@@ -129,6 +129,7 @@ pub(crate) fn declare_web(module: &mut LlModule) {
     module.declare_function("js_ws_close_client_i64", VOID, &[I64]);
     module.declare_function("js_ws_on_client_i64", I64, &[I64, I64, I64]);
     module.declare_function("js_ws_server_close", VOID, &[I64]);
+    module.declare_function("js_ws_server_clients", DOUBLE, &[I64]);
     module.declare_function("js_ws_server_new", I64, &[DOUBLE]);
     // #1113 — `wss.handleUpgrade(req, socket, head, cb)`. Receiver
     // (the noServer WsServerHandle) is passed as I64 (post-unbox_to_i64

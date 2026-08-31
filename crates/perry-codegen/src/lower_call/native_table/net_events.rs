@@ -59,6 +59,18 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         args: &[],
         ret: NR_F64,
     },
+    // #9325 — `WebSocketServer.clients` is a persistent JS Set. HIR only
+    // routes this getter for the WebSocketServer/Server classes, so the table
+    // can use the same generic ws receiver convention as `readyState`.
+    NativeModSig {
+        module: "ws",
+        has_receiver: true,
+        method: "clients",
+        class_filter: None,
+        runtime: "js_ws_server_clients",
+        args: &[],
+        ret: NR_F64,
+    },
     // Issue #577 Phase 4 — `("ws", "Client")` instance methods.
     // The wsId delivered to `Server.on('upgrade', (req, wsId, head) => …)`
     // is NaN-boxed POINTER_TAG so unbox_to_i64 (called by the dispatch

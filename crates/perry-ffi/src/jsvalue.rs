@@ -365,6 +365,63 @@ extern "C" {
     fn js_object_alloc_null_proto(class_id: u32, field_count: u32) -> *mut ObjectHeader;
     fn js_object_set_keys(obj: *mut ObjectHeader, keys_array: *mut ArrayHeader);
     fn js_object_get_field_by_name(obj: *const ObjectHeader, key: *const StringHeader) -> JsValue;
+
+    #[link_name = "js_set_alloc"]
+    fn runtime_js_set_alloc(capacity: u32) -> *mut RuntimeSetHeader;
+    #[link_name = "js_set_add"]
+    fn runtime_js_set_add(set: *mut RuntimeSetHeader, value: f64) -> *mut RuntimeSetHeader;
+    #[link_name = "js_set_delete"]
+    fn runtime_js_set_delete(set: *mut RuntimeSetHeader, value: f64) -> i32;
+}
+
+/// Opaque header for a runtime-owned JavaScript `Set`.
+///
+/// Native wrappers never inspect this layout; the type only prevents a set
+/// pointer from being confused with an ordinary object pointer at the FFI
+/// boundary.
+#[repr(C)]
+struct RuntimeSetHeader {
+    _private: [u8; 0],
+}
+
+/// Allocate an empty JavaScript `Set` with an initial capacity hint.
+///
+/// The returned value is a normal NaN-boxed JavaScript object and must be kept
+/// in a GC-visible slot whenever a native wrapper retains it across calls.
+pub fn alloc_set(capacity: u32) -> JsValue {
+    let set = unsafe { runtime_js_set_alloc(capacity) };
+    if set.is_null() {
+        JsValue::UNDEFINED
+    } else {
+        JsValue::from_object_ptr(set)
+    }
+}
+
+/// Add `value` to a JavaScript `Set` allocated by [`alloc_set`].
+///
+/// Returns the set value so callers can retain the runtime's current pointer.
+/// Passing a non-pointer value is a no-op and returns `undefined`.
+pub fn set_add(set: JsValue, value: JsValue) -> JsValue {
+    let set_ptr = set.as_pointer::<RuntimeSetHeader>();
+    if set_ptr.is_null() {
+        return JsValue::UNDEFINED;
+    }
+    let updated = unsafe { runtime_js_set_add(set_ptr, f64::from_bits(value.bits())) };
+    if updated.is_null() {
+        JsValue::UNDEFINED
+    } else {
+        JsValue::from_object_ptr(updated)
+    }
+}
+
+/// Delete `value` from a JavaScript `Set` allocated by [`alloc_set`].
+///
+/// Returns whether the value was present. Passing a non-pointer value is a
+/// no-op that returns `false`.
+pub fn set_delete(set: JsValue, value: JsValue) -> bool {
+    let set_ptr = set.as_pointer::<RuntimeSetHeader>();
+    !set_ptr.is_null()
+        && unsafe { runtime_js_set_delete(set_ptr, f64::from_bits(value.bits())) != 0 }
 }
 
 /// Compute `(packed_keys_bytes, shape_id)` for use with

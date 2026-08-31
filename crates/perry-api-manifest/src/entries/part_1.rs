@@ -414,6 +414,10 @@ pub(crate) const API_MANIFEST_PART_1: &[ApiEntry] = &[
     method("ws", "send", true, None),
     method("ws", "close", true, None),
     method("ws", "readyState", true, None),
+    // `WebSocketServer.clients` is a data getter. It is represented as a
+    // receiver method internally because native-handle getters dispatch
+    // through the same table as zero-argument methods.
+    internal_method("ws", "clients", true, None),
     // Node-compatible WebSocket ready-state constants. The `ws` package
     // exposes these on both the module/default export and WebSocket class:
     // CONNECTING=0, OPEN=1, CLOSING=2, CLOSED=3.

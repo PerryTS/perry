@@ -109,13 +109,18 @@ pub(crate) fn is_native_dispatch_member(module: &str, class: &str, prop: &str) -
             "Agent" => matches!(prop, "createConnection" | "createSocket"),
             _ => true,
         },
-        // #6117 — ws client instances: `readyState` is a native data getter
-        // (npm ws: CONNECTING=0 / OPEN=1 / CLOSING=2 / CLOSED=3) dispatched
-        // to `js_ws_ready_state`. Server instances expose no readyState, and
-        // every other bare member read stays a plain PropertyGet (method
-        // CALLS like `ws.send(..)` arrive via the call-expression path, not
-        // this bare-read block).
-        "ws" => prop == "readyState" && !matches!(class, "WebSocketServer" | "Server"),
+        // #6117 / #9325 — native data getters on ws handles. Client instances
+        // expose `readyState`; server instances expose the persistent
+        // connection-tracking `clients` Set. Every other bare member read
+        // stays a plain PropertyGet (method CALLS like `ws.send(..)` arrive
+        // through the call-expression path, not this bare-read block).
+        "ws" => {
+            if matches!(class, "WebSocketServer" | "Server") {
+                prop == "clients"
+            } else {
+                prop == "readyState"
+            }
+        }
         // events / net instances dispatch their EventEmitter / socket methods
         // and getters through the class_filter table. These modules expose no
         // user own-property surface in the bundle walls, so keep dispatching
@@ -632,5 +637,22 @@ mod tests {
         assert!(!is_native_dispatch_member("lru-cache", "LRUCache", "set"));
         assert!(!is_native_dispatch_member("lru-cache", "LRUCache", "has"));
         assert!(!is_native_dispatch_member("lru-cache", "LRUCache", "clear"));
+    }
+
+    #[test]
+    fn ws_dispatches_client_and_server_data_getters_separately() {
+        assert!(is_native_dispatch_member("ws", "WebSocket", "readyState"));
+        assert!(!is_native_dispatch_member("ws", "WebSocket", "clients"));
+        assert!(is_native_dispatch_member(
+            "ws",
+            "WebSocketServer",
+            "clients"
+        ));
+        assert!(is_native_dispatch_member("ws", "Server", "clients"));
+        assert!(!is_native_dispatch_member(
+            "ws",
+            "WebSocketServer",
+            "readyState"
+        ));
     }
 }

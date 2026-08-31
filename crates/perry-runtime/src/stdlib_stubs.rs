@@ -110,6 +110,12 @@ mod ws_stubs {
     }
 
     #[no_mangle]
+    pub extern "C" fn js_ws_server_clients(_handle: i64) -> f64 {
+        perry_stub_warn("js_ws_server_clients", WS_REASON, None);
+        f64::from_bits(crate::value::TAG_UNDEFINED)
+    }
+
+    #[no_mangle]
     pub extern "C" fn js_ws_server_close(_handle: i64) {
         perry_stub_warn("js_ws_server_close", WS_REASON, None);
     }

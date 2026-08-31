@@ -5,6 +5,8 @@
 
 #[cfg(not(target_os = "ios"))]
 use futures_util::{SinkExt, StreamExt};
+#[cfg(not(target_os = "ios"))]
+use perry_runtime::set::{js_set_add, js_set_alloc, js_set_delete, SetHeader};
 use perry_runtime::{
     js_closure_call0, js_closure_call1, js_closure_call2, js_string_from_bytes, ClosureHeader,
     JSValue, StringHeader,
@@ -119,6 +121,7 @@ fn scan_ws_roots_mut(visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'_>) {
     }
 
     for_each_handle_mut_of::<WsServerHandle, _>(|server| {
+        visitor.visit_nanbox_u64_slot(&mut server.clients_bits);
         for cb_vec in server.listeners.values_mut() {
             for cb in cb_vec.iter_mut() {
                 visitor.visit_i64_slot(cb);
@@ -164,6 +167,9 @@ pub struct WsServerHandle {
     pub is_listening: bool,
     /// Track connected client IDs for cleanup
     pub client_ids: Vec<usize>,
+    /// Persistent JS `Set` exposed through `WebSocketServer.clients`.
+    /// NaN-boxed so the mutable-root scanner can rewrite a moved header.
+    pub clients_bits: u64,
     /// Shutdown signal sender
     pub shutdown_tx: Option<mpsc::UnboundedSender<()>>,
 }
@@ -219,8 +225,39 @@ fn cleanup_ws_client(ws_id: usize) {
 
     let parent = WS_CLIENT_PARENT_SERVER.lock().unwrap().remove(&ws_id);
     if let Some(server_handle) = parent {
-        if let Some(server) = get_handle_mut::<WsServerHandle>(server_handle) {
+        let clients_bits = get_handle_mut::<WsServerHandle>(server_handle).map(|server| {
             server.client_ids.retain(|client_id| *client_id != ws_id);
+            server.clients_bits
+        });
+        if let Some(clients_bits) = clients_bits {
+            let clients =
+                JSValue::from_bits(clients_bits).as_pointer::<SetHeader>() as *mut SetHeader;
+            js_set_delete(clients, ws_id as f64);
+        }
+    }
+}
+
+#[cfg(not(target_os = "ios"))]
+fn new_server_clients_set() -> u64 {
+    JSValue::pointer(js_set_alloc(4) as *const u8).bits()
+}
+
+#[cfg(not(target_os = "ios"))]
+fn track_server_client(server_handle: Handle, ws_id: usize) {
+    let clients_bits = if let Some(server) = get_handle_mut::<WsServerHandle>(server_handle) {
+        if !server.client_ids.contains(&ws_id) {
+            server.client_ids.push(ws_id);
+        }
+        server.clients_bits
+    } else {
+        return;
+    };
+    let clients = JSValue::from_bits(clients_bits).as_pointer::<SetHeader>() as *mut SetHeader;
+    let updated = js_set_add(clients, ws_id as f64);
+    let updated_bits = JSValue::pointer(updated as *const u8).bits();
+    if updated_bits != clients_bits {
+        if let Some(server) = get_handle_mut::<WsServerHandle>(server_handle) {
+            server.clients_bits = updated_bits;
         }
     }
 }
@@ -1033,6 +1070,7 @@ pub unsafe extern "C" fn js_ws_server_new(opts_f64: f64) -> Handle {
         port,
         is_listening: false,
         client_ids: Vec::new(),
+        clients_bits: new_server_clients_set(),
         shutdown_tx: Some(shutdown_tx),
     });
     WS_ACTIVE_SERVERS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -1228,6 +1266,15 @@ pub unsafe extern "C" fn js_ws_server_new(opts_f64: f64) -> Handle {
     server_handle
 }
 
+/// Return the persistent `Set` exposed as `WebSocketServer.clients`.
+#[cfg(not(target_os = "ios"))]
+#[no_mangle]
+pub extern "C" fn js_ws_server_clients(handle: i64) -> f64 {
+    get_handle_mut::<WsServerHandle>(handle)
+        .map(|server| f64::from_bits(server.clients_bits))
+        .unwrap_or_else(|| f64::from_bits(JSValue::undefined().bits()))
+}
+
 /// Close the WebSocketServer and all its client connections
 /// wss.close(callback?) -> void
 #[cfg(not(target_os = "ios"))]
@@ -1310,6 +1357,9 @@ pub unsafe extern "C" fn js_ws_process_pending() -> i32 {
     for event in events.drain(..) {
         match event {
             PendingWsEvent::Connection(server_handle, client_ws_id) => {
+                // Keep `clients` current before invoking user connection
+                // listeners, matching the ordering in the npm `ws` package.
+                track_server_client(server_handle, client_ws_id);
                 // Get 'connection' listeners from server
                 let listeners: Vec<i64> = get_handle_mut::<WsServerHandle>(server_handle)
                     .and_then(|s| s.listeners.get("connection").cloned())
@@ -1529,6 +1579,7 @@ mod tests {
             port: 0,
             is_listening: false,
             client_ids: Vec::new(),
+            clients_bits: new_server_clients_set(),
             shutdown_tx: None,
         });
 
@@ -1553,6 +1604,7 @@ mod tests {
             port: 0,
             is_listening: false,
             client_ids: vec![client_id],
+            clients_bits: new_server_clients_set(),
             shutdown_tx: None,
         });
 

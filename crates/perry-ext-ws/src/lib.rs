@@ -36,8 +36,8 @@ pub mod mask;
 use futures_util::{SinkExt, StreamExt};
 use lazy_static::lazy_static;
 use perry_ffi::{
-    alloc_string, gc_register_mutable_root_scanner_named, get_handle_mut, iter_handles_of_mut,
-    notify_main_thread, register_handle, spawn_async,
+    alloc_set, alloc_string, gc_register_mutable_root_scanner_named, get_handle_mut,
+    iter_handles_of_mut, notify_main_thread, register_handle, set_add, set_delete, spawn_async,
     spawn_blocking_with_reactor as spawn_blocking, take_handle, GcRootVisitor, Handle, JsClosure,
     JsString, JsValue, ObjectHeader, RawClosureHeader, StringHeader,
 };
@@ -99,6 +99,10 @@ pub struct WsServerHandle {
     pub port: u16,
     pub is_listening: bool,
     pub client_ids: Vec<usize>,
+    /// The persistent JavaScript `Set` exposed as `WebSocketServer.clients`.
+    /// Stored as NaN-boxed bits so the mutable-root scanner can rewrite it
+    /// when a moving collection evacuates the Set header.
+    pub clients_bits: u64,
     pub shutdown_tx: Option<mpsc::UnboundedSender<()>>,
 }
 
@@ -145,6 +149,7 @@ fn scan_ws_roots(visitor: &mut GcRootVisitor<'_>) {
         }
     }
     iter_handles_of_mut::<WsServerHandle, _>(|server| {
+        visitor.visit_nanbox_u64_slot(&mut server.clients_bits);
         for cb_vec in server.listeners.values_mut() {
             for cb in cb_vec.iter_mut() {
                 visitor.visit_i64_slot(cb);
@@ -156,6 +161,55 @@ fn scan_ws_roots(visitor: &mut GcRootVisitor<'_>) {
 fn push_ws_event(ev: PendingWsEvent) {
     WS_PENDING_EVENTS.lock().unwrap().push(ev);
     notify_main_thread();
+}
+
+#[inline]
+fn client_js_value(ws_id: usize) -> JsValue {
+    // Server-side clients are represented throughout this wrapper as ordinary
+    // numeric handles (the same value delivered to `connection` listeners).
+    JsValue::from_number(ws_id as f64)
+}
+
+/// Add a connection to a server's persistent JS-visible clients Set.
+///
+/// This runs only on the JS/main thread: either while handling
+/// `handleUpgrade`, or while draining a queued standalone-server connection.
+fn track_server_client(server_handle: Handle, ws_id: usize) {
+    let clients_bits = if let Some(server) = get_handle_mut::<WsServerHandle>(server_handle) {
+        if !server.client_ids.contains(&ws_id) {
+            server.client_ids.push(ws_id);
+        }
+        server.clients_bits
+    } else {
+        return;
+    };
+
+    // Do not hold a handle-registry guard across a runtime collection point:
+    // Set growth can notify the GC, whose ws scanner walks this same registry.
+    let updated = set_add(JsValue::from_bits(clients_bits), client_js_value(ws_id));
+    if !updated.is_undefined() && updated.bits() != clients_bits {
+        if let Some(server) = get_handle_mut::<WsServerHandle>(server_handle) {
+            server.clients_bits = updated.bits();
+        }
+    }
+}
+
+/// Remove a connection from its parent server and return that parent for
+/// dispatching the server-level close event after the bookkeeping is current.
+fn untrack_server_client(ws_id: usize) -> Option<Handle> {
+    let parent = WS_CLIENT_PARENT_SERVER.lock().unwrap().remove(&ws_id);
+    if let Some(server_handle) = parent {
+        let clients_bits = get_handle_mut::<WsServerHandle>(server_handle).map(|server| {
+            server.client_ids.retain(|client_id| *client_id != ws_id);
+            server.clients_bits
+        });
+        if let Some(clients_bits) = clients_bits {
+            // Keep runtime collection points outside the registry guard; see
+            // the matching add path above.
+            set_delete(JsValue::from_bits(clients_bits), client_js_value(ws_id));
+        }
+    }
+    parent
 }
 
 // ── Client connect ────────────────────────────────────────────────
@@ -690,6 +744,7 @@ pub extern "C" fn js_ws_server_new(opts_f64: f64) -> Handle {
     ensure_gc_scanner_registered();
     let port = extract_port(opts_f64);
     let no_server = extract_no_server(opts_f64);
+    let clients_bits = alloc_set(4).bits();
 
     if no_server || port == 0 {
         // Listener-only handle — no bind, no accept loop, no shutdown
@@ -700,6 +755,7 @@ pub extern "C" fn js_ws_server_new(opts_f64: f64) -> Handle {
             port: 0,
             is_listening: false,
             client_ids: Vec::new(),
+            clients_bits,
             shutdown_tx: None,
         });
     }
@@ -710,6 +766,7 @@ pub extern "C" fn js_ws_server_new(opts_f64: f64) -> Handle {
         port,
         is_listening: false,
         client_ids: Vec::new(),
+        clients_bits,
         shutdown_tx: Some(shutdown_tx),
     });
     WS_ACTIVE_SERVERS.fetch_add(1, Ordering::Relaxed);
@@ -795,6 +852,17 @@ pub extern "C" fn js_ws_server_new(opts_f64: f64) -> Handle {
         });
     });
     server_handle
+}
+
+/// Return the persistent `Set` exposed as `WebSocketServer.clients`.
+///
+/// The Set is allocated with the server, updated before connection/close
+/// callbacks run, and rooted through the server handle for its full lifetime.
+#[no_mangle]
+pub extern "C" fn js_ws_server_clients(handle: i64) -> f64 {
+    get_handle_mut::<WsServerHandle>(handle)
+        .map(|server| f64::from_bits(server.clients_bits))
+        .unwrap_or_else(|| f64::from_bits(JsValue::UNDEFINED.bits()))
 }
 
 fn extract_port(opts_f64: f64) -> u16 {
@@ -1090,11 +1158,9 @@ pub unsafe extern "C" fn js_ws_handle_upgrade(
         .lock()
         .unwrap()
         .insert(ws_id, server_handle);
-    if let Some(s) = get_handle_mut::<WsServerHandle>(server_handle) {
-        if !s.client_ids.contains(&ws_id) {
-            s.client_ids.push(ws_id);
-        }
-    }
+    // `ws` adds the socket to `clients` before invoking handleUpgrade's
+    // callback. Keep that ordering so the callback observes itself in the Set.
+    track_server_client(server_handle, ws_id);
 
     if cb != 0 {
         // Accept either a NaN-boxed POINTER_TAG closure or a raw
@@ -1135,6 +1201,9 @@ pub extern "C" fn js_ws_process_pending() -> i32 {
     for ev in events {
         match ev {
             PendingWsEvent::Connection(server_handle, client_id) => {
+                // Match `ws`: clients is current before the user-visible
+                // `connection` callback fires.
+                track_server_client(server_handle, client_id);
                 let listeners = listeners_on_server(server_handle, "connection");
                 for cb in listeners {
                     if cb != 0 {
@@ -1176,6 +1245,10 @@ pub extern "C" fn js_ws_process_pending() -> i32 {
                 }
             }
             PendingWsEvent::Close(ws_id, _code, _reason) => {
+                // The upstream `ws` package installs its tracking listener
+                // before handing the socket to user code, so user close
+                // callbacks observe the client as already removed.
+                let parent = untrack_server_client(ws_id);
                 let listeners = listeners_on_client(ws_id, "close");
                 if !listeners.is_empty() {
                     for cb in listeners {
@@ -1189,7 +1262,6 @@ pub extern "C" fn js_ws_process_pending() -> i32 {
                 } else {
                     // #746 follow-up: server-level `wss.on('close',
                     // (ws) => ...)` parity with perry-stdlib::ws.
-                    let parent = WS_CLIENT_PARENT_SERVER.lock().unwrap().get(&ws_id).copied();
                     if let Some(server_handle) = parent {
                         for cb in listeners_on_server(server_handle, "close") {
                             if cb != 0 {
@@ -1203,7 +1275,6 @@ pub extern "C" fn js_ws_process_pending() -> i32 {
                 }
                 WS_CONNECTIONS.lock().unwrap().remove(&ws_id);
                 WS_CLIENT_LISTENERS.lock().unwrap().remove(&ws_id);
-                WS_CLIENT_PARENT_SERVER.lock().unwrap().remove(&ws_id);
             }
             PendingWsEvent::Error(ws_id, err) => {
                 let listeners = listeners_on_client(ws_id, "error");
@@ -1359,11 +1430,13 @@ mod tests {
         );
 
         let server_callback = young_gc_root();
+        let clients_before = alloc_set(4).bits();
         let server_handle = register_handle(WsServerHandle {
             listeners: HashMap::from([("connection".to_string(), vec![server_callback])]),
             port: 0,
             is_listening: false,
             client_ids: Vec::new(),
+            clients_bits: clients_before,
             shutdown_tx: None,
         });
 
@@ -1375,8 +1448,47 @@ mod tests {
             let server = get_handle::<WsServerHandle>(server_handle)
                 .expect("server handle should remain live");
             assert_rewritten(server_callback, server.listeners["connection"][0]);
+            assert_ne!(server.clients_bits, clients_before);
+            let clients = JsValue::from_bits(server.clients_bits)
+                .as_pointer::<perry_runtime::set::SetHeader>();
+            assert_eq!(perry_runtime::set::js_set_size(clients), 0);
         }
         WS_CLIENT_LISTENERS.lock().unwrap().remove(&client_id);
+        drop_handle(server_handle);
+    }
+
+    #[test]
+    fn server_clients_is_a_stable_set_that_tracks_connections() {
+        let _lock = GC_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let undefined = f64::from_bits(JsValue::UNDEFINED.bits());
+        let server_handle = js_ws_server_new(undefined);
+
+        let first = js_ws_server_clients(server_handle);
+        let second = js_ws_server_clients(server_handle);
+        assert_eq!(first.to_bits(), second.to_bits());
+        let clients =
+            JsValue::from_bits(first.to_bits()).as_pointer::<perry_runtime::set::SetHeader>();
+        assert!(!clients.is_null());
+        assert_eq!(perry_runtime::set::js_set_size(clients), 0);
+
+        let client_id = 9_325_001;
+        track_server_client(server_handle, client_id);
+        let clients = JsValue::from_bits(js_ws_server_clients(server_handle).to_bits())
+            .as_pointer::<perry_runtime::set::SetHeader>();
+        assert_eq!(perry_runtime::set::js_set_size(clients), 1);
+        assert_eq!(perry_runtime::set::js_set_has(clients, client_id as f64), 1);
+
+        WS_CLIENT_PARENT_SERVER
+            .lock()
+            .unwrap()
+            .insert(client_id, server_handle);
+        assert_eq!(untrack_server_client(client_id), Some(server_handle));
+        let clients = JsValue::from_bits(js_ws_server_clients(server_handle).to_bits())
+            .as_pointer::<perry_runtime::set::SetHeader>();
+        assert_eq!(perry_runtime::set::js_set_size(clients), 0);
+
         drop_handle(server_handle);
     }
 
