@@ -13,6 +13,14 @@ mod header;
 mod header_gc_slots;
 mod immutable;
 mod indexing;
+/// Keys-array length-cap bounds tests, split out of `indexing.rs` for the
+/// 2000-line cap.
+#[cfg(test)]
+mod keys_len_cap_tests;
+/// Test-only strict-dense store helpers, split out of `indexing.rs` for the
+/// 2000-line cap.
+#[cfg(test)]
+mod strict_dense_test_helpers;
 #[cfg(test)]
 pub(crate) use indexing::test_element_accessor_calls;
 mod indexing_support;

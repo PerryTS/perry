@@ -896,19 +896,7 @@ pub(crate) fn get_field_by_name_object_tail(
                 // it a retargeted array reported the WRONG object here while
                 // `Object.getPrototypeOf(arr)` reported the right one.
                 if key_bytes == b"__proto__" {
-                    // `__proto__` itself lives on `Object.prototype`, so an
-                    // array whose chain no longer reaches it (an explicit null
-                    // prototype) has no such property at all.
-                    if crate::object::prototype_chain::object_static_prototype(obj as usize)
-                        == Some(crate::value::TAG_NULL)
-                    {
-                        return JSValue::undefined();
-                    }
-                    let receiver = crate::value::js_nanbox_pointer(obj as i64);
-                    let proto = crate::object::object_ops::js_object_get_prototype_of(
-                        f64::from_bits(receiver.to_bits()),
-                    );
-                    return JSValue::from_bits(proto.to_bits());
+                    return super::array_retargeted_proto::array_proto_slot(obj);
                 }
                 // date-fns / drizzle / lodash duck-typing path:
                 // `arr.constructor === Array`, `new arr.constructor(...)`,
@@ -931,11 +919,8 @@ pub(crate) fn get_field_by_name_object_tail(
                     // implicit chain, so `constructor` must be resolved through
                     // it (a plain `{}` prototype answers `Object`, not `Array`)
                     // rather than short-circuiting to the global `Array`. #9192.
-                    if crate::object::prototype_chain::object_static_prototype(obj as usize)
-                        .is_some()
-                    {
-                        return array_prototype_property_value("constructor", obj as usize)
-                            .unwrap_or_else(JSValue::undefined);
+                    if let Some(v) = super::array_retargeted_proto::array_constructor_slot(obj) {
+                        return v;
                     }
                     let v = js_get_global_this_builtin_value(b"Array".as_ptr(), 5);
                     return JSValue::from_bits(v.to_bits());

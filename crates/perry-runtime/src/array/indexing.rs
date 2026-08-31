@@ -56,6 +56,14 @@ pub(crate) fn test_element_accessor_calls() -> u64 {
     ELEMENT_ACCESSOR_CALLS.with(std::cell::Cell::get)
 }
 
+// The two strict-dense store helpers live in `strict_dense_test_helpers`
+// (2000-line cap). Re-exported by name so `super::indexing::…` paths in the
+// existing test modules keep resolving — a glob would not propagate.
+#[cfg(test)]
+pub(crate) use super::strict_dense_test_helpers::{
+    test_strict_dense_number_store, test_strict_dense_pointer_overwrite,
+};
+
 pub(crate) fn object_prototype_has_index_flag() -> bool {
     OBJECT_PROTO_HAS_INDEX.load(Ordering::Relaxed)
 }
@@ -421,7 +429,12 @@ unsafe fn array_object_proto_index_owner(proto_bits: u64, key: &str) -> usize {
         let Some(addr) = pointer_bits_of_recorded_prototype(bits) else {
             return 0;
         };
-        if !crate::object::is_valid_obj_ptr(addr as *const u8) {
+        // Pair the band predicate with the validity check (#6279): a handle
+        // value sits below HANDLE_BAND_MAX and would otherwise be dereferenced
+        // as if it were an object pointer.
+        if !crate::value::addr_class::is_above_handle_band(addr as usize)
+            || !crate::object::is_valid_obj_ptr(addr as *const u8)
+        {
             return 0;
         }
         if crate::object::get_accessor_descriptor(addr, key).is_some()
@@ -615,7 +628,10 @@ unsafe fn array_inherited_index_get(
     js_array_get_f64(proto_arr, index)
 }
 
-fn array_get_property_by_key(arr: *const ArrayHeader, key: *const crate::StringHeader) -> f64 {
+pub(crate) fn array_get_property_by_key(
+    arr: *const ArrayHeader,
+    key: *const crate::StringHeader,
+) -> f64 {
     // #7891: an erased Array declaration can feed this ABI a heap StringHeader.
     // The receiver arrived unboxed and no longer carries STRING_TAG, so recover
     // its runtime kind from the GC header before ordinary by-name lookup. A
@@ -1381,7 +1397,7 @@ fn array_strict_index_write_guard_resolved(clean: *mut ArrayHeader, index: u32, 
 /// `f64` the raw-f64 layout stores), cannot be a heap pointer (no barrier, no
 /// pointer-mask update), and keeps a pointer-free or tag-scanned layout valid.
 #[inline]
-unsafe fn try_strict_dense_number_store(
+pub(crate) unsafe fn try_strict_dense_number_store(
     arr: *mut ArrayHeader,
     index: u32,
     value: f64,
@@ -1496,14 +1512,6 @@ unsafe fn try_strict_dense_number_store(
 }
 
 /// Exercised by the unit tests: `true` when the fast lane answered the store.
-#[cfg(test)]
-pub(crate) fn test_strict_dense_number_store(
-    arr: *mut ArrayHeader,
-    index: u32,
-    value: f64,
-) -> bool {
-    unsafe { try_strict_dense_number_store(arr, index, value) }.is_some()
-}
 
 /// The strict store's third exact lane: an in-range overwrite of a slot that
 /// holds a heap pointer with another heap pointer — `column[index] = record`
@@ -1529,7 +1537,7 @@ pub(crate) fn test_strict_dense_number_store(
 /// # Safety
 /// `arr` is decoded and validated before any dereference, exactly as in
 /// [`try_strict_dense_number_store`].
-unsafe fn try_strict_dense_pointer_overwrite(
+pub(crate) unsafe fn try_strict_dense_pointer_overwrite(
     arr: *mut ArrayHeader,
     index: u32,
     value: f64,
@@ -1600,14 +1608,6 @@ unsafe fn try_strict_dense_pointer_overwrite(
 
 /// Exercised by the unit tests: `true` when the pointer-overwrite lane
 /// answered the store.
-#[cfg(test)]
-pub(crate) fn test_strict_dense_pointer_overwrite(
-    arr: *mut ArrayHeader,
-    index: u32,
-    value: f64,
-) -> bool {
-    unsafe { try_strict_dense_pointer_overwrite(arr, index, value) }.is_some()
-}
 
 #[no_mangle]
 pub extern "C" fn js_array_set_f64_extend_strict(
@@ -1994,56 +1994,5 @@ unsafe fn js_array_set_f64_extend_resolved(
         }
 
         arr
-    }
-}
-
-#[cfg(test)]
-mod keys_len_cap_tests {
-    use super::{js_array_length, keys_array_len_capped_to_capacity};
-
-    #[test]
-    fn keys_len_capped_bounds_bogus_length_to_capacity() {
-        // Freshly-allocated array: well-formed (length 0 <= capacity), so the
-        // cap is a no-op and returns the real length.
-        let arr = crate::array::js_array_alloc(8);
-        let capacity = unsafe { (*arr).capacity } as usize;
-        assert!(capacity >= 8);
-        assert_eq!(unsafe { keys_array_len_capped_to_capacity(arr) }, 0);
-
-        // Simulate a malformed keys array whose length field reports a bogus,
-        // pointer-sized value — the pathology the object property walks guard
-        // against. Un-capped, callers would iterate/allocate ~645M slots.
-        unsafe {
-            (*arr).length = 645_115_168;
-        }
-        assert_eq!(
-            js_array_length(arr) as usize,
-            645_115_168,
-            "sanity: js_array_length reflects the forged length"
-        );
-        assert_eq!(
-            unsafe { keys_array_len_capped_to_capacity(arr) },
-            capacity,
-            "cap must bound a bogus oversized length to the array's capacity"
-        );
-    }
-}
-
-#[cfg(test)]
-mod claimed_array_string_receiver_tests {
-    use super::array_get_property_by_key;
-
-    #[test]
-    fn numeric_string_key_reads_a_heap_string_before_by_name_fallback() {
-        let receiver = crate::string::js_string_from_bytes(b"ss".as_ptr(), 2);
-        let zero = crate::string::js_string_from_bytes(b"0".as_ptr(), 1);
-        let indexed = array_get_property_by_key(receiver.cast(), zero);
-        assert_eq!(
-            crate::builtins::jsvalue_string_content(indexed).as_deref(),
-            Some("s")
-        );
-
-        let length = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
-        assert_eq!(array_get_property_by_key(receiver.cast(), length), 2.0);
     }
 }

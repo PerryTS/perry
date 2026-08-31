@@ -1275,12 +1275,20 @@ pub(crate) unsafe fn prototype_value_has_property(
     let top16 = proto_bits >> 48;
     let proto_ptr = if top16 == 0x7FFD {
         (proto_bits & crate::value::POINTER_MASK) as usize
-    } else if top16 == 0 && proto_bits > 0x10000 {
+    } else if top16 == 0 && crate::value::addr_class::is_above_handle_band(proto_bits as usize) {
+        // The literal floor here was 0x10000, an order of magnitude BELOW
+        // HANDLE_BAND_MAX (0x100000), so this raw-pointer branch admitted
+        // handle-band values and handed them to a dereference.
         proto_bits as usize
     } else {
         return false;
     };
-    if proto_ptr == 0 || !super::super::is_valid_obj_ptr(proto_ptr as *const u8) {
+    // Band predicate before the validity check (#6279): a handle value is
+    // below HANDLE_BAND_MAX and must not reach a dereference.
+    if proto_ptr == 0
+        || !crate::value::addr_class::is_above_handle_band(proto_ptr as usize)
+        || !super::super::is_valid_obj_ptr(proto_ptr as *const u8)
+    {
         return false;
     }
     ordinary_has_property(proto_ptr as *const ObjectHeader, key)
