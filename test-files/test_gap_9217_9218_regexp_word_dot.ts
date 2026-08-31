@@ -85,9 +85,13 @@ show("dot-crlf-repro", /.{2}/g, "\t\r\n");
 show("dot-crlf-dotall", /.{2}/gs, "\t\r\n");
 
 // #9216 controls: [^] is any character even without s; [] never matches.
-for (const entry of ["x", "\n", "\r", " ", " ", "😀"]) {
+for (const entry of ["x", "\n", "\r", " ", " "]) {
   show("negated-empty", /[^]/i, entry);
   show("empty", /[]/i, entry);
 }
+// Use `u` for the astral control so this fixture does not conflate #9216 with
+// Perry's separate, pre-existing non-u UTF-16 code-unit matching gap.
+show("negated-empty-u", /[^]/iu, "😀");
+show("empty-u", /[]/iu, "😀");
 show("word-complements-any", /[\w\W]/i, "Ω");
 show("word-complements-empty", /[^\w\W]/i, "A");
