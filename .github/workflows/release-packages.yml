@@ -398,10 +398,20 @@ jobs:
             target: x86_64-unknown-linux-musl
             artifact: perry-linux-x86_64-musl
             old_glibc_image: ""
+            # musl needs a musl-BUILT LLVM: perry links libLLVM in-process, and
+            # apt.llvm.org ships only glibc builds, so the static link died with
+            # `ld-linux-*.so.2: DSO missing from command line`. Alpine packages
+            # LLVM 22.1.8 for both arches; nothing is built from source.
+            musl_image: alpine:edge
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
             artifact: perry-linux-aarch64-musl
             old_glibc_image: ""
+            # musl needs a musl-BUILT LLVM: perry links libLLVM in-process, and
+            # apt.llvm.org ships only glibc builds, so the static link died with
+            # `ld-linux-*.so.2: DSO missing from command line`. Alpine packages
+            # LLVM 22.1.8 for both arches; nothing is built from source.
+            musl_image: alpine:edge
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact: perry-windows-x86_64
@@ -433,7 +443,7 @@ jobs:
       # Its host-side GTK4 build does not depend on perry-codegen, so avoid
       # installing a second LLVM copy on the noble runner for these two legs.
       - uses: ./.github/actions/setup-llvm22
-        if: matrix.old_glibc_image == ''
+        if: matrix.old_glibc_image == '' && matrix.musl_image == ''
 
       # Cache cargo registry + target/ per (matrix.target, Cargo.lock).
       # First run on a target is still a cold build, but every subsequent
@@ -508,7 +518,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libgtk-4-dev libunwind-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libwebkitgtk-6.0-dev libshumate-dev
 
       - name: Install musl tools (Linux musl)
-        if: endsWith(matrix.target, '-musl')
+        if: endsWith(matrix.target, '-musl') && matrix.musl_image == ''
         run: sudo apt-get update && sudo apt-get install -y musl-tools
 
       - name: Build perry
@@ -516,11 +526,11 @@ jobs:
         # the next step. (Perry is V8-free — the former perry-jsruntime
         # crate, which downloaded a prebuilt V8 that 404'd on musl, was
         # removed.)
-        if: matrix.old_glibc_image == ''
+        if: matrix.old_glibc_image == '' && matrix.musl_image == ''
         run: cargo build --profile dist --target ${{ matrix.target }} -p perry
 
       - name: Build runtime libraries
-        if: matrix.old_glibc_image == ''
+        if: matrix.old_glibc_image == '' && matrix.musl_image == ''
         run: |
           cargo build --profile dist --target ${{ matrix.target }} -p perry-runtime -p perry-runtime-static
           cargo build --profile dist --target ${{ matrix.target }} -p perry-stdlib -p perry-stdlib-static
@@ -533,7 +543,7 @@ jobs:
         # See optimized_libs.rs (find_runtime_abort_library selection).
         # Separate CARGO_TARGET_DIR so the profile override doesn't
         # invalidate the main build's incremental cache.
-        if: runner.os != 'Windows' && matrix.old_glibc_image == ''
+        if: runner.os != 'Windows' && matrix.old_glibc_image == '' && matrix.musl_image == ''
         run: |
           CARGO_TARGET_DIR=target-abort CARGO_PROFILE_DIST_PANIC=abort \
             cargo build --profile dist --target ${{ matrix.target }} -p perry-runtime -p perry-runtime-static
@@ -558,7 +568,7 @@ jobs:
         # a crate requires a recorded retain/migration decision. Best-effort
         # per crate: a wrapper that can't build on this host must not fail the
         # whole release — packaging below ships whatever was produced.
-        if: runner.os != 'Windows' && matrix.old_glibc_image == ''
+        if: runner.os != 'Windows' && matrix.old_glibc_image == '' && matrix.musl_image == ''
         run: |
           set -euo pipefail
           governed_ext_packages=$(./scripts/release_ext_packages.sh)
@@ -615,6 +625,46 @@ jobs:
           for archive in "$src"/libperry_ext_*.a; do
             [ -f "$archive" ] && cp "$archive" "$dst/"
           done
+
+      # musl needs a musl-BUILT LLVM (see the matrix comment). Alpine is the
+      # only source of a packaged LLVM 22 for musl, so the compiler, runtime and
+      # stdlib are built inside it. Unlike the glibc-2.31 container, the host's
+      # ~/.cargo and ~/.rustup are NOT mounted: those are glibc binaries and
+      # cannot execute in a musl sysroot. The image installs its own rustup with
+      # the pinned nightly, whose musl host toolchain rustup does publish.
+      - name: Build Linux musl core artifacts in a musl sysroot
+        if: matrix.musl_image != ''
+        env:
+          MUSL_IMAGE: ${{ matrix.musl_image }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          docker build \
+            --build-arg "ALPINE_IMAGE=$MUSL_IMAGE" \
+            --build-arg "RUST_TOOLCHAIN=nightly-2026-08-20" \
+            --tag perry-musl-llvm22 \
+            --file scripts/linux-musl-llvm22.Dockerfile \
+            .
+          docker run --rm \
+            --env HOME=/tmp/perry-home \
+            --env CARGO_TARGET_DIR=/work/target-musl \
+            --env PERRY_ABORT_TARGET_DIR=/work/target-musl-abort \
+            --env PERRY_CLI_UPDATE_PUBLIC_KEYS \
+            --volume "$GITHUB_WORKSPACE:/work" \
+            --workdir /work \
+            perry-musl-llvm22 \
+            sh scripts/build_linux_musl.sh "$TARGET"
+
+          # Same boundary as the old-sysroot leg: only the artifacts packaging
+          # consumes cross back into target/.
+          src="target-musl/$TARGET/dist"
+          dst="target/$TARGET/dist"
+          mkdir -p "$dst"
+          for artifact in perry libperry_runtime.a libperry_runtime_abort.a libperry_stdlib.a; do
+            test -s "$src/$artifact"
+            sudo cp "$src/$artifact" "$dst/$artifact"
+          done
+          sudo chown -R "$(id -u):$(id -g)" "$dst"
 
       - name: Build UI library (macOS)
         if: runner.os == 'macOS'
