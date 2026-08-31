@@ -103,6 +103,45 @@ pub(crate) fn packed_f64_loop_offset_read(
 ///
 /// The bare-local cases belong to `foreign_packed_loop_read` and the clone's
 /// own counter path; this is `a[i * size + k]`.
+
+/// Conservative magnitude bound of an affine index tree, with every leaf at
+/// its i32 extreme. `None` means a node outside the affine grammar.
+///
+/// #9294 shipped the i64 materialization with the claim that proven-i32
+/// leaves cannot overflow it. That is true for one multiply — |i32 * i32|
+/// <= 2^62 — and FALSE beyond it: three chained near-2^31 factors reach
+/// 2^93, wrap i64, and a wrapped value that happens to land in [0, len)
+/// passes the unsigned bounds check and reads a DIFFERENT element than the
+/// generic path (JS computes the index in doubles, goes out of bounds, and
+/// yields `undefined`). Flagged by review on the follow-up PR. The bound is
+/// computed in i128 at match time, so admission costs nothing at run time:
+/// a tree whose worst case fits i63 cannot wrap, and anything else declines
+/// to the generic path.
+pub(crate) fn affine_index_magnitude_bound(index: &Expr) -> Option<i128> {
+    match index {
+        Expr::Integer(v) => Some((*v as i128).unsigned_abs().min(1 << 31) as i128),
+        Expr::Number(n) if n.fract() == 0.0 && n.abs() <= f64::from(i32::MAX) => {
+            Some(n.abs() as i128)
+        }
+        Expr::LocalGet(_) => Some(1_i128 << 31),
+        Expr::Binary { op, left, right } => {
+            let l = affine_index_magnitude_bound(left)?;
+            let r = affine_index_magnitude_bound(right)?;
+            match op {
+                perry_hir::BinaryOp::Add | perry_hir::BinaryOp::Sub => l.checked_add(r),
+                perry_hir::BinaryOp::Mul => l.checked_mul(r),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+/// The i64 materialization is wrap-free for exactly the trees this accepts.
+pub(crate) fn affine_index_fits_i64(index: &Expr) -> bool {
+    affine_index_magnitude_bound(index).is_some_and(|b| b < (1_i128 << 63))
+}
+
 pub(crate) fn affine_packed_loop_read(
     ctx: &FnCtx<'_>,
     arr_id: u32,
@@ -117,7 +156,9 @@ pub(crate) fn affine_packed_loop_read(
         .rev()
         .find(|fact| fact.array_local_id == arr_id && fact.affine_indices)?
         .clone();
-    affine_index_leaves_materializable(ctx, index, fact.index_local_id).then_some(fact)
+    (affine_index_fits_i64(index)
+        && affine_index_leaves_materializable(ctx, index, fact.index_local_id))
+    .then_some(fact)
 }
 
 /// Every leaf must be readable as an i32 here, matching exactly what the

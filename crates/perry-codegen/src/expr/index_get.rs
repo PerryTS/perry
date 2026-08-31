@@ -42,7 +42,7 @@ use super::{
 
 mod foreign_counter;
 mod guarded_array;
-pub(crate) use foreign_counter::packed_f64_loop_index_parts;
+pub(crate) use foreign_counter::{affine_index_fits_i64, packed_f64_loop_index_parts};
 use foreign_counter::{
     affine_packed_loop_read, emit_affine_index_i64, foreign_packed_loop_read,
     packed_f64_loop_offset_read,

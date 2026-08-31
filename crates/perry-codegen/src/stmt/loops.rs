@@ -2277,6 +2277,10 @@ pub(super) fn packed_f64_range_loop_pure_expr_collect(
                 // loop from that tier, which is a regression, not a win.
                 if packed_f64_range_loop_index_is_affine_with(index, counter_id, leaf_ok)
                     && expr_mentions_local(index, counter_id)
+                    // #9294 follow-up: the i64 materialization is wrap-free
+                    // only when the tree's worst case fits i63. Shared with
+                    // the lowering so the two cannot disagree.
+                    && crate::expr::affine_index_fits_i64(index)
                 {
                     record_packed_f64_range_affine_access(accesses, *arr_id);
                     return true;

@@ -2746,7 +2746,7 @@ mod unary_bigint_tests;
 #[cfg(test)]
 mod unary_bitnot_tests;
 pub(crate) use index_get::{
-    numeric_index_has_integer_array_index_proof, packed_f64_loop_index_parts,
+    affine_index_fits_i64, numeric_index_has_integer_array_index_proof, packed_f64_loop_index_parts,
 };
 pub(crate) use masked_window::masked_window_fact_for_index;
 /// Rooting coverage for the computed-store arms the TS corpora cannot reach
