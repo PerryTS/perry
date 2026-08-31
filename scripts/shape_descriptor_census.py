@@ -398,10 +398,15 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
         "by-id descriptor before reverse accelerator",
     )
     sync = function_body(shapes, "publish_object_shape_from")
+    # #9317 routed every post-birth ShapeId publication through
+    # `stamp_object_shape_id_with_carrier_note`, which performs the header
+    # write and then arms `old_carrier` for a promoted receiver. The header
+    # write is no longer spelled inline here, so name the funnel: the ordering
+    # this guards (descriptor authoritative BEFORE the stamp) is unchanged.
     assert_before(
         sync,
         "shape_descriptor_ensure",
-        "(*obj).parent_class_id = id",
+        "stamp_object_shape_id_with_carrier_note",
         "descriptor before ObjectHeader ShapeId",
     )
     # #8113 MINT-THEN-STAMP. With `field_count` deleted, the descriptor is the
@@ -786,7 +791,7 @@ def run_sabotage_selftests(sources: dict[str, str], baseline: dict[str, object])
         # #9029 tombstones: the lineage publish carries hole_count, so the
         # mint call in publish_object_shape_from is the _with_holes form.
         "shape_descriptor_ensure_with_holes(",
-        "(*obj).parent_class_id = id",
+        "stamp_object_shape_id_with_carrier_note",
     )
     inverted_publication[path] = inverted_publication[path].replace(
         publication_body, inverted_body, 1

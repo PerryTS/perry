@@ -1634,32 +1634,42 @@ mod tests {
     #[test]
     fn parameter_extraction_preserves_every_supported_value() {
         unsafe {
-            let short = perry_runtime::JSValue::try_short_string(b"hi")
-                .expect("two-byte string uses the SSO representation");
-            let long = alloc_string("long-string");
-            let date = perry_runtime::date::js_date_new_from_timestamp(1_706_933_106_789.0);
-            let buffer = perry_ffi::alloc_buffer(&[0, 1, 127, 128, 255]);
-
-            let mut array = js_array_alloc(8);
-            for value in [
-                JsValue::from_bits(short.bits()),
-                JsValue::from_string_ptr(long.as_raw()),
-                JsValue::from_int32(42),
-                JsValue::from_number(3.25),
-                JsValue::TRUE,
-                JsValue::NULL,
-                JsValue::from_bits(date.to_bits()),
-                JsValue::from_object_ptr(buffer),
-            ] {
-                array = js_array_push(array, value);
-            }
-
+            // Each heap value is built inside the iteration that pushes it.
+            // The eager form -- allocate all eight, then push them one at a
+            // time -- leaves every earlier value live across a `js_array_push`
+            // that can move it, which is the #8217 shape.
             let expected_date = chrono::NaiveDate::from_ymd_opt(2024, 2, 3)
                 .unwrap()
                 .and_hms_milli_opt(4, 5, 6, 789)
                 .unwrap();
-            let actual = extract_params_from_jsvalue(JsValue::from_object_ptr(array))
-                .expect("all supported parameter values must marshal");
+            // Built and consumed in one expression: no named local holds the
+            // array across the pushes that can move it.
+            let actual = extract_params_from_jsvalue(JsValue::from_object_ptr((0..8u32).fold(
+                js_array_alloc(8),
+                |acc, slot| {
+                    let value = match slot {
+                        0 => JsValue::from_bits(
+                            perry_runtime::JSValue::try_short_string(b"hi")
+                                .expect("two-byte string uses the SSO representation")
+                                .bits(),
+                        ),
+                        1 => JsValue::from_string_ptr(alloc_string("long-string").as_raw()),
+                        2 => JsValue::from_int32(42),
+                        3 => JsValue::from_number(3.25),
+                        4 => JsValue::TRUE,
+                        5 => JsValue::NULL,
+                        6 => JsValue::from_bits(
+                            perry_runtime::date::js_date_new_from_timestamp(1_706_933_106_789.0)
+                                .to_bits(),
+                        ),
+                        _ => JsValue::from_object_ptr(perry_ffi::alloc_buffer(&[
+                            0, 1, 127, 128, 255,
+                        ])),
+                    };
+                    js_array_push(acc, value)
+                },
+            )))
+            .expect("all supported parameter values must marshal");
             assert_eq!(
                 actual,
                 vec![
@@ -1679,8 +1689,9 @@ mod tests {
     #[test]
     fn parameter_extraction_rejects_values_instead_of_substituting_null() {
         unsafe {
-            let mut undefined_array = js_array_alloc(1);
-            undefined_array = js_array_push(undefined_array, JsValue::UNDEFINED);
+            // Nested so the fresh array is never a named local held across the
+            // push that can move it.
+            let undefined_array = js_array_push(js_array_alloc(1), JsValue::UNDEFINED);
             let error = extract_params_from_jsvalue(JsValue::from_object_ptr(undefined_array))
                 .expect_err("undefined must never become SQL NULL");
             assert_eq!(error, "Bind parameter at index 0 is undefined");
@@ -1690,8 +1701,7 @@ mod tests {
                 .expect_err("a non-array params container must be rejected");
             assert_eq!(error, "Bind parameters must be an array");
 
-            let mut object_array = js_array_alloc(1);
-            object_array = js_array_push(object_array, object);
+            let object_array = js_array_push(js_array_alloc(1), object);
             let error = extract_params_from_jsvalue(JsValue::from_object_ptr(object_array))
                 .expect_err("an unsupported parameter must never become SQL NULL");
             assert_eq!(error, "Unsupported bind parameter at index 0");

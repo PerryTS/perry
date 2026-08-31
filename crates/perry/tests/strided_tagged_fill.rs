@@ -12,7 +12,7 @@
 //! instead), an out-of-range window (node grows the array), and the plain
 //! strided-gap behavior, under normal and forced-evacuation runs.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, Output};
 
 fn perry_bin() -> PathBuf {
