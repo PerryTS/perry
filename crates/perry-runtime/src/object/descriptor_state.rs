@@ -257,9 +257,15 @@ pub(crate) fn test_reset_class_field_inline_guard() {
 /// setup that runs during every program's startup, `Object.freeze` on a config
 /// object, …) no longer disable the #5093 fast path process-wide.
 ///
-/// The prototype-registry probes scan by value (O(#classes)); descriptor
-/// installs are rare and never on the hot property path, so the scan cost is
-/// acceptable.
+/// The prototype-registry probes scan by value (O(#classes)). This comment
+/// used to add "descriptor installs are rare and never on the hot property
+/// path, so the scan cost is acceptable", and that is false for every bundle:
+/// esbuild's `__export(exports, { … })` makes `Object.defineProperty` a
+/// module-init primitive — claude-code's bundle contains 1,526 of them — so
+/// this function runs 26,290 times on `claude --help` and
+/// `is_registered_class_prototype_object`'s scan alone was 0.46% of the run.
+/// It is now fronted by `CLASS_PROTOTYPE_ADDR_FILTER`, which rejects 99.05% of
+/// those calls before the scan; the O(#classes) slope itself is #9225.
 ///
 /// #6759 C5a — per-KEY refinement (the follow-up the paragraph above used to
 /// promise): the inline fast path only ever compiles accesses to DECLARED
