@@ -596,6 +596,22 @@ pub(crate) fn test_symbol_registry_probe_count() -> u64 {
 }
 
 #[cfg(test)]
+thread_local! {
+/// Every probe that got past `SYMBOL_ADDR_FILTER` and reached
+/// `SYMBOL_POINTERS`. `TEST_SYMBOL_REGISTRY_PROBES` counts ENTRIES into
+/// `is_registered_symbol` and so cannot see the filter working; this counts the
+/// calls the filter was added to remove. (Twin of
+/// `typedarray::TEST_TA_WINDOW_ADMITTED_PROBES`, for the same reason.)
+    static TEST_SYMBOL_FILTER_ADMITTED_PROBES: std::cell::Cell<u64> =
+        const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn test_symbol_filter_admitted_probe_count() -> u64 {
+    TEST_SYMBOL_FILTER_ADMITTED_PROBES.with(|c| c.get())
+}
+
+#[cfg(test)]
 pub(crate) fn test_symbol_latch_is_idle() -> bool {
     SYMBOL_EVER_REGISTERED.is_idle()
 }
@@ -643,6 +659,15 @@ pub fn is_registered_symbol(ptr: usize) -> bool {
     if SYMBOL_EVER_REGISTERED.is_idle() {
         return false;
     }
+    // Counted BEFORE the filter on purpose: this counter's contract is "an
+    // entry that got past the latch", and two other suites
+    // (`get_field_by_name_probe_tests`, `native_call_method::probe_dispatch_tests`)
+    // assert against exactly that — including sabotage checks that DEFEAT a
+    // cheaper screen upstream and require this to move. Counting filter
+    // admissions is a different question; `TEST_SYMBOL_FILTER_ADMITTED_PROBES`
+    // below answers it.
+    #[cfg(test)]
+    TEST_SYMBOL_REGISTRY_PROBES.with(|c| c.set(c.get().wrapping_add(1)));
     // Armed says only that SOME symbol exists — which is true of every program
     // that touches a well-known symbol, i.e. essentially all of them. An
     // address the filter rejects is not one of them, and rejecting it here
@@ -675,7 +700,7 @@ pub fn is_registered_symbol(ptr: usize) -> bool {
         return false;
     }
     #[cfg(test)]
-    TEST_SYMBOL_REGISTRY_PROBES.with(|c| c.set(c.get().wrapping_add(1)));
+    TEST_SYMBOL_FILTER_ADMITTED_PROBES.with(|c| c.set(c.get().wrapping_add(1)));
     is_registered_symbol_slow(ptr)
 }
 

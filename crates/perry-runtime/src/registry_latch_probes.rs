@@ -346,10 +346,10 @@ fn symbol_probe_rejects_a_filtered_address_without_touching_the_registry() {
     let sym = unsafe { crate::symbol::alloc_symbol(std::ptr::null_mut(), false) } as usize;
     assert!(sym != 0, "test premise: the symbol allocated");
 
-    let before = crate::symbol::test_symbol_registry_probe_count();
+    let before = crate::symbol::test_symbol_filter_admitted_probe_count();
     assert!(!crate::symbol::is_registered_symbol(FAR_OUTSIDE_ANY_WINDOW));
     assert_eq!(
-        crate::symbol::test_symbol_registry_probe_count(),
+        crate::symbol::test_symbol_filter_admitted_probe_count(),
         before,
         "the address filter must answer without reaching SYMBOL_POINTERS"
     );
@@ -359,7 +359,7 @@ fn symbol_probe_rejects_a_filtered_address_without_touching_the_registry() {
         "the filter must not hide a registered symbol"
     );
     assert!(
-        crate::symbol::test_symbol_registry_probe_count() > before,
+        crate::symbol::test_symbol_filter_admitted_probe_count() > before,
         "a filter-admitted address must reach SYMBOL_POINTERS"
     );
 }
