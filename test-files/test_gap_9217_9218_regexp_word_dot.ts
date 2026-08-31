@@ -40,6 +40,7 @@ show("mixed-word-i-miss", /^[a\w]+$/i, "Ω");
 show("mixed-negated-word-i", /^[^a\w]+$/i, "Ω");
 show("mixed-nonword-i", /^[a\W]+$/i, "Ω");
 show("mixed-negated-nonword-i", /^[^a\W]+$/i, "Z");
+show("mixed-negated-nonword-i-sequence", /^[^a\W]+$/i, "café");
 
 // \b and \B use the same ASCII word predicate. Around a lone Greek letter,
 // both sides are non-word; next to ASCII x there is a boundary.

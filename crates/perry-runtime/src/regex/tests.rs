@@ -511,6 +511,8 @@ fn ecmascript_word_escapes_and_boundaries_use_the_spec_word_set() {
     assert!(matches(r"^[^a\w]+$", "i", "Ω"));
     assert!(matches(r"^[a\W]+$", "i", "Ω"));
     assert!(!matches(r"^[^a\W]+$", "i", "Ω"));
+    assert!(matches(r"^[^a\W]+$", "i", "cfx"));
+    assert!(!matches(r"^[^a\W]+$", "i", "café"));
 
     // Boundary word-ness is the same predicate as `\w`.
     assert!(!matches(r"^\bΩ\b$", "", "Ω"));

@@ -1690,7 +1690,11 @@ fn rewrite_case_insensitive_ascii_word_class(
     }
     let union = arms.join("|");
     let rewritten = if negated {
-        format!("(?!(?:{union}))(?s:.)")
+        // Keep the assertion and its consuming dot one atom. Otherwise a
+        // following quantifier in the JS source (`[^a\W]+`) would bind only
+        // to the dot, checking the exclusion at the first character but then
+        // silently admitting forbidden characters in later repetitions.
+        format!("(?:(?!(?:{union}))(?s:.))")
     } else {
         format!("(?:{union})")
     };
