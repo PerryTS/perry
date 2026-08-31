@@ -43,6 +43,9 @@ mod ptr_shape_callbacks;
 mod ptr_shape_elements;
 mod ptr_shape_report;
 mod ptr_shape_returns;
+mod receiver_regions;
+#[cfg(test)]
+mod receiver_regions_tests;
 mod refs;
 mod repsel_benefit;
 mod safepoint_sites;
