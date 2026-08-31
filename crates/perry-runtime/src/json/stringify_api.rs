@@ -49,6 +49,121 @@ pub(crate) unsafe fn redirect_lazy_to_materialized(value: f64) -> f64 {
     f64::from_bits(JSValue::object_ptr((*lazy).materialized as *mut u8).bits())
 }
 
+/// Return one validated JSON number token and its exclusive end offset.
+/// The tape builder already accepted this input; the checks here keep the
+/// lazy stringify path fail-closed if a retained blob or tape is corrupted.
+fn json_number_token(bytes: &[u8], start: usize) -> Option<(usize, &[u8])> {
+    let mut end = start;
+    if bytes.get(end) == Some(&b'-') {
+        end += 1;
+    }
+    match bytes.get(end) {
+        Some(b'0') => end += 1,
+        Some(b'1'..=b'9') => {
+            end += 1;
+            while bytes.get(end).is_some_and(u8::is_ascii_digit) {
+                end += 1;
+            }
+        }
+        _ => return None,
+    }
+    if bytes.get(end) == Some(&b'.') {
+        end += 1;
+        let fraction_start = end;
+        while bytes.get(end).is_some_and(u8::is_ascii_digit) {
+            end += 1;
+        }
+        if end == fraction_start {
+            return None;
+        }
+    }
+    if matches!(bytes.get(end), Some(b'e' | b'E')) {
+        end += 1;
+        if matches!(bytes.get(end), Some(b'+' | b'-')) {
+            end += 1;
+        }
+        let exponent_start = end;
+        while bytes.get(end).is_some_and(u8::is_ascii_digit) {
+            end += 1;
+        }
+        if end == exponent_start {
+            return None;
+        }
+    }
+    Some((end, bytes.get(start..end)?))
+}
+
+/// Small source-form integers are already their canonical NumberToString
+/// spelling and are exactly representable as `f64`. This avoids reparsing and
+/// formatting the overwhelmingly common ID/index case while inspecting a lazy
+/// array for number spellings that need normalization.
+fn is_trivially_canonical_json_integer(token: &[u8]) -> bool {
+    let (negative, digits) = match token.strip_prefix(b"-") {
+        Some(digits) => (true, digits),
+        None => (false, token),
+    };
+    !digits.is_empty()
+        && digits.len() <= 15
+        && digits.iter().all(u8::is_ascii_digit)
+        && !(negative && digits == b"0")
+}
+
+/// Normalize number spellings in an otherwise byte-copyable lazy JSON array.
+/// `JSON.parse` converts every number token to an IEEE-754 double, so the
+/// stringify shortcut must not preserve source spellings such as `1e-400`,
+/// `1.0`, or `9007199254740993`. Allocate a rewritten buffer only when a token
+/// differs from the canonical formatting of the `f64` it denotes.
+fn normalize_lazy_json_numbers<'a>(
+    tape: &[crate::json_tape::TapeEntry],
+    blob: &'a [u8],
+    root_start: usize,
+    root_end: usize,
+) -> Option<std::borrow::Cow<'a, [u8]>> {
+    let original = blob.get(root_start..root_end)?;
+    let mut rewritten: Option<Vec<u8>> = None;
+    let mut copied_until = root_start;
+    let mut canonical = String::new();
+
+    for entry in tape {
+        if entry.kind != crate::json_tape::KIND_NUMBER {
+            continue;
+        }
+        let number_start = entry.offset as usize;
+        if number_start < root_start || number_start >= root_end {
+            continue;
+        }
+        let (number_end, token) = json_number_token(blob, number_start)?;
+        if number_end > root_end {
+            return None;
+        }
+        if is_trivially_canonical_json_integer(token) {
+            continue;
+        }
+
+        let value = std::str::from_utf8(token).ok()?.parse::<f64>().ok()?;
+        canonical.clear();
+        unsafe { stringify::write_number(&mut canonical, value) };
+        if canonical.as_bytes() == token {
+            continue;
+        }
+
+        let output = rewritten.get_or_insert_with(|| Vec::with_capacity(original.len()));
+        if number_start < copied_until {
+            return None;
+        }
+        output.extend_from_slice(blob.get(copied_until..number_start)?);
+        output.extend_from_slice(canonical.as_bytes());
+        copied_until = number_end;
+    }
+
+    if let Some(mut output) = rewritten {
+        output.extend_from_slice(blob.get(copied_until..root_end)?);
+        Some(std::borrow::Cow::Owned(output))
+    } else {
+        Some(std::borrow::Cow::Borrowed(original))
+    }
+}
+
 /// Issue #179 Phase 4: lazy-stringify fast path. If `value` is a
 /// lazy-parse top-level array whose `materialized` is still null (no
 /// indexed access or mutation has forced tree build), memcpy the
@@ -63,7 +178,9 @@ pub(crate) unsafe fn redirect_lazy_to_materialized(value: f64) -> f64 {
 /// value (modulo whitespace the user's original blob may contain —
 /// `JSON.stringify` never emits whitespace for the 2-arg form, so
 /// this is only correct when the blob came from `JSON.stringify` or
-/// is otherwise whitespace-free in the array span).
+/// is otherwise whitespace-free in the array span). Number tokens are
+/// normalized separately: their source spelling is preserved only when it
+/// matches the canonical formatting of the `f64` produced by `JSON.parse`.
 pub(crate) unsafe fn try_stringify_lazy_array(value: f64) -> Option<*mut StringHeader> {
     let bits = value.to_bits();
     let top16 = bits >> 48;
@@ -139,8 +256,8 @@ pub(crate) unsafe fn try_stringify_lazy_array(value: f64) -> Option<*mut StringH
     if end > blob_bytes.len() || start > end {
         return None;
     }
-    let slice = &blob_bytes[start..end];
-    Some(json_string_from_output_bytes(slice))
+    let normalized = normalize_lazy_json_numbers(tape, blob_bytes, start, end)?;
+    Some(json_string_from_output_bytes(normalized.as_ref()))
 }
 
 #[no_mangle]
