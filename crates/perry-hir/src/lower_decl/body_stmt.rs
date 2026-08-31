@@ -32,6 +32,9 @@ use detect::{
 
 use for_await::lower_runtime_for_await_iterator_body;
 
+const BODY_STMT_STACK_RED_ZONE: usize = 512 * 1024;
+const BODY_STMT_STACK_SEGMENT: usize = 2 * 1024 * 1024;
+
 // Keep the property-hoist pass and its large `Stmt`/`Expr` return place out of
 // recursive `lower_body_stmt` frames. At the unoptimized test profile, adding
 // those temporaries to the monolithic lowering function exhausted Rust's
@@ -73,7 +76,19 @@ fn finish_for_with_property_array_hoist(
     }]
 }
 
+/// Lower one statement while keeping the large debug-only lowering frame off
+/// a nearly exhausted caller stack. `lower_body_stmt_impl` is intentionally a
+/// separate non-inlined function: the unoptimized frame is large enough that
+/// a handful of ordinary nested blocks can overflow Rust's default 2 MiB test
+/// thread before expression lowering gets a chance to grow the stack (#9196).
 pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Vec<Stmt>> {
+    stacker::maybe_grow(BODY_STMT_STACK_RED_ZONE, BODY_STMT_STACK_SEGMENT, || {
+        lower_body_stmt_impl(ctx, stmt)
+    })
+}
+
+#[inline(never)]
+fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Vec<Stmt>> {
     let mut result = Vec::new();
 
     match stmt {
