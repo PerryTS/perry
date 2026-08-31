@@ -1217,3 +1217,55 @@ fn any_char_rewrite_preserves_match_behaviour() {
         b"[\\s\\S]+".to_vec()
     );
 }
+
+/// #9305 fallout: the translator spells ECMAScript's ASCII `\b`/`\B` as
+/// `(?-iu:\b)`, which fancy-regex's parser rejects (`NonUnicodeUnsupported`).
+/// Any lookaround/backreference pattern containing a word boundary therefore
+/// raised a bogus SyntaxError — cli.js's `marked` html-block regex among
+/// them, whose throw-in-a-microtask the setjmp miscompile then turned into
+/// a segfault. `build_fancy_regex` now rewrites the marker into one-char
+/// lookarounds.
+#[test]
+fn fancy_engine_accepts_ascii_word_boundary_markers() {
+    // Lookahead + \b: std engine refuses (lookaround), fancy must accept.
+    let translated = js_regex_to_rust(r"(?!foo\b)\w+");
+    let fancy = crate::regex::build_fancy_regex(&translated).expect("fancy build");
+    assert_eq!(
+        fancy.find("foobar").unwrap().map(|m| m.as_str()),
+        Some("foobar")
+    );
+    assert!(fancy.find("foo bar").unwrap().map(|m| m.as_str()) != Some("foo"));
+
+    // \B variant.
+    let translated = js_regex_to_rust(r"(?=x)x\Ba");
+    let fancy = crate::regex::build_fancy_regex(&translated).expect("fancy \\B build");
+    assert!(fancy.is_match("xa").unwrap());
+
+    // Boundary semantics stay ASCII on the fancy engine: é is NOT a word
+    // char, so /(?=.)\bé/ must treat the position before é as a boundary
+    // only when the preceding char is a word char... spec: \b before é
+    // (non-word) requires previous to be word.
+    let translated = js_regex_to_rust(r"(?=.)a\b\u00e9");
+    let fancy = crate::regex::build_fancy_regex(&translated).expect("fancy ascii build");
+    assert!(fancy.is_match("a\u{e9}").unwrap());
+
+    // The real-world shape: marked's html-block regex from cli_2.1.112.js.
+    let marked = concat!(
+        r"^ *(?:<!--(?:-?>|[\s\S]*?(?:-->|$)) *(?:\n|\s*$)",
+        r"|<((?!(?:a|em|strong|small|s|cite|q|dfn|abbr|data|time|code|var|samp|kbd",
+        r"|sub|sup|i|b|u|mark|ruby|rt|rp|bdi|bdo|span|br|wbr|ins|del|img)\b)",
+        r"\w+(?!:|[^\w\s@]*@)\b)[\s\S]+?</\1> *(?:\n{2,}|\s*$)",
+        r"|<(?!(?:a|em|strong|small|s|cite|q|dfn|abbr|data|time|code|var|samp|kbd",
+        r"|sub|sup|i|b|u|mark|ruby|rt|rp|bdi|bdo|span|br|wbr|ins|del|img)\b)",
+        r"\w+(?!:|[^\w\s@]*@)\b(?:\x22[^\x22]*\x22|'[^']*'|\s[^'\x22/>\s]*)*?/?> *(?:\n{2,}|\s*$))",
+    );
+    let translated = js_regex_to_rust(marked);
+    let fancy = crate::regex::build_fancy_regex(&translated).expect("marked html regex build");
+    assert_eq!(
+        fancy
+            .find("<div>\nhello\n</div>\n\n")
+            .unwrap()
+            .map(|m| m.as_str()),
+        Some("<div>\nhello\n</div>\n\n")
+    );
+}

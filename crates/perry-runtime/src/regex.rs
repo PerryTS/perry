@@ -358,12 +358,53 @@ pub(crate) fn build_std_regex(pattern: &str) -> Result<Regex, regex::Error> {
         .build()
 }
 
+/// The ASCII word atom the boundary spellings below share. `(?-i:…)` keeps
+/// the class exact under an outer `(?i)` — ECMAScript's non-Unicode word set
+/// is pure ASCII even case-insensitively (no LONG S / KELVIN SIGN), and the
+/// class is already case-closed so disabling the fold changes nothing else.
+#[cfg(feature = "regex-engine")]
+const FANCY_ASCII_WORD: &str = r"(?-i:[0-9A-Za-z_])";
+
+/// Rewrite the translator's ASCII word-boundary markers into a form
+/// `fancy-regex` parses (#9305 fallout, unmasked by the transport fix).
+///
+/// `js_regex_to_rust` spells ECMAScript's ASCII `\b`/`\B` as `(?-iu:\b)` /
+/// `(?-iu:\B)` (#9263). The `regex` crate accepts that scoped flag group,
+/// but `fancy-regex`'s own parser rejects the `u` flag outright
+/// (`NonUnicodeUnsupported`) — so every pattern that must run on this
+/// engine (lookarounds, backreferences) and also contains a word boundary
+/// failed to compile as a `SyntaxError`. cli.js's `marked` html-block
+/// regex is exactly that shape, which is the throw-in-a-microtask that
+/// #9305's setjmp miscompile turned into a segfault.
+///
+/// The markers can only come from our own translator — `(?-iu:` is itself
+/// a SyntaxError in a JS pattern, so no user input survives translation
+/// with that byte sequence outside a character class — making a textual
+/// substitution exact. The replacement spells the boundary with
+/// one-code-point lookarounds, the same technique
+/// `push_unicode_ignore_case_word_boundary` already relies on fancy-regex
+/// for: a boundary is "exactly one side is a word char", a non-boundary
+/// "both sides agree".
+#[cfg(feature = "regex-engine")]
+fn fancy_compatible_word_boundaries(pattern: &str) -> String {
+    if !pattern.contains("(?-iu:") {
+        return pattern.to_string();
+    }
+    let w = FANCY_ASCII_WORD;
+    let boundary = format!("(?:(?<={w})(?!{w})|(?<!{w})(?={w}))");
+    let non_boundary = format!("(?:(?<={w})(?={w})|(?<!{w})(?!{w}))");
+    pattern
+        .replace(r"(?-iu:\b)", &boundary)
+        .replace(r"(?-iu:\B)", &non_boundary)
+}
+
 /// Build a `fancy_regex` `Regex` with the raised delegate size limit (see
 /// [`REGEX_SIZE_LIMIT`]). `fancy-regex` delegates non-fancy subpatterns to the
 /// `regex` crate, so the same 10 MiB cap applies there; raise it in lockstep.
 #[cfg(feature = "regex-engine")]
 pub(crate) fn build_fancy_regex(pattern: &str) -> Result<fancy_regex::Regex, fancy_regex::Error> {
-    fancy_regex::RegexBuilder::new(pattern)
+    let pattern = fancy_compatible_word_boundaries(pattern);
+    fancy_regex::RegexBuilder::new(&pattern)
         .delegate_size_limit(REGEX_SIZE_LIMIT)
         .build()
 }
