@@ -43,7 +43,10 @@ use super::{
 mod foreign_counter;
 mod guarded_array;
 pub(crate) use foreign_counter::packed_f64_loop_index_parts;
-use foreign_counter::{foreign_packed_loop_read, packed_f64_loop_offset_read};
+use foreign_counter::{
+    affine_packed_loop_read, emit_affine_index_i64, foreign_packed_loop_read,
+    packed_f64_loop_offset_read,
+};
 mod inline_dyn_typed_array;
 
 use guarded_array::{
@@ -774,6 +777,31 @@ pub(crate) fn lower_numeric_index_get_for_number_context(
         // `is_packed_f64_loop_foreign_read_index` for read-only bodies. The
         // guard already proved this receiver's packed layout, so the element
         // load is the clone's raw slot load behind one inline bounds check.
+
+        // #9253: `a[i * size + k]` against a receiver-only affine fact. The
+        // entry guard proved the receiver once in the preheader; the index is
+        // materialised in i64 and range-clamped, then the shared bounds-checked
+        // element load does one `icmp ult idx, len` and takes the fact's side
+        // exit. That leaves per iteration only the compare and the raw load,
+        // instead of re-deriving tag/handle/header/flags/16M-sanity per access.
+        if let Some(fact) = affine_packed_loop_read(ctx, *arr_id, index.as_ref()) {
+            let arr_box = lower_expr(ctx, object)?;
+            if let Some(idx64) = emit_affine_index_i64(ctx, index.as_ref(), fact.index_local_id) {
+                // Unsigned: a negative index reads as a huge unsigned value and
+                // takes the side exit, so no static non-negativity proof is
+                // needed. The i32 ceiling keeps the truncation below exact.
+                let fits = ctx.block().icmp_ult(I64, &idx64, "2147483647");
+                let cont_idx = ctx.new_block("packed_f64_affine.index_fits");
+                let cont_label = ctx.block_label(cont_idx);
+                ctx.block()
+                    .cond_br(&fits, &cont_label, &fact.store_side_exit_label);
+                ctx.current_block = cont_idx;
+                let idx_i32 = ctx.block().trunc(I64, &idx64, I32);
+                return Ok(Some(lower_packed_f64_loop_index_get(
+                    ctx, *arr_id, &arr_box, &idx_i32, &fact, true,
+                )));
+            }
+        }
         if let Some((fact, idx_id)) = foreign_packed_loop_read(ctx, *arr_id, index.as_ref()) {
             if let Some(i32_slot) = ctx.i32_counter_slots.get(&idx_id).cloned() {
                 let arr_box = lower_expr(ctx, object)?;

@@ -1073,6 +1073,7 @@ fn lower_packed_f64_versioned_for(
         array_kind: matched.array_kind,
         allow_holes: false,
         window_validated: false,
+        affine_indices: false,
         numeric_accumulators: acc_scope.accumulators.clone(),
     });
     // The guard just proved a live, non-forwarded plain array, and the
@@ -1149,6 +1150,13 @@ pub(super) struct PackedF64RangeArrayAccess {
     /// (`arr[e & K]`, `arr[K1 + (e >>> k & K2)]`, … — see
     /// `collectors::static_index_window`). Dense mode only.
     pub(super) stat: Option<(i64, i64)>,
+    /// #9253: at least one access used an AFFINE index — an integer-producing
+    /// expression over the counter and loop-invariant integer locals, such as
+    /// `a[i * size + k]`. Such an index has no compile-time window, so the
+    /// entry guard proves only the receiver (shape / raw-f64 packedness /
+    /// integrity) and each read pays an inline `icmp ult idx, len` with a side
+    /// exit. Classic mode only: dense mode's loads carry no side exit.
+    pub(super) affine: bool,
     pub(super) written: bool,
 }
 
@@ -1296,8 +1304,31 @@ fn match_packed_f64_range_loop(
     };
     let mut accesses: std::collections::BTreeMap<u32, PackedF64RangeArrayAccess> =
         std::collections::BTreeMap::new();
-    let dense = if packed_f64_range_loop_body_collect(body, counter_id, bound_local, &mut accesses)
-    {
+    // #9253: a leaf of an affine index (`a[i * size + k]`) is admissible when
+    // it is an integer-valued local that the loop body never writes. The
+    // counter is handled by the recogniser itself. Invariance is required
+    // because the fast clone recomputes the index in i64 from the leaves'
+    // slots: a leaf written mid-body would make the recomputation and the
+    // source expression disagree.
+    let affine_leaf_ok = |id: u32| -> bool {
+        // The lowering materialises each leaf from its shared i32 shadow, so
+        // require that shadow HERE. Matcher and lowering must admit exactly
+        // the same shapes: admitting one the lowering declines emits a helper
+        // call, and the clone's call-free scan then discards the whole clone
+        // (the #9259 cascade).
+        ctx.integer_locals.contains(&id)
+            && ctx.i32_counter_slots.contains_key(&id)
+            && !stmts_mutate_local(body, id)
+            && !ctx.boxed_vars.contains(&id)
+            && !ctx.closure_captures.contains_key(&id)
+    };
+    let dense = if packed_f64_range_loop_body_collect(
+        body,
+        counter_id,
+        bound_local,
+        &mut accesses,
+        Some(&affine_leaf_ok),
+    ) {
         false
     } else {
         // The classic shape (one statement, counter-offset indices, stores
@@ -1385,8 +1416,23 @@ fn match_packed_f64_range_loop(
                 return range_loop_reject("static_window_out_of_i32");
             }
         }
-        if access.counter.is_none() && access.stat.is_none() {
+        if access.counter.is_none() && access.stat.is_none() && !access.affine {
             return range_loop_reject("access_has_no_window");
+        }
+        // #9253: an affine index has no compile-time window by construction,
+        // so its entry guard proves the RECEIVER only and each read pays an
+        // inline bounds check with a side exit. Dense mode's loads have no
+        // side exit, so the two are mutually exclusive; the matcher only ever
+        // sets `affine` on the classic path, and this makes that explicit
+        // rather than implicit in which caller passed the leaf predicate.
+        if access.affine && dense {
+            return range_loop_reject("affine_index_in_dense_mode");
+        }
+        if access.affine && access.written {
+            // A store through an affine index would need the side exit to be
+            // replay-safe, which the classic mode only guarantees for a single
+            // statement whose one side effect happens last. Reads only.
+            return range_loop_reject("affine_index_store");
         }
         if access.written {
             // Dense written arrays need only the declared number[]-ness: the
@@ -1431,6 +1477,89 @@ fn match_packed_f64_range_loop(
     })
 }
 
+/// #9253: is `index` an integer-producing expression over the loop counter and
+/// loop-invariant integer locals — `k`, `i * size + k`, `k * size + j`?
+///
+/// This is a KIND proof, not a range proof. It deliberately does not try to
+/// bound the value: `size` is typically a parameter with no callsite summary,
+/// so `int_range_expr` answers `None` and any static window is unobtainable.
+/// The read instead pays an unsigned `icmp ult idx, len` against the live
+/// length, which rejects a negative index as a huge unsigned one and takes the
+/// side exit — so non-negativity is not needed as a static fact either.
+///
+/// What IS needed is that the value materialises without wrapping, which the
+/// lowering guarantees by computing the index in i64 from operands that are
+/// each a proven i32 (`emit_object_array_write_index_i64` is the existing
+/// precedent for the same arithmetic).
+///
+/// Leaves: the counter, any local proven integer-valued, and integer literals.
+/// A non-counter local must additionally be loop-invariant — checked by the
+/// caller, which has the loop body — because a leaf written inside the body
+/// would make the index and the emitted i64 recomputation disagree.
+/// Does `expr` read `id` anywhere? Used to keep the affine index arm to
+/// counter-dependent indices; a wholly loop-invariant index belongs to a tier
+/// that can prove a compile-time window for it.
+fn expr_mentions_local(expr: &perry_hir::Expr, id: u32) -> bool {
+    use perry_hir::Expr;
+    if matches!(expr, Expr::LocalGet(found) if *found == id) {
+        return true;
+    }
+    let mut found = false;
+    perry_hir::walker::walk_expr_children(expr, &mut |child| {
+        if !found {
+            found = expr_mentions_local(child, id);
+        }
+    });
+    found
+}
+
+fn packed_f64_range_loop_index_is_affine_with(
+    index: &perry_hir::Expr,
+    counter_id: u32,
+    leaf_ok: &dyn Fn(u32) -> bool,
+) -> bool {
+    use perry_hir::{BinaryOp, Expr};
+    match index {
+        Expr::Integer(v) => i32::try_from(*v).is_ok(),
+        Expr::Number(n) => {
+            n.fract() == 0.0 && *n >= f64::from(i32::MIN) && *n <= f64::from(i32::MAX)
+        }
+        Expr::LocalGet(id) => *id == counter_id || leaf_ok(*id),
+        // Only the operators whose i64 recomputation is exact. `Div`/`Mod`/
+        // shifts are excluded: they are not wrong here so much as unproven,
+        // and admitting a shape the lowering then declines would emit a helper
+        // call and cost the whole clone (the #9259 cascade).
+        Expr::Binary {
+            op: BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul,
+            left,
+            right,
+        } => {
+            packed_f64_range_loop_index_is_affine_with(left, counter_id, leaf_ok)
+                && packed_f64_range_loop_index_is_affine_with(right, counter_id, leaf_ok)
+        }
+        _ => false,
+    }
+}
+
+/// Record an affine (window-less) access. Unlike the counter/static recorders
+/// this widens nothing: there is no window to merge, and the entry guard will
+/// prove the receiver rather than a range.
+fn record_packed_f64_range_affine_access(
+    accesses: &mut std::collections::BTreeMap<u32, PackedF64RangeArrayAccess>,
+    array_id: u32,
+) {
+    let entry = accesses
+        .entry(array_id)
+        .or_insert(PackedF64RangeArrayAccess {
+            array_id,
+            counter: None,
+            stat: None,
+            affine: false,
+            written: false,
+        });
+    entry.affine = true;
+}
+
 fn record_packed_f64_range_access(
     accesses: &mut std::collections::BTreeMap<u32, PackedF64RangeArrayAccess>,
     array_id: u32,
@@ -1443,6 +1572,7 @@ fn record_packed_f64_range_access(
             array_id,
             counter: None,
             stat: None,
+            affine: false,
             written,
         });
     entry.counter = Some(match entry.counter {
@@ -1479,6 +1609,7 @@ pub(super) fn record_packed_f64_range_static_access(
             array_id,
             counter: None,
             stat: None,
+            affine: false,
             written: false,
         });
     entry.stat = Some(match entry.stat {
@@ -1524,6 +1655,7 @@ fn packed_f64_range_loop_body_collect(
     counter_id: u32,
     bound_local: Option<u32>,
     accesses: &mut std::collections::BTreeMap<u32, PackedF64RangeArrayAccess>,
+    affine_leaf_ok: Option<&dyn Fn(u32) -> bool>,
 ) -> bool {
     use perry_hir::Expr;
     let [Stmt::Expr(expr)] = body else {
@@ -1557,10 +1689,22 @@ fn packed_f64_range_loop_body_collect(
         Expr::LocalSet(id, value) => {
             *id != counter_id
                 && Some(*id) != bound_local
-                && packed_f64_range_loop_pure_expr_collect(value, counter_id, false, accesses)
+                && packed_f64_range_loop_pure_expr_collect(
+                    value,
+                    counter_id,
+                    false,
+                    accesses,
+                    affine_leaf_ok,
+                )
                 && !accesses.contains_key(id)
         }
-        _ => packed_f64_range_loop_pure_expr_collect(expr, counter_id, false, accesses),
+        _ => packed_f64_range_loop_pure_expr_collect(
+            expr,
+            counter_id,
+            false,
+            accesses,
+            affine_leaf_ok,
+        ),
     }
 }
 
@@ -1616,7 +1760,7 @@ fn packed_f64_range_loop_store_collect(
     let Some(offset) = packed_f64_range_loop_index_offset(index, counter_id) else {
         return false;
     };
-    if !packed_f64_range_loop_pure_expr_collect(value, counter_id, false, accesses) {
+    if !packed_f64_range_loop_pure_expr_collect(value, counter_id, false, accesses, None) {
         return false;
     }
     record_packed_f64_range_access(accesses, *arr_id, offset, true);
@@ -1676,7 +1820,9 @@ fn packed_f64_range_loop_dense_stmts_collect(
                 ..
             } => {
                 if !masked_window_expression_is_non_collecting(ctx, init)
-                    || !packed_f64_range_loop_pure_expr_collect(init, counter_id, true, accesses)
+                    || !packed_f64_range_loop_pure_expr_collect(
+                        init, counter_id, true, accesses, None,
+                    )
                 {
                     return false;
                 }
@@ -1690,7 +1836,9 @@ fn packed_f64_range_loop_dense_stmts_collect(
                     return false;
                 }
                 if !masked_window_expression_is_non_collecting(ctx, value)
-                    || !packed_f64_range_loop_pure_expr_collect(value, counter_id, true, accesses)
+                    || !packed_f64_range_loop_pure_expr_collect(
+                        value, counter_id, true, accesses, None,
+                    )
                 {
                     return false;
                 }
@@ -1720,10 +1868,10 @@ fn packed_f64_range_loop_dense_stmts_collect(
                         || !masked_window_expression_is_non_collecting(ctx, value)
                         || !dense_masked_store_rhs_is_admissible(ctx, value, counter_id, accesses)
                         || !packed_f64_range_loop_pure_expr_collect(
-                            index, counter_id, true, accesses,
+                            index, counter_id, true, accesses, None,
                         )
                         || !packed_f64_range_loop_pure_expr_collect(
-                            value, counter_id, true, accesses,
+                            value, counter_id, true, accesses, None,
                         )
                     {
                         return false;
@@ -1738,7 +1886,9 @@ fn packed_f64_range_loop_dense_stmts_collect(
                     continue;
                 }
                 if !masked_window_expression_is_non_collecting(ctx, expr)
-                    || !packed_f64_range_loop_pure_expr_collect(expr, counter_id, true, accesses)
+                    || !packed_f64_range_loop_pure_expr_collect(
+                        expr, counter_id, true, accesses, None,
+                    )
                 {
                     return false;
                 }
@@ -2014,6 +2164,7 @@ pub(super) fn packed_f64_range_loop_pure_expr_collect(
     counter_id: u32,
     allow_static: bool,
     accesses: &mut std::collections::BTreeMap<u32, PackedF64RangeArrayAccess>,
+    affine_leaf_ok: Option<&dyn Fn(u32) -> bool>,
 ) -> bool {
     use perry_hir::Expr;
     match expr {
@@ -2025,6 +2176,23 @@ pub(super) fn packed_f64_range_loop_pure_expr_collect(
                 record_packed_f64_range_access(accesses, *arr_id, offset, false);
                 return true;
             }
+            // #9253: an affine integer index (`a[i * size + k]`). Classic mode
+            // only — the caller passes `None` for dense, whose loads carry no
+            // side exit and so cannot take a per-read bounds check.
+            if let Some(leaf_ok) = affine_leaf_ok {
+                // The index must actually involve the counter. A constant or
+                // wholly loop-invariant index (`a[0]`, `a[1]`) is affine by the
+                // grammar but has a compile-time window, and the DENSE tier's
+                // masked/static-window path serves it better — admitting it
+                // here makes the classic walker succeed and silently steals the
+                // loop from that tier, which is a regression, not a win.
+                if packed_f64_range_loop_index_is_affine_with(index, counter_id, leaf_ok)
+                    && expr_mentions_local(index, counter_id)
+                {
+                    record_packed_f64_range_affine_access(accesses, *arr_id);
+                    return true;
+                }
+            }
             if !allow_static {
                 return false;
             }
@@ -2035,7 +2203,13 @@ pub(super) fn packed_f64_range_loop_pure_expr_collect(
                 return false;
             }
             // The index may nest further tracked reads — walk it too.
-            if !packed_f64_range_loop_pure_expr_collect(index, counter_id, allow_static, accesses) {
+            if !packed_f64_range_loop_pure_expr_collect(
+                index,
+                counter_id,
+                allow_static,
+                accesses,
+                affine_leaf_ok,
+            ) {
                 return false;
             }
             record_packed_f64_range_static_access(accesses, *arr_id, lo, hi);
@@ -2050,51 +2224,68 @@ pub(super) fn packed_f64_range_loop_pure_expr_collect(
         Expr::Binary { left, right, .. }
         | Expr::Compare { left, right, .. }
         | Expr::Logical { left, right, .. } => {
-            packed_f64_range_loop_pure_expr_collect(left, counter_id, allow_static, accesses)
-                && packed_f64_range_loop_pure_expr_collect(
-                    right,
-                    counter_id,
-                    allow_static,
-                    accesses,
-                )
+            packed_f64_range_loop_pure_expr_collect(
+                left,
+                counter_id,
+                allow_static,
+                accesses,
+                affine_leaf_ok,
+            ) && packed_f64_range_loop_pure_expr_collect(
+                right,
+                counter_id,
+                allow_static,
+                accesses,
+                affine_leaf_ok,
+            )
         }
         Expr::Unary { operand, .. }
         | Expr::Void(operand)
         | Expr::TypeOf(operand)
         | Expr::NumberCoerce(operand)
-        | Expr::BooleanCoerce(operand) => {
-            packed_f64_range_loop_pure_expr_collect(operand, counter_id, allow_static, accesses)
-        }
+        | Expr::BooleanCoerce(operand) => packed_f64_range_loop_pure_expr_collect(
+            operand,
+            counter_id,
+            allow_static,
+            accesses,
+            affine_leaf_ok,
+        ),
         Expr::Conditional {
             condition,
             then_expr,
             else_expr,
         } => {
-            packed_f64_range_loop_pure_expr_collect(condition, counter_id, allow_static, accesses)
-                && packed_f64_range_loop_pure_expr_collect(
-                    then_expr,
-                    counter_id,
-                    allow_static,
-                    accesses,
-                )
-                && packed_f64_range_loop_pure_expr_collect(
-                    else_expr,
-                    counter_id,
-                    allow_static,
-                    accesses,
-                )
+            packed_f64_range_loop_pure_expr_collect(
+                condition,
+                counter_id,
+                allow_static,
+                accesses,
+                affine_leaf_ok,
+            ) && packed_f64_range_loop_pure_expr_collect(
+                then_expr,
+                counter_id,
+                allow_static,
+                accesses,
+                affine_leaf_ok,
+            ) && packed_f64_range_loop_pure_expr_collect(
+                else_expr,
+                counter_id,
+                allow_static,
+                accesses,
+                affine_leaf_ok,
+            )
         }
         Expr::MathImul(left, right) | Expr::MathPow(left, right) => {
-            packed_f64_range_loop_pure_expr_collect(left, counter_id, allow_static, accesses)
+            packed_f64_range_loop_pure_expr_collect(left, counter_id, allow_static, accesses, None)
                 && packed_f64_range_loop_pure_expr_collect(
                     right,
                     counter_id,
                     allow_static,
                     accesses,
+                    affine_leaf_ok,
                 )
         }
         Expr::MathMin(values) | Expr::MathMax(values) => values.iter().all(|expr| {
-            packed_f64_range_loop_pure_expr_collect(expr, counter_id, allow_static, accesses)
+            packed_f64_range_loop_pure_expr_collect(expr, counter_id, allow_static, accesses, None)
         }),
         Expr::MathAbs(value)
         | Expr::MathSqrt(value)
@@ -2104,7 +2295,7 @@ pub(super) fn packed_f64_range_loop_pure_expr_collect(
         | Expr::MathTrunc(value)
         | Expr::MathSign(value)
         | Expr::MathF16round(value) => {
-            packed_f64_range_loop_pure_expr_collect(value, counter_id, allow_static, accesses)
+            packed_f64_range_loop_pure_expr_collect(value, counter_id, allow_static, accesses, None)
         }
         _ => false,
     }
@@ -2135,6 +2326,32 @@ fn emit_packed_f64_range_guards(
             "array[packed_f64_range_loop]",
             TypedFeedbackContract::packed_f64_array_loop(),
         );
+        // #9253: an affine access has no window to validate. The 2-arg
+        // receiver guard proves exactly what is hoistable — plain-array shape,
+        // raw-f64 packedness, integrity/frozen state, the 16M length and
+        // capacity sanity bounds — once in the preheader, which is the whole
+        // point: those are the per-iteration instructions this issue is about.
+        // The index itself is validated per read by `icmp ult idx, len`.
+        if access.affine {
+            let guard_i32 = ctx.block().call(
+                I32,
+                "js_typed_feedback_packed_f64_array_loop_guard",
+                &[(I64, &feedback_site_id), (DOUBLE, &arr_box)],
+            );
+            let guard_ok = ctx.block().icmp_ne(I32, &guard_i32, "0");
+            all_guards_ok = Some(match all_guards_ok {
+                None => guard_ok,
+                Some(prev) => ctx.block().and(I1, &prev, &guard_ok),
+            });
+            record_packed_f64_loop_guard_artifacts(
+                ctx,
+                access.array_id,
+                &arr_box,
+                guard_id,
+                PackedNumericLoopKind::F64,
+            );
+            continue;
+        }
         let (min_idx, max_idx): (String, String) = match (access.counter, access.stat) {
             (Some((min_off, max_off)), None) => (
                 (matched.start + i64::from(min_off)).to_string(),
@@ -2211,6 +2428,24 @@ fn push_packed_f64_range_facts(
                 // hole-tolerant.
                 allow_holes: !matched.dense,
                 window_validated: true,
+                affine_indices: false,
+                numeric_accumulators: numeric_accumulators.to_vec(),
+            });
+        }
+        // #9253: an affine access publishes a receiver-only fact. No window
+        // was validated, so reads bounds-check per access; holes are excluded
+        // because the receiver guard proves fully-packed raw f64.
+        if access.affine {
+            ctx.packed_f64_loop_facts.push(PackedF64LoopFact {
+                index_local_id: matched.counter_id,
+                array_local_id: access.array_id,
+                scope_id,
+                guard_id: guard_id.to_string(),
+                store_side_exit_label: slow_pre_label.to_string(),
+                array_kind: PackedNumericLoopKind::F64,
+                allow_holes: false,
+                window_validated: false,
+                affine_indices: true,
                 numeric_accumulators: numeric_accumulators.to_vec(),
             });
         }

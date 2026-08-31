@@ -1992,6 +1992,16 @@ pub(crate) struct PackedF64LoopFact {
     /// is the dense range loop: the window is additionally hole-free, so
     /// loads carry no hole check at all).
     pub window_validated: bool,
+    /// #9253: reads on this receiver may use an AFFINE index — an
+    /// integer-producing expression over the loop counter and loop-invariant
+    /// integer locals (`a[i * size + k]`). The entry guard proved the receiver
+    /// only, so every such read pays an inline `icmp ult idx, len` against the
+    /// live length and takes `store_side_exit_label` when it fails.
+    ///
+    /// The matcher admits the loop only when EVERY tracked access qualifies,
+    /// so a lowering that finds this flag set may trust that the index shape in
+    /// front of it was the one admitted.
+    pub affine_indices: bool,
 }
 
 /// Element storage a masked-window fact's entry guard proved (#6750

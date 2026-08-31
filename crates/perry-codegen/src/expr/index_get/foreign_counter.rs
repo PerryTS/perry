@@ -97,3 +97,87 @@ pub(crate) fn packed_f64_loop_offset_read(
     let needs_bounds_check = offset != 0 && !fact.allow_holes && !fact.window_validated;
     Some((fact, idx_id, offset, needs_bounds_check))
 }
+
+/// #9253: an active receiver-only (`affine_indices`) fact for `arr_id`, when
+/// `index` is an affine integer expression rather than a bare local.
+///
+/// The bare-local cases belong to `foreign_packed_loop_read` and the clone's
+/// own counter path; this is `a[i * size + k]`.
+pub(crate) fn affine_packed_loop_read(
+    ctx: &FnCtx<'_>,
+    arr_id: u32,
+    index: &Expr,
+) -> Option<PackedF64LoopFact> {
+    if matches!(index, Expr::LocalGet(_)) {
+        return None;
+    }
+    let fact = ctx
+        .packed_f64_loop_facts
+        .iter()
+        .rev()
+        .find(|fact| fact.array_local_id == arr_id && fact.affine_indices)?
+        .clone();
+    affine_index_leaves_materializable(ctx, index, fact.index_local_id).then_some(fact)
+}
+
+/// Every leaf must be readable as an i32 here, matching exactly what the
+/// matcher's `affine_leaf_ok` admitted. If these two disagree the matcher
+/// admits a shape this lowering declines, the read falls back to a helper
+/// call, and the clone's call-free scan discards the whole clone — the #9259
+/// cascade.
+fn affine_index_leaves_materializable(ctx: &FnCtx<'_>, index: &Expr, counter_id: u32) -> bool {
+    match index {
+        Expr::Integer(v) => i32::try_from(*v).is_ok(),
+        Expr::Number(n) => {
+            n.fract() == 0.0 && *n >= f64::from(i32::MIN) && *n <= f64::from(i32::MAX)
+        }
+        Expr::LocalGet(id) => *id == counter_id || ctx.i32_counter_slots.contains_key(id),
+        Expr::Binary {
+            op: perry_hir::BinaryOp::Add | perry_hir::BinaryOp::Sub | perry_hir::BinaryOp::Mul,
+            left,
+            right,
+        } => {
+            affine_index_leaves_materializable(ctx, left, counter_id)
+                && affine_index_leaves_materializable(ctx, right, counter_id)
+        }
+        _ => false,
+    }
+}
+
+/// Materialise the index in **i64** from each leaf's shared i32 shadow.
+///
+/// i64 rather than i32 because the source expression evaluates in doubles and
+/// `i * size` can exceed i32 for a large matrix even when the final sum is a
+/// valid index; computing in i32 would wrap and could produce an in-bounds
+/// index for an out-of-bounds access. Every leaf is a proven i32, so three
+/// levels of add/sub/mul cannot overflow i64.
+pub(crate) fn emit_affine_index_i64(
+    ctx: &mut FnCtx<'_>,
+    index: &Expr,
+    counter_id: u32,
+) -> Option<String> {
+    match index {
+        Expr::Integer(v) => Some(v.to_string()),
+        Expr::Number(n) => Some(format!("{}", *n as i64)),
+        Expr::LocalGet(id) => {
+            let slot = if *id == counter_id {
+                ctx.i32_counter_slots.get(id)?.clone()
+            } else {
+                ctx.i32_counter_slots.get(id)?.clone()
+            };
+            let narrow = ctx.block().load(I32, &slot);
+            Some(ctx.block().sext(I32, &narrow, I64))
+        }
+        Expr::Binary { op, left, right } => {
+            let l = emit_affine_index_i64(ctx, left, counter_id)?;
+            let r = emit_affine_index_i64(ctx, right, counter_id)?;
+            Some(match op {
+                perry_hir::BinaryOp::Add => ctx.block().add(I64, &l, &r),
+                perry_hir::BinaryOp::Sub => ctx.block().sub(I64, &l, &r),
+                perry_hir::BinaryOp::Mul => ctx.block().mul(I64, &l, &r),
+                _ => return None,
+            })
+        }
+        _ => None,
+    }
+}

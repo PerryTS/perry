@@ -425,6 +425,7 @@ pub(super) fn try_match_masked_window_region(
                         REGION_NO_COUNTER,
                         true,
                         &mut trial,
+                        None,
                     )
                 {
                     accesses = trial;
@@ -463,6 +464,7 @@ pub(super) fn try_match_masked_window_region(
                         REGION_NO_COUNTER,
                         true,
                         &mut trial,
+                        None,
                     )
                 {
                     accesses = trial;
