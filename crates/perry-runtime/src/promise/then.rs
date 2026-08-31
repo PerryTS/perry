@@ -1175,8 +1175,9 @@ extern "C" fn then_cap_fulfill_fn(
     let (result, threw) = if on_ful_cl.is_null() {
         (value, false)
     } else {
-        match crate::exception::catch_js_throw(|| crate::closure::js_closure_call1(on_ful_cl, value))
-        {
+        match crate::exception::catch_js_throw(|| {
+            crate::closure::js_closure_call1(on_ful_cl, value)
+        }) {
             Ok(ret) => (ret, false),
             Err(exc) => (exc, true),
         }
@@ -1208,8 +1209,9 @@ extern "C" fn then_cap_reject_fn(
     let (result, threw) = if on_rej_cl.is_null() {
         (reason, true) // passthrough rejection
     } else {
-        match crate::exception::catch_js_throw(|| crate::closure::js_closure_call1(on_rej_cl, reason))
-        {
+        match crate::exception::catch_js_throw(|| {
+            crate::closure::js_closure_call1(on_rej_cl, reason)
+        }) {
             Ok(ret) => (ret, false),
             Err(exc) => (exc, true),
         }
@@ -1606,17 +1608,17 @@ fn finally_wrapper_common(
     // report 1, failing every finally test that asserts a zero-arg invocation.
     // (Armed in a C trampoline frame, #9305; the rejection below runs after
     // the trap is popped, as before.)
-    let ret = match crate::exception::catch_js_throw(|| crate::closure::js_closure_call0(on_finally))
-    {
-        Ok(ret) => ret,
-        Err(exc) => {
-            // onFinally threw — reject `next` with the thrown value.
-            if !next.is_null() {
-                js_promise_reject(next, exc);
+    let ret =
+        match crate::exception::catch_js_throw(|| crate::closure::js_closure_call0(on_finally)) {
+            Ok(ret) => ret,
+            Err(exc) => {
+                // onFinally threw — reject `next` with the thrown value.
+                if !next.is_null() {
+                    js_promise_reject(next, exc);
+                }
+                return undef;
             }
-            return undef;
-        }
-    };
+        };
 
     // If onFinally returned a Promise/thenable, adopt it: wait for it before
     // settling `next`. `js_assimilate_thenable` returns a native Promise for

@@ -326,7 +326,10 @@ pub fn arm_trap_and_run<R, F: FnOnce() -> R>(env: *mut i32, f: F) -> Option<R> {
         let f = ctx.f.take().expect("sjlj trampoline invoked body twice");
         ctx.ret = Some(f());
     }
-    let mut ctx: Ctx<_, R> = Ctx { f: Some(f), ret: None };
+    let mut ctx: Ctx<_, R> = Ctx {
+        f: Some(f),
+        ret: None,
+    };
     // SAFETY: `env` points at a live 256-byte, 16-aligned JmpBuf slab owned
     // by this thread's exception state; the trampoline's frame stays alive
     // while `f` runs, so a longjmp from `js_throw` targets a live frame.
@@ -926,7 +929,7 @@ mod tests {
     /// #9305: nested arms target the innermost trap; the outer trap still
     /// works after the inner one pops.
     #[test]
-    fn nested_trampoline_arms_unwind_innermost_first(){
+    fn nested_trampoline_arms_unwind_innermost_first() {
         let base = current_try_depth();
         let outcome = catch_js_throw(|| {
             let inner: Result<u8, f64> = catch_js_throw(|| js_throw(1.0));

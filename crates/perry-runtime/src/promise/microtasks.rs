@@ -354,50 +354,50 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
 /// a local.
 fn pump_protected(mode: MicrotaskDrainMode, reentrant: bool, landed: bool, ran: &mut i32) {
     if landed {
-            restore_all_microtask_contexts();
-            crate::builtins::restore_queued_microtask_contexts();
-            // A microtask's callback threw and unwound here. Read the
-            // exception, clear it, and reject the `next` promise of the
-            // microtask that was running. The try frame stays pushed — the
-            // caller re-arms it for the rest of the drain (js_try_end runs
-            // after the pump loop completes).
-            let exc = crate::exception::js_get_exception();
-            crate::exception::js_clear_exception();
-            let cur = CURRENT_MICROTASK_PROMISE.with(|c| c.replace(std::ptr::null_mut()));
-            CURRENT_MICROTASK_CALLBACK.with(|c| c.set(std::ptr::null()));
-            CURRENT_MICROTASK_VALUE.with(|c| c.set(0.0));
-            CURRENT_MICROTASK_NEXT.with(|c| c.set(std::ptr::null_mut()));
-            let unwound_trap = INLINE_TRAP.with(|c| c.replace(InlineTrap::empty()));
-            // `longjmp` bypasses Rust destructors and normal dispatch tails. Drain
-            // exactly the activation references acquired since THIS (possibly
-            // re-entrant) runner began; an enclosing activation is below the saved
-            // depth and must remain owned when this runner returns.
-            // Re-read the boundary from TLS after the non-local jump. A Rust local
-            // held across a landing is not stable (#8937) — this function's frame
-            // was abandoned by the longjmp; only TLS and memory behind `ran` are.
-            let async_box_ref_depth = ASYNC_BOX_EXECUTION_REF_BASES.with(|bases| {
-                *bases
-                    .borrow()
-                    .last()
-                    .expect("microtask execution-ref boundary")
-            }) as usize;
-            unwind_async_box_execution_refs(async_box_ref_depth);
-            if !cur.is_null() {
-                unsafe {
-                    if !(*cur).next.is_null() {
-                        js_promise_reject((*cur).next, exc);
-                    }
-                }
-                *ran += 1;
-            } else {
-                if !unwound_trap.trap_next.is_null() {
-                    js_promise_reject(unwound_trap.trap_next, exc);
-                    *ran += 1;
-                } else {
-                    crate::node_submodules::diagnostics::schedule_uncaught(exc);
-                    *ran += 1;
+        restore_all_microtask_contexts();
+        crate::builtins::restore_queued_microtask_contexts();
+        // A microtask's callback threw and unwound here. Read the
+        // exception, clear it, and reject the `next` promise of the
+        // microtask that was running. The try frame stays pushed — the
+        // caller re-arms it for the rest of the drain (js_try_end runs
+        // after the pump loop completes).
+        let exc = crate::exception::js_get_exception();
+        crate::exception::js_clear_exception();
+        let cur = CURRENT_MICROTASK_PROMISE.with(|c| c.replace(std::ptr::null_mut()));
+        CURRENT_MICROTASK_CALLBACK.with(|c| c.set(std::ptr::null()));
+        CURRENT_MICROTASK_VALUE.with(|c| c.set(0.0));
+        CURRENT_MICROTASK_NEXT.with(|c| c.set(std::ptr::null_mut()));
+        let unwound_trap = INLINE_TRAP.with(|c| c.replace(InlineTrap::empty()));
+        // `longjmp` bypasses Rust destructors and normal dispatch tails. Drain
+        // exactly the activation references acquired since THIS (possibly
+        // re-entrant) runner began; an enclosing activation is below the saved
+        // depth and must remain owned when this runner returns.
+        // Re-read the boundary from TLS after the non-local jump. A Rust local
+        // held across a landing is not stable (#8937) — this function's frame
+        // was abandoned by the longjmp; only TLS and memory behind `ran` are.
+        let async_box_ref_depth = ASYNC_BOX_EXECUTION_REF_BASES.with(|bases| {
+            *bases
+                .borrow()
+                .last()
+                .expect("microtask execution-ref boundary")
+        }) as usize;
+        unwind_async_box_execution_refs(async_box_ref_depth);
+        if !cur.is_null() {
+            unsafe {
+                if !(*cur).next.is_null() {
+                    js_promise_reject((*cur).next, exc);
                 }
             }
+            *ran += 1;
+        } else {
+            if !unwound_trap.trap_next.is_null() {
+                js_promise_reject(unwound_trap.trap_next, exc);
+                *ran += 1;
+            } else {
+                crate::node_submodules::diagnostics::schedule_uncaught(exc);
+                *ran += 1;
+            }
+        }
     }
 
     // Cached profile flag — set once by mt_profile_register() above.
@@ -1149,7 +1149,6 @@ fn pump_protected(mode: MicrotaskDrainMode, reentrant: bool, landed: bool, ran: 
         *ran += crate::builtins::drain_queued_microtasks_count();
         *ran += crate::timer::js_interval_timer_tick();
     }
-
 }
 
 #[inline(always)]

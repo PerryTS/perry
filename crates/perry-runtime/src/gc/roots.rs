@@ -445,14 +445,14 @@ pub(super) fn mark_stack_roots_unchecked(
     #[repr(C, align(16))]
     struct JmpBufWords([u64; 32]);
     let mut jmp_buf = JmpBufWords([0u64; 32]); // oversized for safety
-    // The ONE remaining raw `setjmp` call in Rust code, and the one place
-    // it is sound (#9305): this buffer is never a `longjmp` target — the
-    // call is a register-spilling trick (setjmp dumps the callee-saved
-    // registers into the buffer for the conservative scan below) and
-    // returns exactly once, so LLVM's single-return assumption holds.
-    // Every jmp_buf that CAN be longjmp'd to is armed through the C
-    // trampoline `exception::arm_trap_and_run` instead — never add a raw
-    // `setjmp` whose buffer reaches `js_throw`.
+                                               // The ONE remaining raw `setjmp` call in Rust code, and the one place
+                                               // it is sound (#9305): this buffer is never a `longjmp` target — the
+                                               // call is a register-spilling trick (setjmp dumps the callee-saved
+                                               // registers into the buffer for the conservative scan below) and
+                                               // returns exactly once, so LLVM's single-return assumption holds.
+                                               // Every jmp_buf that CAN be longjmp'd to is armed through the C
+                                               // trampoline `exception::arm_trap_and_run` instead — never add a raw
+                                               // `setjmp` whose buffer reaches `js_throw`.
     unsafe {
         crate::ffi::setjmp::setjmp(jmp_buf.0.as_mut_ptr() as *mut std::os::raw::c_int);
     }

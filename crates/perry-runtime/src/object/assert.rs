@@ -3,7 +3,6 @@
 //! Split out of `object/mod.rs` (issue #1103). Pure relocation — no
 //! logic changes.
 
-
 use super::*;
 
 fn undefined_f64() -> f64 {
