@@ -38,10 +38,7 @@
 //! exercised here on whichever host runs the suite, since the walkers care
 //! about the layout and not about the object format that motivated it.
 
-use super::{
-    fp_chain, index_records, unwind, ResolvedRoot, StackMapIndex, StackMapLocation, StackMapRecord,
-    DWARF_REG_SP_AARCH64,
-};
+use super::{fp_chain, unwind, ResolvedRoot, StackMapIndex, DWARF_REG_SP_AARCH64};
 
 /// Written into the slot the synthetic record names, and required to be there
 /// when a walker resolves it. Not a round number: a walker that lands on
@@ -142,23 +139,26 @@ const DARWIN_FRAME: Frame = Frame {
     fp_to_sp: 96,
 };
 
+/// The index the walkers get, built from a real v5 blob rather than from
+/// hand-made records.
+///
+/// This used to construct `StackMapIndex` directly from a `StackMapRecord`.
+/// It cannot any more, and that is an improvement: the walkers now decode from
+/// section bytes, so a test that skipped the bytes would exercise a path
+/// production does not have. Everything from the header's pointer-width flag
+/// through the per-function stream offset to the varint slot encoding is under
+/// test here.
 fn index_for(frame: Frame, return_address: usize, offset: i32) -> StackMapIndex {
-    index_records(
-        vec![StackMapRecord {
-            pc: return_address,
-            function_address: frame.function_address,
-            stack_size: frame.stack_size,
-            roots_start: 0,
-            roots_len: 1,
-            derived_start: 0,
-            derived_len: 0,
-        }],
-        vec![StackMapLocation {
-            dwarf_reg: DWARF_REG_SP_AARCH64,
-            offset,
-        }],
-        Vec::new(),
-    )
+    let instruction_offset = u32::try_from(return_address - frame.function_address)
+        .expect("the probe's return address is inside its own function");
+    let blob = super::lazy::test_blob(
+        frame.function_address as u64,
+        frame.stack_size as u32,
+        &[(instruction_offset, vec![(DWARF_REG_SP_AARCH64, offset)])],
+    );
+    // Leaked on purpose: the index holds `&'static` section slices because the
+    // real sections are parts of loaded images, which outlive every collection.
+    super::build_index_from_sections_lazy(vec![Box::leak(blob.into_boxed_slice())])
 }
 
 /// One resolved slot, sampled WHILE THE PROBE FRAME IS STILL LIVE.

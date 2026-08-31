@@ -46,9 +46,10 @@ pub(super) fn visit(
     let fast_stats = fp_chain::visit(index, &mut |root: ResolvedRoot| fast.push(root));
     let Some(fast_stats) = fast_stats else {
         panic!(
-            "PERRY_STACKMAP_WALKER=verify: fast walk unavailable \
-             (chain_walkable={}, anomaly or unsupported target)",
-            index.chain_walkable
+            "PERRY_STACKMAP_WALKER=verify: fast walk unavailable — it abandoned the \
+             walk on a frame it could not resolve (a base outside FP/SP/x19, an \
+             undecodable prologue, or an unvalidated frame record), or this target \
+             has no fp-chain walker."
         );
     };
     let mut slow: Vec<ResolvedRoot> = Vec::new();
@@ -177,10 +178,7 @@ fn describe(out: &mut String, index: &StackMapIndex, root: &ResolvedRoot) {
 /// only what the walk already read.
 #[cfg(any(target_arch = "aarch64", test))]
 fn map_vouches_for(index: &StackMapIndex, function_address: usize) -> bool {
-    index
-        .function_starts
-        .binary_search(&function_address)
-        .is_ok()
+    index.vouches_for(function_address)
 }
 
 /// What the fast walker derives an SP base from, spelled out.
@@ -240,7 +238,7 @@ mod tests {
     /// An index that vouches for NO function address, so the report never
     /// dereferences the synthetic addresses above.
     fn empty_index() -> StackMapIndex {
-        super::super::index_records(Vec::new(), Vec::new(), Vec::new())
+        StackMapIndex::default()
     }
 
     #[test]

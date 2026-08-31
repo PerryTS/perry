@@ -67,11 +67,15 @@ fn ilp32_targets_emit_a_pointer_sized_address_field() {
         out.contains("\t.short\t0\n"),
         "the header must record a 32-bit address width:\n{out}"
     );
-    // 16-byte header + one 12-byte function entry (4-byte address on
-    // ILP32) + one 4-byte instruction offset + a 3-byte root stream. The
-    // LP64 form of the same map is 4 bytes larger, which is the whole
-    // point of the field being pointer-sized.
-    assert_eq!(stats.compact_bytes, 16 + 12 + 4 + 3);
+    assert!(
+        out.contains(&format!("\t.byte\t{GC_MAP_VERSION}\n")),
+        "the emitted blob must declare the version the runtime expects:\n{out}"
+    );
+    // 16-byte header + one 12-byte function entry (4-byte address on ILP32)
+    // + one 4-byte v5 stream offset + one 4-byte instruction offset + a
+    // 3-byte root stream. The LP64 form of the same map is 4 bytes larger,
+    // which is the whole point of the address field being pointer-sized.
+    assert_eq!(stats.compact_bytes, 16 + 12 + 4 + 4 + 3);
 }
 
 fn compact_and_assemble_refusal(target: &str) -> String {

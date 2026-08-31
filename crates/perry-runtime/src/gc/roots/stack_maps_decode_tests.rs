@@ -78,7 +78,10 @@ mod tests {
         // decoder rejects a blob whose recorded width disagrees with its own.
         let ptr64 = std::mem::size_of::<usize>() == 8;
         let entry = if ptr64 { 16 } else { 12 };
-        let total_len = 16 + entry + offsets.len() + stream.len();
+        // v5: a `u32 stream_offset` per function sits between the function
+        // table and the instruction-offset array. One function per blob here,
+        // so its records start at 0 in the stream.
+        let total_len = 16 + entry + 4 + offsets.len() + stream.len();
         let mut bytes = Vec::new();
         bytes.extend_from_slice(GC_MAP_MAGIC);
         bytes.push(GC_MAP_VERSION);
@@ -93,6 +96,7 @@ mod tests {
         }
         bytes.extend_from_slice(&32u32.to_le_bytes());
         bytes.extend_from_slice(&(records.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&0u32.to_le_bytes());
         bytes.extend_from_slice(&offsets);
         bytes.extend_from_slice(&stream);
         while bytes.len() % 8 != 0 {
@@ -177,7 +181,12 @@ mod tests {
             )
             .expect("valid test map");
             records.sort_unstable_by_key(|record| record.pc);
-            index_records(records, roots, derived)
+            let _ = index_records(records, roots, derived);
+            // The published index is the LAZY one; build it the way the
+            // collector does, from section bytes.
+            super::super::build_index_from_sections_lazy(vec![Box::leak(
+                simple(function, 0x20, -8).into_boxed_slice(),
+            )])
         }
 
         fn force_reversed_publication(store: Arc<StackMapIndexStore>, expected_generation: u64) {
@@ -206,8 +215,8 @@ mod tests {
 
             let published = store.read();
             assert_eq!(published.generation, expected_generation);
-            assert_eq!(published.index.records.len(), 1);
-            assert_eq!(published.index.records[0].pc, 0x2020);
+            assert_eq!(published.index.functions.len(), 1);
+            assert_eq!(published.index.functions[0].address, 0x2000);
         }
 
         // Cover both races from the review: the newer initializer wins the
@@ -225,7 +234,7 @@ mod tests {
         let published = store.read();
 
         assert_eq!(published.generation, 0);
-        assert!(published.index.records.is_empty());
+        assert!(published.index.functions.is_empty());
         assert_eq!(
             store
                 .next_generation
@@ -304,7 +313,10 @@ mod tests {
         );
         let index = build_stack_map_index();
         assert!(
-            index.records.iter().any(|record| record.pc == 0x8075_0020),
+            index
+                .functions
+                .iter()
+                .any(|entry| entry.address == 0x8075_0000),
             "the later-loaded shared object's GC map was not indexed"
         );
         drop(index);
@@ -483,54 +495,59 @@ mod tests {
         );
     }
 
+    /// x19 is a real base: LLVM uses it as a frame base pointer in functions
+    /// with dynamic stack allocation. The format must carry it, and on aarch64
+    /// the fast walk must still be willing to resolve the record.
     #[test]
-    fn an_x19_base_keeps_the_fast_walk_available() {
-        // #8770: x19 is the base pointer LLVM takes for a dynamic-allocation
-        // frame, captured as `mov x19, sp` after the fixed prologue — so it
-        // equals the body SP the x29-chain walker already reconstructs. It is
-        // chain-walkable (confirmed per frame at walk time by `x19_is_body_sp`),
-        // not a reason to force the whole image onto the platform unwinder.
-        let index = index_records(
-            vec![StackMapRecord {
-                pc: 0x1000,
-                function_address: 0x1000,
-                stack_size: 64,
-                roots_start: 0,
-                roots_len: 1,
-                derived_start: 0,
-                derived_len: 0,
-            }],
-            vec![StackMapLocation {
-                dwarf_reg: 19,
-                offset: -40,
-            }],
-            Vec::new(),
-        );
-        assert!(index.chain_walkable);
+    fn an_x19_base_round_trips_and_stays_fast_walkable() {
+        let blob = super::super::lazy::test_blob(0x1000, 64, &[(0, vec![(19, -40)])]);
+        let index =
+            super::super::build_index_from_sections_lazy(vec![Box::leak(blob.into_boxed_slice())]);
+        let matched = index.match_records(0x1000).expect("the record matches");
+        let decoded = index.materialise(Some(&matched));
+        assert_eq!(decoded.len(), 1);
+        assert_eq!(decoded[0].1.len(), 1);
+        assert_eq!(decoded[0].1[0].dwarf_reg, 19);
+        assert_eq!(decoded[0].1[0].offset, -40);
+        #[cfg(target_arch = "aarch64")]
+        {
+            let mut records = index.matched(&matched);
+            let record = records.next().expect("one record");
+            let registers =
+                super::super::record_slot_registers(&record).expect("well-formed stream");
+            assert!(
+                registers.chain_walkable,
+                "x19 is chain-walkable (== body SP)"
+            );
+            assert!(registers.uses_x19);
+        }
     }
 
+    /// Any OTHER base register the x29 chain cannot derive from the frame, so
+    /// such a record must send the walk to the platform unwinder.
+    ///
+    /// v4 answered this once for the whole image; it is now answered per
+    /// record, which is strictly narrower — one exotic function no longer
+    /// disables the fast walk everywhere — and fails closed the same way.
     #[test]
-    fn an_unsupported_base_register_disables_the_fast_walk() {
-        // The x29-chain walker recovers FP, SP, and x19 (== body SP); any OTHER
-        // base register it cannot derive from the frame, so such a record must
-        // fall back to the platform unwinder, which reads the frame's CFI.
-        let index = index_records(
-            vec![StackMapRecord {
-                pc: 0x1000,
-                function_address: 0x1000,
-                stack_size: 64,
-                roots_start: 0,
-                roots_len: 1,
-                derived_start: 0,
-                derived_len: 0,
-            }],
-            vec![StackMapLocation {
-                dwarf_reg: 5,
-                offset: -40,
-            }],
-            Vec::new(),
-        );
-        assert!(!index.chain_walkable);
+    fn an_unsupported_base_register_is_not_fast_walkable() {
+        let blob = super::super::lazy::test_blob(0x1000, 64, &[(0, vec![(5, -40)])]);
+        let index =
+            super::super::build_index_from_sections_lazy(vec![Box::leak(blob.into_boxed_slice())]);
+        let matched = index.match_records(0x1000).expect("the record matches");
+        let decoded = index.materialise(Some(&matched));
+        assert_eq!(decoded[0].1[0].dwarf_reg, 5);
+        #[cfg(target_arch = "aarch64")]
+        {
+            let mut records = index.matched(&matched);
+            let record = records.next().expect("one record");
+            let registers =
+                super::super::record_slot_registers(&record).expect("well-formed stream");
+            assert!(
+                !registers.chain_walkable,
+                "a base outside FP/SP/x19 must send this frame to the unwinder"
+            );
+        }
     }
 
     #[test]
@@ -594,108 +611,163 @@ mod tests {
         assert!(parse_gc_map(&bytes).is_none());
     }
 
-    #[test]
-    fn chain_walkable_index_accepts_fp_and_sp_locations_only() {
-        let rec = |pc: usize| StackMapRecord {
-            pc,
-            function_address: pc,
-            stack_size: 160,
-            roots_start: 0,
-            roots_len: 1,
-            derived_start: 0,
-            derived_len: 0,
-        };
-        // FP and SP are both walkable: SP resolves per frame by decoding the
-        // owning function's prologue (#7173).
-        let walkable = index_records(
-            vec![rec(0x1000), rec(0x2000)],
-            vec![
-                StackMapLocation {
-                    dwarf_reg: DWARF_REG_FP_AARCH64,
-                    offset: -8,
-                },
-                StackMapLocation {
-                    dwarf_reg: DWARF_REG_SP_AARCH64,
-                    offset: -8,
-                },
-            ],
-            Vec::new(),
-        );
-        assert!(walkable.chain_walkable);
-        assert_eq!(walkable.min_pc, 0x1000);
-        assert_eq!(walkable.max_pc, 0x2000);
-        // Any other register disqualifies the whole image.
-        assert!(
-            !index_records(
-                vec![rec(0x1000)],
-                vec![StackMapLocation {
-                    dwarf_reg: 1,
-                    offset: -8
-                }],
-                Vec::new()
-            )
-            .chain_walkable,
-            "a non-FP/SP register must disable the fast walk"
-        );
-    }
-
+    /// A safepoint at the end of A must not be matched for an `ip` early in B
+    /// just because it falls inside the ±16 window: the walker would use A's
+    /// frame offsets against B's frame and rewrite unrelated words.
     #[test]
     fn rejects_a_record_from_an_adjacent_function() {
-        // A safepoint at the end of A must not be matched for an `ip` early in
-        // B just because it falls inside the +-16 window: the walker would use
-        // A's frame offsets against B's frame.
-        let index = index_records(
-            vec![
-                StackMapRecord {
-                    pc: 0x1ffc,
-                    function_address: 0x1000,
-                    stack_size: 32,
-                    roots_start: 0,
-                    roots_len: 1,
-                    derived_start: 0,
-                    derived_len: 0,
-                },
-                StackMapRecord {
-                    pc: 0x2040,
-                    function_address: 0x2000,
-                    stack_size: 32,
-                    roots_start: 0,
-                    roots_len: 1,
-                    derived_start: 0,
-                    derived_len: 0,
-                },
-            ],
-            vec![StackMapLocation {
-                dwarf_reg: 29,
-                offset: -8,
-            }],
-            Vec::new(),
-        );
+        let blob = super::super::lazy::test_blob_multi(&[
+            (0x1000, 32, vec![(0xffc, vec![(29, -8)])]),
+            (0x2000, 32, vec![(0x40, vec![(29, -8)])]),
+        ]);
+        let index =
+            super::super::build_index_from_sections_lazy(vec![Box::leak(blob.into_boxed_slice())]);
         // 0x2004 is 8 bytes past A's last safepoint but lives in B.
         assert!(
-            index.match_records(0x2004).is_empty(),
+            index.match_records(0x2004).is_none(),
             "a record from the previous function must not match"
         );
         // A same-function near-match is still accepted — requiring an exact pc
         // would drop it, and the measured suite has one.
-        assert_eq!(index.match_records(0x2038).len(), 1);
+        let matched = index
+            .match_records(0x2038)
+            .expect("same-function near match");
+        assert_eq!(index.materialise(Some(&matched)).len(), 1);
+        // Below every mapped function there is nothing to match.
+        assert!(index.match_records(0x800).is_none());
     }
 
+    /// TWO function-table entries can carry the SAME relocated address — one
+    /// symbol emitted by more than one object file, or code the linker folded
+    /// — and each brings its own records. The lookup must resolve the whole
+    /// run of equal addresses: taking only one would drop the other's roots
+    /// silently, which is the failure this file exists to prevent.
+    ///
+    /// Not "not present in claude-code": the next bundle is not claude-code.
     #[test]
-    fn matches_plain_maps_before_and_statepoints_after_unwinder_ips() {
-        let rec = |pc: usize| StackMapRecord {
-            pc,
-            function_address: pc,
-            stack_size: 32,
-            roots_start: 0,
-            roots_len: 0,
-            derived_start: 0,
-            derived_len: 0,
-        };
-        let maps = vec![rec(0x1000), rec(0x1020)];
-        assert_eq!(closest_record_pc(&maps, 0x1004), Some(0x1000));
-        assert_eq!(closest_record_pc(&maps, 0x101c), Some(0x1020));
-        assert_eq!(closest_record_pc(&maps, 0x1020), Some(0x1020));
+    fn duplicate_function_addresses_contribute_all_of_their_roots() {
+        let blob = super::super::lazy::test_blob_multi(&[
+            (0x3000, 32, vec![(0x10, vec![(29, -8)])]),
+            (0x3000, 32, vec![(0x10, vec![(29, -16)])]),
+        ]);
+        let index =
+            super::super::build_index_from_sections_lazy(vec![Box::leak(blob.into_boxed_slice())]);
+        let matched = index.match_records(0x3010).expect("both entries match");
+        let mut offsets: Vec<i32> = index
+            .materialise(Some(&matched))
+            .into_iter()
+            .flat_map(|(_, roots, _)| roots.into_iter().map(|slot| slot.offset))
+            .collect();
+        offsets.sort_unstable();
+        assert_eq!(
+            offsets,
+            vec![-16, -8],
+            "both entries at this address must contribute their roots"
+        );
+    }
+
+    /// A function with no records must not enter the table.
+    ///
+    /// It would sit between two real functions and shadow the containing one
+    /// for every `ip` inside it — an EMPTY live set for a frame that has
+    /// roots, which is exactly "the collector finds no roots and frees live
+    /// objects". v4 derived its function list from records and so excluded
+    /// these by construction; the lazy table has to exclude them on purpose.
+    #[test]
+    fn a_function_with_no_records_does_not_shadow_the_one_before_it() {
+        let blob = super::super::lazy::test_blob_multi(&[
+            (0x4000, 32, vec![(0x100, vec![(29, -8)])]),
+            (0x4080, 32, Vec::new()),
+        ]);
+        let index =
+            super::super::build_index_from_sections_lazy(vec![Box::leak(blob.into_boxed_slice())]);
+        assert_eq!(
+            index.functions.len(),
+            1,
+            "a record-less function must not enter the table"
+        );
+        let matched = index
+            .match_records(0x4100)
+            .expect("the ip still resolves to the function that has records");
+        assert_eq!(index.materialise(Some(&matched))[0].1[0].offset, -8);
+    }
+
+    /// The per-function decode must reproduce the whole-section decode, for
+    /// every function and every record — the property the whole v5 format
+    /// change rests on. Checked here on a multi-function blob whose repeat
+    /// flags and multi-root records make the stream positions non-trivial.
+    #[test]
+    fn the_lazy_index_and_the_whole_section_index_agree() {
+        let blob = super::super::lazy::test_blob_multi(&[
+            (
+                0x5000,
+                48,
+                vec![
+                    (0x00, vec![(29, -8), (31, 16)]),
+                    (0x10, vec![(29, -8), (31, 16)]),
+                    (0x20, vec![(19, -24)]),
+                ],
+            ),
+            (0x6000, 64, vec![(0x08, vec![(31, 8), (31, 24), (29, -40)])]),
+            (0x7000, 16, vec![(0x00, Vec::new())]),
+        ]);
+        let leaked: &'static [u8] = Box::leak(blob.into_boxed_slice());
+        let index = super::super::build_index_from_sections_lazy(vec![leaked]);
+        let (records, roots, derived) = parse_gc_map(leaked).expect("the eager parse succeeds");
+        let eager = super::super::index_records(records, roots, derived);
+        for record in &eager.records {
+            let matched = index
+                .match_records(record.pc)
+                .expect("every eager record is reachable through the lazy index");
+            let lazy: Vec<StackMapLocation> = index
+                .materialise(Some(&matched))
+                .into_iter()
+                .flat_map(|(_, roots, _)| roots)
+                .collect();
+            assert_eq!(
+                lazy,
+                eager.locations(record).to_vec(),
+                "pc {:#x} decodes differently through the two indexes",
+                record.pc
+            );
+        }
+        assert_eq!(eager.records.len(), 5);
+    }
+
+    /// The v5 stream offsets must describe the stream that follows them. A
+    /// first offset that is not 0, or a non-monotonic one, is a map whose
+    /// per-function decode would start inside another function's records.
+    #[test]
+    fn rejects_stream_offsets_that_do_not_describe_the_stream() {
+        let good = super::super::lazy::test_blob_multi(&[
+            (0x1000, 32, vec![(0x00, vec![(29, -8)])]),
+            (0x2000, 32, vec![(0x00, vec![(29, -8)])]),
+        ]);
+        let ptr64 = std::mem::size_of::<usize>() == 8;
+        let entry = if ptr64 { 16 } else { 12 };
+        let offsets_at = 16 + 2 * entry;
+        let mut functions = Vec::new();
+        assert!(
+            super::super::lazy::parse_function_table(0, &good, &mut functions).is_some(),
+            "the unmodified blob must parse"
+        );
+
+        let mut first_nonzero = good.clone();
+        first_nonzero[offsets_at] = 1;
+        let mut out = Vec::new();
+        assert!(
+            super::super::lazy::parse_function_table(0, &first_nonzero, &mut out).is_none(),
+            "the first function's records start at 0 in the stream"
+        );
+
+        let mut backwards = good.clone();
+        backwards[offsets_at + 4] = 0;
+        backwards[offsets_at] = 4;
+        let mut out = Vec::new();
+        assert!(
+            super::super::lazy::parse_function_table(0, &backwards, &mut out).is_none(),
+            "stream offsets are emitted in stream order"
+        );
     }
 }
 
@@ -984,5 +1056,73 @@ mod sve_prologue_tests {
             "only `addvl` writing SP is undecodable; one writing x8 is a body \
              address computation"
         );
+    }
+}
+
+/// The cross-check must be able to FAIL.
+///
+/// `PERRY_GC_STACK_MAP_CROSSCHECK=1` is the safety net under the whole v5
+/// change: it builds the whole-section index alongside the lazy one and
+/// asserts, for every frame the collector walks, that they name the same
+/// roots. A net that only ever agrees with itself is CLAUDE.md's fourth
+/// gate-failure mode — the gate runs, its subject never did — so plant the
+/// exact fault it exists to catch and assert it aborts.
+///
+/// Planted here rather than only in a live binary because a live probe depends
+/// on which frames happen to carry records: a first attempt at this used a
+/// small program whose ten walked frames turned out to carry none, and the
+/// deliberately corrupted index passed. That is precisely the shape of a test
+/// that cannot fail.
+#[cfg(test)]
+mod cross_check_tests {
+    use super::super::{build_index_from_sections, lazy, IndexMode, StackMapIndex};
+
+    fn two_function_index() -> StackMapIndex {
+        let blob = lazy::test_blob_multi(&[
+            (0x1000, 32, vec![(0x00, vec![(29, -8)])]),
+            (0x2000, 48, vec![(0x00, vec![(31, 40), (31, 56)])]),
+        ]);
+        build_index_from_sections(
+            vec![Box::leak(blob.into_boxed_slice())],
+            IndexMode::CrossCheck,
+        )
+    }
+
+    /// The oracle agrees with the lazy index on an unmodified map — otherwise
+    /// the failing case below would prove nothing.
+    #[test]
+    fn an_unmodified_index_cross_checks_clean() {
+        let index = two_function_index();
+        for ip in [0x1000usize, 0x2000] {
+            let matched = index.match_records(ip);
+            assert!(matched.is_some(), "ip {ip:#x} must match a record");
+            index.cross_check(ip, matched.as_ref());
+        }
+    }
+
+    /// A per-function stream offset pointing at another function's records:
+    /// the map still decodes, the roots are simply the wrong ones. This is the
+    /// failure the whole v5 format change could introduce, and the one thing
+    /// standing between it and a silently-freed live object.
+    #[test]
+    #[should_panic(expected = "disagrees with the whole-section index")]
+    fn a_stream_offset_naming_another_functions_records_is_caught() {
+        let mut index = two_function_index();
+        let first = index.functions[0].stream_at;
+        index.functions[1].stream_at = first;
+        let matched = index.match_records(0x2000);
+        index.cross_check(0x2000, matched.as_ref());
+    }
+
+    /// The same fault the other way round, so the check is not merely
+    /// sensitive to one direction of the swap.
+    #[test]
+    #[should_panic(expected = "disagrees with the whole-section index")]
+    fn the_reverse_swap_is_caught_too() {
+        let mut index = two_function_index();
+        let second = index.functions[1].stream_at;
+        index.functions[0].stream_at = second;
+        let matched = index.match_records(0x1000);
+        index.cross_check(0x1000, matched.as_ref());
     }
 }

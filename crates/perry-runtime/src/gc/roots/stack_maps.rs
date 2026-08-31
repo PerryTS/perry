@@ -36,16 +36,26 @@ use std::sync::{OnceLock, RwLock, RwLockReadGuard};
 /// statepoint constant preamble and base/derived duplicates that this parser
 /// discarded anyway, and shipping it cost 3.9 MB on a real application.
 const GC_MAP_MAGIC: &[u8; 4] = b"PGCM";
+/// v5: the function table is followed by a `u32 stream_offset` per function,
+/// so ONE function's records can be found without decoding every function
+/// before it. The record stream and the instruction-offset array are byte for
+/// byte what v4 emitted; this is an added array and nothing else, costing
+/// +1.3% of the section (+0.1% of a claude-code binary).
+///
+/// It is what makes the index lazy per FRAME rather than merely deferred:
+/// v4 had to decode 2,078,970 records into a ~117 MB index to answer the 74
+/// record lookups a `cc --help` run makes.
+///
 /// v4 (#7803): records carry DERIVED (interior) pointer slots paired with
 /// their base roots — the for-of element cursors the RS4GC prelude hoists
 /// across polls. v3 collapsed those pairs, so this walker chased
 /// `&elements[i]` as an object start and never rewrote it as `base' + delta`
 /// after a move. Version mismatch still fails closed (the parser returns
-/// None and `stack_maps()` panics), so a v3 binary cannot run on this
+/// None and `stack_maps()` panics), so an older binary cannot run on this
 /// runtime half-understood.
-const GC_MAP_VERSION: u8 = 4;
+const GC_MAP_VERSION: u8 = 5;
 const MAX_SAFEPOINT_RETURN_DELTA: usize = 16;
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 struct StackMapLocation {
     dwarf_reg: u16,
     offset: i32,
@@ -53,7 +63,7 @@ struct StackMapLocation {
 
 /// One derived (interior) pointer slot: `slot` holds `base + delta` for the
 /// base root at `base_index` within the same record's roots range.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 struct StackMapDerived {
     base_index: u32,
     slot: StackMapLocation,
@@ -89,15 +99,37 @@ struct StackMapRecord {
     derived_len: u32,
 }
 
-/// Parsed section plus the facts the fast walker's preconditions need.
+/// The map, as the root scan reads it.
 ///
-/// `chain_walkable` is decided once at parse time: the raw x29-chain walk can
-/// recover only the frame pointer (register 29) directly, plus the body SP
-/// (register 31) derived from the header's per-function stack size. Any other
-/// register anywhere in the maps disables the fast path for the whole image
-/// rather than risking a wrong base mid-walk.
+/// `functions` is the whole index in the default configuration: one 32-byte
+/// entry per function that has records, sorted by address — 2.3 MB for
+/// claude-code, replacing the ~117 MB of materialised records v4 built. A
+/// frame's live set is decoded from the section when a walker asks for it,
+/// which for a `cc --help` run is 74 records out of 2,078,970.
+///
+/// `eager` is the v4 index, retained and shipped rather than deleted: it backs
+/// `PERRY_GC_STACK_MAP_EAGER=1`, and it is the oracle
+/// `PERRY_GC_STACK_MAP_CROSSCHECK=1` compares every frame against. It is
+/// `None` unless one of those is on.
 #[derive(Debug, Default)]
 struct StackMapIndex {
+    /// How this index was built. Carried on the index rather than re-read from
+    /// the environment at every lookup: the published index is the authority
+    /// on whether it has an oracle to check itself against, and a test can
+    /// build one without racing a process-wide `OnceLock`.
+    mode: IndexMode,
+    /// The loaded sections, indexed by `FunctionEntry::section`. Held so a
+    /// function's bytes are reachable without storing a pointer per function.
+    sections: Vec<&'static [u8]>,
+    /// Sorted by address. Duplicates are kept, not deduplicated: two entries
+    /// can share a relocated address and each brings its own records.
+    functions: Vec<lazy::FunctionEntry>,
+    eager: Option<EagerIndex>,
+}
+
+/// The v4 whole-section index.
+#[derive(Debug, Default)]
+struct EagerIndex {
     records: Vec<StackMapRecord>,
     /// Every root slot, referenced by `StackMapRecord`'s range. Shared between
     /// records whose live sets are identical.
@@ -105,16 +137,10 @@ struct StackMapIndex {
     /// Every derived slot, referenced by `StackMapRecord`'s derived range.
     derived: Vec<StackMapDerived>,
     /// Sorted, deduplicated start address of every function that has records.
-    /// Used to confirm a matched record belongs to the function `ip` is in.
     function_starts: Vec<usize>,
-    chain_walkable: bool,
-    #[cfg(any(target_arch = "aarch64", test))]
-    min_pc: usize,
-    #[cfg(any(target_arch = "aarch64", test))]
-    max_pc: usize,
 }
 
-impl StackMapIndex {
+impl EagerIndex {
     fn locations(&self, record: &StackMapRecord) -> &[StackMapLocation] {
         let start = record.roots_start as usize;
         let end = start + record.roots_len as usize;
@@ -318,13 +344,14 @@ pub(in crate::gc) fn verify_native_slots_post_walk(
             let published = stack_maps();
             let index = &published.index;
             let base = ctx.slot_addr.wrapping_sub(ctx.offset as usize);
-            for record in index.match_records(ctx.ip) {
+            let matched = index.match_records(ctx.ip);
+            for (function_address, roots, derived) in index.materialise(matched.as_ref()) {
                 eprintln!(
-                    "[gc-native-slot-verify]   record pc={:#x} (fn+{:#x}):",
-                    record.pc,
-                    record.pc.wrapping_sub(record.function_address),
+                    "[gc-native-slot-verify]   record in fn {function_address:#x} \
+                     (ip fn+{:#x}):",
+                    ctx.ip.wrapping_sub(function_address),
                 );
-                for location in index.locations(record) {
+                for location in &roots {
                     let addr = if location.offset < 0 {
                         base.wrapping_sub(location.offset.unsigned_abs() as usize)
                     } else {
@@ -340,7 +367,7 @@ pub(in crate::gc) fn verify_native_slots_post_walk(
                         location.dwarf_reg, location.offset,
                     );
                 }
-                for entry in index.derived_locations(record) {
+                for entry in &derived {
                     eprintln!(
                         "[gc-native-slot-verify]     DERIVED base_index={} reg={} offset={}",
                         entry.base_index, entry.slot.dwarf_reg, entry.slot.offset,
@@ -390,34 +417,39 @@ const MAX_DERIVED_DELTA: usize = 64 << 20;
 /// not rewrite (the verify walker's collection passes) leaves base words
 /// unchanged, which makes every derived rewrite a no-op by construction.
 unsafe fn visit_record_slots(
-    index: &StackMapIndex,
-    record: &StackMapRecord,
+    record: &lazy::DecodedRecord,
     ip: usize,
     resolve: &mut dyn FnMut(&StackMapLocation) -> Option<(usize, usize)>,
     stats: &mut NativeStackWalkStats,
     visit: &mut dyn FnMut(ResolvedRoot),
 ) {
-    let locations = index.locations(record);
-    let deriveds = index.derived_locations(record);
-
     let slot_ok = |address: usize| address != 0 && address & (align_of::<u64>() - 1) == 0;
+    let function_address = record.function_address;
 
     // Old base words, captured before the visitor rewrites anything. Only
-    // needed when the record has derived slots — the common record pays
-    // nothing.
+    // needed when the record has derived slots — the common record (95.7% of
+    // claude-code's) pays nothing, and reads the root list exactly once.
     let mut old_base: Vec<Option<(usize, u64)>> = Vec::new();
-    if !deriveds.is_empty() {
-        old_base.reserve(locations.len());
-        for location in locations {
-            old_base.push(resolve(location).and_then(|(address, _)| {
+    if record.payload.derived_len > 0 {
+        old_base.reserve(record.payload.roots_len as usize);
+        let mut roots = record.roots();
+        while let Some(location) = roots.next() {
+            let Some(location) = location else {
+                lazy::malformed(function_address)
+            };
+            old_base.push(resolve(&location).and_then(|(address, _)| {
                 slot_ok(address).then(|| (address, *(address as *const u64)))
             }));
         }
     }
 
-    for location in locations {
+    let mut roots = record.roots();
+    while let Some(location) = roots.next() {
+        let Some(location) = location else {
+            lazy::malformed(function_address)
+        };
         stats.locations_visited = stats.locations_visited.saturating_add(1);
-        let Some((address, base)) = resolve(location) else {
+        let Some((address, base)) = resolve(&location) else {
             continue;
         };
         if !slot_ok(address) {
@@ -426,23 +458,35 @@ unsafe fn visit_record_slots(
         visit(ResolvedRoot {
             address,
             ip,
-            function_address: record.function_address,
+            function_address,
             dwarf_reg: location.dwarf_reg,
             offset: location.offset,
             base,
         });
     }
 
-    for entry in deriveds {
+    if record.payload.derived_len == 0 {
+        return;
+    }
+    let mut bases = record.derived_base_indices();
+    let Some(mut slots) = record.derived_slots() else {
+        lazy::malformed(function_address)
+    };
+    while let Some(base_index) = bases.next() {
+        let (Some(base_index), Some(slot)) = (base_index, slots.next()) else {
+            lazy::malformed(function_address)
+        };
+        let Some(slot) = slot else {
+            lazy::malformed(function_address)
+        };
         stats.locations_visited = stats.locations_visited.saturating_add(1);
-        let Some((derived_addr, _)) = resolve(&entry.slot) else {
+        let Some((derived_addr, _)) = resolve(&slot) else {
             continue;
         };
         if !slot_ok(derived_addr) {
             continue;
         }
-        let Some(Some((base_addr, old_base_word))) =
-            old_base.get(entry.base_index as usize).copied()
+        let Some(Some((base_addr, old_base_word))) = old_base.get(base_index as usize).copied()
         else {
             continue;
         };
@@ -450,9 +494,59 @@ unsafe fn visit_record_slots(
     }
 }
 
-/// The derived-slot rewrite itself. Decodes through `root_words` so a slot
-/// keeps its stored form (NaN-boxed tag or bare) across the rewrite, exactly
-/// like a base root does.
+/// What one record's slots need from the frame, decided in a single pass.
+///
+/// v4 answered `chain_walkable` once for the whole image by scanning every
+/// root slot in the section. A lazy index cannot, and should not: deciding it
+/// per record is strictly narrower — one function using an exotic base no
+/// longer disables the fast walk everywhere — and it fails closed the same
+/// way, by abandoning the walk to the platform unwinder.
+#[cfg(target_arch = "aarch64")]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct RecordRegisters {
+    /// Every base is one the x29 chain can reconstruct: FP directly, SP and
+    /// x19 from the decoded prologue.
+    chain_walkable: bool,
+    uses_x19: bool,
+    /// Any base other than the frame pointer, i.e. any slot that needs the
+    /// reconstructed body SP.
+    any_non_fp: bool,
+}
+
+/// Returns `None` on a malformed stream so the caller fails closed rather than
+/// deciding from a partial list.
+#[cfg(target_arch = "aarch64")]
+fn record_slot_registers(record: &lazy::DecodedRecord) -> Option<RecordRegisters> {
+    let mut out = RecordRegisters {
+        chain_walkable: true,
+        uses_x19: false,
+        any_non_fp: false,
+    };
+    let mut check = |location: StackMapLocation| {
+        if location.dwarf_reg == DWARF_REG_X19_AARCH64 {
+            out.uses_x19 = true;
+        }
+        if location.dwarf_reg != DWARF_REG_FP_AARCH64 {
+            out.any_non_fp = true;
+        }
+        if !matches!(
+            location.dwarf_reg,
+            DWARF_REG_FP_AARCH64 | DWARF_REG_SP_AARCH64 | DWARF_REG_X19_AARCH64
+        ) {
+            out.chain_walkable = false;
+        }
+    };
+    let mut roots = record.roots();
+    while let Some(location) = roots.next() {
+        check(location?);
+    }
+    let mut slots = record.derived_slots()?;
+    while let Some(location) = slots.next() {
+        check(location?);
+    }
+    Some(out)
+}
+
 unsafe fn rewrite_derived_slot(derived_addr: usize, base_addr: usize, old_base_word: u64) {
     use super::super::root_words::decode_root_word;
     let new_base_word = *(base_addr as *const u64);
@@ -495,6 +589,10 @@ const DWARF_REG_SP_AARCH64: u16 = 31;
 // this these frames flipped the whole-image `chain_walkable` flag false and
 // forced every walk onto the unwinder, whose root resolution the fast walker
 // exists to avoid.
+// Consulted only by the aarch64 fast walk, but documented for every target:
+// the encoding it names is emitted on all of them, so the number belongs with
+// the other two rather than inside a `cfg`.
+#[cfg_attr(not(target_arch = "aarch64"), allow(dead_code))]
 const DWARF_REG_X19_AARCH64: u16 = 19;
 
 // A frame record is two 64-bit words, so it needs EIGHT-byte alignment, not
@@ -704,11 +802,40 @@ pub(in crate::gc) fn ensure_built() {
 /// precise frame roots depend on mapped PCs at all. Consumed by the
 /// `PERRY_GC_SAFEPOINT_ONLY` contract assert.
 pub(in crate::gc) fn native_maps_active() -> bool {
-    !stack_maps().index.records.is_empty()
+    !stack_maps().index.is_empty()
 }
 
 fn stack_maps() -> RwLockReadGuard<'static, PublishedStackMapIndex> {
     STACK_MAPS.read()
+}
+
+/// Which index the collector reads. One binary, switchable, so the lazy path
+/// can be A/B'd and cross-checked against the code it replaced.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum IndexMode {
+    #[default]
+    /// Default: per-function decode, nothing materialised.
+    Lazy,
+    /// `PERRY_GC_STACK_MAP_EAGER=1` — build the v4 whole-section index TOO,
+    /// so its cost can be measured inside one binary. It does not change what
+    /// the walkers read; the lazy index still answers every lookup.
+    BuildBoth,
+    /// `PERRY_GC_STACK_MAP_CROSSCHECK=1` — build both and assert, for every
+    /// frame the collector walks, that they name the same roots.
+    CrossCheck,
+}
+
+fn index_mode() -> IndexMode {
+    static MODE: OnceLock<IndexMode> = OnceLock::new();
+    *MODE.get_or_init(|| {
+        if crate::gc::env_flag_enabled("PERRY_GC_STACK_MAP_CROSSCHECK") {
+            IndexMode::CrossCheck
+        } else if crate::gc::env_flag_enabled("PERRY_GC_STACK_MAP_EAGER") {
+            IndexMode::BuildBoth
+        } else {
+            IndexMode::Lazy
+        }
+    })
 }
 
 fn build_stack_map_index() -> StackMapIndex {
@@ -723,6 +850,12 @@ fn build_stack_map_index() -> StackMapIndex {
     if sections.is_empty() {
         return StackMapIndex::default();
     }
+    build_index_from_sections(sections, index_mode())
+}
+
+/// Build the index from already-located sections. Shared with the tests, so
+/// what they exercise is the path the collector takes.
+fn build_index_from_sections(sections: Vec<&'static [u8]>, mode: IndexMode) -> StackMapIndex {
     // A section that exists but does not decode is a different thing
     // entirely, and it must never degrade to "no roots". The two failure
     // shapes are indistinguishable downstream — both yield an empty index
@@ -732,24 +865,62 @@ fn build_stack_map_index() -> StackMapIndex {
     // fourth gate-failure mode (the gate runs, its subject never did), so
     // fail loudly instead. In practice this can only mean a binary whose
     // compiler and runtime disagree about the map format.
+    let mut functions = Vec::new();
+    for (index, section) in sections.iter().enumerate() {
+        let section_index = u16::try_from(index).unwrap_or_else(|_| {
+            panic!("perry: {} loaded images carry a GC map section; the index addresses them with a u16", sections.len())
+        });
+        if lazy::parse_function_table(section_index, section, &mut functions).is_none() {
+            undecodable_section(section.len());
+        }
+    }
+    // Sorted by address, duplicates KEPT. `match_records` resolves the whole
+    // run of equal addresses: two object files can emit a map for the same
+    // symbol, or the linker can fold identical code, and each entry brings its
+    // own records. Deduplicating would drop one set silently.
+    functions.sort_unstable_by_key(|entry| entry.address);
+
+    let eager = match mode {
+        IndexMode::Lazy => None,
+        IndexMode::BuildBoth | IndexMode::CrossCheck => Some(build_eager_index(&sections)),
+    };
+    StackMapIndex {
+        mode,
+        sections,
+        functions,
+        eager,
+    }
+}
+
+/// The default-configuration build, for tests that only need the lazy index.
+#[cfg(test)]
+fn build_index_from_sections_lazy(sections: Vec<&'static [u8]>) -> StackMapIndex {
+    build_index_from_sections(sections, IndexMode::Lazy)
+}
+
+fn build_eager_index(sections: &[&'static [u8]]) -> EagerIndex {
     let mut records = Vec::new();
     let mut roots = Vec::new();
     let mut derived = Vec::new();
     for section in sections {
         if append_gc_map_section(&mut records, &mut roots, &mut derived, section).is_none() {
-            panic!(
-                "perry: a GC map section (__perry_gcmap / .perry_gcmap, {} bytes) is \
-                 present but could not be decoded — expected format {:?} v{}. This binary's \
-                 compiler and runtime disagree about the map layout; continuing would run \
-                 the collector with missing roots and corrupt the heap silently.",
-                section.len(),
-                std::str::from_utf8(GC_MAP_MAGIC).unwrap_or("PGCM"),
-                GC_MAP_VERSION,
-            );
+            undecodable_section(section.len());
         }
     }
     records.sort_unstable_by_key(|record| record.pc);
     index_records(records, roots, derived)
+}
+
+#[cold]
+fn undecodable_section(len: usize) -> ! {
+    panic!(
+        "perry: a GC map section (__perry_gcmap / .perry_gcmap, {len} bytes) is \
+         present but could not be decoded — expected format {:?} v{}. This binary's \
+         compiler and runtime disagree about the map layout; continuing would run \
+         the collector with missing roots and corrupt the heap silently.",
+        std::str::from_utf8(GC_MAP_MAGIC).unwrap_or("PGCM"),
+        GC_MAP_VERSION,
+    );
 }
 
 fn append_gc_map_section(
@@ -775,51 +946,24 @@ fn index_records(
     records: Vec<StackMapRecord>,
     roots: Vec<StackMapLocation>,
     derived: Vec<StackMapDerived>,
-) -> StackMapIndex {
+) -> EagerIndex {
     // SP-relative locations are admitted here and resolved per FRAME in the
     // walker, which decodes the owning function's `add x29, sp, #imm`
     // prologue to get the body SP (#7173). Deciding it here would mean
     // dereferencing every function address at startup — unsafe for records
     // whose addresses are not live code, and unnecessary because the walker
     // already fails closed to the platform unwinder on any anomaly.
-    // The decoder produces three bases: FP, SP, and x19 (the base pointer LLVM
-    // uses for a dynamic-allocation frame — see `DWARF_REG_X19_AARCH64`). All
-    // three are chain-walkable: FP and SP directly, x19 because it is captured
-    // as `mov x19, sp` after the fixed prologue and so equals the body SP the
-    // walker already reconstructs. The x19 case is confirmed PER FRAME at walk
-    // time by `x19_is_body_sp`; a frame that fails that check fails closed to
-    // the unwinder without disabling the fast walk for the rest of the image.
-    // Any OTHER base (a format change, a register-located root) still disables
-    // the chain walk here rather than being trusted by it.
-    let chain_walkable = roots
-        .iter()
-        .chain(derived.iter().map(|entry| &entry.slot))
-        .all(|location| {
-            matches!(
-                location.dwarf_reg,
-                DWARF_REG_FP_AARCH64 | DWARF_REG_SP_AARCH64 | DWARF_REG_X19_AARCH64
-            )
-        });
-    #[cfg(any(target_arch = "aarch64", test))]
-    let min_pc = records.first().map_or(usize::MAX, |record| record.pc);
-    #[cfg(any(target_arch = "aarch64", test))]
-    let max_pc = records.last().map_or(0, |record| record.pc);
     let mut function_starts: Vec<usize> = records
         .iter()
         .map(|record| record.function_address)
         .collect();
     function_starts.sort_unstable();
     function_starts.dedup();
-    StackMapIndex {
+    EagerIndex {
         records,
         roots,
         derived,
         function_starts,
-        chain_walkable,
-        #[cfg(any(target_arch = "aarch64", test))]
-        min_pc,
-        #[cfg(any(target_arch = "aarch64", test))]
-        max_pc,
     }
 }
 
@@ -1139,74 +1283,6 @@ fn sve_vector_length_bytes() -> Option<usize> {
     None
 }
 
-fn closest_record_pc(maps: &[StackMapRecord], ip: usize) -> Option<usize> {
-    let insertion = maps.partition_point(|record| record.pc < ip);
-    let before = insertion
-        .checked_sub(1)
-        .and_then(|idx| maps.get(idx))
-        .map(|record| record.pc);
-    let at_or_after = maps.get(insertion).map(|record| record.pc);
-    match (before, at_or_after) {
-        (Some(before), Some(after)) => Some(if ip.abs_diff(before) <= ip.abs_diff(after) {
-            before
-        } else {
-            after
-        }),
-        (Some(before), None) => Some(before),
-        (None, Some(after)) => Some(after),
-        (None, None) => None,
-    }
-}
-
-impl StackMapIndex {
-    /// The records describing the frame whose return address is `ip`: the
-    /// ±16-byte nearest-PC match, which can select several records at one PC
-    /// (plain maps sit just before the call, statepoints exactly at the
-    /// return address).
-    fn match_records(&self, ip: usize) -> &[StackMapRecord] {
-        let Some(candidate_pc) = closest_record_pc(&self.records, ip) else {
-            return &[];
-        };
-        if ip.abs_diff(candidate_pc) > MAX_SAFEPOINT_RETURN_DELTA {
-            return &[];
-        }
-        // The ±16 window is a distance, not a containment check: nothing in it
-        // says the matched record belongs to the function `ip` is executing.
-        // Functions are adjacent in .text, so an `ip` early in B can sit within
-        // the window of a safepoint at the end of A — and the walker would then
-        // use A's frame offsets against B's frame and rewrite unrelated words.
-        //
-        // Require the record's function to be the one containing `ip`: the
-        // greatest mapped function start <= ip. Measured across the probe
-        // suite, every near-match is already same-function (deltas 8..64, all
-        // `same=true`), so this rejects only the cross-function case — and
-        // notably NOT the legitimate delta=8 match, which requiring an exact
-        // pc would have discarded along with its roots.
-        //
-        // Residual gap, stated rather than papered over: a function with no
-        // safepoints is absent from `function_starts`, so an `ip` inside one
-        // resolves to the previous mapped function. Closing that needs a
-        // per-function code extent, which Mach-O does not expose cheaply
-        // (`Lfunc_end` covers only EH-carrying functions; there is no `.size`).
-        let owning = self
-            .function_starts
-            .partition_point(|start| *start <= ip)
-            .checked_sub(1)
-            .map(|index| self.function_starts[index]);
-        let first = self
-            .records
-            .partition_point(|record| record.pc < candidate_pc);
-        let last = self
-            .records
-            .partition_point(|record| record.pc <= candidate_pc);
-        let matched = &self.records[first..last];
-        match (matched.first(), owning) {
-            (Some(record), Some(owning)) if record.function_address == owning => matched,
-            _ => &[],
-        }
-    }
-}
-
 pub(super) fn visit_stack_map_root_slots(
     visit: &mut impl FnMut(MutableRootSlot),
 ) -> NativeStackWalkStats {
@@ -1228,7 +1304,7 @@ pub(super) fn visit_stack_map_root_slots(
     );
     let published = stack_maps();
     let index = &published.index;
-    if index.records.is_empty() {
+    if index.is_empty() {
         return NativeStackWalkStats::default();
     }
     match walker_mode() {
@@ -1236,12 +1312,20 @@ pub(super) fn visit_stack_map_root_slots(
             root.visit_with_context(visit)
         }),
         WalkerMode::Fast => {
-            if index.chain_walkable {
-                if let Some(stats) = fp_chain::visit(index, &mut |root: ResolvedRoot| {
-                    root.visit_with_context(visit)
-                }) {
-                    return stats;
-                }
+            // No whole-image `chain_walkable` precondition any more. v4 decided
+            // it once by scanning every root slot in the section — 4.9M of them
+            // for claude-code — which a lazy index cannot do and should not:
+            // the fast walk now checks the frame it is about to resolve and
+            // fails closed to the unwinder if THAT record uses a base it cannot
+            // reconstruct. That is strictly narrower than disabling the fast
+            // path for the whole image because one function somewhere uses an
+            // exotic register, and it reuses the mid-walk bail this walker
+            // already performs for `x19_is_body_sp` and an unvalidated
+            // `caller_fp`.
+            if let Some(stats) = fp_chain::visit(index, &mut |root: ResolvedRoot| {
+                root.visit_with_context(visit)
+            }) {
+                return stats;
             }
             let mut stats = unwind::visit(index, &mut |root: ResolvedRoot| {
                 root.visit_with_context(visit)
@@ -1333,12 +1417,13 @@ mod unwind {
                 state.stats.frames_visited
             );
         }
-        let matched = state.index.match_records(ip);
-        if matched.is_empty() {
+        let index = state.index;
+        let Some(matched) = index.match_records(ip) else {
             return 0;
-        }
-        state.stats.records_matched = state.stats.records_matched.saturating_add(matched.len());
-        for record in matched {
+        };
+        let mut records = index.matched(&matched);
+        while let Some(record) = records.next() {
+            state.stats.records_matched = state.stats.records_matched.saturating_add(1);
             let mut resolve = |location: &StackMapLocation| {
                 // SP-relative roots take the CFA as their base VERBATIM.
                 //
@@ -1376,8 +1461,7 @@ mod unwind {
                 address.map(|address| (address, base))
             };
             visit_record_slots(
-                state.index,
-                record,
+                &record,
                 ip,
                 &mut resolve,
                 &mut state.stats,
@@ -1528,24 +1612,18 @@ mod unwind {
 
         loop {
             stats.frames_visited = stats.frames_visited.saturating_add(1);
-            let matched = index.match_records(context.rip as usize);
-            if !matched.is_empty() {
-                stats.records_matched = stats.records_matched.saturating_add(matched.len());
-                for record in matched {
+            if let Some(matched) = index.match_records(context.rip as usize) {
+                let mut records = index.matched(&matched);
+                while let Some(record) = records.next() {
+                    stats.records_matched = stats.records_matched.saturating_add(1);
                     // This walker's contract is abandon-on-anomaly — return
                     // before visiting ANY slot the moment one location cannot
                     // be resolved and bounds-checked. Pre-validate every base
                     // and derived location, then hand the record to the
                     // shared visitor with a resolve that can no longer fail.
-                    let all_locations = || {
-                        index
-                            .locations(record)
-                            .iter()
-                            .chain(index.derived_locations(record).iter().map(|d| &d.slot))
-                    };
-                    for location in all_locations() {
+                    let mut validate = |location: StackMapLocation| -> bool {
                         let Some(base) = frame_base(&context, location.dwarf_reg) else {
-                            return stats;
+                            return false;
                         };
                         let address = if location.offset < 0 {
                             base.checked_sub(location.offset.unsigned_abs() as usize)
@@ -1553,12 +1631,29 @@ mod unwind {
                             base.checked_add(location.offset as usize)
                         };
                         let Some(address) = address else {
-                            return stats;
+                            return false;
                         };
-                        if address < stack_low
-                            || address.saturating_add(std::mem::size_of::<u64>()) > stack_high
-                            || address & (std::mem::align_of::<u64>() - 1) != 0
-                        {
+                        address >= stack_low
+                            && address.saturating_add(std::mem::size_of::<u64>()) <= stack_high
+                            && address & (std::mem::align_of::<u64>() - 1) == 0
+                    };
+                    let mut roots = record.roots();
+                    while let Some(location) = roots.next() {
+                        let Some(location) = location else {
+                            lazy::malformed(record.function_address)
+                        };
+                        if !validate(location) {
+                            return stats;
+                        }
+                    }
+                    let Some(mut slots) = record.derived_slots() else {
+                        lazy::malformed(record.function_address)
+                    };
+                    while let Some(location) = slots.next() {
+                        let Some(location) = location else {
+                            lazy::malformed(record.function_address)
+                        };
+                        if !validate(location) {
                             return stats;
                         }
                     }
@@ -1573,8 +1668,7 @@ mod unwind {
                     };
                     unsafe {
                         visit_record_slots(
-                            index,
-                            record,
+                            &record,
                             context.rip as usize,
                             &mut resolve,
                             &mut stats,
@@ -1724,9 +1818,6 @@ mod fp_chain {
         index: &StackMapIndex,
         visit: &mut F,
     ) -> Option<NativeStackWalkStats> {
-        if !index.chain_walkable {
-            return None;
-        }
         let top = stack_top();
         if top == 0 {
             return None;
@@ -1736,8 +1827,6 @@ mod fp_chain {
             fp_walks: 1,
             ..NativeStackWalkStats::default()
         };
-        let low_pc = index.min_pc.saturating_sub(MAX_SAFEPOINT_RETURN_DELTA);
-        let high_pc = index.max_pc.saturating_add(MAX_SAFEPOINT_RETURN_DELTA);
         let mut fp = current_frame_pointer();
         while fp != 0 {
             if fp & FRAME_RECORD_ALIGN_MASK != 0 || fp.checked_add(16)? > top {
@@ -1749,92 +1838,85 @@ mod fp_chain {
             if return_address == 0 {
                 break;
             }
-            if return_address >= low_pc && return_address <= high_pc {
-                let matched = index.match_records(return_address);
+            // No pc pre-filter. v4 kept the image's min/max record pc to
+            // reject a frame before searching a 2M-record array; the function
+            // table answers containment exactly and in one binary search, and
+            // a filter that is even slightly too NARROW drops a real frame's
+            // roots — which is not a tradeoff worth making to save a compare.
+            if let Some(matched) = index.match_records(return_address) {
+                // The record describes the caller's frame; its locations are
+                // relative to the caller's own x29, which is exactly the saved
+                // word we just read.
+                //
+                // It gets the SAME validation `fp` gets at the top of the
+                // loop, and it gets it BEFORE the root loop rather than after.
+                // Every FP-relative root is based on this word, and
+                // `fp_to_sp_offset` subtracts from it for the SP-relative
+                // ones; downstream the only filters are non-zero and 8-byte
+                // alignment, so an unvalidated `caller_fp` lets a corrupt
+                // frame produce addresses outside the stack that the collector
+                // then reads and rewrites. Fail closed to the platform
+                // unwinder.
+                if caller_fp == 0
+                    || caller_fp & FRAME_RECORD_ALIGN_MASK != 0
+                    || caller_fp <= fp
+                    || caller_fp.checked_add(16)? > top
                 {
-                    if !matched.is_empty() {
-                        // The record describes the caller's frame; its
-                        // locations are relative to the caller's own x29,
-                        // which is exactly the saved word we just read.
-                        //
-                        // It gets the SAME validation `fp` gets at the top of
-                        // the loop, and it gets it BEFORE the root loop rather
-                        // than after. Every FP-relative root is based on this
-                        // word, and `fp_to_sp_offset` subtracts from it for the
-                        // SP-relative ones; downstream the only filters are
-                        // non-zero and 8-byte alignment, so an unvalidated
-                        // `caller_fp` lets a corrupt frame produce addresses
-                        // outside the stack that the collector then reads and
-                        // rewrites. Fail closed to the platform unwinder.
-                        if caller_fp == 0
-                            || caller_fp & FRAME_RECORD_ALIGN_MASK != 0
-                            || caller_fp <= fp
-                            || caller_fp.checked_add(16)? > top
-                        {
-                            return None;
-                        }
-                        stats.records_matched = stats.records_matched.saturating_add(matched.len());
-                        for record in matched {
-                            // Body SP = fp - (prologue's `add x29, sp, #imm`).
-                            // `chain_walkable` proved this decodes for every
-                            // SP-relative record in the image (#7173).
-                            let sp = fp_to_sp_offset(record.function_address)
-                                .and_then(|off| caller_fp.checked_sub(off));
-                            // #8770: an x19-based root resolves like an SP-based
-                            // one (x19 == body SP) ONLY when the owning function
-                            // captured its base as `mov x19, sp` after the fixed
-                            // prologue. Confirm that per frame before trusting
-                            // the `sp` base for its x19 slots; a frame that does
-                            // not match fails closed to the unwinder like any
-                            // other the fast walk cannot resolve.
-                            let has_x19 = index
-                                .locations(record)
-                                .iter()
-                                .chain(index.derived_locations(record).iter().map(|d| &d.slot))
-                                .any(|l| l.dwarf_reg == DWARF_REG_X19_AARCH64);
-                            if has_x19 && !x19_is_body_sp(record.function_address) {
-                                return None;
-                            }
-                            // An SP-relative (or x19-relative) location with no
-                            // decodable prologue used to abandon the walk from
-                            // inside the location loop; keep that fail-closed
-                            // answer, decided before any slot is visited.
-                            if sp.is_none()
-                                && index
-                                    .locations(record)
-                                    .iter()
-                                    .chain(index.derived_locations(record).iter().map(|d| &d.slot))
-                                    .any(|l| l.dwarf_reg != DWARF_REG_FP_AARCH64)
-                            {
-                                return None;
-                            }
-                            let mut resolve = |location: &StackMapLocation| {
-                                // FP-based → the caller's x29; SP- and
-                                // x19-based → the reconstructed body SP (x19
-                                // was proven equal to it above).
-                                let base = if location.dwarf_reg == DWARF_REG_FP_AARCH64 {
-                                    caller_fp
-                                } else {
-                                    sp?
-                                };
-                                let address = if location.offset < 0 {
-                                    base.checked_sub(location.offset.unsigned_abs() as usize)
-                                } else {
-                                    base.checked_add(location.offset as usize)
-                                };
-                                address.map(|address| (address, base))
-                            };
-                            unsafe {
-                                visit_record_slots(
-                                    index,
-                                    record,
-                                    return_address,
-                                    &mut resolve,
-                                    &mut stats,
-                                    visit,
-                                );
-                            }
-                        }
+                    return None;
+                }
+                let mut records = index.matched(&matched);
+                while let Some(record) = records.next() {
+                    stats.records_matched = stats.records_matched.saturating_add(1);
+                    let Some(registers) = record_slot_registers(&record) else {
+                        lazy::malformed(record.function_address)
+                    };
+                    // A base this walk cannot reconstruct: hand the whole walk
+                    // to the platform unwinder rather than guess one frame.
+                    if !registers.chain_walkable {
+                        return None;
+                    }
+                    // Body SP = fp - (prologue's `add x29, sp, #imm`).
+                    let sp = fp_to_sp_offset(record.function_address)
+                        .and_then(|off| caller_fp.checked_sub(off));
+                    // #8770: an x19-based root resolves like an SP-based one
+                    // (x19 == body SP) ONLY when the owning function captured
+                    // its base as `mov x19, sp` after the fixed prologue.
+                    // Confirm that per frame before trusting the `sp` base for
+                    // its x19 slots.
+                    if registers.uses_x19 && !x19_is_body_sp(record.function_address) {
+                        return None;
+                    }
+                    // An SP-relative (or x19-relative) location with no
+                    // decodable prologue used to abandon the walk from inside
+                    // the location loop; keep that fail-closed answer, decided
+                    // before any slot is visited.
+                    if sp.is_none() && registers.any_non_fp {
+                        return None;
+                    }
+                    let mut resolve = |location: &StackMapLocation| {
+                        // FP-based → the caller's x29; SP- and x19-based → the
+                        // reconstructed body SP (x19 was proven equal to it
+                        // above).
+                        let base = if location.dwarf_reg == DWARF_REG_FP_AARCH64 {
+                            caller_fp
+                        } else {
+                            sp?
+                        };
+                        let address = if location.offset < 0 {
+                            base.checked_sub(location.offset.unsigned_abs() as usize)
+                        } else {
+                            base.checked_add(location.offset as usize)
+                        };
+                        address.map(|address| (address, base))
+                    };
+                    unsafe {
+                        visit_record_slots(
+                            &record,
+                            return_address,
+                            &mut resolve,
+                            &mut stats,
+                            visit,
+                        );
                     }
                 }
             }
@@ -1865,6 +1947,14 @@ mod fp_chain {
 // The compact-map decoder. Its own file because this one is close to the
 // 2000-line cap; the re-export is named rather than a glob because a glob does
 // not propagate through the transitive re-exports this module sits behind.
+#[path = "stack_maps_lazy.rs"]
+mod lazy;
+
+/// Frame lookup and the cross-check, in a sibling file for the same reason
+/// `stack_maps_verify.rs` is: the parent is at the repo's 2000-line cap.
+#[path = "stack_maps_index.rs"]
+mod index;
+
 #[path = "stack_maps_decode.rs"]
 mod decode;
 use decode::parse_gc_map;

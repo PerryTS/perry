@@ -58,12 +58,20 @@ use anyhow::{anyhow, Context, Result};
 /// Magic at the start of every emitted blob.
 const GC_MAP_MAGIC: &[u8; 4] = b"PGCM";
 /// Format version. Bump on any layout change — the runtime rejects others.
+///
+/// v5: a `u32 stream_offset` per function follows the function table, so the
+/// runtime can decode ONE function's records without decoding every function
+/// before it. The record stream and the instruction-offset array are byte for
+/// byte what v4 emitted; this is an added array and nothing else. It costs
+/// +1.3% of the section, and it is what lets a collection read the 74 records
+/// a `claude --help` run needs instead of all 2,078,970.
+///
 /// v4 (#7803): the record header word gained a has-derived bit and records
 /// carry DERIVED (interior) pointer slots tied to their bases. v3 collapsed
 /// every statepoint (base, derived) pair to one slot on the false premise
 /// that Perry emits no interior pointers; the runtime decoder fails closed on
 /// a version mismatch, so both sides bump together.
-const GC_MAP_VERSION: u8 = 4;
+const GC_MAP_VERSION: u8 = 5;
 /// Section the compact map is emitted into, and the label it is given.
 const GC_MAP_LABEL: &str = "_perry_gc_map";
 const MACHO_SECTION: &str = "__PERRY_GCMAP,__perry_gcmap";
@@ -1003,13 +1011,21 @@ fn verify_roundtrip(functions: &[FunctionMap], compact: &CompactStream) -> Resul
 ///
 /// ```text
 ///   0  "PGCM"
-///   4  u8 version, u8 reserved, u16 reserved
+///   4  u8 version, u8 reserved, u16 flags
 ///   8  u32 function_count
 ///  12  u32 total_len          -- lets the runtime walk concatenated blobs
 ///  16  function_count x { u64 address, u32 stack_size, u32 record_count }
+///      function_count x u32 stream_offset   -- v5; see below
 ///      record_count_total x u32 instruction_offset
 ///      varint root stream (see `encode_stream`)
 /// ```
+///
+/// The v5 `stream_offset` array is where each function's records begin in the
+/// varint stream. Without it the stream is only readable from the front — it
+/// is delta- and repeat-chained — so a collector that wanted one frame's live
+/// set had to decode the whole section. It is placed AFTER the function table
+/// rather than inside it so the table's relocated addresses stay 8-byte
+/// aligned and the entry keeps its v4 shape.
 ///
 /// The function table starts at 16 so every relocated address is 8-byte
 /// aligned, and the offset array that follows it is 4-byte aligned.
@@ -1043,11 +1059,18 @@ fn format_for(target: &str) -> ObjectFormat {
     }
 }
 
-fn emit_asm(functions: &[FunctionMap], stream: &[u8], format: ObjectFormat, ptr64: bool) -> String {
+fn emit_asm(
+    functions: &[FunctionMap],
+    compact: &CompactStream,
+    format: ObjectFormat,
+    ptr64: bool,
+) -> String {
+    let stream = &compact.bytes[..];
     let record_total: usize = functions.iter().map(|f| f.records.len()).sum();
     let addr_bytes = if ptr64 { 8 } else { 4 };
     let entry_bytes = addr_bytes + 8; // address + u32 stack_size + u32 records
-    let total_len = 16 + functions.len() * entry_bytes + record_total * 4 + stream.len();
+    let total_len =
+        16 + functions.len() * entry_bytes + functions.len() * 4 + record_total * 4 + stream.len();
     let mut out = String::new();
     out.push_str(&format!(
         "\t.section\t{}\n",
@@ -1077,6 +1100,10 @@ fn emit_asm(functions: &[FunctionMap], stream: &[u8], format: ObjectFormat, ptr6
         ));
         out.push_str(&format!("\t.long\t{}\n", function.stack_size as u32));
         out.push_str(&format!("\t.long\t{}\n", function.records.len()));
+    }
+    // v5: where each function's records begin in the varint stream.
+    for offset in &compact.function_offsets {
+        out.push_str(&format!("\t.long\t{offset}\n"));
     }
     for function in functions {
         for record in &function.records {
@@ -1127,6 +1154,7 @@ fn compact_stack_map_asm(asm: &str, target: &str) -> Result<Option<(String, GcMa
         original_bytes: block.bytes.len(),
         compact_bytes: 16
             + functions.len() * (if ptr64 { 16 } else { 12 })
+            + functions.len() * 4
             + functions.iter().map(|f| f.records.len()).sum::<usize>() * 4
             + stream.bytes.len(),
         functions: functions.len(),
@@ -1138,7 +1166,7 @@ fn compact_stack_map_asm(asm: &str, target: &str) -> Result<Option<(String, GcMa
             .sum(),
     };
 
-    let replacement = emit_asm(&functions, &stream.bytes, format_for(target), ptr64);
+    let replacement = emit_asm(&functions, &stream, format_for(target), ptr64);
     let mut out = String::with_capacity(asm.len());
     for line in &lines[..block.start_line] {
         // `.no_dead_strip` names the block's label from outside it. It is also
