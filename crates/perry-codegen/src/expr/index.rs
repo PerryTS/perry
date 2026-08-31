@@ -209,7 +209,19 @@ pub(crate) fn lower_index_set_fast(
     // predicate (see `value_numeric` below) whenever it is not statically
     // known, so the tier covers those stores too and the flag only decides
     // whether those three instructions are emitted at all.
-    let inline_write_tier = require_numeric_layout && !super::typed_feedback_emission_enabled();
+    // #9237: the tier is no longer restricted to statically numeric receivers.
+    // Every condition the out-of-line guard checks is already tested inline here
+    // — array type, not-forwarded, no element descriptors, integrity flags, the
+    // prototype-chain invalidation flag, and the length/capacity sanity bounds —
+    // and the in-bounds arm below already knows how to store a tagged value into
+    // a non-raw-f64 receiver (that arm is what the out-of-line guard fronts
+    // today). Only two of the conditions are specific to the raw-f64 store, and
+    // they are now applied only when it is the one being emitted, so a
+    // `boolean[]` store reaches the same inline guard instead of paying
+    // `js_typed_feedback_plain_array_index_set_guard` per element: ~41% of such
+    // a loop, and the reason `benchmarks/suite/11_prime_sieve.ts` sits on the
+    // call tier for its whole run.
+    let inline_write_tier = !super::typed_feedback_emission_enabled();
     let cold_guard_idx = if inline_write_tier {
         Some(ctx.new_block("idxset.guard.cold"))
     } else {
@@ -288,13 +300,27 @@ pub(crate) fn lower_index_set_fast(
 
             let mut guard_ok = blk.and(I1, &is_array, &not_forwarded);
             guard_ok = blk.and(I1, &guard_ok, &integrity_clean);
-            guard_ok = blk.and(I1, &guard_ok, &is_dense);
+            if require_numeric_layout {
+                // Raw-f64 layout is a precondition of the RAW store only: that
+                // arm writes an unboxed double into the slot, which is valid
+                // only while the receiver's layout says its elements are
+                // pointer-free. A tagged store writes a NaN-boxed JSValue and
+                // is correct whatever the layout says — and for a downgraded
+                // receiver these bits are clear by definition, which is exactly
+                // why requiring them kept `boolean[]` on the call tier forever.
+                guard_ok = blk.and(I1, &guard_ok, &is_dense);
+            }
             guard_ok = blk.and(I1, &guard_ok, &default_prototype_chain);
             guard_ok = blk.and(I1, &guard_ok, &index_nonnegative);
             guard_ok = blk.and(I1, &guard_ok, &length_sane);
             guard_ok = blk.and(I1, &guard_ok, &capacity_sane);
             guard_ok = blk.and(I1, &guard_ok, &length_within_capacity);
-            if !value_is_canonical_raw_f64 {
+            // #9237: kept exactly where it is load-bearing. The comment below
+            // is about the RAW store — a `number[]` slot can genuinely receive a
+            // non-number at runtime, and writing its NaN-boxed tag verbatim as a
+            // double is the bug being prevented. The tagged arm stores the box
+            // as a box, so the test is dead work there and only there.
+            if require_numeric_layout && !value_is_canonical_raw_f64 {
                 // #7396: the out-of-line guard's `is_numeric_value_bits(value)`
                 // leg, inlined. It is load-bearing and NOT implied by
                 // `require_numeric_layout`: that is a *static* TypeScript
