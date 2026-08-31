@@ -426,6 +426,10 @@ mach2 = "0.6"
 # See `build.rs` and issue #395 for the rationale.
 [build-dependencies]
 perry-dispatch = { path = "../perry-dispatch" }
+# Build-time only: compiles the 20-line setjmp trampoline
+# (src/ffi/perry_sjlj.c) that the exception transport routes every
+# jmp_buf arm through — rustc cannot express `returns_twice` (#9305).
+cc = "1"
 # Build-time only: fingerprints the compiler/runtime source contract embedded
 # in libperry_runtime so the CLI can reject a stale archive before linking.
 sha2 = "0.11"

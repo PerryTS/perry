@@ -8,7 +8,6 @@ use crate::closure::{
 use crate::object::{
     js_object_alloc, js_object_get_field_by_name_f64, js_object_set_field_by_name, ObjectHeader,
 };
-use std::os::raw::c_int;
 
 #[derive(Clone, Copy)]
 pub(super) struct PipelineOptions {
@@ -375,18 +374,7 @@ pub(super) fn settle_pipeline_value(value: f64) -> Result<f64, f64> {
 }
 
 pub(super) fn catch_pipeline_throw(call: impl FnOnce() -> f64) -> Result<f64, f64> {
-    let trap_buf = crate::exception::js_try_push();
-    let jumped = unsafe { crate::ffi::setjmp::setjmp(trap_buf as *mut c_int) };
-    if jumped == 0 {
-        let value = call();
-        crate::exception::js_try_end();
-        Ok(value)
-    } else {
-        let err = crate::exception::js_get_exception();
-        crate::exception::js_clear_exception();
-        crate::exception::js_try_end();
-        Err(err)
-    }
+    crate::exception::catch_js_throw(call)
 }
 
 pub(super) fn collect_pipeline_chunks(value: f64) -> Result<f64, f64> {

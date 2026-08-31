@@ -1,7 +1,6 @@
 //! Callback-style fs APIs — pre-flight probe + (err, value) dispatch.
 
 use crate::closure::ClosureHeader;
-use std::os::raw::c_int;
 
 use super::*;
 
@@ -116,18 +115,7 @@ fn callback_from_options_arg(options: f64, callback: f64) -> *const ClosureHeade
 }
 
 fn catch_callback_throw(call: impl FnOnce() -> f64) -> Result<f64, f64> {
-    let trap_buf = crate::exception::js_try_push();
-    let jumped = unsafe { crate::ffi::setjmp::setjmp(trap_buf as *mut c_int) };
-    if jumped == 0 {
-        let value = call();
-        crate::exception::js_try_end();
-        Ok(value)
-    } else {
-        let err = crate::exception::js_get_exception();
-        crate::exception::js_clear_exception();
-        crate::exception::js_try_end();
-        Err(err)
-    }
+    crate::exception::catch_js_throw(call)
 }
 
 /// Deliver an fs completion on a later event-loop turn under a real

@@ -17,7 +17,6 @@
 //! call into here so the throw-vs-empty-vs-consume decision lives in one place.
 
 use crate::value::{js_jsvalue_to_string, js_nanbox_get_pointer, JSValue, TAG_NULL, TAG_UNDEFINED};
-use std::os::raw::c_int;
 
 /// `typeof`-style word for a non-iterable value, used to build the Node
 /// "<type> is not iterable" message. `null`/`undefined` are handled by the
@@ -269,17 +268,7 @@ pub(crate) fn constructor_iter(value: f64) -> ConstructorIter {
 }
 
 pub(crate) fn call_capturing_throw(call: impl FnOnce() -> f64) -> Result<f64, f64> {
-    let trap_buf = crate::exception::js_try_push();
-    let jumped = unsafe { crate::ffi::setjmp::setjmp(trap_buf as *mut c_int) };
-    let result = if jumped == 0 {
-        Ok(call())
-    } else {
-        let exc = crate::exception::js_get_exception();
-        crate::exception::js_clear_exception();
-        Err(exc)
-    };
-    crate::exception::js_try_end();
-    result
+    crate::exception::catch_js_throw(call)
 }
 
 pub(crate) fn call_with_this_capturing_throw(

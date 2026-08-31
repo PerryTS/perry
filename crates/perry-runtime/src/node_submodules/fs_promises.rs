@@ -17,7 +17,6 @@ use crate::object::{
 use crate::string::{js_string_from_bytes, StringHeader};
 use crate::url::abort::abort_signal_ptr_from_value;
 use crate::value::{js_jsvalue_to_string, JSValue};
-use std::os::raw::c_int;
 
 pub(crate) fn promise_value(value: f64) -> f64 {
     let promise = crate::promise::js_promise_new();
@@ -35,18 +34,7 @@ pub(crate) fn promise_undefined() -> f64 {
 }
 
 fn catch_fs_promises_throw(call: impl FnOnce() -> f64) -> Result<f64, f64> {
-    let trap_buf = crate::exception::js_try_push();
-    let jumped = unsafe { crate::ffi::setjmp::setjmp(trap_buf as *mut c_int) };
-    if jumped == 0 {
-        let value = call();
-        crate::exception::js_try_end();
-        Ok(value)
-    } else {
-        let err = crate::exception::js_get_exception();
-        crate::exception::js_clear_exception();
-        crate::exception::js_try_end();
-        Err(err)
-    }
+    crate::exception::catch_js_throw(call)
 }
 
 fn promise_from_sync_value(call: impl FnOnce() -> f64) -> f64 {

@@ -265,11 +265,117 @@ pub(crate) fn current_try_depth() -> usize {
     with_exception_state(|s| unsafe { (*s).try_depth })
 }
 
+// ---------------------------------------------------------------------------
+// setjmp trampoline (#9305): no Rust frame is ever a longjmp target.
+// ---------------------------------------------------------------------------
+
+extern "C" {
+    /// C-side setjmp trampoline (`src/ffi/perry_sjlj.c`, compiled by
+    /// build.rs). Arms `env` via the platform `setjmp` inside its own C
+    /// frame and invokes `body(ctx)` under it. Returns 0 when `body`
+    /// returns normally, or the `longjmp` value (always 1 — `js_throw`)
+    /// when a JS throw lands.
+    ///
+    /// WHY C: rustc has no `returns_twice`, so a Rust frame containing a
+    /// live `setjmp` is compiled under a one-return assumption — LLVM may
+    /// assign (color) a stack slot that is live only into the longjmp
+    /// return path to an unrelated temporary on the normal path. #9305
+    /// was exactly that: `run_microtasks`' spilled TLS-base temporary was
+    /// overwritten by the task-record copy loop, and the longjmp path
+    /// reloaded NULL. Routing every arm through this trampoline makes the
+    /// hazard unrepresentable: Rust code only ever sees a single-return
+    /// call, and the one twice-returning frame is compiled by a C
+    /// compiler that knows setjmp's contract.
+    fn perry_sjlj_try(
+        env: *mut core::ffi::c_void,
+        body: unsafe extern "C" fn(*mut core::ffi::c_void),
+        ctx: *mut core::ffi::c_void,
+    ) -> core::ffi::c_int;
+}
+
+/// Arm the jmp_buf `env` (from [`js_try_push`]) and run `f` under it.
+///
+/// `Some(r)`: `f` completed normally. `None`: a `js_throw` longjmp landed
+/// while `f` (or JS it called into) was running. The thrown value is left
+/// in the TLS exception slot (`js_get_exception`), and the `try` frame is
+/// still pushed — the caller owns `js_try_end`, exactly as with the raw
+/// `setjmp` idiom this replaces.
+///
+/// SAFETY CONTRACT for callers (same as the raw idiom, spelled out):
+///
+/// * After a `None` return the jmp_buf points at a trampoline invocation
+///   that has already returned. Until the caller either re-arms (calls
+///   this again with the same `env`) or pops the frame (`js_try_end`),
+///   nothing that can reach `js_throw` may run — a throw in that window
+///   would longjmp into a dead frame. Handlers that can throw (they run
+///   user JS: uncaught-exception listeners, promise rejection with hooks
+///   active) must run *inside* a re-armed `f`, loop-style — see
+///   `run_microtasks` / `with_timer_uncaught_trap`.
+/// * A landing abandons the Rust frames between the throw point and the
+///   trampoline without running destructors; `js_throw`'s savepoint
+///   restores cover the runtime's own state (the runtime is panic=abort).
+pub fn arm_trap_and_run<R, F: FnOnce() -> R>(env: *mut i32, f: F) -> Option<R> {
+    struct Ctx<F, R> {
+        f: Option<F>,
+        ret: Option<R>,
+    }
+    unsafe extern "C" fn invoke<F: FnOnce() -> R, R>(raw: *mut core::ffi::c_void) {
+        // SAFETY: `raw` is the `&mut Ctx` passed below, alive for the whole
+        // `perry_sjlj_try` call; the trampoline invokes us at most once.
+        let ctx = unsafe { &mut *(raw as *mut Ctx<F, R>) };
+        let f = ctx.f.take().expect("sjlj trampoline invoked body twice");
+        ctx.ret = Some(f());
+    }
+    let mut ctx: Ctx<_, R> = Ctx { f: Some(f), ret: None };
+    // SAFETY: `env` points at a live 256-byte, 16-aligned JmpBuf slab owned
+    // by this thread's exception state; the trampoline's frame stays alive
+    // while `f` runs, so a longjmp from `js_throw` targets a live frame.
+    let rc = unsafe {
+        perry_sjlj_try(
+            env as *mut core::ffi::c_void,
+            invoke::<F, R>,
+            &mut ctx as *mut Ctx<_, R> as *mut core::ffi::c_void,
+        )
+    };
+    if rc == 0 {
+        // `ret` empty with rc == 0 would mean the trampoline returned 0
+        // without running the body to completion — a broken trampoline.
+        Some(
+            ctx.ret
+                .take()
+                .expect("sjlj trampoline returned 0 without a body result"),
+        )
+    } else {
+        None
+    }
+}
+
+/// Push a `try` frame, run `f` under it, pop it. `Ok(value)` on a normal
+/// return; `Err(exception_bits)` — with the TLS exception slot cleared — if
+/// `f` threw. The everything-in-one-call shape for handlers that are pure
+/// Rust (read the exception, return it): between the landing and the pop
+/// nothing that can throw runs, so the momentarily-stale jmp_buf is never
+/// a live target.
+pub fn catch_js_throw<R>(f: impl FnOnce() -> R) -> Result<R, f64> {
+    let env = js_try_push();
+    let outcome = arm_trap_and_run(env, f);
+    js_try_end();
+    match outcome {
+        Some(r) => Ok(r),
+        None => {
+            let err = js_get_exception();
+            js_clear_exception();
+            Err(err)
+        }
+    }
+}
+
 /// Invoke `f` — which may call into user JS and `js_throw` — inside a `try`
 /// trap, catching any JS exception. Returns `Ok(value)` on a normal return,
-/// or `Err(exception_bits)` if `f` threw. The `setjmp` lives in THIS frame,
-/// which stays alive while `f` runs, so the `longjmp` target is valid, and the
-/// throw unwinds only up to here — NOT past the Rust caller's frame.
+/// or `Err(exception_bits)` if `f` threw. The armed jmp_buf lives in the C
+/// trampoline's frame (see `arm_trap_and_run`), which stays alive while `f`
+/// runs, so the `longjmp` target is valid, and the throw unwinds only up to
+/// there — NOT past the Rust caller's frame.
 ///
 /// Runtime helpers that drive user JS from a Rust-owned microtask/timer
 /// context (e.g. a Web Streams `pull` callback) use this so a throwing
@@ -277,18 +383,7 @@ pub(crate) fn current_try_depth() -> usize {
 /// their frames — skipping cleanup and corrupting state. Mirrors
 /// `combinators::combinator_catch_js`.
 pub fn js_call_catching(f: impl FnOnce() -> f64) -> Result<f64, f64> {
-    let env = js_try_push();
-    let jumped = unsafe { crate::ffi::setjmp::setjmp(env as *mut std::os::raw::c_int) };
-    if jumped == 0 {
-        let result = f();
-        js_try_end();
-        Ok(result)
-    } else {
-        js_try_end();
-        let err = js_get_exception();
-        js_clear_exception();
-        Err(err)
-    }
+    catch_js_throw(f)
 }
 
 /// Throw an exception with the given value

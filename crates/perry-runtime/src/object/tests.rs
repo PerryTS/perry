@@ -61,18 +61,7 @@ fn js_string_to_rust(value: JSValue) -> String {
 }
 
 fn catch_js<F: FnOnce() -> f64>(f: F) -> Result<f64, f64> {
-    let env = crate::exception::js_try_push();
-    let jumped = unsafe { crate::ffi::setjmp::setjmp(env as *mut c_int) };
-    if jumped == 0 {
-        let result = f();
-        crate::exception::js_try_end();
-        Ok(result)
-    } else {
-        crate::exception::js_try_end();
-        let err = crate::exception::js_get_exception();
-        crate::exception::js_clear_exception();
-        Err(err)
-    }
+    crate::exception::catch_js_throw(f)
 }
 
 unsafe fn installed_builtin_method(ctor_name: &str, method_name: &str) -> f64 {

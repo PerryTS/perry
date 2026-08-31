@@ -376,11 +376,11 @@ fn emit_rejection_handled(promise: *mut Promise) {
 /// fired from the same drain.
 fn with_listener_uncaught_trap<F: FnOnce()>(f: F) {
     let trap_buf = crate::exception::js_try_push();
-    // SAFETY: this setjmp frame is live only for the synchronous listener
-    // invocation below; `js_throw` longjmps back here before it is popped.
-    let jumped = unsafe { crate::ffi::setjmp::setjmp(trap_buf as *mut std::os::raw::c_int) };
-    if jumped == 0 {
-        f();
+    // The jmp_buf is armed inside a C trampoline frame (#9305). The
+    // uncaught path below runs only after `js_try_end` pops this trap, so
+    // a throw out of the `uncaughtException` listener targets the OUTER
+    // trap — same as the raw shape, which also popped before emitting.
+    if crate::exception::arm_trap_and_run(trap_buf, f).is_some() {
         crate::exception::js_try_end();
         return;
     }

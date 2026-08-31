@@ -3,7 +3,6 @@
 //! assimilation, the scheduled-resolve queue, and `is_promise` probes.
 
 use super::*;
-use std::os::raw::c_int;
 
 use super::keyed_table::PromiseKeyedTable;
 
@@ -206,20 +205,9 @@ fn promise_try_call(callback: f64, args_ptr: *const f64, args_len: usize) -> Res
         return Err(promise_try_type_error_value(callback));
     };
 
-    let trap_buf = crate::exception::js_try_push();
-    let jumped = unsafe { crate::ffi::setjmp::setjmp(trap_buf as *mut c_int) };
-    let result = if jumped == 0 {
-        let value = unsafe {
-            crate::closure::js_closure_call_array(closure as i64, args_ptr, args_len as i64)
-        };
-        Ok(value)
-    } else {
-        let exc = crate::exception::js_get_exception();
-        crate::exception::js_clear_exception();
-        Err(exc)
-    };
-    crate::exception::js_try_end();
-    result
+    crate::exception::catch_js_throw(|| unsafe {
+        crate::closure::js_closure_call_array(closure as i64, args_ptr, args_len as i64)
+    })
 }
 
 /// `Promise.try(fn, ...args)`: call `fn` with forwarded args and normalize the
@@ -350,18 +338,7 @@ fn not_iterable_prefix(value: f64) -> String {
 }
 
 pub(super) fn combinator_catch_js<F: FnOnce() -> f64>(f: F) -> Result<f64, f64> {
-    let env = crate::exception::js_try_push();
-    let jumped = unsafe { crate::ffi::setjmp::setjmp(env as *mut c_int) };
-    if jumped == 0 {
-        let result = f();
-        crate::exception::js_try_end();
-        Ok(result)
-    } else {
-        crate::exception::js_try_end();
-        let err = crate::exception::js_get_exception();
-        crate::exception::js_clear_exception();
-        Err(err)
-    }
+    crate::exception::catch_js_throw(f)
 }
 
 /// Build the `TypeError: <prefix> is not iterable (cannot read property

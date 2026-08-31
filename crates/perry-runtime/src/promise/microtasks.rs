@@ -265,87 +265,139 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
     // thread-local set just before invoking the callback, reject its
     // `next`, and continue the loop.
     //
-    // ── macOS/BSD: use `_setjmp` (no signal-mask save) ────────────
+    // ── macOS/BSD: the arm uses `_setjmp` (no signal-mask save) ────
     // On Apple platforms the C `setjmp(3)` saves the signal mask via a
     // `sigprocmask` system call AND saves the alt-signal-stack via
-    // `__sigaltstack`. Profiling `promise_all_chains` showed those two
-    // syscalls accounted for ~43% of CPU time even though `setjmp` is
-    // called once per `run_microtasks` drain — each kernel-mode round
-    // trip is ~25 μs because macOS arm64 uses BSD-style "save signal
-    // state for siglongjmp" semantics. Perry never `siglongjmp`s out
-    // of a signal handler — `js_throw` runs in normal user context, so
-    // the signal mask doesn't need to be saved/restored on
-    // setjmp/longjmp pairs. POSIX's `_setjmp` / `_longjmp` are exactly
-    // that: setjmp/longjmp without the sigprocmask round-trip.
-    //
-    // On Linux glibc the C `setjmp` already doesn't save the signal
-    // mask (POSIX leaves it implementation-defined; glibc opted for
-    // the fast path), so the `setjmp` extern there is fine. Other
-    // BSDs (FreeBSD, NetBSD, OpenBSD) match macOS — they too benefit
-    // from `_setjmp`. We gate on `target_vendor = "apple"` for now
-    // since that's where we've measured the win.
-    // `setjmp` lives in `crate::ffi::setjmp` — one canonical extern
-    // declaration shared with `gc.rs` (issue #856). The libc-matching
-    // signature is `unsafe extern "C" fn(*mut c_int) -> c_int`; on
-    // Apple it links to the fast `_setjmp(3)` variant, on glibc Linux
-    // to plain `setjmp(3)` which already skips the signal-mask save.
-    use crate::ffi::setjmp::setjmp;
+    // `__sigaltstack` — measured at ~43% of `promise_all_chains` CPU.
+    // Perry never `siglongjmp`s out of a signal handler, so the fast
+    // `_setjmp(3)` is used instead. That per-platform choice now lives in
+    // the C trampoline (`src/ffi/perry_sjlj.c`); on glibc Linux the plain
+    // `setjmp(3)` already skips the signal-mask save.
 
+    // #9305: the jmp_buf arm must live in a C frame — see
+    // `exception::arm_trap_and_run`. rustc cannot express `returns_twice`,
+    // so with a raw `setjmp` in this Rust frame LLVM colored the stack slot
+    // of the spilled TLS-base temporary into the task-record copy loop on
+    // the normal path, and the longjmp return path reloaded NULL. One
+    // `js_try_push` for the whole drain, one re-arm per caught throw; the
+    // recovery itself runs inside the NEXT protected invocation, so a throw
+    // out of the rejection plumbing (promise hooks can run JS) still lands
+    // in a live trampoline frame, exactly like the old always-armed setjmp.
     let trap_buf = crate::exception::js_try_push();
-    // SAFETY: The setjmp call must remain in this stack frame; we
-    // longjmp to it from `js_throw` only while this frame is still
-    // alive (inside the loop below). The cast `*mut i32 -> *mut c_int`
-    // is a no-op on every Perry-supported target (c_int is i32
-    // everywhere), but it spells the intent at the FFI boundary so
-    // the shared declaration in `ffi::setjmp` stays the single source
-    // of truth for libc's signature.
-    let jumped = unsafe { setjmp(trap_buf as *mut std::os::raw::c_int) };
-    if jumped != 0 {
-        restore_all_microtask_contexts();
-        crate::builtins::restore_queued_microtask_contexts();
-        // A microtask's callback threw and unwound here. Read the
-        // exception, clear it, and reject the `next` promise of the
-        // microtask that was running. js_try_end is intentionally NOT
-        // called yet — we want the trap to remain in scope for the
-        // rest of the loop.
-        let exc = crate::exception::js_get_exception();
-        crate::exception::js_clear_exception();
-        let cur = CURRENT_MICROTASK_PROMISE.with(|c| c.replace(std::ptr::null_mut()));
-        CURRENT_MICROTASK_CALLBACK.with(|c| c.set(std::ptr::null()));
-        CURRENT_MICROTASK_VALUE.with(|c| c.set(0.0));
-        CURRENT_MICROTASK_NEXT.with(|c| c.set(std::ptr::null_mut()));
-        let unwound_trap = INLINE_TRAP.with(|c| c.replace(InlineTrap::empty()));
-        // `longjmp` bypasses Rust destructors and normal dispatch tails. Drain
-        // exactly the activation references acquired since THIS (possibly
-        // re-entrant) runner began; an enclosing activation is below the saved
-        // depth and must remain owned when this runner returns.
-        // Re-read the boundary from TLS after the non-local jump. A Rust local
-        // captured before `setjmp` is not stable here in optimized builds: its
-        // storage can be reused on the ordinary path before `longjmp` resumes
-        // this branch (#8937).
-        let async_box_ref_depth = ASYNC_BOX_EXECUTION_REF_BASES.with(|bases| {
-            *bases
-                .borrow()
-                .last()
-                .expect("microtask execution-ref boundary")
-        }) as usize;
-        unwind_async_box_execution_refs(async_box_ref_depth);
-        if !cur.is_null() {
-            unsafe {
-                if !(*cur).next.is_null() {
-                    js_promise_reject((*cur).next, exc);
+    let mut landed = false;
+    loop {
+        let completed = crate::exception::arm_trap_and_run(trap_buf, || {
+            pump_protected(mode, reentrant, landed, &mut ran)
+        });
+        if completed.is_some() {
+            break;
+        }
+        // A JS throw longjmp-landed in the trampoline. The jmp_buf is stale
+        // until `arm_trap_and_run` re-arms it above, and nothing between
+        // here and there can throw (this assignment is all there is).
+        // `landed` stays true for the rest of the drain: every re-entry
+        // recovers before draining further.
+        landed = true;
+    }
+    crate::exception::js_try_end();
+    crate::node_submodules::diagnostics_channel_drain_uncaught();
+
+    let _ = crate::gc::gc_runtime_safepoint();
+
+    // Phase 1 of the moving-GC project (see project_gc_one_great_moving_gc): at
+    // the OUTERMOST microtask-pump boundary the JS stack has fully unwound, so
+    // there are no live register temporaries and the copying (moving) minor runs
+    // with precise, rewritable roots — no forced conservative scan. Run it when
+    // nursery pressure is due so programs that yield to the event loop get
+    // compacting, O(survivors) young collection instead of the non-moving
+    // alloc-point fallback. Gated (default off); additive.
+    if crate::gc::gc_moving_safepoint_enabled()
+        && MICROTASK_RUN_DEPTH.with(|depth| depth.get().pump) == 1
+    {
+        crate::gc::gc_safepoint_moving_minor();
+    }
+
+    // Fallback for release entry points invoked without a tracked plain-async
+    // activation (principally direct runtime tests). Production async frames
+    // publish at their own queued/running AsyncStep refcount reaching zero;
+    // they do not wait for this global pump boundary.
+    if MICROTASK_RUN_DEPTH.with(|depth| depth.get().pump) == 1
+        && TASK_QUEUE.with(|q| q.borrow().is_empty())
+    {
+        crate::r#box::flush_released_boxes();
+    }
+
+    ASYNC_BOX_EXECUTION_REF_BASES.with(|bases| {
+        let base = bases
+            .borrow_mut()
+            .pop()
+            .expect("microtask execution-ref boundary");
+        debug_assert_eq!(async_box_execution_ref_depth(), base as usize);
+    });
+
+    MICROTASK_RUN_DEPTH.with(|depth| {
+        let mut current = depth.get();
+        current.pump = current.pump.saturating_sub(1);
+        depth.set(current);
+    });
+
+    ran
+}
+
+/// The microtask trap's protected region (#9305): the recovery for a
+/// just-landed throw (`landed`), the tick/task drain loop, the
+/// jobs-quiescent decrement, rejection processing, and the timer phases.
+/// Runs ONLY under an armed trampoline (`exception::arm_trap_and_run`):
+/// a JS throw that reaches the runner's trap longjmps out of this
+/// function into the trampoline, abandoning this frame — state that must
+/// survive a landing lives behind `ran`'s reference or in TLS, never in
+/// a local.
+fn pump_protected(mode: MicrotaskDrainMode, reentrant: bool, landed: bool, ran: &mut i32) {
+    if landed {
+            restore_all_microtask_contexts();
+            crate::builtins::restore_queued_microtask_contexts();
+            // A microtask's callback threw and unwound here. Read the
+            // exception, clear it, and reject the `next` promise of the
+            // microtask that was running. The try frame stays pushed — the
+            // caller re-arms it for the rest of the drain (js_try_end runs
+            // after the pump loop completes).
+            let exc = crate::exception::js_get_exception();
+            crate::exception::js_clear_exception();
+            let cur = CURRENT_MICROTASK_PROMISE.with(|c| c.replace(std::ptr::null_mut()));
+            CURRENT_MICROTASK_CALLBACK.with(|c| c.set(std::ptr::null()));
+            CURRENT_MICROTASK_VALUE.with(|c| c.set(0.0));
+            CURRENT_MICROTASK_NEXT.with(|c| c.set(std::ptr::null_mut()));
+            let unwound_trap = INLINE_TRAP.with(|c| c.replace(InlineTrap::empty()));
+            // `longjmp` bypasses Rust destructors and normal dispatch tails. Drain
+            // exactly the activation references acquired since THIS (possibly
+            // re-entrant) runner began; an enclosing activation is below the saved
+            // depth and must remain owned when this runner returns.
+            // Re-read the boundary from TLS after the non-local jump. A Rust local
+            // held across a landing is not stable (#8937) — this function's frame
+            // was abandoned by the longjmp; only TLS and memory behind `ran` are.
+            let async_box_ref_depth = ASYNC_BOX_EXECUTION_REF_BASES.with(|bases| {
+                *bases
+                    .borrow()
+                    .last()
+                    .expect("microtask execution-ref boundary")
+            }) as usize;
+            unwind_async_box_execution_refs(async_box_ref_depth);
+            if !cur.is_null() {
+                unsafe {
+                    if !(*cur).next.is_null() {
+                        js_promise_reject((*cur).next, exc);
+                    }
+                }
+                *ran += 1;
+            } else {
+                if !unwound_trap.trap_next.is_null() {
+                    js_promise_reject(unwound_trap.trap_next, exc);
+                    *ran += 1;
+                } else {
+                    crate::node_submodules::diagnostics::schedule_uncaught(exc);
+                    *ran += 1;
                 }
             }
-            ran += 1;
-        } else {
-            if !unwound_trap.trap_next.is_null() {
-                js_promise_reject(unwound_trap.trap_next, exc);
-                ran += 1;
-            } else {
-                crate::node_submodules::diagnostics::schedule_uncaught(exc);
-                ran += 1;
-            }
-        }
     }
 
     // Cached profile flag — set once by mt_profile_register() above.
@@ -381,12 +433,12 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
         false
     };
     loop {
-        let ran_before_checkpoint = ran;
+        let ran_before_checkpoint = *ran;
 
         // Node runs process.nextTick jobs before regular microtasks, while
         // queueMicrotask jobs share FIFO order with Promise reactions.
         if ticks_allowed && !esm_defer_tick_drain {
-            ran += crate::builtins::drain_queued_microtasks_count();
+            *ran += crate::builtins::drain_queued_microtasks_count();
         }
 
         loop {
@@ -453,7 +505,7 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
                             CURRENT_MICROTASK_NEXT.with(|c| c.set(std::ptr::null_mut()));
                             clear_promise_context(promise);
                             restore_microtask_context();
-                            ran += 1;
+                            *ran += 1;
                             continue;
                         }
 
@@ -579,7 +631,7 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
                         });
                     }
                     restore_microtask_context();
-                    ran += 1;
+                    *ran += 1;
                 }
                 Some(Task::PromiseAll(mut state, value, is_fulfilled, task_context)) => {
                     bump(&MT_RUN_COUNT);
@@ -604,7 +656,7 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
                     let value = value_h.get_nanbox_f64();
                     combinators::promise_all_settle(state, value, is_fulfilled);
                     restore_microtask_context();
-                    ran += 1;
+                    *ran += 1;
                 }
                 Some(Task::Inline(callback, value, next, is_fulfilled, task_context)) => {
                     bump(&MT_RUN_COUNT);
@@ -646,7 +698,7 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
                         }
                         crate::async_hooks::after_promise(async_id);
                         restore_microtask_context();
-                        ran += 1;
+                        *ran += 1;
                         continue;
                     }
 
@@ -725,7 +777,7 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
                             .fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed);
                     }
                     restore_microtask_context();
-                    ran += 1;
+                    *ran += 1;
                 }
                 Some(Task::Microtask {
                     callback,
@@ -761,7 +813,7 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
                     CURRENT_MICROTASK_NEXT
                         .with(|c| c.set(prev_next_handle.get_raw_mut_ptr::<Promise>()));
                     restore_microtask_context();
-                    ran += 1;
+                    *ran += 1;
                 }
                 Some(Task::AsyncStep(
                     step_closure,
@@ -822,7 +874,7 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
                             pop_async_box_execution_ref(box_activation);
                         }
                         crate::r#box::release_async_box_activation(box_activation);
-                        ran += 1;
+                        *ran += 1;
                         continue;
                     }
                     CURRENT_MICROTASK_CALLBACK.with(|c| c.set(step_closure));
@@ -877,7 +929,7 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
                                 pop_async_box_execution_ref(box_activation);
                             }
                             crate::r#box::release_async_box_activation(box_activation);
-                            ran += 1;
+                            *ran += 1;
                             continue;
                         }
                         ASYNC_STEP_GUARD.with(|c| {
@@ -1034,7 +1086,7 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
                         pop_async_box_execution_ref(box_activation);
                     }
                     crate::r#box::release_async_box_activation(box_activation);
-                    ran += 1;
+                    *ran += 1;
                 }
             }
         }
@@ -1045,10 +1097,10 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
         // normal ticks-first ordering.
         if esm_defer_tick_drain {
             esm_defer_tick_drain = false;
-            ran += crate::builtins::drain_queued_microtasks_count();
+            *ran += crate::builtins::drain_queued_microtasks_count();
         }
 
-        if ran == ran_before_checkpoint {
+        if *ran == ran_before_checkpoint {
             break;
         }
     }
@@ -1092,55 +1144,12 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
         _ => false,
     };
     if fire_timers {
-        ran += crate::timer::js_timer_tick();
-        ran += crate::timer::js_callback_timer_tick();
-        ran += crate::builtins::drain_queued_microtasks_count();
-        ran += crate::timer::js_interval_timer_tick();
+        *ran += crate::timer::js_timer_tick();
+        *ran += crate::timer::js_callback_timer_tick();
+        *ran += crate::builtins::drain_queued_microtasks_count();
+        *ran += crate::timer::js_interval_timer_tick();
     }
 
-    crate::exception::js_try_end();
-    crate::node_submodules::diagnostics_channel_drain_uncaught();
-
-    let _ = crate::gc::gc_runtime_safepoint();
-
-    // Phase 1 of the moving-GC project (see project_gc_one_great_moving_gc): at
-    // the OUTERMOST microtask-pump boundary the JS stack has fully unwound, so
-    // there are no live register temporaries and the copying (moving) minor runs
-    // with precise, rewritable roots — no forced conservative scan. Run it when
-    // nursery pressure is due so programs that yield to the event loop get
-    // compacting, O(survivors) young collection instead of the non-moving
-    // alloc-point fallback. Gated (default off); additive.
-    if crate::gc::gc_moving_safepoint_enabled()
-        && MICROTASK_RUN_DEPTH.with(|depth| depth.get().pump) == 1
-    {
-        crate::gc::gc_safepoint_moving_minor();
-    }
-
-    // Fallback for release entry points invoked without a tracked plain-async
-    // activation (principally direct runtime tests). Production async frames
-    // publish at their own queued/running AsyncStep refcount reaching zero;
-    // they do not wait for this global pump boundary.
-    if MICROTASK_RUN_DEPTH.with(|depth| depth.get().pump) == 1
-        && TASK_QUEUE.with(|q| q.borrow().is_empty())
-    {
-        crate::r#box::flush_released_boxes();
-    }
-
-    ASYNC_BOX_EXECUTION_REF_BASES.with(|bases| {
-        let base = bases
-            .borrow_mut()
-            .pop()
-            .expect("microtask execution-ref boundary");
-        debug_assert_eq!(async_box_execution_ref_depth(), base as usize);
-    });
-
-    MICROTASK_RUN_DEPTH.with(|depth| {
-        let mut current = depth.get();
-        current.pump = current.pump.saturating_sub(1);
-        depth.set(current);
-    });
-
-    ran
 }
 
 #[inline(always)]

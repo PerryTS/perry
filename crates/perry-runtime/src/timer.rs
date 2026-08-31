@@ -13,7 +13,6 @@ use crate::promise::{js_promise_new, js_promise_resolve, Promise};
 use async_lifecycle::{enqueue_destroy_ids, IntervalCallback};
 use std::any::Any;
 use std::collections::HashMap;
-use std::os::raw::c_int;
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
     LazyLock, Mutex,
@@ -478,16 +477,26 @@ fn timer_handle_value(id: i64) -> f64 {
 
 fn with_timer_uncaught_trap<F: FnOnce()>(f: F) {
     let trap_buf = crate::exception::js_try_push();
-    // SAFETY: this setjmp frame is active only for the synchronous timer
-    // callback invocation below. `js_throw` longjmps back here before the
-    // frame is popped, matching the promise microtask runner's trap shape.
-    let jumped = unsafe { crate::ffi::setjmp::setjmp(trap_buf as *mut c_int) };
-    if jumped == 0 {
-        f();
-    } else {
-        let exc = crate::exception::js_get_exception();
-        crate::exception::js_clear_exception();
-        crate::os::emit_process_uncaught_exception(exc);
+    let mut f = Some(f);
+    // The jmp_buf is armed inside a C trampoline frame (#9305 — a raw
+    // `setjmp` in a Rust frame is unsound). Loop shape: a throw from the
+    // timer callback lands in the trampoline, and the uncaught path then
+    // runs under the NEXT arm — so a throw out of an 'uncaughtException'
+    // listener lands here again instead of targeting a dead frame,
+    // matching the raw shape where the still-armed setjmp caught it.
+    loop {
+        let completed = crate::exception::arm_trap_and_run(trap_buf, || {
+            if let Some(f) = f.take() {
+                f();
+            } else {
+                let exc = crate::exception::js_get_exception();
+                crate::exception::js_clear_exception();
+                crate::os::emit_process_uncaught_exception(exc);
+            }
+        });
+        if completed.is_some() {
+            break;
+        }
     }
     crate::exception::js_try_end();
 }

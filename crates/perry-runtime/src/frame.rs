@@ -14,7 +14,6 @@
 
 use crate::closure::ClosureHeader;
 use std::collections::HashMap;
-use std::os::raw::c_int;
 use std::sync::Mutex;
 
 struct FrameCallback {
@@ -53,13 +52,22 @@ fn next_frame_id() -> i64 {
 
 fn with_frame_uncaught_trap<F: FnOnce()>(f: F) {
     let trap_buf = crate::exception::js_try_push();
-    let jumped = unsafe { crate::ffi::setjmp::setjmp(trap_buf as *mut c_int) };
-    if jumped == 0 {
-        f();
-    } else {
-        let exc = crate::exception::js_get_exception();
-        crate::exception::js_clear_exception();
-        crate::os::emit_process_uncaught_exception(exc);
+    let mut f = Some(f);
+    // Armed in a C trampoline frame (#9305); loop shape so the uncaught
+    // path runs under a fresh arm — see `timer::with_timer_uncaught_trap`.
+    loop {
+        let completed = crate::exception::arm_trap_and_run(trap_buf, || {
+            if let Some(f) = f.take() {
+                f();
+            } else {
+                let exc = crate::exception::js_get_exception();
+                crate::exception::js_clear_exception();
+                crate::os::emit_process_uncaught_exception(exc);
+            }
+        });
+        if completed.is_some() {
+            break;
+        }
     }
     crate::exception::js_try_end();
 }

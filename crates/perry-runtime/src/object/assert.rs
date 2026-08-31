@@ -3,7 +3,6 @@
 //! Split out of `object/mod.rs` (issue #1103). Pure relocation — no
 //! logic changes.
 
-use std::os::raw::c_int;
 
 use super::*;
 
@@ -322,34 +321,16 @@ fn expected_is_callable(value: f64) -> bool {
 /// validator can't escape as an uncaught exception). Mirrors
 /// [`call_block_capturing_throw`] but passes one argument.
 fn call_validator_capturing(validator: f64, arg: f64) -> Result<f64, f64> {
-    let trap_buf = crate::exception::js_try_push();
-    let jumped = unsafe { crate::ffi::setjmp::setjmp(trap_buf as *mut c_int) };
-    let result = if jumped == 0 {
+    crate::exception::catch_js_throw(|| {
         let args = [arg];
-        let value = unsafe { crate::closure::js_native_call_value(validator, args.as_ptr(), 1) };
-        Ok(value)
-    } else {
-        let exc = crate::exception::js_get_exception();
-        crate::exception::js_clear_exception();
-        Err(exc)
-    };
-    crate::exception::js_try_end();
-    result
+        unsafe { crate::closure::js_native_call_value(validator, args.as_ptr(), 1) }
+    })
 }
 
 fn call_block_capturing_throw(block: f64) -> Result<f64, f64> {
-    let trap_buf = crate::exception::js_try_push();
-    let jumped = unsafe { crate::ffi::setjmp::setjmp(trap_buf as *mut c_int) };
-    let result = if jumped == 0 {
-        let value = unsafe { crate::closure::js_native_call_value(block, std::ptr::null(), 0) };
-        Ok(value)
-    } else {
-        let exc = crate::exception::js_get_exception();
-        crate::exception::js_clear_exception();
-        Err(exc)
-    };
-    crate::exception::js_try_end();
-    result
+    crate::exception::catch_js_throw(|| unsafe {
+        crate::closure::js_native_call_value(block, std::ptr::null(), 0)
+    })
 }
 
 fn invalid_function_argument(arg_name: &str, value: f64) -> ! {

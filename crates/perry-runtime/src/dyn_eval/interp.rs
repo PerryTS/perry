@@ -1012,40 +1012,38 @@ fn exec_switch(ctx: &Ctx, sw: &ast::SwitchStmt, env_idx: usize) -> Flow {
 /// runs on every exit path — including a throw out of the CATCH body, which
 /// a single-trap shape would miss.
 fn exec_try(ctx: &Ctx, t: &ast::TryStmt, env_idx: usize) -> Flow {
-    use crate::ffi::setjmp::setjmp;
-
     let Some(finalizer) = &t.finalizer else {
         return exec_try_catch(ctx, t, env_idx);
     };
     let trap = crate::exception::js_try_push();
-    // SAFETY: this frame stays alive for the whole protected region; the cast
-    // matches libc's signature (see ffi::setjmp).
-    let jumped = unsafe { setjmp(trap as *mut std::os::raw::c_int) };
-    if jumped == 0 {
-        let flow = exec_try_catch(ctx, t, env_idx);
-        crate::exception::js_try_end();
-        match exec_block_scope(ctx, finalizer, env_idx) {
+    // Armed in a C trampoline frame (#9305). Both continuations below run
+    // after `js_try_end` pops this trap, so a throw out of the finalizer
+    // (or the rethrow) targets the enclosing handler — as before.
+    let outcome = crate::exception::arm_trap_and_run(trap, || exec_try_catch(ctx, t, env_idx));
+    crate::exception::js_try_end();
+    match outcome {
+        Some(flow) => match exec_block_scope(ctx, finalizer, env_idx) {
             Flow::Normal => flow,
             // An abrupt finalizer completion replaces the try/catch result.
             abrupt => abrupt,
-        }
-    } else {
-        // try (or catch) threw. Run the finalizer, then rethrow — unless the
-        // finalizer itself completes abruptly, which swallows the exception
-        // (spec Completion-record semantics).
-        crate::exception::js_try_end();
-        let exc = crate::exception::js_get_exception();
-        crate::exception::js_clear_exception();
-        let exc_idx = root_push(exc);
-        match exec_block_scope(ctx, finalizer, env_idx) {
-            Flow::Normal => {
-                let exc = root_get(exc_idx);
-                roots_truncate(exc_idx);
-                crate::exception::js_throw(exc)
-            }
-            abrupt => {
-                roots_truncate(exc_idx);
-                abrupt
+        },
+        None => {
+            // try (or catch) threw. Run the finalizer, then rethrow — unless the
+            // finalizer itself completes abruptly, which swallows the exception
+            // (spec Completion-record semantics).
+            let exc = crate::exception::js_get_exception();
+            crate::exception::js_clear_exception();
+            let exc_idx = root_push(exc);
+            match exec_block_scope(ctx, finalizer, env_idx) {
+                Flow::Normal => {
+                    let exc = root_get(exc_idx);
+                    roots_truncate(exc_idx);
+                    crate::exception::js_throw(exc)
+                }
+                abrupt => {
+                    roots_truncate(exc_idx);
+                    abrupt
+                }
             }
         }
     }
@@ -1054,20 +1052,17 @@ fn exec_try(ctx: &Ctx, t: &ast::TryStmt, env_idx: usize) -> Flow {
 /// The try-block + catch-handler pair (no finalizer handling).
 #[inline(never)]
 fn exec_try_catch(ctx: &Ctx, t: &ast::TryStmt, env_idx: usize) -> Flow {
-    use crate::ffi::setjmp::setjmp;
-
     let trap = crate::exception::js_try_push();
-    // SAFETY: see exec_try.
-    let jumped = unsafe { setjmp(trap as *mut std::os::raw::c_int) };
-    if jumped == 0 {
-        let flow = protected_block(ctx, t, env_idx);
-        crate::exception::js_try_end();
+    // Armed in a C trampoline frame (#9305); the catch handler runs after
+    // `js_try_end`, so its own throws target the enclosing trap.
+    let outcome = crate::exception::arm_trap_and_run(trap, || protected_block(ctx, t, env_idx));
+    crate::exception::js_try_end();
+    if let Some(flow) = outcome {
         return flow;
     }
-    // A throw from the try block landed here. The pending exception is
-    // live; the interpreter savepoint has already restored the rooted stack
-    // + call depth to this try's entry state.
-    crate::exception::js_try_end();
+    // A throw from the try block landed in the trampoline. The pending
+    // exception is live; the interpreter savepoint has already restored the
+    // rooted stack + call depth to this try's entry state.
     let exc = crate::exception::js_get_exception();
     crate::exception::js_clear_exception();
 

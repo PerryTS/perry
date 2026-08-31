@@ -6314,6 +6314,7 @@ version = "0.5.1519"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
+ "cc",
  "dirs",
  "encoding_rs",
  "fancy-regex",

@@ -250,17 +250,7 @@ pub extern "C" fn js_promise_resolved(value: f64) -> *mut Promise {
 /// iterator/generator algorithms turn an abrupt constructor getter into a
 /// rejected result promise instead of throwing synchronously to their caller.
 pub fn js_promise_resolved_catching(value: f64) -> Result<*mut Promise, f64> {
-    let trap_buf = crate::exception::js_try_push();
-    let jumped = unsafe { crate::ffi::setjmp::setjmp(trap_buf as *mut std::os::raw::c_int) };
-    let result = if jumped == 0 {
-        Ok(js_promise_resolved(value))
-    } else {
-        let reason = crate::exception::js_get_exception();
-        crate::exception::js_clear_exception();
-        Err(reason)
-    };
-    crate::exception::js_try_end();
-    result
+    crate::exception::catch_js_throw(|| js_promise_resolved(value))
 }
 
 /// Fused fast path for `Promise.resolve(value).then(cb_f, cb_e)` —

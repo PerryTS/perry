@@ -464,17 +464,7 @@ mod tests {
     }
 
     fn catch_runtime_throw(f: impl FnOnce()) -> bool {
-        let env = crate::exception::js_try_push();
-        let jumped = unsafe { crate::ffi::setjmp::setjmp(env as *mut c_int) };
-        if jumped == 0 {
-            f();
-            crate::exception::js_try_end();
-            false
-        } else {
-            crate::exception::js_try_end();
-            crate::exception::js_clear_exception();
-            true
-        }
+        crate::exception::catch_js_throw(f).is_err()
     }
 
     fn type_id(name: &str) -> i64 {

@@ -47,19 +47,7 @@ fn truthy(v: f64) -> bool {
 /// Run `f` under a Rust-side landing pad; `Err(exception)` when it throws.
 /// Same setjmp idiom as the interpreter's own try/catch.
 fn catch_throw(f: impl FnOnce() -> f64) -> Result<f64, f64> {
-    use crate::ffi::setjmp::setjmp;
-    let trap = crate::exception::js_try_push();
-    let jumped = unsafe { setjmp(trap as *mut std::os::raw::c_int) };
-    if jumped == 0 {
-        let v = f();
-        crate::exception::js_try_end();
-        Ok(v)
-    } else {
-        crate::exception::js_try_end();
-        let exc = crate::exception::js_get_exception();
-        crate::exception::js_clear_exception();
-        Err(exc)
-    }
+    crate::exception::catch_js_throw(f)
 }
 
 fn error_message(exc: f64) -> String {

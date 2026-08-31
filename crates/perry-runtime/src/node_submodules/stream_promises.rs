@@ -20,7 +20,6 @@ use crate::object::{
 };
 use crate::string::js_string_from_bytes;
 use crate::value::JSValue;
-use std::os::raw::c_int;
 
 #[inline]
 pub(crate) fn undefined_value() -> f64 {
@@ -556,18 +555,7 @@ extern "C" fn stream_promises_pipeline_callback(
 }
 
 fn catch_stream_promises_throw(call: impl FnOnce()) -> Result<(), f64> {
-    let trap_buf = crate::exception::js_try_push();
-    let jumped = unsafe { crate::ffi::setjmp::setjmp(trap_buf as *mut c_int) };
-    if jumped == 0 {
-        call();
-        crate::exception::js_try_end();
-        Ok(())
-    } else {
-        let err = crate::exception::js_get_exception();
-        crate::exception::js_clear_exception();
-        crate::exception::js_try_end();
-        Err(err)
-    }
+    crate::exception::catch_js_throw(call)
 }
 
 #[allow(non_snake_case)] // thunk name mirrors JS API surface

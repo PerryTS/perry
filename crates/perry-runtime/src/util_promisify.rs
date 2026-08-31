@@ -26,7 +26,6 @@
 //! transparently but doesn't reach into `this`).
 
 use std::cell::Cell;
-use std::os::raw::c_int;
 
 use crate::array::{js_array_alloc, js_array_length, js_array_push_f64, ArrayHeader};
 use crate::closure::{
@@ -34,7 +33,6 @@ use crate::closure::{
     js_closure_set_capture_f64, js_closure_set_capture_ptr, js_register_closure_arity,
     js_register_closure_rest, ClosureHeader,
 };
-use crate::ffi::setjmp::setjmp;
 use crate::promise::{
     js_promise_attach_handlers, js_promise_new, js_promise_reject, js_promise_resolve,
     js_value_is_promise, ClosurePtr, Promise,
@@ -387,23 +385,37 @@ extern "C" fn outer_thunk(closure: *const ClosureHeader, rest_value: f64) -> f64
     // instead of crashing the process. Mirrors the timer / microtask
     // runners' guard shape.
     let trap_buf = crate::exception::js_try_push();
-    let jumped = unsafe { setjmp(trap_buf as *mut c_int) };
-    if jumped == 0 {
-        let arr = combined_handle.get_raw_const_ptr::<ArrayHeader>();
-        let data =
-            unsafe { (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64 };
-        let n = js_array_length(arr) as usize;
-        unsafe {
-            crate::closure::js_native_call_value(fn_handle.get_nanbox_f64(), data, n);
-        }
-    } else {
-        // #7341: `js_get_exception` can allocate, so pair it with the re-read.
-        let (exc, promise_after_exc) = promise_handle.across_mut::<Promise, _>(|| {
-            let exc = crate::exception::js_get_exception();
-            crate::exception::js_clear_exception();
-            exc
+    let mut called = false;
+    // Armed in a C trampoline frame (#9305). Loop shape: the rejection
+    // handler runs under a fresh arm, so a throw out of it (promise hooks
+    // can run JS) lands back here — matching the raw shape, where the
+    // still-armed setjmp caught it.
+    loop {
+        let completed = crate::exception::arm_trap_and_run(trap_buf, || {
+            if !called {
+                called = true;
+                let arr = combined_handle.get_raw_const_ptr::<ArrayHeader>();
+                let data = unsafe {
+                    (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64
+                };
+                let n = js_array_length(arr) as usize;
+                unsafe {
+                    crate::closure::js_native_call_value(fn_handle.get_nanbox_f64(), data, n);
+                }
+            } else {
+                // #7341: `js_get_exception` can allocate, so pair it with the
+                // re-read.
+                let (exc, promise_after_exc) = promise_handle.across_mut::<Promise, _>(|| {
+                    let exc = crate::exception::js_get_exception();
+                    crate::exception::js_clear_exception();
+                    exc
+                });
+                js_promise_reject(promise_after_exc, exc);
+            }
         });
-        js_promise_reject(promise_after_exc, exc);
+        if completed.is_some() {
+            break;
+        }
     }
     crate::exception::js_try_end();
 
@@ -493,23 +505,37 @@ extern "C" fn gkp_outer_thunk(closure: *const ClosureHeader, rest_value: f64) ->
     let combined_handle = scope.root_raw_mut_ptr(combined);
 
     let trap_buf = crate::exception::js_try_push();
-    let jumped = unsafe { setjmp(trap_buf as *mut c_int) };
-    if jumped == 0 {
-        let arr = combined_handle.get_raw_const_ptr::<ArrayHeader>();
-        let data =
-            unsafe { (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64 };
-        let n = js_array_length(arr) as usize;
-        unsafe {
-            crate::closure::js_native_call_value(fn_handle.get_nanbox_f64(), data, n);
-        }
-    } else {
-        // #7341: `js_get_exception` can allocate, so pair it with the re-read.
-        let (exc, promise_after_exc) = promise_handle.across_mut::<Promise, _>(|| {
-            let exc = crate::exception::js_get_exception();
-            crate::exception::js_clear_exception();
-            exc
+    let mut called = false;
+    // Armed in a C trampoline frame (#9305). Loop shape: the rejection
+    // handler runs under a fresh arm, so a throw out of it (promise hooks
+    // can run JS) lands back here — matching the raw shape, where the
+    // still-armed setjmp caught it.
+    loop {
+        let completed = crate::exception::arm_trap_and_run(trap_buf, || {
+            if !called {
+                called = true;
+                let arr = combined_handle.get_raw_const_ptr::<ArrayHeader>();
+                let data = unsafe {
+                    (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64
+                };
+                let n = js_array_length(arr) as usize;
+                unsafe {
+                    crate::closure::js_native_call_value(fn_handle.get_nanbox_f64(), data, n);
+                }
+            } else {
+                // #7341: `js_get_exception` can allocate, so pair it with the
+                // re-read.
+                let (exc, promise_after_exc) = promise_handle.across_mut::<Promise, _>(|| {
+                    let exc = crate::exception::js_get_exception();
+                    crate::exception::js_clear_exception();
+                    exc
+                });
+                js_promise_reject(promise_after_exc, exc);
+            }
         });
-        js_promise_reject(promise_after_exc, exc);
+        if completed.is_some() {
+            break;
+        }
     }
     crate::exception::js_try_end();
 

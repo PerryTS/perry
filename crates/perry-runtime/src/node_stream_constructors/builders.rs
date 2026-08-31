@@ -5,7 +5,6 @@ use super::*;
 use crate::closure::ClosureHeader;
 use crate::object::{js_object_get_field_by_name_f64, js_object_set_field_by_name, ObjectHeader};
 use crate::value::JSValue;
-use std::os::raw::c_int;
 
 #[no_mangle]
 pub extern "C" fn js_node_stream_readable_new(opts: f64) -> f64 {
@@ -552,29 +551,27 @@ pub extern "C" fn js_node_stream_readable_from_options(iterable: f64, opts: f64)
     let readable = js_node_stream_readable_new(readable_from_options(opts));
     let raw = raw_ptr_from_value(readable);
     if raw >= 0x10000 {
-        let trap_buf = crate::exception::js_try_push();
-        let jumped = unsafe { crate::ffi::setjmp::setjmp(trap_buf as *mut c_int) };
-        if jumped == 0 {
-            let normalized = normalize_readable_from_input(iterable);
-            crate::exception::js_try_end();
-            js_object_set_field_by_name(
-                raw as *mut ObjectHeader,
-                hidden_chunks_key(),
-                normalized.chunks,
-            );
-            initialize_readable_from_buffered_length(readable, normalized.chunks);
-            if let Some(source_iterator) = normalized.source_iterator {
+        // Armed in a C trampoline frame (#9305); both continuations run
+        // after the trap is popped, as before.
+        match crate::exception::catch_js_throw(|| normalize_readable_from_input(iterable)) {
+            Ok(normalized) => {
                 js_object_set_field_by_name(
                     raw as *mut ObjectHeader,
-                    hidden_key(READABLE_SOURCE_ITERATOR_KEY),
-                    source_iterator,
+                    hidden_chunks_key(),
+                    normalized.chunks,
                 );
+                initialize_readable_from_buffered_length(readable, normalized.chunks);
+                if let Some(source_iterator) = normalized.source_iterator {
+                    js_object_set_field_by_name(
+                        raw as *mut ObjectHeader,
+                        hidden_key(READABLE_SOURCE_ITERATOR_KEY),
+                        source_iterator,
+                    );
+                }
             }
-        } else {
-            let err = crate::exception::js_get_exception();
-            crate::exception::js_clear_exception();
-            crate::exception::js_try_end();
-            destroy_stream(readable, err);
+            Err(err) => {
+                destroy_stream(readable, err);
+            }
         }
     }
     readable

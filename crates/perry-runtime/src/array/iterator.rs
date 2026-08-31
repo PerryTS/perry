@@ -487,14 +487,15 @@ fn async_from_sync_call_raw(iter: f64, method: &[u8], args: &[f64]) -> Result<Op
         None
     };
     let trap_buf = crate::exception::js_try_push();
-    let jumped = unsafe { crate::ffi::setjmp::setjmp(trap_buf as *mut std::os::raw::c_int) };
-    let result = if jumped == 0 {
+    // Armed in a C trampoline frame (#9305); everything between the landing
+    // and `js_try_end` below is pure TLS bookkeeping.
+    let outcome = crate::exception::arm_trap_and_run(trap_buf, || {
         let args_ptr = if args.is_empty() {
             std::ptr::null()
         } else {
             args.as_ptr()
         };
-        let value = if callable {
+        if callable {
             unsafe {
                 crate::closure::js_native_call_value(
                     method_value_h.get_nanbox_f64(),
@@ -512,12 +513,15 @@ fn async_from_sync_call_raw(iter: f64, method: &[u8], args: &[f64]) -> Result<Op
                     args.len(),
                 )
             }
-        };
-        Ok(Some(value))
-    } else {
-        let exc = crate::exception::js_get_exception();
-        crate::exception::js_clear_exception();
-        Err(exc)
+        }
+    });
+    let result = match outcome {
+        Some(value) => Ok(Some(value)),
+        None => {
+            let exc = crate::exception::js_get_exception();
+            crate::exception::js_clear_exception();
+            Err(exc)
+        }
     };
     if let Some(prev) = prev_this {
         crate::object::js_implicit_this_set(prev);
@@ -545,20 +549,21 @@ fn async_from_sync_call_cached_raw(
     }
     let prev_this = crate::object::js_implicit_this_set(iter);
     let trap_buf = crate::exception::js_try_push();
-    let jumped = unsafe { crate::ffi::setjmp::setjmp(trap_buf as *mut std::os::raw::c_int) };
-    let result = if jumped == 0 {
+    let outcome = crate::exception::arm_trap_and_run(trap_buf, || {
         let args_ptr = if args.is_empty() {
             std::ptr::null()
         } else {
             args.as_ptr()
         };
-        let value =
-            unsafe { crate::closure::js_native_call_value(method_value, args_ptr, args.len()) };
-        Ok(Some(value))
-    } else {
-        let exc = crate::exception::js_get_exception();
-        crate::exception::js_clear_exception();
-        Err(exc)
+        unsafe { crate::closure::js_native_call_value(method_value, args_ptr, args.len()) }
+    });
+    let result = match outcome {
+        Some(value) => Ok(Some(value)),
+        None => {
+            let exc = crate::exception::js_get_exception();
+            crate::exception::js_clear_exception();
+            Err(exc)
+        }
     };
     crate::object::js_implicit_this_set(prev_this);
     crate::exception::js_try_end();
@@ -1156,23 +1161,28 @@ pub(crate) fn array_from_spread_value(value: f64) -> *mut ArrayHeader {
             // `this` is the same defect one frame out.
             let prev_this_h = scope.root_nanbox_f64(prev_this);
             let trap_buf = crate::exception::js_try_push();
-            let jumped =
-                unsafe { crate::ffi::setjmp::setjmp(trap_buf as *mut std::os::raw::c_int) };
             // `js_try_push` captured the handle-stack depth AFTER these roots
-            // were pushed, so the `longjmp` restore below leaves them intact and
-            // reading them here is sound.
-            let iter = if jumped == 0 {
+            // were pushed, so the `longjmp` restore leaves them intact and
+            // reading them here is sound. Armed in a C trampoline frame
+            // (#9305); the rethrow below runs after `js_try_end` pops this
+            // trap, so it targets the enclosing handler.
+            let outcome = crate::exception::arm_trap_and_run(trap_buf, || {
                 crate::closure::js_closure_call0(js_nanbox_get_pointer(rebound_h.get_nanbox_f64())
                     as *const crate::closure::ClosureHeader)
-            } else {
-                // Factory threw: restore the receiver and unwind the trap frame
-                // before re-propagating, so IMPLICIT_THIS can't leak into later
-                // calls (mirrors `async_from_sync_call_cached_raw` above).
-                let exc = crate::exception::js_get_exception();
-                crate::exception::js_clear_exception();
-                crate::object::js_implicit_this_set(prev_this_h.get_nanbox_f64());
-                crate::exception::js_try_end();
-                crate::exception::js_throw(exc)
+            });
+            let iter = match outcome {
+                Some(iter) => iter,
+                None => {
+                    // Factory threw: restore the receiver and unwind the trap
+                    // frame before re-propagating, so IMPLICIT_THIS can't leak
+                    // into later calls (mirrors `async_from_sync_call_cached_raw`
+                    // above).
+                    let exc = crate::exception::js_get_exception();
+                    crate::exception::js_clear_exception();
+                    crate::object::js_implicit_this_set(prev_this_h.get_nanbox_f64());
+                    crate::exception::js_try_end();
+                    crate::exception::js_throw(exc)
+                }
             };
             let iter_h = scope.root_nanbox_f64(iter);
             crate::object::js_implicit_this_set(prev_this_h.get_nanbox_f64());

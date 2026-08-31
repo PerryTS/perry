@@ -804,18 +804,7 @@ pub(crate) fn method_id(closure: *const ClosureHeader) -> i64 {
 }
 
 pub(crate) fn catch_js<F: FnOnce() -> f64>(f: F) -> Result<f64, f64> {
-    let env = crate::exception::js_try_push();
-    let jumped = unsafe { crate::ffi::setjmp::setjmp(env as *mut c_int) };
-    if jumped == 0 {
-        let result = f();
-        crate::exception::js_try_end();
-        Ok(result)
-    } else {
-        crate::exception::js_try_end();
-        let err = crate::exception::js_get_exception();
-        crate::exception::js_clear_exception();
-        Err(err)
-    }
+    crate::exception::catch_js_throw(f)
 }
 
 // #854: diagnostics_channel captured-error helper retained for the subsystem

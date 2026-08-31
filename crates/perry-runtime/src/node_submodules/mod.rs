@@ -21,7 +21,6 @@
 //! its helpers while the broader #793 Node compatibility roadmap continues.
 
 use std::cell::RefCell;
-use std::os::raw::c_int;
 use std::sync::atomic::{AtomicI64, Ordering};
 
 use crate::closure::{

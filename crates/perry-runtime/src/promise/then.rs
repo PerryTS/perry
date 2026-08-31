@@ -1175,17 +1175,10 @@ extern "C" fn then_cap_fulfill_fn(
     let (result, threw) = if on_ful_cl.is_null() {
         (value, false)
     } else {
-        let trap = crate::exception::js_try_push();
-        let jumped = unsafe { crate::ffi::setjmp::setjmp(trap as *mut std::os::raw::c_int) };
-        if jumped == 0 {
-            let ret = crate::closure::js_closure_call1(on_ful_cl, value);
-            crate::exception::js_try_end();
-            (ret, false)
-        } else {
-            let exc = crate::exception::js_get_exception();
-            crate::exception::js_clear_exception();
-            crate::exception::js_try_end();
-            (exc, true)
+        match crate::exception::catch_js_throw(|| crate::closure::js_closure_call1(on_ful_cl, value))
+        {
+            Ok(ret) => (ret, false),
+            Err(exc) => (exc, true),
         }
     };
 
@@ -1215,17 +1208,10 @@ extern "C" fn then_cap_reject_fn(
     let (result, threw) = if on_rej_cl.is_null() {
         (reason, true) // passthrough rejection
     } else {
-        let trap = crate::exception::js_try_push();
-        let jumped = unsafe { crate::ffi::setjmp::setjmp(trap as *mut std::os::raw::c_int) };
-        if jumped == 0 {
-            let ret = crate::closure::js_closure_call1(on_rej_cl, reason);
-            crate::exception::js_try_end();
-            (ret, false)
-        } else {
-            let exc = crate::exception::js_get_exception();
-            crate::exception::js_clear_exception();
-            crate::exception::js_try_end();
-            (exc, true)
+        match crate::exception::catch_js_throw(|| crate::closure::js_closure_call1(on_rej_cl, reason))
+        {
+            Ok(ret) => (ret, false),
+            Err(exc) => (exc, true),
         }
     };
 
@@ -1615,23 +1601,22 @@ fn finally_wrapper_common(
     // is null here (js_promise_finally clears it), so a throw would otherwise
     // be swallowed.
     let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
-    let trap_buf = crate::exception::js_try_push();
-    let jumped = unsafe { crate::ffi::setjmp::setjmp(trap_buf as *mut std::os::raw::c_int) };
-    if jumped != 0 {
-        // onFinally threw — reject `next` with the thrown value.
-        let exc = crate::exception::js_get_exception();
-        crate::exception::js_clear_exception();
-        crate::exception::js_try_end();
-        if !next.is_null() {
-            js_promise_reject(next, exc);
-        }
-        return undef;
-    }
     // Spec (Promise.prototype.finally): `onFinally` is invoked with NO
     // arguments. Calling it with a single `undefined` made `arguments.length`
     // report 1, failing every finally test that asserts a zero-arg invocation.
-    let ret = crate::closure::js_closure_call0(on_finally);
-    crate::exception::js_try_end();
+    // (Armed in a C trampoline frame, #9305; the rejection below runs after
+    // the trap is popped, as before.)
+    let ret = match crate::exception::catch_js_throw(|| crate::closure::js_closure_call0(on_finally))
+    {
+        Ok(ret) => ret,
+        Err(exc) => {
+            // onFinally threw — reject `next` with the thrown value.
+            if !next.is_null() {
+                js_promise_reject(next, exc);
+            }
+            return undef;
+        }
+    };
 
     // If onFinally returned a Promise/thenable, adopt it: wait for it before
     // settling `next`. `js_assimilate_thenable` returns a native Promise for
@@ -1664,19 +1649,16 @@ fn finally_wrapper_common(
             let on_err_f =
                 f64::from_bits(crate::value::JSValue::pointer(on_err as *const u8).bits());
             let args = [on_ok_f, on_err_f];
-            let trap2 = crate::exception::js_try_push();
-            let jumped2 = unsafe { crate::ffi::setjmp::setjmp(trap2 as *mut std::os::raw::c_int) };
-            if jumped2 != 0 {
-                let exc = crate::exception::js_get_exception();
-                crate::exception::js_clear_exception();
-                crate::exception::js_try_end();
-                if !next.is_null() {
-                    js_promise_reject(next, exc);
+            match crate::exception::catch_js_throw(|| {
+                call_receiver_then(cleanup, &args);
+            }) {
+                Ok(()) => {}
+                Err(exc) => {
+                    if !next.is_null() {
+                        js_promise_reject(next, exc);
+                    }
                 }
-                return undef;
             }
-            call_receiver_then(cleanup, &args);
-            crate::exception::js_try_end();
             return undef;
         }
     }
