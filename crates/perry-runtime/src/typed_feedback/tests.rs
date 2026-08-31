@@ -59,6 +59,20 @@ fn assert_undefined(value: f64) {
     assert_eq!(value.to_bits(), crate::value::TAG_UNDEFINED);
 }
 
+fn catch_runtime_throw(f: impl FnOnce()) -> bool {
+    let env = crate::exception::js_try_push();
+    let jumped = unsafe { crate::ffi::setjmp::setjmp(env as *mut std::os::raw::c_int) };
+    if jumped == 0 {
+        f();
+        crate::exception::js_try_end();
+        false
+    } else {
+        crate::exception::js_try_end();
+        crate::exception::js_clear_exception();
+        true
+    }
+}
+
 fn class_instance(
     class_id: u32,
     key_name: &'static [u8],
@@ -572,8 +586,9 @@ fn typed_feedback_array_set_guards_reject_frozen_arrays() {
         0
     );
 
-    let returned = js_typed_feedback_array_index_set_fallback_boxed(70, arr_box, 0.0, 99.0);
-    assert_eq!(returned.to_bits(), arr_box.to_bits());
+    assert!(catch_runtime_throw(|| {
+        js_typed_feedback_array_index_set_fallback_boxed(70, arr_box, 0.0, 99.0);
+    }));
     assert_eq!(
         crate::array::js_array_get_f64(arr, 0).to_bits(),
         1.0f64.to_bits()

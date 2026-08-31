@@ -1511,8 +1511,9 @@ pub(crate) unsafe fn try_strict_dense_number_store(
     // proves there are no holes and keeps its bit-for-bit old hot path; every
     // other admitted layout proves ownership with the slot Perry is about to
     // overwrite.
-    if flags & crate::gc::GC_ARRAY_RAW_F64_LAYOUT == 0 && ptr::read(slot) == crate::value::TAG_HOLE
-    {
+    let may_have_holes = flags & crate::gc::GC_ARRAY_RAW_F64_LAYOUT == 0
+        || flags & crate::gc::GC_ARRAY_RAW_F64_HOLES != 0;
+    if may_have_holes && ptr::read(slot) == crate::value::TAG_HOLE {
         return None;
     }
     // GC_STORE_AUDIT(POINTER_FREE): a number never holds a heap pointer, and
