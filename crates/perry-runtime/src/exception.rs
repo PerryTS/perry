@@ -189,7 +189,14 @@ fn with_exception_state<R>(f: impl FnOnce(*mut ExceptionState) -> R) -> R {
 }
 
 /// Push a new try block and return a pointer to its jmp_buf.
-/// The generated code must call setjmp() directly with this pointer.
+///
+/// The buffer must be armed through the C trampoline
+/// (`arm_trap_and_run` / `perry_sjlj_try`), NEVER by a raw `setjmp` call
+/// from Rust: rustc cannot express `returns_twice`, so a Rust frame
+/// containing a live `setjmp` is miscompiled under LLVM's one-return
+/// assumption (#9305 — stack-slot coloring across the call). Generated
+/// code does not use this entry point at all (its `try` transport is
+/// invoke/landingpad, `js_eh_try_push`, since #7302).
 #[no_mangle]
 pub extern "C" fn js_try_push() -> *mut i32 {
     try_push_with_kind(HandlerKind::Setjmp)

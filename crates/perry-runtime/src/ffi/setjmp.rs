@@ -1,5 +1,17 @@
 //! Shared `_setjmp` FFI declaration (issue #856).
 //!
+//! ## #9305: this extern must NOT be used to arm a longjmp target
+//!
+//! rustc cannot express `returns_twice`, so LLVM compiles any Rust caller
+//! of this extern under a one-return assumption and may color stack slots
+//! across the call — which corrupted `run_microtasks`' longjmp-return path
+//! (#9305). The ONLY remaining legitimate caller is the GC's
+//! register-snapshot spill (`gc/roots.rs`), which never longjmps and so
+//! really is a single-return call. Every jmp_buf that `js_throw` can
+//! `longjmp` to must be armed through the C trampoline instead:
+//! `exception::arm_trap_and_run` / `perry_sjlj_try`
+//! (`src/ffi/perry_sjlj.c`).
+//!
 //! Before this module, both `gc.rs` (register-snapshot path) and `promise.rs`
 //! (microtask-trap unwind path) declared their own `extern "C" fn setjmp(...)`
 //! with conflicting parameter types — `*mut u64` vs `*mut i32`. The Rust
