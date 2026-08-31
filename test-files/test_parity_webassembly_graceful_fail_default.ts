@@ -1,7 +1,9 @@
-// Resolve the namespace through a computed key so this test deliberately does
-// not trigger the compiler's static WebAssembly host auto-linking. It checks
-// the default runtime's honest graceful degradation instead.
-const WA: any = (globalThis as any)["Web" + "Assembly"];
+// Resolve the namespace through a runtime-computed key so this test
+// deliberately does not trigger WebAssembly host auto-linking. A `+` here is
+// constant-folded before feature detection, which would turn this default-
+// runtime fixture into a host-runtime test.
+const namespaceKey = ["Web", "Assembly"].join("");
+const WA: any = (globalThis as any)[namespaceKey];
 const validAdd = new Uint8Array([
   0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
   0x01, 0x07, 0x01, 0x60, 0x02, 0x7f, 0x7f, 0x01,
