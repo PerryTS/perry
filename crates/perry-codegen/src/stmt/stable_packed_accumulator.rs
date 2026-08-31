@@ -67,11 +67,18 @@ fn accumulator_rhs_is_numeric(
                 // expression lowers to a tag-test diamond over
                 // `js_dynamic_string_or_number_add` — the same cost #9060 and
                 // #9091 removed for the bare-counter form.
-                _ if offset_reads_inlined => {
-                    crate::expr::packed_f64_loop_index_parts(index)
-                        .is_some_and(|(i, _)| i == counter_id)
+                // Single unguarded catch-all, deliberately. A guarded `_ if flag =>`
+                // arm here makes any LATER arm unreachable while the flag is true,
+                // and the compiler cannot warn — reachability depends on the runtime
+                // guard. #9303's first cut added an index form below exactly such an
+                // arm and verified as a complete no-op in the range tier while
+                // passing every flag-false test. New index forms extend the body of
+                // THIS arm.
+                _ => {
+                    offset_reads_inlined
+                        && crate::expr::packed_f64_loop_index_parts(index)
+                            .is_some_and(|(i, _)| i == counter_id)
                 }
-                _ => false,
             }
         }
         Expr::LocalGet(id) => {
