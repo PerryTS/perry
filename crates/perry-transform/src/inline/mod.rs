@@ -1244,6 +1244,58 @@ mod tests {
     }
 
     #[test]
+    fn cross_module_free_function_graph_with_shape_barrier_is_rejected() {
+        let mut source = Module::new("/src/reshape.ts");
+        let mut helper = function(
+            1,
+            vec![Stmt::Return(Some(Expr::Delete(Box::new(
+                Expr::PropertyGet {
+                    object: Box::new(Expr::LocalGet(10)),
+                    property: "removed".to_string(),
+                    byte_offset: 0,
+                },
+            ))))],
+        );
+        helper.params.push(Param {
+            id: 10,
+            name: "value".to_string(),
+            ty: Type::Any,
+            default: None,
+            decorators: Vec::new(),
+            is_rest: false,
+            arguments_object: None,
+        });
+        let mut root = function(
+            2,
+            vec![Stmt::Return(Some(Expr::Call {
+                callee: Box::new(Expr::FuncRef(1)),
+                args: vec![Expr::Undefined],
+                type_args: Vec::new(),
+                byte_offset: 0,
+            }))],
+        );
+        root.name = "reshape".to_string();
+        root.is_exported = true;
+        source.functions.extend([helper, root]);
+        source.exported_functions.push(("reshape".to_string(), 2));
+
+        let mut barrier_free = source.clone();
+        barrier_free.functions[0].body = vec![Stmt::Return(Some(Expr::PropertyGet {
+            object: Box::new(Expr::LocalGet(10)),
+            property: "removed".to_string(),
+            byte_offset: 0,
+        }))];
+        assert!(
+            gather_cross_module_functions(&barrier_free).contains_key("reshape"),
+            "the helper graph must otherwise be eligible for localization"
+        );
+        assert!(
+            gather_cross_module_functions(&source).is_empty(),
+            "a transitive shape barrier must keep the helper graph outlined"
+        );
+    }
+
+    #[test]
     fn cross_module_free_function_with_module_local_is_rejected() {
         let mut source = Module::new("/src/constants.ts");
         let mut reads_module_binding = function(1, vec![Stmt::Return(Some(Expr::LocalGet(99)))]);

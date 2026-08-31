@@ -2,36 +2,7 @@
 
 use super::*;
 
-/// Whether an expression node is a §5.2 shape barrier for the module-wide
-/// first-increment kill rule. Targets are NOT inspected — any occurrence
-/// disables all `Ptr<Shape>` promotion in the module.
-pub(crate) fn expr_is_shape_barrier(expr: &Expr) -> bool {
-    match expr {
-        Expr::ObjectDefineProperty(..)
-        | Expr::ObjectDefineProperties(..)
-        | Expr::ReflectDefineProperty { .. }
-        | Expr::ObjectSetPrototypeOf(..)
-        | Expr::ReflectSetPrototypeOf { .. }
-        | Expr::ReflectSet { .. }
-        | Expr::ReflectDelete { .. }
-        | Expr::ReflectPreventExtensions(..)
-        | Expr::Delete(..)
-        | Expr::ProxyNew { .. } => true,
-        // `__proto__` writes mutate the prototype chain of an arbitrary
-        // object. Reads and class-prototype naming are handled by the
-        // dispatch-stability facts; only writes are shape barriers.
-        Expr::PropertySet { property, .. } | Expr::PropertyUpdate { property, .. } => {
-            property == "__proto__"
-        }
-        Expr::PutValueSet { key, .. } => {
-            matches!(key.as_ref(), Expr::String(k) if k == "__proto__")
-        }
-        Expr::IndexSet { index, .. } => {
-            matches!(index.as_ref(), Expr::String(k) if k == "__proto__")
-        }
-        _ => false,
-    }
-}
+pub(crate) use perry_hir::expr_is_shape_barrier;
 
 /// Entry point: collect the shape-proven pointer locals of one lowered region.
 /// `not_bigint_locals` feeds the numeric-field proof.

@@ -7,6 +7,12 @@ use super::*;
 
 pub fn is_cross_module_safe(body: &[Stmt]) -> bool {
     fn check_expr(expr: &Expr) -> bool {
+        // Shape barriers are attributed module-wide during representation
+        // selection. Relocating one would conservatively poison unrelated
+        // shape proofs in the importer, so leave the source call outlined.
+        if perry_hir::expr_is_shape_barrier(expr) {
+            return false;
+        }
         match expr {
             // The disqualifying variants — anything tied to a particular
             // module's symbol table.
@@ -345,6 +351,13 @@ fn cross_function_expr_is_safe(
     allowed_ids: &HashSet<FuncId>,
     extern_names: &mut Vec<String>,
 ) -> bool {
+    // Keep module-wide shape barriers attributed to their source module.
+    // Argument containment already rejects values that escape through the
+    // remaining external call; moving the whole helper graph would instead
+    // disable shape proofs for unrelated locals in every importer.
+    if perry_hir::expr_is_shape_barrier(expr) {
+        return false;
+    }
     match expr {
         Expr::FuncRef(id) => allowed_ids.contains(id),
         Expr::ExternFuncRef { name, .. } => {
@@ -1131,6 +1144,9 @@ pub fn gather_cross_module_methods_with_extern_imports(
 /// rules for FuncRef / GlobalGet / NativeModuleRef / Closure.
 pub fn is_cross_module_safe_with_externs(body: &[Stmt], extern_names: &mut Vec<String>) -> bool {
     fn check_expr(expr: &Expr, extern_names: &mut Vec<String>) -> bool {
+        if perry_hir::expr_is_shape_barrier(expr) {
+            return false;
+        }
         match expr {
             Expr::FuncRef(_)
             | Expr::GlobalGet(_)

@@ -31,8 +31,8 @@ pub mod types;
 pub mod walker;
 
 pub use analysis::{
-    collect_local_refs_expr, collect_local_refs_stmt, infer_expr_type, infer_refinable_expr_type,
-    HirTypeEnv, HirTypeFacts,
+    collect_local_refs_expr, collect_local_refs_stmt, expr_is_shape_barrier, infer_expr_type,
+    infer_refinable_expr_type, HirTypeEnv, HirTypeFacts,
 };
 pub use audit::{audit_module, AuditManifest, ModuleAudit};
 pub use capability::{audit_module_capabilities, CapabilityPolicy, CapabilityViolation};

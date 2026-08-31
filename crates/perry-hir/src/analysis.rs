@@ -33,6 +33,39 @@ pub fn body_reads_dynamic_this(stmts: &[Stmt]) -> bool {
     stmts.iter().any(uses_this_stmt)
 }
 
+/// Whether an expression node can invalidate module-wide object-shape proofs.
+///
+/// Targets are deliberately not inspected. Representation selection treats any
+/// occurrence as a conservative shape barrier, and transforms that relocate an
+/// expression across modules must preserve that module attribution.
+pub fn expr_is_shape_barrier(expr: &Expr) -> bool {
+    match expr {
+        Expr::ObjectDefineProperty(..)
+        | Expr::ObjectDefineProperties(..)
+        | Expr::ReflectDefineProperty { .. }
+        | Expr::ObjectSetPrototypeOf(..)
+        | Expr::ReflectSetPrototypeOf { .. }
+        | Expr::ReflectSet { .. }
+        | Expr::ReflectDelete { .. }
+        | Expr::ReflectPreventExtensions(..)
+        | Expr::Delete(..)
+        | Expr::ProxyNew { .. } => true,
+        // `__proto__` writes mutate the prototype chain of an arbitrary
+        // object. Reads and class-prototype naming are handled by the
+        // dispatch-stability facts; only writes are shape barriers.
+        Expr::PropertySet { property, .. } | Expr::PropertyUpdate { property, .. } => {
+            property == "__proto__"
+        }
+        Expr::PutValueSet { key, .. } => {
+            matches!(key.as_ref(), Expr::String(k) if k == "__proto__")
+        }
+        Expr::IndexSet { index, .. } => {
+            matches!(index.as_ref(), Expr::String(k) if k == "__proto__")
+        }
+        _ => false,
+    }
+}
+
 /// Collect every `LocalId` referenced by `expr` (and its sub-expressions).
 ///
 /// Per-variant work focuses on the LocalId-bearing variants (LocalGet,
