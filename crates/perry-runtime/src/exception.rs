@@ -890,4 +890,50 @@ mod tests {
         }
         assert_eq!(current_try_depth(), base);
     }
+
+    /// #9305: the C-trampoline transport round-trips a throw. A real
+    /// `js_throw` longjmps from inside the protected body back into
+    /// `perry_sjlj_try`'s frame; the Rust caller observes a single-return
+    /// call and `None`.
+    #[test]
+    fn arm_trap_and_run_catches_a_real_throw() {
+        let base = current_try_depth();
+        let env = js_try_push();
+        // Normal completion.
+        assert_eq!(arm_trap_and_run(env, || 7), Some(7));
+        // Re-arm the SAME buffer (the run_microtasks shape) and throw.
+        let landed = arm_trap_and_run(env, || -> i32 { js_throw(42.0) });
+        assert!(landed.is_none(), "throw must land in the trampoline");
+        assert_eq!(js_get_exception(), 42.0);
+        js_clear_exception();
+        js_try_end();
+        assert_eq!(current_try_depth(), base);
+    }
+
+    /// #9305: `catch_js_throw` = push + arm + pop, Err with the TLS
+    /// exception cleared.
+    #[test]
+    fn catch_js_throw_err_clears_exception() {
+        let base = current_try_depth();
+        assert_eq!(catch_js_throw(|| 3usize), Ok(3));
+        let r: Result<usize, f64> = catch_js_throw(|| js_throw(7.5));
+        assert_eq!(r, Err(7.5));
+        // The Err path cleared the slot; a fresh trap sees no exception.
+        assert_eq!(catch_js_throw(|| 1u8), Ok(1));
+        assert_eq!(current_try_depth(), base);
+    }
+
+    /// #9305: nested arms target the innermost trap; the outer trap still
+    /// works after the inner one pops.
+    #[test]
+    fn nested_trampoline_arms_unwind_innermost_first(){
+        let base = current_try_depth();
+        let outcome = catch_js_throw(|| {
+            let inner: Result<u8, f64> = catch_js_throw(|| js_throw(1.0));
+            assert_eq!(inner, Err(1.0));
+            js_throw(2.0)
+        });
+        assert_eq!(outcome, Err(2.0));
+        assert_eq!(current_try_depth(), base);
+    }
 }
