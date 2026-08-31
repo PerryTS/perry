@@ -414,10 +414,7 @@ fn tombstone_publish_on_untraced_receiver_arms_old_carrier() {
         // `publish_object_shape_holes` mint-and-retire publish.
         let second = crate::string::js_string_from_bytes(b"key_number_03".as_ptr(), 13)
             as *const crate::StringHeader;
-        assert_eq!(
-            super::delete_rest::js_object_delete_field(obj, second),
-            1
-        );
+        assert_eq!(super::delete_rest::js_object_delete_field(obj, second), 1);
         let descriptor = super::shapes::object_shape_descriptor(obj)
             .expect("the tombstone publish must leave a resolvable descriptor");
         assert_eq!(
