@@ -5516,18 +5516,36 @@ fn is_packed_f64_loop_foreign_read_index(
     if is_packed_f64_loop_index(object, index, arr_id, counter_id) {
         return true;
     }
-    let (perry_hir::Expr::LocalGet(object_id), perry_hir::Expr::LocalGet(index_id)) =
-        (object, index)
-    else {
+    let perry_hir::Expr::LocalGet(object_id) = object else {
         return false;
     };
-    *object_id == arr_id
-        && *index_id != counter_id
-        && *index_id != arr_id
-        && ctx.integer_locals.contains(index_id)
-        && ctx.i32_counter_slots.contains_key(index_id)
-        && !ctx.boxed_vars.contains(index_id)
-        && !ctx.closure_captures.contains_key(index_id)
+    if *object_id != arr_id {
+        return false;
+    }
+    // #9259: parse `j` and `j ± c` with the SAME parser the read lowering uses
+    // (`packed_f64_loop_offset_read`). If the two disagree, the matcher admits
+    // a shape the lowering declines, that read emits a helper call, and the
+    // clone's call-free scan then discards the whole clone — which is exactly
+    // the 9x this issue is about, arriving by a different route.
+    let Some((index_id, offset)) = crate::expr::packed_f64_loop_index_parts(index) else {
+        return false;
+    };
+    // The lowering loads the index from this slot; without it there is no i32
+    // to bounds-check.
+    if index_id == arr_id || !ctx.i32_counter_slots.contains_key(&index_id) {
+        return false;
+    }
+    if index_id == counter_id {
+        // The loop's OWN counter at a constant offset (`a[k - 1]`, the EMA
+        // shape). The bound proves `k` in range, not `k ± c`, so this takes
+        // the identical treatment a foreign counter gets below: one inline
+        // `icmp ult` against the live length and the fact's existing side
+        // exit. Offset 0 was already accepted above.
+        return offset != 0;
+    }
+    ctx.integer_locals.contains(&index_id)
+        && !ctx.boxed_vars.contains(&index_id)
+        && !ctx.closure_captures.contains_key(&index_id)
 }
 
 fn is_packed_f64_loop_index(

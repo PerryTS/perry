@@ -43,7 +43,7 @@ use super::{
 mod foreign_counter;
 mod guarded_array;
 pub(crate) use foreign_counter::packed_f64_loop_index_parts;
-use foreign_counter::{foreign_packed_loop_read, packed_f64_loop_fact_for_index};
+use foreign_counter::{foreign_packed_loop_read, packed_f64_loop_offset_read};
 mod inline_dyn_typed_array;
 
 use guarded_array::{
@@ -222,7 +222,11 @@ fn numeric_index_has_loop_array_index_proof(ctx: &FnCtx<'_>, object: &Expr, inde
     if !ctx.i32_counter_slots.contains_key(&idx_id) {
         return false;
     }
-    if packed_f64_loop_fact_for_index(ctx, *arr_id, index).is_some() {
+    // #9259: an offset index is still an integer array index even when the
+    // loop bound does not prove it in range, so it must not fall through to
+    // the runtime-key helper -- that call is what the clone's call-free scan
+    // rejects. In-range-ness is settled by the inline bounds check instead.
+    if packed_f64_loop_offset_read(ctx, *arr_id, index).is_some() {
         return true;
     }
     offset == 0
@@ -749,14 +753,19 @@ pub(crate) fn lower_numeric_index_get_for_number_context(
     }
 
     if let Expr::LocalGet(arr_id) = object.as_ref() {
-        if let Some((fact, idx_id, offset)) =
-            packed_f64_loop_fact_for_index(ctx, *arr_id, index.as_ref())
+        if let Some((fact, idx_id, offset, needs_bounds_check)) =
+            packed_f64_loop_offset_read(ctx, *arr_id, index.as_ref())
         {
             if let Some(i32_slot) = ctx.i32_counter_slots.get(&idx_id).cloned() {
                 let arr_box = lower_expr(ctx, object)?;
                 let idx_i32 = load_packed_loop_index_i32(ctx, &i32_slot, offset);
                 return Ok(Some(lower_packed_f64_loop_index_get(
-                    ctx, *arr_id, &arr_box, &idx_i32, &fact, false,
+                    ctx,
+                    *arr_id,
+                    &arr_box,
+                    &idx_i32,
+                    &fact,
+                    needs_bounds_check,
                 )));
             }
         }
@@ -1631,14 +1640,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // The loop already proved `i < arr.length` and the
                 // body provably can't change `arr.length`.
                 if let Expr::LocalGet(arr_id) = object.as_ref() {
-                    if let Some((fact, idx_id, offset)) =
-                        packed_f64_loop_fact_for_index(ctx, *arr_id, index.as_ref())
+                    if let Some((fact, idx_id, offset, needs_bounds_check)) =
+                        packed_f64_loop_offset_read(ctx, *arr_id, index.as_ref())
                     {
                         if let Some(i32_slot) = ctx.i32_counter_slots.get(&idx_id).cloned() {
                             let arr_box = lower_expr(ctx, object)?;
                             let idx_i32 = load_packed_loop_index_i32(ctx, &i32_slot, offset);
                             return Ok(lower_packed_f64_loop_index_get(
-                                ctx, *arr_id, &arr_box, &idx_i32, &fact, false,
+                                ctx,
+                                *arr_id,
+                                &arr_box,
+                                &idx_i32,
+                                &fact,
+                                needs_bounds_check,
                             ));
                         }
                     }

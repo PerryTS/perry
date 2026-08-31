@@ -69,19 +69,31 @@ pub(crate) fn packed_f64_loop_index_parts(index: &Expr) -> Option<(u32, i32)> {
     }
 }
 
-/// Look up a packed-f64 loop fact for `(arr, index-expr)`. Zero-offset
-/// indices match any fact; non-zero offsets only match hole-tolerant facts
-/// (established by the range guard, which validated the whole offset window —
-/// the length-bound guard of the classic matcher only proves `i` itself).
-pub(crate) fn packed_f64_loop_fact_for_index(
+/// Look up a packed-f64 loop fact for `(arr, index-expr)`, reporting whether
+/// a non-zero offset needs an inline bounds check rather than declining it.
+///
+/// #9259: declining here was not merely losing one element load. The offset
+/// read fell back to a helper CALL, and the versioned matcher's post-hoc
+/// `fast_clone_not_call_free` scan then discarded the ENTIRE clone — so a
+/// loop like `s += a[k] + a[k-1]` lost the fast path for `a[k]` too, 9x. The
+/// bounds check restores it: `lower_packed_f64_loop_index_get` tests the index
+/// against the live length and takes the fact's side exit, which is a compare
+/// and a never-taken branch, not a call. That is the same treatment a foreign
+/// counter already gets, and for the same reason — an index the loop bound
+/// does not cover needs a run-time test, not a refusal.
+///
+/// The comparison is UNSIGNED, so a negative index (`a[k-1]` at `k == 0`)
+/// exceeds any length and takes the side exit. Reads only: a store side exit
+/// has replay semantics this does not reason about.
+pub(crate) fn packed_f64_loop_offset_read(
     ctx: &FnCtx<'_>,
     arr_id: u32,
     index: &Expr,
-) -> Option<(PackedF64LoopFact, u32, i32)> {
+) -> Option<(PackedF64LoopFact, u32, i32, bool)> {
     let (idx_id, offset) = packed_f64_loop_index_parts(index)?;
     let fact = packed_f64_loop_fact(ctx, arr_id, idx_id)?;
-    if offset != 0 && !fact.allow_holes && !fact.window_validated {
-        return None;
-    }
-    Some((fact, idx_id, offset))
+    // A window-validated or hole-tolerant fact already covers the offset; only
+    // the length-bound guard of the classic matcher leaves it unproven.
+    let needs_bounds_check = offset != 0 && !fact.allow_holes && !fact.window_validated;
+    Some((fact, idx_id, offset, needs_bounds_check))
 }
