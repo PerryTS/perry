@@ -388,6 +388,86 @@ pub(crate) fn emit_layout_note_slot_aware_on_block(
     );
 }
 
+/// Scalar-aware slot store whose GC bookkeeping is gated INLINE on the runtime
+/// note's own early return.
+///
+/// `gc::layout::layout_note_slot_aware` opens with
+/// `if !value_is_pointer && !old_is_pointer { return; }` — two tag tests on
+/// values the caller already holds. Emitting the call regardless means a
+/// `boolean[]` store loop pays a call per element to be told there is nothing
+/// to note: 23.5% of such a loop, against 16% for the loop itself (#9237).
+///
+/// The test is `new || old`, never `new` alone: overwriting a pointer with a
+/// boolean IS a pointer→scalar transition the runtime must see, which is why
+/// `emit_jsvalue_slot_store_pointer_tested` (new-value only, for class fields
+/// under a conforming layout) is not usable here.
+///
+/// The addref and the write barrier ride inside the same arm: both are no-ops
+/// unless the NEW value is pointer-bearing, so an arm entered whenever EITHER
+/// is pointer-bearing is a superset of what they need.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn emit_scalar_aware_store_gated_on_pointerness(
+    ctx: &mut FnCtx<'_>,
+    slot_ptr: &str,
+    value_double: &str,
+    layout_parent_bits: &str,
+    slot_index: &str,
+    string_addref_needed: bool,
+    layout_note_needed: bool,
+    barrier_parent_bits: &str,
+    slot_addr: &str,
+    write_barrier_needed: bool,
+    stem: &str,
+) -> String {
+    let (old_bits, value_bits) = {
+        let blk = ctx.block();
+        let old_double = blk.load(DOUBLE, slot_ptr);
+        let old_bits = blk.bitcast_double_to_i64(&old_double);
+        // GC_STORE_AUDIT(BARRIERED): the slot write is unconditional; the
+        // bookkeeping below is what the pointer test gates.
+        blk.store(DOUBLE, value_double, slot_ptr);
+        let value_bits = blk.bitcast_double_to_i64(value_double);
+        (old_bits, value_bits)
+    };
+    let write_barrier_emitted = write_barrier_needed && crate::codegen::write_barriers_enabled();
+    if !string_addref_needed && !layout_note_needed && !write_barrier_emitted {
+        return value_bits;
+    }
+    let book_idx = ctx.new_block(&format!("{stem}.gc_bookkeeping"));
+    let done_idx = ctx.new_block(&format!("{stem}.gc_bookkeeping.done"));
+    let book_label = ctx.block_label(book_idx);
+    let done_label = ctx.block_label(done_idx);
+    {
+        let blk = ctx.block();
+        let new_ptr = emit_may_carry_heap_pointer_check(blk, &value_bits);
+        let old_ptr = emit_may_carry_heap_pointer_check(blk, &old_bits);
+        let either = blk.or(I1, &new_ptr, &old_ptr);
+        blk.cond_br(&either, &book_label, &done_label);
+    }
+    ctx.current_block = book_idx;
+    {
+        let blk = ctx.block();
+        if string_addref_needed {
+            blk.call_void("js_string_addref_if_heap_string", &[(DOUBLE, value_double)]);
+        }
+        if layout_note_needed {
+            emit_layout_note_slot_aware_on_block(
+                blk,
+                layout_parent_bits,
+                slot_index,
+                &value_bits,
+                &old_bits,
+            );
+        }
+        if write_barrier_emitted {
+            emit_write_barrier_slot_on_block(blk, barrier_parent_bits, slot_addr, &value_bits);
+        }
+        blk.br(&done_label);
+    }
+    ctx.current_block = done_idx;
+    value_bits
+}
+
 pub(crate) fn emit_array_numeric_write_note_on_block(
     blk: &mut LlBlock,
     array_bits: &str,
@@ -515,44 +595,6 @@ pub(crate) fn emit_jsvalue_slot_store_with_value_bits_on_block(
 /// This is the dominant per-write cost on downgraded `any[]` numeric loops
 /// (#5094) and gives ~9× on `bench_numeric_array_downgrade` without regressing
 /// `bench_object_property`.
-/// As [`emit_jsvalue_slot_store_scalar_aware_on_block`], but with the
-/// string-addref demote gated independently of the layout note — the
-/// scalar-aware twin of [`emit_jsvalue_slot_store_with_flags_on_block`].
-///
-/// The plain entry point below ties the two together, which costs an
-/// unconditional `js_string_addref_if_heap_string` call on every store that
-/// needs a layout note but writes a value that provably is not a heap string:
-/// `sieve[j] = false` in `benchmarks/suite/11_prime_sieve.ts` pays one per
-/// element for a boolean.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn emit_jsvalue_slot_store_scalar_aware_with_flags_on_block(
-    blk: &mut LlBlock,
-    slot_ptr: &str,
-    value_double: &str,
-    layout_parent_bits: &str,
-    slot_index: &str,
-    string_addref_needed: bool,
-    layout_note_needed: bool,
-    barrier_parent_bits: &str,
-    slot_addr: &str,
-    write_barrier_needed: bool,
-) -> Option<String> {
-    emit_jsvalue_slot_store_on_block_inner(
-        blk,
-        slot_ptr,
-        value_double,
-        layout_parent_bits,
-        slot_index,
-        string_addref_needed,
-        layout_note_needed,
-        barrier_parent_bits,
-        slot_addr,
-        write_barrier_needed,
-        true,
-        None,
-    )
-}
-
 pub(crate) fn emit_jsvalue_slot_store_scalar_aware_on_block(
     blk: &mut LlBlock,
     slot_ptr: &str,

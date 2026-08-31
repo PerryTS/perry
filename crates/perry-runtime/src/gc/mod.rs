@@ -167,7 +167,14 @@ use oldgen::*;
 mod oldgen_defrag;
 use oldgen_defrag::*;
 mod cycle;
+/// `malloc_trim` maintenance, split out of `cycle.rs` for the 2000-line cap.
+mod cycle_malloc_trim;
 use cycle::*;
+#[cfg(test)]
+pub(crate) use cycle_malloc_trim::{
+    reset_test_malloc_trim_call_count, reset_test_malloc_trim_executed_count,
+    test_malloc_trim_call_count, test_malloc_trim_executed_count,
+};
 mod verify;
 
 /// #7035: whole-heap from-space scan — verification that does NOT depend on
