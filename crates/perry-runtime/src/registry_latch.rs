@@ -118,11 +118,12 @@ impl RegistryLatch {
 /// stops discriminating the moment a program registers its first entry — and
 /// for the two hottest probes in the runtime it stops discriminating almost
 /// immediately: a `claude-code --help` run registers **10** buffers and **42**
-/// typed arrays, then probes `is_registered_buffer` 4.65 M times and
-/// `lookup_typed_array_kind` 3.57 M times. Measured on that binary, the buffer
-/// probe answered `true` **4** times out of 4,651,086. The latch was armed for
-/// every one of those calls, so all 4.65 M paid the out-of-line call, a
-/// thread-local resolution, a `RefCell` borrow and a hash to say "no".
+/// typed arrays, then probes `is_registered_buffer` 4,650,058 times and
+/// `lookup_typed_array_kind` 3,566,956 times. Counted with uretprobes on that
+/// binary, the buffer probe answered `true` **4** times and the typed-array
+/// probe answered `Some` **zero** times. The latch was armed for every one of
+/// those calls, so all 8.2 M paid the out-of-line call, a thread-local
+/// resolution, a `RefCell` borrow and a hash to say "no".
 ///
 /// This window is the same monotone idea applied to the address instead of to
 /// the fact of registration: every registration widens `[lo, hi]` *before* it
@@ -144,10 +145,18 @@ impl RegistryLatch {
 ///
 /// `lo` and `hi` are separate atomics, so a racing reader can observe a mix of
 /// old and new values. That is harmless: each moves in one direction only, so
-/// for any address `a` this thread has admitted, this thread's own subsequent
-/// loads must see `lo <= a` and `hi >= a` (program order plus monotonicity).
-/// Cross-thread visibility rests on the same hand-off edges the latch documents
-/// above.
+/// once `lo <= a <= hi` holds for an address it holds forever, and a reader
+/// that observes a partially-updated pair observes a window that is only ever
+/// wider than the one it replaced — never narrower.
+///
+/// Cross-thread visibility rests on [`admit`](Self::admit)'s `AcqRel`
+/// read-modify-writes. An RMW reads the latest value in its location's
+/// modification order, so its acquire half joins every earlier widening — by
+/// any thread — into the admitting thread's happens-before graph before that
+/// thread publishes the address. A reader can only ask about an address it has
+/// obtained, which requires the publishing hand-off, and `may_contain`'s
+/// `Acquire` loads complete the chain. This is why `admit` may not skip the
+/// RMW: see its own documentation.
 #[derive(Debug)]
 pub struct RegistryAddrWindow {
     lo: AtomicUsize,

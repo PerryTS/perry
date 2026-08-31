@@ -359,8 +359,9 @@ static TYPED_ARRAY_EVER_REGISTERED: crate::registry_latch::RegistryLatch =
 /// Smallest and largest address ever entered into `TYPED_ARRAY_REGISTRY`.
 ///
 /// The latch above stops discriminating at the first typed array. On
-/// `claude-code --help` that is the 42nd allocation of a 3,567,647-probe run —
-/// and every one of those probes answered `None`. Each still paid the
+/// `claude-code --help` there are 42 registrations against 3,566,956 probes —
+/// and every one of those probes answered `None` (uretprobe count, one run:
+/// not a single `Some` in the whole run). Each still paid the
 /// out-of-line call, the direct-mapped cache probe and, on the (usual) cold
 /// miss, a thread-local resolution, a hash **and a negative-entry write-back
 /// that dirties a shared cache line**.

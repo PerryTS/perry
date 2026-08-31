@@ -195,13 +195,14 @@ static BUFFER_LIKE_EVER_REGISTERED: RegistryLatch = RegistryLatch::new();
 /// Smallest and largest address ever registered as buffer-like, process-wide.
 ///
 /// The latch above answers "has ANY buffer ever been registered?", which
-/// `claude-code --help` arms with its **10th** buffer allocation and then
-/// consults 4,650,000 more times — every one of them going out of line to a
+/// `claude-code --help` arms with one of its **10** buffer allocations and then
+/// consults 4,650,058 times — every one of them going out of line to a
 /// thread-local resolution, a `RefCell` borrow and a hash, to answer "no"
-/// 4,651,082 times out of 4,651,086. This window answers the same question
-/// about the *address*, from two adjacent static loads that inline into all
-/// ~239 call sites, and rejected 88% of those calls when it lived (as
-/// `BUFFER_ADDR_RANGE`) behind the call instead of in front of it.
+/// 4,650,054 times out of 4,650,058 (uretprobe count, one run). This window
+/// answers the same question about the *address*, from two adjacent static
+/// loads that inline into all ~239 call sites, and removes 98.0% of those
+/// calls — 4,650,058 down to 92,965, with all four genuine "yes" answers
+/// preserved.
 ///
 /// It covers every table `is_registered_buffer_slow` consults:
 ///   * `BUFFER_REGISTRY` — only `register_buffer` inserts, and it admits first;
