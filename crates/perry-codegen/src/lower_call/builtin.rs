@@ -1061,12 +1061,14 @@ pub(super) fn lower_builtin_new<'a>(
             // `new Response(res.body, res)` header re-wrap — is drained to its
             // bytes instead of stringified to its numeric stream handle.
             // Non-stream bodies coerce exactly as get_raw_string_ptr did.
-            let body_ptr = if !args.is_empty() {
+            let (body_ptr, body_is_string) = if !args.is_empty() {
                 let v = lower_expr(ctx, &args[0])?;
                 let blk = ctx.block();
-                blk.call(I64, "js_response_body_init_ptr", &[(DOUBLE, &v)])
+                let is_string = blk.call(I32, "js_nanbox_is_any_string", &[(DOUBLE, &v)]);
+                let body_ptr = blk.call(I64, "js_response_body_init_ptr", &[(DOUBLE, &v)]);
+                (body_ptr, is_string)
             } else {
-                "0".to_string()
+                ("0".to_string(), "0".to_string())
             };
 
             // Default init: status=200, statusText=null, headers=0
@@ -1164,6 +1166,7 @@ pub(super) fn lower_builtin_new<'a>(
                     (DOUBLE, &status_val),
                     (I64, &status_text_ptr),
                     (DOUBLE, &headers_handle),
+                    (I32, &body_is_string),
                 ],
             );
             // Response handle is a plain numeric f64 (response-registry id).

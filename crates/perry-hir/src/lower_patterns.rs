@@ -4,7 +4,9 @@
 //! parameter destructuring, and other pattern-related utilities.
 
 use crate::ir::*;
-use crate::lower::{lower_expr, LoweringContext};
+use crate::lower::{
+    lower_expr, private_storage_property, wrap_private_guard, LoweringContext, PRIV_OP_READ,
+};
 use crate::lower_types::*;
 use crate::types::{LocalId, Type};
 use anyhow::{anyhow, Result};
@@ -244,9 +246,49 @@ pub(crate) fn lower_assign_target_to_expr(
                     Ok(Expr::IndexGet { object, index })
                 }
                 ast::MemberProp::PrivateName(private) => {
-                    let property = format!("#{}", private.name);
+                    // #8968: the READ half of a compound / logical assignment
+                    // to a private member must lower exactly like an ordinary
+                    // `this.#x` read in `expr_member/member_tail.rs` — brand-
+                    // guard the receiver, and address the slot by its MANGLED
+                    // storage key.
+                    //
+                    // This arm used to build `PropertyGet { property: "#x" }`
+                    // from the source spelling. A private FIELD does not live
+                    // under that key: `private_storage_property` stores it as
+                    // `#<perry:private-value:{class_id}:#x>`, a mangling that
+                    // exists precisely so a private field cannot collide with
+                    // an ordinary computed property such as `obj["#x"]`. So
+                    // the read missed every time and produced `undefined`,
+                    // while the WRITE half — lowered through
+                    // `lower_expr_assignment`, which does use the mangled key
+                    // — landed correctly. Nothing threw; the value was simply
+                    // wrong:
+                    //
+                    //   this.#n += 1     // NaN, not n + 1
+                    //   this.#s += "b"   // "undefinedb"
+                    //   this.#v ||= d    // ALWAYS stored d (read was falsy)
+                    //   this.#v ??= d    // ALWAYS stored d (read was nullish)
+                    //   this.#v &&= d    // NEVER stored    (read was falsy)
+                    //
+                    // hono is the reported case (#8968): its
+                    // `get res() { return this.#res ||= new Response(null, …) }`
+                    // meant every read of `c.res` replaced the finalized
+                    // response with a fresh empty 200, so an unmatched route
+                    // answered `200 ""` and a registered `app.notFound()`
+                    // handler had its 404 thrown away after it had already run.
+                    //
+                    // The guard is also what makes the mangled key resolvable
+                    // for a private METHOD or ACCESSOR: `js_private_guard`
+                    // pushes the access hint that the runtime
+                    // `private_member_get_by_name` consumes. It restores the
+                    // spec-required TypeError for the read of a set-only
+                    // private accessor (`set #x(v) {}` then `obj.#x ||= 1`)
+                    // and for a compound assignment on a foreign receiver.
+                    let private_name = format!("#{}", private.name);
+                    let object = wrap_private_guard(ctx, object, &private_name, PRIV_OP_READ);
+                    let property = private_storage_property(ctx, &private_name);
                     Ok(Expr::PropertyGet {
-                        byte_offset: 0,
+                        byte_offset: member.span.lo.0,
                         object,
                         property,
                     })

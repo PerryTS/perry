@@ -275,6 +275,11 @@ thread_local! {
     static PENDING_FETCH_BODY_STREAM_ID: Cell<usize> = const { Cell::new(0) };
 }
 
+/// `text/plain;charset=UTF-8` — the exact spelling the Fetch standard gives a
+/// body extracted from a string (no space after the semicolon; node emits it
+/// verbatim, and hono's `c.text()` relies on `new Response(str)` producing it).
+pub(super) const BODY_CONTENT_TYPE_TEXT_PLAIN: &str = "text/plain;charset=UTF-8";
+
 fn take_pending_fetch_body_stream_id() -> Option<usize> {
     PENDING_FETCH_BODY_STREAM_ID.with(|pending| {
         let id = pending.get();
@@ -1629,19 +1634,9 @@ pub unsafe extern "C" fn js_response_static_json(
     // Node's `Response.json` leaves statusText "" when not provided — it does
     // not fall back to the status reason phrase.
     let status_text = string_from_header(init_status_text_ptr).unwrap_or_default();
-    // Start from any user-provided headers, then add the default content-type
-    // only if the init headers didn't already set one.
-    let headers_id = handle_id(headers_handle);
-    let mut headers = if headers_id != 0 {
-        HEADERS_REGISTRY
-            .lock()
-            .unwrap()
-            .get(&headers_id)
-            .cloned()
-            .unwrap_or_default()
-    } else {
-        HeadersStore::default()
-    };
+    // Accept the complete HeadersInit surface, including a runtime record or
+    // iterable that codegen could not pre-materialize as a Headers handle.
+    let mut headers = headers_store_from_init_value(headers_handle).unwrap_or_default();
     if !headers.has("content-type") {
         headers.set("content-type", "application/json");
     }

@@ -32,13 +32,15 @@ pub(super) fn alloc_response(
 /// - body_ptr: StringHeader for the body, or null for ""
 /// - status: f64 (200 default)
 /// - status_text_ptr: StringHeader for statusText, or null for ""
-/// - headers_handle: f64 numeric handle from js_headers_new, or 0
+/// - headers_handle: Headers handle, raw HeadersInit value, or 0
+/// - body_is_string: nonzero when the original body JS value was a string
 #[no_mangle]
 pub unsafe extern "C" fn js_response_new(
     body_ptr: *const StringHeader,
     status: f64,
     status_text_ptr: *const StringHeader,
     headers_handle: f64,
+    body_is_string: i32,
 ) -> f64 {
     let body_stream_id = take_pending_fetch_body_stream_id();
     // Lossless raw-byte read so binary bodies survive byte-for-byte (#5435).
@@ -76,21 +78,48 @@ pub unsafe extern "C" fn js_response_new(
             "Response constructor: Invalid response status code {status_u16}"
         ));
     }
-    let headers_id = handle_id(headers_handle);
-    let headers = if headers_id != 0 {
-        HEADERS_REGISTRY
-            .lock()
-            .unwrap()
-            .get(&headers_id)
-            .cloned()
-            .unwrap_or_default()
-    } else {
-        HeadersStore::default()
-    };
+    // `headers_handle` is documented as "an f64 handle from `js_headers_new`",
+    // and codegen produces one whenever it can SEE the header object: an inline
+    // `{ ... }` literal, or a local it tracked as an options object. When it
+    // cannot — a `??` expression, a spread-built object, a call result, or the
+    // `headers` field read off a runtime options object — it passed the plain
+    // NaN-boxed JS value straight through instead. That value is not a registry
+    // id, so this lookup missed and the response was built with NO headers at
+    // all. No throw, no warning.
+    //
+    // hono lost the `Content-Type` of every `c.json()` / `c.html()` that way:
+    // `#newResponse` ends in `new Response(data, { status, headers:
+    // responseHeaders ?? headers })`, handed to `createResponseInstance =
+    // (body, init) => new Response(body, init)` — so BOTH the init object and
+    // its `headers` value reach codegen as opaque expressions. Fixing it here
+    // rather than in codegen covers those two call shapes with one change.
+    //
+    // A value that is not already a registry handle is parsed through the same
+    // complete HeadersInit path as `new Headers(init)`: records and pair
+    // iterables are preserved, while malformed values raise the corresponding
+    // constructor TypeError instead of being silently dropped.
+    let headers_init = headers_store_from_init_value(headers_handle);
+    let had_headers_init = headers_init.is_some();
+    let mut headers = headers_init.unwrap_or_default();
+    // Fetch §"extract a body" + the `Response` constructor: the extracted
+    // body's Content-Type is installed only when `init.headers` did not
+    // already carry one (an explicit header always wins, and never gets a
+    // second value appended). Codegen/runtime captured `body_is_string` before
+    // `js_response_body_init_ptr` erased that distinction by coercing the body
+    // to a byte string. Carrying the bit explicitly keeps nested constructors
+    // independent and cannot retain state when init evaluation throws.
+    //
+    // Missing this made `new Response("hello")` answer with NO content type
+    // where node answers `text/plain;charset=UTF-8` — the whole of hono's
+    // `c.text()`, which short-circuits to exactly that constructor call when
+    // no header, status or prepared header has been set on the context.
+    if body_is_string != 0 && headers.get("content-type").is_none() {
+        headers.set("content-type", BODY_CONTENT_TYPE_TEXT_PLAIN);
+    }
     // A Response owns a private Headers list. The constructor input may be an
     // existing Headers object, so retaining its registry id would make
     // mutations alias in both directions instead of copying the initializer.
-    let response_headers_id = (headers_id != 0).then(|| alloc_headers(headers.clone()));
+    let response_headers_id = had_headers_init.then(|| alloc_headers(headers.clone()));
     let id = alloc_response(status_u16, status_text, headers, body, body_present);
     if response_headers_id.is_some() || body_stream_id.is_some() {
         if let Some(resp) = FETCH_RESPONSES.lock().unwrap().get_mut(&id) {

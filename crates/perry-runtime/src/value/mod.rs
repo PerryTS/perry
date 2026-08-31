@@ -98,8 +98,9 @@ pub use handle::{
 pub(crate) use nanbox::nanbox_string_key;
 pub use nanbox::{
     js_checkpoint, js_debug_val, js_get_string_pointer_unified, js_nanbox_bigint,
-    js_nanbox_get_bigint, js_nanbox_get_pointer, js_nanbox_get_string_pointer, js_nanbox_is_bigint,
-    js_nanbox_is_pointer, js_nanbox_is_string, js_nanbox_pointer, js_nanbox_string,
+    js_nanbox_get_bigint, js_nanbox_get_pointer, js_nanbox_get_string_pointer,
+    js_nanbox_is_any_string, js_nanbox_is_bigint, js_nanbox_is_pointer, js_nanbox_is_string,
+    js_nanbox_pointer, js_nanbox_string,
 };
 
 // ----- Dynamic arithmetic dispatch (BigInt vs float) -----

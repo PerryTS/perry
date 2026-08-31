@@ -389,3 +389,14 @@ pub extern "C" fn js_nanbox_is_string(value: f64) -> i32 {
         0
     }
 }
+
+/// Check if a NaN-boxed f64 value is either a heap or inline string.
+#[no_mangle]
+pub extern "C" fn js_nanbox_is_any_string(value: f64) -> i32 {
+    let jsval = JSValue::from_bits(value.to_bits());
+    if jsval.is_any_string() {
+        1
+    } else {
+        0
+    }
+}

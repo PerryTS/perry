@@ -494,6 +494,7 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
                 f64,
                 *const perry_runtime::StringHeader,
                 f64,
+                i32,
             ) -> f64,
             response_static_json: unsafe extern "C" fn(
                 f64,

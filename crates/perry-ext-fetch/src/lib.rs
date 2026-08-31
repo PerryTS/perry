@@ -1179,21 +1179,22 @@ pub extern "C" fn js_headers_entries(handle: f64) -> f64 {
 // ── Response advanced ─────────────────────────────────────────────
 
 /// `new Response(body, init)` — stores body string + status + statusText
-/// + headers. The `headers_handle` arg matches perry-stdlib's 4-arg shape
-/// (declared in `crates/perry-codegen/src/runtime_decls.rs:1045`); a
-/// 3-arg version dropped the codegen-supplied headers handle on the
+/// + headers. The arguments match perry-stdlib's constructor ABI
+/// (declared in `crates/perry-codegen/src/runtime_decls/strings_part2.rs`);
+/// a 3-arg version dropped the codegen-supplied headers handle on the
 /// floor — `fetchRes.headers.forEach(...)` then iterated an empty map.
 ///
 /// # Safety
 /// All string pointers must be null or Perry-runtime `StringHeader`s;
 /// `headers_handle` must be 0.0 / TAG_UNDEFINED or a valid handle id
-/// returned by `js_headers_new`.
+/// returned by `js_headers_new`; `body_is_string` is a boolean i32.
 #[no_mangle]
 pub unsafe extern "C" fn js_response_new(
     body_ptr: *const StringHeader,
     status: f64,
     status_text_ptr: *const StringHeader,
     headers_handle: f64,
+    body_is_string: i32,
 ) -> f64 {
     let body_opt = read_str(body_ptr);
     let body_present = body_opt.is_some();
@@ -1224,7 +1225,7 @@ pub unsafe extern "C" fn js_response_new(
         ));
     }
     let headers_id = handle_id(headers_handle);
-    let headers = if headers_id != 0 {
+    let mut headers = if headers_id != 0 {
         HEADERS_HANDLES
             .lock()
             .unwrap()
@@ -1234,6 +1235,9 @@ pub unsafe extern "C" fn js_response_new(
     } else {
         HeadersStore::default()
     };
+    if body_is_string != 0 && !headers.has("content-type") {
+        headers.set("content-type", "text/plain;charset=UTF-8");
+    }
     store_response(FetchResponse {
         status,
         status_text,

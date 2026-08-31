@@ -89,6 +89,7 @@ fn response_constructor_copies_headers_initializer() {
             200.0,
             std::ptr::null(),
             handle_to_f64(source_id),
+            0,
         )
     };
     let response_id = handle_id(response);

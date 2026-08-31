@@ -261,6 +261,11 @@ pub(crate) extern "C" fn global_this_response_thunk(
     body: f64,
     init: f64,
 ) -> f64 {
+    let body_is_string = if crate::value::JSValue::from_bits(body.to_bits()).is_any_string() {
+        1
+    } else {
+        0
+    };
     // Route the body through the registered body-init helper (stdlib
     // `js_response_body_init_ptr`) so a binary body — Buffer / Uint8Array /
     // ArrayBuffer — copies its raw bytes instead of being stringified to a
@@ -287,6 +292,7 @@ pub(crate) extern "C" fn global_this_response_thunk(
         status,
         status_text_ptr,
         headers_handle,
+        body_is_string,
     )
 }
 

@@ -111,6 +111,7 @@ pub fn declare_phase1(module: &mut LlModule) {
     module.declare_function("js_nanbox_string", DOUBLE, &[I64]);
     module.declare_function("js_nanbox_pointer", DOUBLE, &[I64]);
     module.declare_function("js_nanbox_get_pointer", I64, &[DOUBLE]);
+    module.declare_function("js_nanbox_is_any_string", I32, &[DOUBLE]);
     module.declare_function(
         "js_native_handle_new_owned",
         DOUBLE,

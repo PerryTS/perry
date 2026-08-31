@@ -86,8 +86,13 @@ type FetchRequestNewFn = unsafe extern "C" fn(
     *const crate::StringHeader,
     f64,
 ) -> f64;
-type FetchResponseNewFn =
-    unsafe extern "C" fn(*const crate::StringHeader, f64, *const crate::StringHeader, f64) -> f64;
+type FetchResponseNewFn = unsafe extern "C" fn(
+    *const crate::StringHeader,
+    f64,
+    *const crate::StringHeader,
+    f64,
+    i32,
+) -> f64;
 type FetchResponseStaticJsonFn =
     unsafe extern "C" fn(f64, f64, *const crate::StringHeader, f64) -> f64;
 type FetchResponseStaticRedirectFn = unsafe extern "C" fn(*const crate::StringHeader, f64) -> f64;
@@ -296,6 +301,7 @@ unsafe extern "C" {
         status: f64,
         status_text_ptr: *const crate::StringHeader,
         headers_handle: f64,
+        body_is_string: i32,
     ) -> f64;
     fn js_response_static_json(
         value: f64,
@@ -572,8 +578,17 @@ pub(super) fn call_global_response_new(
     status: f64,
     status_text_ptr: *const crate::StringHeader,
     headers_handle: f64,
+    body_is_string: i32,
 ) -> f64 {
-    unsafe { js_response_new(body_ptr, status, status_text_ptr, headers_handle) }
+    unsafe {
+        js_response_new(
+            body_ptr,
+            status,
+            status_text_ptr,
+            headers_handle,
+            body_is_string,
+        )
+    }
 }
 
 #[cfg(not(feature = "external-fetch-symbols"))]
@@ -582,11 +597,20 @@ pub(super) fn call_global_response_new(
     status: f64,
     status_text_ptr: *const crate::StringHeader,
     headers_handle: f64,
+    body_is_string: i32,
 ) -> f64 {
     let f = GLOBAL_FETCH_RESPONSE_NEW.load(Ordering::Acquire);
     if !f.is_null() {
         let func: FetchResponseNewFn = unsafe { std::mem::transmute(f) };
-        return unsafe { func(body_ptr, status, status_text_ptr, headers_handle) };
+        return unsafe {
+            func(
+                body_ptr,
+                status,
+                status_text_ptr,
+                headers_handle,
+                body_is_string,
+            )
+        };
     }
     warn_unregistered_fetch_symbol("js_response_new")
 }

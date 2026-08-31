@@ -222,6 +222,7 @@ pub extern "C" fn js_response_new(
     _status: f64,
     _status_text_ptr: *const crate::string::StringHeader,
     _headers_handle: f64,
+    _body_is_string: i32,
 ) -> f64 {
     perry_stub_warn("js_response_new", FETCH_REASON, None);
     f64::from_bits(crate::value::TAG_UNDEFINED)

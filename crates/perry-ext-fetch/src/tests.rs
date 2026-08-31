@@ -109,6 +109,17 @@ fn response_static_json() {
     assert_eq!(status, 200.0);
 }
 
+#[test]
+fn response_string_body_gets_default_content_type() {
+    let body = alloc_string("hello");
+    let response = unsafe { js_response_new(body.as_raw(), 0.0, std::ptr::null(), 0.0, 1) };
+    let headers = js_response_get_headers(response);
+    let key = alloc_string("content-type");
+    let value_ptr = unsafe { js_headers_get(headers, key.as_raw()) };
+    let value = perry_ffi::read_string(unsafe { JsString::from_raw(value_ptr) }).expect("header");
+    assert_eq!(value, "text/plain;charset=UTF-8");
+}
+
 // #1688: request.text()/.json()/.arrayBuffer() were unimplemented. The
 // FFIs build a JsPromise (runtime symbols unavailable in the unittest
 // binary, as with every other promise-returning fetch FFI), so this

@@ -100,6 +100,46 @@ fn is_headers_init_iterable(value: f64) -> bool {
         || has_sync_iterator(value)
 }
 
+/// Build a standalone store from any `HeadersInit` representation: an existing
+/// Headers handle, a record object, or an iterable of `[name, value]` pairs.
+///
+/// `0.0` is the internal "no headers" ABI sentinel and `undefined` means the
+/// same at a dynamic call site. Other invalid values follow the existing
+/// Headers constructor validation instead of being silently discarded.
+pub(super) unsafe fn headers_store_from_init_value(init: f64) -> Option<HeadersStore> {
+    if init == 0.0 {
+        return None;
+    }
+    let init_value = JSValue::from_bits(init.to_bits());
+    if init_value.is_undefined() {
+        return None;
+    }
+    if init_value.is_null() {
+        headers_init_type_error("Headers constructor: init must not be null");
+    }
+
+    let source_id = handle_id(init);
+    if let Some(store) = HEADERS_REGISTRY.lock().unwrap().get(&source_id).cloned() {
+        return Some(store);
+    }
+
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let rooted = scope.root_nanbox_f64(init);
+    let init_now = rooted.get_nanbox_f64();
+    let entries = match read_headers_record_entries(init_now, &scope) {
+        Some(entries) => entries,
+        None => {
+            let array = materialize_headers_init_iterable(init_now, &scope);
+            read_headers_iterable_entries(array, &scope)
+        }
+    };
+    let mut store = HeadersStore::default();
+    for (key, value) in entries {
+        store.append(&key, &value);
+    }
+    Some(store)
+}
+
 fn read_headers_record_entries(
     value: f64,
     scope: &perry_runtime::gc::RuntimeHandleScope,

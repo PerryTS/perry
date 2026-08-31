@@ -944,8 +944,8 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     // property access (`request.url` where `request: any`) routes through
     // `js_object_get_field_by_name`'s strip-tag path → `HANDLE_PROPERTY_DISPATCH`.
     // ──────────────────────────────────────────────────────────────────
-    // new Response(body_ptr, status, status_text_ptr, headers_handle) -> f64
-    module.declare_function("js_response_new", DOUBLE, &[I64, DOUBLE, I64, DOUBLE]);
+    // new Response(body_ptr, status, status_text_ptr, headers, body_is_string) -> f64
+    module.declare_function("js_response_new", DOUBLE, &[I64, DOUBLE, I64, DOUBLE, I32]);
     // Normalize a Request/Response subclass object (for example NextResponse)
     // to its native Fetch registry handle; bare handles pass through.
     module.declare_function("js_fetch_unwrap_handle", DOUBLE, &[DOUBLE]);
