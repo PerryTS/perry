@@ -375,7 +375,14 @@ jobs:
             target: aarch64-apple-darwin
             artifact: perry-macos-aarch64
             old_glibc_image: ""
-          - os: macos-15
+          # macos-15-intel, NOT macos-15: the bare label is the Arm64 image
+          # (see actions/runner-images). Building x86_64-apple-darwin there
+          # links brew's arm64-only LLVM, so every LLVM symbol is undefined at
+          # link once the in-process backend became default — the artifact
+          # shipped in v0.5.1220 and has been failing since. LLVM publishes no
+          # x86_64 macOS binary, so a native Intel runner is the only source of
+          # an x86_64 libLLVM.
+          - os: macos-15-intel
             target: x86_64-apple-darwin
             artifact: perry-macos-x86_64
             old_glibc_image: ""
@@ -654,12 +661,19 @@ jobs:
       # GitHub-hosted Windows runners pre-install the Android NDK at
       # `%ANDROID_NDK_HOME%`; we point cargo at its `aarch64-linux-android-*`
       # clang as the cross-linker.
+      # X64 only: the step below resolves the NDK toolchain under
+      # `prebuilt/windows-x86_64`, and the NDK ships no Windows-arm64 host
+      # toolchain, so `windows-11-arm` cannot run it. It also has no NDK
+      # installed, which is how this surfaced — the leg failed with
+      # "ANDROID_NDK_HOME not set" and blocked `create-release`, which requires
+      # every matrix leg to succeed. The same library is already produced by
+      # the `aarch64-linux-android` build-cross leg on Linux.
       - name: Install aarch64-linux-android Rust target (Windows)
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && runner.arch == 'X64'
         shell: pwsh
         run: rustup target add aarch64-linux-android
       - name: Build Android cross-compile libraries (Windows)
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && runner.arch == 'X64'
         shell: pwsh
         env:
           # API level 24 matches every other Android leg we cross-build for
