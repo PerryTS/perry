@@ -227,6 +227,11 @@ enum RawValue {
     Bool(bool),
     Float64(f64),
     String(String),
+    /// A MySQL JSON column. Held as the decoded document and materialised into
+    /// a JS value on the main thread, because mysql2 in Node hands back the
+    /// parsed value -- not the source text -- and drizzle's `json()` mapper,
+    /// among others, relies on that.
+    Json(serde_json::Value),
 }
 
 #[derive(Clone, Debug)]
@@ -309,6 +314,15 @@ fn extract_raw_value(row: &MySqlRow, index: usize, type_name: &str) -> RawValue 
             .try_get::<chrono::NaiveTime, _>(index)
             .map(|d| RawValue::String(d.format("%H:%M:%S").to_string()))
             .unwrap_or(RawValue::Null),
+        "JSON" => row
+            .try_get::<serde_json::Value, _>(index)
+            .map(RawValue::Json)
+            // Needs sqlx's "json" feature, enabled in Cargo.toml with this
+            // change. Without it MySQL JSON has no Decode impl at all, so the
+            // String and Vec<u8> attempts in the catch-all below both failed
+            // their type check and every JSON column read back as NULL --
+            // silently, because NULL is legal for a nullable JSON column.
+            .unwrap_or(RawValue::Null),
         _ => row
             .try_get::<String, _>(index)
             .map(RawValue::String)
@@ -362,6 +376,55 @@ fn raw_value_to_jsvalue(v: &RawValue) -> JsValue {
         RawValue::Bool(b) => JsValue::from_bool(*b),
         RawValue::Float64(f) => JsValue::from_number(*f),
         RawValue::String(s) => JsValue::from_string_ptr(alloc_string(s).as_raw()),
+        RawValue::Json(v) => json_value_to_jsvalue(v),
+    }
+}
+
+/// Materialise a decoded JSON document as a JS value.
+///
+/// Built here rather than by handing the text to the runtime's JSON parser:
+/// `perry_ffi` exports `json_stringify` and no counterpart, and adding a
+/// `json_parse` to the public ABI for this would be a wider change than the
+/// bug warrants.
+///
+/// Object key order matches the stored document, which is what Node's mysql2
+/// gives you. That needs serde_json's "preserve_order" feature -- without it
+/// the map is a BTreeMap and keys come back alphabetised. Nothing should
+/// depend on JSON object key order, but silently reordering a document that
+/// round-trips through the database is the kind of difference that surfaces
+/// much later, in a diff nobody can explain.
+fn json_value_to_jsvalue(value: &serde_json::Value) -> JsValue {
+    match value {
+        serde_json::Value::Null => JsValue::NULL,
+        serde_json::Value::Bool(b) => JsValue::from_bool(*b),
+        // Every JSON number becomes an f64, which is what JSON.parse does too.
+        serde_json::Value::Number(n) => JsValue::from_number(n.as_f64().unwrap_or(f64::NAN)),
+        serde_json::Value::String(s) => JsValue::from_string_ptr(alloc_string(s).as_raw()),
+        serde_json::Value::Array(items) => {
+            let mut arr = unsafe { js_array_alloc(items.len() as u32) };
+            for item in items {
+                // Reassigned, never reused: the push may reallocate and move
+                // the array, exactly as the row and field builders below do.
+                arr = unsafe { js_array_push(arr, json_value_to_jsvalue(item)) };
+            }
+            JsValue::from_object_ptr(arr)
+        }
+        serde_json::Value::Object(map) => {
+            let names: Vec<&str> = map.keys().map(|k| k.as_str()).collect();
+            let (packed, shape_id) = build_object_shape(&names);
+            let obj = unsafe {
+                js_object_alloc_with_shape(
+                    shape_id,
+                    names.len() as u32,
+                    packed.as_ptr(),
+                    packed.len() as u32,
+                )
+            };
+            for (i, (_, v)) in map.iter().enumerate() {
+                unsafe { js_object_set_field(obj, i as u32, json_value_to_jsvalue(v)) };
+            }
+            JsValue::from_object_ptr(obj)
+        }
     }
 }
 
