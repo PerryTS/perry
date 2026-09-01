@@ -448,6 +448,7 @@ pub(crate) fn test_disable_symbol_magic_screen(disabled: bool) -> bool {
     TEST_DISABLE_SYMBOL_MAGIC_SCREEN.with(|c| c.replace(disabled))
 }
 
+per_test_global! {
 /// Which pointers have ever been registered as a Symbol — a conservative
 /// filter in front of the process-global registry mutex.
 ///
@@ -485,8 +486,15 @@ pub(crate) fn test_disable_symbol_magic_screen(disabled: bool) -> bool {
 /// inserter widens"), and this file no longer relies on one: `debug_assertions`
 /// builds re-derive every rejection from `SYMBOL_POINTERS` itself, so an
 /// inserter added without admitting panics in the first test that touches it.
-static SYMBOL_ADDR_FILTER: crate::registry_latch::RegistryAddrFilter =
-    crate::registry_latch::RegistryAddrFilter::new();
+///
+/// In test builds the filter has the same per-test lifetime as
+/// [`SYMBOL_POINTERS`]. Sharing it between tests would accumulate unrelated
+/// admissions, so a Bloom false positive — including #9344's fixed probe —
+/// would depend on test order. `per_test_global!` still expands to this exact
+/// plain `static` in production.
+    static SYMBOL_ADDR_FILTER: crate::registry_latch::RegistryAddrFilter =
+        crate::registry_latch::RegistryAddrFilter::new();
+}
 
 /// Admit `ptr` into [`SYMBOL_ADDR_FILTER`].
 ///
@@ -519,11 +527,9 @@ pub(crate) fn insert_symbol_pointer_in_set(set: &mut PtrHashSet<usize>, ptr: usi
 #[cfg(test)]
 pub(crate) const SYMBOL_FILTER_WORDS: usize = crate::registry_latch::RegistryAddrFilter::words();
 
-/// Save/restore the address filter around a test that needs to observe a
-/// NEARLY-EMPTY filter. It is process-global and only ever gains bits in
-/// production, so a test that clears it must put back at least what it found —
-/// otherwise a later test in the same binary gets a filter that no longer holds
-/// symbols registered before it ran, and fails for no reason of its own.
+/// Save/restore this test's address filter around a fixture that needs to
+/// observe a NEARLY-EMPTY filter. A reset must put back at least what it found,
+/// so symbols registered earlier in the same test remain admitted afterwards.
 #[cfg(test)]
 pub(crate) struct SymbolAddrRangeGuard([u64; SYMBOL_FILTER_WORDS]);
 

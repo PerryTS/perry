@@ -342,18 +342,21 @@ fn uint8array_probe_rejects_an_out_of_window_address_without_touching_the_regist
 /// address" is not by itself a proof that it can reject: the probe counter is,
 /// and the second half — an address the filter must ADMIT — is what makes the
 /// first half able to fail.
+///
+/// The worker below is a deterministic stand-in for an unrelated test: it
+/// admits this exact address as a false positive in its own filter. Test builds
+/// must isolate that filter alongside `SYMBOL_POINTERS`; a process-global
+/// filter carries the worker's admission here and reproduces #9344.
 #[test]
 fn symbol_probe_rejects_a_filtered_address_without_touching_the_registry() {
-    // `RegistryAddrFilter` is a Bloom filter, so "this one address is
-    // rejected" depends on which symbols every EARLIER test in the binary
-    // happened to register — three bits set by unrelated addresses are enough
-    // to admit `FAR_OUTSIDE_ANY_WINDOW` and fail this assertion for no reason
-    // of its own. Start from an empty filter (taken before the allocation
-    // below, so the symbol this test registers is still admitted) and the
-    // rejection becomes a property of the filter rather than of test order.
-    let _range = crate::symbol::SymbolAddrRangeGuard::reset();
-    let sym = unsafe { crate::symbol::alloc_symbol(std::ptr::null_mut(), false) } as usize;
-    assert!(sym != 0, "test premise: the symbol allocated");
+    std::thread::spawn(|| {
+        let unrelated_sym =
+            unsafe { crate::symbol::alloc_symbol(std::ptr::null_mut(), false) } as usize;
+        assert!(unrelated_sym != 0, "test premise: the symbol allocated");
+        crate::symbol::admit_symbol_pointer(FAR_OUTSIDE_ANY_WINDOW);
+    })
+    .join()
+    .expect("the unrelated symbol registration must finish");
 
     let before = crate::symbol::test_symbol_filter_admitted_probe_count();
     assert!(!crate::symbol::is_registered_symbol(FAR_OUTSIDE_ANY_WINDOW));
@@ -363,6 +366,8 @@ fn symbol_probe_rejects_a_filtered_address_without_touching_the_registry() {
         "the address filter must answer without reaching SYMBOL_POINTERS"
     );
 
+    let sym = unsafe { crate::symbol::alloc_symbol(std::ptr::null_mut(), false) } as usize;
+    assert!(sym != 0, "test premise: the symbol allocated");
     assert!(
         crate::symbol::is_registered_symbol(sym),
         "the filter must not hide a registered symbol"
