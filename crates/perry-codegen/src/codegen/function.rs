@@ -1047,6 +1047,7 @@ pub(super) fn compile_function(
         inline_ctor_return: Vec::new(),
         new_target_stack: Vec::new(),
         class_stack: Vec::new(),
+        in_static_member: false,
         methods,
         module_globals,
         import_function_prefixes,

@@ -1075,6 +1075,12 @@ pub(super) fn compile_closure(
         this_stack,
         new_target_stack,
         class_stack,
+        // Closures are compiled from their own HIR node; the enclosing
+        // member's staticness is not carried on it, so an arrow inside a
+        // static body still lowers `this` as an instance receiver. Tracked
+        // separately from #9369, whose fixture family is the static body
+        // itself.
+        in_static_member: false,
         super_called_stack: Vec::new(),
         shared_super_scope_active: false,
         lexical_this_uses_derived_binding: captures_this

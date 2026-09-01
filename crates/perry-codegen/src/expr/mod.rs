@@ -415,6 +415,21 @@ pub(crate) struct FnCtx<'a> {
     /// find the parent class's constructor to inline. Same depth as
     /// `this_stack` (one entry per nested `new`).
     pub class_stack: Vec<String>,
+    /// True while lowering the body of a STATIC class member (method, static
+    /// accessor, static computed member) — i.e. a body compiled by
+    /// `compile_static_method`, whose `this` slot holds the CLASS
+    /// CONSTRUCTOR, not an instance.
+    ///
+    /// `class_stack` names the owning class in a static body too (it is what
+    /// `super.x` resolves against), and `receiver_class_name(Expr::This)`
+    /// reads `class_stack.last()`. That answer is right for an instance
+    /// method and wrong here: a static body's `this` is the INT32-tagged
+    /// class ref `0x7FFE_0000_0000_00cc`, never a heap instance of the class.
+    /// Lowerings that turn a proven receiver class into an INSTANCE-shaped
+    /// access — anything that strips the NaN-box to a raw `ObjectHeader*`, or
+    /// loads a packed field slot — must consult this flag before trusting
+    /// `Expr::This` (#9369).
+    pub in_static_member: bool,
     /// Method registry: `(class_name, method_name) → LLVM function name`.
     /// Built by `compile_module` from `hir.classes[*].methods`. Used by
     /// `lower_call` to dispatch `obj.method(args)` to the right
@@ -2424,6 +2439,29 @@ mod inline_cache_name_tests {
 }
 
 impl<'a> FnCtx<'a> {
+    /// Is `e` the `this` of a STATIC class member — i.e. a receiver that holds
+    /// the class CONSTRUCTOR (an INT32 class ref) rather than an instance?
+    ///
+    /// `receiver_class_name` answers `Some(<owning class>)` for `Expr::This`
+    /// in a static body just as it does in an instance body, because both read
+    /// `class_stack`. Callers that go on to treat that class name as a
+    /// statement about the receiver's LAYOUT — stripping the NaN-box to an
+    /// `ObjectHeader*`, indexing a packed field slot — are only entitled to do
+    /// so for an instance, so they ask this first (#9369).
+    ///
+    /// Sees through `Expr::PrivateGuard`, which returns its receiver
+    /// unchanged, mirroring `receiver_class_name`'s own arm for it.
+    pub(crate) fn is_static_class_this(&self, e: &perry_hir::Expr) -> bool {
+        if !self.in_static_member {
+            return false;
+        }
+        match e {
+            perry_hir::Expr::This => true,
+            perry_hir::Expr::PrivateGuard { object, .. } => self.is_static_class_this(object),
+            _ => false,
+        }
+    }
+
     /// Return runtime-derived initializer evidence only when no write anywhere
     /// in this region can have invalidated it.
     ///

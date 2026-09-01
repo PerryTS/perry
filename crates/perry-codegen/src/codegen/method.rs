@@ -453,6 +453,7 @@ pub(super) fn compile_method(
         inline_ctor_return: Vec::new(),
         new_target_stack: Vec::new(),
         class_stack: vec![class.name.clone()],
+        in_static_member: false,
         methods,
         module_globals,
         import_function_prefixes,
@@ -1626,6 +1627,7 @@ pub(super) fn compile_static_method(
         // `super.x` in a static method resolves against the parent's static
         // side, mirroring instance-method setup.
         class_stack: vec![class.name.clone()],
+        in_static_member: true,
         methods,
         module_globals,
         import_function_prefixes,
