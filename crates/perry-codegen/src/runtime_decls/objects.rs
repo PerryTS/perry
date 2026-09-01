@@ -133,6 +133,10 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     // #5127: apply ES2022 `cause` from a `super(message, options)` forward to
     // a user Error-subclass instance (a generic object). (this_handle, options)
     module.declare_function("js_error_apply_cause_to_object", VOID, &[I64, DOUBLE]);
+    // #9410: install the own, lazily-formatted `stack` accessor Node gives an
+    // `Error` subclass instance, capturing the frame at the construction site.
+    // (this)
+    module.declare_function("js_error_subclass_capture_stack", VOID, &[DOUBLE]);
     module.declare_function("js_with_has_binding", I32, &[DOUBLE, I64]);
     module.declare_function("js_with_get_binding", DOUBLE, &[DOUBLE, I64]);
     module.declare_function("js_with_set_binding", DOUBLE, &[DOUBLE, I64, DOUBLE, I32]);

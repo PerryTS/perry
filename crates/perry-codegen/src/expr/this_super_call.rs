@@ -1327,6 +1327,26 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                     &[(I64, &this_handle), (DOUBLE, opts_val)],
                                 );
                             }
+                            // #9410: `stack`. `super(message)` into a built-in
+                            // Error stamps `message`/`name`/`cause` onto the
+                            // already-allocated plain instance and stops there,
+                            // so `new (class extends Error {})("x").stack` was
+                            // `undefined` while `new Error("x").stack` is a
+                            // string. The frame is captured HERE, at the
+                            // construction site; the `name: message` head is
+                            // formatted on read, because a subclass
+                            // constructor assigns `this.name` after `super()`
+                            // returns and Node reports the assigned name.
+                            let blk = ctx.block();
+                            // Reload `this` from its slot: the stamps above
+                            // can collect, and a DOUBLE held across a
+                            // collecting call is the bare-pointer hazard
+                            // #8770 is about.
+                            let this_for_stack = blk.load(DOUBLE, &this_slot);
+                            blk.call_void(
+                                "js_error_subclass_capture_stack",
+                                &[(DOUBLE, &this_for_stack)],
+                            );
                         }
                     }
                     bind_derived_this_after_super(ctx);

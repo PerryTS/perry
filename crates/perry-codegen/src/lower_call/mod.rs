@@ -80,6 +80,7 @@ mod native_table;
 mod new;
 pub(crate) mod new_alloc;
 mod new_ctor_args;
+mod new_error_init;
 mod new_helpers;
 pub(crate) use new_helpers::emit_ctor_return_override;
 mod omitted_native_params;
