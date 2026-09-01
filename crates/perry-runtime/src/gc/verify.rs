@@ -731,6 +731,168 @@ pub(super) unsafe fn verify_marked_object_child_marks(
     });
 }
 
+/// One array element the collector's own slot enumeration does not reach,
+/// even though the element holds a heap reference.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) struct UnenumeratedArraySlot {
+    pub(super) array: usize,
+    pub(super) index: usize,
+    pub(super) length: u32,
+    pub(super) reserved: u16,
+    pub(super) child: usize,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(super) struct ArraySlotEnumerationStats {
+    pub(super) checked_arrays: usize,
+    pub(super) checked_pointer_slots: usize,
+    pub(super) unenumerated_slots: usize,
+    pub(super) first: Option<UnenumeratedArraySlot>,
+}
+
+/// Does the collector's own slot enumeration reach every element of `header`
+/// that holds a heap reference?
+///
+/// This is the invariant the per-object pointer LAYOUT rests on, asked of the
+/// one walk that consumes it. `heap_payload_slot_selection` may answer with a
+/// full scan, an all-pointer claim, or a per-object mask; the first two cannot
+/// under-report, the mask can — and when it does, the omitted element is a live
+/// edge that marking never marks and the evacuation rewrite never rewrites. The
+/// child is then swept while its owner still names it, and the collector reads
+/// the recycled bytes as a `GcHeader` one or more cycles later.
+///
+/// That is #9261: an object's spill (overflow-field) buffer whose mask covered
+/// every `POINTER_TAG` element and omitted three live `STRING_TAG` ones
+/// (`mask=0xc7fc live=0xfffc missing=0x3800`), surfacing ~200 collections later
+/// as `[gc-pin-latch] FATAL … obj_type=10 size=1347565393` — payload bytes read
+/// as a header. Nothing between the store and that abort could see it: the
+/// store paths all note the layout correctly, and no runtime GC probe asks this
+/// question. So ask it directly.
+///
+/// Arrays only, deliberately: an array's payload is `length` elements at a
+/// known offset, so "which words are supposed to be reachable" needs no layout
+/// interpretation and the check cannot inherit the bug it is looking for.
+pub(super) unsafe fn verify_array_pointer_slots_enumerated_for(
+    stats: &mut ArraySlotEnumerationStats,
+    header: *mut GcHeader,
+) {
+    if header.is_null() || (*header).obj_type != GC_TYPE_ARRAY {
+        return;
+    }
+    let flags = (*header).gc_flags;
+    // A FORWARDED array is a growth stub or an evacuation original: its first
+    // payload word is a forwarding pointer, not an element.
+    if flags & GC_FLAG_FORWARDED != 0 {
+        return;
+    }
+    let user = (header as *mut u8).add(GC_HEADER_SIZE) as usize;
+    let arr = user as *const crate::array::ArrayHeader;
+    let length = (*arr).length as usize;
+    let capacity = (*arr).capacity as usize;
+    // The same admission gate `array::gc_element_slot_range` applies: outside
+    // it the collector enumerates nothing, and neither should this.
+    if length == 0 || length > capacity || length > 16_000_000 {
+        return;
+    }
+    let elements = (user as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>());
+    let elements_addr = elements as usize;
+    let words = elements as *const u64;
+
+    let mut reached = vec![0u64; length.div_ceil(64)];
+    visit_gc_rewrite_slots(header, |slot| {
+        let addr = slot.slot as usize;
+        if addr < elements_addr {
+            return;
+        }
+        let index = (addr - elements_addr) / std::mem::size_of::<u64>();
+        if index < length {
+            reached[index / 64] |= 1u64 << (index % 64);
+        }
+    });
+
+    stats.checked_arrays += 1;
+    for index in 0..length {
+        let bits = *words.add(index);
+        if !super::layout::layout_pointer_bearing_bits(bits) {
+            continue;
+        }
+        stats.checked_pointer_slots += 1;
+        if reached[index / 64] & (1u64 << (index % 64)) != 0 {
+            continue;
+        }
+        stats.unenumerated_slots += 1;
+        if stats.first.is_none() {
+            stats.first = Some(UnenumeratedArraySlot {
+                array: user,
+                index,
+                length: (*arr).length,
+                reserved: (*header)._reserved,
+                child: (bits & POINTER_MASK) as usize,
+            });
+        }
+    }
+}
+
+/// Is this array dead this cycle, so that its elements are whatever the
+/// previous tenant of the address left behind rather than live edges?
+///
+/// Mirrors `verify_heap_objects`' gate exactly. It belongs to the heap WALK
+/// and not to the per-object check: liveness is only decidable while marks are
+/// final, and the per-object form is also asked about a specific array by
+/// tests, where nothing has marked anything.
+unsafe fn array_is_sweep_eligible(header: *mut GcHeader) -> bool {
+    let flags = (*header).gc_flags;
+    flags & (GC_FLAG_MARKED | GC_FLAG_PINNED) == 0
+        && crate::arena::pointer_in_nursery((header as *mut u8).add(GC_HEADER_SIZE) as usize)
+}
+
+/// [`verify_array_pointer_slots_enumerated_for`] over every live array.
+pub(super) fn verify_array_pointer_slots_enumerated() -> ArraySlotEnumerationStats {
+    let mut stats = ArraySlotEnumerationStats::default();
+    crate::arena::arena_walk_objects(|hp| unsafe {
+        let header = hp as *mut GcHeader;
+        if array_is_sweep_eligible(header) {
+            return;
+        }
+        verify_array_pointer_slots_enumerated_for(&mut stats, header);
+    });
+    MALLOC_STATE.with(|s| {
+        let s = s.borrow();
+        for &header in s.objects.iter() {
+            unsafe {
+                verify_array_pointer_slots_enumerated_for(&mut stats, header);
+            }
+        }
+    });
+    stats
+}
+
+/// `PERRY_GC_VERIFY_MARK` report form. Non-fatal, like its two siblings: the
+/// point is to name the array, the element and the child at the cycle the
+/// invariant breaks, instead of leaving a garbage-header abort hundreds of
+/// collections downstream.
+pub(super) fn verify_array_pointer_slots_enumerated_report(phase: &str) {
+    let stats = verify_array_pointer_slots_enumerated();
+    match stats.first {
+        Some(missing) => eprintln!(
+            "[gc-array-slots:{}] UNENUMERATED slots={} arrays={} pointer_slots={} | first array=0x{:x} index={} length={} reserved=0x{:x} child=0x{:x}",
+            phase,
+            stats.unenumerated_slots,
+            stats.checked_arrays,
+            stats.checked_pointer_slots,
+            missing.array,
+            missing.index,
+            missing.length,
+            missing.reserved,
+            missing.child,
+        ),
+        None => eprintln!(
+            "[gc-array-slots:{}] OK arrays={} pointer_slots={}",
+            phase, stats.checked_arrays, stats.checked_pointer_slots,
+        ),
+    }
+}
+
 #[allow(dead_code)] // GC heap-invariant verifier exercised by cfg(test) suite in gc/tests/barrier.rs
 pub(super) fn verify_marked_heap_no_unmarked_children() -> MarkInvariantVerifyStats {
     let mut stats = MarkInvariantVerifyStats::default();

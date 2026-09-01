@@ -8,6 +8,28 @@
 use super::accessors::array_prototype_property_value;
 use crate::value::JSValue;
 
+/// Follow an array-growth forwarding stub before any address-keyed property or
+/// `[[Prototype]]` lookup.
+///
+/// # Safety
+/// `obj` must point to the user payload of a tracked `GC_TYPE_ARRAY` block.
+#[inline]
+pub(super) unsafe fn live_array_owner(
+    obj: *const crate::object::ObjectHeader,
+) -> Option<*const crate::object::ObjectHeader> {
+    let gc_header =
+        unsafe { (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader };
+    if unsafe { (*gc_header).gc_flags } & crate::gc::GC_FLAG_FORWARDED == 0 {
+        return Some(obj);
+    }
+
+    // #9304: growth leaves aliases at the old allocation while the residual
+    // side tables follow the replacement. Resolve that forwarding edge once
+    // for all of the array branch's own-property and prototype-chain probes.
+    let live = crate::array::clean_arr_ptr(obj as *const crate::array::ArrayHeader);
+    (!live.is_null()).then_some(live as *const crate::object::ObjectHeader)
+}
+
 /// `arr.__proto__` IS the array's `[[Prototype]]` — the spec models it as an
 /// `Object.prototype` accessor returning `[[GetPrototypeOf]](this)`. Without
 /// this a retargeted array reported the WRONG object while

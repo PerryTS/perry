@@ -359,11 +359,22 @@ fn install_panic_hook() {
     }));
 }
 
+/// The CLI's own arguments, decoded leniently (#9401).
+///
+/// `std::env::args()` panics on an argument that is not valid Unicode, so
+/// `perry compile $'\xff'.ts` aborted with a raw Rust backtrace instead of a
+/// diagnostic. A non-UTF-8 path is an ordinary Linux filename.
+fn argv_lossy() -> Vec<String> {
+    std::env::args_os()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect()
+}
+
 fn main_inner() -> Result<()> {
     env_logger::init();
     #[cfg(windows)]
     {
-        let raw_args: Vec<String> = std::env::args().collect();
+        let raw_args: Vec<String> = argv_lossy();
         if let Some(result) = update_checker::maybe_run_windows_update_helper(&raw_args) {
             return result;
         }
@@ -371,7 +382,7 @@ fn main_inner() -> Result<()> {
     update_checker::recover_interrupted_self_update()?;
 
     // Handle legacy invocation (perry file.ts -o out)
-    let args: Vec<String> = std::env::args().collect();
+    let args: Vec<String> = argv_lossy();
     let effective_args = if is_legacy_invocation(&args) {
         transform_legacy_args(args)
     } else {

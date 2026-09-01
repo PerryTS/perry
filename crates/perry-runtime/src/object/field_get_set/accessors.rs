@@ -374,6 +374,27 @@ pub(crate) unsafe fn ordinary_object_prototype_property_value(
             // The guard drops with this branch; let the ordinary final
             // fallback consult Object.prototype on a genuine Error miss.
         }
+
+        // #9362: Object.setPrototypeOf(C.prototype, parentPrototype) changes
+        // the inherited surface of C instances. util.inherits(C, Parent) uses
+        // exactly that operation after materializing C.prototype. Class
+        // instance lookup normally uses the vtable and then jumps straight to
+        // Object.prototype, so a user-selected parent on the declaration
+        // prototype was skipped. Walk the materialized declaration prototype
+        // on a vtable miss, preserving the instance as the accessor receiver.
+        let decl_proto = super::super::class_decl_prototype_object(class_id);
+        if !decl_proto.is_null()
+            && super::super::prototype_chain::object_has_user_prototype_override(
+                decl_proto as usize,
+            )
+        {
+            let _guard = object_prototype_lookup_guard()?;
+            if let Some(value) =
+                prototype_property_value_with_guard(decl_proto as usize, obj as usize, key)
+            {
+                return Some(value);
+            }
+        }
     }
     default_object_prototype_property_value(obj as usize, key)
 }

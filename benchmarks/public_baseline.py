@@ -34,6 +34,7 @@ README_END = "<!-- public-node-bun:end -->"
 SOURCE_PATHS = (
     "Cargo.toml",
     "benchmarks/suite/*.ts",
+    "benchmarks/polyglot/bench.*",
     "benchmarks/json_polyglot/*.ts",
     "benchmarks/app-patterns/kernels/*.ts",
     "benchmarks/honest_bench/scripts/gen_image.py",

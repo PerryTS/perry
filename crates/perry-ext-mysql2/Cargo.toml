@@ -18,7 +18,8 @@ perry-ffi.workspace = true
 # Without it every query against such a server fails at connect with
 # "RSA auth backend disabled" — which broke `pool.execute`/`query` (e.g. an
 # Auth.js credentials `authorize` DB lookup, surfaced as a CallbackRouteError).
-sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "mysql", "mysql-rsa", "chrono"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "mysql", "mysql-rsa", "chrono", "json"] }
 tokio = { workspace = true }
 chrono.workspace = true
 

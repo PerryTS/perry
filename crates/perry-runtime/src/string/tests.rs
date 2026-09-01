@@ -961,3 +961,165 @@ mod concat_chain_no_collect {
         }
     }
 }
+
+/// The short-concat memo: `"prefix" + smallint` results are content-addressed,
+/// so two evaluations producing the same bytes share one string object.
+///
+/// This asserts OBJECT IDENTITY, not equality. Equality would pass whether or
+/// not the memo fires, which would make it a test that cannot fail — the whole
+/// point is proving the allocation was skipped.
+#[test]
+fn concat_memo_returns_one_object_for_equal_results() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    crate::string::concat::test_clear_concat_memo();
+
+    crate::string::concat::test_reset_memo_governor();
+    let prefix = crate::string::js_string_from_bytes(b"field_".as_ptr(), 6);
+    // #9391's doorkeeper admits a result on its SECOND sighting, so the third
+    // evaluation is the first that can share. That ordering is the point: a
+    // result seen once never costs a rooted entry.
+    let _first = crate::string::js_string_concat_value(prefix, 7.0);
+    let second = crate::string::js_string_concat_value(prefix, 7.0);
+    // A DIFFERENT prefix object with the same bytes must still reach the entry:
+    // the memo is keyed on result content, not on operand identity.
+    let other_prefix = crate::string::js_string_from_bytes(b"field_".as_ptr(), 6);
+    assert_ne!(prefix as usize, other_prefix as usize);
+    let third = crate::string::js_string_concat_value(other_prefix, 7.0);
+
+    assert_eq!(
+        second as usize, third as usize,
+        "once admitted, equal concat results must share one memoized string"
+    );
+    let first = third;
+    unsafe {
+        assert_eq!((*first).byte_len, 7);
+        // Shared, so the in-place `+=` append can never mutate it under a
+        // second holder — the property that makes sharing sound at all.
+        assert_eq!((*first).refcount, 0);
+        let bytes = std::slice::from_raw_parts(crate::string::string_data(first), 7);
+        assert_eq!(bytes, b"field_7");
+    }
+}
+
+/// Distinct results must not alias, including across the memo's hash: a
+/// collision has to degrade to a miss, never to a wrong string.
+#[test]
+fn concat_memo_never_aliases_distinct_results() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    crate::string::concat::test_clear_concat_memo();
+
+    let prefix = crate::string::js_string_from_bytes(b"field_".as_ptr(), 6);
+    let mut seen: Vec<(usize, String)> = Vec::new();
+    for n in 0..40u32 {
+        let s = crate::string::js_string_concat_value(prefix, n as f64);
+        let text = unsafe {
+            let b =
+                std::slice::from_raw_parts(crate::string::string_data(s), (*s).byte_len as usize);
+            String::from_utf8_lossy(b).into_owned()
+        };
+        assert_eq!(text, format!("field_{n}"));
+        for (other_ptr, other_text) in &seen {
+            if *other_text != text {
+                assert_ne!(
+                    *other_ptr, s as usize,
+                    "distinct results {other_text} and {text} must not share an object"
+                );
+            }
+        }
+        seen.push((s as usize, text));
+    }
+}
+
+/// A non-ASCII prefix is excluded: its `utf16_len` differs from `byte_len`, so
+/// a memoized result would carry the wrong `.length`.
+#[test]
+fn concat_memo_declines_non_ascii_prefixes() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    crate::string::concat::test_clear_concat_memo();
+
+    let prefix = crate::string::js_string_from_bytes("é_".as_bytes().as_ptr(), 3);
+    let a = crate::string::js_string_concat_value(prefix, 1.0);
+    let b = crate::string::js_string_concat_value(prefix, 1.0);
+    assert_ne!(
+        a as usize, b as usize,
+        "a non-ASCII prefix must not be memoized"
+    );
+    unsafe {
+        // "é_1" is 4 bytes but 3 UTF-16 units; the memo path would have
+        // asserted byte_len == utf16_len.
+        assert_eq!((*a).byte_len, 4);
+        assert_eq!((*a).utf16_len, 3);
+    }
+}
+
+/// #9391: the memo must stop PROBING when it stops paying.
+///
+/// `bench_gc_pressure` builds half a million distinct `"item_" + i` strings.
+/// Before the governor the memo probed every one of them for six hits, and the
+/// probe alone — buffer assembly plus hashing — cost the row 21 ms against
+/// 12 ms with the memo compiled out.
+///
+/// This asserts the governor's DECISION, not a wall-clock number: a timing
+/// test here would be noise-sensitive and would not say why it failed.
+#[test]
+fn concat_memo_governor_disables_itself_when_nothing_hits() {
+    crate::string::concat::test_reset_memo_governor();
+    assert!(
+        crate::string::concat::test_memo_enabled(),
+        "governor starts enabled"
+    );
+
+    // One full window of candidates, none of which hit.
+    let window = crate::string::concat::test_memo_window();
+    for _ in 0..window {
+        crate::string::concat::test_memo_should_probe();
+    }
+    assert!(
+        !crate::string::concat::test_memo_enabled(),
+        "a window with no hits must turn the probe off"
+    );
+}
+
+/// The other half: a workload that DOES hit keeps the memo on, so the governor
+/// cannot silently disable the case the memo exists for
+/// (`bench_object_property`, which hits 211,960 times out of 212,000).
+#[test]
+fn concat_memo_governor_stays_on_when_hits_are_frequent() {
+    crate::string::concat::test_reset_memo_governor();
+    let window = crate::string::concat::test_memo_window();
+    for _ in 0..window {
+        crate::string::concat::test_memo_should_probe();
+        crate::string::concat::test_memo_note_hit();
+    }
+    assert!(
+        crate::string::concat::test_memo_enabled(),
+        "a window that hits every time must keep the probe on"
+    );
+}
+
+/// And it recovers: a backoff always expires into a probation window, so a
+/// program whose first phase misses and whose second phase hits is picked up
+/// rather than left permanently disabled.
+#[test]
+fn concat_memo_governor_recovers_after_backoff() {
+    crate::string::concat::test_reset_memo_governor();
+    let window = crate::string::concat::test_memo_window();
+    for _ in 0..window {
+        crate::string::concat::test_memo_should_probe();
+    }
+    assert!(!crate::string::concat::test_memo_enabled());
+
+    // Serving the backoff out must eventually re-enable. The exact number of
+    // windows is a tuning detail; that it terminates is the contract.
+    let mut windows = 0;
+    while !crate::string::concat::test_memo_enabled() && windows < 8 {
+        for _ in 0..window {
+            crate::string::concat::test_memo_should_probe();
+        }
+        windows += 1;
+    }
+    assert!(
+        crate::string::concat::test_memo_enabled(),
+        "backoff must expire into a probation window, got stuck for {windows} windows"
+    );
+}

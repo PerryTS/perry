@@ -80,6 +80,18 @@ pub(crate) fn classify_direct_callee(name: &str) -> GcCallEffect {
         | "js_shadow_slot_set"
         // `gc/barrier.rs`: remembered-set / incremental-marking maintenance.
         | "js_write_barrier"
+        // #9287 transition-IC leaves. `perry_transition_cache_base` returns a TLS
+        // table pointer (pure state read). `js_transition_ic_note_hit` bumps an
+        // atomic counter (probe builds only). `js_transition_ic_spill_append`
+        // re-validates the receiver and performs ONLY the in-capacity spill
+        // store — its capacity gate exists precisely so it cannot reach the
+        // growing (allocating) spill path; growth returns 0 and the emitted
+        // code takes the ordinary miss call. The TLS learned-fields note and
+        // spill bookkeeping inside allocate at most via std::alloc, which is
+        // outside the GC heap (the `js_box_alloc_bits` precedent).
+        | "perry_transition_cache_base"
+        | "js_transition_ic_note_hit"
+        | "js_transition_ic_spill_append"
         | "js_write_barrier_slot"
         | "js_write_barrier_slot_validated_parent"
         | "js_write_barrier_root_heap_word"

@@ -653,6 +653,40 @@ pub(crate) enum WellKnownComputedMethod {
 ///
 /// Returns `Ok(None)` when the method's key is not a well-known-symbol
 /// computed key at all.
+/// Does `lower_well_known_computed_method` claim this method?
+///
+/// `generic_computed_member_key` MUST agree with this. When it does not, a
+/// well-known-symbol method falls through to the generic computed-member path
+/// and loses the lifting/renaming the runtime resolves it by — the method is
+/// then simply not there, and JS falls back (e.g. `toString()` instead of
+/// `[Symbol.toPrimitive]`).
+///
+/// #9226 hand-copied a SUBSET of these conditions into that function, listing
+/// only `iterator`/`hasInstance`/`toStringTag`, which silently dropped
+/// `toPrimitive`, `asyncIterator`, `dispose` and `asyncDispose`. Both callers
+/// ask THIS function so the two lists cannot drift apart again.
+pub(crate) fn is_special_lowered_well_known(method: &ast::ClassMethod) -> bool {
+    let ast::PropName::Computed(computed) = &method.key else {
+        return false;
+    };
+    let Some(wk) = symbol_well_known_key(&computed.expr) else {
+        return false;
+    };
+    let is_method = matches!(method.kind, ast::MethodKind::Method);
+    let is_getter = matches!(method.kind, ast::MethodKind::Getter);
+    match wk {
+        // the @@iterator generator wrapper (#5128) — handled inline by both
+        // class paths rather than through the shared helper below
+        "iterator" => method.function.is_generator && !method.is_static,
+        "hasInstance" => method.is_static && is_method,
+        "toStringTag" => !method.is_static && is_getter,
+        "dispose" | "asyncDispose" => !method.is_static && is_method,
+        "asyncIterator" => !method.is_static && is_method,
+        "toPrimitive" => is_method,
+        _ => false,
+    }
+}
+
 pub(crate) fn lower_well_known_computed_method(
     ctx: &mut LoweringContext,
     method: &ast::ClassMethod,

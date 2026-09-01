@@ -472,7 +472,6 @@ pub(crate) unsafe fn finalize_native_pod_view_for_gc(view: *mut NativePodViewHea
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::raw::c_int;
 
     fn boxed_ptr(ptr: *const u8) -> f64 {
         f64::from_bits(crate::value::JSValue::pointer(ptr).bits())

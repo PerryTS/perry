@@ -976,6 +976,18 @@ fn lower_put_value_dyn_ic_inline(
     ctx.ic_globals.push(cache_name.clone());
     let cache_ref = format!("@{}", cache_name);
 
+    // #9287: this thread's transition-cache base, loaded once per function
+    // (the table is thread-local; a link-time constant would alias one
+    // worker's table). The entry-init call is a `gc-leaf` state read.
+    if ctx.transition_cache_base_slot.is_none() {
+        let slot = ctx.func.entry_init_call_ptr("perry_transition_cache_base");
+        ctx.transition_cache_base_slot = Some(slot);
+    }
+    let trans_base_slot = ctx
+        .transition_cache_base_slot
+        .clone()
+        .expect("just initialized");
+
     let k_bits = ctx.block().bitcast_double_to_i64(k);
     let v_bits = ctx.block().bitcast_double_to_i64(v);
     let t_bits = ctx.block().bitcast_double_to_i64(t);
@@ -1011,6 +1023,15 @@ fn lower_put_value_dyn_ic_inline(
         StableTombstoneSlotCheck::new(ctx, "put.dynic.store.validate", "put.dynic.store.dispatch");
     let store_scalar_idx = ctx.new_block("put.dynic.store.scalar");
     let store_ref_idx = ctx.new_block("put.dynic.store.ref");
+    let trans_gate_idx = ctx.new_block("put.dynic.trans.gate");
+    let trans_probe_idx = ctx.new_block("put.dynic.trans.probe");
+    let trans_key_idx = ctx.new_block("put.dynic.trans.key");
+    let trans_entry_idx = ctx.new_block("put.dynic.trans.entry");
+    let trans_nk_idx = ctx.new_block("put.dynic.trans.nk");
+    let trans_dispatch_idx = ctx.new_block("put.dynic.trans.dispatch");
+    let trans_inline_ref_idx = ctx.new_block("put.dynic.trans.inline_ref");
+    let trans_ovf_idx = ctx.new_block("put.dynic.trans.ovf");
+    let trans_stamp_idx = ctx.new_block("put.dynic.trans.stamp");
     let slow_idx = ctx.new_block("put.dynic.slow");
     let merge_idx = ctx.new_block("put.dynic.merge");
     let guard_label = ctx.block_label(guard_idx);
@@ -1020,6 +1041,15 @@ fn lower_put_value_dyn_ic_inline(
     let store_label = ctx.block_label(store_idx);
     let store_scalar_label = ctx.block_label(store_scalar_idx);
     let store_ref_label = ctx.block_label(store_ref_idx);
+    let trans_gate_label = ctx.block_label(trans_gate_idx);
+    let trans_probe_label = ctx.block_label(trans_probe_idx);
+    let trans_key_label = ctx.block_label(trans_key_idx);
+    let trans_entry_label = ctx.block_label(trans_entry_idx);
+    let trans_nk_label = ctx.block_label(trans_nk_idx);
+    let trans_dispatch_label = ctx.block_label(trans_dispatch_idx);
+    let trans_inline_ref_label = ctx.block_label(trans_inline_ref_idx);
+    let trans_ovf_label = ctx.block_label(trans_ovf_idx);
+    let trans_stamp_label = ctx.block_label(trans_stamp_idx);
     let slow_label = ctx.block_label(slow_idx);
     let merge_label = ctx.block_label(merge_idx);
     ctx.block().cond_br(&entry_ok, &guard_label, &slow_label);
@@ -1068,13 +1098,25 @@ fn lower_put_value_dyn_ic_inline(
     let cached_token = ctx.block().load(I64, &cached_token_ptr);
     let token_match = ctx.block().icmp_eq(I64, &shape_token, &cached_token);
     let token_nonzero = ctx.block().icmp_ne(I64, &shape_token, "0");
-    let mut ok = ctx.block().and(I1, &gc_object, &not_forwarded);
-    ok = ctx.block().and(I1, &ok, &flags_clear);
-    ok = ctx.block().and(I1, &ok, &receiver_kind_ok);
-    ok = ctx.block().and(I1, &ok, &not_native_module);
-    ok = ctx.block().and(I1, &ok, &token_match);
-    ok = ctx.block().and(I1, &ok, &token_nonzero);
-    ctx.block().cond_br(&ok, &ways_label, &slow_label);
+    let mut ok_base = ctx.block().and(I1, &gc_object, &not_forwarded);
+    ok_base = ctx.block().and(I1, &ok_base, &flags_clear);
+    ok_base = ctx.block().and(I1, &ok_base, &receiver_kind_ok);
+    ok_base = ctx.block().and(I1, &ok_base, &not_native_module);
+    let tok_ok = ctx.block().and(I1, &token_match, &token_nonzero);
+    let ways_ok = ctx.block().and(I1, &ok_base, &tok_ok);
+    // #9287: a valid shaped receiver whose SITE token does not match is the
+    // transition signature — on a transition sequence the receiver's shape
+    // changes every write, so the single site token cannot match, and the
+    // old routing sent every such write to the outlined miss. Route it to
+    // the transition probe instead; genuinely invalid receivers still go
+    // straight to slow.
+    ctx.block()
+        .cond_br(&ways_ok, &ways_label, &trans_gate_label);
+
+    ctx.current_block = trans_gate_idx;
+    let trans_candidate = ctx.block().and(I1, &ok_base, &token_nonzero);
+    ctx.block()
+        .cond_br(&trans_candidate, &trans_probe_label, &slow_label);
 
     ctx.current_block = ways_idx;
     let k0_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "1")]);
@@ -1096,7 +1138,9 @@ fn lower_put_value_dyn_ic_inline(
     let s2_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "6")]);
     let s2 = ctx.block().load(I64, &s2_ptr);
     let hit2 = ctx.block().icmp_eq(I64, &k_bits, &k2);
-    ctx.block().cond_br(&hit2, &store_label, &slow_label);
+    // A ways miss with a MATCHING site token is the same-shape transition
+    // case (the site's first write of a new key on its primed shape).
+    ctx.block().cond_br(&hit2, &store_label, &trans_probe_label);
 
     ctx.current_block = store_idx;
     let slot = ctx.block().phi(
@@ -1147,6 +1191,243 @@ fn lower_put_value_dyn_ic_inline(
         blk.br(&merge_label);
     }
 
+    // ───────────────────────── #9287 transition hit ─────────────────────────
+    // Inline probe of the GLOBAL transition cache: hash (prev ShapeId,
+    // interned key ptr) exactly as `transition_cache_slot` does, compare the
+    // entry, validate the target edge, then store + stamp with at most one
+    // gc-leaf call (the spill-append arm). The probe-and-hash contract with
+    // the runtime is pinned by the PERRY_TRANSITION_IC_PROBE hit-count test —
+    // a drifted hash produces zero hits, never a wrong store, because every
+    // compare is against runtime-owned entry fields.
+    ctx.current_block = trans_probe_idx;
+    {
+        let blk = ctx.block();
+        // Key must be a heap string whose payload is the interned pointer.
+        // Computed keys are canonical from their second evaluation on
+        // (`js_string_concat_value`'s intern hit); SSO immediates simply
+        // miss the pointer compare and take the ordinary path.
+        let k_tag = blk.lshr(I64, &k_bits, "48");
+        let k_is_str = blk.icmp_eq(I64, &k_tag, "32767");
+        let k_handle = blk.and(I64, &k_bits, POINTER_MASK_I64);
+        let k_above = blk.icmp_ugt(I64, &k_handle, "1048575");
+        // `mark_object_dynamic_shape_unknown` must be a no-op for the hit to
+        // skip it: layout state 0 means no side-table entry and no typed
+        // descriptor. Anything else takes the ordinary path, which calls it.
+        let layout_bits = blk.and(I16, &reserved, "49152"); // GC_LAYOUT_STATE_MASK
+        let layout_clean = blk.icmp_eq(I16, &layout_bits, "0");
+        // A non-nursery receiver needs the old-generation carrier note the
+        // runtime stamp performs; bail rather than replicate it.
+        let tenured_bits = blk.and(I8, &gc_flags, "32"); // GC_FLAG_TENURED
+        let in_nursery = blk.icmp_eq(I8, &tenured_bits, "0");
+        let mut probe_ok = blk.and(I1, &k_is_str, &k_above);
+        probe_ok = blk.and(I1, &probe_ok, &layout_clean);
+        probe_ok = blk.and(I1, &probe_ok, &in_nursery);
+        blk.cond_br(&probe_ok, &trans_key_label, &slow_label);
+    }
+
+    ctx.current_block = trans_key_idx;
+    let k_handle;
+    let byte_len;
+    {
+        let blk = ctx.block();
+        k_handle = blk.and(I64, &k_bits, POINTER_MASK_I64);
+        // `Object.prototype[<index>]` writes must reach the ordinary setter
+        // (array hole/OOB guard invalidation). A canonical index starts with
+        // an ASCII digit, so digit-leading keys — and empty keys — take the
+        // ordinary path outright, which also keeps the first-byte load off
+        // the empty-string edge.
+        let len_addr = blk.add(I64, &k_handle, "4"); // StringHeader.byte_len
+        let len_ptr = blk.inttoptr(I64, &len_addr);
+        byte_len = blk.load(I32, &len_ptr);
+        // Content namespace only: 6..=8 bytes (see `transition_key_id`).
+        // Shorter keys reach sites as SSO immediates (caught by the tag
+        // check); anything else has no call-free canonical id.
+        let len_ge = blk.icmp_uge(I32, &byte_len, "6");
+        let len_le = blk.icmp_ule(I32, &byte_len, "8");
+        let data_addr = blk.add(I64, &k_handle, "20"); // STRING_HEADER_SIZE
+        let data_ptr = blk.inttoptr(I64, &data_addr);
+        let first = blk.load(I8, &data_ptr);
+        let digit_rel = blk.sub(I8, &first, "48");
+        let is_digit = blk.icmp_ult(I8, &digit_rel, "10");
+        let not_digit = blk.icmp_eq(I1, &is_digit, "false");
+        let mut key_ok = blk.and(I1, &len_ge, &len_le);
+        key_ok = blk.and(I1, &key_ok, &not_digit);
+        blk.cond_br(&key_ok, &trans_entry_label, &slow_label);
+    }
+
+    ctx.current_block = trans_entry_idx;
+    let (e_next_keys, e_target, e_slot64, slot_plus_1, fixed_v);
+    {
+        let blk = ctx.block();
+        // Canonical content id, bit-identical to `transition_key_id`: the
+        // first byte_len payload bytes as a little-endian u64. The 8-byte
+        // load is in-bounds for byte_len >= 6 (header 20 + 6 rounds to a
+        // >= 28-byte cell); the mask zero-extends exactly like the runtime's
+        // `from_le_bytes` of a zero-padded buffer.
+        let waddr = blk.add(I64, &k_handle, "20");
+        let word_ptr = blk.inttoptr(I64, &waddr);
+        let kword = blk.load(I64, &word_ptr);
+        let len64 = blk.zext(I32, &byte_len, I64);
+        let pad = blk.sub(I64, "8", &len64);
+        let shbits = blk.shl(I64, &pad, "3");
+        let kmask = blk.lshr(I64, "-1", &shbits);
+        let kid = blk.and(I64, &kword, &kmask);
+        let base_ptr = blk.load(crate::types::PTR, &trans_base_slot);
+        let base_i64 = blk.ptrtoint(&base_ptr, I64);
+        // transition_cache_slot, bit for bit (contract pinned by the probe
+        // test): (sid * 0x9E3779B97F4A7C15) ^ ((key >> 3) * 0xC6BC279692B5C323)
+        // & 16383, entries 32 bytes.
+        let sid64 = blk.zext(I32, &raw_shape_id, I64);
+        // ABI-pinned in `perry_runtime::object` (TRANSITION_HASH_MUL_*). The
+        // literals are COMPUTED from the hex, never transcribed: a hand-typed
+        // 19-digit decimal is exactly how this probe first shipped hashing to
+        // the wrong slot on every write (correct output, zero hits).
+        let mul_shape = (0x9E37_79B9_7F4A_7C15u64 as i64).to_string();
+        let mul_key = (0xC6BC_2796_92B5_C323u64 as i64).to_string();
+        let h1 = blk.mul(I64, &sid64, &mul_shape);
+        let kshift = blk.lshr(I64, &kid, "3");
+        let h2 = blk.mul(I64, &kshift, &mul_key);
+        let mixed = blk.xor(I64, &h1, &h2);
+        let eslot = blk.and(I64, &mixed, "16383");
+        let eoff = blk.shl(I64, &eslot, "5");
+        let eaddr = blk.add(I64, &base_i64, &eoff);
+        let ekey_ptr = blk.inttoptr(I64, &eaddr);
+        let e_key = blk.load(I64, &ekey_ptr);
+        let enk_addr = blk.add(I64, &eaddr, "8");
+        let enk_ptr = blk.inttoptr(I64, &enk_addr);
+        e_next_keys = blk.load(I64, &enk_ptr);
+        let eprev_addr = blk.add(I64, &eaddr, "16");
+        let eprev_ptr = blk.inttoptr(I64, &eprev_addr);
+        let e_prev = blk.load(I32, &eprev_ptr);
+        let etgt_addr = blk.add(I64, &eaddr, "20");
+        let etgt_ptr = blk.inttoptr(I64, &etgt_addr);
+        e_target = blk.load(I32, &etgt_ptr);
+        let eslot_addr = blk.add(I64, &eaddr, "24");
+        let eslot_ptr = blk.inttoptr(I64, &eslot_addr);
+        // slot_idx packs `slot | byte_len << 24` — the namespace marker.
+        let e_slot_raw = blk.load(I32, &eslot_ptr);
+        let e_len = blk.lshr(I32, &e_slot_raw, "24");
+        let e_slot = blk.and(I32, &e_slot_raw, "16777215");
+        let etlen_addr = blk.add(I64, &eaddr, "28");
+        let etlen_ptr = blk.inttoptr(I64, &etlen_addr);
+        let e_tlen = blk.load(I32, &etlen_ptr);
+
+        let key_match = blk.icmp_eq(I64, &e_key, &kid);
+        let len_match = blk.icmp_eq(I32, &e_len, &byte_len);
+        let prev_match = blk.icmp_eq(I32, &e_prev, &raw_shape_id);
+        let nk_nonzero = blk.icmp_ne(I64, &e_next_keys, "0");
+        slot_plus_1 = blk.add(I32, &e_slot, "1");
+        let tlen_ok = blk.icmp_eq(I32, &e_tlen, &slot_plus_1);
+        e_slot64 = blk.zext(I32, &e_slot, I64);
+        // The runtime store tail's value fixup, per-value: a pointer-tagged
+        // box with a null payload canonicalizes to undefined.
+        let v_payload = blk.and(I64, &v_bits, POINTER_MASK_I64);
+        let v_is_ptr_tag = blk.icmp_eq(I64, &v_tag, "32765");
+        let v_null_payload = blk.icmp_eq(I64, &v_payload, "0");
+        let v_to_undef = blk.and(I1, &v_is_ptr_tag, &v_null_payload);
+        let fixed_bits = blk.select(
+            I1,
+            &v_to_undef,
+            I64,
+            crate::nanbox::TAG_UNDEFINED_I64,
+            &v_bits,
+        );
+        fixed_v = blk.bitcast_i64_to_double(&fixed_bits);
+
+        let mut entry_ok2 = blk.and(I1, &key_match, &len_match);
+        entry_ok2 = blk.and(I1, &entry_ok2, &prev_match);
+        entry_ok2 = blk.and(I1, &entry_ok2, &nk_nonzero);
+        entry_ok2 = blk.and(I1, &entry_ok2, &tlen_ok);
+        blk.cond_br(&entry_ok2, &trans_nk_label, &slow_label);
+    }
+
+    // Dereference next_keys only behind the match branch: an empty or
+    // mismatched cache entry has next_keys == 0 and the load would fault.
+    ctx.current_block = trans_nk_idx;
+    {
+        let blk = ctx.block();
+        // `next_keys` is WEAK (#6759 phase 3), but the scanner rewrites a
+        // surviving target's address on move and `prune_dead_transition_
+        // cache_entries` clears entries whose target died — so at mutator
+        // time a nonzero next_keys always points at the SAME live array it
+        // named at insert. The one live hazard is that shared array growing
+        // in place after insert, which this exact-length check rejects (the
+        // runtime lookup's own rule; content-id equality replaces its byte
+        // compare exactly for the 6..=8-byte namespace).
+        let nk_ptr = blk.inttoptr(I64, &e_next_keys);
+        let nk_len = blk.load(I32, &nk_ptr);
+        let nk_len_ok = blk.icmp_eq(I32, &nk_len, &slot_plus_1);
+        blk.cond_br(&nk_len_ok, &trans_dispatch_label, &slow_label);
+    }
+
+    ctx.current_block = trans_dispatch_idx;
+    {
+        let blk = ctx.block();
+        if std::env::var_os("PERRY_TRANSITION_IC_PROBE").is_some() {
+            blk.call_void("js_transition_ic_note_hit", &[]);
+        }
+        // Straight-line between store and stamp: no safepoint can interleave,
+        // so store-then-stamp is GC-atomic here (the runtime's mint→stamp→
+        // store doctrine exists for allocating paths). One inline arm serves
+        // scalar and reference values alike — the scalar-aware store helper
+        // gates the addref/note/barrier bookkeeping on the bits at run time.
+        let slot_lt_floor = blk.icmp_ult(I64, &e_slot64, "2"); // INLINE_SLOT_FLOOR
+        blk.cond_br(&slot_lt_floor, &trans_inline_ref_label, &trans_ovf_label);
+    }
+
+    ctx.current_block = trans_inline_ref_idx;
+    {
+        let header_bytes =
+            crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();
+        let slot_bytes = ctx.block().shl(I64, &e_slot64, "3");
+        let slot_off = ctx.block().add(I64, &slot_bytes, &header_bytes);
+        let slot_addr = ctx.block().add(I64, &t_handle, &slot_off);
+        let slot_ptr = ctx.block().inttoptr(I64, &slot_addr);
+        let slot_i32 = ctx.block().trunc(I64, &e_slot64, I32);
+        let blk = ctx.block();
+        emit_jsvalue_slot_store_scalar_aware_on_block(
+            blk, &slot_ptr, &fixed_v, &t_handle, &slot_i32, true, &t_bits, &slot_addr, true,
+        );
+        blk.br(&trans_stamp_label);
+    }
+
+    ctx.current_block = trans_ovf_idx;
+    {
+        let blk = ctx.block();
+        let slot_i32 = blk.trunc(I64, &e_slot64, I32);
+        // Spill-append: validate-and-store under the PREV token (the store is
+        // unreachable until the stamp below publishes the target shape), only
+        // within existing capacity — growth returns 0 and the ordinary miss
+        // path handles it. The helper is an audited gc-leaf, so `t_handle`
+        // stays valid across it for the stamp.
+        let ok = blk.call(
+            I32,
+            "js_transition_ic_spill_append",
+            &[
+                (DOUBLE, t),
+                (I64, &shape_token),
+                (I32, &slot_i32),
+                (DOUBLE, &fixed_v),
+            ],
+        );
+        let stored = blk.icmp_ne(I32, &ok, "0");
+        blk.cond_br(&stored, &trans_stamp_label, &slow_label);
+    }
+
+    ctx.current_block = trans_stamp_idx;
+    let trans_stamp_end;
+    {
+        let blk = ctx.block();
+        // Publication is this single store: the target descriptor (minted by
+        // the slow path that installed the cache entry) carries the keys edge
+        // and the live-slot bound, so nothing else needs writing.
+        let shape_addr = blk.add(I64, &t_handle, "4");
+        let shape_ptr = blk.inttoptr(I64, &shape_addr);
+        blk.store(I32, &e_target, &shape_ptr);
+        trans_stamp_end = blk.label.clone();
+        blk.br(&merge_label);
+    }
+
     ctx.current_block = slow_idx;
     let slow_result = ctx.block().call(
         DOUBLE,
@@ -1167,6 +1448,7 @@ fn lower_put_value_dyn_ic_inline(
         &[
             (v, &store_scalar_label),
             (v, &store_ref_label),
+            (&fixed_v, &trans_stamp_end),
             (&slow_result, &slow_label),
         ],
     );

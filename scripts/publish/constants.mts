@@ -24,8 +24,6 @@ export const PLATFORM_PACKAGES = [
   '@perryts/perry-darwin-x64',
   '@perryts/perry-linux-x64',
   '@perryts/perry-linux-arm64',
-  '@perryts/perry-linux-x64-musl',
-  '@perryts/perry-linux-arm64-musl',
   '@perryts/perry-win32-x64',
   '@perryts/perry-win32-arm64',
 ] as const

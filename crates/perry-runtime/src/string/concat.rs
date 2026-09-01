@@ -235,6 +235,251 @@ pub extern "C" fn js_string_concat_box(l_value: f64, r_value: f64) -> f64 {
     unsafe { crate::value::js_dynamic_string_or_number_add(l_value, r_value) }
 }
 
+/// Memo for short ASCII concat results (`"field_" + j`, `"row" + i`, slug and
+/// id building — the shape that dominates computed property keys).
+///
+/// A result of 6..=`CONCAT_MEMO_MAX_BYTES` bytes is past SSO's 5-byte ceiling,
+/// so today every one of them heap-allocates. In a build-then-key loop that is
+/// pure garbage: measured on `bench_object_property`, 200k such allocations per
+/// run, whose only consumer is the property-key lookup that reads their bytes
+/// and drops them. They cost a young collection, and that collection costs far
+/// more than the allocations themselves (a scavenge copying 248 KB takes ~7 ms,
+/// most of it fixed per-collection work).
+///
+/// Returning the SAME string object for equal bytes is unobservable: JS strings
+/// are primitives, `===` compares by value, and a concat result is born
+/// `refcount = 0` (shared), which is exactly the marker that forbids the
+/// in-place `+=` append — so a memo hit can never be mutated under its other
+/// holders. That the results are already shared is what makes this sound
+/// without any new discipline at the call sites.
+///
+/// Bounded and evicting on collision, so it can never grow: entries are strong
+/// GC roots (`scan_concat_memo_roots_mut`) rather than pinned, so an evicted
+/// string becomes collectable immediately. Pinning would have made a long
+/// program's distinct short concats accumulate forever — a memory-parity
+/// regression traded for wall time, which is the wrong trade
+/// (`memory-parity-directive`).
+const CONCAT_MEMO_SIZE: usize = 512;
+const CONCAT_MEMO_MAX_BYTES: u32 = 12;
+
+// Candidates per governor window.
+const MEMO_WINDOW: u32 = 4096;
+// Earn the probe: at least a quarter of a window's candidates must hit.
+const MEMO_MIN_HIT_SHIFT: u32 = 2;
+// A hostile workload ends up probing one window in 2^8 rather than one in two.
+const MEMO_MAX_BACKOFF: u32 = 8;
+
+const GOV_ENABLED: u64 = 1 << 63;
+const GOV_HIT_SHIFT: u32 = 32;
+const GOV_COUNT_MASK: u64 = 0xFFFF_FFFF;
+
+static MEMO_GOV: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1 << 63);
+static MEMO_SKIP_WINDOWS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+static MEMO_BACKOFF: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// Count this candidate and report whether the memo path is worth walking.
+/// Closes a window every `MEMO_WINDOW` candidates.
+#[inline]
+fn concat_memo_should_probe() -> bool {
+    use std::sync::atomic::Ordering::Relaxed;
+    let v = MEMO_GOV.load(Relaxed);
+    let count = (v & GOV_COUNT_MASK) + 1;
+    if count < MEMO_WINDOW as u64 {
+        MEMO_GOV.store((v & !GOV_COUNT_MASK) | count, Relaxed);
+        return v & GOV_ENABLED != 0;
+    }
+    let hits = (v >> GOV_HIT_SHIFT) & 0x7FFF_FFFF;
+    let now_enabled = if v & GOV_ENABLED != 0 {
+        if (hits << MEMO_MIN_HIT_SHIFT) >= count {
+            MEMO_BACKOFF.store(0, Relaxed);
+            true
+        } else {
+            let b = (MEMO_BACKOFF.load(Relaxed) + 1).min(MEMO_MAX_BACKOFF);
+            MEMO_BACKOFF.store(b, Relaxed);
+            MEMO_SKIP_WINDOWS.store(1u32 << b, Relaxed);
+            false
+        }
+    } else {
+        // Serving out a backoff; expire it into a probation window so a
+        // workload that turns hot later is still picked up.
+        let left = MEMO_SKIP_WINDOWS.load(Relaxed).saturating_sub(1);
+        MEMO_SKIP_WINDOWS.store(left, Relaxed);
+        left == 0
+    };
+    MEMO_GOV.store(if now_enabled { GOV_ENABLED } else { 0 }, Relaxed);
+    now_enabled
+}
+
+#[inline]
+fn concat_memo_note_hit() {
+    MEMO_GOV.fetch_add(1u64 << GOV_HIT_SHIFT, std::sync::atomic::Ordering::Relaxed);
+}
+
+#[cfg(test)]
+pub(crate) fn test_reset_memo_governor() {
+    use std::sync::atomic::Ordering::Relaxed;
+    MEMO_GOV.store(GOV_ENABLED, Relaxed);
+    MEMO_SKIP_WINDOWS.store(0, Relaxed);
+    MEMO_BACKOFF.store(0, Relaxed);
+    CONCAT_MEMO_TAGS.with(|t| unsafe { (*t.get()).fill(0) });
+}
+
+#[cfg(test)]
+pub(crate) fn test_memo_enabled() -> bool {
+    MEMO_GOV.load(std::sync::atomic::Ordering::Relaxed) & GOV_ENABLED != 0
+}
+
+#[cfg(test)]
+pub(crate) fn test_memo_window() -> u32 {
+    MEMO_WINDOW
+}
+
+#[cfg(test)]
+pub(crate) fn test_memo_should_probe() -> bool {
+    concat_memo_should_probe()
+}
+
+#[cfg(test)]
+pub(crate) fn test_memo_note_hit() {
+    concat_memo_note_hit();
+}
+
+// Admission doorkeeper (#9391). A result must be observed TWICE before it
+// earns a memo entry.
+//
+// Without this the memo is a net loss on exactly the workload it looks most
+// applicable to. `bench_gc_pressure` builds `"item_" + i` half a million
+// times with every result distinct: the memo missed 100% of the time, yet
+// inserted on every miss — keeping up to 512 strings alive as strong GC
+// roots, promoting garbage that should have died young, and adding a root
+// scan per collection, all for zero hits. Measured 18 ms with the memo
+// against 12 ms without.
+//
+// A one-byte hash tag per slot fixes it by construction rather than by
+// governor: a never-repeated key writes its tag and leaves, so it never costs
+// an allocation or a root, while a reused key matches its own tag on the
+// second occurrence and is admitted then. No windows, no hit-rate counters,
+// and no disabled state that can get stuck off. The tags are plain bytes —
+// never addresses — so they are invisible to the collector.
+//
+// A tag collision between two distinct keys only admits one of them a little
+// early; the entry itself is still content-compared on lookup, so admission
+// can never produce a wrong string.
+crate::perry_thread_local! {
+    static CONCAT_MEMO_TAGS: std::cell::UnsafeCell<[u8; CONCAT_MEMO_SIZE]> =
+        const { std::cell::UnsafeCell::new([0u8; CONCAT_MEMO_SIZE]) };
+}
+
+/// Returns true when this result has been seen before and may be admitted.
+/// Otherwise records it and declines, so the first sighting costs nothing but
+/// a byte.
+#[inline]
+fn concat_memo_admit(slot: usize, tag: u8) -> bool {
+    CONCAT_MEMO_TAGS.with(|t| unsafe {
+        let slot_tag = &mut (*t.get())[slot];
+        if *slot_tag == tag {
+            true
+        } else {
+            *slot_tag = tag;
+            false
+        }
+    })
+}
+
+crate::perry_thread_local! {
+    static CONCAT_MEMO: std::cell::UnsafeCell<[*mut StringHeader; CONCAT_MEMO_SIZE]> =
+        const { std::cell::UnsafeCell::new([std::ptr::null_mut(); CONCAT_MEMO_SIZE]) };
+}
+
+/// Slot and admission tag from one hash walk. The tag is a different slice of
+/// the same digest, so two keys sharing a slot rarely share a tag.
+#[inline]
+fn concat_memo_slot_and_tag(bytes: &[u8]) -> (usize, u8) {
+    let h = concat_memo_hash(bytes);
+    // FNV-1a avalanches poorly in its high bits, so slicing a tag straight out
+    // of `h >> 32` gave two distinct keys the same tag about half the time —
+    // measured 256,516 admissions in 501,000 probes where ~1/128 was intended,
+    // which defeats the doorkeeper entirely. A splitmix64 finalizer first.
+    let mut z = h;
+    z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    z ^= z >> 31;
+    (
+        (z as usize) & (CONCAT_MEMO_SIZE - 1),
+        // Never 0: that is the "no key seen here yet" sentinel.
+        (((z >> 40) as u8) | 1),
+    )
+}
+
+#[inline]
+fn concat_memo_hash(bytes: &[u8]) -> u64 {
+    // FNV-1a over the result bytes. Content-addressed, so two different
+    // operand splits that produce the same string share one entry.
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for &b in bytes {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x100_0000_01b3);
+    }
+    h
+}
+
+/// A cached string with exactly these bytes, or null. The byte compare makes
+/// a hash collision a miss, never a wrong answer.
+#[inline]
+fn concat_memo_lookup(slot: usize, bytes: &[u8]) -> *mut StringHeader {
+    let cached = CONCAT_MEMO.with(|c| unsafe { (*c.get())[slot] });
+    if cached.is_null() {
+        return std::ptr::null_mut();
+    }
+    unsafe {
+        if (*cached).byte_len as usize != bytes.len() {
+            return std::ptr::null_mut();
+        }
+        let data = crate::string::string_data(cached);
+        if std::slice::from_raw_parts(data, bytes.len()) != bytes {
+            return std::ptr::null_mut();
+        }
+    }
+    cached
+}
+
+#[inline]
+fn concat_memo_insert(slot: usize, ptr: *mut StringHeader) {
+    CONCAT_MEMO.with(|c| unsafe {
+        // GC_STORE_AUDIT(ROOT): CONCAT_MEMO is scanned by scan_concat_memo_roots_mut.
+        crate::gc::runtime_store_root_raw_mut_ptr_slot(&raw mut (*c.get())[slot], ptr);
+    });
+}
+
+/// GC root scanner for [`CONCAT_MEMO`]. Same contract as the small-int cache:
+/// the entries are strong roots, so evacuation rewrites them rather than
+/// leaving the memo holding freed strings.
+pub fn scan_concat_memo_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    CONCAT_MEMO.with(|c| unsafe {
+        for slot in (*c.get()).iter_mut() {
+            let mut addr = *slot as usize;
+            if visitor.visit_tagged_usize_slot(&mut addr, crate::value::STRING_TAG) {
+                *slot = addr as *mut StringHeader;
+            }
+        }
+    });
+}
+
+pub fn scan_concat_memo_roots(mark: &mut dyn FnMut(f64)) {
+    let mut visitor = crate::gc::RuntimeRootVisitor::for_copy(mark);
+    scan_concat_memo_roots_mut(&mut visitor);
+}
+
+#[cfg(test)]
+pub(crate) fn test_clear_concat_memo() {
+    CONCAT_MEMO.with(|c| unsafe {
+        for slot in (*c.get()).iter_mut() {
+            // GC_STORE_AUDIT(ROOT): test cleanup clears CONCAT_MEMO roots.
+            crate::gc::runtime_store_root_raw_mut_ptr_slot(&raw mut *slot, std::ptr::null_mut());
+        }
+    });
+}
+
 /// Shared tail of [`js_string_concat_box`]: assemble two raw byte slices
 /// (each a real string's payload or an itoa'd integer) into an SSO immediate
 /// when the total fits five ASCII bytes, a heap `StringHeader` otherwise.
@@ -263,6 +508,42 @@ fn concat_byte_parts(l: (*const u8, u32), r: (*const u8, u32)) -> f64 {
             let len_bits = (total_blen as u64) << crate::value::SHORT_STRING_LEN_SHIFT;
             return f64::from_bits(crate::value::SHORT_STRING_TAG | len_bits | payload);
         }
+    }
+
+    // Memo probe, ahead of the allocation: assemble the result into a stack
+    // buffer and look it up by content. Restricted to short ASCII results, so
+    // `flags`/`utf16_len` are trivially `0`/`total_blen` and the surrogate
+    // canonicalization below is a no-op — the cached string is bit-identical
+    // to what the heap path would have built.
+    let memoizable =
+        both_ascii && total_blen <= CONCAT_MEMO_MAX_BYTES && concat_memo_should_probe();
+    let mut memo_buf = [0u8; CONCAT_MEMO_MAX_BYTES as usize];
+    let mut memo_slot = 0usize;
+    let mut memo_admitted = false;
+    if memoizable {
+        unsafe {
+            if l.1 > 0 {
+                std::ptr::copy_nonoverlapping(l.0, memo_buf.as_mut_ptr(), l.1 as usize);
+            }
+            if r.1 > 0 {
+                std::ptr::copy_nonoverlapping(
+                    r.0,
+                    memo_buf.as_mut_ptr().add(l.1 as usize),
+                    r.1 as usize,
+                );
+            }
+        }
+        let bytes = &memo_buf[..total_blen as usize];
+        let (slot, tag) = concat_memo_slot_and_tag(bytes);
+        memo_slot = slot;
+        let hit = concat_memo_lookup(memo_slot, bytes);
+        if !hit.is_null() {
+            concat_memo_note_hit();
+            return f64::from_bits(crate::value::JSValue::string_ptr(hit).bits());
+        }
+        // Same admission rule as the `"prefix" + i` arm: a first sighting
+        // costs a tag byte, never a rooted string. See `concat_memo_admit`.
+        memo_admitted = concat_memo_admit(memo_slot, tag);
     }
 
     // Heap path — allocate a StringHeader and memcpy. Decode both
@@ -319,6 +600,11 @@ fn concat_byte_parts(l: (*const u8, u32), r: (*const u8, u32)) -> f64 {
         // Merge any surrogate pair newly formed across the join boundary
         // (no-op unless the result carries the lone-surrogate flag).
         let ptr = canonicalize_surrogate_pairs(ptr);
+        if memoizable && memo_admitted {
+            // Publish only after the header and payload are fully written:
+            // the memo is a GC root, so a half-built entry would be traced.
+            concat_memo_insert(memo_slot, ptr);
+        }
         // NaN-box as STRING_TAG.
         f64::from_bits(crate::value::JSValue::string_ptr(ptr).bits())
     }
@@ -504,6 +790,51 @@ pub extern "C" fn js_string_concat_value(
         // so the incoming `prefix` may have moved — re-read it from its
         // handle before touching the header or copying the payload (#6655).
         let total_blen = prefix_blen as usize + num_len;
+
+        // Memo probe, ahead of the allocation. This is the `"prefix" + i`
+        // shape (computed property keys, id building) and it is where the
+        // allocations actually come from: `js_string_concat_value_box`'s SSO
+        // arm handles results up to 5 bytes, so everything longer lands here
+        // and heap-allocates. Restricted to a plain ASCII prefix so the cached
+        // string is bit-identical to what the block below would build
+        // (flags == 0, utf16_len == byte_len).
+        let memoizable = total_blen <= CONCAT_MEMO_MAX_BYTES as usize
+            && is_valid_string_ptr(prefix)
+            && prefix_u16 == prefix_blen
+            && unsafe { (*prefix).flags == 0 }
+            && bytes_all_ascii(string_data(prefix), prefix_blen)
+            && concat_memo_should_probe();
+        let mut memo_buf = [0u8; CONCAT_MEMO_MAX_BYTES as usize];
+        let mut memo_slot = 0usize;
+        let mut memo_admitted = false;
+        if memoizable {
+            unsafe {
+                if prefix_blen > 0 {
+                    copy_bytes_small(
+                        string_data(prefix),
+                        memo_buf.as_mut_ptr(),
+                        prefix_blen as usize,
+                    );
+                }
+                copy_bytes_small(
+                    num_buf.as_ptr(),
+                    memo_buf.as_mut_ptr().add(prefix_blen as usize),
+                    num_len,
+                );
+            }
+            let bytes = &memo_buf[..total_blen];
+            let (slot, tag) = concat_memo_slot_and_tag(bytes);
+            memo_slot = slot;
+            let hit = concat_memo_lookup(memo_slot, bytes);
+            if !hit.is_null() {
+                concat_memo_note_hit();
+                return hit;
+            }
+            // Missed: admit only a result we have seen before, so a stream of
+            // never-repeated keys costs a tag byte instead of a rooted string.
+            memo_admitted = concat_memo_admit(memo_slot, tag);
+        }
+
         let (ptr, data_ptr, prefix) =
             match crate::string::string_storage_alloc_no_collect(total_blen as u32) {
                 Some((ptr, data_ptr)) => (ptr, data_ptr, prefix),
@@ -545,6 +876,11 @@ pub extern "C" fn js_string_concat_value(
             );
         }
 
+        if memoizable && memo_admitted {
+            // Publish only after header and payload are written: the memo is a
+            // GC root, so a half-built entry would be traced.
+            concat_memo_insert(memo_slot, ptr);
+        }
         return ptr;
     }
 

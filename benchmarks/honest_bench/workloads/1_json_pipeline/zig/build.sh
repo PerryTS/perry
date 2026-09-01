@@ -10,9 +10,14 @@ export ZIG_GLOBAL_CACHE_DIR="$zig_cache/global"
 export ZIG_LOCAL_CACHE_DIR="$zig_cache/json_pipeline"
 
 mkdir -p zig-out/bin
+target_args=()
+if [[ "$(uname)" == "Darwin" ]]; then
+  # Zig 0.15.2 does not recognize macOS 26 as a deployment target.
+  target_args=(-target aarch64-macos.14.0)
+fi
 zig build-exe src/main.zig \
   -O ReleaseFast \
-  -target aarch64-macos.14.0 \
+  "${target_args[@]}" \
   -lc \
   --name json_pipeline \
   -femit-bin=zig-out/bin/json_pipeline

@@ -59,7 +59,8 @@ pub extern "C" fn js_register_class_parent(class_id: u32, parent_class_id: u32) 
 /// Anything else (closures, primitives, null/undefined) is a no-op:
 /// the class stays parentless, identical to the pre-#711 behavior.
 /// Self-registration (`parent_cid == class_id`) is rejected so a
-/// recursive helper that returns its receiver can't create a cycle.
+/// recursive helper that returns its receiver can't create a cycle — and the
+/// VALUE stash below applies the same rejection (`is_self_heritage_value`).
 #[no_mangle]
 pub extern "C" fn js_register_class_parent_dynamic(class_id: u32, mut parent_value: f64) {
     // Stash the parent VALUE keyed by child class id so `super()` can read it
@@ -72,7 +73,8 @@ pub extern "C" fn js_register_class_parent_dynamic(class_id: u32, mut parent_val
     {
         const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
         let bits = parent_value.to_bits();
-        if bits != TAG_UNDEFINED && class_id != 0 {
+        if bits != TAG_UNDEFINED && class_id != 0 && !super::is_self_heritage_value(class_id, bits)
+        {
             CLASS_DYNAMIC_PARENT_VALUE.with(|table| {
                 let mut guard = table.write().unwrap();
                 if guard.is_none() {
@@ -316,7 +318,12 @@ pub extern "C" fn js_class_object_pin_parent(obj: i64, template_class_id: u32) {
     if obj == 0 || template_class_id == 0 {
         return;
     }
-    let parent = js_get_dynamic_parent_value(template_class_id);
+    // The template stash, deliberately: this records the heritage the
+    // `RegisterClassParentDynamic` call immediately preceding us evaluated for
+    // THIS evaluation. `js_get_dynamic_parent_value`'s active-replay override
+    // would answer with an enclosing constructor replay's parent when a factory
+    // is re-entered from inside a constructor body.
+    let parent = template_dynamic_parent_value(template_class_id);
     if parent.to_bits() == TAG_UNDEFINED {
         return;
     }
@@ -411,6 +418,25 @@ pub(crate) fn class_object_own_field_bytes(
 /// falls back to re-evaluating its extends expression.
 #[no_mangle]
 pub extern "C" fn js_get_dynamic_parent_value(class_id: u32) -> f64 {
+    // #9364: while a per-evaluation class OBJECT's constructor is being
+    // replayed, THAT evaluation's pinned heritage is the answer. The stash
+    // below is keyed by the shared TEMPLATE id and is last-wins, so for a
+    // factory whose class is evaluated more than once it names one evaluation's
+    // parent for all of them — and when that parent is an earlier evaluation of
+    // the same template, `super()` resolves to it at every level and re-enters
+    // the same constructor forever.
+    if let Some(parent) = super::active_class_evaluation_parent(class_id) {
+        return parent;
+    }
+    template_dynamic_parent_value(class_id)
+}
+
+/// The TEMPLATE-keyed heritage: the `js_register_class_parent_dynamic` stash,
+/// then the static parent-id edge as a ClassRef. This is
+/// [`js_get_dynamic_parent_value`] without its per-evaluation override, for the
+/// callers that must see what the class DEFINITION recorded rather than what
+/// the constructor currently running inherits.
+pub(crate) fn template_dynamic_parent_value(class_id: u32) -> f64 {
     const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
     const INT32_TAG: u64 = 0x7FFE_0000_0000_0000;
     if class_id == 0 {

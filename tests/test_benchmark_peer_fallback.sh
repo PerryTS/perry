@@ -41,8 +41,27 @@ while [[ $# -gt 0 ]]; do
 done
 source_file="$(cd "$(dirname "$source_file")" && pwd)/$(basename "$source_file")"
 source_name="$(basename "$source_file")"
-printf '#!/usr/bin/env bash\n%q %q\nstatus=$?\nif [[ "${PERRY_FAKE_FAIL_SOURCE:-}" == %q ]]; then exit 7; fi\nexit "$status"\n' \
-  "$PERRY_FAKE_NODE" "$source_file" "$source_name" >"$output_file"
+{
+  printf '#!/usr/bin/env bash\nset -euo pipefail\nsource_file=%q\nsource_name=%q\n' \
+    "$source_file" "$source_name"
+  cat <<'RUNNER'
+if [[ "${PERRY_FAKE_ZERO_SOURCE:-}" == "$source_name" ]]; then
+  "$PERRY_FAKE_NODE" "$source_file" | awk '
+    !replaced && /^[a-z_]+:[0-9]+/ {
+      sub(/:[0-9]+(\.[0-9]+)?$/, ":0")
+      replaced = 1
+    }
+    { print }
+  '
+  status=${PIPESTATUS[0]}
+else
+  "$PERRY_FAKE_NODE" "$source_file"
+  status=$?
+fi
+if [[ "${PERRY_FAKE_FAIL_SOURCE:-}" == "$source_name" ]]; then exit 7; fi
+exit "$status"
+RUNNER
+} >"$output_file"
 chmod +x "$output_file"
 SH
 chmod +x "$FAKE_PERRY"
@@ -103,6 +122,43 @@ if [[ -e "$TMP/failed.json" ]]; then
 fi
 if [[ -e "$ROOT/benchmarks/suite/02_loop_overhead" ]]; then
   echo "compare.sh did not clean compiled benchmark artifacts after failure" >&2
+  exit 1
+fi
+
+# A zero Perry median is not a speedup. It means the internal timer cannot
+# establish that the fixture executed useful timed work, so the table must name
+# it and artifact construction must fail even under --warn-only.
+echo 'stale artifact' >"$TMP/zero.json"
+set +e
+PATH="$TMP/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
+PERRY_BIN="$FAKE_PERRY" \
+PERRY_FAKE_NODE="$NODE_REAL" \
+PERRY_FAKE_ZERO_SOURCE="02_loop_overhead.ts" \
+  "$ROOT/benchmarks/compare.sh" \
+    --quick \
+    --runs 2 \
+    --warn-only \
+    --json-out "$TMP/zero.json" \
+    >"$TMP/zero-output.txt" 2>"$TMP/zero-error.txt"
+zero_status=$?
+set -e
+if [[ "$zero_status" -ne 2 ]]; then
+  cat "$TMP/zero-error.txt" >&2
+  echo "expected a zero Perry median to exit 2, got $zero_status" >&2
+  exit 1
+fi
+if ! grep -q "MEASURES-NOTHING" "$TMP/zero-output.txt"; then
+  cat "$TMP/zero-output.txt" >&2
+  echo "compare.sh did not label the zero Perry row as MEASURES-NOTHING" >&2
+  exit 1
+fi
+if ! grep -q "measures-nothing" "$TMP/zero-error.txt"; then
+  cat "$TMP/zero-error.txt" >&2
+  echo "artifact rejection did not explain the measures-nothing verdict" >&2
+  exit 1
+fi
+if [[ -e "$TMP/zero.json" ]]; then
+  echo "compare.sh left a stale JSON artifact after a measures-nothing row" >&2
   exit 1
 fi
 

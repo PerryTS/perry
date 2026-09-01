@@ -25,14 +25,14 @@ fn benchFibonacci() void {
 
 fn benchLoopOverhead() void {
     const start = std.time.milliTimestamp();
-    var sum: f64 = 0.0;
-    var i: i32 = 0;
-    while (i < 100_000_000) : (i += 1) {
-        sum += 1.0;
+    var checksum: u32 = 0x811c9dc5;
+    var i: u32 = 0;
+    while (i < 100_000_000) : (i +%= 1) {
+        checksum = (checksum ^ i) *% 0x01000193;
     }
     const elapsed = std.time.milliTimestamp() - start;
     print("loop_overhead:{d}\n", .{elapsed});
-    print("  checksum: {d:.0}\n", .{sum});
+    print("  checksum: {d}\n", .{checksum});
 }
 
 fn benchArrayWrite() void {

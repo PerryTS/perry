@@ -1,4 +1,5 @@
 #include <chrono>
+#include <cstdint>
 #include <cstdio>
 #include <vector>
 
@@ -23,12 +24,12 @@ void bench_fibonacci() {
 
 void bench_loop_overhead() {
     auto start = Clock::now();
-    double sum = 0.0;
-    for (int i = 0; i < 100000000; i++) {
-        sum += 1.0;
+    std::uint32_t checksum = 0x811c9dc5U;
+    for (std::uint32_t i = 0; i < 100000000U; i++) {
+        checksum = (checksum ^ i) * 0x01000193U;
     }
     printf("loop_overhead:%lld\n", elapsed_ms(start));
-    printf("  checksum: %.0f\n", sum);
+    printf("  checksum: %u\n", checksum);
 }
 
 void bench_array_write() {
@@ -108,12 +109,9 @@ void bench_accumulate() {
     printf("  checksum: %.0f\n", sum);
 }
 
-// Data-dependent loop with sequential multiply-carry. Sibling to
-// bench_loop_overhead but genuinely non-foldable: array reads + a
-// multiplicative carry through `sum` defeat reassoc, IV-simplify, and
-// the vectorizer. See bench.rs for the asm-verification dump (the
-// generated loop body is a 4-instruction scalar fmul/fadd chain with
-// two array loads).
+// Floating-point loop with a sequential multiply-carry. Unlike
+// bench_loop_overhead's integer carry, this adds two runtime array reads and
+// exposes FP-contraction behavior. See bench.rs for the asm-verification dump.
 void bench_loop_data_dependent() {
     constexpr int N = 64;
     constexpr long long ITERATIONS = 100000000LL;

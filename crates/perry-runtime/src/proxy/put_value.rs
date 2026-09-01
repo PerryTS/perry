@@ -835,6 +835,88 @@ unsafe fn dyn_ic_try_store(target: f64, token: u64, slot: u32, value: f64) -> Op
 static KEEP_JS_PUT_VALUE_SET_DYN_IC: extern "C" fn(*mut [i64; 8], f64, f64, f64, i32) -> f64 =
     js_put_value_set_dyn_ic;
 
+/// #9287 transition-IC: the emitted hit's SPILL-APPEND arm.
+///
+/// The inline hit has already matched the global transition cache entry
+/// (prev shape, interned key) and validated the target edge; this helper is
+/// its one call, for the slot that lives past the inline region. It
+/// re-validates the receiver against `prev_token` exactly as
+/// `dyn_ic_try_store` does — kind, forwarding, blocking flags, current stamp
+/// — and then performs the spill store ONLY when it cannot grow
+/// (`spill_store_would_be_in_capacity`): a growing spill store allocates,
+/// and the emitted code stamps the target shape with registers it loaded
+/// BEFORE this call, so this function must never be a collection point.
+/// Growth returns 0 and the emitted code falls to the ordinary miss path,
+/// which is built for it.
+///
+/// Stable-tombstone receivers decline outright: an append on one interacts
+/// with hole semantics the ordinary path owns.
+#[no_mangle]
+pub extern "C" fn js_transition_ic_spill_append(
+    target: f64,
+    prev_token: i64,
+    slot_idx: u32,
+    value: f64,
+) -> i32 {
+    unsafe {
+        let target_bits = target.to_bits();
+        if (target_bits & !POINTER_MASK) != POINTER_TAG {
+            return 0;
+        }
+        let obj_addr = (target_bits & POINTER_MASK) as usize;
+        let Some(gc_header) = crate::value::addr_class::try_read_gc_header(obj_addr) else {
+            return 0;
+        };
+        const BLOCKING_FLAGS: u16 = crate::gc::OBJ_FLAG_FROZEN
+            | crate::gc::OBJ_FLAG_SEALED
+            | crate::gc::OBJ_FLAG_NO_EXTEND
+            | crate::gc::OBJ_FLAG_HAS_DESCRIPTORS
+            | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO
+            | crate::gc::GC_OBJ_TYPED_LAYOUT_INTACT
+            | crate::gc::OBJ_FLAG_STABLE_TOMBSTONES;
+        if gc_header.obj_type != crate::gc::GC_TYPE_OBJECT
+            || gc_header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+            || gc_header._reserved & BLOCKING_FLAGS != 0
+        {
+            return 0;
+        }
+        let obj = obj_addr as *mut crate::ObjectHeader;
+        let stamp = crate::object::shapes::object_shape_stamp(obj);
+        if (crate::object::shapes::PIC_ID_TOKEN_BIT | stamp as u64) != prev_token as u64 {
+            return 0;
+        }
+        if !crate::object::spill_store_would_be_in_capacity(obj_addr, slot_idx as usize) {
+            return 0;
+        }
+        crate::object::overflow_set(obj_addr, slot_idx as usize, value.to_bits());
+        1
+    }
+}
+
+#[cfg(feature = "keepalive-anchors")]
+#[used]
+static KEEP_JS_TRANSITION_IC_SPILL_APPEND: extern "C" fn(f64, i64, u32, f64) -> i32 =
+    js_transition_ic_spill_append;
+
+/// #9287 probe: bumped by the emitted transition hit when the program was
+/// compiled with `PERRY_TRANSITION_IC_PROBE=1`. See
+/// `PERRY_TRANSITION_IC_HITS` for why the proof is a count, not output.
+#[no_mangle]
+pub extern "C" fn js_transition_ic_note_hit() {
+    static REPORT_AT_EXIT: std::sync::Once = std::sync::Once::new();
+    REPORT_AT_EXIT.call_once(|| unsafe {
+        // Probe builds only reach here, so the atexit hook costs nothing in
+        // ordinary programs. The count goes to stderr where the hit-count
+        // test reads it.
+        libc::atexit(transition_ic_report_shim);
+    });
+    crate::object::PERRY_TRANSITION_IC_HITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+extern "C" fn transition_ic_report_shim() {
+    crate::object::js_transition_ic_probe_report();
+}
+
 /// Full `[[Set]]` semantics + prime. Mirrors the static PIC's prime policy
 /// (only a successful ordinary own-data overwrite on a class-tagged,
 /// unblocked, shape-shared receiver may prime), with the key resolved from

@@ -7,7 +7,7 @@ use crate::value::JSValue;
 
 pub(crate) fn process_permission_enabled() -> bool {
     let mut enabled = false;
-    for arg in std::env::args().skip(1) {
+    for arg in super::process_args_lossy().skip(1) {
         match arg.as_str() {
             "--permission" => enabled = true,
             "--no-permission" => enabled = false,
@@ -20,7 +20,7 @@ pub(crate) fn process_permission_enabled() -> bool {
 fn process_permission_flag_values(flag: &str) -> Vec<String> {
     let mut values = Vec::new();
     let prefix = format!("{flag}=");
-    let mut args = std::env::args().skip(1).peekable();
+    let mut args = super::process_args_lossy().skip(1).peekable();
     while let Some(arg) = args.next() {
         if let Some(value) = arg.strip_prefix(&prefix) {
             values.extend(
@@ -52,7 +52,7 @@ fn process_permission_flag_values(flag: &str) -> Vec<String> {
 }
 
 fn process_permission_has_flag(flag: &str) -> bool {
-    std::env::args().skip(1).any(|arg| arg == flag)
+    super::process_args_lossy().skip(1).any(|arg| arg == flag)
 }
 
 fn permission_canonical_path(path: &str) -> Option<std::path::PathBuf> {

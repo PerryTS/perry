@@ -15,13 +15,13 @@ public class bench {
 
     static void benchLoopOverhead() {
         long start = System.currentTimeMillis();
-        double sum = 0.0;
+        int checksum = 0x811c9dc5;
         for (int i = 0; i < 100_000_000; i++) {
-            sum += 1.0;
+            checksum = (checksum ^ i) * 0x01000193;
         }
         long elapsed = System.currentTimeMillis() - start;
         System.out.println("loop_overhead:" + elapsed);
-        System.out.printf("  checksum: %.0f%n", sum);
+        System.out.println("  checksum: " + Integer.toUnsignedLong(checksum));
     }
 
     static void benchArrayWrite() {
@@ -112,10 +112,9 @@ public class bench {
         System.out.printf("  checksum: %.0f%n", sum);
     }
 
-    // Data-dependent loop with sequential multiply-carry. Sibling to
-    // benchLoopOverhead but genuinely non-foldable: array reads + a
-    // multiplicative carry through `sum` defeat HotSpot's loop
-    // unrolling and reassoc.
+    // Floating-point loop with a sequential multiply-carry. Unlike
+    // benchLoopOverhead's integer carry, this adds two runtime array reads and
+    // exposes FP-contraction behavior.
     static void benchLoopDataDependent() {
         final int N = 64;
         final long ITERATIONS = 100_000_000L;

@@ -54,16 +54,9 @@ fn generic_computed_member_key<'a>(
     let ast::PropName::Computed(computed) = &method.key else {
         return None;
     };
-    let well_known = symbol_well_known_key(&computed.expr);
-    let needs_special_lowering =
-        (well_known == Some("iterator") && method.function.is_generator && !method.is_static)
-            || (well_known == Some("hasInstance")
-                && method.is_static
-                && matches!(method.kind, ast::MethodKind::Method))
-            || (well_known == Some("toStringTag")
-                && !method.is_static
-                && matches!(method.kind, ast::MethodKind::Getter));
-    if needs_special_lowering {
+    // Single source of truth — see `is_special_lowered_well_known`. #9226
+    // hand-copied a subset here and silently dropped four symbols.
+    if crate::lower_decl::helpers::is_special_lowered_well_known(method) {
         return None;
     }
     Some(computed)
@@ -776,6 +769,17 @@ pub fn lower_class_decl(
                             let ast::PropName::Computed(computed) = &method.key else {
                                 unreachable!("@@iterator generator key must be computed");
                             };
+                            // #9226 registers the wrapper as a prototype own
+                            // key so `Object.getOwnPropertyNames` /
+                            // `getOwnPropertySymbols` list it. That registration
+                            // does NOT install an instance vtable entry, and the
+                            // wrapper exists precisely to provide one (#5128) —
+                            // dropping it left `const C = class { *[Symbol.iterator]
+                            // () {…} }` throwing `TypeError: value is not
+                            // iterable`. Both registrations are required: the
+                            // vtable entry makes the instance iterable, the
+                            // computed member makes the key enumerable.
+                            methods.push(wrapper.clone());
                             computed_members.push(ClassComputedMember {
                                 key_expr: lower_expr(ctx, &computed.expr)?,
                                 function: wrapper,
@@ -1641,6 +1645,17 @@ pub fn lower_class_from_ast(
                             let ast::PropName::Computed(computed) = &method.key else {
                                 unreachable!("@@iterator generator key must be computed");
                             };
+                            // #9226 registers the wrapper as a prototype own
+                            // key so `Object.getOwnPropertyNames` /
+                            // `getOwnPropertySymbols` list it. That registration
+                            // does NOT install an instance vtable entry, and the
+                            // wrapper exists precisely to provide one (#5128) —
+                            // dropping it left `const C = class { *[Symbol.iterator]
+                            // () {…} }` throwing `TypeError: value is not
+                            // iterable`. Both registrations are required: the
+                            // vtable entry makes the instance iterable, the
+                            // computed member makes the key enumerable.
+                            methods.push(wrapper.clone());
                             computed_members.push(ClassComputedMember {
                                 key_expr: lower_expr(ctx, &computed.expr)?,
                                 function: wrapper,

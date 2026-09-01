@@ -15,13 +15,15 @@ func benchFibonacci() {
 
 func benchLoopOverhead() {
     let start = CFAbsoluteTimeGetCurrent()
-    var sum: Double = 0.0
-    for _ in 0..<100_000_000 {
-        sum += 1.0
+    var checksum: UInt32 = 0x811c9dc5
+    var i: UInt32 = 0
+    while i < 100_000_000 {
+        checksum = (checksum ^ i) &* 0x01000193
+        i &+= 1
     }
     let elapsed = Int((CFAbsoluteTimeGetCurrent() - start) * 1000)
     print("loop_overhead:\(elapsed)")
-    print("  checksum: \(Int(sum))")
+    print("  checksum: \(checksum)")
 }
 
 func benchArrayWrite() {
@@ -107,10 +109,9 @@ func benchAccumulate() {
     print("  checksum: \(Int(sum))")
 }
 
-// Data-dependent loop with sequential multiply-carry. Sibling to
-// benchLoopOverhead but genuinely non-foldable: array reads + a
-// multiplicative carry through `sum` defeat reassoc, IV-simplify,
-// and the vectorizer.
+// Floating-point loop with a sequential multiply-carry. Unlike
+// benchLoopOverhead's integer carry, this adds two runtime array reads and
+// exposes FP-contraction behavior.
 func benchLoopDataDependent() {
     let N = 64
     let ITERATIONS = 100_000_000

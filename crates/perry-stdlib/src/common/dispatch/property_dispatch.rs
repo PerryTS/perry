@@ -67,6 +67,26 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
         return crate::streams::dispatch_stream_property(handle as f64, property_name);
     }
 
+    // #9324: `WebSocketServer.clients` must resolve on the DYNAMIC path too.
+    // The statically-typed read lowers to a NativeMethodCall (#9325/#9335), but
+    // an UNTYPED receiver lands here instead — a compiled npm package (no types
+    // at all), an `any` alias, a computed `wss[key]`, or a helper that takes the
+    // server as a parameter. ws registers no handle-property surface, so every
+    // one of those read `undefined`, and `for (const c of wss.clients)` over
+    // that `undefined` threw `TypeError: is not iterable` from a timer callback
+    // — uncatchable by application code, so the process exited.
+    //
+    // `js_ws_server_clients` returns `undefined` for any handle that is not a
+    // live `WsServerHandle`, so this arm is inert for every other handle family
+    // and falls through to the dispatchers below.
+    #[cfg(all(feature = "bundled-ws", not(target_os = "ios")))]
+    if property_name == "clients" {
+        let clients = crate::ws::js_ws_server_clients(handle);
+        if !perry_runtime::JSValue::from_bits(clients.to_bits()).is_undefined() {
+            return clients;
+        }
+    }
+
     if let Some(value) =
         super::super::net_socket_bridge::bind_net_socket_property(handle, property_name)
     {

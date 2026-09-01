@@ -28,10 +28,73 @@ macro_rules! println {
     };
 }
 
-// Make the override visible to the topical submodules below via `use
-// super::println;` (each submodule that prints needs the same shadow so
-// stdout output on harmonyos routes through hilog the same way it did
-// pre-split).
+// #9402: with SIGPIPE ignored, a truncated consumer no longer KILLS the
+// writer — the failing `write(2)` returns `EPIPE` instead. `std`'s `println!`
+// turns that error into a panic ("failed printing to stdout"), and Perry
+// builds with `panic = "abort"`, so `prog | head -2` would have traded exit
+// 141 for exit 134. Node's console is specified never to throw: it writes
+// through a stream whose errors it ignores, and `node -e 'for(;;)
+// console.log(1)' | head -2` exits 0. Shadow the print macros for the
+// user-facing `console.*` family with writers that drop the error, which is
+// exactly that contract. Diagnostics elsewhere in the runtime keep `std`'s
+// macros.
+#[cfg(not(feature = "ohos-napi"))]
+pub(crate) fn console_write_line(args: std::fmt::Arguments<'_>) {
+    use std::io::Write;
+    let stdout = std::io::stdout();
+    let mut handle = stdout.lock();
+    let _ = handle.write_fmt(args);
+    let _ = handle.write_all(b"\n");
+}
+
+#[cfg(not(feature = "ohos-napi"))]
+pub(crate) fn console_write_fragment(args: std::fmt::Arguments<'_>) {
+    use std::io::Write;
+    let stdout = std::io::stdout();
+    let mut handle = stdout.lock();
+    let _ = handle.write_fmt(args);
+}
+
+#[cfg(not(feature = "ohos-napi"))]
+pub(crate) fn console_write_err_line(args: std::fmt::Arguments<'_>) {
+    use std::io::Write;
+    let stderr = std::io::stderr();
+    let mut handle = stderr.lock();
+    let _ = handle.write_fmt(args);
+    let _ = handle.write_all(b"\n");
+}
+
+#[cfg(not(feature = "ohos-napi"))]
+macro_rules! println {
+    () => {
+        $crate::builtins::console_write_line(format_args!(""))
+    };
+    ($($arg:tt)*) => {
+        $crate::builtins::console_write_line(format_args!($($arg)*))
+    };
+}
+
+#[cfg(not(feature = "ohos-napi"))]
+macro_rules! print {
+    ($($arg:tt)*) => {
+        $crate::builtins::console_write_fragment(format_args!($($arg)*))
+    };
+}
+
+#[cfg(not(feature = "ohos-napi"))]
+macro_rules! eprintln {
+    () => {
+        $crate::builtins::console_write_err_line(format_args!(""))
+    };
+    ($($arg:tt)*) => {
+        $crate::builtins::console_write_err_line(format_args!($($arg)*))
+    };
+}
+
+// `macro_rules!` textual scope already reaches the topical submodules declared
+// below, so every `console.*` printer in this tree picks up the shadows above.
+// The harmonyos build additionally re-exports `println` because its submodules
+// name it explicitly (`use super::println;`).
 #[cfg(feature = "ohos-napi")]
 pub(crate) use println;
 

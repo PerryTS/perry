@@ -1662,8 +1662,9 @@ pub(super) fn lower(
         collect_numeric_accumulators(
             ctx,
             body,
-            candidate.array_id,
+            &std::collections::BTreeSet::from([candidate.array_id]),
             candidate.counter_id,
+            false,
             false,
             false,
         )

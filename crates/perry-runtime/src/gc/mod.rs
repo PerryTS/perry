@@ -1017,6 +1017,7 @@ pub fn gc_init() {
     // the thread-local slot is the only place the new address can be recorded.
     reg_scanner!(crate::iter_result::scan_iter_result_keys_roots_mut);
     reg_scanner!(small_int_cache_mutable_root_scanner);
+    reg_scanner!(concat_memo_mutable_root_scanner);
     reg_scanner!(crate::builtins::scan_console_log_singleton_roots_mut);
     reg_scanner!(crate::builtins::scan_structured_clone_memo_roots_mut);
     // #8282/#8294: process EventEmitter listener closures live as raw
@@ -1164,6 +1165,12 @@ pub extern "C" fn js_gc_init() {
     // call lands. A host that loads several application images on several
     // threads gets one image per thread; a plain executable gets one.
     crate::object::class_image::enter_current_thread_image();
+    // #9402: a compiled program has its own `main` and never runs Rust's
+    // `std::rt` startup, so SIGPIPE arrives with its DEFAULT disposition and
+    // any truncating consumer (`| head`, `| grep -q`, a closed socket) kills
+    // the writer mid-write. Node ignores the signal and surfaces `EPIPE` to
+    // the writer instead; do the same before a single byte can be written.
+    crate::os::ignore_sigpipe_at_startup();
     // Prime the process wall-clock epoch NOW: it lazily initializes on first
     // read, and the first read is otherwise whatever GC event happens to
     // consult it — which would make the exit-time GC-share denominator start

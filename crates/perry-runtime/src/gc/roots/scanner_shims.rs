@@ -114,3 +114,11 @@ pub fn small_int_cache_root_scanner(mark: &mut dyn FnMut(f64)) {
 pub fn small_int_cache_mutable_root_scanner(visitor: &mut RuntimeRootVisitor<'_>) {
     crate::string::scan_small_int_cache_roots_mut(visitor);
 }
+
+pub fn concat_memo_root_scanner(mark: &mut dyn FnMut(f64)) {
+    crate::string::scan_concat_memo_roots(mark);
+}
+
+pub fn concat_memo_mutable_root_scanner(visitor: &mut RuntimeRootVisitor<'_>) {
+    crate::string::scan_concat_memo_roots_mut(visitor);
+}

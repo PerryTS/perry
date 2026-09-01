@@ -105,7 +105,7 @@ mod append;
 mod base64_codec;
 mod char_ops;
 mod compare;
-mod concat;
+pub(crate) mod concat;
 mod format;
 mod html;
 mod intern;
@@ -157,6 +157,7 @@ pub(crate) use compare::{
 pub use concat::{
     js_string_add_value, js_string_append_chain, js_string_concat, js_string_concat_box,
     js_string_concat_chain, js_string_concat_value, js_value_add_string, js_value_concat_string,
+    scan_concat_memo_roots, scan_concat_memo_roots_mut,
 };
 pub(crate) use format::fix_exponent_format;
 pub(crate) use format::js_format_f64;

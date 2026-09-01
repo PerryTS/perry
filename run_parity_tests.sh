@@ -1187,7 +1187,14 @@ case "$TEST_SUITE" in
     all)
         while IFS= read -r test_file; do
             TEST_FILES+=("$test_file")
-        done < <(find "$TEST_DIR" -maxdepth 1 -type f -name '*.ts' | sort)
+        # `.cts` / `.mts` as well as `.ts`: a fixture whose semantics depend on
+        # the module goal has to name it in the extension, because this repo's
+        # package is `"type": "module"` and a plain `.ts` is therefore
+        # strict-mode ESM for Node and for Perry alike. `-name '*.ts'` does NOT
+        # match `foo.cts` (the suffix is `.cts`), so such a fixture was invisible
+        # to the suite — a dark test, green because it never ran.
+        done < <(find "$TEST_DIR" -maxdepth 1 -type f \
+            \( -name '*.ts' -o -name '*.cts' -o -name '*.mts' \) | sort)
         ;;
     parity|smoke)
         while IFS= read -r test_file; do
@@ -1232,7 +1239,12 @@ for test_file in "${TEST_FILES[@]}"; do
     # Skip directories (multi/ folder)
     [[ -d "$test_file" ]] && continue
 
-    test_name=$(basename "$test_file" .ts)
+    # Strip any TypeScript extension, not just `.ts`: a fixture that has to be
+    # CommonJS in BOTH runtimes is a `.cts` (see
+    # test_gap_9394_array_element_store_strictness.cts, which needs sloppy-mode
+    # semantics that a `.ts` under this repo's `"type": "module"` cannot have).
+    # `basename … .ts` left such a file named `…strictness.c`.
+    test_name=$(basename "$test_file" | sed -E 's/\.(m|c)?ts$//')
     if [[ "$test_file" == "$NODE_SUITE_DIR"/* ]]; then
         test_rel="${test_file#"$NODE_SUITE_DIR"/}"
         test_id="node-suite/${test_rel%.ts}"

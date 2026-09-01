@@ -109,7 +109,7 @@ pub extern "C" fn js_process_resource_usage() -> f64 {
 pub extern "C" fn js_process_title() -> f64 {
     use crate::value::JSValue;
     let stored: Option<String> = PROCESS_TITLE.with(|c| c.borrow().clone());
-    let s = stored.unwrap_or_else(|| std::env::args().next().unwrap_or_default());
+    let s = stored.unwrap_or_else(super::process_argv0_string);
     let bytes = s.as_bytes();
     let ptr = js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
     f64::from_bits(JSValue::string_ptr(ptr).bits())

@@ -3,7 +3,6 @@
 
 use super::*;
 use std::cell::RefCell;
-use std::os::raw::c_int;
 
 thread_local! {
     pub(super) static WRITE_CAPTURED: RefCell<Vec<Vec<u8>>> = const { RefCell::new(Vec::new()) };

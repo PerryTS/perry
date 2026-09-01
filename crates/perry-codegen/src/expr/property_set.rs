@@ -898,7 +898,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 .clone()
                 .or_else(|| guarded_declared_class_store_candidate(ctx, object))
             {
-                if class_has_computed_runtime_members(ctx, &class_name) {
+                // #9369, store twin of the read gate in `property_get.rs`:
+                // the computed-member route strips the receiver NaN-box to a
+                // raw `ObjectHeader*`, which is only meaningful for an
+                // INSTANCE. A static body's `this` is the class ref, so the
+                // store landed on the bare class id and was lost.
+                if class_has_computed_runtime_members(ctx, &class_name)
+                    && !ctx.is_static_class_this(object)
+                {
                     return lower_runtime_property_set_by_name(ctx, object, property, value);
                 }
                 let setter_key = (class_name.clone(), format!("__set_{}", property));

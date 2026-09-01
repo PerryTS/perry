@@ -48,6 +48,10 @@ mod construct;
 pub(crate) use construct::scan_current_new_target_root_mut;
 pub mod decl_prototype_table;
 mod dispatch;
+pub(crate) mod evaluation_heritage;
+pub(crate) use evaluation_heritage::{
+    active_class_evaluation_parent, is_self_heritage_value, push_active_class_evaluation,
+};
 mod function_prototype;
 mod gc_roots;
 pub(crate) mod parent_static;

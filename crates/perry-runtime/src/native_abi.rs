@@ -475,7 +475,6 @@ pub extern "C" fn js_native_abi_check_pod_object(value: f64) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::raw::c_int;
 
     fn catch_runtime_throw(f: impl FnOnce()) -> bool {
         crate::exception::catch_js_throw(f).is_err()

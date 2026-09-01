@@ -446,24 +446,6 @@ jobs:
             target: aarch64-unknown-linux-gnu
             artifact: perry-linux-aarch64
             old_glibc_image: debian:bullseye-slim@sha256:f313b4bd62667092a59b3a664d7d3ab8b5e65f41675f48e81455a15dc5abe792
-          - os: ubuntu-24.04
-            target: x86_64-unknown-linux-musl
-            artifact: perry-linux-x86_64-musl
-            old_glibc_image: ""
-            # musl needs a musl-BUILT LLVM: perry links libLLVM in-process, and
-            # apt.llvm.org ships only glibc builds, so the static link died with
-            # `ld-linux-*.so.2: DSO missing from command line`. Alpine packages
-            # LLVM 22.1.8 for both arches; nothing is built from source.
-            musl_image: alpine:edge
-          - os: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-musl
-            artifact: perry-linux-aarch64-musl
-            old_glibc_image: ""
-            # musl needs a musl-BUILT LLVM: perry links libLLVM in-process, and
-            # apt.llvm.org ships only glibc builds, so the static link died with
-            # `ld-linux-*.so.2: DSO missing from command line`. Alpine packages
-            # LLVM 22.1.8 for both arches; nothing is built from source.
-            musl_image: alpine:edge
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact: perry-windows-x86_64

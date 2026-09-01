@@ -16,12 +16,12 @@ def bench_fibonacci():
 
 def bench_loop_overhead():
     start = time.monotonic()
-    sum_val = 0.0
-    for _ in range(100_000_000):
-        sum_val += 1.0
+    checksum = 0x811C9DC5
+    for i in range(100_000_000):
+        checksum = ((checksum ^ i) * 0x01000193) & 0xFFFFFFFF
     elapsed = int((time.monotonic() - start) * 1000)
     print(f"loop_overhead:{elapsed}")
-    print(f"  checksum: {sum_val:.0f}")
+    print(f"  checksum: {checksum}")
 
 
 def bench_array_write():
@@ -98,10 +98,9 @@ def bench_accumulate():
 
 
 def bench_loop_data_dependent():
-    # Data-dependent loop with sequential multiply-carry. Sibling to
-    # bench_loop_overhead but genuinely non-foldable. Python is its own
-    # interpreter, so no asm-level verification applies; the kernel is
-    # identical to the compiled-language versions for fairness.
+    # Floating-point loop with a sequential multiply-carry. Unlike
+    # bench_loop_overhead's integer carry, this adds two runtime array reads
+    # and exposes FP-contraction behavior.
     N = 64
     ITERATIONS = 100_000_000
     seed = 42

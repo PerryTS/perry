@@ -552,7 +552,7 @@ fn typed_feedback_non_bounded_array_set_guard_failure_uses_jsvalue_object_fallba
     let guard = js_typed_feedback_plain_array_index_set_guard(24, obj_box, 0, 99.0, 0);
     assert_eq!(guard, 0);
 
-    let returned = js_typed_feedback_array_index_set_fallback_boxed(24, obj_box, 0.0, 99.0);
+    let returned = js_typed_feedback_array_index_set_fallback_boxed(24, obj_box, 0.0, 99.0, 1);
     assert_eq!(returned.to_bits(), obj_box.to_bits());
 
     let key = crate::string::js_string_from_bytes(b"0".as_ptr(), 1);
@@ -586,8 +586,18 @@ fn typed_feedback_array_set_guards_reject_frozen_arrays() {
         0
     );
 
+    // #9394: BOTH arms. A rejected element write throws only in strict code —
+    // asserting the throw alone is exactly what let the sloppy regression
+    // through a 64-check differential and a 205-line gap fixture.
     assert!(catch_runtime_throw(|| {
-        js_typed_feedback_array_index_set_fallback_boxed(70, arr_box, 0.0, 99.0);
+        js_typed_feedback_array_index_set_fallback_boxed(70, arr_box, 0.0, 99.0, 1);
+    }));
+    assert_eq!(
+        crate::array::js_array_get_f64(arr, 0).to_bits(),
+        1.0f64.to_bits()
+    );
+    assert!(!catch_runtime_throw(|| {
+        js_typed_feedback_array_index_set_fallback_boxed(70, arr_box, 0.0, 99.0, 0);
     }));
     assert_eq!(
         crate::array::js_array_get_f64(arr, 0).to_bits(),
@@ -610,7 +620,8 @@ fn typed_feedback_array_set_boxed_fallback_preserves_original_index_value() {
     let key = crate::string::js_string_from_bytes(b"foo".as_ptr(), 3);
     let key_value = crate::value::js_nanbox_string(key as i64);
 
-    let returned = js_typed_feedback_array_index_set_fallback_boxed(72, obj_box, key_value, 77.0);
+    let returned =
+        js_typed_feedback_array_index_set_fallback_boxed(72, obj_box, key_value, 77.0, 1);
     assert_eq!(returned.to_bits(), obj_box.to_bits());
     assert_eq!(
         crate::object::js_object_get_field_by_name_f64(obj, key).to_bits(),
@@ -693,24 +704,24 @@ fn typed_feedback_boxed_set_fallback_does_not_truncate_fractional_array_like_key
     let buf = crate::buffer::js_buffer_alloc(3, 0);
     crate::buffer::js_buffer_set(buf, 1, 22);
     let buf_box = crate::value::js_nanbox_pointer(buf as i64);
-    js_typed_feedback_array_index_set_fallback_boxed(74, buf_box, 1.5, 99.0);
+    js_typed_feedback_array_index_set_fallback_boxed(74, buf_box, 1.5, 99.0, 1);
     assert_eq!(crate::buffer::js_buffer_get(buf, 1), 22);
-    js_typed_feedback_array_index_set_fallback_boxed(74, buf_box, 1.0, 99.0);
+    js_typed_feedback_array_index_set_fallback_boxed(74, buf_box, 1.0, 99.0, 1);
     assert_eq!(crate::buffer::js_buffer_get(buf, 1), 99);
 
     let ta = crate::typedarray::js_typed_array_new_empty(crate::typedarray::KIND_UINT8 as i32, 3);
     crate::typedarray::js_typed_array_set(ta, 1, 33.0);
     let ta_box = crate::value::js_nanbox_pointer(ta as i64);
-    js_typed_feedback_array_index_set_fallback_boxed(74, ta_box, 1.5, 88.0);
+    js_typed_feedback_array_index_set_fallback_boxed(74, ta_box, 1.5, 88.0, 1);
     assert_eq!(crate::typedarray::js_typed_array_get(ta, 1), 33.0);
-    js_typed_feedback_array_index_set_fallback_boxed(74, ta_box, 1.0, 88.0);
+    js_typed_feedback_array_index_set_fallback_boxed(74, ta_box, 1.0, 88.0, 1);
     assert_eq!(crate::typedarray::js_typed_array_get(ta, 1), 88.0);
 
     let set = crate::set::js_set_alloc(4);
     crate::set::js_set_add(set, 10.0);
     crate::set::js_set_add(set, 20.0);
     let set_box = crate::value::js_nanbox_pointer(set as i64);
-    js_typed_feedback_array_index_set_fallback_boxed(74, set_box, 1.5, 77.0);
+    js_typed_feedback_array_index_set_fallback_boxed(74, set_box, 1.5, 77.0, 1);
     assert_eq!(crate::set::js_set_size(set), 2);
     assert_eq!(crate::set::js_set_value_at(set, 1), 20.0);
 
@@ -718,7 +729,7 @@ fn typed_feedback_boxed_set_fallback_does_not_truncate_fractional_array_like_key
     crate::map::js_map_set(map, 10.0, 100.0);
     crate::map::js_map_set(map, 20.0, 200.0);
     let map_box = crate::value::js_nanbox_pointer(map as i64);
-    js_typed_feedback_array_index_set_fallback_boxed(74, map_box, 1.5, 66.0);
+    js_typed_feedback_array_index_set_fallback_boxed(74, map_box, 1.5, 66.0, 1);
     assert_eq!(crate::map::js_map_size(map), 2);
     assert_eq!(crate::map::js_map_entry_key_at(map, 1), 20.0);
 

@@ -1106,6 +1106,29 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
                     if class_chain_reaches(cur, class_id) {
                         return true_val;
                     }
+
+                    // #9362: util.inherits(DerivedClass, BaseClass) links
+                    // DerivedClass.prototype to BaseClass.prototype at
+                    // runtime; it does not (and must not) create an extends
+                    // edge between the constructor objects. The class-id fast
+                    // path above therefore misses even though the observable
+                    // prototype chain contains BaseClass.prototype. Only pay
+                    // for the spec prototype walk when the candidate class's
+                    // declaration prototype has a user-selected parent.
+                    let candidate_proto = super::class_registry::class_decl_prototype_object(cur);
+                    let target_proto = super::class_registry::class_decl_prototype_object(class_id);
+                    if !candidate_proto.is_null()
+                        && !target_proto.is_null()
+                        && super::prototype_chain::object_has_user_prototype_override(
+                            candidate_proto as usize,
+                        )
+                        && ordinary_has_instance_prototype_walk(
+                            value,
+                            super::class_constructor_ref_value(class_id),
+                        )
+                    {
+                        return true_val;
+                    }
                 }
             }
         }

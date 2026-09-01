@@ -1077,6 +1077,12 @@ pub(super) fn compile_closure(
         this_stack,
         new_target_stack,
         class_stack,
+        // Closures are compiled from their own HIR node; the enclosing
+        // member's staticness is not carried on it, so an arrow inside a
+        // static body still lowers `this` as an instance receiver. Tracked
+        // separately from #9369, whose fixture family is the static body
+        // itself.
+        in_static_member: false,
         super_called_stack: Vec::new(),
         shared_super_scope_active: false,
         lexical_this_uses_derived_binding: captures_this
@@ -1196,9 +1202,8 @@ pub(super) fn compile_closure(
         element_shape_loop_facts: Vec::new(),
         i32_counter_slots: HashMap::new(),
         numeric_accumulator_f64_slots: HashMap::new(),
-        packed_receiver_box_slots: HashMap::new(),
-        packed_receiver_refresh: Vec::new(),
-        packed_receiver_handle_slots: HashMap::new(),
+        transition_cache_base_slot: None,
+        receiver_descriptors: Default::default(),
         poll_stride_counter_slot: None,
         deferred_integer_update_accumulators: HashSet::new(),
         local_slot_reps: HashMap::new(),

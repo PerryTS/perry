@@ -598,10 +598,19 @@ impl LlFunction {
     pub fn entry_init_call_ptr(&mut self, func_name: &str) -> String {
         let slot = self.alloca_entry(crate::types::PTR);
         let result_reg = format!("%r{}", self.reg_counter.next());
-        self.entry_allocas
-            .push(format!("  {} = call ptr @{}()", result_reg, func_name));
-        self.entry_allocas
-            .push(format!("  store ptr {}, ptr {}", result_reg, slot));
+        let call_line = format!("  {} = call ptr @{}()", result_reg, func_name);
+        let store_line = format!("  store ptr {}, ptr {}", result_reg, slot);
+        // Mirror `entry_init_load_global`: in a function with an init prelude
+        // (main), the callee touches runtime state, so the call must run
+        // AFTER `js_gc_init` — placing it with the allocas SIGSEGVs at
+        // startup the moment a caller's site gets inlined into main.
+        if self.entry_init_boundary.is_some() {
+            self.entry_post_init_setup.push(call_line);
+            self.entry_post_init_setup.push(store_line);
+        } else {
+            self.entry_allocas.push(call_line);
+            self.entry_allocas.push(store_line);
+        }
         slot
     }
 

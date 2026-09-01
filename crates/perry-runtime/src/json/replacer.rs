@@ -14,6 +14,40 @@ use std::fmt::Write as FmtWrite;
 
 // ─── JSON.stringify with replacer ────────────────────────────────────────────
 
+/// True when a keys-array slot holds a tombstone rather than a property key.
+///
+/// #9398. `delete obj.k` on a tombstone-eligible receiver is O(1): it writes
+/// `TAG_HOLE` over the KEY slot and leaves the array length alone, so a
+/// deleted-but-not-yet-squeezed key shows up as a hole while walking
+/// `0..keys.length`. Every walker in this file then derived the key pointer as
+///
+/// ```text
+/// if tag == STRING_TAG || tag == POINTER_TAG { bits & POINTER_MASK } else { bits }
+/// ```
+///
+/// — i.e. any *other* tag was used AS A RAW ADDRESS. `TAG_HOLE` is
+/// `0x7FFC_0000_0000_0010`, far above the low-address floor, so
+/// `str_from_header` read `byte_len` straight off `0x7FFC…0010` and the process
+/// died with SIGSEGV.
+///
+/// The plain (`stringify.rs`) walk already skipped holes; these three
+/// replacer/pretty walks did not, which is why `JSON.stringify(o)` survived a
+/// tombstoned object while `JSON.stringify(o, null, 2)` crashed. That is the
+/// `claude mcp remove` crash: claude-code rewrites `~/.claude.json` with a
+/// 2-space indent right after deleting the server entry, so the write faulted
+/// mid-way — the server stayed registered AND the `.claude.json.lock` the
+/// writer had taken was never released.
+///
+/// `TAG_UNDEFINED` is treated the same way: an unstable tombstone clears the
+/// slot to `undefined` instead of `TAG_HOLE`, `js_array_get` translates
+/// `TAG_HOLE` to `undefined` per OrdinaryGet (#323), and `undefined` is never a
+/// legal key either way — the same pairing `js_object_keys` uses.
+#[inline]
+fn tombstoned_key_slot(key: f64) -> bool {
+    let bits = key.to_bits();
+    bits == crate::value::TAG_HOLE || bits == TAG_UNDEFINED
+}
+
 /// Call a replacer closure with (key, value) and return the result as f64.
 ///
 /// Per ECMA-262 `SerializeJSONProperty`, the replacer is invoked with `this`
@@ -412,6 +446,11 @@ pub(crate) unsafe fn stringify_object_with_replacer_pretty(
         let fields_ptr = (obj_root.get_raw_const_ptr::<u8>())
             .add(std::mem::size_of::<crate::ObjectHeader>()) as *const f64;
         let replacer = replacer_root.get_raw_const_ptr::<crate::ClosureHeader>();
+        // #9398: tombstoned slot from an O(1) delete — not a key, not
+        // serialized. See `tombstoned_key_slot`.
+        if tombstoned_key_slot(*keys_elements.add(f as usize)) {
+            continue;
+        }
         // Skip non-enumerable own keys before invoking the replacer.
         if filter_non_enum
             && f < keys_len
@@ -981,6 +1020,11 @@ pub(crate) unsafe fn stringify_object_pretty(
     // Collect non-undefined, non-closure fields
     let mut entries: Vec<(String, f64)> = Vec::new();
     for f in 0..actual_fields {
+        // #9398: tombstoned slot from an O(1) delete — not a key, not
+        // serialized. See `tombstoned_key_slot`.
+        if tombstoned_key_slot(*keys_elements.add(f as usize)) {
+            continue;
+        }
         // Skip non-enumerable own keys (`Object.defineProperty(o, k,
         // { enumerable: false })`) before touching the value.
         if filter_non_enum
@@ -1173,6 +1217,11 @@ pub(crate) unsafe fn stringify_object_with_array_replacer(
     let filter_non_enum = crate::object::descriptors_in_use();
     let mut field_map: Vec<(String, f64)> = Vec::new();
     for f in 0..actual_fields {
+        // #9398: tombstoned slot from an O(1) delete — not a key, not
+        // serialized. See `tombstoned_key_slot`.
+        if tombstoned_key_slot(*keys_elements.add(f as usize)) {
+            continue;
+        }
         let mut field_val = if f < alloc_limit {
             *fields_ptr.add(f as usize)
         } else {

@@ -468,7 +468,10 @@ NONCOLLECTING = {
     # cannot -- side-table metadata writes through the system allocator, which
     # arms no Perry GC trigger.
     "js_gc_init_typed_shape_layout", "js_gc_declare_typed_shape_layout",
-    "js_write_barrier_root_nanbox", "js_write_barrier_slot",
+    "js_write_barrier_root_nanbox", "perry_transition_cache_base",
+    "js_transition_ic_note_hit",
+    "js_transition_ic_spill_append",
+    "js_write_barrier_slot",
     "js_gc_register_global_root",
     # pure value predicates / bit twiddling
     "js_is_truthy", "js_nanbox_get_pointer",

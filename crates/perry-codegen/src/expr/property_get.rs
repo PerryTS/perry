@@ -1350,7 +1350,29 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 {
                     return lower_runtime_property_get_by_name(ctx, object, property);
                 }
-                if class_has_computed_runtime_members(ctx, &class_name) {
+                // #9369: "this class has computed members" is a statement
+                // about its INSTANCES — their key set is not described by the
+                // packed shape, so an instance read must go by name. It says
+                // nothing about a STATIC body's `this`, which is the class
+                // constructor: an INT32 class ref, not a heap instance.
+                // `lower_runtime_property_get_by_name` strips the NaN-box to a
+                // raw `ObjectHeader*`, so routing a class ref through it hands
+                // the runtime the bare class id as a pointer — below the
+                // handle band, so every read answered `undefined` (except
+                // `name`, which `js_object_get_field_by_name_f64` already
+                // rescues by reading that small integer back as a class id).
+                // That is why `E.prototype` and `this.prototype` disagreed
+                // inside one class, and why axios's
+                // `static accessor(){ let z = this.prototype; … }` fed
+                // `undefined` to `Object.defineProperty` once #9315 routed
+                // `[Symbol.iterator]` onto the computed-member path (#9341).
+                // Falling through leaves the general dispatch tower below,
+                // which classifies the receiver tag and has a class-ref arm —
+                // exactly what the same static method gets when its class
+                // carries no computed member.
+                if class_has_computed_runtime_members(ctx, &class_name)
+                    && !ctx.is_static_class_this(object)
+                {
                     return lower_runtime_property_get_by_name(ctx, object, property);
                 }
                 let getter_key = (class_name.clone(), format!("__get_{}", property));

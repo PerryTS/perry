@@ -8,6 +8,7 @@ use std::sync::atomic::Ordering;
 mod keyed;
 #[path = "indexing_proto_chain.rs"]
 mod proto_chain;
+pub(crate) use keyed::js_array_set_index_or_string_with_strictness;
 pub use keyed::{
     js_array_get_index_or_string, js_array_set_index_or_string,
     js_array_set_index_or_string_strict, js_array_set_string_key,
@@ -1185,18 +1186,37 @@ pub extern "C" fn js_array_set_f64_extend_strict(
     index: u32,
     value: f64,
 ) -> *mut ArrayHeader {
-    js_array_set_f64_extend_strict_impl(arr, index, value, false)
+    js_array_set_f64_extend_strict_impl(arr, index, value, true, false)
 }
 
-/// Strict indexed assignment after optionally completing the inherited
-/// descriptor walk. `prototype_already_checked` is true only for the callback
-/// from [`array_spec_set`]; it prevents a writable inherited data property
-/// from recursing when the spec walk proceeds to create the receiver's own
-/// element.
+/// The same element assignment for a SLOPPY `arr[i] = v` (#9394).
+///
+/// ES2024 §6.2.5.7 calls `Set(O, P, V, Throw)` with `Throw =
+/// IsStrictReference`, so a rejected element write is a silent no-op outside
+/// strict code — for an Array exactly as for an ordinary object. Everything
+/// the strict entry does to *find* the right target still runs (the dense
+/// lanes, and the #9220 inherited-descriptor walk, so a prototype setter is
+/// still invoked with this array as its receiver); only the rejection
+/// changes from a TypeError to returning the receiver unchanged.
+pub(crate) fn js_array_set_f64_extend_sloppy(
+    arr: *mut ArrayHeader,
+    index: u32,
+    value: f64,
+) -> *mut ArrayHeader {
+    js_array_set_f64_extend_strict_impl(arr, index, value, false, false)
+}
+
+/// Indexed assignment after optionally completing the inherited descriptor
+/// walk. `strict` is the assignment's own `Throw` flag (see
+/// [`js_array_set_f64_extend_sloppy`]). `prototype_already_checked` is true
+/// only for the callback from [`array_spec_set`]; it prevents a writable
+/// inherited data property from recursing when the spec walk proceeds to
+/// create the receiver's own element.
 fn js_array_set_f64_extend_strict_impl(
     arr: *mut ArrayHeader,
     index: u32,
     value: f64,
+    strict: bool,
     prototype_already_checked: bool,
 ) -> *mut ArrayHeader {
     // Two exact fast lanes, each storing only what the general path below
@@ -1223,35 +1243,45 @@ fn js_array_set_f64_extend_strict_impl(
     {
         // Preserve the existing polymorphic/subclass behavior on receivers
         // that are not live plain arrays. These are cold and cannot use the
-        // resolved-header contract below.
-        array_strict_index_write_guard(arr, index);
+        // resolved-header contract below. The guard is the *throwing* half of
+        // the policy, so a sloppy assignment skips it and keeps
+        // `js_array_set_f64_extend`'s silent contract.
+        if strict {
+            array_strict_index_write_guard(arr, index);
+        }
         return js_array_set_f64_extend(arr, index, value);
     }
 
-    // #9220: only a retargeted array with no own index pays the inherited
-    // [[Set]] walk. `array_custom_prototype` is the #9219 classification shared
-    // with reads/HasProperty and deliberately returns None for a Proxy
+    // #9220 / #9249: only a prototype-sensitive array with no own index pays
+    // the inherited [[Set]] walk. This includes both a retargeted receiver and
+    // the default chain after an index is installed on `Array.prototype` or
+    // `Object.prototype`. `array_custom_prototype` is the #9219 classification
+    // shared with reads/HasProperty and deliberately returns None for a Proxy
     // prototype, whose dedicated dispatch must remain single-shot. Existing
     // own elements have already had every applicable dense lane above; the
     // fallback still needs the ownership check for descriptor/restricted
     // shapes that correctly declined those lanes.
-    // The process latch leads for the same reason it does in the read/HasProperty
-    // twin (`generic::real_array_uses_recorded_spec_path`): recording a
-    // prototype on ANY array sets it, so a clear latch proves this array cannot
-    // have one and the side-table probe is skipped entirely.
+    //
+    // The process latches lead for the same reason they do in the
+    // read/HasProperty twin: when all are clear, no inherited indexed property
+    // can intercept this store and the side-table probe is skipped entirely.
     if !prototype_already_checked
-        && crate::object::prototype_chain::array_static_proto_recorded()
-        && unsafe { array_custom_prototype(clean).is_some() }
+        && (array_prototype_has_index_flag()
+            || object_prototype_has_index_flag()
+            || (crate::object::prototype_chain::array_static_proto_recorded()
+                && unsafe { array_custom_prototype(clean).is_some() }))
         && unsafe { !array_has_own_index(clean, index) }
     {
-        return array_spec_set(clean, index, value);
+        return array_spec_set(clean, index, value, strict);
     }
 
     // SAFETY: the clean above resolved this exact live plain-array head. The
     // guard performs no Perry allocation/safepoint, so the proof remains live
     // for the store core.
     let flags = unsafe { array_object_flags_resolved(clean) };
-    array_strict_index_write_guard_resolved(clean, index, flags);
+    if strict {
+        array_strict_index_write_guard_resolved(clean, index, flags);
+    }
     crate::string::js_string_addref_if_heap_string(value);
     unsafe { js_array_set_f64_extend_resolved(clean, index, value, flags) }
 }
@@ -1606,12 +1636,24 @@ unsafe fn js_array_set_f64_extend_resolved(
 // to `raw_handle_debt.py --no-raise-vs` as debt appearing in a module that
 // did not exist at the merge base, which is a raise it refuses by design
 // (#7659) even though the repository total is unchanged.
-/// Spec `Set(O, ToString(index), value, true)` for an Array receiver. Unlike
+/// Spec `Set(O, ToString(index), value, Throw)` for an Array receiver. Unlike
 /// the internal dense setter, this observes an inherited indexed accessor
 /// before creating an own element. Array mutators use it on their exotic path
 /// because a prototype setter may mutate the receiver (including freezing it
 /// or making `length` non-writable) before the mutator's final length Set.
-pub(crate) fn array_spec_set(arr: *mut ArrayHeader, index: u32, value: f64) -> *mut ArrayHeader {
+///
+/// `strict` is the assignment's `Throw` argument (#9394): finding the right
+/// target is the same work in both modes — an inherited setter runs either
+/// way — and only a REJECTION differs, throwing in strict code and returning
+/// the receiver unchanged in sloppy code. A spec-internal caller (an array
+/// mutator's own `Set`) passes `true`, because those algorithms specify
+/// `Throw = true` regardless of the calling code's strictness.
+pub(crate) fn array_spec_set(
+    arr: *mut ArrayHeader,
+    index: u32,
+    value: f64,
+    strict: bool,
+) -> *mut ArrayHeader {
     let arr = clean_arr_ptr_mut(arr);
     if arr.is_null() {
         return arr;
@@ -1629,6 +1671,7 @@ pub(crate) fn array_spec_set(arr: *mut ArrayHeader, index: u32, value: f64) -> *
                 arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
                 index,
                 value_handle.get_nanbox_f64(),
+                strict,
                 true,
             );
         }
@@ -1668,31 +1711,50 @@ pub(crate) fn array_spec_set(arr: *mut ArrayHeader, index: u32, value: f64) -> *
             };
         }
 
+        // Every path that the inherited property fully handles — setter
+        // invoked, or the Set rejected — leaves through the one exit below.
+        // A single re-derive of the receiver serves all of them: each of these
+        // arms can run JS or allocate, so the pointer has to be re-read, and
+        // reading it once here rather than at three returns keeps that explicit.
+        let mut handled_by_prototype = false;
         if inherited_owner != 0 {
             if let Some(accessor) = crate::object::get_accessor_descriptor(inherited_owner, &key) {
                 if accessor.set == 0 {
-                    crate::collection_iter::throw_type_error(&format!(
-                        "Cannot set property {index} which has only a getter"
-                    ));
+                    // A getter-only inherited index rejects the Set. Sloppy
+                    // code observes that as a no-op (#9394); strict throws.
+                    if strict {
+                        crate::collection_iter::throw_type_error(&format!(
+                            "Cannot set property {index} which has only a getter"
+                        ));
+                    }
+                } else {
+                    crate::object::invoke_accessor_setter(
+                        accessor.set,
+                        receiver(),
+                        value_handle.get_nanbox_f64(),
+                    );
                 }
-                crate::object::invoke_accessor_setter(
-                    accessor.set,
-                    receiver(),
-                    value_handle.get_nanbox_f64(),
-                );
-                return arr_handle.get_raw_mut_ptr::<ArrayHeader>();
-            }
-            if crate::object::get_property_attrs(inherited_owner, &key)
+                handled_by_prototype = true;
+            } else if crate::object::get_property_attrs(inherited_owner, &key)
                 .is_some_and(|attrs| !attrs.writable())
             {
-                throw_frozen_array_index_write(index);
+                // A non-writable inherited data property rejects the Set
+                // without creating an own element. Silent in sloppy code.
+                if strict {
+                    throw_frozen_array_index_write(index);
+                }
+                handled_by_prototype = true;
             }
+        }
+        if handled_by_prototype {
+            return arr_handle.get_raw_mut_ptr::<ArrayHeader>();
         }
 
         js_array_set_f64_extend_strict_impl(
             arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
             index,
             value_handle.get_nanbox_f64(),
+            strict,
             true,
         )
     }

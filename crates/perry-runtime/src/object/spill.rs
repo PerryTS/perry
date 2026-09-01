@@ -113,6 +113,24 @@ pub(crate) fn spill_get(obj_ptr: usize, field_index: usize) -> Option<u64> {
     }
 }
 
+/// True when a spill write at `field_index` would take `spill_set`'s
+/// in-capacity hot path — meta and buffer exist and the index is within the
+/// buffer's physical capacity — i.e. the write cannot grow, allocate on the
+/// GC heap, or move anything. The emitted transition-IC's spill-append helper
+/// gates on this so it stays a non-collecting leaf; growth falls back to the
+/// full miss path, which is built for it.
+pub(crate) fn spill_store_would_be_in_capacity(obj_ptr: usize, field_index: usize) -> bool {
+    unsafe {
+        let obj = obj_ptr as *const ObjectHeader;
+        let meta = (*obj).meta;
+        if meta.is_null() {
+            return false;
+        }
+        let spill = (*meta).spill as *const crate::array::ArrayHeader;
+        !spill.is_null() && ((*spill).capacity as usize) > field_index
+    }
+}
+
 pub(crate) fn spill_set(obj_ptr: usize, field_index: usize, vbits: u64) {
     unsafe {
         let obj = obj_ptr as *mut ObjectHeader;

@@ -1516,6 +1516,17 @@ pub(super) fn run_copied_minor_attempt(
     // being swept. Non-fatal; logs parent/child obj_types.
     if crate::gc::gc_verify_mark_enabled() {
         super::verify::verify_marked_heap_report_nonfatal("copying-minor");
+        // #9261: the copied minor is the OPERATIVE cycle on every workload that
+        // reaches this path, and it was the one collector with no sweep-live-
+        // child probe — `verify_minor_unmarked_young_children_report` was wired
+        // only into `cycle.rs`'s non-copying minor. So the direct signature of a
+        // dropped old→young edge (a live old parent naming a young child that is
+        // about to be swept) was invisible here, and the first thing anyone saw
+        // was a garbage `GcHeader` hundreds of collections later. Both probes
+        // report their own subject counts, so a cycle on which they had nothing
+        // to check says so rather than reading as a clean bill.
+        super::verify::verify_minor_unmarked_young_children_report("copying-minor");
+        super::verify::verify_array_pointer_slots_enumerated_report("copying-minor");
     }
 
     // #7035: whole-heap from-space scan. MUST run here — after the rewrite

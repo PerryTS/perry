@@ -337,6 +337,21 @@ pub fn stdin_chunk_jsvalue(chunk: &[u8]) -> f64 {
     }
     let buf = crate::buffer::buffer_alloc(chunk.len() as u32);
     unsafe {
+        // #9399: `buffer_alloc` only reserves CAPACITY — it leaves `length` at
+        // 0, and every other caller sets the length itself after filling the
+        // payload. This one never did, so a `data` chunk delivered as a Buffer
+        // (Node's default, i.e. whenever `setEncoding` has NOT been called)
+        // arrived with `.length === 0`: the bytes were copied into the payload
+        // but no consumer could see them. `chunk.toString()` was `""`,
+        // `Buffer.concat([acc, chunk])` appended nothing, and
+        // `JSON.stringify(chunk)` reported `{"type":"Buffer","data":[]}`.
+        //
+        // That is why claude-code's MCP stdio server answered nothing: its
+        // transport does `readBuffer.append(chunk)` on raw (unencoded) chunks,
+        // so the newline-delimited JSON-RPC framer never saw a single byte and
+        // `readMessage()` returned null forever. The `setEncoding("utf8")`
+        // branch above was unaffected, which is why the string path looked fine.
+        (*buf).length = chunk.len() as u32;
         let dst = crate::buffer::buffer_data_mut(buf);
         if !dst.is_null() && !chunk.is_empty() {
             // GC_STORE_AUDIT(POINTER_FREE): raw stdin bytes into a freshly
@@ -435,11 +450,32 @@ extern "C" fn process_stdin_remove_listener(
     event: f64,
     callback: f64,
 ) -> f64 {
+    let cb = stdin_callback_ptr(callback);
+    if cb == 0 {
+        return stdin_this_value();
+    }
+    let name = stdin_event_name(event).unwrap_or_default();
     if let Some((_, off)) = stdin_ops_provider() {
-        let name = stdin_event_name(event).unwrap_or_default();
-        let cb = stdin_callback_ptr(callback);
-        if cb != 0 {
-            off(name.as_ptr(), name.len(), cb);
+        off(name.as_ptr(), name.len(), cb);
+    }
+    // #9399: ALSO drop it from the runtime-local lists. `on`/`once` on the
+    // stdin object file listeners here (see `process_stdin_on`), while `off`
+    // only ever reached readline's registry — so a listener added and then
+    // removed through the object stayed in this list forever. That was merely
+    // wasteful until `stdin_listeners_keep_loop_alive` started reporting these
+    // lists to the event loop; from then on a program that removes its stdin
+    // listener to let itself exit would have been pinned open until EOF, which
+    // never comes on a TTY. Remove from both registries so `off` means off.
+    for list in [
+        &STDIN_DATA_LISTENERS,
+        &STDIN_DATA_ONCE,
+        &STDIN_READABLE_LISTENERS,
+        &STDIN_READABLE_ONCE,
+        &STDIN_END_LISTENERS,
+        &STDIN_END_ONCE,
+    ] {
+        if let Ok(mut l) = list.lock() {
+            l.retain(|entry| *entry != cb);
         }
     }
     stdin_this_value()
@@ -459,6 +495,55 @@ extern "C" fn process_stdin_listeners(
     }
     let arr = crate::array::js_array_alloc(0);
     f64::from_bits(crate::value::JSValue::array_ptr(arr).bits())
+}
+
+/// Whether a `process.stdin` listener registered on the stdin OBJECT still
+/// needs the event loop to keep turning.
+///
+/// #9399. `process.stdin.on(...)` reached as an object method — an alias
+/// (`const s = process.stdin`), a parameter, or a field, which is what
+/// claude-code's MCP stdio transport does with `this._stdin.on("data",
+/// this._ondata)` — files the callback in the runtime-local lists below and
+/// starts [`ensure_stdin_reader`]. Those lists were invisible to every
+/// has-active check the generated event loop consults, so the loop found no
+/// work and the process exited 0 *with the pipe still open and the bytes
+/// unread*: `claude mcp serve` died ~1.7 s after start and never answered a
+/// request. (The literal `process.stdin.on(...)` spelling was unaffected —
+/// codegen lowers that one straight to a readline extern, whose registry
+/// `js_readline_has_active` does report.)
+///
+/// The liveness window matches Node's: a `data`/`readable`/`end` listener holds
+/// the process open until stdin reaches EOF and the buffered bytes have been
+/// delivered, then — once `'end'`/`'close'` have fired, or when nobody is
+/// listening for them — lets it exit. `pause()`/`unref()`/`destroy()` release
+/// the hold immediately, via the same `stdin_is_detached` latch readline uses.
+pub fn stdin_listeners_keep_loop_alive() -> bool {
+    if stdin_is_detached() {
+        return false;
+    }
+    let non_empty =
+        |l: &std::sync::Mutex<Vec<i64>>| l.lock().map(|v| !v.is_empty()).unwrap_or(false);
+    let has_end_listener = non_empty(&STDIN_END_LISTENERS) || non_empty(&STDIN_END_ONCE);
+    let has_any_listener = has_end_listener
+        || non_empty(&STDIN_DATA_LISTENERS)
+        || non_empty(&STDIN_DATA_ONCE)
+        || non_empty(&STDIN_READABLE_LISTENERS)
+        || non_empty(&STDIN_READABLE_ONCE);
+    if !has_any_listener {
+        return false;
+    }
+    // Bytes already read but not yet handed to JS: the pump must run again.
+    if STDIN_BUFFER.lock().map(|b| !b.is_empty()).unwrap_or(false) {
+        return true;
+    }
+    use std::sync::atomic::Ordering;
+    if !STDIN_EOF_SEEN.load(Ordering::Acquire) {
+        // stdin is still open — more bytes may arrive, exactly as in Node.
+        return true;
+    }
+    // EOF reached and drained: the only work left is the terminal
+    // `'end'`/`'close'` dispatch, and only if somebody asked for it.
+    has_end_listener && !STDIN_END_FIRED.load(Ordering::Acquire)
 }
 
 pub fn stdin_push_bytes(bytes: &[u8]) {
@@ -1051,18 +1136,39 @@ fn build_stream_object_with_write(
 #[no_mangle]
 pub extern "C" fn js_process_stdin() -> f64 {
     use crate::value::JSValue;
-    let obj = STDIN_STREAM_SINGLETON.with(|slot| {
+    let (obj, fresh) = STDIN_STREAM_SINGLETON.with(|slot| {
         let mut slot = slot.borrow_mut();
-        if *slot == 0 {
+        let fresh = *slot == 0;
+        if fresh {
             *slot = build_stream_object_with_write(
                 process_stdin_write_noop_stub,
                 0.0,
                 f64::from_bits(crate::value::TAG_UNDEFINED),
             ) as usize;
         }
-        *slot as *mut crate::object::ObjectHeader
+        (*slot as *mut crate::object::ObjectHeader, fresh)
     });
-    f64::from_bits(JSValue::pointer(obj as *const u8).bits())
+    let value = f64::from_bits(JSValue::pointer(obj as *const u8).bits());
+    if !fresh {
+        return value;
+    }
+    // #9400: `for await (const chunk of process.stdin)` — Node's stdin is a
+    // Readable and therefore async-iterable. The install has to happen after
+    // the singleton slot is populated, because the iterator closure captures
+    // this very value, and only once, or each call would re-install it.
+    crate::node_stream::async_iterator::install_method_listener_readable_async_iterator_symbol(
+        value,
+    );
+    // The install allocates (two hidden fields, a closure, a symbol property),
+    // so a collection can relocate the just-born stdin object underneath it.
+    // `STDIN_STREAM_SINGLETON` is a MUTABLE root (see
+    // `scan_process_stream_singleton_roots_mut`), so the slot is rewritten to
+    // the new address — re-read it rather than handing JS the pre-install
+    // pointer, which after a move is a dangling one.
+    STDIN_STREAM_SINGLETON.with(|slot| {
+        let obj = *slot.borrow() as *mut crate::object::ObjectHeader;
+        f64::from_bits(JSValue::pointer(obj as *const u8).bits())
+    })
 }
 
 /// process.stdout -> stream object whose `.write(s)` writes `s` to fd 1.

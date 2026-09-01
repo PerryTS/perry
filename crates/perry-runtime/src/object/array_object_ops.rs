@@ -460,6 +460,13 @@ pub(crate) unsafe fn define_array_property(
     }
 
     if let Some(index) = super::canonical_array_index(key_name) {
+        // `Object.defineProperty(Array.prototype, i, descriptor)` installs an
+        // inherited index without passing through any array element-write
+        // helper. Raise the same sticky latch those helpers do so generated
+        // stores decline their own-slot fast paths and perform the inherited
+        // descriptor walk. `Object.defineProperties` and
+        // `Reflect.defineProperty` both funnel through this branch.
+        crate::array::note_array_index_write(current_arr() as usize);
         let exists = super::has_own_helpers::array_own_key_present(current_arr(), current_key());
 
         // Array exotic `[[DefineOwnProperty]]` (ECMA-262 10.4.2.1) step 3.b: a

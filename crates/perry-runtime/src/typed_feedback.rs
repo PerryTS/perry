@@ -2545,12 +2545,22 @@ pub extern "C" fn js_typed_feedback_numeric_array_push_guard(
     }
 }
 
+/// Cold continuation of a source-level `arr[index] = value` after the inline
+/// guard declines the receiver.
+///
+/// `strict` is the assignment's own `Throw` flag (ES2024 §6.2.5.7): codegen
+/// passes `1` from strict code and `0` from sloppy code. #9394: this helper
+/// used the strict element entry unconditionally, so a rejected write (frozen
+/// array, non-writable own or inherited index, non-extensible receiver) threw
+/// a TypeError in sloppy code where Node is silent — the guard declines
+/// exactly those shapes, so every one of them arrived here.
 #[no_mangle]
 pub extern "C" fn js_typed_feedback_array_index_set_fallback_boxed(
     site_id: u64,
     receiver: f64,
     index: f64,
     value: f64,
+    strict: i32,
 ) -> f64 {
     record_fallback_call(site_id);
 
@@ -2598,17 +2608,18 @@ pub extern "C" fn js_typed_feedback_array_index_set_fallback_boxed(
             (raw_addr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         match (*gc_header).obj_type {
             crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY => {
-                // #9220: this is the cold continuation of a source-level
-                // `arr[index] = value` after the inline guard rejects a
-                // retargeted/prototype-sensitive array. It must preserve the
-                // assignment's strict Set semantics; the non-strict helper
-                // bypassed `js_array_set_f64_extend_strict` entirely, so an
-                // inherited setter/non-writable index was silently replaced
-                // by a new own element.
-                let new_arr = crate::array::js_array_set_index_or_string_strict(
+                // #9220: the inherited-descriptor walk must run in BOTH
+                // modes — a prototype setter fires on a sloppy assignment
+                // too, and the pre-#9220 non-strict helper bypassed it
+                // entirely, silently replacing an inherited setter /
+                // non-writable index with a new own element. #9394: only the
+                // REJECTION is strictness-dependent, so carry the
+                // assignment's own `Throw` rather than forcing `true`.
+                let new_arr = crate::array::js_array_set_index_or_string_with_strictness(
                     raw_addr as *mut ArrayHeader,
                     index,
                     value,
+                    strict != 0,
                 );
                 crate::value::js_nanbox_pointer(new_arr as i64)
             }
@@ -2680,19 +2691,27 @@ pub extern "C" fn js_typed_feedback_array_set_string_key(
     crate::array::js_array_set_string_key(arr, key, value)
 }
 
+/// Assignment-site wrapper for `arr[<runtime key>] = value`. `strict` is the
+/// assignment's own `Throw` flag (#9394).
 #[no_mangle]
 pub extern "C" fn js_typed_feedback_array_set_index_or_string(
     site_id: u64,
     arr: *mut ArrayHeader,
     idx: f64,
     value: f64,
+    strict: i32,
 ) -> *mut ArrayHeader {
     // #5094 for the assignment site: with recording off (the default) every
     // helper below early-returns, but the index conversion and two
     // out-of-line calls to reach those returns were 1.5% of an ECS frame on
     // `column[index] = record`. One flag test, then the store.
     if !typed_feedback_enabled() {
-        return crate::array::js_array_set_index_or_string_strict(arr, idx, value);
+        return crate::array::js_array_set_index_or_string_with_strictness(
+            arr,
+            idx,
+            value,
+            strict != 0,
+        );
     }
     let index = finite_nonnegative_u32_index(idx).unwrap_or(u32::MAX);
     observe_array(site_id, arr, index);
@@ -2702,9 +2721,10 @@ pub extern "C" fn js_typed_feedback_array_set_index_or_string(
     } else {
         record_guard_pass(site_id);
     }
-    // Assignment-site wrapper → strict `Set` with `Throw = true` (frozen /
-    // non-extensible array element write throws a TypeError).
-    crate::array::js_array_set_index_or_string_strict(arr, idx, value)
+    // Assignment-site wrapper → spec `Set` with the reference's own `Throw`:
+    // a frozen / non-extensible array element write throws a TypeError in
+    // strict code and is a silent no-op in sloppy code.
+    crate::array::js_array_set_index_or_string_with_strictness(arr, idx, value, strict != 0)
 }
 
 #[no_mangle]

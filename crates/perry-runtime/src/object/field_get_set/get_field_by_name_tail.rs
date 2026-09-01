@@ -870,13 +870,13 @@ pub(crate) fn get_field_by_name_object_tail(
             }
             return JSValue::undefined();
         }
-        // Arrays: handle `.length` so dynamic property access on a
-        // typed-Any local returned from `JSON.parse("[1,2,3]")` picks
-        // up the real length instead of falling through to object
-        // field lookup and returning undefined. The array-length
-        // inline fast path in codegen fires only when the type is
-        // statically known, so this branch catches the dynamic case.
+        // Arrays: dynamic `.length` access on a typed-Any local returned by
+        // `JSON.parse("[1,2,3]")` must read the array instead of an object field.
+        // The codegen inline fast path only covers statically known array types.
         if gc_type == crate::gc::GC_TYPE_ARRAY {
+            let Some(obj) = super::array_retargeted_proto::live_array_owner(obj) else {
+                return JSValue::undefined();
+            };
             if !key.is_null() {
                 // #7498: OWNED — this is the `[...obj.arr]` arm, and it hands
                 // `key_bytes`/`name` to `array_prototype_property_value` and

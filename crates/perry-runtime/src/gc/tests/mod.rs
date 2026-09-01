@@ -1,4 +1,5 @@
 mod alloc;
+mod array_pointer_slot_enumeration;
 mod barrier;
 mod barrier_arming;
 mod barrier_decoded_parent;

@@ -415,6 +415,21 @@ pub(crate) struct FnCtx<'a> {
     /// find the parent class's constructor to inline. Same depth as
     /// `this_stack` (one entry per nested `new`).
     pub class_stack: Vec<String>,
+    /// True while lowering the body of a STATIC class member (method, static
+    /// accessor, static computed member) — i.e. a body compiled by
+    /// `compile_static_method`, whose `this` slot holds the CLASS
+    /// CONSTRUCTOR, not an instance.
+    ///
+    /// `class_stack` names the owning class in a static body too (it is what
+    /// `super.x` resolves against), and `receiver_class_name(Expr::This)`
+    /// reads `class_stack.last()`. That answer is right for an instance
+    /// method and wrong here: a static body's `this` is the INT32-tagged
+    /// class ref `0x7FFE_0000_0000_00cc`, never a heap instance of the class.
+    /// Lowerings that turn a proven receiver class into an INSTANCE-shaped
+    /// access — anything that strips the NaN-box to a raw `ObjectHeader*`, or
+    /// loads a packed field slot — must consult this flag before trusting
+    /// `Expr::This` (#9369).
+    pub in_static_member: bool,
     /// Method registry: `(class_name, method_name) → LLVM function name`.
     /// Built by `compile_module` from `hir.classes[*].methods`. Used by
     /// `lower_call` to dispatch `obj.method(args)` to the right
@@ -1067,29 +1082,15 @@ pub(crate) struct FnCtx<'a> {
     /// so no conversion exists on either edge; the stale number left in the
     /// root slot during the clone is harmless to a GC scan.
     pub numeric_accumulator_f64_slots: std::collections::HashMap<u32, String>,
-    /// Poll-scoped receiver cache, active only while a packed fast clone is
-    /// being lowered: array local id -> frame-rooted F64 alloca holding the
-    /// receiver BOX. Every in-clone `LocalGet` of the receiver reads this
-    /// alloca instead of the source binding's root, so native-root mem2reg
-    /// promotes it and LLVM hoists the handle mask + element base math out of
-    /// the loop — the per-access root re-derive was 3-5 instructions on every
-    /// packed load and store. The cache is itself rewritten by evacuation and
-    /// refreshes from the source root on the ARMED arm of every loop poll
-    /// (`emit_armed_gc_loop_safepoint`), which is the only place a call-free
-    /// clone can collect; entries in `packed_receiver_refresh` drive that
-    /// reload for EVERY active scope, which keeps nested clones' outer caches
-    /// fresh when an inner loop's poll fires. Rooting the cache is required
-    /// even with that reload: it makes liveness across the poll explicit and
-    /// keeps the shadow and native precise-root lowerings structurally sound.
-    pub packed_receiver_box_slots: std::collections::HashMap<u32, String>,
-    /// (alloca, source ref, source-is-module-global) reload recipes for the
-    /// poll-arm refresh of `packed_receiver_box_slots`.
-    pub packed_receiver_refresh: Vec<(String, String)>,
-    /// Masked-handle twin of `packed_receiver_box_slots`: array id -> i64
-    /// alloca holding `box & POINTER_MASK`. The hot packed lanes' address
-    /// math consults it via `packed_receiver_handle_i64`, removing the
-    /// per-element mask that LLVM cannot PRE across the poll's refresh phi.
-    pub packed_receiver_handle_slots: std::collections::HashMap<u32, String>,
+    pub transition_cache_base_slot: Option<String>,
+    /// #9254 phase 2: active materialised receiver descriptors. The first
+    /// consumer is the packed fast clone's #9111 cache: one entry owns the
+    /// frame-rooted receiver box, its pre-masked base-handle slot and the
+    /// source-root refresh recipe. `LocalGet`, packed address math and the
+    /// armed poll all query this table instead of coordinating three parallel
+    /// maps. The table checks its address claim against the shared region
+    /// boundary algebra before carrying it across a fired poll.
+    pub receiver_descriptors: crate::collectors::ReceiverDescriptorTable,
     /// When set, `emit_armed_gc_loop_safepoint` gates its VOLATILE armed
     /// load on `(counter & 63) == 0`, so the poll's serialization cost (and
     /// the receiver-cache re-derive it forces on every element) is paid once
@@ -2028,13 +2029,17 @@ pub(crate) enum MaskedWindowElem {
 /// pre-masked value when the clone hoisted it, else the inline
 /// bitcast-and-mask. One i64 load vs two ALU ops — the win is that the load
 /// is loop-invariant to LLVM while the mask of a poll-refreshed phi is not.
-pub(crate) fn packed_receiver_handle_i64(
+pub(crate) fn receiver_descriptor_handle_i64(
     ctx: &mut FnCtx<'_>,
     arr_id: Option<u32>,
     arr_box: &str,
 ) -> String {
     if let Some(id) = arr_id {
-        if let Some(slot) = ctx.packed_receiver_handle_slots.get(&id).cloned() {
+        if let Some(slot) = ctx
+            .receiver_descriptors
+            .base_handle_slot(id)
+            .map(str::to_owned)
+        {
             return ctx.block().load(crate::types::I64, &slot);
         }
     }
@@ -2424,6 +2429,29 @@ mod inline_cache_name_tests {
 }
 
 impl<'a> FnCtx<'a> {
+    /// Is `e` the `this` of a STATIC class member — i.e. a receiver that holds
+    /// the class CONSTRUCTOR (an INT32 class ref) rather than an instance?
+    ///
+    /// `receiver_class_name` answers `Some(<owning class>)` for `Expr::This`
+    /// in a static body just as it does in an instance body, because both read
+    /// `class_stack`. Callers that go on to treat that class name as a
+    /// statement about the receiver's LAYOUT — stripping the NaN-box to an
+    /// `ObjectHeader*`, indexing a packed field slot — are only entitled to do
+    /// so for an instance, so they ask this first (#9369).
+    ///
+    /// Sees through `Expr::PrivateGuard`, which returns its receiver
+    /// unchanged, mirroring `receiver_class_name`'s own arm for it.
+    pub(crate) fn is_static_class_this(&self, e: &perry_hir::Expr) -> bool {
+        if !self.in_static_member {
+            return false;
+        }
+        match e {
+            perry_hir::Expr::This => true,
+            perry_hir::Expr::PrivateGuard { object, .. } => self.is_static_class_this(object),
+            _ => false,
+        }
+    }
+
     /// Return runtime-derived initializer evidence only when no write anywhere
     /// in this region can have invalidated it.
     ///
@@ -2747,7 +2775,8 @@ mod unary_bigint_tests;
 #[cfg(test)]
 mod unary_bitnot_tests;
 pub(crate) use index_get::{
-    affine_index_fits_i64, numeric_index_has_integer_array_index_proof, packed_f64_loop_index_parts,
+    affine_counter_occurrences, affine_index_fits_i64, emit_affine_index_i64_with,
+    numeric_index_has_integer_array_index_proof, packed_f64_loop_index_parts,
 };
 pub(crate) use masked_window::masked_window_fact_for_index;
 /// Rooting coverage for the computed-store arms the TS corpora cannot reach

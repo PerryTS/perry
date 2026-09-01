@@ -23,13 +23,13 @@ func benchFibonacci() {
 
 func benchLoopOverhead() {
 	start := time.Now()
-	sum := 0.0
-	for i := 0; i < 100_000_000; i++ {
-		sum += 1.0
+	checksum := uint32(0x811c9dc5)
+	for i := uint32(0); i < 100_000_000; i++ {
+		checksum = (checksum ^ i) * 0x01000193
 	}
 	elapsed := time.Since(start).Milliseconds()
 	fmt.Printf("loop_overhead:%d\n", elapsed)
-	fmt.Printf("  checksum: %.0f\n", sum)
+	fmt.Printf("  checksum: %d\n", checksum)
 }
 
 func benchArrayWrite() {
@@ -115,12 +115,9 @@ func benchAccumulate() {
 	fmt.Printf("  checksum: %.0f\n", sum)
 }
 
-// Data-dependent loop with sequential multiply-carry. Sibling to
-// benchLoopOverhead but genuinely non-foldable: array reads + a
-// multiplicative carry through `sum` defeat any IV-simplify or
-// reassoc the Go compiler might attempt. (Go's compiler does not
-// have a fast-math flag; this loop runs identically with or without
-// optimization in stock Go.)
+// Floating-point loop with a sequential multiply-carry. Unlike
+// benchLoopOverhead's integer carry, this adds two runtime array reads and
+// exposes FP-contraction behavior. Go has no fast-math flag.
 func benchLoopDataDependent() {
 	const N = 64
 	const ITERATIONS = 100_000_000

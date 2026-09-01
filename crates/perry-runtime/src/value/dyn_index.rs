@@ -529,7 +529,8 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
 /// computed assignments use [`js_dyn_index_set_strict`] below.
 ///
 /// Routes by the receiver's `gc_type` byte: arrays go through
-/// `js_array_set_index_or_string_strict` (numeric/string-key spec dispatch);
+/// `js_array_set_index_or_string_with_strictness` (numeric/string-key spec
+/// dispatch, carrying this entry's `strict` flag);
 /// ordinary objects retain receiver-aware property `[[Set]]` semantics.
 /// Strings are immutable — no-op (matches
 /// strict-mode `s[i] = x` semantics, close enough for the `++result[key]`
@@ -767,10 +768,15 @@ pub extern "C" fn js_dyn_index_set_strict(obj: f64, index: f64, value: f64, stri
     }
     let is_array = receiver_tag.is_some_and(|(obj_type, _)| obj_type == crate::gc::GC_TYPE_ARRAY);
     if is_array {
-        crate::array::js_array_set_index_or_string_strict(
+        // #9394: this entry already carries the assignment's own `Throw`
+        // flag (`js_dyn_index_set` passes 0 for the sloppy runtime callers);
+        // the array arm forced `true` and threw on a frozen / non-writable /
+        // non-extensible element write that Node silently drops.
+        crate::array::js_array_set_index_or_string_with_strictness(
             raw_ptr as *mut crate::array::ArrayHeader,
             index,
             value,
+            strict != 0,
         );
         return value;
     }

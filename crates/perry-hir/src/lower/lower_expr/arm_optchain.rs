@@ -5,6 +5,28 @@ use super::*;
 use anyhow::Result;
 use swc_ecma_ast as ast;
 
+/// Whether `expr` is (or transparently wraps) an optional chain.
+///
+/// The call arm below has one branch that may only run for a receiver an
+/// upstream optional chain produced, because it reads that receiver's lowered
+/// `Expr::Conditional` as a short-circuit test. Lowered shape cannot answer
+/// "did a `?.` build this?" — a user's own ternary is the same shape — so the
+/// question is asked of the AST, before lowering erases the distinction.
+/// Parens and the erased TS wrappers are transparent: `(a?.b)?.c()` and
+/// `(a?.b as T)?.c()` are still chains.
+fn receiver_is_optional_chain(expr: &ast::Expr) -> bool {
+    match expr {
+        ast::Expr::OptChain(_) => true,
+        ast::Expr::Paren(paren) => receiver_is_optional_chain(&paren.expr),
+        ast::Expr::TsAs(inner) => receiver_is_optional_chain(&inner.expr),
+        ast::Expr::TsNonNull(inner) => receiver_is_optional_chain(&inner.expr),
+        ast::Expr::TsSatisfies(inner) => receiver_is_optional_chain(&inner.expr),
+        ast::Expr::TsTypeAssertion(inner) => receiver_is_optional_chain(&inner.expr),
+        ast::Expr::TsConstAssertion(inner) => receiver_is_optional_chain(&inner.expr),
+        _ => false,
+    }
+}
+
 pub(crate) fn lower_opt_chain_expr(
     ctx: &mut LoweringContext,
     opt_chain: &ast::OptChainExpr,
@@ -171,6 +193,10 @@ pub(crate) fn lower_opt_chain_expr(
             // on string builtins (`type?.split?.(...)`) — see
             // `opt_call_func_nullish_guard`. `None` for non-member callees.
             let mut opt_call_member_receiver: Option<Expr> = None;
+            // True when the RECEIVER is itself an optional chain, so its
+            // lowered `Expr::Conditional` really is a short-circuit and may be
+            // destructured as one. See `receiver_is_optional_chain`.
+            let receiver_is_chain;
             let (check_expr, callee_expr) = {
                 let mut lower_member_flat = |member: &ast::MemberExpr| -> Result<(Expr, Expr)> {
                     let obj = lower_expr(ctx, &member.obj)?;
@@ -211,6 +237,7 @@ pub(crate) fn lower_opt_chain_expr(
                     // (prop), call the function (prop) — codegen still sees
                     // a PropertyGet callee so `this` binds to obj.
                     ast::Expr::Member(m) => {
+                        receiver_is_chain = receiver_is_optional_chain(&m.obj);
                         let (obj, prop) = lower_member_flat(m)?;
                         opt_call_member_receiver = Some(obj);
                         (prop.clone(), prop)
@@ -247,141 +274,157 @@ pub(crate) fn lower_opt_chain_expr(
                             // the inner-Conditional nesting path can guard
                             // the receiver when it is `undefined`.
                             opt_member_chain = inner.optional;
+                            receiver_is_chain = receiver_is_optional_chain(&m.obj);
                             let (obj, prop) = lower_member_flat(m)?;
                             opt_call_member_receiver = Some(obj.clone());
                             (obj, prop)
                         }
                         _ => {
+                            receiver_is_chain = true;
                             let ce = lower_expr(ctx, callee)?;
                             (ce.clone(), ce)
                         }
                     },
                     _ => {
+                        receiver_is_chain = receiver_is_optional_chain(callee);
                         let ce = lower_expr(ctx, callee)?;
                         (ce.clone(), ce)
                     }
                 }
             };
 
-            // If check_expr is already a Conditional from an inner optional chain,
-            // nest the outer call inside its else branch instead of creating another Conditional.
-            // This avoids duplicating side-effecting expressions (like ArrayShift/ArrayPop).
-            if let Expr::Conditional {
-                condition: inner_cond,
-                then_expr: inner_then,
-                else_expr: inner_else,
-            } = check_expr
-            {
-                // The receiver of the method call is `inner_else` (the
-                // un-short-circuited result of the upstream chain, e.g.
-                // `a.b` for `a?.b?.method(args)`). Keep a copy so an
-                // optional method member (`?.method`) can null-guard it.
-                // Captured whenever the method member is optional and the
-                // receiver is side-effect-free (it appears twice: in the
-                // guard and in the call). Used by BOTH the optional-call
-                // (`?.method?.(args)`) and plain-call (`?.method(args)`)
-                // branches — in the optional-call branch the function-value
-                // nullish guard would otherwise read `(a.b).method` off a
-                // null/undefined `a.b` and throw before short-circuiting.
-                let receiver_for_member_guard =
-                    if opt_member_chain && opt_call_receiver_repeatable(&inner_else) {
-                        Some(inner_else.as_ref().clone())
-                    } else {
-                        None
-                    };
-                // Build the callee with inner_else as the object (not the full Conditional)
-                let fixed_callee = match callee_expr {
-                    Expr::PropertyGet { property, .. } => Expr::PropertyGet {
-                        byte_offset: 0,
-                        object: inner_else,
-                        property,
-                    },
-                    Expr::IndexGet { index, .. } => Expr::IndexGet {
-                        object: inner_else,
-                        index,
-                    },
-                    other => other,
-                };
-                let outer_call = Expr::Call {
-                    callee: Box::new(fixed_callee.clone()),
-                    args,
-                    type_args: Vec::new(),
-                    byte_offset: 0,
-                };
-                // For `foo?.bar?.(args)` the function value (`bar` on the
-                // un-short-circuited receiver) must itself be null-checked
-                // before calling — otherwise an `undefined` property is
-                // invoked and throws "X is not a function" (#4699).
-                let else_expr: Box<Expr> = if callee_from_chain {
-                    // String-builtin-safe nullish guard: a real string
-                    // receiver never short-circuits even though
-                    // `string.method` reads as undefined.
-                    let guard_cond = match &opt_call_member_receiver {
-                        Some(recv) => opt_call_func_nullish_guard(recv, fixed_callee),
-                        None => Expr::Compare {
-                            op: CompareOp::LooseEq,
-                            left: Box::new(fixed_callee),
-                            right: Box::new(Expr::Null),
-                        },
-                    };
-                    let guarded_call = Expr::Conditional {
-                        condition: Box::new(guard_cond),
-                        then_expr: Box::new(Expr::Undefined),
-                        else_expr: Box::new(outer_call),
-                    };
-                    // `a?.b?.method?.(args)` — the function-value guard above
-                    // reads `(a.b).method`, which THROWS when the upstream
-                    // `a.b` is null/undefined (it lowered to a Conditional, so
-                    // the receiver here is the un-short-circuited `a.b`). Wrap
-                    // it in an outer receiver-nullish short-circuit so the
-                    // chain returns `undefined` instead of throwing
-                    // "Cannot read properties of <nullish> (reading 'method')".
-                    match receiver_for_member_guard {
-                        Some(recv) => Box::new(Expr::Conditional {
-                            condition: Box::new(Expr::Compare {
-                                op: CompareOp::LooseEq,
-                                left: Box::new(recv),
-                                right: Box::new(Expr::Null),
-                            }),
-                            then_expr: Box::new(Expr::Undefined),
-                            else_expr: Box::new(guarded_call),
-                        }),
-                        None => Box::new(guarded_call),
-                    }
-                } else if let Some(recv) = receiver_for_member_guard {
-                    // `a?.b?.method(args)` — the method member (`?.method`)
-                    // is optional and its receiver (`a.b`) comes from an
-                    // upstream optional chain, so it lowered to a Conditional
-                    // and this branch lost the per-receiver null-guard that
-                    // the non-Conditional path applies. Re-add it: if the
-                    // RECEIVER is nullish, short-circuit to undefined instead
-                    // of reading `.method` off `undefined` and throwing
-                    // "Cannot read properties of undefined (reading 'method')"
-                    // (the `a?.b?.some(...)` wall). The guard tests the
-                    // receiver value directly — NOT the function value
-                    // `(a.b).method`, which would itself throw while reading
-                    // `.method` off the `undefined` receiver during guard
-                    // evaluation. The receiver appears twice (guard + call),
-                    // so this is only reached when it is side-effect-free
-                    // (`receiver_for_member_guard` is None otherwise).
-                    let guard_cond = Expr::Compare {
-                        op: CompareOp::LooseEq,
-                        left: Box::new(recv),
-                        right: Box::new(Expr::Null),
-                    };
-                    Box::new(Expr::Conditional {
-                        condition: Box::new(guard_cond),
-                        then_expr: Box::new(Expr::Undefined),
-                        else_expr: Box::new(outer_call),
-                    })
-                } else {
-                    Box::new(outer_call)
-                };
-                return Ok(Expr::Conditional {
+            // Destructure ONLY a Conditional that an upstream OPTIONAL CHAIN
+            // produced (`a?.b?.method(args)`) — never a Conditional the user
+            // wrote. A ternary receiver lowers to exactly the same `Expr::
+            // Conditional` shape, and this branch reads its condition and
+            // then-branch as if they were a short-circuit test: `(c ? o :
+            // undefined)?.write(x)` became `c ? o : undefined.write(x)` —
+            // returning the receiver when `c` held, and throwing "Cannot read
+            // properties of undefined" when it did not, where node returns
+            // `undefined`. The question the branch needs answered is where the
+            // Conditional CAME FROM, which only the AST can say, so ask it
+            // there rather than inferring it from the lowered shape.
+            if receiver_is_chain {
+                // If check_expr is already a Conditional from an inner optional chain,
+                // nest the outer call inside its else branch instead of creating another Conditional.
+                // This avoids duplicating side-effecting expressions (like ArrayShift/ArrayPop).
+                if let Expr::Conditional {
                     condition: inner_cond,
                     then_expr: inner_then,
-                    else_expr,
-                });
+                    else_expr: inner_else,
+                } = check_expr
+                {
+                    // The receiver of the method call is `inner_else` (the
+                    // un-short-circuited result of the upstream chain, e.g.
+                    // `a.b` for `a?.b?.method(args)`). Keep a copy so an
+                    // optional method member (`?.method`) can null-guard it.
+                    // Captured whenever the method member is optional and the
+                    // receiver is side-effect-free (it appears twice: in the
+                    // guard and in the call). Used by BOTH the optional-call
+                    // (`?.method?.(args)`) and plain-call (`?.method(args)`)
+                    // branches — in the optional-call branch the function-value
+                    // nullish guard would otherwise read `(a.b).method` off a
+                    // null/undefined `a.b` and throw before short-circuiting.
+                    let receiver_for_member_guard =
+                        if opt_member_chain && opt_call_receiver_repeatable(&inner_else) {
+                            Some(inner_else.as_ref().clone())
+                        } else {
+                            None
+                        };
+                    // Build the callee with inner_else as the object (not the full Conditional)
+                    let fixed_callee = match callee_expr {
+                        Expr::PropertyGet { property, .. } => Expr::PropertyGet {
+                            byte_offset: 0,
+                            object: inner_else,
+                            property,
+                        },
+                        Expr::IndexGet { index, .. } => Expr::IndexGet {
+                            object: inner_else,
+                            index,
+                        },
+                        other => other,
+                    };
+                    let outer_call = Expr::Call {
+                        callee: Box::new(fixed_callee.clone()),
+                        args,
+                        type_args: Vec::new(),
+                        byte_offset: 0,
+                    };
+                    // For `foo?.bar?.(args)` the function value (`bar` on the
+                    // un-short-circuited receiver) must itself be null-checked
+                    // before calling — otherwise an `undefined` property is
+                    // invoked and throws "X is not a function" (#4699).
+                    let else_expr: Box<Expr> = if callee_from_chain {
+                        // String-builtin-safe nullish guard: a real string
+                        // receiver never short-circuits even though
+                        // `string.method` reads as undefined.
+                        let guard_cond = match &opt_call_member_receiver {
+                            Some(recv) => opt_call_func_nullish_guard(recv, fixed_callee),
+                            None => Expr::Compare {
+                                op: CompareOp::LooseEq,
+                                left: Box::new(fixed_callee),
+                                right: Box::new(Expr::Null),
+                            },
+                        };
+                        let guarded_call = Expr::Conditional {
+                            condition: Box::new(guard_cond),
+                            then_expr: Box::new(Expr::Undefined),
+                            else_expr: Box::new(outer_call),
+                        };
+                        // `a?.b?.method?.(args)` — the function-value guard above
+                        // reads `(a.b).method`, which THROWS when the upstream
+                        // `a.b` is null/undefined (it lowered to a Conditional, so
+                        // the receiver here is the un-short-circuited `a.b`). Wrap
+                        // it in an outer receiver-nullish short-circuit so the
+                        // chain returns `undefined` instead of throwing
+                        // "Cannot read properties of <nullish> (reading 'method')".
+                        match receiver_for_member_guard {
+                            Some(recv) => Box::new(Expr::Conditional {
+                                condition: Box::new(Expr::Compare {
+                                    op: CompareOp::LooseEq,
+                                    left: Box::new(recv),
+                                    right: Box::new(Expr::Null),
+                                }),
+                                then_expr: Box::new(Expr::Undefined),
+                                else_expr: Box::new(guarded_call),
+                            }),
+                            None => Box::new(guarded_call),
+                        }
+                    } else if let Some(recv) = receiver_for_member_guard {
+                        // `a?.b?.method(args)` — the method member (`?.method`)
+                        // is optional and its receiver (`a.b`) comes from an
+                        // upstream optional chain, so it lowered to a Conditional
+                        // and this branch lost the per-receiver null-guard that
+                        // the non-Conditional path applies. Re-add it: if the
+                        // RECEIVER is nullish, short-circuit to undefined instead
+                        // of reading `.method` off `undefined` and throwing
+                        // "Cannot read properties of undefined (reading 'method')"
+                        // (the `a?.b?.some(...)` wall). The guard tests the
+                        // receiver value directly — NOT the function value
+                        // `(a.b).method`, which would itself throw while reading
+                        // `.method` off the `undefined` receiver during guard
+                        // evaluation. The receiver appears twice (guard + call),
+                        // so this is only reached when it is side-effect-free
+                        // (`receiver_for_member_guard` is None otherwise).
+                        let guard_cond = Expr::Compare {
+                            op: CompareOp::LooseEq,
+                            left: Box::new(recv),
+                            right: Box::new(Expr::Null),
+                        };
+                        Box::new(Expr::Conditional {
+                            condition: Box::new(guard_cond),
+                            then_expr: Box::new(Expr::Undefined),
+                            else_expr: Box::new(outer_call),
+                        })
+                    } else {
+                        Box::new(outer_call)
+                    };
+                    return Ok(Expr::Conditional {
+                        condition: inner_cond,
+                        then_expr: inner_then,
+                        else_expr,
+                    });
+                }
             }
 
             // Keep the function value for the `foo?.bar?.(args)` guard

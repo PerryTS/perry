@@ -781,21 +781,21 @@ fn emit_range_loop_accumulator_admission(
     slow_pre_label: &str,
     block_prefix: &str,
 ) -> PackedAccumulatorScope {
-    // One array may carry the accumulator proof: with several, no single
-    // admitted leaf spans them all. Counter-bearing arrays keep priority;
-    // a masked-only array (dense mode) now qualifies too, because the dense
-    // entry guard validates its whole window hole-free, making every
-    // in-window read a Number the accumulator walk may lean on.
-    let mut single = matched.arrays.iter().filter(|a| a.counter.is_some());
-    let (array_id, masked_reads_validated) = match (single.next(), single.next()) {
-        (Some(access), None) => (access.array_id, access.stat.is_some()),
-        (None, _) if matched.arrays.len() == 1 => (matched.arrays[0].array_id, true),
-        _ => return PackedAccumulatorScope::empty(),
-    };
+    // The accumulator walk now takes the whole guarded array SET — the old
+    // single-array restriction ("no admitted leaf spans them all") was the
+    // reason `sum = sum + a[..] * b[..]` never earned its number proof, and
+    // every k-iteration of matmul wrote `sum` through a boxed shadow-slot
+    // store with a barrier. Every array in the set is validated by the same
+    // AND-reduced entry guard, so a read of any of them inside the clone is a
+    // Number by the same argument that held for one.
+    let array_ids: std::collections::BTreeSet<u32> =
+        matched.arrays.iter().map(|a| a.array_id).collect();
+    let masked_reads_validated = matched.arrays.iter().any(|a| a.stat.is_some());
+    let affine_reads = matched.arrays.iter().any(|a| a.affine);
     emit_packed_numeric_accumulator_admission(
         ctx,
         body,
-        array_id,
+        &array_ids,
         matched.counter_id,
         slow_pre_label,
         block_prefix,
@@ -804,6 +804,7 @@ fn emit_range_loop_accumulator_admission(
         // Number. See `accumulator_rhs_is_numeric`.
         true,
         masked_reads_validated,
+        affine_reads,
     )
 }
 
@@ -819,8 +820,9 @@ struct PackedAccumulatorScope {
     /// clone: (id, i32 slot, double slot) — exits re-sync the double.
     deferred_integer: Vec<(u32, String, String)>,
     side_exit_override: Option<String>,
-    /// Receiver ids this scope cached into promotable allocas (see
-    /// `FnCtx::packed_receiver_box_slots`); cleared by `finish`.
+    /// Receiver ids this scope materialised in the shared descriptor table;
+    /// cleared by `finish`. An inner scope reusing an outer descriptor does
+    /// not record that receiver here.
     hoisted_receivers: Vec<u32>,
 }
 
@@ -924,11 +926,11 @@ impl PackedAccumulatorScope {
     /// Cache each receiver's box in a promotable precise-root alloca for this
     /// fast clone. Receivers here are matcher-validated plain locals or module
     /// globals (never captures/boxes), and the clone body is call-free, so the
-    /// only collection point is the loop poll — whose armed arm reloads every
-    /// entry in `packed_receiver_refresh` and re-derives its masked handle.
+    /// only collection point is the loop poll — whose armed arm asks the
+    /// shared receiver-descriptor table for every admitted refresh recipe.
     fn hoist_receivers(&mut self, ctx: &mut FnCtx<'_>, array_ids: &[u32]) {
         for arr_id in array_ids {
-            if ctx.packed_receiver_box_slots.contains_key(arr_id) {
+            if ctx.receiver_descriptors.contains(*arr_id) {
                 continue;
             }
             let source_ref = if let Some(slot) = ctx.locals.get(arr_id) {
@@ -961,11 +963,17 @@ impl PackedAccumulatorScope {
                 let handle = blk.and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
                 blk.store(I64, &handle, &handle_alloca);
             }
-            ctx.packed_receiver_box_slots
-                .insert(*arr_id, alloca.clone());
-            ctx.packed_receiver_handle_slots
-                .insert(*arr_id, handle_alloca);
-            ctx.packed_receiver_refresh.push((alloca, source_ref));
+            let installed = ctx.receiver_descriptors.materialize_poll_refreshed_address(
+                *arr_id,
+                alloca,
+                handle_alloca,
+                source_ref,
+                // Packed loop admission rejects Stmt::Try. A throw may
+                // leave the clone, but no descriptor is live in the
+                // handler reached outside this dynamic extent.
+                true,
+            );
+            debug_assert!(installed, "duplicate receiver checked above");
             self.hoisted_receivers.push(*arr_id);
         }
     }
@@ -1038,11 +1046,8 @@ impl PackedAccumulatorScope {
             }
         }
         for arr_id in &self.hoisted_receivers {
-            if let Some(alloca) = ctx.packed_receiver_box_slots.remove(arr_id) {
-                ctx.packed_receiver_refresh
-                    .retain(|(slot, _)| slot != &alloca);
-            }
-            ctx.packed_receiver_handle_slots.remove(arr_id);
+            let removed = ctx.receiver_descriptors.dematerialize(*arr_id);
+            debug_assert!(removed, "scope owns every receiver it materialised");
         }
     }
 }
@@ -1112,20 +1117,22 @@ pub(crate) fn flush_packed_accumulator_locals(ctx: &mut FnCtx<'_>) {
 fn emit_packed_numeric_accumulator_admission(
     ctx: &mut FnCtx<'_>,
     body: &[Stmt],
-    array_id: u32,
+    array_ids: &std::collections::BTreeSet<u32>,
     counter_id: u32,
     slow_pre_label: &str,
     block_prefix: &str,
     offset_reads_inlined: bool,
     masked_reads_validated: bool,
+    affine_reads: bool,
 ) -> PackedAccumulatorScope {
     let accumulators = super::stable_packed_accumulator::collect_numeric_accumulators(
         ctx,
         body,
-        array_id,
+        array_ids,
         counter_id,
         offset_reads_inlined,
         masked_reads_validated,
+        affine_reads,
     );
     // Integer (`c++`) accumulators admit independently of the float set —
     // a pure count loop has no float accumulator at all.
@@ -1302,7 +1309,7 @@ fn lower_packed_f64_versioned_for(
     let mut acc_scope = emit_packed_numeric_accumulator_admission(
         ctx,
         body,
-        matched.array_id,
+        &std::collections::BTreeSet::from([matched.array_id]),
         matched.counter_id,
         &slow_pre_label,
         loop_label,
@@ -1313,6 +1320,8 @@ fn lower_packed_f64_versioned_for(
         false,
         // No masked windows either: this tier's guard proves the receiver and
         // the length bound, not a hole-free window.
+        false,
+        // And no affine reads: this tier's facts publish affine_indices:false.
         false,
     );
     acc_scope.hoist_receivers(ctx, &[matched.array_id]);
@@ -1392,7 +1401,7 @@ enum PackedF64RangeLoopBound {
     Local(u32),
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(super) struct PackedF64RangeArrayAccess {
     pub(super) array_id: u32,
     /// Counter-relative accesses: smallest / largest constant offset `c` over
@@ -1409,6 +1418,14 @@ pub(super) struct PackedF64RangeArrayAccess {
     /// integrity) and each read pays an inline `icmp ult idx, len` with a side
     /// exit. Classic mode only: dense mode's loads carry no side exit.
     pub(super) affine: bool,
+    /// The affine index trees themselves, recorded so the entry guard can try
+    /// to prove the loop's whole index WINDOW: a tree linear in the counter
+    /// takes its extremes at the loop's endpoints, so two preheader
+    /// evaluations (counter = start, counter = bound - 1) bound every index
+    /// the loop touches, and one unsigned compare each against the length
+    /// licenses bounds-free raw loads in the clone. #9318's magnitude bound
+    /// makes the preheader evaluations wrap-free by construction.
+    pub(super) affine_exprs: Vec<perry_hir::Expr>,
     pub(super) written: bool,
 }
 
@@ -1611,7 +1628,13 @@ fn match_packed_f64_range_loop(
             }
             let array_id = *accesses.keys().next().expect("len checked");
             let admitted = super::stable_packed_accumulator::collect_numeric_accumulators(
-                ctx, body, array_id, counter_id, true, true,
+                ctx,
+                body,
+                &std::collections::BTreeSet::from([array_id]),
+                counter_id,
+                true,
+                true,
+                false,
             );
             if !pending_accumulators.iter().all(|id| admitted.contains(id)) {
                 return range_loop_reject("accumulator_not_provable");
@@ -1785,6 +1808,26 @@ fn expr_mentions_local(expr: &perry_hir::Expr, id: u32) -> bool {
     found
 }
 
+/// The one affine-index admissibility test shared by the range matcher, the
+/// read lowering, and the accumulator walk. If any of the three drifts, the
+/// clone can contain a read the others assumed away (#9259's cascade shape),
+/// so they all call this.
+pub(super) fn affine_leaf_admissible(
+    ctx: &FnCtx<'_>,
+    index: &perry_hir::Expr,
+    counter_id: u32,
+) -> bool {
+    let leaf_ok = |id: u32| -> bool {
+        ctx.integer_locals.contains(&id)
+            && ctx.i32_counter_slots.contains_key(&id)
+            && !ctx.boxed_vars.contains(&id)
+            && !ctx.closure_captures.contains_key(&id)
+    };
+    packed_f64_range_loop_index_is_affine_with(index, counter_id, &leaf_ok)
+        && expr_mentions_local(index, counter_id)
+        && crate::expr::affine_index_fits_i64(index)
+}
+
 fn packed_f64_range_loop_index_is_affine_with(
     index: &perry_hir::Expr,
     counter_id: u32,
@@ -1819,6 +1862,7 @@ fn packed_f64_range_loop_index_is_affine_with(
 fn record_packed_f64_range_affine_access(
     accesses: &mut std::collections::BTreeMap<u32, PackedF64RangeArrayAccess>,
     array_id: u32,
+    index: &perry_hir::Expr,
 ) {
     let entry = accesses
         .entry(array_id)
@@ -1827,9 +1871,11 @@ fn record_packed_f64_range_affine_access(
             counter: None,
             stat: None,
             affine: false,
+            affine_exprs: Vec::new(),
             written: false,
         });
     entry.affine = true;
+    entry.affine_exprs.push(index.clone());
 }
 
 fn record_packed_f64_range_access(
@@ -1845,6 +1891,7 @@ fn record_packed_f64_range_access(
             counter: None,
             stat: None,
             affine: false,
+            affine_exprs: Vec::new(),
             written,
         });
     entry.counter = Some(match entry.counter {
@@ -1882,6 +1929,7 @@ pub(super) fn record_packed_f64_range_static_access(
             counter: None,
             stat: None,
             affine: false,
+            affine_exprs: Vec::new(),
             written: false,
         });
     entry.stat = Some(match entry.stat {
@@ -2491,7 +2539,7 @@ pub(super) fn packed_f64_range_loop_pure_expr_collect(
                     // the lowering so the two cannot disagree.
                     && crate::expr::affine_index_fits_i64(index)
                 {
-                    record_packed_f64_range_affine_access(accesses, *arr_id);
+                    record_packed_f64_range_affine_access(accesses, *arr_id, index);
                     return true;
                 }
             }
@@ -2618,8 +2666,9 @@ fn emit_packed_f64_range_guards(
     bound_i32: &str,
     guard_fn: &str,
     guard_id: &str,
-) -> Result<String> {
+) -> Result<(String, std::collections::BTreeSet<u32>)> {
     let mut all_guards_ok: Option<String> = None;
+    let mut affine_window_proven: std::collections::BTreeSet<u32> = Default::default();
     for access in &matched.arrays {
         let arr_box = lower_expr(ctx, &perry_hir::Expr::LocalGet(access.array_id))?;
         let feedback_site_id = emit_typed_feedback_register_site(
@@ -2628,13 +2677,19 @@ fn emit_packed_f64_range_guards(
             "array[packed_f64_range_loop]",
             TypedFeedbackContract::packed_f64_array_loop(),
         );
-        // #9253: an affine access has no window to validate. The 2-arg
-        // receiver guard proves exactly what is hoistable — plain-array shape,
-        // raw-f64 packedness, integrity/frozen state, the 16M length and
-        // capacity sanity bounds — once in the preheader, which is the whole
-        // point: those are the per-iteration instructions this issue is about.
-        // The index itself is validated per read by `icmp ult idx, len`.
-        if access.affine {
+        // #9253: an affine access has no static window. A PURELY affine
+        // array takes the 2-arg receiver guard (plain-array shape, raw-f64
+        // packedness, integrity, the 16M sanity bounds — the per-iteration
+        // instructions the issue measured). An array that ALSO has counter
+        // or masked accesses must NOT skip the windowed guard below: #9294
+        // took this `continue` for mixed arrays too, which left their
+        // counter windows unvalidated while the counter fact still said
+        // `window_validated: true` — `a[k + 1]` then read one raw slot past
+        // the end at the boundary. Mixed arrays now fall through to the
+        // 4-arg windowed guard, and the affine endpoint proof is appended
+        // to either path.
+        let purely_affine = access.affine && access.counter.is_none() && access.stat.is_none();
+        if purely_affine {
             let guard_i32 = ctx.block().call(
                 I32,
                 "js_typed_feedback_packed_f64_array_loop_guard",
@@ -2652,6 +2707,69 @@ fn emit_packed_f64_range_guards(
                 guard_id,
                 PackedNumericLoopKind::F64,
             );
+        }
+        // Affine WINDOW proof: a tree linear in the counter takes its
+        // extremes at the endpoints, so evaluating it at `start` and at
+        // `bound - 1` and unsigned-comparing both against the live length
+        // bounds every index the loop touches — any coefficient sign, since
+        // a linear function's extremes are at the interval's ends, and a
+        // negative value reads as huge unsigned. Every leaf is i32 and the
+        // #9318 magnitude bound admitted the tree, so the i64 endpoint
+        // evaluations cannot wrap. Non-linear trees (`k * k`) keep their
+        // per-read checks; the fact records which case this array is in.
+        if access.affine {
+            let all_linear = access
+                .affine_exprs
+                .iter()
+                .all(|e| crate::expr::affine_counter_occurrences(e, matched.counter_id) == 1);
+            if all_linear && !access.affine_exprs.is_empty() {
+                let (len64, start_i64, end_minus_1) = {
+                    let blk = ctx.block();
+                    let arr_bits = blk.bitcast_double_to_i64(&arr_box);
+                    let arr_handle = blk.and(I64, &arr_bits, crate::nanbox::POINTER_MASK_I64);
+                    let arr_ptr = blk.inttoptr(I64, &arr_handle);
+                    let len32 = blk.load(I32, &arr_ptr);
+                    let len64 = blk.zext(I32, &len32, I64);
+                    let end64 = blk.sext(I32, bound_i32, I64);
+                    let end_minus_1 = blk.sub(I64, &end64, "1");
+                    (len64, matched.start.to_string(), end_minus_1)
+                };
+                let mut window_ok: Option<String> = None;
+                let mut window_failed = false;
+                'exprs: for expr in &access.affine_exprs {
+                    for endpoint in [start_i64.as_str(), end_minus_1.as_str()] {
+                        let value = match crate::expr::emit_affine_index_i64_with(
+                            ctx,
+                            expr,
+                            matched.counter_id,
+                            Some(endpoint),
+                        ) {
+                            Some(value) => value,
+                            None => {
+                                window_failed = true;
+                                break 'exprs;
+                            }
+                        };
+                        let in_bounds = ctx.block().icmp_ult(I64, &value, &len64);
+                        window_ok = Some(match window_ok {
+                            None => in_bounds,
+                            Some(prev) => ctx.block().and(I1, &prev, &in_bounds),
+                        });
+                    }
+                }
+                if window_failed {
+                    window_ok = None;
+                }
+                if let Some(ok) = window_ok {
+                    all_guards_ok = Some(match all_guards_ok {
+                        None => ok,
+                        Some(prev) => ctx.block().and(I1, &prev, &ok),
+                    });
+                    affine_window_proven.insert(access.array_id);
+                }
+            }
+        }
+        if purely_affine {
             continue;
         }
         let (min_idx, max_idx): (String, String) = match (access.counter, access.stat) {
@@ -2699,7 +2817,10 @@ fn emit_packed_f64_range_guards(
             PackedNumericLoopKind::F64,
         );
     }
-    Ok(all_guards_ok.expect("range loop matcher requires >= 1 array"))
+    Ok((
+        all_guards_ok.expect("range loop matcher requires >= 1 array"),
+        affine_window_proven,
+    ))
 }
 
 /// Push the per-array facts for one fast-loop copy: counter accesses get a
@@ -2715,6 +2836,7 @@ fn push_packed_f64_range_facts(
     values_i32: bool,
     allow_masked_stores: bool,
     numeric_accumulators: &[u32],
+    affine_window_proven: &std::collections::BTreeSet<u32>,
 ) {
     for access in &matched.arrays {
         if access.counter.is_some() {
@@ -2746,7 +2868,10 @@ fn push_packed_f64_range_facts(
                 store_side_exit_label: slow_pre_label.to_string(),
                 array_kind: PackedNumericLoopKind::F64,
                 allow_holes: false,
-                window_validated: false,
+                // True when the entry guard proved this array's whole affine
+                // window at the loop's endpoints — the reads then skip both
+                // the range clamp and the per-read bounds check.
+                window_validated: affine_window_proven.contains(&access.array_id),
                 affine_indices: true,
                 numeric_accumulators: numeric_accumulators.to_vec(),
             });
@@ -3120,7 +3245,7 @@ fn lower_packed_f64_range_versioned_for(
         // proof mid-loop, and the f64 tier's raw loads/stores need no such
         // claim.
         if has_stores {
-            let ok_f64 = emit_packed_f64_range_guards(
+            let (ok_f64, _) = emit_packed_f64_range_guards(
                 ctx,
                 &matched,
                 &bound_i32,
@@ -3135,7 +3260,7 @@ fn lower_packed_f64_range_versioned_for(
             let fast_i32_pre_idx = ctx.new_block("packed_f64_range.loop.fast_i32.preheader");
             let fast_i32_pre_label = ctx.block_label(fast_i32_pre_idx);
 
-            let ok_i32 = emit_packed_f64_range_guards(
+            let (ok_i32, _) = emit_packed_f64_range_guards(
                 ctx,
                 &matched,
                 &bound_i32,
@@ -3146,7 +3271,7 @@ fn lower_packed_f64_range_versioned_for(
                 .cond_br(&ok_i32, &fast_i32_pre_label, &try_f64_label);
 
             ctx.current_block = try_f64_idx;
-            let ok_f64 = emit_packed_f64_range_guards(
+            let (ok_f64, _) = emit_packed_f64_range_guards(
                 ctx,
                 &matched,
                 &bound_i32,
@@ -3181,6 +3306,7 @@ fn lower_packed_f64_range_versioned_for(
                 true,
                 false,
                 &acc_scope.accumulators,
+                &Default::default(),
             );
             let saved_stride = ctx.poll_stride_counter_slot.take();
             ctx.poll_stride_counter_slot = ctx.i32_counter_slots.get(&matched.counter_id).cloned();
@@ -3229,6 +3355,7 @@ fn lower_packed_f64_range_versioned_for(
             false,
             has_stores,
             &acc_scope.accumulators,
+            &Default::default(),
         );
         let saved_stride = ctx.poll_stride_counter_slot.take();
         ctx.poll_stride_counter_slot = ctx.i32_counter_slots.get(&matched.counter_id).cloned();
@@ -3251,7 +3378,7 @@ fn lower_packed_f64_range_versioned_for(
             ctx.block().br(&merge_label);
         }
     } else {
-        let all_guards_ok = emit_packed_f64_range_guards(
+        let (all_guards_ok, affine_window_proven) = emit_packed_f64_range_guards(
             ctx,
             &matched,
             &bound_i32,
@@ -3287,6 +3414,7 @@ fn lower_packed_f64_range_versioned_for(
             false,
             false,
             &acc_scope.accumulators,
+            &affine_window_proven,
         );
         let saved_stride = ctx.poll_stride_counter_slot.take();
         ctx.poll_stride_counter_slot = ctx.i32_counter_slots.get(&matched.counter_id).cloned();
@@ -7403,31 +7531,25 @@ fn emit_armed_gc_loop_safepoint(ctx: &mut FnCtx<'_>) {
     }
     ctx.current_block = poll_idx;
     {
-        let refresh = ctx.packed_receiver_refresh.clone();
-        let handle_pairs: Vec<(String, String)> = ctx
-            .packed_receiver_handle_slots
-            .iter()
-            .filter_map(|(id, handle_slot)| {
-                ctx.packed_receiver_box_slots
-                    .get(id)
-                    .map(|box_slot| (handle_slot.clone(), box_slot.clone()))
-            })
-            .collect();
+        let refresh = ctx
+            .receiver_descriptors
+            .poll_refreshes()
+            .expect("every active receiver descriptor must admit a back-edge poll");
         let blk = ctx.block();
         blk.call_void("js_gc_loop_safepoint", &[]);
         // A fired poll may have MOVED every cached packed receiver — reload
         // each active cache (all scopes: an inner loop's poll must refresh
         // outer clones' caches too) from its GC-updated root before any
         // cached-base access runs again.
-        for (alloca, source_ref) in &refresh {
-            let fresh = blk.load(DOUBLE, source_ref);
-            blk.store(DOUBLE, &fresh, alloca);
+        for recipe in &refresh {
+            let fresh = blk.load(DOUBLE, &recipe.source_root);
+            blk.store(DOUBLE, &fresh, &recipe.rooted_box_slot);
         }
-        for (handle_slot, box_slot) in &handle_pairs {
-            let fresh = blk.load(DOUBLE, box_slot);
+        for recipe in &refresh {
+            let fresh = blk.load(DOUBLE, &recipe.rooted_box_slot);
             let bits = blk.bitcast_double_to_i64(&fresh);
             let handle = blk.and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
-            blk.store(I64, &handle, handle_slot);
+            blk.store(I64, &handle, &recipe.base_handle_slot);
         }
         blk.br(&done_label);
     }

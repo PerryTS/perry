@@ -412,8 +412,9 @@ pub(crate) fn prune_dead_object_prototype_owners(is_dead_owner: &dyn Fn(usize) -
     }
 }
 
-/// Migrate the side-table entry when the owner object is evacuated by a moving
-/// GC. Mirrors `closure_dynamic_props_owner_moved`.
+/// Migrate the residual side-table entry when an owner's allocation address
+/// changes, either through moving GC or an `ArrayHeader` growth replacement.
+/// Mirrors `closure_dynamic_props_owner_moved`.
 pub(crate) fn object_static_prototype_owner_moved(old_owner: usize, new_owner: usize) {
     if old_owner == 0 || new_owner == 0 || old_owner == new_owner {
         return;

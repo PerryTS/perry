@@ -50,7 +50,7 @@ fn emit_raw_window_load(
     arr_box: &str,
     idx_i32: &str,
 ) -> String {
-    let arr_handle = super::packed_receiver_handle_i64(ctx, arr_id, arr_box);
+    let arr_handle = super::receiver_descriptor_handle_i64(ctx, arr_id, arr_box);
     let blk = ctx.block();
     let idx_i64 = blk.zext(I32, idx_i32, I64);
     let byte_offset = blk.shl(I64, &idx_i64, "3");
@@ -288,7 +288,7 @@ pub(crate) fn lower_masked_window_index_set(
     fact: &MaskedWindowArrayFact,
 ) {
     {
-        let arr_handle = super::packed_receiver_handle_i64(ctx, Some(arr_id), arr_box);
+        let arr_handle = super::receiver_descriptor_handle_i64(ctx, Some(arr_id), arr_box);
         let blk = ctx.block();
         let idx_i64 = blk.zext(I32, idx_i32, I64);
         let byte_offset = blk.shl(I64, &idx_i64, "3");

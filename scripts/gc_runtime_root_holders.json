@@ -339,6 +339,12 @@
       "why": "Megamorphic property-read stub cache, the read twin of WRITE_STUB: 2-way ways of (shape_token, key_bits, slot) plain u64s. The token is a shape id and the slot an index; key_bits are content-derived by construction, because read_stub_key_bits returns short_ascii_sso_bits(key) — the key's characters packed inline — and yields None for any key that would otherwise be stored under a pointer. No way holds a heap address, so nothing here keeps an object alive, and a stale entry cannot hit: receiver_shape_token returns None for a receiver with no live shape, and the token identifies the exact key set and order, so a shape change yields a different token."
     },
     {
+      "file": "crates/perry-runtime/src/os/os_process_emitter.rs",
+      "name": "PROCESS_EXIT_EVENT_EMITTED",
+      "verdict": "not_a_gc_pointer",
+      "why": "#9403 re-entrancy latch: a bool recording that the process 'exit' event has already been emitted, so a listener that itself calls process.exit() or throws cannot re-run the listeners that already ran (node skips straight out instead). Holds a flag, never a JSValue or heap pointer."
+    },
+    {
       "file": "crates/perry-runtime/src/os/signal.rs",
       "name": "SIGNAL_ASYNC_IDS",
       "verdict": "not_a_gc_pointer",
@@ -432,6 +438,12 @@
       "name": "SET_INDEX",
       "verdict": "not_a_gc_pointer",
       "why": "Derived cache of the Set's own elements array, which is the canonical scanned storage (GcRewriteDescriptorKind::Set element-slot walk). Not root-scanner-shaped: the outer address key is rekeyed on relocation by GcMoveHookKind::SetSideTables -> set_header_moved_for_gc (set.rs:352), the JSValueKey inner keys are rebuilt post-rewrite by GcRewriteHookKind::SetIndex -> rebuild_set_index_for_gc (set.rs:315, fired from gc/copying.rs:669/798, gc/barrier/mod.rs:195, gc/verify.rs:114), and finalize_set_side_allocation_for_gc (set.rs:374) prunes dead owners — the same three-hook design as MAP_INDEX."
+    },
+    {
+      "file": "crates/perry-runtime/src/string/concat.rs",
+      "name": "CONCAT_MEMO_TAGS",
+      "verdict": "not_a_gc_pointer",
+      "why": "#9391 admission doorkeeper: one hash tag byte per CONCAT_MEMO slot, so a concat result must be observed twice before it earns a rooted entry. A [u8; 512] of plain bytes derived from a splitmix64-finalized hash — never an address, so the collector never sees a pointer here. The admitted strings live in CONCAT_MEMO, which scan_concat_memo_roots_mut visits."
     },
     {
       "file": "crates/perry-runtime/src/string/format.rs",

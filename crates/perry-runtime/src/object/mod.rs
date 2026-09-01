@@ -154,7 +154,7 @@ mod regex_proto_thunks;
 mod spill;
 pub(crate) use spill::{
     learned_inline_field_count, learned_inline_fields_hot_addr, object_spill_enabled, overflow_get,
-    overflow_set, reserve_object_spill,
+    overflow_set, reserve_object_spill, spill_store_would_be_in_capacity,
 };
 #[cfg(test)]
 use spill::{spill_capable_owner, spill_get, SPILL_MAX_FIELD_INDEX};
@@ -705,9 +705,12 @@ fn shape_cache_insert(shape_id: u32, keys_array: *mut ArrayHeader) {
 /// for compile-time object literals).
 ///
 /// Direct-mapped, 16384 entries, each a self-describing record (full
-/// key included) so a collision just misses instead of returning the
-/// wrong slot. The target pointers are GC-rooted via
-/// `scan_transition_cache_roots`.
+/// key identity included) so a collision just misses instead of returning
+/// the wrong slot. `next_keys` is WEAK (#6759 phase 3):
+/// `scan_transition_cache_roots_mut` rewrites a surviving target's address
+/// on move and `prune_dead_transition_cache_entries` clears entries whose
+/// target died, so at mutator time a nonzero `next_keys` still names the
+/// same live array it did at insert — without pinning 16384 dead shapes.
 ///
 /// ShapeIds are process-stable metadata rather than moving heap addresses.
 /// Keying on the full predecessor identity also keeps semantic generations,
@@ -715,12 +718,56 @@ fn shape_cache_insert(shape_id: u32, keys_array: *mut ArrayHeader) {
 #[derive(Clone, Copy)]
 #[repr(C)]
 pub(crate) struct TransitionEntry {
-    key_ptr: usize,       // offset 0 — interned string pointer (pointer identity)
-    next_keys: usize,     // offset 8 — strong root for target descriptor's edge
+    key_ptr: usize,       // offset 0 — key id: content u64 (len 6..=8) or interned ptr
+    next_keys: usize,     // offset 8 — WEAK target edge (rewritten on move, pruned on death)
     prev_shape_id: u32,   // offset 16
     target_shape_id: u32, // offset 20 — exact successor learned on the slow path
-    slot_idx: u32,        // offset 24
+    slot_idx: u32,        // offset 24 — slot | key byte_len << 24 (namespace marker)
     target_len: u32,      // offset 28, nonzero when target was validated at insert
+}
+
+/// ── Emitted transition-IC ABI (#9287) ──────────────────────────────────────
+///
+/// The emitted per-site transition hit probes THIS cache inline: hash the
+/// (prev ShapeId, key id) pair exactly as `transition_cache_slot` does —
+/// key id per `transition_key_id`'s content namespace, computable call-free
+/// from a FRESH string — load the entry, compare (including the length
+/// marker), and on a match perform the stamp + slot store with zero calls. Everything the emitted
+/// code depends on is fixed here and pinned by
+/// `emitted_transition_probe_matches_runtime_slot` below:
+///
+/// * the entry layout (`#[repr(C)]`, 32 bytes, field offsets 0/8/16/20/24/28),
+/// * the two hash multipliers and the `key id >> 3` pre-shift,
+/// * `transition_key_id`'s content rule (LE u64 of the first 6..=8 bytes),
+/// * the table size/mask.
+///
+/// The table lives in thread-local state (`ObjectHotTables`), and worker
+/// threads each have their own — so the emitted code takes the base from
+/// `perry_transition_cache_base()` ONCE per function/loop preheader, never
+/// from a link-time constant.
+pub const TRANSITION_HASH_MUL_SHAPE: u64 = 0x9E3779B97F4A7C15;
+pub const TRANSITION_HASH_MUL_KEY: u64 = 0xC6BC279692B5C323;
+pub const TRANSITION_ENTRY_SIZE: usize = 32;
+
+/// Base pointer of the CURRENT thread's transition cache, for the emitted
+/// probe. Cheap (one TLS access); the emitted code hoists it to a preheader.
+#[no_mangle]
+pub extern "C" fn perry_transition_cache_base() -> *mut u8 {
+    with_transition_cache(|t| t as *mut u8)
+}
+
+/// #9287 probe plumbing: the emitted hit path bumps this when compiled with
+/// `PERRY_TRANSITION_IC_PROBE=1`. A broken inline hit falls through to the
+/// miss handler and is CORRECT, only slow -- invisible to any output diff --
+/// so the fails-on-baseline proof asserts this COUNT, not program output.
+#[no_mangle]
+pub static PERRY_TRANSITION_IC_HITS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+#[no_mangle]
+pub extern "C" fn js_transition_ic_probe_report() {
+    let hits = PERRY_TRANSITION_IC_HITS.load(std::sync::atomic::Ordering::Relaxed);
+    eprintln!("[transition-ic] hits: {hits}");
 }
 
 const TRANSITION_CACHE_SIZE: usize = 16384;
@@ -800,10 +847,57 @@ fn key_content_hash_impl(key: *const crate::StringHeader) -> u64 {
     }
 }
 
+/// Cache key namespaces (#9287 inline transition IC).
+///
+/// A dynamic-key site usually builds its key STRING fresh every write
+/// (`o["field_" + j]`), so an interned-pointer-keyed cache can never hit from
+/// emitted code without an intern call — and the inline hit path must be
+/// call-free. For keys of 6..=8 bytes the identity IS the content: the first
+/// `byte_len` payload bytes as a little-endian u64 (zero-extended) plus the
+/// length are an EXACT match, not a hash (perry strings are WTF-8, one
+/// encoding — equal bytes + equal byte_len ⇒ equal string). Keys outside
+/// 6..=8 bytes (SSO immediates arrive at sites tagged 0x7FF9 and bail before
+/// the probe) keep interned-pointer identity, marked by len 0.
+///
+/// The namespace marker lives in `slot_idx`'s high byte (`slot | len << 24`):
+/// the GC scanner and prune must NOT treat a content id as an address, and
+/// the probe compares the marker so the namespaces never cross-match.
+///
+/// The emitted probe replicates `transition_key_id` for the content
+/// namespace as: `load i64 @ key+20` masked by `!0 >> ((8-len)*8)` — a
+/// little-endian load, so bit-identical to `from_le_bytes` here. In-bounds:
+/// payload is always inline at +20 (`string_data`) and a 20+6-byte string
+/// occupies a ≥28-byte cell, so the 8-byte load stays inside the allocation.
+#[inline]
+fn transition_key_id(key: *const crate::StringHeader) -> (usize, u32) {
+    // A null key is part of the insert contract (`transition_edge_places_key`
+    // rejects one on lookup); it takes the pointer namespace as id 0, exactly
+    // as the pre-#9287 `key_ptr = key as usize` did.
+    if key.is_null() {
+        return (0, 0);
+    }
+    unsafe {
+        let blen = (*key).byte_len;
+        if (6..=8).contains(&blen) {
+            let mut w = [0u8; 8];
+            std::ptr::copy_nonoverlapping(
+                crate::string::string_data(key),
+                w.as_mut_ptr(),
+                blen as usize,
+            );
+            (u64::from_le_bytes(w) as usize, blen)
+        } else {
+            (key as usize, 0)
+        }
+    }
+}
+
+const TRANSITION_SLOT_IDX_MASK: u32 = 0x00FF_FFFF;
+
 #[inline(always)]
-fn transition_cache_slot(prev_shape_id: u32, key_ptr: usize) -> usize {
-    let mixed = (prev_shape_id as u64).wrapping_mul(0x9E3779B97F4A7C15)
-        ^ ((key_ptr >> 3) as u64).wrapping_mul(0xC6BC279692B5C323);
+fn transition_cache_slot(prev_shape_id: u32, key_id: usize) -> usize {
+    let mixed = (prev_shape_id as u64).wrapping_mul(TRANSITION_HASH_MUL_SHAPE)
+        ^ ((key_id >> 3) as u64).wrapping_mul(TRANSITION_HASH_MUL_KEY);
     (mixed as usize) & (TRANSITION_CACHE_SIZE - 1)
 }
 
@@ -857,20 +951,25 @@ fn transition_cache_lookup(
     prev_shape_id: u32,
     interned_key: *const crate::StringHeader,
 ) -> Option<(usize, u32, u32)> {
-    let kp = interned_key as usize;
-    let slot = transition_cache_slot(prev_shape_id, kp);
+    let (kid, len_marker) = transition_key_id(interned_key);
+    let slot = transition_cache_slot(prev_shape_id, kid);
     let entry = with_transition_cache(|t| unsafe { (*t)[slot] });
-    if entry.next_keys != 0 && entry.prev_shape_id == prev_shape_id && entry.key_ptr == kp {
+    if entry.next_keys != 0
+        && entry.prev_shape_id == prev_shape_id
+        && entry.key_ptr == kid
+        && (entry.slot_idx >> 24) == len_marker
+    {
+        let entry_slot_idx = entry.slot_idx & TRANSITION_SLOT_IDX_MASK;
         // `key_ptr` is weak address metadata and the target array may still
         // have grown unexpectedly after insertion. Content-validate that the
         // cached transition places THIS key at `slot_idx`; ShapeId identity
         // handles predecessor semantics while this check handles target bytes.
-        if !transition_edge_places_key(entry.next_keys, entry.slot_idx, interned_key) {
+        if !transition_edge_places_key(entry.next_keys, entry_slot_idx, interned_key) {
             return None;
         }
-        let expected_len = entry.slot_idx.checked_add(1)?;
+        let expected_len = entry_slot_idx.checked_add(1)?;
         if entry.target_len == expected_len {
-            return Some((entry.next_keys, entry.slot_idx, entry.target_shape_id));
+            return Some((entry.next_keys, entry_slot_idx, entry.target_shape_id));
         }
         // Stamp SHAPE_SHARED on the returned keys_array — this is the
         // moment we observe that a SECOND object is reusing the
@@ -886,7 +985,7 @@ fn transition_cache_lookup(
                 return None;
             }
         }
-        Some((entry.next_keys, entry.slot_idx, entry.target_shape_id))
+        Some((entry.next_keys, entry_slot_idx, entry.target_shape_id))
     } else {
         None
     }
@@ -919,8 +1018,11 @@ fn transition_cache_insert(
     if next_keys == 0 {
         return;
     }
-    let kp = interned_key as usize;
-    let slot = transition_cache_slot(prev_shape_id, kp);
+    if slot_idx > TRANSITION_SLOT_IDX_MASK {
+        return;
+    }
+    let (kid, len_marker) = transition_key_id(interned_key);
+    let slot = transition_cache_slot(prev_shape_id, kid);
     let mut target_len = 0;
     unsafe {
         if slot_idx < TRANSITION_CACHE_EAGER_SHARE_MAX_SLOT
@@ -936,11 +1038,11 @@ fn transition_cache_insert(
     with_transition_cache(|t| unsafe {
         // GC_STORE_AUDIT(ROOT): TRANSITION_CACHE_GLOBAL entries are scanned by scan_transition_cache_roots_mut.
         let entry = &mut (*t)[slot];
-        entry.key_ptr = kp;
+        entry.key_ptr = kid;
         crate::gc::runtime_store_root_usize_slot(&mut entry.next_keys, next_keys);
         entry.prev_shape_id = prev_shape_id;
         entry.target_shape_id = target_shape_id;
-        entry.slot_idx = slot_idx;
+        entry.slot_idx = slot_idx | (len_marker << 24);
         entry.target_len = target_len;
     });
     if !array_tail_owner.is_null() {
@@ -979,7 +1081,11 @@ pub fn scan_transition_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisit
             let entry = &mut (*table)[i];
             if entry.next_keys != 0 {
                 let mut invalidate = false;
-                invalidate |= visitor.visit_metadata_usize_slot(&mut entry.key_ptr);
+                // Content-namespace ids (len marker != 0) are string BYTES,
+                // not addresses — the visitor must not rewrite them.
+                if (entry.slot_idx >> 24) == 0 {
+                    invalidate |= visitor.visit_metadata_usize_slot(&mut entry.key_ptr);
+                }
                 // #6759 phase 3: `next_keys` is WEAK, not a strong root.
                 //
                 // `visit_usize_slot` MARKS. With 16384 slots this cache was
@@ -1040,7 +1146,9 @@ pub(crate) fn prune_dead_transition_cache_entries(is_dead_owner: &dyn Fn(usize) 
             if entry.next_keys == 0 {
                 continue;
             }
-            let dead = (entry.key_ptr != 0 && is_dead_owner(entry.key_ptr))
+            let dead = ((entry.slot_idx >> 24) == 0
+                && entry.key_ptr != 0
+                && is_dead_owner(entry.key_ptr))
                 // #6759 phase 3: `next_keys` stopped being a strong root, so a
                 // dead target is now possible and must be reaped here — this is
                 // the half that makes weakening it safe.
@@ -1299,141 +1407,6 @@ pub(crate) fn test_seed_shape_cache_root(shape_id: u32, keys_array: *mut ArrayHe
         cache.insert(shape_id, (keys_array, 0));
     }
     crate::gc::runtime_write_barrier_root_raw_ptr(keys_array);
-}
-
-#[cfg(test)]
-pub(crate) fn test_shape_cache_root(shape_id: u32) -> (usize, usize) {
-    let st = crate::state::state();
-    let slot = (shape_id as usize) & (SHAPE_INLINE_CACHE_SIZE - 1);
-    let inline = unsafe { (*st.object_hot.shape_inline_cache.get())[slot].keys_array as usize };
-    let overflow = st
-        .object_hot
-        .shape_cache_overflow
-        .borrow()
-        .get(&shape_id)
-        .map(|(ptr, _)| *ptr as usize)
-        .unwrap_or(0);
-    (inline, overflow)
-}
-
-#[cfg(test)]
-pub(crate) fn test_seed_transition_cache_root(next_keys: usize) {
-    with_transition_cache(|t| unsafe {
-        // GC_STORE_AUDIT(ROOT): test seed mirrors TRANSITION_CACHE_GLOBAL roots scanned by scan_transition_cache_roots_mut.
-        let entry = &mut (*t)[0];
-        entry.key_ptr = 0;
-        crate::gc::runtime_store_root_usize_slot(&mut entry.next_keys, next_keys);
-        entry.prev_shape_id = 0;
-        entry.target_shape_id = 0;
-        entry.slot_idx = 0;
-        entry.target_len = 0;
-    });
-}
-
-#[cfg(test)]
-pub(crate) fn test_transition_cache_root() -> usize {
-    with_transition_cache(|t| unsafe { (*t)[0].next_keys })
-}
-
-#[cfg(test)]
-pub(crate) fn test_clear_transition_cache_root() {
-    with_transition_cache(|t| unsafe {
-        for i in 0..TRANSITION_CACHE_SIZE {
-            // GC_STORE_AUDIT(ROOT): test clear writes non-pointer sentinels into scanned TRANSITION_CACHE_GLOBAL roots.
-            (*t)[i] = TransitionEntry {
-                key_ptr: 0,
-                next_keys: 0,
-                prev_shape_id: 0,
-                target_shape_id: 0,
-                slot_idx: 0,
-                target_len: 0,
-            };
-        }
-    });
-}
-
-#[cfg(test)]
-pub(crate) fn test_seed_overflow_fields_root(owner: usize, value_bits: u64) {
-    let st = crate::state::state();
-    {
-        let mut m = st.object_hot.overflow_fields.borrow_mut();
-        m.clear();
-        m.insert(owner, vec![value_bits]);
-    }
-    crate::gc::layout_note_slot(owner, 0, value_bits);
-    st.object_hot.overflow_last.set((0, std::ptr::null_mut()));
-}
-
-#[cfg(test)]
-pub(crate) fn debug_overflow_entry_len(owner: usize) -> Option<usize> {
-    crate::state::state()
-        .object_hot
-        .overflow_fields
-        .borrow()
-        .get(&owner)
-        .map(|v| v.len())
-}
-
-#[cfg(test)]
-pub(crate) fn test_seed_overflow_fields_vec(owner: usize, values: Vec<u64>) {
-    let st = crate::state::state();
-    st.object_hot
-        .overflow_fields
-        .borrow_mut()
-        .insert(owner, values);
-    st.object_hot.overflow_last.set((0, std::ptr::null_mut()));
-}
-
-#[cfg(test)]
-pub(crate) fn test_clear_overflow_fields_root() {
-    let st = crate::state::state();
-    st.object_hot.overflow_fields.borrow_mut().clear();
-    st.object_hot.overflow_last.set((0, std::ptr::null_mut()));
-}
-
-#[cfg(test)]
-pub(crate) fn test_overflow_fields_root() -> (usize, u64) {
-    let m = crate::state::state().object_hot.overflow_fields.borrow();
-    let Some((&owner, fields)) = m.iter().next() else {
-        return (0, 0);
-    };
-    (owner, fields.first().copied().unwrap_or(0))
-}
-
-#[cfg(test)]
-pub(crate) fn test_overflow_field_bits(owner: usize, index: usize) -> u64 {
-    // Mode-aware probe: overflow values live in the spill buffer by default
-    // and in the legacy side table under PERRY_OBJECT_SPILL=0.
-    if object_spill_enabled()
-        && index < SPILL_MAX_FIELD_INDEX
-        && unsafe { spill_capable_owner(owner) }
-    {
-        return spill_get(owner, index).unwrap_or(0);
-    }
-    crate::state::state()
-        .object_hot
-        .overflow_fields
-        .borrow()
-        .get(&owner)
-        .and_then(|fields| fields.get(index).copied())
-        .unwrap_or(0)
-}
-
-#[cfg(test)]
-pub(crate) fn test_object_spill_enabled() -> bool {
-    object_spill_enabled()
-}
-
-/// Test probe: address of the owner's spill buffer allocation (0 = none).
-#[cfg(test)]
-pub(crate) fn test_spill_buffer_addr(owner: usize) -> usize {
-    unsafe {
-        let obj = owner as *const ObjectHeader;
-        if (*obj).meta.is_null() {
-            return 0;
-        }
-        (*(*obj).meta).spill as usize
-    }
 }
 
 /// Remove OVERFLOW_FIELDS entry for a freed object pointer.
@@ -1898,9 +1871,15 @@ pub(super) unsafe fn mark_object_dynamic_shape_unknown(obj: *mut ObjectHeader) {
 #[cfg(test)]
 mod own_key_probe_tests;
 #[cfg(test)]
+mod test_root_accessors;
+#[cfg(test)]
+pub(crate) use test_root_accessors::*;
+#[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod tombstone_tests;
+#[cfg(test)]
+mod transition_ic_tests;
 
 /// The named-property bag for a cell that has no inline slot layout of its own,
 /// creating it on first write.
