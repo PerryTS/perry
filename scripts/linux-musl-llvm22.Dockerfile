@@ -23,12 +23,22 @@ RUN apk add --no-cache \
       build-base clang22 cmake curl git \
       llvm22 llvm22-dev llvm22-static llvm22-libs \
       libffi-dev openssl-dev zlib-dev zstd-dev xz-dev \
+      zlib-static zstd-static libxml2-static ncurses-static \
       musl-dev pkgconf perl python3 \
   # Alpine installs LLVM 22 under /usr/lib/llvm22 and does NOT put its
   # llvm-config on PATH (the bare name is unversioned and absent), so the
   # check has to name the prefix explicitly.
   && /usr/lib/llvm22/bin/llvm-config --version | grep -q '^22\.' \
      || { echo "alpine llvm is not 22.x ($(/usr/lib/llvm22/bin/llvm-config --version 2>&1))" >&2; exit 1; }
+
+# llvm-sys links LLVM statically, so every library `llvm-config --system-libs`
+# names must exist as a `.a` here. Alpine's `-dev` packages carry only the
+# shared object, so a missing `-static` package surfaces ~20 minutes into the
+# cargo build as `could not find native static library 'z'` rather than at
+# image-build time. Assert it up front instead: resolve each `-lNAME` to a
+# `libNAME.a`, skipping the names musl folds into libc.a (which ships stubs,
+# not standalone archives).
+RUN set -eu;     libdirs="$(/usr/lib/llvm22/bin/llvm-config --libdir) /usr/lib /usr/lib/gcc";     missing="";     for flag in $(/usr/lib/llvm22/bin/llvm-config --system-libs); do       name="${flag#-l}";       [ "$name" != "$flag" ] || continue;       case " c m rt dl pthread util xnet " in *" $name "*) continue ;; esac;       found="";       for d in $libdirs; do         [ -e "$d/lib$name.a" ] && { found=1; break; };       done;       [ -n "$found" ] || missing="$missing $name";     done;     if [ -n "$missing" ]; then       echo "missing static system libs for llvm-sys:$missing" >&2;       echo "(llvm-config --system-libs: $(/usr/lib/llvm22/bin/llvm-config --system-libs))" >&2;       exit 1;     fi;     echo "static system libs OK: $(/usr/lib/llvm22/bin/llvm-config --system-libs)"
 
 ENV LLVM_SYS_221_PREFIX=/usr/lib/llvm22
 ENV RUSTUP_HOME=/opt/rustup
