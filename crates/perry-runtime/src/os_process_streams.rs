@@ -337,6 +337,21 @@ pub fn stdin_chunk_jsvalue(chunk: &[u8]) -> f64 {
     }
     let buf = crate::buffer::buffer_alloc(chunk.len() as u32);
     unsafe {
+        // #9399: `buffer_alloc` only reserves CAPACITY — it leaves `length` at
+        // 0, and every other caller sets the length itself after filling the
+        // payload. This one never did, so a `data` chunk delivered as a Buffer
+        // (Node's default, i.e. whenever `setEncoding` has NOT been called)
+        // arrived with `.length === 0`: the bytes were copied into the payload
+        // but no consumer could see them. `chunk.toString()` was `""`,
+        // `Buffer.concat([acc, chunk])` appended nothing, and
+        // `JSON.stringify(chunk)` reported `{"type":"Buffer","data":[]}`.
+        //
+        // That is why claude-code's MCP stdio server answered nothing: its
+        // transport does `readBuffer.append(chunk)` on raw (unencoded) chunks,
+        // so the newline-delimited JSON-RPC framer never saw a single byte and
+        // `readMessage()` returned null forever. The `setEncoding("utf8")`
+        // branch above was unaffected, which is why the string path looked fine.
+        (*buf).length = chunk.len() as u32;
         let dst = crate::buffer::buffer_data_mut(buf);
         if !dst.is_null() && !chunk.is_empty() {
             // GC_STORE_AUDIT(POINTER_FREE): raw stdin bytes into a freshly
@@ -923,7 +938,27 @@ fn build_stream_object_with_write(
     } else if is_stdin {
         // Real `on(event, cb)` so `process.stdin.on("data"/"readable", …)`
         // registers a keyboard listener instead of dropping it (#input).
-        let on = stdin_native_method(process_stdin_on as *const u8, "on", 2);
+        //
+        // #9399: route it through `process_stdin_add_listener`, exactly like
+        // `once`/`addListener` below, instead of the runtime-local
+        // `process_stdin_on`. `on` and `addListener` are the same method in
+        // Node, but here they landed in two DIFFERENT registries: `addListener`
+        // delegates to perry-stdlib's readline registry (the one the event loop
+        // consults through `js_readline_has_active`, and the one whose pump
+        // delivers the real bytes), while `process_stdin_on` filed the listener
+        // in a runtime-local list that NOTHING in the loop's has-active check
+        // can see.
+        //
+        // So an aliased `stream.on("data", cb)` — `const s = process.stdin`, a
+        // stdin passed as a parameter, or a field like claude-code's
+        // `this._stdin.on("data", this._ondata)` — registered a listener that
+        // did not keep the process alive: the loop found no active handle and
+        // exited 0 while the reader thread still had the pipe open. `claude mcp
+        // serve` died ~1.7s after start with stdin still open and never
+        // answered a request. The literal `process.stdin.on(...)` form was
+        // unaffected because codegen lowers *that* spelling straight to a
+        // readline extern, which is why only the aliased spellings broke.
+        let on = stdin_native_method(process_stdin_add_listener as *const u8, "on", 2);
         js_object_set_field(obj, 3, JSValue::from_bits(on.to_bits()));
         // `once` routes through the same registry as `on`/`addListener` so a
         // one-shot listener registered on an aliased binding is not dropped either.
@@ -1051,18 +1086,39 @@ fn build_stream_object_with_write(
 #[no_mangle]
 pub extern "C" fn js_process_stdin() -> f64 {
     use crate::value::JSValue;
-    let obj = STDIN_STREAM_SINGLETON.with(|slot| {
+    let (obj, fresh) = STDIN_STREAM_SINGLETON.with(|slot| {
         let mut slot = slot.borrow_mut();
-        if *slot == 0 {
+        let fresh = *slot == 0;
+        if fresh {
             *slot = build_stream_object_with_write(
                 process_stdin_write_noop_stub,
                 0.0,
                 f64::from_bits(crate::value::TAG_UNDEFINED),
             ) as usize;
         }
-        *slot as *mut crate::object::ObjectHeader
+        (*slot as *mut crate::object::ObjectHeader, fresh)
     });
-    f64::from_bits(JSValue::pointer(obj as *const u8).bits())
+    let value = f64::from_bits(JSValue::pointer(obj as *const u8).bits());
+    if !fresh {
+        return value;
+    }
+    // #9400: `for await (const chunk of process.stdin)` — Node's stdin is a
+    // Readable and therefore async-iterable. The install has to happen after
+    // the singleton slot is populated, because the iterator closure captures
+    // this very value, and only once, or each call would re-install it.
+    crate::node_stream::async_iterator::install_method_listener_readable_async_iterator_symbol(
+        value,
+    );
+    // The install allocates (two hidden fields, a closure, a symbol property),
+    // so a collection can relocate the just-born stdin object underneath it.
+    // `STDIN_STREAM_SINGLETON` is a MUTABLE root (see
+    // `scan_process_stream_singleton_roots_mut`), so the slot is rewritten to
+    // the new address — re-read it rather than handing JS the pre-install
+    // pointer, which after a move is a dangling one.
+    STDIN_STREAM_SINGLETON.with(|slot| {
+        let obj = *slot.borrow() as *mut crate::object::ObjectHeader;
+        f64::from_bits(JSValue::pointer(obj as *const u8).bits())
+    })
 }
 
 /// process.stdout -> stream object whose `.write(s)` writes `s` to fd 1.

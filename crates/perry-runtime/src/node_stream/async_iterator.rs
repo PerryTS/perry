@@ -21,6 +21,14 @@ const READABLE_ITERATOR_ATTACHED_KEY: &[u8] = b"__perryReadableIteratorAttached"
 /// paused until `resume()` is called on the object itself, so the iterator has to
 /// start their flow through the public method rather than node:stream's internal one.
 const FOREIGN_READABLE_KEY: &[u8] = b"__perryForeignReadable";
+/// #9400: marks a readable whose listener registry is NOT node:stream's — it is
+/// reachable only through the object's own `on`/`off` methods. `process.stdin`
+/// is the case: its `data`/`end` listeners live in perry-stdlib's readline
+/// registry and are fired by the stdin pump, so listeners filed directly into
+/// node:stream's hidden listener arrays (what `add_stream_listener_for_event`
+/// does) would never be called. With this flag the iterator attaches and
+/// detaches through `stream.on(...)` / `stream.off(...)` instead.
+const METHOD_LISTENER_READABLE_KEY: &[u8] = b"__perryMethodListenerReadable";
 const READABLE_ITERATOR_DATA_CB_KEY: &[u8] = b"__perryReadableIteratorDataCb";
 const READABLE_ITERATOR_END_CB_KEY: &[u8] = b"__perryReadableIteratorEndCb";
 const READABLE_ITERATOR_ERROR_CB_KEY: &[u8] = b"__perryReadableIteratorErrorCb";
@@ -385,7 +393,27 @@ fn attach_iterator_listener(
     js_closure_set_capture_f64(cb, 0, iterator);
     let cb_value = box_pointer(cb as *const u8);
     set_hidden_value(iterator, hidden_key(store_key), cb_value);
+    if has_truthy_hidden(stream, hidden_key(METHOD_LISTENER_READABLE_KEY)) {
+        call_stream_listener_method(stream, b"on", event, cb_value);
+        return;
+    }
     add_stream_listener_for_event(stream, string_value(event), cb_value);
+}
+
+/// `stream.<method>(event, cb)` through the object's own dispatch, for a stream
+/// whose listener registry is not node:stream's (see
+/// [`METHOD_LISTENER_READABLE_KEY`]).
+fn call_stream_listener_method(stream: f64, method: &[u8], event: &[u8], cb_value: f64) {
+    let args = [string_value(event), cb_value];
+    unsafe {
+        crate::object::js_native_call_method(
+            stream,
+            method.as_ptr() as *const i8,
+            method.len(),
+            args.as_ptr(),
+            args.len(),
+        );
+    }
 }
 
 /// Attach the persistent `data`/`end`/`error` listeners on the first `next()`
@@ -461,6 +489,15 @@ fn iterator_ensure_attached(iterator: f64, stream: f64) {
 
 fn remove_iterator_listener(iterator: f64, stream: f64, event: &[u8], store_key: &[u8]) {
     if let Some(cb_value) = get_hidden_value(iterator, hidden_key(store_key)) {
+        if has_truthy_hidden(stream, hidden_key(METHOD_LISTENER_READABLE_KEY)) {
+            call_stream_listener_method(stream, b"off", event, cb_value);
+            set_hidden_value(
+                iterator,
+                hidden_key(store_key),
+                f64::from_bits(TAG_UNDEFINED),
+            );
+            return;
+        }
         remove_stream_listener_for_event(stream, string_value(event), cb_value);
         set_hidden_value(
             iterator,
@@ -757,6 +794,24 @@ pub(crate) fn install_foreign_readable_async_iterator_symbol(stream: f64) {
 
 pub(crate) fn install_readable_async_iterator_symbol(stream: f64) {
     install_async_iterator_symbol(stream, ns_async_iterator);
+}
+
+/// #9400: make a readable that owns its own listener registry async-iterable —
+/// `process.stdin`. Like [`install_foreign_readable_async_iterator_symbol`] it
+/// starts the flow through the object's public `resume()`, and additionally
+/// routes listener attach/detach through the object's `on`/`off` methods.
+///
+/// Without this, `for await (const chunk of process.stdin)` threw "not async
+/// iterable" (the symbol was simply absent), which is how claude-code's
+/// `--input-format stream-json` reader — `for await (let _ of this.input)` over
+/// `process.stdin` — produced no output at all and still exited 0.
+pub(crate) fn install_method_listener_readable_async_iterator_symbol(stream: f64) {
+    set_hidden_value(
+        stream,
+        hidden_key(METHOD_LISTENER_READABLE_KEY),
+        f64::from_bits(TAG_TRUE),
+    );
+    install_foreign_readable_async_iterator_symbol(stream);
 }
 
 pub(super) fn register_arities() {
