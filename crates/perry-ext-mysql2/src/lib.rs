@@ -400,15 +400,13 @@ fn json_value_to_jsvalue(value: &serde_json::Value) -> JsValue {
         // Every JSON number becomes an f64, which is what JSON.parse does too.
         serde_json::Value::Number(n) => JsValue::from_number(n.as_f64().unwrap_or(f64::NAN)),
         serde_json::Value::String(s) => JsValue::from_string_ptr(alloc_string(s).as_raw()),
-        serde_json::Value::Array(items) => {
-            let mut arr = unsafe { js_array_alloc(items.len() as u32) };
-            for item in items {
-                // Reassigned, never reused: the push may reallocate and move
-                // the array, exactly as the row and field builders below do.
-                arr = unsafe { js_array_push(arr, json_value_to_jsvalue(item)) };
-            }
-            JsValue::from_object_ptr(arr)
-        }
+        // Folded so the array is never a named local carried across the
+        // pushes and nested conversions that can move it -- the same shape the
+        // row and field builders below use.
+        serde_json::Value::Array(items) => JsValue::from_object_ptr(items.iter().fold(
+            unsafe { js_array_alloc(items.len() as u32) },
+            |acc, item| unsafe { js_array_push(acc, json_value_to_jsvalue(item)) },
+        )),
         serde_json::Value::Object(map) => {
             let names: Vec<&str> = map.keys().map(|k| k.as_str()).collect();
             let (packed, shape_id) = build_object_shape(&names);
