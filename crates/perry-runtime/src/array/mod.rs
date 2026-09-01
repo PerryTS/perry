@@ -17,6 +17,9 @@ mod indexing;
 /// 2000-line cap.
 #[cfg(test)]
 mod keys_len_cap_tests;
+/// #9371: lazy dense growth for large pre-sized holey arrays.
+#[cfg(test)]
+mod large_presized_tests;
 /// Test-only strict-dense store helpers, split out of `indexing.rs` for the
 /// 2000-line cap.
 #[cfg(test)]
@@ -246,19 +249,20 @@ pub(crate) use self::alloc::array_length_from_property_value_or_throw;
 pub(crate) use self::alloc::{js_array_from_arraylike, js_array_from_string_codepoints};
 pub(crate) use self::flat_clone::{dense_spread_copy, dense_spread_source, flattenable_array_ptr};
 pub(crate) use self::header::{
-    array_byte_size, array_has_named_properties_resolved, array_is_frozen,
-    array_is_sealed_or_no_extend, array_named_property_delete, array_named_property_delete_by_name,
-    array_named_property_get, array_named_property_get_by_name, array_named_property_has,
-    array_named_property_names, array_named_property_set, array_numeric_raw_f64_get,
-    array_numeric_raw_f64_push_inbounds, array_numeric_raw_f64_set_inbounds, array_object_flags,
-    array_object_flags_from_tag, array_object_flags_resolved, array_ptr_as_proxy,
-    array_receiver_addr, array_receiver_gc_tag, buffer_receiver_as_uint8_typed_array,
-    clean_arr_ptr, clean_arr_ptr_mut, clear_array_numeric_layout, clear_array_numeric_layout_ptr,
-    gc_element_slot_range, mark_array_layout_unknown, mark_array_raw_f64_holes_fresh,
-    normalize_array_receiver, note_array_slot, note_array_slot_layout_only,
-    note_array_slot_resolved_flags, rebuild_array_layout, rebuild_array_layout_exact,
-    refresh_array_numeric_layout, replay_array_growth_write_barriers, set_array_numeric_layout,
-    store_array_slot, store_array_slot_resolved, transfer_array_numeric_layout,
+    array_byte_size, array_has_named_properties_resolved,
+    array_has_sparse_index_properties_resolved, array_is_frozen, array_is_sealed_or_no_extend,
+    array_named_property_delete, array_named_property_delete_by_name, array_named_property_get,
+    array_named_property_get_by_name, array_named_property_has, array_named_property_names,
+    array_named_property_set, array_numeric_raw_f64_get, array_numeric_raw_f64_push_inbounds,
+    array_numeric_raw_f64_set_inbounds, array_object_flags, array_object_flags_from_tag,
+    array_object_flags_resolved, array_ptr_as_proxy, array_receiver_addr, array_receiver_gc_tag,
+    buffer_receiver_as_uint8_typed_array, clean_arr_ptr, clean_arr_ptr_mut,
+    clear_array_numeric_layout, clear_array_numeric_layout_ptr, gc_element_slot_range,
+    mark_array_layout_unknown, mark_array_raw_f64_holes_fresh, normalize_array_receiver,
+    note_array_slot, note_array_slot_layout_only, note_array_slot_resolved_flags,
+    rebuild_array_layout, rebuild_array_layout_exact, refresh_array_numeric_layout,
+    replay_array_growth_write_barriers, set_array_numeric_layout, store_array_slot,
+    store_array_slot_resolved, transfer_array_named_property_owner, transfer_array_numeric_layout,
     typed_array_receiver, value_bits_to_number, NumericArrayLayout, MIN_ARRAY_CAPACITY,
 };
 
