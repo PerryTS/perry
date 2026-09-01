@@ -462,10 +462,11 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         I32,
         &[I64, DOUBLE, DOUBLE],
     );
+    // Trailing I32: the assignment's own strict/`Throw` flag (#9394).
     module.declare_function(
         "js_typed_feedback_array_index_set_fallback_boxed",
         DOUBLE,
-        &[I64, DOUBLE, DOUBLE, DOUBLE],
+        &[I64, DOUBLE, DOUBLE, DOUBLE, I32],
     );
     module.declare_function(
         "js_typed_feedback_observe_array_element",
@@ -477,10 +478,11 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         I64,
         &[I64, I64, I64, DOUBLE],
     );
+    // Trailing I32: the assignment's own strict/`Throw` flag (#9394).
     module.declare_function(
         "js_typed_feedback_array_set_index_or_string",
         I64,
-        &[I64, I64, DOUBLE, DOUBLE],
+        &[I64, I64, DOUBLE, DOUBLE, I32],
     );
     module.declare_function(
         "js_typed_feedback_object_set_index_polymorphic",
