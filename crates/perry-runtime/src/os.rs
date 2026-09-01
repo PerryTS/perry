@@ -840,7 +840,8 @@ mod process_streams;
 pub use process_streams::{
     js_process_stderr, js_process_stdin, js_process_stdout, mark_process_stdin_destroyed,
     pump_process_stdin, scan_process_stream_singleton_roots_mut, set_process_stdin_raw_state,
-    stdin_chunk_jsvalue, stdin_has_encoding, stdin_is_detached, stdin_push_bytes,
+    stdin_chunk_jsvalue, stdin_has_encoding, stdin_is_detached, stdin_listeners_keep_loop_alive,
+    stdin_push_bytes,
 };
 
 /// Get the operating system name

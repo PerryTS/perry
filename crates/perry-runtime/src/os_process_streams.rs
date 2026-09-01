@@ -450,11 +450,32 @@ extern "C" fn process_stdin_remove_listener(
     event: f64,
     callback: f64,
 ) -> f64 {
+    let cb = stdin_callback_ptr(callback);
+    if cb == 0 {
+        return stdin_this_value();
+    }
+    let name = stdin_event_name(event).unwrap_or_default();
     if let Some((_, off)) = stdin_ops_provider() {
-        let name = stdin_event_name(event).unwrap_or_default();
-        let cb = stdin_callback_ptr(callback);
-        if cb != 0 {
-            off(name.as_ptr(), name.len(), cb);
+        off(name.as_ptr(), name.len(), cb);
+    }
+    // #9399: ALSO drop it from the runtime-local lists. `on`/`once` on the
+    // stdin object file listeners here (see `process_stdin_on`), while `off`
+    // only ever reached readline's registry — so a listener added and then
+    // removed through the object stayed in this list forever. That was merely
+    // wasteful until `stdin_listeners_keep_loop_alive` started reporting these
+    // lists to the event loop; from then on a program that removes its stdin
+    // listener to let itself exit would have been pinned open until EOF, which
+    // never comes on a TTY. Remove from both registries so `off` means off.
+    for list in [
+        &STDIN_DATA_LISTENERS,
+        &STDIN_DATA_ONCE,
+        &STDIN_READABLE_LISTENERS,
+        &STDIN_READABLE_ONCE,
+        &STDIN_END_LISTENERS,
+        &STDIN_END_ONCE,
+    ] {
+        if let Ok(mut l) = list.lock() {
+            l.retain(|entry| *entry != cb);
         }
     }
     stdin_this_value()
@@ -474,6 +495,55 @@ extern "C" fn process_stdin_listeners(
     }
     let arr = crate::array::js_array_alloc(0);
     f64::from_bits(crate::value::JSValue::array_ptr(arr).bits())
+}
+
+/// Whether a `process.stdin` listener registered on the stdin OBJECT still
+/// needs the event loop to keep turning.
+///
+/// #9399. `process.stdin.on(...)` reached as an object method — an alias
+/// (`const s = process.stdin`), a parameter, or a field, which is what
+/// claude-code's MCP stdio transport does with `this._stdin.on("data",
+/// this._ondata)` — files the callback in the runtime-local lists below and
+/// starts [`ensure_stdin_reader`]. Those lists were invisible to every
+/// has-active check the generated event loop consults, so the loop found no
+/// work and the process exited 0 *with the pipe still open and the bytes
+/// unread*: `claude mcp serve` died ~1.7 s after start and never answered a
+/// request. (The literal `process.stdin.on(...)` spelling was unaffected —
+/// codegen lowers that one straight to a readline extern, whose registry
+/// `js_readline_has_active` does report.)
+///
+/// The liveness window matches Node's: a `data`/`readable`/`end` listener holds
+/// the process open until stdin reaches EOF and the buffered bytes have been
+/// delivered, then — once `'end'`/`'close'` have fired, or when nobody is
+/// listening for them — lets it exit. `pause()`/`unref()`/`destroy()` release
+/// the hold immediately, via the same `stdin_is_detached` latch readline uses.
+pub fn stdin_listeners_keep_loop_alive() -> bool {
+    if stdin_is_detached() {
+        return false;
+    }
+    let non_empty =
+        |l: &std::sync::Mutex<Vec<i64>>| l.lock().map(|v| !v.is_empty()).unwrap_or(false);
+    let has_end_listener = non_empty(&STDIN_END_LISTENERS) || non_empty(&STDIN_END_ONCE);
+    let has_any_listener = has_end_listener
+        || non_empty(&STDIN_DATA_LISTENERS)
+        || non_empty(&STDIN_DATA_ONCE)
+        || non_empty(&STDIN_READABLE_LISTENERS)
+        || non_empty(&STDIN_READABLE_ONCE);
+    if !has_any_listener {
+        return false;
+    }
+    // Bytes already read but not yet handed to JS: the pump must run again.
+    if STDIN_BUFFER.lock().map(|b| !b.is_empty()).unwrap_or(false) {
+        return true;
+    }
+    use std::sync::atomic::Ordering;
+    if !STDIN_EOF_SEEN.load(Ordering::Acquire) {
+        // stdin is still open — more bytes may arrive, exactly as in Node.
+        return true;
+    }
+    // EOF reached and drained: the only work left is the terminal
+    // `'end'`/`'close'` dispatch, and only if somebody asked for it.
+    has_end_listener && !STDIN_END_FIRED.load(Ordering::Acquire)
 }
 
 pub fn stdin_push_bytes(bytes: &[u8]) {
@@ -938,27 +1008,7 @@ fn build_stream_object_with_write(
     } else if is_stdin {
         // Real `on(event, cb)` so `process.stdin.on("data"/"readable", …)`
         // registers a keyboard listener instead of dropping it (#input).
-        //
-        // #9399: route it through `process_stdin_add_listener`, exactly like
-        // `once`/`addListener` below, instead of the runtime-local
-        // `process_stdin_on`. `on` and `addListener` are the same method in
-        // Node, but here they landed in two DIFFERENT registries: `addListener`
-        // delegates to perry-stdlib's readline registry (the one the event loop
-        // consults through `js_readline_has_active`, and the one whose pump
-        // delivers the real bytes), while `process_stdin_on` filed the listener
-        // in a runtime-local list that NOTHING in the loop's has-active check
-        // can see.
-        //
-        // So an aliased `stream.on("data", cb)` — `const s = process.stdin`, a
-        // stdin passed as a parameter, or a field like claude-code's
-        // `this._stdin.on("data", this._ondata)` — registered a listener that
-        // did not keep the process alive: the loop found no active handle and
-        // exited 0 while the reader thread still had the pipe open. `claude mcp
-        // serve` died ~1.7s after start with stdin still open and never
-        // answered a request. The literal `process.stdin.on(...)` form was
-        // unaffected because codegen lowers *that* spelling straight to a
-        // readline extern, which is why only the aliased spellings broke.
-        let on = stdin_native_method(process_stdin_add_listener as *const u8, "on", 2);
+        let on = stdin_native_method(process_stdin_on as *const u8, "on", 2);
         js_object_set_field(obj, 3, JSValue::from_bits(on.to_bits()));
         // `once` routes through the same registry as `on`/`addListener` so a
         // one-shot listener registered on an aliased binding is not dropped either.

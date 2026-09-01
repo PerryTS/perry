@@ -875,6 +875,14 @@ pub extern "C" fn js_stdlib_has_active_handles() -> i32 {
     if crate::readline::js_readline_has_active() != 0 {
         return 1;
     }
+    // #9399: the sibling registry. `process.stdin.on(...)` reached as an OBJECT
+    // method — an alias, a parameter, or a field like claude-code's
+    // `this._stdin.on("data", this._ondata)` — lands in perry-runtime's own
+    // stdin listener lists, not readline's, and nothing here reported them. The
+    // loop then exited 0 while the pipe was still open and the request unread.
+    if perry_runtime::os::stdin_listeners_keep_loop_alive() {
+        return 1;
+    }
     // Same-process MessageChannel ports (#3157) — keep the loop alive while a
     // started port still has queued messages or a pending `close` event.
     if crate::worker_threads::js_worker_threads_channels_has_pending() != 0 {
