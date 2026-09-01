@@ -65,6 +65,23 @@ def system_profiler_hardware():
     except (IndexError, json.JSONDecodeError):
         return {}
 
+def os_version():
+    system = platform.system()
+    if system == "Darwin":
+        return run(["sw_vers", "-productVersion"])
+    if system == "Linux":
+        try:
+            with open("/etc/os-release", encoding="utf-8") as handle:
+                values = dict(
+                    line.rstrip().split("=", 1)
+                    for line in handle
+                    if "=" in line
+                )
+            return values.get("PRETTY_NAME", "").strip('"') or platform.release()
+        except OSError:
+            return platform.release()
+    return platform.platform()
+
 hardware = system_profiler_hardware()
 cpu = run(["sysctl", "-n", "machdep.cpu.brand_string"]) or hardware.get("chip_type") or platform.processor()
 ncpu = run(["sysctl", "-n", "hw.ncpu"]) or str(os.cpu_count() or "")
@@ -80,7 +97,7 @@ meta = {
     "generated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
     "commit": run(["git", "-C", "$PERRY_ROOT", "rev-parse", "HEAD"]),
     "host": {
-        "os_version": run(["sw_vers", "-productVersion"]),
+        "os_version": os_version(),
         "kernel":     run(["uname", "-a"]),
         "arch":       platform.machine(),
         "cpu":        cpu,

@@ -193,11 +193,14 @@ Charts: [image convolution](charts/image_convolution.png),
     h = meta.get("host", {})
     t = meta.get("toolchains", {})
     harn = meta.get("harness", {})
+    kernel_name = str(h.get("kernel", "?")).split()[0]
+    os_version = str(h.get("os_version", "?") or "?")
+    os_label = f"macOS {os_version}" if kernel_name == "Darwin" else os_version
     lines.append("| | |")
     lines.append("|---|---|")
     lines.append(f"| CPU | {h.get('cpu','?')} ({h.get('ncpu','?')} cores, {h.get('arch','?')}) |")
     lines.append(f"| RAM | {h.get('ram_gb','?')} GB |")
-    lines.append(f"| OS  | macOS {h.get('os_version','?')} ({h.get('kernel','?').split()[0]}) |")
+    lines.append(f"| OS  | {os_label} ({kernel_name}) |")
     lines.append(f"| Rust | `{t.get('rustc','?')}` |")
     lines.append(f"| Zig | `{t.get('zig','?')}` |")
     lines.append(f"| Perry | `{t.get('perry','?')}` |")

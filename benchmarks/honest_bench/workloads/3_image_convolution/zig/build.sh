@@ -13,9 +13,13 @@ export ZIG_GLOBAL_CACHE_DIR="$zig_cache/global"
 export ZIG_LOCAL_CACHE_DIR="$zig_cache/image_conv"
 
 mkdir -p zig-out/bin
+target_args=()
+if [[ "$(uname)" == "Darwin" ]]; then
+  target_args=(-target aarch64-macos.14.0)
+fi
 zig build-exe src/main.zig \
   -O ReleaseFast \
-  -target aarch64-macos.14.0 \
+  "${target_args[@]}" \
   -lc \
   --name image_conv \
   -femit-bin=zig-out/bin/image_conv
