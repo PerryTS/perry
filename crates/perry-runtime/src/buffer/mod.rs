@@ -45,6 +45,10 @@ pub use header::{BufferHeader, BUFFER_TYPE_ID, SMALL_BUF_THRESHOLD};
 
 // ---- Re-exports: allocation / registry helpers ----
 pub(crate) use header::is_small_buf_slab_addr;
+// #9342: primed by `typedarray::js_u8_buffer_read_f64` (codegen slow arm).
+pub(crate) use header::u8_inline_cache_try_prime;
+#[cfg(test)]
+pub(crate) use header::test_u8_inline_cache_holds;
 // `shared_sab` publishes process-global backings that `is_registered_buffer`
 // reports as buffers without them entering `BUFFER_REGISTRY`, so it arms the
 // same monotone latch — before the backing becomes reachable.

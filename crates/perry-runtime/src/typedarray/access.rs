@@ -132,8 +132,30 @@ pub extern "C" fn js_typed_array_read_int32(ta: *const TypedArrayHeader, index: 
     // non-typed-array receiver has no element to read, and
     // `ToInt32(undefined) == 0` in this i32 consumer context.
     let ta = clean_ta_ptr(ta);
-    if ta.is_null() || lookup_typed_array_kind(ta as usize).is_none() {
+    if ta.is_null() {
         return 0;
+    }
+    if lookup_typed_array_kind(ta as usize).is_none() {
+        // #9342, i32 twin of the `js_typed_array_read_f64` fix: a registry
+        // miss must recover the element, not invent one. Perry's `Uint8Array`
+        // is a `BufferHeader` (buffer registries) that this registry can never
+        // contain, so a "Uint8Array"-proven receiver in `| 0` context read `0`
+        // for every element. Buffer receivers read the byte
+        // (`ToInt32(undefined) == 0` for OOB); everything else falls through
+        // to `js_typed_array_get`, which classifies the receiver BEFORE any
+        // header deref (`classify_element_read_receiver`, #8109) — the
+        // "would read `(*ta).length` before classifying" hazard in the doc
+        // above predates that classifier.
+        let addr = ta as usize;
+        if crate::buffer::is_registered_buffer(addr) {
+            let v = crate::buffer::js_buffer_index_get_value(
+                addr as *const crate::buffer::BufferHeader,
+                index,
+            );
+            // In-range: an exact 0..=255 byte. OOB: TAG_UNDEFINED, and
+            // `ToInt32(undefined) == 0`.
+            return if v.is_finite() { v as i32 } else { 0 };
+        }
     }
     let v = js_typed_array_get(ta, index);
     // `js_typed_array_get` returns a plain finite f64 element for an in-bounds
@@ -170,14 +192,32 @@ static KEEP_JS_TYPED_ARRAY_READ_INT32: extern "C" fn(*const TypedArrayHeader, i3
 /// Memory safety mirrors [`js_typed_array_read_int32`]: a kind-cache miss can be
 /// entered with a receiver that is not a typed array at all (TS types are
 /// erased), so validate the raw pointer is a registered typed array before any
-/// header deref — a non-typed-array receiver has no element and reads
-/// `undefined` (`TAG_UNDEFINED`). Otherwise defer to the full ECMAScript
-/// `[[Get]]`.
+/// header deref. A registry miss recovers the element rather than inventing
+/// `undefined` (#9342/#8111): buffer receivers read the byte, everything else
+/// takes `js_typed_array_get`'s classifier dispatch.
 #[no_mangle]
 pub extern "C" fn js_typed_array_read_f64(ta: *const TypedArrayHeader, index: i32) -> f64 {
     let ta = clean_ta_ptr(ta);
-    if ta.is_null() || lookup_typed_array_kind(ta as usize).is_none() {
+    if ta.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    if lookup_typed_array_kind(ta as usize).is_none() {
+        // #9342: a registry miss is NOT proof there is no element. Perry's
+        // `Uint8Array` is a `BufferHeader` (buffer registries), invisible to
+        // the typed-array kind registry — so this arm used to answer
+        // `undefined` for every in-range read through a "Uint8Array"-proven
+        // receiver. Same defect class as #8111: recover the element instead.
+        // Buffer receivers read the byte; anything else inherits
+        // `js_typed_array_get`'s #8109 receiver-classifier dispatch
+        // (header-wins for an unregistered real TA, ordinary `[[Get]]` for a
+        // plain array/object/string, `undefined` for a non-receiver).
+        let addr = ta as usize;
+        if crate::buffer::is_registered_buffer(addr) {
+            return crate::buffer::js_buffer_index_get_value(
+                addr as *const crate::buffer::BufferHeader,
+                index,
+            );
+        }
     }
     js_typed_array_get(ta, index)
 }
@@ -187,6 +227,27 @@ pub extern "C" fn js_typed_array_read_f64(ta: *const TypedArrayHeader, index: i3
 #[used]
 static KEEP_JS_TYPED_ARRAY_READ_F64: extern "C" fn(*const TypedArrayHeader, i32) -> f64 =
     js_typed_array_read_f64;
+
+/// #9342 — slow arm of the codegen inline `Uint8Array` byte read
+/// (`perry-codegen/src/expr/u8_buffer_read.rs`). Primes the
+/// `PERRY_U8_INLINE_CACHE` admission cache when the receiver satisfies its
+/// contract (live u8-marked inline-storage `BufferHeader`), then delegates to
+/// [`js_uint8array_index_get_value`] for bug-exact element semantics —
+/// including the #8111 stale-static-hint recovery for rebound receivers.
+#[no_mangle]
+pub extern "C" fn js_u8_buffer_read_f64(target: *const TypedArrayHeader, index: i32) -> f64 {
+    let addr = strip_nanbox(target as u64);
+    if addr >= 0x1000 {
+        crate::buffer::u8_inline_cache_try_prime(addr);
+    }
+    js_uint8array_index_get_value(addr as *const TypedArrayHeader, index)
+}
+
+// Codegen-only export: pin under whole-program LTO (mirrors the siblings).
+#[cfg(feature = "keepalive-anchors")]
+#[used]
+static KEEP_JS_U8_BUFFER_READ_F64: extern "C" fn(*const TypedArrayHeader, i32) -> f64 =
+    js_u8_buffer_read_f64;
 
 /// #2063 — dynamic / string-key `[[Get]]` on a TypedArray (`ta[key]`).
 ///

@@ -946,6 +946,14 @@ pub(crate) fn lower(
                 let reason = buffer_access_materialization_reason(ctx, array);
                 return Ok(materialize_js_value(ctx, value, reason));
             }
+            // #9342: untracked-but-class-proven receiver (module-global /
+            // param `Uint8Array`) — guarded inline byte read via the
+            // buffer-lane admission cache; guard misses defer to the priming
+            // memory-safe helper.
+            if let Some(value) = super::u8_buffer_read::try_lower_u8_buffer_read(ctx, array, index)?
+            {
+                return Ok(value);
+            }
             if !numeric_index_has_integer_array_index_proof(ctx, index) {
                 return rooting::with_operands_rooted(ctx, &[array, index], |ctx, vals| {
                     let a = vals[0].clone();
