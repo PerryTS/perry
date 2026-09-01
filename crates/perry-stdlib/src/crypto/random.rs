@@ -724,7 +724,6 @@ pub(super) unsafe fn object_field_u128(obj_bits: u64, name: &[u8]) -> Option<u12
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::raw::c_int;
 
     fn boxed_ptr(ptr: *const u8) -> f64 {
         f64::from_bits(perry_runtime::JSValue::pointer(ptr).bits())
