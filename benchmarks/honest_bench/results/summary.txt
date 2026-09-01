@@ -3,21 +3,21 @@
 # expected.json: present
 
 ## PERF — output verified to match Bun reference
-image_convolution        bun         0.0 ms  runs=20  match=20/20
-image_convolution        node        0.0 ms  runs=20  match=20/20
-image_convolution        perry      -0.0 ms  runs=20  match=20/20
-image_convolution        rust       -0.0 ms  runs=20  match=20/20
-image_convolution        zig         0.0 ms  runs=20  match=20/20
-json_pipeline_full       bun        -0.0 ms  runs=20  match=20/20
-json_pipeline_full       node        0.0 ms  runs=20  match=20/20
-json_pipeline_full       perry       0.0 ms  runs=20  match=20/20
-json_pipeline_full       rust       -0.0 ms  runs=20  match=20/20
-json_pipeline_full       zig        -0.0 ms  runs=20  match=20/20
-json_pipeline_small      bun         0.0 ms  runs=20  match=20/20
-json_pipeline_small      node        0.0 ms  runs=20  match=20/20
-json_pipeline_small      perry       0.0 ms  runs=20  match=20/20
-json_pipeline_small      rust        0.0 ms  runs=20  match=20/20
-json_pipeline_small      zig         0.0 ms  runs=20  match=20/20
+image_convolution        bun       544.0 ms  runs=20  match=20/20
+image_convolution        node      975.0 ms  runs=20  match=20/20
+image_convolution        perry    1204.4 ms  runs=20  match=20/20
+image_convolution        rust      321.6 ms  runs=20  match=20/20
+image_convolution        zig       173.5 ms  runs=20  match=20/20
+json_pipeline_full       bun       624.2 ms  runs=20  match=20/20
+json_pipeline_full       node     1183.5 ms  runs=20  match=20/20
+json_pipeline_full       perry    1831.2 ms  runs=20  match=20/20
+json_pipeline_full       rust      733.6 ms  runs=20  match=20/20
+json_pipeline_full       zig       850.5 ms  runs=20  match=20/20
+json_pipeline_small      bun        27.9 ms  runs=20  match=20/20
+json_pipeline_small      node       53.0 ms  runs=20  match=20/20
+json_pipeline_small      perry      19.6 ms  runs=20  match=20/20
+json_pipeline_small      rust       14.7 ms  runs=20  match=20/20
+json_pipeline_small      zig        14.4 ms  runs=20  match=20/20
 
 # To turn mismatches into a hard CI failure: ./run.sh --strict-output
 # To refresh the reference (only when output semantics intentionally change):

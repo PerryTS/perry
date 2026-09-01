@@ -1,8 +1,8 @@
 # JSON Polyglot Benchmark Results
 
-**Runs per cell:** 11 · **Pinning:** macOS scheduler hint (taskpolicy -t 0 -l 0 — P-core preferred via throughput/latency tiers, NOT strict affinity)
-**Hardware:** Darwin 25.5.0 arm64 on perry-macos.
-**Date:** 2026-08-08.
+**Runs per cell:** 11 · **Pinning:** Linux strict (taskset -c 0)
+**Hardware:** Linux 6.17.0-23-generic x86_64 on ideal-mastodon.
+**Date:** 2026-09-01.
 
 Two workloads, each language listed twice (idiomatic / optimized flag profile).
 Median wall-clock time is the headline number; p95, σ (population stddev),
@@ -18,15 +18,13 @@ low — the lazy path can avoid materializing the parse tree entirely.
 
 | Implementation | Profile | Median (ms) | p95 (ms) | σ | Min | Max | Peak RSS (MB) |
 |---|---|---:|---:|---:|---:|---:|---:|
-| rust serde_json (LTO+1cgu) | optimized | 178 | 194 | 4.6 | 178 | 194 | 10 |
-| perry (gen-gc + lazy tape) | optimized | 184 | 190 | 1.9 | 183 | 190 | 79 |
-| rust serde_json | idiomatic | 188 | 203 | 4.3 | 188 | 203 | 9 |
-| bun (default) | idiomatic | 220 | 232 | 3.5 | 219 | 232 | 83 |
-| node --max-old=4096 | optimized | 380 | 385 | 4.2 | 373 | 385 | 100 |
-| node (default) | idiomatic | 380 | 389 | 3.9 | 373 | 389 | 99 |
-| perry (mark-sweep, no lazy) | idiomatic | 1198 | 1206 | 2.6 | 1196 | 1206 | 62 |
-| swift -O -wmo (Foundation) | optimized | 3461 | 3487 | 10.0 | 3456 | 3487 | 28 |
-| swift -O (Foundation) | idiomatic | 3466 | 3481 | 8.1 | 3452 | 3481 | 28 |
+| perry (gen-gc + lazy tape) | optimized | 186 | 188 | 1.4 | 184 | 188 | 119 |
+| bun (default) | idiomatic | 189 | 195 | 2.3 | 188 | 195 | 87 |
+| rust serde_json (LTO+1cgu) | optimized | 213 | 213 | 0.4 | 212 | 213 | 9 |
+| rust serde_json | idiomatic | 227 | 230 | 1.1 | 226 | 230 | 9 |
+| node --max-old=4096 | optimized | 379 | 409 | 8.8 | 377 | 409 | 114 |
+| node (default) | idiomatic | 407 | 669 | 88.2 | 378 | 669 | 113 |
+| perry (mark-sweep, no lazy) | idiomatic | 514 | 936 | 195.6 | 504 | 936 | 79 |
 
 ## JSON parse-and-iterate
 
@@ -37,12 +35,10 @@ JSON content. 10k records, ~1 MB blob, 50 iterations per run.
 
 | Implementation | Profile | Median (ms) | p95 (ms) | σ | Min | Max | Peak RSS (MB) |
 |---|---|---:|---:|---:|---:|---:|---:|
-| rust serde_json (LTO+1cgu) | optimized | 179 | 198 | 5.4 | 179 | 198 | 10 |
-| rust serde_json | idiomatic | 188 | 203 | 4.3 | 188 | 203 | 9 |
-| bun (default) | idiomatic | 222 | 222 | 0.7 | 220 | 222 | 87 |
-| node --max-old=4096 | optimized | 384 | 389 | 4.4 | 376 | 389 | 95 |
-| node (default) | idiomatic | 385 | 395 | 5.0 | 378 | 395 | 95 |
-| perry (mark-sweep, no lazy) | idiomatic | 1247 | 1250 | 1.9 | 1244 | 1250 | 59 |
-| perry (gen-gc + lazy tape) | optimized | 2030 | 2048 | 69.2 | 1804 | 2048 | 170 |
-| swift -O (Foundation) | idiomatic | 3451 | 3477 | 11.8 | 3441 | 3477 | 28 |
-| swift -O -wmo (Foundation) | optimized | 3474 | 3502 | 14.0 | 3450 | 3502 | 28 |
+| bun (default) | idiomatic | 198 | 206 | 3.1 | 198 | 206 | 104 |
+| rust serde_json (LTO+1cgu) | optimized | 212 | 217 | 1.4 | 212 | 217 | 9 |
+| rust serde_json | idiomatic | 227 | 227 | 0.5 | 226 | 227 | 9 |
+| node --max-old=4096 | optimized | 380 | 383 | 1.2 | 379 | 383 | 114 |
+| node (default) | idiomatic | 382 | 385 | 2.4 | 377 | 385 | 115 |
+| perry (mark-sweep, no lazy) | idiomatic | 513 | 521 | 3.1 | 510 | 521 | 79 |
+| perry (gen-gc + lazy tape) | optimized | 758 | 1013 | 175.4 | 548 | 1013 | 396 |

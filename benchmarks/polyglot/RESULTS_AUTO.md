@@ -1,22 +1,22 @@
 # Polyglot Compute-Microbench Results (auto-generated)
 
-**Runs per cell:** 11 · **Pinning:** macOS scheduler hint (taskpolicy -t 0 -l 0 — P-core preferred via throughput/latency tiers, NOT strict affinity)
-**Hardware:** Darwin 25.5.0 arm64 on perry-macos · **Date:** 2026-08-08
-**Perry version:** v0.5.1355
+**Runs per cell:** 11 · **Pinning:** Linux strict (taskset -c 0)
+**Hardware:** Linux 6.17.0-23-generic x86_64 on ideal-mastodon · **Date:** 2026-09-01
+**Perry version:** v0.5.1519
 
 Headline = median wall-clock ms. Lower is better.
 
 | Benchmark           | Perry |  Rust |   C++ |    Go | Swift |  Java |  Node |   Bun | Hermes |  Python |
 |---------------------|-------|-------|-------|-------|-------|-------|-------|-------|--------|---------|
-| fibonacci           |   390 |   308 |   300 |     - |   389 |   271 |   912 |   500 |      - |   24432 |
-| loop_overhead       |    94 |    93 |    93 |     - |    93 |    95 |    63 |    39 |      - |    2599 |
-| loop_data_dependent |   219 |   218 |   125 |     - |   218 |   221 |   221 |   221 |      - |   12630 |
-| array_write         |     1 |     8 |     1 |     - |     1 |     5 |     7 |     5 |      - |     696 |
-| array_read          |    22 |     9 |     9 |     - |     9 |    11 |    11 |    14 |      - |     323 |
-| math_intensive      |    49 |    46 |    49 |     - |    47 |    49 |    49 |    49 |      - |    2272 |
-| object_create       |     3 |     0 |     0 |     - |     0 |     5 |     5 |     5 |      - |     303 |
-| nested_loops        |    40 |     8 |     8 |     - |     8 |    10 |    18 |    19 |      - |     559 |
-| accumulate          |    94 |    93 |    93 |     - |    93 |    95 |    94 |    95 |      - |    4556 |
+| fibonacci           |   323 |   189 |   103 |     - |     - |     - |   708 |   469 |      - |    8579 |
+| loop_overhead       |    74 |    77 |    75 |     - |     - |     - |    76 |    83 |      - |    5629 |
+| loop_data_dependent |   112 |   112 |   112 |     - |     - |     - |   115 |   124 |      - |    5425 |
+| array_write         |     4 |     4 |     2 |     - |     - |     - |     5 |     9 |      - |     339 |
+| array_read          |     6 |     6 |    12 |     - |     - |     - |     7 |    17 |      - |     193 |
+| math_intensive      |    51 |    44 |    51 |     - |     - |     - |    44 |    55 |      - |    1240 |
+| object_create       |     4 |     2 |     0 |     - |     - |     - |     7 |    20 |      - |     121 |
+| nested_loops        |    26 |     5 |    10 |     - |     - |     - |    15 |    26 |      - |     330 |
+| accumulate          |    58 |    63 |    56 |     - |     - |     - |   162 |    72 |      - |    3369 |
 
 ## Per-cell full stats
 
@@ -24,93 +24,93 @@ Format: median (p95: X, σ: S, min: Y, max: Z) ms
 
 | Benchmark | Runtime | Stats (ms) |
 |---|---|---|
-| fibonacci | perry | 390 (p95: 391, σ: 0.4, min: 389, max: 391) |
-| fibonacci | rust | 308 (p95: 350, σ: 12.1, min: 308, max: 350) |
-| fibonacci | cpp | 300 (p95: 348, σ: 13.9, min: 299, max: 348) |
+| fibonacci | perry | 323 (p95: 325, σ: 0.8, min: 322, max: 325) |
+| fibonacci | rust | 189 (p95: 194, σ: 2.0, min: 188, max: 194) |
+| fibonacci | cpp | 103 (p95: 104, σ: 0.4, min: 103, max: 104) |
 | fibonacci | go | - |
-| fibonacci | swift | 389 (p95: 430, σ: 11.7, min: 389, max: 430) |
-| fibonacci | java | 271 (p95: 272, σ: 0.4, min: 270, max: 272) |
-| fibonacci | node | 912 (p95: 913, σ: 0.5, min: 912, max: 913) |
-| fibonacci | bun | 500 (p95: 504, σ: 1.7, min: 499, max: 504) |
+| fibonacci | swift | - |
+| fibonacci | java | - |
+| fibonacci | node | 708 (p95: 713, σ: 1.7, min: 706, max: 713) |
+| fibonacci | bun | 469 (p95: 694, σ: 99.4, min: 440, max: 694) |
 | fibonacci | hermes | - |
-| fibonacci | python | 24432 (p95: 24445, σ: 8.8, min: 24414, max: 24445) |
-| loop_overhead | perry | 94 (p95: 94, σ: 0.5, min: 93, max: 94) |
-| loop_overhead | rust | 93 (p95: 94, σ: 0.3, min: 93, max: 94) |
-| loop_overhead | cpp | 93 (p95: 93, σ: 0.0, min: 93, max: 93) |
+| fibonacci | python | 8579 (p95: 8853, σ: 110.8, min: 8484, max: 8853) |
+| loop_overhead | perry | 74 (p95: 75, σ: 0.4, min: 74, max: 75) |
+| loop_overhead | rust | 77 (p95: 80, σ: 2.4, min: 74, max: 80) |
+| loop_overhead | cpp | 75 (p95: 75, σ: 0.3, min: 74, max: 75) |
 | loop_overhead | go | - |
-| loop_overhead | swift | 93 (p95: 94, σ: 0.3, min: 93, max: 94) |
-| loop_overhead | java | 95 (p95: 96, σ: 0.3, min: 95, max: 96) |
-| loop_overhead | node | 63 (p95: 64, σ: 0.4, min: 63, max: 64) |
-| loop_overhead | bun | 39 (p95: 40, σ: 0.4, min: 39, max: 40) |
+| loop_overhead | swift | - |
+| loop_overhead | java | - |
+| loop_overhead | node | 76 (p95: 79, σ: 0.9, min: 76, max: 79) |
+| loop_overhead | bun | 83 (p95: 84, σ: 1.2, min: 81, max: 84) |
 | loop_overhead | hermes | - |
-| loop_overhead | python | 2599 (p95: 2603, σ: 2.0, min: 2598, max: 2603) |
-| loop_data_dependent | perry | 219 (p95: 220, σ: 0.3, min: 219, max: 220) |
-| loop_data_dependent | rust | 218 (p95: 219, σ: 0.5, min: 218, max: 219) |
-| loop_data_dependent | cpp | 125 (p95: 125, σ: 0.0, min: 125, max: 125) |
+| loop_overhead | python | 5629 (p95: 6106, σ: 194.1, min: 5511, max: 6106) |
+| loop_data_dependent | perry | 112 (p95: 112, σ: 0.3, min: 111, max: 112) |
+| loop_data_dependent | rust | 112 (p95: 118, σ: 2.4, min: 111, max: 118) |
+| loop_data_dependent | cpp | 112 (p95: 113, σ: 0.6, min: 111, max: 113) |
 | loop_data_dependent | go | - |
-| loop_data_dependent | swift | 218 (p95: 219, σ: 0.5, min: 218, max: 219) |
-| loop_data_dependent | java | 221 (p95: 221, σ: 0.5, min: 220, max: 221) |
-| loop_data_dependent | node | 221 (p95: 225, σ: 1.5, min: 221, max: 225) |
-| loop_data_dependent | bun | 221 (p95: 221, σ: 0.0, min: 221, max: 221) |
+| loop_data_dependent | swift | - |
+| loop_data_dependent | java | - |
+| loop_data_dependent | node | 115 (p95: 116, σ: 0.5, min: 115, max: 116) |
+| loop_data_dependent | bun | 124 (p95: 127, σ: 1.4, min: 122, max: 127) |
 | loop_data_dependent | hermes | - |
-| loop_data_dependent | python | 12630 (p95: 12646, σ: 6.0, min: 12625, max: 12646) |
-| array_write | perry | 1 (p95: 2, σ: 0.5, min: 1, max: 2) |
-| array_write | rust | 8 (p95: 8, σ: 0.8, min: 6, max: 8) |
-| array_write | cpp | 1 (p95: 2, σ: 0.4, min: 1, max: 2) |
+| loop_data_dependent | python | 5425 (p95: 5869, σ: 180.7, min: 5375, max: 5869) |
+| array_write | perry | 4 (p95: 4, σ: 0.5, min: 3, max: 4) |
+| array_write | rust | 4 (p95: 5, σ: 0.9, min: 3, max: 5) |
+| array_write | cpp | 2 (p95: 3, σ: 0.3, min: 2, max: 3) |
 | array_write | go | - |
-| array_write | swift | 1 (p95: 2, σ: 0.5, min: 1, max: 2) |
-| array_write | java | 5 (p95: 6, σ: 0.5, min: 5, max: 6) |
-| array_write | node | 7 (p95: 7, σ: 0.0, min: 7, max: 7) |
-| array_write | bun | 5 (p95: 5, σ: 0.0, min: 5, max: 5) |
+| array_write | swift | - |
+| array_write | java | - |
+| array_write | node | 5 (p95: 5, σ: 0.5, min: 4, max: 5) |
+| array_write | bun | 9 (p95: 11, σ: 0.8, min: 9, max: 11) |
 | array_write | hermes | - |
-| array_write | python | 696 (p95: 722, σ: 13.7, min: 672, max: 722) |
-| array_read | perry | 22 (p95: 23, σ: 0.4, min: 22, max: 23) |
-| array_read | rust | 9 (p95: 9, σ: 0.0, min: 9, max: 9) |
-| array_read | cpp | 9 (p95: 9, σ: 0.0, min: 9, max: 9) |
+| array_write | python | 339 (p95: 342, σ: 1.2, min: 338, max: 342) |
+| array_read | perry | 6 (p95: 6, σ: 0.5, min: 5, max: 6) |
+| array_read | rust | 6 (p95: 6, σ: 0.0, min: 6, max: 6) |
+| array_read | cpp | 12 (p95: 13, σ: 0.3, min: 12, max: 13) |
 | array_read | go | - |
-| array_read | swift | 9 (p95: 9, σ: 0.0, min: 9, max: 9) |
-| array_read | java | 11 (p95: 11, σ: 0.4, min: 10, max: 11) |
-| array_read | node | 11 (p95: 11, σ: 0.5, min: 10, max: 11) |
-| array_read | bun | 14 (p95: 14, σ: 0.4, min: 13, max: 14) |
+| array_read | swift | - |
+| array_read | java | - |
+| array_read | node | 7 (p95: 8, σ: 0.4, min: 7, max: 8) |
+| array_read | bun | 17 (p95: 18, σ: 0.7, min: 16, max: 18) |
 | array_read | hermes | - |
-| array_read | python | 323 (p95: 329, σ: 2.6, min: 322, max: 329) |
-| math_intensive | perry | 49 (p95: 49, σ: 0.0, min: 49, max: 49) |
-| math_intensive | rust | 46 (p95: 47, σ: 0.3, min: 46, max: 47) |
-| math_intensive | cpp | 49 (p95: 49, σ: 0.5, min: 48, max: 49) |
+| array_read | python | 193 (p95: 325, σ: 59.1, min: 179, max: 325) |
+| math_intensive | perry | 51 (p95: 55, σ: 4.1, min: 44, max: 55) |
+| math_intensive | rust | 44 (p95: 45, σ: 0.5, min: 44, max: 45) |
+| math_intensive | cpp | 51 (p95: 54, σ: 2.3, min: 48, max: 54) |
 | math_intensive | go | - |
-| math_intensive | swift | 47 (p95: 47, σ: 0.0, min: 47, max: 47) |
-| math_intensive | java | 49 (p95: 49, σ: 0.4, min: 48, max: 49) |
-| math_intensive | node | 49 (p95: 49, σ: 0.5, min: 48, max: 49) |
-| math_intensive | bun | 49 (p95: 49, σ: 0.3, min: 48, max: 49) |
+| math_intensive | swift | - |
+| math_intensive | java | - |
+| math_intensive | node | 44 (p95: 45, σ: 0.6, min: 43, max: 45) |
+| math_intensive | bun | 55 (p95: 56, σ: 1.3, min: 52, max: 56) |
 | math_intensive | hermes | - |
-| math_intensive | python | 2272 (p95: 2316, σ: 16.1, min: 2254, max: 2316) |
-| object_create | perry | 3 (p95: 3, σ: 0.4, min: 2, max: 3) |
-| object_create | rust | 0 (p95: 0, σ: 0.0, min: 0, max: 0) |
+| math_intensive | python | 1240 (p95: 1978, σ: 332.2, min: 1110, max: 1978) |
+| object_create | perry | 4 (p95: 4, σ: 0.4, min: 3, max: 4) |
+| object_create | rust | 2 (p95: 2, σ: 0.0, min: 2, max: 2) |
 | object_create | cpp | 0 (p95: 0, σ: 0.0, min: 0, max: 0) |
 | object_create | go | - |
-| object_create | swift | 0 (p95: 0, σ: 0.0, min: 0, max: 0) |
-| object_create | java | 5 (p95: 5, σ: 0.4, min: 4, max: 5) |
-| object_create | node | 5 (p95: 5, σ: 0.4, min: 4, max: 5) |
-| object_create | bun | 5 (p95: 6, σ: 0.5, min: 5, max: 6) |
+| object_create | swift | - |
+| object_create | java | - |
+| object_create | node | 7 (p95: 8, σ: 1.2, min: 5, max: 8) |
+| object_create | bun | 20 (p95: 21, σ: 1.7, min: 15, max: 21) |
 | object_create | hermes | - |
-| object_create | python | 303 (p95: 311, σ: 3.5, min: 300, max: 311) |
-| nested_loops | perry | 40 (p95: 40, σ: 0.4, min: 39, max: 40) |
-| nested_loops | rust | 8 (p95: 8, σ: 0.0, min: 8, max: 8) |
-| nested_loops | cpp | 8 (p95: 8, σ: 0.0, min: 8, max: 8) |
+| object_create | python | 121 (p95: 187, σ: 19.4, min: 118, max: 187) |
+| nested_loops | perry | 26 (p95: 26, σ: 0.5, min: 25, max: 26) |
+| nested_loops | rust | 5 (p95: 5, σ: 0.0, min: 5, max: 5) |
+| nested_loops | cpp | 10 (p95: 11, σ: 0.4, min: 10, max: 11) |
 | nested_loops | go | - |
-| nested_loops | swift | 8 (p95: 8, σ: 0.0, min: 8, max: 8) |
-| nested_loops | java | 10 (p95: 11, σ: 0.5, min: 10, max: 11) |
-| nested_loops | node | 18 (p95: 18, σ: 0.0, min: 18, max: 18) |
-| nested_loops | bun | 19 (p95: 19, σ: 0.5, min: 18, max: 19) |
+| nested_loops | swift | - |
+| nested_loops | java | - |
+| nested_loops | node | 15 (p95: 18, σ: 1.4, min: 13, max: 18) |
+| nested_loops | bun | 26 (p95: 27, σ: 1.9, min: 22, max: 27) |
 | nested_loops | hermes | - |
-| nested_loops | python | 559 (p95: 566, σ: 3.4, min: 558, max: 566) |
-| accumulate | perry | 94 (p95: 94, σ: 0.4, min: 93, max: 94) |
-| accumulate | rust | 93 (p95: 94, σ: 0.3, min: 93, max: 94) |
-| accumulate | cpp | 93 (p95: 93, σ: 0.0, min: 93, max: 93) |
+| nested_loops | python | 330 (p95: 527, σ: 82.5, min: 319, max: 527) |
+| accumulate | perry | 58 (p95: 62, σ: 1.4, min: 57, max: 62) |
+| accumulate | rust | 63 (p95: 64, σ: 0.5, min: 62, max: 64) |
+| accumulate | cpp | 56 (p95: 57, σ: 0.3, min: 56, max: 57) |
 | accumulate | go | - |
-| accumulate | swift | 93 (p95: 93, σ: 0.0, min: 93, max: 93) |
-| accumulate | java | 95 (p95: 96, σ: 0.4, min: 95, max: 96) |
-| accumulate | node | 94 (p95: 95, σ: 0.5, min: 94, max: 95) |
-| accumulate | bun | 95 (p95: 96, σ: 0.3, min: 95, max: 96) |
+| accumulate | swift | - |
+| accumulate | java | - |
+| accumulate | node | 162 (p95: 172, σ: 25.1, min: 101, max: 172) |
+| accumulate | bun | 72 (p95: 76, σ: 1.7, min: 69, max: 76) |
 | accumulate | hermes | - |
-| accumulate | python | 4556 (p95: 4562, σ: 45.4, min: 4431, max: 4562) |
+| accumulate | python | 3369 (p95: 5661, σ: 862.4, min: 3262, max: 5661) |
