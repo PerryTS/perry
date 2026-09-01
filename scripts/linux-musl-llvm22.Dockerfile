@@ -24,13 +24,16 @@ RUN apk add --no-cache \
       llvm22 llvm22-dev llvm22-static llvm22-libs \
       libffi-dev openssl-dev zlib-dev zstd-dev xz-dev \
       musl-dev pkgconf perl python3 \
-  && llvm-config --version | grep -q '^22\.' \
-     || { echo "alpine llvm is not 22.x ($(llvm-config --version))" >&2; exit 1; }
+  # Alpine installs LLVM 22 under /usr/lib/llvm22 and does NOT put its
+  # llvm-config on PATH (the bare name is unversioned and absent), so the
+  # check has to name the prefix explicitly.
+  && /usr/lib/llvm22/bin/llvm-config --version | grep -q '^22\.' \
+     || { echo "alpine llvm is not 22.x ($(/usr/lib/llvm22/bin/llvm-config --version 2>&1))" >&2; exit 1; }
 
 ENV LLVM_SYS_221_PREFIX=/usr/lib/llvm22
 ENV RUSTUP_HOME=/opt/rustup
 ENV CARGO_HOME=/opt/cargo
-ENV PATH=/opt/cargo/bin:$PATH
+ENV PATH=/opt/cargo/bin:/usr/lib/llvm22/bin:$PATH
 
 ARG RUST_TOOLCHAIN=nightly-2026-08-20
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
