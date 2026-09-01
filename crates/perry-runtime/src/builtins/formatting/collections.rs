@@ -63,9 +63,20 @@ pub(super) unsafe fn format_map(map: *const crate::map::MapHeader, depth: usize)
     if size == 0 || entries.is_null() {
         return "Map(0) {}".to_string();
     }
+    // #9415: `size` is the LIVE count, but the raw entry indices run `0..used`
+    // — a tombstoned `delete` writes `MAP_HOLE_KEY_BITS` (`TAG_HOLE`) over the
+    // slot, decrements `size`, and leaves `used` alone. Walking `0..size` both
+    // rendered the tombstone (whose key bits read back as a NaN, so
+    // `new Map([["a",1],["b",2]])` after `delete "a"` printed
+    // `Map(1) { NaN => undefined }`) and stopped short of the live tail. Bound
+    // by `used` and skip the holes, exactly as the Map iterator object does.
+    let used = crate::map::map_used_entries(map) as usize;
     let mut parts: Vec<String> = Vec::with_capacity(size);
-    for i in 0..size {
+    for i in 0..used {
         let key = *entries.add(i * 2);
+        if key.to_bits() == crate::map::MAP_HOLE_KEY_BITS {
+            continue;
+        }
         let val = *entries.add(i * 2 + 1);
         parts.push(format!(
             "{} => {}",
@@ -92,9 +103,17 @@ pub(super) unsafe fn format_set(set: *const crate::set::SetHeader, depth: usize)
     if size == 0 || elements.is_null() {
         return "Set(0) {}".to_string();
     }
+    // #9415: same tombstone bound as `format_map` above — `new Set([1,2,3])`
+    // after `delete 1` printed `Set(2) { NaN, 2 }`, both rendering the hole and
+    // never reaching the live `3`.
+    let used = crate::set::set_used_entries(set) as usize;
     let mut parts: Vec<String> = Vec::with_capacity(size);
-    for i in 0..size {
-        parts.push(format_member(*elements.add(i), depth));
+    for i in 0..used {
+        let value = *elements.add(i);
+        if value.to_bits() == crate::set::SET_HOLE_VALUE_BITS {
+            continue;
+        }
+        parts.push(format_member(value, depth));
     }
     wrap("Set", size, &parts)
 }

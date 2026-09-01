@@ -31,7 +31,11 @@ pub extern "C" fn js_console_log(value: JSValue) {
             println!("{}", format_finite_number_js(n));
         }
     } else if value.is_int32() {
-        println!("{}", value.as_int32());
+        // #9415: a class reference shares the INT32 tag, so this arm printed
+        // the raw class id (`console.log(class K {})` -> `49`).
+        println!("{}", int32_or_class_repr(f64::from_bits(value.bits())));
+    } else if is_array_hole(f64::from_bits(value.bits())) {
+        println!("undefined");
     } else {
         println!("{:?}", value);
     }
@@ -70,7 +74,9 @@ pub extern "C" fn js_console_log_dynamic(value: f64) {
         // bigint (refs GH #33).
         println!("{}{}", p, format_jsvalue(value, 0));
     } else if jsval.is_int32() {
-        println!("{}{}", p, jsval.as_int32());
+        println!("{}{}", p, int32_or_class_repr(value));
+    } else if is_array_hole(value) {
+        println!("{}undefined", p);
     } else {
         // Must be a regular number — but first check for a raw (non-NaN-boxed)
         // heap pointer. The codegen returns Buffer pointers as
@@ -267,7 +273,9 @@ pub extern "C" fn js_console_error_dynamic(value: f64) {
         // Object/array pointer - format as JSON
         eprintln!("{}", format_jsvalue(value, 0));
     } else if jsval.is_int32() {
-        eprintln!("{}", jsval.as_int32());
+        eprintln!("{}", int32_or_class_repr(value));
+    } else if is_array_hole(value) {
+        eprintln!("undefined");
     } else {
         let n = value;
         if n.is_nan() {
@@ -326,7 +334,9 @@ pub extern "C" fn js_console_warn_dynamic(value: f64) {
         // Object/array pointer - format as JSON
         eprintln!("{}", format_jsvalue(value, 0));
     } else if jsval.is_int32() {
-        eprintln!("{}", jsval.as_int32());
+        eprintln!("{}", int32_or_class_repr(value));
+    } else if is_array_hole(value) {
+        eprintln!("undefined");
     } else {
         let n = value;
         if n.is_nan() {
@@ -868,7 +878,7 @@ fn color_mode_received(value: f64) -> String {
         return jsval.as_bool().to_string();
     }
     if jsval.is_int32() {
-        return jsval.as_int32().to_string();
+        return int32_or_class_repr(value);
     }
     if jsval.is_number() {
         let n = jsval.as_number();
