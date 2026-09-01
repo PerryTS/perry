@@ -411,6 +411,12 @@ pub extern "C-unwind" fn js_throw(value: f64) -> ! {
     // TLS access "open" would leave the cell permanently borrowed on this
     // thread; in practice UnsafeCell tolerates it but the shorter scope
     // keeps things tidy).
+    // #9403: an uncaught throw is a process exit, so Node's `exit` listeners
+    // run — with code 1, and BEFORE the uncaught-exception report is printed.
+    // The listeners are JS, so they must not run under the open
+    // `with_exception_state` access below; the closure records that this throw
+    // is fatal and the work happens after it has been dropped.
+    let mut fatal = false;
     let jb_ptr: *mut i32 = with_exception_state(|s| unsafe {
         crate::gc::runtime_store_root_nanbox_f64_raw_slot(&raw mut (*s).current_exception, value);
         (*s).has_exception = true;
@@ -421,9 +427,8 @@ pub extern "C-unwind" fn js_throw(value: f64) -> ! {
         }
 
         if (*s).try_depth == 0 {
-            print_uncaught(value);
-            emit_uncaught_backtrace();
-            std::process::exit(1);
+            fatal = true;
+            return std::ptr::null_mut();
         }
 
         // Issue #2780: this throw is going to be CAUGHT by an open `try`
@@ -488,6 +493,17 @@ pub extern "C-unwind" fn js_throw(value: f64) -> ! {
             HandlerKind::Unwind => std::ptr::null_mut(),
         }
     });
+    if fatal {
+        // No open `try`: this throw ends the process. Run the `exit`
+        // listeners first (Node emits `exit` before writing its
+        // uncaught-exception report — verified against node 26.5.1 with the
+        // two streams separated), then report and leave with the status the
+        // listeners may have rewritten via `process.exitCode`.
+        let status = crate::process::run_process_exit_sequence(Some(1));
+        print_uncaught(value);
+        emit_uncaught_backtrace();
+        std::process::exit(status);
+    }
     if !jb_ptr.is_null() {
         // Windows MSVC: `longjmp` inspects `_JUMP_BUFFER.Frame` (the first
         // 8 bytes of the jmp_buf) and, when it is nonzero, performs a REAL

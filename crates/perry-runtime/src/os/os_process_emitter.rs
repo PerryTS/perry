@@ -468,6 +468,72 @@ pub extern "C" fn js_process_emit_before_exit(code: f64) {
     let _ = emit_process_event("beforeExit", &[code]);
 }
 
+/// `js_process_emit_before_exit` with the pending `process.exitCode` as the
+/// argument — the form the generated epilogue calls.
+///
+/// Node passes the code the process is *about* to exit with, not a constant:
+/// `process.exitCode = 5` with a `beforeExit` listener prints `5` there. The
+/// epilogue used to pass a literal `0`, so every `beforeExit` listener in a
+/// program that had set an exit code saw the wrong number (#9403).
+#[no_mangle]
+pub extern "C" fn js_process_emit_before_exit_pending() {
+    let code = crate::process::js_process_pending_exit_code();
+    js_process_emit_before_exit(code as f64);
+}
+
+// Codegen-only symbol: nothing inside the runtime calls it, so anchor it
+// against the auto-optimize whole-program dead-strip (#4876), like the other
+// epilogue hooks.
+#[cfg(feature = "keepalive-anchors")]
+#[used]
+static KEEP_PROCESS_EMIT_BEFORE_EXIT_PENDING: extern "C" fn() =
+    js_process_emit_before_exit_pending;
+
+crate::perry_thread_local! {
+    /// Node emits `exit` at most once per process, whichever way the process
+    /// leaves. The guard is load-bearing, not defensive: an `exit` listener is
+    /// allowed to call `process.exit()` itself, or to throw (taking the fatal
+    /// path) — both re-enter the emit, and without the guard the listeners
+    /// that already ran would run again. Node instead skips straight out,
+    /// which means the listeners *after* the one that exited never run at all.
+    static PROCESS_EXIT_EVENT_EMITTED: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
+}
+
+/// Emit the `exit` event with `code`, at most once per process.
+///
+/// Node runs `exit` listeners synchronously at the moment the process leaves:
+/// after the loop drained (`beforeExit` first), from `process.exit()`, and
+/// from the fatal uncaught-exception / unhandled-rejection paths. Only
+/// SYNCHRONOUS work inside a listener is honoured, and that falls out of where
+/// this is called rather than from any suppression machinery: every caller
+/// terminates — or returns out of generated `main` — as soon as this returns,
+/// so a `setTimeout`, `setImmediate` or `nextTick` queued by a listener is
+/// never given a turn, while a `writeFileSync` in the same listener has
+/// already landed.
+///
+/// Prefer `crate::process::run_process_exit_sequence`, which also publishes
+/// the code as `process.exitCode` and reports the — possibly reassigned —
+/// final status. This entry point exists for it and for tests.
+#[no_mangle]
+pub extern "C" fn js_process_emit_exit(code: f64) {
+    if PROCESS_EXIT_EVENT_EMITTED.with(|emitted| emitted.replace(true)) {
+        return;
+    }
+    let _ = emit_process_event("exit", &[code]);
+}
+
+/// Whether the one-shot `exit` emit has already happened on this thread.
+#[cfg(test)]
+pub(crate) fn process_exit_event_emitted() -> bool {
+    PROCESS_EXIT_EVENT_EMITTED.with(|emitted| emitted.get())
+}
+
+#[cfg(test)]
+pub(crate) fn reset_process_exit_event_emitted_for_test() {
+    PROCESS_EXIT_EVENT_EMITTED.with(|emitted| emitted.set(false));
+}
+
 pub extern "C" fn js_process_signal_drain() -> i32 {
     let mut count = 0i32;
     for event in super::signal::take_pending_process_signals() {

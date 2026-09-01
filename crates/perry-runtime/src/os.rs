@@ -1379,6 +1379,75 @@ fn js_os_user_info_impl(buffer_encoding: bool) -> *mut ObjectHeader {
 mod tests {
     use super::*;
 
+    /// #9403: the shared exit sequence must publish the status only on the
+    /// paths where Node does. On natural drain and a bare `process.exit()`,
+    /// `process.exitCode` stays `undefined` while listeners run — Node prints
+    /// `undefined` there, not `0` — and the resolved status is still 0.
+    /// `process.exit(7)` and the fatal paths DO publish, so a listener reading
+    /// `process.exitCode` sees the status the process is leaving with.
+    #[test]
+    fn process_exit_sequence_publishes_only_where_node_does() {
+        let saved = crate::process::js_process_exit_code_get();
+        crate::os::os_process_emitter::reset_process_exit_event_emitted_for_test();
+        crate::process::js_process_exit_code_set(f64::from_bits(
+            crate::value::JSValue::undefined().bits(),
+        ));
+
+        // Natural drain / bare `process.exit()`: no publish.
+        let status = crate::process::run_process_exit_sequence(None);
+        assert_eq!(status, 0, "an unset exitCode resolves to status 0");
+        assert!(
+            crate::value::JSValue::from_bits(
+                crate::process::js_process_exit_code_get().to_bits()
+            )
+            .is_undefined(),
+            "the natural-drain arm must not publish a code over `undefined`"
+        );
+
+        // The emit is one-shot; the sequence still resolves a status.
+        assert!(
+            crate::os::os_process_emitter::process_exit_event_emitted(),
+            "the first sequence run must consume the one-shot exit emit"
+        );
+
+        // `process.exit(7)` publishes, so listeners observe it.
+        crate::os::os_process_emitter::reset_process_exit_event_emitted_for_test();
+        let status = crate::process::run_process_exit_sequence(Some(7));
+        assert_eq!(status, 7);
+        assert_eq!(
+            crate::process::js_process_exit_code_get(),
+            7.0,
+            "an explicit code must be visible as process.exitCode"
+        );
+
+        // A later listener reassigning `process.exitCode` is what the sequence
+        // reports as the real status — Node honours that on every path.
+        crate::os::os_process_emitter::reset_process_exit_event_emitted_for_test();
+        crate::process::js_process_exit_code_set(9.0);
+        assert_eq!(
+            crate::process::run_process_exit_sequence(None),
+            9,
+            "the resolved status is re-read after the listeners ran"
+        );
+
+        crate::os::os_process_emitter::reset_process_exit_event_emitted_for_test();
+        crate::process::js_process_exit_code_set(saved);
+    }
+
+    /// The guard is what stops an `exit` listener that calls `process.exit()`
+    /// — or throws — from re-running the listeners that already ran.
+    #[test]
+    fn process_exit_event_emits_at_most_once() {
+        crate::os::os_process_emitter::reset_process_exit_event_emitted_for_test();
+        assert!(!crate::os::os_process_emitter::process_exit_event_emitted());
+        crate::os::js_process_emit_exit(0.0);
+        assert!(crate::os::os_process_emitter::process_exit_event_emitted());
+        // Re-entry is a no-op rather than a second pass over the listeners.
+        crate::os::js_process_emit_exit(1.0);
+        assert!(crate::os::os_process_emitter::process_exit_event_emitted());
+        crate::os::os_process_emitter::reset_process_exit_event_emitted_for_test();
+    }
+
     #[test]
     fn test_os_platform() {
         let platform = js_os_platform();

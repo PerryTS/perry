@@ -19,7 +19,7 @@ mod exec_env;
 pub(crate) use env_misc::{
     exit_after_current_thread_collection_teardown, format_out_of_range_number,
     process_env_delete_field, process_env_get_field, process_env_has_field, process_env_set_field,
-    scan_process_env_cache_roots_mut,
+    run_process_exit_sequence, scan_process_env_cache_roots_mut,
 };
 mod finalization;
 pub(crate) mod ipc;
@@ -43,7 +43,8 @@ pub use env_misc::{
     js_process_exit_code_set, js_process_fatal_exception, js_process_get_active_handles,
     js_process_get_active_requests, js_process_has_uncaught_exception_capture_callback,
     js_process_internal_kill, js_process_linked_binding, js_process_memory_usage,
-    js_process_open_stdin, js_process_raw_debug, js_process_really_exit, js_process_ref,
+    js_process_open_stdin, js_process_pending_exit_code, js_process_raw_debug,
+    js_process_really_exit, js_process_ref, js_process_run_exit_sequence,
     js_process_set_uncaught_exception_capture_callback, js_process_start_profiler_idle_notifier,
     js_process_stop_profiler_idle_notifier, js_process_thread_cpu_usage, js_process_tick_callback,
     js_process_unref, js_removeenv, js_setenv,

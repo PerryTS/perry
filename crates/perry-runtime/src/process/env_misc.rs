@@ -98,15 +98,63 @@ pub extern "C" fn js_process_exit(code: f64) {
     // `validate_exit_code` returns `None` *only* for nullish input, so a bare
     // `process.exit()` falls back to `process.exitCode` while an explicit arg
     // (`process.exit(0)`) overrides it — matching Node (#6666).
-    let exit_code = match validate_exit_code(code) {
-        Some(code) => code,
-        None => js_process_pending_exit_code(),
-    };
+    // Node's `process.exit(code)` assigns `process.exitCode = code` when an
+    // argument was supplied, then runs the shared exit sequence; a bare
+    // `process.exit()` leaves the stored code alone. `validate_exit_code`
+    // returns `None` for exactly the nullish (no-argument) case.
+    let published = validate_exit_code(code);
+    let exit_code = run_process_exit_sequence(published);
     js_process_run_finalization_exit();
     crate::node_submodules::flush_trace_events_output();
     crate::gc::js_gc_release_current_thread_collection_side_allocations();
     terminate_without_atexit(exit_code)
 }
+
+/// Node's shared process-exit sequence (`handleProcessExit` in
+/// `lib/internal/process/per_thread.js`), run by EVERY path that terminates
+/// this process: the generated natural-exit epilogue, `process.exit()`, and
+/// the fatal uncaught-exception / unhandled-rejection paths.
+///
+/// 1. `publish` — `Some(code)` for the paths where Node assigns the status to
+///    `process.exitCode` before emitting (an explicit `process.exit(3)`, and
+///    the fatal paths, which force `1` even over an already-set code). `None`
+///    for the paths that leave it alone: natural drain and bare
+///    `process.exit()`, where a listener reading `process.exitCode` must still
+///    see `undefined` if the program never set one.
+/// 2. Emit the one-shot `exit` event with the resolved code as its single
+///    argument. The argument is snapshotted here, so a listener that
+///    reassigns `process.exitCode` does not change what LATER listeners are
+///    passed.
+/// 3. Return the — possibly reassigned — `process.exitCode` as the real
+///    status. Node lets an `exit` listener change the status this way on every
+///    path, including the fatal ones (a listener setting `9` turns both
+///    `process.exit(3)` and an uncaught throw into status 9).
+///
+/// Only SYNCHRONOUS work inside a listener is honoured; see
+/// `crate::os::js_process_emit_exit` for why that needs no suppression.
+pub(crate) fn run_process_exit_sequence(publish: Option<i32>) -> i32 {
+    if let Some(code) = publish {
+        PROCESS_EXIT_CODE.with(|c| c.set(JSValue::number(code as f64).bits()));
+    }
+    let code = js_process_pending_exit_code();
+    crate::os::js_process_emit_exit(code as f64);
+    js_process_pending_exit_code()
+}
+
+/// The natural-drain form of `run_process_exit_sequence`, called from the
+/// generated event-loop epilogue after `beforeExit` and its microtask drain.
+/// The epilogue re-reads `js_process_pending_exit_code` for its `ret`, so the
+/// resolved status is returned there rather than here.
+#[no_mangle]
+pub extern "C" fn js_process_run_exit_sequence() {
+    let _ = run_process_exit_sequence(None);
+}
+
+// Codegen-only symbol — anchor it against the auto-optimize whole-program
+// dead-strip (#4876), like `js_process_pending_exit_code` below.
+#[cfg(feature = "keepalive-anchors")]
+#[used]
+static KEEP_PROCESS_RUN_EXIT_SEQUENCE: extern "C" fn() = js_process_run_exit_sequence;
 
 /// Terminate without running process-wide cleanup after thread-local GC state
 /// has been torn down.
@@ -137,6 +185,12 @@ fn terminate_without_atexit(exit_code: i32) -> ! {
 /// This is used by fatal paths that have already completed their reporting
 /// callbacks and would otherwise bypass the generated executable epilogue.
 pub(crate) fn exit_after_current_thread_collection_teardown(code: i32) -> ! {
+    // #9403: these are real process exits, so Node's `exit` listeners must run
+    // here too — an uncaught exception or an unhandled rejection fires them
+    // with code 1. The emit is one-shot, so a listener that itself calls
+    // `process.exit()` (or throws) re-enters harmlessly, and a caller that
+    // already ran the sequence pays nothing.
+    let code = run_process_exit_sequence(Some(code));
     crate::gc::js_gc_release_current_thread_collection_side_allocations();
     terminate_without_atexit(code)
 }

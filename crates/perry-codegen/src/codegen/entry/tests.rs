@@ -180,6 +180,83 @@ fn executable_exit_releases_collection_side_allocations_last() {
     );
 }
 
+/// #9403: the generated epilogue must EMIT the `exit` event, and must emit it
+/// where a listener's synchronous work still lands but its asynchronous work
+/// cannot run. Perry emitted `beforeExit` here and nothing else, so every
+/// `process.on("exit", …)` listener in every compiled program was dead code.
+#[test]
+fn executable_exit_block_emits_the_process_exit_event() {
+    let ir = emitted_ir("executable");
+    let exit_start = ir
+        .find("\nevent_loop.exit.")
+        .map(|offset| offset + 1)
+        .unwrap_or_else(|| panic!("missing event-loop exit block in emitted IR:\n{ir}"));
+    let exit_len = ir[exit_start..]
+        .find("\n}")
+        .expect("exit block should end with the function's closing brace");
+    let exit_block = &ir[exit_start..exit_start + exit_len];
+
+    let before_exit = exit_block
+        .find("call void @js_process_emit_before_exit_pending()")
+        .expect("beforeExit should be emitted with the pending exit code");
+    let pump = exit_block
+        .find("call i32 @js_promise_run_microtasks_event_loop()")
+        .expect("the post-beforeExit drain should be emitted");
+    let exit_event = exit_block
+        .find("call void @js_process_run_exit_sequence()")
+        .expect("the exit event should be emitted");
+    let finalization = exit_block
+        .find("call void @js_process_run_finalization_exit()")
+        .expect("exit finalization call should be emitted");
+    let promise_jobs = exit_block
+        .find("call i32 @js_promise_run_promise_jobs()")
+        .expect("the post-exit microtask checkpoint should be emitted");
+
+    // Node order: beforeExit (and the loop turn it may schedule) strictly
+    // before exit.
+    assert!(before_exit < pump, "beforeExit must precede its drain\n{exit_block}");
+    assert!(
+        pump < exit_event,
+        "the exit event must come after beforeExit and its drain\n{exit_block}"
+    );
+    assert!(
+        exit_event < finalization,
+        "user exit listeners run before the finalization-registry callbacks\n{exit_block}"
+    );
+    assert!(
+        finalization < promise_jobs,
+        "the microtask checkpoint is the last thing after the exit work\n{exit_block}"
+    );
+
+    // The sync-only contract, pinned structurally: after the exit emit nothing
+    // may give the timer queues (or the nextTick queue) another turn, so a
+    // `setTimeout`/`setImmediate`/`nextTick` scheduled by an exit listener can
+    // never run. `js_promise_run_promise_jobs` is PromiseJobsOnly by
+    // construction and is the only pump allowed past this point.
+    let after_exit = &exit_block[exit_event..];
+    for resurrecting in [
+        "js_promise_run_microtasks_event_loop",
+        "js_promise_run_microtasks(",
+        "js_timer_tick",
+        "js_interval_timer_tick",
+        "js_callback_timer_tick",
+        "js_wait_for_event",
+        "js_run_stdlib_pump",
+    ] {
+        assert!(
+            !after_exit.contains(resurrecting),
+            "{resurrecting} after the exit emit would let an exit listener's async work run\n{after_exit}"
+        );
+    }
+
+    // The old literal-`0` beforeExit emit is gone: Node passes the pending
+    // `process.exitCode`, so `process.exitCode = 5` must reach the listener.
+    assert!(
+        !exit_block.contains("@js_process_emit_before_exit(double"),
+        "beforeExit must no longer be emitted with a constant code\n{exit_block}"
+    );
+}
+
 #[test]
 fn event_loop_microtask_pump_is_the_single_timer_phase_owner() {
     let ir = emitted_ir("executable");

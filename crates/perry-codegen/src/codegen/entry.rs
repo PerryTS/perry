@@ -1248,20 +1248,37 @@ pub(super) fn compile_module_entry(
                 // we ret. Mirrors Node's "event loop drained → one
                 // beforeExit pass" semantics.
                 //
-                // We still pass `0` to the `beforeExit` emit (the #2135 test
-                // surface only pins the firing + default code); the *process*
-                // status, by contrast, now consults `process.exitCode` at the
-                // `ret` below (#6666). Explicit `process.exit(N)` bypasses this
-                // whole block via libc::_exit.
+                // `beforeExit` is emitted with the PENDING `process.exitCode`
+                // rather than a literal `0`: Node passes the code the process
+                // is about to leave with, so `process.exitCode = 5` makes a
+                // `beforeExit` listener see `5` (#9403). The *process* status
+                // likewise consults `process.exitCode` at the `ret` below
+                // (#6666).
+                //
+                // #9403: then run Node's exit sequence — emit `exit` with that
+                // same code. This is the natural-drain arm; `process.exit(N)`
+                // and the fatal uncaught-exception / unhandled-rejection paths
+                // run the identical sequence from the runtime, and the emit is
+                // one-shot so no path can double-fire it. Async work an `exit`
+                // listener schedules must not run, and does not: nothing below
+                // ticks the timer queues again.
                 ctx.current_block = exit_idx;
-                let zero_code = "0x0".to_string();
                 ctx.block()
-                    .call_void("js_process_emit_before_exit", &[(DOUBLE, &zero_code)]);
+                    .call_void("js_process_emit_before_exit_pending", &[]);
                 let _ = ctx
                     .block()
                     .call(I32, "js_promise_run_microtasks_event_loop", &[]);
+                ctx.block().call_void("js_process_run_exit_sequence", &[]);
                 ctx.block()
                     .call_void("js_process_run_finalization_exit", &[]);
+                // The one piece of async work Node DOES honour here: V8 runs a
+                // microtask checkpoint once `emit("exit")` returns to the top
+                // level, so a `.then` queued by an `exit` listener runs (after
+                // every listener) on this path — and only on this path, since
+                // `process.exit()` leaves without one. Promise jobs only: the
+                // nextTick queue and the timer queues stay dark, exactly as in
+                // Node.
+                let _ = ctx.block().call(I32, "js_promise_run_promise_jobs", &[]);
                 ctx.block().call_void("js_trace_events_flush_output", &[]);
                 // After the event loop drains, surface any still-unhandled
                 // promise rejection (Node exits non-zero; this matches the
