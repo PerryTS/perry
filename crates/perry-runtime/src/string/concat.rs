@@ -267,6 +267,68 @@ thread_local! {
         const { std::cell::UnsafeCell::new([std::ptr::null_mut(); CONCAT_MEMO_SIZE]) };
 }
 
+/// #9391: the memo must not tax a workload it never helps.
+///
+/// `bench_gc_pressure` builds 500k DISTINCT short strings (`"item_" + i`, 11
+/// bytes, inside the 12-byte window), so every concat paid a byte hash, a
+/// lookup miss and a ROOTED insert store for a hit rate of ~0. Measured cost:
+/// `bench_gc_pressure` 11 -> 17 ms. The memo's own win
+/// (`bench_object_property` 36 -> 25) comes from the opposite shape — a small
+/// set of keys reused constantly — so the two are separable by hit rate, and
+/// nothing else about them needs to be known in advance.
+///
+/// After `CONCAT_MEMO_TRIAL` attempts, a hit rate below one in eight turns the
+/// memo off for the rest of the process. Disabling a pure cache cannot change
+/// a result, so this is a throughput decision only. The counters are
+/// thread-local and saturate rather than wrap.
+const CONCAT_MEMO_TRIAL: u32 = 4096;
+const CONCAT_MEMO_MIN_HIT_SHIFT: u32 = 3; // keep while hits >= attempts/8
+
+crate::perry_thread_local! {
+    static CONCAT_MEMO_ATTEMPTS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    static CONCAT_MEMO_HITS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    static CONCAT_MEMO_OFF: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// `PERRY_CONCAT_MEMO=0` disables the memo outright (A/B bisection), mirroring
+/// the sibling runtime fast-path gates.
+fn concat_memo_env_enabled() -> bool {
+    use std::sync::OnceLock;
+    static CACHED: OnceLock<bool> = OnceLock::new();
+    *CACHED.get_or_init(|| {
+        !matches!(
+            std::env::var("PERRY_CONCAT_MEMO").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        )
+    })
+}
+
+#[inline]
+fn concat_memo_active() -> bool {
+    concat_memo_env_enabled() && !CONCAT_MEMO_OFF.with(|f| f.get())
+}
+
+/// Record the outcome of one memo attempt and retire the memo if it is not
+/// earning its keep.
+#[inline]
+fn concat_memo_record(hit: bool) {
+    let attempts = CONCAT_MEMO_ATTEMPTS.with(|c| {
+        let n = c.get().saturating_add(1);
+        c.set(n);
+        n
+    });
+    if hit {
+        CONCAT_MEMO_HITS.with(|c| c.set(c.get().saturating_add(1)));
+        return;
+    }
+    if attempts >= CONCAT_MEMO_TRIAL {
+        let hits = CONCAT_MEMO_HITS.with(|c| c.get());
+        if hits < (attempts >> CONCAT_MEMO_MIN_HIT_SHIFT) {
+            CONCAT_MEMO_OFF.with(|f| f.set(true));
+        }
+    }
+}
+
 #[inline]
 fn concat_memo_slot(bytes: &[u8]) -> usize {
     // FNV-1a over the result bytes. Content-addressed, so two different
@@ -327,7 +389,34 @@ pub fn scan_concat_memo_roots(mark: &mut dyn FnMut(f64)) {
 }
 
 #[cfg(test)]
+pub(crate) fn test_concat_memo_trial() -> u32 {
+    CONCAT_MEMO_TRIAL
+}
+
+#[cfg(test)]
+pub(crate) fn test_concat_memo_retired() -> bool {
+    CONCAT_MEMO_OFF.with(|f| f.get())
+}
+
+#[cfg(test)]
+pub(crate) fn test_note_concat_memo_miss() {
+    concat_memo_record(false);
+}
+
+#[cfg(test)]
+pub(crate) fn test_note_concat_memo_hit() {
+    concat_memo_record(true);
+}
+
+#[cfg(test)]
 pub(crate) fn test_clear_concat_memo() {
+    // #9391: the adaptive counters are thread-local and outlive a single test.
+    // A test that misses 4096 times would otherwise retire the memo for every
+    // LATER test on the same thread — the cross-test contamination class that
+    // bit the symbol probe's Bloom filter. Reset them with the table.
+    CONCAT_MEMO_ATTEMPTS.with(|c| c.set(0));
+    CONCAT_MEMO_HITS.with(|c| c.set(0));
+    CONCAT_MEMO_OFF.with(|f| f.set(false));
     CONCAT_MEMO.with(|c| unsafe {
         for slot in (*c.get()).iter_mut() {
             // GC_STORE_AUDIT(ROOT): test cleanup clears CONCAT_MEMO roots.
@@ -371,7 +460,8 @@ fn concat_byte_parts(l: (*const u8, u32), r: (*const u8, u32)) -> f64 {
     // `flags`/`utf16_len` are trivially `0`/`total_blen` and the surrogate
     // canonicalization below is a no-op — the cached string is bit-identical
     // to what the heap path would have built.
-    let memoizable = both_ascii && total_blen <= CONCAT_MEMO_MAX_BYTES;
+    let memoizable =
+        concat_memo_active() && both_ascii && total_blen <= CONCAT_MEMO_MAX_BYTES;
     let mut memo_buf = [0u8; CONCAT_MEMO_MAX_BYTES as usize];
     let mut memo_slot = 0usize;
     if memoizable {
@@ -390,6 +480,7 @@ fn concat_byte_parts(l: (*const u8, u32), r: (*const u8, u32)) -> f64 {
         let bytes = &memo_buf[..total_blen as usize];
         memo_slot = concat_memo_slot(bytes);
         let hit = concat_memo_lookup(memo_slot, bytes);
+        concat_memo_record(!hit.is_null());
         if !hit.is_null() {
             return f64::from_bits(crate::value::JSValue::string_ptr(hit).bits());
         }
@@ -647,7 +738,8 @@ pub extern "C" fn js_string_concat_value(
         // and heap-allocates. Restricted to a plain ASCII prefix so the cached
         // string is bit-identical to what the block below would build
         // (flags == 0, utf16_len == byte_len).
-        let memoizable = total_blen <= CONCAT_MEMO_MAX_BYTES as usize
+        let memoizable = concat_memo_active()
+            && total_blen <= CONCAT_MEMO_MAX_BYTES as usize
             && is_valid_string_ptr(prefix)
             && prefix_u16 == prefix_blen
             && unsafe { (*prefix).flags == 0 }
@@ -672,6 +764,7 @@ pub extern "C" fn js_string_concat_value(
             let bytes = &memo_buf[..total_blen];
             memo_slot = concat_memo_slot(bytes);
             let hit = concat_memo_lookup(memo_slot, bytes);
+            concat_memo_record(!hit.is_null());
             if !hit.is_null() {
                 return hit;
             }

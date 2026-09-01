@@ -1045,3 +1045,44 @@ fn concat_memo_declines_non_ascii_prefixes() {
         assert_eq!((*a).utf16_len, 3);
     }
 }
+
+/// #9391: the memo retires itself on a workload it never helps.
+///
+/// `bench_gc_pressure` builds 500k DISTINCT short strings, so every concat paid
+/// a hash, a lookup miss and a rooted insert for a ~0% hit rate — measured at
+/// 11 -> 17 ms when the memo landed. After `CONCAT_MEMO_TRIAL` attempts a hit
+/// rate below one-in-eight turns it off, while a reusing workload keeps it.
+///
+/// The assertion is on the memo's OWN state rather than on a timing: a
+/// throughput test would be flaky, and the decision is what this change makes.
+#[test]
+fn concat_memo_retires_on_an_all_distinct_workload() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    crate::string::concat::test_clear_concat_memo();
+
+    // All-distinct short results: the shape the memo cannot serve.
+    for i in 0..(crate::string::concat::test_concat_memo_trial() + 64) {
+        let s = crate::string::js_string_from_bytes(
+            format!("item_{i}").as_ptr(),
+            format!("item_{i}").len() as u32,
+        );
+        std::hint::black_box(s);
+        crate::string::concat::test_note_concat_memo_miss();
+    }
+    assert!(
+        crate::string::concat::test_concat_memo_retired(),
+        "an all-distinct workload must retire the memo; otherwise every concat \
+         keeps paying a hash + miss + rooted insert for no hits"
+    );
+
+    // A reusing workload must NOT retire it.
+    crate::string::concat::test_clear_concat_memo();
+    for _ in 0..(crate::string::concat::test_concat_memo_trial() + 64) {
+        crate::string::concat::test_note_concat_memo_hit();
+    }
+    assert!(
+        !crate::string::concat::test_concat_memo_retired(),
+        "a workload that hits must keep the memo — this is what preserves the \
+         bench_object_property win (36 -> 25 ms) the memo exists for"
+    );
+}
