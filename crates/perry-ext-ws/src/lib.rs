@@ -133,12 +133,67 @@ lazy_static! {
 }
 
 static WS_ACTIVE_SERVERS: AtomicI32 = AtomicI32::new(0);
-static WS_GC_REGISTERED: std::sync::Once = std::sync::Once::new();
+static WS_RUNTIME_HOOKS_REGISTERED: std::sync::Once = std::sync::Once::new();
 
-fn ensure_gc_scanner_registered() {
-    WS_GC_REGISTERED.call_once(|| {
+extern "C" {
+    fn js_register_handle_property_dispatch_extension(
+        f: unsafe extern "C" fn(i64, *const u8, usize, *mut f64) -> i32,
+    );
+}
+
+/// Install the crate's runtime hooks once: the mutable-root scanner, and the
+/// handle-property dispatch extension that answers dynamic reads on ws
+/// handles (#9324).
+fn ensure_runtime_hooks_registered() {
+    WS_RUNTIME_HOOKS_REGISTERED.call_once(|| {
         gc_register_mutable_root_scanner_named("perry-ext-ws", scan_ws_roots);
+        unsafe {
+            js_register_handle_property_dispatch_extension(js_ext_ws_handle_property_dispatch)
+        };
     });
+}
+
+/// Resolve `WebSocketServer.clients` for an UNTYPED receiver (#9324).
+///
+/// #9325/#9335 made `clients` a real `Set`, but only through the statically
+/// typed lowering (`native_dispatch.rs` needs to know the receiver's class).
+/// Every other read lands in the runtime's handle-property dispatcher, and
+/// `perry-ext-ws` registered no property surface there at all — so an `any`
+/// alias, a computed `wss[key]`, a helper taking the server as an untyped
+/// parameter, and every compiled npm package (a published bundle carries no
+/// types) all read `undefined`. `for (const ws of wss.clients)` over that
+/// `undefined` threw `TypeError: is not iterable` from inside a `setInterval`
+/// heartbeat — uncatchable by application code, so the process exited every
+/// 30 seconds.
+///
+/// Returns 0 (not handled) for every other property and for any handle that is
+/// not a live `WsServerHandle`, so the composite dispatcher falls through to
+/// the primary stdlib dispatcher unchanged.
+///
+/// # Safety
+/// FFI entry; `property_name_ptr` must be valid for `property_name_len` bytes,
+/// and `out` must be writable when non-null.
+#[no_mangle]
+pub unsafe extern "C" fn js_ext_ws_handle_property_dispatch(
+    handle: i64,
+    property_name_ptr: *const u8,
+    property_name_len: usize,
+    out: *mut f64,
+) -> i32 {
+    if property_name_ptr.is_null() || property_name_len != b"clients".len() {
+        return 0;
+    }
+    if std::slice::from_raw_parts(property_name_ptr, property_name_len) != b"clients" {
+        return 0;
+    }
+    let clients = js_ws_server_clients(handle);
+    if clients.to_bits() == JsValue::UNDEFINED.bits() {
+        return 0;
+    }
+    if !out.is_null() {
+        *out = clients;
+    }
+    1
 }
 
 fn scan_ws_roots(visitor: &mut GcRootVisitor<'_>) {
@@ -223,7 +278,7 @@ fn untrack_server_client(ws_id: usize) -> Option<Handle> {
 /// `url_ptr` must be null or a Perry-runtime `StringHeader`.
 #[no_mangle]
 pub unsafe extern "C" fn js_ws_connect(url_ptr: *const StringHeader) -> *mut perry_ffi::Promise {
-    ensure_gc_scanner_registered();
+    ensure_runtime_hooks_registered();
     ensure_tls_crypto_provider();
     let promise = perry_ffi::JsPromise::new();
     let raw = promise.as_raw();
@@ -253,7 +308,7 @@ pub unsafe extern "C" fn js_ws_connect(url_ptr: *const StringHeader) -> *mut per
 /// codegen sites that don't expect a Promise return.
 #[no_mangle]
 pub extern "C" fn js_ws_connect_start(url_nanboxed: f64) -> f64 {
-    ensure_gc_scanner_registered();
+    ensure_runtime_hooks_registered();
     ensure_tls_crypto_provider();
     let bits = url_nanboxed.to_bits();
     let mask = TAG_MASK;
@@ -499,7 +554,7 @@ pub unsafe extern "C" fn js_ws_on_client_i64(
     event_name_ptr: *const StringHeader,
     callback_ptr: i64,
 ) -> i64 {
-    ensure_gc_scanner_registered();
+    ensure_runtime_hooks_registered();
     let Some(event_name) = read_str(event_name_ptr) else {
         return handle;
     };
@@ -664,7 +719,7 @@ pub unsafe extern "C" fn js_ws_on(
     event_name_ptr: *const StringHeader,
     callback_ptr: i64,
 ) -> i64 {
-    ensure_gc_scanner_registered();
+    ensure_runtime_hooks_registered();
     let Some(event_name) = read_str(event_name_ptr) else {
         return handle;
     };
@@ -744,7 +799,7 @@ pub unsafe extern "C" fn js_ws_on(
 /// has-active gate — `js_fastify_has_active` — does that).
 #[no_mangle]
 pub extern "C" fn js_ws_server_new(opts_f64: f64) -> Handle {
-    ensure_gc_scanner_registered();
+    ensure_runtime_hooks_registered();
     let port = extract_port(opts_f64);
     let no_server = extract_no_server(opts_f64);
     let clients_bits = alloc_set(4).bits();
@@ -1079,7 +1134,7 @@ pub fn register_external_ws_stream<S>(ws_stream: tokio_tungstenite::WebSocketStr
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
-    ensure_gc_scanner_registered();
+    ensure_runtime_hooks_registered();
     let mut id_guard = NEXT_WS_ID.lock().unwrap();
     let ws_id = *id_guard;
     *id_guard += 1;
@@ -1148,7 +1203,7 @@ pub unsafe extern "C" fn js_ws_handle_upgrade(
     _head_f64: f64,
     cb: i64,
 ) -> i64 {
-    ensure_gc_scanner_registered();
+    ensure_runtime_hooks_registered();
     // `ws_id_f64` is POINTER_TAG-boxed (the host upgrade path encodes
     // it as `POINTER_TAG | (ws_id & POINTER_MASK)` so codegen's
     // unbox_to_i64 round-trips it). Extract the low-48 bits.
@@ -1414,8 +1469,8 @@ mod tests {
 
     #[test]
     fn gc_scanner_registration_idempotent() {
-        ensure_gc_scanner_registered();
-        ensure_gc_scanner_registered();
+        ensure_runtime_hooks_registered();
+        ensure_runtime_hooks_registered();
     }
 
     #[test]
@@ -1458,6 +1513,69 @@ mod tests {
         }
         WS_CLIENT_LISTENERS.lock().unwrap().remove(&client_id);
         drop_handle(server_handle);
+    }
+
+    /// #9324: the DYNAMIC read must reach the same live `Set` the typed read
+    /// gets. Pre-fix this dispatcher did not exist, every untyped
+    /// `wss.clients` read `undefined`, and iterating it killed the process.
+    #[test]
+    fn handle_property_dispatch_answers_clients_for_an_untyped_read() {
+        let _lock = GC_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let undefined = f64::from_bits(JsValue::UNDEFINED.bits());
+        let server_handle = js_ws_server_new(undefined);
+
+        let mut out = f64::NAN;
+        let handled = unsafe {
+            js_ext_ws_handle_property_dispatch(
+                server_handle,
+                b"clients".as_ptr(),
+                b"clients".len(),
+                &mut out,
+            )
+        };
+        assert_eq!(handled, 1, "the dispatcher must claim `clients`");
+        assert_eq!(
+            out.to_bits(),
+            js_ws_server_clients(server_handle).to_bits(),
+            "the dynamic read must return the SAME Set as the typed read"
+        );
+        let set = JsValue::from_bits(out.to_bits()).as_pointer::<perry_runtime::set::SetHeader>();
+        assert!(!set.is_null());
+        assert_eq!(perry_runtime::set::js_set_size(set), 0);
+
+        // Every other property stays unhandled so the composite dispatcher
+        // falls through to the primary stdlib dispatcher.
+        let mut other = f64::NAN;
+        assert_eq!(
+            unsafe {
+                js_ext_ws_handle_property_dispatch(
+                    server_handle,
+                    b"readyState".as_ptr(),
+                    b"readyState".len(),
+                    &mut other,
+                )
+            },
+            0
+        );
+
+        drop_handle(server_handle);
+
+        // A handle that is no longer a live server must NOT be claimed —
+        // otherwise this arm would shadow whatever id gets recycled into it.
+        let mut dead = f64::NAN;
+        assert_eq!(
+            unsafe {
+                js_ext_ws_handle_property_dispatch(
+                    server_handle,
+                    b"clients".as_ptr(),
+                    b"clients".len(),
+                    &mut dead,
+                )
+            },
+            0
+        );
     }
 
     #[test]

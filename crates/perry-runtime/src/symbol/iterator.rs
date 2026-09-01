@@ -132,8 +132,28 @@ fn throw_iterator_result_not_object() -> ! {
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
 }
 
-fn throw_value_not_iterable() -> ! {
-    let msg = b"is not iterable";
+/// The word Node puts in front of `is not iterable`.
+///
+/// Node NEVER throws a subject-less `TypeError: is not iterable` — it names
+/// the value (`undefined is not iterable`, `null is not iterable`). Perry's
+/// sync GetIterator threw the bare message, and #9324 is what that costs: a
+/// service died every 30 s inside a `setInterval` on
+/// `for (const ws of wss.clients)` where `wss.clients` read `undefined`, and
+/// because the TypeError named nothing the report attributed it to an
+/// unrelated frame in a dependency. Same label scheme as the async twin,
+/// `array::iterator::throw_not_iterable`.
+fn not_iterable_label(value: f64) -> &'static str {
+    if value.to_bits() == crate::value::TAG_NULL {
+        "null"
+    } else if value.to_bits() == TAG_UNDEFINED {
+        "undefined"
+    } else {
+        "value"
+    }
+}
+
+fn throw_value_not_iterable(value: f64) -> ! {
+    let msg = format!("{} is not iterable", not_iterable_label(value));
     let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
     let err = crate::error::js_typeerror_new(msg_str);
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
@@ -239,7 +259,7 @@ pub extern "C" fn js_get_iterator(val_f64: f64) -> f64 {
                 let fn_ptr = crate::value::js_nanbox_get_pointer(iter_fn)
                     as *const crate::closure::ClosureHeader;
                 if iter_fn.to_bits() == TAG_UNDEFINED || fn_ptr.is_null() {
-                    throw_value_not_iterable();
+                    throw_value_not_iterable(val_f64);
                 }
                 let prev_this = crate::object::js_implicit_this_set(val_f64);
                 let rebound = crate::closure::clone_closure_rebind_this(iter_fn.to_bits(), val_f64);
@@ -384,7 +404,7 @@ pub extern "C" fn js_get_iterator(val_f64: f64) -> f64 {
         if !jsv.is_pointer() && !jsv.is_any_string() {
             is_registered_class_ref = crate::object::class_ref_id(val_f64).is_some();
             if !is_registered_class_ref {
-                throw_value_not_iterable();
+                throw_value_not_iterable(val_f64);
             }
         }
     }
@@ -468,7 +488,7 @@ pub extern "C" fn js_get_iterator(val_f64: f64) -> f64 {
         if jsv.is_pointer()
             && crate::value::addr_class::is_handle_band(jsv.as_pointer::<u8>() as usize)
         {
-            throw_value_not_iterable();
+            throw_value_not_iterable(val_f64);
         }
     }
     // #6454: the class ref admitted past the primitive guard above resolved no
@@ -479,7 +499,7 @@ pub extern "C" fn js_get_iterator(val_f64: f64) -> f64 {
     // "next is not a function" later; throw here, exactly as before #6454 for
     // every non-pointer value.
     if is_registered_class_ref {
-        throw_value_not_iterable();
+        throw_value_not_iterable(val_f64);
     }
     let async_iter_wk = well_known_symbol("asyncIterator");
     if !async_iter_wk.is_null() {
@@ -489,7 +509,7 @@ pub extern "C" fn js_get_iterator(val_f64: f64) -> f64 {
         if async_iter_fn.to_bits() != TAG_UNDEFINED
             && async_iter_fn.to_bits() != crate::value::TAG_NULL
         {
-            throw_value_not_iterable();
+            throw_value_not_iterable(val_f64);
         }
     }
     val_f64
@@ -637,4 +657,37 @@ pub unsafe extern "C" fn js_to_primitive(value: f64, hint: i32) -> f64 {
     let result = crate::closure::js_closure_call1(closure_ptr, hint_f64);
     crate::object::js_implicit_this_set(prev_this);
     result
+}
+
+#[cfg(test)]
+mod not_iterable_message_tests {
+    use super::*;
+
+    /// #9324: the sync GetIterator TypeError must NAME its subject the way
+    /// Node does. A bare `is not iterable` is unattributable — that is the
+    /// whole reason #9324 was filed against the wrong file.
+    #[test]
+    fn label_names_the_receiver_like_node() {
+        assert_eq!(
+            not_iterable_label(f64::from_bits(TAG_UNDEFINED)),
+            "undefined"
+        );
+        assert_eq!(
+            not_iterable_label(f64::from_bits(crate::value::TAG_NULL)),
+            "null"
+        );
+        // Anything else keeps Perry's long-standing generic subject rather
+        // than inventing a type word the async twin does not use.
+        assert_eq!(not_iterable_label(37.0), "value");
+    }
+
+    /// The label is never empty: an empty subject is exactly the bare
+    /// message this fix removes, so guard the property directly.
+    #[test]
+    fn label_is_never_empty() {
+        for bits in [TAG_UNDEFINED, crate::value::TAG_NULL] {
+            assert!(!not_iterable_label(f64::from_bits(bits)).is_empty());
+        }
+        assert!(!not_iterable_label(0.0).is_empty());
+    }
 }
