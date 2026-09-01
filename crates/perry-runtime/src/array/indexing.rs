@@ -23,61 +23,13 @@ const MAX_DENSE_ARRAY_GROW_LENGTH: u32 = 1_000_000;
 /// benchmark for 6 hours (Regression Check, v0.5.1129–v0.5.1150).
 const DENSE_ARRAY_GAP_LIMIT: u32 = 1024;
 
-#[inline]
-pub(crate) fn invalidate_array_index_fast_path() {
-    PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED.store(1, Ordering::Relaxed);
-}
-
-#[cfg(test)]
-thread_local! {
-    static STRICT_DENSE_POINTER_OVERWRITE_HITS: std::cell::Cell<u64> = const {
-        std::cell::Cell::new(0)
-    };
-}
-
-#[cfg(test)]
-pub(crate) fn test_strict_dense_pointer_overwrite_hits() -> u64 {
-    STRICT_DENSE_POINTER_OVERWRITE_HITS.with(std::cell::Cell::get)
-}
-
-// Test-only entry counter for `js_array_get_f64`, the JS-facing element
-// accessor. A runtime walk that reaches for it PER ELEMENT is paying the whole
-// gauntlet (forward-resolution, Map/Set/typed-array/buffer registry probes,
-// descriptor gate, hole translation) for what is a raw slot read, so tests that
-// assert "this walk no longer uses the element accessor" count it rather than
-// timing it. Same shape as the hit counter above.
-#[cfg(test)]
-thread_local! {
-    static ELEMENT_ACCESSOR_CALLS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-}
-
-#[cfg(test)]
-pub(crate) fn test_element_accessor_calls() -> u64 {
-    ELEMENT_ACCESSOR_CALLS.with(std::cell::Cell::get)
-}
-
-// The two strict-dense store helpers live in `strict_dense_test_helpers`
-// (2000-line cap). Re-exported by name so `super::indexing::…` paths in the
-// existing test modules keep resolving — a glob would not propagate.
+// Strict-dense helpers and counters live in `strict_dense_test_helpers`
+// (2000-line cap). Re-exported by name so existing test paths keep resolving.
 #[cfg(test)]
 pub(crate) use super::strict_dense_test_helpers::{
-    test_strict_dense_number_store, test_strict_dense_pointer_overwrite,
+    test_element_accessor_calls, test_strict_dense_number_store,
+    test_strict_dense_pointer_overwrite, test_strict_dense_pointer_overwrite_hits,
 };
-
-pub(crate) fn object_prototype_has_index_flag() -> bool {
-    OBJECT_PROTO_HAS_INDEX.load(Ordering::Relaxed)
-}
-
-/// Record (if `arr` is `Array.prototype`) that the prototype now carries an
-/// indexed property, so subsequent out-of-bounds reads consult it. Called from
-/// the array element-write paths; cheap (two relaxed atomic loads + compare).
-#[inline]
-pub(crate) fn note_array_index_write(arr: usize) {
-    if !ARRAY_PROTO_HAS_INDEX.load(Ordering::Relaxed) && arr != 0 && arr == array_prototype_addr() {
-        ARRAY_PROTO_HAS_INDEX.store(true, Ordering::Relaxed);
-        invalidate_array_index_fast_path();
-    }
-}
 
 /// Out-of-bounds element read fallback: `Array.prototype[index]` when the
 /// prototype has indexed properties (see `ARRAY_PROTO_HAS_INDEX`). Returns the
@@ -928,7 +880,7 @@ pub extern "C" fn js_array_numeric_get_f64_unboxed(arr: *mut ArrayHeader, index:
 pub extern "C" fn js_array_get_f64(arr: *const ArrayHeader, index: u32) -> f64 {
     const TAG_UNDEFINED_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0001u64);
     #[cfg(test)]
-    ELEMENT_ACCESSOR_CALLS.with(|c| c.set(c.get().wrapping_add(1)));
+    super::strict_dense_test_helpers::note_element_accessor_call();
 
     // Issue #179 Phase 5: lazy fast path — must run BEFORE
     // `clean_arr_ptr` because that helper force-materializes a lazy
@@ -1818,7 +1770,7 @@ pub(crate) fn try_strict_dense_index_set(
             && old_bits & pointer_mask != 0
         {
             #[cfg(test)]
-            STRICT_DENSE_POINTER_OVERWRITE_HITS.with(|hits| hits.set(hits.get().wrapping_add(1)));
+            super::strict_dense_test_helpers::note_strict_dense_pointer_overwrite_hit();
             // GC_STORE_AUDIT(BARRIERED): old and new are constructively
             // pointer-bearing, so the slot mask is unchanged. Maintain the
             // independent element proof and the mandatory generational/SATB
