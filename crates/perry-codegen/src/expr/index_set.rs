@@ -951,8 +951,7 @@ pub(crate) fn lower(
 
                                 ctx.current_block = fallback_idx;
                                 {
-                                    let strict_flag =
-                                        if assignment_strict { "1" } else { "0" };
+                                    let strict_flag = if assignment_strict { "1" } else { "0" };
                                     let fallback_box = ctx.block().call(
                                         DOUBLE,
                                         "js_typed_feedback_array_index_set_fallback_boxed",

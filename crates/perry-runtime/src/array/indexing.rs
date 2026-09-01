@@ -8,11 +8,11 @@ use std::sync::atomic::Ordering;
 mod keyed;
 #[path = "indexing_proto_chain.rs"]
 mod proto_chain;
+pub(crate) use keyed::js_array_set_index_or_string_with_strictness;
 pub use keyed::{
     js_array_get_index_or_string, js_array_set_index_or_string,
     js_array_set_index_or_string_strict, js_array_set_string_key,
 };
-pub(crate) use keyed::js_array_set_index_or_string_with_strictness;
 use proto_chain::array_oob_prototype_get;
 pub(crate) use proto_chain::{array_custom_prototype, array_spec_get, array_spec_has_index};
 use proto_chain::{array_object_proto_index_owner, ArrayCustomProto};
@@ -1711,35 +1711,43 @@ pub(crate) fn array_spec_set(
             };
         }
 
+        // Every path that the inherited property fully handles — setter
+        // invoked, or the Set rejected — leaves through the one exit below.
+        // A single re-derive of the receiver serves all of them: each of these
+        // arms can run JS or allocate, so the pointer has to be re-read, and
+        // reading it once here rather than at three returns keeps that explicit.
+        let mut handled_by_prototype = false;
         if inherited_owner != 0 {
             if let Some(accessor) = crate::object::get_accessor_descriptor(inherited_owner, &key) {
                 if accessor.set == 0 {
                     // A getter-only inherited index rejects the Set. Sloppy
-                    // code observes that as a no-op (#9394).
-                    if !strict {
-                        return arr_handle.get_raw_mut_ptr::<ArrayHeader>();
+                    // code observes that as a no-op (#9394); strict throws.
+                    if strict {
+                        crate::collection_iter::throw_type_error(&format!(
+                            "Cannot set property {index} which has only a getter"
+                        ));
                     }
-                    crate::collection_iter::throw_type_error(&format!(
-                        "Cannot set property {index} which has only a getter"
-                    ));
+                } else {
+                    crate::object::invoke_accessor_setter(
+                        accessor.set,
+                        receiver(),
+                        value_handle.get_nanbox_f64(),
+                    );
                 }
-                crate::object::invoke_accessor_setter(
-                    accessor.set,
-                    receiver(),
-                    value_handle.get_nanbox_f64(),
-                );
-                return arr_handle.get_raw_mut_ptr::<ArrayHeader>();
-            }
-            if crate::object::get_property_attrs(inherited_owner, &key)
+                handled_by_prototype = true;
+            } else if crate::object::get_property_attrs(inherited_owner, &key)
                 .is_some_and(|attrs| !attrs.writable())
             {
                 // A non-writable inherited data property rejects the Set
                 // without creating an own element. Silent in sloppy code.
-                if !strict {
-                    return arr_handle.get_raw_mut_ptr::<ArrayHeader>();
+                if strict {
+                    throw_frozen_array_index_write(index);
                 }
-                throw_frozen_array_index_write(index);
+                handled_by_prototype = true;
             }
+        }
+        if handled_by_prototype {
+            return arr_handle.get_raw_mut_ptr::<ArrayHeader>();
         }
 
         js_array_set_f64_extend_strict_impl(

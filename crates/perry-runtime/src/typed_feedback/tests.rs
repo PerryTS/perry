@@ -620,7 +620,8 @@ fn typed_feedback_array_set_boxed_fallback_preserves_original_index_value() {
     let key = crate::string::js_string_from_bytes(b"foo".as_ptr(), 3);
     let key_value = crate::value::js_nanbox_string(key as i64);
 
-    let returned = js_typed_feedback_array_index_set_fallback_boxed(72, obj_box, key_value, 77.0, 1);
+    let returned =
+        js_typed_feedback_array_index_set_fallback_boxed(72, obj_box, key_value, 77.0, 1);
     assert_eq!(returned.to_bits(), obj_box.to_bits());
     assert_eq!(
         crate::object::js_object_get_field_by_name_f64(obj, key).to_bits(),
