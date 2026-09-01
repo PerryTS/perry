@@ -181,6 +181,12 @@ pub fn scan_class_side_table_roots_mut(visitor: &mut crate::gc::RuntimeRootVisit
         }
     });
 
+    // #9364: the class objects whose constructors are being replayed on this
+    // thread. Each is a live heap pointer held across a user constructor body,
+    // so an evacuating minor must visit and forward it — the `super()` leg reads
+    // its pinned heritage back after any allocation the body performs.
+    super::evaluation_heritage::scan_active_class_evaluations_mut(visitor);
+
     scan_class_symbol_member_keys_mut(visitor);
     scan_function_class_id_keys_mut(visitor);
 }

@@ -1308,6 +1308,14 @@ pub(crate) unsafe fn replay_class_object_constructor(
         };
         final_args.push(v);
     }
+    // #9364: name the evaluation this constructor belongs to for the duration
+    // of the replay, so a `super()` in its body resolves THIS class object's
+    // pinned heritage rather than the template's last-wins stash. `capture_owner`
+    // is the class object that owns `ctor_ptr` — the same object whose captured
+    // environment fills the trailing cap params — so it is also the object whose
+    // heritage that constructor's `super()` means. The guard pops on unwind.
+    let _active_evaluation =
+        super::class_registry::push_active_class_evaluation(capture_owner_handle.get_nanbox_f64());
     inst_handle.with_mut_ptr::<ObjectHeader, _>(|inst| {
         let _ = call_vtable_method(
             ctor_ptr,
