@@ -231,3 +231,104 @@ fn element_store_rejection_throws_only_in_strict_mode() {
         assert_eq!(js_array_get_f64(out, 3), 4.0);
     }
 }
+
+/// #9422: a rejected STRICT `arr.length = n` throws for EVERY way `length` can
+/// be non-writable, not just `Object.freeze`.
+///
+/// The gap this pins: `js_array_set_length_strict` tested `OBJ_FLAG_FROZEN`
+/// alone, while the sloppy body it delegates to ALSO silently rejects a
+/// `writable: false` descriptor recorded by
+/// `Object.defineProperty(arr, "length", ...)`. The two sets had drifted, so
+/// that one shape was a silent no-op in strict code where node throws.
+///
+/// Both arms are asserted. Asserting only the throw is what let #9394 through,
+/// and asserting only the sloppy no-op is what let this through.
+#[test]
+fn set_length_rejection_throws_only_in_strict_mode() {
+    // SAFETY: plain array construction plus the public length setters; every
+    // pointer below is a live head this test allocated.
+    unsafe {
+        let values = [1.0, 2.0, 3.0];
+
+        // (a) `writable: false` WITHOUT freezing -- the shape that was silent.
+        let locked = js_array_from_f64(values.as_ptr(), values.len() as u32);
+        crate::object::set_property_attrs(
+            locked as usize,
+            "length".to_string(),
+            crate::object::PropertyAttrs::new(false, false, false),
+        );
+        // `Object.defineProperty` sets BOTH halves: the attrs side-table entry
+        // above and the per-array `OBJ_FLAG_ARRAY_DESCRIPTORS` gate that makes
+        // the numeric fast paths consult it (`object::array_object_ops`, the
+        // `key_name == "length"` arm). `set_property_attrs` alone only writes
+        // the side table -- an array that carries an attrs entry without the
+        // flag is a state no program can reach, and the predicate rightly
+        // ignores it. Set the flag so this test exercises the shape the
+        // end-to-end fixture produces, rather than a half-built one.
+        *super::header::array_gc_header(locked).expect("live array header") =
+            crate::gc::GcHeader {
+                _reserved: (*super::header::array_gc_header(locked).unwrap())._reserved
+                    | crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS,
+                ..*super::header::array_gc_header(locked).unwrap()
+            };
+
+        assert!(
+            catch_runtime_throw(|| {
+                js_array_set_length_strict(locked, 0.0);
+            }),
+            "strict: a non-writable `length` rejects the write"
+        );
+        assert_eq!((*locked).length, 3);
+
+        // A SAME-VALUE write is rejected too: OrdinarySet consults the own
+        // descriptor and reports false before it looks at the value.
+        assert!(
+            catch_runtime_throw(|| {
+                js_array_set_length_strict(locked, 3.0);
+            }),
+            "strict: non-writable rejects even a same-value write"
+        );
+        assert_eq!((*locked).length, 3);
+
+        assert!(
+            !catch_runtime_throw(|| {
+                js_array_set_length(locked, 0.0);
+            }),
+            "sloppy: the same rejection is silent"
+        );
+        assert_eq!((*locked).length, 3);
+
+        // (b) The frozen shape, which already worked -- kept so a future
+        // refactor cannot fix (a) by breaking (b).
+        let frozen = js_array_from_f64(values.as_ptr(), values.len() as u32);
+        crate::object::js_object_freeze(crate::value::js_nanbox_pointer(frozen as i64));
+        assert!(
+            catch_runtime_throw(|| {
+                js_array_set_length_strict(frozen, 0.0);
+            }),
+            "strict: a frozen array's `length` is non-writable"
+        );
+        assert!(
+            !catch_runtime_throw(|| {
+                js_array_set_length(frozen, 0.0);
+            }),
+            "sloppy: the same rejection is silent"
+        );
+        assert_eq!((*frozen).length, 3);
+
+        // (c) The over-throw control: an ordinary array still truncates in
+        // BOTH modes. `Object.preventExtensions` / `Object.seal` are NOT part
+        // of this fix -- they leave `length` writable, and perry's handling of
+        // them is wrong in a different way (it refuses the length change
+        // outright, in both modes); that is reported separately, not pinned
+        // here.
+        let open = js_array_from_f64(values.as_ptr(), values.len() as u32);
+        assert!(
+            !catch_runtime_throw(|| {
+                js_array_set_length_strict(open, 1.0);
+            }),
+            "strict: a writable `length` is not a rejection"
+        );
+        assert_eq!((*open).length, 1);
+    }
+}
