@@ -231,8 +231,8 @@ static KEEP_JS_TYPED_ARRAY_READ_F64: extern "C" fn(*const TypedArrayHeader, i32)
 /// #9342 — slow arm of the codegen inline `Uint8Array` byte read
 /// (`perry-codegen/src/expr/u8_buffer_read.rs`). Primes the
 /// `PERRY_U8_INLINE_CACHE` admission cache when the receiver satisfies its
-/// contract (live u8-marked inline-storage `BufferHeader`), then delegates to
-/// [`js_uint8array_index_get_value`] for bug-exact element semantics —
+/// contract (live u8-marked owning inline-storage `BufferHeader`), then
+/// delegates to [`js_uint8array_index_get_value`] for bug-exact element semantics —
 /// including the #8111 stale-static-hint recovery for rebound receivers.
 #[no_mangle]
 pub extern "C" fn js_u8_buffer_read_f64(target: *const TypedArrayHeader, index: i32) -> f64 {

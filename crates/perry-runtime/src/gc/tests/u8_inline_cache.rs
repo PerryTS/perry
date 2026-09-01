@@ -73,6 +73,41 @@ fn test_prime_rejects_foreign_backed_wrapper() {
     crate::buffer::finalize_collected_dead_buffer(addr);
 }
 
+/// A registered Uint8Array view keeps only a snapshot in its inline payload;
+/// runtime reads resolve to the authoritative backing. Admitting the view
+/// would make a backing-side write visible on the first cache-miss read and
+/// disappear again on the next cache-hit read (#9360/#7219).
+#[test]
+fn test_prime_rejects_registered_view() {
+    let _guard = GcTestIsolationGuard::new();
+
+    let backing = crate::buffer::js_array_buffer_new(4);
+    let boxed_backing = crate::value::js_nanbox_pointer(backing as i64);
+    let view = crate::buffer::js_uint8array_new(boxed_backing);
+    let addr = view as usize;
+
+    unsafe {
+        *crate::buffer::buffer_data_mut(backing).add(1) = 0xAB;
+    }
+    assert_eq!(
+        crate::buffer::js_buffer_index_get_value(view, 1),
+        0xAB as f64,
+        "test premise: the runtime read resolves the view to its backing"
+    );
+    assert_eq!(
+        unsafe { *crate::buffer::buffer_data(view).add(1) },
+        0,
+        "test premise: the view's inline snapshot is stale"
+    );
+
+    crate::buffer::u8_inline_cache_try_prime(addr);
+    assert!(
+        !crate::buffer::test_u8_inline_cache_holds(addr),
+        "a registered view must not be admitted: cache-hit reads bypass the \
+         authoritative backing"
+    );
+}
+
 /// Death pruning: a dead buffer's admission must not survive the full trace
 /// that collects it — the recycled address's next tenant is arbitrary memory
 /// to the emitted reader. Fails if `finalize_collected_dead_buffer` loses its

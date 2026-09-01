@@ -16,7 +16,8 @@
 //!
 //!  * **guard**: NaN-box pointer tag + full-address hit in
 //!    `PERRY_U8_INLINE_CACHE` (`perry-runtime/src/buffer/header.rs`), whose
-//!    entries name live, u8-marked, inline-storage `BufferHeader`s only. The
+//!    entries name live, u8-marked, owning inline-storage `BufferHeader`s
+//!    only. Foreign-backed buffers and registered views are excluded. The
 //!    cache is primed by the slow arm and invalidated on buffer death and
 //!    address reuse, so a hit is proof of the layout contract;
 //!  * **bounds**: `idx ult length` (`ult` also rejects negative indices);
@@ -30,8 +31,10 @@
 //!
 //! READS ONLY. An inline **write** twin would bypass the `buffer/view.rs`
 //! write-propagation protocol and desynchronize slice/`new Uint8Array(ab)`
-//! aliases (#1205); view copies are admissible here precisely because writes
-//! all still propagate.
+//! aliases (#1205). Registered views are excluded from read admission too:
+//! their inline payload is only a snapshot, while runtime reads resolve to the
+//! authoritative backing, which sibling typed-array writes can change without
+//! refreshing that snapshot (#9360/#7219).
 
 use anyhow::Result;
 use perry_hir::Expr;

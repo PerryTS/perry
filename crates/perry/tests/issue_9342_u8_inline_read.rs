@@ -37,6 +37,8 @@ fn perry_bin() -> PathBuf {
 ///    16 * 32640 = 522240.
 ///  * OOB read `buf[4096]` is `undefined`; `undefined + 0` shows as NaN via
 ///    `Number()` coercion in the harness — asserted as the string "NaN".
+///  * A Uint8Array view over a Uint32Array's materialized buffer observes all
+///    four backing bytes after the u32 write → 1 + 2 + 3 + 4 = 10.
 const SOURCE: &str = r#"
 const N = 4096;
 const buf = new Uint8Array(N);
@@ -61,10 +63,17 @@ function oobGlobal(): number {
     return x;
 }
 
-console.log(viaGlobal() + "," + viaParam(buf) + "," + oobGlobal());
+function viaAliasedView(): number {
+    const words = new Uint32Array(1);
+    const bytes = new Uint8Array(words.buffer);
+    words[0] = 0x01020304;
+    return bytes[0] + bytes[1] + bytes[2] + bytes[3];
+}
+
+console.log(viaGlobal() + "," + viaParam(buf) + "," + oobGlobal() + "," + viaAliasedView());
 "#;
 
-const EXPECTED: &str = "522240,522240,NaN\n";
+const EXPECTED: &str = "522240,522240,NaN,10\n";
 
 fn compile(dir: &Path, source: &str, extra_env: &[(&str, &str)]) -> (PathBuf, String) {
     let entry = dir.join("main.ts");

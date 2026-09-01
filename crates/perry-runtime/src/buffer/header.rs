@@ -711,14 +711,17 @@ pub fn asymmetric_key_meta(addr: usize) -> Option<(u8, u8)> {
 /// guarded inline byte load (`perry-codegen/src/expr/u8_buffer_read.rs`).
 ///
 /// An entry holds the full address of a **live, `mark_as_uint8array`-marked
-/// `BufferHeader` whose bytes are inline at `header + 8`** (no foreign
-/// backing). Under that contract the emitted reader may do
+/// owning `BufferHeader` whose authoritative bytes are inline at
+/// `header + 8`** (no foreign backing and no registered view). Under that
+/// contract the emitted reader may do
 /// `len = *(u32*)addr; addr + 8 + idx` directly:
 ///
-///  * view copies (`js_buffer_slice` / `new Uint8Array(arrayBuffer)`) ARE
-///    admissible — their inline bytes are kept current by the write-propagation
-///    protocol in `buffer/view.rs` (reads never go stale; only an inline WRITE
-///    fast path would break aliasing, and this cache feeds no write path);
+///  * view copies (`js_buffer_slice` / `new Uint8Array(arrayBuffer)`) are
+///    excluded — their inline bytes are only a snapshot. Runtime reads resolve
+///    through `buffer/view.rs` to the authoritative backing, which can change
+///    without refreshing that snapshot (for example through a sibling typed
+///    array), so admitting a view would make the first read correct and later
+///    cache-hit reads stale;
 ///  * foreign-backed wrappers (`buffer_alloc_foreign`, bun:ffi externals) are
 ///    excluded at prime time — their header is a lone `BufferHeader` with no
 ///    inline payload, so `header + 8` is past the allocation;
@@ -758,7 +761,10 @@ pub(crate) fn u8_inline_cache_invalidate(addr: usize) {
 /// above. Called from the codegen slow arm (`js_u8_buffer_read_f64`) so a
 /// guard miss primes the next access; never called on a hot path.
 pub(crate) fn u8_inline_cache_try_prime(addr: usize) {
-    if is_uint8array_buffer(addr) && foreign_backing(addr).is_none() {
+    if is_uint8array_buffer(addr)
+        && foreign_backing(addr).is_none()
+        && super::view::lookup(addr).is_none()
+    {
         PERRY_U8_INLINE_CACHE[u8_inline_cache_slot(addr)]
             .store(addr as u64, std::sync::atomic::Ordering::Relaxed);
     }
