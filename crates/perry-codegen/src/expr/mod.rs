@@ -1081,6 +1081,12 @@ pub(crate) struct FnCtx<'a> {
     /// fresh when an inner loop's poll fires. Rooting the cache is required
     /// even with that reload: it makes liveness across the poll explicit and
     /// keeps the shadow and native precise-root lowerings structurally sound.
+    /// #9287: entry-slot holding this thread's transition-cache base pointer
+    /// (`perry_transition_cache_base()`), memoized per function so the
+    /// emitted transition-IC hit loads it instead of calling per write. The
+    /// table is thread-local state, so this must never become a link-time
+    /// constant.
+    pub transition_cache_base_slot: Option<String>,
     pub packed_receiver_box_slots: std::collections::HashMap<u32, String>,
     /// (alloca, source ref, source-is-module-global) reload recipes for the
     /// poll-arm refresh of `packed_receiver_box_slots`.

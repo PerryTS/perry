@@ -1150,6 +1150,7 @@ pub(super) fn compile_function(
             .collect(),
         i32_counter_slots: spec_i32_param_slots,
         numeric_accumulator_f64_slots: HashMap::new(),
+        transition_cache_base_slot: None,
         packed_receiver_box_slots: HashMap::new(),
         packed_receiver_refresh: Vec::new(),
         packed_receiver_handle_slots: HashMap::new(),
