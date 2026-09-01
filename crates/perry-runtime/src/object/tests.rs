@@ -2,7 +2,6 @@
 #![cfg(test)]
 
 use super::*;
-use std::os::raw::c_int;
 
 #[test]
 fn call_method_depth_drop_is_idempotent_after_exception_restore() {

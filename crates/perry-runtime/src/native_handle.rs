@@ -408,7 +408,6 @@ pub(crate) unsafe fn finalize_native_handle_for_gc(handle: *mut NativeHandleHead
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::raw::c_int;
 
     /// The teardown-diagnostics gate must block every thread except the
     /// recorded owner — the unrecorded arm waving workers through is exactly
