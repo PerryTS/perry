@@ -1909,3 +1909,6 @@ fn push_built_array_gets_and_keeps_dense_raw_f64_flag() {
 
 #[path = "tests_proto_discriminator.rs"]
 mod proto_discriminator;
+
+#[path = "tests_from_string_codepoints.rs"]
+mod from_string_codepoints;
