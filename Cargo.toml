@@ -365,7 +365,7 @@ swc_ecma_ast = "19.0"
 swc_ecma_visit = "19.0"
 swc_common = "18.0"
 swc_ecma_codegen = "21.0"
-swc_ecma_transforms_base = "32.0"
+swc_ecma_transforms_base = "49.0"
 swc_ecma_transforms_react = "35.0"
 swc_ecma_transforms_typescript = "35.0"
 
