@@ -365,7 +365,7 @@ pub(crate) fn test_memo_note_hit() {
 // A tag collision between two distinct keys only admits one of them a little
 // early; the entry itself is still content-compared on lookup, so admission
 // can never produce a wrong string.
-thread_local! {
+crate::perry_thread_local! {
     static CONCAT_MEMO_TAGS: std::cell::UnsafeCell<[u8; CONCAT_MEMO_SIZE]> =
         const { std::cell::UnsafeCell::new([0u8; CONCAT_MEMO_SIZE]) };
 }

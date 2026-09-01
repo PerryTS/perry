@@ -434,6 +434,12 @@
       "why": "Derived cache of the Set's own elements array, which is the canonical scanned storage (GcRewriteDescriptorKind::Set element-slot walk). Not root-scanner-shaped: the outer address key is rekeyed on relocation by GcMoveHookKind::SetSideTables -> set_header_moved_for_gc (set.rs:352), the JSValueKey inner keys are rebuilt post-rewrite by GcRewriteHookKind::SetIndex -> rebuild_set_index_for_gc (set.rs:315, fired from gc/copying.rs:669/798, gc/barrier/mod.rs:195, gc/verify.rs:114), and finalize_set_side_allocation_for_gc (set.rs:374) prunes dead owners — the same three-hook design as MAP_INDEX."
     },
     {
+      "file": "crates/perry-runtime/src/string/concat.rs",
+      "name": "CONCAT_MEMO_TAGS",
+      "verdict": "not_a_gc_pointer",
+      "why": "#9391 admission doorkeeper: one hash tag byte per CONCAT_MEMO slot, so a concat result must be observed twice before it earns a rooted entry. A [u8; 512] of plain bytes derived from a splitmix64-finalized hash — never an address, so the collector never sees a pointer here. The admitted strings live in CONCAT_MEMO, which scan_concat_memo_roots_mut visits."
+    },
+    {
       "file": "crates/perry-runtime/src/string/format.rs",
       "name": "POW10",
       "verdict": "not_a_gc_pointer",
