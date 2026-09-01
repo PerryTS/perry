@@ -159,6 +159,12 @@ def build_artifact(
                 raise ArtifactError(f"{name}: {runtime_name} has an invalid zero RSS sample")
             if any(_number(value, f"{name}: {runtime_name} wall sample") < 0 for value in wall_samples):
                 raise ArtifactError(f"{name}: {runtime_name} has an invalid negative wall sample")
+            if runtime_name == "perry" and statistics.median(
+                _number(value, f"{name}: Perry wall sample") for value in wall_samples
+            ) == 0:
+                raise ArtifactError(
+                    f"{name}: Perry median is 0 ms (measures-nothing); refusing to compute ratios"
+                )
             runtime_results[runtime_name] = {
                 "wall_ms": distribution(wall_samples),
                 "rss_kb": distribution(rss_samples),
@@ -331,6 +337,15 @@ def validate_artifact(payload: Mapping[str, Any]) -> None:
                     _number(value, f"{name}: {runtime_name} wall sample") < 0 for value in samples
                 ):
                     raise ArtifactError(f"{name}: {runtime_name} has a negative wall sample")
+                if (
+                    runtime_name == "perry"
+                    and metric_name == "wall_ms"
+                    and recalculated["median"] == 0
+                ):
+                    raise ArtifactError(
+                        f"{name}: Perry median is 0 ms (measures-nothing); "
+                        "refusing to compute ratios"
+                    )
         correctness = _mapping(entry.get("correctness"), f"{name}: correctness")
         correctness_status = correctness.get("status")
         if correctness_status not in ("pass", "fail", "unchecked"):

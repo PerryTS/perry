@@ -108,6 +108,16 @@ class BenchmarkArtifactTests(unittest.TestCase):
                 generated_at="2026-07-12T00:00:00Z",
             )
 
+    def test_rejects_zero_perry_median_as_measuring_nothing(self):
+        with self.assertRaisesRegex(ArtifactError, "fast.*0 ms.*measures-nothing"):
+            build_artifact(
+                records=[record("fast", [0, 0, 1], [18, 20, 22])],
+                requested_samples=3,
+                runtimes={"perry": runtime(), "node": runtime(), "bun": runtime(False)},
+                commit="abc123",
+                generated_at="2026-07-12T00:00:00Z",
+            )
+
     def test_rejects_explicit_empty_rss_samples(self):
         with self.assertRaisesRegex(ArtifactError, "perry.*0/3.*RSS"):
             build_artifact(

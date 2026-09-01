@@ -408,12 +408,17 @@ for bench in $BENCHMARKS; do
   speed_ratio="-"
   bun_speed_ratio="-"
   mem_ratio="-"
-  if [[ "$perry_ms" != "ERR" && "$node_ms" != "-" ]]; then
+  perry_display="${perry_ms}ms"
+  if [[ "$perry_ms" == "0" ]]; then
+    perry_display="MEASURES-NOTHING"
+    speed_ratio="MEASURES-NOTHING"
+    bun_speed_ratio="MEASURES-NOTHING"
+  elif [[ "$perry_ms" != "ERR" && "$node_ms" != "-" ]]; then
     if [[ "$node_ms" -gt 0 ]] 2>/dev/null; then
       speed_ratio=$(python3 -c "print(f'{int(\"$perry_ms\")/int(\"$node_ms\"):.2f}')" 2>/dev/null || echo "-")
     fi
   fi
-  if [[ "$perry_ms" != "ERR" && "$bun_ms" != "-" ]]; then
+  if [[ "$perry_ms" != "0" && "$perry_ms" != "ERR" && "$bun_ms" != "-" ]]; then
     if [[ "$bun_ms" -gt 0 ]] 2>/dev/null; then
       bun_speed_ratio=$(python3 -c "print(f'{int(\"$perry_ms\")/int(\"$bun_ms\"):.2f}')" 2>/dev/null || echo "-")
     fi
@@ -512,7 +517,7 @@ PY
   correctness_status=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['status'])" "$correctness_json")
 
   printf "%-20s %10s %10s %10s %10s %10s %10s %10s\n" \
-    "$display" "${perry_ms}ms" "${node_ms}ms" "${bun_ms}ms" "$speed_ratio" "$bun_speed_ratio" "${perry_rss}KB" "$correctness_status"
+    "$display" "$perry_display" "${node_ms}ms" "${bun_ms}ms" "$speed_ratio" "$bun_speed_ratio" "${perry_rss}KB" "$correctness_status"
 
   # Save raw samples as JSONL. The artifact builder rejects any available
   # runtime that did not produce exactly RUNS timing and RSS samples.
