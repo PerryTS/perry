@@ -57,7 +57,10 @@ mod this_as_value;
 mod uppercase_strings;
 
 // Public re-exports for the visible API.
-pub use cjs_scaffolding::{census as cjs_preamble_census, CjsPreambleCensus};
+pub use cjs_scaffolding::{
+    census as cjs_preamble_census, is_cjs_wrapped_module, CjsPreambleCensus,
+    CJS_WRAP_CREATE_REQUIRE_LOCAL,
+};
 pub use clamp_detect::{detect_clamp3, detect_clamp_u8, returns_i32_identity_arg, returns_integer};
 
 // Internal-to-crate re-exports — explicit names because globs don't

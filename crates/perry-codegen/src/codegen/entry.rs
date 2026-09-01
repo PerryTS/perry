@@ -1046,7 +1046,31 @@ pub(super) fn compile_module_entry(
         // first microtask drain finishes promise/queueMicrotask jobs before
         // the nextTick queue, matching Node's job-within-checkpoint ordering
         // for ESM evaluation (#788). CJS-style entries keep ticks-first.
-        if !hir.imports.is_empty() || !hir.exports.is_empty() || hir.has_top_level_await {
+        //
+        // #9412: "has imports or exports" is not the same question for a
+        // CommonJS entry, because `cjs_wrap` gives every CommonJS file BOTH —
+        // a synthetic `import { createRequire as __perry_cjs_create_require }
+        // from 'node:module'` and an `export default _cjs`. So any entry
+        // containing a bare `require(` answered "ESM" here and ran its
+        // `process.nextTick` callbacks AFTER the promise queue, where Node
+        // runs a CommonJS program's ticks first. Measured against Node 26:
+        // an entry as `.cjs` prints ["tick","promise","await"], the same file
+        // as `.mjs` prints ["promise","await","tick"] — the deferral is right,
+        // it was just being applied to the wrong module kind. Every real
+        // bundle requires a builtin and every minimal fixture doesn't, so the
+        // ordering was correct in exactly the programs a test suite contains.
+        //
+        // Only this checkpoint is re-gated. `is_esm_entry` below keeps its
+        // original meaning for GlobalDeclarationInstantiation: a CommonJS
+        // module's top-level `function` declarations live inside the module
+        // wrapper and are NOT global-object properties either, so "not a
+        // Script" is the right answer there for a wrapped entry too — and
+        // that predicate is mirrored in `perry-hir`'s `lower_module_fn`,
+        // which runs before the wrap flag is knowable here.
+        let cjs_wrapped_entry = crate::collectors::is_cjs_wrapped_module(hir);
+        if (!hir.imports.is_empty() || !hir.exports.is_empty() || hir.has_top_level_await)
+            && !cjs_wrapped_entry
+        {
             ctx.block().call_void("js_mark_entry_module_esm", &[]);
         }
         // Initialize static class fields with their declared init

@@ -617,6 +617,44 @@ fn for_each_stmt(stmts: &[Stmt], f: &mut dyn FnMut(&Stmt)) {
     }
 }
 
+/// The local name `cjs_wrap` binds its synthetic `createRequire` import to.
+///
+/// Mirrors the `imports` prefix in
+/// `perry/src/commands/compile/cjs_wrap/wrap.rs` — a wrapped module always
+/// opens with
+/// `import { createRequire as __perry_cjs_create_require } from 'node:module';`
+/// and nothing else in the pipeline ever mints that local. The `perry` crate's
+/// template canary
+/// (`commands/compile/cjs_wrap/preamble_canary_tests.rs`) asserts the wrap
+/// still emits it, so a template edit fails a test instead of silently
+/// un-recognising every CommonJS entry.
+pub const CJS_WRAP_CREATE_REQUIRE_LOCAL: &str = "__perry_cjs_create_require";
+
+/// True when `module` is the output of `cjs_wrap`'s CommonJS-to-ESM rewrite
+/// rather than a module the user wrote with `import`/`export`.
+///
+/// #9412: `is_esm_entry` asks "does this module have imports or exports?", and
+/// the wrap gives EVERY CommonJS file both — a synthetic `node:module` import
+/// and an `export default _cjs`. A CommonJS entry therefore answered "yes" and
+/// took Node's *ES-module* `process.nextTick` ordering (ticks after the promise
+/// queue drains) when Node runs it with *CommonJS* ordering (ticks first).
+///
+/// Recognised from the HIR, not from an expectation about the wrap template:
+/// if the template stops emitting this binding the predicate degrades to
+/// "not wrapped" — today's behaviour — rather than to a wrong answer for
+/// hand-written ESM.
+pub fn is_cjs_wrapped_module(module: &Module) -> bool {
+    module.imports.iter().any(|import| {
+        import.specifiers.iter().any(|specifier| {
+            matches!(
+                specifier,
+                perry_hir::ImportSpecifier::Named { local, .. }
+                    if local == CJS_WRAP_CREATE_REQUIRE_LOCAL
+            )
+        })
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::ptr_shape::collect_shape_proven_ptr_locals;
