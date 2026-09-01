@@ -353,6 +353,19 @@ pub extern "C" fn js_array_set_index_or_string_strict(
     idx: f64,
     value: f64,
 ) -> *mut ArrayHeader {
+    js_array_set_index_or_string_with_strictness(arr, idx, value, true)
+}
+
+/// [`js_array_set_index_or_string_strict`] with the assignment's own `Throw`
+/// flag (#9394). A sloppy `arr[k] = v` still takes the fused element path —
+/// same key canonicalization, same inherited-descriptor walk — but a rejected
+/// write is a silent no-op instead of a TypeError.
+pub(crate) fn js_array_set_index_or_string_with_strictness(
+    arr: *mut ArrayHeader,
+    idx: f64,
+    value: f64,
+    strict: bool,
+) -> *mut ArrayHeader {
     if !arr.is_null() {
         // Resolve the canonical array-index interpretation of the key (mirrors
         // the numeric branch of `js_array_set_index_or_string`), and guard it.
@@ -365,7 +378,11 @@ pub extern "C" fn js_array_set_index_or_string_strict(
             // canonical index is already proved here, so use the fused strict
             // element path and share one receiver resolution across policy
             // and store.
-            return js_array_set_f64_extend_strict(arr, i, value);
+            return if strict {
+                js_array_set_f64_extend_strict(arr, i, value)
+            } else {
+                crate::array::js_array_set_f64_extend_sloppy(arr, i, value)
+            };
         }
     }
     js_array_set_index_or_string(arr, idx, value)

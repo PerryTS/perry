@@ -284,6 +284,9 @@ fn lower_array_index_set_via_runtime_key(
     index: &Expr,
     value: &Expr,
     source_label: &str,
+    // #9394: the assignment's own `Throw` flag, carried to the runtime helper
+    // so a rejected element write is a TypeError only in strict code.
+    assignment_strict: bool,
 ) -> Result<String> {
     // #7341, same hazard as the packed path: the receiver is live across both
     // `index` and `value` lowering, and an allocating RHS is a collection
@@ -321,6 +324,7 @@ fn lower_array_index_set_via_runtime_key(
                 source_label,
                 TypedFeedbackContract::array_set_index_or_string(),
             );
+            let strict_flag = if assignment_strict { "1" } else { "0" };
             let new_handle = ctx.block().call(
                 I64,
                 "js_typed_feedback_array_set_index_or_string",
@@ -329,6 +333,7 @@ fn lower_array_index_set_via_runtime_key(
                     (I64, &arr_handle),
                     (DOUBLE, &idx_double),
                     (DOUBLE, &val_double),
+                    (I32, strict_flag),
                 ],
             );
             if let Expr::LocalGet(id) = object {
@@ -778,6 +783,7 @@ pub(crate) fn lower(
                     index.as_ref(),
                     value.as_ref(),
                     "array[dynamic_numeric_index]",
+                    assignment_strict,
                 );
             }
             // Same dispatch tree as IndexGet: known array → fast inline,
@@ -880,6 +886,7 @@ pub(crate) fn lower(
                                 index.as_ref(),
                                 value.as_ref(),
                                 "array[dynamic_numeric_index]",
+                                assignment_strict,
                             );
                         };
                         let layout_note_needed = array_store_needs_layout_note(ctx, object, value);
@@ -944,6 +951,8 @@ pub(crate) fn lower(
 
                                 ctx.current_block = fallback_idx;
                                 {
+                                    let strict_flag =
+                                        if assignment_strict { "1" } else { "0" };
                                     let fallback_box = ctx.block().call(
                                         DOUBLE,
                                         "js_typed_feedback_array_index_set_fallback_boxed",
@@ -952,6 +961,7 @@ pub(crate) fn lower(
                                             (DOUBLE, &arr_box),
                                             (DOUBLE, &idx_double),
                                             (DOUBLE, &val_double),
+                                            (I32, strict_flag),
                                         ],
                                     );
                                     if let Some(slot) = ctx.locals.get(arr_id).cloned() {
@@ -1180,6 +1190,7 @@ pub(crate) fn lower(
                                 value_is_numeric,
                                 require_numeric_layout,
                                 value_is_canonical_raw_f64,
+                                assignment_strict,
                                 &feedback_site_id,
                             )?;
                         } else if let Some(global_name) = ctx.module_globals.get(&id).cloned() {

@@ -896,10 +896,13 @@ fn push_array_spec_path(arr: *mut ArrayHeader, value: f64) -> *mut ArrayHeader {
         crate::array::array_length_range_error();
     }
 
+    // `Array.prototype.push` step 4.d specifies `Set(O, …, true)` — the
+    // mutator's own Throw, independent of the caller's strictness (#9394).
     let next = crate::array::array_spec_set(
         arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
         length,
         value_handle.get_nanbox_f64(),
+        true,
     );
     let next = clean_arr_ptr_mut(next);
     if !next.is_null() {
@@ -1575,7 +1578,9 @@ fn shift_array_spec_set(
 ) {
     let (next, post_gc) = arr_handle.across_mut::<ArrayHeader, _>(|| {
         let value = value_handle.get_nanbox_f64();
-        arr_handle.with_mut_ptr(|current| crate::array::array_spec_set(current, index, value))
+        // The mutators specify `Set(O, …, true)` regardless of the calling
+        // code's strictness (#9394).
+        arr_handle.with_mut_ptr(|current| crate::array::array_spec_set(current, index, value, true))
     });
     let next = clean_arr_ptr_mut(next);
     let current = if next.is_null() {

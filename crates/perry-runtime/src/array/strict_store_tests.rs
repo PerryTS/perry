@@ -153,3 +153,81 @@ fn strict_dense_number_store_fast_lane_matches_the_general_path() {
         crate::object::prototype_chain::test_swap_array_static_proto_recorded(latch_was);
     }
 }
+
+/// Whether `f` threw a runtime exception.
+fn catch_runtime_throw(f: impl FnOnce()) -> bool {
+    let env = crate::exception::js_try_push();
+    let jumped = unsafe { crate::ffi::setjmp::setjmp(env as *mut std::os::raw::c_int) };
+    if jumped == 0 {
+        f();
+        crate::exception::js_try_end();
+        false
+    } else {
+        crate::exception::js_try_end();
+        crate::exception::js_clear_exception();
+        true
+    }
+}
+
+/// #9394: a rejected element write throws only in STRICT code.
+///
+/// ES2024 §6.2.5.7 calls `Set(O, P, V, Throw)` with `Throw =
+/// IsStrictReference`, so a sloppy `arr[i] = v` against a frozen /
+/// non-extensible / non-writable target is a silent no-op — exactly as it is
+/// for an ordinary object, and exactly as Node behaves.
+///
+/// BOTH arms are asserted here on purpose. #9326 shipped the throw-only half
+/// with a 64-check differential and a 205-line gap fixture, all of it module
+/// (strict) code, and every one of them stayed green while sloppy code — the
+/// whole of a CommonJS bundle — started throwing.
+#[test]
+fn element_store_rejection_throws_only_in_strict_mode() {
+    // SAFETY: plain array construction plus the public element setters; every
+    // pointer below is a live head this test allocated.
+    unsafe {
+        let values = [1.0, 2.0, 3.0];
+
+        let frozen = js_array_from_f64(values.as_ptr(), values.len() as u32);
+        crate::object::js_object_freeze(crate::value::js_nanbox_pointer(frozen as i64));
+
+        assert!(
+            catch_runtime_throw(|| {
+                js_array_set_f64_extend_strict(frozen, 0, 9.0);
+            }),
+            "strict: a frozen element is non-writable"
+        );
+        assert_eq!(js_array_get_f64(frozen, 0), 1.0);
+
+        assert!(
+            !catch_runtime_throw(|| {
+                crate::array::js_array_set_f64_extend_sloppy(frozen, 0, 9.0);
+            }),
+            "sloppy: the same rejection is silent"
+        );
+        assert_eq!(js_array_get_f64(frozen, 0), 1.0);
+
+        // A new index on a non-extensible array is the other rejection shape.
+        assert!(
+            catch_runtime_throw(|| {
+                js_array_set_f64_extend_strict(frozen, 7, 9.0);
+            }),
+            "strict: a frozen array cannot gain an element"
+        );
+        assert!(
+            !catch_runtime_throw(|| {
+                crate::array::js_array_set_f64_extend_sloppy(frozen, 7, 9.0);
+            }),
+            "sloppy: the same rejection is silent"
+        );
+        assert_eq!((*frozen).length, 3);
+
+        // A writable element is stored in both modes — the sloppy entry is a
+        // no-op only where the strict one would have thrown.
+        let open = js_array_from_f64(values.as_ptr(), values.len() as u32);
+        let out = crate::array::js_array_set_f64_extend_sloppy(open, 0, 42.0);
+        assert_eq!(js_array_get_f64(out, 0), 42.0);
+        let out = crate::array::js_array_set_f64_extend_sloppy(out, 3, 4.0);
+        assert_eq!((*out).length, 4);
+        assert_eq!(js_array_get_f64(out, 3), 4.0);
+    }
+}

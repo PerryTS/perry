@@ -430,13 +430,13 @@ mod keep_typed_feedback {
     #[cfg(feature = "keepalive-anchors")]
 #[used] static K21: extern "C" fn(u64, f64, f64) -> i32 = js_typed_feedback_numeric_array_push_guard;
     #[cfg(feature = "keepalive-anchors")]
-#[used] static K22: extern "C" fn(u64, f64, f64, f64) -> f64 = js_typed_feedback_array_index_set_fallback_boxed;
+#[used] static K22: extern "C" fn(u64, f64, f64, f64, i32) -> f64 = js_typed_feedback_array_index_set_fallback_boxed;
     #[cfg(feature = "keepalive-anchors")]
 #[used] static K23: extern "C" fn(u64, *const ArrayHeader, u32) = js_typed_feedback_observe_array_element;
     #[cfg(feature = "keepalive-anchors")]
 #[used] static K24: extern "C" fn(u64, *mut ArrayHeader, *const crate::StringHeader, f64) -> *mut ArrayHeader = js_typed_feedback_array_set_string_key;
     #[cfg(feature = "keepalive-anchors")]
-#[used] static K25: extern "C" fn(u64, *mut ArrayHeader, f64, f64) -> *mut ArrayHeader = js_typed_feedback_array_set_index_or_string;
+#[used] static K25: extern "C" fn(u64, *mut ArrayHeader, f64, f64, i32) -> *mut ArrayHeader = js_typed_feedback_array_set_index_or_string;
     #[cfg(feature = "keepalive-anchors")]
 #[used] static K26: extern "C" fn(u64, i64, f64, f64) = js_typed_feedback_object_set_index_polymorphic;
     #[cfg(feature = "keepalive-anchors")]

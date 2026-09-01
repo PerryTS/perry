@@ -149,6 +149,9 @@ pub use self::indexing::{
     js_array_set_f64_extend, js_array_set_f64_extend_strict, js_array_set_f64_unchecked,
     js_array_set_index_or_string, js_array_set_index_or_string_strict, js_array_set_string_key,
 };
+pub(crate) use self::indexing::{
+    js_array_set_f64_extend_sloppy, js_array_set_index_or_string_with_strictness,
+};
 #[cfg(test)]
 pub(crate) use self::indexing_support::test_keys_array_slot_fallbacks;
 pub(crate) use self::indexing_support::{

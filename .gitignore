@@ -65,6 +65,14 @@ test-files/test-*
 !test-files/test_*.tsx
 !test-files/test-*.ts
 !test-files/test-*.tsx
+# A fixture that must be CommonJS in BOTH runtimes is a `.cts` (this repo's
+# package is `"type": "module"`, so a `.ts` is strict-mode ESM for Node and for
+# Perry alike). Without these it would be an ignored file — a DARK TEST, the
+# exact failure mode `scripts/check_test_registration.py` exists to prevent.
+!test-files/test_*.cts
+!test-files/test_*.mts
+!test-files/test-*.cts
+!test-files/test-*.mts
 !test-files/*/
 tests/test_*
 tests/test-*
