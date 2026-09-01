@@ -294,9 +294,13 @@ pub(crate) fn lower_index_set_fast(
             let hdr_capacity = blk.load(I32, &cap_ptr);
             let index_nonnegative = blk.icmp_slt(I32, &idx_i32, "0");
             let index_nonnegative = blk.icmp_eq(I1, &index_nonnegative, "false");
-            let length_sane = blk.icmp_ule(I32, &hdr_length, "16000000");
             let capacity_sane = blk.icmp_ule(I32, &hdr_capacity, "16000000");
             let length_within_capacity = blk.icmp_ule(I32, &hdr_length, &hdr_capacity);
+            let index_within_capacity = blk.icmp_ult(I32, &idx_i32, &hdr_capacity);
+            // #9371: `new Array(largeLength)` intentionally has length above
+            // capacity. A store into its allocated prefix is still safe; only
+            // the boundary write needs the runtime to grow that prefix.
+            let storage_safe = blk.or(I1, &length_within_capacity, &index_within_capacity);
 
             let mut guard_ok = blk.and(I1, &is_array, &not_forwarded);
             guard_ok = blk.and(I1, &guard_ok, &integrity_clean);
@@ -312,9 +316,8 @@ pub(crate) fn lower_index_set_fast(
             }
             guard_ok = blk.and(I1, &guard_ok, &default_prototype_chain);
             guard_ok = blk.and(I1, &guard_ok, &index_nonnegative);
-            guard_ok = blk.and(I1, &guard_ok, &length_sane);
             guard_ok = blk.and(I1, &guard_ok, &capacity_sane);
-            guard_ok = blk.and(I1, &guard_ok, &length_within_capacity);
+            guard_ok = blk.and(I1, &guard_ok, &storage_safe);
             // #9237: kept exactly where it is load-bearing. The comment below
             // is about the RAW store — a `number[]` slot can genuinely receive a
             // non-number at runtime, and writing its NaN-boxed tag verbatim as a

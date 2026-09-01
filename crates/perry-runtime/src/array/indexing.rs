@@ -13,16 +13,6 @@ pub use keyed::{
 
 const MAX_DENSE_ARRAY_GROW_LENGTH: u32 = 1_000_000;
 
-/// Largest hole (`index - length`) an extending write may create while still
-/// growing the dense backing store, once the array is past
-/// `MAX_DENSE_ARRAY_GROW_LENGTH`. Sparse storage is for *jumps* far beyond the
-/// current length (`a[2**32-2] = v` on a 3-element array must not allocate
-/// 34 GB); sequential growth (`for (i...) arr[i] = v`, gap 0) must stay dense
-/// no matter how large the array gets — routing it through string-keyed
-/// property sets is quadratic and hung the 10M-element `03_array_write`
-/// benchmark for 6 hours (Regression Check, v0.5.1129–v0.5.1150).
-const DENSE_ARRAY_GAP_LIMIT: u32 = 1024;
-
 #[inline]
 pub(crate) fn invalidate_array_index_fast_path() {
     PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED.store(1, Ordering::Relaxed);
@@ -129,26 +119,6 @@ unsafe fn array_oob_prototype_get(receiver: usize, index: u32) -> f64 {
         return crate::array::sort_object_prototype_index_get(index);
     }
     TAG_UNDEFINED_F64
-}
-
-#[inline]
-unsafe fn array_sparse_index_property_get(arr: *const ArrayHeader, index: u32) -> Option<f64> {
-    let arr = clean_arr_ptr(arr);
-    if arr.is_null() || index < (*arr).capacity {
-        return None;
-    }
-    let key = index.to_string();
-    array_named_property_get_by_name(arr, &key)
-}
-
-unsafe fn array_sparse_index_property_set(arr: *mut ArrayHeader, index: u32, value: f64) {
-    let key = index.to_string();
-    let key_ptr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
-    array_named_property_set(arr, key_ptr, value);
-    let new_length = index + 1;
-    if (*arr).length < new_length {
-        (*arr).length = new_length;
-    }
 }
 
 /// Whether iterating `arr` with the raw dense-store loop would diverge from the
@@ -1926,6 +1896,28 @@ unsafe fn js_array_set_f64_extend_resolved(
                 return arr;
             }
             if index >= (*arr).capacity {
+                if blocks_extension {
+                    return arr;
+                }
+                let capacity = (*arr).capacity;
+                // A large pre-sized holey array has logical length but only a
+                // small dense prefix. Writes at (or near) that prefix are an
+                // ordinary dense fill, not sparse property creation. Grow
+                // geometrically just as the extending path does. Once a true
+                // far index has entered sparse storage, do not grow across it:
+                // indexed reads below capacity intentionally skip the named-
+                // property table, so covering it would hide the property.
+                if index - capacity <= DENSE_ARRAY_GAP_LIMIT
+                    && !array_has_sparse_index_properties_resolved(arr)
+                {
+                    let arr = js_array_grow(arr, index + 1);
+                    let value = value_handle.get_nanbox_f64();
+                    let store_flags = array_object_flags_resolved(arr);
+                    // GC_STORE_AUDIT(BARRIERED): the resolved store performs
+                    // the layout note and write barrier on the grown head.
+                    store_array_slot_resolved(arr, index as usize, value, store_flags);
+                    return arr;
+                }
                 let value = value_handle.get_nanbox_f64();
                 array_sparse_index_property_set(arr, index, value);
                 return arr;
