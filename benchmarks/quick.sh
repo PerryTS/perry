@@ -10,6 +10,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 SUITE_DIR="$SCRIPT_DIR/suite"
 COMPILETS="$ROOT/target/release/perry"
+TIME_EXTRACTOR="$SCRIPT_DIR/benchmark_time.py"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -20,6 +21,11 @@ NC='\033[0m'
 if [[ ! -f "$COMPILETS" ]]; then
   echo "Building Perry..."
   (cd "$ROOT" && cargo build --release --quiet)
+fi
+
+if [[ ! -f "$TIME_EXTRACTOR" ]]; then
+  echo "Benchmark time extractor not found at $TIME_EXTRACTOR" >&2
+  exit 1
 fi
 
 BENCHMARKS="05_fibonacci.ts 06_math_intensive.ts 10_nested_loops.ts 13_factorial.ts 16_matrix_multiply.ts"
@@ -56,7 +62,17 @@ else
 fi
 
 extract_time() {
-  awk -F: '/^[a-z_]+:[0-9]+/ {print $2; exit}' <<<"$1"
+  local benchmark="$1"
+  local output="$2"
+  python3 "$TIME_EXTRACTOR" extract "$benchmark" <<<"$output"
+}
+
+format_ms() {
+  if [[ "$1" =~ ^[0-9]+$ ]]; then
+    printf '%sms' "$1"
+  else
+    printf '%s' "$1"
+  fi
 }
 
 measure() {
@@ -110,7 +126,9 @@ for bench in $BENCHMARKS; do
   result=$(measure "./$name")
   p_rss=$(sed -n '1p' <<<"$result")
   p_out=$(sed '1d' <<<"$result")
-  p_ms=$(extract_time "$p_out")
+  if ! p_ms=$(extract_time "$name" "$p_out"); then
+    p_ms="UNSCOREABLE"
+  fi
 
   # Node
   n_ms="-"; n_rss="-"
@@ -119,7 +137,9 @@ for bench in $BENCHMARKS; do
     result=$(measure "${NODE_CMD[@]}" "$bench")
     n_rss=$(sed -n '1p' <<<"$result")
     n_out=$(sed '1d' <<<"$result")
-    n_ms=$(extract_time "$n_out")
+    if ! n_ms=$(extract_time "$name" "$n_out"); then
+      n_ms="UNSCOREABLE"
+    fi
 
     if [[ "$p_ms" =~ ^[0-9]+$ && "$n_ms" =~ ^[0-9]+$ && "$n_ms" -gt 0 ]]; then
       ratio=$(python3 -c "print(f'{$p_ms/$n_ms:.2f}x')")
@@ -134,8 +154,10 @@ for bench in $BENCHMARKS; do
     fi
   fi
 
-  printf "%-18s %7sms %7sms %8b %6sMB %6sMB %8s\n" \
-    "$display" "$p_ms" "$n_ms" "$ratio" "$p_rss" "$n_rss" "$mratio"
+  p_display=$(format_ms "$p_ms")
+  n_display=$(format_ms "$n_ms")
+  printf "%-18s %9s %9s %8b %6sMB %6sMB %8s\n" \
+    "$display" "$p_display" "$n_display" "$ratio" "$p_rss" "$n_rss" "$mratio"
 
   rm -f "$SUITE_DIR/$name"
 done

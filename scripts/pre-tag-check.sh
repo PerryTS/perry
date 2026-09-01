@@ -93,13 +93,14 @@ run_check "cargo fmt --all --check" cargo fmt --all -- --check
 
 # 2. Benchmark harness, fallback, verifier, and shell-syntax tests.
 run_check "benchmark harness tests" \
-    python3 -m unittest discover -s tests -p 'test_benchmark_gate.py' -v
+    python3 -m unittest discover -s tests -p 'test_benchmark_*.py' -v
 run_check "benchmark peer fallback tests" \
     ./tests/test_benchmark_peer_fallback.sh
 run_check "benchmark output verifier tests" \
     ./tests/test_benchmark_output_verifier.sh
 run_check "benchmark shell syntax" \
-    bash -n benchmarks/compare.sh benchmarks/honest_bench/run.sh \
+    bash -n benchmarks/compare.sh benchmarks/quick.sh \
+        benchmarks/suite/run_benchmarks.sh benchmarks/honest_bench/run.sh \
         benchmarks/honest_bench/harness/run_http_bench.sh \
         tests/test_benchmark_peer_fallback.sh
 

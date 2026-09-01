@@ -54,6 +54,21 @@ if [[ "${PERRY_FAKE_ZERO_SOURCE:-}" == "$source_name" ]]; then
     { print }
   '
   status=${PIPESTATUS[0]}
+elif [[ "${PERRY_FAKE_MISSING_TIME_SOURCE:-}" == "$source_name" ]]; then
+  "$PERRY_FAKE_NODE" "$source_file" | awk '
+    !removed && /^[a-z_]+:[0-9]+/ { removed = 1; next }
+    { print }
+  '
+  status=${PIPESTATUS[0]}
+elif [[ "${PERRY_FAKE_FRACTIONAL_TIME_SOURCE:-}" == "$source_name" ]]; then
+  "$PERRY_FAKE_NODE" "$source_file" | awk '
+    !replaced && /^[a-z_]+:[0-9]+/ {
+      sub(/:[0-9]+$/, ":0.9396551724137931")
+      replaced = 1
+    }
+    { print }
+  '
+  status=${PIPESTATUS[0]}
 else
   "$PERRY_FAKE_NODE" "$source_file"
   status=$?
@@ -122,6 +137,48 @@ if [[ -e "$TMP/failed.json" ]]; then
 fi
 if [[ -e "$ROOT/benchmarks/suite/02_loop_overhead" ]]; then
   echo "compare.sh did not clean compiled benchmark artifacts after failure" >&2
+  exit 1
+fi
+
+# A missing declared time and a fractional value in that millisecond field are
+# both UNSCOREABLE. Other numeric output must never become a positional fallback.
+echo 'stale artifact' >"$TMP/unscoreable.json"
+set +e
+PATH="$TMP/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
+PERRY_BIN="$FAKE_PERRY" \
+PERRY_FAKE_NODE="$NODE_REAL" \
+PERRY_FAKE_MISSING_TIME_SOURCE="05_fibonacci.ts" \
+PERRY_FAKE_FRACTIONAL_TIME_SOURCE="06_math_intensive.ts" \
+  "$ROOT/benchmarks/compare.sh" \
+    --quick \
+    --runs 2 \
+    --warn-only \
+    --json-out "$TMP/unscoreable.json" \
+    >"$TMP/unscoreable-output.txt" 2>"$TMP/unscoreable-error.txt"
+unscoreable_status=$?
+set -e
+if [[ "$unscoreable_status" -ne 2 ]]; then
+  cat "$TMP/unscoreable-error.txt" >&2
+  echo "expected unscoreable timing samples to exit 2, got $unscoreable_status" >&2
+  exit 1
+fi
+if [[ $(grep -c "UNSCOREABLE" "$TMP/unscoreable-output.txt") -lt 2 ]]; then
+  cat "$TMP/unscoreable-output.txt" >&2
+  echo "compare.sh did not label both invalid rows UNSCOREABLE" >&2
+  exit 1
+fi
+if ! grep -q "missing required time-labelled line fibonacci" "$TMP/unscoreable-error.txt"; then
+  cat "$TMP/unscoreable-error.txt" >&2
+  echo "missing timing label was not explained" >&2
+  exit 1
+fi
+if ! grep -q "non-integer millisecond value.*0.9396551724137931" "$TMP/unscoreable-error.txt"; then
+  cat "$TMP/unscoreable-error.txt" >&2
+  echo "fractional millisecond value was not rejected explicitly" >&2
+  exit 1
+fi
+if [[ -e "$TMP/unscoreable.json" ]]; then
+  echo "compare.sh left a stale JSON artifact after unscoreable rows" >&2
   exit 1
 fi
 
