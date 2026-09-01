@@ -18,13 +18,13 @@ fn bench_fibonacci() {
 
 fn bench_loop_overhead() {
     let start = Instant::now();
-    let mut sum: f64 = 0.0;
-    for _ in 0..100_000_000 {
-        sum += 1.0;
+    let mut checksum: u32 = 0x811c9dc5;
+    for i in 0..100_000_000_u32 {
+        checksum = (checksum ^ i).wrapping_mul(0x01000193);
     }
     let elapsed = start.elapsed().as_millis();
     println!("loop_overhead:{}", elapsed);
-    println!("  checksum: {:.0}", sum);
+    println!("  checksum: {}", checksum);
 }
 
 fn bench_array_write() {
@@ -167,12 +167,9 @@ fn bench_loop_data_dependent() {
     // the dependency chain on `sum`; the win is one ISA-level fusion,
     // not a fold or a vectorize.
     //
-    // This is the honest companion to bench_loop_overhead. Where
-    // loop_overhead measures whether the compiler applied
-    // reassoc + IV-simplify to a trivially-foldable accumulator
-    // (a flag-aggressiveness probe), this one forces the compiler
-    // to actually execute work — and surfaces FP-contract as a
-    // secondary axis of the same flag-posture story.
+    // This is the floating-point companion to bench_loop_overhead. Both
+    // kernels have a sequential carry; this one additionally performs two
+    // runtime array loads and surfaces FP contraction as a secondary axis.
     const N: usize = 64;
     const ITERATIONS: u64 = 100_000_000;
     let mut seed: u64 = 42;

@@ -193,6 +193,7 @@ class PublicBaselineTests(unittest.TestCase):
             "benchmarks/honest_bench/workloads/1_json_pipeline/perry/*.ts",
             SOURCE_PATHS,
         )
+        self.assertIn("benchmarks/polyglot/bench.*", SOURCE_PATHS)
 
     def test_measurement_config_rejects_an_invalid_run_count(self):
         config = load_measurement_config()

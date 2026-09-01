@@ -125,7 +125,7 @@ everything else.
 | Benchmark           | Iterations | Array size  | Notes                                            |
 |---------------------|-----------:|------------:|-------------------------------------------------|
 | fibonacci           | recursion  |           — | `fib(40)` — ~2 billion calls                    |
-| loop_overhead       |       100M |           — | `sum += 1.0` — trivially foldable               |
+| loop_overhead       |       100M |           — | 32-bit FNV recurrence with a sequential carry   |
 | loop_data_dependent |       100M |          64 | `sum = sum*x[i%64] + x[(i*7)%64]` on `[0.5,1)`  |
 | array_write         |        10M |         10M | write `arr[i] = i`                              |
 | array_read          |        10M |         10M | sum array elements                              |
@@ -182,15 +182,16 @@ full rationale and divergence numbers.
 
 Rust, C++, Go, and Swift all default to IEEE 754 strict. Under IEEE rules,
 `(a + b) + c ≠ a + (b + c)` in general — because a single `inf` or `nan` in
-the chain makes reordering observably change the result. The compiler
-must preserve original associativity, so every `fadd` in
-`for (...) sum += 1.0` has a 3-cycle latency dependency on the previous
-`fadd`. That's why Rust/C++/Go/Swift cluster at ~95-98 ms on
-`loop_overhead`: they're hitting the `fadd` latency wall, all running
-the same IEEE-strict serialized loop. **Perry default also sits at 95
-ms here**, in the same boat — bit-exact-with-Node by default, no
-reassoc permission. Perry `--fast-math` reaches 12 ms by giving the
-optimizer the same permission `-ffast-math` gives clang.
+the chain makes reordering observably change the result. The compiler must
+therefore preserve original associativity on the floating-point accumulator
+probes such as `math_intensive` and `accumulate`; `--fast-math` permits Perry
+to vectorize those chains in the same way `-ffast-math` permits clang.
+
+`loop_overhead` is intentionally no longer one of those foldability probes.
+As of #9338 it carries a 32-bit FNV-style recurrence whose final value escapes,
+so an optimizer cannot turn the timed region into a 0 ms false green. Results
+from before that change used `sum += 1.0` and are not comparable to the current
+row.
 
 The full rationale for which FMFs Perry emits even under `--fast-math`
 is in `block.rs:113-160` — Perry deliberately does not emit the full
@@ -298,15 +299,13 @@ recursive call more aggressively than any of the AOT compilers here
 manage to do at module scope. This is a JIT-vs-AOT story, not a
 Perry story.
 
-## `loop_data_dependent` — what happens when the compiler *can't* fold
+## `loop_data_dependent` — the floating-point data-dependent companion
 
-Added at v0.5.271 in direct response to the most-common skeptic
-objection to the optimization-probe cells: "your `loop_overhead`
-12 ms vs C++ 98 ms isn't 'Perry beats C++' — it's 'Perry's defaults
-fold the loop and C++'s don't.'" That objection is correct, and
-this benchmark answers the natural follow-up: *what does Perry do
-on a kernel where the compiler can't fold, regardless of flag
-posture?*
+Added at v0.5.271 in response to the old, trivially foldable
+`loop_overhead` kernel. #9338 later replaced that kernel with an observable
+integer recurrence, but this benchmark remains the floating-point companion:
+it adds runtime-loaded data and exposes FP-contraction behavior while retaining
+a true sequential carry.
 
 ### Kernel design
 
@@ -324,9 +323,9 @@ Two properties make this kernel resistant to optimization:
 1. **Multiplicative carry.** The next iteration's `sum` depends on
    the previous via `*` then `+`. LLVM's autovectorizer can't break
    this dependency into parallel accumulators — the closed-form
-   collapse `(sum + 1.0) × N → integer induction variable` that
-   `loop_overhead` admits requires accumulator reordering, which
-   `reassoc` allows but `contract` (FMA fusion) does not change.
+   collapse that the pre-#9338 `sum += 1.0` loop admitted requires accumulator
+   reordering, which `reassoc` allows but `contract` (FMA fusion) does not
+   change.
 2. **Runtime-loaded array reads.** `x[i%64]` and `x[(i*7)%64]` are
    loaded from memory on every step. Even though `x` is constant
    after init, LLVM's loop-invariant code motion can't hoist
@@ -403,8 +402,9 @@ the no-contract pack alongside Bun.
 
 ### What this benchmark answers
 
-The "Perry is 7× faster than C++ on `loop_overhead`" headline does
-not generalize to all f64 compute. On a kernel where the compiler
+The historical "Perry is 7× faster than C++ on `loop_overhead`" headline was
+based on the pre-#9338 foldability probe and does not describe the current
+integer-carry kernel. On a floating-point kernel where the compiler
 *cannot* fold (because the inner loop has a true sequential
 multiplicative dependency on a memory-loaded value), Perry is
 **competitive with the no-contract compiled pack** — Rust default,
@@ -415,19 +415,18 @@ be.
 
 This is the kind of kernel — multiplicative carry, runtime-loaded
 data, contracting domain — that real numerical workloads (signal
-processing, IIR filters, Markov-chain reductions, numerical
-integration) actually look like. The optimization-probe kernels
-(`loop_overhead`, `math_intensive`, `accumulate`) are *probes*, not
-workload simulators — they are diagnostic tools for measuring
-compiler flag posture, and we report them on those terms.
+processing, IIR filters, Markov-chain reductions, numerical integration)
+actually look like. The remaining floating-point optimization probes
+(`math_intensive`, `accumulate`) are diagnostic tools for measuring compiler
+flag posture, not workload simulators.
 
-## Optimization probes (`loop_overhead`, `math_intensive`, `accumulate`, `array_read`, `array_write`)
+## Optimization probes (`math_intensive`, `accumulate`, `array_read`, `array_write`)
 
-These five cells are flag-aggressiveness probes, not runtime perf
-comparisons. They measure whether the compiler applied
-**reassoc + IndVarSimplify + autovectorize** to a trivially-foldable
-accumulator, NOT how fast the resulting loop computes under load
-(which the previous section's `loop_data_dependent` answers honestly).
+These four cells are flag-aggressiveness probes, not runtime performance
+comparisons. They measure whether the compiler applied reassociation,
+induction-variable simplification, or autovectorization to simple accumulator
+and array loops. `loop_overhead` is excluded because its observable integer
+recurrence deliberately measures executed work instead of foldability.
 
 **Two Perry columns since v0.5.585:**
 - `Perry default` (no `--fast-math`) sits at 95-50 ms on these probes,
@@ -443,10 +442,9 @@ accumulator, NOT how fast the resulting loop computes under load
   randomly-generated FP programs at the *program* level (the residual
   6% in default mode comes from the SLP vectorizer).
 
-LLVM's IndVarSimplify rewrites `sum + 1.0 × N` as an integer induction
-variable and the autovectorizer generates `<2 x double>` parallel-
-accumulator reductions with interleave count 4 only when `reassoc` is
-on. **C++ closes every one of these gaps with `clang++ -O3
+LLVM's autovectorizer generates parallel-accumulator reductions for the
+floating-point probes only when `reassoc` is on. **C++ closes these gaps with
+`clang++ -O3
 -ffast-math`** — same LLVM pipeline, one flag — see
 [`RESULTS_OPT.md`](./RESULTS_OPT.md). They are reported here for
 diagnostic completeness; treating Perry's `--fast-math` numbers as
@@ -458,6 +456,9 @@ Perry columns next to each other.
 
 This methodology will drift as the Perry codegen changes. Key moments:
 
+- **2026-09-01 (#9338):** Replaced `loop_overhead`'s foldable floating-point
+  induction with an observable 32-bit recurrence, aligned every native
+  implementation, and fingerprinted the native sources as baseline inputs.
 - **2026-04-25 (v0.5.249 → v0.5.283):** Compiler-version table refreshed
   to actually-installed versions (rustc 1.94.1, Apple clang 21.0.0,
   swift 6.3.1, Bun 1.3.12, Node 25.8.0, Python 3.14.3); added
