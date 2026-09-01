@@ -558,6 +558,29 @@ pub(crate) mod stdlib_pump {
         if crate::dgram_reactor::has_active() {
             return 1;
         }
+        // #9416: a `process.stdin` listener registered on the stdin OBJECT —
+        // an alias (`const s = process.stdin`), a parameter, or a field —
+        // files its callback in perry-runtime's OWN stdin registries and
+        // starts perry-runtime's own fd-0 reader. #9399 taught *perry-stdlib's*
+        // `js_stdlib_has_active_handles` about those lists, but a program whose
+        // only stdlib-flavoured work IS that listener links RUNTIME-ONLY, and
+        // then the symbol the generated event loop calls is THIS trampoline —
+        // whose `STDLIB_HAS_ACTIVE_FN` is null, so the stdlib arm is never
+        // reached. `stdin_listeners_keep_loop_alive()` answered "keep running"
+        // on every check and nothing asked it: the loop found no work and
+        // `main` returned with the pipe still open and the bytes unread, which
+        // kills every stdin-driven CLI filter, REPL and stdio transport that
+        // does not also hold a timer. The registry, the reader and the
+        // predicate are all perry-runtime's, so the check belongs here; the
+        // stdlib copy stays for the stdlib-linked path and is simply redundant.
+        //
+        // Not a pin: the predicate is false when nobody is listening, false
+        // once stdin is detached (`pause`/`unref`/`destroy`), and false again
+        // after EOF has been seen and the terminal `'end'`/`'close'` dispatch
+        // has run.
+        if crate::os::stdin_listeners_keep_loop_alive() {
+            return 1;
+        }
         if crate::process::js_process_ipc_has_active() != 0 {
             return 1;
         }
@@ -590,6 +613,38 @@ pub(crate) mod stdlib_pump {
         extern "C" fn counting_pump() -> i32 {
             PUMP_CALLS.fetch_add(1, AtomicOrdering::SeqCst);
             0
+        }
+
+        /// #9416: the symbol the generated event loop calls must itself
+        /// consult the runtime-local stdin registries.
+        ///
+        /// A `process.stdin` listener registered on the stdin OBJECT lands in
+        /// perry-runtime's own lists, and a program whose only work is that
+        /// listener links RUNTIME-ONLY — `STDLIB_HAS_ACTIVE_FN` is null, so the
+        /// perry-stdlib arm that #9399 taught about those lists is unreachable.
+        /// Before the fix this returned 0 with a live listener and the loop
+        /// exited with the pipe still open.
+        #[test]
+        fn stdin_object_listener_keeps_the_loop_alive_without_stdlib() {
+            crate::os::test_set_stdin_data_listener(None);
+            assert_eq!(
+                js_stdlib_has_active_handles(),
+                0,
+                "no stdin listener and no other source: the loop must be free to exit"
+            );
+            crate::os::test_set_stdin_data_listener(Some(0x1234));
+            assert_eq!(
+                js_stdlib_has_active_handles(),
+                1,
+                "a live runtime-local stdin listener must keep the event loop alive \
+                 even when perry-stdlib is not linked (#9416)"
+            );
+            crate::os::test_set_stdin_data_listener(None);
+            assert_eq!(
+                js_stdlib_has_active_handles(),
+                0,
+                "removing the listener must release the loop again"
+            );
         }
 
         #[test]

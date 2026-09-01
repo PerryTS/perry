@@ -845,6 +845,8 @@ pub use process_streams::{
     stdin_chunk_jsvalue, stdin_has_encoding, stdin_is_detached, stdin_listeners_keep_loop_alive,
     stdin_push_bytes,
 };
+#[cfg(test)]
+pub(crate) use process_streams::test_set_stdin_data_listener;
 
 /// Get the operating system name
 /// Returns: "Darwin", "Linux", "Windows_NT", etc.

@@ -517,6 +517,25 @@ extern "C" fn process_stdin_listeners(
 /// delivered, then — once `'end'`/`'close'` have fired, or when nobody is
 /// listening for them — lets it exit. `pause()`/`unref()`/`destroy()` release
 /// the hold immediately, via the same `stdin_is_detached` latch readline uses.
+/// Test-only: seed or clear the runtime-local `'data'` listener registry.
+///
+/// #9416's unit test drives `js_stdlib_has_active_handles` — the symbol the
+/// generated event loop calls — through the same registry a real
+/// `const s = process.stdin; s.on("data", …)` fills, without spawning an fd-0
+/// reader that would fight the test harness for the terminal.
+#[cfg(test)]
+pub(crate) fn test_set_stdin_data_listener(cb: Option<i64>) {
+    use std::sync::atomic::Ordering;
+    if let Ok(mut l) = STDIN_DATA_LISTENERS.lock() {
+        l.clear();
+        if let Some(cb) = cb {
+            l.push(cb);
+        }
+    }
+    STDIN_EOF_SEEN.store(false, Ordering::Release);
+    STDIN_END_FIRED.store(false, Ordering::Release);
+}
+
 pub fn stdin_listeners_keep_loop_alive() -> bool {
     if stdin_is_detached() {
         return false;
