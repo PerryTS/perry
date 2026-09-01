@@ -543,10 +543,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 if let Some(f64_slot) = ctx.numeric_accumulator_f64_slots.get(id).cloned() {
                     return Ok(ctx.block().load(DOUBLE, &f64_slot));
                 }
-                // Poll-scoped receiver cache (packed fast clones): the
-                // receiver box lives in a promotable alloca, refreshed on
-                // every armed poll — see `packed_receiver_box_slots`.
-                if let Some(box_slot) = ctx.packed_receiver_box_slots.get(id).cloned() {
+                // Materialised receiver descriptor (packed fast clones): the
+                // receiver box lives in a promotable precise-root alloca and
+                // its descriptor refreshes it at every fired poll.
+                if let Some(box_slot) = ctx
+                    .receiver_descriptors
+                    .rooted_box_slot(*id)
+                    .map(str::to_owned)
+                {
                     return Ok(ctx.block().load(DOUBLE, &box_slot));
                 }
                 if let Some(i32_slot) = ctx.i32_counter_slots.get(id).cloned() {

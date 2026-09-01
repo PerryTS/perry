@@ -52,7 +52,7 @@ pub(crate) fn try_lower_index_get(
     }
     let array_box = lower_expr(ctx, object)?;
     let index_i32 = lower_expr_as_i32(ctx, index)?;
-    let handle = super::packed_receiver_handle_i64(ctx, Some(*array_local_id), &array_box);
+    let handle = super::receiver_descriptor_handle_i64(ctx, Some(*array_local_id), &array_box);
     let block = ctx.block();
     let index_i64 = block.zext(I32, &index_i32, I64);
     let byte_offset = block.shl(I64, &index_i64, "3");

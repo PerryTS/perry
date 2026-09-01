@@ -1067,29 +1067,14 @@ pub(crate) struct FnCtx<'a> {
     /// so no conversion exists on either edge; the stale number left in the
     /// root slot during the clone is harmless to a GC scan.
     pub numeric_accumulator_f64_slots: std::collections::HashMap<u32, String>,
-    /// Poll-scoped receiver cache, active only while a packed fast clone is
-    /// being lowered: array local id -> frame-rooted F64 alloca holding the
-    /// receiver BOX. Every in-clone `LocalGet` of the receiver reads this
-    /// alloca instead of the source binding's root, so native-root mem2reg
-    /// promotes it and LLVM hoists the handle mask + element base math out of
-    /// the loop — the per-access root re-derive was 3-5 instructions on every
-    /// packed load and store. The cache is itself rewritten by evacuation and
-    /// refreshes from the source root on the ARMED arm of every loop poll
-    /// (`emit_armed_gc_loop_safepoint`), which is the only place a call-free
-    /// clone can collect; entries in `packed_receiver_refresh` drive that
-    /// reload for EVERY active scope, which keeps nested clones' outer caches
-    /// fresh when an inner loop's poll fires. Rooting the cache is required
-    /// even with that reload: it makes liveness across the poll explicit and
-    /// keeps the shadow and native precise-root lowerings structurally sound.
-    pub packed_receiver_box_slots: std::collections::HashMap<u32, String>,
-    /// (alloca, source ref, source-is-module-global) reload recipes for the
-    /// poll-arm refresh of `packed_receiver_box_slots`.
-    pub packed_receiver_refresh: Vec<(String, String)>,
-    /// Masked-handle twin of `packed_receiver_box_slots`: array id -> i64
-    /// alloca holding `box & POINTER_MASK`. The hot packed lanes' address
-    /// math consults it via `packed_receiver_handle_i64`, removing the
-    /// per-element mask that LLVM cannot PRE across the poll's refresh phi.
-    pub packed_receiver_handle_slots: std::collections::HashMap<u32, String>,
+    /// #9254 phase 2: active materialised receiver descriptors. The first
+    /// consumer is the packed fast clone's #9111 cache: one entry owns the
+    /// frame-rooted receiver box, its pre-masked base-handle slot and the
+    /// source-root refresh recipe. `LocalGet`, packed address math and the
+    /// armed poll all query this table instead of coordinating three parallel
+    /// maps. The table checks its address claim against the shared region
+    /// boundary algebra before carrying it across a fired poll.
+    pub receiver_descriptors: crate::collectors::ReceiverDescriptorTable,
     /// When set, `emit_armed_gc_loop_safepoint` gates its VOLATILE armed
     /// load on `(counter & 63) == 0`, so the poll's serialization cost (and
     /// the receiver-cache re-derive it forces on every element) is paid once
@@ -2028,13 +2013,17 @@ pub(crate) enum MaskedWindowElem {
 /// pre-masked value when the clone hoisted it, else the inline
 /// bitcast-and-mask. One i64 load vs two ALU ops — the win is that the load
 /// is loop-invariant to LLVM while the mask of a poll-refreshed phi is not.
-pub(crate) fn packed_receiver_handle_i64(
+pub(crate) fn receiver_descriptor_handle_i64(
     ctx: &mut FnCtx<'_>,
     arr_id: Option<u32>,
     arr_box: &str,
 ) -> String {
     if let Some(id) = arr_id {
-        if let Some(slot) = ctx.packed_receiver_handle_slots.get(&id).cloned() {
+        if let Some(slot) = ctx
+            .receiver_descriptors
+            .base_handle_slot(id)
+            .map(str::to_owned)
+        {
             return ctx.block().load(crate::types::I64, &slot);
         }
     }
