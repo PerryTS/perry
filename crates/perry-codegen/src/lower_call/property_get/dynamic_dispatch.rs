@@ -331,7 +331,37 @@ pub(crate) fn try_lower_instance_method_call(
             }
         }
         if !implementors.is_empty() {
-            let recv_box = lower_expr(ctx, object)?;
+            // #9417: the receiver is lowered FIRST — JS evaluation order requires
+            // the MemberExpression to be evaluated before the arguments — and
+            // consumed LAST, after every argument expression. Each of those is
+            // arbitrary user code that can drive an evacuating young-gen minor,
+            // and a bare SSA register is not a GC root
+            // (`docs/src/internals/gc-rooting-invariant.md`, case 3), so from the
+            // first collection onward the receiver names from-space.
+            //
+            // Nothing faults there. `js_object_get_own_field_or_undef` fails its
+            // `obj_type == GC_TYPE_OBJECT` check on the recycled cell and answers
+            // TAG_UNDEFINED, the own-override probe misses, and the by-name
+            // dispatch runs on a retired address — so the failure surfaces as a
+            // wrong answer several steps downstream. That is #9417's `reading
+            // 'def'` in the Claude Code bundle: zod's `K4.extend(q, {…})` with the
+            // object literal in argument position.
+            //
+            // `early_branches.rs`'s COMPUTED-key dispatch (`obj[k](…)`) got this
+            // in #7210 (3); the named-property tower here did not. Same fix, same
+            // combinator: one `RootedGroup` over [receiver, ...args], re-read
+            // below the group. `root_reload` then re-derives every later use that
+            // a collection point can reach, so the re-read is needed once here
+            // rather than at each of the tower's ~dozen consumers.
+            //
+            // The window is stated as "collects" unconditionally: the consuming
+            // calls (`js_native_call_method` / `js_native_call_value`) run user
+            // code, and the receiver is live across the override probe that
+            // precedes them, so the answer does not depend on the arguments.
+            // `operand_protection` still decides HOW each operand is protected, so
+            // a numeric or boolean argument pays nothing.
+            let mut roots = crate::rooting::open_rooted_group(1 + args.len());
+            let recv_idx = roots.lower(ctx, object, true)?;
             // #1758 / epic #1785: the raw user args (no `this`, no issue-#235
             // padding, no rest-bundling) drive every concrete callee below. A
             // `perry_static_*` implementor (a class-object value reaching this
@@ -341,9 +371,14 @@ pub(crate) fn try_lower_instance_method_call(
             // static arity/rest semantics; the instance-style `fname(recv,
             // args…)` direct call would pass recv as arg0 and never set
             // IMPLICIT_THIS (the #1787 broken-tower bug).
-            let mut static_user_args: Vec<String> = Vec::with_capacity(args.len());
+            let mut arg_idxs: Vec<usize> = Vec::with_capacity(args.len());
             for a in args {
-                static_user_args.push(lower_expr(ctx, a)?);
+                arg_idxs.push(roots.lower(ctx, a, true)?);
+            }
+            let recv_box = roots.reread(ctx, recv_idx)?;
+            let mut static_user_args: Vec<String> = Vec::with_capacity(args.len());
+            for &idx in &arg_idxs {
+                static_user_args.push(roots.reread(ctx, idx)?);
             }
             // #5391 path 4: oversized modules full-outline the class-id switch
             // tower. The tower emits one icmp + case block per class implementing
@@ -369,6 +404,9 @@ pub(crate) fn try_lower_instance_method_call(
                     call_byte_offset,
                     /* with_override_probe */ true,
                 )?;
+                // Released below the call that reads the group, in the merge the
+                // collapse helper leaves current (`open_rooted_group`'s contract).
+                roots.release(ctx);
                 return Ok(Some(v));
             }
             // #5437: each implementor of `property` has its OWN declared arity
@@ -779,13 +817,18 @@ pub(crate) fn try_lower_instance_method_call(
 
             // Outer merge: phi over override and dispatch values.
             ctx.current_block = probe_outer_merge_idx;
-            return Ok(Some(ctx.block().phi(
+            let v_probe_phi = ctx.block().phi(
                 DOUBLE,
                 &[
                     (v_override_probe.as_str(), after_override_probe.as_str()),
                     (v_dispatch_phi.as_str(), after_dispatch_phi.as_str()),
                 ],
-            )));
+            );
+            // The release has to post-dominate BOTH arms of the override probe
+            // and every case block of the tower, which is why this group is
+            // `open_rooted_group` and the release sits in the outer merge.
+            roots.release(ctx);
+            return Ok(Some(v_probe_phi));
         }
     }
 
