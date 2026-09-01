@@ -89,17 +89,22 @@ unsafe fn materialize_match_all_results(
     // Rust data. The fancy-regex fallback (lookbehind/backreferences) is
     // needed because the never-match placeholder in `regex_ptr` would yield
     // an empty iterator otherwise.
+    // The scan starts AT `search_start` inside the whole subject — never on a
+    // `&str_data[search_start..]` slice, which would strip the context every
+    // zero-width assertion reads (#9429) — and follows the ECMAScript
+    // empty-match rule rather than a Rust iterator's (#9430).
     let str_data = string_as_str(s);
     let search_start = utf16_index_to_byte(str_data, start_char_index);
-    let search_str = &str_data[search_start..];
 
     let mut owned: Vec<OwnedMatchAllData> = Vec::new();
     if let Some(repeat_matcher) = super::lookup_repeat_matcher(re) {
-        for matched in repeat_matcher.regex.find_iter(search_str) {
+        // `regress`'s own iterator is positional and already advances one
+        // position past a zero-width match, which is the ECMAScript rule.
+        for matched in repeat_matcher.regex.find_from(str_data, search_start) {
             owned.push(OwnedMatchAllData {
                 groups: matched
                     .groups()
-                    .map(|group| group.map(|range| search_str[range].to_string()))
+                    .map(|group| group.map(|range| str_data[range].to_string()))
                     .collect(),
                 named: repeat_matcher
                     .capture_names
@@ -111,13 +116,12 @@ unsafe fn materialize_match_all_results(
                                 name.clone(),
                                 matched
                                     .group(index + 1)
-                                    .map(|range| search_str[range].to_string()),
+                                    .map(|range| str_data[range].to_string()),
                             )
                         })
                     })
                     .collect(),
-                match_index: byte_index_to_utf16_index(str_data, search_start + matched.start())
-                    as f64,
+                match_index: byte_index_to_utf16_index(str_data, matched.start()) as f64,
             });
         }
     } else if let Some(fre) = super::lookup_fancy_regex(re) {
@@ -126,8 +130,7 @@ unsafe fn materialize_match_all_results(
             .enumerate()
             .filter_map(|(i, name)| name.map(|n| (i, n.to_string())))
             .collect();
-        let mut it = fre.captures_iter(search_str);
-        while let Some(Ok(caps)) = it.next() {
+        for caps in super::global_scan::fancy_captures(&fre, str_data, search_start) {
             owned.push(OwnedMatchAllData {
                 groups: (0..caps.len())
                     .map(|j| caps.get(j).map(|m| m.as_str().to_string()))
@@ -138,7 +141,7 @@ unsafe fn materialize_match_all_results(
                     .collect(),
                 match_index: caps
                     .get(0)
-                    .map(|m| byte_index_to_utf16_index(str_data, search_start + m.start()) as f64)
+                    .map(|m| byte_index_to_utf16_index(str_data, m.start()) as f64)
                     .unwrap_or(start_char_index as f64),
             });
         }
@@ -149,7 +152,7 @@ unsafe fn materialize_match_all_results(
             .enumerate()
             .filter_map(|(i, name)| name.map(|n| (i, n.to_string())))
             .collect();
-        for caps in regex.captures_iter(search_str) {
+        for caps in super::global_scan::std_captures(regex, str_data, search_start) {
             owned.push(OwnedMatchAllData {
                 groups: (0..caps.len())
                     .map(|j| caps.get(j).map(|m| m.as_str().to_string()))
@@ -160,7 +163,7 @@ unsafe fn materialize_match_all_results(
                     .collect(),
                 match_index: caps
                     .get(0)
-                    .map(|m| byte_index_to_utf16_index(str_data, search_start + m.start()) as f64)
+                    .map(|m| byte_index_to_utf16_index(str_data, m.start()) as f64)
                     .unwrap_or(start_char_index as f64),
             });
         }

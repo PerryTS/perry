@@ -1423,3 +1423,124 @@ fn stateful_test_reports_the_same_answer_as_exec() {
     assert_eq!(js_regexp_test(plain, make_string("ab")), 0);
     assert_eq!(regex_last_index_offset(plain), 1, "plain test leaves it be");
 }
+
+// ---- #9430: a global scan keeps the empty match at a match's end ---------
+
+/// `subject.match(/pattern/flags)` for a global regex, as plain strings.
+fn global_match_list(pattern: &str, flags: &str, subject: &str) -> Vec<String> {
+    let re = js_regexp_new(make_string(pattern), make_string(flags));
+    let arr = js_string_match(make_string(subject), re);
+    if arr.is_null() {
+        return Vec::new();
+    }
+    let len = unsafe { (*arr).length };
+    (0..len)
+        .map(|index| match_capture_text(arr, index).expect("a match list holds only strings"))
+        .collect()
+}
+
+fn replace_all_with(pattern: &str, flags: &str, subject: &str, repl: &str) -> String {
+    let re = js_regexp_new(make_string(pattern), make_string(flags));
+    let out = js_string_replace_regex(make_string(subject), re, make_string(repl));
+    string_as_str(out).to_string()
+}
+
+#[test]
+fn ecmascript_scan_keeps_an_empty_match_where_the_previous_one_ended() {
+    // The scan loop's contract, pinned without an engine: an empty match at
+    // the previous match's end is KEPT, and the cursor then advances one
+    // position — Rust's iterators drop it and advance instead.
+    //
+    // The finder below is `/a*/` over "aXa" written out by hand.
+    let subject = "aXa";
+    let seen = super::global_scan::scan(subject, 0, |cursor| {
+        // `a*` matches the empty string anywhere, so its leftmost match from
+        // `cursor` always STARTS at `cursor` and runs over the `a`s there.
+        let mut end = cursor;
+        while subject.as_bytes().get(end) == Some(&b'a') {
+            end += 1;
+        }
+        Some((cursor, end, (cursor, end)))
+    });
+    assert_eq!(seen, vec![(0, 1), (1, 1), (2, 3), (3, 3)]);
+
+    // The bound is what terminates the walk: without `cursor > len` ending it,
+    // the trailing empty match would repeat forever.
+    let empties = super::global_scan::scan("ab", 0, |cursor| Some((cursor, cursor, cursor)));
+    assert_eq!(empties, vec![0, 1, 2]);
+
+    // A zero-width step never lands inside a scalar.
+    assert_eq!(super::global_scan::advance_past_empty("a𝌆b", 0), 1);
+    assert_eq!(super::global_scan::advance_past_empty("a𝌆b", 1), 5);
+    assert_eq!(super::global_scan::advance_past_empty("a𝌆b", 5), 6);
+    assert_eq!(super::global_scan::advance_past_empty("ab", 2), 3);
+}
+
+#[test]
+fn global_match_keeps_the_trailing_and_interior_empty_matches() {
+    // The linear `regex` lane.
+    let plain = js_regexp_new(make_string("a*"), make_string("g"));
+    assert!(
+        lookup_fancy_regex(plain).is_none() && lookup_repeat_matcher(plain).is_none(),
+        "`a*` must stay on the linear engine"
+    );
+    assert_eq!(global_match_list("a*", "g", "a"), vec!["a", ""]);
+    assert_eq!(global_match_list("a*", "g", "aa"), vec!["aa", ""]);
+    assert_eq!(global_match_list("b*", "g", "ab"), vec!["", "b", ""]);
+    // Not only the trailing one: the empty match at index 1 is interior.
+    assert_eq!(global_match_list("a*", "g", "aXa"), vec!["a", "", "a", ""]);
+    assert_eq!(global_match_list("x*", "g", "abc"), vec!["", "", "", ""]);
+    assert_eq!(global_match_list("a*", "g", ""), vec![""]);
+    // A pattern that cannot match empty is unchanged.
+    assert_eq!(global_match_list("a+", "g", "aXa"), vec!["a", "a"]);
+}
+
+#[test]
+fn global_match_keeps_empty_matches_on_the_fancy_lane() {
+    // A possibly-empty pattern the linear engine cannot compile.
+    let looky = js_regexp_new(make_string("a*(?!x)"), make_string("g"));
+    assert!(
+        lookup_fancy_regex(looky).is_some(),
+        "a lookahead must select the fancy-regex lane"
+    );
+    assert_eq!(global_match_list("a*(?!x)", "g", "a"), vec!["a", ""]);
+    assert_eq!(
+        global_match_list("a*(?!x)", "g", "aXa"),
+        vec!["a", "", "a", ""]
+    );
+    assert_eq!(global_match_list("(?<=,)", "g", "a,b,"), vec!["", ""]);
+}
+
+#[test]
+fn global_match_on_the_regress_lane_is_unchanged() {
+    // `regress`'s iterator already implements the ECMAScript rule; this is the
+    // control that says so, and that nothing routed it elsewhere.
+    let quantified = js_regexp_new(make_string("(a)*"), make_string("g"));
+    assert!(
+        lookup_repeat_matcher(quantified).is_some(),
+        "a quantified capture must select the regress lane"
+    );
+    assert_eq!(global_match_list("(a)*", "g", "a"), vec!["a", ""]);
+    assert_eq!(
+        global_match_list("(a)*", "g", "aXa"),
+        vec!["a", "", "a", ""]
+    );
+}
+
+#[test]
+fn global_replace_substitutes_at_every_empty_match() {
+    assert_eq!(replace_all_with("a*", "g", "a", "<>"), "<><>");
+    assert_eq!(replace_all_with("a*", "g", "aXa", "-"), "--X--");
+    assert_eq!(replace_all_with("b*", "g", "ab", "-"), "-a--");
+    assert_eq!(replace_all_with("x*", "g", "abc", "-"), "-a-b-c-");
+    assert_eq!(replace_all_with("a*", "g", "aXa", "[$&]"), "[a][]X[a][]");
+    // The non-global form still replaces exactly one match.
+    assert_eq!(replace_all_with("a*", "", "aXa", "-"), "-Xa");
+    // Fancy lane.
+    assert_eq!(replace_all_with("a*(?!x)", "g", "a", "<>"), "<><>");
+    assert_eq!(replace_all_with("(?<=a)", "g", "aba", "!"), "a!ba!");
+    // Named-group substitution takes its own scan path.
+    let named = js_regexp_new(make_string("(?<n>a)*"), make_string("g"));
+    let out = js_string_replace_regex_named(make_string("a"), named, make_string("[$<n>]"));
+    assert_eq!(string_as_str(out), "[a][]");
+}

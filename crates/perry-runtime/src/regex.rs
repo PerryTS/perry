@@ -36,6 +36,8 @@ mod escape;
 #[cfg(feature = "regex-engine")]
 mod exec_array;
 #[cfg(feature = "regex-engine")]
+mod global_scan;
+#[cfg(feature = "regex-engine")]
 mod grammar;
 #[cfg(feature = "regex-engine")]
 mod lazy;
@@ -1418,14 +1420,18 @@ unsafe fn replace_regex_str_fancy(
     repl_str: &str,
 ) -> *mut StringHeader {
     let has_named_groups = fre.capture_names().any(|n| n.is_some());
-    let mut captures_list: Vec<fancy_regex::Captures> = Vec::new();
-    let mut iter = fre.captures_iter(str_data);
-    while let Some(Ok(caps)) = iter.next() {
-        captures_list.push(caps);
-        if !global {
-            break;
+    // #9430: the ECMAScript scan for the global form. fancy-regex's own
+    // iterator drops a zero-width match that lands where the previous match
+    // ended, so `"a".replace(/(?<=x)?a*/g, …)`-shaped patterns lost their
+    // trailing (and every interior) empty replacement.
+    let captures_list: Vec<fancy_regex::Captures> = if global {
+        global_scan::fancy_captures(fre, str_data, 0)
+    } else {
+        match fre.captures(str_data) {
+            Ok(Some(caps)) => vec![caps],
+            Ok(None) | Err(_) => Vec::new(),
         }
-    }
+    };
     let mut result = String::new();
     let mut last_end = 0usize;
     for caps in &captures_list {
@@ -1507,19 +1513,29 @@ pub extern "C" fn js_string_replace_regex(
         // Route through a JS-aware expander (closure form) so `$&` / `` $` `` /
         // `$'` — which the regex crate's native `$` syntax doesn't support —
         // are substituted per match. `$$`, `$n`, and `$<name>` are handled too.
-        let result = if global {
-            regex
-                .replace_all(str_data, |caps: &regex::Captures| {
-                    expand_js_replacement(repl_str, caps, str_data, has_named_groups)
-                })
-                .to_string()
+        // #9430: `Regex::replace_all` runs the crate's own match iterator,
+        // whose empty-match rule is not ECMAScript's. Drive the ECMAScript
+        // scan and splice the replacements here instead; the non-global form
+        // is the same loop over a one-element list.
+        let captures_list: Vec<regex::Captures> = if global {
+            global_scan::std_captures(regex, str_data, 0)
         } else {
-            regex
-                .replace(str_data, |caps: &regex::Captures| {
-                    expand_js_replacement(repl_str, caps, str_data, has_named_groups)
-                })
-                .to_string()
+            regex.captures(str_data).into_iter().collect()
         };
+        let mut result = String::with_capacity(str_data.len());
+        let mut last_end = 0usize;
+        for caps in &captures_list {
+            let full = caps.get(0).expect("capture zero is the full match");
+            result.push_str(&str_data[last_end..full.start()]);
+            result.push_str(&expand_js_replacement(
+                repl_str,
+                caps,
+                str_data,
+                has_named_groups,
+            ));
+            last_end = full.end();
+        }
+        result.push_str(&str_data[last_end..]);
 
         finish_replace_bytes(result.as_bytes())
     }
