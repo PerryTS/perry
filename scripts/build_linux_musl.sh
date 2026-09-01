@@ -86,7 +86,19 @@ target-applies-to-host = false
 
 [host]
 rustflags = ["-C", "target-feature=-crt-static"]
+
+# Pin the TARGET static explicitly. The `[host]` relaxation above leaked into
+# the target on the first attempt and produced a dynamically linked musl
+# binary (caught by the staticness assertion below, which is why it exists).
+#
+# NOTE: cargo uses exactly ONE rustflags source, and a target-specific table
+# REPLACES `[build] rustflags` rather than adding to it — so
+# `force-unwind-tables` (Invoke-EH / #7302, without which every throw crossing
+# a runtime helper frame is stranded) must be repeated here, not inherited.
+[target.TARGET_TRIPLE]
+rustflags = ["-C", "force-unwind-tables=yes", "-C", "target-feature=+crt-static"]
 CARGOCFG
+sed -i "s/TARGET_TRIPLE/$target/" "$cargo_home/config.toml"
 echo "[build_linux_musl] host build scripts: crt-static relaxed (bindgen needs dlopen)"
 
 cargo build --profile dist --target "$target" -p perry
