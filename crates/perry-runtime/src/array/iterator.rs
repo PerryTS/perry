@@ -1300,12 +1300,32 @@ fn throw_iterator_result_not_object() -> ! {
 #[no_mangle]
 pub extern "C" fn js_iterator_next_result(iter_f64: f64) -> f64 {
     let next = named_field(iter_f64, b"next");
-    if !is_callable_value(next) {
+    let result = if is_callable_value(next) {
+        let prev_this = crate::object::js_implicit_this_set(iter_f64);
+        let result = unsafe { crate::closure::js_native_call_value(next, std::ptr::null(), 0) };
+        crate::object::js_implicit_this_set(prev_this);
+        result
+    } else if next.to_bits() == crate::value::TAG_UNDEFINED
+        && is_builtin_iterator_class_id(crate::value::js_nanbox_get_pointer(iter_f64) as usize)
+    {
+        // Buffer iterators expose `next` through the native class-id tower,
+        // rather than as a stored closure.  The general iterator drain uses
+        // this same fallback; without it IteratorNext (and therefore
+        // Uint8Array destructuring) treats an ordinary buffer iterator as if
+        // it had no callable `next` at all.  Native dispatch still checks an
+        // own `next` override before advancing the builtin iterator.
+        unsafe {
+            crate::object::js_native_call_method(
+                iter_f64,
+                b"next".as_ptr() as *const i8,
+                4,
+                std::ptr::null(),
+                0,
+            )
+        }
+    } else {
         crate::closure::throw_not_callable();
-    }
-    let prev_this = crate::object::js_implicit_this_set(iter_f64);
-    let result = unsafe { crate::closure::js_native_call_value(next, std::ptr::null(), 0) };
-    crate::object::js_implicit_this_set(prev_this);
+    };
     if !is_object_like_value(result) {
         iter_bt_dump("js_iterator_next_result", result);
         throw_iterator_result_not_object();
