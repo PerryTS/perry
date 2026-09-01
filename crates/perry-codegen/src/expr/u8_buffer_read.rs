@@ -70,6 +70,17 @@ fn u8_buffer_receiver_eligible(ctx: &FnCtx<'_>, object: &Expr) -> bool {
             Some(perry_hir::types::Type::Named(name)) => Some(name.clone()),
             _ => None,
         }
+    })
+    .or_else(|| {
+        // #9363: a declared `Uint8Array` parameter, on the same
+        // guard-validated-hint terms as the typed-array lanes.
+        if ctx.reassigned_locals.contains(id) {
+            return None;
+        }
+        match ctx.local_type_hint(id) {
+            Some(perry_hir::types::Type::Named(name)) => Some(name.clone()),
+            _ => None,
+        }
     });
     class.as_deref() == Some("Uint8Array")
 }

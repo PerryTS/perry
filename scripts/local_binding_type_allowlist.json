@@ -106,6 +106,14 @@
       "reason": "Strict Symbol identity lowering accepts only constructor-derived runtime proof; the proof API rejects every binding written in the region, and fresh or registered Symbol storage is non-moving, so raw NaN-boxed pointer equality is the representation contract."
     },
     {
+      "path": "crates/perry-codegen/src/expr/i32_fast_path.rs",
+      "function": "declared_typed_array_class_i32",
+      "access": "local_type_hint",
+      "count": 1,
+      "classification": "runtime-validated",
+      "reason": "The declared typed-array class is an OPTIMISTIC hint for the checked element load, whose emitted runtime guard re-derives the truth: a receiver of another kind misses PERRY_TA_KIND_CACHE and defers to the memory-safe helper, so a wrong hint costs a missed speedup, never a wrong answer. Reassigned bindings are excluded (#6906). Needed because proven_local_types is empty for a PARAMETER, which left bcryptjs's `S: Int32Array` reads on a per-element runtime call (#9363/#5525)."
+    },
+    {
       "path": "crates/perry-codegen/src/expr/index_get.rs",
       "function": "is_width_tracked_typed_array_receiver",
       "access": "local_type_hint",
@@ -170,14 +178,6 @@
       "reason": "The proof API supplies only runtime-derived initializer evidence and rejects the binding after any write in the region."
     },
     {
-      "path": "crates/perry-codegen/src/expr/property_get/helpers.rs",
-      "function": "guarded_declared_class_get_candidate",
-      "access": "local_type_hint",
-      "count": 1,
-      "classification": "runtime-validated",
-      "reason": "The class hint selects only the guarded plain-field IC; its live class-id and keys-token checks dominate raw access, while accessors and method binding require proven receiver provenance."
-    },
-    {
       "path": "crates/perry-codegen/src/expr/property_get.rs",
       "function": "lower",
       "access": "local_type_hint",
@@ -192,6 +192,14 @@
       "count": 1,
       "classification": "representation-proven",
       "reason": "The proof API supplies only runtime-derived initializer evidence and rejects the binding after any write in the region."
+    },
+    {
+      "path": "crates/perry-codegen/src/expr/property_get/helpers.rs",
+      "function": "guarded_declared_class_get_candidate",
+      "access": "local_type_hint",
+      "count": 1,
+      "classification": "runtime-validated",
+      "reason": "The class hint selects only the guarded plain-field IC; its live class-id and keys-token checks dominate raw access, while accessors and method binding require proven receiver provenance."
     },
     {
       "path": "crates/perry-codegen/src/expr/property_set.rs",
@@ -218,12 +226,36 @@
       "reason": "The proof API supplies only runtime-derived initializer evidence and rejects the binding after any write in the region."
     },
     {
+      "path": "crates/perry-codegen/src/expr/static_field_meta.rs",
+      "function": "lower",
+      "access": "local_type_hint",
+      "count": 1,
+      "classification": "representation-proven",
+      "reason": "The Array hint on a named class expression's compiler-private self binding is not a user annotation: the shared-mutable capture rewrite is what both sets it and allocates the one-element cell, in the same pass, so the cell representation holds by construction wherever the hint is present. The raw POINTER_MASK_I64 decode and js_array_set_f64 below are therefore reaching a cell the compiler itself created; the else arm stores the plain value for an unrewritten binding."
+    },
+    {
+      "path": "crates/perry-codegen/src/expr/ta_param_f64_read.rs",
+      "function": "declared_typed_array_class_f64",
+      "access": "local_type_hint",
+      "count": 1,
+      "classification": "runtime-validated",
+      "reason": "The declared typed-array class is an OPTIMISTIC hint for the checked element load, whose emitted runtime guard re-derives the truth: a receiver of another kind misses PERRY_TA_KIND_CACHE and defers to the memory-safe helper, so a wrong hint costs a missed speedup, never a wrong answer. Reassigned bindings are excluded (#6906). Needed because proven_local_types is empty for a PARAMETER, which left bcryptjs's `S: Int32Array` reads on a per-element runtime call (#9363/#5525)."
+    },
+    {
       "path": "crates/perry-codegen/src/expr/typed_array_rmw.rs",
       "function": "receiver_is_uint32_candidate",
       "access": "local_type_hint",
       "count": 1,
       "classification": "runtime-validated",
       "reason": "The Uint32Array hint only nominates a receiver for the direct RMW route; the emitted code proves it at run time with a POINTER_TAG check, the inline-storage view guard, a cached-address match and a UINT32 kind match, and re-checks the view/kind/bounds guard after the RHS so a receiver mutated by the RHS falls back to the generic path."
+    },
+    {
+      "path": "crates/perry-codegen/src/expr/u8_buffer_read.rs",
+      "function": "u8_buffer_receiver_eligible",
+      "access": "local_type_hint",
+      "count": 1,
+      "classification": "runtime-validated",
+      "reason": "The declared typed-array class is an OPTIMISTIC hint for the checked element load, whose emitted runtime guard re-derives the truth: a receiver of another kind misses PERRY_U8_INLINE_CACHE and defers to the memory-safe helper, so a wrong hint costs a missed speedup, never a wrong answer. Reassigned bindings are excluded (#6906). Needed because proven_local_types is empty for a PARAMETER, which left bcryptjs's `S: Int32Array` reads on a per-element runtime call (#9363/#5525)."
     },
     {
       "path": "crates/perry-codegen/src/lower_call/closure_analysis.rs",
@@ -640,14 +672,6 @@
       "count": 1,
       "classification": "metadata-only",
       "reason": "This indexed scope-stack iteration performs lexical name resolution during HIR construction and does not establish a codegen runtime representation."
-    },
-    {
-      "path": "crates/perry-codegen/src/expr/static_field_meta.rs",
-      "function": "lower",
-      "access": "local_type_hint",
-      "count": 1,
-      "classification": "representation-proven",
-      "reason": "The Array hint on a named class expression's compiler-private self binding is not a user annotation: the shared-mutable capture rewrite is what both sets it and allocates the one-element cell, in the same pass, so the cell representation holds by construction wherever the hint is present. The raw POINTER_MASK_I64 decode and js_array_set_f64 below are therefore reaching a cell the compiler itself created; the else arm stores the plain value for an unrewritten binding."
     }
   ]
 }
