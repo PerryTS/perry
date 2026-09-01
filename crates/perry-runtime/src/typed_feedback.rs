@@ -2598,7 +2598,11 @@ pub extern "C" fn js_typed_feedback_array_index_set_fallback_boxed(
             (raw_addr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         match (*gc_header).obj_type {
             crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY => {
-                let new_arr = crate::array::js_array_set_index_or_string(
+                // #9249: this is the cold continuation of a source-level
+                // assignment after the inline guard rejects a prototype-
+                // sensitive array. Preserve strict Set semantics so the
+                // numeric branch can run the inherited descriptor walk.
+                let new_arr = crate::array::js_array_set_index_or_string_strict(
                     raw_addr as *mut ArrayHeader,
                     index,
                     value,
