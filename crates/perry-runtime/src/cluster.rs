@@ -945,7 +945,7 @@ fn default_args_array_value() -> f64 {
 }
 
 fn default_exec_path() -> String {
-    std::env::args()
+    crate::process::process_args_lossy()
         .nth(1)
         .filter(|s| !s.is_empty())
         .or_else(|| {
@@ -953,7 +953,7 @@ fn default_exec_path() -> String {
                 .ok()
                 .map(|p| p.to_string_lossy().into_owned())
         })
-        .or_else(|| std::env::args().next())
+        .or_else(|| crate::process::process_args_lossy().next())
         .unwrap_or_default()
 }
 

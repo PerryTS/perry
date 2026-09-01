@@ -396,8 +396,28 @@ pub(crate) fn module_set_value(items: &[&str]) -> f64 {
     crate::value::js_nanbox_pointer(set as i64)
 }
 
+/// The process's arguments, decoded the way Node decodes them: every byte that
+/// is not valid UTF-8 becomes U+FFFD (#9401).
+///
+/// `std::env::args()` PANICS on an argument that is not valid Unicode
+/// (`library/std/src/env.rs`: `called Result::unwrap() on an Err value`), and
+/// with `panic = "abort"` that is a SIGABRT with a raw Rust backtrace where
+/// Node prints the program's own output. Non-UTF-8 filenames are ordinary on
+/// Linux, so `prog $'\xff\xfe\x80abc'` reached it trivially — and
+/// `init_trace_events_runtime` reads argv from `js_gc_init`, so the process
+/// died before a line of JavaScript ran.
+///
+/// Node's decoding is byte-for-byte `String::from_utf8_lossy`: verified
+/// against Node 26.5.1, `$'\xff\xfe\x80abc\xc3\x28'` arrives as the eight
+/// code points `fffd fffd fffd 61 62 63 fffd 28`. Every argv reader in the
+/// runtime goes through here so one bad byte cannot resurrect the abort in a
+/// path nobody thought to check.
+pub(crate) fn process_args_lossy() -> impl Iterator<Item = String> {
+    std::env::args_os().map(|arg| arg.to_string_lossy().into_owned())
+}
+
 pub(crate) fn process_argv0_string() -> String {
-    std::env::args().next().unwrap_or_default()
+    process_args_lossy().next().unwrap_or_default()
 }
 
 pub(crate) fn node_arch_name() -> &'static str {

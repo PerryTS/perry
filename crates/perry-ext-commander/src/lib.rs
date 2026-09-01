@@ -290,7 +290,12 @@ fn resolve_parse_args(argv: f64) -> Vec<String> {
             return out.into_iter().skip(2).collect();
         }
     }
-    std::env::args().skip(1).collect()
+    // #9401: `std::env::args()` panics on a non-UTF-8 argument; Node decodes
+    // argv leniently (every invalid byte becomes U+FFFD) and so must this.
+    std::env::args_os()
+        .skip(1)
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect()
 }
 
 /// Top-level parse entry. The second arg is the user's `parse(argv)`
