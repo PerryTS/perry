@@ -2747,6 +2747,7 @@ pub(crate) mod string_window;
 
 mod ptr_numarray_access;
 mod ta_param_f64_read;
+mod u8_buffer_read;
 #[cfg(test)]
 mod unary_bigint_tests;
 #[cfg(test)]

@@ -7,6 +7,7 @@ mod block_pool_pressure;
 mod budgeted_step_api;
 mod buffer_bound_method_name;
 mod buffer_side_tables;
+mod u8_inline_cache;
 mod contract;
 mod copying;
 mod copying_side_tables;

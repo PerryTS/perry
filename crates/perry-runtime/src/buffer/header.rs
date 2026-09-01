@@ -396,6 +396,10 @@ pub fn register_buffer(ptr: *const BufferHeader) {
     // address, and without this the no-ops would carry over and the real packet
     // would serialize as all zeros (the MySQL server then times out reading it).
     super::own_props::clear_buffer_own_props(ptr as usize);
+    // #9342: same recycled-address rule for the inline-read admission cache —
+    // a fresh buffer must not inherit the dead tenant's inline-read admission
+    // (it may be foreign-backed, or not a Uint8Array at all).
+    u8_inline_cache_invalidate(ptr as usize);
     // Arm BEFORE the insert: an arm placed afterwards leaves a window in which
     // this buffer is in the registry while `is_registered_buffer` still takes
     // the idle fast path and denies it. See `crate::registry_latch`.
@@ -700,6 +704,65 @@ pub fn asymmetric_key_meta(addr: usize) -> Option<(u8, u8)> {
         return None;
     }
     ASYMMETRIC_KEY_REGISTRY.with(|r| r.borrow().get(&addr).copied())
+}
+
+
+/// #9342: direct-mapped inline-read admission cache for `Uint8Array`-backing
+/// `BufferHeader`s, exported under a stable link name for the codegen's
+/// guarded inline byte load (`perry-codegen/src/expr/u8_buffer_read.rs`).
+///
+/// An entry holds the full address of a **live, `mark_as_uint8array`-marked
+/// `BufferHeader` whose bytes are inline at `header + 8`** (no foreign
+/// backing). Under that contract the emitted reader may do
+/// `len = *(u32*)addr; addr + 8 + idx` directly:
+///
+///  * view copies (`js_buffer_slice` / `new Uint8Array(arrayBuffer)`) ARE
+///    admissible — their inline bytes are kept current by the write-propagation
+///    protocol in `buffer/view.rs` (reads never go stale; only an inline WRITE
+///    fast path would break aliasing, and this cache feeds no write path);
+///  * foreign-backed wrappers (`buffer_alloc_foreign`, bun:ffi externals) are
+///    excluded at prime time — their header is a lone `BufferHeader` with no
+///    inline payload, so `header + 8` is past the allocation;
+///  * ABA is closed the same way as every other buffer identity table:
+///    `finalize_collected_dead_buffer` clears the entry when the buffer dies,
+///    and `register_buffer` clears it again when the address is re-issued
+///    (belt and suspenders, mirroring its own-props clear).
+///
+/// Slot formula `(addr >> 3) & 63` is duplicated by codegen — keep in sync.
+pub const U8_INLINE_CACHE_SLOTS: usize = 64;
+#[no_mangle]
+pub static PERRY_U8_INLINE_CACHE: [std::sync::atomic::AtomicU64; U8_INLINE_CACHE_SLOTS] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; U8_INLINE_CACHE_SLOTS];
+
+#[inline]
+fn u8_inline_cache_slot(addr: usize) -> usize {
+    (addr >> 3) & (U8_INLINE_CACHE_SLOTS - 1)
+}
+
+/// Test-only: does the admission cache currently hold exactly `addr`?
+/// Reads the slot the way the emitted guard does — full-address compare.
+#[cfg(test)]
+pub(crate) fn test_u8_inline_cache_holds(addr: usize) -> bool {
+    PERRY_U8_INLINE_CACHE[u8_inline_cache_slot(addr)].load(std::sync::atomic::Ordering::Relaxed)
+        == addr as u64
+}
+
+#[inline]
+pub(crate) fn u8_inline_cache_invalidate(addr: usize) {
+    let slot = u8_inline_cache_slot(addr);
+    if PERRY_U8_INLINE_CACHE[slot].load(std::sync::atomic::Ordering::Relaxed) == addr as u64 {
+        PERRY_U8_INLINE_CACHE[slot].store(0, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// Admit `addr` to the inline-read cache iff it satisfies the cache contract
+/// above. Called from the codegen slow arm (`js_u8_buffer_read_f64`) so a
+/// guard miss primes the next access; never called on a hot path.
+pub(crate) fn u8_inline_cache_try_prime(addr: usize) {
+    if is_uint8array_buffer(addr) && foreign_backing(addr).is_none() {
+        PERRY_U8_INLINE_CACHE[u8_inline_cache_slot(addr)]
+            .store(addr as u64, std::sync::atomic::Ordering::Relaxed);
+    }
 }
 
 #[inline]
@@ -1073,6 +1136,10 @@ pub(crate) fn finalize_collected_dead_buffer(addr: usize) {
     super::own_props::clear_buffer_own_props(addr);
     super::detach::remove_detached_entry_for_dead_buffer(addr);
     super::view::remove_entries_for_dead_buffer(addr);
+    // #9342: drop the dead address from the inline-read admission cache before
+    // its block can be reset and re-issued — a stale hit would read the next
+    // tenant's memory as (length, bytes).
+    u8_inline_cache_invalidate(addr);
 }
 
 /// Get the data pointer for a buffer
