@@ -113,7 +113,7 @@ pub(super) fn lower_packed_f64_range_loop_index_set(
     if statically_genuine {
         let arr_expr = Expr::LocalGet(arr_id);
         let arr_box = lower_expr(ctx, &arr_expr)?;
-        let arr_handle = super::packed_receiver_handle_i64(ctx, Some(arr_id), &arr_box);
+        let arr_handle = super::receiver_descriptor_handle_i64(ctx, Some(arr_id), &arr_box);
         let blk = ctx.block();
         let idx_i64 = blk.zext(I32, idx_i32, I64);
         let byte_offset = blk.shl(I64, &idx_i64, "3");
@@ -224,7 +224,7 @@ pub(super) fn lower_packed_f64_range_loop_index_set(
     {
         let arr_expr = Expr::LocalGet(arr_id);
         let arr_box = lower_expr(ctx, &arr_expr)?;
-        let arr_handle = super::packed_receiver_handle_i64(ctx, Some(arr_id), &arr_box);
+        let arr_handle = super::receiver_descriptor_handle_i64(ctx, Some(arr_id), &arr_box);
         let blk = ctx.block();
         let idx_i64 = blk.zext(I32, idx_i32, I64);
         let byte_offset = blk.shl(I64, &idx_i64, "3");

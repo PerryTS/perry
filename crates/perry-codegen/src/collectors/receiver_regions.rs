@@ -1,9 +1,9 @@
 //! Receiver regions — one vocabulary for "receiver R has fact F, valid until
-//! boundary B" (#9254, phase 1).
+//! boundary B" (#9254).
 //!
 //! # Why this exists
 //!
-//! Codegen carries fifteen separate receiver-keyed fact tables on `FnCtx`
+//! Phase 1 found sixteen separate receiver-keyed fact mechanisms on `FnCtx`
 //! (`cached_lengths`, `bounded_index_pairs`, `packed_f64_loop_facts`,
 //! `masked_window_array_facts`, `buffer_view_slots`, `int_range_facts`,
 //! `element_shape_loop_facts`, `class_field_loop_facts`,
@@ -30,12 +30,13 @@
 //!
 //! # What this module is
 //!
-//! The model, and nothing else. **This module emits no IR and is consulted by
-//! no lowering path.** It exists so the boundary rule can be written once,
-//! tested against the tiers that already implement it, and reviewed on its own
-//! merits before anything depends on it. Phase 2 is where a tier starts
-//! *asking* this module instead of hand-rolling; that is a separate change and
-//! this one is revertible by deleting the file.
+//! The model plus the active descriptor table. Phase 1 added the boundary
+//! vocabulary and equivalence lint without changing lowering. Phase 2 routes
+//! the packed/versioned clone's receiver hoist through
+//! [`ReceiverDescriptorTable`]: the table owns the rooted box, pre-masked base
+//! handle and poll refresh recipe as one entry, and asks [`boundary_admits`]
+//! before carrying that address across a back-edge poll. Other fact tables are
+//! migrated one consumer at a time.
 //!
 //! The precedent is `TypeFacts::purity` / `TypeFacts::shape_stability`
 //! (`collectors/hir_facts.rs`, #854): a subgraph the collector populates and
@@ -54,12 +55,12 @@
 //! what keeps this file honest: the model is checked against a shipping,
 //! audited predicate rather than against its own restatement.
 
-// #9254 phase 1: the region/descriptor model is populated and tested but not
-// yet consumed by any codegen pass — the equivalence lint in
-// `receiver_regions_tests` is its only caller. Consumption is phase 2, a
-// separate change; until then the whole module is dead by design and this
-// `allow` is the marker for that, matching the #854 subgraphs in `hir_facts`.
-// If this attribute can be deleted, phase 2 has landed.
+// #9254 phase 2: `ReceiverDescriptorTable` and the poll boundary algebra are
+// production consumers. Region formation remains lint-only until ordinary
+// counted loops migrate in phase 3, so the rest of this module is still dead
+// in a non-test build. Keep that incomplete state explicit rather than
+// scattering per-item allows; this attribute can go when region formation is
+// itself consumed.
 #![allow(dead_code)]
 
 use crate::loop_purity;
@@ -135,7 +136,7 @@ pub(crate) enum FactBoundary {
     /// `BufferViewPointerState::Invalidated`).
     InPlaceDegradation,
     /// Reloaded from the authoritative root at the safepoint, rather than
-    /// invalidated. Only the `packed_receiver_*` trio does this.
+    /// invalidated. `receiver_descriptors` is the first consumer.
     PollRefresh,
     /// Nothing removes or downgrades it.
     Never,
@@ -243,6 +244,129 @@ pub(crate) fn boundary_admits(
             ),
             _ => deny("cached address does not survive this relocation point"),
         },
+    }
+}
+
+/// The concrete refresh recipe carried by a materialised address descriptor.
+///
+/// The box slot is a precise frame root, so evacuation rewrites it directly.
+/// `source_root` remains the authoritative binding used by #9111's poll-arm
+/// reload, and `base_handle_slot` caches `box & POINTER_MASK` for packed lanes.
+/// Keeping the three names in one value prevents the parallel-map drift this
+/// module was introduced to remove.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ReceiverPollRefresh {
+    pub(crate) rooted_box_slot: String,
+    pub(crate) base_handle_slot: String,
+    pub(crate) source_root: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ActiveReceiverDescriptor {
+    contract: ReceiverDescriptor,
+    refresh: ReceiverPollRefresh,
+}
+
+/// Active materialised receiver descriptors for one function lowering.
+///
+/// Entries are kept in installation order so refresh IR is deterministic.
+/// Nested packed clones reuse an outer entry for the same receiver; a scope
+/// removes only the entries it installed itself.
+#[derive(Debug, Default)]
+pub(crate) struct ReceiverDescriptorTable {
+    entries: Vec<ActiveReceiverDescriptor>,
+}
+
+impl ReceiverDescriptorTable {
+    /// Whether an active scope has already materialised `receiver`.
+    pub(crate) fn contains(&self, receiver: u32) -> bool {
+        self.entries
+            .iter()
+            .any(|entry| entry.contract.receiver == receiver)
+    }
+
+    /// Install the first production descriptor consumer (#9254 phase 2): a
+    /// rooted receiver address refreshed at every fired back-edge poll.
+    ///
+    /// Returns `false` for a duplicate receiver. Callers use that to reuse an
+    /// outer clone's descriptor instead of shadowing and prematurely removing
+    /// it when the inner clone ends.
+    pub(crate) fn materialize_poll_refreshed_address(
+        &mut self,
+        receiver: u32,
+        rooted_box_slot: String,
+        base_handle_slot: String,
+        source_root: String,
+        excludes_try: bool,
+    ) -> bool {
+        if self.contains(receiver) {
+            return false;
+        }
+        let contract = ReceiverDescriptor {
+            table: "receiver_descriptors",
+            receiver,
+            claim: ReceiverClaim::Address,
+            boundary: FactBoundary::PollRefresh,
+            excludes_try,
+        };
+        // This is not a descriptive side table any more: installing an active
+        // address requires the shared boundary algebra to license the exact
+        // relocation point its refresh recipe covers.
+        boundary_admits(&contract, RegionEnder::BackEdgePoll)
+            .expect("a poll-refreshed receiver descriptor must survive its poll boundary");
+        self.entries.push(ActiveReceiverDescriptor {
+            contract,
+            refresh: ReceiverPollRefresh {
+                rooted_box_slot,
+                base_handle_slot,
+                source_root,
+            },
+        });
+        true
+    }
+
+    /// End the dynamic extent of one materialised receiver.
+    pub(crate) fn dematerialize(&mut self, receiver: u32) -> bool {
+        let Some(index) = self
+            .entries
+            .iter()
+            .position(|entry| entry.contract.receiver == receiver)
+        else {
+            return false;
+        };
+        self.entries.remove(index);
+        true
+    }
+
+    /// The promotable, precise-root box slot consumed by `LocalGet`.
+    pub(crate) fn rooted_box_slot(&self, receiver: u32) -> Option<&str> {
+        self.entries
+            .iter()
+            .find(|entry| entry.contract.receiver == receiver)
+            .map(|entry| entry.refresh.rooted_box_slot.as_str())
+    }
+
+    /// The pre-masked base-handle slot consumed by packed address math.
+    pub(crate) fn base_handle_slot(&self, receiver: u32) -> Option<&str> {
+        self.entries
+            .iter()
+            .find(|entry| entry.contract.receiver == receiver)
+            .map(|entry| entry.refresh.base_handle_slot.as_str())
+    }
+
+    /// Refresh recipes admitted at a back-edge poll.
+    ///
+    /// Every active entry is checked at the boundary before its recipe is
+    /// returned. A future consumer that installs an address under the wrong
+    /// boundary therefore fails compilation here instead of silently carrying
+    /// a stale pointer past a collection.
+    pub(crate) fn poll_refreshes(&self) -> Result<Vec<ReceiverPollRefresh>, BoundaryViolation> {
+        let mut refreshes = Vec::with_capacity(self.entries.len());
+        for entry in &self.entries {
+            boundary_admits(&entry.contract, RegionEnder::BackEdgePoll)?;
+            refreshes.push(entry.refresh.clone());
+        }
+        Ok(refreshes)
     }
 }
 
@@ -409,10 +533,14 @@ pub(crate) fn region_enders_in_stmts(
 }
 
 fn enders_in_expr(e: &Expr, is_inert: &dyn Fn(&Expr) -> bool, out: &mut Vec<RegionEnder>) {
+    // Child expressions execute before the operation represented by their
+    // parent (`f(makeClosure())` allocates the closure before it calls `f`).
+    // Region boundaries are ordered data once a lowering path consumes them,
+    // so a pre-order walk would put the call before the allocation.
+    perry_hir::walker::walk_expr_children(e, &mut |child| enders_in_expr(child, is_inert, out));
     if let Some(r) = expr_region_ender(e, is_inert) {
         out.push(r);
     }
-    perry_hir::walker::walk_expr_children(e, &mut |child| enders_in_expr(child, is_inert, out));
 }
 
 fn enders_in_stmt(s: &Stmt, is_inert: &dyn Fn(&Expr) -> bool, out: &mut Vec<RegionEnder>) {
@@ -444,11 +572,18 @@ fn enders_in_stmt(s: &Stmt, is_inert: &dyn Fn(&Expr) -> bool, out: &mut Vec<Regi
         // A nested loop's back-edge poll is a relocation point for the
         // *enclosing* region too — this is why the armed-poll refresh reloads
         // every active receiver cache, not just the innermost scope's.
-        Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
+        Stmt::While { condition, body } => {
             enders_in_expr(condition, is_inert, out);
             for st in body {
                 enders_in_stmt(st, is_inert, out);
             }
+            out.push(RegionEnder::BackEdgePoll);
+        }
+        Stmt::DoWhile { body, condition } => {
+            for st in body {
+                enders_in_stmt(st, is_inert, out);
+            }
+            enders_in_expr(condition, is_inert, out);
             out.push(RegionEnder::BackEdgePoll);
         }
         Stmt::For {
@@ -463,11 +598,11 @@ fn enders_in_stmt(s: &Stmt, is_inert: &dyn Fn(&Expr) -> bool, out: &mut Vec<Regi
             if let Some(condition) = condition {
                 enders_in_expr(condition, is_inert, out);
             }
-            if let Some(update) = update {
-                enders_in_expr(update, is_inert, out);
-            }
             for st in body {
                 enders_in_stmt(st, is_inert, out);
+            }
+            if let Some(update) = update {
+                enders_in_expr(update, is_inert, out);
             }
             out.push(RegionEnder::BackEdgePoll);
         }

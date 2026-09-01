@@ -820,8 +820,9 @@ struct PackedAccumulatorScope {
     /// clone: (id, i32 slot, double slot) — exits re-sync the double.
     deferred_integer: Vec<(u32, String, String)>,
     side_exit_override: Option<String>,
-    /// Receiver ids this scope cached into promotable allocas (see
-    /// `FnCtx::packed_receiver_box_slots`); cleared by `finish`.
+    /// Receiver ids this scope materialised in the shared descriptor table;
+    /// cleared by `finish`. An inner scope reusing an outer descriptor does
+    /// not record that receiver here.
     hoisted_receivers: Vec<u32>,
 }
 
@@ -925,11 +926,11 @@ impl PackedAccumulatorScope {
     /// Cache each receiver's box in a promotable precise-root alloca for this
     /// fast clone. Receivers here are matcher-validated plain locals or module
     /// globals (never captures/boxes), and the clone body is call-free, so the
-    /// only collection point is the loop poll — whose armed arm reloads every
-    /// entry in `packed_receiver_refresh` and re-derives its masked handle.
+    /// only collection point is the loop poll — whose armed arm asks the
+    /// shared receiver-descriptor table for every admitted refresh recipe.
     fn hoist_receivers(&mut self, ctx: &mut FnCtx<'_>, array_ids: &[u32]) {
         for arr_id in array_ids {
-            if ctx.packed_receiver_box_slots.contains_key(arr_id) {
+            if ctx.receiver_descriptors.contains(*arr_id) {
                 continue;
             }
             let source_ref = if let Some(slot) = ctx.locals.get(arr_id) {
@@ -962,11 +963,17 @@ impl PackedAccumulatorScope {
                 let handle = blk.and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
                 blk.store(I64, &handle, &handle_alloca);
             }
-            ctx.packed_receiver_box_slots
-                .insert(*arr_id, alloca.clone());
-            ctx.packed_receiver_handle_slots
-                .insert(*arr_id, handle_alloca);
-            ctx.packed_receiver_refresh.push((alloca, source_ref));
+            let installed = ctx.receiver_descriptors.materialize_poll_refreshed_address(
+                *arr_id,
+                alloca,
+                handle_alloca,
+                source_ref,
+                // Packed loop admission rejects Stmt::Try. A throw may
+                // leave the clone, but no descriptor is live in the
+                // handler reached outside this dynamic extent.
+                true,
+            );
+            debug_assert!(installed, "duplicate receiver checked above");
             self.hoisted_receivers.push(*arr_id);
         }
     }
@@ -1039,11 +1046,8 @@ impl PackedAccumulatorScope {
             }
         }
         for arr_id in &self.hoisted_receivers {
-            if let Some(alloca) = ctx.packed_receiver_box_slots.remove(arr_id) {
-                ctx.packed_receiver_refresh
-                    .retain(|(slot, _)| slot != &alloca);
-            }
-            ctx.packed_receiver_handle_slots.remove(arr_id);
+            let removed = ctx.receiver_descriptors.dematerialize(*arr_id);
+            debug_assert!(removed, "scope owns every receiver it materialised");
         }
     }
 }
@@ -7510,31 +7514,25 @@ fn emit_armed_gc_loop_safepoint(ctx: &mut FnCtx<'_>) {
     }
     ctx.current_block = poll_idx;
     {
-        let refresh = ctx.packed_receiver_refresh.clone();
-        let handle_pairs: Vec<(String, String)> = ctx
-            .packed_receiver_handle_slots
-            .iter()
-            .filter_map(|(id, handle_slot)| {
-                ctx.packed_receiver_box_slots
-                    .get(id)
-                    .map(|box_slot| (handle_slot.clone(), box_slot.clone()))
-            })
-            .collect();
+        let refresh = ctx
+            .receiver_descriptors
+            .poll_refreshes()
+            .expect("every active receiver descriptor must admit a back-edge poll");
         let blk = ctx.block();
         blk.call_void("js_gc_loop_safepoint", &[]);
         // A fired poll may have MOVED every cached packed receiver — reload
         // each active cache (all scopes: an inner loop's poll must refresh
         // outer clones' caches too) from its GC-updated root before any
         // cached-base access runs again.
-        for (alloca, source_ref) in &refresh {
-            let fresh = blk.load(DOUBLE, source_ref);
-            blk.store(DOUBLE, &fresh, alloca);
+        for recipe in &refresh {
+            let fresh = blk.load(DOUBLE, &recipe.source_root);
+            blk.store(DOUBLE, &fresh, &recipe.rooted_box_slot);
         }
-        for (handle_slot, box_slot) in &handle_pairs {
-            let fresh = blk.load(DOUBLE, box_slot);
+        for recipe in &refresh {
+            let fresh = blk.load(DOUBLE, &recipe.rooted_box_slot);
             let bits = blk.bitcast_double_to_i64(&fresh);
             let handle = blk.and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
-            blk.store(I64, &handle, handle_slot);
+            blk.store(I64, &handle, &recipe.base_handle_slot);
         }
         blk.br(&done_label);
     }

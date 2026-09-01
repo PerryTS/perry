@@ -1,10 +1,11 @@
-//! Phase-1 tests for the receiver-region model (#9254).
+//! Tests for the receiver-region model and its active descriptor table (#9254).
 //!
 //! Two jobs. The first half pins the boundary algebra — in particular the
 //! unwind rule, which no fact table expresses today and which is therefore the
-//! part with no shipping implementation to check against. The second half is
-//! the equivalence lint: the model held against `loop_purity::loop_may_allocate`,
-//! a shipping audited predicate, on a shared battery.
+//! part with no shipping implementation to check against. The active-table
+//! tests cover phase 2's first consumer. The second half is the equivalence
+//! lint: the model held against `loop_purity::loop_may_allocate`, a shipping
+//! audited predicate, on a shared battery.
 //!
 //! The battery is the load-bearing artifact. Three unsoundnesses in the first
 //! draft of the model survived review and died here.
@@ -119,11 +120,11 @@ fn cached_length_desc() -> ReceiverDescriptor {
     )
 }
 
-/// `packed_receiver_box_slots`: an address, reloaded at the poll, inside a
-/// region the packed matcher keeps free of `Stmt::Try`.
-fn packed_receiver_desc() -> ReceiverDescriptor {
+/// `receiver_descriptors`: an address, reloaded at the poll, inside a region
+/// the packed matcher keeps free of `Stmt::Try`.
+fn poll_refreshed_receiver_desc() -> ReceiverDescriptor {
     desc(
-        "packed_receiver_box_slots",
+        "receiver_descriptors",
         ReceiverClaim::Address,
         FactBoundary::PollRefresh,
         true,
@@ -180,12 +181,13 @@ fn a_scalar_relation_survives_every_relocation_point() {
     assert!(violations_for(&d, &ALL_ENDERS).is_empty());
 }
 
-/// The `packed_receiver_*` contract: the cache is reloaded on the armed arm of
-/// the poll, which is the only collection point a call-free clone has.
+/// The active receiver-descriptor contract: the cache is reloaded on the
+/// armed arm of the poll, which is the only collection point a call-free
+/// clone has.
 #[test]
 fn a_cached_address_survives_the_poll_only_with_a_refresh_recipe() {
     assert!(
-        boundary_admits(&packed_receiver_desc(), RegionEnder::BackEdgePoll).is_ok(),
+        boundary_admits(&poll_refreshed_receiver_desc(), RegionEnder::BackEdgePoll).is_ok(),
         "PollRefresh is written for exactly this ender"
     );
 
@@ -201,6 +203,64 @@ fn a_cached_address_survives_the_poll_only_with_a_refresh_recipe() {
             .expect_err("a cached address with no refresh recipe cannot cross a poll");
         assert_eq!(v.ender, RegionEnder::BackEdgePoll);
     }
+}
+
+/// Phase 2's first production consumer keeps the box, masked handle and
+/// authoritative source together, and runs the boundary algebra before the
+/// poll lowering can consume their refresh recipe.
+#[test]
+fn active_descriptor_table_owns_lookup_refresh_and_dynamic_extent() {
+    let mut table = ReceiverDescriptorTable::default();
+    assert!(table.materialize_poll_refreshed_address(
+        OBJ,
+        "%box.root".into(),
+        "%base.handle".into(),
+        "%source.root".into(),
+        true,
+    ));
+    assert_eq!(table.rooted_box_slot(OBJ), Some("%box.root"));
+    assert_eq!(table.base_handle_slot(OBJ), Some("%base.handle"));
+
+    // An inner clone reuses the outer materialisation rather than installing
+    // an entry it would remove while the outer clone is still active.
+    assert!(!table.materialize_poll_refreshed_address(
+        OBJ,
+        "%inner.box".into(),
+        "%inner.handle".into(),
+        "%inner.source".into(),
+        true,
+    ));
+    assert!(table.materialize_poll_refreshed_address(
+        OBJ + 1,
+        "%other.box".into(),
+        "%other.handle".into(),
+        "%other.source".into(),
+        true,
+    ));
+
+    assert_eq!(
+        table
+            .poll_refreshes()
+            .expect("PollRefresh must admit BackEdgePoll"),
+        vec![
+            ReceiverPollRefresh {
+                rooted_box_slot: "%box.root".into(),
+                base_handle_slot: "%base.handle".into(),
+                source_root: "%source.root".into(),
+            },
+            ReceiverPollRefresh {
+                rooted_box_slot: "%other.box".into(),
+                base_handle_slot: "%other.handle".into(),
+                source_root: "%other.source".into(),
+            },
+        ]
+    );
+    assert!(table.dematerialize(OBJ + 1));
+    assert_eq!(table.rooted_box_slot(OBJ), Some("%box.root"));
+    assert!(table.dematerialize(OBJ));
+    assert_eq!(table.rooted_box_slot(OBJ), None);
+    assert!(table.poll_refreshes().unwrap().is_empty());
+    assert!(!table.dematerialize(OBJ));
 }
 
 /// A cached address dies at a call no matter how the table scopes itself —
@@ -243,7 +303,7 @@ fn an_address_claim_with_no_try_exclusion_is_flagged_on_the_unwind_edge() {
     // A tier that DOES exclude `Try` from its region is not flagged: the
     // packed matcher rejects `Stmt::Try` outright, so no handler can observe
     // its cache.
-    assert!(boundary_admits(&packed_receiver_desc(), RegionEnder::UnwindEdge).is_ok());
+    assert!(boundary_admits(&poll_refreshed_receiver_desc(), RegionEnder::UnwindEdge).is_ok());
 }
 
 /// An unwind edge diverts control; it does not fall through. That is why a
@@ -285,7 +345,7 @@ fn a_representation_claim_survives_the_poll_but_not_user_code() {
 /// silently widens every region.
 #[test]
 fn an_unmodelled_expression_is_a_relocation_point() {
-    for d in [packed_receiver_desc(), packed_f64_desc()] {
+    for d in [poll_refreshed_receiver_desc(), packed_f64_desc()] {
         assert!(boundary_admits(&d, RegionEnder::Unmodelled).is_err());
     }
     // ...but it still does not disturb a value claim.
@@ -394,6 +454,52 @@ fn closure_allocation_is_an_ender_and_its_body_is_not_descended_into() {
     // The closure allocation itself, and nothing from its body: a nested
     // closure is its own frame with its own regions.
     assert_eq!(got, vec![RegionEnder::AllocatingOperation], "got {got:?}");
+}
+
+#[test]
+fn expression_enders_follow_execution_order() {
+    let body = vec![Stmt::Expr(call(vec![closure(vec![])]))];
+    assert_eq!(
+        enders(&body),
+        vec![
+            RegionEnder::AllocatingOperation,
+            RegionEnder::CollectingCall,
+        ],
+        "the argument closure is allocated before the parent call executes"
+    );
+}
+
+#[test]
+fn loop_enders_follow_body_then_update_order() {
+    let body_call = Stmt::Expr(call(vec![]));
+    let update_alloc = Expr::Array(vec![]);
+    let for_loop = vec![Stmt::For {
+        init: None,
+        condition: None,
+        update: Some(update_alloc.clone()),
+        body: vec![body_call.clone()],
+    }];
+    assert_eq!(
+        enders(&for_loop),
+        vec![
+            RegionEnder::CollectingCall,
+            RegionEnder::AllocatingOperation,
+            RegionEnder::BackEdgePoll,
+        ]
+    );
+
+    let do_while = vec![Stmt::DoWhile {
+        body: vec![body_call],
+        condition: update_alloc,
+    }];
+    assert_eq!(
+        enders(&do_while),
+        vec![
+            RegionEnder::CollectingCall,
+            RegionEnder::AllocatingOperation,
+            RegionEnder::BackEdgePoll,
+        ]
+    );
 }
 
 #[test]
@@ -694,7 +800,7 @@ fn inventory() -> Vec<TableRow> {
             unwind_safe_by: "same double lock as class_field_loop_facts",
         },
         TableRow {
-            table: "packed_receiver_box_slots",
+            table: "receiver_descriptors",
             claim: ReceiverClaim::Address,
             boundary: FactBoundary::PollRefresh,
             excludes_try: true,
