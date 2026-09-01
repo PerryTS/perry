@@ -583,7 +583,8 @@ pub extern "C" fn js_process_argv() -> *mut ArrayHeader {
     use crate::array::{js_array_alloc, js_array_push_f64};
     use crate::value::js_nanbox_string;
 
-    let args: Vec<String> = std::env::args().collect();
+    // #9401: never `std::env::args()` — it panics on a non-UTF-8 argument.
+    let args: Vec<String> = crate::process::process_args_lossy().collect();
     // Match Node.js behavior: argv[0] = binary path (like node path),
     // argv[1] = source entry path (like script path), argv[2+] = user args.
     // Node.js: ["/usr/bin/node", "/path/to/script.js", ...user_args]

@@ -313,7 +313,7 @@ fn process_report_user_limits_object() -> f64 {
 }
 
 fn process_report_command_line_array() -> f64 {
-    let args: Vec<String> = std::env::args().collect();
+    let args: Vec<String> = super::process_args_lossy().collect();
     let items = if args.is_empty() {
         vec![process_argv0_string()]
     } else {
@@ -344,7 +344,7 @@ fn process_report_unix_time_ms() -> f64 {
 
 #[cfg(feature = "diagnostics")]
 fn process_report_json_string(trigger: &str, filename: Option<&str>) -> String {
-    let args: Vec<String> = std::env::args().collect();
+    let args: Vec<String> = super::process_args_lossy().collect();
     let command_line = if args.is_empty() {
         vec![process_argv0_string()]
     } else {

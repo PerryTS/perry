@@ -326,7 +326,11 @@ impl UpdatePolicy {
 /// because the policy is resolved before dispatch and this is the one input
 /// that has to be right on the very first line of output.
 fn structured_output_selected() -> bool {
-    let mut args = std::env::args().skip(1);
+    // #9401: a non-UTF-8 argument must not abort the CLI before it can
+    // report anything.
+    let mut args = std::env::args_os()
+        .skip(1)
+        .map(|arg| arg.to_string_lossy().into_owned());
     while let Some(arg) = args.next() {
         if let Some(value) = arg.strip_prefix("--format=") {
             return !value.eq_ignore_ascii_case("text");

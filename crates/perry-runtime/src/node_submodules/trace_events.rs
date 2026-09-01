@@ -542,7 +542,9 @@ pub(crate) fn init_trace_events_runtime() {
         if slot.borrow().initialized {
             return;
         }
-        let mut output = trace_options_from_args(std::env::args());
+        // #9401: this runs from `js_gc_init`, so a raw `std::env::args()`
+        // aborted the process on a non-UTF-8 argument before any JS ran.
+        let mut output = trace_options_from_args(crate::process::process_args_lossy());
         seed_legacy_categories(&mut output);
         output.initialized = true;
         TRACE_ENABLED_COUNTS.with(|counts| {
