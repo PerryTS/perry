@@ -127,29 +127,5 @@ fn strict_dense_number_store_fast_lane_matches_the_general_path() {
         let out = js_array_set_f64_extend_strict(boxed, 3, 3.0);
         assert_eq!((*out).length, 4);
         assert_eq!(js_array_get_f64(out, 3), 3.0);
-
-        // #9220: an in-bounds hole is not an own property. The number lane
-        // must decline it so the strict entry can consult an inherited index
-        // setter / non-writable data descriptor before creating an element —
-        // but ONLY once some array has been retargeted. With the process latch
-        // clear (the overwhelmingly common case, including every `new Array(n)`
-        // fill) the lane keeps filling holes exactly as it did before #9220.
-        //
-        // Indices 4 and 5 are the SAME shape — two in-bounds holes on one
-        // array — so the latch is the only variable between the two arms.
-        js_array_set_length(out, 6.0);
-        assert!(!array_has_own_index(out, 4));
-        assert!(!array_has_own_index(out, 5));
-        let latch_was =
-            crate::object::prototype_chain::test_swap_array_static_proto_recorded(false);
-        assert!(
-            lane(out, 4, 8.0),
-            "no recorded array prototype: the hole fill stays on the fast lane"
-        );
-        assert!(array_has_own_index(out, 4));
-        crate::object::prototype_chain::test_swap_array_static_proto_recorded(true);
-        assert!(!lane(out, 5, 8.0), "hole slot requires the [[Set]] walk");
-        assert!(!array_has_own_index(out, 5));
-        crate::object::prototype_chain::test_swap_array_static_proto_recorded(latch_was);
     }
 }

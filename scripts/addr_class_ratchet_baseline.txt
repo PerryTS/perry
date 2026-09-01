@@ -32,9 +32,8 @@ handle-floor | crates/perry-runtime/src/array/concat_reverse.rs | 1
 handle-floor | crates/perry-runtime/src/array/flat_clone.rs | 4
 handle-floor | crates/perry-runtime/src/array/generic.rs | 4
 handle-floor | crates/perry-runtime/src/array/header.rs | 3
-handle-floor | crates/perry-runtime/src/array/indexing.rs | 2
+handle-floor | crates/perry-runtime/src/array/indexing.rs | 3
 handle-floor | crates/perry-runtime/src/array/indexing_keyed.rs | 1
-handle-floor | crates/perry-runtime/src/array/indexing_proto_chain.rs | 1
 handle-floor | crates/perry-runtime/src/array/iter_object.rs | 1
 handle-floor | crates/perry-runtime/src/array/iterator.rs | 2
 handle-floor | crates/perry-runtime/src/array/push_pop.rs | 1
