@@ -45,9 +45,10 @@ use perry_hir::{Expr, Module, ModuleInitKind, Stmt};
 
 mod builtin_ctor;
 mod call_callee;
+mod dispatch_receiver;
 mod operands;
 
-fn entry_opts() -> CompileOptions {
+pub(crate) fn entry_opts() -> CompileOptions {
     CompileOptions {
         target: None,
         is_entry_module: true,

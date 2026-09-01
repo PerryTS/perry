@@ -7,7 +7,7 @@ use super::*;
 use anyhow::Result;
 use perry_hir::Expr;
 
-use crate::expr::{lower_expr, nanbox_pointer_inline, unbox_to_i64, FnCtx};
+use crate::expr::{nanbox_pointer_inline, unbox_to_i64, FnCtx};
 use crate::nanbox::double_literal;
 use crate::type_analysis::receiver_class_name;
 use crate::types::{DOUBLE, I1, I32, I64};
@@ -923,10 +923,29 @@ pub(crate) fn try_lower_instance_method_call(
                 }
             }
 
-            let recv_box = lower_expr(ctx, object)?;
-            let mut fallback_user_args: Vec<String> = Vec::with_capacity(args.len());
+            // #9417, same defect as the dynamic-dispatch site above and for the
+            // same reason: the receiver is lowered first (JS evaluation order)
+            // and consumed by the override probe, the guarded direct calls and
+            // every arm of the class-id tower — all of it below the lowering of
+            // the argument expressions, any of which can drive an evacuating
+            // young-gen minor. `build_direct_method_args` additionally allocates
+            // a rest array between the re-read and the call.
+            //
+            // One `RootedGroup` over [receiver, ...args], re-read below the
+            // group. Every later use is a use of a register loaded out of a
+            // rooted slot, so `root_reload` re-derives the ones a collection
+            // point can reach — which is what makes a single re-read enough for
+            // a block with nine exits.
+            let mut roots = crate::rooting::open_rooted_group(1 + args.len());
+            let recv_idx = roots.lower(ctx, object, true)?;
+            let mut arg_idxs: Vec<usize> = Vec::with_capacity(args.len());
             for a in args {
-                fallback_user_args.push(lower_expr(ctx, a)?);
+                arg_idxs.push(roots.lower(ctx, a, true)?);
+            }
+            let recv_box = roots.reread(ctx, recv_idx)?;
+            let mut fallback_user_args: Vec<String> = Vec::with_capacity(args.len());
+            for &idx in &arg_idxs {
+                fallback_user_args.push(roots.reread(ctx, idx)?);
             }
             // #5391 path 4 (virtual tower): eligibility to collapse the
             // per-overriding-subclass class-id switch to a single by-name
@@ -1013,14 +1032,16 @@ pub(crate) fn try_lower_instance_method_call(
             if (fallback_has_rest || override_meta.iter().any(|meta| meta.0))
                 && can_collapse_virtual
             {
-                return Ok(Some(emit_collapsed_instance_dispatch(
+                let collapsed = emit_collapsed_instance_dispatch(
                     ctx,
                     &recv_box,
                     property,
                     &fallback_user_args,
                     call_byte_offset,
                     /* with_override_probe */ false,
-                )?));
+                )?;
+                roots.release(ctx);
+                return Ok(Some(collapsed));
             }
             let undefined_lit = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
             let direct_args = build_direct_method_args(
@@ -1351,6 +1372,7 @@ pub(crate) fn try_lower_instance_method_call(
                         } else {
                             ctx.block().call(DOUBLE, &target, &fast_args)
                         };
+                        roots.release(ctx);
                         return Ok(Some(value));
                     }
                 }
@@ -1400,7 +1422,9 @@ pub(crate) fn try_lower_instance_method_call(
                     if fallback_arguments_length_only {
                         let target =
                             crate::codegen::arguments::arguments_length_method_name(&fallback_fn);
-                        return Ok(Some(ctx.block().call(DOUBLE, &target, &arg_slices)));
+                        let value = ctx.block().call(DOUBLE, &target, &arg_slices);
+                        roots.release(ctx);
+                        return Ok(Some(value));
                     }
                     // Representation-selection Phase 5a: the proven-`this`
                     // clone, when one was emitted. Hoisted above the
@@ -1464,6 +1488,7 @@ pub(crate) fn try_lower_instance_method_call(
                             &fallback_fn,
                             &argument_specialized,
                         );
+                        roots.release(ctx);
                         return Ok(Some(argument_specialized));
                     }
                     // Prefer the typed-receiver clone (bare gep+load field
@@ -1532,6 +1557,7 @@ pub(crate) fn try_lower_instance_method_call(
                             &fallback_fn,
                             &merged,
                         );
+                        roots.release(ctx);
                         return Ok(Some(merged));
                     }
                     // Representation-selection Phase 5a: route to the
@@ -1546,6 +1572,7 @@ pub(crate) fn try_lower_instance_method_call(
                         &fallback_fn,
                         &direct,
                     );
+                    roots.release(ctx);
                     return Ok(Some(direct));
                 }
                 let arguments_length_direct_fn = fallback_arguments_length_only
@@ -1593,6 +1620,7 @@ pub(crate) fn try_lower_instance_method_call(
                     shape_only_guard,
                     &subclass_arms,
                 ) {
+                    roots.release(ctx);
                     return Ok(Some(guarded));
                 }
             }
@@ -1634,7 +1662,7 @@ pub(crate) fn try_lower_instance_method_call(
                 // array as one positional argument and break a native override
                 // such as `super.emit(event, ...args)` forwarding to
                 // EventEmitter (#620 / rest-spread-to-native-override).
-                return Ok(Some(emit_own_method_override_check(
+                let checked = emit_own_method_override_check(
                     ctx,
                     &recv_box,
                     property,
@@ -1642,7 +1670,9 @@ pub(crate) fn try_lower_instance_method_call(
                     &arg_slices,
                     &recv_box,
                     &fallback_user_args,
-                )));
+                );
+                roots.release(ctx);
+                return Ok(Some(checked));
             }
 
             // #5391 path 4 (virtual tower): collapse the per-overriding-subclass
@@ -1654,14 +1684,16 @@ pub(crate) fn try_lower_instance_method_call(
             // behavior-identical. The rest-bearing case already collapsed above
             // (before the rest bundling); this handles the non-rest case.
             if can_collapse_virtual {
-                return Ok(Some(emit_collapsed_instance_dispatch(
+                let collapsed = emit_collapsed_instance_dispatch(
                     ctx,
                     &recv_box,
                     property,
                     &fallback_user_args,
                     call_byte_offset,
                     /* with_override_probe */ false,
-                )?));
+                )?;
+                roots.release(ctx);
+                return Ok(Some(collapsed));
             }
 
             // Step 4: virtual dispatch via class_id switch.
@@ -1782,7 +1814,12 @@ pub(crate) fn try_lower_instance_method_call(
                 .iter()
                 .map(|(v, l)| (v.as_str(), l.as_str()))
                 .collect();
-            return Ok(Some(ctx.block().phi(DOUBLE, &phi_args)));
+            let v_tower = ctx.block().phi(DOUBLE, &phi_args);
+            // The release post-dominates every case block and the default arm,
+            // which is why the group is `open_rooted_group`: releasing inside an
+            // arm would cut slots a sibling arm still reads.
+            roots.release(ctx);
+            return Ok(Some(v_tower));
         }
     }
     Ok(None)
