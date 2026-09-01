@@ -2598,7 +2598,14 @@ pub extern "C" fn js_typed_feedback_array_index_set_fallback_boxed(
             (raw_addr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         match (*gc_header).obj_type {
             crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY => {
-                let new_arr = crate::array::js_array_set_index_or_string(
+                // #9220: this is the cold continuation of a source-level
+                // `arr[index] = value` after the inline guard rejects a
+                // retargeted/prototype-sensitive array. It must preserve the
+                // assignment's strict Set semantics; the non-strict helper
+                // bypassed `js_array_set_f64_extend_strict` entirely, so an
+                // inherited setter/non-writable index was silently replaced
+                // by a new own element.
+                let new_arr = crate::array::js_array_set_index_or_string_strict(
                     raw_addr as *mut ArrayHeader,
                     index,
                     value,
