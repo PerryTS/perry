@@ -961,3 +961,87 @@ mod concat_chain_no_collect {
         }
     }
 }
+
+/// The short-concat memo: `"prefix" + smallint` results are content-addressed,
+/// so two evaluations producing the same bytes share one string object.
+///
+/// This asserts OBJECT IDENTITY, not equality. Equality would pass whether or
+/// not the memo fires, which would make it a test that cannot fail — the whole
+/// point is proving the allocation was skipped.
+#[test]
+fn concat_memo_returns_one_object_for_equal_results() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    crate::string::concat::test_clear_concat_memo();
+
+    let prefix = crate::string::js_string_from_bytes(b"field_".as_ptr(), 6);
+    let first = crate::string::js_string_concat_value(prefix, 7.0);
+    // A DIFFERENT prefix object with the same bytes must still reach the entry:
+    // the memo is keyed on result content, not on operand identity.
+    let other_prefix = crate::string::js_string_from_bytes(b"field_".as_ptr(), 6);
+    assert_ne!(prefix as usize, other_prefix as usize);
+    let second = crate::string::js_string_concat_value(other_prefix, 7.0);
+
+    assert_eq!(
+        first as usize, second as usize,
+        "equal concat results must share one memoized string"
+    );
+    unsafe {
+        assert_eq!((*first).byte_len, 7);
+        // Shared, so the in-place `+=` append can never mutate it under a
+        // second holder — the property that makes sharing sound at all.
+        assert_eq!((*first).refcount, 0);
+        let bytes = std::slice::from_raw_parts(crate::string::string_data(first), 7);
+        assert_eq!(bytes, b"field_7");
+    }
+}
+
+/// Distinct results must not alias, including across the memo's hash: a
+/// collision has to degrade to a miss, never to a wrong string.
+#[test]
+fn concat_memo_never_aliases_distinct_results() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    crate::string::concat::test_clear_concat_memo();
+
+    let prefix = crate::string::js_string_from_bytes(b"field_".as_ptr(), 6);
+    let mut seen: Vec<(usize, String)> = Vec::new();
+    for n in 0..40u32 {
+        let s = crate::string::js_string_concat_value(prefix, n as f64);
+        let text = unsafe {
+            let b =
+                std::slice::from_raw_parts(crate::string::string_data(s), (*s).byte_len as usize);
+            String::from_utf8_lossy(b).into_owned()
+        };
+        assert_eq!(text, format!("field_{n}"));
+        for (other_ptr, other_text) in &seen {
+            if *other_text != text {
+                assert_ne!(
+                    *other_ptr, s as usize,
+                    "distinct results {other_text} and {text} must not share an object"
+                );
+            }
+        }
+        seen.push((s as usize, text));
+    }
+}
+
+/// A non-ASCII prefix is excluded: its `utf16_len` differs from `byte_len`, so
+/// a memoized result would carry the wrong `.length`.
+#[test]
+fn concat_memo_declines_non_ascii_prefixes() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    crate::string::concat::test_clear_concat_memo();
+
+    let prefix = crate::string::js_string_from_bytes("é_".as_bytes().as_ptr(), 3);
+    let a = crate::string::js_string_concat_value(prefix, 1.0);
+    let b = crate::string::js_string_concat_value(prefix, 1.0);
+    assert_ne!(
+        a as usize, b as usize,
+        "a non-ASCII prefix must not be memoized"
+    );
+    unsafe {
+        // "é_1" is 4 bytes but 3 UTF-16 units; the memo path would have
+        // asserted byte_len == utf16_len.
+        assert_eq!((*a).byte_len, 4);
+        assert_eq!((*a).utf16_len, 3);
+    }
+}

@@ -344,6 +344,14 @@ fn uint8array_probe_rejects_an_out_of_window_address_without_touching_the_regist
 /// first half able to fail.
 #[test]
 fn symbol_probe_rejects_a_filtered_address_without_touching_the_registry() {
+    // `RegistryAddrFilter` is a Bloom filter, so "this one address is
+    // rejected" depends on which symbols every EARLIER test in the binary
+    // happened to register — three bits set by unrelated addresses are enough
+    // to admit `FAR_OUTSIDE_ANY_WINDOW` and fail this assertion for no reason
+    // of its own. Start from an empty filter (taken before the allocation
+    // below, so the symbol this test registers is still admitted) and the
+    // rejection becomes a property of the filter rather than of test order.
+    let _range = crate::symbol::SymbolAddrRangeGuard::reset();
     let sym = unsafe { crate::symbol::alloc_symbol(std::ptr::null_mut(), false) } as usize;
     assert!(sym != 0, "test premise: the symbol allocated");
 

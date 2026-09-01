@@ -1017,6 +1017,7 @@ pub fn gc_init() {
     // the thread-local slot is the only place the new address can be recorded.
     reg_scanner!(crate::iter_result::scan_iter_result_keys_roots_mut);
     reg_scanner!(small_int_cache_mutable_root_scanner);
+    reg_scanner!(concat_memo_mutable_root_scanner);
     reg_scanner!(crate::builtins::scan_console_log_singleton_roots_mut);
     reg_scanner!(crate::builtins::scan_structured_clone_memo_roots_mut);
     // #8282/#8294: process EventEmitter listener closures live as raw
