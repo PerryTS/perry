@@ -91,7 +91,7 @@ pub(crate) use number_format::{
     number_format_bound_to_parts_thunk, number_format_format_getter_thunk,
     number_format_range_thunk, number_format_range_to_parts_thunk,
     number_format_resolved_options_thunk, number_format_to_parts_thunk, number_parts_from_resolved,
-    parts_to_js_array, this_intl_object,
+    number_to_locale_string, parts_to_js_array, this_intl_object,
 };
 pub(crate) use number_format_options::configure_number_format;
 pub(crate) use segmenter::{

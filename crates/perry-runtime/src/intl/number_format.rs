@@ -1183,6 +1183,26 @@ fn bigint_number_parts_exact(
 /// `Intl.NumberFormat.prototype.format` uses (`nf_coerce_number`), so
 /// `toLocaleString` stays self-consistent with `format()` there too, even
 /// where both are lossy for BigInts past 2^53.
+/// `Number.prototype.toLocaleString(locales, options)` (#9414).
+///
+/// ECMA-402 §Number.prototype.toLocaleString is literally "construct an
+/// `Intl.NumberFormat` with exactly these arguments, then FormatNumeric the
+/// receiver with it", so this is the same `make_instance` +
+/// `format_number_instance` pair `bigint_to_locale_string` above uses rather
+/// than a second formatting implementation. A bad locale tag / option value
+/// therefore throws the same `RangeError` the constructor would.
+///
+/// There is no formatter cache: every call builds one instance, exactly as the
+/// spec describes. The zero-argument call never reaches here — codegen folds it
+/// to the inline default-locale grouping helper — so the construction cost is
+/// paid only by calls that actually asked for a locale or options.
+pub(crate) fn number_to_locale_string(value: f64, locales: f64, options: f64) -> *mut StringHeader {
+    let nf_obj_value = make_instance(std::ptr::null(), KIND_NUMBER, locales, options);
+    let nf_obj = object_ptr_from_value(nf_obj_value).expect("make_instance returns a valid object");
+    let out = format_number_instance(nf_obj, nf_coerce_number(value));
+    js_string_from_bytes(out.as_ptr(), out.len() as u32)
+}
+
 pub(crate) fn bigint_to_locale_string(value: f64, locales: f64, options: f64) -> *mut StringHeader {
     let ptr = JSValue::from_bits(value.to_bits()).as_bigint_ptr();
     let negative = crate::bigint::js_bigint_is_negative(ptr) != 0;

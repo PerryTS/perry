@@ -497,7 +497,29 @@ pub(super) unsafe fn dispatch_common(
         // lookup further down `js_native_call_method`, which resolves the
         // real installed method (and honors a user override, same as every
         // other primitive-wrapper method).
-        "toLocaleString" if !jsval.is_bigint() => {
+        //
+        // #9414: a NUMBER receiver carrying an actual `(locales, options)`
+        // argument needs the same escape. `js_object_default_to_locale_string`
+        // takes no arguments AT ALL, so this arm silently dropped every locale
+        // and every option a number was formatted with —
+        // `(1234.5).toLocaleString("de-DE")` printed the en-US default
+        // `1,234.5`, and `{ style: "percent" }` / `{ notation: "compact" }`
+        // never reached a formatter. That is also what made
+        // `[0.5, 0.25].toLocaleString("en-US", { style: "percent" })` wrong:
+        // `Array.prototype.toLocaleString` forwards its arguments to each
+        // element correctly, and they died one level down, here.
+        //
+        // Falling through resolves the installed
+        // `Number.prototype.toLocaleString` thunk with its arguments intact
+        // (and honors a user override of it, like every other primitive-wrapper
+        // method). The ZERO-argument call keeps this direct arm: it is the
+        // form the codegen fast path already answers inline, and it must not
+        // start paying for a prototype walk plus an `Intl.NumberFormat`
+        // construction.
+        "toLocaleString"
+            if !jsval.is_bigint()
+                && !(jsval.is_number() && args_len > 0 && !args_ptr.is_null()) =>
+        {
             return Some(js_object_default_to_locale_string(object));
         }
 

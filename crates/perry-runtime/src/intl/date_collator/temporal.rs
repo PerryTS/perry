@@ -222,14 +222,59 @@ pub(crate) fn temporal_locale_string(
     let (year, month, day, hour, minute, second) = crate::date::timestamp_to_components(secs);
     let locale = crate::intl::locale_or_default(locale_arg);
 
+    // #9414: `dateStyle` / `timeStyle` used to be rendered here by the bespoke
+    // `format_date_style` / `format_time_style` pair, which hard-codes the
+    // en-US layout and the English month/weekday tables — so
+    // `d.toLocaleDateString("de-DE", { dateStyle: "long" })` printed
+    // "September 1, 2026". `Intl.DateTimeFormat.prototype.format`
+    // (`format_ms_with_dtf_obj`) had already been moved onto icu4x's CLDR
+    // patterns for exactly these options; this function is the OTHER spelling
+    // of the same operation and had been left behind, which is why the two
+    // disagreed on the same instant with the same options. Route the style
+    // arms through the same `icu_style` and keep the bespoke pair as the
+    // fallback for the combinations icu declines — notably a `long`/`full`
+    // timeStyle, which carries a localized time-zone name.
+    //
+    // The Temporal partials keep their own layout: `PlainYearMonth` /
+    // `PlainMonthDay` have dedicated field-dropping formatters below the
+    // style arms, and `Instant` / `ZonedDateTime` render a zone that icu's
+    // zone-less field sets cannot reproduce.
+    let use_icu = matches!(
+        ctx,
+        TemporalLocaleCtx::PlainDate
+            | TemporalLocaleCtx::PlainDateTime
+            | TemporalLocaleCtx::PlainTime
+    );
+    let icu = |ds: Option<&str>, ts: Option<&str>| -> Option<String> {
+        icu_style(
+            use_icu,
+            &locale,
+            year,
+            month,
+            day,
+            hour,
+            minute,
+            second,
+            ds,
+            ts,
+            hour_cycle.as_deref(),
+            hour12,
+        )
+    };
+
     let result = match (eff_date_style, eff_time_style) {
-        (Some(ds), Some(ts)) => format!(
-            "{}, {}",
-            format_date_style(year, month, day, secs, ds),
-            format_time_style(hour, minute, second, ts, use_24h),
-        ),
-        (Some(ds), None) => format_date_style(year, month, day, secs, ds),
-        (None, Some(ts)) => format_time_style(hour, minute, second, ts, use_24h),
+        (Some(ds), Some(ts)) => icu(Some(ds), Some(ts)).unwrap_or_else(|| {
+            format!(
+                "{}, {}",
+                format_date_style(year, month, day, secs, ds),
+                format_time_style(hour, minute, second, ts, use_24h),
+            )
+        }),
+        (Some(ds), None) => {
+            icu(Some(ds), None).unwrap_or_else(|| format_date_style(year, month, day, secs, ds))
+        }
+        (None, Some(ts)) => icu(None, Some(ts))
+            .unwrap_or_else(|| format_time_style(hour, minute, second, ts, use_24h)),
         (None, None) => format_components(
             &locale,
             year,
