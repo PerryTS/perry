@@ -834,6 +834,7 @@ pub use chdir::js_process_chdir;
 // Signal normalization is shared with `util.convertProcessSignalToExitCode`.
 mod signal;
 pub use signal::{js_process_kill, js_util_convert_process_signal_to_exit_code};
+pub(crate) use signal::ignore_sigpipe_at_startup;
 
 #[path = "os_process_streams.rs"]
 mod process_streams;
