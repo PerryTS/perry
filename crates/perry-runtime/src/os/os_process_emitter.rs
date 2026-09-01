@@ -486,8 +486,7 @@ pub extern "C" fn js_process_emit_before_exit_pending() {
 // epilogue hooks.
 #[cfg(feature = "keepalive-anchors")]
 #[used]
-static KEEP_PROCESS_EMIT_BEFORE_EXIT_PENDING: extern "C" fn() =
-    js_process_emit_before_exit_pending;
+static KEEP_PROCESS_EMIT_BEFORE_EXIT_PENDING: extern "C" fn() = js_process_emit_before_exit_pending;
 
 crate::perry_thread_local! {
     /// Node emits `exit` at most once per process, whichever way the process

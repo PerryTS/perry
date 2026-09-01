@@ -214,7 +214,10 @@ fn executable_exit_block_emits_the_process_exit_event() {
 
     // Node order: beforeExit (and the loop turn it may schedule) strictly
     // before exit.
-    assert!(before_exit < pump, "beforeExit must precede its drain\n{exit_block}");
+    assert!(
+        before_exit < pump,
+        "beforeExit must precede its drain\n{exit_block}"
+    );
     assert!(
         pump < exit_event,
         "the exit event must come after beforeExit and its drain\n{exit_block}"

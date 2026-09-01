@@ -339,6 +339,12 @@
       "why": "Megamorphic property-read stub cache, the read twin of WRITE_STUB: 2-way ways of (shape_token, key_bits, slot) plain u64s. The token is a shape id and the slot an index; key_bits are content-derived by construction, because read_stub_key_bits returns short_ascii_sso_bits(key) — the key's characters packed inline — and yields None for any key that would otherwise be stored under a pointer. No way holds a heap address, so nothing here keeps an object alive, and a stale entry cannot hit: receiver_shape_token returns None for a receiver with no live shape, and the token identifies the exact key set and order, so a shape change yields a different token."
     },
     {
+      "file": "crates/perry-runtime/src/os/os_process_emitter.rs",
+      "name": "PROCESS_EXIT_EVENT_EMITTED",
+      "verdict": "not_a_gc_pointer",
+      "why": "#9403 re-entrancy latch: a bool recording that the process 'exit' event has already been emitted, so a listener that itself calls process.exit() or throws cannot re-run the listeners that already ran (node skips straight out instead). Holds a flag, never a JSValue or heap pointer."
+    },
+    {
       "file": "crates/perry-runtime/src/os/signal.rs",
       "name": "SIGNAL_ASYNC_IDS",
       "verdict": "not_a_gc_pointer",

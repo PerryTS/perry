@@ -834,8 +834,8 @@ pub use chdir::js_process_chdir;
 
 // Signal normalization is shared with `util.convertProcessSignalToExitCode`.
 mod signal;
-pub use signal::{js_process_kill, js_util_convert_process_signal_to_exit_code};
 pub(crate) use signal::ignore_sigpipe_at_startup;
+pub use signal::{js_process_kill, js_util_convert_process_signal_to_exit_code};
 
 #[path = "os_process_streams.rs"]
 mod process_streams;
@@ -1397,10 +1397,8 @@ mod tests {
         let status = crate::process::run_process_exit_sequence(None);
         assert_eq!(status, 0, "an unset exitCode resolves to status 0");
         assert!(
-            crate::value::JSValue::from_bits(
-                crate::process::js_process_exit_code_get().to_bits()
-            )
-            .is_undefined(),
+            crate::value::JSValue::from_bits(crate::process::js_process_exit_code_get().to_bits())
+                .is_undefined(),
             "the natural-drain arm must not publish a code over `undefined`"
         );
 
