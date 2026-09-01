@@ -31,14 +31,46 @@ RUN apk add --no-cache \
   && /usr/lib/llvm22/bin/llvm-config --version | grep -q '^22\.' \
      || { echo "alpine llvm is not 22.x ($(/usr/lib/llvm22/bin/llvm-config --version 2>&1))" >&2; exit 1; }
 
-# llvm-sys links LLVM statically, so every library `llvm-config --system-libs`
-# names must exist as a `.a` here. Alpine's `-dev` packages carry only the
-# shared object, so a missing `-static` package surfaces ~20 minutes into the
-# cargo build as `could not find native static library 'z'` rather than at
-# image-build time. Assert it up front instead: resolve each `-lNAME` to a
-# `libNAME.a`, skipping the names musl folds into libc.a (which ships stubs,
-# not standalone archives).
-RUN set -eu;     libdirs="$(/usr/lib/llvm22/bin/llvm-config --libdir) /usr/lib /usr/lib/gcc";     missing="";     for flag in $(/usr/lib/llvm22/bin/llvm-config --system-libs); do       name="${flag#-l}";       [ "$name" != "$flag" ] || continue;       case " c m rt dl pthread util xnet " in *" $name "*) continue ;; esac;       found="";       for d in $libdirs; do         [ -e "$d/lib$name.a" ] && { found=1; break; };       done;       [ -n "$found" ] || missing="$missing $name";     done;     if [ -n "$missing" ]; then       echo "missing static system libs for llvm-sys:$missing" >&2;       echo "(llvm-config --system-libs: $(/usr/lib/llvm22/bin/llvm-config --system-libs))" >&2;       exit 1;     fi;     echo "static system libs OK: $(/usr/lib/llvm22/bin/llvm-config --system-libs)"
+# llvm-sys links LLVM statically, so the static system libs it pulls in must
+# exist here as `.a`. Alpine's `-dev` packages carry only the shared object, so
+# a missing `-static` package surfaces ~20 minutes into the cargo build as
+# `could not find native static library 'z'` rather than at image-build time.
+#
+# `llvm-config --system-libs` is EMPTY on this image (Alpine builds LLVM so it
+# reports no system libs), so iterating it alone is a vacuous check that passes
+# having verified nothing -- llvm-sys still demands `z`, which is what broke the
+# musl legs in the first place. So: verify an explicit REQUIRED floor, and union
+# it with whatever llvm-config does report.
+RUN set -eu; \
+    REQUIRED="z zstd"; \
+    libdirs="$(/usr/lib/llvm22/bin/llvm-config --libdir) /usr/lib /usr/lib/gcc"; \
+    reported="$(/usr/lib/llvm22/bin/llvm-config --system-libs || true)"; \
+    names="$REQUIRED"; \
+    for flag in $reported; do \
+      name="${flag#-l}"; \
+      [ "$name" != "$flag" ] || continue; \
+      case " c m rt dl pthread util xnet " in *" $name "*) continue ;; esac; \
+      names="$names $name"; \
+    done; \
+    checked=0; missing=""; \
+    for name in $names; do \
+      found=""; \
+      for d in $libdirs; do \
+        if [ -e "$d/lib$name.a" ]; then found=1; break; fi; \
+      done; \
+      checked=$((checked + 1)); \
+      [ -n "$found" ] || missing="$missing $name"; \
+    done; \
+    if [ -n "$missing" ]; then \
+      echo "missing static system libs for llvm-sys:$missing" >&2; \
+      echo "(llvm-config --system-libs: '$reported')" >&2; \
+      exit 1; \
+    fi; \
+    if [ "$checked" -lt 2 ]; then \
+      echo "static-libs check verified only $checked lib(s) -- it is not testing anything" >&2; \
+      exit 1; \
+    fi; \
+    echo "static system libs OK: checked $checked ($names)"
 
 ENV LLVM_SYS_221_PREFIX=/usr/lib/llvm22
 ENV RUSTUP_HOME=/opt/rustup
