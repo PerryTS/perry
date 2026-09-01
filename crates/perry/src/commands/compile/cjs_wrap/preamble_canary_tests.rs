@@ -309,8 +309,7 @@ fn a_hand_written_es_module_is_not_recognised_as_cjs_wrapped() {
 const require2 = createRequire(import.meta.url);
 export const value = 1;
 "#;
-    let ast = perry_parser::parse_typescript(ESM_FIXTURE, "esm.ts")
-        .expect("fixture must parse");
+    let ast = perry_parser::parse_typescript(ESM_FIXTURE, "esm.ts").expect("fixture must parse");
     let hir = perry_hir::lower_module(&ast, "esm", "/tmp/perry-canary/esm.ts")
         .expect("fixture must lower");
     assert!(

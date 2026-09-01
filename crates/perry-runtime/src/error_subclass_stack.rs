@@ -42,10 +42,10 @@ unsafe fn error_object_field_string(
 /// when `name` is empty. Absent `name` defaults to `"Error"`, matching the
 /// value a subclass inherits from `Error.prototype`.
 unsafe fn error_subclass_stack_head(receiver: f64) -> String {
-    if crate::value::js_nanbox_get_pointer(receiver) == 0
-        || !crate::object::is_valid_obj_ptr(
-            crate::value::js_nanbox_get_pointer(receiver) as *const u8
-        )
+    let receiver_ptr = crate::value::js_nanbox_get_pointer(receiver);
+    if receiver_ptr == 0
+        || !crate::value::addr_class::is_above_handle_band(receiver_ptr as usize)
+        || !crate::object::is_valid_obj_ptr(receiver_ptr as *const u8)
     {
         return "Error".to_string();
     }
@@ -89,7 +89,10 @@ extern "C" fn error_subclass_stack_getter(closure: *const crate::closure::Closur
         let frame = {
             let bits = crate::closure::js_closure_get_capture_bits(closure, 0);
             let ptr = (bits & crate::value::POINTER_MASK) as *const StringHeader;
-            if ptr.is_null() || !crate::object::is_valid_obj_ptr(ptr as *const u8) {
+            if ptr.is_null()
+                || !crate::value::addr_class::is_above_handle_band(ptr as usize)
+                || !crate::object::is_valid_obj_ptr(ptr as *const u8)
+            {
                 current_stack_frame()
             } else {
                 read_string_header_owned(ptr)
@@ -119,7 +122,10 @@ extern "C" fn error_subclass_stack_setter(
 ) -> f64 {
     let receiver = crate::object::js_implicit_this_get();
     let ptr = crate::value::js_nanbox_get_pointer(receiver);
-    if ptr != 0 && crate::object::is_valid_obj_ptr(ptr as *const u8) {
+    if ptr != 0
+        && crate::value::addr_class::is_above_handle_band(ptr as usize)
+        && crate::object::is_valid_obj_ptr(ptr as *const u8)
+    {
         // The key allocation can collect, so both the receiver and the value
         // are re-read through handles after it.
         let scope = crate::gc::RuntimeHandleScope::new();
@@ -129,13 +135,38 @@ extern "C" fn error_subclass_stack_setter(
         let target = crate::value::js_nanbox_get_pointer(this_handle.get_nanbox_f64())
             as *mut crate::object::ObjectHeader;
         crate::object::clear_accessor_descriptor(target as usize, "stack");
-        let target = crate::value::js_nanbox_get_pointer(this_handle.get_nanbox_f64())
-            as *mut crate::object::ObjectHeader;
-        crate::object::js_object_set_field_by_name_nonenum(
-            target,
-            key_handle.get_raw_const_ptr::<StringHeader>(),
-            value_handle.get_nanbox_f64(),
-        );
+        // The generic field setter can grow property storage or invoke user
+        // code. The accessor's receiver is an ordinary Error-subclass object
+        // and `stack` remains an own key after its descriptor is cleared, so
+        // this route reaches the setter's self-rooting ordinary-object tail.
+        // Still, put the whole call inside nested `across_*` windows: only
+        // scoped entry pointers feed it, and both the key and receiver used by
+        // the post-call attribute write are re-read after it returns.
+        let (((), stack_key), receiver) = this_handle.across_nanbox(|| {
+            key_handle.across_const::<StringHeader, _>(|| {
+                key_handle.with_const_ptr::<StringHeader, _>(|key| {
+                    let target = crate::value::js_nanbox_get_pointer(this_handle.get_nanbox_f64())
+                        as *mut crate::object::ObjectHeader;
+                    crate::object::js_object_set_field_by_name(
+                        target,
+                        key,
+                        value_handle.get_nanbox_f64(),
+                    );
+                })
+            })
+        });
+        let target =
+            crate::value::js_nanbox_get_pointer(receiver) as *mut crate::object::ObjectHeader;
+        if !stack_key.is_null()
+            && crate::value::addr_class::is_above_handle_band(target as usize)
+            && crate::object::is_valid_obj_ptr(target as *const u8)
+        {
+            crate::object::set_property_attrs(
+                target as usize,
+                unsafe { read_string_header_owned(stack_key) },
+                crate::object::PropertyAttrs::new(true, false, true),
+            );
+        }
     }
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
@@ -166,7 +197,10 @@ extern "C" fn error_subclass_stack_setter(
 pub extern "C" fn js_error_subclass_capture_stack(this_val: f64) {
     unsafe {
         let ptr = crate::value::js_nanbox_get_pointer(this_val);
-        if ptr == 0 || !crate::object::is_valid_obj_ptr(ptr as *const u8) {
+        if ptr == 0
+            || !crate::value::addr_class::is_above_handle_band(ptr as usize)
+            || !crate::object::is_valid_obj_ptr(ptr as *const u8)
+        {
             return;
         }
         // Every heap value that outlives an allocation below gets a handle:
@@ -180,8 +214,9 @@ pub extern "C" fn js_error_subclass_capture_stack(this_val: f64) {
 
         let target = crate::value::js_nanbox_get_pointer(this_handle.get_nanbox_f64())
             as *mut crate::object::ObjectHeader;
-        let stack_key = key_handle.get_raw_const_ptr::<StringHeader>();
-        if crate::object::object_ops::own_key_present(target, stack_key) {
+        if key_handle.with_const_ptr::<StringHeader, _>(|stack_key| {
+            crate::object::object_ops::own_key_present(target, stack_key)
+        }) {
             return;
         }
 
@@ -216,28 +251,41 @@ pub extern "C" fn js_error_subclass_capture_stack(this_val: f64) {
         // kind mismatch").
         let getter_ptr = crate::value::js_nanbox_get_pointer(getter_handle.get_nanbox_f64())
             as *mut crate::closure::ClosureHeader;
-        crate::closure::js_closure_set_capture_bits(
-            getter_ptr,
-            0,
-            crate::value::js_nanbox_string(
-                frame_handle.get_raw_const_ptr::<StringHeader>() as i64,
-            )
-            .to_bits(),
-        );
+        frame_handle.with_const_ptr::<StringHeader, _>(|frame| {
+            crate::closure::js_closure_set_capture_bits(
+                getter_ptr,
+                0,
+                crate::value::js_nanbox_string(frame as i64).to_bits(),
+            );
+        });
 
         // The key-array append can grow (and therefore allocate), so it runs
         // BEFORE the closure bits and the descriptor-table key — an address
         // recorded ahead of it would be the pre-move one.
-        crate::object::ensure_key_in_keys_array(
-            crate::value::js_nanbox_get_pointer(this_handle.get_nanbox_f64())
-                as *mut crate::object::ObjectHeader,
-            key_handle.get_raw_const_ptr::<StringHeader>(),
-        );
-        let target = crate::value::js_nanbox_get_pointer(this_handle.get_nanbox_f64())
-            as *mut crate::object::ObjectHeader;
+        // `ensure_key_in_keys_array` can allocate, but roots both incoming
+        // pointers at entry. Scope the entry key and re-read it only after the
+        // whole operation; no pre-call receiver pointer survives the closure.
+        let (((), stack_key), receiver) = this_handle.across_nanbox(|| {
+            key_handle.across_const::<StringHeader, _>(|| {
+                key_handle.with_const_ptr::<StringHeader, _>(|key| {
+                    crate::object::ensure_key_in_keys_array(
+                        crate::value::js_nanbox_get_pointer(this_handle.get_nanbox_f64())
+                            as *mut crate::object::ObjectHeader,
+                        key,
+                    );
+                })
+            })
+        });
+        let descriptor_key = if stack_key.is_null() {
+            "stack".to_string()
+        } else {
+            read_string_header_owned(stack_key)
+        };
+        let target =
+            crate::value::js_nanbox_get_pointer(receiver) as *mut crate::object::ObjectHeader;
         crate::object::set_builtin_accessor_descriptor(
             target as usize,
-            "stack".to_string(),
+            descriptor_key,
             crate::object::AccessorDescriptor {
                 get: getter_handle.get_nanbox_f64().to_bits(),
                 set: setter_handle.get_nanbox_f64().to_bits(),
@@ -284,8 +332,7 @@ mod tests {
 
             let scope = crate::gc::RuntimeHandleScope::new();
             let obj = crate::object::js_object_alloc(0, 4);
-            let this_handle =
-                scope.root_nanbox_f64(crate::value::js_nanbox_pointer(obj as i64));
+            let this_handle = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(obj as i64));
 
             let obj_now = || {
                 crate::value::js_nanbox_get_pointer(this_handle.get_nanbox_f64())

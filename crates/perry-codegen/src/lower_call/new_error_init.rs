@@ -60,8 +60,7 @@ pub(super) fn emit_default_error_init(
         let this_handle = blk.and(I64, &this_bits, POINTER_MASK_I64);
         if let Some(msg_val) = lowered_args.first() {
             let key_idx = ctx.strings.intern("message");
-            let key_handle_global =
-                format!("@{}", ctx.strings.entry(key_idx).handle_global);
+            let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
             let blk = ctx.block();
             let key_box = blk.load(DOUBLE, &key_handle_global);
             let key_bits = blk.bitcast_double_to_i64(&key_box);
