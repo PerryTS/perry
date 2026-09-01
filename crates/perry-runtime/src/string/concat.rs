@@ -262,7 +262,7 @@ pub extern "C" fn js_string_concat_box(l_value: f64, r_value: f64) -> f64 {
 const CONCAT_MEMO_SIZE: usize = 512;
 const CONCAT_MEMO_MAX_BYTES: u32 = 12;
 
-thread_local! {
+crate::perry_thread_local! {
     static CONCAT_MEMO: std::cell::UnsafeCell<[*mut StringHeader; CONCAT_MEMO_SIZE]> =
         const { std::cell::UnsafeCell::new([std::ptr::null_mut(); CONCAT_MEMO_SIZE]) };
 }
