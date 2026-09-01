@@ -466,6 +466,34 @@ impl LlBlock {
         r
     }
 
+    /// `fadd reassoc` for ONE instruction, independent of the module's
+    /// `--fast-math` setting (#9363).
+    ///
+    /// Only the caller's proof licenses this: the addends are byte reads
+    /// (magnitude <= 255, or the `undefined`-box NaN out of range) and the
+    /// enclosing loop's trip count is bounded, so every partial sum is either
+    /// an exactly-representable integer far below 2^53 — where f64 addition
+    /// is associative, so ANY grouping is bit-identical — or a NaN, which
+    /// propagates through every grouping alike. That is an exactness argument
+    /// about the value range, not a tolerance argument, which is why it does
+    /// not need `--fast-math` (whose global reassociation is NOT sound for
+    /// arbitrary f64 chains and is correctly off by default).
+    ///
+    /// `contract` is deliberately NOT added: FMA fusion changes rounding of
+    /// multiply/add pairs, which this proof says nothing about.
+    pub fn fadd_reassoc(&mut self, a: &str, b: &str) -> String {
+        let r = self.reg();
+        self.push_inst(crate::inst::LlInst::Bin {
+            dst: r.clone(),
+            op: "fadd",
+            pre: "reassoc ",
+            ty: "double",
+            a: a.to_string(),
+            b: b.to_string(),
+        });
+        r
+    }
+
     pub fn fsub(&mut self, a: &str, b: &str) -> String {
         let r = self.reg();
         self.push_inst(crate::inst::LlInst::Bin {

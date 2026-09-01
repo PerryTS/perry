@@ -861,6 +861,8 @@ pub(super) fn compile_closure(
         classes,
         &cross_module.compile_time_constants,
         &cross_module.module_dispatch,
+        // #9363: a closure body reads the same module-scope views.
+        &cross_module.module_global_proven_types,
     );
     if !versioned_loop_callback {
         if let Some(callback_shapes) = cross_module.array_callback_shapes.get(&func_id) {

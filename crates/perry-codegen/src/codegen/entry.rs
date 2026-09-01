@@ -720,7 +720,7 @@ pub(super) fn compile_module_entry(
         main.mark_entry_init_boundary();
         let flat_const_ids: std::collections::HashSet<u32> =
             cross_module.flat_const_arrays.keys().copied().collect();
-        let (main_shadow_slot_map, main_shadow_slot_clears_after_stmt) =
+        let (mut main_shadow_slot_map, main_shadow_slot_clears_after_stmt) =
             enable_module_init_shadow_frame(main, &hir.init, &flat_const_ids);
 
         let main_boxed_vars = module_boxed_vars.clone();
@@ -749,7 +749,34 @@ pub(super) fn compile_module_entry(
             classes,
             &cross_module.compile_time_constants,
             &cross_module.module_dispatch,
+            // #9363: module-scope views need their construction proofs here
+            // too — passing an empty map kept top-level accumulator loops on
+            // the rooted/guarded path while in-function ones were clean.
+            &cross_module.module_global_proven_types,
         );
+        // #9363: the same redundant-shadow-slot pruning `codegen/function.rs`
+        // does, which module init never got. The shadow map is built above
+        // from the CONSERVATIVE pointer-typed-locals scan, before the fact
+        // graph exists; a local the whole-write proof later shows can only
+        // hold a Number keeps a root slot it can never need. That slot is not
+        // just wasted stores: `local_is_inert_primitive` refuses any local
+        // with one, so the accumulator of `sum += buf[i]` was never inert,
+        // `loop_may_allocate` stayed true, and the inner loop kept a
+        // per-iteration volatile GC poll that blocks vectorization. In a
+        // function body the same loop was already clean — this was the whole
+        // top-level/in-function asymmetry.
+        //
+        // `enable_post_init_shadow_frame` sized the frame from the unpruned
+        // map, so the retained slot indices stay valid with holes, exactly as
+        // in the function-body twin.
+        main_shadow_slot_map
+            .retain(|id, _| !main_native_facts.number_by_construction_locals().contains(id));
+        let main_shadow_slot_clears_after_stmt =
+            crate::collectors::collect_shadow_slot_clear_points(
+                &hir.init,
+                &main_shadow_slot_map,
+            );
+
         // #7109: the program-entry body participates in canonical (i32/u32/Str)
         // selection on exactly the per-value rules a function body uses. There
         // is no structural context reason to deny — see
@@ -1436,7 +1463,7 @@ pub(super) fn compile_module_entry(
         init_fn.mark_entry_init_boundary();
         let flat_const_ids: std::collections::HashSet<u32> =
             cross_module.flat_const_arrays.keys().copied().collect();
-        let (init_shadow_slot_map, init_shadow_slot_clears_after_stmt) =
+        let (mut init_shadow_slot_map, init_shadow_slot_clears_after_stmt) =
             enable_module_init_shadow_frame(init_fn, &hir.init, &flat_const_ids);
 
         let init_boxed_vars = module_boxed_vars.clone();
@@ -1464,7 +1491,34 @@ pub(super) fn compile_module_entry(
             classes,
             &cross_module.compile_time_constants,
             &cross_module.module_dispatch,
+            // #9363: module-scope views need their construction proofs here
+            // too — passing an empty map kept top-level accumulator loops on
+            // the rooted/guarded path while in-function ones were clean.
+            &cross_module.module_global_proven_types,
         );
+        // #9363: the same redundant-shadow-slot pruning `codegen/function.rs`
+        // does, which module init never got. The shadow map is built above
+        // from the CONSERVATIVE pointer-typed-locals scan, before the fact
+        // graph exists; a local the whole-write proof later shows can only
+        // hold a Number keeps a root slot it can never need. That slot is not
+        // just wasted stores: `local_is_inert_primitive` refuses any local
+        // with one, so the accumulator of `sum += buf[i]` was never inert,
+        // `loop_may_allocate` stayed true, and the inner loop kept a
+        // per-iteration volatile GC poll that blocks vectorization. In a
+        // function body the same loop was already clean — this was the whole
+        // top-level/in-function asymmetry.
+        //
+        // `enable_post_init_shadow_frame` sized the frame from the unpruned
+        // map, so the retained slot indices stay valid with holes, exactly as
+        // in the function-body twin.
+        init_shadow_slot_map
+            .retain(|id, _| !init_native_facts.number_by_construction_locals().contains(id));
+        let init_shadow_slot_clears_after_stmt =
+            crate::collectors::collect_shadow_slot_clear_points(
+                &hir.init,
+                &init_shadow_slot_map,
+            );
+
         // #7109: the module-init body participates in canonical (i32/u32/Str)
         // selection on exactly the per-value rules a function body uses. There
         // is no structural context reason to deny — see
