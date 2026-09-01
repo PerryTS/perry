@@ -37,13 +37,23 @@
       "anchor": true,
       "why": "The launcher -- the package `npm install @perryts/perry` resolves. This is the one #7491 was about."
     },
-    { "name": "@perryts/perry-darwin-arm64" },
-    { "name": "@perryts/perry-darwin-x64" },
-    { "name": "@perryts/perry-linux-arm64" },
-    { "name": "@perryts/perry-linux-arm64-musl" },
-    { "name": "@perryts/perry-linux-x64" },
-    { "name": "@perryts/perry-linux-x64-musl" },
-    { "name": "@perryts/perry-win32-arm64" },
-    { "name": "@perryts/perry-win32-x64" }
+    {
+      "name": "@perryts/perry-darwin-arm64"
+    },
+    {
+      "name": "@perryts/perry-darwin-x64"
+    },
+    {
+      "name": "@perryts/perry-linux-arm64"
+    },
+    {
+      "name": "@perryts/perry-linux-x64"
+    },
+    {
+      "name": "@perryts/perry-win32-arm64"
+    },
+    {
+      "name": "@perryts/perry-win32-x64"
+    }
   ]
 }
