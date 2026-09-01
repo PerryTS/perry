@@ -54,16 +54,9 @@ fn generic_computed_member_key<'a>(
     let ast::PropName::Computed(computed) = &method.key else {
         return None;
     };
-    let well_known = symbol_well_known_key(&computed.expr);
-    let needs_special_lowering =
-        (well_known == Some("iterator") && method.function.is_generator && !method.is_static)
-            || (well_known == Some("hasInstance")
-                && method.is_static
-                && matches!(method.kind, ast::MethodKind::Method))
-            || (well_known == Some("toStringTag")
-                && !method.is_static
-                && matches!(method.kind, ast::MethodKind::Getter));
-    if needs_special_lowering {
+    // Single source of truth — see `is_special_lowered_well_known`. #9226
+    // hand-copied a subset here and silently dropped four symbols.
+    if crate::lower_decl::helpers::is_special_lowered_well_known(method) {
         return None;
     }
     Some(computed)
