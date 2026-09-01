@@ -559,12 +559,11 @@ pub(crate) extern "C" fn function_prototype_to_string_thunk(
             return f64::from_bits(JSValue::string_ptr(str_ptr).bits());
         }
         // A class reference (INT32-tagged registered class id) is a function
-        // value; Perry retains no class source, so emit the NativeFunction
-        // form with the class name.
+        // value; #9413 retains its source text at compile time, so answer with
+        // that and keep the NativeFunction form only for classes with none.
         if super::super::class_prototype_ref_id(this_val).is_none() {
             if let Some(cid) = super::super::native_module::class_ref_id(this_val) {
-                let name = super::super::class_registry::class_name_for_id(cid).unwrap_or_default();
-                let s = format!("function {name}() {{ [native code] }}");
+                let s = super::super::class_registry::class_ref_to_string(cid);
                 let str_ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
                 return f64::from_bits(JSValue::string_ptr(str_ptr).bits());
             }

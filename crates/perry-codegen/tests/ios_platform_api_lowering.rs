@@ -116,6 +116,7 @@ fn module(body: Vec<Stmt>) -> Module {
         closure_display_names: Default::default(),
         class_display_names: Default::default(),
         closure_source_text: Default::default(),
+        class_source_text: Default::default(),
         async_generator_funcs: Default::default(),
         local_source_spans: Default::default(),
         gen_param_prologue_len: Default::default(),

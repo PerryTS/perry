@@ -112,6 +112,10 @@ pub(super) fn emit_string_pool(
     // #5592: user-visible `.name` overrides keyed by ClassId, for classes
     // whose HIR registration key was uniquified away from their JS name.
     class_display_names: &HashMap<u32, String>,
+    // #9413: retained class SOURCE text keyed by ClassId, so `String(C)` /
+    // `C.toString()` return the class source instead of a synthesized
+    // `function C() { [native code] }`.
+    class_source_text: &HashMap<u32, String>,
     // Wall 51: per-class standalone-constructor arity, accounting for the
     // synthesized `super(...args)` forwarding ctor a no-own-ctor class with
     // heritage inherits (its arity comes from the nearest ancestor ctor, which
@@ -302,6 +306,31 @@ pub(super) fn emit_string_pool(
         for (cid, name) in named {
             let (const_name, byte_len) = llmod.add_string_constant(&name);
             named_class_name_constants.push((cid, const_name, byte_len));
+        }
+    }
+
+    // #9413: the same pre-allocation for retained class source text — also
+    // before `init_fn` borrows `llmod`.
+    let mut class_source_constants: Vec<(u32, String, usize)> = Vec::new();
+    {
+        let mut sources: Vec<(u32, &String)> = Vec::new();
+        for (class_name, class) in classes.iter() {
+            if *class_name != class.name || class_name.starts_with("__AnonShape_") {
+                continue;
+            }
+            let cid = match class_ids.get(class_name).copied() {
+                Some(c) if c != 0 => c,
+                _ => continue,
+            };
+            if let Some(src) = class_source_text.get(&cid) {
+                sources.push((cid, src));
+            }
+        }
+        sources.sort_by_key(|entry| entry.0);
+        sources.dedup_by_key(|(cid, _)| *cid);
+        for (cid, src) in sources {
+            let (const_name, byte_len) = llmod.add_string_constant(src);
+            class_source_constants.push((cid, const_name, byte_len));
         }
     }
 
@@ -1098,6 +1127,23 @@ pub(super) fn emit_string_pool(
         let const_ref = format!("@{}", const_name);
         blk.call_void(
             "js_register_class_name",
+            &[
+                (crate::types::I32, &cid.to_string()),
+                (crate::types::PTR, &const_ref),
+                (crate::types::I32, &byte_len.to_string()),
+            ],
+        );
+    }
+    // #9413: mirror each class's retained source text into the runtime so
+    // `Function.prototype.toString` on a class REF (an INT32 immediate, not a
+    // ClosureHeader) answers with the class source. Same shape as the
+    // `js_register_function_source` loop above.
+    for (cid, const_name, byte_len) in &class_source_constants {
+        chunker.roll_if_full();
+        let blk = chunker.current_block();
+        let const_ref = format!("@{}", const_name);
+        blk.call_void(
+            "js_register_class_source",
             &[
                 (crate::types::I32, &cid.to_string()),
                 (crate::types::PTR, &const_ref),

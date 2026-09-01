@@ -14,6 +14,7 @@ pub fn monomorphize_module(module: &mut Module) {
     let mut new_classes = Vec::new();
     // #7632: (specialization class id, the JS-visible name of its origin).
     let mut new_display_names: Vec<(crate::ClassId, String)> = Vec::new();
+    let mut new_source_texts: Vec<(crate::ClassId, String)> = Vec::new();
 
     while !ctx.func_work_queue.is_empty() || !ctx.class_work_queue.is_empty() {
         // Process function specializations
@@ -91,6 +92,12 @@ pub fn monomorphize_module(module: &mut Module) {
                     .cloned()
                     .unwrap_or_else(|| original.name.clone());
                 new_display_names.push((new_id, display_name));
+                // #9413: `String(Gen$num)` must show the origin's source for
+                // the same reason `.name` must show the origin's name — the
+                // mangling is perry's business, not the program's.
+                if let Some(src) = module.class_source_text.get(&original.id).cloned() {
+                    new_source_texts.push((new_id, src));
+                }
                 let specialized = specialize_class(original, &request.type_args, new_id);
                 new_classes.push(specialized);
             }
@@ -103,6 +110,9 @@ pub fn monomorphize_module(module: &mut Module) {
     // #7632: deferred out of the loop above, which holds `module` immutably.
     for (class_id, display_name) in new_display_names {
         module.class_display_names.insert(class_id, display_name);
+    }
+    for (class_id, source) in new_source_texts {
+        module.class_source_text.insert(class_id, source);
     }
 
     // Update call sites to use specialized versions

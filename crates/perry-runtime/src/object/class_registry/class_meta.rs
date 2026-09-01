@@ -65,6 +65,90 @@ pub fn class_name_for_id(class_id: u32) -> Option<String> {
     guard.as_ref()?.get(&class_id).cloned()
 }
 
+/// #9413: `class_id → the class's original source text`. Populated by codegen
+/// via `js_register_class_source`, exactly as `js_register_function_source`
+/// does for functions (#4101). A class ref is an INT32 immediate rather than a
+/// heap Function object, so `Function.prototype.toString` cannot recover its
+/// source from a `ClosureHeader` — this side table is the only record. Kept
+/// out of the heap image (unlike `CLASS_NAMES`) because nothing but
+/// `Function.prototype.toString` reads it.
+fn class_source_registry(
+) -> &'static std::sync::Mutex<std::collections::HashMap<u32, std::sync::Arc<str>>> {
+    static REGISTRY: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<u32, std::sync::Arc<str>>>,
+    > = std::sync::OnceLock::new();
+    REGISTRY.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+/// Register the original source text of a class. Idempotent — last write wins,
+/// matching `js_register_class_name`.
+///
+/// # Safety
+///
+/// `src_ptr..src_ptr + src_len` must point at a valid UTF-8 byte slice that
+/// outlives the call (we copy it). `class_id` is used only as a map key.
+#[no_mangle]
+pub unsafe extern "C" fn js_register_class_source(class_id: u32, src_ptr: *const u8, src_len: u32) {
+    if class_id == 0 || src_ptr.is_null() || src_len == 0 {
+        return;
+    }
+    let slice = std::slice::from_raw_parts(src_ptr, src_len as usize);
+    let Ok(text) = std::str::from_utf8(slice) else {
+        return;
+    };
+    if let Ok(mut map) = class_source_registry().lock() {
+        map.insert(class_id, std::sync::Arc::from(text));
+    }
+}
+
+/// The retained source text of a registered class, or `None` when codegen
+/// registered none (a builtin, or a class synthesized at runtime).
+pub fn class_source_for_id(class_id: u32) -> Option<String> {
+    let map = class_source_registry().lock().ok()?;
+    map.get(&class_id).map(|text| text.to_string())
+}
+
+/// `Function.prototype.toString` for a class REF: the retained class source
+/// when codegen registered it, otherwise the NativeFunction placeholder Node
+/// uses for callables with no recoverable source. Mirrors
+/// `builtins::function_source_for_func_ptr` for the INT32 class-ref encoding.
+pub fn class_ref_to_string(class_id: u32) -> String {
+    if let Some(src) = class_source_for_id(class_id) {
+        return src;
+    }
+    let name = class_name_for_id(class_id).unwrap_or_default();
+    format!("function {name}() {{ [native code] }}")
+}
+
+/// #9413: Node's `util.inspect` / `console.log` rendering of a class
+/// constructor — `[class Name]`, `[class Name extends Parent]`,
+/// `[class (anonymous)]` when its `.name` is the empty string.
+///
+/// A class ref is an INT32-tagged NaN box carrying the class id, the same
+/// encoding a tagged small integer uses, and the console formatter's
+/// `is_int32()` arm printed that payload — so `console.log(Klass)` and
+/// `util.inspect(Klass)` both answered `6`, handing the program the
+/// compiler's internal class identity. Callers must gate on
+/// `is_class_id_registered` first, exactly as `js_jsvalue_to_string` does,
+/// so a plain small integer whose value collides with a live class id still
+/// prints as a number.
+pub fn class_ref_inspect_label(class_id: u32) -> String {
+    let name = class_name_for_id(class_id).unwrap_or_default();
+    let label = if name.is_empty() {
+        "(anonymous)"
+    } else {
+        name.as_str()
+    };
+    match crate::object::get_parent_class_id(class_id)
+        .filter(|parent| *parent != 0)
+        .and_then(class_name_for_id)
+        .filter(|parent| !parent.is_empty())
+    {
+        Some(parent) => format!("[class {label} extends {parent}]"),
+        None => format!("[class {label}]"),
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn js_register_class_length(class_id: u32, length: u32) {
     if class_id == 0 {

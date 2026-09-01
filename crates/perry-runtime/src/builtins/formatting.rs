@@ -1093,6 +1093,14 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                 }
             }
         } else if jsval.is_int32() {
+            // #9413: a class ref shares this encoding with a tagged small
+            // integer, and this arm printed the raw class id. The registry
+            // probe is the one `js_jsvalue_to_string` already uses to tell
+            // the two apart; see `class_ref_inspect_label`.
+            let cid = (value.to_bits() & 0xFFFF_FFFF) as u32;
+            if crate::object::is_class_id_registered(cid) {
+                return crate::object::class_ref_inspect_label(cid);
+            }
             jsval.as_int32().to_string()
         } else {
             // Regular number — but first check for raw (non-NaN-boxed) heap

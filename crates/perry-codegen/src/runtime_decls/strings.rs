@@ -1377,6 +1377,8 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // is non-empty. Codegen emits one call per registered class id at
     // program init, mirroring `js_register_class_id`.
     module.declare_function("js_register_class_name", VOID, &[I32, PTR, I32]);
+    // #9413: the class-source sibling of `js_register_function_source`.
+    module.declare_function("js_register_class_source", VOID, &[I32, PTR, I32]);
     module.declare_function("js_register_class_length", VOID, &[I32, I32]);
     // Anon-shape class registration so `.constructor` reads on object
     // literals (`{ x: 1 }`) return the global `Object` constructor

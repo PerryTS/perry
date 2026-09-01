@@ -1041,9 +1041,11 @@ pub extern "C" fn js_jsvalue_to_string(value: f64) -> *mut crate::string::String
         }
     } else if jsval.is_int32() {
         // A registered class id shares the INT32 encoding (`Expr::ClassRef`)
-        // — `String(C)` / `"" + C` must produce function source, not the
-        // numeric id. Perry keeps no class source, so the NativeFunction
-        // form with the class name.
+        // — `String(C)` / `"" + C` must produce the class's source text, not
+        // the numeric id. #9413 gave codegen a class-source side table
+        // (`js_register_class_source`), so this is the real source when the
+        // class came from user code and the NativeFunction placeholder only
+        // for classes perry synthesized.
         let n = jsval.as_int32();
         let cid = (value.to_bits() & 0xFFFF_FFFF) as u32;
         if crate::object::is_class_id_registered(cid) {
@@ -1051,8 +1053,7 @@ pub extern "C" fn js_jsvalue_to_string(value: f64) -> *mut crate::string::String
                 let primitive = unsafe { class_ref_to_primitive(value, 2) };
                 return js_jsvalue_to_string(primitive);
             }
-            let name = crate::object::class_name_for_id(cid).unwrap_or_default();
-            let s = format!("function {name}() {{ [native code] }}");
+            let s = crate::object::class_ref_to_string(cid);
             return crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
         }
         let s = n.to_string();

@@ -145,6 +145,18 @@ pub struct Module {
     /// (and `Function.prototype.toString.call(fn)`) reconstruct the source
     /// instead of returning the generic `"[object Object]"`.
     pub closure_source_text: std::collections::HashMap<crate::types::FuncId, String>,
+    /// #9413: original source text for each user class, keyed by ClassId.
+    /// Populated at lowering by slicing the module source against the class's
+    /// AST span (SWC anchors `Class::span` at the `class` keyword and ends it
+    /// at the closing brace, so the slice is exactly what
+    /// `Function.prototype.toString` must return). Consumed by codegen to emit
+    /// `js_register_class_source`, so `String(C)` / `C.toString()` /
+    /// `` `${C}` `` reconstruct the class source instead of the
+    /// `function C() { [native code] }` placeholder a class ref used to get —
+    /// classes are the one callable kind whose source perry retained nowhere,
+    /// even though the sibling `closure_source_text` had done it for every
+    /// function since #4101.
+    pub class_source_text: std::collections::HashMap<crate::ClassId, String>,
     /// #3664: func_ids of `async function*` declarations and `async function*(){}`
     /// expressions. The generator transform clears `is_async`/`is_generator`
     /// before codegen, erasing the async-vs-sync distinction (both lower to a
@@ -206,6 +218,7 @@ impl Module {
             closure_display_names: std::collections::HashMap::new(),
             class_display_names: std::collections::HashMap::new(),
             closure_source_text: std::collections::HashMap::new(),
+            class_source_text: std::collections::HashMap::new(),
             async_generator_funcs: std::collections::HashSet::new(),
             local_source_spans: std::collections::HashMap::new(),
             gen_param_prologue_len: std::collections::HashMap::new(),

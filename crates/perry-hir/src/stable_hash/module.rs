@@ -39,6 +39,7 @@ impl SH for Module {
             closure_display_names,
             class_display_names,
             closure_source_text,
+            class_source_text,
             async_generator_funcs,
             // Observational source metadata does not affect emitted code and
             // therefore must not invalidate the object cache.
@@ -107,6 +108,15 @@ impl SH for Module {
             closure_source_text.iter().map(|(k, v)| (*k, v)).collect();
         source_pairs.sort_unstable_by_key(|(k, _)| *k);
         for (id, src) in source_pairs {
+            id.hash(h);
+            src.hash(h);
+        }
+        // #9413: class source text drives the js_register_class_source calls,
+        // so it participates in the stable hash for the same reason.
+        let mut class_source_pairs: Vec<(u32, &String)> =
+            class_source_text.iter().map(|(k, v)| (*k, v)).collect();
+        class_source_pairs.sort_unstable_by_key(|(k, _)| *k);
+        for (id, src) in class_source_pairs {
             id.hash(h);
             src.hash(h);
         }

@@ -178,6 +178,24 @@ fn noncomputed_member_registration_name(
     format!("{}_{}_{}", base, method.span.lo.0, method.span.hi.0)
 }
 
+/// #9413: retain a class's original source text keyed by ClassId so
+/// `Function.prototype.toString` can reconstruct it, mirroring
+/// `capture_function_source` (#4101) for functions. SWC anchors
+/// `ast::Class::span` at the `class` keyword (decorators sit outside it) and
+/// closes it at the class body's `}`, so the slice is exactly the class source
+/// node's `[[SourceText]]`. A no-op when no module source is installed (unit
+/// tests / `check`), and idempotent — last write wins, matching the name
+/// registry.
+pub(crate) fn capture_class_source(
+    ctx: &mut LoweringContext,
+    class_id: crate::ClassId,
+    class: &ast::Class,
+) {
+    if let Some(src) = crate::ir::current_module_source_slice(class.span.lo.0, class.span.hi.0) {
+        ctx.class_source_text.insert(class_id, src);
+    }
+}
+
 pub fn lower_class_decl(
     ctx: &mut LoweringContext,
     class_decl: &ast::ClassDecl,
@@ -196,6 +214,18 @@ pub fn lower_class_decl(
             id
         }
     };
+    // #9413: a body-local `class X` that collides with an already-registered
+    // `X` registers under a uniquified key (`X$0`) so the name-keyed dedup
+    // keeps the two bodies apart — see `maybe_rename_colliding_class`. That
+    // key is a COMPILER artifact: `.name`, `String(C)` and `constructor.name`
+    // must still report the SOURCE name. Record the #5592 display-name
+    // override, which is what codegen already emits for
+    // `js_register_class_name` in place of the registration key.
+    if name != class_decl.ident.sym.as_str() {
+        ctx.class_display_names
+            .insert(class_id, class_decl.ident.sym.to_string());
+    }
+    capture_class_source(ctx, class_id, &class_decl.class);
     if let Some(ast::Expr::Ident(parent)) = class_decl.class.super_class.as_deref() {
         if let Some(crate::lower::fn_ctor_env::FnCtorShape::DynCtor(kind)) =
             ctx.fn_ctor_env.entries.get(parent.sym.as_ref()).cloned()
@@ -1270,6 +1300,7 @@ pub fn lower_class_from_ast(
             id
         }
     };
+    capture_class_source(ctx, class_id, class);
 
     let old_class = ctx.current_class.take();
     ctx.current_class = Some(name.to_string());

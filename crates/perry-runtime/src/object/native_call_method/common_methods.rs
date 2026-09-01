@@ -746,14 +746,14 @@ pub(super) unsafe fn dispatch_common(
         // Common string methods on string values
         "toString" => {
             // A class REFERENCE (INT32-tagged registered class id) is a
-            // function value: `C.toString()` must produce function source,
-            // not the numeric rendering of its class id ("1"). Perry doesn't
-            // retain class source text, so emit the NativeFunction form —
-            // Test262's assertToStringOrNativeFunction accepts it.
+            // function value: `C.toString()` must produce the class source,
+            // not the numeric rendering of its class id ("1"). #9413 retains
+            // that source at compile time; classes perry synthesized (no
+            // registered source) still get the NativeFunction form, which
+            // Test262's assertToStringOrNativeFunction accepts.
             if super::class_prototype_ref_id(object).is_none() {
                 if let Some(cid) = super::native_module::class_ref_id(object) {
-                    let name = super::class_registry::class_name_for_id(cid).unwrap_or_default();
-                    let s = format!("function {name}() {{ [native code] }}");
+                    let s = super::class_registry::class_ref_to_string(cid);
                     let str_ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
                     return Some(f64::from_bits(JSValue::string_ptr(str_ptr).bits()));
                 }

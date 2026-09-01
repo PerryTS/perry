@@ -131,8 +131,21 @@ pub(crate) fn lower_new_non_ident(
     };
     if let Some(class_expr) = class_expr_opt {
         let synthetic_name = format!("__anon_class_{}", ctx.fresh_class());
-        ctx.pending_class_inner_name = class_expr.ident.as_ref().map(|i| i.sym.to_string());
+        let source_class_name = class_expr.ident.as_ref().map(|i| i.sym.to_string());
+        ctx.pending_class_inner_name = source_class_name.clone();
         let class = lower_class_from_ast(ctx, &class_expr.class, &synthetic_name, false)?;
+        // #9413: `__anon_class_N` is a registration key minted so this in-place
+        // class expression gets its own ClassId — it is not a name. Per spec
+        // the constructor's `.name` is the class expression's own binding
+        // identifier, or `""` when it has none. The general class-expression
+        // arm (`lower_expr/arm_class.rs`) already records exactly this override
+        // via `display_override`; this arm, which lowers straight to a `New` on
+        // the synthetic name, never did — so
+        // `new (class extends Error {})("m").constructor.name` answered
+        // `"__anon_class_8"` and `new (class Q {})().constructor.name`
+        // answered `"__anon_class_6"` instead of `"Q"`.
+        ctx.class_display_names
+            .insert(class.id, source_class_name.unwrap_or_default());
         // #6336: a class expression's `Subclass → Parent` registry edge is a SIDE
         // EFFECT of evaluating the expression — `lower_class_expr` sequences a
         // `RegisterClassParentDynamic` in front of the `ClassRef` it yields
