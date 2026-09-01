@@ -479,7 +479,7 @@ tokio-cron-scheduler = { version = "0.15", optional = true }
 governor = { version = "0.10", optional = true }
 
 # Validation
-validator = { version = "0.20", features = ["derive"], optional = true }
+validator = { version = "0.21", features = ["derive"], optional = true }
 regex = { workspace = true, optional = true }
 
 # IDs
