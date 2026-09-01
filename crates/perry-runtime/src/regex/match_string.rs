@@ -103,7 +103,6 @@ pub extern "C" fn js_string_match(
                 OwnedStringMatch::NonGlobal(
                     OwnedExecMatch::from_repeat_matcher(
                         str_data,
-                        0,
                         &repeat_matcher,
                         &matched,
                         has_indices,
@@ -128,7 +127,7 @@ pub extern "C" fn js_string_match(
                     return ptr::null_mut();
                 };
                 OwnedStringMatch::NonGlobal(
-                    OwnedExecMatch::from_fancy(str_data, 0, &fre, &caps, has_indices),
+                    OwnedExecMatch::from_fancy(str_data, &fre, &caps, has_indices),
                     has_indices,
                 )
             }
@@ -147,7 +146,7 @@ pub extern "C" fn js_string_match(
                 return ptr::null_mut();
             };
             OwnedStringMatch::NonGlobal(
-                OwnedExecMatch::from_standard(str_data, 0, regex, &caps, has_indices),
+                OwnedExecMatch::from_standard(str_data, regex, &caps, has_indices),
                 has_indices,
             )
         }

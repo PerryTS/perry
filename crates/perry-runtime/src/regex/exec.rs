@@ -44,61 +44,73 @@ pub extern "C" fn js_regexp_exec(
         let has_indices = (*re).has_indices;
         let use_last_index = global || sticky;
         let last_index = if use_last_index { last_index_read } else { 0 };
+
+        // Spec RegExpBuiltinExec step 12.a: `lastIndex > length` is "no match"
+        // outright — NOT a search clamped to the end of the subject. The bound
+        // is in UTF-16 code units, the same unit `lastIndex` is stored in;
+        // comparing byte offsets can't express it because
+        // `utf16_index_to_byte` saturates at `str_data.len()`.
+        if use_last_index && last_index > (*s).utf16_len as usize {
+            set_last_index_throwing(re, 0);
+            LAST_EXEC_INDEX.with(|idx| *idx.borrow_mut() = -1.0);
+            LAST_EXEC_GROUPS.with(|g| *g.borrow_mut() = ptr::null_mut());
+            return ptr::null_mut();
+        }
+
         let search_start_byte = if use_last_index && last_index > 0 {
             super::exec_array::utf16_index_to_byte(str_data, last_index)
         } else {
             0
         };
 
-        if search_start_byte > str_data.len() {
-            if use_last_index {
-                set_last_index_throwing(re, 0);
-            }
-            LAST_EXEC_INDEX.with(|idx| *idx.borrow_mut() = -1.0);
-            LAST_EXEC_GROUPS.with(|g| *g.borrow_mut() = ptr::null_mut());
-            return ptr::null_mut();
-        }
-        let search_str = &str_data[search_start_byte..];
-
+        // #9429: search FROM `search_start_byte` in the whole subject rather
+        // than searching a `&str_data[search_start_byte..]` slice. Every
+        // zero-width assertion — `^`, `$`, `\b`, and both lookaround
+        // directions — is defined against the real subject, and a slice both
+        // invents context at its left edge (`^`/`\b` hold where they must not)
+        // and destroys it (`(?<=a)` fails where it must hold). All three
+        // engines expose a positional entry point with exactly these
+        // semantics, documented as such: `regex::Regex::captures_at`,
+        // `fancy_regex::Regex::captures_from_pos` and
+        // `regress::Regex::find_from`. Their reported offsets are absolute, so
+        // nothing downstream re-bases them.
         let owned = if let Some(repeat_matcher) = lookup_repeat_matcher(re) {
             repeat_matcher
                 .regex
-                .find(search_str)
-                .filter(|matched| !sticky || matched.start() == 0)
+                .find_from(str_data, search_start_byte)
+                .next()
+                .filter(|matched| !sticky || matched.start() == search_start_byte)
                 .map(|matched| {
                     if use_last_index {
                         set_last_index_throwing(
                             re,
-                            super::exec_array::byte_index_to_utf16_index(
-                                str_data,
-                                search_start_byte + matched.end(),
-                            ),
+                            super::exec_array::byte_index_to_utf16_index(str_data, matched.end()),
                         );
                     }
                     OwnedExecMatch::from_repeat_matcher(
                         str_data,
-                        search_start_byte,
                         &repeat_matcher,
                         &matched,
                         has_indices,
                     )
                 })
         } else if let Some(fre) = lookup_fancy_regex(re) {
-            match fre.captures(search_str) {
-                Ok(Some(caps)) if !sticky || caps.get(0).is_some_and(|full| full.start() == 0) => {
+            match fre.captures_from_pos(str_data, search_start_byte) {
+                Ok(Some(caps))
+                    if !sticky
+                        || caps
+                            .get(0)
+                            .is_some_and(|full| full.start() == search_start_byte) =>
+                {
                     let full = caps.get(0).expect("capture zero is the full match");
                     if use_last_index {
                         set_last_index_throwing(
                             re,
-                            super::exec_array::byte_index_to_utf16_index(
-                                str_data,
-                                search_start_byte + full.end(),
-                            ),
+                            super::exec_array::byte_index_to_utf16_index(str_data, full.end()),
                         );
                     }
                     Some(OwnedExecMatch::from_fancy(
                         str_data,
-                        search_start_byte,
                         &fre,
                         &caps,
                         has_indices,
@@ -108,26 +120,22 @@ pub extern "C" fn js_regexp_exec(
             }
         } else {
             regex
-                .captures(search_str)
-                .filter(|caps| !sticky || caps.get(0).is_some_and(|full| full.start() == 0))
+                .captures_at(str_data, search_start_byte)
+                .filter(|caps| {
+                    !sticky
+                        || caps
+                            .get(0)
+                            .is_some_and(|full| full.start() == search_start_byte)
+                })
                 .map(|caps| {
                     let full = caps.get(0).expect("capture zero is the full match");
                     if use_last_index {
                         set_last_index_throwing(
                             re,
-                            super::exec_array::byte_index_to_utf16_index(
-                                str_data,
-                                search_start_byte + full.end(),
-                            ),
+                            super::exec_array::byte_index_to_utf16_index(str_data, full.end()),
                         );
                     }
-                    OwnedExecMatch::from_standard(
-                        str_data,
-                        search_start_byte,
-                        regex,
-                        &caps,
-                        has_indices,
-                    )
+                    OwnedExecMatch::from_standard(str_data, regex, &caps, has_indices)
                 })
         };
 
