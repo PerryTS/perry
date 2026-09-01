@@ -704,6 +704,14 @@ pub fn collect_int_valued_ta_locals(
     // (an `undefined`-able operand breaks `image == ToInt32(true)` through a
     // float add — `undefined + 1` is NaN→0, the image path would say 1).
     let additive_invalid = additive_flow_invalid_targets(stmts, &types, &ta_lens, &numeric_locals);
+    // #9363: locals a loop body re-seeds unconditionally every iteration, which
+    // bounds an in-loop additive chain to one body's worth. See
+    // `collect_loop_reseeded_locals` for why no dominance argument is needed.
+    let loop_reseeded = {
+        let mut out = HashSet::new();
+        collect_loop_reseeded_locals(stmts, &types, guarded_number_array_params, false, &mut out);
+        out
+    };
 
     // Rule (1) admission. A candidate is a `let`-declared local with ≥1
     // int-TA-read write, whose EVERY write is i32-producing-safe (or, in the
@@ -729,7 +737,7 @@ pub fn collect_int_valued_ta_locals(
         pool.retain(|id| {
             facts.writes[id].iter().all(|(w, in_loop)| {
                 write_is_i32_producing_safe(w, &types, guarded_number_array_params, &numeric_locals)
-                    || (!in_loop
+                    || ((!in_loop || loop_reseeded.contains(id))
                         && !additive_invalid.contains(id)
                         && additive_write_admissible(
                             w,
@@ -974,6 +982,121 @@ fn collect_facts<'a>(
             | Stmt::PreallocateBoxes(_)
             | Stmt::PreallocateTdzBoxes(_)
             | Stmt::ReleaseBoxes(_) => {}
+        }
+    }
+}
+
+/// Locals that a loop body RE-SEEDS on every iteration with a non-additive,
+/// i32-producing write (#9363/#6898 follow-up).
+///
+/// The wrap-i32 additive arm is otherwise restricted to straight-line trees
+/// because an in-loop chain can carry the true f64 value past 2^53, where it
+/// rounds while the i32 slot wraps — and rule (2) only guarantees the ToInt32
+/// image is observed, so the two would then disagree.
+///
+/// A re-seed removes exactly that hazard, and does so WITHOUT needing a
+/// dominance argument: if a loop body unconditionally assigns the local a
+/// fresh exact-i32 value on every iteration, then whatever additive writes the
+/// same body performs, the local's magnitude never exceeds one body's worth of
+/// them — the order of the re-seed within the body does not matter, because
+/// the chain restarts once per iteration either way. With every addend below
+/// 2^31, the true value stays under `(writes_per_body + 1) * 2^31`, and a body
+/// would need ~4M additive writes to reach 2^53.
+///
+/// This is why the scan is deliberately narrow: the re-seed must sit at the
+/// loop body's TOP level. A re-seed nested in an `if`/`switch`/`try` may not
+/// run on a given iteration, which is precisely the case where the chain can
+/// keep growing. Nested loops are scanned as their own bodies, so an inner
+/// loop is judged by its own re-seeds, never by the outer body's.
+///
+/// The motivating shape is bcryptjs `_encipher`, this module's own subject:
+/// `n = S[l >>> 24]` re-seeds every round, followed by at most two `+=` before
+/// a bitwise write, so `|n| < 2^33`.
+fn collect_loop_reseeded_locals<'a>(
+    stmts: &'a [Stmt],
+    types: &HashMap<u32, HirType>,
+    guarded_number_array_params: &HashSet<u32>,
+    inside_loop: bool,
+    out: &mut HashSet<u32>,
+) {
+    for stmt in stmts {
+        // Only a TOP-LEVEL `x = <rhs>` in a loop body counts as a re-seed.
+        if inside_loop {
+            if let Stmt::Expr(Expr::LocalSet(id, rhs)) = stmt {
+                if write_is_i32_producing_safe(
+                    rhs,
+                    types,
+                    guarded_number_array_params,
+                    &HashSet::new(),
+                ) {
+                    out.insert(*id);
+                }
+            }
+        }
+        match stmt {
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                collect_loop_reseeded_locals(body, types, guarded_number_array_params, true, out);
+            }
+            Stmt::For { body, init, .. } => {
+                if let Some(init) = init.as_deref() {
+                    collect_loop_reseeded_locals(
+                        std::slice::from_ref(init),
+                        types,
+                        guarded_number_array_params,
+                        inside_loop,
+                        out,
+                    );
+                }
+                collect_loop_reseeded_locals(body, types, guarded_number_array_params, true, out);
+            }
+            // Conditional and unwinding scaffolding: walk for NESTED loops, but
+            // nothing directly inside them is an unconditional re-seed of the
+            // enclosing body, so the flag is cleared.
+            Stmt::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                collect_loop_reseeded_locals(
+                    then_branch,
+                    types,
+                    guarded_number_array_params,
+                    false,
+                    out,
+                );
+                if let Some(eb) = else_branch {
+                    collect_loop_reseeded_locals(eb, types, guarded_number_array_params, false, out);
+                }
+            }
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                collect_loop_reseeded_locals(body, types, guarded_number_array_params, false, out);
+                if let Some(c) = catch {
+                    collect_loop_reseeded_locals(
+                        &c.body,
+                        types,
+                        guarded_number_array_params,
+                        false,
+                        out,
+                    );
+                }
+                if let Some(f) = finally {
+                    collect_loop_reseeded_locals(f, types, guarded_number_array_params, false, out);
+                }
+            }
+            Stmt::Labeled { body, .. } => {
+                collect_loop_reseeded_locals(
+                    std::slice::from_ref(body),
+                    types,
+                    guarded_number_array_params,
+                    inside_loop,
+                    out,
+                );
+            }
+            _ => {}
         }
     }
 }
