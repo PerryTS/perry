@@ -12,6 +12,12 @@ pub(crate) struct CodegenTypeFacts<'a> {
     pub(crate) classes: &'a std::collections::HashMap<String, &'a perry_hir::Class>,
     pub(crate) interfaces: &'a std::collections::HashMap<String, perry_hir::Interface>,
     pub(crate) class_stack: &'a [String],
+    /// #9404: mirrors `FnCtx::in_static_member`. `this_type` must not answer
+    /// `Named(<owning class>)` for a static body's `this` — the generic HIR
+    /// inference reached by every expression that CONTAINS `this` (e.g.
+    /// `PropertyGet { object: This }`) would otherwise re-derive the instance
+    /// type that `static_type_of`'s own `Expr::This` arm now refuses.
+    pub(crate) in_static_member: bool,
     pub(crate) enums: &'a std::collections::HashMap<(String, String), perry_hir::EnumValue>,
 }
 
@@ -24,6 +30,7 @@ impl<'a> CodegenTypeFacts<'a> {
             classes: ctx.classes,
             interfaces: ctx.interfaces,
             class_stack: &ctx.class_stack,
+            in_static_member: ctx.in_static_member,
             enums: ctx.enums,
         }
     }
@@ -56,6 +63,9 @@ impl HirTypeFacts for CodegenTypeFacts<'_> {
     }
 
     fn this_type(&self) -> Option<HirType> {
+        if self.in_static_member {
+            return None;
+        }
         self.class_stack.last().cloned().map(HirType::Named)
     }
 

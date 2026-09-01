@@ -181,6 +181,7 @@ fn hir_inferred_types_reuse_imported_function_return_facts() {
         classes: &classes,
         interfaces: &interfaces,
         class_stack: &class_stack,
+        in_static_member: false,
         enums: &enums,
     };
     let call = Expr::Call {
@@ -219,6 +220,7 @@ fn codegen_type_facts_invalidate_reassigned_local_hints() {
         classes: &classes,
         interfaces: &interfaces,
         class_stack: &class_stack,
+        in_static_member: false,
         enums: &enums,
     };
 
@@ -376,6 +378,7 @@ fn hir_inferred_types_reuse_codegen_contextual_class_facts() {
         classes: &classes,
         interfaces: &interfaces,
         class_stack: &class_stack,
+        in_static_member: false,
         enums: &enums,
     };
 
@@ -383,6 +386,24 @@ fn hir_inferred_types_reuse_codegen_contextual_class_facts() {
         infer_expr_type(&Expr::This, &facts),
         HirType::Named("Widget".to_string())
     );
+    // #9404: the SAME class stack in a STATIC body must NOT infer an instance
+    // type. `this` there is the class constructor, and every consumer of this
+    // answer goes on to prove instance facts (field slots, shape ids, direct
+    // method dispatch) that are false for it. `Any` is the honest answer —
+    // and it must stay `Any` rather than becoming `Named("Widget")` again,
+    // because static members are inherited, so a static body's `this` can be
+    // any subclass of the class named on the stack.
+    let static_facts = CodegenTypeFacts {
+        proven_local_types: &local_types,
+        reassigned_locals: &reassigned_locals,
+        imported_func_return_types: &imported_func_return_types,
+        classes: &classes,
+        interfaces: &interfaces,
+        class_stack: &class_stack,
+        in_static_member: true,
+        enums: &enums,
+    };
+    assert_eq!(infer_expr_type(&Expr::This, &static_facts), HirType::Any);
     assert_eq!(
         infer_expr_type(
             &Expr::EnumMember {
@@ -497,6 +518,7 @@ fn function_return_type_is_conservative() {
         classes: &classes,
         interfaces: &interfaces,
         class_stack: &class_stack,
+        in_static_member: false,
         enums: &enums,
     };
     assert_eq!(facts.function_return_type(0), None);

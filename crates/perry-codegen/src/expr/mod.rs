@@ -2441,6 +2441,15 @@ impl<'a> FnCtx<'a> {
     ///
     /// Sees through `Expr::PrivateGuard`, which returns its receiver
     /// unchanged, mirroring `receiver_class_name`'s own arm for it.
+    ///
+    /// #9404 made `receiver_class_name` / `static_type_of` themselves refuse
+    /// `Expr::This` in a static body, so the two call sites below are now
+    /// defense in depth rather than the only guard: neither can be reached
+    /// with a static `this` any more (the class name they gate on comes from
+    /// `receiver_class_name`, which answers `None`, or from
+    /// `guarded_declared_class_{get,store}_candidate`, which requires a
+    /// `LocalGet`). They are kept because they encode the reason — a class ref
+    /// has no instance layout — at the sites that would strip the NaN-box.
     pub(crate) fn is_static_class_this(&self, e: &perry_hir::Expr) -> bool {
         if !self.in_static_member {
             return false;

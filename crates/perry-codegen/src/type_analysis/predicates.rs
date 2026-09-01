@@ -360,9 +360,26 @@ pub(crate) fn receiver_class_name(ctx: &FnCtx<'_>, e: &Expr) -> Option<String> {
             None => Some(class_name.clone()),
         },
         e if net_result_class(e).is_some() => net_result_class(e).map(str::to_string),
-        // `this` inside a constructor or method body — the class name is
-        // at the top of class_stack (for inlined constructors) or comes
-        // from the enclosing method's owning class.
+        // #9404: NOT in a static body. `class_stack` names the owning class
+        // there too — that is what `super.x` resolves against — but this
+        // function answers "is the receiver a known INSTANCE of a Named
+        // class", and a static body's `this` is the class CONSTRUCTOR: an
+        // INT32 class ref, never a heap instance. Answering `Some(C)` let
+        // every consumer prove instance facts about the constructor object.
+        // Measured on `757beace0`: `this.instanceMethod` in a static body
+        // lowered to a bound-method closure (`typeof` reported "function"
+        // where node says "undefined"), and CALLING it ran the instance body
+        // with the class ref as receiver instead of throwing a TypeError.
+        //
+        // "The constructor object of C" would not be a better answer either:
+        // static members are INHERITED, so `this` in a static body of `Base`
+        // is whatever subclass the call came through — `Sub.inherited()` sees
+        // `this === Sub`, and `Sub` may override every static member the body
+        // touches. Only `None` is sound.
+        Expr::This if ctx.in_static_member => None,
+        // `this` inside a constructor or instance method body — the class
+        // name is at the top of class_stack (for inlined constructors) or
+        // comes from the enclosing method's owning class.
         Expr::This => ctx.class_stack.last().cloned(),
         // A private-access brand guard returns its receiver unchanged; see
         // through it so shadowed private-field slot resolution stays accurate.
@@ -686,6 +703,13 @@ pub(crate) fn static_type_of(ctx: &FnCtx<'_>, e: &Expr) -> Option<HirType> {
             }
             hir_inferred_static_type(ctx, e)
         }
+        // #9404: a static body's `this` is the class constructor, not an
+        // instance of the class — see `receiver_class_name`'s matching arm.
+        // `refine_type_from_init` writes this answer into `local_types`, so
+        // `const t = this` in a static body used to hand every LocalGet
+        // consumer an instance type for the constructor object (the #9386
+        // alias residual).
+        Expr::This if ctx.in_static_member => None,
         Expr::This => {
             let cls = ctx.class_stack.last()?.clone();
             Some(HirType::Named(cls))

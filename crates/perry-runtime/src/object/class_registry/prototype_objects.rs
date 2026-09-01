@@ -334,11 +334,14 @@ pub(crate) fn class_prototype_object(class_id: u32) -> *mut ObjectHeader {
 /// when it has no `keys_array` at all (an `Object.create(proto)` result, or
 /// a `Function.prototype = obj` instance with no own props). Returns the
 /// first defined, non-null field found on the chain.
+/// The receiver-less form, whose ONE caller is the CONSTRUCTOR-side read in
+/// `js_object_get_field_by_name` (`C.foo` on an INT32 class ref). It therefore
+/// refuses a name that is a declared INSTANCE member — see `constructor_side`.
 pub(crate) unsafe fn resolve_proto_chain_field(
     class_id: u32,
     key: *const crate::StringHeader,
 ) -> Option<JSValue> {
-    resolve_proto_chain_field_inner(class_id, key, None)
+    resolve_proto_chain_field_inner(class_id, key, None, true)
 }
 
 pub(crate) unsafe fn resolve_proto_chain_field_with_receiver(
@@ -346,7 +349,7 @@ pub(crate) unsafe fn resolve_proto_chain_field_with_receiver(
     key: *const crate::StringHeader,
     receiver: f64,
 ) -> Option<JSValue> {
-    resolve_proto_chain_field_inner(class_id, key, Some(receiver))
+    resolve_proto_chain_field_inner(class_id, key, Some(receiver), false)
 }
 
 unsafe fn inherited_proto_accessor_value(
@@ -380,11 +383,58 @@ unsafe fn inherited_proto_accessor_value(
     ))
 }
 
+/// `constructor_side`: this walk serves a read on the class CONSTRUCTOR, so a
+/// name that is a declared INSTANCE member must not resolve through it.
+///
+/// #9404: declared instance methods are MIRRORED onto the reflective
+/// `C.prototype` object as own data fields (see the `own_data_field_by_name`
+/// arm below). That is right for an instance read, which is what the
+/// `_with_receiver` form serves. It is wrong for the CONSTRUCTOR-side read the
+/// receiver-less form serves: in JS a class object does not expose its
+/// prototype methods as statics — `class C { m(){} }` has `C.m === undefined`,
+/// because `m` lives on `C.prototype`. Walking into the decl-prototype from a
+/// static lookup made every instance method resolve on the class ref, so
+/// `typeof C.m` answered "function", `C.m === C.prototype.m` was true, and a
+/// static body's `typeof this.m` answered "function" where node says
+/// "undefined" — the surviving half of #9404 after the codegen predicate was
+/// made honest. `js_object_has_property` already had this gate (`"m" in C` was
+/// correctly false), and the sibling `is_prototype_ref` gate two hundred lines
+/// up in `get_field_by_name.rs` plugged the same hole on the direct-vtable
+/// door for #1021/NestJS; this is that door's chain-walk twin.
+///
+/// The exclusion is keyed on `class_instance_has_member` — the exact
+/// "is this a prototype method / getter / setter of the chain" predicate — and
+/// NOT on "skip the decl-prototype entirely". A blanket skip also removed
+/// `C.constructor`, which the decl-prototype carries as an ordinary data field,
+/// and that is load-bearing today for a reason outside this issue: perry hands
+/// a PROPERTY DECORATOR the class itself where the spec hands it
+/// `Class.prototype`, so NestJS-style `Reflect.defineMetadata(k, v,
+/// target.constructor)` relies on `C.constructor === C`. Node says
+/// `C.constructor === Function`, so perry has two divergences that cancel;
+/// removing either one alone breaks decorator metadata
+/// (`test_decorators_nest_common_canary`,
+/// `test_decorators_legacy_property_metadata`). The decorator-target defect is
+/// the one to fix, and it is not this issue.
+///
+/// The `class_prototype_object` step below is never skipped: for a subclass of
+/// a class-EXPRESSION value it holds the parent CLASS OBJECT (#1788/#6552),
+/// which is genuinely on the constructor's static chain.
 unsafe fn resolve_proto_chain_field_inner(
     class_id: u32,
     key: *const crate::StringHeader,
     receiver: Option<f64>,
+    constructor_side: bool,
 ) -> Option<JSValue> {
+    // Resolved once: `class_instance_has_member` already walks the parent
+    // chain, so a parent's instance method is excluded from a subclass's
+    // constructor read too.
+    let skip_decl_prototype = constructor_side && !key.is_null() && {
+        let key_ptr = crate::string::string_data(key);
+        let key_len = (*key).byte_len as usize;
+        std::str::from_utf8(std::slice::from_raw_parts(key_ptr, key_len))
+            .map(|name| crate::object::class_instance_has_member(class_id, name))
+            .unwrap_or(false)
+    };
     let mut cid = class_id;
     let mut depth = 0usize;
     while depth < 32 {
@@ -411,7 +461,11 @@ unsafe fn resolve_proto_chain_field_inner(
         // re-walk) so a computed prototype write is visible as
         // `(new C()).name` (#6945). Class methods / vtable data still come
         // from the vtable + `class_prototype_object` path below.
-        let decl_proto = class_decl_prototype_object(cid);
+        let decl_proto = if skip_decl_prototype {
+            std::ptr::null_mut()
+        } else {
+            class_decl_prototype_object(cid)
+        };
         if !decl_proto.is_null() {
             if let Some(receiver) = receiver {
                 if let Some(value) = inherited_proto_accessor_value(decl_proto, key, receiver) {
