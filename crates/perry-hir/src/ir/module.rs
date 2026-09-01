@@ -63,6 +63,22 @@ pub struct Module {
     /// same-named bare top-level function declaration, whose entry value is
     /// emitted separately through `script_global_functions`.
     pub annexb_global_undefined_names: Vec<String>,
+    /// #9423: true iff this module's top-level code is STRICT.
+    ///
+    /// An ES module is strict with no directive prologue (ES2024 SS11.2.2), and a
+    /// Script is strict when it opens with a `"use strict"` directive. Lowering
+    /// already computes exactly this as `LoweringContext::module_strict` and
+    /// feeds it to `current_strict`, so every HIR node that carries its own
+    /// `strict` flag (`PutValueSet`, `PropertyUpdate`, `IndexUpdate`) is right.
+    ///
+    /// This field exists because CODEGEN cannot see that. Module init is lowered
+    /// as a synthetic function, and codegen's `FnCtx::is_strict_fn` was hardcoded
+    /// `false` for it -- so the lanes that read the CONTEXT's strictness rather
+    /// than a flag on the node (`Expr::IndexSet` via `expr/dispatch.rs`,
+    /// `Expr::This`, `delete`) all saw sloppy at module top level. A rejected
+    /// `for (frozenArray[0] of ...)` silently no-opped, and module top-level
+    /// `this` read the global object instead of `undefined`.
+    pub init_is_strict: bool,
     /// Top-level statements to execute
     pub init: Vec<Stmt>,
     /// Lexical bindings from multi-declarator classic `for` heads.
@@ -189,6 +205,7 @@ impl Module {
             script_global_functions: Vec::new(),
             references_global_this: false,
             annexb_global_undefined_names: Vec::new(),
+            init_is_strict: false,
             init: Vec::new(),
             classic_for_lexical_bindings: std::collections::HashSet::new(),
             exported_native_instances: Vec::new(),

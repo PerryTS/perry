@@ -822,7 +822,11 @@ pub(super) fn compile_module_entry(
             current_closure_slot: None,
             enums,
             is_async_fn: false,
-            is_strict_fn: false,
+            // #9423: an ESM is strict code (ES2024 SS11.2.2) and so is a Script
+            // with a `"use strict"` prologue. This was hardcoded `false`, so
+            // every codegen lane keyed on the CONTEXT rather than on a
+            // node-carried flag ran module top-level code sloppy.
+            is_strict_fn: hir.init_is_strict,
             static_field_globals,
             class_ids,
             class_keys_globals: &cross_module.class_keys_globals,
@@ -1551,7 +1555,11 @@ pub(super) fn compile_module_entry(
             current_closure_slot: None,
             enums,
             is_async_fn: false,
-            is_strict_fn: false,
+            // #9423: an ESM is strict code (ES2024 SS11.2.2) and so is a Script
+            // with a `"use strict"` prologue. This was hardcoded `false`, so
+            // every codegen lane keyed on the CONTEXT rather than on a
+            // node-carried flag ran module top-level code sloppy.
+            is_strict_fn: hir.init_is_strict,
             static_field_globals,
             class_ids,
             class_keys_globals: &cross_module.class_keys_globals,

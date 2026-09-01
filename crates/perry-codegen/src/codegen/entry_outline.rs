@@ -639,6 +639,10 @@ fn outline_entry_module_with_target(hir: &mut HirModule, target: usize) -> Outli
     }
     let mut next_id = max_id + 1;
     let module_name = hir.name.clone();
+    // #9423: a chunk is module top-level code that merely moved into a
+    // function, so it carries the module's strictness. Read before `hir.init`
+    // is taken, for the same reason `module_name` is.
+    let module_is_strict = hir.init_is_strict;
     let original = std::mem::take(&mut hir.init);
 
     // The rewritten body: chunk calls interleaved with any statement that had
@@ -658,6 +662,7 @@ fn outline_entry_module_with_target(hir: &mut HirModule, target: usize) -> Outli
         new_body: &mut Vec<perry_hir::Stmt>,
         next_id: &mut u32,
         module_name: &str,
+        module_is_strict: bool,
     ) {
         if run.is_empty() {
             return;
@@ -674,10 +679,11 @@ fn outline_entry_module_with_target(hir: &mut HirModule, target: usize) -> Outli
             body: std::mem::take(run),
             is_async: false,
             is_generator: false,
-            // Entry lowering currently uses `is_strict_fn: false` even for an
-            // ESM. Match that lowering exactly; HIR already encodes the source
-            // strictness decisions that affect semantics.
-            is_strict: false,
+            // #9423: match the entry lowering, which now carries the module's
+            // real strictness. A chunk holds statements that were module
+            // top-level code a moment ago; relocating them into a function must
+            // not relax the mode they execute in.
+            is_strict: module_is_strict,
             is_exported: false,
             captures: Vec::new(),
             decorators: Vec::new(),
@@ -706,6 +712,7 @@ fn outline_entry_module_with_target(hir: &mut HirModule, target: usize) -> Outli
                     &mut new_body,
                     &mut next_id,
                     &module_name,
+                    module_is_strict,
                 );
                 run_safepoints = 0;
                 new_body.push(stmt);
@@ -723,6 +730,7 @@ fn outline_entry_module_with_target(hir: &mut HirModule, target: usize) -> Outli
                 &mut new_body,
                 &mut next_id,
                 &module_name,
+                module_is_strict,
             );
             run_safepoints = 0;
         }
@@ -733,6 +741,7 @@ fn outline_entry_module_with_target(hir: &mut HirModule, target: usize) -> Outli
         &mut new_body,
         &mut next_id,
         &module_name,
+        module_is_strict,
     );
 
     let chunks = chunk_fns.len();

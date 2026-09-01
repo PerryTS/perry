@@ -90,6 +90,7 @@ fn concat_probe_ir(property: &str) -> String {
         script_global_functions: Vec::new(),
         references_global_this: false,
         annexb_global_undefined_names: Vec::new(),
+        init_is_strict: false,
         init: Vec::new(),
         classic_for_lexical_bindings: std::collections::HashSet::new(),
         exported_native_instances: Vec::new(),

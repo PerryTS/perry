@@ -200,6 +200,7 @@ fn module_with_new(class: Class, arg_count: usize) -> Module {
             was_plain_async: false,
             was_unrolled: false,
         }],
+        init_is_strict: false,
         init: Vec::new(),
         classic_for_lexical_bindings: std::collections::HashSet::new(),
         exported_native_instances: Vec::new(),
