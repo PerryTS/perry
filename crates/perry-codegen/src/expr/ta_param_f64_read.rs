@@ -109,16 +109,17 @@ fn checked_typed_array_f64_kind(
     // bindings are still excluded so a rebind can't make the proof stale for
     // the local-proof case; for the module-global case the runtime guard is
     // the safety net regardless. #8595-followup / typed-array read inlining.
-    let class = crate::type_analysis::receiver_class_name(ctx, object).or_else(|| {
-        if ctx.reassigned_locals.contains(id) {
-            return None;
-        }
-        match ctx.module_global_proven_types.get(id) {
-            Some(perry_hir::types::Type::Named(name)) => Some(name.clone()),
-            _ => None,
-        }
-    })
-    .or_else(|| declared_typed_array_class_f64(ctx, id))?;
+    let class = crate::type_analysis::receiver_class_name(ctx, object)
+        .or_else(|| {
+            if ctx.reassigned_locals.contains(id) {
+                return None;
+            }
+            match ctx.module_global_proven_types.get(id) {
+                Some(perry_hir::types::Type::Named(name)) => Some(name.clone()),
+                _ => None,
+            }
+        })
+        .or_else(|| declared_typed_array_class_f64(ctx, id))?;
     f64_kind_from_class(&class)
 }
 

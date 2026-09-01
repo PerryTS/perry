@@ -1065,7 +1065,13 @@ fn collect_loop_reseeded_locals<'a>(
                     out,
                 );
                 if let Some(eb) = else_branch {
-                    collect_loop_reseeded_locals(eb, types, guarded_number_array_params, false, out);
+                    collect_loop_reseeded_locals(
+                        eb,
+                        types,
+                        guarded_number_array_params,
+                        false,
+                        out,
+                    );
                 }
             }
             Stmt::Try {

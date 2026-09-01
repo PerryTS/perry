@@ -497,15 +497,9 @@ fn chain_fold_is_sound(ctx: &FnCtx<'_>, parts: &[&Expr]) -> bool {
 /// the writes it saw, and an `acc + <something else>` node inside the same
 /// function is a different expression that its bound does not license.
 fn reduction_add_is_reassociable(ctx: &FnCtx<'_>, left: &Expr, right: &Expr) -> bool {
-    let admitted = |e: &Expr| {
-        matches!(e, Expr::LocalGet(id) if ctx.native_facts.reassociable_f64_accumulators().contains(id))
-    };
-    let byte_read = |e: &Expr| {
-        matches!(
-            e,
-            Expr::Uint8ArrayGet { .. } | Expr::BufferIndexGet { .. }
-        )
-    };
+    let admitted = |e: &Expr| matches!(e, Expr::LocalGet(id) if ctx.native_facts.reassociable_f64_accumulators().contains(id));
+    let byte_read =
+        |e: &Expr| matches!(e, Expr::Uint8ArrayGet { .. } | Expr::BufferIndexGet { .. });
     (admitted(left) && byte_read(right)) || (admitted(right) && byte_read(left))
 }
 

@@ -1331,7 +1331,14 @@ fn walk_accumulator_stmts(
                     mode,
                     accumulators,
                 );
-                walk_accumulator_stmts(body, unknown, induction, induction_intervals, mode, accumulators);
+                walk_accumulator_stmts(
+                    body,
+                    unknown,
+                    induction,
+                    induction_intervals,
+                    mode,
+                    accumulators,
+                );
             }
             Stmt::For {
                 init,
@@ -1513,7 +1520,14 @@ fn walk_accumulator_expr(
             accumulators.disqualified.extend(written);
             let unknown = execution.nested_loop(None);
             perry_hir::walker::walk_expr_children(expr, &mut |child| {
-                walk_accumulator_expr(child, unknown, induction, induction_intervals, mode, accumulators)
+                walk_accumulator_expr(
+                    child,
+                    unknown,
+                    induction,
+                    induction_intervals,
+                    mode,
+                    accumulators,
+                )
             });
         }
         _ => {

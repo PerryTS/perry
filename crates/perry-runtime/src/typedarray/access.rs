@@ -237,7 +237,10 @@ static KEEP_JS_TYPED_ARRAY_READ_F64: extern "C" fn(*const TypedArrayHeader, i32)
 #[no_mangle]
 pub extern "C" fn js_u8_buffer_read_f64(target: *const TypedArrayHeader, index: i32) -> f64 {
     let addr = strip_nanbox(target as u64);
-    if addr >= 0x1000 {
+    // Pointer-tagged registry handles share this ABI with heap receivers but
+    // are never dereferenceable. Keep them out of the admission probe; the
+    // delegated getter below owns their ordinary JS-value semantics.
+    if crate::value::addr_class::is_above_handle_band(addr) {
         crate::buffer::u8_inline_cache_try_prime(addr);
     }
     js_uint8array_index_get_value(addr as *const TypedArrayHeader, index)

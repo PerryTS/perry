@@ -621,16 +621,17 @@ fn checked_typed_array_i32_kind(
     // guard-protected (a wrong class misses the runtime KIND cache and defers
     // to `js_typed_array_read_int32`); a reassigned binding is still excluded.
     // Mirrors the f64 sibling (`ta_param_f64_read.rs`).
-    let class = crate::type_analysis::receiver_class_name(ctx, object).or_else(|| {
-        if ctx.reassigned_locals.contains(id) {
-            return None;
-        }
-        match ctx.module_global_proven_types.get(id) {
-            Some(perry_hir::types::Type::Named(name)) => Some(name.clone()),
-            _ => None,
-        }
-    })
-    .or_else(|| declared_typed_array_class_i32(ctx, id))?;
+    let class = crate::type_analysis::receiver_class_name(ctx, object)
+        .or_else(|| {
+            if ctx.reassigned_locals.contains(id) {
+                return None;
+            }
+            match ctx.module_global_proven_types.get(id) {
+                Some(perry_hir::types::Type::Named(name)) => Some(name.clone()),
+                _ => None,
+            }
+        })
+        .or_else(|| declared_typed_array_class_i32(ctx, id))?;
     i32_kind_from_class(&class)
 }
 

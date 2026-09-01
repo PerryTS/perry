@@ -706,7 +706,6 @@ pub fn asymmetric_key_meta(addr: usize) -> Option<(u8, u8)> {
     ASYMMETRIC_KEY_REGISTRY.with(|r| r.borrow().get(&addr).copied())
 }
 
-
 /// #9342: direct-mapped inline-read admission cache for `Uint8Array`-backing
 /// `BufferHeader`s, exported under a stable link name for the codegen's
 /// guarded inline byte load (`perry-codegen/src/expr/u8_buffer_read.rs`).

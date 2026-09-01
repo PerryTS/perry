@@ -62,26 +62,27 @@ fn u8_buffer_receiver_eligible(ctx: &FnCtx<'_>, object: &Expr) -> bool {
     if ctx.buffer_view_slots.contains_key(id) {
         return false;
     }
-    let class = crate::type_analysis::receiver_class_name(ctx, object).or_else(|| {
-        if ctx.reassigned_locals.contains(id) {
-            return None;
-        }
-        match ctx.module_global_proven_types.get(id) {
-            Some(perry_hir::types::Type::Named(name)) => Some(name.clone()),
-            _ => None,
-        }
-    })
-    .or_else(|| {
-        // #9363: a declared `Uint8Array` parameter, on the same
-        // guard-validated-hint terms as the typed-array lanes.
-        if ctx.reassigned_locals.contains(id) {
-            return None;
-        }
-        match ctx.local_type_hint(id) {
-            Some(perry_hir::types::Type::Named(name)) => Some(name.clone()),
-            _ => None,
-        }
-    });
+    let class = crate::type_analysis::receiver_class_name(ctx, object)
+        .or_else(|| {
+            if ctx.reassigned_locals.contains(id) {
+                return None;
+            }
+            match ctx.module_global_proven_types.get(id) {
+                Some(perry_hir::types::Type::Named(name)) => Some(name.clone()),
+                _ => None,
+            }
+        })
+        .or_else(|| {
+            // #9363: a declared `Uint8Array` parameter, on the same
+            // guard-validated-hint terms as the typed-array lanes.
+            if ctx.reassigned_locals.contains(id) {
+                return None;
+            }
+            match ctx.local_type_hint(id) {
+                Some(perry_hir::types::Type::Named(name)) => Some(name.clone()),
+                _ => None,
+            }
+        });
     class.as_deref() == Some("Uint8Array")
 }
 
