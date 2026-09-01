@@ -464,6 +464,7 @@ pub(crate) fn collect_type_facts(
     spec_i32_params: &HashSet<u32>,
     spec_numeric_params: &HashSet<u32>,
     spec_number_array_params: &HashSet<u32>,
+    module_global_proven_types: &HashMap<u32, perry_hir::types::Type>,
 ) -> TypeFacts {
     // #7700: which locals hold a NUMBER, so a `u8[k]` keyed on one is a byte
     // read rather than a property read. Computed once here because
@@ -560,6 +561,7 @@ pub(crate) fn collect_type_facts(
         spec_ta_lens,
         spec_numeric_params,
         &not_bigint_locals,
+        module_global_proven_types,
     );
     let (mut array_facts, effect_facts, materialization_hazards) =
         collect_array_facts(stmts, params, module_globals, binding_types);
@@ -792,6 +794,7 @@ pub(crate) fn collect_native_region_fact_graph(
         &HashSet::new(),
         &HashSet::new(),
         &HashSet::new(),
+        &HashMap::new(),
     )
 }
 
@@ -815,6 +818,7 @@ pub(crate) fn collect_native_region_fact_graph_with_spec_params(
     spec_i32_params: &HashSet<u32>,
     spec_numeric_params: &HashSet<u32>,
     spec_number_array_params: &HashSet<u32>,
+    module_global_proven_types: &HashMap<u32, perry_hir::types::Type>,
 ) -> NativeRegionFactGraph {
     collect_type_facts(
         stmts,
@@ -832,6 +836,7 @@ pub(crate) fn collect_native_region_fact_graph_with_spec_params(
         spec_i32_params,
         spec_numeric_params,
         spec_number_array_params,
+        module_global_proven_types,
     )
 }
 
@@ -861,6 +866,7 @@ pub(crate) fn collect_hir_facts(
         &HashSet::new(),
         &HashSet::new(),
         &HashSet::new(),
+        &HashMap::new(),
     )
 }
 

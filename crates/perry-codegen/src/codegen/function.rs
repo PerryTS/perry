@@ -931,6 +931,10 @@ pub(super) fn compile_function(
         &spec_i32_params,
         &spec_numeric_params,
         &spec_number_array_params,
+        // #9363: module-scope bindings whose CONSTRUCTION (not annotation)
+        // proves a numeric typed-array/Uint8Array kind, so `g[i]` off one is
+        // Number-or-`undefined` exactly as a body-local `const` view is.
+        &cross_module.module_global_proven_types,
     );
 
     // A Number-by-construction local cannot ever hold a GC pointer, so it
