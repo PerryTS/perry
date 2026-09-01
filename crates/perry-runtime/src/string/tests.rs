@@ -1123,3 +1123,176 @@ fn concat_memo_governor_recovers_after_backoff() {
         "backoff must expire into a probation window, got stuck for {windows} windows"
     );
 }
+
+/// #9409: `split("")` cuts at UTF-16 CODE UNIT boundaries, so an astral
+/// character yields TWO parts — a high and a low surrogate, each stored as
+/// WTF-8 and flagged, exactly as `charAt` already returns them.
+mod split_empty_delimiter_code_units {
+    use super::*;
+
+    fn parts(source: &str, limit: i32) -> Vec<Vec<u8>> {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let s = scope.root_string_ptr(js_string_from_bytes(source.as_ptr(), source.len() as u32));
+        let empty = scope.root_string_ptr(js_string_from_bytes(b"".as_ptr(), 0));
+        let arr = s.with_const_ptr::<StringHeader, _>(|s| {
+            empty.with_const_ptr::<StringHeader, _>(|e| {
+                crate::string::js_string_split_n(s, e, limit)
+            })
+        });
+        // `split` stores NaN-boxed string pointers with STRING_TAG; the mask is
+        // how the existing split tests read one back.
+        const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
+        unsafe {
+            (0..crate::array::js_array_length(arr) as usize)
+                .map(|i| {
+                    let part = (crate::array::js_array_get_f64(arr, i as u32).to_bits()
+                        & POINTER_MASK) as *const StringHeader;
+                    std::slice::from_raw_parts(
+                        crate::string::string_data(part),
+                        (*part).byte_len as usize,
+                    )
+                    .to_vec()
+                })
+                .collect()
+        }
+    }
+
+    fn flags_of(source: &str, index: usize) -> u32 {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let s = scope.root_string_ptr(js_string_from_bytes(source.as_ptr(), source.len() as u32));
+        let empty = scope.root_string_ptr(js_string_from_bytes(b"".as_ptr(), 0));
+        let arr = s.with_const_ptr::<StringHeader, _>(|s| {
+            empty.with_const_ptr::<StringHeader, _>(|e| crate::string::js_string_split_n(s, e, -1))
+        });
+        const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
+        unsafe {
+            let part = (crate::array::js_array_get_f64(arr, index as u32).to_bits() & POINTER_MASK)
+                as *const StringHeader;
+            (*part).flags as u32
+        }
+    }
+
+    #[test]
+    fn an_astral_character_splits_into_its_two_surrogate_halves() {
+        assert_eq!(
+            parts("😀", -1),
+            [vec![0xED, 0xA0, 0xBD], vec![0xED, 0xB8, 0x80]]
+        );
+        assert_eq!(
+            parts("a😀b", -1),
+            [
+                b"a".to_vec(),
+                vec![0xED, 0xA0, 0xBD],
+                vec![0xED, 0xB8, 0x80],
+                b"b".to_vec()
+            ]
+        );
+    }
+
+    /// Each half must carry `HAS_LONE_SURROGATES`, or `isWellFormed()` and
+    /// `JSON.stringify` would treat a broken half as valid text.
+    #[test]
+    fn each_half_is_flagged_as_a_lone_surrogate() {
+        assert_ne!(flags_of("😀", 0) & STRING_FLAG_HAS_LONE_SURROGATES, 0);
+        assert_ne!(flags_of("😀", 1) & STRING_FLAG_HAS_LONE_SURROGATES, 0);
+        // A BMP part is untouched by the change and stays unflagged.
+        assert_eq!(flags_of("é", 0) & STRING_FLAG_HAS_LONE_SURROGATES, 0);
+    }
+
+    /// `limit` counts code units, so it can stop between the halves of one
+    /// character — `"😀".split("", 1)` is a one-element array holding the lone
+    /// high surrogate.
+    #[test]
+    fn limit_counts_code_units_and_may_cut_a_pair() {
+        assert_eq!(parts("😀", 1), [vec![0xED, 0xA0, 0xBD]]);
+        assert_eq!(
+            parts("😀", 2),
+            [vec![0xED, 0xA0, 0xBD], vec![0xED, 0xB8, 0x80]]
+        );
+        assert_eq!(parts("a😀b", 2), [b"a".to_vec(), vec![0xED, 0xA0, 0xBD]]);
+        assert_eq!(parts("😀", 0).len(), 0);
+    }
+
+    /// BMP text, lone surrogates already in the payload, and the empty string
+    /// keep their pre-#9409 answers: the change is confined to 4-byte
+    /// sequences.
+    #[test]
+    fn non_astral_payloads_are_unchanged() {
+        assert_eq!(
+            parts("abc", -1),
+            [b"a".to_vec(), b"b".to_vec(), b"c".to_vec()]
+        );
+        assert_eq!(
+            parts("é漢", -1),
+            ["é".as_bytes().to_vec(), "漢".as_bytes().to_vec()]
+        );
+        assert_eq!(parts("", -1).len(), 0);
+    }
+
+    fn scalar_part(source: &str, index: i32) -> Vec<u8> {
+        const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let s = scope.root_string_ptr(js_string_from_bytes(source.as_ptr(), source.len() as u32));
+        let empty = scope.root_string_ptr(js_string_from_bytes(b"".as_ptr(), 0));
+        let value = s.with_const_ptr::<StringHeader, _>(|s| {
+            empty.with_const_ptr::<StringHeader, _>(|e| {
+                crate::string::split::js_string_split_part_value(s, e, index)
+            })
+        });
+        let part = (value.to_bits() & POINTER_MASK) as *const StringHeader;
+        unsafe {
+            std::slice::from_raw_parts(crate::string::string_data(part), (*part).byte_len as usize)
+                .to_vec()
+        }
+    }
+
+    fn scalar_part_len(source: &str, index: i32) -> f64 {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let s = scope.root_string_ptr(js_string_from_bytes(source.as_ptr(), source.len() as u32));
+        let empty = scope.root_string_ptr(js_string_from_bytes(b"".as_ptr(), 0));
+        s.with_const_ptr::<StringHeader, _>(|s| {
+            empty.with_const_ptr::<StringHeader, _>(|e| {
+                crate::string::split::js_string_split_part_utf16_length(s, e, index)
+            })
+        })
+    }
+
+    /// The two scalar-replacement fast paths answer `split("")[k]` and
+    /// `split("")[k].length` WITHOUT building the array, so they need the same
+    /// code-unit indexing or a scalar-replaced read would disagree with the
+    /// array form of the identical expression.
+    #[test]
+    fn the_scalar_fast_paths_index_the_same_code_units() {
+        assert_eq!(scalar_part("a\u{1F600}b", 0), b"a".to_vec());
+        assert_eq!(scalar_part("a\u{1F600}b", 1), vec![0xED, 0xA0, 0xBD]);
+        assert_eq!(scalar_part("a\u{1F600}b", 2), vec![0xED, 0xB8, 0x80]);
+        assert_eq!(scalar_part("a\u{1F600}b", 3), b"b".to_vec());
+        for index in 0..4 {
+            assert_eq!(scalar_part_len("a\u{1F600}b", index), 1.0, "index {index}");
+            assert_eq!(
+                scalar_part("a\u{1F600}b", index),
+                parts("a\u{1F600}b", -1)[index as usize],
+                "index {index} must match the array form"
+            );
+        }
+        assert_eq!(scalar_part_len("a\u{1F600}b", 4), 0.0);
+    }
+
+    /// A malformed payload (a `Buffer`/FFI slice cut mid-sequence) reports 0
+    /// UTF-16 units for its stray lead byte. It still has to come back as its
+    /// own part, or split/join would silently drop bytes — the #6085 guarantee.
+    #[test]
+    fn a_malformed_lead_byte_is_still_its_own_part() {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let bytes = [0x80u8, b'|', 0xF0];
+        let s = scope.root_string_ptr(js_string_from_wtf8_bytes(
+            bytes.as_ptr(),
+            bytes.len() as u32,
+        ));
+        let empty = scope.root_string_ptr(js_string_from_bytes(b"".as_ptr(), 0));
+        let arr = s.with_const_ptr::<StringHeader, _>(|s| {
+            empty.with_const_ptr::<StringHeader, _>(|e| crate::string::js_string_split_n(s, e, -1))
+        });
+        assert_eq!(crate::array::js_array_length(arr), 3);
+    }
+}

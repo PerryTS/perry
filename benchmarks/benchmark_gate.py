@@ -66,6 +66,12 @@ def _number(value: Any, context: str) -> float:
     return value
 
 
+def _integer_ms(value: Any, context: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ArtifactError(f"{context}: expected an integer millisecond value, got {value!r}")
+    return value
+
+
 def distribution(values: Iterable[Any]) -> dict[str, Any]:
     """Return raw samples and deterministic summary statistics."""
     samples = [_number(value, "sample") for value in values]
@@ -155,18 +161,20 @@ def build_artifact(
                 raise ArtifactError(
                     f"{name}: {runtime_name} has {len(rss_samples)}/{requested_samples} RSS samples"
                 )
+            integer_wall_samples = [
+                _integer_ms(value, f"{name}: {runtime_name} wall sample")
+                for value in wall_samples
+            ]
             if any(_number(value, f"{name}: {runtime_name} RSS sample") <= 0 for value in rss_samples):
                 raise ArtifactError(f"{name}: {runtime_name} has an invalid zero RSS sample")
-            if any(_number(value, f"{name}: {runtime_name} wall sample") < 0 for value in wall_samples):
+            if any(value < 0 for value in integer_wall_samples):
                 raise ArtifactError(f"{name}: {runtime_name} has an invalid negative wall sample")
-            if runtime_name == "perry" and statistics.median(
-                _number(value, f"{name}: Perry wall sample") for value in wall_samples
-            ) == 0:
+            if runtime_name == "perry" and statistics.median(integer_wall_samples) == 0:
                 raise ArtifactError(
                     f"{name}: Perry median is 0 ms (measures-nothing); refusing to compute ratios"
                 )
             runtime_results[runtime_name] = {
-                "wall_ms": distribution(wall_samples),
+                "wall_ms": distribution(integer_wall_samples),
                 "rss_kb": distribution(rss_samples),
             }
 
@@ -323,6 +331,9 @@ def validate_artifact(payload: Mapping[str, Any]) -> None:
                     raise ArtifactError(
                         f"{name}: {runtime_name} has {len(samples)}/{requested} {metric_name} samples"
                     )
+                if metric_name == "wall_ms":
+                    for value in samples:
+                        _integer_ms(value, f"{name}: {runtime_name} wall sample")
                 recalculated = distribution(samples)
                 for field, value in recalculated.items():
                     if metric.get(field) != value:

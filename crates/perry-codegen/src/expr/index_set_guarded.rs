@@ -179,18 +179,18 @@ pub(super) fn emit_guarded_inbounds_array_store(
         // STRICTLY in bounds: `index == length` is an extend, which changes
         // `length` and may need a realloc, so it belongs on the slow arm.
         let index_in_bounds = blk.icmp_ult(I32, idx_i32, &length);
-        let length_sane = blk.icmp_ule(I32, &length, "16000000");
         let capacity_sane = blk.icmp_ule(I32, &capacity, "16000000");
-        let length_within_capacity = blk.icmp_ule(I32, &length, &capacity);
+        let index_within_capacity = blk.icmp_ult(I32, idx_i32, &capacity);
 
         let mut guard_ok = blk.and(I1, &is_array, &not_forwarded);
         guard_ok = blk.and(I1, &guard_ok, &integrity_clean);
         guard_ok = blk.and(I1, &guard_ok, &default_prototype_chain);
         guard_ok = blk.and(I1, &guard_ok, &index_nonnegative);
         guard_ok = blk.and(I1, &guard_ok, &index_in_bounds);
-        guard_ok = blk.and(I1, &guard_ok, &length_sane);
         guard_ok = blk.and(I1, &guard_ok, &capacity_sane);
-        guard_ok = blk.and(I1, &guard_ok, &length_within_capacity);
+        // #9371: a large pre-sized holey Array has `length > capacity`, but
+        // an in-bounds index below capacity still names allocated storage.
+        guard_ok = blk.and(I1, &guard_ok, &index_within_capacity);
         blk.cond_br(&guard_ok, &fast_label, &slow_label);
         // The live head's `_reserved` word dominates the fast arm; the numeric
         // write note below is gated on it.

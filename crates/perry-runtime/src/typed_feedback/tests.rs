@@ -610,6 +610,26 @@ fn typed_feedback_array_set_guards_reject_frozen_arrays() {
 }
 
 #[test]
+fn large_presized_array_set_guards_admit_only_the_allocated_prefix() {
+    let arr = crate::array::js_array_constructor_single(1_000_001.0);
+    let capacity = unsafe { (*arr).capacity };
+
+    assert!(plain_array_index_set_guard(arr, 0, true));
+    assert!(numeric_array_index_set_guard(arr, 0, true));
+    assert!(!plain_array_index_set_guard(arr, capacity, true));
+    assert!(!numeric_array_index_set_guard(arr, capacity, true));
+    assert!(
+        !plain_array_index_guard(arr, 0, true),
+        "read guards must still reject a partially materialized array"
+    );
+    let (_, _, _, boundary_kind) = classify_array(arr as usize, Some(capacity));
+    assert_eq!(
+        boundary_kind, STABLE_VALUE_UNDEFINED,
+        "feedback classification must not read beyond physical capacity"
+    );
+}
+
+#[test]
 fn typed_feedback_array_set_boxed_fallback_preserves_original_index_value() {
     let _guard = typed_feedback_test_lock();
     reset_typed_feedback_for_tests();

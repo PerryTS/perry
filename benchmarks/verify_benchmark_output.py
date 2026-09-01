@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """Compare semantic benchmark stdout against a reference stdout file.
 
-Benchmark programs print a volatile timing line first, for example
-``json_roundtrip:97``. This verifier ignores that first timing-shaped line
+The verifier ignores a suite fixture's explicitly declared measurement labels
 and compares the remaining stable ``key:value`` or ``key=value`` lines.
 """
 
@@ -16,22 +15,15 @@ from pathlib import Path
 from typing import Any
 
 
+BENCHMARKS_DIR = Path(__file__).resolve().parent
+if str(BENCHMARKS_DIR) not in sys.path:
+    sys.path.insert(0, str(BENCHMARKS_DIR))
+
+from benchmark_time import timing_contract
+
+
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 KV_RE = re.compile(r"^([A-Za-z0-9_(). -]+?)\s*([:=])\s*(.*?)\s*$")
-NUMERIC_RE = re.compile(r"^-?\d+(?:\.\d+)?$")
-
-# These are semantic even if they appear as the first output line. The suite
-# normally prints timing first, but keeping common evidence keys explicit makes
-# direct verifier use less surprising.
-FIRST_LINE_SEMANTIC_KEYS = {
-    "checksum",
-    "length",
-    "sum",
-    "result",
-    "value",
-    "primes",
-    "total_iter",
-}
 
 
 def _strip_ansi(value: str) -> str:
@@ -46,9 +38,9 @@ def _parse_kv(line: str) -> tuple[str, str, str] | None:
     return key.strip(), sep, value.strip()
 
 
-def semantic_lines_from_text(text: str) -> list[str]:
+def semantic_lines_from_text(text: str, benchmark: str) -> list[str]:
     lines: list[str] = []
-    first_content_seen = False
+    ignored_labels = timing_contract(benchmark).measurement_labels
 
     for raw_line in text.splitlines():
         line = _strip_ansi(raw_line).strip()
@@ -56,19 +48,11 @@ def semantic_lines_from_text(text: str) -> list[str]:
             continue
 
         kv = _parse_kv(line)
-        is_first_content = not first_content_seen
-        first_content_seen = True
-
         if not kv:
             continue
 
-        key, sep, value = kv
-        if (
-            is_first_content
-            and sep == ":"
-            and key not in FIRST_LINE_SEMANTIC_KEYS
-            and NUMERIC_RE.match(value)
-        ):
+        key, _, value = kv
+        if key in ignored_labels:
             continue
 
         lines.append(f"{key}:{value}")
@@ -126,10 +110,11 @@ def compare_stdout_files(
     *,
     expected_path: str | Path,
     actual_path: str | Path,
+    benchmark: str,
     reference: str = "node",
 ) -> dict[str, Any]:
-    expected_lines = semantic_lines_from_text(_read_text(expected_path))
-    actual_lines = semantic_lines_from_text(_read_text(actual_path))
+    expected_lines = semantic_lines_from_text(_read_text(expected_path), benchmark)
+    actual_lines = semantic_lines_from_text(_read_text(actual_path), benchmark)
 
     if not expected_lines:
         return {
@@ -178,6 +163,11 @@ def main(argv: list[str] | None = None) -> int:
         default="node",
         help="Reference source recorded in the JSON report",
     )
+    parser.add_argument(
+        "--benchmark",
+        required=True,
+        help="Suite fixture filename/stem whose declared measurement labels are ignored",
+    )
     parser.add_argument("--json-out", help="Write the JSON report to this path")
     args = parser.parse_args(argv)
 
@@ -185,7 +175,7 @@ def main(argv: list[str] | None = None) -> int:
         report = {
             "status": "unchecked",
             "reference": "none",
-            "actual_lines": semantic_lines_from_text(_read_text(args.actual)),
+            "actual_lines": semantic_lines_from_text(_read_text(args.actual), args.benchmark),
             "expected_lines": [],
             "reason": "reference unavailable",
         }
@@ -194,6 +184,7 @@ def main(argv: list[str] | None = None) -> int:
             expected_path=args.expected,
             actual_path=args.actual,
             reference=args.reference,
+            benchmark=args.benchmark,
         )
 
     _write_json(report, args.json_out)

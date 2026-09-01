@@ -31,6 +31,7 @@ checksum:11842140
 EOF
 
 if python3 "$VERIFIER" \
+  --benchmark bench_json_roundtrip \
   --expected "$TMP_DIR/json-node.out" \
   --actual "$TMP_DIR/json-perry.out" \
   --json-out "$TMP_DIR/json-report.json"; then
@@ -54,6 +55,7 @@ checksum:2998500000
 EOF
 
 python3 "$VERIFIER" \
+  --benchmark bench_array_grow \
   --expected "$TMP_DIR/array-node.out" \
   --actual "$TMP_DIR/array-perry.out" \
   --json-out "$TMP_DIR/array-report.json"
@@ -69,8 +71,34 @@ fibonacci:456
 EOF
 
 python3 "$VERIFIER" \
+  --benchmark 05_fibonacci \
   --expected "$TMP_DIR/fibonacci-node.out" \
   --actual "$TMP_DIR/fibonacci-perry.out" \
   --json-out "$TMP_DIR/fibonacci-report.json"
 assert_json "$TMP_DIR/fibonacci-report.json" "data['status'] == 'unchecked'"
 assert_json "$TMP_DIR/fibonacci-report.json" "data['expected_lines'] == []"
+
+# The #5525 ratio and both absolute elapsed-time lines are measurements, not
+# correctness evidence. Their values may differ across runtimes; the checksum
+# is the semantic line that must match.
+cat >"$TMP_DIR/typed-array-node.out" <<'EOF'
+ta_untyped_typed_ratio:0.94
+ta_untyped_access:290
+ta_typed_access:309
+checksum:123
+EOF
+
+cat >"$TMP_DIR/typed-array-perry.out" <<'EOF'
+ta_untyped_typed_ratio:1.17
+ta_untyped_access:257
+ta_typed_access:220
+checksum:123
+EOF
+
+python3 "$VERIFIER" \
+  --benchmark bench_typed_array_untyped_access \
+  --expected "$TMP_DIR/typed-array-node.out" \
+  --actual "$TMP_DIR/typed-array-perry.out" \
+  --json-out "$TMP_DIR/typed-array-report.json"
+assert_json "$TMP_DIR/typed-array-report.json" "data['status'] == 'pass'"
+assert_json "$TMP_DIR/typed-array-report.json" "data['expected_lines'] == ['checksum:123']"

@@ -385,7 +385,33 @@ const JS_NON_WHITESPACE_CLASS: &str = r"[^\t\n\x0B\x0C\r\x20\x{A0}\x{1680}\x{200
 // case fold lands in that set (LONG S -> s, KELVIN SIGN -> k).
 const JS_ASCII_WORD_MEMBERS: &str = r"A-Za-z0-9_";
 const JS_UNICODE_IGNORE_CASE_WORD_MEMBERS: &str = r"A-Za-z0-9_\x{017F}\x{212A}";
-const JS_NON_DOTALL_DOT: &str = r"[^\n\r\x{2028}\x{2029}]";
+/// The four ECMAScript LineTerminators (§12.3), as character-class members.
+///
+/// One spelling, three consumers: a non-dotAll `.` excludes exactly this set
+/// (#9218), and §22.2.2.6 defines the multiline `^`/`$` assertions over exactly
+/// the same characters (#9408). A macro rather than a `const` so `concat!` can
+/// build the three patterns from it and they cannot drift.
+macro_rules! js_line_terminator_members {
+    () => {
+        r"\n\r\x{2028}\x{2029}"
+    };
+}
+const JS_NON_DOTALL_DOT: &str = concat!("[^", js_line_terminator_members!(), "]");
+/// `^` under the `m` flag: the start of the input, or any position immediately
+/// after a LineTerminator.
+///
+/// Rust's `(?m)` mode — what the flag prefix used to be translated to on its
+/// own — recognizes LF and nothing else, so `"one\rtwo"` looked like a single
+/// line and `"one\r\ntwo"` like two instead of three (CRLF is TWO terminators,
+/// with an empty line between them). Neither engine has a configurable line
+/// terminator SET (`regex`'s `line_terminator` is a single byte), so the
+/// assertion is spelled out. The lookbehind costs the linear engine: a pattern
+/// using it falls back to `fancy-regex`, which is why only `m` patterns are
+/// rewritten and `\A`/`\z` are used rather than leaning on the `(?m)` prefix.
+const JS_MULTILINE_LINE_START: &str = concat!(r"(?:\A|(?<=[", js_line_terminator_members!(), "]))");
+/// `$` under the `m` flag: the end of the input, or any position immediately
+/// before a LineTerminator. Mirror of [`JS_MULTILINE_LINE_START`].
+const JS_MULTILINE_LINE_END: &str = concat!(r"(?:\z|(?=[", js_line_terminator_members!(), "]))");
 // ECMAScript allows quantifiers up to 2^53-1; regex-syntax uses u32 and rejects larger values.
 const MAX_QUANTIFIER: u64 = 65_535;
 
@@ -1716,6 +1742,7 @@ pub(super) fn js_regex_to_rust_with_flags(pattern: &str, flags: &str) -> String 
     let unicode = flags.contains('u') || flags.contains('v');
     let unicode_ignore_case = case_insensitive && unicode;
     let dot_all = flags.contains('s');
+    let multiline = flags.contains('m');
     let mut i = 0;
     let mut in_class = false; // track `[...]` position; JS and Rust disagree on bare `[` inside
     while i < chars.len() {
@@ -2019,6 +2046,19 @@ pub(super) fn js_regex_to_rust_with_flags(pattern: &str, flags: &str) -> String 
             } else {
                 result.push_str(JS_NON_DOTALL_DOT);
             }
+            i += 1;
+        } else if multiline && !in_class && (chars[i] == '^' || chars[i] == '$') {
+            // §22.2.2.6 Assertion: under `m`, `^`/`$` hold at every
+            // LineTerminator, not just LF. Only an UNESCAPED anchor outside a
+            // character class reaches here — `\^` / `\$` are consumed by the
+            // backslash arm above, and inside `[...]` both are ordinary
+            // members (`in_class` is what the `[`/`]` arms maintain for exactly
+            // this kind of question).
+            result.push_str(if chars[i] == '^' {
+                JS_MULTILINE_LINE_START
+            } else {
+                JS_MULTILINE_LINE_END
+            });
             i += 1;
         } else if !in_class && chars[i] == '(' && i + 2 < chars.len() && chars[i + 1] == '?' {
             // Check for JS named group (?<name>...) — convert to (?P<name>...)
@@ -2518,5 +2558,127 @@ mod any_char_rewrite_tests {
             assert_eq!(js_regex_to_rust_with_flags("[]", flags), "[a&&b]");
             assert_eq!(js_regex_to_rust_with_flags(r"[\w\W]", flags), "(?s:.)");
         }
+    }
+}
+
+#[cfg(test)]
+mod multiline_anchor_tests {
+    use super::{
+        js_regex_to_rust, js_regex_to_rust_with_flags, JS_MULTILINE_LINE_END,
+        JS_MULTILINE_LINE_START, JS_NON_DOTALL_DOT,
+    };
+    use crate::regex::lazy::flag_prefixed_pattern;
+    use crate::regex::{build_fancy_regex, build_std_regex};
+
+    /// §22.2.2.6 defines the multiline anchors over the SAME LineTerminator set
+    /// #9218 taught `.` to exclude. `js_line_terminator_members!` is what makes
+    /// that structural rather than a coincidence; this pins the three
+    /// expansions so a hand-edit of one is a test failure, not a silent
+    /// divergence.
+    #[test]
+    fn anchors_and_dot_share_one_line_terminator_set() {
+        let members = r"\n\r\x{2028}\x{2029}";
+        assert_eq!(JS_NON_DOTALL_DOT, format!("[^{members}]"));
+        assert_eq!(JS_MULTILINE_LINE_START, format!(r"(?:\A|(?<=[{members}]))"));
+        assert_eq!(JS_MULTILINE_LINE_END, format!(r"(?:\z|(?=[{members}]))"));
+    }
+
+    #[test]
+    fn anchors_are_rewritten_only_under_m() {
+        assert_eq!(
+            js_regex_to_rust_with_flags("^a$", "m"),
+            format!("{JS_MULTILINE_LINE_START}a{JS_MULTILINE_LINE_END}")
+        );
+        // Without `m` the anchors are whole-input anchors, which is exactly
+        // what the `regex`/`fancy-regex` default already means.
+        assert_eq!(js_regex_to_rust_with_flags("^a$", "g"), "^a$");
+        assert_eq!(js_regex_to_rust("^a$"), "^a$");
+    }
+
+    /// A `^`/`$` that is NOT an assertion must survive untouched: inside a
+    /// character class both are ordinary members (`[$^]`, and the leading `^`
+    /// of a negated class), and `\^` / `\$` are escaped literals.
+    #[test]
+    fn literal_carets_and_dollars_are_untouched() {
+        for pattern in [r"[$^]", r"[^a]", r"[a^b$c]", r"\^", r"\$", r"a\$b\^c"] {
+            assert_eq!(
+                js_regex_to_rust_with_flags(pattern, "gim"),
+                js_regex_to_rust_with_flags(pattern, "gi"),
+                "/{pattern}/m must translate exactly like /{pattern}/"
+            );
+        }
+        // #9216's rewrites keep firing with `m` in the flags: the `^` in `[^]`
+        // belongs to the class, not to an assertion.
+        assert_eq!(js_regex_to_rust_with_flags("[^]", "gm"), "(?s:.)");
+        assert_eq!(js_regex_to_rust_with_flags("[]", "gm"), "[a&&b]");
+    }
+
+    /// The lookaround spelling is deliberately outside the linear engine's
+    /// grammar, so a multiline anchor now selects `fancy-regex`. Assert BOTH
+    /// halves of that: the linear engine refuses, and the fancy engine — the
+    /// one that will actually run — accepts. #9305 is the precedent for a
+    /// translator change that only one engine could parse.
+    #[test]
+    fn multiline_anchors_compile_on_the_fancy_engine() {
+        for pattern in [
+            "^.*$",
+            "^",
+            "$",
+            r"^\w+$",
+            r"^[\w-]+$",
+            r"[ \t]+$",
+            "^[^]$",
+            "^[]$",
+            r"^\b\w+\b$",
+            "^(a)+$",
+            r"^(\w)\1$",
+            "(?=^b)b",
+        ] {
+            let translated = flag_prefixed_pattern(pattern, "gm");
+            assert!(
+                build_std_regex(&translated).is_err(),
+                "/{pattern}/m unexpectedly compiled on the linear engine: {translated}"
+            );
+            assert!(
+                build_fancy_regex(&translated).is_ok(),
+                "/{pattern}/m must compile on fancy-regex: {translated}"
+            );
+        }
+    }
+
+    /// The behaviour the issue reports, at the engine level: every
+    /// LineTerminator starts and ends a line, and CRLF is TWO of them with an
+    /// empty line in between.
+    #[test]
+    fn every_line_terminator_bounds_a_line() {
+        let re = build_fancy_regex(&flag_prefixed_pattern("^.*$", "gm")).unwrap();
+        let lines = |subject: &str| -> Vec<String> {
+            re.find_iter(subject)
+                .map(|m| m.unwrap().as_str().to_string())
+                .collect()
+        };
+        assert_eq!(lines("one\ntwo"), ["one", "two"]);
+        assert_eq!(lines("one\rtwo"), ["one", "two"]);
+        assert_eq!(lines("one\u{2028}two"), ["one", "two"]);
+        assert_eq!(lines("one\u{2029}two"), ["one", "two"]);
+        // CRLF: `$` before the CR, `^` after it, `$` before the LF — an empty
+        // match sits between the pair.
+        assert_eq!(lines("one\r\ntwo"), ["one", "", "two"]);
+        assert_eq!(lines("onetwo"), ["onetwo"]);
+    }
+
+    /// Insertion points, i.e. the `replace(/^/gm, ">")` shape: the anchors are
+    /// zero-width, so the count and the offsets are the whole answer.
+    #[test]
+    fn anchors_are_zero_width_at_every_terminator() {
+        let starts = build_fancy_regex(&flag_prefixed_pattern("^", "gm")).unwrap();
+        let ends = build_fancy_regex(&flag_prefixed_pattern("$", "gm")).unwrap();
+        let offsets = |re: &fancy_regex::Regex, subject: &str| -> Vec<usize> {
+            re.find_iter(subject).map(|m| m.unwrap().start()).collect()
+        };
+        assert_eq!(offsets(&starts, "one\r\ntwo"), [0, 4, 5]);
+        assert_eq!(offsets(&ends, "one\r\ntwo"), [3, 4, 8]);
+        assert_eq!(offsets(&starts, "\rone"), [0, 1]);
+        assert_eq!(offsets(&ends, "one\r"), [3, 4]);
     }
 }

@@ -6,6 +6,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 COMPILETS="${SCRIPT_DIR}/../../target/release/perry"
 RESULTS_DIR="${SCRIPT_DIR}/results"
+TIME_EXTRACTOR="${SCRIPT_DIR}/../benchmark_time.py"
 mkdir -p "$RESULTS_DIR"
 
 # Colors for output
@@ -57,6 +58,10 @@ if [ -f "$COMPILETS" ]; then
 else
     echo -e "${RED}✗${NC} perry not found at $COMPILETS"
     echo "   Run: cd ${SCRIPT_DIR}/../.. && cargo build --release"
+    exit 1
+fi
+if [ ! -f "$TIME_EXTRACTOR" ]; then
+    echo -e "${RED}✗${NC} benchmark time extractor not found at $TIME_EXTRACTOR"
     exit 1
 fi
 
@@ -128,7 +133,21 @@ fi
 
 # Function to extract timing from output
 extract_time() {
-    echo "$1" | grep -E "^[a-z_]+:[0-9]+" | head -1 | cut -d: -f2
+    local benchmark="$1"
+    local output="$2"
+    python3 "$TIME_EXTRACTOR" extract "$benchmark" <<<"$output"
+}
+
+is_integer_ms() {
+    [[ "$1" =~ ^[0-9]+$ ]]
+}
+
+format_ms() {
+    if is_integer_ms "$1"; then
+        printf '%sms' "$1"
+    else
+        printf '%s' "$1"
+    fi
 }
 
 # Run benchmarks
@@ -159,7 +178,9 @@ for bench in $BENCHMARKS; do
     # Run Perry
     if [ -f "./$name" ]; then
         output=$("./$name" 2>&1)
-        perry_time=$(extract_time "$output")
+        if ! perry_time=$(extract_time "$name" "$output"); then
+            perry_time="UNSCOREABLE"
+        fi
     else
         perry_time="ERR"
     fi
@@ -167,7 +188,9 @@ for bench in $BENCHMARKS; do
     # Run Node.js
     if [ $HAS_NODE -eq 1 ]; then
         output=$(node "$bench" 2>&1)
-        node_time=$(extract_time "$output")
+        if ! node_time=$(extract_time "$name" "$output"); then
+            node_time="UNSCOREABLE"
+        fi
     else
         node_time="-"
     fi
@@ -175,7 +198,9 @@ for bench in $BENCHMARKS; do
     # Run Bun
     if [ $HAS_BUN -eq 1 ]; then
         output=$(bun run "$bench" 2>&1)
-        bun_time=$(extract_time "$output")
+        if ! bun_time=$(extract_time "$name" "$output"); then
+            bun_time="UNSCOREABLE"
+        fi
     else
         bun_time="-"
     fi
@@ -183,13 +208,15 @@ for bench in $BENCHMARKS; do
     # Run Static Hermes
     if [ $HAS_SHERMES -eq 1 ] && [ -f "./${name}_shermes" ]; then
         output=$("./${name}_shermes" 2>&1)
-        shermes_time=$(extract_time "$output")
+        if ! shermes_time=$(extract_time "$name" "$output"); then
+            shermes_time="UNSCOREABLE"
+        fi
     else
         shermes_time="-"
     fi
 
     # Track wins/losses vs Node
-    if [ -n "$perry_time" ] && [ "$perry_time" != "ERR" ] && [ -n "$node_time" ] && [ "$node_time" != "-" ]; then
+    if is_integer_ms "$perry_time" && is_integer_ms "$node_time"; then
         if [ "$perry_time" -lt "$node_time" ]; then
             WINS_NODE=$((WINS_NODE + 1))
         elif [ "$perry_time" -gt "$node_time" ]; then
@@ -200,7 +227,7 @@ for bench in $BENCHMARKS; do
     fi
 
     # Track wins/losses vs Bun
-    if [ -n "$perry_time" ] && [ "$perry_time" != "ERR" ] && [ -n "$bun_time" ] && [ "$bun_time" != "-" ]; then
+    if is_integer_ms "$perry_time" && is_integer_ms "$bun_time"; then
         if [ "$perry_time" -lt "$bun_time" ]; then
             WINS_BUN=$((WINS_BUN + 1))
         elif [ "$perry_time" -gt "$bun_time" ]; then
@@ -211,7 +238,7 @@ for bench in $BENCHMARKS; do
     fi
 
     # Track wins/losses vs Static Hermes
-    if [ -n "$perry_time" ] && [ "$perry_time" != "ERR" ] && [ -n "$shermes_time" ] && [ "$shermes_time" != "-" ]; then
+    if is_integer_ms "$perry_time" && is_integer_ms "$shermes_time"; then
         if [ "$perry_time" -lt "$shermes_time" ]; then
             WINS_SHERMES=$((WINS_SHERMES + 1))
         elif [ "$perry_time" -gt "$shermes_time" ]; then
@@ -222,24 +249,28 @@ for bench in $BENCHMARKS; do
     fi
 
     # Print results with colors based on comparison to Node
-    if [ -n "$perry_time" ] && [ "$perry_time" != "ERR" ]; then
-        if [ -n "$node_time" ] && [ "$node_time" != "-" ] && [ "$perry_time" -lt "$node_time" ]; then
+    if is_integer_ms "$perry_time"; then
+        if is_integer_ms "$node_time" && [ "$perry_time" -lt "$node_time" ]; then
             perry_display="${GREEN}${perry_time}ms${NC}"
-        elif [ -n "$node_time" ] && [ "$node_time" != "-" ] && [ "$perry_time" -gt "$node_time" ]; then
+        elif is_integer_ms "$node_time" && [ "$perry_time" -gt "$node_time" ]; then
             perry_display="${RED}${perry_time}ms${NC}"
         else
             perry_display="${perry_time}ms"
         fi
     else
-        perry_display="ERR"
+        perry_display="$perry_time"
     fi
+
+    node_display=$(format_ms "$node_time")
+    bun_display=$(format_ms "$bun_time")
+    shermes_display=$(format_ms "$shermes_time")
 
     if [ $HAS_SHERMES -eq 1 ]; then
         printf "%-20s " "$display_name"
-        echo -e "${perry_display}\t\t${node_time:-"-"}ms\t\t${bun_time:-"-"}ms\t\t${shermes_time:-"-"}ms"
+        echo -e "${perry_display}\t\t${node_display}\t\t${bun_display}\t\t${shermes_display}"
     else
         printf "%-20s " "$display_name"
-        echo -e "${perry_display}\t\t${node_time:-"-"}ms\t\t${bun_time:-"-"}ms"
+        echo -e "${perry_display}\t\t${node_display}\t\t${bun_display}"
     fi
 done
 

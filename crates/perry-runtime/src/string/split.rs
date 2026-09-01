@@ -133,6 +133,55 @@ fn split_part_byte_range(source: &[u8], delimiter: &[u8], target: usize) -> Opti
     (part_index == target).then_some((part_start, source.len()))
 }
 
+/// One element of an EMPTY-delimiter split, located by UTF-16 code-unit index
+/// (#9409). `split("")` cuts at code-unit boundaries, so an astral character
+/// covers two indices and neither of them is a byte range in the source.
+enum EmptyDelimiterPart {
+    /// A byte range to copy verbatim: a BMP character, a WTF-8 lone surrogate
+    /// already in the payload, or a malformed sequence.
+    Bytes { start: usize, end: usize },
+    /// One synthesized half of an astral character.
+    Surrogate(u16),
+}
+
+/// The `index`-th part of `source.split("")`, plus the part's own UTF-16
+/// length. `None` once `index` is past the end.
+///
+/// Shared by the two scalar-replacement fast paths so `split("")[k]` and
+/// `split("")[k].length` cannot disagree with the array `js_string_split_n`
+/// builds. A malformed lead byte reports zero units and still occupies one
+/// index, exactly as the array walk treats it.
+fn empty_delimiter_part(source: &[u8], index: usize) -> Option<(EmptyDelimiterPart, usize)> {
+    let mut byte_offset = 0usize;
+    let mut remaining = index;
+    while byte_offset < source.len() {
+        let (advance, units, code_point) = crate::string::wtf8_step(source, byte_offset);
+        let end = (byte_offset + advance).min(source.len());
+        let parts = units.max(1);
+        if remaining < parts {
+            if units == 2 && code_point >= 0x10000 {
+                let astral = code_point - 0x10000;
+                let unit = if remaining == 0 {
+                    0xD800 + (astral >> 10) as u16
+                } else {
+                    0xDC00 + (astral & 0x3FF) as u16
+                };
+                return Some((EmptyDelimiterPart::Surrogate(unit), 1));
+            }
+            return Some((
+                EmptyDelimiterPart::Bytes {
+                    start: byte_offset,
+                    end,
+                },
+                units,
+            ));
+        }
+        remaining -= parts;
+        byte_offset = end;
+    }
+    None
+}
+
 /// Materialize one element of a string-delimiter split as a boxed JS value.
 /// This is used when codegen proves the result array does not escape and only
 /// a constant element is observed. A missing element remains `undefined`.
@@ -149,30 +198,27 @@ pub extern "C" fn js_string_split_part_value(
     let delimiter_bytes =
         unsafe { slice::from_raw_parts(string_data(delimiter), (*delimiter).byte_len as usize) };
     if delimiter_bytes.is_empty() {
-        let mut byte_offset = 0usize;
-        for _ in 0..index as usize {
-            if byte_offset >= source.len() {
-                return f64::from_bits(crate::value::TAG_UNDEFINED);
-            }
-            let (advance, _, _) = crate::string::wtf8_step(source, byte_offset);
-            byte_offset = (byte_offset + advance).min(source.len());
-        }
-        if byte_offset >= source.len() {
+        let Some((part, _)) = empty_delimiter_part(source, index as usize) else {
             return f64::from_bits(crate::value::TAG_UNDEFINED);
-        }
-        let (advance, _, _) = crate::string::wtf8_step(source, byte_offset);
-        let end = (byte_offset + advance).min(source.len());
-        let mut buf = [0u8; 4];
-        let part = &source[byte_offset..end];
-        buf[..part.len()].copy_from_slice(part);
-        let has_lone_surrogate = unsafe {
-            (*s).flags & STRING_FLAG_HAS_LONE_SURROGATES != 0
-                && crate::string::bytes_have_lone_surrogate(part)
         };
-        let result = if has_lone_surrogate {
-            js_string_from_wtf8_bytes(buf.as_ptr(), part.len() as u32)
-        } else {
-            js_string_from_bytes(buf.as_ptr(), part.len() as u32)
+        let result = match part {
+            // Half of an astral character: the same one-code-unit constructor
+            // `charAt` uses, which flags the WTF-8 lone surrogate it produces.
+            EmptyDelimiterPart::Surrogate(unit) => crate::string::string_from_code_unit(unit),
+            EmptyDelimiterPart::Bytes { start, end } => {
+                let mut buf = [0u8; 4];
+                let bytes = &source[start..end];
+                buf[..bytes.len()].copy_from_slice(bytes);
+                let has_lone_surrogate = unsafe {
+                    (*s).flags & STRING_FLAG_HAS_LONE_SURROGATES != 0
+                        && crate::string::bytes_have_lone_surrogate(bytes)
+                };
+                if has_lone_surrogate {
+                    js_string_from_wtf8_bytes(buf.as_ptr(), bytes.len() as u32)
+                } else {
+                    js_string_from_bytes(buf.as_ptr(), bytes.len() as u32)
+                }
+            }
         };
         return crate::value::js_nanbox_string(result as i64);
     }
@@ -228,19 +274,12 @@ pub extern "C" fn js_string_split_part_utf16_length(
     let delimiter_bytes =
         unsafe { slice::from_raw_parts(string_data(delimiter), (*delimiter).byte_len as usize) };
     if delimiter_bytes.is_empty() {
-        let mut byte_offset = 0usize;
-        for _ in 0..index as usize {
-            if byte_offset >= source.len() {
-                return 0.0;
-            }
-            let (advance, _, _) = crate::string::wtf8_step(source, byte_offset);
-            byte_offset = (byte_offset + advance).min(source.len());
-        }
-        if byte_offset >= source.len() {
-            return 0.0;
-        }
-        let (_, units, _) = crate::string::wtf8_step(source, byte_offset);
-        return units as f64;
+        // Every part of an empty-delimiter split is ONE code unit — including
+        // each half of an astral character, which is the whole point of #9409.
+        return match empty_delimiter_part(source, index as usize) {
+            Some((_, units)) => units as f64,
+            None => 0.0,
+        };
     }
 
     let Some((start, end)) = split_part_byte_range(source, delimiter_bytes, index as usize) else {
@@ -404,18 +443,34 @@ pub extern "C" fn js_string_split_n(
         // up to 3 bytes past the end of the allocation. Step the raw bytes with
         // the bounded WTF-8 decoder instead and emit each sequence verbatim;
         // well-formed input yields byte-identical parts.
-        // Pass 1: count the sequences. No allocation happens here, so the
-        // source payload cannot move under us.
+        //
+        // #9409: the unit of the split is a UTF-16 CODE UNIT, not a WTF-8
+        // sequence. §22.1.3.23 runs SplitMatch over the code-unit sequence, so
+        // an astral character — one 4-byte WTF-8 sequence, but TWO code units
+        // (`"😀".length === 2`) — becomes two parts, each a lone surrogate.
+        // Stepping one WTF-8 sequence per part made `"😀".split("")` a
+        // one-element array while `charAt(0)`/`charAt(1)` on the same string
+        // already reported the two halves.
+        //
+        // Pass 1: count the parts. No allocation happens here, so the source
+        // payload cannot move under us.
         let mut n = 0usize;
         unsafe {
             let src = slice::from_raw_parts(string_data(s), (*s).byte_len as usize);
             let mut i = 0usize;
-            while i < src.len() {
-                let (advance, _, _) = crate::string::wtf8_step(src, i);
+            'count: while i < src.len() {
+                let (advance, units, _) = crate::string::wtf8_step(src, i);
                 i = (i + advance).min(src.len());
-                n += 1;
-                if limit > 0 && n as i64 >= limit as i64 {
-                    break;
+                // `units` is 2 for an astral sequence and 1 for anything else,
+                // including a WTF-8 lone surrogate. A malformed lead byte
+                // reports 0 units but still owns bytes, and the pre-#9409 code
+                // emitted it as its own part — keep that, or a `Buffer`-derived
+                // payload would silently lose bytes across a split/join.
+                for _ in 0..units.max(1) {
+                    n += 1;
+                    if limit > 0 && n as i64 >= limit as i64 {
+                        break 'count;
+                    }
                 }
             }
         }
@@ -436,32 +491,51 @@ pub extern "C" fn js_string_split_n(
         let arr_handle = scope.root_raw_mut_ptr(arr);
 
         let mut i = 0usize;
+        // The trailing half of an astral character, produced with its leading
+        // half and emitted by the next iteration. `limit` can stop the loop
+        // between the two, which is exactly what `"😀".split("", 1)` must do.
+        let mut pending_low_surrogate: Option<u16> = None;
         for idx in 0..n {
             // Copy the sequence into a stack buffer BEFORE allocating:
             // `js_string_from_bytes` allocates first and copies second, so
             // handing it a pointer into the GC heap is the #5062 dangling-source
             // class. A WTF-8 sequence is at most 4 bytes.
             let mut buf = [0u8; 4];
-            let seq_len;
-            unsafe {
-                let s_now = s_handle.get_raw_const_ptr::<StringHeader>();
-                let src = slice::from_raw_parts(string_data(s_now), (*s_now).byte_len as usize);
-                if i >= src.len() {
-                    break;
+            let mut seq_len = 0usize;
+            // Set when this part is one half of an astral character; the half
+            // is synthesized from the code point, not copied from the payload.
+            let mut code_unit = pending_low_surrogate.take();
+            if code_unit.is_none() {
+                unsafe {
+                    let s_now = s_handle.get_raw_const_ptr::<StringHeader>();
+                    let src = slice::from_raw_parts(string_data(s_now), (*s_now).byte_len as usize);
+                    if i >= src.len() {
+                        break;
+                    }
+                    let (advance, units, code_point) = crate::string::wtf8_step(src, i);
+                    let end = (i + advance).min(src.len());
+                    if units == 2 && code_point >= 0x10000 {
+                        let astral = code_point - 0x10000;
+                        code_unit = Some(0xD800 + (astral >> 10) as u16);
+                        pending_low_surrogate = Some(0xDC00 + (astral & 0x3FF) as u16);
+                    } else {
+                        seq_len = end - i;
+                        buf[..seq_len].copy_from_slice(&src[i..end]);
+                    }
+                    i = end;
                 }
-                let (advance, _, _) = crate::string::wtf8_step(src, i);
-                let end = (i + advance).min(src.len());
-                seq_len = end - i;
-                buf[..seq_len].copy_from_slice(&src[i..end]);
-                i = end;
             }
             // `js_string_from_bytes` derives utf16_len from the bytes (correct
             // even for a malformed sequence) but hardcodes flags = 0. A lone
             // surrogate carved out of a WTF-8 source must keep its flag, or
             // `isWellFormed()` on the part wrongly reports true.
+            // `string_from_code_unit` — what `charAt` already uses — applies
+            // the same rule to a synthesized surrogate half.
             let seq = &buf[..seq_len];
             let (sh, arr_now) = arr_handle.across_mut::<ArrayHeader, _>(|| {
-                if src_has_lone_surrogates && crate::string::bytes_have_lone_surrogate(seq) {
+                if let Some(unit) = code_unit {
+                    crate::string::string_from_code_unit(unit)
+                } else if src_has_lone_surrogates && crate::string::bytes_have_lone_surrogate(seq) {
                     js_string_from_wtf8_bytes(seq.as_ptr(), seq_len as u32)
                 } else {
                     js_string_from_bytes(seq.as_ptr(), seq_len as u32)
