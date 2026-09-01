@@ -371,6 +371,39 @@ pub extern "C" fn js_array_set_index_or_string_strict(
     js_array_set_index_or_string(arr, idx, value)
 }
 
+/// Preserve the typed-feedback fallback's established non-strict behavior for
+/// own elements while applying strict inherited `[[Set]]` semantics to a
+/// missing canonical index after the default prototype chain was invalidated.
+/// This keeps unrelated guard failures (for example, an existing element on a
+/// frozen array) on their original path while making prototype descriptors
+/// observable for holes and out-of-bounds stores.
+pub(crate) fn js_array_set_index_or_string_inherited_strict(
+    arr: *mut ArrayHeader,
+    idx: f64,
+    value: f64,
+) -> *mut ArrayHeader {
+    if arr.is_null() || (!array_prototype_has_index_flag() && !object_prototype_has_index_flag()) {
+        return js_array_set_index_or_string(arr, idx, value);
+    }
+
+    // An SSO key can materialize a StringHeader while it is classified, so
+    // keep both the receiver and stored value live across classification.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let arr_handle = scope.root_raw_mut_ptr(arr);
+    let value_handle = scope.root_nanbox_f64(value);
+    let (index, arr) = arr_handle.across_mut::<ArrayHeader, _>(|| canonical_index_of_set_key(idx));
+    let value = value_handle.get_nanbox_f64();
+
+    if let Some(index) = index {
+        let clean = clean_arr_ptr_mut(arr);
+        if !clean.is_null() && unsafe { !array_has_own_index(clean, index) } {
+            return array_spec_set(clean, index, value);
+        }
+    }
+
+    js_array_set_index_or_string(arr, idx, value)
+}
+
 /// The canonical array index (`0..2^32-1`) a dynamic `arr[key] = v` key targets,
 /// or `None` for a non-index key. Numbers use the array-index boundary; string
 /// keys are parsed via their ToString so `arr["3"]` on a frozen array throws

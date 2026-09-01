@@ -6,6 +6,7 @@ use std::sync::atomic::Ordering;
 
 #[path = "indexing_keyed.rs"]
 mod keyed;
+pub(crate) use keyed::js_array_set_index_or_string_inherited_strict;
 pub use keyed::{
     js_array_get_index_or_string, js_array_set_index_or_string,
     js_array_set_index_or_string_strict, js_array_set_string_key,

@@ -2600,9 +2600,11 @@ pub extern "C" fn js_typed_feedback_array_index_set_fallback_boxed(
             crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY => {
                 // #9249: this is the cold continuation of a source-level
                 // assignment after the inline guard rejects a prototype-
-                // sensitive array. Preserve strict Set semantics so the
-                // numeric branch can run the inherited descriptor walk.
-                let new_arr = crate::array::js_array_set_index_or_string_strict(
+                // sensitive array. Apply strict Set semantics only to a
+                // missing canonical index whose default prototype chain may
+                // carry a descriptor; preserve every other fallback's
+                // established behavior.
+                let new_arr = crate::array::js_array_set_index_or_string_inherited_strict(
                     raw_addr as *mut ArrayHeader,
                     index,
                     value,
