@@ -776,6 +776,17 @@ pub fn lower_class_decl(
                             let ast::PropName::Computed(computed) = &method.key else {
                                 unreachable!("@@iterator generator key must be computed");
                             };
+                            // #9226 registers the wrapper as a prototype own
+                            // key so `Object.getOwnPropertyNames` /
+                            // `getOwnPropertySymbols` list it. That registration
+                            // does NOT install an instance vtable entry, and the
+                            // wrapper exists precisely to provide one (#5128) —
+                            // dropping it left `const C = class { *[Symbol.iterator]
+                            // () {…} }` throwing `TypeError: value is not
+                            // iterable`. Both registrations are required: the
+                            // vtable entry makes the instance iterable, the
+                            // computed member makes the key enumerable.
+                            methods.push(wrapper.clone());
                             computed_members.push(ClassComputedMember {
                                 key_expr: lower_expr(ctx, &computed.expr)?,
                                 function: wrapper,
@@ -1641,6 +1652,17 @@ pub fn lower_class_from_ast(
                             let ast::PropName::Computed(computed) = &method.key else {
                                 unreachable!("@@iterator generator key must be computed");
                             };
+                            // #9226 registers the wrapper as a prototype own
+                            // key so `Object.getOwnPropertyNames` /
+                            // `getOwnPropertySymbols` list it. That registration
+                            // does NOT install an instance vtable entry, and the
+                            // wrapper exists precisely to provide one (#5128) —
+                            // dropping it left `const C = class { *[Symbol.iterator]
+                            // () {…} }` throwing `TypeError: value is not
+                            // iterable`. Both registrations are required: the
+                            // vtable entry makes the instance iterable, the
+                            // computed member makes the key enumerable.
+                            methods.push(wrapper.clone());
                             computed_members.push(ClassComputedMember {
                                 key_expr: lower_expr(ctx, &computed.expr)?,
                                 function: wrapper,
