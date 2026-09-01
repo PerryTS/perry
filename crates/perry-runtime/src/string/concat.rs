@@ -651,7 +651,7 @@ pub extern "C" fn js_string_concat_value(
             && is_valid_string_ptr(prefix)
             && prefix_u16 == prefix_blen
             && unsafe { (*prefix).flags == 0 }
-            && unsafe { bytes_all_ascii(string_data(prefix), prefix_blen) };
+            && bytes_all_ascii(string_data(prefix), prefix_blen);
         let mut memo_buf = [0u8; CONCAT_MEMO_MAX_BYTES as usize];
         let mut memo_slot = 0usize;
         if memoizable {

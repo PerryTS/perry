@@ -12,7 +12,7 @@
     "crates/perry-codegen/src/expr/property_set.rs|crate::target_layout::object_header_size_bytes(": 3,
     "crates/perry-codegen/src/expr/property_set.rs|crate::target_layout::object_header_size_bytes(ctx.target_triple)": 1,
     "crates/perry-codegen/src/expr/property_set.rs|crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();": 2,
-    "crates/perry-codegen/src/expr/proxy_reflect.rs|crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();": 2,
+    "crates/perry-codegen/src/expr/proxy_reflect.rs|crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();": 3,
     "crates/perry-codegen/src/lower_call/new.rs|crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();": 1,
     "crates/perry-codegen/src/lower_call/new_alloc.rs|crate::target_layout::object_header_size_bytes(ctx.target_triple);": 1,
     "crates/perry-codegen/src/lower_call/property_get/imported_object.rs|let header_skip = crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();": 1,
@@ -41,7 +41,6 @@
     "crates/perry-runtime/src/object/alloc.rs|keys_array|declaration|keys_array: *mut ArrayHeader,": 3,
     "crates/perry-runtime/src/object/field_get_set/field_ops.rs|keys_array|declaration|pub extern fn js_object_set_keys(obj: *mut ObjectHeader, keys_array: *mut ArrayHeader) {": 1,
     "crates/perry-runtime/src/object/mod.rs|keys_array|access|crate::gc::runtime_store_root_raw_mut_ptr_slot(&mut entry.keys_array, keys_array);": 2,
-    "crates/perry-runtime/src/object/mod.rs|keys_array|access|let inline = unsafe { (*st.object_hot.shape_inline_cache.get())[slot].keys_array as usize };": 1,
     "crates/perry-runtime/src/object/mod.rs|keys_array|access|return (entry.keys_array, entry.runtime_shape_id);": 1,
     "crates/perry-runtime/src/object/mod.rs|keys_array|access|visitor.visit_raw_mut_ptr_slot(&mut entry.keys_array);": 1,
     "crates/perry-runtime/src/object/mod.rs|keys_array|declaration|fn shape_cache_insert(shape_id: u32, keys_array: *mut ArrayHeader) {": 1,
@@ -49,11 +48,12 @@
     "crates/perry-runtime/src/object/mod.rs|keys_array|declaration|keys_array: std::ptr::null_mut(),": 1,
     "crates/perry-runtime/src/object/mod.rs|keys_array|declaration|pub(crate) fn test_seed_shape_cache_root(shape_id: u32, keys_array: *mut ArrayHeader) {": 1,
     "crates/perry-runtime/src/object/mod.rs|keys_array|declaration|unsafe fn set_object_keys_array(obj: *mut ObjectHeader, keys_array: *mut ArrayHeader) {": 1,
-    "crates/perry-runtime/src/object/object_ops.rs|keys_array|declaration|pub(crate) use keys_array::{": 1
+    "crates/perry-runtime/src/object/object_ops.rs|keys_array|declaration|pub(crate) use keys_array::{": 1,
+    "crates/perry-runtime/src/object/test_root_accessors.rs|keys_array|access|let inline = unsafe { (*st.object_hot.shape_inline_cache.get())[slot].keys_array as usize };": 1
   },
   "summary": {
-    "codegen_object_header_size_sites": 42,
-    "raw_member_files": 7,
+    "codegen_object_header_size_sites": 43,
+    "raw_member_files": 8,
     "raw_member_sites": {
       "keys_array": 24
     }
