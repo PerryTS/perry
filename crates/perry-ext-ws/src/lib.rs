@@ -33,6 +33,9 @@
 /// reference and validated by a property test.
 pub mod mask;
 
+#[cfg(test)]
+mod test_async_shims;
+
 use futures_util::{SinkExt, StreamExt};
 use lazy_static::lazy_static;
 use perry_ffi::{
