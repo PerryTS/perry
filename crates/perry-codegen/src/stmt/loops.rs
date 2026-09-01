@@ -7411,6 +7411,23 @@ pub(crate) fn emit_gc_loop_safepoint(
     if !ctx.element_shape_loop_facts.is_empty()
         || !ctx.class_field_loop_facts.is_empty()
         || !ctx.stable_packed_loop_facts.is_empty()
+        // #9379: the packed-f64 loop clone is the next body the paragraph above
+        // predicted — "the next body shape admitted to the matcher that is not
+        // provably inert would delete that clone the same way", except this one
+        // IS provably inert and was simply not listed. Its entry guard proves a
+        // live packed raw-f64 plain Array with the window in bounds, its reads
+        // and writes lower to bare `double` load/store on existing slots (so no
+        // growth, no realloc, no barrier), and its matcher admits no calls,
+        // closures or awaits into the body. `loop_may_allocate` cannot see any
+        // of that: it answers from the HIR, where `arr[i] = e` is a generic
+        // `IndexSet` that CAN reallocate, which is why it demanded a poll here.
+        //
+        // The poll was not merely costing its own instructions. Its volatile
+        // load is a clobber inside the loop, so the cached receiver base had to
+        // be re-derived per element — which is why striding it 1-in-64 (#9316)
+        // did not recover the loss and removing it does. Measured on
+        // `bench_numeric_array_numeric`: 45 -> 38 ms against node's 38.
+        || !ctx.packed_f64_loop_facts.is_empty()
         || ctx.versioned_indexed_loop_facts.last().is_some_and(|fact| {
             matches!(
                 fact.guard_mode,
