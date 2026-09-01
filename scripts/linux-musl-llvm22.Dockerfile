@@ -23,7 +23,7 @@ RUN apk add --no-cache \
       build-base clang22 cmake curl git \
       llvm22 llvm22-dev llvm22-static llvm22-libs \
       libffi-dev openssl-dev zlib-dev zstd-dev xz-dev \
-      zlib-static zstd-static libxml2-static ncurses-static \
+      zlib-static zstd-static libxml2-static ncurses-static clang22-libclang \
       musl-dev pkgconf perl python3 \
   # Alpine installs LLVM 22 under /usr/lib/llvm22 and does NOT put its
   # llvm-config on PATH (the bare name is unversioned and absent), so the
@@ -44,6 +44,21 @@ ENV LLVM_SYS_221_PREFIX=/usr/lib/llvm22
 ENV RUSTUP_HOME=/opt/rustup
 ENV CARGO_HOME=/opt/cargo
 ENV PATH=/opt/cargo/bin:/usr/lib/llvm22/bin:$PATH
+
+# `libsqlite3-sys` runs bindgen, which dlopens libclang at BUILD time. Alpine
+# ships the shared library in `clang22-libclang` (plain `clang22` is the driver
+# only) and does not put it on the default search path, so bindgen needs both
+# the package and this variable. Declared AFTER the other ENVs and asserted
+# below, so an Alpine layout change fails here instead of ~8 minutes into the
+# cargo build with "Unable to find libclang".
+ENV LIBCLANG_PATH=/usr/lib/llvm22/lib
+RUN set -eu; \
+    for c in "$LIBCLANG_PATH"/libclang.so "$LIBCLANG_PATH"/libclang.so.*; do \
+      if [ -e "$c" ]; then echo "libclang OK: $c"; exit 0; fi; \
+    done; \
+    echo "no libclang.so under $LIBCLANG_PATH (bindgen would fail)" >&2; \
+    ls -la "$LIBCLANG_PATH" >&2 2>&1 || true; \
+    exit 1
 
 ARG RUST_TOOLCHAIN=nightly-2026-08-20
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
