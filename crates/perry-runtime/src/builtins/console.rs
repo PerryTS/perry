@@ -1444,17 +1444,26 @@ fn emit_console_trace_stack() {
 
 // === console.clear ===
 //
-// Best-effort: emit ANSI clear sequence on stdout — but ONLY when stdout
-// is an actual TTY. When stdout is piped or redirected to a file, Node
-// makes `console.clear()` a no-op (no escape sequence written), so emitting
-// it unconditionally would diff against Node by injecting `\x1b[2J\x1b[H`
-// into captured output.
+// Node (`lib/internal/console/constructor.js`): only when stdout is a TTY and
+// `TERM` is not `dumb`, `cursorTo(0, 0)` then `clearScreenDown()` — the bytes
+// `\x1b[1;1H\x1b[0J`. When stdout is piped or redirected it is a no-op, so
+// emitting anything there would diff against Node in captured output.
+//
+// #9493: the fragment has no newline, so it sat in Rust's line-buffered
+// stdout, and `process.exit()` — which terminates through `_exit` without
+// flushing — swallowed it. Node's TTY writes are synchronous, so it flushes
+// here. The old sequence (`\x1b[2J\x1b[H`) also differed from Node's.
 
 #[no_mangle]
 pub extern "C" fn js_console_clear() {
-    use std::io::IsTerminal as _;
-    if std::io::stdout().is_terminal() {
-        print!("\x1b[2J\x1b[H");
+    use std::io::{IsTerminal as _, Write as _};
+    let term_is_dumb = std::env::var_os("TERM").is_some_and(|term| term == "dumb");
+    if std::io::stdout().is_terminal() && !term_is_dumb {
+        // The crate's `print!` (the #9402 error-dropping writer), then an
+        // explicit flush: nothing else would ever flush a newline-less
+        // fragment before `_exit`.
+        print!("\x1b[1;1H\x1b[0J");
+        let _ = std::io::stdout().flush();
     }
 }
 

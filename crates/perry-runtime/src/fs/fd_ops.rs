@@ -19,15 +19,22 @@ pub(crate) fn array_ptr_from_value(value: f64) -> *const crate::array::ArrayHead
 }
 
 fn open_options_from_flags(flags_value: f64) -> (fs::OpenOptions, bool) {
-    let mut opts = fs::OpenOptions::new();
-    let append_mode;
     if flags_value.is_finite() {
-        let flags = flags_value as i32;
-        append_mode = apply_numeric_open_flags(&mut opts, flags);
-    } else {
-        let flags = flag_string(flags_value);
-        append_mode = matches!(flags.as_str(), "a" | "a+" | "ax" | "ax+");
-        match flags.as_str() {
+        let mut opts = fs::OpenOptions::new();
+        let append_mode = apply_numeric_open_flags(&mut opts, flags_value as i32);
+        return (opts, append_mode);
+    }
+    open_options_from_flag_str(&flag_string(flags_value))
+}
+
+/// The string-flag half of `open_options_from_flags`, callable without a
+/// NaN-boxed value: the deferred `fs.WriteStream` open (#9493) runs on a later
+/// event-loop turn holding only the Rust-side flag string.
+pub(crate) fn open_options_from_flag_str(flags: &str) -> (fs::OpenOptions, bool) {
+    let mut opts = fs::OpenOptions::new();
+    let append_mode = matches!(flags, "a" | "a+" | "ax" | "ax+");
+    {
+        match flags {
             "r" | "rs" => {
                 opts.read(true);
             }
@@ -148,21 +155,34 @@ pub(crate) unsafe fn fs_open_sync_result(
     };
     let (opts, append_mode) = open_options_from_flags(flags_value);
     match opts.open(&path_str) {
-        Ok(file) => {
-            let fd = allocate_synthetic_fd();
-            FD_REGISTRY.with(|r| {
-                r.borrow_mut().insert(fd, file);
-            });
-            FD_PATHS.with(|r| {
-                r.borrow_mut().insert(fd, path_str.to_string());
-            });
-            FD_APPEND_MODE.with(|r| {
-                r.borrow_mut().insert(fd, append_mode);
-            });
-            Ok(fd)
-        }
+        Ok(file) => Ok(register_opened_file(file, &path_str, append_mode)),
         Err(err) => Err((err, path_str)),
     }
+}
+
+/// Register an opened file under a fresh synthetic fd.
+fn register_opened_file(file: fs::File, path_str: &str, append_mode: bool) -> i32 {
+    let fd = allocate_synthetic_fd();
+    FD_REGISTRY.with(|r| {
+        r.borrow_mut().insert(fd, file);
+    });
+    FD_PATHS.with(|r| {
+        r.borrow_mut().insert(fd, path_str.to_string());
+    });
+    FD_APPEND_MODE.with(|r| {
+        r.borrow_mut().insert(fd, append_mode);
+    });
+    fd
+}
+
+/// #9493: open + register `path_str` with a flag string, for the deferred
+/// `fs.WriteStream` open. Path validation (the throwing kind) already ran on
+/// the constructing turn, so this takes the decoded Rust path and never
+/// throws; the caller turns an `Err` into the stream's `'error'` event.
+pub(crate) fn fs_open_path_str_result(path_str: &str, flags: &str) -> Result<i32, std::io::Error> {
+    let (opts, append_mode) = open_options_from_flag_str(flags);
+    let file = opts.open(path_str)?;
+    Ok(register_opened_file(file, path_str, append_mode))
 }
 
 /// `fs.openSync(path, flags)` — small fd registry for deterministic tests.

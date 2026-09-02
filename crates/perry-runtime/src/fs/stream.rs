@@ -41,6 +41,13 @@ struct PipeDestination {
     end: bool,
 }
 
+/// #9493: a chunk `WriteStream.write()`/`end()` accepted, awaiting its turn.
+struct PendingWrite {
+    bytes: Vec<u8>,
+    /// `write(chunk, cb)`'s callback; `undefined` when absent.
+    callback: f64,
+}
+
 /// State for a single file stream (read OR write).
 pub(crate) struct StreamState {
     kind: StreamKind,
@@ -69,7 +76,20 @@ pub(crate) struct StreamState {
     pumping: bool,
     writable_length: usize,
     writable_need_drain: bool,
-    drain_scheduled: bool,
+    /// #9493: chunks accepted by `write()`/`end()` and not yet written. Node
+    /// hands each to the thread pool; perry performs them on a later
+    /// event-loop turn (`run_write_stream_turn`), so a `process.exit()` in the
+    /// same tick abandons them exactly as Node does.
+    pending_writes: Vec<PendingWrite>,
+    /// #9493: `end(cb)`'s callback — runs before `'finish'` (Node's
+    /// `kOnFinished`). `undefined` when absent.
+    end_callback: f64,
+    /// #9493: node-shaped error value (`.code`/`.syscall`/`.path`) from the
+    /// deferred open, handed to the pending callbacks and to `'error'`.
+    /// `undefined` until then; `error_msg` stays the "errored" flag.
+    error_value: f64,
+    /// #9493: a turn is already parked on the callback-timer queue.
+    turn_pending: bool,
     bytes_read: u64,
     bytes_written: u64,
 }
@@ -144,7 +164,10 @@ impl StreamState {
             pumping: false,
             writable_length: 0,
             writable_need_drain: false,
-            drain_scheduled: false,
+            pending_writes: Vec::new(),
+            end_callback: f64::from_bits(crate::value::TAG_UNDEFINED),
+            error_value: f64::from_bits(crate::value::TAG_UNDEFINED),
+            turn_pending: false,
             bytes_read: 0,
             bytes_written: 0,
         }
@@ -200,6 +223,12 @@ pub(crate) fn scan_fs_stream_roots_mut(visitor: &mut crate::gc::RuntimeRootVisit
             for pipe in &mut state.pipes {
                 visitor.visit_nanbox_f64_slot(&mut pipe.value);
             }
+            // #9493: the deferred-write queue holds JS callbacks across turns.
+            for write in &mut state.pending_writes {
+                visitor.visit_nanbox_f64_slot(&mut write.callback);
+            }
+            visitor.visit_nanbox_f64_slot(&mut state.end_callback);
+            visitor.visit_nanbox_f64_slot(&mut state.error_value);
         }
     });
     UTF8_STREAM_REGISTRY.with(|registry| {
@@ -590,7 +619,13 @@ fn callbacks_for_event(id: usize, event: &str) -> Vec<f64> {
 /// `js_fs_create_read_stream`), and that iterator's `data`/`end`/`error`
 /// listeners register in node:stream's registry — not the per-id one above. Without
 /// this, `for await (const chunk of fs.createReadStream(p))` would hang forever.
-fn bridge_to_stream_listeners(id: usize, event: &str, args: &[f64]) {
+///
+/// `handled_locally` — this stream's own registry delivered the event. An
+/// `'error'` it handled is forwarded only to listeners node:stream actually
+/// holds: that emitter throws an `'error'` nobody listens to (#9493 — the
+/// deferred open's failure reaches here for real, where the old synchronous
+/// replay never did), and "nobody" has to mean neither registry.
+fn bridge_to_stream_listeners(id: usize, event: &str, args: &[f64], handled_locally: bool) {
     let object_value = STREAM_REGISTRY.with(|registry| {
         registry
             .borrow()
@@ -601,31 +636,39 @@ fn bridge_to_stream_listeners(id: usize, event: &str, args: &[f64]) {
     if object_value.to_bits() == crate::value::TAG_UNDEFINED {
         return;
     }
+    if event == "error"
+        && handled_locally
+        && !crate::node_stream::has_stream_listeners(object_value, event.as_bytes())
+    {
+        return;
+    }
     crate::node_stream::emit_to_stream_listeners(object_value, event.as_bytes(), args);
 }
 
 fn emit_event0(id: usize, event: &str) {
     use crate::closure::js_closure_call0;
     let callbacks = callbacks_for_event(id, event);
+    let handled_locally = !callbacks.is_empty();
     for cb in callbacks {
         let cb_ptr = extract_closure_ptr(cb);
         if !cb_ptr.is_null() {
             js_closure_call0(cb_ptr);
         }
     }
-    bridge_to_stream_listeners(id, event, &[]);
+    bridge_to_stream_listeners(id, event, &[], handled_locally);
 }
 
 fn emit_event1(id: usize, event: &str, arg: f64) {
     use crate::closure::js_closure_call1;
     let callbacks = callbacks_for_event(id, event);
+    let handled_locally = !callbacks.is_empty();
     for cb in callbacks {
         let cb_ptr = extract_closure_ptr(cb);
         if !cb_ptr.is_null() {
             js_closure_call1(cb_ptr, arg);
         }
     }
-    bridge_to_stream_listeners(id, event, &[arg]);
+    bridge_to_stream_listeners(id, event, &[arg], handled_locally);
 }
 
 fn call_js_method0(receiver: f64, name: &[u8]) -> f64 {
@@ -666,16 +709,33 @@ fn call_js_method2(receiver: f64, name: &[u8], arg0: f64, arg1: f64) -> f64 {
     }
 }
 
+/// The stream's stored error: the node-shaped value the deferred open produced
+/// when there is one (#9493), else the message an `Error` is built from —
+/// built by `stored_error_value` OUTSIDE the registry borrow, since the
+/// allocation may collect and the root scanner borrows the registry mutably.
+enum StoredError {
+    Value(f64),
+    Message(String),
+}
+
+fn stored_error(state: &StreamState) -> Option<StoredError> {
+    if !JSValue::from_bits(state.error_value.to_bits()).is_undefined() {
+        return Some(StoredError::Value(state.error_value));
+    }
+    state.error_msg.clone().map(StoredError::Message)
+}
+
+fn stored_error_value(stored: StoredError) -> f64 {
+    match stored {
+        StoredError::Value(value) => value,
+        StoredError::Message(message) => make_error_value(&message),
+    }
+}
+
 fn emit_stored_error(id: usize) {
-    let error_value = STREAM_REGISTRY.with(|registry| {
-        let registry = registry.borrow();
-        registry
-            .get(&id)
-            .and_then(|state| state.error_msg.as_deref())
-            .map(make_error_value)
-    });
-    if let Some(err) = error_value {
-        emit_event1(id, "error", err);
+    let stored = STREAM_REGISTRY.with(|registry| registry.borrow().get(&id).and_then(stored_error));
+    if let Some(stored) = stored {
+        emit_event1(id, "error", stored_error_value(stored));
     }
 }
 
@@ -815,49 +875,282 @@ fn write_to_stream_fd(id: usize, bytes: &[u8]) -> Result<(), String> {
     result
 }
 
-fn schedule_drain(id: usize) {
+fn call_stream_callback0(callback: f64) {
+    if is_callable_value(callback) {
+        let cb_ptr = extract_closure_ptr(callback);
+        if !cb_ptr.is_null() {
+            crate::closure::js_closure_call0(cb_ptr);
+        }
+    }
+}
+
+fn call_stream_callback1(callback: f64, arg: f64) {
+    if is_callable_value(callback) {
+        let cb_ptr = extract_closure_ptr(callback);
+        if !cb_ptr.is_null() {
+            crate::closure::js_closure_call1(cb_ptr, arg);
+        }
+    }
+}
+
+/// #9493: park one `WriteStream` turn on the callback-timer queue. At most one
+/// is pending per stream; a turn re-schedules while work remains.
+///
+/// This is the mechanism `fs::deferred` uses for `fs.writeFile`: the timer
+/// queue roots the closure; a pending refed callback timer is a live event
+/// source, so a program that ends by draining its loop still lands every byte
+/// and `'finish'` still fires; and `process.exit()` terminates through
+/// `libc::_exit` without ticking the queue, so an exit in the same tick
+/// abandons the parked open and writes the way Node abandons its not-yet-run
+/// thread-pool requests.
+fn schedule_write_stream_turn(id: usize) {
     let should_schedule = STREAM_REGISTRY.with(|registry| {
         let mut registry = registry.borrow_mut();
         let Some(state) = registry.get_mut(&id) else {
             return false;
         };
-        if state.drain_scheduled || !state.writable_need_drain {
+        if state.turn_pending || state.closed {
             return false;
         }
-        state.drain_scheduled = true;
+        state.turn_pending = true;
         true
     });
     if should_schedule {
-        let closure = js_closure_alloc(write_stream_drain_timer_impl as *const u8, 1);
+        let closure = js_closure_alloc(write_stream_turn_impl as *const u8, 1);
         js_closure_set_capture_ptr(closure, 0, id as i64);
         let _ = crate::timer::js_set_timeout_callback(closure as i64, 0.0);
     }
 }
 
-fn flush_write_drain(id: usize) {
-    let should_emit = STREAM_REGISTRY.with(|registry| {
-        let mut registry = registry.borrow_mut();
-        let Some(state) = registry.get_mut(&id) else {
-            return false;
-        };
-        if !state.writable_need_drain {
-            state.drain_scheduled = false;
-            return false;
+extern "C" fn write_stream_turn_impl(closure: *const ClosureHeader) -> f64 {
+    let id = stream_id_of(closure);
+    STREAM_REGISTRY.with(|registry| {
+        if let Some(state) = registry.borrow_mut().get_mut(&id) {
+            state.turn_pending = false;
         }
-        state.writable_length = 0;
-        state.writable_need_drain = false;
-        state.drain_scheduled = false;
-        update_common_props(state);
-        true
     });
-    if should_emit {
-        emit_event0(id, "drain");
+    run_write_stream_turn(id);
+    undefined_value()
+}
+
+/// What a `WriteStream` turn does, decided from the state when it runs. One
+/// step per turn, each the analogue of one Node thread-pool request: the open
+/// (`_construct` → `fs.open`), then the queued writes ending in `'finish'`,
+/// then the close. A step schedules the next when more work remains, so a
+/// microtask queued by an `'open'` or `'finish'` listener runs before the
+/// first write callback / before `'close'`, as it does in Node.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WriteStreamStep {
+    Open,
+    Drain,
+    Close,
+    Idle,
+}
+
+fn write_stream_step(id: usize) -> WriteStreamStep {
+    STREAM_REGISTRY.with(|registry| {
+        let registry = registry.borrow();
+        let Some(state) = registry.get(&id) else {
+            return WriteStreamStep::Idle;
+        };
+        if state.kind != StreamKind::Write || state.closed {
+            return WriteStreamStep::Idle;
+        }
+        if state.destroyed {
+            return WriteStreamStep::Close;
+        }
+        if !state.opened && state.error_msg.is_none() && matches!(state.owner, FdOwner::Path) {
+            return WriteStreamStep::Open;
+        }
+        if !state.pending_writes.is_empty() || (state.ended && !state.finished) {
+            return WriteStreamStep::Drain;
+        }
+        if state.finished && state.auto_close {
+            return WriteStreamStep::Close;
+        }
+        WriteStreamStep::Idle
+    })
+}
+
+fn run_write_stream_turn(id: usize) {
+    match write_stream_step(id) {
+        WriteStreamStep::Open => write_stream_open_step(id),
+        WriteStreamStep::Drain => write_stream_drain_step(id),
+        WriteStreamStep::Close => write_stream_close_step(id),
+        WriteStreamStep::Idle => {}
     }
 }
 
-extern "C" fn write_stream_drain_timer_impl(closure: *const ClosureHeader) -> f64 {
-    flush_write_drain(stream_id_of(closure));
-    undefined_value()
+fn schedule_next_write_stream_step(id: usize) {
+    if write_stream_step(id) != WriteStreamStep::Idle {
+        schedule_write_stream_turn(id);
+    }
+}
+
+/// The deferred `open(2)`: Node's `_construct` runs `fs.open` on the pool and
+/// then emits `'open'` and `'ready'`. The queued writes are performed on a
+/// LATER turn — their `fs.write` requests are only dispatched once the open
+/// callback has returned.
+fn write_stream_open_step(id: usize) {
+    let (path, flags) = STREAM_REGISTRY.with(|registry| {
+        registry
+            .borrow()
+            .get(&id)
+            .map(|state| (state.path.clone(), state.flags.clone()))
+            .unwrap_or_default()
+    });
+    match fs_open_path_str_result(&path, &flags) {
+        Ok(fd) => {
+            STREAM_REGISTRY.with(|registry| {
+                if let Some(state) = registry.borrow_mut().get_mut(&id) {
+                    state.fd = Some(fd);
+                    state.opened = true;
+                    if matches!(state.flags.as_str(), "a" | "a+" | "ax" | "ax+") {
+                        state.position = end_position_for_fd(fd);
+                    }
+                    update_common_props(state);
+                }
+            });
+            emit_event1(id, "open", fd as f64);
+            emit_event0(id, "ready");
+            schedule_next_write_stream_step(id);
+        }
+        Err(err) => {
+            let message = err.to_string();
+            let error_value = unsafe { build_fs_error_value(&err, "open", &path) };
+            write_stream_fail(id, error_value, message);
+        }
+    }
+}
+
+/// The error cascade Node runs when the open fails: every pending write
+/// callback and the `end()` callback receive the error, then `'error'` fires,
+/// then the stream is destroyed and `'close'` follows on a later turn.
+fn write_stream_fail(id: usize, error_value: f64, message: String) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let error_handle = scope.root_nanbox_f64(error_value);
+    // The value goes into the state first — the registry is a GC root and the
+    // callbacks below allocate.
+    let (writes, end_callback) = STREAM_REGISTRY.with(|registry| {
+        let mut registry = registry.borrow_mut();
+        let Some(state) = registry.get_mut(&id) else {
+            return (Vec::new(), undefined_value());
+        };
+        state.errored = true;
+        state.error_msg = Some(message);
+        state.error_value = error_handle.get_nanbox_f64();
+        state.destroyed = true;
+        state.writable_length = 0;
+        state.writable_need_drain = false;
+        let writes = std::mem::take(&mut state.pending_writes);
+        let end_callback = std::mem::replace(&mut state.end_callback, undefined_value());
+        update_common_props(state);
+        (writes, end_callback)
+    });
+    let callbacks: Vec<_> = writes
+        .iter()
+        .map(|write| scope.root_nanbox_f64(write.callback))
+        .collect();
+    let end_handle = scope.root_nanbox_f64(end_callback);
+    for callback in &callbacks {
+        call_stream_callback1(callback.get_nanbox_f64(), error_handle.get_nanbox_f64());
+    }
+    call_stream_callback1(end_handle.get_nanbox_f64(), error_handle.get_nanbox_f64());
+    emit_event1(id, "error", error_handle.get_nanbox_f64());
+    schedule_next_write_stream_step(id);
+}
+
+/// The queued writes, in order — Node batches them into one `writev` — then
+/// Node's `afterWrite` order: `'drain'` (when a `write()` returned `false`
+/// and the stream is not ending) BEFORE the completed writes' callbacks. Once
+/// `end()` has been called and nothing is left: the `end()` callback and
+/// `'finish'`; with `autoClose`, the close lands on the next turn.
+fn write_stream_drain_step(id: usize) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let mut completed = Vec::new();
+    loop {
+        let next = STREAM_REGISTRY.with(|registry| {
+            let mut registry = registry.borrow_mut();
+            let state = registry.get_mut(&id)?;
+            if state.destroyed || state.pending_writes.is_empty() {
+                return None;
+            }
+            Some(state.pending_writes.remove(0))
+        });
+        let Some(write) = next else {
+            break;
+        };
+        let callback = scope.root_nanbox_f64(write.callback);
+        match write_to_stream_fd(id, &write.bytes) {
+            Ok(()) => completed.push(callback),
+            Err(message) => {
+                // The writes that did land complete normally; the failing one
+                // gets the error, then the rest of the queue does via the
+                // error cascade.
+                for done in &completed {
+                    call_stream_callback0(done.get_nanbox_f64());
+                }
+                let error_value = scope.root_nanbox_f64(make_error_value(&message));
+                call_stream_callback1(callback.get_nanbox_f64(), error_value.get_nanbox_f64());
+                write_stream_fail(id, error_value.get_nanbox_f64(), message);
+                return;
+            }
+        }
+    }
+    let (emit_drain, finish) = STREAM_REGISTRY.with(|registry| {
+        let mut registry = registry.borrow_mut();
+        let Some(state) = registry.get_mut(&id) else {
+            return (false, false);
+        };
+        if state.destroyed {
+            return (false, false);
+        }
+        state.writable_length = 0;
+        let emit_drain = state.writable_need_drain && !state.ended;
+        state.writable_need_drain = false;
+        let mut finish = false;
+        if state.ended && !state.finished {
+            if state.error_msg.is_none() {
+                state.finished = true;
+                finish = true;
+            } else {
+                state.destroyed = true;
+            }
+        }
+        update_common_props(state);
+        (emit_drain, finish)
+    });
+    if emit_drain {
+        emit_event0(id, "drain");
+    }
+    for callback in &completed {
+        call_stream_callback0(callback.get_nanbox_f64());
+    }
+    if finish {
+        let end_callback = STREAM_REGISTRY.with(|registry| {
+            registry
+                .borrow_mut()
+                .get_mut(&id)
+                .map(|state| std::mem::replace(&mut state.end_callback, undefined_value()))
+                .unwrap_or_else(undefined_value)
+        });
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let end_callback = scope.root_nanbox_f64(end_callback);
+        call_stream_callback0(end_callback.get_nanbox_f64());
+        emit_event0(id, "finish");
+    }
+    schedule_next_write_stream_step(id);
+}
+
+fn write_stream_close_step(id: usize) {
+    let force = STREAM_REGISTRY.with(|registry| {
+        registry
+            .borrow()
+            .get(&id)
+            .map(|state| state.destroyed)
+            .unwrap_or(false)
+    });
+    maybe_close_stream(id, force);
 }
 
 pub(crate) extern "C" fn write_stream_write_impl(
@@ -866,57 +1159,86 @@ pub(crate) extern "C" fn write_stream_write_impl(
     encoding: f64,
     cb: f64,
 ) -> f64 {
-    use crate::closure::js_closure_call0;
     let id = stream_id_of(closure);
     let (chunk_value, callback) = normalize_write_args(chunk, encoding, cb);
     let Some(chunk_value) = chunk_value else {
-        if let Some(callback) = callback {
-            let cb_ptr = extract_closure_ptr(callback);
-            if !cb_ptr.is_null() {
-                js_closure_call0(cb_ptr);
-            }
-        }
+        call_stream_callback0(callback.unwrap_or_else(undefined_value));
         return bool_value(true);
     };
+    // Decoding the chunk can allocate; the callback outlives that.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let callback = scope.root_nanbox_f64(callback.unwrap_or_else(undefined_value));
     let bytes = bytes_from_value(chunk_value);
-    let (should_return, should_write) = STREAM_REGISTRY.with(|registry| {
+    // #9493: accept the chunk into the queue and answer the back-pressure
+    // question from the queued length, as Node does; the write itself runs on
+    // a later turn.
+    let accepted = STREAM_REGISTRY.with(|registry| {
         let mut registry = registry.borrow_mut();
-        let Some(state) = registry.get_mut(&id) else {
-            return (true, false);
-        };
-        if state.kind != StreamKind::Write || state.finished || state.destroyed {
-            return (false, false);
+        let state = registry.get_mut(&id)?;
+        if state.kind != StreamKind::Write || state.ended || state.destroyed || state.closed {
+            return None;
         }
         state.writable_length = state.writable_length.saturating_add(bytes.len());
         let over_hwm = state.writable_length >= state.high_water_mark;
         if over_hwm {
             state.writable_need_drain = true;
         }
-        update_common_props(state);
-        (!over_hwm, true)
-    });
-    if should_write {
-        if let Err(message) = write_to_stream_fd(id, &bytes) {
-            record_stream_error(id, message);
-        }
-    }
-    if should_return {
-        STREAM_REGISTRY.with(|registry| {
-            if let Some(state) = registry.borrow_mut().get_mut(&id) {
-                state.writable_length = 0;
-                update_common_props(state);
-            }
+        state.pending_writes.push(PendingWrite {
+            bytes,
+            callback: callback.get_nanbox_f64(),
         });
+        update_common_props(state);
+        Some(!over_hwm)
+    });
+    let Some(below_hwm) = accepted else {
+        // Refused (write after `end()`, or a destroyed/closed stream). Node
+        // still completes the callback — on a later turn, with
+        // `ERR_STREAM_WRITE_AFTER_END` / `ERR_STREAM_DESTROYED` — and that is
+        // what a caller can be waiting on. (Node also emits `'error'` for a
+        // write after end; not done here, so a formerly silent divergence
+        // cannot become an unhandled-`'error'` crash.)
+        schedule_rejected_write_callback(id, callback.get_nanbox_f64());
+        return bool_value(false);
+    };
+    schedule_write_stream_turn(id);
+    bool_value(below_hwm)
+}
+
+/// Park `callback(err)` for a refused `write()` on the next turn (#9493).
+fn schedule_rejected_write_callback(id: usize, callback: f64) {
+    if !is_callable_value(callback) {
+        return;
+    }
+    let destroyed = STREAM_REGISTRY.with(|registry| {
+        registry
+            .borrow()
+            .get(&id)
+            .map(|state| state.destroyed || state.closed)
+            .unwrap_or(true)
+    });
+    let (message, code) = if destroyed {
+        (
+            "Cannot call write after a stream was destroyed",
+            "ERR_STREAM_DESTROYED",
+        )
     } else {
-        schedule_drain(id);
-    }
-    if let Some(callback) = callback {
-        let cb_ptr = extract_closure_ptr(callback);
-        if !cb_ptr.is_null() {
-            js_closure_call0(cb_ptr);
-        }
-    }
-    bool_value(should_return)
+        ("write after end", "ERR_STREAM_WRITE_AFTER_END")
+    };
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let callback = scope.root_nanbox_f64(callback);
+    let err = scope.root_nanbox_f64(make_error_value(message));
+    set_object_field_str(err.get_nanbox_f64(), b"code", code);
+    let closure = js_closure_alloc(rejected_write_callback_impl as *const u8, 2);
+    crate::closure::js_closure_set_capture_f64(closure, 0, callback.get_nanbox_f64());
+    crate::closure::js_closure_set_capture_f64(closure, 1, err.get_nanbox_f64());
+    let _ = crate::timer::js_set_timeout_callback(closure as i64, 0.0);
+}
+
+extern "C" fn rejected_write_callback_impl(closure: *const ClosureHeader) -> f64 {
+    let callback = crate::closure::js_closure_get_capture_f64(closure, 0);
+    let err = crate::closure::js_closure_get_capture_f64(closure, 1);
+    call_stream_callback1(callback, err);
+    undefined_value()
 }
 
 pub(crate) extern "C" fn write_stream_end_impl(
@@ -925,43 +1247,41 @@ pub(crate) extern "C" fn write_stream_end_impl(
     encoding: f64,
     cb: f64,
 ) -> f64 {
-    use crate::closure::js_closure_call0;
     let id = stream_id_of(closure);
     let (chunk_value, callback) = normalize_write_args(chunk, encoding, cb);
-    if let Some(chunk_value) = chunk_value {
-        let bytes = bytes_from_value(chunk_value);
-        if let Err(message) = write_to_stream_fd(id, &bytes) {
-            record_stream_error(id, message);
-        }
-    }
-    flush_write_drain(id);
-    let should_finish = STREAM_REGISTRY.with(|registry| {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let callback = scope.root_nanbox_f64(callback.unwrap_or_else(undefined_value));
+    let bytes = chunk_value.map(bytes_from_value);
+    let accepted = STREAM_REGISTRY.with(|registry| {
         let mut registry = registry.borrow_mut();
         let Some(state) = registry.get_mut(&id) else {
             return false;
         };
-        if state.finished {
+        if state.kind != StreamKind::Write || state.ended || state.destroyed || state.closed {
             return false;
         }
-        state.ended = true;
-        state.finished = state.error_msg.is_none();
-        state.writable_length = 0;
-        state.writable_need_drain = false;
-        update_common_props(state);
-        state.error_msg.is_none()
-    });
-    if should_finish {
-        if let Some(callback) = callback {
-            let cb_ptr = extract_closure_ptr(callback);
-            if !cb_ptr.is_null() {
-                js_closure_call0(cb_ptr);
+        if let Some(bytes) = bytes {
+            if !bytes.is_empty() {
+                state.writable_length = state.writable_length.saturating_add(bytes.len());
+                state.pending_writes.push(PendingWrite {
+                    bytes,
+                    callback: undefined_value(),
+                });
             }
         }
-        emit_event0(id, "finish");
+        state.ended = true;
+        state.end_callback = callback.get_nanbox_f64();
+        update_common_props(state);
+        true
+    });
+    if accepted {
+        // #9493: `'finish'` and the callback land once the queue has drained,
+        // on a later turn — `writableEnded` flips now, `writableFinished`
+        // then, as in Node.
+        schedule_write_stream_turn(id);
     } else {
         emit_stored_error(id);
     }
-    maybe_close_stream(id, false);
     current_receiver_value()
 }
 
@@ -1015,6 +1335,9 @@ pub(crate) extern "C" fn write_stream_close_impl(closure: *const ClosureHeader, 
     STREAM_REGISTRY.with(|registry| {
         if let Some(state) = registry.borrow_mut().get_mut(&id) {
             state.destroyed = true;
+            state.pending_writes.clear();
+            state.writable_length = 0;
+            state.writable_need_drain = false;
             update_common_props(state);
         }
     });
@@ -1331,23 +1654,39 @@ pub(crate) extern "C" fn read_stream_close_impl(closure: *const ClosureHeader, c
 
 fn stream_on_common(id: usize, event_value: f64, cb: f64, once: bool) {
     let event = event_name(event_value);
+    if event == "error" {
+        // A late `'error'` listener replays the stored error; the value is
+        // built outside the registry borrow (see `StoredError`).
+        let stored =
+            STREAM_REGISTRY.with(|registry| registry.borrow().get(&id).and_then(stored_error));
+        if let Some(stored) = stored {
+            let err = stored_error_value(stored);
+            call_stream_callback1(cb, err);
+            return;
+        }
+        add_listener(id, &event, cb, once);
+        return;
+    }
     let immediate = STREAM_REGISTRY.with(|registry| {
         let registry = registry.borrow();
         let Some(state) = registry.get(&id) else {
             return None;
         };
         match event.as_str() {
+            // A read stream still opens eagerly, so its `'open'`/`'ready'` are
+            // replayed to the listeners attached right after construction. A
+            // write stream opens on a later turn (#9493) and emits them for
+            // real; Node never fires either for a supplied fd.
             "open"
-                if state.opened
+                if state.kind == StreamKind::Read
+                    && state.opened
                     && !matches!(state.owner, FdOwner::External | FdOwner::FileHandle(_)) =>
             {
                 state.fd.map(|fd| ("open", fd as f64))
             }
-            "ready" if state.opened => Some(("ready", undefined_value())),
-            "error" => state
-                .error_msg
-                .as_deref()
-                .map(|message| ("error", make_error_value(message))),
+            "ready" if state.kind == StreamKind::Read && state.opened => {
+                Some(("ready", undefined_value()))
+            }
             "end" if state.kind == StreamKind::Read && state.ended => {
                 Some(("end", undefined_value()))
             }
@@ -1362,7 +1701,7 @@ fn stream_on_common(id: usize, event_value: f64, cb: f64, once: bool) {
         if is_callable_value(cb) {
             let cb_ptr = extract_closure_ptr(cb);
             if !cb_ptr.is_null() {
-                if name == "open" || name == "error" {
+                if name == "open" {
                     crate::closure::js_closure_call1(cb_ptr, arg);
                 } else {
                     crate::closure::js_closure_call0(cb_ptr);
@@ -1399,7 +1738,8 @@ fn register_stream_method_arities() {
     crate::closure::js_register_closure_arity(write_stream_once_impl as *const u8, 2);
     crate::closure::js_register_closure_arity(write_stream_close_impl as *const u8, 1);
     crate::closure::js_register_closure_arity(stream_emit_impl as *const u8, 2);
-    crate::closure::js_register_closure_arity(write_stream_drain_timer_impl as *const u8, 0);
+    crate::closure::js_register_closure_arity(write_stream_turn_impl as *const u8, 0);
+    crate::closure::js_register_closure_arity(rejected_write_callback_impl as *const u8, 0);
     crate::closure::js_register_closure_arity(read_stream_on_impl as *const u8, 2);
     crate::closure::js_register_closure_arity(read_stream_once_impl as *const u8, 2);
     crate::closure::js_register_closure_arity(read_stream_pipe_impl as *const u8, 2);
@@ -1526,20 +1866,16 @@ fn init_write_state_from_options(
         return state;
     }
 
-    let flag_value = make_flag_value(&state.flags);
-    match unsafe { fs_open_sync_result(path_value, flag_value) } {
-        Ok(fd) => {
-            state.fd = Some(fd);
-            state.owner = FdOwner::Path;
-            state.opened = true;
-            if matches!(state.flags.as_str(), "a" | "a+" | "ax" | "ax+") {
-                state.position = end_position_for_fd(fd);
-            }
-        }
-        Err((err, _path)) => {
-            state.error_msg = Some(err.to_string());
-        }
+    // #9493: Node's constructor validates the path and opens it on a later
+    // turn (`_construct` → `fs.open` on the pool): `fd` stays `null` and
+    // `pending` true until then, and a `process.exit()` in this tick leaves
+    // no file behind. The throwing validation stays here, on the calling
+    // turn; `write_stream_open_step` performs the open.
+    crate::fs::validate::validate_path("path", path_value);
+    if let Some(decoded) = unsafe { decode_path_value(path_value) } {
+        state.path = decoded;
     }
+    state.owner = FdOwner::Path;
     state
 }
 
@@ -1602,7 +1938,17 @@ fn create_write_stream_with_state(state: StreamState) -> f64 {
             update_common_props(state);
         }
     });
-    value
+    // #9493: a path-owned stream opens on the next turn. Scheduling allocates
+    // the turn closure, so the object is re-read from its rooted slot rather
+    // than from the local that created it.
+    schedule_next_write_stream_step(id);
+    STREAM_REGISTRY.with(|registry| {
+        registry
+            .borrow()
+            .get(&id)
+            .map(|state| state.object_value)
+            .unwrap_or(value)
+    })
 }
 
 fn create_read_stream_with_state(state: StreamState) -> f64 {

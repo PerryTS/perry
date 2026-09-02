@@ -174,6 +174,14 @@ pub(crate) fn cp_build_writable() -> f64 {
     cp_set_field(val, b"readable", TAG_FALSE_F64);
     cp_set_field(val, b"writable", TAG_TRUE_F64);
     cp_set_field(val, b"destroyed", TAG_FALSE_F64);
+    // #9493: the back-pressure observables `stdin.write()` maintains.
+    cp_set_field(val, b"writableLength", 0.0);
+    cp_set_field(
+        val,
+        b"writableHighWaterMark",
+        reactor::CP_STDIN_HIGH_WATER_MARK as f64,
+    );
+    cp_set_field(val, b"writableNeedDrain", TAG_FALSE_F64);
     val
 }
 

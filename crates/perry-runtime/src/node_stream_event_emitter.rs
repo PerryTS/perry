@@ -733,6 +733,14 @@ pub(super) fn emit_stream_event_from_array(
     emit_stream_event(stream, event, &args)
 }
 
+/// #9493: whether `stream` has a listener for `event` in THIS registry. The
+/// fs-stream bridge asks before forwarding an `'error'` its own registry has
+/// already delivered, so the unhandled-error throw below fires only when
+/// neither registry had a listener.
+pub(super) fn has_stream_listeners(stream: f64, event: f64) -> bool {
+    event_identity_bytes(event).is_some() && !listener_snapshot(stream, event).is_empty()
+}
+
 pub(super) fn emit_stream_event(stream: f64, event: f64, args: &[f64]) -> f64 {
     if event_identity_bytes(event).is_none() {
         return f64::from_bits(super::TAG_FALSE);

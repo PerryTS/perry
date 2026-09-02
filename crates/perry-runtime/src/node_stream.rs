@@ -55,6 +55,11 @@ use event_emitter::{
 pub(crate) fn emit_to_stream_listeners(stream: f64, event: &[u8], args: &[f64]) {
     let _ = emit_stream_event(stream, string_value(event), args);
 }
+
+/// Whether node:stream's registry holds a listener for `event` on `stream`.
+pub(crate) fn has_stream_listeners(stream: f64, event: &[u8]) -> bool {
+    event_emitter::has_stream_listeners(stream, string_value(event))
+}
 // #3049 — `process.setMaxListeners` reuses the EventEmitter setter
 // validation (TypeError/RangeError + fractional/Infinity storage).
 pub(crate) use event_emitter::validate_max_listeners;

@@ -49,6 +49,176 @@ type CpReader = Box<dyn Read + Send>;
 type CpWriter = Box<dyn Write + Send>;
 type CpWaiter = Box<dyn FnOnce() -> (Option<i32>, Option<i32>) + Send>;
 
+/// Node's default `writableHighWaterMark` for a child's stdin socket.
+pub(super) const CP_STDIN_HIGH_WATER_MARK: usize = 64 * 1024;
+
+/// #9493: the writable side of a live child's stdin.
+///
+/// `stdin.write()` used to `write_all` inline: it parked the main thread on a
+/// full pipe until the child read (an LSP that stops reading hangs the
+/// program), always returned `true`, never emitted `'drain'`, and committed
+/// every byte before a `process.exit()` in the same tick. Node — libuv's
+/// `uv_try_write` — commits what the pipe accepts right now, queues the
+/// remainder for the loop, and judges the return value against the queued
+/// length. This is that shape: the synchronous try-write is on the main
+/// thread (bytes below pipe capacity land exactly as they did, including at
+/// `process.exit()`), the remainder goes to a drain thread, and completion
+/// (callbacks, `'drain'`, the deferred close for `end()`) is reported back
+/// through the event queue like every other child event.
+struct CpStdin {
+    /// Owns the pipe end; dropping it is the EOF the child sees.
+    writer: CpWriter,
+    /// Raw descriptor the drain thread dups. Unix only.
+    #[cfg(unix)]
+    fd: i32,
+    /// Bytes handed to the drain thread and not yet reported written —
+    /// `writableLength`.
+    queued: usize,
+    /// A `write()` returned `false` and no `'drain'` has fired since.
+    need_drain: bool,
+    /// `end()` ran while bytes were queued: close once they are written.
+    end_pending: bool,
+    /// Write/end callbacks that fire, in order, once the queue drains
+    /// (NaN-boxed closures; rooted by `cp_reactor_scan_roots_mut`).
+    callbacks: Vec<u64>,
+    /// Sender to the lazily-started drain thread.
+    #[cfg(unix)]
+    tx: Option<std::sync::mpsc::Sender<Vec<u8>>>,
+}
+
+impl CpStdin {
+    #[cfg(unix)]
+    fn new(writer: CpWriter, fd: i32) -> Self {
+        // `O_NONBLOCK` is a property of this open file description alone —
+        // the child's read end is a separate description — so the try-write
+        // reports `WouldBlock` instead of parking the main thread.
+        unsafe {
+            let flags = libc::fcntl(fd, libc::F_GETFL);
+            if flags >= 0 {
+                let _ = libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
+            }
+        }
+        Self {
+            writer,
+            fd,
+            queued: 0,
+            need_drain: false,
+            end_pending: false,
+            callbacks: Vec::new(),
+            tx: None,
+        }
+    }
+
+    #[cfg(not(unix))]
+    fn new(writer: CpWriter) -> Self {
+        Self {
+            writer,
+            queued: 0,
+            need_drain: false,
+            end_pending: false,
+            callbacks: Vec::new(),
+        }
+    }
+
+    /// libuv's `uv__try_write`: write until the pipe would block. Returns how
+    /// many bytes were committed. A broken pipe counts the whole chunk as
+    /// consumed — `SIGPIPE` is ignored process-wide (#9402), the reader is
+    /// gone, and there is nobody left to deliver to.
+    fn try_write(&mut self, bytes: &[u8]) -> usize {
+        let mut offset = 0;
+        while offset < bytes.len() {
+            match self.writer.write(&bytes[offset..]) {
+                Ok(0) => break,
+                Ok(n) => offset += n,
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => break,
+                Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(_) => return bytes.len(),
+            }
+        }
+        offset
+    }
+
+    #[cfg(unix)]
+    fn enqueue(&mut self, handle: u64, bytes: Vec<u8>) {
+        if self.tx.is_none() {
+            let (tx, rx) = std::sync::mpsc::channel();
+            cp_spawn_stdin_drain(handle, self.fd, rx);
+            self.tx = Some(tx);
+        }
+        if let Some(tx) = &self.tx {
+            let _ = tx.send(bytes);
+        }
+    }
+
+    #[cfg(not(unix))]
+    fn enqueue(&mut self, handle: u64, bytes: Vec<u8>) {
+        // Blocking pipe handles: a short `write` only means an error, so the
+        // remainder is written inline as before and reported at once.
+        let _ = self.writer.write_all(&bytes);
+        cp_push_event(CpEvent::StdinWritten {
+            handle,
+            len: bytes.len(),
+            broken: false,
+        });
+    }
+}
+
+/// Drain thread for the bytes the pipe would not take synchronously. It
+/// owns a `dup` of the descriptor, so the registry's writer can be dropped
+/// (`end()`, child close, teardown) without pulling the fd out from under
+/// an in-flight write; the dup closes when the channel ends, which is what
+/// finally delivers EOF after an `end()` on a backed-up pipe.
+#[cfg(unix)]
+fn cp_spawn_stdin_drain(handle: u64, fd: i32, rx: std::sync::mpsc::Receiver<Vec<u8>>) {
+    let dup = unsafe { libc::dup(fd) };
+    std::thread::spawn(move || {
+        let mut broken = dup < 0;
+        for chunk in rx {
+            let mut offset = 0;
+            while !broken && offset < chunk.len() {
+                let n = unsafe {
+                    libc::write(
+                        dup,
+                        chunk[offset..].as_ptr() as *const libc::c_void,
+                        chunk.len() - offset,
+                    )
+                };
+                if n >= 0 {
+                    offset += n as usize;
+                    continue;
+                }
+                match std::io::Error::last_os_error().raw_os_error() {
+                    Some(code) if code == libc::EAGAIN || code == libc::EWOULDBLOCK => {
+                        let mut pfd = libc::pollfd {
+                            fd: dup,
+                            events: libc::POLLOUT,
+                            revents: 0,
+                        };
+                        unsafe {
+                            libc::poll(&mut pfd, 1, -1);
+                        }
+                    }
+                    Some(code) if code == libc::EINTR => {}
+                    _ => broken = true,
+                }
+            }
+            cp_push_event(CpEvent::StdinWritten {
+                handle,
+                len: chunk.len(),
+                broken,
+            });
+            if broken {
+                break;
+            }
+        }
+        if dup >= 0 {
+            unsafe {
+                libc::close(dup);
+            }
+        }
+    });
+}
+
 /// Monotonic registry key for live children.
 static CP_NEXT_LIVE_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -88,6 +258,15 @@ enum CpEvent {
     Timeout { handle: u64, signal: i32 },
     /// `AbortSignal` attached through `options.signal` fired.
     Abort { handle: u64 },
+    /// #9493: the stdin drain thread wrote `len` queued bytes (`len == 0` is
+    /// the main thread asking for a `'drain'` after an over-the-mark write
+    /// the pipe took whole). `broken` — the pipe is gone (EPIPE): the queue
+    /// is abandoned and stdin closed.
+    StdinWritten {
+        handle: u64,
+        len: usize,
+        broken: bool,
+    },
 }
 
 static CP_EVENT_QUEUE: Mutex<Vec<CpEvent>> = Mutex::new(Vec::new());
@@ -103,7 +282,7 @@ struct LiveChild {
     pipe_ids: [crate::async_hooks::AsyncResourceIds; 3],
     pipe_bits: [u64; 3],
     pid: i32,
-    stdin: Option<CpWriter>,
+    stdin: Option<CpStdin>,
     stdout_open: bool,
     stderr_open: bool,
     /// Hold stdout EOF until stderr EOF when both pipes exist. Node drains
@@ -390,7 +569,18 @@ pub(super) fn cp_register_live_child(
 
     let stdout_pipe = child.stdout.take().map(|pipe| Box::new(pipe) as CpReader);
     let stderr_pipe = child.stderr.take().map(|pipe| Box::new(pipe) as CpReader);
-    let stdin_pipe = child.stdin.take().map(|pipe| Box::new(pipe) as CpWriter);
+    let stdin_pipe = child.stdin.take().map(|pipe| {
+        #[cfg(unix)]
+        {
+            use std::os::unix::io::AsRawFd;
+            let fd = pipe.as_raw_fd();
+            CpStdin::new(Box::new(pipe) as CpWriter, fd)
+        }
+        #[cfg(not(unix))]
+        {
+            CpStdin::new(Box::new(pipe) as CpWriter)
+        }
+    });
     let waiter: CpWaiter = Box::new(move || match child.wait() {
         Ok(status) => {
             #[cfg(unix)]
@@ -470,7 +660,7 @@ pub(super) fn cp_register_windows_live_child(
         stdin_obj,
         extra_pipes,
         pid,
-        stdin.map(|pipe| Box::new(pipe) as CpWriter),
+        stdin.map(|pipe| CpStdin::new(Box::new(pipe) as CpWriter)),
         stdout.map(|pipe| Box::new(pipe) as CpReader),
         stderr.map(|pipe| Box::new(pipe) as CpReader),
         waiter,
@@ -490,7 +680,7 @@ fn cp_register_live_child_parts(
     stdin_obj: f64,
     extra_pipes: Vec<(usize, f64, std::fs::File)>,
     pid: u32,
-    stdin_pipe: Option<CpWriter>,
+    stdin_pipe: Option<CpStdin>,
     stdout_pipe: Option<CpReader>,
     stderr_pipe: Option<CpReader>,
     waiter: CpWaiter,
@@ -1520,6 +1710,11 @@ fn cp_reactor_pump_inner() {
                     cp_emit(cp, "error", &[cp_abort_error(None)]);
                 }
             }
+            CpEvent::StdinWritten {
+                handle,
+                len,
+                broken,
+            } => cp_stdin_written(handle, len, broken),
         }
     }
 
@@ -1616,6 +1811,7 @@ struct CpCloseItem {
 #[inline]
 fn cp_stdio_stream(cp: f64, fd: usize) -> f64 {
     match fd {
+        0 => cp_get_field(cp, b"stdin"),
         1 => cp_get_field(cp, b"stdout"),
         2 => cp_get_field(cp, b"stderr"),
         _ => cp_array_ptr(cp_get_field(cp, b"stdio"))
@@ -1653,25 +1849,174 @@ pub(super) fn cp_async_scope_for_target(
 // Live `stdin.write()` / `kill()` — called from the mod.rs method bodies.
 // ============================================================================
 
-/// Write `bytes` to a live child's stdin. Returns whether the write succeeded.
-pub(super) fn cp_live_stdin_write(handle: u64, bytes: &[u8]) -> bool {
+/// What `stdin.write()` hands back to the method body (#9493).
+pub(super) struct CpStdinWriteOutcome {
+    /// Node's return value: the queued length, chunk included, was below the
+    /// high-water mark.
+    pub(super) below_high_water_mark: bool,
+    /// Bytes still queued behind the pipe afterwards — `writableLength`.
+    pub(super) writable_length: usize,
+    /// The completion callback was taken over by the drain: it fires, in
+    /// order, once the queue empties. Otherwise the caller defers it as before.
+    pub(super) callback_queued: bool,
+}
+
+/// Write `bytes` to a live child's stdin — libuv's try-write (#9493). Returns
+/// `None` when there is no live child, no open stdin, or `end()` already ran;
+/// the caller then keeps its pre-existing completion path.
+pub(super) fn cp_live_stdin_write(
+    handle: u64,
+    bytes: &[u8],
+    callback_bits: Option<u64>,
+) -> Option<CpStdinWriteOutcome> {
     let mut guard = cp_live_lock();
-    if let Some(map) = guard.as_mut() {
+    let lc = guard.as_mut()?.get_mut(&handle)?;
+    let stdin = lc.stdin.as_mut()?;
+    if stdin.end_pending {
+        return None;
+    }
+    // Node counts the chunk into `writableLength` BEFORE dispatching it and
+    // judges the return value against that: a chunk at or above the mark
+    // returns `false` even when the pipe took all of it, and `'drain'` then
+    // follows on the next turn.
+    let length_with_chunk = stdin.queued.saturating_add(bytes.len());
+    let below_high_water_mark = length_with_chunk < CP_STDIN_HIGH_WATER_MARK;
+    let mut offset = 0;
+    if stdin.queued == 0 {
+        offset = stdin.try_write(bytes);
+    }
+    let remainder = &bytes[offset..];
+    if !remainder.is_empty() {
+        stdin.queued = stdin.queued.saturating_add(remainder.len());
+        stdin.enqueue(handle, remainder.to_vec());
+    }
+    let mut callback_queued = false;
+    if !below_high_water_mark {
+        stdin.need_drain = true;
+    }
+    if !remainder.is_empty() || !below_high_water_mark {
+        if let Some(bits) = callback_bits {
+            stdin.callbacks.push(bits);
+        }
+        callback_queued = true;
+        if remainder.is_empty() {
+            // Written whole but over the mark: the callback and `'drain'` land
+            // on the next turn, through the pump like a drained queue would.
+            cp_push_event(CpEvent::StdinWritten {
+                handle,
+                len: 0,
+                broken: false,
+            });
+        }
+    }
+    Some(CpStdinWriteOutcome {
+        below_high_water_mark,
+        writable_length: stdin.queued,
+        callback_queued,
+    })
+}
+
+/// Close a live child's stdin (`stdin.end()`). Returns `true` when the pipe
+/// closed now (the child sees EOF); `false` when bytes are still queued, in
+/// which case the close — and a callback queued through
+/// `cp_live_stdin_queue_callback` — happens once the drain thread reports
+/// them written (#9493). No-op if already closed / unknown.
+pub(super) fn cp_live_stdin_close(handle: u64) -> bool {
+    if let Some(map) = cp_live_lock().as_mut() {
         if let Some(lc) = map.get_mut(&handle) {
             if let Some(stdin) = lc.stdin.as_mut() {
-                return stdin.write_all(bytes).is_ok();
+                if stdin.queued > 0 {
+                    stdin.end_pending = true;
+                    return false;
+                }
+            }
+            lc.stdin = None;
+        }
+    }
+    true
+}
+
+/// Queue a completion callback behind the stdin bytes still in flight.
+/// Returns `false` (nothing queued) when the queue is already empty.
+pub(super) fn cp_live_stdin_queue_callback(handle: u64, callback_bits: u64) -> bool {
+    if let Some(map) = cp_live_lock().as_mut() {
+        if let Some(lc) = map.get_mut(&handle) {
+            if let Some(stdin) = lc.stdin.as_mut() {
+                if stdin.queued > 0 {
+                    stdin.callbacks.push(callback_bits);
+                    return true;
+                }
             }
         }
     }
     false
 }
 
-/// Close a live child's stdin (`stdin.end()`), dropping the pipe so the child
-/// sees EOF. No-op if already closed / unknown.
-pub(super) fn cp_live_stdin_close(handle: u64) {
-    if let Some(map) = cp_live_lock().as_mut() {
-        if let Some(lc) = map.get_mut(&handle) {
-            lc.stdin = None;
+/// Pump-side completion of queued stdin bytes (#9493): account for them, and
+/// once the queue is empty emit `'drain'` and then fire the waiting callbacks
+/// in order — Node's `afterWrite` order — and perform the close an `end()`
+/// left pending.
+fn cp_stdin_written(handle: u64, len: usize, broken: bool) {
+    let mut callbacks: Vec<u64> = Vec::new();
+    let mut emit_drain = false;
+    let mut writable_length = 0;
+    let mut close_now = false;
+    let mut found = false;
+    {
+        let mut guard = cp_live_lock();
+        if let Some(lc) = guard.as_mut().and_then(|m| m.get_mut(&handle)) {
+            if let Some(stdin) = lc.stdin.as_mut() {
+                found = true;
+                stdin.queued = if broken {
+                    0
+                } else {
+                    stdin.queued.saturating_sub(len)
+                };
+                writable_length = stdin.queued;
+                if stdin.queued == 0 {
+                    callbacks = std::mem::take(&mut stdin.callbacks);
+                    emit_drain = stdin.need_drain && !stdin.end_pending && !broken;
+                    stdin.need_drain = false;
+                    close_now = stdin.end_pending || broken;
+                }
+            }
+            if close_now {
+                // EOF for the child: the drain thread's dup closes with its
+                // channel, which this drop ends.
+                lc.stdin = None;
+            }
+        }
+    }
+    if !found {
+        return;
+    }
+    let Some(cp_bits) = cp_lookup_cp_bits(handle) else {
+        return;
+    };
+    // The callbacks came out of the registry root; re-root them before
+    // anything below allocates (the field setters can), and across the
+    // `'drain'` listeners and the calls.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let handles: Vec<_> = callbacks
+        .iter()
+        .map(|bits| scope.root_nanbox_f64(f64::from_bits(*bits)))
+        .collect();
+    let stream = cp_stdio_stream(f64::from_bits(cp_bits), 0);
+    if super::cp_object_ptr(stream).is_none() {
+        return;
+    }
+    cp_set_field(stream, b"writableLength", writable_length as f64);
+    if writable_length == 0 {
+        cp_set_field(stream, b"writableNeedDrain", TAG_FALSE_F64);
+    }
+    if emit_drain {
+        cp_emit(stream, "drain", &[]);
+    }
+    for callback in &handles {
+        let args: [f64; 0] = [];
+        unsafe {
+            let _ =
+                crate::closure::js_native_call_value(callback.get_nanbox_f64(), args.as_ptr(), 0);
         }
     }
 }
@@ -1923,6 +2268,12 @@ pub(crate) fn cp_reactor_scan_roots_mut(visitor: &mut crate::gc::RuntimeRootVisi
             // it fires on `close`.
             if let Some(exec) = lc.exec.as_mut() {
                 visitor.visit_nanbox_u64_slot(&mut exec.cb_bits);
+            }
+            // #9493: stdin write/end callbacks waiting on the drain thread.
+            if let Some(stdin) = lc.stdin.as_mut() {
+                for callback in &mut stdin.callbacks {
+                    visitor.visit_nanbox_u64_slot(callback);
+                }
             }
         }
     }
