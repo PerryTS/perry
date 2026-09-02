@@ -86,6 +86,10 @@ extern "C" fn error_subclass_stack_getter(closure: *const crate::closure::Closur
                 crate::value::js_nanbox_get_pointer(prep) as *const crate::closure::ClosureHeader;
             return crate::closure::js_closure_call2(prep_ptr, receiver, structured);
         }
+        // #9486: capture slot 0 holds the ENCODED capture (native return
+        // addresses, plus the #5247 line when one was recorded), not a
+        // finished frame line — resolving addresses to names is the expensive
+        // half and belongs here, on read, not in the constructor.
         let frame = {
             let bits = crate::closure::js_closure_get_capture_bits(closure, 0);
             let ptr = (bits & crate::value::POINTER_MASK) as *const StringHeader;
@@ -95,7 +99,7 @@ extern "C" fn error_subclass_stack_getter(closure: *const crate::closure::Closur
             {
                 current_stack_frame()
             } else {
-                read_string_header_owned(ptr)
+                frames_payload_to_lines(read_string_header_owned(ptr).as_bytes())
             }
         };
         let head = error_subclass_stack_head(receiver);
@@ -220,9 +224,11 @@ pub extern "C" fn js_error_subclass_capture_stack(this_val: f64) {
             return;
         }
 
-        // Capture the frame NOW — this is the whole point of installing at
-        // construction rather than formatting the string on first read.
-        let frame = current_stack_frame();
+        // Capture the frames NOW — this is the whole point of installing at
+        // construction rather than formatting on first read. #9486 makes the
+        // captured value the raw return addresses; the getter turns them into
+        // named lines.
+        let frame = capture_frames_payload();
         let frame_ptr = js_string_from_bytes(frame.as_ptr(), frame.len() as u32);
         if frame_ptr.is_null() {
             return;

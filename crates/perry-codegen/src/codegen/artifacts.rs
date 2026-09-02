@@ -1745,6 +1745,30 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                 .map(|sym| (format!("__perry_wrap_{}", sym), display))
         })
         .collect();
+    // #9486: the same name against the function BODY symbol as well.
+    //
+    // The wrapper address above is what a closure VALUE carries, so it is what
+    // `fn.name` needs — but it is not what a return address on the native
+    // stack points into. A direct call from one compiled function to another
+    // targets `perry_fn_<prefix>__<name>` itself, so an `Error.stack` frame
+    // resolves against the body or against nothing at all. Both keys map to
+    // the same name, and `fn.name` still reads the wrapper key it always did,
+    // so nothing that consulted this registry before sees a different answer.
+    let body_symbol_display_names: Vec<(String, String)> = hir
+        .functions
+        .iter()
+        .filter_map(|f| {
+            let display = hir.closure_display_names.get(&f.id).cloned().or_else(|| {
+                if f.name.is_empty() || f.name.starts_with('_') {
+                    None
+                } else {
+                    Some(f.name.clone())
+                }
+            })?;
+            func_names.get(&f.id).map(|sym| (sym.clone(), display))
+        })
+        .collect();
+    user_fn_display_names.extend(body_symbol_display_names);
     // (b) Closures bound to a top-level `let`/`const`. #2076: a named
     // function expression's own name takes precedence over the binding
     // name (`const bar = function namedBar(){}` ⇒ `"namedBar"`).

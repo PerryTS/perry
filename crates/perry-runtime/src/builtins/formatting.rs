@@ -429,6 +429,28 @@ pub fn register_function_name_if_absent(func_ptr: usize, name: &str) {
     }
 }
 
+/// #9486: how many `(function address, name)` pairs the registry currently
+/// holds. Cheap enough to consult on every `.stack` read, so the stack-frame
+/// resolver can tell a stale address-sorted snapshot from a current one
+/// without cloning the table to compare it.
+pub fn function_name_registry_len() -> Option<usize> {
+    function_name_registry().lock().ok().map(|map| map.len())
+}
+
+/// #9486: snapshot the registry as `(function address, name bytes)` pairs for
+/// the `Error.stack` frame resolver to sort by address.
+///
+/// The `Arc` clones make this a pointer copy per entry rather than a name
+/// copy, and the lock is held only for the walk — resolution (a binary search
+/// per frame) happens outside it, so a `.stack` read never blocks a
+/// concurrent registration for longer than the snapshot itself.
+pub fn function_name_registry_entries() -> Option<Vec<(usize, std::sync::Arc<[u8]>)>> {
+    function_name_registry()
+        .lock()
+        .ok()
+        .map(|map| map.iter().map(|(k, v)| (*k, v.clone())).collect())
+}
+
 /// Look up the codegen-registered JS name for a function pointer.
 ///
 /// Returns the name registered by `js_register_function_name` (keyed on the

@@ -120,6 +120,21 @@ pub struct ErrorHeader {
     /// there separately (#6812: a meta edge enumerated only on the rewrite
     /// path is invisible to marking).
     pub meta: *mut crate::object::ObjectMeta,
+    /// #9486: the native return addresses captured when this error was
+    /// constructed, ASCII-encoded by `stack_frames::encode_pcs`, optionally
+    /// followed by `\n` and the #5247 recorded call-site line. Null when the
+    /// platform has no frame-pointer chain to walk, or once `stack` has been
+    /// materialised.
+    ///
+    /// A `StringHeader` rather than a bespoke cell so it needs no new
+    /// `GC_TYPE_*`, no new rewrite-descriptor arm and no finalizer: it is
+    /// traced by the one added `visit(...)` line in the
+    /// `GcRewriteDescriptorKind::Error` arm of `gc/layout_slot_visit.rs`,
+    /// exactly like `stack` beside it.
+    ///
+    /// Appended LAST, for the reason `meta` documents above: every preceding
+    /// field keeps its offset.
+    pub frames: *mut StringHeader,
 }
 
 thread_local! {
@@ -178,16 +193,62 @@ static KEEP_JS_SET_CALL_LOCATION: unsafe extern "C" fn(*const u8, usize, u32) =
 /// #5247: render the current call-location frame, or `<anonymous>` when no
 /// location was recorded (default builds, or a synthesized/offset-less site).
 fn current_stack_frame() -> String {
+    recorded_stack_frame().unwrap_or_else(|| "    at <anonymous>".to_string())
+}
+
+/// The #5247 call-site frame line, or `None` when no location was recorded.
+///
+/// The `Option` is what lets #9486 capture this WITHOUT paying for a string in
+/// a default build: `current_stack_frame`'s unconditional `"<anonymous>"`
+/// allocation happened on every `new Error`, and the recorded case only exists
+/// under `--debug-symbols`.
+fn recorded_stack_frame() -> Option<String> {
     if let Some((file, line, column)) = RUNTIME_SOURCE_LOCATION.with(|slot| slot.borrow().clone()) {
-        return format!("    at {file}:{line}:{column}");
+        return Some(format!("    at {file}:{line}:{column}"));
     }
-    CURRENT_CALL_LOCATION.with(|c| match c.get() {
-        Some((file_ptr, file_len, line)) => {
+    CURRENT_CALL_LOCATION.with(|c| {
+        c.get().map(|(file_ptr, file_len, line)| {
             let bytes = unsafe { std::slice::from_raw_parts(file_ptr as *const u8, file_len) };
             format!("    at {}:{}", String::from_utf8_lossy(bytes), line)
-        }
-        None => "    at <anonymous>".to_string(),
+        })
     })
+}
+
+/// #9486: build the `frames` payload for an error being constructed — the
+/// encoded native return addresses, plus the recorded #5247 line when there is
+/// one. Returns an empty vector when there is nothing to record, in which case
+/// no string is allocated at all.
+pub(crate) fn capture_frames_payload() -> Vec<u8> {
+    let (blob, len) = stack_frames::capture_encoded();
+    let recorded = recorded_stack_frame();
+    if len == 0 && recorded.is_none() {
+        return Vec::new();
+    }
+    let recorded = recorded.unwrap_or_default();
+    let mut out = Vec::with_capacity(len + recorded.len() + 1);
+    out.extend_from_slice(&blob[..len]);
+    if !recorded.is_empty() {
+        out.push(b'\n');
+        out.extend_from_slice(recorded.as_bytes());
+    }
+    out
+}
+
+/// #9486: render the frame lines of a `.stack` from a captured `frames`
+/// payload. The recorded #5247 call site comes first (it is the innermost
+/// position we know), then the resolved native frames outward.
+pub(crate) fn frames_payload_to_lines(payload: &[u8]) -> String {
+    let (blob, recorded) = match payload.iter().position(|b| *b == b'\n') {
+        Some(at) => (&payload[..at], std::str::from_utf8(&payload[at + 1..]).ok()),
+        None => (payload, None),
+    };
+    let resolved = stack_frames::render_frames(blob);
+    match (recorded, resolved) {
+        (Some(line), Some(frames)) => format!("{line}\n{frames}"),
+        (Some(line), None) => line.to_string(),
+        (None, Some(frames)) => frames,
+        (None, None) => "    at <anonymous>".to_string(),
+    }
 }
 
 unsafe fn make_stack(name: &str, message: &str) -> *mut StringHeader {
@@ -237,16 +298,23 @@ unsafe fn alloc_error(
     let error_name = js_string_from_bytes(name_bytes.as_ptr(), name_bytes.len() as u32);
     let error_name_handle = scope.root_string_ptr(error_name);
 
-    let message_ptr = message_handle.get_raw_const_ptr::<StringHeader>() as *mut StringHeader;
-    let msg_str = {
-        let len = (*message_ptr).byte_len as usize;
-        let data = (message_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-        let bytes = std::slice::from_raw_parts(data, len);
-        std::str::from_utf8(bytes).unwrap_or("")
+    // #9486: `.stack` is NOT built here. The frames are captured — a
+    // frame-pointer chain walk, no allocation, no symbolication — and the
+    // string is formatted on first read (`js_error_get_stack`), the same
+    // capture-then-format-on-read split #9432 gave Error subclasses. Building
+    // it eagerly meant every `new Error` paid for a UTF-8 decode of its own
+    // message and two `String` allocations to produce a line almost no
+    // program ever looks at; paying for a SYMBOLICATED one would have been far
+    // worse.
+    let payload = capture_frames_payload();
+    let frames_handle = if payload.is_empty() {
+        None
+    } else {
+        Some(scope.root_string_ptr(js_string_from_bytes(
+            payload.as_ptr(),
+            payload.len() as u32,
+        )))
     };
-    let name_str = std::str::from_utf8(name_bytes).unwrap_or("Error");
-    let stack = make_stack(name_str, msg_str);
-    let stack_handle = scope.root_string_ptr(stack);
 
     let raw = crate::arena::arena_alloc_gc(
         std::mem::size_of::<ErrorHeader>(),
@@ -266,12 +334,17 @@ unsafe fn alloc_error(
     };
     (*ptr).message = message_handle.get_raw_const_ptr::<StringHeader>() as *mut StringHeader;
     (*ptr).name = error_name_handle.get_raw_const_ptr::<StringHeader>() as *mut StringHeader;
-    (*ptr).stack = stack_handle.get_raw_const_ptr::<StringHeader>() as *mut StringHeader;
+    // Null until `js_error_get_stack` materialises it (#9486).
+    (*ptr).stack = std::ptr::null_mut();
     (*ptr).cause = f64::from_bits(TAG_UNDEFINED);
     (*ptr).errors = std::ptr::null_mut();
     // No metadata record until something needs one; the GC treats a null meta
     // edge as absent.
     (*ptr).meta = std::ptr::null_mut();
+    (*ptr).frames = match &frames_handle {
+        Some(handle) => handle.get_raw_const_ptr::<StringHeader>() as *mut StringHeader,
+        None => std::ptr::null_mut(),
+    };
 
     ptr
 }
@@ -880,15 +953,71 @@ pub(crate) unsafe fn js_error_builtin_own_property_is_enumerable(
     }
 }
 
-/// Get the stack property of an Error
+/// Get the stack property of an Error.
+///
+/// #9486: this is where `.stack` is BUILT. `alloc_error` stores only the
+/// captured return addresses, so the first read of an error's `.stack`
+/// formats the head from the error's current `name`/`message` (what V8 does —
+/// a subclass constructor assigns `this.name` after `super()` returns) and
+/// resolves the captured frames to names, then memoises the result into the
+/// `stack` field. Every later read returns that string.
+///
+/// This is the single choke point: nothing else may read `(*error).stack`
+/// directly, because before this runs it is null.
 #[no_mangle]
 pub extern "C" fn js_error_get_stack(error: *mut ErrorHeader) -> *mut StringHeader {
     unsafe {
         if error.is_null() {
             return js_string_from_bytes(b"".as_ptr(), 0);
         }
-        (*error).stack
+        materialize_error_stack(error)
     }
+}
+
+/// #9486: format-and-memoise half of [`js_error_get_stack`].
+pub(crate) unsafe fn materialize_error_stack(error: *mut ErrorHeader) -> *mut StringHeader {
+    if !(*error).stack.is_null() {
+        return (*error).stack;
+    }
+    let name = read_string_header_owned((*error).name);
+    let message = read_string_header_owned((*error).message);
+    let head = if name.is_empty() {
+        message
+    } else if message.is_empty() {
+        name
+    } else {
+        format!("{name}: {message}")
+    };
+    let head = if head.is_empty() {
+        "Error".to_string()
+    } else {
+        head
+    };
+    let payload = read_string_header_owned((*error).frames);
+    let text = format!("{head}\n{}", frames_payload_to_lines(payload.as_bytes()));
+
+    // The string birth can collect, and `error` is a bare pointer: root it
+    // across the allocation and re-read it afterwards, or a moving scavenge
+    // leaves the memoising store writing into from-space.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let error_handle = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(error as i64));
+    let stack_ptr = js_string_from_bytes(text.as_ptr(), text.len() as u32);
+    let stack_handle = scope.root_string_ptr(stack_ptr);
+    let error = crate::value::js_nanbox_get_pointer(error_handle.get_nanbox_f64()) as *mut ErrorHeader;
+    let stack_ptr = stack_handle.get_raw_const_ptr::<StringHeader>() as *mut StringHeader;
+    crate::gc::runtime_store_gc_heap_word_slot(
+        error as usize,
+        &(*error).stack as *const _ as usize,
+        stack_ptr as u64,
+    );
+    // The capture has served its purpose; releasing it keeps a long-lived
+    // error from pinning 128 bytes of encoded addresses forever.
+    crate::gc::runtime_store_gc_heap_word_slot(
+        error as usize,
+        &(*error).frames as *const _ as usize,
+        0,
+    );
+    stack_ptr
 }
 
 fn throw_builtin_not_constructor(name: &'static str) -> ! {
@@ -1861,6 +1990,9 @@ static KEEP_AGGREGATEERROR_NEW_FULL: extern "C" fn(
 #[cfg(feature = "keepalive-anchors")]
 #[used]
 static KEEP_ERROR_IS_ERROR: extern "C" fn(f64) -> f64 = js_error_is_error;
+
+#[path = "error_stack_frames.rs"]
+mod stack_frames;
 
 #[path = "error_subclass_stack.rs"]
 mod subclass_stack;

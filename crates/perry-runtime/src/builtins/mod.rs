@@ -144,7 +144,8 @@ pub(crate) use console::{
 pub(crate) use console::{test_console_instance_count, test_seed_console_instance};
 
 pub use formatting::{
-    function_name_for_ptr, function_source_for_func_ptr, function_source_for_ptr, js_array_print,
+    function_name_for_ptr, function_name_registry_entries, function_name_registry_len,
+    function_source_for_func_ptr, function_source_for_ptr, js_array_print,
     js_boxed_bigint_new, js_boxed_boolean_new, js_boxed_number_new, js_boxed_string_new,
     js_boxed_symbol_new, js_register_function_name, js_register_function_source, js_util_format,
     js_util_format_with_options, js_util_inspect, js_util_is_deep_strict_equal,

@@ -694,7 +694,13 @@ pub(crate) fn print_uncaught(value: f64) {
                 let eh = ptr as *const crate::error::ErrorHeader;
                 let name_str = unsafe { string_header_to_string((*eh).name) };
                 let msg_str = unsafe { string_header_to_string((*eh).message) };
-                let stack_str = unsafe { string_header_to_string((*eh).stack) };
+                // #9486: through the accessor, never off the field — the
+                // field is null until the first read materialises it.
+                let stack_str = unsafe {
+                    string_header_to_string(crate::error::js_error_get_stack(
+                        ptr as *mut crate::error::ErrorHeader,
+                    ))
+                };
                 let name_display = if name_str.is_empty() {
                     "Error"
                 } else {

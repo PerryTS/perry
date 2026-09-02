@@ -221,6 +221,11 @@ pub(super) unsafe fn visit_gc_rewrite_slot_descriptors(
             // the meta record (keeping it, and anything reachable only through
             // it, alive) and rewrites the edge when evacuation moves it.
             visit(fixed_slot(&mut (*error).meta as *mut _ as *mut u64));
+            // #9486: the captured-frames blob. Same shape as `stack` beside
+            // it — a `StringHeader` edge, null until captured and null again
+            // once `.stack` has been materialised — so it needs exactly this
+            // one line and no new descriptor kind.
+            visit(fixed_slot(&mut (*error).frames as *mut _ as *mut u64));
         }
         GcRewriteDescriptorKind::Map => {
             let map = user_ptr as *mut crate::map::MapHeader;
