@@ -10,7 +10,9 @@
 // `Reflect.defineMetadata(k, v, target.constructor)` landed on C by accident.
 // Fixing either half alone broke decorator metadata; this fixture pins the
 // pair. Decorator application ORDER across member kinds is deliberately not
-// under test (records are collected, then printed sorted).
+// under test (records are collected, then printed sorted), and every
+// `design:*` type is a user class — builtin-constructor identity
+// (`=== Number`) is a separate question.
 import "reflect-metadata";
 
 class Repo {}
@@ -65,13 +67,13 @@ class Service {
   repo!: Repo;
 
   @Prop()
-  static counter: number = 0;
+  static shared: Repo = new Repo();
 
   @Method()
   run(@Param() a: Repo) {}
 
   @Method()
-  static make(@Param() n: number) {}
+  static make(@Param() n: Repo) {}
 
   constructor(@Param() r: Repo) {}
 }
@@ -95,10 +97,10 @@ console.log("'constructor' in Service", "constructor" in Service);
 console.log("hasOwn constructor", Object.prototype.hasOwnProperty.call(Service, "constructor"));
 
 console.log("design:type via prototype", Reflect.getMetadata("design:type", Service.prototype, "repo") === Repo);
-console.log("design:type static via class", Reflect.getMetadata("design:type", Service, "counter") === Number);
+console.log("design:type static via class", Reflect.getMetadata("design:type", Service, "shared") === Repo);
 console.log("design:paramtypes ctor", Reflect.getMetadata("design:paramtypes", Service)[0] === Repo);
 console.log("design:paramtypes method via prototype", Reflect.getMetadata("design:paramtypes", Service.prototype, "run")[0] === Repo);
-console.log("design:paramtypes static via class", Reflect.getMetadata("design:paramtypes", Service, "make")[0] === Number);
+console.log("design:paramtypes static via class", Reflect.getMetadata("design:paramtypes", Service, "make")[0] === Repo);
 console.log("via:target on prototype", Reflect.getMetadata("via:target", Service.prototype, "repo"));
 console.log("via:ctor on class", Reflect.getMetadata("via:ctor", Service, "repo"));
 console.log("via:ctor method on class", Reflect.getMetadata("via:ctor", Service, "run"));

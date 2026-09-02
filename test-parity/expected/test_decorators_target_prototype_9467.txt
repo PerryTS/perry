@@ -3,8 +3,8 @@ method:run -> Service.prototype ctor===Service:true value:function
 param:make:0 -> Service ctor===Service:false
 param:run:0 -> Service.prototype ctor===Service:true
 param:undefined:0 -> Service ctor===Service:false
-prop:counter -> Service ctor===Service:false
 prop:repo -> Service.prototype ctor===Service:true
+prop:shared -> Service ctor===Service:false
 Service.constructor === Function true
 Service.constructor === Service false
 Sub.constructor === Function true
