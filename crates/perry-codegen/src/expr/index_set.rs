@@ -357,27 +357,37 @@ fn lower_array_index_set_via_runtime_key(
 
 /// #9459: the SLOPPY object-by-name tail for `Expr::IndexSet`.
 ///
-/// The two string-key arms below reach `js_typed_feedback_object_set_field_by_name`
-/// → `js_object_set_field_by_name`, which has no `strict` parameter and rejects a
-/// non-writable slot by throwing. #9426 carried `assignment_strict` to the ARRAY
-/// element lanes; the object-by-name lanes on the same node still threw, so
-/// `for (o[k] of …)` and `o[k] += 1` on a frozen object stopped a sloppy program
-/// node runs to completion.
+/// #9459 / #9495: the terminal store for the two string-key object arms below,
+/// in BOTH modes.
 ///
-/// `Set(O, ToPropertyKey(k), V, false)` is `js_put_value_set(target, key, value,
-/// receiver, 0)` — the same entry sloppy `o[k] = v` already reaches, because
+/// Those arms used to reach `js_typed_feedback_object_set_field_by_name` →
+/// `js_object_set_field_by_name`: no `strict` parameter, so a rejected sloppy
+/// write threw (#9459 -- #9426 had carried `assignment_strict` to the ARRAY
+/// element lanes only), and an OWN-property store, so a strict write skipped
+/// the prototype walk (#9495 -- an inherited setter never ran, an inherited
+/// non-writable / getter-only property never threw, and an own property was
+/// created where ES2024 SS10.1.9.2 creates none).
+///
+/// `Set(O, ToPropertyKey(k), V, Throw)` is `js_put_value_set(target, key, value,
+/// receiver, strict)` — the same entry `o[k] = v` already reaches, because
 /// `put_value_index_fast_path` keeps statically-known string keys off this file
-/// entirely (`expr/proxy_reflect.rs`). Routing here makes the two spellings agree.
+/// entirely (`expr/proxy_reflect.rs`). Routing here makes the spellings agree.
 ///
-/// Rooting is the #7639/#7201 window the strict arms open: receiver AND key are
-/// live across `value`'s lowering, which is arbitrary user code and can drive an
-/// evacuating minor. `target` and `receiver` are one evaluation of the base, so
-/// the single lowered box fills both operand slots.
-fn lower_sloppy_object_index_set(
+/// The typed-feedback `PropertySet` site the arms carried moves with the store
+/// (`property_set::emit_typed_feedback_property_set_observation`), keyed by the
+/// same `operation` label each arm used.
+///
+/// Rooting is the #7639/#7201 window: receiver AND key are live across
+/// `value`'s lowering, which is arbitrary user code and can drive an evacuating
+/// minor. `target` and `receiver` are one evaluation of the base, so the single
+/// lowered box fills both operand slots.
+fn lower_object_index_set_put_value(
     ctx: &mut FnCtx<'_>,
     object: &Expr,
     index: &Expr,
     value: &Expr,
+    assignment_strict: bool,
+    operation: &str,
 ) -> Result<String> {
     rooting::with_operands_rooted_across(
         ctx,
@@ -387,17 +397,26 @@ fn lower_sloppy_object_index_set(
             lower_value_for_dynamic_index_set(
                 ctx,
                 value,
-                "index_set.sloppy_object_value_bits",
-                "sloppy_object_index_set_helper_edge",
+                "index_set.object_string_key_value_bits",
+                "object_string_key_index_set_helper_edge",
             )
         },
         |ctx, vals, (val_double, _val_bits)| {
             let (obj_box, key_box) = (vals[0].clone(), vals[1].clone());
             let obj_bits = ctx.block().bitcast_double_to_i64(&obj_box);
-            // Same guard the strict arms emit: `undefined[k] = 1` is a TypeError
-            // in BOTH modes -- `GetValue` on the base runs before `PutValue`
-            // ever consults `Throw`.
-            super::property_set::emit_nullish_write_guard(ctx, &obj_bits, "index", "iset.sloppy");
+            // `undefined[k] = 1` is a TypeError in BOTH modes -- `GetValue` on
+            // the base runs before `PutValue` ever consults `Throw`.
+            super::property_set::emit_nullish_write_guard(ctx, &obj_bits, "index", "iset.object");
+            super::property_set::emit_typed_feedback_property_set_observation(
+                ctx,
+                operation,
+                &obj_bits,
+                // #7640 section D: the SSO-safe key unbox can allocate, and
+                // `obj_bits` is the NaN-boxed receiver the group re-read --
+                // no raw handle is derived from it before this.
+                |ctx| unbox_str_handle(ctx.block(), &key_box),
+            );
+            let strict_flag = if assignment_strict { "1" } else { "0" };
             let _ = ctx.block().call(
                 DOUBLE,
                 "js_put_value_set",
@@ -406,7 +425,7 @@ fn lower_sloppy_object_index_set(
                     (DOUBLE, &key_box),
                     (DOUBLE, &val_double),
                     (DOUBLE, &obj_box),
-                    (I32, "0"),
+                    (I32, strict_flag),
                 ],
             );
             Ok(val_double)
@@ -1453,157 +1472,36 @@ pub(crate) fn lower(
                 });
             }
             if let Expr::String(literal) = index.as_ref() {
+                // #9459 / #9495: the receiver-aware `[[Set]]` in both modes --
+                // see `lower_object_index_set_put_value`. The literal key is
+                // lowered as an operand (an interned-pool load), which is what
+                // the old strict arm did by hand.
+                //
                 // #7154: the value expression can collect, and an evacuating
                 // minor inside it relocates the receiver out from under
-                // `obj_box`. Root it across the evaluation and re-read below.
-                // The key is a literal, so it is not an operand here at all —
-                // it is interned into the string pool below.
-                //
-                // #9459: strict only -- see `lower_sloppy_object_index_set`.
-                if !assignment_strict {
-                    return lower_sloppy_object_index_set(ctx, object, index, value);
-                }
-                return rooting::with_operands_rooted_across(
+                // `obj_box`; the helper roots it across the evaluation.
+                return lower_object_index_set_put_value(
                     ctx,
-                    &[object.as_ref()],
-                    &[value.as_ref()],
-                    |ctx| {
-                        lower_value_for_dynamic_index_set(
-                            ctx,
-                            value,
-                            "index_set.literal_string_value_bits",
-                            "literal_string_index_set_helper_edge",
-                        )
-                    },
-                    |ctx, vals, (val_double, _val_bits)| {
-                        let obj_box = vals[0].clone();
-                        let key_idx = ctx.strings.intern(literal);
-                        let key_handle_global =
-                            format!("@{}", ctx.strings.entry(key_idx).handle_global);
-                        let obj_bits = ctx.block().bitcast_double_to_i64(&obj_box);
-                        super::property_set::emit_nullish_write_guard(
-                            ctx,
-                            &obj_bits,
-                            literal,
-                            "iset.literal",
-                        );
-                        let static_classref = super::index_get::index_object_is_class_or_proto_ref(
-                            ctx,
-                            object.as_ref(),
-                        );
-                        let (obj_handle, key_raw) = {
-                            let blk = ctx.block();
-                            let obj_handle = super::index_get::classref_preserving_handle(
-                                blk,
-                                &obj_bits,
-                                static_classref,
-                            );
-                            let key_box = blk.load(DOUBLE, &key_handle_global);
-                            let key_bits = blk.bitcast_double_to_i64(&key_box);
-                            let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
-                            (obj_handle, key_raw)
-                        };
-                        let site_id = emit_typed_feedback_register_site(
-                            ctx,
-                            TypedFeedbackKind::PropertySet,
-                            literal,
-                            TypedFeedbackContract::object_set_by_name(),
-                        );
-                        ctx.block().call_void(
-                            "js_typed_feedback_object_set_field_by_name",
-                            &[
-                                (I64, &site_id),
-                                (I64, &obj_handle),
-                                (I64, &key_raw),
-                                (DOUBLE, &val_double),
-                            ],
-                        );
-                        Ok(val_double)
-                    },
+                    object,
+                    index,
+                    value,
+                    assignment_strict,
+                    literal,
                 );
             }
             if is_string_expr(ctx, index) {
-                // #9459: strict only -- see `lower_sloppy_object_index_set`.
-                if !assignment_strict {
-                    return lower_sloppy_object_index_set(ctx, object, index, value);
-                }
-                // #7154: see the literal-key arm above, plus the KEY, which
-                // sits in the same window. A non-literal string key is an
-                // ordinary heap string with no registered root of its own, so
-                // an evacuating minor inside the value's evaluation relocates
-                // it and leaves the register naming from-space —
-                // `unbox_str_handle` below would hand the setter a pre-move
-                // `StringHeader*` and the field would land under a garbage key.
-                //
-                // #7639: the receiver's window used to be derived from `value`
-                // ALONE, which is the half-measure #7201 named. The receiver is
-                // lowered before the KEY as well, so `o[f()] = 1` — a literal
-                // RHS that cannot collect, an allocating key that can — left it
-                // unguarded. As one operand group the receiver's window is the
-                // disjunction over everything after it, which is what #7201
-                // established and what `guard_store_operand`'s two-argument
-                // form structurally could not say.
-                return rooting::with_operands_rooted_across(
+                // #9459 / #9495: as above. #7154 / #7639: the KEY sits in the
+                // same rooting window as the receiver -- a non-literal string
+                // key is an ordinary heap string with no registered root of its
+                // own, and `o[f()] = 1` lowers the receiver before an allocating
+                // key. The helper roots both as one operand group.
+                return lower_object_index_set_put_value(
                     ctx,
-                    &[object.as_ref(), index.as_ref()],
-                    &[value.as_ref()],
-                    |ctx| {
-                        lower_value_for_dynamic_index_set(
-                            ctx,
-                            value,
-                            "index_set.string_value_bits",
-                            "string_index_set_helper_edge",
-                        )
-                    },
-                    |ctx, vals, (val_double, _val_bits)| {
-                        let (obj_box, key_box) = (vals[0].clone(), vals[1].clone());
-                        let obj_bits = ctx.block().bitcast_double_to_i64(&obj_box);
-                        super::property_set::emit_nullish_write_guard(
-                            ctx,
-                            &obj_bits,
-                            "index",
-                            "iset.string",
-                        );
-                        let static_classref = super::index_get::index_object_is_class_or_proto_ref(
-                            ctx,
-                            object.as_ref(),
-                        );
-                        let (obj_handle, key_handle) = {
-                            let blk = ctx.block();
-                            // #7640 section D: the SSO-safe key unbox can
-                            // allocate, so it goes FIRST — `obj_bits` is a
-                            // NaN-boxed double the group re-read, but
-                            // `obj_handle` is a raw `i64` no root can name.
-                            let key_handle = unbox_str_handle(blk, &key_box);
-                            let obj_handle = super::index_get::classref_preserving_handle(
-                                blk,
-                                &obj_bits,
-                                static_classref,
-                            );
-                            (obj_handle, key_handle)
-                        };
-                        let site_id = emit_typed_feedback_register_site(
-                            ctx,
-                            TypedFeedbackKind::PropertySet,
-                            "object[string_index]",
-                            TypedFeedbackContract::object_set_by_name(),
-                        );
-                        ctx.block().call_void(
-                            "js_typed_feedback_object_set_field_by_name",
-                            &[
-                                (I64, &site_id),
-                                (I64, &obj_handle),
-                                (I64, &key_handle),
-                                (DOUBLE, &val_double),
-                            ],
-                        );
-                        // One group, one release, below the store. The inner-to-outer
-                        // ordering obligation the two hand-written guards carried —
-                        // `temp_root_truncate` is a stack CUT, so releasing the
-                        // receiver first silently dropped the key's slot as well — is
-                        // gone rather than merely documented.
-                        Ok(val_double)
-                    },
+                    object,
+                    index,
+                    value,
+                    assignment_strict,
+                    "object[string_index]",
                 );
             }
             // Fallback with runtime STRING_TAG check, matching IndexGet.

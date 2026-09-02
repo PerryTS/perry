@@ -304,13 +304,18 @@ fn scalar_object_literal_keeps_initializers_read_by_update() {
 
 fn assert_typed_feedback_setter_after(ir: &str, start_pos: usize, context: &str) {
     let after_start = &ir[start_pos..];
+    // #9459 / #9495: the dynamic by-name store is the receiver-aware `[[Set]]`
+    // (`js_put_value_set`) in both modes -- not the own-property
+    // `js_typed_feedback_object_set_field_by_name` wrapper, which had no
+    // `strict` parameter and no prototype walk. Match the CALL: every runtime
+    // entry is `declare`d in every module.
     assert!(
-        after_start.contains("call void @js_typed_feedback_object_set_field_by_name"),
-        "{context} should use the typed-feedback setter wrapper"
+        after_start.contains("call double @js_put_value_set("),
+        "{context} should reach the receiver-aware runtime setter"
     );
     assert!(
-        ir.contains("js_object_set_field_by_name"),
-        "{context} should keep the safe runtime setter as the typed-feedback fallback"
+        !after_start.contains("call void @js_typed_feedback_object_set_field_by_name"),
+        "{context} must not take the own-property setter wrapper (#9495)"
     );
 }
 

@@ -6975,10 +6975,12 @@ fn artifact_records_dynamic_property_set_value_bits_before_helper() {
 
 /// #9459: the sloppy twin of the test above.
 ///
-/// Same module, `is_strict: false`, so the store takes the sloppy tail. The
-/// representation contract is identical -- the RHS is lowered by
-/// `lower_value_for_dynamic_property_set` and stays `js_value_bits` until the
-/// helper edge -- only the consumer/boxed-at labels and the runtime entry differ.
+/// Same module, `is_strict: false`. The representation contract is identical --
+/// the RHS is lowered by `lower_value_for_dynamic_property_set` and stays
+/// `js_value_bits` until the helper edge. #9495: the two modes share one tail
+/// (`js_put_value_set` with the assignment's own `Throw` flag), so the labels
+/// are the same too; the twin stays so that the invariant is asserted on both
+/// values of the flag rather than on one.
 #[test]
 fn artifact_records_sloppy_dynamic_property_set_value_bits_before_helper() {
     let module = module_with_classes_and_params(
@@ -7001,12 +7003,12 @@ fn artifact_records_sloppy_dynamic_property_set_value_bits_before_helper() {
     assert!(
         records.iter().any(|record| {
             record["expr_kind"] == "PropertySet"
-                && record["consumer"] == "property_set.sloppy_dynamic_value_bits"
+                && record["consumer"] == "property_set.dynamic_value_bits"
                 && record["native_rep_name"] == "js_value_bits"
                 && record["llvm_ty"] == "i64"
                 && record["native_value_state"] == "region_local"
                 && record["access_mode"].is_null()
-                && record_has_note(record, "boxed_at=sloppy_property_set_helper_edge")
+                && record_has_note(record, "boxed_at=dynamic_property_set_helper_edge")
         }),
         "expected sloppy dynamic property-set RHS to stay as js_value_bits before the helper edge:\n{artifact:#}"
     );

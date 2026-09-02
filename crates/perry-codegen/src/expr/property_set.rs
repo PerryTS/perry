@@ -42,8 +42,8 @@ use super::{
     class_field_store_layout_note_is_conforming, class_field_store_needs_layout_note,
     class_field_store_needs_string_addref, emit_jsvalue_slot_store_pointer_tested,
     emit_typed_feedback_register_site, expr_produces_non_pointer_bits_by_construction, lower_expr,
-    lower_expr_native, raw_f64_layout_fact, try_lower_pod_field_set, unbox_to_i64, FnCtx,
-    TypedFeedbackContract, TypedFeedbackKind,
+    lower_expr_native, raw_f64_layout_fact, try_lower_pod_field_set,
+    typed_feedback_emission_enabled, unbox_to_i64, FnCtx, TypedFeedbackContract, TypedFeedbackKind,
 };
 
 /// Metadata-only class candidate for the runtime-guarded plain-field store.
@@ -564,7 +564,7 @@ fn lower_runtime_property_set_by_name(
     assignment_strict: bool,
 ) -> Result<String> {
     if !assignment_strict {
-        return lower_sloppy_property_set_by_name(ctx, object, property, value);
+        return lower_put_value_property_set_by_name(ctx, object, property, value, false);
     }
     // #7154: root the receiver across the value's evaluation, which allocates.
     // The group re-reads it as part of emitting the store, so no register of
@@ -584,28 +584,46 @@ fn lower_runtime_property_set_by_name(
     })
 }
 
-/// #9459: the SLOPPY terminal store for `Expr::PropertySet`.
+/// #9459 / #9495: the terminal by-name store for `Expr::PropertySet`, in BOTH
+/// modes.
 ///
-/// `Set(O, P, V, false)` -- ordinary `[[Set]]` with the receiver, and a
-/// rejection (frozen / sealed / non-writable own or inherited data property /
-/// getter-only accessor / non-extensible new key) reported as `false` and
-/// discarded rather than thrown. That is exactly `js_put_value_set(target, key,
-/// value, receiver, 0)`, the entry sloppy `o.x = v` has always used through
-/// `Expr::PutValueSet`; routing here makes `o.x += 1`, `for (o.x of it)` and
-/// `[o.x] = arr` agree with it instead of throwing where node is silent.
+/// `Set(O, P, V, Throw)` -- ordinary `[[Set]]` WITH the receiver. When the
+/// receiver has no own property, ES2024 SS10.1.9.2 (`OrdinarySetWithOwnDescriptor`)
+/// walks to the parent and lets the PARENT's descriptor decide: an inherited
+/// non-writable data property or getter-only accessor rejects, an inherited
+/// setter runs with the original receiver, and only a writable data property
+/// (or the end of the chain) creates a new own property on the receiver. The
+/// rejection is thrown iff `Throw` (SS6.2.5.7 `PutValue`,
+/// `Throw = IsStrictReference`). That is exactly
+/// `js_put_value_set(target, key, value, receiver, strict)`, the entry `o.x = v`
+/// has always used through `Expr::PutValueSet`; routing every `PropertySet`
+/// spelling here -- `o.x += 1`, `for (o.x of it)`, `[o.x] = arr` -- makes them
+/// agree with it instead of diverging by lane.
+///
+/// #9459 brought the SLOPPY half here: its old tail rejected by throwing. #9495
+/// brings the STRICT half: its old tail,
+/// `js_typed_feedback_object_set_field_by_name_fast` ->
+/// `js_object_set_field_by_name`, was an OWN-property store with no prototype
+/// walk, so a strict `o.x += 1` against an inherited setter never ran the setter,
+/// an inherited non-writable / getter-only property never threw, and an own
+/// property materialised where the spec creates none.
+///
+/// The typed-feedback `PropertySet` site moves with the store
+/// (`emit_typed_feedback_property_set_observation`): it describes the store,
+/// not the store's strictness, so both modes register it.
 ///
 /// `target` and `receiver` are the same expression, evaluated ONCE -- the
-/// property reference's base is one evaluation, and `with_operands_rooted`
+/// property reference's base is one evaluation, and `with_operands_rooted_across`
 /// hands the single lowered box to both operand slots.
 ///
-/// Rooting is the #7154 window the strict tail also opens: the receiver is live
-/// across `value`'s lowering, which is arbitrary user code and can drive an
-/// evacuating minor.
-fn lower_sloppy_property_set_by_name(
+/// Rooting is the #7154 window: the receiver is live across `value`'s
+/// lowering, which is arbitrary user code and can drive an evacuating minor.
+fn lower_put_value_property_set_by_name(
     ctx: &mut FnCtx<'_>,
     object: &Expr,
     property: &str,
     value: &Expr,
+    assignment_strict: bool,
 ) -> Result<String> {
     rooting::with_operands_rooted_across(
         ctx,
@@ -615,8 +633,8 @@ fn lower_sloppy_property_set_by_name(
             lower_value_for_dynamic_property_set(
                 ctx,
                 value,
-                "property_set.sloppy_dynamic_value_bits",
-                "sloppy_property_set_helper_edge",
+                "property_set.dynamic_value_bits",
+                "dynamic_property_set_helper_edge",
             )
         },
         |ctx, vals, (val_double, _val_bits)| {
@@ -624,11 +642,17 @@ fn lower_sloppy_property_set_by_name(
             let key_idx = ctx.strings.intern(property);
             let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
             let obj_bits = ctx.block().bitcast_double_to_i64(&obj_box);
-            // The nullish receiver check is the same one the strict tail emits:
-            // `undefined.x = 1` is a TypeError in BOTH modes (GetValue on the
-            // base runs before PutValue's Throw flag is ever consulted).
-            emit_nullish_write_guard(ctx, &obj_bits, property, "pset_sloppy");
+            // `undefined.x = 1` is a TypeError in BOTH modes: `GetValue` on the
+            // base runs before `PutValue` ever consults `Throw`.
+            emit_nullish_write_guard(ctx, &obj_bits, property, "pset");
             let key_box = ctx.block().load(DOUBLE, &key_handle_global);
+            emit_typed_feedback_property_set_observation(ctx, property, &obj_bits, |ctx| {
+                // The key is an interned heap string, so its `StringHeader*` is
+                // a mask, never an allocation.
+                let key_bits = ctx.block().bitcast_double_to_i64(&key_box);
+                ctx.block().and(I64, &key_bits, POINTER_MASK_I64)
+            });
+            let strict_flag = if assignment_strict { "1" } else { "0" };
             let _ = ctx.block().call(
                 DOUBLE,
                 "js_put_value_set",
@@ -637,12 +661,56 @@ fn lower_sloppy_property_set_by_name(
                     (DOUBLE, &key_box),
                     (DOUBLE, &val_double),
                     (DOUBLE, &obj_box),
-                    (I32, "0"),
+                    (I32, strict_flag),
                 ],
             );
             Ok(val_double)
         },
     )
+}
+
+/// #9495: the typed-feedback `PropertySet` observation for a by-name store
+/// whose tail is `js_put_value_set`.
+///
+/// The old strict tail folded the observation into a DISPATCHING wrapper
+/// (`js_typed_feedback_object_set_field_by_name_fast`), emitted in every build
+/// because it also chose between the shape-transition fast path and the
+/// by-name setter. The receiver-aware `[[Set]]` makes that choice inside
+/// `js_put_value_set`, so nothing is left for a wrapper to decide and the
+/// observation stands alone -- a pure-recording helper, compile-gated on
+/// `PERRY_TYPED_FEEDBACK` / `_TRACE` like every other one since #7480 step 4. A
+/// default build emits the bare `js_put_value_set` call and nothing else.
+///
+/// The site is always REGISTERED (a no-op call-free counter bump in a default
+/// build) so that `ic_site_counter` -- and with it every later inline-cache
+/// global name in the function -- is numbered exactly as it was when the
+/// dispatching wrapper stood here.
+///
+/// `key_raw` derives the bare `StringHeader*` the observer hashes, and is only
+/// run in an emitting build. It runs BEFORE the observe call and after nothing
+/// else, so a derivation that can allocate (an SSO key materialising onto the
+/// heap -- #7640 section D) precedes no raw receiver handle: `obj_bits` is the
+/// NaN-boxed receiver the rooting group re-read.
+pub(super) fn emit_typed_feedback_property_set_observation(
+    ctx: &mut FnCtx<'_>,
+    operation: &str,
+    obj_bits: &str,
+    key_raw: impl FnOnce(&mut FnCtx<'_>) -> String,
+) {
+    let site_id = emit_typed_feedback_register_site(
+        ctx,
+        TypedFeedbackKind::PropertySet,
+        operation,
+        TypedFeedbackContract::put_value_set(),
+    );
+    if !typed_feedback_emission_enabled() {
+        return;
+    }
+    let key_raw = key_raw(ctx);
+    ctx.block().call_void(
+        "js_typed_feedback_observe_property_set",
+        &[(I64, &site_id), (I64, obj_bits), (I64, &key_raw)],
+    );
 }
 
 fn lower_value_for_dynamic_property_set(
@@ -719,6 +787,10 @@ pub(crate) fn emit_nullish_write_guard(
 /// every arm below whose runtime entry rejects by THROWING is strict-only; the
 /// sloppy twin of each is the strictness-aware `js_put_value_set(..., 0)` that
 /// the surrounding `PutValueSet` lowering already uses for `o.x = v`.
+///
+/// #9495: the generic by-name tail is that same receiver-aware `[[Set]]` in BOTH
+/// modes (`lower_put_value_property_set_by_name`). The strict tail used to be an
+/// own-property store that skipped the prototype walk; see the helper.
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -> Result<String> {
     match expr {
         Expr::PropertySet {
@@ -1129,7 +1201,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
                             return Ok(result);
                         }
                     }
-                    return lower_sloppy_property_set_by_name(ctx, object, property, value);
+                    return lower_put_value_property_set_by_name(
+                        ctx, object, property, value, false,
+                    );
                 }
                 // Fast path: known class instance + plain instance field.
                 // The runtime guard checks the receiver's class/shape and
@@ -1852,18 +1926,22 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
                     }
                 }
             }
-            // #9459: the generic SLOPPY tail. The strict tail below ends in
-            // `js_typed_feedback_object_set_field_by_name_fast`, whose underlying
-            // `js_object_set_field_by_name` has no `strict` parameter and rejects
-            // by throwing; sloppy `PutValue` must discard the rejection instead.
+            // #9459 / #9495: the generic by-name tail is the receiver-aware
+            // `[[Set]]` with the assignment's own `Throw` flag, in BOTH modes.
             //
             // `caller`/`arguments` are excluded in BOTH modes: those two names are
             // routed here from `PutValueSet` specifically to reach
             // `js_object_set_field_by_name`'s poisoned-accessor handling, which is
-            // not a `Throw`-flag decision, and diverting them would change
-            // behaviour this issue is not about.
-            if !assignment_strict && !matches!(property.as_str(), "caller" | "arguments") {
-                return lower_sloppy_property_set_by_name(ctx, object, property, value);
+            // neither a `Throw`-flag nor a prototype-walk decision, and diverting
+            // them would change behaviour neither issue is about.
+            if !matches!(property.as_str(), "caller" | "arguments") {
+                return lower_put_value_property_set_by_name(
+                    ctx,
+                    object,
+                    property,
+                    value,
+                    assignment_strict,
+                );
             }
             // #7154: the value expression can collect, and an evacuating minor
             // inside it relocates the receiver out from under `obj_box` --
@@ -1906,27 +1984,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
                     let key_box = ctx.block().load(DOUBLE, &key_handle_global);
                     let key_bits = ctx.block().bitcast_double_to_i64(&key_box);
                     let key_raw = ctx.block().and(I64, &key_bits, POINTER_MASK_I64);
-                    if matches!(property.as_str(), "caller" | "arguments") {
-                        ctx.block().call_void(
-                            "js_object_set_field_by_name",
-                            &[(I64, &obj_bits), (I64, &key_raw), (DOUBLE, &val_double)],
-                        );
-                        return Ok(val_double);
-                    }
-                    let site_id = emit_typed_feedback_register_site(
-                        ctx,
-                        TypedFeedbackKind::PropertySet,
-                        property,
-                        TypedFeedbackContract::object_set_by_name(),
-                    );
                     ctx.block().call_void(
-                        "js_typed_feedback_object_set_field_by_name_fast",
-                        &[
-                            (I64, &site_id),
-                            (I64, &obj_bits),
-                            (I64, &key_raw),
-                            (DOUBLE, &val_double),
-                        ],
+                        "js_object_set_field_by_name",
+                        &[(I64, &obj_bits), (I64, &key_raw), (DOUBLE, &val_double)],
                     );
                     Ok(val_double)
                 },
