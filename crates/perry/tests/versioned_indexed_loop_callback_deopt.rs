@@ -44,10 +44,16 @@ fn workspace_root() -> PathBuf {
 /// Perry ships a `panic=abort` runtime. A debug `panic=unwind` archive plants
 /// abort-on-unwind guards in `extern "C"` helpers, so the raw JS exceptions in
 /// this fixture cannot reach their generated catch landing pads on Linux.
+/// Relative Cargo target overrides are rooted at the nested build's workspace.
 fn target_runtime_dir() -> PathBuf {
-    let target = std::env::var_os("CARGO_TARGET_DIR")
+    let target = match std::env::var_os("CARGO_TARGET_DIR")
+        .filter(|value| !value.is_empty())
         .map(PathBuf::from)
-        .unwrap_or_else(|| workspace_root().join("target"));
+    {
+        Some(path) if path.is_absolute() => path,
+        Some(path) => workspace_root().join(path),
+        None => workspace_root().join("target"),
+    };
     if cfg!(windows) {
         target.join("x86_64-pc-windows-msvc").join("release")
     } else {
