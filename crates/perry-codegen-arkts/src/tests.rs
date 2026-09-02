@@ -33,6 +33,7 @@ pub(crate) fn empty_module() -> Module {
         script_global_functions: vec![],
         references_global_this: false,
         annexb_global_undefined_names: Vec::new(),
+        init_is_strict: false,
         init: vec![],
         classic_for_lexical_bindings: std::collections::HashSet::new(),
         exported_native_instances: vec![],

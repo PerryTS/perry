@@ -103,7 +103,6 @@ pub extern "C" fn js_string_match(
                 OwnedStringMatch::NonGlobal(
                     OwnedExecMatch::from_repeat_matcher(
                         str_data,
-                        0,
                         &repeat_matcher,
                         &matched,
                         has_indices,
@@ -113,11 +112,14 @@ pub extern "C" fn js_string_match(
             }
         } else if let Some(fre) = lookup_fancy_regex(re) {
             if global {
-                let matches: Vec<OwnedCapture> = fre
-                    .find_iter(str_data)
-                    .filter_map(Result::ok)
-                    .map(|m| OwnedCapture::from_range(str_data, m.start(), m.end()))
-                    .collect();
+                // #9430: the ECMAScript scan, not fancy-regex's iterator —
+                // the latter drops a zero-width match that lands where the
+                // previous match ended.
+                let matches: Vec<OwnedCapture> =
+                    super::global_scan::fancy_ranges(&fre, str_data, 0)
+                        .into_iter()
+                        .map(|(start, end)| OwnedCapture::from_range(str_data, start, end))
+                        .collect();
                 if matches.is_empty() {
                     return ptr::null_mut();
                 }
@@ -128,14 +130,16 @@ pub extern "C" fn js_string_match(
                     return ptr::null_mut();
                 };
                 OwnedStringMatch::NonGlobal(
-                    OwnedExecMatch::from_fancy(str_data, 0, &fre, &caps, has_indices),
+                    OwnedExecMatch::from_fancy(str_data, &fre, &caps, has_indices),
                     has_indices,
                 )
             }
         } else if global {
-            let matches: Vec<OwnedCapture> = regex
-                .find_iter(str_data)
-                .map(|m| OwnedCapture::from_range(str_data, m.start(), m.end()))
+            // #9430: see the fancy branch above; `regex`'s iterator has the
+            // same non-ECMAScript empty-match rule.
+            let matches: Vec<OwnedCapture> = super::global_scan::std_ranges(regex, str_data, 0)
+                .into_iter()
+                .map(|(start, end)| OwnedCapture::from_range(str_data, start, end))
                 .collect();
             if matches.is_empty() {
                 return ptr::null_mut();
@@ -147,7 +151,7 @@ pub extern "C" fn js_string_match(
                 return ptr::null_mut();
             };
             OwnedStringMatch::NonGlobal(
-                OwnedExecMatch::from_standard(str_data, 0, regex, &caps, has_indices),
+                OwnedExecMatch::from_standard(str_data, regex, &caps, has_indices),
                 has_indices,
             )
         }

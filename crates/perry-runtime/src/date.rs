@@ -1891,6 +1891,80 @@ mod tests {
         assert!(parse_date_string("not a date").is_nan());
     }
 
+    /// #9414: the numeric slash grammar node accepts as its
+    /// implementation-defined format. Measured against
+    /// `node --experimental-strip-types`, not derived from the spec (which
+    /// leaves this format undefined).
+    #[test]
+    fn test_date_parse_slash_grammar() {
+        // Zone-designated forms are timezone-deterministic, so they can be
+        // pinned to an exact instant.
+        assert_eq!(parse_date_string("2026/09/01 GMT"), 1_788_220_800_000.0);
+        assert_eq!(parse_date_string("09/01/2026 GMT"), 1_788_220_800_000.0);
+        assert_eq!(parse_date_string("2026/9 GMT"), 1_788_220_800_000.0);
+        assert_eq!(
+            parse_date_string("2026/9/1 10:30:45.123 UTC"),
+            1_788_258_645_123.0
+        );
+        assert_eq!(
+            parse_date_string("2026/09/01 10:30 GMT+0500"),
+            1_788_240_600_000.0
+        );
+        // Two-digit years: 0..=49 → 2000s, 50..=99 → 1900s.
+        assert_eq!(parse_date_string("09/01/26 GMT"), 1_788_220_800_000.0);
+        assert_eq!(parse_date_string("99/1/1 GMT"), 915_148_800_000.0);
+        assert_eq!(parse_date_string("1/2/3 GMT"), 1_041_465_600_000.0);
+        // A day past the end of its month ROLLS OVER (node: 2 March 2026),
+        // while an out-of-range month or a zero day is Invalid Date.
+        assert_eq!(parse_date_string("2026/02/30 GMT"), 1_772_409_600_000.0);
+        assert_eq!(parse_date_string("2026/09/31 GMT"), 1_790_812_800_000.0);
+        // Clock edge cases: 24:00 rolls to the next midnight, 25:00 is Invalid.
+        assert_eq!(
+            parse_date_string("2026/09/01 24:00 GMT"),
+            1_788_307_200_000.0
+        );
+        assert_eq!(
+            parse_date_string("2026/09/01 3:04 PM GMT"),
+            1_788_275_040_000.0
+        );
+        // A named month may also be slash-separated.
+        assert_eq!(parse_date_string("Sep/01/2026 GMT"), 1_788_220_800_000.0);
+
+        for bad in [
+            "2026/13/01",       // month out of range
+            "2026/00/01",       // month zero
+            "2026/09/00",       // day zero
+            "2026/09/32",       // day out of range
+            "31/1/2026",        // 31 read as a month
+            "13/1/2026",        // 13 read as a month
+            "0/1/2026",         // Y/M/D with 2026 as the day
+            "9/2026",           // M/D with 2026 as the day
+            "2026/1/2/3",       // a fourth component
+            "2026/09/01T10:30", // 'T' is ISO-only, not this grammar
+            "2026/09/01 25:00", // hour out of range
+            "2026/09/01 10:60", // minute out of range
+            "2026/09/01 +0500", // bare offset with no clock
+        ] {
+            assert!(
+                parse_date_string(bad).is_nan(),
+                "expected Invalid Date for {bad:?}"
+            );
+        }
+
+        // Without a zone designator the components are LOCAL wall clock — the
+        // property that separates this branch from the ISO one. Assert it
+        // through the local-component decoder so the test is host-zone
+        // independent.
+        let ts = parse_date_string("2026/09/01 10:30:45");
+        assert!(!ts.is_nan());
+        let (y, mo, d, h, mi, s, _) = timestamp_to_local_components((ts as i64).div_euclid(1000));
+        assert_eq!((y, mo, d, h, mi, s), (2026, 9, 1, 10, 30, 45));
+        let midnight = parse_date_string("09/01/2026");
+        let (y, mo, d, h, mi, s, _) =
+            timestamp_to_local_components((midnight as i64).div_euclid(1000));
+        assert_eq!((y, mo, d, h, mi, s), (2026, 9, 1, 0, 0, 0));
+    }
+
     #[test]
     fn test_setter_optional_args() {
         // #2851 — setUTCFullYear(year, month, date)

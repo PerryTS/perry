@@ -14,12 +14,30 @@ pub(crate) unsafe fn gc_element_slot_range(
     }
     let length = (*arr).length as usize;
     let capacity = (*arr).capacity as usize;
-    if length > capacity || length > 16_000_000 {
+    if capacity > 16_000_000 {
         return None;
     }
+    if length > capacity {
+        // Preserve the old corruption fail-closed behavior while admitting
+        // legitimate sparse headers: the claimed capacity must exactly match
+        // the GC allocation that owns this payload.
+        let Some(gc_header) = crate::value::addr_class::try_read_tracked_gc_header(arr as usize)
+        else {
+            return None;
+        };
+        if checked_array_allocation_size(capacity) != Some((*gc_header.as_ptr()).size as usize) {
+            return None;
+        }
+    }
+    // A large `new Array(length)` intentionally starts with `length >
+    // capacity`. Only the allocated dense prefix can contain inline child
+    // edges; indices beyond it live in the separately-rooted named-property
+    // table. Returning no range here would lose pointer values written into
+    // that prefix while it grows (#9371).
+    let dense_prefix = length.min(capacity);
     Some(crate::gc::HeapSlotRange::new(
         array_elements_ptr(arr),
-        length,
+        dense_prefix,
     ))
 }
 
@@ -248,13 +266,17 @@ pub(crate) unsafe fn replay_array_growth_write_barriers(arr: *mut ArrayHeader) {
         return;
     }
 
-    let length = (*arr).length as usize;
-    if length == 0 || length > 16_000_000 {
+    // `length` may exceed the allocation for a large fresh holey array. Growth
+    // copies and barriers only the allocated dense prefix; scanning logical
+    // length here walked beyond intermediate growth allocations and corrupted
+    // earlier values once the array became dense (#9371).
+    let dense_prefix = ((*arr).length as usize).min((*arr).capacity as usize);
+    if dense_prefix == 0 || dense_prefix > 16_000_000 {
         return;
     }
 
     let slots = array_elements_ptr(arr);
-    if crate::gc::layout_visit_pointer_slots_for_user(arr as usize, length, |index| {
+    if crate::gc::layout_visit_pointer_slots_for_user(arr as usize, dense_prefix, |index| {
         let slot = slots.add(index);
         crate::gc::runtime_write_barrier_slot(arr as usize, slot as usize, *slot);
     }) {
@@ -265,7 +287,7 @@ pub(crate) unsafe fn replay_array_growth_write_barriers(arr: *mut ArrayHeader) {
     // per-store entry point would re-derive the parent classification `length`
     // times and re-assert a page-granular fact ~512 times per page. See
     // `gc::barrier::replay_old_parent_slot_range`.
-    crate::gc::replay_old_parent_slot_range_barriers(arr as usize, slots, length);
+    crate::gc::replay_old_parent_slot_range_barriers(arr as usize, slots, dense_prefix);
 }
 
 #[inline]

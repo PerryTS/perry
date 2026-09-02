@@ -76,6 +76,8 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     // reads 0 whenever every live typed array uses inline storage (so the
     // inline `header + 16 + idx*elem_size` load matches the runtime `data_ptr`).
     module.add_external_global("PERRY_TA_KIND_CACHE", "[64 x i64]");
+    // #9342: Uint8Array inline-read admission cache (buffer/header.rs).
+    module.add_external_global("PERRY_U8_INLINE_CACHE", "[64 x i64]");
     module.add_external_global("PERRY_TA_VIEW_GUARD", I64);
     module.declare_function("js_object_alloc", I64, &[I32, I32]);
     // #3149: `Object(value)` plain-call coercion. Takes & returns a NaN-boxed
@@ -133,6 +135,10 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     // #5127: apply ES2022 `cause` from a `super(message, options)` forward to
     // a user Error-subclass instance (a generic object). (this_handle, options)
     module.declare_function("js_error_apply_cause_to_object", VOID, &[I64, DOUBLE]);
+    // #9410: install the own, lazily-formatted `stack` accessor Node gives an
+    // `Error` subclass instance, capturing the frame at the construction site.
+    // (this)
+    module.declare_function("js_error_subclass_capture_stack", VOID, &[DOUBLE]);
     module.declare_function("js_with_has_binding", I32, &[DOUBLE, I64]);
     module.declare_function("js_with_get_binding", DOUBLE, &[DOUBLE, I64]);
     module.declare_function("js_with_set_binding", DOUBLE, &[DOUBLE, I64, DOUBLE, I32]);

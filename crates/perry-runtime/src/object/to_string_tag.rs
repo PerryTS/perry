@@ -385,6 +385,24 @@ pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
                 tag_str = Some("RegExp String Iterator".to_string());
             } else if class_id == crate::object::namespace_create::MODULE_NAMESPACE_CLASS_ID {
                 tag_str = Some("Module".to_string());
+            } else if class_id != 0 && crate::object::extends_builtin_error(class_id) {
+                // #9410: §20.1.3.6 picks `builtinTag` from the internal slot,
+                // and an Error SUBCLASS instance has [[ErrorData]] — it is
+                // just not a `GC_TYPE_ERROR` cell here (it is an ordinary
+                // class instance, so the subclass's own fields have somewhere
+                // to live), which is why the header-typed branch above misses
+                // it and `Object.prototype.toString.call(new (class extends
+                // Error {})())` reported "[object Object]" while the base
+                // `Error` reported "[object Error]".
+                //
+                // Set BEFORE the `Symbol.toStringTag` hook below, not after:
+                // the spec consults the tag property last and lets it win, so
+                // a subclass that declares `[Symbol.toStringTag]` still
+                // overrides this. `extends_builtin_error` is the same
+                // class-id chain walk that already backs `instanceof Error`,
+                // `util.types.isNativeError` and `Error.prototype.toString`
+                // for these instances.
+                tag_str = Some("Error".to_string());
             }
             if let Some(func_ptr) = lookup_to_string_tag_hook(class_id) {
                 let getter: extern "C" fn(f64) -> f64 = std::mem::transmute(func_ptr as *const u8);

@@ -154,10 +154,10 @@ pub use formatting::{
 
 pub(crate) use formatting::{
     boxed_primitive_json_value, boxed_primitive_payload, boxed_primitive_to_string_tag,
-    format_finite_number_js, format_jsvalue, is_negative_zero, jsvalue_string_content,
-    prune_dead_boxed_primitive_payload_owners, InspectCompactGuard, InspectCustomInspectGuard,
-    InspectDepthLimitGuard, InspectGettersGuard, InspectShowHiddenGuard, InspectSortedGuard,
-    INT_EXACT_FASTPATH_LIMIT,
+    format_finite_number_js, format_jsvalue, int32_or_class_repr, is_array_hole, is_negative_zero,
+    jsvalue_string_content, prune_dead_boxed_primitive_payload_owners, InspectCompactGuard,
+    InspectCustomInspectGuard, InspectDepthLimitGuard, InspectGettersGuard, InspectShowHiddenGuard,
+    InspectSortedGuard, INT_EXACT_FASTPATH_LIMIT,
 };
 #[cfg(test)]
 pub(crate) use formatting::{

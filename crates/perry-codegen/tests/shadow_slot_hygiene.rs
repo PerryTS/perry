@@ -147,6 +147,7 @@ fn shadow_hygiene_module() -> Module {
             was_plain_async: false,
             was_unrolled: false,
         }],
+        init_is_strict: false,
         init: Vec::new(),
         classic_for_lexical_bindings: std::collections::HashSet::new(),
         exported_native_instances: Vec::new(),
@@ -185,6 +186,7 @@ fn top_level_shadow_module(name: &str) -> Module {
         script_global_functions: Vec::new(),
         references_global_this: false,
         annexb_global_undefined_names: Vec::new(),
+        init_is_strict: false,
         init: vec![
             Stmt::Let {
                 id: 10,
@@ -298,6 +300,7 @@ fn flat_const_row_alias_shadow_module() -> Module {
         script_global_functions: Vec::new(),
         references_global_this: false,
         annexb_global_undefined_names: Vec::new(),
+        init_is_strict: false,
         init: vec![
             Stmt::Let {
                 id: 30,
@@ -393,6 +396,7 @@ fn reassigned_any_shadow_module() -> Module {
             was_plain_async: false,
             was_unrolled: false,
         }],
+        init_is_strict: false,
         init: Vec::new(),
         classic_for_lexical_bindings: std::collections::HashSet::new(),
         exported_native_instances: Vec::new(),
@@ -471,6 +475,7 @@ fn mixed_any_alias_shadow_module() -> Module {
             was_plain_async: false,
             was_unrolled: false,
         }],
+        init_is_strict: false,
         init: Vec::new(),
         classic_for_lexical_bindings: std::collections::HashSet::new(),
         exported_native_instances: Vec::new(),
@@ -557,6 +562,7 @@ fn closure_captured_write_shadow_module() -> Module {
             was_plain_async: false,
             was_unrolled: false,
         }],
+        init_is_strict: false,
         init: Vec::new(),
         classic_for_lexical_bindings: std::collections::HashSet::new(),
         exported_native_instances: Vec::new(),
@@ -1150,6 +1156,7 @@ fn canonical_str_shadow_module() -> Module {
             was_plain_async: false,
             was_unrolled: false,
         }],
+        init_is_strict: false,
         init: Vec::new(),
         classic_for_lexical_bindings: std::collections::HashSet::new(),
         exported_native_instances: Vec::new(),

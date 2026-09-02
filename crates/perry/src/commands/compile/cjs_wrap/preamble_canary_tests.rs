@@ -261,3 +261,62 @@ fn computed_relative_requires_are_joined_against_the_module_dir() {
          './chunks/N.js' will miss it (#8040)"
     );
 }
+
+// ── #9412: the wrap's synthetic `createRequire` import ─────────────────────
+
+/// The entry codegen decides `process.nextTick`-vs-microtask ordering from
+/// "is this entry an ES module?", and the wrap answers yes for every CommonJS
+/// file because it injects an import and an export. #9412 re-gates that on
+/// `collectors::is_cjs_wrapped_module`, which recognises a wrapped module by
+/// the local name the synthetic `node:module` import binds.
+///
+/// Nothing else links the two. Rename the local in `wrap.rs` and every
+/// CommonJS entry silently goes back to ES-module tick ordering — ticks after
+/// the promise queue, where Node runs them first — with no test failing and no
+/// error, which is exactly how #9412 survived in the first place.
+#[test]
+fn the_wrap_still_binds_the_local_the_cjs_entry_recogniser_keys_on() {
+    let local = perry_codegen::cjs_wrap_create_require_local();
+    let path = Path::new("/tmp/perry-canary/node_modules/dep/index.js");
+    let wrapped = wrap_commonjs_for_target(CJS_FIXTURE, path, None);
+
+    // Anti-vacuity: the template must still emit the binding at all.
+    assert!(
+        wrapped.contains(local),
+        "the CJS wrap no longer binds `{local}`.\n\
+         `is_cjs_wrapped_module` in perry-codegen/src/collectors/cjs_scaffolding.rs \
+         keys on that local to tell a CommonJS entry from a hand-written ES module; \
+         without it every CommonJS entry runs `process.nextTick` after the promise \
+         queue again (#9412). Rename it in both places, or replace the recogniser."
+    );
+
+    let hir = wrap_and_lower(CJS_FIXTURE);
+    assert!(
+        perry_codegen::module_is_cjs_wrapped(&hir),
+        "a wrapped CommonJS module is no longer recognised as one. The wrap's \
+         synthetic `node:module` import survived the source, but not lowering — \
+         compare `is_cjs_wrapped_module`'s specifier match against what \
+         `perry_hir::lower_module` produces for the wrap's import prefix."
+    );
+}
+
+/// Negative control: a genuine ES module must NOT be mistaken for a wrapped
+/// CommonJS one, or #9412's fix would give real ESM entries CommonJS tick
+/// ordering — the same bug pointed the other way.
+#[test]
+fn a_hand_written_es_module_is_not_recognised_as_cjs_wrapped() {
+    const ESM_FIXTURE: &str = r#"import { createRequire } from 'node:module';
+const require2 = createRequire(import.meta.url);
+export const value = 1;
+"#;
+    let ast = perry_parser::parse_typescript(ESM_FIXTURE, "esm.ts").expect("fixture must parse");
+    let hir = perry_hir::lower_module(&ast, "esm", "/tmp/perry-canary/esm.ts")
+        .expect("fixture must lower");
+    assert!(
+        !perry_codegen::module_is_cjs_wrapped(&hir),
+        "a user's own `import {{ createRequire }} from 'node:module'` was taken for \
+         Perry's wrap. The recogniser must key on the aliased local \
+         (`{}`), not on the module specifier.",
+        perry_codegen::cjs_wrap_create_require_local()
+    );
+}

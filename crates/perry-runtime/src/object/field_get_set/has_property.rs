@@ -730,6 +730,24 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
                     } {
                         return nanbox_true;
                     }
+                    // A Uint8Array is represented by a registered buffer, but
+                    // ordinary properties written through the typed-array
+                    // [[Set]] path live in TYPED_ARRAY_OWN_PROPS.  The
+                    // lookup_typed_array_kind arm above can never see this
+                    // receiver, and the legacy buffer table below is a
+                    // different store.  Ask the buffer-aware typed-array own
+                    // property helper as well, matching Object.keys,
+                    // hasOwnProperty, and getOwnPropertyDescriptor.
+                    let key_str = crate::value::js_get_string_pointer_unified(key)
+                        as *const crate::StringHeader;
+                    if unsafe {
+                        crate::typedarray_props::typed_array_has_own_property(
+                            obj_addr as *const crate::typedarray::TypedArrayHeader,
+                            key_str,
+                        )
+                    } {
+                        return nanbox_true;
+                    }
                     // #6406: the Buffer-specific surface the %TypedArray% chain
                     // above does NOT cover — a user own-property (`buf.foo = v`)
                     // and the `Buffer.prototype` methods (`readUInt8`,

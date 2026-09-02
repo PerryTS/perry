@@ -1269,3 +1269,278 @@ fn fancy_engine_accepts_ascii_word_boundary_markers() {
         Some("<div>\nhello\n</div>\n\n")
     );
 }
+
+// ---- #9429: exec/test at a non-zero lastIndex see the WHOLE subject ------
+
+/// One `exec` at `last_index`, as `(matched text, .index, lastIndex after)`.
+/// `None` also asserts the spec's reset-to-0 on a failed stateful exec, so a
+/// row that stops matching cannot quietly leave `lastIndex` behind.
+fn exec_from(
+    pattern: &str,
+    flags: &str,
+    subject: &str,
+    last_index: usize,
+) -> Option<(String, f64, usize)> {
+    let re = js_regexp_new(make_string(pattern), make_string(flags));
+    store_last_index_number(re, last_index);
+    let arr = js_regexp_exec(re, make_string(subject));
+    if arr.is_null() {
+        assert_eq!(
+            regex_last_index_offset(re),
+            0,
+            "{pattern}/{flags} @{last_index}: a failed stateful exec resets lastIndex"
+        );
+        return None;
+    }
+    let text = match_capture_text(arr, 0).expect("capture zero always participates");
+    Some((
+        text,
+        js_regexp_exec_get_index(),
+        regex_last_index_offset(re),
+    ))
+}
+
+fn hit(text: &str, index: f64, last_index: usize) -> Option<(String, f64, usize)> {
+    Some((text.to_string(), index, last_index))
+}
+
+#[test]
+fn exec_at_last_index_holds_anchors_against_the_subject_not_a_slice() {
+    // Every row is a position where the SLICE and the SUBJECT disagree.
+    // `^` is start-of-subject: at lastIndex 1 of "ab" it must not hold, even
+    // though it would hold at offset 0 of the slice "b".
+    assert_eq!(exec_from("^b", "g", "ab", 1), None);
+    assert_eq!(exec_from("^b", "g", "ab", 0), None);
+    assert_eq!(exec_from("^a", "g", "ab", 0), hit("a", 0.0, 1));
+    assert_eq!(exec_from("^a", "g", "ab", 1), None);
+    // Under `m` it holds after a LineTerminator IN THE SUBJECT — index 2 of
+    // "a\nb" regardless of where the scan was told to start.
+    assert_eq!(exec_from("^b", "gm", "a\nb", 0), hit("b", 2.0, 3));
+    assert_eq!(exec_from("^b", "gm", "a\nb", 1), hit("b", 2.0, 3));
+    assert_eq!(exec_from("^b", "gm", "a\nb", 2), hit("b", 2.0, 3));
+    // `\b`/`\B` read the character BEFORE the start position.
+    assert_eq!(exec_from(r"\bb", "g", "ab", 1), None);
+    assert_eq!(exec_from(r"\Bb", "g", "ab", 1), hit("b", 1.0, 2));
+    assert_eq!(exec_from(r"\bb", "g", "a b", 1), hit("b", 2.0, 3));
+    assert_eq!(exec_from(r"\Bb", "g", "a b", 1), None);
+    // `$` at the very end still matches the empty string there.
+    assert_eq!(exec_from("$", "g", "ab", 2), hit("", 2.0, 2));
+}
+
+#[test]
+fn exec_at_last_index_keeps_lookaround_context() {
+    // The `regex` crate has no lookaround, so these run on the fancy-regex
+    // fallback — assert the lane, or the rows below could pass on a different
+    // engine than the one this fix touches.
+    let looky = js_regexp_new(make_string("(?<=a)b"), make_string("g"));
+    assert!(
+        lookup_fancy_regex(looky).is_some(),
+        "lookbehind must select the fancy-regex lane"
+    );
+
+    // Lookbehind is destroyed by a slice: the `a` is to the LEFT of the start.
+    assert_eq!(exec_from("(?<=a)b", "g", "ab", 0), hit("b", 1.0, 2));
+    assert_eq!(exec_from("(?<=a)b", "g", "ab", 1), hit("b", 1.0, 2));
+    assert_eq!(exec_from("(?<=a)b", "g", "ab", 2), None);
+    assert_eq!(exec_from("(?<=ab)c", "g", "abc", 2), hit("c", 2.0, 3));
+    // …and a NEGATIVE lookbehind is wrong the other way: a slice makes it hold.
+    assert_eq!(exec_from("(?<!a)b", "g", "ab", 1), None);
+    assert_eq!(exec_from("(?<!a)b", "g", "xb", 1), hit("b", 1.0, 2));
+    // A zero-width lookbehind at the end of the subject still matches.
+    assert_eq!(exec_from("(?<=b)", "g", "ab", 2), hit("", 2.0, 2));
+    // Lookahead scans rightwards from the found position, unaffected by the
+    // start but covered so a future rewrite can't drop it.
+    assert_eq!(exec_from("a(?=b)", "g", "abab", 1), hit("a", 2.0, 3));
+    assert_eq!(exec_from("a(?=b)", "g", "abab", 3), None);
+}
+
+#[test]
+fn sticky_exec_anchors_at_last_index_not_at_offset_zero() {
+    // Sticky means "the match must START at lastIndex" — of the subject.
+    assert_eq!(exec_from("b", "y", "ab", 1), hit("b", 1.0, 2));
+    assert_eq!(exec_from("b", "y", "ab", 0), None);
+    assert_eq!(exec_from("^b", "y", "ab", 1), None);
+    assert_eq!(exec_from(r"\bb", "y", "ab", 1), None);
+    assert_eq!(exec_from(r"\bb", "y", "a b", 2), hit("b", 2.0, 3));
+    assert_eq!(exec_from("(?<=a)b", "y", "ab", 1), hit("b", 1.0, 2));
+    assert_eq!(exec_from("(?<=ab)c", "y", "abc", 2), hit("c", 2.0, 3));
+}
+
+#[test]
+fn exec_from_last_index_on_the_regress_lane() {
+    // A quantified capture group routes to `regress` — the third engine, and
+    // the only one whose positional entry point is an iterator.
+    let re = js_regexp_new(make_string("(?<=a)(b)*"), make_string("g"));
+    assert!(
+        lookup_repeat_matcher(re).is_some(),
+        "a quantified capture must select the regress lane"
+    );
+    assert_eq!(exec_from("(?<=a)(b)*", "g", "ab", 1), hit("b", 1.0, 2));
+    assert_eq!(exec_from("(?<=a)(b)*", "g", "xb", 1), None);
+    assert_eq!(exec_from("(a)*", "g", "xa", 1), hit("a", 1.0, 2));
+}
+
+#[test]
+fn exec_past_the_end_is_no_match_not_a_search_clamped_to_the_end() {
+    // RegExpBuiltinExec step 12.a. `utf16_index_to_byte` saturates at the
+    // payload length, so a byte-offset bound cannot see this at all: without
+    // the UTF-16 bound, `/a*/g` with lastIndex 5 reports an empty match at 2.
+    assert_eq!(exec_from("a*", "g", "ab", 5), None);
+    assert_eq!(exec_from("a*", "y", "ab", 5), None);
+    assert_eq!(exec_from("a*", "g", "ab", 3), None);
+    // Exactly at the end is still in range.
+    assert_eq!(exec_from("a*", "g", "ab", 2), hit("", 2.0, 2));
+    // Astral: "𝌆" is ONE scalar but TWO code units, so lastIndex 2 is the end
+    // and 3 is past it — a scalar-count bound would get both wrong.
+    assert_eq!(exec_from("x*", "g", "𝌆", 2), hit("", 2.0, 2));
+    assert_eq!(exec_from("x*", "g", "𝌆", 3), None);
+}
+
+#[test]
+fn stateful_test_reports_the_same_answer_as_exec() {
+    // `test` routes global/sticky through `exec`; these are the rows where a
+    // sliced haystack flipped the boolean.
+    let sticky_anchor = js_regexp_new(make_string("^b"), make_string("y"));
+    store_last_index_number(sticky_anchor, 1);
+    assert_eq!(js_regexp_test(sticky_anchor, make_string("ab")), 0);
+
+    let global_anchor = js_regexp_new(make_string("^b"), make_string("g"));
+    store_last_index_number(global_anchor, 1);
+    assert_eq!(js_regexp_test(global_anchor, make_string("ab")), 0);
+
+    let behind = js_regexp_new(make_string("(?<=a)b"), make_string("g"));
+    store_last_index_number(behind, 1);
+    assert_eq!(js_regexp_test(behind, make_string("ab")), 1);
+    assert_eq!(regex_last_index_offset(behind), 2);
+
+    let past_end = js_regexp_new(make_string("a*"), make_string("g"));
+    store_last_index_number(past_end, 5);
+    assert_eq!(js_regexp_test(past_end, make_string("ab")), 0);
+
+    // A non-global, non-sticky regex ignores lastIndex entirely.
+    let plain = js_regexp_new(make_string("^b"), make_string(""));
+    store_last_index_number(plain, 1);
+    assert_eq!(js_regexp_test(plain, make_string("ab")), 0);
+    assert_eq!(regex_last_index_offset(plain), 1, "plain test leaves it be");
+}
+
+// ---- #9430: a global scan keeps the empty match at a match's end ---------
+
+/// `subject.match(/pattern/flags)` for a global regex, as plain strings.
+fn global_match_list(pattern: &str, flags: &str, subject: &str) -> Vec<String> {
+    let re = js_regexp_new(make_string(pattern), make_string(flags));
+    let arr = js_string_match(make_string(subject), re);
+    if arr.is_null() {
+        return Vec::new();
+    }
+    let len = unsafe { (*arr).length };
+    (0..len)
+        .map(|index| match_capture_text(arr, index).expect("a match list holds only strings"))
+        .collect()
+}
+
+fn replace_all_with(pattern: &str, flags: &str, subject: &str, repl: &str) -> String {
+    let re = js_regexp_new(make_string(pattern), make_string(flags));
+    let out = js_string_replace_regex(make_string(subject), re, make_string(repl));
+    string_as_str(out).to_string()
+}
+
+#[test]
+fn ecmascript_scan_keeps_an_empty_match_where_the_previous_one_ended() {
+    // The scan loop's contract, pinned without an engine: an empty match at
+    // the previous match's end is KEPT, and the cursor then advances one
+    // position — Rust's iterators drop it and advance instead.
+    //
+    // The finder below is `/a*/` over "aXa" written out by hand.
+    let subject = "aXa";
+    let seen = super::global_scan::scan(subject, 0, |cursor| {
+        // `a*` matches the empty string anywhere, so its leftmost match from
+        // `cursor` always STARTS at `cursor` and runs over the `a`s there.
+        let mut end = cursor;
+        while subject.as_bytes().get(end) == Some(&b'a') {
+            end += 1;
+        }
+        Some((cursor, end, (cursor, end)))
+    });
+    assert_eq!(seen, vec![(0, 1), (1, 1), (2, 3), (3, 3)]);
+
+    // The bound is what terminates the walk: without `cursor > len` ending it,
+    // the trailing empty match would repeat forever.
+    let empties = super::global_scan::scan("ab", 0, |cursor| Some((cursor, cursor, cursor)));
+    assert_eq!(empties, vec![0, 1, 2]);
+
+    // A zero-width step never lands inside a scalar.
+    assert_eq!(super::global_scan::advance_past_empty("a𝌆b", 0), 1);
+    assert_eq!(super::global_scan::advance_past_empty("a𝌆b", 1), 5);
+    assert_eq!(super::global_scan::advance_past_empty("a𝌆b", 5), 6);
+    assert_eq!(super::global_scan::advance_past_empty("ab", 2), 3);
+}
+
+#[test]
+fn global_match_keeps_the_trailing_and_interior_empty_matches() {
+    // The linear `regex` lane.
+    let plain = js_regexp_new(make_string("a*"), make_string("g"));
+    assert!(
+        lookup_fancy_regex(plain).is_none() && lookup_repeat_matcher(plain).is_none(),
+        "`a*` must stay on the linear engine"
+    );
+    assert_eq!(global_match_list("a*", "g", "a"), vec!["a", ""]);
+    assert_eq!(global_match_list("a*", "g", "aa"), vec!["aa", ""]);
+    assert_eq!(global_match_list("b*", "g", "ab"), vec!["", "b", ""]);
+    // Not only the trailing one: the empty match at index 1 is interior.
+    assert_eq!(global_match_list("a*", "g", "aXa"), vec!["a", "", "a", ""]);
+    assert_eq!(global_match_list("x*", "g", "abc"), vec!["", "", "", ""]);
+    assert_eq!(global_match_list("a*", "g", ""), vec![""]);
+    // A pattern that cannot match empty is unchanged.
+    assert_eq!(global_match_list("a+", "g", "aXa"), vec!["a", "a"]);
+}
+
+#[test]
+fn global_match_keeps_empty_matches_on_the_fancy_lane() {
+    // A possibly-empty pattern the linear engine cannot compile.
+    let looky = js_regexp_new(make_string("a*(?!x)"), make_string("g"));
+    assert!(
+        lookup_fancy_regex(looky).is_some(),
+        "a lookahead must select the fancy-regex lane"
+    );
+    assert_eq!(global_match_list("a*(?!x)", "g", "a"), vec!["a", ""]);
+    assert_eq!(
+        global_match_list("a*(?!x)", "g", "aXa"),
+        vec!["a", "", "a", ""]
+    );
+    assert_eq!(global_match_list("(?<=,)", "g", "a,b,"), vec!["", ""]);
+}
+
+#[test]
+fn global_match_on_the_regress_lane_is_unchanged() {
+    // `regress`'s iterator already implements the ECMAScript rule; this is the
+    // control that says so, and that nothing routed it elsewhere.
+    let quantified = js_regexp_new(make_string("(a)*"), make_string("g"));
+    assert!(
+        lookup_repeat_matcher(quantified).is_some(),
+        "a quantified capture must select the regress lane"
+    );
+    assert_eq!(global_match_list("(a)*", "g", "a"), vec!["a", ""]);
+    assert_eq!(
+        global_match_list("(a)*", "g", "aXa"),
+        vec!["a", "", "a", ""]
+    );
+}
+
+#[test]
+fn global_replace_substitutes_at_every_empty_match() {
+    assert_eq!(replace_all_with("a*", "g", "a", "<>"), "<><>");
+    assert_eq!(replace_all_with("a*", "g", "aXa", "-"), "--X--");
+    assert_eq!(replace_all_with("b*", "g", "ab", "-"), "-a--");
+    assert_eq!(replace_all_with("x*", "g", "abc", "-"), "-a-b-c-");
+    assert_eq!(replace_all_with("a*", "g", "aXa", "[$&]"), "[a][]X[a][]");
+    // The non-global form still replaces exactly one match.
+    assert_eq!(replace_all_with("a*", "", "aXa", "-"), "-Xa");
+    // Fancy lane.
+    assert_eq!(replace_all_with("a*(?!x)", "g", "a", "<>"), "<><>");
+    assert_eq!(replace_all_with("(?<=a)", "g", "aba", "!"), "a!ba!");
+    // Named-group substitution takes its own scan path.
+    let named = js_regexp_new(make_string("(?<n>a)*"), make_string("g"));
+    let out = js_string_replace_regex_named(make_string("a"), named, make_string("[$<n>]"));
+    assert_eq!(string_as_str(out), "[a][]");
+}

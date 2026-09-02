@@ -351,11 +351,50 @@ pub extern "C" fn js_array_from_arraylike_holey_value(boxed: f64) -> *mut ArrayH
     crate::array::js_array_from_value(boxed)
 }
 
-/// `Array.from(string)` — split the source string into Unicode codepoints
-/// and emit each as a 1-codepoint string element (matches `[..."hello"]` /
+/// Store a freshly built part string into slot `index` of an all-pointer
+/// result array and publish the slot.
+///
+/// Mirrors `string/split.rs`'s `store_split_string`: the array is allocated
+/// with `length == 0` and each element is published only after its write and
+/// barrier, so a collection triggered by the NEXT part's allocation never scans
+/// an uninitialized slot.
+///
+/// # Safety
+///
+/// `arr` must be a live all-pointer `GC_TYPE_ARRAY` with capacity > `index`,
+/// and `string` a live `StringHeader`.
+unsafe fn store_codepoint_string(
+    arr: *mut ArrayHeader,
+    index: usize,
+    string: *mut crate::string::StringHeader,
+) {
+    let elements = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+    let value = crate::value::js_nanbox_string(string as i64);
+    // GC_STORE_AUDIT(BARRIERED): codepoint array slot is followed by a runtime write barrier.
+    ptr::write(elements.add(index), value);
+    crate::gc::runtime_write_barrier_slot(
+        arr as usize,
+        elements.add(index) as usize,
+        value.to_bits(),
+    );
+    (*arr).length = (index + 1) as u32;
+}
+
+/// `Array.from(string)` — split the source string into Unicode code points and
+/// emit each as a 1-code-point string element (matches `[..."hello"]` /
 /// `for (const c of "hello")` semantics). Surrogate pairs in UTF-16 source
-/// space materialize as a single codepoint per ECMA-262 §22.1.5 String
+/// space materialize as a single code point per ECMA-262 §22.1.5 String
 /// Iterator Records, so `[..."🎉"]` yields a 1-element array (not 2).
+///
+/// #9431: this used to run `std::str::from_utf8(bytes)` and return an EMPTY
+/// array on `Err`. Perry string payloads are WTF-8, not UTF-8 — a lone
+/// surrogate (`"a\ud83db"`, the half of a pair a slicing bug or a chunked
+/// decoder leaves behind) is a legal payload that `from_utf8` rejects — so
+/// `Array.from` silently answered `[]` for the whole string while `[...s]` and
+/// `for…of` over the same string were correct. Step the raw bytes with the
+/// bounded `wtf8_step` decoder instead, which yields one code point per step
+/// and reports a lone surrogate as its own single-unit step, exactly as the
+/// string iterator does.
 pub(crate) unsafe fn js_array_from_string_codepoints(
     s: *const crate::string::StringHeader,
 ) -> *mut ArrayHeader {
@@ -366,28 +405,86 @@ pub(crate) unsafe fn js_array_from_string_codepoints(
     if byte_len == 0 {
         return js_array_alloc(0);
     }
-    let data_ptr = (s as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
-    let bytes = std::slice::from_raw_parts(data_ptr, byte_len);
-    let src = match std::str::from_utf8(bytes) {
-        Ok(s) => s,
-        Err(_) => return js_array_alloc(0),
-    };
-    // Pre-count to size the result exactly.
-    let cp_count = src.chars().count() as u32;
-    let arr = js_array_alloc(cp_count);
-    (*arr).length = cp_count;
-    clear_array_numeric_layout(arr);
-    let elements = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
-    for (i, ch) in src.chars().enumerate() {
-        let mut buf = [0u8; 4];
-        let s_ref = ch.encode_utf8(&mut buf);
-        let s_ptr = crate::string::js_string_from_bytes(s_ref.as_ptr(), s_ref.len() as u32);
-        let value = crate::value::js_nanbox_string(s_ptr as i64);
-        // GC_STORE_AUDIT(BARRIERED): string codepoint array slot is immediately recorded via note_array_slot.
-        *elements.add(i) = value;
-        note_array_slot(arr, i, value.to_bits());
+
+    // GC safety: `js_string_from_bytes` allocates, and a collection can both
+    // reclaim and (under evacuation) MOVE the source string and the result
+    // array. The pre-#9431 loop held a raw `elements` pointer and a borrow of
+    // the source payload across every per-element allocation — pre-existing,
+    // and exactly the `string/split.rs` hazard. Root both, re-read the source
+    // after each allocation, and store each part into the rooted array
+    // immediately.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let s_handle = scope.root_string_ptr(s);
+    let src_has_lone_surrogates = (*s).flags & crate::string::STRING_FLAG_HAS_LONE_SURROGATES != 0;
+
+    // Pass 1: count the code points. No allocation here, so the payload cannot
+    // move under us.
+    let mut count = 0usize;
+    {
+        let bytes = std::slice::from_raw_parts(crate::string::string_data(s), byte_len);
+        let mut i = 0usize;
+        while i < bytes.len() {
+            let (advance, _, _) = crate::string::wtf8_step(bytes, i);
+            i = (i + advance).min(bytes.len());
+            count += 1;
+        }
     }
-    arr
+
+    // Pass 2: allocate the result, then fill it slot by slot.
+    let (arr, _) = s_handle.across_const::<crate::string::StringHeader, _>(|| {
+        js_array_alloc_pointer_elements(count as u32)
+    });
+    let arr_handle = scope.root_raw_mut_ptr(arr);
+    // The CURRENT array pointer, refreshed from every `across_mut` re-read
+    // below. Nothing between one refresh and the next allocates
+    // (`with_const_ptr` only copies into a stack buffer and
+    // `store_codepoint_string` is a direct slot write + barrier), so this is
+    // always valid — including at the final return, which needs no re-read.
+    let mut arr_latest = arr;
+
+    let mut offset = 0usize;
+    for index in 0..count {
+        // Copy the sequence into a stack buffer BEFORE allocating:
+        // `js_string_from_bytes` allocates first and copies second, so handing
+        // it a pointer into the GC heap is the #5062 dangling-source class. A
+        // WTF-8 sequence is at most 4 bytes.
+        let mut buf = [0u8; 4];
+        // The copy into `buf` is the whole validity window for the string
+        // pointer, so scope it with `with_const_ptr` — nothing in the closure
+        // allocates, and the pointer never escapes it.
+        let seq_len = s_handle.with_const_ptr::<crate::string::StringHeader, _>(|s_now| {
+            let bytes = std::slice::from_raw_parts(
+                crate::string::string_data(s_now),
+                (*s_now).byte_len as usize,
+            );
+            if offset >= bytes.len() {
+                return 0;
+            }
+            let (advance, _, _) = crate::string::wtf8_step(bytes, offset);
+            let end = (offset + advance).min(bytes.len());
+            let len = end - offset;
+            buf[..len].copy_from_slice(&bytes[offset..end]);
+            offset = end;
+            len
+        });
+        if seq_len == 0 {
+            break;
+        }
+        // `js_string_from_bytes` hardcodes flags = 0, so a lone surrogate
+        // carved out of a WTF-8 source would lose its marker and
+        // `isWellFormed()` on the element would wrongly report true.
+        let seq = &buf[..seq_len];
+        let (sh, arr_now) = arr_handle.across_mut::<ArrayHeader, _>(|| {
+            if src_has_lone_surrogates && crate::string::bytes_have_lone_surrogate(seq) {
+                crate::string::js_string_from_wtf8_bytes(seq.as_ptr(), seq_len as u32)
+            } else {
+                crate::string::js_string_from_bytes(seq.as_ptr(), seq_len as u32)
+            }
+        });
+        arr_latest = arr_now;
+        store_codepoint_string(arr_now, index, sh);
+    }
+    arr_latest
 }
 
 /// Exact-sized array allocation for array literals `[a, b, c, ...]`.

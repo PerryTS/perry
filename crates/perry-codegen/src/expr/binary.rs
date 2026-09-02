@@ -485,6 +485,24 @@ fn chain_fold_is_sound(ctx: &FnCtx<'_>, parts: &[&Expr]) -> bool {
         .any(|p| crate::type_analysis::string_value_is_runtime_guaranteed(ctx, p))
 }
 
+/// Is this `+` the update of an accumulator whose whole chain is proven to
+/// stay below 2^53 (#9363)?
+///
+/// Shape: `acc + <byte read>` (either operand order), where `acc` is a local
+/// the trip-count analysis admitted. The analysis proved the property over
+/// EVERY write to that local in the function, so recognizing the shape here is
+/// only selecting which `fadd` gets the flag — it is not itself the argument.
+///
+/// The addend must still be checked at this site: the collector's bound covers
+/// the writes it saw, and an `acc + <something else>` node inside the same
+/// function is a different expression that its bound does not license.
+fn reduction_add_is_reassociable(ctx: &FnCtx<'_>, left: &Expr, right: &Expr) -> bool {
+    let admitted = |e: &Expr| matches!(e, Expr::LocalGet(id) if ctx.native_facts.reassociable_f64_accumulators().contains(id));
+    let byte_read =
+        |e: &Expr| matches!(e, Expr::Uint8ArrayGet { .. } | Expr::BufferIndexGet { .. });
+    (admitted(left) && byte_read(right)) || (admitted(right) && byte_read(left))
+}
+
 fn lower_arithmetic_operand(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<(String, bool)> {
     // A stable-packed numeric clone has a stronger fact than the generic
     // untyped-local typed-array probe below: its preheader scanned the exact
@@ -1248,8 +1266,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             };
             let v = match op {
                 BinaryOp::Add => {
+                    // #9363: a proven byte-read reduction may reassociate, so
+                    // LLVM can split the serial dependency chain into parallel
+                    // partial sums (and vectorize it). The proof is the
+                    // collector's, not this site's — see
+                    // `collectors/loop_bounded_i32.rs::AccumulatorMode`.
+                    let reassoc = reduction_add_is_reassociable(ctx, left, right);
                     let blk = ctx.block();
-                    blk.fadd(&l, &r)
+                    if reassoc {
+                        blk.fadd_reassoc(&l, &r)
+                    } else {
+                        blk.fadd(&l, &r)
+                    }
                 }
                 BinaryOp::Sub => {
                     let blk = ctx.block();

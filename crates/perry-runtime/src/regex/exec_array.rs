@@ -63,6 +63,12 @@ impl OwnedCapture {
 /// All subject-derived state needed to build one RegExp match result. This is
 /// deliberately owned/scalar-only: no `&str`, `regex::Match`, or `Captures`
 /// may survive into the allocation phase (#8449).
+///
+/// Every offset here is absolute in `str_data`. The constructors used to take
+/// a `search_start_byte` and re-base onto it, because `exec` searched a
+/// `&str_data[lastIndex..]` slice; they no longer do, because `exec` searches
+/// the whole subject from a position (#9429). Reintroducing a base offset
+/// would mean the engine had been handed a slice again.
 pub(super) struct OwnedExecMatch {
     captures: Vec<Option<OwnedCapture>>,
     named: Vec<(String, usize)>,
@@ -72,7 +78,6 @@ pub(super) struct OwnedExecMatch {
 impl OwnedExecMatch {
     pub(super) fn from_standard(
         str_data: &str,
-        search_start_byte: usize,
         regex: &regex::Regex,
         caps: &regex::Captures,
         has_indices: bool,
@@ -81,12 +86,7 @@ impl OwnedExecMatch {
             .iter()
             .map(|capture| {
                 capture.map(|m| {
-                    OwnedCapture::from_range_with_indices(
-                        str_data,
-                        search_start_byte + m.start(),
-                        search_start_byte + m.end(),
-                        has_indices,
-                    )
+                    OwnedCapture::from_range_with_indices(str_data, m.start(), m.end(), has_indices)
                 })
             })
             .collect();
@@ -113,7 +113,6 @@ impl OwnedExecMatch {
 
     pub(super) fn from_fancy(
         str_data: &str,
-        search_start_byte: usize,
         regex: &fancy_regex::Regex,
         caps: &fancy_regex::Captures,
         has_indices: bool,
@@ -121,12 +120,7 @@ impl OwnedExecMatch {
         let captures: Vec<Option<OwnedCapture>> = (0..caps.len())
             .map(|index| {
                 caps.get(index).map(|m| {
-                    OwnedCapture::from_range_with_indices(
-                        str_data,
-                        search_start_byte + m.start(),
-                        search_start_byte + m.end(),
-                        has_indices,
-                    )
+                    OwnedCapture::from_range_with_indices(str_data, m.start(), m.end(), has_indices)
                 })
             })
             .collect();
@@ -153,7 +147,6 @@ impl OwnedExecMatch {
 
     pub(super) fn from_repeat_matcher(
         str_data: &str,
-        search_start_byte: usize,
         regex: &super::repeat_matcher::RepeatMatcherRegex,
         matched: &regress::Match,
         has_indices: bool,
@@ -164,8 +157,8 @@ impl OwnedExecMatch {
                 capture.map(|range| {
                     OwnedCapture::from_range_with_indices(
                         str_data,
-                        search_start_byte + range.start,
-                        search_start_byte + range.end,
+                        range.start,
+                        range.end,
                         has_indices,
                     )
                 })
@@ -177,8 +170,7 @@ impl OwnedExecMatch {
             .enumerate()
             .filter_map(|(index, name)| name.as_ref().map(|name| (name.clone(), index + 1)))
             .collect();
-        let match_index =
-            byte_index_to_utf16_index(str_data, search_start_byte + matched.start()) as f64;
+        let match_index = byte_index_to_utf16_index(str_data, matched.start()) as f64;
         Self {
             captures,
             named,

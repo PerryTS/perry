@@ -18,6 +18,7 @@ COMPILETS="${PERRY_BIN:-$ROOT/target/release/perry}"
 BASELINE="$SCRIPT_DIR/baseline.json"
 VERIFY_OUTPUT="$SCRIPT_DIR/verify_benchmark_output.py"
 BENCHMARK_GATE="$SCRIPT_DIR/benchmark_gate.py"
+TIME_EXTRACTOR="$SCRIPT_DIR/benchmark_time.py"
 
 # Thresholds
 SPEED_THRESHOLD=15    # >15% slower = regression
@@ -79,6 +80,11 @@ fi
 
 if [[ ! -f "$BENCHMARK_GATE" ]]; then
   echo -e "${RED}Benchmark artifact builder not found at $BENCHMARK_GATE${NC}"
+  exit 1
+fi
+
+if [[ ! -f "$TIME_EXTRACTOR" ]]; then
+  echo -e "${RED}Benchmark time extractor not found at $TIME_EXTRACTOR${NC}"
   exit 1
 fi
 
@@ -217,7 +223,9 @@ cleanup() {
 trap cleanup EXIT
 
 extract_time() {
-  awk -F: '/^[a-z_]+:[0-9]+/ {print $2; exit}' <<<"$1"
+  local benchmark="$1"
+  local output="$2"
+  python3 "$TIME_EXTRACTOR" extract "$benchmark" <<<"$output"
 }
 
 measure_rss() {
@@ -288,6 +296,14 @@ median() {
   python3 -c "import sys; xs=sorted(int(x) for x in sys.argv[1:]); print(xs[len(xs)//2] if xs else 0)" "$@"
 }
 
+format_ms() {
+  if [[ "$1" =~ ^[0-9]+$ ]]; then
+    printf '%sms' "$1"
+  else
+    printf '%s' "$1"
+  fi
+}
+
 join_samples() {
   local IFS=,
   printf '%s' "$*"
@@ -325,6 +341,8 @@ for bench in $BENCHMARKS; do
   p_out_samples=()
   p_ms_samples=()
   p_rss_samples=()
+  p_unscoreable=0
+  p_failed=0
   if [[ -f "$SUITE_DIR/$name" ]]; then
     for (( run=0; run<RUNS; run++ )); do
       p_out="$RUN_OUTPUT_DIR/$name.perry.$run.out"
@@ -333,13 +351,23 @@ for bench in $BENCHMARKS; do
       r_rss="${measurement%%|*}"
       r_status="${measurement##*|}"
       r_out=$(cat "$p_out")
-      r_ms=$(extract_time "$r_out")
-      if [[ "$r_status" -eq 0 && -n "$r_ms" ]]; then
+      if [[ "$r_status" -ne 0 ]]; then
+        p_failed=1
+      elif r_ms=$(extract_time "$name" "$r_out"); then
         p_ms_samples+=("$r_ms")
         p_rss_samples+=("${r_rss:-0}")
+      else
+        p_unscoreable=1
       fi
     done
-    if [[ ${#p_ms_samples[@]} -gt 0 ]]; then
+    if [[ $p_unscoreable -eq 1 ]]; then
+      p_ms_samples=()
+      p_rss_samples=()
+      perry_ms="UNSCOREABLE"
+    elif [[ $p_failed -eq 1 ]]; then
+      p_ms_samples=()
+      p_rss_samples=()
+    elif [[ ${#p_ms_samples[@]} -gt 0 ]]; then
       perry_ms=$(median "${p_ms_samples[@]}")
     fi
     if [[ ${#p_rss_samples[@]} -gt 0 ]]; then
@@ -353,6 +381,8 @@ for bench in $BENCHMARKS; do
   n_out_samples=()
   n_ms_samples=()
   n_rss_samples=()
+  n_unscoreable=0
+  n_failed=0
   if [[ $HAS_NODE -eq 1 ]]; then
     for (( run=0; run<RUNS; run++ )); do
       n_out="$RUN_OUTPUT_DIR/$name.node.$run.out"
@@ -361,13 +391,24 @@ for bench in $BENCHMARKS; do
       r_rss="${measurement%%|*}"
       r_status="${measurement##*|}"
       r_out=$(cat "$n_out")
-      r_ms=$(extract_time "$r_out")
-      if [[ "$r_status" -eq 0 && -n "$r_ms" ]]; then
+      if [[ "$r_status" -ne 0 ]]; then
+        n_failed=1
+      elif r_ms=$(extract_time "$name" "$r_out"); then
         n_ms_samples+=("$r_ms")
         n_rss_samples+=("${r_rss:-0}")
+      else
+        n_unscoreable=1
       fi
     done
-    if [[ ${#n_ms_samples[@]} -gt 0 ]]; then
+    if [[ $n_unscoreable -eq 1 ]]; then
+      n_ms_samples=()
+      n_rss_samples=()
+      node_ms="UNSCOREABLE"
+    elif [[ $n_failed -eq 1 ]]; then
+      n_ms_samples=()
+      n_rss_samples=()
+      node_ms="ERR"
+    elif [[ ${#n_ms_samples[@]} -gt 0 ]]; then
       node_ms=$(median "${n_ms_samples[@]}")
     fi
     if [[ ${#n_rss_samples[@]} -gt 0 ]]; then
@@ -382,6 +423,8 @@ for bench in $BENCHMARKS; do
   b_out_samples=()
   b_ms_samples=()
   b_rss_samples=()
+  b_unscoreable=0
+  b_failed=0
   if [[ $HAS_BUN -eq 1 ]]; then
     for (( run=0; run<RUNS; run++ )); do
       b_out="$RUN_OUTPUT_DIR/$name.bun.$run.out"
@@ -390,13 +433,24 @@ for bench in $BENCHMARKS; do
       r_rss="${measurement%%|*}"
       r_status="${measurement##*|}"
       r_out=$(cat "$b_out")
-      r_ms=$(extract_time "$r_out")
-      if [[ "$r_status" -eq 0 && -n "$r_ms" ]]; then
+      if [[ "$r_status" -ne 0 ]]; then
+        b_failed=1
+      elif r_ms=$(extract_time "$name" "$r_out"); then
         b_ms_samples+=("$r_ms")
         b_rss_samples+=("${r_rss:-0}")
+      else
+        b_unscoreable=1
       fi
     done
-    if [[ ${#b_ms_samples[@]} -gt 0 ]]; then
+    if [[ $b_unscoreable -eq 1 ]]; then
+      b_ms_samples=()
+      b_rss_samples=()
+      bun_ms="UNSCOREABLE"
+    elif [[ $b_failed -eq 1 ]]; then
+      b_ms_samples=()
+      b_rss_samples=()
+      bun_ms="ERR"
+    elif [[ ${#b_ms_samples[@]} -gt 0 ]]; then
       bun_ms=$(median "${b_ms_samples[@]}")
     fi
     if [[ ${#b_rss_samples[@]} -gt 0 ]]; then
@@ -408,20 +462,16 @@ for bench in $BENCHMARKS; do
   speed_ratio="-"
   bun_speed_ratio="-"
   mem_ratio="-"
-  perry_display="${perry_ms}ms"
+  perry_display=$(format_ms "$perry_ms")
   if [[ "$perry_ms" == "0" ]]; then
     perry_display="MEASURES-NOTHING"
     speed_ratio="MEASURES-NOTHING"
     bun_speed_ratio="MEASURES-NOTHING"
-  elif [[ "$perry_ms" != "ERR" && "$node_ms" != "-" ]]; then
-    if [[ "$node_ms" -gt 0 ]] 2>/dev/null; then
-      speed_ratio=$(python3 -c "print(f'{int(\"$perry_ms\")/int(\"$node_ms\"):.2f}')" 2>/dev/null || echo "-")
-    fi
+  elif [[ "$perry_ms" =~ ^[0-9]+$ && "$node_ms" =~ ^[0-9]+$ && "$node_ms" -gt 0 ]]; then
+    speed_ratio=$(python3 -c "print(f'{int(\"$perry_ms\")/int(\"$node_ms\"):.2f}')")
   fi
-  if [[ "$perry_ms" != "0" && "$perry_ms" != "ERR" && "$bun_ms" != "-" ]]; then
-    if [[ "$bun_ms" -gt 0 ]] 2>/dev/null; then
-      bun_speed_ratio=$(python3 -c "print(f'{int(\"$perry_ms\")/int(\"$bun_ms\"):.2f}')" 2>/dev/null || echo "-")
-    fi
+  if [[ "$perry_ms" =~ ^[1-9][0-9]*$ && "$bun_ms" =~ ^[0-9]+$ && "$bun_ms" -gt 0 ]]; then
+    bun_speed_ratio=$(python3 -c "print(f'{int(\"$perry_ms\")/int(\"$bun_ms\"):.2f}')")
   fi
   if [[ "$perry_rss" -gt 0 && "$node_rss" -gt 0 ]] 2>/dev/null; then
     mem_ratio=$(python3 -c "print(f'{int(\"$perry_rss\")/int(\"$node_rss\"):.2f}')" 2>/dev/null || echo "-")
@@ -444,12 +494,12 @@ for bench in $BENCHMARKS; do
       : > "$missing_out"
       p_out_samples=("$missing_out")
     fi
-    python3 - "$VERIFY_OUTPUT" "${reference_outputs[0]}" "$correctness_json" "$reference" "${p_out_samples[@]}" <<'PY'
+    python3 - "$VERIFY_OUTPUT" "$name" "${reference_outputs[0]}" "$correctness_json" "$reference" "${p_out_samples[@]}" <<'PY'
 import importlib.util
 import json
 import sys
 
-verifier_path, expected_path, output_path, reference, *actual_paths = sys.argv[1:]
+verifier_path, benchmark, expected_path, output_path, reference, *actual_paths = sys.argv[1:]
 spec = importlib.util.spec_from_file_location("benchmark_output_verifier", verifier_path)
 module = importlib.util.module_from_spec(spec)
 assert spec.loader is not None
@@ -461,6 +511,7 @@ for index, actual_path in enumerate(actual_paths, start=1):
         expected_path=expected_path,
         actual_path=actual_path,
         reference=reference,
+        benchmark=benchmark,
     )
     report["sample"] = index
     reports.append(report)
@@ -515,9 +566,11 @@ sys.exit(1 if merged["status"] == "fail" else 0)
 PY
   fi
   correctness_status=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['status'])" "$correctness_json")
+  node_display=$(format_ms "$node_ms")
+  bun_display=$(format_ms "$bun_ms")
 
   printf "%-20s %10s %10s %10s %10s %10s %10s %10s\n" \
-    "$display" "$perry_display" "${node_ms}ms" "${bun_ms}ms" "$speed_ratio" "$bun_speed_ratio" "${perry_rss}KB" "$correctness_status"
+    "$display" "$perry_display" "$node_display" "$bun_display" "$speed_ratio" "$bun_speed_ratio" "${perry_rss}KB" "$correctness_status"
 
   # Save raw samples as JSONL. The artifact builder rejects any available
   # runtime that did not produce exactly RUNS timing and RSS samples.

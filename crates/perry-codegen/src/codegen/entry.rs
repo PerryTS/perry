@@ -720,7 +720,7 @@ pub(super) fn compile_module_entry(
         main.mark_entry_init_boundary();
         let flat_const_ids: std::collections::HashSet<u32> =
             cross_module.flat_const_arrays.keys().copied().collect();
-        let (main_shadow_slot_map, main_shadow_slot_clears_after_stmt) =
+        let (mut main_shadow_slot_map, _) =
             enable_module_init_shadow_frame(main, &hir.init, &flat_const_ids);
 
         let main_boxed_vars = module_boxed_vars.clone();
@@ -749,7 +749,34 @@ pub(super) fn compile_module_entry(
             classes,
             &cross_module.compile_time_constants,
             &cross_module.module_dispatch,
+            // #9363: module-scope views need their construction proofs here
+            // too — passing an empty map kept top-level accumulator loops on
+            // the rooted/guarded path while in-function ones were clean.
+            &cross_module.module_global_proven_types,
         );
+        // #9363: the same redundant-shadow-slot pruning `codegen/function.rs`
+        // does, which module init never got. The shadow map is built above
+        // from the CONSERVATIVE pointer-typed-locals scan, before the fact
+        // graph exists; a local the whole-write proof later shows can only
+        // hold a Number keeps a root slot it can never need. That slot is not
+        // just wasted stores: `local_is_inert_primitive` refuses any local
+        // with one, so the accumulator of `sum += buf[i]` was never inert,
+        // `loop_may_allocate` stayed true, and the inner loop kept a
+        // per-iteration volatile GC poll that blocks vectorization. In a
+        // function body the same loop was already clean — this was the whole
+        // top-level/in-function asymmetry.
+        //
+        // `enable_post_init_shadow_frame` sized the frame from the unpruned
+        // map, so the retained slot indices stay valid with holes, exactly as
+        // in the function-body twin.
+        main_shadow_slot_map.retain(|id, _| {
+            !main_native_facts
+                .number_by_construction_locals()
+                .contains(id)
+        });
+        let main_shadow_slot_clears_after_stmt =
+            crate::collectors::collect_shadow_slot_clear_points(&hir.init, &main_shadow_slot_map);
+
         // #7109: the program-entry body participates in canonical (i32/u32/Str)
         // selection on exactly the per-value rules a function body uses. There
         // is no structural context reason to deny — see
@@ -822,7 +849,11 @@ pub(super) fn compile_module_entry(
             current_closure_slot: None,
             enums,
             is_async_fn: false,
-            is_strict_fn: false,
+            // #9423: an ESM is strict code (ES2024 SS11.2.2) and so is a Script
+            // with a `"use strict"` prologue. This was hardcoded `false`, so
+            // every codegen lane keyed on the CONTEXT rather than on a
+            // node-carried flag ran module top-level code sloppy.
+            is_strict_fn: hir.init_is_strict,
             static_field_globals,
             class_ids,
             class_keys_globals: &cross_module.class_keys_globals,
@@ -1046,7 +1077,31 @@ pub(super) fn compile_module_entry(
         // first microtask drain finishes promise/queueMicrotask jobs before
         // the nextTick queue, matching Node's job-within-checkpoint ordering
         // for ESM evaluation (#788). CJS-style entries keep ticks-first.
-        if !hir.imports.is_empty() || !hir.exports.is_empty() || hir.has_top_level_await {
+        //
+        // #9412: "has imports or exports" is not the same question for a
+        // CommonJS entry, because `cjs_wrap` gives every CommonJS file BOTH —
+        // a synthetic `import { createRequire as __perry_cjs_create_require }
+        // from 'node:module'` and an `export default _cjs`. So any entry
+        // containing a bare `require(` answered "ESM" here and ran its
+        // `process.nextTick` callbacks AFTER the promise queue, where Node
+        // runs a CommonJS program's ticks first. Measured against Node 26:
+        // an entry as `.cjs` prints ["tick","promise","await"], the same file
+        // as `.mjs` prints ["promise","await","tick"] — the deferral is right,
+        // it was just being applied to the wrong module kind. Every real
+        // bundle requires a builtin and every minimal fixture doesn't, so the
+        // ordering was correct in exactly the programs a test suite contains.
+        //
+        // Only this checkpoint is re-gated. `is_esm_entry` below keeps its
+        // original meaning for GlobalDeclarationInstantiation: a CommonJS
+        // module's top-level `function` declarations live inside the module
+        // wrapper and are NOT global-object properties either, so "not a
+        // Script" is the right answer there for a wrapped entry too — and
+        // that predicate is mirrored in `perry-hir`'s `lower_module_fn`,
+        // which runs before the wrap flag is knowable here.
+        let cjs_wrapped_entry = crate::collectors::is_cjs_wrapped_module(hir);
+        if (!hir.imports.is_empty() || !hir.exports.is_empty() || hir.has_top_level_await)
+            && !cjs_wrapped_entry
+        {
             ctx.block().call_void("js_mark_entry_module_esm", &[]);
         }
         // Initialize static class fields with their declared init
@@ -1452,7 +1507,7 @@ pub(super) fn compile_module_entry(
         init_fn.mark_entry_init_boundary();
         let flat_const_ids: std::collections::HashSet<u32> =
             cross_module.flat_const_arrays.keys().copied().collect();
-        let (init_shadow_slot_map, init_shadow_slot_clears_after_stmt) =
+        let (mut init_shadow_slot_map, _) =
             enable_module_init_shadow_frame(init_fn, &hir.init, &flat_const_ids);
 
         let init_boxed_vars = module_boxed_vars.clone();
@@ -1480,7 +1535,34 @@ pub(super) fn compile_module_entry(
             classes,
             &cross_module.compile_time_constants,
             &cross_module.module_dispatch,
+            // #9363: module-scope views need their construction proofs here
+            // too — passing an empty map kept top-level accumulator loops on
+            // the rooted/guarded path while in-function ones were clean.
+            &cross_module.module_global_proven_types,
         );
+        // #9363: the same redundant-shadow-slot pruning `codegen/function.rs`
+        // does, which module init never got. The shadow map is built above
+        // from the CONSERVATIVE pointer-typed-locals scan, before the fact
+        // graph exists; a local the whole-write proof later shows can only
+        // hold a Number keeps a root slot it can never need. That slot is not
+        // just wasted stores: `local_is_inert_primitive` refuses any local
+        // with one, so the accumulator of `sum += buf[i]` was never inert,
+        // `loop_may_allocate` stayed true, and the inner loop kept a
+        // per-iteration volatile GC poll that blocks vectorization. In a
+        // function body the same loop was already clean — this was the whole
+        // top-level/in-function asymmetry.
+        //
+        // `enable_post_init_shadow_frame` sized the frame from the unpruned
+        // map, so the retained slot indices stay valid with holes, exactly as
+        // in the function-body twin.
+        init_shadow_slot_map.retain(|id, _| {
+            !init_native_facts
+                .number_by_construction_locals()
+                .contains(id)
+        });
+        let init_shadow_slot_clears_after_stmt =
+            crate::collectors::collect_shadow_slot_clear_points(&hir.init, &init_shadow_slot_map);
+
         // #7109: the module-init body participates in canonical (i32/u32/Str)
         // selection on exactly the per-value rules a function body uses. There
         // is no structural context reason to deny — see
@@ -1551,7 +1633,11 @@ pub(super) fn compile_module_entry(
             current_closure_slot: None,
             enums,
             is_async_fn: false,
-            is_strict_fn: false,
+            // #9423: an ESM is strict code (ES2024 SS11.2.2) and so is a Script
+            // with a `"use strict"` prologue. This was hardcoded `false`, so
+            // every codegen lane keyed on the CONTEXT rather than on a
+            // node-carried flag ran module top-level code sloppy.
+            is_strict_fn: hir.init_is_strict,
             static_field_globals,
             class_ids,
             class_keys_globals: &cross_module.class_keys_globals,

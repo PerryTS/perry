@@ -71,6 +71,29 @@ pub(crate) fn enabled() -> bool {
     )
 }
 
+/// Typed-array/`Uint8Array` class names whose elements are Numbers.
+///
+/// The BigInt kinds are deliberately absent: `BigInt64Array`/`BigUint64Array`
+/// elements are BigInts, not Numbers, and `+` on one throws when mixed. Kept
+/// as a name list rather than reusing a kind table because
+/// `module_global_proven_types` records the CLASS NAME the initializer
+/// constructed.
+fn class_name_is_number_valued_view(name: &str) -> bool {
+    matches!(
+        name,
+        "Uint8Array"
+            | "Uint8ClampedArray"
+            | "Int8Array"
+            | "Int16Array"
+            | "Uint16Array"
+            | "Int32Array"
+            | "Uint32Array"
+            | "Float32Array"
+            | "Float64Array"
+            | "Buffer"
+    )
+}
+
 /// Locals whose every write is number-producing by construction.
 ///
 /// Deliberately independent of `PERRY_PTR_SHAPE_LOCALS`: the fact is about
@@ -88,6 +111,7 @@ pub(crate) fn collect_number_by_construction_locals(
     spec_ta_lens: &HashMap<u32, i64>,
     spec_numeric_params: &HashSet<u32>,
     not_bigint_locals: &HashSet<u32>,
+    module_global_proven_types: &HashMap<u32, HirType>,
 ) -> HashSet<u32> {
     if !enabled() {
         return HashSet::new();
@@ -101,7 +125,29 @@ pub(crate) fn collect_number_by_construction_locals(
     // pointer/string, so the fixpoint may treat it like a compiler-visible
     // local typed-view constructor on one side of `+` (where `undefined`
     // becomes the Number NaN rather than selecting string concatenation).
-    let numeric_ta_views: HashSet<u32> = spec_ta_lens.keys().copied().collect();
+    let mut numeric_ta_views: HashSet<u32> = spec_ta_lens.keys().copied().collect();
+    // #9363: a MODULE-GLOBAL typed array carries the same construction proof a
+    // body-local `const view = new Uint8Array(n)` does, and for the same
+    // reason: `module_global_proven_types` is derived from the initializer
+    // expression (`Expr::Uint8ArrayNew` / `TypedArrayNew`) on a single-`Let`,
+    // never-reassigned binding — it is not a declared type, which this
+    // collector correctly refuses to treat as evidence (#7773).
+    //
+    // Without this the fixpoint saw `const buf = new Uint8Array(N)` at module
+    // scope and answered "unknown receiver", so `acc += buf[i]` inside a
+    // function lost the accumulator's Number-by-construction proof. The cost
+    // was not the read: the missing proof made the `+` non-inert, which made
+    // `loop_purity::loop_may_allocate` answer `true`, which kept a per-
+    // iteration `load volatile @PERRY_GC_POLL_ARMED` in the inner loop —
+    // blocking vectorization and pinning the accumulator in memory — and
+    // routed the add through the rooted `guarded_add` diamond. Measured 444 ms
+    // vs 94 ms for the identical loop over a body-local receiver.
+    numeric_ta_views.extend(
+        module_global_proven_types
+            .iter()
+            .filter(|(_, ty)| matches!(ty, HirType::Named(name) if class_name_is_number_valued_view(name)))
+            .map(|(id, _)| *id),
+    );
     let mut numeric = super::ptr_shape::collect_numeric_by_construction_locals_for_type_analysis(
         stmts,
         boxed_vars,

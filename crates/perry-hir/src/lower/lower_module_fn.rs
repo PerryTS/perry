@@ -904,6 +904,10 @@ pub fn lower_module_full(
         ctx.seed_imported_class_accessors(seed);
     }
     let mut module = Module::new(name);
+    // #9423: hand codegen the strictness lowering just computed. Set here, next
+    // to `ctx.module_strict`, rather than at the end of lowering, so a later
+    // early return cannot ship a module that claims to be sloppy.
+    module.init_is_strict = ctx.module_strict;
     if should_enable_react_automatic_jsx(name, ast_module) {
         enable_react_automatic_jsx(&mut module, &mut ctx);
     }

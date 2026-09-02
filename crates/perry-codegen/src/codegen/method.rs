@@ -361,6 +361,8 @@ pub(super) fn compile_method(
         classes,
         &cross_module.compile_time_constants,
         &cross_module.module_dispatch,
+        // #9363: a method body reads the same module-scope views.
+        &cross_module.module_global_proven_types,
     );
     let mut index_clone_integer_locals = native_facts.integer_locals().clone();
     index_clone_integer_locals.extend(index_param_ids.iter().copied());
@@ -1565,6 +1567,8 @@ pub(super) fn compile_static_method(
         classes,
         &cross_module.compile_time_constants,
         &cross_module.module_dispatch,
+        // #9363: a method body reads the same module-scope views.
+        &cross_module.module_global_proven_types,
     );
 
     // Representation-selection context gates (see codegen/function.rs).

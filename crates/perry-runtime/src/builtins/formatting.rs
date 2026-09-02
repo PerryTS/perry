@@ -30,6 +30,8 @@ mod prototype_equality;
 mod strip_vt;
 mod typed_array_equality;
 mod util_format;
+mod value_repr;
+pub(crate) use value_repr::{int32_or_class_repr, is_array_hole};
 
 pub use strip_vt::js_util_strip_vt_control_characters;
 pub use util_format::{js_util_format, js_util_format_with_options, js_util_inspect};
@@ -974,81 +976,23 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                     let data_ptr = (maybe_arr as *const u8)
                         .add(std::mem::size_of::<crate::array::ArrayHeader>())
                         as *const f64;
-                    let mut parts: Vec<String> = Vec::with_capacity(length);
-                    let mut all_numeric = true;
-                    for i in 0..length {
-                        let elem_value = *data_ptr.add(i);
-                        let elem_jsval = JSValue::from_bits(elem_value.to_bits());
+                    // #9415: a hole slot is `TAG_HOLE`, whose bits read back as
+                    // a NaN, so element-by-element recursion printed
+                    // `new Array(3)` as `[ NaN, NaN, NaN ]`. Runs of holes are
+                    // ONE entry (`<N empty items>`), which is also why the
+                    // layout below counts entries rather than slots.
+                    let parts = value_repr::array_entries_with_holes(data_ptr, length, |elem| {
+                        let elem_jsval = JSValue::from_bits(elem.to_bits());
                         // Quote string elements like Node's util.inspect: 'hello'
                         if elem_jsval.is_any_string() {
-                            all_numeric = false;
-                            let s = format_jsvalue(elem_value, depth + 1);
-                            parts.push(format!("'{}'", s));
-                        } else {
-                            if !elem_jsval.is_number() && !elem_jsval.is_int32() {
-                                all_numeric = false;
-                            }
-                            parts.push(format_jsvalue(elem_value, depth + 1));
+                            let s = format_jsvalue(elem, depth + 1);
+                            return value_repr::ArrayEntry::new(format!("'{}'", s), false);
                         }
-                    }
-                    let inner = parts.join(", ");
-                    // Node uses multi-line when length > 6 or single-line exceeds breakLength (76)
-                    let use_multiline =
-                        !inspect_compact_enabled() || length > 6 || inner.len() + 4 > 76;
-                    let body_str = if !use_multiline {
-                        format!("[ {} ]", inner)
-                    } else if all_numeric {
-                        // Node.js groupArrayElements for numeric arrays:
-                        // right-align each number to max width, compute per-line
-                        // column count via Node's sqrt heuristic.
-                        let max_len = parts.iter().map(|s| s.len()).max().unwrap_or(1);
-                        // biasedMax = max(maxLength - 2, 1)
-                        let biased_max = max_len.saturating_sub(2).max(1);
-                        // cols_by_sqrt = round(sqrt(2.5 * biasedMax * N) / biasedMax)
-                        let cols_by_sqrt = ((2.5_f64 * biased_max as f64 * length as f64).sqrt()
-                            / biased_max as f64)
-                            .round() as usize;
-                        // cols_by_width = ceil(breakLength / (maxLen + 2)); breakLength=76
-                        let actual_max = max_len + 2;
-                        let cols_by_width = 76_usize.div_ceil(actual_max);
-                        let columns = cols_by_sqrt
-                            .min(cols_by_width.max(1))
-                            .min(12) // compact(3) * 4
-                            .min(15) // absolute max per Node
-                            .max(1);
-                        let indent = "  ";
-                        let mut lines: Vec<String> = parts
-                            .chunks(columns)
-                            .map(|chunk| {
-                                let elems: Vec<String> = chunk
-                                    .iter()
-                                    .map(|s| format!("{:>width$}", s, width = max_len))
-                                    .collect();
-                                format!("{}{}", indent, elems.join(", "))
-                            })
-                            .collect();
-                        // Trailing comma on every line but the last (Node format)
-                        let n_lines = lines.len();
-                        for line in lines.iter_mut().take(n_lines - 1) {
-                            line.push(',');
-                        }
-                        format!("[\n{}\n]", lines.join("\n"))
-                    } else {
-                        // Non-numeric multi-line: short arrays of wide string
-                        // entries print one item per row in Node's compact
-                        // inspect layout.
-                        let indent = "  ";
-                        let chunk_size = if length <= 6 { 1 } else { 4 };
-                        let mut row_strs: Vec<String> = parts
-                            .chunks(chunk_size)
-                            .map(|chunk| format!("{}{}", indent, chunk.join(", ")))
-                            .collect();
-                        let n = row_strs.len();
-                        for line in row_strs.iter_mut().take(n - 1) {
-                            line.push(',');
-                        }
-                        format!("[\n{}\n]", row_strs.join("\n"))
-                    };
+                        let rendered = format_jsvalue(elem, depth + 1);
+                        let numeric = value_repr::entry_is_numeric(elem, &rendered);
+                        value_repr::ArrayEntry::new(rendered, numeric)
+                    });
+                    let body_str = value_repr::render_array_body(&parts, inspect_compact_enabled());
                     inspect_finish_circular(ptr as usize, body_str)
                 } else if gc_type == crate::gc::GC_TYPE_OBJECT {
                     // Object — check for keys_array. Cycle check FIRST so the
@@ -1084,7 +1028,9 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                 } else if gc_type == crate::gc::GC_TYPE_CLOSURE {
                     format_function_for_console(ptr as *const crate::closure::ClosureHeader)
                 } else if gc_type == crate::gc::GC_TYPE_PROMISE {
-                    "Promise { <pending> }".to_string()
+                    value_repr::promise_inspect(ptr as *const crate::promise::Promise, |v| {
+                        format_jsvalue_for_json(v, depth + 1)
+                    })
                 } else {
                     // Safe fallback for unknown GC types — avoid heuristic
                     // pointer interpretation which can crash on closures,
@@ -1093,15 +1039,14 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                 }
             }
         } else if jsval.is_int32() {
-            // #9413: a class ref shares this encoding with a tagged small
-            // integer, and this arm printed the raw class id. The registry
-            // probe is the one `js_jsvalue_to_string` already uses to tell
-            // the two apart; see `class_ref_inspect_label`.
-            let cid = (value.to_bits() & 0xFFFF_FFFF) as u32;
-            if crate::object::is_class_id_registered(cid) {
-                return crate::object::class_ref_inspect_label(cid);
-            }
-            jsval.as_int32().to_string()
+            // Shares its tag with a class reference; `int32_or_class_repr` is
+            // the only place that decides which one these bits are (#9415).
+            value_repr::int32_or_class_repr(value)
+        } else if value_repr::is_array_hole(value) {
+            // A hole that escaped its array. `js_array_get_f64` normalizes one
+            // to `undefined`, so that is what it must display as — not the
+            // `NaN` the raw-double tail below would produce (#9415).
+            "undefined".to_string()
         } else {
             // Regular number — but first check for raw (non-NaN-boxed) heap
             // pointers. The codegen sometimes returns a raw
@@ -1729,18 +1674,26 @@ fn format_jsvalue_for_json(value: f64, depth: usize) -> String {
                         let data_ptr = (maybe_arr as *const u8)
                             .add(std::mem::size_of::<crate::array::ArrayHeader>())
                             as *const f64;
-                        let mut parts: Vec<String> = Vec::with_capacity(length);
-                        for i in 0..length {
-                            let elem_value = *data_ptr.add(i);
-                            parts.push(format_jsvalue_for_json(elem_value, depth + 1));
-                        }
+                        // #9415: the same hole grouping the `format_jsvalue`
+                        // array arm does. This is the twin that renders an
+                        // array reached as an object FIELD, so without it
+                        // `{ h: new Array(3) }` still said
+                        // `{ h: [ NaN, NaN, NaN ] }`.
+                        let parts =
+                            value_repr::array_entries_with_holes(data_ptr, length, |elem| {
+                                value_repr::ArrayEntry::new(
+                                    format_jsvalue_for_json(elem, depth + 1),
+                                    false,
+                                )
+                            });
                         // Node formats empty arrays as `[]` and non-empty
                         // arrays with a space inside the brackets:
                         // `[ 1, 2, 3 ]`. Match byte-for-byte.
-                        let body_str = if length == 0 {
+                        let body_str = if parts.is_empty() {
                             "[]".to_string()
                         } else {
-                            format!("[ {} ]", parts.join(", "))
+                            let texts: Vec<&str> = parts.iter().map(|p| p.text.as_str()).collect();
+                            format!("[ {} ]", texts.join(", "))
                         };
                         inspect_finish_circular(ptr as usize, body_str)
                     } else if gc_type == crate::gc::GC_TYPE_OBJECT {
@@ -1777,13 +1730,22 @@ fn format_jsvalue_for_json(value: f64, depth: usize) -> String {
                         // path as `format_jsvalue` so the registered function
                         // name flows out instead of `[object Object]`.
                         format_function_for_console(ptr as *const crate::closure::ClosureHeader)
+                    } else if gc_type == crate::gc::GC_TYPE_PROMISE {
+                        // Promise-valued field. Without this arm it fell to
+                        // `[object Object]` below, so the state defect was
+                        // invisible here rather than merely wrong (#9415).
+                        value_repr::promise_inspect(ptr as *const crate::promise::Promise, |v| {
+                            format_jsvalue_for_json(v, depth + 1)
+                        })
                     } else {
                         "[object Object]".to_string()
                     }
                 }
             }
         } else if jsval.is_int32() {
-            jsval.as_int32().to_string()
+            value_repr::int32_or_class_repr(value)
+        } else if value_repr::is_array_hole(value) {
+            "undefined".to_string()
         } else {
             // A TypedArray field is a RAW (non-NaN-boxed) heap pointer, so it
             // lands here, not in the pointer branch; redirect it (#800).
@@ -1957,8 +1919,19 @@ fn js_util_deep_strict_equal_bool(
         }
         formatted_deep_equal(left, right, skip_prototype)
     } else {
+        // A class REFERENCE is compared by identity, never by its rendering.
+        // Since #9415 a class ref renders as `[class Name]`, so two DISTINCT
+        // classes that happen to share a name format identically — the
+        // formatted comparison would call them deep-equal, where node (and the
+        // pre-#9415 class-id rendering, by accident) says they are not. The
+        // probe runs only after `js_jsvalue_equals` has already answered "not
+        // equal", so an ordinary integer that collides with a live class id is
+        // unaffected: equal integers were settled one line above, and unequal
+        // ones are unequal either way.
         crate::value::js_jsvalue_equals(left, right) != 0
-            || formatted_deep_equal(left, right, skip_prototype)
+            || (crate::object::class_ref_id(left).is_none()
+                && crate::object::class_ref_id(right).is_none()
+                && formatted_deep_equal(left, right, skip_prototype))
     }
 }
 

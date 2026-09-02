@@ -218,3 +218,25 @@ pub fn module_exported_return_shapes(
 pub fn cjs_preamble_census(hir: &perry_hir::Module) -> CjsPreambleCensus {
     collectors::cjs_preamble_census(hir)
 }
+
+/// #9412 template-change canary: the local name `cjs_wrap` binds its synthetic
+/// `createRequire` import to.
+///
+/// [`crate::collectors::is_cjs_wrapped_module`] keys the CommonJS-entry
+/// recognition on this name, and the entry codegen keys the
+/// `process.nextTick`-vs-microtask ordering on that. The `perry` crate's
+/// template canary asserts the wrap still emits it, so a template edit fails a
+/// test rather than silently putting every CommonJS entry back on ES-module
+/// tick ordering.
+pub fn cjs_wrap_create_require_local() -> &'static str {
+    collectors::CJS_WRAP_CREATE_REQUIRE_LOCAL
+}
+
+/// #9412: is `hir` the output of `cjs_wrap`'s CommonJS-to-ESM rewrite?
+///
+/// Public for the `perry` crate's template canary, alongside
+/// [`cjs_wrap_create_require_local`]. The compile pipeline reaches the same
+/// predicate through `collectors::is_cjs_wrapped_module`.
+pub fn module_is_cjs_wrapped(hir: &perry_hir::Module) -> bool {
+    collectors::is_cjs_wrapped_module(hir)
+}

@@ -85,6 +85,7 @@ fn fixture_module() -> Module {
         script_global_functions: Vec::new(),
         references_global_this: false,
         annexb_global_undefined_names: Vec::new(),
+        init_is_strict: false,
         init: vec![
             mock_property_call(vec![target(), Expr::String("value".to_string())]),
             mock_property_call(vec![

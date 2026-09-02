@@ -202,10 +202,11 @@ jobs:
 
       - name: Validate benchmark artifact and fallback gates
         run: |
-          python3 -m unittest discover -s tests -p 'test_benchmark_gate.py' -v
+          python3 -m unittest discover -s tests -p 'test_benchmark_*.py' -v
           ./tests/test_benchmark_peer_fallback.sh
           ./tests/test_benchmark_output_verifier.sh
-          bash -n benchmarks/compare.sh benchmarks/honest_bench/run.sh \
+          bash -n benchmarks/compare.sh benchmarks/quick.sh \
+            benchmarks/suite/run_benchmarks.sh benchmarks/honest_bench/run.sh \
             benchmarks/honest_bench/harness/run_http_bench.sh \
             tests/test_benchmark_peer_fallback.sh
 

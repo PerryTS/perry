@@ -1862,6 +1862,10 @@ static KEEP_AGGREGATEERROR_NEW_FULL: extern "C" fn(
 #[used]
 static KEEP_ERROR_IS_ERROR: extern "C" fn(f64) -> f64 = js_error_is_error;
 
+#[path = "error_subclass_stack.rs"]
+mod subclass_stack;
+pub use subclass_stack::js_error_subclass_capture_stack;
+
 #[cfg(test)]
 #[path = "error_tostring_tests.rs"]
 mod tostring_tests;

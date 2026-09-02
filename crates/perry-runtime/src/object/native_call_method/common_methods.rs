@@ -497,7 +497,41 @@ pub(super) unsafe fn dispatch_common(
         // lookup further down `js_native_call_method`, which resolves the
         // real installed method (and honors a user override, same as every
         // other primitive-wrapper method).
-        "toLocaleString" if !jsval.is_bigint() => {
+        //
+        // #9414: a NUMBER receiver carrying an actual `(locales, options)`
+        // argument needs the same escape. `js_object_default_to_locale_string`
+        // takes no arguments AT ALL, so this arm silently dropped every locale
+        // and every option a number was formatted with —
+        // `(1234.5).toLocaleString("de-DE")` printed the en-US default
+        // `1,234.5`, and `{ style: "percent" }` / `{ notation: "compact" }`
+        // never reached a formatter. That is also what made
+        // `[0.5, 0.25].toLocaleString("en-US", { style: "percent" })` wrong:
+        // `Array.prototype.toLocaleString` forwards its arguments to each
+        // element correctly, and they died one level down, here.
+        //
+        // Falling through resolves the installed
+        // `Number.prototype.toLocaleString` thunk with its arguments intact
+        // (and honors a user override of it, like every other primitive-wrapper
+        // method). The ZERO-argument call keeps this direct arm: it is the
+        // form the codegen fast path already answers inline, and it must not
+        // start paying for a prototype walk plus an `Intl.NumberFormat`
+        // construction.
+        // NOTE `is_number()` excludes the whole perry tag band 0x7FF9..=0x7FFF,
+        // so an INT32-tagged receiver fails it — and int32-tagged values do
+        // reach this dispatch (the `call` arm below guards `class_ref_id` for
+        // exactly that reason). Without the `is_int32()` half, an int32 number
+        // with a locale argument would still take the arg-less default arm.
+        // A *registered ClassRef* shares INT32_TAG and must stay on the
+        // default arm: `Object.prototype.toLocaleString` ignores its
+        // arguments per spec, and falling through would resolve
+        // `Number.prototype.toLocaleString` against a class reference.
+        "toLocaleString"
+            if !jsval.is_bigint()
+                && !((jsval.is_number()
+                    || (jsval.is_int32() && super::class_ref_id(object).is_none()))
+                    && args_len > 0
+                    && !args_ptr.is_null()) =>
+        {
             return Some(js_object_default_to_locale_string(object));
         }
 

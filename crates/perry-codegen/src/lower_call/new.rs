@@ -1489,75 +1489,11 @@ fn lower_new_impl_inner<'a>(
             .get(class_name)
             .map(|ctor| ctor.stops_constructor_walk())
             .unwrap_or(false);
-        if !found_inherited_ctor && !imported_ctor_has_body_or_fields {
-            // Trace the chain to find the first Error-like ancestor name.
-            let mut error_kind: Option<String> = None;
-            let mut cur = class.extends_name.clone();
-            let mut depth = 0usize;
-            while let Some(pname) = cur {
-                if matches!(
-                    pname.as_str(),
-                    "Error"
-                        | "TypeError"
-                        | "RangeError"
-                        | "ReferenceError"
-                        | "SyntaxError"
-                        | "URIError"
-                        | "EvalError"
-                        | "AggregateError"
-                ) {
-                    error_kind = Some(pname);
-                    break;
-                }
-                cur = ctx
-                    .classes
-                    .get(pname.as_str())
-                    .and_then(|c| c.extends_name.clone());
-                depth += 1;
-                if depth > 32 {
-                    break;
-                }
-            }
-            if let Some(kind) = error_kind {
-                let this_slot_for_err = ctx.this_stack.last().cloned().unwrap_or_default();
-                let blk = ctx.block();
-                let this_box = blk.load(DOUBLE, &this_slot_for_err);
-                let this_bits = blk.bitcast_double_to_i64(&this_box);
-                let this_handle = blk.and(I64, &this_bits, POINTER_MASK_I64);
-                if let Some(msg_val) = lowered_args.first() {
-                    let key_idx = ctx.strings.intern("message");
-                    let key_handle_global =
-                        format!("@{}", ctx.strings.entry(key_idx).handle_global);
-                    let blk = ctx.block();
-                    let key_box = blk.load(DOUBLE, &key_handle_global);
-                    let key_bits = blk.bitcast_double_to_i64(&key_box);
-                    let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
-                    // Spec: built-in Error sets `message` non-enumerable via
-                    // DefinePropertyOrThrow (Test262 NativeError/*-message).
-                    blk.call_void(
-                        "js_object_set_field_by_name_nonenum",
-                        &[(I64, &this_handle), (I64, &key_raw), (DOUBLE, msg_val)],
-                    );
-                }
-                let name_idx = ctx.strings.intern("name");
-                let name_handle_global = format!("@{}", ctx.strings.entry(name_idx).handle_global);
-                let name_val_idx = ctx.strings.intern(&kind);
-                let name_val_global = format!("@{}", ctx.strings.entry(name_val_idx).handle_global);
-                let blk = ctx.block();
-                let name_key_box = blk.load(DOUBLE, &name_handle_global);
-                let name_key_bits = blk.bitcast_double_to_i64(&name_key_box);
-                let name_key_raw = blk.and(I64, &name_key_bits, POINTER_MASK_I64);
-                let name_val_box = blk.load(DOUBLE, &name_val_global);
-                blk.call_void(
-                    "js_object_set_field_by_name",
-                    &[
-                        (I64, &this_handle),
-                        (I64, &name_key_raw),
-                        (DOUBLE, &name_val_box),
-                    ],
-                );
-                found_inherited_ctor = true; // skip the imported-ctor fallback below
-            }
+        if !found_inherited_ctor
+            && !imported_ctor_has_body_or_fields
+            && super::new_error_init::emit_default_error_init(ctx, class, &lowered_args)
+        {
+            found_inherited_ctor = true; // skip the imported-ctor fallback below
         }
         if let Some(runtime_fn) = builtin_parent_runtime {
             let undef_lit = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));

@@ -118,6 +118,16 @@ class BenchmarkArtifactTests(unittest.TestCase):
                 generated_at="2026-07-12T00:00:00Z",
             )
 
+    def test_rejects_fractional_millisecond_samples(self):
+        with self.assertRaisesRegex(ArtifactError, "integer millisecond.*0.939655"):
+            build_artifact(
+                records=[record("fast", [0.939655, 1, 1], [18, 20, 22])],
+                requested_samples=3,
+                runtimes={"perry": runtime(), "node": runtime(), "bun": runtime(False)},
+                commit="abc123",
+                generated_at="2026-07-12T00:00:00Z",
+            )
+
     def test_rejects_explicit_empty_rss_samples(self):
         with self.assertRaisesRegex(ArtifactError, "perry.*0/3.*RSS"):
             build_artifact(

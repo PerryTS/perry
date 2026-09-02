@@ -1,10 +1,43 @@
 //! Indexing support split out of `indexing.rs` to keep it under the repo's
 //! 2000-line cap: the strict-store TypeError throwers, the prototype
-//! indexed-property / iterator invalidation latches, and the dense keys-array
-//! slot helpers. Pure move except for the `use` lines and `pub(super)`
-//! visibility on items `indexing.rs` still calls.
+//! indexed-property / iterator invalidation latches, sparse index helpers, and
+//! the dense keys-array slot helpers. Pure move except for the `use` lines and
+//! `pub(super)` visibility on items `indexing.rs` still calls.
 use super::*;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+
+/// Largest hole (`index - length`) an extending write may create while still
+/// growing the dense backing store once the array is large. Sparse storage is
+/// for jumps far beyond the current length; sequential growth must stay dense
+/// because routing it through string-keyed property sets is quadratic.
+pub(super) const DENSE_ARRAY_GAP_LIMIT: u32 = 1024;
+
+#[inline]
+pub(super) unsafe fn array_sparse_index_property_get(
+    arr: *const ArrayHeader,
+    index: u32,
+) -> Option<f64> {
+    let arr = clean_arr_ptr(arr);
+    if arr.is_null() || index < (*arr).capacity {
+        return None;
+    }
+    let key = index.to_string();
+    array_named_property_get_by_name(arr, &key)
+}
+
+pub(super) unsafe fn array_sparse_index_property_set(
+    arr: *mut ArrayHeader,
+    index: u32,
+    value: f64,
+) {
+    let key = index.to_string();
+    let key_ptr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
+    array_named_property_set(arr, key_ptr, value);
+    let new_length = index + 1;
+    if (*arr).length < new_length {
+        (*arr).length = new_length;
+    }
+}
 
 /// Resolve a raw array head a generated loop re-read from its root after a
 /// callback returned: the callback may have grown the array, leaving the root

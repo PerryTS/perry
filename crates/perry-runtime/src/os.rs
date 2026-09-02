@@ -839,6 +839,8 @@ pub use signal::{js_process_kill, js_util_convert_process_signal_to_exit_code};
 
 #[path = "os_process_streams.rs"]
 mod process_streams;
+#[cfg(test)]
+pub(crate) use process_streams::test_set_stdin_data_listener;
 pub use process_streams::{
     js_process_stderr, js_process_stdin, js_process_stdout, mark_process_stdin_destroyed,
     pump_process_stdin, scan_process_stream_singleton_roots_mut, set_process_stdin_raw_state,

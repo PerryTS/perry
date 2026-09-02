@@ -53,6 +53,36 @@ enum F64Conv {
 /// (`typedarray/mod.rs`): the runtime `PERRY_TA_KIND_CACHE` stores `kind as u64`,
 /// and the entry guard compares against this tag — a mismatch would merely miss
 /// the cache and route every read to the slow helper (correct, but no speedup).
+/// A DECLARED typed-array class on a non-reassigned local or parameter
+/// (#9363/#5525).
+///
+/// `receiver_class_name` answers only from `proven_local_types`, which is
+/// runtime-derived and therefore empty for a PARAMETER — its value comes from
+/// outside the body. That left the shape this machinery was built for on the
+/// slow path: bcryptjs's `_encipher(lr, off, P: Int32Array, S: Int32Array)`
+/// does ~600M `S[i]` reads through parameters and emitted a
+/// `js_typed_array_get` CALL for every one, while the identical loop over a
+/// module-global receiver took the inline checked load. Measured on
+/// `bench_typed_array_untyped_access`: the param body emits zero `ctaf.get`
+/// blocks, the module-global body 66.
+///
+/// A declaration is not a lifetime proof, and this does not treat it as one.
+/// It is an OPTIMISTIC hint whose only consumer is a load whose runtime guard
+/// re-derives the truth: a receiver that is not the expected kind misses the
+/// `PERRY_TA_KIND_CACHE` entry and defers to the memory-safe helper. So a
+/// wrong hint costs a missed speedup, never a wrong answer — the same
+/// reasoning the module-global arm already documents. Reassigned bindings are
+/// still excluded, matching `receiver_class_name`'s own #6906 rule.
+fn declared_typed_array_class_f64(ctx: &FnCtx<'_>, id: &u32) -> Option<String> {
+    if ctx.reassigned_locals.contains(id) {
+        return None;
+    }
+    match ctx.local_type_hint(id)? {
+        perry_hir::types::Type::Named(name) => Some(name.clone()),
+        _ => None,
+    }
+}
+
 fn checked_typed_array_f64_kind(
     ctx: &FnCtx<'_>,
     object: &Expr,
@@ -79,15 +109,17 @@ fn checked_typed_array_f64_kind(
     // bindings are still excluded so a rebind can't make the proof stale for
     // the local-proof case; for the module-global case the runtime guard is
     // the safety net regardless. #8595-followup / typed-array read inlining.
-    let class = crate::type_analysis::receiver_class_name(ctx, object).or_else(|| {
-        if ctx.reassigned_locals.contains(id) {
-            return None;
-        }
-        match ctx.module_global_proven_types.get(id) {
-            Some(perry_hir::types::Type::Named(name)) => Some(name.clone()),
-            _ => None,
-        }
-    })?;
+    let class = crate::type_analysis::receiver_class_name(ctx, object)
+        .or_else(|| {
+            if ctx.reassigned_locals.contains(id) {
+                return None;
+            }
+            match ctx.module_global_proven_types.get(id) {
+                Some(perry_hir::types::Type::Named(name)) => Some(name.clone()),
+                _ => None,
+            }
+        })
+        .or_else(|| declared_typed_array_class_f64(ctx, id))?;
     f64_kind_from_class(&class)
 }
 

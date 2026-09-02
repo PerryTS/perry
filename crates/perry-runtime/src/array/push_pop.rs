@@ -203,6 +203,10 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
             (new_ptr as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
         (*new_header)._reserved = (*old_header)._reserved;
         crate::gc::layout_transfer(arr as *mut u8, new_ptr as *mut u8);
+        // Array expandos and sparse numeric indices live in an address-keyed
+        // side table. Growth is not a collector move, so rekey it explicitly
+        // before the old address becomes a forwarding stub (#9371).
+        transfer_array_named_property_owner(arr as usize, new_ptr as usize);
         // `js_array_grow` is an allocation replacement outside the collector,
         // so GC's normal side-table rekey phase does not run. Preserve every
         // accessor/property descriptor already owned by the old array before
@@ -1267,10 +1271,36 @@ fn try_truncate_plain_array_to_zero(arr: *mut ArrayHeader) -> bool {
 
 #[no_mangle]
 pub extern "C" fn js_array_set_length_strict(arr: *mut ArrayHeader, new_length: f64) {
+    // #9422: a rejected STRICT `Set(O, "length", n, true)` must throw, and this
+    // entry recognised only ONE of the two ways `length` can be non-writable.
+    // `Object.freeze` sets `OBJ_FLAG_FROZEN`, which it tested; an explicit
+    // `Object.defineProperty(arr, "length", { writable: false })` records the
+    // attribute in the descriptor side table WITHOUT freezing the array, and
+    // that shape fell through to the sloppy body, whose own non-writable arm is
+    // a silent `return` (see `js_array_set_length` below, where the comment
+    // says the strict throw "is handled by the caller's PutValue" -- this IS
+    // that caller). Node throws for every `arr.length = n` on a non-writable
+    // `length`, including a same-value write: OrdinarySet consults the own
+    // descriptor and returns false before it ever looks at `n`.
+    //
+    // `array_length_is_non_writable` is not new. It is the predicate
+    // `push`/`pop`/`shift`/`unshift` have guarded with since test262
+    // Array.prototype.push/set-length-*-non-writable -- those mutators perform
+    // the same `Set(O, "length", ..., true)`. This is the one such site that
+    // was not using it.
+    //
+    // It runs BEFORE the zero-truncate fast path on purpose: a write the spec
+    // rejects must not reach a shortcut that stores.
+    let cleaned = clean_arr_ptr_mut(arr);
+    if !cleaned.is_null()
+        && (array_object_flags(cleaned) & crate::gc::OBJ_FLAG_FROZEN != 0
+            || array_length_is_non_writable(cleaned))
+    {
+        throw_non_writable_length();
+    }
     if new_length.to_bits() == 0 && try_truncate_plain_array_to_zero(arr) {
         return;
     }
-    let cleaned = clean_arr_ptr_mut(arr);
     if cleaned.is_null() {
         // #7574: `a.length = n` on a `class X extends Array` instance reached
         // here through the `is_array_expr`-keyed `property_set` lowering and
@@ -1283,11 +1313,7 @@ pub extern "C" fn js_array_set_length_strict(arr: *mut ArrayHeader, new_length: 
         }
         return;
     }
-    let arr = cleaned;
-    if array_object_flags(arr) & crate::gc::OBJ_FLAG_FROZEN != 0 {
-        throw_non_writable_length();
-    }
-    js_array_set_length(arr, new_length);
+    js_array_set_length(cleaned, new_length);
 }
 
 #[no_mangle]

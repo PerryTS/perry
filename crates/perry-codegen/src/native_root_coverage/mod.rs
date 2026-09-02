@@ -182,6 +182,7 @@ fn bare_module(name: &str) -> Module {
         enums: Vec::new(),
         globals: Vec::new(),
         functions: Vec::new(),
+        init_is_strict: false,
         init: Vec::new(),
         classic_for_lexical_bindings: std::collections::HashSet::new(),
         exported_native_instances: Vec::new(),

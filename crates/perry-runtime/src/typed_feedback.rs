@@ -674,14 +674,24 @@ fn classify_array(addr: usize, index: Option<u32>) -> (u32, u16, u64, u16) {
             );
         }
 
-        let len = (*(addr as *const ArrayHeader)).length as u64;
+        let arr = &*(addr as *const ArrayHeader);
+        let len = arr.length as u64;
+        // Large pre-sized and truly sparse arrays have logical holes beyond
+        // their inline allocation. Feedback classifies only physical slots:
+        // walking or reading through logical `length` would either turn one
+        // store into an O(length) observation or read past capacity (#9371).
+        let dense_len = len.min(arr.capacity as u64);
         let access_kind = match index {
             Some(i) if i != u32::MAX && i as u64 >= len => ARRAY_ACCESS_INDEXED_OUT_OF_BOUNDS,
             _ => access_kind,
         };
-        let layout_kind = array_layout_kind(addr, len);
-        let element_kind =
-            array_element_kind(addr, index.filter(|i| *i != u32::MAX), len, layout_kind);
+        let layout_kind = array_layout_kind(addr, dense_len);
+        let element_kind = array_element_kind(
+            addr,
+            index.filter(|i| *i != u32::MAX),
+            dense_len,
+            layout_kind,
+        );
         (
             0,
             gc_type as u16,
@@ -1257,7 +1267,12 @@ fn gc_header_for_user_addr(addr: usize) -> Option<*const crate::gc::GcHeader> {
     })
 }
 
-fn plain_array_index_guard(arr: *const ArrayHeader, index: u32, require_in_bounds: bool) -> bool {
+fn plain_array_index_guard_impl(
+    arr: *const ArrayHeader,
+    index: u32,
+    require_in_bounds: bool,
+    allow_sparse_dense_prefix: bool,
+) -> bool {
     let raw_addr = normalize_raw_object_addr(arr as u64);
     let Some(header) = gc_header_for_user_addr(raw_addr) else {
         return false;
@@ -1297,11 +1312,15 @@ fn plain_array_index_guard(arr: *const ArrayHeader, index: u32, require_in_bound
         let arr = raw_addr as *const ArrayHeader;
         let len = (*arr).length;
         let cap = (*arr).capacity;
-        if len > 16_000_000 || cap > 16_000_000 || len > cap {
+        if cap > 16_000_000 || (len > cap && (!allow_sparse_dense_prefix || index >= cap)) {
             return false;
         }
         !require_in_bounds || index < len
     }
+}
+
+fn plain_array_index_guard(arr: *const ArrayHeader, index: u32, require_in_bounds: bool) -> bool {
+    plain_array_index_guard_impl(arr, index, require_in_bounds, false)
 }
 
 #[cfg(test)]
@@ -1340,7 +1359,11 @@ fn plain_array_index_set_guard(
     index: u32,
     require_in_bounds: bool,
 ) -> bool {
-    if !plain_array_index_guard(arr, index, require_in_bounds) {
+    // #9371: a large pre-sized holey array is allowed to store directly into
+    // its allocated prefix even while logical `length` exceeds `capacity`.
+    // The index-specific capacity check keeps every admitted raw store inside
+    // the allocation; loop/read guards retain the stricter dense-array rule.
+    if !plain_array_index_guard_impl(arr, index, require_in_bounds, true) {
         return false;
     }
     let raw_addr = normalize_raw_object_addr(arr as u64);
@@ -1375,10 +1398,19 @@ fn numeric_array_index_set_guard(
         return false;
     };
     unsafe {
-        if (*header)._reserved & crate::gc::GC_ARRAY_RAW_F64_LAYOUT != 0 {
+        let flags = (*header)._reserved;
+        let arr = raw_addr as *const ArrayHeader;
+        if flags & crate::gc::GC_ARRAY_RAW_F64_LAYOUT != 0 {
             true
+        } else if (*arr).length > (*arr).capacity {
+            // The plain set guard proved `index < capacity`. Large fresh holey
+            // arrays cannot satisfy the dense-layout verifier yet, and that
+            // verifier reads the logical last slot. Trust the representation's
+            // raw-f64-or-holes proof instead; a numeric prefix store preserves
+            // it and remains inside the physical allocation (#9371).
+            flags & crate::gc::GC_ARRAY_RAW_F64_HOLES != 0
         } else {
-            crate::array::js_array_is_numeric_f64_layout(raw_addr as *const ArrayHeader) != 0
+            crate::array::js_array_is_numeric_f64_layout(arr) != 0
         }
     }
 }

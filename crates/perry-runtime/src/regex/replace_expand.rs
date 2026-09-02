@@ -248,8 +248,17 @@ pub(super) unsafe fn replace_regex_fn_fancy(
     // `OwnedMatchData`).
     let str_data = string_as_str(s_handle.get_raw_const_ptr::<StringHeader>());
     let mut matches: Vec<OwnedMatchData> = Vec::new();
-    let mut iter = fre.captures_iter(str_data);
-    while let Some(Ok(caps)) = iter.next() {
+    // #9430: the ECMAScript scan for the global form — fancy-regex's iterator
+    // would drop every zero-width match sitting at a previous match's end.
+    let scanned: Vec<fancy_regex::Captures> = if global {
+        super::global_scan::fancy_captures(fre, str_data, 0)
+    } else {
+        match fre.captures(str_data) {
+            Ok(Some(caps)) => vec![caps],
+            Ok(None) | Err(_) => Vec::new(),
+        }
+    };
+    for caps in &scanned {
         let full_match = caps.get(0).unwrap();
         matches.push(OwnedMatchData {
             start: full_match.start(),
@@ -263,9 +272,6 @@ pub(super) unsafe fn replace_regex_fn_fancy(
                 .map(|(gi, n)| (n.clone(), caps.get(*gi).map(|m| m.as_str().to_string())))
                 .collect(),
         });
-        if !global {
-            break;
-        }
     }
 
     replace_fn_run_matches(s_handle, &matches, closure_ptr, has_named_groups)
@@ -408,8 +414,9 @@ pub extern "C" fn js_string_replace_regex_fn(
                     .collect(),
             });
         };
+        // #9430: the ECMAScript scan, not `Regex::captures_iter`.
         if global {
-            for caps in regex.captures_iter(str_data) {
+            for caps in super::global_scan::std_captures(regex, str_data, 0) {
                 push_caps(caps);
             }
         } else if let Some(caps) = regex.captures(str_data) {
@@ -489,8 +496,9 @@ pub extern "C" fn js_string_replace_regex_named(
         let mut result = String::new();
         let mut last_end = 0usize;
 
+        // #9430: the ECMAScript scan, not `Regex::captures_iter`.
         let captures_list: Vec<regex::Captures> = if global {
-            regex.captures_iter(str_data).collect()
+            super::global_scan::std_captures(regex, str_data, 0)
         } else {
             match regex.captures(str_data) {
                 Some(caps) => vec![caps],

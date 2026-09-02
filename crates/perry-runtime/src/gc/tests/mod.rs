@@ -55,4 +55,5 @@ mod telemetry_verifier;
 mod temp_roots;
 mod triggers;
 mod typed_layout_intact_residual;
+mod u8_inline_cache;
 mod weak_read_barrier;

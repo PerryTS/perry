@@ -348,6 +348,26 @@ fn merge_array_named_props(
     barrier_array_named_props(owner, entry);
 }
 
+/// Rekey an array's named-property side table when `js_array_grow` replaces
+/// its inline allocation. GC moves do this through the mutable-root visitor;
+/// array growth is outside the collector and must perform the same ownership
+/// transfer explicitly before publishing the forwarding stub.
+pub(crate) fn transfer_array_named_property_owner(old_owner: usize, new_owner: usize) {
+    if old_owner == 0
+        || new_owner == 0
+        || old_owner == new_owner
+        || !ARRAY_NAMED_PROPS_EVER.load(std::sync::atomic::Ordering::Acquire)
+    {
+        return;
+    }
+    ARRAY_NAMED_PROPS.with(|m| {
+        let mut props = m.borrow_mut();
+        if let Some(old_props) = props.remove(&old_owner) {
+            merge_array_named_props(&mut props, new_owner, old_props);
+        }
+    });
+}
+
 pub(crate) fn scan_array_named_property_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     ARRAY_NAMED_PROPS.with(|m| {
         let mut props = m.borrow_mut();
@@ -505,6 +525,24 @@ pub(crate) unsafe fn array_has_named_properties_resolved(arr: *const ArrayHeader
         m.borrow()
             .get(&(arr as usize))
             .is_some_and(|props| !props.is_empty())
+    })
+}
+
+/// Whether an already-resolved array owns numeric indices in the named-property
+/// side table. Those indices live beyond the dense allocation. Growing the
+/// allocation across one without migrating it would hide the property because
+/// indexed reads consult the side table only at `index >= capacity`.
+#[inline]
+pub(crate) unsafe fn array_has_sparse_index_properties_resolved(arr: *const ArrayHeader) -> bool {
+    if !ARRAY_NAMED_PROPS_EVER.load(std::sync::atomic::Ordering::Acquire) {
+        return false;
+    }
+    ARRAY_NAMED_PROPS.with(|m| {
+        m.borrow().get(&(arr as usize)).is_some_and(|props| {
+            props
+                .iter()
+                .any(|prop| crate::object::canonical_array_index(&prop.name).is_some())
+        })
     })
 }
 
@@ -798,9 +836,19 @@ pub(crate) fn clean_arr_ptr(arr: *const ArrayHeader) -> *const ArrayHeader {
             // wave them through; everything else at this size is
             // almost certainly corrupted.
             let addr = cleaned as usize;
+            // #9371: a large pre-sized holey array grows its dense prefix on
+            // demand, so a legitimate sparse header can have capacity above
+            // the old one-million cutoff while it is still below `length`.
+            // Prove the capacity against the tracked allocation's exact byte
+            // size instead of imposing a second semantic threshold. Corrupt
+            // length/capacity words still fail closed unless they describe
+            // precisely the allocation the GC owns at this address.
             let sparse_array_shape = tracked_obj_type == Some(crate::gc::GC_TYPE_ARRAY)
                 && hdr.length > hdr.capacity
-                && hdr.capacity <= 1_000_000;
+                && tracked_header.is_some_and(|gc_header| {
+                    checked_array_allocation_size(hdr.capacity as usize)
+                        == Some((*gc_header.as_ptr()).size as usize)
+                });
             if sparse_array_shape {
                 return cleaned;
             }
@@ -1908,6 +1956,14 @@ static KEEP_JS_ARRAY_REFRESH_LOCAL_HEAD: extern "C" fn(f64) -> f64 = js_array_re
 #[inline]
 pub(crate) fn array_byte_size(capacity: usize) -> usize {
     std::mem::size_of::<ArrayHeader>() + capacity * std::mem::size_of::<f64>()
+}
+
+#[inline]
+pub(super) fn checked_array_allocation_size(capacity: usize) -> Option<usize> {
+    capacity
+        .checked_mul(std::mem::size_of::<f64>())
+        .and_then(|elements| std::mem::size_of::<ArrayHeader>().checked_add(elements))
+        .and_then(|payload| crate::gc::GC_HEADER_SIZE.checked_add(payload))
 }
 
 #[inline]

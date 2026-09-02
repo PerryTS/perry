@@ -33,10 +33,15 @@ pub(super) fn install_primitive_proto_methods(
                 number_proto_to_fixed_thunk as *const u8,
                 1,
             );
-            ipm(
+            // `.length` is 0 (both params are optional), but the thunk needs
+            // `(locales, options)` to reach it — install it rest-based like
+            // `BigInt.prototype.toLocaleString` below, so the fixed call arity
+            // stays 0 while the arguments still arrive in `rest` (#9414).
+            super::global_this::install_proto_method_rest_with_length(
                 proto_obj,
                 "toLocaleString",
                 number_proto_to_locale_string_thunk as *const u8,
+                0,
                 0,
             );
             ipm(
@@ -128,7 +133,15 @@ pub(crate) fn primitive_proto_method_value(builtin_name: &str, method_name: &str
     let (func_ptr, arity) = match (builtin_name, method_name) {
         ("Number", "toExponential") => (number_proto_to_exponential_thunk as *const u8, 1),
         ("Number", "toFixed") => (number_proto_to_fixed_thunk as *const u8, 1),
-        ("Number", "toLocaleString") => (number_proto_to_locale_string_thunk as *const u8, 0),
+        // #9414: rest-based (see `install_primitive_proto_methods`), so the
+        // reified `Number.prototype.toLocaleString` function value must be
+        // registered the same way or its `(locales, options)` never arrive.
+        ("Number", "toLocaleString") => {
+            let func_ptr = number_proto_to_locale_string_thunk as *const u8;
+            let value = primitive_proto_method_closure_value(method_name, func_ptr, 0);
+            crate::closure::js_register_closure_rest(func_ptr, 0);
+            return Some(value);
+        }
         ("Number", "toPrecision") => (number_proto_to_precision_thunk as *const u8, 1),
         ("Number", "toString") => (number_proto_to_string_thunk as *const u8, 1),
         ("Number", "valueOf") => (number_proto_value_of_thunk as *const u8, 0),
@@ -325,12 +338,42 @@ pub(super) extern "C" fn number_proto_to_exponential_thunk(
     ))
 }
 
+/// `Number.prototype.toLocaleString(locales?, options?)` (#9414).
+///
+/// ECMA-402 defines this as "construct an `Intl.NumberFormat` with exactly
+/// these arguments and FormatNumeric the receiver with it", so a call that
+/// actually carries a locale or an options bag delegates to the real formatter.
+/// Before this the thunk took NO arguments at all and always ran the
+/// hand-rolled en-US grouping helper, which is why `(1234.5)
+/// .toLocaleString("de-DE")` printed `1,234.5` and `{style:"percent"}` was
+/// dropped on the floor.
+///
+/// The DEFAULT call keeps that helper. `(1234.5).toLocaleString()` never
+/// reaches this thunk at all — codegen folds the zero-arg form to an inline
+/// `js_number_to_locale_string` call — and the explicit
+/// `toLocaleString(undefined, undefined)` spelling is the same request, so it
+/// takes the same path rather than paying for a NumberFormat construction
+/// (Intl builds a fresh instance per call; there is no formatter cache).
 pub(super) extern "C" fn number_proto_to_locale_string_thunk(
     _closure: *const crate::closure::ClosureHeader,
+    rest: f64,
 ) -> f64 {
     let n = number_receiver_or_throw("toLocaleString");
-    let s = crate::date::js_number_to_locale_string(n);
-    string_value(s)
+    #[cfg(feature = "intl-namespace")]
+    {
+        let args = super::global_this::global_this_rest_array_values(rest);
+        let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+        let locales = args.first().copied().unwrap_or(undef);
+        let options = args.get(1).copied().unwrap_or(undef);
+        let defaulted = crate::value::JSValue::from_bits(locales.to_bits()).is_undefined()
+            && crate::value::JSValue::from_bits(options.to_bits()).is_undefined();
+        if !defaulted {
+            return string_value(crate::intl::number_to_locale_string(n, locales, options));
+        }
+    }
+    #[cfg(not(feature = "intl-namespace"))]
+    let _ = rest;
+    string_value(crate::date::js_number_to_locale_string(n))
 }
 
 pub(super) extern "C" fn boolean_proto_value_of_thunk(
