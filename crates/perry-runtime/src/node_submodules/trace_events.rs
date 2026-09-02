@@ -611,8 +611,7 @@ fn emit_enabled_trace_warning() {
     let process = scope.root_nanbox_f64(process);
     let callback = scope.root_nanbox_f64(callback);
     let warning = scope.root_nanbox_f64(warning);
-    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-    let previous = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(
+    let previous = scope.root_nanbox_f64(crate::object::js_implicit_this_set(
         process.get_nanbox_f64(),
     ));
     unsafe {

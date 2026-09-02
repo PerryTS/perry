@@ -516,9 +516,8 @@ fn call_timer_callback(
     let previous_roots = crate::async_context::root_snapshot(&scope, &previous);
     let a = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
     let cb = callback_handle.get_raw_const_ptr::<crate::closure::ClosureHeader>();
-    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
     let prev_this =
-        this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(timer_handle_value(id)));
+        scope.root_nanbox_f64(crate::object::js_implicit_this_set(timer_handle_value(id)));
     with_timer_uncaught_trap(|| unsafe {
         crate::closure::js_closure_call_array(cb as i64, a.as_ptr(), a.len() as i64);
     });
@@ -1296,6 +1295,8 @@ pub extern "C" fn js_callback_timer_tick() -> i32 {
     let mut fired = 0;
     // Call the callbacks, forwarding any trailing args captured at
     // `setTimeout(fn, delay, ...args)` time. Refs #665.
+    // #9445: the displaced receiver is rooted ONCE here, not once per callback.
+    let prev_this = batch_scope.root_nanbox_f64(crate::object::js_implicit_this_get());
     for (index, mut timer) in expired.into_iter().enumerate() {
         if !timer.cleared {
             crate::async_context::refresh_snapshot_from_roots(
@@ -1306,10 +1307,7 @@ pub extern "C" fn js_callback_timer_tick() -> i32 {
             let mut previous = previous;
             let previous_roots = crate::async_context::root_snapshot(&batch_scope, &previous);
             crate::async_hooks::before(timer.async_id, timer.trigger_async_id);
-            let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-            let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(
-                timer_handle_value(timer.id),
-            ));
+            crate::object::js_implicit_this_set(timer_handle_value(timer.id));
             enter_timer_callback_dispatch();
             with_timer_uncaught_trap(|| {
                 // Installing the timer receiver above is itself a collecting
@@ -1728,9 +1726,8 @@ pub extern "C" fn js_interval_timer_tick() -> i32 {
         let previous = crate::async_context::enter_context(&context);
         let mut previous = previous;
         let previous_roots = crate::async_context::root_snapshot(&scope, &previous);
-        let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
         let prev_this =
-            this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(timer_handle_value(id)));
+            scope.root_nanbox_f64(crate::object::js_implicit_this_set(timer_handle_value(id)));
         enter_timer_callback_dispatch();
         crate::async_hooks::before(async_id, trigger_async_id);
         with_timer_uncaught_trap(|| {

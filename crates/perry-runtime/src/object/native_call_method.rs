@@ -2510,9 +2510,8 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
         if crate::promise::subclass_backing_promise(object()).is_some() {
             if let Some(m) = crate::promise::promise_proto_method(method_name) {
                 let args = refreshed_args();
-                let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
                 let prev_this =
-                    this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(object()));
+                    root_scope.root_nanbox_f64(crate::object::js_implicit_this_set(object()));
                 let result = crate::closure::js_native_call_value(m, args.as_ptr(), args.len());
                 crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
                 return result;

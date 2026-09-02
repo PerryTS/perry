@@ -715,8 +715,7 @@ unsafe fn call_reviver(
     let holder_arg = holder_handle.get_nanbox_f64();
     let key_arg = key_handle.get_nanbox_f64();
     let value_arg = value_handle.get_nanbox_f64();
-    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-    let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(holder_arg));
+    let prev_this = scope.root_nanbox_f64(crate::object::js_implicit_this_set(holder_arg));
     let result =
         crate::js_closure_call3(reviver, key_arg, value_arg, context_handle.get_nanbox_f64());
     crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());

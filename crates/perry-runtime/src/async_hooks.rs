@@ -1811,8 +1811,7 @@ fn call_callback_with_rest(callback_value: f64, this_arg: f64, rest: f64) -> f64
     }
     let args_array = ptr_from_nanboxed(rest) as *const ArrayHeader;
     let args_array_handle = scope.root_raw_const_ptr(args_array);
-    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-    let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(
+    let prev_this = scope.root_nanbox_f64(crate::object::js_implicit_this_set(
         this_arg_handle.get_nanbox_f64(),
     ));
     let result = if args_array.is_null() {

@@ -279,9 +279,7 @@ fn invoke_message_handler(handler: f64, event: f64, port_box: f64) {
     let handler_h = scope.root_nanbox_f64(handler);
     let event_h = scope.root_nanbox_f64(event);
     let port_h = scope.root_nanbox_f64(port_box);
-    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-    let prev_this =
-        this_scope.root_nanbox_f64(object::js_implicit_this_set(port_h.get_nanbox_f64()));
+    let prev_this = scope.root_nanbox_f64(object::js_implicit_this_set(port_h.get_nanbox_f64()));
     let args = [event_h.get_nanbox_f64()];
     unsafe {
         let _ = crate::closure::js_native_call_value(

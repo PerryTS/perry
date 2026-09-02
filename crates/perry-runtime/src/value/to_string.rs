@@ -183,6 +183,8 @@ pub(crate) unsafe fn ordinary_to_primitive_for_toprimitive(
     } else {
         [b"valueOf", b"toString"]
     };
+    // #9445: the displaced receiver is rooted ONCE here, not once per callback.
+    let prev_this = scope.root_nanbox_f64(crate::object::js_implicit_this_get());
     for name in order {
         let recv = value_handle.get_nanbox_f64();
         let key_ptr = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
@@ -197,8 +199,7 @@ pub(crate) unsafe fn ordinary_to_primitive_for_toprimitive(
         }
         let method_handle = scope.root_nanbox_f64(method);
         let recv = value_handle.get_nanbox_f64();
-        let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-        let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(recv));
+        crate::object::js_implicit_this_set(recv);
         let result = crate::closure::js_native_call_value(
             method_handle.get_nanbox_f64(),
             std::ptr::null(),
@@ -835,8 +836,7 @@ unsafe fn call_method_for_primitive(
     // receiver, so rebinding is a correct no-op. Mirrors #1982.
     let recv = value_handle.get_nanbox_f64();
     let bound = crate::closure::clone_closure_rebind_this(method_bits, recv);
-    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-    let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(recv));
+    let prev_this = scope.root_nanbox_f64(crate::object::js_implicit_this_set(recv));
     let ret = crate::closure::js_native_call_value(f64::from_bits(bound), std::ptr::null(), 0);
     crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
     let ret_jsv = JSValue::from_bits(ret.to_bits());
@@ -891,8 +891,7 @@ unsafe fn call_function_method(
 
     let method_handle = scope.root_nanbox_f64(method);
     let bound = crate::closure::clone_closure_rebind_this(method_handle.get_nanbox_u64(), recv);
-    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-    let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(recv));
+    let prev_this = scope.root_nanbox_f64(crate::object::js_implicit_this_set(recv));
     let ret = crate::closure::js_native_call_value(f64::from_bits(bound), std::ptr::null(), 0);
     crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
 

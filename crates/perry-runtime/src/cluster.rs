@@ -303,10 +303,12 @@ pub(crate) fn cluster_emit_event(event: &str, args: &[f64]) -> bool {
     if listeners.is_empty() {
         return false;
     }
+    let this_scope = crate::gc::RuntimeHandleScope::new();
+    // #9445: the displaced receiver is rooted ONCE here, not once per callback.
+    let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_get());
     for listener in listeners {
         let cb = f64::from_bits(listener.callback_bits);
-        let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-        let prev = this_scope.root_nanbox_f64(js_implicit_this_set(cluster_default_value()));
+        js_implicit_this_set(cluster_default_value());
         unsafe {
             let _ = crate::closure::js_native_call_value(cb, args.as_ptr(), args.len());
         }
@@ -1416,6 +1418,9 @@ fn emit(target: f64, event: &str, args: &[f64]) -> bool {
     let key = listener_key(event);
     let mut i = 0;
     let mut fired = false;
+    let this_scope = crate::gc::RuntimeHandleScope::new();
+    // #9445: the displaced receiver is rooted ONCE here, not once per callback.
+    let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_get());
     loop {
         let Some(arr) = array_ptr(get_field(target, &key)) else {
             break;
@@ -1424,8 +1429,7 @@ fn emit(target: f64, event: &str, args: &[f64]) -> bool {
             break;
         }
         let cb = crate::array::js_array_get_f64(arr, i);
-        let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-        let prev = this_scope.root_nanbox_f64(js_implicit_this_set(target));
+        js_implicit_this_set(target);
         unsafe {
             let _ = crate::closure::js_native_call_value(cb, args.as_ptr(), args.len());
         }
