@@ -102,11 +102,10 @@ pub struct ErrorHeader {
     /// `ObjectHeader` hangs off its own `meta` field.
     ///
     /// #6759 phase 1 (header unification). An `ErrorHeader` is not an
-    /// `ObjectHeader`, so before this field the only place to put anything
-    /// per-error was a side table keyed by the error's ADDRESS — and errors
-    /// accumulated seven of them, each needing its own GC rekey-on-evacuation,
-    /// finalize, dead-sweep and root-scanner hook. Giving the cell a metadata
-    /// edge is what lets those payloads move onto the object itself.
+    /// `ObjectHeader`, so before this field user-assigned properties lived in
+    /// an address-keyed side table. Giving the cell a metadata edge lets those
+    /// properties live on the object itself. Node's built-in diagnostic fields
+    /// remain in one owner-keyed record managed by the Error GC hook.
     ///
     /// Appended LAST on purpose: every preceding field keeps its offset, so
     /// codegen and the `errors`-at-+48 assumption in this file's tests are
@@ -234,7 +233,6 @@ unsafe fn alloc_error(
     message: *mut StringHeader,
     has_message: bool,
 ) -> *mut ErrorHeader {
-    let scope = crate::gc::RuntimeHandleScope::new();
     // #321 frontier issue #69 (sibling to #2230's `dyn_index_get` guard):
     // codegen lowers `new Error(value)` by handing the value straight to
     // `js_error_new_with_message` even when `value` is not a string pointer
@@ -250,11 +248,23 @@ unsafe fn alloc_error(
     // predicate guards `dyn_index_get/set` (#2230), `js_object_keys`, the
     // by-name field setters, and several typed-feedback probes — this
     // brings the error-allocation path under the same umbrella.
-    let message_ptr = if message.is_null() || !crate::object::is_valid_obj_ptr(message as *const u8)
-    {
-        js_string_from_bytes(b"".as_ptr(), 0)
+    let message_is_valid =
+        !message.is_null() && crate::object::is_valid_obj_ptr(message as *const u8);
+    // #9530: Node diagnostics are registered immediately before construction
+    // because no ErrorHeader exists yet. Take that transient message-keyed
+    // record before the first allocation below can move the message; once the
+    // Error exists, the record is installed under its owner address and follows
+    // the existing ErrorSideTables move/finalize hook.
+    let diagnostics = if message_is_valid {
+        crate::node_submodules::take_pending_error_diagnostics(message)
     } else {
+        None
+    };
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let message_ptr = if message_is_valid {
         message
+    } else {
+        js_string_from_bytes(b"".as_ptr(), 0)
     };
     let message_handle = scope.root_string_ptr(message_ptr);
 
@@ -305,6 +315,8 @@ unsafe fn alloc_error(
         Some(handle) => handle.get_raw_const_ptr::<StringHeader>() as *mut StringHeader,
         None => std::ptr::null_mut(),
     };
+
+    crate::node_submodules::install_error_diagnostics(ptr, diagnostics);
 
     ptr
 }
@@ -403,9 +415,9 @@ pub extern "C" fn js_referenceerror_new(message: *mut StringHeader) -> *mut Erro
 
 thread_local! {
     /// Interned `&'static str` for each distinct Node `ERR_*` code passed
-    /// across the FFI boundary, so it can be stored in the
-    /// message→code side table read by the `.code` getter. Bounded: each
-    /// distinct code string leaks at most once per thread.
+    /// across the FFI boundary, so it can be stored in the diagnostic record
+    /// read by the `.code` getter. Bounded: each distinct code string leaks at
+    /// most once per thread.
     static INTERNED_ERROR_CODES: std::cell::RefCell<std::collections::HashMap<String, &'static str>> =
         std::cell::RefCell::new(std::collections::HashMap::new());
 }
@@ -424,7 +436,7 @@ fn intern_error_code(code: &str) -> &'static str {
 /// Generic "build a JS Error subclass carrying a Node `.code`" FFI entry
 /// point for out-of-crate callers that have no direct access to
 /// `perry-runtime`'s Rust API. Building + registering in this single extern
-/// symbol guarantees the message→code registration and the later `.code` read
+/// symbol guarantees the diagnostic registration and the later `.code` read
 /// resolve through the same runtime copy, avoiding the staticlib thread-local
 /// divergence that split registration/read paths hit.
 ///

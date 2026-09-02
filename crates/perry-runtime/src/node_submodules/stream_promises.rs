@@ -120,16 +120,16 @@ pub(crate) fn signal_aborted(signal: f64) -> bool {
 pub(crate) fn abort_error_value() -> f64 {
     let msg = b"The operation was aborted";
     let msg_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err = crate::error::js_error_new_with_name_message(b"AbortError", msg_ptr);
     crate::node_submodules::register_error_code_pub(msg_ptr, "ABORT_ERR");
+    let err = crate::error::js_error_new_with_name_message(b"AbortError", msg_ptr);
     value_from_ptr(err as *const u8)
 }
 
 fn premature_close_error_value() -> f64 {
     let msg = b"Premature close";
     let msg_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err = crate::error::js_error_new_with_name_message(b"Error", msg_ptr);
     crate::node_submodules::register_error_code_pub(msg_ptr, "ERR_STREAM_PREMATURE_CLOSE");
+    let err = crate::error::js_error_new_with_name_message(b"Error", msg_ptr);
     value_from_ptr(err as *const u8)
 }
 

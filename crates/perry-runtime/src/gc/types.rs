@@ -218,11 +218,11 @@ pub(crate) enum GcMoveHookKind {
     /// move. Used by `GC_TYPE_PROMISE`, whose `status`/`value` expandos
     /// (#5142) live in `object::exotic_expando` keyed by the promise address.
     ExoticExpandoOwner,
-    /// Rekey the error side tables (`node_submodules::diagnostics`:
-    /// ERROR_MESSAGE_{CODES,SYSCALLS,ERRNOS,PATHS,DESTS,HOSTNAMES} and
-    /// ERROR_USER_PROPS — all keyed by the ErrorHeader address) after a
-    /// move. Errors are movable; without this a moved error lost its
-    /// `err.code`/`err.syscall`/user-assigned props.
+    /// Rekey the Node diagnostic record keyed by the ErrorHeader address after
+    /// a move. Errors are movable; without this a moved error loses its
+    /// `err.code`/`err.syscall`/`err.errno`/path fields. User-assigned props
+    /// live on the Error's traced `ObjectMeta` edge and need no side-table
+    /// rekeying.
     ErrorSideTables,
     /// Rekey RegExp identity/source registries plus its exotic expando owner
     /// entry. `GC_TYPE_REGEXP` is movable, and all three tables use the
@@ -264,9 +264,8 @@ pub(crate) enum GcFinalizeHookKind {
     /// heap-owning variant (e.g. a `ZonedDateTime` IANA timezone string) is
     /// released when the cell is swept. POD variants drop to a no-op.
     TemporalCleanup,
-    /// Drop a swept error's entries from the address-keyed error side tables
-    /// so a fresh error allocated at the recycled address doesn't inherit
-    /// the dead error's codes/props.
+    /// Drop a swept error's address-keyed Node diagnostic record so a fresh
+    /// error allocated at the recycled address doesn't inherit its fields.
     ErrorSideTables,
     /// #7539: free a dead lazy JSON array's tape bytes, which
     /// `json_tape_store` owns outside the GC heap.

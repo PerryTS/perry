@@ -697,7 +697,7 @@ fn emit_uncaught_backtrace() {
 pub(crate) unsafe fn uncaught_native_error_report(eh: *mut crate::error::ErrorHeader) -> String {
     let name_str = string_header_to_string((*eh).name);
     let msg_str = string_header_to_string((*eh).message);
-    let code = crate::node_submodules::error_code_for_message((*eh).message);
+    let code = crate::node_submodules::error_code_for_error(eh);
     // Nothing may read `eh` past this line.
     let stack_str = string_header_to_string(crate::error::js_error_get_stack(eh));
 
@@ -1000,19 +1000,16 @@ mod tests {
     /// What this does pin is the report itself: the code branch, the frame
     /// tail, and the `<Name> [<code>]: <message>` head.
     ///
-    /// Adjacent finding, NOT fixed here (pre-existing, unrelated to #9486):
-    /// `register_error_code_pub` / `error_code_for_message` key on the
-    /// MESSAGE `StringHeader`'s address, while the `GcMoveHookKind::ErrorSideTables`
-    /// rekey in `node_submodules/diagnostics_gc.rs` rekeys by the ERROR's
-    /// address. Nothing rekeys the message key, so an error's `ERR_*` code is
-    /// dropped as soon as its message string is relocated — reproduced with a
-    /// forced minor collection while writing this test.
+    /// #9530 moved the code lookup onto the Error's address, so the existing
+    /// `ErrorSideTables` hook now keeps it attached when either the Error or its
+    /// message relocates. The forced-moving coverage lives beside that hook in
+    /// `gc::tests::error_side_tables`.
     #[test]
     fn the_uncaught_report_carries_the_error_code_and_the_frames() {
         unsafe {
             let msg = crate::string::js_string_from_bytes(b"boom".as_ptr(), 4);
+            crate::node_submodules::register_error_code_pub(msg, "ERR_TEST_9486");
             let err = crate::error::js_error_new_with_message(msg);
-            crate::node_submodules::register_error_code_pub((*err).message, "ERR_TEST_9486");
 
             let report = uncaught_native_error_report(err);
 

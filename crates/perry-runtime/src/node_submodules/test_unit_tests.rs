@@ -20,7 +20,7 @@ fn options_with_bool(name: &str, value: bool) -> f64 {
 fn caught_error_code(f: impl FnOnce() -> f64) -> &'static str {
     let error = catch_js(f).expect_err("operation should throw");
     let error = raw_ptr_from_value(error) as *mut crate::error::ErrorHeader;
-    crate::node_submodules::error_code_for_message(crate::error::js_error_get_message(error))
+    crate::node_submodules::error_code_for_error(error)
         .expect("error should have a registered Node code")
 }
 

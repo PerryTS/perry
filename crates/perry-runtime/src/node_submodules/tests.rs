@@ -181,9 +181,8 @@ fn assert_rejected_node_error(value: f64, code: &str, message: &str) {
     let actual_message =
         string_from_value(string_header_value(crate::error::js_error_get_message(err)))
             .expect("error message should be a string");
-    let actual_code =
-        crate::node_submodules::error_code_for_message(crate::error::js_error_get_message(err))
-            .expect("error should have a registered Node code");
+    let actual_code = crate::node_submodules::error_code_for_error(err)
+        .expect("error should have a registered Node code");
 
     assert_eq!(name, "TypeError");
     assert_eq!(actual_code, code);

@@ -285,8 +285,8 @@ fn abort_error_constructor_value() -> f64 {
 pub extern "C" fn js_abort_error_value() -> f64 {
     let msg = b"The operation was aborted";
     let msg_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err = crate::error::js_error_new_with_name_message(b"AbortError", msg_ptr);
     crate::node_submodules::register_error_code_pub(msg_ptr, "ABORT_ERR");
+    let err = crate::error::js_error_new_with_name_message(b"AbortError", msg_ptr);
     crate::node_submodules::set_error_user_prop(
         err as usize,
         "constructor",

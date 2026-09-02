@@ -1,71 +1,38 @@
 //! GC integration for the error side tables (2026-07-02 audit, GC deep set).
-//! Split out of `diagnostics.rs` (2000-line lint gate); the tables and
-//! `ErrUserProp` stay there.
+//! Split out of `diagnostics.rs` (2000-line lint gate); the diagnostic record
+//! stays there.
 
-use super::diagnostics::{
-    ERROR_MESSAGE_CODES, ERROR_MESSAGE_DESTS, ERROR_MESSAGE_ERRNOS, ERROR_MESSAGE_HOSTNAMES,
-    ERROR_MESSAGE_PATHS, ERROR_MESSAGE_SYSCALLS,
-};
-use std::cell::RefCell;
-use std::collections::HashMap;
+use super::diagnostics::ERROR_DIAGNOSTICS;
 
 // ---------------------------------------------------------------------------
 // GC integration for the error side tables (2026-07-02 audit, GC deep set).
 //
-// Errors are MOVABLE arena objects (`GC_TYPE_ERROR`, `movable: true`), and
-// every table above — ERROR_MESSAGE_{CODES,SYSCALLS,ERRNOS,PATHS,DESTS,
-// HOSTNAMES} and ERROR_USER_PROPS — keys by the ErrorHeader address. Before
-// these hooks existed: (1) a moved error's entries were stranded at the old
-// address, so `err.code` / user-assigned props VANISHED after an evacuating
-// cycle; (2) a swept error's entries persisted, so a FRESH error allocated
-// at the recycled address INHERITED the dead error's codes/props; (3) an
-// object-valued user prop (`err.cause = {...}`) was stored as raw bits
-// invisible to GC — collectable while still reachable through the error.
-// The in-code "stale entries are harmless" comments were wrong on all
-// three counts.
+// Errors are MOVABLE arena objects (`GC_TYPE_ERROR`, `movable: true`). Node's
+// code/syscall/errno/path/dest/hostname fields share one record keyed by the
+// ErrorHeader address; user-assigned props moved onto `ObjectMeta.expando` in
+// #8891 and need no bespoke table hook.
 
-/// Move an error's entries in every address-keyed side table to its new
-/// address. `GcMoveHookKind::ErrorSideTables`, fired by
+/// Move an error's address-keyed diagnostic record to its new address.
+/// `GcMoveHookKind::ErrorSideTables`, fired by
 /// `gc_type_after_payload_move` on evacuation/copy.
 pub(crate) fn error_side_tables_owner_moved(old_user: usize, new_user: usize) {
     if old_user == new_user || old_user == 0 {
         return;
     }
-    fn rekey<V>(m: &RefCell<HashMap<usize, V>>, old: usize, new: usize) {
+    ERROR_DIAGNOSTICS.with(|m| {
         let mut m = m.borrow_mut();
-        if let Some(v) = m.remove(&old) {
-            m.insert(new, v);
+        if let Some(diagnostics) = m.remove(&old_user) {
+            m.insert(new_user, diagnostics);
         }
-    }
-    ERROR_MESSAGE_CODES.with(|m| rekey(m, old_user, new_user));
-    ERROR_MESSAGE_SYSCALLS.with(|m| rekey(m, old_user, new_user));
-    ERROR_MESSAGE_ERRNOS.with(|m| rekey(m, old_user, new_user));
-    ERROR_MESSAGE_PATHS.with(|m| rekey(m, old_user, new_user));
-    ERROR_MESSAGE_DESTS.with(|m| rekey(m, old_user, new_user));
-    ERROR_MESSAGE_HOSTNAMES.with(|m| rekey(m, old_user, new_user));
+    });
 }
 
-/// Drop a dead error's entries from every side table so a fresh error
-/// allocated at the recycled address doesn't inherit them.
+/// Drop a dead error's diagnostic record so a fresh error allocated at the
+/// recycled address doesn't inherit it.
 /// `GcFinalizeHookKind::ErrorSideTables` (old-gen sweep) and the
 /// copied-minor from-space finalize both land here.
 pub(crate) fn error_side_tables_clear_dead(user_ptr: usize) {
-    ERROR_MESSAGE_CODES.with(|m| {
-        m.borrow_mut().remove(&user_ptr);
-    });
-    ERROR_MESSAGE_SYSCALLS.with(|m| {
-        m.borrow_mut().remove(&user_ptr);
-    });
-    ERROR_MESSAGE_ERRNOS.with(|m| {
-        m.borrow_mut().remove(&user_ptr);
-    });
-    ERROR_MESSAGE_PATHS.with(|m| {
-        m.borrow_mut().remove(&user_ptr);
-    });
-    ERROR_MESSAGE_DESTS.with(|m| {
-        m.borrow_mut().remove(&user_ptr);
-    });
-    ERROR_MESSAGE_HOSTNAMES.with(|m| {
+    ERROR_DIAGNOSTICS.with(|m| {
         m.borrow_mut().remove(&user_ptr);
     });
     // 2026-07-09 GC audit wave 2: the DOMException brand set is address-
@@ -99,20 +66,13 @@ pub(crate) fn finalize_dead_copied_minor_from_space_errors() {
                 && flags & (crate::gc::GC_FLAG_MARKED | crate::gc::GC_FLAG_FORWARDED) == 0
         }
     }
-    let mut dead: std::collections::HashSet<usize> = std::collections::HashSet::new();
-    let mut collect = |keys: Vec<usize>| {
-        for addr in keys {
-            if is_dead_from_space_error(addr) {
-                dead.insert(addr);
-            }
-        }
-    };
-    collect(ERROR_MESSAGE_CODES.with(|m| m.borrow().keys().copied().collect()));
-    collect(ERROR_MESSAGE_SYSCALLS.with(|m| m.borrow().keys().copied().collect()));
-    collect(ERROR_MESSAGE_ERRNOS.with(|m| m.borrow().keys().copied().collect()));
-    collect(ERROR_MESSAGE_PATHS.with(|m| m.borrow().keys().copied().collect()));
-    collect(ERROR_MESSAGE_DESTS.with(|m| m.borrow().keys().copied().collect()));
-    collect(ERROR_MESSAGE_HOSTNAMES.with(|m| m.borrow().keys().copied().collect()));
+    let dead: Vec<usize> = ERROR_DIAGNOSTICS.with(|m| {
+        m.borrow()
+            .keys()
+            .copied()
+            .filter(|addr| is_dead_from_space_error(*addr))
+            .collect()
+    });
     for addr in dead {
         error_side_tables_clear_dead(addr);
     }
