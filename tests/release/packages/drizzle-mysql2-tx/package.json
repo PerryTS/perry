@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Tier-3 fixture: drizzle-orm transactions over the native mysql2 binding against a real MySQL on 127.0.0.1:3306, 400 in a row under a 1 MB nursery (the #9356 acceptance).",
   "dependencies": {
-    "drizzle-orm": "^0.44.7",
+    "drizzle-orm": "^0.45.2",
     "mysql2": "^3.24.2"
   },
   "perry": {
