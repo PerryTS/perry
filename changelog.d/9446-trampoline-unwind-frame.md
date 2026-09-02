@@ -43,7 +43,9 @@ the call. The dynamic adjustment is then invisible to unwinding on every target
 and under every frame-pointer setting, and the frame record is what a
 frame-pointer chain walk expects too. Argument marshalling is unchanged
 (`split_register_and_stacked` feeds the same eight register slots and the
-16-byte-rounded spill area the inline version built).
+16-byte-rounded spill area the inline version built). Windows ARM64 keeps the
+inline-`asm!` shape: it unwinds through SEH metadata the compiler emits for its
+own frame-chained prologue, which already covers the adjustment.
 
 Validation:
 
@@ -59,13 +61,3 @@ Validation:
   caller holds a young object.
 - Claude Code (`cli_2.1.112.js`) under `PERRY_GC_SCHEDULE_SEED=1
   PERRY_GC_SCHEDULE_RATE=1` no longer dies at safepoint 4266.
-
-The issue's three unexamined leads, examined: `PERRY_GC_VERIFY_MARK`'s
-`marked->UNMARKED edges` on a copying minor are old-generation children that a
-MINOR legitimately leaves unmarked (a known false positive of that verifier,
-see #8770's ladder); `PERRY_GC_FROMSPACE_SCAN`'s `type=5 (Promise) +0 bare`
-offenders are the seven padding bytes after the one-byte `state` field, which
-`ptr::write(promise, Promise::new())` leaves holding recycled arena bits and
-which no rewrite descriptor ever reads (also a known scanner false positive);
-`PERRY_CONSERVATIVE_STACK_SCAN=1`'s segfault was not chased here (see the PR
-for what it does on the fixed binary).

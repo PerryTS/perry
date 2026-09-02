@@ -123,37 +123,29 @@ fn split_register_and_stacked(args: &[f64]) -> ([f64; 8], &[f64], usize) {
 // exactly what a frame-pointer chain walk expects.
 // `tests::the_unwinder_steps_through_a_trampoline_with_stacked_args` pins the
 // contract from inside a stacked-argument callee.
+//
+// The one target that keeps the inline-`asm!` shape is Windows ARM64, where
+// unwinding is SEH and its metadata comes from the compiler's own prologue —
+// see `call_all_f64_aarch64`'s Windows twin below.
 // ---------------------------------------------------------------------------
 
-/// The unwind directives inside the naked trampolines. DWARF CFI is what the
-/// Itanium unwinder — the GC's native-root walk and the exception transport on
-/// every ELF and Mach-O host — reads; COFF targets unwind through
-/// `.pdata`/`.xdata` instead, their assembler has no CFI region to put these
-/// in, and the runtime does not walk native frames there (shadow frames), so
-/// the directives are dropped and the frame-pointer prologue stays.
+/// The unwind directives inside the naked trampolines: DWARF CFI, which is what
+/// the Itanium unwinder — the GC's native-root walk and the exception transport
+/// on every ELF and Mach-O host — reads.
 #[cfg(all(
     not(target_os = "windows"),
-    any(
-        target_arch = "aarch64",
-        all(target_arch = "x86_64", not(target_os = "windows"))
-    )
+    any(target_arch = "aarch64", target_arch = "x86_64")
 ))]
 macro_rules! cfi {
     ($directive:literal) => {
         $directive
     };
 }
-#[cfg(all(target_os = "windows", target_arch = "aarch64"))]
-macro_rules! cfi {
-    ($directive:literal) => {
-        ""
-    };
-}
 
 /// AAPCS64: `x0` = callee, `x1` = the eight register args, `x2`/`x3` = the
 /// spilled args and their count, `x4` = the 16-byte-rounded spill area size.
 /// Register args go in `d0`–`d7`; args 9+ are copied to `[sp + i*8]` in order.
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_arch = "aarch64", not(target_os = "windows")))]
 #[unsafe(naked)]
 unsafe extern "C" fn call_all_f64_aarch64(
     func_ptr: usize,
@@ -198,6 +190,75 @@ unsafe extern "C" fn call_all_f64_aarch64(
         "ret",
         cfi!(".cfi_endproc"),
     )
+}
+
+/// Windows ARM64 keeps the previous shape: an `asm!` block inside an ordinary
+/// Rust function. Unwinding there is SEH (`js_throw` raises with
+/// `RaiseException`; the runtime walks no native frames — shadow frames), and
+/// SEH reads `.pdata`/`.xdata` unwind codes that the COMPILER emits for the
+/// prologue it generates — a frame-chained one on this ABI, so the dynamic
+/// `sp` adjustment below is already invisible to it. A naked function would
+/// have to hand-write those codes with nothing in this tree able to test
+/// them, and would be treated as a leaf until it did — the callee's `blr`
+/// has overwritten `x30`, so a throw through it could not find its handler.
+#[cfg(all(target_arch = "aarch64", target_os = "windows"))]
+#[inline(never)]
+unsafe extern "C" fn call_all_f64_aarch64(
+    func_ptr: usize,
+    reg: *const f64,
+    stacked: *const f64,
+    stacked_count: usize,
+    stack_bytes: usize,
+) -> f64 {
+    use core::arch::asm;
+
+    let reg: [f64; 8] = unsafe { *reg.cast::<[f64; 8]>() };
+    let ret: f64;
+    asm!(
+        // Stash the pre-adjust sp in a CALLEE-SAVED register (x20, declared as
+        // a clobber so the compiler saves/restores it around this asm): it
+        // survives the callee, unlike anything caller-saved.
+        "mov x20, sp",
+        "sub sp, sp, {stack_bytes}",
+        "mov {i}, xzr",
+        "cbz {cnt}, 3f",
+        "2:",
+        "ldr {tmp}, [{src}, {i}, lsl #3]",
+        "str {tmp}, [sp, {i}, lsl #3]",
+        "add {i}, {i}, #1",
+        "cmp {i}, {cnt}",
+        "b.lo 2b",
+        "3:",
+        "blr {func}",
+        "mov sp, x20",
+        func = in(reg) func_ptr,
+        src = in(reg) stacked,
+        cnt = in(reg) stacked_count,
+        stack_bytes = in(reg) stack_bytes,
+        i = out(reg) _,
+        tmp = out(reg) _,
+        out("x20") _,
+        inout("d0") reg[0] => ret,
+        inout("d1") reg[1] => _,
+        inout("d2") reg[2] => _,
+        inout("d3") reg[3] => _,
+        inout("d4") reg[4] => _,
+        inout("d5") reg[5] => _,
+        inout("d6") reg[6] => _,
+        inout("d7") reg[7] => _,
+        // Caller-saved registers the callee may clobber (AAPCS64): x0–x17,
+        // x30 (lr), and the caller-saved vector registers v16–v31.
+        lateout("x0") _, lateout("x1") _, lateout("x2") _, lateout("x3") _,
+        lateout("x4") _, lateout("x5") _, lateout("x6") _, lateout("x7") _,
+        lateout("x8") _, lateout("x9") _, lateout("x10") _, lateout("x11") _,
+        lateout("x12") _, lateout("x13") _, lateout("x14") _, lateout("x15") _,
+        lateout("x16") _, lateout("x17") _, lateout("x30") _,
+        lateout("v16") _, lateout("v17") _, lateout("v18") _, lateout("v19") _,
+        lateout("v20") _, lateout("v21") _, lateout("v22") _, lateout("v23") _,
+        lateout("v24") _, lateout("v25") _, lateout("v26") _, lateout("v27") _,
+        lateout("v28") _, lateout("v29") _, lateout("v30") _, lateout("v31") _,
+    );
+    ret
 }
 
 /// SysV x86-64: `rdi` = callee, `rsi` = the eight register args, `rdx`/`rcx` =
