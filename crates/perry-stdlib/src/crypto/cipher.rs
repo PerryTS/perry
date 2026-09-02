@@ -113,17 +113,20 @@ pub(super) fn gcm_ghash<C>(key: &[u8], aad: &[u8], ciphertext: &[u8]) -> Option<
 where
     C: aes::cipher::BlockEncrypt + aes::cipher::KeyInit,
 {
-    use ghash::universal_hash::{KeyInit as GHashKeyInit, UniversalHash};
+    use ghash::universal_hash::UniversalHash;
 
     let h = aes_encrypt_block::<C>(key, [0u8; 16])?;
-    let mut ghash = ghash::GHash::new(ghash::Key::from_slice(&h));
+    // ghash 0.6 deprecates Array::from_slice in favour of TryFrom; the block
+    // is a fixed [u8; 16], so the conversion cannot fail.
+    let ghash_key = ghash::Key::try_from(&h[..]).ok()?;
+    let mut ghash = ghash::GHash::new(&ghash_key);
     ghash.update_padded(aad);
     ghash.update_padded(ciphertext);
 
     let mut lengths = [0u8; 16];
     lengths[..8].copy_from_slice(&((aad.len() as u64).wrapping_mul(8)).to_be_bytes());
     lengths[8..].copy_from_slice(&((ciphertext.len() as u64).wrapping_mul(8)).to_be_bytes());
-    let length_block = ghash::Block::clone_from_slice(&lengths);
+    let length_block = ghash::Block::try_from(&lengths[..]).ok()?;
     ghash.update(std::slice::from_ref(&length_block));
 
     let tag = ghash.finalize();
