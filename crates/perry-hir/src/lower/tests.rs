@@ -1944,6 +1944,7 @@ fn unresolved_new_names_the_identifier_and_defers_to_a_runtime_global_lookup() {
 }
 
 mod capture_stash;
+mod mixin_parent_chain;
 
 /// `const masks = opts?.masks ?? null` must not be declared `Null`. The
 /// AST-level `??` rule used to answer the right operand's type whenever the
