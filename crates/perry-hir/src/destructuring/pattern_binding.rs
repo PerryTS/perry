@@ -347,6 +347,14 @@ pub(crate) fn lower_pattern_binding_into(
     match pat {
         ast::Pat::Ident(ident) => {
             let name = ident.id.sym.to_string();
+            // A destructured leaf is a fresh lexical binding just like a
+            // simple `let`/`const` declarator. Minified bundles routinely
+            // reuse short names, so hide any native-instance classification
+            // left by an unrelated earlier binding before lowering uses of
+            // this local. Otherwise `{ install: z }` can inherit a prior
+            // `z = childProcess.spawn(...)` tag and misroute `z.call(...)`
+            // through child_process native dispatch.
+            ctx.shadow_native_instance_if_present(&name);
             let ty = ident
                 .type_ann
                 .as_ref()
@@ -616,6 +624,11 @@ pub(crate) fn lower_pattern_binding_into(
                     ast::ObjectPatProp::Assign(assign) => {
                         // Shorthand { key } or { key = default }
                         let name = assign.key.sym.to_string();
+                        // This arm creates its leaf directly rather than
+                        // recursing through `Pat::Ident`, so apply the same
+                        // native-instance hygiene here as for keyed, array,
+                        // rest, and nested destructuring leaves.
+                        ctx.shadow_native_instance_if_present(&name);
                         static_keys.push(name.clone());
                         if source_is_global_this {
                             if let Some(class_name) = global_this_constructor_alias(&name) {
