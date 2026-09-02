@@ -1,0 +1,1 @@
+test: the versioned indexed-loop callback-deopt fixture now links Perry's shipped `panic=abort` runtime, so its ordinary and forced-evacuation GC paths run on Linux again instead of aborting behind an ignore (#9482).
