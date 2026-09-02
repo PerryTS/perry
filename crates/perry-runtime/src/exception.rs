@@ -672,6 +672,58 @@ fn emit_uncaught_backtrace() {
     }
 }
 
+/// Render the line `print_uncaught` emits for a native `ErrorHeader`.
+///
+/// Extracted so the ORDER of the reads is testable, which is the whole point
+/// of this function existing (#9486). Node formats an uncaught throw as
+/// `<Name>: <message>` followed by the frames and no `Uncaught exception:`
+/// prefix (#616), and `Error.stack` already starts with that head, so the
+/// stack IS the report; the head is rebuilt only when there is no stack.
+///
+/// # Every read off `eh` happens BEFORE the stack is materialised
+///
+/// `js_error_get_stack` allocates: since #9486 the string is built on first
+/// read, not at construction. That allocation is a GC point, and an
+/// evacuating scavenge moves the error out from under `eh` — a plain Rust
+/// local, which perry's collector neither scans nor pins, so afterwards it
+/// names from-space. Reading `(*eh).message` there to resolve the `ERR_*`
+/// code is an unsound read whose result is whatever the collector left in the
+/// vacated cell, and the address it yields is then used as a side-table key.
+/// Reading everything first costs nothing and needs no root, which is why
+/// this is an ordering fix rather than a `RuntimeHandleScope`.
+///
+/// (Before #9486 the stack came from a plain field load, so no GC point
+/// existed between the reads at all.)
+pub(crate) unsafe fn uncaught_native_error_report(eh: *mut crate::error::ErrorHeader) -> String {
+    let name_str = string_header_to_string((*eh).name);
+    let msg_str = string_header_to_string((*eh).message);
+    let code = crate::node_submodules::error_code_for_message((*eh).message);
+    // Nothing may read `eh` past this line.
+    let stack_str = string_header_to_string(crate::error::js_error_get_stack(eh));
+
+    let name_display = if name_str.is_empty() {
+        "Error"
+    } else {
+        &name_str
+    };
+    if !stack_str.is_empty() {
+        match code {
+            Some(code) => {
+                let frames = stack_str
+                    .split_once('\n')
+                    .map(|(_, frames)| format!("\n{frames}"))
+                    .unwrap_or_default();
+                format!("{name_display} [{code}]: {msg_str}{frames}")
+            }
+            None => stack_str,
+        }
+    } else if msg_str.is_empty() {
+        name_display.to_string()
+    } else {
+        format!("{name_display}: {msg_str}")
+    }
+}
+
 /// Best-effort display of a thrown value for uncaught-exception reporting.
 /// Matches Node semantics roughly: Errors print `name: message` + stack,
 /// regular objects probe for `.message`/`.stack`, everything else goes
@@ -690,48 +742,9 @@ pub(crate) fn print_uncaught(value: f64) {
             // program declares (`class_id == 2 == OBJECT_TYPE_ERROR`) as an
             // Error and print `name`/`message`/`stack` out of its field slots.
             if unsafe { crate::error::ptr_is_native_error(ptr) } {
-                // ErrorHeader: object_type, error_kind, message, name, stack, cause, errors
-                let eh = ptr as *const crate::error::ErrorHeader;
-                let name_str = unsafe { string_header_to_string((*eh).name) };
-                let msg_str = unsafe { string_header_to_string((*eh).message) };
-                // #9486: through the accessor, never off the field — the
-                // field is null until the first read materialises it.
-                let stack_str = unsafe {
-                    string_header_to_string(crate::error::js_error_get_stack(
-                        ptr as *mut crate::error::ErrorHeader,
-                    ))
-                };
-                let name_display = if name_str.is_empty() {
-                    "Error"
-                } else {
-                    &name_str
-                };
-                // Issue #616: Node formats an uncaught throw as
-                //   <Name>: <message>
-                //       at <frame>
-                //       ...
-                // (no `Uncaught exception:` prefix). Perry's `stack` field
-                // already starts with `<Name>: <message>` per Error.stack
-                // convention, so emit just the stack — matches Node format
-                // for this header. When the stack is empty (defensive), fall
-                // back to the bare `<Name>: <message>` line.
-                if !stack_str.is_empty() {
-                    if let Some(code) =
-                        crate::node_submodules::error_code_for_message(unsafe { (*eh).message })
-                    {
-                        let frames = stack_str
-                            .split_once('\n')
-                            .map(|(_, frames)| format!("\n{frames}"))
-                            .unwrap_or_default();
-                        eprintln!("{name_display} [{code}]: {msg_str}{frames}");
-                    } else {
-                        eprintln!("{}", stack_str);
-                    }
-                } else if msg_str.is_empty() {
-                    eprintln!("{}", name_display);
-                } else {
-                    eprintln!("{}: {}", name_display, msg_str);
-                }
+                eprintln!("{}", unsafe {
+                    uncaught_native_error_report(ptr as *mut crate::error::ErrorHeader)
+                });
                 return;
             }
             if unsafe {
@@ -967,5 +980,53 @@ mod tests {
         });
         assert_eq!(outcome, Err(2.0));
         assert_eq!(current_try_depth(), base);
+    }
+
+    /// #9486: the extracted uncaught report carries the `ERR_*` code and the
+    /// frames, in the shape `print_uncaught` emits.
+    ///
+    /// This function exists as a separate item so the ORDER of its reads is
+    /// reviewable: `js_error_get_stack` allocates now, so every read off the
+    /// raw `eh` has to happen before it. That ordering is held by the
+    /// function's structure and its doc comment, NOT by this test — the
+    /// harness can force a collection at a point of its own choosing
+    /// (`gc_collect_minor`) but cannot schedule one inside
+    /// `js_string_from_bytes`, and a test that cannot create the racing
+    /// collection cannot assert the race is handled. Two attempts at one were
+    /// discarded rather than shipped green-but-vacuous: the first suppressed
+    /// GC triggers so nothing moved at all, and the second moved the error but
+    /// asserted a rekey that does not happen (see below).
+    ///
+    /// What this does pin is the report itself: the code branch, the frame
+    /// tail, and the `<Name> [<code>]: <message>` head.
+    ///
+    /// Adjacent finding, NOT fixed here (pre-existing, unrelated to #9486):
+    /// `register_error_code_pub` / `error_code_for_message` key on the
+    /// MESSAGE `StringHeader`'s address, while the `GcMoveHookKind::ErrorSideTables`
+    /// rekey in `node_submodules/diagnostics_gc.rs` rekeys by the ERROR's
+    /// address. Nothing rekeys the message key, so an error's `ERR_*` code is
+    /// dropped as soon as its message string is relocated — reproduced with a
+    /// forced minor collection while writing this test.
+    #[test]
+    fn the_uncaught_report_carries_the_error_code_and_the_frames() {
+        unsafe {
+            let msg = crate::string::js_string_from_bytes(b"boom".as_ptr(), 4);
+            let err = crate::error::js_error_new_with_message(msg);
+            crate::node_submodules::register_error_code_pub((*err).message, "ERR_TEST_9486");
+
+            let report = uncaught_native_error_report(err);
+
+            let (head, frames) = report
+                .split_once('\n')
+                .unwrap_or_else(|| panic!("the report must carry frames; got {report:?}"));
+            assert_eq!(
+                head, "Error [ERR_TEST_9486]: boom",
+                "node's head for a coded error is `<Name> [<code>]: <message>`"
+            );
+            assert!(
+                frames.contains("    at "),
+                "the frame tail must survive the code branch; got {frames:?}"
+            );
+        }
     }
 }

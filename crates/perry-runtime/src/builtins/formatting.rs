@@ -721,8 +721,16 @@ unsafe fn format_error_headline(error_ptr: *const crate::error::ErrorHeader) -> 
     }
 }
 
-unsafe fn format_error_stack_frame(error_ptr: *const crate::error::ErrorHeader) -> Option<String> {
-    let stack = string_header_to_string((*error_ptr).stack, "");
+/// The one stack line `util.inspect` shows under an error's headline.
+///
+/// #9486: through the accessor, never off the field — `alloc_error` leaves
+/// `stack` null and the first read materialises it, so a direct field read
+/// here made `console.log(err)` print no frame at all. It is called from
+/// `format_error_value` as the LAST use of `error_ptr` on purpose: the
+/// accessor allocates, and a moving scavenge during that allocation would
+/// leave any later read of `error_ptr` pointing at from-space.
+unsafe fn format_error_stack_frame(error_ptr: *mut crate::error::ErrorHeader) -> Option<String> {
+    let stack = string_header_to_string(crate::error::js_error_get_stack(error_ptr), "");
     stack
         .lines()
         .skip(1)
@@ -780,7 +788,7 @@ unsafe fn format_error_value(error_ptr: *const crate::error::ErrorHeader, depth:
     }
 
     let mut out = headline;
-    if let Some(frame) = format_error_stack_frame(error_ptr) {
+    if let Some(frame) = format_error_stack_frame(error_ptr as *mut _) {
         out.push('\n');
         out.push_str(&frame);
         out.push_str(" {");

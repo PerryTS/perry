@@ -35,6 +35,13 @@ fn target_debug_dir() -> PathBuf {
         .join("debug")
 }
 
+/// `perry-runtime` is an rlib; the archive the compiled fixture links against
+/// comes from the `perry-runtime-static` staticlib wrapper, so that is the
+/// package to build. Building the rlib instead leaves `PERRY_RUNTIME_DIR`
+/// pointing at a directory with no `libperry_runtime.a` (clean tree: the
+/// fixture fails to link) or a stale one (reused target dir: the fixture
+/// links a runtime older than the compiler that emitted its object code, and
+/// perry's own source-hash check rejects the pair).
 fn ensure_runtime_archive() {
     static BUILD_RUNTIME: Once = Once::new();
     BUILD_RUNTIME.call_once(|| {
@@ -43,12 +50,12 @@ fn ensure_runtime_archive() {
             .current_dir(workspace_root())
             .arg("build")
             .arg("-p")
-            .arg("perry-runtime")
+            .arg("perry-runtime-static")
             .output()
-            .expect("run cargo build -p perry-runtime");
+            .expect("run cargo build -p perry-runtime-static");
         assert!(
             build.status.success(),
-            "cargo build -p perry-runtime failed\nstdout:\n{}\nstderr:\n{}",
+            "cargo build -p perry-runtime-static failed\nstdout:\n{}\nstderr:\n{}",
             String::from_utf8_lossy(&build.stdout),
             String::from_utf8_lossy(&build.stderr)
         );

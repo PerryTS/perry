@@ -1103,7 +1103,9 @@ mod tests {
                 perry_ffi::copy_string_from_raw(message),
                 "Invalid sharp handle"
             );
-            assert!(!(*error).stack.is_null());
+            // #9486: through the accessor — the field is null until the
+            // first read materialises the string.
+            assert!(!perry_runtime::error::js_error_get_stack(error).is_null());
         }
     }
 

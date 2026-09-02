@@ -1828,7 +1828,9 @@ mod tests {
                 runtime_string((*error).message),
                 "Invalid connection handle"
             );
-            let stack = runtime_string((*error).stack);
+            // #9486: through the accessor — the field is null until the
+            // first read materialises the string.
+            let stack = runtime_string(perry_runtime::error::js_error_get_stack(error));
             assert!(stack.contains("Error: Invalid connection handle"));
         }
     }

@@ -43,7 +43,10 @@
 
   **Frames are named but not positioned.** A `file:line:col` needs a
   per-return-address line table, an O(instructions) artifact against this
-  one's O(functions); a resolved frame renders as `    at <name>`. Frames the
+  one's O(functions); a resolved frame renders as `    at <name> (<anonymous>)`
+  — V8's own spelling for a frame whose script position is unknown, which is
+  also the `name (location)` shape the stack-parsing libraries in real bundles
+  read a name out of. Frames the
   resolver cannot attribute to a registered JS function — the runtime's own,
   between `new Error` and the throwing code — are elided rather than printed
   as bare addresses, the way node elides its internals; a capture in which
