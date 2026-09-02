@@ -37,6 +37,10 @@ const BUILD_CACHE_ENV_VARS: &[&str] = &[
     // a different backend means different object bytes.
     "PERRY_LLVM_INPROCESS",
     "PERRY_WRITE_BARRIERS",
+    // #9342 kill switch: `PERRY_U8_INLINE_READ=0` removes the inline u8-read
+    // lane from the emitted code, so an object built with the lane must not be
+    // served from cache to a build that turned it off (and vice versa).
+    "PERRY_U8_INLINE_READ",
     "PERRY_SHADOW_STACK",
     "PERRY_RS4GC",
     // `-Os` vs `-O3` for every native module.
