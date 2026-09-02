@@ -25,6 +25,7 @@ pub(crate) mod lower_array_method;
 pub(crate) mod lower_call;
 pub(crate) mod lower_conditional;
 pub(crate) mod lower_string_concat;
+pub(crate) mod concat_site_cache;
 pub(crate) mod lower_string_method;
 pub mod module;
 pub mod nanbox;

@@ -567,6 +567,13 @@ fn coerce_concat_body(
                 &[(DOUBLE, l_box), (DOUBLE, r_box)],
             ));
         }
+        // Literal prefix + proven-small value: the per-site table keeps the
+        // hot key off the runtime entirely (`concat_site_cache.rs`).
+        if let Some(value) =
+            crate::concat_site_cache::try_lower_concat_site_cached(ctx, left, right, l_box, r_box)?
+        {
+            return Ok(value);
+        }
         // Issue #214: SSO-safe unbox; repsel Phase 3a: inline `bitcast+and`
         // for proven-heap operands (string literals — the `"user_" + i`
         // shape) and tag-dispatch for canonical-Str locals.

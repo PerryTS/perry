@@ -105,10 +105,11 @@ struct GuardedLevel {
     extreme: i64,
 }
 
+/// A closed integer interval a local is proven never to leave.
 #[derive(Clone, Copy, Debug)]
-struct IntInterval {
-    lo: i64,
-    hi: i64,
+pub(crate) struct IntInterval {
+    pub(crate) lo: i64,
+    pub(crate) hi: i64,
 }
 
 /// Analysis state, accumulated over one whole function body.
@@ -216,6 +217,48 @@ pub fn collect_reassociable_f64_accumulators(
     stmts: &[Stmt],
     compile_time_constants: &HashMap<u32, f64>,
 ) -> HashSet<u32> {
+    let st = analysed_state(stmts, compile_time_constants);
+    let induction_intervals = induction_intervals(&st);
+    collect_bounded_accumulator_locals(
+        stmts,
+        &st,
+        &induction_intervals,
+        AccumulatorMode::ReassocF64,
+    )
+}
+
+/// What the induction proof knows about integer values, for a consumer that
+/// needs the numbers rather than the i32 verdict: `concat_site_cache.rs`
+/// gives a `"literal" + value` site a per-site table only when the value is
+/// proven small, because the table's inline gate is pure cost on a value
+/// that sweeps past it.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct LoopInductionFacts {
+    /// Every admissible counter's closed interval, both endpoints in i32.
+    pub(crate) intervals: HashMap<u32, IntInterval>,
+    /// Locals that are integer constants: module-level compile-time
+    /// constants plus this body's never-written `const`/`let` bindings with
+    /// an integer-literal initialiser — the same set the loop guard `v < B`
+    /// accepts as `B`.
+    pub(crate) integer_constants: HashMap<u32, i64>,
+}
+
+pub fn collect_loop_induction_facts(
+    stmts: &[Stmt],
+    compile_time_constants: &HashMap<u32, f64>,
+) -> LoopInductionFacts {
+    let st = analysed_state(stmts, compile_time_constants);
+    let intervals = induction_intervals(&st);
+    let mut integer_constants = st.module_consts.clone();
+    integer_constants.extend(st.const_ints.iter().map(|(&id, &v)| (id, v)));
+    LoopInductionFacts {
+        intervals,
+        integer_constants,
+    }
+}
+
+/// Run the whole-function walk once; both interval consumers start here.
+fn analysed_state(stmts: &[Stmt], compile_time_constants: &HashMap<u32, f64>) -> State {
     let mut st = State::default();
     st.module_consts = compile_time_constants
         .iter()
@@ -228,9 +271,12 @@ pub fn collect_reassociable_f64_accumulators(
     collect_const_ints(stmts, &mut st);
     let empty: HashMap<u32, GuardedLevel> = HashMap::new();
     walk_stmts(stmts, &empty, &mut st);
+    st
+}
 
-    let induction_intervals: HashMap<u32, IntInterval> = st
-        .bounds
+/// Every admissible local's closed interval, both endpoints inside i32.
+fn induction_intervals(st: &State) -> HashMap<u32, IntInterval> {
+    st.bounds
         .iter()
         .filter_map(|(&id, bound)| {
             if st.disqualified.contains(&id) || st.bad_decl.contains(&id) {
@@ -249,14 +295,7 @@ pub fn collect_reassociable_f64_accumulators(
             };
             (fits_i32(interval.lo) && fits_i32(interval.hi)).then_some((id, interval))
         })
-        .collect();
-
-    collect_bounded_accumulator_locals(
-        stmts,
-        &st,
-        &induction_intervals,
-        AccumulatorMode::ReassocF64,
-    )
+        .collect()
 }
 
 fn fits_i32(n: i64) -> bool {

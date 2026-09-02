@@ -106,6 +106,7 @@ mod base64_codec;
 mod char_ops;
 mod compare;
 pub(crate) mod concat;
+pub(crate) mod concat_site;
 mod format;
 mod html;
 mod intern;
@@ -163,6 +164,7 @@ pub use concat::{
     js_string_concat_chain, js_string_concat_value, js_value_add_string, js_value_concat_string,
     scan_concat_memo_roots, scan_concat_memo_roots_mut,
 };
+pub use concat_site::{js_string_concat_site_value, CONCAT_SITE_SLOTS};
 pub(crate) use format::fix_exponent_format;
 pub(crate) use format::js_format_f64;
 pub use format::{
