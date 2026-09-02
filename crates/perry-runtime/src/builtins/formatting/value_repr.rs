@@ -179,6 +179,31 @@ pub(crate) fn entry_is_numeric(elem: f64, rendered: &str) -> bool {
     jv.is_number()
 }
 
+/// Node's `showHidden` tail for an array body. An array's own `length` is a
+/// non-enumerable property, so `util.inspect(a, { showHidden: true })` — which
+/// is exactly what `%o` is — prints it after the elements as `[length]: N`, on
+/// EVERY array and at every depth (#9463, measured against node 26.5.1:
+/// `util.format("%o", [1,2,3])` → `[ 1, 2, 3, [length]: 3 ]`, and `%o` on `[]`
+/// → `[ [length]: 0 ]` where `%O` gives a bare `[]`).
+pub(crate) fn hidden_length_entry(length: usize) -> ArrayEntry {
+    ArrayEntry::new(format!("[length]: {}", length), false)
+}
+
+/// Lay out an array body that carries the `showHidden` tail.
+///
+/// Node's `groupArrayElements` column layout stops applying once a non-index
+/// entry is appended — measured: `%o` on `[1..12]` stays on ONE line where the
+/// same array under `%O` breaks into right-aligned columns — so the single-line
+/// form is used whenever it fits inside the break length.
+pub(crate) fn render_array_body_with_hidden(parts: &[ArrayEntry]) -> String {
+    let texts: Vec<&str> = parts.iter().map(|p| p.text.as_str()).collect();
+    let inner = texts.join(", ");
+    if inner.len() + 4 <= 76 {
+        return format!("[ {} ]", inner);
+    }
+    join_rows(texts.iter().map(|text| (*text).to_string()))
+}
+
 /// Lay out rendered entries as Node's `util.inspect` array body.
 ///
 /// The single-line / multi-line decision counts ENTRIES, not array slots:
@@ -325,6 +350,35 @@ mod tests {
         assert_eq!(parts.len(), 1);
         // Seven SLOTS but one ENTRY, so Node keeps it on one line.
         assert_eq!(render_array_body(&parts, true), "[ <7 empty items> ]");
+    }
+
+    /// #9463: `%o` is `util.inspect(v, { showHidden: true, depth: 4 })`, and an
+    /// array's own `length` is a non-enumerable property node prints after the
+    /// elements. Measured against node 26.5.1.
+    #[test]
+    fn the_show_hidden_tail_is_nodes_length_entry() {
+        let parts = vec![entry("1", true), entry("2", true), hidden_length_entry(2)];
+        assert_eq!(
+            render_array_body_with_hidden(&parts),
+            "[ 1, 2, [length]: 2 ]"
+        );
+        // An empty array still carries it: node's `%o` on `[]` is
+        // `[ [length]: 0 ]` where `%O` is a bare `[]`.
+        assert_eq!(
+            render_array_body_with_hidden(&[hidden_length_entry(0)]),
+            "[ [length]: 0 ]"
+        );
+        // The tail is not numeric, so it never joins the right-aligned column
+        // layout — and node's grouping stops applying once it is present, which
+        // is why more than six entries still print on one line.
+        let many: Vec<ArrayEntry> = (1..=8)
+            .map(|n: u32| ArrayEntry::new(n.to_string(), true))
+            .chain(std::iter::once(hidden_length_entry(8)))
+            .collect();
+        assert_eq!(
+            render_array_body_with_hidden(&many),
+            "[ 1, 2, 3, 4, 5, 6, 7, 8, [length]: 8 ]"
+        );
     }
 
     #[test]

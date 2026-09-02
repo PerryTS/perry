@@ -971,7 +971,15 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                     let maybe_arr = ptr;
                     let length = (*maybe_arr).length as usize;
                     if length == 0 {
-                        return inspect_finish_circular(ptr as usize, "[]".to_string());
+                        // #9463: under `showHidden` even an empty array carries
+                        // its own non-enumerable `length` — node's `%o` on `[]`
+                        // is `[ [length]: 0 ]`, not `[]`.
+                        let empty = if inspect_show_hidden() {
+                            "[ [length]: 0 ]".to_string()
+                        } else {
+                            "[]".to_string()
+                        };
+                        return inspect_finish_circular(ptr as usize, empty);
                     }
                     let data_ptr = (maybe_arr as *const u8)
                         .add(std::mem::size_of::<crate::array::ArrayHeader>())
@@ -981,18 +989,27 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                     // `new Array(3)` as `[ NaN, NaN, NaN ]`. Runs of holes are
                     // ONE entry (`<N empty items>`), which is also why the
                     // layout below counts entries rather than slots.
-                    let parts = value_repr::array_entries_with_holes(data_ptr, length, |elem| {
-                        let elem_jsval = JSValue::from_bits(elem.to_bits());
-                        // Quote string elements like Node's util.inspect: 'hello'
-                        if elem_jsval.is_any_string() {
-                            let s = format_jsvalue(elem, depth + 1);
-                            return value_repr::ArrayEntry::new(format!("'{}'", s), false);
-                        }
-                        let rendered = format_jsvalue(elem, depth + 1);
-                        let numeric = value_repr::entry_is_numeric(elem, &rendered);
-                        value_repr::ArrayEntry::new(rendered, numeric)
-                    });
-                    let body_str = value_repr::render_array_body(&parts, inspect_compact_enabled());
+                    let mut parts =
+                        value_repr::array_entries_with_holes(data_ptr, length, |elem| {
+                            let elem_jsval = JSValue::from_bits(elem.to_bits());
+                            // Quote string elements like Node's util.inspect: 'hello'
+                            if elem_jsval.is_any_string() {
+                                let s = format_jsvalue(elem, depth + 1);
+                                return value_repr::ArrayEntry::new(format!("'{}'", s), false);
+                            }
+                            let rendered = format_jsvalue(elem, depth + 1);
+                            let numeric = value_repr::entry_is_numeric(elem, &rendered);
+                            value_repr::ArrayEntry::new(rendered, numeric)
+                        });
+                    let body_str = if inspect_show_hidden() {
+                        // #9463: `%o` is `util.inspect(v, { showHidden: true,
+                        // depth: 4 })`; the array's own `length` is part of that
+                        // surface.
+                        parts.push(value_repr::hidden_length_entry(length));
+                        value_repr::render_array_body_with_hidden(&parts)
+                    } else {
+                        value_repr::render_array_body(&parts, inspect_compact_enabled())
+                    };
                     inspect_finish_circular(ptr as usize, body_str)
                 } else if gc_type == crate::gc::GC_TYPE_OBJECT {
                     // Object — check for keys_array. Cycle check FIRST so the
@@ -1679,13 +1696,19 @@ fn format_jsvalue_for_json(value: f64, depth: usize) -> String {
                         // array reached as an object FIELD, so without it
                         // `{ h: new Array(3) }` still said
                         // `{ h: [ NaN, NaN, NaN ] }`.
-                        let parts =
+                        let mut parts =
                             value_repr::array_entries_with_holes(data_ptr, length, |elem| {
                                 value_repr::ArrayEntry::new(
                                     format_jsvalue_for_json(elem, depth + 1),
                                     false,
                                 )
                             });
+                        // #9463: the `showHidden` tail belongs on nested arrays
+                        // too — node's `%o` on `{ a: [1, 2] }` is
+                        // `{ a: [ 1, 2, [length]: 2 ] }`.
+                        if inspect_show_hidden() {
+                            parts.push(value_repr::hidden_length_entry(length));
+                        }
                         // Node formats empty arrays as `[]` and non-empty
                         // arrays with a space inside the brackets:
                         // `[ 1, 2, 3 ]`. Match byte-for-byte.

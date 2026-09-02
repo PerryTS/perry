@@ -118,6 +118,86 @@ unsafe fn util_format_json_object_has_cycle(ptr: *const u8, stack: &mut Vec<usiz
 /// unquoted (the `console.log(str)` bare-string behavior), so calling it
 /// directly for `%o`/`%O` diverged from Node, which routes the value
 /// through `util.inspect` (strings quoted at every depth).
+/// Node's `%s` rule for objects (`lib/internal/util/inspect.js`): a value that
+/// is not an object goes through `String(value)`, and an object does too —
+/// *unless* its `toString` is a built-in one, in which case node INSPECTS it
+/// with `{ depth: 0 }`. `hasBuiltInToString` is the check node uses; the
+/// practical reading is "an object with no USER-defined `toString` inspects",
+/// which is why `util.format("%s", [1, , 3])` is `[ 1, <1 empty item>, 3 ]` and
+/// not `1,,3` (#9463).
+///
+/// Perry's object model has no discoverable `Object.prototype.toString`
+/// (documented in `js_jsvalue_to_string`), so "the name resolves to a callable
+/// through the prototype chain" IS "user-defined" here — an object literal's
+/// own `toString`, or one declared on a user class's prototype. Arrays, Maps
+/// and Sets carry no reachable `toString` in this model and always inspect.
+///
+/// Deliberately NOT included, each a separate pre-existing divergence: a Date
+/// (node inspects to the ISO form, perry keeps the `toString` calendar form),
+/// an Error (node's `%s` prints the stack) and a class ref (#9468 /
+/// `value/to_string.rs:1042`). Those are not `GC_TYPE_OBJECT` and keep the
+/// `String()` route.
+unsafe fn util_format_s_inspects(val: f64) -> bool {
+    let jv = crate::value::JSValue::from_bits(val.to_bits());
+    if !jv.is_pointer() {
+        return false;
+    }
+    let addr = jv.as_pointer::<u8>() as usize;
+    if crate::value::addr_class::is_handle_band(addr)
+        || crate::symbol::is_registered_symbol(addr)
+        || crate::buffer::is_registered_buffer(addr)
+        || crate::typedarray::lookup_typed_array_kind(addr).is_some()
+    {
+        return false;
+    }
+    // `try_read_gc_header` is the audited classifier: it rejects the handle
+    // bands and anything that is not a real managed header, so no hand-rolled
+    // address floor is needed (and the addr-class ratchet forbids one).
+    let Some(header) = crate::value::addr_class::try_read_gc_header(addr) else {
+        return false;
+    };
+    match header.obj_type {
+        crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_MAP | crate::gc::GC_TYPE_SET => true,
+        crate::gc::GC_TYPE_OBJECT => !object_has_a_user_to_string(val),
+        _ => false,
+    }
+}
+
+/// `Get(value, "toString")` without invoking it, then node's
+/// `hasBuiltInToString` question: is what came back a USER function, or a
+/// built-in?
+///
+/// "Resolves to a callable" is NOT the discriminator, which is the trap here:
+/// perry installs `Object.prototype.toString` as a real, discoverable closure
+/// (`install_proto_method`), so EVERY ordinary object resolves one and a
+/// callable test alone answers "user-defined" for `{ a: 1 }`. The
+/// discriminator is WHICH closure — comparing the resolved `func_ptr` against
+/// the built-in thunk is exactly node's built-in test, and it stays right for
+/// `obj.toString = Object.prototype.toString`, which node also inspects.
+///
+/// The lookup walks the prototype chain, so a user class's `toString` counts
+/// (`String(new WithToString())` resolves through this same helper today).
+/// Rooted across the key allocation: `js_string_from_bytes` can collect and
+/// move the receiver.
+unsafe fn object_has_a_user_to_string(val: f64) -> bool {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(val);
+    let key = crate::string::js_string_from_bytes(b"toString".as_ptr(), 8);
+    let obj = (receiver.get_nanbox_f64().to_bits() & crate::value::POINTER_MASK)
+        as *const crate::object::ObjectHeader;
+    let method = crate::object::js_object_get_field_by_name_f64(obj, key);
+    let bits = method.to_bits();
+    if (bits & 0xFFFF_0000_0000_0000) != crate::value::POINTER_TAG {
+        return false;
+    }
+    let addr = (bits & crate::value::POINTER_MASK) as usize;
+    if !crate::closure::is_closure_ptr(addr) {
+        return false;
+    }
+    let closure = addr as *const crate::closure::ClosureHeader;
+    (*closure).func_ptr != crate::object::object_prototype_to_string_thunk as *const u8
+}
+
 fn inspect_format_arg(val: f64) -> String {
     let jv = crate::value::JSValue::from_bits(val.to_bits());
     if jv.is_any_string() {
@@ -236,7 +316,15 @@ pub extern "C" fn js_util_format(arr_ptr: *const crate::array::ArrayHeader) -> f
             let jv = JSValue::from_bits(val.to_bits());
             match spec {
                 b's' => {
-                    out.push_str(&jsvalue_as_owned_string(val));
+                    if util_format_s_inspects(val) {
+                        // Node: `inspect(value, { …opts, depth: 0,
+                        // colors: false, compact: 3 })` — note depth 0, so a
+                        // nested object collapses to `[Object]` (#9463).
+                        let _depth_guard = InspectDepthLimitGuard::new(0);
+                        out.push_str(&format_jsvalue(val, 0));
+                    } else {
+                        out.push_str(&jsvalue_as_owned_string(val));
+                    }
                 }
                 b'd' => {
                     // Node's `%d` uses Number(value), except BigInt keeps the
@@ -455,4 +543,77 @@ fn inspect_bool_option(options: f64, default_options: f64, name: &str) -> Option
     unsafe { crate::builtins::console::decode_dir_bool_option(options, name) }.or_else(|| unsafe {
         crate::builtins::console::decode_dir_bool_option(default_options, name)
     })
+}
+
+#[cfg(test)]
+mod s_placeholder_policy_tests {
+    use super::*;
+
+    fn boxed(ptr: *mut crate::object::ObjectHeader) -> f64 {
+        crate::value::js_nanbox_pointer(ptr as i64)
+    }
+
+    /// #9463: which values `%s` inspects instead of `String()`-coercing.
+    #[test]
+    fn only_objects_without_a_user_to_string_inspect() {
+        let _global = crate::gc::global_side_table_test_lock();
+        unsafe {
+            // Primitives never inspect.
+            assert!(!util_format_s_inspects(42.0));
+            assert!(!util_format_s_inspects(f64::from_bits(
+                crate::value::TAG_UNDEFINED
+            )));
+            assert!(!util_format_s_inspects(f64::from_bits(
+                crate::value::TAG_NULL
+            )));
+
+            let array = crate::array::js_array_alloc(2);
+            let array = crate::array::js_array_push_f64(array, 1.0);
+            assert!(util_format_s_inspects(crate::value::js_nanbox_pointer(
+                array as i64
+            )));
+
+            let map = crate::map::js_map_alloc(2);
+            crate::map::js_map_set(map, 1.0, 2.0);
+            assert!(util_format_s_inspects(crate::value::js_nanbox_pointer(
+                map as i64
+            )));
+
+            let set = crate::set::js_set_alloc(2);
+            crate::set::js_set_add(set, 1.0);
+            assert!(util_format_s_inspects(crate::value::js_nanbox_pointer(
+                set as i64
+            )));
+
+            // A plain object's `toString` resolves to the built-in
+            // `Object.prototype.toString` closure, which is what makes the
+            // "resolves to a callable" test wrong — node inspects this.
+            let plain = crate::object::js_object_alloc(0, 1);
+            let key = crate::string::js_string_from_bytes(b"a".as_ptr(), 1);
+            crate::object::js_object_set_field_by_name(plain, key, 1.0);
+            assert!(
+                util_format_s_inspects(boxed(plain)),
+                "a plain object must inspect"
+            );
+
+            // …and an OWN `toString` closure flips it back to `String(value)`.
+            // This is the pair that fails if the built-in thunk comparison is
+            // replaced by a bare callable test in either direction.
+            let custom = crate::object::js_object_alloc(0, 1);
+            let to_string_key = crate::string::js_string_from_bytes(b"toString".as_ptr(), 8);
+            let user_fn = crate::closure::js_closure_alloc(
+                crate::object::object_prototype_value_of_thunk as *const u8,
+                0,
+            );
+            crate::object::js_object_set_field_by_name(
+                custom,
+                to_string_key,
+                crate::value::js_nanbox_pointer(user_fn as i64),
+            );
+            assert!(
+                !util_format_s_inspects(boxed(custom)),
+                "an own non-builtin `toString` must keep String(value)"
+            );
+        }
+    }
 }
