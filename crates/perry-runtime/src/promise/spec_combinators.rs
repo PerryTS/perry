@@ -297,10 +297,11 @@ fn call_with_this(func: f64, this_arg: f64, args: &[f64]) -> Result<f64, f64> {
     } else {
         (args.as_ptr(), args.len())
     };
-    let prev = crate::object::js_implicit_this_set(this_arg);
+    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+    let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(this_arg));
     let result =
         combinator_catch_js(|| unsafe { crate::closure::js_native_call_value(func, ptr, len) });
-    crate::object::js_implicit_this_set(prev);
+    crate::object::js_implicit_this_set(prev.get_nanbox_f64());
     result
 }
 

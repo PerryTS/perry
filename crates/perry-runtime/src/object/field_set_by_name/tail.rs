@@ -125,9 +125,11 @@ pub(crate) fn set_field_by_name_object_tail(
                             as *const crate::closure::ClosureHeader;
                         if !closure.is_null() {
                             let receiver = crate::value::js_nanbox_pointer(obj as i64);
-                            let previous_this = super::js_implicit_this_set(receiver);
+                            let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+                            let previous_this =
+                                this_scope.root_nanbox_f64(super::js_implicit_this_set(receiver));
                             crate::closure::js_closure_call1(closure, value);
-                            super::js_implicit_this_set(previous_this);
+                            super::js_implicit_this_set(previous_this.get_nanbox_f64());
                         }
                     } else {
                         crate::error::throw_immutable_write(0, name);
@@ -686,9 +688,11 @@ pub(crate) fn set_field_by_name_object_tail(
                             as *const crate::closure::ClosureHeader;
                         if !closure.is_null() {
                             let receiver = crate::value::js_nanbox_pointer(obj as i64);
-                            let previous_this = super::js_implicit_this_set(receiver);
+                            let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+                            let previous_this =
+                                this_scope.root_nanbox_f64(super::js_implicit_this_set(receiver));
                             crate::closure::js_closure_call1(closure, value);
-                            super::js_implicit_this_set(previous_this);
+                            super::js_implicit_this_set(previous_this.get_nanbox_f64());
                         }
                     } else {
                         crate::error::throw_immutable_write(0, k);

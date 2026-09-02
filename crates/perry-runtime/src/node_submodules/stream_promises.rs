@@ -442,9 +442,10 @@ fn invoke_destination_method(destination: f64, method: &[u8], args: &[f64]) -> f
     let Some(func) = get_object_property(destination, method) else {
         return undefined_value();
     };
-    let prev_this = crate::object::js_implicit_this_set(destination);
+    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+    let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(destination));
     let result = unsafe { crate::closure::js_native_call_value(func, args.as_ptr(), args.len()) };
-    crate::object::js_implicit_this_set(prev_this);
+    crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
     result
 }
 

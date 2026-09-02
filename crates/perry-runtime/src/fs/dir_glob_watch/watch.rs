@@ -518,11 +518,14 @@ fn emit_listener0(object_value: f64, callback: f64) {
     if cb.is_null() {
         return;
     }
-    let prev_this = crate::object::js_implicit_this_set(object_handle.get_nanbox_f64());
+    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+    let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(
+        object_handle.get_nanbox_f64(),
+    ));
     with_watcher_uncaught_trap(|| {
         crate::closure::js_closure_call0(cb);
     });
-    crate::object::js_implicit_this_set(prev_this);
+    crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
 }
 
 fn emit_fs_watch_event(
@@ -551,11 +554,14 @@ fn emit_fs_watch_event(
         if cb.is_null() {
             continue;
         }
-        let prev_this = crate::object::js_implicit_this_set(object_handle.get_nanbox_f64());
+        let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+        let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(
+            object_handle.get_nanbox_f64(),
+        ));
         with_watcher_uncaught_trap(|| {
             crate::closure::js_closure_call2(cb, refreshed_args[0], refreshed_args[1]);
         });
-        crate::object::js_implicit_this_set(prev_this);
+        crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
     }
 }
 
@@ -586,11 +592,14 @@ fn emit_watch_file_change(
         if cb.is_null() {
             continue;
         }
-        let prev_this = crate::object::js_implicit_this_set(object_handle.get_nanbox_f64());
+        let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+        let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(
+            object_handle.get_nanbox_f64(),
+        ));
         with_watcher_uncaught_trap(|| {
             crate::closure::js_closure_call2(cb, refreshed_args[0], refreshed_args[1]);
         });
-        crate::object::js_implicit_this_set(prev_this);
+        crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
     }
 }
 

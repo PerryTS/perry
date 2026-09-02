@@ -265,7 +265,8 @@ unsafe fn dispatch_symbol_bound_method(
         // the direct-call path. The one-shot static-`this` override (armed by
         // the Function.prototype call/apply arms for a static bound-method
         // value) still wins in the static-method prologue.
-        let prev_this = crate::object::js_implicit_this_set(receiver);
+        let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+        let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
         crate::object::static_private_owner_push(receiver);
         let result = crate::object::call_registered_static_method(
             func_ptr,
@@ -275,7 +276,7 @@ unsafe fn dispatch_symbol_bound_method(
             has_rest,
         );
         crate::object::static_private_owner_pop();
-        crate::object::js_implicit_this_set(prev_this);
+        crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
         result
     } else {
         // Computed symbol methods never synthesize an `arguments` object but
@@ -318,14 +319,15 @@ pub unsafe fn dispatch_bound_function(closure: *const ClosureHeader, args: &[f64
     // slot, not IMPLICIT_THIS — rebind it to the bound receiver so the bound
     // `this` is honored (arrows/non-captures_this targets are returned as-is).
     let target = rebind_explicit_this(target, bound_this);
-    let prev_this = crate::object::js_implicit_this_set(bound_this);
+    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+    let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(bound_this));
     let (call_ptr, call_len) = if combined.is_empty() {
         (std::ptr::null::<f64>(), 0usize)
     } else {
         (combined.as_ptr(), combined.len())
     };
     let result = js_native_call_value(target, call_ptr, call_len);
-    crate::object::js_implicit_this_set(prev_this);
+    crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
     result
 }
 

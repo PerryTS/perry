@@ -382,11 +382,12 @@ extern "C" fn promise_resolve_thenable_job(closure: *const crate::closure::Closu
     let reject_value = crate::value::js_nanbox_pointer(reject_closure as i64);
     let args = [resolve_value, reject_value];
 
-    let prev_this = crate::object::js_implicit_this_set(thenable);
+    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+    let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(thenable));
     let result = combinator_catch_js(|| unsafe {
         crate::closure::js_native_call_value(then_action, args.as_ptr(), args.len())
     });
-    crate::object::js_implicit_this_set(prev_this);
+    crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
     if let Err(reason) = result {
         if thenable_job_take_guard(guard_arr) {
             js_promise_reject(promise, reason);
@@ -446,11 +447,12 @@ pub(super) fn assimilate_via_then_property(value: f64) -> f64 {
 
     // Bind `this` to the thenable so a non-arrow `then` body reads the right
     // receiver, then call `Get(value, "then")` as a value (own data property).
-    let prev = crate::object::js_implicit_this_set(value);
+    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+    let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(value));
     unsafe {
         crate::closure::js_native_call_value(then_val, args.as_ptr(), args.len());
     }
-    crate::object::js_implicit_this_set(prev);
+    crate::object::js_implicit_this_set(prev.get_nanbox_f64());
 
     crate::value::js_nanbox_pointer(new_promise as i64)
 }

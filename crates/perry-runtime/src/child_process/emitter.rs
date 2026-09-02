@@ -61,11 +61,12 @@ pub(crate) fn cp_emit(target: f64, event: &str, args: &[f64]) -> bool {
             break;
         }
         let cb = crate::array::js_array_get_f64(arr, i);
-        let prev = js_implicit_this_set(target);
+        let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+        let prev = this_scope.root_nanbox_f64(js_implicit_this_set(target));
         unsafe {
             let _ = js_native_call_value(cb, args.as_ptr(), args.len());
         }
-        js_implicit_this_set(prev);
+        js_implicit_this_set(prev.get_nanbox_f64());
         fired = true;
         i += 1;
     }
@@ -255,12 +256,13 @@ pub(crate) extern "C" fn cp_pipe_data_thunk(closure: *const ClosureHeader, chunk
     let dest = f64::from_bits(js_closure_get_capture_ptr(closure, 0) as u64);
     let write = cp_get_field(dest, b"write");
     if !crate::fs::extract_closure_ptr(write).is_null() {
-        let prev = js_implicit_this_set(dest);
+        let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+        let prev = this_scope.root_nanbox_f64(js_implicit_this_set(dest));
         let args = [chunk];
         unsafe {
             let _ = js_native_call_value(write, args.as_ptr(), args.len());
         }
-        js_implicit_this_set(prev);
+        js_implicit_this_set(prev.get_nanbox_f64());
     }
     cp_undefined()
 }
@@ -272,12 +274,13 @@ pub(crate) extern "C" fn cp_pipe_end_thunk(closure: *const ClosureHeader) -> f64
     let dest = f64::from_bits(js_closure_get_capture_ptr(closure, 0) as u64);
     let end = cp_get_field(dest, b"end");
     if !crate::fs::extract_closure_ptr(end).is_null() {
-        let prev = js_implicit_this_set(dest);
+        let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+        let prev = this_scope.root_nanbox_f64(js_implicit_this_set(dest));
         let args = [cp_undefined()];
         unsafe {
             let _ = js_native_call_value(end, args.as_ptr(), 0);
         }
-        js_implicit_this_set(prev);
+        js_implicit_this_set(prev.get_nanbox_f64());
     }
     cp_undefined()
 }

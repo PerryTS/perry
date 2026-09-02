@@ -210,6 +210,31 @@ pub extern "C" fn js_implicit_this_get_sloppy() -> f64 {
 /// Callers must restore the previous value to scope the binding to the
 /// duration of a single method-style call.
 ///
+/// **The returned previous value is a GC-managed pointer held in a bare Rust
+/// local** (#9417, #9445). It is the caller's receiver, and the call this
+/// save/restore brackets is user code, so an evacuating young-gen minor inside
+/// it moves that object and rewrites every slot the collector can see — a
+/// Rust local is not one. Restoring the stale bits then installs a retired
+/// from-space address as the caller's `this`, and the failure is silent:
+/// `js_object_get_own_field_or_undef` fails its type check on the recycled cell
+/// and answers `undefined`, so the caller's next `this.<field>` throws a
+/// TypeError naming a property nowhere near the defect. Every runtime site
+/// therefore roots the saved value in a `RuntimeHandleScope` and re-reads it at
+/// the restore:
+///
+/// ```ignore
+/// let this_scope = crate::gc::RuntimeHandleScope::new();
+/// let prev = this_scope.root_nanbox_f64(js_implicit_this_set(receiver));
+/// … user code …
+/// js_implicit_this_set(prev.get_nanbox_f64());
+/// ```
+///
+/// This is longjmp-safe: `exception.rs` saves and restores the handle stack at
+/// trap boundaries, so a throw through the window truncates the scope exactly
+/// as a normal drop would. Inside a loop, open the scope PER ITERATION (or
+/// reuse an existing per-iteration scope) so the handle stack does not grow by
+/// one slot per callback.
+///
 /// This is part of every dynamically-dispatched call's save/restore path.
 /// Keep the shipped path to one TLS replacement; default-off diagnostics here
 /// still impose their mode checks millions of times on closure-heavy programs.

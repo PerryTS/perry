@@ -305,11 +305,12 @@ pub(crate) fn cluster_emit_event(event: &str, args: &[f64]) -> bool {
     }
     for listener in listeners {
         let cb = f64::from_bits(listener.callback_bits);
-        let prev = js_implicit_this_set(cluster_default_value());
+        let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+        let prev = this_scope.root_nanbox_f64(js_implicit_this_set(cluster_default_value()));
         unsafe {
             let _ = crate::closure::js_native_call_value(cb, args.as_ptr(), args.len());
         }
-        js_implicit_this_set(prev);
+        js_implicit_this_set(prev.get_nanbox_f64());
     }
     true
 }
@@ -1423,11 +1424,12 @@ fn emit(target: f64, event: &str, args: &[f64]) -> bool {
             break;
         }
         let cb = crate::array::js_array_get_f64(arr, i);
-        let prev = js_implicit_this_set(target);
+        let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+        let prev = this_scope.root_nanbox_f64(js_implicit_this_set(target));
         unsafe {
             let _ = crate::closure::js_native_call_value(cb, args.as_ptr(), args.len());
         }
-        js_implicit_this_set(prev);
+        js_implicit_this_set(prev.get_nanbox_f64());
         fired = true;
         i += 1;
     }

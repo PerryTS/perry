@@ -677,7 +677,9 @@ pub unsafe extern "C-unwind" fn js_native_call_method_value(
                     if let Some((func_ptr, param_count, has_rest)) =
                         lookup_class_symbol_method_in_chain(class_id, sym_key, true)
                     {
-                        let prev_this = crate::object::js_implicit_this_set(object);
+                        let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+                        let prev_this =
+                            this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(object));
                         let result = call_registered_static_method(
                             func_ptr,
                             args_ptr,
@@ -685,7 +687,7 @@ pub unsafe extern "C-unwind" fn js_native_call_method_value(
                             param_count,
                             has_rest,
                         );
-                        crate::object::js_implicit_this_set(prev_this);
+                        crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
                         return result;
                     }
                 }
@@ -695,7 +697,9 @@ pub unsafe extern "C-unwind" fn js_native_call_method_value(
                 if let Some((func_ptr, param_count, has_rest)) =
                     lookup_class_symbol_method_in_chain(class_id, sym_key, true)
                 {
-                    let prev_this = crate::object::js_implicit_this_set(object);
+                    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+                    let prev_this =
+                        this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(object));
                     let result = call_registered_static_method(
                         func_ptr,
                         args_ptr,
@@ -703,7 +707,7 @@ pub unsafe extern "C-unwind" fn js_native_call_method_value(
                         param_count,
                         has_rest,
                     );
-                    crate::object::js_implicit_this_set(prev_this);
+                    crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
                     return result;
                 }
             } else if key_jsval.is_pointer() || JSValue::from_bits(bits).is_pointer() {
@@ -2506,9 +2510,11 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
         if crate::promise::subclass_backing_promise(object()).is_some() {
             if let Some(m) = crate::promise::promise_proto_method(method_name) {
                 let args = refreshed_args();
-                let prev_this = crate::object::js_implicit_this_set(object());
+                let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+                let prev_this =
+                    this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(object()));
                 let result = crate::closure::js_native_call_value(m, args.as_ptr(), args.len());
-                crate::object::js_implicit_this_set(prev_this);
+                crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
                 return result;
             }
         }

@@ -752,10 +752,11 @@ pub(crate) fn call_function(callback: f64, this: f64, args: &[f64]) -> f64 {
     if !is_callable_value(callback) {
         return undefined_value();
     }
-    let prev = crate::object::js_implicit_this_set(this);
+    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+    let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(this));
     let result =
         unsafe { crate::closure::js_native_call_value(callback, args.as_ptr(), args.len()) };
-    crate::object::js_implicit_this_set(prev);
+    crate::object::js_implicit_this_set(prev.get_nanbox_f64());
     result
 }
 

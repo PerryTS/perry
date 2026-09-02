@@ -51,9 +51,10 @@ pub(crate) unsafe fn custom_to_primitive(value: f64, hint: &[u8]) -> CustomToPri
         if !crate::closure::is_closure_ptr(method_ptr) {
             return CustomToPrimitiveOutcome::TypeError;
         }
-        let prev_this = crate::object::js_implicit_this_set(receiver);
+        let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+        let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
         let result = crate::closure::js_native_call_value(method, &hint, 1);
-        crate::object::js_implicit_this_set(prev_this);
+        crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
         result
     };
 

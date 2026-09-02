@@ -986,9 +986,11 @@ pub unsafe extern "C" fn js_event_target_dispatch_event(
         if once {
             remove_event_listener_value_with_capture(target, event_name_ptr, callback, capture);
         }
-        let prev_this = crate::object::js_implicit_this_set(target_value);
+        let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+        let prev_this =
+            this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(target_value));
         let _ = crate::closure::js_native_call_value(callable, args.as_ptr(), args.len());
-        crate::object::js_implicit_this_set(prev_this);
+        crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
         if event_bool_field(event_ptr, b"_immediateStopped") {
             break;
         }

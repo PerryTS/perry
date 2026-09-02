@@ -62,16 +62,18 @@ pub extern "C" fn js_reflect_get(target: f64, key: f64, receiver: f64) -> f64 {
             if !closure.is_null() {
                 // Also set IMPLICIT_THIS for free-function getters that read
                 // `this` from the implicit-this fallback rather than a slot.
-                let prev = crate::object::js_implicit_this_set(recv);
+                let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+                let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(recv));
                 let result = js_closure_call0(closure);
-                crate::object::js_implicit_this_set(prev);
+                crate::object::js_implicit_this_set(prev.get_nanbox_f64());
                 return result;
             }
         }
     }
-    let prev = crate::object::js_implicit_this_set(recv);
+    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+    let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(recv));
     let result = target_get_property_key(target, property_key);
-    crate::object::js_implicit_this_set(prev);
+    crate::object::js_implicit_this_set(prev.get_nanbox_f64());
     result
 }
 
@@ -380,9 +382,10 @@ pub extern "C" fn js_reflect_get_own_property_descriptor(target: f64, key: f64) 
     if closure.is_null() {
         return throw_type_error("proxy getOwnPropertyDescriptor trap is not a function");
     }
-    let prev = crate::object::js_implicit_this_set(handler);
+    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+    let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(handler));
     let result = js_closure_call2(closure, inner, property_key);
-    crate::object::js_implicit_this_set(prev);
+    crate::object::js_implicit_this_set(prev.get_nanbox_f64());
     let result_handle = scope.root_nanbox_f64(result);
 
     let target_desc = crate::object::js_object_get_own_property_descriptor(inner, property_key);

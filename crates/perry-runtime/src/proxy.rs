@@ -695,7 +695,8 @@ fn call_trap(handler: f64, trap: f64, args: &[f64]) -> f64 {
     }
     let undef = f64::from_bits(TAG_UNDEFINED);
     let a = |i: usize| -> f64 { args.get(i).copied().unwrap_or(undef) };
-    let prev = crate::object::js_implicit_this_set(handler);
+    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+    let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(handler));
     let result = match args.len() {
         0 => js_closure_call0(closure),
         1 => js_closure_call1(closure, a(0)),
@@ -703,7 +704,7 @@ fn call_trap(handler: f64, trap: f64, args: &[f64]) -> f64 {
         3 => js_closure_call3(closure, a(0), a(1), a(2)),
         _ => crate::closure::js_closure_call4(closure, a(0), a(1), a(2), a(3)),
     };
-    crate::object::js_implicit_this_set(prev);
+    crate::object::js_implicit_this_set(prev.get_nanbox_f64());
     result
 }
 
@@ -892,7 +893,8 @@ fn call_with_this_and_args(f: f64, this_arg: f64, args: &[f64]) -> f64 {
     if closure.is_null() {
         return throw_type_error("Reflect.apply target is not a function");
     }
-    let prev = crate::object::js_implicit_this_set(this_arg);
+    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+    let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(this_arg));
     let a = |i: usize| -> f64 {
         args.get(i)
             .copied()
@@ -905,7 +907,7 @@ fn call_with_this_and_args(f: f64, this_arg: f64, args: &[f64]) -> f64 {
         3 => js_closure_call3(closure, a(0), a(1), a(2)),
         _ => crate::closure::js_closure_call4(closure, a(0), a(1), a(2), a(3)),
     };
-    crate::object::js_implicit_this_set(prev);
+    crate::object::js_implicit_this_set(prev.get_nanbox_f64());
     result
 }
 
@@ -1622,9 +1624,10 @@ fn call_setter_with_receiver(setter_bits: u64, receiver: f64, value: f64) -> boo
     if closure.is_null() {
         return false;
     }
-    let prev = crate::object::js_implicit_this_set(receiver);
+    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+    let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
     let _ = js_closure_call1(closure, value);
-    crate::object::js_implicit_this_set(prev);
+    crate::object::js_implicit_this_set(prev.get_nanbox_f64());
     true
 }
 
@@ -2252,9 +2255,11 @@ fn class_super_accessor_set(
                 .or_else(|| vtable.setters.get(&setter_alias))
             {
                 let f: extern "C" fn(f64, f64) -> f64 = unsafe { std::mem::transmute(setter_ptr) };
-                let prev_this = crate::object::js_implicit_this_set(receiver);
+                let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+                let prev_this =
+                    this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
                 let _ = f(receiver, value);
-                crate::object::js_implicit_this_set(prev_this);
+                crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
                 return Some(true);
             }
             let getter_alias = format!("__get_{}", key_name);

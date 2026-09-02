@@ -45,9 +45,10 @@ unsafe fn dispatch_handle_proto_method(
     // `this` and for non-closure values. Mirrors the class-prototype fallback.
     let _ = closure_ptr;
     let bound = crate::closure::clone_closure_rebind_this(resolved_bits, object);
-    let prev = crate::object::js_implicit_this_set(object);
+    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+    let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(object));
     let result = crate::closure::js_native_call_value(f64::from_bits(bound), args_ptr, args_len);
-    crate::object::js_implicit_this_set(prev);
+    crate::object::js_implicit_this_set(prev.get_nanbox_f64());
     Some(result)
 }
 

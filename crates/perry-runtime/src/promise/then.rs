@@ -982,10 +982,11 @@ fn call_receiver_then(receiver: f64, args: &[f64]) -> f64 {
         let err_val = crate::value::JSValue::pointer(err_ptr as *const u8).bits();
         crate::exception::js_throw(f64::from_bits(err_val));
     }
-    let prev_this = crate::object::js_implicit_this_set(receiver);
+    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+    let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
     let result =
         unsafe { crate::closure::js_native_call_value(then_fn, args.as_ptr(), args.len()) };
-    crate::object::js_implicit_this_set(prev_this);
+    crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
     result
 }
 

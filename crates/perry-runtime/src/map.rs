@@ -3154,9 +3154,10 @@ fn js_map_foreach_impl(
             // Bind `thisArg` for the duration of the call (matches the
             // URLSearchParams.forEach pattern); `js_native_call_value`
             // dispatches the NaN-boxed callback with the full arg vector.
-            let prev_this = crate::object::js_implicit_this_set(this_v);
+            let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+            let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(this_v));
             let _ = crate::closure::js_native_call_value(cb, args.as_ptr(), args.len());
-            crate::object::js_implicit_this_set(prev_this);
+            crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
         }
     }
     let map = map_handle.get_raw_const_ptr::<MapHeader>();
