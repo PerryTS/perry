@@ -147,7 +147,6 @@ pub(crate) fn class_has_computed_runtime_members(ctx: &FnCtx<'_>, class_name: &s
 /// and a per-object side-table touch, for a store whose slot index is a
 /// compile-time constant. On `deeplist.ts` that one store was the benchmark.
 mod sloppy_class_field;
-use sloppy_class_field::try_lower_sloppy_class_field_boxed_store;
 pub(crate) use sloppy_class_field::try_lower_sloppy_class_field_store;
 
 fn lower_runtime_property_set_by_name(

@@ -268,7 +268,7 @@ pub(crate) fn try_lower_sloppy_class_field_store(
 /// pointer store still reaches the remembered set. Nothing here is keyed on
 /// strictness, so this arm's GC behaviour is byte-identical to the strict one.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn try_lower_sloppy_class_field_boxed_store(
+fn try_lower_sloppy_class_field_boxed_store(
     ctx: &mut FnCtx<'_>,
     object: &Expr,
     property: &str,
