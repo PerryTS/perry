@@ -64,6 +64,7 @@ pub(super) unsafe fn alloc_old_test_promise() -> *mut crate::promise::Promise {
         ptr,
         crate::promise::Promise {
             state: crate::promise::PromiseState::Pending,
+            native_pinned: 0,
             value: 0.0,
             reason: 0.0,
             on_fulfilled: std::ptr::null(),
@@ -785,6 +786,7 @@ pub(super) fn allocate_dead_malloc_churn_headers(per_type: usize) -> Vec<usize> 
                 ptr,
                 crate::promise::Promise {
                     state: crate::promise::PromiseState::Pending,
+                    native_pinned: 0,
                     value: 0.0,
                     reason: 0.0,
                     on_fulfilled: std::ptr::null(),
