@@ -1415,6 +1415,75 @@ fn fresh_class_refresh_keeps_shared_capture_cell_handle() {
     );
 }
 
+/// A mutable lexical classic-for binding captured by a class uses the shared
+/// one-element cell representation.  The backedge must copy its current value
+/// into a fresh cell before the update, matching CreatePerIterationEnvironment:
+/// instances from completed iterations retain their own capture cell, while a
+/// `var` head continues to share one binding for the whole loop.
+#[test]
+fn classic_for_class_capture_freshens_lexical_cell_before_update() {
+    let source = r#"
+        const lexical = [];
+        for (let i = 0; i < 3; i++) {
+            class Lexical { value() { return i; } }
+            lexical.push(new Lexical());
+        }
+
+        const shared = [];
+        for (var i = 0; i < 3; i++) {
+            class Shared { value() { return i; } }
+            shared.push(new Shared());
+        }
+    "#;
+    let module = perry_parser::parse_typescript(source, "t.ts").expect("source parses");
+    let hir = super::lower_module(&module, "t", "t.ts").expect("source lowers");
+    let loops: Vec<_> = hir
+        .init
+        .iter()
+        .filter_map(|stmt| match stmt {
+            crate::Stmt::For { init, update, .. } => Some((init, update)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(loops.len(), 2, "fixture lowers to lexical and var loops");
+
+    let lexical_id = match loops[0].0.as_deref() {
+        Some(crate::Stmt::Let {
+            id,
+            init: Some(crate::Expr::Array(items)),
+            ..
+        }) if items.len() == 1 => *id,
+        other => panic!("lexical head must lower to one shared capture cell: {other:#?}"),
+    };
+    assert!(matches!(
+        loops[0].1,
+        Some(crate::Expr::Sequence(items))
+            if matches!(
+                items.as_slice(),
+                [
+                    crate::Expr::LocalSet(set_id, fresh),
+                    crate::Expr::IndexUpdate { object, .. },
+                ] if *set_id == lexical_id
+                    && matches!(
+                        fresh.as_ref(),
+                        crate::Expr::Array(values)
+                            if matches!(
+                                values.as_slice(),
+                                [crate::Expr::IndexGet { object, .. }]
+                                    if matches!(object.as_ref(), crate::Expr::LocalGet(id) if *id == lexical_id)
+                            )
+                    )
+                    && matches!(object.as_ref(), crate::Expr::LocalGet(id) if *id == lexical_id)
+            )
+    ));
+
+    assert!(
+        loops[1].0.is_none(),
+        "var head is hoisted outside For::init"
+    );
+    assert!(matches!(loops[1].1, Some(crate::Expr::IndexUpdate { .. })));
+}
+
 /// Companion (the case the depth rule must NOT break): a module-scope `class e`
 /// and a factory-local `let e` holding a different constructor. JS says the
 /// nearer local wins, so `new e()` inside the factory must still construct the

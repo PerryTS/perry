@@ -867,6 +867,15 @@ fn rewrite_stmt(stmt: &mut Stmt, shared: &HashSet<LocalId>, index_uses: &HashSet
             update,
             body,
         } => {
+            // A lexical classic-for head has a distinct binding on every
+            // iteration.  Its `Stmt::Let` is the one source-level binding that
+            // lives in `For::init`; `var` heads are hoisted ahead of the loop
+            // and leave this slot empty.  Remember a shared capture before
+            // rewriting the Let into its one-element cell.
+            let per_iteration_capture = init.as_deref().and_then(|stmt| match stmt {
+                Stmt::Let { id, .. } if shared.contains(id) => Some(*id),
+                _ => None,
+            });
             if let Some(i) = init {
                 rewrite_stmt(i, shared, index_uses);
             }
@@ -877,6 +886,28 @@ fn rewrite_stmt(stmt: &mut Stmt, shared: &HashSet<LocalId>, index_uses: &HashSet
                 rewrite_expr(u, shared, index_uses);
             }
             rewrite_stmts(body, shared, index_uses);
+
+            if let Some(id) = per_iteration_capture {
+                // CreatePerIterationEnvironment copies the current lexical
+                // value before evaluating the update expression.  The shared-
+                // mutable class-capture representation needs the equivalent
+                // operation at the cell level: replace the loop local with a
+                // fresh `[old[0]]` cell, leaving classes from the completed
+                // iteration attached to the old cell.  Insert this AFTER the
+                // ordinary rewrite so the whole-cell LocalSet is not itself
+                // changed into an IndexSet.
+                let freshen = Expr::LocalSet(
+                    id,
+                    Box::new(Expr::Array(vec![Expr::IndexGet {
+                        object: Box::new(Expr::LocalGet(id)),
+                        index: Box::new(Expr::Integer(0)),
+                    }])),
+                );
+                *update = Some(match update.take() {
+                    Some(original) => Expr::Sequence(vec![freshen, original]),
+                    None => freshen,
+                });
+            }
         }
         Stmt::Labeled { body, .. } => rewrite_stmt(body, shared, index_uses),
         Stmt::Try {
