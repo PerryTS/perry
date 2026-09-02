@@ -736,9 +736,13 @@ fn test_native_async_completion_token_roots_survive_copied_minor_gc() {
 
     let (moved_promise, moved_payload, moved_handles) =
         crate::promise::native_async::test_native_async_slot_snapshot(token);
-    assert_ne!(
+    // #9356: the token's promise is malloc resident (non-moving) because the
+    // address is handed to native code as a raw pointer; a copied minor must
+    // leave it where it is. The payload and attached-handle slots hold
+    // nursery strings and are still rewritten.
+    assert_eq!(
         moved_promise, original_promise,
-        "token promise slot should be rewritten after copied-minor GC"
+        "token promise must not move: native code holds its raw address"
     );
     assert_ne!(
         moved_payload.unwrap() & POINTER_MASK,

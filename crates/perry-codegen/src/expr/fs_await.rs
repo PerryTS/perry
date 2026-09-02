@@ -24,7 +24,7 @@ use perry_hir::Expr;
 
 use crate::nanbox::double_literal;
 use crate::rooting::{with_rooted_group, Repr};
-use crate::types::{DOUBLE, I1, I32, I64};
+use crate::types::{DOUBLE, I32, I64};
 
 use super::{lower_expr, unbox_to_i64, FnCtx};
 
@@ -206,18 +206,35 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // server renderer) can never settle.
                 let _ = ctx.block().call(I32, "js_await_loop_tick_timers", &[]);
 
+                // #9356: the drain / pump / timer phases above can settle the
+                // awaited promise themselves — the pump delivers a native
+                // completion, and the microtask drain then runs the async
+                // chain to the point where it fulfils this promise. Promise
+                // settlements made while the drain is active deliberately skip
+                // the main-thread notify (`js_notify_promise_progress`), so
+                // `js_wait_for_event` would find nothing pending and park for
+                // the whole idle budget (up to 1 s) on a promise that is
+                // already settled — one such stall per top-level `await` of a
+                // database transaction. Re-check before parking; `check`
+                // re-reads the rooted promise and takes the settled path.
+                let park_idx = ctx.new_block("await.park");
+                let park_label = ctx.block_label(park_idx);
+                let promise_box = g.reread_emitted(ctx, promise_root);
+                let promise_handle_wait = unbox_to_i64(ctx.block(), &promise_box);
+                let state_after_tick =
+                    ctx.block()
+                        .call(I32, "js_promise_state", &[(I64, &promise_handle_wait)]);
+                let still_pending = ctx.block().icmp_eq(I32, &state_after_tick, "0");
+                ctx.block()
+                    .cond_br(&still_pending, &park_label, &check_label);
+                ctx.current_block = park_idx;
+
                 if !ctx.is_async_fn {
                     let wait_for_event_idx = ctx.new_block("await.wait_for_event");
                     let unsettled_exit_idx = ctx.new_block("await.unsettled_exit");
                     let wait_for_event_label = ctx.block_label(wait_for_event_idx);
                     let unsettled_exit_label = ctx.block_label(unsettled_exit_idx);
 
-                    let promise_box = g.reread_emitted(ctx, promise_root);
-                    let promise_handle_wait = unbox_to_i64(ctx.block(), &promise_box);
-                    let state_after_tick =
-                        ctx.block()
-                            .call(I32, "js_promise_state", &[(I64, &promise_handle_wait)]);
-                    let still_pending = ctx.block().icmp_eq(I32, &state_after_tick, "0");
                     let has_timers = ctx.block().call(I32, "js_timer_has_pending", &[]);
                     let has_callbacks = ctx.block().call(I32, "js_callback_timer_has_pending", &[]);
                     let has_intervals = ctx.block().call(I32, "js_interval_timer_has_pending", &[]);
@@ -232,9 +249,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let any3 = ctx.block().or(I32, &any1, &any2);
                     let any = ctx.block().or(I32, &any3, &has_microtasks);
                     let no_refed_work = ctx.block().icmp_eq(I32, &any, "0");
-                    let should_exit = ctx.block().and(I1, &still_pending, &no_refed_work);
-                    ctx.block()
-                        .cond_br(&should_exit, &unsettled_exit_label, &wait_for_event_label);
+                    // The promise is still pending here (the settled case
+                    // branched back to `check` above); with no refed work left
+                    // nothing can ever settle it.
+                    ctx.block().cond_br(
+                        &no_refed_work,
+                        &unsettled_exit_label,
+                        &wait_for_event_label,
+                    );
 
                     ctx.current_block = unsettled_exit_idx;
                     ctx.block()

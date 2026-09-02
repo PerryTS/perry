@@ -58,7 +58,7 @@ pub use native_async::{
     js_native_async_completion_reject_bits, js_native_async_completion_reject_promise_bits,
     js_native_async_completion_reject_string, js_native_async_completion_resolve_bits,
     js_native_async_completion_resolve_promise_bits, js_native_async_drop_promise_token,
-    js_native_async_has_active, js_native_async_process_pending,
+    js_native_async_has_active, js_native_async_process_pending, native_async_promise_has_token,
     scan_native_async_completion_roots_mut, NativeAsyncCompletion,
     PERRY_NATIVE_ASYNC_ALREADY_COMPLETED, PERRY_NATIVE_ASYNC_CLEANUP_ON_CANCEL,
     PERRY_NATIVE_ASYNC_CLEANUP_ON_REJECT, PERRY_NATIVE_ASYNC_CLEANUP_ON_SUCCESS,

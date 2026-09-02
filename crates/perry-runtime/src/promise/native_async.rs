@@ -298,10 +298,39 @@ fn adopt_or_get_token_for_promise(promise: *mut Promise) -> *mut NativeAsyncComp
 }
 
 /// Allocate a native async completion token and its JS-visible Promise.
+///
+/// The Promise is allocated in malloc space (`js_promise_new_cross_thread`),
+/// never in the nursery. A token exists precisely so native code can carry
+/// the Promise across a worker thread and settle it later, and every consumer
+/// of `js_native_async_completion_promise` holds that pointer as a raw
+/// `*mut Promise` / `usize` the collector cannot see or rewrite (perry-ffi's
+/// `JsPromise`, the ext crates' pending tables). The registry scanner keeps
+/// the object alive and rewrites the token's own slot, but a copying minor
+/// still *moved* a nursery-resident promise, and the worker's captured
+/// address then named retired from-space: the eventual
+/// `perry_ffi_promise_resolve_deferred` settled the stale copy (or read
+/// garbage) and the promise the program awaited stayed pending forever
+/// (#9356 — drizzle/mysql2 transactions hanging once the nursery first
+/// filled). Malloc space is non-moving, so the address native code captured
+/// stays valid for the token's whole life.
 #[no_mangle]
 pub extern "C" fn js_native_async_completion_new(flags: u32) -> *mut NativeAsyncCompletion {
-    let promise = super::js_promise_new();
+    let promise = super::js_promise_new_cross_thread();
     make_token_for_promise(promise, flags, true)
+}
+
+/// Does `promise` currently own a registered native async token?
+///
+/// Test/diagnostic surface for the token lifecycle: a token is registered by
+/// [`js_native_async_completion_new`] and released by
+/// [`js_native_async_process_pending`] (token API settlement) or
+/// [`js_native_async_drop_promise_token`] (settlement outside the token API).
+pub fn native_async_promise_has_token(promise: *mut Promise) -> bool {
+    if promise.is_null() {
+        return false;
+    }
+    let registry = crate::gc::lock_gc_root_registry(registry());
+    registry.by_promise.contains_key(&(promise as usize))
 }
 
 /// Return the JS-visible Promise owned by a native async completion token.
@@ -706,6 +735,34 @@ mod tests {
             "Error.stack must include the rejection message: {}",
             String::from_utf8_lossy(&stack)
         );
+    }
+
+    #[test]
+    fn token_promise_is_allocated_outside_the_copying_nursery() {
+        let _guard = test_native_async_lock();
+        test_reset_native_async_registry();
+        let token = js_native_async_completion_new(0);
+        let promise = js_native_async_completion_promise(token);
+        assert!(!promise.is_null());
+        // #9356: the promise address is handed to worker threads as a raw
+        // pointer, so it must live in non-moving (malloc) space — an arena
+        // resident would be relocated by the copying minor behind that
+        // pointer's back.
+        let header = unsafe {
+            (promise as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader
+        };
+        assert_eq!(
+            unsafe { (*header).gc_flags } & crate::gc::GC_FLAG_ARENA,
+            0,
+            "native async token promise must not be arena (nursery) resident"
+        );
+        assert!(native_async_promise_has_token(promise));
+        assert_eq!(
+            js_native_async_completion_resolve_bits(token, 3.0f64.to_bits()),
+            0
+        );
+        assert_eq!(js_native_async_process_pending(), 1);
+        assert!(!native_async_promise_has_token(promise));
     }
 
     #[test]

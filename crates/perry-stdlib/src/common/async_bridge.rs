@@ -69,6 +69,24 @@ unsafe fn unpin_promise_after_native_resolution(promise_ptr: usize) {
     perry_runtime::gc::unpin_object(header);
 }
 
+/// Release the native async completion token a promise minted through
+/// `perry_ffi_promise_new` still owns (#9356).
+///
+/// `perry_ffi_promise_new` allocates through `js_native_async_completion_new`,
+/// which registers a token keyed by the promise address so the token API can
+/// settle it later. perry-ffi's `JsPromise::resolve_with` / `reject_with` and
+/// the legacy `resolve_*` shims do not go through the token API — they queue
+/// straight into the stdlib pump and settle the promise here — so nothing ever
+/// removed the token. Every native call (each mysql2 query, every bcrypt hash,
+/// …) leaked one registry entry: the settled promise stayed rooted and was
+/// rewritten on every minor collection, and `js_native_async_has_active`
+/// reported work forever. Dropping the token here mirrors the cleanup
+/// `js_native_async_process_pending` performs for token-API settlements; it
+/// is a no-op for promises that never had a token.
+fn release_native_async_token(promise: *mut perry_runtime::Promise) {
+    perry_runtime::promise::js_native_async_drop_promise_token(promise);
+}
+
 /// Allocate a fresh Promise and pin it for cross-thread resolution.
 /// Convenience wrapper for direct callers of [`queue_promise_resolution`]
 /// / [`queue_deferred_resolution`] (fetch, zlib, bcrypt, ioredis, ws,
@@ -539,11 +557,9 @@ pub extern "C" fn js_stdlib_process_pending() -> i32 {
         // can be reclaimed by the next GC. Resolve doesn't trigger GC
         // mid-call, so ordering here is purely about leaving a clean
         // GC state after the loop.
-        unsafe {
-            unpin_promise_after_native_resolution(
-                promise_handle.get_raw_mut_ptr::<perry_runtime::Promise>() as usize,
-            )
-        };
+        let promise_ptr = promise_handle.get_raw_mut_ptr::<perry_runtime::Promise>();
+        unsafe { unpin_promise_after_native_resolution(promise_ptr as usize) };
+        release_native_async_token(promise_ptr);
         if resolution.is_success {
             perry_runtime::js_promise_resolve(
                 promise_handle.get_raw_mut_ptr(),
@@ -578,11 +594,9 @@ pub extern "C" fn js_stdlib_process_pending() -> i32 {
         // and may itself have allocated (creating the result string,
         // etc.), but the promise stayed pinned across that work — so
         // even if the converter triggered GC, the promise survived.
-        unsafe {
-            unpin_promise_after_native_resolution(
-                promise_handle.get_raw_mut_ptr::<perry_runtime::Promise>() as usize,
-            )
-        };
+        let promise_ptr = promise_handle.get_raw_mut_ptr::<perry_runtime::Promise>();
+        unsafe { unpin_promise_after_native_resolution(promise_ptr as usize) };
+        release_native_async_token(promise_ptr);
         if resolution.is_success {
             perry_runtime::js_promise_resolve(
                 promise_handle.get_raw_mut_ptr(),
@@ -1046,6 +1060,28 @@ mod tests {
     fn clear_pending() {
         PENDING_RESOLUTIONS.lock().unwrap().clear();
         PENDING_DEFERRED.lock().unwrap().clear();
+    }
+
+    #[test]
+    fn stdlib_pump_releases_the_native_async_token_of_a_deferred_resolution() {
+        clear_pending();
+        // perry-ffi's `JsPromise::new()` mints the promise through this shim,
+        // which registers a native async token keyed by the promise address.
+        let promise = crate::perry_ffi_async::perry_ffi_promise_new();
+        assert!(!promise.is_null());
+        assert!(perry_runtime::promise::native_async_promise_has_token(
+            promise
+        ));
+        // `JsPromise::resolve_with` settles through the deferred queue, never
+        // through the token API — the pump must drop the token itself or it
+        // leaks one registry entry per native call (#9356).
+        queue_deferred_resolution(promise as usize, true, || 7.0f64.to_bits());
+        assert!(js_stdlib_process_pending() >= 1);
+        assert_eq!(perry_runtime::promise::js_promise_state(promise), 1);
+        assert_eq!(perry_runtime::promise::js_promise_value(promise), 7.0);
+        assert!(!perry_runtime::promise::native_async_promise_has_token(
+            promise
+        ));
     }
 
     #[test]

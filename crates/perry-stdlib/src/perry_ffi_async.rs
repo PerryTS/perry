@@ -57,16 +57,20 @@ extern "C" {
 /// is owned by the runtime arena; resolution / rejection is what
 /// transfers it to the awaiter.
 ///
-/// Issue #859: the promise is also PINNED before returning, because
-/// every documented use of `perry_ffi_promise_new` ships the pointer
+/// Every documented use of `perry_ffi_promise_new` ships the pointer
 /// to a worker future (via `perry_ffi_spawn_blocking*` /
-/// `perry_ffi_spawn_async`) and later resolves it from the worker.
-/// Without pinning, the await chain has no path back to the promise
-/// — `P.next = N` is a forward edge — and a GC cycle during the
-/// worker's run sweeps `P` mid-flight, turning the eventual
-/// `js_promise_resolve(P, ...)` into a use-after-free SIGBUS. The
-/// matching unpin lives in `js_stdlib_process_pending` (see
-/// `unpin_promise_after_native_resolution` in `async_bridge`).
+/// `perry_ffi_spawn_async`) and later resolves it from the worker, so
+/// the promise must survive — and keep its address — for as long as
+/// that raw pointer is out there. The await chain has no path back to
+/// the promise (`P.next = N` is a forward edge; #859), so the native
+/// async token registered here is what roots it. And because the
+/// worker's copy of the address is invisible to the collector, the
+/// promise is allocated in non-moving malloc space (see
+/// `js_native_async_completion_new`, #9356): a nursery-resident
+/// promise was relocated by the copying minor and the worker then
+/// settled its retired from-space copy, leaving the awaited promise
+/// pending forever. The token is released when the stdlib pump settles
+/// the promise (`js_stdlib_process_pending`).
 #[no_mangle]
 pub extern "C" fn perry_ffi_promise_new() -> *mut perry_runtime::Promise {
     async_bridge::ensure_pump_registered();
