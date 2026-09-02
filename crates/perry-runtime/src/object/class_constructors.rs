@@ -1085,11 +1085,14 @@ unsafe fn default_error_init_for_implicit_chain(
         b"message".len() as u32,
     ));
     let inst = crate::value::js_nanbox_get_pointer(this_h.get_nanbox_f64()) as *mut ObjectHeader;
-    let msg_str = msg_str_h.get_raw_const_ptr::<crate::StringHeader>();
-    let boxed =
-        f64::from_bits(crate::value::STRING_TAG | (msg_str as u64 & crate::value::POINTER_MASK));
-    let key = key_h.get_raw_const_ptr::<crate::StringHeader>();
-    crate::object::js_object_set_field_by_name(inst, key, boxed);
+    msg_str_h.with_const_ptr::<crate::StringHeader, _>(|msg_str| {
+        let boxed = f64::from_bits(
+            crate::value::STRING_TAG | (msg_str as u64 & crate::value::POINTER_MASK),
+        );
+        key_h.with_const_ptr::<crate::StringHeader, _>(|key| {
+            crate::object::js_object_set_field_by_name(inst, key, boxed);
+        });
+    });
 }
 
 /// #6469: spec default Error-init, called from the SYNTHESIZED standalone
@@ -1132,12 +1135,14 @@ pub unsafe extern "C" fn js_error_subclass_default_init(this_val: f64, msg: f64)
             ));
             let inst =
                 crate::value::js_nanbox_get_pointer(this_h.get_nanbox_f64()) as *mut ObjectHeader;
-            let msg_str = msg_str_h.get_raw_const_ptr::<crate::StringHeader>();
-            let boxed = f64::from_bits(
-                crate::value::STRING_TAG | (msg_str as u64 & crate::value::POINTER_MASK),
-            );
-            let key = key_h.get_raw_const_ptr::<crate::StringHeader>();
-            crate::object::js_object_set_field_by_name_nonenum(inst, key, boxed);
+            msg_str_h.with_const_ptr::<crate::StringHeader, _>(|msg_str| {
+                let boxed = f64::from_bits(
+                    crate::value::STRING_TAG | (msg_str as u64 & crate::value::POINTER_MASK),
+                );
+                key_h.with_const_ptr::<crate::StringHeader, _>(|key| {
+                    crate::object::js_object_set_field_by_name_nonenum(inst, key, boxed);
+                });
+            });
         }
     }
 }

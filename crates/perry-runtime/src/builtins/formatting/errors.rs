@@ -16,17 +16,18 @@ unsafe fn string_header_to_string(ptr: *mut StringHeader, fallback: &str) -> Str
 unsafe fn format_error_headline(error_ptr: *const crate::error::ErrorHeader) -> String {
     let scope = crate::gc::RuntimeHandleScope::new();
     let error_h = scope.root_raw_const_ptr(error_ptr);
-    let own_name_h = crate::node_submodules::error_user_prop(
-        error_h.get_raw_const_ptr::<crate::error::ErrorHeader>() as usize,
-        "name",
-    )
-    .map(|value| scope.root_nanbox_f64(value));
-    let own_message_h = crate::node_submodules::error_user_prop(
-        error_h.get_raw_const_ptr::<crate::error::ErrorHeader>() as usize,
-        "message",
-    )
-    .map(|value| scope.root_nanbox_f64(value));
-    let error_ptr = error_h.get_raw_const_ptr::<crate::error::ErrorHeader>();
+    let own_name_h = error_h
+        .with_const_ptr::<crate::error::ErrorHeader, _>(|error_ptr| {
+            crate::node_submodules::error_user_prop(error_ptr as usize, "name")
+        })
+        .map(|value| scope.root_nanbox_f64(value));
+    let (own_message_h, error_ptr) = error_h.across_const::<crate::error::ErrorHeader, _>(|| {
+        error_h
+            .with_const_ptr::<crate::error::ErrorHeader, _>(|error_ptr| {
+                crate::node_submodules::error_user_prop(error_ptr as usize, "message")
+            })
+            .map(|value| scope.root_nanbox_f64(value))
+    });
     let display_part = |value: Option<&crate::gc::RuntimeHandle<'_>>,
                         header: *mut StringHeader,
                         fallback: &str| {
@@ -85,17 +86,20 @@ pub(super) unsafe fn format_error_value(
     // Keep the native Error live and re-read its address for every later slot.
     let scope = crate::gc::RuntimeHandleScope::new();
     let error_h = scope.root_raw_const_ptr(error_ptr);
-    let headline = format_error_headline(error_h.get_raw_const_ptr());
-    let mut entries: Vec<(String, String)> = crate::node_submodules::error_user_props(
-        error_h.get_raw_const_ptr::<crate::error::ErrorHeader>() as usize,
-    )
-    .into_iter()
-    .filter(|(key, _)| key != "cause" && key != "errors" && key != "name")
-    .map(|(key, value)| (key, format_jsvalue_for_json(value, depth + 1)))
-    .collect();
+    let headline = error_h.with_const_ptr::<crate::error::ErrorHeader, _>(|error_ptr| {
+        format_error_headline(error_ptr)
+    });
+    let mut entries: Vec<(String, String)> = error_h
+        .with_const_ptr::<crate::error::ErrorHeader, _>(|error_ptr| {
+            crate::node_submodules::error_user_props(error_ptr as usize)
+        })
+        .into_iter()
+        .filter(|(key, _)| key != "cause" && key != "errors" && key != "name")
+        .map(|(key, value)| (key, format_jsvalue_for_json(value, depth + 1)))
+        .collect();
 
-    let error_ptr = error_h.get_raw_const_ptr::<crate::error::ErrorHeader>();
-    let cause = (*error_ptr).cause;
+    let cause =
+        error_h.with_const_ptr::<crate::error::ErrorHeader, _>(|error_ptr| (*error_ptr).cause);
     if !crate::value::JSValue::from_bits(cause.to_bits()).is_undefined() {
         entries.push((
             "[cause]".to_string(),
@@ -103,7 +107,8 @@ pub(super) unsafe fn format_error_value(
         ));
     }
 
-    let errors = (*error_h.get_raw_const_ptr::<crate::error::ErrorHeader>()).errors;
+    let errors =
+        error_h.with_const_ptr::<crate::error::ErrorHeader, _>(|error_ptr| (*error_ptr).errors);
     if !errors.is_null() {
         entries.push((
             "[errors]".to_string(),
@@ -116,7 +121,9 @@ pub(super) unsafe fn format_error_value(
     }
 
     let mut out = headline;
-    if let Some(frame) = format_error_stack_frame(error_h.get_raw_const_ptr()) {
+    if let Some(frame) = error_h.with_const_ptr::<crate::error::ErrorHeader, _>(|error_ptr| {
+        format_error_stack_frame(error_ptr)
+    }) {
         out.push('\n');
         out.push_str(&frame);
         out.push_str(" {");
@@ -154,7 +161,9 @@ pub(super) unsafe fn format_error_subclass_headline(
     // conversion, and return the receiver's refreshed address to the caller.
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj_h = scope.root_raw_const_ptr(obj_ptr);
-    let keys = crate::object::object_keys_array(obj_h.get_raw_const_ptr());
+    let keys = obj_h.with_const_ptr::<crate::object::ObjectHeader, _>(|obj_ptr| {
+        crate::object::object_keys_array(obj_ptr)
+    });
     let mut own_name: Option<f64> = None;
     let mut own_message: Option<f64> = None;
     if !keys.is_null() {
@@ -172,14 +181,12 @@ pub(super) unsafe fn format_error_subclass_headline(
             let key_data = (key_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
             let key_bytes = std::slice::from_raw_parts(key_data, key_len);
             if key_bytes == b"name" {
-                own_name = Some(crate::object::js_object_get_field_f64(
-                    obj_h.get_raw_const_ptr(),
-                    index,
+                own_name = Some(obj_h.with_const_ptr::<crate::object::ObjectHeader, _>(
+                    |obj_ptr| crate::object::js_object_get_field_f64(obj_ptr, index),
                 ));
             } else if key_bytes == b"message" {
-                own_message = Some(crate::object::js_object_get_field_f64(
-                    obj_h.get_raw_const_ptr(),
-                    index,
+                own_message = Some(obj_h.with_const_ptr::<crate::object::ObjectHeader, _>(
+                    |obj_ptr| crate::object::js_object_get_field_f64(obj_ptr, index),
                 ));
             }
         }
@@ -187,37 +194,41 @@ pub(super) unsafe fn format_error_subclass_headline(
 
     let own_name_h = own_name.map(|value| scope.root_nanbox_f64(value));
     let own_message_h = own_message.map(|value| scope.root_nanbox_f64(value));
-    let value_string = |value: &crate::gc::RuntimeHandle<'_>, fallback: &str| {
-        let value = value.get_nanbox_f64();
-        let js = JSValue::from_bits(value.to_bits());
-        if js.is_undefined() {
-            return fallback.to_string();
+    // The string coercions below can collect; compute the headline inside
+    // `across_const` so the receiver address handed back is re-read afterwards.
+    let (headline, obj_ptr) = obj_h.across_const::<crate::object::ObjectHeader, _>(|| {
+        let value_string = |value: &crate::gc::RuntimeHandle<'_>, fallback: &str| {
+            let value = value.get_nanbox_f64();
+            let js = JSValue::from_bits(value.to_bits());
+            if js.is_undefined() {
+                return fallback.to_string();
+            }
+            jsvalue_string_content(value).unwrap_or_else(|| {
+                let string = crate::value::js_jsvalue_to_string(value);
+                string_header_to_string(string, fallback)
+            })
+        };
+        let prototype_name = crate::object::builtin_error_prototype_name(class_id);
+        let name = own_name_h
+            .as_ref()
+            .map(|value| value_string(value, prototype_name))
+            .unwrap_or_else(|| prototype_name.to_string());
+        let message = own_message_h
+            .as_ref()
+            .map(|value| value_string(value, ""))
+            .unwrap_or_default();
+        let display_name = if own_name_h.is_none() && class_name != name {
+            format!("{class_name} [{name}]")
+        } else {
+            name
+        };
+        if display_name.is_empty() {
+            message
+        } else if message.is_empty() {
+            display_name
+        } else {
+            format!("{display_name}: {message}")
         }
-        jsvalue_string_content(value).unwrap_or_else(|| {
-            let string = crate::value::js_jsvalue_to_string(value);
-            string_header_to_string(string, fallback)
-        })
-    };
-    let prototype_name = crate::object::builtin_error_prototype_name(class_id);
-    let name = own_name_h
-        .as_ref()
-        .map(|value| value_string(value, prototype_name))
-        .unwrap_or_else(|| prototype_name.to_string());
-    let message = own_message_h
-        .as_ref()
-        .map(|value| value_string(value, ""))
-        .unwrap_or_default();
-    let display_name = if own_name_h.is_none() && class_name != name {
-        format!("{class_name} [{name}]")
-    } else {
-        name
-    };
-    let headline = if display_name.is_empty() {
-        message
-    } else if message.is_empty() {
-        display_name
-    } else {
-        format!("{display_name}: {message}")
-    };
-    (headline, obj_h.get_raw_const_ptr())
+    });
+    (headline, obj_ptr)
 }
