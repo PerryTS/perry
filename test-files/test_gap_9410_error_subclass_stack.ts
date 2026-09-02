@@ -76,12 +76,9 @@ describe("factory-subclass", make("factory-msg"), "Error", "factory-msg");
 // `stack` is not (node installs `stack` as a non-enumerable own property).
 const withField = new WithField("field-msg");
 console.log("field value: " + withField.code);
-// The subclass's own field enumerates; `stack` must not. NOT asserted here:
-// the full `Object.keys` list, because perry additionally stamps an own
-// ENUMERABLE `name` onto an Error-subclass instance where node leaves `name`
-// on `Error.prototype` — a separate, pre-existing divergence (perry
-// `["code","name"]` vs node `["code"]`) with its own fix, and asserting the
-// whole list here would tie this fixture to that one.
+// The subclass's own field enumerates; inherited `name` and own `stack` do
+// not. The complete reflection/serialization contract is covered by #9440's
+// dedicated fixture.
 console.log("field key enumerates: " + Object.keys(withField).includes("code"));
 console.log("stack key enumerates: " + Object.keys(withField).includes("stack"));
 console.log(

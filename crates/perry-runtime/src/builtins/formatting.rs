@@ -12,6 +12,7 @@ use super::*;
 mod array_buffer;
 mod boxed_primitives;
 mod collection_equality;
+mod errors;
 pub(crate) use boxed_primitives::{
     boxed_primitive_json_value, boxed_primitive_payload, boxed_primitive_to_string_tag,
     prune_dead_boxed_primitive_payload_owners,
@@ -701,117 +702,6 @@ impl Drop for InspectCompactGuard {
     }
 }
 
-unsafe fn string_header_to_string(ptr: *mut StringHeader, fallback: &str) -> String {
-    if ptr.is_null() {
-        return fallback.to_string();
-    }
-    let len = (*ptr).byte_len as usize;
-    let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-    let bytes = std::slice::from_raw_parts(data, len);
-    std::str::from_utf8(bytes).unwrap_or(fallback).to_string()
-}
-
-unsafe fn format_error_headline(error_ptr: *const crate::error::ErrorHeader) -> String {
-    let name_str = string_header_to_string((*error_ptr).name, "Error");
-    let message_str = string_header_to_string((*error_ptr).message, "");
-    if message_str.is_empty() {
-        name_str
-    } else {
-        format!("{}: {}", name_str, message_str)
-    }
-}
-
-/// The one stack line `util.inspect` shows under an error's headline.
-///
-/// #9486: through the accessor, never off the field — `alloc_error` leaves
-/// `stack` null and the first read materialises it, so a direct field read
-/// here made `console.log(err)` print no frame at all. It is called from
-/// `format_error_value` as the LAST use of `error_ptr` on purpose: the
-/// accessor allocates, and a moving scavenge during that allocation would
-/// leave any later read of `error_ptr` pointing at from-space.
-unsafe fn format_error_stack_frame(error_ptr: *mut crate::error::ErrorHeader) -> Option<String> {
-    let stack = string_header_to_string(crate::error::js_error_get_stack(error_ptr), "");
-    stack
-        .lines()
-        .skip(1)
-        .find(|line| !line.trim().is_empty())
-        .map(str::to_string)
-}
-
-unsafe fn format_error_array(arr_ptr: *const crate::array::ArrayHeader, depth: usize) -> String {
-    if arr_ptr.is_null() {
-        return "[]".to_string();
-    }
-    let length = (*arr_ptr).length as usize;
-    if length == 0 {
-        return "[]".to_string();
-    }
-    let data_ptr =
-        (arr_ptr as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *const f64;
-    let mut out = String::from("[");
-    for i in 0..length {
-        out.push('\n');
-        out.push_str("    ");
-        out.push_str(&format_jsvalue_for_json(*data_ptr.add(i), depth + 1));
-    }
-    out.push('\n');
-    out.push_str("  ]");
-    out
-}
-
-unsafe fn format_error_value(error_ptr: *const crate::error::ErrorHeader, depth: usize) -> String {
-    let headline = format_error_headline(error_ptr);
-    let mut entries: Vec<(String, String)> =
-        crate::node_submodules::error_user_props(error_ptr as usize)
-            .into_iter()
-            .filter(|(key, _)| key != "cause" && key != "errors")
-            .map(|(key, value)| (key, format_jsvalue_for_json(value, depth + 1)))
-            .collect();
-
-    let cause = (*error_ptr).cause;
-    if !crate::value::JSValue::from_bits(cause.to_bits()).is_undefined() {
-        entries.push((
-            "[cause]".to_string(),
-            format_jsvalue_for_json(cause, depth + 1),
-        ));
-    }
-
-    if !(*error_ptr).errors.is_null() {
-        entries.push((
-            "[errors]".to_string(),
-            format_error_array((*error_ptr).errors, depth + 1),
-        ));
-    }
-
-    if entries.is_empty() {
-        return headline;
-    }
-
-    let mut out = headline;
-    if let Some(frame) = format_error_stack_frame(error_ptr as *mut _) {
-        out.push('\n');
-        out.push_str(&frame);
-        out.push_str(" {");
-    } else {
-        out.push_str("\n{");
-    }
-
-    let last = entries.len().saturating_sub(1);
-    for (idx, (label, value)) in entries.into_iter().enumerate() {
-        out.push('\n');
-        out.push_str("  ");
-        out.push_str(&label);
-        out.push_str(": ");
-        out.push_str(&value);
-        if idx != last {
-            out.push(',');
-        }
-    }
-    out.push('\n');
-    out.push('}');
-    out
-}
-
 /// #2089: a Date's `util.inspect` rendering — ISO string (unquoted) or "Invalid Date". DateCell pointer only (gated by callers).
 unsafe fn date_inspect_string(value: f64) -> String {
     let s_ptr = crate::date::js_date_to_iso_string(value);
@@ -981,7 +871,7 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
 
                 if gc_type == crate::gc::GC_TYPE_ERROR {
                     let error_ptr = ptr as *const crate::error::ErrorHeader;
-                    format_error_value(error_ptr, depth)
+                    errors::format_error_value(error_ptr, depth)
                 } else if gc_type == crate::gc::GC_TYPE_ARRAY {
                     // Array — format as [ elem1, elem2, ... ] matching Node.js util.inspect.
                     // Cycle check FIRST so back-edges win over depth truncation
@@ -1248,14 +1138,14 @@ fn format_weak_wrapper(
 /// crash safety net for cyclic structures; the Node-style `[Object]` truncation
 /// at depth > 2 is enforced by `format_jsvalue_for_json` on the way in.
 unsafe fn format_object_as_json(
-    obj_ptr: *const crate::object::ObjectHeader,
+    mut obj_ptr: *const crate::object::ObjectHeader,
     depth: usize,
 ) -> String {
     if depth > 10 {
         return "{...}".to_string();
     }
 
-    let obj_addr = obj_ptr as usize;
+    let mut obj_addr = obj_ptr as usize;
 
     // `[util.inspect.custom]` hook: when the object carries a symbol-keyed
     // entry for `Symbol.for("nodejs.util.inspect.custom")` and the
@@ -1366,6 +1256,18 @@ unsafe fn format_object_as_json(
             crate::object::class_name_for_id(class_id).filter(|name| !name.is_empty())
         }
     };
+    let error_headline = if crate::object::extends_builtin_error((*obj_ptr).class_id) {
+        let (headline, refreshed_obj_ptr) = errors::format_error_subclass_headline(
+            obj_ptr,
+            (*obj_ptr).class_id,
+            class_name.as_deref().unwrap_or("Error"),
+        );
+        obj_ptr = refreshed_obj_ptr;
+        obj_addr = obj_ptr as usize;
+        Some(headline)
+    } else {
+        None
+    };
     let has_class_name = class_name.is_some();
     let class_name_ref = if deep_equal_skip_prototype_format_enabled() {
         None
@@ -1385,14 +1287,21 @@ unsafe fn format_object_as_json(
     // null-proto plain object, otherwise nothing. (Distinct from
     // `class_name_ref`/`has_class_name`, which drive the private-field skip
     // and must reflect only a genuine class.)
-    let name_prefix: Option<String> = match class_name_ref {
-        Some(name) => Some(name.to_string()),
-        None if boxed_base.is_none() && is_null_proto => {
-            Some("[Object: null prototype]".to_string())
+    let name_prefix: Option<String> = if let Some(headline) = error_headline.as_ref() {
+        Some(headline.clone())
+    } else {
+        match class_name_ref {
+            Some(name) => Some(name.to_string()),
+            None if boxed_base.is_none() && is_null_proto => {
+                Some("[Object: null prototype]".to_string())
+            }
+            None => None,
         }
-        None => None,
     };
     let empty_object = || {
+        if let Some(headline) = error_headline.as_deref() {
+            return headline.to_string();
+        }
         if let Some(base) = boxed_base.as_deref() {
             return base.to_string();
         }
@@ -1442,6 +1351,13 @@ unsafe fn format_object_as_json(
         // Perry stores private class fields in the regular key table, but
         // Node's util.inspect never exposes them, even with showHidden.
         if has_class_name && key_str.starts_with('#') {
+            continue;
+        }
+
+        // Error inspection consumes an own `name` into the headline. Node
+        // does not print it again as an enumerable body property unless
+        // showHidden asks for the complete reflective surface.
+        if error_headline.is_some() && !show_hidden && key_str == "name" {
             continue;
         }
 
@@ -1701,7 +1617,7 @@ fn format_jsvalue_for_json(value: f64, depth: usize) -> String {
 
                     if gc_type == crate::gc::GC_TYPE_ERROR {
                         let error_ptr = ptr as *const crate::error::ErrorHeader;
-                        format_error_value(error_ptr, depth)
+                        errors::format_error_value(error_ptr, depth)
                     } else if gc_type == crate::gc::GC_TYPE_ARRAY {
                         // Cycle check FIRST so back-edges always print as
                         // `[Circular *N]` regardless of depth (#1204). The
@@ -1846,8 +1762,35 @@ fn escape_string(s: &str) -> String {
 /// whitespace, numeric-leading, and non-ASCII names are quoted. `$` is a
 /// valid JavaScript identifier character but Node deliberately quotes it in
 /// inspected object keys.
-mod inspect_property_key;
-use inspect_property_key::format_inspect_property_key;
+fn format_inspect_property_key(key: &str) -> String {
+    let mut chars = key.chars();
+    let is_bare = chars
+        .next()
+        .is_some_and(|first| first.is_ascii_alphabetic() || first == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_');
+    if is_bare {
+        return key.to_string();
+    }
+
+    // Node prefers the delimiter that avoids an escape when exactly one kind
+    // of quote occurs in the key.
+    if key.contains('\'') && !key.contains('"') {
+        let escaped = key
+            .chars()
+            .flat_map(|c| match c {
+                '\\' => "\\\\".chars().collect::<Vec<_>>(),
+                '"' => "\\\"".chars().collect(),
+                '\n' => "\\n".chars().collect(),
+                '\r' => "\\r".chars().collect(),
+                '\t' => "\\t".chars().collect(),
+                _ => vec![c],
+            })
+            .collect::<String>();
+        format!("\"{}\"", escaped)
+    } else {
+        format!("'{}'", escape_string(key))
+    }
+}
 
 #[cfg(test)]
 mod inspect_property_key_tests;

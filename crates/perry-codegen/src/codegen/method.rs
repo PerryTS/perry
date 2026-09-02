@@ -978,17 +978,10 @@ pub(super) fn compile_method(
                                 .cloned()
                                 .map(|slot| ctx.block().load(DOUBLE, &slot))
                                 .unwrap_or_else(|| undef_lit.clone());
-                            let kind_idx = ctx.strings.intern(&pname_owned);
-                            let kind_handle_global =
-                                format!("@{}", ctx.strings.entry(kind_idx).handle_global);
                             let blk = ctx.block();
-                            let kind_box = blk.load(DOUBLE, &kind_handle_global);
-                            let kind_bits = blk.bitcast_double_to_i64(&kind_box);
-                            let kind_raw =
-                                blk.and(I64, &kind_bits, crate::nanbox::POINTER_MASK_I64);
                             blk.call_void(
                                 "js_error_subclass_default_init",
-                                &[(DOUBLE, &this_box), (DOUBLE, &msg_box), (I64, &kind_raw)],
+                                &[(DOUBLE, &this_box), (DOUBLE, &msg_box)],
                             );
                         }
                         ("".to_string(), 0)

@@ -329,6 +329,31 @@ fn extends_builtin_error_slow(class_id: u32) -> bool {
     false
 }
 
+/// Resolve the Error-family prototype at the bottom of a registered class
+/// chain. Callers first establish [`extends_builtin_error`]; returning
+/// `"Error"` on an incomplete/cyclic chain is the same fallback used by
+/// ordinary prototype-property lookup.
+pub(crate) fn builtin_error_prototype_name(class_id: u32) -> &'static str {
+    let mut current = class_id;
+    for _ in 0..32 {
+        match current {
+            crate::error::CLASS_ID_TYPE_ERROR => return "TypeError",
+            crate::error::CLASS_ID_RANGE_ERROR => return "RangeError",
+            crate::error::CLASS_ID_REFERENCE_ERROR => return "ReferenceError",
+            crate::error::CLASS_ID_SYNTAX_ERROR => return "SyntaxError",
+            crate::error::CLASS_ID_EVAL_ERROR => return "EvalError",
+            crate::error::CLASS_ID_URI_ERROR => return "URIError",
+            crate::error::CLASS_ID_AGGREGATE_ERROR => return "AggregateError",
+            crate::error::CLASS_ID_ERROR => return "Error",
+            _ => match get_parent_class_id(current) {
+                Some(parent) if parent != 0 && parent != current => current = parent,
+                _ => break,
+            },
+        }
+    }
+    "Error"
+}
+
 #[cfg(test)]
 mod dense_parent_tests {
     use super::*;

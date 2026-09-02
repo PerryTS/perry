@@ -601,8 +601,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // family) — HIR captures `extends_expr` for any unknown Ident,
                     // INCLUDING the built-ins, so we'd otherwise eat the more-correct
                     // Error-init path below. The built-in arms handle their own
-                    // semantics (Error sets this.message + this.name; streams allocate
-                    // a registry handle). Anything else with an extends_expr is a
+                    // semantics (Error installs own message/stack slots; streams
+                    // allocate a registry handle). Anything else with an extends_expr is a
                     // real runtime-value parent and routes through this dispatch.
                     // The classic node:stream / Web-Streams names are only the
                     // genuine built-in parents when HIR did NOT capture an
@@ -1169,8 +1169,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     }
                     // Built-in parent (Error, TypeError, RangeError, etc.)
                     // — user classes extending them need `super(message)` to
-                    // assign `this.message = args[0]` and `this.name = parent_name`
-                    // so downstream `err.message` / `err.name` access works.
+                    // install the own non-enumerable `message`/`stack` slots;
+                    // `name` resolves from the Error-family prototype.
                     // `instanceof Error` walking the extends chain is handled
                     // elsewhere; this just makes `err.message` non-undefined.
                     if matches!(
@@ -1274,6 +1274,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         let this_slot = ctx.this_stack.last().cloned();
                         if let Some(this_slot) = this_slot {
                             let blk = ctx.block();
+                            // #9410/#9440: capture the own non-enumerable
+                            // `stack` before installing `message`, matching
+                            // V8's observable own-key order. Its lazy getter
+                            // still reads `name`/`message` after `super()`.
+                            let this_for_stack = blk.load(DOUBLE, &this_slot);
+                            blk.call_void(
+                                "js_error_subclass_capture_stack",
+                                &[(DOUBLE, &this_for_stack)],
+                            );
+                            // Capture can collect, so derive the raw receiver
+                            // from a fresh load for the remaining stores.
                             let this_box = blk.load(DOUBLE, &this_slot);
                             let this_bits = blk.bitcast_double_to_i64(&this_box);
                             let this_handle = blk.and(I64, &this_bits, POINTER_MASK_I64);
@@ -1295,58 +1306,27 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                     &[(I64, &this_handle), (I64, &key_raw), (DOUBLE, msg_val)],
                                 );
                             }
-                            // this.name = <parent_name> as default (can be
-                            // overridden by the subclass constructor body).
-                            let name_idx = ctx.strings.intern("name");
-                            let name_handle_global =
-                                format!("@{}", ctx.strings.entry(name_idx).handle_global);
-                            let name_val_idx = ctx.strings.intern(&parent_name);
-                            let name_val_global =
-                                format!("@{}", ctx.strings.entry(name_val_idx).handle_global);
-                            let blk = ctx.block();
-                            let name_key_box = blk.load(DOUBLE, &name_handle_global);
-                            let name_key_bits = blk.bitcast_double_to_i64(&name_key_box);
-                            let name_key_raw = blk.and(I64, &name_key_bits, POINTER_MASK_I64);
-                            let name_val_box = blk.load(DOUBLE, &name_val_global);
-                            blk.call_void(
-                                "js_object_set_field_by_name",
-                                &[
-                                    (I64, &this_handle),
-                                    (I64, &name_key_raw),
-                                    (DOUBLE, &name_val_box),
-                                ],
-                            );
+                            // `name` is inherited from the Error-family
+                            // prototype. Do not stamp it here: untouched Error
+                            // subclasses must have no own `name`; a later
+                            // `this.name = ...` remains an ordinary enumerable
+                            // own assignment (#9440).
                             // #5127: `super(message, options)` must forward the
                             // ES2022 `cause` option. The instance is a generic
                             // object, so install a non-enumerable `cause`
                             // property from args[1] when present.
                             if let Some(opts_val) = lowered_args.get(1) {
                                 let blk = ctx.block();
+                                // The message store above can collect. Reload
+                                // the rooted receiver before applying `cause`.
+                                let this_box = blk.load(DOUBLE, &this_slot);
+                                let this_bits = blk.bitcast_double_to_i64(&this_box);
+                                let this_handle = blk.and(I64, &this_bits, POINTER_MASK_I64);
                                 blk.call_void(
                                     "js_error_apply_cause_to_object",
                                     &[(I64, &this_handle), (DOUBLE, opts_val)],
                                 );
                             }
-                            // #9410: `stack`. `super(message)` into a built-in
-                            // Error stamps `message`/`name`/`cause` onto the
-                            // already-allocated plain instance and stops there,
-                            // so `new (class extends Error {})("x").stack` was
-                            // `undefined` while `new Error("x").stack` is a
-                            // string. The frame is captured HERE, at the
-                            // construction site; the `name: message` head is
-                            // formatted on read, because a subclass
-                            // constructor assigns `this.name` after `super()`
-                            // returns and Node reports the assigned name.
-                            let blk = ctx.block();
-                            // Reload `this` from its slot: the stamps above
-                            // can collect, and a DOUBLE held across a
-                            // collecting call is the bare-pointer hazard
-                            // #8770 is about.
-                            let this_for_stack = blk.load(DOUBLE, &this_slot);
-                            blk.call_void(
-                                "js_error_subclass_capture_stack",
-                                &[(DOUBLE, &this_for_stack)],
-                            );
                         }
                     }
                     bind_derived_this_after_super(ctx);
@@ -1591,11 +1571,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 }
 
                 restore_inline_constructor_scope(ctx, saved_scope);
-            } else if let Some(error_kind) = {
+            } else if let Some(_error_kind) = {
                 // Issue #573: walk the chain from `effective_parent_class`
                 // upward; if it terminates at an Error-like built-in,
-                // emit the same Error init the no-parent-class branch
-                // does (sets this.message + this.name). Without this,
+                // emit the same Error init the no-parent-class branch does
+                // (own non-enumerable `stack`/`message`; inherited `name`). Without this,
                 // `class C extends Error {}; class D extends C { ctor(m){
                 // super(m); } }` reaches here with `effective_parent_class
                 // = C` (no own ctor) and a parent of "Error" (not in
@@ -1633,6 +1613,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let this_slot = ctx.this_stack.last().cloned();
                 if let Some(this_slot) = this_slot {
                     let blk = ctx.block();
+                    // The indirect all-implicit chain is still an Error
+                    // construction site. Capture `stack` first for the same
+                    // own-key order as the direct built-in arm above.
+                    let this_for_stack = blk.load(DOUBLE, &this_slot);
+                    blk.call_void(
+                        "js_error_subclass_capture_stack",
+                        &[(DOUBLE, &this_for_stack)],
+                    );
                     let this_box = blk.load(DOUBLE, &this_slot);
                     let this_bits = blk.bitcast_double_to_i64(&this_box);
                     let this_handle = blk.and(I64, &this_bits, POINTER_MASK_I64);
@@ -1650,25 +1638,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             &[(I64, &this_handle), (I64, &key_raw), (DOUBLE, msg_val)],
                         );
                     }
-                    let name_idx = ctx.strings.intern("name");
-                    let name_handle_global =
-                        format!("@{}", ctx.strings.entry(name_idx).handle_global);
-                    let name_val_idx = ctx.strings.intern(&error_kind);
-                    let name_val_global =
-                        format!("@{}", ctx.strings.entry(name_val_idx).handle_global);
-                    let blk = ctx.block();
-                    let name_key_box = blk.load(DOUBLE, &name_handle_global);
-                    let name_key_bits = blk.bitcast_double_to_i64(&name_key_box);
-                    let name_key_raw = blk.and(I64, &name_key_bits, POINTER_MASK_I64);
-                    let name_val_box = blk.load(DOUBLE, &name_val_global);
-                    blk.call_void(
-                        "js_object_set_field_by_name",
-                        &[
-                            (I64, &this_handle),
-                            (I64, &name_key_raw),
-                            (DOUBLE, &name_val_box),
-                        ],
-                    );
                 }
             } else if let Some(ctor) = ctx
                 .imported_class_ctors

@@ -316,45 +316,7 @@ pub(crate) unsafe fn ordinary_object_prototype_property_value(
                 scope.root_nanbox_f64(crate::value::js_nanbox_pointer(obj as usize as i64));
             let key_h = scope.root_nanbox_f64(crate::value::nanbox_string_key(key));
             let _guard = object_prototype_lookup_guard()?;
-            let mut current = class_id;
-            let mut prototype_name = "Error";
-            for _ in 0..32 {
-                match current {
-                    crate::error::CLASS_ID_TYPE_ERROR => {
-                        prototype_name = "TypeError";
-                        break;
-                    }
-                    crate::error::CLASS_ID_RANGE_ERROR => {
-                        prototype_name = "RangeError";
-                        break;
-                    }
-                    crate::error::CLASS_ID_REFERENCE_ERROR => {
-                        prototype_name = "ReferenceError";
-                        break;
-                    }
-                    crate::error::CLASS_ID_SYNTAX_ERROR => {
-                        prototype_name = "SyntaxError";
-                        break;
-                    }
-                    crate::error::CLASS_ID_EVAL_ERROR => {
-                        prototype_name = "EvalError";
-                        break;
-                    }
-                    crate::error::CLASS_ID_URI_ERROR => {
-                        prototype_name = "URIError";
-                        break;
-                    }
-                    crate::error::CLASS_ID_AGGREGATE_ERROR => {
-                        prototype_name = "AggregateError";
-                        break;
-                    }
-                    crate::error::CLASS_ID_ERROR => break,
-                    _ => match super::super::get_parent_class_id(current) {
-                        Some(parent) if parent != 0 && parent != current => current = parent,
-                        _ => break,
-                    },
-                }
-            }
+            let prototype_name = super::super::builtin_error_prototype_name(class_id);
             let prototype = super::super::builtin_prototype_value(prototype_name);
             let prototype_value = JSValue::from_bits(prototype.to_bits());
             if prototype_value.is_pointer() {

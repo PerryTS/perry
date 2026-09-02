@@ -1054,15 +1054,24 @@ unsafe fn default_error_init_for_implicit_chain(
     if !crate::object::extends_builtin_error(class_cid) {
         return;
     }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let this_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(inst as i64));
+    // Read and root the forwarded value before stack capture can collect; the
+    // caller-owned argument slice itself is not a runtime handle.
+    let msg_h = if args_ptr.is_null() || args_len == 0 {
+        None
+    } else {
+        Some(scope.root_nanbox_f64(*args_ptr))
+    };
     // #9410: the dynamic replay path is a construction site like any other,
     // so the instance gets its own lazily-formatted `stack` here — before the
     // message guard below, which returns early for `new X()` with no argument
     // and would otherwise leave exactly those instances trace-less.
-    crate::error::js_error_subclass_capture_stack(crate::value::js_nanbox_pointer(inst as i64));
-    if args_ptr.is_null() || args_len == 0 {
+    crate::error::js_error_subclass_capture_stack(this_h.get_nanbox_f64());
+    let Some(msg_h) = msg_h else {
         return;
-    }
-    let msg = *args_ptr;
+    };
+    let msg = msg_h.get_nanbox_f64();
     if msg.to_bits() == crate::value::TAG_UNDEFINED {
         return;
     }
@@ -1070,9 +1079,16 @@ unsafe fn default_error_init_for_implicit_chain(
     if msg_str.is_null() {
         return;
     }
+    let msg_str_h = scope.root_string_ptr(msg_str);
+    let key_h = scope.root_string_ptr(crate::string::js_string_from_bytes(
+        b"message".as_ptr(),
+        b"message".len() as u32,
+    ));
+    let inst = crate::value::js_nanbox_get_pointer(this_h.get_nanbox_f64()) as *mut ObjectHeader;
+    let msg_str = msg_str_h.get_raw_const_ptr::<crate::StringHeader>();
     let boxed =
         f64::from_bits(crate::value::STRING_TAG | (msg_str as u64 & crate::value::POINTER_MASK));
-    let key = crate::string::js_string_from_bytes(b"message".as_ptr(), b"message".len() as u32);
+    let key = key_h.get_raw_const_ptr::<crate::StringHeader>();
     crate::object::js_object_set_field_by_name(inst, key, boxed);
 }
 
@@ -1089,53 +1105,48 @@ unsafe fn default_error_init_for_implicit_chain(
 /// standalone ctor's forwarding params are padded with undefined for missing
 /// call args, and setting an OWN undefined `message` would shadow
 /// `Error.prototype.message` (""). Set non-enumerable, matching the built-in
-/// (test262 NativeError/*-message). `name` mirrors the static arm: the
-/// terminating Error-family kind as an own property.
+/// (test262 NativeError/*-message). `name` remains inherited from the
+/// terminating Error-family prototype (#9440).
 #[no_mangle]
-pub unsafe extern "C" fn js_error_subclass_default_init(
-    this_val: f64,
-    msg: f64,
-    name_ptr: *const crate::StringHeader,
-) {
+pub unsafe extern "C" fn js_error_subclass_default_init(this_val: f64, msg: f64) {
     let bits = this_val.to_bits();
     let raw = (bits & crate::value::POINTER_MASK) as usize;
     if raw < 0x10000 {
         return;
     }
-    let inst = raw as *mut ObjectHeader;
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let this_h = scope.root_nanbox_f64(this_val);
+    let msg_h = scope.root_nanbox_f64(msg);
+    // Capture first: V8 exposes `stack` before `message` from
+    // `getOwnPropertyNames`, and the lazy getter still observes the later
+    // message or an explicit user-assigned `name`.
+    crate::error::js_error_subclass_capture_stack(this_h.get_nanbox_f64());
+    let msg = msg_h.get_nanbox_f64();
     if msg.to_bits() != crate::value::TAG_UNDEFINED {
         let msg_str = crate::value::js_jsvalue_to_string(msg);
         if !msg_str.is_null() {
+            let msg_str_h = scope.root_string_ptr(msg_str);
+            let key_h = scope.root_string_ptr(crate::string::js_string_from_bytes(
+                b"message".as_ptr(),
+                b"message".len() as u32,
+            ));
+            let inst =
+                crate::value::js_nanbox_get_pointer(this_h.get_nanbox_f64()) as *mut ObjectHeader;
+            let msg_str = msg_str_h.get_raw_const_ptr::<crate::StringHeader>();
             let boxed = f64::from_bits(
                 crate::value::STRING_TAG | (msg_str as u64 & crate::value::POINTER_MASK),
             );
-            let key =
-                crate::string::js_string_from_bytes(b"message".as_ptr(), b"message".len() as u32);
+            let key = key_h.get_raw_const_ptr::<crate::StringHeader>();
             crate::object::js_object_set_field_by_name_nonenum(inst, key, boxed);
         }
     }
-    if !name_ptr.is_null() {
-        let name_boxed = f64::from_bits(
-            crate::value::STRING_TAG | (name_ptr as u64 & crate::value::POINTER_MASK),
-        );
-        let key = crate::string::js_string_from_bytes(b"name".as_ptr(), b"name".len() as u32);
-        crate::object::js_object_set_field_by_name(inst, key, name_boxed);
-    }
-    // #9410: `stack`. The synthesized standalone ctor stamps `message` and
-    // `name` but installed nothing for `stack`, so `new X("m").stack` was
-    // `undefined` for every `class X extends Error {}` with no own
-    // constructor. Last, so the getter's head sees the `name` just written.
-    crate::error::js_error_subclass_capture_stack(this_val);
 }
 
 /// Keepalive: generated code is the only caller (#6469).
 #[cfg(feature = "keepalive-anchors")]
 #[used]
-static KEEP_JS_ERROR_SUBCLASS_DEFAULT_INIT: unsafe extern "C" fn(
-    f64,
-    f64,
-    *const crate::StringHeader,
-) = js_error_subclass_default_init;
+static KEEP_JS_ERROR_SUBCLASS_DEFAULT_INIT: unsafe extern "C" fn(f64, f64) =
+    js_error_subclass_default_init;
 
 /// Find the per-evaluation class object that owns `target_cid` while walking a
 /// fresh derived class's pinned parent chain. The template class-id registry

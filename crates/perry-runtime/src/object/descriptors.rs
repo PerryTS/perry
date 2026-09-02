@@ -1351,7 +1351,18 @@ fn js_object_get_own_property_names_shape(obj_value: f64) -> f64 {
             use super::exotic_expando::ExoticKind;
             let mut names = match kind {
                 ExoticKind::RegExp => vec!["lastIndex".to_string()],
-                ExoticKind::Error => vec!["message".to_string(), "stack".to_string()],
+                ExoticKind::Error => {
+                    // V8 creates the lazy own `stack` before Error's optional
+                    // `message`. The header keeps both payload slots, but only
+                    // `message` values supplied to the constructor are own
+                    // properties; `name` is always inherited until assigned.
+                    let mut builtin = vec!["stack".to_string()];
+                    let error = addr as *mut crate::error::ErrorHeader;
+                    if crate::error::js_error_has_own_property(error, "message") {
+                        builtin.push("message".to_string());
+                    }
+                    builtin
+                }
                 ExoticKind::Date
                 | ExoticKind::Temporal
                 | ExoticKind::Promise
