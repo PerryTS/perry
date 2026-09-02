@@ -97,10 +97,6 @@ fn assert_codegen_cache(
 }
 
 #[test]
-#[ignore = "#9378: a dependency change invalidates its dependents' codegen objects, so the \
-           expected 1 cache hit is 0. Pre-existing — fails identically at the Aug-31 \
-           release pin (83754818ea) on a clean build, and is unrelated to #9226. \
-           Ignored to unblock a release it does not belong to; see #9378 to re-enable."]
 fn native_compile_skips_link_on_identical_second_build() {
     let dir = tempfile::tempdir().expect("tempdir");
     let project = dir.path();
@@ -113,16 +109,12 @@ fn native_compile_skips_link_on_identical_second_build() {
         "{\"name\":\"link-cache-test\"}\n",
     )
     .unwrap();
-    fs::write(
-        src.join("util.ts"),
-        "export function answer(): number { return 41; }\n",
-    )
-    .unwrap();
-    fs::write(
-        src.join("main.ts"),
-        "import { answer } from './util';\nconsole.log(answer() + 1);\n",
-    )
-    .unwrap();
+    // Keep the changed module behind a side-effect import. A direct imported
+    // function call can be specialized into the consumer, in which case a
+    // body edit legitimately changes both modules' post-transform HIR and
+    // cannot prove the one-hit/one-miss object-cache contract below.
+    fs::write(src.join("util.ts"), "console.log('util-41');\n").unwrap();
+    fs::write(src.join("main.ts"), "import './util';\nconsole.log(42);\n").unwrap();
 
     let entry = src.join("main.ts");
     let output = dist.join("app");
@@ -132,13 +124,13 @@ fn native_compile_skips_link_on_identical_second_build() {
     assert_build_cache_miss(&first, "manifest-missing");
     assert_codegen_cache(&first, 0, 2, 0, 2, 0);
     let first_bytes = fs::read(&output).expect("first output");
-    assert_eq!(run_binary(&output).trim(), "42");
+    assert_eq!(run_binary(&output).trim(), "util-41\n42");
 
     let second = compile_json(project, &entry, &output);
     assert_skipped(&second);
     assert_build_cache_hit(&second);
     assert_eq!(fs::read(&output).expect("second output"), first_bytes);
-    assert_eq!(run_binary(&output).trim(), "42");
+    assert_eq!(run_binary(&output).trim(), "util-41\n42");
 
     fs::write(
         project.join("package.json"),
@@ -147,7 +139,7 @@ fn native_compile_skips_link_on_identical_second_build() {
     .unwrap();
     let config_changed = compile_json(project, &entry, &output);
     assert_build_cache_miss(&config_changed, "config");
-    assert_eq!(run_binary(&output).trim(), "42");
+    assert_eq!(run_binary(&output).trim(), "util-41\n42");
 
     let env_changed = compile_json_with_env(project, &entry, &output, &[("PERRY_DEBUG_INIT", "1")]);
     assert_linked(&env_changed);
@@ -156,22 +148,18 @@ fn native_compile_skips_link_on_identical_second_build() {
     let env_restored = compile_json(project, &entry, &output);
     assert_linked(&env_restored);
     assert_build_cache_miss(&env_restored, "env");
-    assert_eq!(run_binary(&output).trim(), "42");
+    assert_eq!(run_binary(&output).trim(), "util-41\n42");
 
     let warm_again = compile_json(project, &entry, &output);
     assert_skipped(&warm_again);
     assert_build_cache_hit(&warm_again);
 
-    fs::write(
-        src.join("util.ts"),
-        "export function answer(): number { return 40; }\n",
-    )
-    .unwrap();
+    fs::write(src.join("util.ts"), "console.log('util-40');\n").unwrap();
     let changed = compile_json(project, &entry, &output);
     assert_linked(&changed);
     assert_build_cache_miss(&changed, "source");
     assert_codegen_cache(&changed, 1, 1, 1, 1, 0);
-    assert_eq!(run_binary(&output).trim(), "41");
+    assert_eq!(run_binary(&output).trim(), "util-40\n42");
 
     fs::remove_file(&output).unwrap();
     let missing_output = compile_json(project, &entry, &output);

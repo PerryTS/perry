@@ -211,10 +211,6 @@ t.then((v) => console.log("then:", v));
 /// instead of the value (CodeRabbit finding on the initial version of this
 /// fix).
 #[test]
-#[ignore = "#9377: a bare p.then() pass-through chain resolves AFTER a later combinator \
-           (values correct, order reversed). Pre-existing — fails identically at the \
-           Aug-31 release pin (83754818ea) on a clean build. Ignored to unblock a \
-           release it does not belong to; see #9377 to re-enable."]
 fn degenerate_then_chain_survives_combinator() {
     let dir = tempfile::tempdir().expect("tempdir");
     let stdout = compile_and_run(
@@ -231,5 +227,28 @@ resolveP(9);
     assert_eq!(
         stdout, "chain: 9\nall: 9\n",
         "a bare p.then() pass-through chain must survive a later combinator"
+    );
+}
+
+/// The inverse registration order must retain the allocation-free
+/// PromiseAllState path and still run the combinator before the later bare
+/// `.then()` chain.
+#[test]
+fn promise_all_before_degenerate_then_keeps_registration_order() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let stdout = compile_and_run(
+        dir.path(),
+        r#"
+let resolveP: any;
+const p = new Promise((r) => { resolveP = r; });
+Promise.all([p]).then(([v]) => console.log("all:", v));
+const chain = p.then();
+chain.then((v) => console.log("chain:", v));
+resolveP(9);
+"#,
+    );
+    assert_eq!(
+        stdout, "all: 9\nchain: 9\n",
+        "Promise.all registered first must keep its earlier reaction order"
     );
 }
