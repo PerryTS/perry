@@ -115,6 +115,32 @@ function frozenCell(): any {
   return c;
 }
 
+// #9542: the class-field lane of the `caller` receiver rule. A field literally
+// named `caller` on an ORDINARY object is not the poison pill -- that accessor
+// lives on Function.prototype and is keyed on the RECEIVER, so a class INSTANCE
+// carrying the name must behave exactly like `Cell` above.
+//
+// This case was held out of the file when #9459 landed: adding it made the
+// module SIGSEGV on an unrelated earlier statement
+// (`computedPlus[computedKey] += 1`) with a garbage key inside
+// `set_field_by_name_object_tail`. That was #9499, not a property-set bug --
+// a root-slot reload folded back into an earlier safepoint's spill slot, so
+// the setter was handed the RECEIVER as its key. #9522's reload launder fixed
+// it; this case is the second witness, and it goes red again (SIGSEGV, output
+// truncated mid-arm) if that launder is reverted.
+class CallerCell {
+  caller: number;
+  constructor(caller: number) {
+    this.caller = caller;
+  }
+}
+
+function frozenCallerCell(): any {
+  const c = new CallerCell(1);
+  Object.freeze(c);
+  return c;
+}
+
 class RestrictedClassTarget {
   static marker = 1;
 }
@@ -556,6 +582,29 @@ function sloppyArm(): void {
     threw,
     hasOwn(RestrictedClassTarget, "caller"),
   );
+
+  // #9542: a frozen CLASS INSTANCE whose field is named `caller`. The receiver
+  // is an ordinary object, so the poison pill must NOT apply -- only the
+  // assignment's own Throw flag decides, exactly as for `Cell` above.
+  const sloppyCallerCell = frozenCallerCell();
+  threw = false;
+  try {
+    sloppyCallerCell.caller += 1;
+  } catch {
+    threw = true;
+  }
+  report("sloppy frozen class field .caller +=:", threw, sloppyCallerCell.caller);
+
+  // Not frozen: the store must still LAND, so a fix that silenced the lane
+  // rather than un-rejecting it fails here.
+  const sloppyLiveCallerCell = new CallerCell(1);
+  threw = false;
+  try {
+    sloppyLiveCallerCell.caller += 1;
+  } catch {
+    threw = true;
+  }
+  report("sloppy live class field .caller +=:", threw, sloppyLiveCallerCell.caller);
 
   // ---- `++` (Expr::PropertyUpdate) alongside `+=`, so the two spellings of
   //      one operation are asserted in the same file and mode ----
@@ -1018,6 +1067,29 @@ function strictArm(): void {
     threw,
     hasOwn(RestrictedClassTarget, "caller"),
   );
+
+  // #9542: a frozen CLASS INSTANCE whose field is named `caller`. The receiver
+  // is an ordinary object, so the poison pill must NOT apply -- only the
+  // assignment's own Throw flag decides, exactly as for `Cell` above.
+  const strictCallerCell = frozenCallerCell();
+  threw = false;
+  try {
+    strictCallerCell.caller += 1;
+  } catch {
+    threw = true;
+  }
+  report("strict frozen class field .caller +=:", threw, strictCallerCell.caller);
+
+  // Not frozen: the store must still LAND, so a fix that silenced the lane
+  // rather than un-rejecting it fails here.
+  const strictLiveCallerCell = new CallerCell(1);
+  threw = false;
+  try {
+    strictLiveCallerCell.caller += 1;
+  } catch {
+    threw = true;
+  }
+  report("strict live class field .caller +=:", threw, strictLiveCallerCell.caller);
 
   // ---- `++` (Expr::PropertyUpdate) alongside `+=`, so the two spellings of
   //      one operation are asserted in the same file and mode ----
