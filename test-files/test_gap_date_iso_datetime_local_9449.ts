@@ -13,7 +13,11 @@
 //     (which read back the very digits that were written, in any zone) and
 //     compare the instant against a locally-constructed reference `Date` by
 //     equality.
-// Every expectation is measured against `node --experimental-strip-types`.
+// #9509 extends the same fixture over the parser tail that follows those date
+// and clock fields. Perry used to discard any bytes it did not understand, so
+// named US zones and AM/PM were ignored while junk glued to a clock was
+// accepted. Every expectation is measured against
+// `node --experimental-strip-types`.
 
 // ---- absolute rows: a zone designator, or no time at all -------------------
 function iso(input: string): void {
@@ -29,6 +33,23 @@ iso("2026-09");
 iso("2026");
 iso("+002026-09-01");
 iso("-000001-07-01");
+
+// Node's implementation-defined date-only surface accepts a bare zone word,
+// both separated and directly attached. Missing month/day components retain
+// the same defaults as the plain ISO spellings above.
+iso("2026 GMT");
+iso("2026-09 GMT");
+iso("2026-09-01 GMT");
+iso("2026-09-01 Z");
+iso("2026-09-01Z");
+iso("2026-09-01 EST");
+iso("2026-09-01 EDT");
+iso("2026-09-01 CST");
+iso("2026-09-01 CDT");
+iso("2026-09-01 MST");
+iso("2026-09-01 MDT");
+iso("2026-09-01 PST");
+iso("2026-09-01 PDT");
 
 // An explicit designator wins in the date-time form, exactly as before.
 iso("2026-09-01T10:30Z");
@@ -59,6 +80,29 @@ iso("2026-09-01 10:30 GMT+0500");
 iso("2026-09-01 10:30 GMT+05:00");
 iso("2026-09-01 10:30 +0500");
 iso("2026-09-01 10:30:45 +05:00");
+
+// V8's legacy zone-name table is fixed-offset and deliberately small. These
+// rows also prove that the tail is consumed rather than merely classified.
+iso("2026-09-01 10:30 EST");
+iso("2026-09-01 10:30 EDT");
+iso("2026-09-01 10:30 CST");
+iso("2026-09-01 10:30 CDT");
+iso("2026-09-01 10:30 MST");
+iso("2026-09-01 10:30 MDT");
+iso("2026-09-01 10:30 PST");
+iso("2026-09-01 10:30 PDT");
+// Meridiem and zone may occur together, in either order.
+iso("2026-09-01 10:30 PM EST");
+iso("2026-09-01 10:30 EST PM");
+iso("2026-09-01 12:30 AM PST");
+
+// A word must be token-separated from the clock. These used to be accepted
+// because only the leading HH:MM bytes were read and the rest was discarded.
+iso("2026-09-01 10:30GMT");
+iso("2026-09-01 10:30EST");
+iso("2026-09-01 10:30PM");
+iso("2026-09-01 10:30 XYZ");
+iso("2026-09-01 10:30:45oops");
 
 // ---- wall-clock rows: a time, no designator => LOCAL -----------------------
 function local(input: string): void {
@@ -93,6 +137,17 @@ local("2026-09-01 10:30");
 local("2026-09-01 10:30:45");
 local("2026-09-01 10:30:45.123");
 local("2026-09-01 00:00");
+local("2026-09-01  10:30");
+// The implementation-defined partial forms default the missing day/month to
+// one before applying the clock.
+local("2026-09 10:30");
+local("2026-09T10:30");
+local("2026T10:30");
+// AM/PM is a clock modifier, including the two 12-hour boundary cases.
+local("2026-09-01 10:30 AM");
+local("2026-09-01 10:30 PM");
+local("2026-09-01 12:30 AM");
+local("2026-09-01 12:30 PM");
 // A January row and a July row: if the conversion used a FIXED offset rather
 // than the offset in effect at that instant, one of these two would be wrong
 // in any zone that observes DST.
@@ -115,6 +170,13 @@ sameInstant("2026-09-01T10:30:45", new Date(2026, 8, 1, 10, 30, 45, 0));
 sameInstant("2026-09-01T10:30:45.123", new Date(2026, 8, 1, 10, 30, 45, 123));
 sameInstant("2026-09-01 10:30", new Date(2026, 8, 1, 10, 30, 0, 0));
 sameInstant("2026-09-01 10:30:45.123", new Date(2026, 8, 1, 10, 30, 45, 123));
+sameInstant("2026-09-01  10:30", new Date(2026, 8, 1, 10, 30, 0, 0));
+sameInstant("2026-09 10:30", new Date(2026, 8, 1, 10, 30, 0, 0));
+sameInstant("2026-09T10:30", new Date(2026, 8, 1, 10, 30, 0, 0));
+sameInstant("2026T10:30", new Date(2026, 0, 1, 10, 30, 0, 0));
+sameInstant("2026-09-01 10:30 PM", new Date(2026, 8, 1, 22, 30, 0, 0));
+sameInstant("2026-09-01 12:30 AM", new Date(2026, 8, 1, 0, 30, 0, 0));
+sameInstant("2026-09-01 12:30 PM", new Date(2026, 8, 1, 12, 30, 0, 0));
 sameInstant("2026-09-01T00:00", new Date(2026, 8, 1, 0, 0, 0, 0));
 sameInstant("2026-09-01T24:00", new Date(2026, 8, 2, 0, 0, 0, 0));
 sameInstant("2026-01-15T10:30", new Date(2026, 0, 15, 10, 30, 0, 0));

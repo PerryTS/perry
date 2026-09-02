@@ -207,6 +207,59 @@ fn test_date_parse_iso_offsetless_datetime_is_local() {
     assert_eq!(wall("2026-09-01 10:30 (comment)"), (2026, 9, 1, 10, 30, 0));
 }
 
+/// #9509: the ISO/space parser must consume its complete tail. V8 accepts a
+/// fixed set of zone and meridiem tokens; an unknown or unseparated word is
+/// Invalid Date rather than ignored.
+#[test]
+fn test_date_parse_iso_tail_tokens_are_consumed() {
+    let wall = |s: &str| {
+        let ts = parse_date_string(s);
+        assert!(!ts.is_nan(), "expected a valid date for {s:?}");
+        let (y, mo, d, h, mi, sec, _) = timestamp_to_local_components((ts as i64).div_euclid(1000));
+        (y, mo, d, h, mi, sec)
+    };
+
+    assert_eq!(wall("2026-09 10:30"), (2026, 9, 1, 10, 30, 0));
+    assert_eq!(wall("2026-09-01  10:30"), (2026, 9, 1, 10, 30, 0));
+    assert_eq!(wall("2026-09-01 10:30 PM"), (2026, 9, 1, 22, 30, 0));
+    assert_eq!(wall("2026-09-01 12:30 AM"), (2026, 9, 1, 0, 30, 0));
+    assert_eq!(wall("2026-09-01 12:30 PM"), (2026, 9, 1, 12, 30, 0));
+
+    let midnight = 1_788_220_800_000.0;
+    for s in ["2026-09-01 GMT", "2026-09-01 Z", "2026-09-01Z"] {
+        assert_eq!(parse_date_string(s), midnight, "{s:?}");
+    }
+    assert_eq!(
+        parse_date_string("2026-09-01 EST"),
+        midnight + 5.0 * 3_600_000.0
+    );
+    assert_eq!(
+        parse_date_string("2026-09-01 PDT"),
+        midnight + 7.0 * 3_600_000.0
+    );
+    assert_eq!(
+        parse_date_string("2026-09-01 10:30 PM EST"),
+        midnight + 27.5 * 3_600_000.0
+    );
+    assert_eq!(
+        parse_date_string("2026-09-01 12:30 AM PST"),
+        midnight + 8.5 * 3_600_000.0
+    );
+
+    for bad in [
+        "2026-09-01 10:30GMT",
+        "2026-09-01 10:30EST",
+        "2026-09-01 10:30PM",
+        "2026-09-01 10:30 XYZ",
+        "2026-09-01 10:30:45oops",
+    ] {
+        assert!(
+            parse_date_string(bad).is_nan(),
+            "expected Invalid Date for {bad:?}"
+        );
+    }
+}
+
 /// #9414: the numeric slash grammar node accepts as its
 /// implementation-defined format. Measured against
 /// `node --experimental-strip-types`, not derived from the spec (which
