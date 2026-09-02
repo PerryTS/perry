@@ -22,6 +22,8 @@ pub mod assimilate;
 pub mod async_step;
 pub mod checked_dispatch;
 pub mod combinators;
+#[cfg(test)]
+mod cross_thread_pin_tests;
 pub(crate) mod keyed_table;
 pub mod microtasks;
 pub mod native_async;
@@ -532,6 +534,12 @@ pub type ClosurePtr = *const crate::closure::ClosureHeader;
 pub struct Promise {
     /// Current state of the promise
     pub(crate) state: PromiseState,
+    /// #9552 — non-zero while this promise holds the cross-thread pin taken by
+    /// `js_promise_new_cross_thread`. Lives in the padding after `state`, so no
+    /// other field moves. Cleared, and the pin released, by the settlement
+    /// paths (`js_promise_resolve` / `js_promise_reject`) and by
+    /// `remove_token_from_registry` for a token dropped without settling.
+    pub(crate) native_pinned: u8,
     /// The resolved value (if fulfilled)
     pub(crate) value: f64,
     /// The rejection reason (if rejected)
@@ -565,6 +573,7 @@ impl Promise {
     pub(crate) fn new() -> Self {
         Promise {
             state: PromiseState::Pending,
+            native_pinned: 0,
             value: 0.0,
             reason: 0.0,
             on_fulfilled: ptr::null(),
@@ -1263,4 +1272,67 @@ pub extern "C" fn js_microtasks_pending() -> i32 {
         return 1;
     }
     TASK_QUEUE.with(|q| if q.borrow().is_empty() { 0 } else { 1 })
+}
+
+/// #9552 — what a raw promise address handed back by native code names.
+#[derive(Debug, PartialEq, Eq)]
+pub enum NativePromiseAddr {
+    /// A null hand-off (a caller that never minted a promise).
+    Null,
+    /// A live promise.
+    Live(*mut Promise),
+    /// Not a tracked heap object at all (freed and unmapped, or never one).
+    NotAHeapObject,
+    /// A heap object of another type: the promise was freed and its slot
+    /// reused. The payload is the occupant's `obj_type`.
+    WrongType(u8),
+}
+
+/// Classify `addr` without dereferencing anything the heap does not vouch
+/// for. Pure, so the abort policy in [`native_promise_from_raw`] is testable.
+pub fn classify_native_promise_addr(addr: usize) -> NativePromiseAddr {
+    if addr == 0 {
+        return NativePromiseAddr::Null;
+    }
+    match unsafe { crate::value::addr_class::try_read_gc_header(addr) } {
+        None => NativePromiseAddr::NotAHeapObject,
+        Some(header) if header.obj_type == crate::gc::GC_TYPE_PROMISE => {
+            NativePromiseAddr::Live(addr as *mut Promise)
+        }
+        Some(header) => NativePromiseAddr::WrongType(header.obj_type),
+    }
+}
+
+/// The trust boundary for a promise address that left the runtime as a bare
+/// `usize` (a worker future, a pending-result queue, a native async token) and
+/// is now coming back to be settled (#9552).
+///
+/// A stale address here is a use-after-free in the making: `js_promise_resolve`
+/// would write a state byte and a value into whatever the allocator has since
+/// put in the slot, and the corruption surfaces cycles later in an unrelated
+/// object (the #9552 report was a RegExp header read as a promise's `next`).
+/// Aborting at the boundary names the site and the occupant instead. This runs
+/// once per native completion — never per `await` — so it is not on any hot
+/// path.
+pub fn native_promise_from_raw(addr: usize, site: &str) -> *mut Promise {
+    match classify_native_promise_addr(addr) {
+        NativePromiseAddr::Null => ptr::null_mut(),
+        NativePromiseAddr::Live(promise) => promise,
+        NativePromiseAddr::NotAHeapObject => {
+            eprintln!(
+                "[perry] FATAL (#9552): {site} handed back promise address {addr:#x}, which is \
+                 not a tracked heap object — the promise was freed while native code still \
+                 held its address. It was not rooted across its in-flight window."
+            );
+            std::process::abort()
+        }
+        NativePromiseAddr::WrongType(obj_type) => {
+            eprintln!(
+                "[perry] FATAL (#9552): {site} handed back promise address {addr:#x}, but the \
+                 object there now has obj_type={obj_type} — the promise was freed while native \
+                 code still held its address and the slot was reused."
+            );
+            std::process::abort()
+        }
+    }
 }

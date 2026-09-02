@@ -391,6 +391,16 @@ jobs:
           python3 scripts/gc_pin_sites.py --self-test
           python3 scripts/gc_pin_sites.py
 
+      # #9552. A promise handed to native code as a bare address is invisible
+      # to every root scanner until its completion is queued back. The
+      # cross-thread constructor pins it for that window; the arena constructor
+      # cannot. This finds arena promises reaching a native settlement sink.
+      - name: Cross-thread promise provenance (#9552)
+        if: ${{ !cancelled() }}
+        run: |
+          python3 scripts/check_cross_thread_promise_provenance.py --self-test
+          python3 scripts/check_cross_thread_promise_provenance.py
+
       # #7231. A runtime-side table holding a GC pointer IS a root, and nothing
       # static could see that class before: gc_root_dominance_check.py reads
       # emitted LLVM IR and a thread_local is not in it. #7226, #7239, #7268 and

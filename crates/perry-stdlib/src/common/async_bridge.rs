@@ -87,34 +87,22 @@ fn release_native_async_token(promise: *mut perry_runtime::Promise) {
     perry_runtime::promise::js_native_async_drop_promise_token(promise);
 }
 
-/// Allocate a fresh Promise and pin it for cross-thread resolution.
-/// Convenience wrapper for direct callers of [`queue_promise_resolution`]
-/// / [`queue_deferred_resolution`] (fetch, zlib, bcrypt, ioredis, ws,
-/// etc.) — modules that bypass `spawn_for_promise[_deferred]` because
-/// their own future setup is custom. Equivalent to
-/// `js_promise_new()` followed by [`pin_promise_for_native_resolution`].
+/// Allocate a fresh Promise for cross-thread resolution. Convenience wrapper
+/// for direct callers of [`queue_promise_resolution`] /
+/// [`queue_deferred_resolution`] — modules that bypass
+/// `spawn_for_promise[_deferred]` because their own future setup is custom.
+///
+/// #9552: the pin is taken by `js_promise_new_cross_thread` itself and
+/// released when the promise settles, so this is now exactly that
+/// constructor. Callers that reach for the bare constructor get the same
+/// guarantee; this name survives for the modules that spell the intent.
 ///
 /// # Safety
-/// Same as `js_promise_new()`; the pinning has no preconditions of
-/// its own. The matching unpin runs automatically in
-/// `js_stdlib_process_pending`.
+/// Same as `js_promise_new()`.
 #[inline]
 pub unsafe fn js_promise_new_for_native_resolution() -> *mut perry_runtime::Promise {
     ensure_gc_scanner_registered();
-    // #8770: allocate in MALLOC space (non-moving), not the nursery arena. A
-    // native-resolution promise is handed to a tokio worker as a raw `usize` and,
-    // until its resolution is queued into PENDING_RESOLUTIONS (which the root
-    // scanner visits), it is reachable only through that worker-thread capture —
-    // invisible to the main-thread copying minor. A nursery resident in that
-    // window is wiped by the from-space flip REGARDLESS of its PIN flag (the flip
-    // resets eden/survivor blocks wholesale; only root-reachable pins force the
-    // fallback — see `js_promise_new_cross_thread`). Then `js_stdlib_process_
-    // pending` unpins/resolves through the stale pointer and faults on the
-    // reclaimed header. Malloc space is non-moving and both sweep paths honor
-    // GC_FLAG_PINNED, so the pin actually protects it there.
-    let p = perry_runtime::js_promise_new_cross_thread();
-    pin_promise_for_native_resolution(p as usize);
-    p
+    perry_runtime::js_promise_new_cross_thread()
 }
 
 /// Count of in-flight `perry_ffi_spawn_blocking[_with_reactor]` tasks
@@ -550,8 +538,11 @@ pub extern "C" fn js_stdlib_process_pending() -> i32 {
     for resolution in simple_resolutions {
         let scope = perry_runtime::gc::RuntimeHandleScope::new();
         let promise_ptr_usize = resolution.promise_ptr;
-        let promise_handle =
-            scope.root_raw_mut_ptr(promise_ptr_usize as *mut perry_runtime::Promise);
+        // #9552: the address spent its in-flight window as a bare usize in a
+        // worker future; verify it still names a promise before touching it.
+        let promise_handle = scope.root_raw_mut_ptr(
+            perry_runtime::promise::native_promise_from_raw(promise_ptr_usize, "stdlib pump"),
+        );
         let result_handle = scope.root_nanbox_u64(resolution.result_bits);
         // Issue #859: unpin BEFORE resolve so the just-settled promise
         // can be reclaimed by the next GC. Resolve doesn't trigger GC
@@ -584,8 +575,11 @@ pub extern "C" fn js_stdlib_process_pending() -> i32 {
     for resolution in deferred_resolutions {
         let scope = perry_runtime::gc::RuntimeHandleScope::new();
         let promise_ptr_usize = resolution.promise_ptr;
-        let promise_handle =
-            scope.root_raw_mut_ptr(promise_ptr_usize as *mut perry_runtime::Promise);
+        // #9552: the address spent its in-flight window as a bare usize in a
+        // worker future; verify it still names a promise before touching it.
+        let promise_handle = scope.root_raw_mut_ptr(
+            perry_runtime::promise::native_promise_from_raw(promise_ptr_usize, "stdlib pump"),
+        );
         // Run the converter on the main thread to create JSValues safely
         let result_bits = (resolution.converter)();
         let result_handle = scope.root_nanbox_u64(result_bits);

@@ -768,11 +768,9 @@ pub extern "C" fn js_atomics_wait_async(
     // Cross-thread variant: referenced only by a raw usize in the pending
     // results queue until drained — must not live in the copying nursery
     // (the from-space flip ignores pins that no scanner reaches).
+    // #9552: the cross-thread constructor pins the promise until it settles;
+    // this only has to keep the event loop alive until the result lands.
     let promise = crate::promise::js_promise_new_cross_thread();
-    // Pin the promise + keep the event loop alive until the async result lands.
-    unsafe {
-        crate::thread::pin_promise(promise);
-    }
     crate::thread::thread_job_begin();
     let promise_usize = promise as usize;
     // #6185: the promise belongs to the agent calling `waitAsync`. The futex
