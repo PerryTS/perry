@@ -75,9 +75,14 @@ pub struct Module {
     /// as a synthetic function, and codegen's `FnCtx::is_strict_fn` was hardcoded
     /// `false` for it -- so the lanes that read the CONTEXT's strictness rather
     /// than a flag on the node (`Expr::IndexSet` via `expr/dispatch.rs`,
-    /// `Expr::This`, `delete`) all saw sloppy at module top level. A rejected
-    /// `for (frozenArray[0] of ...)` silently no-opped, and module top-level
-    /// `this` read the global object instead of `undefined`.
+    /// `delete`) saw sloppy at module top level: a rejected
+    /// `for (frozenArray[0] of ...)` silently no-opped. Both entry sites and
+    /// every outlined chunk now read this field.
+    ///
+    /// Module top-level `this` is NOT governed by this flag: that is
+    /// `Expr::ModuleTopThis`, a module-goal decision made in `lower_expr`'s
+    /// `This` arm (switched only by `PERRY_GLOBAL_SCRIPT_THIS`), which never
+    /// consults strictness -- it still diverges from node (#9423 notes it).
     pub init_is_strict: bool,
     /// Top-level statements to execute
     pub init: Vec<Stmt>,
