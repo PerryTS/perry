@@ -29,7 +29,9 @@
 // helper would test one mode twice. Only the mode prefix and the directive
 // differ.
 //
-// Companions: test_gap_9422_strict_object_store_strictness.cts (the `=` lane),
+// Companions: test_gap_9495_strict_inherited_property_set.cts (the prototype
+// walk these spellings skipped in strict code),
+// test_gap_9422_strict_object_store_strictness.cts (the `=` lane),
 // test_gap_9394_array_element_store_strictness.cts (the array element lane),
 // test_gap_9423_module_init_strictness.ts (the ESM always-strict half).
 
@@ -336,29 +338,10 @@ function sloppyArm(): void {
 
   // ---- INHERITED rejecting receivers ----
   //
-  // `+=` against a receiver whose rejection lives on the PROTOTYPE is asserted
-  // in the sloppy arm only, and the strict twin is spelled `=` instead. That
-  // asymmetry is deliberate and is NOT what this issue is about:
-  //
-  //   Perry's `Expr::PropertySet` tail (`js_object_set_field_by_name`) performs
-  //   an OWN-property store. It never runs `OrdinarySetWithOwnDescriptor`'s
-  //   prototype walk, so an inherited non-writable data property, an inherited
-  //   getter-only accessor, and an inherited SETTER are all mishandled the same
-  //   way: the setter never fires and an own property is created instead. That
-  //   is wrong in BOTH modes, it is wrong on unfixed `main` in both modes, and
-  //   it is a missing prototype walk rather than a missing `Throw` flag.
-  //
-  //   #9459 routes the SLOPPY tail to `js_put_value_set(..., 0)` -- the
-  //   receiver-aware `[[Set]]` that sloppy `o.x = v` has always used -- so the
-  //   sloppy arm below becomes correct as a side effect of getting the
-  //   strictness right. The strict tail keeps its typed-feedback store site
-  //   (`js_typed_feedback_object_set_field_by_name_fast`, a #7480/#5093 gate
-  //   with its own IR tests), so fixing the strict half means retargeting that
-  //   lane, which is a separate change. Filed as #9495; the strict `=`
-  //   twins below pin the shapes so a future fix has a baseline here.
-  //
-  // Asserting the sloppy arm alone would be the #9394 mistake, which is why the
-  // strict side is still exercised -- on the lane that is already correct.
+  // The rejection lives on the PROTOTYPE, so these exercise the walk of
+  // ES2024 SS10.1.9.2 as well as the `Throw` flag. Both modes are asserted
+  // here; the walk itself, across every spelling and lane, is the subject of
+  // test_gap_9495_strict_inherited_property_set.cts.
   const inheritedNonWritable: any = Object.create(nonWritableProto());
   threw = false;
   try {
@@ -770,18 +753,22 @@ function strictArm(): void {
   }
   report("strict non-writable own +=:", threw, nonWritable.x);
 
-  // See the note in `sloppyArm`: the `+=` spelling on an inherited receiver is
-  // a separate, mode-independent defect. `=` is the same three receiver shapes
-  // on the lane that already walks the prototype chain.
+  // ---- INHERITED rejecting receivers ----
+  //
+  // The rejection lives on the PROTOTYPE, so these exercise the walk of
+  // ES2024 SS10.1.9.2 as well as the `Throw` flag. Until #9495 the strict tail
+  // was an own-property store that skipped the walk, so these three were
+  // spelled `=` (the lane that already walked) as a baseline; they are the
+  // `+=` twins of the sloppy arm now.
   const inheritedNonWritable: any = Object.create(nonWritableProto());
   threw = false;
   try {
-    inheritedNonWritable.x = 11;
+    inheritedNonWritable.x += 1;
   } catch {
     threw = true;
   }
   report(
-    "strict non-writable inherited =:",
+    "strict non-writable inherited +=:",
     threw,
     hasOwn(inheritedNonWritable, "x"),
     inheritedNonWritable.x,
@@ -799,12 +786,12 @@ function strictArm(): void {
   const inheritedGetterOnly: any = Object.create(getterOnlyProto());
   threw = false;
   try {
-    inheritedGetterOnly.x = 21;
+    inheritedGetterOnly.x += 1;
   } catch {
     threw = true;
   }
   report(
-    "strict getter-only inherited =:",
+    "strict getter-only inherited +=:",
     threw,
     hasOwn(inheritedGetterOnly, "x"),
     inheritedGetterOnly.x,
@@ -818,11 +805,11 @@ function strictArm(): void {
   const withSetter: any = Object.create(setterProto(calls));
   threw = false;
   try {
-    withSetter.x = 31;
+    withSetter.x += 1;
   } catch {
     threw = true;
   }
-  report("strict inherited setter =:", threw, calls.join(","), hasOwn(withSetter, "x"));
+  report("strict inherited setter +=:", threw, calls.join(","), hasOwn(withSetter, "x"));
 
   const noExtend: any = { x: 1 };
   Object.preventExtensions(noExtend);

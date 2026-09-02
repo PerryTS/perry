@@ -42,6 +42,14 @@ impl TypedFeedbackContract {
         Self::new("object_set_by_name_guard", "js_object_set_field_by_name")
     }
 
+    /// #9495: the by-name store whose tail is the receiver-aware `[[Set]]`
+    /// (`js_put_value_set`) rather than the own-property setter. Same guard
+    /// label as `object_set_by_name` -- it is the same site kind, observed the
+    /// same way; only the entry that performs the store differs.
+    pub(crate) const fn put_value_set() -> Self {
+        Self::new("object_set_by_name_guard", "js_put_value_set")
+    }
+
     pub(crate) const fn class_field_get() -> Self {
         Self::new("class_field_get_guard", "js_object_get_field_by_name_f64")
     }
