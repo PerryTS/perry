@@ -456,6 +456,25 @@ mod cjs_default_dispatch_tests {
         );
     }
 
+    /// #9500: the spelled-out list above IS the shared table
+    /// (`perry_dispatch::CJS_DEFAULT_NAMESPACE_MODULES`), in both directions —
+    /// so a row added there is exercised by the two tests above, and a row
+    /// listed here that the table dropped is a failure rather than a stale name.
+    #[test]
+    fn spelled_out_list_matches_the_shared_table() {
+        let mut listed: Vec<&str> = CJS_DEFAULT_NAMESPACES.to_vec();
+        let mut table: Vec<&str> = perry_dispatch::CJS_DEFAULT_NAMESPACE_MODULES
+            .iter()
+            .map(|(_, name)| *name)
+            .collect();
+        listed.sort_unstable();
+        table.sort_unstable();
+        assert_eq!(
+            listed, table,
+            "CJS_DEFAULT_NAMESPACES and perry_dispatch::CJS_DEFAULT_NAMESPACE_MODULES differ"
+        );
+    }
+
     /// The exact regression, pinned by name.
     #[test]
     fn child_process_default_dispatches_as_child_process() {

@@ -11,6 +11,10 @@ use anyhow::Result;
 use swc_ecma_ast as ast;
 
 use crate::lower_types::extract_ts_type_with_ctx;
+// #9500: one CJS-default-import predicate, derived from the shared table —
+// this file used to carry its own copy, which had drifted (no `ffi`,
+// `inspector`, `inspector/promises`, `wasi`).
+use crate::lower::module_decl::native_default_import::is_cjs_style_native_default_import;
 
 /// Whether `PERRY_GLOBAL_SCRIPT_THIS` is set — compile the program as a
 /// *global script* rather than a CJS module, so module top-level `this`
@@ -182,29 +186,6 @@ pub(crate) fn is_fetch_global_value_name(name: &str) -> bool {
     matches!(
         name,
         "fetch" | "Blob" | "File" | "FormData" | "Headers" | "Request" | "Response"
-    )
-}
-
-pub(crate) fn is_cjs_style_native_default_import(module_name: &str) -> bool {
-    matches!(
-        module_name,
-        "async_hooks"
-            | "child_process"
-            | "cluster"
-            | "constants"
-            | "dns"
-            | "dns/promises"
-            | "events"
-            | "module"
-            | "os"
-            | "path"
-            | "path/posix"
-            | "path/win32"
-            | "punycode"
-            | "querystring"
-            | "sys"
-            | "url"
-            | "util"
     )
 }
 

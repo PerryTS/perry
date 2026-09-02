@@ -670,62 +670,16 @@ pub(crate) fn subtle_crypto_namespace() -> f64 {
     js_create_native_module_namespace(b"crypto.subtle".as_ptr(), "crypto.subtle".len())
 }
 
+/// `"<mod>.default"` → `mod`. #9500: a thin view over the ONE shared table
+/// (`perry_dispatch::CJS_DEFAULT_NAMESPACE_MODULES`); the hand-maintained copy
+/// that used to live here is what the method-call router drifted from (#9485).
 pub(crate) fn cjs_default_base_module(module_name: &str) -> Option<&'static str> {
-    match module_name {
-        "async_hooks.default" => Some("async_hooks"),
-        "child_process.default" => Some("child_process"),
-        "cluster.default" => Some("cluster"),
-        "constants.default" => Some("constants"),
-        "dns.default" => Some("dns"),
-        "dns/promises.default" => Some("dns/promises"),
-        "ffi.default" => Some("ffi"),
-        "inspector.default" => Some("inspector"),
-        "inspector/promises.default" => Some("inspector/promises"),
-        "module.default" => Some("module"),
-        "node-pty.default" => Some("node-pty"),
-        "os.default" => Some("os"),
-        "path.default" => Some("path"),
-        "path.posix.default" => Some("path.posix"),
-        "path.win32.default" => Some("path.win32"),
-        "process.default" => Some("process"),
-        "punycode.default" => Some("punycode"),
-        "querystring.default" => Some("querystring"),
-        "repl.default" => Some("repl"),
-        "sea.default" => Some("sea"),
-        "url.default" => Some("url"),
-        "util.default" => Some("util"),
-        "wasi.default" => Some("wasi"),
-        _ => None,
-    }
+    perry_dispatch::cjs_default_base_module(module_name)
 }
 
+/// `mod` → `"<mod>.default"`, from the same shared table (#9500).
 fn cjs_default_namespace_name(module_name: &str) -> Option<&'static str> {
-    match module_name {
-        "async_hooks" => Some("async_hooks.default"),
-        "child_process" => Some("child_process.default"),
-        "cluster" => Some("cluster.default"),
-        "constants" => Some("constants.default"),
-        "dns" => Some("dns.default"),
-        "dns/promises" => Some("dns/promises.default"),
-        "ffi" => Some("ffi.default"),
-        "inspector" => Some("inspector.default"),
-        "inspector/promises" => Some("inspector/promises.default"),
-        "module" => Some("module.default"),
-        "node-pty" => Some("node-pty.default"),
-        "os" => Some("os.default"),
-        "path" => Some("path.default"),
-        "path.posix" => Some("path.posix.default"),
-        "path.win32" => Some("path.win32.default"),
-        "process" => Some("process.default"),
-        "punycode" => Some("punycode.default"),
-        "querystring" => Some("querystring.default"),
-        "repl" => Some("repl.default"),
-        "sea" => Some("sea.default"),
-        "url" => Some("url.default"),
-        "util" => Some("util.default"),
-        "wasi" => Some("wasi.default"),
-        _ => None,
-    }
+    perry_dispatch::cjs_default_namespace_name(module_name)
 }
 
 fn create_cjs_default_namespace(module_name: &str) -> Option<f64> {
@@ -764,10 +718,12 @@ pub(crate) fn cjs_default_export_value(module_name: &str) -> Option<f64> {
             b"wasi.default".as_ptr(),
             "wasi.default".len(),
         )),
-        "async_hooks" | "child_process" | "constants" | "dns" | "dns/promises" | "ffi"
-        | "node-pty" | "os" | "path" | "path.posix" | "path.win32" | "punycode" | "querystring"
-        | "repl" | "sea" | "url" | "util" | "inspector" | "inspector/promises" => {
-            create_cjs_default_namespace(module_name)
+        // #9500: every remaining row of the shared CJS-default table gets its
+        // `<mod>.default` namespace — the arms above are the modules whose
+        // default export is NOT that namespace (a callable, or the plain
+        // namespace itself) and must keep winning.
+        other if perry_dispatch::has_cjs_default_namespace(other) => {
+            create_cjs_default_namespace(other)
         }
         _ => None,
     }
