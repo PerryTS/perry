@@ -105,7 +105,25 @@ pub(crate) fn lower_var_decl_with_destructuring(
             if let Some(init_ast) = decl.init.as_ref() {
                 result.extend(predeclare_implicit_assignment_targets(ctx, init_ast));
             }
-            let init = decl.init.as_ref().map(|e| lower_expr(ctx, e)).transpose()?;
+            // A simple binding performs NamedEvaluation for an anonymous
+            // function/class initializer (`const C = class {}`). Most class
+            // expressions take stmt.rs's direct class fast path, but a
+            // pre-existing class-registry entry can deliberately divert one
+            // through this generic path (notably the CommonJS factory's
+            // function-scope pre-registration). Preserve the binding name in
+            // that path too; the helper filters out named definitions and
+            // non-NamedEvaluation expressions before installing the context.
+            let init = decl
+                .init
+                .as_ref()
+                .map(|e| {
+                    crate::lower::expr_assign::lower_rhs_with_assignment_name(
+                        ctx,
+                        e,
+                        Some(name.clone()),
+                    )
+                })
+                .transpose()?;
             if matches!(ty, Type::Any) {
                 match &init {
                     Some(Expr::NativeMethodCall { module, method, .. }) => {

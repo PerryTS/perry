@@ -9,6 +9,40 @@ use crate::lower_types::*;
 
 use super::*;
 
+/// #9468: retain a class member's MethodDefinition source under the FuncId of
+/// its compiled method/accessor body. Unlike ordinary functions, class members
+/// are emitted as raw `perry_method_*` / `perry_static_*` symbols, but the
+/// source registry can still use the same FuncId-to-source handoff.
+///
+/// SWC's ClassMethod span includes the class-only `static` modifier. That
+/// modifier is not part of the function object's [[SourceText]] (`String(C.m)`
+/// starts at the method definition itself), so remove it while preserving the
+/// rest byte-for-byte, including `get`/`set`, `async`, `*`, and comments.
+fn capture_class_method_source(
+    ctx: &mut LoweringContext,
+    func_id: crate::types::FuncId,
+    method: &ast::ClassMethod,
+) {
+    let Some(mut src) = crate::ir::current_module_source_slice(method.span.lo.0, method.span.hi.0)
+    else {
+        return;
+    };
+    if method.is_static {
+        let leading_ws = src.len() - src.trim_start().len();
+        let candidate = &src[leading_ws..];
+        if let Some(after_static) = candidate.strip_prefix("static") {
+            if after_static
+                .as_bytes()
+                .first()
+                .is_some_and(u8::is_ascii_whitespace)
+            {
+                src = after_static.trim_start().to_string();
+            }
+        }
+    }
+    ctx.closure_source_text.insert(func_id, src);
+}
+
 pub fn lower_constructor(
     ctx: &mut LoweringContext,
     class_name: &str,
@@ -670,6 +704,7 @@ pub fn lower_class_method_with_name(
     ctx.exit_type_param_scope();
 
     let func_id = ctx.fresh_func();
+    capture_class_method_source(ctx, func_id, method);
     // Record the param-prologue length for generator methods so the generator
     // transform runs param binding (default guards + destructuring) synchronously
     // at call time per spec FunctionDeclarationInstantiation order. Without this,
@@ -799,8 +834,11 @@ pub fn lower_getter_method_with_name(
     ctx.exit_scope(scope_mark);
     ctx.in_nonarrow_fn = saved_in_nonarrow_fn;
 
+    let func_id = ctx.fresh_func();
+    capture_class_method_source(ctx, func_id, method);
+
     Ok(Function {
-        id: ctx.fresh_func(),
+        id: func_id,
         name,
         type_params: Vec::new(),
         params: Vec::new(),
@@ -967,8 +1005,11 @@ pub fn lower_setter_method_with_name(
     ctx.exit_scope(scope_mark);
     ctx.in_nonarrow_fn = saved_in_nonarrow_fn;
 
+    let func_id = ctx.fresh_func();
+    capture_class_method_source(ctx, func_id, method);
+
     Ok(Function {
-        id: ctx.fresh_func(),
+        id: func_id,
         name,
         type_params: Vec::new(),
         params,

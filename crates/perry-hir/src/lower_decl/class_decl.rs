@@ -226,6 +226,28 @@ pub fn lower_class_decl(
             .insert(class_id, class_decl.ident.sym.to_string());
     }
     capture_class_source(ctx, class_id, &class_decl.class);
+    // cjs_wrap rewrites a sole `module.exports = class { ... }` into a
+    // declaration under this reserved key so Perry can hoist and register the
+    // class. The key is compiler-only: the original class expression had no
+    // NamedEvaluation context, therefore its observable `.name` is empty and
+    // its retained source must not expose the injected identifier.
+    const CJS_ANONYMOUS_DEFAULT: &str = "__perry_cjs_default__";
+    if class_decl.ident.sym.as_ref() == CJS_ANONYMOUS_DEFAULT {
+        ctx.class_display_names.insert(class_id, String::new());
+        if let Some(source) = ctx.class_source_text.get_mut(&class_id) {
+            if let Some(after_class) = source.strip_prefix("class") {
+                let trimmed = after_class.trim_start();
+                if let Some(after_name) = trimmed.strip_prefix(CJS_ANONYMOUS_DEFAULT) {
+                    let name_is_complete = after_name.as_bytes().first().is_none_or(|byte| {
+                        !byte.is_ascii_alphanumeric() && *byte != b'_' && *byte != b'$'
+                    });
+                    if name_is_complete {
+                        *source = format!("class{after_name}");
+                    }
+                }
+            }
+        }
+    }
     if let Some(ast::Expr::Ident(parent)) = class_decl.class.super_class.as_deref() {
         if let Some(crate::lower::fn_ctor_env::FnCtorShape::DynCtor(kind)) =
             ctx.fn_ctor_env.entries.get(parent.sym.as_ref()).cloned()

@@ -20,7 +20,10 @@ mod errors;
 mod validate;
 mod value_call;
 
-pub(crate) use bound::{coerce_call_this, rebind_explicit_this, reify_function_method_value};
+pub(crate) use bound::{
+    bound_method_source_func_ptr, coerce_call_this, rebind_explicit_this,
+    reify_function_method_value,
+};
 pub use bound::{dispatch_bound_function, dispatch_bound_method, js_function_bind};
 
 pub(crate) use errors::reset_throw_not_callable_counter;

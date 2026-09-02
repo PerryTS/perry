@@ -230,7 +230,12 @@ pub(crate) fn compiled_function_source_for_closure(closure: usize) -> Option<Str
 
 pub(crate) fn function_source_for_closure(closure: usize) -> String {
     compiled_function_source_for_closure(closure).unwrap_or_else(|| {
-        let func_ptr = unsafe { (*(closure as *const ClosureHeader)).func_ptr as usize };
+        let closure_ptr = closure as *const ClosureHeader;
+        let func_ptr = unsafe {
+            crate::closure::bound_method_source_func_ptr(closure_ptr)
+                .or_else(|| crate::object::class_accessor_source_func_ptr(closure_ptr))
+                .unwrap_or((*closure_ptr).func_ptr as usize)
+        };
         crate::builtins::function_source_for_func_ptr(func_ptr)
     })
 }

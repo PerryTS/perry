@@ -7,6 +7,8 @@ use crate::value::{js_nanbox_pointer, JSValue};
 
 mod compare;
 use compare::{collator_compare_order, CollatorCompareOptions};
+mod icu;
+use icu::{icu_component_parts, icu_components, icu_style};
 
 /// ECMA-402 FormatDateTime / HandleDateTimeValue step 1: coerce the
 /// `format`/`formatToParts` argument to a TimeClip'd integer-millisecond value.
@@ -139,6 +141,7 @@ fn format_parts_with_dtf_obj(
     let secs = dtf_zone_local_secs(obj, (ms as i64).div_euclid(1000), temporal_kind);
     let (year, month, day, hour, minute, second) = crate::date::timestamp_to_components(secs);
     let mi = month.saturating_sub(1).min(11) as usize;
+    let locale = get_string_field(obj, KEY_LOCALE).unwrap_or_else(|| "en-US".to_string());
 
     let date_style = get_string_field(obj, KEY_DATE_STYLE);
     let time_style = get_string_field(obj, KEY_TIME_STYLE);
@@ -415,6 +418,26 @@ fn format_parts_with_dtf_obj(
             let day_period_opt = get_string_field(obj, KEY_DAY_PERIOD);
             let fractional_digits =
                 get_number_field(obj, KEY_FRACTIONAL).map(|n| (n as u8).clamp(1, 3));
+            if hour_opt.is_none()
+                && minute_opt.is_none()
+                && second_opt.is_none()
+                && day_period_opt.is_none()
+                && era_opt.is_none()
+                && fractional_digits.is_none()
+            {
+                if let Some(parts) = icu_component_parts(
+                    &locale,
+                    year,
+                    month,
+                    day,
+                    year_opt.as_deref(),
+                    month_opt.as_deref(),
+                    day_opt.as_deref(),
+                    weekday_opt.as_deref(),
+                ) {
+                    return parts;
+                }
+            }
             build_parts_from_components(
                 year,
                 month,
@@ -843,117 +866,6 @@ fn era_string(year: i32, style: &str) -> &'static str {
             }
         }
     }
-}
-
-/// Format a `dateStyle`/`timeStyle` combination via icu4x (CLDR patterns).
-/// Returns `None` when the icu feature is off, the caller opted out (`enabled`
-/// = false, e.g. a Temporal partial), or the option combination is unmapped
-/// (notably a `long`/`full` timeStyle, which carries a localized time-zone
-/// name) — the caller then falls back to the bespoke formatters below.
-#[cfg(feature = "intl-datetime")]
-#[allow(clippy::too_many_arguments)]
-fn icu_style(
-    enabled: bool,
-    locale: &str,
-    year: i32,
-    month: u32,
-    day: u32,
-    hour: u32,
-    minute: u32,
-    second: u32,
-    date_style: Option<&str>,
-    time_style: Option<&str>,
-    hour_cycle: Option<&str>,
-    hour12: Option<bool>,
-) -> Option<String> {
-    use super::icu_dtf::{self, Len, Req};
-    if !enabled {
-        return None;
-    }
-    icu_dtf::format(&Req {
-        locale,
-        year,
-        month: month as u8,
-        day: day as u8,
-        hour: hour as u8,
-        minute: minute as u8,
-        second: second as u8,
-        date_style: date_style.and_then(Len::parse),
-        time_style: time_style.and_then(Len::parse),
-        hour_cycle,
-        hour12,
-    })
-}
-
-#[cfg(not(feature = "intl-datetime"))]
-#[allow(clippy::too_many_arguments)]
-fn icu_style(
-    _enabled: bool,
-    _locale: &str,
-    _year: i32,
-    _month: u32,
-    _day: u32,
-    _hour: u32,
-    _minute: u32,
-    _second: u32,
-    _date_style: Option<&str>,
-    _time_style: Option<&str>,
-    _hour_cycle: Option<&str>,
-    _hour12: Option<bool>,
-) -> Option<String> {
-    None
-}
-
-/// Format a date-only, name-bearing component set via icu4x. `None` when the
-/// feature is off or icu can't reproduce the combo (numeric-only, narrow,
-/// structurally inexpressible), so the caller falls back.
-#[cfg(feature = "intl-datetime")]
-#[allow(clippy::too_many_arguments)]
-fn icu_components(
-    locale: &str,
-    year: i32,
-    month: u32,
-    day: u32,
-    year_opt: Option<&str>,
-    month_opt: Option<&str>,
-    day_opt: Option<&str>,
-    weekday_opt: Option<&str>,
-) -> Option<String> {
-    use super::icu_dtf::{self, CompReq};
-    icu_dtf::format_components(&CompReq {
-        locale,
-        year,
-        month: month as u8,
-        day: day as u8,
-        hour: 0,
-        minute: 0,
-        second: 0,
-        has_year: year_opt.is_some(),
-        has_month: month_opt.is_some(),
-        has_day: day_opt.is_some(),
-        month_style: month_opt,
-        weekday_style: weekday_opt,
-        has_hour: false,
-        has_minute: false,
-        has_second: false,
-        hour_cycle: None,
-        hour12: None,
-    })
-}
-
-#[cfg(not(feature = "intl-datetime"))]
-#[allow(clippy::too_many_arguments)]
-fn icu_components(
-    _locale: &str,
-    _year: i32,
-    _month: u32,
-    _day: u32,
-    _year_opt: Option<&str>,
-    _month_opt: Option<&str>,
-    _day_opt: Option<&str>,
-    _weekday_opt: Option<&str>,
-) -> Option<String> {
-    None
 }
 
 fn format_date_style(year: i32, month: u32, day: u32, secs: i64, style: &str) -> String {

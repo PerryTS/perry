@@ -212,7 +212,7 @@ proc-ipc = []
 intl-locale = ["dep:icu_locale", "dep:icu_locale_core"]
 # CLDR-accurate Intl.DateTimeFormat / toLocaleString date-time patterns and a
 # compiled IANA database for explicit named `timeZone` options.
-intl-datetime = ["dep:icu_datetime", "dep:icu_time", "dep:icu_calendar", "dep:icu_locale_core", "dep:timezone_provider"]
+intl-datetime = ["dep:icu_datetime", "dep:icu_time", "dep:icu_calendar", "dep:icu_locale_core", "dep:timezone_provider", "dep:writeable"]
 # `full` only opt-ins the small Node-API helpers (os.hostname / os.homedir).
 # `postgres`, `redis`, `whoami` were previously listed here but were either
 # unimported (postgres, whoami) or only used by a now-deleted `redis_client.rs`
@@ -347,6 +347,8 @@ icu_locale_core = { version = "2", optional = true }
 icu_datetime = { version = "2", default-features = false, features = ["compiled_data"], optional = true }
 icu_time = { version = "2", default-features = false, features = ["compiled_data"], optional = true }
 icu_calendar = { version = "2", default-features = false, features = ["compiled_data"], optional = true }
+# ICU's semantic field annotations drive Intl.DateTimeFormat#formatToParts.
+writeable = { version = "0.6", optional = true }
 idna = { version = "1", optional = true }
 url = { version = "2", optional = true }
 # #4911: real node:dns resolve*/reverse. hickory-proto provides DNS wire-format
