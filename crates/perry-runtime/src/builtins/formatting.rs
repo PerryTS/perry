@@ -471,33 +471,43 @@ pub fn function_name_for_ptr(func_ptr: usize) -> Option<String> {
         .filter(|n| !n.is_empty())
 }
 
-/// #4101: sidecar registry mapping each user function's compiled address to
-/// its retained original source text. Populated by `js_register_function_source`
-/// (emitted from module init alongside `js_register_function_name`), so by the
-/// time user code runs the map is fully populated. Mirrors the function-name
-/// registry's single-writer, last-write-wins semantics.
+/// #4101 / #9525: sidecar registry mapping each user function's compiled
+/// address to its retained source text and ordinary-function kind bit.
+/// Populated by `js_register_function_source` (emitted from module init
+/// alongside `js_register_function_name`), so by the time user code runs the
+/// map is fully populated. Mirrors the function-name registry's single-writer,
+/// last-write-wins semantics.
+struct RegisteredFunctionSource {
+    bytes: std::sync::Arc<[u8]>,
+    is_non_strict_ordinary: bool,
+}
+
 fn function_source_registry(
-) -> &'static std::sync::Mutex<std::collections::HashMap<usize, std::sync::Arc<[u8]>>> {
+) -> &'static std::sync::Mutex<std::collections::HashMap<usize, RegisteredFunctionSource>> {
     use std::sync::OnceLock;
     static REGISTRY: OnceLock<
-        std::sync::Mutex<std::collections::HashMap<usize, std::sync::Arc<[u8]>>>,
+        std::sync::Mutex<std::collections::HashMap<usize, RegisteredFunctionSource>>,
     > = OnceLock::new();
     REGISTRY.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
 }
 
 /// Codegen-facing entry point: register `func_ptr` as the compiled address of
 /// a JS function whose original source spans `src_ptr..src_ptr+src_len` (UTF-8,
-/// not NUL-terminated). Idempotent — last write wins.
+/// not NUL-terminated). `is_non_strict_ordinary` also records whether the
+/// function uses the sloppy ordinary-function `caller` / `arguments` behavior.
+/// Idempotent — last write wins.
 ///
 /// # Safety
 ///
 /// `src_ptr..src_ptr+src_len` must point at a valid UTF-8 byte slice that
-/// outlives the call (we copy it). `func_ptr` is used only as a map key.
+/// outlives the call (we copy it). `func_ptr` is used only as a map key. The
+/// flag is treated as a boolean (`0` is false; every other value is true).
 #[no_mangle]
 pub unsafe extern "C" fn js_register_function_source(
     func_ptr: *const u8,
     src_ptr: *const u8,
     src_len: u32,
+    is_non_strict_ordinary: i32,
 ) {
     if func_ptr.is_null() || src_ptr.is_null() || src_len == 0 {
         return;
@@ -510,8 +520,26 @@ pub unsafe extern "C" fn js_register_function_source(
         return;
     }
     if let Ok(mut map) = function_source_registry().lock() {
-        map.insert(func_ptr as usize, std::sync::Arc::from(bytes));
+        map.insert(
+            func_ptr as usize,
+            RegisteredFunctionSource {
+                bytes: std::sync::Arc::from(bytes),
+                is_non_strict_ordinary: is_non_strict_ordinary != 0,
+            },
+        );
     }
+}
+
+/// Whether codegen registered this address as an ordinary non-strict
+/// function declaration/expression. This is function-kind metadata rather
+/// than an inference from source spelling, so methods and other callable
+/// forms remain distinguishable.
+pub fn function_is_non_strict_ordinary_for_ptr(func_ptr: usize) -> bool {
+    func_ptr != 0
+        && function_source_registry().lock().is_ok_and(|map| {
+            map.get(&func_ptr)
+                .is_some_and(|source| source.is_non_strict_ordinary)
+        })
 }
 
 /// Look up the codegen-registered source text for a function pointer.
@@ -522,7 +550,7 @@ pub fn function_source_for_ptr(func_ptr: usize) -> Option<String> {
     function_source_registry()
         .lock()
         .ok()
-        .and_then(|map| decode_registered(map.get(&func_ptr)))
+        .and_then(|map| decode_registered(map.get(&func_ptr).map(|source| &source.bytes)))
         .filter(|s| !s.is_empty())
 }
 

@@ -420,8 +420,22 @@ pub(crate) fn try_const_fold_function_construct_kind(
 
     // `fn.toString()` must return the spec-assembled source, not a slice of
     // the enclosing module at the synthetic span (which would be garbage).
-    if let Expr::Closure { func_id, .. } = &lowered {
-        ctx.closure_source_text.insert(*func_id, assembled);
+    if let Expr::Closure {
+        func_id,
+        is_arrow,
+        is_async,
+        is_generator,
+        is_strict,
+        ..
+    } = &lowered
+    {
+        ctx.closure_source_text.insert(
+            *func_id,
+            crate::ir::FunctionSourceMetadata {
+                text: assembled,
+                is_non_strict_ordinary: !is_arrow && !is_async && !is_generator && !is_strict,
+            },
+        );
     }
 
     if eval_diag_enabled() {

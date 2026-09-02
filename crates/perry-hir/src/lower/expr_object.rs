@@ -384,7 +384,7 @@ fn lower_method_prop(
             ast::PropName::BigInt(b) => b.span,
         };
         let method_src_span = swc_common::Span::new(method_key_span.lo, method.function.span.hi);
-        super::capture_function_source(ctx, func_id, &method_src_span, false);
+        super::capture_function_source(ctx, func_id, &method_src_span, false, false);
     }
 
     // Capture analysis (same pattern as arrow/function expressions)

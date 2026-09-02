@@ -1825,11 +1825,15 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
     // above); inline closures only have a `perry_closure_*` global when
     // materialized, so gate those on `materialized_closure_ids` to avoid
     // referencing an undefined global (the #318/#343 clang-failure class).
-    let mut user_fn_source: Vec<(String, String)> = Vec::new();
+    let mut user_fn_source: Vec<(String, String, bool)> = Vec::new();
     for f in &hir.functions {
         if let Some(src) = hir.closure_source_text.get(&f.id) {
             if let Some(sym) = func_names.get(&f.id) {
-                user_fn_source.push((format!("__perry_wrap_{}", sym), src.clone()));
+                user_fn_source.push((
+                    format!("__perry_wrap_{}", sym),
+                    src.text.clone(),
+                    src.is_non_strict_ordinary,
+                ));
             }
         }
     }
@@ -1841,7 +1845,10 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
     // IR, a technique several representation and GC investigations relied on.
     // Emission order is the only thing that changes; sorting by `FuncId` makes
     // it stable without altering what is emitted.
-    let mut materialized_closure_sources: Vec<(&perry_hir::types::FuncId, &String)> = hir
+    let mut materialized_closure_sources: Vec<(
+        &perry_hir::types::FuncId,
+        &perry_hir::FunctionSourceMetadata,
+    )> = hir
         .closure_source_text
         .iter()
         .filter(|(func_id, _)| {
@@ -1851,7 +1858,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
     materialized_closure_sources.sort_by_key(|(func_id, _)| **func_id);
     for (func_id, src) in materialized_closure_sources {
         let sym = format!("perry_closure_{}__{}", module_prefix, func_id);
-        user_fn_source.push((sym, src.clone()));
+        user_fn_source.push((sym, src.text.clone(), src.is_non_strict_ordinary));
     }
 
     // #9468: method/accessor bodies are raw symbols rather than closure

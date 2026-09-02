@@ -18,7 +18,7 @@ pub(super) fn extend_class_method_source_text(
     hir: &HirModule,
     module_prefix: &str,
     llmod: &LlModule,
-    user_fn_source: &mut Vec<(String, String)>,
+    user_fn_source: &mut Vec<(String, String, bool)>,
 ) {
     // An HIR registry entry is not proof that this module emitted the body: a
     // cross-module or typed-only accessor can remain present without a local
@@ -26,7 +26,7 @@ pub(super) fn extend_class_method_source_text(
     // LLVM reject the module, so `has_function` is the final authority.
     let mut seen: HashSet<String> = user_fn_source
         .iter()
-        .map(|(symbol, _)| symbol.clone())
+        .map(|(symbol, _, _)| symbol.clone())
         .collect();
     let mut push_defined = |func_id: FuncId, symbol: String| {
         let Some(source) = hir.closure_source_text.get(&func_id) else {
@@ -35,7 +35,7 @@ pub(super) fn extend_class_method_source_text(
         if symbol.is_empty() || !llmod.has_function(&symbol) || !seen.insert(symbol.clone()) {
             return;
         }
-        user_fn_source.push((symbol, source.clone()));
+        user_fn_source.push((symbol, source.text.clone(), source.is_non_strict_ordinary));
     };
 
     for class in &hir.classes {

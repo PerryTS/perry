@@ -97,11 +97,12 @@ pub(super) unsafe fn closure_set_field_by_name(
     let Ok(name_str) = std::str::from_utf8(name_bytes) else {
         return;
     };
-    // ECMAScript "poison pill" — assigning `caller`/`arguments` on any
-    // strict-mode function (Perry compiles everything strict: declarations,
-    // expressions, bound and built-in closures, arrows) throws via the
-    // %ThrowTypeError% accessor's missing setter. A genuine own data prop of
-    // that name (defineProperty round-trip) still wins.
+    // ECMAScript "poison pill" — the by-name setter has a throwing contract,
+    // so assigning `caller`/`arguments` through this entry throws. Ordinary
+    // assignment (including a plain non-strict function's sloppy no-op) goes
+    // through `js_put_value_set`, whose closure walk can report `false` and
+    // consult the reference's `Throw` flag. A genuine own data prop of that
+    // name (defineProperty round-trip) still wins.
     // Refs test262 13.2-*-s / StrictFunction_restricted-*.
     if matches!(name_str, "caller" | "arguments")
         && !crate::closure::closure_has_own_dynamic_prop(obj as usize, name_str)

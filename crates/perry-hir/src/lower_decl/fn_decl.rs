@@ -42,6 +42,12 @@ pub fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) -> Result
             id
         }
     };
+    let strict = fn_decl
+        .function
+        .body
+        .as_ref()
+        .map(|b| ctx.current_strict_mode() || body_has_use_strict(&b.stmts))
+        .unwrap_or(false);
 
     // #4101: retain the original source text so `fn.toString()` reconstructs
     // it. Slice the module source against the function's AST span; prepend the
@@ -53,6 +59,7 @@ pub fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) -> Result
             func_id,
             &fn_decl.function.span,
             fn_decl.function.is_async,
+            !strict && !fn_decl.function.is_async && !fn_decl.function.is_generator,
         );
     }
 
@@ -82,12 +89,6 @@ pub fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) -> Result
         .params
         .iter()
         .any(|p| get_pat_name(&p.pat).ok().as_deref() == Some("arguments"));
-    let strict = fn_decl
-        .function
-        .body
-        .as_ref()
-        .map(|b| ctx.current_strict_mode() || body_has_use_strict(&b.stmts))
-        .unwrap_or(false);
     ctx.enter_strict_mode(strict);
     let simple_parameters = params_are_simple_arguments_list(&fn_decl.function.params);
     let needs_arguments_synth = !user_has_arguments_param

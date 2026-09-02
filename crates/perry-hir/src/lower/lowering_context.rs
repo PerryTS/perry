@@ -366,7 +366,7 @@ pub struct LoweringContext {
     /// #4101: original source text keyed by FuncId, captured by slicing the
     /// module source against each function's AST span at lowering time.
     /// Flushed into `Module.closure_source_text` alongside `pending_functions`.
-    pub(crate) closure_source_text: HashMap<FuncId, String>,
+    pub(crate) closure_source_text: HashMap<FuncId, crate::ir::FunctionSourceMetadata>,
     /// #9413: original source text keyed by ClassId, captured by slicing the
     /// module source against each class's AST span at lowering time. Flushed
     /// into `Module.class_source_text`. See that field's docs.

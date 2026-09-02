@@ -1523,71 +1523,21 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
                     }
                 }
             }
-            // #9459 / #9495: the generic by-name tail is the receiver-aware
-            // `[[Set]]` with the assignment's own `Throw` flag, in BOTH modes.
-            //
-            // `caller`/`arguments` are excluded in BOTH modes: those two names are
-            // routed here from `PutValueSet` specifically to reach
-            // `js_object_set_field_by_name`'s poisoned-accessor handling, which is
-            // neither a `Throw`-flag nor a prototype-walk decision, and diverting
-            // them would change behaviour neither issue is about.
-            if !matches!(property.as_str(), "caller" | "arguments") {
-                return lower_put_value_property_set_by_name(
-                    ctx,
-                    object,
-                    property,
-                    value,
-                    assignment_strict,
-                );
-            }
-            // #7154: the value expression can collect, and an evacuating minor
-            // inside it relocates the receiver out from under `obj_box` --
-            // `obj.k = f()` then writes `k` into abandoned from-space memory
-            // and the field never appears on the object the program keeps.
-            //
-            // `across` rather than the plain form because the value is lowered
-            // by `lower_value_for_dynamic_property_set` (an
-            // `ExpectedNativeRep::JsValueBits` lowering plus a recorded
-            // materialisation), which the operand list cannot produce.
-            rooting::with_operands_rooted_across(
+            // #9459 / #9495 / #9525: the generic by-name tail is the
+            // receiver-aware `[[Set]]` with the assignment's own `Throw` flag,
+            // in BOTH modes. This includes `caller` / `arguments`: their
+            // inherited poisoned accessor rejects a plain non-strict
+            // function store with `false`, and only PutValue can decide from
+            // `Throw` whether that rejection stays silent or becomes a
+            // TypeError. The by-name setter below has no `Throw` parameter and
+            // therefore remains only for strict-only specialised paths.
+            return lower_put_value_property_set_by_name(
                 ctx,
-                &[object.as_ref()],
-                &[value.as_ref()],
-                |ctx| {
-                    lower_value_for_dynamic_property_set(
-                        ctx,
-                        value,
-                        "property_set.dynamic_value_bits",
-                        "dynamic_property_set_helper_edge",
-                    )
-                },
-                |ctx, vals, (val_double, _val_bits)| {
-                    let obj_box = &vals[0];
-                    // Intern the field name in the StringPool (same one the
-                    // matching getter uses, so they share the global string).
-                    let key_idx = ctx.strings.intern(property);
-                    let key_handle_global =
-                        format!("@{}", ctx.strings.entry(key_idx).handle_global);
-                    let obj_bits = ctx.block().bitcast_double_to_i64(obj_box);
-                    emit_nullish_write_guard(ctx, &obj_bits, property, "pset");
-                    // Issue #618-followup: pass the FULL bits (including NaN-box
-                    // tag) so the runtime can detect INT32-tagged class refs
-                    // (`SQL.Aliased = Aliased` IIFE-static-property pattern from
-                    // drizzle-orm). Pre-fix the AND-with-POINTER_MASK_I64 stripped
-                    // the 0x7FFE tag, leaving the runtime with a small integer
-                    // (the class id) — which fell into the small-handle dispatch
-                    // path and silently dropped the assignment. The runtime now
-                    // checks for top16 == 0x7FFE and routes to CLASS_DYNAMIC_PROPS.
-                    let key_box = ctx.block().load(DOUBLE, &key_handle_global);
-                    let key_bits = ctx.block().bitcast_double_to_i64(&key_box);
-                    let key_raw = ctx.block().and(I64, &key_bits, POINTER_MASK_I64);
-                    ctx.block().call_void(
-                        "js_object_set_field_by_name",
-                        &[(I64, &obj_bits), (I64, &key_raw), (DOUBLE, &val_double)],
-                    );
-                    Ok(val_double)
-                },
-            )
+                object,
+                property,
+                value,
+                assignment_strict,
+            );
         }
 
         // `obj.field` — generic object field read. We get the key string
