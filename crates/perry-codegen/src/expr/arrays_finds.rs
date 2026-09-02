@@ -91,8 +91,8 @@ use super::index_get::numeric_index_has_integer_array_index_proof;
 /// other shape — a subclass instance, a plain object, an out-of-range or
 /// negative index, an unpublished handle — takes the runtime helper exactly
 /// as before, so the two paths are equivalent by construction.
-/// Byte offset of `MapHeader::used`, which the tombstoned-delete lane loads to
-/// check `used == size` (no holes) before admitting a raw entry read.
+/// Byte offset of `MapHeader::used`, the raw extent the inline entry read is
+/// bounded by (the for-of cursor only ever yields a live raw index below it).
 ///
 /// `perry-codegen` does not depend on `perry-runtime`, so nothing binds this
 /// literal to the struct it describes. The runtime pins the offset with an
@@ -156,20 +156,19 @@ fn lower_map_entry_at_inline(
         let gc_flags = blk.load(I8, &flags_ptr);
         let forwarded = blk.and(I8, &gc_flags, GC_FLAG_FORWARDED);
         let live = blk.icmp_eq(I8, &forwarded, "0");
-        let size_ptr = blk.inttoptr(I64, &m_handle);
-        let size = blk.load(I32, &size_ptr);
-        // Tombstoned deletes leave `used > size`; a raw entry read is only
-        // dense-correct with no holes present, so a holey map falls back to
-        // the runtime helper — which compacts, after which this admission
-        // holds again (the lane self-heals).
+        // The index is a LIVE raw index by construction: it comes from
+        // `js_map_cursor_next`, and the for-of desugars in perry-hir are the
+        // only producers of these reads. So the read is bounded by the raw
+        // extent `used`, not the live `size`, and holes need no admission
+        // check — the cursor already stepped over them. (This lane used to
+        // require `used == size` and fall back to a runtime helper that
+        // compacted the whole map on every holey read.)
         let used_addr = blk.add(I64, &m_handle, MAP_HEADER_USED_OFFSET);
         let used_ptr = blk.inttoptr(I64, &used_addr);
         let used = blk.load(I32, &used_ptr);
-        let dense = blk.icmp_eq(I32, &used, &size);
-        let in_range = blk.icmp_ult(I32, &i_i32, &size);
+        let in_range = blk.icmp_ult(I32, &i_i32, &used);
         let a = blk.and(I1, &is_map, &live);
-        let b = blk.and(I1, &a, &dense);
-        let admitted = blk.and(I1, &b, &in_range);
+        let admitted = blk.and(I1, &a, &in_range);
         blk.cond_br(&admitted, &fast_label, &slow_label);
     }
     ctx.current_block = fast_idx;

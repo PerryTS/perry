@@ -51,6 +51,120 @@ pub(crate) fn map_foreach_stack_restore(depth: usize) {
     MAP_FOREACH_STACK.with(|stack| stack.borrow_mut().truncate(depth));
 }
 
+/// One squeeze of the entries buffer, as a raw-index cursor needs to see it:
+/// which raw indices below the cursor disappeared, so it can move down by
+/// exactly that many.
+enum RemovedSlots {
+    /// `clear()` discarded the whole extent `0..n`.
+    Prefix(u32),
+    /// Compaction squeezed out these tombstoned raw indices (ascending).
+    Indices(Vec<u32>),
+}
+
+impl RemovedSlots {
+    fn count_below(&self, cursor: u32) -> u32 {
+        match self {
+            RemovedSlots::Prefix(n) => cursor.min(*n),
+            RemovedSlots::Indices(v) => v.partition_point(|&i| i < cursor) as u32,
+        }
+    }
+}
+
+struct CompactionRecord {
+    /// The header's `compaction_epoch` AFTER this squeeze.
+    epoch: u32,
+    removed: RemovedSlots,
+}
+
+/// Records retained per Map. A cursor older than the oldest retained record
+/// can no longer rebase exactly (`rebase_map_cursor` applies what is left);
+/// reaching that depth needs ONE loop body to drive 32 compactions of the
+/// same Map between two of its own reads, each of which requires the holes
+/// to outnumber the live entries again.
+const MAP_COMPACTION_LOG_DEPTH: usize = 32;
+
+crate::perry_thread_local! {
+    /// Per-Map history of squeezes, keyed by header address. Re-keyed on GC
+    /// move by `map_header_moved_for_gc`; dropped by `js_map_alloc` for a
+    /// reused address and by the dead-owner prune.
+    static MAP_COMPACTION_LOG: RefCell<
+        crate::fast_hash::PtrHashMap<usize, std::collections::VecDeque<CompactionRecord>>,
+    > = RefCell::new(crate::fast_hash::new_ptr_hash_map());
+}
+
+/// Append a squeeze record and advance the header epoch. Every operation
+/// that moves entries to lower raw indices or discards the extent calls
+/// this — it is what lets a live cursor find its entry again.
+unsafe fn note_map_compaction(map: *mut MapHeader, removed: RemovedSlots) {
+    let epoch = (*map).compaction_epoch.wrapping_add(1);
+    (*map).compaction_epoch = epoch;
+    MAP_COMPACTION_LOG.with(|log| {
+        let mut log = log.borrow_mut();
+        let records = log.entry(map as usize).or_default();
+        if records.len() == MAP_COMPACTION_LOG_DEPTH {
+            records.pop_front();
+        }
+        records.push_back(CompactionRecord { epoch, removed });
+    });
+}
+
+/// Rebase a raw-index cursor that last synchronised at `loop_epoch` onto the
+/// current raw layout: each squeeze since then removed some raw indices
+/// below it, and the cursor moves down by exactly that count, in order.
+///
+/// Exact by the walk's own invariant: the entries a raw-index walk has
+/// yielded are precisely the LIVE entries below its cursor (deletes
+/// tombstone in place, adds append at the end, compaction preserves order),
+/// so after a squeeze the cursor belongs at "old cursor minus removed slots
+/// below it" — no key lookup, no guess about how many holes were squeezed.
+unsafe fn rebase_map_cursor(map: *const MapHeader, cursor: u32, loop_epoch: u32) -> u32 {
+    if (*map).compaction_epoch == loop_epoch {
+        return cursor;
+    }
+    MAP_COMPACTION_LOG.with(|log| {
+        let log = log.borrow();
+        let Some(records) = log.get(&(map as usize)) else {
+            return cursor;
+        };
+        let mut c = cursor;
+        for rec in records
+            .iter()
+            .filter(|r| r.epoch.wrapping_sub(loop_epoch) as i32 > 0)
+        {
+            c -= rec.removed.count_below(c);
+        }
+        c
+    })
+}
+
+/// The next live raw index at or after `cursor` (itself rebased through any
+/// squeezes since `loop_epoch`), or `None` when the extent is exhausted.
+///
+/// The raw-index walkers — the `for…of` fast path and the iterator objects —
+/// call this once per step. It is O(holes stepped over) and NEVER compacts:
+/// the reader-side "self-heal" compaction it replaces ran once per hole
+/// observed, which made a delete-during-`for…of` loop O(n) per delete, and
+/// the single-hole cursor arithmetic that went with it skipped entries when
+/// several holes were squeezed at once.
+pub(crate) unsafe fn map_cursor_next_raw(
+    map: *const MapHeader,
+    cursor: u32,
+    loop_epoch: u32,
+) -> Option<u32> {
+    let mut idx = rebase_map_cursor(map, cursor, loop_epoch);
+    let used = (*map).used;
+    let entries = entries_ptr(map);
+    while idx < used && ptr::read(entries.add(idx as usize * 2)).to_bits() == MAP_HOLE_KEY_BITS {
+        idx += 1;
+    }
+    (idx < used).then_some(idx)
+}
+
+#[inline]
+pub(crate) fn map_compaction_epoch(map: *const MapHeader) -> u32 {
+    unsafe { (*map).compaction_epoch }
+}
+
 fn mark_map_iterator_array(arr: *mut crate::array::ArrayHeader) {
     if !arr.is_null() {
         MAP_ITERATOR_ARRAYS.with(|r| {
@@ -90,9 +204,29 @@ pub(crate) fn prune_dead_map_iterator_array_owners(is_dead_owner: &dyn Fn(usize)
     });
 }
 
+/// Dead-owner prune for `MAP_COMPACTION_LOG`: a dead Map's squeeze history
+/// has no cursor left to serve.
+pub(crate) fn prune_dead_map_compaction_log_owners(is_dead_owner: &dyn Fn(usize) -> bool) {
+    MAP_COMPACTION_LOG.with(|log| {
+        log.borrow_mut().retain(|owner, _| !is_dead_owner(*owner));
+    });
+}
+
 #[cfg(test)]
 pub(crate) fn test_clear_map_iterator_arrays() {
     MAP_ITERATOR_ARRAYS.with(|r| r.borrow_mut().clear());
+}
+
+/// Test-only: the allocation-time reset a fresh Map performs on a reused
+/// address (`js_map_alloc` drops any stale squeeze log and zeroes the epoch),
+/// applied to an existing header so a test can prove a cursor from a previous
+/// tenant's history is not rebased.
+#[cfg(test)]
+pub(crate) fn test_reset_compaction_log_for(map: *mut MapHeader) {
+    MAP_COMPACTION_LOG.with(|log| {
+        log.borrow_mut().remove(&(map as usize));
+    });
+    unsafe { (*map).compaction_epoch = 0 };
 }
 
 #[cfg(test)]
@@ -822,6 +956,13 @@ pub(crate) fn map_header_moved_for_gc(old_addr: usize, new_addr: usize) {
             idx.insert(new_addr, slot);
         }
     });
+    MAP_COMPACTION_LOG.with(|log| {
+        let mut log = log.borrow_mut();
+        log.remove(&new_addr);
+        if let Some(records) = log.remove(&old_addr) {
+            log.insert(new_addr, records);
+        }
+    });
     MAP_FOREACH_STACK.with(|stack| {
         for addr in stack.borrow_mut().iter_mut() {
             if *addr == old_addr {
@@ -1003,6 +1144,7 @@ pub(crate) fn release_current_thread_map_side_allocations() {
     }
     MAP_STRING_INDEX.with(|idx| idx.borrow_mut().clear());
     MAP_PTR_INDEX.with(|idx| idx.borrow_mut().clear());
+    MAP_COMPACTION_LOG.with(|log| log.borrow_mut().clear());
 }
 
 #[cfg(test)]
@@ -1131,9 +1273,17 @@ pub struct MapHeader {
     pub meta: *mut crate::object::ObjectMeta,
     /// Extent of the entries array actually written: raw entry indices run
     /// `0..used`. `size` stays the LIVE count, so `used - size` is the number
-    /// of tombstoned entries awaiting compaction. Appended last; codegen
-    /// reads it at offset 32 (pinned below).
+    /// of tombstoned entries awaiting compaction. Codegen reads it at offset
+    /// 32 (pinned below).
     pub used: u32,
+    /// Bumped by every operation that moves an entry to a LOWER raw index
+    /// (`compact_map_entries`) or discards the extent (`clear`). A raw-index
+    /// cursor — the `for…of` fast path, the iterator objects — records the
+    /// epoch it last synchronised with; when the header's epoch has moved on,
+    /// the cursor rebases itself through `MAP_COMPACTION_LOG` (see
+    /// `map_cursor_next_raw`) instead of guessing. Appended last so every
+    /// preceding offset is unchanged; fits in the padding after `used`.
+    pub compaction_epoch: u32,
 }
 
 const _: () = {
@@ -1141,6 +1291,8 @@ const _: () = {
     assert!(std::mem::offset_of!(MapHeader, capacity) == 4);
     assert!(std::mem::offset_of!(MapHeader, entries) == 8);
     assert!(std::mem::offset_of!(MapHeader, used) == 32);
+    assert!(std::mem::offset_of!(MapHeader, compaction_epoch) == 36);
+    assert!(std::mem::size_of::<MapHeader>() == 40);
 };
 
 /// The tombstone a deleted entry's KEY slot takes. Never a legal stored key:
@@ -1389,6 +1541,13 @@ pub extern "C" fn js_map_alloc(capacity: u32) -> *mut MapHeader {
         // meta edge is a garbage pointer the collector would follow.
         (*ptr).meta = std::ptr::null_mut();
         (*ptr).used = 0;
+        (*ptr).compaction_epoch = 0;
+        // A previous tenant of this address may have left a compaction log
+        // behind if the dead-owner prune has not run yet; a fresh Map must
+        // start with no history, or a cursor could rebase through it.
+        MAP_COMPACTION_LOG.with(|log| {
+            log.borrow_mut().remove(&(ptr as usize));
+        });
 
         // Register in map registry for runtime type detection
         register_map(ptr, entries, cap as usize);
@@ -1454,6 +1613,42 @@ pub extern "C" fn js_map_find_key_index(map_boxed: f64, key: f64) -> f64 {
 #[used]
 static KEEP_MAP_FIND_KEY_INDEX: extern "C" fn(f64, f64) -> f64 = js_map_find_key_index;
 
+/// C-ABI, for the `for…of` fast path (`perry-hir`'s
+/// `map_set_delete_safe_for_of`): the next live raw index at or after
+/// `cursor`, after rebasing it through every squeeze since `epoch`, or
+/// `-1.0` when the extent is exhausted. Takes the NaN-boxed collection; the
+/// cursor and epoch are the loop's Number state temps.
+#[no_mangle]
+pub extern "C" fn js_map_cursor_next(map_boxed: f64, cursor: f64, epoch: f64) -> f64 {
+    let map = clean_map_ptr(crate::value::js_nanbox_get_pointer(map_boxed) as *const MapHeader);
+    if map.is_null() {
+        return -1.0;
+    }
+    let cursor = if cursor > 0.0 { cursor as u32 } else { 0 };
+    let epoch = if epoch > 0.0 { epoch as u32 } else { 0 };
+    match unsafe { map_cursor_next_raw(map, cursor, epoch) } {
+        Some(idx) => idx as f64,
+        None => -1.0,
+    }
+}
+#[cfg(feature = "keepalive-anchors")]
+#[used]
+static KEEP_MAP_CURSOR_NEXT: extern "C" fn(f64, f64, f64) -> f64 = js_map_cursor_next;
+
+/// C-ABI companion: the header's compaction epoch, which the loop stores
+/// after each step so the next `js_map_cursor_next` knows what it has seen.
+#[no_mangle]
+pub extern "C" fn js_map_compaction_epoch(map_boxed: f64) -> f64 {
+    let map = clean_map_ptr(crate::value::js_nanbox_get_pointer(map_boxed) as *const MapHeader);
+    if map.is_null() {
+        return 0.0;
+    }
+    map_compaction_epoch(map) as f64
+}
+#[cfg(feature = "keepalive-anchors")]
+#[used]
+static KEEP_MAP_COMPACTION_EPOCH: extern "C" fn(f64) -> f64 = js_map_compaction_epoch;
+
 /// Live-extent accessor for iteration (`0..used` are the raw entry indices).
 #[inline(always)]
 pub(crate) fn map_used_entries(map: *const MapHeader) -> u32 {
@@ -1488,9 +1683,12 @@ unsafe fn compact_map_entries(map: *mut MapHeader) {
     let used = (*map).used as usize;
     let entries = entries_ptr_mut(map);
     let mut out = 0usize;
+    // The raw indices squeezed out, for the cursors that were walking them.
+    let mut removed: Vec<u32> = Vec::with_capacity(used.saturating_sub((*map).size as usize));
     for i in 0..used {
         let key = ptr::read(entries.add(i * 2));
         if key.to_bits() == MAP_HOLE_KEY_BITS {
+            removed.push(i as u32);
             continue;
         }
         if out != i {
@@ -1539,6 +1737,9 @@ unsafe fn compact_map_entries(map: *mut MapHeader) {
         }
     });
     rebuild_map_ptr_index(map);
+    if !removed.is_empty() {
+        note_map_compaction(map, RemovedSlots::Indices(removed));
+    }
 }
 
 pub(crate) unsafe fn compact_if_holey(map: *mut MapHeader) {
@@ -2564,8 +2765,11 @@ pub extern "C" fn js_map_clear(map: *mut MapHeader) {
     let size = unsafe { (*map).size };
     let used = unsafe { (*map).used };
     if size == 0 {
-        if !map_foreach_is_active(map) {
-            unsafe { (*map).used = 0 };
+        if !map_foreach_is_active(map) && used > 0 {
+            unsafe {
+                (*map).used = 0;
+                note_map_compaction(map, RemovedSlots::Prefix(used));
+            }
         }
         return;
     }
@@ -2606,7 +2810,12 @@ pub extern "C" fn js_map_clear(map: *mut MapHeader) {
                 }
             }
         } else {
+            // Discarding the extent moves nothing, but a live raw-index
+            // cursor must restart at 0 to see what is appended next (spec:
+            // the [[MapData]] list is emptied in place, later adds are
+            // visited), so record it as a squeeze of the whole extent.
             (*map).used = 0;
+            note_map_compaction(map, RemovedSlots::Prefix(used));
         }
     }
     unsafe {
@@ -2643,15 +2852,12 @@ pub extern "C" fn js_map_entry_key_at(map: *const MapHeader, idx: u32) -> f64 {
         return f64::from_bits(TAG_UNDEFINED);
     }
     unsafe {
-        if (*map).used != (*map).size {
-            // Tombstones present under a raw-indexed read: the typed for-of
-            // lane and this fallback iterate raw indices against the live
-            // size, so squeeze the holes out — after which the codegen lane's
-            // `used == size` admission holds again and the lane self-heals.
-            compact_map_entries(map as *mut MapHeader);
-        }
-        let size = (*map).size;
-        if idx >= size {
+        // A raw read, bounded by the raw extent. The index comes from
+        // `js_map_cursor_next`, which only ever yields a LIVE raw index, so
+        // no hole reaches user code — and nothing here compacts: the
+        // self-heal compaction this used to perform ran once per hole
+        // observed, which made a delete-during-`for…of` loop O(n) per delete.
+        if idx >= (*map).used {
             return f64::from_bits(TAG_UNDEFINED);
         }
         let entries = entries_ptr(map);
@@ -2667,15 +2873,9 @@ pub extern "C" fn js_map_entry_value_at(map: *const MapHeader, idx: u32) -> f64 
         return f64::from_bits(TAG_UNDEFINED);
     }
     unsafe {
-        if (*map).used != (*map).size {
-            // Tombstones present under a raw-indexed read: the typed for-of
-            // lane and this fallback iterate raw indices against the live
-            // size, so squeeze the holes out — after which the codegen lane's
-            // `used == size` admission holds again and the lane self-heals.
-            compact_map_entries(map as *mut MapHeader);
-        }
-        let size = (*map).size;
-        if idx >= size {
+        // See `js_map_entry_key_at`: raw, bounded by the extent, never
+        // compacts.
+        if idx >= (*map).used {
             return f64::from_bits(TAG_UNDEFINED);
         }
         let entries = entries_ptr(map);
@@ -3628,11 +3828,22 @@ mod tests {
                 .filter(|(i, _)| *i != 1)
                 .map(|(_, key)| key.to_bits()),
         );
-        let actual_keys = (0..js_map_size(map))
-            .map(|i| js_map_entry_key_at(map, i).to_bits())
-            .collect::<Vec<_>>();
+        // Walk the LIVE entries the way a for-of does: raw reads never
+        // compact any more, so raw index != live index while holes exist,
+        // and the cursor is what steps over them.
+        let live_keys = |map: *mut MapHeader| {
+            let mut keys = Vec::new();
+            let mut idx = 0u32;
+            while let Some(i) = unsafe { map_cursor_next_raw(map, idx, map_compaction_epoch(map)) }
+            {
+                keys.push(js_map_entry_key_at(map, i).to_bits());
+                idx = i + 1;
+            }
+            keys
+        };
         assert_eq!(
-            actual_keys, expected_keys,
+            live_keys(map),
+            expected_keys,
             "delete must preserve survivor order"
         );
 
@@ -3640,15 +3851,18 @@ mod tests {
         js_map_set_string_number(map, string_key_ptr(4), 444.0);
         js_map_set(map, pointer_keys[1], 1_111.0);
         assert_eq!(js_map_size(map), 28);
-        assert_eq!(js_map_entry_key_at(map, 25).to_bits(), 2.0f64.to_bits());
+        let after_readd = live_keys(map);
+        assert_eq!(after_readd.len(), 28);
+        assert_eq!(after_readd[25], 2.0f64.to_bits());
         assert_eq!(
-            js_map_entry_key_at(map, 26).to_bits(),
+            after_readd[26],
             string_keys[4].get_nanbox_f64().to_bits(),
             "delete-then-re-add must append at the end"
         );
         assert_eq!(
-            js_map_entry_key_at(map, 27).to_bits(),
-            pointer_keys[1].to_bits()
+            after_readd[27],
+            pointer_keys[1].to_bits(),
+            "delete-then-re-add must append at the end"
         );
     }
 

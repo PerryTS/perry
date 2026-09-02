@@ -1239,6 +1239,13 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // fast path. Takes the NaN-boxed collection + key; strips internally.
     module.declare_function("js_map_find_key_index", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_set_find_value_index", DOUBLE, &[DOUBLE, DOUBLE]);
+    // The delete-safe for-of cursor: (NaN-boxed collection, cursor, epoch) →
+    // next live raw index or -1, and the collection's compaction epoch the
+    // loop stores after each step. See perry-hir `map_set_delete_safe_for_of`.
+    module.declare_function("js_map_cursor_next", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function("js_map_compaction_epoch", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_set_cursor_next", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function("js_set_compaction_epoch", DOUBLE, &[DOUBLE]);
     // Map/Set forEach: (collection_ptr, callback_nanboxed_f64, thisArg_f64) -> void (#2830)
     module.declare_function("js_map_foreach", VOID, &[I64, DOUBLE, DOUBLE]);
     module.declare_function("js_set_foreach", VOID, &[I64, DOUBLE, DOUBLE]);

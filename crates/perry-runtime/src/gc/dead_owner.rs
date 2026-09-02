@@ -314,10 +314,22 @@ pub(super) const DEAD_KEY_PRUNES: &[DeadKeyPrune] = &[
         owner: DeadKeyOwner::Any,
         prune: crate::map::prune_dead_map_iterator_array_owners,
     },
+    // Re-keyed by `map_header_moved_for_gc`; a dead Map's squeeze history
+    // serves no cursor.
+    DeadKeyPrune {
+        table: "MAP_COMPACTION_LOG",
+        owner: DeadKeyOwner::Any,
+        prune: crate::map::prune_dead_map_compaction_log_owners,
+    },
     DeadKeyPrune {
         table: "SET_ITERATOR_ARRAYS",
         owner: DeadKeyOwner::Any,
         prune: crate::set::prune_dead_set_iterator_array_owners,
+    },
+    DeadKeyPrune {
+        table: "SET_COMPACTION_LOG",
+        owner: DeadKeyOwner::Any,
+        prune: crate::set::prune_dead_set_compaction_log_owners,
     },
     DeadKeyPrune {
         table: "state().descriptors.property_descriptors + .accessor_descriptors",

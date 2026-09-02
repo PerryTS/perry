@@ -142,7 +142,7 @@ fn emptying_a_set_stays_consistent_and_compacts() {
 }
 
 #[test]
-fn raw_indexed_access_self_heals_by_compacting() {
+fn raw_indexed_reads_never_compact_and_the_cursor_steps_over_holes() {
     let set = js_set_alloc(8);
     for v in [1.0f64, 2.0, 3.0] {
         js_set_add(set, v);
@@ -151,10 +151,87 @@ fn raw_indexed_access_self_heals_by_compacting() {
     unsafe {
         assert_ne!((*set).used, (*set).size, "a hole is present");
     }
-    assert_eq!(js_set_value_at(set, 1), 3.0, "extern read compacts first");
+    // A plain bounded raw read: raw index 2 is still the THIRD value, the
+    // hole at 1 stays, the layout is untouched (this used to compact the
+    // whole set on every such read, once per hole).
+    assert_eq!(js_set_value_at(set, 2), 3.0);
     unsafe {
-        assert_eq!((*set).used, (*set).size, "access healed the layout");
+        assert_ne!((*set).used, (*set).size, "the read left the layout alone");
+        assert_eq!(
+            crate::set::set_compaction_epoch(set),
+            0,
+            "no squeeze happened"
+        );
+        assert_eq!(crate::set::set_cursor_next_raw(set, 0, 0), Some(0));
+        assert_eq!(
+            crate::set::set_cursor_next_raw(set, 1, 0),
+            Some(2),
+            "hole at 1 skipped"
+        );
+        assert_eq!(
+            crate::set::set_cursor_next_raw(set, 3, 0),
+            None,
+            "extent exhausted"
+        );
     }
+}
+
+#[test]
+fn cursor_rebases_exactly_across_a_multi_hole_compaction() {
+    // 40 values; a walk at cursor 21 while the body deletes v0..v20: holes
+    // outnumber the 19 live values, one compaction squeezes all 21 below the
+    // cursor. The rebase moves the cursor down by exactly that count.
+    let set = js_set_alloc(64);
+    for i in 0..40 {
+        js_set_add(set, i as f64);
+    }
+    let epoch0 = crate::set::set_compaction_epoch(set);
+    for i in 0..=20 {
+        assert_eq!(js_set_delete(set, i as f64), 1);
+    }
+    unsafe {
+        assert_eq!((*set).used, (*set).size, "the delete path compacted");
+    }
+    assert_ne!(crate::set::set_compaction_epoch(set), epoch0);
+    assert_eq!(
+        unsafe { crate::set::set_cursor_next_raw(set, 21, epoch0) },
+        Some(0)
+    );
+    assert_eq!(js_set_value_at(set, 0), 21.0, "the true next value");
+    let epoch1 = crate::set::set_compaction_epoch(set);
+    assert_eq!(
+        unsafe { crate::set::set_cursor_next_raw(set, 3, epoch1) },
+        Some(3)
+    );
+}
+
+#[test]
+fn cursor_rebases_through_successive_squeezes_and_clear() {
+    let set = js_set_alloc(64);
+    for i in 0..40 {
+        js_set_add(set, i as f64);
+    }
+    let epoch0 = crate::set::set_compaction_epoch(set);
+    for i in 0..=31 {
+        assert_eq!(js_set_delete(set, i as f64), 1);
+    }
+    unsafe {
+        assert_eq!((*set).used, (*set).size);
+        assert_eq!((*set).size, 8);
+    }
+    assert_eq!(
+        unsafe { crate::set::set_cursor_next_raw(set, 21, epoch0) },
+        Some(0)
+    );
+    assert_eq!(js_set_value_at(set, 0), 32.0);
+    let epoch1 = crate::set::set_compaction_epoch(set);
+    js_set_clear(set);
+    js_set_add(set, 100.0);
+    assert_eq!(
+        unsafe { crate::set::set_cursor_next_raw(set, 5, epoch1) },
+        Some(0)
+    );
+    assert_eq!(js_set_value_at(set, 0), 100.0);
 }
 
 #[test]
