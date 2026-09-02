@@ -1905,6 +1905,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             property: property.clone(),
                             value: value.clone(),
                         },
+                        // #9459: the reference's own `Throw` flag, not the
+                        // enclosing function's -- module init is a synthetic
+                        // function whose strictness is `Module::init_is_strict`
+                        // (#9458), and `PutValueSet` already carries the right
+                        // answer for every reference it desugars.
+                        *strict,
                     );
                 }
             }
@@ -1918,6 +1924,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         property,
                         value: value.clone(),
                     },
+                    // #9459: see the `caller`/`arguments` route above.
+                    *strict,
                 );
             }
             // #7288: sloppy code is barred from the class-field route above

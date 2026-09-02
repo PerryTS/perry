@@ -355,6 +355,65 @@ fn lower_array_index_set_via_runtime_key(
     )
 }
 
+/// #9459: the SLOPPY object-by-name tail for `Expr::IndexSet`.
+///
+/// The two string-key arms below reach `js_typed_feedback_object_set_field_by_name`
+/// → `js_object_set_field_by_name`, which has no `strict` parameter and rejects a
+/// non-writable slot by throwing. #9426 carried `assignment_strict` to the ARRAY
+/// element lanes; the object-by-name lanes on the same node still threw, so
+/// `for (o[k] of …)` and `o[k] += 1` on a frozen object stopped a sloppy program
+/// node runs to completion.
+///
+/// `Set(O, ToPropertyKey(k), V, false)` is `js_put_value_set(target, key, value,
+/// receiver, 0)` — the same entry sloppy `o[k] = v` already reaches, because
+/// `put_value_index_fast_path` keeps statically-known string keys off this file
+/// entirely (`expr/proxy_reflect.rs`). Routing here makes the two spellings agree.
+///
+/// Rooting is the #7639/#7201 window the strict arms open: receiver AND key are
+/// live across `value`'s lowering, which is arbitrary user code and can drive an
+/// evacuating minor. `target` and `receiver` are one evaluation of the base, so
+/// the single lowered box fills both operand slots.
+fn lower_sloppy_object_index_set(
+    ctx: &mut FnCtx<'_>,
+    object: &Expr,
+    index: &Expr,
+    value: &Expr,
+) -> Result<String> {
+    rooting::with_operands_rooted_across(
+        ctx,
+        &[object, index],
+        &[value],
+        |ctx| {
+            lower_value_for_dynamic_index_set(
+                ctx,
+                value,
+                "index_set.sloppy_object_value_bits",
+                "sloppy_object_index_set_helper_edge",
+            )
+        },
+        |ctx, vals, (val_double, _val_bits)| {
+            let (obj_box, key_box) = (vals[0].clone(), vals[1].clone());
+            let obj_bits = ctx.block().bitcast_double_to_i64(&obj_box);
+            // Same guard the strict arms emit: `undefined[k] = 1` is a TypeError
+            // in BOTH modes -- `GetValue` on the base runs before `PutValue`
+            // ever consults `Throw`.
+            super::property_set::emit_nullish_write_guard(ctx, &obj_bits, "index", "iset.sloppy");
+            let _ = ctx.block().call(
+                DOUBLE,
+                "js_put_value_set",
+                &[
+                    (DOUBLE, &obj_box),
+                    (DOUBLE, &key_box),
+                    (DOUBLE, &val_double),
+                    (DOUBLE, &obj_box),
+                    (I32, "0"),
+                ],
+            );
+            Ok(val_double)
+        },
+    )
+}
+
 pub(crate) fn lower(
     ctx: &mut FnCtx<'_>,
     expr: &Expr,
@@ -1399,6 +1458,11 @@ pub(crate) fn lower(
                 // `obj_box`. Root it across the evaluation and re-read below.
                 // The key is a literal, so it is not an operand here at all —
                 // it is interned into the string pool below.
+                //
+                // #9459: strict only -- see `lower_sloppy_object_index_set`.
+                if !assignment_strict {
+                    return lower_sloppy_object_index_set(ctx, object, index, value);
+                }
                 return rooting::with_operands_rooted_across(
                     ctx,
                     &[object.as_ref()],
@@ -1459,6 +1523,10 @@ pub(crate) fn lower(
                 );
             }
             if is_string_expr(ctx, index) {
+                // #9459: strict only -- see `lower_sloppy_object_index_set`.
+                if !assignment_strict {
+                    return lower_sloppy_object_index_set(ctx, object, index, value);
+                }
                 // #7154: see the literal-key arm above, plus the KEY, which
                 // sits in the same window. A non-literal string key is an
                 // ordinary heap string with no registered root of its own, so

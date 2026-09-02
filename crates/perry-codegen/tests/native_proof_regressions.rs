@@ -150,6 +150,29 @@ fn module_with_classes_and_params(
     }
 }
 
+/// #9459: the same module, with `probe` (and module init) STRICT.
+///
+/// `module_with_classes_and_params` hard-codes `is_strict: false`, which used to
+/// be invisible: `Expr::PropertySet` carried no strictness and every store took
+/// one lowering. It now takes the assignment's own `Throw` flag from
+/// `FnCtx::is_strict_fn`, so a test whose subject is the STRICT store lane has
+/// to say so — the same expectation move #9458 made across the codegen test
+/// files when `Module::init_is_strict` was introduced.
+fn strict_module_with_classes_and_params(
+    name: &str,
+    classes: Vec<Class>,
+    params: Vec<Param>,
+    return_type: Type,
+    body: Vec<Stmt>,
+) -> Module {
+    let mut module = module_with_classes_and_params(name, classes, params, return_type, body);
+    module.init_is_strict = true;
+    for function in &mut module.functions {
+        function.is_strict = true;
+    }
+    module
+}
+
 fn compile_ir(name: &str, body: Vec<Stmt>) -> String {
     compile_ir_with_opts(name, body, empty_opts())
 }
@@ -6913,7 +6936,13 @@ fn artifact_records_array_push_value_bits_before_slot_store() {
 
 #[test]
 fn artifact_records_dynamic_property_set_value_bits_before_helper() {
-    let module = module_with_classes_and_params(
+    // #9459: STRICT. The subject is a representation invariant -- the RHS stays
+    // in `js_value_bits` until the runtime helper edge boxes it -- and it is
+    // asserted here on the strict tail. The sloppy tail is a different runtime
+    // entry (`js_put_value_set(..., 0)`, so a rejected sloppy `[[Set]]` is a
+    // silent no-op) and gets its own twin below, because a representation
+    // invariant that holds on only one of two tails is not an invariant.
+    let module = strict_module_with_classes_and_params(
         "artifact_property_set_slot_js_value_bits.ts",
         Vec::new(),
         vec![param(1, "obj", Type::Any), param(2, "value", Type::Any)],
@@ -6941,6 +6970,45 @@ fn artifact_records_dynamic_property_set_value_bits_before_helper() {
                 && record_has_note(record, "boxed_at=dynamic_property_set_helper_edge")
         }),
         "expected dynamic property-set RHS to stay as js_value_bits before the helper edge:\n{artifact:#}"
+    );
+}
+
+/// #9459: the sloppy twin of the test above.
+///
+/// Same module, `is_strict: false`, so the store takes the sloppy tail. The
+/// representation contract is identical -- the RHS is lowered by
+/// `lower_value_for_dynamic_property_set` and stays `js_value_bits` until the
+/// helper edge -- only the consumer/boxed-at labels and the runtime entry differ.
+#[test]
+fn artifact_records_sloppy_dynamic_property_set_value_bits_before_helper() {
+    let module = module_with_classes_and_params(
+        "artifact_property_set_slot_js_value_bits_sloppy.ts",
+        Vec::new(),
+        vec![param(1, "obj", Type::Any), param(2, "value", Type::Any)],
+        Type::Number,
+        vec![
+            Stmt::Expr(Expr::PropertySet {
+                object: Box::new(local(1)),
+                property: "field".to_string(),
+                value: Box::new(local(2)),
+            }),
+            Stmt::Return(Some(int(0))),
+        ],
+    );
+
+    let artifact = compile_artifact_json_for_module(module);
+    let records = artifact["records"].as_array().unwrap();
+    assert!(
+        records.iter().any(|record| {
+            record["expr_kind"] == "PropertySet"
+                && record["consumer"] == "property_set.sloppy_dynamic_value_bits"
+                && record["native_rep_name"] == "js_value_bits"
+                && record["llvm_ty"] == "i64"
+                && record["native_value_state"] == "region_local"
+                && record["access_mode"].is_null()
+                && record_has_note(record, "boxed_at=sloppy_property_set_helper_edge")
+        }),
+        "expected sloppy dynamic property-set RHS to stay as js_value_bits before the helper edge:\n{artifact:#}"
     );
 }
 
@@ -14423,8 +14491,13 @@ fn scalar_method_int32_bitwise_rejects_unproven_or_unsigned_shapes() {
 
 #[test]
 fn static_property_access_on_computed_class_uses_property_id_wrappers() {
+    // #9459: STRICT. The property-id store ABI
+    // (`js_object_set_field_by_property_id` -> `js_object_set_field_by_name`)
+    // rejects a non-writable slot by throwing, which is correct only for a
+    // strict `PutValue`; the sloppy tail is asserted by the twin below. The
+    // READ side is strictness-independent and is asserted in both.
     let dynamic = class_with_computed_member(141, "DynamicShape", vec![]);
-    let module = module_with_classes_and_params(
+    let module = strict_module_with_classes_and_params(
         "property_id_static_access.ts",
         vec![dynamic],
         vec![
@@ -14454,6 +14527,57 @@ fn static_property_access_on_computed_class_uses_property_id_wrappers() {
     assert!(
         ir.contains("call double @js_object_get_field_by_property_id_f64"),
         "computed-member class static property reads should use property-id ABI:\n{ir}"
+    );
+}
+
+/// #9459: the sloppy twin of the test above.
+///
+/// A sloppy store must NOT take the property-id ABI: that route ends in
+/// `js_object_set_field_by_name`, which has no `strict` parameter and throws on
+/// a rejected `[[Set]]`. It goes to `js_put_value_set(..., 0)` instead. The READ
+/// keeps the property-id ABI in both modes -- strictness is a property of
+/// `PutValue`, not of `GetValue` -- and asserting it here is what keeps this
+/// test from passing on an empty program.
+#[test]
+fn sloppy_static_property_store_on_computed_class_avoids_property_id_setter() {
+    let dynamic = class_with_computed_member(141, "DynamicShape", vec![]);
+    let module = module_with_classes_and_params(
+        "property_id_static_access_sloppy.ts",
+        vec![dynamic],
+        vec![
+            param(1, "obj", Type::Named("DynamicShape".to_string())),
+            param(2, "value", Type::Number),
+        ],
+        Type::Number,
+        vec![
+            Stmt::Expr(Expr::PropertySet {
+                object: Box::new(local(1)),
+                property: "score".to_string(),
+                value: Box::new(local(2)),
+            }),
+            Stmt::Return(Some(Expr::PropertyGet {
+                byte_offset: 0,
+                object: Box::new(local(1)),
+                property: "score".to_string(),
+            })),
+        ],
+    );
+
+    let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
+    assert!(
+        !ir.contains("call void @js_object_set_field_by_property_id"),
+        "a sloppy store must not reach the throwing property-id setter:\n{ir}"
+    );
+    // The CALL, not the symbol -- `js_put_value_set` is `declare`d in every
+    // module, so matching the bare name would pass on a program with no store.
+    assert!(
+        ir.contains("call double @js_put_value_set("),
+        "a sloppy store should reach the strictness-aware [[Set]]:\n{ir}"
+    );
+    assert!(
+        ir.contains("call double @js_object_get_field_by_property_id_f64"),
+        "computed-member class static property reads keep the property-id ABI in \
+         sloppy code too:\n{ir}"
     );
 }
 

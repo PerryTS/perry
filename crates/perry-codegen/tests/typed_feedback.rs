@@ -199,6 +199,25 @@ fn module(name: &str, params: Vec<Param>, return_type: Type, body: Vec<Stmt>) ->
     module_with_classes(name, Vec::new(), params, return_type, body)
 }
 
+/// #9459: the same module with `probe` (and module init) STRICT.
+///
+/// `module_with_classes` hard-codes `is_strict: false`, which used to be
+/// invisible: `Expr::PropertySet` carried no strictness and every store took one
+/// lowering. It now takes the assignment's own `Throw` flag from
+/// `FnCtx::is_strict_fn`, and only the STRICT store tail carries the
+/// typed-feedback `PropertySet` site -- the sloppy tail is
+/// `js_put_value_set(..., 0)`, so a rejected sloppy `[[Set]]` stays a silent
+/// no-op. A test whose subject is that site has to ask for the lane it lives on,
+/// the same expectation move #9458 made when `Module::init_is_strict` landed.
+fn strict_module(name: &str, params: Vec<Param>, return_type: Type, body: Vec<Stmt>) -> Module {
+    let mut module = module_with_classes(name, Vec::new(), params, return_type, body);
+    module.init_is_strict = true;
+    for function in &mut module.functions {
+        function.is_strict = true;
+    }
+    module
+}
+
 fn module_with_classes(
     name: &str,
     classes: Vec<Class>,
@@ -343,7 +362,11 @@ fn typed_feedback_instruments_property_and_method_boundaries() {
     // later tests in this binary never observe the changed environment.
     let _lock = env_lock();
     let _env = EnvVarGuard::set("PERRY_TYPED_FEEDBACK", Some("1"));
-    let ir = ir_for(module(
+    // #9459: STRICT -- the `object_set_by_name_guard` site and the
+    // `js_typed_feedback_object_set_field_by_name_fast` dispatcher this asserts
+    // live on the strict store tail. See `strict_module`. The sloppy tail is
+    // asserted by `sloppy_property_set_uses_strictness_aware_put_value` below.
+    let ir = ir_for(strict_module(
         "typed_feedback_property.ts",
         vec![param(1, "obj", Type::Any)],
         Type::Any,
@@ -384,6 +407,68 @@ fn typed_feedback_instruments_property_and_method_boundaries() {
     assert!(ir.contains("call void @js_typed_feedback_record_guard_fail"));
     assert!(ir.contains("call void @js_typed_feedback_record_fallback_call"));
     assert!(ir.contains("call void @js_typed_feedback_observe_property_get"));
+}
+
+/// #9459: the sloppy twin of the boundaries test above.
+///
+/// A sloppy `o.x = v` must not reach `js_object_set_field_by_name` -- it has no
+/// `strict` parameter and rejects a non-writable slot by throwing, where sloppy
+/// `PutValue` discards the rejection. It goes to `js_put_value_set(..., 0)`.
+///
+/// The GET boundary is asserted too, and is deliberately unchanged: strictness
+/// is a property of `PutValue`, not of `GetValue`. That assertion is also what
+/// keeps this test from passing on an empty program -- every other check here is
+/// a negative.
+#[test]
+fn sloppy_property_set_uses_strictness_aware_put_value() {
+    let _lock = env_lock();
+    let _env = EnvVarGuard::set("PERRY_TYPED_FEEDBACK", Some("1"));
+    let ir = ir_for(module(
+        "typed_feedback_property_sloppy.ts",
+        vec![param(1, "obj", Type::Any)],
+        Type::Any,
+        vec![
+            Stmt::Expr(Expr::PropertySet {
+                object: Box::new(Expr::LocalGet(1)),
+                property: "x".to_string(),
+                value: Box::new(Expr::Number(1.0)),
+            }),
+            Stmt::Return(Some(Expr::PropertyGet {
+                byte_offset: 0,
+                object: Box::new(Expr::LocalGet(1)),
+                property: "x".to_string(),
+            })),
+        ],
+    ));
+
+    // Match the CALL, not the symbol: every runtime entry is `declare`d in
+    // every module, so `contains("js_put_value_set")` would pass on a module
+    // that never stores and `contains("...set_field_by_name_fast")` would fail
+    // on one that never does either.
+    assert!(
+        ir.contains("call double @js_put_value_set("),
+        "a sloppy property store should reach the strictness-aware [[Set]]:\n{ir}"
+    );
+    assert!(
+        !ir.contains("call void @js_typed_feedback_object_set_field_by_name_fast("),
+        "the strict typed-feedback store dispatcher must not be CALLED on a \
+         sloppy store -- its underlying setter throws on a rejected write:\n{ir}"
+    );
+    assert!(
+        !ir.contains("object_set_by_name_guard"),
+        "no typed-feedback SET site is registered on the sloppy tail:\n{ir}"
+    );
+    // ANTI-VACUITY: the reads are untouched by strictness and must still be
+    // instrumented, so the negatives above are about the store lane and not
+    // about an empty module.
+    assert!(
+        ir.contains("object_get_by_name_guard"),
+        "the property READ boundary is strictness-independent and must remain:\n{ir}"
+    );
+    assert!(
+        ir.contains("js_object_get_field_by_name_f64"),
+        "the property read itself must still be lowered:\n{ir}"
+    );
 }
 
 /// The negative twin of the test above, and the whole of #7480 step 4's second

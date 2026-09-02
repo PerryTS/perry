@@ -64,7 +64,18 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let strict = ctx.is_strict_fn;
             super::index_set::lower(ctx, expr, value_discarded, strict)
         }
-        Expr::PropertySet { .. } => super::property_set::lower(ctx, expr),
+        Expr::PropertySet { .. } => {
+            // #9459, twin of the `IndexSet` line above (#9426): `Expr::PropertySet`
+            // carries no strictness of its own, so the assignment's `Throw` flag
+            // comes from the CONTEXT it is lowered in. Every spelling that reaches
+            // this arm -- `o.x += 1`, `for (o.x of it)`, `[o.x] = arr` -- is a
+            // `PutValue` on a property reference whose strictness is the enclosing
+            // code's (ES2024 SS6.2.5.7). A `PutValueSet` that routes here instead
+            // carries the reference's own flag and passes it explicitly
+            // (`expr/proxy_reflect.rs`).
+            let strict = ctx.is_strict_fn;
+            super::property_set::lower(ctx, expr, strict)
+        }
         Expr::PropertyGet { .. } => super::property_get::lower(ctx, expr),
         Expr::Conditional { .. } => super::conditional::lower(ctx, expr),
         Expr::ArrayPush { .. } | Expr::ArrayPushSpread { .. } => {
