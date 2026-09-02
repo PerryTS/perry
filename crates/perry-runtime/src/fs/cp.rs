@@ -69,7 +69,6 @@ unsafe fn build_cp_error_value(
     path: Option<String>,
 ) -> f64 {
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_error_new_with_message(msg);
     crate::node_submodules::register_error_code_pub(msg, code);
     if let Some(syscall) = syscall {
         crate::node_submodules::register_error_syscall(msg, syscall);
@@ -77,13 +76,14 @@ unsafe fn build_cp_error_value(
     if let Some(path) = path {
         crate::node_submodules::register_error_path(msg, path);
     }
+    let err = crate::error::js_error_new_with_message(msg);
     crate::value::js_nanbox_pointer(err as i64)
 }
 
 unsafe fn build_cp_type_error_value(message: &str, code: &'static str) -> f64 {
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_typeerror_new(msg);
     crate::node_submodules::register_error_code_pub(msg, code);
+    let err = crate::error::js_typeerror_new(msg);
     crate::value::js_nanbox_pointer(err as i64)
 }
 
@@ -92,10 +92,10 @@ unsafe fn build_cp_eexist_error(dst: &Path) -> f64 {
     let message =
         format!("Target already exists: cp returned EEXIST ({path} already exists) {path}");
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_error_new_with_message(msg);
     crate::node_submodules::register_error_code_pub(msg, "ERR_FS_CP_EEXIST");
     crate::node_submodules::register_error_syscall(msg, "cp");
     crate::node_submodules::register_error_path(msg, path);
+    let err = crate::error::js_error_new_with_message(msg);
     #[cfg(unix)]
     crate::node_submodules::set_error_user_prop(err as usize, "errno", libc::EEXIST as f64);
     crate::value::js_nanbox_pointer(err as i64)

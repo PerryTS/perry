@@ -720,8 +720,8 @@ unsafe fn reject_type_error(promise: *mut Promise, message: &str) {
 
 unsafe fn throw_invalid_arg_type(message: &str) -> ! {
     let s = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = perry_runtime::error::js_typeerror_new(s);
     perry_runtime::node_submodules::register_error_code_pub(s, "ERR_INVALID_ARG_TYPE");
+    let err = perry_runtime::error::js_typeerror_new(s);
     perry_runtime::exception::js_throw(perry_runtime::value::js_nanbox_pointer(err as i64))
 }
 

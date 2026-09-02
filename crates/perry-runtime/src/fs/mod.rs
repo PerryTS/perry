@@ -980,10 +980,10 @@ pub extern "C" fn js_fs_rm_recursive_options(path_value: f64, options_value: f64
 unsafe fn build_eisdir_rm_error(path: &str) -> f64 {
     let msg = format!("Path is a directory: rm returned EISDIR (is a directory) {path}");
     let msg_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err_ptr = crate::error::js_error_new_with_message(msg_ptr);
     crate::node_submodules::register_error_code_pub(msg_ptr, "ERR_FS_EISDIR");
     crate::node_submodules::register_error_syscall(msg_ptr, "rm");
     crate::node_submodules::register_error_path(msg_ptr, path.to_string());
+    let err_ptr = crate::error::js_error_new_with_message(msg_ptr);
     crate::value::js_nanbox_pointer(err_ptr as i64)
 }
 

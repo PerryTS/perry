@@ -1,6 +1,6 @@
 //! node:diagnostics_channel + supporting helpers (channel registry,
-//! subscribe/unsubscribe, tracing channels) + global error-code/syscall/path
-//! side tables consumed by the OBJECT_TYPE_ERROR getters.
+//! subscribe/unsubscribe, tracing channels) + the global Node diagnostic
+//! records consumed by the OBJECT_TYPE_ERROR getters.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -427,158 +427,194 @@ pub(crate) fn diagnostics_channel_is_channel_instance_value(value: f64) -> bool 
     })
 }
 
+#[derive(Default)]
+pub(crate) struct ErrorDiagnostics {
+    code: Option<&'static str>,
+    syscall: Option<&'static str>,
+    errno: Option<i32>,
+    path: Option<String>,
+    dest: Option<String>,
+    hostname: Option<String>,
+}
+
 thread_local! {
-    /// Side table keyed on an ErrorHeader's `message` string pointer (which
-    /// is allocated fresh per throw via `js_string_from_bytes`). The
-    /// `.code` getter in `object::field_get_set` consults this map to
-    /// recover an `ERR_*` code without resorting to substring matches on
-    /// the message text — which would have applied to any user-thrown
-    /// error sharing the same message string. Stale entries (after the
-    /// referenced StringHeader is GC'd) are harmless: a fresh allocation
-    /// will overwrite the slot via `register_error_code` the next time we
-    /// register a code, and lookups for unrelated message pointers miss.
-    pub(crate) static ERROR_MESSAGE_CODES: RefCell<HashMap<usize, &'static str>> =
+    /// Diagnostics staged by the freshly allocated message until `alloc_error`
+    /// can attach them to the Error that owns them. Registration historically
+    /// precedes construction at the runtime/stdlib call sites; `alloc_error`
+    /// drains this entry before doing any GC-capable allocation, so a message
+    /// relocation can never strand a pending record.
+    static PENDING_ERROR_DIAGNOSTICS: RefCell<HashMap<usize, ErrorDiagnostics>> =
         RefCell::new(HashMap::new());
+
+    /// The live Node diagnostic record, keyed by ErrorHeader address. Errors
+    /// have one existing move/finalize hook, so all six fields now rekey and die
+    /// together with their owner instead of following six message addresses
+    /// that the Error hook never receives.
+    pub(crate) static ERROR_DIAGNOSTICS: RefCell<HashMap<usize, ErrorDiagnostics>> =
+        RefCell::new(HashMap::new());
+}
+
+fn with_pending_error_diagnostics(
+    message_ptr: *const StringHeader,
+    update: impl FnOnce(&mut ErrorDiagnostics),
+) {
+    if message_ptr.is_null() {
+        return;
+    }
+    PENDING_ERROR_DIAGNOSTICS.with(|m| {
+        update(m.borrow_mut().entry(message_ptr as usize).or_default());
+    });
+}
+
+/// Remove the construction-stage diagnostics for `message_ptr` before an
+/// Error constructor reaches its first GC point.
+pub(crate) fn take_pending_error_diagnostics(
+    message_ptr: *const StringHeader,
+) -> Option<ErrorDiagnostics> {
+    if message_ptr.is_null() {
+        return None;
+    }
+    PENDING_ERROR_DIAGNOSTICS.with(|m| m.borrow_mut().remove(&(message_ptr as usize)))
+}
+
+/// Attach a staged diagnostic record to the newly allocated Error.
+pub(crate) fn install_error_diagnostics(
+    error_ptr: *const crate::error::ErrorHeader,
+    diagnostics: Option<ErrorDiagnostics>,
+) {
+    let Some(diagnostics) = diagnostics else {
+        return;
+    };
+    if error_ptr.is_null() {
+        return;
+    }
+    ERROR_DIAGNOSTICS.with(|m| {
+        m.borrow_mut().insert(error_ptr as usize, diagnostics);
+    });
 }
 
 pub(crate) fn register_error_code(message_ptr: *const StringHeader, code: &'static str) {
     register_error_code_pub(message_ptr, code);
 }
 
-/// `register_error_code` for crate-external callers (e.g. `fs.rs` decorates
-/// io::Error values with their POSIX `ERR_*` code so `err.code === "ENOENT"`
-/// works on caught errors).
+/// `register_error_code` for crate-external callers.
+///
+/// Registration must immediately precede construction of the Error that owns
+/// `message_ptr`. `alloc_error` drains this construction-stage record before
+/// its first GC point and installs it under the resulting ErrorHeader address.
 pub fn register_error_code_pub(message_ptr: *const StringHeader, code: &'static str) {
-    if message_ptr.is_null() {
-        return;
-    }
-    ERROR_MESSAGE_CODES.with(|m| {
-        m.borrow_mut().insert(message_ptr as usize, code);
-    });
+    with_pending_error_diagnostics(message_ptr, |diagnostics| diagnostics.code = Some(code));
 }
 
-/// Returns the explicit `ERR_*` code registered for an Error's `message`
-/// pointer, if any. Called from the `.code` property getter.
-pub fn error_code_for_message(message_ptr: *const StringHeader) -> Option<&'static str> {
-    if message_ptr.is_null() {
+/// Returns the explicit `ERR_*` code registered for an Error, if any. Called
+/// from the `.code` property getter and uncaught-error reporter.
+pub fn error_code_for_error(error_ptr: *const crate::error::ErrorHeader) -> Option<&'static str> {
+    if error_ptr.is_null() {
         return None;
     }
-    ERROR_MESSAGE_CODES.with(|m| m.borrow().get(&(message_ptr as usize)).copied())
+    ERROR_DIAGNOSTICS.with(|m| {
+        m.borrow()
+            .get(&(error_ptr as usize))
+            .and_then(|diagnostics| diagnostics.code)
+    })
 }
 
-thread_local! {
-    pub(crate) static ERROR_MESSAGE_SYSCALLS: RefCell<HashMap<usize, &'static str>> =
-        RefCell::new(HashMap::new());
-    pub(crate) static ERROR_MESSAGE_ERRNOS: RefCell<HashMap<usize, i32>> =
-        RefCell::new(HashMap::new());
-    pub(crate) static ERROR_MESSAGE_PATHS: RefCell<HashMap<usize, String>> =
-        RefCell::new(HashMap::new());
-    pub(crate) static ERROR_MESSAGE_DESTS: RefCell<HashMap<usize, String>> =
-        RefCell::new(HashMap::new());
-}
-
-/// Attach a Node-style `syscall` string to an Error keyed by its message
-/// StringHeader, mirroring [`register_error_code_pub`]. Read back from the
-/// `.syscall` getter in `field_get_set`.
+/// Stage a Node-style `syscall` string for the Error constructed from this
+/// message. Read back from the `.syscall` getter in `field_get_set`.
 pub fn register_error_syscall(message_ptr: *const StringHeader, syscall: &'static str) {
-    if message_ptr.is_null() {
-        return;
-    }
-    ERROR_MESSAGE_SYSCALLS.with(|m| {
-        m.borrow_mut().insert(message_ptr as usize, syscall);
+    with_pending_error_diagnostics(message_ptr, |diagnostics| {
+        diagnostics.syscall = Some(syscall)
     });
 }
 
-pub fn error_syscall_for_message(message_ptr: *const StringHeader) -> Option<&'static str> {
-    if message_ptr.is_null() {
+pub fn error_syscall_for_error(
+    error_ptr: *const crate::error::ErrorHeader,
+) -> Option<&'static str> {
+    if error_ptr.is_null() {
         return None;
     }
-    ERROR_MESSAGE_SYSCALLS.with(|m| m.borrow().get(&(message_ptr as usize)).copied())
+    ERROR_DIAGNOSTICS.with(|m| {
+        m.borrow()
+            .get(&(error_ptr as usize))
+            .and_then(|diagnostics| diagnostics.syscall)
+    })
 }
 
-/// Attach a Node-style negative libuv errno to an Error keyed by its message
-/// StringHeader. Read back from the `.errno` getter in `field_get_set`.
+/// Stage a Node-style negative libuv errno for the Error constructed from this
+/// message. Read back from the `.errno` getter in `field_get_set`.
 pub fn register_error_errno(message_ptr: *const StringHeader, errno: i32) {
-    if message_ptr.is_null() {
-        return;
-    }
-    ERROR_MESSAGE_ERRNOS.with(|m| {
-        m.borrow_mut().insert(message_ptr as usize, errno);
-    });
+    with_pending_error_diagnostics(message_ptr, |diagnostics| diagnostics.errno = Some(errno));
 }
 
-pub fn error_errno_for_message(message_ptr: *const StringHeader) -> Option<i32> {
-    if message_ptr.is_null() {
+pub fn error_errno_for_error(error_ptr: *const crate::error::ErrorHeader) -> Option<i32> {
+    if error_ptr.is_null() {
         return None;
     }
-    ERROR_MESSAGE_ERRNOS.with(|m| m.borrow().get(&(message_ptr as usize)).copied())
+    ERROR_DIAGNOSTICS.with(|m| {
+        m.borrow()
+            .get(&(error_ptr as usize))
+            .and_then(|diagnostics| diagnostics.errno)
+    })
 }
 
-/// Attach a Node-style `path` string to an Error keyed by its message
-/// StringHeader. The value is owned (paths are runtime data, not static).
+/// Stage a Node-style `path` string for the Error constructed from this
+/// message. The value is owned (paths are runtime data, not static).
 pub fn register_error_path(message_ptr: *const StringHeader, path: String) {
-    if message_ptr.is_null() {
-        return;
-    }
-    ERROR_MESSAGE_PATHS.with(|m| {
-        m.borrow_mut().insert(message_ptr as usize, path);
-    });
+    with_pending_error_diagnostics(message_ptr, |diagnostics| diagnostics.path = Some(path));
 }
 
-pub fn error_path_for_message(message_ptr: *const StringHeader) -> Option<String> {
-    if message_ptr.is_null() {
+pub fn error_path_for_error(error_ptr: *const crate::error::ErrorHeader) -> Option<String> {
+    if error_ptr.is_null() {
         return None;
     }
-    ERROR_MESSAGE_PATHS.with(|m| m.borrow().get(&(message_ptr as usize)).cloned())
+    ERROR_DIAGNOSTICS.with(|m| {
+        m.borrow()
+            .get(&(error_ptr as usize))
+            .and_then(|diagnostics| diagnostics.path.clone())
+    })
 }
 
-thread_local! {
-    pub(crate) static ERROR_MESSAGE_HOSTNAMES: RefCell<HashMap<usize, String>> =
-        RefCell::new(HashMap::new());
-}
-
-/// Attach a Node-style `hostname` string to an Error keyed by its message
-/// StringHeader. Node's c-ares `dns.resolve*`/`dns.reverse` failures carry the
-/// queried hostname (or address) on `err.hostname`. Read back from the
-/// `.hostname` getter in `field_get_set` (mirrors `.path`).
+/// Stage a Node-style `hostname` string for the Error constructed from this
+/// message. Node's c-ares `dns.resolve*`/`dns.reverse` failures carry the
+/// queried hostname (or address) on `err.hostname`.
 pub fn register_error_hostname(message_ptr: *const StringHeader, hostname: String) {
-    if message_ptr.is_null() {
-        return;
-    }
-    ERROR_MESSAGE_HOSTNAMES.with(|m| {
-        m.borrow_mut().insert(message_ptr as usize, hostname);
+    with_pending_error_diagnostics(message_ptr, |diagnostics| {
+        diagnostics.hostname = Some(hostname)
     });
 }
 
-pub fn error_hostname_for_message(message_ptr: *const StringHeader) -> Option<String> {
-    if message_ptr.is_null() {
+pub fn error_hostname_for_error(error_ptr: *const crate::error::ErrorHeader) -> Option<String> {
+    if error_ptr.is_null() {
         return None;
     }
-    ERROR_MESSAGE_HOSTNAMES.with(|m| m.borrow().get(&(message_ptr as usize)).cloned())
+    ERROR_DIAGNOSTICS.with(|m| {
+        m.borrow()
+            .get(&(error_ptr as usize))
+            .and_then(|diagnostics| diagnostics.hostname.clone())
+    })
 }
 
-/// Attach a Node-style `dest` string to an Error keyed by its message
-/// StringHeader. Node sets `dest` on two-path fs errors (rename/copyFile/
-/// link/symlink) alongside `path`. Read back from the `.dest` getter.
+/// Stage a Node-style `dest` string for the Error constructed from this
+/// message. Node sets `dest` on two-path fs errors (rename/copyFile/link/
+/// symlink) alongside `path`.
 pub fn register_error_dest(message_ptr: *const StringHeader, dest: String) {
-    if message_ptr.is_null() {
-        return;
-    }
-    ERROR_MESSAGE_DESTS.with(|m| {
-        m.borrow_mut().insert(message_ptr as usize, dest);
-    });
+    with_pending_error_diagnostics(message_ptr, |diagnostics| diagnostics.dest = Some(dest));
 }
 
-pub fn error_dest_for_message(message_ptr: *const StringHeader) -> Option<String> {
-    if message_ptr.is_null() {
+pub fn error_dest_for_error(error_ptr: *const crate::error::ErrorHeader) -> Option<String> {
+    if error_ptr.is_null() {
         return None;
     }
-    ERROR_MESSAGE_DESTS.with(|m| m.borrow().get(&(message_ptr as usize)).cloned())
+    ERROR_DIAGNOSTICS.with(|m| {
+        m.borrow()
+            .get(&(error_ptr as usize))
+            .and_then(|diagnostics| diagnostics.dest.clone())
+    })
 }
 
 /// A user-assigned own property value on an `Error` object. String values are
 /// stored as an owned `String` (GC-safe — reconstructed into a fresh
-/// `StringHeader` on read, exactly like [`ERROR_MESSAGE_PATHS`]); everything
+/// `StringHeader` on read, exactly like diagnostic `path` values); everything
 /// else is stored as raw NaN-box bits. Immediates (number/bool/null/undefined)
 /// carry no live heap reference so this is fully safe for the common cases
 /// (`err.code = "X"`, `err.errno = -2`). Heap-object-valued props are stored

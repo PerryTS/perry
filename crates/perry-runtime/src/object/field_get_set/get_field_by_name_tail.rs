@@ -707,8 +707,8 @@ pub(crate) fn get_field_by_name_object_tail(
                 let err_ptr = obj as *mut crate::error::ErrorHeader;
                 // User-assigned own properties (`err.code = "X"`,
                 // `err.errno = -2`, custom fields) take precedence over the
-                // built-in accessors below — they were recorded in the
-                // per-error side table by the setter (#2014). Routed through
+                // built-in accessors below — they live on the Error's
+                // `ObjectMeta.expando` bag (#2014). Routed through
                 // the exotic helper so `Object.defineProperty(err, k, {get})`
                 // accessors fire too.
                 if let Ok(key_str) = std::str::from_utf8(key_bytes) {
@@ -749,14 +749,13 @@ pub(crate) fn get_field_by_name_object_tail(
                     b"code" => {
                         // Errors thrown by runtime validation paths (e.g.
                         // diagnostics_channel argument checks) register
-                        // their `ERR_*` code in a side table keyed on the
-                        // message StringHeader pointer. This avoids the
+                        // their `ERR_*` code in a diagnostic record owned by
+                        // the ErrorHeader. This avoids the
                         // earlier substring-match shim that incorrectly
                         // applied `ERR_INVALID_ARG_TYPE` to any user
                         // TypeError whose `.message` happened to equal
                         // the placeholder text.
-                        let msg = crate::error::js_error_get_message(err_ptr);
-                        if let Some(code) = crate::node_submodules::error_code_for_message(msg) {
+                        if let Some(code) = crate::node_submodules::error_code_for_error(err_ptr) {
                             let s = crate::string::js_string_from_bytes(
                                 code.as_ptr(),
                                 code.len() as u32,
@@ -780,11 +779,10 @@ pub(crate) fn get_field_by_name_object_tail(
                     b"syscall" => {
                         // Node attaches `syscall` to system-call errors
                         // (open/stat/access/…). Perry's fs helpers register
-                        // the value in a side table keyed by the message
-                        // StringHeader (parallel to the `.code` path).
-                        let msg = crate::error::js_error_get_message(err_ptr);
+                        // the value in the Error's diagnostic record
+                        // (parallel to the `.code` path).
                         if let Some(syscall) =
-                            crate::node_submodules::error_syscall_for_message(msg)
+                            crate::node_submodules::error_syscall_for_error(err_ptr)
                         {
                             let s = crate::string::js_string_from_bytes(
                                 syscall.as_ptr(),
@@ -795,15 +793,14 @@ pub(crate) fn get_field_by_name_object_tail(
                         return JSValue::undefined();
                     }
                     b"errno" => {
-                        let msg = crate::error::js_error_get_message(err_ptr);
-                        if let Some(errno) = crate::node_submodules::error_errno_for_message(msg) {
+                        if let Some(errno) = crate::node_submodules::error_errno_for_error(err_ptr)
+                        {
                             return JSValue::number(errno as f64);
                         }
                         return JSValue::undefined();
                     }
                     b"path" => {
-                        let msg = crate::error::js_error_get_message(err_ptr);
-                        if let Some(path) = crate::node_submodules::error_path_for_message(msg) {
+                        if let Some(path) = crate::node_submodules::error_path_for_error(err_ptr) {
                             let s = crate::string::js_string_from_bytes(
                                 path.as_ptr(),
                                 path.len() as u32,
@@ -815,9 +812,8 @@ pub(crate) fn get_field_by_name_object_tail(
                     b"hostname" => {
                         // Node attaches `hostname` to c-ares dns errors
                         // (`dns.resolve*`/`dns.reverse`). Mirrors `.path`.
-                        let msg = crate::error::js_error_get_message(err_ptr);
                         if let Some(hostname) =
-                            crate::node_submodules::error_hostname_for_message(msg)
+                            crate::node_submodules::error_hostname_for_error(err_ptr)
                         {
                             let s = crate::string::js_string_from_bytes(
                                 hostname.as_ptr(),
@@ -830,8 +826,7 @@ pub(crate) fn get_field_by_name_object_tail(
                     b"dest" => {
                         // Node attaches `dest` to two-path fs errors
                         // (rename/copyFile/link/symlink). Mirrors `.path`.
-                        let msg = crate::error::js_error_get_message(err_ptr);
-                        if let Some(dest) = crate::node_submodules::error_dest_for_message(msg) {
+                        if let Some(dest) = crate::node_submodules::error_dest_for_error(err_ptr) {
                             let s = crate::string::js_string_from_bytes(
                                 dest.as_ptr(),
                                 dest.len() as u32,
