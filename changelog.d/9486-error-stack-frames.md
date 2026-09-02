@@ -65,6 +65,13 @@
   name of their own and were the ones a neighbour's name leaked into (measured:
   a `new Widget()` frame came out labelled `main`).
 
+  Registering a name is gated on `LlModule::has_function`. `method_names` is
+  a DISPATCH registry, not an emission record — it carries keys this module
+  never defines a body for, and emitting a registration against one makes
+  module init reference an undefined global. The claude-code bundle found
+  exactly one, a getter (`UT7.__get_get_extensionName`) out of ~46k functions,
+  and failed to compile; nothing smaller than that bundle reproduced it.
+
 - **x86_64 builds now keep frame pointers.** The capture above walks the
   `rbp` / `x29` chain, which is only a chain if every frame between
   `new Error` and the throwing JS function maintains one. Generated code always
