@@ -138,21 +138,28 @@ fn names(stdout: &str, label: &str) -> Vec<String> {
         .collect()
 }
 
-/// The headline of #9486: a three-deep call chain reports three named frames,
-/// where before the fix it reported one unnamed placeholder.
+/// The headline of #9486: a captured stack names the JS functions it ran
+/// through, in call order, instead of the single `at <anonymous>` placeholder.
+///
+/// The re-throw chain is what this asserts on, and deliberately so: its
+/// `try`/`catch` frames survive LLVM's inliner, whereas the plain
+/// `chainA → chainB → chainC` next door is small enough that `-O` folds all
+/// three into their caller and there are no frames left to report. That
+/// collapse is inherent to compiling ahead of time — V8 keeps inlined frames
+/// because it retains inlining metadata for deoptimization, and perry has no
+/// such record — so a test that demanded three frames there would be pinning
+/// the optimizer's current appetite, not this fix.
 #[test]
-fn a_plain_call_chain_reports_named_frames() {
+fn a_call_chain_reports_named_frames_in_call_order() {
     let stdout = compile_and_run(&[]);
-    let frames = names(&stdout, "CHAIN");
+    let frames = names(&stdout, "RETHROW");
     assert!(
         frames.len() >= 3,
-        "a three-deep chain must report at least three frames, not the single \
-         `<anonymous>` placeholder #9486 is about; got {frames:?}\n{stdout}"
+        "expected at least three frames, not the single `<anonymous>` \
+         placeholder #9486 is about; got {frames:?}\n{stdout}"
     );
-    // Call order, innermost first. `contains` rather than equality because a
-    // frame may legitimately carry more than the bare name.
     let joined = frames.join(",");
-    for expected in ["chainC", "chainB", "chainA"] {
+    for expected in ["innerThrow", "outerRethrow", "catchRethrow"] {
         assert!(
             frames.iter().any(|f| f.contains(expected)),
             "frame `{expected}` is missing from {joined}\n{stdout}"
@@ -160,7 +167,7 @@ fn a_plain_call_chain_reports_named_frames() {
     }
     let pos = |name: &str| frames.iter().position(|f| f.contains(name)).unwrap();
     assert!(
-        pos("chainC") < pos("chainB") && pos("chainB") < pos("chainA"),
+        pos("innerThrow") < pos("outerRethrow") && pos("outerRethrow") < pos("catchRethrow"),
         "frames must run innermost-first like node's; got {joined}"
     );
     assert!(
@@ -170,27 +177,38 @@ fn a_plain_call_chain_reports_named_frames() {
 }
 
 /// `throw e` inside a `catch` re-throws the SAME error object. Node keeps the
-/// original capture, so the innermost frame stays `innerThrow` — a stack that
-/// starts at `catchRethrow` would mean the capture was redone at the re-throw.
+/// original capture, so the innermost frame stays `innerThrow` — a stack whose
+/// innermost frame were `catchRethrow` would mean the capture was redone at
+/// the re-throw.
 #[test]
 fn a_rethrown_error_keeps_its_original_capture() {
     let stdout = compile_and_run(&[]);
     let frames = names(&stdout, "RETHROW");
-    assert!(
-        frames.len() >= 2,
-        "the re-thrown error must still carry its frames; got {frames:?}\n{stdout}"
-    );
-    assert!(
-        frames.iter().any(|f| f.contains("innerThrow")),
+    let inner = frames
+        .iter()
+        .position(|f| f.contains("innerThrow"))
+        .unwrap_or_else(|| panic!("no `innerThrow` frame in {frames:?}\n{stdout}"));
+    assert_eq!(
+        inner, 0,
         "the capture must be the one taken where the error was CONSTRUCTED \
-         (`innerThrow`), not where it was re-thrown; got {frames:?}\n{stdout}"
+         (`innerThrow` is the innermost JS frame), not where it was \
+         re-thrown; got {frames:?}\n{stdout}"
     );
-    let inner = frames.iter().position(|f| f.contains("innerThrow"));
-    let outer = frames.iter().position(|f| f.contains("catchRethrow"));
-    if let (Some(inner), Some(outer)) = (inner, outer) {
-        assert!(
-            inner < outer,
-            "the construction frame must precede the re-throw frame; got {frames:?}"
-        );
-    }
+}
+
+/// Even where inlining leaves nothing of the call chain, the stack must not
+/// fall back to the placeholder: the frame that remains has to be named.
+#[test]
+fn an_inlined_chain_still_names_the_frame_that_survives() {
+    let stdout = compile_and_run(&[]);
+    let frames = names(&stdout, "CHAIN");
+    assert!(
+        !frames.is_empty(),
+        "a stack with no frames at all; got {stdout}"
+    );
+    assert!(
+        frames.iter().all(|f| f != "<anonymous>"),
+        "every surviving frame must be named — `<anonymous>` is the \
+         pre-#9486 placeholder; got {frames:?}\n{stdout}"
+    );
 }
