@@ -241,25 +241,16 @@ macro_rules! nm_general_closures {
     };
 }
 
-/// Thin router — extract+normalize the module name, dispatch via the per-module
-/// registry. Names no bucket fn, so unused modules dead-strip.
-pub(crate) unsafe fn dispatch_native_module_method(
-    obj: *const ObjectHeader,
-    method_name: &str,
-    args_ptr: *const f64,
-    args_len: usize,
-) -> f64 {
-    // Extract the module name from field 0 of the namespace object
-    let module_field = js_object_get_field(obj as *mut _, 0);
-    let module_name = if module_field.is_string() {
-        let str_ptr = module_field.as_string_ptr();
-        let len = (*str_ptr).byte_len as usize;
-        let data = (str_ptr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-        std::str::from_utf8(std::slice::from_raw_parts(data, len)).unwrap_or("")
-    } else {
-        ""
-    };
-    let (module_name, assert_skip_prototype) = match module_name {
+/// Normalize the name stored on a native-module namespace object to the name the
+/// per-module dispatch buckets are registered under, plus assert's
+/// skip-prototype flag.
+///
+/// Split out of `dispatch_native_module_method` so the `<mod>.default` coverage
+/// is unit-testable against `cjs_default_base_module` — the same table the
+/// property-READ path (`bound_native_callable_export_value`) normalizes
+/// through. See `cjs_default_dispatch_names_resolve_to_a_bucket`.
+pub(crate) fn normalize_dispatch_module_name(module_name: &str) -> (&str, bool) {
+    match module_name {
         "assert.instance" => ("assert", false),
         "assert.instance.skip" => ("assert", true),
         "assert/strict.instance" => ("assert/strict", false),
@@ -291,8 +282,48 @@ pub(crate) unsafe fn dispatch_native_module_method(
         // has no arm — and returned `undefined`. The base `("punycode", …)`
         // arms below already implement decode/encode/toASCII/toUnicode.
         "punycode.default" => ("punycode", false),
-        _ => (module_name, false),
+        // #9485: every REMAINING `<mod>.default` CJS namespace normalizes
+        // through the one canonical table the property-read path already uses
+        // (`cjs_default_base_module`, shared with
+        // `bound_native_callable_export_value`). The hand-maintained arms above
+        // had drifted from it — `child_process.default`, `constants.default`,
+        // `dns.default`, `dns/promises.default`, `inspector.default`,
+        // `inspector/promises.default`, `module.default`, `repl.default`,
+        // `sea.default` and `wasi.default` were all missing — so a METHOD CALL
+        // on the namespace `const cp = require('child_process')` produces
+        // (`cp.spawn(...)`, `cp['spawn'](...)`) reached
+        // `nm_dispatch_lookup("child_process.default")`, found no bucket, and
+        // returned `undefined` WITHOUT spawning. The two-step forms
+        // (`const f = cp.spawn; f(...)`, `cp.spawn.call(...)`) always worked,
+        // because the property-read path normalizes through the canonical
+        // table — which is exactly the asymmetry that made cross-spawn (and
+        // therefore claude-code's MCP stdio client) fail silently.
+        other => match cjs_default_base_module(other) {
+            Some(base) => (base, false),
+            None => (other, false),
+        },
+    }
+}
+
+/// Thin router — extract+normalize the module name, dispatch via the per-module
+/// registry. Names no bucket fn, so unused modules dead-strip.
+pub(crate) unsafe fn dispatch_native_module_method(
+    obj: *const ObjectHeader,
+    method_name: &str,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> f64 {
+    // Extract the module name from field 0 of the namespace object
+    let module_field = js_object_get_field(obj as *mut _, 0);
+    let module_name = if module_field.is_string() {
+        let str_ptr = module_field.as_string_ptr();
+        let len = (*str_ptr).byte_len as usize;
+        let data = (str_ptr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+        std::str::from_utf8(std::slice::from_raw_parts(data, len)).unwrap_or("")
+    } else {
+        ""
     };
+    let (module_name, assert_skip_prototype) = normalize_dispatch_module_name(module_name);
     let ctx = NmCtx {
         obj,
         args_ptr,
@@ -335,3 +366,107 @@ pub(crate) use dispatch_q_u::{
 };
 pub(crate) use dispatch_util::nm_dispatch_util;
 pub(crate) use dispatch_v_z::{nm_dispatch_v8, nm_dispatch_vm, nm_dispatch_wasi, nm_dispatch_zlib};
+
+#[cfg(test)]
+mod cjs_default_dispatch_tests {
+    use super::*;
+
+    /// Every `<mod>.default` namespace name `cjs_default_base_module` knows.
+    /// Kept spelled out so ADDING a row there without teaching the method-call
+    /// router about it is a test failure rather than a silent `undefined`.
+    const CJS_DEFAULT_NAMESPACES: &[&str] = &[
+        "async_hooks.default",
+        "child_process.default",
+        "cluster.default",
+        "constants.default",
+        "dns.default",
+        "dns/promises.default",
+        "ffi.default",
+        "inspector.default",
+        "inspector/promises.default",
+        "module.default",
+        "node-pty.default",
+        "os.default",
+        "path.default",
+        "path.posix.default",
+        "path.win32.default",
+        "process.default",
+        "punycode.default",
+        "querystring.default",
+        "repl.default",
+        "sea.default",
+        "url.default",
+        "util.default",
+        "wasi.default",
+    ];
+
+    /// #9485: the method-CALL router must normalize a `<mod>.default` namespace
+    /// name exactly the way the property-READ path
+    /// (`bound_native_callable_export_value` → `cjs_default_base_module`) does.
+    /// The router used to carry its own hand-maintained list, and it had
+    /// drifted: `child_process.default` was missing, so
+    /// `require('child_process').spawn(...)` — cross-spawn's exact shape, and
+    /// therefore the MCP SDK's stdio client — dispatched under a name with no
+    /// bucket and returned `undefined` WITHOUT SPAWNING, while
+    /// `const f = cp.spawn; f(...)` worked.
+    #[test]
+    fn cjs_default_names_normalize_like_the_property_read_path() {
+        for name in CJS_DEFAULT_NAMESPACES {
+            let canonical = cjs_default_base_module(name).unwrap_or_else(|| {
+                panic!("{name} is not in cjs_default_base_module — update this list")
+            });
+            let (dispatched, skip_prototype) = normalize_dispatch_module_name(name);
+            assert_eq!(
+                dispatched, canonical,
+                "method-call dispatch for `{name}` normalizes to `{dispatched}` but the \
+                 property-read path resolves it to `{canonical}`"
+            );
+            assert!(
+                !skip_prototype,
+                "`{name}` is a CJS-default namespace, not an assert instance"
+            );
+        }
+    }
+
+    /// The consequence of the drift, stated directly: a `<mod>.default` name
+    /// must reach the SAME dispatch bucket its base module reaches. Modules
+    /// with no bucket at all (data-only namespaces such as `constants`) are
+    /// skipped — they have no methods to dispatch.
+    #[test]
+    fn cjs_default_names_reach_the_same_dispatch_bucket_as_the_base_module() {
+        use crate::object::native_module_registry::nm_dispatch_lookup;
+        let mut checked = 0usize;
+        for name in CJS_DEFAULT_NAMESPACES {
+            let base = cjs_default_base_module(name).expect("listed above");
+            if nm_dispatch_lookup(base).is_none() {
+                continue;
+            }
+            let (dispatched, _) = normalize_dispatch_module_name(name);
+            assert!(
+                nm_dispatch_lookup(dispatched).is_some(),
+                "`{name}` normalizes to `{dispatched}`, which has no dispatch bucket — a \
+                 method call on that namespace would silently return undefined"
+            );
+            checked += 1;
+        }
+        // Positive control: the loop must actually have asserted something.
+        assert!(
+            checked >= 15,
+            "expected most CJS-default namespaces to have a dispatch bucket, checked {checked}"
+        );
+    }
+
+    /// The exact regression, pinned by name.
+    #[test]
+    fn child_process_default_dispatches_as_child_process() {
+        assert_eq!(
+            normalize_dispatch_module_name("child_process.default"),
+            ("child_process", false)
+        );
+        assert_eq!(normalize_dispatch_module_name("dns.default"), ("dns", false));
+        assert_eq!(
+            normalize_dispatch_module_name("module.default"),
+            ("module", false)
+        );
+    }
+}
