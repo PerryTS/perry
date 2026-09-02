@@ -257,11 +257,27 @@ pub(super) fn emit_string_pool(
     // Each entry becomes one `js_register_function_name(<sym>, <str>,
     // <len>)` call inside the init function. See #1202.
     let mut user_fn_name_constants: Vec<(String, String, usize)> = Vec::new();
+    // Deduplicated by CONTENT (#9486): the same display name is now registered
+    // against several symbols — a top-level function's wrapper and its body,
+    // a class method and its `__perry_wrap_*` twin — and `add_string_constant`
+    // mints a fresh `@.str.N` per call, so without this every extra
+    // registration also cost a duplicate copy of the name in rodata.
+    // Deterministic: the map only reuses a global the loop already minted in
+    // its (already sorted) input order, so emission order is unchanged (#7622).
+    let mut name_constant_cache: std::collections::HashMap<&str, (String, usize)> =
+        std::collections::HashMap::new();
     for (wrapper_sym, display_name) in user_fn_display_names {
         if wrapper_sym.is_empty() || display_name.is_empty() {
             continue;
         }
-        let (const_name, byte_len) = llmod.add_string_constant(display_name);
+        let (const_name, byte_len) = match name_constant_cache.get(display_name.as_str()) {
+            Some(hit) => hit.clone(),
+            None => {
+                let minted = llmod.add_string_constant(display_name);
+                name_constant_cache.insert(display_name.as_str(), minted.clone());
+                minted
+            }
+        };
         user_fn_name_constants.push((wrapper_sym.clone(), const_name, byte_len));
     }
 

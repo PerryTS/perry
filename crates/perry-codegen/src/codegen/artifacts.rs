@@ -1793,6 +1793,55 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                 }
                 user_fn_display_names.push((symbol, format!("{}.{}", class.name, method.name)));
             }
+            for method in &class.static_methods {
+                let Some(symbol) = method_names
+                    .get(&(class.name.clone(), method.name.clone()))
+                    .cloned()
+                else {
+                    continue;
+                };
+                if method.name.is_empty() || !seen.insert(symbol.clone()) {
+                    continue;
+                }
+                user_fn_display_names.push((symbol, format!("{}.{}", class.name, method.name)));
+            }
+            // Accessors are keyed with the `__get_` / `__set_` prefix
+            // `method_registry` gives them, and node labels their frames
+            // `get x` / `set x`.
+            for (accessors, prefix, label) in [
+                (&class.getters, "__get_", "get"),
+                (&class.setters, "__set_", "set"),
+            ] {
+                for (prop, _) in accessors {
+                    let Some(symbol) = method_names
+                        .get(&(class.name.clone(), format!("{prefix}{prop}")))
+                        .cloned()
+                    else {
+                        continue;
+                    };
+                    if prop.is_empty() || !seen.insert(symbol.clone()) {
+                        continue;
+                    }
+                    user_fn_display_names.push((symbol, format!("{label} {prop}")));
+                }
+            }
+            // The constructor is registered in `method_names` under the
+            // synthesized `<Class>_constructor` method name (method_registry.rs
+            // emits one for EVERY class, explicit or not), and node labels its
+            // frame `new <Class>`.
+            //
+            // Registering these is not only about naming THEIR frames. A
+            // registry entry names a function START and carries no end, so an
+            // address inside an UNREGISTERED function resolves to whatever
+            // registered function precedes it — measured: a `new Widget()`
+            // frame came out labelled `main`. Every emitted function this list
+            // covers is one that can no longer borrow a neighbour's name.
+            let ctor_key = (class.name.clone(), format!("{}_constructor", class.name));
+            if let Some(symbol) = method_names.get(&ctor_key).cloned() {
+                if seen.insert(symbol.clone()) {
+                    user_fn_display_names.push((symbol, format!("new {}", class.name)));
+                }
+            }
         }
     }
     // (b) Closures bound to a top-level `let`/`const`. #2076: a named
