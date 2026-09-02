@@ -48,7 +48,7 @@
   primitive and on the two objects that DO define their own `toString`.
 
   Validation: `test-files/test_gap_9463_util_format_s_o_policy.ts`, byte-compared
-  against node 26.5.1 — 20 of its 58 lines diverge on unfixed `origin/main`, none
+  against node 26.5.1 — 23 of its 60 lines diverge on unfixed `origin/main`, none
   after. `util_format.rs` also unit-tests the `%s` predicate directly over
   primitives, an array, a Map, a Set, a plain object (must inspect) and an object
   with an own non-builtin `toString` (must not) — the pair that fails in one

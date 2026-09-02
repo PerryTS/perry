@@ -85,7 +85,7 @@
   - `crates/perry-runtime/src/param_type_guard.rs`
 
   Validation: `test-files/test_gap_9462_hole_leak_family.ts`, byte-compared
-  against node 26.5.1 — 61 of its 128 stdout lines diverge on unfixed
+  against node 26.5.1 — 52 of its 128 stdout lines diverge on unfixed
   `origin/main`, and none after. The guard's accept/deopt verdict is not
   observable from TypeScript (it only chooses which clone runs), so it is
   asserted directly in `param_type_guard.rs`
