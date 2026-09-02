@@ -416,4 +416,141 @@ mod tests {
         let got = unsafe { call_all_f64(pick as *const () as usize, &args) };
         assert_eq!(got, 42.0 * 1000.0 + 7.0);
     }
+
+    // #9446: the unwinder must be able to step THROUGH the trampoline while the
+    // callee runs. With stacked arguments the trampoline has lowered the stack
+    // pointer by a runtime amount; a frame description that does not account
+    // for that hands every unwinder — the GC's native-root walk, the exception
+    // transport, gdb — a garbage return address for the trampoline's caller,
+    // and the walk either stops there (silently dropping every frame above the
+    // trampoline from the root set) or faults probing the garbage. This is a
+    // differential test: the frames ABOVE the caller must look identical
+    // whether the stack is walked from the caller itself or from inside a
+    // callee reached through the trampoline with four stacked arguments.
+    // `_Unwind_Backtrace` is what `gc/roots/stack_maps.rs` walks with, so it
+    // is what this asks.
+    #[cfg(all(
+        any(target_os = "linux", target_vendor = "apple"),
+        any(
+            target_arch = "aarch64",
+            all(target_arch = "x86_64", not(target_os = "windows"))
+        )
+    ))]
+    mod unwind_through_the_trampoline {
+        use super::call_all_f64;
+        use crate::eh::UnwindContext;
+        use std::cell::RefCell;
+        use std::ffi::c_void;
+
+        unsafe extern "C" {
+            fn _Unwind_Backtrace(
+                trace: unsafe extern "C" fn(*mut UnwindContext, *mut c_void) -> i32,
+                argument: *mut c_void,
+            ) -> i32;
+            fn _Unwind_GetIP(context: *mut UnwindContext) -> usize;
+        }
+
+        /// `_URC_NO_REASON`, the only code that continues the walk.
+        const URC_NO_REASON: i32 = 0;
+        /// `_URC_END_OF_STACK`: stop, normally.
+        const URC_END_OF_STACK: i32 = 5;
+        /// Well above any test-harness depth; a walk that runs away must fail
+        /// the assertion, not hang the suite.
+        const MAX_FRAMES: usize = 256;
+
+        unsafe extern "C" fn collect(context: *mut UnwindContext, argument: *mut c_void) -> i32 {
+            let out = unsafe { &mut *argument.cast::<Vec<usize>>() };
+            out.push(unsafe { _Unwind_GetIP(context) });
+            if out.len() >= MAX_FRAMES {
+                URC_END_OF_STACK
+            } else {
+                URC_NO_REASON
+            }
+        }
+
+        /// Return addresses innermost-first, starting at this function's own
+        /// frame. `inline(never)` so both walks below start one frame deep and
+        /// the indexing that follows means the same thing on every host.
+        #[inline(never)]
+        fn return_addresses() -> Vec<usize> {
+            let mut ips: Vec<usize> = Vec::new();
+            unsafe {
+                _Unwind_Backtrace(collect, (&mut ips as *mut Vec<usize>).cast::<c_void>());
+            }
+            std::hint::black_box(ips)
+        }
+
+        thread_local! {
+            static SEEN_FROM_CALLEE: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
+        }
+
+        /// Twelve f64 params: eight in registers, four stacked on both asm
+        /// ABIs. Walks the stack from inside, and returns two of the stacked
+        /// args so a mis-passed spill is caught by the same test.
+        extern "C" fn walking_callee(
+            a0: f64,
+            a1: f64,
+            a2: f64,
+            a3: f64,
+            a4: f64,
+            a5: f64,
+            a6: f64,
+            a7: f64,
+            a8: f64,
+            a9: f64,
+            a10: f64,
+            a11: f64,
+        ) -> f64 {
+            let _ = (a0, a1, a2, a3, a4, a5, a6, a7, a9, a10);
+            SEEN_FROM_CALLEE.with(|seen| *seen.borrow_mut() = return_addresses());
+            a8 * 1000.0 + a11
+        }
+
+        /// The caller frame the two walks have in common. Returns the walk
+        /// taken from here and the walk taken from inside the callee.
+        #[inline(never)]
+        fn walk_from_caller_and_from_callee() -> (Vec<usize>, Vec<usize>) {
+            let from_caller = return_addresses();
+            let args: Vec<f64> = (0..12).map(f64::from).collect();
+            let got = unsafe { call_all_f64(walking_callee as *const () as usize, &args) };
+            assert_eq!(got, 8.0 * 1000.0 + 11.0, "stacked args mis-passed");
+            let from_callee = SEEN_FROM_CALLEE.with(|seen| std::mem::take(&mut *seen.borrow_mut()));
+            (from_caller, from_callee)
+        }
+
+        #[test]
+        fn the_unwinder_steps_through_a_trampoline_with_stacked_args() {
+            let (from_caller, from_callee) = walk_from_caller_and_from_callee();
+            // `from_caller` is [return_addresses, walk_from_caller_and_from_callee,
+            // harness…]; `from_callee` is [return_addresses, walking_callee,
+            // trampoline, walk_from_caller_and_from_callee, harness…]. The two
+            // sites inside the shared caller differ, everything above it must
+            // not.
+            assert!(
+                from_caller.len() >= 3,
+                "the control walk saw only {} frame(s); the harness above the \
+                 caller is what the comparison is made of",
+                from_caller.len()
+            );
+            let above_caller = &from_caller[2..];
+            assert!(
+                from_callee.len() >= above_caller.len() + 4,
+                "walked from inside the trampoline's callee the unwinder saw \
+                 {} frame(s), but the caller's own walk saw {} frames above \
+                 the caller alone — the walk stopped at the trampoline, which \
+                 is #9446: every frame above it is invisible to the GC's root \
+                 scan while a dynamically dispatched callee runs.\n  from \
+                 callee: {from_callee:#x?}\n  from caller: {from_caller:#x?}",
+                from_callee.len(),
+                above_caller.len()
+            );
+            let tail = &from_callee[from_callee.len() - above_caller.len()..];
+            assert_eq!(
+                tail, above_caller,
+                "the frames above the caller must be reachable, and the same, \
+                 through the trampoline.\n  from callee: {from_callee:#x?}\n  \
+                 from caller: {from_caller:#x?}"
+            );
+        }
+    }
 }
