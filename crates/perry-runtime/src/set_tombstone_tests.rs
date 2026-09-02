@@ -151,12 +151,22 @@ fn raw_indexed_reads_never_compact_and_the_cursor_steps_over_holes() {
     unsafe {
         assert_ne!((*set).used, (*set).size, "a hole is present");
     }
-    // A plain bounded raw read: raw index 2 is still the THIRD value, the
-    // hole at 1 stays, the layout is untouched (this used to compact the
-    // whole set on every such read, once per hole).
-    assert_eq!(js_set_value_at(set, 2), 3.0);
+    // The RAW twin the for-of walker uses is a plain bounded read: raw index
+    // 2 is still the THIRD value, the hole at 1 stays, the layout is untouched
+    // (the walker's reads used to compact the whole set once per observed
+    // hole).
+    assert_eq!(js_set_value_raw_at(set, 2), 3.0);
+    assert_eq!(
+        js_set_value_raw_at(set, 1).to_bits(),
+        SET_HOLE_VALUE_BITS,
+        "the raw twin exposes the hole — only the cursor ever reads it"
+    );
     unsafe {
-        assert_ne!((*set).used, (*set).size, "the read left the layout alone");
+        assert_ne!(
+            (*set).used,
+            (*set).size,
+            "the raw read left the layout alone"
+        );
         assert_eq!(
             crate::set::set_compaction_epoch(set),
             0,
@@ -173,6 +183,29 @@ fn raw_indexed_reads_never_compact_and_the_cursor_steps_over_holes() {
             None,
             "extent exhausted"
         );
+    }
+    // The LIVE-index accessor (#9462 / #9504 — the array-like `set[i]` read)
+    // squeezes first: live index 1 IS the third value, never a hole, and the
+    // squeeze is recorded so a cursor past the hole rebases exactly.
+    assert_eq!(
+        js_set_value_at(set, 1),
+        3.0,
+        "live index 1 is the third value"
+    );
+    assert_eq!(
+        js_set_value_at(set, 2).to_bits(),
+        crate::value::TAG_UNDEFINED,
+        "past the live size is undefined, not a hole"
+    );
+    unsafe {
+        assert_eq!(
+            (*set).used,
+            (*set).size,
+            "the live accessor squeezed the hole"
+        );
+        assert_eq!(crate::set::set_compaction_epoch(set), 1, "…and recorded it");
+        assert_eq!(crate::set::set_cursor_next_raw(set, 2, 0), Some(1));
+        assert_eq!(js_set_value_raw_at(set, 1), 3.0);
     }
 }
 
@@ -303,4 +336,61 @@ fn clear_resets_the_extent_and_walkers_compact() {
         1,
         "the hole must not defeat the subset walk"
     );
+}
+
+#[test]
+fn cursor_stays_exact_across_forty_squeezes_in_one_body() {
+    // See the Map twin: a set at full capacity squeezes once per delete+re-add
+    // pair on the grow path; the removed-index budget keeps every record.
+    let set = js_set_alloc(64);
+    for i in 0..64 {
+        js_set_add(set, i as f64);
+    }
+    unsafe {
+        assert_eq!((*set).used, (*set).capacity, "premise: at capacity");
+    }
+    let epoch0 = crate::set::set_compaction_epoch(set);
+    for i in 0..40 {
+        assert_eq!(js_set_delete(set, i as f64), 1);
+        js_set_add(set, i as f64);
+    }
+    let squeezes = crate::set::set_compaction_epoch(set).wrapping_sub(epoch0);
+    assert!(
+        squeezes >= 33,
+        "premise: {squeezes} squeezes happened, need > 32"
+    );
+    assert_eq!(
+        unsafe { crate::set::set_cursor_next_raw(set, 10, epoch0) },
+        Some(0)
+    );
+    assert_eq!(js_set_value_raw_at(set, 0), 40.0);
+    let mut order = Vec::new();
+    let mut idx = 0u32;
+    let epoch_now = crate::set::set_compaction_epoch(set);
+    while let Some(i) = unsafe { crate::set::set_cursor_next_raw(set, idx, epoch_now) } {
+        order.push(js_set_value_raw_at(set, i));
+        idx = i + 1;
+    }
+    let expected: Vec<f64> = (40..64).chain(0..40).map(|k| k as f64).collect();
+    assert_eq!(order, expected);
+}
+
+#[test]
+fn clear_truncates_the_squeeze_history() {
+    let set = js_set_alloc(64);
+    for i in 0..64 {
+        js_set_add(set, i as f64);
+    }
+    let epoch0 = crate::set::set_compaction_epoch(set);
+    for i in 0..40 {
+        js_set_delete(set, i as f64);
+        js_set_add(set, i as f64);
+    }
+    js_set_clear(set);
+    js_set_add(set, 7.0);
+    assert_eq!(
+        unsafe { crate::set::set_cursor_next_raw(set, 10, epoch0) },
+        Some(0)
+    );
+    assert_eq!(js_set_value_raw_at(set, 0), 7.0);
 }

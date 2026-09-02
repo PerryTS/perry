@@ -594,8 +594,14 @@ pub(crate) fn lower(
         // calling `js_map_entries` (which materializes N+1 small Arrays).
         Expr::MapEntryKeyAt { map, idx } | Expr::MapEntryValueAt { map, idx } => {
             let (runtime_fn, value_slot) = match expr {
-                Expr::MapEntryKeyAt { .. } => ("js_map_entry_key_at", false),
-                Expr::MapEntryValueAt { .. } => ("js_map_entry_value_at", true),
+                // The RAW twins: these nodes are produced only by the for-of
+                // desugars, whose cursor yields live raw indices, so the
+                // fallback must read raw slots bounded by `used` and never
+                // compact. (`js_map_entry_key_at` without `_raw` is the
+                // live-index accessor the array-like `map[i]` read uses,
+                // which compacts — #9504.)
+                Expr::MapEntryKeyAt { .. } => ("js_map_entry_key_raw_at", false),
+                Expr::MapEntryValueAt { .. } => ("js_map_entry_value_raw_at", true),
                 _ => unreachable!(),
             };
             rooting::with_operands_rooted(ctx, &[map, idx], |ctx, vals| {
@@ -618,7 +624,7 @@ pub(crate) fn lower(
                 let i_i32 = blk.fptosi(DOUBLE, &i_dbl, I32);
                 Ok(blk.call(
                     DOUBLE,
-                    "js_set_value_at",
+                    "js_set_value_raw_at",
                     &[(I64, &s_handle), (I32, &i_i32)],
                 ))
             })

@@ -76,19 +76,43 @@ struct CompactionRecord {
     removed: RemovedSlots,
 }
 
-/// Records retained per Map. A cursor older than the oldest retained record
-/// can no longer rebase exactly (`rebase_map_cursor` applies what is left);
-/// reaching that depth needs ONE loop body to drive 32 compactions of the
-/// same Map between two of its own reads, each of which requires the holes
-/// to outnumber the live entries again.
-const MAP_COMPACTION_LOG_DEPTH: usize = 32;
+/// Retention budget for a map's squeeze history, in removed raw indices.
+///
+/// A cursor rebases exactly only through records it has not been trimmed out
+/// of, so the budget is what bounds the exactness window: exceeding it needs
+/// ONE loop body to delete more than `max(MAP_COMPACTION_LOG_MIN_BUDGET,
+/// capacity)` entries (deletes plus re-adds count separately) between two of
+/// its own reads. Record COUNT is not the bound — a delete+re-add pair on a
+/// collection at full capacity squeezes one hole per pair, so counting
+/// records would make the window a few dozen pairs.
+///
+/// Bounded in memory by construction: at most `budget` indices (4 bytes each)
+/// plus a record header per squeeze; a `clear()` record supersedes everything
+/// before it and truncates them.
+const MAP_COMPACTION_LOG_MIN_BUDGET: usize = 4096;
+
+struct MapCompactionLog {
+    records: std::collections::VecDeque<CompactionRecord>,
+    /// Sum of `records[..].removed.retained_len()`.
+    retained: usize,
+}
+
+impl RemovedSlots {
+    /// Budget cost of this record.
+    fn retained_len(&self) -> usize {
+        match self {
+            RemovedSlots::Prefix(_) => 1,
+            RemovedSlots::Indices(v) => v.len(),
+        }
+    }
+}
 
 crate::perry_thread_local! {
     /// Per-Map history of squeezes, keyed by header address. Re-keyed on GC
     /// move by `map_header_moved_for_gc`; dropped by `js_map_alloc` for a
     /// reused address and by the dead-owner prune.
     static MAP_COMPACTION_LOG: RefCell<
-        crate::fast_hash::PtrHashMap<usize, std::collections::VecDeque<CompactionRecord>>,
+        crate::fast_hash::PtrHashMap<usize, MapCompactionLog>,
     > = RefCell::new(crate::fast_hash::new_ptr_hash_map());
 }
 
@@ -98,13 +122,26 @@ crate::perry_thread_local! {
 unsafe fn note_map_compaction(map: *mut MapHeader, removed: RemovedSlots) {
     let epoch = (*map).compaction_epoch.wrapping_add(1);
     (*map).compaction_epoch = epoch;
+    let budget = std::cmp::max(MAP_COMPACTION_LOG_MIN_BUDGET, (*map).capacity as usize);
     MAP_COMPACTION_LOG.with(|log| {
         let mut log = log.borrow_mut();
-        let records = log.entry(map as usize).or_default();
-        if records.len() == MAP_COMPACTION_LOG_DEPTH {
-            records.pop_front();
+        let entry = log.entry(map as usize).or_insert_with(|| MapCompactionLog {
+            records: std::collections::VecDeque::new(),
+            retained: 0,
+        });
+        if matches!(removed, RemovedSlots::Prefix(_)) {
+            // The extent was discarded: every cursor rebases to 0 through
+            // this record whatever came before, so older history is dead.
+            entry.records.clear();
+            entry.retained = 0;
         }
-        records.push_back(CompactionRecord { epoch, removed });
+        entry.retained += removed.retained_len();
+        entry.records.push_back(CompactionRecord { epoch, removed });
+        while entry.retained > budget && entry.records.len() > 1 {
+            if let Some(oldest) = entry.records.pop_front() {
+                entry.retained -= oldest.removed.retained_len();
+            }
+        }
     });
 }
 
@@ -123,11 +160,12 @@ unsafe fn rebase_map_cursor(map: *const MapHeader, cursor: u32, loop_epoch: u32)
     }
     MAP_COMPACTION_LOG.with(|log| {
         let log = log.borrow();
-        let Some(records) = log.get(&(map as usize)) else {
+        let Some(entry) = log.get(&(map as usize)) else {
             return cursor;
         };
         let mut c = cursor;
-        for rec in records
+        for rec in entry
+            .records
             .iter()
             .filter(|r| r.epoch.wrapping_sub(loop_epoch) as i32 > 0)
         {
@@ -2852,11 +2890,35 @@ pub extern "C" fn js_map_entry_key_at(map: *const MapHeader, idx: u32) -> f64 {
         return f64::from_bits(TAG_UNDEFINED);
     }
     unsafe {
-        // A raw read, bounded by the raw extent. The index comes from
-        // `js_map_cursor_next`, which only ever yields a LIVE raw index, so
-        // no hole reaches user code — and nothing here compacts: the
-        // self-heal compaction this used to perform ran once per hole
-        // observed, which made a delete-during-`for…of` loop O(n) per delete.
+        // LIVE-index accessor (#9462 / #9504): `idx` counts live entries, the
+        // contract `js_array_length` (== `size`) pairs with for the
+        // array-like `map[i]` read, `console.table` and collection equality.
+        // Tombstones are squeezed first so raw index == live index — a one-off
+        // O(n) on a holey collection for those paths only, and RECORDED in the
+        // compaction log, so a `for…of` cursor open on this map rebases
+        // exactly. The walkers themselves never come here: they read through
+        // `js_map_entry_key_raw_at`, which never compacts (a compaction per
+        // observed hole is what made delete-during-`for…of` O(n) per delete).
+        compact_if_holey(map as *mut MapHeader);
+        if idx >= (*map).size {
+            return f64::from_bits(TAG_UNDEFINED);
+        }
+        let entries = entries_ptr(map);
+        ptr::read(entries.add(idx as usize * 2))
+    }
+}
+
+/// RAW twin of `js_map_entry_key_at` for the raw-index walkers (the `for…of`
+/// fast path's `MapEntryKeyAt` lowering): bounded by the raw extent `used`,
+/// never compacts. The index comes from `js_map_cursor_next`, which only
+/// ever yields a LIVE raw index, so no hole reaches user code.
+#[no_mangle]
+pub extern "C" fn js_map_entry_key_raw_at(map: *const MapHeader, idx: u32) -> f64 {
+    let map = clean_map_ptr(map);
+    if map.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    unsafe {
         if idx >= (*map).used {
             return f64::from_bits(TAG_UNDEFINED);
         }
@@ -2864,6 +2926,10 @@ pub extern "C" fn js_map_entry_key_at(map: *const MapHeader, idx: u32) -> f64 {
         ptr::read(entries.add(idx as usize * 2))
     }
 }
+#[cfg(feature = "keepalive-anchors")]
+#[used]
+static KEEP_MAP_ENTRY_KEY_RAW_AT: extern "C" fn(*const MapHeader, u32) -> f64 =
+    js_map_entry_key_raw_at;
 
 /// Companion to `js_map_entry_key_at` — read the value at entry index `idx`.
 #[no_mangle]
@@ -2873,8 +2939,25 @@ pub extern "C" fn js_map_entry_value_at(map: *const MapHeader, idx: u32) -> f64 
         return f64::from_bits(TAG_UNDEFINED);
     }
     unsafe {
-        // See `js_map_entry_key_at`: raw, bounded by the extent, never
-        // compacts.
+        // Live-index accessor — see `js_map_entry_key_at`.
+        compact_if_holey(map as *mut MapHeader);
+        if idx >= (*map).size {
+            return f64::from_bits(TAG_UNDEFINED);
+        }
+        let entries = entries_ptr(map);
+        ptr::read(entries.add(idx as usize * 2 + 1))
+    }
+}
+
+/// RAW twin of `js_map_entry_value_at` for the raw-index walkers: bounded by
+/// `used`, never compacts.
+#[no_mangle]
+pub extern "C" fn js_map_entry_value_raw_at(map: *const MapHeader, idx: u32) -> f64 {
+    let map = clean_map_ptr(map);
+    if map.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    unsafe {
         if idx >= (*map).used {
             return f64::from_bits(TAG_UNDEFINED);
         }
@@ -2882,6 +2965,10 @@ pub extern "C" fn js_map_entry_value_at(map: *const MapHeader, idx: u32) -> f64 
         ptr::read(entries.add(idx as usize * 2 + 1))
     }
 }
+#[cfg(feature = "keepalive-anchors")]
+#[used]
+static KEEP_MAP_ENTRY_VALUE_RAW_AT: extern "C" fn(*const MapHeader, u32) -> f64 =
+    js_map_entry_value_raw_at;
 
 /// Get the entries of a map as an array of [key, value] pairs
 /// Returns an array where each element is a 2-element array [key, value]
@@ -3838,7 +3925,7 @@ mod tests {
             let mut idx = 0u32;
             while let Some(i) = unsafe { map_cursor_next_raw(map, idx, map_compaction_epoch(map)) }
             {
-                keys.push(js_map_entry_key_at(map, i).to_bits());
+                keys.push(js_map_entry_key_raw_at(map, i).to_bits());
                 idx = i + 1;
             }
             keys
