@@ -18,7 +18,7 @@ use perry_ffi::{
     alloc_string, build_object_shape, js_array_alloc, js_array_get, js_array_length, js_array_push,
     js_object_alloc_with_shape, js_object_get_field, js_object_set_field, register_handle,
     spawn_blocking, take_handle, value_byte_slice, with_handle, ArrayHeader, Handle, JsPromise,
-    JsValue, ObjectHeader, Promise, StringHeader, SHORT_STRING_MAX_LEN,
+    JsValue, ObjectHeader, Promise, StringHeader, TransientRootScope, SHORT_STRING_MAX_LEN,
 };
 use sqlx::mysql::{MySqlConnection, MySqlDatabaseError, MySqlPool, MySqlPoolOptions, MySqlRow};
 use sqlx::pool::PoolConnection;
@@ -694,17 +694,6 @@ fn rejected_params_promise(message: String) -> *mut Promise {
     raw
 }
 
-unsafe fn read_sql(sql_ptr: *const u8) -> String {
-    if sql_ptr.is_null() {
-        return String::new();
-    }
-    let header = sql_ptr as *const StringHeader;
-    let len = (*header).byte_len as usize;
-    let data = sql_ptr.add(std::mem::size_of::<StringHeader>());
-    let bytes = std::slice::from_raw_parts(data, len);
-    std::str::from_utf8(bytes).unwrap_or("").to_string()
-}
-
 // ── Connection ────────────────────────────────────────────────────
 
 pub struct MysqlConnectionHandle {
@@ -988,18 +977,14 @@ pub extern "C" fn js_mysql2_connection_end(conn_handle: Handle) -> *mut Promise 
 
 unsafe fn run_connection_query(
     conn_handle: Handle,
-    sql_ptr: *const u8,
+    query_f: f64,
     params_f: f64,
-    rows_as_array: bool,
     force_prepared: bool,
 ) -> *mut Promise {
-    let sql = read_sql(sql_ptr);
-    let params = JsValue::from_bits(params_f.to_bits());
-    let param_values = match extract_params_from_jsvalue(params) {
-        Ok(values) => values,
+    let request = match parse_query_request(query_f, params_f, force_prepared) {
+        Ok(request) => request,
         Err(message) => return rejected_params_promise(message),
     };
-    let request = QueryRequest::new(sql, param_values, rows_as_array, force_prepared);
     let target = connection_target(conn_handle);
 
     let promise = JsPromise::new();
@@ -1028,28 +1013,28 @@ unsafe fn run_connection_query(
 /// `connection.query(sql, params) -> Promise<[rows, fields]>`.
 ///
 /// # Safety
-/// `sql_ptr` must be null or a Perry-runtime `StringHeader`.
+/// `query_f` must be a SQL string or mysql2 query-options object.
 #[no_mangle]
 pub unsafe extern "C" fn js_mysql2_connection_query(
     conn_handle: Handle,
-    sql_ptr: *const u8,
+    query_f: f64,
     params_f: f64,
 ) -> *mut Promise {
-    run_connection_query(conn_handle, sql_ptr, params_f, false, false)
+    run_connection_query(conn_handle, query_f, params_f, false)
 }
 
 /// `connection.execute(sql, params) -> Promise<[rows, fields]>`.
 /// Same backing as `query` for now (sqlx prepares all queries).
 ///
 /// # Safety
-/// `sql_ptr` must be null or a Perry-runtime `StringHeader`.
+/// `query_f` must be a SQL string or mysql2 query-options object.
 #[no_mangle]
 pub unsafe extern "C" fn js_mysql2_connection_execute(
     conn_handle: Handle,
-    sql_ptr: *const u8,
+    query_f: f64,
     params_f: f64,
 ) -> *mut Promise {
-    run_connection_query(conn_handle, sql_ptr, params_f, false, true)
+    run_connection_query(conn_handle, query_f, params_f, true)
 }
 
 fn run_simple_command(conn_handle: Handle, sql: &'static str) -> *mut Promise {
@@ -1206,6 +1191,14 @@ extern "C" {
     fn js_register_handle_method_dispatch_extension(
         f: unsafe extern "C" fn(i64, *const u8, usize, *const f64, usize, *mut f64) -> i32,
     );
+    fn js_register_handle_property_dispatch_extension(
+        f: unsafe extern "C" fn(i64, *const u8, usize, *mut f64) -> i32,
+    );
+    fn js_class_method_bind(
+        instance: f64,
+        method_name_ptr: *const u8,
+        method_name_len: usize,
+    ) -> f64;
     // Runtime generic field read; returns the runtime `JSValue` (repr-transparent
     // u64), ABI-compatible with `u64` here.
     fn js_object_get_field_by_name(obj: *const ObjectHeader, key: *const StringHeader) -> u64;
@@ -1219,43 +1212,69 @@ fn ensure_dispatch_registered() {
     static REGISTER: std::sync::Once = std::sync::Once::new();
     REGISTER.call_once(|| unsafe {
         js_register_handle_method_dispatch_extension(js_mysql2_handle_method_dispatch);
+        js_register_handle_property_dispatch_extension(js_mysql2_handle_property_dispatch);
     });
 }
 
 /// Read a named field off a JS object value. Returns `JsValue::UNDEFINED` for a
 /// non-object receiver or a missing key.
 unsafe fn object_field_by_name(obj: JsValue, name: &str) -> JsValue {
-    let obj_ptr = obj.as_pointer::<ObjectHeader>();
+    let roots = TransientRootScope::enter();
+    let obj = roots.root_nanbox(f64::from_bits(obj.bits()));
+    let key = alloc_string(name);
+    let obj_ptr = JsValue::from_bits(obj.get().to_bits()).as_pointer::<ObjectHeader>();
     if obj_ptr.is_null() {
         return JsValue::UNDEFINED;
     }
-    let key = alloc_string(name);
     let bits = js_object_get_field_by_name(obj_ptr, key.as_raw());
     JsValue::from_bits(bits)
 }
 
-/// Resolve the SQL `StringHeader` pointer and `rowsAsArray` flag from a `query`
-/// argument that is either a SQL string or a mysql2 options object
-/// (`{ sql, rowsAsArray? }` — Drizzle's shape).
-unsafe fn query_sql_ptr_and_rows_as_array(arg: JsValue) -> Option<(*const u8, bool)> {
-    if arg.is_string() {
-        let p = arg.as_string_ptr();
-        if p.is_null() {
-            return None;
-        }
-        return Some((p as *const u8, false));
-    }
-    if arg.is_pointer() {
-        let sql_val = object_field_by_name(arg, "sql");
-        if sql_val.is_string() {
-            let p = sql_val.as_string_ptr();
-            if !p.is_null() {
-                let rows_as_array = object_field_by_name(arg, "rowsAsArray").to_bool();
-                return Some((p as *const u8, rows_as_array));
-            }
-        }
-    }
-    None
+/// Parse both mysql2 query signatures while the JS arguments are rooted.
+unsafe fn parse_query_request(
+    query_f: f64,
+    params_f: f64,
+    force_prepared: bool,
+) -> Result<QueryRequest, String> {
+    let roots = TransientRootScope::enter();
+    let query = roots.root_nanbox(query_f);
+    let supplied_params = roots.root_nanbox(params_f);
+    let query_value = JsValue::from_bits(query.get().to_bits());
+    let (sql, rows_as_array, option_values) = if query_value.is_any_string() {
+        (
+            jsvalue_to_string(query_value).unwrap_or_default(),
+            false,
+            JsValue::UNDEFINED,
+        )
+    } else if query_value.is_pointer() {
+        let sql = jsvalue_to_string(object_field_by_name(
+            JsValue::from_bits(query.get().to_bits()),
+            "sql",
+        ))
+        .ok_or_else(|| "Query options must include a SQL string".to_string())?;
+        let rows = object_field_by_name(JsValue::from_bits(query.get().to_bits()), "rowsAsArray");
+        (
+            sql,
+            rows.is_bool() && rows.to_bool(),
+            object_field_by_name(JsValue::from_bits(query.get().to_bits()), "values"),
+        )
+    } else {
+        return Err("Query must be a SQL string or options object".to_string());
+    };
+
+    let supplied_params = JsValue::from_bits(supplied_params.get().to_bits());
+    let params = if supplied_params.is_undefined() {
+        option_values
+    } else {
+        supplied_params
+    };
+    let params = extract_params_from_jsvalue(params)?;
+    Ok(QueryRequest::new(
+        sql,
+        params,
+        rows_as_array,
+        force_prepared,
+    ))
 }
 
 /// Handle-method dispatch extension for mysql2 pool / connection handles.
@@ -1281,11 +1300,10 @@ unsafe extern "C" fn js_mysql2_handle_method_dispatch(
     } else {
         std::slice::from_raw_parts(args_ptr, args_len)
     };
-    let arg = |i: usize| -> JsValue {
+    let arg = |i: usize| -> f64 {
         args.get(i)
             .copied()
-            .map(|f| JsValue::from_bits(f.to_bits()))
-            .unwrap_or(JsValue::UNDEFINED)
+            .unwrap_or(f64::from_bits(DISPATCH_TAG_UNDEFINED))
     };
 
     // Only claim methods for handles we actually own.
@@ -1298,20 +1316,17 @@ unsafe extern "C" fn js_mysql2_handle_method_dispatch(
 
     let result: f64 = match method {
         "query" | "execute" => {
-            let Some((sql_ptr, rows_as_array)) = query_sql_ptr_and_rows_as_array(arg(0)) else {
-                return 0;
-            };
             let params_f = args
                 .get(1)
                 .copied()
                 .unwrap_or(f64::from_bits(DISPATCH_TAG_UNDEFINED));
             let force_prepared = method == "execute";
             let promise = if is_pool {
-                run_pool_query(handle, sql_ptr, params_f, rows_as_array, force_prepared)
+                run_pool_query(handle, arg(0), params_f, force_prepared)
             } else if is_pool_conn {
-                run_pool_conn_query(handle, sql_ptr, params_f, rows_as_array, force_prepared)
+                run_pool_conn_query(handle, arg(0), params_f, force_prepared)
             } else {
-                run_connection_query(handle, sql_ptr, params_f, rows_as_array, force_prepared)
+                run_connection_query(handle, arg(0), params_f, force_prepared)
             };
             dispatch_nanbox_ptr(promise)
         }
@@ -1341,6 +1356,66 @@ unsafe extern "C" fn js_mysql2_handle_method_dispatch(
     1
 }
 
+/// Reflect mysql2 methods as callable properties. Drizzle uses
+/// `"getConnection" in client` to decide whether a transaction must check out
+/// and pin a pool connection; method-call dispatch alone cannot satisfy that
+/// probe.
+#[no_mangle]
+unsafe extern "C" fn js_mysql2_handle_property_dispatch(
+    handle: i64,
+    property_name_ptr: *const u8,
+    property_name_len: usize,
+    out: *mut f64,
+) -> i32 {
+    if property_name_ptr.is_null() || property_name_len == 0 {
+        return 0;
+    }
+    let property = match std::str::from_utf8(std::slice::from_raw_parts(
+        property_name_ptr,
+        property_name_len,
+    )) {
+        Ok(property) => property,
+        Err(_) => return 0,
+    };
+    let is_pool = with_handle::<MysqlPoolHandle, _, _>(handle, |_| ()).is_some();
+    let is_pool_conn = with_handle::<MysqlPoolConnectionHandle, _, _>(handle, |_| ()).is_some();
+    let is_conn = with_handle::<MysqlConnectionHandle, _, _>(handle, |_| ()).is_some();
+    let available = (is_pool
+        && matches!(
+            property,
+            "query" | "execute" | "end" | "getConnection" | "promise"
+        ))
+        || (is_pool_conn
+            && matches!(
+                property,
+                "query" | "execute" | "release" | "beginTransaction" | "commit" | "rollback"
+            ))
+        || (is_conn
+            && matches!(
+                property,
+                "query"
+                    | "execute"
+                    | "end"
+                    | "beginTransaction"
+                    | "commit"
+                    | "rollback"
+                    | "promise"
+            ));
+    if !available {
+        return 0;
+    }
+
+    let value = js_class_method_bind(
+        dispatch_nanbox_ptr(handle as *mut u8),
+        property.as_ptr(),
+        property.len(),
+    );
+    if !out.is_null() {
+        *out = value;
+    }
+    1
+}
+
 #[no_mangle]
 pub extern "C" fn js_mysql2_pool_end(pool_handle: Handle) -> *mut Promise {
     let promise = JsPromise::new();
@@ -1358,18 +1433,14 @@ pub extern "C" fn js_mysql2_pool_end(pool_handle: Handle) -> *mut Promise {
 
 unsafe fn run_pool_query(
     pool_handle: Handle,
-    sql_ptr: *const u8,
+    query_f: f64,
     params_f: f64,
-    rows_as_array: bool,
     force_prepared: bool,
 ) -> *mut Promise {
-    let sql = read_sql(sql_ptr);
-    let params = JsValue::from_bits(params_f.to_bits());
-    let param_values = match extract_params_from_jsvalue(params) {
-        Ok(values) => values,
+    let request = match parse_query_request(query_f, params_f, force_prepared) {
+        Ok(request) => request,
         Err(message) => return rejected_params_promise(message),
     };
-    let request = QueryRequest::new(sql, param_values, rows_as_array, force_prepared);
     let pool = with_handle::<MysqlPoolHandle, _, _>(pool_handle, |wrapper| wrapper.pool.clone());
     let promise = JsPromise::new();
     let raw = promise.as_raw();
@@ -1404,25 +1475,25 @@ unsafe fn run_pool_query(
 }
 
 /// # Safety
-/// `sql_ptr` must be null or a Perry-runtime `StringHeader`.
+/// `query_f` must be a SQL string or mysql2 query-options object.
 #[no_mangle]
 pub unsafe extern "C" fn js_mysql2_pool_query(
     pool_handle: Handle,
-    sql_ptr: *const u8,
+    query_f: f64,
     params_f: f64,
 ) -> *mut Promise {
-    run_pool_query(pool_handle, sql_ptr, params_f, false, false)
+    run_pool_query(pool_handle, query_f, params_f, false)
 }
 
 /// # Safety
-/// `sql_ptr` must be null or a Perry-runtime `StringHeader`.
+/// `query_f` must be a SQL string or mysql2 query-options object.
 #[no_mangle]
 pub unsafe extern "C" fn js_mysql2_pool_execute(
     pool_handle: Handle,
-    sql_ptr: *const u8,
+    query_f: f64,
     params_f: f64,
 ) -> *mut Promise {
-    run_pool_query(pool_handle, sql_ptr, params_f, false, true)
+    run_pool_query(pool_handle, query_f, params_f, true)
 }
 
 #[no_mangle]
@@ -1469,18 +1540,14 @@ pub extern "C" fn js_mysql2_pool_connection_release(conn_handle: Handle) {
 
 unsafe fn run_pool_conn_query(
     conn_handle: Handle,
-    sql_ptr: *const u8,
+    query_f: f64,
     params_f: f64,
-    rows_as_array: bool,
     force_prepared: bool,
 ) -> *mut Promise {
-    let sql = read_sql(sql_ptr);
-    let params = JsValue::from_bits(params_f.to_bits());
-    let param_values = match extract_params_from_jsvalue(params) {
-        Ok(values) => values,
+    let request = match parse_query_request(query_f, params_f, force_prepared) {
+        Ok(request) => request,
         Err(message) => return rejected_params_promise(message),
     };
-    let request = QueryRequest::new(sql, param_values, rows_as_array, force_prepared);
     let connection = with_handle::<MysqlPoolConnectionHandle, _, _>(conn_handle, |wrapper| {
         Arc::clone(&wrapper.connection)
     });
@@ -1512,25 +1579,25 @@ unsafe fn run_pool_conn_query(
 }
 
 /// # Safety
-/// `sql_ptr` must be null or a Perry-runtime `StringHeader`.
+/// `query_f` must be a SQL string or mysql2 query-options object.
 #[no_mangle]
 pub unsafe extern "C" fn js_mysql2_pool_connection_query(
     conn_handle: Handle,
-    sql_ptr: *const u8,
+    query_f: f64,
     params_f: f64,
 ) -> *mut Promise {
-    run_pool_conn_query(conn_handle, sql_ptr, params_f, false, false)
+    run_pool_conn_query(conn_handle, query_f, params_f, false)
 }
 
 /// # Safety
-/// `sql_ptr` must be null or a Perry-runtime `StringHeader`.
+/// `query_f` must be a SQL string or mysql2 query-options object.
 #[no_mangle]
 pub unsafe extern "C" fn js_mysql2_pool_connection_execute(
     conn_handle: Handle,
-    sql_ptr: *const u8,
+    query_f: f64,
     params_f: f64,
 ) -> *mut Promise {
-    run_pool_conn_query(conn_handle, sql_ptr, params_f, false, true)
+    run_pool_conn_query(conn_handle, query_f, params_f, true)
 }
 
 #[cfg(test)]
@@ -1810,7 +1877,7 @@ mod tests {
         let promise = unsafe {
             js_mysql2_connection_execute(
                 perry_ffi::INVALID_HANDLE,
-                sql.as_raw() as *const u8,
+                f64::from_bits(JsValue::from_string_ptr(sql.as_raw()).bits()),
                 f64::from_bits(JsValue::UNDEFINED.bits()),
             )
         };

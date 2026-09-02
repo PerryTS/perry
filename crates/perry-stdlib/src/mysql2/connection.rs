@@ -1,535 +1,245 @@
-//! MySQL connection implementation
+//! MySQL connection implementation.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use perry_runtime::{js_promise_new_cross_thread, JSValue, Promise};
 use sqlx::mysql::MySqlConnection;
 use sqlx::Connection;
+use tokio::sync::Mutex;
 
-use super::pool::{extract_params_from_jsvalue, MysqlPoolConnectionHandle, ParamValue};
-use super::result::{is_row_returning_query, QueryOutcome, RawQueryResult};
+use super::pool::{
+    execute_query_on_connection, parse_query_request, MysqlPoolConnectionHandle, MysqlPromiseError,
+    QueryRequest, DEFAULT_QUERY_TIMEOUT_SECS,
+};
+use super::result::QueryOutcome;
 use super::types::parse_mysql_config;
-use crate::common::{get_handle_mut, register_handle, Handle};
+use crate::common::{register_handle, take_handle, with_handle, Handle};
 
-/// Default timeout for connecting to the database (in seconds)
-const DEFAULT_CONNECT_TIMEOUT_SECS: u64 = 10;
-/// Default timeout for overall query operation (in seconds)
-const DEFAULT_QUERY_TIMEOUT_SECS: u64 = 30;
+const CONNECT_TIMEOUT_SECS: u64 = 10;
 
-/// Wrapper around MySqlConnection that we can store in the handle registry
 pub struct MysqlConnectionHandle {
-    pub connection: Option<MySqlConnection>,
+    pub connection: Arc<Mutex<Option<MySqlConnection>>>,
 }
 
 impl MysqlConnectionHandle {
     pub fn new(conn: MySqlConnection) -> Self {
         Self {
-            connection: Some(conn),
+            connection: Arc::new(Mutex::new(Some(conn))),
         }
-    }
-
-    pub fn take(&mut self) -> Option<MySqlConnection> {
-        self.connection.take()
     }
 }
 
-/// mysql.createConnection(config) -> Promise<Connection>
-///
-/// Creates a new MySQL connection with the given configuration.
-/// Returns a Promise that resolves to a connection handle.
-///
-/// # Safety
-/// The config parameter must be a valid JSValue representing a config object.
-#[no_mangle]
-pub unsafe extern "C" fn js_mysql2_create_connection(config_f: f64) -> *mut Promise {
-    // Take f64 at the FFI boundary to avoid SysV AMD64 ABI mismatch
-    // (see js_mysql2_create_pool for details).
-    let config = JSValue::from_bits(config_f.to_bits());
-    let promise = js_promise_new_cross_thread();
+#[derive(Clone)]
+pub(crate) enum MysqlConnectionTarget {
+    Direct(Arc<Mutex<Option<MySqlConnection>>>),
+    Pool(Arc<Mutex<Option<sqlx::pool::PoolConnection<sqlx::MySql>>>>),
+}
 
-    // Parse the config
-    let mysql_config = parse_mysql_config(config);
+pub(crate) fn connection_target(handle: Handle) -> Option<MysqlConnectionTarget> {
+    with_handle::<MysqlConnectionHandle, _, _>(handle, |wrapper| {
+        MysqlConnectionTarget::Direct(Arc::clone(&wrapper.connection))
+    })
+    .or_else(|| {
+        with_handle::<MysqlPoolConnectionHandle, _, _>(handle, |wrapper| {
+            MysqlConnectionTarget::Pool(Arc::clone(&wrapper.connection))
+        })
+    })
+}
 
-    crate::common::spawn_for_promise(promise as *mut u8, async move {
-        use tokio::time::timeout;
-
-        let url = mysql_config.to_url();
-
-        // Wrap connection in a timeout to prevent indefinite hangs
-        match timeout(
-            Duration::from_secs(DEFAULT_CONNECT_TIMEOUT_SECS),
-            MySqlConnection::connect(&url),
-        )
-        .await
-        {
-            Ok(Ok(conn)) => {
-                let handle = register_handle(MysqlConnectionHandle::new(conn));
-                // NaN-box the handle with POINTER_TAG so it can be properly extracted later
-                let nanboxed = perry_runtime::js_nanbox_pointer(handle as i64);
-                Ok(nanboxed.to_bits())
-            }
-            Ok(Err(e)) => Err(format!("Failed to connect: {}", e)),
-            Err(_) => Err(format!(
-                "Connection timed out after {} seconds (MySQL server may be unavailable)",
-                DEFAULT_CONNECT_TIMEOUT_SECS
-            )),
+async fn execute_query_on_target(
+    target: MysqlConnectionTarget,
+    request: &QueryRequest,
+) -> Result<QueryOutcome, MysqlPromiseError> {
+    match target {
+        MysqlConnectionTarget::Direct(connection) => {
+            let mut slot = connection.lock().await;
+            let connection = slot
+                .as_mut()
+                .ok_or_else(|| MysqlPromiseError::message("Connection already closed"))?;
+            execute_query_on_connection(connection, request).await
         }
-    });
+        MysqlConnectionTarget::Pool(connection) => {
+            let mut slot = connection.lock().await;
+            let connection = slot
+                .as_mut()
+                .ok_or_else(|| MysqlPromiseError::message("Pool connection released"))?;
+            execute_query_on_connection(connection, request).await
+        }
+    }
+}
 
+unsafe fn run_connection_query(
+    conn_handle: Handle,
+    query_f: f64,
+    params_f: f64,
+    force_prepared: bool,
+) -> *mut Promise {
+    let promise = js_promise_new_cross_thread();
+    let request = parse_query_request(query_f, params_f, force_prepared);
+    let target = connection_target(conn_handle);
+    let rows_as_array = request
+        .as_ref()
+        .map(|request| request.rows_as_array)
+        .unwrap_or(false);
+
+    crate::common::spawn_for_promise_deferred_with_error(
+        promise as *mut u8,
+        async move {
+            let request = request?;
+            let target =
+                target.ok_or_else(|| MysqlPromiseError::message("Invalid connection handle"))?;
+            execute_query_on_target(target, &request).await
+        },
+        move |outcome| outcome.to_jsvalue_with_rows_as_array(rows_as_array).bits(),
+        MysqlPromiseError::to_jsvalue_bits,
+    );
     promise
 }
 
-/// connection.end() -> Promise<void>
-///
-/// Closes the MySQL connection.
+pub(crate) fn transaction_sql_for_method(method: &str) -> Option<&'static str> {
+    match method {
+        "beginTransaction" => Some("START TRANSACTION"),
+        "commit" => Some("COMMIT"),
+        "rollback" => Some("ROLLBACK"),
+        _ => None,
+    }
+}
+
+pub(crate) fn run_simple_command(conn_handle: Handle, sql: &'static str) -> *mut Promise {
+    let promise = js_promise_new_cross_thread();
+    let target = connection_target(conn_handle);
+    unsafe {
+        crate::common::spawn_for_promise_deferred_with_error(
+            promise as *mut u8,
+            async move {
+                let target = target
+                    .ok_or_else(|| MysqlPromiseError::message("Invalid connection handle"))?;
+                let execute = async {
+                    match target {
+                        MysqlConnectionTarget::Direct(connection) => {
+                            let mut slot = connection.lock().await;
+                            let connection = slot.as_mut().ok_or_else(|| {
+                                MysqlPromiseError::message("Connection already closed")
+                            })?;
+                            sqlx::raw_sql(sql)
+                                .execute(connection)
+                                .await
+                                .map_err(|error| MysqlPromiseError::from_sqlx(sql, error))?;
+                        }
+                        MysqlConnectionTarget::Pool(connection) => {
+                            let mut slot = connection.lock().await;
+                            let connection = slot.as_mut().ok_or_else(|| {
+                                MysqlPromiseError::message("Pool connection released")
+                            })?;
+                            sqlx::raw_sql(sql)
+                                .execute(&mut **connection)
+                                .await
+                                .map_err(|error| MysqlPromiseError::from_sqlx(sql, error))?;
+                        }
+                    }
+                    Ok::<_, MysqlPromiseError>(JSValue::undefined().bits())
+                };
+                tokio::time::timeout(Duration::from_secs(DEFAULT_QUERY_TIMEOUT_SECS), execute)
+                    .await
+                    .map_err(|_| MysqlPromiseError::message(format!("{sql} timed out")))?
+            },
+            |bits| bits,
+            MysqlPromiseError::to_jsvalue_bits,
+        );
+    }
+    promise
+}
+
+/// mysql.createConnection(config) -> Promise<Connection>.
+#[no_mangle]
+pub unsafe extern "C" fn js_mysql2_create_connection(config_f: f64) -> *mut Promise {
+    let config = JSValue::from_bits(config_f.to_bits());
+    let mysql_config = parse_mysql_config(config);
+    let promise = js_promise_new_cross_thread();
+
+    crate::common::spawn_for_promise_deferred_with_error(
+        promise as *mut u8,
+        async move {
+            let connection = tokio::time::timeout(
+                Duration::from_secs(CONNECT_TIMEOUT_SECS),
+                MySqlConnection::connect(&mysql_config.to_url()),
+            )
+            .await
+            .map_err(|_| MysqlPromiseError::message("MySQL connection timed out"))?
+            .map_err(|error| MysqlPromiseError::from_sqlx("Failed to connect", error))?;
+            Ok(connection)
+        },
+        |connection| {
+            let handle = register_handle(MysqlConnectionHandle::new(connection));
+            perry_runtime::js_nanbox_pointer(handle).to_bits()
+        },
+        MysqlPromiseError::to_jsvalue_bits,
+    );
+    promise
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn js_mysql2_connection_end(conn_handle: Handle) -> *mut Promise {
     let promise = js_promise_new_cross_thread();
-
-    crate::common::spawn_for_promise(promise as *mut u8, async move {
-        use crate::common::take_handle;
-        use tokio::time::timeout;
-
-        if let Some(mut wrapper) = take_handle::<MysqlConnectionHandle>(conn_handle) {
-            if let Some(conn) = wrapper.take() {
-                match timeout(
-                    Duration::from_secs(DEFAULT_CONNECT_TIMEOUT_SECS),
-                    conn.close(),
-                )
+    let connection = take_handle::<MysqlConnectionHandle>(conn_handle)
+        .map(|wrapper| Arc::clone(&wrapper.connection));
+    crate::common::spawn_for_promise_deferred_with_error(
+        promise as *mut u8,
+        async move {
+            let connection = connection
+                .ok_or_else(|| MysqlPromiseError::message("Invalid connection handle"))?;
+            let connection = connection
+                .lock()
                 .await
-                {
-                    Ok(Ok(())) => Ok(JSValue::undefined().bits()),
-                    Ok(Err(e)) => Err(format!("Failed to close connection: {}", e)),
-                    Err(_) => {
-                        // Connection close timed out, but we've already taken it so just return
-                        Ok(JSValue::undefined().bits())
-                    }
-                }
-            } else {
-                Err("Connection already closed".to_string())
-            }
-        } else {
-            Err("Invalid connection handle".to_string())
-        }
-    });
-
+                .take()
+                .ok_or_else(|| MysqlPromiseError::message("Connection already closed"))?;
+            tokio::time::timeout(
+                Duration::from_secs(CONNECT_TIMEOUT_SECS),
+                connection.close(),
+            )
+            .await
+            .map_err(|_| MysqlPromiseError::message("Connection close timed out"))?
+            .map_err(|error| MysqlPromiseError::from_sqlx("Failed to close", error))?;
+            Ok(JSValue::undefined().bits())
+        },
+        |bits| bits,
+        MysqlPromiseError::to_jsvalue_bits,
+    );
     promise
 }
 
-/// connection.query(sql, params?) -> Promise<[rows, fields]>
-///
-/// Executes a query and returns the results.
-/// This function handles both regular connections (MysqlConnectionHandle)
-/// and pool connections (MysqlPoolConnectionHandle). See
-/// `js_mysql2_pool_query` for rationale on accepting and binding `params`
-/// here. Issue #414.
 #[no_mangle]
 pub unsafe extern "C" fn js_mysql2_connection_query(
     conn_handle: Handle,
-    sql_ptr: *const u8,
+    query_f: f64,
     params_f: f64,
 ) -> *mut Promise {
-    let promise = js_promise_new_cross_thread();
-    let params = JSValue::from_bits(params_f.to_bits());
-
-    // Extract the SQL string
-    let sql = if sql_ptr.is_null() {
-        String::new()
-    } else {
-        let header = sql_ptr as *const perry_runtime::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data_ptr = sql_ptr.add(std::mem::size_of::<perry_runtime::StringHeader>());
-        let bytes = std::slice::from_raw_parts(data_ptr, len);
-        String::from_utf8_lossy(bytes).to_string()
-    };
-
-    let param_values = extract_params_from_jsvalue(params);
-    let is_select = is_row_returning_query(&sql);
-
-    // Use spawn_for_promise_deferred to safely create JSValues on the main thread
-    crate::common::spawn_for_promise_deferred(
-        promise as *mut u8,
-        async move {
-            use tokio::time::timeout;
-
-            let param_values = param_values?;
-
-            // First try as a regular connection
-            if let Some(wrapper) = get_handle_mut::<MysqlConnectionHandle>(conn_handle) {
-                if let Some(conn) = wrapper.connection.as_mut() {
-                    let mut query = sqlx::query(sqlx::AssertSqlSafe(sql.clone()));
-                    for param in &param_values {
-                        query = match param {
-                            ParamValue::Null => query.bind(Option::<String>::None),
-                            ParamValue::String(s) => query.bind(s.clone()),
-                            ParamValue::Bytes(bytes) => query.bind(bytes.clone()),
-                            ParamValue::DateTime(date) => query.bind(*date),
-                            ParamValue::Number(n) => query.bind(*n),
-                            ParamValue::Int(i) => query.bind(*i),
-                            ParamValue::Bool(b) => query.bind(*b),
-                        };
-                    }
-                    if is_select {
-                        let query_future = query.fetch_all(conn);
-                        match timeout(Duration::from_secs(DEFAULT_QUERY_TIMEOUT_SECS), query_future).await {
-                            Ok(Ok(rows)) => {
-                                let raw_result = RawQueryResult::from_mysql_rows(rows);
-                                return Ok(QueryOutcome::Rows(raw_result));
-                            }
-                            Ok(Err(e)) => return Err(format!("Query failed: {}", e)),
-                            Err(_) => return Err(format!(
-                                "Query timed out after {} seconds (MySQL server may be unavailable)",
-                                DEFAULT_QUERY_TIMEOUT_SECS
-                            )),
-                        }
-                    } else {
-                        let query_future = query.execute(conn);
-                        match timeout(Duration::from_secs(DEFAULT_QUERY_TIMEOUT_SECS), query_future).await {
-                            Ok(Ok(result)) => {
-                                return Ok(QueryOutcome::Executed {
-                                    affected_rows: result.rows_affected(),
-                                    last_insert_id: result.last_insert_id(),
-                                });
-                            }
-                            Ok(Err(e)) => return Err(format!("Query failed: {}", e)),
-                            Err(_) => return Err(format!(
-                                "Query timed out after {} seconds (MySQL server may be unavailable)",
-                                DEFAULT_QUERY_TIMEOUT_SECS
-                            )),
-                        }
-                    }
-                } else {
-                    return Err("Connection already closed".to_string());
-                }
-            }
-
-            // Then try as a pool connection
-            if let Some(wrapper) = get_handle_mut::<MysqlPoolConnectionHandle>(conn_handle) {
-                if let Some(ref mut conn) = wrapper.connection {
-                    let mut query = sqlx::query(sqlx::AssertSqlSafe(sql.clone()));
-                    for param in &param_values {
-                        query = match param {
-                            ParamValue::Null => query.bind(Option::<String>::None),
-                            ParamValue::String(s) => query.bind(s.clone()),
-                            ParamValue::Bytes(bytes) => query.bind(bytes.clone()),
-                            ParamValue::DateTime(date) => query.bind(*date),
-                            ParamValue::Number(n) => query.bind(*n),
-                            ParamValue::Int(i) => query.bind(*i),
-                            ParamValue::Bool(b) => query.bind(*b),
-                        };
-                    }
-                    if is_select {
-                        let query_future = query.fetch_all(&mut **conn);
-                        match timeout(Duration::from_secs(DEFAULT_QUERY_TIMEOUT_SECS), query_future).await {
-                            Ok(Ok(rows)) => {
-                                let raw_result = RawQueryResult::from_mysql_rows(rows);
-                                return Ok(QueryOutcome::Rows(raw_result));
-                            }
-                            Ok(Err(e)) => return Err(format!("Query failed: {}", e)),
-                            Err(_) => return Err(format!(
-                                "Query timed out after {} seconds (MySQL server may be unavailable)",
-                                DEFAULT_QUERY_TIMEOUT_SECS
-                            )),
-                        }
-                    } else {
-                        let query_future = query.execute(&mut **conn);
-                        match timeout(Duration::from_secs(DEFAULT_QUERY_TIMEOUT_SECS), query_future).await {
-                            Ok(Ok(result)) => {
-                                return Ok(QueryOutcome::Executed {
-                                    affected_rows: result.rows_affected(),
-                                    last_insert_id: result.last_insert_id(),
-                                });
-                            }
-                            Ok(Err(e)) => return Err(format!("Query failed: {}", e)),
-                            Err(_) => return Err(format!(
-                                "Query timed out after {} seconds (MySQL server may be unavailable)",
-                                DEFAULT_QUERY_TIMEOUT_SECS
-                            )),
-                        }
-                    }
-                } else {
-                    return Err("Connection has been released".to_string());
-                }
-            }
-
-            Err("Invalid connection handle".to_string())
-        },
-        |outcome: QueryOutcome| outcome.to_jsvalue().bits(),
-    );
-
-    promise
+    run_connection_query(conn_handle, query_f, params_f, false)
 }
 
-/// connection.execute(sql, params) -> Promise<[rows, fields]>
-///
-/// Executes a prepared statement with parameters.
 #[no_mangle]
 pub unsafe extern "C" fn js_mysql2_connection_execute(
     conn_handle: Handle,
-    sql_ptr: *const u8,
+    query_f: f64,
     params_f: f64,
 ) -> *mut Promise {
-    let promise = js_promise_new_cross_thread();
-    let params = JSValue::from_bits(params_f.to_bits());
-
-    let sql = if sql_ptr.is_null() {
-        String::new()
-    } else {
-        let header = sql_ptr as *const perry_runtime::StringHeader;
-        let len = (*header).byte_len as usize;
-        let data_ptr = sql_ptr.add(std::mem::size_of::<perry_runtime::StringHeader>());
-        let bytes = std::slice::from_raw_parts(data_ptr, len);
-        String::from_utf8_lossy(bytes).to_string()
-    };
-
-    let param_values = extract_params_from_jsvalue(params);
-    let is_select = is_row_returning_query(&sql);
-
-    crate::common::spawn_for_promise_deferred(
-        promise as *mut u8,
-        async move {
-            use tokio::time::timeout;
-
-            let param_values = param_values?;
-
-            // Try as a regular connection first
-            if let Some(wrapper) = get_handle_mut::<MysqlConnectionHandle>(conn_handle) {
-                if let Some(conn) = wrapper.connection.as_mut() {
-                    let mut query = sqlx::query(sqlx::AssertSqlSafe(sql.clone()));
-                    for param in &param_values {
-                        query = match param {
-                            ParamValue::Null => query.bind(Option::<String>::None),
-                            ParamValue::String(s) => query.bind(s.clone()),
-                            ParamValue::Bytes(bytes) => query.bind(bytes.clone()),
-                            ParamValue::DateTime(date) => query.bind(*date),
-                            ParamValue::Number(n) => query.bind(*n),
-                            ParamValue::Int(i) => query.bind(*i),
-                            ParamValue::Bool(b) => query.bind(*b),
-                        };
-                    }
-                    if is_select {
-                        match timeout(
-                            Duration::from_secs(DEFAULT_QUERY_TIMEOUT_SECS),
-                            query.fetch_all(conn),
-                        )
-                        .await
-                        {
-                            Ok(Ok(rows)) => {
-                                return Ok(QueryOutcome::Rows(RawQueryResult::from_mysql_rows(
-                                    rows,
-                                )))
-                            }
-                            Ok(Err(e)) => return Err(format!("Query failed: {}", e)),
-                            Err(_) => {
-                                return Err(format!(
-                                    "Query timed out after {} seconds",
-                                    DEFAULT_QUERY_TIMEOUT_SECS
-                                ))
-                            }
-                        }
-                    } else {
-                        match timeout(
-                            Duration::from_secs(DEFAULT_QUERY_TIMEOUT_SECS),
-                            query.execute(conn),
-                        )
-                        .await
-                        {
-                            Ok(Ok(result)) => {
-                                return Ok(QueryOutcome::Executed {
-                                    affected_rows: result.rows_affected(),
-                                    last_insert_id: result.last_insert_id(),
-                                })
-                            }
-                            Ok(Err(e)) => return Err(format!("Query failed: {}", e)),
-                            Err(_) => {
-                                return Err(format!(
-                                    "Query timed out after {} seconds",
-                                    DEFAULT_QUERY_TIMEOUT_SECS
-                                ))
-                            }
-                        }
-                    }
-                } else {
-                    return Err("Connection already closed".to_string());
-                }
-            }
-
-            // Try as a pool connection
-            if let Some(wrapper) = get_handle_mut::<MysqlPoolConnectionHandle>(conn_handle) {
-                if let Some(ref mut conn) = wrapper.connection {
-                    let mut query = sqlx::query(sqlx::AssertSqlSafe(sql.clone()));
-                    for param in &param_values {
-                        query = match param {
-                            ParamValue::Null => query.bind(Option::<String>::None),
-                            ParamValue::String(s) => query.bind(s.clone()),
-                            ParamValue::Bytes(bytes) => query.bind(bytes.clone()),
-                            ParamValue::DateTime(date) => query.bind(*date),
-                            ParamValue::Number(n) => query.bind(*n),
-                            ParamValue::Int(i) => query.bind(*i),
-                            ParamValue::Bool(b) => query.bind(*b),
-                        };
-                    }
-                    if is_select {
-                        match timeout(
-                            Duration::from_secs(DEFAULT_QUERY_TIMEOUT_SECS),
-                            query.fetch_all(&mut **conn),
-                        )
-                        .await
-                        {
-                            Ok(Ok(rows)) => {
-                                return Ok(QueryOutcome::Rows(RawQueryResult::from_mysql_rows(
-                                    rows,
-                                )))
-                            }
-                            Ok(Err(e)) => return Err(format!("Query failed: {}", e)),
-                            Err(_) => {
-                                return Err(format!(
-                                    "Query timed out after {} seconds",
-                                    DEFAULT_QUERY_TIMEOUT_SECS
-                                ))
-                            }
-                        }
-                    } else {
-                        match timeout(
-                            Duration::from_secs(DEFAULT_QUERY_TIMEOUT_SECS),
-                            query.execute(&mut **conn),
-                        )
-                        .await
-                        {
-                            Ok(Ok(result)) => {
-                                return Ok(QueryOutcome::Executed {
-                                    affected_rows: result.rows_affected(),
-                                    last_insert_id: result.last_insert_id(),
-                                })
-                            }
-                            Ok(Err(e)) => return Err(format!("Query failed: {}", e)),
-                            Err(_) => {
-                                return Err(format!(
-                                    "Query timed out after {} seconds",
-                                    DEFAULT_QUERY_TIMEOUT_SECS
-                                ))
-                            }
-                        }
-                    }
-                } else {
-                    return Err("Connection has been released".to_string());
-                }
-            }
-
-            Err("Invalid connection handle".to_string())
-        },
-        |outcome: QueryOutcome| outcome.to_jsvalue().bits(),
-    );
-
-    promise
+    run_connection_query(conn_handle, query_f, params_f, true)
 }
 
-/// connection.beginTransaction() -> Promise<void>
 #[no_mangle]
 pub unsafe extern "C" fn js_mysql2_connection_begin_transaction(
     conn_handle: Handle,
 ) -> *mut Promise {
-    let promise = js_promise_new_cross_thread();
-
-    crate::common::spawn_for_promise(promise as *mut u8, async move {
-        use crate::common::get_handle_mut;
-        use tokio::time::timeout;
-
-        if let Some(wrapper) = get_handle_mut::<MysqlConnectionHandle>(conn_handle) {
-            if let Some(conn) = wrapper.connection.as_mut() {
-                let query_future = sqlx::query("BEGIN").execute(conn);
-                match timeout(
-                    Duration::from_secs(DEFAULT_QUERY_TIMEOUT_SECS),
-                    query_future,
-                )
-                .await
-                {
-                    Ok(Ok(_)) => Ok(JSValue::undefined().bits()),
-                    Ok(Err(e)) => Err(format!("Failed to begin transaction: {}", e)),
-                    Err(_) => Err(format!(
-                        "Begin transaction timed out after {} seconds",
-                        DEFAULT_QUERY_TIMEOUT_SECS
-                    )),
-                }
-            } else {
-                Err("Connection already closed".to_string())
-            }
-        } else {
-            Err("Invalid connection handle".to_string())
-        }
-    });
-
-    promise
+    run_simple_command(conn_handle, "START TRANSACTION")
 }
 
-/// connection.commit() -> Promise<void>
 #[no_mangle]
 pub unsafe extern "C" fn js_mysql2_connection_commit(conn_handle: Handle) -> *mut Promise {
-    let promise = js_promise_new_cross_thread();
-
-    crate::common::spawn_for_promise(promise as *mut u8, async move {
-        use crate::common::get_handle_mut;
-        use tokio::time::timeout;
-
-        if let Some(wrapper) = get_handle_mut::<MysqlConnectionHandle>(conn_handle) {
-            if let Some(conn) = wrapper.connection.as_mut() {
-                let query_future = sqlx::query("COMMIT").execute(conn);
-                match timeout(
-                    Duration::from_secs(DEFAULT_QUERY_TIMEOUT_SECS),
-                    query_future,
-                )
-                .await
-                {
-                    Ok(Ok(_)) => Ok(JSValue::undefined().bits()),
-                    Ok(Err(e)) => Err(format!("Failed to commit transaction: {}", e)),
-                    Err(_) => Err(format!(
-                        "Commit timed out after {} seconds",
-                        DEFAULT_QUERY_TIMEOUT_SECS
-                    )),
-                }
-            } else {
-                Err("Connection already closed".to_string())
-            }
-        } else {
-            Err("Invalid connection handle".to_string())
-        }
-    });
-
-    promise
+    run_simple_command(conn_handle, "COMMIT")
 }
 
-/// connection.rollback() -> Promise<void>
 #[no_mangle]
 pub unsafe extern "C" fn js_mysql2_connection_rollback(conn_handle: Handle) -> *mut Promise {
-    let promise = js_promise_new_cross_thread();
-
-    crate::common::spawn_for_promise(promise as *mut u8, async move {
-        use crate::common::get_handle_mut;
-        use tokio::time::timeout;
-
-        if let Some(wrapper) = get_handle_mut::<MysqlConnectionHandle>(conn_handle) {
-            if let Some(conn) = wrapper.connection.as_mut() {
-                let query_future = sqlx::query("ROLLBACK").execute(conn);
-                match timeout(
-                    Duration::from_secs(DEFAULT_QUERY_TIMEOUT_SECS),
-                    query_future,
-                )
-                .await
-                {
-                    Ok(Ok(_)) => Ok(JSValue::undefined().bits()),
-                    Ok(Err(e)) => Err(format!("Failed to rollback transaction: {}", e)),
-                    Err(_) => Err(format!(
-                        "Rollback timed out after {} seconds",
-                        DEFAULT_QUERY_TIMEOUT_SECS
-                    )),
-                }
-            } else {
-                Err("Connection already closed".to_string())
-            }
-        } else {
-            Err("Invalid connection handle".to_string())
-        }
-    });
-
-    promise
+    run_simple_command(conn_handle, "ROLLBACK")
 }
