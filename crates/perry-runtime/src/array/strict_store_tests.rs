@@ -265,12 +265,11 @@ fn set_length_rejection_throws_only_in_strict_mode() {
         // flag is a state no program can reach, and the predicate rightly
         // ignores it. Set the flag so this test exercises the shape the
         // end-to-end fixture produces, rather than a half-built one.
-        *super::header::array_gc_header(locked).expect("live array header") =
-            crate::gc::GcHeader {
-                _reserved: (*super::header::array_gc_header(locked).unwrap())._reserved
-                    | crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS,
-                ..*super::header::array_gc_header(locked).unwrap()
-            };
+        *super::header::array_gc_header(locked).expect("live array header") = crate::gc::GcHeader {
+            _reserved: (*super::header::array_gc_header(locked).unwrap())._reserved
+                | crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS,
+            ..*super::header::array_gc_header(locked).unwrap()
+        };
 
         assert!(
             catch_runtime_throw(|| {
