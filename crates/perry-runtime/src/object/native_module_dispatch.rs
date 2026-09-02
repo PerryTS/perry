@@ -463,7 +463,10 @@ mod cjs_default_dispatch_tests {
             normalize_dispatch_module_name("child_process.default"),
             ("child_process", false)
         );
-        assert_eq!(normalize_dispatch_module_name("dns.default"), ("dns", false));
+        assert_eq!(
+            normalize_dispatch_module_name("dns.default"),
+            ("dns", false)
+        );
         assert_eq!(
             normalize_dispatch_module_name("module.default"),
             ("module", false)
