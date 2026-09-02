@@ -485,3 +485,72 @@ fn clear_truncates_the_squeeze_history() {
     );
     assert_eq!(js_map_entry_key_raw_at(map, 0), 7.0);
 }
+
+extern "C" fn delete_earlier_then_live_read(
+    _closure: *const crate::closure::ClosureHeader,
+    value: f64,
+    key: f64,
+    collection: f64,
+) -> f64 {
+    FOREACH_DELETE_VISITS.with(|visits| visits.borrow_mut().push((key.to_bits(), value.to_bits())));
+    if key == 5.0 {
+        let map = crate::value::js_nanbox_get_pointer(collection) as *mut MapHeader;
+        js_map_delete(map, 1.0);
+        js_map_delete(map, 2.0);
+        // The array-like `map[0]` read: a LIVE-index accessor. It must answer
+        // the live element without squeezing the layout under the walk.
+        assert_eq!(js_map_entry_key_at(map, 0), 0.0, "live index 0 is key 0");
+        assert_eq!(
+            js_map_entry_key_at(map, 1),
+            3.0,
+            "live index 1 skips the two holes"
+        );
+        assert_eq!(js_map_entry_value_at(map, 1), 30.0);
+        unsafe {
+            assert_ne!(
+                (*map).used,
+                (*map).size,
+                "the walk's raw layout was left alone"
+            );
+        }
+    }
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+#[test]
+fn a_live_index_read_inside_foreach_defers_the_squeeze_and_skips_nothing() {
+    // A callback that deletes already-visited entries and then reads `map[j]`
+    // used to compact the entries under forEach's raw counter, shifting the
+    // survivors below it: keys 6 and 7 were never visited.
+    let map = js_map_alloc(32);
+    let expected = (0..20)
+        .map(|key| (key as f64, (key * 10) as f64))
+        .collect::<Vec<_>>();
+    for &(key, value) in &expected {
+        js_map_set(map, key, value);
+    }
+    js_map_foreach(
+        map,
+        foreach_callback(delete_earlier_then_live_read as *const u8),
+        f64::from_bits(crate::value::TAG_UNDEFINED),
+    );
+    assert_eq!(
+        take_foreach_delete_visits(),
+        expected,
+        "every entry visited exactly once"
+    );
+    assert_eq!(js_map_size(map), 18);
+    unsafe {
+        assert_eq!(
+            (*map).used,
+            (*map).size,
+            "the outermost walk's completion squeezed"
+        );
+    }
+    // Outside a walk the accessor squeezes as before (#9504 contract).
+    js_map_delete(map, 3.0);
+    assert_eq!(js_map_entry_key_at(map, 1), 4.0);
+    unsafe {
+        assert_eq!((*map).used, (*map).size);
+    }
+}

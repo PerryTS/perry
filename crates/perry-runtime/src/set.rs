@@ -1879,13 +1879,43 @@ pub extern "C" fn js_set_value_at(set: *const SetHeader, i: u32) -> f64 {
         // those paths only, RECORDED in the compaction log so an open
         // `for…of` cursor rebases exactly. The walkers read through
         // `js_set_value_raw_at`, which never compacts.
-        compact_if_holey_set(set as *mut SetHeader);
-        if i >= (*set).size {
+        //
+        // While a `forEach` walk is active the squeeze is DEFERRED (its raw
+        // counter is not epoch-rebased; compacting under it skipped entries)
+        // and the live index is translated by stepping over holes; the
+        // outermost walk's completion performs the deferred squeeze.
+        let Some(raw) = live_index_to_raw_set(set, i) else {
             return f64::from_bits(UNDEF);
-        }
+        };
         let elements = (*set).elements as *const f64;
-        ptr::read(elements.add(i as usize))
+        ptr::read(elements.add(raw as usize))
     }
+}
+
+/// Resolve a LIVE element index onto the raw elements buffer — see
+/// `map::live_index_to_raw`.
+unsafe fn live_index_to_raw_set(set: *const SetHeader, idx: u32) -> Option<u32> {
+    if idx >= (*set).size {
+        return None;
+    }
+    if !set_foreach_is_active(set) {
+        compact_if_holey_set(set as *mut SetHeader);
+        return Some(idx);
+    }
+    let used = (*set).used;
+    let elements = elements_ptr(set);
+    let mut live = 0u32;
+    let mut raw = 0u32;
+    while raw < used {
+        if ptr::read(elements.add(raw as usize)).to_bits() != SET_HOLE_VALUE_BITS {
+            if live == idx {
+                return Some(raw);
+            }
+            live += 1;
+        }
+        raw += 1;
+    }
+    None
 }
 
 /// RAW twin of `js_set_value_at` for the raw-index walkers (the `for…of`
