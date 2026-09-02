@@ -32,6 +32,43 @@ fn is_local_name_char(c: char) -> bool {
     c.is_alphanumeric() || c == '%' || c == '_' || c == '.'
 }
 
+/// The identity barrier every root reload passes through (#9499).
+///
+/// A root slot is a `ptr addrspace(1)` alloca, so the value read back out of it
+/// is a GC pointer — and the reload's `ptrtoint` composed with the *next*
+/// root push's `inttoptr` folds, under InstCombine, straight back to the
+/// `gc.relocate` the first push produced. That makes ONE `ptr addrspace(1)`
+/// SSA value the statepoint operand at two different safepoints, with a HOLE
+/// in between (the value lives in a plain non-root alloca while it is not
+/// rooted). LLVM's statepoint lowering assumes the opposite: `findPreviousSpillSlot`
+/// treats "spill location is known for gc relocates" as permanent, so at the
+/// second safepoint it re-reads the FIRST safepoint's stack slot without
+/// re-storing — and that slot has been recycled for another statepoint's
+/// operand in the hole. The reload then hands the consuming call a completely
+/// different live object. Measured on `map.set(messageId, response => …)`
+/// (#9499): the key stored was the closure allocated three lines earlier.
+///
+/// The barrier states the thing that is actually true and that the fold denies:
+/// **a value read out of a root slot is an ordinary NaN-boxed datum, not the
+/// GC reference it came from.** Re-rooting it must mint a fresh statepoint
+/// operand with its own spill slot, not re-identify it with a relocation from
+/// an earlier safepoint.
+///
+/// An empty `asm` with a tied `"=r,0"` operand: the standard register-level
+/// identity, zero machine instructions, and — unlike every pure IR spelling —
+/// something InstCombine cannot see through, so it can no longer read
+/// `inttoptr(ptrtoint X)` as an identity pair. Marked `"gc-leaf-function"` so
+/// RS4GC does not try to wrap the asm itself in a statepoint (which it rejects
+/// outright: "Cannot take the address of an inline asm!").
+///
+/// `freeze i64` was tried first and is the prettier spelling — not a call, so
+/// the element-shape fast clones stay textually call-free. It is REJECTED on
+/// evidence: with `freeze` the reduced fixtures still pass but the real MCP SDK
+/// client throws `TypeError: value is not a function` on every run, where the
+/// `asm` form connects. Do not "simplify" this back to `freeze` without
+/// re-running `secret-tests`' MCP anchor end to end.
+const ROOT_RELOAD_LAUNDER: &str = "call i64 asm \"\", \"=r,0\"";
+
 /// Rewrite one root-alloca access (`store`/`load` of `i64`/`double` whose
 /// pointer operand is a root) into its `ptr addrspace(1)` form. `None` when
 /// the line is not such an access; the caller then falls through to the
@@ -83,7 +120,7 @@ fn rewrite_root_access(
             return None;
         }
         return Some(format!(
-            "  {result}.rs4p = load ptr addrspace(1), ptr {ptr}\n  {result} = ptrtoint ptr addrspace(1) {result}.rs4p to i64\n"
+            "  {result}.rs4p = load ptr addrspace(1), ptr {ptr}\n  {result}.rs4i = ptrtoint ptr addrspace(1) {result}.rs4p to i64\n  {result} = {ROOT_RELOAD_LAUNDER}(i64 {result}.rs4i) \"gc-leaf-function\"\n"
         ));
     }
     if let Some((result, ptr)) = trimmed.split_once(" = load double, ptr ") {
@@ -91,7 +128,7 @@ fn rewrite_root_access(
             return None;
         }
         return Some(format!(
-            "  {result}.rs4p = load ptr addrspace(1), ptr {ptr}\n  {result}.rs4i = ptrtoint ptr addrspace(1) {result}.rs4p to i64\n  {result} = bitcast i64 {result}.rs4i to double\n"
+            "  {result}.rs4p = load ptr addrspace(1), ptr {ptr}\n  {result}.rs4i = ptrtoint ptr addrspace(1) {result}.rs4p to i64\n  {result}.rs4o = {ROOT_RELOAD_LAUNDER}(i64 {result}.rs4i) \"gc-leaf-function\"\n  {result} = bitcast i64 {result}.rs4o to double\n"
         ));
     }
     None
@@ -356,6 +393,119 @@ mod tests {
             !rewritten.contains("= call i64 @js_map_alloc("),
             "the control callee must be statepoint-wrapped, not direct:\n{rewritten}"
         );
+    }
+
+    /// #9499, at the level the defect actually lives.
+    ///
+    /// A value is rooted, released, parked in a PLAIN (non-root) alloca across
+    /// another safepoint, then rooted AGAIN. Without the launder, the second
+    /// push's `inttoptr` composes with the first reload's `ptrtoint` and
+    /// InstCombine folds the pair away, so the third safepoint's `gc-live`
+    /// operand IS the `gc.relocate` the first safepoint produced — one GC value
+    /// serving two statepoints with a hole in between. SelectionDAG's
+    /// `findPreviousSpillSlot` then re-reads the first safepoint's stack slot
+    /// without re-storing, and that slot was recycled for the intervening
+    /// statepoint's operand.
+    ///
+    /// The assertion names the VALUE: no operand of the LAST statepoint may be
+    /// a register defined by a `gc.relocate`, because in this fixture the value
+    /// demonstrably left the GC domain in between.
+    ///
+    /// Sabotage: reverting `rewrite_root_access`'s two load arms to the bare
+    /// `ptrtoint` form fails this with the relocate's own name in the final
+    /// `gc-live` bundle.
+    #[test]
+    fn a_re_rooted_value_is_not_the_earlier_relocate() {
+        let ir = r#"declare void @js_shadow_slot_bind(i32, ptr)
+declare i64 @may_collect()
+
+define i64 @f(i64 %v) gc "statepoint-example" {
+entry:
+  %slot = alloca i64
+  store i64 0, ptr %slot
+  %park = alloca i64
+  store i64 0, ptr %park
+  call void @js_shadow_slot_bind(i32 0, ptr %slot)
+  store i64 %v, ptr %slot
+  %c1 = call i64 @may_collect()
+  %r1 = load i64, ptr %slot
+  store i64 0, ptr %slot
+  store i64 %r1, ptr %park
+  %c2 = call i64 @may_collect()
+  %r2 = load i64, ptr %park
+  store i64 %r2, ptr %slot
+  %c3 = call i64 @may_collect()
+  %r3 = load i64, ptr %slot
+  store i64 0, ptr %slot
+  ret i64 %r3
+}
+"#;
+        let lowered = lower_precise_roots_to_native_stack(ir, "f", 1);
+        // THE discriminating clause: reverting `rewrite_root_access`'s two load
+        // arms fails here. The RS4GC-level clauses below are the structural
+        // companion — they show WHY the launder is needed (the second
+        // safepoint's operand is a fresh `inttoptr`, not the first's relocate)
+        // — but they do not by themselves discriminate, because the fold this
+        // guards against happens in the `-Os` pipeline that runs after the
+        // rewrite, not inside it. The end-to-end discriminator is
+        // `test-files/test_gap_9499_rooted_key_across_closure_alloc.ts`.
+        assert!(
+            lowered.contains("asm \"\", \"=r,0\""),
+            "every root reload must be laundered:\n{lowered}"
+        );
+
+        // InstCombine is appended on purpose: the fold this guards against does
+        // NOT happen in the shipped rewrite pipeline (`mem2reg,sccp`), it
+        // happens in the `-Os` pipeline that runs AFTER it. Running one
+        // InstCombine here reproduces that stage with nothing else.
+        const PASSES: &str = "always-inline,function(mem2reg,sccp),\
+                              rewrite-statepoints-for-gc,function(instcombine)";
+        let target = crate::codegen::default_target_triple();
+        let rewritten = crate::inprocess::statepoint_rewritten_ir_with_passes(
+            &lowered, &target, "reroot_9499", PASSES,
+        )
+        .expect("fixture survives the rewrite pipeline");
+
+        let relocates: Vec<&str> = rewritten
+            .lines()
+            .filter(|line| line.contains("@llvm.experimental.gc.relocate"))
+            .filter_map(|line| line.trim().split_once(" = "))
+            .map(|(name, _)| name.trim())
+            .collect();
+        assert!(
+            !relocates.is_empty(),
+            "the fixture must relocate something, or this assertion has no \
+             subject:\n{rewritten}"
+        );
+
+        let live_bundles: Vec<&str> = rewritten
+            .lines()
+            .filter(|line| line.contains("\"gc-live\""))
+            .collect();
+        // TWO, not three: the middle safepoint carries no `gc-live` bundle at
+        // all, because the value is genuinely dead there — it is sitting in the
+        // plain alloca. That hole is the whole point of the fixture.
+        assert!(
+            live_bundles.len() >= 2,
+            "the fixture must root the value across two separate safepoints:\n{rewritten}"
+        );
+        let last = live_bundles.last().copied().expect("just checked");
+        let live = last
+            .split_once("\"gc-live\"(")
+            .map(|(_, tail)| tail.split(')').next().unwrap_or(tail))
+            .unwrap_or("");
+        for name in &relocates {
+            assert!(
+                !live
+                    .split(|c: char| !super::is_local_name_char(c))
+                    .any(|tok| tok == *name),
+                "#9499: the last safepoint's gc-live operand is {name}, the \
+                 relocate an EARLIER safepoint produced. That value is not \
+                 live in between (it sits in a plain alloca), so LLVM's \
+                 statepoint spill-slot reuse re-reads a slot that has been \
+                 recycled. gc-live was: {live}\n{rewritten}"
+            );
+        }
     }
 
     #[test]

@@ -62,6 +62,12 @@ const PURE_OPS: &[&str] = &[
     "sub ",
     "getelementptr",
     "select",
+    // #9499's root-reload launder. An empty `asm` with a tied `"=r,0"` operand
+    // is a register-level identity that emits nothing, so a value defined by it
+    // is exactly as fresh as its input — which is what this list means. Without
+    // it the walk stops AT the launder and every assertion that names the
+    // reload's `load ptr addrspace(1)` line goes red on a correct lowering.
+    "call i64 asm \"\", \"=r,0\"",
 ];
 
 /// Walk `reg`'s definition chain up through [`PURE_OPS`] and return the line of
@@ -96,9 +102,12 @@ pub(super) fn producer_line(ir: &str, reg: &str) -> usize {
         else {
             return idx;
         };
-        // Follow the FIRST register operand of the pure op.
+        // Follow the FIRST register operand of the pure op. Parentheses are
+        // separators too: #9499's launder is a call, so its operand is inside
+        // `(...)` — and no existing op's first `%` token is affected, because
+        // `ptr addrspace(1)` carries no register.
         let Some(next) = rhs[op.len()..]
-            .split(&[',', ' '][..])
+            .split(&[',', ' ', '(', ')'][..])
             .find(|t| t.starts_with('%'))
         else {
             return idx; // constant-only pure op: it is its own producer

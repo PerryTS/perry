@@ -378,7 +378,7 @@ fn assert_fast_clone_is_entered(ir: &str) {
 /// `br label %for.element_shape_fast.cond.N` terminator of
 /// `element_shape.loop.fast.preheader`, three lines above the slow
 /// preheader's own branch. Every assertion made against the result is a
-/// NEGATIVE (`!fast.contains(" call ")`, `!fast.contains("js_array_get_f64")`,
+/// NEGATIVE (`!fast_clone_has_a_call(&fast)`, `!fast.contains("js_array_get_f64")`,
 /// …), so that four-line stub satisfied all of them: the IR census that exists
 /// to prove the clone is really call-free had never been able to fail. The
 /// liveness assertion below is what makes it a gate — CLAUDE.md's "a gate must
@@ -419,6 +419,22 @@ fn fast_clone_slice(ir: &str) -> String {
     owned
 }
 
+/// Does the versioned-loop fast clone contain a call?
+///
+/// The clone's revocation argument is that it is **call-free**: no funnel can
+/// revoke the invariant and no allocation can move the array. #9499's
+/// root-reload launder is the one thing excluded, and it is excluded because it
+/// is not a call in any sense the argument uses — an empty `asm` with a tied
+/// `"=r,0"` operand emits no machine instruction, transfers control nowhere and
+/// clobbers nothing. It exists only to stop InstCombine reading
+/// `inttoptr(ptrtoint X)` as an identity pair (`function/precise_roots.rs`), so
+/// counting it would fail these tests for a property they do not measure.
+/// Every other `call` still fails them.
+fn fast_clone_has_a_call(fast: &str) -> bool {
+    fast.lines()
+        .any(|line| line.contains("call ") && !line.contains("asm \"\", \"=r,0\""))
+}
+
 #[test]
 fn element_shape_versioned_loop_fires_for_the_7480_access_shape() {
     let ir = emit(&element_shape_module(
@@ -454,7 +470,7 @@ fn element_shape_versioned_loop_fires_for_the_7480_access_shape() {
     // no allocation can move the array), so it is asserted directly rather
     // than by naming individual guard symbols.
     assert!(
-        !fast.contains(" call "),
+        !fast_clone_has_a_call(&fast),
         "the fast clone must be call-free; found a call in:\n{fast}"
     );
     assert!(
@@ -795,7 +811,7 @@ fn element_shape_versioned_loop_resolves_an_object_literal_element_type() {
     assert_fast_clone_is_entered(&ir);
     let fast = fast_clone_slice(&ir);
     assert!(
-        !fast.contains(" call "),
+        !fast_clone_has_a_call(&fast),
         "the fast clone must be call-free; found a call in:\n{fast}"
     );
     // The second half, and the reason the first half alone would be inert: the
@@ -1021,7 +1037,7 @@ fn element_shape_versioned_loop_admits_an_array_length_bound() {
     assert_fast_clone_is_entered(&ir);
     let fast = fast_clone_slice(&ir);
     assert!(
-        !fast.contains(" call "),
+        !fast_clone_has_a_call(&fast),
         "the fast clone must stay call-free with a `.length` bound; found a \
          call in:\n{fast}"
     );
@@ -1131,7 +1147,7 @@ fn element_shape_versioned_loop_resolves_an_aliased_object_element_type() {
     assert_fast_clone_is_entered(&ir);
     let fast = fast_clone_slice(&ir);
     assert!(
-        !fast.contains(" call "),
+        !fast_clone_has_a_call(&fast),
         "an alias-resolved fast clone must stay call-free -- a call is a GC \
          safepoint, and the element-shape guard is established BEFORE it; \
          emitted:\n{fast}"
@@ -1193,7 +1209,7 @@ fn element_shape_versioned_loop_fires_for_the_churn_read_shape() {
     assert_fast_clone_is_entered(&ir);
     let fast = fast_clone_slice(&ir);
     assert!(
-        !fast.contains(" call "),
+        !fast_clone_has_a_call(&fast),
         "the fast clone must be call-free; found a call in:\n{fast}"
     );
     assert!(
@@ -1223,7 +1239,7 @@ fn the_repair_does_not_put_a_call_inside_the_fast_clone() {
     assert_fast_clone_is_entered(&ir);
     let fast = fast_clone_slice(&ir);
     assert!(
-        !fast.contains("call "),
+        !fast_clone_has_a_call(&fast),
         "the fast clone must stay call-free after the #7480 repair; emitted:\n{fast}"
     );
     assert!(
@@ -1299,7 +1315,7 @@ fn element_shape_versioned_loop_fires_for_the_7771_element_binding_shape() {
     assert_fast_clone_is_entered(&ir);
     let fast = fast_clone_slice(&ir);
     assert!(
-        !fast.contains(" call "),
+        !fast_clone_has_a_call(&fast),
         "the fast clone must be call-free; found a call in:\n{fast}"
     );
     assert!(
@@ -1331,7 +1347,7 @@ fn element_binding_reads_every_tracked_field_through_the_fact() {
     assert_fast_clone_is_entered(&ir);
     let fast = fast_clone_slice(&ir);
     assert!(
-        !fast.contains(" call "),
+        !fast_clone_has_a_call(&fast),
         "the two-field fast clone must be call-free; found a call in:\n{fast}"
     );
     // One `element_shape.load` chain per tracked field read.
@@ -1455,7 +1471,7 @@ fn assert_clone_fires_call_free(ir: &str, what: &str) {
     assert_fast_clone_is_entered(ir);
     let fast = fast_clone_slice(ir);
     assert!(
-        !fast.contains(" call "),
+        !fast_clone_has_a_call(&fast),
         "{what}: the fast clone must be call-free; found a call in:\n{fast}"
     );
     assert!(

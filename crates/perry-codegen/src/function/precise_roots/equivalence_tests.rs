@@ -81,7 +81,8 @@ pub(super) fn reference_lower_roots_for_rs4gc(
             {
                 let result = trimmed.split(' ').next().unwrap_or("");
                 out.push_str(&format!(
-                    "  {result}.rs4p = load ptr addrspace(1), ptr {ptr}\n  {result} = ptrtoint ptr addrspace(1) {result}.rs4p to i64\n"
+                    "  {result}.rs4p = load ptr addrspace(1), ptr {ptr}\n  {result}.rs4i = ptrtoint ptr addrspace(1) {result}.rs4p to i64\n  {result} = {launder}(i64 {result}.rs4i) \"gc-leaf-function\"\n",
+                    launder = super::ROOT_RELOAD_LAUNDER,
                 ));
                 handled = true;
                 break;
@@ -94,7 +95,8 @@ pub(super) fn reference_lower_roots_for_rs4gc(
             {
                 let result = trimmed.split(' ').next().unwrap_or("");
                 out.push_str(&format!(
-                    "  {result}.rs4p = load ptr addrspace(1), ptr {ptr}\n  {result}.rs4i = ptrtoint ptr addrspace(1) {result}.rs4p to i64\n  {result} = bitcast i64 {result}.rs4i to double\n"
+                    "  {result}.rs4p = load ptr addrspace(1), ptr {ptr}\n  {result}.rs4i = ptrtoint ptr addrspace(1) {result}.rs4p to i64\n  {result}.rs4o = {launder}(i64 {result}.rs4i) \"gc-leaf-function\"\n  {result} = bitcast i64 {result}.rs4o to double\n",
+                    launder = super::ROOT_RELOAD_LAUNDER,
                 ));
                 handled = true;
                 break;

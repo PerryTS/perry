@@ -56,7 +56,7 @@ pub(crate) fn statepoint_rewritten_ir(
 }
 
 #[cfg(test)]
-fn statepoint_rewritten_ir_with_passes(
+pub(crate) fn statepoint_rewritten_ir_with_passes(
     ll_text: &str,
     effective_target: &str,
     module_name: &str,
