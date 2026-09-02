@@ -12,9 +12,14 @@ use crate::expr::FnCtx;
 use crate::nanbox::POINTER_MASK_I64;
 use crate::types::{DOUBLE, I64};
 
-/// Stamp `message`, `name` and `stack` onto the freshly allocated instance of
-/// an Error-family subclass, mirroring the `SuperCall` Error-like arm in
+/// Stamp `stack` and (when supplied) `message` onto the freshly allocated
+/// instance of an Error-family subclass, mirroring the `SuperCall` Error-like arm in
 /// `expr/this_super_call.rs`.
+///
+/// `name` deliberately stays on the terminating Error-family prototype. A
+/// plain assignment such as `error.name = "Custom"` then creates the ordinary
+/// enumerable own property required by `[[Set]]`, while an untouched instance
+/// keeps `name` out of every own-key consumer (#9440).
 ///
 /// Returns `true` when the class's `extends` chain does terminate at an Error
 /// family base and the init was emitted — the caller then skips its
@@ -52,9 +57,19 @@ pub(super) fn emit_default_error_init(
             break;
         }
     }
-    if let Some(kind) = error_kind {
+    if error_kind.is_some() {
         let this_slot_for_err = ctx.this_stack.last().cloned().unwrap_or_default();
         let blk = ctx.block();
+        let this_for_stack = blk.load(DOUBLE, &this_slot_for_err);
+        // V8 creates `stack` before `message`; preserve that observable own-key
+        // order (`["stack", "message"]`) while the stack head itself remains
+        // lazy and therefore sees the later message/name values.
+        blk.call_void(
+            "js_error_subclass_capture_stack",
+            &[(DOUBLE, &this_for_stack)],
+        );
+        // The capture allocates, so reload the rooted receiver before deriving
+        // the raw pointer consumed by the message store.
         let this_box = blk.load(DOUBLE, &this_slot_for_err);
         let this_bits = blk.bitcast_double_to_i64(&this_box);
         let this_handle = blk.and(I64, &this_bits, POINTER_MASK_I64);
@@ -72,37 +87,6 @@ pub(super) fn emit_default_error_init(
                 &[(I64, &this_handle), (I64, &key_raw), (DOUBLE, msg_val)],
             );
         }
-        let name_idx = ctx.strings.intern("name");
-        let name_handle_global = format!("@{}", ctx.strings.entry(name_idx).handle_global);
-        let name_val_idx = ctx.strings.intern(&kind);
-        let name_val_global = format!("@{}", ctx.strings.entry(name_val_idx).handle_global);
-        let blk = ctx.block();
-        let name_key_box = blk.load(DOUBLE, &name_handle_global);
-        let name_key_bits = blk.bitcast_double_to_i64(&name_key_box);
-        let name_key_raw = blk.and(I64, &name_key_bits, POINTER_MASK_I64);
-        let name_val_box = blk.load(DOUBLE, &name_val_global);
-        blk.call_void(
-            "js_object_set_field_by_name",
-            &[
-                (I64, &this_handle),
-                (I64, &name_key_raw),
-                (DOUBLE, &name_val_box),
-            ],
-        );
-        // #9410: `stack`. This arm stamps `message` and `name` onto an
-        // ordinary class instance; nothing ever filled `stack`, so
-        // `new MyError("x").stack` was `undefined` where the base
-        // `new Error("x").stack` is a string. The runtime installs a
-        // lazily-formatted own accessor and captures the FRAME here,
-        // at the construction site.
-        let blk = ctx.block();
-        // Reload `this`: the `message`/`name` stamps above can
-        // collect, so the earlier `this_box` may be stale (#8770).
-        let this_for_stack = blk.load(DOUBLE, &this_slot_for_err);
-        blk.call_void(
-            "js_error_subclass_capture_stack",
-            &[(DOUBLE, &this_for_stack)],
-        );
         return true;
     }
     false
