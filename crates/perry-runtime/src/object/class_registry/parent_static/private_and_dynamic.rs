@@ -120,17 +120,20 @@ pub(crate) fn register_class_dynamic_static_accessor(
         owner,
         key.clone(),
         crate::object::AccessorDescriptor {
-            get: get_bits.map(|_| get.get_nanbox_u64()).unwrap_or(existing.get),
-            set: set_bits.map(|_| set.get_nanbox_u64()).unwrap_or(existing.set),
+            get: get_bits
+                .map(|_| get.get_nanbox_u64())
+                .unwrap_or(existing.get),
+            set: set_bits
+                .map(|_| set.get_nanbox_u64())
+                .unwrap_or(existing.set),
         },
     );
     let existing_attrs = if is_class_object_ptr(owner as *const u8) {
         crate::object::get_property_attrs(owner, &key)
             .map(|attrs| (attrs.enumerable(), attrs.configurable()))
     } else {
-        class_static_defined_attrs(class_id, name).map(|(_, enumerable, configurable)| {
-            (enumerable, configurable)
-        })
+        class_static_defined_attrs(class_id, name)
+            .map(|(_, enumerable, configurable)| (enumerable, configurable))
     };
     let enumerable = enumerable
         .or_else(|| existing_attrs.map(|attrs| attrs.0))
@@ -153,7 +156,10 @@ pub(crate) fn class_dynamic_static_accessor_descriptor(
     class_id: u32,
     name: &str,
     receiver: f64,
-) -> Option<(crate::object::AccessorDescriptor, crate::object::PropertyAttrs)> {
+) -> Option<(
+    crate::object::AccessorDescriptor,
+    crate::object::PropertyAttrs,
+)> {
     let scope = crate::gc::RuntimeHandleScope::new();
     let receiver = scope.root_nanbox_f64(receiver);
     let owner = dynamic_static_accessor_owner(class_id, receiver.get_nanbox_f64());
@@ -289,7 +295,10 @@ pub(crate) unsafe fn call_private_static_method_for_owner(
     let scope = crate::gc::RuntimeHandleScope::new();
     let this_value = scope.root_nanbox_f64(this_value);
     let private_brand = scope.root_nanbox_f64(private_brand);
-    let previous_this = crate::object::js_implicit_this_set(this_value.get_nanbox_f64());
+    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+    let previous_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(
+        this_value.get_nanbox_f64(),
+    ));
     crate::object::static_private_owner_push(private_brand.get_nanbox_f64());
     crate::object::private_lexical_brand_push(private_brand.get_nanbox_f64());
     crate::object::static_this_arm_if_unarmed(this_value.get_nanbox_f64());
@@ -297,6 +306,6 @@ pub(crate) unsafe fn call_private_static_method_for_owner(
     crate::object::static_this_disarm();
     crate::object::private_lexical_brand_pop();
     crate::object::static_private_owner_pop();
-    crate::object::js_implicit_this_set(previous_this);
+    crate::object::js_implicit_this_set(previous_this.get_nanbox_f64());
     Some(result)
 }

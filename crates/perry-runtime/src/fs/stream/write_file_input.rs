@@ -150,9 +150,10 @@ fn well_known_iterator_method(value: f64, name: &str) -> Option<f64> {
 
 fn call_well_known_iterator(value: f64, name: &str) -> Option<f64> {
     let method = well_known_iterator_method(value, name)?;
-    let prev_this = crate::object::js_implicit_this_set(value);
+    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+    let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(value));
     let iterator = unsafe { crate::closure::js_native_call_value(method, std::ptr::null(), 0) };
-    crate::object::js_implicit_this_set(prev_this);
+    crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
     if iterator.to_bits() == crate::value::TAG_UNDEFINED {
         None
     } else {

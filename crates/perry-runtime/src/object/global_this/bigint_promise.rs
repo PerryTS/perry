@@ -696,9 +696,10 @@ pub(crate) extern "C" fn typed_array_from_thunk(
         if map_closure.is_null() {
             return v;
         }
-        let prev = crate::object::js_implicit_this_set(this_arg);
+        let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+        let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(this_arg));
         let r = crate::closure::js_closure_call2(map_closure, v, k as f64);
-        crate::object::js_implicit_this_set(prev);
+        crate::object::js_implicit_this_set(prev.get_nanbox_f64());
         r
     };
     if let Some(kind) = kind_opt {

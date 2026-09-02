@@ -182,9 +182,10 @@ extern "C" fn date_to_json(_closure: *const crate::closure::ClosureHeader) -> f6
     {
         // `Call(func, O, «»)` — toJSON's `key` argument is intentionally not
         // forwarded (Invoke passes an empty argument list).
-        let prev = crate::object::js_implicit_this_set(o);
+        let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+        let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(o));
         let r = crate::closure::js_closure_call0(closure);
-        crate::object::js_implicit_this_set(prev);
+        crate::object::js_implicit_this_set(prev.get_nanbox_f64());
         return r;
     }
     super::object_ops::throw_object_type_error(b"toISOString is not a function")

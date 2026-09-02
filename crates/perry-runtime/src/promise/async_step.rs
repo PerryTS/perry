@@ -1501,9 +1501,10 @@ fn array_from_async_map_or_push(closure: *const crate::closure::ClosureHeader, v
     let this_arg = crate::closure::js_closure_get_capture_f64(closure, AFA_THIS_ARG);
     let args = [value, index];
     let args_arr = crate::array::js_array_from_f64(args.as_ptr(), args.len() as u32);
-    let prev_this = crate::object::js_implicit_this_set(this_arg);
+    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+    let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(this_arg));
     let mapped_promise = js_promise_try(map_fn, args_arr);
-    crate::object::js_implicit_this_set(prev_this);
+    crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
 
     let mapped_closure = crate::closure::js_closure_get_capture_ptr(closure, AFA_MAPPED_CLOSURE)
         as *const crate::closure::ClosureHeader;

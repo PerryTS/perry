@@ -103,9 +103,10 @@ extern "C" fn bound_dispose_thunk(closure: *const ClosureHeader) -> f64 {
     if !is_callable_value(method) {
         return undefined();
     }
-    let prev = js_implicit_this_set(resource);
+    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+    let prev = this_scope.root_nanbox_f64(js_implicit_this_set(resource));
     let result = unsafe { js_native_call_value(method, std::ptr::null(), 0) };
-    js_implicit_this_set(prev);
+    js_implicit_this_set(prev.get_nanbox_f64());
     result
 }
 

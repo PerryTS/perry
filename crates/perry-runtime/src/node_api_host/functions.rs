@@ -277,7 +277,10 @@ pub unsafe extern "C" fn napi_call_function(
         };
         arguments.push(f64::from_bits(bits));
     }
-    let previous_this = crate::object::js_implicit_this_set(f64::from_bits(receiver_bits));
+    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+    let previous_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(
+        f64::from_bits(receiver_bits),
+    ));
     let call_result = catch_value_call(env, || {
         crate::closure::js_native_call_value(
             f64::from_bits(function_bits),
@@ -285,7 +288,7 @@ pub unsafe extern "C" fn napi_call_function(
             arguments.len(),
         )
     });
-    crate::object::js_implicit_this_set(previous_this);
+    crate::object::js_implicit_this_set(previous_this.get_nanbox_f64());
     match call_result {
         Ok(value) => {
             if !result.is_null() {

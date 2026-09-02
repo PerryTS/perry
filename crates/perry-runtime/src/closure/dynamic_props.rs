@@ -600,9 +600,10 @@ pub fn closure_get_dynamic_prop(ptr: usize, prop: &str) -> f64 {
             return f64::from_bits(crate::value::TAG_UNDEFINED);
         }
         let receiver = crate::value::js_nanbox_pointer(ptr as i64);
-        let prev = crate::object::js_implicit_this_set(receiver);
+        let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+        let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
         let result = crate::closure::js_closure_call0(closure);
-        crate::object::js_implicit_this_set(prev);
+        crate::object::js_implicit_this_set(prev.get_nanbox_f64());
         return result;
     }
 
@@ -661,9 +662,11 @@ pub fn closure_get_dynamic_prop(ptr: usize, prop: &str) -> f64 {
                 if getter.is_null() {
                     return f64::from_bits(crate::value::TAG_UNDEFINED);
                 }
-                let prev = crate::object::js_implicit_this_set(receiver);
+                let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+                let prev =
+                    this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
                 let result = crate::closure::js_closure_call0(getter);
-                crate::object::js_implicit_this_set(prev);
+                crate::object::js_implicit_this_set(prev.get_nanbox_f64());
                 return result;
             }
             if let Ok(props) = get_closure_props().lock() {
@@ -692,9 +695,10 @@ pub fn closure_get_dynamic_prop(ptr: usize, prop: &str) -> f64 {
             if getter.is_null() {
                 return f64::from_bits(crate::value::TAG_UNDEFINED);
             }
-            let prev = crate::object::js_implicit_this_set(receiver);
+            let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+            let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
             let result = crate::closure::js_closure_call0(getter);
-            crate::object::js_implicit_this_set(prev);
+            crate::object::js_implicit_this_set(prev.get_nanbox_f64());
             return result;
         }
         {
@@ -724,9 +728,11 @@ pub fn closure_get_dynamic_prop(ptr: usize, prop: &str) -> f64 {
                     (acc.get & crate::value::POINTER_MASK) as *const crate::closure::ClosureHeader;
                 if !getter.is_null() {
                     let receiver = crate::value::js_nanbox_pointer(ptr as i64);
-                    let prev = crate::object::js_implicit_this_set(receiver);
+                    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+                    let prev =
+                        this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
                     let result = crate::closure::js_closure_call0(getter);
-                    crate::object::js_implicit_this_set(prev);
+                    crate::object::js_implicit_this_set(prev.get_nanbox_f64());
                     return result;
                 }
             }

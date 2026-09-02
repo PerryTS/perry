@@ -231,9 +231,10 @@ pub(crate) unsafe fn bigint_apply_to_json(value: f64) -> Option<f64> {
     let recv = value_handle.get_nanbox_f64();
     // `toJSON(key)` receives the property key of this BigInt value (#5909).
     let key_f64_arg = super::stringify_tojson_probe::current_to_json_key_arg();
-    let prev_this = crate::object::js_implicit_this_set(recv);
+    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+    let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(recv));
     let result = crate::closure::js_native_call_value(f64::from_bits(method_bits), &key_f64_arg, 1);
-    crate::object::js_implicit_this_set(prev_this);
+    crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
     // The user callback may have installed/removed `Object.prototype.toJSON`.
     invalidate_object_proto_tojson_state();
     Some(result)

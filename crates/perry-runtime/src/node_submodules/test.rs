@@ -805,7 +805,7 @@ extern "C" fn mock_function_invoke(closure: *const ClosureHeader, rest: f64) -> 
     let rest_handle = scope.root_nanbox_f64(rest);
     let arg_handles = scope.root_nanbox_f64_slice(&args);
     let call_args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
-    let previous_this = crate::object::js_implicit_this_set(this_value);
+    let previous_this = scope.root_nanbox_f64(crate::object::js_implicit_this_set(this_value)); // #9445
     let call_result = catch_js(|| unsafe {
         crate::closure::js_native_call_value(
             implementation_handle.get_nanbox_f64(),
@@ -813,7 +813,7 @@ extern "C" fn mock_function_invoke(closure: *const ClosureHeader, rest: f64) -> 
             call_args.len(),
         )
     });
-    crate::object::js_implicit_this_set(previous_this);
+    crate::object::js_implicit_this_set(previous_this.get_nanbox_f64());
 
     match call_result {
         Ok(result) => {

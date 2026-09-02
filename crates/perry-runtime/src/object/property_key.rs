@@ -129,10 +129,11 @@ unsafe fn ordinary_to_primitive_string_key(value: f64) -> Option<f64> {
             continue;
         }
         let bound = crate::closure::clone_closure_rebind_this(method_bits, receiver);
-        let prev_this = crate::object::js_implicit_this_set(receiver);
+        let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+        let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
         let result =
             crate::closure::js_native_call_value(f64::from_bits(bound), std::ptr::null(), 0);
-        crate::object::js_implicit_this_set(prev_this);
+        crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
         if js_value_is_not_object(result) {
             return Some(result);
         }
@@ -373,9 +374,11 @@ pub unsafe extern "C" fn js_super_accessor_get(
                         {
                             if getter_ptr != 0 {
                                 let f: extern "C" fn(f64) -> f64 = std::mem::transmute(getter_ptr);
-                                let prev = crate::object::js_implicit_this_set(receiver);
+                                let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+                                let prev = this_scope
+                                    .root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
                                 let r = f(receiver);
-                                crate::object::js_implicit_this_set(prev);
+                                crate::object::js_implicit_this_set(prev.get_nanbox_f64());
                                 return r;
                             }
                         }
@@ -468,9 +471,11 @@ pub unsafe extern "C" fn js_super_accessor_get(
                             .or_else(|| vtable.getters.get(&getter_alias))
                         {
                             let f: extern "C" fn(f64) -> f64 = std::mem::transmute(getter_ptr);
-                            let prev = crate::object::js_implicit_this_set(receiver);
+                            let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+                            let prev = this_scope
+                                .root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
                             let r = f(receiver);
-                            crate::object::js_implicit_this_set(prev);
+                            crate::object::js_implicit_this_set(prev.get_nanbox_f64());
                             return r;
                         }
                     }
@@ -565,13 +570,14 @@ pub unsafe extern "C" fn js_object_super_call(
     let bound = crate::closure::clone_closure_rebind_this(callee_handle.get_nanbox_u64(), receiver);
     let bound_handle = scope.root_nanbox_u64(bound);
     let receiver = f64::from_bits(receiver_handle.get_heap_word_u64());
-    let prev_this = crate::object::js_implicit_this_set(receiver);
+    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+    let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
     let result = crate::closure::js_native_call_value(
         f64::from_bits(bound_handle.get_nanbox_u64()),
         args_ptr,
         args_len,
     );
-    crate::object::js_implicit_this_set(prev_this);
+    crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
     result
 }
 

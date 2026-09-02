@@ -93,9 +93,10 @@ fn forward_apply(target: f64, this_arg: f64, args_array: f64) -> f64 {
     } else {
         (buf.as_ptr(), buf.len())
     };
-    let prev = crate::object::js_implicit_this_set(this_arg);
+    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+    let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(this_arg));
     let result = unsafe { crate::closure::js_native_call_value(target, ptr, n) };
-    crate::object::js_implicit_this_set(prev);
+    crate::object::js_implicit_this_set(prev.get_nanbox_f64());
     result
 }
 
@@ -178,9 +179,10 @@ pub extern "C" fn js_proxy_apply(proxy_boxed: f64, this_arg: f64, args_array: f6
     if closure.is_null() {
         return throw_type_error("proxy apply trap is not a function");
     }
-    let prev = crate::object::js_implicit_this_set(handler);
+    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+    let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(handler));
     let result = js_closure_call3(closure, target, this_arg, args_array);
-    crate::object::js_implicit_this_set(prev);
+    crate::object::js_implicit_this_set(prev.get_nanbox_f64());
     result
 }
 
@@ -256,9 +258,10 @@ pub extern "C" fn js_proxy_construct(proxy_boxed: f64, args_array: f64, new_targ
     if closure.is_null() {
         return throw_type_error("proxy construct trap is not a function");
     }
-    let prev = crate::object::js_implicit_this_set(handler);
+    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+    let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(handler));
     let result = js_closure_call3(closure, target, args_array, nt);
-    crate::object::js_implicit_this_set(prev);
+    crate::object::js_implicit_this_set(prev.get_nanbox_f64());
     // [[Construct]] must return an Object (spec step 9 of the construct trap).
     if !reflect_value_is_object(result) {
         // Node/V8 wording: `'construct' on proxy: trap returned non-object ('1')`.

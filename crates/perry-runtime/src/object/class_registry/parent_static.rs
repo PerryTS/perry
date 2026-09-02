@@ -1007,12 +1007,14 @@ pub(crate) unsafe fn class_symbol_getter_value(
                     return Some(f64::from_bits(crate::value::TAG_UNDEFINED));
                 }
                 let result = if is_static {
-                    let prev_this = crate::object::js_implicit_this_set(receiver);
+                    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+                    let prev_this =
+                        this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
                     crate::object::static_private_owner_push(receiver);
                     let f: extern "C" fn() -> f64 = std::mem::transmute(getter);
                     let result = f();
                     crate::object::static_private_owner_pop();
-                    crate::object::js_implicit_this_set(prev_this);
+                    crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
                     result
                 } else {
                     let f: extern "C" fn(f64) -> f64 = std::mem::transmute(getter);
@@ -1053,12 +1055,14 @@ pub(crate) unsafe fn class_symbol_setter_apply(
             if let Some(&(_, setter)) = map.get(&(cid, sym_key, is_static)) {
                 if setter != 0 {
                     if is_static {
-                        let prev_this = crate::object::js_implicit_this_set(receiver);
+                        let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+                        let prev_this = this_scope
+                            .root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
                         crate::object::static_private_owner_push(receiver);
                         let f: extern "C" fn(f64) -> f64 = std::mem::transmute(setter);
                         let _ = f(value);
                         crate::object::static_private_owner_pop();
-                        crate::object::js_implicit_this_set(prev_this);
+                        crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
                     } else {
                         let f: extern "C" fn(f64, f64) -> f64 = std::mem::transmute(setter);
                         let _ = f(receiver, value);
@@ -1575,7 +1579,8 @@ pub unsafe extern "C" fn js_class_static_method_call(
         return receiver;
     }
     if let Some((func_ptr, param_count, has_rest)) = lookup_static_method_in_chain(class_id, name) {
-        let prev_this = crate::object::js_implicit_this_set(receiver);
+        let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+        let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
         crate::object::static_private_owner_push(receiver);
         // Receiver-sensitive static `this`: arm the one-shot override so the
         // method prologue (`js_static_this_resolve`) sees the DYNAMIC receiver
@@ -1613,7 +1618,7 @@ pub unsafe extern "C" fn js_class_static_method_call(
         };
         crate::object::static_this_disarm();
         crate::object::static_private_owner_pop();
-        crate::object::js_implicit_this_set(prev_this);
+        crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
         return result;
     }
     // #1787 / #321: not a static METHOD — try a static FIELD holding a
@@ -1667,9 +1672,11 @@ pub unsafe extern "C" fn js_class_static_method_call(
                 let member = f64::from_bits(member.bits());
                 let mv = crate::value::JSValue::from_bits(member.to_bits());
                 if !mv.is_undefined() && !mv.is_null() {
-                    let prev_this = crate::object::js_implicit_this_set(receiver);
+                    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+                    let prev_this =
+                        this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
                     let result = crate::closure::js_native_call_value(member, args_ptr, args_len);
-                    crate::object::js_implicit_this_set(prev_this);
+                    crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
                     return result;
                 }
             }
@@ -1694,9 +1701,11 @@ pub unsafe extern "C" fn js_class_static_method_call(
             // implicit-this slot, so bind it to the subclass receiver for the
             // duration of the call — `NewPromiseCapability(receiver)` then
             // constructs the subclass.
-            let prev_this = crate::object::js_implicit_this_set(receiver);
+            let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+            let prev_this =
+                this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
             let result = crate::closure::js_native_call_value(static_val, args_ptr, args_len);
-            crate::object::js_implicit_this_set(prev_this);
+            crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
             return result;
         }
     }
@@ -1771,9 +1780,11 @@ pub unsafe extern "C" fn js_class_static_method_call(
             // not a real inherited member.
             && member.to_bits() != closure_val.to_bits()
         {
-            let prev_this = crate::object::js_implicit_this_set(receiver);
+            let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+            let prev_this =
+                this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
             let result = crate::closure::js_native_call_value(member, args_ptr, args_len);
-            crate::object::js_implicit_this_set(prev_this);
+            crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
             return result;
         }
     }

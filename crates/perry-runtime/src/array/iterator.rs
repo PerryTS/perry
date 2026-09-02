@@ -481,8 +481,9 @@ fn async_from_sync_call_raw(iter: f64, method: &[u8], args: &[f64]) -> Result<Op
         true
     };
 
+    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
     let prev_this = if callable {
-        Some(crate::object::js_implicit_this_set(iter))
+        Some(this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(iter)))
     } else {
         None
     };
@@ -524,7 +525,7 @@ fn async_from_sync_call_raw(iter: f64, method: &[u8], args: &[f64]) -> Result<Op
         }
     };
     if let Some(prev) = prev_this {
-        crate::object::js_implicit_this_set(prev);
+        crate::object::js_implicit_this_set(prev.get_nanbox_f64());
     }
     crate::exception::js_try_end();
     result
@@ -547,7 +548,8 @@ fn async_from_sync_call_cached_raw(
             b"Async-from-sync iterator method is not callable",
         ));
     }
-    let prev_this = crate::object::js_implicit_this_set(iter);
+    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+    let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(iter));
     let trap_buf = crate::exception::js_try_push();
     let outcome = crate::exception::arm_trap_and_run(trap_buf, || {
         let args_ptr = if args.is_empty() {
@@ -565,7 +567,7 @@ fn async_from_sync_call_cached_raw(
             Err(exc)
         }
     };
-    crate::object::js_implicit_this_set(prev_this);
+    crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
     crate::exception::js_try_end();
     result
 }
@@ -848,10 +850,11 @@ pub extern "C" fn js_get_async_iterator(value: f64) -> f64 {
             if !is_callable_value(method) {
                 throw_iterator_method_not_callable();
             }
-            let prev_this = crate::object::js_implicit_this_set(value);
+            let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+            let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(value));
             let iterator =
                 unsafe { crate::closure::js_native_call_value(method, std::ptr::null(), 0) };
-            crate::object::js_implicit_this_set(prev_this);
+            crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
             // GetIterator step 5: the result must be an Object.
             if !is_async_iterator_object(iterator) {
                 throw_iterator_result_not_object();
@@ -1301,9 +1304,10 @@ fn throw_iterator_result_not_object() -> ! {
 pub extern "C" fn js_iterator_next_result(iter_f64: f64) -> f64 {
     let next = named_field(iter_f64, b"next");
     let result = if is_callable_value(next) {
-        let prev_this = crate::object::js_implicit_this_set(iter_f64);
+        let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+        let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(iter_f64));
         let result = unsafe { crate::closure::js_native_call_value(next, std::ptr::null(), 0) };
-        crate::object::js_implicit_this_set(prev_this);
+        crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
         result
     } else if next.to_bits() == crate::value::TAG_UNDEFINED
         && is_builtin_iterator_class_id(crate::value::js_nanbox_get_pointer(iter_f64) as usize)
@@ -1363,9 +1367,10 @@ pub extern "C" fn js_iterator_close_if_not_done(iter_f64: f64, done_f64: f64) ->
         crate::closure::throw_not_callable();
     }
 
-    let prev_this = crate::object::js_implicit_this_set(iter_f64);
+    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+    let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(iter_f64));
     let result = unsafe { crate::closure::js_native_call_value(ret, std::ptr::null(), 0) };
-    crate::object::js_implicit_this_set(prev_this);
+    crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
     if !is_object_like_value(result) {
         throw_iterator_result_not_object();
     }
@@ -1439,9 +1444,11 @@ pub(crate) fn sync_iterator_to_array_if_not_async(iter_f64: f64) -> Option<*mut 
         } else {
             // Call(next, iterator) — bind `this` like `js_iterator_to_array`
             // does for its stored-closure path (#9019).
-            let prev_this = crate::object::js_implicit_this_set(iter_f64);
+            let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+            let prev_this =
+                this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(iter_f64));
             let r = closure::js_closure_call1(next_ptr, f64::from_bits(TAG_UNDEFINED));
-            crate::object::js_implicit_this_set(prev_this);
+            crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
             r
         };
         if crate::promise::js_value_is_promise(step) != 0 {
@@ -1477,9 +1484,10 @@ pub(crate) fn call_symbol_async_iterator(value: f64) -> Option<f64> {
     if !is_callable_value(method) {
         return None;
     }
-    let prev_this = crate::object::js_implicit_this_set(value);
+    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+    let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(value));
     let iterator = unsafe { crate::closure::js_native_call_value(method, std::ptr::null(), 0) };
-    crate::object::js_implicit_this_set(prev_this);
+    crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
     if iterator.to_bits() == crate::value::TAG_UNDEFINED {
         None
     } else {
@@ -1633,12 +1641,14 @@ pub extern "C" fn js_iterator_to_array(iter_f64: f64) -> *mut ArrayHeader {
             // Call(next, iterator): bind `this` for the stored-closure path
             // exactly like `js_iterator_next_result` — a user-assigned
             // `it.next = function () { … }` may read `this` (#9019).
-            let prev_this = crate::object::js_implicit_this_set(iter_h.get_nanbox_f64());
+            let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+            let prev_this = this_scope
+                .root_nanbox_f64(crate::object::js_implicit_this_set(iter_h.get_nanbox_f64()));
             let r = closure::js_closure_call1(
                 js_nanbox_get_pointer(next_h.get_nanbox_f64()) as *const closure::ClosureHeader,
                 f64::from_bits(TAG_UNDEFINED),
             );
-            crate::object::js_implicit_this_set(prev_this);
+            crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
             r
         };
         // IteratorNext (ECMA-262 §7.4.2 step 3): if Type(result) is not
@@ -1755,9 +1765,11 @@ fn js_async_iterator_to_array(iter_f64: f64) -> *mut ArrayHeader {
         } else {
             // Call(next, iterator) — bind `this` for the stored-closure path
             // (#9019), mirroring `js_iterator_to_array`.
-            let prev_this = crate::object::js_implicit_this_set(iter_f64);
+            let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+            let prev_this =
+                this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(iter_f64));
             let r = closure::js_closure_call1(next_ptr, f64::from_bits(TAG_UNDEFINED));
-            crate::object::js_implicit_this_set(prev_this);
+            crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
             r
         };
         let Some(step_result) = settled_promise_value(step) else {

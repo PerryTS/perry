@@ -842,9 +842,10 @@ pub(crate) fn suppress_uncaught_drain<F: FnOnce() -> f64>(f: F) -> f64 {
 }
 
 pub(crate) fn with_implicit_this<F: FnOnce() -> f64>(this_arg: f64, f: F) -> f64 {
-    let prev = crate::object::js_implicit_this_set(this_arg);
+    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+    let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(this_arg));
     let result = f();
-    crate::object::js_implicit_this_set(prev);
+    crate::object::js_implicit_this_set(prev.get_nanbox_f64());
     result
 }
 

@@ -677,7 +677,9 @@ pub unsafe extern "C" fn js_super_method_call_dynamic(
         if let Some((func_ptr, param_count, has_rest)) =
             super::class_registry::lookup_static_method_in_chain(parent_cid, name)
         {
-            let prev_this = crate::object::js_implicit_this_set(this_value);
+            let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+            let prev_this =
+                this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(this_value));
             crate::object::static_this_arm_if_unarmed(this_value);
             let result = if has_rest {
                 // Mirror `js_class_static_method_call`'s rest bundling: fixed
@@ -709,7 +711,7 @@ pub unsafe extern "C" fn js_super_method_call_dynamic(
                 super::class_registry::call_static_method(func_ptr, args_ptr, args_len, param_count)
             };
             crate::object::static_this_disarm();
-            crate::object::js_implicit_this_set(prev_this);
+            crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
             return result;
         }
     }

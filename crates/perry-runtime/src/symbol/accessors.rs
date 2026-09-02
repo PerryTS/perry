@@ -169,9 +169,10 @@ pub(super) unsafe fn invoke_symbol_accessor_getter(get_bits: u64, receiver: f64)
     if closure.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
-    let prev = crate::object::js_implicit_this_set(receiver);
+    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
+    let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
     let result = crate::closure::js_closure_call0(closure);
-    crate::object::js_implicit_this_set(prev);
+    crate::object::js_implicit_this_set(prev.get_nanbox_f64());
     result
 }
 
