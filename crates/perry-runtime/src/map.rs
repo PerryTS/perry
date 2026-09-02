@@ -2899,13 +2899,48 @@ pub extern "C" fn js_map_entry_key_at(map: *const MapHeader, idx: u32) -> f64 {
         // exactly. The walkers themselves never come here: they read through
         // `js_map_entry_key_raw_at`, which never compacts (a compaction per
         // observed hole is what made delete-during-`for…of` O(n) per delete).
-        compact_if_holey(map as *mut MapHeader);
-        if idx >= (*map).size {
+        //
+        // While a `forEach` walk is active the squeeze is DEFERRED instead —
+        // that walk's raw counter is not epoch-rebased, so compacting under it
+        // (a callback that deletes an earlier entry and then reads `map[j]`)
+        // shifted the survivors below its counter and it skipped entries. The
+        // live index is translated by stepping over holes, and the outermost
+        // walk's completion performs the deferred squeeze as it already does
+        // for the delete path.
+        let Some(raw) = live_index_to_raw(map, idx) else {
             return f64::from_bits(TAG_UNDEFINED);
-        }
+        };
         let entries = entries_ptr(map);
-        ptr::read(entries.add(idx as usize * 2))
+        ptr::read(entries.add(raw as usize * 2))
     }
+}
+
+/// Resolve a LIVE entry index onto the raw entries buffer for the live-index
+/// accessors: squeeze first when no `forEach` walk is active (so raw == live
+/// and the read is O(1)), otherwise leave the layout alone and step over the
+/// tombstones (O(idx)). `None` past the live size.
+unsafe fn live_index_to_raw(map: *const MapHeader, idx: u32) -> Option<u32> {
+    if idx >= (*map).size {
+        return None;
+    }
+    if !map_foreach_is_active(map) {
+        compact_if_holey(map as *mut MapHeader);
+        return Some(idx);
+    }
+    let used = (*map).used;
+    let entries = entries_ptr(map);
+    let mut live = 0u32;
+    let mut raw = 0u32;
+    while raw < used {
+        if ptr::read(entries.add(raw as usize * 2)).to_bits() != MAP_HOLE_KEY_BITS {
+            if live == idx {
+                return Some(raw);
+            }
+            live += 1;
+        }
+        raw += 1;
+    }
+    None
 }
 
 /// RAW twin of `js_map_entry_key_at` for the raw-index walkers (the `for…of`
@@ -2940,12 +2975,11 @@ pub extern "C" fn js_map_entry_value_at(map: *const MapHeader, idx: u32) -> f64 
     }
     unsafe {
         // Live-index accessor — see `js_map_entry_key_at`.
-        compact_if_holey(map as *mut MapHeader);
-        if idx >= (*map).size {
+        let Some(raw) = live_index_to_raw(map, idx) else {
             return f64::from_bits(TAG_UNDEFINED);
-        }
+        };
         let entries = entries_ptr(map);
-        ptr::read(entries.add(idx as usize * 2 + 1))
+        ptr::read(entries.add(raw as usize * 2 + 1))
     }
 }
 

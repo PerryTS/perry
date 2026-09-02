@@ -394,3 +394,63 @@ fn clear_truncates_the_squeeze_history() {
     );
     assert_eq!(js_set_value_raw_at(set, 0), 7.0);
 }
+
+extern "C" fn delete_earlier_then_live_read(
+    _closure: *const crate::closure::ClosureHeader,
+    value: f64,
+    _value_again: f64,
+    collection: f64,
+) -> f64 {
+    FOREACH_DELETE_VISITS.with(|visits| visits.borrow_mut().push(value.to_bits()));
+    if value == 5.0 {
+        let set = crate::value::js_nanbox_get_pointer(collection) as *mut SetHeader;
+        js_set_delete(set, 1.0);
+        js_set_delete(set, 2.0);
+        assert_eq!(js_set_value_at(set, 0), 0.0, "live index 0 is value 0");
+        assert_eq!(
+            js_set_value_at(set, 1),
+            3.0,
+            "live index 1 skips the two holes"
+        );
+        unsafe {
+            assert_ne!(
+                (*set).used,
+                (*set).size,
+                "the walk's raw layout was left alone"
+            );
+        }
+    }
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+#[test]
+fn a_live_index_read_inside_foreach_defers_the_squeeze_and_skips_nothing() {
+    let expected = (0..20).map(|value| value as f64).collect::<Vec<_>>();
+    let set = js_set_alloc(32);
+    for &value in &expected {
+        js_set_add(set, value);
+    }
+    js_set_foreach(
+        set,
+        foreach_callback(delete_earlier_then_live_read as *const u8),
+        f64::from_bits(crate::value::TAG_UNDEFINED),
+    );
+    assert_eq!(
+        take_foreach_delete_visits(),
+        expected,
+        "every element visited exactly once"
+    );
+    assert_eq!(js_set_size(set), 18);
+    unsafe {
+        assert_eq!(
+            (*set).used,
+            (*set).size,
+            "the outermost walk's completion squeezed"
+        );
+    }
+    js_set_delete(set, 3.0);
+    assert_eq!(js_set_value_at(set, 1), 4.0);
+    unsafe {
+        assert_eq!((*set).used, (*set).size);
+    }
+}
