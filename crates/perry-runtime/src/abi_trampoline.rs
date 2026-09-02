@@ -15,10 +15,12 @@
 //! Because EVERY argument is an `f64`, the platform C ABI is fully determined:
 //! the first 8 floating-point args go in FP argument registers and the rest are
 //! spilled to a 16-byte-aligned stack area. This module implements that call
-//! directly with inline assembly for the two hosted architectures (aarch64 +
-//! x86-64); other targets fall back to a fixed-arity dispatch good to 16 args
-//! (no Perry target other than the two asm ones exercises high-arity dynamic
-//! ctor dispatch today).
+//! directly in assembly for the two hosted architectures (aarch64 + x86-64) —
+//! as naked functions that carry their own frame pointer and unwind
+//! description, because the unwinder has to step through them while the
+//! callee runs (#9446; see the comment above the trampolines). Other targets
+//! fall back to a fixed-arity dispatch good to 16 args (no Perry target other
+//! than the two asm ones exercises high-arity dynamic ctor dispatch today).
 
 /// Call `func_ptr` (a `extern "C" double(double, …)` with `args.len()` f64
 /// params) passing every element of `args` as an f64 argument. Returns the f64
@@ -31,7 +33,14 @@
 pub(crate) unsafe fn call_all_f64(func_ptr: usize, args: &[f64]) -> f64 {
     #[cfg(target_arch = "aarch64")]
     {
-        call_all_f64_aarch64(func_ptr, args)
+        let (reg, stacked, stack_bytes) = split_register_and_stacked(args);
+        call_all_f64_aarch64(
+            func_ptr,
+            reg.as_ptr(),
+            stacked.as_ptr(),
+            stacked.len(),
+            stack_bytes,
+        )
     }
     // NOTE: gated to NON-Windows x86-64. The asm below is the SysV ABI (FP args
     // in xmm0..xmm7, no shadow space). The Windows x64 ABI passes FP args in
@@ -39,7 +48,14 @@ pub(crate) unsafe fn call_all_f64(func_ptr: usize, args: &[f64]) -> f64 {
     // mis-pass 5+ args. Win64 falls through to the portable fallback instead.
     #[cfg(all(target_arch = "x86_64", not(target_os = "windows")))]
     {
-        call_all_f64_x86_64(func_ptr, args)
+        let (reg, stacked, stack_bytes) = split_register_and_stacked(args);
+        call_all_f64_x86_64(
+            func_ptr,
+            reg.as_ptr(),
+            stacked.as_ptr(),
+            stacked.len(),
+            stack_bytes,
+        )
     }
     #[cfg(not(any(
         target_arch = "aarch64",
@@ -50,164 +66,199 @@ pub(crate) unsafe fn call_all_f64(func_ptr: usize, args: &[f64]) -> f64 {
     }
 }
 
-/// AAPCS64: the first 8 f64 args go in v0–v7; args 9+ are spilled to the stack
-/// in order, each occupying 8 bytes, with the stack 16-byte aligned at the call.
-#[cfg(target_arch = "aarch64")]
-#[inline(never)]
-unsafe fn call_all_f64_aarch64(func_ptr: usize, args: &[f64]) -> f64 {
-    use core::arch::asm;
-
-    let n = args.len();
-    // Register args (up to 8); pad missing with 0.0 (callee won't read them).
+/// Both asm ABIs (AAPCS64 and SysV x86-64) agree on the split: the first eight
+/// f64 args ride in FP argument registers, the rest are spilled to the stack in
+/// order, eight bytes each, with the stack pointer 16-byte aligned at the call.
+/// Register slots past `args.len()` are padded with `0.0` — the callee has no
+/// such parameter and never reads them.
+#[cfg(any(
+    target_arch = "aarch64",
+    all(target_arch = "x86_64", not(target_os = "windows"))
+))]
+#[inline]
+fn split_register_and_stacked(args: &[f64]) -> ([f64; 8], &[f64], usize) {
     let mut reg = [0.0f64; 8];
-    for (i, slot) in reg.iter_mut().enumerate() {
-        if i < n {
-            *slot = args[i];
-        }
-    }
-
-    // Stack-spilled args: args[8..]. Bytes = stacked_count * 8, rounded up to a
-    // 16-byte multiple so `sp` stays 16-aligned across the `blr`.
-    let stacked = if n > 8 { &args[8..] } else { &[][..] };
-    let stacked_count = stacked.len();
-    let raw_bytes = stacked_count * 8;
-    let stack_bytes = (raw_bytes + 15) & !15;
-
-    let ret: f64;
-    asm!(
-        // Stash the current sp in a CALLEE-SAVED register (x20, declared as a
-        // clobber below so the compiler saves/restores it around this asm). The
-        // callee preserves callee-saved registers, so x20 survives the `blr` —
-        // restoring sp from a caller-saved copy or by re-adding a clobbered
-        // `stack_bytes` would corrupt the stack.
-        "mov x20, sp",
-        // Reserve aligned stack space for the spilled args.
-        "sub sp, sp, {stack_bytes}",
-        // Copy spilled args from the source pointer into [sp + i*8].
-        "mov {i}, xzr",
-        "cbz {cnt}, 3f",
-        "2:",
-        "ldr {tmp}, [{src}, {i}, lsl #3]",
-        "str {tmp}, [sp, {i}, lsl #3]",
-        "add {i}, {i}, #1",
-        "cmp {i}, {cnt}",
-        "b.lo 2b",
-        "3:",
-        "blr {func}",
-        // Restore sp from the callee-saved copy.
-        "mov sp, x20",
-        func = in(reg) func_ptr,
-        src = in(reg) stacked.as_ptr(),
-        cnt = in(reg) stacked_count,
-        stack_bytes = in(reg) stack_bytes,
-        i = out(reg) _,
-        tmp = out(reg) _,
-        out("x20") _,
-        // FP argument registers v0–v7.
-        inout("d0") reg[0] => ret,
-        inout("d1") reg[1] => _,
-        inout("d2") reg[2] => _,
-        inout("d3") reg[3] => _,
-        inout("d4") reg[4] => _,
-        inout("d5") reg[5] => _,
-        inout("d6") reg[6] => _,
-        inout("d7") reg[7] => _,
-        // Caller-saved registers the callee may clobber (AAPCS64). x0–x17 and
-        // x30(lr) are call-clobbered GPRs; v8–v15 lower 64 bits are
-        // callee-saved (preserved), v16–v31 are caller-saved.
-        lateout("x0") _, lateout("x1") _, lateout("x2") _, lateout("x3") _,
-        lateout("x4") _, lateout("x5") _, lateout("x6") _, lateout("x7") _,
-        lateout("x8") _, lateout("x9") _, lateout("x10") _, lateout("x11") _,
-        lateout("x12") _, lateout("x13") _, lateout("x14") _, lateout("x15") _,
-        lateout("x16") _, lateout("x17") _, lateout("x30") _,
-        lateout("v16") _, lateout("v17") _, lateout("v18") _, lateout("v19") _,
-        lateout("v20") _, lateout("v21") _, lateout("v22") _, lateout("v23") _,
-        lateout("v24") _, lateout("v25") _, lateout("v26") _, lateout("v27") _,
-        lateout("v28") _, lateout("v29") _, lateout("v30") _, lateout("v31") _,
-    );
-    ret
+    let in_regs = args.len().min(reg.len());
+    reg[..in_regs].copy_from_slice(&args[..in_regs]);
+    let stacked = if args.len() > reg.len() {
+        &args[reg.len()..]
+    } else {
+        &[][..]
+    };
+    // A 16-byte multiple keeps the stack aligned across the call.
+    let stack_bytes = (stacked.len() * 8 + 15) & !15;
+    (reg, stacked, stack_bytes)
 }
 
-/// SysV x86-64: the first 8 f64 args go in xmm0–xmm7; args 9+ are spilled to the
-/// stack (each 8 bytes), with the stack 16-byte aligned at the `call`. `al` must
-/// hold the number of vector registers used for a (possibly) variadic callee;
-/// Perry callees are non-variadic, but setting `al` is harmless and matches the
-/// ABI requirement for safety.
+// ---------------------------------------------------------------------------
+// The two asm trampolines are NAKED functions that set up their own frame
+// pointer and describe it to the unwinder, rather than inline `asm!` blocks
+// inside an ordinary Rust function. That is the whole point of their shape,
+// and the reason is #9446.
+//
+// The trampoline has to lower the stack pointer by a runtime-computed amount
+// (the spilled-argument area) and leave it there ACROSS the call. Inside an
+// `asm!` block the compiler does not know that, so the frame description it
+// emits for the surrounding function still says "CFA = rsp + 32" (measured on
+// x86-64 Linux, where LLVM keeps no frame pointer) while rsp is really
+// `stack_bytes` lower. Every unwinder that steps through the trampoline while
+// the callee runs — the GC's native-root walk (`gc/roots/stack_maps.rs`, an
+// `_Unwind_Backtrace`), the exception transport (`_Unwind_RaiseException`),
+// gdb — then reads the trampoline's return address from the wrong slot. What it
+// finds there is a spilled argument or a saved register, so the walk either
+// stops (silently dropping every frame ABOVE the trampoline: the collector
+// never sees those frames' roots and frees or moves what they hold) or, when
+// the garbage is not a mapped address, faults inside libgcc's fallback frame
+// probe. The second shape is `PERRY_GC_SCHEDULE_SEED=1 PERRY_GC_SCHEDULE_RATE=1`
+// on the Claude Code bundle at safepoint 4266: a minor at a loop poll inside a
+// dynamically constructed class whose synthesized constructor takes more than
+// eight params. aarch64 never showed it only because LLVM happened to keep a
+// frame pointer there, so the CFA was `x29`-relative and immune to `sp`.
+//
+// With a naked function the frame IS the code below: `rbp`/`x29` is set from
+// the entry stack pointer before anything moves, the CFA is defined off that
+// register, and the callee restores it like any callee-saved register. The
+// dynamic `rsp`/`sp` adjustment is then invisible to unwinding, on every
+// target and under every frame-pointer setting, and the frame record is also
+// exactly what a frame-pointer chain walk expects.
+// `tests::the_unwinder_steps_through_a_trampoline_with_stacked_args` pins the
+// contract from inside a stacked-argument callee.
+// ---------------------------------------------------------------------------
+
+/// The unwind directives inside the naked trampolines. DWARF CFI is what the
+/// Itanium unwinder — the GC's native-root walk and the exception transport on
+/// every ELF and Mach-O host — reads; COFF targets unwind through
+/// `.pdata`/`.xdata` instead, their assembler has no CFI region to put these
+/// in, and the runtime does not walk native frames there (shadow frames), so
+/// the directives are dropped and the frame-pointer prologue stays.
+#[cfg(all(
+    not(target_os = "windows"),
+    any(
+        target_arch = "aarch64",
+        all(target_arch = "x86_64", not(target_os = "windows"))
+    )
+))]
+macro_rules! cfi {
+    ($directive:literal) => {
+        $directive
+    };
+}
+#[cfg(all(target_os = "windows", target_arch = "aarch64"))]
+macro_rules! cfi {
+    ($directive:literal) => {
+        ""
+    };
+}
+
+/// AAPCS64: `x0` = callee, `x1` = the eight register args, `x2`/`x3` = the
+/// spilled args and their count, `x4` = the 16-byte-rounded spill area size.
+/// Register args go in `d0`–`d7`; args 9+ are copied to `[sp + i*8]` in order.
+#[cfg(target_arch = "aarch64")]
+#[unsafe(naked)]
+unsafe extern "C" fn call_all_f64_aarch64(
+    func_ptr: usize,
+    reg: *const f64,
+    stacked: *const f64,
+    stacked_count: usize,
+    stack_bytes: usize,
+) -> f64 {
+    core::arch::naked_asm!(
+        // Frame record first, before sp moves by a runtime amount.
+        // Naked functions get no CFI region from rustc; this body is its own.
+        cfi!(".cfi_startproc"),
+        "stp x29, x30, [sp, #-16]!",
+        cfi!(".cfi_def_cfa_offset 16"),
+        cfi!(".cfi_offset w30, -8"),
+        cfi!(".cfi_offset w29, -16"),
+        "mov x29, sp",
+        cfi!(".cfi_def_cfa w29, 16"),
+        // Reserve the (16-byte multiple) spill area and copy args 9+ into it.
+        "sub sp, sp, x4",
+        "mov x9, xzr",
+        "cbz x3, 3f",
+        "2:",
+        "ldr x10, [x2, x9, lsl #3]",
+        "str x10, [sp, x9, lsl #3]",
+        "add x9, x9, #1",
+        "cmp x9, x3",
+        "b.lo 2b",
+        "3:",
+        // FP argument registers, loaded last so nothing above clobbers them.
+        "ldp d0, d1, [x1]",
+        "ldp d2, d3, [x1, #16]",
+        "ldp d4, d5, [x1, #32]",
+        "ldp d6, d7, [x1, #48]",
+        "blr x0",
+        // The callee preserved x29; drop the spill area through it.
+        "mov sp, x29",
+        "ldp x29, x30, [sp], #16",
+        cfi!(".cfi_def_cfa wsp, 0"),
+        cfi!(".cfi_restore w30"),
+        cfi!(".cfi_restore w29"),
+        "ret",
+        cfi!(".cfi_endproc"),
+    )
+}
+
+/// SysV x86-64: `rdi` = callee, `rsi` = the eight register args, `rdx`/`rcx` =
+/// the spilled args and their count, `r8` = the 16-byte-rounded spill area
+/// size. Register args go in `xmm0`–`xmm7`; args 9+ are copied to
+/// `[rsp + i*8]` in order. `al` carries the vector-register count a variadic
+/// callee would want; Perry callees are non-variadic, but setting it is
+/// harmless and matches the ABI requirement.
+///
+/// Alignment: `rsp ≡ 8 (mod 16)` at entry, `≡ 0` after the `push`, unchanged
+/// by the 16-byte-multiple `sub`, so the `call` leaves the callee entry at
+/// `≡ 8` per SysV.
 #[cfg(all(target_arch = "x86_64", not(target_os = "windows")))]
-#[inline(never)]
-unsafe fn call_all_f64_x86_64(func_ptr: usize, args: &[f64]) -> f64 {
-    use core::arch::asm;
-
-    let n = args.len();
-    let mut reg = [0.0f64; 8];
-    for (i, slot) in reg.iter_mut().enumerate() {
-        if i < n {
-            *slot = args[i];
-        }
-    }
-
-    let stacked = if n > 8 { &args[8..] } else { &[][..] };
-    let stacked_count = stacked.len();
-    // Stack must be 16-aligned at the call instruction. The `call` pushes an
-    // 8-byte return address, so before the `call` we need `sp % 16 == 0`. We
-    // reserve a 16-byte multiple for the spilled args; if `stacked_count` is
-    // odd, the natural 8-byte total would misalign, so round up.
-    let raw_bytes = stacked_count * 8;
-    let stack_bytes = (raw_bytes + 15) & !15;
-
-    let ret: f64;
-    asm!(
-        // Stash the pre-adjust rsp in r12 (CALLEE-SAVED, declared as a clobber
-        // below so the compiler saves/restores it). The callee preserves r12, so
-        // the sp restore survives the callee clobbering every caller-saved
-        // register (including any holding `stack_bytes`). We use r12 rather than
-        // rbx because LLVM reserves rbx internally and rejects it as an explicit
-        // inline-asm operand; r12 is an equivalent callee-saved scratch.
-        "mov r12, rsp",
-        // Reserve space for spilled args, then force rsp 16-aligned so that the
-        // `call` (which pushes the 8-byte return address) leaves the callee
-        // entry with rsp ≡ 8 (mod 16), per SysV. `stack_bytes` is a 16-multiple,
-        // so aligning rsp down by clearing the low 4 bits keeps room for all
-        // spilled slots (they are written relative to the post-align rsp).
-        "sub rsp, {stack_bytes}",
-        "and rsp, -16",
-        "xor {i:e}, {i:e}",
-        "test {cnt}, {cnt}",
+#[unsafe(naked)]
+unsafe extern "C" fn call_all_f64_x86_64(
+    func_ptr: usize,
+    reg: *const f64,
+    stacked: *const f64,
+    stacked_count: usize,
+    stack_bytes: usize,
+) -> f64 {
+    core::arch::naked_asm!(
+        // Frame pointer first, before rsp moves by a runtime amount.
+        // Naked functions get no CFI region from rustc; this body is its own.
+        cfi!(".cfi_startproc"),
+        "push rbp",
+        cfi!(".cfi_def_cfa_offset 16"),
+        cfi!(".cfi_offset rbp, -16"),
+        "mov rbp, rsp",
+        cfi!(".cfi_def_cfa_register rbp"),
+        // Reserve the (16-byte multiple) spill area and copy args 9+ into it.
+        "sub rsp, r8",
+        "xor eax, eax",
+        "test rcx, rcx",
         "jz 3f",
         "2:",
-        "mov {tmp}, qword ptr [{src} + {i}*8]",
-        "mov qword ptr [rsp + {i}*8], {tmp}",
-        "inc {i}",
-        "cmp {i}, {cnt}",
+        "mov r9, qword ptr [rdx + rax*8]",
+        "mov qword ptr [rsp + rax*8], r9",
+        "inc rax",
+        "cmp rax, rcx",
         "jb 2b",
         "3:",
-        "call {func}",
-        "mov rsp, r12",
-        func = in(reg) func_ptr,
-        src = in(reg) stacked.as_ptr(),
-        cnt = in(reg) stacked_count,
-        stack_bytes = in(reg) stack_bytes,
-        i = out(reg) _,
-        tmp = out(reg) _,
-        out("r12") _,
-        inout("xmm0") reg[0] => ret,
-        inout("xmm1") reg[1] => _,
-        inout("xmm2") reg[2] => _,
-        inout("xmm3") reg[3] => _,
-        inout("xmm4") reg[4] => _,
-        inout("xmm5") reg[5] => _,
-        inout("xmm6") reg[6] => _,
-        inout("xmm7") reg[7] => _,
-        // Caller-saved GPRs the callee may clobber (SysV). `al` (in rax) is set
-        // to the FP-register count for variadic safety. xmm8–xmm15 are
-        // caller-saved on SysV too.
-        inout("rax") 8u64 => _, lateout("rcx") _, lateout("rdx") _, lateout("rsi") _,
-        lateout("rdi") _, lateout("r8") _, lateout("r9") _, lateout("r10") _,
-        lateout("r11") _,
-        lateout("xmm8") _, lateout("xmm9") _, lateout("xmm10") _, lateout("xmm11") _,
-        lateout("xmm12") _, lateout("xmm13") _, lateout("xmm14") _, lateout("xmm15") _,
-    );
-    ret
+        // FP argument registers, loaded last so nothing above clobbers them.
+        "movsd xmm0, qword ptr [rsi]",
+        "movsd xmm1, qword ptr [rsi + 8]",
+        "movsd xmm2, qword ptr [rsi + 16]",
+        "movsd xmm3, qword ptr [rsi + 24]",
+        "movsd xmm4, qword ptr [rsi + 32]",
+        "movsd xmm5, qword ptr [rsi + 40]",
+        "movsd xmm6, qword ptr [rsi + 48]",
+        "movsd xmm7, qword ptr [rsi + 56]",
+        "mov eax, 8",
+        "call rdi",
+        // The callee preserved rbp; drop the spill area through it.
+        "mov rsp, rbp",
+        "pop rbp",
+        cfi!(".cfi_def_cfa rsp, 8"),
+        cfi!(".cfi_restore rbp"),
+        "ret",
+        cfi!(".cfi_endproc"),
+    )
 }
 
 /// Portable fallback for non-asm targets (incl. Windows x64, whose ABI differs
