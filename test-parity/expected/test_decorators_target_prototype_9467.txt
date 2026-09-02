@@ -1,0 +1,30 @@
+method:make -> Service ctor===Service:false value:function
+method:run -> Service.prototype ctor===Service:true value:function
+param:make:0 -> Service ctor===Service:false
+param:run:0 -> Service.prototype ctor===Service:true
+param:undefined:0 -> Service ctor===Service:false
+prop:counter -> Service ctor===Service:false
+prop:repo -> Service.prototype ctor===Service:true
+Service.constructor === Function true
+Service.constructor === Service false
+Sub.constructor === Function true
+typeof Service.constructor function
+Service.constructor.name Function
+Service.prototype.constructor === Service true
+Sub.prototype.constructor === Sub true
+instance.constructor === Service true
+sub instance.constructor === Sub true
+'constructor' in Service true
+hasOwn constructor false
+design:type via prototype true
+design:type static via class true
+design:paramtypes ctor true
+design:paramtypes method via prototype true
+design:paramtypes static via class true
+via:target on prototype T:repo
+via:ctor on class C:repo
+via:ctor method on class M:run
+param:via:ctor on class 0
+via:ctor inherited on Sub C:repo
+via:target inherited on Sub.prototype T:repo
+nothing for repo on Function undefined

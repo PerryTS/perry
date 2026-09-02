@@ -36,7 +36,11 @@ supports two paths:
   `Reflect.getOwnMetadataKeys`, `Reflect.deleteMetadata`, and
   `@Reflect.metadata(...)` are available. Perry emits
   `design:paramtypes` for decorated classes/methods and `design:type`
-  for decorated properties.
+  for decorated properties. A member decorator receives the same
+  `target` `tsc` hands it: `Class.prototype` for an instance member and
+  the constructor for a static one, so the NestJS idiom
+  `Reflect.defineMetadata(key, value, target.constructor)` lands on the
+  class, and `Class.constructor === Function` as in node.
 - **Compile-time-only transforms.** The bundled `@log` transform is the
   canonical example — it rewrites a decorated method into a wrapper that
   prints entry/exit at compile time, with zero runtime decorator

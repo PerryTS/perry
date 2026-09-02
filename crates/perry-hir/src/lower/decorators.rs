@@ -64,16 +64,16 @@ pub(crate) fn append_legacy_decorator_init_for_class(
     }
 
     for method in &class.methods {
-        append_method_decorator_init(ctx, init, class, method);
+        append_method_decorator_init(ctx, init, class, method, false);
     }
     for method in &class.static_methods {
-        append_method_decorator_init(ctx, init, class, method);
+        append_method_decorator_init(ctx, init, class, method, true);
     }
     for field in &class.fields {
-        append_property_decorator_init(ctx, init, class, field);
+        append_property_decorator_init(ctx, init, class, field, false);
     }
     for field in &class.static_fields {
-        append_property_decorator_init(ctx, init, class, field);
+        append_property_decorator_init(ctx, init, class, field, true);
     }
 
     append_class_decorator_invocations(
@@ -93,29 +93,60 @@ fn field_has_legacy_decorators(field: &ClassField) -> bool {
     !field.decorators.is_empty()
 }
 
+/// The `target` a legacy member decorator receives (#9467).
+///
+/// `tsc` emits `__decorate([...], C.prototype, "m", desc)` for an INSTANCE
+/// member and `__decorate([...], C, "s", desc)` for a STATIC one, and the
+/// `design:*` metadata rides the same target. Perry used to hand every member
+/// decorator the class itself; NestJS-style code
+/// (`Reflect.defineMetadata(k, v, target.constructor)`) only kept working
+/// because the runtime answered `C.constructor === C` — a second divergence
+/// that cancelled the first (node: `C.constructor === Function`). Both were
+/// fixed together; the runtime half is the `constructor` clause of
+/// `resolve_proto_chain_field_inner` in
+/// `perry-runtime/src/object/class_registry/prototype_objects.rs`.
+///
+/// `Class.prototype` is read as an ordinary `PropertyGet` on the class ref,
+/// which the class-ref arm of `js_object_get_field_by_name` materializes as
+/// the reflective decl-prototype object (`class_decl_prototype_value`) — the
+/// same object `C.prototype` answers with everywhere else, so
+/// `target === C.prototype` and `target.constructor === C` both hold.
+fn member_decorator_target(class: &Class, is_static: bool) -> Expr {
+    if is_static {
+        Expr::ClassRef(class.name.clone())
+    } else {
+        Expr::PropertyGet {
+            object: Box::new(Expr::ClassRef(class.name.clone())),
+            property: "prototype".to_string(),
+            byte_offset: 0,
+        }
+    }
+}
+
 fn append_property_decorator_init(
     ctx: &mut LoweringContext,
     out: &mut Vec<Stmt>,
     class: &Class,
     field: &ClassField,
+    is_static: bool,
 ) {
     if field.decorators.is_empty() {
         return;
     }
 
-    // NOTE: TypeScript's `emitDecoratorMetadata` stores instance-member
-    // `design:type` on `Class.prototype`, and class-transformer reads it back
-    // with `Reflect.getMetadata("design:type", SomeClass.prototype, prop)`.
-    // Perry stores it on the class constructor (`ClassRef`) here; the runtime
-    // metadata store folds class-prototype lookup targets onto the same class
-    // key (see `proxy/metadata.rs::normalize_target_bits`), so both the
-    // historical `getMetadata(..., Class, prop)` reads (locked in by
-    // test_decorators_legacy_property_metadata.ts) and the library's
-    // `Class.prototype` reads resolve to this entry.
+    // `design:type` rides the decorator's own target — `Class.prototype` for
+    // an instance member, the constructor for a static one (#9467) — which is
+    // where class-transformer reads it back
+    // (`Reflect.getMetadata("design:type", SomeClass.prototype, prop)`). The
+    // runtime metadata store folds prototype targets onto the class key (see
+    // `proxy/metadata.rs::normalize_target_bits`), so the historical
+    // `getMetadata(..., Class, prop)` reads locked in by
+    // test_decorators_legacy_property_metadata.ts keep resolving too.
+    let target = member_decorator_target(class, is_static);
     out.push(Stmt::Expr(Expr::ReflectDefineMetadata {
         key: Box::new(Expr::String("design:type".to_string())),
         value: Box::new(type_metadata_expr(&field.ty)),
-        target: Box::new(Expr::ClassRef(class.name.clone())),
+        target: Box::new(target.clone()),
         property_key: Some(Box::new(Expr::String(field.name.clone()))),
     }));
 
@@ -123,10 +154,7 @@ fn append_property_decorator_init(
         ctx,
         out,
         &field.decorators,
-        vec![
-            Expr::ClassRef(class.name.clone()),
-            Expr::String(field.name.clone()),
-        ],
+        vec![target, Expr::String(field.name.clone())],
     );
 }
 
@@ -135,11 +163,17 @@ fn append_method_decorator_init(
     out: &mut Vec<Stmt>,
     class: &Class,
     method: &Function,
+    is_static: bool,
 ) {
     if !method_has_legacy_decorators(method) {
         return;
     }
 
+    // #9467: `Class.prototype` for an instance method, the constructor for a
+    // static one — the target of the method decorator, its parameter
+    // decorators, and their `design:paramtypes` alike (one `__decorate` call
+    // in `tsc`'s emit carries all three).
+    let target = member_decorator_target(class, is_static);
     if method.params.iter().any(|p| !p.decorators.is_empty()) || !method.decorators.is_empty() {
         let param_types = method
             .params
@@ -149,7 +183,7 @@ fn append_method_decorator_init(
         out.push(Stmt::Expr(Expr::ReflectDefineMetadata {
             key: Box::new(Expr::String("design:paramtypes".to_string())),
             value: Box::new(Expr::Array(param_types)),
-            target: Box::new(Expr::ClassRef(class.name.clone())),
+            target: Box::new(target.clone()),
             property_key: Some(Box::new(Expr::String(method.name.clone()))),
         }));
     }
@@ -160,7 +194,7 @@ fn append_method_decorator_init(
             out,
             &param.decorators,
             vec![
-                Expr::ClassRef(class.name.clone()),
+                target.clone(),
                 Expr::String(method.name.clone()),
                 Expr::Number(index as f64),
             ],
@@ -187,11 +221,7 @@ fn append_method_decorator_init(
         ctx,
         out,
         &method.decorators,
-        vec![
-            Expr::ClassRef(class.name.clone()),
-            Expr::String(method.name.clone()),
-            descriptor,
-        ],
+        vec![target, Expr::String(method.name.clone()), descriptor],
     );
 }
 

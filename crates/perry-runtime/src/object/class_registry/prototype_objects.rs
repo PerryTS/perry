@@ -403,18 +403,30 @@ unsafe fn inherited_proto_accessor_value(
 /// door for #1021/NestJS; this is that door's chain-walk twin.
 ///
 /// The exclusion is keyed on `class_instance_has_member` — the exact
-/// "is this a prototype method / getter / setter of the chain" predicate — and
-/// NOT on "skip the decl-prototype entirely". A blanket skip also removed
-/// `C.constructor`, which the decl-prototype carries as an ordinary data field,
-/// and that is load-bearing today for a reason outside this issue: perry hands
-/// a PROPERTY DECORATOR the class itself where the spec hands it
-/// `Class.prototype`, so NestJS-style `Reflect.defineMetadata(k, v,
-/// target.constructor)` relies on `C.constructor === C`. Node says
-/// `C.constructor === Function`, so perry has two divergences that cancel;
-/// removing either one alone breaks decorator metadata
+/// "is this a prototype method / getter / setter of the chain" predicate —
+/// plus the `constructor` back-edge, and NOT on "skip the decl-prototype
+/// entirely": a blanket skip would also hide a user's own
+/// `Object.defineProperty(C.prototype, ...)` data field from this walk.
+///
+/// #9467: `constructor` is the one decl-prototype data field that is NOT an
+/// instance member by `class_instance_has_member`'s definition, and walking
+/// into it from the constructor side answered `C.constructor === C`. Node says
+/// `C.constructor === Function` — a constructor object's own chain is
+/// `C → Function.prototype`, with no back-edge to `C`; only
+/// `C.prototype.constructor` and `(new C()).constructor` are `C`. The
+/// `Function` answer already existed as the tail fallback of the class-ref arm
+/// in `get_field_by_name.rs`; this walk simply returned first. The wrong
+/// answer used to be load-bearing: perry handed a decorator on an INSTANCE
+/// member the class itself where the spec hands it `Class.prototype`, so
+/// NestJS-style `Reflect.defineMetadata(k, v, target.constructor)` landed on
+/// `C` only because `C.constructor === C`. Two divergences that cancelled;
+/// fixing either alone broke decorator metadata
 /// (`test_decorators_nest_common_canary`,
-/// `test_decorators_legacy_property_metadata`). The decorator-target defect is
-/// the one to fix, and it is not this issue.
+/// `test_decorators_legacy_property_metadata`). Both halves were fixed
+/// together — the decorator target in
+/// `perry-hir/src/lower/decorators.rs::member_decorator_target` and the
+/// `constructor` clause below; `test_decorators_target_prototype_9467` pins
+/// the pair.
 ///
 /// The `class_prototype_object` step below is never skipped: for a subclass of
 /// a class-EXPRESSION value it holds the parent CLASS OBJECT (#1788/#6552),
@@ -432,7 +444,11 @@ unsafe fn resolve_proto_chain_field_inner(
         let key_ptr = crate::string::string_data(key);
         let key_len = (*key).byte_len as usize;
         std::str::from_utf8(std::slice::from_raw_parts(key_ptr, key_len))
-            .map(|name| crate::object::class_instance_has_member(class_id, name))
+            .map(|name| {
+                // #9467: `C.prototype.constructor` is `C`; `C.constructor` is
+                // `Function` (the class-ref arm's tail fallback), never `C`.
+                name == "constructor" || crate::object::class_instance_has_member(class_id, name)
+            })
             .unwrap_or(false)
     };
     let mut cid = class_id;
