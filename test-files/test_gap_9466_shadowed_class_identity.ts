@@ -222,3 +222,38 @@ function loopCaptures() {
   return fs.map((f) => f()).join(",") + "|" + new Cp().v();
 }
 console.log("loop-captures:", loopCaptures());
+
+// --- 9. instanceof across a BLOCK boundary, and at the THIRD depth ---------
+// Arm 4's instanceof rows sit at two-scope depth, which the name-keyed
+// disambiguation already handled; these two are where identity actually broke.
+class Ib { tag() { return "ib-top"; } }
+const ibTop = new Ib();
+let ibInnerInst: any = null;
+let ibInnerCls: any = null;
+{
+  class Ib { tag() { return "ib-block"; } }
+  ibInnerInst = new Ib();
+  ibInnerCls = Ib;
+}
+console.log("blk-io same-class:", ibInnerCls === Ib);
+console.log("blk-io inner-is-top:", ibInnerInst instanceof Ib);
+console.log("blk-io top-is-inner:", ibTop instanceof ibInnerCls);
+console.log("blk-io proto:", Object.getPrototypeOf(ibInnerInst) === Ib.prototype);
+console.log("blk-io tags:", ibTop.tag(), ibInnerInst.tag());
+
+function ioDepth() {
+  class Id { tag() { return "id-1"; } }
+  function inner() {
+    class Id { tag() { return "id-2"; } }
+    return { inst: new Id(), cls: Id as any };
+  }
+  const deep = inner();
+  return [
+    deep.inst.tag(),
+    String(deep.cls === Id),
+    String(deep.inst instanceof Id),
+    String(new Id() instanceof deep.cls),
+  ].join(",");
+}
+class Id { tag() { return "id-top"; } }
+console.log("depth-io:", ioDepth(), new Id().tag());
