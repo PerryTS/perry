@@ -1082,54 +1082,85 @@ fn ensure_reader_started() {
     std::thread::spawn(move || {
         let stdin = io::stdin();
         let mut reader = stdin.lock();
-        let mut byte = [0u8; 1];
-        let mut line_buf: Vec<u8> = Vec::with_capacity(256);
+        // #9489: read a BLOCK per syscall, and cut `'data'` chunks at the
+        // block boundary. This loop used to `read(2)` ONE BYTE at a time and
+        // flush a chunk at every `\n`, so 1 MB of `"line\n"` cost 1,048,576
+        // read syscalls and produced 200,000 `'data'` events in 2.10 s where
+        // Node delivers 16 in 0.04 s.
+        //
+        // 64 KiB is Node's own pipe read size, and `read` still returns as
+        // soon as ANY bytes are available — it does not wait to fill the
+        // buffer — so a lone keystroke is still delivered immediately and
+        // three spaced writes are still three chunks.
+        let mut buf = [0u8; 65536];
+        // Bytes accumulated for the CURRENT read: in cooked flowing / pull
+        // mode this becomes one `'data'` chunk per read; in line mode it is
+        // the partial line carried to the next `\n`.
+        let mut line_buf: Vec<u8> = Vec::with_capacity(65536);
+        // Raw-mode chunks staged for one lock acquisition per read instead of
+        // one per byte. The per-BYTE chunking itself is preserved on purpose:
+        // the keypress path reassembles escape sequences from single-byte
+        // chunks (`pump::coalesce_escape_sequences`), and a paste must still
+        // fire one `'keypress'` per character.
+        let mut raw_chunks: Vec<Vec<u8>> = Vec::new();
         loop {
-            match reader.read(&mut byte) {
+            let n = match reader.read(&mut buf) {
                 Ok(0) => break, // EOF
-                Ok(_) => {
-                    if STDIN_DESTROYED.load(Ordering::Acquire) {
-                        break;
-                    }
-                    if RAW_MODE.load(Ordering::Acquire) {
-                        // In raw mode, queue a single-byte chunk. Multi-byte
-                        // escape sequences (e.g. arrow keys = "\x1b[A")
-                        // arrive as three separate chunks; the keypress
-                        // parser on the drain side reassembles them.
-                        if let Ok(mut q) = PENDING_DATA.lock() {
-                            q.push(vec![byte[0]]);
-                        }
-                    } else if STDIN_DATA_FLOWING.load(Ordering::Acquire)
-                        || STDIN_PULL_MODE.load(Ordering::Acquire)
-                    {
-                        // Cooked flowing mode (#5227): a `process.stdin.on('data')`
-                        // listener is attached but raw mode is off. Deliver input
-                        // as 'data' chunks (newline INCLUDED, matching Node's
-                        // line-buffered cooked tty / piped-stream chunks) rather
-                        // than routing it to the readline 'line' queue.
-                        line_buf.push(byte[0]);
-                        if byte[0] == b'\n' {
-                            let chunk = std::mem::take(&mut line_buf);
-                            if let Ok(mut q) = PENDING_DATA.lock() {
-                                q.push(chunk);
-                            }
-                            line_buf = Vec::with_capacity(256);
-                        }
-                    } else if byte[0] == b'\n' {
-                        // Strip trailing CR for Windows CRLF input.
-                        if line_buf.last() == Some(&b'\r') {
-                            line_buf.pop();
-                        }
-                        let line = String::from_utf8_lossy(&line_buf).into_owned();
-                        line_buf.clear();
-                        if let Ok(mut q) = PENDING_LINES.lock() {
-                            q.push(line);
-                        }
-                    } else {
-                        line_buf.push(byte[0]);
-                    }
-                }
+                Ok(n) => n,
                 Err(_) => break,
+            };
+            if STDIN_DESTROYED.load(Ordering::Acquire) {
+                break;
+            }
+            // The mode atomics are still consulted PER BYTE, exactly as
+            // before: a mode flip from the main thread mid-block must land on
+            // the same byte it used to. Only the syscall and the chunk
+            // boundary changed.
+            for &b in &buf[..n] {
+                if RAW_MODE.load(Ordering::Acquire) {
+                    raw_chunks.push(vec![b]);
+                } else if STDIN_DATA_FLOWING.load(Ordering::Acquire)
+                    || STDIN_PULL_MODE.load(Ordering::Acquire)
+                {
+                    // Cooked flowing mode (#5227): a `process.stdin.on('data')`
+                    // listener is attached but raw mode is off. Deliver input
+                    // as 'data' chunks (newline INCLUDED, matching Node's
+                    // piped-stream chunks) rather than routing it to the
+                    // readline 'line' queue. #9489: the chunk is cut at the
+                    // end of this read, NOT at each newline.
+                    line_buf.push(b);
+                } else if b == b'\n' {
+                    // Strip trailing CR for Windows CRLF input.
+                    if line_buf.last() == Some(&b'\r') {
+                        line_buf.pop();
+                    }
+                    let line = String::from_utf8_lossy(&line_buf).into_owned();
+                    line_buf.clear();
+                    if let Ok(mut q) = PENDING_LINES.lock() {
+                        q.push(line);
+                    }
+                } else {
+                    line_buf.push(b);
+                }
+            }
+            if !raw_chunks.is_empty() {
+                if let Ok(mut q) = PENDING_DATA.lock() {
+                    q.append(&mut raw_chunks);
+                }
+                raw_chunks.clear();
+            }
+            // One `'data'` chunk per read(2) — Node's contract. Line splitting
+            // is the CONSUMER's job (readline does its own, above); imposing
+            // it on the shared `'data'` path is what #9489 fixed.
+            if !line_buf.is_empty()
+                && !RAW_MODE.load(Ordering::Acquire)
+                && (STDIN_DATA_FLOWING.load(Ordering::Acquire)
+                    || STDIN_PULL_MODE.load(Ordering::Acquire))
+            {
+                if let Ok(mut q) = PENDING_DATA.lock() {
+                    q.push(std::mem::take(&mut line_buf));
+                }
+                line_buf = Vec::with_capacity(65536);
             }
         }
         // Flush any trailing bytes not terminated by a newline. In cooked
