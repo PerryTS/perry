@@ -231,6 +231,12 @@ fn payload_to_settlement(payload: PendingPayload) -> (bool, u64, u32) {
 }
 
 fn remove_token_from_registry(token_ptr: usize, promise: usize) {
+    // #9552: the registry entry was the token promise's root; the constructor
+    // pin must not outlive it, or a cancelled token (no settlement, so no
+    // `js_promise_resolve` to release it) would leak its promise forever.
+    if promise != 0 {
+        unsafe { super::then::release_native_pin(promise as *mut Promise) };
+    }
     let mut registry = crate::gc::lock_gc_root_registry(registry());
     registry.tokens.retain(|&candidate| candidate != token_ptr);
     registry.pending.retain(|&candidate| candidate != token_ptr);
@@ -506,7 +512,12 @@ pub extern "C" fn js_native_async_process_pending() -> i32 {
         };
 
         let scope = crate::gc::RuntimeHandleScope::new();
-        let promise_handle = scope.root_raw_mut_ptr(promise as *mut Promise);
+        // #9552: the token carried the address as a bare usize; verify it
+        // still names a promise before rooting and settling it.
+        let promise_handle = scope.root_raw_mut_ptr(super::native_promise_from_raw(
+            promise,
+            "native async token pump",
+        ));
         let handle_roots: Vec<_> = handles
             .iter()
             .map(|handle| scope.root_nanbox_u64(handle.value_bits))

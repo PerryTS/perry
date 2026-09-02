@@ -75,7 +75,7 @@
 use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use super::types::{GcHeader, GC_FLAG_ARENA, GC_FLAG_PINNED};
+use super::types::{GcHeader, GC_FLAG_ARENA, GC_FLAG_PINNED, GC_HEADER_SIZE};
 
 crate::perry_thread_local! {
     static COPYING_WALK_PHASE: Cell<Option<&'static str>> =
@@ -266,6 +266,29 @@ pub(crate) unsafe fn pin_constrains_copying_minor_for_tests(header: *mut GcHeade
 /// # Safety
 ///
 /// As [`pin_object`].
+/// Pin the non-young object whose USER pointer is `user_ptr` (#9552).
+///
+/// The address arithmetic lives here, next to the flag it serves, so callers
+/// that hold a `*mut Promise` (or any other user pointer) do not each grow a
+/// bare `GcHeader` cast. Malloc-resident and old-arena objects only: the
+/// young-pin latch is deliberately not consulted (see `pin_object_non_young`).
+#[inline]
+pub unsafe fn pin_user_ptr_non_young(user_ptr: *mut u8) {
+    if user_ptr.is_null() {
+        return;
+    }
+    pin_object_non_young(user_ptr.sub(GC_HEADER_SIZE) as *mut GcHeader);
+}
+
+/// Release the pin on the object whose USER pointer is `user_ptr` (#9552).
+#[inline]
+pub unsafe fn unpin_user_ptr(user_ptr: *mut u8) {
+    if user_ptr.is_null() {
+        return;
+    }
+    unpin_object(user_ptr.sub(GC_HEADER_SIZE) as *mut GcHeader);
+}
+
 #[inline]
 pub unsafe fn unpin_object(header: *mut GcHeader) {
     if header.is_null() {

@@ -1541,12 +1541,9 @@ unsafe fn spawn_impl(closure_val: f64) -> *mut crate::promise::Promise {
     // in PENDING_THREAD_RESULTS (no scanner) until drain — a nursery
     // resident would be destroyed by the copied-minor from-space flip even
     // while pinned. Malloc space is non-moving and sweeps honor the pin.
+    // #9552: the cross-thread constructor pins the promise; the settlement in
+    // `js_thread_process_pending` releases it.
     let promise = crate::promise::js_promise_new_cross_thread();
-
-    // Pin the promise so GC doesn't collect it while the thread is running.
-    // Malloc-resident (see above), so this does not arm the young-pin latch.
-    let promise_header = (promise as *mut u8).sub(gc::GC_HEADER_SIZE) as *mut gc::GcHeader;
-    gc::pin_object_non_young(promise_header);
 
     let promise_usize = promise as usize;
     // #6185: the promise lives in the SPAWNING agent's heap, so that is the
@@ -1681,16 +1678,6 @@ pub fn thread_job_begin() {
     ACTIVE_THREAD_JOBS.fetch_add(1, Ordering::SeqCst);
 }
 
-/// Pin `promise` so GC keeps it alive while a background job runs; the matching
-/// unpin happens in [`js_thread_process_pending`] when the result resolves.
-///
-/// # Safety
-/// `promise` must be a live promise allocation preceded by an 8-byte GcHeader.
-pub unsafe fn pin_promise(promise: *mut crate::promise::Promise) {
-    let header = (promise as *mut u8).sub(gc::GC_HEADER_SIZE) as *mut gc::GcHeader;
-    gc::pin_object_non_young(header);
-}
-
 /// Resolve the promise at `promise_usize` with a UTF-8 string on the agent that
 /// owns it. Routes through the same pending-result path `spawn` uses (which
 /// unpins the promise, deserializes the value into that agent's arena,
@@ -1787,11 +1774,13 @@ pub extern "C" fn js_thread_process_pending() -> i32 {
     // `queue_thread_result` (deadlock on a re-entrant lock of the same Mutex).
     for item in mine {
         unsafe {
-            let promise = item.promise_ptr as *mut crate::promise::Promise;
-
-            // Unpin the promise now that we're settling it.
-            let promise_header = (promise as *mut u8).sub(gc::GC_HEADER_SIZE) as *mut gc::GcHeader;
-            gc::unpin_object(promise_header);
+            // #9552: the address crossed the thread boundary as a bare usize;
+            // verify it still names a promise. The constructor's pin is
+            // released by the settlement below, not here.
+            let promise = crate::promise::native_promise_from_raw(
+                item.promise_ptr,
+                "perry/thread result drain",
+            );
 
             // #6185: a worker that returned a non-transferable value (e.g.
             // `spawn(() => new Map())`) can't throw on its own thread (no

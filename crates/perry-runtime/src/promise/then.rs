@@ -53,13 +53,33 @@ pub(crate) fn js_promise_new_with_parent(parent: *mut Promise) -> *mut Promise {
 }
 
 /// Allocate a Promise that will cross a thread boundary as a raw address
-/// (`spawn`, `Atomics.waitAsync`): pinned by the caller and referenced only
-/// by a `usize` in the global PENDING_THREAD_RESULTS queue, which no root
-/// scanner visits. A nursery resident in that situation is destroyed by the
-/// copied-minor from-space flip regardless of its PIN flag (the flip resets
-/// eden/survivor blocks wholesale; only root-reachable pins force the
-/// fallback). Malloc space is non-moving and both sweep paths honor
-/// GC_FLAG_PINNED, so these promises are allocated there unconditionally.
+/// (`spawn`, `Atomics.waitAsync`, every stdlib `fetch`/db/ws request that
+/// settles through the stdlib pump): referenced only by a `usize` inside a
+/// worker future or a pending-result queue, which no root scanner visits.
+///
+/// Two properties follow, and this constructor owns both (#9552):
+///
+///   * **Non-moving.** A nursery resident is destroyed by the copied-minor
+///     from-space flip regardless of its PIN flag (the flip resets
+///     eden/survivor blocks wholesale; only root-reachable pins force the
+///     fallback). Malloc space is non-moving, so these promises are
+///     allocated there unconditionally.
+///   * **Rooted until it settles.** Nothing on the JS side points AT a
+///     pending promise whose only consumer is an `await` continuation —
+///     `P.on_fulfilled = step` and `P.next = N` are edges OUT of `P`, and the
+///     worker's `usize` is invisible to the collector. Both sweep paths honor
+///     `GC_FLAG_PINNED`, so the constructor pins here and the settlement
+///     paths (`js_promise_resolve` / `js_promise_reject`) release the pin the
+///     moment the native side is done with the address. Before this lived
+///     here, the pin was the CALLER's job, and ~110 stdlib call sites
+///     (`fetch` among them) never took it: a full collection landing while a
+///     request was in flight freed the promise, and the completion then
+///     resolved whatever the allocator had put in its place.
+///
+/// The pin is one flag bit on an object this function is already writing,
+/// and the release is one byte test on the settlement path; neither touches
+/// the young-pin latch that pessimises copying minors (malloc residents are
+/// never young-arena).
 #[no_mangle]
 pub extern "C" fn js_promise_new_cross_thread() -> *mut Promise {
     js_promise_new_with_parent_impl(ptr::null_mut(), true)
@@ -89,6 +109,14 @@ fn js_promise_new_with_parent_impl(parent: *mut Promise, force_malloc: bool) -> 
     unsafe {
         // GC_STORE_AUDIT(INIT): initializes freshly allocated Promise storage before the promise is published.
         ptr::write(promise, Promise::new());
+        if force_malloc {
+            // #9552: see `js_promise_new_cross_thread`. The object is
+            // malloc-resident (never young-arena), so the non-young pin is
+            // the right one — it must not arm the copying minor's young-pin
+            // latch.
+            crate::gc::pin_user_ptr_non_young(promise as *mut u8);
+            (*promise).native_pinned = 1;
+        }
         let trigger_async_id = parent_handle.with_mut_ptr::<Promise, _>(|parent| {
             if parent.is_null() {
                 crate::async_hooks::execution_async_id_u64()
@@ -203,6 +231,20 @@ pub extern "C" fn js_promise_result(promise: *mut Promise) -> f64 {
 }
 
 /// Resolve a promise with a value
+/// #9552 — release the cross-thread pin `js_promise_new_cross_thread` took,
+/// if this promise holds one. Called from every state transition out of
+/// `Pending` and from the token registry when a token is dropped without a
+/// settlement. Idempotent: the byte is cleared with the pin, so a second call
+/// is one load and a not-taken branch. Ordinary (arena) promises pay exactly
+/// that load; the byte shares `state`'s cache line.
+#[inline]
+pub(crate) unsafe fn release_native_pin(promise: *mut Promise) {
+    if (*promise).native_pinned != 0 {
+        (*promise).native_pinned = 0;
+        crate::gc::unpin_user_ptr(promise as *mut u8);
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn js_promise_resolve(promise: *mut Promise, value: f64) {
     if promise.is_null() {
@@ -214,6 +256,7 @@ pub extern "C" fn js_promise_resolve(promise: *mut Promise, value: f64) {
         }
         super::async_step::trace_async_settle(promise, "fulfill");
         (*promise).state = PromiseState::Fulfilled;
+        release_native_pin(promise);
         store_promise_jsvalue_slot(promise, std::ptr::addr_of_mut!((*promise).value), value);
         crate::async_hooks::promise_resolve((*promise).async_id);
         crate::v8::promise_hook_settled(promise);
@@ -422,6 +465,7 @@ pub extern "C" fn js_promise_reject(promise: *mut Promise, reason: f64) {
         }
         super::async_step::trace_async_settle(promise, "reject");
         (*promise).state = PromiseState::Rejected;
+        release_native_pin(promise);
         store_promise_jsvalue_slot(promise, std::ptr::addr_of_mut!((*promise).reason), reason);
         crate::async_hooks::promise_resolve((*promise).async_id);
         crate::v8::promise_hook_settled(promise);

@@ -127,7 +127,7 @@ mod pin;
 pub(crate) use pin::test_reset_young_pin_latch;
 pub use pin::{
     copied_minor_preflight_skips, copied_minor_preflight_walks, pin_object, pin_object_non_young,
-    unpin_object,
+    pin_user_ptr_non_young, unpin_object, unpin_user_ptr,
 };
 use pin::{note_preflight_skipped, note_preflight_walked, young_pin_latch_armed};
 /// Software prefetch helpers for the collector's pointer-chasing loops
