@@ -65,13 +65,13 @@ fn map_entry_reads_are_inline_with_the_helper_as_the_fallback() {
             && key_ir.contains("map_entry_key.fast")
             && key_ir.contains("icmp eq i8")
             && key_ir.contains("load double")
-            && key_ir.contains("call double @js_map_entry_key_at("),
+            && key_ir.contains("call double @js_map_entry_key_raw_at("),
         "the key read should be inline with the helper as fallback:\n{key_ir}"
     );
     let value_ir = entry_read_ir(true);
     assert!(
         value_ir.contains("map_entry_value.fast")
-            && value_ir.contains("call double @js_map_entry_value_at("),
+            && value_ir.contains("call double @js_map_entry_value_raw_at("),
         "the value read should be inline with the helper as fallback:\n{value_ir}"
     );
     // The value slot is the second word of the 16-byte entry.
