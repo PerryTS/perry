@@ -2,12 +2,48 @@
 // spelled `month` or a `weekday`) must localize the field names AND the field
 // order — `5. Januar 2026`, `2026年1月5日`, `lundi 5 janvier` — not the old
 // US-hardcoded `January 5, 2026`. Perry routes these name-bearing combos
-// through icu4x's dynamic FieldSetBuilder; numeric-only combos keep the
-// existing assembly and aren't asserted here. Both entry points are covered:
+// through icu4x's dynamic FieldSetBuilder. #9451 extends the same CLDR route
+// to the default numeric Y/M/D field set, including semantic parts. Both entry
+// points are covered:
 // `Intl.DateTimeFormat(...).format()` and `Date.prototype.toLocaleDateString`.
 //
 // Compared byte-for-byte against `node --experimental-strip-types`.
 const d = new Date(Date.UTC(2026, 0, 5, 14, 37, 9));
+
+// The ECMA-402 no-fields default is numeric year/month/day. Cover both sides
+// of the padding boundary: January 5 has single-digit month/day, while
+// November 15 has double-digit month/day.
+const defaultDates = [
+  new Date(Date.UTC(2026, 0, 5, 14, 37, 9)),
+  new Date(Date.UTC(2026, 10, 15, 14, 37, 9)),
+];
+for (const loc of ["de-DE", "fr-FR", "ja-JP", "en-GB", "en-US"]) {
+  for (const date of defaultDates) {
+    const dtf = new Intl.DateTimeFormat(loc, { timeZone: "UTC" });
+    console.log(loc + " | default | " + dtf.format(date));
+    console.log(loc + " | parts   | " + JSON.stringify(dtf.formatToParts(date)));
+    console.log(
+      loc + " | method  | " + date.toLocaleDateString(loc, { timeZone: "UTC" }),
+    );
+  }
+}
+
+// Controls: style-driven requests already use ICU's CLDR patterns and must
+// remain unchanged when the numeric component path is enabled.
+const styleControls: Array<[string, Opt]> = [
+  ["de-DE", { dateStyle: "short" }],
+  ["fr-FR", { dateStyle: "long" }],
+  ["ja-JP", { timeStyle: "short" }],
+  ["en-GB", { dateStyle: "medium", timeStyle: "short" }],
+  ["en-US", { dateStyle: "full" }],
+];
+for (const [loc, opt] of styleControls) {
+  console.log(
+    loc +
+      " | style   | " +
+      new Intl.DateTimeFormat(loc, { ...opt, timeZone: "UTC" }).format(d),
+  );
+}
 
 type Opt = Intl.DateTimeFormatOptions;
 const cases: Array<[string, Opt]> = [

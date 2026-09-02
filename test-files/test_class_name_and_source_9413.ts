@@ -66,6 +66,40 @@ console.log("expr-toString:", String(class Anon { y = 2; }));
 console.log("subclass-toString:", String(class ExtNamed extends Named {}));
 console.log("objmethod-toString:", String(({ m() { return 1; } }).m));
 
+// #9468: class member values retain their exact MethodDefinition source even
+// though Perry compiles them as raw vtable/static/accessor symbols rather than
+// ordinary closure bodies.
+class MemberSource {
+  m() { return 1; }
+  static sm() { return 2; }
+  get value() { return 3; }
+  set value(v) { void v; }
+  async am() { return 4; }
+  *gm() { yield 5; }
+  async *agm() { yield 6; }
+}
+const memberDescriptor = Object.getOwnPropertyDescriptor(MemberSource.prototype, "value")!;
+console.log("method-String:", String(MemberSource.prototype.m));
+console.log("method-toString:", MemberSource.prototype.m.toString());
+console.log("method-template:", `${MemberSource.prototype.m}`);
+console.log("static-method:", String(MemberSource.sm));
+console.log("getter-source:", String(memberDescriptor.get));
+console.log("setter-source:", String(memberDescriptor.set));
+console.log("async-method:", String(MemberSource.prototype.am));
+console.log("generator-method:", String(MemberSource.prototype.gm));
+console.log("async-generator-method:", String(MemberSource.prototype.agm));
+
+// Object-literal accessors use SetFunctionName with the `get`/`set` prefix.
+const objectAccessors = {
+  get g() { return 1; },
+  set s(v) { void v; },
+};
+console.log(
+  "object-accessor-names:",
+  Object.getOwnPropertyDescriptor(objectAccessors, "g")!.get!.name,
+  Object.getOwnPropertyDescriptor(objectAccessors, "s")!.set!.name,
+);
+
 // util.inspect / console.log of a class object.
 console.log("direct:", Klass);
 console.log("inspect:", inspect(Klass));

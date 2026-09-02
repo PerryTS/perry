@@ -44,6 +44,10 @@ pub use registry::{
     CLOSURE_MAGIC, NO_THIS_REBIND_FLAG,
 };
 
+pub(crate) use dispatch::{
+    bound_method_source_func_ptr, coerce_call_this, rebind_explicit_this,
+    reify_function_method_value, reset_throw_not_callable_counter,
+};
 pub use dispatch::{
     clean_closure_ptr, dispatch_bound_function, dispatch_bound_method, get_valid_func_ptr,
     js_closure_call0, js_closure_call1, js_closure_call10, js_closure_call11, js_closure_call12,
@@ -52,10 +56,6 @@ pub use dispatch::{
     js_closure_call5, js_closure_call6, js_closure_call7, js_closure_call8, js_closure_call9,
     js_closure_call_apply_with_spread, js_closure_call_array, js_function_bind,
     js_native_call_value, throw_not_callable, DirectCall1, DirectCall2, DirectCall3, DirectCall4,
-};
-pub(crate) use dispatch::{
-    coerce_call_this, rebind_explicit_this, reify_function_method_value,
-    reset_throw_not_callable_counter,
 };
 pub use unbox::{js_closure_unbox_callee_checked, js_closure_unbox_callee_checked_rebind};
 

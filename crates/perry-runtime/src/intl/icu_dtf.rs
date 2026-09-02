@@ -10,11 +10,15 @@
 use icu_datetime::fieldsets;
 use icu_datetime::fieldsets::builder::{DateFields, FieldSetBuilder};
 use icu_datetime::input::{Date, DateTime, Time};
-use icu_datetime::options::{Length, TimePrecision};
+use icu_datetime::options::{Alignment, Length, TimePrecision, YearStyle};
 use icu_datetime::preferences::HourCycle;
 use icu_datetime::DateTimeFormatter;
 use icu_datetime::DateTimeFormatterPreferences;
 use icu_locale_core::Locale;
+use writeable::{Part, PartsWrite, Writeable};
+
+mod default_numeric_patterns;
+use default_numeric_patterns::YMD_PATTERNS;
 
 /// dateStyle / timeStyle length.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -177,9 +181,13 @@ pub(crate) struct CompReq<'a> {
     pub has_year: bool,
     pub has_month: bool,
     pub has_day: bool,
+    /// `year` option value (`numeric`/`2-digit`), or `None` when absent.
+    pub year_style: Option<&'a str>,
     /// `month` option value (`numeric`/`2-digit`/`short`/`long`/`narrow`), or
     /// `None` when month is absent.
     pub month_style: Option<&'a str>,
+    /// `day` option value (`numeric`/`2-digit`), or `None` when absent.
+    pub day_style: Option<&'a str>,
     /// `weekday` option value (`short`/`long`/`narrow`), or `None` when absent.
     pub weekday_style: Option<&'a str>,
     pub has_hour: bool,
@@ -191,17 +199,21 @@ pub(crate) struct CompReq<'a> {
 
 /// Format an explicit-component request via icu4x's dynamic `FieldSetBuilder`.
 ///
-/// Only combos icu's *semantic* field sets reproduce faithfully are handled:
-/// a date part must carry a spelled month (`short`/`long`) or a weekday (icu
-/// gets the localized name + field order right). A **purely numeric** date is
-/// deliberately rejected (returns `None`): its minimal-digit CLDR pattern
-/// (`5.1.2026` for de) can't be expressed by icu's `Short` length, which pads
-/// and truncates the year (`05.01.26`) — the caller's numeric assembly owns
-/// that. `narrow` and structurally-inexpressible field combos also return
-/// `None` for the fallback.
+/// Only combos icu's semantic field sets reproduce faithfully are handled: a
+/// date part must carry a spelled month (`short`/`long`), a weekday, or the
+/// ECMA-402 default numeric Y/M/D set. The latter uses CLDR's classical `yMd`
+/// pattern (see `format_default_numeric_parts`); semantic `Short` is not
+/// equivalent because it pads German/Japanese fields. `narrow` and
+/// structurally-inexpressible field combos still return `None` for fallback.
 pub(crate) fn format_components(req: &CompReq) -> Option<String> {
     let has_weekday = req.weekday_style.is_some();
     let has_date = req.has_year || req.has_month || req.has_day || has_weekday;
+    let has_time = req.has_hour || req.has_minute || req.has_second;
+    let numeric_ymd = req.year_style == Some("numeric")
+        && req.month_style == Some("numeric")
+        && req.day_style == Some("numeric")
+        && !has_weekday
+        && !has_time;
 
     // Name-bearing = a spelled month or a weekday; only these route to icu.
     let month_len = match req.month_style {
@@ -216,9 +228,18 @@ pub(crate) fn format_components(req: &CompReq) -> Option<String> {
     };
     let name_bearing = month_len.is_some() || weekday_len.is_some();
 
-    // Reject narrow (no semantic-fieldset equivalent) and purely numeric dates.
+    // Reject narrow (no semantic-fieldset equivalent) and numeric component
+    // combinations other than the default Y/M/D set.
     if matches!(req.month_style, Some("narrow")) || matches!(req.weekday_style, Some("narrow")) {
         return None;
+    }
+    if numeric_ymd {
+        return format_default_numeric_parts(req).map(|parts| {
+            parts
+                .into_iter()
+                .map(|(_, value)| value)
+                .collect::<String>()
+        });
     }
     if has_date && !name_bearing {
         return None;
@@ -287,6 +308,204 @@ pub(crate) fn format_components(req: &CompReq) -> Option<String> {
         (false, false) => return None,
     };
     Some(normalize(&formatted))
+}
+
+#[derive(Default)]
+struct DatePartsSink {
+    active: Vec<Part>,
+    parts: Vec<(&'static str, String)>,
+}
+
+impl std::fmt::Write for DatePartsSink {
+    fn write_str(&mut self, value: &str) -> std::fmt::Result {
+        let kind = self
+            .active
+            .iter()
+            .rev()
+            .find(|part| part.category == "datetime")
+            .map(|part| part.value)
+            .unwrap_or("literal");
+        if let Some((last_kind, last_value)) = self.parts.last_mut() {
+            if *last_kind == kind {
+                last_value.push_str(value);
+                return Ok(());
+            }
+        }
+        self.parts.push((kind, value.to_string()));
+        Ok(())
+    }
+}
+
+impl PartsWrite for DatePartsSink {
+    type SubPartsWrite = Self;
+
+    fn with_part(
+        &mut self,
+        part: Part,
+        mut write: impl FnMut(&mut Self::SubPartsWrite) -> std::fmt::Result,
+    ) -> std::fmt::Result {
+        self.active.push(part);
+        let result = write(self);
+        self.active.pop();
+        result
+    }
+}
+
+fn ymd_pattern(locale: &Locale) -> Option<&'static str> {
+    // The table contains canonical CLDR locale identifiers without Unicode or
+    // private-use extensions. Fall back one subtag at a time for structurally
+    // valid locales not materialized as their own CLDR data locale.
+    let id = locale.id.to_string();
+    let mut candidate = id.as_str();
+    loop {
+        if let Ok(index) = YMD_PATTERNS.binary_search_by(|entry| entry.0.cmp(candidate)) {
+            return Some(YMD_PATTERNS[index].1);
+        }
+        candidate = candidate.rsplit_once('-').map(|(parent, _)| parent)?;
+    }
+}
+
+fn push_part(parts: &mut Vec<(&'static str, String)>, kind: &'static str, value: impl AsRef<str>) {
+    let value = value.as_ref();
+    if value.is_empty() {
+        return;
+    }
+    if let Some((last_kind, last_value)) = parts.last_mut() {
+        if *last_kind == kind {
+            last_value.push_str(value);
+            return;
+        }
+    }
+    parts.push((kind, value.to_string()));
+}
+
+fn without_numeric_padding(value: &str, number: u8) -> &str {
+    if number >= 10 {
+        return value;
+    }
+    // `Alignment::Column` makes a one-digit month/day two localized digits.
+    // Decimal digits are single Unicode scalars; discard that leading zero.
+    value
+        .char_indices()
+        .nth(1)
+        .map_or(value, |(index, _)| &value[index..])
+}
+
+/// Render the ECMA-402 default numeric fields with CLDR's classical `yMd`
+/// skeleton. ICU4X 2.x compiles semantic field sets but no longer exposes its
+/// classical skeleton matcher at runtime, and semantic `YMD::short()` is not
+/// the same pattern: for example, it yields `05.01.2026` in German and
+/// `2026/01/05` in Japanese. The small generated table carries just `yMd`'s
+/// localized pattern; ICU still supplies calendar conversion and digits.
+fn format_default_numeric_parts(req: &CompReq) -> Option<Vec<(&'static str, String)>> {
+    let locale: Locale = req.locale.parse().ok()?;
+    let pattern = ymd_pattern(&locale)?;
+    let mut builder = FieldSetBuilder::default();
+    builder.date_fields = Some(DateFields::YMD);
+    builder.length = Some(Length::Short);
+    builder.alignment = Some(Alignment::Column);
+    builder.year_style = Some(YearStyle::Full);
+
+    let date = Date::try_new_iso(req.year, req.month.into(), req.day.into()).ok()?;
+    let dtf = DateTimeFormatter::try_new((&locale).into(), builder.build_date().ok()?).ok()?;
+    let mut sink = DatePartsSink::default();
+    dtf.format(&date).write_to_parts(&mut sink).ok()?;
+
+    let year = sink
+        .parts
+        .iter()
+        .find(|(kind, _)| *kind == "year" || *kind == "relatedYear")?
+        .1
+        .as_str();
+    let month = sink
+        .parts
+        .iter()
+        .find(|(kind, _)| *kind == "month")?
+        .1
+        .as_str();
+    let day = sink
+        .parts
+        .iter()
+        .find(|(kind, _)| *kind == "day")?
+        .1
+        .as_str();
+
+    let mut parts = Vec::with_capacity(5);
+    let mut chars = pattern.chars().peekable();
+    let mut literal = String::new();
+    let mut quoted = false;
+    while let Some(ch) = chars.next() {
+        if ch == '\'' {
+            if chars.peek() == Some(&'\'') {
+                chars.next();
+                literal.push('\'');
+            } else {
+                quoted = !quoted;
+            }
+            continue;
+        }
+        if !quoted && matches!(ch, 'y' | 'M' | 'd') {
+            push_part(&mut parts, "literal", &literal);
+            literal.clear();
+            let mut width = 1;
+            while chars.peek() == Some(&ch) {
+                chars.next();
+                width += 1;
+            }
+            match ch {
+                'y' => push_part(&mut parts, "year", year),
+                'M' => push_part(
+                    &mut parts,
+                    "month",
+                    if width == 1 {
+                        without_numeric_padding(month, req.month)
+                    } else {
+                        month
+                    },
+                ),
+                'd' => push_part(
+                    &mut parts,
+                    "day",
+                    if width == 1 {
+                        without_numeric_padding(day, req.day)
+                    } else {
+                        day
+                    },
+                ),
+                _ => unreachable!(),
+            }
+        } else {
+            literal.push(ch);
+        }
+    }
+    if quoted {
+        return None;
+    }
+    push_part(&mut parts, "literal", literal);
+    Some(
+        parts
+            .into_iter()
+            .map(|(kind, value)| (kind, normalize(&value)))
+            .collect(),
+    )
+}
+
+/// CLDR-ordered semantic parts for the default numeric Y/M/D component set.
+/// ICU annotates fields before localized punctuation is written, so this stays
+/// correct even when a locale changes both order and separators.
+pub(crate) fn format_components_parts(req: &CompReq) -> Option<Vec<(&'static str, String)>> {
+    let numeric_ymd = req.year_style == Some("numeric")
+        && req.month_style == Some("numeric")
+        && req.day_style == Some("numeric")
+        && req.weekday_style.is_none()
+        && !req.has_hour
+        && !req.has_minute
+        && !req.has_second;
+    if !numeric_ymd {
+        return None;
+    }
+
+    format_default_numeric_parts(req)
 }
 
 #[cfg(test)]
@@ -419,7 +638,9 @@ mod tests {
             has_year: year.is_some(),
             has_month: month.is_some(),
             has_day: day.is_some(),
+            year_style: year,
             month_style: month,
+            day_style: day,
             weekday_style: weekday,
             has_hour: false,
             has_minute: false,
@@ -468,16 +689,39 @@ mod tests {
     }
 
     #[test]
-    fn numeric_and_narrow_components_defer() {
-        // Pure-numeric date → None (numeric locale pattern owns it).
+    fn default_numeric_components_match_node() {
+        let cases = [
+            ("de-DE", "5.1.2026"),
+            ("fr-FR", "05/01/2026"),
+            ("ja-JP", "2026/1/5"),
+            ("en-GB", "05/01/2026"),
+            ("en-US", "1/5/2026"),
+        ];
+        for (locale, want) in cases {
+            let got = comp(
+                locale,
+                Some("numeric"),
+                Some("numeric"),
+                Some("numeric"),
+                None,
+            );
+            assert_eq!(got.as_deref(), Some(want), "locale {locale}");
+        }
+    }
+
+    #[test]
+    fn default_numeric_pattern_table_is_strictly_sorted() {
+        assert!(
+            YMD_PATTERNS.windows(2).all(|pair| pair[0].0 < pair[1].0),
+            "YMD_PATTERNS must stay sorted and unique for binary search"
+        );
+    }
+
+    #[test]
+    fn unsupported_numeric_and_narrow_components_defer() {
+        // Numeric subsets retain the bespoke fallback.
         assert_eq!(
-            comp(
-                "de",
-                Some("numeric"),
-                Some("numeric"),
-                Some("numeric"),
-                None
-            ),
+            comp("de", None, Some("numeric"), Some("numeric"), None),
             None
         );
         // Narrow → None.

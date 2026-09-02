@@ -179,6 +179,7 @@ mod argument_shape_clone_tests;
 pub(crate) mod arguments;
 mod artifact_context;
 mod artifact_display_names;
+mod artifact_source_text;
 mod artifacts;
 mod boxed_locals;
 #[cfg(test)]

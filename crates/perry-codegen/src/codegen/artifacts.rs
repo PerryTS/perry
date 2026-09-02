@@ -1854,6 +1854,16 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
         user_fn_source.push((sym, src.clone()));
     }
 
+    // #9468: method/accessor bodies are raw symbols rather than closure
+    // wrappers. Pair retained MethodDefinition text only with symbols this
+    // module actually emitted; the helper also preserves the file-size gate.
+    super::artifact_source_text::extend_class_method_source_text(
+        hir,
+        module_prefix,
+        llmod,
+        &mut user_fn_source,
+    );
+
     // Wall 51: the standalone-ctor arity registered into CLASS_CONSTRUCTORS must
     // match the arity of the ctor function actually emitted above (which, for a
     // no-own-ctor class with heritage, is the synthesized `super(...args)`

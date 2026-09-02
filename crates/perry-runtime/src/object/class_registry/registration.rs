@@ -236,6 +236,25 @@ extern "C" fn class_accessor_setter_thunk(
     f(this, value)
 }
 
+/// Return the raw getter/setter body wrapped by a descriptor-reflection
+/// accessor closure. The wrapper has its own calling-convention thunk, while
+/// Function.prototype.toString must consult the original MethodDefinition.
+pub(crate) unsafe fn class_accessor_source_func_ptr(
+    closure: *const crate::closure::ClosureHeader,
+) -> Option<usize> {
+    if closure.is_null() || crate::closure::real_capture_count((*closure).capture_count) < 1 {
+        return None;
+    }
+    let thunk = (*closure).func_ptr;
+    if thunk != class_accessor_getter_thunk as *const u8
+        && thunk != class_accessor_setter_thunk as *const u8
+    {
+        return None;
+    }
+    let raw = crate::closure::js_closure_get_capture_ptr(closure, 0) as usize;
+    (raw != 0).then_some(raw)
+}
+
 /// Wrap a raw class accessor func_ptr as a callable function VALUE for
 /// descriptor reflection (`Object.getOwnPropertyDescriptor(C.prototype,
 /// "x").get`). Built-in-shaped: `.length` 0/1, no `.prototype`, native

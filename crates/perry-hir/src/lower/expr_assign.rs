@@ -56,7 +56,7 @@ pub(crate) fn rhs_accepts_assignment_name(expr: &ast::Expr) -> bool {
     }
 }
 
-fn lower_rhs_with_assignment_name(
+pub(crate) fn lower_rhs_with_assignment_name(
     ctx: &mut LoweringContext,
     rhs: &ast::Expr,
     name: Option<String>,

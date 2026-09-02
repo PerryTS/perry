@@ -501,6 +501,19 @@ fn lower_accessor_prop(
     };
 
     let func_id = ctx.fresh_func();
+    // #9468: accessor definitions run SetFunctionName with the `get`/`set`
+    // prefix. Class accessors already acquire this name when reflected from a
+    // descriptor; object-literal accessors are ordinary closure values and
+    // therefore need the same metadata recorded at lowering.
+    if let MethodKeyKind::Static(key) = &accessor_key {
+        let prefix = if setter_param.is_some() {
+            "set "
+        } else {
+            "get "
+        };
+        ctx.closure_display_names
+            .insert(func_id, format!("{prefix}{key}"));
+    }
     let outer_locals: Vec<(String, LocalId)> = ctx
         .locals
         .iter()

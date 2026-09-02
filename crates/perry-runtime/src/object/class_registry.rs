@@ -171,8 +171,8 @@ pub(crate) use gc_roots::{
 
 // ── registration.rs ─────────────────────────────────────────────────────────
 pub(crate) use registration::{
-    class_accessor_function_value, class_own_accessor_ptrs, class_own_static_accessor_ptrs,
-    invalidate_class_string_member_order,
+    class_accessor_function_value, class_accessor_source_func_ptr, class_own_accessor_ptrs,
+    class_own_static_accessor_ptrs, invalidate_class_string_member_order,
 };
 pub use registration::{
     is_class_id_registered, js_register_class_getter, js_register_class_method,

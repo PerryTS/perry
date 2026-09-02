@@ -6364,6 +6364,7 @@ dependencies = [
  "unicode-segmentation",
  "url",
  "windows-sys 0.61.2",
+ "writeable",
  "x509-cert",
 ]
 
