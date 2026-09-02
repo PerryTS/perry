@@ -13,15 +13,82 @@
 use crate::value::JSValue;
 
 use super::{
-    cp_array_ptr, cp_get_field, cp_object_ptr, cp_signal_is_valid, cp_stdio_stream_fd,
+    cp_array_ptr, cp_box_ptr, cp_get_field, cp_object_ptr, cp_signal_is_valid, cp_stdio_stream_fd,
     cp_value_to_string,
 };
 
-fn cp_throw_null_bytes() -> ! {
-    crate::fs::validate::throw_type_error_with_code(
-        "The argument must not contain null bytes",
-        "ERR_INVALID_ARG_VALUE",
-    );
+fn cp_inspect_received_string(received: &str) -> String {
+    // Node's ERR_INVALID_ARG_VALUE uses util.inspect's string quoting: prefer
+    // a delimiter absent from the value, and escape controls/backslashes.
+    let quote = if !received.contains('\'') {
+        '\''
+    } else if !received.contains('"') {
+        '"'
+    } else if !received.contains('`') && !received.contains("${") {
+        '`'
+    } else {
+        '\''
+    };
+    let mut display = String::with_capacity(received.len() + 2);
+    display.push(quote);
+    for ch in received.chars() {
+        match ch {
+            '\0' => display.push_str("\\x00"),
+            '\x08' => display.push_str("\\b"),
+            '\x0c' => display.push_str("\\f"),
+            '\n' => display.push_str("\\n"),
+            '\r' => display.push_str("\\r"),
+            '\t' => display.push_str("\\t"),
+            '\x0b' => display.push_str("\\v"),
+            '\\' => display.push_str("\\\\"),
+            ch if ch == quote => {
+                display.push('\\');
+                display.push(ch);
+            }
+            ch if ch.is_ascii_control() => {
+                use std::fmt::Write;
+                let _ = write!(display, "\\x{:02x}", ch as u32);
+            }
+            ch => display.push(ch),
+        }
+    }
+    display.push(quote);
+    display
+}
+
+fn cp_throw_null_bytes(name: &str, received: &str, path_like: bool) -> ! {
+    let subject = if name.starts_with("options.") {
+        "property"
+    } else {
+        "argument"
+    };
+    let expected = if path_like {
+        "a string, Uint8Array, or URL without null bytes"
+    } else {
+        "a string without null bytes"
+    };
+    let display = cp_inspect_received_string(received);
+    let message = format!("The {subject} '{name}' must be {expected}. Received {display}");
+    crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_VALUE");
+}
+
+/// Reject a string before it crosses into `std::process::Command`. This lives
+/// in the runtime, rather than only in the direct-import lowering, so CJS
+/// namespace dispatch and future call paths cannot bypass the check. Node's
+/// `ERR_INVALID_ARG_VALUE` distinguishes top-level arguments from `options.*`
+/// properties in the message.
+pub(super) fn cp_validate_no_null_bytes(name: &str, received: &str) {
+    if received.contains('\0') {
+        cp_throw_null_bytes(name, received, false);
+    }
+}
+
+/// `options.cwd` is PathLike, so Node's expected-type clause also names
+/// Uint8Array and URL even when the received value is a string.
+pub(super) fn cp_validate_path_no_null_bytes(name: &str, received: &str) {
+    if received.contains('\0') {
+        cp_throw_null_bytes(name, received, true);
+    }
 }
 
 /// Validate a `command` / `file` argument. `value` is the original NaN-boxed
@@ -31,8 +98,8 @@ fn cp_throw_null_bytes() -> ! {
 /// message when `value` is not a string. A no-op for any string.
 pub(crate) fn cp_validate_command(value: f64, name: &str) {
     if JSValue::from_bits(value.to_bits()).is_any_string() {
-        if cp_value_to_string(value).is_some_and(|value| value.contains('\0')) {
-            cp_throw_null_bytes();
+        if let Some(received) = cp_value_to_string(value) {
+            cp_validate_no_null_bytes(name, &received);
         }
         return;
     }
@@ -48,7 +115,7 @@ pub(crate) fn cp_validate_command(value: f64, name: &str) {
 /// (arrays and plain objects), but throws `TypeError [ERR_INVALID_ARG_TYPE]`
 /// with `The "args" argument must be of type object. Received …` for a
 /// primitive such as a string, number, boolean, bigint, or symbol.
-fn cp_validate_args(value: f64) {
+pub(super) fn cp_validate_args(value: f64) {
     let jv = JSValue::from_bits(value.to_bits());
     // Node's `normalizeSpawnArguments` / `normalizeExecFileArgs` reject the
     // args slot only when it is a non-nullish *primitive* (string, number,
@@ -67,8 +134,8 @@ fn cp_validate_args(value: f64) {
         if let Some(args) = cp_array_ptr(value) {
             for i in 0..unsafe { (*args).length } {
                 let value = crate::array::js_array_get_f64(args, i);
-                if cp_value_to_string(value).is_some_and(|value| value.contains('\0')) {
-                    cp_throw_null_bytes();
+                if let Some(received) = cp_value_to_string(value) {
+                    cp_validate_no_null_bytes(&format!("args[{i}]"), &received);
                 }
             }
         }
@@ -79,6 +146,21 @@ fn cp_validate_args(value: f64) {
         crate::fs::validate::describe_received(value)
     );
     crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
+}
+
+/// Validate a raw args slot after codegen/native-module dispatch has stripped
+/// its NaN-box tag. Only real heap pointers can name an args array; nullish and
+/// options-overload sentinels are intentionally ignored. Re-boxing lets the
+/// shared validator preserve the original array index in its error message.
+///
+/// # Safety
+///
+/// A non-sentinel `args_ptr` must be a runtime-managed heap pointer.
+pub(super) unsafe fn cp_validate_raw_args(args_ptr: i64) {
+    if args_ptr <= 0 || !crate::value::addr_class::is_above_handle_band(args_ptr as usize) {
+        return;
+    }
+    cp_validate_args(cp_box_ptr(args_ptr as *const u8));
 }
 
 fn cp_throw_option_type(name: &str, value: f64) -> ! {
