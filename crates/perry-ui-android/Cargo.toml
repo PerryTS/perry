@@ -26,7 +26,7 @@ perry-runtime = { path = "../perry-runtime", default-features = false }
 perry-ext-sharp = { path = "../perry-ext-sharp" }
 base64.workspace = true
 libc.workspace = true
-jni = "0.21"
+jni = "0.22"
 serde_json.workspace = true
 itoa.workspace = true
 ryu.workspace = true
