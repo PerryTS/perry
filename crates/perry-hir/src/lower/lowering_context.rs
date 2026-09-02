@@ -820,9 +820,21 @@ pub struct LoweringContext {
     /// name-keyed: `Expr::New { class_name }` / `ClassRef(name)`). When a body
     /// declares `class X` while an outer/prior `class X` is already registered,
     /// the body's X is renamed `X$<n>` and `X -> X$<n>` recorded so every
-    /// reference in that body binds to the lexically-correct class. Saved/
-    /// restored per body in both `lower_fn_body_block_stmt` and `lower_fn_expr`.
-    pub(crate) class_renames: std::collections::HashMap<String, String>,
+    /// reference in that body binds to the lexically-correct class.
+    ///
+    /// The value is `(registration key, scope key)`, where the scope key is the
+    /// source span of the LEXICAL SCOPE that minted the alias. #9466: without
+    /// it there was one alias per NAME — a nested body inherited the enclosing
+    /// body's alias, saw "already renamed", and registered its own `class X`
+    /// under the OUTER body's key, so the two classes shared one ClassId and
+    /// the inner body was silently dropped. With it there is one alias per
+    /// (name, scope), which is what a lexical declaration actually is.
+    ///
+    /// Bracketed at every scope that can declare a class: the function-body
+    /// Phase-1.5 scans in `lower_fn_body_block_stmt` / `lower_fn_expr`
+    /// (whole-map snapshot + restore), and `enter_class_rename_scope` /
+    /// `exit_class_rename_scope` for `{ … }`-shaped block scopes.
+    pub(crate) class_renames: std::collections::HashMap<String, (String, u32)>,
     /// Monotonic suffix source for `class_renames` unique names.
     pub(crate) next_class_rename_id: u32,
     /// Names of TOP-LEVEL `class X { … }` declarations in the module being

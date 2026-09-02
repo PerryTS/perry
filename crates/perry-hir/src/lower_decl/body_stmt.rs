@@ -1025,9 +1025,19 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
             // Case statement-lists share the switch's block scope without
             // being a `BlockStmt`, so they don't pass through
             // `lower_block_stmt` — re-bind their pre-registered
-            // forward-captured lets here (all cases up front: one scope).
+            // forward-captured lets here (all cases up front: one scope), and
+            // (#9466) disambiguate the `class` declarations they hold for the
+            // same reason. Every case shares ONE lexical scope, so they take
+            // one shared scope key: a second case re-declaring the name is a
+            // redeclaration, not a shadow.
+            let mut saved_class_renames = Vec::new();
             for case in &switch_stmt.cases {
                 crate::lower_decl::rebind_nested_forward_scope_lets(ctx, &case.cons);
+                saved_class_renames.extend(crate::lower_decl::enter_class_rename_scope(
+                    ctx,
+                    switch_stmt.span.lo.0,
+                    &case.cons,
+                ));
             }
 
             for case in &switch_stmt.cases {
@@ -1041,6 +1051,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                 cases.push(SwitchCase { test, body });
             }
 
+            crate::lower_decl::exit_class_rename_scope(ctx, saved_class_renames);
             ctx.pop_block_scope(switch_scope_mark);
 
             result.push(Stmt::Switch {
