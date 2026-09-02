@@ -199,6 +199,50 @@ fn collect_entry_env_literals(hir: &HirModule) -> Vec<(String, String)> {
 /// `hir.script_global_functions` list is already deduped (last declaration
 /// wins) and excludes nested closures / object-literal methods, which must
 /// not pollute the global object.
+/// #9441 — emit the event loop's "is any source still live?" test into the
+/// current block and return the i32 disjunction.
+///
+/// Emitted TWICE per loop: once in `event_loop.check_pending`, which decides
+/// whether to run the body, and once in `event_loop.body_check`, which decides
+/// whether the body's park is worth taking. It is one function so the two
+/// cannot drift — an arm added to the header but not to the post-body check
+/// would silently restore the second of idle latency this exists to remove.
+fn emit_event_loop_liveness(ctx: &mut FnCtx<'_>, needs_stdlib: bool) -> String {
+    let has_timers = ctx.block().call(I32, "js_timer_has_pending", &[]);
+    let has_callbacks = ctx.block().call(I32, "js_callback_timer_has_pending", &[]);
+    let has_intervals = ctx.block().call(I32, "js_interval_timer_has_pending", &[]);
+    // Cron jobs (node-cron schedule() / npm cron's CronJob). Guarded on
+    // `needs_stdlib` like `js_stdlib_init_dispatch` — the runtime-only link
+    // doesn't carry the cron symbols (and a cron import always pulls stdlib
+    // in). With stdlib linked the symbol always resolves: perry-ext-cron or
+    // the bundled scheduler provide the real queue; perry-stdlib exports a
+    // 0-returning stub otherwise. Without this gate (and the tick in
+    // loop_body) a program whose only live work is a running cron job exits
+    // immediately and scheduled callbacks never fire.
+    let has_cron = if needs_stdlib {
+        ctx.block().call(I32, "js_cron_timer_has_pending", &[])
+    } else {
+        "0".to_string()
+    };
+    let has_stdlib = ctx.block().call(I32, "js_stdlib_has_active_handles", &[]);
+    let has_ffi_callbacks = ctx
+        .block()
+        .call(I32, "js_bun_ffi_has_active_threadsafe_callbacks", &[]);
+    // #591: TASK_QUEUE may carry a pending `.then` continuation that was
+    // queued by `js_run_stdlib_pump`'s resolution path in the SAME body
+    // iteration that already drained the inflight counter and
+    // PENDING_RESOLUTIONS to zero. Without this gate, the header check would
+    // flip to "exit" before the next body's microtask drain ran the
+    // continuation.
+    let has_microtasks = ctx.block().call(I32, "js_microtasks_pending", &[]);
+    let any1 = ctx.block().or(I32, &has_timers, &has_callbacks);
+    let any2 = ctx.block().or(I32, &has_intervals, &has_stdlib);
+    let any2 = ctx.block().or(I32, &any2, &has_ffi_callbacks);
+    let any3 = ctx.block().or(I32, &any1, &any2);
+    let any4 = ctx.block().or(I32, &any3, &has_cron);
+    ctx.block().or(I32, &any4, &has_microtasks)
+}
+
 fn emit_script_global_function_decls(ctx: &mut FnCtx<'_>, hir: &HirModule) {
     for (name, fid) in &hir.script_global_functions {
         if ctx.block().is_terminated() {
@@ -1183,11 +1227,17 @@ pub(super) fn compile_module_entry(
                 let pending_idx = ctx.new_block("event_loop.check_pending");
                 let host_ret_idx = ctx.new_block("event_loop.host_return");
                 let body_idx = ctx.new_block("event_loop.body");
+                // #9441: the post-body liveness re-check and the park it
+                // guards. See the comment on `body_check` below.
+                let body_check_idx = ctx.new_block("event_loop.body_check");
+                let body_wait_idx = ctx.new_block("event_loop.body_wait");
                 let exit_idx = ctx.new_block("event_loop.exit");
                 let header_label = ctx.block_label(header_idx);
                 let pending_label = ctx.block_label(pending_idx);
                 let host_ret_label = ctx.block_label(host_ret_idx);
                 let body_label = ctx.block_label(body_idx);
+                let body_check_label = ctx.block_label(body_check_idx);
+                let body_wait_label = ctx.block_label(body_wait_idx);
                 let exit_label = ctx.block_label(exit_idx);
 
                 // Initial event-loop flush (4 rounds) before entering the
@@ -1238,44 +1288,7 @@ pub(super) fn compile_module_entry(
 
                 // check_pending: is there any reason to keep running?
                 ctx.current_block = pending_idx;
-                let has_timers = ctx.block().call(I32, "js_timer_has_pending", &[]);
-                let has_callbacks = ctx.block().call(I32, "js_callback_timer_has_pending", &[]);
-                let has_intervals = ctx.block().call(I32, "js_interval_timer_has_pending", &[]);
-                // Cron jobs (node-cron schedule() / npm cron's CronJob).
-                // Guarded on `needs_stdlib` like js_stdlib_init_dispatch
-                // above — the runtime-only link doesn't carry the cron
-                // symbols (and a cron import always pulls stdlib in).
-                // With stdlib linked the symbol always resolves:
-                // perry-ext-cron or the bundled scheduler provide the
-                // real queue; perry-stdlib exports a 0-returning stub
-                // otherwise. Without this gate (and the tick in
-                // loop_body below) a program whose only live work is a
-                // running cron job exits immediately and scheduled
-                // callbacks never fire — the CRON_TIMERS machinery
-                // existed but nothing in the generated event loop drove
-                // it.
-                let has_cron = if cross_module.needs_stdlib {
-                    ctx.block().call(I32, "js_cron_timer_has_pending", &[])
-                } else {
-                    "0".to_string()
-                };
-                let has_stdlib = ctx.block().call(I32, "js_stdlib_has_active_handles", &[]);
-                let has_ffi_callbacks =
-                    ctx.block()
-                        .call(I32, "js_bun_ffi_has_active_threadsafe_callbacks", &[]);
-                // #591: TASK_QUEUE may carry a pending `.then` continuation
-                // that was queued by `js_run_stdlib_pump`'s resolution path
-                // in the SAME body iteration that already drained the inflight
-                // counter and PENDING_RESOLUTIONS to zero. Without this gate,
-                // the header check would flip to "exit" before the next body's
-                // microtask drain ran the continuation.
-                let has_microtasks = ctx.block().call(I32, "js_microtasks_pending", &[]);
-                let any1 = ctx.block().or(I32, &has_timers, &has_callbacks);
-                let any2 = ctx.block().or(I32, &has_intervals, &has_stdlib);
-                let any2 = ctx.block().or(I32, &any2, &has_ffi_callbacks);
-                let any3 = ctx.block().or(I32, &any1, &any2);
-                let any4 = ctx.block().or(I32, &any3, &has_cron);
-                let any = ctx.block().or(I32, &any4, &has_microtasks);
+                let any = emit_event_loop_liveness(&mut ctx, cross_module.needs_stdlib);
                 let cmp = ctx.block().icmp_ne(I32, &any, &zero);
                 ctx.block().cond_br(&cmp, &body_label, &exit_label);
 
@@ -1290,10 +1303,55 @@ pub(super) fn compile_module_entry(
                     let _ = ctx.block().call(I32, "js_cron_timer_tick", &[]);
                 }
                 ctx.block().call_void("js_run_stdlib_pump", &[]);
+                ctx.block().br(&body_check_label);
+
+                // #9441 — body_check: ask the liveness question AGAIN, now that
+                // the body has run.
+                //
+                // The body's last act used to be an unconditional
+                // `js_wait_for_event`, which parks for up to `IDLE_CAP_MS`
+                // (1 s) when no timer deadline is nearer. That park happened
+                // even on the iteration that CONSUMED the last event source —
+                // the drain that fired the final timer, or dispatched stdin's
+                // `'end'` — so the header discovered "nothing left to do" a
+                // second after the answer was already known. A program whose
+                // only work was a 20 ms `setTimeout` measured 1082 ms against
+                // node's 132 ms; the same binary exits in 45 ms when
+                // `process.exit(0)` runs in the first tick.
+                //
+                // No wake can shorten that sleep, which is why the fix is a
+                // look and not a notify. Every off-main producer in the runtime
+                // already notifies when its source goes away (the stdin
+                // reader's EOF path, the child-process and pty reactors, dgram,
+                // signals), so the removals left unserved are exactly the ones
+                // the MAIN thread performed itself — inside the very iteration
+                // that then parks. For those a wake is not an available shape:
+                // the main thread is the pump. It has to look before it sleeps.
+                //
+                // Asking here rather than inside `js_wait_for_event` is what
+                // makes the question EXACT: `has_cron` is a stdlib symbol the
+                // runtime cannot call (perry-runtime's archive does not define
+                // it), so a runtime-side predicate would have had to omit cron
+                // and would then spin on a cron-only program instead of
+                // parking. Here the predicate is literally the header's, by
+                // construction.
+                //
+                // Branching to the header rather than to the exit block keeps
+                // the host-driven return (`js_event_loop_host_driven`) and the
+                // exit epilogue on exactly one path each; the header re-runs a
+                // cheap predicate and leaves.
+                ctx.current_block = body_check_idx;
+                let still_live = emit_event_loop_liveness(&mut ctx, cross_module.needs_stdlib);
+                let still_live_cmp = ctx.block().icmp_ne(I32, &still_live, &zero);
+                ctx.block()
+                    .cond_br(&still_live_cmp, &body_wait_label, &header_label);
+
+                // body_wait: something is still live, so park until it moves.
                 // Issue #84: condvar-backed wait. Returns immediately when
                 // a tokio worker (net/ws/http/fetch/redis/spawn) notifies
                 // after pushing to its queue; otherwise blocks until the
                 // next timer/interval deadline or a 1 s safety cap.
+                ctx.current_block = body_wait_idx;
                 ctx.block().call_void("js_wait_for_event", &[]);
                 ctx.block().br(&header_label);
 
