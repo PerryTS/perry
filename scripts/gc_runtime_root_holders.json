@@ -199,6 +199,15 @@
       "reason": "Holds Set/Map header ADDRESSES as identity keys for in-flight forEach walks (#9082); the values are only ever compared (`contains`, `pop` equality) and truncated, never dereferenced, so no collector edge originates here. Correctness across evacuation is maintained by set_header_moved_for_gc / map_header_moved_for_gc, which rewrite every matching entry when a header moves — see the SET_FOREACH_STACK/MAP_FOREACH_STACK rewrite loops there."
     },
     {
+      "file": "crates/perry-runtime/src/map.rs",
+      "name": "MAP_COMPACTION_LOG",
+      "count": 1,
+      "classification": "not_a_gc_pointer",
+      "verdict": "not_a_gc_pointer",
+      "why": "Per-Map compaction log for the epoch-based for-of/iterator cursor rebase: keyed by MapHeader ADDRESS (identity only, never dereferenced), values are VecDeque<{epoch: u32, removed: Prefix(u32) | Indices(Vec<u32>)}> — raw entry indices, no heap references, so no collector edge originates here. Correctness across evacuation is maintained by map_header_moved_for_gc, which re-keys the entry when a header moves; js_map_alloc drops any stale entry for a reused address; prune_dead_map_compaction_log_owners is registered in gc/dead_owner.rs (table MAP_COMPACTION_LOG) so a dead Map's history is dropped.",
+      "reason": "Per-Map compaction log for the epoch-based for-of/iterator cursor rebase: keyed by MapHeader ADDRESS (identity only, never dereferenced), values are VecDeque<{epoch: u32, removed: Prefix(u32) | Indices(Vec<u32>)}> — raw entry indices, no heap references, so no collector edge originates here. Correctness across evacuation is maintained by map_header_moved_for_gc, which re-keys the entry when a header moves; js_map_alloc drops any stale entry for a reused address; prune_dead_map_compaction_log_owners is registered in gc/dead_owner.rs (table MAP_COMPACTION_LOG) so a dead Map's history is dropped."
+    },
+    {
       "file": "crates/perry-runtime/src/net.rs",
       "name": "TCP_SERVERS",
       "verdict": "not_a_gc_pointer",
@@ -432,6 +441,15 @@
       "verdict": "not_a_gc_pointer",
       "why": "Holds Set/Map header ADDRESSES as identity keys for in-flight forEach walks (#9082); the values are only ever compared (`contains`, `pop` equality) and truncated, never dereferenced, so no collector edge originates here. Correctness across evacuation is maintained by set_header_moved_for_gc / map_header_moved_for_gc, which rewrite every matching entry when a header moves — see the SET_FOREACH_STACK/MAP_FOREACH_STACK rewrite loops there.",
       "reason": "Holds Set/Map header ADDRESSES as identity keys for in-flight forEach walks (#9082); the values are only ever compared (`contains`, `pop` equality) and truncated, never dereferenced, so no collector edge originates here. Correctness across evacuation is maintained by set_header_moved_for_gc / map_header_moved_for_gc, which rewrite every matching entry when a header moves — see the SET_FOREACH_STACK/MAP_FOREACH_STACK rewrite loops there."
+    },
+    {
+      "file": "crates/perry-runtime/src/set.rs",
+      "name": "SET_COMPACTION_LOG",
+      "count": 1,
+      "classification": "not_a_gc_pointer",
+      "verdict": "not_a_gc_pointer",
+      "why": "Per-Set compaction log for the epoch-based for-of/iterator cursor rebase: keyed by SetHeader ADDRESS (identity only, never dereferenced), values are VecDeque<{epoch: u32, removed: Prefix(u32) | Indices(Vec<u32>)}> — raw element indices, no heap references, so no collector edge originates here. Correctness across evacuation is maintained by set_header_moved_for_gc, which re-keys the entry when a header moves; js_set_alloc drops any stale entry for a reused address; prune_dead_set_compaction_log_owners is registered in gc/dead_owner.rs (table SET_COMPACTION_LOG).",
+      "reason": "Per-Set compaction log for the epoch-based for-of/iterator cursor rebase: keyed by SetHeader ADDRESS (identity only, never dereferenced), values are VecDeque<{epoch: u32, removed: Prefix(u32) | Indices(Vec<u32>)}> — raw element indices, no heap references, so no collector edge originates here. Correctness across evacuation is maintained by set_header_moved_for_gc, which re-keys the entry when a header moves; js_set_alloc drops any stale entry for a reused address; prune_dead_set_compaction_log_owners is registered in gc/dead_owner.rs (table SET_COMPACTION_LOG)."
     },
     {
       "file": "crates/perry-runtime/src/set.rs",

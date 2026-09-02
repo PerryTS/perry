@@ -518,67 +518,50 @@ pub(crate) fn rewrite_collection_view_for_of(
     })
 }
 
-/// Build the delete-safe control for the Map/Set `for-of` fast path (#6075).
+/// Build the cursor control for the Map/Set `for-of` fast path.
 ///
-/// The fast path iterates the backing entries array by index (`arr_id` holds the
-/// collection, `idx_id` the cursor). But `delete` compacts that array (entries
-/// after the hole shift down), so deleting an entry at index ≤ the cursor moves
-/// an unvisited entry below the cursor and skips it. This re-derives the read
-/// index each iteration from the last-returned key, so a shift can't skip.
+/// The fast path walks the backing entries buffer by RAW index (`arr_id`
+/// holds the collection, `idx_id` the cursor). Two things can happen to the
+/// raw layout while the body runs:
+///
+/// * a `delete` tombstones an entry in place (#9020) — raw indices are
+///   stable, the cursor only has to step over the hole;
+/// * a squeeze (`delete` past the tombstone threshold, `set` at capacity,
+///   `clear`) moves survivors to lower raw indices — the cursor must move
+///   down by exactly the number of removed slots below it.
+///
+/// Both are answered by ONE runtime call per step, `js_map_cursor_next` /
+/// `js_set_cursor_next`: it rebases the cursor through the collection's
+/// compaction log (every squeeze since the epoch the loop last recorded) and
+/// returns the next live raw index, or `-1` when the extent is exhausted.
+/// The loop keeps the epoch it last synchronised with in a state temp. Cost
+/// per step is O(holes stepped over); nothing here is O(n), and nothing here
+/// compacts — the reader-side "self-heal" compaction that preceded this made
+/// a delete-during-`for…of` loop O(n) per delete and, when more than one
+/// hole was squeezed at once, its `cursor-1` recovery skipped entries.
 ///
 /// Returns `(init_lets, condition, body_prefix)`:
 /// - `init_lets` — declare the state temps; push BEFORE the `for`.
-/// - `condition` — replaces `idx < size`. Overwrites `idx_id` with the corrected
-///   read index (plain cursor while the previously-read key is still at
-///   `cursor-1`; else locate the last key — `+1` after it, or into its vacated
-///   slot if it was itself deleted) and yields whether that index is in range.
-/// - `body_prefix` — prepend to the loop body (runs after the in-range check):
-///   records the visited key for the next iteration's in-place check.
-///
-/// `find` is O(1) for numeric/string keys and only called when a shift is
-/// detected, so normal / append-only iteration keeps the plain cursor path.
+/// - `condition` — replaces `idx < size`: rebases + advances `idx_id` and
+///   yields whether an entry is available.
+/// - `body_prefix` — empty; kept so both desugars keep their shape.
 pub(crate) fn map_set_delete_safe_for_of(
     ctx: &mut LoweringContext,
     arr_id: LocalId,
     idx_id: LocalId,
     is_set: bool,
 ) -> (Vec<Stmt>, Expr, Vec<Stmt>) {
-    let lk_id = ctx.fresh_local(); // last-returned key
-    let sz_id = ctx.fresh_local(); // current size (spilled once per iteration)
-    let fk_id = ctx.fresh_local(); // find() result
-
-    // `.size` on a Map/Set-typed receiver is codegen-recognized and lowered to
-    // js_map_size / js_set_size (the raw `MapSize`/`SetSize` nodes are not
-    // codegen expressions), matching the original loop bound.
-    let size_of = |a: Expr| -> Expr {
-        Expr::PropertyGet {
-            byte_offset: 0,
-            object: Box::new(a),
-            property: "size".to_string(),
-        }
-    };
-    let key_at = |a: Expr, i: Expr| -> Expr {
-        if is_set {
-            Expr::SetValueAt {
-                set: Box::new(a),
-                idx: Box::new(i),
-            }
-        } else {
-            Expr::MapEntryKeyAt {
-                map: Box::new(a),
-                idx: Box::new(i),
-            }
-        }
-    };
-    let find_fn = if is_set {
-        "js_set_find_value_index"
+    let ep_id = ctx.fresh_local(); // compaction epoch last synchronised with
+    let nx_id = ctx.fresh_local(); // js_*_cursor_next result
+    let (next_fn, epoch_fn) = if is_set {
+        ("js_set_cursor_next", "js_set_compaction_epoch")
     } else {
-        "js_map_find_key_index"
+        ("js_map_cursor_next", "js_map_compaction_epoch")
     };
-    let find_call = |args: Vec<Expr>| -> Expr {
+    let extern_call = |name: &str, args: Vec<Expr>| -> Expr {
         Expr::Call {
             callee: Box::new(Expr::ExternFuncRef {
-                name: find_fn.to_string(),
+                name: name.to_string(),
                 param_types: Vec::new(),
                 return_type: Type::Number,
             }),
@@ -587,110 +570,40 @@ pub(crate) fn map_set_delete_safe_for_of(
             byte_offset: 0,
         }
     };
-    let cmp = |op: CompareOp, l: Expr, r: Expr| -> Expr {
-        Expr::Compare {
-            op,
-            left: Box::new(l),
-            right: Box::new(r),
-        }
-    };
-
-    // cursor-1 (index of the entry read on the previous iteration).
-    let prev_idx = |i: Expr| Expr::Binary {
-        op: BinaryOp::Sub,
-        left: Box::new(i),
-        right: Box::new(Expr::Number(1.0)),
-    };
-
-    // read_idx = cursor == 0                              // not started
-    //            ? cursor
-    //            : key_at(coll, cursor-1) === last_key    // last entry still in place
-    //              ? cursor                               // no shift at/below cursor
-    //              : (j = find(coll, last_key)) >= 0 ? j + 1 : cursor - 1
-    //
-    // Comparing the entry now at cursor-1 to the last-returned key detects ANY
-    // delete that compacted an entry at/below the cursor — including a delete
-    // balanced by an add in the same turn (which leaves `size` unchanged), which
-    // a size-only gate would miss. Map/Set keys are unique under SameValueZero,
-    // so `===` here is exact except for a NaN key (which just forces the `find`
-    // path — still correct).
-    let rederive = Expr::Conditional {
-        condition: Box::new(cmp(
-            CompareOp::Eq,
-            Expr::LocalGet(idx_id),
-            Expr::Number(0.0),
-        )),
-        then_expr: Box::new(Expr::LocalGet(idx_id)),
-        else_expr: Box::new(Expr::Conditional {
-            condition: Box::new(cmp(
-                CompareOp::Eq,
-                key_at(Expr::LocalGet(arr_id), prev_idx(Expr::LocalGet(idx_id))),
-                Expr::LocalGet(lk_id),
-            )),
-            then_expr: Box::new(Expr::LocalGet(idx_id)),
-            else_expr: Box::new(Expr::Sequence(vec![
-                Expr::LocalSet(
-                    fk_id,
-                    Box::new(find_call(vec![
-                        Expr::LocalGet(arr_id),
-                        Expr::LocalGet(lk_id),
-                    ])),
-                ),
-                Expr::Conditional {
-                    // A delete only shifts entries down: a merely-shifted last key
-                    // is now below the cursor (`0 <= j < cursor`) → resume after
-                    // it. Deleted (`j < 0`) or deleted-then-re-added at the end
-                    // (`j >= cursor`) → read the entry now in its old slot
-                    // (`cursor - 1`).
-                    condition: Box::new(cmp(
-                        CompareOp::Ge,
-                        Expr::LocalGet(fk_id),
-                        Expr::Number(0.0),
-                    )),
-                    then_expr: Box::new(Expr::Conditional {
-                        condition: Box::new(cmp(
-                            CompareOp::Lt,
-                            Expr::LocalGet(fk_id),
-                            Expr::LocalGet(idx_id),
-                        )),
-                        then_expr: Box::new(Expr::Binary {
-                            op: BinaryOp::Add,
-                            left: Box::new(Expr::LocalGet(fk_id)),
-                            right: Box::new(Expr::Number(1.0)),
-                        }),
-                        else_expr: Box::new(prev_idx(Expr::LocalGet(idx_id))),
-                    }),
-                    else_expr: Box::new(prev_idx(Expr::LocalGet(idx_id))),
-                },
-            ])),
-        }),
-    };
-
+    // nx = cursor_next(coll, idx, ep); ep = epoch(coll); idx = nx; nx >= 0
     let condition = Expr::Sequence(vec![
-        Expr::LocalSet(sz_id, Box::new(size_of(Expr::LocalGet(arr_id)))),
-        Expr::LocalSet(idx_id, Box::new(rederive)),
-        cmp(CompareOp::Lt, Expr::LocalGet(idx_id), Expr::LocalGet(sz_id)),
+        Expr::LocalSet(
+            nx_id,
+            Box::new(extern_call(
+                next_fn,
+                vec![
+                    Expr::LocalGet(arr_id),
+                    Expr::LocalGet(idx_id),
+                    Expr::LocalGet(ep_id),
+                ],
+            )),
+        ),
+        Expr::LocalSet(
+            ep_id,
+            Box::new(extern_call(epoch_fn, vec![Expr::LocalGet(arr_id)])),
+        ),
+        Expr::LocalSet(idx_id, Box::new(Expr::LocalGet(nx_id))),
+        Expr::Compare {
+            op: CompareOp::Ge,
+            left: Box::new(Expr::LocalGet(nx_id)),
+            right: Box::new(Expr::Number(0.0)),
+        },
     ]);
-
-    // Record the key just read so the next iteration can check it is still in
-    // place at cursor-1.
-    let body_prefix = vec![Stmt::Expr(Expr::LocalSet(
-        lk_id,
-        Box::new(key_at(Expr::LocalGet(arr_id), Expr::LocalGet(idx_id))),
-    ))];
-
-    let mk_let = |id: LocalId, tag: &str, ty: Type, init: Expr| Stmt::Let {
+    let mk_let = |id: LocalId, tag: &str, init: Expr| Stmt::Let {
         id,
         name: format!("__miter_{}_{}", tag, id),
-        ty,
+        ty: Type::Number,
         mutable: true,
         init: Some(init),
     };
     let init_lets = vec![
-        mk_let(lk_id, "lk", Type::Any, Expr::Undefined),
-        mk_let(sz_id, "sz", Type::Number, Expr::Number(0.0)),
-        mk_let(fk_id, "fk", Type::Number, Expr::Number(0.0)),
+        mk_let(ep_id, "ep", Expr::Number(0.0)),
+        mk_let(nx_id, "nx", Expr::Number(0.0)),
     ];
-
-    (init_lets, condition, body_prefix)
+    (init_lets, condition, Vec::new())
 }

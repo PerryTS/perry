@@ -4,8 +4,9 @@
 //! entry indices stay stable, and compaction runs only when tombstones
 //! outnumber live entries or the array must grow. These tests pin the
 //! observable contract — insertion order, delete-then-re-add, lookup
-//! correctness across holes, iterator hole-skips, and the self-healing
-//! compaction under raw-indexed access.
+//! correctness across holes, iterator hole-skips, the no-compaction
+//! contract of the raw-indexed readers, and the exact epoch-based cursor
+//! rebase across squeezes (single-hole, multi-hole, successive, and `clear`).
 
 use super::*;
 
@@ -171,7 +172,7 @@ fn emptying_a_map_stays_consistent_and_compacts() {
 }
 
 #[test]
-fn raw_indexed_access_self_heals_by_compacting() {
+fn raw_indexed_reads_never_compact_and_the_cursor_steps_over_holes() {
     let map = js_map_alloc(8);
     for k in [1.0f64, 2.0, 3.0] {
         js_map_set(map, k, k);
@@ -180,12 +181,124 @@ fn raw_indexed_access_self_heals_by_compacting() {
     unsafe {
         assert_ne!((*map).used, (*map).size, "a hole is present");
     }
-    // The raw-indexed extern compacts first, so entry 1 is the THIRD key —
-    // exactly what the typed for-of lane's fallback needs for raw == live.
-    assert_eq!(js_map_entry_key_at(map, 1), 3.0);
+    // The raw-indexed extern is a plain bounded read: raw index 2 is still
+    // the THIRD key, the hole at 1 stays, and the layout is untouched — this
+    // used to compact the whole map on every such read, once per hole.
+    assert_eq!(js_map_entry_key_at(map, 2), 3.0);
+    assert_eq!(js_map_entry_value_at(map, 2), 3.0);
     unsafe {
-        assert_eq!((*map).used, (*map).size, "access healed the layout");
+        assert_ne!((*map).used, (*map).size, "the read left the layout alone");
+        assert_eq!(
+            crate::map::map_compaction_epoch(map),
+            0,
+            "no squeeze happened"
+        );
+        // The hole is visible only to the cursor walker, which steps over it.
+        assert_eq!(crate::map::map_cursor_next_raw(map, 0, 0), Some(0));
+        assert_eq!(
+            crate::map::map_cursor_next_raw(map, 1, 0),
+            Some(2),
+            "hole at 1 skipped"
+        );
+        assert_eq!(
+            crate::map::map_cursor_next_raw(map, 3, 0),
+            None,
+            "extent exhausted"
+        );
     }
+}
+
+#[test]
+fn cursor_rebases_exactly_across_a_multi_hole_compaction() {
+    // 40 keys. A walk has yielded k0..k20 (cursor = 21) when the body deletes
+    // exactly those 21 — holes now outnumber the 19 live entries, so the
+    // delete path squeezes 21 holes below the cursor in ONE compaction. The
+    // old key-based recovery read `cursor-1` and skipped 19 entries; the
+    // rebase moves the cursor down by the removed count below it: 21 → 0.
+    let map = js_map_alloc(64);
+    for i in 0..40 {
+        js_map_set(map, i as f64, i as f64);
+    }
+    let epoch0 = crate::map::map_compaction_epoch(map);
+    for i in 0..=20 {
+        assert_eq!(js_map_delete(map, i as f64), 1);
+    }
+    unsafe {
+        assert_eq!((*map).used, (*map).size, "the delete path compacted");
+    }
+    assert_ne!(crate::map::map_compaction_epoch(map), epoch0);
+    let next = unsafe { crate::map::map_cursor_next_raw(map, 21, epoch0) };
+    assert_eq!(
+        next,
+        Some(0),
+        "cursor 21 minus the 21 slots removed below it"
+    );
+    assert_eq!(
+        js_map_entry_key_at(map, 0),
+        21.0,
+        "which is the true next key"
+    );
+    // A cursor already synchronised with the new epoch is not rebased again.
+    let epoch1 = crate::map::map_compaction_epoch(map);
+    assert_eq!(
+        unsafe { crate::map::map_cursor_next_raw(map, 3, epoch1) },
+        Some(3)
+    );
+}
+
+#[test]
+fn cursor_rebases_through_successive_squeezes_and_clear() {
+    let map = js_map_alloc(64);
+    for i in 0..40 {
+        js_map_set(map, i as f64, i as f64);
+    }
+    let epoch0 = crate::map::map_compaction_epoch(map);
+    // Squeeze 1 at the 21st delete (k0..k20 gone), squeeze 2 at the 32nd
+    // (k21..k31 gone from the compacted layout: 8 live < 19 / 2). The cursor,
+    // still at raw 21 with epoch0, must rebase through BOTH records in order.
+    for i in 0..=31 {
+        assert_eq!(js_map_delete(map, i as f64), 1);
+    }
+    unsafe {
+        assert_eq!((*map).used, (*map).size);
+        assert_eq!((*map).size, 8);
+    }
+    assert_eq!(
+        unsafe { crate::map::map_cursor_next_raw(map, 21, epoch0) },
+        Some(0)
+    );
+    assert_eq!(js_map_entry_key_at(map, 0), 32.0);
+    // clear() during a walk discards the extent; a cursor then resumes at 0
+    // and visits whatever is appended afterwards (the spec empties the
+    // [[MapData]] list in place, so later adds are visited).
+    let epoch1 = crate::map::map_compaction_epoch(map);
+    js_map_clear(map);
+    js_map_set(map, 100.0, 1.0);
+    assert_eq!(
+        unsafe { crate::map::map_cursor_next_raw(map, 5, epoch1) },
+        Some(0)
+    );
+    assert_eq!(js_map_entry_key_at(map, 0), 100.0);
+}
+
+#[test]
+fn a_fresh_map_at_a_reused_address_starts_without_history() {
+    // A previous tenant's squeeze log must not rebase a new Map's cursor.
+    let map = js_map_alloc(64);
+    for i in 0..40 {
+        js_map_set(map, i as f64, i as f64);
+    }
+    for i in 0..=20 {
+        js_map_delete(map, i as f64);
+    }
+    assert_ne!(crate::map::map_compaction_epoch(map), 0);
+    // Simulate address reuse: re-run the allocation-time reset on this
+    // header and check a stale-epoch cursor is left alone.
+    crate::map::test_reset_compaction_log_for(map);
+    assert_eq!(
+        unsafe { crate::map::map_cursor_next_raw(map, 5, 0) },
+        Some(5)
+    );
 }
 
 #[test]

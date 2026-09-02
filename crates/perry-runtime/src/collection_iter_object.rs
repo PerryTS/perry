@@ -85,13 +85,14 @@ unsafe fn alloc_iterator(class_id: u32, coll_nanboxed: f64, kind: i32) -> f64 {
     obj_h.with_mut_ptr::<ObjectHeader, _>(|obj| {
         js_object_set_field(obj, 2, JSValue::number(kind as f64))
     });
-    // Field 3: collection size observed at the last `next()`. `-1` sentinel means
-    // "not started" (no entry returned yet). Used to detect a mid-iteration
-    // delete (which compacts the entries array, shifting live entries below the
-    // cursor) so the cursor can be re-derived from the last key (#6075).
-    obj_h.with_mut_ptr::<ObjectHeader, _>(|obj| js_object_set_field(obj, 3, JSValue::number(-1.0)));
-    // Field 4: the KEY of the last-returned entry (a Map key / Set value), used
-    // to re-derive the cursor after a delete-shift. Undefined until started.
+    // Field 3: the backing collection's compaction epoch this iterator last
+    // synchronised with (starts at 0 — a cursor of 0 rebases to 0 through any
+    // history). `next()` rebases the cursor through every squeeze recorded
+    // since, so a compaction below the cursor can never skip an entry (#6075,
+    // #6165 — and the multi-hole squeeze the key-based re-derive got wrong).
+    obj_h.with_mut_ptr::<ObjectHeader, _>(|obj| js_object_set_field(obj, 3, JSValue::number(0.0)));
+    // Field 4: unused since the epoch-based rebase (was the last-returned
+    // key); kept so the object layout and the cached-result field 5 stay put.
     obj_h.with_mut_ptr::<ObjectHeader, _>(|obj| js_object_set_field(obj, 4, JSValue::undefined()));
     // Field 5: the recycled `{value, done}` result the FUSED for-of driver
     // mutates in place (one allocation per loop, not per element). Manual
@@ -218,37 +219,6 @@ unsafe fn make_pair_array(a: f64, b: f64) -> f64 {
     pair.with_mut_ptr::<ArrayHeader, _>(|pair| js_nanbox_pointer(pair as i64))
 }
 
-/// Compute the entries-array index to read next, self-correcting for a
-/// mid-iteration delete. `cursor` = index just past the last-returned entry;
-/// `last_key_in_place` = the previously-read key is still at `cursor-1`;
-/// `find_last` locates the last-returned key's current index (or `< 0` if it was
-/// deleted).
-///
-/// Deleting an entry compacts the backing array (entries after the hole shift
-/// down one slot, #2831), so a delete at index ≤ cursor would move an unvisited
-/// entry below the cursor and skip it. If the last-returned key is still sitting
-/// at `cursor-1`, no such shift happened and the plain cursor is correct — so
-/// normal / append-only iteration keeps the fast path and object-keyed maps pay
-/// no lookup. Otherwise re-derive from the last key: locate it (`+1` after it),
-/// or, if it was itself deleted, read the entry that shifted into its slot
-/// (`cursor-1`). Comparing the key (rather than the size) also catches a delete
-/// balanced by an add in the same turn. (#6075 / #6165)
-fn next_read_index(cursor: u32, last_key_in_place: bool, find_last: impl FnOnce() -> i32) -> u32 {
-    if cursor == 0 || last_key_in_place {
-        return cursor;
-    }
-    let j = find_last();
-    // A delete only shifts entries DOWN, so a last key that merely shifted is now
-    // below the cursor (`j < cursor`) → resume after it. Otherwise it was deleted
-    // (`j < 0`) or deleted-then-re-added at the end (`j >= cursor`) — either way
-    // the entry that shifted into its old slot sits at `cursor-1`.
-    if j >= 0 && (j as u32) < cursor {
-        (j as u32) + 1
-    } else {
-        cursor.saturating_sub(1)
-    }
-}
-
 /// Dispatch `.next()` / `[Symbol.iterator]()` on a Map iterator object.
 pub unsafe fn dispatch_map_iterator_method(iter_obj: *mut ObjectHeader, method_name: &str) -> f64 {
     dispatch_map_iterator_method_emit(iter_obj, method_name, false, true)
@@ -293,38 +263,31 @@ unsafe fn dispatch_map_iterator_method_emit(
                 return emit_iter_result(&scope, &iter_h, emit_cached, JSValue::undefined(), true);
             }
             let cursor = f64::from_bits(js_object_get_field(iter_obj(), 1).bits()) as u32;
-            let last_key = js_object_get_field(iter_obj(), 4);
+            // Field 3: the backing Map's compaction epoch this iterator last
+            // synchronised with. `map_cursor_next_raw` rebases the cursor
+            // through every squeeze since (exactly — by removed-slot count,
+            // not by re-finding a key that may itself be gone), then steps
+            // over tombstones.
+            let epoch = f64::from_bits(js_object_get_field(iter_obj(), 3).bits());
+            let epoch = if epoch > 0.0 { epoch as u32 } else { 0 };
             let used = crate::map::map_used_entries(map());
-            // Is the last-returned key still at cursor-1? (SameValueZero, so a
-            // NaN key matches itself.) If so, no delete shifted an entry at/below
-            // the cursor.
-            let in_place = cursor > 0 && {
-                let prev = crate::map::map_entry_key_raw(map(), cursor - 1);
-                crate::value::js_jsvalue_same_value_zero(prev, f64::from_bits(last_key.bits())) != 0
-            };
-            let mut idx = next_read_index(cursor, in_place, || {
-                crate::map::find_key_index(map(), f64::from_bits(last_key.bits()))
-            });
-            // Tombstoned deletes leave holes in the raw entry order; the
-            // cursor walks raw indices, so step over them here.
-            while idx < used
-                && crate::map::map_entry_key_raw(map(), idx).to_bits()
-                    == crate::map::MAP_HOLE_KEY_BITS
-            {
-                idx += 1;
-            }
-            if idx >= used {
+            let next = crate::map::map_cursor_next_raw(map(), cursor, epoch);
+            js_object_set_field(
+                iter_obj(),
+                3,
+                JSValue::number(crate::map::map_compaction_epoch(map()) as f64),
+            );
+            let Some(idx) = next else {
                 js_object_set_field(iter_obj(), 1, JSValue::number(used as f64));
                 // Once a collection iterator is exhausted it stays exhausted,
                 // even if entries are appended later.
                 js_object_set_field(iter_obj(), 0, JSValue::undefined());
                 return emit_iter_result(&scope, &iter_h, emit_cached, JSValue::undefined(), true);
-            }
+            };
 
             let entry_key = crate::map::map_entry_key_raw(map(), idx);
-            // Record state for the next re-derive BEFORE any allocation below.
+            // Record the cursor BEFORE any allocation below.
             js_object_set_field(iter_obj(), 1, JSValue::number((idx + 1) as f64));
-            js_object_set_field(iter_obj(), 4, JSValue::from_bits(entry_key.to_bits()));
 
             let value = match kind {
                 KIND_KEYS => JSValue::from_bits(entry_key.to_bits()),
@@ -382,31 +345,24 @@ unsafe fn dispatch_set_iterator_method_emit(
                 return emit_iter_result(&scope, &iter_h, emit_cached, JSValue::undefined(), true);
             }
             let cursor = f64::from_bits(js_object_get_field(iter_obj(), 1).bits()) as u32;
-            let last_val = js_object_get_field(iter_obj(), 4);
+            // Field 3: the backing Set's compaction epoch (see the Map arm).
+            let epoch = f64::from_bits(js_object_get_field(iter_obj(), 3).bits());
+            let epoch = if epoch > 0.0 { epoch as u32 } else { 0 };
             let used = crate::set::set_used_entries(set());
-            let in_place = cursor > 0 && {
-                let prev = crate::set::set_value_raw(set(), cursor - 1);
-                crate::value::js_jsvalue_same_value_zero(prev, f64::from_bits(last_val.bits())) != 0
-            };
-            let mut idx = next_read_index(cursor, in_place, || {
-                crate::set::find_value_index(set(), f64::from_bits(last_val.bits()))
-            });
-            // Tombstoned deletes leave holes in the raw order; step over them.
-            while idx < used
-                && crate::set::set_value_raw(set(), idx).to_bits()
-                    == crate::set::SET_HOLE_VALUE_BITS
-            {
-                idx += 1;
-            }
-            if idx >= used {
+            let next = crate::set::set_cursor_next_raw(set(), cursor, epoch);
+            js_object_set_field(
+                iter_obj(),
+                3,
+                JSValue::number(crate::set::set_compaction_epoch(set()) as f64),
+            );
+            let Some(idx) = next else {
                 js_object_set_field(iter_obj(), 1, JSValue::number(used as f64));
                 js_object_set_field(iter_obj(), 0, JSValue::undefined());
                 return emit_iter_result(&scope, &iter_h, emit_cached, JSValue::undefined(), true);
-            }
+            };
 
             let elem = crate::set::set_value_raw(set(), idx);
             js_object_set_field(iter_obj(), 1, JSValue::number((idx + 1) as f64));
-            js_object_set_field(iter_obj(), 4, JSValue::from_bits(elem.to_bits()));
 
             let value = match kind {
                 // For Sets, keys === values; entries yields [v, v] pairs.

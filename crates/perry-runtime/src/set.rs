@@ -336,6 +336,7 @@ pub(crate) fn test_clear_set_roots() {
         drop(allocation);
     }
     SET_INDEX.with(|idx| idx.borrow_mut().clear());
+    SET_COMPACTION_LOG.with(|log| log.borrow_mut().clear());
 }
 
 pub fn scan_set_roots(_mark: &mut dyn FnMut(f64)) {
@@ -409,6 +410,13 @@ pub(crate) fn set_header_moved_for_gc(old_addr: usize, new_addr: usize) {
         idx.remove(&new_addr);
         if let Some(slot) = idx.remove(&old_addr) {
             idx.insert(new_addr, slot);
+        }
+    });
+    SET_COMPACTION_LOG.with(|log| {
+        let mut log = log.borrow_mut();
+        log.remove(&new_addr);
+        if let Some(records) = log.remove(&old_addr) {
+            log.insert(new_addr, records);
         }
     });
     SET_FOREACH_STACK.with(|stack| {
@@ -558,6 +566,7 @@ pub(crate) fn release_current_thread_set_side_allocations() {
         drop(allocation);
     }
     SET_INDEX.with(|idx| idx.borrow_mut().clear());
+    SET_COMPACTION_LOG.with(|log| log.borrow_mut().clear());
 }
 
 /// Set header - GC-movable address, elements allocated separately
@@ -577,8 +586,14 @@ pub struct SetHeader {
     pub meta: *mut crate::object::ObjectMeta,
     /// Extent of the elements array actually written: raw element indices run
     /// `0..used`. `size` stays the LIVE count; `used - size` counts the
-    /// tombstoned slots awaiting compaction. Appended last (offset pinned).
+    /// tombstoned slots awaiting compaction (offset pinned).
     pub used: u32,
+    /// Bumped whenever an element moves to a LOWER raw index
+    /// (`compact_set_elements`) or the extent is discarded (`clear`). Raw-index
+    /// cursors record the epoch they last saw and rebase through
+    /// `SET_COMPACTION_LOG` when it has moved (see `set_cursor_next_raw`).
+    /// Appended last; fits in the padding after `used`.
+    pub compaction_epoch: u32,
 }
 
 const _: () = {
@@ -586,6 +601,8 @@ const _: () = {
     assert!(std::mem::offset_of!(SetHeader, capacity) == 4);
     assert!(std::mem::offset_of!(SetHeader, elements) == 8);
     assert!(std::mem::offset_of!(SetHeader, used) == 24);
+    assert!(std::mem::offset_of!(SetHeader, compaction_epoch) == 28);
+    assert!(std::mem::size_of::<SetHeader>() == 32);
 };
 
 /// The tombstone a deleted element's slot takes — same reserved marker as the
@@ -875,13 +892,155 @@ pub(crate) unsafe fn set_value_raw(set: *const SetHeader, idx: u32) -> f64 {
 
 /// Squeeze the tombstones out (insertion order preserved), then rebuild the
 /// lookup index from the dense buffer.
+/// One squeeze of the elements buffer, as a raw-index cursor needs to see it
+/// (the Map twin is `map::RemovedSlots`): which raw indices below the cursor
+/// disappeared, so it can move down by exactly that many.
+enum SetRemovedSlots {
+    /// `clear()` discarded the whole extent `0..n`.
+    Prefix(u32),
+    /// Compaction squeezed out these tombstoned raw indices (ascending).
+    Indices(Vec<u32>),
+}
+
+impl SetRemovedSlots {
+    fn count_below(&self, cursor: u32) -> u32 {
+        match self {
+            SetRemovedSlots::Prefix(n) => cursor.min(*n),
+            SetRemovedSlots::Indices(v) => v.partition_point(|&i| i < cursor) as u32,
+        }
+    }
+}
+
+struct SetCompactionRecord {
+    /// The header's `compaction_epoch` AFTER this squeeze.
+    epoch: u32,
+    removed: SetRemovedSlots,
+}
+
+/// Records retained per Set — see `map::MAP_COMPACTION_LOG_DEPTH`.
+const SET_COMPACTION_LOG_DEPTH: usize = 32;
+
+crate::perry_thread_local! {
+    /// Per-Set history of squeezes, keyed by header address. Re-keyed on GC
+    /// move by `set_header_moved_for_gc`; dropped by `js_set_alloc` for a
+    /// reused address and by the dead-owner prune.
+    static SET_COMPACTION_LOG: RefCell<
+        crate::fast_hash::PtrHashMap<usize, std::collections::VecDeque<SetCompactionRecord>>,
+    > = RefCell::new(crate::fast_hash::new_ptr_hash_map());
+}
+
+/// Append a squeeze record and advance the header epoch (every operation
+/// that moves elements to lower raw indices or discards the extent).
+unsafe fn note_set_compaction(set: *mut SetHeader, removed: SetRemovedSlots) {
+    let epoch = (*set).compaction_epoch.wrapping_add(1);
+    (*set).compaction_epoch = epoch;
+    SET_COMPACTION_LOG.with(|log| {
+        let mut log = log.borrow_mut();
+        let records = log.entry(set as usize).or_default();
+        if records.len() == SET_COMPACTION_LOG_DEPTH {
+            records.pop_front();
+        }
+        records.push_back(SetCompactionRecord { epoch, removed });
+    });
+}
+
+/// Rebase a raw-index cursor that last synchronised at `loop_epoch` onto the
+/// current raw layout — exact for the same reason as `map::rebase_map_cursor`:
+/// the elements a walk has yielded are precisely the live ones below its
+/// cursor, so each squeeze moves the cursor down by the removed count below it.
+unsafe fn rebase_set_cursor(set: *const SetHeader, cursor: u32, loop_epoch: u32) -> u32 {
+    if (*set).compaction_epoch == loop_epoch {
+        return cursor;
+    }
+    SET_COMPACTION_LOG.with(|log| {
+        let log = log.borrow();
+        let Some(records) = log.get(&(set as usize)) else {
+            return cursor;
+        };
+        let mut c = cursor;
+        for rec in records
+            .iter()
+            .filter(|r| r.epoch.wrapping_sub(loop_epoch) as i32 > 0)
+        {
+            c -= rec.removed.count_below(c);
+        }
+        c
+    })
+}
+
+/// The next live raw index at or after `cursor` (rebased through any
+/// squeezes since `loop_epoch`), or `None` when the extent is exhausted.
+/// O(holes stepped over); never compacts. See `map::map_cursor_next_raw`.
+pub(crate) unsafe fn set_cursor_next_raw(
+    set: *const SetHeader,
+    cursor: u32,
+    loop_epoch: u32,
+) -> Option<u32> {
+    let mut idx = rebase_set_cursor(set, cursor, loop_epoch);
+    let used = (*set).used;
+    let elements = elements_ptr(set);
+    while idx < used && ptr::read(elements.add(idx as usize)).to_bits() == SET_HOLE_VALUE_BITS {
+        idx += 1;
+    }
+    (idx < used).then_some(idx)
+}
+
+#[inline]
+pub(crate) fn set_compaction_epoch(set: *const SetHeader) -> u32 {
+    unsafe { (*set).compaction_epoch }
+}
+
+/// Dead-owner prune for `SET_COMPACTION_LOG`.
+pub(crate) fn prune_dead_set_compaction_log_owners(is_dead_owner: &dyn Fn(usize) -> bool) {
+    SET_COMPACTION_LOG.with(|log| {
+        log.borrow_mut().retain(|owner, _| !is_dead_owner(*owner));
+    });
+}
+
+/// C-ABI, for the `for…of` fast path: next live raw index at or after
+/// `cursor` after rebasing through squeezes since `epoch`, or `-1.0` when
+/// exhausted. NaN-boxed set; cursor/epoch are the loop's Number temps.
+#[no_mangle]
+pub extern "C" fn js_set_cursor_next(set_boxed: f64, cursor: f64, epoch: f64) -> f64 {
+    let set = clean_set_ptr(crate::value::js_nanbox_get_pointer(set_boxed) as *const SetHeader);
+    if set.is_null() {
+        return -1.0;
+    }
+    let cursor = if cursor > 0.0 { cursor as u32 } else { 0 };
+    let epoch = if epoch > 0.0 { epoch as u32 } else { 0 };
+    match unsafe { set_cursor_next_raw(set, cursor, epoch) } {
+        Some(idx) => idx as f64,
+        None => -1.0,
+    }
+}
+#[cfg(feature = "keepalive-anchors")]
+#[used]
+static KEEP_SET_CURSOR_NEXT: extern "C" fn(f64, f64, f64) -> f64 = js_set_cursor_next;
+
+/// C-ABI companion: the header's compaction epoch the loop stores after
+/// each step.
+#[no_mangle]
+pub extern "C" fn js_set_compaction_epoch(set_boxed: f64) -> f64 {
+    let set = clean_set_ptr(crate::value::js_nanbox_get_pointer(set_boxed) as *const SetHeader);
+    if set.is_null() {
+        return 0.0;
+    }
+    set_compaction_epoch(set) as f64
+}
+#[cfg(feature = "keepalive-anchors")]
+#[used]
+static KEEP_SET_COMPACTION_EPOCH: extern "C" fn(f64) -> f64 = js_set_compaction_epoch;
+
 unsafe fn compact_set_elements(set: *mut SetHeader) {
     let used = (*set).used as usize;
     let elements = elements_ptr_mut(set);
     let mut out = 0usize;
+    // The raw indices squeezed out, for the cursors that were walking them.
+    let mut removed: Vec<u32> = Vec::with_capacity(used.saturating_sub((*set).size as usize));
     for i in 0..used {
         let v = ptr::read(elements.add(i));
         if v.to_bits() == SET_HOLE_VALUE_BITS {
+            removed.push(i as u32);
             continue;
         }
         if out != i {
@@ -900,6 +1059,9 @@ unsafe fn compact_set_elements(set: *mut SetHeader) {
         crate::gc::runtime_write_barrier_external_slot_span(set as usize, elements as usize, out);
     }
     rebuild_set_index(set);
+    if !removed.is_empty() {
+        note_set_compaction(set, SetRemovedSlots::Indices(removed));
+    }
 }
 
 pub(crate) unsafe fn compact_if_holey_set(set: *mut SetHeader) {
@@ -1035,6 +1197,13 @@ pub extern "C" fn js_set_alloc(capacity: u32) -> *mut SetHeader {
         // uninitialised meta edge would be a garbage pointer the GC follows.
         (*ptr).meta = std::ptr::null_mut();
         (*ptr).used = 0;
+        (*ptr).compaction_epoch = 0;
+        // A previous tenant of this address may have left a compaction log
+        // behind if the dead-owner prune has not run yet; a fresh Set must
+        // start with no history.
+        SET_COMPACTION_LOG.with(|log| {
+            log.borrow_mut().remove(&(ptr as usize));
+        });
 
         // Register in set registry for runtime type detection
         register_set(ptr, elements, cap as usize);
@@ -1602,12 +1771,14 @@ pub extern "C" fn js_set_clear(set: *mut SetHeader) {
     }
     unsafe {
         let active_foreach = set_foreach_is_active(set);
+        let extent = (*set).used;
         // The side-table mirrors the elements exactly, so an already-empty
         // set has nothing to reset — half of a change set's per-entity
         // `adds.clear(); removes.clear()` — and skips the table probe.
         if (*set).size == 0 {
-            if !active_foreach {
+            if !active_foreach && extent > 0 {
                 (*set).used = 0;
+                note_set_compaction(set, SetRemovedSlots::Prefix(extent));
             }
             return;
         }
@@ -1629,7 +1800,12 @@ pub extern "C" fn js_set_clear(set: *mut SetHeader) {
                 }
             }
         } else {
+            // Discarding the extent moves nothing, but a live raw-index
+            // cursor must restart at 0 to see what is appended next (spec:
+            // [[SetData]] is emptied in place, later adds are visited), so
+            // record it as a squeeze of the whole extent.
             (*set).used = 0;
+            note_set_compaction(set, SetRemovedSlots::Prefix(extent));
         }
     }
     SET_INDEX.with(|idx| {
@@ -1652,12 +1828,12 @@ pub extern "C" fn js_set_value_at(set: *const SetHeader, i: u32) -> f64 {
         return f64::from_bits(UNDEF);
     }
     unsafe {
-        if (*set).used != (*set).size {
-            // Raw-indexed access with holes present: compact so raw == live
-            // again for every external walker that loops `0..size`.
-            compact_set_elements(set as *mut SetHeader);
-        }
-        if i >= (*set).size {
+        // A raw read, bounded by the raw extent. The index comes from
+        // `js_set_cursor_next`, which only yields LIVE raw indices, so no
+        // hole reaches user code — and nothing here compacts (the self-heal
+        // compaction this used to perform ran once per hole observed, which
+        // made a delete-during-`for…of` loop O(n) per delete).
+        if i >= (*set).used {
             return f64::from_bits(UNDEF);
         }
         let elements = (*set).elements as *const f64;
@@ -2889,6 +3065,7 @@ mod tests {
             elements: std::ptr::null_mut(),
             meta: std::ptr::null_mut(),
             used: 1,
+            compaction_epoch: 0,
         };
 
         let cases: &[(&str, *mut f64)] = &[
