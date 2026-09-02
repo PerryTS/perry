@@ -1765,7 +1765,10 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                     Some(f.name.clone())
                 }
             })?;
-            func_names.get(&f.id).map(|sym| (sym.clone(), display))
+            func_names
+                .get(&f.id)
+                .filter(|sym| llmod.has_function(sym))
+                .map(|sym| (sym.clone(), display))
         })
         .collect();
     user_fn_display_names.extend(body_symbol_display_names);
@@ -1780,6 +1783,25 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
     // `.name` it never had is a separate, observable change.
     {
         let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        // `method_names` is a DISPATCH registry, not an emission record: it
+        // carries entries this module never defines a body for (an accessor
+        // reached only through a cross-module or typed path, a stale key from
+        // a shape that lowered elsewhere). Registering one of those emits a
+        // `js_register_function_name(ptr @perry_method_…)` against a symbol
+        // that does not exist, and the module fails to build with "reference
+        // to unknown global" — measured on the claude-code bundle, where
+        // exactly one getter (`UT7.__get_get_extensionName`) had a registry
+        // key and no definition out of ~46k functions. `has_function` is the
+        // authority on what this module actually emitted, so every name below
+        // goes through it.
+        let mut push_defined = |symbol: String, display: String| {
+            if symbol.is_empty() || display.is_empty() || !llmod.has_function(&symbol) {
+                return;
+            }
+            if seen.insert(symbol.clone()) {
+                user_fn_display_names.push((symbol, display));
+            }
+        };
         for class in &hir.classes {
             for method in &class.methods {
                 let Some(symbol) = method_names
@@ -1788,10 +1810,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                 else {
                     continue;
                 };
-                if method.name.is_empty() || !seen.insert(symbol.clone()) {
-                    continue;
-                }
-                user_fn_display_names.push((symbol, format!("{}.{}", class.name, method.name)));
+                push_defined(symbol, format!("{}.{}", class.name, method.name));
             }
             for method in &class.static_methods {
                 let Some(symbol) = method_names
@@ -1800,10 +1819,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                 else {
                     continue;
                 };
-                if method.name.is_empty() || !seen.insert(symbol.clone()) {
-                    continue;
-                }
-                user_fn_display_names.push((symbol, format!("{}.{}", class.name, method.name)));
+                push_defined(symbol, format!("{}.{}", class.name, method.name));
             }
             // Accessors are keyed with the `__get_` / `__set_` prefix
             // `method_registry` gives them, and node labels their frames
@@ -1819,10 +1835,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                     else {
                         continue;
                     };
-                    if prop.is_empty() || !seen.insert(symbol.clone()) {
-                        continue;
-                    }
-                    user_fn_display_names.push((symbol, format!("{label} {prop}")));
+                    push_defined(symbol, format!("{label} {prop}"));
                 }
             }
             // The constructor is registered in `method_names` under the
@@ -1838,9 +1851,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
             // covers is one that can no longer borrow a neighbour's name.
             let ctor_key = (class.name.clone(), format!("{}_constructor", class.name));
             if let Some(symbol) = method_names.get(&ctor_key).cloned() {
-                if seen.insert(symbol.clone()) {
-                    user_fn_display_names.push((symbol, format!("new {}", class.name)));
-                }
+                push_defined(symbol, format!("new {}", class.name));
             }
         }
     }
