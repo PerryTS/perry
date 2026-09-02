@@ -1872,6 +1872,8 @@ pub(super) unsafe fn mark_object_dynamic_shape_unknown(obj: *mut ObjectHeader) {
 #[cfg(test)]
 mod own_key_probe_tests;
 #[cfg(test)]
+mod restricted_function_store_tests;
+#[cfg(test)]
 mod test_root_accessors;
 #[cfg(test)]
 pub(crate) use test_root_accessors::*;
