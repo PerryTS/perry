@@ -95,6 +95,7 @@ pub(super) unsafe fn alloc_old_test_error() -> *mut crate::error::ErrorHeader {
             cause: f64::from_bits(crate::value::TAG_UNDEFINED),
             errors: std::ptr::null_mut(),
             meta: std::ptr::null_mut(),
+            frames: std::ptr::null_mut(),
         },
     );
     ptr
