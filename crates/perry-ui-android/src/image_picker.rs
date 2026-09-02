@@ -7,7 +7,7 @@
 
 use crate::callback;
 use crate::jni_bridge;
-use jni::objects::JValue;
+use jni::JValue;
 
 pub fn pick(max_count: f64, allow_multiple: f64, callback_f64: f64) {
     let key = callback::register(callback_f64);
@@ -26,24 +26,25 @@ pub fn pick(max_count: f64, allow_multiple: f64, callback_f64: f64) {
             && allow_multiple != 0.0
             && !allow_multiple.is_nan());
 
-    let mut env = jni_bridge::get_env();
-    let _ = env.push_local_frame(16);
+    jni_bridge::with_env(|env| {
+        let _ = jni_bridge::push_local_frame(env, 16);
 
-    let bridge_class =
-        jni_bridge::with_cache(|c| env.new_local_ref(c.perry_bridge_class.as_obj()).unwrap());
-    let bridge_cls: &jni::objects::JClass = (&bridge_class).into();
-    let _ = env.call_static_method(
-        bridge_cls,
-        "requestImagePickerPick",
-        "(IZJ)V",
-        &[
-            JValue::Int(max),
-            JValue::Bool(if allow_multi { 1 } else { 0 }),
-            JValue::Long(key),
-        ],
-    );
+        let bridge_class =
+            jni_bridge::with_cache(|c| env.new_local_ref(&c.perry_bridge_class).unwrap());
+        let bridge_cls: &jni::objects::JClass = &bridge_class;
+        let _ = env.call_static_method(
+            bridge_cls,
+            jni::jni_str!("requestImagePickerPick"),
+            jni::jni_sig!("(IZJ)V"),
+            &[
+                JValue::Int(max),
+                JValue::Bool(allow_multi),
+                JValue::Long(key),
+            ],
+        );
 
-    unsafe {
-        env.pop_local_frame(&jni::objects::JObject::null());
-    }
+        unsafe {
+            let _ = jni_bridge::pop_local_frame(env, &jni::objects::JObject::null());
+        }
+    })
 }

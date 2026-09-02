@@ -16,7 +16,7 @@
 
 use crate::callback;
 use crate::jni_bridge;
-use jni::objects::JValue;
+use jni::JValue;
 
 extern "C" {
     fn js_closure_call1(closure: *const u8, arg: f64) -> f64;
@@ -32,7 +32,7 @@ const POINTER_TYPE_TOUCH: u32 = 1;
 /// finger touch).
 #[no_mangle]
 pub extern "C" fn Java_com_perry_app_PerryBridge_nativeInvokePointerCallback(
-    _env: jni::JNIEnv,
+    _env: jni::EnvUnowned,
     _class: jni::objects::JClass,
     key: jni::sys::jlong,
     x: jni::sys::jdouble,
@@ -57,25 +57,26 @@ fn install_touch_listener(handle: i64, down_key: i64, move_key: i64, up_key: i64
     let Some(view_ref) = crate::widgets::get_widget(handle) else {
         return;
     };
-    let mut env = jni_bridge::get_env();
-    let _ = env.push_local_frame(8);
-    let bridge_class =
-        jni_bridge::with_cache(|c| env.new_local_ref(c.perry_bridge_class.as_obj()).unwrap());
-    let bridge_cls: &jni::objects::JClass = (&bridge_class).into();
-    let _ = env.call_static_method(
-        bridge_cls,
-        "setOnPointerCallbacks",
-        "(Landroid/view/View;JJJ)V",
-        &[
-            JValue::Object(view_ref.as_obj()),
-            JValue::Long(down_key),
-            JValue::Long(move_key),
-            JValue::Long(up_key),
-        ],
-    );
-    unsafe {
-        env.pop_local_frame(&jni::objects::JObject::null());
-    }
+    jni_bridge::with_env(|env| {
+        let _ = jni_bridge::push_local_frame(env, 8);
+        let bridge_class =
+            jni_bridge::with_cache(|c| env.new_local_ref(&c.perry_bridge_class).unwrap());
+        let bridge_cls: &jni::objects::JClass = &bridge_class;
+        let _ = env.call_static_method(
+            bridge_cls,
+            jni::jni_str!("setOnPointerCallbacks"),
+            jni::jni_sig!("(Landroid/view/View;JJJ)V"),
+            &[
+                JValue::Object(view_ref.as_obj()),
+                JValue::Long(down_key),
+                JValue::Long(move_key),
+                JValue::Long(up_key),
+            ],
+        );
+        unsafe {
+            let _ = jni_bridge::pop_local_frame(env, &jni::objects::JObject::null());
+        }
+    })
 }
 
 use std::cell::RefCell;

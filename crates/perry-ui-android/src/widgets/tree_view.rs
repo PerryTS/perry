@@ -13,7 +13,8 @@
 use crate::app::str_from_header;
 use crate::callback;
 use crate::jni_bridge;
-use jni::objects::{JObject, JString, JValue};
+use jni::objects::{JObject, JString};
+use jni::JValue;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
@@ -86,52 +87,53 @@ pub fn create(root_node: i64, on_select: f64) -> i64 {
         0
     };
 
-    let mut env = jni_bridge::get_env();
-    let _ = env.push_local_frame(8);
-    let bridge_class =
-        jni_bridge::with_cache(|c| env.new_local_ref(c.perry_bridge_class.as_obj()).unwrap());
-    let bridge_cls: &jni::objects::JClass = (&bridge_class).into();
-    let result = env.call_static_method(
-        bridge_cls,
-        "treeViewCreate",
-        "(J)Landroid/widget/ListView;",
-        &[JValue::Long(cb_key)],
-    );
-    let widget_handle = match result {
-        Ok(jv) => match jv.l() {
-            Ok(obj) if !obj.is_null() => {
-                let g = env.new_global_ref(obj).expect("global-ref TreeView");
-                super::register_widget(g)
+    jni_bridge::with_env(|env| {
+        let _ = jni_bridge::push_local_frame(env, 8);
+        let bridge_class =
+            jni_bridge::with_cache(|c| env.new_local_ref(&c.perry_bridge_class).unwrap());
+        let bridge_cls: &jni::objects::JClass = &bridge_class;
+        let result = env.call_static_method(
+            bridge_cls,
+            jni::jni_str!("treeViewCreate"),
+            jni::jni_sig!("(J)Landroid/widget/ListView;"),
+            &[JValue::Long(cb_key)],
+        );
+        let widget_handle = match result {
+            Ok(jv) => match jv.l() {
+                Ok(obj) if !obj.is_null() => {
+                    let g = jni_bridge::new_global_ref(env, obj).expect("global-ref TreeView");
+                    super::register_widget(g)
+                }
+                _ => 0,
+            },
+            Err(_) => {
+                if env.exception_check() {
+                    let _ = env.exception_describe();
+                    let _ = env.exception_clear();
+                }
+                0
             }
-            _ => 0,
-        },
-        Err(_) => {
-            if env.exception_check().unwrap_or(false) {
-                let _ = env.exception_describe();
-                let _ = env.exception_clear();
-            }
-            0
+        };
+        unsafe {
+            let _ = jni_bridge::pop_local_frame(env, &JObject::null());
         }
-    };
-    unsafe {
-        env.pop_local_frame(&JObject::null());
-    }
 
-    if widget_handle != 0 {
-        TREE_VIEWS.with(|m| {
-            m.borrow_mut().insert(
-                widget_handle,
-                TreeViewState {
-                    root_node,
-                    expanded: HashSet::new(),
-                    callback_key: cb_key,
-                    selected_id: None,
-                },
-            );
-        });
-        refresh(widget_handle);
-    }
-    widget_handle
+        if widget_handle != 0 {
+            TREE_VIEWS.with(|m| {
+                m.borrow_mut().insert(
+                    widget_handle,
+                    TreeViewState {
+                        root_node,
+                        expanded: HashSet::new(),
+                        callback_key: cb_key,
+                        selected_id: None,
+                    },
+                );
+            });
+            refresh(widget_handle);
+        }
+        widget_handle
+    })
 }
 
 pub fn expand_all(widget_handle: i64) {
@@ -307,57 +309,62 @@ fn refresh(widget_handle: i64) {
         return;
     };
     let (rows, ids) = flatten_visible(widget_handle);
-    let mut env = jni_bridge::get_env();
-    let _ = env.push_local_frame(64);
+    jni_bridge::with_env(|env| {
+        let _ = jni_bridge::push_local_frame(env, 64);
 
-    let str_class = env.find_class("java/lang/String").expect("String class");
-    let rows_arr = env
-        .new_object_array(rows.len() as i32, &str_class, &JObject::null())
-        .expect("rows array");
-    for (i, row) in rows.iter().enumerate() {
-        let js = env.new_string(row).expect("row string");
-        let _ = env.set_object_array_element(&rows_arr, i as i32, &js);
-    }
-    let ids_arr = env
-        .new_object_array(ids.len() as i32, &str_class, &JObject::null())
-        .expect("ids array");
-    for (i, id) in ids.iter().enumerate() {
-        let js = env.new_string(id).expect("id string");
-        let _ = env.set_object_array_element(&ids_arr, i as i32, &js);
-    }
+        let str_class = env
+            .find_class(jni::jni_str!("java/lang/String"))
+            .expect("String class");
+        let rows_arr = env
+            .new_object_array(rows.len() as i32, &str_class, &JObject::null())
+            .expect("rows array");
+        for (i, row) in rows.iter().enumerate() {
+            let js = env.new_string(row).expect("row string");
+            let _ = rows_arr.set_element(env, i, &js);
+        }
+        let ids_arr = env
+            .new_object_array(ids.len() as i32, &str_class, &JObject::null())
+            .expect("ids array");
+        for (i, id) in ids.iter().enumerate() {
+            let js = env.new_string(id).expect("id string");
+            let _ = ids_arr.set_element(env, i, &js);
+        }
 
-    let bridge_class =
-        jni_bridge::with_cache(|c| env.new_local_ref(c.perry_bridge_class.as_obj()).unwrap());
-    let bridge_cls: &jni::objects::JClass = (&bridge_class).into();
-    let _ = env.call_static_method(
-        bridge_cls,
-        "treeViewRefresh",
-        "(JLandroid/widget/ListView;[Ljava/lang/String;[Ljava/lang/String;)V",
-        &[
-            JValue::Long(widget_handle),
-            JValue::Object(view.as_obj()),
-            JValue::Object(&rows_arr),
-            JValue::Object(&ids_arr),
-        ],
-    );
-    if env.exception_check().unwrap_or(false) {
-        let _ = env.exception_describe();
-        let _ = env.exception_clear();
-    }
-    unsafe {
-        env.pop_local_frame(&JObject::null());
-    }
+        let bridge_class =
+            jni_bridge::with_cache(|c| env.new_local_ref(&c.perry_bridge_class).unwrap());
+        let bridge_cls: &jni::objects::JClass = &bridge_class;
+        let _ = env.call_static_method(
+            bridge_cls,
+            jni::jni_str!("treeViewRefresh"),
+            jni::jni_sig!("(JLandroid/widget/ListView;[Ljava/lang/String;[Ljava/lang/String;)V"),
+            &[
+                JValue::Long(widget_handle),
+                JValue::Object(view.as_obj()),
+                JValue::Object(&rows_arr),
+                JValue::Object(&ids_arr),
+            ],
+        );
+        if env.exception_check() {
+            let _ = env.exception_describe();
+            let _ = env.exception_clear();
+        }
+        unsafe {
+            let _ = jni_bridge::pop_local_frame(env, &JObject::null());
+        }
+    })
 }
 
 /// JNI entry point: PerryBridge.nativeTreeRowTapped(long widgetHandle, String id).
 /// Runs on the UI thread (ListView OnItemClickListener).
 #[no_mangle]
 pub extern "C" fn Java_com_perry_app_PerryBridge_nativeTreeRowTapped(
-    mut env: jni::JNIEnv,
+    mut env: jni::EnvUnowned,
     _class: jni::objects::JClass,
     widget_handle: jni::sys::jlong,
     id: JString,
 ) {
-    let s: String = env.get_string(&id).map(|j| j.into()).unwrap_or_default();
-    handle_row_tap(widget_handle as i64, &s);
+    jni_bridge::with_unowned_env(&mut env, |env| {
+        let s = id.try_to_string(env).unwrap_or_default();
+        handle_row_tap(widget_handle as i64, &s);
+    });
 }

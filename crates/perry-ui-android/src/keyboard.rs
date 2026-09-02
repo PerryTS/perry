@@ -35,7 +35,7 @@ pub fn current_modifiers() -> u32 {
 /// `repeat_count` ≥ 1 marks the OS auto-repeat case.
 #[no_mangle]
 pub extern "C" fn Java_com_perry_app_PerryBridge_nativeDispatchKey(
-    _env: jni::JNIEnv,
+    _env: jni::EnvUnowned,
     _class: jni::objects::JClass,
     key_code: jni::sys::jint,
     action: jni::sys::jint,

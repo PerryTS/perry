@@ -18,7 +18,9 @@
 //! `PerryBridge.showToast(String)`, whose Kotlin implementation posts to
 //! the UI thread's `Handler(Looper.getMainLooper())`.
 
-use jni::objects::JValue;
+use jni::JValue;
+
+use crate::jni_bridge;
 
 /// Cross-platform handler entry point. Registered with
 /// `js_register_show_toast_handler` at app startup.
@@ -32,23 +34,24 @@ pub extern "C" fn show_toast_handler(msg_ptr: *const u8, msg_len: usize) {
         String::from_utf8_lossy(bytes).into_owned()
     };
 
-    let mut env = crate::jni_bridge::get_env();
-    let _ = env.push_local_frame(8);
+    crate::jni_bridge::with_env(|env| {
+        let _ = jni_bridge::push_local_frame(env, 8);
 
-    if let Ok(jstr) = env.new_string(&msg) {
-        let bridge_class = crate::jni_bridge::with_cache(|c| {
-            env.new_local_ref(c.perry_bridge_class.as_obj()).unwrap()
-        });
-        let bridge_cls: &jni::objects::JClass = (&bridge_class).into();
-        let _ = env.call_static_method(
-            bridge_cls,
-            "showToast",
-            "(Ljava/lang/String;)V",
-            &[JValue::Object(&jstr)],
-        );
-    }
+        if let Ok(jstr) = env.new_string(&msg) {
+            let bridge_class = crate::jni_bridge::with_cache(|c| {
+                env.new_local_ref(&c.perry_bridge_class).unwrap()
+            });
+            let bridge_cls: &jni::objects::JClass = &bridge_class;
+            let _ = env.call_static_method(
+                bridge_cls,
+                jni::jni_str!("showToast"),
+                jni::jni_sig!("(Ljava/lang/String;)V"),
+                &[JValue::Object(&jstr)],
+            );
+        }
 
-    unsafe {
-        env.pop_local_frame(&jni::objects::JObject::null());
-    }
+        unsafe {
+            let _ = jni_bridge::pop_local_frame(env, &jni::objects::JObject::null());
+        }
+    })
 }

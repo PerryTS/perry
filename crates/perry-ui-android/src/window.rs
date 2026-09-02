@@ -1,7 +1,8 @@
 //! Multi-window — Dialog-based windows on Android
 
 use crate::jni_bridge;
-use jni::objects::{GlobalRef, JValue};
+use crate::jni_bridge::GlobalRef;
+use jni::JValue;
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -9,8 +10,8 @@ use perry_ffi::copy_string_from_raw as str_from_header;
 
 struct WindowState {
     title: String,
-    width: f64,
-    height: f64,
+    _width: f64,
+    _height: f64,
     body_handle: Option<i64>,
     dialog_ref: Option<GlobalRef>,
 }
@@ -34,8 +35,8 @@ pub fn create(title_ptr: *const u8, width: f64, height: f64) -> i64 {
             id,
             WindowState {
                 title,
-                width,
-                height,
+                _width: width,
+                _height: height,
                 body_handle: None,
                 dialog_ref: None,
             },
@@ -65,53 +66,53 @@ pub fn show(window_handle: i64) {
 
     if let Some(body_handle) = body {
         if let Some(view_ref) = crate::widgets::get_widget(body_handle) {
-            let mut env = jni_bridge::get_env();
-            let _ = env.push_local_frame(32);
+            jni_bridge::with_env(|env| {
+                let _ = jni_bridge::push_local_frame(env, 32);
 
-            let activity = crate::widgets::get_activity(&mut env);
+                let activity = crate::widgets::get_activity(env);
 
-            let dialog = env
-                .new_object(
-                    "android/app/Dialog",
-                    "(Landroid/content/Context;)V",
-                    &[JValue::Object(&activity)],
-                )
-                .expect("Failed to create Dialog");
+                let dialog = env
+                    .new_object(
+                        jni::jni_str!("android/app/Dialog"),
+                        jni::jni_sig!("(Landroid/content/Context;)V"),
+                        &[JValue::Object(&activity)],
+                    )
+                    .expect("Failed to create Dialog");
 
-            // Set title
-            if !title.is_empty() {
-                let jtitle = env.new_string(&title).expect("Failed to create JNI string");
+                // Set title
+                if !title.is_empty() {
+                    let jtitle = env.new_string(&title).expect("Failed to create JNI string");
+                    let _ = env.call_method(
+                        &dialog,
+                        jni::jni_str!("setTitle"),
+                        jni::jni_sig!("(Ljava/lang/CharSequence;)V"),
+                        &[JValue::Object(&jtitle)],
+                    );
+                }
+
+                // Set content
                 let _ = env.call_method(
                     &dialog,
-                    "setTitle",
-                    "(Ljava/lang/CharSequence;)V",
-                    &[JValue::Object(&jtitle)],
+                    jni::jni_str!("setContentView"),
+                    jni::jni_sig!("(Landroid/view/View;)V"),
+                    &[JValue::Object(view_ref.as_obj())],
                 );
-            }
 
-            // Set content
-            let _ = env.call_method(
-                &dialog,
-                "setContentView",
-                "(Landroid/view/View;)V",
-                &[JValue::Object(view_ref.as_obj())],
-            );
+                let _ = env.call_method(&dialog, jni::jni_str!("show"), jni::jni_sig!("()V"), &[]);
 
-            let _ = env.call_method(&dialog, "show", "()V", &[]);
+                let global =
+                    jni_bridge::new_global_ref(env, dialog).expect("Failed to create global ref");
+                WINDOWS.with(|w| {
+                    let mut windows = w.borrow_mut();
+                    if let Some(state) = windows.get_mut(&window_handle) {
+                        state.dialog_ref = Some(global);
+                    }
+                });
 
-            let global = env
-                .new_global_ref(dialog)
-                .expect("Failed to create global ref");
-            WINDOWS.with(|w| {
-                let mut windows = w.borrow_mut();
-                if let Some(state) = windows.get_mut(&window_handle) {
-                    state.dialog_ref = Some(global);
+                unsafe {
+                    let _ = jni_bridge::pop_local_frame(env, &jni::objects::JObject::null());
                 }
-            });
-
-            unsafe {
-                env.pop_local_frame(&jni::objects::JObject::null());
-            }
+            })
         }
     }
 }
@@ -125,11 +126,17 @@ pub fn close(window_handle: i64) {
     });
 
     if let Some(dialog_ref) = dialog {
-        let mut env = jni_bridge::get_env();
-        let _ = env.push_local_frame(8);
-        let _ = env.call_method(dialog_ref.as_obj(), "dismiss", "()V", &[]);
-        unsafe {
-            env.pop_local_frame(&jni::objects::JObject::null());
-        }
+        jni_bridge::with_env(|env| {
+            let _ = jni_bridge::push_local_frame(env, 8);
+            let _ = env.call_method(
+                dialog_ref.as_obj(),
+                jni::jni_str!("dismiss"),
+                jni::jni_sig!("()V"),
+                &[],
+            );
+            unsafe {
+                let _ = jni_bridge::pop_local_frame(env, &jni::objects::JObject::null());
+            }
+        })
     }
 }

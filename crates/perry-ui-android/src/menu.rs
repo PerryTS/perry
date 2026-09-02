@@ -1,4 +1,4 @@
-use jni::objects::JValue;
+use jni::JValue;
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -55,16 +55,17 @@ pub fn set_context_menu(widget_handle: i64, menu_handle: i64) {
 
     // Set up long-click listener on the widget via PerryBridge
     if let Some(view_ref) = crate::widgets::get_widget(widget_handle) {
-        let mut env = jni_bridge::get_env();
-        let bridge_class =
-            jni_bridge::with_cache(|c| env.new_local_ref(c.perry_bridge_class.as_obj()).unwrap());
-        let bridge_cls: &jni::objects::JClass = (&bridge_class).into();
-        let _ = env.call_static_method(
-            bridge_cls,
-            "setContextMenu",
-            "(Landroid/view/View;J)V",
-            &[JValue::Object(view_ref.as_obj()), JValue::Long(menu_handle)],
-        );
+        jni_bridge::with_env(|env| {
+            let bridge_class =
+                jni_bridge::with_cache(|c| env.new_local_ref(&c.perry_bridge_class).unwrap());
+            let bridge_cls: &jni::objects::JClass = &bridge_class;
+            let _ = env.call_static_method(
+                bridge_cls,
+                jni::jni_str!("setContextMenu"),
+                jni::jni_sig!("(Landroid/view/View;J)V"),
+                &[JValue::Object(view_ref.as_obj()), JValue::Long(menu_handle)],
+            );
+        })
     }
 }
 
@@ -72,7 +73,7 @@ pub fn set_context_menu(widget_handle: i64, menu_handle: i64) {
 /// Returns the number of menu items.
 #[no_mangle]
 pub extern "C" fn Java_com_perry_app_PerryBridge_nativeGetMenuItemCount(
-    _env: jni::JNIEnv,
+    _env: jni::EnvUnowned,
     _class: jni::objects::JClass,
     menu_handle: jni::sys::jlong,
 ) -> jni::sys::jint {
@@ -90,7 +91,7 @@ pub extern "C" fn Java_com_perry_app_PerryBridge_nativeGetMenuItemCount(
 /// JNI entry point: called from Java to get a menu item title.
 #[no_mangle]
 pub extern "C" fn Java_com_perry_app_PerryBridge_nativeGetMenuItemTitle(
-    env: jni::JNIEnv,
+    mut env: jni::EnvUnowned,
     _class: jni::objects::JClass,
     menu_handle: jni::sys::jlong,
     index: jni::sys::jint,
@@ -106,14 +107,17 @@ pub extern "C" fn Java_com_perry_app_PerryBridge_nativeGetMenuItemTitle(
         }
         String::new()
     });
-    let jstr = env.new_string(&title).expect("Failed to create JNI string");
-    jstr.into_raw()
+    jni_bridge::with_unowned_env(&mut env, |env| {
+        env.new_string(&title)
+            .expect("Failed to create JNI string")
+            .into_raw()
+    })
 }
 
 /// JNI entry point: called from Java when a context menu item is selected.
 #[no_mangle]
 pub extern "C" fn Java_com_perry_app_PerryBridge_nativeMenuItemSelected(
-    _env: jni::JNIEnv,
+    _env: jni::EnvUnowned,
     _class: jni::objects::JClass,
     menu_handle: jni::sys::jlong,
     index: jni::sys::jint,

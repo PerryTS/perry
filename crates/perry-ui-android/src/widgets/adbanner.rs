@@ -9,7 +9,7 @@
 //! API parity but unused by the placeholder.
 
 use crate::jni_bridge;
-use jni::objects::JValue;
+use jni::JValue;
 
 use perry_ffi::copy_string_from_raw as str_from_header;
 
@@ -31,40 +31,39 @@ pub fn create(unit_id_ptr: *const u8, size_ptr: *const u8) -> i64 {
     let size_key = unsafe { str_from_header(size_ptr) };
     let (w_dp, h_dp) = banner_size_dp(&size_key);
 
-    let mut env = jni_bridge::get_env();
-    let _ = env.push_local_frame(32);
-    let activity = super::get_activity(&mut env);
+    jni_bridge::with_env(|env| {
+        let _ = jni_bridge::push_local_frame(env, 32);
+        let activity = super::get_activity(env);
 
-    let view = env
-        .new_object(
-            "android/view/View",
-            "(Landroid/content/Context;)V",
-            &[JValue::Object(&activity)],
-        )
-        .expect("Failed to create View");
+        let view = env
+            .new_object(
+                jni::jni_str!("android/view/View"),
+                jni::jni_sig!("(Landroid/content/Context;)V"),
+                &[JValue::Object(&activity)],
+            )
+            .expect("Failed to create View");
 
-    let width_px = super::dp_to_px(&mut env, w_dp);
-    let height_px = super::dp_to_px(&mut env, h_dp);
-    let params = env
-        .new_object(
-            "android/widget/LinearLayout$LayoutParams",
-            "(II)V",
-            &[JValue::Int(width_px), JValue::Int(height_px)],
-        )
-        .expect("Failed to create LayoutParams");
-    let _ = env.call_method(
-        &view,
-        "setLayoutParams",
-        "(Landroid/view/ViewGroup$LayoutParams;)V",
-        &[JValue::Object(&params)],
-    );
+        let width_px = super::dp_to_px(env, w_dp);
+        let height_px = super::dp_to_px(env, h_dp);
+        let params = env
+            .new_object(
+                jni::jni_str!("android/widget/LinearLayout$LayoutParams"),
+                jni::jni_sig!("(II)V"),
+                &[JValue::Int(width_px), JValue::Int(height_px)],
+            )
+            .expect("Failed to create LayoutParams");
+        let _ = env.call_method(
+            &view,
+            jni::jni_str!("setLayoutParams"),
+            jni::jni_sig!("(Landroid/view/ViewGroup$LayoutParams;)V"),
+            &[JValue::Object(&params)],
+        );
 
-    let global = env
-        .new_global_ref(view)
-        .expect("Failed to create global ref");
-    let handle = super::register_widget(global);
-    unsafe {
-        env.pop_local_frame(&jni::objects::JObject::null());
-    }
-    handle
+        let global = jni_bridge::new_global_ref(env, view).expect("Failed to create global ref");
+        let handle = super::register_widget(global);
+        unsafe {
+            let _ = jni_bridge::pop_local_frame(env, &jni::objects::JObject::null());
+        }
+        handle
+    })
 }

@@ -1,7 +1,7 @@
 //! NavigationStack — FrameLayout with page stack (show/hide)
 
 use crate::jni_bridge;
-use jni::objects::JValue;
+use jni::JValue;
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -17,39 +17,39 @@ thread_local! {
 
 pub fn create(title_ptr: *const u8, body_handle: i64) -> i64 {
     let _title = unsafe { str_from_header(title_ptr) };
-    let mut env = jni_bridge::get_env();
-    let _ = env.push_local_frame(32);
+    jni_bridge::with_env(|env| {
+        let _ = jni_bridge::push_local_frame(env, 32);
 
-    let activity = super::get_activity(&mut env);
-    let frame_layout = env
-        .new_object(
-            "android/widget/FrameLayout",
-            "(Landroid/content/Context;)V",
-            &[JValue::Object(&activity)],
-        )
-        .expect("Failed to create FrameLayout");
+        let activity = super::get_activity(env);
+        let frame_layout = env
+            .new_object(
+                jni::jni_str!("android/widget/FrameLayout"),
+                jni::jni_sig!("(Landroid/content/Context;)V"),
+                &[JValue::Object(&activity)],
+            )
+            .expect("Failed to create FrameLayout");
 
-    let global = env
-        .new_global_ref(frame_layout)
-        .expect("Failed to create global ref");
-    let handle = super::register_widget(global);
+        let global =
+            jni_bridge::new_global_ref(env, frame_layout).expect("Failed to create global ref");
+        let handle = super::register_widget(global);
 
-    // Add the initial page
-    super::add_child(handle, body_handle);
+        // Add the initial page
+        super::add_child(handle, body_handle);
 
-    NAV_STATES.with(|s| {
-        s.borrow_mut().insert(
-            handle,
-            NavState {
-                pages: vec![body_handle],
-            },
-        );
-    });
+        NAV_STATES.with(|s| {
+            s.borrow_mut().insert(
+                handle,
+                NavState {
+                    pages: vec![body_handle],
+                },
+            );
+        });
 
-    unsafe {
-        env.pop_local_frame(&jni::objects::JObject::null());
-    }
-    handle
+        unsafe {
+            let _ = jni_bridge::pop_local_frame(env, &jni::objects::JObject::null());
+        }
+        handle
+    })
 }
 
 pub fn push(handle: i64, title_ptr: *const u8, body_handle: i64) {

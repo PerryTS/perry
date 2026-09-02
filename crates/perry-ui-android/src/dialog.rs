@@ -2,7 +2,7 @@
 
 use crate::callback;
 use crate::jni_bridge;
-use jni::objects::JValue;
+use jni::JValue;
 
 use perry_ffi::copy_string_from_raw as str_from_header;
 
@@ -35,39 +35,40 @@ pub fn alert(title_ptr: *const u8, message_ptr: *const u8, _buttons_ptr: *const 
     let title = unsafe { str_from_header(title_ptr) };
     let message = unsafe { str_from_header(message_ptr) };
 
-    let mut env = jni_bridge::get_env();
-    let _ = env.push_local_frame(32);
+    jni_bridge::with_env(|env| {
+        let _ = jni_bridge::push_local_frame(env, 32);
 
-    let activity = crate::widgets::get_activity(&mut env);
+        let activity = crate::widgets::get_activity(env);
 
-    // Use PerryBridge.showAlert(Activity, String title, String message, long callback)
-    let bridge_class =
-        jni_bridge::with_cache(|c| env.new_local_ref(c.perry_bridge_class.as_obj()).unwrap());
+        // Use PerryBridge.showAlert(Activity, String title, String message, long callback)
+        let bridge_class =
+            jni_bridge::with_cache(|c| env.new_local_ref(&c.perry_bridge_class).unwrap());
 
-    let jtitle = env.new_string(title).expect("Failed to create JNI string");
-    let jmessage = env
-        .new_string(message)
-        .expect("Failed to create JNI string");
-    let cb_key = if callback != 0.0 {
-        callback::register(callback)
-    } else {
-        0
-    };
+        let jtitle = env.new_string(title).expect("Failed to create JNI string");
+        let jmessage = env
+            .new_string(message)
+            .expect("Failed to create JNI string");
+        let cb_key = if callback != 0.0 {
+            callback::register(callback)
+        } else {
+            0
+        };
 
-    let bridge_cls: &jni::objects::JClass = (&bridge_class).into();
-    let _ = env.call_static_method(
-        bridge_cls,
-        "showAlert",
-        "(Landroid/app/Activity;Ljava/lang/String;Ljava/lang/String;J)V",
-        &[
-            JValue::Object(&activity),
-            JValue::Object(&jtitle),
-            JValue::Object(&jmessage),
-            JValue::Long(cb_key),
-        ],
-    );
+        let bridge_cls: &jni::objects::JClass = &bridge_class;
+        let _ = env.call_static_method(
+            bridge_cls,
+            jni::jni_str!("showAlert"),
+            jni::jni_sig!("(Landroid/app/Activity;Ljava/lang/String;Ljava/lang/String;J)V"),
+            &[
+                JValue::Object(&activity),
+                JValue::Object(&jtitle),
+                JValue::Object(&jmessage),
+                JValue::Long(cb_key),
+            ],
+        );
 
-    unsafe {
-        env.pop_local_frame(&jni::objects::JObject::null());
-    }
+        unsafe {
+            let _ = jni_bridge::pop_local_frame(env, &jni::objects::JObject::null());
+        }
+    })
 }

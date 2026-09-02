@@ -38,7 +38,9 @@ pub mod webview;
 pub mod wheel_picker;
 pub mod zstack;
 
-use jni::objects::{GlobalRef, JObject, JValue};
+use crate::jni_bridge::GlobalRef;
+use jni::objects::JObject;
+use jni::JValue;
 use std::sync::Mutex;
 
 use crate::jni_bridge;
@@ -122,18 +124,19 @@ pub fn get_widget(handle: i64) -> Option<GlobalRef> {
 /// Set the hidden state of a widget (View.VISIBLE=0, View.GONE=8).
 pub fn set_hidden(handle: i64, hidden: bool) {
     if let Some(view_ref) = get_widget(handle) {
-        let mut env = jni_bridge::get_env();
-        let _ = env.push_local_frame(8);
-        let visibility = if hidden { 8i32 } else { 0i32 }; // View.GONE=8, View.VISIBLE=0
-        let _ = env.call_method(
-            view_ref.as_obj(),
-            "setVisibility",
-            "(I)V",
-            &[JValue::Int(visibility)],
-        );
-        unsafe {
-            env.pop_local_frame(&JObject::null());
-        }
+        jni_bridge::with_env(|env| {
+            let _ = jni_bridge::push_local_frame(env, 8);
+            let visibility = if hidden { 8i32 } else { 0i32 }; // View.GONE=8, View.VISIBLE=0
+            let _ = env.call_method(
+                view_ref.as_obj(),
+                jni::jni_str!("setVisibility"),
+                jni::jni_sig!("(I)V"),
+                &[JValue::Int(visibility)],
+            );
+            unsafe {
+                let _ = jni_bridge::pop_local_frame(env, &JObject::null());
+            }
+        })
     }
 }
 
@@ -144,33 +147,39 @@ pub fn clear_children(handle: i64) {
     // Track the first widget that gets clearChildren called — it's the root
     crate::app::track_root_candidate(handle);
     if let Some(parent_ref) = get_widget(handle) {
-        let mut env = jni_bridge::get_env();
-        let _ = env.push_local_frame(8);
-        let _ = env.call_method(parent_ref.as_obj(), "removeAllViews", "()V", &[]);
-        unsafe {
-            if env.exception_check().unwrap_or(false) {
-                let _ = env.exception_describe();
-                let _ = env.exception_clear();
+        jni_bridge::with_env(|env| {
+            let _ = jni_bridge::push_local_frame(env, 8);
+            let _ = env.call_method(
+                parent_ref.as_obj(),
+                jni::jni_str!("removeAllViews"),
+                jni::jni_sig!("()V"),
+                &[],
+            );
+            unsafe {
+                if env.exception_check() {
+                    let _ = env.exception_describe();
+                    let _ = env.exception_clear();
+                }
+                let _ = jni_bridge::pop_local_frame(env, &JObject::null());
             }
-            env.pop_local_frame(&JObject::null());
-        }
 
-        // Only truncate widget handles when ALL of the following are true:
-        // 1. The app has completed its initial build (app_set_body called)
-        // 2. The handle being cleared is the root body widget
-        // During init, clearChildren may be called on non-root containers (e.g.
-        // refreshConnectionList) while sibling widgets are still being created.
-        // Truncating during init would destroy those handles.
-        if crate::app::is_initialized() {
-            let root = crate::app::get_root_handle();
-            if handle == root {
-                let idx = (handle - 1) as usize;
-                let mut widgets = WIDGETS.lock().unwrap();
-                if idx < widgets.len() {
-                    widgets.truncate(idx + 1);
+            // Only truncate widget handles when ALL of the following are true:
+            // 1. The app has completed its initial build (app_set_body called)
+            // 2. The handle being cleared is the root body widget
+            // During init, clearChildren may be called on non-root containers (e.g.
+            // refreshConnectionList) while sibling widgets are still being created.
+            // Truncating during init would destroy those handles.
+            if crate::app::is_initialized() {
+                let root = crate::app::get_root_handle();
+                if handle == root {
+                    let idx = (handle - 1) as usize;
+                    let mut widgets = WIDGETS.lock().unwrap();
+                    if idx < widgets.len() {
+                        widgets.truncate(idx + 1);
+                    }
                 }
             }
-        }
+        })
     }
 }
 
@@ -181,101 +190,142 @@ pub fn add_child(parent_handle: i64, child_handle: i64) {
     if let (Some(parent_ref), Some(child_ref)) =
         (get_widget(parent_handle), get_widget(child_handle))
     {
-        let mut env = jni_bridge::get_env();
-        let _ = env.push_local_frame(16);
+        jni_bridge::with_env(|env| {
+            let _ = jni_bridge::push_local_frame(env, 16);
 
-        // Debug: log parent/child handles and child class
-        unsafe {
-            __android_log_print(
-                3,
-                b"PerryWidgets\0".as_ptr(),
-                b"add_child: parent=%lld child=%lld\0".as_ptr(),
-                parent_handle,
-                child_handle,
+            // Debug: log parent/child handles and child class
+            unsafe {
+                __android_log_print(
+                    3,
+                    b"PerryWidgets\0".as_ptr(),
+                    b"add_child: parent=%lld child=%lld\0".as_ptr(),
+                    parent_handle,
+                    child_handle,
+                );
+            }
+
+            let result = env.call_method(
+                parent_ref.as_obj(),
+                jni::jni_str!("addView"),
+                jni::jni_sig!("(Landroid/view/View;)V"),
+                &[JValue::Object(child_ref.as_obj())],
             );
-        }
 
-        let result = env.call_method(
-            parent_ref.as_obj(),
-            "addView",
-            "(Landroid/view/View;)V",
-            &[JValue::Object(child_ref.as_obj())],
-        );
-
-        // Match iOS UIStackView fill alignment: adjust child LayoutParams
-        // based on parent type
-        if result.is_ok() {
-            if env
-                .is_instance_of(parent_ref.as_obj(), "android/widget/FrameLayout")
-                .unwrap_or(false)
-                && !env
-                    .is_instance_of(parent_ref.as_obj(), "android/widget/LinearLayout")
+            // Match iOS UIStackView fill alignment: adjust child LayoutParams
+            // based on parent type
+            if result.is_ok() {
+                if env
+                    .is_instance_of(
+                        parent_ref.as_obj(),
+                        jni::jni_str!("android/widget/FrameLayout"),
+                    )
                     .unwrap_or(false)
-            {
-                // FrameLayout (ZStack): children fill parent by default (match iOS ZStack behavior)
-                if let Ok(lp) = env.call_method(
-                    child_ref.as_obj(),
-                    "getLayoutParams",
-                    "()Landroid/view/ViewGroup$LayoutParams;",
-                    &[],
-                ) {
-                    if let Ok(lp_obj) = lp.l() {
-                        if !lp_obj.is_null() {
-                            let _ = env.set_field(&lp_obj, "width", "I", JValue::Int(-1)); // MATCH_PARENT
-                            let _ = env.set_field(&lp_obj, "height", "I", JValue::Int(-1)); // MATCH_PARENT
-                            let _ = env.call_method(
-                                child_ref.as_obj(),
-                                "setLayoutParams",
-                                "(Landroid/view/ViewGroup$LayoutParams;)V",
-                                &[JValue::Object(&lp_obj)],
-                            );
+                    && !env
+                        .is_instance_of(
+                            parent_ref.as_obj(),
+                            jni::jni_str!("android/widget/LinearLayout"),
+                        )
+                        .unwrap_or(false)
+                {
+                    // FrameLayout (ZStack): children fill parent by default (match iOS ZStack behavior)
+                    if let Ok(lp) = env.call_method(
+                        child_ref.as_obj(),
+                        jni::jni_str!("getLayoutParams"),
+                        jni::jni_sig!("()Landroid/view/ViewGroup$LayoutParams;"),
+                        &[],
+                    ) {
+                        if let Ok(lp_obj) = lp.l() {
+                            if !lp_obj.is_null() {
+                                let _ = env.set_field(
+                                    &lp_obj,
+                                    jni::jni_str!("width"),
+                                    jni::jni_sig!("I"),
+                                    JValue::Int(-1),
+                                ); // MATCH_PARENT
+                                let _ = env.set_field(
+                                    &lp_obj,
+                                    jni::jni_str!("height"),
+                                    jni::jni_sig!("I"),
+                                    JValue::Int(-1),
+                                ); // MATCH_PARENT
+                                let _ = env.call_method(
+                                    child_ref.as_obj(),
+                                    jni::jni_str!("setLayoutParams"),
+                                    jni::jni_sig!("(Landroid/view/ViewGroup$LayoutParams;)V"),
+                                    &[JValue::Object(&lp_obj)],
+                                );
+                            }
                         }
                     }
-                }
-            } else if env
-                .is_instance_of(parent_ref.as_obj(), "android/widget/LinearLayout")
-                .unwrap_or(false)
-            {
-                let orientation = env
-                    .call_method(parent_ref.as_obj(), "getOrientation", "()I", &[])
-                    .map(|v| v.i().unwrap_or(-1))
-                    .unwrap_or(-1);
-                if let Ok(lp) = env.call_method(
-                    child_ref.as_obj(),
-                    "getLayoutParams",
-                    "()Landroid/view/ViewGroup$LayoutParams;",
-                    &[],
-                ) {
-                    if let Ok(lp_obj) = lp.l() {
-                        if !lp_obj.is_null() {
-                            if orientation == 1 {
-                                // VERTICAL — stretch children to fill width
-                                let _ = env.set_field(&lp_obj, "width", "I", JValue::Int(-1));
-                            // MATCH_PARENT
-                            } else if orientation == 0 {
-                                // HORIZONTAL — share space equally
-                                // If child has MATCH_PARENT width, convert to weight-based
-                                // so multiple children share the HStack evenly
-                                let cur_w = env
-                                    .get_field(&lp_obj, "width", "I")
-                                    .map(|v| v.i().unwrap_or(0))
-                                    .unwrap_or(0);
-                                if cur_w == -1 {
-                                    // MATCH_PARENT
-                                    let _ = env.set_field(&lp_obj, "width", "I", JValue::Int(0));
-                                    if env
-                                        .is_instance_of(
+                } else if env
+                    .is_instance_of(
+                        parent_ref.as_obj(),
+                        jni::jni_str!("android/widget/LinearLayout"),
+                    )
+                    .unwrap_or(false)
+                {
+                    let orientation = env
+                        .call_method(
+                            parent_ref.as_obj(),
+                            jni::jni_str!("getOrientation"),
+                            jni::jni_sig!("()I"),
+                            &[],
+                        )
+                        .map(|v| v.i().unwrap_or(-1))
+                        .unwrap_or(-1);
+                    if let Ok(lp) = env.call_method(
+                        child_ref.as_obj(),
+                        jni::jni_str!("getLayoutParams"),
+                        jni::jni_sig!("()Landroid/view/ViewGroup$LayoutParams;"),
+                        &[],
+                    ) {
+                        if let Ok(lp_obj) = lp.l() {
+                            if !lp_obj.is_null() {
+                                if orientation == 1 {
+                                    // VERTICAL — stretch children to fill width
+                                    let _ = env.set_field(
+                                        &lp_obj,
+                                        jni::jni_str!("width"),
+                                        jni::jni_sig!("I"),
+                                        JValue::Int(-1),
+                                    );
+                                // MATCH_PARENT
+                                } else if orientation == 0 {
+                                    // HORIZONTAL — share space equally
+                                    // If child has MATCH_PARENT width, convert to weight-based
+                                    // so multiple children share the HStack evenly
+                                    let cur_w = env
+                                        .get_field(
                                             &lp_obj,
-                                            "android/widget/LinearLayout$LayoutParams",
+                                            jni::jni_str!("width"),
+                                            jni::jni_sig!("I"),
                                         )
-                                        .unwrap_or(false)
-                                    {
+                                        .map(|v| v.i().unwrap_or(0))
+                                        .unwrap_or(0);
+                                    if cur_w == -1 {
+                                        // MATCH_PARENT
                                         let _ = env.set_field(
                                             &lp_obj,
-                                            "weight",
-                                            "F",
-                                            JValue::Float(1.0),
+                                            jni::jni_str!("width"),
+                                            jni::jni_sig!("I"),
+                                            JValue::Int(0),
                                         );
+                                        if env
+                                            .is_instance_of(
+                                                &lp_obj,
+                                                jni::jni_str!(
+                                                    "android/widget/LinearLayout$LayoutParams"
+                                                ),
+                                            )
+                                            .unwrap_or(false)
+                                        {
+                                            let _ = env.set_field(
+                                                &lp_obj,
+                                                jni::jni_str!("weight"),
+                                                jni::jni_sig!("F"),
+                                                JValue::Float(1.0),
+                                            );
+                                        }
                                     }
                                 }
                             }
@@ -283,20 +333,20 @@ pub fn add_child(parent_handle: i64, child_handle: i64) {
                     }
                 }
             }
-        }
 
-        unsafe {
-            if env.exception_check().unwrap_or(false) {
-                __android_log_print(
-                    6,
-                    b"PerryWidgets\0".as_ptr(),
-                    b"add_child: JNI EXCEPTION!\0".as_ptr(),
-                );
-                let _ = env.exception_describe();
-                let _ = env.exception_clear();
+            unsafe {
+                if env.exception_check() {
+                    __android_log_print(
+                        6,
+                        b"PerryWidgets\0".as_ptr(),
+                        b"add_child: JNI EXCEPTION!\0".as_ptr(),
+                    );
+                    let _ = env.exception_describe();
+                    let _ = env.exception_clear();
+                }
+                let _ = jni_bridge::pop_local_frame(env, &JObject::null());
             }
-            env.pop_local_frame(&JObject::null());
-        }
+        })
     }
 }
 
@@ -305,30 +355,36 @@ pub fn add_child_at(parent_handle: i64, child_handle: i64, index: i64) {
     if let (Some(parent_ref), Some(child_ref)) =
         (get_widget(parent_handle), get_widget(child_handle))
     {
-        let mut env = jni_bridge::get_env();
-        let _ = env.push_local_frame(8);
-        let _ = env.call_method(
-            parent_ref.as_obj(),
-            "addView",
-            "(Landroid/view/View;I)V",
-            &[
-                JValue::Object(child_ref.as_obj()),
-                JValue::Int(index as i32),
-            ],
-        );
-        unsafe {
-            env.pop_local_frame(&JObject::null());
-        }
+        jni_bridge::with_env(|env| {
+            let _ = jni_bridge::push_local_frame(env, 8);
+            let _ = env.call_method(
+                parent_ref.as_obj(),
+                jni::jni_str!("addView"),
+                jni::jni_sig!("(Landroid/view/View;I)V"),
+                &[
+                    JValue::Object(child_ref.as_obj()),
+                    JValue::Int(index as i32),
+                ],
+            );
+            unsafe {
+                let _ = jni_bridge::pop_local_frame(env, &JObject::null());
+            }
+        })
     }
 }
 
 /// Get the Activity context via PerryBridge.
-pub fn get_activity<'a>(env: &mut jni::JNIEnv<'a>) -> JObject<'a> {
+pub fn get_activity<'a>(env: &mut jni::Env<'a>) -> JObject<'a> {
     let bridge_class =
-        jni_bridge::with_cache(|c| env.new_local_ref(c.perry_bridge_class.as_obj()).unwrap());
-    let bridge_cls: &jni::objects::JClass = (&bridge_class).into();
+        jni_bridge::with_cache(|c| env.new_local_ref(&c.perry_bridge_class).unwrap());
+    let bridge_cls: &jni::objects::JClass = &bridge_class;
     let result = env
-        .call_static_method(bridge_cls, "getActivity", "()Landroid/app/Activity;", &[])
+        .call_static_method(
+            bridge_cls,
+            jni::jni_str!("getActivity"),
+            jni::jni_sig!("()Landroid/app/Activity;"),
+            &[],
+        )
         .expect("Failed to get Activity");
     result.l().expect("Activity is not an object")
 }
@@ -336,17 +392,18 @@ pub fn get_activity<'a>(env: &mut jni::JNIEnv<'a>) -> JObject<'a> {
 /// Set enabled/disabled on a widget.
 pub fn set_enabled(handle: i64, enabled: bool) {
     if let Some(view_ref) = get_widget(handle) {
-        let mut env = jni_bridge::get_env();
-        let _ = env.push_local_frame(8);
-        let _ = env.call_method(
-            view_ref.as_obj(),
-            "setEnabled",
-            "(Z)V",
-            &[JValue::Bool(enabled as u8)],
-        );
-        unsafe {
-            env.pop_local_frame(&JObject::null());
-        }
+        jni_bridge::with_env(|env| {
+            let _ = jni_bridge::push_local_frame(env, 8);
+            let _ = env.call_method(
+                view_ref.as_obj(),
+                jni::jni_str!("setEnabled"),
+                jni::jni_sig!("(Z)V"),
+                &[JValue::Bool(enabled)],
+            );
+            unsafe {
+                let _ = jni_bridge::pop_local_frame(env, &JObject::null());
+            }
+        })
     }
 }
 
@@ -354,47 +411,49 @@ pub fn set_enabled(handle: i64, enabled: bool) {
 pub fn set_tooltip(handle: i64, text_ptr: *const u8) {
     let text = unsafe { crate::app::str_from_header(text_ptr) };
     if let Some(view_ref) = get_widget(handle) {
-        let mut env = jni_bridge::get_env();
-        let _ = env.push_local_frame(8);
-        let jstr = env.new_string(text).expect("tooltip string");
-        let _ = env.call_method(
-            view_ref.as_obj(),
-            "setTooltipText",
-            "(Ljava/lang/CharSequence;)V",
-            &[JValue::Object(&jstr)],
-        );
-        unsafe {
-            env.pop_local_frame(&JObject::null());
-        }
+        jni_bridge::with_env(|env| {
+            let _ = jni_bridge::push_local_frame(env, 8);
+            let jstr = env.new_string(text).expect("tooltip string");
+            let _ = env.call_method(
+                view_ref.as_obj(),
+                jni::jni_str!("setTooltipText"),
+                jni::jni_sig!("(Ljava/lang/CharSequence;)V"),
+                &[JValue::Object(&jstr)],
+            );
+            unsafe {
+                let _ = jni_bridge::pop_local_frame(env, &JObject::null());
+            }
+        })
     }
 }
 
 /// Set control size (map to scale).
 pub fn set_control_size(handle: i64, size: i64) {
     if let Some(view_ref) = get_widget(handle) {
-        let mut env = jni_bridge::get_env();
-        let _ = env.push_local_frame(8);
-        let scale = match size {
-            0 => 0.75f32, // mini
-            1 => 0.85f32, // small
-            3 => 1.15f32, // large
-            _ => 1.0f32,  // regular
-        };
-        let _ = env.call_method(
-            view_ref.as_obj(),
-            "setScaleX",
-            "(F)V",
-            &[JValue::Float(scale)],
-        );
-        let _ = env.call_method(
-            view_ref.as_obj(),
-            "setScaleY",
-            "(F)V",
-            &[JValue::Float(scale)],
-        );
-        unsafe {
-            env.pop_local_frame(&JObject::null());
-        }
+        jni_bridge::with_env(|env| {
+            let _ = jni_bridge::push_local_frame(env, 8);
+            let scale = match size {
+                0 => 0.75f32, // mini
+                1 => 0.85f32, // small
+                3 => 1.15f32, // large
+                _ => 1.0f32,  // regular
+            };
+            let _ = env.call_method(
+                view_ref.as_obj(),
+                jni::jni_str!("setScaleX"),
+                jni::jni_sig!("(F)V"),
+                &[JValue::Float(scale)],
+            );
+            let _ = env.call_method(
+                view_ref.as_obj(),
+                jni::jni_str!("setScaleY"),
+                jni::jni_sig!("(F)V"),
+                &[JValue::Float(scale)],
+            );
+            unsafe {
+                let _ = jni_bridge::pop_local_frame(env, &JObject::null());
+            }
+        })
     }
 }
 
@@ -403,57 +462,75 @@ pub fn set_control_size(handle: i64, size: i64) {
 /// (preserving the existing color). Otherwise creates a new transparent GradientDrawable.
 pub fn set_corner_radius(handle: i64, radius: f64) {
     if let Some(view_ref) = get_widget(handle) {
-        let mut env = jni_bridge::get_env();
-        let _ = env.push_local_frame(16);
-        let radius_px = dp_to_px(&mut env, radius as f32) as f32;
+        jni_bridge::with_env(|env| {
+            let _ = jni_bridge::push_local_frame(env, 16);
+            let radius_px = dp_to_px(env, radius as f32) as f32;
 
-        // Try to reuse existing GradientDrawable background (preserving color)
-        let mut reused = false;
-        if let Ok(bg) = env.call_method(
-            view_ref.as_obj(),
-            "getBackground",
-            "()Landroid/graphics/drawable/Drawable;",
-            &[],
-        ) {
-            if let Ok(bg_obj) = bg.l() {
-                if !bg_obj.is_null() {
-                    if env
-                        .is_instance_of(&bg_obj, "android/graphics/drawable/GradientDrawable")
-                        .unwrap_or(false)
-                    {
-                        let _ = env.call_method(
-                            &bg_obj,
-                            "setCornerRadius",
-                            "(F)V",
-                            &[JValue::Float(radius_px)],
-                        );
-                        reused = true;
+            // Try to reuse existing GradientDrawable background (preserving color)
+            let mut reused = false;
+            if let Ok(bg) = env.call_method(
+                view_ref.as_obj(),
+                jni::jni_str!("getBackground"),
+                jni::jni_sig!("()Landroid/graphics/drawable/Drawable;"),
+                &[],
+            ) {
+                if let Ok(bg_obj) = bg.l() {
+                    if !bg_obj.is_null() {
+                        if env
+                            .is_instance_of(
+                                &bg_obj,
+                                jni::jni_str!("android/graphics/drawable/GradientDrawable"),
+                            )
+                            .unwrap_or(false)
+                        {
+                            let _ = env.call_method(
+                                &bg_obj,
+                                jni::jni_str!("setCornerRadius"),
+                                jni::jni_sig!("(F)V"),
+                                &[JValue::Float(radius_px)],
+                            );
+                            reused = true;
+                        }
                     }
                 }
             }
-        }
-        if !reused {
-            let gd = env
-                .new_object("android/graphics/drawable/GradientDrawable", "()V", &[])
-                .expect("GradientDrawable");
-            let _ = env.call_method(&gd, "setCornerRadius", "(F)V", &[JValue::Float(radius_px)]);
-            let _ = env.call_method(&gd, "setColor", "(I)V", &[JValue::Int(0)]);
+            if !reused {
+                let gd = env
+                    .new_object(
+                        jni::jni_str!("android/graphics/drawable/GradientDrawable"),
+                        jni::jni_sig!("()V"),
+                        &[],
+                    )
+                    .expect("GradientDrawable");
+                let _ = env.call_method(
+                    &gd,
+                    jni::jni_str!("setCornerRadius"),
+                    jni::jni_sig!("(F)V"),
+                    &[JValue::Float(radius_px)],
+                );
+                let _ = env.call_method(
+                    &gd,
+                    jni::jni_str!("setColor"),
+                    jni::jni_sig!("(I)V"),
+                    &[JValue::Int(0)],
+                );
+                let _ = env.call_method(
+                    view_ref.as_obj(),
+                    jni::jni_str!("setBackground"),
+                    jni::jni_sig!("(Landroid/graphics/drawable/Drawable;)V"),
+                    &[JValue::Object(&gd)],
+                );
+            }
             let _ = env.call_method(
                 view_ref.as_obj(),
-                "setBackground",
-                "(Landroid/graphics/drawable/Drawable;)V",
-                &[JValue::Object(&gd)],
+                jni::jni_str!("setClipToOutline"),
+                jni::jni_sig!("(Z)V"),
+                &[JValue::Bool(true)],
             );
-        }
-        let _ = env.call_method(
-            view_ref.as_obj(),
-            "setClipToOutline",
-            "(Z)V",
-            &[JValue::Bool(1)],
-        );
-        unsafe {
-            env.pop_local_frame(&JObject::null());
-        }
+            unsafe {
+                let _ = jni_bridge::pop_local_frame(env, &JObject::null());
+            }
+        })
     }
 }
 
@@ -477,90 +554,113 @@ pub fn set_background_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
         );
     }
     if let Some(view_ref) = get_widget(handle) {
-        let mut env = jni_bridge::get_env();
-        let _ = env.push_local_frame(24);
-        let color = argb_color(a, r, g, b);
+        jni_bridge::with_env(|env| {
+            let _ = jni_bridge::push_local_frame(env, 24);
+            let color = argb_color(a, r, g, b);
 
-        // Clear backgroundTint so MaterialButton doesn't paint over our drawable.
-        // Signature: setBackgroundTintList(ColorStateList?) — pass null.
-        let _ = env.call_method(
-            view_ref.as_obj(),
-            "setBackgroundTintList",
-            "(Landroid/content/res/ColorStateList;)V",
-            &[JValue::Object(&JObject::null())],
-        );
-        if env.exception_check().unwrap_or(false) {
-            let _ = env.exception_clear();
-        }
+            // Clear backgroundTint so MaterialButton doesn't paint over our drawable.
+            // Signature: setBackgroundTintList(ColorStateList?) — pass null.
+            let _ = env.call_method(
+                view_ref.as_obj(),
+                jni::jni_str!("setBackgroundTintList"),
+                jni::jni_sig!("(Landroid/content/res/ColorStateList;)V"),
+                &[JValue::Object(&JObject::null())],
+            );
+            if env.exception_check() {
+                let _ = env.exception_clear();
+            }
 
-        // Prefer GradientDrawable so corner radius can share the same bg.
-        let mut reused = false;
-        if let Ok(bg) = env.call_method(
-            view_ref.as_obj(),
-            "getBackground",
-            "()Landroid/graphics/drawable/Drawable;",
-            &[],
-        ) {
-            if let Ok(bg_obj) = bg.l() {
-                if !bg_obj.is_null() {
-                    if env
-                        .is_instance_of(&bg_obj, "android/graphics/drawable/GradientDrawable")
-                        .unwrap_or(false)
-                    {
-                        let _ = env.call_method(&bg_obj, "setColor", "(I)V", &[JValue::Int(color)]);
-                        reused = true;
+            // Prefer GradientDrawable so corner radius can share the same bg.
+            let mut reused = false;
+            if let Ok(bg) = env.call_method(
+                view_ref.as_obj(),
+                jni::jni_str!("getBackground"),
+                jni::jni_sig!("()Landroid/graphics/drawable/Drawable;"),
+                &[],
+            ) {
+                if let Ok(bg_obj) = bg.l() {
+                    if !bg_obj.is_null() {
+                        if env
+                            .is_instance_of(
+                                &bg_obj,
+                                jni::jni_str!("android/graphics/drawable/GradientDrawable"),
+                            )
+                            .unwrap_or(false)
+                        {
+                            let _ = env.call_method(
+                                &bg_obj,
+                                jni::jni_str!("setColor"),
+                                jni::jni_sig!("(I)V"),
+                                &[JValue::Int(color)],
+                            );
+                            reused = true;
+                        }
                     }
                 }
             }
-        }
-        if !reused {
-            let gd = env
-                .new_object("android/graphics/drawable/GradientDrawable", "()V", &[])
-                .expect("GradientDrawable");
-            let _ = env.call_method(&gd, "setColor", "(I)V", &[JValue::Int(color)]);
-            // solid shape rect
-            let _ = env.call_method(&gd, "setShape", "(I)V", &[JValue::Int(0)]);
-            let _ = env.call_method(
-                view_ref.as_obj(),
-                "setBackground",
-                "(Landroid/graphics/drawable/Drawable;)V",
-                &[JValue::Object(&gd)],
-            );
-        }
-
-        // MaterialButton: the real paint path is backgroundTintList.
-        // Set it to our solid color so the button actually shows DaisyUI fills.
-        if let Ok(csl) = env.call_static_method(
-            "android/content/res/ColorStateList",
-            "valueOf",
-            "(I)Landroid/content/res/ColorStateList;",
-            &[JValue::Int(color)],
-        ) {
-            if let Ok(csl_obj) = csl.l() {
+            if !reused {
+                let gd = env
+                    .new_object(
+                        jni::jni_str!("android/graphics/drawable/GradientDrawable"),
+                        jni::jni_sig!("()V"),
+                        &[],
+                    )
+                    .expect("GradientDrawable");
+                let _ = env.call_method(
+                    &gd,
+                    jni::jni_str!("setColor"),
+                    jni::jni_sig!("(I)V"),
+                    &[JValue::Int(color)],
+                );
+                // solid shape rect
+                let _ = env.call_method(
+                    &gd,
+                    jni::jni_str!("setShape"),
+                    jni::jni_sig!("(I)V"),
+                    &[JValue::Int(0)],
+                );
                 let _ = env.call_method(
                     view_ref.as_obj(),
-                    "setBackgroundTintList",
-                    "(Landroid/content/res/ColorStateList;)V",
-                    &[JValue::Object(&csl_obj)],
+                    jni::jni_str!("setBackground"),
+                    jni::jni_sig!("(Landroid/graphics/drawable/Drawable;)V"),
+                    &[JValue::Object(&gd)],
                 );
             }
-        }
-        if env.exception_check().unwrap_or(false) {
-            let _ = env.exception_clear();
-        }
 
-        unsafe {
-            __android_log_print(
-                3,
-                b"PerryStyle\0".as_ptr(),
-                b"set_bg applied handle=%lld color=0x%08x\0".as_ptr(),
-                handle,
-                color as u32,
-            );
-        }
-        unsafe {
-            env.pop_local_frame(&JObject::null());
-        }
+            // MaterialButton: the real paint path is backgroundTintList.
+            // Set it to our solid color so the button actually shows DaisyUI fills.
+            if let Ok(csl) = env.call_static_method(
+                jni::jni_str!("android/content/res/ColorStateList"),
+                jni::jni_str!("valueOf"),
+                jni::jni_sig!("(I)Landroid/content/res/ColorStateList;"),
+                &[JValue::Int(color)],
+            ) {
+                if let Ok(csl_obj) = csl.l() {
+                    let _ = env.call_method(
+                        view_ref.as_obj(),
+                        jni::jni_str!("setBackgroundTintList"),
+                        jni::jni_sig!("(Landroid/content/res/ColorStateList;)V"),
+                        &[JValue::Object(&csl_obj)],
+                    );
+                }
+            }
+            if env.exception_check() {
+                let _ = env.exception_clear();
+            }
+
+            unsafe {
+                __android_log_print(
+                    3,
+                    b"PerryStyle\0".as_ptr(),
+                    b"set_bg applied handle=%lld color=0x%08x\0".as_ptr(),
+                    handle,
+                    color as u32,
+                );
+            }
+            unsafe {
+                let _ = jni_bridge::pop_local_frame(env, &JObject::null());
+            }
+        })
     } else {
         unsafe {
             __android_log_print(
@@ -602,38 +702,39 @@ pub fn set_shadow(
     _offset_y: f64,
 ) {
     if let Some(view_ref) = get_widget(handle) {
-        let mut env = jni_bridge::get_env();
-        let _ = env.push_local_frame(8);
+        jni_bridge::with_env(|env| {
+            let _ = jni_bridge::push_local_frame(env, 8);
 
-        let elevation_dp = (blur / 2.0).max(0.0) as f32;
-        let elevation_px = dp_to_px(&mut env, elevation_dp) as f32;
-        let _ = env.call_method(
-            view_ref.as_obj(),
-            "setElevation",
-            "(F)V",
-            &[JValue::Float(elevation_px)],
-        );
+            let elevation_dp = (blur / 2.0).max(0.0) as f32;
+            let elevation_px = dp_to_px(env, elevation_dp) as f32;
+            let _ = env.call_method(
+                view_ref.as_obj(),
+                jni::jni_str!("setElevation"),
+                jni::jni_sig!("(F)V"),
+                &[JValue::Float(elevation_px)],
+            );
 
-        // API 28+ shadow tinting; both call_method results are ignored
-        // because older API levels just don't have the method and we
-        // accept the system default in that case.
-        let color = argb_color(a, r, g, b);
-        let _ = env.call_method(
-            view_ref.as_obj(),
-            "setOutlineSpotShadowColor",
-            "(I)V",
-            &[JValue::Int(color)],
-        );
-        let _ = env.call_method(
-            view_ref.as_obj(),
-            "setOutlineAmbientShadowColor",
-            "(I)V",
-            &[JValue::Int(color)],
-        );
+            // API 28+ shadow tinting; both call_method results are ignored
+            // because older API levels just don't have the method and we
+            // accept the system default in that case.
+            let color = argb_color(a, r, g, b);
+            let _ = env.call_method(
+                view_ref.as_obj(),
+                jni::jni_str!("setOutlineSpotShadowColor"),
+                jni::jni_sig!("(I)V"),
+                &[JValue::Int(color)],
+            );
+            let _ = env.call_method(
+                view_ref.as_obj(),
+                jni::jni_str!("setOutlineAmbientShadowColor"),
+                jni::jni_sig!("(I)V"),
+                &[JValue::Int(color)],
+            );
 
-        unsafe {
-            env.pop_local_frame(&JObject::null());
-        }
+            unsafe {
+                let _ = jni_bridge::pop_local_frame(env, &JObject::null());
+            }
+        })
     }
 }
 
@@ -651,56 +752,68 @@ pub fn set_background_gradient(
     direction: f64,
 ) {
     if let Some(view_ref) = get_widget(handle) {
-        let mut env = jni_bridge::get_env();
-        let _ = env.push_local_frame(16);
+        jni_bridge::with_env(|env| {
+            let _ = jni_bridge::push_local_frame(env, 16);
 
-        let c1 = argb_color(a1, r1, g1, b1);
-        let c2 = argb_color(a2, r2, g2, b2);
+            let c1 = argb_color(a1, r1, g1, b1);
+            let c2 = argb_color(a2, r2, g2, b2);
 
-        let gd = env
-            .new_object("android/graphics/drawable/GradientDrawable", "()V", &[])
-            .expect("GradientDrawable");
+            let gd = env
+                .new_object(
+                    jni::jni_str!("android/graphics/drawable/GradientDrawable"),
+                    jni::jni_sig!("()V"),
+                    &[],
+                )
+                .expect("GradientDrawable");
 
-        // Set colors
-        let colors = env.new_int_array(2).expect("int array");
-        let _ = env.set_int_array_region(&colors, 0, &[c1, c2]);
-        let _ = env.call_method(&gd, "setColors", "([I)V", &[JValue::Object(&colors)]);
+            // Set colors
+            let colors = env.new_int_array(2).expect("int array");
+            let _ = colors.set_region(env, 0, &[c1, c2]);
+            let _ = env.call_method(
+                &gd,
+                jni::jni_str!("setColors"),
+                jni::jni_sig!("([I)V"),
+                &[JValue::Object(&colors)],
+            );
 
-        // Set orientation
-        let orient_name = if direction < 0.5 {
-            "TOP_BOTTOM"
-        } else {
-            "LEFT_RIGHT"
-        };
-        let orient_class = env
-            .find_class("android/graphics/drawable/GradientDrawable$Orientation")
-            .expect("Orientation");
-        let orient = env
-            .get_static_field(
-                &orient_class,
-                orient_name,
-                "Landroid/graphics/drawable/GradientDrawable$Orientation;",
-            )
-            .expect("orient")
-            .l()
-            .expect("orient obj");
-        let _ = env.call_method(
-            &gd,
-            "setOrientation",
-            "(Landroid/graphics/drawable/GradientDrawable$Orientation;)V",
-            &[JValue::Object(&orient)],
-        );
+            // Set orientation
+            let orient_name = if direction < 0.5 {
+                "TOP_BOTTOM"
+            } else {
+                "LEFT_RIGHT"
+            };
+            let orient_class = env
+                .find_class(jni::jni_str!(
+                    "android/graphics/drawable/GradientDrawable$Orientation"
+                ))
+                .expect("Orientation");
+            let orient = env
+                .get_static_field(
+                    &orient_class,
+                    jni::strings::JNIString::new(orient_name),
+                    jni::jni_sig!("Landroid/graphics/drawable/GradientDrawable$Orientation;"),
+                )
+                .expect("orient")
+                .l()
+                .expect("orient obj");
+            let _ = env.call_method(
+                &gd,
+                jni::jni_str!("setOrientation"),
+                jni::jni_sig!("(Landroid/graphics/drawable/GradientDrawable$Orientation;)V"),
+                &[JValue::Object(&orient)],
+            );
 
-        let _ = env.call_method(
-            view_ref.as_obj(),
-            "setBackground",
-            "(Landroid/graphics/drawable/Drawable;)V",
-            &[JValue::Object(&gd)],
-        );
+            let _ = env.call_method(
+                view_ref.as_obj(),
+                jni::jni_str!("setBackground"),
+                jni::jni_sig!("(Landroid/graphics/drawable/Drawable;)V"),
+                &[JValue::Object(&gd)],
+            );
 
-        unsafe {
-            env.pop_local_frame(&JObject::null());
-        }
+            unsafe {
+                let _ = jni_bridge::pop_local_frame(env, &JObject::null());
+            }
+        })
     }
 }
 
@@ -722,172 +835,194 @@ pub fn set_on_double_click(_handle: i64, _callback: f64) {
 /// Animate opacity. `duration_secs` is in seconds.
 pub fn animate_opacity(handle: i64, target: f64, duration_secs: f64) {
     if let Some(view_ref) = get_widget(handle) {
-        let mut env = jni_bridge::get_env();
-        let _ = env.push_local_frame(8);
-        let animator = env
-            .call_method(
-                view_ref.as_obj(),
-                "animate",
-                "()Landroid/view/ViewPropertyAnimator;",
-                &[],
-            )
-            .expect("animate")
-            .l()
-            .expect("animator");
-        let dur_ms = (duration_secs * 1000.0) as i64;
-        let _ = env.call_method(
-            &animator,
-            "alpha",
-            "(F)Landroid/view/ViewPropertyAnimator;",
-            &[JValue::Float(target as f32)],
-        );
-        let _ = env.call_method(
-            &animator,
-            "setDuration",
-            "(J)Landroid/view/ViewPropertyAnimator;",
-            &[JValue::Long(dur_ms)],
-        );
-        let _ = env.call_method(&animator, "start", "()V", &[]);
-        unsafe {
-            env.pop_local_frame(&JObject::null());
-        }
+        jni_bridge::with_env(|env| {
+            let _ = jni_bridge::push_local_frame(env, 8);
+            let animator = env
+                .call_method(
+                    view_ref.as_obj(),
+                    jni::jni_str!("animate"),
+                    jni::jni_sig!("()Landroid/view/ViewPropertyAnimator;"),
+                    &[],
+                )
+                .expect("animate")
+                .l()
+                .expect("animator");
+            let dur_ms = (duration_secs * 1000.0) as i64;
+            let _ = env.call_method(
+                &animator,
+                jni::jni_str!("alpha"),
+                jni::jni_sig!("(F)Landroid/view/ViewPropertyAnimator;"),
+                &[JValue::Float(target as f32)],
+            );
+            let _ = env.call_method(
+                &animator,
+                jni::jni_str!("setDuration"),
+                jni::jni_sig!("(J)Landroid/view/ViewPropertyAnimator;"),
+                &[JValue::Long(dur_ms)],
+            );
+            let _ = env.call_method(&animator, jni::jni_str!("start"), jni::jni_sig!("()V"), &[]);
+            unsafe {
+                let _ = jni_bridge::pop_local_frame(env, &JObject::null());
+            }
+        })
     }
 }
 
 /// Animate position. `duration_secs` is in seconds.
 pub fn animate_position(handle: i64, dx: f64, dy: f64, duration_secs: f64) {
     if let Some(view_ref) = get_widget(handle) {
-        let mut env = jni_bridge::get_env();
-        let _ = env.push_local_frame(8);
-        let animator = env
-            .call_method(
-                view_ref.as_obj(),
-                "animate",
-                "()Landroid/view/ViewPropertyAnimator;",
-                &[],
-            )
-            .expect("animate")
-            .l()
-            .expect("animator");
-        let dur_ms = (duration_secs * 1000.0) as i64;
-        let _ = env.call_method(
-            &animator,
-            "translationXBy",
-            "(F)Landroid/view/ViewPropertyAnimator;",
-            &[JValue::Float(dx as f32)],
-        );
-        let _ = env.call_method(
-            &animator,
-            "translationYBy",
-            "(F)Landroid/view/ViewPropertyAnimator;",
-            &[JValue::Float(dy as f32)],
-        );
-        let _ = env.call_method(
-            &animator,
-            "setDuration",
-            "(J)Landroid/view/ViewPropertyAnimator;",
-            &[JValue::Long(dur_ms)],
-        );
-        let _ = env.call_method(&animator, "start", "()V", &[]);
-        unsafe {
-            env.pop_local_frame(&JObject::null());
-        }
+        jni_bridge::with_env(|env| {
+            let _ = jni_bridge::push_local_frame(env, 8);
+            let animator = env
+                .call_method(
+                    view_ref.as_obj(),
+                    jni::jni_str!("animate"),
+                    jni::jni_sig!("()Landroid/view/ViewPropertyAnimator;"),
+                    &[],
+                )
+                .expect("animate")
+                .l()
+                .expect("animator");
+            let dur_ms = (duration_secs * 1000.0) as i64;
+            let _ = env.call_method(
+                &animator,
+                jni::jni_str!("translationXBy"),
+                jni::jni_sig!("(F)Landroid/view/ViewPropertyAnimator;"),
+                &[JValue::Float(dx as f32)],
+            );
+            let _ = env.call_method(
+                &animator,
+                jni::jni_str!("translationYBy"),
+                jni::jni_sig!("(F)Landroid/view/ViewPropertyAnimator;"),
+                &[JValue::Float(dy as f32)],
+            );
+            let _ = env.call_method(
+                &animator,
+                jni::jni_str!("setDuration"),
+                jni::jni_sig!("(J)Landroid/view/ViewPropertyAnimator;"),
+                &[JValue::Long(dur_ms)],
+            );
+            let _ = env.call_method(&animator, jni::jni_str!("start"), jni::jni_sig!("()V"), &[]);
+            unsafe {
+                let _ = jni_bridge::pop_local_frame(env, &JObject::null());
+            }
+        })
     }
 }
 
 /// Set a fixed width on a widget via LayoutParams.
 pub fn set_width(handle: i64, width: f64) {
     if let Some(view_ref) = get_widget(handle) {
-        let mut env = jni_bridge::get_env();
-        let _ = env.push_local_frame(16);
-        let width_px = dp_to_px(&mut env, width as f32);
-        if let Ok(lp) = env.call_method(
-            view_ref.as_obj(),
-            "getLayoutParams",
-            "()Landroid/view/ViewGroup$LayoutParams;",
-            &[],
-        ) {
-            if let Ok(lp_obj) = lp.l() {
-                if !lp_obj.is_null() {
-                    let _ = env.set_field(&lp_obj, "width", "I", JValue::Int(width_px));
-                    // Clear weight so width is respected
-                    if env
-                        .is_instance_of(&lp_obj, "android/widget/LinearLayout$LayoutParams")
-                        .unwrap_or(false)
-                    {
-                        let _ = env.set_field(&lp_obj, "weight", "F", JValue::Float(0.0));
-                    }
-                    let _ = env.call_method(
-                        view_ref.as_obj(),
-                        "setLayoutParams",
-                        "(Landroid/view/ViewGroup$LayoutParams;)V",
-                        &[JValue::Object(&lp_obj)],
-                    );
-                } else {
-                    // No LayoutParams yet — create one
-                    let params = env.new_object(
-                        "android/widget/LinearLayout$LayoutParams",
-                        "(II)V",
-                        &[JValue::Int(width_px), JValue::Int(-2)], // -2 = WRAP_CONTENT
-                    );
-                    if let Ok(params) = params {
+        jni_bridge::with_env(|env| {
+            let _ = jni_bridge::push_local_frame(env, 16);
+            let width_px = dp_to_px(env, width as f32);
+            if let Ok(lp) = env.call_method(
+                view_ref.as_obj(),
+                jni::jni_str!("getLayoutParams"),
+                jni::jni_sig!("()Landroid/view/ViewGroup$LayoutParams;"),
+                &[],
+            ) {
+                if let Ok(lp_obj) = lp.l() {
+                    if !lp_obj.is_null() {
+                        let _ = env.set_field(
+                            &lp_obj,
+                            jni::jni_str!("width"),
+                            jni::jni_sig!("I"),
+                            JValue::Int(width_px),
+                        );
+                        // Clear weight so width is respected
+                        if env
+                            .is_instance_of(
+                                &lp_obj,
+                                jni::jni_str!("android/widget/LinearLayout$LayoutParams"),
+                            )
+                            .unwrap_or(false)
+                        {
+                            let _ = env.set_field(
+                                &lp_obj,
+                                jni::jni_str!("weight"),
+                                jni::jni_sig!("F"),
+                                JValue::Float(0.0),
+                            );
+                        }
                         let _ = env.call_method(
                             view_ref.as_obj(),
-                            "setLayoutParams",
-                            "(Landroid/view/ViewGroup$LayoutParams;)V",
-                            &[JValue::Object(&params)],
+                            jni::jni_str!("setLayoutParams"),
+                            jni::jni_sig!("(Landroid/view/ViewGroup$LayoutParams;)V"),
+                            &[JValue::Object(&lp_obj)],
                         );
+                    } else {
+                        // No LayoutParams yet — create one
+                        let params = env.new_object(
+                            jni::jni_str!("android/widget/LinearLayout$LayoutParams"),
+                            jni::jni_sig!("(II)V"),
+                            &[JValue::Int(width_px), JValue::Int(-2)], // -2 = WRAP_CONTENT
+                        );
+                        if let Ok(params) = params {
+                            let _ = env.call_method(
+                                view_ref.as_obj(),
+                                jni::jni_str!("setLayoutParams"),
+                                jni::jni_sig!("(Landroid/view/ViewGroup$LayoutParams;)V"),
+                                &[JValue::Object(&params)],
+                            );
+                        }
                     }
                 }
             }
-        }
-        unsafe {
-            env.pop_local_frame(&JObject::null());
-        }
+            unsafe {
+                let _ = jni_bridge::pop_local_frame(env, &JObject::null());
+            }
+        })
     }
 }
 
 /// Set a fixed height on a widget via LayoutParams.
 pub fn set_height(handle: i64, height: f64) {
     if let Some(view_ref) = get_widget(handle) {
-        let mut env = jni_bridge::get_env();
-        let _ = env.push_local_frame(16);
-        let height_px = dp_to_px(&mut env, height as f32);
-        if let Ok(lp) = env.call_method(
-            view_ref.as_obj(),
-            "getLayoutParams",
-            "()Landroid/view/ViewGroup$LayoutParams;",
-            &[],
-        ) {
-            if let Ok(lp_obj) = lp.l() {
-                if !lp_obj.is_null() {
-                    let _ = env.set_field(&lp_obj, "height", "I", JValue::Int(height_px));
-                    let _ = env.call_method(
-                        view_ref.as_obj(),
-                        "setLayoutParams",
-                        "(Landroid/view/ViewGroup$LayoutParams;)V",
-                        &[JValue::Object(&lp_obj)],
-                    );
-                } else {
-                    let params = env.new_object(
-                        "android/widget/LinearLayout$LayoutParams",
-                        "(II)V",
-                        &[JValue::Int(-2), JValue::Int(height_px)], // -2 = WRAP_CONTENT
-                    );
-                    if let Ok(params) = params {
+        jni_bridge::with_env(|env| {
+            let _ = jni_bridge::push_local_frame(env, 16);
+            let height_px = dp_to_px(env, height as f32);
+            if let Ok(lp) = env.call_method(
+                view_ref.as_obj(),
+                jni::jni_str!("getLayoutParams"),
+                jni::jni_sig!("()Landroid/view/ViewGroup$LayoutParams;"),
+                &[],
+            ) {
+                if let Ok(lp_obj) = lp.l() {
+                    if !lp_obj.is_null() {
+                        let _ = env.set_field(
+                            &lp_obj,
+                            jni::jni_str!("height"),
+                            jni::jni_sig!("I"),
+                            JValue::Int(height_px),
+                        );
                         let _ = env.call_method(
                             view_ref.as_obj(),
-                            "setLayoutParams",
-                            "(Landroid/view/ViewGroup$LayoutParams;)V",
-                            &[JValue::Object(&params)],
+                            jni::jni_str!("setLayoutParams"),
+                            jni::jni_sig!("(Landroid/view/ViewGroup$LayoutParams;)V"),
+                            &[JValue::Object(&lp_obj)],
                         );
+                    } else {
+                        let params = env.new_object(
+                            jni::jni_str!("android/widget/LinearLayout$LayoutParams"),
+                            jni::jni_sig!("(II)V"),
+                            &[JValue::Int(-2), JValue::Int(height_px)], // -2 = WRAP_CONTENT
+                        );
+                        if let Ok(params) = params {
+                            let _ = env.call_method(
+                                view_ref.as_obj(),
+                                jni::jni_str!("setLayoutParams"),
+                                jni::jni_sig!("(Landroid/view/ViewGroup$LayoutParams;)V"),
+                                &[JValue::Object(&params)],
+                            );
+                        }
                     }
                 }
             }
-        }
-        unsafe {
-            env.pop_local_frame(&JObject::null());
-        }
+            unsafe {
+                let _ = jni_bridge::pop_local_frame(env, &JObject::null());
+            }
+        })
     }
 }
 
@@ -896,112 +1031,126 @@ pub fn remove_child(parent_handle: i64, child_handle: i64) {
     if let (Some(parent_ref), Some(child_ref)) =
         (get_widget(parent_handle), get_widget(child_handle))
     {
-        let mut env = jni_bridge::get_env();
-        let _ = env.push_local_frame(8);
-        let _ = env.call_method(
-            parent_ref.as_obj(),
-            "removeView",
-            "(Landroid/view/View;)V",
-            &[JValue::Object(child_ref.as_obj())],
-        );
-        unsafe {
-            env.pop_local_frame(&JObject::null());
-        }
+        jni_bridge::with_env(|env| {
+            let _ = jni_bridge::push_local_frame(env, 8);
+            let _ = env.call_method(
+                parent_ref.as_obj(),
+                jni::jni_str!("removeView"),
+                jni::jni_sig!("(Landroid/view/View;)V"),
+                &[JValue::Object(child_ref.as_obj())],
+            );
+            unsafe {
+                let _ = jni_bridge::pop_local_frame(env, &JObject::null());
+            }
+        })
     }
 }
 
 /// Reorder a child widget within a parent ViewGroup by index.
 pub fn reorder_child(parent_handle: i64, from_index: i64, to_index: i64) {
     if let Some(parent_ref) = get_widget(parent_handle) {
-        let mut env = jni_bridge::get_env();
-        let _ = env.push_local_frame(16);
-        // Get child at from_index
-        let child_result = env.call_method(
-            parent_ref.as_obj(),
-            "getChildAt",
-            "(I)Landroid/view/View;",
-            &[JValue::Int(from_index as i32)],
-        );
-        if let Ok(child_val) = child_result {
-            if let Ok(child_obj) = child_val.l() {
-                if !child_obj.is_null() {
-                    // Remove and re-add at target index
-                    let _ = env.call_method(
-                        parent_ref.as_obj(),
-                        "removeViewAt",
-                        "(I)V",
-                        &[JValue::Int(from_index as i32)],
-                    );
-                    let _ = env.call_method(
-                        parent_ref.as_obj(),
-                        "addView",
-                        "(Landroid/view/View;I)V",
-                        &[JValue::Object(&child_obj), JValue::Int(to_index as i32)],
-                    );
+        jni_bridge::with_env(|env| {
+            let _ = jni_bridge::push_local_frame(env, 16);
+            // Get child at from_index
+            let child_result = env.call_method(
+                parent_ref.as_obj(),
+                jni::jni_str!("getChildAt"),
+                jni::jni_sig!("(I)Landroid/view/View;"),
+                &[JValue::Int(from_index as i32)],
+            );
+            if let Ok(child_val) = child_result {
+                if let Ok(child_obj) = child_val.l() {
+                    if !child_obj.is_null() {
+                        // Remove and re-add at target index
+                        let _ = env.call_method(
+                            parent_ref.as_obj(),
+                            jni::jni_str!("removeViewAt"),
+                            jni::jni_sig!("(I)V"),
+                            &[JValue::Int(from_index as i32)],
+                        );
+                        let _ = env.call_method(
+                            parent_ref.as_obj(),
+                            jni::jni_str!("addView"),
+                            jni::jni_sig!("(Landroid/view/View;I)V"),
+                            &[JValue::Object(&child_obj), JValue::Int(to_index as i32)],
+                        );
+                    }
                 }
             }
-        }
-        unsafe {
-            env.pop_local_frame(&JObject::null());
-        }
+            unsafe {
+                let _ = jni_bridge::pop_local_frame(env, &JObject::null());
+            }
+        })
     }
 }
 
 /// Pin a child view's width to match its parent (MATCH_PARENT).
 pub fn match_parent_width(child_handle: i64) {
     if let Some(view_ref) = get_widget(child_handle) {
-        let mut env = jni_bridge::get_env();
-        let _ = env.push_local_frame(16);
-        if let Ok(lp) = env.call_method(
-            view_ref.as_obj(),
-            "getLayoutParams",
-            "()Landroid/view/ViewGroup$LayoutParams;",
-            &[],
-        ) {
-            if let Ok(lp_obj) = lp.l() {
-                if !lp_obj.is_null() {
-                    let _ = env.set_field(&lp_obj, "width", "I", JValue::Int(-1)); // MATCH_PARENT
-                    let _ = env.call_method(
-                        view_ref.as_obj(),
-                        "setLayoutParams",
-                        "(Landroid/view/ViewGroup$LayoutParams;)V",
-                        &[JValue::Object(&lp_obj)],
-                    );
+        jni_bridge::with_env(|env| {
+            let _ = jni_bridge::push_local_frame(env, 16);
+            if let Ok(lp) = env.call_method(
+                view_ref.as_obj(),
+                jni::jni_str!("getLayoutParams"),
+                jni::jni_sig!("()Landroid/view/ViewGroup$LayoutParams;"),
+                &[],
+            ) {
+                if let Ok(lp_obj) = lp.l() {
+                    if !lp_obj.is_null() {
+                        let _ = env.set_field(
+                            &lp_obj,
+                            jni::jni_str!("width"),
+                            jni::jni_sig!("I"),
+                            JValue::Int(-1),
+                        ); // MATCH_PARENT
+                        let _ = env.call_method(
+                            view_ref.as_obj(),
+                            jni::jni_str!("setLayoutParams"),
+                            jni::jni_sig!("(Landroid/view/ViewGroup$LayoutParams;)V"),
+                            &[JValue::Object(&lp_obj)],
+                        );
+                    }
                 }
             }
-        }
-        unsafe {
-            env.pop_local_frame(&JObject::null());
-        }
+            unsafe {
+                let _ = jni_bridge::pop_local_frame(env, &JObject::null());
+            }
+        })
     }
 }
 
 /// Pin a child view's height to match its parent (MATCH_PARENT).
 pub fn match_parent_height(child_handle: i64) {
     if let Some(view_ref) = get_widget(child_handle) {
-        let mut env = jni_bridge::get_env();
-        let _ = env.push_local_frame(16);
-        if let Ok(lp) = env.call_method(
-            view_ref.as_obj(),
-            "getLayoutParams",
-            "()Landroid/view/ViewGroup$LayoutParams;",
-            &[],
-        ) {
-            if let Ok(lp_obj) = lp.l() {
-                if !lp_obj.is_null() {
-                    let _ = env.set_field(&lp_obj, "height", "I", JValue::Int(-1)); // MATCH_PARENT
-                    let _ = env.call_method(
-                        view_ref.as_obj(),
-                        "setLayoutParams",
-                        "(Landroid/view/ViewGroup$LayoutParams;)V",
-                        &[JValue::Object(&lp_obj)],
-                    );
+        jni_bridge::with_env(|env| {
+            let _ = jni_bridge::push_local_frame(env, 16);
+            if let Ok(lp) = env.call_method(
+                view_ref.as_obj(),
+                jni::jni_str!("getLayoutParams"),
+                jni::jni_sig!("()Landroid/view/ViewGroup$LayoutParams;"),
+                &[],
+            ) {
+                if let Ok(lp_obj) = lp.l() {
+                    if !lp_obj.is_null() {
+                        let _ = env.set_field(
+                            &lp_obj,
+                            jni::jni_str!("height"),
+                            jni::jni_sig!("I"),
+                            JValue::Int(-1),
+                        ); // MATCH_PARENT
+                        let _ = env.call_method(
+                            view_ref.as_obj(),
+                            jni::jni_str!("setLayoutParams"),
+                            jni::jni_sig!("(Landroid/view/ViewGroup$LayoutParams;)V"),
+                            &[JValue::Object(&lp_obj)],
+                        );
+                    }
                 }
             }
-        }
-        unsafe {
-            env.pop_local_frame(&JObject::null());
-        }
+            unsafe {
+                let _ = jni_bridge::pop_local_frame(env, &JObject::null());
+            }
+        })
     }
 }
 
@@ -1014,155 +1163,175 @@ pub fn set_detaches_hidden_views(_handle: i64, _detaches: bool) {
 /// Set border color on a widget via GradientDrawable stroke.
 pub fn set_border_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
     if let Some(view_ref) = get_widget(handle) {
-        let mut env = jni_bridge::get_env();
-        let _ = env.push_local_frame(16);
-        let color = argb_color(a, r, g, b);
-        // Try to reuse existing GradientDrawable
-        if let Ok(bg) = env.call_method(
-            view_ref.as_obj(),
-            "getBackground",
-            "()Landroid/graphics/drawable/Drawable;",
-            &[],
-        ) {
-            if let Ok(bg_obj) = bg.l() {
-                if !bg_obj.is_null() {
-                    if env
-                        .is_instance_of(&bg_obj, "android/graphics/drawable/GradientDrawable")
-                        .unwrap_or(false)
-                    {
-                        let _ = env.call_method(
-                            &bg_obj,
-                            "setStroke",
-                            "(II)V",
-                            &[JValue::Int(2), JValue::Int(color)],
-                        ); // 2px default width
-                        unsafe {
-                            env.pop_local_frame(&JObject::null());
+        jni_bridge::with_env(|env| {
+            let _ = jni_bridge::push_local_frame(env, 16);
+            let color = argb_color(a, r, g, b);
+            // Try to reuse existing GradientDrawable
+            if let Ok(bg) = env.call_method(
+                view_ref.as_obj(),
+                jni::jni_str!("getBackground"),
+                jni::jni_sig!("()Landroid/graphics/drawable/Drawable;"),
+                &[],
+            ) {
+                if let Ok(bg_obj) = bg.l() {
+                    if !bg_obj.is_null() {
+                        if env
+                            .is_instance_of(
+                                &bg_obj,
+                                jni::jni_str!("android/graphics/drawable/GradientDrawable"),
+                            )
+                            .unwrap_or(false)
+                        {
+                            let _ = env.call_method(
+                                &bg_obj,
+                                jni::jni_str!("setStroke"),
+                                jni::jni_sig!("(II)V"),
+                                &[JValue::Int(2), JValue::Int(color)],
+                            ); // 2px default width
+                            unsafe {
+                                let _ = jni_bridge::pop_local_frame(env, &JObject::null());
+                            }
+                            return;
                         }
-                        return;
                     }
                 }
             }
-        }
-        // Create new GradientDrawable with border
-        let gd = env
-            .new_object("android/graphics/drawable/GradientDrawable", "()V", &[])
-            .expect("GradientDrawable");
-        let _ = env.call_method(&gd, "setColor", "(I)V", &[JValue::Int(0)]); // transparent fill
-        let _ = env.call_method(
-            &gd,
-            "setStroke",
-            "(II)V",
-            &[JValue::Int(2), JValue::Int(color)],
-        );
-        let _ = env.call_method(
-            view_ref.as_obj(),
-            "setBackground",
-            "(Landroid/graphics/drawable/Drawable;)V",
-            &[JValue::Object(&gd)],
-        );
-        unsafe {
-            env.pop_local_frame(&JObject::null());
-        }
+            // Create new GradientDrawable with border
+            let gd = env
+                .new_object(
+                    jni::jni_str!("android/graphics/drawable/GradientDrawable"),
+                    jni::jni_sig!("()V"),
+                    &[],
+                )
+                .expect("GradientDrawable");
+            let _ = env.call_method(
+                &gd,
+                jni::jni_str!("setColor"),
+                jni::jni_sig!("(I)V"),
+                &[JValue::Int(0)],
+            ); // transparent fill
+            let _ = env.call_method(
+                &gd,
+                jni::jni_str!("setStroke"),
+                jni::jni_sig!("(II)V"),
+                &[JValue::Int(2), JValue::Int(color)],
+            );
+            let _ = env.call_method(
+                view_ref.as_obj(),
+                jni::jni_str!("setBackground"),
+                jni::jni_sig!("(Landroid/graphics/drawable/Drawable;)V"),
+                &[JValue::Object(&gd)],
+            );
+            unsafe {
+                let _ = jni_bridge::pop_local_frame(env, &JObject::null());
+            }
+        })
     }
 }
 
 /// Set border width on a widget via GradientDrawable stroke.
 pub fn set_border_width(handle: i64, width: f64) {
     if let Some(view_ref) = get_widget(handle) {
-        let mut env = jni_bridge::get_env();
-        let _ = env.push_local_frame(16);
-        let width_px = dp_to_px(&mut env, width as f32);
-        if let Ok(bg) = env.call_method(
-            view_ref.as_obj(),
-            "getBackground",
-            "()Landroid/graphics/drawable/Drawable;",
-            &[],
-        ) {
-            if let Ok(bg_obj) = bg.l() {
-                if !bg_obj.is_null() {
-                    if env
-                        .is_instance_of(&bg_obj, "android/graphics/drawable/GradientDrawable")
-                        .unwrap_or(false)
-                    {
-                        // setStroke requires both width and color
-                        let _ = env.call_method(
-                            &bg_obj,
-                            "setStroke",
-                            "(II)V",
-                            &[JValue::Int(width_px), JValue::Int(0xFF000000u32 as i32)],
-                        ); // black default
+        jni_bridge::with_env(|env| {
+            let _ = jni_bridge::push_local_frame(env, 16);
+            let width_px = dp_to_px(env, width as f32);
+            if let Ok(bg) = env.call_method(
+                view_ref.as_obj(),
+                jni::jni_str!("getBackground"),
+                jni::jni_sig!("()Landroid/graphics/drawable/Drawable;"),
+                &[],
+            ) {
+                if let Ok(bg_obj) = bg.l() {
+                    if !bg_obj.is_null() {
+                        if env
+                            .is_instance_of(
+                                &bg_obj,
+                                jni::jni_str!("android/graphics/drawable/GradientDrawable"),
+                            )
+                            .unwrap_or(false)
+                        {
+                            // setStroke requires both width and color
+                            let _ = env.call_method(
+                                &bg_obj,
+                                jni::jni_str!("setStroke"),
+                                jni::jni_sig!("(II)V"),
+                                &[JValue::Int(width_px), JValue::Int(0xFF000000u32 as i32)],
+                            ); // black default
+                        }
                     }
                 }
             }
-        }
-        unsafe {
-            env.pop_local_frame(&JObject::null());
-        }
+            unsafe {
+                let _ = jni_bridge::pop_local_frame(env, &JObject::null());
+            }
+        })
     }
 }
 
 /// Set edge insets (padding) on a widget.
 pub fn set_edge_insets(handle: i64, top: f64, left: f64, bottom: f64, right: f64) {
     if let Some(view_ref) = get_widget(handle) {
-        let mut env = jni_bridge::get_env();
-        let _ = env.push_local_frame(8);
-        let t = dp_to_px(&mut env, top as f32);
-        let l = dp_to_px(&mut env, left as f32);
-        let b = dp_to_px(&mut env, bottom as f32);
-        let r = dp_to_px(&mut env, right as f32);
-        let _ = env.call_method(
-            view_ref.as_obj(),
-            "setPadding",
-            "(IIII)V",
-            &[
-                JValue::Int(l),
-                JValue::Int(t),
-                JValue::Int(r),
-                JValue::Int(b),
-            ],
-        );
-        unsafe {
-            env.pop_local_frame(&JObject::null());
-        }
+        jni_bridge::with_env(|env| {
+            let _ = jni_bridge::push_local_frame(env, 8);
+            let t = dp_to_px(env, top as f32);
+            let l = dp_to_px(env, left as f32);
+            let b = dp_to_px(env, bottom as f32);
+            let r = dp_to_px(env, right as f32);
+            let _ = env.call_method(
+                view_ref.as_obj(),
+                jni::jni_str!("setPadding"),
+                jni::jni_sig!("(IIII)V"),
+                &[
+                    JValue::Int(l),
+                    JValue::Int(t),
+                    JValue::Int(r),
+                    JValue::Int(b),
+                ],
+            );
+            unsafe {
+                let _ = jni_bridge::pop_local_frame(env, &JObject::null());
+            }
+        })
     }
 }
 
 /// Set view opacity (alpha) in [0.0, 1.0].
 pub fn set_opacity(handle: i64, alpha: f64) {
     if let Some(view_ref) = get_widget(handle) {
-        let mut env = jni_bridge::get_env();
-        let _ = env.push_local_frame(8);
-        let _ = env.call_method(
-            view_ref.as_obj(),
-            "setAlpha",
-            "(F)V",
-            &[JValue::Float(alpha as f32)],
-        );
-        unsafe {
-            env.pop_local_frame(&JObject::null());
-        }
+        jni_bridge::with_env(|env| {
+            let _ = jni_bridge::push_local_frame(env, 8);
+            let _ = env.call_method(
+                view_ref.as_obj(),
+                jni::jni_str!("setAlpha"),
+                jni::jni_sig!("(F)V"),
+                &[JValue::Float(alpha as f32)],
+            );
+            unsafe {
+                let _ = jni_bridge::pop_local_frame(env, &JObject::null());
+            }
+        })
     }
 }
 
 /// Set on-click callback for any widget (via PerryBridge).
 pub fn set_on_click(handle: i64, callback: f64) {
     if let Some(view_ref) = get_widget(handle) {
-        let mut env = jni_bridge::get_env();
-        let _ = env.push_local_frame(8);
-        let cb_key = crate::callback::register(callback);
-        let bridge_class =
-            jni_bridge::with_cache(|c| env.new_local_ref(c.perry_bridge_class.as_obj()).unwrap());
-        let bridge_cls: &jni::objects::JClass = (&bridge_class).into();
-        let _ = env.call_static_method(
-            bridge_cls,
-            "setOnClickCallback",
-            "(Landroid/view/View;J)V",
-            &[JValue::Object(view_ref.as_obj()), JValue::Long(cb_key)],
-        );
-        unsafe {
-            env.pop_local_frame(&JObject::null());
-        }
+        jni_bridge::with_env(|env| {
+            let _ = jni_bridge::push_local_frame(env, 8);
+            let cb_key = crate::callback::register(callback);
+            let bridge_class =
+                jni_bridge::with_cache(|c| env.new_local_ref(&c.perry_bridge_class).unwrap());
+            let bridge_cls: &jni::objects::JClass = &bridge_class;
+            let _ = env.call_static_method(
+                bridge_cls,
+                jni::jni_str!("setOnClickCallback"),
+                jni::jni_sig!("(Landroid/view/View;J)V"),
+                &[JValue::Object(view_ref.as_obj()), JValue::Long(cb_key)],
+            );
+            unsafe {
+                let _ = jni_bridge::pop_local_frame(env, &JObject::null());
+            }
+        })
     }
 }
 
@@ -1171,75 +1340,81 @@ pub fn set_on_click(handle: i64, callback: f64) {
 /// A low hugging value means the view WANTS to expand (high weight).
 pub fn set_hugging(handle: i64, priority: f64) {
     if let Some(view_ref) = get_widget(handle) {
-        let mut env = jni_bridge::get_env();
-        let _ = env.push_local_frame(16);
+        jni_bridge::with_env(|env| {
+            let _ = jni_bridge::push_local_frame(env, 16);
 
-        // Determine parent orientation to set the correct axis
-        let parent_horizontal = (|| -> Option<bool> {
-            let parent = env
-                .call_method(
-                    view_ref.as_obj(),
-                    "getParent",
-                    "()Landroid/view/ViewParent;",
-                    &[],
-                )
-                .ok()?
-                .l()
-                .ok()?;
-            if parent.is_null() {
-                return None;
-            }
-            if !env
-                .is_instance_of(&parent, "android/widget/LinearLayout")
-                .unwrap_or(false)
-            {
-                return None;
-            }
-            let orient = env
-                .call_method(&parent, "getOrientation", "()I", &[])
-                .map(|v| v.i().unwrap_or(-1))
-                .unwrap_or(-1);
-            Some(orient == 0) // 0=HORIZONTAL
-        })()
-        .unwrap_or(false);
+            // Determine parent orientation to set the correct axis
+            let parent_horizontal = (|| -> Option<bool> {
+                let parent = env
+                    .call_method(
+                        view_ref.as_obj(),
+                        jni::jni_str!("getParent"),
+                        jni::jni_sig!("()Landroid/view/ViewParent;"),
+                        &[],
+                    )
+                    .ok()?
+                    .l()
+                    .ok()?;
+                if parent.is_null() {
+                    return None;
+                }
+                if !env
+                    .is_instance_of(&parent, jni::jni_str!("android/widget/LinearLayout"))
+                    .unwrap_or(false)
+                {
+                    return None;
+                }
+                let orient = env
+                    .call_method(
+                        &parent,
+                        jni::jni_str!("getOrientation"),
+                        jni::jni_sig!("()I"),
+                        &[],
+                    )
+                    .map(|v| v.i().unwrap_or(-1))
+                    .unwrap_or(-1);
+                Some(orient == 0) // 0=HORIZONTAL
+            })()
+            .unwrap_or(false);
 
-        // Map hugging priority to weight:
-        // low hugging (< 100) = high weight (expands), high hugging = compact (wrap content)
-        let expand = priority < 100.0;
-        let weight = if expand { 1.0f32 } else { 0.0f32 };
+            // Map hugging priority to weight:
+            // low hugging (< 100) = high weight (expands), high hugging = compact (wrap content)
+            let expand = priority < 100.0;
+            let weight = if expand { 1.0f32 } else { 0.0f32 };
 
-        let (w, h) = if parent_horizontal {
-            // HStack: weight distributes WIDTH; cross-axis (height) = MATCH_PARENT
-            if expand {
-                (0, -1)
+            let (w, h) = if parent_horizontal {
+                // HStack: weight distributes WIDTH; cross-axis (height) = MATCH_PARENT
+                if expand {
+                    (0, -1)
+                } else {
+                    (-2, -1)
+                } // width=0+weight or WRAP_CONTENT; height=MATCH_PARENT
             } else {
-                (-2, -1)
-            } // width=0+weight or WRAP_CONTENT; height=MATCH_PARENT
-        } else {
-            // VStack (default): weight distributes HEIGHT; cross-axis (width) = MATCH_PARENT
-            if expand {
-                (-1, 0)
-            } else {
-                (-1, -2)
-            } // width=MATCH_PARENT; height=0+weight or WRAP_CONTENT
-        };
+                // VStack (default): weight distributes HEIGHT; cross-axis (width) = MATCH_PARENT
+                if expand {
+                    (-1, 0)
+                } else {
+                    (-1, -2)
+                } // width=MATCH_PARENT; height=0+weight or WRAP_CONTENT
+            };
 
-        let params = env.new_object(
-            "android/widget/LinearLayout$LayoutParams",
-            "(IIF)V",
-            &[JValue::Int(w), JValue::Int(h), JValue::Float(weight)],
-        );
-        if let Ok(params) = params {
-            let _ = env.call_method(
-                view_ref.as_obj(),
-                "setLayoutParams",
-                "(Landroid/view/ViewGroup$LayoutParams;)V",
-                &[JValue::Object(&params)],
+            let params = env.new_object(
+                jni::jni_str!("android/widget/LinearLayout$LayoutParams"),
+                jni::jni_sig!("(IIF)V"),
+                &[JValue::Int(w), JValue::Int(h), JValue::Float(weight)],
             );
-        }
-        unsafe {
-            env.pop_local_frame(&JObject::null());
-        }
+            if let Ok(params) = params {
+                let _ = env.call_method(
+                    view_ref.as_obj(),
+                    jni::jni_str!("setLayoutParams"),
+                    jni::jni_sig!("(Landroid/view/ViewGroup$LayoutParams;)V"),
+                    &[JValue::Object(&params)],
+                );
+            }
+            unsafe {
+                let _ = jni_bridge::pop_local_frame(env, &JObject::null());
+            }
+        })
     }
 }
 
@@ -1252,12 +1427,17 @@ fn argb_color(a: f64, r: f64, g: f64, b: f64) -> i32 {
 }
 
 /// Convert dp to pixels via PerryBridge.
-pub fn dp_to_px(env: &mut jni::JNIEnv, dp: f32) -> i32 {
+pub fn dp_to_px(env: &mut jni::Env, dp: f32) -> i32 {
     let bridge_class =
-        jni_bridge::with_cache(|c| env.new_local_ref(c.perry_bridge_class.as_obj()).unwrap());
-    let bridge_cls: &jni::objects::JClass = (&bridge_class).into();
+        jni_bridge::with_cache(|c| env.new_local_ref(&c.perry_bridge_class).unwrap());
+    let bridge_cls: &jni::objects::JClass = &bridge_class;
     let result = env
-        .call_static_method(bridge_cls, "dpToPx", "(F)I", &[JValue::Float(dp)])
+        .call_static_method(
+            bridge_cls,
+            jni::jni_str!("dpToPx"),
+            jni::jni_sig!("(F)I"),
+            &[JValue::Float(dp)],
+        )
         .expect("Failed to convert dp to px");
     result.i().expect("dpToPx did not return int")
 }

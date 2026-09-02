@@ -21,7 +21,7 @@
 
 use crate::callback;
 use crate::jni_bridge;
-use jni::objects::JValue;
+use jni::JValue;
 
 /// Register the deep-link handler. Stores the closure-key on the Kotlin
 /// side. Setting a fresh handler replaces the previous one. If a URL
@@ -30,43 +30,57 @@ use jni::objects::JValue;
 pub fn set_handler(callback: f64) {
     let key = callback::register(callback);
 
-    let mut env = jni_bridge::get_env();
-    let _ = env.push_local_frame(8);
+    jni_bridge::with_env(|env| {
+        let _ = jni_bridge::push_local_frame(env, 8);
 
-    let bridge_class =
-        jni_bridge::with_cache(|c| env.new_local_ref(c.perry_bridge_class.as_obj()).unwrap());
-    let bridge_cls: &jni::objects::JClass = (&bridge_class).into();
-    let _ = env.call_static_method(bridge_cls, "appOnOpenUrl", "(J)V", &[JValue::Long(key)]);
+        let bridge_class =
+            jni_bridge::with_cache(|c| env.new_local_ref(&c.perry_bridge_class).unwrap());
+        let bridge_cls: &jni::objects::JClass = &bridge_class;
+        let _ = env.call_static_method(
+            bridge_cls,
+            jni::jni_str!("appOnOpenUrl"),
+            jni::jni_sig!("(J)V"),
+            &[JValue::Long(key)],
+        );
 
-    unsafe {
-        env.pop_local_frame(&jni::objects::JObject::null());
-    }
+        unsafe {
+            let _ = jni_bridge::pop_local_frame(env, &jni::objects::JObject::null());
+        }
+    })
 }
 
 /// Read the cold-start URL (or `""` if the app was launched without one).
 /// Walks across to the Kotlin side, which owns the `intent.data` snapshot.
 pub fn launch_url() -> String {
-    let mut env = jni_bridge::get_env();
-    let _ = env.push_local_frame(8);
+    jni_bridge::with_env(|env| {
+        let _ = jni_bridge::push_local_frame(env, 8);
 
-    let bridge_class =
-        jni_bridge::with_cache(|c| env.new_local_ref(c.perry_bridge_class.as_obj()).unwrap());
-    let bridge_cls: &jni::objects::JClass = (&bridge_class).into();
-    let result_str: String =
-        match env.call_static_method(bridge_cls, "appGetLaunchUrl", "()Ljava/lang/String;", &[]) {
+        let bridge_class =
+            jni_bridge::with_cache(|c| env.new_local_ref(&c.perry_bridge_class).unwrap());
+        let bridge_cls: &jni::objects::JClass = &bridge_class;
+        let result_str: String = match env.call_static_method(
+            bridge_cls,
+            jni::jni_str!("appGetLaunchUrl"),
+            jni::jni_sig!("()Ljava/lang/String;"),
+            &[],
+        ) {
             Ok(v) => match v.l() {
                 Ok(obj) => {
-                    let jstr: jni::objects::JString = obj.into();
-                    env.get_string(&jstr).map(|s| s.into()).unwrap_or_default()
+                    let jstr: jni::objects::JString =
+                        unsafe { jni::objects::JString::from_raw(env, obj.into_raw()) };
+                    jstr.try_to_string(env)
+                        .map(|s| s.into())
+                        .unwrap_or_default()
                 }
                 Err(_) => String::new(),
             },
             Err(_) => String::new(),
         };
 
-    unsafe {
-        env.pop_local_frame(&jni::objects::JObject::null());
-    }
+        unsafe {
+            let _ = jni_bridge::pop_local_frame(env, &jni::objects::JObject::null());
+        }
 
-    result_str
+        result_str
+    })
 }

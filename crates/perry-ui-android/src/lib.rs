@@ -1,4 +1,8 @@
 #![cfg(target_os = "android")]
+// The crate's pre-existing runtime symbol declarations use caller-specific
+// Rust representations for the same C ABI values. Normalizing that ABI is a
+// separate change from the JNI migration.
+#![allow(clashing_extern_declarations)]
 
 // Issue #552: force libperry_ui_android.a to bundle perry-ext-sharp's
 // `js_sharp_*` symbols (resize / jpeg / toBuffer / etc). Without this `extern
@@ -132,7 +136,12 @@ pub(crate) fn catch_panic_void(name: &str, f: impl FnOnce() + std::panic::Unwind
 
 /// Called by the JVM when the native library is loaded via System.loadLibrary().
 #[no_mangle]
-pub extern "C" fn JNI_OnLoad(vm: jni::JavaVM, _reserved: *mut std::ffi::c_void) -> jni::sys::jint {
+pub extern "C" fn JNI_OnLoad(
+    vm: *mut jni::sys::JavaVM,
+    _reserved: *mut std::ffi::c_void,
+) -> jni::sys::jint {
+    // SAFETY: the JVM invokes JNI_OnLoad with its live VM interface pointer.
+    let vm = unsafe { jni::JavaVM::from_raw(vm) };
     gc::ensure_registered();
     unsafe {
         __android_log_print(
@@ -176,7 +185,7 @@ pub extern "C" fn JNI_OnLoad(vm: jni::JavaVM, _reserved: *mut std::ffi::c_void) 
 /// Initializes the JNI cache on the calling thread.
 #[no_mangle]
 pub extern "C" fn Java_com_perry_app_PerryBridge_nativeInit(
-    mut env: jni::JNIEnv,
+    mut env: jni::EnvUnowned,
     _class: jni::objects::JClass,
 ) {
     gc::ensure_registered();
@@ -189,14 +198,16 @@ pub extern "C" fn Java_com_perry_app_PerryBridge_nativeInit(
     unsafe {
         mallopt(-204, 0);
     }
-    jni_bridge::ensure_vm(&env);
-    jni_bridge::init_cache(&mut env);
+    jni_bridge::with_unowned_env(&mut env, |env| {
+        jni_bridge::ensure_vm(env);
+        jni_bridge::init_cache(env);
+    });
 }
 
 /// Called from PerryActivity when the Activity is being destroyed.
 #[no_mangle]
 pub extern "C" fn Java_com_perry_app_PerryBridge_nativeShutdown(
-    _env: jni::JNIEnv,
+    _env: jni::EnvUnowned,
     _class: jni::objects::JClass,
 ) {
     app::signal_shutdown();
@@ -209,7 +220,7 @@ pub extern "C" fn Java_com_perry_app_PerryBridge_nativeShutdown(
 /// the Activity's main thread, which owns the JS arena.
 #[no_mangle]
 pub extern "C" fn Java_com_perry_app_PerryBridge_nativeMemoryPressure(
-    _env: jni::JNIEnv,
+    _env: jni::EnvUnowned,
     _class: jni::objects::JClass,
     level: jni::sys::jint,
 ) {
@@ -236,43 +247,52 @@ extern "C" {
 #[cfg(not(test))]
 #[no_mangle]
 pub extern "C" fn Java_com_perry_app_PerryBridge_nativeMain(
-    _env: jni::JNIEnv,
+    _env: jni::EnvUnowned,
     _class: jni::objects::JClass,
 ) {
     // Set CWD to the app's internal files directory so that relative paths
     // (e.g. SQLite databases like "mango.db") resolve to a writable location.
     {
-        let mut env = jni_bridge::get_env();
-        let _ = env.push_local_frame(16);
-        if let Ok(activity) = env.call_static_method(
-            "com/perry/app/PerryBridge",
-            "getActivity",
-            "()Landroid/app/Activity;",
-            &[],
-        ) {
-            if let Ok(act_obj) = activity.l() {
-                if let Ok(files_dir) =
-                    env.call_method(&act_obj, "getFilesDir", "()Ljava/io/File;", &[])
-                {
-                    if let Ok(fd_obj) = files_dir.l() {
-                        if let Ok(abs_val) =
-                            env.call_method(&fd_obj, "getAbsolutePath", "()Ljava/lang/String;", &[])
-                        {
-                            if let Ok(abs_obj) = abs_val.l() {
-                                if let Ok(path_str) = env.get_string((&abs_obj).into()) {
-                                    let path: String = path_str.into();
-                                    let _ = std::fs::create_dir_all(&path);
-                                    let _ = std::env::set_current_dir(&path);
+        jni_bridge::with_env(|env| {
+            let _ = jni_bridge::push_local_frame(env, 16);
+            if let Ok(activity) = env.call_static_method(
+                jni::jni_str!("com/perry/app/PerryBridge"),
+                jni::jni_str!("getActivity"),
+                jni::jni_sig!("()Landroid/app/Activity;"),
+                &[],
+            ) {
+                if let Ok(act_obj) = activity.l() {
+                    if let Ok(files_dir) = env.call_method(
+                        &act_obj,
+                        jni::jni_str!("getFilesDir"),
+                        jni::jni_sig!("()Ljava/io/File;"),
+                        &[],
+                    ) {
+                        if let Ok(fd_obj) = files_dir.l() {
+                            if let Ok(abs_val) = env.call_method(
+                                &fd_obj,
+                                jni::jni_str!("getAbsolutePath"),
+                                jni::jni_sig!("()Ljava/lang/String;"),
+                                &[],
+                            ) {
+                                if let Ok(abs_obj) = abs_val.l() {
+                                    let abs_jstr = unsafe {
+                                        jni::objects::JString::from_raw(env, abs_obj.into_raw())
+                                    };
+                                    if let Ok(path) = abs_jstr.try_to_string(env) {
+                                        let _ = std::fs::create_dir_all(&path);
+                                        let _ = std::env::set_current_dir(&path);
+                                    }
                                 }
                             }
                         }
                     }
                 }
             }
-        }
-        unsafe {
-            env.pop_local_frame(&jni::objects::JObject::null());
-        }
+            unsafe {
+                let _ = jni_bridge::pop_local_frame(env, &jni::objects::JObject::null());
+            }
+        })
     }
 
     unsafe {

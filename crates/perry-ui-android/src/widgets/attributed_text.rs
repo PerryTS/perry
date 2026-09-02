@@ -5,8 +5,9 @@
 //! for explicit font size).
 
 use crate::jni_bridge;
-use jni::objects::{GlobalRef, JObject, JValue};
-use jni::JNIEnv;
+use crate::jni_bridge::GlobalRef;
+use jni::objects::JObject;
+use jni::{Env, JValue};
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -27,39 +28,44 @@ use perry_ffi::copy_string_from_raw as str_from_header;
 
 /// Create an empty `TextView` ready to receive `append` runs.
 pub fn create() -> i64 {
-    let mut env = jni_bridge::get_env();
-    let _ = env.push_local_frame(16);
-    let activity = super::get_activity(&mut env);
-    let tv = env
-        .new_object(
-            "android/widget/TextView",
-            "(Landroid/content/Context;)V",
-            &[JValue::Object(&activity)],
-        )
-        .expect("AttributedText TextView");
-    let global = env.new_global_ref(&tv).expect("TextView global ref");
+    jni_bridge::with_env(|env| {
+        let _ = jni_bridge::push_local_frame(env, 16);
+        let activity = super::get_activity(env);
+        let tv = env
+            .new_object(
+                jni::jni_str!("android/widget/TextView"),
+                jni::jni_sig!("(Landroid/content/Context;)V"),
+                &[JValue::Object(&activity)],
+            )
+            .expect("AttributedText TextView");
+        let global = jni_bridge::new_global_ref(env, &tv).expect("TextView global ref");
 
-    // Empty SpannableStringBuilder.
-    let ssb = env
-        .new_object("android/text/SpannableStringBuilder", "()V", &[])
-        .expect("SpannableStringBuilder()");
-    let ssb_global = env.new_global_ref(&ssb).expect("SSB global ref");
+        // Empty SpannableStringBuilder.
+        let ssb = env
+            .new_object(
+                jni::jni_str!("android/text/SpannableStringBuilder"),
+                jni::jni_sig!("()V"),
+                &[],
+            )
+            .expect("SpannableStringBuilder()");
+        let ssb_global = jni_bridge::new_global_ref(env, &ssb).expect("SSB global ref");
 
-    let handle = super::register_widget(global);
-    BUFFERS.with(|b| {
-        b.borrow_mut().insert(
-            handle,
-            Buffer {
-                builder: ssb_global,
-                len: 0,
-            },
-        );
-    });
+        let handle = super::register_widget(global);
+        BUFFERS.with(|b| {
+            b.borrow_mut().insert(
+                handle,
+                Buffer {
+                    builder: ssb_global,
+                    len: 0,
+                },
+            );
+        });
 
-    unsafe {
-        env.pop_local_frame(&JObject::null());
-    }
-    handle
+        unsafe {
+            let _ = jni_bridge::pop_local_frame(env, &JObject::null());
+        }
+        handle
+    })
 }
 
 /// Append one styled run. See iOS/macOS twin for parameter semantics.
@@ -94,99 +100,97 @@ pub fn append(
         None => return,
     };
 
-    let mut env = jni_bridge::get_env();
-    let _ = env.push_local_frame(32);
+    jni_bridge::with_env(|env| {
+        let _ = jni_bridge::push_local_frame(env, 32);
 
-    // Append the raw text to the SSB; the returned object is the SSB
-    // itself but we don't need the return value.
-    let java_text = match env.new_string(&text) {
-        Ok(s) => s,
-        Err(_) => {
-            unsafe {
-                env.pop_local_frame(&JObject::null());
+        // Append the raw text to the SSB; the returned object is the SSB
+        // itself but we don't need the return value.
+        let java_text = match env.new_string(&text) {
+            Ok(s) => s,
+            Err(_) => {
+                unsafe {
+                    let _ = jni_bridge::pop_local_frame(env, &JObject::null());
+                }
+                return;
             }
-            return;
+        };
+        let _ = env.call_method(
+            ssb_ref.as_obj(),
+            jni::jni_str!("append"),
+            jni::jni_sig!("(Ljava/lang/CharSequence;)Landroid/text/SpannableStringBuilder;"),
+            &[JValue::Object(&java_text)],
+        );
+
+        let end = start + text.chars().count() as i32;
+
+        // SPAN_EXCLUSIVE_EXCLUSIVE = 33 — the conventional flag for static
+        // run spans that don't expand when adjacent text is inserted.
+        const SPAN_FLAG: i32 = 33;
+
+        if bold != 0 || italic != 0 {
+            // Build a Typeface style int: BOLD = 1, ITALIC = 2, BOLD_ITALIC = 3.
+            let style: i32 = (bold != 0) as i32 | ((italic != 0) as i32) << 1;
+            if let Ok(style_span) = env.new_object(
+                jni::jni_str!("android/text/style/StyleSpan"),
+                jni::jni_sig!("(I)V"),
+                &[JValue::Int(style)],
+            ) {
+                set_span(env, ssb_ref.as_obj(), &style_span, start, end, SPAN_FLAG);
+            }
         }
-    };
-    let _ = env.call_method(
-        ssb_ref.as_obj(),
-        "append",
-        "(Ljava/lang/CharSequence;)Landroid/text/SpannableStringBuilder;",
-        &[JValue::Object(&java_text)],
-    );
 
-    let end = start + text.chars().count() as i32;
-
-    // SPAN_EXCLUSIVE_EXCLUSIVE = 33 — the conventional flag for static
-    // run spans that don't expand when adjacent text is inserted.
-    const SPAN_FLAG: i32 = 33;
-
-    if bold != 0 || italic != 0 {
-        // Build a Typeface style int: BOLD = 1, ITALIC = 2, BOLD_ITALIC = 3.
-        let style: i32 = (bold != 0) as i32 | ((italic != 0) as i32) << 1;
-        if let Ok(style_span) = env.new_object(
-            "android/text/style/StyleSpan",
-            "(I)V",
-            &[JValue::Int(style)],
-        ) {
-            set_span(
-                &mut env,
-                ssb_ref.as_obj(),
-                &style_span,
-                start,
-                end,
-                SPAN_FLAG,
-            );
+        if underline != 0 {
+            if let Ok(u_span) = env.new_object(
+                jni::jni_str!("android/text/style/UnderlineSpan"),
+                jni::jni_sig!("()V"),
+                &[],
+            ) {
+                set_span(env, ssb_ref.as_obj(), &u_span, start, end, SPAN_FLAG);
+            }
         }
-    }
 
-    if underline != 0 {
-        if let Ok(u_span) = env.new_object("android/text/style/UnderlineSpan", "()V", &[]) {
-            set_span(&mut env, ssb_ref.as_obj(), &u_span, start, end, SPAN_FLAG);
+        if a > 0.0 {
+            let argb = rgba_to_argb(r, g, b, a);
+            if let Ok(c_span) = env.new_object(
+                jni::jni_str!("android/text/style/ForegroundColorSpan"),
+                jni::jni_sig!("(I)V"),
+                &[JValue::Int(argb)],
+            ) {
+                set_span(env, ssb_ref.as_obj(), &c_span, start, end, SPAN_FLAG);
+            }
         }
-    }
 
-    if a > 0.0 {
-        let argb = rgba_to_argb(r, g, b, a);
-        if let Ok(c_span) = env.new_object(
-            "android/text/style/ForegroundColorSpan",
-            "(I)V",
-            &[JValue::Int(argb)],
-        ) {
-            set_span(&mut env, ssb_ref.as_obj(), &c_span, start, end, SPAN_FLAG);
+        if font_size > 0.0 {
+            // AbsoluteSizeSpan(size, dip) — dip=true means the int is in dp.
+            if let Ok(sz_span) = env.new_object(
+                jni::jni_str!("android/text/style/AbsoluteSizeSpan"),
+                jni::jni_sig!("(IZ)V"),
+                &[JValue::Int(font_size.round() as i32), JValue::Bool(true)],
+            ) {
+                set_span(env, ssb_ref.as_obj(), &sz_span, start, end, SPAN_FLAG);
+            }
         }
-    }
 
-    if font_size > 0.0 {
-        // AbsoluteSizeSpan(size, dip) — dip=true means the int is in dp.
-        if let Ok(sz_span) = env.new_object(
-            "android/text/style/AbsoluteSizeSpan",
-            "(IZ)V",
-            &[JValue::Int(font_size.round() as i32), JValue::Bool(1)],
-        ) {
-            set_span(&mut env, ssb_ref.as_obj(), &sz_span, start, end, SPAN_FLAG);
+        // Push the buffer onto the TextView. Calling setText(CharSequence)
+        // copies-on-write internally on most Android versions; safer to do
+        // it every append rather than try to incrementally update.
+        let _ = env.call_method(
+            view_ref.as_obj(),
+            jni::jni_str!("setText"),
+            jni::jni_sig!("(Ljava/lang/CharSequence;)V"),
+            &[JValue::Object(ssb_ref.as_obj())],
+        );
+
+        unsafe {
+            let _ = jni_bridge::pop_local_frame(env, &JObject::null());
         }
-    }
 
-    // Push the buffer onto the TextView. Calling setText(CharSequence)
-    // copies-on-write internally on most Android versions; safer to do
-    // it every append rather than try to incrementally update.
-    let _ = env.call_method(
-        view_ref.as_obj(),
-        "setText",
-        "(Ljava/lang/CharSequence;)V",
-        &[JValue::Object(ssb_ref.as_obj())],
-    );
-
-    unsafe {
-        env.pop_local_frame(&JObject::null());
-    }
-
-    BUFFERS.with(|b| {
-        if let Some(buf) = b.borrow_mut().get_mut(&handle) {
-            buf.len = end;
-        }
-    });
+        BUFFERS.with(|b| {
+            if let Some(buf) = b.borrow_mut().get_mut(&handle) {
+                buf.len = end;
+            }
+        });
+    })
 }
 
 /// Reset the buffer back to empty.
@@ -195,43 +199,48 @@ pub fn clear(handle: i64) {
         return;
     };
 
-    let mut env = jni_bridge::get_env();
-    let _ = env.push_local_frame(16);
+    jni_bridge::with_env(|env| {
+        let _ = jni_bridge::push_local_frame(env, 16);
 
-    let ssb = match env.new_object("android/text/SpannableStringBuilder", "()V", &[]) {
-        Ok(o) => o,
-        Err(_) => {
-            unsafe {
-                env.pop_local_frame(&JObject::null());
+        let ssb = match env.new_object(
+            jni::jni_str!("android/text/SpannableStringBuilder"),
+            jni::jni_sig!("()V"),
+            &[],
+        ) {
+            Ok(o) => o,
+            Err(_) => {
+                unsafe {
+                    let _ = jni_bridge::pop_local_frame(env, &JObject::null());
+                }
+                return;
             }
-            return;
-        }
-    };
-    let _ = env.call_method(
-        view_ref.as_obj(),
-        "setText",
-        "(Ljava/lang/CharSequence;)V",
-        &[JValue::Object(&ssb)],
-    );
-    let global = env.new_global_ref(&ssb).expect("SSB global ref");
+        };
+        let _ = env.call_method(
+            view_ref.as_obj(),
+            jni::jni_str!("setText"),
+            jni::jni_sig!("(Ljava/lang/CharSequence;)V"),
+            &[JValue::Object(&ssb)],
+        );
+        let global = jni_bridge::new_global_ref(env, &ssb).expect("SSB global ref");
 
-    BUFFERS.with(|b| {
-        if let Some(buf) = b.borrow_mut().get_mut(&handle) {
-            buf.builder = global;
-            buf.len = 0;
-        }
-    });
+        BUFFERS.with(|b| {
+            if let Some(buf) = b.borrow_mut().get_mut(&handle) {
+                buf.builder = global;
+                buf.len = 0;
+            }
+        });
 
-    unsafe {
-        env.pop_local_frame(&JObject::null());
-    }
+        unsafe {
+            let _ = jni_bridge::pop_local_frame(env, &JObject::null());
+        }
+    })
 }
 
-fn set_span(env: &mut JNIEnv, ssb: &JObject, span: &JObject, start: i32, end: i32, flags: i32) {
+fn set_span(env: &mut Env, ssb: &JObject, span: &JObject, start: i32, end: i32, flags: i32) {
     let _ = env.call_method(
         ssb,
-        "setSpan",
-        "(Ljava/lang/Object;III)V",
+        jni::jni_str!("setSpan"),
+        jni::jni_sig!("(Ljava/lang/Object;III)V"),
         &[
             JValue::Object(span),
             JValue::Int(start),
@@ -251,7 +260,7 @@ fn rgba_to_argb(r: f64, g: f64, b: f64, a: f64) -> i32 {
 /// JNI `GlobalRef` is not `Clone`, but `as_obj` returns the underlying
 /// `JObject<'static>` we can re-wrap as a new global via JNIEnv.
 fn env_clone_global(g: &GlobalRef) -> GlobalRef {
-    let env = jni_bridge::get_env();
-    env.new_global_ref(g.as_obj())
-        .expect("clone SSB global ref")
+    jni_bridge::with_env(|env| {
+        jni_bridge::new_global_ref(env, g.as_obj()).expect("clone SSB global ref")
+    })
 }

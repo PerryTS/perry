@@ -58,7 +58,7 @@
 use crate::app::str_from_header;
 use crate::callback;
 use crate::jni_bridge;
-use jni::objects::JValue;
+use jni::JValue;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ffi::c_void;
@@ -141,25 +141,26 @@ fn install_drag_source(handle: i64, keys: (i64, i64, i64)) {
         return;
     };
     let (text_key, file_key, url_key) = keys;
-    let mut env = jni_bridge::get_env();
-    let _ = env.push_local_frame(8);
-    let bridge_class =
-        jni_bridge::with_cache(|c| env.new_local_ref(c.perry_bridge_class.as_obj()).unwrap());
-    let bridge_cls: &jni::objects::JClass = (&bridge_class).into();
-    let _ = env.call_static_method(
-        bridge_cls,
-        "setDragSource",
-        "(Landroid/view/View;JJJ)V",
-        &[
-            JValue::Object(view_ref.as_obj()),
-            JValue::Long(text_key),
-            JValue::Long(file_key),
-            JValue::Long(url_key),
-        ],
-    );
-    unsafe {
-        env.pop_local_frame(&jni::objects::JObject::null());
-    }
+    jni_bridge::with_env(|env| {
+        let _ = jni_bridge::push_local_frame(env, 8);
+        let bridge_class =
+            jni_bridge::with_cache(|c| env.new_local_ref(&c.perry_bridge_class).unwrap());
+        let bridge_cls: &jni::objects::JClass = &bridge_class;
+        let _ = env.call_static_method(
+            bridge_cls,
+            jni::jni_str!("setDragSource"),
+            jni::jni_sig!("(Landroid/view/View;JJJ)V"),
+            &[
+                JValue::Object(view_ref.as_obj()),
+                JValue::Long(text_key),
+                JValue::Long(file_key),
+                JValue::Long(url_key),
+            ],
+        );
+        unsafe {
+            let _ = jni_bridge::pop_local_frame(env, &jni::objects::JObject::null());
+        }
+    })
 }
 
 // --- FFI: drop destination ---------------------------------------------------
@@ -173,20 +174,21 @@ pub extern "C" fn perry_ui_widget_on_drop(widget: i64, callback: f64) {
         return;
     };
     let key = callback::register(callback);
-    let mut env = jni_bridge::get_env();
-    let _ = env.push_local_frame(8);
-    let bridge_class =
-        jni_bridge::with_cache(|c| env.new_local_ref(c.perry_bridge_class.as_obj()).unwrap());
-    let bridge_cls: &jni::objects::JClass = (&bridge_class).into();
-    let _ = env.call_static_method(
-        bridge_cls,
-        "setOnDropCallback",
-        "(Landroid/view/View;J)V",
-        &[JValue::Object(view_ref.as_obj()), JValue::Long(key)],
-    );
-    unsafe {
-        env.pop_local_frame(&jni::objects::JObject::null());
-    }
+    jni_bridge::with_env(|env| {
+        let _ = jni_bridge::push_local_frame(env, 8);
+        let bridge_class =
+            jni_bridge::with_cache(|c| env.new_local_ref(&c.perry_bridge_class).unwrap());
+        let bridge_cls: &jni::objects::JClass = &bridge_class;
+        let _ = env.call_static_method(
+            bridge_cls,
+            jni::jni_str!("setOnDropCallback"),
+            jni::jni_sig!("(Landroid/view/View;J)V"),
+            &[JValue::Object(view_ref.as_obj()), JValue::Long(key)],
+        );
+        unsafe {
+            let _ = jni_bridge::pop_local_frame(env, &jni::objects::JObject::null());
+        }
+    })
 }
 
 // --- FFI: drag source --------------------------------------------------------
@@ -233,7 +235,7 @@ pub extern "C" fn perry_ui_widget_set_drag_url(widget: i64, provider: f64) {
 /// microtasks afterwards (matching every other callback in this crate).
 #[no_mangle]
 pub extern "C" fn Java_com_perry_app_PerryBridge_nativeInvokeDropCallback(
-    mut env: jni::JNIEnv,
+    mut env: jni::EnvUnowned,
     _class: jni::objects::JClass,
     key: jni::sys::jlong,
     text: jni::objects::JString,
@@ -248,37 +250,39 @@ pub extern "C" fn Java_com_perry_app_PerryBridge_nativeInvokeDropCallback(
         return;
     }
 
-    // Read the optional `text` representation.
-    let text_str: Option<String> = if text.is_null() {
-        None
-    } else {
-        env.get_string(&text).map(|s| s.into()).ok()
-    };
+    jni_bridge::with_unowned_env(&mut env, |env| {
+        // Read the optional `text` representation.
+        let text_str = if text.is_null() {
+            None
+        } else {
+            text.try_to_string(env).ok()
+        };
 
-    let files_vec = read_string_array(&mut env, &files);
-    let urls_vec = read_string_array(&mut env, &urls);
+        let files_vec = read_string_array(env, &files);
+        let urls_vec = read_string_array(env, &urls);
 
-    unsafe {
-        // Up to three fields: text, files, urls.
-        let obj = js_object_alloc(0, 3);
-        if obj.is_null() {
-            return;
+        unsafe {
+            // Up to three fields: text, files, urls.
+            let obj = js_object_alloc(0, 3);
+            if obj.is_null() {
+                return;
+            }
+            if let Some(t) = text_str {
+                js_object_set_field_by_name(obj, js_key(b"text"), nanbox_str(&t));
+            }
+            if !files_vec.is_empty() {
+                let arr = build_string_array(&files_vec);
+                js_object_set_field_by_name(obj, js_key(b"files"), js_nanbox_pointer(arr as i64));
+            }
+            if !urls_vec.is_empty() {
+                let arr = build_string_array(&urls_vec);
+                js_object_set_field_by_name(obj, js_key(b"urls"), js_nanbox_pointer(arr as i64));
+            }
+            let payload = js_nanbox_pointer(obj as i64);
+            js_closure_call1(closure_ptr, payload);
         }
-        if let Some(t) = text_str {
-            js_object_set_field_by_name(obj, js_key(b"text"), nanbox_str(&t));
-        }
-        if !files_vec.is_empty() {
-            let arr = build_string_array(&files_vec);
-            js_object_set_field_by_name(obj, js_key(b"files"), js_nanbox_pointer(arr as i64));
-        }
-        if !urls_vec.is_empty() {
-            let arr = build_string_array(&urls_vec);
-            js_object_set_field_by_name(obj, js_key(b"urls"), js_nanbox_pointer(arr as i64));
-        }
-        let payload = js_nanbox_pointer(obj as i64);
-        js_closure_call1(closure_ptr, payload);
-    }
-    pump_microtasks();
+        pump_microtasks();
+    });
 }
 
 /// Called from `PerryBridge` when a drag is starting, once per registered
@@ -289,13 +293,13 @@ pub extern "C" fn Java_com_perry_app_PerryBridge_nativeInvokeDropCallback(
 /// thread, so it pumps microtasks afterwards.
 #[no_mangle]
 pub extern "C" fn Java_com_perry_app_PerryBridge_nativeInvokeDragProvider<'local>(
-    env: jni::JNIEnv<'local>,
+    mut env: jni::EnvUnowned<'local>,
     _class: jni::objects::JClass<'local>,
     key: jni::sys::jlong,
 ) -> jni::objects::JString<'local> {
     let payload = drag_provider_payload(key as i64).unwrap_or_default();
     pump_microtasks();
-    env.new_string(payload).unwrap_or_default()
+    jni_bridge::with_unowned_env(&mut env, |env| env.new_string(payload).unwrap_or_default())
 }
 
 /// Invoke the provider closure registered under `key` and convert its return
@@ -316,7 +320,7 @@ fn drag_provider_payload(key: i64) -> Option<String> {
         if sh.is_null() {
             None
         } else {
-            Some(unsafe { str_from_header(sh) }.to_string())
+            Some(str_from_header(sh).to_string())
         }
     }
 }
@@ -324,19 +328,21 @@ fn drag_provider_payload(key: i64) -> Option<String> {
 // --- helpers -----------------------------------------------------------------
 
 /// Read a `String[]` JNI array into a `Vec<String>`, skipping null elements.
-fn read_string_array(env: &mut jni::JNIEnv, arr: &jni::objects::JObjectArray) -> Vec<String> {
+fn read_string_array(env: &mut jni::Env, arr: &jni::objects::JObjectArray) -> Vec<String> {
     let mut out = Vec::new();
     if arr.is_null() {
         return out;
     }
-    if let Ok(len) = env.get_array_length(arr) {
+    if let Ok(len) = arr.len(env) {
         for i in 0..len {
-            if let Ok(item) = env.get_object_array_element(arr, i) {
+            if let Ok(item) = arr.get_element(env, i) {
                 if item.is_null() {
                     continue;
                 }
-                let jstr: jni::objects::JString = item.into();
-                let s: Result<String, _> = env.get_string(&jstr).map(Into::into);
+                // The Java declaration is `String[]`; this is the same
+                // zero-call wrapper conversion used by jni 0.21.
+                let jstr = unsafe { jni::objects::JString::from_raw(env, item.into_raw()) };
+                let s = jstr.try_to_string(env);
                 if let Ok(s) = s {
                     out.push(s);
                 }

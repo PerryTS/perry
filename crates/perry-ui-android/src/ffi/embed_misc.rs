@@ -29,23 +29,24 @@ pub extern "C" fn perry_ui_embed_nsview(view_ptr: i64) -> i64 {
     }
     // On Android, the native view pointer is a raw JNI object pointer.
     // Convert it to a GlobalRef and register as a widget.
-    let env = jni_bridge::get_env();
-    let _ = env.push_local_frame(8);
-    let obj = unsafe { jni::objects::JObject::from_raw(view_ptr as jni::sys::jobject) };
-    let global = match env.new_global_ref(obj) {
-        Ok(g) => g,
-        Err(_) => {
-            unsafe {
-                env.pop_local_frame(&jni::objects::JObject::null());
+    jni_bridge::with_env(|env| {
+        let _ = jni_bridge::push_local_frame(env, 8);
+        let obj = unsafe { jni::objects::JObject::from_raw(env, view_ptr as jni::sys::jobject) };
+        let global = match jni_bridge::new_global_ref(env, obj) {
+            Ok(g) => g,
+            Err(_) => {
+                unsafe {
+                    let _ = jni_bridge::pop_local_frame(env, &jni::objects::JObject::null());
+                }
+                return 0;
             }
-            return 0;
+        };
+        let handle = widgets::register_widget(global);
+        unsafe {
+            let _ = jni_bridge::pop_local_frame(env, &jni::objects::JObject::null());
         }
-    };
-    let handle = widgets::register_widget(global);
-    unsafe {
-        env.pop_local_frame(&jni::objects::JObject::null());
-    }
-    handle
+        handle
+    })
 }
 
 // =============================================================================
@@ -63,63 +64,76 @@ pub extern "C" fn perry_ui_frame_split_add_child(_parent: i64, _child: i64) {}
 /// Query display metrics from the Android system.
 /// Returns (widthDp, heightDp, density).
 fn query_display_metrics() -> (f64, f64, f64) {
-    let mut env = jni_bridge::get_env();
-    let _ = env.push_local_frame(16);
+    jni_bridge::with_env(|env| {
+        let _ = jni_bridge::push_local_frame(env, 16);
 
-    // Get Application context: ActivityThread.currentApplication()
-    let result = (|| -> Option<(f64, f64, f64)> {
-        let app = env
-            .call_static_method(
-                "android/app/ActivityThread",
-                "currentApplication",
-                "()Landroid/app/Application;",
-                &[],
-            )
-            .ok()?
-            .l()
-            .ok()?;
-        if app.is_null() {
-            return None;
+        // Get Application context: ActivityThread.currentApplication()
+        let result = (|| -> Option<(f64, f64, f64)> {
+            let app = env
+                .call_static_method(
+                    jni::jni_str!("android/app/ActivityThread"),
+                    jni::jni_str!("currentApplication"),
+                    jni::jni_sig!("()Landroid/app/Application;"),
+                    &[],
+                )
+                .ok()?
+                .l()
+                .ok()?;
+            if app.is_null() {
+                return None;
+            }
+
+            // Get Resources
+            let res = env
+                .call_method(
+                    &app,
+                    jni::jni_str!("getResources"),
+                    jni::jni_sig!("()Landroid/content/res/Resources;"),
+                    &[],
+                )
+                .ok()?
+                .l()
+                .ok()?;
+            // Get DisplayMetrics
+            let dm = env
+                .call_method(
+                    &res,
+                    jni::jni_str!("getDisplayMetrics"),
+                    jni::jni_sig!("()Landroid/util/DisplayMetrics;"),
+                    &[],
+                )
+                .ok()?
+                .l()
+                .ok()?;
+
+            let width_px = env
+                .get_field(&dm, jni::jni_str!("widthPixels"), jni::jni_sig!("I"))
+                .ok()?
+                .i()
+                .ok()? as f64;
+            let height_px = env
+                .get_field(&dm, jni::jni_str!("heightPixels"), jni::jni_sig!("I"))
+                .ok()?
+                .i()
+                .ok()? as f64;
+            let density = env
+                .get_field(&dm, jni::jni_str!("density"), jni::jni_sig!("F"))
+                .ok()?
+                .f()
+                .ok()? as f64;
+
+            if density > 0.0 {
+                Some((width_px / density, height_px / density, density))
+            } else {
+                None
+            }
+        })();
+
+        unsafe {
+            let _ = jni_bridge::pop_local_frame(env, &jni::objects::JObject::null());
         }
-
-        // Get Resources
-        let res = env
-            .call_method(
-                &app,
-                "getResources",
-                "()Landroid/content/res/Resources;",
-                &[],
-            )
-            .ok()?
-            .l()
-            .ok()?;
-        // Get DisplayMetrics
-        let dm = env
-            .call_method(
-                &res,
-                "getDisplayMetrics",
-                "()Landroid/util/DisplayMetrics;",
-                &[],
-            )
-            .ok()?
-            .l()
-            .ok()?;
-
-        let width_px = env.get_field(&dm, "widthPixels", "I").ok()?.i().ok()? as f64;
-        let height_px = env.get_field(&dm, "heightPixels", "I").ok()?.i().ok()? as f64;
-        let density = env.get_field(&dm, "density", "F").ok()?.f().ok()? as f64;
-
-        if density > 0.0 {
-            Some((width_px / density, height_px / density, density))
-        } else {
-            None
-        }
-    })();
-
-    unsafe {
-        env.pop_local_frame(&jni::objects::JObject::null());
-    }
-    result.unwrap_or((412.0, 915.0, 2.625))
+        result.unwrap_or((412.0, 915.0, 2.625))
+    })
 }
 
 #[no_mangle]
@@ -258,55 +272,68 @@ extern "C" {
 }
 
 fn get_app_files_dir_string() -> f64 {
-    let mut env = jni_bridge::get_env();
-    let _ = env.push_local_frame(16);
-    let result = (|| -> Option<f64> {
-        let activity = env
-            .call_static_method(
-                "com/perry/app/PerryBridge",
-                "getActivity",
-                "()Landroid/app/Activity;",
-                &[],
-            )
-            .ok()?
-            .l()
-            .ok()?;
-        if activity.is_null() {
-            return None;
+    jni_bridge::with_env(|env| {
+        let _ = jni_bridge::push_local_frame(env, 16);
+        let result = (|| -> Option<f64> {
+            let activity = env
+                .call_static_method(
+                    jni::jni_str!("com/perry/app/PerryBridge"),
+                    jni::jni_str!("getActivity"),
+                    jni::jni_sig!("()Landroid/app/Activity;"),
+                    &[],
+                )
+                .ok()?
+                .l()
+                .ok()?;
+            if activity.is_null() {
+                return None;
+            }
+            let files_dir = env
+                .call_method(
+                    &activity,
+                    jni::jni_str!("getFilesDir"),
+                    jni::jni_sig!("()Ljava/io/File;"),
+                    &[],
+                )
+                .ok()?
+                .l()
+                .ok()?;
+            if files_dir.is_null() {
+                return None;
+            }
+            let abs_path = env
+                .call_method(
+                    &files_dir,
+                    jni::jni_str!("getAbsolutePath"),
+                    jni::jni_sig!("()Ljava/lang/String;"),
+                    &[],
+                )
+                .ok()?
+                .l()
+                .ok()?;
+            let abs_path = unsafe { jni::objects::JString::from_raw(env, abs_path.into_raw()) };
+            let rust_str = abs_path.try_to_string(env).ok()?;
+            let bytes = rust_str.as_bytes();
+            if bytes.is_empty() {
+                return None;
+            }
+            // Append /workspace to the files dir
+            let mut path = String::from_utf8_lossy(bytes).to_string();
+            path.push_str("/workspace");
+            crate::log_debug(&format!("get_app_files_dir: path={}", path));
+            let path_bytes = path.as_bytes();
+            let str_ptr =
+                unsafe { js_string_from_bytes(path_bytes.as_ptr(), path_bytes.len() as i64) };
+            // NaN-box the string pointer so Perry can use it as a string value
+            let nanboxed = unsafe { js_nanbox_string(str_ptr) };
+            Some(nanboxed)
+        })();
+        unsafe {
+            let _ = jni_bridge::pop_local_frame(env, &jni::objects::JObject::null());
         }
-        let files_dir = env
-            .call_method(&activity, "getFilesDir", "()Ljava/io/File;", &[])
-            .ok()?
-            .l()
-            .ok()?;
-        if files_dir.is_null() {
-            return None;
-        }
-        let abs_path = env
-            .call_method(&files_dir, "getAbsolutePath", "()Ljava/lang/String;", &[])
-            .ok()?
-            .l()
-            .ok()?;
-        let rust_str = env.get_string((&abs_path).into()).ok()?;
-        let bytes = rust_str.to_str().unwrap_or("").as_bytes();
-        if bytes.is_empty() {
-            return None;
-        }
-        // Append /workspace to the files dir
-        let mut path = String::from_utf8_lossy(bytes).to_string();
-        path.push_str("/workspace");
-        crate::log_debug(&format!("get_app_files_dir: path={}", path));
-        let path_bytes = path.as_bytes();
-        let str_ptr = unsafe { js_string_from_bytes(path_bytes.as_ptr(), path_bytes.len() as i64) };
-        // NaN-box the string pointer so Perry can use it as a string value
-        let nanboxed = unsafe { js_nanbox_string(str_ptr) };
-        Some(nanboxed)
-    })();
-    unsafe {
-        env.pop_local_frame(&jni::objects::JObject::null());
-    }
-    // Return empty string NaN-boxed (not 0, which is integer 0)
-    result.unwrap_or_else(|| unsafe { js_nanbox_string(std::ptr::null()) })
+        // Return empty string NaN-boxed (not 0, which is integer 0)
+        result.unwrap_or_else(|| unsafe { js_nanbox_string(std::ptr::null()) })
+    })
 }
 
 #[no_mangle]

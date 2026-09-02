@@ -10,7 +10,7 @@
 
 use crate::callback;
 use crate::jni_bridge;
-use jni::objects::JValue;
+use jni::JValue;
 
 use perry_ffi::copy_string_from_raw as str_from_header;
 
@@ -36,21 +36,22 @@ pub fn register_task(identifier_ptr: *const u8, handler: f64) {
     }
     let key = callback::register(handler);
 
-    let mut env = jni_bridge::get_env();
-    let _ = env.push_local_frame(8);
-    let bridge_class =
-        jni_bridge::with_cache(|c| env.new_local_ref(c.perry_bridge_class.as_obj()).unwrap());
-    let bridge_cls: &jni::objects::JClass = (&bridge_class).into();
-    let id_jstr = env.new_string(&id).expect("new_string");
-    let _ = env.call_static_method(
-        bridge_cls,
-        "backgroundRegisterTask",
-        "(Ljava/lang/String;J)V",
-        &[JValue::Object(&id_jstr), JValue::Long(key)],
-    );
-    unsafe {
-        env.pop_local_frame(&jni::objects::JObject::null());
-    }
+    jni_bridge::with_env(|env| {
+        let _ = jni_bridge::push_local_frame(env, 8);
+        let bridge_class =
+            jni_bridge::with_cache(|c| env.new_local_ref(&c.perry_bridge_class).unwrap());
+        let bridge_cls: &jni::objects::JClass = &bridge_class;
+        let id_jstr = env.new_string(&id).expect("new_string");
+        let _ = env.call_static_method(
+            bridge_cls,
+            jni::jni_str!("backgroundRegisterTask"),
+            jni::jni_sig!("(Ljava/lang/String;J)V"),
+            &[JValue::Object(&id_jstr), JValue::Long(key)],
+        );
+        unsafe {
+            let _ = jni_bridge::pop_local_frame(env, &jni::objects::JObject::null());
+        }
+    })
 }
 
 pub fn schedule(
@@ -73,28 +74,29 @@ pub fn schedule(
     let req_net = boolean_truthy(requires_network);
     let req_charge = boolean_truthy(requires_charging);
 
-    let mut env = jni_bridge::get_env();
-    let _ = env.push_local_frame(16);
-    let bridge_class =
-        jni_bridge::with_cache(|c| env.new_local_ref(c.perry_bridge_class.as_obj()).unwrap());
-    let bridge_cls: &jni::objects::JClass = (&bridge_class).into();
-    let id_jstr = env.new_string(&id).expect("new_string");
-    let kind_jstr = env.new_string(&kind).expect("new_string");
-    let _ = env.call_static_method(
-        bridge_cls,
-        "backgroundSchedule",
-        "(Ljava/lang/String;Ljava/lang/String;DZZ)V",
-        &[
-            JValue::Object(&id_jstr),
-            JValue::Object(&kind_jstr),
-            JValue::Double(earliest_start_ms),
-            JValue::Bool(if req_net { 1 } else { 0 }),
-            JValue::Bool(if req_charge { 1 } else { 0 }),
-        ],
-    );
-    unsafe {
-        env.pop_local_frame(&jni::objects::JObject::null());
-    }
+    jni_bridge::with_env(|env| {
+        let _ = jni_bridge::push_local_frame(env, 16);
+        let bridge_class =
+            jni_bridge::with_cache(|c| env.new_local_ref(&c.perry_bridge_class).unwrap());
+        let bridge_cls: &jni::objects::JClass = &bridge_class;
+        let id_jstr = env.new_string(&id).expect("new_string");
+        let kind_jstr = env.new_string(&kind).expect("new_string");
+        let _ = env.call_static_method(
+            bridge_cls,
+            jni::jni_str!("backgroundSchedule"),
+            jni::jni_sig!("(Ljava/lang/String;Ljava/lang/String;DZZ)V"),
+            &[
+                JValue::Object(&id_jstr),
+                JValue::Object(&kind_jstr),
+                JValue::Double(earliest_start_ms),
+                JValue::Bool(req_net),
+                JValue::Bool(req_charge),
+            ],
+        );
+        unsafe {
+            let _ = jni_bridge::pop_local_frame(env, &jni::objects::JObject::null());
+        }
+    })
 }
 
 pub fn cancel(identifier_ptr: *const u8) {
@@ -102,19 +104,20 @@ pub fn cancel(identifier_ptr: *const u8) {
     if id.is_empty() {
         return;
     }
-    let mut env = jni_bridge::get_env();
-    let _ = env.push_local_frame(8);
-    let bridge_class =
-        jni_bridge::with_cache(|c| env.new_local_ref(c.perry_bridge_class.as_obj()).unwrap());
-    let bridge_cls: &jni::objects::JClass = (&bridge_class).into();
-    let id_jstr = env.new_string(&id).expect("new_string");
-    let _ = env.call_static_method(
-        bridge_cls,
-        "backgroundCancel",
-        "(Ljava/lang/String;)V",
-        &[JValue::Object(&id_jstr)],
-    );
-    unsafe {
-        env.pop_local_frame(&jni::objects::JObject::null());
-    }
+    jni_bridge::with_env(|env| {
+        let _ = jni_bridge::push_local_frame(env, 8);
+        let bridge_class =
+            jni_bridge::with_cache(|c| env.new_local_ref(&c.perry_bridge_class).unwrap());
+        let bridge_cls: &jni::objects::JClass = &bridge_class;
+        let id_jstr = env.new_string(&id).expect("new_string");
+        let _ = env.call_static_method(
+            bridge_cls,
+            jni::jni_str!("backgroundCancel"),
+            jni::jni_sig!("(Ljava/lang/String;)V"),
+            &[JValue::Object(&id_jstr)],
+        );
+        unsafe {
+            let _ = jni_bridge::pop_local_frame(env, &jni::objects::JObject::null());
+        }
+    })
 }

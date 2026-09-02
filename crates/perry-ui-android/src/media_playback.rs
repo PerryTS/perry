@@ -18,7 +18,9 @@
 //! A 10 Hz polling thread fires the JS state-change + time-update
 //! callbacks, matching the cross-platform contract.
 
-use jni::objects::{GlobalRef, JObject, JValue};
+use crate::jni_bridge::GlobalRef;
+use jni::objects::JObject;
+use jni::JValue;
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -133,90 +135,100 @@ pub fn create_player(url_ptr: *const u8) -> i64 {
     let prepared_w = Arc::clone(&prepared);
     let error_w = Arc::clone(&error);
     std::thread::spawn(move || {
-        let vm = jni_bridge::get_vm().clone();
-        let mut env = match vm.attach_current_thread_permanently() {
-            Ok(e) => e,
-            Err(_) => {
-                error_w.store(true, Ordering::Relaxed);
-                return;
-            }
-        };
-        let _ = env.push_local_frame(8);
+        if jni_bridge::try_with_env(|env| {
+            let _ = jni_bridge::push_local_frame(env, 8);
 
-        // new MediaPlayer()
-        let mp = match env.new_object("android/media/MediaPlayer", "()V", &[]) {
-            Ok(o) => o,
-            Err(_) => {
+            // new MediaPlayer()
+            let mp = match env.new_object(
+                jni::jni_str!("android/media/MediaPlayer"),
+                jni::jni_sig!("()V"),
+                &[],
+            ) {
+                Ok(o) => o,
+                Err(_) => {
+                    error_w.store(true, Ordering::Relaxed);
+                    unsafe {
+                        let _ = jni_bridge::pop_local_frame(env, &JObject::null());
+                    }
+                    return;
+                }
+            };
+
+            // setDataSource(String url)
+            let url_jstr = match env.new_string(&url_owned) {
+                Ok(s) => s,
+                Err(_) => {
+                    error_w.store(true, Ordering::Relaxed);
+                    unsafe {
+                        let _ = jni_bridge::pop_local_frame(env, &JObject::null());
+                    }
+                    return;
+                }
+            };
+            if env
+                .call_method(
+                    &mp,
+                    jni::jni_str!("setDataSource"),
+                    jni::jni_sig!("(Ljava/lang/String;)V"),
+                    &[JValue::Object(&url_jstr.into())],
+                )
+                .is_err()
+            {
+                let _ = env.exception_clear();
                 error_w.store(true, Ordering::Relaxed);
                 unsafe {
-                    env.pop_local_frame(&JObject::null());
+                    let _ = jni_bridge::pop_local_frame(env, &JObject::null());
                 }
                 return;
             }
-        };
 
-        // setDataSource(String url)
-        let url_jstr = match env.new_string(&url_owned) {
-            Ok(s) => s,
-            Err(_) => {
-                error_w.store(true, Ordering::Relaxed);
-                unsafe {
-                    env.pop_local_frame(&JObject::null());
-                }
-                return;
-            }
-        };
-        if env
-            .call_method(
+            // setAudioStreamType(STREAM_MUSIC=3) — deprecated since API 26 but
+            // still works; the modern AudioAttributes setter is more verbose
+            // and the deprecated path is a single call.
+            let _ = env.call_method(
                 &mp,
-                "setDataSource",
-                "(Ljava/lang/String;)V",
-                &[JValue::Object(&url_jstr.into())],
-            )
-            .is_err()
-        {
+                jni::jni_str!("setAudioStreamType"),
+                jni::jni_sig!("(I)V"),
+                &[JValue::Int(3)],
+            );
             let _ = env.exception_clear();
-            error_w.store(true, Ordering::Relaxed);
-            unsafe {
-                env.pop_local_frame(&JObject::null());
-            }
-            return;
-        }
 
-        // setAudioStreamType(STREAM_MUSIC=3) — deprecated since API 26 but
-        // still works; the modern AudioAttributes setter is more verbose
-        // and the deprecated path is a single call.
-        let _ = env.call_method(&mp, "setAudioStreamType", "(I)V", &[JValue::Int(3)]);
-        let _ = env.exception_clear();
-
-        // prepare() — synchronous. Blocks until the source is ready.
-        if env.call_method(&mp, "prepare", "()V", &[]).is_err() {
-            let _ = env.exception_clear();
-            error_w.store(true, Ordering::Relaxed);
-            unsafe {
-                env.pop_local_frame(&JObject::null());
-            }
-            return;
-        }
-
-        let global = match env.new_global_ref(&mp) {
-            Ok(g) => g,
-            Err(_) => {
+            // prepare() — synchronous. Blocks until the source is ready.
+            if env
+                .call_method(&mp, jni::jni_str!("prepare"), jni::jni_sig!("()V"), &[])
+                .is_err()
+            {
+                let _ = env.exception_clear();
                 error_w.store(true, Ordering::Relaxed);
                 unsafe {
-                    env.pop_local_frame(&JObject::null());
+                    let _ = jni_bridge::pop_local_frame(env, &JObject::null());
                 }
                 return;
             }
-        };
-        unsafe {
-            env.pop_local_frame(&JObject::null());
-        }
 
-        if let Ok(mut slot) = player_arc_w.lock() {
-            *slot = Some(global);
+            let global = match jni_bridge::new_global_ref(env, &mp) {
+                Ok(g) => g,
+                Err(_) => {
+                    error_w.store(true, Ordering::Relaxed);
+                    unsafe {
+                        let _ = jni_bridge::pop_local_frame(env, &JObject::null());
+                    }
+                    return;
+                }
+            };
+            unsafe {
+                let _ = jni_bridge::pop_local_frame(env, &JObject::null());
+            }
+
+            if let Ok(mut slot) = player_arc_w.lock() {
+                *slot = Some(global);
+            }
+            prepared_w.store(true, Ordering::Relaxed);
+        })
+        .is_err()
+        {
+            error_w.store(true, Ordering::Relaxed);
         }
-        prepared_w.store(true, Ordering::Relaxed);
     });
 
     let entry = PlayerEntry {
@@ -253,7 +265,12 @@ pub fn play(handle: f64) {
     with_entry_mut(handle, |entry| {
         if let Some(global) = lock_player(&entry.player) {
             with_env(|env| {
-                let _ = env.call_method(global.as_obj(), "start", "()V", &[]);
+                let _ = env.call_method(
+                    global.as_obj(),
+                    jni::jni_str!("start"),
+                    jni::jni_sig!("()V"),
+                    &[],
+                );
                 let _ = env.exception_clear();
             });
             entry.has_started = true;
@@ -268,7 +285,12 @@ pub fn pause(handle: f64) {
     with_entry_mut(handle, |entry| {
         if let Some(global) = lock_player(&entry.player) {
             with_env(|env| {
-                let _ = env.call_method(global.as_obj(), "pause", "()V", &[]);
+                let _ = env.call_method(
+                    global.as_obj(),
+                    jni::jni_str!("pause"),
+                    jni::jni_sig!("()V"),
+                    &[],
+                );
                 let _ = env.exception_clear();
             });
         }
@@ -282,8 +304,18 @@ pub fn stop(handle: f64) {
     with_entry_mut(handle, |entry| {
         if let Some(global) = lock_player(&entry.player) {
             with_env(|env| {
-                let _ = env.call_method(global.as_obj(), "pause", "()V", &[]);
-                let _ = env.call_method(global.as_obj(), "seekTo", "(I)V", &[JValue::Int(0)]);
+                let _ = env.call_method(
+                    global.as_obj(),
+                    jni::jni_str!("pause"),
+                    jni::jni_sig!("()V"),
+                    &[],
+                );
+                let _ = env.call_method(
+                    global.as_obj(),
+                    jni::jni_str!("seekTo"),
+                    jni::jni_sig!("(I)V"),
+                    &[JValue::Int(0)],
+                );
                 let _ = env.exception_clear();
             });
             entry.has_started = false;
@@ -299,7 +331,12 @@ pub fn seek(handle: f64, seconds: f64) {
         if let Some(global) = lock_player(&entry.player) {
             let ms = (seconds * 1000.0).max(0.0) as i32;
             with_env(|env| {
-                let _ = env.call_method(global.as_obj(), "seekTo", "(I)V", &[JValue::Int(ms)]);
+                let _ = env.call_method(
+                    global.as_obj(),
+                    jni::jni_str!("seekTo"),
+                    jni::jni_sig!("(I)V"),
+                    &[JValue::Int(ms)],
+                );
                 let _ = env.exception_clear();
             });
         }
@@ -317,8 +354,8 @@ pub fn set_volume(handle: f64, volume: f64) {
             with_env(|env| {
                 let _ = env.call_method(
                     global.as_obj(),
-                    "setVolume",
-                    "(FF)V",
+                    jni::jni_str!("setVolume"),
+                    jni::jni_sig!("(FF)V"),
                     &[JValue::Float(v), JValue::Float(v)],
                 );
                 let _ = env.exception_clear();
@@ -334,14 +371,14 @@ pub fn set_rate(handle: f64, rate: f64) {
     with_entry_mut(handle, |entry| {
         if let Some(global) = lock_player(&entry.player) {
             with_env(|env| {
-                let pp_cls = match env.find_class("android/media/PlaybackParams") {
+                let pp_cls = match env.find_class(jni::jni_str!("android/media/PlaybackParams")) {
                     Ok(c) => c,
                     Err(_) => {
                         let _ = env.exception_clear();
                         return;
                     }
                 };
-                let pp = match env.new_object(pp_cls, "()V", &[]) {
+                let pp = match env.new_object(pp_cls, jni::jni_sig!("()V"), &[]) {
                     Ok(o) => o,
                     Err(_) => {
                         let _ = env.exception_clear();
@@ -351,8 +388,8 @@ pub fn set_rate(handle: f64, rate: f64) {
                 if env
                     .call_method(
                         &pp,
-                        "setSpeed",
-                        "(F)Landroid/media/PlaybackParams;",
+                        jni::jni_str!("setSpeed"),
+                        jni::jni_sig!("(F)Landroid/media/PlaybackParams;"),
                         &[JValue::Float(rate as f32)],
                     )
                     .is_err()
@@ -362,8 +399,8 @@ pub fn set_rate(handle: f64, rate: f64) {
                 }
                 let _ = env.call_method(
                     global.as_obj(),
-                    "setPlaybackParams",
-                    "(Landroid/media/PlaybackParams;)V",
+                    jni::jni_str!("setPlaybackParams"),
+                    jni::jni_sig!("(Landroid/media/PlaybackParams;)V"),
                     &[JValue::Object(&pp)],
                 );
                 let _ = env.exception_clear();
@@ -377,7 +414,12 @@ pub fn get_current_time(handle: f64) -> f64 {
         if let Some(global) = lock_player(&entry.player) {
             let mut out = 0.0;
             with_env(|env| {
-                if let Ok(v) = env.call_method(global.as_obj(), "getCurrentPosition", "()I", &[]) {
+                if let Ok(v) = env.call_method(
+                    global.as_obj(),
+                    jni::jni_str!("getCurrentPosition"),
+                    jni::jni_sig!("()I"),
+                    &[],
+                ) {
                     out = v.i().unwrap_or(0) as f64 / 1000.0;
                 }
                 let _ = env.exception_clear();
@@ -443,26 +485,26 @@ pub fn set_now_playing(
     };
 
     with_env(|env| {
-        let _ = env.push_local_frame(16);
+        let _ = jni_bridge::push_local_frame(env, 16);
 
         // MediaMetadataCompat.Builder — putString returns the builder,
         // build() returns the metadata.
         let builder = match env.new_object(
-            "android/support/v4/media/MediaMetadataCompat$Builder",
-            "()V",
+            jni::jni_str!("android/support/v4/media/MediaMetadataCompat$Builder"),
+            jni::jni_sig!("()V"),
             &[],
         ) {
             Ok(b) => b,
             Err(_) => {
                 let _ = env.exception_clear();
                 unsafe {
-                    env.pop_local_frame(&JObject::null());
+                    let _ = jni_bridge::pop_local_frame(env, &JObject::null());
                 }
                 return;
             }
         };
 
-        let put_string = |env: &mut jni::JNIEnv, key: &str, val: &str| {
+        let put_string = |env: &mut jni::Env, key: &str, val: &str| {
             if val.is_empty() {
                 return;
             }
@@ -482,8 +524,8 @@ pub fn set_now_playing(
             };
             let _ = env.call_method(
                 &builder,
-                "putString",
-                "(Ljava/lang/String;Ljava/lang/String;)Landroid/support/v4/media/MediaMetadataCompat$Builder;",
+                jni::jni_str!("putString"),
+                jni::jni_sig!("(Ljava/lang/String;Ljava/lang/String;)Landroid/support/v4/media/MediaMetadataCompat$Builder;"),
                 &[JValue::Object(&k.into()), JValue::Object(&v.into())],
             );
             let _ = env.exception_clear();
@@ -498,8 +540,8 @@ pub fn set_now_playing(
                 if let Ok(key) = env.new_string("android.media.metadata.ART") {
                     let _ = env.call_method(
                         &builder,
-                        "putBitmap",
-                        "(Ljava/lang/String;Landroid/graphics/Bitmap;)Landroid/support/v4/media/MediaMetadataCompat$Builder;",
+                        jni::jni_str!("putBitmap"),
+                        jni::jni_sig!("(Ljava/lang/String;Landroid/graphics/Bitmap;)Landroid/support/v4/media/MediaMetadataCompat$Builder;"),
                         &[JValue::Object(&key.into()), JValue::Object(&bitmap)],
                     );
                     let _ = env.exception_clear();
@@ -509,15 +551,15 @@ pub fn set_now_playing(
 
         let metadata = match env.call_method(
             &builder,
-            "build",
-            "()Landroid/support/v4/media/MediaMetadataCompat;",
+            jni::jni_str!("build"),
+            jni::jni_sig!("()Landroid/support/v4/media/MediaMetadataCompat;"),
             &[],
         ) {
             Ok(v) => match v.l() {
                 Ok(o) => o,
                 Err(_) => {
                     unsafe {
-                        env.pop_local_frame(&JObject::null());
+                        let _ = jni_bridge::pop_local_frame(env, &JObject::null());
                     }
                     return;
                 }
@@ -525,7 +567,7 @@ pub fn set_now_playing(
             Err(_) => {
                 let _ = env.exception_clear();
                 unsafe {
-                    env.pop_local_frame(&JObject::null());
+                    let _ = jni_bridge::pop_local_frame(env, &JObject::null());
                 }
                 return;
             }
@@ -533,14 +575,14 @@ pub fn set_now_playing(
 
         let _ = env.call_method(
             session.as_obj(),
-            "setMetadata",
-            "(Landroid/support/v4/media/MediaMetadataCompat;)V",
+            jni::jni_str!("setMetadata"),
+            jni::jni_sig!("(Landroid/support/v4/media/MediaMetadataCompat;)V"),
             &[JValue::Object(&metadata)],
         );
         let _ = env.exception_clear();
 
         unsafe {
-            env.pop_local_frame(&JObject::null());
+            let _ = jni_bridge::pop_local_frame(env, &JObject::null());
         }
     });
 }
@@ -557,7 +599,12 @@ pub fn destroy(handle: f64) {
     if let Some(entry) = entry {
         if let Some(global) = lock_player(&entry.player) {
             with_env(|env| {
-                let _ = env.call_method(global.as_obj(), "release", "()V", &[]);
+                let _ = env.call_method(
+                    global.as_obj(),
+                    jni::jni_str!("release"),
+                    jni::jni_sig!("()V"),
+                    &[],
+                );
                 let _ = env.exception_clear();
             });
         }
@@ -602,9 +649,10 @@ fn lock_player(p: &Arc<Mutex<Option<GlobalRef>>>) -> Option<GlobalRef> {
     p.lock().ok()?.clone()
 }
 
-fn with_env<F: FnOnce(&mut jni::JNIEnv)>(f: F) {
-    let mut env = jni_bridge::get_env();
-    f(&mut env);
+fn with_env<F: FnOnce(&mut jni::Env)>(f: F) {
+    jni_bridge::with_env(|env| {
+        f(env);
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -644,14 +692,20 @@ fn poll_tick() {
             // -1 if unknown (live stream).
             if entry.prepared.load(Ordering::Relaxed) && entry.duration_seconds == 0.0 {
                 if let Some(global) = lock_player(&entry.player) {
-                    let mut env = jni_bridge::get_env();
-                    if let Ok(v) = env.call_method(global.as_obj(), "getDuration", "()I", &[]) {
-                        let ms = v.i().unwrap_or(0);
-                        if ms > 0 {
-                            entry.duration_seconds = ms as f64 / 1000.0;
+                    jni_bridge::with_env(|env| {
+                        if let Ok(v) = env.call_method(
+                            global.as_obj(),
+                            jni::jni_str!("getDuration"),
+                            jni::jni_sig!("()I"),
+                            &[],
+                        ) {
+                            let ms = v.i().unwrap_or(0);
+                            if ms > 0 {
+                                entry.duration_seconds = ms as f64 / 1000.0;
+                            }
                         }
-                    }
-                    let _ = env.exception_clear();
+                        let _ = env.exception_clear();
+                    })
                 }
             }
 
@@ -686,12 +740,19 @@ fn poll_tick() {
 
 fn current_time_seconds(entry: &PlayerEntry) -> f64 {
     if let Some(global) = lock_player(&entry.player) {
-        let mut env = jni_bridge::get_env();
-        if let Ok(v) = env.call_method(global.as_obj(), "getCurrentPosition", "()I", &[]) {
+        return jni_bridge::with_env(|env| {
+            if let Ok(v) = env.call_method(
+                global.as_obj(),
+                jni::jni_str!("getCurrentPosition"),
+                jni::jni_sig!("()I"),
+                &[],
+            ) {
+                let _ = env.exception_clear();
+                return v.i().unwrap_or(0) as f64 / 1000.0;
+            }
             let _ = env.exception_clear();
-            return v.i().unwrap_or(0) as f64 / 1000.0;
-        }
-        let _ = env.exception_clear();
+            0.0
+        });
     }
     0.0
 }
@@ -714,16 +775,23 @@ fn derive_state(entry: &PlayerEntry) -> MediaState {
         return MediaState::Ready;
     }
     if let Some(global) = lock_player(&entry.player) {
-        let mut env = jni_bridge::get_env();
-        if let Ok(v) = env.call_method(global.as_obj(), "isPlaying", "()Z", &[]) {
+        return jni_bridge::with_env(|env| {
+            if let Ok(v) = env.call_method(
+                global.as_obj(),
+                jni::jni_str!("isPlaying"),
+                jni::jni_sig!("()Z"),
+                &[],
+            ) {
+                let _ = env.exception_clear();
+                return if v.z().unwrap_or(false) {
+                    MediaState::Playing
+                } else {
+                    MediaState::Paused
+                };
+            }
             let _ = env.exception_clear();
-            return if v.z().unwrap_or(false) {
-                MediaState::Playing
-            } else {
-                MediaState::Paused
-            };
-        }
-        let _ = env.exception_clear();
+            MediaState::Paused
+        });
     }
     MediaState::Paused
 }
@@ -766,94 +834,109 @@ fn ensure_session() -> Option<GlobalRef> {
         }
     }
 
-    let mut env = jni_bridge::get_env();
-    let _ = env.push_local_frame(8);
+    jni_bridge::with_env(|env| {
+        let _ = jni_bridge::push_local_frame(env, 8);
 
-    let activity = crate::widgets::get_activity(&mut env);
-    let tag = match env.new_string("perry-media") {
-        Ok(s) => s,
-        Err(_) => {
-            let _ = env.exception_clear();
-            unsafe {
-                env.pop_local_frame(&JObject::null());
+        let activity = crate::widgets::get_activity(env);
+        let tag = match env.new_string("perry-media") {
+            Ok(s) => s,
+            Err(_) => {
+                let _ = env.exception_clear();
+                unsafe {
+                    let _ = jni_bridge::pop_local_frame(env, &JObject::null());
+                }
+                return None;
             }
-            return None;
-        }
-    };
+        };
 
-    let session = match env.new_object(
-        "android/support/v4/media/session/MediaSessionCompat",
-        "(Landroid/content/Context;Ljava/lang/String;)V",
-        &[JValue::Object(&activity), JValue::Object(&tag.into())],
-    ) {
-        Ok(o) => o,
-        Err(_) => {
-            let _ = env.exception_clear();
-            unsafe {
-                env.pop_local_frame(&JObject::null());
+        let session = match env.new_object(
+            jni::jni_str!("android/support/v4/media/session/MediaSessionCompat"),
+            jni::jni_sig!("(Landroid/content/Context;Ljava/lang/String;)V"),
+            &[JValue::Object(&activity), JValue::Object(&tag.into())],
+        ) {
+            Ok(o) => o,
+            Err(_) => {
+                let _ = env.exception_clear();
+                unsafe {
+                    let _ = jni_bridge::pop_local_frame(env, &JObject::null());
+                }
+                return None;
             }
-            return None;
-        }
-    };
+        };
 
-    let _ = env.call_method(&session, "setActive", "(Z)V", &[JValue::Bool(1)]);
-    let _ = env.exception_clear();
-
-    // Wire the headphone/media-button callback. The Java helper class
-    // PerryMediaSessionCallback extends MediaSessionCompat.Callback and
-    // routes onPlay / onPause / onStop / onSeekTo to the native exports
-    // below.
-    if let Ok(callback) = env.new_object("com/perry/app/PerryMediaSessionCallback", "()V", &[]) {
         let _ = env.call_method(
             &session,
-            "setCallback",
-            "(Landroid/support/v4/media/session/MediaSessionCompat$Callback;)V",
-            &[JValue::Object(&callback)],
+            jni::jni_str!("setActive"),
+            jni::jni_sig!("(Z)V"),
+            &[JValue::Bool(true)],
         );
         let _ = env.exception_clear();
-    } else {
-        // The Java helper class isn't compiled into this APK — the
-        // session still works for metadata / state, but headphone keys
-        // will fall back to system defaults.
-        let _ = env.exception_clear();
-    }
 
-    let global = match env.new_global_ref(&session) {
-        Ok(g) => g,
-        Err(_) => {
-            unsafe {
-                env.pop_local_frame(&JObject::null());
-            }
-            return None;
+        // Wire the headphone/media-button callback. The Java helper class
+        // PerryMediaSessionCallback extends MediaSessionCompat.Callback and
+        // routes onPlay / onPause / onStop / onSeekTo to the native exports
+        // below.
+        if let Ok(callback) = env.new_object(
+            jni::jni_str!("com/perry/app/PerryMediaSessionCallback"),
+            jni::jni_sig!("()V"),
+            &[],
+        ) {
+            let _ = env.call_method(
+                &session,
+                jni::jni_str!("setCallback"),
+                jni::jni_sig!("(Landroid/support/v4/media/session/MediaSessionCompat$Callback;)V"),
+                &[JValue::Object(&callback)],
+            );
+            let _ = env.exception_clear();
+        } else {
+            // The Java helper class isn't compiled into this APK — the
+            // session still works for metadata / state, but headphone keys
+            // will fall back to system defaults.
+            let _ = env.exception_clear();
         }
-    };
-    unsafe {
-        env.pop_local_frame(&JObject::null());
-    }
 
-    if let Ok(mut slot) = cell.lock() {
-        *slot = Some(global.clone());
-    }
-    Some(global)
+        let global = match jni_bridge::new_global_ref(env, &session) {
+            Ok(g) => g,
+            Err(_) => {
+                unsafe {
+                    let _ = jni_bridge::pop_local_frame(env, &JObject::null());
+                }
+                return None;
+            }
+        };
+        unsafe {
+            let _ = jni_bridge::pop_local_frame(env, &JObject::null());
+        }
+
+        if let Ok(mut slot) = cell.lock() {
+            *slot = Some(global.clone());
+        }
+        Some(global)
+    })
 }
 
 /// Decode an artwork URL into an Android Bitmap. Returns the local-ref
 /// JObject on success; failures (network error, decode failure, missing
 /// file) are silently swallowed so set_now_playing still publishes the
 /// title/artist/album metadata.
-fn decode_artwork<'a>(env: &mut jni::JNIEnv<'a>, url: &str) -> Option<JObject<'a>> {
+fn decode_artwork<'a>(env: &mut jni::Env<'a>, url: &str) -> Option<JObject<'a>> {
     let factory = "android/graphics/BitmapFactory";
 
     if url.starts_with("http://") || url.starts_with("https://") {
         let url_jstr = env.new_string(url).ok()?;
         let url_obj = env
             .new_object(
-                "java/net/URL",
-                "(Ljava/lang/String;)V",
+                jni::jni_str!("java/net/URL"),
+                jni::jni_sig!("(Ljava/lang/String;)V"),
                 &[JValue::Object(&url_jstr.into())],
             )
             .ok()?;
-        let stream = match env.call_method(&url_obj, "openStream", "()Ljava/io/InputStream;", &[]) {
+        let stream = match env.call_method(
+            &url_obj,
+            jni::jni_str!("openStream"),
+            jni::jni_sig!("()Ljava/io/InputStream;"),
+            &[],
+        ) {
             Ok(v) => v.l().ok()?,
             Err(_) => {
                 let _ = env.exception_clear();
@@ -861,9 +944,9 @@ fn decode_artwork<'a>(env: &mut jni::JNIEnv<'a>, url: &str) -> Option<JObject<'a
             }
         };
         let bitmap = match env.call_static_method(
-            factory,
-            "decodeStream",
-            "(Ljava/io/InputStream;)Landroid/graphics/Bitmap;",
+            jni::strings::JNIString::new(factory),
+            jni::jni_str!("decodeStream"),
+            jni::jni_sig!("(Ljava/io/InputStream;)Landroid/graphics/Bitmap;"),
             &[JValue::Object(&stream)],
         ) {
             Ok(v) => v.l().ok()?,
@@ -872,7 +955,7 @@ fn decode_artwork<'a>(env: &mut jni::JNIEnv<'a>, url: &str) -> Option<JObject<'a
                 return None;
             }
         };
-        let _ = env.call_method(&stream, "close", "()V", &[]);
+        let _ = env.call_method(&stream, jni::jni_str!("close"), jni::jni_sig!("()V"), &[]);
         let _ = env.exception_clear();
         if bitmap.is_null() {
             None
@@ -883,9 +966,9 @@ fn decode_artwork<'a>(env: &mut jni::JNIEnv<'a>, url: &str) -> Option<JObject<'a
         let path = url.strip_prefix("file://").unwrap_or(url);
         let path_jstr = env.new_string(path).ok()?;
         let bitmap = match env.call_static_method(
-            factory,
-            "decodeFile",
-            "(Ljava/lang/String;)Landroid/graphics/Bitmap;",
+            jni::strings::JNIString::new(factory),
+            jni::jni_str!("decodeFile"),
+            jni::jni_sig!("(Ljava/lang/String;)Landroid/graphics/Bitmap;"),
             &[JValue::Object(&path_jstr.into())],
         ) {
             Ok(v) => v.l().ok()?,
@@ -931,25 +1014,25 @@ fn push_playback_state(state: MediaState, position_seconds: f64) {
     let actions: i64 = 4 | 2 | 512 | 256 | 1 | 32 | 16;
 
     with_env(|env| {
-        let _ = env.push_local_frame(8);
+        let _ = jni_bridge::push_local_frame(env, 8);
         let builder = match env.new_object(
-            "android/support/v4/media/session/PlaybackStateCompat$Builder",
-            "()V",
+            jni::jni_str!("android/support/v4/media/session/PlaybackStateCompat$Builder"),
+            jni::jni_sig!("()V"),
             &[],
         ) {
             Ok(b) => b,
             Err(_) => {
                 let _ = env.exception_clear();
                 unsafe {
-                    env.pop_local_frame(&JObject::null());
+                    let _ = jni_bridge::pop_local_frame(env, &JObject::null());
                 }
                 return;
             }
         };
         let _ = env.call_method(
             &builder,
-            "setState",
-            "(IJF)Landroid/support/v4/media/session/PlaybackStateCompat$Builder;",
+            jni::jni_str!("setState"),
+            jni::jni_sig!("(IJF)Landroid/support/v4/media/session/PlaybackStateCompat$Builder;"),
             &[
                 JValue::Int(state_code),
                 JValue::Long(position_ms),
@@ -959,15 +1042,15 @@ fn push_playback_state(state: MediaState, position_seconds: f64) {
         let _ = env.exception_clear();
         let _ = env.call_method(
             &builder,
-            "setActions",
-            "(J)Landroid/support/v4/media/session/PlaybackStateCompat$Builder;",
+            jni::jni_str!("setActions"),
+            jni::jni_sig!("(J)Landroid/support/v4/media/session/PlaybackStateCompat$Builder;"),
             &[JValue::Long(actions)],
         );
         let _ = env.exception_clear();
         let built = match env.call_method(
             &builder,
-            "build",
-            "()Landroid/support/v4/media/session/PlaybackStateCompat;",
+            jni::jni_str!("build"),
+            jni::jni_sig!("()Landroid/support/v4/media/session/PlaybackStateCompat;"),
             &[],
         ) {
             Ok(v) => v.l().ok(),
@@ -979,14 +1062,14 @@ fn push_playback_state(state: MediaState, position_seconds: f64) {
         if let Some(ps) = built {
             let _ = env.call_method(
                 session.as_obj(),
-                "setPlaybackState",
-                "(Landroid/support/v4/media/session/PlaybackStateCompat;)V",
+                jni::jni_str!("setPlaybackState"),
+                jni::jni_sig!("(Landroid/support/v4/media/session/PlaybackStateCompat;)V"),
                 &[JValue::Object(&ps)],
             );
             let _ = env.exception_clear();
         }
         unsafe {
-            env.pop_local_frame(&JObject::null());
+            let _ = jni_bridge::pop_local_frame(env, &JObject::null());
         }
     });
 }
@@ -1015,7 +1098,7 @@ fn first_active_player_handle() -> Option<f64> {
 
 #[no_mangle]
 pub extern "C" fn Java_com_perry_app_PerryMediaSessionCallback_nativeMediaSessionPlay(
-    _env: jni::JNIEnv,
+    _env: jni::EnvUnowned,
     _class: JObject,
 ) {
     if let Some(h) = first_active_player_handle() {
@@ -1025,7 +1108,7 @@ pub extern "C" fn Java_com_perry_app_PerryMediaSessionCallback_nativeMediaSessio
 
 #[no_mangle]
 pub extern "C" fn Java_com_perry_app_PerryMediaSessionCallback_nativeMediaSessionPause(
-    _env: jni::JNIEnv,
+    _env: jni::EnvUnowned,
     _class: JObject,
 ) {
     if let Some(h) = first_active_player_handle() {
@@ -1035,7 +1118,7 @@ pub extern "C" fn Java_com_perry_app_PerryMediaSessionCallback_nativeMediaSessio
 
 #[no_mangle]
 pub extern "C" fn Java_com_perry_app_PerryMediaSessionCallback_nativeMediaSessionStop(
-    _env: jni::JNIEnv,
+    _env: jni::EnvUnowned,
     _class: JObject,
 ) {
     if let Some(h) = first_active_player_handle() {
@@ -1045,7 +1128,7 @@ pub extern "C" fn Java_com_perry_app_PerryMediaSessionCallback_nativeMediaSessio
 
 #[no_mangle]
 pub extern "C" fn Java_com_perry_app_PerryMediaSessionCallback_nativeMediaSessionSeekTo(
-    _env: jni::JNIEnv,
+    _env: jni::EnvUnowned,
     _class: JObject,
     position_ms: jni::sys::jlong,
 ) {

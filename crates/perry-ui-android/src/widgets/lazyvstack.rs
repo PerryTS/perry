@@ -8,7 +8,7 @@ extern "C" {
 }
 
 struct LazyState {
-    scroll_handle: i64,
+    _scroll_handle: i64,
     container_handle: i64,
     render_closure: f64,
 }
@@ -39,7 +39,7 @@ pub fn create(count: f64, render_closure: f64) -> i64 {
         s.borrow_mut().insert(
             scroll_handle,
             LazyState {
-                scroll_handle,
+                _scroll_handle: scroll_handle,
                 container_handle,
                 render_closure,
             },

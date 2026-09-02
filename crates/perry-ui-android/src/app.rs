@@ -1,4 +1,4 @@
-use jni::objects::JValue;
+use jni::JValue;
 use std::cell::RefCell;
 
 use crate::jni_bridge;
@@ -125,25 +125,25 @@ fn attach_root_to_activity() {
     }
     if root_handle > 0 {
         if let Some(root_ref) = widgets::get_widget(root_handle) {
-            let mut env = jni_bridge::get_env();
-            let root_obj = root_ref.as_obj();
-            let bridge_class = jni_bridge::with_cache(|c| {
-                env.new_local_ref(c.perry_bridge_class.as_obj()).unwrap()
-            });
-            let bridge_cls: &jni::objects::JClass = (&bridge_class).into();
-            let _ = env.call_static_method(
-                bridge_cls,
-                "setContentView",
-                "(Landroid/view/View;)V",
-                &[JValue::Object(root_obj)],
-            );
-            unsafe {
-                __android_log_print(
-                    3,
-                    b"PerryApp\0".as_ptr(),
-                    b"attach_root_to_activity: setContentView called\0".as_ptr(),
+            jni_bridge::with_env(|env| {
+                let root_obj = root_ref.as_obj();
+                let bridge_class =
+                    jni_bridge::with_cache(|c| env.new_local_ref(&c.perry_bridge_class).unwrap());
+                let bridge_cls: &jni::objects::JClass = &bridge_class;
+                let _ = env.call_static_method(
+                    bridge_cls,
+                    jni::jni_str!("setContentView"),
+                    jni::jni_sig!("(Landroid/view/View;)V"),
+                    &[JValue::Object(root_obj)],
                 );
-            }
+                unsafe {
+                    __android_log_print(
+                        3,
+                        b"PerryApp\0".as_ptr(),
+                        b"attach_root_to_activity: setContentView called\0".as_ptr(),
+                    );
+                }
+            })
         }
     }
 }
@@ -172,24 +172,25 @@ fn start_timer_pump() {
         );
     }
 
-    let mut env = jni_bridge::get_env();
-    let _ = env.push_local_frame(16);
+    jni_bridge::with_env(|env| {
+        let _ = jni_bridge::push_local_frame(env, 16);
 
-    let bridge_class =
-        jni_bridge::with_cache(|c| env.new_local_ref(c.perry_bridge_class.as_obj()).unwrap());
-    let bridge_cls: &jni::objects::JClass = (&bridge_class).into();
+        let bridge_class =
+            jni_bridge::with_cache(|c| env.new_local_ref(&c.perry_bridge_class).unwrap());
+        let bridge_cls: &jni::objects::JClass = &bridge_class;
 
-    // Register the pump timer — fires every 8ms, calls nativePumpTick on UI thread
-    let _ = env.call_static_method(
-        bridge_cls,
-        "startPumpTimer",
-        "(J)V",
-        &[jni::objects::JValue::Long(8)], // 8ms interval
-    );
+        // Register the pump timer — fires every 8ms, calls nativePumpTick on UI thread
+        let _ = env.call_static_method(
+            bridge_cls,
+            jni::jni_str!("startPumpTimer"),
+            jni::jni_sig!("(J)V"),
+            &[jni::JValue::Long(8)], // 8ms interval
+        );
 
-    unsafe {
-        env.pop_local_frame(&jni::objects::JObject::null());
-    }
+        unsafe {
+            let _ = jni_bridge::pop_local_frame(env, &jni::objects::JObject::null());
+        }
+    })
 }
 
 /// Counter for throttled pump tick logging
@@ -200,7 +201,7 @@ static PUMP_TICK_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::Atomic
 /// even though timers were registered on the perry-native thread.
 #[no_mangle]
 pub extern "C" fn Java_com_perry_app_PerryBridge_nativePumpTick(
-    _env: jni::JNIEnv,
+    _env: jni::EnvUnowned,
     _class: jni::objects::JClass,
 ) {
     let count = PUMP_TICK_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -360,24 +361,25 @@ thread_local! {
 
 /// Set a repeating timer via PerryBridge.setTimer.
 pub fn set_timer(interval_ms: f64, callback: f64) {
-    let mut env = jni_bridge::get_env();
-    let _ = env.push_local_frame(16);
+    jni_bridge::with_env(|env| {
+        let _ = jni_bridge::push_local_frame(env, 16);
 
-    let cb_key = crate::callback::register(callback);
-    let bridge_class =
-        jni_bridge::with_cache(|c| env.new_local_ref(c.perry_bridge_class.as_obj()).unwrap());
+        let cb_key = crate::callback::register(callback);
+        let bridge_class =
+            jni_bridge::with_cache(|c| env.new_local_ref(&c.perry_bridge_class).unwrap());
 
-    let bridge_cls: &jni::objects::JClass = (&bridge_class).into();
-    let _ = env.call_static_method(
-        bridge_cls,
-        "setTimer",
-        "(JJ)V",
-        &[JValue::Long(cb_key), JValue::Long(interval_ms as i64)],
-    );
+        let bridge_cls: &jni::objects::JClass = &bridge_class;
+        let _ = env.call_static_method(
+            bridge_cls,
+            jni::jni_str!("setTimer"),
+            jni::jni_sig!("(JJ)V"),
+            &[JValue::Long(cb_key), JValue::Long(interval_ms as i64)],
+        );
 
-    unsafe {
-        env.pop_local_frame(&jni::objects::JObject::null());
-    }
+        unsafe {
+            let _ = jni_bridge::pop_local_frame(env, &jni::objects::JObject::null());
+        }
+    })
 }
 
 /// Register callback for app activation (resume).

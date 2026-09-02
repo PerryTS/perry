@@ -3,7 +3,7 @@
 //! NetworkOnMainThreadException.
 
 use crate::jni_bridge;
-use jni::objects::JValue;
+use jni::JValue;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
@@ -51,30 +51,30 @@ fn do_fetch(
     body: &str,
     headers_json: &str,
 ) -> Result<FetchResponse, String> {
-    let mut env = jni_bridge::get_env();
-    let _ = env.push_local_frame(32);
+    jni_bridge::with_env(|env| {
+        let _ = jni_bridge::push_local_frame(env, 32);
 
-    let jurl = env
-        .new_string(url)
-        .map_err(|e| format!("url string: {e}"))?;
-    let jmethod = env
-        .new_string(method)
-        .map_err(|e| format!("method string: {e}"))?;
-    let jbody = env
-        .new_string(body)
-        .map_err(|e| format!("body string: {e}"))?;
-    let jheaders = env
-        .new_string(headers_json)
-        .map_err(|e| format!("headers string: {e}"))?;
+        let jurl = env
+            .new_string(url)
+            .map_err(|e| format!("url string: {e}"))?;
+        let jmethod = env
+            .new_string(method)
+            .map_err(|e| format!("method string: {e}"))?;
+        let jbody = env
+            .new_string(body)
+            .map_err(|e| format!("body string: {e}"))?;
+        let jheaders = env
+            .new_string(headers_json)
+            .map_err(|e| format!("headers string: {e}"))?;
 
-    let bridge_class =
-        jni_bridge::with_cache(|c| env.new_local_ref(c.perry_bridge_class.as_obj()).unwrap());
-    let bridge_cls: &jni::objects::JClass = (&bridge_class).into();
+        let bridge_class =
+            jni_bridge::with_cache(|c| env.new_local_ref(&c.perry_bridge_class).unwrap());
+        let bridge_cls: &jni::objects::JClass = &bridge_class;
 
-    let result = env.call_static_method(
+        let result = env.call_static_method(
         bridge_cls,
-        "performFetchSync",
-        "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
+        jni::jni_str!("performFetchSync"),
+        jni::jni_sig!("(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;"),
         &[
             JValue::Object(&jurl),
             JValue::Object(&jmethod),
@@ -83,39 +83,40 @@ fn do_fetch(
         ],
     );
 
-    let result_obj = match result {
-        Ok(v) => v.l().map_err(|e| format!("result object: {e}"))?,
-        Err(e) => {
-            // Clear any pending JNI exception
-            if env.exception_check().unwrap_or(false) {
-                let _ = env.exception_clear();
+        let result_obj = match result {
+            Ok(v) => v.l().map_err(|e| format!("result object: {e}"))?,
+            Err(e) => {
+                // Clear any pending JNI exception
+                if env.exception_check() {
+                    let _ = env.exception_clear();
+                }
+                unsafe {
+                    let _ = jni_bridge::pop_local_frame(env, &jni::objects::JObject::null());
+                }
+                return Err(format!("JNI call failed: {e}"));
             }
-            unsafe {
-                env.pop_local_frame(&jni::objects::JObject::null());
-            }
-            return Err(format!("JNI call failed: {e}"));
+        };
+
+        // Parse result: "STATUS_CODE\nSTATUS_TEXT\nBODY"
+        // `performFetch` is declared to return String; retype the owned local
+        // without adding an IsInstanceOf call.
+        let result_jstr = unsafe { jni::objects::JString::from_raw(env, result_obj.into_raw()) };
+        let result_str = result_jstr.try_to_string(env).unwrap_or_default();
+
+        unsafe {
+            let _ = jni_bridge::pop_local_frame(env, &jni::objects::JObject::null());
         }
-    };
 
-    // Parse result: "STATUS_CODE\nSTATUS_TEXT\nBODY"
-    let result_str: String = env
-        .get_string((&result_obj).into())
-        .map(|s| s.into())
-        .unwrap_or_default();
+        let mut lines = result_str.splitn(3, '\n');
+        let status: u16 = lines.next().unwrap_or("0").parse().unwrap_or(0);
+        let status_text = lines.next().unwrap_or("").to_string();
+        let body = lines.next().unwrap_or("").as_bytes().to_vec();
 
-    unsafe {
-        env.pop_local_frame(&jni::objects::JObject::null());
-    }
-
-    let mut lines = result_str.splitn(3, '\n');
-    let status: u16 = lines.next().unwrap_or("0").parse().unwrap_or(0);
-    let status_text = lines.next().unwrap_or("").to_string();
-    let body = lines.next().unwrap_or("").as_bytes().to_vec();
-
-    Ok(FetchResponse {
-        status,
-        status_text,
-        body,
+        Ok(FetchResponse {
+            status,
+            status_text,
+            body,
+        })
     })
 }
 

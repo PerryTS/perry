@@ -215,7 +215,7 @@ pub fn invoke_with_string_array(key: i64, paths: &[String]) {
 /// This runs on the UI thread. Pumps microtasks after to drive async/await.
 #[no_mangle]
 pub extern "C" fn Java_com_perry_app_PerryBridge_nativeInvokeCallback0(
-    _env: jni::JNIEnv,
+    _env: jni::EnvUnowned,
     _class: jni::objects::JClass,
     key: jni::sys::jlong,
 ) {
@@ -227,7 +227,7 @@ pub extern "C" fn Java_com_perry_app_PerryBridge_nativeInvokeCallback0(
 /// This runs on the UI thread. Pumps microtasks after to drive async/await.
 #[no_mangle]
 pub extern "C" fn Java_com_perry_app_PerryBridge_nativeInvokeCallback1(
-    _env: jni::JNIEnv,
+    _env: jni::EnvUnowned,
     _class: jni::objects::JClass,
     key: jni::sys::jlong,
     arg: jni::sys::jdouble,
@@ -240,7 +240,7 @@ pub extern "C" fn Java_com_perry_app_PerryBridge_nativeInvokeCallback1(
 /// This runs on the UI thread. Pumps microtasks after to drive async/await.
 #[no_mangle]
 pub extern "C" fn Java_com_perry_app_PerryBridge_nativeInvokeCallback2(
-    _env: jni::JNIEnv,
+    _env: jni::EnvUnowned,
     _class: jni::objects::JClass,
     key: jni::sys::jlong,
     arg1: jni::sys::jdouble,
@@ -254,26 +254,28 @@ pub extern "C" fn Java_com_perry_app_PerryBridge_nativeInvokeCallback2(
 /// Converts the Java String to a NaN-boxed Perry string and invokes the callback.
 #[no_mangle]
 pub extern "C" fn Java_com_perry_app_PerryBridge_nativeInvokeCallbackWithString(
-    mut env: jni::JNIEnv,
+    mut env: jni::EnvUnowned,
     _class: jni::objects::JClass,
     key: jni::sys::jlong,
     text: jni::objects::JString,
 ) {
-    let rust_str: String = env.get_string(&text).map(|s| s.into()).unwrap_or_default();
-    let bytes = rust_str.as_bytes();
-    let nanboxed = unsafe {
-        let str_ptr = js_string_from_bytes(bytes.as_ptr(), bytes.len() as i64);
-        js_nanbox_string(str_ptr as i64)
-    };
-    invoke1(key as i64, nanboxed);
-    pump_microtasks();
+    crate::jni_bridge::with_unowned_env(&mut env, |env| {
+        let rust_str = text.try_to_string(env).unwrap_or_default();
+        let bytes = rust_str.as_bytes();
+        let nanboxed = unsafe {
+            let str_ptr = js_string_from_bytes(bytes.as_ptr(), bytes.len() as i64);
+            js_nanbox_string(str_ptr as i64)
+        };
+        invoke1(key as i64, nanboxed);
+        pump_microtasks();
+    });
 }
 
 /// JNI entry point: called from Java PerryBridge.nativeInvokeCallback4(long key, double, double, double, double).
 /// Issue #552 geolocation success callback: (lat, lng, accuracy, timestamp_ms).
 #[no_mangle]
 pub extern "C" fn Java_com_perry_app_PerryBridge_nativeInvokeCallback4(
-    _env: jni::JNIEnv,
+    _env: jni::EnvUnowned,
     _class: jni::objects::JClass,
     key: jni::sys::jlong,
     arg0: jni::sys::jdouble,
@@ -289,25 +291,28 @@ pub extern "C" fn Java_com_perry_app_PerryBridge_nativeInvokeCallback4(
 /// Issue #552 image picker callback: passes a NaN-boxed Perry array of NaN-boxed Perry strings.
 #[no_mangle]
 pub extern "C" fn Java_com_perry_app_PerryBridge_nativeInvokeCallbackWithStringArray(
-    mut env: jni::JNIEnv,
+    mut env: jni::EnvUnowned,
     _class: jni::objects::JClass,
     key: jni::sys::jlong,
     paths: jni::objects::JObjectArray,
 ) {
-    let mut rust_paths: Vec<String> = Vec::new();
-    if let Ok(len) = env.get_array_length(&paths) {
-        for i in 0..len {
-            if let Ok(item) = env.get_object_array_element(&paths, i) {
-                let jstr: jni::objects::JString = item.into();
-                let s: Option<String> = env.get_string(&jstr).map(|j| j.into()).ok();
-                if let Some(s) = s {
-                    rust_paths.push(s);
+    crate::jni_bridge::with_unowned_env(&mut env, |env| {
+        let mut rust_paths: Vec<String> = Vec::new();
+        if let Ok(len) = paths.len(env) {
+            for i in 0..len {
+                if let Ok(item) = paths.get_element(env, i) {
+                    // The Java declaration is `String[]`; retain 0.21's
+                    // zero-call wrapper conversion instead of type-checking.
+                    let jstr = unsafe { jni::objects::JString::from_raw(env, item.into_raw()) };
+                    if let Ok(s) = jstr.try_to_string(env) {
+                        rust_paths.push(s);
+                    }
                 }
             }
         }
-    }
-    invoke_with_string_array(key as i64, &rust_paths);
-    pump_microtasks();
+        invoke_with_string_array(key as i64, &rust_paths);
+        pump_microtasks();
+    });
 }
 
 /// JNI entry point for the issue #583 deep-link callback. Java signature:
@@ -317,27 +322,26 @@ pub extern "C" fn Java_com_perry_app_PerryBridge_nativeInvokeCallbackWithStringA
 /// `"foreground"`.
 #[no_mangle]
 pub extern "C" fn Java_com_perry_app_PerryBridge_nativeInvokeDeepLinkCallback(
-    mut env: jni::JNIEnv,
+    mut env: jni::EnvUnowned,
     _class: jni::objects::JClass,
     key: jni::sys::jlong,
     url: jni::objects::JString,
     source: jni::objects::JString,
 ) {
-    let url_str: String = env.get_string(&url).map(|s| s.into()).unwrap_or_default();
-    let source_str: String = env
-        .get_string(&source)
-        .map(|s| s.into())
-        .unwrap_or_default();
-    let url_jsval = unsafe {
-        let p = js_string_from_bytes(url_str.as_ptr(), url_str.len() as i64);
-        js_nanbox_string(p as i64)
-    };
-    let source_jsval = unsafe {
-        let p = js_string_from_bytes(source_str.as_ptr(), source_str.len() as i64);
-        js_nanbox_string(p as i64)
-    };
-    invoke2(key as i64, url_jsval, source_jsval);
-    pump_microtasks();
+    crate::jni_bridge::with_unowned_env(&mut env, |env| {
+        let url_str = url.try_to_string(env).unwrap_or_default();
+        let source_str = source.try_to_string(env).unwrap_or_default();
+        let url_jsval = unsafe {
+            let p = js_string_from_bytes(url_str.as_ptr(), url_str.len() as i64);
+            js_nanbox_string(p as i64)
+        };
+        let source_jsval = unsafe {
+            let p = js_string_from_bytes(source_str.as_ptr(), source_str.len() as i64);
+            js_nanbox_string(p as i64)
+        };
+        invoke2(key as i64, url_jsval, source_jsval);
+        pump_microtasks();
+    });
 }
 
 /// JNI entry point for the issue #582 network reachability callback. Java
@@ -347,21 +351,23 @@ pub extern "C" fn Java_com_perry_app_PerryBridge_nativeInvokeDeepLinkCallback(
 /// "ethernet" | "none" | "unknown"`.
 #[no_mangle]
 pub extern "C" fn Java_com_perry_app_PerryBridge_nativeInvokeNetworkCallback(
-    mut env: jni::JNIEnv,
+    mut env: jni::EnvUnowned,
     _class: jni::objects::JClass,
     key: jni::sys::jlong,
     connected: jni::sys::jboolean,
     kind: jni::objects::JString,
 ) {
-    const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
-    const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
-    let connected_jsval = f64::from_bits(if connected != 0 { TAG_TRUE } else { TAG_FALSE });
-    let kind_str: String = env.get_string(&kind).map(|s| s.into()).unwrap_or_default();
-    let bytes = kind_str.as_bytes();
-    let kind_jsval = unsafe {
-        let str_ptr = js_string_from_bytes(bytes.as_ptr(), bytes.len() as i64);
-        js_nanbox_string(str_ptr as i64)
-    };
-    invoke2(key as i64, connected_jsval, kind_jsval);
-    pump_microtasks();
+    crate::jni_bridge::with_unowned_env(&mut env, |env| {
+        const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
+        const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
+        let connected_jsval = f64::from_bits(if connected { TAG_TRUE } else { TAG_FALSE });
+        let kind_str = kind.try_to_string(env).unwrap_or_default();
+        let bytes = kind_str.as_bytes();
+        let kind_jsval = unsafe {
+            let str_ptr = js_string_from_bytes(bytes.as_ptr(), bytes.len() as i64);
+            js_nanbox_string(str_ptr as i64)
+        };
+        invoke2(key as i64, connected_jsval, kind_jsval);
+        pump_microtasks();
+    });
 }

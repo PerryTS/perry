@@ -160,43 +160,51 @@ pub extern "C" fn perry_ui_stack_set_distribution(handle: i64, distribution: f64
     if distribution as i64 == 1 {
         // FillEqually: set all children to weight=1
         if let Some(view_ref) = widgets::get_widget(handle) {
-            let mut env = jni_bridge::get_env();
-            let _ = env.push_local_frame(32);
-            let child_count = env
-                .call_method(view_ref.as_obj(), "getChildCount", "()I", &[])
-                .map(|v| v.i().unwrap_or(0))
-                .unwrap_or(0);
-            for i in 0..child_count {
-                let child = env.call_method(
-                    view_ref.as_obj(),
-                    "getChildAt",
-                    "(I)Landroid/view/View;",
-                    &[jni::objects::JValue::Int(i)],
-                );
-                if let Ok(child_val) = child {
-                    if let Ok(child_obj) = child_val.l() {
-                        if !child_obj.is_null() {
-                            if let Ok(lp) = env.call_method(
-                                &child_obj,
-                                "getLayoutParams",
-                                "()Landroid/view/ViewGroup$LayoutParams;",
-                                &[],
-                            ) {
-                                if let Ok(lp_obj) = lp.l() {
-                                    if !lp_obj.is_null() {
-                                        if env
-                                            .is_instance_of(
-                                                &lp_obj,
-                                                "android/widget/LinearLayout$LayoutParams",
-                                            )
-                                            .unwrap_or(false)
-                                        {
-                                            let _ = env.set_field(
-                                                &lp_obj,
-                                                "weight",
-                                                "F",
-                                                jni::objects::JValue::Float(1.0),
-                                            );
+            jni_bridge::with_env(|env| {
+                let _ = jni_bridge::push_local_frame(env, 32);
+                let child_count = env
+                    .call_method(
+                        view_ref.as_obj(),
+                        jni::jni_str!("getChildCount"),
+                        jni::jni_sig!("()I"),
+                        &[],
+                    )
+                    .map(|v| v.i().unwrap_or(0))
+                    .unwrap_or(0);
+                for i in 0..child_count {
+                    let child = env.call_method(
+                        view_ref.as_obj(),
+                        jni::jni_str!("getChildAt"),
+                        jni::jni_sig!("(I)Landroid/view/View;"),
+                        &[jni::JValue::Int(i)],
+                    );
+                    if let Ok(child_val) = child {
+                        if let Ok(child_obj) = child_val.l() {
+                            if !child_obj.is_null() {
+                                if let Ok(lp) = env.call_method(
+                                    &child_obj,
+                                    jni::jni_str!("getLayoutParams"),
+                                    jni::jni_sig!("()Landroid/view/ViewGroup$LayoutParams;"),
+                                    &[],
+                                ) {
+                                    if let Ok(lp_obj) = lp.l() {
+                                        if !lp_obj.is_null() {
+                                            if env
+                                                .is_instance_of(
+                                                    &lp_obj,
+                                                    jni::jni_str!(
+                                                        "android/widget/LinearLayout$LayoutParams"
+                                                    ),
+                                                )
+                                                .unwrap_or(false)
+                                            {
+                                                let _ = env.set_field(
+                                                    &lp_obj,
+                                                    jni::jni_str!("weight"),
+                                                    jni::jni_sig!("F"),
+                                                    jni::JValue::Float(1.0),
+                                                );
+                                            }
                                         }
                                     }
                                 }
@@ -204,10 +212,10 @@ pub extern "C" fn perry_ui_stack_set_distribution(handle: i64, distribution: f64
                         }
                     }
                 }
-            }
-            unsafe {
-                env.pop_local_frame(&jni::objects::JObject::null());
-            }
+                unsafe {
+                    let _ = jni_bridge::pop_local_frame(env, &jni::objects::JObject::null());
+                }
+            })
         }
     }
 }
@@ -221,47 +229,53 @@ pub extern "C" fn perry_ui_stack_set_alignment(handle: i64, alignment: f64) {
     // Fill (0) means children stretch to fill the cross-axis — we don't set gravity
     // so that MATCH_PARENT on children takes effect.
     if let Some(view_ref) = widgets::get_widget(handle) {
-        let mut env = jni_bridge::get_env();
-        let _ = env.push_local_frame(8);
+        jni_bridge::with_env(|env| {
+            let _ = jni_bridge::push_local_frame(env, 8);
 
-        // Determine orientation: 0=HORIZONTAL (HStack), 1=VERTICAL (VStack)
-        let orientation = env
-            .call_method(view_ref.as_obj(), "getOrientation", "()I", &[])
-            .map(|v| v.i().unwrap_or(0))
-            .unwrap_or(0);
+            // Determine orientation: 0=HORIZONTAL (HStack), 1=VERTICAL (VStack)
+            let orientation = env
+                .call_method(
+                    view_ref.as_obj(),
+                    jni::jni_str!("getOrientation"),
+                    jni::jni_sig!("()I"),
+                    &[],
+                )
+                .map(|v| v.i().unwrap_or(0))
+                .unwrap_or(0);
 
-        let align = alignment as i64;
-        let gravity = if orientation == 0 {
-            // HStack: cross-axis is vertical
-            match align {
-                0 => -1, // Fill — no gravity override (let children use MATCH_PARENT height)
-                1 => 48, // Leading → TOP
-                3 => 16, // Center → CENTER_VERTICAL
-                4 => 80, // Trailing → BOTTOM
-                _ => -1,
+            let align = alignment as i64;
+            let gravity = if orientation == 0 {
+                // HStack: cross-axis is vertical
+                match align {
+                    0 => -1, // Fill — no gravity override (let children use MATCH_PARENT height)
+                    1 => 48, // Leading → TOP
+                    3 => 16, // Center → CENTER_VERTICAL
+                    4 => 80, // Trailing → BOTTOM
+                    _ => -1,
+                }
+            } else {
+                // VStack: cross-axis is horizontal
+                match align {
+                    0 => -1, // Fill — no gravity override
+                    1 => 3,  // Leading → LEFT
+                    3 => 1,  // Center → CENTER_HORIZONTAL
+                    4 => 5,  // Trailing → RIGHT
+                    _ => -1,
+                }
+            };
+
+            if gravity >= 0 {
+                let _ = env.call_method(
+                    view_ref.as_obj(),
+                    jni::jni_str!("setGravity"),
+                    jni::jni_sig!("(I)V"),
+                    &[jni::JValue::Int(gravity)],
+                );
             }
-        } else {
-            // VStack: cross-axis is horizontal
-            match align {
-                0 => -1, // Fill — no gravity override
-                1 => 3,  // Leading → LEFT
-                3 => 1,  // Center → CENTER_HORIZONTAL
-                4 => 5,  // Trailing → RIGHT
-                _ => -1,
+            unsafe {
+                let _ = jni_bridge::pop_local_frame(env, &jni::objects::JObject::null());
             }
-        };
-
-        if gravity >= 0 {
-            let _ = env.call_method(
-                view_ref.as_obj(),
-                "setGravity",
-                "(I)V",
-                &[jni::objects::JValue::Int(gravity)],
-            );
-        }
-        unsafe {
-            env.pop_local_frame(&jni::objects::JObject::null());
-        }
+        })
     }
 }
 

@@ -1,7 +1,20 @@
-use jni::objects::{GlobalRef, JClass, JMethodID};
-use jni::{JNIEnv, JavaVM};
+use jni::ids::JMethodID;
+use jni::objects::{JClass, JObject};
+use jni::refs::{Global, Reference};
+use jni::signature::RuntimeMethodSignature;
+use jni::strings::JNIString;
+use jni::{AttachConfig, AttachmentExceptionPolicy, Env, EnvUnowned, JavaVM};
 use std::cell::RefCell;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
+
+/// A shared, type-erased global object reference.
+///
+/// `jni` 0.21's `GlobalRef` used an internal `Arc`, so cloning it shared one
+/// JNI global reference. `jni` 0.22's `Global<T>` is no longer cloneable; the
+/// outer `Arc` retains the previous ownership and deletion semantics.
+pub type GlobalRef = Arc<Global<JObject<'static>>>;
+
+type ClassGlobal = Global<JClass<'static>>;
 
 /// The global JavaVM reference, set once during JNI_OnLoad.
 static JAVA_VM: OnceLock<JavaVM> = OnceLock::new();
@@ -10,27 +23,27 @@ static JAVA_VM: OnceLock<JavaVM> = OnceLock::new();
 /// These are populated lazily on first use per thread.
 pub struct JniCache {
     // --- Classes ---
-    pub text_view_class: GlobalRef,
-    pub button_class: GlobalRef,
-    pub linear_layout_class: GlobalRef,
-    pub scroll_view_class: GlobalRef,
-    pub edit_text_class: GlobalRef,
-    pub switch_class: GlobalRef,
-    pub seek_bar_class: GlobalRef,
-    pub space_class: GlobalRef,
-    pub view_class: GlobalRef,
-    pub color_class: GlobalRef,
-    pub typeface_class: GlobalRef,
-    pub popup_menu_class: GlobalRef,
-    pub clipboard_manager_class: GlobalRef,
-    pub context_class: GlobalRef,
-    pub frame_layout_class: GlobalRef,
-    pub view_group_class: GlobalRef,
-    pub view_group_layout_params_class: GlobalRef,
-    pub linear_layout_params_class: GlobalRef,
-    pub frame_layout_params_class: GlobalRef,
-    pub text_watcher_class: GlobalRef,
-    pub perry_bridge_class: GlobalRef,
+    pub text_view_class: ClassGlobal,
+    pub button_class: ClassGlobal,
+    pub linear_layout_class: ClassGlobal,
+    pub scroll_view_class: ClassGlobal,
+    pub edit_text_class: ClassGlobal,
+    pub switch_class: ClassGlobal,
+    pub seek_bar_class: ClassGlobal,
+    pub space_class: ClassGlobal,
+    pub view_class: ClassGlobal,
+    pub color_class: ClassGlobal,
+    pub typeface_class: ClassGlobal,
+    pub popup_menu_class: ClassGlobal,
+    pub clipboard_manager_class: ClassGlobal,
+    pub context_class: ClassGlobal,
+    pub frame_layout_class: ClassGlobal,
+    pub view_group_class: ClassGlobal,
+    pub view_group_layout_params_class: ClassGlobal,
+    pub linear_layout_params_class: ClassGlobal,
+    pub frame_layout_params_class: ClassGlobal,
+    pub text_watcher_class: ClassGlobal,
+    pub perry_bridge_class: ClassGlobal,
 
     // --- Constructor IDs ---
     pub text_view_init: JMethodID,
@@ -121,7 +134,7 @@ pub fn init_vm(vm: JavaVM) {
     let _ = JAVA_VM.set(vm);
 }
 
-/// Ensure the global JavaVM is cached, deriving it from a live `JNIEnv` when
+/// Ensure the global JavaVM is cached, deriving it from a live `Env` when
 /// Perry's own `JNI_OnLoad` never ran.
 ///
 /// This happens when the final `.so` also links a native library that defines
@@ -133,7 +146,7 @@ pub fn init_vm(vm: JavaVM) {
 /// `RegisterNatives`, so they still resolve regardless. But the JavaVM cache
 /// that `JNI_OnLoad` would have populated gets skipped. Calling this from
 /// `nativeInit` (which always runs, on a thread with a valid env) recovers it.
-pub fn ensure_vm(env: &JNIEnv) {
+pub fn ensure_vm(env: &Env) {
     if JAVA_VM.get().is_some() {
         return;
     }
@@ -142,17 +155,91 @@ pub fn ensure_vm(env: &JNIEnv) {
     }
 }
 
-/// Get a JNIEnv for the current thread.
-pub fn get_env() -> JNIEnv<'static> {
+/// Run with the JNI environment for the current thread.
+///
+/// The 0.21 code permanently attached threads and returned a `JNIEnv` without
+/// pushing a local frame or changing pending-exception handling. Use the 0.22
+/// closure API with matching attachment settings so all existing explicit
+/// local-frame boundaries remain authoritative.
+pub fn with_env<R>(f: impl for<'local> FnOnce(&mut Env<'local>) -> R) -> R {
+    try_with_env(f).expect("Failed to attach JNI thread")
+}
+
+/// Fallible form of [`with_env`] for call sites that previously handled an
+/// attachment failure explicitly.
+pub fn try_with_env<R>(
+    f: impl for<'local> FnOnce(&mut Env<'local>) -> R,
+) -> jni::errors::Result<R> {
     let vm = JAVA_VM.get().expect("JavaVM not initialized");
-    // attach_current_thread_permanently is safe to call multiple times
-    vm.attach_current_thread_permanently()
-        .expect("Failed to attach JNI thread")
+    vm.attach_current_thread_with_config(
+        || AttachConfig::new().exceptions_policy(AttachmentExceptionPolicy::Ignore),
+        None,
+        |env| Ok::<R, jni::errors::Error>(f(env)),
+    )
+}
+
+/// Upgrade the FFI-safe environment passed to a native method without adding
+/// a frame, catching exceptions, or changing the previous panic behavior.
+pub fn with_unowned_env<'local, R>(
+    env: &mut EnvUnowned<'local>,
+    f: impl FnOnce(&mut Env<'local>) -> R,
+) -> R {
+    match env
+        .with_env_no_catch(|env| Ok::<R, jni::errors::Error>(f(env)))
+        .into_outcome()
+    {
+        jni::Outcome::Ok(value) => value,
+        // `with_env_no_catch` only forwards the closure's result, and the
+        // closure above cannot return `Err` or synthesize `Outcome::Panic`.
+        jni::Outcome::Err(error) => unreachable!("infallible JNI closure failed: {error}"),
+        jni::Outcome::Panic(payload) => std::panic::resume_unwind(payload),
+    }
 }
 
 /// Get the JavaVM.
 pub fn get_vm() -> &'static JavaVM {
     JAVA_VM.get().expect("JavaVM not initialized")
+}
+
+/// Create a shared, type-erased global reference with the same clone semantics
+/// as `jni` 0.21's `GlobalRef`.
+pub fn new_global_ref<'local, O>(env: &Env, obj: O) -> jni::errors::Result<GlobalRef>
+where
+    O: Reference + AsRef<JObject<'local>>,
+{
+    let obj: &JObject<'local> = obj.as_ref();
+    env.new_global_ref(obj).map(Arc::new)
+}
+
+/// Compatibility binding for the explicit frame management used throughout
+/// this crate. `jni` 0.22 made the direct methods private in favor of scoped
+/// closures, but changing the lexical scope of these frames would change which
+/// local references they release.
+pub fn push_local_frame(env: &Env, capacity: i32) -> jni::errors::Result<()> {
+    let raw = env.get_raw();
+    // SAFETY: `raw` belongs to the live `Env`, and `PushLocalFrame` is valid
+    // for every JNI version supported by jni-rs.
+    let result = unsafe { ((**raw).v1_2.PushLocalFrame)(raw, capacity) };
+    jni::errors::jni_error_code_to_result(result)
+}
+
+/// Pop the current explicit local frame, optionally promoting `result` into
+/// its parent frame.
+///
+/// # Safety
+///
+/// As with `jni` 0.21's `JNIEnv::pop_local_frame`, callers must not use any
+/// local reference allocated since the matching `push_local_frame` afterward.
+pub unsafe fn pop_local_frame<'local>(
+    env: &Env<'local>,
+    result: &JObject,
+) -> jni::errors::Result<JObject<'local>> {
+    let raw = env.get_raw();
+    // SAFETY: the caller guarantees frame pairing and reference validity; the
+    // returned reference is promoted into the frame represented by `env`.
+    let promoted = unsafe { ((**raw).v1_2.PopLocalFrame)(raw, result.as_raw()) };
+    // SAFETY: JNI returns either null or a valid local in the parent frame.
+    Ok(unsafe { JObject::from_raw(env, promoted) })
 }
 
 /// `extern "C"` accessor used by external `perry.nativeLibrary`
@@ -167,14 +254,14 @@ pub fn get_vm() -> &'static JavaVM {
 #[no_mangle]
 pub extern "C" fn perry_android_jvm() -> *mut jni::sys::JavaVM {
     match JAVA_VM.get() {
-        Some(vm) => vm.get_java_vm_pointer(),
+        Some(vm) => vm.get_raw(),
         None => std::ptr::null_mut(),
     }
 }
 
 /// Initialize the JNI class/method cache for the current thread.
-/// Must be called after JavaVM is set and from a thread with a valid JNIEnv.
-pub fn init_cache(env: &mut JNIEnv) {
+/// Must be called after JavaVM is set and from a thread with a valid Env.
+pub fn init_cache(env: &mut Env) {
     JNI_CACHE.with(|cache| {
         if cache.borrow().is_some() {
             return;
@@ -195,8 +282,7 @@ where
         // Lazy-init: build cache on first access per thread
         let needs_init = cache.borrow().is_none();
         if needs_init {
-            let mut env = get_env();
-            let c = build_cache(&mut env);
+            let c = with_env(build_cache);
             *cache.borrow_mut() = Some(c);
         }
         let borrow = cache.borrow();
@@ -205,25 +291,29 @@ where
     })
 }
 
-fn find_class(env: &mut JNIEnv, name: &str) -> GlobalRef {
+fn find_class(env: &mut Env, name: &str) -> ClassGlobal {
     let class = env
-        .find_class(name)
+        .find_class(JNIString::new(name))
         .unwrap_or_else(|_| panic!("Failed to find class: {}", name));
     env.new_global_ref(class)
         .unwrap_or_else(|_| panic!("Failed to create global ref for: {}", name))
 }
 
-fn get_method(env: &mut JNIEnv, class: &GlobalRef, name: &str, sig: &str) -> JMethodID {
-    let cls: &JClass = class.as_obj().into();
-    env.get_method_id(cls, name, sig)
+fn get_method(env: &mut Env, class: &ClassGlobal, name: &str, sig: &str) -> JMethodID {
+    let jni_name = JNIString::new(name);
+    let parsed_sig = RuntimeMethodSignature::from_str(sig)
+        .unwrap_or_else(|_| panic!("Invalid method signature: {sig}"));
+    env.get_method_id(class, jni_name, parsed_sig.method_signature())
         .unwrap_or_else(|_| panic!("Failed to find method: {}::{} {}", "<class>", name, sig))
 }
 
-fn get_static_method(env: &mut JNIEnv, class: &GlobalRef, name: &str, sig: &str) -> JMethodID {
-    let cls: &JClass = class.as_obj().into();
+fn get_static_method(env: &mut Env, class: &ClassGlobal, name: &str, sig: &str) -> JMethodID {
+    let jni_name = JNIString::new(name);
+    let parsed_sig = RuntimeMethodSignature::from_str(sig)
+        .unwrap_or_else(|_| panic!("Invalid method signature: {sig}"));
     // Static method IDs are the same type as instance method IDs in jni-rs
     let mid = env
-        .get_static_method_id(cls, name, sig)
+        .get_static_method_id(class, jni_name, parsed_sig.method_signature())
         .unwrap_or_else(|_| {
             panic!(
                 "Failed to find static method: {}::{} {}",
@@ -234,7 +324,7 @@ fn get_static_method(env: &mut JNIEnv, class: &GlobalRef, name: &str, sig: &str)
     unsafe { std::mem::transmute(mid) }
 }
 
-fn build_cache(env: &mut JNIEnv) -> JniCache {
+fn build_cache(env: &mut Env) -> JniCache {
     // Find all classes
     let text_view_class = find_class(env, "android/widget/TextView");
     let button_class = find_class(env, "android/widget/Button");

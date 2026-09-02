@@ -1,7 +1,7 @@
 //! System APIs — open_url, dark mode, preferences, keychain, notifications
 
 use crate::jni_bridge;
-use jni::objects::JValue;
+use jni::JValue;
 
 use perry_ffi::copy_string_from_raw as str_from_header;
 
@@ -13,154 +13,157 @@ extern "C" {
 /// Open a URL in the default browser via Intent.ACTION_VIEW.
 pub fn open_url(url_ptr: *const u8) {
     let url = unsafe { str_from_header(url_ptr) };
-    let mut env = jni_bridge::get_env();
-    let _ = env.push_local_frame(32);
+    jni_bridge::with_env(|env| {
+        let _ = jni_bridge::push_local_frame(env, 32);
 
-    let activity = crate::widgets::get_activity(&mut env);
+        let activity = crate::widgets::get_activity(env);
 
-    let jurl = env.new_string(url).expect("Failed to create JNI string");
-    let uri = env
-        .call_static_method(
-            "android/net/Uri",
-            "parse",
-            "(Ljava/lang/String;)Landroid/net/Uri;",
-            &[JValue::Object(&jurl)],
-        )
-        .expect("Uri.parse")
-        .l()
-        .expect("uri");
+        let jurl = env.new_string(url).expect("Failed to create JNI string");
+        let uri = env
+            .call_static_method(
+                jni::jni_str!("android/net/Uri"),
+                jni::jni_str!("parse"),
+                jni::jni_sig!("(Ljava/lang/String;)Landroid/net/Uri;"),
+                &[JValue::Object(&jurl)],
+            )
+            .expect("Uri.parse")
+            .l()
+            .expect("uri");
 
-    let action = env
-        .new_string("android.intent.action.VIEW")
-        .expect("action string");
-    let intent = env
-        .new_object(
-            "android/content/Intent",
-            "(Ljava/lang/String;Landroid/net/Uri;)V",
-            &[JValue::Object(&action), JValue::Object(&uri)],
-        )
-        .expect("Intent");
+        let action = env
+            .new_string("android.intent.action.VIEW")
+            .expect("action string");
+        let intent = env
+            .new_object(
+                jni::jni_str!("android/content/Intent"),
+                jni::jni_sig!("(Ljava/lang/String;Landroid/net/Uri;)V"),
+                &[JValue::Object(&action), JValue::Object(&uri)],
+            )
+            .expect("Intent");
 
-    let _ = env.call_method(
-        &activity,
-        "startActivity",
-        "(Landroid/content/Intent;)V",
-        &[JValue::Object(&intent)],
-    );
+        let _ = env.call_method(
+            &activity,
+            jni::jni_str!("startActivity"),
+            jni::jni_sig!("(Landroid/content/Intent;)V"),
+            &[JValue::Object(&intent)],
+        );
 
-    unsafe {
-        env.pop_local_frame(&jni::objects::JObject::null());
-    }
+        unsafe {
+            let _ = jni_bridge::pop_local_frame(env, &jni::objects::JObject::null());
+        }
+    })
 }
 
 /// Check if dark mode is enabled via Configuration.uiMode.
 pub fn is_dark_mode() -> i64 {
-    let mut env = jni_bridge::get_env();
-    let _ = env.push_local_frame(16);
+    jni_bridge::with_env(|env| {
+        let _ = jni_bridge::push_local_frame(env, 16);
 
-    let activity = crate::widgets::get_activity(&mut env);
+        let activity = crate::widgets::get_activity(env);
 
-    let resources = env
-        .call_method(
-            &activity,
-            "getResources",
-            "()Landroid/content/res/Resources;",
-            &[],
-        )
-        .expect("getResources")
-        .l()
-        .expect("resources");
+        let resources = env
+            .call_method(
+                &activity,
+                jni::jni_str!("getResources"),
+                jni::jni_sig!("()Landroid/content/res/Resources;"),
+                &[],
+            )
+            .expect("getResources")
+            .l()
+            .expect("resources");
 
-    let config = env
-        .call_method(
-            &resources,
-            "getConfiguration",
-            "()Landroid/content/res/Configuration;",
-            &[],
-        )
-        .expect("getConfiguration")
-        .l()
-        .expect("configuration");
+        let config = env
+            .call_method(
+                &resources,
+                jni::jni_str!("getConfiguration"),
+                jni::jni_sig!("()Landroid/content/res/Configuration;"),
+                &[],
+            )
+            .expect("getConfiguration")
+            .l()
+            .expect("configuration");
 
-    let ui_mode = env
-        .get_field(&config, "uiMode", "I")
-        .expect("uiMode")
-        .i()
-        .expect("int");
+        let ui_mode = env
+            .get_field(&config, jni::jni_str!("uiMode"), jni::jni_sig!("I"))
+            .expect("uiMode")
+            .i()
+            .expect("int");
 
-    unsafe {
-        env.pop_local_frame(&jni::objects::JObject::null());
-    }
+        unsafe {
+            let _ = jni_bridge::pop_local_frame(env, &jni::objects::JObject::null());
+        }
 
-    // UI_MODE_NIGHT_MASK = 0x30, UI_MODE_NIGHT_YES = 0x20
-    if (ui_mode & 0x30) == 0x20 {
-        1
-    } else {
-        0
-    }
+        // UI_MODE_NIGHT_MASK = 0x30, UI_MODE_NIGHT_YES = 0x20
+        if (ui_mode & 0x30) == 0x20 {
+            1
+        } else {
+            0
+        }
+    })
 }
 
 /// Set a preference value using SharedPreferences.
 pub fn preferences_set(key_ptr: *const u8, value: f64) {
     let key = unsafe { str_from_header(key_ptr) };
-    let mut env = jni_bridge::get_env();
-    let _ = env.push_local_frame(16);
+    jni_bridge::with_env(|env| {
+        let _ = jni_bridge::push_local_frame(env, 16);
 
-    let activity = crate::widgets::get_activity(&mut env);
-    let pref_name = env.new_string("perry_prefs").expect("pref name");
-    let prefs = env
-        .call_method(
-            &activity,
-            "getSharedPreferences",
-            "(Ljava/lang/String;I)Landroid/content/SharedPreferences;",
-            &[JValue::Object(&pref_name), JValue::Int(0)], // MODE_PRIVATE = 0
-        )
-        .expect("getSharedPreferences")
-        .l()
-        .expect("prefs");
+        let activity = crate::widgets::get_activity(env);
+        let pref_name = env.new_string("perry_prefs").expect("pref name");
+        let prefs = env
+            .call_method(
+                &activity,
+                jni::jni_str!("getSharedPreferences"),
+                jni::jni_sig!("(Ljava/lang/String;I)Landroid/content/SharedPreferences;"),
+                &[JValue::Object(&pref_name), JValue::Int(0)], // MODE_PRIVATE = 0
+            )
+            .expect("getSharedPreferences")
+            .l()
+            .expect("prefs");
 
-    let editor = env
-        .call_method(
-            &prefs,
-            "edit",
-            "()Landroid/content/SharedPreferences$Editor;",
-            &[],
-        )
-        .expect("edit")
-        .l()
-        .expect("editor");
+        let editor = env
+            .call_method(
+                &prefs,
+                jni::jni_str!("edit"),
+                jni::jni_sig!("()Landroid/content/SharedPreferences$Editor;"),
+                &[],
+            )
+            .expect("edit")
+            .l()
+            .expect("editor");
 
-    let jkey = env.new_string(key).expect("key string");
+        let jkey = env.new_string(key).expect("key string");
 
-    // Check if value is a NaN-boxed string
-    let bits = value.to_bits();
-    let tag = (bits >> 48) as u16;
-    if tag == 0x7FFF {
-        // String value — extract and store as string
-        let ptr = (bits & 0x0000_FFFF_FFFF_FFFF) as *const u8;
-        let s = unsafe { str_from_header(ptr) };
-        let jval = env.new_string(s).expect("value string");
-        let _ = env.call_method(
-            &editor,
-            "putString",
-            "(Ljava/lang/String;Ljava/lang/String;)Landroid/content/SharedPreferences$Editor;",
-            &[JValue::Object(&jkey), JValue::Object(&jval)],
-        );
-    } else {
-        // Numeric value
-        let _ = env.call_method(
-            &editor,
-            "putFloat",
-            "(Ljava/lang/String;F)Landroid/content/SharedPreferences$Editor;",
-            &[JValue::Object(&jkey), JValue::Float(value as f32)],
-        );
-    }
+        // Check if value is a NaN-boxed string
+        let bits = value.to_bits();
+        let tag = (bits >> 48) as u16;
+        if tag == 0x7FFF {
+            // String value — extract and store as string
+            let ptr = (bits & 0x0000_FFFF_FFFF_FFFF) as *const u8;
+            let s = unsafe { str_from_header(ptr) };
+            let jval = env.new_string(s).expect("value string");
+            let _ = env.call_method(
+                &editor,
+                jni::jni_str!("putString"),
+                jni::jni_sig!("(Ljava/lang/String;Ljava/lang/String;)Landroid/content/SharedPreferences$Editor;"),
+                &[JValue::Object(&jkey), JValue::Object(&jval)],
+            );
+        } else {
+            // Numeric value
+            let _ = env.call_method(
+                &editor,
+                jni::jni_str!("putFloat"),
+                jni::jni_sig!("(Ljava/lang/String;F)Landroid/content/SharedPreferences$Editor;"),
+                &[JValue::Object(&jkey), JValue::Float(value as f32)],
+            );
+        }
 
-    let _ = env.call_method(&editor, "apply", "()V", &[]);
+        let _ = env.call_method(&editor, jni::jni_str!("apply"), jni::jni_sig!("()V"), &[]);
 
-    unsafe {
-        env.pop_local_frame(&jni::objects::JObject::null());
-    }
+        unsafe {
+            let _ = jni_bridge::pop_local_frame(env, &jni::objects::JObject::null());
+        }
+    })
 }
 
 /// Get a preference value from SharedPreferences.
@@ -173,263 +176,293 @@ pub fn preferences_set(key_ptr: *const u8, value: f64) {
 /// clear any leftover exception before returning.
 pub fn preferences_get(key_ptr: *const u8) -> f64 {
     let key = unsafe { str_from_header(key_ptr) };
-    let mut env = jni_bridge::get_env();
-    let _ = env.push_local_frame(24);
+    jni_bridge::with_env(|env| {
+        let _ = jni_bridge::push_local_frame(env, 24);
 
-    let finish = |env: &mut jni::JNIEnv, result: f64| -> f64 {
-        if env.exception_check().unwrap_or(false) {
-            let _ = env.exception_clear();
-        }
-        unsafe {
-            env.pop_local_frame(&jni::objects::JObject::null());
-        }
-        result
-    };
-
-    let activity = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        crate::widgets::get_activity(&mut env)
-    })) {
-        Ok(a) => a,
-        Err(_) => return finish(&mut env, 0.0),
-    };
-
-    let pref_name = match env.new_string("perry_prefs") {
-        Ok(s) => s,
-        Err(_) => return finish(&mut env, 0.0),
-    };
-    let prefs = match env.call_method(
-        &activity,
-        "getSharedPreferences",
-        "(Ljava/lang/String;I)Landroid/content/SharedPreferences;",
-        &[JValue::Object(&pref_name), JValue::Int(0)],
-    ) {
-        Ok(v) => match v.l() {
-            Ok(o) => o,
-            Err(_) => return finish(&mut env, 0.0),
-        },
-        Err(_) => return finish(&mut env, 0.0),
-    };
-
-    let jkey = match env.new_string(key) {
-        Ok(s) => s,
-        Err(_) => return finish(&mut env, 0.0),
-    };
-
-    // getAll avoids ClassCastException from typed getters.
-    let map = match env.call_method(&prefs, "getAll", "()Ljava/util/Map;", &[]) {
-        Ok(v) => match v.l() {
-            Ok(o) => o,
-            Err(_) => return finish(&mut env, 0.0),
-        },
-        Err(_) => return finish(&mut env, 0.0),
-    };
-
-    let entry = match env.call_method(
-        &map,
-        "get",
-        "(Ljava/lang/Object;)Ljava/lang/Object;",
-        &[JValue::Object(&jkey)],
-    ) {
-        Ok(v) => match v.l() {
-            Ok(o) => o,
-            Err(_) => return finish(&mut env, 0.0),
-        },
-        Err(_) => return finish(&mut env, 0.0),
-    };
-
-    if entry.is_null() {
-        return finish(&mut env, 0.0);
-    }
-
-    // Branch on runtime type without throwing.
-    if let Ok(true) = env.is_instance_of(&entry, "java/lang/String") {
-        let jstr: jni::objects::JString = entry.into();
-        if let Ok(java_str) = env.get_string(&jstr) {
-            let s: String = java_str.into();
-            let bytes = s.as_bytes();
-            let ptr = unsafe { js_string_from_bytes(bytes.as_ptr(), bytes.len()) };
-            let result = unsafe { js_nanbox_string(ptr) };
-            return finish(&mut env, result);
-        }
-        return finish(&mut env, 0.0);
-    }
-
-    if let Ok(true) = env.is_instance_of(&entry, "java/lang/Float") {
-        if let Ok(f) = env.call_method(&entry, "floatValue", "()F", &[]) {
-            if let Ok(v) = f.f() {
-                return finish(&mut env, v as f64);
+        let finish = |env: &mut jni::Env, result: f64| -> f64 {
+            if env.exception_check() {
+                let _ = env.exception_clear();
             }
-        }
-        return finish(&mut env, 0.0);
-    }
-
-    if let Ok(true) = env.is_instance_of(&entry, "java/lang/Double") {
-        if let Ok(d) = env.call_method(&entry, "doubleValue", "()D", &[]) {
-            if let Ok(v) = d.d() {
-                return finish(&mut env, v);
+            unsafe {
+                let _ = jni_bridge::pop_local_frame(env, &jni::objects::JObject::null());
             }
-        }
-        return finish(&mut env, 0.0);
-    }
+            result
+        };
 
-    if let Ok(true) = env.is_instance_of(&entry, "java/lang/Integer") {
-        if let Ok(i) = env.call_method(&entry, "intValue", "()I", &[]) {
-            if let Ok(v) = i.i() {
-                return finish(&mut env, v as f64);
+        let activity = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            crate::widgets::get_activity(env)
+        })) {
+            Ok(a) => a,
+            Err(_) => return finish(env, 0.0),
+        };
+
+        let pref_name = match env.new_string("perry_prefs") {
+            Ok(s) => s,
+            Err(_) => return finish(env, 0.0),
+        };
+        let prefs = match env.call_method(
+            &activity,
+            jni::jni_str!("getSharedPreferences"),
+            jni::jni_sig!("(Ljava/lang/String;I)Landroid/content/SharedPreferences;"),
+            &[JValue::Object(&pref_name), JValue::Int(0)],
+        ) {
+            Ok(v) => match v.l() {
+                Ok(o) => o,
+                Err(_) => return finish(env, 0.0),
+            },
+            Err(_) => return finish(env, 0.0),
+        };
+
+        let jkey = match env.new_string(key) {
+            Ok(s) => s,
+            Err(_) => return finish(env, 0.0),
+        };
+
+        // getAll avoids ClassCastException from typed getters.
+        let map = match env.call_method(
+            &prefs,
+            jni::jni_str!("getAll"),
+            jni::jni_sig!("()Ljava/util/Map;"),
+            &[],
+        ) {
+            Ok(v) => match v.l() {
+                Ok(o) => o,
+                Err(_) => return finish(env, 0.0),
+            },
+            Err(_) => return finish(env, 0.0),
+        };
+
+        let entry = match env.call_method(
+            &map,
+            jni::jni_str!("get"),
+            jni::jni_sig!("(Ljava/lang/Object;)Ljava/lang/Object;"),
+            &[JValue::Object(&jkey)],
+        ) {
+            Ok(v) => match v.l() {
+                Ok(o) => o,
+                Err(_) => return finish(env, 0.0),
+            },
+            Err(_) => return finish(env, 0.0),
+        };
+
+        if entry.is_null() {
+            return finish(env, 0.0);
+        }
+
+        // Branch on runtime type without throwing.
+        if let Ok(true) = env.is_instance_of(&entry, jni::jni_str!("java/lang/String")) {
+            let jstr: jni::objects::JString =
+                unsafe { jni::objects::JString::from_raw(env, entry.into_raw()) };
+            if let Ok(java_str) = jstr.try_to_string(env) {
+                let s: String = java_str.into();
+                let bytes = s.as_bytes();
+                let ptr = unsafe { js_string_from_bytes(bytes.as_ptr(), bytes.len()) };
+                let result = unsafe { js_nanbox_string(ptr) };
+                return finish(env, result);
             }
+            return finish(env, 0.0);
         }
-        return finish(&mut env, 0.0);
-    }
 
-    if let Ok(true) = env.is_instance_of(&entry, "java/lang/Long") {
-        if let Ok(l) = env.call_method(&entry, "longValue", "()J", &[]) {
-            if let Ok(v) = l.j() {
-                return finish(&mut env, v as f64);
+        if let Ok(true) = env.is_instance_of(&entry, jni::jni_str!("java/lang/Float")) {
+            if let Ok(f) = env.call_method(
+                &entry,
+                jni::jni_str!("floatValue"),
+                jni::jni_sig!("()F"),
+                &[],
+            ) {
+                if let Ok(v) = f.f() {
+                    return finish(env, v as f64);
+                }
             }
+            return finish(env, 0.0);
         }
-        return finish(&mut env, 0.0);
-    }
 
-    finish(&mut env, 0.0)
+        if let Ok(true) = env.is_instance_of(&entry, jni::jni_str!("java/lang/Double")) {
+            if let Ok(d) = env.call_method(
+                &entry,
+                jni::jni_str!("doubleValue"),
+                jni::jni_sig!("()D"),
+                &[],
+            ) {
+                if let Ok(v) = d.d() {
+                    return finish(env, v);
+                }
+            }
+            return finish(env, 0.0);
+        }
+
+        if let Ok(true) = env.is_instance_of(&entry, jni::jni_str!("java/lang/Integer")) {
+            if let Ok(i) =
+                env.call_method(&entry, jni::jni_str!("intValue"), jni::jni_sig!("()I"), &[])
+            {
+                if let Ok(v) = i.i() {
+                    return finish(env, v as f64);
+                }
+            }
+            return finish(env, 0.0);
+        }
+
+        if let Ok(true) = env.is_instance_of(&entry, jni::jni_str!("java/lang/Long")) {
+            if let Ok(l) = env.call_method(
+                &entry,
+                jni::jni_str!("longValue"),
+                jni::jni_sig!("()J"),
+                &[],
+            ) {
+                if let Ok(v) = l.j() {
+                    return finish(env, v as f64);
+                }
+            }
+            return finish(env, 0.0);
+        }
+
+        finish(env, 0.0)
+    })
 }
 
 /// Save a value to the keychain (SharedPreferences with private mode).
 pub fn keychain_save(key_ptr: *const u8, value_ptr: *const u8) {
     let key = unsafe { str_from_header(key_ptr) };
     let value = unsafe { str_from_header(value_ptr) };
-    let mut env = jni_bridge::get_env();
-    let _ = env.push_local_frame(16);
+    jni_bridge::with_env(|env| {
+        let _ = jni_bridge::push_local_frame(env, 16);
 
-    let activity = crate::widgets::get_activity(&mut env);
-    let pref_name = env.new_string("perry_keychain").expect("pref name");
-    let prefs = env
-        .call_method(
-            &activity,
-            "getSharedPreferences",
-            "(Ljava/lang/String;I)Landroid/content/SharedPreferences;",
-            &[JValue::Object(&pref_name), JValue::Int(0)],
-        )
-        .expect("getSharedPreferences")
-        .l()
-        .expect("prefs");
+        let activity = crate::widgets::get_activity(env);
+        let pref_name = env.new_string("perry_keychain").expect("pref name");
+        let prefs = env
+            .call_method(
+                &activity,
+                jni::jni_str!("getSharedPreferences"),
+                jni::jni_sig!("(Ljava/lang/String;I)Landroid/content/SharedPreferences;"),
+                &[JValue::Object(&pref_name), JValue::Int(0)],
+            )
+            .expect("getSharedPreferences")
+            .l()
+            .expect("prefs");
 
-    let editor = env
-        .call_method(
-            &prefs,
-            "edit",
-            "()Landroid/content/SharedPreferences$Editor;",
-            &[],
-        )
-        .expect("edit")
-        .l()
-        .expect("editor");
+        let editor = env
+            .call_method(
+                &prefs,
+                jni::jni_str!("edit"),
+                jni::jni_sig!("()Landroid/content/SharedPreferences$Editor;"),
+                &[],
+            )
+            .expect("edit")
+            .l()
+            .expect("editor");
 
-    let jkey = env.new_string(key).expect("key string");
-    let jval = env.new_string(value).expect("value string");
-    let _ = env.call_method(
-        &editor,
-        "putString",
-        "(Ljava/lang/String;Ljava/lang/String;)Landroid/content/SharedPreferences$Editor;",
-        &[JValue::Object(&jkey), JValue::Object(&jval)],
-    );
-    let _ = env.call_method(&editor, "apply", "()V", &[]);
+        let jkey = env.new_string(key).expect("key string");
+        let jval = env.new_string(value).expect("value string");
+        let _ = env.call_method(
+            &editor,
+            jni::jni_str!("putString"),
+            jni::jni_sig!(
+                "(Ljava/lang/String;Ljava/lang/String;)Landroid/content/SharedPreferences$Editor;"
+            ),
+            &[JValue::Object(&jkey), JValue::Object(&jval)],
+        );
+        let _ = env.call_method(&editor, jni::jni_str!("apply"), jni::jni_sig!("()V"), &[]);
 
-    unsafe {
-        env.pop_local_frame(&jni::objects::JObject::null());
-    }
+        unsafe {
+            let _ = jni_bridge::pop_local_frame(env, &jni::objects::JObject::null());
+        }
+    })
 }
 
 /// Get a value from the keychain.
 pub fn keychain_get(key_ptr: *const u8) -> f64 {
     let key = unsafe { str_from_header(key_ptr) };
-    let mut env = jni_bridge::get_env();
-    let _ = env.push_local_frame(16);
+    jni_bridge::with_env(|env| {
+        let _ = jni_bridge::push_local_frame(env, 16);
 
-    let activity = crate::widgets::get_activity(&mut env);
-    let pref_name = env.new_string("perry_keychain").expect("pref name");
-    let prefs = env
-        .call_method(
-            &activity,
-            "getSharedPreferences",
-            "(Ljava/lang/String;I)Landroid/content/SharedPreferences;",
-            &[JValue::Object(&pref_name), JValue::Int(0)],
-        )
-        .expect("getSharedPreferences")
-        .l()
-        .expect("prefs");
+        let activity = crate::widgets::get_activity(env);
+        let pref_name = env.new_string("perry_keychain").expect("pref name");
+        let prefs = env
+            .call_method(
+                &activity,
+                jni::jni_str!("getSharedPreferences"),
+                jni::jni_sig!("(Ljava/lang/String;I)Landroid/content/SharedPreferences;"),
+                &[JValue::Object(&pref_name), JValue::Int(0)],
+            )
+            .expect("getSharedPreferences")
+            .l()
+            .expect("prefs");
 
-    let jkey = env.new_string(key).expect("key string");
-    let result = env.call_method(
-        &prefs,
-        "getString",
-        "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
-        &[
-            JValue::Object(&jkey),
-            JValue::Object(&jni::objects::JObject::null()),
-        ],
-    );
+        let jkey = env.new_string(key).expect("key string");
+        let result = env.call_method(
+            &prefs,
+            jni::jni_str!("getString"),
+            jni::jni_sig!("(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;"),
+            &[
+                JValue::Object(&jkey),
+                JValue::Object(&jni::objects::JObject::null()),
+            ],
+        );
 
-    let mut ret_val = f64::from_bits(0x7FFC_0000_0000_0001u64); // undefined
-    if let Ok(val) = result {
-        if let Ok(obj) = val.l() {
-            if !obj.is_null() {
-                let jstr: jni::objects::JString = obj.into();
-                let s: String = env.get_string(&jstr).expect("get string").into();
-                let bytes = s.as_bytes();
-                let ptr = unsafe { js_string_from_bytes(bytes.as_ptr(), bytes.len()) };
-                ret_val = unsafe { js_nanbox_string(ptr) };
+        let mut ret_val = f64::from_bits(0x7FFC_0000_0000_0001u64); // undefined
+        if let Ok(val) = result {
+            if let Ok(obj) = val.l() {
+                if !obj.is_null() {
+                    let jstr: jni::objects::JString =
+                        unsafe { jni::objects::JString::from_raw(env, obj.into_raw()) };
+                    let s: String = jstr.try_to_string(env).expect("get string").into();
+                    let bytes = s.as_bytes();
+                    let ptr = unsafe { js_string_from_bytes(bytes.as_ptr(), bytes.len()) };
+                    ret_val = unsafe { js_nanbox_string(ptr) };
+                }
             }
         }
-    }
 
-    unsafe {
-        env.pop_local_frame(&jni::objects::JObject::null());
-    }
-    ret_val
+        unsafe {
+            let _ = jni_bridge::pop_local_frame(env, &jni::objects::JObject::null());
+        }
+        ret_val
+    })
 }
 
 /// Delete a value from the keychain.
 pub fn keychain_delete(key_ptr: *const u8) {
     let key = unsafe { str_from_header(key_ptr) };
-    let mut env = jni_bridge::get_env();
-    let _ = env.push_local_frame(16);
+    jni_bridge::with_env(|env| {
+        let _ = jni_bridge::push_local_frame(env, 16);
 
-    let activity = crate::widgets::get_activity(&mut env);
-    let pref_name = env.new_string("perry_keychain").expect("pref name");
-    let prefs = env
-        .call_method(
-            &activity,
-            "getSharedPreferences",
-            "(Ljava/lang/String;I)Landroid/content/SharedPreferences;",
-            &[JValue::Object(&pref_name), JValue::Int(0)],
-        )
-        .expect("getSharedPreferences")
-        .l()
-        .expect("prefs");
+        let activity = crate::widgets::get_activity(env);
+        let pref_name = env.new_string("perry_keychain").expect("pref name");
+        let prefs = env
+            .call_method(
+                &activity,
+                jni::jni_str!("getSharedPreferences"),
+                jni::jni_sig!("(Ljava/lang/String;I)Landroid/content/SharedPreferences;"),
+                &[JValue::Object(&pref_name), JValue::Int(0)],
+            )
+            .expect("getSharedPreferences")
+            .l()
+            .expect("prefs");
 
-    let editor = env
-        .call_method(
-            &prefs,
-            "edit",
-            "()Landroid/content/SharedPreferences$Editor;",
-            &[],
-        )
-        .expect("edit")
-        .l()
-        .expect("editor");
+        let editor = env
+            .call_method(
+                &prefs,
+                jni::jni_str!("edit"),
+                jni::jni_sig!("()Landroid/content/SharedPreferences$Editor;"),
+                &[],
+            )
+            .expect("edit")
+            .l()
+            .expect("editor");
 
-    let jkey = env.new_string(key).expect("key string");
-    let _ = env.call_method(
-        &editor,
-        "remove",
-        "(Ljava/lang/String;)Landroid/content/SharedPreferences$Editor;",
-        &[JValue::Object(&jkey)],
-    );
-    let _ = env.call_method(&editor, "apply", "()V", &[]);
+        let jkey = env.new_string(key).expect("key string");
+        let _ = env.call_method(
+            &editor,
+            jni::jni_str!("remove"),
+            jni::jni_sig!("(Ljava/lang/String;)Landroid/content/SharedPreferences$Editor;"),
+            &[JValue::Object(&jkey)],
+        );
+        let _ = env.call_method(&editor, jni::jni_str!("apply"), jni::jni_sig!("()V"), &[]);
 
-    unsafe {
-        env.pop_local_frame(&jni::objects::JObject::null());
-    }
+        unsafe {
+            let _ = jni_bridge::pop_local_frame(env, &jni::objects::JObject::null());
+        }
+    })
 }
 
 /// Play a haptic feedback effect via the system Vibrator service
@@ -458,22 +491,23 @@ pub fn haptic_play(type_ptr: *const u8) {
         _ => 20,
     };
 
-    let mut env = jni_bridge::get_env();
-    let _ = env.push_local_frame(32);
+    jni_bridge::with_env(|env| {
+        let _ = jni_bridge::push_local_frame(env, 32);
 
-    // Haptics are fire-and-forget: any JNI failure (no vibrator
-    // service, missing VIBRATE permission, exotic OEM builds) degrades
-    // to the documented no-op instead of panicking the runtime.
-    if haptic_play_inner(&mut env, effect_id, fallback_ms).is_none() {
-        let _ = env.exception_clear();
-    }
+        // Haptics are fire-and-forget: any JNI failure (no vibrator
+        // service, missing VIBRATE permission, exotic OEM builds) degrades
+        // to the documented no-op instead of panicking the runtime.
+        if haptic_play_inner(env, effect_id, fallback_ms).is_none() {
+            let _ = env.exception_clear();
+        }
 
-    unsafe {
-        env.pop_local_frame(&jni::objects::JObject::null());
-    }
+        unsafe {
+            let _ = jni_bridge::pop_local_frame(env, &jni::objects::JObject::null());
+        }
+    })
 }
 
-fn haptic_play_inner(env: &mut jni::JNIEnv, effect_id: i32, fallback_ms: i64) -> Option<()> {
+fn haptic_play_inner(env: &mut jni::Env, effect_id: i32, fallback_ms: i64) -> Option<()> {
     let activity = crate::widgets::get_activity(env);
 
     // Context.VIBRATOR_SERVICE = "vibrator". Deprecated in favor of
@@ -483,8 +517,8 @@ fn haptic_play_inner(env: &mut jni::JNIEnv, effect_id: i32, fallback_ms: i64) ->
     let vibrator = env
         .call_method(
             &activity,
-            "getSystemService",
-            "(Ljava/lang/String;)Ljava/lang/Object;",
+            jni::jni_str!("getSystemService"),
+            jni::jni_sig!("(Ljava/lang/String;)Ljava/lang/Object;"),
             &[JValue::Object(&service_name)],
         )
         .ok()?
@@ -495,7 +529,11 @@ fn haptic_play_inner(env: &mut jni::JNIEnv, effect_id: i32, fallback_ms: i64) ->
     }
 
     let sdk_int = env
-        .get_static_field("android/os/Build$VERSION", "SDK_INT", "I")
+        .get_static_field(
+            jni::jni_str!("android/os/Build$VERSION"),
+            jni::jni_str!("SDK_INT"),
+            jni::jni_sig!("I"),
+        )
         .ok()?
         .i()
         .ok()?;
@@ -504,9 +542,9 @@ fn haptic_play_inner(env: &mut jni::JNIEnv, effect_id: i32, fallback_ms: i64) ->
         // VibrationEffect.createPredefined(int) + vibrate(VibrationEffect).
         let effect = env
             .call_static_method(
-                "android/os/VibrationEffect",
-                "createPredefined",
-                "(I)Landroid/os/VibrationEffect;",
+                jni::jni_str!("android/os/VibrationEffect"),
+                jni::jni_str!("createPredefined"),
+                jni::jni_sig!("(I)Landroid/os/VibrationEffect;"),
                 &[JValue::Int(effect_id)],
             )
             .ok()?
@@ -514,15 +552,20 @@ fn haptic_play_inner(env: &mut jni::JNIEnv, effect_id: i32, fallback_ms: i64) ->
             .ok()?;
         env.call_method(
             &vibrator,
-            "vibrate",
-            "(Landroid/os/VibrationEffect;)V",
+            jni::jni_str!("vibrate"),
+            jni::jni_sig!("(Landroid/os/VibrationEffect;)V"),
             &[JValue::Object(&effect)],
         )
         .ok()?;
     } else {
         // Pre-29: the deprecated-but-present one-shot vibrate(long).
-        env.call_method(&vibrator, "vibrate", "(J)V", &[JValue::Long(fallback_ms)])
-            .ok()?;
+        env.call_method(
+            &vibrator,
+            jni::jni_str!("vibrate"),
+            jni::jni_sig!("(J)V"),
+            &[JValue::Long(fallback_ms)],
+        )
+        .ok()?;
     }
     Some(())
 }
@@ -573,7 +616,7 @@ pub fn notification_on_tap(callback: f64) {
 /// side.
 #[no_mangle]
 pub extern "C" fn Java_com_perry_app_PerryBridge_nativeNotificationTap(
-    mut env: jni::JNIEnv,
+    mut env: jni::EnvUnowned,
     _class: jni::objects::JClass,
     id: jni::objects::JString,
 ) {
@@ -582,17 +625,19 @@ pub extern "C" fn Java_com_perry_app_PerryBridge_nativeNotificationTap(
         return;
     }
 
-    let rust_str: String = env.get_string(&id).map(|s| s.into()).unwrap_or_default();
-    let bytes = rust_str.as_bytes();
-    let id_value = unsafe {
-        let ptr = js_string_from_bytes(bytes.as_ptr(), bytes.len());
-        js_nanbox_string(ptr)
-    };
-    // `action` is always undefined until #97 follow-up wires action buttons.
-    const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
-    let action_value = f64::from_bits(TAG_UNDEFINED);
+    jni_bridge::with_unowned_env(&mut env, |env| {
+        let rust_str = id.try_to_string(env).unwrap_or_default();
+        let bytes = rust_str.as_bytes();
+        let id_value = unsafe {
+            let ptr = js_string_from_bytes(bytes.as_ptr(), bytes.len());
+            js_nanbox_string(ptr)
+        };
+        // `action` is always undefined until #97 follow-up wires action buttons.
+        const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
+        let action_value = f64::from_bits(TAG_UNDEFINED);
 
-    crate::callback::invoke2(key, id_value, action_value);
+        crate::callback::invoke2(key, id_value, action_value);
+    });
 }
 
 /// Register the JS closure that fires when FCM hands us a device token
@@ -608,21 +653,22 @@ pub fn notification_register_remote(callback: f64) {
     let key = crate::callback::register(callback);
     NOTIFICATION_REMOTE_TOKEN_KEY.store(key, std::sync::atomic::Ordering::Relaxed);
 
-    let mut env = jni_bridge::get_env();
-    let _ = env.push_local_frame(8);
-    let activity = crate::widgets::get_activity(&mut env);
-    let bridge_class =
-        jni_bridge::with_cache(|c| env.new_local_ref(c.perry_bridge_class.as_obj()).unwrap());
-    let bridge_cls: &jni::objects::JClass = (&bridge_class).into();
-    let _ = env.call_static_method(
-        bridge_cls,
-        "registerForRemoteNotifications",
-        "(Landroid/app/Activity;)V",
-        &[JValue::Object(&activity)],
-    );
-    unsafe {
-        env.pop_local_frame(&jni::objects::JObject::null());
-    }
+    jni_bridge::with_env(|env| {
+        let _ = jni_bridge::push_local_frame(env, 8);
+        let activity = crate::widgets::get_activity(env);
+        let bridge_class =
+            jni_bridge::with_cache(|c| env.new_local_ref(&c.perry_bridge_class).unwrap());
+        let bridge_cls: &jni::objects::JClass = &bridge_class;
+        let _ = env.call_static_method(
+            bridge_cls,
+            jni::jni_str!("registerForRemoteNotifications"),
+            jni::jni_sig!("(Landroid/app/Activity;)V"),
+            &[JValue::Object(&activity)],
+        );
+        unsafe {
+            let _ = jni_bridge::pop_local_frame(env, &jni::objects::JObject::null());
+        }
+    })
 }
 
 /// Register the JS closure that fires for foreground FCM payloads (#95).
@@ -653,7 +699,7 @@ pub fn notification_on_background_receive(callback: f64) {
 /// callback and invokes it with the token NaN-boxed string.
 #[no_mangle]
 pub extern "C" fn Java_com_perry_app_PerryBridge_nativeNotificationToken(
-    mut env: jni::JNIEnv,
+    mut env: jni::EnvUnowned,
     _class: jni::objects::JClass,
     token: jni::objects::JString,
 ) {
@@ -661,13 +707,15 @@ pub extern "C" fn Java_com_perry_app_PerryBridge_nativeNotificationToken(
     if key == 0 {
         return;
     }
-    let rust_str: String = env.get_string(&token).map(|s| s.into()).unwrap_or_default();
-    let bytes = rust_str.as_bytes();
-    let token_value = unsafe {
-        let ptr = js_string_from_bytes(bytes.as_ptr(), bytes.len());
-        js_nanbox_string(ptr)
-    };
-    crate::callback::invoke1(key, token_value);
+    jni_bridge::with_unowned_env(&mut env, |env| {
+        let rust_str = token.try_to_string(env).unwrap_or_default();
+        let bytes = rust_str.as_bytes();
+        let token_value = unsafe {
+            let ptr = js_string_from_bytes(bytes.as_ptr(), bytes.len());
+            js_nanbox_string(ptr)
+        };
+        crate::callback::invoke1(key, token_value);
+    });
 }
 
 /// JNI: FCM foreground push (#95). Parses the JSON payload via the runtime's
@@ -675,7 +723,7 @@ pub extern "C" fn Java_com_perry_app_PerryBridge_nativeNotificationToken(
 /// receive callback with it.
 #[no_mangle]
 pub extern "C" fn Java_com_perry_app_PerryBridge_nativeNotificationReceive(
-    mut env: jni::JNIEnv,
+    mut env: jni::EnvUnowned,
     _class: jni::objects::JClass,
     payload_json: jni::objects::JString,
 ) {
@@ -683,21 +731,20 @@ pub extern "C" fn Java_com_perry_app_PerryBridge_nativeNotificationReceive(
     if key == 0 {
         return;
     }
-    let rust_str: String = env
-        .get_string(&payload_json)
-        .map(|s| s.into())
-        .unwrap_or_default();
-    let bytes = rust_str.as_bytes();
+    jni_bridge::with_unowned_env(&mut env, |env| {
+        let rust_str = payload_json.try_to_string(env).unwrap_or_default();
+        let bytes = rust_str.as_bytes();
 
-    extern "C" {
-        fn js_json_parse(text_ptr: *const u8) -> u64;
-    }
-    let payload_value = unsafe {
-        let str_ptr = js_string_from_bytes(bytes.as_ptr(), bytes.len());
-        let bits = js_json_parse(str_ptr);
-        f64::from_bits(bits)
-    };
-    crate::callback::invoke1(key, payload_value);
+        extern "C" {
+            fn js_json_parse(text_ptr: *const u8) -> u64;
+        }
+        let payload_value = unsafe {
+            let str_ptr = js_string_from_bytes(bytes.as_ptr(), bytes.len());
+            let bits = js_json_parse(str_ptr);
+            f64::from_bits(bits)
+        };
+        crate::callback::invoke1(key, payload_value);
+    });
 }
 
 /// JNI: FCM background push (#98). Same JSON→object shape as
@@ -711,7 +758,7 @@ pub extern "C" fn Java_com_perry_app_PerryBridge_nativeNotificationReceive(
 /// when the OS suspends the process; v1 limitation, document for users.
 #[no_mangle]
 pub extern "C" fn Java_com_perry_app_PerryBridge_nativeNotificationBackgroundReceive(
-    mut env: jni::JNIEnv,
+    mut env: jni::EnvUnowned,
     _class: jni::objects::JClass,
     payload_json: jni::objects::JString,
 ) {
@@ -719,34 +766,33 @@ pub extern "C" fn Java_com_perry_app_PerryBridge_nativeNotificationBackgroundRec
     if key == 0 {
         return;
     }
-    let rust_str: String = env
-        .get_string(&payload_json)
-        .map(|s| s.into())
-        .unwrap_or_default();
-    let bytes = rust_str.as_bytes();
+    jni_bridge::with_unowned_env(&mut env, |env| {
+        let rust_str = payload_json.try_to_string(env).unwrap_or_default();
+        let bytes = rust_str.as_bytes();
 
-    extern "C" {
-        fn js_json_parse(text_ptr: *const u8) -> u64;
-        fn js_promise_run_microtasks() -> i32;
-    }
-    let payload_value = unsafe {
-        let str_ptr = js_string_from_bytes(bytes.as_ptr(), bytes.len());
-        let bits = js_json_parse(str_ptr);
-        f64::from_bits(bits)
-    };
-    crate::callback::invoke1(key, payload_value);
-
-    // Drive the microtask pump a few times so an async callback that awaits
-    // already-resolved Promises (e.g., a cached value, an in-memory write)
-    // gets a chance to finish before we hand control back to the FCM service.
-    // Each tick may schedule new work, so loop until it stabilizes (or we hit
-    // the cap, to keep this call bounded).
-    for _ in 0..8 {
-        let drained = unsafe { js_promise_run_microtasks() };
-        if drained == 0 {
-            break;
+        extern "C" {
+            fn js_json_parse(text_ptr: *const u8) -> u64;
+            fn js_promise_run_microtasks() -> i32;
         }
-    }
+        let payload_value = unsafe {
+            let str_ptr = js_string_from_bytes(bytes.as_ptr(), bytes.len());
+            let bits = js_json_parse(str_ptr);
+            f64::from_bits(bits)
+        };
+        crate::callback::invoke1(key, payload_value);
+
+        // Drive the microtask pump a few times so an async callback that awaits
+        // already-resolved Promises (e.g., a cached value, an in-memory write)
+        // gets a chance to finish before we hand control back to the FCM service.
+        // Each tick may schedule new work, so loop until it stabilizes (or we hit
+        // the cap, to keep this call bounded).
+        for _ in 0..8 {
+            let drained = unsafe { js_promise_run_microtasks() };
+            if drained == 0 {
+                break;
+            }
+        }
+    });
 }
 
 /// Schedule a fire-after-N-seconds notification via PerryBridge (#96).
@@ -766,31 +812,34 @@ pub fn notification_schedule_interval(
     let title = unsafe { str_from_header(title_ptr) };
     let body = unsafe { str_from_header(body_ptr) };
 
-    let mut env = jni_bridge::get_env();
-    let _ = env.push_local_frame(16);
-    let activity = crate::widgets::get_activity(&mut env);
-    let bridge_class =
-        jni_bridge::with_cache(|c| env.new_local_ref(c.perry_bridge_class.as_obj()).unwrap());
-    let jid = env.new_string(id).expect("id");
-    let jtitle = env.new_string(title).expect("title");
-    let jbody = env.new_string(body).expect("body");
-    let bridge_cls: &jni::objects::JClass = (&bridge_class).into();
-    let _ = env.call_static_method(
-        bridge_cls,
-        "scheduleInterval",
-        "(Landroid/app/Activity;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;DZ)V",
-        &[
-            JValue::Object(&activity),
-            JValue::Object(&jid),
-            JValue::Object(&jtitle),
-            JValue::Object(&jbody),
-            JValue::Double(seconds),
-            JValue::Bool(if repeats_bool { 1u8 } else { 0u8 }),
-        ],
-    );
-    unsafe {
-        env.pop_local_frame(&jni::objects::JObject::null());
-    }
+    jni_bridge::with_env(|env| {
+        let _ = jni_bridge::push_local_frame(env, 16);
+        let activity = crate::widgets::get_activity(env);
+        let bridge_class =
+            jni_bridge::with_cache(|c| env.new_local_ref(&c.perry_bridge_class).unwrap());
+        let jid = env.new_string(id).expect("id");
+        let jtitle = env.new_string(title).expect("title");
+        let jbody = env.new_string(body).expect("body");
+        let bridge_cls: &jni::objects::JClass = &bridge_class;
+        let _ = env.call_static_method(
+            bridge_cls,
+            jni::jni_str!("scheduleInterval"),
+            jni::jni_sig!(
+                "(Landroid/app/Activity;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;DZ)V"
+            ),
+            &[
+                JValue::Object(&activity),
+                JValue::Object(&jid),
+                JValue::Object(&jtitle),
+                JValue::Object(&jbody),
+                JValue::Double(seconds),
+                JValue::Bool(repeats_bool),
+            ],
+        );
+        unsafe {
+            let _ = jni_bridge::pop_local_frame(env, &jni::objects::JObject::null());
+        }
+    })
 }
 
 /// Schedule a fire-at-wallclock-ms notification via PerryBridge (#96).
@@ -804,30 +853,33 @@ pub fn notification_schedule_calendar(
     let title = unsafe { str_from_header(title_ptr) };
     let body = unsafe { str_from_header(body_ptr) };
 
-    let mut env = jni_bridge::get_env();
-    let _ = env.push_local_frame(16);
-    let activity = crate::widgets::get_activity(&mut env);
-    let bridge_class =
-        jni_bridge::with_cache(|c| env.new_local_ref(c.perry_bridge_class.as_obj()).unwrap());
-    let jid = env.new_string(id).expect("id");
-    let jtitle = env.new_string(title).expect("title");
-    let jbody = env.new_string(body).expect("body");
-    let bridge_cls: &jni::objects::JClass = (&bridge_class).into();
-    let _ = env.call_static_method(
-        bridge_cls,
-        "scheduleCalendar",
-        "(Landroid/app/Activity;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;D)V",
-        &[
-            JValue::Object(&activity),
-            JValue::Object(&jid),
-            JValue::Object(&jtitle),
-            JValue::Object(&jbody),
-            JValue::Double(timestamp_ms),
-        ],
-    );
-    unsafe {
-        env.pop_local_frame(&jni::objects::JObject::null());
-    }
+    jni_bridge::with_env(|env| {
+        let _ = jni_bridge::push_local_frame(env, 16);
+        let activity = crate::widgets::get_activity(env);
+        let bridge_class =
+            jni_bridge::with_cache(|c| env.new_local_ref(&c.perry_bridge_class).unwrap());
+        let jid = env.new_string(id).expect("id");
+        let jtitle = env.new_string(title).expect("title");
+        let jbody = env.new_string(body).expect("body");
+        let bridge_cls: &jni::objects::JClass = &bridge_class;
+        let _ = env.call_static_method(
+            bridge_cls,
+            jni::jni_str!("scheduleCalendar"),
+            jni::jni_sig!(
+                "(Landroid/app/Activity;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;D)V"
+            ),
+            &[
+                JValue::Object(&activity),
+                JValue::Object(&jid),
+                JValue::Object(&jtitle),
+                JValue::Object(&jbody),
+                JValue::Double(timestamp_ms),
+            ],
+        );
+        unsafe {
+            let _ = jni_bridge::pop_local_frame(env, &jni::objects::JObject::null());
+        }
+    })
 }
 
 /// Logged no-op — Geofencing requires `FUSED_LOCATION_PROVIDER` + a
@@ -859,51 +911,53 @@ pub fn notification_schedule_location(
 pub fn notification_cancel(id_ptr: *const u8) {
     let id = unsafe { str_from_header(id_ptr) };
 
-    let mut env = jni_bridge::get_env();
-    let _ = env.push_local_frame(8);
-    let activity = crate::widgets::get_activity(&mut env);
-    let bridge_class =
-        jni_bridge::with_cache(|c| env.new_local_ref(c.perry_bridge_class.as_obj()).unwrap());
-    let jid = env.new_string(id).expect("id");
-    let bridge_cls: &jni::objects::JClass = (&bridge_class).into();
-    let _ = env.call_static_method(
-        bridge_cls,
-        "cancelNotification",
-        "(Landroid/app/Activity;Ljava/lang/String;)V",
-        &[JValue::Object(&activity), JValue::Object(&jid)],
-    );
-    unsafe {
-        env.pop_local_frame(&jni::objects::JObject::null());
-    }
+    jni_bridge::with_env(|env| {
+        let _ = jni_bridge::push_local_frame(env, 8);
+        let activity = crate::widgets::get_activity(env);
+        let bridge_class =
+            jni_bridge::with_cache(|c| env.new_local_ref(&c.perry_bridge_class).unwrap());
+        let jid = env.new_string(id).expect("id");
+        let bridge_cls: &jni::objects::JClass = &bridge_class;
+        let _ = env.call_static_method(
+            bridge_cls,
+            jni::jni_str!("cancelNotification"),
+            jni::jni_sig!("(Landroid/app/Activity;Ljava/lang/String;)V"),
+            &[JValue::Object(&activity), JValue::Object(&jid)],
+        );
+        unsafe {
+            let _ = jni_bridge::pop_local_frame(env, &jni::objects::JObject::null());
+        }
+    })
 }
 
 /// Send a notification via PerryBridge.
 pub fn notification_send(title_ptr: *const u8, body_ptr: *const u8) {
     let title = unsafe { str_from_header(title_ptr) };
     let body = unsafe { str_from_header(body_ptr) };
-    let mut env = jni_bridge::get_env();
-    let _ = env.push_local_frame(16);
+    jni_bridge::with_env(|env| {
+        let _ = jni_bridge::push_local_frame(env, 16);
 
-    let activity = crate::widgets::get_activity(&mut env);
-    let bridge_class =
-        jni_bridge::with_cache(|c| env.new_local_ref(c.perry_bridge_class.as_obj()).unwrap());
+        let activity = crate::widgets::get_activity(env);
+        let bridge_class =
+            jni_bridge::with_cache(|c| env.new_local_ref(&c.perry_bridge_class).unwrap());
 
-    let jtitle = env.new_string(title).expect("title string");
-    let jbody = env.new_string(body).expect("body string");
+        let jtitle = env.new_string(title).expect("title string");
+        let jbody = env.new_string(body).expect("body string");
 
-    let bridge_cls: &jni::objects::JClass = (&bridge_class).into();
-    let _ = env.call_static_method(
-        bridge_cls,
-        "sendNotification",
-        "(Landroid/app/Activity;Ljava/lang/String;Ljava/lang/String;)V",
-        &[
-            JValue::Object(&activity),
-            JValue::Object(&jtitle),
-            JValue::Object(&jbody),
-        ],
-    );
+        let bridge_cls: &jni::objects::JClass = &bridge_class;
+        let _ = env.call_static_method(
+            bridge_cls,
+            jni::jni_str!("sendNotification"),
+            jni::jni_sig!("(Landroid/app/Activity;Ljava/lang/String;Ljava/lang/String;)V"),
+            &[
+                JValue::Object(&activity),
+                JValue::Object(&jtitle),
+                JValue::Object(&jbody),
+            ],
+        );
 
-    unsafe {
-        env.pop_local_frame(&jni::objects::JObject::null());
-    }
+        unsafe {
+            let _ = jni_bridge::pop_local_frame(env, &jni::objects::JObject::null());
+        }
+    })
 }
