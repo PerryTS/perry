@@ -1616,21 +1616,7 @@ pub extern "C" fn js_string_split_regex_n(
         let parts: Vec<Option<String>> = if let Some(repeat_matcher) = lookup_repeat_matcher(re) {
             repeat_matcher.split(&str_data, limit)
         } else if let Some(fre) = lookup_fancy_regex(re) {
-            // Fancy-regex fallback (lookbehind/backreferences): `fancy_regex` has
-            // no `split`, so walk non-overlapping matches and slice between them.
-            // (Captured-group splicing is not reproduced for this engine.)
-            let mut v: Vec<Option<String>> = Vec::new();
-            let mut last = 0usize;
-            let mut iter = fre.find_iter(&str_data);
-            while let Some(Ok(m)) = iter.next() {
-                v.push(Some(str_data[last..m.start()].to_string()));
-                last = m.end();
-            }
-            v.push(Some(str_data[last..].to_string()));
-            if limit > 0 && (v.len() as i64) > (limit as i64) {
-                v.truncate(limit as usize);
-            }
-            v
+            crate::string::spec_fancy_regex_split(&fre, &str_data, limit)
         } else {
             // Standard engine: the JS `RegExp.prototype[Symbol.split]` algorithm
             // (21.2.5.11). The `regex` crate's own `split` diverges from JS for

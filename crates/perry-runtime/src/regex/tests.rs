@@ -219,15 +219,40 @@ fn fancy_lookbehind_search() {
 
 #[test]
 fn fancy_lookbehind_split() {
-    // Zero-width lookbehind split: "a1b2c3" → ["a1","b2","c3",""].
+    // RegExp.prototype[@@split] never visits q == size, so a zero-width match
+    // at the end does not open a trailing empty chunk.
     let re = js_regexp_new(make_string(r"(?<=\d)"), make_string(""));
     let arr = js_string_split_regex(make_string("a1b2c3"), re);
     unsafe {
-        assert_eq!((*arr).length, 4);
-        let first = crate::array::js_array_get_f64(arr, 0);
-        let sp = crate::value::js_get_string_pointer_unified(first) as *const StringHeader;
-        assert_eq!(string_as_str(sp), "a1");
+        assert_eq!((*arr).length, 3);
     }
+    assert_eq!(
+        (0..3)
+            .map(|index| match_capture_text(arr, index))
+            .collect::<Vec<_>>(),
+        vec![
+            Some("a1".to_string()),
+            Some("b2".to_string()),
+            Some("c3".to_string()),
+        ]
+    );
+
+    // Separator captures are interleaved into the result.
+    let re = js_regexp_new(make_string(r"((?<=a)X)"), make_string(""));
+    let arr = js_string_split_regex(make_string("aXbXc"), re);
+    unsafe {
+        assert_eq!((*arr).length, 3);
+    }
+    assert_eq!(
+        (0..3)
+            .map(|index| match_capture_text(arr, index))
+            .collect::<Vec<_>>(),
+        vec![
+            Some("a".to_string()),
+            Some("X".to_string()),
+            Some("bXc".to_string()),
+        ]
+    );
 }
 
 #[test]

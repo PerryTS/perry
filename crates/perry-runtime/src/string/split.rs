@@ -100,6 +100,81 @@ pub(crate) fn spec_regex_split(regex: &regex::Regex, s: &str, limit: i32) -> Vec
     out
 }
 
+/// Fancy-regex implementation of the same `RegExp.prototype[Symbol.split]`
+/// cursor algorithm as [`spec_regex_split`]. A plain `find_iter` is not enough:
+/// the spec performs a sticky probe at each `q`, never probes `q == size`, and
+/// splices every separator capture into the result. `captures_from_pos` keeps
+/// the complete haystack visible to lookbehind while starting the search at
+/// the spec cursor (#9429/#9438).
+#[cfg(feature = "regex-engine")]
+pub(crate) fn spec_fancy_regex_split(
+    regex: &fancy_regex::Regex,
+    s: &str,
+    limit: i32,
+) -> Vec<Option<String>> {
+    let mut out: Vec<Option<String>> = Vec::new();
+    let unbounded = limit < 0;
+    let push = |out: &mut Vec<Option<String>>, value: Option<String>| -> bool {
+        out.push(value);
+        !unbounded && out.len() as i32 >= limit
+    };
+    if limit == 0 {
+        return out;
+    }
+
+    let size = s.len();
+    if size == 0 {
+        // Empty subject: `[""]` unless the pattern itself matches empty.
+        if !matches!(regex.captures_from_pos(s, 0), Ok(Some(_))) {
+            out.push(Some(String::new()));
+        }
+        return out;
+    }
+
+    let mut p = 0usize;
+    let mut q = 0usize;
+    while q < size {
+        let captures = match regex.captures_from_pos(s, q) {
+            Ok(Some(captures)) => captures,
+            Ok(None) | Err(_) => break,
+        };
+        let Some(full) = captures.get(0) else {
+            break;
+        };
+        if full.start() != q {
+            // Sticky probing found the next possible match to the right. No
+            // match exists between q and that position, so jump to it.
+            q = full.start();
+            continue;
+        }
+
+        let e = full.end().min(size);
+        if e == p {
+            // A zero-width match at the pending segment's start is skipped.
+            q = next_char_boundary(s, q);
+            continue;
+        }
+        if push(&mut out, Some(s[p..q].to_string())) {
+            return out;
+        }
+        for index in 1..captures.len() {
+            let group = captures
+                .get(index)
+                .map(|matched| matched.as_str().to_string());
+            if push(&mut out, group) {
+                return out;
+            }
+        }
+        p = e;
+        q = p;
+    }
+
+    if unbounded || (out.len() as i32) < limit {
+        out.push(Some(s[p..size].to_string()));
+    }
+    out
+}
+
 /// Split a string by a delimiter
 /// Returns an array of string pointers (stored as f64 bit patterns)
 #[no_mangle]
