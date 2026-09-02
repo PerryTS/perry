@@ -292,11 +292,26 @@ pub extern "C" fn js_readline_process_pending() -> i32 {
         .map(|cb| callback_scope.root_raw_const_ptr(*cb as *const ClosureHeader))
         .collect();
     for chunk in chunks {
-        for callback in &data_callback_handles {
-            let arg = stdin_chunk_value(&chunk);
-            let closure = callback.get_raw_const_ptr::<ClosureHeader>();
-            js_closure_call1(closure, arg);
-            fired += 1;
+        // #9490: decode ONCE per chunk, above the listener loop. The UTF-8
+        // decoder is stateful; decoding per listener fed the same bytes
+        // through it once per registered callback. `None` = the chunk was
+        // absorbed whole into a held partial (a code point split across this
+        // read boundary), for which Node emits no `'data'` event.
+        let data_arg = if data_callback_handles.is_empty() {
+            None
+        } else {
+            stdin_chunk_value(&chunk)
+        };
+        if let Some(arg) = data_arg {
+            // Root the decoded value: a GC inside one listener can move the
+            // string the remaining listeners still have to receive.
+            let arg_scope = perry_runtime::gc::RuntimeHandleScope::new();
+            let arg_handle = arg_scope.root_nanbox_f64(arg);
+            for callback in &data_callback_handles {
+                let closure = callback.get_raw_const_ptr::<ClosureHeader>();
+                js_closure_call1(closure, arg_handle.get_nanbox_f64());
+                fired += 1;
+            }
         }
         if keypress_callback_handles.is_empty() {
             continue;
@@ -356,6 +371,32 @@ pub extern "C" fn js_readline_process_pending() -> i32 {
             was
         });
         if !already {
+            // #9490: flush the stream decoder first — a sequence left
+            // incomplete at EOF is one final `'data'` chunk of U+FFFD, ahead
+            // of `'end'`/`'close'`.
+            // Only when a `data` listener exists to receive it: in pull mode
+            // the flush belongs to the consumer's last `read()`, and taking
+            // it here would consume the state and drop the replacement.
+            let flush_targets = DATA_CALLBACKS.lock().map(|v| v.clone()).unwrap_or_default();
+            if let Some(flushed) = if flush_targets.is_empty() {
+                None
+            } else {
+                perry_runtime::os::stdin_encoding_flush_jsvalue()
+            } {
+                let flush_scope = perry_runtime::gc::RuntimeHandleScope::new();
+                let flush_handles: Vec<_> = flush_targets
+                    .iter()
+                    .map(|cb| flush_scope.root_raw_const_ptr(*cb as *const ClosureHeader))
+                    .collect();
+                // Root the flushed string too, and re-read it per call: a GC
+                // inside one listener can move it out from under the next.
+                let arg_handle = flush_scope.root_nanbox_f64(flushed);
+                for callback in &flush_handles {
+                    let closure = callback.get_raw_const_ptr::<ClosureHeader>();
+                    js_closure_call1(closure, arg_handle.get_nanbox_f64());
+                    fired += 1;
+                }
+            }
             let cb = CLOSE_CALLBACK.with(|c| c.borrow_mut().take());
             if let Some(cb_i64) = cb {
                 let closure = cb_i64 as *const ClosureHeader;

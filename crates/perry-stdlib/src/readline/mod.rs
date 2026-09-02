@@ -450,10 +450,12 @@ extern "C" fn stdin_off_op(name_ptr: *const u8, name_len: usize, cb: i64) {
     }
 }
 
-/// A `data` chunk as Node would deliver it: a Buffer by default, a string once an
-/// encoding has been set with `setEncoding`.
-fn stdin_chunk_value(chunk: &[u8]) -> f64 {
-    perry_runtime::os::stdin_chunk_jsvalue(chunk)
+/// A `data` chunk as Node would deliver it: a Buffer by default, a decoded
+/// string once an encoding has been set with `setEncoding`. `None` means the
+/// chunk was absorbed into the UTF-8 decoder's held partial and Node would
+/// fire no `'data'` event for it (#9490).
+fn stdin_chunk_value(chunk: &[u8]) -> Option<f64> {
+    perry_runtime::os::stdin_chunk_jsvalue_opt(chunk)
 }
 
 fn try_register_pump() {

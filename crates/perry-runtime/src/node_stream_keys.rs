@@ -204,6 +204,11 @@ pub(super) fn hidden_readable_base64_remainder_key() -> *mut crate::string::Stri
 }
 
 #[inline]
+pub(super) fn hidden_readable_utf8_remainder_key() -> *mut crate::string::StringHeader {
+    hidden_key(READABLE_UTF8_REMAINDER_KEY)
+}
+
+#[inline]
 pub(super) fn hidden_stream_pipe_no_end_key() -> *mut crate::string::StringHeader {
     hidden_key(STREAM_PIPE_NO_END_KEY)
 }

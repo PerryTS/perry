@@ -328,12 +328,76 @@ pub fn stdin_has_encoding() -> bool {
     STDIN_ENCODING.lock().map(|e| e.is_some()).unwrap_or(false)
 }
 
+/// Incremental UTF-8 decode state for `process.stdin`, live once
+/// `setEncoding` has been called (#9490).
+///
+/// `process.stdin` is a process-global stream, so one decoder serves both
+/// delivery paths (the runtime's own pump and perry-stdlib's readline pump)
+/// and `read()`. Only one of those is ever active for a given program, and
+/// sharing the state is what lets a code point split across a chunk boundary
+/// survive whichever path picks the halves up.
+static STDIN_DECODER: std::sync::Mutex<crate::utf8_stream_decoder::Utf8StreamDecoder> =
+    std::sync::Mutex::new(crate::utf8_stream_decoder::Utf8StreamDecoder::new());
+
+/// Decode raw stdin bytes under the active `setEncoding`, holding back a
+/// trailing incomplete sequence for the next chunk. Returns `None` when the
+/// whole chunk was absorbed into the held partial — Node emits no `'data'`
+/// event for that.
+fn stdin_decode_encoded(chunk: &[u8]) -> Option<String> {
+    let decoded = match STDIN_DECODER.lock() {
+        Ok(mut d) => d.write(chunk),
+        // A poisoned decoder must not silently drop input; fall back to the
+        // one-shot lossy decode, which is correct except across a boundary.
+        Err(_) => String::from_utf8_lossy(chunk).into_owned(),
+    };
+    if decoded.is_empty() {
+        None
+    } else {
+        Some(decoded)
+    }
+}
+
+fn string_jsvalue(s: &str) -> f64 {
+    let sh = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+    f64::from_bits(crate::value::JSValue::string_ptr(sh).bits())
+}
+
+/// End-of-stream flush: a held incomplete sequence becomes one U+FFFD,
+/// delivered as its own final `'data'` chunk before `'end'` (Node's
+/// `StringDecoder.prototype.end`, and how Node's Readable emits it).
+pub fn stdin_encoding_flush_jsvalue() -> Option<f64> {
+    if !stdin_has_encoding() {
+        return None;
+    }
+    let flushed = STDIN_DECODER.lock().ok()?.end(None);
+    if flushed.is_empty() {
+        return None;
+    }
+    Some(string_jsvalue(&flushed))
+}
+
+/// A `data` chunk as Node delivers it: a Buffer by default, a decoded string
+/// once an encoding is set. `None` means "emit no event for this chunk" —
+/// the bytes were absorbed into the decoder's held partial.
+pub fn stdin_chunk_jsvalue_opt(chunk: &[u8]) -> Option<f64> {
+    if stdin_has_encoding() {
+        return stdin_decode_encoded(chunk).map(|s| string_jsvalue(&s));
+    }
+    Some(stdin_chunk_jsvalue(chunk))
+}
+
 /// A `data` chunk as Node delivers it: a Buffer by default, a string once an
 /// encoding is set.
+///
+/// #9490: the encoded arm used to hand the raw bytes to
+/// `js_string_from_bytes`, which validates nothing — it memcpy's them into
+/// the string payload and counts UTF-16 units with a WTF-8-shaped walk. Bytes
+/// 0..255 therefore came out as 158 code units with zero U+FFFD, high bytes
+/// passed through raw, where Node yields 256 units and 128 replacements.
 pub fn stdin_chunk_jsvalue(chunk: &[u8]) -> f64 {
     if stdin_has_encoding() {
-        let s = crate::string::js_string_from_bytes(chunk.as_ptr(), chunk.len() as u32);
-        return f64::from_bits(crate::value::JSValue::string_ptr(s).bits());
+        let decoded = stdin_decode_encoded(chunk).unwrap_or_default();
+        return string_jsvalue(&decoded);
     }
     let buf = crate::buffer::buffer_alloc(chunk.len() as u32);
     unsafe {
@@ -722,9 +786,23 @@ extern "C" fn process_stdin_read(_closure: *const crate::closure::ClosureHeader,
         Err(_) => return f64::from_bits(crate::value::TAG_NULL),
     };
     if bytes.is_empty() {
+        // EOF with an incomplete sequence still held: Node's last `read()`
+        // yields the decoder's flush rather than `null` (#9490).
+        if STDIN_EOF_SEEN.load(std::sync::atomic::Ordering::Acquire) {
+            if let Some(flushed) = stdin_encoding_flush_jsvalue() {
+                return flushed;
+            }
+        }
         return f64::from_bits(crate::value::TAG_NULL);
     }
-    let s = String::from_utf8_lossy(&bytes);
+    // #9490: pull mode ("readable" + read()) shares the stream decoder, so a
+    // code point split across two reads is reassembled instead of becoming
+    // two replacement characters.
+    let s = if stdin_has_encoding() {
+        stdin_decode_encoded(&bytes).unwrap_or_default()
+    } else {
+        String::from_utf8_lossy(&bytes).into_owned()
+    };
     let sh = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
     // Nanbox as a STRING value (not a generic object pointer) so JS sees a
     // real string from `read()` — `typeof` / `+` / `!== null` all rely on this.
@@ -782,18 +860,29 @@ fn pump_stdin_data_chunks() {
             return;
         }
         let this = stdin_this_value();
+        // #9490: decode ONCE per chunk. The UTF-8 decoder carries state
+        // across chunks, so decoding per listener would push the same bytes
+        // through it N times and give the second listener a continuation of
+        // the first one's leftovers. `None` = the chunk was absorbed whole
+        // into a held partial, for which Node fires no `'data'` event.
+        let Some(arg) = stdin_chunk_jsvalue_opt(&bytes) else {
+            return;
+        };
+        // The value is built ONCE now, so it must survive every listener call:
+        // a GC inside listener N can move the string listener N+1 still has to
+        // receive, and a bare `f64` local would then be stale. Root it in a
+        // scope that outlives the loop and re-read the handle each iteration.
+        // (Before #9490 this was safe by accident — the arg was rebuilt inside
+        // the loop, which a stateful decoder can no longer do.)
+        let arg_scope = crate::gc::RuntimeHandleScope::new();
+        let arg_handle = arg_scope.root_nanbox_f64(arg);
         for cb in data_listeners {
             let scope = crate::gc::RuntimeHandleScope::new();
             let cb_handle = scope.root_raw_const_ptr(cb as *const crate::closure::ClosureHeader);
-            // Allocate the arg string inside the scope so GC during the call
-            // can't free or move it out from under the callback.
-            let arg = stdin_chunk_jsvalue(&bytes);
-            let arg_handles = scope.root_nanbox_f64_slice(&[arg]);
-            let a = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
             let closure = cb_handle.get_raw_const_ptr::<crate::closure::ClosureHeader>();
             // Node calls stream listeners with `this === stream`.
             let prev_this = crate::object::js_implicit_this_set(this);
-            crate::closure::js_closure_call1(closure, a[0]);
+            crate::closure::js_closure_call1(closure, arg_handle.get_nanbox_f64());
             crate::object::js_implicit_this_set(prev_this);
         }
         return;
@@ -833,6 +922,36 @@ fn maybe_fire_stdin_end() {
     let has_bytes = STDIN_BUFFER.lock().map(|b| !b.is_empty()).unwrap_or(false);
     if has_bytes {
         return;
+    }
+    // #9490: a sequence left incomplete at EOF is flushed as one U+FFFD, in
+    // its own final `'data'` event, BEFORE `'end'`.
+    //
+    // Only when a `data` listener exists to receive it: in pull mode the
+    // flush belongs to the consumer's last `read()`, and taking it here would
+    // consume the decoder state and drop the replacement character.
+    let has_data_listener = STDIN_DATA_LISTENERS
+        .lock()
+        .map(|l| !l.is_empty())
+        .unwrap_or(false);
+    if has_data_listener {
+        if let Some(flushed) = stdin_encoding_flush_jsvalue() {
+            let data_listeners: Vec<i64> = STDIN_DATA_LISTENERS
+                .lock()
+                .map(|l| l.clone())
+                .unwrap_or_default();
+            let this = stdin_this_value();
+            let flush_scope = crate::gc::RuntimeHandleScope::new();
+            let flush_handle = flush_scope.root_nanbox_f64(flushed);
+            for cb in data_listeners {
+                let scope = crate::gc::RuntimeHandleScope::new();
+                let cb_handle =
+                    scope.root_raw_const_ptr(cb as *const crate::closure::ClosureHeader);
+                let closure = cb_handle.get_raw_const_ptr::<crate::closure::ClosureHeader>();
+                let prev_this = crate::object::js_implicit_this_set(this);
+                crate::closure::js_closure_call1(closure, flush_handle.get_nanbox_f64());
+                crate::object::js_implicit_this_set(prev_this);
+            }
+        }
     }
     let mut end_listeners: Vec<i64> = STDIN_END_LISTENERS
         .lock()

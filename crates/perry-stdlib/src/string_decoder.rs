@@ -49,16 +49,11 @@ pub enum DecodingMode {
 /// Each mode only touches its own fields, so they don't interact.
 pub struct StringDecoderHandle {
     mode: DecodingMode,
-    /// UTF-8: number of bytes still needed to complete the current code
-    /// point (0 when no partial point is buffered).
-    last_need: u8,
-    /// UTF-8: total byte length of the in-progress code point (2, 3, or 4).
-    last_total: u8,
-    /// UTF-8: up to 4 bytes of partial code point captured from prior writes.
-    last_char: [u8; 4],
-    /// UTF-8: how many bytes of `last_char` are valid (= last_total -
-    /// last_need at the time the partial was captured; never larger than 4).
-    last_char_len: u8,
+    /// UTF-8: the incremental decode core, shared with every stream that
+    /// honours `setEncoding("utf8")` (#9490). It owns `lastNeed` /
+    /// `lastTotal` / `lastChar`, which this module still exposes verbatim as
+    /// `StringDecoder` properties.
+    utf8: perry_runtime::utf8_stream_decoder::Utf8StreamDecoder,
     /// UTF-16LE: at most 1 trailing byte buffered for the next write.
     /// `Some(b)` means an odd-length write ended with `b` as the low byte
     /// of an unfinished code unit. `None` means clean state.
@@ -87,10 +82,7 @@ impl StringDecoderHandle {
     pub fn with_mode(mode: DecodingMode) -> Self {
         StringDecoderHandle {
             mode,
-            last_need: 0,
-            last_total: 0,
-            last_char: [0; 4],
-            last_char_len: 0,
+            utf8: perry_runtime::utf8_stream_decoder::Utf8StreamDecoder::new(),
             utf16_partial: None,
             base64_partial: Vec::new(),
             utf16_high_surrogate: None,
@@ -447,151 +439,6 @@ unsafe fn string_from_nanboxed_for_error(bits: i64) -> String {
         return format!("{}", f);
     }
     "unknown".to_string()
-}
-
-/// Detect a multi-byte UTF-8 lead in the final 0–3 bytes of `buf`.
-/// Returns the number of bytes that should be buffered for the next
-/// write (so they aren't returned as garbled output). Mirrors the
-/// `utf8CheckIncomplete` function in Node's `lib/string_decoder.js`.
-fn utf8_check_incomplete(state: &mut StringDecoderHandle, buf: &[u8]) -> usize {
-    let mut i = buf.len();
-    // Walk back from the end of the buffer up to 3 bytes — the longest
-    // UTF-8 lead sequence the trailing bytes could need to wait for.
-    let walk = if buf.len() >= 3 { 3 } else { buf.len() };
-    let mut steps = 0usize;
-    while steps < walk {
-        i -= 1;
-        steps += 1;
-        let b = buf[i];
-        // Continuation byte 10xxxxxx — keep walking.
-        if (b & 0xC0) == 0x80 {
-            continue;
-        }
-        // 4-byte lead 11110xxx.
-        if (b & 0xF8) == 0xF0 {
-            // We've already walked `steps - 1` continuation bytes plus
-            // this lead; we need 4 total, so we still need
-            // `4 - steps` bytes.
-            if steps < 4 {
-                state.last_need = (4 - steps) as u8;
-                state.last_total = 4;
-                let start = buf.len() - steps;
-                state.last_char_len = steps as u8;
-                state.last_char[..steps].copy_from_slice(&buf[start..]);
-                return steps;
-            }
-            return 0;
-        }
-        // 3-byte lead 1110xxxx.
-        if (b & 0xF0) == 0xE0 {
-            if steps < 3 {
-                state.last_need = (3 - steps) as u8;
-                state.last_total = 3;
-                let start = buf.len() - steps;
-                state.last_char_len = steps as u8;
-                state.last_char[..steps].copy_from_slice(&buf[start..]);
-                return steps;
-            }
-            return 0;
-        }
-        // 2-byte lead 110xxxxx.
-        if (b & 0xE0) == 0xC0 {
-            if steps < 2 {
-                state.last_need = (2 - steps) as u8;
-                state.last_total = 2;
-                let start = buf.len() - steps;
-                state.last_char_len = steps as u8;
-                state.last_char[..steps].copy_from_slice(&buf[start..]);
-                return steps;
-            }
-            return 0;
-        }
-        // ASCII byte 0xxxxxxx — nothing to buffer.
-        return 0;
-    }
-    0
-}
-
-/// Decode `bytes` against the existing partial-codepoint state, mutating
-/// `state` to reflect any new trailing partial. Returns the decoded
-/// string. UTF-8 invalid sequences are replaced with U+FFFD, matching
-/// Node's `lossy` UTF-8 decoder behavior.
-fn write_utf8(state: &mut StringDecoderHandle, bytes: &[u8]) -> String {
-    let mut out = String::new();
-
-    // Stitch the buffered partial together with the new input first.
-    if state.last_need > 0 {
-        let need = state.last_need as usize;
-        if bytes.len() < need {
-            // Still incomplete — append what we can and exit empty.
-            let new_len = state.last_char_len as usize + bytes.len();
-            if new_len <= 4 {
-                state.last_char[state.last_char_len as usize..new_len].copy_from_slice(bytes);
-                state.last_char_len = new_len as u8;
-                state.last_need -= bytes.len() as u8;
-            } else {
-                // Defensive: should never happen given UTF-8 is at most 4
-                // bytes, but if upstream feeds garbage we reset rather
-                // than overrun.
-                state.last_need = 0;
-                state.last_total = 0;
-                state.last_char_len = 0;
-            }
-            return out;
-        }
-
-        // We have enough new bytes to complete the buffered point.
-        let total = state.last_total as usize;
-        let buffered = state.last_char_len as usize;
-        let take_new = total - buffered;
-        let mut cp = Vec::with_capacity(total);
-        cp.extend_from_slice(&state.last_char[..buffered]);
-        cp.extend_from_slice(&bytes[..take_new]);
-
-        match std::str::from_utf8(&cp) {
-            Ok(s) => out.push_str(s),
-            Err(_) => out.push('\u{FFFD}'),
-        }
-        state.last_need = 0;
-        state.last_total = 0;
-        state.last_char_len = 0;
-
-        // The "rest" continues below — chop off the consumed prefix.
-        let rest = &bytes[take_new..];
-        // Recurse on the tail so trailing partials get caught.
-        out.push_str(&write_utf8_tail(state, rest));
-        return out;
-    }
-
-    out.push_str(&write_utf8_tail(state, bytes));
-    out
-}
-
-/// Tail half of `write_utf8`: assumes `state.last_need == 0` on entry.
-/// Splits a trailing incomplete code point off into `state`.
-fn write_utf8_tail(state: &mut StringDecoderHandle, bytes: &[u8]) -> String {
-    if bytes.is_empty() {
-        return String::new();
-    }
-    let trail = utf8_check_incomplete(state, bytes);
-    let head = &bytes[..bytes.len() - trail];
-    String::from_utf8_lossy(head).into_owned()
-}
-
-/// `decoder.end([buf?])` — flush any incomplete state as U+FFFD, matching
-/// Node's behavior.
-fn end_utf8(state: &mut StringDecoderHandle, bytes: Option<&[u8]>) -> String {
-    let mut out = match bytes {
-        Some(b) => write_utf8(state, b),
-        None => String::new(),
-    };
-    if state.last_need > 0 {
-        out.push('\u{FFFD}');
-        state.last_need = 0;
-        state.last_total = 0;
-        state.last_char_len = 0;
-    }
-    out
 }
 
 /// UTF-16LE write: pair bytes as little-endian u16 code units. The last
@@ -965,7 +812,7 @@ pub unsafe fn dispatch_string_decoder(handle: i64, method: &str, args: &[f64]) -
                 }
                 _ => {
                     let s = match h.mode {
-                        DecodingMode::Utf8 => write_utf8(h, &bytes),
+                        DecodingMode::Utf8 => h.utf8.write(&bytes),
                         DecodingMode::Base64 | DecodingMode::Base64Url => write_base64(h, &bytes),
                         DecodingMode::Hex => write_hex(h, &bytes),
                         DecodingMode::Latin1 => write_latin1(h, &bytes),
@@ -998,7 +845,7 @@ pub unsafe fn dispatch_string_decoder(handle: i64, method: &str, args: &[f64]) -
                 }
                 _ => {
                     let s = match h.mode {
-                        DecodingMode::Utf8 => end_utf8(h, bytes_ref),
+                        DecodingMode::Utf8 => h.utf8.end(bytes_ref),
                         DecodingMode::Base64 => end_base64(h, bytes_ref, true),
                         DecodingMode::Base64Url => end_base64(h, bytes_ref, false),
                         // Hex / Latin1 / Ascii have no carry-over state — `end`
@@ -1050,8 +897,8 @@ pub unsafe fn dispatch_string_decoder_property(handle: i64, property: &str) -> f
     };
 
     match property {
-        "lastNeed" => f64::from(h.last_need as i32),
-        "lastTotal" => f64::from(h.last_total as i32),
+        "lastNeed" => f64::from(h.utf8.last_need as i32),
+        "lastTotal" => f64::from(h.utf8.last_total as i32),
         "lastChar" => {
             let buf = perry_runtime::buffer::buffer_alloc(4);
             if buf.is_null() {
@@ -1059,7 +906,7 @@ pub unsafe fn dispatch_string_decoder_property(handle: i64, property: &str) -> f
             }
             (*buf).length = 4;
             let dst = perry_runtime::buffer::buffer_data_mut(buf);
-            std::ptr::copy_nonoverlapping(h.last_char.as_ptr(), dst, 4);
+            std::ptr::copy_nonoverlapping(h.utf8.last_char.as_ptr(), dst, 4);
             f64::from_bits(0x7FFD_0000_0000_0000u64 | ((buf as u64) & 0x0000_FFFF_FFFF_FFFF))
         }
         "encoding" => {
@@ -1099,43 +946,6 @@ pub unsafe fn dispatch_string_decoder_property(handle: i64, property: &str) -> f
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn split_euro_sign() {
-        // U+20AC EURO SIGN = E2 82 AC in UTF-8.
-        let mut s = StringDecoderHandle::new();
-        let a = write_utf8(&mut s, &[0xE2, 0x82]);
-        assert_eq!(a, "");
-        assert_eq!(s.last_need, 1);
-        assert_eq!(s.last_total, 3);
-        let b = write_utf8(&mut s, &[0xAC]);
-        assert_eq!(b, "\u{20AC}");
-        assert_eq!(s.last_need, 0);
-    }
-
-    #[test]
-    fn split_emoji() {
-        // U+1F600 GRINNING FACE = F0 9F 98 80 in UTF-8 (4 bytes).
-        let mut s = StringDecoderHandle::new();
-        assert_eq!(write_utf8(&mut s, &[0xF0, 0x9F]), "");
-        assert_eq!(write_utf8(&mut s, &[0x98]), "");
-        assert_eq!(write_utf8(&mut s, &[0x80]), "\u{1F600}");
-    }
-
-    #[test]
-    fn end_flushes_partial_as_replacement() {
-        let mut s = StringDecoderHandle::new();
-        write_utf8(&mut s, &[0xE2, 0x82]);
-        let final_str = end_utf8(&mut s, None);
-        assert_eq!(final_str, "\u{FFFD}");
-    }
-
-    #[test]
-    fn complete_codepoint_round_trip() {
-        let mut s = StringDecoderHandle::new();
-        assert_eq!(write_utf8(&mut s, "hello".as_bytes()), "hello");
-        assert_eq!(s.last_need, 0);
-    }
 
     #[test]
     fn utf16le_end_emits_lone_high_surrogate_as_wtf8() {

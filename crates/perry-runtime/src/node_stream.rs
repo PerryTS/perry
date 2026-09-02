@@ -135,6 +135,9 @@ const READABLE_PENDING_KEY: &[u8] = b"__perryReadablePending";
 const READABLE_RESUME_SCHEDULED_KEY: &[u8] = b"__perryReadableResumeScheduled";
 const STREAM_PIPES_KEY: &[u8] = b"__perryStreamPipes";
 const READABLE_BASE64_REMAINDER_KEY: &[u8] = b"__perryReadableBase64Remainder";
+/// #9490: the incomplete trailing UTF-8 sequence held between `push()` calls
+/// on a `setEncoding("utf8")` readable, mirroring the base64 remainder above.
+const READABLE_UTF8_REMAINDER_KEY: &[u8] = b"__perryReadableUtf8Remainder";
 const STREAM_PIPE_NO_END_KEY: &[u8] = b"__perryStreamPipeNoEnd";
 const STREAM_PIPE_END_PENDING_KEY: &[u8] = b"__perryStreamPipeEndPending";
 const STREAM_AUTO_DESTROY_KEY: &[u8] = b"__perryStreamAutoDestroy";
@@ -583,7 +586,31 @@ fn decode_readable_chunk_for_encoding(stream: f64, chunk: f64) -> Option<f64> {
     if encoding == 2 {
         return decode_readable_base64_chunk(stream, raw);
     }
+    if encoding == 0 {
+        return decode_readable_utf8_chunk(stream, raw);
+    }
     Some(buffer_chunk_to_encoded_string(raw, encoding))
+}
+
+/// UTF-8 with carry-over (#9490). `buffer_chunk_to_encoded_string` decodes
+/// each chunk on its own, so a code point straddling two `push()` calls came
+/// out as replacement characters. Hold the incomplete tail in a per-stream
+/// hidden field — the same shape the base64 arm above already uses — and
+/// re-prefix it onto the next chunk.
+fn decode_readable_utf8_chunk(stream: f64, raw: usize) -> Option<f64> {
+    let mut bytes = readable_utf8_remainder_bytes(stream);
+    append_buffer_bytes(raw, &mut bytes);
+    let mut decoder = crate::utf8_stream_decoder::Utf8StreamDecoder::new();
+    // Feeding remainder+chunk to a fresh decoder is equivalent to feeding the
+    // chunk to a decoder that already held the remainder: the held bytes are
+    // by construction the prefix of an incomplete sequence.
+    let text = decoder.write(&bytes);
+    set_readable_utf8_remainder_bytes(stream, decoder.pending_bytes());
+    if text.is_empty() {
+        // Whole chunk absorbed into the partial — Node emits no chunk here.
+        return None;
+    }
+    Some(string_value_from_str(&text))
 }
 
 fn decode_readable_base64_chunk(stream: f64, raw: usize) -> Option<f64> {
@@ -598,6 +625,21 @@ fn decode_readable_base64_chunk(stream: f64, raw: usize) -> Option<f64> {
 }
 
 fn flush_readable_decoder(stream: f64) {
+    if readable_encoding_tag(stream) == Some(0) {
+        // #9490: an incomplete UTF-8 sequence at end-of-stream flushes as a
+        // single U+FFFD, in its own final chunk.
+        let held = readable_utf8_remainder_bytes(stream);
+        set_readable_utf8_remainder_bytes(stream, &[]);
+        if !held.is_empty() {
+            let mut decoder = crate::utf8_stream_decoder::Utf8StreamDecoder::new();
+            let mut flushed = decoder.write(&held);
+            flushed.push_str(&decoder.end(None));
+            if !flushed.is_empty() {
+                append_readable_output_chunk(stream, string_value_from_str(&flushed));
+            }
+        }
+        return;
+    }
     if readable_encoding_tag(stream) != Some(2) {
         return;
     }
@@ -606,6 +648,28 @@ fn flush_readable_decoder(stream: f64) {
     if !bytes.is_empty() {
         append_readable_output_chunk(stream, encoded_string_from_bytes(&bytes, 2));
     }
+}
+
+fn string_value_from_str(text: &str) -> f64 {
+    let ptr = crate::string::js_string_from_bytes(text.as_ptr(), text.len() as u32);
+    f64::from_bits(JSValue::string_ptr(ptr).bits())
+}
+
+fn readable_utf8_remainder_bytes(stream: f64) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    if let Some(value) = get_hidden_value(stream, hidden_readable_utf8_remainder_key()) {
+        append_buffer_bytes(raw_ptr_from_value(value), &mut bytes);
+    }
+    bytes
+}
+
+fn set_readable_utf8_remainder_bytes(stream: f64, bytes: &[u8]) {
+    let value = if bytes.is_empty() {
+        f64::from_bits(TAG_UNDEFINED)
+    } else {
+        buffer_value_from_bytes(bytes)
+    };
+    set_hidden_value(stream, hidden_readable_utf8_remainder_key(), value);
 }
 
 fn readable_base64_remainder_bytes(stream: f64) -> Vec<u8> {
