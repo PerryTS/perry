@@ -16,8 +16,13 @@ use super::{make_utc_ms, time_clip, timestamp_to_local_components};
 /// accepts:
 ///   - ISO 8601: "YYYY", "YYYY-MM", "YYYY-MM-DD", with optional
 ///     "THH:MM[:SS[.sss]]" and an optional "Z" / "+HH:MM" / "-HH:MM" offset.
-///     Date-only forms are UTC; date-time forms without an offset are also
-///     treated as UTC (matching V8's ISO handling).
+///     ECMA-262 §21.4.3.2 splits the default zone on whether a TIME is
+///     present: a date-ONLY form with no offset is UTC, a date-TIME form
+///     with no offset is LOCAL wall-clock time. An explicit designator wins
+///     in both. (#9449: this comment previously claimed date-time forms
+///     were "also treated as UTC (matching V8's ISO handling)" and the code
+///     did that — wrong against both node and the spec, and the reason the
+///     behaviour looked deliberate.)
 ///   - "YYYY-MM-DD HH:MM:SS" (space separator, MySQL form).
 ///   - RFC-1123 / IETF: "Thu, 01 Jan 1970 00:00:00 GMT",
 ///     "01 Jan 1970 00:00:00 GMT" (with optional weekday and optional
@@ -78,6 +83,18 @@ fn parse_tz_offset(rest: &str) -> Option<i64> {
     let h: i64 = hh.parse().ok()?;
     let m: i64 = mm.parse().ok()?;
     Some(sign * (h * 60 + m))
+}
+
+/// Reinterpret an instant that was composed with `make_utc_ms` from
+/// wall-clock components as LOCAL time: subtract the host's UTC offset in
+/// effect at that instant. Shared by every grammar here that yields
+/// wall-clock components with no zone designator — the ISO date-TIME form
+/// (#9449), the RFC / month-name form and the numeric slash form (#9414).
+/// Mirrors the conversion in `js_date_new_local_components`.
+fn local_wall_clock_to_utc(base: f64) -> f64 {
+    let secs = (base as i64).div_euclid(1000);
+    let (_, _, _, _, _, _, tz_offset) = timestamp_to_local_components(secs);
+    base - (tz_offset * 1000) as f64
 }
 
 /// ISO 8601 / MySQL branch. Returns `Some(ms)` on success.
@@ -153,6 +170,9 @@ fn parse_iso8601(s: &str) -> Option<f64> {
 
     // Time part (after 'T' or ' ').
     let mut tz_minutes_east: Option<i64> = None; // None => "no offset present"
+    // #9449: the presence of a time component — not the presence of a zone —
+    // is what decides the default interpretation below.
+    let mut has_time = false;
     if idx < s.len() {
         let sep = b[idx];
         if sep != b'T' && sep != b' ' {
@@ -173,12 +193,33 @@ fn parse_iso8601(s: &str) -> Option<f64> {
             Some(p) => (&time_str[..p], &time_str[p..]),
             None => (time_str, ""),
         };
+        // #9449: node also accepts the designator as a trailing, whitespace-
+        // separated WORD in the space-separated spelling —
+        // `new Date("2026-09-01 10:30 GMT")` is 10:30 UTC, and so are the
+        // `UTC` / `UT` / `Z` spellings in either case. The scan above only
+        // finds `Z`, `+` and `-`, so the word used to be ignored outright;
+        // that was invisible while every offsetless form was read as UTC and
+        // becomes a wrong instant the moment they are read as local. A
+        // parenthesised trailing comment is NOT a designator and stays local.
+        let (clock, utc_word) = match clock.rsplit_once(char::is_whitespace) {
+            Some((head, tail))
+                if !head.trim().is_empty()
+                    && matches!(
+                        tail.to_ascii_lowercase().as_str(),
+                        "gmt" | "utc" | "ut" | "z"
+                    ) =>
+            {
+                (head.trim_end(), true)
+            }
+            _ => (clock, false),
+        };
         let cb = clock.as_bytes();
         if clock.len() < 5 || cb[2] != b':' {
             return None;
         }
         hour = clock[0..2].parse().ok()?;
         minute = clock[3..5].parse().ok()?;
+        has_time = true;
         if clock.len() >= 8 && cb[5] == b':' {
             second = clock[6..8].parse().ok()?;
             if clock.len() > 9 && cb[8] == b'.' {
@@ -195,15 +236,20 @@ fn parse_iso8601(s: &str) -> Option<f64> {
                 Some(v) => tz_minutes_east = Some(v),
                 None => return None,
             }
+        } else if utc_word {
+            tz_minutes_east = Some(0);
         }
     }
     let base = make_utc_ms(year, month1 as i64 - 1, day, hour, minute, second, millis);
-    // Apply zone offset: a clock with offset +HH:MM is `offset` ahead of UTC,
-    // so UTC = clock - offset.
-    let adjusted = if let Some(off) = tz_minutes_east {
-        base - (off * 60_000) as f64
-    } else {
-        base
+    let adjusted = match tz_minutes_east {
+        // An explicit `Z` / `±HH:MM` always wins: a clock with offset +HH:MM
+        // is `offset` ahead of UTC, so UTC = clock - offset.
+        Some(off) => base - (off * 60_000) as f64,
+        // #9449: no designator and a TIME present => local wall clock.
+        None if has_time => local_wall_clock_to_utc(base),
+        // No designator and no time (a date-only form) => UTC, per the spec's
+        // deliberate asymmetry. This half was already right; it must stay.
+        None => base,
     };
     let _ = idx;
     Some(adjusted)
@@ -341,13 +387,8 @@ fn parse_rfc_or_named(s: &str) -> Option<f64> {
     let base = make_utc_ms(y, m as i64 - 1, d, hour, minute, second, 0);
     match tz_minutes_east {
         Some(off) => Some(base - (off * 60_000) as f64),
-        None => {
-            // Local-time interpretation: subtract local tz offset at that
-            // instant (mirrors js_date_new_local_components).
-            let secs = (base as i64).div_euclid(1000);
-            let (_, _, _, _, _, _, tz_offset) = timestamp_to_local_components(secs);
-            Some(base - (tz_offset * 1000) as f64)
-        }
+        // Local-time interpretation (see `local_wall_clock_to_utc`).
+        None => Some(local_wall_clock_to_utc(base)),
     }
 }
 
@@ -555,11 +596,7 @@ fn parse_slash_date(s: &str) -> Option<f64> {
     let base = make_utc_ms(year, month - 1, day, hour, minute, second, millis);
     match tz_minutes_east {
         Some(off) => Some(base - (off * 60_000) as f64),
-        None => {
-            // No designator: the components are LOCAL wall-clock time.
-            let secs = (base as i64).div_euclid(1000);
-            let (_, _, _, _, _, _, tz_offset) = timestamp_to_local_components(secs);
-            Some(base - (tz_offset * 1000) as f64)
-        }
+        // No designator: the components are LOCAL wall-clock time.
+        None => Some(local_wall_clock_to_utc(base)),
     }
 }
