@@ -1593,17 +1593,28 @@ pub extern "C" fn js_date_to_locale_time_string(timestamp: f64) -> *mut crate::S
 /// support), so the LLVM codegen routes statically-Number receivers
 /// here and Date receivers to `js_date_to_locale_string` below. Decimal
 /// part follows JS spec: trailing zeros after the decimal stripped,
-/// leading sign preserved, NaN/Infinity passed through as the literal
-/// strings "NaN" / "Infinity" / "-Infinity".
+/// leading sign preserved.
+///
+/// The non-finite and signed-zero spellings are ECMA-402's, not Rust's
+/// (#9452): the operation is defined as "format with a default
+/// `Intl.NumberFormat`", whose number pattern renders the infinities with
+/// U+221E ("∞" / "-∞") and keeps the sign of negative zero ("-0"). `NaN`
+/// stays the literal "NaN" in both. Before #9452 this returned Rust's
+/// `Display` spelling "Infinity"/"-Infinity" and dropped the sign of `-0`,
+/// so `x.toLocaleString()` disagreed with `x.toLocaleString("en-US")` —
+/// which since #9448 goes through the real formatter (see
+/// `intl::number_format`, whose sign test this now mirrors).
 #[no_mangle]
 pub extern "C" fn js_number_to_locale_string(n: f64) -> *mut crate::StringHeader {
     if n.is_nan() {
         return alloc_runtime_string("NaN");
     }
     if n.is_infinite() {
-        return alloc_runtime_string(if n > 0.0 { "Infinity" } else { "-Infinity" });
+        return alloc_runtime_string(if n > 0.0 { "\u{221e}" } else { "-\u{221e}" });
     }
-    let negative = n < 0.0;
+    // `-0.0 < 0.0` is false, so the sign of a negative zero has to be read
+    // off the bit pattern — the same test `intl::number_format` applies.
+    let negative = n < 0.0 || (n == 0.0 && n.is_sign_negative());
     let abs = n.abs();
     // Split into integer and decimal parts. JS's default
     // `Number.prototype.toLocaleString()` shows up to 3 fraction digits

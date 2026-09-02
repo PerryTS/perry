@@ -56,6 +56,46 @@ console.log((0).toLocaleString());
 console.log(NaN.toLocaleString());
 console.log((2 ** 60).toLocaleString());
 
+// ---- #9452: the non-finite and signed-zero spellings of the no-argument
+// fast path. `Number.prototype.toLocaleString()` is defined as "format with a
+// default Intl.NumberFormat", and ECMA-402's number formatter spells the
+// infinities with U+221E and keeps the sign of negative zero. Perry's inline
+// `js_number_to_locale_string` returned Rust's `Display` spelling instead, so
+// the no-argument call disagreed with the very same call carrying a locale.
+// NaN is `"NaN"` in both and must not move.
+console.log(Infinity.toLocaleString());
+console.log((-Infinity).toLocaleString());
+console.log(NaN.toLocaleString());
+console.log((-0).toLocaleString());
+// A negative zero the constant folder cannot spell away, and one that arrives
+// from arithmetic rather than a literal.
+const negZero = -0;
+console.log(negZero.toLocaleString());
+console.log((0 * -1).toLocaleString());
+console.log((-1 / Infinity).toLocaleString());
+// Same values through a division that overflows, so the receiver is a computed
+// f64 rather than a folded literal.
+console.log((1 / 0).toLocaleString());
+console.log((-1 / 0).toLocaleString());
+console.log((0 / 0).toLocaleString());
+// The argument-bearing spelling of each (already correct since #9448) must
+// agree with the no-argument one — that agreement is the point of the fix.
+console.log(Infinity.toLocaleString("en-US"), (-Infinity).toLocaleString("en-US"));
+console.log(NaN.toLocaleString("en-US"), (-0).toLocaleString("en-US"));
+console.log((-0).toLocaleString(undefined, undefined));
+// The delegation target, standalone.
+console.log(new Intl.NumberFormat().format(Infinity));
+console.log(new Intl.NumberFormat().format(-Infinity));
+console.log(new Intl.NumberFormat().format(-0));
+console.log(new Intl.NumberFormat().format(NaN));
+// The array and Object.prototype spellings inherit the element formatter.
+console.log([Infinity, -Infinity, NaN, -0].toLocaleString());
+// `Object.prototype.toLocaleString.call(x)` is NOT the number formatter — it
+// is defined as `Invoke(O, "toString")`, so it keeps the `"Infinity"` spelling
+// and must NOT move with this fix.
+console.log(Object.prototype.toLocaleString.call(Infinity));
+console.log(Object.prototype.toLocaleString.call(-0));
+
 // ---- the delegation target, standalone -------------------------------------
 console.log(new Intl.NumberFormat("de-DE").format(1234.5));
 console.log(new Intl.NumberFormat("en-US", { style: "percent" }).format(0.5));
