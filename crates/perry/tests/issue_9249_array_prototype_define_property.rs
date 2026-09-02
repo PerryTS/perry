@@ -111,7 +111,15 @@ console.log(hits, values.length, values[5]);
 #[test]
 fn reflect_define_property_non_writable_prototype_index_blocks_array_store() {
     compile_and_run(
-        r#"
+        r#""use strict";
+// #9426 made a rejected array-element write throw ONLY in strict mode, which
+// is what node does. This file is a bare .ts — the oracle
+// (`node --experimental-strip-types`) runs it as a SCRIPT, i.e. sloppy, where
+// the rejected store silently no-ops in node too:
+//   $ node --experimental-strip-types <this program without "use strict">
+//   no error 1 P
+// The point of this test is that a non-writable inherited index BLOCKS the
+// store, so it opts into strict mode rather than asserting the sloppy no-op.
 Reflect.defineProperty(Array.prototype, 11, {
   value: "P",
   writable: false,
