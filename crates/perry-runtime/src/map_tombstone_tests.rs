@@ -181,13 +181,23 @@ fn raw_indexed_reads_never_compact_and_the_cursor_steps_over_holes() {
     unsafe {
         assert_ne!((*map).used, (*map).size, "a hole is present");
     }
-    // The raw-indexed extern is a plain bounded read: raw index 2 is still
-    // the THIRD key, the hole at 1 stays, and the layout is untouched — this
-    // used to compact the whole map on every such read, once per hole.
-    assert_eq!(js_map_entry_key_at(map, 2), 3.0);
-    assert_eq!(js_map_entry_value_at(map, 2), 3.0);
+    // The RAW twins the for-of walkers use are plain bounded reads: raw
+    // index 2 is still the THIRD key, the hole at 1 stays, and the layout is
+    // untouched — the walkers' reads used to compact the whole map once per
+    // observed hole.
+    assert_eq!(js_map_entry_key_raw_at(map, 2), 3.0);
+    assert_eq!(js_map_entry_value_raw_at(map, 2), 3.0);
+    assert_eq!(
+        js_map_entry_key_raw_at(map, 1).to_bits(),
+        MAP_HOLE_KEY_BITS,
+        "the raw twin exposes the hole — only the cursor ever reads it"
+    );
     unsafe {
-        assert_ne!((*map).used, (*map).size, "the read left the layout alone");
+        assert_ne!(
+            (*map).used,
+            (*map).size,
+            "the raw read left the layout alone"
+        );
         assert_eq!(
             crate::map::map_compaction_epoch(map),
             0,
@@ -205,6 +215,35 @@ fn raw_indexed_reads_never_compact_and_the_cursor_steps_over_holes() {
             None,
             "extent exhausted"
         );
+    }
+    // The LIVE-index accessors (#9462 / #9504 — the array-like `map[i]` read,
+    // console.table, collection equality) squeeze first so that live index 1
+    // IS the third key and never a hole…
+    assert_eq!(
+        js_map_entry_key_at(map, 1),
+        3.0,
+        "live index 1 is the third key"
+    );
+    assert_eq!(js_map_entry_value_at(map, 1), 3.0);
+    assert_eq!(
+        js_map_entry_key_at(map, 2).to_bits(),
+        crate::value::TAG_UNDEFINED,
+        "past the live size is undefined, not a hole"
+    );
+    unsafe {
+        assert_eq!(
+            (*map).used,
+            (*map).size,
+            "the live accessor squeezed the hole"
+        );
+        assert_eq!(
+            crate::map::map_compaction_epoch(map),
+            1,
+            "…and recorded it, so a cursor that was past the hole (raw 2, synced \
+             at epoch 0) rebases onto the third key's new raw index 1"
+        );
+        assert_eq!(crate::map::map_cursor_next_raw(map, 2, 0), Some(1));
+        assert_eq!(js_map_entry_key_raw_at(map, 1), 3.0);
     }
 }
 
@@ -370,4 +409,79 @@ unsafe fn iter_backing(iter: f64) -> *mut MapHeader {
     crate::value::js_nanbox_get_pointer(f64::from_bits(
         crate::object::js_object_get_field(obj, 0).bits(),
     )) as *mut MapHeader
+}
+
+#[test]
+fn cursor_stays_exact_across_forty_squeezes_in_one_body() {
+    // A map at FULL capacity squeezes once per delete+re-add pair on the grow
+    // path (`ensure_capacity`: used == capacity with a hole → compact), so one
+    // loop body can force dozens of squeezes between two reads of a cursor.
+    // History is budgeted by removed-index count, not record count, so all of
+    // them are retained and the rebase stays exact.
+    let map = js_map_alloc(64);
+    for i in 0..64 {
+        js_map_set(map, i as f64, i as f64);
+    }
+    unsafe {
+        assert_eq!((*map).used, (*map).capacity, "premise: at capacity");
+    }
+    let epoch0 = crate::map::map_compaction_epoch(map);
+    // The walk has yielded k0..k9 (cursor = 10). The body then deletes and
+    // re-adds k0..k39: ten holes BELOW the cursor, thirty above, forty
+    // squeezes in total.
+    for i in 0..40 {
+        assert_eq!(js_map_delete(map, i as f64), 1);
+        js_map_set(map, i as f64, (i * 100) as f64);
+    }
+    let squeezes = crate::map::map_compaction_epoch(map).wrapping_sub(epoch0);
+    assert!(
+        squeezes >= 33,
+        "premise: {squeezes} squeezes happened, need > 32"
+    );
+    unsafe {
+        assert_eq!((*map).used, (*map).size);
+    }
+    // Every entry yielded so far (k0..k9) was deleted, so no live entry
+    // remains below the old cursor: it rebases to 0, where the first
+    // not-yet-visited live entry now sits — k40, because k10..k39 were
+    // re-appended behind k40..k63 and behind the re-added k0..k9.
+    assert_eq!(
+        unsafe { crate::map::map_cursor_next_raw(map, 10, epoch0) },
+        Some(0)
+    );
+    assert_eq!(js_map_entry_key_raw_at(map, 0), 40.0);
+    // Live order is k40..k63, k0..k9, k10..k39 — the raw walk from the
+    // rebased cursor sees exactly that.
+    let mut order = Vec::new();
+    let mut idx = 0u32;
+    let epoch_now = crate::map::map_compaction_epoch(map);
+    while let Some(i) = unsafe { crate::map::map_cursor_next_raw(map, idx, epoch_now) } {
+        order.push(js_map_entry_key_raw_at(map, i));
+        idx = i + 1;
+    }
+    let expected: Vec<f64> = (40..64).chain(0..40).map(|k| k as f64).collect();
+    assert_eq!(order, expected);
+}
+
+#[test]
+fn clear_truncates_the_squeeze_history() {
+    let map = js_map_alloc(64);
+    for i in 0..64 {
+        js_map_set(map, i as f64, i as f64);
+    }
+    let epoch0 = crate::map::map_compaction_epoch(map);
+    for i in 0..40 {
+        js_map_delete(map, i as f64);
+        js_map_set(map, i as f64, 0.0);
+    }
+    js_map_clear(map);
+    js_map_set(map, 7.0, 7.0);
+    // Whatever the cursor was, a clear rebases it to 0 — and the log behind
+    // the clear record is gone, so this holds however many squeezes preceded
+    // it.
+    assert_eq!(
+        unsafe { crate::map::map_cursor_next_raw(map, 10, epoch0) },
+        Some(0)
+    );
+    assert_eq!(js_map_entry_key_raw_at(map, 0), 7.0);
 }

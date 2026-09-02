@@ -917,15 +917,43 @@ struct SetCompactionRecord {
     removed: SetRemovedSlots,
 }
 
-/// Records retained per Set — see `map::MAP_COMPACTION_LOG_DEPTH`.
-const SET_COMPACTION_LOG_DEPTH: usize = 32;
+/// Retention budget for a set's squeeze history, in removed raw indices.
+///
+/// A cursor rebases exactly only through records it has not been trimmed out
+/// of, so the budget is what bounds the exactness window: exceeding it needs
+/// ONE loop body to delete more than `max(SET_COMPACTION_LOG_MIN_BUDGET,
+/// capacity)` entries (deletes plus re-adds count separately) between two of
+/// its own reads. Record COUNT is not the bound — a delete+re-add pair on a
+/// collection at full capacity squeezes one hole per pair, so counting
+/// records would make the window a few dozen pairs.
+///
+/// Bounded in memory by construction: at most `budget` indices (4 bytes each)
+/// plus a record header per squeeze; a `clear()` record supersedes everything
+/// before it and truncates them.
+const SET_COMPACTION_LOG_MIN_BUDGET: usize = 4096;
+
+struct SetCompactionLog {
+    records: std::collections::VecDeque<SetCompactionRecord>,
+    /// Sum of `records[..].removed.retained_len()`.
+    retained: usize,
+}
+
+impl SetRemovedSlots {
+    /// Budget cost of this record.
+    fn retained_len(&self) -> usize {
+        match self {
+            SetRemovedSlots::Prefix(_) => 1,
+            SetRemovedSlots::Indices(v) => v.len(),
+        }
+    }
+}
 
 crate::perry_thread_local! {
     /// Per-Set history of squeezes, keyed by header address. Re-keyed on GC
     /// move by `set_header_moved_for_gc`; dropped by `js_set_alloc` for a
     /// reused address and by the dead-owner prune.
     static SET_COMPACTION_LOG: RefCell<
-        crate::fast_hash::PtrHashMap<usize, std::collections::VecDeque<SetCompactionRecord>>,
+        crate::fast_hash::PtrHashMap<usize, SetCompactionLog>,
     > = RefCell::new(crate::fast_hash::new_ptr_hash_map());
 }
 
@@ -934,13 +962,28 @@ crate::perry_thread_local! {
 unsafe fn note_set_compaction(set: *mut SetHeader, removed: SetRemovedSlots) {
     let epoch = (*set).compaction_epoch.wrapping_add(1);
     (*set).compaction_epoch = epoch;
+    let budget = std::cmp::max(SET_COMPACTION_LOG_MIN_BUDGET, (*set).capacity as usize);
     SET_COMPACTION_LOG.with(|log| {
         let mut log = log.borrow_mut();
-        let records = log.entry(set as usize).or_default();
-        if records.len() == SET_COMPACTION_LOG_DEPTH {
-            records.pop_front();
+        let entry = log.entry(set as usize).or_insert_with(|| SetCompactionLog {
+            records: std::collections::VecDeque::new(),
+            retained: 0,
+        });
+        if matches!(removed, SetRemovedSlots::Prefix(_)) {
+            // The extent was discarded: every cursor rebases to 0 through
+            // this record whatever came before, so older history is dead.
+            entry.records.clear();
+            entry.retained = 0;
         }
-        records.push_back(SetCompactionRecord { epoch, removed });
+        entry.retained += removed.retained_len();
+        entry
+            .records
+            .push_back(SetCompactionRecord { epoch, removed });
+        while entry.retained > budget && entry.records.len() > 1 {
+            if let Some(oldest) = entry.records.pop_front() {
+                entry.retained -= oldest.removed.retained_len();
+            }
+        }
     });
 }
 
@@ -954,11 +997,12 @@ unsafe fn rebase_set_cursor(set: *const SetHeader, cursor: u32, loop_epoch: u32)
     }
     SET_COMPACTION_LOG.with(|log| {
         let log = log.borrow();
-        let Some(records) = log.get(&(set as usize)) else {
+        let Some(entry) = log.get(&(set as usize)) else {
             return cursor;
         };
         let mut c = cursor;
-        for rec in records
+        for rec in entry
+            .records
             .iter()
             .filter(|r| r.epoch.wrapping_sub(loop_epoch) as i32 > 0)
         {
@@ -1828,11 +1872,34 @@ pub extern "C" fn js_set_value_at(set: *const SetHeader, i: u32) -> f64 {
         return f64::from_bits(UNDEF);
     }
     unsafe {
-        // A raw read, bounded by the raw extent. The index comes from
-        // `js_set_cursor_next`, which only yields LIVE raw indices, so no
-        // hole reaches user code — and nothing here compacts (the self-heal
-        // compaction this used to perform ran once per hole observed, which
-        // made a delete-during-`for…of` loop O(n) per delete).
+        // LIVE-index accessor (#9462 / #9504): `i` counts live elements, the
+        // contract `js_array_length` (== `size`) pairs with for the array-like
+        // `set[i]` read, `console.table` and collection equality. Tombstones
+        // are squeezed first so raw index == live index — a one-off O(n) for
+        // those paths only, RECORDED in the compaction log so an open
+        // `for…of` cursor rebases exactly. The walkers read through
+        // `js_set_value_raw_at`, which never compacts.
+        compact_if_holey_set(set as *mut SetHeader);
+        if i >= (*set).size {
+            return f64::from_bits(UNDEF);
+        }
+        let elements = (*set).elements as *const f64;
+        ptr::read(elements.add(i as usize))
+    }
+}
+
+/// RAW twin of `js_set_value_at` for the raw-index walkers (the `for…of`
+/// fast path's `SetValueAt` lowering): bounded by the raw extent `used`,
+/// never compacts. The index comes from `js_set_cursor_next`, which only
+/// yields LIVE raw indices, so no hole reaches user code.
+#[no_mangle]
+pub extern "C" fn js_set_value_raw_at(set: *const SetHeader, i: u32) -> f64 {
+    const UNDEF: u64 = 0x7FFC_0000_0000_0001;
+    let set = clean_set_ptr(set);
+    if set.is_null() {
+        return f64::from_bits(UNDEF);
+    }
+    unsafe {
         if i >= (*set).used {
             return f64::from_bits(UNDEF);
         }
@@ -1840,6 +1907,9 @@ pub extern "C" fn js_set_value_at(set: *const SetHeader, i: u32) -> f64 {
         ptr::read(elements.add(i as usize))
     }
 }
+#[cfg(feature = "keepalive-anchors")]
+#[used]
+static KEEP_SET_VALUE_RAW_AT: extern "C" fn(*const SetHeader, u32) -> f64 = js_set_value_raw_at;
 
 /// Convert a Set to an Array (for Array.from(set))
 /// Returns a new array containing all elements of the set.
