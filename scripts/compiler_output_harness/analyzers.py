@@ -45,17 +45,25 @@ def parse_target_triple(ir: str) -> str | None:
     return match.group(1) if match else None
 
 
+# LLVM quotes any identifier containing characters outside its bare-name set --
+# notably ``$``, which specialized function names use (``…$spec_i32.exit``). A
+# quoted label line starts with ``"``, so a bare-name-only pattern never matches
+# it, no new block begins, and the quoted block's body is silently appended to
+# the PREVIOUS block. That mis-attributes its calls (perry#9494).
+_LABEL_PATTERN = r"^(?:\"([^\"]+)\"|([A-Za-z0-9_.$-]+)):(?:\s|$)"
+
+
 def extract_blocks(ir: str) -> list[tuple[str, str]]:
     blocks: list[tuple[str, str]] = []
     current_label: str | None = None
     current_lines: list[str] = []
-    label_re = re.compile(r"^([A-Za-z0-9_.$-]+):(?:\s|$)")
+    label_re = re.compile(_LABEL_PATTERN)
     for line in ir.splitlines():
         match = label_re.match(line)
         if match:
             if current_label is not None:
                 blocks.append((current_label, "\n".join(current_lines)))
-            current_label = match.group(1)
+            current_label = match.group(1) or match.group(2)
             current_lines = [line]
         elif current_label is not None:
             current_lines.append(line)
@@ -69,8 +77,8 @@ def extract_blocks_with_functions(ir: str) -> list[tuple[str, str, str]]:
     current_function = ""
     current_label: str | None = None
     current_lines: list[str] = []
-    label_re = re.compile(r"^([A-Za-z0-9_.$-]+):(?:\s|$)")
-    define_re = re.compile(r"^define\b.*@([A-Za-z0-9_.$-]+)\(")
+    label_re = re.compile(_LABEL_PATTERN)
+    define_re = re.compile(r"^define\b.*@(?:\"([^\"]+)\"|([A-Za-z0-9_.$-]+))\(")
     for line in ir.splitlines():
         define_match = define_re.match(line)
         if define_match:
@@ -78,7 +86,7 @@ def extract_blocks_with_functions(ir: str) -> list[tuple[str, str, str]]:
                 blocks.append(
                     (current_function, current_label, "\n".join(current_lines))
                 )
-            current_function = define_match.group(1)
+            current_function = define_match.group(1) or define_match.group(2)
             current_label = None
             current_lines = []
             continue
@@ -88,7 +96,7 @@ def extract_blocks_with_functions(ir: str) -> list[tuple[str, str, str]]:
                 blocks.append(
                     (current_function, current_label, "\n".join(current_lines))
                 )
-            current_label = match.group(1)
+            current_label = match.group(1) or match.group(2)
             current_lines = [line]
         elif current_label is not None:
             current_lines.append(line)

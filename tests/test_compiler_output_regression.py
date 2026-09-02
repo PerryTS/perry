@@ -3000,5 +3000,66 @@ arr.merge.24:
         )
 
 
+class QuotedLlvmLabelBlockBoundaryTests(unittest.TestCase):
+    """perry#9494: a quoted LLVM label must start a new basic block.
+
+    LLVM quotes any identifier outside its bare-name set -- notably ``$``, which
+    specialized function names carry (``…$spec_i32.exit``). When the block
+    splitter only matched bare names, a quoted label started no block and its
+    body was appended to the PREVIOUS one, so a ``js_array_alloc`` belonging to
+    a ``console.log`` epilogue was reported as a runtime call inside an unrolled
+    hot-loop epilogue. The proof failed on correct codegen.
+    """
+
+    IR = "\n".join(
+        [
+            "define i32 @main() {",
+            "for.body.7.epil:",
+            "  %v = fadd double %a, %b",
+            "  br label %\"fn$spec_i32.exit\"",
+            "",
+            '"fn$spec_i32.exit":',
+            "  %r = tail call i64 @js_array_alloc(i32 1)",
+            "  ret i32 0",
+            "}",
+        ]
+    )
+
+    def test_quoted_label_starts_its_own_block(self):
+        from compiler_output_harness.analyzers import extract_blocks
+
+        labels = [label for label, _ in extract_blocks(self.IR)]
+        self.assertIn(
+            "fn$spec_i32.exit",
+            labels,
+            "quoted label must be recognised as its own block",
+        )
+
+    def test_hot_loop_does_not_absorb_following_quoted_block(self):
+        from compiler_output_harness.analyzers import hot_loop_blocks
+
+        bodies = {label: body for label, body in hot_loop_blocks(self.IR)}
+        self.assertIn("for.body.7.epil", bodies, "fixture must select the hot loop")
+        self.assertNotIn(
+            "js_array_alloc",
+            bodies["for.body.7.epil"],
+            "call from the quoted block leaked into the hot loop (perry#9494)",
+        )
+
+    def test_quoted_function_name_is_attributed(self):
+        from compiler_output_harness.analyzers import extract_blocks_with_functions
+
+        ir = "\n".join(
+            [
+                'define i32 @"mod$spec_i32"() {',
+                "entry:",
+                "  ret i32 0",
+                "}",
+            ]
+        )
+        functions = {fn for fn, _, _ in extract_blocks_with_functions(ir)}
+        self.assertIn("mod$spec_i32", functions)
+
+
 if __name__ == "__main__":
     unittest.main()
