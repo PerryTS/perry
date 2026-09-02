@@ -219,7 +219,7 @@ console.log("loop-same-class:", loopSameClass());
 // class-capture mechanism, not class identity: it reproduces with NO name
 // shadowing anywhere (`class Uniq` declared in a loop body, nothing else
 // named Uniq in the program) and is byte-identical before and after this fix.
-// Filed separately so this fixture keeps discriminating exactly one thing.
+// Reported separately so this fixture keeps discriminating exactly one thing.
 
 // --- 9. instanceof across a BLOCK boundary, and at the THIRD depth ---------
 // Arm 4's instanceof rows sit at two-scope depth, which the name-keyed
