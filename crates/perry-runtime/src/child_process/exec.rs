@@ -42,6 +42,7 @@ pub extern "C" fn js_child_process_exec_sync(
         let cmd_bytes = std::slice::from_raw_parts(data_ptr, len);
         String::from_utf8_lossy(cmd_bytes).into_owned()
     };
+    validate::cp_validate_no_null_bytes("command", &cmd_str);
 
     // Execute the command using the shell, honoring `cwd`/`env` options.
     #[cfg(unix)]
@@ -92,6 +93,8 @@ pub extern "C" fn js_child_process_spawn_sync(
         let cmd_data = (cmd_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
         String::from_utf8_lossy(std::slice::from_raw_parts(cmd_data, cmd_len)).into_owned()
     };
+    validate::cp_validate_no_null_bytes("file", &cmd_str);
+    unsafe { validate::cp_validate_raw_args(args_ptr as i64) };
 
     let opts_val = cp_options_from_raw_args(args_ptr as i64, options_ptr as i64);
     let mode = cp_read_output_mode(opts_val, false);
@@ -258,6 +261,7 @@ pub extern "C" fn js_child_process_exec(cmd_ptr: *const StringHeader, arg1: f64,
         let cmd_bytes = std::slice::from_raw_parts(data_ptr, len);
         String::from_utf8_lossy(cmd_bytes).into_owned()
     };
+    validate::cp_validate_no_null_bytes("command", &cmd_str);
 
     if abort_signal.is_some_and(cp_abort_signal_is_aborted) {
         let stdout_box = cp_box_output(b"", &mode);
@@ -338,6 +342,8 @@ pub extern "C" fn js_child_process_exec_file(
     };
 
     let file_str = unsafe { cp_read_string_header(file_ptr) };
+    validate::cp_validate_no_null_bytes("file", &file_str);
+    validate::cp_validate_args(args_val);
     let arg_strs = cp_args_from_value(args_val);
     // execFile defaults to utf8 (callback stdout/stderr are strings).
     let mode = cp_read_output_mode(opts_val, true);
@@ -394,6 +400,8 @@ pub extern "C" fn js_child_process_exec_file_sync(
     opts_val: f64,
 ) -> f64 {
     let file_str = unsafe { cp_read_string_header(file_ptr) };
+    validate::cp_validate_no_null_bytes("file", &file_str);
+    validate::cp_validate_args(args_val);
     let mode = cp_read_output_mode(opts_val, false);
     if file_str.is_empty() {
         return cp_box_output(b"", &mode);
@@ -483,6 +491,7 @@ fn cp_promisified_run(command: Command, cmd_str: String, opts: f64) -> f64 {
 }
 
 extern "C" fn cp_promisified_exec(_closure: *const ClosureHeader, cmd_val: f64, opts: f64) -> f64 {
+    validate::cp_validate_command(cmd_val, "command");
     let cmd = cp_value_to_string(cmd_val).unwrap_or_default();
     #[cfg(unix)]
     let mut command = {
@@ -508,6 +517,8 @@ extern "C" fn cp_promisified_exec_file(
     file_val: f64,
     args_val: f64,
 ) -> f64 {
+    validate::cp_validate_command(file_val, "file");
+    validate::cp_validate_args(args_val);
     let file = cp_value_to_string(file_val).unwrap_or_default();
     let arg_strs = cp_args_from_value(args_val);
     // The 2-arg promisify(execFile) wrapper has no options slot; resolve a bare

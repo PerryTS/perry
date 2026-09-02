@@ -1041,6 +1041,8 @@ pub extern "C" fn js_child_process_spawn_streams(
             cp_read_arg_strings(args_ptr),
         )
     };
+    validate::cp_validate_no_null_bytes("file", &cmd_str);
+    unsafe { validate::cp_validate_raw_args(args_ptr) };
 
     // `opts_ptr` arrives as a raw (unboxed) heap pointer; re-box it so the
     // options helpers can read `cwd`/`env`/`shell`. Small values mean

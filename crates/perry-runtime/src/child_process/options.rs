@@ -52,6 +52,7 @@ pub(crate) fn cp_apply_options(command: &mut Command, opts_val: f64) {
     }
 
     if let Some(dir) = cp_value_to_string(cp_get_field(opts_val, b"cwd")) {
+        validate::cp_validate_path_no_null_bytes("options.cwd", &dir);
         if !dir.is_empty() {
             command.current_dir(dir);
         }
@@ -72,7 +73,11 @@ pub(crate) fn cp_apply_options(command: &mut Command, opts_val: f64) {
                 if JSValue::from_bits(v.to_bits()).is_undefined() {
                     continue; // Node omits keys whose value is `undefined`.
                 }
-                command.env(&key, cp_coerce_string(v));
+                let property = format!("options.env['{key}']");
+                validate::cp_validate_no_null_bytes(&property, &key);
+                let value = cp_coerce_string(v);
+                validate::cp_validate_no_null_bytes(&property, &value);
+                command.env(&key, value);
             }
         }
     }
@@ -82,7 +87,9 @@ pub(crate) fn cp_apply_options(command: &mut Command, opts_val: f64) {
 
 pub(crate) fn cp_read_argv0(opts_val: f64) -> Option<String> {
     cp_object_ptr(opts_val)?;
-    cp_value_to_string(cp_get_field(opts_val, b"argv0"))
+    let argv0 = cp_value_to_string(cp_get_field(opts_val, b"argv0"))?;
+    validate::cp_validate_no_null_bytes("options.argv0", &argv0);
+    Some(argv0)
 }
 
 pub(crate) fn cp_read_abort_signal(opts_val: f64) -> Option<f64> {
@@ -513,7 +520,10 @@ pub(crate) fn cp_build_command(cmd: &str, args: &[String], opts_val: f64) -> Com
     let mut command = if crate::value::js_is_truthy(shell) != 0 {
         // `shell: "<path>"` picks the binary; `shell: true` uses the default.
         let shell_bin = match cp_value_to_string(shell) {
-            Some(s) if !s.is_empty() => s,
+            Some(s) if !s.is_empty() => {
+                validate::cp_validate_no_null_bytes("options.shell", &s);
+                s
+            }
             _ => cp_default_shell(),
         };
         let mut line = program.clone();
