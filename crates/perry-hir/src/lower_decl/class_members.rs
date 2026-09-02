@@ -40,7 +40,13 @@ fn capture_class_method_source(
             }
         }
     }
-    ctx.closure_source_text.insert(func_id, src);
+    ctx.closure_source_text.insert(
+        func_id,
+        crate::ir::FunctionSourceMetadata {
+            text: src,
+            is_non_strict_ordinary: false,
+        },
+    );
 }
 
 pub fn lower_constructor(

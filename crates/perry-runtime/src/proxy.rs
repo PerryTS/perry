@@ -2182,15 +2182,26 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
         }
         if crate::closure::is_closure_ptr(extract_pointer(current.to_bits()) as usize) {
             // ECMAScript poison pill: `fn.caller = v` / `fn.arguments = v` on
-            // a strict-mode function (all Perry-compiled code) throws via the
-            // %ThrowTypeError% accessor's absent setter. A genuine own data
-            // prop (defineProperty round-trip) still wins via the descriptor
-            // arm above.
+            // a strict-mode function throws via %ThrowTypeError%. A plain
+            // non-strict function instead rejects the inherited setter-less
+            // property with `false`; PutValue's `Throw` flag decides whether
+            // that rejection stays silent or becomes a TypeError. A genuine
+            // own data prop (defineProperty round-trip) still wins via the
+            // descriptor arm above.
             let cur_ptr = extract_pointer(current.to_bits()) as usize;
             if let Some(name) = key_to_rust_string(key) {
                 if matches!(name.as_str(), "caller" | "arguments")
                     && !crate::closure::closure_has_own_dynamic_prop(cur_ptr, &name)
                 {
+                    let closure = cur_ptr as *const crate::closure::ClosureHeader;
+                    let func_ptr = crate::closure::get_valid_func_ptr(closure);
+                    let is_non_strict_ordinary_function = !func_ptr.is_null()
+                        && crate::builtins::function_is_non_strict_ordinary_for_ptr(
+                            func_ptr as usize,
+                        );
+                    if is_non_strict_ordinary_function {
+                        return false;
+                    }
                     throw_type_error("Restricted function property assignment");
                 }
                 // Every function's [[Prototype]] is %Function.prototype% — a

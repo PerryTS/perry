@@ -626,13 +626,16 @@ fn lower_assignment_target(
                         ]));
                     }
                 }
-                // `f.caller = v` / `f.arguments = v` on a declared function —
-                // the poisoned setter-less accessor on Function.prototype
-                // throws (strict semantics; Perry-compiled code is strict).
-                // The runtime closure-receiver path covers function VALUES;
-                // this covers `function f(){}` declarations whose property
-                // writes lower before reaching it. Refs test262 13.2-*-s.
-                if ctx.lookup_local(&obj_name).is_none() && ctx.lookup_func(&obj_name).is_some() {
+                // `f.caller = v` / `f.arguments = v` on a declared function.
+                // In strict code the rejected assignment throws directly. A
+                // sloppy script must reach the runtime closure-receiver path,
+                // where a non-strict ordinary function rejects with `false`
+                // and PutValue keeps that failure silent. Refs test262
+                // 13.2-*-s.
+                if ctx.current_strict
+                    && ctx.lookup_local(&obj_name).is_none()
+                    && ctx.lookup_func(&obj_name).is_some()
+                {
                     if let ast::MemberProp::Ident(prop_ident) = &member.prop {
                         if matches!(prop_ident.sym.as_ref(), "caller" | "arguments") {
                             return Ok(Expr::Sequence(vec![

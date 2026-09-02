@@ -47,6 +47,7 @@ pub(crate) fn capture_function_source(
     func_id: crate::types::FuncId,
     span: &swc_common::Span,
     is_async: bool,
+    is_non_strict_ordinary: bool,
 ) {
     let Some(mut src) = crate::ir::current_module_source_slice(span.lo.0, span.hi.0) else {
         return;
@@ -54,7 +55,13 @@ pub(crate) fn capture_function_source(
     if is_async && !src.trim_start().starts_with("async") {
         src = format!("async {src}");
     }
-    ctx.closure_source_text.insert(func_id, src);
+    ctx.closure_source_text.insert(
+        func_id,
+        crate::ir::FunctionSourceMetadata {
+            text: src,
+            is_non_strict_ordinary,
+        },
+    );
 }
 
 fn block_has_use_strict(block: Option<&ast::BlockStmt>) -> bool {
@@ -195,7 +202,7 @@ pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> 
     // Lower arrow function to a closure
     let func_id = ctx.fresh_func();
     // #4101: retain source text for `fn.toString()`.
-    capture_function_source(ctx, func_id, &arrow.span, arrow.is_async);
+    capture_function_source(ctx, func_id, &arrow.span, arrow.is_async, false);
     let scope_mark = ctx.enter_scope();
     // #6604: truncate mark for capturing class expressions recorded while
     // lowering THIS arrow — placed at scope entry so default-param
@@ -590,12 +597,19 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
     // without `this` capture — function expressions have their own
     // `this` binding determined by how they're called).
     let func_id = ctx.fresh_func();
+    let strict = fn_expr
+        .function
+        .body
+        .as_ref()
+        .map(|b| ctx.current_strict_mode() || crate::lower_decl::body_has_use_strict(&b.stmts))
+        .unwrap_or(false);
     // #4101: retain source text for `fn.toString()`.
     capture_function_source(
         ctx,
         func_id,
         &fn_expr.function.span,
         fn_expr.function.is_async,
+        !strict && !fn_expr.function.is_async && !fn_expr.function.is_generator,
     );
     let scope_mark = ctx.enter_scope();
     // #6604: capturing class EXPRESSIONS lowered in THIS function register
@@ -679,12 +693,6 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
         .params
         .iter()
         .any(|p| get_pat_name(&p.pat).ok().as_deref() == Some("arguments"));
-    let strict = fn_expr
-        .function
-        .body
-        .as_ref()
-        .map(|b| ctx.current_strict_mode() || crate::lower_decl::body_has_use_strict(&b.stmts))
-        .unwrap_or(false);
     ctx.enter_strict_mode(strict);
     let simple_parameters =
         crate::lower_decl::params_are_simple_arguments_list(&fn_expr.function.params);

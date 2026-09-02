@@ -22,6 +22,16 @@ pub(super) fn lower_nested_fn_decl(
 ) -> Result<()> {
     let func_name = fn_decl.ident.sym.to_string();
     let func_id = ctx.fresh_func();
+    let is_strict = ctx.current_strict || function_has_use_strict(&fn_decl.function);
+    if fn_decl.function.body.is_some() {
+        crate::lower::capture_function_source(
+            ctx,
+            func_id,
+            &fn_decl.function.span,
+            fn_decl.function.is_async,
+            !is_strict && !fn_decl.function.is_async && !fn_decl.function.is_generator,
+        );
+    }
 
     // Register the function name temporarily so self-recursive calls
     // inside the body resolve to FuncRef(func_id).
@@ -116,7 +126,6 @@ pub(super) fn lower_nested_fn_decl(
         .iter()
         .any(|p| get_pat_name(&p.pat).ok().as_deref() == Some("arguments"));
     let outer_strict = ctx.current_strict;
-    let is_strict = outer_strict || function_has_use_strict(&fn_decl.function);
     let simple_parameters = params_are_simple_arguments_list(&fn_decl.function.params);
     let needs_arguments_synth = !user_has_arguments_param
         && fn_decl

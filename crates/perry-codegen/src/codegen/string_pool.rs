@@ -197,7 +197,7 @@ pub(super) fn emit_string_pool(
     // original source we retained. Each entry produces one
     // `js_register_function_source` call in `__perry_init_strings_<prefix>`
     // so `fn.toString()` can reconstruct the source.
-    user_fn_source: &[(String, String)],
+    user_fn_source: &[(String, String, bool)],
 ) {
     for entry in strings.iter() {
         // .rodata bytes — `[N+1 x i8]` because we include the null terminator.
@@ -284,13 +284,18 @@ pub(super) fn emit_string_pool(
     // #4101: pre-allocate string constants for function-source registration,
     // mirroring the name constants above (same borrow ordering: mint the
     // rodata globals BEFORE `init_fn` claims `&mut llmod`).
-    let mut user_fn_source_constants: Vec<(String, String, usize)> = Vec::new();
-    for (wrapper_sym, source_text) in user_fn_source {
+    let mut user_fn_source_constants: Vec<(String, String, usize, bool)> = Vec::new();
+    for (wrapper_sym, source_text, is_non_strict_ordinary) in user_fn_source {
         if wrapper_sym.is_empty() || source_text.is_empty() {
             continue;
         }
         let (const_name, byte_len) = llmod.add_string_constant(source_text);
-        user_fn_source_constants.push((wrapper_sym.clone(), const_name, byte_len));
+        user_fn_source_constants.push((
+            wrapper_sym.clone(),
+            const_name,
+            byte_len,
+            *is_non_strict_ordinary,
+        ));
     }
 
     // Pre-allocate string constants for class-name registration. We need
@@ -459,7 +464,8 @@ pub(super) fn emit_string_pool(
     // #4101: register each function's retained source text against the same
     // wrapper/closure address `js_closure_alloc_singleton` stamps into the
     // ClosureHeader, so `fn.toString()` resolves the source by func_ptr.
-    for (wrapper_sym, source_const, source_len) in &user_fn_source_constants {
+    for (wrapper_sym, source_const, source_len, is_non_strict_ordinary) in &user_fn_source_constants
+    {
         chunker.roll_if_full();
         let blk = chunker.current_block();
         let wrapper_ref = format!("@{}", wrapper_sym);
@@ -467,7 +473,12 @@ pub(super) fn emit_string_pool(
         let len_str = source_len.to_string();
         blk.call_void(
             "js_register_function_source",
-            &[(PTR, &wrapper_ref), (PTR, &source_ref), (I32, &len_str)],
+            &[
+                (PTR, &wrapper_ref),
+                (PTR, &source_ref),
+                (I32, &len_str),
+                (I32, if *is_non_strict_ordinary { "1" } else { "0" }),
+            ],
         );
     }
 

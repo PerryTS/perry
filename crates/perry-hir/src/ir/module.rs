@@ -16,6 +16,15 @@ pub struct LocalSourceSpan {
     pub end: u32,
 }
 
+/// Retained source text plus the function-kind bit needed by runtime
+/// reflection. The latter distinguishes ordinary non-strict functions from
+/// methods and other callable forms that share the same closure layout.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FunctionSourceMetadata {
+    pub text: String,
+    pub is_non_strict_ordinary: bool,
+}
+
 /// A complete HIR module (corresponds to one TypeScript file)
 #[derive(Debug, Clone)]
 pub struct Module {
@@ -165,7 +174,8 @@ pub struct Module {
     /// by codegen to emit `js_register_function_source` so `fn.toString()`
     /// (and `Function.prototype.toString.call(fn)`) reconstruct the source
     /// instead of returning the generic `"[object Object]"`.
-    pub closure_source_text: std::collections::HashMap<crate::types::FuncId, String>,
+    pub closure_source_text:
+        std::collections::HashMap<crate::types::FuncId, FunctionSourceMetadata>,
     /// #9413: original source text for each user class, keyed by ClassId.
     /// Populated at lowering by slicing the module source against the class's
     /// AST span (SWC anchors `Class::span` at the `class` keyword and ends it

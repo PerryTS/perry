@@ -115,6 +115,10 @@ function frozenCell(): any {
   return c;
 }
 
+class RestrictedClassTarget {
+  static marker = 1;
+}
+
 function sloppyArm(): void {
   let threw = false;
 
@@ -505,6 +509,53 @@ function sloppyArm(): void {
     threw = true;
   }
   report("sloppy plain new key ??=:", threw, plainNew.y);
+
+  // ---- Function.prototype's `caller` / `arguments` poison pills ----
+  // A plain non-strict function rejects these inherited setter-less
+  // properties. PutValue keeps that failed [[Set]] silent in sloppy code, and
+  // no own property is created. The computed twin proves the runtime-key route
+  // carries the same Throw flag as the named route.
+  function restrictedCallerTarget() {}
+  function restrictedArgumentsTarget() {}
+
+  threw = false;
+  try {
+    restrictedCallerTarget.caller = 2;
+  } catch {
+    threw = true;
+  }
+  report(
+    "sloppy plain function .caller =:",
+    threw,
+    hasOwn(restrictedCallerTarget, "caller"),
+  );
+
+  const restrictedArgumentsKey: any = "arguments";
+  threw = false;
+  try {
+    restrictedArgumentsTarget[restrictedArgumentsKey] = 2;
+  } catch {
+    threw = true;
+  }
+  report(
+    "sloppy plain function [arguments] =:",
+    threw,
+    hasOwn(restrictedArgumentsTarget, "arguments"),
+  );
+
+  // A class constructor is a strict function, so its poison-pill setter itself
+  // throws even when the surrounding assignment is sloppy.
+  threw = false;
+  try {
+    (RestrictedClassTarget as any).caller = 2;
+  } catch {
+    threw = true;
+  }
+  report(
+    "sloppy class constructor .caller =:",
+    threw,
+    hasOwn(RestrictedClassTarget, "caller"),
+  );
 
   // ---- `++` (Expr::PropertyUpdate) alongside `+=`, so the two spellings of
   //      one operation are asserted in the same file and mode ----
@@ -923,6 +974,50 @@ function strictArm(): void {
     threw = true;
   }
   report("strict plain new key ??=:", threw, plainNew.y);
+
+  // ---- Function.prototype's `caller` / `arguments` poison pills ----
+  // These are the strict twins of the sloppy cases above. Because these plain
+  // functions are defined in strict code, their poison-pill setter throws and
+  // still does not materialize an own property.
+  function restrictedCallerTarget() {}
+  function restrictedArgumentsTarget() {}
+
+  threw = false;
+  try {
+    restrictedCallerTarget.caller = 2;
+  } catch {
+    threw = true;
+  }
+  report(
+    "strict plain function .caller =:",
+    threw,
+    hasOwn(restrictedCallerTarget, "caller"),
+  );
+
+  const restrictedArgumentsKey: any = "arguments";
+  threw = false;
+  try {
+    restrictedArgumentsTarget[restrictedArgumentsKey] = 2;
+  } catch {
+    threw = true;
+  }
+  report(
+    "strict plain function [arguments] =:",
+    threw,
+    hasOwn(restrictedArgumentsTarget, "arguments"),
+  );
+
+  threw = false;
+  try {
+    (RestrictedClassTarget as any).caller = 2;
+  } catch {
+    threw = true;
+  }
+  report(
+    "strict class constructor .caller =:",
+    threw,
+    hasOwn(RestrictedClassTarget, "caller"),
+  );
 
   // ---- `++` (Expr::PropertyUpdate) alongside `+=`, so the two spellings of
   //      one operation are asserted in the same file and mode ----
