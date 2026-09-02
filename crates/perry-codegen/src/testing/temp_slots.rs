@@ -485,6 +485,26 @@ pub fn temp_root_slots(fn_ir: &str) -> Vec<String> {
         .collect()
 }
 
+/// The pooled temporary-root slot holding `value`, if any.
+///
+/// Unlike [`slot_holding`], this excludes ordinary stack buffers and named
+/// locals. Dispatch calls marshal arguments into `alloca [N x double]`
+/// buffers after lowering, so using the broader helper for a negative rooting
+/// assertion mistakes that ABI store for GC protection.
+pub fn temp_root_slot_holding(fn_ir: &str, value: &str) -> Option<String> {
+    let defs = defs(fn_ir);
+    let temp_slots: std::collections::HashSet<String> =
+        temp_root_slots(fn_ir).into_iter().collect();
+    slot_traffic(fn_ir).into_iter().find_map(|(slot, events)| {
+        (temp_slots.contains(&slot)
+            && events.iter().any(|event| match event {
+                SlotEvent::Store { value: stored, .. } => derives_from(&defs, stored, value, 4),
+                _ => false,
+            }))
+        .then_some(slot)
+    })
+}
+
 /// No expression temporary was rooted in `fn_ir`: the #6996 / #6997 direction,
 /// where rooting a value that can never be collected is pure cost.
 ///

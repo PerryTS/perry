@@ -172,6 +172,20 @@ pub(crate) fn classify_direct_callee(name: &str) -> GcCallEffect {
         // `clean_arr_ptr` on a raw head: reads headers and the forwarding
         // registry, allocates nothing, never re-enters generated code.
         | "js_array_live_head"
+        // #9480 dispatch probes. `js_object_get_class_id` performs only
+        // address checks, Set/Map registry membership reads, validated GC
+        // header reads, and a scalar class-id load. `js_object_get_own_field_
+        // or_undef` validates an Object + its dense keys array, compares raw
+        // string slots, and reads the matching inline/overflow field. Its keys
+        // walk deliberately does NOT call the generic array accessors: their
+        // lazy/exotic/accessor paths would invalidate this certification.
+        // Neither call graph allocates in the Perry heap, polls, throws, or
+        // re-enters generated JS. Rust/TLS table initialization is system
+        // allocation and cannot arm Perry GC; both exports are `extern "C"`
+        // with no explicit panic path, so no unwind edge returns to generated
+        // code. Kept in the dominance checker and root-reload authorities.
+        | "js_object_get_class_id"
+        | "js_object_get_own_field_or_undef"
         // TLS dynamic-call context only. #8596 adds the `_get` reader — a bare
         // `IMPLICIT_THIS.with(|c| f64::from_bits(c.get()))` (`object/this_binding.rs`),
         // the exact shape of the already-admitted `_set` and `js_new_target_get`.
@@ -743,6 +757,31 @@ mod tests {
                 classify_direct_callee(name),
                 GcCallEffect::CannotCollect,
                 "{name}"
+            );
+        }
+    }
+
+    /// #9480: these are the only runtime calls between re-reading the
+    /// dispatch operands and the class/own-property branch that consumes
+    /// them. Their runtime bodies carry the full call-graph audit; pin both
+    /// the compiler classification and the checker's independent authority so
+    /// a future edit cannot silently reopen only one side of the window.
+    #[test]
+    fn dispatch_probe_helpers_cannot_collect_and_stay_in_checker_authority() {
+        let manifest = env!("CARGO_MANIFEST_DIR");
+        let py_path = format!("{manifest}/../../scripts/gc_root_dominance_check.py");
+        let py_src = std::fs::read_to_string(py_path).expect("read gc_root_dominance_check.py");
+        let noncollecting = extract_python_set(&py_src, "NONCOLLECTING");
+
+        for name in ["js_object_get_class_id", "js_object_get_own_field_or_undef"] {
+            assert_eq!(
+                classify_direct_callee(name),
+                GcCallEffect::CannotCollect,
+                "{name}"
+            );
+            assert!(
+                noncollecting.contains(name),
+                "{name} must stay in the root-dominance checker's NONCOLLECTING set"
             );
         }
     }

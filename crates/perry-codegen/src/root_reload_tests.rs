@@ -83,6 +83,23 @@ fn a_non_collecting_window_is_left_byte_for_byte_alone() {
     assert_eq!(body(&f), before);
 }
 
+/// #9480: the dispatch probes sit after the operands' final re-read and before
+/// the branch that consumes them. Treating either as collecting would put the
+/// conservative reload/root window back into every dispatch tower.
+#[test]
+fn dispatch_probes_do_not_open_a_reload_window() {
+    for helper in ["js_object_get_class_id", "js_object_get_own_field_or_undef"] {
+        assert!(
+            NON_COLLECTING.contains(&helper),
+            "{helper} is missing from root_reload's leaf authority"
+        );
+        let before = body(&one_block(helper));
+        let mut f = one_block(helper);
+        assert_eq!(apply_to_function(&mut f), 0, "{helper}");
+        assert_eq!(body(&f), before, "{helper}");
+    }
+}
+
 #[test]
 fn guarded_indirect_leaf_call_does_not_reload_a_dead_on_collecting_return_handle() {
     let mut f = LlFunction::new("t", DOUBLE, vec![(DOUBLE, "%arg".into())]);

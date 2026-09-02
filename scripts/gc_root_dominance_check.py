@@ -511,6 +511,17 @@ NONCOLLECTING = {
     "js_tdz_suppress_begin", "js_tdz_suppress_end",  # box.rs:242/248 counter
     "js_array_note_numeric_write",                   # array/header.rs:1443
     "js_array_length",                               # array/indexing.rs:537
+    # #9480 dispatch probes. `js_object_get_class_id` is address checks,
+    # Set/Map registry membership reads, validated GcHeader reads, and one
+    # scalar load (object/field_get_set/field_ops.rs). The own-field helper
+    # validates an Object + live dense keys array, compares raw string slots,
+    # then reads the matching inline/overflow field
+    # (object/object_ops/accessors.rs). Its scan deliberately bypasses generic
+    # array accessors, whose lazy/exotic/accessor paths are not leaf-safe.
+    # Neither call graph allocates in the Perry heap, polls, throws, or enters
+    # generated JS. Rust/TLS table initialization cannot arm Perry GC; both
+    # exports are non-unwinding `extern "C"` with no explicit panic path.
+    "js_object_get_class_id", "js_object_get_own_field_or_undef",
     "js_object_mark_class", "js_class_object_pin_parent",
     "js_new_target_get", "js_new_target_set",
     # closure/unbox.rs:25 -- a tag check on the NaN-boxed callee and a low-48

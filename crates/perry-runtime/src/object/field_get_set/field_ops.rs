@@ -192,6 +192,16 @@ pub extern "C" fn js_object_set_field(obj: *mut ObjectHeader, field_index: u32, 
 /// its `capacity` field. `js_set_alloc(0)` defaults capacity to 4, which
 /// collides with whichever user class lands at id 4, routing the call into the
 /// wrong method body and crashing on the bogus `this` pointer.
+///
+/// # Perry-GC leaf contract (#9480)
+///
+/// Codegen may keep dispatch operands in SSA across this probe. Its complete
+/// call graph is address-range checks, Set/Map registry membership reads, a
+/// validated `GcHeader` read, and the final scalar `class_id` load. Registry
+/// lookup can initialize/consult Rust TLS storage but cannot allocate in the
+/// Perry heap, poll its collector, invoke generated JavaScript, or throw. This
+/// is `extern "C"` (not `C-unwind`) and has no explicit panic/throw path, so it
+/// cannot unwind back into generated code.
 #[no_mangle]
 pub extern "C" fn js_object_get_class_id(obj: *const ObjectHeader) -> u32 {
     if crate::value::addr_class::is_handle_band(obj as usize) {

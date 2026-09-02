@@ -239,6 +239,12 @@ const NON_COLLECTING: &[&str] = &[
     "js_array_declare_all_pointer_elements",
     "js_array_live_head",
     "js_array_length",
+    // #9480 dispatch probes: validated header/registry/shape/slot reads only.
+    // Their keys walk bypasses the generic array accessors; neither helper
+    // allocates in the Perry heap, polls, throws, or re-enters generated JS.
+    // See the complete audit in `gc_call_effects.rs` and the runtime bodies.
+    "js_object_get_class_id",
+    "js_object_get_own_field_or_undef",
     "js_object_mark_class",
     "js_class_object_pin_parent",
     "js_new_target_get",

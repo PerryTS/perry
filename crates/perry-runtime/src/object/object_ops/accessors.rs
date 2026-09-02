@@ -104,6 +104,18 @@ unsafe fn lookup_accessor_annexb(this: f64, key: f64, want_getter: bool) -> f64 
 /// on first call). Distinct from `js_object_get_field_by_name` because it
 /// does NOT walk the class vtable's getter chain — we only want a raw own
 /// data-property read, not a side-effecting getter invocation.
+///
+/// # Perry-GC leaf contract (#9480)
+///
+/// Codegen keeps dispatch operands in SSA across this probe, so this helper
+/// must not allocate in the Perry heap, poll the collector, throw, or re-enter
+/// generated JavaScript. Keep the keys walk on the validated dense-array
+/// representation below: the generic `js_array_length` / `js_array_get`
+/// entry points have lazy/exotic/accessor paths and therefore cannot support
+/// that call-effect certification. Shape-table and overflow-table reads may
+/// initialize or consult Rust/TLS storage, but raw system allocation cannot
+/// arm Perry's collector. This is `extern "C"` (not `C-unwind`) and contains no
+/// explicit panic/throw path, so it cannot unwind back into generated code.
 #[no_mangle]
 pub extern "C" fn js_object_get_own_field_or_undef(
     obj_value: f64,
@@ -149,20 +161,30 @@ pub extern "C" fn js_object_get_own_field_or_undef(
         }
         let keys_gc =
             (keys as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        if (*keys_gc).obj_type != crate::gc::GC_TYPE_ARRAY {
+        if (*keys_gc).obj_type != crate::gc::GC_TYPE_ARRAY
+            || (*keys_gc).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+        {
             return f64::from_bits(TAG_UNDEF);
         }
         let key_bytes = std::slice::from_raw_parts(name_ptr, name_len);
-        let key_count = crate::array::js_array_length(keys) as usize;
-        if key_count > 65536 {
+        // A shape descriptor's keys edge is a live, dense GC_TYPE_ARRAY. Read
+        // its representation directly so this leaf never enters the generic
+        // array accessors (which can materialize lazy arrays or dispatch an
+        // accessor). A forwarded edge is rejected above rather than resolved:
+        // the collector rewrites the descriptor's traced `keys` slot, so a
+        // live descriptor never legitimately retains the old stub.
+        let key_count = (*keys).length as usize;
+        if key_count > (*keys).capacity as usize || key_count > 65536 {
             return f64::from_bits(TAG_UNDEF);
         }
+        let key_slots =
+            (keys as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *const f64;
         let alloc_limit = std::cmp::max(
             crate::object::object_live_slot_count(obj),
             crate::object::INLINE_SLOT_FLOOR as u32,
         ) as usize;
         for i in 0..key_count {
-            let key_val = crate::array::js_array_get(keys, i as u32);
+            let key_val = crate::JSValue::from_bits((*key_slots.add(i)).to_bits());
             // #1781: SSO-aware match by byte slice — the
             // own-property-or-undef path was the route through which
             // hono's `c.req.X` dispatch decided to invoke the vtable
