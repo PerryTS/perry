@@ -1,7 +1,9 @@
 // #9356 acceptance: drizzle-orm transactions over the native `mysql2`
 // binding (perry-ext-mysql2), a few hundred in a row, with the young
 // generation collected every couple of transactions (fixture.sh sets
-// PERRY_GC_SCAVENGE_NURSERY_MB=1).
+// PERRY_GC_SCAVENGE_NURSERY_MB=1). #9516 additionally keeps Drizzle's
+// inferred `MySql2Database<TSchema> & { $client: ... }` intersection intact,
+// so both `execute` and `transaction` exercise typed method dispatch.
 //
 // Before the fix the promise minted by `perry_ffi_promise_new` lived in the
 // nursery; the first copying minor that landed while a query was in flight
@@ -21,11 +23,7 @@ const pool = mysql.createPool({
     password: process.env.PERRY_FIXTURE_MYSQL_PASSWORD ?? "",
     database: "perry_drizzle_test",
 });
-// `any`: the statically typed `db.transaction(...)` call currently throws
-// "Cannot convert undefined or null to object" on main (typed-dispatch
-// regression, tracked separately); the reporter's code hits the same
-// machinery through the dynamic path this exercises.
-const db: any = drizzle(pool, { mode: "default" });
+const db = drizzle(pool, { mode: "default" });
 
 await db.execute(sql`DROP TABLE IF EXISTS tx_notifications`);
 await db.execute(sql`CREATE TABLE tx_notifications (id INT PRIMARY KEY AUTO_INCREMENT, body VARCHAR(32) NOT NULL)`);
@@ -37,7 +35,7 @@ console.log("seeded");
 const ITERATIONS = 400;
 let completed = 0;
 for (let iteration = 1; iteration <= ITERATIONS; iteration++) {
-    await db.transaction(async (tx: any) => {
+    await db.transaction(async (tx) => {
         const result = await tx.execute(sql`
             SELECT a.id
               FROM tx_notifications a
