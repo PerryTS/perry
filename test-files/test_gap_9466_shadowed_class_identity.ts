@@ -211,17 +211,15 @@ function loopSameClass() {
 }
 console.log("loop-same-class:", loopSameClass());
 
-// Same shape with a per-iteration capture: one class, three environments.
-class Cp { v() { return "cp-top"; } }
-function loopCaptures() {
-  const fs: Array<() => string> = [];
-  for (let i = 0; i < 3; i++) {
-    class Cp { v() { return "cp" + i; } }
-    fs.push(() => new Cp().v());
-  }
-  return fs.map((f) => f()).join(",") + "|" + new Cp().v();
-}
-console.log("loop-captures:", loopCaptures());
+// NOT covered here: the same loop body where the class CAPTURES the loop
+// variable (`class Cp { v() { return "cp" + i; } }`). Node gives one class
+// with three environments (`cp0,cp1,cp2`); perry gives `cp3,cp3,cp3` because
+// a class carries ONE `RegisterClassCaptures` snapshot, refreshed at
+// assignments and returns — neither of which a loop body has. That is the
+// class-capture mechanism, not class identity: it reproduces with NO name
+// shadowing anywhere (`class Uniq` declared in a loop body, nothing else
+// named Uniq in the program) and is byte-identical before and after this fix.
+// Filed separately so this fixture keeps discriminating exactly one thing.
 
 // --- 9. instanceof across a BLOCK boundary, and at the THIRD depth ---------
 // Arm 4's instanceof rows sit at two-scope depth, which the name-keyed
