@@ -1053,6 +1053,44 @@ where
     });
 }
 
+/// Spawn an async operation whose success and error values both need to be
+/// materialized on the main thread.
+///
+/// Database adapters use this variant to reject with a real JavaScript Error
+/// (including driver-specific fields such as `code` and `errno`) instead of a
+/// bare string. As with [`spawn_for_promise_deferred`], neither converter runs
+/// on the async executor, where allocating Perry heap values would be unsafe.
+///
+/// # Safety
+/// `promise_ptr` must point to a live Perry Promise.
+pub unsafe fn spawn_for_promise_deferred_with_error<T, E, F, C, R>(
+    promise_ptr: *mut u8,
+    future: F,
+    converter: C,
+    reject_converter: R,
+) where
+    T: Send + 'static,
+    E: Send + 'static,
+    F: Future<Output = Result<T, E>> + Send + 'static,
+    C: FnOnce(T) -> u64 + Send + 'static,
+    R: FnOnce(E) -> u64 + Send + 'static,
+{
+    ensure_pump_registered();
+    ensure_gc_scanner_registered();
+    let ptr = promise_ptr as usize;
+    pin_promise_for_native_resolution(ptr);
+
+    EXT_BLOCKING_TASKS_INFLIGHT.fetch_add(1, Ordering::AcqRel);
+    RUNTIME.spawn(async move {
+        match future.await {
+            Ok(data) => queue_deferred_resolution(ptr, true, move || converter(data)),
+            Err(error) => queue_deferred_resolution(ptr, false, move || reject_converter(error)),
+        }
+        EXT_BLOCKING_TASKS_INFLIGHT.fetch_sub(1, Ordering::AcqRel);
+        perry_runtime::event_pump::js_notify_main_thread();
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

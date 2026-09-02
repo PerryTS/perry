@@ -105,14 +105,25 @@ impl RawQueryResult {
 
     /// Convert to JSValue (call this on main thread only!)
     pub fn to_jsvalue(&self) -> JSValue {
+        self.to_jsvalue_with_rows_as_array(false)
+    }
+
+    /// Convert to mysql2's `[rows, fields]` tuple, optionally representing
+    /// every row as a positional array (`rowsAsArray: true`).
+    pub fn to_jsvalue_with_rows_as_array(&self, rows_as_array: bool) -> JSValue {
         // Create the result tuple [rows, fields]
         let mut result_array = js_array_alloc(2);
 
         // Create rows array
         let mut rows_array = js_array_alloc(self.rows.len() as u32);
         for row in &self.rows {
-            let row_obj = raw_row_to_js_object(row, &self.columns);
-            rows_array = js_array_push(rows_array, JSValue::object_ptr(row_obj as *mut u8));
+            let row_value = if rows_as_array {
+                JSValue::array_ptr(raw_row_to_js_array(row))
+            } else {
+                let row_obj = raw_row_to_js_object(row, &self.columns);
+                JSValue::object_ptr(row_obj as *mut u8)
+            };
+            rows_array = js_array_push(rows_array, row_value);
         }
         let rows_jsval = JSValue::array_ptr(rows_array);
         result_array = js_array_push(result_array, rows_jsval);
@@ -128,6 +139,16 @@ impl RawQueryResult {
 
         JSValue::array_ptr(result_array)
     }
+}
+
+/// Convert a raw row to the positional representation used by mysql2 when
+/// `rowsAsArray` is enabled.
+fn raw_row_to_js_array(row: &RawRowData) -> *mut perry_runtime::ArrayHeader {
+    let mut array = js_array_alloc(row.values.len() as u32);
+    for (_, value) in &row.values {
+        array = js_array_push(array, raw_value_to_jsvalue(value));
+    }
+    array
 }
 
 /// Extract a raw value from a MySQL row (safe to call on any thread)
@@ -346,8 +367,12 @@ pub fn rows_to_result_tuple(rows: Vec<MySqlRow>, columns: &[MySqlColumn]) -> JSV
 
 impl QueryOutcome {
     pub fn to_jsvalue(&self) -> JSValue {
+        self.to_jsvalue_with_rows_as_array(false)
+    }
+
+    pub fn to_jsvalue_with_rows_as_array(&self, rows_as_array: bool) -> JSValue {
         match self {
-            QueryOutcome::Rows(raw) => raw.to_jsvalue(),
+            QueryOutcome::Rows(raw) => raw.to_jsvalue_with_rows_as_array(rows_as_array),
             QueryOutcome::Executed {
                 affected_rows,
                 last_insert_id,
