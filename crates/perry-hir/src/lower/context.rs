@@ -466,20 +466,53 @@ impl LoweringContext {
     pub(crate) fn resolve_class_name(&self, name: &str) -> String {
         self.class_renames
             .get(name)
-            .cloned()
+            .map(|(registration_key, _)| registration_key.clone())
             .unwrap_or_else(|| name.to_string())
     }
 
-    /// Register a scope-local rename for `class X` when an outer/prior `class X`
-    /// is already registered (a distinct class that the name-keyed dedup would
-    /// otherwise skip). Returns immediately if no collision or already aliased.
-    /// Call from each body's Phase-1.5 class scan.
-    pub(crate) fn maybe_rename_colliding_class(&mut self, name: &str) {
-        if self.lookup_class(name).is_some() && !self.class_renames.contains_key(name) {
-            let unique = format!("{}${}", name, self.next_class_rename_id);
-            self.next_class_rename_id += 1;
-            self.class_renames.insert(name.to_string(), unique);
+    /// Mint a scope-local rename for `class X` when an outer/prior `class X` is
+    /// already registered (a distinct class that the name-keyed dedup would
+    /// otherwise skip). Returns `Some(displaced entry)` when it minted — so the
+    /// caller can restore exactly what it replaced — and `None` when no rename
+    /// was needed.
+    ///
+    /// #9466: the "already renamed" guard is per SCOPE, not per name. It used
+    /// to be `!class_renames.contains_key(name)`, but `class_renames` inherits
+    /// every enclosing body's aliases, so a NESTED body declaring the same name
+    /// took that branch and registered its class under the OUTER body's key.
+    /// The two source classes then shared one ClassId, whichever body lowered
+    /// first won, and the other's members silently vanished — no diagnostic.
+    /// Keying on `scope_key` (the declaring scope's source span) keeps the
+    /// idempotence the old guard existed for — one alias per scope, so a scope
+    /// scanned twice (a function body: Phase-1.5, then `lower_block_stmt`)
+    /// mints exactly once — while letting each nested scope mint its own.
+    pub(crate) fn mint_class_rename(
+        &mut self,
+        name: &str,
+        scope_key: u32,
+    ) -> Option<Option<(String, u32)>> {
+        if self.lookup_class(name).is_none() {
+            return None;
         }
+        if self
+            .class_renames
+            .get(name)
+            .is_some_and(|(_, key)| *key == scope_key)
+        {
+            return None;
+        }
+        let unique = format!("{}${}", name, self.next_class_rename_id);
+        self.next_class_rename_id += 1;
+        Some(
+            self.class_renames
+                .insert(name.to_string(), (unique, scope_key)),
+        )
+    }
+
+    /// Single-name entry point for the function-body Phase-1.5 class scans,
+    /// which snapshot and restore the whole `class_renames` map themselves.
+    pub(crate) fn maybe_rename_colliding_class(&mut self, name: &str, scope_key: u32) {
+        let _ = self.mint_class_rename(name, scope_key);
     }
 
     /// Is `name` a user-declared `interface`? Interfaces are not classes, so

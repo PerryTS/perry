@@ -20,7 +20,22 @@ pub(crate) use var_names::{
 
 pub fn lower_block_stmt(ctx: &mut LoweringContext, block: &ast::BlockStmt) -> Result<Vec<Stmt>> {
     rebind_nested_forward_scope_lets(ctx, &block.stmts);
-    lower_stmts_using_aware(ctx, &block.stmts)
+    // #9466: `class` is block-scoped, so a `class X` here is a DISTINCT class
+    // from any enclosing/prior `class X` and needs its own registration key.
+    // This is the funnel every `{}`-shaped scope shares — bare block, `if` /
+    // `else` branch, loop body, `try` / `catch` / `finally` — the same set
+    // `rebind_nested_forward_scope_lets` documents. Bracketed so the alias dies
+    // with the block.
+    //
+    // Keyed on the block's span: a FUNCTION body arrives here after
+    // `lower_fn_body_block_stmt`'s Phase-1.5 scan already aliased this same
+    // block, and the matching key makes this call a no-op rather than a second
+    // alias — which would strand that function's end-of-body capture
+    // re-registration on the now-stale key.
+    let saved_class_renames = enter_class_rename_scope(ctx, block.span.lo.0, &block.stmts);
+    let lowered = lower_stmts_using_aware(ctx, &block.stmts);
+    exit_class_rename_scope(ctx, saved_class_renames);
+    lowered
 }
 
 /// Make the forward-captured `let`/`const` bindings that
@@ -524,7 +539,7 @@ pub fn lower_fn_body_block_stmt(
             // Disambiguate a distinct same-named class declared in this body so
             // its references don't bind to a colliding `class X` elsewhere in
             // the bundled module (see `class_renames`).
-            ctx.maybe_rename_colliding_class(class_decl.ident.sym.as_str());
+            ctx.maybe_rename_colliding_class(class_decl.ident.sym.as_str(), block.span.lo.0);
             let cname = class_decl.ident.sym.to_string();
             // Record the (shallowest) scope depth this class is declared at so a
             // later bare-ident reference can compare it against a same-named
@@ -1025,13 +1040,22 @@ pub fn lower_block_stmt_scoped(
     block: &ast::BlockStmt,
 ) -> Result<Vec<Stmt>> {
     let mark = ctx.push_block_scope();
+    // #9466: the strict-mode branch does NOT route through `lower_block_stmt`,
+    // so the block-scoped class disambiguation is bracketed here, around both
+    // branches. On the non-strict path `lower_block_stmt`'s own bracket sees
+    // this same span key and is a no-op.
+    let saved_class_renames = enter_class_rename_scope(ctx, block.span.lo.0, &block.stmts);
     // Via `lower_block_stmt` so this scope's pre-registered forward-captured
     // lets are re-bound at entry (`rebind_nested_forward_scope_lets`).
     let stmts = if ctx.current_strict {
-        lower_strict_block_fn_decls(ctx, block)?
+        lower_strict_block_fn_decls(ctx, block)
     } else {
-        lower_block_stmt(ctx, block)?
+        lower_block_stmt(ctx, block)
     };
+    exit_class_rename_scope(ctx, saved_class_renames);
+    // `?` deliberately AFTER the rename restore but BEFORE `pop_block_scope`,
+    // preserving this function's original error control flow exactly.
+    let stmts = stmts?;
     ctx.pop_block_scope(mark);
     Ok(stmts)
 }
@@ -1158,6 +1182,58 @@ fn register_block_forward_lexicals(ctx: &mut LoweringContext, stmts: &[ast::Stmt
         }
     }
     newly
+}
+
+/// What one [`enter_class_rename_scope`] bracket displaced, keyed by source
+/// name: `None` = the name had no active alias, `Some(entry)` = the enclosing
+/// scope's alias to put back. See `LoweringContext::class_renames`.
+pub(crate) type ClassRenameScopeSave = Vec<(String, Option<(String, u32)>)>;
+
+/// #9466: scope-entry hook for a `{ … }`-shaped lexical scope — disambiguate
+/// every `class X` declared DIRECTLY in `stmts` and return what to hand to
+/// [`exit_class_rename_scope`] on the way out.
+///
+/// A `class` declaration is block-scoped, so a bare block, an `if`/`else`
+/// branch, a loop body, a `try` / `catch` / `finally` block and a `switch` body
+/// each shadow an enclosing same-named class exactly as a `let` does. Before
+/// #9466 only FUNCTION bodies ran the disambiguation scan, so two sibling
+/// `{ class X { … } }` blocks registered one ClassId between them and the
+/// second block silently ran the first's body.
+///
+/// Deliberately mirrors [`register_block_forward_lexicals`] (#6062), which
+/// brackets this same boundary for TDZ names: record only what this call
+/// changed and undo exactly that, so an alias owned by an enclosing scope
+/// survives the block.
+pub(crate) fn enter_class_rename_scope(
+    ctx: &mut LoweringContext,
+    scope_key: u32,
+    stmts: &[ast::Stmt],
+) -> ClassRenameScopeSave {
+    let mut saved = ClassRenameScopeSave::new();
+    for stmt in stmts {
+        let ast::Stmt::Decl(ast::Decl::Class(class_decl)) = stmt else {
+            continue;
+        };
+        let name = class_decl.ident.sym.as_str();
+        if let Some(displaced) = ctx.mint_class_rename(name, scope_key) {
+            saved.push((name.to_string(), displaced));
+        }
+    }
+    saved
+}
+
+/// Undo an [`enter_class_rename_scope`] bracket, innermost mint first.
+pub(crate) fn exit_class_rename_scope(ctx: &mut LoweringContext, saved: ClassRenameScopeSave) {
+    for (name, displaced) in saved.into_iter().rev() {
+        match displaced {
+            Some(entry) => {
+                ctx.class_renames.insert(name, entry);
+            }
+            None => {
+                ctx.class_renames.remove(&name);
+            }
+        }
+    }
 }
 
 pub fn lower_stmts_using_aware(

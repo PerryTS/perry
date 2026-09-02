@@ -1151,7 +1151,7 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
                 // shape `(function(e){…class s{…}…})(t)` declares superstruct's
                 // `Struct` = `class s`, which collided with other `class s` in
                 // the bundle and was dedup-skipped). See `class_renames`.
-                ctx.maybe_rename_colliding_class(class_decl.ident.sym.as_str());
+                ctx.maybe_rename_colliding_class(class_decl.ident.sym.as_str(), block.span.lo.0);
                 let cname = class_decl.ident.sym.to_string();
                 ctx.forward_class_decl_depth
                     .entry(cname.clone())
