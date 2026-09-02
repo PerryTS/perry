@@ -68,6 +68,23 @@ pub(super) fn attach_promise_all_state(promise: *mut Promise, state: PromiseAllS
         return;
     }
     mark_rejection_handled(promise);
+
+    // The direct PromiseAllState table is allocation-free, but it is a
+    // separate queue from the promise's ordinary reaction slot. If a reaction
+    // is already registered, parking the state here would let Promise.all
+    // overtake that earlier reaction when the promise settles. Join the
+    // ordered overflow path in that uncommon case; a promise with no prior
+    // reaction keeps the direct fast path below.
+    let has_prior_reaction = unsafe {
+        !(*promise).on_fulfilled.is_null()
+            || !(*promise).on_rejected.is_null()
+            || !(*promise).next.is_null()
+    };
+    if has_prior_reaction {
+        attach_promise_all_after_prior_reaction(promise, state);
+        return;
+    }
+
     let mut queued = false;
     unsafe {
         match (*promise).state {
@@ -928,37 +945,7 @@ pub extern "C" fn js_promise_all(promises_arr: *const crate::array::ArrayHeader)
             state_arr,
             index: i,
         };
-
-        unsafe {
-            match (*promise_ptr).state {
-                PromiseState::Fulfilled => {
-                    TASK_QUEUE.with(|q| {
-                        q.borrow_mut().push_back(Task::PromiseAll(
-                            state,
-                            (*promise_ptr).value,
-                            true,
-                            context_for_promise(promise_ptr),
-                        ));
-                    });
-                }
-                PromiseState::Rejected => {
-                    TASK_QUEUE.with(|q| {
-                        q.borrow_mut().push_back(Task::PromiseAll(
-                            state,
-                            (*promise_ptr).reason,
-                            false,
-                            context_for_promise(promise_ptr),
-                        ));
-                    });
-                }
-                PromiseState::Pending => {
-                    PROMISE_ALL_STATES.with(|states| {
-                        states.borrow_mut().push(promise_ptr as usize, state);
-                    });
-                    set_promise_callback_context(promise_ptr);
-                }
-            }
-        }
+        attach_promise_all_state(promise_ptr, state);
     }
 
     let remaining = js_array_get_f64(state_arr, 0);
@@ -968,6 +955,78 @@ pub extern "C" fn js_promise_all(promises_arr: *const crate::array::ArrayHeader)
     }
 
     result_promise
+}
+
+/// Attach a Promise.all element after reactions already registered on the
+/// input promise. The closures enter the same overflow list as later `.then`
+/// calls, preserving registration order without penalizing the empty-slot fast
+/// path above.
+fn attach_promise_all_after_prior_reaction(promise: *mut Promise, state: PromiseAllState) {
+    use crate::closure::{
+        js_closure_alloc, js_closure_set_capture_f64, js_closure_set_capture_ptr,
+    };
+
+    // Both closure allocations may collect. Root every pointer that is stored
+    // afterwards, including the first closure across allocation of the second.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let promise_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(promise as i64));
+    let result_h =
+        scope.root_nanbox_f64(crate::value::js_nanbox_pointer(state.result_promise as i64));
+    let results_h =
+        scope.root_nanbox_f64(crate::value::js_nanbox_pointer(state.results_arr as i64));
+    let state_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(state.state_arr as i64));
+    let fulfill_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(js_closure_alloc(
+        promise_all_ordered_fulfill_handler as *const u8,
+        4,
+    ) as i64));
+    let reject_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(js_closure_alloc(
+        promise_all_ordered_reject_handler as *const u8,
+        2,
+    ) as i64));
+
+    let ptr_of =
+        |h: &crate::gc::RuntimeHandle<'_>| crate::value::js_nanbox_get_pointer(h.get_nanbox_f64());
+    let fulfill = ptr_of(&fulfill_h) as *mut crate::closure::ClosureHeader;
+    js_closure_set_capture_ptr(fulfill, 0, ptr_of(&result_h));
+    js_closure_set_capture_ptr(fulfill, 1, ptr_of(&results_h));
+    js_closure_set_capture_ptr(fulfill, 2, ptr_of(&state_h));
+    js_closure_set_capture_f64(fulfill, 3, state.index as f64);
+
+    let reject = ptr_of(&reject_h) as *mut crate::closure::ClosureHeader;
+    js_closure_set_capture_ptr(reject, 0, ptr_of(&result_h));
+    js_closure_set_capture_ptr(reject, 1, ptr_of(&state_h));
+
+    js_promise_attach_handlers(ptr_of(&promise_h) as *mut Promise, fulfill, reject);
+}
+
+extern "C" fn promise_all_ordered_fulfill_handler(
+    closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) -> f64 {
+    use crate::closure::{js_closure_get_capture_f64, js_closure_get_capture_ptr};
+    promise_all_fulfill_direct(
+        PromiseAllState {
+            result_promise: js_closure_get_capture_ptr(closure, 0) as *mut Promise,
+            results_arr: js_closure_get_capture_ptr(closure, 1) as *mut crate::array::ArrayHeader,
+            state_arr: js_closure_get_capture_ptr(closure, 2) as *mut crate::array::ArrayHeader,
+            index: js_closure_get_capture_f64(closure, 3) as u32,
+        },
+        value,
+    );
+    0.0
+}
+
+extern "C" fn promise_all_ordered_reject_handler(
+    closure: *const crate::closure::ClosureHeader,
+    reason: f64,
+) -> f64 {
+    use crate::closure::js_closure_get_capture_ptr;
+    promise_all_reject_direct(
+        js_closure_get_capture_ptr(closure, 0) as *mut Promise,
+        js_closure_get_capture_ptr(closure, 1) as *mut crate::array::ArrayHeader,
+        reason,
+    );
+    0.0
 }
 
 #[inline]
