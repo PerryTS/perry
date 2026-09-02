@@ -181,8 +181,13 @@ fn describe_rejection_reason(v: f64) -> String {
         // Offset 0 is `class_id` now, and `OBJECT_TYPE_ERROR` is 2 — an
         // ordinary user class id.
         if unsafe { crate::error::ptr_is_native_error(ptr) } {
-            let eh = ptr as *const crate::error::ErrorHeader;
-            let stack = unsafe { crate::exception::string_header_to_string((*eh).stack) };
+            // #9486: through the accessor, never off the field — the field is
+            // null until the first read materialises it.
+            let stack = unsafe {
+                crate::exception::string_header_to_string(crate::error::js_error_get_stack(
+                    ptr as *mut crate::error::ErrorHeader,
+                ))
+            };
             return format!("error(0x{ptr:x}) stack={stack:?}");
         }
         return format!("pointer(0x{ptr:x})");
@@ -464,8 +469,14 @@ fn print_unhandled_diagnostic(reason: f64) {
         // #8113: `GcHeader.obj_type == GC_TYPE_ERROR` (which subsumes the
         // band+plausibility gate above), not a raw offset-0 read.
         if unsafe { crate::error::ptr_is_native_error(ptr) } {
-            let eh = ptr as *const crate::error::ErrorHeader;
-            let stack_str = unsafe { crate::exception::string_header_to_string((*eh).stack) };
+            // #9486: through the accessor — see above. This is the line that
+            // prints an unhandled rejection's trace, so a null read here is
+            // exactly the frameless report this issue is about.
+            let stack_str = unsafe {
+                crate::exception::string_header_to_string(crate::error::js_error_get_stack(
+                    ptr as *mut crate::error::ErrorHeader,
+                ))
+            };
             if !stack_str.is_empty() {
                 eprintln!("Uncaught (in promise) {stack_str}");
                 return;

@@ -700,7 +700,9 @@ mod tests {
         assert!(crate::error::ptr_is_native_error(error as usize));
         assert_eq!(string_bytes((*error).message), expected);
 
-        let stack = string_bytes((*error).stack);
+        // #9486: through the accessor, never off the field — `alloc_error`
+        // leaves `stack` null and the first read materialises it.
+        let stack = string_bytes(crate::error::js_error_get_stack(error));
         assert!(
             stack.starts_with(b"Error: ") && stack.windows(expected.len()).any(|w| w == expected),
             "Error.stack must include the rejection message: {}",
