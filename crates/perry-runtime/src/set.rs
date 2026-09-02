@@ -1919,6 +1919,8 @@ fn js_set_foreach_impl(
         // during the callback are visited too. Bounding this by the live count
         // surfaced holes and stopped before later live values (#9072).
         let mut i = 0usize;
+        // #9445: the displaced receiver is rooted ONCE here, not once per callback.
+        let prev_this = scope.root_nanbox_f64(crate::object::js_implicit_this_get());
         loop {
             let set = set_handle.get_raw_const_ptr::<SetHeader>();
             if i >= (*set).used as usize {
@@ -1941,8 +1943,7 @@ fn js_set_foreach_impl(
             let args = [value, value, set_value];
             let cb = callback_handle.get_nanbox_f64();
             let this_v = this_handle.get_nanbox_f64();
-            let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-            let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(this_v));
+            crate::object::js_implicit_this_set(this_v);
             let _ = crate::closure::js_native_call_value(cb, args.as_ptr(), args.len());
             crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
         }

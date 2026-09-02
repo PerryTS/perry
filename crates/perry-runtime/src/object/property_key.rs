@@ -129,8 +129,7 @@ unsafe fn ordinary_to_primitive_string_key(value: f64) -> Option<f64> {
             continue;
         }
         let bound = crate::closure::clone_closure_rebind_this(method_bits, receiver);
-        let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-        let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
+        let prev_this = scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
         let result =
             crate::closure::js_native_call_value(f64::from_bits(bound), std::ptr::null(), 0);
         crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
@@ -570,8 +569,7 @@ pub unsafe extern "C" fn js_object_super_call(
     let bound = crate::closure::clone_closure_rebind_this(callee_handle.get_nanbox_u64(), receiver);
     let bound_handle = scope.root_nanbox_u64(bound);
     let receiver = f64::from_bits(receiver_handle.get_heap_word_u64());
-    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-    let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
+    let prev_this = scope.root_nanbox_f64(crate::object::js_implicit_this_set(receiver));
     let result = crate::closure::js_native_call_value(
         f64::from_bits(bound_handle.get_nanbox_u64()),
         args_ptr,

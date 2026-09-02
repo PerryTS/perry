@@ -692,12 +692,14 @@ pub(crate) extern "C" fn typed_array_from_thunk(
     // possibly throwing) element coercion INTERLEAVE per spec, so an abrupt
     // coercion at element k means the map callback never ran for k+1
     // (test262 from/set-value-abrupt-completion).
+    let this_scope = crate::gc::RuntimeHandleScope::new();
+    // #9445: the displaced receiver is rooted ONCE here, not once per callback.
+    let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_get());
     let map_at = |k: usize, v: f64| -> f64 {
         if map_closure.is_null() {
             return v;
         }
-        let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-        let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(this_arg));
+        crate::object::js_implicit_this_set(this_arg);
         let r = crate::closure::js_closure_call2(map_closure, v, k as f64);
         crate::object::js_implicit_this_set(prev.get_nanbox_f64());
         r

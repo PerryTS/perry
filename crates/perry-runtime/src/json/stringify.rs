@@ -347,8 +347,7 @@ pub(crate) unsafe fn array_get_to_json(arr: *const crate::ArrayHeader) -> Option
     let recv_handle = scope.root_nanbox_f64(recv);
     // `toJSON(key)` receives the property key of this array value (#5909).
     let key_f64_arg = current_to_json_key_arg();
-    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-    let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(
+    let prev_this = scope.root_nanbox_f64(crate::object::js_implicit_this_set(
         recv_handle.get_nanbox_f64(),
     ));
     let result = crate::closure::js_native_call_value(f64::from_bits(method_bits), &key_f64_arg, 1);

@@ -295,8 +295,7 @@ pub(crate) unsafe fn call_private_static_method_for_owner(
     let scope = crate::gc::RuntimeHandleScope::new();
     let this_value = scope.root_nanbox_f64(this_value);
     let private_brand = scope.root_nanbox_f64(private_brand);
-    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-    let previous_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(
+    let previous_this = scope.root_nanbox_f64(crate::object::js_implicit_this_set(
         this_value.get_nanbox_f64(),
     ));
     crate::object::static_private_owner_push(private_brand.get_nanbox_f64());

@@ -52,6 +52,9 @@ pub(crate) fn cp_emit(target: f64, event: &str, args: &[f64]) -> bool {
     let key = cp_listener_key(event);
     let mut i: u32 = 0;
     let mut fired = false;
+    let this_scope = crate::gc::RuntimeHandleScope::new();
+    // #9445: the displaced receiver is rooted ONCE here, not once per callback.
+    let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_get());
     loop {
         let arr = match cp_array_ptr(cp_get_field(target, &key)) {
             Some(a) => a,
@@ -61,8 +64,7 @@ pub(crate) fn cp_emit(target: f64, event: &str, args: &[f64]) -> bool {
             break;
         }
         let cb = crate::array::js_array_get_f64(arr, i);
-        let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-        let prev = this_scope.root_nanbox_f64(js_implicit_this_set(target));
+        js_implicit_this_set(target);
         unsafe {
             let _ = js_native_call_value(cb, args.as_ptr(), args.len());
         }

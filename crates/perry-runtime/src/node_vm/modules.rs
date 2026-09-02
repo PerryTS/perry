@@ -75,8 +75,7 @@ fn evaluate_synthetic_module(module: *mut ObjectHeader) -> f64 {
     }));
     let js = JSValue::from_bits(callback.get_nanbox_f64().to_bits());
     if !js.is_undefined() && !js.is_null() {
-        let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-        let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(with_hmut(
+        let prev = scope.root_nanbox_f64(crate::object::js_implicit_this_set(with_hmut(
             &module,
             object_value,
         )));

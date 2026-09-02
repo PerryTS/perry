@@ -654,8 +654,7 @@ pub unsafe extern "C" fn js_to_primitive(value: f64, hint: i32) -> f64 {
     // `this.celsius` resolved to `undefined`, so `+t` was `NaN` and `` `${t}` ``
     // was `undefined°C` (test_gap_symbols). The proxy arm above already binds
     // `this`; mirror it for the closure method.
-    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-    let prev_this = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(
+    let prev_this = scope.root_nanbox_f64(crate::object::js_implicit_this_set(
         value_handle.get_nanbox_f64(),
     ));
     // Spec says the return value must be a primitive; if it's still an
