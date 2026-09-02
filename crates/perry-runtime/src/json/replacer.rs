@@ -685,20 +685,28 @@ pub unsafe extern "C" fn js_json_stringify_with_replacer(
         // Fall back to normal stringify if replacer is null
         return js_json_stringify(value, type_hint);
     }
+    // #9445: the root `toJSON` and the root replacer call below both run user
+    // code. The replacer closure and the `""` key are young heap cells held in
+    // bare locals across them and are consumed AFTER (the key by the replacer
+    // call, the closure by the walk) — an evacuating minor inside either
+    // callback left the walk calling a retired closure (SIGSEGV in
+    // `js_closure_call2`). Root both and re-read at each use.
+    let root_scope = crate::gc::RuntimeHandleScope::new();
+    let replacer_root = root_scope.root_raw_const_ptr(replacer);
 
     // Per JSON spec, the initial call to the replacer is with key="" and the
     // root value — but toJSON runs FIRST (SerializeJSONProperty step 2).
     let empty_str = js_string_from_bytes(b"".as_ptr(), 0);
-    let empty_key_f64 = nanbox_string_f64(empty_str);
-    let value_after_to_json = apply_to_json_keyed(value, empty_key_f64);
+    let empty_key_root = root_scope.root_nanbox_f64(nanbox_string_f64(empty_str));
+    let value_after_to_json = apply_to_json_keyed(value, empty_key_root.get_nanbox_f64());
 
     // Call replacer with ("", root_value), `this` = the `{ "": value }` wrapper.
     // Per spec the holder wraps the ORIGINAL root value (so a root replacer's
     // `this[""]` observes the pre-`toJSON` value); only the replacer's value
     // argument is post-`toJSON`. CodeRabbit (PR #5438).
     let replaced_root = call_replacer(
-        replacer,
-        empty_key_f64,
+        replacer_root.get_raw_const_ptr::<crate::ClosureHeader>(),
+        empty_key_root.get_nanbox_f64(),
         value_after_to_json,
         root_holder(value),
     );
@@ -739,7 +747,14 @@ pub unsafe extern "C" fn js_json_stringify_with_replacer(
     // inline, pointers via the GC-tag dispatch (compact, no indent).
     if !write_replaced_scalar(&mut buf, replaced_root) {
         let ptr = extract_pointer(replaced_bits).unwrap();
-        dispatch_pointer_with_replacer(ptr, replaced_root, replacer, &mut buf, "", 0);
+        dispatch_pointer_with_replacer(
+            ptr,
+            replaced_root,
+            replacer_root.get_raw_const_ptr::<crate::ClosureHeader>(),
+            &mut buf,
+            "",
+            0,
+        );
     }
 
     let result = js_string_from_bytes(buf.as_ptr(), buf.len() as u32);
@@ -1743,12 +1758,17 @@ pub unsafe extern "C" fn js_json_stringify_full(
         // Function replacer. Per spec SerializeJSONProperty: toJSON FIRST, then
         // the replacer, then serialize — threading `indent_str` so the 3-arg
         // form (replacer + space) pretty-prints, matching Node.
+        //
+        // #9445: see `js_json_stringify_with_replacer` — the closure and the
+        // `""` key live across two user callbacks and are consumed after them.
+        let root_scope = crate::gc::RuntimeHandleScope::new();
+        let replacer_root = root_scope.root_raw_const_ptr(closure_ptr);
         let empty_str = js_string_from_bytes(b"".as_ptr(), 0);
-        let empty_key_f64 = nanbox_string_f64(empty_str);
-        let value_after_to_json = apply_to_json_keyed(value, empty_key_f64);
+        let empty_key_root = root_scope.root_nanbox_f64(nanbox_string_f64(empty_str));
+        let value_after_to_json = apply_to_json_keyed(value, empty_key_root.get_nanbox_f64());
         let replaced_root = call_replacer(
-            closure_ptr,
-            empty_key_f64,
+            replacer_root.get_raw_const_ptr::<crate::ClosureHeader>(),
+            empty_key_root.get_nanbox_f64(),
             value_after_to_json,
             root_holder(value_after_to_json),
         );
@@ -1772,7 +1792,7 @@ pub unsafe extern "C" fn js_json_stringify_full(
             dispatch_pointer_with_replacer(
                 ptr,
                 replaced_root,
-                closure_ptr,
+                replacer_root.get_raw_const_ptr::<crate::ClosureHeader>(),
                 &mut buf,
                 &indent_str,
                 0,
