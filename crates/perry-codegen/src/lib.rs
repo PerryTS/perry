@@ -8,6 +8,7 @@ pub mod block;
 pub(crate) mod boxed_vars;
 pub mod codegen;
 pub(crate) mod collectors;
+pub(crate) mod concat_site_cache;
 #[cfg(feature = "llvm-inprocess")]
 pub(crate) mod dialect;
 pub(crate) mod eh_mode;
@@ -25,7 +26,6 @@ pub(crate) mod lower_array_method;
 pub(crate) mod lower_call;
 pub(crate) mod lower_conditional;
 pub(crate) mod lower_string_concat;
-pub(crate) mod concat_site_cache;
 pub(crate) mod lower_string_method;
 pub mod module;
 pub mod nanbox;
