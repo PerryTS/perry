@@ -63,9 +63,17 @@ console.log(valued + 2);
     assert_eq!(
         String::from_utf8_lossy(&run.stdout),
         concat!(
-            "string function K() { [native code] }1\n",
-            "string 1function K() { [native code] }\n",
-            "string function K() { [native code] }01234567\n",
+            // #9465 made class name/toString/inspect report SOURCE IDENTITY,
+            // which is what node does — `String(class K {…})` is the class's
+            // source text, not `function K() { [native code] }`. Verified:
+            //   $ node -e 'class K { static m() { return 1; } }; \
+            //              console.log("string " + K + "1")'
+            //   string class K { static m() { return 1; } }1
+            // Perry reports the TypeScript source it compiled, so the type
+            // annotation is retained here.
+            "string class K { static m(): number { return 1; } }1\n",
+            "string 1class K { static m(): number { return 1; } }\n",
+            "string class K { static m(): number { return 1; } }01234567\n",
             "42\n"
         )
     );
