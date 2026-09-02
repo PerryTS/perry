@@ -227,3 +227,23 @@ fn test_jsvalue_equals_distinct_box_allocated_registered_symbols() {
 
     assert_eq!(js_jsvalue_equals(left, right), 0);
 }
+
+/// #9462: a hole reaching a string coercion rendered as `"NaN"` — the sentinel's
+/// bits are a NaN and the ladder's tail is `js_number_to_string`. Node prints
+/// `"undefined"` for `String(a[i])` on an empty slot, and template
+/// interpolation and `x.toString()` funnel through this same helper.
+#[test]
+fn an_array_hole_stringifies_as_undefined() {
+    fn text(value: f64) -> String {
+        let ptr = crate::value::js_jsvalue_to_string(value);
+        assert!(!ptr.is_null());
+        unsafe { crate::object::has_own_helpers::str_from_string_header(ptr) }
+            .expect("a rendered string is UTF-8")
+            .to_string()
+    }
+    assert_eq!(text(f64::from_bits(TAG_HOLE)), "undefined");
+    // Controls: a real NaN still prints NaN, and undefined is unchanged.
+    assert_eq!(text(f64::NAN), "NaN");
+    assert_eq!(text(f64::from_bits(TAG_UNDEFINED)), "undefined");
+    assert_eq!(text(f64::from_bits(TAG_NULL)), "null");
+}

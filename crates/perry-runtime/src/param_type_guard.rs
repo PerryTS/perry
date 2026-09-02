@@ -313,7 +313,14 @@ impl GuardState<'_> {
         Some((object, address, live_slots))
     }
 
-    unsafe fn plain_map(&self, value: JSValue) -> Option<(*const crate::map::MapHeader, usize)> {
+    /// Returns `(header, live_count, used_extent)`. #9462: raw entry indices
+    /// run `0..used`; `size` is the LIVE count and `used - size` counts the
+    /// tombstones a `.delete()` left behind. A walk needs BOTH — the bound is
+    /// `used`, the accept still has to describe `size` live entries.
+    unsafe fn plain_map(
+        &self,
+        value: JSValue,
+    ) -> Option<(*const crate::map::MapHeader, usize, usize)> {
         if !value.is_pointer() {
             return None;
         }
@@ -330,13 +337,23 @@ impl GuardState<'_> {
         let map = address as *const crate::map::MapHeader;
         let size = (*map).size as usize;
         let capacity = (*map).capacity as usize;
-        if size > capacity || size > MAX_CONTAINER_LEN || (size != 0 && (*map).entries.is_null()) {
+        let used = (*map).used as usize;
+        if size > capacity
+            || used > capacity
+            || used < size
+            || used > MAX_CONTAINER_LEN
+            || (used != 0 && (*map).entries.is_null())
+        {
             return None;
         }
-        Some((map, size))
+        Some((map, size, used))
     }
 
-    unsafe fn plain_set(&self, value: JSValue) -> Option<(*const crate::set::SetHeader, usize)> {
+    /// Returns `(header, live_count, used_extent)` — see [`Self::plain_map`].
+    unsafe fn plain_set(
+        &self,
+        value: JSValue,
+    ) -> Option<(*const crate::set::SetHeader, usize, usize)> {
         if !value.is_pointer() {
             return None;
         }
@@ -353,10 +370,16 @@ impl GuardState<'_> {
         let set = address as *const crate::set::SetHeader;
         let size = (*set).size as usize;
         let capacity = (*set).capacity as usize;
-        if size > capacity || size > MAX_CONTAINER_LEN || (size != 0 && (*set).elements.is_null()) {
+        let used = (*set).used as usize;
+        if size > capacity
+            || used > capacity
+            || used < size
+            || used > MAX_CONTAINER_LEN
+            || (used != 0 && (*set).elements.is_null())
+        {
             return None;
         }
-        Some((set, size))
+        Some((set, size, used))
     }
 
     /// Resolve and validate the object's `keys_array` ONCE per object (#8202).
@@ -649,15 +672,27 @@ impl GuardState<'_> {
                 {
                     return false;
                 }
-                let Some((map, size)) = self.plain_map(value) else {
+                let Some((map, size, used)) = self.plain_map(value) else {
                     return false;
                 };
                 if track && self.seen_or_insert(map as usize, node_id) {
                     return true;
                 }
                 let entries = (*map).entries as *const f64;
-                for index in 0..size {
+                // #9462: walk raw entries `0..used` and SKIP tombstones, the way
+                // the Map iterators do. Bounding by `size` read a tombstoned
+                // entry as if it were real — a `TAG_HOLE` key matches no
+                // descriptor node — so a legitimate `Map<string, number>`
+                // parameter silently lost its specialized clone after any
+                // `.delete()`, while the live entries past `size` went
+                // unchecked. `OP_ARRAY`/`OP_TUPLE` *reject* a hole because
+                // there it is an element; here it is bookkeeping.
+                let mut live = 0usize;
+                for index in 0..used {
                     let key = JSValue::from_bits(std::ptr::read(entries.add(index * 2)).to_bits());
+                    if key.bits() == TAG_HOLE {
+                        continue;
+                    }
                     let value =
                         JSValue::from_bits(std::ptr::read(entries.add(index * 2 + 1)).to_bits());
                     if !self.matches(key, key_node, depth + 1)
@@ -665,8 +700,12 @@ impl GuardState<'_> {
                     {
                         return false;
                     }
+                    live += 1;
                 }
-                true
+                // The walk must have seen exactly the live count; anything else
+                // means the header's bookkeeping disagrees with its buffer, and
+                // the guard fails closed onto the generic function.
+                live == size
             }
             OP_SET => {
                 let Some(child) = read_u32(node, 1) else {
@@ -675,20 +714,26 @@ impl GuardState<'_> {
                 if node.len() != 5 || self.descriptor.node(child).is_none() {
                     return false;
                 }
-                let Some((set, size)) = self.plain_set(value) else {
+                let Some((set, size, used)) = self.plain_set(value) else {
                     return false;
                 };
                 if track && self.seen_or_insert(set as usize, node_id) {
                     return true;
                 }
                 let elements = (*set).elements as *const f64;
-                for index in 0..size {
+                // #9462: same `used`-bounded, tombstone-skipping walk as OP_MAP.
+                let mut live = 0usize;
+                for index in 0..used {
                     let element = JSValue::from_bits(std::ptr::read(elements.add(index)).to_bits());
+                    if element.bits() == TAG_HOLE {
+                        continue;
+                    }
                     if !self.matches(element, child, depth + 1) {
                         return false;
                     }
+                    live += 1;
                 }
-                true
+                live == size
             }
             _ => false,
         }
@@ -1046,5 +1091,87 @@ mod tests {
         assert_eq!(guard(set_value, &set_descriptor), 1);
         crate::set::js_set_add(set, 7.0);
         assert_eq!(guard(set_value, &set_descriptor), 0);
+    }
+
+    /// #9462: a tombstone must not deopt a legitimate collection parameter.
+    ///
+    /// This IS the guard's own accept/deopt observable — the verdict
+    /// `js_param_type_guard` hands the specialized clone — not a timing proxy.
+    /// Raw entry indices run `0..used` while `size` is the live count, so the
+    /// old `0..size` walk read the hole `.delete()` left as if it were a real
+    /// entry (no descriptor node matches `TAG_HOLE`, so: deopt) AND never
+    /// reached the live entry sitting past it.
+    #[test]
+    fn a_tombstoned_entry_does_not_deopt_a_collection_parameter() {
+        let _global = crate::gc::global_side_table_test_lock();
+
+        let map_descriptor = descriptor(
+            0,
+            &[
+                &[OP_MAP, 1, 0, 0, 0, 2, 0, 0, 0],
+                &[OP_STRING],
+                &[OP_NUMBER],
+            ],
+        );
+        let map = crate::map::js_map_alloc(4);
+        for (name, value) in [(&b"a"[..], 1.0), (&b"b"[..], 2.0), (&b"c"[..], 3.0)] {
+            let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+            crate::map::js_map_set(map, crate::value::js_nanbox_string(key as i64), value);
+        }
+        let map_value = JSValue::from_bits(crate::value::js_nanbox_pointer(map as i64).to_bits());
+        assert_eq!(
+            guard(map_value, &map_descriptor),
+            1,
+            "a clean Map validates"
+        );
+
+        let doomed = crate::string::js_string_from_bytes(b"a".as_ptr(), 1);
+        assert_eq!(
+            crate::map::js_map_delete(map, crate::value::js_nanbox_string(doomed as i64)),
+            1,
+        );
+        assert_eq!(
+            guard(map_value, &map_descriptor),
+            1,
+            "a deleted key must not cost the specialized clone"
+        );
+
+        // …and the entry PAST the tombstone is genuinely validated, not merely
+        // skipped: `c` sits at raw index 2, beyond the live `size` of 2.
+        let liar = crate::string::js_string_from_bytes(b"c".as_ptr(), 1);
+        crate::map::js_map_set(
+            map,
+            crate::value::js_nanbox_string(liar as i64),
+            crate::value::js_nanbox_string(liar as i64),
+        );
+        assert_eq!(
+            guard(map_value, &map_descriptor),
+            0,
+            "the live tail past `size` is still type-checked"
+        );
+
+        let set_descriptor = descriptor(0, &[&[OP_SET, 1, 0, 0, 0], &[OP_NUMBER]]);
+        let set = crate::set::js_set_alloc(4);
+        for value in [1.0, 2.0, 3.0] {
+            crate::set::js_set_add(set, value);
+        }
+        let set_value = JSValue::from_bits(crate::value::js_nanbox_pointer(set as i64).to_bits());
+        assert_eq!(
+            guard(set_value, &set_descriptor),
+            1,
+            "a clean Set validates"
+        );
+        assert_eq!(crate::set::js_set_delete(set, 1.0), 1);
+        assert_eq!(
+            guard(set_value, &set_descriptor),
+            1,
+            "a deleted element must not cost the specialized clone"
+        );
+        crate::set::js_set_add(set, f64::from_bits(TAG_TRUE));
+        assert_eq!(
+            guard(set_value, &set_descriptor),
+            0,
+            "and a genuinely wrong element still deopts"
+        );
     }
 }

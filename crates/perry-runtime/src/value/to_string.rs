@@ -1029,7 +1029,12 @@ pub extern "C" fn js_jsvalue_to_string(value: f64) -> *mut crate::string::String
         // a correctness-preserving compatibility shim for the many
         // call sites that currently expect a heap pointer.
         crate::string::js_string_materialize_to_heap(value)
-    } else if jsval.is_undefined() {
+    } else if jsval.is_undefined() || jsval.bits() == crate::value::TAG_HOLE {
+        // #9462: an empty-slot sentinel that reached a string coercion. Its
+        // bits are a NaN, so the numeric tail below rendered it "NaN"; node
+        // prints "undefined" for `String(a[i])` on an empty slot. Template
+        // interpolation and `x.toString()` both funnel through here, so this
+        // one arm covers all three spellings.
         crate::string::js_string_from_bytes(b"undefined".as_ptr(), 9)
     } else if jsval.is_null() {
         crate::string::js_string_from_bytes(b"null".as_ptr(), 4)

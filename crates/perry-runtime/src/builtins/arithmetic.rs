@@ -689,7 +689,12 @@ enum ValueTypeofTag {
 fn classify_value_typeof(value: f64) -> ValueTypeofTag {
     let jsval = JSValue::from_bits(value.to_bits());
 
-    if jsval.is_undefined() {
+    if jsval.is_undefined() || jsval.bits() == crate::value::TAG_HOLE {
+        // #9462: `TAG_HOLE` is the internal empty-slot sentinel, and its bit
+        // pattern IS a NaN — without this arm it fell all the way through to
+        // the "regular f64 number" tail and `typeof` answered "number". User
+        // code only ever observes an unset slot as `undefined`, which is also
+        // what node reports.
         ValueTypeofTag::Undefined
     } else if jsval.is_null() {
         // typeof null === "object" in JavaScript
@@ -953,6 +958,30 @@ mod rel_numeric_fastpath_tests {
         assert!(!is_true(js_rel_gt(-0.0, 0.0)));
         assert!(is_true(js_rel_le(-0.0, 0.0)));
         assert!(is_true(js_rel_ge(-0.0, 0.0)));
+    }
+
+    /// #9462: `TAG_HOLE` is a NaN bit pattern, so without its own arm it fell
+    /// through every tag test to the "regular f64 number" tail and `typeof`
+    /// answered "number". User code only ever observes an unset slot as
+    /// `undefined`. This arm is defence in depth once the leak source in
+    /// `js_array_get_f64` is fixed — it is what keeps the NEXT producer of a
+    /// stray hole from re-opening the same symptom.
+    #[test]
+    fn an_array_hole_is_typeof_undefined() {
+        let hole = f64::from_bits(crate::value::TAG_HOLE);
+        assert_eq!(
+            js_value_typeof_tag(hole),
+            js_value_typeof_tag(f64::from_bits(crate::value::TAG_UNDEFINED)),
+            "a hole classifies exactly as undefined"
+        );
+        // Controls: a real NaN is still a number, and so is an ordinary double.
+        assert_ne!(js_value_typeof_tag(f64::NAN), js_value_typeof_tag(hole));
+        assert_eq!(js_value_typeof_tag(f64::NAN), js_value_typeof_tag(1.5));
+        // TDZ shares the 0x7FFC singleton namespace and must not be swept up.
+        assert_ne!(
+            js_value_typeof_tag(f64::from_bits(crate::value::TAG_TDZ)),
+            js_value_typeof_tag(hole)
+        );
     }
 
     #[test]
