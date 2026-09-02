@@ -435,6 +435,12 @@ pub(crate) unsafe fn js_array_from_string_codepoints(
         js_array_alloc_pointer_elements(count as u32)
     });
     let arr_handle = scope.root_raw_mut_ptr(arr);
+    // The CURRENT array pointer, refreshed from every `across_mut` re-read
+    // below. Nothing between one refresh and the next allocates
+    // (`with_const_ptr` only copies into a stack buffer and
+    // `store_codepoint_string` is a direct slot write + barrier), so this is
+    // always valid — including at the final return, which needs no re-read.
+    let mut arr_latest = arr;
 
     let mut offset = 0usize;
     for index in 0..count {
@@ -443,21 +449,26 @@ pub(crate) unsafe fn js_array_from_string_codepoints(
         // it a pointer into the GC heap is the #5062 dangling-source class. A
         // WTF-8 sequence is at most 4 bytes.
         let mut buf = [0u8; 4];
-        let seq_len;
-        {
-            let s_now = s_handle.get_raw_const_ptr::<crate::string::StringHeader>();
+        // The copy into `buf` is the whole validity window for the string
+        // pointer, so scope it with `with_const_ptr` — nothing in the closure
+        // allocates, and the pointer never escapes it.
+        let seq_len = s_handle.with_const_ptr::<crate::string::StringHeader, _>(|s_now| {
             let bytes = std::slice::from_raw_parts(
                 crate::string::string_data(s_now),
                 (*s_now).byte_len as usize,
             );
             if offset >= bytes.len() {
-                break;
+                return 0;
             }
             let (advance, _, _) = crate::string::wtf8_step(bytes, offset);
             let end = (offset + advance).min(bytes.len());
-            seq_len = end - offset;
-            buf[..seq_len].copy_from_slice(&bytes[offset..end]);
+            let len = end - offset;
+            buf[..len].copy_from_slice(&bytes[offset..end]);
             offset = end;
+            len
+        });
+        if seq_len == 0 {
+            break;
         }
         // `js_string_from_bytes` hardcodes flags = 0, so a lone surrogate
         // carved out of a WTF-8 source would lose its marker and
@@ -470,9 +481,10 @@ pub(crate) unsafe fn js_array_from_string_codepoints(
                 crate::string::js_string_from_bytes(seq.as_ptr(), seq_len as u32)
             }
         });
+        arr_latest = arr_now;
         store_codepoint_string(arr_now, index, sh);
     }
-    arr_handle.get_raw_mut_ptr::<ArrayHeader>()
+    arr_latest
 }
 
 /// Exact-sized array allocation for array literals `[a, b, c, ...]`.
