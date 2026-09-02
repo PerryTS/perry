@@ -495,40 +495,108 @@ pub(crate) fn decimal_msd_exponent(int_part: &str, frac_part: &str) -> i32 {
     }
 }
 
-/// Group an integer digit string into locale parts. Pushes `integer`/`group`
-/// segments. Grouping is applied when `grouping` is true and the integer has >3
-/// digits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct DecimalGrouping {
+    primary: usize,
+    secondary: usize,
+    min_grouping: usize,
+}
+
+const WESTERN_GROUPING: DecimalGrouping = DecimalGrouping {
+    primary: 3,
+    secondary: 3,
+    min_grouping: 1,
+};
+
+#[cfg(feature = "intl-namespace")]
+fn icu_locale_grouping(locale: &str) -> Option<DecimalGrouping> {
+    use icu_decimal::provider::{Baked, DecimalSymbolsV1};
+    use icu_provider::{DataIdentifierBorrowed, DataProvider, DataRequest, DataResponse};
+
+    let locale: icu_locale_core::Locale = locale.parse().ok()?;
+    let data_locale = icu_provider::DataLocale::from(&locale);
+    let response: DataResponse<DecimalSymbolsV1> = Baked
+        .load(DataRequest {
+            id: DataIdentifierBorrowed::for_locale(&data_locale),
+            ..Default::default()
+        })
+        .ok()?;
+    let sizes = response.payload.get().grouping_sizes;
+    Some(DecimalGrouping {
+        primary: sizes.primary as usize,
+        secondary: if sizes.secondary == 0 {
+            sizes.primary as usize
+        } else {
+            sizes.secondary as usize
+        },
+        min_grouping: sizes.min_grouping as usize,
+    })
+}
+
+/// CLDR grouping widths for the resolved locale.
+pub(crate) fn locale_grouping(locale: &str) -> DecimalGrouping {
+    #[cfg(feature = "intl-namespace")]
+    if let Some(grouping) = icu_locale_grouping(locale) {
+        return grouping;
+    }
+    let _ = locale;
+    WESTERN_GROUPING
+}
+
+/// Whether grouping separators should be emitted for an integer of `int_len`
+/// digits under the resolved `useGrouping` value.
+pub(crate) fn grouping_enabled(use_grouping: &str, int_len: usize, sizes: DecimalGrouping) -> bool {
+    if sizes.primary == 0 {
+        return false;
+    }
+    match use_grouping {
+        "false" => false,
+        "always" => int_len > sizes.primary,
+        "min2" => int_len >= sizes.primary + sizes.min_grouping.max(2),
+        _ => int_len >= sizes.primary + sizes.min_grouping.max(1),
+    }
+}
+
+/// Group an ASCII integer digit string into locale-aware `integer`/`group`
+/// segments. The rightmost group uses `primary`; all preceding groups use
+/// `secondary` (for example, en-IN uses 3 then repeated 2).
 pub(crate) fn push_grouped_integer(
     parts: &mut Vec<(&'static str, String)>,
     int_digits: &str,
     group_sep: char,
     grouping: bool,
+    sizes: DecimalGrouping,
 ) {
-    if !grouping || int_digits.len() <= 3 {
+    let primary = sizes.primary;
+    if !grouping || primary == 0 || int_digits.len() <= primary {
         parts.push(("integer", int_digits.to_string()));
         return;
     }
-    let chars: Vec<char> = int_digits.chars().collect();
-    let n = chars.len();
-    let head = if n % 3 == 0 { 3 } else { n % 3 };
-    parts.push(("integer", chars[..head].iter().collect()));
-    let mut i = head;
-    while i < n {
+    let secondary = sizes.secondary.max(1);
+    let primary_start = int_digits.len() - primary;
+    let remainder = primary_start % secondary;
+    let head = if remainder == 0 { secondary } else { remainder };
+    parts.push(("integer", int_digits[..head].to_string()));
+    let mut index = head;
+    while index < primary_start {
         parts.push(("group", group_sep.to_string()));
-        parts.push(("integer", chars[i..i + 3].iter().collect()));
-        i += 3;
+        parts.push(("integer", int_digits[index..index + secondary].to_string()));
+        index += secondary;
     }
+    parts.push(("group", group_sep.to_string()));
+    parts.push(("integer", int_digits[primary_start..].to_string()));
 }
 
-/// Whether grouping separators should be emitted for an integer of `int_len`
-/// digits under the resolved `useGrouping` value.
-pub(crate) fn grouping_enabled(use_grouping: &str, int_len: usize) -> bool {
-    match use_grouping {
-        "false" => false,
-        "min2" => int_len >= 5,
-        // "auto" / "always" both group for the locales we render (Latin/de).
-        _ => int_len > 3,
-    }
+pub(crate) fn group_integer_digits_for_locale(
+    digits: &str,
+    separator: char,
+    locale: &str,
+) -> String {
+    let sizes = locale_grouping(locale);
+    let enabled = grouping_enabled("auto", digits.len(), sizes);
+    let mut parts = Vec::new();
+    push_grouped_integer(&mut parts, digits, separator, enabled, sizes);
+    parts.into_iter().map(|(_, value)| value).collect()
 }
 
 /// Locale-specific display symbol for USD. Most locales use "$"; Korean and
@@ -666,6 +734,7 @@ fn number_parts_core(r: &NfResolved, value: f64) -> Vec<(&'static str, String)> 
 
     // #7429: CLDR separators for the resolved locale, not a de-vs-rest guess.
     let (group_sep, decimal_sep) = locale_separators(&r.locale);
+    let grouping_sizes = locale_grouping(&r.locale);
 
     let mut parts: Vec<(&'static str, String)> = Vec::new();
     let is_zero = value == 0.0;
@@ -758,7 +827,7 @@ fn number_parts_core(r: &NfResolved, value: f64) -> Vec<(&'static str, String)> 
             while (i_out.len() as u32) < r.min_int {
                 i_out.insert(0, '0');
             }
-            push_grouped_integer(&mut parts, &i_out, group_sep, false);
+            push_grouped_integer(&mut parts, &i_out, group_sep, false, grouping_sizes);
             if !f_out.is_empty() {
                 parts.push(("decimal", decimal_sep.to_string()));
                 parts.push(("fraction", f_out));
@@ -804,8 +873,8 @@ fn number_parts_core(r: &NfResolved, value: f64) -> Vec<(&'static str, String)> 
             while (i_out.len() as u32) < r.min_int {
                 i_out.insert(0, '0');
             }
-            let grouping = grouping_enabled(&r.use_grouping, i_out.len());
-            push_grouped_integer(&mut parts, &i_out, group_sep, grouping);
+            let grouping = grouping_enabled(&r.use_grouping, i_out.len(), grouping_sizes);
+            push_grouped_integer(&mut parts, &i_out, group_sep, grouping, grouping_sizes);
             if !f_out.is_empty() {
                 parts.push(("decimal", decimal_sep.to_string()));
                 parts.push(("fraction", f_out));
@@ -827,8 +896,8 @@ fn number_parts_core(r: &NfResolved, value: f64) -> Vec<(&'static str, String)> 
             while (i_out.len() as u32) < r.min_int {
                 i_out.insert(0, '0');
             }
-            let grouping = grouping_enabled(&r.use_grouping, i_out.len());
-            push_grouped_integer(&mut parts, &i_out, group_sep, grouping);
+            let grouping = grouping_enabled(&r.use_grouping, i_out.len(), grouping_sizes);
+            push_grouped_integer(&mut parts, &i_out, group_sep, grouping, grouping_sizes);
             if !f_out.is_empty() {
                 parts.push(("decimal", decimal_sep.to_string()));
                 parts.push(("fraction", f_out));
@@ -1145,6 +1214,7 @@ fn bigint_number_parts_exact(
 ) -> Vec<(&'static str, String)> {
     // #7429: CLDR separators for the resolved locale, not a de-vs-rest guess.
     let (group_sep, decimal_sep) = locale_separators(&r.locale);
+    let grouping_sizes = locale_grouping(&r.locale);
     set_round_ctx(&r.rounding_mode, negative);
 
     let mut parts: Vec<(&'static str, String)> = Vec::new();
@@ -1155,8 +1225,8 @@ fn bigint_number_parts_exact(
     while (i_out.len() as u32) < r.min_int {
         i_out.insert(0, '0');
     }
-    let grouping = grouping_enabled(&r.use_grouping, i_out.len());
-    push_grouped_integer(&mut parts, &i_out, group_sep, grouping);
+    let grouping = grouping_enabled(&r.use_grouping, i_out.len(), grouping_sizes);
+    push_grouped_integer(&mut parts, &i_out, group_sep, grouping, grouping_sizes);
     if !f_out.is_empty() {
         parts.push(("decimal", decimal_sep.to_string()));
         parts.push(("fraction", f_out));
@@ -1531,4 +1601,34 @@ pub(crate) fn number_format_resolved_options_object(obj: *const ObjectHeader) ->
     set_field(out, "roundingPriority", string_value(&r.rounding_priority));
     set_field(out, "trailingZeroDisplay", string_value(&r.trailing_zero));
     js_nanbox_pointer(out as i64)
+}
+
+#[cfg(test)]
+mod grouping_tests {
+    use super::*;
+
+    fn render(digits: &str, sizes: DecimalGrouping) -> String {
+        let mut parts = Vec::new();
+        push_grouped_integer(&mut parts, digits, ',', true, sizes);
+        parts.into_iter().map(|(_, value)| value).collect()
+    }
+
+    #[cfg(feature = "intl-namespace")]
+    #[test]
+    fn uses_cldr_secondary_group_widths() {
+        let sizes = locale_grouping("en-IN");
+        assert_eq!(
+            (sizes.primary, sizes.secondary, sizes.min_grouping),
+            (3, 2, 1)
+        );
+        assert_eq!(render("123456789", sizes), "12,34,56,789");
+    }
+
+    #[test]
+    fn preserves_western_grouping() {
+        let sizes = locale_grouping("en-US");
+        assert_eq!(render("123456789", sizes), "123,456,789");
+        assert!(grouping_enabled("auto", 4, sizes));
+        assert!(!grouping_enabled("false", 9, sizes));
+    }
 }

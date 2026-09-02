@@ -162,7 +162,7 @@ intl-segmenter = ["dep:unicode-segmentation"]
 # reachable), so only the `Intl.` namespace members depend on it. The
 # compiler enables it on any `Intl`/locale-formatting token, erring toward
 # enabling (same over-approximation contract as `temporal`).
-intl-namespace = []
+intl-namespace = ["dep:icu_decimal", "dep:icu_provider", "dep:icu_locale_core"]
 # Per-namespace `globalThis` member tables. Each installs the reflectable
 # members of one built-in namespace (`Math.max`, `JSON.stringify`,
 # `Reflect.get`, `Atomics.add`, …) as real properties. Call sites in user code
@@ -343,6 +343,11 @@ unicode-segmentation = { version = "1", optional = true }
 # their compiled data are already in the default lock graph via icu_datetime.
 icu_locale = { version = "2", optional = true }
 icu_locale_core = { version = "2", optional = true }
+# CLDR decimal grouping metadata (primary/secondary group widths and the
+# locale's minimum grouping threshold), shared by Intl.NumberFormat and
+# Number/BigInt.prototype.toLocaleString.
+icu_decimal = { version = "2", default-features = false, features = ["compiled_data"], optional = true }
+icu_provider = { version = "2", default-features = false, optional = true }
 # CLDR date/time formatting for Intl.DateTimeFormat / Date.prototype.toLocale*
 # (icu4x 2.x, matching the icu_calendar/icu_locale_core already in the graph).
 # `compiled_data` vendors the CLDR dataset, so byte-for-byte-with-Node locale

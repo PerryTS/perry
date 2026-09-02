@@ -68,6 +68,51 @@ unsafe fn error_subclass_stack_head(receiver: f64) -> String {
         format!("{name}: {message}")
     }
 }
+/// Node-style first line for `util.inspect` on an Error subclass.
+pub(crate) unsafe fn error_subclass_inspect_headline(receiver: f64) -> String {
+    let receiver_ptr = crate::value::js_nanbox_get_pointer(receiver);
+    if receiver_ptr == 0
+        || !crate::value::addr_class::is_above_handle_band(receiver_ptr as usize)
+        || !crate::object::is_valid_obj_ptr(receiver_ptr as *const u8)
+    {
+        return "Error".to_string();
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let handle = scope.root_nanbox_f64(receiver);
+    let obj = || {
+        crate::value::js_nanbox_get_pointer(handle.get_nanbox_f64())
+            as *const crate::object::ObjectHeader
+    };
+    let class_id = (*obj()).class_id;
+    let name = error_object_field_string(obj(), b"name").unwrap_or_else(|| "Error".to_string());
+    let message = error_object_field_string(obj(), b"message").unwrap_or_default();
+    let builtin_name = matches!(
+        name.as_str(),
+        "Error"
+            | "TypeError"
+            | "RangeError"
+            | "ReferenceError"
+            | "SyntaxError"
+            | "URIError"
+            | "EvalError"
+            | "AggregateError"
+    );
+    let display_name = if builtin_name {
+        crate::object::class_name_for_id(class_id)
+            .filter(|class_name| !class_name.is_empty() && class_name != &name)
+            .map(|class_name| format!("{class_name} [{name}]"))
+            .unwrap_or(name)
+    } else {
+        name
+    };
+    if display_name.is_empty() {
+        message
+    } else if message.is_empty() {
+        display_name
+    } else {
+        format!("{display_name}: {message}")
+    }
+}
 
 /// Lazy `stack` getter for an Error SUBCLASS instance (#9410).
 ///
