@@ -572,8 +572,8 @@ pub extern "C" fn js_fs_write_file_sync_options(
     }
 }
 
-/// Append content to a file synchronously
-/// Returns 1 on success, 0 on failure
+/// Append content to a file synchronously.
+/// Returns 1 on success and throws a Node-shaped fs error on failure (#9421).
 /// Accepts NaN-boxed string values
 #[no_mangle]
 pub extern "C" fn js_fs_append_file_sync(path_value: f64, content_value: f64) -> i32 {
@@ -584,45 +584,75 @@ pub extern "C" fn js_fs_append_file_sync(path_value: f64, content_value: f64) ->
     )
 }
 
+/// Shared `appendFile` op. Returns a Node-shaped fs error value
+/// (`code` / `errno` / `syscall` / `path`) instead of a bare status, so the
+/// sync FFI can throw it, the callback form can pass it as `err`, and
+/// `fs/promises.appendFile` can reject with it.
+///
+/// #9421: every one of those three surfaces used to read a `0`/`1` status
+/// that the callers dropped on the floor, so a failing append was reported
+/// as a *success*. The visible cost was in claude-code: its session writer is
+///
+/// ```js
+/// try { await appendFile(p, chunk) }
+/// catch { await mkdir(dirname(p), { recursive: true }); await appendFile(p, chunk) }
+/// ```
+///
+/// and it relies on the first append rejecting with ENOENT to learn that the
+/// transcript directory does not exist yet. Under Perry the promise resolved,
+/// the recovery arm never ran, and every queued transcript record was
+/// silently discarded.
+pub(crate) unsafe fn js_fs_append_file_result(
+    path_value: f64,
+    content_value: f64,
+    options_value: f64,
+) -> Result<(), f64> {
+    validate::validate_path_or_fd("path", path_value, "write");
+    validate::validate_string_or_object_options("options", options_value);
+
+    if let Some(fd) = numeric_fd_value(path_value) {
+        let content_bytes = bytes_from_value(content_value);
+        return FD_REGISTRY.with(|r| {
+            let mut reg = r.borrow_mut();
+            let Some(file) = reg.get_mut(&fd) else {
+                return Err(validate::build_ebadf_error_value("write"));
+            };
+            if let Err(err) = file.seek(SeekFrom::End(0)) {
+                return Err(build_fs_error_value_no_path(&err, "write"));
+            }
+            file.write_all(&content_bytes)
+                .map_err(|err| build_fs_error_value_no_path(&err, "write"))
+        });
+    }
+
+    let path_str = match decode_path_value(path_value) {
+        Some(s) => s,
+        None => validate::throw_invalid_path_arg("path", path_value),
+    };
+
+    let content_bytes = bytes_from_value(content_value);
+
+    let flag = file_options_flag(options_value, "a");
+    let mut file = match open_file_for_write_flag(&path_str, &flag) {
+        Ok(file) => file,
+        Err(err) => return Err(build_fs_error_value(&err, "open", &path_str)),
+    };
+    file.write_all(&content_bytes)
+        .map_err(|err| build_fs_error_value(&err, "write", &path_str))
+}
+
+/// Append content to a file synchronously.
+/// Returns 1 on success and throws a Node-shaped fs error on failure (#9421).
 #[no_mangle]
 pub extern "C" fn js_fs_append_file_sync_options(
     path_value: f64,
     content_value: f64,
     options_value: f64,
 ) -> i32 {
-    validate::validate_path_or_fd("path", path_value, "write");
-    validate::validate_string_or_object_options("options", options_value);
     unsafe {
-        if let Some(fd) = numeric_fd_value(path_value) {
-            let content_bytes = bytes_from_value(content_value);
-            return FD_REGISTRY.with(|r| {
-                let mut reg = r.borrow_mut();
-                let Some(file) = reg.get_mut(&fd) else {
-                    return 0;
-                };
-                let _ = file.seek(SeekFrom::End(0));
-                if file.write_all(&content_bytes).is_ok() {
-                    1
-                } else {
-                    0
-                }
-            });
-        }
-
-        let path_str = match decode_path_value(path_value) {
-            Some(s) => s,
-            None => return 0,
-        };
-
-        let content_bytes = bytes_from_value(content_value);
-
-        let flag = file_options_flag(options_value, "a");
-        match open_file_for_write_flag(&path_str, &flag) {
-            Ok(mut file) => match file.write_all(&content_bytes) {
-                Ok(_) => 1,
-                Err(_) => 0,
-            },
-            Err(_) => 0,
+        match js_fs_append_file_result(path_value, content_value, options_value) {
+            Ok(()) => 1,
+            Err(err) => crate::exception::js_throw(err),
         }
     }
 }

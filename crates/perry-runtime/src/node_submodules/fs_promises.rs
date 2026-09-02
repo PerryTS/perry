@@ -161,8 +161,12 @@ pub(crate) extern "C" fn thunk_fs_promises_appendFile(
     data: f64,
     options: f64,
 ) -> f64 {
-    promise_from_sync_undefined(|| {
-        let _ = crate::fs::js_fs_append_file_sync_options(path, data, options);
+    // #9421: must REJECT when the append fails. It used to call the
+    // status-returning sync helper and drop the status, so a failed append
+    // resolved and callers that recover in `catch` (claude-code creates the
+    // missing transcript directory there) never ran their recovery.
+    promise_from_result_undefined(|| unsafe {
+        crate::fs::js_fs_append_file_result(path, data, options)
     })
 }
 
