@@ -10,7 +10,7 @@ use super::*;
 use crate::ir::*;
 
 mod namespace;
-mod native_default_import;
+pub(super) mod native_default_import;
 pub(super) mod native_profile_import;
 mod object_literal;
 mod static_import_bindings;

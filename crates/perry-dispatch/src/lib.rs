@@ -96,6 +96,7 @@ pub struct MethodRow {
 // re-exported below so consumers keep using `perry_dispatch::PERRY_*`.
 mod audio_table;
 mod background_table;
+mod cjs_default_modules;
 mod i18n_table;
 mod ios_table;
 mod media_table;
@@ -106,6 +107,10 @@ mod updater_table;
 
 pub use audio_table::PERRY_AUDIO_TABLE;
 pub use background_table::PERRY_BACKGROUND_TABLE;
+pub use cjs_default_modules::{
+    cjs_default_base_module, cjs_default_namespace_name, has_cjs_default_namespace,
+    CJS_DEFAULT_NAMESPACE_MODULES,
+};
 pub use i18n_table::PERRY_I18N_TABLE;
 pub use ios_table::PERRY_IOS_TABLE;
 pub use media_table::PERRY_MEDIA_TABLE;

@@ -278,6 +278,10 @@ node-api-host = ["dep:hex", "dep:sha2"]
 dyn-eval = ["dep:perry-parser", "dep:perry-diagnostics"]
 
 [dependencies]
+# #9500: the CJS-default module table (`<mod>.default` <-> base) is shared
+# with perry-hir through perry-dispatch, so the runtime's property-read and
+# method-call paths and the HIR's import lowering cannot drift apart.
+perry-dispatch.workspace = true
 thiserror.workspace = true
 anyhow.workspace = true
 libc.workspace = true
