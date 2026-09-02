@@ -90,11 +90,33 @@ pub fn collect_non_escaping_news(
     candidates
 }
 
-/// For scalar-replaced `new` locals, collect the fields that are actually read
-/// through the local after construction. This intentionally tracks only reads
-/// (plus read-modify-write updates): writes still need their RHS evaluated for
-/// JS side effects, but the scalar slot/store can be elided when the field is
-/// never observed.
+/// For scalar-replaced `new` locals, collect the fields that are accessed
+/// through the local after construction — reads, read-modify-write updates, and
+/// (since #9460) WRITES.
+///
+/// The set decides which fields get a stack alloca in `stmt/let_stmt.rs`'s
+/// scalar-replacement arm, for the synthetic `__AnonShape_*` classes that object
+/// literals lower to.
+///
+/// It used to track reads only, on the argument that a store to a field nothing
+/// ever reads is unobservable and its slot can be elided. That is true of the
+/// STORE and false of the SLOT. `let_stmt.rs` registers `ctx.locals[id]` as an
+/// uninitialized DUMMY alloca for a scalar-replaced binding — the binding has
+/// stopped being an object — so a store lowering that looks up the field slot
+/// and finds none does not stop: it falls through to the class-field /
+/// `Ptr<Shape>` lanes, which load that dummy as an `ObjectHeader*` and store
+/// through `null + <header size>`. `const o: any = {x:1}; o.x = 7;` with no
+/// later read of `o.x` segfaulted (#9460), in both modes, through several
+/// different store lanes.
+///
+/// Reserving a slot for a written-but-unread field is the fix at the source
+/// rather than in each lane: `Expr::PropertySet`, `Expr::PutValueSet` and the
+/// write IC all resolve the slot the same way, so one answer here covers all of
+/// them. It costs nothing at runtime — a store into an alloca nothing loads is
+/// removed by LLVM — and it is the same shape as #9024's rule one step further:
+/// #9024 escapes a write to an UNDECLARED property because it would have no
+/// slot; this gives a slot to a DECLARED property that would otherwise have
+/// none.
 pub fn collect_non_escaping_new_used_fields(
     stmts: &[perry_hir::Stmt],
     non_escaping_news: &HashMap<u32, String>,
@@ -228,9 +250,50 @@ fn collect_used_new_fields_in_expr(
             }
             collect_used_new_fields_in_expr(object, non_escaping_news, used);
         }
-        Expr::PropertySet { object, value, .. } => {
+        Expr::PropertySet {
+            object,
+            property,
+            value,
+        } => {
+            // #9460: a WRITE reserves the field's slot — see this function's
+            // doc comment. Without it the store lowering finds no slot and
+            // dereferences the dummy `ctx.locals[id]` alloca.
+            if let Expr::LocalGet(id) = object.as_ref() {
+                if non_escaping_news.contains_key(id) {
+                    used.entry(*id).or_default().insert(property.clone());
+                    collect_used_new_fields_in_expr(value, non_escaping_news, used);
+                    return;
+                }
+            }
             collect_used_new_fields_in_expr(object, non_escaping_news, used);
             collect_used_new_fields_in_expr(value, non_escaping_news, used);
+        }
+        // #9460: `o.x = v` lowers to `PutValueSet`, not `PropertySet` — and this
+        // walker had NO arm for it at all, so neither the written field nor the
+        // value's own nested uses were recorded. Same rule as `PropertySet`
+        // above, on the same shape `escape_check.rs`'s `PutValueSet` arm
+        // recognises: a static string key with `target` and `receiver` naming
+        // the one candidate local.
+        Expr::PutValueSet {
+            target,
+            key,
+            value,
+            receiver,
+            ..
+        } => {
+            if let (Expr::LocalGet(id), Expr::LocalGet(receiver_id), Expr::String(property)) =
+                (target.as_ref(), receiver.as_ref(), key.as_ref())
+            {
+                if id == receiver_id && non_escaping_news.contains_key(id) {
+                    used.entry(*id).or_default().insert(property.clone());
+                    collect_used_new_fields_in_expr(value, non_escaping_news, used);
+                    return;
+                }
+            }
+            collect_used_new_fields_in_expr(target, non_escaping_news, used);
+            collect_used_new_fields_in_expr(key, non_escaping_news, used);
+            collect_used_new_fields_in_expr(value, non_escaping_news, used);
+            collect_used_new_fields_in_expr(receiver, non_escaping_news, used);
         }
         Expr::Binary { left, right, .. }
         | Expr::Compare { left, right, .. }

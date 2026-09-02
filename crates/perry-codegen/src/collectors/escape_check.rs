@@ -320,6 +320,19 @@ pub fn check_escapes_in_expr(
                         escaped.insert(*id);
                         return;
                     }
+                    // #9460: #9024's rule, which the `PropertySet` and
+                    // `PutValueSet` arms above already apply and this one was
+                    // missing. `obj.x++` is a WRITE as well as a read, and a
+                    // write to a property the class does not declare has no
+                    // scalar slot — so `expr/member_update.rs` finds none and
+                    // falls through to the by-name / `Ptr<Shape>` lanes on the
+                    // uninitialized dummy `ctx.locals[id]` alloca.
+                    // `const o: any = {x:1}; o.y++;` reached that.
+                    if !crate::collectors::class_accessors::class_chain_has_field(
+                        classes, class_name, property,
+                    ) {
+                        escaped.insert(*id);
+                    }
                     // Safe — field increment on a non-escaping local
                     return;
                 }

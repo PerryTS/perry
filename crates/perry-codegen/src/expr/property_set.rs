@@ -898,6 +898,66 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
                     return Ok(val_double);
                 }
             }
+            // #9460: the local IS scalar-replaced, but this property has no
+            // field slot -- so there is nothing to store into, and nothing that
+            // could ever read it back.
+            //
+            // `stmt/let_stmt.rs`'s scalar-replacement arm creates slots for a
+            // synthetic `__AnonShape_*` class (an object literal) only for the
+            // fields in `non_escaping_new_used_fields`, which by design tracks
+            // READS: "writes still need their RHS evaluated for JS side effects,
+            // but the scalar slot/store can be elided when the field is never
+            // observed" (`collectors/escape_news.rs`). It then registers
+            // `ctx.locals[id]` as a DUMMY entry-block alloca that is never
+            // initialized, because the binding has stopped being an object at
+            // all, and overwrites `local_types[id]` with the synthetic class.
+            //
+            // Without this arm a slotless store fell through to the class-field /
+            // `Ptr<Shape>` lowerings below, which load that dummy slot as an
+            // `ObjectHeader*` and store through `null + <header size>` --
+            // SIGSEGV on `const o: any = {x:1}; o.x = 7;` with no later read of
+            // `o.x`, in BOTH modes. The read side has had the matching guard
+            // since the synthetic-shape work (`expr/property_get.rs`, whose
+            // comment names the same hazard: "the generic runtime helper that
+            // crashes on the dummy slot"); the write side never got it, which is
+            // why adding a `console.log(o.x)` made the crash disappear -- the
+            // read is what creates the slot.
+            //
+            // Discarding the store is what the contract above promises and is
+            // unobservable: the receiver is a non-escaping fresh literal, so no
+            // alias exists, and a read of a slotless field already answers
+            // `undefined` on the read side. The RHS is still lowered, so its side
+            // effects happen -- same shape as the `this` arm just below, which
+            // has always evaluated the value and dropped the store when the
+            // inlined constructor's target field has no slot.
+            if let Expr::LocalGet(id) = object.as_ref() {
+                if ctx.scalar_replaced.contains_key(id) {
+                    let val_double = lower_expr(ctx, value)?;
+                    let lowered = LoweredValue {
+                        semantic: SemanticKind::JsValue,
+                        rep: NativeRep::JsValue,
+                        llvm_ty: DOUBLE,
+                        value: val_double.clone(),
+                    };
+                    ctx.record_lowered_value_with_access_mode(
+                        "ScalarObjectFieldSetElided",
+                        Some(*id),
+                        "scalar_object_field_store.unobserved",
+                        &lowered,
+                        None,
+                        None,
+                        None,
+                        None,
+                        false,
+                        false,
+                        vec![
+                            format!("field={}", property),
+                            "reason=field_never_read_no_scalar_slot".to_string(),
+                        ],
+                    );
+                    return Ok(val_double);
+                }
+            }
             // Handle `this` during scalar-replaced constructor inlining:
             if let Expr::This = object.as_ref() {
                 if let Some(target_id) = ctx.scalar_ctor_target.last().copied() {
