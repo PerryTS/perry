@@ -9,6 +9,7 @@ use perry_hir::types::Type as HirType;
 use perry_hir::{BinaryOp, Expr};
 
 use crate::nanbox::{double_literal, POINTER_MASK_I64};
+use crate::rooting::{operand_may_collect, with_rooted_group, RootedGroup};
 use crate::type_analysis::{
     is_bigint_expr, set_static_type_args, string_value_is_runtime_guaranteed,
 };
@@ -131,6 +132,48 @@ fn guarded_set_number_add(ctx: &mut FnCtx<'_>, set_handle: &str, value_box: &str
             (fallback_value.as_str(), after_fallback.as_str()),
         ],
     )
+}
+
+/// The `Set` receiver's raw handle on the UNPROTECTED path of a `SetHas` /
+/// `SetDelete` lowering (#9523), or `None` when the receiver is rooted.
+///
+/// Both arms lower the receiver, then the value, then consume the receiver as
+/// a raw `i64` — the #6970 shape their Map twins (`MapGet` / `MapHas` /
+/// `MapDelete`) were fixed for. The receiver is now a [`RootedGroup`] operand,
+/// pushed before `value` is lowered. Unboxing eagerly is only sound when the
+/// group pushed nothing: then `value` cannot collect, `reread` hands the
+/// original register back, and the emitted IR — register numbering included —
+/// is exactly what it was before this change. On the protected path the
+/// handle has to come from the *re-read* box, below the value's lowering, so
+/// it is derived in [`reread_set_receiver`] instead.
+fn eager_set_handle(ctx: &mut FnCtx<'_>, group: &RootedGroup<'_>) -> Result<Option<String>> {
+    if group.is_rooted() {
+        return Ok(None);
+    }
+    let s_box = group.reread(ctx, 0)?;
+    let blk = ctx.block();
+    Ok(Some(unbox_to_i64(blk, &s_box)))
+}
+
+/// Re-derive the `Set` receiver handle AFTER `value` has been lowered (#9523).
+///
+/// Mirrors `math_simple.rs`'s `reread_map_set_receiver_and_key`: on the
+/// protected path the box is read back out of its temp-root slot — mandatory,
+/// since an evacuating minor inside the value's lowering rewrites the slot and
+/// the register pushed beforehand names from-space — and the handle is
+/// unboxed from that. On the unprotected path this is the eagerly computed
+/// handle and nothing is emitted.
+fn reread_set_receiver(
+    ctx: &mut FnCtx<'_>,
+    group: &RootedGroup<'_>,
+    s_handle_unrooted: &Option<String>,
+) -> Result<String> {
+    if let Some(handle) = s_handle_unrooted {
+        return Ok(handle.clone());
+    }
+    let s_box = group.reread(ctx, 0)?;
+    let blk = ctx.block();
+    Ok(unbox_to_i64(blk, &s_box))
 }
 
 fn guarded_set_number_has(ctx: &mut FnCtx<'_>, set_handle: &str, value_box: &str) -> String {
@@ -870,214 +913,230 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 );
             let use_string_set =
                 is_static_string_set(ctx, set) && string_value_is_runtime_guaranteed(ctx, value);
-            let s_box = lower_expr(ctx, set)?;
-            let s_handle = {
-                let blk = ctx.block();
-                unbox_to_i64(blk, &s_box)
-            };
-            let i32_v = if use_i32_set {
-                let value_i32 =
-                    lower_expr_native(ctx, value, crate::native_value::ExpectedNativeRep::I32)?;
-                let i32_v = {
-                    let blk = ctx.block();
-                    blk.call(
-                        I32,
-                        "js_set_has_i32",
-                        &[(I64, &s_handle), (I32, &value_i32.value)],
-                    )
-                };
-                record_collection_typed_value_selected(
-                    ctx,
-                    "SetHas",
-                    "collection_typed_value.set_has_i32",
-                    &value_i32,
-                    "set",
-                    "int32_value_helper",
-                    "js_set_has_i32",
-                    "set_slot",
-                );
-                i32_v
-            } else if use_u32_set {
-                let value_u32 =
-                    lower_expr_native(ctx, value, crate::native_value::ExpectedNativeRep::U32)?;
-                let i32_v = {
-                    let blk = ctx.block();
-                    blk.call(
-                        I32,
-                        "js_set_has_u32",
-                        &[(I64, &s_handle), (I32, &value_u32.value)],
-                    )
-                };
-                record_collection_typed_value_selected(
-                    ctx,
-                    "SetHas",
-                    "collection_typed_value.set_has_u32",
-                    &value_u32,
-                    "set",
-                    "uint32_value_helper",
-                    "js_set_has_u32",
-                    "set_slot",
-                );
-                i32_v
-            } else if use_f32_set {
-                let value_f32 =
-                    lower_expr_native(ctx, value, crate::native_value::ExpectedNativeRep::F32)?;
-                let i32_v = {
-                    let blk = ctx.block();
-                    blk.call(
-                        I32,
-                        "js_set_has_f32",
-                        &[(I64, &s_handle), (F32, &value_f32.value)],
-                    )
-                };
-                record_collection_typed_value_selected(
-                    ctx,
-                    "SetHas",
-                    "collection_typed_value.set_has_f32",
-                    &value_f32,
-                    "set",
-                    "float32_value_helper",
-                    "js_set_has_f32",
-                    "set_slot",
-                );
-                i32_v
-            } else if use_boolean_set {
-                let value_i1 =
-                    lower_expr_native(ctx, value, crate::native_value::ExpectedNativeRep::I1)?;
-                let i32_v = {
-                    let blk = ctx.block();
-                    let value_i32 = blk.zext(I1, &value_i1.value, I32);
-                    blk.call(
-                        I32,
-                        "js_set_has_bool",
-                        &[(I64, &s_handle), (I32, &value_i32)],
-                    )
-                };
-                record_collection_typed_value_selected(
-                    ctx,
-                    "SetHas",
-                    "collection_typed_value.set_has_bool",
-                    &value_i1,
-                    "set",
-                    "boolean_value_helper",
-                    "js_set_has_bool",
-                    "set_slot",
-                );
-                i32_v
-            } else if use_number_set {
-                let v_box = lower_expr(ctx, value)?;
-                guarded_set_number_has(ctx, &s_handle, &v_box)
-            } else {
-                if use_string_set {
-                    let value_ref = lower_expr_native(
-                        ctx,
-                        value,
-                        crate::native_value::ExpectedNativeRep::StringRef,
-                    )?;
+            // #9523: the receiver used to be unboxed to a raw `i64` HERE, before
+            // `value` was lowered, and consumed after — a bare SSA register across
+            // an arbitrary allocation, the #6970 shape `MapGet` / `MapHas` /
+            // `MapDelete` were fixed for. `s.has(makeKey())` with an evacuating
+            // minor inside `makeKey` handed `js_set_has` a from-space header. Root the
+            // receiver across the value's lowering and derive the handle from the
+            // re-read box; when the value cannot collect nothing is pushed and the
+            // eager unbox keeps the IR byte for byte.
+            let value_collects = operand_may_collect(ctx, value);
+            let i32_v = with_rooted_group(ctx, 1, |ctx, group| {
+                group.lower(ctx, set, value_collects)?;
+                let s_handle_unrooted = eager_set_handle(ctx, group)?;
+                let i32_v = if use_i32_set {
+                    let value_i32 =
+                        lower_expr_native(ctx, value, crate::native_value::ExpectedNativeRep::I32)?;
+                    let s_handle = reread_set_receiver(ctx, group, &s_handle_unrooted)?;
                     let i32_v = {
                         let blk = ctx.block();
-                        let i32_v = blk.call(
+                        blk.call(
                             I32,
-                            "js_set_has_string",
-                            &[(I64, &s_handle), (I64, &value_ref.value)],
-                        );
-                        i32_v
+                            "js_set_has_i32",
+                            &[(I64, &s_handle), (I32, &value_i32.value)],
+                        )
                     };
-                    record_collection_string_key_selected(
-                        ctx,
-                        "SetHas",
-                        "collection_string_key.set_has",
-                        &value_ref.value,
-                        "set",
-                        "js_set_has_string",
-                    );
                     record_collection_typed_value_selected(
                         ctx,
                         "SetHas",
-                        "collection_typed_value.set_has_string",
-                        &value_ref,
+                        "collection_typed_value.set_has_i32",
+                        &value_i32,
                         "set",
-                        "string_value_helper",
-                        "js_set_has_string",
+                        "int32_value_helper",
+                        "js_set_has_i32",
                         "set_slot",
                     );
                     i32_v
-                } else {
-                    let v_box = lower_expr(ctx, value)?;
+                } else if use_u32_set {
+                    let value_u32 =
+                        lower_expr_native(ctx, value, crate::native_value::ExpectedNativeRep::U32)?;
+                    let s_handle = reread_set_receiver(ctx, group, &s_handle_unrooted)?;
                     let i32_v = {
                         let blk = ctx.block();
-                        blk.call(I32, "js_set_has", &[(I64, &s_handle), (DOUBLE, &v_box)])
+                        blk.call(
+                            I32,
+                            "js_set_has_u32",
+                            &[(I64, &s_handle), (I32, &value_u32.value)],
+                        )
                     };
-                    if receiver_i32_set {
-                        record_collection_typed_value_fallback(
-                            ctx,
-                            "SetHas",
-                            "collection_typed_value.set_has_generic",
-                            &v_box,
-                            "set",
-                            "int32_value_helper",
-                            "js_set_has",
-                            "value_expr_not_native_i32",
-                        );
-                    } else if receiver_u32_set {
-                        record_collection_typed_value_fallback(
-                            ctx,
-                            "SetHas",
-                            "collection_typed_value.set_has_generic",
-                            &v_box,
-                            "set",
-                            "uint32_value_helper",
-                            "js_set_has",
-                            "value_expr_not_native_u32",
-                        );
-                    } else if receiver_f32_set {
-                        record_collection_typed_value_fallback(
-                            ctx,
-                            "SetHas",
-                            "collection_typed_value.set_has_generic",
-                            &v_box,
-                            "set",
-                            "float32_value_helper",
-                            "js_set_has",
-                            "value_expr_not_native_f32",
-                        );
-                    } else if receiver_boolean_set {
-                        record_collection_typed_value_fallback(
-                            ctx,
-                            "SetHas",
-                            "collection_typed_value.set_has_generic",
-                            &v_box,
-                            "set",
-                            "boolean_value_helper",
-                            "js_set_has",
-                            "value_expr_not_native_i1",
-                        );
-                    } else if receiver_number_set {
-                        record_collection_number_key_fallback(
-                            ctx,
-                            "SetHas",
-                            "collection_number_value.set_has_generic",
-                            &v_box,
-                            "set",
-                            "number_value_helper",
-                            "js_set_has",
-                            "value_expr_not_numeric",
-                            "value",
-                        );
-                    } else {
-                        record_collection_string_key_fallback(
-                            ctx,
-                            "SetHas",
-                            "collection_string_key.set_has_generic",
-                            &v_box,
-                            "set",
-                            "js_set_has",
-                            "receiver_or_value_not_static_string",
-                        );
-                    }
+                    record_collection_typed_value_selected(
+                        ctx,
+                        "SetHas",
+                        "collection_typed_value.set_has_u32",
+                        &value_u32,
+                        "set",
+                        "uint32_value_helper",
+                        "js_set_has_u32",
+                        "set_slot",
+                    );
                     i32_v
-                }
-            };
+                } else if use_f32_set {
+                    let value_f32 =
+                        lower_expr_native(ctx, value, crate::native_value::ExpectedNativeRep::F32)?;
+                    let s_handle = reread_set_receiver(ctx, group, &s_handle_unrooted)?;
+                    let i32_v = {
+                        let blk = ctx.block();
+                        blk.call(
+                            I32,
+                            "js_set_has_f32",
+                            &[(I64, &s_handle), (F32, &value_f32.value)],
+                        )
+                    };
+                    record_collection_typed_value_selected(
+                        ctx,
+                        "SetHas",
+                        "collection_typed_value.set_has_f32",
+                        &value_f32,
+                        "set",
+                        "float32_value_helper",
+                        "js_set_has_f32",
+                        "set_slot",
+                    );
+                    i32_v
+                } else if use_boolean_set {
+                    let value_i1 =
+                        lower_expr_native(ctx, value, crate::native_value::ExpectedNativeRep::I1)?;
+                    let s_handle = reread_set_receiver(ctx, group, &s_handle_unrooted)?;
+                    let i32_v = {
+                        let blk = ctx.block();
+                        let value_i32 = blk.zext(I1, &value_i1.value, I32);
+                        blk.call(
+                            I32,
+                            "js_set_has_bool",
+                            &[(I64, &s_handle), (I32, &value_i32)],
+                        )
+                    };
+                    record_collection_typed_value_selected(
+                        ctx,
+                        "SetHas",
+                        "collection_typed_value.set_has_bool",
+                        &value_i1,
+                        "set",
+                        "boolean_value_helper",
+                        "js_set_has_bool",
+                        "set_slot",
+                    );
+                    i32_v
+                } else if use_number_set {
+                    let v_box = lower_expr(ctx, value)?;
+                    let s_handle = reread_set_receiver(ctx, group, &s_handle_unrooted)?;
+                    guarded_set_number_has(ctx, &s_handle, &v_box)
+                } else {
+                    if use_string_set {
+                        let value_ref = lower_expr_native(
+                            ctx,
+                            value,
+                            crate::native_value::ExpectedNativeRep::StringRef,
+                        )?;
+                        let s_handle = reread_set_receiver(ctx, group, &s_handle_unrooted)?;
+                        let i32_v = {
+                            let blk = ctx.block();
+                            let i32_v = blk.call(
+                                I32,
+                                "js_set_has_string",
+                                &[(I64, &s_handle), (I64, &value_ref.value)],
+                            );
+                            i32_v
+                        };
+                        record_collection_string_key_selected(
+                            ctx,
+                            "SetHas",
+                            "collection_string_key.set_has",
+                            &value_ref.value,
+                            "set",
+                            "js_set_has_string",
+                        );
+                        record_collection_typed_value_selected(
+                            ctx,
+                            "SetHas",
+                            "collection_typed_value.set_has_string",
+                            &value_ref,
+                            "set",
+                            "string_value_helper",
+                            "js_set_has_string",
+                            "set_slot",
+                        );
+                        i32_v
+                    } else {
+                        let v_box = lower_expr(ctx, value)?;
+                        let s_handle = reread_set_receiver(ctx, group, &s_handle_unrooted)?;
+                        let i32_v = {
+                            let blk = ctx.block();
+                            blk.call(I32, "js_set_has", &[(I64, &s_handle), (DOUBLE, &v_box)])
+                        };
+                        if receiver_i32_set {
+                            record_collection_typed_value_fallback(
+                                ctx,
+                                "SetHas",
+                                "collection_typed_value.set_has_generic",
+                                &v_box,
+                                "set",
+                                "int32_value_helper",
+                                "js_set_has",
+                                "value_expr_not_native_i32",
+                            );
+                        } else if receiver_u32_set {
+                            record_collection_typed_value_fallback(
+                                ctx,
+                                "SetHas",
+                                "collection_typed_value.set_has_generic",
+                                &v_box,
+                                "set",
+                                "uint32_value_helper",
+                                "js_set_has",
+                                "value_expr_not_native_u32",
+                            );
+                        } else if receiver_f32_set {
+                            record_collection_typed_value_fallback(
+                                ctx,
+                                "SetHas",
+                                "collection_typed_value.set_has_generic",
+                                &v_box,
+                                "set",
+                                "float32_value_helper",
+                                "js_set_has",
+                                "value_expr_not_native_f32",
+                            );
+                        } else if receiver_boolean_set {
+                            record_collection_typed_value_fallback(
+                                ctx,
+                                "SetHas",
+                                "collection_typed_value.set_has_generic",
+                                &v_box,
+                                "set",
+                                "boolean_value_helper",
+                                "js_set_has",
+                                "value_expr_not_native_i1",
+                            );
+                        } else if receiver_number_set {
+                            record_collection_number_key_fallback(
+                                ctx,
+                                "SetHas",
+                                "collection_number_value.set_has_generic",
+                                &v_box,
+                                "set",
+                                "number_value_helper",
+                                "js_set_has",
+                                "value_expr_not_numeric",
+                                "value",
+                            );
+                        } else {
+                            record_collection_string_key_fallback(
+                                ctx,
+                                "SetHas",
+                                "collection_string_key.set_has_generic",
+                                &v_box,
+                                "set",
+                                "js_set_has",
+                                "receiver_or_value_not_static_string",
+                            );
+                        }
+                        i32_v
+                    }
+                };
+                Ok(i32_v)
+            })?;
             let blk = ctx.block();
             let bit = blk.icmp_ne(I32, &i32_v, "0");
             let tagged = blk.select(
@@ -1110,214 +1169,230 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 );
             let use_string_set =
                 is_static_string_set(ctx, set) && string_value_is_runtime_guaranteed(ctx, value);
-            let s_box = lower_expr(ctx, set)?;
-            let s_handle = {
-                let blk = ctx.block();
-                unbox_to_i64(blk, &s_box)
-            };
-            let i32_v = if use_i32_set {
-                let value_i32 =
-                    lower_expr_native(ctx, value, crate::native_value::ExpectedNativeRep::I32)?;
-                let i32_v = {
-                    let blk = ctx.block();
-                    blk.call(
-                        I32,
-                        "js_set_delete_i32",
-                        &[(I64, &s_handle), (I32, &value_i32.value)],
-                    )
-                };
-                record_collection_typed_value_selected(
-                    ctx,
-                    "SetDelete",
-                    "collection_typed_value.set_delete_i32",
-                    &value_i32,
-                    "set",
-                    "int32_value_helper",
-                    "js_set_delete_i32",
-                    "set_slot",
-                );
-                i32_v
-            } else if use_u32_set {
-                let value_u32 =
-                    lower_expr_native(ctx, value, crate::native_value::ExpectedNativeRep::U32)?;
-                let i32_v = {
-                    let blk = ctx.block();
-                    blk.call(
-                        I32,
-                        "js_set_delete_u32",
-                        &[(I64, &s_handle), (I32, &value_u32.value)],
-                    )
-                };
-                record_collection_typed_value_selected(
-                    ctx,
-                    "SetDelete",
-                    "collection_typed_value.set_delete_u32",
-                    &value_u32,
-                    "set",
-                    "uint32_value_helper",
-                    "js_set_delete_u32",
-                    "set_slot",
-                );
-                i32_v
-            } else if use_f32_set {
-                let value_f32 =
-                    lower_expr_native(ctx, value, crate::native_value::ExpectedNativeRep::F32)?;
-                let i32_v = {
-                    let blk = ctx.block();
-                    blk.call(
-                        I32,
-                        "js_set_delete_f32",
-                        &[(I64, &s_handle), (F32, &value_f32.value)],
-                    )
-                };
-                record_collection_typed_value_selected(
-                    ctx,
-                    "SetDelete",
-                    "collection_typed_value.set_delete_f32",
-                    &value_f32,
-                    "set",
-                    "float32_value_helper",
-                    "js_set_delete_f32",
-                    "set_slot",
-                );
-                i32_v
-            } else if use_boolean_set {
-                let value_i1 =
-                    lower_expr_native(ctx, value, crate::native_value::ExpectedNativeRep::I1)?;
-                let i32_v = {
-                    let blk = ctx.block();
-                    let value_i32 = blk.zext(I1, &value_i1.value, I32);
-                    blk.call(
-                        I32,
-                        "js_set_delete_bool",
-                        &[(I64, &s_handle), (I32, &value_i32)],
-                    )
-                };
-                record_collection_typed_value_selected(
-                    ctx,
-                    "SetDelete",
-                    "collection_typed_value.set_delete_bool",
-                    &value_i1,
-                    "set",
-                    "boolean_value_helper",
-                    "js_set_delete_bool",
-                    "set_slot",
-                );
-                i32_v
-            } else if use_number_set {
-                let v_box = lower_expr(ctx, value)?;
-                guarded_set_number_delete(ctx, &s_handle, &v_box)
-            } else {
-                if use_string_set {
-                    let value_ref = lower_expr_native(
-                        ctx,
-                        value,
-                        crate::native_value::ExpectedNativeRep::StringRef,
-                    )?;
+            // #9523: the receiver used to be unboxed to a raw `i64` HERE, before
+            // `value` was lowered, and consumed after — a bare SSA register across
+            // an arbitrary allocation, the #6970 shape `MapGet` / `MapHas` /
+            // `MapDelete` were fixed for. `s.has(makeKey())` with an evacuating
+            // minor inside `makeKey` handed `js_set_delete` a from-space header. Root the
+            // receiver across the value's lowering and derive the handle from the
+            // re-read box; when the value cannot collect nothing is pushed and the
+            // eager unbox keeps the IR byte for byte.
+            let value_collects = operand_may_collect(ctx, value);
+            let i32_v = with_rooted_group(ctx, 1, |ctx, group| {
+                group.lower(ctx, set, value_collects)?;
+                let s_handle_unrooted = eager_set_handle(ctx, group)?;
+                let i32_v = if use_i32_set {
+                    let value_i32 =
+                        lower_expr_native(ctx, value, crate::native_value::ExpectedNativeRep::I32)?;
+                    let s_handle = reread_set_receiver(ctx, group, &s_handle_unrooted)?;
                     let i32_v = {
                         let blk = ctx.block();
-                        let i32_v = blk.call(
+                        blk.call(
                             I32,
-                            "js_set_delete_string",
-                            &[(I64, &s_handle), (I64, &value_ref.value)],
-                        );
-                        i32_v
+                            "js_set_delete_i32",
+                            &[(I64, &s_handle), (I32, &value_i32.value)],
+                        )
                     };
-                    record_collection_string_key_selected(
-                        ctx,
-                        "SetDelete",
-                        "collection_string_key.set_delete",
-                        &value_ref.value,
-                        "set",
-                        "js_set_delete_string",
-                    );
                     record_collection_typed_value_selected(
                         ctx,
                         "SetDelete",
-                        "collection_typed_value.set_delete_string",
-                        &value_ref,
+                        "collection_typed_value.set_delete_i32",
+                        &value_i32,
                         "set",
-                        "string_value_helper",
-                        "js_set_delete_string",
+                        "int32_value_helper",
+                        "js_set_delete_i32",
                         "set_slot",
                     );
                     i32_v
-                } else {
-                    let v_box = lower_expr(ctx, value)?;
+                } else if use_u32_set {
+                    let value_u32 =
+                        lower_expr_native(ctx, value, crate::native_value::ExpectedNativeRep::U32)?;
+                    let s_handle = reread_set_receiver(ctx, group, &s_handle_unrooted)?;
                     let i32_v = {
                         let blk = ctx.block();
-                        blk.call(I32, "js_set_delete", &[(I64, &s_handle), (DOUBLE, &v_box)])
+                        blk.call(
+                            I32,
+                            "js_set_delete_u32",
+                            &[(I64, &s_handle), (I32, &value_u32.value)],
+                        )
                     };
-                    if receiver_i32_set {
-                        record_collection_typed_value_fallback(
-                            ctx,
-                            "SetDelete",
-                            "collection_typed_value.set_delete_generic",
-                            &v_box,
-                            "set",
-                            "int32_value_helper",
-                            "js_set_delete",
-                            "value_expr_not_native_i32",
-                        );
-                    } else if receiver_u32_set {
-                        record_collection_typed_value_fallback(
-                            ctx,
-                            "SetDelete",
-                            "collection_typed_value.set_delete_generic",
-                            &v_box,
-                            "set",
-                            "uint32_value_helper",
-                            "js_set_delete",
-                            "value_expr_not_native_u32",
-                        );
-                    } else if receiver_f32_set {
-                        record_collection_typed_value_fallback(
-                            ctx,
-                            "SetDelete",
-                            "collection_typed_value.set_delete_generic",
-                            &v_box,
-                            "set",
-                            "float32_value_helper",
-                            "js_set_delete",
-                            "value_expr_not_native_f32",
-                        );
-                    } else if receiver_boolean_set {
-                        record_collection_typed_value_fallback(
-                            ctx,
-                            "SetDelete",
-                            "collection_typed_value.set_delete_generic",
-                            &v_box,
-                            "set",
-                            "boolean_value_helper",
-                            "js_set_delete",
-                            "value_expr_not_native_i1",
-                        );
-                    } else if receiver_number_set {
-                        record_collection_number_key_fallback(
-                            ctx,
-                            "SetDelete",
-                            "collection_number_value.set_delete_generic",
-                            &v_box,
-                            "set",
-                            "number_value_helper",
-                            "js_set_delete",
-                            "value_expr_not_numeric",
-                            "value",
-                        );
-                    } else {
-                        record_collection_string_key_fallback(
-                            ctx,
-                            "SetDelete",
-                            "collection_string_key.set_delete_generic",
-                            &v_box,
-                            "set",
-                            "js_set_delete",
-                            "receiver_or_value_not_static_string",
-                        );
-                    }
+                    record_collection_typed_value_selected(
+                        ctx,
+                        "SetDelete",
+                        "collection_typed_value.set_delete_u32",
+                        &value_u32,
+                        "set",
+                        "uint32_value_helper",
+                        "js_set_delete_u32",
+                        "set_slot",
+                    );
                     i32_v
-                }
-            };
+                } else if use_f32_set {
+                    let value_f32 =
+                        lower_expr_native(ctx, value, crate::native_value::ExpectedNativeRep::F32)?;
+                    let s_handle = reread_set_receiver(ctx, group, &s_handle_unrooted)?;
+                    let i32_v = {
+                        let blk = ctx.block();
+                        blk.call(
+                            I32,
+                            "js_set_delete_f32",
+                            &[(I64, &s_handle), (F32, &value_f32.value)],
+                        )
+                    };
+                    record_collection_typed_value_selected(
+                        ctx,
+                        "SetDelete",
+                        "collection_typed_value.set_delete_f32",
+                        &value_f32,
+                        "set",
+                        "float32_value_helper",
+                        "js_set_delete_f32",
+                        "set_slot",
+                    );
+                    i32_v
+                } else if use_boolean_set {
+                    let value_i1 =
+                        lower_expr_native(ctx, value, crate::native_value::ExpectedNativeRep::I1)?;
+                    let s_handle = reread_set_receiver(ctx, group, &s_handle_unrooted)?;
+                    let i32_v = {
+                        let blk = ctx.block();
+                        let value_i32 = blk.zext(I1, &value_i1.value, I32);
+                        blk.call(
+                            I32,
+                            "js_set_delete_bool",
+                            &[(I64, &s_handle), (I32, &value_i32)],
+                        )
+                    };
+                    record_collection_typed_value_selected(
+                        ctx,
+                        "SetDelete",
+                        "collection_typed_value.set_delete_bool",
+                        &value_i1,
+                        "set",
+                        "boolean_value_helper",
+                        "js_set_delete_bool",
+                        "set_slot",
+                    );
+                    i32_v
+                } else if use_number_set {
+                    let v_box = lower_expr(ctx, value)?;
+                    let s_handle = reread_set_receiver(ctx, group, &s_handle_unrooted)?;
+                    guarded_set_number_delete(ctx, &s_handle, &v_box)
+                } else {
+                    if use_string_set {
+                        let value_ref = lower_expr_native(
+                            ctx,
+                            value,
+                            crate::native_value::ExpectedNativeRep::StringRef,
+                        )?;
+                        let s_handle = reread_set_receiver(ctx, group, &s_handle_unrooted)?;
+                        let i32_v = {
+                            let blk = ctx.block();
+                            let i32_v = blk.call(
+                                I32,
+                                "js_set_delete_string",
+                                &[(I64, &s_handle), (I64, &value_ref.value)],
+                            );
+                            i32_v
+                        };
+                        record_collection_string_key_selected(
+                            ctx,
+                            "SetDelete",
+                            "collection_string_key.set_delete",
+                            &value_ref.value,
+                            "set",
+                            "js_set_delete_string",
+                        );
+                        record_collection_typed_value_selected(
+                            ctx,
+                            "SetDelete",
+                            "collection_typed_value.set_delete_string",
+                            &value_ref,
+                            "set",
+                            "string_value_helper",
+                            "js_set_delete_string",
+                            "set_slot",
+                        );
+                        i32_v
+                    } else {
+                        let v_box = lower_expr(ctx, value)?;
+                        let s_handle = reread_set_receiver(ctx, group, &s_handle_unrooted)?;
+                        let i32_v = {
+                            let blk = ctx.block();
+                            blk.call(I32, "js_set_delete", &[(I64, &s_handle), (DOUBLE, &v_box)])
+                        };
+                        if receiver_i32_set {
+                            record_collection_typed_value_fallback(
+                                ctx,
+                                "SetDelete",
+                                "collection_typed_value.set_delete_generic",
+                                &v_box,
+                                "set",
+                                "int32_value_helper",
+                                "js_set_delete",
+                                "value_expr_not_native_i32",
+                            );
+                        } else if receiver_u32_set {
+                            record_collection_typed_value_fallback(
+                                ctx,
+                                "SetDelete",
+                                "collection_typed_value.set_delete_generic",
+                                &v_box,
+                                "set",
+                                "uint32_value_helper",
+                                "js_set_delete",
+                                "value_expr_not_native_u32",
+                            );
+                        } else if receiver_f32_set {
+                            record_collection_typed_value_fallback(
+                                ctx,
+                                "SetDelete",
+                                "collection_typed_value.set_delete_generic",
+                                &v_box,
+                                "set",
+                                "float32_value_helper",
+                                "js_set_delete",
+                                "value_expr_not_native_f32",
+                            );
+                        } else if receiver_boolean_set {
+                            record_collection_typed_value_fallback(
+                                ctx,
+                                "SetDelete",
+                                "collection_typed_value.set_delete_generic",
+                                &v_box,
+                                "set",
+                                "boolean_value_helper",
+                                "js_set_delete",
+                                "value_expr_not_native_i1",
+                            );
+                        } else if receiver_number_set {
+                            record_collection_number_key_fallback(
+                                ctx,
+                                "SetDelete",
+                                "collection_number_value.set_delete_generic",
+                                &v_box,
+                                "set",
+                                "number_value_helper",
+                                "js_set_delete",
+                                "value_expr_not_numeric",
+                                "value",
+                            );
+                        } else {
+                            record_collection_string_key_fallback(
+                                ctx,
+                                "SetDelete",
+                                "collection_string_key.set_delete_generic",
+                                &v_box,
+                                "set",
+                                "js_set_delete",
+                                "receiver_or_value_not_static_string",
+                            );
+                        }
+                        i32_v
+                    }
+                };
+                Ok(i32_v)
+            })?;
             let blk = ctx.block();
             let bit = blk.icmp_ne(I32, &i32_v, "0");
             let tagged = blk.select(

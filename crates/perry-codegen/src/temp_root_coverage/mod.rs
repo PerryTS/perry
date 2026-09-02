@@ -47,6 +47,7 @@ mod builtin_ctor;
 mod call_callee;
 mod dispatch_receiver;
 mod operands;
+mod set_receiver;
 
 pub(crate) fn entry_opts() -> CompileOptions {
     CompileOptions {
