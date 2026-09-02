@@ -107,7 +107,9 @@ fn tagged_class() -> perry_hir::Class {
 fn main_ir_for_dispatch(name: &str, arg: Expr) -> String {
     let mut module = Module::new(name);
     module.classes.push(tagged_class());
-    module.functions.push(empty_fn(MAKE_FN, "makeTagged", Type::Any));
+    module
+        .functions
+        .push(empty_fn(MAKE_FN, "makeTagged", Type::Any));
     // A named local so the module is not optimized down to nothing; the call's
     // receiver is still the inline `makeTagged()` result.
     module.init.push(Stmt::Let {
@@ -137,8 +139,8 @@ fn main_ir_for_dispatch(name: &str, arg: Expr) -> String {
         app_metadata: AppMetadata::default(),
         ..entry_opts()
     };
-    let bytes = compile_module(&module, opts)
-        .unwrap_or_else(|e| panic!("codegen failed for {name}: {e}"));
+    let bytes =
+        compile_module(&module, opts).unwrap_or_else(|e| panic!("codegen failed for {name}: {e}"));
     let ir = String::from_utf8(bytes).expect("LLVM IR should be UTF-8");
     crate::testing::root_slots::function_slice(&ir, "main").to_string()
 }
