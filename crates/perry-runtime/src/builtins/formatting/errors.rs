@@ -177,14 +177,12 @@ pub(super) unsafe fn format_error_subclass_headline(
             if key_ptr.is_null() {
                 continue;
             }
-            let key_len = (*key_ptr).byte_len as usize;
-            let key_data = (key_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-            let key_bytes = std::slice::from_raw_parts(key_data, key_len);
-            if key_bytes == b"name" {
+            let key_str = string_header_to_string(key_ptr as *mut StringHeader, "");
+            if key_str == "name" {
                 own_name = Some(obj_h.with_const_ptr::<crate::object::ObjectHeader, _>(
                     |obj_ptr| crate::object::js_object_get_field_f64(obj_ptr, index),
                 ));
-            } else if key_bytes == b"message" {
+            } else if key_str == "message" {
                 own_message = Some(obj_h.with_const_ptr::<crate::object::ObjectHeader, _>(
                     |obj_ptr| crate::object::js_object_get_field_f64(obj_ptr, index),
                 ));

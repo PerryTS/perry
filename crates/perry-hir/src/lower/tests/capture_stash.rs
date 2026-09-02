@@ -2,8 +2,6 @@
 //! stash must follow `super()`, not constructor entry. Split from `tests.rs`
 //! for the 2000-line file cap.
 
-use super::*;
-
 /// A derived class with captured outers whose `super()` is not its own
 /// statement — the minifier's `super(a), this.x = b, …` comma sequence, as in
 /// Next's `AppRouteRouteModule` — must stash the `this.__perry_cap_*` fields

@@ -322,7 +322,7 @@
       "reason": "The proof API supplies only runtime-derived initializer evidence and rejects the binding after any write in the region."
     },
     {
-      "path": "crates/perry-codegen/src/lower_call/property_get/dynamic_dispatch.rs",
+      "path": "crates/perry-codegen/src/lower_call/property_get/dispatch_receiver_class.rs",
       "function": "guarded_declared_receiver_class_candidate",
       "access": "local_type_hint",
       "count": 1,

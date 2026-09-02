@@ -138,14 +138,8 @@ fn test_moved_fs_enoent_round_trips_through_util_inspect() {
         f64::from_bits(crate::value::TAG_UNDEFINED),
     );
     let inspected = crate::value::JSValue::from_bits(inspected.to_bits());
-    let text = unsafe {
-        let ptr = inspected.as_string_ptr();
-        let bytes = std::slice::from_raw_parts(
-            (ptr as *const u8).add(std::mem::size_of::<crate::StringHeader>()),
-            (*ptr).byte_len as usize,
-        );
-        String::from_utf8_lossy(bytes).into_owned()
-    };
+    let text =
+        unsafe { crate::symbol::str_from_header(inspected.as_string_ptr()).unwrap_or_default() };
     assert!(text.contains("code: 'ENOENT'"), "missing ENOENT: {text}");
     assert!(
         text.contains("path: '/perry-9530-definitely-missing'"),

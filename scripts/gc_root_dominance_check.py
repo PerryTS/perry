@@ -1385,6 +1385,10 @@ POLL_CAPABLE_RUNTIME = {
     # already listed. So the entry is an omission at introduction, not a
     # judgement call.
     "js_string_concat_value_box",
+    # #9514's per-site concat cache: `js_string_concat_site_value` calls
+    # `js_string_concat_value_box` on its miss path, so it can allocate and
+    # re-enter a moving minor exactly like its callee (the #7616 shape).
+    "js_string_concat_site_value",
     # `js_private_brand_add` is the referent-with-no-name that NEITHER audit can
     # ask for: `--audit-poll-reach` only walks symbols `ALLOC_RE` matches, and
     # `js_private_brand_add` matches no alloc/new/create convention, so the one
