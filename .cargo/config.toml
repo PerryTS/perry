@@ -27,3 +27,24 @@ global-min-publish-age = "7 days"
 # aborts loudly if the tables are missing (perry-runtime/src/eh.rs).
 [build]
 rustflags = ["-C", "force-unwind-tables=yes"]
+
+# #9486: x86_64 needs frame pointers, and cannot inherit them from `[build]`.
+#
+# `Error.stack` captures its frames by walking the `rbp` / `x29` chain, which
+# is only a chain if every frame between `new Error` and the throwing JS
+# function maintains one. Generated code always does — codegen tags it
+# `"frame-pointer"="non-leaf"` — but the runtime is Rust, and on
+# x86_64-unknown-linux-gnu rustc leaves `rbp` as a general-purpose
+# callee-saved register. Measured: `rbp` inside `alloc_error` held `0x1`, so
+# the walk had no root at all and every stack fell back to `at <anonymous>`.
+# The AArch64 platform ABI reserves x29, which is why this is a x86_64-only
+# knob and why the collector's own `fp_chain` walker was AArch64-only.
+#
+# `force-unwind-tables` is REPEATED here on purpose: cargo does not merge
+# `target.*.rustflags` with `build.rustflags` — the target flags take
+# precedence and the `[build]` list is dropped entirely for this target. Omit
+# the repeat and every throw crossing a runtime frame is stranded (the runtime
+# self-checks on the first `try` and aborts loudly, so the mistake is loud
+# rather than silent — but it is still a mistake).
+[target.'cfg(target_arch = "x86_64")']
+rustflags = ["-C", "force-unwind-tables=yes", "-C", "force-frame-pointers=yes"]
