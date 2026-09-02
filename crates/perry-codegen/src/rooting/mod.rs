@@ -1671,6 +1671,10 @@ const MIGRATED_MODULES: &[(&str, &str)] = &[
         include_str!("../expr/logical_collections.rs"),
     ),
     (
+        "crates/perry-codegen/src/expr/bigint_set.rs",
+        include_str!("../expr/bigint_set.rs"),
+    ),
+    (
         "crates/perry-codegen/src/lower_call/property_get/map_set.rs",
         include_str!("../lower_call/property_get/map_set.rs"),
     ),

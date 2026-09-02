@@ -26,7 +26,7 @@
 use anyhow::Result;
 use perry_hir::Expr;
 
-use crate::expr::{lower_expr, unbox_to_i64, FnCtx};
+use crate::expr::{lower_expr, nanbox_pointer_inline, unbox_to_i64, FnCtx};
 use crate::nanbox::double_literal;
 use crate::rooting;
 use crate::type_analysis::{
@@ -88,11 +88,23 @@ pub(crate) fn try_lower_map_set_methods(
                             (vals[0].clone(), vals[1].clone(), vals[2].clone());
                         let blk = ctx.block();
                         let m_handle = unbox_to_i64(blk, &m_box);
-                        blk.call_void(
+                        // #9523: `js_map_set` returns the RECEIVER as it stands
+                        // after the insert. For a `class X extends Map` instance
+                        // that receiver is a movable `ObjectHeader` the runtime
+                        // roots across the grow (`map_op_returning_receiver`), so
+                        // a moving minor inside `ensure_capacity` hands back a
+                        // different address — and `m_box`, read from its slot
+                        // BEFORE the call, is then a from-space pointer. The
+                        // chained `.set(a, 1).set(b, 2)` consumes exactly that
+                        // return value. `Expr::MapSet` already re-boxes the
+                        // returned pointer; this arm called the helper as `void`
+                        // and returned the pre-call box.
+                        let receiver = blk.call(
+                            I64,
                             "js_map_set",
                             &[(I64, &m_handle), (DOUBLE, &k_box), (DOUBLE, &v_box)],
                         );
-                        Ok(Some(m_box))
+                        Ok(Some(nanbox_pointer_inline(blk, &receiver)))
                     },
                 );
             }
