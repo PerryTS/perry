@@ -207,6 +207,24 @@ fn render_table(headers: &[String], rows: &[Vec<String>]) {
 
 /// Read all keys from an object's keys_array as Strings.
 unsafe fn object_key_names(obj_ptr: *const crate::object::ObjectHeader) -> Vec<String> {
+    object_key_entries(obj_ptr)
+        .into_iter()
+        .map(|(_, name)| name)
+        .collect()
+}
+
+/// Own string keys of `obj_ptr`, each paired with the SLOT index it occupies in
+/// the object's field storage.
+///
+/// #9462: the slot index is the load-bearing half. A tombstoned key (`delete
+/// o.a` — default-on since #9331) leaves a non-string in the keys array, and
+/// dropping it from a `Vec` renumbers every later key. Reading the fields back
+/// by the COMPACTED position then reads the tombstone itself, so
+/// `console.table({a:1,b:2})` after `delete o.a` printed `b | NaN`.
+/// `format_object_as_json` and both `console.rs` option decoders already
+/// iterate `0..key_count` and `continue` on a non-string key for exactly this
+/// reason; this is that same walk, with the index kept.
+unsafe fn object_key_entries(obj_ptr: *const crate::object::ObjectHeader) -> Vec<(u32, String)> {
     let keys_array = crate::object::object_keys_array(obj_ptr);
     if keys_array.is_null() {
         return Vec::new();
@@ -216,7 +234,7 @@ unsafe fn object_key_names(obj_ptr: *const crate::object::ObjectHeader) -> Vec<S
     for i in 0..count {
         let key_val = crate::array::js_array_get(keys_array, i as u32);
         if let Some(s) = read_string_from_jsvalue(key_val) {
-            keys.push(s);
+            keys.push((i as u32, s));
         }
     }
     keys
@@ -416,10 +434,39 @@ pub extern "C" fn js_console_table_with_properties(value: f64, properties: f64) 
                     }
                 }
 
+                // #9462: node derives the columns from the UNION of each
+                // row's OWN keys (`Object.keys(row)`), and a hole is not an own
+                // key — so `console.table([[1, , 3]])` prints columns `0` and
+                // `2`, never three columns with a `NaN` in the middle. A cell-
+                // only fix cannot match node; the header derivation needs the
+                // same treatment. Ascending order is node's too: its column map
+                // is keyed by index strings, which `Object.keys` returns in
+                // numeric order however the rows contributed them
+                // (`[[1, , 3], [4, 5, 6]]` → `0 1 2`, not `0 2 1`).
+                let mut present = vec![false; max_len];
+                for i in 0..length {
+                    let elem = *data_ptr.add(i);
+                    if get_gc_type(elem) != crate::gc::GC_TYPE_ARRAY {
+                        continue;
+                    }
+                    let sub = JSValue::from_bits(elem.to_bits())
+                        .as_pointer::<crate::array::ArrayHeader>();
+                    let sub_len = ((*sub).length as usize).min(max_len);
+                    let sub_data = (sub as *const u8)
+                        .add(std::mem::size_of::<crate::array::ArrayHeader>())
+                        as *const f64;
+                    for (j, slot) in present.iter_mut().enumerate().take(sub_len) {
+                        if (*sub_data.add(j)).to_bits() != crate::value::TAG_HOLE {
+                            *slot = true;
+                        }
+                    }
+                }
+                let columns: Vec<usize> = (0..max_len).filter(|j| present[*j]).collect();
+
                 let include_values_col = !all_arrays;
-                let mut headers: Vec<String> = Vec::with_capacity(2 + max_len);
+                let mut headers: Vec<String> = Vec::with_capacity(2 + columns.len());
                 headers.push("(index)".to_string());
-                for j in 0..max_len {
+                for j in &columns {
                     headers.push(j.to_string());
                 }
                 if include_values_col {
@@ -438,19 +485,23 @@ pub extern "C" fn js_console_table_with_properties(value: f64, properties: f64) 
                         let sub_data = (sub as *const u8)
                             .add(std::mem::size_of::<crate::array::ArrayHeader>())
                             as *const f64;
-                        for j in 0..max_len {
-                            if j < sub_len {
-                                let v = *sub_data.add(j);
-                                row.push(format_table_cell(v));
-                            } else {
+                        for &j in &columns {
+                            // A slot this row does not own renders as an empty
+                            // cell, exactly like a short row's missing tail —
+                            // never as the hole sentinel's `NaN` (#9462).
+                            let empty = j >= sub_len
+                                || (*sub_data.add(j)).to_bits() == crate::value::TAG_HOLE;
+                            if empty {
                                 row.push("".to_string());
+                            } else {
+                                row.push(format_table_cell(*sub_data.add(j)));
                             }
                         }
                         if include_values_col {
                             row.push("".to_string());
                         }
                     } else {
-                        for _ in 0..max_len {
+                        for _ in &columns {
                             row.push("".to_string());
                         }
                         row.push(format_table_cell(elem));
@@ -477,7 +528,7 @@ pub extern "C" fn js_console_table_with_properties(value: f64, properties: f64) 
         } else if gc_type == crate::gc::GC_TYPE_OBJECT {
             // Single object: rows are property name → "Values" column.
             let obj_ptr = jsval.as_pointer::<crate::object::ObjectHeader>();
-            let keys = object_key_names(obj_ptr);
+            let keys = object_key_entries(obj_ptr);
             if keys.is_empty() {
                 return;
             }
@@ -485,8 +536,8 @@ pub extern "C" fn js_console_table_with_properties(value: f64, properties: f64) 
             // columns, e.g. console.table({ a: { a: 1, b: 2 } }).
             let mut nested_keys: Vec<String> = Vec::new();
             let mut all_nested = true;
-            for i in 0..keys.len() {
-                let v = crate::object::js_object_get_field_f64(obj_ptr, i as u32);
+            for (slot, _) in &keys {
+                let v = crate::object::js_object_get_field_f64(obj_ptr, *slot);
                 if get_gc_type(v) == crate::gc::GC_TYPE_OBJECT {
                     let vp =
                         JSValue::from_bits(v.to_bits()).as_pointer::<crate::object::ObjectHeader>();
@@ -507,8 +558,8 @@ pub extern "C" fn js_console_table_with_properties(value: f64, properties: f64) 
                     headers.push("Values".to_string());
                 }
                 let mut rows: Vec<Vec<String>> = Vec::with_capacity(keys.len());
-                for (i, key) in keys.iter().enumerate() {
-                    let v = crate::object::js_object_get_field_f64(obj_ptr, i as u32);
+                for (slot, key) in &keys {
+                    let v = crate::object::js_object_get_field_f64(obj_ptr, *slot);
                     let mut row = vec![key.clone()];
                     if get_gc_type(v) == crate::gc::GC_TYPE_OBJECT {
                         let vp = JSValue::from_bits(v.to_bits())
@@ -541,9 +592,10 @@ pub extern "C" fn js_console_table_with_properties(value: f64, properties: f64) 
             }
             let headers = vec!["(index)".to_string(), "Values".to_string()];
             let mut rows: Vec<Vec<String>> = Vec::with_capacity(keys.len());
-            for (i, key) in keys.iter().enumerate() {
-                // Read the value by field index (matches keys_array order).
-                let v = crate::object::js_object_get_field_f64(obj_ptr, i as u32);
+            for (slot, key) in &keys {
+                // Read the value by the key's OWN slot index — never by its
+                // position in the compacted name list (#9462).
+                let v = crate::object::js_object_get_field_f64(obj_ptr, *slot);
                 rows.push(vec![key.clone(), format_table_cell(v)]);
             }
             render_table(&headers, &rows);
