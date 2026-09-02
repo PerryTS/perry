@@ -704,12 +704,14 @@ pub unsafe extern "C" fn js_json_stringify_with_replacer(
     // Per spec the holder wraps the ORIGINAL root value (so a root replacer's
     // `this[""]` observes the pre-`toJSON` value); only the replacer's value
     // argument is post-`toJSON`. CodeRabbit (PR #5438).
-    let replaced_root = call_replacer(
-        replacer_root.get_raw_const_ptr::<crate::ClosureHeader>(),
-        empty_key_root.get_nanbox_f64(),
-        value_after_to_json,
-        root_holder(value),
-    );
+    let replaced_root = replacer_root.with_const_ptr::<crate::ClosureHeader, _>(|replacer| {
+        call_replacer(
+            replacer,
+            empty_key_root.get_nanbox_f64(),
+            value_after_to_json,
+            root_holder(value),
+        )
+    });
     let replaced_bits = replaced_root.to_bits();
 
     // If replacer returns undefined for root, return undefined.
@@ -747,14 +749,9 @@ pub unsafe extern "C" fn js_json_stringify_with_replacer(
     // inline, pointers via the GC-tag dispatch (compact, no indent).
     if !write_replaced_scalar(&mut buf, replaced_root) {
         let ptr = extract_pointer(replaced_bits).unwrap();
-        dispatch_pointer_with_replacer(
-            ptr,
-            replaced_root,
-            replacer_root.get_raw_const_ptr::<crate::ClosureHeader>(),
-            &mut buf,
-            "",
-            0,
-        );
+        replacer_root.with_const_ptr::<crate::ClosureHeader, _>(|replacer| {
+            dispatch_pointer_with_replacer(ptr, replaced_root, replacer, &mut buf, "", 0);
+        });
     }
 
     let result = js_string_from_bytes(buf.as_ptr(), buf.len() as u32);
@@ -1766,12 +1763,14 @@ pub unsafe extern "C" fn js_json_stringify_full(
         let empty_str = js_string_from_bytes(b"".as_ptr(), 0);
         let empty_key_root = root_scope.root_nanbox_f64(nanbox_string_f64(empty_str));
         let value_after_to_json = apply_to_json_keyed(value, empty_key_root.get_nanbox_f64());
-        let replaced_root = call_replacer(
-            replacer_root.get_raw_const_ptr::<crate::ClosureHeader>(),
-            empty_key_root.get_nanbox_f64(),
-            value_after_to_json,
-            root_holder(value_after_to_json),
-        );
+        let replaced_root = replacer_root.with_const_ptr::<crate::ClosureHeader, _>(|replacer| {
+            call_replacer(
+                replacer,
+                empty_key_root.get_nanbox_f64(),
+                value_after_to_json,
+                root_holder(value_after_to_json),
+            )
+        });
         let replaced_bits = replaced_root.to_bits();
         if replaced_bits == TAG_UNDEFINED {
             STRINGIFY_STACK.with(|s| s.borrow_mut().clear());
@@ -1789,14 +1788,16 @@ pub unsafe extern "C" fn js_json_stringify_full(
         // (object vs array) so the indent threads through nested structures.
         if !write_replaced_scalar(&mut buf, replaced_root) {
             let ptr = extract_pointer(replaced_bits).unwrap();
-            dispatch_pointer_with_replacer(
-                ptr,
-                replaced_root,
-                replacer_root.get_raw_const_ptr::<crate::ClosureHeader>(),
-                &mut buf,
-                &indent_str,
-                0,
-            );
+            replacer_root.with_const_ptr::<crate::ClosureHeader, _>(|replacer| {
+                dispatch_pointer_with_replacer(
+                    ptr,
+                    replaced_root,
+                    replacer,
+                    &mut buf,
+                    &indent_str,
+                    0,
+                );
+            });
         }
     } else {
         // No replacer. Pre-resolve the ROOT value's own `toJSON` here (same
