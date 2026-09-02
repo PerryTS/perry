@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "fastify": "5.8.5"
+    "fastify": "5.12.1"
   },
   "devDependencies": {
     "tsx": "4.22.3",
