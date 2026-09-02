@@ -1769,6 +1769,32 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
         })
         .collect();
     user_fn_display_names.extend(body_symbol_display_names);
+    // #9486: class methods, under the `Class.method` label node uses for a
+    // prototype-method frame. `method_names` is the map codegen itself keyed
+    // the emitted `perry_method_*` symbols by, and the `__perry_wrap_*`
+    // generator earlier in this function walks exactly this pair of loops
+    // with the same `.get(...)` guard — so every symbol here is one this module
+    // definitely emitted, which is the condition the #318/#343 "use of
+    // undefined value" class turns on. Only the BODY symbol is registered:
+    // the wrapper address is what `fn.name` reads, and giving a method a
+    // `.name` it never had is a separate, observable change.
+    {
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for class in &hir.classes {
+            for method in &class.methods {
+                let Some(symbol) = method_names
+                    .get(&(class.name.clone(), method.name.clone()))
+                    .cloned()
+                else {
+                    continue;
+                };
+                if method.name.is_empty() || !seen.insert(symbol.clone()) {
+                    continue;
+                }
+                user_fn_display_names.push((symbol, format!("{}.{}", class.name, method.name)));
+            }
+        }
+    }
     // (b) Closures bound to a top-level `let`/`const`. #2076: a named
     // function expression's own name takes precedence over the binding
     // name (`const bar = function namedBar(){}` ⇒ `"namedBar"`).

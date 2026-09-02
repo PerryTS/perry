@@ -37,8 +37,11 @@
 //! A `file:line:col` would need a per-return-address line table — an
 //! O(instructions) artifact, against this one's O(functions). The issue's bar
 //! is frame COUNT and NAMES; positions are explicitly not byte-compared
-//! against node. `    at name` is what a resolved frame renders as.
+//! against node. A resolved frame renders as `    at name (<anonymous>)` —
+//! V8's own spelling for a frame whose script position is unknown, and the
+//! shape the stack-parsing libraries in real bundles expect.
 
+use super::*;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::OnceLock;
@@ -57,12 +60,17 @@ const RENDER_LIMIT: usize = 10;
 const PC_CHARS: usize = 8;
 const PC_BITS: u32 = 48;
 
-/// A frame whose containing function starts more than this far below it is not
-/// plausibly inside that function: the address belongs to an unregistered
-/// function (runtime Rust code, a codegen thunk) that happens to sort after a
-/// registered one. Rejecting it is what keeps a native frame from being
-/// reported under some unrelated JS function's name.
-const MAX_FUNCTION_SPAN: usize = 1 << 20;
+/// A frame whose nearest registered function starts more than this far below
+/// it is not plausibly inside that function: the address belongs to an
+/// unregistered one — runtime Rust code, a codegen thunk — that happens to
+/// sort after it. Rejecting it is what keeps a native frame out of the trace
+/// under some unrelated JS function's name, and dropping a frame is the right
+/// way to be wrong here: a MISSING frame is visibly missing, while a
+/// MIS-NAMED one sends the reader after the wrong function.
+///
+/// 64 KiB of machine code is a very large single JS function and a very small
+/// slice of the runtime, which is the asymmetry this number trades on.
+const MAX_FUNCTION_SPAN: usize = 64 * 1024;
 
 const ALPHABET: &[u8; 64] =
     b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+-";
@@ -226,8 +234,22 @@ mod walk {
         if top == 0 {
             return 0;
         }
+        // The low bound is this frame's own stack address. On aarch64 the
+        // platform ABI makes x29 a real frame pointer everywhere, so this is
+        // belt-and-braces; on x86_64 the runtime's own Rust frames may omit
+        // one, in which case `rbp` still holds the frame pointer of the
+        // innermost function that DID establish one — generated code always
+        // does — and that is exactly the frame the capture wants. What the
+        // bound rules out is the remaining case: an `rbp` holding something
+        // that is not a stack address at all, which would otherwise start the
+        // walk on fabricated frame records.
+        let probe = 0usize;
+        let low = &probe as *const usize as usize;
         let mut n = 0usize;
         let mut fp = current_frame_pointer();
+        if fp < low {
+            return 0;
+        }
         while n < MAX_CAPTURED_FRAMES && fp != 0 {
             if fp & FRAME_RECORD_ALIGN_MASK != 0 {
                 break;
@@ -303,23 +325,28 @@ fn index_slot() -> &'static Mutex<Option<CodeSymbolIndex>> {
 
 /// Resolve `ip` to the display name of the function containing it.
 ///
-/// The registry names function STARTS, and there is no end address to pair
-/// with them, so containment is "the greatest start at or below `ip`, provided
-/// `ip` is below the next start and within [`MAX_FUNCTION_SPAN`] of this one".
-/// The span cap is what stops an address past the last registered function —
-/// every runtime Rust frame, on a link layout that places the archives after
-/// the generated objects — from being reported under that function's name.
+/// The binary search already guarantees the NEXT registered function starts
+/// above `ip`, so the only open question is whether `ip` is inside THIS
+/// function or past its end — and the registry has no end addresses, it names
+/// starts. [`MAX_FUNCTION_SPAN`] is that missing bound, and it is what stops
+/// an address well past the last registered function (every runtime Rust
+/// frame, on a link layout that places the archives after the generated
+/// objects) from being reported under that function's name.
+///
+/// The residual is honest and worth stating: an address inside an
+/// UNREGISTERED function that sits within the span of a registered one — a
+/// codegen thunk, or runtime code the linker interleaved — resolves to the
+/// preceding registered name. It is the same shape as the residual the
+/// collector's own function table carries (`stack_maps_index.rs`: "a function
+/// with no safepoints is absent … so an `ip` inside one resolves to the
+/// previous mapped function"), and closing it needs a per-function code
+/// extent, which Mach-O does not expose cheaply.
 fn name_for_ip(index: &CodeSymbolIndex, ip: usize) -> Option<&Arc<[u8]>> {
     let at = index.entries.partition_point(|(addr, _)| *addr <= ip);
     let at = at.checked_sub(1)?;
     let (start, name) = &index.entries[at];
-    if ip < *start || ip - *start > MAX_FUNCTION_SPAN {
+    if ip - *start > MAX_FUNCTION_SPAN {
         return None;
-    }
-    if let Some((next, _)) = index.entries.get(at + 1) {
-        if ip >= *next {
-            return None;
-        }
     }
     Some(name)
 }
@@ -378,8 +405,14 @@ pub(crate) fn render_frames(blob: &[u8]) -> Option<String> {
             if rendered > 0 {
                 out.push('\n');
             }
+            // `at <name> (<anonymous>)`, not a bare `at <name>`: V8 already
+            // spells an unknown script position `(<anonymous>)`, and keeping
+            // the `name (location)` shape is what lets the stack-parsing
+            // libraries in real bundles (`error-stack-parser`,
+            // `source-map-support`) read the name out of the frame at all.
             out.push_str("    at ");
             out.push_str(name);
+            out.push_str(" (<anonymous>)");
             rendered += 1;
         }
         if rendered == 0 {
@@ -389,6 +422,89 @@ pub(crate) fn render_frames(blob: &[u8]) -> Option<String> {
         }
     })
     .flatten()
+}
+
+/// #9486: build the `frames` payload for an error being constructed — the
+/// encoded native return addresses, plus the recorded #5247 line when there is
+/// one. Returns an empty vector when there is nothing to record, in which case
+/// no string is allocated at all.
+pub(crate) fn capture_frames_payload() -> Vec<u8> {
+    let (blob, len) = capture_encoded();
+    let recorded = recorded_stack_frame();
+    if len == 0 && recorded.is_none() {
+        return Vec::new();
+    }
+    let recorded = recorded.unwrap_or_default();
+    let mut out = Vec::with_capacity(len + recorded.len() + 1);
+    out.extend_from_slice(&blob[..len]);
+    if !recorded.is_empty() {
+        out.push(b'\n');
+        out.extend_from_slice(recorded.as_bytes());
+    }
+    out
+}
+
+/// #9486: render the frame lines of a `.stack` from a captured `frames`
+/// payload. The recorded #5247 call site comes first (it is the innermost
+/// position we know), then the resolved native frames outward.
+pub(crate) fn frames_payload_to_lines(payload: &[u8]) -> String {
+    let (blob, recorded) = match payload.iter().position(|b| *b == b'\n') {
+        Some(at) => (&payload[..at], std::str::from_utf8(&payload[at + 1..]).ok()),
+        None => (payload, None),
+    };
+    let resolved = render_frames(blob);
+    match (recorded, resolved) {
+        (Some(line), Some(frames)) => format!("{line}\n{frames}"),
+        (Some(line), None) => line.to_string(),
+        (None, Some(frames)) => frames,
+        (None, None) => "    at <anonymous>".to_string(),
+    }
+}
+
+/// #9486: format-and-memoise half of [`js_error_get_stack`].
+pub(crate) unsafe fn materialize_error_stack(error: *mut ErrorHeader) -> *mut StringHeader {
+    if !(*error).stack.is_null() {
+        return (*error).stack;
+    }
+    let name = read_string_header_owned((*error).name);
+    let message = read_string_header_owned((*error).message);
+    let head = if name.is_empty() {
+        message
+    } else if message.is_empty() {
+        name
+    } else {
+        format!("{name}: {message}")
+    };
+    let head = if head.is_empty() {
+        "Error".to_string()
+    } else {
+        head
+    };
+    let payload = read_string_header_owned((*error).frames);
+    let text = format!("{head}\n{}", frames_payload_to_lines(payload.as_bytes()));
+
+    // The string birth can collect, and `error` is a bare pointer: root it
+    // across the allocation and re-read it afterwards, or a moving scavenge
+    // leaves the memoising store writing into from-space.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let error_handle = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(error as i64));
+    let stack_ptr = js_string_from_bytes(text.as_ptr(), text.len() as u32);
+    let stack_handle = scope.root_string_ptr(stack_ptr);
+    let error = crate::value::js_nanbox_get_pointer(error_handle.get_nanbox_f64()) as *mut ErrorHeader;
+    let stack_ptr = stack_handle.get_raw_const_ptr::<StringHeader>() as *mut StringHeader;
+    crate::gc::runtime_store_gc_heap_word_slot(
+        error as usize,
+        &(*error).stack as *const _ as usize,
+        stack_ptr as u64,
+    );
+    // The capture has served its purpose; releasing it keeps a long-lived
+    // error from pinning 128 bytes of encoded addresses forever.
+    crate::gc::runtime_store_gc_heap_word_slot(
+        error as usize,
+        &(*error).frames as *const _ as usize,
+        0,
+    );
+    stack_ptr
 }
 
 #[cfg(test)]

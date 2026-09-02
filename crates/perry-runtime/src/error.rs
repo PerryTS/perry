@@ -214,43 +214,6 @@ fn recorded_stack_frame() -> Option<String> {
     })
 }
 
-/// #9486: build the `frames` payload for an error being constructed — the
-/// encoded native return addresses, plus the recorded #5247 line when there is
-/// one. Returns an empty vector when there is nothing to record, in which case
-/// no string is allocated at all.
-pub(crate) fn capture_frames_payload() -> Vec<u8> {
-    let (blob, len) = stack_frames::capture_encoded();
-    let recorded = recorded_stack_frame();
-    if len == 0 && recorded.is_none() {
-        return Vec::new();
-    }
-    let recorded = recorded.unwrap_or_default();
-    let mut out = Vec::with_capacity(len + recorded.len() + 1);
-    out.extend_from_slice(&blob[..len]);
-    if !recorded.is_empty() {
-        out.push(b'\n');
-        out.extend_from_slice(recorded.as_bytes());
-    }
-    out
-}
-
-/// #9486: render the frame lines of a `.stack` from a captured `frames`
-/// payload. The recorded #5247 call site comes first (it is the innermost
-/// position we know), then the resolved native frames outward.
-pub(crate) fn frames_payload_to_lines(payload: &[u8]) -> String {
-    let (blob, recorded) = match payload.iter().position(|b| *b == b'\n') {
-        Some(at) => (&payload[..at], std::str::from_utf8(&payload[at + 1..]).ok()),
-        None => (payload, None),
-    };
-    let resolved = stack_frames::render_frames(blob);
-    match (recorded, resolved) {
-        (Some(line), Some(frames)) => format!("{line}\n{frames}"),
-        (Some(line), None) => line.to_string(),
-        (None, Some(frames)) => frames,
-        (None, None) => "    at <anonymous>".to_string(),
-    }
-}
-
 unsafe fn make_stack(name: &str, message: &str) -> *mut StringHeader {
     // Build a simple "<name>: <message>\n    at <file>:<line>" string
     // (or "<anonymous>" when no #5247 source location is recorded). Real
@@ -972,52 +935,6 @@ pub extern "C" fn js_error_get_stack(error: *mut ErrorHeader) -> *mut StringHead
         }
         materialize_error_stack(error)
     }
-}
-
-/// #9486: format-and-memoise half of [`js_error_get_stack`].
-pub(crate) unsafe fn materialize_error_stack(error: *mut ErrorHeader) -> *mut StringHeader {
-    if !(*error).stack.is_null() {
-        return (*error).stack;
-    }
-    let name = read_string_header_owned((*error).name);
-    let message = read_string_header_owned((*error).message);
-    let head = if name.is_empty() {
-        message
-    } else if message.is_empty() {
-        name
-    } else {
-        format!("{name}: {message}")
-    };
-    let head = if head.is_empty() {
-        "Error".to_string()
-    } else {
-        head
-    };
-    let payload = read_string_header_owned((*error).frames);
-    let text = format!("{head}\n{}", frames_payload_to_lines(payload.as_bytes()));
-
-    // The string birth can collect, and `error` is a bare pointer: root it
-    // across the allocation and re-read it afterwards, or a moving scavenge
-    // leaves the memoising store writing into from-space.
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let error_handle = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(error as i64));
-    let stack_ptr = js_string_from_bytes(text.as_ptr(), text.len() as u32);
-    let stack_handle = scope.root_string_ptr(stack_ptr);
-    let error = crate::value::js_nanbox_get_pointer(error_handle.get_nanbox_f64()) as *mut ErrorHeader;
-    let stack_ptr = stack_handle.get_raw_const_ptr::<StringHeader>() as *mut StringHeader;
-    crate::gc::runtime_store_gc_heap_word_slot(
-        error as usize,
-        &(*error).stack as *const _ as usize,
-        stack_ptr as u64,
-    );
-    // The capture has served its purpose; releasing it keeps a long-lived
-    // error from pinning 128 bytes of encoded addresses forever.
-    crate::gc::runtime_store_gc_heap_word_slot(
-        error as usize,
-        &(*error).frames as *const _ as usize,
-        0,
-    );
-    stack_ptr
 }
 
 fn throw_builtin_not_constructor(name: &'static str) -> ! {
@@ -1993,6 +1910,9 @@ static KEEP_ERROR_IS_ERROR: extern "C" fn(f64) -> f64 = js_error_is_error;
 
 #[path = "error_stack_frames.rs"]
 mod stack_frames;
+pub(crate) use stack_frames::{
+    capture_frames_payload, frames_payload_to_lines, materialize_error_stack,
+};
 
 #[path = "error_subclass_stack.rs"]
 mod subclass_stack;
