@@ -32,6 +32,7 @@
 // The parity runner gives a fixture no stdin, so this test re-spawns itself
 // with a pipe on the child's stdin and drives each shape in a child role.
 import { spawn } from "node:child_process";
+import { Readable } from "node:stream";
 import { existsSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -176,7 +177,43 @@ if (role !== "") {
       }
     });
 
+  // A generic `Readable` carries the same contract, and had the same
+  // carry-over hole: `decode_readable_chunk_for_encoding` decoded each
+  // pushed chunk on its own, so a code point straddling two `push()` calls
+  // became replacement characters. This arm needs no child process.
+  const runReadable = (name: string, pushes: number[][]) =>
+    new Promise<void>((resolve) => {
+      const stream = new Readable({ read() {} });
+      stream.setEncoding("utf8");
+      const evs: string[] = [];
+      let acc = "";
+      stream.on("data", (chunk: string) => {
+        evs.push(units(chunk));
+        acc += chunk;
+      });
+      stream.on("end", () => {
+        console.log(name + " length:", acc.length);
+        console.log(name + " fffd:", fffdCount(acc));
+        console.log(name + " units:", units(acc));
+        console.log(name + " events:", JSON.stringify(evs));
+        resolve();
+      });
+      for (const p of pushes) stream.push(Buffer.from(p));
+      stream.push(null);
+    });
+
   (async () => {
+    // Emoji split 2/2, then a 3-byte sequence split 1/2 across the next two
+    // pushes, then invalid bytes — one arm covering hold, resume and replace.
+    await runReadable("readable", [
+      [0xf0, 0x9f],
+      [0x98, 0x80],
+      [0x41, 0xe2, 0x82],
+      [0xac, 0x80, 0xc0, 0x80],
+    ]);
+    // Stream ends mid-sequence: the held tail flushes as one U+FFFD, in its
+    // own final chunk.
+    await runReadable("readable_flush", [[0x41, 0xe2, 0x82]]);
     await runRole("all256");
     await runRole("invalid");
     await runRole("truncend");
