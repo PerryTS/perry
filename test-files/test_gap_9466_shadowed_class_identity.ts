@@ -171,3 +171,54 @@ function innerSub() {
 }
 console.log("sub-top:", new SubTop().who(), new SubTop() instanceof B);
 console.log("sub-inner:", innerSub());
+
+// --- 7. switch: a bare case statement-list shares ONE switch block scope ---
+class Sw { v() { return "sw-top"; } }
+function switchBare(k: number) {
+  switch (k) {
+    case 1:
+      class Sw { v() { return "sw-case"; } }
+      return new Sw().v();
+    default:
+      return "none";
+  }
+}
+console.log("switch-bare:", switchBare(1), switchBare(2), new Sw().v());
+
+// A braced case is its own block scope on top of the switch's.
+class Sw2 { v() { return "sw2-top"; } }
+function switchBraced(k: number) {
+  switch (k) {
+    case 1: { class Sw2 { v() { return "c1"; } } return new Sw2().v(); }
+    case 2: { class Sw2 { v() { return "c2"; } } return new Sw2().v(); }
+    default: return new Sw2().v();
+  }
+}
+console.log("switch-braced:", switchBraced(1), switchBraced(2), switchBraced(3));
+
+// --- 8. loop body: ONE declaration site, so ONE class for every iteration ---
+// (the disambiguation is keyed on the declaration's source span, and every
+// iteration shares that span). The closures must still hold the inner class
+// after the loop exits, and the post-loop `new Lp()` must get the OUTER one.
+class Lp { v() { return "lp-top"; } }
+function loopSameClass() {
+  const fs: Array<() => string> = [];
+  for (let i = 0; i < 3; i++) {
+    class Lp { v() { return "lp-body"; } }
+    fs.push(() => new Lp().v());
+  }
+  return fs.map((f) => f()).join(",") + "|" + new Lp().v();
+}
+console.log("loop-same-class:", loopSameClass());
+
+// Same shape with a per-iteration capture: one class, three environments.
+class Cp { v() { return "cp-top"; } }
+function loopCaptures() {
+  const fs: Array<() => string> = [];
+  for (let i = 0; i < 3; i++) {
+    class Cp { v() { return "cp" + i; } }
+    fs.push(() => new Cp().v());
+  }
+  return fs.map((f) => f()).join(",") + "|" + new Cp().v();
+}
+console.log("loop-captures:", loopCaptures());
