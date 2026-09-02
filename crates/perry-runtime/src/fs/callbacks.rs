@@ -156,7 +156,8 @@ pub(crate) unsafe fn call_cb_err1(callback: *const ClosureHeader, err_val: f64) 
     defer_fs_callback(callback, &[err_val]);
 }
 
-/// `fs.writeFile(path, data, callback)` — sync write + immediate callback.
+/// `fs.writeFile(path, data, callback)` — the write is parked on a later
+/// event-loop turn (#9442), then the callback is delivered.
 #[no_mangle]
 pub extern "C" fn js_fs_write_file_callback(
     path_value: f64,
@@ -177,16 +178,15 @@ pub extern "C" fn js_fs_write_file_callback(
             return f64::from_bits(TAG_UNDEFINED);
         }
     }
-    unsafe {
-        match write_file_path_or_fd_result(path_value, content_value, options) {
-            Ok(()) => call_cb0(cb),
-            Err(err_val) => call_cb_err1(cb, err_val),
-        }
-    }
+    // #9442: park the write instead of performing it here. Node hands
+    // `writeFile` to the thread pool and returns; a `process.exit()` in the
+    // same tick abandons it, and perry must abandon it too.
+    defer_write_file_callback(path_value, content_value, options, cb);
     f64::from_bits(TAG_UNDEFINED)
 }
 
-/// `fs.appendFile(path, data, callback)` — sync append + immediate callback.
+/// `fs.appendFile(path, data, callback)` — the append is parked on a later
+/// event-loop turn (#9442), then the callback is delivered.
 #[no_mangle]
 pub extern "C" fn js_fs_append_file_callback(
     path_value: f64,
@@ -207,8 +207,10 @@ pub extern "C" fn js_fs_append_file_callback(
             return f64::from_bits(TAG_UNDEFINED);
         }
     }
-    let _ = js_fs_append_file_sync_options(path_value, content_value, options);
-    call_cb0(cb);
+    // #9442: park the write instead of performing it here. Node hands
+    // `appendFile` to the thread pool and returns; a `process.exit()` in the
+    // same tick abandons it, and perry must abandon it too.
+    defer_append_file_callback(path_value, content_value, options, cb);
     f64::from_bits(TAG_UNDEFINED)
 }
 

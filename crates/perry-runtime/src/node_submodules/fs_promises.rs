@@ -143,12 +143,11 @@ pub(crate) extern "C" fn thunk_fs_promises_writeFile(
     data: f64,
     options: f64,
 ) -> f64 {
-    match catch_fs_promises_throw(|| {
-        match unsafe { crate::fs::write_file_path_or_fd_result(path, data, options) } {
-            Ok(()) => crate::fs::promise_undefined_fs(),
-            Err(err) => crate::fs::promise_rejected_fs(err),
-        }
-    }) {
+    // #9442: return a PENDING promise and park the write on a later turn, the
+    // way Node returns before the thread pool has touched the file. Argument
+    // validation that throws still runs here, so a bad path or options object
+    // rejects exactly as it did before.
+    match catch_fs_promises_throw(|| crate::fs::defer_write_file_promise(path, data, options)) {
         Ok(promise) => promise,
         Err(err) => crate::fs::promise_rejected_fs(err),
     }
@@ -161,9 +160,13 @@ pub(crate) extern "C" fn thunk_fs_promises_appendFile(
     data: f64,
     options: f64,
 ) -> f64 {
-    promise_from_sync_undefined(|| {
-        let _ = crate::fs::js_fs_append_file_sync_options(path, data, options);
-    })
+    // #9442: see `thunk_fs_promises_writeFile`. Five of these followed by
+    // `process.exit(0)` in the same tick is the issue's repro; Node lands zero
+    // records because none of the five has run yet.
+    match catch_fs_promises_throw(|| crate::fs::defer_append_file_promise(path, data, options)) {
+        Ok(promise) => promise,
+        Err(err) => crate::fs::promise_rejected_fs(err),
+    }
 }
 
 pub(crate) extern "C" fn thunk_fs_promises_chmod(

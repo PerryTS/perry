@@ -18,6 +18,11 @@ use crate::value::{POINTER_MASK, POINTER_TAG};
 
 mod callbacks;
 pub use callbacks::*;
+// #9442: the async write entry points park their work on a later event-loop
+// turn instead of doing it inline, so `process.exit()` abandons it the way
+// Node's does.
+mod deferred;
+pub(crate) use deferred::*;
 mod stream;
 pub use stream::*;
 mod filehandle;
