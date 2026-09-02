@@ -51,3 +51,27 @@
   program loses what it had. Windows and any target without a guaranteed
   frame-pointer chain keep the old behavior rather than guess at a frame
   shape the ABI does not promise.
+
+  **Two limits worth knowing.** Inlining removes frames: `a() → b() → c()`
+  where all three are small folds into one function, so the trace names the
+  frame that survives rather than all three. V8 keeps inlined frames because it
+  retains inlining metadata for deoptimization; an ahead-of-time compiler has
+  no such record, and the frames that matter in real traces — the ones across
+  `try`/`catch`, callbacks and module boundaries — are exactly the ones the
+  inliner does not fold. And a frame is only as good as the registry's
+  coverage: an address inside a function nothing registered resolves to
+  whichever registered function precedes it, so this change also registers
+  class constructors, static methods and accessors, which previously had no
+  name of their own and were the ones a neighbour's name leaked into (measured:
+  a `new Widget()` frame came out labelled `main`).
+
+- **x86_64 builds now keep frame pointers.** The capture above walks the
+  `rbp` / `x29` chain, which is only a chain if every frame between
+  `new Error` and the throwing JS function maintains one. Generated code always
+  did; the runtime is Rust, and on `x86_64-unknown-linux-gnu` rustc leaves
+  `rbp` as a general-purpose callee-saved register — measured, `rbp` inside
+  `alloc_error` held `0x1`, so the walk had no root and every stack on that
+  target fell back to `at <anonymous>`. `.cargo/config.toml` now adds
+  `-C force-frame-pointers=yes` for x86_64 only; the AArch64 platform ABI
+  reserves `x29`, which is why the collector's own `fp_chain` walker was
+  AArch64-only and why this knob is not needed there.
