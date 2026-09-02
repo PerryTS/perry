@@ -454,3 +454,69 @@ fn a_plain_array_foreach_iterates_without_probing_the_collection_registries() {
          collection_foreach_reroute and this is what fails"
     );
 }
+
+/// #9462: the Set/Map arm of `js_array_get_f64` used to index the raw element
+/// buffer directly, bounded by the LIVE count `size` while raw slots run
+/// `0..used`. After a `.delete()` it therefore handed the caller the TOMBSTONE
+/// — a bare `TAG_HOLE`, with none of the translation the plain-array arm
+/// performs — and never reached the live element sitting past it.
+///
+/// `js_array_length` on a Set answers `size`, so the paired contract is that
+/// indices `0..size` enumerate the LIVE elements. That is what is asserted
+/// here: not merely "not a hole", but the right element at the right index.
+#[test]
+fn a_tombstoned_collection_never_hands_a_hole_to_an_indexed_read() {
+    let (_map, _set) = arm_both_registries();
+
+    let set = js_set_alloc(4);
+    for value in [1.0, 2.0, 3.0] {
+        js_set_add(set, value);
+    }
+    crate::set::js_set_delete(set, 1.0);
+    let set_receiver = set as *const ArrayHeader;
+    assert_eq!(
+        js_array_length(set_receiver),
+        2,
+        "`length` reports live size"
+    );
+    for (index, expected) in [(0u32, 2.0), (1, 3.0)] {
+        let got = js_array_get_f64(set_receiver, index);
+        assert_ne!(
+            got.to_bits(),
+            crate::value::TAG_HOLE,
+            "set[{index}] must never be the raw hole sentinel"
+        );
+        assert_eq!(got, expected, "set[{index}] must be the live element");
+    }
+    assert_eq!(
+        js_array_get_f64(set_receiver, 2).to_bits(),
+        crate::value::TAG_UNDEFINED,
+        "past the live size the read is undefined, not a hole"
+    );
+
+    let map = js_map_alloc(4);
+    for (key, value) in [(1.0, 10.0), (2.0, 20.0), (3.0, 30.0)] {
+        js_map_set(map, key, value);
+    }
+    crate::map::js_map_delete(map, 1.0);
+    let map_receiver = map as *const ArrayHeader;
+    assert_eq!(
+        js_array_length(map_receiver),
+        2,
+        "`length` reports live size"
+    );
+    for (index, expected) in [(0u32, 2.0), (1, 3.0)] {
+        let got = js_array_get_f64(map_receiver, index);
+        assert_ne!(
+            got.to_bits(),
+            crate::value::TAG_HOLE,
+            "map[{index}] must never be the raw hole sentinel"
+        );
+        assert_eq!(got, expected, "map[{index}] must be the live entry key");
+    }
+    assert_eq!(
+        js_array_get_f64(map_receiver, 2).to_bits(),
+        crate::value::TAG_UNDEFINED,
+        "past the live size the read is undefined, not a hole"
+    );
+}

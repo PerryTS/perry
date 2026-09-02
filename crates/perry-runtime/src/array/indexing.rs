@@ -448,7 +448,6 @@ pub extern "C" fn js_array_numeric_get_f64_unboxed(arr: *mut ArrayHeader, index:
 /// Get an element from an array by index (returns f64)
 #[no_mangle]
 pub extern "C" fn js_array_get_f64(arr: *const ArrayHeader, index: u32) -> f64 {
-    const TAG_UNDEFINED_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0001u64);
     #[cfg(test)]
     ELEMENT_ACCESSOR_CALLS.with(|c| c.set(c.get().wrapping_add(1)));
 
@@ -517,26 +516,21 @@ pub extern "C" fn js_array_get_f64(arr: *const ArrayHeader, index: u32) -> f64 {
     // ask; the registry remains the liveness/layout proof.
     let receiver_tag = array_receiver_gc_tag(raw_ptr);
     if receiver_tag.0 == crate::gc::GC_TYPE_SET && crate::set::is_registered_set(raw_ptr as usize) {
-        let set = raw_ptr as *const crate::set::SetHeader;
-        unsafe {
-            let size = (*set).size;
-            if index >= size {
-                return TAG_UNDEFINED_F64;
-            }
-            let elements = (*set).elements as *const f64;
-            return std::ptr::read(elements.add(index as usize));
-        }
+        // #9462: go through the collection's own live-index accessor instead of
+        // indexing the raw element buffer. Raw slots run `0..used` while `size`
+        // is the LIVE count, so after any `.delete()` this arm returned the
+        // TOMBSTONE itself — a bare `TAG_HOLE` with none of the translation the
+        // plain-array arm below performs (`typeof s[0]` said "number",
+        // `String(s[0])` said "NaN") — and its `0..size` bound also stopped
+        // short of the live tail. `js_set_value_at` compacts when
+        // `used != size`, after which raw index == live index again; it is the
+        // same accessor `console.table` and the Set iterators already use.
+        return crate::set::js_set_value_at(raw_ptr as *const crate::set::SetHeader, index);
     }
     if receiver_tag.0 == crate::gc::GC_TYPE_MAP && crate::map::is_registered_map(raw_ptr as usize) {
-        let map = raw_ptr as *const crate::map::MapHeader;
-        unsafe {
-            let size = (*map).size;
-            if index >= size {
-                return TAG_UNDEFINED_F64;
-            }
-            let entries = (*map).entries as *const f64;
-            return std::ptr::read(entries.add(index as usize * 2));
-        }
+        // Same defect, same fix. This arm exposes the entry KEY at a raw pair
+        // index; `js_map_entry_key_at` is its live-index twin.
+        return crate::map::js_map_entry_key_at(raw_ptr as *const crate::map::MapHeader, index);
     }
 
     // A %TypedArray% receiver reaching the generic element read (an untyped

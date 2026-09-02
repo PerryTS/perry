@@ -1157,6 +1157,18 @@ pub extern "C" fn js_array_pop_f64(arr: *mut ArrayHeader) -> f64 {
             let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
             let value = *elements_ptr.add(new_length as usize);
             (*arr).length = new_length;
+            // #9462: the popped slot can be a HOLE — `[1, ,].pop()`,
+            // `new Array(3).pop()`, `delete a[a.length - 1]` then pop. The
+            // dense fast path above explicitly DECLINES on `TAG_HOLE` and
+            // lands here, where the raw slot was returned untranslated; the
+            // sentinel's bits are a NaN, so `typeof v` was "number",
+            // `String(v)` was "NaN" and `v !== undefined` — the same shape as
+            // #536's bare-NaN empty pop, which this exact function was already
+            // fixed for once. The element READ arm of `js_array_get_f64`
+            // translates the sentinel; so must the element REMOVE arm.
+            if value.to_bits() == crate::value::TAG_HOLE {
+                return TAG_UNDEFINED_F64;
+            }
             return value;
         }
 
