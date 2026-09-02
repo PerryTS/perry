@@ -502,16 +502,13 @@ pub(crate) unsafe fn invoke_accessor_getter(get_bits: u64, receiver: f64) -> JSV
         recv_h.get_nanbox_f64(),
     );
     let recv_h = scope.root_nanbox_f64(coerced);
-    let call_bits = crate::closure::clone_closure_rebind_this(
-        get_h.get_nanbox_u64(),
-        recv_h.get_nanbox_f64(),
-    );
+    let call_bits =
+        crate::closure::clone_closure_rebind_this(get_h.get_nanbox_u64(), recv_h.get_nanbox_f64());
     let call_h = scope.root_nanbox_u64(call_bits);
     if (call_h.get_nanbox_u64() & crate::value::POINTER_MASK) == 0 {
         return JSValue::undefined();
     }
-    let prev_h =
-        scope.root_nanbox_f64(super::super::js_implicit_this_set(recv_h.get_nanbox_f64()));
+    let prev_h = scope.root_nanbox_f64(super::super::js_implicit_this_set(recv_h.get_nanbox_f64()));
     let closure = (call_h.get_nanbox_u64() & crate::value::POINTER_MASK)
         as *const crate::closure::ClosureHeader;
     let result_f64 = crate::closure::js_closure_call0(closure);
@@ -539,16 +536,13 @@ pub(crate) unsafe fn invoke_accessor_setter(set_bits: u64, receiver: f64, value:
         recv_h.get_nanbox_f64(),
     );
     let recv_h = scope.root_nanbox_f64(coerced);
-    let call_bits = crate::closure::clone_closure_rebind_this(
-        set_h.get_nanbox_u64(),
-        recv_h.get_nanbox_f64(),
-    );
+    let call_bits =
+        crate::closure::clone_closure_rebind_this(set_h.get_nanbox_u64(), recv_h.get_nanbox_f64());
     let call_h = scope.root_nanbox_u64(call_bits);
     if (call_h.get_nanbox_u64() & crate::value::POINTER_MASK) == 0 {
         return;
     }
-    let prev_h =
-        scope.root_nanbox_f64(super::super::js_implicit_this_set(recv_h.get_nanbox_f64()));
+    let prev_h = scope.root_nanbox_f64(super::super::js_implicit_this_set(recv_h.get_nanbox_f64()));
     let closure = (call_h.get_nanbox_u64() & crate::value::POINTER_MASK)
         as *const crate::closure::ClosureHeader;
     let _ = crate::closure::js_closure_call1(closure, value_h.get_nanbox_f64());

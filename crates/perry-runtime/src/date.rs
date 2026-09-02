@@ -1919,7 +1919,10 @@ mod tests {
         assert_eq!(parse_date_string("2026/02/30 GMT"), 1_772_409_600_000.0);
         assert_eq!(parse_date_string("2026/09/31 GMT"), 1_790_812_800_000.0);
         // Clock edge cases: 24:00 rolls to the next midnight, 25:00 is Invalid.
-        assert_eq!(parse_date_string("2026/09/01 24:00 GMT"), 1_788_307_200_000.0);
+        assert_eq!(
+            parse_date_string("2026/09/01 24:00 GMT"),
+            1_788_307_200_000.0
+        );
         assert_eq!(
             parse_date_string("2026/09/01 3:04 PM GMT"),
             1_788_275_040_000.0
@@ -1928,19 +1931,19 @@ mod tests {
         assert_eq!(parse_date_string("Sep/01/2026 GMT"), 1_788_220_800_000.0);
 
         for bad in [
-            "2026/13/01",              // month out of range
-            "2026/00/01",              // month zero
-            "2026/09/00",              // day zero
-            "2026/09/32",              // day out of range
-            "31/1/2026",               // 31 read as a month
-            "13/1/2026",               // 13 read as a month
-            "0/1/2026",                // Y/M/D with 2026 as the day
-            "9/2026",                  // M/D with 2026 as the day
-            "2026/1/2/3",              // a fourth component
-            "2026/09/01T10:30",        // 'T' is ISO-only, not this grammar
-            "2026/09/01 25:00",        // hour out of range
-            "2026/09/01 10:60",        // minute out of range
-            "2026/09/01 +0500",        // bare offset with no clock
+            "2026/13/01",       // month out of range
+            "2026/00/01",       // month zero
+            "2026/09/00",       // day zero
+            "2026/09/32",       // day out of range
+            "31/1/2026",        // 31 read as a month
+            "13/1/2026",        // 13 read as a month
+            "0/1/2026",         // Y/M/D with 2026 as the day
+            "9/2026",           // M/D with 2026 as the day
+            "2026/1/2/3",       // a fourth component
+            "2026/09/01T10:30", // 'T' is ISO-only, not this grammar
+            "2026/09/01 25:00", // hour out of range
+            "2026/09/01 10:60", // minute out of range
+            "2026/09/01 +0500", // bare offset with no clock
         ] {
             assert!(
                 parse_date_string(bad).is_nan(),
