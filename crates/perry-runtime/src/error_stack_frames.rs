@@ -72,6 +72,23 @@ const PC_BITS: u32 = 48;
 /// slice of the runtime, which is the asymmetry this number trades on.
 const MAX_FUNCTION_SPAN: usize = 64 * 1024;
 
+/// `PERRY_ERROR_STACK_DIAG=1` prints, per `.stack` materialisation, what the
+/// capture collected and what the resolver made of it.
+///
+/// Parsed by VALUE, not by presence: `PERRY_GC_DIAG` was `var_os(..).is_some()`
+/// for long enough that `PERRY_GC_DIAG=0` ENABLED diagnostics and silently
+/// collapsed one arm of an A/B (fixed in #7993). A new knob does not get to
+/// repeat that.
+pub(crate) fn diag_enabled() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| {
+        matches!(
+            std::env::var("PERRY_ERROR_STACK_DIAG").ok().as_deref(),
+            Some("1") | Some("on") | Some("true")
+        )
+    })
+}
+
 const ALPHABET: &[u8; 64] =
     b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+-";
 
@@ -229,6 +246,14 @@ mod walk {
     /// Fails closed: any misaligned, non-increasing or out-of-bounds frame
     /// pointer ends the walk and keeps whatever was collected before it,
     /// rather than reading a word at a fabricated address.
+    pub(super) fn diag_stack_top() -> usize {
+        stack_top()
+    }
+
+    pub(super) fn diag_frame_pointer() -> usize {
+        current_frame_pointer()
+    }
+
     pub(super) fn capture(out: &mut [usize; MAX_CAPTURED_FRAMES]) -> usize {
         let top = stack_top();
         if top == 0 {
@@ -289,6 +314,14 @@ mod walk {
     pub(super) fn capture(_out: &mut [usize; MAX_CAPTURED_FRAMES]) -> usize {
         0
     }
+
+    pub(super) fn diag_stack_top() -> usize {
+        0
+    }
+
+    pub(super) fn diag_frame_pointer() -> usize {
+        0
+    }
 }
 
 /// Capture the current native return addresses and encode them.
@@ -296,6 +329,14 @@ mod walk {
 pub(crate) fn capture_encoded() -> ([u8; MAX_CAPTURED_FRAMES * PC_CHARS], usize) {
     let mut pcs = [0usize; MAX_CAPTURED_FRAMES];
     let n = walk::capture(&mut pcs);
+    if diag_enabled() {
+        eprintln!(
+            "[stackdiag] capture: frames={n} top={:#x} fp0={:#x} pcs={:x?}",
+            walk::diag_stack_top(),
+            walk::diag_frame_pointer(),
+            &pcs[..n]
+        );
+    }
     let mut blob = [0u8; MAX_CAPTURED_FRAMES * PC_CHARS];
     if n == 0 {
         return (blob, 0);
@@ -384,6 +425,19 @@ pub(crate) fn render_frames(blob: &[u8]) -> Option<String> {
         return None;
     }
     with_index(|index| {
+        if diag_enabled() {
+            eprintln!(
+                "[stackdiag] resolve: registry_entries={} first={:#x} last={:#x}",
+                index.entries.len(),
+                index.entries.first().map(|(a, _)| *a).unwrap_or(0),
+                index.entries.last().map(|(a, _)| *a).unwrap_or(0)
+            );
+            for pc in &pcs {
+                let hit = name_for_ip(index, pc.saturating_sub(1))
+                    .and_then(|n| std::str::from_utf8(n).ok().map(|s| s.to_string()));
+                eprintln!("[stackdiag]   ip={pc:#x} -> {hit:?}");
+            }
+        }
         let mut out = String::new();
         let mut rendered = 0usize;
         for pc in &pcs {
