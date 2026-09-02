@@ -105,3 +105,17 @@ console.log([1234.5, null, undefined, 6789.1].toLocaleString("de-DE"));
 // Control: the no-argument array form.
 console.log([1234.5, 6789.1].toLocaleString());
 console.log([3, 1, 2].toLocaleString());
+
+// --- INT32-tagged receivers (CodeRabbit flag on PR #9448) ---------------
+// `JSValue::is_number()` excludes the perry tag band, so an int32-boxed
+// receiver needs its own half of the dispatch carve-out. These spellings are
+// the ones most likely to carry INT32_TAG through codegen; whichever
+// representation they actually take, the answer must match node.
+const len = [10, 20, 30].length;
+console.log("int32-len", len.toLocaleString("de-DE", { minimumIntegerDigits: 3 }));
+console.log("int32-len-loc", (1234).toLocaleString("de-DE"));
+const bitor = (1234567 | 0);
+console.log("int32-bitor", bitor.toLocaleString("de-DE"));
+console.log("int32-charcode", "A".charCodeAt(0).toLocaleString("en-US", { style: "percent" }));
+const idx = ["a", "b"].indexOf("b");
+console.log("int32-indexof", idx.toLocaleString("en-US", { minimumFractionDigits: 2 }));

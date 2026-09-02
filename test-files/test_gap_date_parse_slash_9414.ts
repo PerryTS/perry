@@ -7,10 +7,10 @@
 // The subtle half is that these components are LOCAL wall-clock time, unlike
 // the ISO branch, which is UTC — so this asserts the local getters (which are
 // host-zone independent) and, for the zone-designated rows, `toISOString()`.
-// `getTime()` is printed as an offset from a locally-constructed reference
-// instant so the expected bytes do not depend on the host time zone either.
-
-const REF = new Date(2026, 8, 1, 0, 0, 0, 0).getTime(); // 2026-09-01T00:00 local
+// `getTime()` itself is deliberately NOT printed: the local getters below
+// fully determine the instant in the host zone, and a raw epoch (or a delta
+// against any fixed reference) would couple the output to the host zone's
+// DST regime at each row's date.
 
 function show(input: string): void {
   const d = new Date(input);
@@ -22,7 +22,6 @@ function show(input: string): void {
   console.log(
     input,
     "=>",
-    "delta=" + (t - REF),
     d.getFullYear(),
     d.getMonth(),
     d.getDate(),

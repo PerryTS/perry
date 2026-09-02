@@ -516,9 +516,21 @@ pub(super) unsafe fn dispatch_common(
         // form the codegen fast path already answers inline, and it must not
         // start paying for a prototype walk plus an `Intl.NumberFormat`
         // construction.
+        // NOTE `is_number()` excludes the whole perry tag band 0x7FF9..=0x7FFF,
+        // so an INT32-tagged receiver fails it — and int32-tagged values do
+        // reach this dispatch (the `call` arm below guards `class_ref_id` for
+        // exactly that reason). Without the `is_int32()` half, an int32 number
+        // with a locale argument would still take the arg-less default arm.
+        // A *registered ClassRef* shares INT32_TAG and must stay on the
+        // default arm: `Object.prototype.toLocaleString` ignores its
+        // arguments per spec, and falling through would resolve
+        // `Number.prototype.toLocaleString` against a class reference.
         "toLocaleString"
             if !jsval.is_bigint()
-                && !(jsval.is_number() && args_len > 0 && !args_ptr.is_null()) =>
+                && !((jsval.is_number()
+                    || (jsval.is_int32() && super::class_ref_id(object).is_none()))
+                    && args_len > 0
+                    && !args_ptr.is_null()) =>
         {
             return Some(js_object_default_to_locale_string(object));
         }
