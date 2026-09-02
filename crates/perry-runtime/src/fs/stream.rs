@@ -709,33 +709,22 @@ fn call_js_method2(receiver: f64, name: &[u8], arg0: f64, arg1: f64) -> f64 {
     }
 }
 
-/// The stream's stored error: the node-shaped value the deferred open produced
-/// when there is one (#9493), else the message an `Error` is built from —
-/// built by `stored_error_value` OUTSIDE the registry borrow, since the
-/// allocation may collect and the root scanner borrows the registry mutably.
-enum StoredError {
-    Value(f64),
-    Message(String),
-}
-
-fn stored_error(state: &StreamState) -> Option<StoredError> {
+/// The stream's stored error as a JS value: the node-shaped value the deferred
+/// open produced when there is one (#9493), else an `Error` over `error_msg`.
+fn stored_error_value(state: &StreamState) -> Option<f64> {
     if !JSValue::from_bits(state.error_value.to_bits()).is_undefined() {
-        return Some(StoredError::Value(state.error_value));
+        return Some(state.error_value);
     }
-    state.error_msg.clone().map(StoredError::Message)
-}
-
-fn stored_error_value(stored: StoredError) -> f64 {
-    match stored {
-        StoredError::Value(value) => value,
-        StoredError::Message(message) => make_error_value(&message),
-    }
+    state.error_msg.as_deref().map(make_error_value)
 }
 
 fn emit_stored_error(id: usize) {
-    let stored = STREAM_REGISTRY.with(|registry| registry.borrow().get(&id).and_then(stored_error));
-    if let Some(stored) = stored {
-        emit_event1(id, "error", stored_error_value(stored));
+    let error_value = STREAM_REGISTRY.with(|registry| {
+        let registry = registry.borrow();
+        registry.get(&id).and_then(stored_error_value)
+    });
+    if let Some(err) = error_value {
+        emit_event1(id, "error", err);
     }
 }
 
@@ -1191,54 +1180,10 @@ pub(crate) extern "C" fn write_stream_write_impl(
         Some(!over_hwm)
     });
     let Some(below_hwm) = accepted else {
-        // Refused (write after `end()`, or a destroyed/closed stream). Node
-        // still completes the callback — on a later turn, with
-        // `ERR_STREAM_WRITE_AFTER_END` / `ERR_STREAM_DESTROYED` — and that is
-        // what a caller can be waiting on. (Node also emits `'error'` for a
-        // write after end; not done here, so a formerly silent divergence
-        // cannot become an unhandled-`'error'` crash.)
-        schedule_rejected_write_callback(id, callback.get_nanbox_f64());
         return bool_value(false);
     };
     schedule_write_stream_turn(id);
     bool_value(below_hwm)
-}
-
-/// Park `callback(err)` for a refused `write()` on the next turn (#9493).
-fn schedule_rejected_write_callback(id: usize, callback: f64) {
-    if !is_callable_value(callback) {
-        return;
-    }
-    let destroyed = STREAM_REGISTRY.with(|registry| {
-        registry
-            .borrow()
-            .get(&id)
-            .map(|state| state.destroyed || state.closed)
-            .unwrap_or(true)
-    });
-    let (message, code) = if destroyed {
-        (
-            "Cannot call write after a stream was destroyed",
-            "ERR_STREAM_DESTROYED",
-        )
-    } else {
-        ("write after end", "ERR_STREAM_WRITE_AFTER_END")
-    };
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let callback = scope.root_nanbox_f64(callback);
-    let err = scope.root_nanbox_f64(make_error_value(message));
-    set_object_field_str(err.get_nanbox_f64(), b"code", code);
-    let closure = js_closure_alloc(rejected_write_callback_impl as *const u8, 2);
-    crate::closure::js_closure_set_capture_f64(closure, 0, callback.get_nanbox_f64());
-    crate::closure::js_closure_set_capture_f64(closure, 1, err.get_nanbox_f64());
-    let _ = crate::timer::js_set_timeout_callback(closure as i64, 0.0);
-}
-
-extern "C" fn rejected_write_callback_impl(closure: *const ClosureHeader) -> f64 {
-    let callback = crate::closure::js_closure_get_capture_f64(closure, 0);
-    let err = crate::closure::js_closure_get_capture_f64(closure, 1);
-    call_stream_callback1(callback, err);
-    undefined_value()
 }
 
 pub(crate) extern "C" fn write_stream_end_impl(
@@ -1324,6 +1269,8 @@ fn throw_plain_type_error_value(message: &str) -> ! {
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 
+mod options_init;
+use options_init::*;
 mod utf8_stream;
 pub(crate) use utf8_stream::*;
 
@@ -1654,19 +1601,6 @@ pub(crate) extern "C" fn read_stream_close_impl(closure: *const ClosureHeader, c
 
 fn stream_on_common(id: usize, event_value: f64, cb: f64, once: bool) {
     let event = event_name(event_value);
-    if event == "error" {
-        // A late `'error'` listener replays the stored error; the value is
-        // built outside the registry borrow (see `StoredError`).
-        let stored =
-            STREAM_REGISTRY.with(|registry| registry.borrow().get(&id).and_then(stored_error));
-        if let Some(stored) = stored {
-            let err = stored_error_value(stored);
-            call_stream_callback1(cb, err);
-            return;
-        }
-        add_listener(id, &event, cb, once);
-        return;
-    }
     let immediate = STREAM_REGISTRY.with(|registry| {
         let registry = registry.borrow();
         let Some(state) = registry.get(&id) else {
@@ -1687,6 +1621,7 @@ fn stream_on_common(id: usize, event_value: f64, cb: f64, once: bool) {
             "ready" if state.kind == StreamKind::Read && state.opened => {
                 Some(("ready", undefined_value()))
             }
+            "error" => stored_error_value(state).map(|err| ("error", err)),
             "end" if state.kind == StreamKind::Read && state.ended => {
                 Some(("end", undefined_value()))
             }
@@ -1701,7 +1636,7 @@ fn stream_on_common(id: usize, event_value: f64, cb: f64, once: bool) {
         if is_callable_value(cb) {
             let cb_ptr = extract_closure_ptr(cb);
             if !cb_ptr.is_null() {
-                if name == "open" {
+                if name == "open" || name == "error" {
                     crate::closure::js_closure_call1(cb_ptr, arg);
                 } else {
                     crate::closure::js_closure_call0(cb_ptr);
@@ -1729,154 +1664,6 @@ pub(crate) fn extract_closure_ptr(v: f64) -> *const ClosureHeader {
     } else {
         raw as *const ClosureHeader
     }
-}
-
-fn register_stream_method_arities() {
-    crate::closure::js_register_closure_arity(write_stream_write_impl as *const u8, 3);
-    crate::closure::js_register_closure_arity(write_stream_end_impl as *const u8, 3);
-    crate::closure::js_register_closure_arity(write_stream_on_impl as *const u8, 2);
-    crate::closure::js_register_closure_arity(write_stream_once_impl as *const u8, 2);
-    crate::closure::js_register_closure_arity(write_stream_close_impl as *const u8, 1);
-    crate::closure::js_register_closure_arity(stream_emit_impl as *const u8, 2);
-    crate::closure::js_register_closure_arity(write_stream_turn_impl as *const u8, 0);
-    crate::closure::js_register_closure_arity(rejected_write_callback_impl as *const u8, 0);
-    crate::closure::js_register_closure_arity(read_stream_on_impl as *const u8, 2);
-    crate::closure::js_register_closure_arity(read_stream_once_impl as *const u8, 2);
-    crate::closure::js_register_closure_arity(read_stream_pipe_impl as *const u8, 2);
-    crate::closure::js_register_closure_arity(read_stream_pause_impl as *const u8, 0);
-    crate::closure::js_register_closure_arity(read_stream_resume_impl as *const u8, 0);
-    crate::closure::js_register_closure_arity(read_stream_is_paused_impl as *const u8, 0);
-    crate::closure::js_register_closure_arity(read_stream_close_impl as *const u8, 1);
-    crate::closure::js_register_closure_arity(read_stream_resume_from_drain_impl as *const u8, 0);
-    crate::closure::js_register_closure_arity(utf8_stream_write_impl as *const u8, 1);
-    crate::closure::js_register_closure_arity(utf8_stream_flush_impl as *const u8, 1);
-    crate::closure::js_register_closure_arity(utf8_stream_flush_sync_impl as *const u8, 0);
-    crate::closure::js_register_closure_arity(utf8_stream_end_impl as *const u8, 0);
-    crate::closure::js_register_closure_arity(utf8_stream_destroy_impl as *const u8, 0);
-    crate::closure::js_register_closure_arity(utf8_stream_reopen_impl as *const u8, 1);
-    crate::closure::js_register_closure_arity(utf8_stream_on_impl as *const u8, 2);
-    crate::closure::js_register_closure_arity(utf8_stream_once_impl as *const u8, 2);
-    crate::closure::js_register_closure_arity(utf8_stream_off_impl as *const u8, 2);
-    crate::closure::js_register_closure_arity(utf8_stream_remove_all_impl as *const u8, 1);
-    crate::closure::js_register_closure_arity(utf8_stream_listener_count_impl as *const u8, 1);
-    crate::closure::js_register_closure_arity(utf8_stream_emit_impl as *const u8, 2);
-    crate::closure::js_register_closure_arity(utf8_periodic_flush_impl as *const u8, 0);
-    crate::closure::js_register_closure_arity(utf8_async_open_impl as *const u8, 0);
-    crate::closure::js_register_closure_arity(utf8_async_open_done_impl as *const u8, 2);
-    crate::closure::js_register_closure_arity(utf8_async_mkdir_done_impl as *const u8, 1);
-    crate::closure::js_register_closure_arity(utf8_close_events_impl as *const u8, 0);
-}
-
-fn init_read_state_from_options(
-    path_value: f64,
-    options_value: f64,
-    supplied_fd: Option<(i32, Option<f64>)>,
-) -> StreamState {
-    let mut state = StreamState::new(StreamKind::Read);
-    state.path = path_from_value(path_value);
-    state.flags = file_options_flag(options_value, "r");
-    state.high_water_mark =
-        option_usize_default(options_value, b"highWaterMark", READ_STREAM_DEFAULT_HWM);
-    state.start = option_u64(options_value, b"start");
-    state.end = option_u64(options_value, b"end");
-    state.position = state.start.unwrap_or(0);
-    state.encoding = fs_encoding_option(options_value).filter(|encoding| encoding != "buffer");
-    state.auto_close = option_bool_default(options_value, b"autoClose", true);
-    state.emit_close = option_bool_default(options_value, b"emitClose", true);
-
-    if let Some((fd, handle)) =
-        supplied_fd.or_else(|| options_fd(options_value).map(|fd| (fd, None)))
-    {
-        state.fd = Some(fd);
-        state.owner = handle.map(FdOwner::FileHandle).unwrap_or(FdOwner::External);
-        state.position = state.start.unwrap_or_else(|| current_position_for_fd(fd));
-        state.opened = fd_is_registered(fd);
-        if !state.opened {
-            state.error_msg = Some("bad file descriptor".to_string());
-        }
-        return state;
-    }
-
-    if let Some(fd) = numeric_fd_value(path_value) {
-        state.fd = Some(fd);
-        state.owner = FdOwner::External;
-        state.position = state.start.unwrap_or_else(|| current_position_for_fd(fd));
-        state.opened = fd_is_registered(fd);
-        if !state.opened {
-            state.error_msg = Some("bad file descriptor".to_string());
-        }
-        return state;
-    }
-
-    let flag_value = make_flag_value(&state.flags);
-    match unsafe { fs_open_sync_result(path_value, flag_value) } {
-        Ok(fd) => {
-            state.fd = Some(fd);
-            state.owner = FdOwner::Path;
-            state.opened = true;
-        }
-        Err((err, _path)) => {
-            state.error_msg = Some(err.to_string());
-        }
-    }
-    state
-}
-
-fn init_write_state_from_options(
-    path_value: f64,
-    options_value: f64,
-    supplied_fd: Option<(i32, Option<f64>)>,
-) -> StreamState {
-    let mut state = StreamState::new(StreamKind::Write);
-    state.path = path_from_value(path_value);
-    state.flags = file_options_flag(options_value, "w");
-    state.high_water_mark =
-        option_usize_default(options_value, b"highWaterMark", WRITE_STREAM_DEFAULT_HWM);
-    state.start = option_u64(options_value, b"start");
-    state.position = state.start.unwrap_or(0);
-    state.auto_close = option_bool_default(options_value, b"autoClose", true);
-    state.emit_close = option_bool_default(options_value, b"emitClose", true);
-
-    if let Some((fd, handle)) =
-        supplied_fd.or_else(|| options_fd(options_value).map(|fd| (fd, None)))
-    {
-        state.fd = Some(fd);
-        state.owner = handle.map(FdOwner::FileHandle).unwrap_or(FdOwner::External);
-        state.opened = fd_is_registered(fd);
-        state.position =
-            if matches!(state.flags.as_str(), "a" | "a+" | "ax" | "ax+") || fd_append_mode(fd) {
-                end_position_for_fd(fd)
-            } else {
-                state.start.unwrap_or_else(|| current_position_for_fd(fd))
-            };
-        if !state.opened {
-            state.error_msg = Some("bad file descriptor".to_string());
-        }
-        return state;
-    }
-
-    if let Some(fd) = numeric_fd_value(path_value) {
-        state.fd = Some(fd);
-        state.owner = FdOwner::External;
-        state.opened = fd_is_registered(fd);
-        state.position = state.start.unwrap_or_else(|| current_position_for_fd(fd));
-        if !state.opened {
-            state.error_msg = Some("bad file descriptor".to_string());
-        }
-        return state;
-    }
-
-    // #9493: Node's constructor validates the path and opens it on a later
-    // turn (`_construct` → `fs.open` on the pool): `fd` stays `null` and
-    // `pending` true until then, and a `process.exit()` in this tick leaves
-    // no file behind. The throwing validation stays here, on the calling
-    // turn; `write_stream_open_step` performs the open.
-    crate::fs::validate::validate_path("path", path_value);
-    if let Some(decoded) = unsafe { decode_path_value(path_value) } {
-        state.path = decoded;
-    }
-    state.owner = FdOwner::Path;
-    state
 }
 
 fn create_write_stream_with_state(state: StreamState) -> f64 {

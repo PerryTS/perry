@@ -12,8 +12,11 @@ use crate::nanbox::double_literal;
 use crate::type_analysis::receiver_class_name;
 use crate::types::{DOUBLE, I1, I32, I64};
 
+#[path = "dispatch_receiver_class.rs"]
+mod dispatch_receiver_class;
 #[path = "dynamic_dispatch_tower.rs"]
 mod tower;
+use dispatch_receiver_class::*;
 use tower::{emit_tower_pshape_call, tower_pshape_route};
 
 // Reach the override-emit helpers (`pub(super)` of `lower_call`) by their
@@ -28,62 +31,6 @@ use crate::lower_call::method_override::{
 /// long inline compare chain — more instruction cache than the single tower
 /// call it replaces — so past this width the site keeps the single-arm guard.
 const MAX_SUBCLASS_DISPATCH_ARMS: usize = 8;
-
-/// Can an exact canonical shape prove that `property` is not an own field?
-///
-/// A post-construction assignment such as `this.run = f` mints a successor
-/// ShapeId, so an exact canonical-shape match excludes that override. A
-/// declared field is different: it is already part of the canonical shape and
-/// may intentionally shadow a prototype method (#620). Computed fields and
-/// incomplete/dynamic parent chains are similarly unknowable here and retain
-/// the runtime own-property probe.
-fn canonical_shape_excludes_own_property(
-    ctx: &FnCtx<'_>,
-    class_name: &str,
-    property: &str,
-) -> bool {
-    let mut current = Some(class_name.to_string());
-    let mut seen = std::collections::HashSet::new();
-    while let Some(name) = current {
-        if !seen.insert(name.clone()) {
-            return false;
-        }
-        let Some(class) = ctx.classes.get(&name) else {
-            return false;
-        };
-        if class
-            .fields
-            .iter()
-            .any(|field| field.key_expr.is_some() || field.name == property)
-        {
-            return false;
-        }
-        if class.extends_expr.is_some() || class.native_extends.is_some() {
-            return false;
-        }
-        current = class.extends_name.clone().or_else(|| {
-            class.extends.and_then(|parent_id| {
-                ctx.classes
-                    .iter()
-                    .find_map(|(name, candidate)| (candidate.id == parent_id).then(|| name.clone()))
-            })
-        });
-    }
-    true
-}
-
-/// A declared class may select the direct-method guard, but never prove the
-/// direct call. The guard validates the live class id, keys token, own
-/// override, and resolved method pointer; every miss uses dynamic dispatch.
-fn guarded_declared_receiver_class_candidate(ctx: &FnCtx<'_>, object: &Expr) -> Option<String> {
-    let Expr::LocalGet(id) = object else {
-        return None;
-    };
-    let perry_hir::types::Type::Named(name) = ctx.local_type_hint(id)? else {
-        return None;
-    };
-    ctx.classes.contains_key(name).then(|| name.clone())
-}
 
 /// #7142: the proven-`this` clone a class-id dispatch-tower case may route to,
 /// plus the keys token the routed path must re-check inline.

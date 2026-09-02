@@ -170,8 +170,8 @@ fn parse_iso8601(s: &str) -> Option<f64> {
 
     // Time part (after 'T' or ' ').
     let mut tz_minutes_east: Option<i64> = None; // None => "no offset present"
-    // #9449: the presence of a time component — not the presence of a zone —
-    // is what decides the default interpretation below.
+                                                 // #9449: the presence of a time component — not the presence of a zone —
+                                                 // is what decides the default interpretation below.
     let mut has_time = false;
     if idx < s.len() {
         let sep = b[idx];
