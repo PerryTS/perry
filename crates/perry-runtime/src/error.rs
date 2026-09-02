@@ -1591,23 +1591,16 @@ unsafe fn read_string_header_owned(ptr: *const StringHeader) -> String {
 #[no_mangle]
 pub extern "C" fn js_error_to_string(error: *mut ErrorHeader) -> *mut StringHeader {
     unsafe {
-        let result = error_display_headline(error);
+        let name = error_to_string_part(error, "name", js_error_get_name(error), "Error");
+        let message = error_to_string_part(error, "message", js_error_get_message(error), "");
+        let result = if name.is_empty() {
+            message
+        } else if message.is_empty() {
+            name
+        } else {
+            format!("{name}: {message}")
+        };
         js_string_from_bytes(result.as_ptr(), result.len() as u32)
-    }
-}
-
-pub(crate) unsafe fn error_display_headline(error: *mut ErrorHeader) -> String {
-    if error.is_null() {
-        return "Error".to_string();
-    }
-    let name = error_to_string_part(error, "name", js_error_get_name(error), "Error");
-    let message = error_to_string_part(error, "message", js_error_get_message(error), "");
-    if name.is_empty() {
-        message
-    } else if message.is_empty() {
-        name
-    } else {
-        format!("{name}: {message}")
     }
 }
 
@@ -1920,7 +1913,6 @@ pub(crate) use stack_frames::{
 
 #[path = "error_subclass_stack.rs"]
 mod subclass_stack;
-pub(crate) use subclass_stack::error_subclass_inspect_headline;
 pub use subclass_stack::js_error_subclass_capture_stack;
 
 #[cfg(test)]

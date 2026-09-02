@@ -75,7 +75,6 @@ mod data_view_registry;
 mod dataview_proto_thunks;
 mod date_proto_thunks;
 mod delete_rest;
-mod descriptor_own_names;
 pub(crate) mod descriptors;
 mod disposable_proto_thunks;
 pub(crate) mod exotic_expando;

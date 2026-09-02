@@ -1463,16 +1463,17 @@ fn lower_new_impl_inner<'a>(
         // without finding any user-class constructor, synthesize the JS
         // spec default ctor `constructor(...args) { super(...args); }` —
         // i.e. forward the first arg to Error's initialization, which
-        // sets `this.message`. Without this, `new MyError(
-        // "hello")` returns an object with `.message`
+        // sets `this.message` + `this.name`. Without this, `new MyError(
+        // "hello")` returns an object with `.message` / `.name`
         // unset — the SIGABRT-on-property-read happens because the slot
         // index lookup misses and downstream NaN-box decode reads
         // garbage.
         //
         // Walk the chain to find the terminating Error-like name (so
         // `class A extends Error {}; class B extends A {}` also flows
-        // through correctly). If found, initialize `message`, mirroring the
-        // SuperCall Error-like arm in expr.rs, then capture `stack`.
+        // through correctly). If found, set `this.message = args[0]`
+        // and `this.name = <error_kind>` directly, mirroring the
+        // SuperCall Error-like arm in expr.rs.
         //
         // BUT: if `class_name` is an imported stub with a cross-module
         // ctor with a real body/effect, defer to that path — the source
@@ -1482,7 +1483,7 @@ fn lower_new_impl_inner<'a>(
         // assign the wrong arg to `message` and corrupt the instance.
         // When the imported ctor is a synthesized empty 0-param ctor for the
         // bare-extends-Error case, calling it is a no-op and we still need
-        // Error-init to populate `this.message`.
+        // Error-init to populate `this.message` / `this.name`.
         let imported_ctor_has_body_or_fields = ctx
             .imported_class_ctors
             .get(class_name)
