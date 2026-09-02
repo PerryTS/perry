@@ -1,7 +1,7 @@
 ### Tests
 
-- `test_gap_9421_async_output_flush` pins the async queue-and-flush write path
-  #9421 attributes the truncated claude-code transcript to (#9421). It drives
+- `test_gap_9421_async_output_flush` pins the async queue-and-flush write
+  path that #9421 blames for the truncated claude-code transcript. It drives
   multi-line output from async callbacks, a `process.stdout.write` loop,
   interleaved `console.log`/`console.error`, output followed by an explicit
   `process.exit()`, output past one pipe buffer, and a transliteration of
