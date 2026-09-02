@@ -50,8 +50,18 @@ replays the session-writer shape; on unfixed `main` it prints `resolved`,
 `no-throw` and `writer-file: MISSING` where Node prints `ENOENT` and the two
 records.
 
-**Found while fixing, NOT fixed here:** the `mode` option is ignored on both
-append paths. `appendFile(p, data, { mode: 0o600 })` and the `appendFileSync`
-form open `0666 & ~umask`, so a freshly created file lands `0644` where Node
-lands `0600` — the claude-code transcript is world-readable under Perry.
-`writeFile` and `mkdir` honour their `mode`; only append does not.
+**Found while fixing:** `fs.writeFileSync` swallowed its errors the same way,
+and the `mode` option was dropped on every create path — so the transcript
+this issue is about was also landing `0644` instead of the `0600` the writer
+asks for. Both are fixed in this PR; see
+`changelog.d/9421-write-file-sync-throws.md`.
+
+**Found while fixing, NOT fixed here** (separate lanes, filed on their own):
+`process.stdin` delivers one `data` event per *line* rather than in 64 KiB
+chunks — 1 MB of short lines is 200,000 events and 2.10 s against Node's 16
+events and 0.04 s, and claude-code loses a non-deterministic tail of a piped
+prompt as a result (394 KB–612 KB of 1 MB across four runs). And
+`stream.setEncoding("utf8")` does not decode: fed bytes `0x00..0xFF` it yields
+158 code units with raw `U+0080..U+00FF` where Node yields 256 with 128
+`U+FFFD`, which puts invalid UTF-8 into the transcript and makes those lines
+unparseable JSON. Neither is touched by this PR.

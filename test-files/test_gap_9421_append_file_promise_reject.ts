@@ -25,6 +25,10 @@
 // Pre-fix Perry prints `resolved` / `no-throw` / `no-err` on the first three
 // probes and `writer-file: MISSING`. Node -- and fixed Perry -- print
 // `ENOENT` three times and the writer's two records.
+//
+// The `writer-mode` line pins the second half of the same defect: the `mode`
+// the writer passes was dropped on the create path, so the transcript landed
+// `0644` where Node makes it `0600`.
 
 import { appendFile, mkdir, readFile } from "node:fs/promises";
 import {
@@ -33,6 +37,7 @@ import {
   openSync,
   closeSync,
   rmSync,
+  statSync,
   appendFile as appendFileCb,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -89,6 +94,9 @@ async function main(): Promise<void> {
     const lines = text.split("\n").filter((l) => l.length > 0);
     console.log("writer-records: " + lines.length);
     for (const l of lines) console.log("writer-line: " + l);
+    // The writer asks for 0o600; a transcript is private. Perry used to drop
+    // the mode and create it 0666 & ~umask, i.e. world-readable.
+    console.log("writer-mode: " + (statSync(target).mode & 0o777).toString(8));
   } catch (e) {
     console.log("writer-file: MISSING (" + code(e) + ")");
   }

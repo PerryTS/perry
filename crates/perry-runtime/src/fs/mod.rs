@@ -527,47 +527,27 @@ fn read_file_bytes_with_options(path_value: f64, options_value: f64) -> Option<V
     }
 }
 
+/// Write content to a file synchronously.
+/// Returns 1 on success and throws a Node-shaped fs error on failure (#9421).
+///
+/// This now runs the same `write_file_path_or_fd_result` core the callback and
+/// promise forms have always used. The private copy it replaces reported
+/// failure by returning `0` -- which every caller discarded -- and, because it
+/// read the payload with `bytes_from_value` rather than
+/// `consume_write_file_input`, it also skipped the argument validation and
+/// ignored the `encoding` option: `writeFileSync(p, "414243", "hex")` wrote the
+/// six literal digits, and `writeFileSync(p, 42)` wrote something instead of
+/// throwing `ERR_INVALID_ARG_TYPE`.
 #[no_mangle]
 pub extern "C" fn js_fs_write_file_sync_options(
     path_value: f64,
     content_value: f64,
     options_value: f64,
 ) -> i32 {
-    validate::validate_path_or_fd("path", path_value, "write");
-    validate::validate_string_or_object_options("options", options_value);
     unsafe {
-        if let Some(fd) = numeric_fd_value(path_value) {
-            let content_bytes = bytes_from_value(content_value);
-            return FD_REGISTRY.with(|r| {
-                let mut reg = r.borrow_mut();
-                let Some(file) = reg.get_mut(&fd) else {
-                    return 0;
-                };
-                if file.write_all(&content_bytes).is_ok() {
-                    1
-                } else {
-                    0
-                }
-            });
-        }
-
-        let path_str = match decode_path_value(path_value) {
-            Some(s) => s,
-            None => return 0,
-        };
-
-        let content_bytes = bytes_from_value(content_value);
-
-        let flag = file_options_flag(options_value, "w");
-        match open_file_for_write_flag(&path_str, &flag) {
-            Ok(mut file) => {
-                if file.write_all(&content_bytes).is_ok() {
-                    1
-                } else {
-                    0
-                }
-            }
-            Err(_) => 0,
+        match write_file_path_or_fd_result(path_value, content_value, options_value) {
+            Ok(()) => 1,
+            Err(err) => crate::exception::js_throw(err),
         }
     }
 }
@@ -633,7 +613,8 @@ pub(crate) unsafe fn js_fs_append_file_result(
     let content_bytes = bytes_from_value(content_value);
 
     let flag = file_options_flag(options_value, "a");
-    let mut file = match open_file_for_write_flag(&path_str, &flag) {
+    let mode = write_mode_from_options(options_value);
+    let mut file = match open_file_for_write_flag(&path_str, &flag, mode) {
         Ok(file) => file,
         Err(err) => return Err(build_fs_error_value(&err, "open", &path_str)),
     };
@@ -717,6 +698,31 @@ fn mkdir_mode_from_options(options_value: f64) -> Option<u32> {
             if let Some(s) = options_string_field(options_value, b"mode") {
                 return parse_mode_string(&s);
             }
+        }
+    }
+    None
+}
+
+/// `mode` for a `writeFile` / `appendFile` options argument.
+///
+/// Unlike `mkdir`, a bare string option here is the ENCODING, not the mode, so
+/// only an options *object* can carry `mode`. Returned as the `open(2)` mode:
+/// it applies when the file is created and is ignored for an existing one,
+/// which is exactly what Node does. #9421.
+fn write_mode_from_options(options_value: f64) -> Option<u32> {
+    unsafe {
+        let mode = options_field_value(options_value, b"mode")?;
+        let bits = mode.bits();
+        let mode_value = crate::value::JSValue::from_bits(bits);
+        if mode_value.is_int32() {
+            return Some(mode_value.as_int32() as u32);
+        }
+        let v = f64::from_bits(bits);
+        if mode_value.is_number() && v.is_finite() {
+            return Some(v as u32);
+        }
+        if let Some(s) = options_string_field(options_value, b"mode") {
+            return parse_mode_string(&s);
         }
     }
     None
@@ -1249,9 +1255,23 @@ fn file_options_flag(options_value: f64, default_flag: &str) -> String {
     }
 }
 
-fn open_file_for_write_flag(path: &str, flag: &str) -> std::io::Result<fs::File> {
+fn open_file_for_write_flag(
+    path: &str,
+    flag: &str,
+    mode: Option<u32>,
+) -> std::io::Result<fs::File> {
     use std::fs::OpenOptions;
     let mut opts = OpenOptions::new();
+    // #9421: `{ mode }` was dropped, so every file Perry created landed
+    // `0666 & ~umask` where Node honours the request. `OpenOptions::mode` is
+    // the `open(2)` mode argument: consulted only when the file is created.
+    #[cfg(unix)]
+    if let Some(mode) = mode {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(mode & 0o7777);
+    }
+    #[cfg(not(unix))]
+    let _ = mode;
     match flag {
         "a" | "a+" => {
             opts.create(true).append(true);

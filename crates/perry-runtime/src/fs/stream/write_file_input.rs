@@ -399,7 +399,8 @@ pub(crate) unsafe fn write_file_path_or_fd_result(
         None => validate::throw_invalid_path_arg("path", path_value),
     };
     let flag = file_options_flag(options, "w");
-    let mut file = match open_file_for_write_flag(&path, &flag) {
+    let mode = write_mode_from_options(options);
+    let mut file = match open_file_for_write_flag(&path, &flag, mode) {
         Ok(file) => file,
         Err(err) => return Err(build_fs_error_value(&err, "open", &path)),
     };
