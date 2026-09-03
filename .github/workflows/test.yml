@@ -3059,20 +3059,23 @@ jobs:
           #
           # Delete an entry the moment #9470 lands — an entry that stops
           # matching is a stale exemption, and the check below fails on one.
-          KNOWN_FAIL=(
-            test_issue_340_axios_response_props
-            test_issue_414_mysql_query_params
-          )
+          # Empty on purpose. #9470's two entries
+          # (test_issue_340_axios_response_props, test_issue_414_mysql_query_params)
+          # were fixed elsewhere and started passing; the STALE guard below turned
+          # the job red demanding their removal, which is exactly its job. Add an
+          # entry here only with an issue number, and delete it the moment the
+          # guard says it passes.
+          KNOWN_FAIL=()
           UNEXPECTED=()
           STALE=()
           for marker in "$LOGS_DIR"/*.fail; do
             [[ -e "$marker" ]] || continue
             name=$(basename "$marker" .fail)
             known=0
-            for k in "${KNOWN_FAIL[@]}"; do [[ "$name" == "$k" ]] && known=1 && break; done
+            for k in ${KNOWN_FAIL[@]+"${KNOWN_FAIL[@]}"}; do [[ "$name" == "$k" ]] && known=1 && break; done
             [[ $known -eq 1 ]] || UNEXPECTED+=("$name")
           done
-          for k in "${KNOWN_FAIL[@]}"; do
+          for k in ${KNOWN_FAIL[@]+"${KNOWN_FAIL[@]}"}; do
             [[ -e "$LOGS_DIR/$k.fail" ]] || STALE+=("$k")
           done
           if [[ ${#STALE[@]} -gt 0 ]]; then
@@ -3475,7 +3478,15 @@ jobs:
     # healthy runs: macOS 34 min end-to-end. 120 leaves generous headroom for
     # the slower Windows host while bounding a hang to a fifth of what it cost
     # (run 32298711372).
-    timeout-minutes: 120
+    #
+    # 2026-09-03: that 34-min premise is stale. The macOS leg now runs the full
+    # xcompile matrix and measured 119 min against this 120-min cap (run
+    # 33598905771) and then OVERRAN it (run 33626738093, cancelled at 120 with
+    # its doc-tests already reporting 30/30 passed) -- a cancelled job fails
+    # full-suite-gate, so a minute of runner jitter cost a release cycle. 240
+    # restores real headroom while still bounding a hang well under GitHub's
+    # 360-min hosted-runner ceiling.
+    timeout-minutes: 240
     # Blocking host runs and the portable cross-compile subset gate the job.
     # Known platform-tail failures remain advisory at their individual steps.
     strategy:
