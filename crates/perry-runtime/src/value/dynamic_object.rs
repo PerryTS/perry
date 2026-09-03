@@ -439,7 +439,9 @@ pub unsafe extern "C" fn js_dynamic_object_get_property(
     // indexed keys, `buffer`, and the remaining typed-array builtins. Creating
     // the StringHeader may collect, so keep the old-generation typed-array
     // receiver live and re-read its address after that allocation.
-    if crate::typedarray::lookup_typed_array_kind(ptr as usize).is_some() {
+    if crate::typedarray::lookup_typed_array_kind(ptr as usize).is_some()
+        || crate::buffer::is_uint8array_buffer(ptr as usize)
+    {
         let scope = crate::gc::RuntimeHandleScope::new();
         let receiver = scope.root_raw_const_ptr(ptr as *const crate::typedarray::TypedArrayHeader);
         let (key, typed) = receiver.across_const(|| {
@@ -918,5 +920,21 @@ mod length_handle_band_tests {
             },
             8.0
         );
+    }
+
+    /// A Uint8Array uses BufferHeader storage rather than TypedArrayHeader
+    /// registry storage, but its ordinary own properties still live in the
+    /// shared typed-array property table. The property-semantic length helper
+    /// must consult that table before the intrinsic BufferHeader length.
+    #[test]
+    fn uint8array_own_length_shadows_intrinsic_length() {
+        let typed = crate::buffer::js_uint8array_alloc(3);
+        assert!(crate::buffer::is_uint8array_buffer(typed as usize));
+        assert!(unsafe {
+            crate::typedarray_props::typed_array_set_property_by_name(typed as usize, "length", 1.0)
+        });
+
+        let boxed = crate::value::js_nanbox_pointer(typed as i64);
+        assert_eq!(js_value_length_property_f64(boxed), 1.0);
     }
 }

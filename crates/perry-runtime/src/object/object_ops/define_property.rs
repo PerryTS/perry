@@ -489,14 +489,23 @@ pub extern "C" fn js_object_define_property(
         let descriptor_value = desc_handle.get_nanbox_f64();
         let key_value = key_handle.get_nanbox_f64();
 
-        // ArrayBuffer/SharedArrayBuffer/DataView use `BufferHeader` storage,
-        // but are ordinary extensible objects for named properties. Keep their
-        // data descriptors in the existing buffer expando table instead of
-        // falling through and interpreting the header as an `ObjectHeader`.
+        // Buffer / ArrayBuffer / SharedArrayBuffer / DataView use
+        // `BufferHeader` storage, but are ordinary extensible objects for
+        // named properties. Keep their descriptors in the existing buffer
+        // expando table instead of falling through and interpreting the header
+        // as an `ObjectHeader`.
+        //
+        // A `new Uint8Array(...)` is BufferHeader-backed too, but its ordinary
+        // own properties live in `typedarray_props`, alongside those of every
+        // other TypedArray kind. Do not claim it here: the TypedArray arm below
+        // must define the property in the same table that its get/descriptor/
+        // own-keys paths read. Claiming it as a generic buffer made a
+        // successful definition immediately invisible to every observer.
         let buffer_addr = crate::value::JSValue::from_bits(obj_value.to_bits())
             .is_pointer()
             .then(|| crate::value::js_nanbox_get_pointer(obj_value) as usize)
-            .filter(|addr| crate::buffer::is_registered_buffer(*addr));
+            .filter(|addr| crate::buffer::is_registered_buffer(*addr))
+            .filter(|addr| !crate::buffer::is_uint8array_buffer(*addr));
         if buffer_addr.is_some() {
             let current_obj = || f64::from_bits(obj_value_handle.get_heap_word_u64());
             let current_addr = || crate::value::js_nanbox_get_pointer(current_obj()) as usize;

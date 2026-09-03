@@ -833,19 +833,12 @@ pub(crate) unsafe fn stringify_value_pretty(
             buf.push_str("null");
             return;
         }
-        // #2089: a Date is a NaN-boxed `DateCell` pointer — emit `toJSON()` (ISO
-        // string, or `null` for an Invalid Date) per ECMA-262 25.5.2, before any
-        // object/array deref of the small cell. The plain path has always done
-        // this; the pretty path did not, so `JSON.stringify(new Date(), null, 2)`
-        // walked the cell as a plain object and produced `""` instead of the ISO
-        // string — silently corrupting every indented JSON file with a date in it.
+        // Apply Date.prototype.toJSON before any object/array deref of the
+        // small cell. The shared algorithm performs the observable
+        // `toISOString` lookup, including an own override (#9529).
         if crate::date::is_date_cell_addr(ptr as usize) {
-            let s_ptr = crate::date::js_date_to_json(value);
-            if let Some(s) = str_from_header(s_ptr) {
-                write_escaped_string(buf, s);
-            } else {
-                buf.push_str("null");
-            }
+            let result = crate::object::date_to_json_value(value);
+            stringify_value_pretty(result, TYPE_UNKNOWN, buf, indent, depth);
             return;
         }
         // #3857: a boxed primitive wrapper (`new String`/`Number`/`Boolean`,

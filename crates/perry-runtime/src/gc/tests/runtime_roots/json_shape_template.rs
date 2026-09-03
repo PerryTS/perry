@@ -20,8 +20,9 @@
 //! ## The collection point needs no user JS to reach
 //!
 //! A `Date` field is enough: `stringify_value_depth`'s `is_date_cell_addr`
-//! branch calls `js_date_to_json`, which **allocates a `StringHeader`**. That
-//! makes the hazard reachable from a pure-runtime unit test — no closure
+//! branch applies `Date.prototype.toJSON`, which **allocates StringHeaders**
+//! for the method key and ISO result. That makes the hazard reachable from a
+//! pure-runtime unit test — no closure
 //! plumbing, no `.ts` witness, no knob. The issue's suggested shape (a later
 //! element carrying an allocating `toJSON`) is the same window reached the hard
 //! way.

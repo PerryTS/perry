@@ -116,6 +116,16 @@ extern "C" fn date_to_temporal_instant(_closure: *const crate::closure::ClosureH
 /// `Number(-Infinity)` wrapper (→ `null`).
 extern "C" fn date_to_json(_closure: *const crate::closure::ClosureHeader) -> f64 {
     let this = f64::from_bits(IMPLICIT_THIS.with(|c| c.get()));
+    date_to_json_value(this)
+}
+
+/// Apply the `Date.prototype.toJSON` algorithm to an explicit receiver.
+///
+/// The closure thunk above uses the implicit-this slot for normal JavaScript
+/// calls. JSON.stringify already has the Date value in hand, so it calls this
+/// shared implementation directly instead of bypassing the observable
+/// `Invoke(O, "toISOString")` step with `date::js_date_to_json`.
+pub(crate) fn date_to_json_value(this: f64) -> f64 {
     let jsv = crate::value::JSValue::from_bits(this.to_bits());
     // ToObject(this): null / undefined throw a TypeError.
     if jsv.is_undefined() || jsv.is_null() {
@@ -154,36 +164,47 @@ extern "C" fn date_to_json(_closure: *const crate::closure::ClosureHeader) -> f6
             return f64::from_bits(crate::value::TAG_NULL);
         }
     }
-    // Step 4: Invoke(this, "toISOString"). For a real Date, dispatch straight
-    // to the runtime helper: `js_native_call_method` does not resolve the
-    // reflective `toISOString` on a `DateCell` receiver and would fall back to
-    // the generic `[object Object]` Object.prototype.toString. Other receivers
-    // (a plain object carrying its own `toISOString`) use the ordinary Invoke.
-    if crate::date::is_date_value(this) {
-        let s = crate::date::js_date_to_iso_string_or_throw(this);
-        return crate::value::js_nanbox_string(s as i64);
-    }
-    // Other receivers: a full `Invoke(O, "toISOString")` where
-    // `O = ToObject(this)`. `ToObject` boxes primitives (so
+    // Step 4: a full `Invoke(O, "toISOString")` where `O = ToObject(this)`.
+    // This lookup must run for Date instances too: an own `toISOString`
+    // property shadows Date.prototype, and JSON.stringify observes that
+    // override through `toJSON`. The DateCell field getter resolves expandos
+    // first and then the prototype thunk, so the ordinary reflective lookup
+    // covers both the overridden and builtin cases.
+    //
+    // `ToObject` boxes primitives (so
     // `Date.prototype.toJSON.call(10)` reaches `Number.prototype.toISOString`),
     // the property read fires accessor getters and walks the prototype chain
     // (`{ get toISOString() {…} }`), and a non-callable result throws
     // `TypeError` from `Call`. `js_native_call_method` does none of these — it
     // only dispatches builtin/native methods — so it is not used here.
-    let o = crate::object::js_object_coerce(this);
-    let key = {
+    // `toISOString` lookup allocates its key and can invoke an accessor. Keep
+    // the receiver live across both operations and re-read it afterwards: a
+    // copying collection may relocate a DateCell before the builtin thunk
+    // performs its brand check.
+    let invoke_scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = invoke_scope.root_nanbox_f64(crate::object::js_object_coerce(this));
+    let key = invoke_scope.root_nanbox_f64({
         let k = crate::string::js_string_from_bytes(b"toISOString".as_ptr(), 11);
         f64::from_bits(crate::value::js_nanbox_string(k as i64).to_bits())
-    };
-    let func = crate::proxy::js_reflect_get(o, key, o);
-    let closure = crate::value::js_nanbox_get_pointer(func) as *const crate::closure::ClosureHeader;
-    if crate::collection_iter::is_callable(func)
+    });
+    let func = invoke_scope.root_nanbox_f64(crate::proxy::js_reflect_get(
+        receiver.get_nanbox_f64(),
+        key.get_nanbox_f64(),
+        receiver.get_nanbox_f64(),
+    ));
+    let func_value = func.get_nanbox_f64();
+    let closure =
+        crate::value::js_nanbox_get_pointer(func_value) as *const crate::closure::ClosureHeader;
+    if crate::collection_iter::is_callable(func_value)
         && !crate::closure::get_valid_func_ptr(closure).is_null()
     {
         // `Call(func, O, «»)` — toJSON's `key` argument is intentionally not
         // forwarded (Invoke passes an empty argument list).
-        let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-        let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(o));
+        let prev = invoke_scope.root_nanbox_f64(crate::object::js_implicit_this_set(
+            receiver.get_nanbox_f64(),
+        ));
+        let closure = crate::value::js_nanbox_get_pointer(func.get_nanbox_f64())
+            as *const crate::closure::ClosureHeader;
         let r = crate::closure::js_closure_call0(closure);
         crate::object::js_implicit_this_set(prev.get_nanbox_f64());
         return r;

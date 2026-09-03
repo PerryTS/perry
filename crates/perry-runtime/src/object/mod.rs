@@ -195,6 +195,7 @@ pub(crate) use class_gc_roots::{
 pub use class_registry::*;
 pub(crate) use collection_proto_thunks::{is_builtin_map_set_value, is_builtin_set_add_value};
 pub(crate) use data_view_registry::{extends_builtin_data_view, extends_builtin_typed_array};
+pub(crate) use date_proto_thunks::date_to_json_value;
 pub use delete_rest::*;
 pub use descriptors::*;
 pub use exotic_expando::scan_exotic_expando_roots_mut;

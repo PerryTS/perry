@@ -503,16 +503,13 @@ pub(crate) unsafe fn stringify_value(value: f64, type_hint: u32, buf: &mut Strin
             stringify_value(prim, TYPE_UNKNOWN, buf);
             return;
         }
-        // #2089: a Date is a NaN-boxed `DateCell` pointer — emit `toJSON()`
-        // (ISO string, or `null` for an Invalid Date) per ECMA-262 25.5.2,
-        // before any object/array deref of the small cell.
+        // #2089: a Date is a NaN-boxed `DateCell` pointer. Apply the shared
+        // Date.prototype.toJSON algorithm before any object/array deref of the
+        // small cell. This must perform the observable `toISOString` lookup:
+        // an own override participates in JSON.stringify (#9529).
         if crate::date::is_date_cell_addr(ptr as usize) {
-            let s_ptr = crate::date::js_date_to_json(value);
-            if let Some(s) = str_from_header(s_ptr) {
-                write_escaped_string(buf, s);
-            } else {
-                buf.push_str("null");
-            }
+            let result = crate::object::date_to_json_value(value);
+            stringify_value(result, TYPE_UNKNOWN, buf);
             return;
         }
         // Temporal (#4686): `JSON.stringify(temporal)` calls `toJSON`, which
@@ -786,17 +783,12 @@ pub(crate) unsafe fn stringify_value_depth(
             buf.push_str("{}");
             return;
         }
-        // #2089: a Date is a NaN-boxed `DateCell` pointer. JSON.stringify must
-        // emit `toJSON()` → the ISO string (or `null` for an Invalid Date) per
-        // ECMA-262 25.5.2. Check before any object/array handling so the small
-        // cell is never deref'd as an `ObjectHeader`/`ArrayHeader`.
+        // Apply Date.prototype.toJSON before any object/array handling so the
+        // small cell is never deref'd as an `ObjectHeader`/`ArrayHeader`. The
+        // shared algorithm performs the observable `toISOString` lookup.
         if crate::date::is_date_cell_addr(ptr as usize) {
-            let s_ptr = crate::date::js_date_to_json(value);
-            if let Some(s) = str_from_header(s_ptr) {
-                write_escaped_string(buf, s);
-            } else {
-                buf.push_str("null");
-            }
+            let result = crate::object::date_to_json_value(value);
+            stringify_value_depth(result, TYPE_UNKNOWN, buf, depth);
             return;
         }
         // Temporal (#4686): `toJSON` → quoted ISO string. See the matching
@@ -1632,15 +1624,11 @@ pub(crate) unsafe fn stringify_array_depth(ptr: *const u8, buf: &mut String, dep
                 stringify_value_depth(prim, TYPE_UNKNOWN, buf, depth + 1);
                 continue;
             }
-            // #2089: a Date element → its toJSON() ISO string (or null),
-            // before any object/array deref of the small cell.
+            // A Date element applies the shared Date.prototype.toJSON
+            // algorithm before any object/array deref of the small cell.
             if crate::date::is_date_cell_addr(elem_ptr as usize) {
-                let s_ptr = crate::date::js_date_to_json(elem);
-                if let Some(s) = str_from_header(s_ptr) {
-                    write_escaped_string(buf, s);
-                } else {
-                    buf.push_str("null");
-                }
+                let result = crate::object::date_to_json_value(elem);
+                stringify_value_depth(result, TYPE_UNKNOWN, buf, depth + 1);
                 continue;
             }
             // #2900: raw-JSON wrapper element — emit stored text verbatim.

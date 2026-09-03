@@ -190,6 +190,64 @@ fn guarded_length_read_emits_array_subclass_scalar_ic() {
     );
 }
 
+/// A native Uint8Array view normally lowers `.length` to a header load. Once
+/// the module can define properties, that load is no longer semantically safe:
+/// an own `length` data/accessor property shadows `%TypedArray%.prototype`.
+#[test]
+fn typed_array_length_uses_property_semantics_after_define_property() {
+    let mut module = Module::new("typed_array_length_descriptor.ts");
+    module.init = vec![
+        Stmt::Let {
+            id: 20,
+            name: "view".to_string(),
+            ty: perry_hir::types::Type::Named("Uint8Array".to_string()),
+            mutable: false,
+            init: Some(Expr::Uint8ArrayNew(Some(Box::new(Expr::Number(3.0))))),
+        },
+        Stmt::Expr(Expr::ObjectDefineProperty(
+            Box::new(Expr::LocalGet(20)),
+            Box::new(Expr::String("length".to_string())),
+            Box::new(Expr::Object(vec![])),
+        )),
+        Stmt::Return(Some(Expr::PropertyGet {
+            object: Box::new(Expr::LocalGet(20)),
+            property: "length".to_string(),
+            byte_offset: 0,
+        })),
+    ];
+    let ir = String::from_utf8(compile_module(&module, ir_opts(false, None)).unwrap())
+        .expect("LLVM IR should be UTF-8");
+    assert!(
+        ir.contains("call double @js_value_length_property_f64"),
+        "a descriptor-capable module must not bypass an own typed-array length:\n{ir}"
+    );
+}
+
+#[test]
+fn typed_array_length_keeps_native_load_without_shape_barrier() {
+    let mut module = Module::new("typed_array_length_fast.ts");
+    module.init = vec![
+        Stmt::Let {
+            id: 21,
+            name: "view".to_string(),
+            ty: perry_hir::types::Type::Named("Uint8Array".to_string()),
+            mutable: false,
+            init: Some(Expr::Uint8ArrayNew(Some(Box::new(Expr::Number(3.0))))),
+        },
+        Stmt::Return(Some(Expr::PropertyGet {
+            object: Box::new(Expr::LocalGet(21)),
+            property: "length".to_string(),
+            byte_offset: 0,
+        })),
+    ];
+    let ir = String::from_utf8(compile_module(&module, ir_opts(false, None)).unwrap())
+        .expect("LLVM IR should be UTF-8");
+    assert!(
+        !ir.contains("call double @js_value_length_property_f64"),
+        "a barrier-free native view should retain its direct length load:\n{ir}"
+    );
+}
+
 #[test]
 fn fs_parent_promises_property_installs_before_resolution() {
     let mut module = Module::new("fs_parent_promises_property.ts");
