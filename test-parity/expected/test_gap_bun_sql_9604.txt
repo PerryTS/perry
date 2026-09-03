@@ -1,0 +1,12 @@
+connected: true
+shape: function function function function
+thenable: function
+rows: 2 1 true two
+commit: committed 3
+rollback: rollback 3
+nested: 4
+reserve: three
+close-client: true
+closed: 1 1 false
+after-close: true
+readonly: persisted true

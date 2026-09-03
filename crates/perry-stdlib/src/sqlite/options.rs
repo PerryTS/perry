@@ -2,6 +2,7 @@ use super::*;
 pub(crate) use crate::common::string_from_header_lossy as string_from_header;
 use perry_runtime::{
     closure::{is_closure_ptr, ClosureHeader},
+    gc::RuntimeHandleScope,
     js_get_string_pointer_unified, js_nanbox_pointer, js_object_get_field_by_name,
     js_string_from_bytes, JSValue, ObjectHeader, StringHeader,
 };
@@ -138,11 +139,16 @@ pub(crate) unsafe fn object_field(object_value: f64, name: &str) -> JSValue {
     if !is_object_like(object_value) {
         return JSValue::undefined();
     }
-    let obj_ptr = value_from_f64(object_value).as_pointer::<ObjectHeader>();
+    // Creating the property-name string may collect. Keep the options object
+    // live and derive its address only after that allocation so callers can
+    // safely read more than one option from the same object.
+    let scope = RuntimeHandleScope::new();
+    let object = scope.root_nanbox_f64(object_value);
+    let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let obj_ptr = value_from_f64(object.get_nanbox_f64()).as_pointer::<ObjectHeader>();
     if obj_ptr.is_null() || (obj_ptr as usize) < 0x1000 {
         return JSValue::undefined();
     }
-    let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
     js_object_get_field_by_name(obj_ptr, key)
 }
 

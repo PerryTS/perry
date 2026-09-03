@@ -60,6 +60,76 @@ pub unsafe extern "C" fn js_bun_sqlite_database_new(path_value: f64, options_val
     register_node_sqlite_database(path, options, "bun:sqlite")
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BunSqliteOpenMode {
+    ReadOnly,
+    ReadWrite,
+    ReadWriteCreate,
+}
+
+impl BunSqliteOpenMode {
+    fn flags(self) -> (bool, bool, bool) {
+        match self {
+            Self::ReadOnly => (true, false, false),
+            Self::ReadWrite => (false, true, false),
+            Self::ReadWriteCreate => (false, true, true),
+        }
+    }
+}
+
+/// Open the SQLite adapter used by Bun's unified `SQL` client.
+///
+/// `bun:sqlite` treats an explicit options object as a raw SQLite flag set,
+/// while `Bun.SQL` starts from read/write/create defaults and selectively
+/// overrides them.  Keeping this adapter constructor beside the existing Bun
+/// facade lets both APIs share the same handle and statement implementation
+/// without making `NodeSqliteOptions` part of the crate-wide public surface.
+pub(crate) unsafe fn open_bun_sqlite_database(
+    path: String,
+    options_value: f64,
+    url_mode: Option<BunSqliteOpenMode>,
+) -> Handle {
+    let mut options = NodeSqliteOptions::default();
+    if let Some(mode) = url_mode {
+        (options.read_only, options.read_write, options.create) = mode.flags();
+    }
+    if !value_from_f64(options_value).is_undefined() {
+        validate_optional_object(options_value);
+        options.read_only = bool_option(options_value, "readonly", options.read_only);
+        options.read_write = bool_option(
+            options_value,
+            "readwrite",
+            if options.read_only {
+                false
+            } else {
+                options.read_write
+            },
+        );
+        options.create = bool_option(
+            options_value,
+            "create",
+            if options.read_only {
+                false
+            } else {
+                options.create
+            },
+        );
+        if options.read_only && options.read_write {
+            throw_plain_type(
+                "flags must not include both SQLITE_OPEN_READONLY and SQLITE_OPEN_READWRITE",
+            );
+        }
+        let strict = bool_option(options_value, "strict", false);
+        options.allow_bare_named_parameters = strict;
+        options.allow_unknown_named_parameters = !strict;
+        options.read_bigints = bool_option(options_value, "safeIntegers", false);
+    }
+    options.enable_foreign_keys = false;
+    options.allow_extension = true;
+    options.defensive = false;
+    register_node_sqlite_database(path, options, "bun")
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn js_bun_sqlite_database_query(db_handle: Handle, sql_value: f64) -> Handle {
     js_node_sqlite_database_sync_prepare(db_handle, sql_value, undefined_f64())

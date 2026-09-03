@@ -29,6 +29,15 @@ pub(crate) const BUN_ROWS: &[NativeModSig] = &[
     NativeModSig {
         module: "bun",
         has_receiver: false,
+        method: "SQL",
+        class_filter: None,
+        runtime: "js_bun_sql_new",
+        args: &[NA_F64, NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "bun",
+        has_receiver: false,
         method: "stringWidth",
         class_filter: None,
         runtime: "js_bun_string_width",

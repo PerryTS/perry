@@ -1100,6 +1100,7 @@ pub(crate) const API_MANIFEST_PART_4: &[ApiEntry] = &[
     // (Zig-std wyhash, BigInt result), and the module-level
     // `pathToFileURL` / `fileURLToPath` aliases of node:url.
     // Implementation: perry-runtime `bun_compat`.
+    method("bun", "SQL", false, None),
     method("bun", "stringWidth", false, None),
     method("bun", "hash", false, None),
     method("bun", "deepEquals", false, None),

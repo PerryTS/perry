@@ -39,7 +39,7 @@ pub(crate) fn lower_new_member_native(
                         module == "bun" && (export.is_none() || export == Some("default"))
                     });
             if (is_global_bun || is_bun_namespace)
-                && matches!(prop_ident.sym.as_ref(), "Glob" | "Terminal")
+                && matches!(prop_ident.sym.as_ref(), "Glob" | "Terminal" | "SQL")
             {
                 return Ok(Some(Expr::NativeMethodCall {
                     module: "bun".to_string(),

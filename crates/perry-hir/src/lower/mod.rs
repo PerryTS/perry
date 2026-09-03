@@ -132,6 +132,8 @@ pub(crate) use crate::lower_patterns::*;
 pub(crate) use crate::lower_types::*;
 
 #[cfg(test)]
+mod bun_sql_tests;
+#[cfg(test)]
 mod collection_view_tests;
 #[cfg(test)]
 mod for_multi_decl_tests;
