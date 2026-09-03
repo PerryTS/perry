@@ -1619,6 +1619,12 @@ pub(crate) struct FnCtx<'a> {
     /// inline byte-load fold to the own-prop-aware runtime dispatch. False for
     /// every program that never shadows a Buffer method (the common case).
     pub program_shadows_buffer_read_method: bool,
+    /// This module contains a shape barrier such as `Object.defineProperty`.
+    /// Native Buffer/TypedArray views normally read `.length` straight from
+    /// their header, but a barrier can install an own `length` property that
+    /// must win over that intrinsic slot. Such modules route the read through
+    /// the ordinary property-semantic helper instead.
+    pub module_has_shape_barrier_sites: bool,
     /// LocalId facts of the form `n = min(src.length, dst.length)`.
     pub min_length_bounds: std::collections::HashMap<u32, Vec<u32>>,
     /// Loop-local facts proving a buffer index is bounded inside the current

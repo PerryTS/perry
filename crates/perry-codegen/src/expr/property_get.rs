@@ -271,6 +271,21 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             && matches!(object.as_ref(), Expr::LocalGet(id)
                     if ctx.buffer_data_slots.contains_key(id)) =>
         {
+            // A native view normally reads this immutable header word
+            // directly. `Object.defineProperty(view, "length", ...)` creates
+            // an ordinary own property, however, and it must shadow the
+            // intrinsic TypedArray length. A module-wide shape barrier is the
+            // conservative cross-closure proof that such a definition may
+            // have happened; retain the zero-overhead load for the common
+            // barrier-free module and use full property semantics otherwise.
+            if ctx.module_has_shape_barrier_sites {
+                let recv = lower_expr(ctx, object)?;
+                return Ok(ctx.block().call(
+                    DOUBLE,
+                    "js_value_length_property_f64",
+                    &[(DOUBLE, &recv)],
+                ));
+            }
             let arr_id = match object.as_ref() {
                 Expr::LocalGet(id) => *id,
                 _ => unreachable!(),
