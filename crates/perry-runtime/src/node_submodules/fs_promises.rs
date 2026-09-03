@@ -278,6 +278,16 @@ pub(crate) extern "C" fn thunk_fs_promises_unlink(
     _closure: *const ClosureHeader,
     path: f64,
 ) -> f64 {
+    // #9574: writeFile/appendFile are parked on the timer queue, while most
+    // other fs promise operations still run synchronously. Do not let an
+    // unlink of the same path overtake an earlier parked write: join that
+    // queue so the write runs first and the cleanup removes its result.
+    if crate::fs::has_pending_path_write(path) {
+        return match catch_fs_promises_throw(|| crate::fs::defer_unlink_promise(path)) {
+            Ok(promise) => promise,
+            Err(err) => crate::fs::promise_rejected_fs(err),
+        };
+    }
     promise_from_result_undefined(|| unsafe { crate::fs::js_fs_unlink_result(path) })
 }
 
