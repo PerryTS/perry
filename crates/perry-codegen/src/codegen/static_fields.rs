@@ -160,6 +160,11 @@ pub(super) fn init_static_fields_early(
             let len_str = entry.byte_len.to_string();
             let cid_str = class_id.to_string();
             let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            let global_slot = ctx
+                .static_field_globals
+                .get(&(c.name.clone(), sf.name.clone()))
+                .map(|name| format!("@{name}"))
+                .unwrap_or_else(|| "null".to_string());
             ctx.block().call_void(
                 "js_class_register_static_field",
                 &[
@@ -167,6 +172,7 @@ pub(super) fn init_static_fields_early(
                     (crate::types::PTR, &bytes_ref),
                     (crate::types::I64, &len_str),
                     (DOUBLE, &undef),
+                    (crate::types::PTR, &global_slot),
                 ],
             );
         }
@@ -267,6 +273,11 @@ pub(super) fn init_static_fields_late(
                 continue;
             }
             let key = (c.name.clone(), sf.name.clone());
+            let global_slot = ctx
+                .static_field_globals
+                .get(&key)
+                .map(|name| format!("@{name}"))
+                .unwrap_or_else(|| "null".to_string());
             // Register the field in the runtime CLASS_DYNAMIC_PROPS side
             // table (mirroring the StaticFieldSet lowering) so dynamic
             // class-ref reads and `getOwnPropertyDescriptor(C, name)` see an
@@ -287,6 +298,7 @@ pub(super) fn init_static_fields_late(
                                 (crate::types::PTR, &bytes_ref),
                                 (crate::types::I64, &len_str),
                                 (DOUBLE, value),
+                                (crate::types::PTR, &global_slot),
                             ],
                         );
                     }

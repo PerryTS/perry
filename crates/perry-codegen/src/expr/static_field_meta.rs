@@ -66,7 +66,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         } => {
             let v = lower_expr(ctx, value)?;
             let key = (class_name.clone(), field_name.clone());
-            if let Some(global_name) = ctx.static_field_globals.get(&key).cloned() {
+            let global_name = ctx.static_field_globals.get(&key).cloned();
+            if let Some(global_name) = global_name.as_ref() {
                 let g_ref = format!("@{}", global_name);
                 // GC_STORE_AUDIT(ROOT): static field global slot is registered as a mutable GC root
                 // (register_module_globals_as_gc_roots walks ctx.static_field_globals since the
@@ -89,6 +90,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let bytes_ref = format!("@{}", entry.bytes_global);
                 let len_str = entry.byte_len.to_string();
                 let cid_str = class_id.to_string();
+                let global_slot = global_name
+                    .as_ref()
+                    .map(|name| format!("@{name}"))
+                    .unwrap_or_else(|| "null".to_string());
                 ctx.block().call_void(
                     "js_class_register_static_field",
                     &[
@@ -96,6 +101,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         (crate::types::PTR, &bytes_ref),
                         (crate::types::I64, &len_str),
                         (DOUBLE, &v),
+                        (PTR, &global_slot),
                     ],
                 );
             }

@@ -139,6 +139,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 (crate::types::PTR, &bytes_ref),
                                 (I64, &byte_len),
                                 (DOUBLE, &mirrored),
+                                (crate::types::PTR, &global_ref),
                             ],
                         );
                     }

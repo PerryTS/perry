@@ -252,7 +252,7 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     module.declare_function(
         "js_class_register_static_field",
         VOID,
-        &[I32, PTR, I64, DOUBLE],
+        &[I32, PTR, I64, DOUBLE, PTR],
     );
     module.declare_function(
         "js_object_define_property",

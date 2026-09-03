@@ -291,6 +291,12 @@
     },
     {
       "file": "crates/perry-runtime/src/object/class_registry/state.rs",
+      "name": "CLASS_DECLARED_STATIC_GLOBAL_SLOTS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Maps each declared static field to the address of its process-lifetime LLVM global, not to an object in Perry's movable GC heap. Codegen separately registers every pointed-to global with js_gc_register_global_root, so the NaN-boxed value stored in that cell is marked and rewritten; this table only retains the stable address needed for runtime property writes to update the same cell."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/class_registry/state.rs",
       "name": "CLASS_OBJECT_VALUES",
       "verdict": "covered_elsewhere",
       "scanner": "object::scan_class_side_table_roots_mut and its budgeted step twin (class_registry/gc_roots.rs:138 and :256)",
