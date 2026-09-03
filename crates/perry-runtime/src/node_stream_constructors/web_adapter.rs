@@ -279,15 +279,15 @@ extern "C" fn foreign_readable_to_web_pull(closure: *const ClosureHeader, contro
         foreign_readable_pull_rejected as *const u8,
         1,
     ));
-    js_closure_set_capture_f64(fulfilled.get_raw_mut_ptr(), 0, controller);
-    js_closure_set_capture_f64(rejected.get_raw_mut_ptr(), 0, controller);
+    fulfilled.with_mut_ptr(|f| js_closure_set_capture_f64(f, 0, controller));
+    rejected.with_mut_ptr(|r| js_closure_set_capture_f64(r, 0, controller));
     let promise =
         crate::value::js_nanbox_get_pointer(next.get_nanbox_f64()) as *mut crate::promise::Promise;
-    box_pointer(crate::promise::js_promise_then(
-        promise,
-        fulfilled.get_raw_mut_ptr(),
-        rejected.get_raw_mut_ptr(),
-    ) as *const u8)
+    box_pointer(
+        fulfilled.with_mut_ptr(|f| {
+            rejected.with_mut_ptr(|r| crate::promise::js_promise_then(promise, f, r))
+        }) as *const u8,
+    )
 }
 
 extern "C" fn foreign_readable_to_web_cancel(closure: *const ClosureHeader, reason: f64) -> f64 {
