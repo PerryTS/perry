@@ -1261,24 +1261,49 @@ pub extern "C" fn js_assimilate_thenable(value: f64) -> f64 {
         };
 
     // Allocate the wrapper promise plus resolve/reject closures pointing at it.
-    let new_promise = js_promise_new();
-    let promise_i64 = new_promise as i64;
+    //
+    // #9539: the vtable `then` below is user code, and with the moving nursery
+    // (default-on) a loop safepoint inside it evacuates the young generation.
+    // The wrapper survives — the closures' capture words are rewritten — but a
+    // bare `*mut Promise` local is not a GC root, so reading it after the call
+    // returns a retired from-space address. Hold every value the call outlives
+    // in transient handles and re-read them through those handles.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let this_handle = scope.root_raw_const_ptr(obj_ptr);
+    let promise_handle = scope.root_raw_mut_ptr(js_promise_new());
 
-    let resolve_closure = crate::closure::js_closure_alloc(promise_resolve_fn as *const u8, 1);
-    crate::closure::js_closure_set_capture_ptr(resolve_closure, 0, promise_i64);
-    let reject_closure = crate::closure::js_closure_alloc(promise_reject_fn as *const u8, 1);
-    crate::closure::js_closure_set_capture_ptr(reject_closure, 0, promise_i64);
+    let resolve_handle = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
+        promise_resolve_fn as *const u8,
+        1,
+    ));
+    crate::closure::js_closure_set_capture_ptr(
+        resolve_handle.get_raw_mut_ptr(),
+        0,
+        promise_handle.get_raw_mut_ptr::<Promise>() as i64,
+    );
+    let reject_handle = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
+        promise_reject_fn as *const u8,
+        1,
+    ));
+    crate::closure::js_closure_set_capture_ptr(
+        reject_handle.get_raw_mut_ptr(),
+        0,
+        promise_handle.get_raw_mut_ptr::<Promise>() as i64,
+    );
 
     // The user's `then(onFulfilled, onRejected)` reads each parameter as a
     // raw f64 closure pointer (matching the convention used by
     // `js_promise_new_with_executor`).
-    let resolve_f64 = f64::from_bits(resolve_closure as u64);
-    let reject_f64 = f64::from_bits(reject_closure as u64);
+    let resolve_f64 = f64::from_bits(resolve_handle.get_raw_mut_ptr::<u8>() as u64);
+    let reject_f64 = f64::from_bits(reject_handle.get_raw_mut_ptr::<u8>() as u64);
 
     // Invoke `value.then(resolve, reject)` via the vtable. Mirrors
     // `call_vtable_method` in object.rs: NaN-box `this` with POINTER_TAG so
     // the method body sees a real instance pointer.
-    let this_f64 = f64::from_bits(JSValue::pointer(obj_ptr as *mut u8).bits());
+    let this_f64 = f64::from_bits(
+        JSValue::pointer(this_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>() as *mut u8)
+            .bits(),
+    );
     unsafe {
         match then_param_count {
             0 => {
@@ -1297,7 +1322,8 @@ pub extern "C" fn js_assimilate_thenable(value: f64) -> f64 {
         }
     }
 
-    crate::value::js_nanbox_pointer(new_promise as i64)
+    // Re-read the wrapper through its handle — see the #9539 note above.
+    crate::value::js_nanbox_pointer(promise_handle.get_raw_mut_ptr::<Promise>() as i64)
 }
 
 /// Assimilate an object-literal thenable whose `then` is an own/inherited DATA

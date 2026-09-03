@@ -18,6 +18,7 @@ mod side_table_scanners;
 mod string_normalize_form;
 mod string_slice;
 mod symbol_description;
+mod thenable_assimilation;
 mod transient_handles;
 
 fn assert_panics_with(expected: &str, f: impl FnOnce()) {
