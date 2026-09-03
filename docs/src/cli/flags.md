@@ -109,6 +109,7 @@ executable so it runs with no external files on disk (#5731).
 | Flag | Description |
 |------|-------------|
 | `--embed <pattern>` | Embed a file, directory, or `*`/`**` glob (relative to the project root). Repeatable. Merged with `perry.embed` (package.json) and `[compile] embed` (perry.toml). |
+| `--bunfs-root <dir>` | Map an extracted Bun standalone root to `/$bunfs/root/`; mapped module paths resolve natively and literal file paths remain readable from the relocated executable. |
 | `--asset-module <specifier=dir>` | Generate a virtual module whose default export maps every file below `dir` to a stable `$perryfs` handle. Repeatable; source maps are excluded. |
 
 ```bash
@@ -142,6 +143,21 @@ and bind the default import to its `$perryfs` path:
 ```typescript,no-test
 import sound from "./sound.mp3" with { type: "file" };
 ```
+
+For source extracted from a Bun standalone executable, mount its extracted
+`root/` directory at Bun's original virtual prefix:
+
+```bash
+perry compile --bunfs-root ./fixture/root ./fixture/root/entry.js -o app
+```
+
+Static imports, re-exports, literal dynamic imports, and literal `require()`
+calls below `/$bunfs/root/` resolve against that directory. Perry canonicalizes
+their real targets, so importing the same module through `./chunk.js` and
+`/$bunfs/root/chunk.js` still initializes one module. Literal mapped file paths
+are embedded under their original names and work through both `node:fs` and
+`Bun.file()` after the extracted directory is removed. No host-level
+`/$bunfs` directory or compatibility symlink is needed.
 
 Some build pipelines inject a generated module rather than writing it into the
 source checkout. Reproduce that file-map step with `--asset-module`. Perry

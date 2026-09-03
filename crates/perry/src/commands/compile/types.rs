@@ -178,6 +178,13 @@ pub struct CompileArgs {
     #[arg(long)]
     pub embed: Vec<String>,
 
+    /// Map Bun standalone-executable virtual paths below `/$bunfs/root/` to
+    /// an extracted filesystem tree. Static module edges resolve through the
+    /// mapping, while referenced files are embedded under their original Bun
+    /// paths so `node:fs` and `Bun.file()` keep working after relocation.
+    #[arg(long, value_name = "DIR")]
+    pub bunfs_root: Option<PathBuf>,
+
     /// Generate a deterministic TypeScript module that maps asset-relative
     /// names to Bun-compatible `{ type: "file" }` imports. The value is
     /// `<module-specifier>=<asset-directory>`; paths are relative to the
@@ -690,6 +697,9 @@ pub struct CompilationContext {
     #[allow(dead_code)]
     // #5731 embed-assets context contract; pub field populated on the embed path, not read here
     pub embedded_assets: Vec<(String, PathBuf)>,
+    /// Canonical extracted root mounted at Bun's `/$bunfs/root/` virtual path.
+    /// Set only by the compile CLI's `--bunfs-root` option.
+    pub bunfs_root: Option<PathBuf>,
     /// Canonical paths whose import attributes explicitly requested Bun's
     /// `{ type: "file" }` loader. Kept separate from `embedded_assets` because
     /// automatic wasm imports also register bytes there but must still lower
@@ -1197,6 +1207,7 @@ impl CompilationContext {
             auto_skipped_node_addon_packages: HashSet::new(),
             aot_discovered_modules: HashSet::new(),
             embedded_assets: Vec::new(),
+            bunfs_root: None,
             file_loader_asset_paths: HashSet::new(),
             file_loader_asset_names: HashMap::new(),
             generated_asset_modules: BTreeMap::new(),

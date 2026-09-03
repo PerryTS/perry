@@ -709,6 +709,10 @@ impl BuildCacheProbe {
         runtime_inputs: &[PathBuf],
     ) -> Result<BuildCacheManifest, String> {
         let mut source_paths = ctx.native_modules.keys().cloned().collect::<BTreeSet<_>>();
+        // Graph-discovered assets (including `/$bunfs/root/...` literals) are
+        // not necessarily modules. Fingerprint their source bytes alongside
+        // modules so changing an embedded file cannot reuse a stale binary.
+        source_paths.extend(ctx.embedded_assets.iter().map(|(_, path)| path.clone()));
         for addon in ctx.native_addons.values() {
             source_paths.extend(super::native_addon_sidecar::addon_payload_files(addon));
         }

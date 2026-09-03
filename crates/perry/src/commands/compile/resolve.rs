@@ -147,6 +147,11 @@ mod tests;
 const PERRY_NATIVE_EXTENSION_PACKAGES: &[&str] =
     &["ioredis", "ethers", "mysql2", "ws", "dotenv", "undici"];
 
+/// Absolute virtual prefix used by files extracted from a Bun standalone
+/// executable. `--bunfs-root` maps the suffix below this prefix to a real
+/// directory without requiring a host-level `/$bunfs` mount or symlink.
+pub(super) const BUNFS_ROOT_PREFIX: &str = "/$bunfs/root/";
+
 /// Check if a file path is inside a Perry native extension package (has built-in stdlib support)
 /// or a package that has perry.nativeLibrary in its package.json.
 pub(super) fn is_in_perry_native_package(path: &Path) -> bool {
@@ -1289,6 +1294,32 @@ pub(super) fn resolve_absolute_import_paths(import_source: &str) -> Option<Resol
     })
 }
 
+/// Return the lexical filesystem target for a Bun virtual path. Parent/root
+/// components are rejected so a virtual specifier cannot escape the configured
+/// extracted root.
+pub(super) fn bunfs_mapped_path(import_source: &str, root: &Path) -> Option<PathBuf> {
+    let suffix = import_source.strip_prefix(BUNFS_ROOT_PREFIX)?;
+    let relative = Path::new(suffix);
+    if relative
+        .components()
+        .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return None;
+    }
+    Some(root.join(relative))
+}
+
+/// Resolve a Bun virtual module specifier through the configured extracted
+/// root, using Perry's ordinary extension/index lookup while retaining one
+/// canonical identity for real-path and virtual-path imports of the same file.
+pub(super) fn resolve_bunfs_import_path(import_source: &str, root: &Path) -> Option<PathBuf> {
+    let canonical_root = root.canonicalize().ok()?;
+    let mapped = bunfs_mapped_path(import_source, &canonical_root)?;
+    let source_path = resolve_with_extensions(&mapped)?;
+    let canonical = source_path.canonicalize().ok()?;
+    canonical.starts_with(&canonical_root).then_some(canonical)
+}
+
 fn normalize_path_lexically(path: &Path) -> PathBuf {
     let mut normalized = PathBuf::new();
     for component in path.components() {
@@ -1350,6 +1381,7 @@ pub(super) fn is_relative_specifier(import_source: &str) -> bool {
 }
 
 /// Resolve an import specifier to a file path
+#[cfg(test)]
 pub(super) fn resolve_import(
     import_source: &str,
     importer_path: &Path,
@@ -1357,6 +1389,32 @@ pub(super) fn resolve_import(
     compile_packages: &HashSet<String>,
     compile_package_dirs: &BTreeSet<PathBuf>,
 ) -> Option<(PathBuf, ModuleKind)> {
+    resolve_import_with_bunfs(
+        import_source,
+        importer_path,
+        project_root,
+        compile_packages,
+        compile_package_dirs,
+        None,
+    )
+}
+
+/// Context-aware resolver entry point used by compile passes that must retain
+/// `--bunfs-root` semantics after the initial module walk (export flattening,
+/// init ordering, and dynamic-import metadata construction).
+pub(super) fn resolve_import_with_bunfs(
+    import_source: &str,
+    importer_path: &Path,
+    project_root: &Path,
+    compile_packages: &HashSet<String>,
+    compile_package_dirs: &BTreeSet<PathBuf>,
+    bunfs_root: Option<&Path>,
+) -> Option<(PathBuf, ModuleKind)> {
+    if import_source.starts_with(BUNFS_ROOT_PREFIX) {
+        return bunfs_root
+            .and_then(|root| resolve_bunfs_import_path(import_source, root))
+            .map(|path| (path, ModuleKind::NativeCompiled));
+    }
     // Check if it's a native Rust stdlib module. Refs #665: when the user has
     // explicitly opted the package into `perry.compilePackages`, they want
     // their `node_modules` copy compiled from source (cjs_wrap + native
@@ -1389,12 +1447,13 @@ pub(super) fn resolve_import(
             // specifier, which resolves through node_modules per spec (or the
             // stdlib for `node:` builtins).
             Ok(SubpathImportOutcome::External(spec)) => {
-                return resolve_import(
+                return resolve_import_with_bunfs(
                     &spec,
                     importer_path,
                     project_root,
                     compile_packages,
                     compile_package_dirs,
+                    bunfs_root,
                 );
             }
             // Not covered by an `imports` map — fall through (the tsconfig
@@ -1737,12 +1796,13 @@ pub(super) fn cached_resolve_import(
     if let Some(cached) = ctx.resolve_cache.get(&cache_key) {
         return cached.clone();
     }
-    let result = resolve_import(
+    let result = resolve_import_with_bunfs(
         import_source,
         importer_path,
         &ctx.project_root,
         &ctx.compile_packages,
         &ctx.compile_package_dirs,
+        ctx.bunfs_root.as_deref(),
     );
     ctx.resolve_cache.insert(cache_key, result.clone());
     result

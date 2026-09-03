@@ -30,6 +30,51 @@ use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::OnceLock;
+
+/// Find literal Bun virtual paths in one source module and return every mapped
+/// file that should retain that exact runtime name in the standalone binary.
+/// Missing literals are left to the calling API's normal ENOENT behavior;
+/// module edges receive a focused compile-time diagnostic in the resolver.
+pub(super) fn resolve_bunfs_literal_assets(
+    source: &str,
+    bunfs_root: &Path,
+) -> Vec<(String, PathBuf)> {
+    static LITERAL_RES: OnceLock<Vec<regex::Regex>> = OnceLock::new();
+    let literal_res = LITERAL_RES.get_or_init(|| {
+        vec![
+            regex::Regex::new(r#"\"(/\$bunfs/root/[^\"\\\r\n]+)\""#)
+                .expect("double-quoted bunfs path"),
+            regex::Regex::new(r#"'(/\$bunfs/root/[^'\\\r\n]+)'"#)
+                .expect("single-quoted bunfs path"),
+            regex::Regex::new(r#"`(/\$bunfs/root/[^`\\$\r\n]+)`"#).expect("template bunfs path"),
+        ]
+    });
+    let canonical_root = match bunfs_root.canonicalize() {
+        Ok(root) => root,
+        Err(_) => return Vec::new(),
+    };
+    let mut assets = std::collections::BTreeMap::new();
+    for literal_re in literal_res {
+        for captures in literal_re.captures_iter(source) {
+            let Some(path_match) = captures.get(1) else {
+                continue;
+            };
+            let virtual_path = path_match.as_str();
+            let Some(mapped) = super::resolve::bunfs_mapped_path(virtual_path, &canonical_root)
+            else {
+                continue;
+            };
+            let Ok(canonical) = mapped.canonicalize() else {
+                continue;
+            };
+            if canonical.is_file() && canonical.starts_with(&canonical_root) {
+                assets.insert(virtual_path.to_string(), canonical);
+            }
+        }
+    }
+    assets.into_iter().collect()
+}
 
 /// Collect the embed patterns from the CLI flag plus `perry.embed`
 /// (package.json) and `[compile] embed` (perry.toml) under `project_root`,
@@ -509,6 +554,32 @@ mod tests {
             resolve_embedded_assets(&["./dist/**".into(), "./dist/index.html".into()], root)
                 .unwrap();
         assert_eq!(merged.len(), 3);
+    }
+
+    #[test]
+    fn bunfs_literals_keep_names_and_cannot_escape_the_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("root");
+        fs::create_dir_all(root.join("assets")).unwrap();
+        fs::write(root.join("assets/a.bin"), b"A").unwrap();
+        fs::write(root.join("assets/b.bin"), b"B").unwrap();
+
+        let source = r#"
+const a = "/$bunfs/root/assets/a.bin";
+const duplicate = '/$bunfs/root/assets/a.bin';
+const b = `/$bunfs/root/assets/b.bin`;
+const missing = "/$bunfs/root/assets/missing.bin";
+const escape = "/$bunfs/root/../outside.bin";
+"#;
+        let assets = resolve_bunfs_literal_assets(source, &root);
+        let names: Vec<_> = assets.iter().map(|(name, _)| name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["/$bunfs/root/assets/a.bin", "/$bunfs/root/assets/b.bin"]
+        );
+        assert!(assets
+            .iter()
+            .all(|(_, path)| path.starts_with(root.canonicalize().unwrap())));
     }
 
     #[test]

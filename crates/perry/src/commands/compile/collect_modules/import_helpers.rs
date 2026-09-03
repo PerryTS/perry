@@ -6,12 +6,55 @@
 //! mapping for HIR lowering, JS-module import scanning, lexical-vs-canonical
 //! import resolution, and the known-node-submodule classifier.
 
+use anyhow::{anyhow, Result};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use perry_hir::ModuleKind;
 
 use super::{cached_resolve_import, CompilationContext};
+
+/// Reject an unresolved Bun virtual module edge with a diagnostic that names
+/// both the original contract path and its configured extracted-tree target.
+/// Ordinary resolver failures retain their existing behavior.
+pub(super) fn ensure_bunfs_import_resolves(
+    import_source: &str,
+    importer_path: &Path,
+    ctx: &CompilationContext,
+) -> Result<()> {
+    if !import_source.starts_with(super::super::resolve::BUNFS_ROOT_PREFIX) {
+        return Ok(());
+    }
+    let root = ctx.bunfs_root.as_deref().ok_or_else(|| {
+        anyhow!(
+            "cannot resolve Bun virtual path `{}` imported from `{}`: pass \
+             `--bunfs-root <DIR>` pointing at the extracted standalone root",
+            import_source,
+            importer_path.display()
+        )
+    })?;
+    let mapped =
+        super::super::resolve::bunfs_mapped_path(import_source, root).ok_or_else(|| {
+            anyhow!(
+                "cannot resolve Bun virtual path `{}` imported from `{}`: the path escapes \
+             configured --bunfs-root `{}`",
+                import_source,
+                importer_path.display(),
+                root.display()
+            )
+        })?;
+    if super::super::resolve::resolve_bunfs_import_path(import_source, root).is_none() {
+        return Err(anyhow!(
+            "cannot resolve Bun virtual path `{}` imported from `{}`: mapped target `{}` \
+             is absent under --bunfs-root `{}`",
+            import_source,
+            importer_path.display(),
+            mapped.display(),
+            root.display()
+        ));
+    }
+    Ok(())
+}
 
 /// #5009: build the bare-name → literal map perry-hir lowering consults to fold
 /// `process.env.<NAME>` reads (`perry_hir::env_define_lookup`). Strips the

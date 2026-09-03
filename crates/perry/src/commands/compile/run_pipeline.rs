@@ -736,6 +736,25 @@ pub fn run_with_parse_cache(
     let mut ctx = CompilationContext::new(project_root.clone());
     ctx.bun_platform = args.platform == JavaScriptPlatform::Bun;
     ctx.cache_root = object_cache_project_root(&args.input, &project_root);
+    ctx.bunfs_root = match args.bunfs_root.as_deref() {
+        Some(root) => {
+            let canonical = root.canonicalize().map_err(|error| {
+                anyhow::anyhow!(
+                    "failed to resolve --bunfs-root `{}`: {}",
+                    root.display(),
+                    error
+                )
+            })?;
+            if !canonical.is_dir() {
+                anyhow::bail!(
+                    "invalid --bunfs-root `{}`: expected an extracted root directory",
+                    root.display()
+                );
+            }
+            Some(canonical)
+        }
+        None => None,
+    };
     let explain_lowering = if args.explain_lowering {
         Some(lowering_report::ExplainLoweringRun::prepare(
             &ctx.cache_root,
@@ -1080,12 +1099,13 @@ pub fn run_with_parse_cache(
                     _ => None,
                 };
                 if let Some((source, re_export_names)) = source_str {
-                    if let Some((resolved_source, _)) = resolve_import(
+                    if let Some((resolved_source, _)) = resolve_import_with_bunfs(
                         source,
                         path,
                         &ctx.project_root,
                         &ctx.compile_packages,
                         &ctx.compile_package_dirs,
+                        ctx.bunfs_root.as_deref(),
                     ) {
                         let source_path_str = resolved_source.to_string_lossy().to_string();
                         for ((src_path, enum_name), members) in &exported_enums {
@@ -1209,12 +1229,13 @@ pub fn run_with_parse_cache(
                     let Some((source, names)) = re_export else {
                         continue;
                     };
-                    let Some((resolved_source, _)) = resolve_import(
+                    let Some((resolved_source, _)) = resolve_import_with_bunfs(
                         source,
                         path,
                         &ctx.project_root,
                         &ctx.compile_packages,
                         &ctx.compile_package_dirs,
+                        ctx.bunfs_root.as_deref(),
                     ) else {
                         continue;
                     };
@@ -1774,12 +1795,13 @@ pub fn run_with_parse_cache(
             for export in &hir_module.exports {
                 match export {
                     perry_hir::Export::ExportAll { source } => {
-                        if let Some((resolved_source, _)) = resolve_import(
+                        if let Some((resolved_source, _)) = resolve_import_with_bunfs(
                             source,
                             path,
                             &ctx.project_root,
                             &ctx.compile_packages,
                             &ctx.compile_package_dirs,
+                            ctx.bunfs_root.as_deref(),
                         ) {
                             let source_path_str = resolved_source.to_string_lossy().to_string();
                             if let Some(source_exports) = all_module_exports.get(&source_path_str) {
@@ -1828,12 +1850,13 @@ pub fn run_with_parse_cache(
                         imported,
                         exported,
                     } => {
-                        if let Some((resolved_source, _)) = resolve_import(
+                        if let Some((resolved_source, _)) = resolve_import_with_bunfs(
                             source,
                             path,
                             &ctx.project_root,
                             &ctx.compile_packages,
                             &ctx.compile_package_dirs,
+                            ctx.bunfs_root.as_deref(),
                         ) {
                             let source_path_str = resolved_source.to_string_lossy().to_string();
                             if let Some(source_exports) = all_module_exports.get(&source_path_str) {
@@ -1881,12 +1904,13 @@ pub fn run_with_parse_cache(
                                     _ => (false, String::new()),
                                 };
                                 if matches {
-                                    if let Some((resolved_source, _)) = resolve_import(
+                                    if let Some((resolved_source, _)) = resolve_import_with_bunfs(
                                         &import.source,
                                         path,
                                         &ctx.project_root,
                                         &ctx.compile_packages,
                                         &ctx.compile_package_dirs,
+                                        ctx.bunfs_root.as_deref(),
                                     ) {
                                         let source_path_str =
                                             resolved_source.to_string_lossy().to_string();
@@ -1976,12 +2000,13 @@ pub fn run_with_parse_cache(
             for export in &hir_module.exports {
                 match export {
                     perry_hir::Export::ExportAll { source } => {
-                        if let Some((resolved_source, _)) = resolve_import(
+                        if let Some((resolved_source, _)) = resolve_import_with_bunfs(
                             source,
                             path,
                             &ctx.project_root,
                             &ctx.compile_packages,
                             &ctx.compile_package_dirs,
+                            ctx.bunfs_root.as_deref(),
                         ) {
                             let source_path_str = resolved_source.to_string_lossy().to_string();
                             for ((src_path, func_name), &param_count) in &exported_func_param_counts
@@ -2004,12 +2029,13 @@ pub fn run_with_parse_cache(
                         imported,
                         exported,
                     } => {
-                        if let Some((resolved_source, _)) = resolve_import(
+                        if let Some((resolved_source, _)) = resolve_import_with_bunfs(
                             source,
                             path,
                             &ctx.project_root,
                             &ctx.compile_packages,
                             &ctx.compile_package_dirs,
+                            ctx.bunfs_root.as_deref(),
                         ) {
                             let source_path_str = resolved_source.to_string_lossy().to_string();
                             for ((src_path, func_name), &param_count) in &exported_func_param_counts
@@ -2040,12 +2066,13 @@ pub fn run_with_parse_cache(
                                     _ => (false, String::new()),
                                 };
                                 if matches {
-                                    if let Some((resolved_source, _)) = resolve_import(
+                                    if let Some((resolved_source, _)) = resolve_import_with_bunfs(
                                         &import.source,
                                         path,
                                         &ctx.project_root,
                                         &ctx.compile_packages,
                                         &ctx.compile_package_dirs,
+                                        ctx.bunfs_root.as_deref(),
                                     ) {
                                         let source_path_str =
                                             resolved_source.to_string_lossy().to_string();
@@ -2093,12 +2120,13 @@ pub fn run_with_parse_cache(
             for export in &hir_module.exports {
                 match export {
                     perry_hir::Export::ExportAll { source } => {
-                        if let Some((resolved_source, _)) = resolve_import(
+                        if let Some((resolved_source, _)) = resolve_import_with_bunfs(
                             source,
                             path,
                             &ctx.project_root,
                             &ctx.compile_packages,
                             &ctx.compile_package_dirs,
+                            ctx.bunfs_root.as_deref(),
                         ) {
                             let source_path_str = resolved_source.to_string_lossy().to_string();
                             for ((src_path, func_name), return_type) in &exported_func_return_types
@@ -2125,12 +2153,13 @@ pub fn run_with_parse_cache(
                         imported,
                         exported,
                     } => {
-                        if let Some((resolved_source, _)) = resolve_import(
+                        if let Some((resolved_source, _)) = resolve_import_with_bunfs(
                             source,
                             path,
                             &ctx.project_root,
                             &ctx.compile_packages,
                             &ctx.compile_package_dirs,
+                            ctx.bunfs_root.as_deref(),
                         ) {
                             let source_path_str = resolved_source.to_string_lossy().to_string();
                             for ((src_path, func_name), return_type) in &exported_func_return_types
@@ -2164,12 +2193,13 @@ pub fn run_with_parse_cache(
                                     _ => (false, String::new()),
                                 };
                                 if matches {
-                                    if let Some((resolved_source, _)) = resolve_import(
+                                    if let Some((resolved_source, _)) = resolve_import_with_bunfs(
                                         &import.source,
                                         path,
                                         &ctx.project_root,
                                         &ctx.compile_packages,
                                         &ctx.compile_package_dirs,
+                                        ctx.bunfs_root.as_deref(),
                                     ) {
                                         let source_path_str =
                                             resolved_source.to_string_lossy().to_string();
@@ -2219,12 +2249,13 @@ pub fn run_with_parse_cache(
             for export in &hir_module.exports {
                 match export {
                     perry_hir::Export::ExportAll { source } => {
-                        if let Some((resolved_source, _)) = resolve_import(
+                        if let Some((resolved_source, _)) = resolve_import_with_bunfs(
                             source,
                             path,
                             &ctx.project_root,
                             &ctx.compile_packages,
                             &ctx.compile_package_dirs,
+                            ctx.bunfs_root.as_deref(),
                         ) {
                             let source_path_str = resolved_source.to_string_lossy().to_string();
                             for ((src_path, class_name), class) in &exported_classes {
@@ -2242,12 +2273,13 @@ pub fn run_with_parse_cache(
                         imported,
                         exported,
                     } => {
-                        if let Some((resolved_source, _)) = resolve_import(
+                        if let Some((resolved_source, _)) = resolve_import_with_bunfs(
                             source,
                             path,
                             &ctx.project_root,
                             &ctx.compile_packages,
                             &ctx.compile_package_dirs,
+                            ctx.bunfs_root.as_deref(),
                         ) {
                             let source_path_str = resolved_source.to_string_lossy().to_string();
                             for ((src_path, class_name), class) in &exported_classes {
@@ -2273,12 +2305,13 @@ pub fn run_with_parse_cache(
                                     _ => (false, String::new()),
                                 };
                                 if matches {
-                                    if let Some((resolved_source, _)) = resolve_import(
+                                    if let Some((resolved_source, _)) = resolve_import_with_bunfs(
                                         &import.source,
                                         path,
                                         &ctx.project_root,
                                         &ctx.compile_packages,
                                         &ctx.compile_package_dirs,
+                                        ctx.bunfs_root.as_deref(),
                                     ) {
                                         let source_path_str =
                                             resolved_source.to_string_lossy().to_string();
@@ -2569,12 +2602,13 @@ pub fn run_with_parse_cache(
                 perry_hir::Export::ReExport { source, .. }
                 | perry_hir::Export::ExportAll { source }
                 | perry_hir::Export::NamespaceReExport { source, .. } => {
-                    if let Some((resolved_path, _)) = resolve_import(
+                    if let Some((resolved_path, _)) = resolve_import_with_bunfs(
                         source,
                         path,
                         &ctx.project_root,
                         &ctx.compile_packages,
                         &ctx.compile_package_dirs,
+                        ctx.bunfs_root.as_deref(),
                     ) {
                         if let Some(name) = path_to_module_name.get(&resolved_path) {
                             *source = name.clone();
@@ -2596,12 +2630,13 @@ pub fn run_with_parse_cache(
             if import.is_native {
                 continue;
             }
-            if let Some((resolved_path, _)) = resolve_import(
+            if let Some((resolved_path, _)) = resolve_import_with_bunfs(
                 &import.source,
                 path,
                 &ctx.project_root,
                 &ctx.compile_packages,
                 &ctx.compile_package_dirs,
+                ctx.bunfs_root.as_deref(),
             ) {
                 if let Some(name) = path_to_module_name.get(&resolved_path) {
                     import.source = name.clone();
@@ -3244,12 +3279,13 @@ pub fn run_with_parse_cache(
                         perry_hir::Export::Named { .. } => None,
                     };
                     if let Some(src) = src {
-                        if let Some((resolved_path, _)) = resolve_import(
+                        if let Some((resolved_path, _)) = resolve_import_with_bunfs(
                             &src,
                             path,
                             &ctx.project_root,
                             &ctx.compile_packages,
                             &ctx.compile_package_dirs,
+                            ctx.bunfs_root.as_deref(),
                         ) {
                             if let Some(src_mod) = ctx.native_modules.get(&resolved_path) {
                                 push_dep(&mut deps, &mut seen, sanitize_name(&src_mod.name));
@@ -4090,12 +4126,13 @@ pub fn run_with_parse_cache(
                                 let perry_hir::Export::ExportAll { source } = e else {
                                     return None;
                                 };
-                                let (target_path, _) = resolve_import(
+                                let (target_path, _) = resolve_import_with_bunfs(
                                     source,
                                     std::path::Path::new(&ns_scan_path),
                                     &ctx.project_root,
                                     &ctx.compile_packages,
                                     &ctx.compile_package_dirs,
+                                    ctx.bunfs_root.as_deref(),
                                 )?;
                                 let target = target_path.to_string_lossy().to_string();
                                 all_module_exports
@@ -4107,12 +4144,13 @@ pub fn run_with_parse_cache(
                         let Some((hop_src, hop_imported)) = named_hop.or_else(export_all_hop) else {
                             break;
                         };
-                        let Some((hop_path, _)) = resolve_import(
+                        let Some((hop_path, _)) = resolve_import_with_bunfs(
                             &hop_src,
                             std::path::Path::new(&ns_scan_path),
                             &ctx.project_root,
                             &ctx.compile_packages,
                             &ctx.compile_package_dirs,
+                            ctx.bunfs_root.as_deref(),
                         ) else {
                             break;
                         };
@@ -4168,12 +4206,13 @@ pub fn run_with_parse_cache(
                                     break;
                                 }
                                 let importer = std::path::Path::new(&ns_scan_path);
-                                let Some((ns_target, _)) = resolve_import(
+                                let Some((ns_target, _)) = resolve_import_with_bunfs(
                                     ns_src,
                                     importer,
                                     &ctx.project_root,
                                     &ctx.compile_packages,
                                     &ctx.compile_package_dirs,
+                                    ctx.bunfs_root.as_deref(),
                                 ) else {
                                     break;
                                 };
