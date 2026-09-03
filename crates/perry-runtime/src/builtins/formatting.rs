@@ -327,9 +327,8 @@ fn registered_name_string(func_ptr: usize) -> Option<String> {
 fn function_name_registry(
 ) -> &'static std::sync::Mutex<std::collections::HashMap<usize, &'static [u8]>> {
     use std::sync::OnceLock;
-    static REGISTRY: OnceLock<
-        std::sync::Mutex<std::collections::HashMap<usize, &'static [u8]>>,
-    > = OnceLock::new();
+    static REGISTRY: OnceLock<std::sync::Mutex<std::collections::HashMap<usize, &'static [u8]>>> =
+        OnceLock::new();
     REGISTRY.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
 }
 
@@ -369,8 +368,7 @@ fn format_function_for_console(closure_ptr: *const crate::closure::ClosureHeader
         if func_ptr.is_null() {
             None
         } else {
-            registered_name_string(func_ptr as usize)
-                .filter(|n| !n.is_empty())
+            registered_name_string(func_ptr as usize).filter(|n| !n.is_empty())
         }
     };
     let label = match registry_name.or_else(|| {
@@ -439,7 +437,8 @@ pub unsafe extern "C" fn js_register_function_name(
         // constant in the program image, which outlives the process. Codegen
         // emits exactly that (`@.str.N = private unnamed_addr constant`), and
         // the tests pass `b"..."` literals, which are `'static` too.
-        let image: &'static [u8] = unsafe { std::slice::from_raw_parts(name_ptr, name_len as usize) };
+        let image: &'static [u8] =
+            unsafe { std::slice::from_raw_parts(name_ptr, name_len as usize) };
         map.insert(func_ptr as usize, image);
     }
 }
@@ -498,23 +497,20 @@ pub fn function_name_registry_entries() -> Option<Vec<(usize, std::sync::Arc<[u8
     // The `Arc` in the return type is the resolver's, not the registry's: an
     // image name is borrowed, so materializing one costs a copy of the NAME
     // (tens of bytes), paid per `.stack` snapshot rather than per process.
-    function_name_registry()
-        .lock()
-        .ok()
-        .map(|map| {
-            let mut out: Vec<(usize, std::sync::Arc<[u8]>)> = map
-                .iter()
-                .map(|(k, v)| (*k, std::sync::Arc::from(*v)))
-                .collect();
-            if let Ok(overrides) = function_name_overrides().lock() {
-                for (k, v) in overrides.iter() {
-                    if !map.contains_key(k) {
-                        out.push((*k, v.clone()));
-                    }
+    function_name_registry().lock().ok().map(|map| {
+        let mut out: Vec<(usize, std::sync::Arc<[u8]>)> = map
+            .iter()
+            .map(|(k, v)| (*k, std::sync::Arc::from(*v)))
+            .collect();
+        if let Ok(overrides) = function_name_overrides().lock() {
+            for (k, v) in overrides.iter() {
+                if !map.contains_key(k) {
+                    out.push((*k, v.clone()));
                 }
             }
-            out
-        })
+        }
+        out
+    })
 }
 
 /// Look up the codegen-registered JS name for a function pointer.
@@ -2030,7 +2026,10 @@ pub(crate) fn function_registries_census() -> Vec<crate::gc::census::SideTableRo
         rows.push((
             "fn.name_registry",
             map.len(),
-            hash_table_bytes(map.capacity(), std::mem::size_of::<(usize, &'static [u8])>()),
+            hash_table_bytes(
+                map.capacity(),
+                std::mem::size_of::<(usize, &'static [u8])>(),
+            ),
         ));
     }
     if let Ok(map) = function_name_overrides().lock() {

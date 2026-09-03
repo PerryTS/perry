@@ -760,9 +760,17 @@ pub(crate) fn malloc_state_census() -> Vec<crate::gc::census::SideTableRow> {
     MALLOC_STATE.with(|s| {
         let s = s.borrow();
         vec![
-            ("gc.malloc_objects_vec", s.objects.len(), vec_bytes(&s.objects)),
+            (
+                "gc.malloc_objects_vec",
+                s.objects.len(),
+                vec_bytes(&s.objects),
+            ),
             ("gc.malloc_objects_set", s.set.len(), set_bytes(&s.set)),
-            ("gc.malloc_realloc_forwarding", s.realloc_forwarding.len(), map_bytes(&s.realloc_forwarding)),
+            (
+                "gc.malloc_realloc_forwarding",
+                s.realloc_forwarding.len(),
+                map_bytes(&s.realloc_forwarding),
+            ),
         ]
     })
 }

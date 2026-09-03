@@ -828,9 +828,19 @@ pub(super) fn singleton_closure_census() -> Vec<crate::gc::census::SideTableRow>
         let m = m.borrow();
         let inner: usize = m
             .values()
-            .map(|c| vec_bytes(&c.entries) + c.entries.iter().map(|e| vec_bytes(&e.captures)).sum::<usize>())
+            .map(|c| {
+                vec_bytes(&c.entries)
+                    + c.entries
+                        .iter()
+                        .map(|e| vec_bytes(&e.captures))
+                        .sum::<usize>()
+            })
             .sum();
-        rows.push(("closure.captured_singletons", m.len(), map_bytes(&m) + inner));
+        rows.push((
+            "closure.captured_singletons",
+            m.len(),
+            map_bytes(&m) + inner,
+        ));
     });
     rows
 }

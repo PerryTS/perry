@@ -233,10 +233,10 @@ pub use schedule::{
     schedule_polls_paced,
 };
 pub use verify::*;
-#[cfg(feature = "diagnostics")]
-mod heap_snapshot;
 /// Env-gated heap census (`PERRY_GC_CENSUS`); off by default.
 pub(crate) mod census;
+#[cfg(feature = "diagnostics")]
+mod heap_snapshot;
 pub use census::{census_poll_signal, gc_census_enabled};
 #[cfg(feature = "diagnostics")]
 pub use heap_snapshot::gc_build_v8_heap_snapshot_json;

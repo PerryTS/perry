@@ -1969,12 +1969,20 @@ pub(crate) fn object_tables_census() -> Vec<crate::gc::census::SideTableRow> {
     {
         let m = st.descriptors.property_descriptors.borrow();
         let inner: usize = m.keys().map(|(_, k)| k.capacity()).sum();
-        rows.push(("object.property_descriptors", m.len(), map_bytes(&m) + inner));
+        rows.push((
+            "object.property_descriptors",
+            m.len(),
+            map_bytes(&m) + inner,
+        ));
     }
     {
         let m = st.descriptors.accessor_descriptors.borrow();
         let inner: usize = m.keys().map(|(_, k)| k.capacity()).sum();
-        rows.push(("object.accessor_descriptors", m.len(), map_bytes(&m) + inner));
+        rows.push((
+            "object.accessor_descriptors",
+            m.len(),
+            map_bytes(&m) + inner,
+        ));
     }
     rows
 }

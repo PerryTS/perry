@@ -1860,7 +1860,10 @@ pub(crate) fn page_meta_census() -> Vec<crate::gc::census::SideTableRow> {
         rows.push((
             "arena.page_generations",
             m.len(),
-            hash_table_bytes(m.capacity(), std::mem::size_of::<(usize, PageGenerationSlot)>()),
+            hash_table_bytes(
+                m.capacity(),
+                std::mem::size_of::<(usize, PageGenerationSlot)>(),
+            ),
         ));
     });
     OLD_GEN_PAGE_OBJECTS.with(|m| {
@@ -1885,7 +1888,10 @@ pub(crate) fn page_meta_census() -> Vec<crate::gc::census::SideTableRow> {
         rows.push((
             "arena.old_gen_page_promoted_runs",
             m.len(),
-            hash_table_bytes(m.capacity(), std::mem::size_of::<(usize, PromotedPageRun)>()),
+            hash_table_bytes(
+                m.capacity(),
+                std::mem::size_of::<(usize, PromotedPageRun)>(),
+            ),
         ));
     });
     rows

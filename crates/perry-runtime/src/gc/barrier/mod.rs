@@ -1981,7 +1981,11 @@ pub(crate) fn barrier_tables_census() -> Vec<crate::gc::census::SideTableRow> {
     EXTERNAL_DIRTY_SLOT_PAGES.with(|m| {
         let m = m.borrow();
         let inner: usize = m.values().map(vec_bytes).sum();
-        rows.push(("gc.external_dirty_slot_pages", m.len(), map_bytes(&m) + inner));
+        rows.push((
+            "gc.external_dirty_slot_pages",
+            m.len(),
+            map_bytes(&m) + inner,
+        ));
     });
     REMEMBERED_SET.with(|s| {
         let s = s.borrow();

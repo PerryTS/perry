@@ -1152,6 +1152,10 @@ pub(crate) fn path_registry_census() -> Vec<crate::gc::census::SideTableRow> {
             return Vec::new();
         };
         let inner: usize = state.entries.keys().map(|k| k.capacity()).sum();
-        vec![("module.path_registry", state.entries.len(), map_bytes(&state.entries) + inner)]
+        vec![(
+            "module.path_registry",
+            state.entries.len(),
+            map_bytes(&state.entries) + inner,
+        )]
     })
 }

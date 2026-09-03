@@ -400,10 +400,16 @@ impl Census {
         self.size_hist[size_bucket(size)].add(size);
         let user = (header as *const u8).add(GC_HEADER_SIZE);
         match obj_type {
-            GC_TYPE_OBJECT => self.visit_object(user as *const crate::object::ObjectHeader, size, flags),
-            GC_TYPE_ARRAY => self.visit_array(user as *const crate::array::ArrayHeader, size, flags),
+            GC_TYPE_OBJECT => {
+                self.visit_object(user as *const crate::object::ObjectHeader, size, flags)
+            }
+            GC_TYPE_ARRAY => {
+                self.visit_array(user as *const crate::array::ArrayHeader, size, flags)
+            }
             GC_TYPE_STRING => self.visit_string(user as *const crate::StringHeader, size, flags),
-            GC_TYPE_CLOSURE => self.visit_closure(user as *const crate::closure::ClosureHeader, size),
+            GC_TYPE_CLOSURE => {
+                self.visit_closure(user as *const crate::closure::ClosureHeader, size)
+            }
             _ => {}
         }
     }
@@ -440,7 +446,12 @@ impl Census {
         }
     }
 
-    unsafe fn visit_array(&mut self, arr: *const crate::array::ArrayHeader, size: usize, flags: u8) {
+    unsafe fn visit_array(
+        &mut self,
+        arr: *const crate::array::ArrayHeader,
+        size: usize,
+        flags: u8,
+    ) {
         let header_bytes = GC_HEADER_SIZE + std::mem::size_of::<crate::array::ArrayHeader>();
         let slot_capacity = size.saturating_sub(header_bytes) / 8;
         let length = ((*arr).length as usize).min(slot_capacity);
@@ -450,8 +461,8 @@ impl Census {
         if flags & GC_FLAG_SHAPE_SHARED != 0 {
             self.arr_shape_keys.add(size);
         }
-        let elems = (arr as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>())
-            as *const u64;
+        let elems =
+            (arr as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *const u64;
         for i in 0..length {
             self.arr_slot_tags[slot_kind(*elems.add(i))] += 1;
         }
@@ -591,12 +602,20 @@ fn phys_footprint_bytes() -> Option<u64> {
 // retag is what pulls it in), so the stats call is Apple-only too.
 #[cfg(all(feature = "alloc-mimalloc", target_vendor = "apple"))]
 fn mimalloc_info() -> serde_json::Value {
-    let (mut e, mut u, mut s, mut rss, mut prss, mut commit, mut pcommit, mut pf) =
-        (0usize, 0usize, 0usize, 0usize, 0usize, 0usize, 0usize, 0usize);
+    let (mut e, mut u, mut s, mut rss, mut prss, mut commit, mut pcommit, mut pf) = (
+        0usize, 0usize, 0usize, 0usize, 0usize, 0usize, 0usize, 0usize,
+    );
     // SAFETY: plain out-params.
     unsafe {
         libmimalloc_sys::mi_process_info(
-            &mut e, &mut u, &mut s, &mut rss, &mut prss, &mut commit, &mut pcommit, &mut pf,
+            &mut e,
+            &mut u,
+            &mut s,
+            &mut rss,
+            &mut prss,
+            &mut commit,
+            &mut pcommit,
+            &mut pf,
         );
     }
     serde_json::json!({
@@ -749,7 +768,10 @@ fn take_census(label: &str, pass1: Option<Vec<usize>>) {
         .into_iter()
         .map(|(n, e, b)| serde_json::json!({"table": n, "entries": e, "bytes": b}))
         .collect();
-    let side_total: usize = side.iter().map(|r| r["bytes"].as_u64().unwrap_or(0) as usize).sum();
+    let side_total: usize = side
+        .iter()
+        .map(|r| r["bytes"].as_u64().unwrap_or(0) as usize)
+        .sum();
 
     let live_total: u64 = c.space_live.iter().map(|a| a.bytes).sum();
     let dead_total: u64 = c.space_dead.iter().map(|a| a.bytes).sum();

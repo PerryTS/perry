@@ -237,7 +237,11 @@ pub(crate) fn class_registry_census() -> Vec<crate::gc::census::SideTableRow> {
                 inner += vt.getters.keys().map(|k| k.capacity()).sum::<usize>();
                 inner += vt.setters.keys().map(|k| k.capacity()).sum::<usize>();
             }
-            rows.push(("class.vtables(methods+accessors)", entries, map_bytes(m) + inner));
+            rows.push((
+                "class.vtables(methods+accessors)",
+                entries,
+                map_bytes(m) + inner,
+            ));
         }
     }
     if let Ok(g) = state::CLASS_STATIC_METHODS.read() {
@@ -273,7 +277,11 @@ pub(crate) fn class_registry_census() -> Vec<crate::gc::census::SideTableRow> {
         if let Ok(g) = lock.read() {
             if let Some(m) = g.as_ref() {
                 let inner: usize = m.iter().map(|(_, k)| k.capacity()).sum();
-                rows.push(("class.prototype_method_nonenum", m.len(), set_bytes(m) + inner));
+                rows.push((
+                    "class.prototype_method_nonenum",
+                    m.len(),
+                    set_bytes(m) + inner,
+                ));
             }
         }
     });

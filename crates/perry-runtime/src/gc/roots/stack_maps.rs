@@ -2010,13 +2010,33 @@ pub(crate) fn stack_map_index_census() -> Vec<crate::gc::census::SideTableRow> {
         return rows;
     };
     let ix = &g.index;
-    rows.push(("stackmap.sections(file-backed)", ix.sections.len(), ix.sections.iter().map(|s| s.len()).sum()));
-    rows.push(("stackmap.functions", ix.functions.len(), vec_bytes(&ix.functions)));
+    rows.push((
+        "stackmap.sections(file-backed)",
+        ix.sections.len(),
+        ix.sections.iter().map(|s| s.len()).sum(),
+    ));
+    rows.push((
+        "stackmap.functions",
+        ix.functions.len(),
+        vec_bytes(&ix.functions),
+    ));
     if let Some(e) = ix.eager.as_ref() {
-        rows.push(("stackmap.eager.records", e.records.len(), vec_bytes(&e.records)));
+        rows.push((
+            "stackmap.eager.records",
+            e.records.len(),
+            vec_bytes(&e.records),
+        ));
         rows.push(("stackmap.eager.roots", e.roots.len(), vec_bytes(&e.roots)));
-        rows.push(("stackmap.eager.derived", e.derived.len(), vec_bytes(&e.derived)));
-        rows.push(("stackmap.eager.function_starts", e.function_starts.len(), vec_bytes(&e.function_starts)));
+        rows.push((
+            "stackmap.eager.derived",
+            e.derived.len(),
+            vec_bytes(&e.derived),
+        ));
+        rows.push((
+            "stackmap.eager.function_starts",
+            e.function_starts.len(),
+            vec_bytes(&e.function_starts),
+        ));
     }
     rows
 }
