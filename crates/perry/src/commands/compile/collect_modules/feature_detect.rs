@@ -333,6 +333,12 @@ pub(super) fn detect_optional_feature_usage(
             "{:?}{:?}{:?}",
             &hir_module.init, &hir_module.functions, &hir_module.classes
         );
+        // Bare `Bun.*` calls have no import declaration. Lowering gives them
+        // the same `module: "bun"` marker as imported calls; retain it so the
+        // optimized runtime includes #9600's utility backends.
+        if hir_debug.contains("module: \"bun\"") || hir_debug.contains("NativeModuleRef(\"bun\")") {
+            ctx.native_module_imports.insert("bun".to_string());
+        }
         for native_module in [
             "lru-cache",
             "big.js",
@@ -522,6 +528,7 @@ pub(super) fn detect_optional_feature_usage(
         );
         if hir_debug.contains("method: \"getHeapSnapshot\"")
             || hir_debug.contains("method: \"writeHeapSnapshot\"")
+            || hir_debug.contains("method: \"generateHeapSnapshot\"")
             || hir_debug.contains("property: \"report\"")
         {
             ctx.uses_diagnostics = true;

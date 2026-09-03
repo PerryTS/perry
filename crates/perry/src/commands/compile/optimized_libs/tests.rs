@@ -1177,6 +1177,32 @@ fn auto_optimize_always_includes_keepalive_anchors() {
 }
 
 #[test]
+fn bun_usage_enables_cli_utility_runtime_pack() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let empty_features: std::collections::BTreeSet<&'static str> =
+        std::collections::BTreeSet::new();
+    let mut imported = CompilationContext::new(dir.path().to_path_buf());
+    imported.native_module_imports.insert("bun".to_string());
+    let imported_features = auto_optimized_cross_features(&imported, &empty_features, &[]);
+    assert!(
+        imported_features
+            .iter()
+            .any(|feature| feature == "perry-runtime/bun-cli-utils"),
+        "a bun import must retain #9600's runtime backends: {imported_features:?}"
+    );
+
+    let mut platform = CompilationContext::new(dir.path().to_path_buf());
+    platform.bun_platform = true;
+    let platform_features = auto_optimized_cross_features(&platform, &empty_features, &[]);
+    assert!(
+        platform_features
+            .iter()
+            .any(|feature| feature == "perry-runtime/bun-cli-utils"),
+        "--platform bun must retain #9600's runtime backends: {platform_features:?}"
+    );
+}
+
+#[test]
 fn data_url_dynamic_import_enables_dyn_eval_and_changes_cache_key() {
     let dir = tempfile::tempdir().expect("tempdir");
     let empty_features = std::collections::BTreeSet::new();

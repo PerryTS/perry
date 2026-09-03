@@ -75,6 +75,14 @@ pub(super) fn try_module_class_static(
                                 // is a String method on the property value.
                                 | ("os", "EOL")
                                 | ("os", "devNull")
+                                // Bun's utility namespaces are object-valued
+                                // exports. Their methods are native closures,
+                                // not class statics on the `bun` dispatcher.
+                                | ("bun", "YAML")
+                                | ("bun", "TOML")
+                                | ("bun", "semver")
+                                | ("bun", "JSONL")
+                                | ("bun", "hash")
                         );
                         // Unimplemented-API gate (#463) for the chained
                         // `mod.X.Y()` case. The lower_member gate fires

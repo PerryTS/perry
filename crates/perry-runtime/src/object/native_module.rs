@@ -1007,6 +1007,15 @@ unsafe fn native_module_property_by_name_impl(
             "stdin" => return crate::bun_compat::js_bun_stdin(),
             "stdout" => return crate::bun_compat::js_bun_stdout(),
             "stderr" => return crate::bun_compat::js_bun_stderr(),
+            "YAML" => return crate::bun_compat::js_bun_yaml(),
+            "TOML" => return crate::bun_compat::js_bun_toml(),
+            "semver" => return crate::bun_compat::js_bun_semver(),
+            "JSONL" => return crate::bun_compat::js_bun_jsonl(),
+            "hash" => {
+                return crate::bun_compat::decorate_bun_hash(bound_native_callable_export_value(
+                    "bun", "hash",
+                ))
+            }
             "version" => return native_string_value(env!("CARGO_PKG_VERSION")),
             "isStandaloneExecutable" => return crate::embedded::is_standalone_executable_value(),
             _ => {}
@@ -1196,7 +1205,12 @@ pub extern "C" fn js_native_module_bind_method(
         {
             return bound;
         }
-        return bound_native_callable_export_value(&module_name, property_name);
+        let value = bound_native_callable_export_value(&module_name, property_name);
+        return if module_name == "bun" && property_name == "hash" {
+            crate::bun_compat::decorate_bun_hash(value)
+        } else {
+            value
+        };
     }
 
     // Try V8 JS runtime fallback for unknown properties (e.g., ethers.Contract)
@@ -1841,9 +1855,13 @@ unsafe fn vt_get_own_field(
         if let Some(bound) = instance_bound_perf_method(&module_name, property_name, nb_ptr) {
             return Some(JSValue::from_bits(bound.to_bits()));
         }
-        return Some(JSValue::from_bits(
-            bound_native_callable_export_value(&module_name, property_name).to_bits(),
-        ));
+        let value = bound_native_callable_export_value(&module_name, property_name);
+        let value = if module_name == "bun" && property_name == "hash" {
+            crate::bun_compat::decorate_bun_hash(value)
+        } else {
+            value
+        };
+        return Some(JSValue::from_bits(value.to_bits()));
     }
     // Object-valued exports (e.g. `perf_hooks.performance` / `.constants`) are
     // resolved by the shared per-property dispatch but are not covered by the
