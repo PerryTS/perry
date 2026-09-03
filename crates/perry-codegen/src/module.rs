@@ -41,13 +41,6 @@ fn strip_leading_linkage(s: &str) -> &str {
     s
 }
 
-/// Rewrite a module-global definition so it is safe to duplicate across
-/// codegen units (#5391). Local-linkage (`private`/`internal`) and bare
-/// external definitions are promoted to `linkonce_odr`, so the linker keeps a
-/// single copy when the same global is emitted into multiple units. `external`
-/// declarations (no initializer) are returned unchanged — duplicating a
-/// declaration is harmless.
-
 /// Symbol name of a global/string definition line (`@name = ...`).
 fn global_symbol_name(line: &str) -> Option<&str> {
     let line = line.trim_start();
@@ -107,6 +100,37 @@ fn collect_metadata_refs(text: &str, out: &mut HashSet<u32>) {
     }
 }
 
+/// True when a global definition already carries LOCAL linkage
+/// (`private`/`internal`). Those are the only definitions whose promotion
+/// `codegen_unit_parts` may skip: a local symbol cannot collide with anything
+/// — not another unit of this module, not another module's copy of a
+/// same-named global — so leaving it alone is inert at link time. Dropping the
+/// promotion on a strong external definition would NOT be: `linkonce_odr` is
+/// what lets ld64 coalesce two modules' same-named globals instead of
+/// reporting a duplicate symbol.
+fn has_local_linkage(line: &str) -> bool {
+    match line.split_once(" = ") {
+        Some((_, rhs)) => {
+            let rhs = rhs.trim_start();
+            rhs.starts_with("private ") || rhs.starts_with("internal ")
+        }
+        None => false,
+    }
+}
+
+/// Rewrite a module-global definition so it is safe to duplicate across
+/// codegen units (#5391). Local-linkage (`private`/`internal`) and bare
+/// external definitions are promoted to `linkonce_odr`, so the linker keeps a
+/// single copy when the same global is emitted into multiple units. `external`
+/// declarations (no initializer) are returned unchanged — duplicating a
+/// declaration is harmless.
+///
+/// Apply this ONLY to a global that really is emitted more than once (#9610).
+/// `linkonce_odr` is weak-for-linker, and `TargetLoweringObjectFileMachO`
+/// routes every weak-for-linker global to the coalesced data section before it
+/// ever consults `SectionKind::isBSS()` — so promoting a `zeroinitializer`
+/// global that only one unit defines moves it out of zerofill `__DATA,__bss`
+/// and writes its zeros into the file.
 fn promote_global_for_units(line: &str) -> String {
     if line.contains(" = external ") {
         return line.to_string();
@@ -991,10 +1015,12 @@ impl LlModule {
     /// the single giant translation unit that makes clang OOM on large bundles.
     ///
     /// The functions are split into `n` contiguous buckets. Every unit carries:
-    ///   * the full string-constant + global set, with local-linkage and bare
-    ///     external DEFINITIONS promoted to `linkonce_odr` (the linker keeps one
-    ///     copy). Globals are a tiny fraction of a large module's IR, so the
-    ///     duplication is cheap; `external` *declarations* are replicated as-is;
+    ///   * the string constants + globals it references, with local-linkage
+    ///     and bare external DEFINITIONS promoted to `linkonce_odr` when more
+    ///     than one unit defines them (the linker keeps one copy) and left in
+    ///     their original linkage otherwise (#9610). Globals are a tiny
+    ///     fraction of a large module's IR, so the duplication is cheap;
+    ///     `external` *declarations* are replicated as-is;
     ///   * the module's external `declare`s plus a synthesized `declare` for
     ///     every locally-defined function the unit does NOT itself define, so
     ///     cross-unit calls resolve at link time (deduped by name, existing
@@ -1048,16 +1074,11 @@ impl LlModule {
             bucket_bytes[target] += sizes[i];
         }
 
-        let shared_strings: Vec<String> = self
-            .string_constants
-            .iter()
-            .map(|s| promote_global_for_units(s))
-            .collect();
-        let shared_globals: Vec<String> = self
-            .globals
-            .iter()
-            .map(|g| promote_global_for_units(g))
-            .collect();
+        // Definitions are carried in their ORIGINAL linkage here; the
+        // duplicate-safe promotion below is applied per unit, and only to the
+        // globals that more than one unit actually defines (#9610).
+        let shared_strings: Vec<String> = self.string_constants.clone();
+        let shared_globals: Vec<String> = self.globals.clone();
 
         // name -> declare line. Existing module declarations (runtime, FFI,
         // cross-module) take precedence; every locally-defined function without
@@ -1098,10 +1119,11 @@ impl LlModule {
 
         // A global is emitted into every unit that REFERENCES it — normally
         // exactly one, and `linkonce_odr` lets the linker fold the rare
-        // multi-unit case. Definition-in-one-unit + `external` elsewhere was
-        // tried first and is subtly wrong under `-dead_strip`: the sole
-        // definition can be discarded with its unit's atoms while a live
-        // reference survives in another object.
+        // multi-unit case (only that case: see `defining_unit_count` below).
+        // Definition-in-one-unit + `external` elsewhere was tried first and is
+        // subtly wrong under `-dead_strip`: the sole definition can be
+        // discarded with its unit's atoms while a live reference survives in
+        // another object.
         let all_globals: Vec<&String> =
             shared_strings.iter().chain(shared_globals.iter()).collect();
         // Globals reference OTHER globals in their initializers (a string
@@ -1157,6 +1179,32 @@ impl LlModule {
             })
             .collect();
         let replicate_globals = self.target_triple.contains("apple");
+        // #9610: how many units end up DEFINING each global. Under the
+        // replicated (Mach-O) policy that is one unit per referencing bucket;
+        // the owner fallback keeps unreferenced globals at one. Only the
+        // globals a link would see twice need `linkonce_odr` to fold, and
+        // linkage is not free: LLVM's Mach-O section picker sends every
+        // weak-for-linker global to the coalesced *data* section, so a
+        // `zeroinitializer` global promoted for no reason leaves
+        // `__DATA,__bss` (zerofill, no file bytes) for file-backed
+        // `__DATA,__data`. Per-site inline caches are `[12 x i64]
+        // zeroinitializer` referenced by exactly one function each — 25.16 MB
+        // of literal zeros in the Claude Code binary's `__data`, 8.2% of the
+        // file, purely from the promotion. Only LOCAL-linkage definitions skip
+        // it (`has_local_linkage`) — that covers every generated cache and
+        // table, and keeps a strong external definition's cross-module
+        // coalescing exactly as it was.
+        let mut defining_unit_count: Vec<usize> = vec![0; all_globals.len()];
+        if replicate_globals {
+            for need in &bucket_needs {
+                for &gi in need {
+                    defining_unit_count[gi] += 1;
+                }
+            }
+        }
+        for count in &mut defining_unit_count {
+            *count = (*count).max(1);
+        }
 
         let unit_posts: Vec<String> = bucket_metadata_refs
             .into_iter()
@@ -1187,7 +1235,11 @@ impl LlModule {
                 let owns = global_owners[gi] == bi;
                 if (replicate_globals && referenced) || owns {
                     if replicate_globals {
-                        pre.push_str(def);
+                        if defining_unit_count[gi] > 1 || !has_local_linkage(def) {
+                            pre.push_str(&promote_global_for_units(def));
+                        } else {
+                            pre.push_str(def);
+                        }
                     } else {
                         pre.push_str(&make_unique_owner_global(def));
                     }
@@ -1705,6 +1757,93 @@ mod tests {
             "size balancing should put the small wrapper in the other unit"
         );
         assert!(global_unit.contains("declare double @__perry_wrap_extern_dep__value(i64)"));
+    }
+
+    #[test]
+    fn mach_o_split_promotes_only_globals_two_units_define() {
+        // #9610: `linkonce_odr` is weak-for-linker, and
+        // `TargetLoweringObjectFileMachO::SelectSectionForGlobal` routes every
+        // weak-for-linker global to the coalesced DATA section before it ever
+        // asks whether the initializer is zero. So promoting a
+        // `zeroinitializer` global that only ONE unit defines moves it out of
+        // zerofill `__DATA,__bss` and writes its zeros into the file — 25.16 MB
+        // (8.2%) of the Claude Code binary, all of it per-site inline caches
+        // (`[12 x i64] zeroinitializer`, one per property-access site, each
+        // referenced by exactly one function and so by exactly one unit).
+        // Promote only what a link would otherwise see defined twice; ELF/COFF
+        // are unaffected either way (their BSS choice ignores linkage).
+        let mut m = LlModule::new("arm64-apple-macosx15.0.0");
+        m.declare_function("js_ic_touch", VOID, &[PTR]);
+        m.add_raw_global("@perry_ic_m__0 = private global [12 x i64] zeroinitializer".to_string());
+        m.add_raw_global("@perry_ic_m__1 = private global [12 x i64] zeroinitializer".to_string());
+        m.add_internal_global("perry_class_keys_m__C", I64, "0");
+        m.add_global("perry_class_shape_id_m__C", I32, "0");
+
+        // Two functions, one per unit under a 2-way split. Each touches its
+        // own cache; both touch the class-keys global, which therefore needs
+        // the linker to fold the two copies onto one storage.
+        for (name, ic) in [
+            ("perry_fn_m__f", "@perry_ic_m__0"),
+            ("perry_fn_m__g", "@perry_ic_m__1"),
+        ] {
+            let f = m.define_function(name, DOUBLE, vec![]);
+            let e = f.create_block("entry");
+            e.call_void("js_ic_touch", &[(PTR, ic)]);
+            e.call_void("js_ic_touch", &[(PTR, "@perry_class_keys_m__C")]);
+            if name == "perry_fn_m__f" {
+                e.call_void("js_ic_touch", &[(PTR, "@perry_class_shape_id_m__C")]);
+            }
+            e.ret(DOUBLE, "0.0");
+        }
+
+        let units = m.render_codegen_units(2);
+        assert_eq!(units.len(), 2, "two functions → two units");
+
+        for ic in ["@perry_ic_m__0", "@perry_ic_m__1"] {
+            let defs: Vec<&String> = units
+                .iter()
+                .filter(|u| {
+                    u.contains(&format!("{ic} = private global [12 x i64] zeroinitializer"))
+                })
+                .collect();
+            assert_eq!(
+                defs.len(),
+                1,
+                "{ic} is referenced by one function, so exactly one unit defines \
+                 it — in its original local linkage, which is what keeps it in __bss"
+            );
+            for u in &units {
+                assert!(
+                    !u.contains(&format!("{ic} = linkonce_odr")),
+                    "{ic} must not be promoted: no second definition exists to fold"
+                );
+            }
+        }
+
+        // The genuinely shared global still gets the promotion — two strong
+        // copies of it in one link is a duplicate-symbol error, and two
+        // *local* copies would be two distinct storages for one runtime slot.
+        let shared_defs = units
+            .iter()
+            .filter(|u| u.contains("@perry_class_keys_m__C = linkonce_odr global i64 0"))
+            .count();
+        assert_eq!(
+            shared_defs, 2,
+            "a global both units reference is defined in both, folded by linkage"
+        );
+
+        // A strong EXTERNAL definition keeps the promotion even at one unit:
+        // `linkonce_odr` is what lets ld64 coalesce two modules' same-named
+        // globals rather than report a duplicate symbol, and this change is
+        // about section placement, not about that.
+        let external_defs = units
+            .iter()
+            .filter(|u| u.contains("@perry_class_shape_id_m__C = linkonce_odr global i32 0"))
+            .count();
+        assert_eq!(
+            external_defs, 1,
+            "a link-visible definition stays `linkonce_odr` however few units define it"
+        );
     }
 
     #[test]
