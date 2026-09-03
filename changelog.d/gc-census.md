@@ -20,3 +20,14 @@ rooted 100-byte strings and 500 rooted 8-slot objects appear with exactly
 those counts and header-inclusive sizes, and reappear as *dead* once their
 roots are dropped. When the variable is unset nothing is installed or armed;
 the residual cost is one relaxed atomic load per event-loop wait.
+
+**Correction to the side-table estimate.** The first version of
+`hash_table_bytes` added 1 before rounding to a power of two, which pushed
+every exactly-sized table to the NEXT bucket count and reported up to twice
+the real storage. `HashMap::capacity()` is already the post-load-factor
+figure, so the bucket count is `capacity * 8/7` with no adjustment. The heap
+walk was never affected — only the estimate for tables outside the GC heap.
+A known-answer test now checks the estimate against real `HashMap`s across
+the size range, including the small-table cases where hashbrown does not
+apply the 7/8 load factor at all (4 buckets hold 3, 8 hold 7); that edge is
+in the test because the first version of the test got it wrong and failed.
