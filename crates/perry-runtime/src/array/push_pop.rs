@@ -205,7 +205,7 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
         crate::gc::layout_transfer(arr as *mut u8, new_ptr as *mut u8);
         // Array expandos and sparse numeric indices live in an address-keyed
         // side table. Growth is not a collector move, so rekey it explicitly
-        // before the old address becomes a forwarding stub (#9371).
+        // before the old address becomes a forwarding stub (#9371, #9201).
         transfer_array_named_property_owner(arr as usize, new_ptr as usize);
         // `js_array_grow` is an allocation replacement outside the collector,
         // so GC's normal side-table rekey phase does not run. Preserve every
