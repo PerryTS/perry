@@ -235,13 +235,7 @@ pub(crate) async fn run_request(
                 let result_bits = super::handle_to_f64(response_id).to_bits();
                 queue_promise_resolution(promise_ptr, true, result_bits);
             }
-            Err(e) => {
-                let err_msg = format!("Fetch error: {}", e);
-                // SAFETY: `fetch_error_bits` allocates an Error JSValue; this is
-                // the worker-side error path it replaces verbatim.
-                let err_bits = unsafe { super::fetch_error_bits(&err_msg) };
-                queue_promise_resolution(promise_ptr, false, err_bits);
-            }
+            Err(e) => super::queue_fetch_transport_error(promise_ptr, &e, &url),
         }
     };
     race_request(promise_ptr, abort_watch, request_future).await;

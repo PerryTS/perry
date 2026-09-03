@@ -55,6 +55,24 @@ pub extern "C" fn js_fetch_take_pending_signal() -> f64 {
     })
 }
 
+/// Convert a fetch `RequestInfo` to the raw pointer ABI used by
+/// `js_fetch_with_options`. A `URL` contributes its `href`; strings and native
+/// `Request` handles keep their existing pointer/handle representation.
+#[no_mangle]
+pub extern "C" fn js_fetch_input_ptr(input: f64) -> i64 {
+    let input_ptr = crate::value::js_nanbox_get_pointer(input);
+    if crate::value::addr_class::is_small_handle(input_ptr as usize) {
+        return input_ptr;
+    }
+
+    let href = crate::url::url_class::js_url_href_if_url(input);
+    if href.to_bits() != crate::value::TAG_UNDEFINED {
+        crate::value::js_nanbox_get_pointer(href)
+    } else {
+        input_ptr
+    }
+}
+
 #[cfg(not(feature = "external-fetch-symbols"))]
 const FETCH_REASON: &str =
     "fetch symbol from perry-stdlib not linked into this binary (runtime-only build)";
@@ -661,7 +679,12 @@ pub(super) extern "C" fn global_this_fetch_thunk(
         .into_iter()
         .next()
         .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
-    let url_ptr = crate::value::js_get_string_pointer_unified(input) as *const crate::StringHeader;
+    let input_ptr = js_fetch_input_ptr(input);
+    let url_ptr = if input_ptr == 0 {
+        crate::value::js_get_string_pointer_unified(input)
+    } else {
+        input_ptr
+    } as *const crate::StringHeader;
     let method_ptr = fetch_option_string_ptr(init, b"method");
     let body_ptr = fetch_option_string_ptr(init, b"body");
     let headers_json_ptr = fetch_headers_json_ptr(init);

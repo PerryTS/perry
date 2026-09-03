@@ -20,6 +20,7 @@ mod abort_bridge;
 pub use abort_bridge::*;
 mod headers;
 mod request_handle;
+mod transport_error;
 pub use headers::*;
 
 // Cached bound-method values for Fetch `Headers` handles — split out to keep
@@ -369,6 +370,13 @@ unsafe fn fetch_error_bits<S: AsRef<str>>(msg: S) -> u64 {
     JSValue::pointer(err as *const u8).bits()
 }
 
+fn queue_fetch_transport_error(promise_ptr: usize, error: &reqwest::Error, url: &str) {
+    let failure = transport_error::FetchFailure::from_reqwest(error, url);
+    crate::common::async_bridge::queue_deferred_resolution(promise_ptr, false, move || {
+        failure.into_js_bits()
+    });
+}
+
 const BODY_ALREADY_USED_MESSAGE: &str = "Body is unusable: Body has already been read";
 
 unsafe fn fetch_type_error_bits<S: AsRef<str>>(msg: S) -> u64 {
@@ -452,11 +460,7 @@ pub unsafe extern "C" fn js_fetch_get(url_ptr: *const StringHeader) -> *mut perr
                 let result_bits = handle_to_f64(response_id).to_bits();
                 queue_promise_resolution(promise_ptr, true, result_bits);
             }
-            Err(e) => {
-                let err_msg = format!("Fetch error: {}", e);
-                let err_bits = fetch_error_bits(&err_msg);
-                queue_promise_resolution(promise_ptr, false, err_bits);
-            }
+            Err(e) => queue_fetch_transport_error(promise_ptr, &e, &url),
         }
     });
 
@@ -527,11 +531,7 @@ pub unsafe extern "C" fn js_fetch_get_with_auth(
                 let result_bits = handle_to_f64(response_id).to_bits();
                 queue_promise_resolution(promise_ptr, true, result_bits);
             }
-            Err(e) => {
-                let err_msg = format!("Fetch error: {}", e);
-                let err_bits = fetch_error_bits(&err_msg);
-                queue_promise_resolution(promise_ptr, false, err_bits);
-            }
+            Err(e) => queue_fetch_transport_error(promise_ptr, &e, &url),
         }
     });
 
@@ -605,11 +605,7 @@ pub unsafe extern "C" fn js_fetch_post_with_auth(
                 let result_bits = handle_to_f64(response_id).to_bits();
                 queue_promise_resolution(promise_ptr, true, result_bits);
             }
-            Err(e) => {
-                let err_msg = format!("Fetch error: {}", e);
-                let err_bits = fetch_error_bits(&err_msg);
-                queue_promise_resolution(promise_ptr, false, err_bits);
-            }
+            Err(e) => queue_fetch_transport_error(promise_ptr, &e, &url),
         }
     });
 
@@ -691,11 +687,7 @@ pub unsafe extern "C" fn js_fetch_post(
                 let result_bits = handle_to_f64(response_id).to_bits();
                 queue_promise_resolution(promise_ptr, true, result_bits);
             }
-            Err(e) => {
-                let err_msg = format!("Fetch error: {}", e);
-                let err_bits = fetch_error_bits(&err_msg);
-                queue_promise_resolution(promise_ptr, false, err_bits);
-            }
+            Err(e) => queue_fetch_transport_error(promise_ptr, &e, &url),
         }
     });
 

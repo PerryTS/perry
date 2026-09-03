@@ -389,6 +389,21 @@ pub extern "C" fn js_typeerror_new(message: *mut StringHeader) -> *mut ErrorHead
     unsafe { alloc_error(ERROR_KIND_TYPE_ERROR, b"TypeError", message, true) }
 }
 
+/// Create a new TypeError with a message and a cause (raw f64 NaN-boxed).
+#[no_mangle]
+pub extern "C" fn js_typeerror_new_with_cause(
+    message: *mut StringHeader,
+    cause: f64,
+) -> *mut ErrorHeader {
+    unsafe {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let cause_handle = scope.root_nanbox_f64(cause);
+        let ptr = alloc_error(ERROR_KIND_TYPE_ERROR, b"TypeError", message, true);
+        error_set_cause(ptr, cause_handle.get_nanbox_f64());
+        ptr
+    }
+}
+
 /// Create a new RangeError with a message
 #[no_mangle]
 pub extern "C" fn js_rangeerror_new(message: *mut StringHeader) -> *mut ErrorHeader {
