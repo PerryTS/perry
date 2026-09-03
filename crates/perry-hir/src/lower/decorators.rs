@@ -382,16 +382,33 @@ fn append_reflect_metadata_decorator(
     }));
 }
 
+/// Read a built-in constructor through `globalThis`, producing the same
+/// first-class function value as a bare built-in identifier.
+fn builtin_metadata_constructor(name: &str) -> Expr {
+    Expr::PropertyGet {
+        object: Box::new(Expr::GlobalGet(0)),
+        property: name.to_string(),
+        byte_offset: 0,
+    }
+}
+
+/// Convert a lowered TypeScript type into its legacy `design:*` metadata
+/// value, following TypeScript's `emitDecoratorMetadata` constructor mapping.
 fn type_metadata_expr(ty: &Type) -> Expr {
     match ty {
         Type::Named(name) => Expr::ClassRef(name.clone()),
         Type::Generic { base, .. } => Expr::ClassRef(base.clone()),
-        Type::Array(_) | Type::Tuple(_) => Expr::ClassRef("Array".to_string()),
-        Type::String => Expr::ClassRef("String".to_string()),
-        Type::Number | Type::Int32 | Type::BigInt => Expr::ClassRef("Number".to_string()),
-        Type::Boolean => Expr::ClassRef("Boolean".to_string()),
-        Type::Object(_) => Expr::ClassRef("Object".to_string()),
-        Type::Function(_) => Expr::ClassRef("Function".to_string()),
+        Type::Array(_) | Type::Tuple(_) => builtin_metadata_constructor("Array"),
+        Type::String | Type::StringLiteral(_) => builtin_metadata_constructor("String"),
+        Type::Number | Type::Int32 => builtin_metadata_constructor("Number"),
+        Type::Boolean => builtin_metadata_constructor("Boolean"),
+        Type::BigInt => builtin_metadata_constructor("BigInt"),
+        Type::Symbol => builtin_metadata_constructor("Symbol"),
+        Type::Promise(_) => builtin_metadata_constructor("Promise"),
+        Type::Object(_) | Type::Union(_) | Type::Any | Type::Unknown => {
+            builtin_metadata_constructor("Object")
+        }
+        Type::Function(_) => builtin_metadata_constructor("Function"),
         _ => Expr::Undefined,
     }
 }
