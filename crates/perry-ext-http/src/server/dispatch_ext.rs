@@ -99,6 +99,14 @@ fn is_http_server_method(name: &str) -> bool {
     )
 }
 
+fn is_bun_server_method(name: &str) -> bool {
+    matches!(name, "stop" | "requestIP")
+}
+
+fn is_bun_server_property(name: &str) -> bool {
+    is_bun_server_method(name) || matches!(name, "hostname" | "port" | "development" | "protocol")
+}
+
 fn is_http_server_property(name: &str) -> bool {
     is_http_server_method(name)
         || matches!(
@@ -344,8 +352,9 @@ unsafe extern "C" fn http_server_method_dispatch_ext(
     if name.is_empty() {
         return 0;
     }
-    let value = if is_http_server_method(name)
-        && crate::server::handle_dispatch::js_ext_http_server_is_handle(handle) != 0
+    let value = if crate::server::handle_dispatch::js_ext_http_server_is_handle(handle) != 0
+        && (is_http_server_method(name)
+            || (is_bun_server_method(name) && crate::server::bun_server::is_bun_server(handle)))
     {
         Some(
             crate::server::handle_dispatch::js_ext_http_server_dispatch_method(
@@ -409,8 +418,9 @@ unsafe extern "C" fn http_server_property_dispatch_ext(
     if name.is_empty() {
         return 0;
     }
-    let value = if is_http_server_property(name)
-        && crate::server::handle_dispatch::js_ext_http_server_is_handle(handle) != 0
+    let value = if crate::server::handle_dispatch::js_ext_http_server_is_handle(handle) != 0
+        && (is_http_server_property(name)
+            || (is_bun_server_property(name) && crate::server::bun_server::is_bun_server(handle)))
     {
         Some(
             crate::server::handle_dispatch::js_ext_http_server_dispatch_property(

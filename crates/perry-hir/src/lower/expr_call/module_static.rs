@@ -87,6 +87,7 @@ pub(super) fn try_module_static_methods(
                             | "generateHeapSnapshot"
                             | "file"
                             | "write"
+                            | "serve"
                             | "pathToFileURL"
                             | "fileURLToPath"
                     ) {

@@ -95,6 +95,7 @@ pub(super) static CALLABLE_EXPORT_TABLE: &[(&str, &[&str])] = &[
             "generateHeapSnapshot",
             "hash",
             "pathToFileURL",
+            "serve",
             "spawn",
             "stringWidth",
             "stripANSI",

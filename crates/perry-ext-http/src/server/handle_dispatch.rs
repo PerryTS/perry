@@ -226,6 +226,8 @@ fn http_server_method_bytes(name: &str) -> Option<&'static [u8]> {
         "setTimeout" => Some(b"setTimeout"),
         "ref" => Some(b"ref"),
         "unref" => Some(b"unref"),
+        "stop" => Some(b"stop"),
+        "requestIP" => Some(b"requestIP"),
         "setTicketKeys" => Some(b"setTicketKeys"),
         "@@__perry_wk_asyncDispose" => Some(b"@@__perry_wk_asyncDispose"),
         _ => None,
@@ -602,6 +604,18 @@ pub unsafe extern "C" fn js_ext_http_server_dispatch_method(
             }
             self_ref
         }
+        "stop" if crate::server::bun_server::is_bun_server(handle) => {
+            crate::server::bun_server::js_bun_server_stop(
+                handle,
+                args.first().copied().unwrap_or(undef),
+            )
+        }
+        "requestIP" if crate::server::bun_server::is_bun_server(handle) => {
+            crate::server::bun_server::js_bun_server_request_ip(
+                handle,
+                args.first().copied().unwrap_or(undef),
+            )
+        }
         "@@__perry_wk_asyncDispose" => {
             if server_is_listening(handle, is_https, is_h2) {
                 if is_h2 {
@@ -642,6 +656,18 @@ pub unsafe extern "C" fn js_ext_http_server_dispatch_property(
     let is_https = get_handle::<HttpsServer>(handle).is_some();
     let is_h2 = get_handle::<Http2SecureServer>(handle).is_some();
     match property.as_str() {
+        "hostname" => crate::server::bun_server::hostname(handle)
+            .map(|hostname| string_ptr_value(alloc_string(&hostname).as_raw()))
+            .unwrap_or(undef),
+        "port" => crate::server::bun_server::port(handle)
+            .map(|port| port as f64)
+            .unwrap_or(undef),
+        "development" => crate::server::bun_server::development(handle)
+            .map(bool_value)
+            .unwrap_or(undef),
+        "protocol" if crate::server::bun_server::is_bun_server(handle) => {
+            string_ptr_value(alloc_string("http").as_raw())
+        }
         "listening" => bool_value(server_is_listening(handle, is_https, is_h2)),
         "ALPNProtocols" if is_https => get_handle::<HttpsServer>(handle)
             .and_then(|server| server.alpn_protocols.as_ref())

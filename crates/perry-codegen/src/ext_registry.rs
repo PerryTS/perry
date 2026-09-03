@@ -715,6 +715,26 @@ thread_local! {
 /// ~30 ns per emission, fully amortized by the surrounding format!
 /// strings.
 pub(crate) fn record_ffi_call(symbol: &str) {
+    // #9603: `js_bun_serve` is implemented by perry-ext-http but crosses a
+    // narrow JSON bridge into perry-stdlib's Fetch registries to construct
+    // Request values and consume Response values. It therefore has two
+    // providers, unlike the ordinary one-symbol/one-owner registry rows.
+    if symbol == "js_bun_serve" {
+        if provider_recording_permitted() {
+            let mut guard = USED_PROVIDERS.lock().expect("USED_PROVIDERS poisoned");
+            let providers = guard.get_or_insert_with(HashSet::new);
+            providers.insert(OwnerKind::WellKnown("http"));
+            providers.insert(OwnerKind::Stdlib {
+                feature: Some("web-fetch"),
+            });
+        }
+        MODULE_CAPTURE.with(|cell| {
+            if let Some(set) = cell.borrow_mut().as_mut() {
+                set.insert("js_bun_serve");
+            }
+        });
+        return;
+    }
     for (name, owner) in FFI_REGISTRY {
         if *name == symbol {
             if provider_recording_permitted() {
@@ -1010,6 +1030,18 @@ mod tests {
             "js_node_http_create_server_with_options",
             OwnerKind::WellKnown("http"),
         );
+    }
+
+    #[test]
+    fn bun_serve_routes_to_http_and_fetch_providers() {
+        let _guard = ProviderTestGuard::new();
+        let _ = take_used_providers();
+        record_ffi_call("js_bun_serve");
+        let got = take_used_providers();
+        assert!(got.contains(&OwnerKind::WellKnown("http")));
+        assert!(got.contains(&OwnerKind::Stdlib {
+            feature: Some("web-fetch")
+        }));
     }
 
     /// #3954 regression: HTTP-suite native-table rows can emit newer

@@ -1121,6 +1121,14 @@ pub(crate) const API_MANIFEST_PART_4: &[ApiEntry] = &[
     method("bun", "write", false, None),
     method("bun", "spawn", false, None),
     method("bun", "Terminal", false, None),
+    method_sig(
+        "bun",
+        "serve",
+        false,
+        None,
+        &[p_any("options")],
+        TypeSpec::Any,
+    ),
     method("bun", "pathToFileURL", false, None),
     method("bun", "fileURLToPath", false, None),
     // #8537 — OpenCode compatibility coverage added these dispatch rows
