@@ -1445,6 +1445,14 @@ fn deferred_registration_flush_sites() {
     // Every exemption is a claim about why the deferral cannot be observed.
     const EXEMPT: &[(&str, &str)] = &[
         (
+            "page_meta_census",
+            "PERRY_GC_CENSUS read-only size estimate (gc/census.rs): an observer \
+             must not mutate the tables it measures, and a pending deferred \
+             registration is at most a handful of entries of under-estimate in \
+             a diagnostic byte count — it removes nothing, so the resurrection \
+             hazard does not apply",
+        ),
+        (
             "register_old_block_pages",
             "creates zeroed per-page META entries when a BLOCK is registered; \
              reads no counter the deferral owes",
