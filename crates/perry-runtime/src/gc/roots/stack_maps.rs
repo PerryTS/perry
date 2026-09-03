@@ -1997,5 +1997,4 @@ mod decode_tests;
 #[path = "stack_maps_walker_agreement.rs"]
 mod walker_agreement;
 
-mod census_rows;
-pub(crate) use census_rows::stack_map_index_census;
+pub(crate) mod census_rows;
