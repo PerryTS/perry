@@ -101,6 +101,12 @@ release number. `Bun.isStandaloneExecutable` is always `true`, because Perry
 produces standalone binaries. Unsupported properties are absent; a direct call
 to an unsupported `Bun.*` member raises Perry's Bun compatibility error.
 
+`Bun.spawn` supports the command-array and `{ cmd, ...options }` forms, piped
+output consumers such as `child.stdout.text()`, lifecycle controls, and raw-fd
+or `Bun.file` stdio. On POSIX targets, `Bun.Terminal` can attach a subprocess
+to Perry's native PTY implementation; ConPTY-backed terminals are not yet
+available on Windows.
+
 ## Embedding Assets
 
 Bake static files (an SPA `dist/`, images, JSON, fonts, …) into the standalone

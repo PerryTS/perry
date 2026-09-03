@@ -139,8 +139,8 @@ pub extern "C" fn js_child_process_fork(module_ptr: i64, args_ptr: i64, opts_ptr
         ),
         ("emit", cp_cast2(cp_method_emit)),
         ("kill", cp_cast1(cp_method_kill)),
-        ("ref", cp_cast0(cp_method_this0)),
-        ("unref", cp_cast0(cp_method_this0)),
+        ("ref", cp_cast0(cp_method_ref)),
+        ("unref", cp_cast0(cp_method_unref)),
         ("send", cp_cast4(cp_method_send)),
         ("disconnect", cp_cast0(cp_method_disconnect)),
     ];

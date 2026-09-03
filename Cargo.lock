@@ -6381,6 +6381,7 @@ dependencies = [
  "mach2",
  "mimalloc",
  "node-semver",
+ "notify",
  "perry-diagnostics",
  "perry-dispatch",
  "perry-parser",

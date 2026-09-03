@@ -10,6 +10,9 @@ fn native_callable_export_arity_reference(module: &str, prop: &str) -> Option<u3
         ) => Some(1),
         ("bun", "deepEquals" | "generateHeapSnapshot" | "write") => Some(2),
         ("bun", "wrapAnsi") => Some(3),
+            "Glob" | "Terminal" | "file" | "fileURLToPath" | "hash" | "pathToFileURL"
+            | "stringWidth",
+        ("bun", "spawn" | "write") => Some(2),
         // bun:ffi (#6562).
         ("bun:ffi", "dlopen") => Some(2),
         ("bun:ffi", "ptr" | "CString" | "CFunction" | "linkSymbols") => Some(1),
@@ -290,6 +293,7 @@ static CALLABLE_EXPORT_ARITY_TABLE: &[(&str, &[(&str, u32)])] = &[
         "bun",
         &[
             ("Glob", 1),
+            ("Terminal", 1),
             ("deepEquals", 2),
             ("file", 1),
             ("fileURLToPath", 1),
@@ -297,6 +301,7 @@ static CALLABLE_EXPORT_ARITY_TABLE: &[(&str, &[(&str, u32)])] = &[
             ("generateHeapSnapshot", 2),
             ("hash", 1),
             ("pathToFileURL", 1),
+            ("spawn", 2),
             ("stringWidth", 1),
             ("stripANSI", 1),
             ("which", 1),

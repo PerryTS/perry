@@ -117,6 +117,27 @@ pub(crate) extern "C" fn cp_method_this1(closure: *const ClosureHeader, _a: f64)
     cp_this(closure)
 }
 
+/// Keep a live child attached to the event loop. Calls are idempotent, matching
+/// Node and Bun's process-handle contract.
+pub(crate) extern "C" fn cp_method_ref(closure: *const ClosureHeader) -> f64 {
+    let this = cp_this(closure);
+    if let Some(handle) = cp_handle_of(this) {
+        reactor::cp_live_set_refed(handle, true);
+    }
+    this
+}
+
+/// Let the program terminate while this child continues running. The reactor
+/// still pumps and roots the child whenever another handle keeps the loop
+/// alive; only the active-handle accounting changes.
+pub(crate) extern "C" fn cp_method_unref(closure: *const ClosureHeader) -> f64 {
+    let this = cp_this(closure);
+    if let Some(handle) = cp_handle_of(this) {
+        reactor::cp_live_set_refed(handle, false);
+    }
+    this
+}
+
 /// Low-level `new ChildProcess().spawn(options)` validation boundary. Node's
 /// constructor is public even though normal callers use `spawn()`; keep the
 /// constructed idle object inert after its setup checks.

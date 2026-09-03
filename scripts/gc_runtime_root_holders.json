@@ -155,9 +155,21 @@
     },
     {
       "file": "crates/perry-runtime/src/child_process/reactor.rs",
+      "name": "CP_LIVE_COUNT",
+      "verdict": "not_a_gc_pointer",
+      "why": "Atomic count of spawned children that have not reached close. It is only a lock-free emptiness gate for the reactor and root scanner; the ChildProcess values themselves live in CP_LIVE and are visited by cp_reactor_scan_roots_mut."
+    },
+    {
+      "file": "crates/perry-runtime/src/child_process/reactor.rs",
       "name": "CP_NEXT_LIVE_ID",
       "verdict": "not_a_gc_pointer",
       "why": "Monotonic id counter for CP_LIVE keys. CP_LIVE itself is covered by cp_reactor_scan_roots_mut."
+    },
+    {
+      "file": "crates/perry-runtime/src/child_process/reactor.rs",
+      "name": "CP_REFED_COUNT",
+      "verdict": "not_a_gc_pointer",
+      "why": "Atomic count of live child-process handles that currently keep the event loop active. It stores only a scalar count; ChildProcess JS values live in CP_LIVE and are visited by cp_reactor_scan_roots_mut."
     },
     {
       "file": "crates/perry-runtime/src/closure/alloc.rs",
@@ -410,6 +422,12 @@
       "name": "EXIT_SINK",
       "verdict": "test_only",
       "why": "#[cfg(test)] sink for the pty exit callback's two JSValues. Never compiled into a shipped binary."
+    },
+    {
+      "file": "crates/perry-runtime/src/pty/reactor.rs",
+      "name": "PTY_REFED_COUNT",
+      "verdict": "not_a_gc_pointer",
+      "why": "Atomic count of live PTY handles that currently keep the event loop active. It stores only a scalar count; PTY JS values live in PTY_LIVE and are visited by pty_reactor_scan_roots_mut."
     },
     {
       "file": "crates/perry-runtime/src/regex.rs",

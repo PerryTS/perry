@@ -39,6 +39,7 @@ pub(crate) fn is_native_module_callable_export_reference(module: &str, prop: &st
         && matches!(
             prop,
             "Glob"
+                | "Terminal"
                 | "deepEquals"
                 | "file"
                 | "fileURLToPath"
@@ -46,6 +47,7 @@ pub(crate) fn is_native_module_callable_export_reference(module: &str, prop: &st
                 | "generateHeapSnapshot"
                 | "hash"
                 | "pathToFileURL"
+                | "spawn"
                 | "stringWidth"
                 | "stripANSI"
                 | "which"

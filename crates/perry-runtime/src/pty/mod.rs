@@ -34,7 +34,7 @@ pub(crate) mod reactor;
 #[cfg(unix)]
 pub use unix_impl::js_pty_spawn;
 #[cfg(unix)]
-pub(crate) use unix_impl::pty_emit;
+pub(crate) use unix_impl::{pty_emit, pty_handle_of, pty_register};
 
 #[cfg(unix)]
 mod unix_impl {
@@ -141,7 +141,7 @@ mod unix_impl {
 
     /// Read the reactor registry key (`__ptyHandle`) off an IPty. `None` for
     /// a foreign object.
-    fn pty_handle_of(this: f64) -> Option<u64> {
+    pub(crate) fn pty_handle_of(this: f64) -> Option<u64> {
         let h = cp_get_field(this, b"__ptyHandle");
         if JSValue::from_bits(h.to_bits()).is_undefined() {
             return None;
