@@ -848,6 +848,11 @@ pub extern "C" fn perry_wasm_host_instance_memory_len(inst: *mut WasmInstanceHan
 /// where wasm could have grown the memory since (see
 /// `perry-runtime`'s `rebind_active_wasm_memories`).
 ///
+/// Takes a SHARED borrow of the instance, so it is safe to call from inside an
+/// imported function while wasmi still has the `Store` borrowed for the
+/// enclosing call — the same re-entrancy the table accessors rely on. Only
+/// MUTATING re-entry has to be deferred (see `ACTIVE_INSTANCE_TABLES`).
+///
 /// Returns null with `*out_len == 0` when the instance exports no memory.
 #[no_mangle]
 pub extern "C" fn perry_wasm_host_instance_memory_span(
