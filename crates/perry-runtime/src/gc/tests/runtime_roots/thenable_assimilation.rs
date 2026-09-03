@@ -55,7 +55,8 @@ fn test_assimilated_thenable_wrapper_survives_then_callback_copied_minor_gc() {
     // `{ then(resolve, reject) { … } }` — an object literal (class_id 0), so
     // assimilation takes the `then`-as-data-property path.
     let thenable_handle = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 1));
-    let key_handle = scope.root_string_ptr(crate::string::js_string_from_bytes(b"then".as_ptr(), 4));
+    let key_handle =
+        scope.root_string_ptr(crate::string::js_string_from_bytes(b"then".as_ptr(), 4));
     crate::object::js_object_set_field_by_name(
         thenable_handle.get_raw_mut_ptr(),
         key_handle.get_raw_const_ptr::<crate::StringHeader>(),
