@@ -42,6 +42,12 @@ use swc_ecma_transforms_typescript::{tsx, typescript, Config as TypeScriptConfig
 use swc_ecma_visit::{Visit, VisitWith};
 
 const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
+/// Mirror of `perry_runtime::value::addr_class::HANDLE_BAND_MAX` — this crate
+/// links only `perry-ffi`, so the constant cannot be imported. #9219: a bare
+/// `>= 0x10000` floor admits the fetch/zlib/proxy handle bands, which are real
+/// addresses on Linux (macOS happens to hide it), so anything below the band
+/// top must not be treated as a heap pointer.
+const HANDLE_BAND_MAX: usize = 0x100000;
 const PLUGIN_FILE_PREFIX: &str = "perry-bun-plugin:";
 
 extern "C" {
@@ -707,7 +713,7 @@ fn raw_heap_address(value: f64) -> i64 {
     let bits = value.to_bits();
     if bits >> 48 == 0x7FFD {
         (bits & POINTER_MASK) as i64
-    } else if bits >> 48 == 0 && bits >= 0x10000 {
+    } else if bits >> 48 == 0 && bits as usize >= HANDLE_BAND_MAX {
         bits as i64
     } else {
         0
@@ -1256,11 +1262,26 @@ fn run_build(options_value: f64) -> Result<Vec<BuildOutput>, Vec<BunDiagnostic>>
 
 fn array_from_values(values: impl IntoIterator<Item = JsValue>) -> JsValue {
     let values = values.into_iter().collect::<Vec<_>>();
-    let mut array = unsafe { js_array_alloc(values.len() as u32) };
-    for value in values {
-        array = unsafe { js_array_push(array, value) };
+    // Every `js_array_push` can grow the array and drive a collection, which
+    // moves both the array and the elements still waiting in `values`. Root all
+    // of them and re-read through the handles at each use rather than holding
+    // raw addresses across the loop.
+    let scope = TransientRootScope::enter();
+    let rooted: Vec<_> = values
+        .into_iter()
+        .map(|value| scope.root_nanbox(f64::from_bits(value.bits())))
+        .collect();
+    let array = scope.root_addr(unsafe { js_array_alloc(rooted.len() as u32) } as i64);
+    for value in &rooted {
+        let grown = unsafe {
+            js_array_push(
+                array.get() as *mut ArrayHeader,
+                JsValue::from_bits(value.get().to_bits()),
+            )
+        };
+        debug_assert!(!grown.is_null());
     }
-    JsValue::from_object_ptr(array)
+    JsValue::from_object_ptr(array.get() as *mut ArrayHeader)
 }
 
 extern "C" fn bun_build_output_text(closure: *const RawClosureHeader) -> f64 {
