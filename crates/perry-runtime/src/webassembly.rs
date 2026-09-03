@@ -201,7 +201,6 @@ extern "C" {
         import_context: u64,
         out_err: *mut *mut c_char,
     ) -> *mut c_void;
-    fn perry_wasm_host_instance_set_import_context(inst: *mut c_void, import_context: u64);
     #[allow(dead_code)]
     fn perry_wasm_host_instance_drop(inst: *mut c_void);
     fn perry_wasm_host_instance_memory_span(inst: *mut c_void, out_len: *mut usize) -> *mut u8;
@@ -715,6 +714,70 @@ impl Drop for ActiveInstanceGuard {
     }
 }
 
+crate::perry_thread_local! {
+    /// `import token -> the imports object the instance was instantiated with`.
+    ///
+    /// The token is a monotonic counter, NOT a heap address. That is the whole
+    /// point: it is what the wasm host stores and hands back to
+    /// [`call_wasm_import`], and the host has no way to learn that a JS object
+    /// moved. Before this table the host stored the imports object's NaN-boxed
+    /// bits directly, so a copying collection triggered inside one import
+    /// callback left every later import in the same call reading a relocated
+    /// object — the lookup failed, `call_wasm_import` returned 0, and the host
+    /// substituted the import's default result, so wasm ran on with no error
+    /// at all. Through undici's llhttp that silently dropped
+    /// `on_message_complete`: a truncated HTTP response reported as a clean
+    /// parse (found by the #9611 llhttp differential).
+    static WASM_IMPORT_OBJECTS: std::cell::RefCell<crate::fast_hash::PtrHashMap<u64, f64>> =
+        std::cell::RefCell::new(crate::fast_hash::new_ptr_hash_map());
+    /// Source of import tokens. Starts at 1 so 0 is never a live token.
+    static WASM_NEXT_IMPORT_TOKEN: std::cell::Cell<u64> = const { std::cell::Cell::new(1) };
+}
+
+/// Reserve a token for `imports` and record it. The token is what crosses the
+/// C ABI into the host; the object itself stays on this side, where the
+/// collector can see it.
+fn register_instance_imports(imports: f64) -> u64 {
+    let token = WASM_NEXT_IMPORT_TOKEN.with(|next| {
+        let token = next.get();
+        next.set(token.wrapping_add(1).max(1));
+        token
+    });
+    WASM_IMPORT_OBJECTS.with(|objects| {
+        objects.borrow_mut().insert(token, imports);
+    });
+    token
+}
+
+/// The imports object for `token`, or `undefined` when the token is unknown.
+fn instance_imports(token: u64) -> f64 {
+    WASM_IMPORT_OBJECTS.with(|objects| {
+        objects
+            .borrow()
+            .get(&token)
+            .copied()
+            .unwrap_or_else(nanbox_undefined)
+    })
+}
+
+/// Rewrite the imports objects in [`WASM_IMPORT_OBJECTS`] when a collection
+/// relocates them. Registered in `gc_init`.
+///
+/// Rewrite-only, like [`scan_wasm_memory_binding_roots_mut`]: every path that
+/// can reach an import already roots the imports object on the stack —
+/// `call_captured_wasm_export` roots the export closure's capture for the
+/// whole call, and instantiation roots it across the start function — so this
+/// table is a lookup side table, not the reference that keeps the object
+/// alive. Marking from here would instead pin the imports object of every
+/// instance ever created, since entries live as long as their instance.
+pub(crate) fn scan_wasm_import_object_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    WASM_IMPORT_OBJECTS.with(|objects| {
+        for slot in objects.borrow_mut().values_mut() {
+            visitor.visit_metadata_nanbox_f64_slot(slot);
+        }
+    });
+}
+
 /// Rewrite the published-buffer address in [`WASM_MEMORY_BINDINGS`] if the
 /// collector ever relocates a `BufferHeader`. Registered in `gc_init`.
 ///
@@ -900,8 +963,10 @@ unsafe extern "C" fn call_wasm_import(
     // write `memory.buffer`, so re-point it at the live span first (#9611).
     rebind_active_wasm_memories();
 
+    // `context` is an import TOKEN, not an object address: the host cannot be
+    // told that a collection moved the imports object, so it never holds one.
     let scope = crate::gc::RuntimeHandleScope::new();
-    let imports = scope.root_nanbox_f64(f64::from_bits(context));
+    let imports = scope.root_nanbox_f64(instance_imports(context));
     let imports_value = JSValue::from_bits(imports.get_nanbox_f64().to_bits());
     if !imports_value.is_pointer() {
         return 0;
@@ -979,9 +1044,9 @@ fn call_captured_wasm_export(closure: *const crate::closure::ClosureHeader, args
     let instance = scope.root_nanbox_f64(crate::closure::js_closure_get_capture_f64(closure, 3));
     let imports = scope.root_nanbox_f64(crate::closure::js_closure_get_capture_f64(closure, 4));
     let handle = crate::closure::js_closure_get_capture_f64(closure, 5) as usize;
-    unsafe {
-        perry_wasm_host_instance_set_import_context(inst, imports.get_nanbox_f64().to_bits())
-    };
+    // No per-call import-context store: the token the host holds was fixed at
+    // instantiation and cannot go stale, which is the bug this replaced.
+    let _ = &imports;
     let result = {
         let _active = ActiveInstanceGuard::enter(inst);
         if handle != 0 {
@@ -1434,7 +1499,7 @@ pub extern "C" fn js_webassembly_instance_new(
         perry_wasm_host_instance_new(
             module,
             Some(call_wasm_import),
-            imports.get_nanbox_f64().to_bits(),
+            register_instance_imports(imports.get_nanbox_f64()),
             &mut err,
         )
     };
@@ -1480,7 +1545,7 @@ pub extern "C" fn js_webassembly_instantiate(bytes_jsval: f64, imports_jsval: f6
         perry_wasm_host_instance_new(
             module,
             Some(call_wasm_import),
-            imports.get_nanbox_f64().to_bits(),
+            register_instance_imports(imports.get_nanbox_f64()),
             &mut err2,
         )
     };
