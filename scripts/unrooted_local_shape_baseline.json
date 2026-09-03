@@ -5,7 +5,7 @@
     "crates/perry-ext-commander/src/lib.rs": 4,
     "crates/perry-ext-cron/src/lib.rs": 2,
     "crates/perry-ext-decimal/src/lib.rs": 1,
-    "crates/perry-ext-events/src/lib.rs": 21,
+    "crates/perry-ext-events/src/lib.rs": 12,
     "crates/perry-ext-events/src/module_iterators.rs": 2,
     "crates/perry-ext-events/src/tests.rs": 2,
     "crates/perry-ext-fastify/src/upgrade.rs": 4,
@@ -48,8 +48,7 @@
     "crates/perry-stdlib/src/ioredis.rs": 14,
     "crates/perry-stdlib/src/lodash.rs": 21,
     "crates/perry-stdlib/src/mongodb.rs": 4,
-    "crates/perry-stdlib/src/mysql2/pool.rs": 2,
-    "crates/perry-stdlib/src/mysql2/result.rs": 43,
+    "crates/perry-stdlib/src/mysql2/result.rs": 44,
     "crates/perry-stdlib/src/mysql2/types.rs": 16,
     "crates/perry-stdlib/src/nodemailer.rs": 3,
     "crates/perry-stdlib/src/pg/result.rs": 14,
@@ -84,5 +83,5 @@
     "crates/perry-stdlib/src/zlib.rs": 2
   },
   "schema_version": 2,
-  "total": 576
+  "total": 566
 }

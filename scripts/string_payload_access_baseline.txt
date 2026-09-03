@@ -6,14 +6,14 @@
 inline-offset | perry-ext-ethers | 2
 inline-offset | perry-ext-fastify | 3
 inline-offset | perry-ext-http | 1
-inline-offset | perry-ext-mysql2 | 2
+inline-offset | perry-ext-mysql2 | 1
 inline-offset | perry-ext-net | 1
 inline-offset | perry-ext-nodemailer | 1
 inline-offset | perry-ext-pg | 2
 inline-offset | perry-ext-zlib | 3
 inline-offset | perry-ffi | 3
 inline-offset | perry-runtime | 358
-inline-offset | perry-stdlib | 48
+inline-offset | perry-stdlib | 40
 inline-offset | perry-updater | 5
 reader-helper | perry-ext-ethers | 1
 reader-helper | perry-runtime | 12

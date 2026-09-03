@@ -273,6 +273,10 @@ pub(super) enum RawEvent {
     /// The fallback poller's diff for watcher `id` — already relative.
     Polled { id: usize, event: WatchEvent },
     /// A backend error; `paths` is what the backend attached (may be empty).
+    /// Constructed only by the `notify` backend — on macOS the FSEvents driver
+    /// reports failures at construction time instead, so the variant is
+    /// consumption-only there.
+    #[cfg_attr(target_os = "macos", allow(dead_code))]
     Error {
         source: Source,
         paths: Vec<PathBuf>,

@@ -68,6 +68,10 @@ ALLOWLIST = {
     # preflight, or the skip path is masked entirely. It has no reader outside
     # the guard, so it cannot damage another test's assertion.
     "YOUNG_PIN_EVER": "#7645",
+    # #9613's FSEvents symbol table: a OnceLock caching dlopen'd CoreServices
+    # function addresses. Process-wide by nature (dynamic-loader handles),
+    # write-once, holds no JS-heap pointers and no per-test state.
+    "API": "#9613",
     # Read, never written, by `test_clear_symbol_side_table_roots`: these two are
     # the process-lifetime registries the per-thread `SYMBOL_POINTERS` rebuild is
     # derived FROM. Their symbols are `Box::leak`ed, so a process-wide identity
