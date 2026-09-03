@@ -219,6 +219,13 @@ fn every_page_object_reader_expands_promoted_runs() {
     const EXEMPT: &[(&str, &str)] = &[
         ("expand_promoted_run", "the expansion itself"),
         (
+            "page_meta_census",
+            "PERRY_GC_CENSUS read-only size estimate (gc/census.rs): reports the \
+             promoted-run map as its own row and must not expand (mutate) what \
+             it measures — a described run is bytes in that row, not a missing \
+             entry",
+        ),
+        (
             "unregister_old_block_pages",
             "DISCARDS the run rather than expanding it — the backing block is \
              going away, so its bounds no longer address arena memory",
