@@ -294,11 +294,20 @@ pub(crate) fn build_optimized_libs(
                         binding.tracking.as_deref().unwrap_or("no tracking issue")
                     );
                 }
-                tokio_using_bindings.push((
-                    binding.krate.clone(),
-                    binding.lib.clone(),
-                    binding.tracking.clone(),
-                ));
+                // Multiple import spellings can resolve to one archive
+                // (`mysql2` + `mysql2/promise`, `http` + `https`). Keep the
+                // Cargo package set and link line unique; alias multiplicity
+                // is not a different build graph.
+                if !tokio_using_bindings
+                    .iter()
+                    .any(|(krate, lib, _tracking)| krate == &binding.krate && lib == &binding.lib)
+                {
+                    tokio_using_bindings.push((
+                        binding.krate.clone(),
+                        binding.lib.clone(),
+                        binding.tracking.clone(),
+                    ));
+                }
             }
             if matches!(module_normalized, "net" | "http" | "https" | "http2") {
                 external_net_transport = true;
@@ -653,13 +662,13 @@ pub(crate) fn build_optimized_libs(
     };
     let workspace_root = cargo_target_dir_path(workspace_root);
 
-    // Hash the (features, panic_mode, target, wasm-host) tuple into the
-    // target dir name so cargo treats each combination as its own
-    // incremental cache. `wasm-host` lives on `perry-runtime` (not
-    // perry-stdlib), so it isn't part of `feature_arg`; bake it in here
-    // separately so a wasm program's build doesn't get served from a
-    // cached non-wasm dir (which would lack `js_webassembly_*` symbols)
-    // and vice versa (would carry unresolved `perry_wasm_host_*` refs).
+    // Hash the (features, panic_mode, target, wasm-host, shared-tokio wrapper
+    // set) tuple into the target dir name so cargo treats each combination as
+    // its own incremental cache. `wasm-host` lives on `perry-runtime` (not
+    // perry-stdlib), so it isn't part of `feature_arg`; the selected ext
+    // wrappers are Cargo packages rather than features, so they are not in it
+    // either. Bake both into the key so neither graph can be served or
+    // overwritten by another compile using the same stripped stdlib features.
     //
     // The compiler version is part of the key too. Codegen emits calls to
     // runtime entrypoints (e.g. `js_promise_run_promise_jobs`,
@@ -671,8 +680,14 @@ pub(crate) fn build_optimized_libs(
     // "undefined symbol" link failure for exactly the newly-added entrypoints.
     // Keying on the version forces a matching rebuild whenever perry upgrades.
     // Cheap djb2 — no need for the SipHash overhead.
-    let key_input =
-        auto_optimized_cache_key(&feature_arg, panic_abort_safe, panic_immediate, target, ctx);
+    let key_input = auto_optimized_cache_key(
+        &feature_arg,
+        panic_abort_safe,
+        panic_immediate,
+        target,
+        ctx,
+        &tokio_using_bindings,
+    );
     let mut hash: u64 = 5381;
     for b in key_input.as_bytes() {
         hash = hash.wrapping_mul(33).wrapping_add(*b as u64);

@@ -101,18 +101,37 @@ pub(crate) fn size_lto_fat() -> bool {
 
 /// Cache key for the auto-optimize target dir + build stamp. Hashed into the
 /// `target/perry-auto-<hash>` dir name so each (features, panic-mode, target,
-/// runtime-gate, version) combination gets its own incremental cache. Kept in
-/// one place so `build_optimized_libs` and its freshness tests can never drift.
+/// runtime-gate, shared-tokio-wrapper set, version) combination gets its own
+/// incremental cache. Kept in one place so `build_optimized_libs` and its
+/// freshness tests can never drift.
 pub(crate) fn auto_optimized_cache_key(
     feature_arg: &str,
     panic_abort_safe: bool,
     panic_immediate: bool,
     target: Option<&str>,
     ctx: &CompilationContext,
+    tokio_using_bindings: &[(String, String, Option<String>)],
 ) -> String {
     let target_str = target.unwrap_or("host");
+    // The stripped stdlib feature set is not enough to identify this Cargo
+    // graph. For example, mysql2 and a CPU-only async wrapper both reduce to
+    // `async-runtime`, but only the mysql2 build selects perry-ext-mysql2.
+    // Sharing a target dir lets the second invocation replace stdlib after
+    // the first invocation releases its build lock but before it links. The
+    // first process then sees an ext archive and stdlib archive from different
+    // dependency graphs (#9470; the same class produced #9094's Linux link).
+    //
+    // Sort and deduplicate here as a defensive measure: aliases such as
+    // `mysql2` + `mysql2/promise` name the same wrapper and must describe the
+    // same graph regardless of discovery order or alias multiplicity.
+    let mut tokio_bindings: Vec<String> = tokio_using_bindings
+        .iter()
+        .map(|(krate, lib, _tracking)| format!("{krate}:{lib}"))
+        .collect();
+    tokio_bindings.sort_unstable();
+    tokio_bindings.dedup();
     format!(
-        "{}|{}|{}|wasm={}|napi={}|regex={}|temporal={}|ee={}|url={}|norm={}|seg={}|loc={}|intlns={}|gns={}{}{}{}{}{}{}{}{}{}|diag={}|dgram={}|http2={}|nodetest={}|dyneval={}|sizeopt={}|anchors={}|v={}",
+        "{}|{}|{}|wasm={}|napi={}|regex={}|temporal={}|ee={}|url={}|norm={}|seg={}|loc={}|intlns={}|gns={}{}{}{}{}{}{}{}{}{}|diag={}|dgram={}|http2={}|nodetest={}|dyneval={}|tokio={}|sizeopt={}|anchors={}|v={}",
         feature_arg,
         panic_abort_safe,
         target_str,
@@ -150,6 +169,7 @@ pub(crate) fn auto_optimized_cache_key(
         perry_hir::has_deferred_dynamic_code_sites()
             || ctx.native_module_imports.contains("vm")
             || ctx.uses_data_url_dynamic_import,
+        tokio_bindings.join(","),
         format!(
             "{}{}{}",
             size_opt_level().unwrap_or("off"),
