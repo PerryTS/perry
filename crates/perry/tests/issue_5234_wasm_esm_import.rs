@@ -102,6 +102,25 @@ const LIVE_MEMORY_MULTI_WASM: &[u8] = &[
     0x00, 0x0b,
 ];
 
+/// A module with an exported memory it grows from inside wasm, plus byte
+/// load/store helpers at a caller-chosen offset:
+///
+/// ```wat
+/// (module
+///   (memory (export "memory") 1)
+///   (func (export "load")  (param i32) (result i32) local.get 0 i32.load8_u)
+///   (func (export "store") (param i32 i32) local.get 0 local.get 1 i32.store8)
+///   (func (export "grow")  (param i32) (result i32) local.get 0 memory.grow))
+/// ```
+const GROW_MEMORY_WASM: &[u8] = &[
+    0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x0b, 0x02, 0x60, 0x01, 0x7f, 0x01, 0x7f,
+    0x60, 0x02, 0x7f, 0x7f, 0x00, 0x03, 0x04, 0x03, 0x00, 0x01, 0x00, 0x05, 0x03, 0x01, 0x00, 0x01,
+    0x07, 0x20, 0x04, 0x06, 0x6d, 0x65, 0x6d, 0x6f, 0x72, 0x79, 0x02, 0x00, 0x04, 0x6c, 0x6f, 0x61,
+    0x64, 0x00, 0x00, 0x05, 0x73, 0x74, 0x6f, 0x72, 0x65, 0x00, 0x01, 0x04, 0x67, 0x72, 0x6f, 0x77,
+    0x00, 0x02, 0x0a, 0x1a, 0x03, 0x07, 0x00, 0x20, 0x00, 0x2d, 0x00, 0x00, 0x0b, 0x09, 0x00, 0x20,
+    0x00, 0x20, 0x01, 0x3a, 0x00, 0x00, 0x0b, 0x06, 0x00, 0x20, 0x00, 0x40, 0x00, 0x0b,
+];
+
 /// `(module (table (export "refs") 2 externref))`
 const EXTERNREF_TABLE_WASM: &[u8] = &[
     0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x04, 0x04, 0x01, 0x6f, 0x00, 0x02, 0x07, 0x08,
@@ -126,6 +145,12 @@ import { throughGlue } from "./glue";
 import memoryDefault, { memory } from "./memory.wasm";
 import liveDefault, { load, store, pair, memory as liveMemory } from "./live-memory.wasm";
 import { refs } from "./externref-table.wasm";
+import {
+    grow,
+    load as growLoad,
+    store as growStore,
+    memory as growMemory,
+} from "./grow-memory.wasm";
 import { runTableCycle } from "./table-glue";
 import addWasmPath from "./file-add.wasm" with { type: "file" };
 import importedWasmPath from "./file-imported.wasm" with { type: "file" };
@@ -165,6 +190,30 @@ const importedInstance = new WebAssembly.Instance(importedModule, {
 });
 console.log("fileImported=" + importedInstance.exports.call(20));
 console.log("instanceLength=" + WebAssembly.Instance.length);
+
+// #9611: `memory.buffer` exposes the engine's linear memory itself rather than
+// a copy synchronised around each call, so a view built BEFORE a call observes
+// what that call wrote, and a write through that view is what the next call
+// reads. This is the views-observability contract the zero-copy binding must
+// not break.
+const liveView = new Uint8Array(liveMemory.buffer);
+liveView[0] = 21;
+console.log("viewToWasm=" + load());
+store(77);
+console.log("wasmToView=" + liveView[0]);
+
+// A `memory.grow` executed inside wasm reallocates the engine's linear memory.
+// The buffer that was published before the grow is detached, exactly as node
+// does, and `memory.buffer` is a fresh view over the grown span whose earlier
+// bytes survived.
+growStore(5, 65);
+const beforeGrow = growMemory.buffer;
+console.log("growOldPages=" + grow(1));
+console.log("growByteLength=" + growMemory.buffer.byteLength);
+console.log("growDetached=" + beforeGrow.byteLength);
+console.log("growKept=" + growLoad(5));
+new Uint8Array(growMemory.buffer)[70000] = 3;
+console.log("growTail=" + growLoad(70000));
 "#;
 
 const GLUE_FIXTURE: &str = r#"
@@ -207,6 +256,8 @@ fn write_fixture(root: &std::path::Path) {
     std::fs::write(root.join("memory.wasm"), MEMORY_WASM).expect("write memory.wasm");
     std::fs::write(root.join("live-memory.wasm"), LIVE_MEMORY_MULTI_WASM)
         .expect("write live memory wasm");
+    std::fs::write(root.join("grow-memory.wasm"), GROW_MEMORY_WASM)
+        .expect("write grow memory wasm");
     std::fs::write(root.join("externref-table.wasm"), EXTERNREF_TABLE_WASM)
         .expect("write externref table wasm");
     std::fs::write(
@@ -277,4 +328,15 @@ fn wasm_esm_import_instantiates_and_exposes_exports() {
     assert!(stdout.contains("fileInstance=21"), "stdout:\n{stdout}");
     assert!(stdout.contains("fileImported=21"), "stdout:\n{stdout}");
     assert!(stdout.contains("instanceLength=1"), "stdout:\n{stdout}");
+    // #9611 — zero-copy linear memory.
+    assert!(stdout.contains("viewToWasm=21"), "stdout:\n{stdout}");
+    assert!(stdout.contains("wasmToView=77"), "stdout:\n{stdout}");
+    assert!(stdout.contains("growOldPages=1"), "stdout:\n{stdout}");
+    assert!(
+        stdout.contains("growByteLength=131072"),
+        "stdout:\n{stdout}"
+    );
+    assert!(stdout.contains("growDetached=0"), "stdout:\n{stdout}");
+    assert!(stdout.contains("growKept=65"), "stdout:\n{stdout}");
+    assert!(stdout.contains("growTail=3"), "stdout:\n{stdout}");
 }

@@ -66,6 +66,9 @@ pub(crate) use header::{
     buffer_alloc_foreign, collect_dead_registered_buffers_post_trace,
     finalize_collected_dead_buffer, is_foreign_backed_buffer,
 };
+// Only the wasm host re-points a foreign wrapper (#9611); see the fn's docs.
+#[cfg(feature = "wasm-host")]
+pub(crate) use header::rebind_foreign_buffer;
 #[cfg(test)]
 pub(crate) use header::{
     test_buffer_addr_window_bounds, test_buffer_registry_probe_count, test_data_view_registry_len,

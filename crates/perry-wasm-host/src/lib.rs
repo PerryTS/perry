@@ -15,7 +15,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use wasmi::{Engine, ExternRef, ExternType, Linker, Module, Ref, Store, Table, Val, ValType};
+use wasmi::{Engine, ExternRef, ExternType, Func, Linker, Module, Ref, Store, Table, Val, ValType};
 
 /// Numeric WebAssembly value. MVP supports only the four core numeric types;
 /// `externref` / `funcref` / `v128` are out of scope (see issue #76, "Open
@@ -61,6 +61,30 @@ struct InstanceInner {
     /// Keep the module alive for the lifetime of the instance so `engine` /
     /// `module` references stay valid.
     _module: WasmModuleHandle,
+    /// Exports resolved once and then called by index (#9611). Resolving by
+    /// name on every call cost a `Map<Box<str>, Extern>` probe plus a
+    /// `FuncType` clone plus two `Vec` allocations for the argument and result
+    /// buffers — roughly the whole sub-microsecond floor of a Wasm call once
+    /// the linear-memory copy was gone.
+    exports: Vec<CachedExport>,
+    /// `export name -> index into `exports``.
+    export_handles: HashMap<String, usize>,
+    /// The exported linear memory, resolved once. The embedder re-reads its
+    /// span after every call to notice a `memory.grow`, so a by-name
+    /// `get_memory` there would put a string lookup back on the hot path
+    /// (#9611).
+    memory: Option<wasmi::Memory>,
+}
+
+/// One resolved export: the `Func` handle, its signature, and the argument /
+/// result buffers reused across calls so a steady-state call allocates nothing.
+struct CachedExport {
+    name: String,
+    func: Func,
+    params: Box<[ValType]>,
+    results: Box<[ValType]>,
+    args: Vec<Val>,
+    outs: Vec<Val>,
 }
 
 struct WasmHostState {
@@ -348,11 +372,15 @@ fn instantiate_with_import_callback(
     let instance = linker
         .instantiate_and_start(&mut store, &module.0.module)
         .map_err(|e| WasmHostError::Link(e.to_string()))?;
+    let memory = instance.get_memory(&store, "memory");
     Ok(WasmInstanceHandle {
         inner: Box::new(InstanceInner {
             store,
             instance,
             _module: module.clone(),
+            exports: Vec::new(),
+            export_handles: HashMap::new(),
+            memory,
         }),
     })
 }
@@ -378,57 +406,112 @@ fn coerce_numeric_value(value: WasmVal, expected: ValType) -> Option<Val> {
 /// returned in declaration order. wasm-bindgen uses multi-value returns for
 /// pointer/length pairs, so preserving only the first result is not enough for
 /// real generated glue.
-pub fn call_export(
-    inst: &mut WasmInstanceHandle,
-    name: &str,
-    args: &[WasmVal],
-) -> Result<Vec<WasmVal>, WasmHostError> {
-    let func = inst
-        .inner
-        .instance
-        .get_func(&inst.inner.store, name)
-        .ok_or_else(|| WasmHostError::InvalidExport(name.to_string()))?;
-
+/// Resolve an export function to a cache index, resolving by name at most
+/// once per instance. `None` when the instance has no function export by that
+/// name.
+fn resolve_export(inst: &mut WasmInstanceHandle, name: &str) -> Option<usize> {
+    if let Some(&index) = inst.inner.export_handles.get(name) {
+        return Some(index);
+    }
+    let func = inst.inner.instance.get_func(&inst.inner.store, name)?;
     let ty = func.ty(&inst.inner.store);
-    let params = ty.params();
-    if params.len() != args.len() {
-        return Err(WasmHostError::Runtime(format!(
-            "{name}: arity mismatch (export expects {}, got {})",
-            params.len(),
-            args.len()
-        )));
+    let index = inst.inner.exports.len();
+    inst.inner.exports.push(CachedExport {
+        name: name.to_string(),
+        func,
+        params: ty.params().to_vec().into_boxed_slice(),
+        results: ty.results().to_vec().into_boxed_slice(),
+        args: Vec::new(),
+        outs: Vec::new(),
+    });
+    inst.inner.export_handles.insert(name.to_string(), index);
+    Some(index)
+}
+
+/// Call a previously resolved export. Results are left in the cached entry's
+/// `outs` buffer, which stays valid until the next call on the same export.
+fn call_resolved_export(
+    inst: &mut WasmInstanceHandle,
+    index: usize,
+    args: &[WasmVal],
+) -> Result<(), WasmHostError> {
+    {
+        let entry = inst
+            .inner
+            .exports
+            .get_mut(index)
+            .ok_or_else(|| WasmHostError::InvalidExport(format!("export handle {index}")))?;
+        if entry.params.len() != args.len() {
+            return Err(WasmHostError::Runtime(format!(
+                "{}: arity mismatch (export expects {}, got {})",
+                entry.name,
+                entry.params.len(),
+                args.len()
+            )));
+        }
+        entry.args.clear();
+        for (value, expected) in args.iter().copied().zip(entry.params.iter().copied()) {
+            let coerced = coerce_numeric_value(value, expected).ok_or_else(|| {
+                WasmHostError::UnsupportedSignature(format!(
+                    "{}: unsupported parameter type {expected:?}",
+                    entry.name
+                ))
+            })?;
+            entry.args.push(coerced);
+        }
+        entry.outs.clear();
+        entry
+            .outs
+            .extend(entry.results.iter().copied().map(Val::default));
     }
 
-    let wasmi_args: Vec<Val> = args
-        .iter()
-        .copied()
-        .zip(ty.params().iter().copied())
-        .map(|(value, expected)| {
-            coerce_numeric_value(value, expected).ok_or_else(|| {
-                WasmHostError::UnsupportedSignature(format!(
-                    "{name}: unsupported parameter type {expected:?}"
-                ))
-            })
-        })
-        .collect::<Result<_, _>>()?;
-    let mut results: Vec<Val> = ty.results().iter().copied().map(Val::default).collect();
     begin_instance_call(inst);
-    let call_result = func.call(&mut inst.inner.store, &wasmi_args, &mut results);
+    let call_result = {
+        // Split the borrow: the call needs the store mutably while reading the
+        // cached argument buffer and filling the cached result buffer, and all
+        // three are disjoint fields of the same `InstanceInner`.
+        let inner = &mut *inst.inner;
+        let CachedExport {
+            func, args, outs, ..
+        } = &mut inner.exports[index];
+        func.call(&mut inner.store, args, outs)
+    };
     let table_result = finish_instance_call(inst);
     call_result.map_err(|e| WasmHostError::Runtime(e.to_string()))?;
     table_result?;
+    Ok(())
+}
 
-    results
+/// Decode the results of the most recent [`call_resolved_export`].
+fn resolved_export_results(
+    inst: &WasmInstanceHandle,
+    index: usize,
+) -> Result<Vec<WasmVal>, WasmHostError> {
+    let entry = &inst.inner.exports[index];
+    entry
+        .outs
         .iter()
         .map(|value| {
             WasmVal::from_wasmi(value).ok_or_else(|| {
                 WasmHostError::UnsupportedSignature(format!(
-                    "{name}: unsupported result type {:?}",
+                    "{}: unsupported result type {:?}",
+                    entry.name,
                     value.ty()
                 ))
             })
         })
         .collect()
+}
+
+pub fn call_export(
+    inst: &mut WasmInstanceHandle,
+    name: &str,
+    args: &[WasmVal],
+) -> Result<Vec<WasmVal>, WasmHostError> {
+    let index =
+        resolve_export(inst, name).ok_or_else(|| WasmHostError::InvalidExport(name.to_string()))?;
+    call_resolved_export(inst, index, args)?;
+    resolved_export_results(inst, index)
 }
 
 // ────────────────────────────────────────────────────────────────────────
@@ -754,6 +837,38 @@ pub extern "C" fn perry_wasm_host_instance_memory_len(inst: *mut WasmInstanceHan
         .unwrap_or(0)
 }
 
+/// Return the base pointer and byte length of the exported `memory`, i.e. the
+/// live wasmi linear memory itself rather than a copy of it (#9611).
+///
+/// The embedder publishes this span as the bytes of the JavaScript-visible
+/// `WebAssembly.Memory.prototype.buffer`, so a JS write lands in wasm memory
+/// and a wasm write is visible to JS with no copying on either side. The span
+/// is only valid until the instance next executes `memory.grow`, which
+/// reallocates wasmi's backing store: callers must re-read it at every point
+/// where wasm could have grown the memory since (see
+/// `perry-runtime`'s `rebind_active_wasm_memories`).
+///
+/// Returns null with `*out_len == 0` when the instance exports no memory.
+#[no_mangle]
+pub extern "C" fn perry_wasm_host_instance_memory_span(
+    inst: *mut WasmInstanceHandle,
+    out_len: *mut usize,
+) -> *mut u8 {
+    if !out_len.is_null() {
+        unsafe { *out_len = 0 };
+    }
+    let Some(inst) = (unsafe { inst.as_ref() }) else {
+        return std::ptr::null_mut();
+    };
+    let Some(memory) = inst.inner.memory else {
+        return std::ptr::null_mut();
+    };
+    if !out_len.is_null() {
+        unsafe { *out_len = memory.data_size(&inst.inner.store) };
+    }
+    memory.data_ptr(&inst.inner.store)
+}
+
 /// Copy the exported `memory` into caller-provided storage.
 #[no_mangle]
 pub extern "C" fn perry_wasm_host_instance_memory_copy(
@@ -1039,11 +1154,33 @@ pub const WASM_VAL_KIND_NONE: u8 = 0xFF;
 /// (i32/f32 widened, i64/f64 as-is). On success writes every result into the
 /// parallel output arrays and sets `*out_count`. On error returns 0 and writes
 /// `*out_err`.
+/// Resolve an export function to a stable handle so repeated calls skip the
+/// by-name lookup and the `FuncType` clone (#9611). Returns 0 when the
+/// instance has no function export by that name; any other value is an opaque
+/// handle for [`perry_wasm_host_call_export_by_handle`].
 #[no_mangle]
-pub extern "C" fn perry_wasm_host_call_export(
+pub extern "C" fn perry_wasm_host_instance_export_handle(
     inst: *mut WasmInstanceHandle,
     name: *const c_char,
     name_len: usize,
+) -> usize {
+    if inst.is_null() || name.is_null() {
+        return 0;
+    }
+    let inst = unsafe { &mut *inst };
+    let name_bytes = unsafe { slice::from_raw_parts(name as *const u8, name_len) };
+    let Ok(name) = std::str::from_utf8(name_bytes) else {
+        return 0;
+    };
+    resolve_export(inst, name).map_or(0, |index| index + 1)
+}
+
+/// Shared marshalling for both C call paths: decode the argument arrays, run
+/// the export, and encode the results into the caller's output arrays.
+#[allow(clippy::too_many_arguments)]
+fn call_export_c_abi(
+    inst: &mut WasmInstanceHandle,
+    index: usize,
     arg_kinds: *const u8,
     arg_bits: *const u64,
     arg_count: usize,
@@ -1053,26 +1190,6 @@ pub extern "C" fn perry_wasm_host_call_export(
     out_count: *mut usize,
     out_err: *mut *mut c_char,
 ) -> i32 {
-    if inst.is_null()
-        || name.is_null()
-        || out_count.is_null()
-        || (out_capacity != 0 && (out_kinds.is_null() || out_bits.is_null()))
-    {
-        capture_err(out_err, WasmHostError::Runtime("null arg".into()));
-        return 0;
-    }
-    let inst = unsafe { &mut *inst };
-    let name_bytes = unsafe { slice::from_raw_parts(name as *const u8, name_len) };
-    let name_str = match std::str::from_utf8(name_bytes) {
-        Ok(s) => s,
-        Err(_) => {
-            capture_err(
-                out_err,
-                WasmHostError::InvalidExport("non-utf8 export name".into()),
-            );
-            return 0;
-        }
-    };
     let kinds = unsafe { slice::from_raw_parts(arg_kinds, arg_count) };
     let bits = unsafe { slice::from_raw_parts(arg_bits, arg_count) };
     let mut args: Vec<WasmVal> = Vec::with_capacity(arg_count);
@@ -1092,38 +1209,136 @@ pub extern "C" fn perry_wasm_host_call_export(
         };
         args.push(v);
     }
-    match call_export(inst, name_str, &args) {
-        Ok(values) if values.len() <= out_capacity => {
-            for (index, value) in values.iter().copied().enumerate() {
-                let (kind, bits) = match value {
-                    WasmVal::I32(value) => (WASM_VAL_KIND_I32, value as u32 as u64),
-                    WasmVal::I64(value) => (WASM_VAL_KIND_I64, value as u64),
-                    WasmVal::F32(value) => (WASM_VAL_KIND_F32, value.to_bits() as u64),
-                    WasmVal::F64(value) => (WASM_VAL_KIND_F64, value.to_bits()),
-                };
-                unsafe {
-                    *out_kinds.add(index) = kind;
-                    *out_bits.add(index) = bits;
-                }
-            }
-            unsafe { *out_count = values.len() };
-            1
-        }
-        Ok(values) => {
-            capture_err(
-                out_err,
-                WasmHostError::UnsupportedSignature(format!(
-                    "{name_str}: {} results exceed host capacity {out_capacity}",
-                    values.len()
-                )),
-            );
-            0
-        }
+    if let Err(e) = call_resolved_export(inst, index, &args) {
+        capture_err(out_err, e);
+        return 0;
+    }
+    let values = match resolved_export_results(inst, index) {
+        Ok(values) => values,
         Err(e) => {
             capture_err(out_err, e);
-            0
+            return 0;
+        }
+    };
+    if values.len() > out_capacity {
+        capture_err(
+            out_err,
+            WasmHostError::UnsupportedSignature(format!(
+                "{}: {} results exceed host capacity {out_capacity}",
+                inst.inner.exports[index].name,
+                values.len()
+            )),
+        );
+        return 0;
+    }
+    for (offset, value) in values.iter().copied().enumerate() {
+        let (kind, bits) = match value {
+            WasmVal::I32(value) => (WASM_VAL_KIND_I32, value as u32 as u64),
+            WasmVal::I64(value) => (WASM_VAL_KIND_I64, value as u64),
+            WasmVal::F32(value) => (WASM_VAL_KIND_F32, value.to_bits() as u64),
+            WasmVal::F64(value) => (WASM_VAL_KIND_F64, value.to_bits()),
+        };
+        unsafe {
+            *out_kinds.add(offset) = kind;
+            *out_bits.add(offset) = bits;
         }
     }
+    unsafe { *out_count = values.len() };
+    1
+}
+
+/// Call an export previously resolved by
+/// [`perry_wasm_host_instance_export_handle`].
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub extern "C" fn perry_wasm_host_call_export_by_handle(
+    inst: *mut WasmInstanceHandle,
+    handle: usize,
+    arg_kinds: *const u8,
+    arg_bits: *const u64,
+    arg_count: usize,
+    out_kinds: *mut u8,
+    out_bits: *mut u64,
+    out_capacity: usize,
+    out_count: *mut usize,
+    out_err: *mut *mut c_char,
+) -> i32 {
+    if inst.is_null()
+        || handle == 0
+        || out_count.is_null()
+        || (arg_count != 0 && (arg_kinds.is_null() || arg_bits.is_null()))
+        || (out_capacity != 0 && (out_kinds.is_null() || out_bits.is_null()))
+    {
+        capture_err(out_err, WasmHostError::Runtime("null arg".into()));
+        return 0;
+    }
+    let inst = unsafe { &mut *inst };
+    call_export_c_abi(
+        inst,
+        handle - 1,
+        arg_kinds,
+        arg_bits,
+        arg_count,
+        out_kinds,
+        out_bits,
+        out_capacity,
+        out_count,
+        out_err,
+    )
+}
+
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub extern "C" fn perry_wasm_host_call_export(
+    inst: *mut WasmInstanceHandle,
+    name: *const c_char,
+    name_len: usize,
+    arg_kinds: *const u8,
+    arg_bits: *const u64,
+    arg_count: usize,
+    out_kinds: *mut u8,
+    out_bits: *mut u64,
+    out_capacity: usize,
+    out_count: *mut usize,
+    out_err: *mut *mut c_char,
+) -> i32 {
+    if inst.is_null()
+        || name.is_null()
+        || out_count.is_null()
+        || (arg_count != 0 && (arg_kinds.is_null() || arg_bits.is_null()))
+        || (out_capacity != 0 && (out_kinds.is_null() || out_bits.is_null()))
+    {
+        capture_err(out_err, WasmHostError::Runtime("null arg".into()));
+        return 0;
+    }
+    let inst = unsafe { &mut *inst };
+    let name_bytes = unsafe { slice::from_raw_parts(name as *const u8, name_len) };
+    let name_str = match std::str::from_utf8(name_bytes) {
+        Ok(s) => s,
+        Err(_) => {
+            capture_err(
+                out_err,
+                WasmHostError::InvalidExport("non-utf8 export name".into()),
+            );
+            return 0;
+        }
+    };
+    let Some(index) = resolve_export(inst, name_str) else {
+        capture_err(out_err, WasmHostError::InvalidExport(name_str.to_string()));
+        return 0;
+    };
+    call_export_c_abi(
+        inst,
+        index,
+        arg_kinds,
+        arg_bits,
+        arg_count,
+        out_kinds,
+        out_bits,
+        out_capacity,
+        out_count,
+        out_err,
+    )
 }
 
 #[cfg(test)]
@@ -1172,11 +1387,214 @@ mod tests {
         0x07, 0x08, 0x01, 0x04, 0x63, 0x61, 0x6c, 0x6c, 0x00, 0x01, 0x0a, 0x06, 0x01, 0x04, 0x00,
         0x10, 0x00, 0x0b,
     ];
+    /// A module with an exported memory it can GROW from inside wasm, plus
+    /// byte load/store helpers at a caller-chosen offset:
+    ///
+    /// ```wat
+    /// (module
+    ///   (memory (export "memory") 1)
+    ///   (func (export "load")  (param i32) (result i32) local.get 0 i32.load8_u)
+    ///   (func (export "store") (param i32 i32) local.get 0 local.get 1 i32.store8)
+    ///   (func (export "grow")  (param i32) (result i32) local.get 0 memory.grow))
+    /// ```
+    const GROW_MEMORY_WASM: &[u8] = &[
+        0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x0b, 0x02, 0x60, 0x01, 0x7f, 0x01,
+        0x7f, 0x60, 0x02, 0x7f, 0x7f, 0x00, 0x03, 0x04, 0x03, 0x00, 0x01, 0x00, 0x05, 0x03, 0x01,
+        0x00, 0x01, 0x07, 0x20, 0x04, 0x06, 0x6d, 0x65, 0x6d, 0x6f, 0x72, 0x79, 0x02, 0x00, 0x04,
+        0x6c, 0x6f, 0x61, 0x64, 0x00, 0x00, 0x05, 0x73, 0x74, 0x6f, 0x72, 0x65, 0x00, 0x01, 0x04,
+        0x67, 0x72, 0x6f, 0x77, 0x00, 0x02, 0x0a, 0x1a, 0x03, 0x07, 0x00, 0x20, 0x00, 0x2d, 0x00,
+        0x00, 0x0b, 0x09, 0x00, 0x20, 0x00, 0x20, 0x01, 0x3a, 0x00, 0x00, 0x0b, 0x06, 0x00, 0x20,
+        0x00, 0x40, 0x00, 0x0b,
+    ];
     /// `(module (@custom "meta" "\01\02\03"))`.
     const CUSTOM_WASM: &[u8] = &[
         0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x00, 0x08, 0x04, 0x6d, 0x65, 0x74, 0x61,
         0x01, 0x02, 0x03,
     ];
+
+    fn memory_span(inst: &mut WasmInstanceHandle) -> (*mut u8, usize) {
+        let mut len = 0usize;
+        let ptr = perry_wasm_host_instance_memory_span(inst, &mut len);
+        (ptr, len)
+    }
+
+    /// #9611: the span handed to the embedder IS wasmi's linear memory, not a
+    /// copy of it. Both directions have to be visible with no sync call in
+    /// between — that is the whole point of publishing it as `memory.buffer`.
+    #[test]
+    fn memory_span_aliases_the_live_linear_memory() {
+        let module = compile(GROW_MEMORY_WASM).expect("compile");
+        let mut inst = instantiate(&module).expect("instantiate");
+        let (ptr, len) = memory_span(&mut inst);
+        assert!(!ptr.is_null());
+        assert_eq!(len, 65536);
+
+        // Host write -> wasm read.
+        unsafe { *ptr.add(3) = 7 };
+        assert_eq!(
+            call_export(&mut inst, "load", &[WasmVal::I32(3)]).expect("load"),
+            vec![WasmVal::I32(7)]
+        );
+
+        // Wasm write -> host read.
+        call_export(&mut inst, "store", &[WasmVal::I32(4), WasmVal::I32(9)]).expect("store");
+        assert_eq!(unsafe { *ptr.add(4) }, 9);
+    }
+
+    /// A `memory.grow` executed inside wasm reallocates wasmi's backing store,
+    /// so the previously published span can dangle. The embedder re-reads the
+    /// span at every boundary where JS can observe the memory again; this pins
+    /// that the re-read reports the grown size and preserves the old bytes.
+    #[test]
+    fn memory_span_follows_a_grow_from_inside_wasm() {
+        let module = compile(GROW_MEMORY_WASM).expect("compile");
+        let mut inst = instantiate(&module).expect("instantiate");
+        call_export(&mut inst, "store", &[WasmVal::I32(5), WasmVal::I32(65)]).expect("store");
+        let (_, before) = memory_span(&mut inst);
+
+        assert_eq!(
+            call_export(&mut inst, "grow", &[WasmVal::I32(1)]).expect("grow"),
+            vec![WasmVal::I32(1)],
+            "memory.grow returns the previous size in pages"
+        );
+
+        let (ptr, after) = memory_span(&mut inst);
+        assert_eq!(before, 65536);
+        assert_eq!(after, 131072, "the re-read span reports the grown size");
+        assert_eq!(
+            unsafe { *ptr.add(5) },
+            65,
+            "bytes written before the grow survive it"
+        );
+        // The grown tail is addressable through the re-read span.
+        unsafe { *ptr.add(70000) = 3 };
+        assert_eq!(
+            call_export(&mut inst, "load", &[WasmVal::I32(70000)]).expect("load"),
+            vec![WasmVal::I32(3)]
+        );
+    }
+
+    /// #9611: an export resolves to a handle once and every later call goes by
+    /// index, skipping the by-name `get_func` probe and the `FuncType` clone.
+    #[test]
+    fn export_handles_resolve_once_and_call_by_index() {
+        let module = compile(ADD_WASM).expect("compile");
+        let mut inst = instantiate(&module).expect("instantiate");
+        let name = b"add";
+        let handle = perry_wasm_host_instance_export_handle(
+            &mut inst,
+            name.as_ptr() as *const c_char,
+            name.len(),
+        );
+        assert_ne!(handle, 0);
+        assert_eq!(
+            perry_wasm_host_instance_export_handle(
+                &mut inst,
+                name.as_ptr() as *const c_char,
+                name.len(),
+            ),
+            handle,
+            "re-resolving the same export reuses its cache entry"
+        );
+        let missing = b"nope";
+        assert_eq!(
+            perry_wasm_host_instance_export_handle(
+                &mut inst,
+                missing.as_ptr() as *const c_char,
+                missing.len(),
+            ),
+            0,
+            "an export that does not exist has no handle"
+        );
+
+        // Repeated calls through the cached entry must not leak state between
+        // calls — the argument and result buffers are reused.
+        for (a, b, expected) in [(2, 3, 5), (10, 20, 30), (-1, 1, 0)] {
+            let kinds = [WASM_VAL_KIND_I32, WASM_VAL_KIND_I32];
+            let bits = [a as u32 as u64, b as u32 as u64];
+            let mut out_kinds = [WASM_VAL_KIND_NONE; 4];
+            let mut out_bits = [0u64; 4];
+            let mut out_count = 0usize;
+            let mut err = std::ptr::null_mut();
+            assert_eq!(
+                perry_wasm_host_call_export_by_handle(
+                    &mut inst,
+                    handle,
+                    kinds.as_ptr(),
+                    bits.as_ptr(),
+                    2,
+                    out_kinds.as_mut_ptr(),
+                    out_bits.as_mut_ptr(),
+                    4,
+                    &mut out_count,
+                    &mut err,
+                ),
+                1,
+                "call by handle"
+            );
+            assert_eq!(out_count, 1);
+            assert_eq!(out_kinds[0], WASM_VAL_KIND_I32);
+            assert_eq!(out_bits[0] as u32 as i32, expected);
+        }
+    }
+
+    /// A handle-based call carries the same arity check as the by-name path,
+    /// and a zero handle is rejected rather than indexing the cache.
+    #[test]
+    fn call_by_handle_rejects_a_bad_arity_and_a_null_handle() {
+        let module = compile(ADD_WASM).expect("compile");
+        let mut inst = instantiate(&module).expect("instantiate");
+        let name = b"add";
+        let handle = perry_wasm_host_instance_export_handle(
+            &mut inst,
+            name.as_ptr() as *const c_char,
+            name.len(),
+        );
+        let kinds = [WASM_VAL_KIND_I32];
+        let bits = [1u64];
+        let mut out_kinds = [WASM_VAL_KIND_NONE; 4];
+        let mut out_bits = [0u64; 4];
+        let mut out_count = 0usize;
+        let mut err = std::ptr::null_mut();
+        assert_eq!(
+            perry_wasm_host_call_export_by_handle(
+                &mut inst,
+                handle,
+                kinds.as_ptr(),
+                bits.as_ptr(),
+                1,
+                out_kinds.as_mut_ptr(),
+                out_bits.as_mut_ptr(),
+                4,
+                &mut out_count,
+                &mut err,
+            ),
+            0,
+            "one argument for a two-parameter export must fail"
+        );
+        assert!(!err.is_null());
+        perry_wasm_host_string_free(err);
+
+        let mut err = std::ptr::null_mut();
+        assert_eq!(
+            perry_wasm_host_call_export_by_handle(
+                &mut inst,
+                0,
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                out_kinds.as_mut_ptr(),
+                out_bits.as_mut_ptr(),
+                4,
+                &mut out_count,
+                &mut err,
+            ),
+            0,
+            "handle 0 means unresolved"
+        );
+        assert!(!err.is_null());
+        perry_wasm_host_string_free(err);
+    }
 
     #[test]
     fn validate_add_wasm() {
