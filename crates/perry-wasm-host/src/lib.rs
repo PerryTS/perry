@@ -401,11 +401,6 @@ fn coerce_numeric_value(value: WasmVal, expected: ValType) -> Option<Val> {
     }
 }
 
-/// Call an exported function by name. Numeric JavaScript inputs are coerced
-/// against the declared Wasm parameter types, and all numeric results are
-/// returned in declaration order. wasm-bindgen uses multi-value returns for
-/// pointer/length pairs, so preserving only the first result is not enough for
-/// real generated glue.
 /// Resolve an export function to a cache index, resolving by name at most
 /// once per instance. `None` when the instance has no function export by that
 /// name.
@@ -503,6 +498,11 @@ fn resolved_export_results(
         .collect()
 }
 
+/// Call an exported function by name. Numeric JavaScript inputs are coerced
+/// against the declared Wasm parameter types, and all numeric results are
+/// returned in declaration order. wasm-bindgen uses multi-value returns for
+/// pointer/length pairs, so preserving only the first result is not enough for
+/// real generated glue.
 pub fn call_export(
     inst: &mut WasmInstanceHandle,
     name: &str,
