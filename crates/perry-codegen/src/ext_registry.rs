@@ -105,6 +105,11 @@ pub enum OwnerKind {
 /// grows past a few dozen entries.
 #[rustfmt::skip]
 const FFI_REGISTRY: &[(&str, OwnerKind)] = &[
+    // ── #9604: Bun.SQL ───────────────────────────────────────────────
+    // The rest of the `"bun"` module stays runtime-only. Pull SQLite into
+    // perry-stdlib only when codegen actually emits the SQL constructor.
+    ("js_bun_sql_new",                           OwnerKind::Stdlib { feature: Some("database-sqlite") }),
+
     // ── #835: Web Streams ────────────────────────────────────────────
     // `perry-stdlib::streams` owns the canonical implementations.
     // `perry-ext-streams` re-implements a subset, but `js_stream_unwrap_handle`
@@ -983,6 +988,9 @@ mod tests {
         // Stdlib { feature: Some("http-client") } so the auto-optimize
         // stdlib rebuild compiles the `fetch_blob` module in.
         record_ffi_call("js_url_revoke_object_url");
+        // Repro #9604: one stdlib-backed export must not make every `bun`
+        // import pull in SQLite; the emitted constructor is the feature gate.
+        record_ffi_call("js_bun_sql_new");
         // Non-registered FFI: must NOT cause an insert.
         record_ffi_call("js_definitely_not_a_real_ffi_symbol_zzz");
 
@@ -999,6 +1007,13 @@ mod tests {
                 feature: Some("http-client")
             }),
             "expected Stdlib(http-client) in providers (Blob/URL object-URL), got {:?}",
+            got
+        );
+        assert!(
+            got.contains(&OwnerKind::Stdlib {
+                feature: Some("database-sqlite")
+            }),
+            "expected Stdlib(database-sqlite) for Bun.SQL, got {:?}",
             got
         );
         assert!(

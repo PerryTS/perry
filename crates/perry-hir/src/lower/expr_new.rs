@@ -623,6 +623,18 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             }
 
             if let Some((module_name, method_name)) = ctx.lookup_native_module(&class_name) {
+                // Bun.SQL constructs and returns a callable tagged-template
+                // client. Preserve that explicit return instead of letting
+                // generic `new` manufacture a blank ObjectHeader instance.
+                if module_name == "bun" && method_name == Some("SQL") {
+                    return Ok(Expr::NativeMethodCall {
+                        module: "bun".to_string(),
+                        class_name: None,
+                        object: None,
+                        method: "SQL".to_string(),
+                        args: lower_optional_args(ctx, new_expr.args.as_deref())?,
+                    });
+                }
                 // #6562: Bun exposes JSCallback as a constructor, but Perry's
                 // native-module export returns the already-built
                 // `{ ptr, threadsafe, close }` object. Route the named import

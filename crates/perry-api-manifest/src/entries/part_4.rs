@@ -1100,6 +1100,7 @@ pub(crate) const API_MANIFEST_PART_4: &[ApiEntry] = &[
     // (Zig-std wyhash, BigInt result), and the module-level
     // `pathToFileURL` / `fileURLToPath` aliases of node:url.
     // Implementation: perry-runtime `bun_compat`.
+<<<<<<< HEAD
     class("bun", "Transpiler"),
     method("bun", "Transpiler", false, None),
     method("bun", "build", false, None),
@@ -1107,6 +1108,9 @@ pub(crate) const API_MANIFEST_PART_4: &[ApiEntry] = &[
     method("bun", "transform", true, Some("Transpiler")),
     method("bun", "scanImports", true, Some("Transpiler")),
     method("bun", "scan", true, Some("Transpiler")),
+=======
+    method("bun", "SQL", false, None),
+>>>>>>> 21fc15c063 (feat(bun): implement SQL SQLite compatibility)
     method("bun", "stringWidth", false, None),
     method("bun", "hash", false, None),
     method("bun", "deepEquals", false, None),

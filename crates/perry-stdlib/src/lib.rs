@@ -215,6 +215,14 @@ pub mod sqlite;
 #[cfg(feature = "database-sqlite")]
 pub use sqlite::*;
 
+// Bun's unified SQL tag currently delegates to the SQLite adapter.  Keep the
+// module beside the database feature so minimal-stdlib builds that import
+// `"bun"` pull in both the constructor symbol and its rusqlite backend.
+#[cfg(feature = "database-sqlite")]
+pub mod bun_sql;
+#[cfg(feature = "database-sqlite")]
+pub use bun_sql::*;
+
 // Unconditional sqlite-handle existence shims — referenced by
 // `perry-jsruntime::bridge` to decide whether a small-handle pointer
 // crossing the native→V8 boundary is a SqliteDbHandle / SqliteStmtHandle

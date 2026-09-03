@@ -1345,6 +1345,10 @@ POLL_CAPABLE_RUNTIME = {
     "js_map_from_iterable", "js_set_from_iterable",
     "js_new_function_construct_apply",
     "js_node_sqlite_database_sync_new",
+    # Bun.SQL's constructor invokes the user-provided `onconnect` callback
+    # through `js_closure_call1`, so callers must treat the returned client as
+    # potentially moved even though construction usually stays synchronous.
+    "js_bun_sql_new",
     "js_node_stream_passthrough_new", "js_node_stream_transform_new",
     "js_object_create_with_props",
     "js_object_entries_value", "js_object_values_value",
