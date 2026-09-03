@@ -57,16 +57,19 @@ fn test_assimilated_thenable_wrapper_survives_then_callback_copied_minor_gc() {
     let thenable_handle = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 1));
     let key_handle =
         scope.root_string_ptr(crate::string::js_string_from_bytes(b"then".as_ptr(), 4));
-    crate::object::js_object_set_field_by_name(
-        thenable_handle.get_raw_mut_ptr(),
-        key_handle.get_raw_const_ptr::<crate::StringHeader>(),
-        f64::from_bits(ptr_bits(then_handle.get_raw_mut_ptr::<u8>() as usize)),
-    );
+    let then_boxed =
+        then_handle.with_mut_ptr::<u8, _>(|then| f64::from_bits(ptr_bits(then as usize)));
+    thenable_handle.with_mut_ptr(|thenable| {
+        key_handle.with_const_ptr::<crate::StringHeader, _>(|key| {
+            crate::object::js_object_set_field_by_name(thenable, key, then_boxed);
+        })
+    });
 
     let before = gc_collection_count();
-    let assimilated = crate::promise::js_assimilate_thenable(f64::from_bits(ptr_bits(
-        thenable_handle.get_raw_mut_ptr::<u8>() as usize,
-    )));
+    let assimilated = crate::promise::js_assimilate_thenable(
+        thenable_handle
+            .with_mut_ptr::<u8, _>(|thenable| f64::from_bits(ptr_bits(thenable as usize))),
+    );
     assert!(
         gc_collection_count() > before,
         "the thenable's `then` body must force a copying minor GC while the wrapper is live"

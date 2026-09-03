@@ -432,13 +432,12 @@ pub(super) fn assimilate_via_then_property(value: f64) -> f64 {
         Err(reason) => {
             let reason_handle = scope.root_nanbox_f64(reason);
             let rejected_handle = scope.root_raw_mut_ptr(js_promise_new());
-            js_promise_reject(
-                rejected_handle.get_raw_mut_ptr::<Promise>(),
-                reason_handle.get_nanbox_f64(),
-            );
-            return crate::value::js_nanbox_pointer(
-                rejected_handle.get_raw_mut_ptr::<Promise>() as i64
-            );
+            let ((), rejected) = rejected_handle.across_mut::<Promise, _>(|| {
+                rejected_handle.with_mut_ptr::<Promise, _>(|rejected| {
+                    js_promise_reject(rejected, reason_handle.get_nanbox_f64());
+                })
+            });
+            return crate::value::js_nanbox_pointer(rejected as i64);
         }
     };
     let then_handle = scope.root_nanbox_f64(then_val);
@@ -452,20 +451,20 @@ pub(super) fn assimilate_via_then_property(value: f64) -> f64 {
         promise_resolve_fn as *const u8,
         1,
     ));
-    crate::closure::js_closure_set_capture_ptr(
-        resolve_handle.get_raw_mut_ptr(),
-        0,
-        promise_handle.get_raw_mut_ptr::<Promise>() as i64,
-    );
+    resolve_handle.with_mut_ptr(|resolve| {
+        promise_handle.with_mut_ptr::<Promise, _>(|promise| {
+            crate::closure::js_closure_set_capture_ptr(resolve, 0, promise as i64);
+        })
+    });
     let reject_handle = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
         promise_reject_fn as *const u8,
         1,
     ));
-    crate::closure::js_closure_set_capture_ptr(
-        reject_handle.get_raw_mut_ptr(),
-        0,
-        promise_handle.get_raw_mut_ptr::<Promise>() as i64,
-    );
+    reject_handle.with_mut_ptr(|reject| {
+        promise_handle.with_mut_ptr::<Promise, _>(|promise| {
+            crate::closure::js_closure_set_capture_ptr(reject, 0, promise as i64);
+        })
+    });
 
     // Pass the resolving functions as proper NaN-boxed function values (not the
     // raw closure-pointer-bits convention used internally by
@@ -474,9 +473,10 @@ pub(super) fn assimilate_via_then_property(value: f64) -> f64 {
     // so `typeof onFulfilled === "function"` must hold (test262
     // yield-star-async-* / yield-star-next-then-* check this). A NaN-boxed
     // closure is still invoked through the normal call path.
-    let resolve_f64 =
-        crate::value::js_nanbox_pointer(resolve_handle.get_raw_mut_ptr::<u8>() as i64);
-    let reject_f64 = crate::value::js_nanbox_pointer(reject_handle.get_raw_mut_ptr::<u8>() as i64);
+    let resolve_f64 = resolve_handle
+        .with_mut_ptr::<u8, _>(|resolve| crate::value::js_nanbox_pointer(resolve as i64));
+    let reject_f64 = reject_handle
+        .with_mut_ptr::<u8, _>(|reject| crate::value::js_nanbox_pointer(reject as i64));
     let args = [resolve_f64, reject_f64];
 
     // Bind `this` to the thenable so a non-arrow `then` body reads the right
@@ -497,7 +497,8 @@ pub(super) fn assimilate_via_then_property(value: f64) -> f64 {
     // have relocated it (#9539). Returning `new_promise`'s pre-call address is
     // what handed callers (util.callbackify, await) a retired from-space
     // pointer they then classified, rooted and attached reactions to.
-    crate::value::js_nanbox_pointer(promise_handle.get_raw_mut_ptr::<Promise>() as i64)
+    promise_handle
+        .with_mut_ptr::<Promise, _>(|promise| crate::value::js_nanbox_pointer(promise as i64))
 }
 
 #[cfg(test)]

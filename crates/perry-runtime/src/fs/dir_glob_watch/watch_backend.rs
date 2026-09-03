@@ -323,7 +323,7 @@ impl EventQueue {
     }
 }
 
-thread_local! {
+crate::perry_thread_local! {
     // One queue per JS thread: a watcher created on a `perry/thread` worker
     // is drained by that worker's pump, never by the main thread's.
     static QUEUE: Arc<EventQueue> = Arc::new(EventQueue::new());
@@ -461,7 +461,7 @@ struct SharedInstance {
     refs: HashMap<PathBuf, usize>,
 }
 
-thread_local! {
+crate::perry_thread_local! {
     // Outer `None`: never tried. `Some(None)`: construction failed — every
     // non-recursive watcher on this thread uses the poller from then on.
     static SHARED: RefCell<Option<Option<SharedInstance>>> = const { RefCell::new(None) };

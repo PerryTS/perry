@@ -819,10 +819,11 @@ fn callable_then_field(value: f64) -> Option<f64> {
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj_handle = scope.root_raw_const_ptr(addr as *const crate::object::ObjectHeader);
     let key_handle = scope.root_string_ptr(js_string_from_bytes(b"then".as_ptr(), 4));
-    let then_value = crate::object::js_object_get_field_by_name_f64(
-        obj_handle.get_raw_const_ptr::<crate::object::ObjectHeader>(),
-        key_handle.get_raw_const_ptr::<crate::StringHeader>(),
-    );
+    let then_value = obj_handle.with_const_ptr::<crate::object::ObjectHeader, _>(|obj| {
+        key_handle.with_const_ptr::<crate::StringHeader, _>(|key| {
+            crate::object::js_object_get_field_by_name_f64(obj, key)
+        })
+    });
     if is_callable_closure(then_value) {
         Some(then_value)
     } else {
