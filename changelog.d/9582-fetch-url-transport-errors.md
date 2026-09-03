@@ -1,0 +1,1 @@
+Fixed global `fetch` rejecting WHATWG `URL` instances (#9536): a `URL` object is now accepted anywhere `RequestInfo` is, while native `Request` handles are preserved. Transport failures from the reqwest layer now reject with Node-compatible `TypeError("fetch failed")` carrying a diagnostic `cause`; DNS failures expose `ENOTFOUND` with `errno`, `syscall`, and `hostname`.
