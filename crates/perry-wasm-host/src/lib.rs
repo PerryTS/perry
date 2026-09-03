@@ -1411,6 +1411,30 @@ mod tests {
         0x00, 0x0b, 0x09, 0x00, 0x20, 0x00, 0x20, 0x01, 0x3a, 0x00, 0x00, 0x0b, 0x06, 0x00, 0x20,
         0x00, 0x40, 0x00, 0x0b,
     ];
+    /// Grows the memory and THEN calls an imported function, so the import
+    /// runs with the previously published span already freed:
+    ///
+    /// ```wat
+    /// (module
+    ///   (import "env" "peek" (func $peek (param i32) (result i32)))
+    ///   (memory (export "memory") 1)
+    ///   (func (export "store") (param i32 i32) local.get 0 local.get 1 i32.store8)
+    ///   (func (export "load")  (param i32) (result i32) local.get 0 i32.load8_u)
+    ///   (func (export "growThenPeek") (param i32) (result i32)
+    ///     i32.const 1 memory.grow drop
+    ///     local.get 0 call $peek))
+    /// ```
+    const GROW_THEN_IMPORT_WASM: &[u8] = &[
+        0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x0b, 0x02, 0x60, 0x01, 0x7f, 0x01,
+        0x7f, 0x60, 0x02, 0x7f, 0x7f, 0x00, 0x02, 0x0c, 0x01, 0x03, 0x65, 0x6e, 0x76, 0x04, 0x70,
+        0x65, 0x65, 0x6b, 0x00, 0x00, 0x03, 0x04, 0x03, 0x01, 0x00, 0x00, 0x05, 0x03, 0x01, 0x00,
+        0x01, 0x07, 0x28, 0x04, 0x06, 0x6d, 0x65, 0x6d, 0x6f, 0x72, 0x79, 0x02, 0x00, 0x05, 0x73,
+        0x74, 0x6f, 0x72, 0x65, 0x00, 0x01, 0x04, 0x6c, 0x6f, 0x61, 0x64, 0x00, 0x02, 0x0c, 0x67,
+        0x72, 0x6f, 0x77, 0x54, 0x68, 0x65, 0x6e, 0x50, 0x65, 0x65, 0x6b, 0x00, 0x03, 0x0a, 0x1f,
+        0x03, 0x09, 0x00, 0x20, 0x00, 0x20, 0x01, 0x3a, 0x00, 0x00, 0x0b, 0x07, 0x00, 0x20, 0x00,
+        0x2d, 0x00, 0x00, 0x0b, 0x0b, 0x00, 0x41, 0x01, 0x40, 0x00, 0x1a, 0x20, 0x00, 0x10, 0x00,
+        0x0b,
+    ];
     /// `(module (@custom "meta" "\01\02\03"))`.
     const CUSTOM_WASM: &[u8] = &[
         0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x00, 0x08, 0x04, 0x6d, 0x65, 0x74, 0x61,
@@ -1476,6 +1500,67 @@ mod tests {
         assert_eq!(
             call_export(&mut inst, "load", &[WasmVal::I32(70000)]).expect("load"),
             vec![WasmVal::I32(3)]
+        );
+    }
+
+    /// An import callback re-reads the memory span through the C ABI while
+    /// wasmi still owns the store for the enclosing call. Wasm grew the memory
+    /// immediately before the call, so the span the embedder published is
+    /// already freed — the re-read is what keeps the JS-visible
+    /// `memory.buffer` off that dangling allocation (#9611).
+    unsafe extern "C" fn peek_memory_span_import_callback(
+        context: u64,
+        _module: *const u8,
+        _module_len: usize,
+        _name: *const u8,
+        _name_len: usize,
+        _arg_kinds: *const u8,
+        arg_bits: *const u64,
+        arg_count: usize,
+        _result_kinds: *const u8,
+        result_bits: *mut u64,
+        result_count: usize,
+    ) -> i32 {
+        assert_eq!(arg_count, 1);
+        assert_eq!(result_count, 1);
+        let offset = *arg_bits as u32 as usize;
+        let inst = context as *mut WasmInstanceHandle;
+        let mut len = 0usize;
+        let ptr = perry_wasm_host_instance_memory_span(inst, &mut len);
+        assert!(!ptr.is_null());
+        assert_eq!(len, 131072, "the re-read span sees the grow that just ran");
+        assert!(offset < len, "the grown tail is inside the re-read span");
+        // Write through the re-read span exactly as a JS import handler would
+        // through `memory.buffer`; the caller checks wasm can read it back.
+        *ptr.add(offset) = 42;
+        *result_bits = len as u32 as u64;
+        1
+    }
+
+    #[test]
+    fn memory_span_re_read_inside_an_import_survives_a_grow_in_the_same_call() {
+        let module = compile(GROW_THEN_IMPORT_WASM).expect("compile");
+        let mut inst =
+            instantiate_with_import_callback(&module, Some(peek_memory_span_import_callback), 0)
+                .expect("instantiate");
+        inst.inner.store.data_mut().import_context =
+            &mut inst as *mut WasmInstanceHandle as usize as u64;
+        call_export(&mut inst, "store", &[WasmVal::I32(5), WasmVal::I32(65)]).expect("store");
+
+        assert_eq!(
+            call_export(&mut inst, "growThenPeek", &[WasmVal::I32(70000)]).expect("growThenPeek"),
+            vec![WasmVal::I32(131072)],
+            "the import saw the grown span, not the freed one"
+        );
+        assert_eq!(
+            call_export(&mut inst, "load", &[WasmVal::I32(70000)]).expect("load"),
+            vec![WasmVal::I32(42)],
+            "what the import wrote through the re-read span is in wasm memory"
+        );
+        assert_eq!(
+            call_export(&mut inst, "load", &[WasmVal::I32(5)]).expect("load"),
+            vec![WasmVal::I32(65)],
+            "bytes written before the grow survive it"
         );
     }
 

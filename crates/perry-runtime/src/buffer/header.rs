@@ -971,7 +971,8 @@ pub(crate) fn buffer_alloc_foreign(data: *mut u8, length: u32) -> *mut BufferHea
 /// bytes live inline after its header and cannot be re-pointed. Returns
 /// whether the rebind happened.
 ///
-/// Gated with `webassembly`, its only caller: the default runtime build does
+/// Gated with `wasm-host`, whose module is its only caller: the default
+/// runtime build does
 /// not compile the wasm host shims, and an ungated helper would be dead code
 /// there.
 #[cfg(feature = "wasm-host")]

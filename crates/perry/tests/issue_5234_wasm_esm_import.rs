@@ -121,6 +121,32 @@ const GROW_MEMORY_WASM: &[u8] = &[
     0x00, 0x20, 0x01, 0x3a, 0x00, 0x00, 0x0b, 0x06, 0x00, 0x20, 0x00, 0x40, 0x00, 0x0b,
 ];
 
+/// Grows the memory and THEN calls a JS import, so the import runs with the
+/// previously published buffer already freed — the boundary
+/// `rebind_active_wasm_memories` exists for:
+///
+/// ```wat
+/// (module
+///   (import "./grow-glue" "peek" (func $peek (param i32) (result i32)))
+///   (memory (export "memory") 1)
+///   (func (export "store") (param i32 i32) local.get 0 local.get 1 i32.store8)
+///   (func (export "load")  (param i32) (result i32) local.get 0 i32.load8_u)
+///   (func (export "growThenPeek") (param i32) (result i32)
+///     i32.const 1 memory.grow drop
+///     local.get 0 call $peek))
+/// ```
+const GROW_THEN_IMPORT_WASM: &[u8] = &[
+    0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x0b, 0x02, 0x60, 0x01, 0x7f, 0x01, 0x7f,
+    0x60, 0x02, 0x7f, 0x7f, 0x00, 0x02, 0x14, 0x01, 0x0b, 0x2e, 0x2f, 0x67, 0x72, 0x6f, 0x77, 0x2d,
+    0x67, 0x6c, 0x75, 0x65, 0x04, 0x70, 0x65, 0x65, 0x6b, 0x00, 0x00, 0x03, 0x04, 0x03, 0x01, 0x00,
+    0x00, 0x05, 0x03, 0x01, 0x00, 0x01, 0x07, 0x28, 0x04, 0x06, 0x6d, 0x65, 0x6d, 0x6f, 0x72, 0x79,
+    0x02, 0x00, 0x05, 0x73, 0x74, 0x6f, 0x72, 0x65, 0x00, 0x01, 0x04, 0x6c, 0x6f, 0x61, 0x64, 0x00,
+    0x02, 0x0c, 0x67, 0x72, 0x6f, 0x77, 0x54, 0x68, 0x65, 0x6e, 0x50, 0x65, 0x65, 0x6b, 0x00, 0x03,
+    0x0a, 0x1f, 0x03, 0x09, 0x00, 0x20, 0x00, 0x20, 0x01, 0x3a, 0x00, 0x00, 0x0b, 0x07, 0x00, 0x20,
+    0x00, 0x2d, 0x00, 0x00, 0x0b, 0x0b, 0x00, 0x41, 0x01, 0x40, 0x00, 0x1a, 0x20, 0x00, 0x10, 0x00,
+    0x0b,
+];
+
 /// `(module (table (export "refs") 2 externref))`
 const EXTERNREF_TABLE_WASM: &[u8] = &[
     0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x04, 0x04, 0x01, 0x6f, 0x00, 0x02, 0x07, 0x08,
@@ -151,6 +177,7 @@ import {
     store as growStore,
     memory as growMemory,
 } from "./grow-memory.wasm";
+import { growThenPeek, load as peekLoad, store as peekStore } from "./grow-then-import.wasm";
 import { runTableCycle } from "./table-glue";
 import addWasmPath from "./file-add.wasm" with { type: "file" };
 import importedWasmPath from "./file-imported.wasm" with { type: "file" };
@@ -214,6 +241,15 @@ console.log("growDetached=" + beforeGrow.byteLength);
 console.log("growKept=" + growLoad(5));
 new Uint8Array(growMemory.buffer)[70000] = 3;
 console.log("growTail=" + growLoad(70000));
+
+// The other boundary: wasm grows the memory and THEN calls a JS import, so the
+// import handler runs inside the call with the previously published buffer
+// already freed. The handler reads and writes `memory.buffer`, which must have
+// been re-pointed at the grown span rather than left on the freed one.
+peekStore(5, 65);
+console.log("peekLength=" + growThenPeek(70000));
+console.log("peekWrote=" + peekLoad(70000));
+console.log("peekKept=" + peekLoad(5));
 "#;
 
 const GLUE_FIXTURE: &str = r#"
@@ -225,6 +261,22 @@ export function inc(value: number): number {
 
 export function throughGlue(value: number): number {
     return call(value);
+}
+"#;
+
+const GROW_GLUE_FIXTURE: &str = r#"
+import { memory } from "./grow-then-import.wasm";
+
+// Called from inside a wasm function that grew the memory one instruction
+// earlier. Reading `memory.buffer` here is what a wasm-bindgen glue import
+// does; it must see the grown span, not the allocation the grow freed.
+export function peek(offset: number): number {
+    const view = new Uint8Array(memory.buffer);
+    if (offset >= view.length) {
+        return -1;
+    }
+    view[offset] = 42;
+    return view.length;
 }
 "#;
 
@@ -258,6 +310,9 @@ fn write_fixture(root: &std::path::Path) {
         .expect("write live memory wasm");
     std::fs::write(root.join("grow-memory.wasm"), GROW_MEMORY_WASM)
         .expect("write grow memory wasm");
+    std::fs::write(root.join("grow-then-import.wasm"), GROW_THEN_IMPORT_WASM)
+        .expect("write grow-then-import wasm");
+    std::fs::write(root.join("grow-glue.ts"), GROW_GLUE_FIXTURE).expect("write grow glue ts");
     std::fs::write(root.join("externref-table.wasm"), EXTERNREF_TABLE_WASM)
         .expect("write externref table wasm");
     std::fs::write(
@@ -339,4 +394,7 @@ fn wasm_esm_import_instantiates_and_exposes_exports() {
     assert!(stdout.contains("growDetached=0"), "stdout:\n{stdout}");
     assert!(stdout.contains("growKept=65"), "stdout:\n{stdout}");
     assert!(stdout.contains("growTail=3"), "stdout:\n{stdout}");
+    assert!(stdout.contains("peekLength=131072"), "stdout:\n{stdout}");
+    assert!(stdout.contains("peekWrote=42"), "stdout:\n{stdout}");
+    assert!(stdout.contains("peekKept=65"), "stdout:\n{stdout}");
 }
