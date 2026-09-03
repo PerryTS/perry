@@ -7,7 +7,7 @@ use anyhow::Result;
 use perry_diagnostics::{Diagnostic, DiagnosticCode, Diagnostics, FileId, SourceCache, Span};
 use std::path::Path;
 use swc_common::{input::StringInput, sync::Lrc, BytePos, FileName, SourceMap};
-use swc_ecma_ast::{Module, ModuleItem, Script};
+use swc_ecma_ast::{Module, ModuleItem, Program, Script};
 use swc_ecma_parser::{lexer::Lexer, EsSyntax, Parser, Syntax, TsSyntax};
 use swc_ecma_visit::{VisitMut, VisitMutWith};
 
@@ -145,7 +145,7 @@ fn parse_source_file_with_typescript_fallback<'a>(
     let is_typescript = matches!(syntax, Syntax::Typescript(_));
     let mut parser = parser_for_source_file_with_syntax(source_file, syntax);
 
-    match parse_module_or_script(&mut parser, filename, source) {
+    match parse_module_or_script(&mut parser, filename) {
         Ok(module) => Ok((module, parser)),
         Err(first_error) => {
             if !is_typescript && source_looks_like_typescript(source) {
@@ -153,7 +153,7 @@ fn parse_source_file_with_typescript_fallback<'a>(
                     source_file,
                     typescript_syntax_for_filename(filename),
                 );
-                if let Ok(module) = parse_module_or_script(&mut retry_parser, filename, source) {
+                if let Ok(module) = parse_module_or_script(&mut retry_parser, filename) {
                     return Ok((module, retry_parser));
                 }
             }
@@ -316,24 +316,24 @@ fn source_looks_like_typescript(source: &str) -> bool {
 fn parse_module_or_script(
     parser: &mut Parser<Lexer<'_>>,
     filename: &str,
-    source: &str,
 ) -> swc_ecma_parser::PResult<Module> {
-    if should_parse_as_script(filename, source) {
-        parser.parse_script().map(script_to_module)
+    if should_parse_unambiguous_program(filename) {
+        // Let SWC's lexer and parser identify real top-level module items. In
+        // particular, this keeps template expressions, nested templates, and
+        // regex literals synchronized without maintaining a second partial
+        // JavaScript lexer here.
+        parser.parse_program().map(program_to_module)
     } else {
         parser.parse_module()
     }
 }
 
-fn should_parse_as_script(filename: &str, source: &str) -> bool {
+fn should_parse_unambiguous_program(filename: &str) -> bool {
     let path = path_for_extension_check(filename);
     if !(path.ends_with(".js") || path.ends_with(".cjs") || path.ends_with(".jsx")) {
         return false;
     }
-    if !path.ends_with(".cjs") && file_is_in_esm_package_context(path) {
-        return false;
-    }
-    !looks_like_es_module(source)
+    path.ends_with(".cjs") || !file_is_in_esm_package_context(path)
 }
 
 /// Whether `filename` is an ES module purely by its module FORMAT — i.e.
@@ -344,7 +344,7 @@ fn should_parse_as_script(filename: &str, source: &str) -> bool {
 /// `"type":"module"`); an ambiguous extension (`.js`/`.ts`/`.jsx`/`.tsx`) is a
 /// module when it sits in an ESM package context (`"type":"module"` /
 /// conditional-export map). Mirrors the format half of Node's CJS-vs-ESM
-/// detection and of `should_parse_as_script`'s package-context guard.
+/// detection and of `should_parse_unambiguous_program`'s package-context guard.
 ///
 /// Module code is strict-mode code, so lowering consults this to decide the
 /// runtime strictness of a file that carries no in-file module syntax (#6542):
@@ -359,205 +359,6 @@ pub fn file_is_es_module_by_format(filename: &str) -> bool {
         return false;
     }
     file_is_in_esm_package_context(path)
-}
-
-fn looks_like_es_module(source: &str) -> bool {
-    #[derive(Clone, Copy, PartialEq, Eq)]
-    enum State {
-        Code,
-        String(u8),
-        LineComment,
-        BlockComment,
-    }
-
-    fn is_ident(b: u8) -> bool {
-        b == b'_' || b == b'$' || b.is_ascii_alphanumeric()
-    }
-
-    // Whether a top-level `import`/`export` keyword found here can begin a
-    // module item, given `last_sig` — the last significant *code* byte seen so
-    // far (0 = start of input). A module item starts at input start or right
-    // after a statement boundary (`;`, `{`, `}`); anything else (an operator, an
-    // identifier byte, a string/regex terminator) means the keyword is part of a
-    // larger expression and not a real `import`/`export` statement.
-    //
-    // `last_sig` is tracked during the forward scan rather than recovered by
-    // walking the raw bytes backward, because a backward walk cannot tell that
-    // the preceding bytes were inside a comment. Bundler chunks almost always
-    // open with a banner comment (`// chunk-….js`) immediately followed by a
-    // top-level `export`/`import`; a raw backward walk would see the comment's
-    // last character (e.g. the `)` of "(cross-chunk re-export)") and wrongly
-    // conclude the keyword can't start a module item, so the `.js` chunk parsed
-    // as a Script and SWC raised `ImportExportInScript` (issue #5207).
-    fn allows_module_item(last_sig: u8) -> bool {
-        matches!(last_sig, 0 | b';' | b'{' | b'}')
-    }
-
-    fn next_after_keyword(bytes: &[u8], i: usize, keyword: &[u8]) -> Option<usize> {
-        let end = i.checked_add(keyword.len())?;
-        if bytes.get(i..end)? != keyword {
-            return None;
-        }
-        if i > 0 && is_ident(bytes[i - 1]) {
-            return None;
-        }
-        if bytes.get(end).is_some_and(|b| is_ident(*b)) {
-            return None;
-        }
-        Some(end)
-    }
-
-    // A `/` starts a regex literal (not division) when the preceding token
-    // cannot end an expression: an operator/punctuator, start of input, or a
-    // keyword like `return`. Regex literals may contain unescaped quote chars
-    // (e.g. picomatch's `/(^[*!]|[/()[\]{}"])/`), which would desync the
-    // string-state scan below if skipped as ordinary code.
-    fn regex_can_start_here(bytes: &[u8], slash_at: usize) -> bool {
-        let mut i = slash_at;
-        while i > 0 {
-            i -= 1;
-            match bytes[i] {
-                b' ' | b'\t' | b'\r' | b'\n' => continue,
-                b'=' | b'(' | b',' | b':' | b'[' | b'!' | b'&' | b'|' | b'?' | b'{' | b'}'
-                | b';' | b'+' | b'-' | b'*' | b'%' | b'~' | b'^' | b'<' | b'>' => return true,
-                c if is_ident(c) => {
-                    let end = i + 1;
-                    let mut start = end;
-                    while start > 0 && is_ident(bytes[start - 1]) {
-                        start -= 1;
-                    }
-                    return matches!(
-                        &bytes[start..end],
-                        b"return"
-                            | b"typeof"
-                            | b"instanceof"
-                            | b"in"
-                            | b"of"
-                            | b"case"
-                            | b"do"
-                            | b"else"
-                            | b"void"
-                            | b"delete"
-                            | b"throw"
-                            | b"new"
-                            | b"yield"
-                            | b"await"
-                    );
-                }
-                _ => return false,
-            }
-        }
-        true
-    }
-
-    // Returns the index just past the closing `/`, or None if no regex
-    // terminator is found on this line (then it was division after all).
-    fn skip_regex_literal(bytes: &[u8], slash_at: usize) -> Option<usize> {
-        let mut i = slash_at + 1;
-        let mut in_class = false;
-        while i < bytes.len() {
-            match bytes[i] {
-                b'\\' => i += 2,
-                b'\n' => return None,
-                b'[' => {
-                    in_class = true;
-                    i += 1;
-                }
-                b']' => {
-                    in_class = false;
-                    i += 1;
-                }
-                b'/' if !in_class => return Some(i + 1),
-                _ => i += 1,
-            }
-        }
-        None
-    }
-
-    let bytes = source.as_bytes();
-    let mut i = 0;
-    let mut state = State::Code;
-    // Last significant code byte seen (0 = start of input). Comments are
-    // transparent — they never update this — so a banner comment before a
-    // top-level `import`/`export` no longer hides the keyword. Strings and
-    // regex literals leave their terminator (`"`/`'`/`` ` ``/`/`) as the last
-    // significant byte, matching the old backward walk's behavior.
-    let mut last_sig: u8 = 0;
-    while i < bytes.len() {
-        match state {
-            State::Code => {
-                if bytes[i] == b'\'' || bytes[i] == b'"' || bytes[i] == b'`' {
-                    state = State::String(bytes[i]);
-                    i += 1;
-                } else if bytes[i] == b'/' && bytes.get(i + 1) == Some(&b'/') {
-                    state = State::LineComment;
-                    i += 2;
-                } else if bytes[i] == b'/' && bytes.get(i + 1) == Some(&b'*') {
-                    state = State::BlockComment;
-                    i += 2;
-                } else if bytes[i] == b'/' && regex_can_start_here(bytes, i) {
-                    match skip_regex_literal(bytes, i) {
-                        Some(end) => i = end,
-                        None => i += 1,
-                    }
-                    // A regex literal (or a `/` division operator) is an
-                    // expression token — a following keyword can't begin a
-                    // module item.
-                    last_sig = b'/';
-                } else {
-                    if allows_module_item(last_sig) {
-                        if let Some(end) = next_after_keyword(bytes, i, b"export") {
-                            if matches!(
-                                bytes.get(end),
-                                Some(b' ' | b'\t' | b'\r' | b'\n' | b'{' | b'*')
-                            ) {
-                                return true;
-                            }
-                        }
-                        if let Some(end) = next_after_keyword(bytes, i, b"import") {
-                            if matches!(
-                                bytes.get(end),
-                                Some(b' ' | b'\t' | b'\r' | b'\n' | b'{' | b'*' | b'"' | b'\'')
-                            ) || bytes.get(end) == Some(&b'.')
-                            {
-                                return true;
-                            }
-                        }
-                    }
-                    if !matches!(bytes[i], b' ' | b'\t' | b'\r' | b'\n') {
-                        last_sig = bytes[i];
-                    }
-                    i += 1;
-                }
-            }
-            State::String(quote) => {
-                if bytes[i] == b'\\' {
-                    i += 2;
-                } else {
-                    if bytes[i] == quote {
-                        state = State::Code;
-                        last_sig = quote;
-                    }
-                    i += 1;
-                }
-            }
-            State::LineComment => {
-                if bytes[i] == b'\n' {
-                    state = State::Code;
-                }
-                i += 1;
-            }
-            State::BlockComment => {
-                if bytes[i] == b'*' && bytes.get(i + 1) == Some(&b'/') {
-                    i += 2;
-                    state = State::Code;
-                } else {
-                    i += 1;
-                }
-            }
-        }
-    }
-    false
 }
 
 fn file_is_in_esm_package_context(filename: &str) -> bool {
@@ -602,6 +403,13 @@ fn script_to_module(script: Script) -> Module {
         span: script.span,
         body: script.body.into_iter().map(ModuleItem::Stmt).collect(),
         shebang: script.shebang,
+    }
+}
+
+fn program_to_module(program: Program) -> Module {
+    match program {
+        Program::Module(module) => module,
+        Program::Script(script) => script_to_module(script),
     }
 }
 
@@ -1096,24 +904,96 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_looks_like_es_module_survives_regex_with_quote() {
+    fn test_es_module_detection_survives_regex_with_quote() {
         // Regression: picomatch's bundled source contains a regex literal with
-        // an unescaped `"` inside a character class. The module-detection scan
-        // must not enter string state there, or a trailing `export` (appended
-        // by the CJS wrap) is missed and the file parses as a Script.
+        // an unescaped `"` inside a character class. Module detection must lex
+        // the whole regex before looking for a trailing `export` appended by
+        // the CJS wrap.
         let source = "const re = /(^[*!]|[/()[\\]{}\"])/;\nconst x = \"ok\";\nexport default x;\n";
         let module = parse_typescript(source, "vendored.js").unwrap();
         assert_eq!(module.body.len(), 3);
+        assert!(matches!(
+            module.body.last(),
+            Some(ModuleItem::ModuleDecl(_))
+        ));
+    }
+
+    #[test]
+    fn test_es_module_detection_handles_template_interpolations() {
+        // Regression for #9608: the old byte scanner treated a whole template
+        // as an opaque string. A backtick in an interpolation regex could end
+        // that fake string early and hide a trailing export. SWC's program
+        // parser must classify all of these as modules.
+        let cases = [
+            (
+                "issue repro",
+                r#"const value = `${"x".replace(/[`].*$/, "")}`;
+export { value };
+"#,
+            ),
+            (
+                "nested expression braces",
+                r#"const value = `${({ nested: { value: "`" } }).nested.value}`;
+export { value };
+"#,
+            ),
+            (
+                "nested template",
+                r#"const value = `outer ${`inner ${String(/[`]/)}`}`;
+export { value };
+"#,
+            ),
+            (
+                "escaped template backtick",
+                r#"const value = `escaped \` ${"`"}`;
+export { value };
+"#,
+            ),
+            (
+                "regex backtick and interpolation opener in character class",
+                r#"const value = `${/[`${}]/.test("`")}`;
+export { value };
+"#,
+            ),
+            (
+                "comment and string in interpolation",
+                r#"const value = `${(() => {
+    /* ` and ${ are inert here */
+    return "` and ${ are inert here";
+})()}`;
+export { value };
+"#,
+            ),
+            (
+                "division followed by regex",
+                r#"const value = `${10 / 2 + /[`]/.source.length}`;
+export { value };
+"#,
+            ),
+        ];
+
+        for (name, source) in cases {
+            let mut cache = SourceCache::new();
+            let result = parse_typescript_with_cache(source, "ambiguous.js", &mut cache)
+                .unwrap_or_else(|error| panic!("{name} did not parse as a module: {error:?}"));
+            assert!(
+                result.diagnostics.is_empty(),
+                "{name} produced diagnostics: {:?}",
+                result.diagnostics
+            );
+            assert!(matches!(
+                result.module.body.last(),
+                Some(ModuleItem::ModuleDecl(_))
+            ));
+        }
     }
 
     #[test]
     fn test_banner_comment_before_top_level_export_is_module() {
         // Regression for #5207: a bundler code-split chunk almost always opens
         // with a banner comment immediately followed by a top-level `export`
-        // (or `import`). The module-detection scan must look through the comment
-        // — its last character (here the `)` of "(cross-chunk re-export)") must
-        // not be mistaken for a preceding code token that bars a module item, or
-        // the `.js` chunk parses as a Script and SWC raises ImportExportInScript.
+        // (or `import`). Module detection must look through the comment rather
+        // than treating its last character as code before the module item.
         let cases = [
             "// runtime chunk (cross-chunk re-export)\nexport function rt(x) { return x; }\n",
             "// banner foo\nexport const V = 1;\n",
@@ -1121,28 +1001,46 @@ mod tests {
             "// a\n// b\n// c\nexport { y } from \"./other.js\";\n",
         ];
         for src in cases {
-            assert!(
-                looks_like_es_module(src),
-                "expected ESM classification for chunk:\n{src}"
-            );
-            // And it must actually parse as a module rather than a Script.
-            parse_typescript(src, "chunk-abc.js")
+            let module = parse_typescript(src, "chunk-abc.js")
                 .unwrap_or_else(|e| panic!("chunk failed to parse as a module {src:?}: {e:?}"));
+            assert!(matches!(
+                module.body.last(),
+                Some(ModuleItem::ModuleDecl(_))
+            ));
         }
     }
 
     #[test]
     fn test_comment_does_not_create_false_module_classification() {
-        // The transparency fix must not flip a genuinely CommonJS chunk to ESM:
-        // a comment ending in `;`/`{`/`}` followed by a non-keyword leaves the
-        // file a Script, and `exportFoo`/`importMap`-style identifiers after a
-        // comment still don't match the `export`/`import` keywords.
-        assert!(!looks_like_es_module(
-            "// helper;\nconst exportFoo = 1;\nmodule.exports = exportFoo;\n"
-        ));
-        assert!(!looks_like_es_module(
-            "// note\nconst importMap = {};\nmodule.exports = importMap;\n"
-        ));
+        // A comment ending in `;`/`{`/`}` followed by a non-keyword must leave a
+        // genuine CommonJS chunk as a sloppy Script. `exportFoo`/`importMap`
+        // identifiers and template contents are not module items.
+        let cases = [
+            "// helper;\nconst exportFoo = 1;\nwith ({}) {}\nmodule.exports = exportFoo;\n",
+            "// note\nconst importMap = {};\nwith ({}) {}\nmodule.exports = importMap;\n",
+            r#"const value = `${"`" + /[`${}]/.source}`;
+with ({}) {}
+module.exports = value;
+"#,
+        ];
+        for source in cases {
+            let mut cache = SourceCache::new();
+            let result = parse_typescript_with_cache(source, "chunk.js", &mut cache)
+                .unwrap_or_else(|error| panic!("CommonJS source failed to parse: {error:?}"));
+            assert!(
+                result.diagnostics.is_empty(),
+                "CommonJS source was parsed as strict module code: {:?}",
+                result.diagnostics
+            );
+            assert!(
+                result
+                    .module
+                    .body
+                    .iter()
+                    .all(|item| matches!(item, ModuleItem::Stmt(_))),
+                "CommonJS source unexpectedly contained a module declaration"
+            );
+        }
     }
 
     #[test]
