@@ -367,6 +367,11 @@ pub(crate) mod stdlib_pump {
     use std::sync::Mutex;
 
     static STDLIB_PUMP_FN: AtomicPtr<()> = AtomicPtr::new(null_mut());
+    /// Optional deadline provider for stdlib-owned one-shot work. The callback
+    /// returns milliseconds until its next wake, or -1 when it has no deadline.
+    /// Kept as a function pointer for the same reason as `STDLIB_PUMP_FN`: the
+    /// runtime must not hard-link perry-stdlib into runtime-only binaries.
+    static STDLIB_NEXT_WAKE_FN: AtomicPtr<()> = AtomicPtr::new(null_mut());
 
     // Runtime-internal reactor pumps (child_process, node-pty) register here
     // when their first live handle appears, mirroring `STDLIB_PUMP_FN`. The
@@ -515,6 +520,27 @@ pub(crate) mod stdlib_pump {
     #[no_mangle]
     pub extern "C" fn js_register_stdlib_pump(f: extern "C" fn() -> i32) {
         STDLIB_PUMP_FN.store(f as *mut (), Ordering::Release);
+    }
+
+    /// Register the stdlib's nearest-deadline provider. This lets native
+    /// one-shots participate in `js_wait_for_event` without manufacturing a JS
+    /// timer callback or relying on the one-second idle heartbeat.
+    #[no_mangle]
+    pub extern "C" fn js_register_stdlib_next_wake(f: extern "C" fn() -> f64) {
+        STDLIB_NEXT_WAKE_FN.store(f as *mut (), Ordering::Release);
+    }
+
+    /// Milliseconds until the closest registered stdlib deadline, or -1 when
+    /// perry-stdlib is absent or currently owns no timed work.
+    pub(crate) fn stdlib_next_wake_ms() -> f64 {
+        let f = STDLIB_NEXT_WAKE_FN.load(Ordering::Acquire);
+        if f.is_null() {
+            return -1.0;
+        }
+        // SAFETY: `js_register_stdlib_next_wake` only stores callbacks with
+        // this exact ABI and signature.
+        let func: extern "C" fn() -> f64 = unsafe { std::mem::transmute(f) };
+        func()
     }
 
     /// Run the registered stdlib pump if available. Safe to call even if perry-stdlib

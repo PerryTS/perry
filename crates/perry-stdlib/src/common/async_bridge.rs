@@ -290,9 +290,9 @@ where
 /// whichever first. Because the producing task ran in this same tick, its
 /// completion is observed in-thread and `perry_poll` drains it on the next loop
 /// turn; there is no cross-thread wake to lose. `budget_ms` is the loop's
-/// computed sleep budget (min of the next perry-timer deadline and the 1 s idle
-/// cap); a zero budget is floored to 1 ms so native work still gets one poll
-/// cycle under a hot timer.
+/// computed sleep budget (min of the next Perry timer/native deadline and the
+/// 1 s idle cap); a zero budget is floored to 1 ms so native work still gets
+/// one poll cycle under a hot timer.
 extern "C" fn stdlib_wait_driver(budget_ms: u64) {
     run_one_tick(budget_ms);
 }
@@ -490,6 +490,7 @@ pub fn ensure_pump_registered() {
         extern "C" {
             fn js_register_stdlib_pump(f: extern "C" fn() -> i32);
             fn js_register_stdlib_has_active(f: extern "C" fn() -> i32);
+            fn js_register_stdlib_next_wake(f: extern "C" fn() -> f64);
             fn js_stdlib_init_dispatch();
         }
         ensure_gc_scanner_registered();
@@ -508,6 +509,7 @@ pub fn ensure_pump_registered() {
         unsafe {
             js_register_stdlib_pump(js_stdlib_process_pending);
             js_register_stdlib_has_active(js_stdlib_has_active_handles);
+            js_register_stdlib_next_wake(crate::readline::js_readline_next_wake_ms);
             // Wire up the runtime-level HANDLE_METHOD_DISPATCH so that
             // generic `jsObject.method(args)` calls on stdlib handle types
             // (net.Socket, Fastify, ioredis) fall back to the right FFI

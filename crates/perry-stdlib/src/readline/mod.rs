@@ -32,6 +32,7 @@ use std::io::Read;
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use perry_runtime::closure::{
     get_valid_func_ptr, js_closure_alloc, js_closure_call0, js_closure_call1, js_closure_call2,
@@ -122,6 +123,12 @@ static PENDING_DATA: Mutex<Vec<Vec<u8>>> = Mutex::new(Vec::new());
 /// reader queues one byte per chunk, so `\x1b[A` arrives as three chunks
 /// and `pump::coalesce_escape_sequences` parks an incomplete prefix here.
 static PENDING_ESCAPE: Mutex<Vec<u8>> = Mutex::new(Vec::new());
+/// One-shot deadline for the escape prefix above. A wake from another timer or
+/// producer must not make a held ESC look old enough to flush; only this clock
+/// can do that (#9593).
+static PENDING_ESCAPE_DEADLINE: Mutex<Option<Instant>> = Mutex::new(None);
+/// Node's default `readline.escapeCodeTimeout`.
+const ESCAPE_CODE_TIMEOUT: Duration = Duration::from_millis(500);
 /// Whether the one-shot `'readable'` EOF notification has been delivered.
 static READABLE_EOF_NOTIFIED: AtomicBool = AtomicBool::new(false);
 /// `true` when raw mode is enabled — the reader thread checks this
@@ -1851,6 +1858,9 @@ pub extern "C" fn js_readline_stdin_destroy() -> f64 {
     if let Ok(mut p) = PENDING_ESCAPE.lock() {
         p.clear();
     }
+    if let Ok(mut deadline) = PENDING_ESCAPE_DEADLINE.lock() {
+        *deadline = None;
+    }
     if let Ok(mut q) = PENDING_LINES.lock() {
         q.clear();
     }
@@ -1878,6 +1888,7 @@ pub extern "C" fn js_readline_stdin_destroy() -> f64 {
 // ---------------------------------------------------------------------------
 
 mod pump;
+pub(crate) use pump::js_readline_next_wake_ms;
 pub use pump::{js_readline_has_active, js_readline_process_pending};
 
 // ---------------------------------------------------------------------------

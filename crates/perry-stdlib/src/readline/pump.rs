@@ -130,24 +130,83 @@ fn escape_state(acc: &[u8]) -> EscState {
     }
 }
 
+fn arm_escape_timeout() {
+    if let Ok(mut deadline) = PENDING_ESCAPE_DEADLINE.lock() {
+        *deadline = Some(Instant::now() + ESCAPE_CODE_TIMEOUT);
+    }
+}
+
+fn cancel_escape_timeout() {
+    if let Ok(mut deadline) = PENDING_ESCAPE_DEADLINE.lock() {
+        *deadline = None;
+    }
+}
+
+fn escape_timeout_expired() -> bool {
+    let Ok(mut deadline) = PENDING_ESCAPE_DEADLINE.lock() else {
+        return false;
+    };
+    if deadline.is_some_and(|at| at <= Instant::now()) {
+        *deadline = None;
+        true
+    } else {
+        false
+    }
+}
+
+/// Deadline provider registered with perry-runtime's event pump. Returning the
+/// ceiling avoids truncating a sub-millisecond remainder to zero and spinning
+/// before the timeout is actually due.
+pub(crate) extern "C" fn js_readline_next_wake_ms() -> f64 {
+    if STDIN_DESTROYED.load(Ordering::Acquire) || STDIN_PAUSED.load(Ordering::Acquire) {
+        return -1.0;
+    }
+    let Ok(deadline) = PENDING_ESCAPE_DEADLINE.lock() else {
+        return -1.0;
+    };
+    let Some(deadline) = *deadline else {
+        return -1.0;
+    };
+    let now = Instant::now();
+    if deadline <= now {
+        0.0
+    } else {
+        deadline.duration_since(now).as_millis().saturating_add(1) as f64
+    }
+}
+
 /// Reassemble ANSI escape sequences that the raw-mode reader queues as
 /// individual 1-byte chunks (`\x1b`, `[`, `A` → one `\x1b[A` chunk) so a
 /// single arrow key fires a single `'keypress'`/`'data'` event, matching a
 /// terminal's one-write delivery. A sequence still incomplete at the end of
-/// a drain batch is carried in [`PENDING_ESCAPE`] and finished by the next
-/// tick's bytes; if that next tick brings no new bytes the held bytes flush
-/// as-is, so a bare Escape keypress is delivered one tick later (a
-/// tick-granularity stand-in for Node's `escapeCodeTimeout`).
+/// a drain batch is carried in [`PENDING_ESCAPE`] and arms a one-shot
+/// `escapeCodeTimeout`. Bytes that complete the sequence cancel that deadline;
+/// expiry flushes the held bytes as-is. Event-loop ticks from unrelated work do
+/// not advance this state (#9593).
 fn coalesce_escape_sequences(raw: Vec<Vec<u8>>) -> Vec<Vec<u8>> {
     let mut acc: Vec<u8> = PENDING_ESCAPE
         .lock()
         .map(|mut p| std::mem::take(&mut *p))
         .unwrap_or_default();
     if raw.is_empty() {
-        // No new bytes this tick: a held ESC prefix is a bare Escape (or a
-        // torn sequence from a very slow terminal) — deliver it byte-wise
-        // instead of holding it forever.
-        return acc.into_iter().map(|b| vec![b]).collect();
+        if acc.is_empty() {
+            cancel_escape_timeout();
+            return Vec::new();
+        }
+        if escape_timeout_expired() {
+            return acc.into_iter().map(|b| vec![b]).collect();
+        }
+        // A timer, I/O source, or stale notify can produce arbitrarily many
+        // pump turns before the deadline. Put the prefix back unchanged.
+        if let Ok(mut p) = PENDING_ESCAPE.lock() {
+            *p = acc;
+        }
+        return Vec::new();
+    }
+    // Fresh bytes either complete/invalidate the held prefix or replace it
+    // with a new incomplete one below. In every case the old one-shot is done.
+    if !acc.is_empty() {
+        cancel_escape_timeout();
     }
     let mut out: Vec<Vec<u8>> = Vec::with_capacity(raw.len());
     for chunk in raw {
@@ -176,6 +235,7 @@ fn coalesce_escape_sequences(raw: Vec<Vec<u8>>) -> Vec<Vec<u8>> {
     if !acc.is_empty() {
         if let Ok(mut p) = PENDING_ESCAPE.lock() {
             *p = acc;
+            arm_escape_timeout();
         }
     }
     out
@@ -196,6 +256,7 @@ pub extern "C" fn js_readline_process_pending() -> i32 {
         if let Ok(mut p) = PENDING_ESCAPE.lock() {
             p.clear();
         }
+        cancel_escape_timeout();
         Vec::new()
     } else if STDIN_PAUSED.load(Ordering::Acquire) {
         // Paused: leave the queue AND any held escape prefix untouched so
@@ -434,8 +495,8 @@ pub extern "C" fn js_readline_has_active() -> i32 {
     let paused = STDIN_PAUSED.load(Ordering::Acquire);
     let refed = STDIN_REFED.load(Ordering::Acquire);
     let has_lines = PENDING_LINES.lock().map(|q| !q.is_empty()).unwrap_or(false);
-    // A held escape prefix counts as pending data: the loop must tick once
-    // more so the accumulator can flush it as a bare Escape keypress.
+    // A held escape prefix counts as pending data: the loop must stay alive
+    // until its explicit escapeCodeTimeout deadline can flush it.
     let has_data = PENDING_DATA.lock().map(|q| !q.is_empty()).unwrap_or(false)
         || PENDING_ESCAPE
             .lock()

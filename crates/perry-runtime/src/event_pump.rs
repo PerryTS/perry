@@ -7,7 +7,7 @@
 //! - a cross-thread event source (tokio worker, `std::thread::spawn`)
 //!   calls `js_notify_main_thread` after pushing into a queue that the
 //!   pump drains, or
-//! - the next timer / interval deadline elapses, or
+//! - the next timer, interval, or registered native deadline elapses, or
 //! - a 1-second safety cap elapses (heartbeat).
 //!
 //! Result: cross-thread async-op latency on the event loop drops from
@@ -418,7 +418,7 @@ pub(crate) fn js_notify_promise_progress() {
 //   * `perry_poll()`           — drains microtasks + stdlib
 //   * `perry_has_work()`       — true while anything is pending (microtasks,
 //                                timers across all 3 queues, stdlib handles)
-//   * `perry_next_wake_ms()`   — minimum across the 3 timer queues, or -1
+//   * `perry_next_wake_ms()`   — minimum timer/native deadline, or -1
 //
 // Pair with `perry_set_wake_callback` for polling-free integration.
 // ============================================================================
@@ -482,21 +482,30 @@ pub extern "C" fn perry_has_work() -> i32 {
     0
 }
 
-/// Returns the closest pending wake-up across all 3 timer queues, in
-/// milliseconds from now. Returns -1.0 when no timers are scheduled —
-/// the host can then sleep indefinitely (or until an OS event / a wake
-/// callback fires).
+/// Return every source that can put a deadline on the next event-loop park.
+/// The fourth slot is an optional callback rather than a hard stdlib reference,
+/// so runtime-only binaries retain their existing link surface.
+#[inline]
+fn next_wake_sources_ms() -> [f64; 4] {
+    [
+        js_timer_next_deadline(),
+        js_callback_timer_next_deadline(),
+        js_interval_timer_next_deadline(),
+        crate::stdlib_pump::stdlib_next_wake_ms(),
+    ]
+}
+
+/// Returns the closest pending wake-up across all timer queues and registered
+/// stdlib one-shots, in milliseconds from now. Returns -1.0 when no deadline is
+/// scheduled — the host can then sleep indefinitely (or until an OS event / a
+/// wake callback fires).
 ///
 /// NaN is *not* returned — keeps the return shape printable and avoids
 /// surprising hosts that compare with `<`.
 #[no_mangle]
 pub extern "C" fn perry_next_wake_ms() -> f64 {
     let mut best: f64 = -1.0;
-    for d in [
-        js_timer_next_deadline(),
-        js_callback_timer_next_deadline(),
-        js_interval_timer_next_deadline(),
-    ] {
+    for d in next_wake_sources_ms() {
         if d < 0.0 {
             continue;
         }
@@ -526,11 +535,11 @@ pub extern "C" fn js_event_loop_host_driven() -> i32 {
     EVENT_LOOP_HOST_DRIVEN.load(Ordering::Relaxed) as i32
 }
 
-/// Block until the next scheduled timer fires, a notify arrives, or the
-/// 1-second idle cap elapses — whichever is earliest. Returns immediately
-/// if a notify arrived since the last call (the flag is cleared on
-/// return). Replaces the old `js_sleep_ms` in the generated event loop
-/// and `await` busy-wait.
+/// Block until the next scheduled timer/native deadline fires, a notify
+/// arrives, or the 1-second idle cap elapses — whichever is earliest. Returns
+/// immediately if a notify arrived since the last call (the flag is cleared on
+/// return). Replaces the old `js_sleep_ms` in the generated event loop and
+/// `await` busy-wait.
 #[no_mangle]
 pub extern "C" fn js_wait_for_event() {
     // `PERRY_GC_CENSUS`: one relaxed atomic load; services a pending SIGUSR2
@@ -574,11 +583,7 @@ pub extern "C" fn js_wait_for_event() {
     }
 
     let mut budget_ms: u64 = IDLE_CAP_MS;
-    for d in [
-        js_timer_next_deadline(),
-        js_callback_timer_next_deadline(),
-        js_interval_timer_next_deadline(),
-    ] {
+    for d in next_wake_sources_ms() {
         if d >= 0.0 {
             let d_ms = d as u64;
             if d_ms < budget_ms {
