@@ -3436,7 +3436,15 @@ jobs:
     # healthy runs: macOS 34 min end-to-end. 120 leaves generous headroom for
     # the slower Windows host while bounding a hang to a fifth of what it cost
     # (run 32298711372).
-    timeout-minutes: 120
+    #
+    # 2026-09-03: that 34-min premise is stale. The macOS leg now runs the full
+    # xcompile matrix and measured 119 min against this 120-min cap (run
+    # 33598905771), then OVERRAN it (run 33626738093) -- cancelled with its own
+    # doc-tests already reporting 30/30 passed, the kill landing in the trailing
+    # cross-compile step. A cancelled job fails `full-suite-gate`, so a minute of
+    # runner jitter cost a full release cycle. 240 restores real headroom while
+    # still bounding a hang well under GitHub's 360-min hosted-runner ceiling.
+    timeout-minutes: 240
     # Blocking host runs and the portable cross-compile subset gate the job.
     # Known platform-tail failures remain advisory at their individual steps.
     strategy:
