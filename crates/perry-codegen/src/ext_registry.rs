@@ -105,6 +105,9 @@ pub enum OwnerKind {
 /// grows past a few dozen entries.
 #[rustfmt::skip]
 const FFI_REGISTRY: &[(&str, OwnerKind)] = &[
+    // The Bun dispatch bucket can reach listen/connect through extracted
+    // callable exports, so installing it also activates the net provider.
+    ("js_bun_tcp_nm_install",                       OwnerKind::WellKnown("net")),
     // ── #835: Web Streams ────────────────────────────────────────────
     // `perry-stdlib::streams` owns the canonical implementations.
     // `perry-ext-streams` re-implements a subset, but `js_stream_unwrap_handle`
@@ -395,6 +398,8 @@ const FFI_REGISTRY: &[(&str, OwnerKind)] = &[
     ("js_net_create_server",                        OwnerKind::WellKnown("net")),
     ("js_ext_net_create_server",                    OwnerKind::WellKnown("net")),
     ("js_ext_net_socket_connect",                   OwnerKind::WellKnown("net")),
+    ("js_bun_tcp_listen",                           OwnerKind::WellKnown("net")),
+    ("js_bun_tcp_connect",                          OwnerKind::WellKnown("net")),
     ("js_net_server_listen",                        OwnerKind::WellKnown("net")),
     ("js_net_server_close",                         OwnerKind::WellKnown("net")),
     ("js_net_server_address",                       OwnerKind::WellKnown("net")),

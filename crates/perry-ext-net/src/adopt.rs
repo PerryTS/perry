@@ -38,6 +38,7 @@ pub fn adopt_upgraded_tcp_stream(stream: tokio::net::TcpStream) -> i64 {
     }
     let (tx, rx) = mpsc::unbounded_channel::<SocketCommand>();
     let local = stream.local_addr().ok();
+    let remote = stream.peer_addr().ok();
     statics::sockets().lock().unwrap().insert(
         id,
         SocketState {
@@ -49,6 +50,7 @@ pub fn adopt_upgraded_tcp_stream(stream: tokio::net::TcpStream) -> i64 {
             is_open: true,
             refed: true,
             local_addr: local,
+            remote_addr: remote,
             raw: None,
             destroyed: false,
             bytes_read: 0,

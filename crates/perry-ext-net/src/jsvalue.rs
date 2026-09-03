@@ -189,7 +189,10 @@ pub(crate) unsafe fn get_object_string_field(obj_f64: f64, field_name: &str) -> 
     if (obj_ptr as usize) < 0x100000 {
         return None;
     }
+    let roots = perry_ffi::TransientRootScope::enter();
+    let object = roots.root_nanbox(obj_f64);
     let key = js_string_from_bytes(field_name.as_ptr(), field_name.len() as u32);
+    let obj_ptr = unbox_pointer(object.get()) as *const ObjectHeader;
     let val_f64 = js_object_get_field_by_name_f64(obj_ptr, key);
     let val = JsValue::from_bits(val_f64.to_bits());
     if val.is_undefined() || val.is_null() {
@@ -212,7 +215,10 @@ pub(crate) unsafe fn get_object_value_field(obj_f64: f64, field_name: &str) -> O
     if (obj_ptr as usize) < 0x100000 {
         return None;
     }
+    let roots = perry_ffi::TransientRootScope::enter();
+    let object = roots.root_nanbox(obj_f64);
     let key = js_string_from_bytes(field_name.as_ptr(), field_name.len() as u32);
+    let obj_ptr = unbox_pointer(object.get()) as *const ObjectHeader;
     Some(js_object_get_field_by_name_f64(obj_ptr, key))
 }
 
@@ -228,7 +234,10 @@ pub(crate) unsafe fn get_object_number_field(obj_f64: f64, field_name: &str) -> 
     if (obj_ptr as usize) < 0x100000 {
         return None;
     }
+    let roots = perry_ffi::TransientRootScope::enter();
+    let object = roots.root_nanbox(obj_f64);
     let key = js_string_from_bytes(field_name.as_ptr(), field_name.len() as u32);
+    let obj_ptr = unbox_pointer(object.get()) as *const ObjectHeader;
     let val_f64 = js_object_get_field_by_name_f64(obj_ptr, key);
     let val = JsValue::from_bits(val_f64.to_bits());
     if val.is_undefined() || val.is_null() {
@@ -263,7 +272,10 @@ pub(crate) unsafe fn get_object_bool_field(obj_f64: f64, field_name: &str) -> Op
     if (obj_ptr as usize) < 0x100000 {
         return None;
     }
+    let roots = perry_ffi::TransientRootScope::enter();
+    let object = roots.root_nanbox(obj_f64);
     let key = js_string_from_bytes(field_name.as_ptr(), field_name.len() as u32);
+    let obj_ptr = unbox_pointer(object.get()) as *const ObjectHeader;
     let val = JsValue::from_bits(js_object_get_field_by_name_f64(obj_ptr, key).to_bits());
     if val.is_undefined() || val.is_null() {
         return None;
@@ -292,9 +304,13 @@ pub(crate) unsafe fn build_error_object(msg: &str) -> f64 {
         let s = alloc_string(msg);
         return f64::from_bits(nanbox_string_bits(s.as_raw()));
     }
+    let roots = perry_ffi::TransientRootScope::enter();
+    let object = roots.root_nanbox(f64::from_bits(
+        JsValue::from_object_ptr(obj as *mut u8).bits(),
+    ));
     let s = alloc_string(msg);
     let v = JsValue::from_string_ptr(s.as_raw());
-    js_object_set_field(obj, 0, v);
+    js_object_set_field(unbox_pointer(object.get()) as *mut ObjectHeader, 0, v);
     let code = if msg.starts_with("ERR_") {
         Some(msg)
     } else if msg.contains("UnknownIssuer")
@@ -309,12 +325,19 @@ pub(crate) unsafe fn build_error_object(msg: &str) -> f64 {
     };
     if let Some(code) = code {
         let code = alloc_string(code);
-        js_object_set_field(obj, 1, JsValue::from_string_ptr(code.as_raw()));
+        js_object_set_field(
+            unbox_pointer(object.get()) as *mut ObjectHeader,
+            1,
+            JsValue::from_string_ptr(code.as_raw()),
+        );
     }
     let name = alloc_string("Error");
-    js_object_set_field(obj, 2, JsValue::from_string_ptr(name.as_raw()));
-    let obj_v = JsValue::from_object_ptr(obj as *mut u8);
-    f64::from_bits(obj_v.bits())
+    js_object_set_field(
+        unbox_pointer(object.get()) as *mut ObjectHeader,
+        2,
+        JsValue::from_string_ptr(name.as_raw()),
+    );
+    object.get()
 }
 
 #[cfg(test)]

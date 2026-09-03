@@ -5,8 +5,9 @@ fn native_callable_export_arity_reference(module: &str, prop: &str) -> Option<u3
         // Bun global/module surface (#9599).
         (
             "bun",
-            "Glob" | "Terminal" | "file" | "fileURLToPath" | "gc" | "hash" | "pathToFileURL"
-            | "stringWidth" | "stripANSI" | "which" | "zstdDecompress" | "zstdDecompressSync",
+            "Glob" | "Terminal" | "connect" | "file" | "fileURLToPath" | "gc" | "hash" | "listen"
+            | "pathToFileURL" | "stringWidth" | "stripANSI" | "which" | "zstdDecompress"
+            | "zstdDecompressSync",
         ) => Some(1),
         ("bun", "deepEquals" | "generateHeapSnapshot" | "spawn" | "write") => Some(2),
         ("bun", "wrapAnsi") => Some(3),
@@ -291,12 +292,14 @@ static CALLABLE_EXPORT_ARITY_TABLE: &[(&str, &[(&str, u32)])] = &[
         &[
             ("Glob", 1),
             ("Terminal", 1),
+            ("connect", 1),
             ("deepEquals", 2),
             ("file", 1),
             ("fileURLToPath", 1),
             ("gc", 1),
             ("generateHeapSnapshot", 2),
             ("hash", 1),
+            ("listen", 1),
             ("pathToFileURL", 1),
             ("spawn", 2),
             ("stringWidth", 1),

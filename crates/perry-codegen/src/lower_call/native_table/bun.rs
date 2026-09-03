@@ -3,8 +3,9 @@ use super::*;
 /// `"bun"` module / `Bun.*` globals shim pack (issue #6560, Tier 0 of
 /// Bun-app support — driver: opencode).
 ///
-/// Runtime implementations live in perry-runtime `bun_compat` except the
-/// url aliases, which reuse the `node:url` FFI directly.
+/// Runtime implementations live in perry-runtime `bun_compat`, except the
+/// TCP/Unix socket facade in perry-ext-net and the url aliases, which reuse
+/// the `node:url` FFI directly.
 /// `Bun.stdin` / `Bun.stdout` / `Bun.stderr` are property reads (handled by
 /// `js_native_module_property_by_name`), not rows here.
 pub(crate) const BUN_ROWS: &[NativeModSig] = &[
@@ -25,6 +26,24 @@ pub(crate) const BUN_ROWS: &[NativeModSig] = &[
         runtime: "js_bun_terminal_new",
         args: &[NA_F64],
         ret: NR_F64,
+    },
+    NativeModSig {
+        module: "bun",
+        has_receiver: false,
+        method: "listen",
+        class_filter: None,
+        runtime: "js_bun_tcp_listen",
+        args: &[NA_F64],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "bun",
+        has_receiver: false,
+        method: "connect",
+        class_filter: None,
+        runtime: "js_bun_tcp_connect",
+        args: &[NA_F64],
+        ret: NR_PROMISE,
     },
     NativeModSig {
         module: "bun",

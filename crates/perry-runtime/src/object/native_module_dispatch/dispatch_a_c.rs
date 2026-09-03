@@ -274,6 +274,17 @@ pub(crate) unsafe fn nm_dispatch_bun(ctx: &NmCtx, module_name: &str, method_name
     match (module_name, method_name) {
         ("bun", "spawn") => crate::bun_compat::js_bun_spawn(arg(0), arg(1)),
         ("bun", "Terminal") => crate::bun_compat::js_bun_terminal_new(arg(0)),
+        ("bun", "listen" | "connect") => {
+            let ptr =
+                crate::value::JS_NATIVE_BUN_TCP_DISPATCH.load(std::sync::atomic::Ordering::SeqCst);
+            if ptr.is_null() {
+                f64::from_bits(JSValue::undefined().bits())
+            } else {
+                let dispatch: unsafe extern "C" fn(*const u8, usize, *const f64, usize) -> f64 =
+                    std::mem::transmute(ptr);
+                dispatch(method_name.as_ptr(), method_name.len(), args_ptr, args_len)
+            }
+        }
         ("bun", "stringWidth") => crate::bun_compat::js_bun_string_width(arg(0), arg(1)),
         ("bun", "hash") => crate::bun_compat::js_bun_hash(arg(0), arg(1)),
         ("bun", "deepEquals") => crate::bun_compat::js_bun_deep_equals(arg(0), arg(1), arg(2)),

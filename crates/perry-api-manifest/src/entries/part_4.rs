@@ -1099,8 +1099,11 @@ pub(crate) const API_MANIFEST_PART_4: &[ApiEntry] = &[
     // `Bun.file` / `Bun.write`, `Bun.stdin/stdout/stderr`, `Bun.hash`
     // (Zig-std wyhash, BigInt result), and the module-level
     // `pathToFileURL` / `fileURLToPath` aliases of node:url.
-    // Implementation: perry-runtime `bun_compat`.
+    // Implementation: perry-runtime `bun_compat`; TCP/Unix sockets live in
+    // perry-ext-net.
     method("bun", "stringWidth", false, None),
+    method("bun", "listen", false, None),
+    method("bun", "connect", false, None),
     method("bun", "hash", false, None),
     method("bun", "deepEquals", false, None),
     method("bun", "stripANSI", false, None),

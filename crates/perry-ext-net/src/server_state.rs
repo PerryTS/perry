@@ -384,8 +384,11 @@ pub(crate) fn has_active_handles() -> bool {
     statics::servers()
         .lock()
         .unwrap()
-        .values()
-        .any(|server| server.listening || server.shutdown_tx.is_some())
+        .iter()
+        .any(|(id, server)| {
+            (server.listening || server.shutdown_tx.is_some())
+                && crate::bun_tcp::server_keeps_alive(*id)
+        })
 }
 
 #[no_mangle]

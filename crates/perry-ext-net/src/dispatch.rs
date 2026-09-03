@@ -35,6 +35,9 @@ extern "C" {
     fn js_register_handle_property_set_dispatch_extension(
         f: unsafe extern "C" fn(i64, *const u8, usize, f64) -> i32,
     );
+    fn js_set_native_bun_tcp_dispatch(
+        f: unsafe extern "C" fn(*const u8, usize, *const f64, usize) -> f64,
+    );
 }
 
 extern "C" fn process_pending_aux() -> i32 {
@@ -54,6 +57,7 @@ pub(crate) fn ensure_runtime_dispatch_registered() {
         js_register_handle_method_dispatch_extension(js_ext_net_handle_method_dispatch);
         js_register_handle_property_dispatch_extension(js_ext_net_handle_property_dispatch);
         js_register_handle_property_set_dispatch_extension(js_ext_net_handle_property_set_dispatch);
+        js_set_native_bun_tcp_dispatch(crate::bun_tcp::js_bun_tcp_native_dispatch);
     });
 }
 
@@ -475,7 +479,8 @@ pub unsafe extern "C" fn js_ext_net_handle_method_dispatch(
     } else {
         std::slice::from_raw_parts(args_ptr, args_len)
     };
-    let value = socket_method(handle, method, args)
+    let value = crate::bun_tcp::dispatch_method(handle, method, args)
+        .or_else(|| socket_method(handle, method, args))
         .or_else(|| server_method(handle, method, args))
         .or_else(|| block_list_method(handle, method, args));
     if let Some(value) = value {
@@ -496,7 +501,11 @@ pub unsafe extern "C" fn js_ext_net_handle_property_dispatch(
     out: *mut f64,
 ) -> i32 {
     let prop = property_name(property_name_ptr, property_name_len);
-    let value = if matches!(prop, "address" | "family" | "port" | "flowlabel")
+    let value = if let Some(name) = crate::bun_tcp::method_name(handle, prop) {
+        Some(bind_handle_method(handle, name))
+    } else if let Some(value) = crate::bun_tcp::property(handle, prop) {
+        Some(value)
+    } else if matches!(prop, "address" | "family" | "port" | "flowlabel")
         && crate::js_ext_net_is_socket_address_handle(handle) != 0
     {
         Some(match prop {
@@ -581,6 +590,13 @@ pub unsafe extern "C" fn js_ext_net_handle_property_set_dispatch(
     property_name_len: usize,
     value: f64,
 ) -> i32 {
+    if crate::bun_tcp::set_property(
+        handle,
+        property_name(property_name_ptr, property_name_len),
+        value,
+    ) {
+        return 1;
+    }
     if crate::js_ext_net_is_server_handle(handle) == 0 {
         return 0;
     }

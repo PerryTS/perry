@@ -44,6 +44,7 @@ mod ip;
 // recycles pooled 16 KiB capacity instead of allocating a fresh
 // `BytesMut` per read. See `buffer_pool.rs` for the rationale.
 mod buffer_pool;
+mod bun_tcp;
 mod tls;
 pub use tls::{js_ext_tls_connect, js_tls_connect};
 // #2131 — lifecycle / EventEmitter surface for `net.Socket` + `net.Server`
@@ -254,6 +255,7 @@ pub(crate) struct SocketState {
     /// `TcpStream::connect`/`accept`. Drives `socket.address()` so the
     /// "undefined.address" cluster reports the actual bound port/family.
     pub(crate) local_addr: Option<SocketAddr>,
+    pub(crate) remote_addr: Option<SocketAddr>,
     /// #2154 — raw-consumer mode (see `raw_bridge`). When `Some`,
     /// `run_socket_task` buffers inbound bytes here for `perry-ext-http` to
     /// drain instead of firing JS `'data'` events.
@@ -288,6 +290,7 @@ impl SocketState {
             is_open: true,
             refed: true,
             local_addr: None,
+            remote_addr: None,
             raw: None,
             destroyed: false,
             bytes_read: 0,
@@ -537,6 +540,7 @@ pub unsafe extern "C" fn js_net_socket_alloc() -> i64 {
             is_open: false,
             refed: true,
             local_addr: None,
+            remote_addr: None,
             raw: None,
             destroyed: false,
             bytes_read: 0,
@@ -767,7 +771,7 @@ pub unsafe extern "C" fn js_net_server_listen(handle: i64, port: f64, arg2: f64,
             tokio::select! {
                 accepted = listener.accept() => {
                     match accepted {
-                        Ok((stream, _peer)) => {
+                        Ok((stream, peer)) => {
                             if let Some(info) =
                                 server_state::should_drop_connection(server_id, &stream)
                             {
@@ -779,16 +783,14 @@ pub unsafe extern "C" fn js_net_server_listen(handle: i64, port: f64, arg2: f64,
                             // aren't delayed waiting to coalesce; a later
                             // `socket.setNoDelay(false)` can re-enable Nagle.
                             let _ = stream.set_nodelay(true);
-                            // Issue #2131 — record the accepted
-                            // stream's local address so `sock.address()`
-                            // on the server-side socket reports the
-                            // bound port/family instead of returning
-                            // undefined.
+                            // Keep both endpoints for address metadata on the
+                            // accepted socket.
                             let accepted_local = stream.local_addr().ok();
                             ipc::register_accepted_transport(
                                 server_id,
                                 Transport::Plain(stream),
                                 accepted_local,
+                                Some(peer),
                             );
                         }
                         Err(e) => {
@@ -1003,12 +1005,13 @@ pub unsafe extern "C" fn js_net_socket_method_connect(
 
             // Node default: TCP_NODELAY on for a freshly-connected socket.
             let _ = tcp.set_nodelay(true);
-            // Issue #2131 — record the local addr so `socket.address()`
-            // returns the bound port/family on the deferred-connect path.
+            // Preserve both endpoints for socket metadata.
             let local = tcp.local_addr().ok();
+            let remote = tcp.peer_addr().ok();
             if let Some(s) = statics::sockets().lock().unwrap().get_mut(&handle) {
                 s.is_open = true;
                 s.local_addr = local;
+                s.remote_addr = remote;
             }
             tokio::task::yield_now().await;
             push_event(PendingNetEvent::Connect(handle, local_server));
@@ -1067,6 +1070,7 @@ where
             is_open: false,
             refed: true,
             local_addr: None,
+            remote_addr: None,
             raw: None,
             destroyed: false,
             bytes_read: 0,
@@ -1104,9 +1108,9 @@ where
             // before any TLS handshake consumes the stream — the option lives
             // on the kernel socket and persists through the rustls wrapper.
             let _ = tcp.set_nodelay(true);
-            // Issue #2131 — capture the local addr before we possibly
-            // hand the stream to rustls (the TLS path consumes it).
+            // Capture endpoints before rustls consumes the stream.
             let local = tcp.local_addr().ok();
+            let remote = tcp.peer_addr().ok();
 
             let transport = match direct_tls {
                 Some((servername, verify, config)) => {
@@ -1130,6 +1134,7 @@ where
             if let Some(s) = statics::sockets().lock().unwrap().get_mut(&id) {
                 s.is_open = true;
                 s.local_addr = local;
+                s.remote_addr = remote;
             }
             tokio::task::yield_now().await;
             push_event(PendingNetEvent::Connect(id, local_server));
@@ -1668,6 +1673,7 @@ pub unsafe extern "C" fn js_ext_net_drain_pending() -> i32 {
         match ev {
             PendingNetEvent::Connect(id, local_server) => {
                 server_state::finish_local_connect(local_server);
+                bun_tcp::on_connect(id);
                 // #8259: park the snapshot so callback N stays rooted (and is
                 // rewritten on evacuation) while callback N-1 runs user JS.
                 emit_socket_no_arg(id, "connect");
@@ -1684,6 +1690,9 @@ pub unsafe extern "C" fn js_ext_net_drain_pending() -> i32 {
             }
             PendingNetEvent::SecureConnect(id) => emit_tls_secure_connect(id),
             PendingNetEvent::Data(id, bytes) => {
+                if bun_tcp::on_data(id, &bytes) {
+                    continue;
+                }
                 let cbs = listeners_for(id, "data");
                 if cbs.is_empty() {
                     server_state::buffer_pending_server_data(id, bytes);
@@ -1729,6 +1738,7 @@ pub unsafe extern "C" fn js_ext_net_drain_pending() -> i32 {
                 lifecycle::drain_once_listeners(id, "data");
             }
             PendingNetEvent::Error(id, msg) => {
+                bun_tcp::on_error(id, &msg);
                 let cbs = listeners_for(id, "error");
                 if cbs.is_empty() {
                     continue;
@@ -1771,6 +1781,7 @@ pub unsafe extern "C" fn js_ext_net_drain_pending() -> i32 {
                 lifecycle::drain_once_listeners(id, "error");
             }
             PendingNetEvent::End(id) => {
+                bun_tcp::on_end(id);
                 // Issue #1852 — readable side ended (peer FIN). Fire the
                 // `'end'` listeners; the trailing `Close` event (pushed
                 // right after `End` in `run_socket_task`) does the actual
@@ -1786,11 +1797,16 @@ pub unsafe extern "C" fn js_ext_net_drain_pending() -> i32 {
                 drop(frame);
                 lifecycle::drain_once_listeners(id, "end");
             }
-            PendingNetEvent::WriteComplete(_, completion, error)
-            | PendingNetEvent::ShutdownComplete(_, completion, error) => {
+            PendingNetEvent::WriteComplete(id, completion, error) => {
+                if !bun_tcp::on_write_complete(id, completion, error.is_none()) {
+                    lifecycle::dispatch_socket_completion(completion, error);
+                }
+            }
+            PendingNetEvent::ShutdownComplete(_, completion, error) => {
                 lifecycle::dispatch_socket_completion(completion, error);
             }
             PendingNetEvent::Close(id) => {
+                bun_tcp::on_close(id);
                 lifecycle::drop_socket_completions(id);
                 extern "C" {
                     fn js_tls_client_record_closed(handle: i64);
@@ -1813,15 +1829,13 @@ pub unsafe extern "C" fn js_ext_net_drain_pending() -> i32 {
                 statics::max_listeners().lock().unwrap().remove(&id);
                 server_state::discard_pending_server_data(id);
             }
-            // Issue #1123 followup — server-side events. The
-            // accept loop pushes `ServerConnection`/`ServerListening`/
-            // `ServerError`/`ServerClose`; the main-thread pump
-            // converts them into the appropriate JS dispatch.
+            // Convert accept-loop events into main-thread JS dispatch.
             PendingNetEvent::ServerConnection(server_id, socket_id, released) => {
                 if !released && server_state::defer_server_connection(server_id, socket_id) {
                     continue;
                 }
                 server_state::activate_connection(server_id, socket_id);
+                bun_tcp::on_accept(server_id, socket_id);
                 let cbs = listeners_for(server_id, "connection");
                 if cbs.is_empty() {
                     // Drain any `server.once('connection', cb)` flagged
@@ -1832,17 +1846,8 @@ pub unsafe extern "C" fn js_ext_net_drain_pending() -> i32 {
                     server_state::release_connection_callback(socket_id);
                     continue;
                 }
-                // Sockets returned by the codegen's `net.connect`
-                // path (`js_net_socket_connect` → NR_PTR ret kind in
-                // lower_call.rs) are NaN-boxed with POINTER_TAG over
-                // the raw socket id. Match that here so user code
-                // sees the same value shape regardless of which side
-                // produced the socket: `sock.on(...)` then dispatches
-                // through the `("net", true, "on", Some("Socket"))`
-                // NATIVE_MODULE_TABLE row (which `unbox_to_i64`s the
-                // receiver back to the raw id). Bare-number sockets
-                // skipped the dispatch and hit the generic property
-                // path → `(number).on is not a function`.
+                // Match the POINTER_TAG representation returned by net.connect
+                // so accepted sockets use the same method-dispatch path.
                 let sock_f64 = f64::from_bits(
                     0x7FFD_0000_0000_0000 | (socket_id as u64 & 0x0000_FFFF_FFFF_FFFF),
                 );
@@ -1861,13 +1866,8 @@ pub unsafe extern "C" fn js_ext_net_drain_pending() -> i32 {
                 server_state::release_connection_callback(socket_id);
             }
             PendingNetEvent::ServerListening(server_id) => {
-                // Take + drain the 'listening' listeners so the
-                // optional `listen(port, cb)` callback fires exactly
-                // once (Node's semantics). Subsequent
-                // `.on('listening', ...)` registrations would have
-                // to wait for another `.listen(...)` cycle — fine,
-                // re-binding without close() in between would error
-                // on bind anyway.
+                bun_tcp::on_server_listening(server_id);
+                // Drain one-shot `listening` callbacks for this bind cycle.
                 let cbs = {
                     let mut listeners = statics::listeners().lock().unwrap();
                     if let Some(per_server) = listeners.get_mut(&server_id) {
@@ -1876,9 +1876,7 @@ pub unsafe extern "C" fn js_ext_net_drain_pending() -> i32 {
                         Vec::new()
                     }
                 };
-                // #8259: these were REMOVED from the table above (one-shot),
-                // so this frame is their ONLY root during dispatch — without
-                // it a collection here can free, not just move, them.
+                // Removed callbacks need custody as their only remaining root.
                 let frame = dispatch_custody::DispatchFrame::park(cbs);
                 for i in 0..frame.len() {
                     let cb = frame.cb(i);
@@ -1889,6 +1887,7 @@ pub unsafe extern "C" fn js_ext_net_drain_pending() -> i32 {
                 drop(frame);
             }
             PendingNetEvent::ServerClose(server_id) => {
+                bun_tcp::on_server_close(server_id);
                 // Drain close listeners (one-shot, like Node).
                 let cbs = {
                     let mut listeners = statics::listeners().lock().unwrap();
@@ -1908,9 +1907,7 @@ pub unsafe extern "C" fn js_ext_net_drain_pending() -> i32 {
                     }
                 }
                 drop(frame);
-                // Tear down the server entry so the keepalive gate
-                // (`js_ext_net_has_active_handles`) lets the runtime
-                // exit cleanly after the user's close() resolves.
+                // Remove keepalive state after the close callbacks run.
                 server_state::remove_server(server_id);
                 statics::servers().lock().unwrap().remove(&server_id);
                 statics::listeners().lock().unwrap().remove(&server_id);

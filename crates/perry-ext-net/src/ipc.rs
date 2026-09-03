@@ -40,6 +40,7 @@ fn allocate_socket() -> (i64, mpsc::UnboundedReceiver<SocketCommand>) {
             is_open: false,
             refed: true,
             local_addr: None,
+            remote_addr: None,
             raw: None,
             destroyed: false,
             bytes_read: 0,
@@ -90,6 +91,7 @@ pub(crate) fn register_accepted_transport(
     server_id: i64,
     transport: Transport,
     local_addr: Option<std::net::SocketAddr>,
+    remote_addr: Option<std::net::SocketAddr>,
 ) {
     let socket_id = next_id();
     if socket_id == perry_ffi::INVALID_HANDLE {
@@ -108,6 +110,7 @@ pub(crate) fn register_accepted_transport(
             is_open: true,
             refed: true,
             local_addr,
+            remote_addr,
             raw: None,
             destroyed: false,
             bytes_read: 0,
@@ -231,6 +234,7 @@ async fn run_listener(
                             server_id,
                             Transport::Ipc(Box::new(stream)),
                             None,
+                            None,
                         );
                     }
                 }
@@ -304,6 +308,7 @@ async fn run_listener(
                     register_accepted_transport(
                         server_id,
                         Transport::Ipc(Box::new(stream)),
+                        None,
                         None,
                     );
                 }
