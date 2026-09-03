@@ -138,8 +138,8 @@ Everything else lives in the [docs](https://perryts.github.io/perry/):
 - [Language support](https://perryts.github.io/perry/language/supported-features.html) — supported TypeScript features and [limitations](https://perryts.github.io/perry/language/limitations.html)
 - [Native UI](https://perryts.github.io/perry/ui/overview.html) · [Multi-threading](https://perryts.github.io/perry/threading/overview.html) · [Standard library](https://perryts.github.io/perry/stdlib/overview.html)
 - [Platforms](https://perryts.github.io/perry/platforms/overview.html) — per-platform guides from macOS to watchOS to WASM
-- [CLI reference](https://perryts.github.io/perry/cli/commands.html) — commands, flags, `perry.toml`, [privacy & telemetry](https://perryts.github.io/perry/cli/telemetry.html)
-- [Contributing](https://perryts.github.io/perry/contributing/architecture.html) — architecture, [building from source](https://perryts.github.io/perry/contributing/building.html), and the [release process](https://perryts.github.io/perry/contributing/releasing.html)
+- [CLI reference](https://perryts.github.io/perry/cli/commands.html) — commands, flags, `perry.toml`, [privacy & telemetry](docs/src/cli/telemetry.md)
+- [Contributing](docs/src/contributing/architecture.md) — architecture, [building from source](docs/src/contributing/building.md), and the [release process](docs/src/contributing/releasing.md)
 
 ## Community
 
@@ -151,7 +151,7 @@ Perry is built in the open — come say hi:
 
 ## Privacy
 
-Telemetry is **opt-in**: nothing leaves your machine unless you explicitly enable it in `~/.perry/config.toml`, and `PERRY_NO_TELEMETRY=1` (or `CI=true`) always wins. What can be sent is anonymous and redacted — never your source, paths, or project names. Inspect it any time with `perry doctor`, and see exactly what's in the payload in the [privacy & telemetry docs](https://perryts.github.io/perry/cli/telemetry.html).
+Telemetry is **opt-in**: nothing leaves your machine unless you explicitly enable it in `~/.perry/config.toml`, and `PERRY_NO_TELEMETRY=1` (or `CI=true`) always wins. What can be sent is anonymous and redacted — never your source, paths, or project names. Inspect it any time with `perry doctor`, and see exactly what's in the payload in the [privacy & telemetry docs](docs/src/cli/telemetry.md).
 
 ## Sponsors
 
