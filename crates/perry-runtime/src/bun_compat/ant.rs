@@ -175,6 +175,12 @@ pub extern "C" fn js_bun_ant_get_peer_pid(fd: f64) -> f64 {
         .unwrap_or_else(null)
 }
 
+// Its production callers are the Linux/Android cgroup and sysinfo paths below;
+// on other targets only the unit test uses it.
+#[cfg_attr(
+    not(any(target_os = "linux", target_os = "android", test)),
+    allow(dead_code)
+)]
 fn classify_availability(available: u64, limit: u64) -> Option<MemoryPressureLevel> {
     if limit == 0 {
         return None;

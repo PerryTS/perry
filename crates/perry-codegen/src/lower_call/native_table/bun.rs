@@ -29,7 +29,6 @@ pub(crate) const BUN_ROWS: &[NativeModSig] = &[
     NativeModSig {
         module: "bun",
         has_receiver: false,
-<<<<<<< HEAD
         method: "Transpiler",
         class_filter: None,
         runtime: "js_bun_transpiler_new",
@@ -91,13 +90,15 @@ pub(crate) const BUN_ROWS: &[NativeModSig] = &[
         runtime: "js_bun_transpiler_scan",
         args: &[NA_STR],
         ret: NR_OBJ_FROM_JSON_STR,
-=======
+    },
+    NativeModSig {
+        module: "bun",
+        has_receiver: false,
         method: "SQL",
         class_filter: None,
         runtime: "js_bun_sql_new",
         args: &[NA_F64, NA_F64],
         ret: NR_F64,
->>>>>>> 21fc15c063 (feat(bun): implement SQL SQLite compatibility)
     },
     NativeModSig {
         module: "bun",

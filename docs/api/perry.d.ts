@@ -1,7 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2072 entries across 136 modules
-// Coverage: 2070 entries across 136 modules
+// Coverage: 2089 entries across 136 modules
 
 type PerryI8 = number & { readonly __perryI8?: never };
 type PerryI16 = number & { readonly __perryI16?: never };
@@ -346,7 +345,17 @@ declare module "bun" {
   /** stdlib */
   export class Transpiler { [key: string]: any; }
   /** stdlib */
+  export const JSONL: any;
+  /** stdlib */
+  export const TOML: any;
+  /** stdlib */
+  export const YAML: any;
+  /** stdlib */
+  export const ant: any;
+  /** stdlib */
   export const isStandaloneExecutable: any;
+  /** stdlib */
+  export const semver: any;
   /** stdlib */
   export const stderr: any;
   /** stdlib */
@@ -358,13 +367,23 @@ declare module "bun" {
   /** stdlib */
   export function Glob(...args: any[]): any;
   /** stdlib */
+  export function SQL(...args: any[]): any;
+  /** stdlib */
+  export function Terminal(...args: any[]): any;
+  /** stdlib */
   export function Transpiler(...args: any[]): any;
   /** stdlib */
   export function build(...args: any[]): any;
   /** stdlib */
+  export function deepEquals(...args: any[]): any;
+  /** stdlib */
   export function file(...args: any[]): any;
   /** stdlib */
   export function fileURLToPath(...args: any[]): any;
+  /** stdlib */
+  export function gc(...args: any[]): any;
+  /** stdlib */
+  export function generateHeapSnapshot(...args: any[]): any;
   /** stdlib */
   export function hash(...args: any[]): any;
   /** stdlib */
@@ -372,11 +391,23 @@ declare module "bun" {
   /** stdlib */
   export function serve(options: any): any;
   /** stdlib */
+  export function spawn(...args: any[]): any;
+  /** stdlib */
   export function stringWidth(...args: any[]): any;
+  /** stdlib */
+  export function stripANSI(...args: any[]): any;
   /** stdlib */
   export function unsupported(...args: any[]): any;
   /** stdlib */
+  export function which(...args: any[]): any;
+  /** stdlib */
+  export function wrapAnsi(...args: any[]): any;
+  /** stdlib */
   export function write(...args: any[]): any;
+  /** stdlib */
+  export function zstdDecompress(...args: any[]): any;
+  /** stdlib */
+  export function zstdDecompressSync(...args: any[]): any;
 }
 
 declare module "bun:ffi" {

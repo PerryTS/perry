@@ -39,11 +39,10 @@ pub(crate) fn lower_new_member_native(
                         module == "bun" && (export.is_none() || export == Some("default"))
                     });
             if (is_global_bun || is_bun_namespace)
-<<<<<<< HEAD
-                && matches!(prop_ident.sym.as_ref(), "Glob" | "Terminal" | "Transpiler")
-=======
-                && matches!(prop_ident.sym.as_ref(), "Glob" | "Terminal" | "SQL")
->>>>>>> 21fc15c063 (feat(bun): implement SQL SQLite compatibility)
+                && matches!(
+                    prop_ident.sym.as_ref(),
+                    "Glob" | "SQL" | "Terminal" | "Transpiler"
+                )
             {
                 return Ok(Some(Expr::NativeMethodCall {
                     module: "bun".to_string(),
