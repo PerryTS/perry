@@ -321,3 +321,36 @@ fn test_buffer_own_props_table_drains_after_owners_die() {
          remain, expected at most the pre-test {base}"
     );
 }
+
+/// The invariant that makes every address-keyed buffer registry legitimate in
+/// the first place: a `BufferHeader` is never relocated, so its address is a
+/// stable key for the object's whole lifetime and only DEATH (the pruning the
+/// rest of this file tests) can invalidate an entry.
+///
+/// Nothing pinned this before, and a great deal rests on it: `bun:ffi`'s
+/// pointer-lifetime contract hands `ptr(view)` to native code and documents
+/// the address as stable for the lifetime of the JS object
+/// (`bun_ffi/mod.rs`); `FOREIGN_BACKING_REGISTRY`, `VIEW_REGISTRY`,
+/// `BACKING_TO_VIEWS`, `DETACHED_BUFFER_REGISTRY` and the identity registries
+/// above are all keyed by that address; and #9611 publishes
+/// `WebAssembly.Memory.prototype.buffer` as a foreign-backed wrapper whose
+/// address the wasm binding table keys. Flipping either type to `movable`
+/// invalidates all of them at once, silently — this test is where that shows
+/// up instead.
+///
+/// Movability is enforced in two places, and both are what this asserts
+/// through: `gc_type_is_movable` gates the per-object and the block-granular
+/// old-page evacuation paths (`gc/oldgen.rs`), and buffers are born in the old
+/// arena as `TENURED`, so no copying minor ever sees one either.
+#[test]
+fn test_buffer_headers_are_never_relocated() {
+    assert!(
+        !crate::gc::types::gc_type_is_movable(crate::gc::GC_TYPE_BUFFER),
+        "GC_TYPE_BUFFER must stay non-movable: every buffer registry is keyed \
+         by the header address, and bun:ffi hands that address to native code"
+    );
+    assert!(
+        !crate::gc::types::gc_type_is_movable(crate::gc::GC_TYPE_TYPED_ARRAY),
+        "GC_TYPE_TYPED_ARRAY must stay non-movable for the same reason"
+    );
+}

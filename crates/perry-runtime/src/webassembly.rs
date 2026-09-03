@@ -715,6 +715,36 @@ impl Drop for ActiveInstanceGuard {
     }
 }
 
+/// Rewrite the published-buffer address in [`WASM_MEMORY_BINDINGS`] if the
+/// collector ever relocates a `BufferHeader`. Registered in `gc_init`.
+///
+/// The address is a metadata KEY, not an ownership root, so this visits it
+/// with `visit_metadata_usize_slot` — rewritten when forwarded, never marked.
+/// Marking from here would be wrong twice over: the buffer is already strongly
+/// held by the `WebAssembly.Memory` object's own `buffer` property for as long
+/// as any export closure (and therefore any caller that can reach this table)
+/// is alive, and an entry lives as long as its instance, so marking would pin
+/// a buffer whose JS owner has died.
+///
+/// It rewrites nothing today. `GC_TYPE_BUFFER` is declared `movable: false`
+/// (`gc/types.rs`), both old-page evacuation paths bail on
+/// `!gc_type_is_movable` (`gc/oldgen.rs`), and `buffer_alloc_foreign` allocates
+/// straight into the old arena as `TENURED`, so no copying minor sees one
+/// either — the same guarantee `bun_ffi`'s pointer-lifetime contract already
+/// rests on. It is registered anyway so that this table is not what breaks if
+/// that flag is ever flipped, and so the holder is covered by a scanner rather
+/// than by a verdict that would silently rot on the day it changed.
+pub(crate) fn scan_wasm_memory_binding_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    // Safe to take unconditionally: every allocating call in this module sits
+    // OUTSIDE the `with` block that borrows this map, so a collection can
+    // never land while the borrow is held.
+    WASM_MEMORY_BINDINGS.with(|bindings| {
+        for binding in bindings.borrow_mut().values_mut() {
+            visitor.visit_metadata_usize_slot(&mut binding.buffer);
+        }
+    });
+}
+
 fn instance_memory_span(inst: *mut c_void) -> (*mut u8, usize) {
     let mut len = 0usize;
     let data = unsafe { perry_wasm_host_instance_memory_span(inst, &mut len) };
