@@ -137,6 +137,7 @@ pub(crate) fn declare_core(module: &mut LlModule) {
     module.declare_function("js_console_create_task", DOUBLE, &[DOUBLE]);
 
     // ========== Fetch ==========
+    module.declare_function("js_fetch_input_ptr", I64, &[DOUBLE]);
     module.declare_function("js_fetch_get", I64, &[I64]);
     module.declare_function("js_fetch_get_with_auth", I64, &[I64, I64]);
     module.declare_function("js_fetch_post", I64, &[I64, I64, I64]);

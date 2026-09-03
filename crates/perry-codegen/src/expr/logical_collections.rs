@@ -545,13 +545,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 },
                 |ctx, vals, headers_str| {
                     let blk = ctx.block();
-                    // The runtime takes raw StringHeader pointers (i64). Unbox
-                    // each input string. `body` may be undefined → unbox produces
-                    // 0 which the runtime treats as "no body" via
-                    // string_from_header(). The unbox happens BELOW the re-read,
-                    // which is the only place it can be correct (slice 1b's
-                    // `BufferSlice` finding).
-                    let url_handle = unbox_to_i64(blk, &vals[0]);
+                    // The runtime takes a raw URL StringHeader pointer or native
+                    // Request handle (i64), followed by raw string pointers.
+                    // `body` may be undefined → unbox produces 0 which the
+                    // runtime treats as "no body" via string_from_header(). The
+                    // conversion happens BELOW the re-read, which is the only
+                    // place it can be correct (slice 1b's `BufferSlice` finding).
+                    let url_handle = blk.call(I64, "js_fetch_input_ptr", &[(DOUBLE, &vals[0])]);
                     let method_handle = unbox_to_i64(blk, &vals[1]);
                     let body_handle = unbox_to_i64(blk, &vals[2]);
                     // Stash the AbortSignal so `js_fetch_with_options` can cancel
