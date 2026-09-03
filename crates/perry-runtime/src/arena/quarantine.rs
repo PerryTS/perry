@@ -359,10 +359,14 @@ unsafe fn poison(data: *mut u8, used: usize) {
     let words = used / 8;
     let ptr = data as *mut u64;
     for i in 0..words {
+        // GC_STORE_AUDIT(POINTER_FREE): diagnostic poison in a retired arena
+        // span is not a live heap edge.
         ptr.add(i).write(QUARANTINE_POISON_WORD);
     }
     let tail_start = words * 8;
     for i in tail_start..used {
+        // GC_STORE_AUDIT(POINTER_FREE): tail bytes repeat the non-pointer
+        // poison pattern in dead storage.
         data.add(i)
             .write((QUARANTINE_POISON_WORD >> (8 * (i % 8))) as u8);
     }

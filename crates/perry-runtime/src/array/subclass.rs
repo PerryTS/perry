@@ -923,6 +923,8 @@ pub(crate) fn array_subclass_fast_length_with_ic(value: f64, cache: *mut u64) ->
             0
         };
         unsafe {
+            // GC_STORE_AUDIT(POINTER_FREE): this IC contains scalar
+            // shape/layout identities, never managed pointers.
             cache.add(1).write(layout.length_slot as u64);
             cache.add(2).write(layout.live_inline_slots as u64);
             cache.write(if family_token != 0 {
@@ -1589,6 +1591,8 @@ pub extern "C" fn js_packed_arraylike_index_get(receiver: f64, index: f64, cache
                                 )
                             };
                             unsafe {
+                                // GC_STORE_AUDIT(POINTER_FREE): generated IC
+                                // words are scalar layout facts, not heap edges.
                                 cache.add(1).write(layout.length_slot as u64);
                                 cache.add(2).write(layout.element_base as u64);
                                 cache.add(3).write(layout.dense_prefix_len as u64);

@@ -518,6 +518,7 @@ pub extern "C-unwind" fn js_throw(value: f64) -> ! {
         // assume (skipped cleanups are replayed manually).
         #[cfg(windows)]
         unsafe {
+            // GC_STORE_AUDIT(STACK): native jmp_buf control word is not GC-managed storage.
             (jb_ptr as *mut u64).write(0);
         }
         unsafe { longjmp(jb_ptr, 1) }

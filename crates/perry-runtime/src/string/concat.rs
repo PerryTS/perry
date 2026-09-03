@@ -143,6 +143,8 @@ pub(crate) unsafe fn copy_bytes_small(src: *const u8, dst: *mut u8, len: usize) 
     } else if len >= 4 {
         let head = src.cast::<u32>().read_unaligned();
         let tail = src.add(len - 4).cast::<u32>().read_unaligned();
+        // GC_STORE_AUDIT(POINTER_FREE): all unaligned arms copy raw UTF-8
+        // payload bytes, never traced slots.
         dst.cast::<u32>().write_unaligned(head);
         dst.add(len - 4).cast::<u32>().write_unaligned(tail);
     } else if len >= 2 {

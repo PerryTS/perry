@@ -56,6 +56,12 @@ RUST_TLS_INDEX_STORE_RE = re.compile(
 
 RUST_PTR_STORE_RE = re.compile(r"\b(?:std::)?ptr::write(?:_unaligned)?\s*\(")
 RUST_COPY_RE = re.compile(r"\b(?:std::)?ptr::copy(?:_nonoverlapping)?\s*\(")
+RUST_PTR_METHOD_WRITE_RE = re.compile(
+    r"\.\s*(?P<operation>write(?:_unaligned)?)\s*\((?!\s*\))"
+)
+RUST_PTR_METHOD_COPY_RE = re.compile(
+    r"\.\s*copy_(?:to|from)(?:_nonoverlapping)?\s*\("
+)
 RUST_DEREF_ASSIGN_RE = re.compile(
     r"\*(?P<target>[A-Za-z_][A-Za-z0-9_]*)(?:\.add\([^)]*\))?\s*=(?!=)"
 )
@@ -153,6 +159,27 @@ RUST_DEREF_RISK_TARGETS = (
     "new_keys_elements",
     "pair_elems",
     "result_elements",
+)
+
+# Unlike `ptr::write(dst, value)`, `dst.write(value)` carries no namespace that
+# proves the receiver is a raw pointer. Admit the unambiguous unaligned method,
+# explicit pointer-producing chains/casts, and conventional pointer/slot names;
+# this keeps ordinary `file.write(bytes)` and `RwLock::write()` calls out of a
+# GC store inventory while covering raw-pointer method syntax.
+RUST_PTR_METHOD_EXACT_TARGETS = {
+    "dest",
+    "dst",
+    "p",
+    "ptr",
+    "raw",
+    "slot",
+}
+RUST_PTR_METHOD_TARGET_SUFFIXES = (
+    "_data",
+    "_elements",
+    "_fields",
+    "_ptr",
+    "_slot",
 )
 
 RUST_ATOMIC_ROOT_TARGET_HINTS = (
@@ -406,12 +433,16 @@ def classify_rust_store(path: Path, lines: list[str], index: int) -> str | None:
     if RUST_FIELD_STORE_RE.search(line):
         return "raw heap pointer field store"
 
-    if RUST_PTR_STORE_RE.search(line):
+    method_write = any(
+        is_raw_pointer_method_write(lines, index, match)
+        for match in RUST_PTR_METHOD_WRITE_RE.finditer(line)
+    )
+    if RUST_PTR_STORE_RE.search(line) or method_write:
         if any(hint in window for hint in STACK_COPY_HINTS):
             return "raw stack/temporary argument store"
         return "raw slot write"
 
-    if RUST_COPY_RE.search(line):
+    if RUST_COPY_RE.search(line) or RUST_PTR_METHOD_COPY_RE.search(line):
         if any(hint in window for hint in STACK_COPY_HINTS):
             return "raw stack/temporary argument copy"
         if is_runtime_module(path, "string") or is_pointer_free_module(path):
@@ -449,6 +480,51 @@ def is_risky_tls_index_store(window: str) -> bool:
     window_lower = window.lower()
     return "cache" in window_lower and any(
         hint in window_lower for hint in RUST_GLOBAL_INDEX_POINTER_HINTS
+    )
+
+
+def is_raw_pointer_method_write(
+    lines: list[str], index: int, match: re.Match[str]
+) -> bool:
+    """Distinguish raw-pointer `.write` from unrelated Rust write methods."""
+
+    if match.group("operation") == "write_unaligned":
+        return True
+
+    receiver = lines[index][: match.start()].strip()
+    if not receiver:
+        # Rustfmt can put a pointer-producing expression on the immediately
+        # preceding line, with `.write(value)` alone on the continuation line.
+        # Do not reach farther back: that can borrow `.add(...)` from a separate
+        # statement and misclassify an ordinary writer's `.write(...)` call.
+        receiver = lines[index - 1].strip() if index else ""
+    if re.search(
+        r"\bas\s+\*mut\b"
+        r"|\.(?:add|byte_add|cast|cast_mut|offset|sub|byte_sub|wrapping_add|wrapping_sub)"
+        r"(?:::<[^>]+>)?\s*\("
+        r"|\.(?:as_mut_ptr|as_ptr)\s*\("
+        r"|\b(?:std::)?ptr::(?:addr_of_mut|null_mut)!?\s*\(",
+        receiver,
+    ):
+        return True
+
+    target = re.search(r"([A-Za-z_][A-Za-z0-9_]*)\s*$", receiver)
+    if target is None:
+        return False
+    name = target.group(1).lower()
+    source_before_store = "\n".join(lines[: index + 1])
+    escaped_name = re.escape(target.group(1))
+    if re.search(rf"\b{escaped_name}\s*:\s*\*mut\b", source_before_store):
+        return True
+    if re.search(
+        rf"\blet\s+(?:mut\s+)?{escaped_name}\b[^;=]*=\s*[^;]*"
+        rf"(?:\bas\s+\*mut\b|\.as_mut_ptr\s*\(|\.cast_mut\s*\(|"
+        rf"\b(?:std::)?ptr::(?:addr_of_mut|null_mut)!?\s*\()",
+        source_before_store,
+    ):
+        return True
+    return name in RUST_PTR_METHOD_EXACT_TARGETS or name.endswith(
+        RUST_PTR_METHOD_TARGET_SUFFIXES
     )
 
 
@@ -1264,6 +1340,99 @@ def run_self_tests() -> int:
         ["std::ptr::write(elements_ptr.add(i), nanboxed);"],
         "raw slot write",
     )
+    check(
+        "crates/perry-runtime/src/regex.rs",
+        ["slot.write(nanboxed);"],
+        "raw slot write",
+    )
+    check(
+        "crates/perry-runtime/src/string/concat.rs",
+        ["dst.cast::<u64>().write_unaligned(head);"],
+        "raw slot write",
+    )
+    check(
+        "crates/perry-runtime/src/array.rs",
+        ["(addr as *mut usize).write(value);"],
+        "raw slot write",
+    )
+    check_at(
+        "crates/perry-runtime/src/array.rs",
+        ["fn store(output: *mut u64) {", "    output.write(value);", "}"],
+        1,
+        "raw slot write",
+    )
+    check(
+        "crates/perry-runtime/src/string.rs",
+        ["string_data(value).cast_mut().write(b'X');"],
+        "raw slot write",
+    )
+    check(
+        "crates/perry-runtime/src/array.rs",
+        ["cell.write(buffer).as_mut_ptr().write(value);"],
+        "raw slot write",
+    )
+    split_method_write = ["dst.add(i)", ".write(value);"]
+    check_at("crates/perry-runtime/src/array.rs", split_method_write, 0, None)
+    check_at(
+        "crates/perry-runtime/src/array.rs",
+        split_method_write,
+        1,
+        "raw slot write",
+    )
+    for method_copy in (
+        "src.copy_to(dst, count);",
+        "src.copy_to_nonoverlapping(dst, count);",
+        "dst.copy_from(src, count);",
+        "dst.copy_from_nonoverlapping(src, count);",
+    ):
+        check(
+            "crates/perry-runtime/src/array.rs",
+            [method_copy],
+            "slot copy",
+        )
+    split_method_copy = [
+        "src.copy_to_nonoverlapping(",
+        "    dst,",
+        "    count,",
+        ");",
+    ]
+    check(
+        "crates/perry-runtime/src/array.rs",
+        split_method_copy,
+        "slot copy",
+    )
+    for below in range(1, len(split_method_copy)):
+        check_at("crates/perry-runtime/src/array.rs", split_method_copy, below, None)
+    check(
+        "crates/perry-runtime/src/buffer.rs",
+        ["src.copy_to_nonoverlapping(dst_data, count);"],
+        None,
+    )
+    for ordinary_write in (
+        "file.write(&bytes);",
+        "decoder.write(&bytes);",
+        "data.write(&bytes);",
+        "cache.write(value);",
+        "GLOBAL_CACHE.write().unwrap();",
+        "num_bufs[i].write([0u8; 32]);",
+    ):
+        check(
+            "crates/perry-runtime/src/fs.rs",
+            [ordinary_write],
+            None,
+        )
+    split_ordinary_write = [
+        "let data = buffer_data(buf).add(offset);",
+        "let result = file",
+        "    .write(std::slice::from_raw_parts(data, n));",
+    ]
+    for index in range(len(split_ordinary_write)):
+        check_at(
+            "crates/perry-runtime/src/fs.rs",
+            split_ordinary_write,
+            index,
+            None,
+        )
     check(
         "crates/perry-runtime/src/plugin.rs",
         ["*fields.add(1) = make_nanboxed_string(&name);"],

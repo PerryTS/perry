@@ -349,6 +349,8 @@ pub extern "C" fn js_derived_super_bind_current() -> f64 {
         if slot.read() != 0 {
             return crate::error::js_throw_reference_error_this_before_super();
         }
+        // GC_STORE_AUDIT(STACK): generated derived-constructor binding cell
+        // stores a pointer-free byte.
         slot.write(1);
     }
     f64::from_bits(crate::value::TAG_UNDEFINED)

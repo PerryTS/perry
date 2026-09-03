@@ -66,12 +66,16 @@ fn poison_region_in_place(arena: &mut Arena) {
             let words = block.offset / 8;
             let p = block.data as *mut u64;
             for i in 0..words {
+                // GC_STORE_AUDIT(POINTER_FREE): this dead from-space span
+                // receives non-pointer diagnostic poison.
                 p.add(i)
                     .write(crate::arena::quarantine::QUARANTINE_POISON_WORD);
             }
             let tail = block.offset % 8;
             let base = block.data as *mut u8;
             for i in 0..tail {
+                // GC_STORE_AUDIT(POINTER_FREE): trailing dead bytes repeat
+                // the non-pointer poison pattern.
                 base.add(words * 8 + i).write(
                     (crate::arena::quarantine::QUARANTINE_POISON_WORD >> (8 * (i % 8))) as u8,
                 );

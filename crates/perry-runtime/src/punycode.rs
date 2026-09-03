@@ -506,6 +506,8 @@ mod ucs2_tests {
         let ptr = crate::string::js_string_from_bytes(source.as_ptr(), source.len() as u32);
 
         let copied = copy_string_bytes(ptr);
+        // GC_STORE_AUDIT(POINTER_FREE): test mutates one raw byte of a String
+        // payload, not a traced slot.
         unsafe { string_data(ptr).cast_mut().write(b'X') };
 
         assert_eq!(copied, source);
