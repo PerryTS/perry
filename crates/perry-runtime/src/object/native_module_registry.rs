@@ -79,7 +79,7 @@ fn nm_module_index(name: &str) -> Option<NmBucket> {
         "async_hooks" => Some(NmBucket::AsyncHooks),
         "bigint" => Some(NmBucket::Bigint),
         "buffer" | "buffer.Buffer" => Some(NmBucket::Buffer),
-        "bun" => Some(NmBucket::Bun),
+        "bun" | "bun.ant" => Some(NmBucket::Bun),
         // #6562: the `bun:` prefix is part of the name (not stripped like
         // `node:`).
         "bun:ffi" | "ffi" | "ffi.default" => Some(NmBucket::BunFfi),

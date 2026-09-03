@@ -107,6 +107,10 @@ pub(super) static CALLABLE_EXPORT_TABLE: &[(&str, &[&str])] = &[
         ],
     ),
     (
+        "bun.ant",
+        &["getPeerPid", "getPeerUid", "memoryPressureLevel"],
+    ),
+    (
         "bun:ffi",
         &[
             "CFunction",

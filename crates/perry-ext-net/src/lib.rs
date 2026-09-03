@@ -248,6 +248,9 @@ pub(crate) struct SocketState {
     /// can move it into the spawned task at connect time.
     pub(crate) pending_rx: Option<mpsc::UnboundedReceiver<SocketCommand>>,
     pub(crate) is_open: bool,
+    /// Borrowed OS descriptor for Node's private `socket._handle.fd` shape.
+    /// The transport task remains the sole owner and clears this on close.
+    pub(crate) raw_fd: Option<i32>,
     /// Whether pending socket I/O keeps the process event loop alive.
     pub(crate) refed: bool,
     /// Issue #2131 — the kernel-assigned local address, populated after
@@ -286,6 +289,7 @@ impl SocketState {
             cmd_tx,
             pending_rx: None,
             is_open: true,
+            raw_fd: None,
             refed: true,
             local_addr: None,
             raw: None,
@@ -412,6 +416,9 @@ fn push_event(ev: PendingNetEvent) {
 }
 
 fn mark_closed(id: i64) {
+    if let Some(socket) = statics::sockets().lock().unwrap().get_mut(&id) {
+        socket.raw_fd = None;
+    }
     server_state::mark_socket_closed(id);
 }
 
@@ -535,6 +542,7 @@ pub unsafe extern "C" fn js_net_socket_alloc() -> i64 {
             cmd_tx: tx,
             pending_rx: Some(rx),
             is_open: false,
+            raw_fd: None,
             refed: true,
             local_addr: None,
             raw: None,
@@ -1065,6 +1073,7 @@ where
             cmd_tx: tx,
             pending_rx: None,
             is_open: false,
+            raw_fd: None,
             refed: true,
             local_addr: None,
             raw: None,
@@ -1126,10 +1135,12 @@ where
                 }
                 None => Transport::Plain(tcp),
             };
+            let raw_fd = transport.raw_fd();
 
             if let Some(s) = statics::sockets().lock().unwrap().get_mut(&id) {
                 s.is_open = true;
                 s.local_addr = local;
+                s.raw_fd = raw_fd;
             }
             tokio::task::yield_now().await;
             push_event(PendingNetEvent::Connect(id, local_server));
