@@ -1125,6 +1125,7 @@ pub(super) fn run_copied_minor_attempt(
             CopiedMinorFallbackReason::PinnedYoungRoot => "pinned_young_root",
             CopiedMinorFallbackReason::PinnedYoungDirtySlot => "pinned_young_dirty_slot",
             CopiedMinorFallbackReason::PinnedYoungTransitive => "pinned_young_transitive",
+            CopiedMinorFallbackReason::IdleCompaction => "idle_compaction",
         };
         eprintln!(
             "[gc-copy-minor] eligible={} fallback={} preflight_skipped={} (skips={} walks={})",
