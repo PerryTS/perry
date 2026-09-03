@@ -63,12 +63,14 @@ fn open_pty() -> (File, File) {
     let mut master: RawFd = -1;
     let mut slave: RawFd = -1;
     let rc = unsafe {
+        // `null_mut()` for all three: macOS types the trailing termios/winsize
+        // params `*mut`, Linux `*const`, and `*mut` coerces to `*const`.
         libc::openpty(
             &mut master,
             &mut slave,
             std::ptr::null_mut(),
-            std::ptr::null(),
-            std::ptr::null(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
         )
     };
     assert_eq!(rc, 0, "openpty failed: {}", std::io::Error::last_os_error());
