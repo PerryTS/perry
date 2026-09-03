@@ -667,6 +667,7 @@ pub(crate) fn is_global_this_builtin_name(name: &str) -> bool {
             | "crypto"
             | "localStorage"
             | "sessionStorage"
+            | "Bun"
     )
 }
 
@@ -699,6 +700,7 @@ pub(crate) fn is_global_this_builtin_function_name(name: &str) -> bool {
                 | "crypto"
                 | "localStorage"
                 | "sessionStorage"
+                | "Bun"
         )
 }
 

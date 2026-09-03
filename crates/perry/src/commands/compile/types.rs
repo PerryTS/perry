@@ -13,6 +13,16 @@ use std::path::PathBuf;
 use perry_hir::{Module as HirModule, ModuleKind};
 use serde::{Deserialize, Serialize};
 
+/// JavaScript host compatibility surface exposed to compiled code.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
+pub enum JavaScriptPlatform {
+    /// Preserve Perry's Node-compatible globals (the historical default).
+    #[default]
+    Node,
+    /// Install a real `globalThis.Bun` namespace backed by Perry's Bun shims.
+    Bun,
+}
+
 /// Result of a successful compilation
 pub struct CompileResult {
     pub output_path: PathBuf,
@@ -111,6 +121,11 @@ pub struct CompileArgs {
     /// for the full target table.
     #[arg(long)]
     pub target: Option<String>,
+
+    /// JavaScript host compatibility platform. `node` keeps the historical
+    /// global surface; `bun` installs a stable `globalThis.Bun` namespace.
+    #[arg(long, value_enum, default_value_t)]
+    pub platform: JavaScriptPlatform,
 
     /// C library / linkage for Linux targets: `glibc` (default, dynamic) or
     /// `musl` (fully static). `--libc musl` upgrades a Linux target
@@ -607,6 +622,9 @@ pub struct CompilationContext {
     /// `WebAssembly.*` usage OR the user passed `--enable-wasm-runtime`).
     /// Issue #76.
     pub needs_wasm_runtime: bool,
+    /// Whether this build exposes Perry's Bun compatibility namespace as the
+    /// real `Bun` / `globalThis.Bun` global. Off by default.
+    pub bun_platform: bool,
     /// Whether perry/ui module is imported (needs UI library linking).
     /// On the harmonyos target this is forced back to false after the
     /// destructive Phase-2 ArkUI harvest (see `harmonyos_index_ets`) — UI
@@ -1163,6 +1181,7 @@ impl CompilationContext {
             declaration_sidecars: BTreeMap::new(),
             import_map: BTreeMap::new(),
             needs_wasm_runtime: false,
+            bun_platform: false,
             needs_ui: false,
             harmonyos_index_ets: None,
             needs_plugins: false,

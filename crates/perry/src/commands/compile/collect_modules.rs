@@ -676,6 +676,26 @@ fn collect_module_one(
     };
     *next_class_id = new_next_class_id; // Update the global class_id counter
 
+    // #9599: Bun platform mode is a real global mode, not merely a direct-call
+    // syntax rewrite. Seed `globalThis.Bun` before every module initializer so
+    // dependency code can observe it before the entry module runs. The native
+    // namespace is cached by the runtime, making every idempotent assignment
+    // install the same object and preserving `Bun === globalThis.Bun`.
+    if ctx.bun_platform {
+        hir_module.init.insert(
+            0,
+            perry_hir::Stmt::Expr(perry_hir::Expr::PropertySet {
+                object: Box::new(perry_hir::Expr::PropertyGet {
+                    object: Box::new(perry_hir::Expr::GlobalGet(0)),
+                    property: "globalThis".to_string(),
+                    byte_offset: 0,
+                }),
+                property: "Bun".to_string(),
+                value: Box::new(perry_hir::Expr::NativeModuleRef("bun".to_string())),
+            }),
+        );
+    }
+
     // Preserve native result types before async lowering splits awaited values
     // across synthetic locals. The later global fixup remains for inlined code.
     perry_hir::fix_local_native_instances(&mut hir_module);

@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2067 entries across 136 modules
+// Coverage: 2069 entries across 136 modules
 
 type PerryI8 = number & { readonly __perryI8?: never };
 type PerryI16 = number & { readonly __perryI16?: never };
@@ -343,11 +343,15 @@ declare module "buffer" {
 
 declare module "bun" {
   /** stdlib */
+  export const isStandaloneExecutable: any;
+  /** stdlib */
   export const stderr: any;
   /** stdlib */
   export const stdin: any;
   /** stdlib */
   export const stdout: any;
+  /** stdlib */
+  export const version: any;
   /** stdlib */
   export function Glob(...args: any[]): any;
   /** stdlib */

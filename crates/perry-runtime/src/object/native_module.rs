@@ -775,6 +775,7 @@ fn should_cache_native_module_namespace(module_name: &str) -> bool {
         "assert/strict"
             | "async_hooks"
             | "async_hooks.default"
+            | "bun"
             | "constants"
             | "constants.default"
             // #5263: cache the top-level namespace objects whose dynamic
@@ -997,13 +998,17 @@ unsafe fn native_module_property_by_name_impl(
     if module_name == "url" && property_name == "URLPattern" {
         return js_get_global_this_builtin_value(b"URLPattern".as_ptr(), "URLPattern".len());
     }
-    // #6560 — Bun globals shim pack: `Bun.stdin` / `Bun.stdout` / `Bun.stderr`
-    // are object-valued reads (BunFile-like handles built by `bun_compat`).
+    // #6560/#9599 — Bun globals shim pack. The stdio properties are
+    // BunFile-like handles built by `bun_compat`. In Bun platform mode the
+    // compiler installs this namespace on globalThis, so the metadata below is
+    // deliberately Perry-specific rather than pretending to be a Bun runtime.
     if module_name == "bun" {
         match property_name {
             "stdin" => return crate::bun_compat::js_bun_stdin(),
             "stdout" => return crate::bun_compat::js_bun_stdout(),
             "stderr" => return crate::bun_compat::js_bun_stderr(),
+            "version" => return native_string_value(env!("CARGO_PKG_VERSION")),
+            "isStandaloneExecutable" => return crate::embedded::is_standalone_executable_value(),
             _ => {}
         }
     }

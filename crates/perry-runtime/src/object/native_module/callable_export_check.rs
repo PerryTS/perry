@@ -35,6 +35,14 @@ pub(crate) fn is_native_module_callable_export_reference(module: &str, prop: &st
     if module == "fs" && matches!(prop, "lchmod" | "lchmodSync") {
         return crate::fs::lchmod_is_callable_on_this_platform();
     }
+    if module == "bun"
+        && matches!(
+            prop,
+            "Glob" | "file" | "fileURLToPath" | "hash" | "pathToFileURL" | "stringWidth" | "write"
+        )
+    {
+        return true;
+    }
     // bun:ffi (#6562). `FFIType` and `suffix` are constants, not callables;
     // the not-yet-supported exports are callable so they throw their
     // stage-1 error instead of "undefined is not a function".
