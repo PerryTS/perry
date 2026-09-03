@@ -323,19 +323,26 @@ pub(crate) unsafe fn build_error_object(msg: &str) -> f64 {
     } else {
         None
     };
+    // `JsString` is a bare pointer wrapper, so each freshly allocated string is
+    // rooted through the same scope as the receiver before the next store — a
+    // field write can collect, and a raw local would be read back stale.
     if let Some(code) = code {
-        let code = alloc_string(code);
+        let code = roots.root_nanbox(f64::from_bits(nanbox_string_bits(
+            alloc_string(code).as_raw(),
+        )));
         js_object_set_field(
             unbox_pointer(object.get()) as *mut ObjectHeader,
             1,
-            JsValue::from_string_ptr(code.as_raw()),
+            JsValue::from_bits(code.get().to_bits()),
         );
     }
-    let name = alloc_string("Error");
+    let name = roots.root_nanbox(f64::from_bits(nanbox_string_bits(
+        alloc_string("Error").as_raw(),
+    )));
     js_object_set_field(
         unbox_pointer(object.get()) as *mut ObjectHeader,
         2,
-        JsValue::from_string_ptr(name.as_raw()),
+        JsValue::from_bits(name.get().to_bits()),
     );
     object.get()
 }

@@ -1,3 +1,11 @@
+//! Bun TCP socket facades (#9635).
+//!
+//! Several helpers and two `BunSocket` fields are written but not yet read on
+//! this build: they are reachable only from paths the follow-up surface turns
+//! on. Allowed at module scope rather than deleted, since removing them would
+//! also remove the writes that feed them; flagged to the author on landing.
+#![allow(dead_code)]
+
 //! Bun's low-level TCP facade over the existing `node:net` transport.
 //!
 //! The transport, accept loop, and event pump remain shared with `net.Socket`.

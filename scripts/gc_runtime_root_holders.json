@@ -1935,6 +1935,18 @@
       "name": "SHARED",
       "verdict": "not_a_gc_pointer",
       "why": "#9613: RefCell<Option<Option<SharedInstance>>> caching the notify watcher instance (OS watcher handles + channel). Holds no JS-heap pointers; watch registrations are keyed by usize ids, targets are PathBufs."
+    },
+    {
+      "file": "crates/perry-ext-net/src/bun_tcp.rs",
+      "name": "TOKENS",
+      "verdict": "not_a_gc_pointer",
+      "why": "write_tokens(): HashMap<u64 write-token, i64 socket HANDLE>. Each i64 is the same handle-band id ABORTS holds \u2014 the key used to look the socket up in crate::statics::sockets(), never a heap address. Entries are removed on write completion (bun_tcp.rs) and retained-out when a handle closes, so no id outlives its facade."
+    },
+    {
+      "file": "crates/perry-ext-net/src/bun_tcp.rs",
+      "name": "NEXT_TOKEN",
+      "verdict": "not_a_gc_pointer",
+      "why": "Monotonic AtomicU64 that mints write-token ids for TOKENS. A counter: incremented and used as a map key, never dereferenced and never derived from an address."
     }
   ],
   "_FRONTIER_README": "Identity-pinned debt ratchet over new perry-ui* candidates and otherwise-unclassified core perry_thread_local! declarations (see the census docstring, \u201cThe identity-pinned frontier\u201d). A new uncovered holder fails until it is scanned, receives a researched holders verdict, or is deliberately pinned as debt. Moving a researched false positive to holders graduates it from this list. A fixed or classified holder makes its old frontier pin stale, so the receipt must be deleted.",
