@@ -921,6 +921,7 @@ pub extern "C" fn perry_wasm_host_instance_memory_write(
 }
 
 mod tables;
+pub use tables::WASM_VAL_KIND_NONE;
 use tables::*;
 
 /// Shared marshalling for both C call paths: decode the argument arrays, run
