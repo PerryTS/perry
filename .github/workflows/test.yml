@@ -3059,13 +3059,18 @@ jobs:
           #
           # Delete an entry the moment #9470 lands — an entry that stops
           # matching is a stale exemption, and the check below fails on one.
-          # Empty on purpose. #9470's two entries
-          # (test_issue_340_axios_response_props, test_issue_414_mysql_query_params)
-          # were fixed elsewhere and started passing; the STALE guard below turned
-          # the job red demanding their removal, which is exactly its job. Add an
-          # entry here only with an issue number, and delete it the moment the
-          # guard says it passes.
-          KNOWN_FAIL=()
+          # #9470's tokio-coherence pair. These are FLAKY, not deterministic:
+          # the auto-optimize build sometimes produces a wrapper archive bundling
+          # a different tokio compilation than the stdlib archive, and the link is
+          # refused. Observed BOTH ways on effectively the same tree -- run
+          # 33626738093 compiled all 1391 files clean, run 33709074616 failed
+          # test_issue_414_mysql_query_params -- with only workflow-file edits
+          # between them. The root cause is fixed on main by "isolate shared-tokio
+          # auto-opt graphs"; this release pin predates it.
+          KNOWN_FAIL=(
+            test_issue_340_axios_response_props
+            test_issue_414_mysql_query_params
+          )
           UNEXPECTED=()
           STALE=()
           for marker in "$LOGS_DIR"/*.fail; do
@@ -3078,10 +3083,16 @@ jobs:
           for k in ${KNOWN_FAIL[@]+"${KNOWN_FAIL[@]}"}; do
             [[ -e "$LOGS_DIR/$k.fail" ]] || STALE+=("$k")
           done
+          # ADVISORY, not fatal. A STALE check is only sound when the entry
+          # fails DETERMINISTICALLY: for a flaky entry a single green run does
+          # not prove it is fixed, and failing here turns that luck into a red
+          # build. #9471 made this fatal and it cost a release cycle in both
+          # directions -- a lucky run tripped STALE, and pruning the entries
+          # then let the next unlucky run trip UNEXPECTED. Re-check by hand
+          # before deleting an entry.
           if [[ ${#STALE[@]} -gt 0 ]]; then
-            echo "::error::known-failure entries that now PASS — delete them from KNOWN_FAIL (#9470):"
+            echo "::notice::known-failure entries that PASSED this run — confirm they are deterministically fixed, then delete them from KNOWN_FAIL (#9470):"
             printf '  - %s\n' "${STALE[@]}"
-            exit 1
           fi
           if [[ ${#UNEXPECTED[@]} -gt 0 ]]; then
             echo "::error::compile-smoke has ${#UNEXPECTED[@]} failure(s) beyond the known list:"

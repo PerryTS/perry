@@ -27,7 +27,13 @@ env:
 jobs:
   simctl:
     runs-on: macos-14
-    timeout-minutes: 60
+    # 2026-09-03: 60 was measured against a smaller tree and is now marginal.
+    # Successful runs went 42 -> 45 -> 54 min as the iOS smoke grew, then two
+    # consecutive runs on the same commit hit the cap at 61 min and were
+    # cancelled (33709079451, 33718460967) before a third passed at 54
+    # (33727755737). A cancelled simctl run fails release-packages' exact-SHA
+    # gate, so this coin flip blocks releases. 120 restores headroom.
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
