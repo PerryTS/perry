@@ -6345,6 +6345,7 @@ dependencies = [
  "libmimalloc-sys",
  "mach2",
  "mimalloc",
+ "notify",
  "perry-diagnostics",
  "perry-dispatch",
  "perry-parser",

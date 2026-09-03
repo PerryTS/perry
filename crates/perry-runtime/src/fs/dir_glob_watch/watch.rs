@@ -10,19 +10,20 @@ use crate::fs::{encoded_string_ptr, fs_encoding_option};
 use crate::string::js_string_from_bytes;
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Once;
+
+use super::watch_backend::{self, Backend, RawEvent, Source, WatchError, WatchEvent};
 
 use crate::closure::{
     js_closure_alloc, js_closure_get_capture_f64, js_closure_set_capture_f64,
     js_register_closure_arity, ClosureHeader,
 };
 
-const FS_WATCH_POLL_INTERVAL_MS: f64 = 25.0;
 const WATCH_FILE_DEFAULT_INTERVAL_MS: f64 = 5007.0;
 
 #[derive(Clone, Copy)]
@@ -31,32 +32,17 @@ struct WatchListener {
     once: bool,
 }
 
-#[derive(Clone, PartialEq, Eq)]
-struct WatchEntry {
-    is_file: bool,
-    is_dir: bool,
-    is_symlink: bool,
-    len: u64,
-    mode: u32,
-    modified_ns: i128,
-    created_ns: i128,
-}
-
-type WatchSnapshot = BTreeMap<String, WatchEntry>;
-
-#[derive(Clone)]
-struct WatchEvent {
-    event_type: &'static str,
-    filename: String,
-}
-
 struct FsWatchState {
     path: String,
     recursive: bool,
     encoding: String,
     object_value: f64,
-    timer_id: i64,
-    snapshot: WatchSnapshot,
+    /// The OS watch (or the poll thread) behind this watcher; dropping the
+    /// state releases it. See `watch_backend` (#9591).
+    backend: Backend,
+    /// `persistent` at creation, then `ref()` / `unref()`. A ref'd watcher
+    /// keeps the event loop alive through `fs_watch_has_active`.
+    refed: bool,
     listeners: HashMap<String, Vec<WatchListener>>,
     signal: f64,
     abort_listener: f64,
@@ -94,10 +80,12 @@ struct PromiseWatchState {
     recursive: bool,
     encoding: String,
     object_value: f64,
-    timer_id: i64,
+    /// Started lazily by the first `next()` (Node starts the FSEvent handle
+    /// when the async generator body first runs); `None` until then and
+    /// again once closed.
+    backend: Option<Backend>,
     persistent: bool,
     active: bool,
-    snapshot: WatchSnapshot,
     queue: VecDeque<WatchEvent>,
     pending: VecDeque<*mut crate::promise::Promise>,
     signal: f64,
@@ -262,100 +250,6 @@ fn remove_abort_listener(signal: f64, listener: f64) {
     if let Some(signal_ptr) = crate::url::abort::abort_signal_ptr_from_value(signal) {
         crate::url::js_abort_signal_remove_listener(signal_ptr, string_value(b"abort"), listener);
     }
-}
-
-fn metadata_time_ns(time: std::io::Result<std::time::SystemTime>) -> i128 {
-    time.ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_nanos() as i128)
-        .unwrap_or(0)
-}
-
-fn watch_entry_from_metadata(meta: &fs::Metadata) -> WatchEntry {
-    let ft = meta.file_type();
-    #[cfg(unix)]
-    let mode = meta.permissions().mode();
-    #[cfg(not(unix))]
-    let mode = if meta.permissions().readonly() {
-        0o444
-    } else {
-        0o666
-    };
-    WatchEntry {
-        is_file: ft.is_file(),
-        is_dir: ft.is_dir(),
-        is_symlink: ft.is_symlink(),
-        len: meta.len(),
-        mode,
-        modified_ns: metadata_time_ns(meta.modified()),
-        created_ns: metadata_time_ns(meta.created()),
-    }
-}
-
-fn relative_path(root: &Path, path: &Path) -> String {
-    path.strip_prefix(root)
-        .unwrap_or(path)
-        .to_string_lossy()
-        .replace('\\', "/")
-}
-
-fn walk_watch_dir(root: &Path, dir: &Path, recursive: bool, out: &mut WatchSnapshot) {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return;
-    };
-    let mut paths: Vec<std::path::PathBuf> = entries.flatten().map(|entry| entry.path()).collect();
-    paths.sort();
-    for path in paths {
-        let Ok(meta) = fs::symlink_metadata(&path) else {
-            continue;
-        };
-        let rel = relative_path(root, &path);
-        out.insert(rel, watch_entry_from_metadata(&meta));
-        if recursive && meta.is_dir() {
-            walk_watch_dir(root, &path, true, out);
-        }
-    }
-}
-
-fn snapshot_watch_target(path: &str, recursive: bool) -> std::io::Result<WatchSnapshot> {
-    let root = Path::new(path);
-    let meta = fs::symlink_metadata(root)?;
-    let mut snapshot = WatchSnapshot::new();
-    if meta.is_dir() {
-        walk_watch_dir(root, root, recursive, &mut snapshot);
-    } else {
-        let name = root
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_else(|| path.to_string());
-        snapshot.insert(name, watch_entry_from_metadata(&meta));
-    }
-    Ok(snapshot)
-}
-
-fn diff_watch_snapshots(previous: &WatchSnapshot, current: &WatchSnapshot) -> Vec<WatchEvent> {
-    let mut events = Vec::new();
-    let mut keys = BTreeMap::<String, ()>::new();
-    for key in previous.keys() {
-        keys.insert(key.clone(), ());
-    }
-    for key in current.keys() {
-        keys.insert(key.clone(), ());
-    }
-    for key in keys.keys() {
-        match (previous.get(key), current.get(key)) {
-            (None, Some(_)) | (Some(_), None) => events.push(WatchEvent {
-                event_type: "rename",
-                filename: key.clone(),
-            }),
-            (Some(a), Some(b)) if a != b => events.push(WatchEvent {
-                event_type: "change",
-                filename: key.clone(),
-            }),
-            _ => {}
-        }
-    }
-    events
 }
 
 fn stat_snapshot(path: &str) -> Option<StatSnapshot> {
@@ -602,15 +496,25 @@ fn emit_watch_file_change(
 
 fn close_fs_watcher(id: usize) {
     let removed = FS_WATCHERS.with(|watchers| watchers.borrow_mut().remove(&id));
-    let Some(mut state) = removed else {
+    let Some(state) = removed else {
         return;
     };
-    crate::timer::clearInterval(state.timer_id);
-    crate::async_hooks::destroy(state.async_ids.async_id);
-    remove_abort_listener(state.signal, state.abort_listener);
-    let close_listeners = take_event_listeners(&mut state.listeners, "close");
+    let FsWatchState {
+        backend,
+        object_value,
+        mut listeners,
+        signal,
+        abort_listener,
+        async_ids,
+        ..
+    } = state;
+    // Release the OS watch before any user code runs.
+    drop(backend);
+    crate::async_hooks::destroy(async_ids.async_id);
+    remove_abort_listener(signal, abort_listener);
+    let close_listeners = take_event_listeners(&mut listeners, "close");
     for listener in close_listeners {
-        emit_listener0(state.object_value, listener.callback);
+        emit_listener0(object_value, listener.callback);
     }
 }
 
@@ -633,9 +537,7 @@ fn close_promise_watcher_return(id: usize) -> Vec<*mut crate::promise::Promise> 
     let Some(state) = removed else {
         return Vec::new();
     };
-    if state.timer_id != 0 {
-        crate::timer::clearInterval(state.timer_id);
-    }
+    drop(state.backend);
     remove_abort_listener(state.signal, state.abort_listener);
     state.pending.into_iter().collect()
 }
@@ -646,11 +548,8 @@ fn abort_promise_watcher(id: usize, reason: f64) -> Vec<*mut crate::promise::Pro
         let Some(state) = watchers.get_mut(&id) else {
             return Vec::new();
         };
-        if state.timer_id != 0 {
-            crate::timer::clearInterval(state.timer_id);
-        }
+        state.backend = None;
         remove_abort_listener(state.signal, state.abort_listener);
-        state.timer_id = 0;
         state.active = false;
         state.signal = undefined_value();
         state.abort_listener = undefined_value();
@@ -754,69 +653,273 @@ fn reject_promise(promise: *mut crate::promise::Promise, reason: f64) {
     );
 }
 
-extern "C" fn fs_watcher_poll_impl(closure: *const ClosureHeader) -> f64 {
-    let id = js_closure_get_capture_f64(closure, 0) as usize;
-    let deliveries = FS_WATCHERS.with(|watchers| {
-        let mut watchers = watchers.borrow_mut();
-        let Some(state) = watchers.get_mut(&id) else {
-            return Vec::new();
-        };
-        let current = snapshot_watch_target(&state.path, state.recursive).unwrap_or_default();
-        let events = diff_watch_snapshots(&state.snapshot, &current);
-        state.snapshot = current;
-        events
-            .into_iter()
-            .map(|event| {
-                let callbacks = take_event_listeners(&mut state.listeners, "change");
-                (state.object_value, callbacks, event, state.encoding.clone())
-            })
-            .collect()
-    });
-    for (object_value, callbacks, event, encoding) in deliveries {
-        emit_fs_watch_event(object_value, callbacks, &event, &encoding);
-    }
-    undefined_value()
+// ============================================================================
+// #9591 — delivery. Events arrive on the backend's queue (notify's thread or
+// the poll thread); the runtime pump slot below drains them once per event-
+// loop turn and routes each to the JS watchers it concerns.
+// ============================================================================
+
+/// One routed event, keyed by watcher id only. The JS values delivery needs
+/// (the watcher object, its listeners, a pending promise) are read from the
+/// state maps at delivery time, right before they are rooted — never cached
+/// across another watcher's callback, where a copying collection would leave
+/// a cached value stale. A watcher closed by an earlier callback in the same
+/// batch simply drops its later events, as Node does after `close()`.
+enum Delivery {
+    Event { id: usize, event: WatchEvent },
+    Error { id: usize, error: WatchError },
 }
 
-extern "C" fn promise_watcher_poll_impl(closure: *const ClosureHeader) -> f64 {
-    let id = js_closure_get_capture_f64(closure, 0) as usize;
-    let actions = PROMISE_WATCHERS.with(|watchers| {
-        let mut watchers = watchers.borrow_mut();
-        let Some(state) = watchers.get_mut(&id) else {
-            return Vec::new();
-        };
-        if state.closed {
-            return Vec::new();
+fn ensure_pump_registered() {
+    static REGISTER: Once = Once::new();
+    REGISTER.call_once(|| {
+        crate::stdlib_pump::register_runtime_pump(2, fs_watch_pump_extern);
+        crate::stdlib_pump::register_runtime_has_active(0, fs_watch_has_active_extern);
+    });
+}
+
+extern "C" fn fs_watch_pump_extern() {
+    pump_fs_watch_events();
+}
+
+extern "C" fn fs_watch_has_active_extern() -> i32 {
+    i32::from(fs_watch_has_active())
+}
+
+/// A ref'd `fs.watch` handle or a started, persistent `fsPromises.watch`
+/// iterator keeps the event loop alive — the role the ref'd interval timer
+/// played before #9591.
+fn fs_watch_has_active() -> bool {
+    FS_WATCHERS.with(|watchers| watchers.borrow().values().any(|state| state.refed))
+        || PROMISE_WATCHERS.with(|watchers| {
+            watchers
+                .borrow()
+                .values()
+                .any(|state| state.active && state.persistent && !state.closed)
+        })
+}
+
+/// Drain the backend queue: route every raw event to the watchers it
+/// concerns (state maps borrowed, no JS runs), then deliver (borrows
+/// released, JS runs).
+fn pump_fs_watch_events() {
+    let raw = watch_backend::drain_queue();
+    if raw.is_empty() {
+        return;
+    }
+    let mut deliveries = Vec::new();
+    for item in raw {
+        route_raw_event(item, &mut deliveries);
+    }
+    for delivery in deliveries {
+        match delivery {
+            Delivery::Event { id, event } => deliver_event(id, event),
+            Delivery::Error { id, error } => deliver_error(id, error),
         }
-        let current = snapshot_watch_target(&state.path, state.recursive).unwrap_or_default();
-        let events = diff_watch_snapshots(&state.snapshot, &current);
-        state.snapshot = current;
-        let mut actions = Vec::new();
-        for event in events {
-            if let Some(promise) = state.pending.pop_front() {
-                actions.push((promise, event, state.encoding.clone()));
-            } else {
-                state.queue.push_back(event);
+    }
+}
+
+fn route_raw_event(item: RawEvent, out: &mut Vec<Delivery>) {
+    match item {
+        RawEvent::Polled { id, event } => out.push(Delivery::Event { id, event }),
+        RawEvent::Native {
+            source,
+            path,
+            class,
+        } => {
+            for (id, filename) in native_targets(source, &path) {
+                out.push(Delivery::Event {
+                    id,
+                    event: WatchEvent {
+                        event_type: class.node_name(),
+                        filename,
+                    },
+                });
             }
         }
-        actions
+        RawEvent::Error {
+            source,
+            paths,
+            error,
+        } => {
+            for id in error_targets(source, &paths) {
+                out.push(Delivery::Error {
+                    id,
+                    error: error.clone(),
+                });
+            }
+        }
+    }
+}
+
+/// The watchers an OS event on `path` from `source` is delivered to, with the
+/// filename each reports. An own instance has exactly one owner; a shared
+/// instance's event is offered to every shared watcher whose root is the
+/// path or its parent (`filename_for` applies the depth rule).
+fn native_targets(source: Source, path: &Path) -> Vec<(usize, String)> {
+    let mut out = Vec::new();
+    let mut consider = |id: usize, backend: &Backend, recursive: bool| {
+        let root = match (source, backend) {
+            (Source::Own(owner), Backend::Own { root, .. }) if owner == id => root,
+            (Source::Shared, Backend::Shared { root }) => root,
+            _ => return,
+        };
+        if let Some(filename) = watch_backend::filename_for(root, path, recursive) {
+            out.push((id, filename));
+        }
+    };
+    FS_WATCHERS.with(|watchers| {
+        for (id, state) in watchers.borrow().iter() {
+            consider(*id, &state.backend, state.recursive);
+        }
     });
-    for (promise, event, encoding) in actions {
+    PROMISE_WATCHERS.with(|watchers| {
+        for (id, state) in watchers.borrow().iter() {
+            if let Some(backend) = &state.backend {
+                consider(*id, backend, state.recursive);
+            }
+        }
+    });
+    out
+}
+
+fn error_targets(source: Source, paths: &[PathBuf]) -> Vec<usize> {
+    if let Source::Own(id) = source {
+        return vec![id];
+    }
+    let mut out = Vec::new();
+    let mut consider = |id: usize, backend: &Backend| {
+        if let Backend::Shared { root } = backend {
+            if watch_backend::error_concerns_root(root, paths) {
+                out.push(id);
+            }
+        }
+    };
+    FS_WATCHERS.with(|watchers| {
+        for (id, state) in watchers.borrow().iter() {
+            consider(*id, &state.backend);
+        }
+    });
+    PROMISE_WATCHERS.with(|watchers| {
+        for (id, state) in watchers.borrow().iter() {
+            if let Some(backend) = &state.backend {
+                consider(*id, backend);
+            }
+        }
+    });
+    out
+}
+
+/// Deliver one event to watcher `id`: a callback watcher's `'change'`
+/// listeners, or a promise watcher's oldest pending `next()` (queued when
+/// none is waiting). Ids are unique across both maps.
+fn deliver_event(id: usize, event: WatchEvent) {
+    let fs_target = FS_WATCHERS.with(|watchers| {
+        let mut watchers = watchers.borrow_mut();
+        let state = watchers.get_mut(&id)?;
+        let callbacks = take_event_listeners(&mut state.listeners, "change");
+        Some((state.object_value, callbacks, state.encoding.clone()))
+    });
+    if let Some((object_value, callbacks, encoding)) = fs_target {
+        emit_fs_watch_event(object_value, callbacks, &event, &encoding);
+        return;
+    }
+    let mut event = Some(event);
+    let promise_target = PROMISE_WATCHERS.with(|watchers| {
+        let mut watchers = watchers.borrow_mut();
+        let state = watchers.get_mut(&id)?;
+        if state.closed {
+            return None;
+        }
+        match state.pending.pop_front() {
+            Some(promise) => Some((promise, state.encoding.clone())),
+            None => {
+                state
+                    .queue
+                    .push_back(event.take().expect("event consumed once"));
+                None
+            }
+        }
+    });
+    if let (Some((promise, encoding)), Some(event)) = (promise_target, event) {
         resolve_promise_with_event(promise, event, encoding);
     }
-    undefined_value()
+}
+
+/// Deliver a backend error to watcher `id` as a Node-shaped fs error: the
+/// callback watcher's `'error'` listeners (uncaught when there are none), or
+/// the promise watcher's pending `next()` rejections, after which the
+/// iterator is finished.
+fn deliver_error(id: usize, error: WatchError) {
+    let fs_target = FS_WATCHERS.with(|watchers| {
+        let mut watchers = watchers.borrow_mut();
+        let state = watchers.get_mut(&id)?;
+        let callbacks = take_event_listeners(&mut state.listeners, "error");
+        Some((state.object_value, callbacks, state.path.clone()))
+    });
+    if let Some((object_value, callbacks, path)) = fs_target {
+        emit_fs_watch_error(object_value, callbacks, &error.to_io_error(), &path);
+        return;
+    }
+    let promise_path = PROMISE_WATCHERS.with(|watchers| {
+        let watchers = watchers.borrow();
+        let state = watchers.get(&id)?;
+        if state.closed {
+            return None;
+        }
+        Some(state.path.clone())
+    });
+    if let Some(path) = promise_path {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let reason = unsafe { build_fs_error_value(&error.to_io_error(), "watch", &path) };
+        let reason_handle = scope.root_nanbox_f64(reason);
+        let pending = abort_promise_watcher(id, reason_handle.get_nanbox_f64());
+        for promise in pending {
+            reject_promise(promise, reason_handle.get_nanbox_f64());
+        }
+    }
+}
+
+/// `'error'` delivery. With no listener Node's EventEmitter throws the error
+/// as an uncaught exception; do the same through the process funnel.
+fn emit_fs_watch_error(
+    object_value: f64,
+    callbacks: Vec<WatchListener>,
+    error: &std::io::Error,
+    path: &str,
+) {
+    let raw_callbacks: Vec<f64> = callbacks.iter().map(|listener| listener.callback).collect();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let callback_handles = scope.root_nanbox_f64_slice(&raw_callbacks);
+    let object_handle = scope.root_nanbox_f64(object_value);
+    let err_value = unsafe { build_fs_error_value(error, "watch", path) };
+    if callbacks.is_empty() {
+        crate::os::emit_process_uncaught_exception(err_value);
+        return;
+    }
+    let err_handle = scope.root_nanbox_f64(err_value);
+    let refreshed_callbacks =
+        crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&callback_handles);
+    let prev_this = scope.root_nanbox_f64(crate::object::js_implicit_this_get());
+    for callback in refreshed_callbacks {
+        let cb = extract_closure_ptr(callback);
+        if cb.is_null() {
+            continue;
+        }
+        crate::object::js_implicit_this_set(object_handle.get_nanbox_f64());
+        with_watcher_uncaught_trap(|| {
+            crate::closure::js_closure_call1(cb, err_handle.get_nanbox_f64());
+        });
+        crate::object::js_implicit_this_set(prev_this.get_nanbox_f64());
+    }
 }
 
 fn start_promise_watcher(id: usize, state: &mut PromiseWatchState) {
     if state.active || state.closed {
         return;
     }
-    let timer_callback = poll_closure_value(promise_watcher_poll_impl as *const u8, id);
-    let timer_id = crate::timer::setInterval(timer_callback as i64, FS_WATCH_POLL_INTERVAL_MS);
-    if !state.persistent {
-        crate::timer::js_timer_unref(timer_id);
-    }
-    state.timer_id = timer_id;
+    ensure_pump_registered();
+    state.backend = Some(Backend::start(id, &state.path, state.recursive));
     state.active = true;
 }
 
@@ -877,8 +980,8 @@ extern "C" fn fs_watcher_ref_impl(closure: *const ClosureHeader) -> f64 {
     let id = js_closure_get_capture_f64(closure, 0) as usize;
     let self_value = js_closure_get_capture_f64(closure, 1);
     FS_WATCHERS.with(|watchers| {
-        if let Some(state) = watchers.borrow().get(&id) {
-            crate::timer::js_timer_ref(state.timer_id);
+        if let Some(state) = watchers.borrow_mut().get_mut(&id) {
+            state.refed = true;
         }
     });
     self_value
@@ -888,8 +991,8 @@ extern "C" fn fs_watcher_unref_impl(closure: *const ClosureHeader) -> f64 {
     let id = js_closure_get_capture_f64(closure, 0) as usize;
     let self_value = js_closure_get_capture_f64(closure, 1);
     FS_WATCHERS.with(|watchers| {
-        if let Some(state) = watchers.borrow().get(&id) {
-            crate::timer::js_timer_unref(state.timer_id);
+        if let Some(state) = watchers.borrow_mut().get_mut(&id) {
+            state.refed = false;
         }
     });
     self_value
@@ -1168,8 +1271,6 @@ extern "C" fn promise_watcher_self_impl(closure: *const ClosureHeader) -> f64 {
 fn ensure_watch_method_arities() {
     static REGISTER: Once = Once::new();
     REGISTER.call_once(|| {
-        js_register_closure_arity(fs_watcher_poll_impl as *const u8, 0);
-        js_register_closure_arity(promise_watcher_poll_impl as *const u8, 0);
         js_register_closure_arity(watch_file_poll_impl as *const u8, 0);
         js_register_closure_arity(fs_watcher_abort_impl as *const u8, 0);
         js_register_closure_arity(promise_watcher_abort_impl as *const u8, 0);
@@ -1459,7 +1560,8 @@ fn normalized_watch_args(arg1: f64, arg2: f64) -> (f64, Option<f64>) {
     }
 }
 
-/// `fs.watch(path[, options][, listener])` — polling-backed watcher.
+/// `fs.watch(path[, options][, listener])` — OS-event-backed watcher (#9591);
+/// see `watch_backend`.
 #[no_mangle]
 pub extern "C" fn js_fs_watch(path_value: f64, arg1: f64, arg2: f64) -> f64 {
     validate::validate_path("filename", path_value);
@@ -1475,20 +1577,18 @@ pub extern "C" fn js_fs_watch(path_value: f64, arg1: f64, arg2: f64) -> f64 {
         Ok(signal) => signal,
         Err(err) => crate::exception::js_throw(err),
     };
-    let snapshot = match snapshot_watch_target(&path, recursive) {
-        Ok(snapshot) => snapshot,
-        Err(err) => unsafe {
+    // Node throws ENOENT & co. at call time; one stat answers that without
+    // the pre-#9591 full walk of the target.
+    if let Err(err) = fs::symlink_metadata(&path) {
+        unsafe {
             crate::exception::js_throw(build_fs_error_value(&err, "watch", &path));
-        },
-    };
+        }
+    }
     let id = next_watch_id();
     let object_value = build_fs_watcher_object(id);
     let async_ids = crate::async_hooks::init_resource("FSEVENTWRAP", object_value, true);
-    let timer_callback = poll_closure_value(fs_watcher_poll_impl as *const u8, id);
-    let timer_id = crate::timer::setInterval(timer_callback as i64, FS_WATCH_POLL_INTERVAL_MS);
-    if !persistent {
-        crate::timer::js_timer_unref(timer_id);
-    }
+    ensure_pump_registered();
+    let backend = Backend::start(id, &path, recursive);
     let abort_listener = signal
         .map(|signal| add_abort_listener(signal, id, fs_watcher_abort_impl))
         .unwrap_or_else(undefined_value);
@@ -1505,8 +1605,8 @@ pub extern "C" fn js_fs_watch(path_value: f64, arg1: f64, arg2: f64) -> f64 {
                 recursive,
                 encoding,
                 object_value,
-                timer_id,
-                snapshot,
+                backend,
+                refed: persistent,
                 listeners,
                 signal: signal_value,
                 abort_listener,
@@ -1624,16 +1724,14 @@ pub extern "C" fn js_fs_promises_watch(path_value: f64, options_value: f64) -> f
         Ok(signal) => signal,
         Err(err) => crate::exception::js_throw(err),
     };
-    // Snapshot the watch target at creation time. This serves two purposes:
-    //   1. It validates the path synchronously, matching Node's `watch()` which
-    //      throws (ENOENT etc.) at call time rather than at first iteration.
-    //   2. It seeds an initial baseline for the state.
-    let initial_snapshot = match snapshot_watch_target(&path, recursive) {
-        Ok(snapshot) => snapshot,
-        Err(err) => unsafe {
+    // Validate the path synchronously, matching Node's `watch()` which throws
+    // (ENOENT etc.) at call time rather than at first iteration. The OS watch
+    // itself starts on the first `next()` (`start_promise_watcher`).
+    if let Err(err) = fs::symlink_metadata(&path) {
+        unsafe {
             crate::exception::js_throw(build_fs_error_value(&err, "watch", &path));
-        },
-    };
+        }
+    }
     let id = next_watch_id();
     let object_value = build_promise_watcher_object(id);
     let abort_listener = signal
@@ -1654,10 +1752,9 @@ pub extern "C" fn js_fs_promises_watch(path_value: f64, options_value: f64) -> f
                 recursive,
                 encoding,
                 object_value,
-                timer_id: 0,
+                backend: None,
                 persistent,
                 active: false,
-                snapshot: initial_snapshot,
                 queue: VecDeque::new(),
                 pending: VecDeque::new(),
                 signal: signal_value,

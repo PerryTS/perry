@@ -449,3 +449,12 @@ sha2 = "0.11"
 # the generated `[u16; 128]` arrays land in the binary. Already vetted in the
 # workspace lock (allsorts / lopdf depend on it).
 encoding_rs = "0.8"
+
+# #9591: OS change notifications behind `fs.watch` / `fsPromises.watch`
+# (inotify / ReadDirectoryChangesW / kqueue), replacing the timer-driven full
+# tree walk. See `fs/dir_glob_watch/watch_backend.rs`. NOT on macOS: notify's
+# FSEvents backend needs `-framework CoreServices` on every link line that
+# retains the watcher (every `fs` importer), which perry keeps off console
+# binaries for launch time; `watch_fsevents.rs` binds FSEvents via dlopen.
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+notify.workspace = true
