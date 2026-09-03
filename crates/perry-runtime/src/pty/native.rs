@@ -261,6 +261,24 @@ pub(crate) fn resize_pty(master: RawFd, cols: u16, rows: u16) -> bool {
     unsafe { libc::ioctl(master, libc::TIOCSWINSZ as _, &ws) == 0 }
 }
 
+/// Switch the slave-side line discipline through the master descriptor. A
+/// disabled raw mode restores the same deterministic cooked settings used at
+/// PTY creation, which is the useful Bun.Terminal contract for reusable
+/// terminals.
+pub(crate) fn set_raw_mode(master: RawFd, enabled: bool) -> bool {
+    let mut term = if enabled {
+        let mut current: libc::termios = unsafe { std::mem::zeroed() };
+        if unsafe { libc::tcgetattr(master, &mut current) } != 0 {
+            return false;
+        }
+        unsafe { libc::cfmakeraw(&mut current) };
+        current
+    } else {
+        sane_termios()
+    };
+    unsafe { libc::tcsetattr(master, libc::TCSANOW, &mut term) == 0 }
+}
+
 /// `kill(2)` — deliver `signo` to `pid`.
 pub(crate) fn signal_pid(pid: i32, signo: i32) -> bool {
     unsafe { libc::kill(pid, signo) == 0 }

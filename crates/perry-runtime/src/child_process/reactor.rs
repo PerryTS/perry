@@ -227,6 +227,11 @@ static CP_NEXT_LIVE_ID: AtomicU64 = AtomicU64::new(1);
 /// any lock, so the hot async loop pays a single relaxed load per tick.
 static CP_LIVE_COUNT: AtomicU64 = AtomicU64::new(0);
 
+/// Live children which currently keep the event loop alive. `unref()` only
+/// changes this count; the total live count above continues to gate pumping
+/// and GC scanning while the runtime is alive for another reason.
+static CP_REFED_COUNT: AtomicU64 = AtomicU64::new(0);
+
 /// An event produced by a child's background thread, consumed by the pump.
 enum CpEvent {
     /// A stdout (`stderr == false`) or stderr chunk.
@@ -295,6 +300,8 @@ struct LiveChild {
     exited: Option<(Option<i32>, Option<i32>)>,
     /// Whether `exit`/`close` have been emitted (terminal state).
     closed: bool,
+    /// Whether this process currently contributes an active event-loop handle.
+    refed: bool,
     /// #1933: the parent end of the IPC socket for a `fork()`ed child (a clone
     /// for `child.send()` / `child.disconnect()`; the reader thread owns
     /// another clone). `None` for plain `spawn`.
@@ -739,6 +746,7 @@ fn cp_register_live_child_parts(
                 spawned: false,
                 exited: None,
                 closed: false,
+                refed: true,
                 ipc_send,
                 ipc_advanced,
                 abort_signal_bits: 0,
@@ -754,6 +762,7 @@ fn cp_register_live_child_parts(
     }
     crate::stdlib_pump::register_runtime_pump(0, cp_reactor_pump_extern);
     CP_LIVE_COUNT.fetch_add(1, Ordering::SeqCst);
+    CP_REFED_COUNT.fetch_add(1, Ordering::SeqCst);
 
     if let Some(o) = stdout_pipe {
         cp_spawn_reader(handle, o, 1);
@@ -1083,8 +1092,8 @@ pub extern "C" fn js_child_process_spawn_streams(
         ),
         ("emit", cp_cast2(cp_method_emit)),
         ("kill", cp_cast1(cp_method_kill)),
-        ("ref", cp_cast0(cp_method_this0)),
-        ("unref", cp_cast0(cp_method_this0)),
+        ("ref", cp_cast0(cp_method_ref)),
+        ("unref", cp_cast0(cp_method_unref)),
     ];
     let cp_obj = cp_build_object(&cp_methods, CP_SHAPE_ID + cp_methods.len() as u32);
     let cp = cp_box_ptr(cp_obj as *const u8);
@@ -1273,8 +1282,8 @@ pub(super) fn cp_exec_async(
         ),
         ("emit", cp_cast2(cp_method_emit)),
         ("kill", cp_cast1(cp_method_kill)),
-        ("ref", cp_cast0(cp_method_this0)),
-        ("unref", cp_cast0(cp_method_this0)),
+        ("ref", cp_cast0(cp_method_ref)),
+        ("unref", cp_cast0(cp_method_unref)),
     ];
     let cp = cp_box_ptr(cp_build_object(&methods, CP_SHAPE_ID + methods.len() as u32) as *const u8);
     cp_set_field(cp, b"stdout", stdout_obj);
@@ -1344,6 +1353,7 @@ pub(super) fn cp_exec_async(
                         spawned: false,
                         exited: None,
                         closed: false,
+                        refed: true,
                         ipc_send: None,
                         ipc_advanced: false,
                         abort_signal_bits: 0,
@@ -1359,6 +1369,7 @@ pub(super) fn cp_exec_async(
             }
             crate::stdlib_pump::register_runtime_pump(0, cp_reactor_pump_extern);
             CP_LIVE_COUNT.fetch_add(1, Ordering::SeqCst);
+            CP_REFED_COUNT.fetch_add(1, Ordering::SeqCst);
 
             if let Some(o) = stdout_pipe {
                 cp_spawn_reader(handle, o, 1);
@@ -1746,6 +1757,7 @@ fn cp_reactor_pump_inner() {
                             exec: lc.exec.take(),
                             process_ids: lc.process_ids,
                             pipe_ids: lc.pipe_ids,
+                            refed: lc.refed,
                         });
                         lc.abort_signal_bits = 0;
                         lc.abort_listener_bits = 0;
@@ -1792,6 +1804,9 @@ fn cp_reactor_pump_inner() {
             crate::async_hooks::destroy(pipe.async_id);
         }
         CP_LIVE_COUNT.fetch_sub(1, Ordering::SeqCst);
+        if item.refed {
+            CP_REFED_COUNT.fetch_sub(1, Ordering::SeqCst);
+        }
     }
 }
 
@@ -1808,6 +1823,7 @@ struct CpCloseItem {
     exec: Option<Box<CpExecPending>>,
     process_ids: crate::async_hooks::AsyncResourceIds,
     pipe_ids: [crate::async_hooks::AsyncResourceIds; 3],
+    refed: bool,
 }
 
 fn cp_lookup_cp_bits(handle: u64) -> Option<u64> {
@@ -1942,51 +1958,12 @@ pub(super) fn cp_live_stdin_queue_callback(handle: u64, callback_bits: u64) -> b
     false
 }
 
-// ============================================================================
-// Event-loop integration hooks (wired from lib.rs / gc/mod.rs).
-// ============================================================================
-
-/// Whether any live child is keeping the event loop alive — OR'd into
-/// `js_stdlib_has_active_handles`.
-pub(crate) fn cp_reactor_has_live() -> bool {
-    CP_LIVE_COUNT.load(Ordering::Relaxed) > 0
-}
-
-/// GC mutable-root scanner: keep every live ChildProcess (and its reachable
-/// stdio sub-objects + listener arrays) alive across collections, and rewrite
-/// the stored pointer on evacuation.
-pub(crate) fn cp_reactor_scan_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    if CP_LIVE_COUNT.load(Ordering::Relaxed) == 0 {
-        return;
-    }
-    if let Some(map) = cp_live_lock().as_mut() {
-        for lc in map.values_mut() {
-            visitor.visit_nanbox_u64_slot(&mut lc.cp_bits);
-            if lc.abort_signal_bits != 0 {
-                visitor.visit_nanbox_u64_slot(&mut lc.abort_signal_bits);
-            }
-            if lc.abort_listener_bits != 0 {
-                visitor.visit_nanbox_u64_slot(&mut lc.abort_listener_bits);
-            }
-            // #4912: keep the async exec/execFile callback closure alive until
-            // it fires on `close`.
-            if let Some(exec) = lc.exec.as_mut() {
-                visitor.visit_nanbox_u64_slot(&mut exec.cb_bits);
-            }
-            // #9493: stdin write/end callbacks waiting on the drain thread.
-            if let Some(stdin) = lc.stdin.as_mut() {
-                for callback in &mut stdin.callbacks {
-                    visitor.visit_nanbox_u64_slot(callback);
-                }
-            }
-        }
-    }
-}
-
+mod integration;
 mod kill;
 mod stdin_drain;
 #[cfg(all(test, windows))]
 #[path = "reactor/windows_kill_tests.rs"]
 mod windows_kill_tests;
+pub(crate) use integration::*;
 pub(crate) use kill::*;
 use stdin_drain::*;

@@ -21,6 +21,7 @@
 //!   `.toString(16)` cache keys match bun-run installs.
 
 mod glob;
+mod spawn;
 mod string_width;
 mod width_tables;
 mod wyhash;
@@ -37,6 +38,7 @@ use crate::value::{js_jsvalue_to_string, JSValue};
 use std::io::{Read, Write};
 
 pub use glob::js_bun_glob_new;
+pub use spawn::{js_bun_spawn, js_bun_terminal_new};
 pub use string_width::bun_string_width;
 pub use wyhash::wyhash;
 

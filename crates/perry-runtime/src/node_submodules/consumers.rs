@@ -562,6 +562,26 @@ fn consume_stream(kind: ConsumerKind, stream: f64) -> f64 {
     promise_rejected(invalid_stream_error())
 }
 
+/// Bun's subprocess-readable convenience methods share the exact same
+/// event-driven collector as `node:stream/consumers`. Keeping these as small
+/// crate-visible entry points avoids a second buffering implementation while
+/// preserving the public module thunk ABI below.
+pub(crate) fn consume_text(stream: f64) -> f64 {
+    consume_stream(ConsumerKind::Text, stream)
+}
+
+pub(crate) fn consume_json(stream: f64) -> f64 {
+    consume_stream(ConsumerKind::Json, stream)
+}
+
+pub(crate) fn consume_array_buffer(stream: f64) -> f64 {
+    consume_stream(ConsumerKind::ArrayBuffer, stream)
+}
+
+pub(crate) fn consume_bytes(stream: f64) -> f64 {
+    consume_stream(ConsumerKind::Bytes, stream)
+}
+
 extern "C" fn consumer_collect_rejected(closure: *const ClosureHeader, reason: f64) -> f64 {
     let promise = js_closure_get_capture_ptr(closure, 0) as *mut crate::Promise;
     crate::promise::js_promise_reject(promise, reason);

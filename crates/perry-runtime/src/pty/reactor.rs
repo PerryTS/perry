@@ -34,6 +34,10 @@ static PTY_NEXT_LIVE_ID: AtomicU64 = AtomicU64::new(1);
 /// gate for the pump and the active-handle check.
 static PTY_LIVE_COUNT: AtomicU64 = AtomicU64::new(0);
 
+/// Live PTYs which currently keep the event loop alive. Unreferenced PTYs are
+/// still pumped and rooted while another handle drives the runtime.
+static PTY_REFED_COUNT: AtomicU64 = AtomicU64::new(0);
+
 /// An event produced by a pty's background threads, consumed by the pump.
 enum PtyEvent {
     /// One master-side read chunk.
@@ -66,6 +70,8 @@ struct LivePty {
     exited: Option<(Option<i32>, Option<i32>)>,
     /// Whether `onExit` has been fired (terminal state).
     closed: bool,
+    /// Whether this PTY currently contributes an active event-loop handle.
+    refed: bool,
 }
 
 static PTY_LIVE: Mutex<Option<HashMap<u64, LivePty>>> = Mutex::new(None);
@@ -149,11 +155,13 @@ pub(super) fn pty_register_live(ipty: f64, child: native::PtyChild) -> u64 {
                 eof: false,
                 exited: None,
                 closed: false,
+                refed: true,
             },
         );
     }
     crate::stdlib_pump::register_runtime_pump(1, pty_reactor_pump_extern);
     PTY_LIVE_COUNT.fetch_add(1, Ordering::SeqCst);
+    PTY_REFED_COUNT.fetch_add(1, Ordering::SeqCst);
     pty_spawn_reader(handle, child.master);
     pty_spawn_waiter(handle, child.pid);
     crate::event_pump::js_notify_main_thread();
@@ -161,7 +169,7 @@ pub(super) fn pty_register_live(ipty: f64, child: native::PtyChild) -> u64 {
 }
 
 /// Write `bytes` to a live pty's master. Returns whether the write succeeded.
-pub(super) fn pty_live_write(handle: u64, bytes: &[u8]) -> bool {
+pub(crate) fn pty_live_write(handle: u64, bytes: &[u8]) -> bool {
     let master = {
         let guard = pty_live_lock();
         match guard.as_ref().and_then(|m| m.get(&handle)) {
@@ -193,7 +201,7 @@ pub(super) fn pty_live_write(handle: u64, bytes: &[u8]) -> bool {
 }
 
 /// `TIOCSWINSZ` a live pty. Returns whether the ioctl succeeded.
-pub(super) fn pty_live_resize(handle: u64, cols: u16, rows: u16) -> bool {
+pub(crate) fn pty_live_resize(handle: u64, cols: u16, rows: u16) -> bool {
     let master = {
         let guard = pty_live_lock();
         match guard.as_ref().and_then(|m| m.get(&handle)) {
@@ -204,8 +212,20 @@ pub(super) fn pty_live_resize(handle: u64, cols: u16, rows: u16) -> bool {
     native::resize_pty(master, cols, rows)
 }
 
+/// Toggle raw mode on a live PTY.
+pub(crate) fn pty_live_set_raw_mode(handle: u64, enabled: bool) -> bool {
+    let master = {
+        let guard = pty_live_lock();
+        match guard.as_ref().and_then(|m| m.get(&handle)) {
+            Some(lp) if !lp.closed => lp.master,
+            _ => return false,
+        }
+    };
+    native::set_raw_mode(master, enabled)
+}
+
 /// Signal a live pty child. Skipped once reaped (the pid may be recycled).
-pub(super) fn pty_live_kill(handle: u64, signo: i32) -> bool {
+pub(crate) fn pty_live_kill(handle: u64, signo: i32) -> bool {
     let pid = {
         let guard = pty_live_lock();
         match guard.as_ref().and_then(|m| m.get(&handle)) {
@@ -214,6 +234,30 @@ pub(super) fn pty_live_kill(handle: u64, signo: i32) -> bool {
         }
     };
     native::signal_pid(pid, signo)
+}
+
+/// Toggle one PTY's event-loop keepalive bit. Calls are idempotent.
+pub(crate) fn pty_live_set_refed(handle: u64, refed: bool) -> bool {
+    {
+        let mut guard = pty_live_lock();
+        let Some(pty) = guard.as_mut().and_then(|map| map.get_mut(&handle)) else {
+            return false;
+        };
+        if pty.closed {
+            return false;
+        }
+        if pty.refed == refed {
+            return true;
+        }
+        pty.refed = refed;
+    }
+    if refed {
+        PTY_REFED_COUNT.fetch_add(1, Ordering::SeqCst);
+        crate::event_pump::js_notify_main_thread();
+    } else {
+        PTY_REFED_COUNT.fetch_sub(1, Ordering::SeqCst);
+    }
+    true
 }
 
 /// Decode `bytes` (with the pty's carry-over prefix) into a String, saving an
@@ -352,6 +396,7 @@ fn pty_reactor_pump_inner() {
         master: RawFd,
         code: Option<i32>,
         signal: Option<i32>,
+        refed: bool,
     }
     let to_close: Vec<PtyCloseItem> = {
         let mut guard = pty_live_lock();
@@ -370,6 +415,7 @@ fn pty_reactor_pump_inner() {
                             master: lp.master,
                             code,
                             signal,
+                            refed: lp.refed,
                         });
                     }
                 }
@@ -402,6 +448,9 @@ fn pty_reactor_pump_inner() {
             map.remove(&item.handle);
         }
         PTY_LIVE_COUNT.fetch_sub(1, Ordering::SeqCst);
+        if item.refed {
+            PTY_REFED_COUNT.fetch_sub(1, Ordering::SeqCst);
+        }
     }
 }
 
@@ -412,7 +461,7 @@ fn pty_reactor_pump_inner() {
 /// Whether any live pty is keeping the event loop alive — OR'd into
 /// `js_stdlib_has_active_handles`.
 pub(crate) fn pty_reactor_has_live() -> bool {
-    PTY_LIVE_COUNT.load(Ordering::Relaxed) > 0
+    PTY_REFED_COUNT.load(Ordering::Relaxed) > 0
 }
 
 /// GC mutable-root scanner: keep every live IPty (and, through its fields,

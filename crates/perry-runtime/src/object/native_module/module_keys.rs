@@ -1630,11 +1630,13 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
         // "bun"` share this one enumerable native-module surface.
         "bun" => Some(&[
             b"Glob",
+            b"Terminal",
             b"file",
             b"fileURLToPath",
             b"hash",
             b"isStandaloneExecutable",
             b"pathToFileURL",
+            b"spawn",
             b"stderr",
             b"stdin",
             b"stdout",

@@ -85,10 +85,12 @@ pub(super) static CALLABLE_EXPORT_TABLE: &[(&str, &[&str])] = &[
         "bun",
         &[
             "Glob",
+            "Terminal",
             "file",
             "fileURLToPath",
             "hash",
             "pathToFileURL",
+            "spawn",
             "stringWidth",
             "write",
         ],

@@ -47,6 +47,8 @@ pub(crate) fn cp_register_arities() {
     js_register_closure_arity(cp_method_remove_listener as *const u8, 2);
     js_register_closure_arity(cp_method_remove_all_listeners as *const u8, 1);
     js_register_closure_arity(cp_method_kill as *const u8, 1);
+    js_register_closure_arity(cp_method_ref as *const u8, 0);
+    js_register_closure_arity(cp_method_unref as *const u8, 0);
     js_register_closure_arity(cp_method_dispose as *const u8, 0);
     crate::closure::js_register_closure_length(cp_method_dispose as *const u8, 0);
     js_register_closure_arity(cp_method_read as *const u8, 1);
@@ -202,8 +204,8 @@ pub(crate) fn cp_build_unstarted_child_process() -> f64 {
             cp_cast1(cp_method_remove_all_listeners),
         ),
         ("kill", cp_cast1(cp_method_kill)),
-        ("ref", cp_cast0(cp_method_this0)),
-        ("unref", cp_cast0(cp_method_this0)),
+        ("ref", cp_cast0(cp_method_ref)),
+        ("unref", cp_cast0(cp_method_unref)),
         ("spawn", cp_cast1(cp_method_child_spawn)),
     ];
     let obj = cp_build_object(&methods, CP_SHAPE_ID + 0x60 + methods.len() as u32);

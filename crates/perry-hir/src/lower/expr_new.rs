@@ -73,6 +73,22 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
     }
 
     if let ast::Expr::Ident(callee_ident) = callee_expr {
+        // Bun.Terminal returns an already-built runtime object. Like
+        // bun:ffi's explicit-return constructors below, a named import must
+        // call the native export directly instead of falling through to the
+        // generic class path, which would manufacture an empty instance.
+        if matches!(
+            ctx.lookup_native_module(callee_ident.sym.as_ref()),
+            Some(("bun", Some("Terminal")))
+        ) {
+            return Ok(Expr::NativeMethodCall {
+                module: "bun".to_string(),
+                class_name: None,
+                object: None,
+                method: "Terminal".to_string(),
+                args: lower_optional_args(ctx, new_expr.args.as_deref())?,
+            });
+        }
         // Keep Bun's `Database` distinct from better-sqlite3's same-named
         // constructor while still allocating the shared native SQLite handle.
         if matches!(

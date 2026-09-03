@@ -272,6 +272,8 @@ pub(crate) unsafe fn nm_dispatch_bun(ctx: &NmCtx, module_name: &str, method_name
         typed_kind
     );
     match (module_name, method_name) {
+        ("bun", "spawn") => crate::bun_compat::js_bun_spawn(arg(0), arg(1)),
+        ("bun", "Terminal") => crate::bun_compat::js_bun_terminal_new(arg(0)),
         ("bun", "stringWidth") => crate::bun_compat::js_bun_string_width(arg(0), arg(1)),
         ("bun", "hash") => crate::bun_compat::js_bun_hash(arg(0), arg(1)),
         ("bun", "file") => crate::bun_compat::js_bun_file(arg(0)),
