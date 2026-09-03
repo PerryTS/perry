@@ -981,6 +981,10 @@ pub fn gc_init() {
     // Metadata-only: the buffer's real owner is the Memory object.
     #[cfg(feature = "wasm-host")]
     reg_scanner!(crate::webassembly::scan_wasm_memory_binding_roots_mut);
+    // The imports object a wasm instance was created with. The host holds only
+    // an opaque token for it, so this table is what a collection rewrites.
+    #[cfg(feature = "wasm-host")]
+    reg_scanner!(crate::webassembly::scan_wasm_import_object_roots_mut);
     reg_budgeted_scanner!(
         crate::object::scan_class_side_table_roots_mut,
         crate::object::scan_class_side_table_roots_mut_step,

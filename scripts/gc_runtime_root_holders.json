@@ -518,6 +518,12 @@
       "why": "Maps scalar timer handle IDs to the CallbackTimerKind enum so clearTimeout/clearInterval can destroy the matching async_hooks resource. Neither the i64 keys nor the enum values contain a JS heap address."
     },
     {
+      "file": "crates/perry-runtime/src/webassembly.rs",
+      "name": "WASM_NEXT_IMPORT_TOKEN",
+      "verdict": "not_a_gc_pointer",
+      "why": "Monotonic per-thread counter that hands out import TOKENS for WASM_IMPORT_OBJECTS. The value is incremented and passed to the wasm host as an opaque u64; it is never an address, never dereferenced, and never used to reach an object, and the table it keys answers undefined for an unknown token. Its whole reason for existing is that the host must NOT hold a heap address: the host used to store the imports object's NaN-boxed bits, so a collection triggered inside one import callback left every later import in the same call reading a relocated object (found by the #9611 llhttp differential)."
+    },
+    {
       "file": "crates/perry-stdlib/src/fetch/body_metadata.rs",
       "name": "FORM_DATA_REGISTRY",
       "verdict": "not_a_gc_pointer",
