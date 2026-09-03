@@ -776,6 +776,10 @@ pub(super) enum AllocatorMaintenanceReason {
     NotSupported,
     #[cfg_attr(not(target_env = "gnu"), allow(dead_code))]
     ExplicitOrEmergency,
+    /// #9612: the allocator purge is major-only; this cycle was a minor.
+    MinorCollection,
+    /// #9612: `PERRY_GC_MALLOC_PURGE=0`.
+    Disabled,
 }
 
 impl AllocatorMaintenanceReason {
@@ -786,6 +790,8 @@ impl AllocatorMaintenanceReason {
             Self::OrdinaryBudgeted => "ordinary_budgeted",
             Self::NotSupported => "not_supported",
             Self::ExplicitOrEmergency => "explicit_or_emergency",
+            Self::MinorCollection => "minor_collection",
+            Self::Disabled => "disabled",
         }
     }
 }
@@ -802,6 +808,10 @@ pub(super) struct AllocatorMaintenanceEvent {
 #[cfg_attr(not(feature = "diagnostics"), allow(dead_code))]
 pub(super) struct AllocatorMaintenanceTrace {
     pub(super) malloc_trim: Option<AllocatorMaintenanceEvent>,
+    /// #9612: the mimalloc purge, which is the primitive that actually
+    /// reaches this process's allocator. Distinct from `malloc_trim` so a
+    /// trace shows which of the two ran and what each cost.
+    pub(super) allocator_purge: Option<AllocatorMaintenanceEvent>,
 }
 
 #[cfg_attr(not(feature = "diagnostics"), allow(dead_code))]
@@ -921,6 +931,22 @@ impl GcCycleTrace {
         elapsed_us: u64,
     ) {
         self.allocator_maintenance.malloc_trim = Some(AllocatorMaintenanceEvent {
+            status,
+            reason,
+            elapsed_us,
+        });
+    }
+
+    /// #9612 counterpart of [`Self::record_malloc_trim_maintenance`] for the
+    /// mimalloc purge.
+    #[inline]
+    pub(super) fn record_allocator_purge_maintenance(
+        &mut self,
+        status: AllocatorMaintenanceStatus,
+        reason: AllocatorMaintenanceReason,
+        elapsed_us: u64,
+    ) {
+        self.allocator_maintenance.allocator_purge = Some(AllocatorMaintenanceEvent {
             status,
             reason,
             elapsed_us,
@@ -1350,6 +1376,11 @@ pub(super) fn allocator_maintenance_json(
     let malloc_trim = trace
         .malloc_trim
         .unwrap_or_else(|| default_malloc_trim_maintenance(progress_kind));
+    let purge = trace.allocator_purge.unwrap_or(AllocatorMaintenanceEvent {
+        status: AllocatorMaintenanceStatus::Skipped,
+        reason: AllocatorMaintenanceReason::MinorCollection,
+        elapsed_us: 0,
+    });
     serde_json::json!({
         "malloc_trim": {
             "status": malloc_trim.status.as_str(),
@@ -1358,6 +1389,11 @@ pub(super) fn allocator_maintenance_json(
             "class": progress_kind.report_class(),
             "ordinary_pause_stats_include": false,
             "elapsed_us": malloc_trim.elapsed_us,
+        },
+        "allocator_purge": {
+            "status": purge.status.as_str(),
+            "reason": purge.reason.as_str(),
+            "elapsed_us": purge.elapsed_us,
         },
     })
 }

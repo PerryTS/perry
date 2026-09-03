@@ -62,6 +62,73 @@ fn record_test_malloc_trim_executed() {
     TEST_MALLOC_TRIM_EXECUTED.with(|calls| calls.set(calls.get().saturating_add(1)));
 }
 
+/// Purge the allocator the process ACTUALLY allocates through.
+///
+/// [`run_malloc_trim`] addresses glibc (`malloc_trim`) or the macOS malloc
+/// zones (`malloc_zone_pressure_relief`). Neither reaches mimalloc, which
+/// `lib.rs` installs as the `#[global_allocator]` on every 64-bit target — so
+/// on both production platforms the GC's hand-back step was trimming an
+/// allocator almost nothing in the process uses. Measured on the compiled
+/// claude-code TUI (Linux, idle): three explicit full collections each ran
+/// `malloc_trim(0)` in 16-23 us and moved RSS by 0 MB, while the same
+/// collection under `MIMALLOC_PURGE_DELAY=0` returned 318 MB. The collector
+/// was already freeing the memory; mimalloc was holding the pages.
+///
+/// `mi_collect(force = true)` is the mimalloc equivalent: it collects the
+/// thread's heaps and returns abandoned/free segments to the OS. It runs at
+/// the same point as the trim (Reclaim, outside the atomic tail) and only for
+/// MAJOR collections, so its cost is paid once per full cycle rather than on
+/// every free the way the `MIMALLOC_PURGE_DELAY=0` knob would.
+///
+/// Kill switch: `PERRY_GC_MALLOC_PURGE=0` (also `off`/`false`).
+pub(super) fn run_allocator_purge(major: bool) -> MallocTrimOutcome {
+    if !major {
+        return MallocTrimOutcome {
+            status: AllocatorMaintenanceStatus::Skipped,
+            reason: AllocatorMaintenanceReason::MinorCollection,
+            elapsed_us: 0,
+        };
+    }
+    if !allocator_purge_enabled() {
+        return MallocTrimOutcome {
+            status: AllocatorMaintenanceStatus::Skipped,
+            reason: AllocatorMaintenanceReason::Disabled,
+            elapsed_us: 0,
+        };
+    }
+    #[cfg(all(target_pointer_width = "64", feature = "alloc-mimalloc"))]
+    {
+        let start = Instant::now();
+        // SAFETY: `mi_collect` is mimalloc's own public maintenance entry. It
+        // takes no pointer from us and is safe to call at any time from a
+        // thread that allocates; the collector owns the heap here, and this
+        // touches allocator metadata only, never a JS object.
+        unsafe {
+            libmimalloc_sys::mi_collect(true);
+        }
+        return MallocTrimOutcome {
+            status: AllocatorMaintenanceStatus::Executed,
+            reason: AllocatorMaintenanceReason::ExplicitOrEmergency,
+            elapsed_us: start.elapsed().as_micros() as u64,
+        };
+    }
+    #[cfg(not(all(target_pointer_width = "64", feature = "alloc-mimalloc")))]
+    {
+        MallocTrimOutcome {
+            status: AllocatorMaintenanceStatus::Unsupported,
+            reason: AllocatorMaintenanceReason::NotSupported,
+            elapsed_us: 0,
+        }
+    }
+}
+
+/// `PERRY_GC_MALLOC_PURGE` — ON by default; `=0`/`off`/`false` disables the
+/// mimalloc purge above and restores the pre-#9612 behaviour.
+fn allocator_purge_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| crate::gc::env_default_on_enabled("PERRY_GC_MALLOC_PURGE"))
+}
+
 pub(super) fn run_malloc_trim(_progress_kind: GcProgressKind) -> MallocTrimOutcome {
     // #6179/#6180 RSS floor: budgeted cycles are the DEFAULT-path collector
     // once incremental graduates — skipping allocator trim there meant a

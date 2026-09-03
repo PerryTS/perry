@@ -1964,6 +1964,43 @@ pub(crate) use shapes_test_support::*;
 #[path = "shapes_tests.rs"]
 mod shapes_tests;
 
+/// #9612: release the capacity that pruning left behind.
+///
+/// hashbrown never shrinks on `remove`/`retain`, so the shape tables keep the
+/// allocation of their startup PEAK for the life of the process. Measured on
+/// the compiled claude-code TUI at idle: `ids_by_facts` held 30.8 MB at 12.3%
+/// fill and `descriptors` 13.8 MB at 10.5% fill, i.e. sized for a peak that
+/// `prune_dead_shape_keys` had already discarded.
+///
+/// Called once per MAJOR collection, right after the prune, where a rehash is
+/// already amortized against a full heap walk. `shrink_to(2 * len)` rather
+/// than `shrink_to_fit()` keeps one doubling of headroom so a table that is
+/// merely oscillating does not re-grow on the next insert.
+pub(crate) fn shrink_shape_tables() {
+    fn worth_shrinking<T>(len: usize, capacity: usize, _: &T) -> bool {
+        // Only when the table is holding at least 1 MB-ish of slack and is
+        // less than half used; a small or well-packed table is left alone.
+        capacity > 4096 && capacity > len.saturating_mul(2)
+    }
+    let mut inner = crate::state::state().shapes.inner.borrow_mut();
+    if worth_shrinking(inner.descriptors.len(), inner.descriptors.capacity(), &()) {
+        let target = inner.descriptors.len().saturating_mul(2);
+        inner.descriptors.shrink_to(target);
+    }
+    if worth_shrinking(inner.indices.len(), inner.indices.capacity(), &()) {
+        let target = inner.indices.len().saturating_mul(2);
+        inner.indices.shrink_to(target);
+    }
+    if worth_shrinking(inner.ids_by_facts.len(), inner.ids_by_facts.capacity(), &()) {
+        let target = inner.ids_by_facts.len().saturating_mul(2);
+        inner.ids_by_facts.shrink_to(target);
+    }
+    if worth_shrinking(inner.ids_by_keys.len(), inner.ids_by_keys.capacity(), &()) {
+        let target = inner.ids_by_keys.len().saturating_mul(2);
+        inner.ids_by_keys.shrink_to(target);
+    }
+}
+
 /// `PERRY_GC_CENSUS`: the shape table's four maps plus the boxed
 /// descriptors and per-shape key indices they own.
 pub(crate) fn shape_table_census() -> Vec<crate::gc::census::SideTableRow> {

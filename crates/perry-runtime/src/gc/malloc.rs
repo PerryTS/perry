@@ -724,6 +724,36 @@ mod drop_tests {
     }
 }
 
+/// #9612: give back the malloc registry's peak capacity.
+///
+/// `reserve_heavy_capacity_if_needed` latches `heavy_capacity_reserved` and
+/// reserves [`MALLOC_STATE_HEAVY_CAPACITY`] the first time a thread crosses
+/// the heavy threshold — a ONE-WAY latch, so a process that was briefly
+/// malloc-heavy keeps the reservation forever. Measured on the compiled
+/// claude-code TUI at idle: the set held 9.4 MB at 2.3% fill and the vector
+/// 2.1 MB for 24k live entries.
+///
+/// Runs once per MAJOR collection, after the malloc sweep has removed the
+/// dead. Clearing the latch lets a genuinely heavy phase re-reserve; the
+/// `2 * len` floor keeps ordinary churn from re-growing immediately.
+pub(crate) fn shrink_malloc_registry() {
+    MALLOC_STATE.with(|state| {
+        let mut state = state.borrow_mut();
+        let live = state.objects.len();
+        let target = live.saturating_mul(2).max(MALLOC_STATE_INITIAL_CAPACITY);
+        if state.objects.capacity() > target {
+            state.objects.shrink_to(target);
+            state.heavy_capacity_reserved = false;
+        }
+        if state.set.capacity() > target {
+            state.set.shrink_to(target);
+        }
+        if state.realloc_forwarding.capacity() > target {
+            state.realloc_forwarding.shrink_to(target);
+        }
+    });
+}
+
 /// `PERRY_GC_CENSUS`: the malloc-object registry's own storage.
 pub(crate) fn malloc_state_census() -> Vec<crate::gc::census::SideTableRow> {
     use crate::gc::census::{map_bytes, set_bytes, vec_bytes};
