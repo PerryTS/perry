@@ -714,6 +714,8 @@ fn zero_alignment_padding_tail(raw: *mut u8, requested_payload_size: usize) {
                 // writes it (a byte LOOP here gets idiom-recognized by LLVM
                 // back into the `bzero` PLT call this branch exists to
                 // avoid — a real cost when the padding is 2 bytes).
+                // GC_STORE_AUDIT(INIT): fresh String tail padding is zeroed
+                // before payload/header publication.
                 raw.add(allocated_payload - 8)
                     .cast::<u64>()
                     .write_unaligned(0);

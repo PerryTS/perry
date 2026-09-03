@@ -82,9 +82,9 @@ fn elements_backed_loop_guard(
         out.add(0).write(3);
         out.add(1).write(gc_word);
         out.add(2).write(array_word);
-        // Word 3 is the payload address the generated loop reads through; the
-        // revalidation entry refreshes it after every iteration that can move
-        // or re-allocate the store.
+        // GC_STORE_AUDIT(STACK): caller-owned generated descriptor; the rooted
+        // receiver owns word 3's derived payload, which revalidation refreshes
+        // after every iteration that can move or re-allocate the store.
         out.add(3).write(elements as u64);
         out.add(4).write(0);
         out.add(5).write(0);
@@ -200,6 +200,8 @@ fn packed_arraylike_loop_guard(
             out.add(0).write(1);
             out.add(1).write(gc_word);
             out.add(2).write(array_word);
+            // GC_STORE_AUDIT(STACK): caller-owned generated descriptor holds
+            // scalar array facts, not roots.
             out.add(3).write(0);
             out.add(4).write(0);
             out.add(5).write(0);
@@ -252,6 +254,8 @@ fn packed_arraylike_loop_guard(
         out.add(1).write(gc_word);
         out.add(2).write(receiver_word);
         out.add(3).write(u64::from(layout.length_slot));
+        // GC_STORE_AUDIT(STACK): caller-owned generated descriptor stores only
+        // revalidated scalar layout facts.
         out.add(4).write(u64::from(layout.element_base));
         out.add(5).write(
             (u64::from(layout.live_inline_slots) << 32) | u64::from(layout.dense_prefix_len),
@@ -344,6 +348,8 @@ pub extern "C" fn js_packed_ecs_u32_loop_guard(
             .take(column_count as usize)
             .enumerate()
         {
+            // GC_STORE_AUDIT(STACK): rooted column operands keep these
+            // call-free generated-loop addresses live.
             out.add(7 + index).write(address as u64);
         }
     }
@@ -572,6 +578,8 @@ fn revalidate_admitted_elements_live(
     // Republish the payload address: the store itself may have been evacuated
     // even though its contents and header word are unchanged.
     unsafe {
+        // GC_STORE_AUDIT(STACK): generated descriptor is not a root; the
+        // rooted receiver supplies this refreshed address.
         (facts as *mut u64).add(3).write(elements as u64);
         (facts as *mut u64)
             .add(6)

@@ -427,6 +427,8 @@ fn push_free_cell(addr: usize, head: &'static crate::tls_hot::HotKey<std::cell::
     head.with(|head| {
         let next = head.get();
         debug_assert_eq!(addr % ALIGN_OF_BOX_CELL, 0);
+        // GC_STORE_AUDIT(POINTER_FREE): an unregistered malloc-side cell
+        // stores a non-GC free-list link.
         unsafe { (addr as *mut usize).write(next) };
         head.set(addr);
     });
@@ -570,6 +572,8 @@ fn publish_released_cells(
         let mut next = h.get();
         for addr in cells.drain(..) {
             debug_assert_eq!(addr % ALIGN_OF_BOX_CELL, 0);
+            // GC_STORE_AUDIT(POINTER_FREE): released malloc-side cells hold
+            // only non-GC free-list links.
             unsafe { (addr as *mut usize).write(next) };
             next = addr;
         }

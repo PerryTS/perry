@@ -1637,6 +1637,8 @@ mod tests {
         fn drop(&mut self) {
             unsafe {
                 for (source, first_word) in self.forwarded_sources {
+                    // GC_STORE_AUDIT(POINTER_FREE): test restores Promise state
+                    // or a native closure function word, never a GC edge.
                     source.cast::<usize>().write(first_word);
                     let header = source.sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
                     (*header).gc_flags &= !crate::gc::GC_FLAG_FORWARDED;
