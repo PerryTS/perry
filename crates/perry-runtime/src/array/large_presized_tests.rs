@@ -4,6 +4,45 @@
 
 use super::*;
 
+// #9201: named properties live in a side table keyed by the array allocation.
+// A grow replaces that allocation, so both the values and the owner key must
+// move before the old header becomes a forwarding stub.
+#[test]
+fn growth_rekeys_named_property_owner() {
+    let _global = crate::gc::global_side_table_test_lock();
+    unsafe {
+        const NAME: &str = "__perry_test_9201_expando__";
+        let key = crate::string::js_string_from_bytes(NAME.as_ptr(), NAME.len() as u32);
+        let mut arr = js_array_alloc(3);
+        arr = js_array_push_f64(arr, 1.0);
+        arr = js_array_push_f64(arr, 2.0);
+        arr = js_array_push_f64(arr, 3.0);
+
+        array_named_property_set(arr, key, 42.0);
+        let old_owner = arr as usize;
+        let old_capacity = (*arr).capacity;
+        assert_eq!(
+            array_named_property_get_by_name(arr, NAME),
+            Some(42.0),
+            "the expando must exist before growth"
+        );
+
+        arr = js_array_set_f64_extend(arr, old_capacity, 99.0);
+
+        assert_ne!(arr as usize, old_owner, "the fixture must grow the array");
+        assert_eq!(
+            array_named_property_get_by_name(arr, NAME),
+            Some(42.0),
+            "#9201: growth must preserve the named property"
+        );
+        assert!(test_array_named_property_owner_exists(arr as usize));
+        assert!(
+            !test_array_named_property_owner_exists(old_owner),
+            "the side table must no longer be keyed by the forwarding stub"
+        );
+    }
+}
+
 #[test]
 fn large_presized_array_grows_its_dense_frontier() {
     unsafe {
