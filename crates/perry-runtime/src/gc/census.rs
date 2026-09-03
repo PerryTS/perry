@@ -556,7 +556,7 @@ fn side_tables() -> Vec<SideTableRow> {
     rows.push(("string.intern_table(fixed)", slots, bytes));
     rows.extend(super::malloc_state_census());
     rows.extend(crate::arena::page_meta_census());
-    rows.extend(super::barrier::barrier_tables_census());
+    rows.extend(super::barrier::census_rows::barrier_tables_census());
     rows.extend(crate::module_require::path_registry_census());
     rows.extend(crate::timer::timer_tables_census());
     rows.push(crate::symbol::symbol_registry_census());
