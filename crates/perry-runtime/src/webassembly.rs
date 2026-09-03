@@ -734,6 +734,25 @@ impl Drop for ActiveInstanceGuard {
 /// rests on. It is registered anyway so that this table is not what breaks if
 /// that flag is ever flipped, and so the holder is covered by a scanner rather
 /// than by a verdict that would silently rot on the day it changed.
+/// Drop bindings whose published `BufferHeader` did not survive the cycle.
+///
+/// The KEY is a native wasmi instance pointer, not a GC address, so it is the
+/// VALUE that can die: a `WebAssembly.Memory` whose JS owner became unreachable
+/// is swept while its instance entry lives on. Leaving the address behind is
+/// the #8174 hazard — the slot is rewritten by `visit_metadata_usize_slot`, so
+/// once that address is recycled by a movable object and forwarded, the stale
+/// key would be silently re-pointed at an unrelated allocation.
+///
+/// A pruned instance simply has no published buffer until its next
+/// `publish_memory_buffer`, which is the same state it holds before its first.
+pub(crate) fn prune_dead_wasm_memory_bindings(is_dead_owner: &dyn Fn(usize) -> bool) {
+    WASM_MEMORY_BINDINGS.with(|bindings| {
+        bindings
+            .borrow_mut()
+            .retain(|_, b| !is_dead_owner(b.buffer));
+    });
+}
+
 pub(crate) fn scan_wasm_memory_binding_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     // Safe to take unconditionally: every allocating call in this module sits
     // OUTSIDE the `with` block that borrows this map, so a collection can

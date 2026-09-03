@@ -289,6 +289,14 @@ pub(super) struct DeadKeyPrune {
 /// are re-keyed by a per-object move hook (`gc_type_after_payload_move`) rather
 /// than by a metadata visitor, so they have no `visit_metadata_*` site at all.
 pub(super) const DEAD_KEY_PRUNES: &[DeadKeyPrune] = &[
+    // #9611/#9620: the key is a native wasmi instance pointer, so it is the
+    // VALUE (the published BufferHeader) that can die while the entry lives.
+    #[cfg(feature = "wasm-host")]
+    DeadKeyPrune {
+        table: "WASM_MEMORY_BINDINGS",
+        owner: DeadKeyOwner::Any,
+        prune: crate::webassembly::prune_dead_wasm_memory_bindings,
+    },
     DeadKeyPrune {
         table: "ARRAY_NAMED_PROPS",
         owner: DeadKeyOwner::Any,
