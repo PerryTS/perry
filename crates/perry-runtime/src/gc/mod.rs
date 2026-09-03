@@ -975,6 +975,12 @@ pub fn gc_init() {
     reg_scanner!(crate::bun_ffi::scan_bun_ffi_roots_mut);
     #[cfg(feature = "node-api-host")]
     reg_scanner!(crate::node_api_host::scan_node_api_roots_mut);
+    // #9611: `WebAssembly.Memory.prototype.buffer` is a foreign-backed wrapper
+    // over the engine's linear memory, and the wasm binding table keys it by
+    // address so an import boundary can re-point it after a `memory.grow`.
+    // Metadata-only: the buffer's real owner is the Memory object.
+    #[cfg(feature = "wasm-host")]
+    reg_scanner!(crate::webassembly::scan_wasm_memory_binding_roots_mut);
     reg_budgeted_scanner!(
         crate::object::scan_class_side_table_roots_mut,
         crate::object::scan_class_side_table_roots_mut_step,
