@@ -959,6 +959,44 @@ pub(crate) fn buffer_alloc_foreign(data: *mut u8, length: u32) -> *mut BufferHea
     ptr
 }
 
+/// Re-point a foreign-backed wrapper at a new span, in place.
+///
+/// [`buffer_alloc_foreign`] hands out a wrapper whose bytes live in memory the
+/// caller owns. When that memory MOVES the wrapper has to follow it or every
+/// later read dereferences freed memory: wasmi's linear memory is a `Vec<u8>`
+/// that reallocates when wasm executes `memory.grow`, and the JS-visible
+/// `WebAssembly.Memory.prototype.buffer` is a foreign wrapper over it (#9611).
+///
+/// Only touches a wrapper that really is foreign-backed — a plain buffer's
+/// bytes live inline after its header and cannot be re-pointed. Returns
+/// whether the rebind happened.
+///
+/// Gated with `webassembly`, its only caller: the default runtime build does
+/// not compile the wasm host shims, and an ungated helper would be dead code
+/// there.
+#[cfg(feature = "wasm-host")]
+pub(crate) fn rebind_foreign_buffer(addr: usize, data: *mut u8, length: u32) -> bool {
+    if FOREIGN_BACKING_EVER_REGISTERED.is_idle() {
+        return false;
+    }
+    let rebound = FOREIGN_BACKING_REGISTRY.with(|r| {
+        let mut r = r.borrow_mut();
+        if !r.contains_key(&addr) {
+            return false;
+        }
+        r.insert(addr, data as usize);
+        true
+    });
+    if rebound {
+        unsafe {
+            let header = addr as *mut BufferHeader;
+            (*header).length = length;
+            (*header).capacity = length;
+        }
+    }
+    rebound
+}
+
 #[inline]
 fn foreign_backing(addr: usize) -> Option<usize> {
     if FOREIGN_BACKING_EVER_REGISTERED.is_idle() {

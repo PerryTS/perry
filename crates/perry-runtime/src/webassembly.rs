@@ -204,12 +204,11 @@ extern "C" {
     fn perry_wasm_host_instance_set_import_context(inst: *mut c_void, import_context: u64);
     #[allow(dead_code)]
     fn perry_wasm_host_instance_drop(inst: *mut c_void);
-    fn perry_wasm_host_instance_memory_len(inst: *mut c_void) -> usize;
-    fn perry_wasm_host_instance_memory_copy(inst: *mut c_void, out: *mut u8, len: usize) -> usize;
-    fn perry_wasm_host_instance_memory_write(
+    fn perry_wasm_host_instance_memory_span(inst: *mut c_void, out_len: *mut usize) -> *mut u8;
+    fn perry_wasm_host_instance_export_handle(
         inst: *mut c_void,
-        data: *const u8,
-        len: usize,
+        name: *const c_char,
+        name_len: usize,
     ) -> usize;
     fn perry_wasm_host_instance_table_len(
         inst: *mut c_void,
@@ -238,6 +237,18 @@ extern "C" {
         inst: *mut c_void,
         name: *const c_char,
         name_len: usize,
+        arg_kinds: *const u8,
+        arg_bits: *const u64,
+        arg_count: usize,
+        out_kinds: *mut u8,
+        out_bits: *mut u64,
+        out_capacity: usize,
+        out_count: *mut usize,
+        out_err: *mut *mut c_char,
+    ) -> i32;
+    fn perry_wasm_host_call_export_by_handle(
+        inst: *mut c_void,
+        handle: usize,
         arg_kinds: *const u8,
         arg_bits: *const u64,
         arg_count: usize,
@@ -643,80 +654,175 @@ pub extern "C" fn js_webassembly_module_custom_sections(module_jsval: f64, name_
     arr.get_nanbox_f64()
 }
 
-fn copy_instance_memory(inst: *mut c_void, buffer: f64) {
-    let ptr = unbox_pointer(buffer) as *mut crate::buffer::BufferHeader;
-    if ptr.is_null() || !crate::buffer::is_array_buffer(ptr as usize) {
-        return;
-    }
-    let len = unsafe { (*ptr).length.max(0) as usize };
-    unsafe {
-        perry_wasm_host_instance_memory_copy(inst, crate::buffer::buffer_data_mut(ptr), len);
+// ── Zero-copy linear memory (#9611) ──────────────────────────────────────
+//
+// `WebAssembly.Memory.prototype.buffer` is a foreign-backed `ArrayBuffer`
+// wrapper pointed straight at wasmi's linear memory, so neither direction
+// copies: a JS store through `new Uint8Array(memory.buffer)` lands in wasm
+// memory, and a wasm store is visible to JS with no synchronisation at all.
+// Before this, every exported call memcpy'd the WHOLE linear memory in and
+// then back out, which made one call cost 0.11 ns per byte of memory — 44,000x
+// node once llhttp's memory had grown to a few MiB.
+//
+// The one thing that can invalidate the published span is `memory.grow`, which
+// reallocates wasmi's backing `Vec` and can move it. Growth can only happen
+// while wasm is executing, so the span is re-read (a pointer and a length
+// compare, no copying) at the two boundaries where JS can observe it again:
+// when an exported call returns, and when wasm calls back into a JS import.
+struct MemoryBinding {
+    /// `BufferHeader` currently published as `memory.buffer`.
+    buffer: usize,
+    /// The wasmi span that buffer is pointed at.
+    data: usize,
+    len: usize,
+    /// The span moved mid-call and the published buffer was re-pointed at it
+    /// in place. The buffer still has to be REPLACED when the call unwinds —
+    /// node hands out a fresh `ArrayBuffer` after a grow and detaches the old
+    /// one, which is the signal glue code (wasm-bindgen) uses to rebuild its
+    /// cached views.
+    rebound: bool,
+}
+
+crate::perry_thread_local! {
+    /// `instance handle -> the memory span published to JS`. An entry lives as
+    /// long as its instance, which today is the process: the runtime never
+    /// calls `perry_wasm_host_instance_drop`, so an instance address is never
+    /// recycled under a live binding.
+    static WASM_MEMORY_BINDINGS: std::cell::RefCell<crate::fast_hash::PtrHashMap<usize, MemoryBinding>> =
+        std::cell::RefCell::new(crate::fast_hash::new_ptr_hash_map());
+    /// Instances with an exported call on the stack, innermost last. Only
+    /// these can have grown their memory since JS last looked.
+    static ACTIVE_WASM_INSTANCES: std::cell::RefCell<Vec<usize>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Pushes an instance onto [`ACTIVE_WASM_INSTANCES`] for the duration of one
+/// exported call, popping it however the call leaves.
+struct ActiveInstanceGuard;
+
+impl ActiveInstanceGuard {
+    fn enter(inst: *mut c_void) -> Self {
+        ACTIVE_WASM_INSTANCES.with(|stack| stack.borrow_mut().push(inst as usize));
+        ActiveInstanceGuard
     }
 }
 
-fn write_instance_memory(inst: *mut c_void, buffer: f64) {
-    let ptr = unbox_pointer(buffer) as *mut crate::buffer::BufferHeader;
-    if ptr.is_null() || !crate::buffer::is_array_buffer(ptr as usize) {
-        return;
-    }
-    let len = unsafe { (*ptr).length.max(0) as usize };
-    unsafe {
-        perry_wasm_host_instance_memory_write(inst, crate::buffer::buffer_data_mut(ptr), len);
+impl Drop for ActiveInstanceGuard {
+    fn drop(&mut self) {
+        ACTIVE_WASM_INSTANCES.with(|stack| {
+            stack.borrow_mut().pop();
+        });
     }
 }
 
-fn memory_buffer_value(memory: f64) -> f64 {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let memory = scope.root_nanbox_f64(memory);
-    let value = JSValue::from_bits(memory.get_nanbox_f64().to_bits());
-    if !value.is_pointer() {
+fn instance_memory_span(inst: *mut c_void) -> (*mut u8, usize) {
+    let mut len = 0usize;
+    let data = unsafe { perry_wasm_host_instance_memory_span(inst, &mut len) };
+    if data.is_null() {
+        return (std::ptr::null_mut(), 0);
+    }
+    // A `BufferHeader` length is an i32-domain byte count; a wasm32 memory can
+    // in principle exceed that, and the excess simply stays invisible to JS
+    // rather than wrapping the header's length.
+    (data, len.min(i32::MAX as usize))
+}
+
+/// Allocate the `ArrayBuffer` that exposes `data[..len]` — wasmi's own linear
+/// memory — and record it as the instance's published span.
+fn publish_memory_buffer(inst: *mut c_void, data: *mut u8, len: usize) -> f64 {
+    let buffer = crate::buffer::buffer_alloc_foreign(data, len as u32);
+    if buffer.is_null() {
         return nanbox_undefined();
     }
-    let key = scope.root_string_ptr(named_key(b"buffer"));
-    key.with_const_ptr(|key: *const crate::string::StringHeader| {
-        crate::object::js_object_get_field_by_name_f64(
-            JSValue::from_bits(memory.get_nanbox_f64().to_bits())
-                .as_pointer::<crate::object::ObjectHeader>(),
-            key,
-        )
-    })
+    crate::buffer::mark_as_array_buffer(buffer as usize);
+    WASM_MEMORY_BINDINGS.with(|bindings| {
+        bindings.borrow_mut().insert(
+            inst as usize,
+            MemoryBinding {
+                buffer: buffer as usize,
+                data: data as usize,
+                len,
+                rebound: false,
+            },
+        );
+    });
+    crate::value::js_nanbox_pointer(buffer as i64)
 }
 
-fn sync_memory_to_wasm(inst: *mut c_void, memory: f64) {
-    write_instance_memory(inst, memory_buffer_value(memory));
+/// Re-point every active instance's published buffer at its current linear
+/// memory. Called before wasm re-enters JS through an imported function: wasm
+/// may have grown the memory since the buffer was published, and the JS import
+/// handler is about to read and write `memory.buffer` (this is exactly what
+/// wasm-bindgen glue does), which without this would dereference the `Vec`
+/// allocation the grow freed.
+///
+/// The published buffer keeps its identity here — swapping in a fresh
+/// `ArrayBuffer` needs the `WebAssembly.Memory` object, which this path does
+/// not hold — and the `rebound` flag defers that to the end of the call.
+fn rebind_active_wasm_memories() {
+    ACTIVE_WASM_INSTANCES.with(|stack| {
+        let active = stack.borrow();
+        for &inst in active.iter() {
+            let (data, len) = instance_memory_span(inst as *mut c_void);
+            if data.is_null() {
+                continue;
+            }
+            WASM_MEMORY_BINDINGS.with(|bindings| {
+                let mut bindings = bindings.borrow_mut();
+                let Some(binding) = bindings.get_mut(&inst) else {
+                    return;
+                };
+                if binding.data == data as usize && binding.len == len {
+                    return;
+                }
+                if crate::buffer::rebind_foreign_buffer(binding.buffer, data, len as u32) {
+                    binding.data = data as usize;
+                    binding.len = len;
+                    binding.rebound = true;
+                }
+            });
+        }
+    });
 }
 
-fn sync_memory_from_wasm(inst: *mut c_void, memory: f64) {
+/// Bring `memory.buffer` back in sync with the instance's linear memory after
+/// an exported call. In the overwhelmingly common case — the call did not grow
+/// the memory — this is one pointer and one length compare and nothing else.
+///
+/// After a grow it does what node does: publish a FRESH `ArrayBuffer` over the
+/// new span and detach the old one, so a JS view captured before the grow
+/// reports `byteLength === 0` instead of aliasing a freed allocation.
+fn resync_memory_after_call(inst: *mut c_void, memory: f64) {
+    let (data, len) = instance_memory_span(inst);
+    if data.is_null() {
+        return;
+    }
+    let stale =
+        WASM_MEMORY_BINDINGS.with(|bindings| match bindings.borrow().get(&(inst as usize)) {
+            Some(binding) => binding.rebound || binding.data != data as usize || binding.len != len,
+            None => true,
+        });
+    if !stale {
+        return;
+    }
     let scope = crate::gc::RuntimeHandleScope::new();
     let memory = scope.root_nanbox_f64(memory);
     let memory_value = JSValue::from_bits(memory.get_nanbox_f64().to_bits());
     if !memory_value.is_pointer() {
         return;
     }
-    let host_len = unsafe { perry_wasm_host_instance_memory_len(inst) };
-    if host_len == 0 || host_len > i32::MAX as usize {
-        return;
+    let previous = WASM_MEMORY_BINDINGS
+        .with(|bindings| bindings.borrow().get(&(inst as usize)).map(|b| b.buffer))
+        .unwrap_or(0);
+    let buffer = scope.root_nanbox_f64(publish_memory_buffer(inst, data, len));
+    let memory_ptr = JSValue::from_bits(memory.get_nanbox_f64().to_bits())
+        .as_pointer::<crate::object::ObjectHeader>()
+        as *mut crate::object::ObjectHeader;
+    let _ = object_set(memory_ptr, b"buffer", buffer.get_nanbox_f64());
+    let replacement = unbox_pointer(buffer.get_nanbox_f64()) as usize;
+    if previous != 0 && previous != replacement {
+        crate::buffer::detach_array_buffer(previous);
     }
-    let old_buffer = scope.root_nanbox_f64(memory_buffer_value(memory.get_nanbox_f64()));
-    let old_ptr = unbox_pointer(old_buffer.get_nanbox_f64()) as *mut crate::buffer::BufferHeader;
-    let old_len = if !old_ptr.is_null() && crate::buffer::is_array_buffer(old_ptr as usize) {
-        unsafe { (*old_ptr).length.max(0) as usize }
-    } else {
-        0
-    };
-    let buffer = if old_len == host_len {
-        old_buffer.get_nanbox_f64()
-    } else {
-        let new_buffer = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
-            crate::buffer::js_array_buffer_new(host_len as i32) as i64,
-        ));
-        let memory_ptr = JSValue::from_bits(memory.get_nanbox_f64().to_bits())
-            .as_pointer::<crate::object::ObjectHeader>()
-            as *mut crate::object::ObjectHeader;
-        let _ = object_set(memory_ptr, b"buffer", new_buffer.get_nanbox_f64());
-        new_buffer.get_nanbox_f64()
-    };
-    copy_instance_memory(inst, buffer);
 }
 
 unsafe extern "C" fn call_wasm_import(
@@ -739,6 +845,11 @@ unsafe extern "C" fn call_wasm_import(
     {
         return 0;
     }
+
+    // wasm may have grown its memory before reaching this import, which
+    // reallocates wasmi's backing store; the JS handler is about to read and
+    // write `memory.buffer`, so re-point it at the live span first (#9611).
+    rebind_active_wasm_memories();
 
     let scope = crate::gc::RuntimeHandleScope::new();
     let imports = scope.root_nanbox_f64(f64::from_bits(context));
@@ -818,12 +929,24 @@ fn call_captured_wasm_export(closure: *const crate::closure::ClosureHeader, args
     let memory = scope.root_nanbox_f64(crate::closure::js_closure_get_capture_f64(closure, 2));
     let instance = scope.root_nanbox_f64(crate::closure::js_closure_get_capture_f64(closure, 3));
     let imports = scope.root_nanbox_f64(crate::closure::js_closure_get_capture_f64(closure, 4));
+    let handle = crate::closure::js_closure_get_capture_f64(closure, 5) as usize;
     unsafe {
         perry_wasm_host_instance_set_import_context(inst, imports.get_nanbox_f64().to_bits())
     };
-    sync_memory_to_wasm(inst, memory.get_nanbox_f64());
-    let result = call_export_n(nanbox_pointer_raw(inst), name.get_nanbox_f64(), args);
-    sync_memory_from_wasm(inst, memory.get_nanbox_f64());
+    let result = {
+        let _active = ActiveInstanceGuard::enter(inst);
+        if handle != 0 {
+            call_export_by_handle(inst, handle, args)
+        } else {
+            call_export_n(nanbox_pointer_raw(inst), name.get_nanbox_f64(), args)
+        }
+    };
+    // A module with no exported memory has nothing to resync, and asking the
+    // host for a span it does not have would put an FFI call back on a hot
+    // path that no longer needs one.
+    if JSValue::from_bits(memory.get_nanbox_f64().to_bits()).is_pointer() {
+        resync_memory_after_call(inst, memory.get_nanbox_f64());
+    }
     let mut exit_code = 0;
     if unsafe { perry_wasm_host_instance_take_exit_code(inst, &mut exit_code) } != 0 {
         let instance = unbox_pointer(instance.get_nanbox_f64()) as *mut crate::object::ObjectHeader;
@@ -890,7 +1013,13 @@ fn make_export_function(
         3 => (js_wasm_export_call_3 as *const u8, 3),
         _ => (js_wasm_export_call_4 as *const u8, 4),
     };
-    let closure = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(func_ptr, 5));
+    // Resolve the export ONCE here rather than by name on every call: the
+    // per-call `get_func` probe plus `FuncType` clone was the sub-microsecond
+    // floor left under the linear-memory copy this binding removed (#9611).
+    let handle = unsafe {
+        perry_wasm_host_instance_export_handle(inst, name.as_ptr() as *const c_char, name.len())
+    };
+    let closure = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(func_ptr, 6));
     if closure
         .get_raw_mut_ptr::<crate::closure::ClosureHeader>()
         .is_null()
@@ -905,6 +1034,7 @@ fn make_export_function(
     crate::closure::js_closure_set_capture_f64(closure_ptr, 2, memory.get_nanbox_f64());
     crate::closure::js_closure_set_capture_f64(closure_ptr, 3, instance.get_nanbox_f64());
     crate::closure::js_closure_set_capture_f64(closure_ptr, 4, imports.get_nanbox_f64());
+    crate::closure::js_closure_set_capture_f64(closure_ptr, 5, handle as f64);
     crate::object::set_bound_native_closure_name(
         closure_ptr,
         std::str::from_utf8(name).unwrap_or("wasm"),
@@ -1135,14 +1265,11 @@ fn make_export_table(inst: *mut c_void, name: &[u8]) -> f64 {
 fn make_instance_value(module: *mut c_void, inst: *mut c_void, imports: f64, receiver: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let imports = scope.root_nanbox_f64(imports);
-    let memory_len = unsafe { perry_wasm_host_instance_memory_len(inst) };
-    let memory = if memory_len == 0 {
+    let (memory_data, memory_len) = instance_memory_span(inst);
+    let memory = if memory_data.is_null() {
         scope.root_nanbox_f64(nanbox_undefined())
     } else {
-        let buffer = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
-            crate::buffer::js_array_buffer_new(memory_len.min(i32::MAX as usize) as i32) as i64,
-        ));
-        copy_instance_memory(inst, buffer.get_nanbox_f64());
+        let buffer = scope.root_nanbox_f64(publish_memory_buffer(inst, memory_data, memory_len));
         let object = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
         let object = object.with_mut_ptr(|object: *mut crate::object::ObjectHeader| {
             object_set(object, b"buffer", buffer.get_nanbox_f64())
@@ -1327,14 +1454,27 @@ pub extern "C" fn js_webassembly_instantiate(bytes_jsval: f64, imports_jsval: f6
 ///
 /// Args > 4 are silently truncated in this MVP — the codegen-side wiring
 /// only routes 0-4 args anyway.
+/// `WebAssembly.callExport(...)` — the ahead-of-time lowering
+/// (`Expr::WebAssemblyCallExport`), which reaches an export without the
+/// closure that owns the instance's `WebAssembly.Memory` object. The call can
+/// still grow the memory, so the published buffer is re-pointed at the live
+/// span in place; only the closure path can additionally hand out a fresh
+/// `ArrayBuffer` (it is the one that holds the memory object).
+fn call_export_named_rebinding(inst_jsval: f64, name_jsval: f64, args: &[f64]) -> f64 {
+    let _active = ActiveInstanceGuard::enter(unbox_pointer(inst_jsval));
+    let result = call_export_n(inst_jsval, name_jsval, args);
+    rebind_active_wasm_memories();
+    result
+}
+
 #[no_mangle]
 pub extern "C" fn js_webassembly_call_export_0(inst_jsval: f64, name_jsval: f64) -> f64 {
-    call_export_n(inst_jsval, name_jsval, &[])
+    call_export_named_rebinding(inst_jsval, name_jsval, &[])
 }
 
 #[no_mangle]
 pub extern "C" fn js_webassembly_call_export_1(inst_jsval: f64, name_jsval: f64, a: f64) -> f64 {
-    call_export_n(inst_jsval, name_jsval, &[a])
+    call_export_named_rebinding(inst_jsval, name_jsval, &[a])
 }
 
 #[no_mangle]
@@ -1344,7 +1484,7 @@ pub extern "C" fn js_webassembly_call_export_2(
     a: f64,
     b: f64,
 ) -> f64 {
-    call_export_n(inst_jsval, name_jsval, &[a, b])
+    call_export_named_rebinding(inst_jsval, name_jsval, &[a, b])
 }
 
 #[no_mangle]
@@ -1355,7 +1495,7 @@ pub extern "C" fn js_webassembly_call_export_3(
     b: f64,
     c: f64,
 ) -> f64 {
-    call_export_n(inst_jsval, name_jsval, &[a, b, c])
+    call_export_named_rebinding(inst_jsval, name_jsval, &[a, b, c])
 }
 
 #[no_mangle]
@@ -1367,7 +1507,112 @@ pub extern "C" fn js_webassembly_call_export_4(
     c: f64,
     d: f64,
 ) -> f64 {
-    call_export_n(inst_jsval, name_jsval, &[a, b, c, d])
+    call_export_named_rebinding(inst_jsval, name_jsval, &[a, b, c, d])
+}
+
+/// The most arguments any exported-function shim forwards
+/// (`js_wasm_export_call_4` / `js_webassembly_call_export_4`). Keeping the
+/// marshalling buffers on the stack keeps a Wasm call allocation-free.
+const MAX_WASM_ARGS: usize = 4;
+const MAX_WASM_RESULTS: usize = 16;
+
+/// Encode JS numbers as wasm values.
+///
+/// Every input arg arrives as an f64. An f64 that round-trips through i32
+/// exactly is sent as an i32 — that covers `add(2, 3)` on an i32 export
+/// without making the caller think about wasm signatures — and everything else
+/// is sent as an f64. The host re-coerces against the export's real signature.
+fn encode_wasm_args(
+    args: &[f64],
+    kinds: &mut [u8; MAX_WASM_ARGS],
+    bits: &mut [u64; MAX_WASM_ARGS],
+) {
+    for (index, v) in args.iter().take(MAX_WASM_ARGS).enumerate() {
+        let as_i32 = *v as i32;
+        if (as_i32 as f64) == *v && v.is_finite() {
+            kinds[index] = WASM_VAL_KIND_I32;
+            bits[index] = as_i32 as u32 as u64;
+        } else {
+            kinds[index] = WASM_VAL_KIND_F64;
+            bits[index] = v.to_bits();
+        }
+    }
+}
+
+fn decode_wasm_value(kind: u8, bits: u64) -> f64 {
+    match kind {
+        WASM_VAL_KIND_I32 => (bits as u32 as i32) as f64,
+        WASM_VAL_KIND_I64 => (bits as i64) as f64,
+        WASM_VAL_KIND_F32 => f32::from_bits(bits as u32) as f64,
+        WASM_VAL_KIND_F64 => f64::from_bits(bits),
+        _ => nanbox_undefined(),
+    }
+}
+
+/// Decode a call's results: no result is `undefined`, one is the value itself,
+/// and several become an array (wasm multi-value).
+fn decode_wasm_results(
+    out_kinds: &[u8; MAX_WASM_RESULTS],
+    out_bits: &[u64; MAX_WASM_RESULTS],
+    out_count: usize,
+) -> f64 {
+    match out_count {
+        0 => nanbox_undefined(),
+        1 => decode_wasm_value(out_kinds[0], out_bits[0]),
+        count => {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let array = scope.root_nanbox_f64(array_value(crate::array::js_array_alloc(
+                count.min(MAX_WASM_RESULTS) as u32,
+            )));
+            for index in 0..count.min(MAX_WASM_RESULTS) {
+                let array_ptr = JSValue::from_bits(array.get_nanbox_f64().to_bits())
+                    .as_pointer::<crate::array::ArrayHeader>()
+                    as *mut crate::array::ArrayHeader;
+                let array_ptr = crate::array::js_array_push_f64(
+                    array_ptr,
+                    decode_wasm_value(out_kinds[index], out_bits[index]),
+                );
+                array.set_nanbox_f64(array_value(array_ptr));
+            }
+            array.get_nanbox_f64()
+        }
+    }
+}
+
+/// Call an export the instance resolved at construction time (#9611). Same
+/// marshalling as [`call_export_n`], without the per-call name lookup.
+fn call_export_by_handle(inst: *mut c_void, handle: usize, args: &[f64]) -> f64 {
+    let mut kinds = [WASM_VAL_KIND_NONE; MAX_WASM_ARGS];
+    let mut bits = [0u64; MAX_WASM_ARGS];
+    encode_wasm_args(args, &mut kinds, &mut bits);
+    let arg_count = args.len().min(MAX_WASM_ARGS);
+
+    let mut out_kinds = [WASM_VAL_KIND_NONE; MAX_WASM_RESULTS];
+    let mut out_bits = [0u64; MAX_WASM_RESULTS];
+    let mut out_count = 0usize;
+    let mut err: *mut c_char = std::ptr::null_mut();
+    let ok = unsafe {
+        perry_wasm_host_call_export_by_handle(
+            inst,
+            handle,
+            kinds.as_ptr(),
+            bits.as_ptr(),
+            arg_count,
+            out_kinds.as_mut_ptr(),
+            out_bits.as_mut_ptr(),
+            MAX_WASM_RESULTS,
+            &mut out_count,
+            &mut err,
+        )
+    };
+    if ok == 0 {
+        emit_error_to_stderr("WebAssembly.RuntimeError", err);
+        return nanbox_undefined();
+    }
+    if !err.is_null() {
+        unsafe { perry_wasm_host_string_free(err) };
+    }
+    decode_wasm_results(&out_kinds, &out_bits, out_count)
 }
 
 fn call_export_n(inst_jsval: f64, name_jsval: f64, args: &[f64]) -> f64 {
@@ -1381,32 +1626,13 @@ fn call_export_n(inst_jsval: f64, name_jsval: f64, args: &[f64]) -> f64 {
         return nanbox_undefined();
     };
 
-    // MVP: every input arg is treated as f64. wasmi's `call` will
-    // coerce/typecheck against the actual signature on the wasm side —
-    // we re-marshal to the right kind here based on the export type.
-    // For simplicity we send everything as F64 and let the host translate.
-    // (Pragmatic for the PoC: most numeric wasm exports are i32/f64; an
-    // f64-encoded i32 round-trips losslessly.)
-    let mut kinds: Vec<u8> = Vec::with_capacity(args.len());
-    let mut bits: Vec<u64> = Vec::with_capacity(args.len());
-    for v in args {
-        // Encode as i32 if the f64 round-trips through i32 exactly, else
-        // as f64. Covers `add(2,3)` (i32 add) without forcing the user to
-        // think about wasm signatures, while still passing real f64s
-        // through faithfully.
-        let as_i32 = *v as i32;
-        if (as_i32 as f64) == *v && v.is_finite() {
-            kinds.push(WASM_VAL_KIND_I32);
-            bits.push(as_i32 as u32 as u64);
-        } else {
-            kinds.push(WASM_VAL_KIND_F64);
-            bits.push(v.to_bits());
-        }
-    }
+    let mut kinds = [WASM_VAL_KIND_NONE; MAX_WASM_ARGS];
+    let mut bits = [0u64; MAX_WASM_ARGS];
+    encode_wasm_args(args, &mut kinds, &mut bits);
+    let arg_count = args.len().min(MAX_WASM_ARGS);
 
-    const MAX_RESULTS: usize = 16;
-    let mut out_kinds = [WASM_VAL_KIND_NONE; MAX_RESULTS];
-    let mut out_bits = [0u64; MAX_RESULTS];
+    let mut out_kinds = [WASM_VAL_KIND_NONE; MAX_WASM_RESULTS];
+    let mut out_bits = [0u64; MAX_WASM_RESULTS];
     let mut out_count = 0usize;
     let mut err: *mut c_char = std::ptr::null_mut();
     let ok = unsafe {
@@ -1416,10 +1642,10 @@ fn call_export_n(inst_jsval: f64, name_jsval: f64, args: &[f64]) -> f64 {
             name_len,
             kinds.as_ptr(),
             bits.as_ptr(),
-            kinds.len(),
+            arg_count,
             out_kinds.as_mut_ptr(),
             out_bits.as_mut_ptr(),
-            MAX_RESULTS,
+            MAX_WASM_RESULTS,
             &mut out_count,
             &mut err,
         )
@@ -1428,37 +1654,9 @@ fn call_export_n(inst_jsval: f64, name_jsval: f64, args: &[f64]) -> f64 {
         emit_error_to_stderr("WebAssembly.RuntimeError", err);
         return nanbox_undefined();
     }
-    let decode = |kind: u8, bits: u64| match kind {
-        WASM_VAL_KIND_I32 => (bits as u32 as i32) as f64,
-        WASM_VAL_KIND_I64 => (bits as i64) as f64,
-        WASM_VAL_KIND_F32 => f32::from_bits(bits as u32) as f64,
-        WASM_VAL_KIND_F64 => f64::from_bits(bits),
-        _ => nanbox_undefined(),
-    };
-    let result = match out_count {
-        0 => nanbox_undefined(),
-        1 => decode(out_kinds[0], out_bits[0]),
-        count => {
-            let scope = crate::gc::RuntimeHandleScope::new();
-            let array = scope.root_nanbox_f64(array_value(crate::array::js_array_alloc(
-                count.min(MAX_RESULTS) as u32,
-            )));
-            for index in 0..count.min(MAX_RESULTS) {
-                let array_ptr = JSValue::from_bits(array.get_nanbox_f64().to_bits())
-                    .as_pointer::<crate::array::ArrayHeader>()
-                    as *mut crate::array::ArrayHeader;
-                let array_ptr = crate::array::js_array_push_f64(
-                    array_ptr,
-                    decode(out_kinds[index], out_bits[index]),
-                );
-                array.set_nanbox_f64(array_value(array_ptr));
-            }
-            array.get_nanbox_f64()
-        }
-    };
     // Avoid leaking the unused err buffer on success.
     if !err.is_null() {
         unsafe { perry_wasm_host_string_free(err) };
     }
-    result
+    decode_wasm_results(&out_kinds, &out_bits, out_count)
 }
