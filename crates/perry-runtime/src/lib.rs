@@ -404,6 +404,39 @@ pub(crate) mod stdlib_pump {
         }
     }
 
+    // #9591: the has-active counterpart of `RUNTIME_PUMP_FNS` — armed slots
+    // for runtime-internal subsystems whose live handles must keep the loop
+    // alive, with the same reason for the indirection: a direct call from
+    // `js_stdlib_has_active_handles` into the fs.watch backend would pin the
+    // OS watcher (and its notify dependency) into every binary.
+    const RUNTIME_HAS_ACTIVE_SLOTS: usize = 4;
+    static RUNTIME_HAS_ACTIVE_FNS: [AtomicPtr<()>; RUNTIME_HAS_ACTIVE_SLOTS] = [
+        AtomicPtr::new(null_mut()),
+        AtomicPtr::new(null_mut()),
+        AtomicPtr::new(null_mut()),
+        AtomicPtr::new(null_mut()),
+    ];
+
+    /// Arm runtime has-active slot `slot` with `f` (see `register_runtime_pump`).
+    pub(crate) fn register_runtime_has_active(slot: usize, f: extern "C" fn() -> i32) {
+        if slot >= RUNTIME_HAS_ACTIVE_SLOTS {
+            return;
+        }
+        RUNTIME_HAS_ACTIVE_FNS[slot].store(std::hint::black_box(f as *mut ()), Ordering::Release);
+    }
+
+    fn run_runtime_has_active() -> bool {
+        RUNTIME_HAS_ACTIVE_FNS.iter().any(|slot| {
+            let p = slot.load(Ordering::Acquire);
+            if p.is_null() {
+                return false;
+            }
+            // SAFETY: only `extern "C" fn() -> i32` values are ever stored.
+            let func: extern "C" fn() -> i32 = unsafe { std::mem::transmute(p) };
+            func() != 0
+        })
+    }
+
     // #2532 — auxiliary pump / has-active registries.
     //
     // perry-stdlib owns the single `STDLIB_PUMP_FN` slot above and drains
@@ -588,6 +621,11 @@ pub(crate) mod stdlib_pump {
         if crate::os::js_process_signal_has_active() != 0 {
             return 1;
         }
+        // #9591: a ref'd `fs.watch` handle / started `fsPromises.watch`
+        // iterator (armed slot, see `register_runtime_has_active`).
+        if run_runtime_has_active() {
+            return 1;
+        }
         // #2532 — a live `perry-ext-*` handle (e.g. a listening HTTP
         // server registered out-of-tree) keeps the loop alive even when
         // perry-stdlib reports none.
@@ -646,6 +684,41 @@ pub(crate) mod stdlib_pump {
                 0,
                 "removing the listener must release the loop again"
             );
+        }
+
+        static HAS_ACTIVE_FLAG: AtomicI32 = AtomicI32::new(0);
+        extern "C" fn flag_has_active() -> i32 {
+            HAS_ACTIVE_FLAG.load(AtomicOrdering::SeqCst)
+        }
+
+        /// #9591: an armed runtime has-active slot keeps the loop alive
+        /// exactly while its callback reports live work — the fs.watch
+        /// backend's liveness reaches the generated event loop through
+        /// this slot, not through a timer.
+        #[test]
+        fn runtime_has_active_slot_gates_the_loop() {
+            crate::os::test_set_stdin_data_listener(None);
+            register_runtime_has_active(RUNTIME_HAS_ACTIVE_SLOTS - 1, flag_has_active);
+            HAS_ACTIVE_FLAG.store(0, AtomicOrdering::SeqCst);
+            assert_eq!(
+                js_stdlib_has_active_handles(),
+                0,
+                "an armed slot reporting 0 must not pin the loop"
+            );
+            HAS_ACTIVE_FLAG.store(1, AtomicOrdering::SeqCst);
+            assert_eq!(
+                js_stdlib_has_active_handles(),
+                1,
+                "an armed slot reporting live work must keep the loop alive"
+            );
+            HAS_ACTIVE_FLAG.store(0, AtomicOrdering::SeqCst);
+            assert_eq!(
+                js_stdlib_has_active_handles(),
+                0,
+                "the loop is released again once the work is gone"
+            );
+            // Out-of-range slots are ignored, never a panic.
+            register_runtime_has_active(RUNTIME_HAS_ACTIVE_SLOTS, flag_has_active);
         }
 
         #[test]

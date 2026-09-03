@@ -10,6 +10,9 @@ use super::*;
 mod glob;
 mod opendir;
 mod watch;
+mod watch_backend;
+#[cfg(target_os = "macos")]
+mod watch_fsevents;
 
 // Re-export the opendir entry points consumed cross-module (callbacks.rs,
 // node_submodules/fs_promises.rs) plus the unmangled FFI sync symbol.
