@@ -19,6 +19,7 @@ struct SidecarManifest {
     shipping_model: &'static str,
     target: String,
     allowlist: Vec<String>,
+    path_allowlist: Vec<String>,
     addons: Vec<ManifestAddon>,
 }
 
@@ -82,6 +83,9 @@ fn payload_key(addon: &NativeAddonModule) -> String {
 /// artifact. Nested node_modules and VCS state are separate packages, not
 /// part of the selected platform payload.
 pub(super) fn addon_payload_files(addon: &NativeAddonModule) -> Vec<PathBuf> {
+    if !addon.ship_package_payload {
+        return vec![addon.source_path.clone()];
+    }
     let mut files = walkdir::WalkDir::new(&addon.package_dir)
         .follow_links(false)
         .into_iter()
@@ -189,6 +193,7 @@ pub(super) fn stage_native_addon_sidecar(
         shipping_model: SHIPPING_MODEL,
         target: target_tuple(target),
         allowlist: ctx.native_addon_packages.iter().cloned().collect(),
+        path_allowlist: ctx.native_addon_paths.values().cloned().collect(),
         addons: manifest_addons,
     };
     fs::write(
@@ -236,6 +241,7 @@ mod tests {
                 source_path: entry,
                 package_dir: package,
                 entry_relative: PathBuf::from("demo.node"),
+                ship_package_payload: true,
             },
         );
         let root = stage_native_addon_sidecar(&ctx, &output, None)

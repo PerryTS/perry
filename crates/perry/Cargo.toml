@@ -21,7 +21,10 @@ path = "src/main.rs"
 
 [dependencies]
 perry-parser.workspace = true
+swc_common.workspace = true
 swc_ecma_ast.workspace = true
+swc_ecma_transforms_base.workspace = true
+swc_ecma_visit.workspace = true
 perry-hir.workspace = true
 perry-transform.workspace = true
 perry-codegen.workspace = true
@@ -172,7 +175,6 @@ all-codegen-backends = [
 
 [dev-dependencies]
 tempfile.workspace = true
-swc_common.workspace = true
 
 [build-dependencies]
 winresource = "0.1.31"

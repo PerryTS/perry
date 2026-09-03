@@ -127,6 +127,24 @@ fn compile_app(root: &Path, entry: &Path, output: &Path) -> Output {
     command.output().expect("run perry compile")
 }
 
+fn compile_bunfs_app(root: &Path, entry: &Path, output: &Path) -> Output {
+    let mut command = Command::new(perry_bin());
+    command
+        .current_dir(root)
+        .env("PERRY_WORKSPACE_ROOT", workspace_root())
+        .arg("compile")
+        .arg(entry)
+        .arg("-o")
+        .arg(output)
+        .arg("--bunfs-root")
+        .arg(root)
+        .arg("--no-cache");
+    if std::env::var_os("PERRY_E2E_VERBOSE").is_some() {
+        command.arg("-vv");
+    }
+    command.output().expect("run bunfs perry compile")
+}
+
 fn find_node_file(path: &Path) -> Option<PathBuf> {
     let mut entries = std::fs::read_dir(path)
         .ok()?
@@ -518,6 +536,158 @@ console.log("node-api-cache", direct.exports === addon)
     assert!(
         denied_diagnostic.contains("perry.nativeAddons"),
         "denied compile omitted policy guidance: {denied_diagnostic}"
+    );
+}
+
+#[test]
+fn bun_import_meta_require_project_addon_survives_source_removal() {
+    if !require_tool("clang") {
+        return;
+    }
+    #[cfg(windows)]
+    if !require_tool("llvm-dlltool") {
+        return;
+    }
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let extracted = dir.path().join("extracted");
+    let native = extracted.join("native");
+    let build = dir.path().join("build");
+    std::fs::create_dir_all(&native).expect("create project addon directory");
+    std::fs::create_dir_all(&build).expect("create build directory");
+    std::fs::write(
+        extracted.join("package.json"),
+        r#"{
+  "name": "perry-bun-root-addon-e2e",
+  "private": true,
+  "perry": {
+    "nativeAddonPaths": ["native/addon.node"]
+  }
+}"#,
+    )
+    .expect("write project addon policy");
+    compile_addon(&extracted, &native);
+
+    let entry = extracted.join("main.js");
+    std::fs::write(
+        &entry,
+        r#"const load = import.meta.require;
+const addonPath = new URL("./native/addon.node", import.meta.url).pathname;
+const first = load(addonPath);
+const r = import.meta.require;
+const second = r("./native/addon.node");
+const third = r("/$bunfs/root/native/addon.node");
+const fourth = import.meta.require(new URL("./native/addon.node", import.meta.url).pathname);
+console.log("bun-root-node-api", first.add(19, 23), second.answer, third === first, fourth === first);
+"#,
+    )
+    .expect("write import.meta.require entry");
+
+    let executable = build.join(if cfg!(windows) { "app.exe" } else { "app" });
+    let compile = compile_bunfs_app(&extracted, &entry, &executable);
+    assert!(
+        compile.status.success(),
+        "project Node-API compile failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&compile.stdout),
+        String::from_utf8_lossy(&compile.stderr)
+    );
+    let sidecar = executable.with_file_name(format!(
+        "{}.perry-native",
+        executable.file_name().unwrap().to_string_lossy()
+    ));
+    let manifest: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(sidecar.join("manifest.json")).expect("read project addon manifest"),
+    )
+    .expect("parse project addon manifest");
+    assert_eq!(
+        manifest["path_allowlist"],
+        serde_json::json!(["native/addon.node"])
+    );
+    assert_eq!(
+        manifest["addons"][0]["logical_id"],
+        "$project/native/addon.node"
+    );
+    assert_eq!(manifest["addons"][0]["package"], "$project");
+    assert_eq!(
+        manifest["addons"][0]["files"]
+            .as_array()
+            .expect("project addon files")
+            .len(),
+        1,
+        "an exact project path must not implicitly ship its directory"
+    );
+
+    let install = dir.path().join("install");
+    std::fs::create_dir_all(&install).expect("create install directory");
+    let installed = install.join(executable.file_name().unwrap());
+    let installed_sidecar = install.join(sidecar.file_name().unwrap());
+    std::fs::rename(&executable, &installed).expect("relocate executable");
+    std::fs::rename(&sidecar, &installed_sidecar).expect("relocate addon sidecar");
+    std::fs::remove_dir_all(&extracted).expect("remove Bun extraction source tree");
+    assert!(
+        !extracted.exists(),
+        "source tree must be gone before runtime"
+    );
+
+    let output = run(
+        Command::new(&installed),
+        "relocated Bun import.meta.require Node-API host",
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("bun-root-node-api 42 8523 true true"),
+        "stdout: {stdout}"
+    );
+}
+
+#[test]
+fn dynamic_import_meta_require_addon_path_is_rejected_with_declaration_help() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let native = dir.path().join("native");
+    std::fs::create_dir_all(&native).expect("create native directory");
+    // Configuration validates existence and path containment before module
+    // collection. The dynamic-path diagnostic fires before binary inspection,
+    // so an inert marker is sufficient for this negative gate.
+    std::fs::write(native.join("addon.node"), b"not loaded").expect("write addon marker");
+    std::fs::write(
+        dir.path().join("package.json"),
+        r#"{
+  "name": "perry-dynamic-root-addon-e2e",
+  "private": true,
+  "perry": {
+    "nativeAddonPaths": ["native/addon.node"]
+  }
+}"#,
+    )
+    .expect("write project addon policy");
+    let entry = dir.path().join("main.js");
+    std::fs::write(
+        &entry,
+        "const load = import.meta.require; load(process.env.ADDON_PATH);\n",
+    )
+    .expect("write dynamic addon entry");
+    let output = dir.path().join(if cfg!(windows) {
+        "dynamic.exe"
+    } else {
+        "dynamic"
+    });
+    let compile = compile_app(dir.path(), &entry, &output);
+    assert!(
+        !compile.status.success(),
+        "dynamic import.meta.require addon path unexpectedly compiled"
+    );
+    let diagnostic = format!(
+        "{}{}",
+        String::from_utf8_lossy(&compile.stdout),
+        String::from_utf8_lossy(&compile.stderr)
+    );
+    assert!(
+        diagnostic.contains("cannot statically prove"),
+        "{diagnostic}"
+    );
+    assert!(
+        diagnostic.contains("perry.nativeAddonPaths"),
+        "{diagnostic}"
     );
 }
 

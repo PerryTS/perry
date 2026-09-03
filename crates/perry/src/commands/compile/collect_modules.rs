@@ -36,6 +36,7 @@ mod dynamic_glob;
 mod eval_worker;
 mod feature_detect;
 mod import_helpers;
+mod import_meta_require;
 mod json_module;
 mod native_addon;
 mod parse_error;
@@ -56,6 +57,7 @@ use import_helpers::{
     cached_resolve_import_with_lexical_base, collect_js_module_imports,
     ensure_bunfs_import_resolves, env_defines_for_lowering,
 };
+use import_meta_require::rewrite_import_meta_require_addons;
 use json_module::synthesize_json_module;
 pub(super) use native_addon::package_has_unsupported_node_addon;
 use native_addon::{collect_or_refuse_node_addon, refuse_compile_package_native_addon};
@@ -338,6 +340,13 @@ fn collect_module_one(
         fs::read_to_string(&canonical)
             .map_err(|e| anyhow!("Failed to read {}: {}", canonical.display(), e))?
     };
+    // Bun exposes `import.meta.require`; unlike CommonJS `require`, aliases of
+    // that function and URL-derived addon paths are invisible to the ordinary
+    // static-require scan. Recover and rewrite exact Node-API loads before HIR
+    // lowering so runtime execution uses only the authenticated sidecar id.
+    // Run before the Bun virtual-literal asset scan so a `.node` call target
+    // ships once in the sidecar rather than also being embedded as inert data.
+    let raw_source = rewrite_import_meta_require_addons(&raw_source, &canonical, ctx)?;
     register_bunfs_literal_assets(&raw_source, ctx);
     // CJS wrapping consumes literal `require()` sites and replaces them with
     // generated loader calls. Queue native targets before that rewrite so the

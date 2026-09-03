@@ -14,7 +14,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 
 use anyhow::Result;
 use perry_codegen::FpContractMode;
@@ -56,6 +56,29 @@ fn is_exact_npm_package_name(name: &str) -> bool {
             && parts.next().is_none();
     }
     valid_segment(name)
+}
+
+fn normalized_project_addon_path(value: &str) -> Option<(PathBuf, String)> {
+    let path = Path::new(value.trim());
+    if path.as_os_str().is_empty()
+        || path.is_absolute()
+        || path.extension().and_then(|extension| extension.to_str()) != Some("node")
+    {
+        return None;
+    }
+    let mut relative = PathBuf::new();
+    let mut portable = Vec::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::Normal(part) if part != "node_modules" => {
+                relative.push(part);
+                portable.push(part.to_string_lossy().into_owned());
+            }
+            _ => return None,
+        }
+    }
+    (!portable.is_empty()).then(|| (relative, portable.join("/")))
 }
 
 fn parse_boolean_switch(value: &str) -> Option<bool> {
@@ -255,6 +278,54 @@ pub(super) fn apply_pkg_and_toml_config(
                             );
                         }
                         ctx.native_addon_packages.insert(name.to_string());
+                    }
+                }
+                // #9606: extracted Bun standalones can carry project-owned
+                // `.node` files that have no npm package identity. Keep those
+                // exact path grants separate from package grants: authorizing
+                // `native/addon.node` must not trust its directory, another
+                // addon, or a package under node_modules.
+                if let Some(native_addon_paths) = pkg
+                    .get("perry")
+                    .and_then(|perry| perry.get("nativeAddonPaths"))
+                {
+                    let entries = native_addon_paths.as_array().ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "`perry.nativeAddonPaths` must be an array of exact project-relative `.node` paths"
+                        )
+                    })?;
+                    let config_root = pkg_json_path
+                        .parent()
+                        .ok_or_else(|| {
+                            anyhow::anyhow!("project package.json has no parent directory")
+                        })?
+                        .canonicalize()?;
+                    for (index, entry) in entries.iter().enumerate() {
+                        let value = entry.as_str().ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "`perry.nativeAddonPaths[{index}]` must be a project-relative path string"
+                            )
+                        })?;
+                        let (relative, logical_id) = normalized_project_addon_path(value)
+                            .ok_or_else(|| {
+                                anyhow::anyhow!(
+                                    "`perry.nativeAddonPaths[{index}]` must name one exact project-relative `.node` file outside `node_modules`; invalid entry `{value}`"
+                                )
+                            })?;
+                        let configured = config_root.join(&relative);
+                        let canonical = configured.canonicalize().map_err(|error| {
+                            anyhow::anyhow!(
+                                "configured Node-API addon `{}` is unavailable: {error}",
+                                configured.display()
+                            )
+                        })?;
+                        if !canonical.starts_with(&config_root) || !canonical.is_file() {
+                            anyhow::bail!(
+                                "configured Node-API addon `{}` must resolve to a file inside the host project",
+                                configured.display()
+                            );
+                        }
+                        ctx.native_addon_paths.insert(canonical, logical_id);
                     }
                 }
                 // #1680 (Phase 2 of #1677): build-time codegen steps. Each
@@ -1262,7 +1333,7 @@ pub(super) fn apply_pkg_and_toml_config(
         }
     }
 
-    if !ctx.native_addon_packages.is_empty() {
+    if !ctx.native_addon_packages.is_empty() || !ctx.native_addon_paths.is_empty() {
         let target = args.target.as_deref().unwrap_or("native");
         let unsupported = matches!(
             target,
@@ -1284,7 +1355,7 @@ pub(super) fn apply_pkg_and_toml_config(
         );
         if unsupported {
             anyhow::bail!(
-                "`perry.nativeAddons` is unavailable for target `{target}`; prebuilt Node-API sidecars are supported only on desktop/server targets"
+                "`perry.nativeAddons` / `perry.nativeAddonPaths` are unavailable for target `{target}`; prebuilt Node-API sidecars are supported only on desktop/server targets"
             );
         }
     }
@@ -1315,6 +1386,30 @@ mod tests {
             "two words",
         ] {
             assert!(!is_exact_npm_package_name(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn project_addon_policy_accepts_only_exact_relative_node_paths() {
+        for (value, expected) in [
+            ("native/addon.node", "native/addon.node"),
+            ("./addon.node", "addon.node"),
+            ("native/platform/addon.node", "native/platform/addon.node"),
+        ] {
+            let (_, portable) = normalized_project_addon_path(value).expect(value);
+            assert_eq!(portable, expected);
+        }
+        for value in [
+            "",
+            ".",
+            "native",
+            "native/addon.so",
+            "../addon.node",
+            "/tmp/addon.node",
+            "node_modules/pkg/addon.node",
+            "native/../../addon.node",
+        ] {
+            assert!(normalized_project_addon_path(value).is_none(), "{value}");
         }
     }
 

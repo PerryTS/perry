@@ -151,26 +151,58 @@ fn validate_node_api_binary(path: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
+fn path_is_inside_node_modules(path: &std::path::Path) -> bool {
+    path.components().any(|component| {
+        matches!(component, std::path::Component::Normal(part) if part == "node_modules")
+    })
+}
+
 /// Record an approved `.node` graph member or emit the existing actionable
-/// unsupported-addon diagnostic. Returns true exactly for `.node` inputs so
-/// the caller can stop before attempting to parse the native binary.
-pub(super) fn collect_or_refuse_node_addon(
+/// unsupported-addon diagnostic. The returned logical id is the only path
+/// that generated code may pass to the authenticated runtime loader.
+pub(super) fn collect_node_addon_request(
     ctx: &mut CompilationContext,
     canonical: &std::path::Path,
-) -> Result<bool> {
+) -> Result<Option<String>> {
     if canonical.extension().and_then(|ext| ext.to_str()) != Some("node") {
-        return Ok(false);
+        return Ok(None);
+    }
+    if let Some(project_path) = ctx.native_addon_paths.get(canonical).cloned() {
+        // Keep project entries in a namespace that cannot collide with the
+        // existing `<package>/<entry>` logical-id scheme.
+        let logical_id = format!("$project/{project_path}");
+        validate_node_api_binary(canonical)?;
+        let package_dir = canonical
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .to_path_buf();
+        let entry_relative = canonical
+            .file_name()
+            .map(PathBuf::from)
+            .ok_or_else(|| anyhow::anyhow!("Node-API addon path has no filename"))?;
+        ctx.native_addons
+            .entry(logical_id.clone())
+            .or_insert_with(|| NativeAddonModule {
+                logical_id: logical_id.clone(),
+                package: "$project".to_string(),
+                version: "0.0.0".to_string(),
+                source_path: canonical.to_path_buf(),
+                package_dir,
+                entry_relative,
+                ship_package_payload: false,
+            });
+        return Ok(Some(logical_id));
     }
     let package_root = nearest_package_root(canonical);
     if package_root
         .as_deref()
         .is_some_and(package_is_parcel_watcher_facade)
     {
-        return Ok(true);
+        return Ok(None);
     }
-    let Some(package_root) = package_root else {
+    let Some(package_root) = package_root.filter(|root| path_is_inside_node_modules(root)) else {
         anyhow::bail!(
-            "`{}` is a Node native addon outside an npm package. Addons must be selected through an exact `perry.nativeAddons` package entry.",
+            "`{}` is a project-owned Node native addon and is not authorized. Add its exact project-relative path to `perry.nativeAddonPaths` (for example `\"nativeAddonPaths\": [\"native/addon.node\"]`).",
             canonical.display()
         );
     };
@@ -199,14 +231,31 @@ pub(super) fn collect_or_refuse_node_addon(
     ctx.native_addons
         .entry(logical_id.clone())
         .or_insert_with(|| NativeAddonModule {
-            logical_id,
+            logical_id: logical_id.clone(),
             package: owner_package,
             version,
             source_path: canonical.to_path_buf(),
             package_dir: package_root,
             entry_relative,
+            ship_package_payload: true,
         });
-    Ok(true)
+    Ok(Some(logical_id))
+}
+
+/// Returns true exactly for `.node` inputs handled as sidecar graph members so
+/// the caller can stop before attempting to parse native bytes as source.
+pub(super) fn collect_or_refuse_node_addon(
+    ctx: &mut CompilationContext,
+    canonical: &std::path::Path,
+) -> Result<bool> {
+    if canonical.extension().and_then(|ext| ext.to_str()) == Some("node")
+        && nearest_package_root(canonical)
+            .as_deref()
+            .is_some_and(package_is_parcel_watcher_facade)
+    {
+        return Ok(true);
+    }
+    collect_node_addon_request(ctx, canonical).map(|request| request.is_some())
 }
 
 fn package_is_parcel_watcher_facade(package_root: &std::path::Path) -> bool {
@@ -340,6 +389,15 @@ pub(super) fn refuse_compile_package_native_addon(
     let Some(package_root) = package_root_for_compile_package(ctx, canonical) else {
         return Ok(());
     };
+    // The host project can legitimately contain exact path-authorized addons
+    // (#9606). This package-wide preflight exists for dependencies selected by
+    // `compilePackages`; project members are checked individually when their
+    // `.node` edge is collected, so scanning the host root here would reject
+    // an authorized addon merely because Bun-root routing selected the host
+    // JS. Keep checking symlinked/file: dependency roots outside node_modules.
+    if ctx.cache_root.starts_with(&package_root) {
+        return Ok(());
+    }
     if !ctx
         .checked_compile_package_native_addon_roots
         .insert(package_root.clone())

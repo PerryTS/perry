@@ -186,7 +186,7 @@ pub(super) fn transform_static_literal_requires_with_bunfs(
     prepend_imports_preserving_shebang(&transformed, &imports)
 }
 
-fn resolve_static_require(
+pub(super) fn resolve_static_require(
     module_dir: &Path,
     specifier: &str,
     bunfs_root: Option<&Path>,
