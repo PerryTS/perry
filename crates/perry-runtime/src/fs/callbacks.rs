@@ -236,11 +236,17 @@ pub extern "C" fn js_fs_mkdir_callback(path_value: f64, arg1: f64, arg2: f64) ->
     f64::from_bits(TAG_UNDEFINED)
 }
 
-/// `fs.unlink(path, callback)` — sync unlink + immediate callback.
+/// `fs.unlink(path, callback)` — normally sync unlink + immediate callback.
+/// If a write to the same path is parked, the unlink joins its timer queue so
+/// it cannot overtake that write (#9574).
 #[no_mangle]
 pub extern "C" fn js_fs_unlink_callback(path_value: f64, callback: f64) -> f64 {
     const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
     let cb = required_callback(callback);
+    if has_pending_path_write(path_value) {
+        defer_unlink_callback(path_value, cb);
+        return f64::from_bits(TAG_UNDEFINED);
+    }
     unsafe {
         match js_fs_unlink_result(path_value) {
             Ok(()) => call_cb0(cb),
