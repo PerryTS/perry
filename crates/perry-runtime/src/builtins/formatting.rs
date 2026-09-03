@@ -284,47 +284,52 @@ fn decode_registered(slot: Option<&[u8]>) -> Option<String> {
     std::str::from_utf8(bytes).ok().map(str::to_owned)
 }
 
-/// Bytes for a registered function name.
-///
 /// #9612: codegen's names and sources are `private unnamed_addr constant`
 /// globals in the program image — read-only, file-backed, already resident at
 /// zero private cost. Copying them into `Arc<[u8]>` at module init made a
 /// second, DIRTY copy of the whole set: measured 5.1 MB of names and 23.8 MB
 /// of source text on the compiled claude-code TUI, for data the binary was
-/// already carrying. `Image` borrows the constant instead.
+/// already carrying. Both registries now borrow the image.
 ///
-/// `Owned` stays because not every name comes from the image:
-/// `register_function_name_if_absent` infers names at runtime (a symbol's
-/// description, `get <key>`), and those must be owned.
-#[derive(Clone)]
-enum RegisteredName {
-    Image(&'static [u8]),
-    Owned(std::sync::Arc<[u8]>),
+/// Names have a second source that the image cannot supply:
+/// `register_function_name_if_absent` INFERS a name at runtime (a symbol's
+/// description, `get <key>`), and those bytes must be owned. They live in
+/// their own small map rather than widening the main one — an enum value
+/// would add 8 bytes to every one of the ~60 000 image entries to carry the
+/// handful of owned ones, which measured as a NET LOSS on the first attempt
+/// (+0.31 MB) even though it removed 1.8 MB of copies.
+fn function_name_overrides(
+) -> &'static std::sync::Mutex<std::collections::HashMap<usize, std::sync::Arc<[u8]>>> {
+    use std::sync::OnceLock;
+    static OVERRIDES: OnceLock<
+        std::sync::Mutex<std::collections::HashMap<usize, std::sync::Arc<[u8]>>>,
+    > = OnceLock::new();
+    OVERRIDES.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
 }
 
-impl RegisteredName {
-    #[inline]
-    fn as_bytes(&self) -> &[u8] {
-        match self {
-            Self::Image(bytes) => bytes,
-            Self::Owned(bytes) => bytes,
+/// The registered name for `func_ptr`: the image name when it decodes, else a
+/// runtime-inferred override. Mirrors what the single map used to do, where an
+/// undecodable registration counted as absent — `register_function_name_
+/// if_absent` writes an override in exactly that case, so a reader that
+/// stopped at the image map would lose the name it just recovered.
+fn registered_name_string(func_ptr: usize) -> Option<String> {
+    if let Ok(map) = function_name_registry().lock() {
+        if let Some(name) = decode_registered(map.get(&func_ptr).copied()) {
+            return Some(name);
         }
     }
-}
-
-impl std::ops::Deref for RegisteredName {
-    type Target = [u8];
-    #[inline]
-    fn deref(&self) -> &[u8] {
-        self.as_bytes()
-    }
+    function_name_overrides()
+        .lock()
+        .ok()
+        .and_then(|map| decode_registered(map.get(&func_ptr).map(|b| &**b)))
 }
 
 fn function_name_registry(
-) -> &'static std::sync::Mutex<std::collections::HashMap<usize, RegisteredName>> {
+) -> &'static std::sync::Mutex<std::collections::HashMap<usize, &'static [u8]>> {
     use std::sync::OnceLock;
-    static REGISTRY: OnceLock<std::sync::Mutex<std::collections::HashMap<usize, RegisteredName>>> =
-        OnceLock::new();
+    static REGISTRY: OnceLock<
+        std::sync::Mutex<std::collections::HashMap<usize, &'static [u8]>>,
+    > = OnceLock::new();
     REGISTRY.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
 }
 
@@ -364,10 +369,7 @@ fn format_function_for_console(closure_ptr: *const crate::closure::ClosureHeader
         if func_ptr.is_null() {
             None
         } else {
-            function_name_registry()
-                .lock()
-                .ok()
-                .and_then(|map| decode_registered(map.get(&(func_ptr as usize)).map(|n| n.as_bytes())))
+            registered_name_string(func_ptr as usize)
                 .filter(|n| !n.is_empty())
         }
     };
@@ -438,7 +440,7 @@ pub unsafe extern "C" fn js_register_function_name(
         // emits exactly that (`@.str.N = private unnamed_addr constant`), and
         // the tests pass `b"..."` literals, which are `'static` too.
         let image: &'static [u8] = unsafe { std::slice::from_raw_parts(name_ptr, name_len as usize) };
-        map.insert(func_ptr as usize, RegisteredName::Image(image));
+        map.insert(func_ptr as usize, image);
     }
 }
 
@@ -454,7 +456,7 @@ pub fn register_function_name_if_absent(func_ptr: usize, name: &str) {
     if func_ptr == 0 || name.is_empty() {
         return;
     }
-    if let Ok(mut map) = function_name_registry().lock() {
+    if let Ok(map) = function_name_registry().lock() {
         // "Absent" now means "absent OR stored bytes that do not decode" —
         // registration no longer rejects invalid UTF-8, so an undecodable
         // entry occupies the slot where nothing used to, and a plain
@@ -464,11 +466,15 @@ pub fn register_function_name_if_absent(func_ptr: usize, name: &str) {
         let usable = map
             .get(&func_ptr)
             .is_some_and(|bytes| std::str::from_utf8(bytes).is_ok());
+        // Release the image lock before taking the override lock: the two are
+        // always acquired in this order, never the reverse.
+        drop(map);
         if !usable {
-            map.insert(
-                func_ptr,
-                RegisteredName::Owned(std::sync::Arc::from(name.as_bytes())),
-            );
+            if let Ok(mut overrides) = function_name_overrides().lock() {
+                overrides
+                    .entry(func_ptr)
+                    .or_insert_with(|| std::sync::Arc::from(name.as_bytes()));
+            }
         }
     }
 }
@@ -496,9 +502,18 @@ pub fn function_name_registry_entries() -> Option<Vec<(usize, std::sync::Arc<[u8
         .lock()
         .ok()
         .map(|map| {
-            map.iter()
-                .map(|(k, v)| (*k, std::sync::Arc::from(v.as_bytes())))
-                .collect()
+            let mut out: Vec<(usize, std::sync::Arc<[u8]>)> = map
+                .iter()
+                .map(|(k, v)| (*k, std::sync::Arc::from(*v)))
+                .collect();
+            if let Ok(overrides) = function_name_overrides().lock() {
+                for (k, v) in overrides.iter() {
+                    if !map.contains_key(k) {
+                        out.push((*k, v.clone()));
+                    }
+                }
+            }
+            out
         })
 }
 
@@ -514,11 +529,7 @@ pub fn function_name_for_ptr(func_ptr: usize) -> Option<String> {
     if func_ptr == 0 {
         return None;
     }
-    function_name_registry()
-        .lock()
-        .ok()
-        .and_then(|map| decode_registered(map.get(&func_ptr).map(|n| n.as_bytes())))
-        .filter(|n| !n.is_empty())
+    registered_name_string(func_ptr).filter(|n| !n.is_empty())
 }
 
 /// #4101 / #9525: sidecar registry mapping each user function's compiled
@@ -2014,18 +2025,23 @@ pub(crate) fn function_registries_census() -> Vec<crate::gc::census::SideTableRo
     if let Ok(map) = function_name_registry().lock() {
         // #9612: `Image` names cost nothing beyond the map slot (they point
         // into the binary); only the runtime-inferred `Owned` ones are heap.
-        let payload: usize = map
-            .values()
-            .map(|n| match n {
-                RegisteredName::Image(_) => 0,
-                RegisteredName::Owned(bytes) => bytes.len() + 16,
-            })
-            .sum();
+        // #9612: image names cost nothing beyond the map slot (they point
+        // into the binary); only the runtime-inferred overrides are heap.
         rows.push((
             "fn.name_registry",
             map.len(),
-            hash_table_bytes(map.capacity(), std::mem::size_of::<(usize, RegisteredName)>())
-                + payload,
+            hash_table_bytes(map.capacity(), std::mem::size_of::<(usize, &'static [u8])>()),
+        ));
+    }
+    if let Ok(map) = function_name_overrides().lock() {
+        let payload: usize = map.values().map(|b| b.len() + 16).sum();
+        rows.push((
+            "fn.name_overrides(runtime-inferred)",
+            map.len(),
+            hash_table_bytes(
+                map.capacity(),
+                std::mem::size_of::<(usize, std::sync::Arc<[u8]>)>(),
+            ) + payload,
         ));
     }
     if let Ok(map) = function_source_registry().lock() {
