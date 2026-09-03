@@ -271,3 +271,8 @@ pub fn pointer_in_nursery(addr: usize) -> bool {
 pub fn pointer_in_old_gen(addr: usize) -> bool {
     matches!(classify_heap_generation(addr), HeapGeneration::Old)
 }
+
+/// Bytes sitting on the general arena's free list (`PERRY_GC_CENSUS`).
+pub(crate) fn arena_free_list_bytes() -> usize {
+    arena_free_bytes()
+}

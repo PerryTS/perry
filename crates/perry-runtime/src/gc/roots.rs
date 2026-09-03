@@ -7,6 +7,7 @@ mod scan_mode;
 mod scanner_shims;
 mod shadow_stack;
 mod stack_maps;
+pub(crate) use stack_maps::stack_map_index_census;
 mod temp_roots;
 pub(super) use stack_maps::ensure_built as ensure_stack_maps_built;
 pub(super) use stack_maps::initialize as initialize_stack_maps;

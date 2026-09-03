@@ -213,3 +213,87 @@ pub use parent_static::{
     js_register_class_parent, js_register_class_parent_dynamic, js_register_class_static_method,
     lookup_class_method_in_chain, method_owner_class_id,
 };
+
+/// `PERRY_GC_CENSUS`: the class metadata family (names, vtables, static
+/// members, prototype tables, parent edges). Estimated bytes include the
+/// `String` keys the nested maps own.
+pub(crate) fn class_registry_census() -> Vec<crate::gc::census::SideTableRow> {
+    use crate::gc::census::{map_bytes, set_bytes};
+    let mut rows: Vec<crate::gc::census::SideTableRow> = Vec::new();
+    if let Ok(g) = class_meta::CLASS_NAMES.read() {
+        if let Some(m) = g.as_ref() {
+            let inner: usize = m.values().map(|s| s.capacity()).sum();
+            rows.push(("class.names", m.len(), map_bytes(m) + inner));
+        }
+    }
+    if let Ok(g) = state::CLASS_VTABLE_REGISTRY.read() {
+        if let Some(m) = g.as_ref() {
+            let mut entries = 0usize;
+            let mut inner = 0usize;
+            for vt in m.values() {
+                entries += vt.methods.len() + vt.getters.len() + vt.setters.len();
+                inner += map_bytes(&vt.methods) + map_bytes(&vt.getters) + map_bytes(&vt.setters);
+                inner += vt.methods.keys().map(|k| k.capacity()).sum::<usize>();
+                inner += vt.getters.keys().map(|k| k.capacity()).sum::<usize>();
+                inner += vt.setters.keys().map(|k| k.capacity()).sum::<usize>();
+            }
+            rows.push(("class.vtables(methods+accessors)", entries, map_bytes(m) + inner));
+        }
+    }
+    if let Ok(g) = state::CLASS_STATIC_METHODS.read() {
+        if let Some(m) = g.as_ref() {
+            let mut entries = 0usize;
+            let mut inner = 0usize;
+            for t in m.values() {
+                entries += t.len();
+                inner += map_bytes(t) + t.keys().map(|k| k.capacity()).sum::<usize>();
+            }
+            rows.push(("class.static_methods", entries, map_bytes(m) + inner));
+        }
+    }
+    if let Ok(g) = state::CLASS_METHOD_BIND_LENGTHS.read() {
+        if let Some(m) = g.as_ref() {
+            let inner: usize = m.keys().map(|(_, k)| k.capacity()).sum();
+            rows.push(("class.method_bind_lengths", m.len(), map_bytes(m) + inner));
+        }
+    }
+    if let Ok(g) = state::REGISTERED_CLASS_IDS.read() {
+        if let Some(m) = g.as_ref() {
+            rows.push(("class.registered_ids", m.len(), set_bytes(m)));
+        }
+    }
+    state::CLASS_PROTOTYPE_OBJECTS.with(|lock| {
+        if let Ok(g) = lock.read() {
+            if let Some(m) = g.as_ref() {
+                rows.push(("class.prototype_objects", m.len(), map_bytes(m)));
+            }
+        }
+    });
+    state::CLASS_PROTOTYPE_METHOD_NONENUM.with(|lock| {
+        if let Ok(g) = lock.read() {
+            if let Some(m) = g.as_ref() {
+                let inner: usize = m.iter().map(|(_, k)| k.capacity()).sum();
+                rows.push(("class.prototype_method_nonenum", m.len(), set_bytes(m) + inner));
+            }
+        }
+    });
+    prototype_methods::CLASS_PROTOTYPE_METHODS.with(|lock| {
+        if let Ok(g) = lock.read() {
+            if let Some(m) = g.as_ref() {
+                let mut entries = 0usize;
+                let mut inner = 0usize;
+                for t in m.values() {
+                    entries += t.len();
+                    inner += map_bytes(t) + t.keys().map(|k| k.capacity()).sum::<usize>();
+                }
+                rows.push(("class.prototype_methods", entries, map_bytes(m) + inner));
+            }
+        }
+    });
+    if let Ok(g) = super::class_meta_registry::CLASS_REGISTRY.read() {
+        if let Some(m) = g.as_ref() {
+            rows.push(("class.parent_registry", m.len(), map_bytes(m)));
+        }
+    }
+    rows
+}

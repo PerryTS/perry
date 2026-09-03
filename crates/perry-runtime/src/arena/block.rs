@@ -1117,3 +1117,9 @@ pub(crate) fn old_gen_in_use_bytes_sub(delta: usize) {
     }
     OLD_GEN_IN_USE_BYTES.with(|c| c.set(c.get().saturating_sub(delta)));
 }
+
+/// Bytes currently held in this thread's recycled-block pool (MADV_FREE'd,
+/// still mapped). `PERRY_GC_CENSUS` reads it; nothing else should.
+pub(crate) fn block_pool_bytes() -> usize {
+    BLOCK_POOL_BYTES.with(Cell::get)
+}

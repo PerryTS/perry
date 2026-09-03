@@ -1138,3 +1138,15 @@ mod wellknown_desc_tests {
         }
     }
 }
+
+/// `PERRY_GC_CENSUS`: the `Symbol.for` registry.
+pub(crate) fn symbol_registry_census() -> crate::gc::census::SideTableRow {
+    use crate::gc::census::map_bytes;
+    if let Ok(g) = SYMBOL_REGISTRY.lock() {
+        if let Some(m) = g.as_ref() {
+            let inner: usize = m.keys().map(|k| k.capacity()).sum();
+            return ("symbol.registry", m.len(), map_bytes(m) + inner);
+        }
+    }
+    ("symbol.registry", 0, 0)
+}

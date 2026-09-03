@@ -957,3 +957,46 @@ pub(crate) fn old_arena_walk_all_headers_filtered(
         }
     });
 }
+
+/// `PERRY_GC_CENSUS` (gc/census.rs): per-space block accounting in walk
+/// order (general, survivor0, survivor1, longlived, old), with the global
+/// block-index range each space occupies.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct ArenaSpaceCensus {
+    pub(crate) name: &'static str,
+    pub(crate) blocks: usize,
+    pub(crate) tombstones: usize,
+    pub(crate) capacity_bytes: usize,
+    pub(crate) used_bytes: usize,
+    pub(crate) object_starts_bytes: usize,
+    pub(crate) block_index_start: usize,
+    pub(crate) block_index_end: usize,
+}
+
+pub(crate) fn arena_space_census() -> [ArenaSpaceCensus; 5] {
+    sync_inline_arena_state();
+    let mut out = [ArenaSpaceCensus::default(); 5];
+    let mut base = 0usize;
+    let mut fill = |arena: &Arena, name: &'static str, slot: &mut ArenaSpaceCensus| {
+        slot.name = name;
+        slot.block_index_start = base;
+        for b in &arena.blocks {
+            if b.data.is_null() {
+                slot.tombstones += 1;
+            } else {
+                slot.blocks += 1;
+                slot.capacity_bytes += b.size;
+                slot.used_bytes += b.offset;
+            }
+            slot.object_starts_bytes += b.object_starts.len() * 8;
+        }
+        base += arena.blocks.len();
+        slot.block_index_end = base;
+    };
+    ARENA.with(|a| fill(unsafe { &*a.get() }, "nursery_eden", &mut out[0]));
+    SURVIVOR_ARENA_0.with(|a| fill(unsafe { &*a.get() }, "survivor0", &mut out[1]));
+    SURVIVOR_ARENA_1.with(|a| fill(unsafe { &*a.get() }, "survivor1", &mut out[2]));
+    LONGLIVED_ARENA.with(|a| fill(unsafe { &*a.get() }, "longlived", &mut out[3]));
+    OLD_ARENA.with(|a| fill(unsafe { &*a.get() }, "old", &mut out[4]));
+    out
+}

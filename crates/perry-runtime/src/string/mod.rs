@@ -1024,3 +1024,12 @@ pub(crate) fn string_as_str<'a>(s: *const StringHeader) -> &'a str {
 pub(crate) fn is_ascii_string(s: *const StringHeader) -> bool {
     unsafe { (*s).utf16_len == (*s).byte_len }
 }
+
+/// `PERRY_GC_CENSUS`: the fixed-size intern table (slots, bytes). Entries
+/// point into the GC heap; only the table itself is counted.
+pub(crate) fn intern_table_census() -> (usize, usize) {
+    (
+        intern::INTERN_TABLE_SIZE,
+        intern::INTERN_TABLE_SIZE * std::mem::size_of::<intern::InternEntry>(),
+    )
+}

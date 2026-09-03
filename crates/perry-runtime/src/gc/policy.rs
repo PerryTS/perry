@@ -3622,6 +3622,9 @@ pub extern "C" fn js_gc_collect() {
     if manual_gc_blocked_by_unsafe_zone() {
         return;
     }
+    // `PERRY_GC_CENSUS`: an explicit gc() takes a census in the full cycle it
+    // runs (or, if deferred/blocked, in the next full cycle). No-op otherwise.
+    super::census::census_arm("manual");
     if defer_gc_request(DeferredGcRequest::Collect(GcTriggerKind::Manual)) {
         return;
     }

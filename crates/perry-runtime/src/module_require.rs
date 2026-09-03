@@ -799,6 +799,7 @@ pub extern "C" fn js_module_create_require_devirt(filename_or_url: f64) -> f64 {
 }
 
 mod path_registry;
+pub(crate) use path_registry::path_registry_census;
 
 use path_registry::{PathModuleRequireError, MODULE_PATH_REGISTRY};
 

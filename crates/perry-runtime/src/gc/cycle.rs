@@ -1157,6 +1157,11 @@ impl GcCycleState {
         if trace_worklist.step(valid_ptrs, budget.work_units) {
             self.trace_worklist = None;
             self.phase = GcCyclePhase::BlockPersistence;
+            // `PERRY_GC_CENSUS` pass 1: reachability is complete for a
+            // synchronous full cycle (block persistence has not run yet).
+            if self.minor.is_none() && !self.progress_kind.is_budgeted() {
+                super::census::census_pass1_if_armed();
+            }
         }
         trace_phase_record(&mut self.trace, "trace_worklist", phase_start);
     }
@@ -1590,6 +1595,11 @@ impl GcCycleState {
             }
             if full_trace {
                 finish_full_trace();
+            }
+            if full_trace && !self.progress_kind.is_budgeted() {
+                // `PERRY_GC_CENSUS` pass 2: marks are final and nothing is
+                // swept yet; only synchronous full cycles are exact.
+                super::census::census_take_if_armed_at_full_sweep_start();
             }
 
             let (do_age_bump, reclaim_dead_old_blocks, targeted_old_blocks, sweep_malloc) =

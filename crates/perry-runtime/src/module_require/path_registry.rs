@@ -1142,3 +1142,16 @@ mod path_module_registry_tests {
         std::fs::remove_dir_all(temp).unwrap();
     }
 }
+
+/// `PERRY_GC_CENSUS`: the module path registry (one canonical path `String`
+/// per registered module).
+pub(crate) fn path_registry_census() -> Vec<crate::gc::census::SideTableRow> {
+    use crate::gc::census::map_bytes;
+    MODULE_PATH_REGISTRY.with(|registry| {
+        let Ok(state) = registry.state.lock() else {
+            return Vec::new();
+        };
+        let inner: usize = state.entries.keys().map(|k| k.capacity()).sum();
+        vec![("module.path_registry", state.entries.len(), map_bytes(&state.entries) + inner)]
+    })
+}

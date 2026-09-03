@@ -1929,3 +1929,21 @@ mod tests_inline;
 // moved their definitions, so re-export them at the original path.
 #[cfg(test)]
 pub(crate) use tests_inline::*;
+
+/// `PERRY_GC_CENSUS`: the three timer queues.
+pub(crate) fn timer_tables_census() -> Vec<crate::gc::census::SideTableRow> {
+    use crate::gc::census::vec_bytes;
+    let mut rows = Vec::new();
+    if let Ok(v) = TIMER_QUEUE.lock() {
+        rows.push(("timer.promise_timers", v.len(), vec_bytes(&v)));
+    }
+    if let Ok(v) = CALLBACK_TIMERS.lock() {
+        let inner: usize = v.iter().map(|t| vec_bytes(&t.args)).sum();
+        rows.push(("timer.callback_timers", v.len(), vec_bytes(&v) + inner));
+    }
+    if let Ok(v) = INTERVAL_TIMERS.lock() {
+        let inner: usize = v.iter().map(|t| vec_bytes(&t.args)).sum();
+        rows.push(("timer.interval_timers", v.len(), vec_bytes(&v) + inner));
+    }
+    rows
+}

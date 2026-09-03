@@ -29,6 +29,14 @@ pub use alloc::{
 };
 
 pub(crate) use registry::DispatchKind;
+pub(crate) use registry::closure_registry_census;
+
+/// `PERRY_GC_CENSUS`: every closure-keyed side table outside the registries.
+pub(crate) fn closure_side_table_census() -> Vec<crate::gc::census::SideTableRow> {
+    let mut rows = alloc::singleton_closure_census();
+    rows.extend(dynamic_props::dynamic_props_census());
+    rows
+}
 pub use registry::{
     build_rest_array, closure_arity, closure_is_arrow, closure_is_bound_method, closure_length,
     dispatch_rest_bundled, dispatch_with_arity, is_registered_arrow_function,

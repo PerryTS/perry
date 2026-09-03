@@ -1963,3 +1963,28 @@ pub(crate) use shapes_test_support::*;
 #[cfg(test)]
 #[path = "shapes_tests.rs"]
 mod shapes_tests;
+
+/// `PERRY_GC_CENSUS`: the shape table's four maps plus the boxed
+/// descriptors and per-shape key indices they own.
+pub(crate) fn shape_table_census() -> Vec<crate::gc::census::SideTableRow> {
+    use crate::gc::census::{hash_table_bytes, map_bytes, vec_bytes};
+    let table = &crate::state::state().shapes;
+    let inner = table.inner.borrow();
+    let mut rows = Vec::new();
+    rows.push((
+        "shapes.descriptors",
+        inner.descriptors.len(),
+        map_bytes(&inner.descriptors) + inner.descriptors.len() * (std::mem::size_of::<ShapeDescriptor>() + 16),
+    ));
+    let index_inner: usize = inner
+        .indices
+        .values()
+        .map(|ix| hash_table_bytes(ix.slots.capacity(), std::mem::size_of::<(u64, SlotList)>()))
+        .sum();
+    rows.push(("shapes.indices", inner.indices.len(), map_bytes(&inner.indices) + index_inner));
+    let facts_inner: usize = inner.ids_by_facts.values().map(vec_bytes).sum();
+    rows.push(("shapes.ids_by_facts", inner.ids_by_facts.len(), map_bytes(&inner.ids_by_facts) + facts_inner));
+    let keys_inner: usize = inner.ids_by_keys.values().map(vec_bytes).sum();
+    rows.push(("shapes.ids_by_keys", inner.ids_by_keys.len(), map_bytes(&inner.ids_by_keys) + keys_inner));
+    rows
+}

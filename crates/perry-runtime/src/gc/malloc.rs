@@ -723,3 +723,16 @@ mod drop_tests {
         }
     }
 }
+
+/// `PERRY_GC_CENSUS`: the malloc-object registry's own storage.
+pub(crate) fn malloc_state_census() -> Vec<crate::gc::census::SideTableRow> {
+    use crate::gc::census::{map_bytes, set_bytes, vec_bytes};
+    MALLOC_STATE.with(|s| {
+        let s = s.borrow();
+        vec![
+            ("gc.malloc_objects_vec", s.objects.len(), vec_bytes(&s.objects)),
+            ("gc.malloc_objects_set", s.set.len(), set_bytes(&s.set)),
+            ("gc.malloc_realloc_forwarding", s.realloc_forwarding.len(), map_bytes(&s.realloc_forwarding)),
+        ]
+    })
+}

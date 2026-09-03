@@ -1297,3 +1297,24 @@ pub(crate) fn clone_closure_rebind_this(closure_bits: u64, recv_box: f64) -> u64
         0x7FFD_0000_0000_0000 | (new_ptr & 0x0000_FFFF_FFFF_FFFF)
     }
 }
+
+/// `PERRY_GC_CENSUS`: closure dynamic-property side tables.
+pub(super) fn dynamic_props_census() -> Vec<crate::gc::census::SideTableRow> {
+    use crate::gc::census::{map_bytes, set_bytes};
+    let mut rows = Vec::new();
+    if let Ok(m) = get_closure_props().lock() {
+        let inner: usize = m
+            .values()
+            .map(|p| map_bytes(&p.values) + p.values.keys().map(|k| k.capacity()).sum::<usize>())
+            .sum();
+        rows.push(("closure.dynamic_props", m.len(), map_bytes(&m) + inner));
+    }
+    if let Ok(m) = get_closure_deleted_keys().lock() {
+        let inner: usize = m.values().map(set_bytes).sum();
+        rows.push(("closure.deleted_keys", m.len(), map_bytes(&m) + inner));
+    }
+    if let Ok(m) = get_closure_prototypes().lock() {
+        rows.push(("closure.static_prototypes", m.len(), map_bytes(&m)));
+    }
+    rows
+}
