@@ -102,8 +102,14 @@ fn build_optimized_libs_reuses_fresh_auto_archives_without_cargo() {
     let panic_abort_safe =
         !ctx.needs_ui && !ctx.needs_thread && !ctx.needs_plugins && !ctx.needs_geisterhand;
     let panic_immediate = effective_size_panic_immediate_abort(panic_abort_safe);
-    let key_input =
-        auto_optimized_cache_key(&feature_arg, panic_abort_safe, panic_immediate, None, &ctx);
+    let key_input = auto_optimized_cache_key(
+        &feature_arg,
+        panic_abort_safe,
+        panic_immediate,
+        None,
+        &ctx,
+        &[],
+    );
     let mut hash: u64 = 5381;
     for b in key_input.as_bytes() {
         hash = hash.wrapping_mul(33).wrapping_add(*b as u64);
@@ -612,9 +618,51 @@ fn node_test_gate_keys_the_auto_optimize_cache() {
     let without = CompilationContext::new(dir.path().to_path_buf());
 
     assert_ne!(
-        auto_optimized_cache_key("", true, false, None, &with_test),
-        auto_optimized_cache_key("", true, false, None, &without),
+        auto_optimized_cache_key("", true, false, None, &with_test, &[]),
+        auto_optimized_cache_key("", true, false, None, &without, &[]),
         "mod-node-test must participate in the auto-optimize cache key"
+    );
+}
+
+#[test]
+fn shared_tokio_wrapper_set_keys_the_auto_optimize_target_dir() {
+    // #9470 / #9094: wrapper selection is expressed with Cargo `-p` args,
+    // not stdlib features. Two otherwise-identical compilations therefore
+    // used to share one perry-auto target dir. Once the wrapper build released
+    // its lock, a wrapper-free build could replace stdlib before the first
+    // compiler linked, leaving archives from different dependency graphs.
+    let ctx = CompilationContext::new(std::env::current_dir().expect("cwd"));
+    let mysql = vec![(
+        "perry-ext-mysql2".to_string(),
+        "perry_ext_mysql2".to_string(),
+        Some("#466".to_string()),
+    )];
+    let axios = vec![(
+        "perry-ext-axios".to_string(),
+        "perry_ext_axios".to_string(),
+        Some("#466".to_string()),
+    )];
+
+    let without_wrapper = auto_optimized_cache_key("async-runtime", true, false, None, &ctx, &[]);
+    let with_mysql = auto_optimized_cache_key("async-runtime", true, false, None, &ctx, &mysql);
+    let with_axios = auto_optimized_cache_key("async-runtime", true, false, None, &ctx, &axios);
+
+    assert_ne!(without_wrapper, with_mysql);
+    assert_ne!(with_mysql, with_axios);
+
+    // Aliases can discover the same archive more than once. Multiplicity and
+    // tracking prose do not change the Cargo graph, so neither changes its key.
+    let duplicate_mysql = vec![
+        mysql[0].clone(),
+        (
+            "perry-ext-mysql2".to_string(),
+            "perry_ext_mysql2".to_string(),
+            Some("different tracking text".to_string()),
+        ),
+    ];
+    assert_eq!(
+        with_mysql,
+        auto_optimized_cache_key("async-runtime", true, false, None, &ctx, &duplicate_mysql,)
     );
 }
 
@@ -666,11 +714,11 @@ fn http2_import_changes_optimized_libs_cache_key() {
     let dir = tempfile::tempdir().expect("tempdir");
 
     let base = CompilationContext::new(dir.path().to_path_buf());
-    let key_without = auto_optimized_cache_key("", true, false, None, &base);
+    let key_without = auto_optimized_cache_key("", true, false, None, &base, &[]);
 
     let mut with_http2 = CompilationContext::new(dir.path().to_path_buf());
     with_http2.native_module_imports.insert("http2".to_string());
-    let key_with = auto_optimized_cache_key("", true, false, None, &with_http2);
+    let key_with = auto_optimized_cache_key("", true, false, None, &with_http2, &[]);
 
     assert_ne!(
         key_without, key_with,
@@ -681,7 +729,7 @@ fn http2_import_changes_optimized_libs_cache_key() {
     dynamic.uses_get_builtin_module = true;
     assert_ne!(
         key_without,
-        auto_optimized_cache_key("", true, false, None, &dynamic),
+        auto_optimized_cache_key("", true, false, None, &dynamic, &[]),
         "getBuiltinModule must change the auto-optimized cache key"
     );
 }
@@ -697,9 +745,9 @@ fn immediate_abort_requires_unwind_safe_reachability_and_changes_cache_identity(
     let ctx = CompilationContext::new(std::env::current_dir().expect("cwd"));
     let safe_mode = effective_size_panic_immediate_abort(true);
     let unsafe_mode = effective_size_panic_immediate_abort(false);
-    let ordinary_key = auto_optimized_cache_key("", true, false, None, &ctx);
-    let immediate_key = auto_optimized_cache_key("", true, safe_mode, None, &ctx);
-    let unsafe_key = auto_optimized_cache_key("", false, unsafe_mode, None, &ctx);
+    let ordinary_key = auto_optimized_cache_key("", true, false, None, &ctx, &[]);
+    let immediate_key = auto_optimized_cache_key("", true, safe_mode, None, &ctx, &[]);
+    let unsafe_key = auto_optimized_cache_key("", false, unsafe_mode, None, &ctx, &[]);
 
     set_env_var("PERRY_SIZE_OPT", old_size_opt.as_deref());
     set_env_var("PERRY_SIZE_PANIC", old_size_panic.as_deref());
@@ -1142,8 +1190,8 @@ fn data_url_dynamic_import_enables_dyn_eval_and_changes_cache_key() {
         "data URL modules require the dyn-eval runtime, got {cross:?}"
     );
     assert_ne!(
-        auto_optimized_cache_key("", true, false, None, &with_data_url),
-        auto_optimized_cache_key("", true, false, None, &without),
+        auto_optimized_cache_key("", true, false, None, &with_data_url, &[]),
+        auto_optimized_cache_key("", true, false, None, &without, &[]),
         "a runtime without dyn-eval must not be reused for data URL imports"
     );
 }
@@ -1359,8 +1407,8 @@ fn wasm_usage_changes_auto_optimize_cache_key() {
         ctx_no_wasm.uses_crypto_builtins,
     );
     let feature_arg = features_to_cargo_arg(&features);
-    let key_no_wasm = auto_optimized_cache_key(&feature_arg, true, false, None, &ctx_no_wasm);
-    let key_wasm = auto_optimized_cache_key(&feature_arg, true, false, None, &ctx_wasm);
+    let key_no_wasm = auto_optimized_cache_key(&feature_arg, true, false, None, &ctx_no_wasm, &[]);
+    let key_wasm = auto_optimized_cache_key(&feature_arg, true, false, None, &ctx_wasm, &[]);
     assert_ne!(
         key_no_wasm, key_wasm,
         "wasm usage must change the cache key so the target dirs don't collide"
