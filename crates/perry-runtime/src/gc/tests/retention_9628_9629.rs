@@ -39,7 +39,8 @@ fn a_precise_root_collection_does_not_force_mark_its_recent_window() {
         let after = crate::gc::block_persist_force_mark_count();
 
         assert_eq!(
-            after, before,
+            after,
+            before,
             "an explicit gc() runs on precise roots (#7558), so no object can be \
              live-in-a-register-only here and block persistence must not force-mark \
              its window; it resurrected {} objects",
