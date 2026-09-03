@@ -41,6 +41,7 @@ fn allocate_socket() -> (i64, mpsc::UnboundedReceiver<SocketCommand>) {
             raw_fd: None,
             refed: true,
             local_addr: None,
+            remote_addr: None,
             raw: None,
             destroyed: false,
             bytes_read: 0,
@@ -91,6 +92,7 @@ pub(crate) fn register_accepted_transport(
     server_id: i64,
     transport: Transport,
     local_addr: Option<std::net::SocketAddr>,
+    remote_addr: Option<std::net::SocketAddr>,
 ) {
     let raw_fd = transport.raw_fd();
     let socket_id = next_id();
@@ -111,6 +113,7 @@ pub(crate) fn register_accepted_transport(
             raw_fd,
             refed: true,
             local_addr,
+            remote_addr,
             raw: None,
             destroyed: false,
             bytes_read: 0,
@@ -237,6 +240,7 @@ async fn run_listener(
                             server_id,
                             Transport::Ipc(Box::new(stream)),
                             None,
+                            None,
                         );
                     }
                 }
@@ -310,6 +314,7 @@ async fn run_listener(
                     register_accepted_transport(
                         server_id,
                         Transport::Ipc(Box::new(stream)),
+                        None,
                         None,
                     );
                 }

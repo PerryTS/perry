@@ -241,16 +241,17 @@ pub unsafe extern "C" fn js_net_socket_get_local_family(handle: i64) -> f64 {
     }
 }
 
-/// `socket.remoteAddress` — the peer IP string, or `undefined`. Perry does
-/// not cache the connected peer endpoint yet, so this reports `undefined`
-/// (Node's pre-connect value) rather than a stale address.
+/// `socket.remoteAddress` — the peer IP string, or `undefined`.
 ///
 /// # Safety
 ///
 /// See [`js_net_socket_get_pending`].
 #[no_mangle]
-pub unsafe extern "C" fn js_net_socket_get_remote_address(_handle: i64) -> f64 {
-    nanbox_undefined()
+pub unsafe extern "C" fn js_net_socket_get_remote_address(handle: i64) -> f64 {
+    match with_socket(handle, None, |s| s.remote_addr) {
+        Some(addr) => nanbox_string_value(&addr.ip().to_string()),
+        None => nanbox_undefined(),
+    }
 }
 
 /// `socket.remotePort` — the peer port, or `undefined` (see
@@ -260,8 +261,11 @@ pub unsafe extern "C" fn js_net_socket_get_remote_address(_handle: i64) -> f64 {
 ///
 /// See [`js_net_socket_get_pending`].
 #[no_mangle]
-pub unsafe extern "C" fn js_net_socket_get_remote_port(_handle: i64) -> f64 {
-    nanbox_undefined()
+pub unsafe extern "C" fn js_net_socket_get_remote_port(handle: i64) -> f64 {
+    match with_socket(handle, None, |s| s.remote_addr) {
+        Some(addr) => addr.port() as f64,
+        None => nanbox_undefined(),
+    }
 }
 
 /// `socket.remoteFamily` — `"IPv4"`/`"IPv6"` of the peer, or `undefined`
@@ -271,8 +275,11 @@ pub unsafe extern "C" fn js_net_socket_get_remote_port(_handle: i64) -> f64 {
 ///
 /// See [`js_net_socket_get_pending`].
 #[no_mangle]
-pub unsafe extern "C" fn js_net_socket_get_remote_family(_handle: i64) -> f64 {
-    nanbox_undefined()
+pub unsafe extern "C" fn js_net_socket_get_remote_family(handle: i64) -> f64 {
+    match with_socket(handle, None, |s| s.remote_addr) {
+        Some(addr) => nanbox_string_value(if addr.is_ipv6() { "IPv6" } else { "IPv4" }),
+        None => nanbox_undefined(),
+    }
 }
 
 /// `socket.bufferSize` — Node reports `undefined` for an unconnected socket

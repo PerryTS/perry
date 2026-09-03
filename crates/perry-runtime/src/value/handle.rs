@@ -72,6 +72,13 @@ pub extern "C" fn js_set_native_querystring_dispatch(func: JsNativeQuerystringDi
     JS_NATIVE_QUERYSTRING_DISPATCH.store(func as *mut (), Ordering::SeqCst);
 }
 
+/// Set the Bun TCP dispatcher supplied by perry-ext-net when the well-known
+/// net binding is linked.
+#[no_mangle]
+pub extern "C" fn js_set_native_bun_tcp_dispatch(func: JsNativeBunTcpDispatchFn) {
+    JS_NATIVE_BUN_TCP_DISPATCH.store(func as *mut (), Ordering::SeqCst);
+}
+
 /// Set the node:events MODULE-level helper dispatcher (`events.listenerCount`,
 /// `events.once`, …). Registered by perry-stdlib at startup so a captured,
 /// type-erased or spread-called module helper reaches the same `js_events_*`

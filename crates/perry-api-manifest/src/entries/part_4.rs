@@ -1108,7 +1108,11 @@ pub(crate) const API_MANIFEST_PART_4: &[ApiEntry] = &[
     method("bun", "scanImports", true, Some("Transpiler")),
     method("bun", "scan", true, Some("Transpiler")),
     method("bun", "SQL", false, None),
+    // Implementation: perry-runtime `bun_compat`; TCP/Unix sockets live in
+    // perry-ext-net.
     method("bun", "stringWidth", false, None),
+    method("bun", "listen", false, None),
+    method("bun", "connect", false, None),
     method("bun", "hash", false, None),
     method("bun", "deepEquals", false, None),
     method("bun", "stripANSI", false, None),

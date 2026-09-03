@@ -65,6 +65,7 @@ pub(crate) fn scan_net_roots(visitor: &mut GcRootVisitor<'_>) {
             visitor.visit_i64_slot(callback);
         }
     }
+    crate::bun_tcp::scan_roots(visitor);
     // #8259 — the pump's in-flight dispatch frames (snapshotted callbacks +
     // parked payloads), which the table walks above cannot see.
     dispatch_custody::scan(visitor);

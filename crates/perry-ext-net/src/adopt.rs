@@ -43,6 +43,10 @@ pub fn adopt_upgraded_tcp_stream(stream: tokio::net::TcpStream) -> i64 {
         Transport::Plain(stream) => stream.local_addr().ok(),
         _ => None,
     };
+    let remote = match &transport {
+        Transport::Plain(stream) => stream.peer_addr().ok(),
+        _ => None,
+    };
     statics::sockets().lock().unwrap().insert(
         id,
         SocketState {
@@ -55,6 +59,7 @@ pub fn adopt_upgraded_tcp_stream(stream: tokio::net::TcpStream) -> i64 {
             raw_fd,
             refed: true,
             local_addr: local,
+            remote_addr: remote,
             raw: None,
             destroyed: false,
             bytes_read: 0,

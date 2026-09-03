@@ -44,6 +44,7 @@ mod ip;
 // recycles pooled 16 KiB capacity instead of allocating a fresh
 // `BytesMut` per read. See `buffer_pool.rs` for the rationale.
 mod buffer_pool;
+mod bun_tcp;
 mod tls;
 pub use tls::{js_ext_tls_connect, js_tls_connect};
 // #2131 — lifecycle / EventEmitter surface for `net.Socket` + `net.Server`
@@ -257,6 +258,7 @@ pub(crate) struct SocketState {
     /// `TcpStream::connect`/`accept`. Drives `socket.address()` so the
     /// "undefined.address" cluster reports the actual bound port/family.
     pub(crate) local_addr: Option<SocketAddr>,
+    pub(crate) remote_addr: Option<SocketAddr>,
     /// #2154 — raw-consumer mode (see `raw_bridge`). When `Some`,
     /// `run_socket_task` buffers inbound bytes here for `perry-ext-http` to
     /// drain instead of firing JS `'data'` events.
@@ -292,6 +294,7 @@ impl SocketState {
             raw_fd: None,
             refed: true,
             local_addr: None,
+            remote_addr: None,
             raw: None,
             destroyed: false,
             bytes_read: 0,
@@ -545,6 +548,7 @@ pub unsafe extern "C" fn js_net_socket_alloc() -> i64 {
             raw_fd: None,
             refed: true,
             local_addr: None,
+            remote_addr: None,
             raw: None,
             destroyed: false,
             bytes_read: 0,
@@ -775,7 +779,7 @@ pub unsafe extern "C" fn js_net_server_listen(handle: i64, port: f64, arg2: f64,
             tokio::select! {
                 accepted = listener.accept() => {
                     match accepted {
-                        Ok((stream, _peer)) => {
+                        Ok((stream, peer)) => {
                             if let Some(info) =
                                 server_state::should_drop_connection(server_id, &stream)
                             {
@@ -787,16 +791,14 @@ pub unsafe extern "C" fn js_net_server_listen(handle: i64, port: f64, arg2: f64,
                             // aren't delayed waiting to coalesce; a later
                             // `socket.setNoDelay(false)` can re-enable Nagle.
                             let _ = stream.set_nodelay(true);
-                            // Issue #2131 — record the accepted
-                            // stream's local address so `sock.address()`
-                            // on the server-side socket reports the
-                            // bound port/family instead of returning
-                            // undefined.
+                            // Keep both endpoints for address metadata on the
+                            // accepted socket.
                             let accepted_local = stream.local_addr().ok();
                             ipc::register_accepted_transport(
                                 server_id,
                                 Transport::Plain(stream),
                                 accepted_local,
+                                Some(peer),
                             );
                         }
                         Err(e) => {
@@ -1011,12 +1013,13 @@ pub unsafe extern "C" fn js_net_socket_method_connect(
 
             // Node default: TCP_NODELAY on for a freshly-connected socket.
             let _ = tcp.set_nodelay(true);
-            // Issue #2131 — record the local addr so `socket.address()`
-            // returns the bound port/family on the deferred-connect path.
+            // Preserve both endpoints for socket metadata.
             let local = tcp.local_addr().ok();
+            let remote = tcp.peer_addr().ok();
             if let Some(s) = statics::sockets().lock().unwrap().get_mut(&handle) {
                 s.is_open = true;
                 s.local_addr = local;
+                s.remote_addr = remote;
             }
             tokio::task::yield_now().await;
             push_event(PendingNetEvent::Connect(handle, local_server));
@@ -1076,6 +1079,7 @@ where
             raw_fd: None,
             refed: true,
             local_addr: None,
+            remote_addr: None,
             raw: None,
             destroyed: false,
             bytes_read: 0,
@@ -1113,9 +1117,9 @@ where
             // before any TLS handshake consumes the stream — the option lives
             // on the kernel socket and persists through the rustls wrapper.
             let _ = tcp.set_nodelay(true);
-            // Issue #2131 — capture the local addr before we possibly
-            // hand the stream to rustls (the TLS path consumes it).
+            // Capture endpoints before rustls consumes the stream.
             let local = tcp.local_addr().ok();
+            let remote = tcp.peer_addr().ok();
 
             let transport = match direct_tls {
                 Some((servername, verify, config)) => {
@@ -1141,6 +1145,7 @@ where
                 s.is_open = true;
                 s.local_addr = local;
                 s.raw_fd = raw_fd;
+                s.remote_addr = remote;
             }
             tokio::task::yield_now().await;
             push_event(PendingNetEvent::Connect(id, local_server));

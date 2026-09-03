@@ -140,6 +140,10 @@ pub(crate) type JsNativeZlibDispatchFn =
 /// can reach the stdlib implementation without perry-runtime depending on it.
 pub(crate) type JsNativeQuerystringDispatchFn =
     unsafe extern "C" fn(*const u8, usize, *const f64, usize) -> f64;
+/// Bun TCP module dispatcher registered by perry-ext-net. It keeps the
+/// runtime-to-extension dependency indirect for captured callable exports.
+pub(crate) type JsNativeBunTcpDispatchFn =
+    unsafe extern "C" fn(*const u8, usize, *const f64, usize) -> f64;
 /// node:sqlite module-method/constructor dispatcher. Same dependency-boundary
 /// pattern as crypto/zlib, with an extra construct flag so dynamic `new
 /// DatabaseSync(...)` can reach the real stdlib constructor.
@@ -189,6 +193,7 @@ pub static JS_NATIVE_CRYPTO_DISPATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr::n
 pub static JS_NATIVE_WEBCRYPTO_DISPATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
 pub static JS_NATIVE_ZLIB_DISPATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
 pub static JS_NATIVE_QUERYSTRING_DISPATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
+pub static JS_NATIVE_BUN_TCP_DISPATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
 pub static JS_NATIVE_SQLITE_DISPATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
 pub static JS_NATIVE_DOMAIN_DISPATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
 pub static JS_NATIVE_TLS_DISPATCH: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
