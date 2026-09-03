@@ -4,10 +4,12 @@
 import { spawn } from "node:child_process";
 import { readdirSync } from "node:fs";
 
+/** Resolve after the child process and its stdio handles have closed. */
 function close(child: any): Promise<void> {
   return new Promise((resolve) => child.on("close", () => resolve()));
 }
 
+/** Count this process's live OS threads when Linux exposes the task census. */
 function threadCount(): number {
   return process.platform === "linux" ? readdirSync("/proc/self/task").length : 0;
 }
