@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check mdBook navigation, local links/anchors, and include targets.
+"""Check mdBook navigation, local links/anchors, and README release links.
 
 This intentionally avoids network access. The scheduled docs workflow runs a
 separate external-link checker so transient remote failures do not block every
@@ -8,17 +8,20 @@ documentation pull request.
 
 from __future__ import annotations
 
+import os
 import re
+import subprocess
 import sys
 from collections import Counter
 from pathlib import Path
-from urllib.parse import unquote
+from urllib.parse import unquote, urlparse
 
 
 ROOT = Path(__file__).resolve().parents[1]
 DOCS = ROOT / "docs"
 SRC = DOCS / "src"
 SUMMARY = SRC / "SUMMARY.md"
+README = ROOT / "README.md"
 
 FENCE_RE = re.compile(r"^\s*(```+|~~~+)")
 INLINE_LINK_RE = re.compile(r"!?\[[^\]]*\]\(([^)]+)\)")
@@ -26,6 +29,7 @@ REFERENCE_LINK_RE = re.compile(r"^\s*\[[^\]]+\]:\s*(\S+)", re.MULTILINE)
 INCLUDE_RE = re.compile(r"\{\{#(?:rustdoc_)?include\s+([^}\s]+)")
 HEADING_RE = re.compile(r"^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$")
 HTML_ID_RE = re.compile(r"\bid=[\"']([^\"']+)[\"']")
+RELEASE_TAG_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
 
 FORBIDDEN_TEXT = {
     "https://github.com/skelpo/perry": "https://github.com/PerryTS/perry",
@@ -35,6 +39,117 @@ FORBIDDEN_TEXT = {
     "@perry/dotenv": "@perryts/dotenv",
     "perryts/mysql2-bindings": "@perryts/tursodb",
 }
+
+
+def latest_release_tag() -> str | None:
+    """Return the highest stable vX.Y.Z tag available in this checkout."""
+    configured = os.environ.get("PERRY_DOCS_RELEASE_TAG")
+    if configured is not None:
+        return configured if RELEASE_TAG_RE.fullmatch(configured) else None
+
+    try:
+        result = subprocess.run(
+            ["git", "tag", "--list", "v*"],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return None
+
+    releases: list[tuple[tuple[int, int, int], str]] = []
+    for tag in result.stdout.splitlines():
+        match = RELEASE_TAG_RE.fullmatch(tag)
+        if match:
+            releases.append((tuple(map(int, match.groups())), tag))
+    return max(releases)[1] if releases else None
+
+
+def published_docs_at(tag: str) -> set[str] | None:
+    """List mdBook chapters published by a release tag's SUMMARY."""
+    try:
+        result = subprocess.run(
+            ["git", "show", f"{tag}:docs/src/SUMMARY.md"],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return None
+
+    published: set[str] = set()
+    for raw in local_destinations(result.stdout):
+        rel, _ = split_destination(raw)
+        if rel and not rel.startswith(("http://", "https://", "mailto:")):
+            published.add((Path("docs/src") / rel).as_posix())
+    return published
+
+
+def public_docs_path(destination: str) -> str | None:
+    """Map either public docs hostname to its mdBook-relative URL path."""
+    parsed = urlparse(destination)
+    path = unquote(parsed.path)
+    if parsed.hostname == "perryts.github.io":
+        if path.rstrip("/") == "/perry":
+            return ""
+        prefix = "/perry/"
+        if not path.startswith(prefix):
+            return None
+        return path[len(prefix) :]
+    if parsed.hostname == "docs.perryts.com":
+        return path.lstrip("/")
+    return None
+
+
+def readme_release_link_errors(
+    text: str, released_docs: set[str], release_tag: str
+) -> list[str]:
+    """Reject public README pages that the deployed release cannot contain."""
+    errors: list[str] = []
+    for raw in local_destinations(text):
+        destination, _ = split_destination(raw)
+        web_path = public_docs_path(destination)
+        if web_path is None or web_path in {"", "index.html"}:
+            continue
+        if not web_path.endswith(".html"):
+            errors.append(
+                f"README.md: public docs link is not an mdBook page: {destination}"
+            )
+            continue
+        source = f"docs/src/{web_path.removesuffix('.html')}.md"
+        if source not in released_docs:
+            errors.append(
+                f"README.md: public docs link is absent from {release_tag}: "
+                f"{destination}; link to {source} until it ships in a release"
+            )
+    return errors
+
+
+def self_test() -> int:
+    released = {"docs/src/guide/released.md"}
+    fixture = """
+[home](https://perryts.github.io/perry/)
+[released](https://perryts.github.io/perry/guide/released.html#section)
+[canonical](https://docs.perryts.com/guide/released.html)
+[external](https://example.com/guide/unreleased.html)
+"""
+    if readme_release_link_errors(fixture, released, "v1.2.3"):
+        print("check_docs --self-test FAILED: accepted fixture was rejected")
+        return 1
+
+    planted = (
+        fixture
+        + "\n[unreleased](https://perryts.github.io/perry/guide/unreleased.html)\n"
+    )
+    errors = readme_release_link_errors(planted, released, "v1.2.3")
+    if len(errors) != 1 or "docs/src/guide/unreleased.md" not in errors[0]:
+        print("check_docs --self-test FAILED: planted unreleased page was not caught")
+        return 1
+
+    print("check_docs --self-test passed: released aliases pass and an unreleased page fails")
+    return 0
 
 
 def without_fenced_code(text: str) -> str:
@@ -108,6 +223,36 @@ def include_file(raw: str) -> str:
 def main() -> int:
     errors: list[str] = []
     markdown = sorted(SRC.rglob("*.md"))
+
+    readme_text = README.read_text(encoding="utf-8")
+    release_tag = latest_release_tag()
+    if release_tag is None:
+        errors.append(
+            "README.md: cannot find a stable release tag; fetch tags before checking docs"
+        )
+    else:
+        released_docs = published_docs_at(release_tag)
+        if released_docs is None:
+            errors.append(f"README.md: cannot inspect documentation at {release_tag}")
+        else:
+            errors.extend(
+                readme_release_link_errors(readme_text, released_docs, release_tag)
+            )
+
+    for raw in local_destinations(readme_text):
+        rel, anchor = split_destination(raw)
+        if not rel or rel.startswith(("http://", "https://", "mailto:")):
+            continue
+        target = (README.parent / rel).resolve()
+        if not target.is_file():
+            errors.append(f"README.md: local link target does not exist: {raw}")
+            continue
+        if anchor and target.suffix.lower() == ".md":
+            anchors = anchors_for(target)
+            if anchor not in anchors:
+                errors.append(
+                    f"README.md: anchor #{anchor} not found in {target.relative_to(ROOT)}"
+                )
 
     summary_text = SUMMARY.read_text(encoding="utf-8")
     listed: set[Path] = set()
@@ -190,10 +335,11 @@ def main() -> int:
 
     print(
         f"documentation checks passed: {len(markdown) - 1} chapters, "
-        "all listed with valid local links, anchors, and include targets"
+        f"all listed with valid local links, anchors, and include targets; "
+        f"README public pages present in {release_tag}"
     )
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(self_test() if sys.argv[1:] == ["--self-test"] else main())
