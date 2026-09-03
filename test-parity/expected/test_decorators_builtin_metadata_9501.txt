@@ -1,0 +1,17 @@
+numberValue function true Number
+stringValue function true String
+booleanValue function true Boolean
+objectValue function true Object
+arrayValue function true Array
+tupleValue function true Array
+functionValue function true Function
+symbolValue function true Symbol
+bigintValue function true BigInt
+promiseValue function true Promise
+unionValue function true Object
+anyValue function true Object
+unknownValue function true Object
+userValue function true UserType
+params length 14
+params identities true
+new via number metadata 5
