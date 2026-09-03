@@ -5,14 +5,11 @@ fn native_callable_export_arity_reference(module: &str, prop: &str) -> Option<u3
         // Bun global/module surface (#9599).
         (
             "bun",
-            "Glob" | "file" | "fileURLToPath" | "gc" | "hash" | "pathToFileURL" | "stringWidth"
-            | "stripANSI" | "which" | "zstdDecompress" | "zstdDecompressSync",
+            "Glob" | "Terminal" | "file" | "fileURLToPath" | "gc" | "hash" | "pathToFileURL"
+            | "stringWidth" | "stripANSI" | "which" | "zstdDecompress" | "zstdDecompressSync",
         ) => Some(1),
-        ("bun", "deepEquals" | "generateHeapSnapshot" | "write") => Some(2),
+        ("bun", "deepEquals" | "generateHeapSnapshot" | "spawn" | "write") => Some(2),
         ("bun", "wrapAnsi") => Some(3),
-            "Glob" | "Terminal" | "file" | "fileURLToPath" | "hash" | "pathToFileURL"
-            | "stringWidth",
-        ("bun", "spawn" | "write") => Some(2),
         // bun:ffi (#6562).
         ("bun:ffi", "dlopen") => Some(2),
         ("bun:ffi", "ptr" | "CString" | "CFunction" | "linkSymbols") => Some(1),
