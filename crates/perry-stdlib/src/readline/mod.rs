@@ -127,9 +127,15 @@ static READABLE_EOF_NOTIFIED: AtomicBool = AtomicBool::new(false);
 /// `true` when raw mode is enabled — the reader thread checks this
 /// between bytes to decide which queue to push to.
 static RAW_MODE: AtomicBool = AtomicBool::new(false);
-/// Set when stdin returns EOF or `rl.close()` is called. The has-active
-/// check reads this to decide whether to keep the event loop alive.
+/// Set only when stdin returns EOF. Closing a readline interface pauses its
+/// input stream but does not end that stream; `process.stdin.resume()` may
+/// consume more bytes afterwards.
 static EOF_REACHED: AtomicBool = AtomicBool::new(false);
+/// Whether the physical stdin EOF has been dispatched to `end` / `close`
+/// listeners. This is separate from `CLOSE_FIRED`: explicitly closing a
+/// readline interface fires the interface's `close` event without ending
+/// `process.stdin`.
+static STDIN_END_FIRED: AtomicBool = AtomicBool::new(false);
 /// Whether the background reader thread has been spawned. Atomic
 /// (compare_exchange) so we don't accidentally spawn twice if two
 /// init paths race on first call.
@@ -1410,6 +1416,12 @@ pub extern "C" fn js_readline_create_interface(opts: f64) -> i64 {
     try_register_pump();
     let handle = create_interface_from_options(opts);
     if !with_interface(handle, |state| state.uses_custom_stream).unwrap_or(false) {
+        // Node's Interface constructor calls input.resume(). This matters for
+        // a second interface created after the first one was closed, since
+        // close() pauses the shared stdin stream.
+        if !STDIN_DESTROYED.load(Ordering::Acquire) && !EOF_REACHED.load(Ordering::Acquire) {
+            STDIN_PAUSED.store(false, Ordering::Release);
+        }
         ensure_reader_started();
     }
     handle
@@ -1525,8 +1537,8 @@ pub extern "C" fn js_readline_on(
     undefined()
 }
 
-/// rl.close() — synchronously fire the close callback (matching Node's
-/// `Interface.close()` semantics) and mark the interface as EOF.
+/// rl.close() — synchronously pause the input and fire the close callback,
+/// matching Node's `Interface.close()` semantics.
 #[no_mangle]
 pub extern "C" fn js_readline_close(_handle: i64) -> f64 {
     match with_interface(_handle, |state| state.uses_custom_stream) {
@@ -1540,7 +1552,10 @@ pub extern "C" fn js_readline_close(_handle: i64) -> f64 {
         None if _handle != STDIN_READLINE_HANDLE => return undefined(),
         _ => {}
     }
-    EOF_REACHED.store(true, Ordering::Release);
+    // Node implements Interface.close() by calling Interface.pause(), which
+    // in turn pauses the input stream. Do not mark stdin as EOF: user code can
+    // explicitly resume the shared stream after the interface is gone.
+    STDIN_PAUSED.store(true, Ordering::Release);
     // Node stops emitting 'line' after close(). Without clearing these, the
     // pump would still deliver a queued late line to the 'line' handler and
     // `has_line_callbacks` would keep the event loop alive.
@@ -1844,6 +1859,7 @@ pub extern "C" fn js_readline_stdin_destroy() -> f64 {
     RAW_MODE.store(false, Ordering::Release);
     STDIN_DATA_FLOWING.store(false, Ordering::Release);
     EOF_REACHED.store(true, Ordering::Release);
+    STDIN_END_FIRED.store(true, Ordering::Release);
     let _ = termios_impl::disable();
     if let Ok(mut q) = PENDING_DATA.lock() {
         q.clear();

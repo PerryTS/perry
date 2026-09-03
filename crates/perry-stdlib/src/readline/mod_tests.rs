@@ -11,8 +11,45 @@ fn close_without_callbacks_is_noop() {
     let h = js_readline_create_interface(0.0);
     assert_eq!(h, STDIN_READLINE_HANDLE);
     js_readline_close(h);
+    assert!(STDIN_PAUSED.load(Ordering::Acquire));
+    assert!(!EOF_REACHED.load(Ordering::Acquire));
+    test_inject_line("late");
     assert_eq!(js_readline_process_pending(), 0);
+    assert_eq!(PENDING_LINES.lock().unwrap().len(), 1);
+    assert_eq!(js_readline_has_active(), 0);
     assert_eq!(js_readline_process_pending(), 0);
+}
+
+#[test]
+fn stdin_close_pauses_delivery_until_explicit_resume() {
+    let _g = reset();
+    let h = js_readline_create_interface(0.0);
+    let event = event_name("data");
+    let cb = data_counter_callback();
+    let _ = js_readline_stdin_on(event, cb);
+
+    js_readline_close(h);
+    test_inject_chunk(b"late");
+    assert_eq!(js_readline_process_pending(), 0);
+    assert_eq!(PENDING_DATA.lock().unwrap().len(), 1);
+    assert!(!EOF_REACHED.load(Ordering::Acquire));
+
+    let _ = js_readline_stdin_resume();
+    assert_eq!(js_readline_process_pending(), 1);
+    DATA_COUNT.with(|count| assert_eq!(*count.borrow(), 1));
+}
+
+#[test]
+fn new_stdin_interface_resumes_after_previous_interface_closed() {
+    let _g = reset();
+    let first = js_readline_create_interface(0.0);
+    js_readline_close(first);
+    assert!(STDIN_PAUSED.load(Ordering::Acquire));
+
+    let second = js_readline_create_interface(0.0);
+    assert_eq!(second, STDIN_READLINE_HANDLE);
+    assert!(!STDIN_PAUSED.load(Ordering::Acquire));
+    assert!(!EOF_REACHED.load(Ordering::Acquire));
 }
 
 #[test]
