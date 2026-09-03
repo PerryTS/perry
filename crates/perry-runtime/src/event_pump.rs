@@ -533,6 +533,9 @@ pub extern "C" fn js_event_loop_host_driven() -> i32 {
 /// and `await` busy-wait.
 #[no_mangle]
 pub extern "C" fn js_wait_for_event() {
+    // `PERRY_GC_CENSUS`: one relaxed atomic load; services a pending SIGUSR2
+    // census request on the main thread before parking.
+    crate::gc::census_poll_signal();
     if crate::promise::mt_profile_enabled() {
         PROFILE_WAIT_COUNT.fetch_add(1, Ordering::Relaxed);
     }

@@ -107,6 +107,7 @@ pub(crate) use crate::JSValue;
 pub(crate) mod arithmetic;
 mod console;
 mod formatting;
+pub(crate) use formatting::function_registries_census;
 mod globals;
 mod numbers;
 mod table;

@@ -814,3 +814,23 @@ static KEEP_JS_CLOSURE_SET_CAPTURE_BITS: extern "C" fn(*mut ClosureHeader, u32, 
 #[used]
 static KEEP_JS_CLOSURE_SET_BOX_CAPTURE_PTR: extern "C" fn(*mut ClosureHeader, u32, i64) =
     js_closure_set_box_capture_ptr;
+
+/// `PERRY_GC_CENSUS`: singleton-closure caches (entries point INTO the GC
+/// heap; only the table storage is counted here).
+pub(super) fn singleton_closure_census() -> Vec<crate::gc::census::SideTableRow> {
+    use crate::gc::census::{map_bytes, vec_bytes};
+    let mut rows = Vec::new();
+    SINGLETON_CLOSURES.with(|m| {
+        let m = m.borrow();
+        rows.push(("closure.singletons", m.len(), map_bytes(&m)));
+    });
+    SINGLETON_CAPTURED_CLOSURES.with(|m| {
+        let m = m.borrow();
+        let inner: usize = m
+            .values()
+            .map(|c| vec_bytes(&c.entries) + c.entries.iter().map(|e| vec_bytes(&e.captures)).sum::<usize>())
+            .sum();
+        rows.push(("closure.captured_singletons", m.len(), map_bytes(&m) + inner));
+    });
+    rows
+}

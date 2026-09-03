@@ -235,6 +235,9 @@ pub use schedule::{
 pub use verify::*;
 #[cfg(feature = "diagnostics")]
 mod heap_snapshot;
+/// Env-gated heap census (`PERRY_GC_CENSUS`); off by default.
+pub(crate) mod census;
+pub use census::{census_poll_signal, gc_census_enabled};
 #[cfg(feature = "diagnostics")]
 pub use heap_snapshot::gc_build_v8_heap_snapshot_json;
 
@@ -879,6 +882,9 @@ pub fn gc_init() {
         return;
     }
     crate::perf_hooks::init_time_origin();
+    // `PERRY_GC_CENSUS`: remember the main thread and install the SIGUSR2
+    // trigger. No-op (one OnceLock read) when the env var is unset.
+    census::census_on_gc_init();
     reg_budgeted_scanner!(
         scan_runtime_handle_roots_mut,
         scan_runtime_handle_roots_mut_step,

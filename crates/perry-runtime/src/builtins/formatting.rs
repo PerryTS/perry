@@ -1944,3 +1944,31 @@ pub extern "C" fn js_array_print(arr_ptr: *const crate::array::ArrayHeader) {
         println!("[{}]", parts.join(", "));
     }
 }
+
+/// `PERRY_GC_CENSUS`: entries and estimated bytes of the function-name and
+/// function-source registries (map storage + one `Arc<[u8]>` per entry).
+pub(crate) fn function_registries_census() -> Vec<crate::gc::census::SideTableRow> {
+    use crate::gc::census::hash_table_bytes;
+    let mut rows = Vec::new();
+    if let Ok(map) = function_name_registry().lock() {
+        let payload: usize = map.values().map(|a| a.len() + 16).sum();
+        rows.push((
+            "fn.name_registry",
+            map.len(),
+            hash_table_bytes(map.capacity(), std::mem::size_of::<(usize, std::sync::Arc<[u8]>)>())
+                + payload,
+        ));
+    }
+    if let Ok(map) = function_source_registry().lock() {
+        let payload: usize = map.values().map(|s| s.bytes.len() + 16).sum();
+        rows.push((
+            "fn.source_registry(toString)",
+            map.len(),
+            hash_table_bytes(
+                map.capacity(),
+                std::mem::size_of::<(usize, RegisteredFunctionSource)>(),
+            ) + payload,
+        ));
+    }
+    rows
+}

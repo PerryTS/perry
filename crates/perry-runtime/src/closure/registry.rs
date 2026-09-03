@@ -1239,3 +1239,51 @@ pub const NO_THIS_REBIND_FLAG: u32 = 0x4000_0000;
 pub fn real_capture_count(capture_count: u32) -> u32 {
     capture_count & !(CAPTURES_THIS_FLAG | NO_THIS_REBIND_FLAG)
 }
+
+/// `PERRY_GC_CENSUS`: entries and estimated bytes of every per-`func_ptr`
+/// registry filled from module init.
+pub(crate) fn closure_registry_census() -> Vec<crate::gc::census::SideTableRow> {
+    use crate::gc::census::map_bytes;
+    let mut rows = Vec::new();
+    CLOSURE_REST_REGISTRY.with(|m| {
+        let m = m.borrow();
+        rows.push(("closure.rest_registry", m.len(), map_bytes(&m)));
+    });
+    CLOSURE_ARITY_REGISTRY.with(|m| {
+        let m = m.borrow();
+        rows.push(("closure.arity_registry", m.len(), map_bytes(&m)));
+    });
+    CLOSURE_LENGTH_REGISTRY.with(|m| {
+        let m = m.borrow();
+        rows.push(("closure.length_registry", m.len(), map_bytes(&m)));
+    });
+    CLOSURE_ARROW_FUNCTION_REGISTRY.with(|m| {
+        let m = m.borrow();
+        rows.push(("closure.arrow_registry", m.len(), map_bytes(&m)));
+    });
+    CLOSURE_VERSIONED_LOOP_REGISTRY.with(|m| {
+        let m = m.borrow();
+        rows.push(("closure.versioned_loop_registry", m.len(), map_bytes(&m)));
+    });
+    CLOSURE_STRICT_FUNCTION_REGISTRY.with(|m| {
+        let m = m.borrow();
+        rows.push(("closure.strict_registry", m.len(), map_bytes(&m)));
+    });
+    CLOSURE_ASYNC_FUNCTION_REGISTRY.with(|m| {
+        let m = m.borrow();
+        rows.push(("closure.async_registry", m.len(), map_bytes(&m)));
+    });
+    CLOSURE_GENERATOR_FUNCTION_REGISTRY.with(|m| {
+        let m = m.borrow();
+        rows.push(("closure.generator_registry", m.len(), map_bytes(&m)));
+    });
+    CLOSURE_ASYNC_GENERATOR_FUNCTION_REGISTRY.with(|m| {
+        let m = m.borrow();
+        rows.push(("closure.async_generator_registry", m.len(), map_bytes(&m)));
+    });
+    DISPATCH_CACHE.with(|m| {
+        let m = m.borrow();
+        rows.push(("closure.dispatch_cache", m.len(), map_bytes(&m)));
+    });
+    rows
+}

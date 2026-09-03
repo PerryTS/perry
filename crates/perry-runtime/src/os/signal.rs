@@ -385,6 +385,9 @@ fn uninstall_process_signal_handler(slot: &'static ProcessSignalSlot) {
         libc::sigemptyset(&mut sa.sa_mask);
         let _ = libc::sigaction(slot.number, &sa, std::ptr::null_mut());
     }
+    // `PERRY_GC_CENSUS` owns SIGUSR2 for the life of the process; give it
+    // back after the JS listener's disposition reset. No-op when unset.
+    crate::gc::census::census_after_signal_disposition_reset(slot.number);
 }
 
 // ============================================================================

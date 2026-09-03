@@ -1850,3 +1850,43 @@ mod page_generation_hasher_tests {
         assert_eq!(map.len(), 256);
     }
 }
+
+/// `PERRY_GC_CENSUS`: estimated bytes held by the per-page side tables.
+pub(crate) fn page_meta_census() -> Vec<crate::gc::census::SideTableRow> {
+    use crate::gc::census::{hash_table_bytes, vec_bytes};
+    let mut rows = Vec::new();
+    PAGE_GENERATIONS.with(|m| {
+        let m = m.borrow();
+        rows.push((
+            "arena.page_generations",
+            m.len(),
+            hash_table_bytes(m.capacity(), std::mem::size_of::<(usize, PageGenerationSlot)>()),
+        ));
+    });
+    OLD_GEN_PAGE_OBJECTS.with(|m| {
+        let m = m.borrow();
+        let inner: usize = m.values().map(vec_bytes).sum();
+        rows.push((
+            "arena.old_gen_page_objects",
+            m.len(),
+            hash_table_bytes(m.capacity(), std::mem::size_of::<(usize, Vec<usize>)>()) + inner,
+        ));
+    });
+    OLD_GEN_PAGE_META.with(|m| {
+        let m = m.borrow();
+        rows.push((
+            "arena.old_gen_page_meta",
+            m.len(),
+            hash_table_bytes(m.capacity(), std::mem::size_of::<(usize, OldPageMeta)>()),
+        ));
+    });
+    OLD_GEN_PAGE_PROMOTED_RUNS.with(|m| {
+        let m = m.borrow();
+        rows.push((
+            "arena.old_gen_page_promoted_runs",
+            m.len(),
+            hash_table_bytes(m.capacity(), std::mem::size_of::<(usize, PromotedPageRun)>()),
+        ));
+    });
+    rows
+}
