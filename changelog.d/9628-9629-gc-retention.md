@@ -42,3 +42,14 @@ worse direction.
 Both tests fail when their own fix is reverted, which is how they were
 checked: the first reports 20,000 resurrected objects, the second a non-zero
 `newly_marked` on a full cycle.
+
+**Measured effect, stated honestly.** On the compiled claude-code TUI at idle
+(Linux, three full collections), block persistence force-marked **0** objects:
+its recent-block window happened to hold no dead neighbours, so #9628 buys
+nothing there and the 13,364 figure above is a fixture result, not a TUI one.
+The remembered-set marking on those same three full cycles marked **845, 800
+and 800** young objects as roots. After the fix a full trace marks none of
+them, and every one that is genuinely reachable is still reached from the real
+roots; the retention actually removed is the subset reachable only from dead
+old objects, which this telemetry does not separate. Both changes are
+correctness and hygiene rather than a large idle-memory win.
