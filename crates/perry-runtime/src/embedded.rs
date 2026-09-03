@@ -30,6 +30,10 @@ use crate::value::{js_nanbox_pointer, JSValue, TAG_TRUE};
 /// Bun's `$bunfs/`. `fs` and `readEmbedded` strip it before lookup; the
 /// import-attribute lowering hands user code a `$perryfs/<name>` string.
 pub const VIRTUAL_PREFIX: &str = "$perryfs/";
+/// Bun standalone executables expose extracted files through this absolute
+/// virtual prefix. Perry retains the full path as the registry key so user
+/// code can keep passing the original string to `node:fs` and `Bun.file()`.
+pub const BUNFS_ROOT_PREFIX: &str = "/$bunfs/root/";
 
 /// One embedded file. `bytes` points into the binary's read-only data and is
 /// valid for the life of the process.
@@ -95,12 +99,14 @@ pub fn lookup(path: &str) -> Option<&'static [u8]> {
     reg.iter().find(|a| a.name == key).map(|a| a.bytes)
 }
 
-/// True if `path` is an embedded-asset *virtual* path (carries the `$perryfs/`
-/// prefix), independent of whether it actually resolves. `fs` uses this to treat
-/// an unresolved `$perryfs/...` path as missing rather than attempting a real
-/// disk read of the literal string. Actual presence is [`lookup`].
+/// True if `path` is an embedded-asset virtual path (carries the `$perryfs/`
+/// or `/$bunfs/root/` prefix), independent of whether it actually resolves.
+/// `fs` uses this to treat an unresolved virtual path as missing rather than
+/// attempting a real disk read of the literal string. Actual presence is
+/// [`lookup`].
 pub fn is_virtual_path(path: &str) -> bool {
-    path.replace('\\', "/").starts_with(VIRTUAL_PREFIX)
+    let unified = path.replace('\\', "/");
+    unified.starts_with(VIRTUAL_PREFIX) || unified.starts_with(BUNFS_ROOT_PREFIX)
 }
 
 /// Snapshot of `(name, size)` for every embedded asset, in registration order.
@@ -311,6 +317,7 @@ mod tests {
         assert_eq!(lookup("$perryfs\\embed-test\\asset.txt"), Some(DATA));
         // `is_virtual_path` is a pure prefix test; presence is `lookup`.
         assert!(is_virtual_path("$perryfs/anything"));
+        assert!(is_virtual_path("/$bunfs/root/assets/help.zst"));
         assert!(!is_virtual_path("not/registered.txt"));
         assert!(lookup("not/registered.txt").is_none());
         assert!(lookup("$perryfs/not-registered").is_none());

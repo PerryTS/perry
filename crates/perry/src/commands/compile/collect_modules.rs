@@ -53,17 +53,33 @@ use dynamic_glob::expand_dynamic_import_glob;
 use eval_worker::materialize_eval_worker_source;
 pub(super) use import_helpers::known_node_submodule_key;
 use import_helpers::{
-    cached_resolve_import_with_lexical_base, collect_js_module_imports, env_defines_for_lowering,
+    cached_resolve_import_with_lexical_base, collect_js_module_imports,
+    ensure_bunfs_import_resolves, env_defines_for_lowering,
 };
 use json_module::synthesize_json_module;
 pub(super) use native_addon::package_has_unsupported_node_addon;
 use native_addon::{collect_or_refuse_node_addon, refuse_compile_package_native_addon};
 use parse_error::annotate_parse_error;
-use static_require_transform::transform_static_literal_requires;
+use static_require_transform::transform_static_literal_requires_with_bunfs;
 pub(super) use walk::collect_modules;
 use wasm_asset::{is_wasm_asset, synthesize_wasm_module};
 
 const MAX_CROSS_MODULE_INLINE_PRIOR_MODULES: usize = 128;
+
+fn register_bunfs_literal_assets(source: &str, ctx: &mut CompilationContext) {
+    let Some(root) = ctx.bunfs_root.clone() else {
+        return;
+    };
+    for (name, path) in super::embed::resolve_bunfs_literal_assets(source, &root) {
+        if !ctx
+            .embedded_assets
+            .iter()
+            .any(|(existing_name, _)| existing_name == &name)
+        {
+            ctx.embedded_assets.push((name, path));
+        }
+    }
+}
 
 enum VisitState {
     InProgress,
@@ -142,7 +158,17 @@ fn collect_module_one(
         .components()
         .any(|c| c.as_os_str() == "node_modules");
     let is_perry_native = is_in_node_modules && is_in_perry_native_package(&canonical);
-    let is_in_compiled_pkg = ctx.aot_discovered_modules.contains(&canonical)
+    // `--bunfs-root` describes source extracted from a self-contained Bun
+    // executable. Compile every module below that opted-in tree natively,
+    // including paths with a `node_modules` component; otherwise Perry's
+    // ordinary dependency classification can route those mapped modules to
+    // the removed JS fallback despite the resolver selecting NativeCompiled.
+    let is_in_bunfs_root = ctx
+        .bunfs_root
+        .as_ref()
+        .is_some_and(|root| canonical.starts_with(root));
+    let is_in_compiled_pkg = is_in_bunfs_root
+        || ctx.aot_discovered_modules.contains(&canonical)
         || (is_in_node_modules && is_in_compile_package(&canonical, &ctx.compile_packages))
         || ctx.compile_package_dirs.iter().any(|dir| {
             if canonical.starts_with(dir) {
@@ -203,6 +229,7 @@ fn collect_module_one(
 
         let source = fs::read_to_string(&canonical)
             .map_err(|e| anyhow!("Failed to read {}: {}", canonical.display(), e))?;
+        register_bunfs_literal_assets(&source, ctx);
         progress.record(ProgressSnapshot {
             stage: "collect-js-module",
             module_path: Some(&canonical),
@@ -311,10 +338,12 @@ fn collect_module_one(
         fs::read_to_string(&canonical)
             .map_err(|e| anyhow!("Failed to read {}: {}", canonical.display(), e))?
     };
+    register_bunfs_literal_assets(&raw_source, ctx);
     // CJS wrapping consumes literal `require()` sites and replaces them with
     // generated loader calls. Queue native targets before that rewrite so the
     // graph still authenticates and packages the selected `.node` binary.
     for specifier in super::cjs_wrap::extract_require_specifiers(&raw_source) {
+        ensure_bunfs_import_resolves(&specifier, &canonical, ctx)?;
         if let Some(target) = super::resolve::resolve_relative_import_path(&specifier, &canonical) {
             if target.extension().and_then(|extension| extension.to_str()) == Some("node") {
                 pending.push(target);
@@ -399,10 +428,11 @@ fn collect_module_one(
     // delta to the prefix so the wrapped-line → original-line subtraction is
     // computed against the FINAL parsed source.
     let lines_before_transform = source.bytes().filter(|&b| b == b'\n').count();
-    let source = transform_static_literal_requires(
+    let source = transform_static_literal_requires_with_bunfs(
         &source,
         &ctx.compile_packages,
         canonical.parent().unwrap_or_else(|| Path::new(".")),
+        ctx.bunfs_root.as_deref(),
     );
 
     // #8547: a builtin reached through `require("http")` never appears in the
@@ -1030,6 +1060,7 @@ fn collect_module_one(
 
     // Process imports and update their resolved paths and module kinds
     for import in &mut hir_module.imports {
+        ensure_bunfs_import_resolves(&import.source, &canonical, ctx)?;
         // Resolve TypeScript type-only imports for metadata, but never queue
         // their target as a runtime module. The final graph may already
         // contain the target through a value import elsewhere; retaining its
@@ -1667,6 +1698,7 @@ fn collect_module_one(
             perry_hir::Export::Named { .. } => None,
         };
         if let Some(src) = source {
+            ensure_bunfs_import_resolves(src, &canonical, ctx)?;
             progress.record(ProgressSnapshot {
                 stage: "resolve-re-export",
                 module_path: Some(&canonical),

@@ -81,7 +81,11 @@ pub(super) fn write(
                 ctx,
                 path,
                 kind,
-                format!("$perryfs/{packaged_name}"),
+                if packaged_name.starts_with(super::resolve::BUNFS_ROOT_PREFIX) {
+                    packaged_name.clone()
+                } else {
+                    format!("$perryfs/{packaged_name}")
+                },
                 generated_owner(ctx, path),
             )?,
         );

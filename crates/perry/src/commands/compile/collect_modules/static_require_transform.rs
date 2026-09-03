@@ -9,10 +9,20 @@ use serde::Deserialize;
 use super::parse_package_specifier;
 use crate::commands::compile::cjs_wrap::detect::strip_comments_and_strings;
 
-pub(super) fn transform_static_literal_requires(
+#[cfg(test)]
+fn transform_static_literal_requires(
     source: &str,
     compile_packages: &HashSet<String>,
     module_dir: &Path,
+) -> String {
+    transform_static_literal_requires_with_bunfs(source, compile_packages, module_dir, None)
+}
+
+pub(super) fn transform_static_literal_requires_with_bunfs(
+    source: &str,
+    compile_packages: &HashSet<String>,
+    module_dir: &Path,
+    bunfs_root: Option<&Path>,
 ) -> String {
     let create_require_aliases = collect_create_require_aliases(source);
     let mut require_aliases =
@@ -73,7 +83,7 @@ pub(super) fn transform_static_literal_requires(
                 continue;
             }
             let specifier = cap.name("spec").map(|m| m.as_str()).unwrap_or_default();
-            if let Some(target) = resolve_static_require(module_dir, specifier) {
+            if let Some(target) = resolve_static_require(module_dir, specifier, bunfs_root) {
                 if discovered_side_effects.insert(target.clone()) {
                     let binding = unique_lazy_require_name(source, &mut next_id);
                     imports.push(format!(
@@ -86,7 +96,7 @@ pub(super) fn transform_static_literal_requires(
         let call_re = literal_require_call_re(&alias);
         for cap in call_re.captures_iter(source) {
             let specifier = cap.name("spec").map(|m| m.as_str()).unwrap_or_default();
-            let require_target = resolve_static_require(module_dir, specifier);
+            let require_target = resolve_static_require(module_dir, specifier, bunfs_root);
             if should_leave_runtime_require(specifier, compile_packages) {
                 if let Some(target) = require_target.as_ref() {
                     if discovered_side_effects.insert(target.clone()) {
@@ -176,7 +186,16 @@ pub(super) fn transform_static_literal_requires(
     prepend_imports_preserving_shebang(&transformed, &imports)
 }
 
-fn resolve_static_require(module_dir: &Path, specifier: &str) -> Option<std::path::PathBuf> {
+fn resolve_static_require(
+    module_dir: &Path,
+    specifier: &str,
+    bunfs_root: Option<&Path>,
+) -> Option<std::path::PathBuf> {
+    if specifier.starts_with(crate::commands::compile::resolve::BUNFS_ROOT_PREFIX) {
+        return bunfs_root.and_then(|root| {
+            crate::commands::compile::resolve::resolve_bunfs_import_path(specifier, root)
+        });
+    }
     if is_relative_or_absolute_specifier(specifier) {
         let base = if std::path::Path::new(specifier).is_absolute() {
             std::path::PathBuf::from(specifier)
