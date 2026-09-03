@@ -1105,6 +1105,9 @@ fn ensure_reader_started() {
         // chunks (`pump::coalesce_escape_sequences`), and a paste must still
         // fire one `'keypress'` per character.
         let mut raw_chunks: Vec<Vec<u8>> = Vec::new();
+        // #9588: set whenever this read(2) put something the MAIN THREAD has to
+        // dispatch into a shared queue. See the notify below.
+        let mut queued_for_main: bool;
         loop {
             let n = match reader.read(&mut buf) {
                 Ok(0) => break, // EOF
@@ -1114,6 +1117,7 @@ fn ensure_reader_started() {
             if STDIN_DESTROYED.load(Ordering::Acquire) {
                 break;
             }
+            queued_for_main = false;
             // The mode atomics are still consulted PER BYTE, exactly as
             // before: a mode flip from the main thread mid-block must land on
             // the same byte it used to. Only the syscall and the chunk
@@ -1141,6 +1145,7 @@ fn ensure_reader_started() {
                     if let Ok(mut q) = PENDING_LINES.lock() {
                         q.push(line);
                     }
+                    queued_for_main = true;
                 } else {
                     line_buf.push(b);
                 }
@@ -1150,6 +1155,7 @@ fn ensure_reader_started() {
                     q.append(&mut raw_chunks);
                 }
                 raw_chunks.clear();
+                queued_for_main = true;
             }
             // One `'data'` chunk per read(2) — Node's contract. Line splitting
             // is the CONSUMER's job (readline does its own, above); imposing
@@ -1163,6 +1169,29 @@ fn ensure_reader_started() {
                     q.push(std::mem::take(&mut line_buf));
                 }
                 line_buf = Vec::with_capacity(65536);
+                queued_for_main = true;
+            }
+            // #9588 — WAKE THE PUMP. This reader is a cross-thread producer for
+            // queues only the main thread drains (`js_readline_process_pending`,
+            // reached from `js_run_stdlib_pump`), and it used to push and loop
+            // straight back into `read(2)` without telling anyone. The main loop
+            // therefore learned about a keystroke only when it happened to wake
+            // for some *other* reason, so input latency was the whole
+            // `js_wait_for_event` budget: the next timer deadline, or — for a TUI
+            // sitting idle with no timer armed — the full `IDLE_CAP_MS` (1 s)
+            // safety cap. Measured on the claude-code bundle before this line:
+            // 695-963 ms from keypress to the `'data'` handler, against Node's
+            // sub-millisecond. That is the protocol the event pump documents
+            // ("producer: push_to_queue(); js_notify_main_thread()") and the one
+            // perry-runtime's own stdin reader in `os_process_streams` already
+            // follows; readline's reader was the one producer that skipped it.
+            //
+            // Once per read(2), not per byte: a paste arrives as one syscall and
+            // needs exactly one wake, and the flag keeps a read that queued
+            // nothing (a raw-mode byte absorbed with no listener, a partial line
+            // still accumulating) from waking the loop for no work.
+            if queued_for_main {
+                perry_runtime::event_pump::js_notify_main_thread();
             }
         }
         // Flush any trailing bytes not terminated by a newline. In cooked
@@ -1187,6 +1216,10 @@ fn ensure_reader_started() {
             }
         }
         EOF_REACHED.store(true, Ordering::Release);
+        // #9588: EOF is main-thread-visible work too — the `'end'`/`'close'`
+        // dispatch and the liveness flip that lets the loop exit. Without a wake
+        // here a piped program's exit was delayed by up to `IDLE_CAP_MS`.
+        perry_runtime::event_pump::js_notify_main_thread();
     });
 }
 
