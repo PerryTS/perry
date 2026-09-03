@@ -1,5 +1,6 @@
 # Build artifacts
 target/
+target-*/
 *.o
 *.a
 

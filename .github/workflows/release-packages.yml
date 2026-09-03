@@ -446,6 +446,23 @@ jobs:
             target: aarch64-unknown-linux-gnu
             artifact: perry-linux-aarch64
             old_glibc_image: debian:bullseye-slim@sha256:f313b4bd62667092a59b3a664d7d3ab8b5e65f41675f48e81455a15dc5abe792
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            artifact: perry-linux-x86_64-musl
+            old_glibc_image: ""
+            # Cargo build scripts stay on glibc so bindgen can dlopen the host
+            # libclang (#9382); Alpine supplies only the musl-target LLVM and
+            # static C/C++ archives to the cross-build image.
+            musl_image: alpine:edge
+            musl_glibc_image: debian:bullseye-slim@sha256:f313b4bd62667092a59b3a664d7d3ab8b5e65f41675f48e81455a15dc5abe792
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            artifact: perry-linux-aarch64-musl
+            old_glibc_image: ""
+            # Use the architecture-matched runner so both the GNU Rust host
+            # toolchain and Alpine's harvested musl libraries remain native.
+            musl_image: alpine:edge
+            musl_glibc_image: debian:bullseye-slim@sha256:f313b4bd62667092a59b3a664d7d3ab8b5e65f41675f48e81455a15dc5abe792
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact: perry-windows-x86_64
@@ -491,6 +508,8 @@ jobs:
             . -> target
             . -> target-glibc231
             . -> target-glibc231-abort
+            . -> target-musl
+            . -> target-musl-abort
 
       # #4856 — evict workspace-crate fingerprints from the restored cache.
       # rust-cache's own workspace cleanup misses cross-target dirs, so a
@@ -512,7 +531,11 @@ jobs:
                    target-glibc231/dist/.fingerprint/"$pkg"-* \
                    target-glibc231/*/dist/.fingerprint/"$pkg"-* \
                    target-glibc231-abort/dist/.fingerprint/"$pkg"-* \
-                   target-glibc231-abort/*/dist/.fingerprint/"$pkg"-*
+                   target-glibc231-abort/*/dist/.fingerprint/"$pkg"-* \
+                   target-musl/dist/.fingerprint/"$pkg"-* \
+                   target-musl/*/dist/.fingerprint/"$pkg"-* \
+                   target-musl-abort/dist/.fingerprint/"$pkg"-* \
+                   target-musl-abort/*/dist/.fingerprint/"$pkg"-*
           done < <(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].name')
 
       # Closes #394: Homebrew bottle was missing libperry_ui_ios.a so
@@ -660,34 +683,38 @@ jobs:
             [ -f "$archive" ] && cp "$archive" "$dst/"
           done
 
-      # musl needs a musl-BUILT LLVM (see the matrix comment). Alpine is the
-      # only source of a packaged LLVM 22 for musl, so the compiler, runtime and
-      # stdlib are built inside it. Unlike the glibc-2.31 container, the host's
-      # ~/.cargo and ~/.rustup are NOT mounted: those are glibc binaries and
-      # cannot execute in a musl sysroot. The image installs its own rustup with
-      # the pinned nightly, whose musl host toolchain rustup does publish.
-      - name: Build Linux musl core artifacts in a musl sysroot
+      # Perry needs a musl-BUILT LLVM, but bindgen needs a dynamically linked
+      # build script so it can dlopen libclang (#9382). The image harvests LLVM
+      # and static target libraries from Alpine, then cross-builds from glibc
+      # with the runner's pinned GNU-host Rust toolchain.
+      - name: Build Linux musl core artifacts from a glibc host
         if: matrix.musl_image != ''
         env:
           MUSL_IMAGE: ${{ matrix.musl_image }}
+          MUSL_GLIBC_IMAGE: ${{ matrix.musl_glibc_image }}
           TARGET: ${{ matrix.target }}
         run: |
           set -euo pipefail
           docker build \
             --build-arg "ALPINE_IMAGE=$MUSL_IMAGE" \
-            --build-arg "RUST_TOOLCHAIN=nightly-2026-08-20" \
+            --build-arg "GLIBC_IMAGE=$MUSL_GLIBC_IMAGE" \
             --tag perry-musl-llvm22 \
             --file scripts/linux-musl-llvm22.Dockerfile \
             .
           docker run --rm \
+            --user "$(id -u):$(id -g)" \
             --env HOME=/tmp/perry-home \
+            --env CARGO_HOME=/tmp/cargo-home \
+            --env RUSTUP_HOME=/tmp/rustup-home \
             --env CARGO_TARGET_DIR=/work/target-musl \
             --env PERRY_ABORT_TARGET_DIR=/work/target-musl-abort \
             --env PERRY_CLI_UPDATE_PUBLIC_KEYS \
+            --volume "$HOME/.cargo:/tmp/cargo-home" \
+            --volume "$HOME/.rustup:/tmp/rustup-home" \
             --volume "$GITHUB_WORKSPACE:/work" \
             --workdir /work \
             perry-musl-llvm22 \
-            sh scripts/build_linux_musl.sh "$TARGET"
+            bash scripts/build_linux_musl.sh "$TARGET"
 
           # Same boundary as the old-sysroot leg: only the artifacts packaging
           # consumes cross back into target/.
@@ -696,9 +723,8 @@ jobs:
           mkdir -p "$dst"
           for artifact in perry libperry_runtime.a libperry_runtime_abort.a libperry_stdlib.a; do
             test -s "$src/$artifact"
-            sudo cp "$src/$artifact" "$dst/$artifact"
+            cp "$src/$artifact" "$dst/$artifact"
           done
-          sudo chown -R "$(id -u):$(id -g)" "$dst"
 
       - name: Build UI library (macOS)
         if: runner.os == 'macOS'
