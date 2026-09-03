@@ -1113,7 +1113,7 @@ pub(crate) const API_MANIFEST_PART_4: &[ApiEntry] = &[
     method("bun", "stripANSI", false, None),
     method("bun", "wrapAnsi", false, None),
     method("bun", "which", false, None),
-    method("bun", "zstdDecompress", true, None),
+    method("bun", "zstdDecompress", false, None),
     method("bun", "zstdDecompressSync", false, None),
     method("bun", "gc", false, None),
     method("bun", "generateHeapSnapshot", false, None),
