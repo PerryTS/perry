@@ -659,6 +659,7 @@ pub(crate) fn test_clear_class_side_table_roots() {
     // and `use crate::object::*`; name the canonical definition explicitly.
     use super::state::CLASS_DELETED_KEYS;
     CLASS_DYNAMIC_PROPS.with(|m| m.borrow_mut().clear());
+    super::state::CLASS_DECLARED_STATIC_GLOBAL_SLOTS.with(|m| m.borrow_mut().clear());
     crate::object::CLASS_DYNAMIC_PROP_ORDER.with(|order| order.borrow_mut().clear());
     CLASS_DELETED_KEYS.with(|m| m.borrow_mut().clear());
     CLASS_PROTOTYPE_METHOD_VALUES.with(|cache| cache.borrow_mut().clear());

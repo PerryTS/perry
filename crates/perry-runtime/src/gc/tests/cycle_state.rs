@@ -1468,6 +1468,7 @@ fn full_cycle_class_static_field_store_after_root_scan_preserves_new_value() {
             name.as_ptr(),
             name.len(),
             f64::from_bits(ptr_bits(child as usize)),
+            std::ptr::null_mut(),
         );
     }
     run_cycle_in_single_unit_steps(&mut state);

@@ -476,7 +476,11 @@ pub extern "C" fn js_object_set_field_by_name(
                         );
                         crate::typed_feedback::invalidate_method_change(class_id);
                     } else {
-                        class_dynamic_prop_root_store(class_id, &name, value);
+                        // #9526: a declared static has two views: runtime class
+                        // property dispatch and the LLVM global used by direct
+                        // `C.name` reads. Keep both coherent for every runtime
+                        // spelling, including a genuinely dynamic `C[key]`.
+                        class_ref_dynamic_prop_root_store(class_id, &name, value);
                     }
                 }
                 return;

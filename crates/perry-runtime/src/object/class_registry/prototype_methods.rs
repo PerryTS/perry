@@ -27,14 +27,17 @@ pub extern "C" fn js_class_lexical_binding_set(class_ref: f64, value: f64) -> f6
 /// accessed via dynamic dispatch — e.g. through an Any-typed local) finds
 /// the value via the runtime path. Codegen calls this at module init for
 /// every static field initializer in addition to writing the value to the
-/// per-field module global. Refs #420 / #618 followup. Static-field values
-/// stored in CLASS_DYNAMIC_PROPS keyed by class_id.
+/// per-field module global. `global_slot` binds those two storage views so a
+/// later computed/member write can update the cell used by direct reads.
+/// Refs #420 / #618 followup / #9526. Static-field values are stored in
+/// CLASS_DYNAMIC_PROPS keyed by class_id.
 #[no_mangle]
 pub unsafe extern "C" fn js_class_register_static_field(
     class_id: u32,
     name_ptr: *const u8,
     name_len: usize,
     value: f64,
+    global_slot: *mut f64,
 ) {
     if class_id == 0 || name_ptr.is_null() || name_len == 0 {
         return;
@@ -42,6 +45,7 @@ pub unsafe extern "C" fn js_class_register_static_field(
     let Ok(name) = std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len)) else {
         return;
     };
+    class_register_declared_static_global_slot(class_id, name, global_slot);
     class_dynamic_prop_root_store(class_id, name, value);
 }
 

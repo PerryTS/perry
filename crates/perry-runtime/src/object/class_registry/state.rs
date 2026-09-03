@@ -9,6 +9,12 @@ use std::sync::RwLock;
 crate::perry_thread_local! {
     pub(crate) static CLASS_DELETED_KEYS: std::cell::RefCell<std::collections::HashMap<u32, std::collections::HashSet<String>>> =
         std::cell::RefCell::new(std::collections::HashMap::new());
+    /// Backing LLVM globals for declared static fields, keyed exactly like
+    /// `CLASS_DYNAMIC_PROPS`. Direct compiled reads use these cells, while
+    /// computed/member writes reach the runtime side table. Remembering the
+    /// stable global address lets the runtime keep both views coherent.
+    pub(super) static CLASS_DECLARED_STATIC_GLOBAL_SLOTS: std::cell::RefCell<HashMap<u32, HashMap<String, usize>>> =
+        std::cell::RefCell::new(HashMap::new());
 }
 
 pub(crate) fn is_non_constructable_builtin_function_value(value: f64) -> bool {
@@ -119,6 +125,49 @@ pub(crate) fn class_dynamic_prop_root_store(class_id: u32, name: &str, value: f6
         }
     });
     crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
+}
+
+/// Associate a declared static field's runtime-table entry with the LLVM
+/// global used by statically lowered reads and writes. The global has process
+/// lifetime and is separately registered with the collector as a mutable root.
+pub(crate) fn class_register_declared_static_global_slot(
+    class_id: u32,
+    name: &str,
+    slot: *mut f64,
+) {
+    if class_id == 0 || name.is_empty() || slot.is_null() {
+        return;
+    }
+    CLASS_DECLARED_STATIC_GLOBAL_SLOTS.with(|slots| {
+        let mut slots = slots.borrow_mut();
+        let fields = slots.entry(class_id).or_default();
+        if let Some(existing) = fields.get_mut(name) {
+            *existing = slot as usize;
+        } else {
+            fields.insert(name.to_string(), slot as usize);
+        }
+    });
+}
+
+/// Store through the class-ref property table and, when this is a declared
+/// static, through its compiled backing cell as well. This is the terminal
+/// write used by `C.x`, `C["x"]`, and `C[key]` runtime assignment paths.
+pub(crate) fn class_ref_dynamic_prop_root_store(class_id: u32, name: &str, value: f64) {
+    let global_slot = CLASS_DECLARED_STATIC_GLOBAL_SLOTS.with(|slots| {
+        slots
+            .borrow()
+            .get(&class_id)
+            .and_then(|fields| fields.get(name))
+            .copied()
+    });
+    if let Some(global_slot) = global_slot {
+        // SAFETY: codegen only registers addresses of process-lifetime LLVM
+        // globals, and those slots are mutable GC roots.
+        unsafe {
+            crate::gc::runtime_store_root_nanbox_f64_raw_slot(global_slot as *mut f64, value);
+        }
+    }
+    class_dynamic_prop_root_store(class_id, name, value);
 }
 
 /// Own static-field value for a class (no parent-chain walk) — the

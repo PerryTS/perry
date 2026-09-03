@@ -73,7 +73,8 @@ pub(crate) use state::{
     class_own_static_field_value, class_own_string_member_names, class_parent_closure,
     class_parent_closure_root_store, class_prototype_method_is_enumerable,
     class_prototype_method_set_enumerable, class_prototype_method_value_cache_root_store,
-    class_prototype_object_root_store, class_static_defined_attrs, class_static_prototype,
+    class_prototype_object_root_store, class_ref_dynamic_prop_root_store,
+    class_register_declared_static_global_slot, class_static_defined_attrs, class_static_prototype,
     class_static_prototype_is_nulled, class_static_prototype_root_clear,
     class_static_prototype_root_store, class_static_set_defined_attrs, class_unmark_key_deleted,
     global_object_prototype_bits, is_bound_native_constructor_closure_value,
@@ -297,6 +298,20 @@ pub(crate) fn class_registry_census() -> Vec<crate::gc::census::SideTableRow> {
                 rows.push(("class.prototype_methods", entries, map_bytes(m) + inner));
             }
         }
+    });
+    state::CLASS_DECLARED_STATIC_GLOBAL_SLOTS.with(|slots| {
+        let slots = slots.borrow();
+        let mut entries = 0usize;
+        let mut inner = 0usize;
+        for fields in slots.values() {
+            entries += fields.len();
+            inner += map_bytes(fields) + fields.keys().map(|key| key.capacity()).sum::<usize>();
+        }
+        rows.push((
+            "class.declared_static_global_slots",
+            entries,
+            map_bytes(&slots) + inner,
+        ));
     });
     if let Ok(g) = super::class_meta_registry::CLASS_REGISTRY.read() {
         if let Some(m) = g.as_ref() {
