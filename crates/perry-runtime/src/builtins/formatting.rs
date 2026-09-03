@@ -279,17 +279,52 @@ fn eager_fn_metadata_validation() -> bool {
 /// function's name and source text; the check moves here, where it runs only
 /// for metadata something actually reads. Invalid bytes yield `None`, which is
 /// what the caller saw before when registration rejected them up front.
-fn decode_registered(slot: Option<&std::sync::Arc<[u8]>>) -> Option<String> {
+fn decode_registered(slot: Option<&[u8]>) -> Option<String> {
     let bytes = slot?;
     std::str::from_utf8(bytes).ok().map(str::to_owned)
 }
 
+/// Bytes for a registered function name.
+///
+/// #9612: codegen's names and sources are `private unnamed_addr constant`
+/// globals in the program image — read-only, file-backed, already resident at
+/// zero private cost. Copying them into `Arc<[u8]>` at module init made a
+/// second, DIRTY copy of the whole set: measured 5.1 MB of names and 23.8 MB
+/// of source text on the compiled claude-code TUI, for data the binary was
+/// already carrying. `Image` borrows the constant instead.
+///
+/// `Owned` stays because not every name comes from the image:
+/// `register_function_name_if_absent` infers names at runtime (a symbol's
+/// description, `get <key>`), and those must be owned.
+#[derive(Clone)]
+enum RegisteredName {
+    Image(&'static [u8]),
+    Owned(std::sync::Arc<[u8]>),
+}
+
+impl RegisteredName {
+    #[inline]
+    fn as_bytes(&self) -> &[u8] {
+        match self {
+            Self::Image(bytes) => bytes,
+            Self::Owned(bytes) => bytes,
+        }
+    }
+}
+
+impl std::ops::Deref for RegisteredName {
+    type Target = [u8];
+    #[inline]
+    fn deref(&self) -> &[u8] {
+        self.as_bytes()
+    }
+}
+
 fn function_name_registry(
-) -> &'static std::sync::Mutex<std::collections::HashMap<usize, std::sync::Arc<[u8]>>> {
+) -> &'static std::sync::Mutex<std::collections::HashMap<usize, RegisteredName>> {
     use std::sync::OnceLock;
-    static REGISTRY: OnceLock<
-        std::sync::Mutex<std::collections::HashMap<usize, std::sync::Arc<[u8]>>>,
-    > = OnceLock::new();
+    static REGISTRY: OnceLock<std::sync::Mutex<std::collections::HashMap<usize, RegisteredName>>> =
+        OnceLock::new();
     REGISTRY.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
 }
 
@@ -332,7 +367,7 @@ fn format_function_for_console(closure_ptr: *const crate::closure::ClosureHeader
             function_name_registry()
                 .lock()
                 .ok()
-                .and_then(|map| decode_registered(map.get(&(func_ptr as usize))))
+                .and_then(|map| decode_registered(map.get(&(func_ptr as usize)).map(|n| n.as_bytes())))
                 .filter(|n| !n.is_empty())
         }
     };
@@ -377,7 +412,7 @@ fn format_function_for_console(closure_ptr: *const crate::closure::ClosureHeader
 /// # Safety
 ///
 /// `name_ptr..name_ptr+name_len` must point at a valid UTF-8 byte slice
-/// that outlives the call (we copy it). `func_ptr` may be anything; we
+/// that is valid for the REST OF THE PROCESS (#9612: the registry borrows it; codegen emits a `private unnamed_addr constant`). `func_ptr` may be anything; we
 /// only use it as a map key.
 #[no_mangle]
 pub unsafe extern "C" fn js_register_function_name(
@@ -398,7 +433,12 @@ pub unsafe extern "C" fn js_register_function_name(
         return;
     }
     if let Ok(mut map) = function_name_registry().lock() {
-        map.insert(func_ptr as usize, std::sync::Arc::from(bytes));
+        // SAFETY (#9612): the caller's contract is that `name_ptr` addresses a
+        // constant in the program image, which outlives the process. Codegen
+        // emits exactly that (`@.str.N = private unnamed_addr constant`), and
+        // the tests pass `b"..."` literals, which are `'static` too.
+        let image: &'static [u8] = unsafe { std::slice::from_raw_parts(name_ptr, name_len as usize) };
+        map.insert(func_ptr as usize, RegisteredName::Image(image));
     }
 }
 
@@ -425,7 +465,10 @@ pub fn register_function_name_if_absent(func_ptr: usize, name: &str) {
             .get(&func_ptr)
             .is_some_and(|bytes| std::str::from_utf8(bytes).is_ok());
         if !usable {
-            map.insert(func_ptr, std::sync::Arc::from(name.as_bytes()));
+            map.insert(
+                func_ptr,
+                RegisteredName::Owned(std::sync::Arc::from(name.as_bytes())),
+            );
         }
     }
 }
@@ -446,10 +489,17 @@ pub fn function_name_registry_len() -> Option<usize> {
 /// per frame) happens outside it, so a `.stack` read never blocks a
 /// concurrent registration for longer than the snapshot itself.
 pub fn function_name_registry_entries() -> Option<Vec<(usize, std::sync::Arc<[u8]>)>> {
+    // The `Arc` in the return type is the resolver's, not the registry's: an
+    // image name is borrowed, so materializing one costs a copy of the NAME
+    // (tens of bytes), paid per `.stack` snapshot rather than per process.
     function_name_registry()
         .lock()
         .ok()
-        .map(|map| map.iter().map(|(k, v)| (*k, v.clone())).collect())
+        .map(|map| {
+            map.iter()
+                .map(|(k, v)| (*k, std::sync::Arc::from(v.as_bytes())))
+                .collect()
+        })
 }
 
 /// Look up the codegen-registered JS name for a function pointer.
@@ -467,7 +517,7 @@ pub fn function_name_for_ptr(func_ptr: usize) -> Option<String> {
     function_name_registry()
         .lock()
         .ok()
-        .and_then(|map| decode_registered(map.get(&func_ptr)))
+        .and_then(|map| decode_registered(map.get(&func_ptr).map(|n| n.as_bytes())))
         .filter(|n| !n.is_empty())
 }
 
@@ -478,7 +528,10 @@ pub fn function_name_for_ptr(func_ptr: usize) -> Option<String> {
 /// map is fully populated. Mirrors the function-name registry's single-writer,
 /// last-write-wins semantics.
 struct RegisteredFunctionSource {
-    bytes: std::sync::Arc<[u8]>,
+    /// #9612: borrowed from the program image, never copied. Only codegen's
+    /// module init and unit tests with `b"..."` literals register sources, and
+    /// both are `'static`; there is no runtime-inferred source text.
+    bytes: &'static [u8],
     is_non_strict_ordinary: bool,
 }
 
@@ -499,9 +552,14 @@ fn function_source_registry(
 ///
 /// # Safety
 ///
-/// `src_ptr..src_ptr+src_len` must point at a valid UTF-8 byte slice that
-/// outlives the call (we copy it). `func_ptr` is used only as a map key. The
-/// flag is treated as a boolean (`0` is false; every other value is true).
+/// `src_ptr..src_ptr+src_len` must point at a valid UTF-8 byte slice that is
+/// valid for the REST OF THE PROCESS — #9612 stopped copying it, so the
+/// registry borrows these bytes for the program's lifetime. Codegen satisfies
+/// this by emitting the text as a `private unnamed_addr constant` global
+/// (`codegen/string_pool.rs`), which is exactly the property that makes the
+/// borrow free: the bytes are already resident, read-only and file-backed.
+/// `func_ptr` is used only as a map key. The flag is treated as a boolean
+/// (`0` is false; every other value is true).
 #[no_mangle]
 pub unsafe extern "C" fn js_register_function_source(
     func_ptr: *const u8,
@@ -520,10 +578,13 @@ pub unsafe extern "C" fn js_register_function_source(
         return;
     }
     if let Ok(mut map) = function_source_registry().lock() {
+        // SAFETY (#9612): as for names above — `src_ptr` must address a
+        // constant in the program image. The doc comment states the contract.
+        let image: &'static [u8] = std::slice::from_raw_parts(src_ptr, src_len as usize);
         map.insert(
             func_ptr as usize,
             RegisteredFunctionSource {
-                bytes: std::sync::Arc::from(bytes),
+                bytes: image,
                 is_non_strict_ordinary: is_non_strict_ordinary != 0,
             },
         );
@@ -550,7 +611,7 @@ pub fn function_source_for_ptr(func_ptr: usize) -> Option<String> {
     function_source_registry()
         .lock()
         .ok()
-        .and_then(|map| decode_registered(map.get(&func_ptr).map(|source| &source.bytes)))
+        .and_then(|map| decode_registered(map.get(&func_ptr).map(|source| source.bytes)))
         .filter(|s| !s.is_empty())
 }
 
@@ -1951,23 +2012,31 @@ pub(crate) fn function_registries_census() -> Vec<crate::gc::census::SideTableRo
     use crate::gc::census::hash_table_bytes;
     let mut rows = Vec::new();
     if let Ok(map) = function_name_registry().lock() {
-        let payload: usize = map.values().map(|a| a.len() + 16).sum();
+        // #9612: `Image` names cost nothing beyond the map slot (they point
+        // into the binary); only the runtime-inferred `Owned` ones are heap.
+        let payload: usize = map
+            .values()
+            .map(|n| match n {
+                RegisteredName::Image(_) => 0,
+                RegisteredName::Owned(bytes) => bytes.len() + 16,
+            })
+            .sum();
         rows.push((
             "fn.name_registry",
             map.len(),
-            hash_table_bytes(map.capacity(), std::mem::size_of::<(usize, std::sync::Arc<[u8]>)>())
+            hash_table_bytes(map.capacity(), std::mem::size_of::<(usize, RegisteredName)>())
                 + payload,
         ));
     }
     if let Ok(map) = function_source_registry().lock() {
-        let payload: usize = map.values().map(|s| s.bytes.len() + 16).sum();
+        // #9612: source bytes are borrowed from the image; only the map is heap.
         rows.push((
             "fn.source_registry(toString)",
             map.len(),
             hash_table_bytes(
                 map.capacity(),
                 std::mem::size_of::<(usize, RegisteredFunctionSource)>(),
-            ) + payload,
+            ),
         ));
     }
     rows

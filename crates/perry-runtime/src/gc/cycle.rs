@@ -1,5 +1,5 @@
 use super::barrier::{ConservativePinClearState, RememberedSetClearState};
-use super::cycle_malloc_trim::run_malloc_trim;
+use super::cycle_malloc_trim::{run_allocator_purge, run_malloc_trim};
 use super::*;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1791,8 +1791,33 @@ impl GcCycleState {
                                 trace.sweep.deallocated_bytes.saturating_add(drained.bytes);
                         }
                     }
+                    // #9612: release the capacity pruning left behind BEFORE
+                    // purging, so the freed table pages are part of what the
+                    // purge below hands back to the OS.
+                    if self.minor.is_none() {
+                        crate::object::shapes::shrink_shape_tables();
+                        super::shrink_malloc_registry();
+                    }
                     let trim = run_malloc_trim(self.progress_kind);
+                    // #9612: and purge the allocator the process actually uses.
+                    // `run_malloc_trim` above addresses glibc / the macOS malloc
+                    // zones; mimalloc is the `#[global_allocator]`, so without
+                    // this a full collection frees objects the OS never gets
+                    // back. Major-only, at the same point, outside the atomic
+                    // tail.
+                    let purge = run_allocator_purge(self.minor.is_none());
                     if let Some(trace) = self.trace.as_mut() {
+                        trace.record_allocator_purge_maintenance(
+                            purge.status,
+                            purge.reason,
+                            purge.elapsed_us,
+                        );
+                        if purge.status == AllocatorMaintenanceStatus::Executed {
+                            trace.record_phase(
+                                "allocator_purge",
+                                Duration::from_micros(purge.elapsed_us),
+                            );
+                        }
                         if trim.status == AllocatorMaintenanceStatus::Executed {
                             trace.record_phase(
                                 "malloc_trim",
