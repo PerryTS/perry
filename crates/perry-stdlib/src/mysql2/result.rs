@@ -111,10 +111,12 @@ impl RawQueryResult {
     /// Convert to mysql2's `[rows, fields]` tuple, optionally representing
     /// every row as a positional array (`rowsAsArray: true`).
     pub fn to_jsvalue_with_rows_as_array(&self, rows_as_array: bool) -> JSValue {
-        // Create the result tuple [rows, fields]
-        let mut result_array = js_array_alloc(2);
+        // Both children are built BEFORE the result tuple is allocated, and each
+        // is rooted the moment it exists: every `js_array_alloc` / `js_array_push`
+        // below can drive a moving collection, and a bare Rust local holding an
+        // array pointer across one is read back at its pre-collection address.
+        let scope = perry_runtime::gc::RuntimeHandleScope::new();
 
-        // Create rows array
         let mut rows_array = js_array_alloc(self.rows.len() as u32);
         for row in &self.rows {
             let row_value = if rows_as_array {
@@ -125,17 +127,28 @@ impl RawQueryResult {
             };
             rows_array = js_array_push(rows_array, row_value);
         }
-        let rows_jsval = JSValue::array_ptr(rows_array);
-        result_array = js_array_push(result_array, rows_jsval);
+        let rows_handle =
+            scope.root_nanbox_f64(f64::from_bits(JSValue::array_ptr(rows_array).bits()));
 
-        // Create fields array
         let mut fields_array = js_array_alloc(self.columns.len() as u32);
         for col in &self.columns {
             let field_obj = raw_column_to_field_packet(col);
             fields_array = js_array_push(fields_array, JSValue::object_ptr(field_obj as *mut u8));
         }
-        let fields_jsval = JSValue::array_ptr(fields_array);
-        result_array = js_array_push(result_array, fields_jsval);
+        let fields_handle =
+            scope.root_nanbox_f64(f64::from_bits(JSValue::array_ptr(fields_array).bits()));
+
+        // The result tuple [rows, fields]. Each push re-reads its operands from
+        // their handles, so a growth-driven collection cannot strand either one.
+        let mut result_array = js_array_alloc(2);
+        result_array = js_array_push(
+            result_array,
+            JSValue::from_bits(rows_handle.get_nanbox_f64().to_bits()),
+        );
+        result_array = js_array_push(
+            result_array,
+            JSValue::from_bits(fields_handle.get_nanbox_f64().to_bits()),
+        );
 
         JSValue::array_ptr(result_array)
     }
