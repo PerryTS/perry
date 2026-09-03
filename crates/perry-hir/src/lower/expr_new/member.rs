@@ -30,7 +30,7 @@ pub(crate) fn lower_new_member_native(
         {
             let obj_name = obj_ident.sym.as_ref();
             if obj_name == "Bun"
-                && prop_ident.sym.as_ref() == "Glob"
+                && matches!(prop_ident.sym.as_ref(), "Glob" | "Transpiler")
                 && !ctx.shadows_unqualified_global("Bun")
                 && ctx.lookup_native_module("Bun").is_none()
             {
@@ -38,7 +38,7 @@ pub(crate) fn lower_new_member_native(
                     module: "bun".to_string(),
                     class_name: None,
                     object: None,
-                    method: "Glob".to_string(),
+                    method: prop_ident.sym.to_string(),
                     args: lower_optional_args(ctx, new_expr.args.as_deref())?,
                 }));
             }

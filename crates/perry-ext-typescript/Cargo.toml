@@ -12,15 +12,19 @@ workspace = true
 crate-type = ["staticlib", "rlib"]
 
 [dependencies]
+anyhow.workspace = true
 perry-ffi.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+swc_bundler.workspace = true
 swc_common.workspace = true
 swc_ecma_ast.workspace = true
 swc_ecma_codegen.workspace = true
+swc_ecma_loader.workspace = true
 # Keep this aligned with the parser generation used by the SWC transform
 # crates below so native applications do not link two parser copies.
 swc_ecma_parser = "29.0"
 swc_ecma_transforms_base.workspace = true
 swc_ecma_transforms_react.workspace = true
 swc_ecma_transforms_typescript.workspace = true
+swc_ecma_visit.workspace = true

@@ -1371,6 +1371,7 @@ pub fn detect_native_instance_creation_with_context(
                 ("http2", "createSecureServer") => "Http2SecureServer",
                 ("node-cron", "schedule") => "CronJob",
                 ("readline", "createInterface") => "Interface",
+                ("bun", "Transpiler") => "Transpiler",
                 (
                     "axios",
                     "get" | "post" | "put" | "delete" | "patch" | "head" | "options" | "request",
@@ -1489,6 +1490,7 @@ pub fn detect_native_instance_creation_with_context(
                 "DatabaseSync" => Some(("sqlite".to_string(), "DatabaseSync".to_string())),
                 "StatementSync" => Some(("sqlite".to_string(), "StatementSync".to_string())),
                 "BunSqliteDatabase" => Some(("bun:sqlite".to_string(), "Database".to_string())),
+                "Transpiler" => Some(("bun".to_string(), "Transpiler".to_string())),
                 _ => None,
             }
         }

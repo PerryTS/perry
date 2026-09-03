@@ -22,6 +22,10 @@ pub(crate) fn is_native_module_constructor_export(module: &str, property: &str) 
 
     !match module {
         "assert" | "assert/strict" => matches!(property, "doesNotReject" | "rejects"),
+        "bun" => matches!(
+            property,
+            "build" | "file" | "fileURLToPath" | "hash" | "pathToFileURL" | "stringWidth" | "write"
+        ),
         "buffer.Buffer" => property == "of",
         "console" => matches!(
             property,
