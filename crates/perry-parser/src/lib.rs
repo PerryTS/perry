@@ -193,6 +193,7 @@ fn syntax_for_filename(filename: &str) -> Syntax {
             decorators_before_export: true,
             export_default_from: true,
             import_attributes: true,
+            explicit_resource_management: true,
             ..Default::default()
         })
     }
@@ -902,6 +903,67 @@ pub fn swc_span_to_span(swc_span: swc_common::Span, file_id: FileId) -> Span {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_resource_management_has_no_diagnostics_for_supported_extensions() {
+        let source = r#"
+async function exerciseResources() {
+    using syncResource = { [Symbol.dispose]() {} };
+    await using asyncResource = { async [Symbol.asyncDispose]() {} };
+}
+export { exerciseResources };
+"#;
+
+        for filename in [
+            "resources.js",
+            "resources.mjs",
+            "resources.ts",
+            "resources.mts",
+        ] {
+            let mut cache = SourceCache::new();
+            let result = parse_typescript_with_cache(source, filename, &mut cache)
+                .unwrap_or_else(|error| panic!("{filename} failed to parse: {error:?}"));
+
+            assert!(
+                result.diagnostics.is_empty(),
+                "{filename} produced diagnostics: {:?}",
+                result.diagnostics
+            );
+        }
+    }
+
+    #[test]
+    fn many_valid_using_declarations_do_not_accumulate_diagnostics() {
+        let declarations = (0..70)
+            .map(|index| format!("    using resource_{index} = null;\n"))
+            .collect::<String>();
+        let source = format!("function manyResources() {{\n{declarations}}}\n");
+        let mut cache = SourceCache::new();
+
+        let result = parse_typescript_with_cache(&source, "bundle.js", &mut cache).unwrap();
+
+        assert!(
+            result.diagnostics.is_empty(),
+            "valid declarations produced diagnostics: {:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn invalid_using_declarations_still_report_diagnostics() {
+        for source in ["using resource;", "using { resource } = value;"] {
+            let mut cache = SourceCache::new();
+            let diagnosed = match parse_typescript_with_cache(source, "invalid.js", &mut cache) {
+                Ok(result) => !result.diagnostics.is_empty(),
+                Err(_) => true,
+            };
+
+            assert!(
+                diagnosed,
+                "invalid declaration unexpectedly had no diagnostics: {source}"
+            );
+        }
+    }
 
     #[test]
     fn test_es_module_detection_survives_regex_with_quote() {
