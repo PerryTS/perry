@@ -424,14 +424,18 @@ pub extern "C" fn js_readline_process_pending() -> i32 {
         }
     }
 
-    // Fire close callback once on EOF.
+    // Physical EOF closes an active readline interface and independently
+    // emits process.stdin's end/close events. `rl.close()` may already have
+    // fired the first event without stdin actually ending, so the two
+    // one-shot states must not be conflated.
     if EOF_REACHED.load(Ordering::Acquire) {
-        let already = CLOSE_FIRED.with(|f| {
+        let readline_close_already = CLOSE_FIRED.with(|f| {
             let was = *f.borrow();
             *f.borrow_mut() = true;
             was
         });
-        if !already {
+        let stdin_end_already = STDIN_END_FIRED.swap(true, Ordering::AcqRel);
+        if !stdin_end_already {
             // #9490: flush the stream decoder first — a sequence left
             // incomplete at EOF is one final `'data'` chunk of U+FFFD, ahead
             // of `'end'`/`'close'`.
@@ -458,12 +462,16 @@ pub extern "C" fn js_readline_process_pending() -> i32 {
                     fired += 1;
                 }
             }
+        }
+        if !readline_close_already {
             let cb = CLOSE_CALLBACK.with(|c| c.borrow_mut().take());
             if let Some(cb_i64) = cb {
                 let closure = cb_i64 as *const ClosureHeader;
                 js_closure_call0(closure);
                 fired += 1;
             }
+        }
+        if !stdin_end_already {
             // Every `process.stdin.on("end" | "close", …)` listener, in
             // registration order. Node fires all of them; the previous
             // single-slot storage kept only the last one registered.
@@ -516,12 +524,15 @@ pub extern "C" fn js_readline_has_active() -> i32 {
             .unwrap_or(false);
     let has_line_callbacks = QUESTION_CALLBACK.with(|c| c.borrow().is_some())
         || LINE_CALLBACK.with(|c| c.borrow().is_some());
-    let has_close_cb = !CLOSE_FIRED.with(|f| *f.borrow())
-        && (CLOSE_CALLBACK.with(|c| c.borrow().is_some())
-            || STDIN_END_CALLBACKS
-                .lock()
-                .map(|v| !v.is_empty())
-                .unwrap_or(false));
+    let has_readline_close_cb =
+        !CLOSE_FIRED.with(|f| *f.borrow()) && CLOSE_CALLBACK.with(|c| c.borrow().is_some());
+    let has_stdin_end_cb = !STDIN_END_FIRED.load(Ordering::Acquire)
+        && STDIN_END_CALLBACKS
+            .lock()
+            .map(|v| !v.is_empty())
+            .unwrap_or(false);
+    let has_close_cb = has_readline_close_cb || has_stdin_end_cb;
+    let has_dispatchable_lines = has_lines && !paused;
     let has_dispatchable_data = has_data && has_stdin_callbacks && !paused;
     let reader_keeps_alive = started
         && !eof
@@ -534,7 +545,7 @@ pub extern "C" fn js_readline_has_active() -> i32 {
             || has_close_cb);
     if !destroyed
         && refed
-        && (has_lines || has_dispatchable_data || has_close_cb || reader_keeps_alive)
+        && (has_dispatchable_lines || has_dispatchable_data || has_close_cb || reader_keeps_alive)
     {
         1
     } else {
