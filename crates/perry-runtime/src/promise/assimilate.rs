@@ -408,31 +408,64 @@ pub(super) fn assimilate_via_then_property(value: f64) -> f64 {
     if super::then_probe::definitely_no_then(value) {
         return value;
     }
+    // #9539: `js_native_call_value` below runs the thenable's `then` body —
+    // arbitrary user code. With the moving nursery (default-on) a loop
+    // safepoint inside it evacuates the young generation, so every heap value
+    // this function still needs afterwards must live in a transient handle the
+    // collector rewrites; a bare `*mut Promise` local would name retired
+    // from-space by the time the call returns.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value_handle = scope.root_nanbox_f64(value);
+
     // `Get(value, "then")` (27.2.1.3.2 step 8). A throwing getter is an abrupt
     // completion → resolve-with-thenable rejects the wrapper promise with the
     // thrown value (step 9), rather than letting the exception unwind out of the
     // resolve path. Return that rejected wrapper so callers chain it.
     let then_val = match combinator_catch_js(|| unsafe {
-        crate::value::js_dynamic_object_get_property(value, b"then".as_ptr() as *const i8, 4)
+        crate::value::js_dynamic_object_get_property(
+            value_handle.get_nanbox_f64(),
+            b"then".as_ptr() as *const i8,
+            4,
+        )
     }) {
         Ok(v) => v,
         Err(reason) => {
-            let p = js_promise_new();
-            js_promise_reject(p, reason);
-            return crate::value::js_nanbox_pointer(p as i64);
+            let reason_handle = scope.root_nanbox_f64(reason);
+            let rejected_handle = scope.root_raw_mut_ptr(js_promise_new());
+            js_promise_reject(
+                rejected_handle.get_raw_mut_ptr::<Promise>(),
+                reason_handle.get_nanbox_f64(),
+            );
+            return crate::value::js_nanbox_pointer(
+                rejected_handle.get_raw_mut_ptr::<Promise>() as i64
+            );
         }
     };
-    if callable_closure_value(then_val).is_none() {
-        return value;
+    let then_handle = scope.root_nanbox_f64(then_val);
+    if callable_closure_value(then_handle.get_nanbox_f64()).is_none() {
+        return value_handle.get_nanbox_f64();
     }
 
-    let new_promise = js_promise_new();
-    let promise_i64 = new_promise as i64;
+    let promise_handle = scope.root_raw_mut_ptr(js_promise_new());
 
-    let resolve_closure = crate::closure::js_closure_alloc(promise_resolve_fn as *const u8, 1);
-    crate::closure::js_closure_set_capture_ptr(resolve_closure, 0, promise_i64);
-    let reject_closure = crate::closure::js_closure_alloc(promise_reject_fn as *const u8, 1);
-    crate::closure::js_closure_set_capture_ptr(reject_closure, 0, promise_i64);
+    let resolve_handle = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
+        promise_resolve_fn as *const u8,
+        1,
+    ));
+    crate::closure::js_closure_set_capture_ptr(
+        resolve_handle.get_raw_mut_ptr(),
+        0,
+        promise_handle.get_raw_mut_ptr::<Promise>() as i64,
+    );
+    let reject_handle = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
+        promise_reject_fn as *const u8,
+        1,
+    ));
+    crate::closure::js_closure_set_capture_ptr(
+        reject_handle.get_raw_mut_ptr(),
+        0,
+        promise_handle.get_raw_mut_ptr::<Promise>() as i64,
+    );
 
     // Pass the resolving functions as proper NaN-boxed function values (not the
     // raw closure-pointer-bits convention used internally by
@@ -441,20 +474,30 @@ pub(super) fn assimilate_via_then_property(value: f64) -> f64 {
     // so `typeof onFulfilled === "function"` must hold (test262
     // yield-star-async-* / yield-star-next-then-* check this). A NaN-boxed
     // closure is still invoked through the normal call path.
-    let resolve_f64 = crate::value::js_nanbox_pointer(resolve_closure as i64);
-    let reject_f64 = crate::value::js_nanbox_pointer(reject_closure as i64);
+    let resolve_f64 =
+        crate::value::js_nanbox_pointer(resolve_handle.get_raw_mut_ptr::<u8>() as i64);
+    let reject_f64 = crate::value::js_nanbox_pointer(reject_handle.get_raw_mut_ptr::<u8>() as i64);
     let args = [resolve_f64, reject_f64];
 
     // Bind `this` to the thenable so a non-arrow `then` body reads the right
     // receiver, then call `Get(value, "then")` as a value (own data property).
-    let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-    let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(value));
+    let prev = scope.root_nanbox_f64(crate::object::js_implicit_this_set(
+        value_handle.get_nanbox_f64(),
+    )); // #9445
     unsafe {
-        crate::closure::js_native_call_value(then_val, args.as_ptr(), args.len());
+        crate::closure::js_native_call_value(
+            then_handle.get_nanbox_f64(),
+            args.as_ptr(),
+            args.len(),
+        );
     }
     crate::object::js_implicit_this_set(prev.get_nanbox_f64());
 
-    crate::value::js_nanbox_pointer(new_promise as i64)
+    // Re-read the wrapper through its handle: the user `then` just ran and may
+    // have relocated it (#9539). Returning `new_promise`'s pre-call address is
+    // what handed callers (util.callbackify, await) a retired from-space
+    // pointer they then classified, rooted and attached reactions to.
+    crate::value::js_nanbox_pointer(promise_handle.get_raw_mut_ptr::<Promise>() as i64)
 }
 
 #[cfg(test)]

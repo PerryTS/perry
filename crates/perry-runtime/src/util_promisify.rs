@@ -702,6 +702,11 @@ extern "C" fn callbackify_outer_thunk(closure: *const ClosureHeader, rest_value:
         let data = (arr as *const u8).add(std::mem::size_of::<ArrayHeader>()) as *const f64;
         crate::closure::js_native_call_value(fn_handle.get_nanbox_f64(), data, original_arg_len)
     };
+    // #9539: `returned` is a heap value that outlives two closure allocations,
+    // an interned-key lookup and `js_assimilate_thenable` (which runs the
+    // thenable's own `then`). Root it so every later read sees the current
+    // address rather than a pre-collection one.
+    let returned_handle = scope.root_nanbox_f64(returned);
 
     // Build the onFulfilled / onRejected closures (bound to the user callback).
     let fulfilled = js_closure_alloc(callbackify_fulfilled_thunk as *const u8, 1);
@@ -727,7 +732,7 @@ extern "C" fn callbackify_outer_thunk(closure: *const ClosureHeader, rest_value:
     );
 
     // Native Perry Promise → attach our handlers directly.
-    let promise_ptr = promise_ptr_from_value(returned);
+    let promise_ptr = promise_ptr_from_value(returned_handle.get_nanbox_f64());
     if !promise_ptr.is_null() {
         let promise_handle = scope.root_raw_mut_ptr(promise_ptr);
         js_promise_attach_handlers(
@@ -740,8 +745,10 @@ extern "C" fn callbackify_outer_thunk(closure: *const ClosureHeader, rest_value:
 
     // Class-based thenable (e.g. a custom Promise subclass) → assimilate into a
     // real Promise wrapper, then attach.
-    let assimilated = crate::promise::js_assimilate_thenable(returned);
-    let assimilated_ptr = promise_ptr_from_value(assimilated);
+    let assimilated = scope.root_nanbox_f64(crate::promise::js_assimilate_thenable(
+        returned_handle.get_nanbox_f64(),
+    ));
+    let assimilated_ptr = promise_ptr_from_value(assimilated.get_nanbox_f64());
     if !assimilated_ptr.is_null() {
         let promise_handle = scope.root_raw_mut_ptr(assimilated_ptr);
         js_promise_attach_handlers(
@@ -756,14 +763,16 @@ extern "C" fn callbackify_outer_thunk(closure: *const ClosureHeader, rest_value:
     // as an own field, not a vtable method, so `js_assimilate_thenable` passes
     // it through unchanged. Probe for a callable `.then` field and invoke it
     // with the thenable as `this`, passing our fulfilled/rejected handlers.
-    if let Some(then_fn) = callable_then_field(returned) {
+    if let Some(then_fn) = callable_then_field(returned_handle.get_nanbox_f64()) {
         let then_handle = scope.root_nanbox_f64(then_fn);
         let on_fulfilled =
             nanbox_pointer(fulfilled_handle.get_raw_const_ptr::<ClosureHeader>() as *const u8);
         let on_rejected =
             nanbox_pointer(rejected_handle.get_raw_const_ptr::<ClosureHeader>() as *const u8);
         let args = [on_fulfilled, on_rejected];
-        let prev_this = scope.root_nanbox_f64(crate::object::js_implicit_this_set(returned));
+        let prev_this = scope.root_nanbox_f64(crate::object::js_implicit_this_set(
+            returned_handle.get_nanbox_f64(),
+        ));
         unsafe {
             crate::closure::js_native_call_value(
                 then_handle.get_nanbox_f64(),
@@ -777,7 +786,7 @@ extern "C" fn callbackify_outer_thunk(closure: *const ClosureHeader, rest_value:
 
     // Not a Promise or thenable — Node throws `TypeError` synchronously because
     // it attempts to call `.then` on the result.
-    throw_callbackify_not_thenable(returned);
+    throw_callbackify_not_thenable(returned_handle.get_nanbox_f64());
 }
 
 /// Locate a callable own `then` field on a heap-object value (object-literal
@@ -805,10 +814,15 @@ fn callable_then_field(value: f64) -> Option<f64> {
     if gc_header.obj_type != crate::gc::GC_TYPE_OBJECT {
         return None;
     }
-    let obj = addr as *const crate::object::ObjectHeader;
-    let key = js_string_from_bytes(b"then".as_ptr(), 4);
-    let then_value =
-        crate::object::js_object_get_field_by_name_f64(obj, key as *const crate::StringHeader);
+    // #9539: interning `"then"` allocates, so the receiver must be a root
+    // across it — a raw local would be read back at its pre-collection address.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj_handle = scope.root_raw_const_ptr(addr as *const crate::object::ObjectHeader);
+    let key_handle = scope.root_string_ptr(js_string_from_bytes(b"then".as_ptr(), 4));
+    let then_value = crate::object::js_object_get_field_by_name_f64(
+        obj_handle.get_raw_const_ptr::<crate::object::ObjectHeader>(),
+        key_handle.get_raw_const_ptr::<crate::StringHeader>(),
+    );
     if is_callable_closure(then_value) {
         Some(then_value)
     } else {
