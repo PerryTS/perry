@@ -720,7 +720,15 @@ fn root_scan_slices_remembered_set_dirty_slots_with_tiny_budget() {
     }
     assert!(remembered_set_size() > 0);
 
-    let mut state = GcCycleState::new_full(trace_snapshot(GcTriggerKind::Manual));
+    // #9629: a MINOR, deliberately. The subject here is that the
+    // remembered-set subphase respects a tiny budget instead of running to
+    // completion in one step, and a minor is where that marking now lives: a
+    // full trace reaches every LIVE old object's children on its own, so it
+    // takes the snapshot and marks nothing. This fixture's `old_obj` is
+    // unrooted, so under a full cycle the mark assertion below would be
+    // asserting that a DEAD old object keeps its children alive, which is the
+    // retention #9629 removes.
+    let mut state = start_minor_fallback_state(trace_snapshot(GcTriggerKind::Manual));
     run_cycle_until_phase(&mut state, GcCyclePhase::RootScan);
 
     let mut root_steps = 0usize;
@@ -769,7 +777,15 @@ fn root_scan_slices_remembered_set_dirty_old_pages_with_tiny_budget() {
     }
     assert!(remembered_set_size() > 0);
 
-    let mut state = GcCycleState::new_full(trace_snapshot(GcTriggerKind::Manual));
+    // #9629: a MINOR, deliberately. The subject here is that the
+    // remembered-set subphase respects a tiny budget instead of running to
+    // completion in one step, and a minor is where that marking now lives: a
+    // full trace reaches every LIVE old object's children on its own, so it
+    // takes the snapshot and marks nothing. This fixture's `old_obj` is
+    // unrooted, so under a full cycle the mark assertion below would be
+    // asserting that a DEAD old object keeps its children alive, which is the
+    // retention #9629 removes.
+    let mut state = start_minor_fallback_state(trace_snapshot(GcTriggerKind::Manual));
     run_cycle_until_phase(&mut state, GcCyclePhase::RootScan);
 
     let mut root_steps = 0usize;
