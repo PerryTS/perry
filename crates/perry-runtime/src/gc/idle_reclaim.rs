@@ -372,6 +372,9 @@ pub(super) fn note_cycle_completed(freed_bytes: u64) {
     // released: `external_collections` borrows it too.
     STATE.with(|s| s.borrow_mut().completions += 1);
     let external = external_collections();
+    // The sweep that just ran is what makes old-page `dead_bytes` current,
+    // which is what the compaction's selection reads.
+    super::idle_compact::note_reclaim_full_completed();
     let after = old_gen_occupancy();
     STATE.with(|s| {
         let mut st = s.borrow_mut();
@@ -479,6 +482,14 @@ pub(crate) fn park_hook(budget_ms: u64) -> ParkVerdict {
         // A cycle is already open — the pacer's or ours. Idle time is the
         // cheapest time to finish it.
         return drive_active_cycle(deadline);
+    }
+    // A full of ours has completed, so page `dead_bytes` are current. If the
+    // old-gen free list has outgrown what a non-moving sweep can hand back,
+    // this is where the moving collection that CAN hand it back runs
+    // (`gc/idle_compact.rs`); it is synchronous, so the timer budget computed
+    // by the caller is stale afterwards.
+    if super::idle_compact::maybe_compact(now) {
+        return ParkVerdict::Resume;
     }
     if !should_start(now) {
         return ParkVerdict::Park(budget_ms);

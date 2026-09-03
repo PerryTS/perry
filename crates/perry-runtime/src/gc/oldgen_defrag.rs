@@ -79,6 +79,31 @@ pub(super) fn select_old_page_defrag_pages_from_snapshot(
     selection
 }
 
+thread_local! {
+    /// Set for the duration of one `gc/idle_compact.rs` collection.
+    static IDLE_COMPACT_ARMED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn idle_compact_armed() -> bool {
+    IDLE_COMPACT_ARMED.with(|c| c.get())
+}
+
+/// Arms old-page defrag selection on this thread for the guard's lifetime.
+pub(super) struct IdleCompactDefragArm;
+
+impl IdleCompactDefragArm {
+    pub(super) fn new() -> Self {
+        IDLE_COMPACT_ARMED.with(|c| c.set(true));
+        Self
+    }
+}
+
+impl Drop for IdleCompactDefragArm {
+    fn drop(&mut self) {
+        IDLE_COMPACT_ARMED.with(|c| c.set(false));
+    }
+}
+
 // Test override for selection-policy tests. Thread-local so parallel tests do
 // not race with the production default or one another.
 #[cfg(test)]
@@ -138,6 +163,12 @@ fn old_page_defrag_enabled() -> bool {
     #[cfg(test)]
     if let Some(v) = OLD_DEFRAG_TEST_OVERRIDE.with(|c| c.get()) {
         return v;
+    }
+    // The idle compaction arms selection for its own collection only. The env
+    // default below still decides for every allocation-triggered collection —
+    // #7917's opt-in is about the THROUGHPUT path, and this is idle time.
+    if idle_compact_armed() {
+        return true;
     }
     use std::sync::OnceLock;
     static ENABLED: OnceLock<bool> = OnceLock::new();

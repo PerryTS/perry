@@ -817,6 +817,11 @@ pub(super) enum GcTriggerKind {
     /// event loop's park site because the mutator went quiet, not because any
     /// allocation threshold was crossed.
     IdleReclaim,
+    /// The idle-time compaction (`gc/idle_compact.rs`): a synchronous moving
+    /// minor with old-page defrag selected, started at the park site because
+    /// the old-gen free list has grown past what a non-moving sweep can give
+    /// back.
+    IdleCompact,
 }
 
 impl GcTriggerKind {
@@ -832,6 +837,7 @@ impl GcTriggerKind {
             GcTriggerKind::Manual => "manual",
             GcTriggerKind::Direct => "direct",
             GcTriggerKind::IdleReclaim => "idle_reclaim",
+            GcTriggerKind::IdleCompact => "idle_compact",
         }
     }
 
@@ -846,6 +852,7 @@ impl GcTriggerKind {
             GcTriggerKind::Direct => 6,
             GcTriggerKind::Emergency => 7,
             GcTriggerKind::IdleReclaim => 8,
+            GcTriggerKind::IdleCompact => 9,
         }
     }
 
@@ -862,7 +869,8 @@ impl GcTriggerKind {
                 | GcTriggerKind::SurvivorPromotionBytes
                 | GcTriggerKind::Emergency
                 | GcTriggerKind::Direct
-                | GcTriggerKind::IdleReclaim,
+                | GcTriggerKind::IdleReclaim
+                | GcTriggerKind::IdleCompact,
                 _,
             ) => GcProgressKind::LegacySynchronous,
         }
@@ -1211,6 +1219,13 @@ pub(super) fn defer_gc_request(request: DeferredGcRequest) -> bool {
         });
     }
     locked
+}
+
+/// Whether a root lock is held on this thread, i.e. a collection started now
+/// would have to be deferred. The idle compaction asks before it runs one: it
+/// is synchronous and moving, so there is no deferral path for it to take.
+pub(super) fn gc_root_lock_held() -> bool {
+    GC_ROOT_LOCK_DEPTH.with(|depth| depth.get() != 0)
 }
 
 pub(super) fn take_deferred_gc_request() -> DeferredGcRequest {

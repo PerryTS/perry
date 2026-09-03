@@ -200,6 +200,10 @@ pub(super) enum CopiedMinorFallbackReason {
     PinnedYoungRoot,
     PinnedYoungDirtySlot,
     PinnedYoungTransitive,
+    /// The caller asked for the non-copying fallback so old-page defrag could
+    /// be selected (`gc/idle_compact.rs`); the fast path was not declined on
+    /// its own merits.
+    IdleCompaction,
 }
 
 impl CopiedMinorFallbackReason {
@@ -216,6 +220,7 @@ impl CopiedMinorFallbackReason {
             Self::PinnedYoungRoot => "pinned_young_root",
             Self::PinnedYoungDirtySlot => "pinned_young_dirty_slot",
             Self::PinnedYoungTransitive => "pinned_young_transitive",
+            Self::IdleCompaction => "idle_compaction",
         }
     }
 }
