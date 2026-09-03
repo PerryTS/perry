@@ -45,33 +45,43 @@ pub(super) fn build_object(methods: &[(&str, StubFn)], shape_id: u32) -> *mut Ob
         packed.push(0);
     }
     let field_count = methods.len() as u32;
-    let obj =
-        js_object_alloc_with_shape(shape_id, field_count, packed.as_ptr(), packed.len() as u32);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj = scope.root_raw_mut_ptr(js_object_alloc_with_shape(
+        shape_id,
+        field_count,
+        packed.as_ptr(),
+        packed.len() as u32,
+    ));
 
-    // NaN-box the object pointer — we'll capture it (as raw bits) in each
-    // closure's slot 0 so the stub `this_value` helper can reconstruct
-    // the f64 form for `return this` semantics.
-    let this_bits = JSValue::pointer(obj as *const u8).bits();
-
-    let mut on_method: Option<JSValue> = None;
+    let mut on_method: Option<crate::gc::RuntimeHandle<'_>> = None;
     for (i, (name, func)) in methods.iter().enumerate() {
         if *name == "addListener" {
-            if let Some(val) = on_method {
-                js_object_set_field(obj, i as u32, val);
+            if let Some(on_method) = on_method {
+                obj.with_mut_ptr(|obj| {
+                    on_method.with_const_ptr(|closure| {
+                        js_object_set_field(obj, i as u32, JSValue::pointer(closure))
+                    })
+                });
                 continue;
             }
         }
-        let closure = js_closure_alloc(*func as *const u8, 1);
+        let closure = scope.root_raw_mut_ptr(js_closure_alloc(*func as *const u8, 1));
         // Reuse `set_capture_ptr` (i64 payload). We only need 64 bits
         // and the NaN-boxed pattern fits cleanly when reinterpreted.
-        crate::closure::js_closure_set_capture_ptr(closure, 0, this_bits as i64);
-        let val = JSValue::pointer(closure as *const u8);
+        closure.with_mut_ptr(|closure| {
+            let this_bits = obj.with_const_ptr(|obj| JSValue::pointer(obj).bits());
+            crate::closure::js_closure_set_capture_ptr(closure, 0, this_bits as i64);
+        });
         if *name == "on" {
-            on_method = Some(val);
+            on_method = Some(closure);
         }
-        js_object_set_field(obj, i as u32, val);
+        obj.with_mut_ptr(|obj| {
+            closure.with_const_ptr(|closure| {
+                js_object_set_field(obj, i as u32, JSValue::pointer(closure))
+            })
+        });
     }
-    obj
+    obj.with_mut_ptr(|obj| obj)
 }
 
 /// #6316 — reserved own-key prefix for a native base method DISPLACED by a

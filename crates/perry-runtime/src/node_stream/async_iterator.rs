@@ -704,44 +704,70 @@ pub(super) extern "C" fn ns_iterator1(closure: *const ClosureHeader, opts: f64) 
 }
 
 fn install_async_iterator_symbol(target: f64, func: extern "C" fn(*const ClosureHeader) -> f64) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let target = scope.root_nanbox_f64(target);
     let async_iterator = crate::symbol::well_known_symbol("asyncIterator");
     if async_iterator.is_null() {
         return;
     }
-    let closure = js_closure_alloc(func as *const u8, 1);
-    js_closure_set_capture_ptr(closure, 0, target.to_bits() as i64);
-    let closure_value = box_pointer(closure as *const u8);
+    let closure = scope.root_raw_mut_ptr(js_closure_alloc(func as *const u8, 1));
+    closure.with_mut_ptr(|closure| {
+        js_closure_set_capture_ptr(closure, 0, target.get_nanbox_f64().to_bits() as i64)
+    });
     let symbol_value = box_pointer(async_iterator as *const u8);
-    unsafe {
-        crate::symbol::js_object_set_symbol_property(target, symbol_value, closure_value);
-    }
+    closure.with_const_ptr(|closure| unsafe {
+        crate::symbol::js_object_set_symbol_property(
+            target.get_nanbox_f64(),
+            symbol_value,
+            box_pointer(closure),
+        );
+    });
+}
+
+fn set_rooted_iterator_value(
+    iterator: &crate::gc::RuntimeHandle<'_>,
+    key_bytes: &[u8],
+    value: f64,
+) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value = scope.root_nanbox_f64(value);
+    let key = scope.root_string_ptr(hidden_key(key_bytes));
+    key.with_mut_ptr(|key| {
+        set_hidden_value(iterator.get_nanbox_f64(), key, value.get_nanbox_f64())
+    });
 }
 
 pub(super) fn build_readable_async_iterator(stream: f64, destroy_on_return: bool) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let stream = scope.root_nanbox_f64(stream);
     let methods = [
         ("next", cast0(ns_readable_iterator_next)),
         ("return", cast0(ns_readable_iterator_return)),
     ];
     let obj = build_object(&methods, READABLE_ITERATOR_SHAPE_ID + methods.len() as u32);
-    let iterator = box_pointer(obj as *const u8);
-    set_hidden_value(iterator, hidden_key(READABLE_ITERATOR_STREAM_KEY), stream);
-    set_hidden_value(iterator, hidden_key(READABLE_ITERATOR_INDEX_KEY), 0.0);
-    set_hidden_value(
-        iterator,
-        hidden_key(READABLE_ITERATOR_DONE_KEY),
+    let iterator = scope.root_nanbox_f64(box_pointer(obj as *const u8));
+    set_rooted_iterator_value(
+        &iterator,
+        READABLE_ITERATOR_STREAM_KEY,
+        stream.get_nanbox_f64(),
+    );
+    set_rooted_iterator_value(&iterator, READABLE_ITERATOR_INDEX_KEY, 0.0);
+    set_rooted_iterator_value(
+        &iterator,
+        READABLE_ITERATOR_DONE_KEY,
         f64::from_bits(TAG_FALSE),
     );
-    set_hidden_value(
-        iterator,
-        hidden_key(READABLE_ITERATOR_DESTROY_ON_RETURN_KEY),
+    set_rooted_iterator_value(
+        &iterator,
+        READABLE_ITERATOR_DESTROY_ON_RETURN_KEY,
         f64::from_bits(if destroy_on_return {
             TAG_TRUE
         } else {
             TAG_FALSE
         }),
     );
-    install_async_iterator_symbol(iterator, ns_readable_iterator_self);
-    iterator
+    install_async_iterator_symbol(iterator.get_nanbox_f64(), ns_readable_iterator_self);
+    iterator.get_nanbox_f64()
 }
 
 /// Build an async iterator that yields `value` exactly once, then completes.
