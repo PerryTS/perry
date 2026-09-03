@@ -76,6 +76,7 @@ pub(super) fn reset() -> MutexGuard<'static, ()> {
     PENDING_LINES.lock().unwrap().clear();
     PENDING_DATA.lock().unwrap().clear();
     PENDING_ESCAPE.lock().unwrap().clear();
+    *PENDING_ESCAPE_DEADLINE.lock().unwrap() = None;
     EOF_REACHED.store(false, Ordering::Release);
     READABLE_EOF_NOTIFIED.store(false, Ordering::Release);
     STDIN_PAUSED.store(false, Ordering::Release);
