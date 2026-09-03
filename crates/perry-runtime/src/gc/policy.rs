@@ -813,6 +813,10 @@ pub(super) enum GcTriggerKind {
     Emergency,
     Manual,
     Direct,
+    /// The idle-time reclaim (`gc/idle_reclaim.rs`): a full started at the
+    /// event loop's park site because the mutator went quiet, not because any
+    /// allocation threshold was crossed.
+    IdleReclaim,
 }
 
 impl GcTriggerKind {
@@ -827,6 +831,7 @@ impl GcTriggerKind {
             GcTriggerKind::Emergency => "emergency",
             GcTriggerKind::Manual => "manual",
             GcTriggerKind::Direct => "direct",
+            GcTriggerKind::IdleReclaim => "idle_reclaim",
         }
     }
 
@@ -840,6 +845,7 @@ impl GcTriggerKind {
             GcTriggerKind::Manual => 5,
             GcTriggerKind::Direct => 6,
             GcTriggerKind::Emergency => 7,
+            GcTriggerKind::IdleReclaim => 8,
         }
     }
 
@@ -855,7 +861,8 @@ impl GcTriggerKind {
                 | GcTriggerKind::OldGenBytes
                 | GcTriggerKind::SurvivorPromotionBytes
                 | GcTriggerKind::Emergency
-                | GcTriggerKind::Direct,
+                | GcTriggerKind::Direct
+                | GcTriggerKind::IdleReclaim,
                 _,
             ) => GcProgressKind::LegacySynchronous,
         }
@@ -3332,7 +3339,10 @@ fn gc_finish_budgeted_cycle(mut cycle: BudgetedGcCycle) -> JsGcStepResult {
             gc_finish_malloc_trigger_collection(pre_count, outcome);
         }
         BudgetedGcRebaseline::OldReclaim => {
-            outcome.emit_after_current();
+            let freed = outcome.emit_after_current();
+            if matches!(cycle.trigger_kind, GcTriggerKind::IdleReclaim) {
+                super::idle_reclaim::note_cycle_completed(freed);
+            }
         }
     }
     GC_BUDGETED_CYCLE_ACTIVE.with(|active| active.set(false));
@@ -3386,6 +3396,51 @@ pub(super) fn gc_drain_active_budgeted_cycle() {
 
 fn gc_budgeted_step_work_units_inner(work_units: usize) -> JsGcStepResult {
     gc_budgeted_step_work_units_inner_with_progress(work_units, GcProgressKind::NormalIncremental)
+}
+
+/// Start a FULL budgeted cycle on behalf of the idle-time reclaim
+/// (`gc/idle_reclaim.rs`), bypassing the pressure predicates: the reducer's
+/// whole point is to collect when nothing is due. Same start guards as every
+/// budgeted cycle; the block-pool drain is armed so the sweep's released
+/// blocks leave the process, and the sticky old-reclaim debt is consumed
+/// because a full satisfies it. Returns whether a cycle was opened.
+pub(super) fn gc_idle_reclaim_try_start() -> bool {
+    if gc_budgeted_cycle_active() || gc_budgeted_start_blocked() {
+        return false;
+    }
+    let Some(_guard) = BudgetedGcStepGuard::enter() else {
+        return false;
+    };
+    GC_OLD_RECLAIM_PENDING.with(|pending| pending.set(false));
+    crate::arena::request_block_pool_drain();
+    GC_TRIGGER_BUMPED.with(|c| c.set(false));
+    let cycle = gc_start_budgeted_full_cycle(
+        GcTriggerKind::IdleReclaim,
+        BudgetedGcRebaseline::OldReclaim,
+        GcProgressKind::NormalIncremental,
+    );
+    GC_BUDGETED_CYCLE.with(|slot| {
+        *slot.borrow_mut() = Some(cycle);
+    });
+    GC_BUDGETED_CYCLE_ACTIVE.with(|active| active.set(true));
+    super::instruments::note_incremental_cycle_start();
+    true
+}
+
+/// One time slice of the active budgeted cycle for the idle-time reclaim:
+/// normal-increment work units, repeated until `budget_us` has elapsed or the
+/// cycle stops reporting `ACTIVE`. Never starts a cycle of its own — when none
+/// is active the stepper's pressure check runs exactly as it would at any host
+/// safepoint.
+pub(super) fn gc_idle_reclaim_step(budget_us: u64) -> JsGcStepResult {
+    let start = Instant::now();
+    let mut result = gc_budgeted_step_work_units_inner(GC_NORMAL_INCREMENTAL_WORK_UNITS);
+    while result.status == JS_GC_STEP_STATUS_ACTIVE
+        && start.elapsed().as_micros() < u128::from(budget_us)
+    {
+        result = gc_budgeted_step_work_units_inner(GC_NORMAL_INCREMENTAL_WORK_UNITS);
+    }
+    result
 }
 
 /// #7909: arm the precise-root safepoint for nursery pressure the budgeted

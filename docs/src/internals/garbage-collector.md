@@ -172,12 +172,46 @@ on an unconstrained desktop/server process, scaled to one eighth of a
 device/container budget with a 1 MiB floor. Overflow is returned to the
 allocator, thread exit drains that thread's pool, and a critical-pressure drain
 request is sticky: it survives unsafe/deferred periods and empties the pool when
-the owed full collection finishes its arena reclamation.
+the owed full collection finishes its arena reclamation. A full cycle's reclaim
+tail then asks the allocator itself to release what it is holding — mimalloc's
+`mi_collect` on the default `alloc-mimalloc` builds, plus glibc `malloc_trim` or
+Darwin zone pressure relief for the system allocator — because a block
+deallocated into mimalloc's segment cache otherwise waits for a purge the idle
+program would never trigger.
 <!-- gc-symbol: block_pool_cap_is_process_wide_across_live_threads in crates/perry-runtime/src/arena/tests.rs -->
 <!-- gc-symbol: deferred_critical_pressure_drains_after_the_owed_full_cycle in crates/perry-runtime/src/gc/tests/block_pool_pressure.rs -->
 Reported heap usage (`js_arena_stats`,
 `process.memoryUsage().heapUsed`) is an exact post-collection **live census**
 plus incremental deltas, not a sum of block high-water offsets.
+
+### Idle-time reclaim
+
+Every automatic collection above is scheduled by allocation, so a program that
+bursts and then goes quiet keeps whatever the last mid-burst cycle left in
+old-gen until the next burst. The idle-time reclaim
+(`crates/perry-runtime/src/gc/idle_reclaim.rs`) closes that gap at the event
+loop's park site. When the loop is about to sleep — no notify, no microtask, no
+timer due — and at least one collection the reducer did not start itself has
+completed since its last full, and 3000 ms
+<!-- gc-fact: IDLE_RECLAIM_QUIET_MS = 3_000 in crates/perry-runtime/src/gc/idle_reclaim.rs -->
+have passed since that collection was observed, it opens a full budgeted cycle
+with the block-pool drain armed and steps it in 4000 µs
+<!-- gc-fact: IDLE_RECLAIM_SLICE_US = 4_000 in crates/perry-runtime/src/gc/idle_reclaim.rs -->
+slices, returning to the loop the moment a wake is pending. Two reducer fulls
+are never closer than 10000 ms
+<!-- gc-fact: IDLE_RECLAIM_MIN_INTERVAL_MS = 10_000 in crates/perry-runtime/src/gc/idle_reclaim.rs -->
+apart. A full that lowers old-gen occupancy by less than 5 percent
+<!-- gc-fact: IDLE_RECLAIM_PRODUCTIVE_PCT = 5 in crates/perry-runtime/src/gc/idle_reclaim.rs -->
+of what it started with (or by less than 4 MiB
+<!-- gc-fact: IDLE_RECLAIM_PRODUCTIVE_MIN_BYTES = 4 * 1024 * 1024 in crates/perry-runtime/src/gc/idle_reclaim.rs -->
+) doubles the number of collections required before the next attempt, up to 32
+<!-- gc-fact: IDLE_RECLAIM_MAX_BACKOFF_SHIFT = 5 in crates/perry-runtime/src/gc/idle_reclaim.rs -->
+(two to that power); a productive full resets the requirement to one. The same
+slicing finishes a budgeted cycle the pacer left open when the mutator went
+quiet. `PERRY_GC_DIAG=1` reports the reducer's counters on the
+`[gc-idle-reclaim]` exit line, and `PERRY_GC_IDLE_RECLAIM=0` disables it.
+<!-- gc-symbol: idle_reclaim_runs_a_full_at_the_park_when_owed in crates/perry-runtime/src/gc/tests/idle_reclaim.rs -->
+<!-- gc-symbol: kill_switch_off_leaves_the_heap_alone in crates/perry-runtime/src/gc/tests/idle_reclaim.rs -->
 
 ## Supported controls
 
@@ -203,7 +237,7 @@ Rooting stress uses `PERRY_GC_SCHEDULE_SEED`,
 `PERRY_GC_FROMSPACE_SCAN`, and `PERRY_GC_FROMSPACE_SCAN_ABORT`. Their exact
 contracts and non-vacuity requirements live in the
 [rooting invariant](gc-rooting-invariant.md). Research/bisection controls such
-as `PERRY_GC_INCREMENTAL`,
+as `PERRY_GC_INCREMENTAL`, `PERRY_GC_IDLE_RECLAIM`,
 `PERRY_GC_MAJOR_PACING_FLOOR_MB`, `PERRY_GC_MAJOR_PACING_GROWTH`,
 `PERRY_GC_MOVING_SAFEPOINT`, `PERRY_GC_MOVING_LOOP_POLLS`,
 `PERRY_GC_SAFEPOINT_ONLY`, and `PERRY_STACKMAP_WALKER` are accepted but are not
