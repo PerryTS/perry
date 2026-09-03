@@ -1566,7 +1566,7 @@ pub unsafe extern "C" fn js_net_process_pending() -> i32 {
 }
 
 mod socket_events;
-use socket_events::*;
+pub use socket_events::js_ext_net_drain_pending;
 
 mod handle_exports;
 use handle_exports::listeners_for;

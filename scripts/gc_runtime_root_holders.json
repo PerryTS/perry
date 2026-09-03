@@ -78,7 +78,7 @@
       "why": "pending_events(): Vec<PendingNetEvent>; every variant carries socket/server ids, Bytes, String, bool, or DropInfo (SocketAddrs) \u2014 no closures or NaN-boxed values. Listener closures live in listeners(), visited by scan_net_roots."
     },
     {
-      "file": "crates/perry-ext-net/src/lib.rs",
+      "file": "crates/perry-ext-net/src/socket_events.rs",
       "name": "SCRATCH",
       "verdict": "not_a_gc_pointer",
       "why": "Drain-side reusable Vec<PendingNetEvent> inside js_ext_net_drain_pending; same payload as P (ids/Bytes/strings), emptied within the drain call. No JS values."
