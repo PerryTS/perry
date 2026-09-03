@@ -112,6 +112,18 @@ pub(super) fn try_imported_module_dispatch(
                 if module_name == "bun:ffi" && imported_method == Some("read") {
                     return Ok(Err(args));
                 }
+                // `import { YAML } from "bun"; YAML.parse(...)` and the other
+                // #9600 value namespaces call closures stored on that value.
+                // Do not reinterpret `.parse`/`.order`/`.xxHash64` as a
+                // top-level `bun` native method.
+                if module_name == "bun"
+                    && matches!(
+                        imported_method,
+                        Some("YAML" | "TOML" | "semver" | "JSONL" | "hash")
+                    )
+                {
+                    return Ok(Err(args));
+                }
                 if module_name.strip_prefix("node:").unwrap_or(module_name) == "vm"
                     && imported_method.is_none()
                     && method_name == "Module"

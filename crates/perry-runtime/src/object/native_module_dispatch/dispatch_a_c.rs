@@ -274,6 +274,16 @@ pub(crate) unsafe fn nm_dispatch_bun(ctx: &NmCtx, module_name: &str, method_name
     match (module_name, method_name) {
         ("bun", "stringWidth") => crate::bun_compat::js_bun_string_width(arg(0), arg(1)),
         ("bun", "hash") => crate::bun_compat::js_bun_hash(arg(0), arg(1)),
+        ("bun", "deepEquals") => crate::bun_compat::js_bun_deep_equals(arg(0), arg(1), arg(2)),
+        ("bun", "stripANSI") => crate::bun_compat::js_bun_strip_ansi(arg(0)),
+        ("bun", "wrapAnsi") => crate::bun_compat::js_bun_wrap_ansi(arg(0), arg(1), arg(2)),
+        ("bun", "which") => crate::bun_compat::js_bun_which(arg(0), arg(1)),
+        ("bun", "zstdDecompress") => crate::bun_compat::js_bun_zstd_decompress(arg(0)),
+        ("bun", "zstdDecompressSync") => crate::bun_compat::js_bun_zstd_decompress_sync(arg(0)),
+        ("bun", "gc") => crate::bun_compat::js_bun_gc(arg(0)),
+        ("bun", "generateHeapSnapshot") => {
+            crate::bun_compat::js_bun_generate_heap_snapshot(arg(0), arg(1))
+        }
         ("bun", "file") => crate::bun_compat::js_bun_file(arg(0)),
         ("bun", "write") => crate::bun_compat::js_bun_write(arg(0), arg(1)),
         ("bun", "Glob") => crate::bun_compat::js_bun_glob_new(arg(0)),

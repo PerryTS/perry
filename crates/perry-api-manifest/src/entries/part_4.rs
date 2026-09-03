@@ -1102,6 +1102,14 @@ pub(crate) const API_MANIFEST_PART_4: &[ApiEntry] = &[
     // Implementation: perry-runtime `bun_compat`.
     method("bun", "stringWidth", false, None),
     method("bun", "hash", false, None),
+    method("bun", "deepEquals", false, None),
+    method("bun", "stripANSI", false, None),
+    method("bun", "wrapAnsi", false, None),
+    method("bun", "which", false, None),
+    method("bun", "zstdDecompress", true, None),
+    method("bun", "zstdDecompressSync", false, None),
+    method("bun", "gc", false, None),
+    method("bun", "generateHeapSnapshot", false, None),
     method("bun", "file", false, None),
     method("bun", "write", false, None),
     method("bun", "pathToFileURL", false, None),
@@ -1116,6 +1124,10 @@ pub(crate) const API_MANIFEST_PART_4: &[ApiEntry] = &[
     property("bun", "stderr"),
     property("bun", "version"),
     property("bun", "isStandaloneExecutable"),
+    property("bun", "YAML"),
+    property("bun", "TOML"),
+    property("bun", "semver"),
+    property("bun", "JSONL"),
     // --- qs (issue #8751) ---
     // Native nested query-string codec. This keeps Stripe's request encoder
     // off qs' legacy get-intrinsic/ES-shims dependency chain.

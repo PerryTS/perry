@@ -20,6 +20,10 @@
 //! - `Bun.hash` is Zig-std Wyhash (see `wyhash.rs`) returning a BigInt, so
 //!   `.toString(16)` cache keys match bun-run installs.
 
+#[cfg(feature = "bun-cli-utils")]
+mod cli_utils;
+#[cfg(not(feature = "bun-cli-utils"))]
+mod cli_utils_stub;
 mod glob;
 mod string_width;
 mod width_tables;
@@ -36,6 +40,10 @@ use crate::string::{js_string_from_bytes, StringHeader};
 use crate::value::{js_jsvalue_to_string, JSValue};
 use std::io::{Read, Write};
 
+#[cfg(feature = "bun-cli-utils")]
+pub use cli_utils::*;
+#[cfg(not(feature = "bun-cli-utils"))]
+pub use cli_utils_stub::*;
 pub use glob::js_bun_glob_new;
 pub use string_width::bun_string_width;
 pub use wyhash::wyhash;

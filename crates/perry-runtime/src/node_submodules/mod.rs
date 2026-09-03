@@ -109,7 +109,7 @@ macro_rules! thunk {
 }
 
 pub(crate) mod blob;
-mod consumers;
+pub(crate) mod consumers;
 mod fs_promises;
 mod hono_jsx;
 mod stream_promises;

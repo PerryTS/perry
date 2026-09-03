@@ -1298,6 +1298,12 @@ fn collect_module_one(
                 // panic = "unwind" when this is set.
                 ctx.needs_thread = true;
             }
+            // Runtime-only Bun imports do not satisfy `requires_stdlib`, but
+            // #9600's parser/compression backends are an optional runtime
+            // feature and therefore still need an auto-optimize marker.
+            if import.source == "bun" {
+                ctx.native_module_imports.insert("bun".to_string());
+            }
             if perry_hir::requires_stdlib(&import.source) {
                 ctx.needs_stdlib = true;
                 // Track for `--minimal-stdlib` feature computation. Strip

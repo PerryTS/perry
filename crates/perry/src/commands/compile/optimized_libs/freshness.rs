@@ -221,6 +221,9 @@ pub(crate) fn auto_optimized_cross_features(
     if !ctx.native_addons.is_empty() {
         cross_features.push("perry-runtime/node-api-host".to_string());
     }
+    if ctx.bun_platform || ctx.native_module_imports.contains("bun") {
+        cross_features.push("perry-runtime/bun-cli-utils".to_string());
+    }
     // Binary-size feature gating (kept in sync with the inline list on `main`):
     // each engine/table is linked only when the program actually uses it.
     if ctx.uses_regex {

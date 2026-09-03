@@ -3,10 +3,13 @@
 fn native_callable_export_arity_reference(module: &str, prop: &str) -> Option<u32> {
     match (module, prop) {
         // Bun global/module surface (#9599).
-        ("bun", "Glob" | "file" | "fileURLToPath" | "hash" | "pathToFileURL" | "stringWidth") => {
-            Some(1)
-        }
-        ("bun", "write") => Some(2),
+        (
+            "bun",
+            "Glob" | "file" | "fileURLToPath" | "gc" | "hash" | "pathToFileURL" | "stringWidth"
+            | "stripANSI" | "which" | "zstdDecompress" | "zstdDecompressSync",
+        ) => Some(1),
+        ("bun", "deepEquals" | "generateHeapSnapshot" | "write") => Some(2),
+        ("bun", "wrapAnsi") => Some(3),
         // bun:ffi (#6562).
         ("bun:ffi", "dlopen") => Some(2),
         ("bun:ffi", "ptr" | "CString" | "CFunction" | "linkSymbols") => Some(1),
@@ -287,12 +290,20 @@ static CALLABLE_EXPORT_ARITY_TABLE: &[(&str, &[(&str, u32)])] = &[
         "bun",
         &[
             ("Glob", 1),
+            ("deepEquals", 2),
             ("file", 1),
             ("fileURLToPath", 1),
+            ("gc", 1),
+            ("generateHeapSnapshot", 2),
             ("hash", 1),
             ("pathToFileURL", 1),
             ("stringWidth", 1),
+            ("stripANSI", 1),
+            ("which", 1),
+            ("wrapAnsi", 3),
             ("write", 2),
+            ("zstdDecompress", 1),
+            ("zstdDecompressSync", 1),
         ],
     ),
     (

@@ -22,7 +22,7 @@ crate-type = ["rlib"]
 # actually needs (see optimized_libs.rs), so the heavy subsystems below
 # (regex engine, Temporal, URL/IDNA, normalize, segmenter) are *opt-in per
 # app* and absent from binaries that never use them.
-default = ["full", "regex-engine", "temporal", "url-engine", "string-normalize", "intl-segmenter", "intl-namespace", "global-math", "global-json", "global-reflect", "global-atomics", "global-url", "global-text", "global-websocket", "global-webcrypto", "global-webfetch", "proc-ipc", "intl-locale", "intl-datetime", "diagnostics", "mod-dgram", "mod-http2-constants", "mod-node-test", "dyn-eval", "keepalive-anchors", "alloc-mimalloc"]
+default = ["full", "regex-engine", "temporal", "url-engine", "string-normalize", "intl-segmenter", "intl-namespace", "global-math", "global-json", "global-reflect", "global-atomics", "global-url", "global-text", "global-websocket", "global-webcrypto", "global-webfetch", "proc-ipc", "intl-locale", "intl-datetime", "diagnostics", "mod-dgram", "mod-http2-constants", "mod-node-test", "bun-cli-utils", "dyn-eval", "keepalive-anchors", "alloc-mimalloc"]
 # Compile the ~490 `#[used]` keep-alive anchor statics (`KEEP_*`, `keep!`,
 # `K*`/`G*` fn-pointer statics) that pin codegen-facing `#[no_mangle]` entry
 # points so they survive into the staticlib archive. Without these anchors,
@@ -105,6 +105,17 @@ mod-http2-constants = []
 # `process.getBuiltinModule` (whose target is only known at runtime), the same
 # way `mod-http2-constants` does. Pure cfg gate, no extra deps.
 mod-node-test = []
+# Bun's small data/CLI utility pack (#9600): YAML/TOML parsing, node-semver
+# compatible ranges, xxHash64, and zstd decompression. The compiler enables
+# this as a unit whenever the `"bun"` module or the opt-in Bun global is used;
+# unrelated auto-optimized binaries do not compile or link these backends.
+bun-cli-utils = [
+    "dep:node-semver",
+    "dep:toml",
+    "dep:unsafe-libyaml",
+    "dep:xxhash-rust",
+    "dep:zstd",
+]
 # Cold-path diagnostic JSON serializers (~67 KB of code + the `serde_json`
 # pulled only by them, which dead-strips when unreferenced): GC cycle telemetry
 # (`PERRY_GC_DIAG`), typed-feedback trace dump (`PERRY_TYPED_FEEDBACK`), the v8
@@ -310,6 +321,11 @@ lazy_static.workspace = true
 # only on swc + perry-diagnostics — no cycle back into perry-runtime.
 perry-parser = { path = "../perry-parser", optional = true }
 perry-diagnostics = { path = "../perry-diagnostics", optional = true }
+node-semver = { version = "2.2.0", optional = true }
+toml = { workspace = true, optional = true }
+unsafe-libyaml = { version = "0.2.11", optional = true }
+xxhash-rust = { version = "0.8.15", features = ["xxh64"], optional = true }
+zstd = { workspace = true, optional = true }
 
 # TC39 Temporal API (#4686). Pure-Rust date/time engine (the same one V8
 # uses). We write no calendar/duration/timezone math — temporal_rs owns it;
