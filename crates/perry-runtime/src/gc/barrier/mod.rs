@@ -310,6 +310,27 @@ pub(super) struct RememberedSetRootMarkState {
 
 impl RememberedSetRootMarkState {
     pub(super) fn new() -> Self {
+        Self::new_with_marking(true)
+    }
+
+    /// #9629: a FULL trace visits the old generation from the real root set,
+    /// so every young object a LIVE old object points at is reached anyway.
+    /// Marking from the remembered set on top of that adds exactly one thing:
+    /// the young objects reachable only from old objects that are themselves
+    /// DEAD. `DirtyHeaderSlotScan::new` validates that the dirty page's header
+    /// is a plausible pointer (`valid_ptrs`), never that it is live, so a dead
+    /// old owner's slots are marked as roots like any other.
+    ///
+    /// `mark = false` therefore skips the marking for full traces while still
+    /// taking the snapshot, which is NOT optional: `remembered_dirty_snapshot`
+    /// is what lazily arms the write barrier and reconstructs the log from the
+    /// heap (`barrier_arming::arm_and_reconstruct_remembered_set_if_unarmed`).
+    /// Skipping the snapshot as well would leave a thread's old-to-young
+    /// stores unlogged, which fails in the opposite and far worse direction.
+    ///
+    /// A minor keeps marking: it deliberately does not trace the old
+    /// generation, so there old-to-young edges genuinely are roots.
+    pub(super) fn new_with_marking(mark: bool) -> Self {
         let snapshot = remembered_dirty_snapshot();
         let stats = RememberedSetTraceStats {
             entries_scanned: snapshot.dirty_old_pages.len()
@@ -322,7 +343,7 @@ impl RememberedSetRootMarkState {
         let old_page_cursor = (!snapshot.dirty_old_pages.is_empty())
             .then(|| crate::arena::OldArenaPageObjectCursor::new(&snapshot.dirty_old_pages));
 
-        Self {
+        let mut state = Self {
             snapshot,
             stats,
             old_page_cursor,
@@ -331,7 +352,17 @@ impl RememberedSetRootMarkState {
             seen_headers: crate::fast_hash::new_ptr_hash_set(),
             current_header: None,
             finalized: false,
+        };
+        if !mark {
+            // Snapshot taken (barrier armed, log reconstructed); mark nothing.
+            // The reported set size stays truthful — only `newly_marked` is 0.
+            state.old_page_cursor = None;
+            state.external_cursor = state.snapshot.external_dirty_entries.len();
+            state.fallback_cursor = state.snapshot.fallback_headers.len();
+            state.stats.dirty_pages_after = remembered_dirty_page_count();
+            state.finalized = true;
         }
+        state
     }
 
     pub(super) fn step(&mut self, valid_ptrs: &ValidPointerSet, budget: usize) -> bool {

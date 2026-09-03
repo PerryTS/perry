@@ -1,5 +1,7 @@
 use super::barrier::{ConservativePinClearState, RememberedSetClearState};
-use super::cycle_malloc_trim::{run_allocator_purge, run_malloc_trim};
+use super::cycle_malloc_trim::{
+    block_persist_always_enabled, run_allocator_purge, run_malloc_trim,
+};
 use super::*;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -530,16 +532,21 @@ struct RootScanCycleState {
     mutable_registered: Option<MutableRegisteredRootScanState>,
     legacy_registered: Option<LegacyRegisteredRootScanState>,
     remembered_set: Option<RememberedSetRootMarkState>,
+    /// #9629: whether this cycle's trace stops at the old generation. Only a
+    /// minor needs the remembered set marked as roots; see the
+    /// `RememberedSet` subphase.
+    minor_only: bool,
 }
 
 impl RootScanCycleState {
-    fn new() -> Self {
+    fn new(minor_only: bool) -> Self {
         Self {
             subphase: RootScanSubphase::ConservativeStack,
             mutable_slot_cursor: MutableRootSlotScanCursor::default(),
             mutable_registered: None,
             legacy_registered: None,
             remembered_set: None,
+            minor_only,
         }
     }
 
@@ -667,9 +674,15 @@ impl RootScanCycleState {
                 false
             }
             RootScanSubphase::RememberedSet => {
-                let state = self
-                    .remembered_set
-                    .get_or_insert_with(RememberedSetRootMarkState::new);
+                // #9629: only a MINOR needs old->young edges as roots; a full
+                // trace reaches them through the live old objects themselves,
+                // and marking from the set additionally retains whatever only
+                // DEAD old objects point at. The snapshot is still taken (it
+                // arms the write barrier) — see `new_with_marking`.
+                let mark_from_set = self.minor_only;
+                let state = self.remembered_set.get_or_insert_with(|| {
+                    RememberedSetRootMarkState::new_with_marking(mark_from_set)
+                });
                 if state.step(valid_ptrs, budget) {
                     if let Some(trace) = trace.as_mut() {
                         trace.remembered_set = state.stats();
@@ -1108,7 +1121,9 @@ impl GcCycleState {
             .as_ref()
             .is_some_and(|minor| minor.evacuation_policy.considered);
 
-        self.root_scan.get_or_insert_with(RootScanCycleState::new);
+        let minor_only = matches!(self.collection_kind, GcCollectionKind::Minor);
+        self.root_scan
+            .get_or_insert_with(|| RootScanCycleState::new(minor_only));
         // Phase 4 (incremental old-gen, gated): allow the initial root-scan step
         // of a budgeted cycle to run unbudgeted scanners synchronously (a
         // bounded initial-mark pause), so the stepper can start on programs that
@@ -1166,6 +1181,57 @@ impl GcCycleState {
         trace_phase_record(&mut self.trace, "trace_worklist", phase_start);
     }
 
+    /// Is the block-persistence pass redundant for THIS cycle? (#9628)
+    ///
+    /// The pass exists for one hazard, stated at
+    /// `trace::mark_block_persisting_arena_objects`: an object that the
+    /// mutator still holds **in a register** and will store somewhere after
+    /// the collection returns, which the root scan cannot see. Its arena block
+    /// survives (block reset is all-or-nothing and a neighbour is reachable),
+    /// so the object's own memory is intact — but its individually-swept
+    /// malloc children are freed under it, and the mutator then reads freed
+    /// memory. Issues #43/#44.
+    ///
+    /// So the question the pass should ask is "can a root-invisible register
+    /// hold a live object here?", and the answer is no in three cases:
+    ///
+    /// * the conservative stack+register scan RAN, which pins exactly those
+    ///   objects — the original condition, and the only one this used to test;
+    /// * no generated frame is live on this thread, so there is no register
+    ///   holding a JS value at all. This is verbatim the completeness argument
+    ///   `pressure.rs` already makes for skipping `force_full_scan`;
+    /// * the collection is an explicit `gc()`. A call is a statepoint: every
+    ///   value live across it is rooted by codegen, because it has to survive
+    ///   the call whether or not the call collects. That is #7558's argument
+    ///   for dropping the conservative scan from `manual_gc_collect_now`, and
+    ///   it is the same argument.
+    ///
+    /// Before this, only the first case skipped, so the modern precise-root
+    /// paths — every explicit `gc()` and every safepoint-driven collection —
+    /// ran the pass and force-marked their recent window. That is not a small
+    /// effect: the pass pushes each resurrected object onto the trace
+    /// worklist, so it also retains everything reachable FROM the dead
+    /// objects. Measured on a 30-line fixture that drops 11,000 objects and
+    /// calls `gc()`: 13,364 objects force-marked, none reachable from a root.
+    ///
+    /// `PERRY_GC_BLOCK_PERSIST_ALWAYS=1` restores the pre-#9628 behaviour for
+    /// bisection.
+    fn block_persistence_is_redundant(&self) -> bool {
+        if block_persist_always_enabled() {
+            return false;
+        }
+        if matches!(
+            super::roots::conservative_stack_scan_decision(),
+            super::roots::ConservativeStackScanDecision::Scan
+        ) {
+            return true;
+        }
+        if !super::roots::shadow_stack_has_active_frame() {
+            return true;
+        }
+        matches!(self.trigger_kind, GcTriggerKind::Manual)
+    }
+
     fn step_block_persistence(&mut self, budget: GcWorkBudget) {
         // #6010: block persistence exists to protect REGISTER-HELD recent
         // objects that precise (shadow-stack) roots can't see (#43/#44). A
@@ -1178,10 +1244,7 @@ impl GcCycleState {
         // window, which made garbage there immortal — dead Maps/Sets kept
         // multi-MB external buffers for the life of the process (#6010:
         // 1.4 GB RSS on a Map-churn benchmark whose live heap was ~1 MB).
-        if matches!(
-            super::roots::conservative_stack_scan_decision(),
-            super::roots::ConservativeStackScanDecision::Scan
-        ) {
+        if self.block_persistence_is_redundant() {
             self.phase = GcCyclePhase::AtomicFinalize;
             return;
         }
@@ -1281,7 +1344,10 @@ impl GcCycleState {
                     let _remark_timer = instruments::FinalRemarkTimer::start();
                     let valid_ptrs = self.valid_ptrs.as_ref().expect("valid pointer set built");
                     let minor_only = self.minor.is_some();
-                    let remark_scan = self.root_scan.get_or_insert_with(RootScanCycleState::new);
+                    let remark_minor_only = matches!(self.collection_kind, GcCollectionKind::Minor);
+                    let remark_scan = self
+                        .root_scan
+                        .get_or_insert_with(|| RootScanCycleState::new(remark_minor_only));
                     while !remark_scan.step_current_subphase(
                         valid_ptrs,
                         &mut self.trace,

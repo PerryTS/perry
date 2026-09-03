@@ -8,6 +8,7 @@ mod budgeted_step_api;
 mod buffer_bound_method_name;
 mod buffer_side_tables;
 mod census;
+mod retention_9628_9629;
 mod concat_site;
 mod contract;
 mod copying;

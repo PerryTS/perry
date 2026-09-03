@@ -122,6 +122,15 @@ pub(super) fn run_allocator_purge(major: bool) -> MallocTrimOutcome {
     }
 }
 
+/// `PERRY_GC_BLOCK_PERSIST_ALWAYS` — OFF by default. Set it to run the
+/// block-persistence pass on every cycle again, i.e. the behaviour before
+/// #9628 taught it to skip cycles whose root set is complete. Bisection knob;
+/// see `cycle::GcCycleState::block_persistence_is_redundant`.
+pub(super) fn block_persist_always_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| crate::gc::env_flag_enabled("PERRY_GC_BLOCK_PERSIST_ALWAYS"))
+}
+
 /// `PERRY_GC_MALLOC_PURGE` — ON by default; `=0`/`off`/`false` disables the
 /// mimalloc purge above and restores the pre-#9612 behaviour.
 fn allocator_purge_enabled() -> bool {
