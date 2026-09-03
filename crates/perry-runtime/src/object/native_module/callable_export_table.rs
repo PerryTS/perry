@@ -89,6 +89,7 @@ pub(super) static CALLABLE_EXPORT_TABLE: &[(&str, &[&str])] = &[
             "fileURLToPath",
             "hash",
             "pathToFileURL",
+            "serve",
             "stringWidth",
             "write",
         ],

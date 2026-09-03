@@ -79,6 +79,7 @@ pub(super) fn try_module_static_methods(
                             | "hash"
                             | "file"
                             | "write"
+                            | "serve"
                             | "pathToFileURL"
                             | "fileURLToPath"
                     ) {

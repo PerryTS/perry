@@ -39,6 +39,12 @@ pub use dispatch::*;
 mod body_metadata;
 pub use body_metadata::*;
 
+// Bridge used by perry-ext-http's Bun.serve adapter. The ext crate owns the
+// listener, while this module owns the Fetch Request/Response registries; the
+// small JSON ABI keeps those ownership boundaries intact.
+mod bun_server_bridge;
+pub use bun_server_bridge::*;
+
 // GC root scanner for the heap values the Fetch registries hold (#8163):
 // the two bound-method caches and `RequestRecord::signal`. Same
 // child-module/`use super::*` contract as `headers`.

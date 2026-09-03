@@ -272,13 +272,13 @@ fn unsupported_bun_calls_fail_explicitly() {
     let stdout = compile_and_run(
         r#"
 try {
-  Bun.serve({ port: 0 });
+  Bun.spawn(["echo", "hello"]);
 } catch (error: any) {
   console.log(error.name, error.message);
 }
 "#,
     );
-    assert_eq!(stdout, "Error Bun.serve is not supported by Perry\n");
+    assert_eq!(stdout, "Error Bun.spawn is not supported by Perry\n");
 }
 
 #[test]

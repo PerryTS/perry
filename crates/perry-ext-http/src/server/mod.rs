@@ -52,6 +52,7 @@ use std::sync::Once;
 
 use perry_ffi::{gc_register_mutable_root_scanner_named, iter_handles_of_mut, GcRootVisitor};
 
+mod bun_server;
 mod cluster_bind;
 mod dispatch_ext;
 mod handle_dispatch;
@@ -124,6 +125,7 @@ fn scan_http_server_roots(visitor: &mut GcRootVisitor<'_>) {
 
     fn scan_base_server_roots(server: &mut HttpServer, visitor: &mut GcRootVisitor<'_>) {
         visitor.visit_i64_slot(&mut server.handler);
+        visitor.visit_i64_slot(&mut server.bun_error_handler);
         scan_listener_roots(&mut server.listeners, visitor);
         scan_listener_roots(&mut server.once_listeners, visitor);
         // #4903 — listen callbacks queued for the deferred `'listening'`
@@ -189,6 +191,7 @@ fn scan_http_server_roots(visitor: &mut GcRootVisitor<'_>) {
     // Closures parked in the HTTP/2 pending-event queue between a JS-side
     // `session.close/settings/ping(cb)` and the main-thread drain.
     http2_server::scan_h2_pending_event_roots(visitor);
+    bun_server::scan_pending_roots(visitor);
 }
 
 #[cfg(test)]

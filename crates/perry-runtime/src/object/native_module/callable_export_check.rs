@@ -38,7 +38,14 @@ pub(crate) fn is_native_module_callable_export_reference(module: &str, prop: &st
     if module == "bun"
         && matches!(
             prop,
-            "Glob" | "file" | "fileURLToPath" | "hash" | "pathToFileURL" | "stringWidth" | "write"
+            "Glob"
+                | "file"
+                | "fileURLToPath"
+                | "hash"
+                | "pathToFileURL"
+                | "serve"
+                | "stringWidth"
+                | "write"
         )
     {
         return true;

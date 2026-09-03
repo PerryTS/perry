@@ -160,6 +160,14 @@ pub struct HttpServer {
     /// `true` (refed), matching Node where a fresh server holds the loop
     /// open once it's listening.
     pub refed: bool,
+    /// `Bun.serve` marks its backing `HttpServer` so pending requests use the
+    /// Fetch Request/Response adapter instead of Node's `(req, res)` callback.
+    pub is_bun_server: bool,
+    /// Optional `Bun.serve({ error })` callback. `handler` stores the required
+    /// `fetch` callback; both raw closure addresses are pinned by the scanner.
+    pub bun_error_handler: i64,
+    /// Observable `Server.development` option.
+    pub bun_development: bool,
 }
 
 impl HttpServer {
@@ -195,6 +203,9 @@ impl HttpServer {
             keep_alive_initial_delay: 0.0,
             connections_checking_interval_destroyed: false,
             refed: true,
+            is_bun_server: false,
+            bun_error_handler: 0,
+            bun_development: false,
         }
     }
 }
@@ -1505,6 +1516,10 @@ pub extern "C" fn js_node_http_server_process_pending() -> i32 {
     // `perry_ffi::drain_quarantined_handles`.)
     perry_ffi::drain_quarantined_handles();
 
+    // Settle `Bun.serve` fetch/error promises before the ordinary in-flight
+    // reaper observes their ServerResponse handles.
+    count += crate::server::bun_server::process_pending_promises();
+
     // #4728 — finalize any async-handler requests that have flushed their
     // response since the last tick (or timed out) before draining new ones.
     reap_in_flight_requests();
@@ -1675,6 +1690,10 @@ pub(crate) fn try_recv_pending_nonblocking(server_handle: i64) -> Option<HttpPen
 /// expected to call `res.end(...)` itself; the response oneshot
 /// fires from inside `js_node_http_res_end`.
 fn process_pending(pending: HttpPendingRequest) {
+    if crate::server::bun_server::is_bun_server(pending.server_handle) {
+        crate::server::bun_server::process_request(pending);
+        return;
+    }
     let incoming_async_id = unsafe {
         crate::js_async_hooks_provider_init(
             b"HTTPINCOMINGMESSAGE".as_ptr(),

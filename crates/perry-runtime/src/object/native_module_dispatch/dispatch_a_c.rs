@@ -272,6 +272,30 @@ pub(crate) unsafe fn nm_dispatch_bun(ctx: &NmCtx, module_name: &str, method_name
         typed_kind
     );
     match (module_name, method_name) {
+        ("bun", "serve") => {
+            let ptr =
+                crate::value::JS_NATIVE_HTTP_DISPATCH.load(std::sync::atomic::Ordering::SeqCst);
+            if ptr.is_null() {
+                f64::from_bits(JSValue::undefined().bits())
+            } else {
+                let dispatch: unsafe extern "C" fn(
+                    *const u8,
+                    usize,
+                    *const u8,
+                    usize,
+                    *const f64,
+                    usize,
+                ) -> f64 = std::mem::transmute(ptr);
+                dispatch(
+                    module_name.as_ptr(),
+                    module_name.len(),
+                    method_name.as_ptr(),
+                    method_name.len(),
+                    args_ptr,
+                    args_len,
+                )
+            }
+        }
         ("bun", "stringWidth") => crate::bun_compat::js_bun_string_width(arg(0), arg(1)),
         ("bun", "hash") => crate::bun_compat::js_bun_hash(arg(0), arg(1)),
         ("bun", "file") => crate::bun_compat::js_bun_file(arg(0)),

@@ -11,6 +11,17 @@ pub(crate) const BUN_ROWS: &[NativeModSig] = &[
     NativeModSig {
         module: "bun",
         has_receiver: false,
+        method: "serve",
+        class_filter: None,
+        // The listener lives in perry-ext-http and returns a native server
+        // handle, reusing the same event-loop pump as node:http.
+        runtime: "js_bun_serve",
+        args: &[NA_F64],
+        ret: NR_PTR,
+    },
+    NativeModSig {
+        module: "bun",
+        has_receiver: false,
         method: "stringWidth",
         class_filter: None,
         runtime: "js_bun_string_width",

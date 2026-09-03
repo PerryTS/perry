@@ -98,14 +98,9 @@ console.log(Bun?.stringWidth?.("abcde"));
 console.log(typeof Bun.version, Bun.version.length > 0);
 console.log(Bun.isStandaloneExecutable);
 console.log(typeof Bun.notImplemented);
+console.log(typeof Bun.serve);
 const keys = Object.keys(Bun);
-console.log(keys.includes("stringWidth"), keys.includes("version"));
-
-try {
-  Bun.serve();
-} catch (error: any) {
-  console.log(error.message === "Bun.serve is not supported by Perry");
-}
+console.log(keys.includes("stringWidth"), keys.includes("version"), keys.includes("serve"));
 
 function scoped() {
   const Bun = { stringWidth: (_value: string) => 99 };
@@ -131,8 +126,8 @@ function
 string true
 true
 undefined
-true true
-true
+function
+true true true
 99
 ";
     assert_eq!(run(&output, dir.path()), expected);

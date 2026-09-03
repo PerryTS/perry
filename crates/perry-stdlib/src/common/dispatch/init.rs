@@ -220,6 +220,7 @@ unsafe extern "C" fn js_node_http_native_dispatch(
 ) -> f64 {
     use perry_runtime::JSValue;
     extern "C" {
+        fn js_bun_serve(options: f64) -> i64;
         fn js_node_http_create_server_with_options(first_arg: f64, second_arg: f64) -> i64;
         fn js_node_http_outgoing_message_new() -> i64;
         fn js_node_https_create_server(opts_f64: f64, handler: i64) -> i64;
@@ -245,6 +246,14 @@ unsafe extern "C" fn js_node_http_native_dispatch(
             undefined
         }
     };
+    if module == "bun" && method == "serve" {
+        let handle = js_bun_serve(arg(0));
+        return if handle == 0 {
+            undefined
+        } else {
+            perry_runtime::js_nanbox_pointer(handle)
+        };
+    }
     if module == "http" && method == "OutgoingMessage" {
         let handle = js_node_http_outgoing_message_new();
         return if handle == 0 {
