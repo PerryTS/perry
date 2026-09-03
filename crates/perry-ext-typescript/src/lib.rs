@@ -6,6 +6,8 @@
 //! exposes the audited `transpileModule` and `flattenDiagnosticMessageText`
 //! surface using SWC, which Perry already uses for source parsing.
 
+mod bun;
+
 use perry_ffi::{alloc_string, json_stringify, read_string, JsString, JsValue, StringHeader};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

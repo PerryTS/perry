@@ -644,6 +644,9 @@ const EXT_PREFIX_REGISTRY: &[(&str, &str)] = &[
     ("js_node_forge_", "node-forge"),
     // Native runtime TypeScript transpilation subset (#8511).
     ("js_typescript_", "typescript"),
+    // Bun runtime transpilation/build subset shares the pinned SWC wrapper.
+    ("js_bun_transpiler_", "typescript"),
+    ("js_bun_build", "typescript"),
     ("js_qs_",         "qs"),
 ];
 

@@ -125,6 +125,7 @@ pub(super) fn lower_builtin_new<'a>(
         "Decimal" => Some(&["decimal.js"]),
         "RateLimiterMemory" => Some(&["rate-limiter-flexible"]),
         "CronJob" => Some(&["cron", "node-cron"]),
+        "Transpiler" => Some(&["bun"]),
         _ => None,
     };
     if let Some(sources) = required_sources {
@@ -133,6 +134,14 @@ pub(super) fn lower_builtin_new<'a>(
         }
     }
     match class_name {
+        "Transpiler" => {
+            let options = adopt_leading_arg_discard_rest(ctx, args, group)?;
+            ctx.pending_declares
+                .push(("js_bun_transpiler_new".to_string(), I64, vec![DOUBLE]));
+            let block = ctx.block();
+            let handle = block.call(I64, "js_bun_transpiler_new", &[(DOUBLE, &options)]);
+            Ok(Some(nanbox_pointer_inline(block, &handle)))
+        }
         "Resolver"
             if import_src.is_some_and(|source| {
                 matches!(

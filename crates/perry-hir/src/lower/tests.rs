@@ -1857,6 +1857,33 @@ fn typescript_transpile_subset_lowers_to_native_dispatch_and_enums() {
     );
 }
 
+/// #9602: Bun's runtime compiler surface stays on native calls; neither the
+/// source string nor a plugin object is handed to Perry's JS-module fallback.
+#[test]
+fn bun_transpiler_and_build_lower_to_native_dispatch() {
+    let source = r#"
+        import { Transpiler, build } from "bun";
+        const transpiler = new Transpiler({ loader: "ts" });
+        const output = transpiler.transformSync("const n: number = 1");
+        const imports = transpiler.scanImports("import x from 'pkg'");
+        async function bundle() {
+            return await build({ entrypoints: ["./entry.ts"], target: "bun", format: "esm" });
+        }
+        console.log(output, imports, bundle);
+    "#;
+    let module = perry_parser::parse_typescript(source, "bun-runtime.ts").expect("source parses");
+    let hir = super::lower_module(&module, "bun-runtime", "bun-runtime.ts").expect("source lowers");
+    let dump = format!("{hir:?}");
+    assert!(
+        dump.contains("module: \"bun\"")
+            && dump.contains("class_name: Some(\"Transpiler\")")
+            && dump.contains("method: \"transformSync\"")
+            && dump.contains("method: \"scanImports\"")
+            && dump.contains("method: \"build\""),
+        "Bun runtime compiler APIs must use native dispatch: {dump}"
+    );
+}
+
 /// #8882: a module-level class constructing a sibling class that is declared
 /// inside a function body lowered LATER. This is the shape the CJS wrap
 /// produces for Next's `server/lib/lru-cache.js`: `LRUCache` is hoisted out of

@@ -86,6 +86,8 @@ pub(super) static CALLABLE_EXPORT_TABLE: &[(&str, &[&str])] = &[
         &[
             "Glob",
             "Terminal",
+            "Transpiler",
+            "build",
             "deepEquals",
             "file",
             "fileURLToPath",
