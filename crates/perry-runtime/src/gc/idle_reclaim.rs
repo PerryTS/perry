@@ -58,15 +58,29 @@
 //! 3. **Rate.** At least [`IDLE_RECLAIM_MIN_INTERVAL_MS`] since the reducer's
 //!    own last full started.
 //!
-//! **Productivity backoff.** A full that lowered old-gen occupancy by less than
-//! [`IDLE_RECLAIM_PRODUCTIVE_PCT`] percent of what it started with, or by less
-//! than [`IDLE_RECLAIM_PRODUCTIVE_MIN_BYTES`], doubles the activity requirement
+//! **Productivity backoff.** A full whose SWEEP freed less than
+//! [`IDLE_RECLAIM_PRODUCTIVE_PCT`] percent of the old-gen occupancy it started
+//! with, or less than [`IDLE_RECLAIM_PRODUCTIVE_MIN_BYTES`], doubles the
+//! activity requirement
 //! up to `2^`[`IDLE_RECLAIM_MAX_BACKOFF_SHIFT`] collections; a productive full
 //! resets it to one. This is what keeps a RETAINING idle heap (the TUI's
 //! six-second young-collection sawtooth) from paying a whole-heap mark per
 //! minor: after a few unproductive attempts the reducer runs once per ~32
 //! collections, and any burst — which produces many collections in a row —
 //! re-arms it promptly.
+//!
+//! The price is the cycle's own freed-bytes count and NOT the change in
+//! `arena::old_gen_in_use_bytes`, which is the sum of the live old blocks'
+//! bump offsets: a non-moving sweep hands dead objects to the old-gen free
+//! list and the block keeps its offset, so only a whole-block release moves
+//! that number. Pricing on it scored every full on a real workload
+//! unproductive — measured on the compiled claude-code TUI, two reducer fulls
+//! freed 2.37 MB and 0.51 MB while occupancy stood still at 93.6 MB with
+//! 50 MB already on the old-gen free list, and the reducer backed off to one
+//! attempt per four collections inside a minute of idle. Returning that free
+//! list to the OS needs compaction, which a budgeted (non-moving) cycle
+//! cannot do; the `reusable=` field on the `[gc-idle-reclaim] done` line
+//! reports how much is waiting for it.
 //!
 //! **Work cap.** While a cycle is open the hook never spends more than
 //! [`IDLE_RECLAIM_MAX_WORK_MS_PER_SECOND`] of any wall-clock second stepping
@@ -97,9 +111,9 @@ pub const IDLE_RECLAIM_QUIET_MS: u64 = 3_000;
 /// Minimum spacing between two reducer-started fulls.
 pub const IDLE_RECLAIM_MIN_INTERVAL_MS: u64 = 10_000;
 
-/// A reducer full counts as productive when it lowered old-gen occupancy by at
-/// least this many bytes AND by at least [`IDLE_RECLAIM_PRODUCTIVE_PCT`] percent
-/// of the occupancy it started with.
+/// A reducer full counts as productive when its sweep freed at least this many
+/// bytes AND at least [`IDLE_RECLAIM_PRODUCTIVE_PCT`] percent of the old-gen
+/// occupancy it started with.
 pub const IDLE_RECLAIM_PRODUCTIVE_MIN_BYTES: usize = 4 * 1024 * 1024;
 
 /// See [`IDLE_RECLAIM_PRODUCTIVE_MIN_BYTES`].
@@ -365,7 +379,14 @@ pub(super) fn note_cycle_completed(freed_bytes: u64) {
         let reclaimed = before.saturating_sub(after);
         OLD_RECLAIMED_BYTES.fetch_add(reclaimed as u64, Ordering::Relaxed);
         let bar = IDLE_RECLAIM_PRODUCTIVE_MIN_BYTES.max(before / 100 * IDLE_RECLAIM_PRODUCTIVE_PCT);
-        let productive = reclaimed >= bar;
+        // Price the full by what its sweep freed. `old_gen_occupancy` sums the
+        // live blocks' bump offsets, which a non-moving sweep cannot lower —
+        // it returns objects to the old-gen free list and the block keeps its
+        // offset — so the occupancy delta reads ~0 for a cycle that freed
+        // megabytes, and every real full scored unproductive (module docs).
+        // The delta stays in the counters and the trace as the whole-block
+        // release signal it actually is.
+        let productive = freed_bytes >= bar as u64;
         if productive {
             PRODUCTIVE.fetch_add(1, Ordering::Relaxed);
             st.backoff_shift = 0;
@@ -379,7 +400,8 @@ pub(super) fn note_cycle_completed(freed_bytes: u64) {
         st.last_seen_external = external;
         if gc_diag_enabled() {
             eprintln!(
-                "[gc-idle-reclaim] done old_in_use={before}->{after} reclaimed_old={reclaimed} freed={freed_bytes} productive={productive} backoff_shift={}",
+                "[gc-idle-reclaim] done old_in_use={before}->{after} reclaimed_old={reclaimed} freed={freed_bytes} bar={bar} reusable={} productive={productive} backoff_shift={}",
+                old_free_bytes(),
                 st.backoff_shift
             );
         }
@@ -524,6 +546,13 @@ pub(super) mod test_support {
     /// Forget this thread's reducer history.
     pub(crate) fn reset_state() {
         STATE.with(|s| *s.borrow_mut() = IdleReclaimState::default());
+    }
+
+    /// Pin the old-gen occupancy the in-flight full started with, so a
+    /// completion can be priced against a known `before` without reproducing
+    /// the allocation pattern that would produce one.
+    pub(crate) fn set_old_in_use_at_start(bytes: usize) {
+        STATE.with(|s| s.borrow_mut().old_in_use_at_start = bytes);
     }
 
     pub(crate) fn thread_attempts() -> u64 {

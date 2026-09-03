@@ -419,3 +419,58 @@ fn idle_reclaim_full_reaches_the_allocator_purge() {
         );
     }
 }
+
+/// A full is priced by what its SWEEP freed, not by the old-gen occupancy
+/// delta. `arena::old_gen_in_use_bytes` is the sum of the live blocks' bump
+/// offsets: a non-moving sweep returns dead objects to the old-gen free list
+/// and the block keeps its offset, so a cycle that freed megabytes can leave
+/// it unchanged. That is not a corner case — it is what the compiled TUI does
+/// (2.37 MB freed, occupancy flat at 93.6 MB, scored unproductive, backoff to
+/// one attempt per four collections inside a minute of idle).
+#[test]
+fn a_full_is_productive_on_swept_bytes_when_occupancy_cannot_move() {
+    let _reducer = IdleReclaimTestGuard::new(0);
+    // Price against the live occupancy, so the completion below sees no delta
+    // at all — the production shape, reproduced without the fragmentation.
+    let before = crate::arena::old_gen_in_use_bytes();
+    set_old_in_use_at_start(before);
+    let bar = IDLE_RECLAIM_PRODUCTIVE_MIN_BYTES.max(before / 100 * IDLE_RECLAIM_PRODUCTIVE_PCT);
+    let productive_before = idle_reclaim_productive();
+
+    super::super::idle_reclaim::note_cycle_completed(bar as u64);
+
+    assert_eq!(
+        idle_reclaim_productive(),
+        productive_before + 1,
+        "a sweep that freed the bar is productive however the block offsets read"
+    );
+    assert_eq!(
+        idle_reclaim_backoff_shift(),
+        0,
+        "a productive full resets the activity requirement"
+    );
+}
+
+/// The mirror: freeing less than the bar still backs off, so the pricing
+/// change cannot be satisfied by calling every full productive.
+#[test]
+fn a_full_that_freed_less_than_the_bar_still_backs_off() {
+    let _reducer = IdleReclaimTestGuard::new(0);
+    let before = crate::arena::old_gen_in_use_bytes();
+    set_old_in_use_at_start(before);
+    let bar = IDLE_RECLAIM_PRODUCTIVE_MIN_BYTES.max(before / 100 * IDLE_RECLAIM_PRODUCTIVE_PCT);
+    let productive_before = idle_reclaim_productive();
+
+    super::super::idle_reclaim::note_cycle_completed(bar as u64 - 1);
+
+    assert_eq!(
+        idle_reclaim_productive(),
+        productive_before,
+        "one byte short of the bar is not productive"
+    );
+    assert_eq!(
+        idle_reclaim_backoff_shift(),
+        1,
+        "an unproductive full doubles the activity requirement"
+    );
+}
