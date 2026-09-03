@@ -36,8 +36,13 @@ pub fn adopt_upgraded_tcp_stream(stream: tokio::net::TcpStream) -> i64 {
         drop(stream);
         return perry_ffi::INVALID_HANDLE;
     }
+    let transport = Transport::Plain(stream);
+    let raw_fd = transport.raw_fd();
     let (tx, rx) = mpsc::unbounded_channel::<SocketCommand>();
-    let local = stream.local_addr().ok();
+    let local = match &transport {
+        Transport::Plain(stream) => stream.local_addr().ok(),
+        _ => None,
+    };
     statics::sockets().lock().unwrap().insert(
         id,
         SocketState {
@@ -47,6 +52,7 @@ pub fn adopt_upgraded_tcp_stream(stream: tokio::net::TcpStream) -> i64 {
             cmd_tx: tx,
             pending_rx: None,
             is_open: true,
+            raw_fd,
             refed: true,
             local_addr: local,
             raw: None,
@@ -67,7 +73,7 @@ pub fn adopt_upgraded_tcp_stream(stream: tokio::net::TcpStream) -> i64 {
         .insert(id, HashMap::new());
     tokio::spawn(async move {
         let mut rx = rx;
-        run_socket_task(id, Transport::Plain(stream), &mut rx).await;
+        run_socket_task(id, transport, &mut rx).await;
     });
     id
 }

@@ -38,6 +38,7 @@ fn allocate_socket() -> (i64, mpsc::UnboundedReceiver<SocketCommand>) {
             cmd_tx: tx,
             pending_rx: None,
             is_open: false,
+            raw_fd: None,
             refed: true,
             local_addr: None,
             raw: None,
@@ -91,6 +92,7 @@ pub(crate) fn register_accepted_transport(
     transport: Transport,
     local_addr: Option<std::net::SocketAddr>,
 ) {
+    let raw_fd = transport.raw_fd();
     let socket_id = next_id();
     if socket_id == perry_ffi::INVALID_HANDLE {
         server_state::cancel_pending_connection(server_id);
@@ -106,6 +108,7 @@ pub(crate) fn register_accepted_transport(
             cmd_tx: tx,
             pending_rx: None,
             is_open: true,
+            raw_fd,
             refed: true,
             local_addr,
             raw: None,
@@ -177,12 +180,15 @@ fn spawn_connect(id: i64, path: String, mut rx: mpsc::UnboundedReceiver<SocketCo
                 }
             };
 
+            let transport = Transport::Ipc(stream);
+            let raw_fd = transport.raw_fd();
             if let Some(socket) = statics::sockets().lock().unwrap().get_mut(&id) {
                 socket.is_open = true;
+                socket.raw_fd = raw_fd;
             }
             tokio::task::yield_now().await;
             push_event(PendingNetEvent::Connect(id, local_server));
-            run_socket_task(id, Transport::Ipc(stream), &mut rx).await;
+            run_socket_task(id, transport, &mut rx).await;
         })
     });
 }

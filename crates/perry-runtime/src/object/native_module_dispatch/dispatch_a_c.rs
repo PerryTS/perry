@@ -292,6 +292,9 @@ pub(crate) unsafe fn nm_dispatch_bun(ctx: &NmCtx, module_name: &str, method_name
         ("bun", "unsupported") => crate::bun_compat::js_bun_unsupported(arg(0)),
         ("bun", "pathToFileURL") => crate::url::js_url_path_to_file_url(arg(0), arg(1)),
         ("bun", "fileURLToPath") => crate::url::js_url_file_url_to_path(arg(0), arg(1)),
+        ("bun.ant", "getPeerUid") => crate::bun_compat::js_bun_ant_get_peer_uid(arg(0)),
+        ("bun.ant", "getPeerPid") => crate::bun_compat::js_bun_ant_get_peer_pid(arg(0)),
+        ("bun.ant", "memoryPressureLevel") => crate::bun_compat::js_bun_ant_memory_pressure_level(),
         _ => f64::from_bits(JSValue::undefined().bits()),
     }
 }

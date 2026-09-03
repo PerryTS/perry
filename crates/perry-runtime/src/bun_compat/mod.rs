@@ -20,6 +20,7 @@
 //! - `Bun.hash` is Zig-std Wyhash (see `wyhash.rs`) returning a BigInt, so
 //!   `.toString(16)` cache keys match bun-run installs.
 
+mod ant;
 #[cfg(feature = "bun-cli-utils")]
 mod cli_utils;
 #[cfg(not(feature = "bun-cli-utils"))]
@@ -41,6 +42,7 @@ use crate::string::{js_string_from_bytes, StringHeader};
 use crate::value::{js_jsvalue_to_string, JSValue};
 use std::io::{Read, Write};
 
+pub use ant::{js_bun_ant_get_peer_pid, js_bun_ant_get_peer_uid, js_bun_ant_memory_pressure_level};
 #[cfg(feature = "bun-cli-utils")]
 pub use cli_utils::*;
 #[cfg(not(feature = "bun-cli-utils"))]

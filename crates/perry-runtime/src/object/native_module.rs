@@ -776,6 +776,7 @@ fn should_cache_native_module_namespace(module_name: &str) -> bool {
             | "async_hooks"
             | "async_hooks.default"
             | "bun"
+            | "bun.ant"
             | "constants"
             | "constants.default"
             // #5263: cache the top-level namespace objects whose dynamic
@@ -1004,6 +1005,10 @@ unsafe fn native_module_property_by_name_impl(
     // deliberately Perry-specific rather than pretending to be a Bun runtime.
     if module_name == "bun" {
         match property_name {
+            "ant" => {
+                let submodule = "bun.ant";
+                return js_create_native_module_namespace(submodule.as_ptr(), submodule.len());
+            }
             "stdin" => return crate::bun_compat::js_bun_stdin(),
             "stdout" => return crate::bun_compat::js_bun_stdout(),
             "stderr" => return crate::bun_compat::js_bun_stderr(),

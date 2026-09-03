@@ -10,6 +10,8 @@ fn native_callable_export_arity_reference(module: &str, prop: &str) -> Option<u3
         ) => Some(1),
         ("bun", "deepEquals" | "generateHeapSnapshot" | "spawn" | "write") => Some(2),
         ("bun", "wrapAnsi") => Some(3),
+        ("bun.ant", "getPeerPid" | "getPeerUid") => Some(1),
+        ("bun.ant", "memoryPressureLevel") => Some(0),
         // bun:ffi (#6562).
         ("bun:ffi", "dlopen") => Some(2),
         ("bun:ffi", "ptr" | "CString" | "CFunction" | "linkSymbols") => Some(1),
@@ -306,6 +308,14 @@ static CALLABLE_EXPORT_ARITY_TABLE: &[(&str, &[(&str, u32)])] = &[
             ("write", 2),
             ("zstdDecompress", 1),
             ("zstdDecompressSync", 1),
+        ],
+    ),
+    (
+        "bun.ant",
+        &[
+            ("getPeerPid", 1),
+            ("getPeerUid", 1),
+            ("memoryPressureLevel", 0),
         ],
     ),
     (

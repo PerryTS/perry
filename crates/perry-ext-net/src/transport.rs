@@ -7,12 +7,32 @@ use std::io;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
+#[cfg(unix)]
+use std::os::fd::{AsRawFd, RawFd};
+
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::TcpStream;
 use tokio_rustls::client::TlsStream;
 
+#[cfg(unix)]
+pub(crate) trait IpcStream: AsyncRead + AsyncWrite + Send + Unpin {
+    fn raw_fd(&self) -> RawFd;
+}
+
+#[cfg(unix)]
+impl<T> IpcStream for T
+where
+    T: AsyncRead + AsyncWrite + Send + Unpin + AsRawFd,
+{
+    fn raw_fd(&self) -> RawFd {
+        self.as_raw_fd()
+    }
+}
+
+#[cfg(not(unix))]
 pub(crate) trait IpcStream: AsyncRead + AsyncWrite + Send + Unpin {}
 
+#[cfg(not(unix))]
 impl<T> IpcStream for T where T: AsyncRead + AsyncWrite + Send + Unpin {}
 
 pub(crate) enum Transport {
@@ -22,6 +42,24 @@ pub(crate) enum Transport {
 }
 
 impl Transport {
+    /// Borrow the live kernel descriptor without transferring ownership.
+    /// Claude Code reads it through Node's private `socket._handle.fd` shape
+    /// before passing it to the read-only `Bun.ant` peer-credential hooks.
+    pub(crate) fn raw_fd(&self) -> Option<i32> {
+        #[cfg(unix)]
+        {
+            Some(match self {
+                Transport::Plain(stream) => stream.as_raw_fd(),
+                Transport::Tls(stream) => stream.get_ref().0.as_raw_fd(),
+                Transport::Ipc(stream) => stream.raw_fd(),
+            })
+        }
+        #[cfg(not(unix))]
+        {
+            None
+        }
+    }
+
     /// Set `TCP_NODELAY` on the underlying TCP socket. For a TLS transport the
     /// option lives on the wrapped TCP stream (`get_ref().0`), so reach through
     /// the rustls wrapper to the kernel socket. Matches Node's `socket.setNoDelay`,

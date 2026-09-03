@@ -1634,6 +1634,7 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
             b"TOML",
             b"Terminal",
             b"YAML",
+            b"ant",
             b"deepEquals",
             b"file",
             b"fileURLToPath",
@@ -1656,6 +1657,7 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
             b"zstdDecompress",
             b"zstdDecompressSync",
         ]),
+        "bun.ant" => Some(&[b"getPeerPid", b"getPeerUid", b"memoryPressureLevel"]),
         // bun:ffi (#6562) — stage-1 surface plus the declared-but-throwing
         // exports (their reads resolve to callables that raise the stage-1
         // error).

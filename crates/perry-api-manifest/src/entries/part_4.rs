@@ -1130,6 +1130,7 @@ pub(crate) const API_MANIFEST_PART_4: &[ApiEntry] = &[
     property("bun", "TOML"),
     property("bun", "semver"),
     property("bun", "JSONL"),
+    property("bun", "ant"),
     // --- qs (issue #8751) ---
     // Native nested query-string codec. This keeps Stripe's request encoder
     // off qs' legacy get-intrinsic/ES-shims dependency chain.
