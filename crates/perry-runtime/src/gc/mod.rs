@@ -47,6 +47,17 @@ mod heap_budget;
 pub(crate) use heap_budget::*;
 mod pressure;
 pub use pressure::*;
+mod idle_reclaim;
+pub use idle_reclaim::{
+    idle_reclaim_attempts, idle_reclaim_backoff_shift, idle_reclaim_completions,
+    idle_reclaim_enabled_from_value, idle_reclaim_freed_bytes, idle_reclaim_old_reclaimed_bytes,
+    idle_reclaim_post_purges, idle_reclaim_productive, idle_reclaim_slices,
+    idle_reclaim_start_blocked, idle_reclaim_work_capped, idle_reclaim_yields,
+    IDLE_RECLAIM_MAX_BACKOFF_SHIFT, IDLE_RECLAIM_MAX_WORK_MS_PER_SECOND,
+    IDLE_RECLAIM_MIN_INTERVAL_MS, IDLE_RECLAIM_PRODUCTIVE_MIN_BYTES, IDLE_RECLAIM_PRODUCTIVE_PCT,
+    IDLE_RECLAIM_QUIET_MS, IDLE_RECLAIM_SLICE_US,
+};
+pub(crate) use idle_reclaim::{park_hook as idle_reclaim_park_hook, ParkVerdict};
 mod telemetry;
 pub use telemetry::*;
 mod malloc;
@@ -1292,6 +1303,7 @@ fn emit_incremental_liveness_diag() {
         poll_arm::poll_arm_events(),
         poll_arm::poll_armed_count(),
     );
+    idle_reclaim::emit_diag();
     emit_step_bounds_diag();
     emit_gc_time_share_diag();
 }

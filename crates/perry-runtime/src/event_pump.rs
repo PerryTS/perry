@@ -314,6 +314,25 @@ pub extern "C" fn js_main_thread_notified() -> i32 {
     i32::from(NOTIFIED.load(Ordering::Acquire))
 }
 
+/// Is there JS work the main thread should be running right now — a notify
+/// since the last wait, or a queued microtask? The idle-time reclaim
+/// (`gc/idle_reclaim.rs`) asks this between collector slices so input never
+/// waits behind more than one slice. Does NOT consume the notify; the next
+/// `js_wait_for_event` fast path does.
+pub(crate) fn main_thread_wake_pending() -> bool {
+    NOTIFIED.load(Ordering::Acquire) || unsafe { js_microtasks_pending() } > 0
+}
+
+/// Test-only: forget a notify left behind by an earlier test in the same
+/// process. `NOTIFIED` is process-global (every promise resolution sets it),
+/// and the production path consumes it in `js_wait_for_event`'s fast path
+/// before any park-site work runs; a unit test that drives the park hook
+/// directly needs the same clean slate.
+#[cfg(test)]
+pub(crate) fn clear_main_thread_notified_for_test() {
+    NOTIFIED.store(false, Ordering::Release);
+}
+
 /// Wake the main thread from `js_wait_for_event` (or a future call).
 ///
 /// Safe to call from any thread, including the main thread itself.
@@ -597,6 +616,17 @@ pub extern "C" fn js_wait_for_event() {
         invoke_wait_driver_fast();
         return;
     }
+    // About to park: nothing notified, no microtask queued, no timer due. That
+    // is the runtime's definition of idle, and idle time is the collector's to
+    // use first — finishing a budgeted cycle the pacer left open, or starting
+    // the idle-time old-gen reclaim if one is owed (`gc/idle_reclaim.rs`). The
+    // hook steps in wake-checked slices; when it did work or a wake arrived
+    // the timer budget computed above is stale, so go back around the loop
+    // rather than parking on it. Otherwise park for whatever it left.
+    let budget_ms = match crate::gc::idle_reclaim_park_hook(budget_ms) {
+        crate::gc::ParkVerdict::Resume => return,
+        crate::gc::ParkVerdict::Park(remaining_ms) => remaining_ms,
+    };
     // Unified single-thread async model: when perry-stdlib has installed a
     // wait-driver (i.e. async work exists), drive ONE bounded tick of the
     // current-thread tokio runtime here instead of parking on the condvar. The
