@@ -673,6 +673,12 @@ pub struct CompilationContext {
     /// Approved `.node` entries reached by the compile graph, keyed by their
     /// relocatable package-relative logical id.
     pub native_addons: BTreeMap<String, NativeAddonModule>,
+    /// Exact project-relative `.node` paths authorized by the host manifest,
+    /// keyed by canonical source path. The value is the portable declared path
+    /// used to derive the sidecar logical id; unlike `native_addon_packages`,
+    /// these entries never confer trust on an npm package or a containing
+    /// directory.
+    pub native_addon_paths: BTreeMap<PathBuf, String>,
     /// Package aliases: maps npm package name → replacement package name (from perry.packageAliases)
     pub package_aliases: HashMap<String, String>,
     /// Packages to compile natively instead of routing to V8 (from perry.compilePackages)
@@ -1202,6 +1208,7 @@ impl CompilationContext {
             native_libraries: Vec::new(),
             native_addon_packages: BTreeSet::new(),
             native_addons: BTreeMap::new(),
+            native_addon_paths: BTreeMap::new(),
             package_aliases: HashMap::new(),
             compile_packages: HashSet::new(),
             auto_skipped_node_addon_packages: HashSet::new(),
@@ -1308,6 +1315,10 @@ pub struct NativeAddonModule {
     pub source_path: PathBuf,
     pub package_dir: PathBuf,
     pub entry_relative: PathBuf,
+    /// Package entries ship their complete package-local payload so adjacent
+    /// data/shared libraries remain available. Exact project-path entries ship
+    /// only the explicitly authorized `.node` file.
+    pub ship_package_payload: bool,
 }
 
 /// External native library manifest parsed from package.json `perry.nativeLibrary` field

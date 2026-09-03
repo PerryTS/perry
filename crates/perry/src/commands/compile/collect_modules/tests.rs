@@ -42,6 +42,7 @@ fn approved_node_addon_is_recorded_as_a_relocatable_graph_member() {
     assert_eq!(record.package, "demo-addon");
     assert_eq!(record.version, "1.2.3");
     assert_eq!(record.entry_relative, std::path::Path::new("binding.node"));
+    assert!(record.ship_package_payload);
 }
 
 #[test]
@@ -901,6 +902,30 @@ fn compile_package_with_node_file_is_rejected() {
         },
         "*.node",
     );
+}
+
+#[test]
+fn external_compile_package_root_still_gets_native_addon_preflight() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let host = dir.path().join("host");
+    let package = dir.path().join("linked-addon");
+    std::fs::create_dir_all(&host).expect("host directory");
+    std::fs::create_dir_all(&package).expect("linked package directory");
+    std::fs::write(package.join("package.json"), r#"{"name":"linked-addon"}"#)
+        .expect("linked package manifest");
+    std::fs::write(package.join("binding.gyp"), "{}\n").expect("native addon marker");
+    let entry = package.join("index.js");
+    std::fs::write(&entry, "module.exports = 1\n").expect("linked package entry");
+
+    let mut ctx = CompilationContext::new(host);
+    ctx.compile_package_dirs
+        .insert(package.canonicalize().expect("canonical linked package"));
+    let error = refuse_compile_package_native_addon(
+        &mut ctx,
+        &entry.canonicalize().expect("canonical linked entry"),
+    )
+    .expect_err("an external file: dependency must retain package-wide preflight");
+    assert!(error.to_string().contains("binding.gyp"), "{error}");
 }
 
 #[test]
