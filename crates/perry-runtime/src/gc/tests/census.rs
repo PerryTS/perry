@@ -172,3 +172,54 @@ fn census_is_inert_without_a_path() {
     .join()
     .expect("census inert test thread must not panic");
 }
+
+/// The side-table byte estimator is load-bearing for what the census REPORTS
+/// about memory outside the GC heap, so it gets the same treatment as the
+/// heap walk: checked against a known answer. It shipped once reporting 2x
+/// the real storage for every table whose bucket count was already a power of
+/// two, which is every table of any size.
+#[test]
+fn hash_table_estimate_matches_a_real_table() {
+    use super::super::census::hash_table_bytes;
+    use std::collections::HashMap;
+
+    for entries in [0usize, 1, 7, 8, 100, 1000, 60_000] {
+        let mut map: HashMap<usize, u32> = HashMap::new();
+        for i in 0..entries {
+            map.insert(i, i as u32);
+        }
+        let capacity = map.capacity();
+        let bytes = hash_table_bytes(capacity, std::mem::size_of::<(usize, u32)>());
+        if capacity == 0 {
+            assert_eq!(bytes, 0);
+            continue;
+        }
+        // Derive the bucket count independently of the function under test:
+        // the smallest power of two whose capacity holds `capacity`. hashbrown
+        // does NOT apply the 7/8 load factor below 8 buckets — a 4-bucket
+        // table holds 3 and an 8-bucket table holds 7 — and this test found
+        // that out by failing on the 1-entry case.
+        let capacity_of = |buckets: usize| {
+            if buckets < 8 {
+                buckets - 1
+            } else {
+                buckets / 8 * 7
+            }
+        };
+        let mut buckets = 4usize;
+        while capacity_of(buckets) < capacity {
+            buckets *= 2;
+        }
+        let expected = buckets * (std::mem::size_of::<(usize, u32)>() + 1) + 16;
+        assert_eq!(
+            bytes, expected,
+            "estimate for {entries} entries (capacity {capacity}, {buckets} buckets) is wrong"
+        );
+        // And the estimate must never exceed what the allocation can possibly
+        // be: bucket count is bounded by 2x the entries' own requirement.
+        assert!(
+            bytes <= (entries.max(8) * 4) * (std::mem::size_of::<(usize, u32)>() + 1) + 16,
+            "estimate {bytes} implausible for {entries} entries"
+        );
+    }
+}

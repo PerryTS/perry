@@ -491,13 +491,29 @@ impl Census {
 pub(crate) type SideTableRow = (&'static str, usize, usize);
 
 /// Estimated bytes held by a hashbrown table with `capacity()` == `capacity`
-/// and `size_of::<(K, V)>()` == `kv`: buckets are the next power of two at
-/// or above capacity*8/7, one control byte per bucket.
+/// and `size_of::<(K, V)>()` == `kv`: one bucket-sized slot plus one control
+/// byte per bucket.
+///
+/// `HashMap::capacity()` is already the post-load-factor figure — the number
+/// of elements the table holds without reallocating, i.e. `buckets * 7/8` —
+/// so recovering the bucket count is `capacity * 8/7`, and the rounding up to
+/// a power of two only matters for the small tables where that product is not
+/// already one. An earlier version added 1 before rounding, which pushed every
+/// exactly-sized table to the NEXT power of two and reported up to 2x the real
+/// storage; `debug_assert`s below pin both ends of that mistake.
 pub(crate) fn hash_table_bytes(capacity: usize, kv: usize) -> usize {
     if capacity == 0 {
         return 0;
     }
-    let buckets = (capacity * 8 / 7 + 1).next_power_of_two();
+    let buckets = (capacity * 8 / 7).max(1).next_power_of_two();
+    debug_assert!(
+        buckets * 7 / 8 >= capacity,
+        "bucket count must actually hold the reported capacity"
+    );
+    debug_assert!(
+        buckets / 2 * 7 / 8 < capacity || buckets <= 8,
+        "bucket count must be the SMALLEST power of two that holds it —          an off-by-one before `next_power_of_two` doubles every estimate"
+    );
     buckets * (kv + 1) + 16
 }
 
