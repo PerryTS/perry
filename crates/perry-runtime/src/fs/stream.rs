@@ -1429,6 +1429,10 @@ fn end_pipes(id: usize) {
 }
 
 fn read_stream_pump(id: usize) {
+    if emit_pending_read_error(id) {
+        return;
+    }
+
     let should_start = STREAM_REGISTRY.with(|registry| {
         let mut registry = registry.borrow_mut();
         let Some(state) = registry.get_mut(&id) else {

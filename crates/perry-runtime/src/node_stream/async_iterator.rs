@@ -299,6 +299,41 @@ fn iterator_set_error(iterator: f64, err: f64) {
 
 // ── persistent stream-event listeners feeding the iterator ─────────────────
 
+pub(super) fn is_foreign_readable(stream: f64) -> bool {
+    has_truthy_hidden(stream, hidden_key(FOREIGN_READABLE_KEY))
+}
+
+/// Pause/resume an event-backed readable through both stream models. Foreign
+/// sources such as `fs.ReadStream` do not carry node:stream's private flowing
+/// flag, so the internal helper alone is a no-op for them; their public method
+/// owns the actual producer. Keeping that source paused whenever no iterator
+/// pull is waiting gives `Readable.toWeb()` one-file-chunk backpressure instead
+/// of eagerly buffering the complete file on its first read (#9616).
+fn call_foreign_flow_method(stream: f64, method: &[u8]) {
+    if !is_foreign_readable(stream) {
+        return;
+    }
+    unsafe {
+        crate::object::js_native_call_method(
+            stream,
+            method.as_ptr() as *const i8,
+            method.len(),
+            std::ptr::null(),
+            0,
+        );
+    }
+}
+
+fn pause_iterator_source(stream: f64) {
+    pause_readable_stream(stream);
+    call_foreign_flow_method(stream, b"pause");
+}
+
+fn resume_iterator_source(stream: f64) {
+    resume_readable_stream(stream);
+    call_foreign_flow_method(stream, b"resume");
+}
+
 fn iterator_from_listener(closure: *const ClosureHeader) -> f64 {
     js_closure_get_capture_f64(closure, 0)
 }
@@ -332,9 +367,9 @@ extern "C" fn ns_readable_iter_on_data(closure: *const ClosureHeader, chunk: f64
     }
     if let Some(stream) = get_hidden_value(iterator, hidden_key(READABLE_ITERATOR_STREAM_KEY)) {
         if iterator_has_pending(iterator) {
-            resume_readable_stream(stream);
+            resume_iterator_source(stream);
         } else {
-            pause_readable_stream(stream);
+            pause_iterator_source(stream);
         }
     }
     f64::from_bits(TAG_UNDEFINED)
@@ -469,22 +504,7 @@ fn iterator_ensure_attached(iterator: f64, stream: f64) {
 
     // Start flow: delivers any already-buffered chunks via `data` (on the
     // resume/drain microtask) and schedules `end` if the source is finite.
-    resume_readable_stream(stream);
-
-    // A foreign readable has no node:stream state for the call above to act on;
-    // it starts reading only when its own `resume()` runs.
-    if has_truthy_hidden(stream, hidden_key(FOREIGN_READABLE_KEY)) {
-        let name = b"resume";
-        unsafe {
-            crate::object::js_native_call_method(
-                stream,
-                name.as_ptr() as *const i8,
-                name.len(),
-                std::ptr::null(),
-                0,
-            );
-        }
-    }
+    resume_iterator_source(stream);
 }
 
 fn remove_iterator_listener(iterator: f64, stream: f64, event: &[u8], store_key: &[u8]) {
@@ -650,7 +670,7 @@ extern "C" fn ns_readable_iterator_next(closure: *const ClosureHeader) -> f64 {
     let promise = crate::promise::js_promise_new();
     let promise = scope.root_raw_mut_ptr(promise);
     iterator_push_pending(iterator.get_nanbox_f64(), promise.get_raw_mut_ptr());
-    resume_readable_stream(stream.get_nanbox_f64());
+    resume_iterator_source(stream.get_nanbox_f64());
     box_pointer(promise.get_raw_const_ptr())
 }
 
@@ -697,7 +717,7 @@ fn install_async_iterator_symbol(target: f64, func: extern "C" fn(*const Closure
     }
 }
 
-fn build_readable_async_iterator(stream: f64, destroy_on_return: bool) -> f64 {
+pub(super) fn build_readable_async_iterator(stream: f64, destroy_on_return: bool) -> f64 {
     let methods = [
         ("next", cast0(ns_readable_iterator_next)),
         ("return", cast0(ns_readable_iterator_return)),

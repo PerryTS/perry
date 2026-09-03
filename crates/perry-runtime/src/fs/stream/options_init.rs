@@ -3,6 +3,25 @@
 
 use super::*;
 
+/// Starting a ReadStream must deliver a constructor-time open failure. Without
+/// this transition, event-backed consumers wait forever for data/end/error
+/// after `createReadStream()` recorded an invalid path (#9616).
+pub(super) fn emit_pending_read_error(id: usize) -> bool {
+    let pending = STREAM_REGISTRY.with(|registry| {
+        registry.borrow().get(&id).and_then(|state| {
+            (state.kind == StreamKind::Read && !state.errored)
+                .then(|| state.error_msg.clone())
+                .flatten()
+        })
+    });
+    let Some(message) = pending else {
+        return false;
+    };
+    record_stream_error(id, message);
+    maybe_close_stream(id, false);
+    true
+}
+
 pub(super) fn register_stream_method_arities() {
     crate::closure::js_register_closure_arity(write_stream_write_impl as *const u8, 3);
     crate::closure::js_register_closure_arity(write_stream_end_impl as *const u8, 3);
