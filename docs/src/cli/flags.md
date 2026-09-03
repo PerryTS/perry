@@ -74,6 +74,7 @@ Use `--output-type` to change what's produced:
 | Flag | Description |
 |---|---|
 | `-o, --output <PATH>` | Output executable, bundle, shared library, archive, or object path. |
+| `--platform node\|bun` | Select the JavaScript host global surface. `node` is the default; `bun` installs a real, stable `Bun === globalThis.Bun` namespace. |
 | `--libc glibc\|musl` | Select Linux libc/linkage; `musl` upgrades the corresponding Linux target to a fully static headless build. |
 | `--app-bundle-id <ID>` | Bundle identifier required by home-screen widget targets. |
 | `--bundle-extensions <DIR>` | Discover and statically bundle native extension packages from a directory. |
@@ -85,6 +86,20 @@ Use `--output-type` to change what's produced:
 | `--harmonyos-cert <PATH>` | HarmonyOS application certificate chain. |
 | `--harmonyos-profile <PATH>` | HarmonyOS signed provisioning profile. |
 | `--harmonyos-key-alias <NAME>` | HarmonyOS keystore alias; defaults to `debugKey`. |
+
+### Bun platform mode
+
+`perry compile app.ts --platform bun` exposes Perry's implemented Bun APIs
+through one real global namespace. Direct calls, extracted or destructured
+methods, optional chaining, and computed property reads all resolve through the
+same `Bun` object. The default `node` mode preserves the historical behavior:
+`typeof Bun` remains `"undefined"`, while Perry's existing direct Bun shims and
+imports from `"bun"` continue to work.
+
+In this mode, `Bun.version` is Perry's runtime crate version, not a claimed Bun
+release number. `Bun.isStandaloneExecutable` is always `true`, because Perry
+produces standalone binaries. Unsupported properties are absent; a direct call
+to an unsupported `Bun.*` member raises Perry's Bun compatibility error.
 
 ## Embedding Assets
 

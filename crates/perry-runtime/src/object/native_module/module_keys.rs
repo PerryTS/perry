@@ -1626,6 +1626,22 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
             b"default",
         ]),
         "sqlite.constants" => Some(SQLITE_CONSTANTS_KEYS),
+        // #9599: the opt-in globalThis.Bun object and `import * as bun from
+        // "bun"` share this one enumerable native-module surface.
+        "bun" => Some(&[
+            b"Glob",
+            b"file",
+            b"fileURLToPath",
+            b"hash",
+            b"isStandaloneExecutable",
+            b"pathToFileURL",
+            b"stderr",
+            b"stdin",
+            b"stdout",
+            b"stringWidth",
+            b"version",
+            b"write",
+        ]),
         // bun:ffi (#6562) — stage-1 surface plus the declared-but-throwing
         // exports (their reads resolve to callables that raise the stage-1
         // error).

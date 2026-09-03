@@ -2,6 +2,11 @@
 #[cfg(test)]
 fn native_callable_export_arity_reference(module: &str, prop: &str) -> Option<u32> {
     match (module, prop) {
+        // Bun global/module surface (#9599).
+        ("bun", "Glob" | "file" | "fileURLToPath" | "hash" | "pathToFileURL" | "stringWidth") => {
+            Some(1)
+        }
+        ("bun", "write") => Some(2),
         // bun:ffi (#6562).
         ("bun:ffi", "dlopen") => Some(2),
         ("bun:ffi", "ptr" | "CString" | "CFunction" | "linkSymbols") => Some(1),
@@ -276,6 +281,18 @@ static CALLABLE_EXPORT_ARITY_TABLE: &[(&str, &[(&str, u32)])] = &[
             ("executionAsyncId", 0),
             ("executionAsyncResource", 0),
             ("triggerAsyncId", 0),
+        ],
+    ),
+    (
+        "bun",
+        &[
+            ("Glob", 1),
+            ("file", 1),
+            ("fileURLToPath", 1),
+            ("hash", 1),
+            ("pathToFileURL", 1),
+            ("stringWidth", 1),
+            ("write", 2),
         ],
     ),
     (

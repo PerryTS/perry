@@ -289,6 +289,7 @@ fn build_once(
         no_codegen: false,
         enable_wasm_runtime: false,
         target: None,
+        platform: super::compile::JavaScriptPlatform::Node,
         libc: None,
         march: None,
         app_bundle_id: None,

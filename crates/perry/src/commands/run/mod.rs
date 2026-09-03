@@ -201,6 +201,7 @@ pub fn run(args: RunArgs, format: OutputFormat, use_color: bool, verbose: u8) ->
         no_codegen: false,
         enable_wasm_runtime: args.enable_wasm_runtime,
         target: target.clone(),
+        platform: super::compile::JavaScriptPlatform::Node,
         libc: args.libc.clone(),
         march: None,
         app_bundle_id: Some(bundle_id),

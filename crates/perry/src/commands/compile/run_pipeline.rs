@@ -734,6 +734,7 @@ pub fn run_with_parse_cache(
         .unwrap_or_else(|| PathBuf::from("."));
 
     let mut ctx = CompilationContext::new(project_root.clone());
+    ctx.bun_platform = args.platform == JavaScriptPlatform::Bun;
     ctx.cache_root = object_cache_project_root(&args.input, &project_root);
     let explain_lowering = if args.explain_lowering {
         Some(lowering_report::ExplainLoweringRun::prepare(
