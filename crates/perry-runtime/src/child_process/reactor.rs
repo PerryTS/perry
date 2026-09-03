@@ -466,25 +466,6 @@ fn cp_spawn_reader<R: Read + Send + 'static>(handle: u64, mut pipe: R, fd: usize
     });
 }
 
-/// Spawn the waiter thread that reaps `child` and reports its exit status.
-fn cp_spawn_waiter(handle: u64, waiter: CpWaiter) {
-    std::thread::spawn(move || {
-        let (code, signal) = waiter();
-        cp_push_event(CpEvent::Exited {
-            handle,
-            code,
-            signal,
-        });
-    });
-}
-
-fn cp_spawn_timeout(handle: u64, timeout: Duration, signal: i32) {
-    std::thread::spawn(move || {
-        std::thread::sleep(timeout);
-        cp_push_event(CpEvent::Timeout { handle, signal });
-    });
-}
-
 /// IPC reader (#1933): read newline-delimited JSON from the parent socket and
 /// push each line for main-thread parse + `'message'` delivery. For
 /// `serialization: 'advanced'` (#2130) the framing is instead a 4-byte
@@ -773,10 +754,11 @@ fn cp_register_live_child_parts(
     for (fd, _, pipe) in extra_pipes {
         cp_spawn_reader(handle, pipe, fd);
     }
-    cp_spawn_waiter(handle, waiter);
-    if let Some(timeout) = timeout {
-        cp_spawn_timeout(handle, timeout, kill_signal);
-    }
+    cp_spawn_waiter(
+        handle,
+        waiter,
+        timeout.map(|timeout| (timeout, kill_signal)),
+    );
     #[cfg(any(unix, windows))]
     {
         if let Some(sock) = ipc {
@@ -1390,10 +1372,11 @@ pub(super) fn cp_exec_async(
                 }
                 Err(_) => (Some(-1), None),
             });
-            cp_spawn_waiter(handle, waiter);
-            if let Some(timeout) = timeout {
-                cp_spawn_timeout(handle, timeout, kill_signal);
-            }
+            cp_spawn_waiter(
+                handle,
+                waiter,
+                timeout.map(|timeout| (timeout, kill_signal)),
+            );
             crate::event_pump::js_notify_main_thread();
             cp
         }
@@ -1961,9 +1944,11 @@ pub(super) fn cp_live_stdin_queue_callback(handle: u64, callback_bits: u64) -> b
 mod integration;
 mod kill;
 mod stdin_drain;
+mod timeout;
 #[cfg(all(test, windows))]
 #[path = "reactor/windows_kill_tests.rs"]
 mod windows_kill_tests;
 pub(crate) use integration::*;
 pub(crate) use kill::*;
 use stdin_drain::*;
+use timeout::*;
