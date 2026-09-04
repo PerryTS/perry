@@ -69,6 +69,16 @@ async function main(): Promise<void> {
   report("nested-await", () => pending[6]!());
   report("earlier-refs-later", h);
 
+  // The shapes the pre-pass's original ordering existed for. They passed
+  // before this fix and must keep passing: moving the initializer scan earlier
+  // is a superset, not a replacement.
+  const fact = (n: number): number => (n <= 1 ? 1 : n * fact(n - 1));
+  const fib = function rec(n: number): number { return n < 2 ? n : rec(n - 1) + rec(n - 2); };
+  const off = renderSync(() => off.u() + "/init-call-result");
+  console.log("self-recursive-arrow=" + fact(5));
+  console.log("named-fn-expr-recursion=" + fib(10));
+  report("init-call-result", () => pending[7]!());
+
   // The declaration is complete by the time these run, so the direct calls
   // must agree with what the closures saw.
   report("direct-plain", () => a.u());
