@@ -172,7 +172,10 @@ pub(super) fn evacuation_policy_initial_decision(
             force,
             reason: disabled_reason,
             snapshot,
-            ..EvacuationPolicyDecision { idle, ..EvacuationPolicyDecision::default() }
+            ..EvacuationPolicyDecision {
+                idle,
+                ..EvacuationPolicyDecision::default()
+            }
         };
     }
     if !old_to_young_tracking_complete {
@@ -181,7 +184,10 @@ pub(super) fn evacuation_policy_initial_decision(
             force,
             reason: "barriers_inactive",
             snapshot,
-            ..EvacuationPolicyDecision { idle, ..EvacuationPolicyDecision::default() }
+            ..EvacuationPolicyDecision {
+                idle,
+                ..EvacuationPolicyDecision::default()
+            }
         };
     }
     if force {
@@ -191,7 +197,10 @@ pub(super) fn evacuation_policy_initial_decision(
             force,
             reason: "force_considered",
             snapshot,
-            ..EvacuationPolicyDecision { idle, ..EvacuationPolicyDecision::default() }
+            ..EvacuationPolicyDecision {
+                idle,
+                ..EvacuationPolicyDecision::default()
+            }
         };
     }
     if tenured_still_in_nursery_bytes >= MIN_TENURED_NURSERY_BYTES {
@@ -201,7 +210,10 @@ pub(super) fn evacuation_policy_initial_decision(
             force,
             reason: "nursery_pressure",
             snapshot,
-            ..EvacuationPolicyDecision { idle, ..EvacuationPolicyDecision::default() }
+            ..EvacuationPolicyDecision {
+                idle,
+                ..EvacuationPolicyDecision::default()
+            }
         };
     }
     if rss_bytes >= gc_rss_pressure_dyn_bytes() {
@@ -211,7 +223,10 @@ pub(super) fn evacuation_policy_initial_decision(
             force,
             reason: "rss_pressure",
             snapshot,
-            ..EvacuationPolicyDecision { idle, ..EvacuationPolicyDecision::default() }
+            ..EvacuationPolicyDecision {
+                idle,
+                ..EvacuationPolicyDecision::default()
+            }
         };
     }
     if old_page_selected_pages > 0 {
@@ -221,7 +236,10 @@ pub(super) fn evacuation_policy_initial_decision(
             force,
             reason: "old_page_fragmentation",
             snapshot,
-            ..EvacuationPolicyDecision { idle, ..EvacuationPolicyDecision::default() }
+            ..EvacuationPolicyDecision {
+                idle,
+                ..EvacuationPolicyDecision::default()
+            }
         };
     }
     EvacuationPolicyDecision {
@@ -229,7 +247,10 @@ pub(super) fn evacuation_policy_initial_decision(
         force,
         reason: "low_pressure",
         snapshot,
-        ..EvacuationPolicyDecision { idle, ..EvacuationPolicyDecision::default() }
+        ..EvacuationPolicyDecision {
+            idle,
+            ..EvacuationPolicyDecision::default()
+        }
     }
 }
 

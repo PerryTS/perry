@@ -283,9 +283,8 @@ pub(super) fn maybe_compact(now: u64) -> bool {
     }
 
     let start = Instant::now();
-    let outcome = super::gc_collect_compacting_minor(GcTriggerSnapshot::capture(
-        GcTriggerKind::IdleCompact,
-    ));
+    let outcome =
+        super::gc_collect_compacting_minor(GcTriggerSnapshot::capture(GcTriggerKind::IdleCompact));
     let moved_objects = outcome
         .trace
         .as_ref()

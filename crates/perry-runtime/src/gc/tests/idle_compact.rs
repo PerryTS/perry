@@ -199,7 +199,10 @@ fn an_owed_compaction_runs_and_records_its_pause() {
     crate::event_pump::clear_main_thread_notified_for_test();
 
     let attempts_before = idle_compact_attempts();
-    assert!(maybe_compact_at(0), "nothing is blocking an owed compaction");
+    assert!(
+        maybe_compact_at(0),
+        "nothing is blocking an owed compaction"
+    );
     assert_eq!(idle_compact_attempts(), attempts_before + 1);
     assert_eq!(thread_attempts(), 1);
     assert!(
@@ -248,7 +251,10 @@ fn the_idle_compaction_is_exempt_from_the_pause_budget_and_nothing_else_is() {
     };
 
     let throughput = decide(false);
-    assert!(!throughput.enabled, "a waiting mutator keeps its pause budget");
+    assert!(
+        !throughput.enabled,
+        "a waiting mutator keeps its pause budget"
+    );
     assert_eq!(throughput.reason, "pause_budget_exceeded");
 
     let idle = decide(true);
