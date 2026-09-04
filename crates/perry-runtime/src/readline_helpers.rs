@@ -8,19 +8,6 @@ use crate::closure::{
 use crate::object::{js_object_alloc_with_shape, js_object_set_field};
 use crate::string::{js_string_from_bytes, StringHeader};
 use crate::value::{js_jsvalue_to_string, JSValue, TAG_FALSE, TAG_UNDEFINED};
-use std::cell::RefCell;
-use std::collections::HashMap;
-
-#[derive(Default)]
-struct KeypressReplayState {
-    emitted: Vec<Vec<u8>>,
-    replay_index: Option<usize>,
-}
-
-thread_local! {
-    static KEYPRESS_REPLAY: RefCell<HashMap<i64, KeypressReplayState>> =
-        RefCell::new(HashMap::new());
-}
 
 fn undefined() -> f64 {
     f64::from_bits(TAG_UNDEFINED)
@@ -162,14 +149,18 @@ fn string_bytes(value: f64) -> Vec<u8> {
 }
 
 fn build_keypress_object(name: &str, ctrl: bool, shift: bool, meta: bool, seq: &str) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
     let packed = b"name\0ctrl\0shift\0meta\0sequence\0";
     let obj = js_object_alloc_with_shape(0x7FFF_FF48, 5, packed.as_ptr(), packed.len() as u32);
+    let obj_handle = scope.root_raw_mut_ptr(obj);
     let name_str = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let obj = obj_handle.get_raw_mut_ptr();
     js_object_set_field(obj, 0, JSValue::string_ptr(name_str));
     js_object_set_field(obj, 1, JSValue::bool(ctrl));
     js_object_set_field(obj, 2, JSValue::bool(shift));
     js_object_set_field(obj, 3, JSValue::bool(meta));
     let seq_str = js_string_from_bytes(seq.as_ptr(), seq.len() as u32);
+    let obj = obj_handle.get_raw_mut_ptr();
     js_object_set_field(obj, 4, JSValue::string_ptr(seq_str));
     f64::from_bits(JSValue::pointer(obj as *const u8).bits())
 }
@@ -209,52 +200,82 @@ fn parse_keypress(chunk: &[u8]) -> Option<(Option<String>, String, bool, bool, b
     Some((Some(seq.clone()), seq.clone(), false, false, false, seq))
 }
 
-fn is_replayed_keypress_chunk(stream_raw: i64, bytes: &[u8]) -> bool {
-    KEYPRESS_REPLAY.with(|states| {
-        let mut states = states.borrow_mut();
-        let state = states.entry(stream_raw).or_default();
-        if let Some(index) = state.replay_index {
-            if index < state.emitted.len() && state.emitted[index] == bytes {
-                state.replay_index = if index + 1 >= state.emitted.len() {
-                    None
-                } else {
-                    Some(index + 1)
-                };
-                return true;
+/// Split a cooked-mode stream chunk into the logical key units that Node's
+/// `emitKeypressEvents` parser emits. Raw-mode input already arrives one byte
+/// at a time, while a pipe commonly arrives as `"abc\n"` in one read; treating
+/// that whole read as one key was the cooked-input half of #9692.
+pub fn split_keypress_chunks(bytes: &[u8]) -> Vec<Vec<u8>> {
+    let mut chunks = Vec::new();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == 0x1b
+            && index + 2 < bytes.len()
+            && matches!(bytes[index + 1], b'[' | b'O')
+        {
+            let mut end = index + 2;
+            while end < bytes.len() && end - index < 16 {
+                if (0x40..=0x7e).contains(&bytes[end]) {
+                    end += 1;
+                    break;
+                }
+                end += 1;
             }
-            state.replay_index = None;
+            chunks.push(bytes[index..end].to_vec());
+            index = end;
+            continue;
         }
-        if state.emitted.len() > 1 && state.emitted.first().is_some_and(|first| first == bytes) {
-            state.replay_index = Some(1);
-            return true;
+
+        let width = match bytes[index] {
+            0x00..=0x7f => 1,
+            0xc2..=0xdf => 2,
+            0xe0..=0xef => 3,
+            0xf0..=0xf4 => 4,
+            _ => 1,
+        };
+        let end = (index + width).min(bytes.len());
+        if std::str::from_utf8(&bytes[index..end]).is_ok() {
+            chunks.push(bytes[index..end].to_vec());
+            index = end;
+        } else {
+            chunks.push(vec![bytes[index]]);
+            index += 1;
         }
-        state.emitted.push(bytes.to_vec());
-        if state.emitted.len() > 32 {
-            state.emitted.remove(0);
-        }
-        false
-    })
+    }
+    chunks
 }
 
 extern "C" fn emit_keypress_data(closure: *const ClosureHeader, chunk: f64) -> f64 {
-    let stream = js_closure_get_capture_f64(closure, 0);
-    let Some(raw) = raw_ptr_from_value(stream) else {
-        return undefined();
-    };
-    let bytes = string_bytes(chunk);
-    if is_replayed_keypress_chunk(raw, &bytes) {
-        return undefined();
-    }
-    if let Some((str_arg, name, ctrl, shift, meta, seq)) = parse_keypress(&bytes) {
+    let stream_scope = crate::gc::RuntimeHandleScope::new();
+    let stream = stream_scope.root_nanbox_f64(js_closure_get_capture_f64(closure, 0));
+    let chunk = stream_scope.root_nanbox_f64(chunk);
+    let bytes = string_bytes(chunk.get_nanbox_f64());
+    for key_chunk in split_keypress_chunks(&bytes) {
+        let Some((str_arg, name, ctrl, shift, meta, seq)) = parse_keypress(&key_chunk) else {
+            continue;
+        };
+        let scope = crate::gc::RuntimeHandleScope::new();
         let event = boxed_str(b"keypress");
-        let mut args = js_array_alloc(0);
+        let event = scope.root_nanbox_f64(event);
         let first = str_arg
             .as_ref()
             .map(|s| boxed_str(s.as_bytes()))
             .unwrap_or_else(undefined);
-        args = js_array_push_f64(args, first);
-        args = js_array_push_f64(args, build_keypress_object(&name, ctrl, shift, meta, &seq));
-        crate::node_stream::js_node_stream_method_emit_args(raw, event, args as i64);
+        let first = scope.root_nanbox_f64(first);
+        let key = build_keypress_object(&name, ctrl, shift, meta, &seq);
+        let key = scope.root_nanbox_f64(key);
+        let args = scope.root_raw_mut_ptr(js_array_alloc(0));
+        let pushed = js_array_push_f64(args.get_raw_mut_ptr(), first.get_nanbox_f64());
+        args.set_raw_mut_ptr(pushed);
+        let pushed = js_array_push_f64(args.get_raw_mut_ptr(), key.get_nanbox_f64());
+        args.set_raw_mut_ptr(pushed);
+        let Some(raw) = raw_ptr_from_value(stream.get_nanbox_f64()) else {
+            return undefined();
+        };
+        crate::node_stream::js_node_stream_method_emit_args(
+            raw,
+            event.get_nanbox_f64(),
+            args.get_raw_mut_ptr::<crate::array::ArrayHeader>() as i64,
+        );
     }
     undefined()
 }
@@ -263,13 +284,27 @@ extern "C" fn emit_keypress_data(closure: *const ClosureHeader, chunk: f64) -> f
 pub extern "C" fn js_readline_emit_keypress_events_args(
     args: *const crate::array::ArrayHeader,
 ) -> f64 {
-    let stream = arg(args, 0);
-    let Some(raw) = raw_ptr_from_value(stream) else {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let stream = scope.root_nanbox_f64(arg(args, 0));
+    if raw_ptr_from_value(stream.get_nanbox_f64()).is_none() {
+        return undefined();
+    }
+    let listener = js_closure_alloc(emit_keypress_data as *const u8, 1);
+    js_closure_set_capture_f64(listener, 0, stream.get_nanbox_f64());
+    let listener = scope.root_raw_const_ptr(listener as *const ClosureHeader);
+    let Some(raw) = raw_ptr_from_value(stream.get_nanbox_f64()) else {
         return undefined();
     };
-    let listener = js_closure_alloc(emit_keypress_data as *const u8, 1);
-    js_closure_set_capture_f64(listener, 0, stream);
-    let listener_value = f64::from_bits(JSValue::pointer(listener as *const u8).bits());
-    crate::node_stream::js_node_stream_method_on(raw, boxed_str(b"data"), listener_value);
+    if crate::os::is_process_stdin_handle(raw) {
+        crate::os::enable_process_stdin_keypress_events(
+            listener.get_raw_const_ptr::<ClosureHeader>() as i64,
+        );
+    } else {
+        let event = scope.root_nanbox_f64(boxed_str(b"data"));
+        let listener_value = f64::from_bits(
+            JSValue::pointer(listener.get_raw_const_ptr::<ClosureHeader>() as *const u8).bits(),
+        );
+        crate::node_stream::js_node_stream_method_on(raw, event.get_nanbox_f64(), listener_value);
+    }
     undefined()
 }

@@ -241,14 +241,119 @@ fn coalesce_escape_sequences(raw: Vec<Vec<u8>>) -> Vec<Vec<u8>> {
     out
 }
 
+/// Classify reader blocks after synchronous JS for this event-loop turn has
+/// settled the stream mode. This keeps physical I/O single-owned without
+/// exposing producer-thread scheduling as observable listener behavior.
+fn route_pending_stdin_input() {
+    if STDIN_DESTROYED.load(Ordering::Acquire) {
+        if let Ok(mut pending) = PENDING_INPUT.lock() {
+            pending.clear();
+        }
+        if let Ok(mut line) = PENDING_LINE_BYTES.lock() {
+            line.clear();
+        }
+        return;
+    }
+
+    let blocks = PENDING_INPUT
+        .lock()
+        .map(|mut pending| std::mem::take(&mut *pending))
+        .unwrap_or_default();
+    let mut line_buf = PENDING_LINE_BYTES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut raw_chunks: Vec<Vec<u8>> = Vec::new();
+
+    for block in blocks {
+        for byte in block {
+            if RAW_MODE.load(Ordering::Acquire) {
+                // Preserve byte-sized raw chunks so escape sequences can be
+                // reassembled across reads by `coalesce_escape_sequences`.
+                raw_chunks.push(vec![byte]);
+            } else if STDIN_DATA_FLOWING.load(Ordering::Acquire)
+                || STDIN_PULL_MODE.load(Ordering::Acquire)
+            {
+                line_buf.push(byte);
+            } else if byte == b'\n' {
+                if line_buf.last() == Some(&b'\r') {
+                    line_buf.pop();
+                }
+                let line = String::from_utf8_lossy(&line_buf).into_owned();
+                line_buf.clear();
+                if let Ok(mut queue) = PENDING_LINES.lock() {
+                    queue.push(line);
+                }
+            } else {
+                line_buf.push(byte);
+            }
+        }
+
+        if !raw_chunks.is_empty() {
+            if let Ok(mut queue) = PENDING_DATA.lock() {
+                queue.append(&mut raw_chunks);
+            }
+        }
+        // One cooked `'data'` chunk per physical read, preserving #9489's Node
+        // chunking while leaving line splitting to the readline consumer.
+        if !line_buf.is_empty()
+            && !RAW_MODE.load(Ordering::Acquire)
+            && (STDIN_DATA_FLOWING.load(Ordering::Acquire)
+                || STDIN_PULL_MODE.load(Ordering::Acquire))
+        {
+            if let Ok(mut queue) = PENDING_DATA.lock() {
+                queue.push(std::mem::take(&mut *line_buf));
+            }
+            *line_buf = Vec::with_capacity(65536);
+        }
+    }
+
+    // EOF is published after the reader has enqueued its final block. The
+    // producer may publish it while this pump is still classifying an earlier
+    // snapshot, so flush only when no later block remains in PENDING_INPUT.
+    if stdin_eof_input_drained() {
+        if !line_buf.is_empty() {
+            if (STDIN_DATA_FLOWING.load(Ordering::Acquire)
+                || STDIN_PULL_MODE.load(Ordering::Acquire))
+                && !RAW_MODE.load(Ordering::Acquire)
+            {
+                if let Ok(mut queue) = PENDING_DATA.lock() {
+                    queue.push(std::mem::take(&mut *line_buf));
+                }
+            } else if !RAW_MODE.load(Ordering::Acquire) {
+                if line_buf.last() == Some(&b'\r') {
+                    line_buf.pop();
+                }
+                let line = String::from_utf8_lossy(&line_buf).into_owned();
+                line_buf.clear();
+                if let Ok(mut queue) = PENDING_LINES.lock() {
+                    queue.push(line);
+                }
+            }
+        }
+    }
+}
+
+/// Whether physical EOF has been observed and every preceding reader block
+/// has left the handoff queue. The reader enqueues a block before publishing
+/// EOF, so the acquire load followed by the queue lock closes the race where a
+/// pump took an earlier snapshot just before the final blocks arrived.
+fn stdin_eof_input_drained() -> bool {
+    EOF_REACHED.load(Ordering::Acquire)
+        && PENDING_INPUT
+            .lock()
+            .map(|pending| pending.is_empty())
+            .unwrap_or(false)
+}
+
 /// Drain pending lines and byte chunks, dispatching to registered
 /// callbacks. Called from the async-bridge tick on every event-loop
 /// iteration. Returns the number of callbacks fired.
 #[no_mangle]
 pub extern "C" fn js_readline_process_pending() -> i32 {
     let mut fired: i32 = 0;
+    route_pending_stdin_input();
 
-    // Drain raw-mode byte chunks → 'data' / 'keypress' callbacks.
+    // Drain raw- or cooked-mode byte chunks → 'data' / 'keypress' callbacks.
     let chunks: Vec<Vec<u8>> = if STDIN_DESTROYED.load(Ordering::Acquire) {
         if let Ok(mut q) = PENDING_DATA.lock() {
             q.clear();
@@ -302,7 +407,7 @@ pub extern "C" fn js_readline_process_pending() -> i32 {
     // JS busy loop: one registered listener meant a callback invocation on
     // every event-loop iteration forever, and the non-zero `fired` return
     // kept the loop hot.
-    let readable_eof_due = EOF_REACHED.load(Ordering::Acquire)
+    let readable_eof_due = stdin_eof_input_drained()
         && !READABLE_EOF_NOTIFIED.load(Ordering::Acquire)
         && !STDIN_DESTROYED.load(Ordering::Acquire);
     if !chunks.is_empty() || readable_eof_due {
@@ -336,10 +441,14 @@ pub extern "C" fn js_readline_process_pending() -> i32 {
     // drain (not once per chunk) and each chunk is parsed once, not once
     // per callback.
     let data_callbacks = DATA_CALLBACKS.lock().map(|v| v.clone()).unwrap_or_default();
-    let keypress_callbacks = KEYPRESS_CALLBACKS
-        .lock()
-        .map(|v| v.clone())
-        .unwrap_or_default();
+    let keypress_callbacks = if cfg!(test) || perry_runtime::os::stdin_keypress_events_enabled() {
+        KEYPRESS_CALLBACKS
+            .lock()
+            .map(|v| v.clone())
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
     // `stdin_chunk_value`, the sequence string and key-object construction
     // all allocate. Root these cloned callback snapshots because the mutable
     // registry scanner can only rewrite the original listener lists.
@@ -374,10 +483,10 @@ pub extern "C" fn js_readline_process_pending() -> i32 {
                 fired += 1;
             }
         }
-        if keypress_callback_handles.is_empty() {
-            continue;
-        }
-        if let Some((name, ctrl, shift, meta, seq)) = parse_keypress(&chunk) {
+        for key_chunk in perry_runtime::readline_helpers::split_keypress_chunks(&chunk) {
+            let Some((name, ctrl, shift, meta, seq)) = parse_keypress(&key_chunk) else {
+                continue;
+            };
             for callback in &keypress_callback_handles {
                 // Root the sequence string across build_keypress_object's
                 // allocations (a moving minor GC there would leave arg1
@@ -428,7 +537,7 @@ pub extern "C" fn js_readline_process_pending() -> i32 {
     // emits process.stdin's end/close events. `rl.close()` may already have
     // fired the first event without stdin actually ending, so the two
     // one-shot states must not be conflated.
-    if EOF_REACHED.load(Ordering::Acquire) {
+    if stdin_eof_input_drained() {
         let readline_close_already = CLOSE_FIRED.with(|f| {
             let was = *f.borrow();
             *f.borrow_mut() = true;
@@ -503,6 +612,7 @@ pub extern "C" fn js_readline_has_active() -> i32 {
     let paused = STDIN_PAUSED.load(Ordering::Acquire);
     let refed = STDIN_REFED.load(Ordering::Acquire);
     let has_lines = PENDING_LINES.lock().map(|q| !q.is_empty()).unwrap_or(false);
+    let has_input = PENDING_INPUT.lock().map(|q| !q.is_empty()).unwrap_or(false);
     // A held escape prefix counts as pending data: the loop must stay alive
     // until its explicit escapeCodeTimeout deadline can flush it.
     let has_data = PENDING_DATA.lock().map(|q| !q.is_empty()).unwrap_or(false)
@@ -545,7 +655,11 @@ pub extern "C" fn js_readline_has_active() -> i32 {
             || has_close_cb);
     if !destroyed
         && refed
-        && (has_dispatchable_lines || has_dispatchable_data || has_close_cb || reader_keeps_alive)
+        && ((has_input && !paused)
+            || has_dispatchable_lines
+            || has_dispatchable_data
+            || has_close_cb
+            || reader_keeps_alive)
     {
         1
     } else {
@@ -556,6 +670,22 @@ pub extern "C" fn js_readline_has_active() -> i32 {
 #[cfg(test)]
 mod tests {
     use super::parse_keypress;
+
+    #[test]
+    fn eof_waits_for_every_reader_handoff_block() {
+        let _guard = super::super::test_support::reset();
+        super::PENDING_INPUT
+            .lock()
+            .unwrap()
+            .push(b"still pending".to_vec());
+        super::EOF_REACHED.store(true, std::sync::atomic::Ordering::Release);
+
+        assert!(!super::stdin_eof_input_drained());
+        super::PENDING_INPUT.lock().unwrap().clear();
+        assert!(super::stdin_eof_input_drained());
+
+        super::EOF_REACHED.store(false, std::sync::atomic::Ordering::Release);
+    }
 
     #[test]
     fn parse_keypress_arrow_keys() {
