@@ -40,9 +40,10 @@ use futures_util::{SinkExt, StreamExt};
 use lazy_static::lazy_static;
 use perry_ffi::{
     alloc_set, alloc_string, gc_register_mutable_root_scanner_named, get_handle_mut,
-    iter_handles_of_mut, notify_main_thread, register_handle, set_add, set_delete, spawn_async,
-    spawn_blocking_with_reactor as spawn_blocking, take_handle, GcRootVisitor, Handle, JsClosure,
-    JsString, JsValue, ObjectHeader, RawClosureHeader, StringHeader,
+    iter_handles_of_mut, notify_main_thread, register_aux_event_pump, register_handle, set_add,
+    set_delete, spawn_async, spawn_blocking_with_reactor as spawn_blocking, take_handle,
+    GcRootVisitor, Handle, JsClosure, JsString, JsValue, ObjectHeader, RawClosureHeader,
+    StringHeader,
 };
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicI32, Ordering};
@@ -141,12 +142,13 @@ extern "C" {
     );
 }
 
-/// Install the crate's runtime hooks once: the mutable-root scanner, and the
-/// handle-property dispatch extension that answers dynamic reads on ws
-/// handles (#9324).
+/// Install the crate's runtime hooks once: event-pump and keepalive
+/// contributors, the mutable-root scanner, and the handle-property dispatch
+/// extension that answers dynamic reads on ws handles (#9324).
 fn ensure_runtime_hooks_registered() {
     WS_RUNTIME_HOOKS_REGISTERED.call_once(|| {
         gc_register_mutable_root_scanner_named("perry-ext-ws", scan_ws_roots);
+        register_aux_event_pump(js_ws_process_pending, js_ws_has_pending);
         unsafe {
             js_register_handle_property_dispatch_extension(js_ext_ws_handle_property_dispatch)
         };

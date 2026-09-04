@@ -442,29 +442,14 @@ pub(crate) mod stdlib_pump {
         })
     }
 
-    // #2532 — auxiliary pump / has-active registries.
+    // #2532/#9696 — extension pump / keepalive registries.
     //
-    // perry-stdlib owns the single `STDLIB_PUMP_FN` slot above and drains
-    // every in-tree module's pending queue from there. But the
-    // `perry-ext-*` wrapper crates (perry-ext-http's request queue,
-    // perry-ext-http's client response queue, …) are normally drained by
-    // `js_stdlib_process_pending`'s `#[cfg(feature = "external-*-pump")]`
-    // arms — which are only compiled in when the *workspace* auto-optimize
-    // rebuilds perry-stdlib with that feature.
-    //
-    // In an out-of-tree install there is no workspace to rebuild from, so
-    // the link uses the prebuilt full `libperry_stdlib.a` with those pump
-    // arms compiled OUT. The ext lib would then link but its queue would
-    // never be drained — a `node:http` server accepts connections that
-    // nobody dispatches and the program hangs.
-    //
-    // These registries let each linked ext crate register its own
-    // `*_process_pending` / `*_has_active` directly with the runtime, which
-    // drains them on every tick regardless of which perry-stdlib features
-    // are present. Registration is idempotent (a given fn pointer is only
-    // stored once), so the in-tree path's compile-time arm calling the same
-    // function is harmless — the second drain of an already-empty queue is
-    // a no-op.
+    // A prebuilt stdlib cannot know which `perry-ext-*` archives a program
+    // will link. Each extension therefore registers its own pending-work pump
+    // and activity contributor when its first entry point runs. The runtime
+    // drains and queries them without either side naming the other's symbols,
+    // which also lets out-of-tree extensions participate. Registration is
+    // idempotent for each function pointer.
     static AUX_PUMPS: Mutex<Vec<extern "C" fn() -> i32>> = Mutex::new(Vec::new());
     static AUX_HAS_ACTIVE: Mutex<Vec<extern "C" fn() -> i32>> = Mutex::new(Vec::new());
 
@@ -513,6 +498,15 @@ pub(crate) mod stdlib_pump {
             Err(_) => return false,
         };
         fns.iter().any(|f| f() != 0)
+    }
+
+    /// Query the registered extension keepalive contributors.
+    ///
+    /// Exported so the stdlib wait driver's fast path can decide whether to
+    /// advance native I/O without naming any extension crate or symbol.
+    #[no_mangle]
+    pub extern "C" fn js_aux_has_active() -> i32 {
+        i32::from(aux_has_active())
     }
 
     /// Register the stdlib's process_pending function pointer.
@@ -575,9 +569,8 @@ pub(crate) mod stdlib_pump {
                 func();
             }
         }
-        // #2532 — drain any `perry-ext-*` pumps registered directly with
-        // the runtime (out-of-tree installs where perry-stdlib's
-        // compile-time `external-*-pump` arms aren't present).
+        // #2532/#9696 — drain every initialized extension through the
+        // registry; stdlib deliberately has no per-extension pump arms.
         run_aux_pumps();
         let _ = crate::gc::gc_runtime_safepoint();
     }
@@ -655,7 +648,7 @@ pub(crate) mod stdlib_pump {
         // #2532 — a live `perry-ext-*` handle (e.g. a listening HTTP
         // server registered out-of-tree) keeps the loop alive even when
         // perry-stdlib reports none.
-        if aux_has_active() {
+        if js_aux_has_active() != 0 {
             return 1;
         }
         let f = STDLIB_HAS_ACTIVE_FN.load(Ordering::Acquire);
@@ -762,6 +755,35 @@ pub(crate) mod stdlib_pump {
                 after - before,
                 1,
                 "counting_pump must be invoked exactly once per run_aux_pumps despite triple registration"
+            );
+        }
+
+        static AUX_ACTIVE_FLAG: AtomicI32 = AtomicI32::new(0);
+        extern "C" fn aux_flag_has_active() -> i32 {
+            AUX_ACTIVE_FLAG.load(AtomicOrdering::SeqCst)
+        }
+
+        #[test]
+        fn aux_has_active_registration_is_idempotent_and_queryable() {
+            js_register_aux_has_active(aux_flag_has_active);
+            js_register_aux_has_active(aux_flag_has_active);
+            AUX_ACTIVE_FLAG.store(0, AtomicOrdering::SeqCst);
+            assert_eq!(
+                js_aux_has_active(),
+                0,
+                "an idle registered extension must not pin the event loop"
+            );
+            AUX_ACTIVE_FLAG.store(1, AtomicOrdering::SeqCst);
+            assert_eq!(
+                js_aux_has_active(),
+                1,
+                "a live registered extension must keep the event loop alive"
+            );
+            AUX_ACTIVE_FLAG.store(0, AtomicOrdering::SeqCst);
+            assert_eq!(
+                js_aux_has_active(),
+                0,
+                "the contributor must release the loop when it becomes idle"
             );
         }
     }

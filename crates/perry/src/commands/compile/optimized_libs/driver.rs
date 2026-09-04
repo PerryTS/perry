@@ -382,10 +382,9 @@ pub(crate) fn build_optimized_libs(
                 features.insert("web-fetch");
             }
             // v0.5.579 — when the flip strips `bundled-net`, activate
-            // `external-net-pump` so perry-stdlib's
-            // `js_stdlib_process_pending` knows to call into
-            // perry-ext-net's queue. Without this the call site is
-            // `#[cfg]`-gated off and tokio events stay queued forever.
+            // `external-net-pump` to retain the shared runtime and external
+            // net dispatch adapters. perry-ext-net registers its pump and
+            // keepalive contributor directly with runtime.
             if original_features.contains(&"bundled-net") {
                 features.insert("external-net-pump");
             }
@@ -398,15 +397,14 @@ pub(crate) fn build_optimized_libs(
             }
             // #1843 — when the flip strips the compression base feature and
             // routes `node:zlib` to perry-ext-zlib, activate
-            // `external-zlib-pump` so perry-stdlib's main-thread pump +
-            // active-handles gate drain perry-ext-zlib's deferred
-            // stream-event queue and route `gz.write()`/`.on()`/`.pipe()`
-            // (lost-static-type) calls into its `js_ext_zlib_dispatch_method`.
-            // Without this the events stay queued forever
-            // (`createGzip().on('data')` never fires). `module_to_features`
-            // maps `zlib` to `compression-gzip` since the per-codec split;
+            // `external-zlib-pump` to retain lost-static-type dispatch
+            // (`gz.write()`/`.on()`/`.pipe()`) into
+            // `js_ext_zlib_dispatch_method`. perry-ext-zlib registers its
+            // own deferred-event pump and keepalive contributor.
+            // `module_to_features` maps `zlib` to `compression-gzip` since
+            // the per-codec split;
             // keep matching the legacy `compression` umbrella too so a
-            // future mapping change can't silently drop the pump.
+            // future mapping change cannot silently drop the adapter.
             if original_features.contains(&"compression-gzip")
                 || original_features.contains(&"compression")
             {
@@ -420,23 +418,18 @@ pub(crate) fn build_optimized_libs(
                 features.remove("compression-zstd");
             }
             // Closes #606 — same shape for ws. When the well-known flip
-            // strips `bundled-ws` and routes to perry-ext-ws, activate
-            // `external-ws-pump` so perry-stdlib's main-thread pump and
-            // active-handles gate know to call into perry-ext-ws's
-            // queue. Without this, perry-ext-ws's accept loop pushes
-            // events that nobody drains, and the program exits or hangs
-            // before any handler fires.
+            // strips `bundled-ws` and routes to perry-ext-ws, retain
+            // `external-ws-pump` for the shared async runtime. perry-ext-ws
+            // registers its event queue and active handles when it initializes.
             if original_features.contains(&"bundled-ws") {
                 features.insert("external-ws-pump");
             }
             // `node:http` / `node:https` / `node:http2` can also create
             // WebSocket client handles through `server.on("upgrade", ...)`.
             // The HTTP wrapper registers those upgraded streams in
-            // perry-ext-ws, so stdlib must pump the external WS queue even
-            // when user code does not import `ws` directly. Without this,
-            // `ws.send(...)` from the upgrade callback works for the greeting,
-            // but later browser/client frames remain queued forever and
-            // `ws.on("message", ...)` never fires.
+            // perry-ext-ws, whose initialization registers its pump and
+            // keepalive callback even without a direct `ws` import. Retain
+            // `external-ws-pump` here for the shared async runtime.
             if matches!(module_normalized, "http" | "https" | "http2") {
                 features.insert("external-ws-pump");
             }
@@ -444,29 +437,20 @@ pub(crate) fn build_optimized_libs(
             // perry-ext-fastify (the in-stdlib adapter was removed), so this
             // fires whenever `import 'fastify'` is routed here — not off a
             // (now-gone) `bundled-fastify` feature. `external-fastify-pump`
-            // wires perry-ext-fastify's `js_fastify_process_pending` /
-            // `js_fastify_has_active` into perry-stdlib's
-            // `js_stdlib_process_pending` / `_has_active_handles` so requests
-            // flow on the main TS thread; it pulls `async-runtime` (shared
-            // tokio) transitively via its Cargo feature deps.
+            // retains Fastify's dispatch adapters and shared async runtime;
+            // perry-ext-fastify self-registers its pump and keepalive callback.
             if module_normalized == "fastify" {
                 features.insert("external-fastify-pump");
             }
             // Closes #604 — when the well-known flip routes `node:http` /
             // `node:https` / `node:http2` to perry-ext-http, activate
-            // `external-http-server-pump`
-            // so perry-stdlib's main-thread pump and active-handles gate
-            // call into perry-ext-http's queue each tick. Without
-            // this, the http server's accept-loop tokio task pushes
-            // requests that nobody drains, and the program hangs (pre-#604
-            // listen() blocked the main thread; post-#604 listen() is
-            // non-blocking but needs the pump to fire).
+            // `external-http-server-pump` to retain its dispatch adapters and
+            // shared async runtime. perry-ext-http self-registers the server
+            // pump and keepalive callback.
             //
             // Gate strictly on the MODULE name (not on `http-client`
-            // feature, which axios / node-fetch also map to) — those
-            // bring perry-ext-axios / perry-ext-fetch which don't define
-            // `js_node_http_server_*` symbols. Activating the pump for
-            // them would drop unresolved externs at link time.
+            // feature, which axios / node-fetch also map to), because those
+            // packages do not need the server dispatch adapters.
             if matches!(module_normalized, "http" | "https" | "http2") {
                 features.insert("external-http-server-pump");
                 // perry-ext-http depends on perry-ext-net, whose TLS client
@@ -478,11 +462,8 @@ pub(crate) fn build_optimized_libs(
                 features.insert("external-tls-server");
             }
             // Issue #769 — when `node:http` / `node:https` routes to
-            // perry-ext-http, also activate the client-side pump so the
-            // response/error queue produced by `http.request` /
-            // `http.get` (perry-ext-http's `js_http_request`,
-            // `js_http_get`) actually gets drained. Without this the
-            // request fires but the user callback never runs.
+            // perry-ext-http, retain its client dispatch adapters and shared
+            // runtime. The client queue and in-flight predicate self-register.
             if matches!(module_normalized, "http" | "https") {
                 features.insert("external-http-client-pump");
             }

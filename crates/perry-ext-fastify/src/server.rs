@@ -548,9 +548,9 @@ fn drain_server_upgrades(server_handle: Handle) -> i32 {
 
 /// Pump entrypoint — drain pending requests from every registered
 /// `FastifyServerHandle` and dispatch each on the main TS thread.
-/// Wired into perry-stdlib's `js_stdlib_process_pending` via the
-/// `external-fastify-pump` feature so the runtime's outer event loop
-/// drives us each tick.
+/// Registered with perry-runtime when the first Fastify app initializes, so
+/// the runtime's outer event loop drives it without a named reference from
+/// stdlib.
 ///
 /// Re-entrancy: dispatching a request runs user TS, which may `await`;
 /// `wait_for_promise` then drives `js_run_stdlib_pump`, which calls back into
@@ -681,10 +681,10 @@ fn try_recv_fastify_upgrade(server_handle: Handle) -> Option<FastifyPendingUpgra
 }
 
 /// Reports whether any registered fastify server is currently in the
-/// "listening" state OR has a non-empty upgrade queue. Wired into
-/// perry-stdlib's `js_stdlib_has_active_handles` so the runtime's main
-/// event loop keeps running until the user explicitly closes every
-/// server and every queued upgrade has been drained.
+/// "listening" state OR has a non-empty upgrade queue. Registered as a
+/// runtime keepalive contributor so the main event loop keeps running until
+/// the user explicitly closes every server and every queued upgrade has been
+/// drained.
 #[no_mangle]
 pub extern "C" fn js_fastify_has_active() -> i32 {
     let mut active = 0i32;

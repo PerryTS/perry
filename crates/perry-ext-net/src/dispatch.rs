@@ -7,8 +7,9 @@
 //! handle family.
 
 use perry_ffi::{
-    build_object_shape, js_object_alloc_with_shape, js_object_set_field, ArrayHeader, JsClosure,
-    JsPromise, JsValue, ObjectHeader, Promise, RawClosureHeader, StringHeader,
+    build_object_shape, js_object_alloc_with_shape, js_object_set_field, register_aux_event_pump,
+    ArrayHeader, JsClosure, JsPromise, JsValue, ObjectHeader, Promise, RawClosureHeader,
+    StringHeader,
 };
 use std::sync::Once;
 
@@ -27,8 +28,6 @@ extern "C" {
     ) -> f64;
     fn js_json_parse_or_null(text_ptr: *const StringHeader) -> JsValue;
     fn js_promise_resolve(promise: *mut Promise, value: f64);
-    fn js_register_aux_has_active(f: extern "C" fn() -> i32);
-    fn js_register_aux_pump(f: extern "C" fn() -> i32);
     fn js_register_handle_method_dispatch_extension(
         f: unsafe extern "C" fn(i64, *const u8, usize, *const f64, usize, *mut f64) -> i32,
     );
@@ -54,13 +53,16 @@ extern "C" fn process_pending_aux() -> i32 {
 
 pub(crate) fn ensure_runtime_dispatch_registered() {
     static REGISTER: Once = Once::new();
-    REGISTER.call_once(|| unsafe {
-        js_register_aux_pump(process_pending_aux);
-        js_register_aux_has_active(crate::js_ext_net_has_active_handles);
-        js_register_handle_method_dispatch_extension(js_ext_net_handle_method_dispatch);
-        js_register_handle_property_dispatch_extension(js_ext_net_handle_property_dispatch);
-        js_register_handle_property_set_dispatch_extension(js_ext_net_handle_property_set_dispatch);
-        js_set_native_bun_tcp_dispatch(crate::bun_tcp::js_bun_tcp_native_dispatch);
+    REGISTER.call_once(|| {
+        register_aux_event_pump(process_pending_aux, crate::js_ext_net_has_active_handles);
+        unsafe {
+            js_register_handle_method_dispatch_extension(js_ext_net_handle_method_dispatch);
+            js_register_handle_property_dispatch_extension(js_ext_net_handle_property_dispatch);
+            js_register_handle_property_set_dispatch_extension(
+                js_ext_net_handle_property_set_dispatch,
+            );
+            js_set_native_bun_tcp_dispatch(crate::bun_tcp::js_bun_tcp_native_dispatch);
+        }
     });
 }
 
