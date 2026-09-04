@@ -1787,7 +1787,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
     // can hold stale entries for closures that were never emitted — e.g.
     // `module.exports = function named(){}` records a display name for a fid that
     // CJS export lowering replaces with a different, materialized fid. Registering
-    // a name for the stale fid emits a `js_register_function_name` call referencing
+    // a name for the stale fid emits a `js_register_function_name_static` call referencing
     // an undefined `@perry_closure_*` global, which makes `clang -c` fail with
     // "use of undefined value" (regression class of #318/#343).
     let materialized_closure_ids: std::collections::HashSet<perry_hir::types::FuncId> =
@@ -1796,7 +1796,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
     // one loop down for `closure_source_text`, left standing here. Every entry
     // mints a rodata constant through `add_string_constant`, whose `@.str.N`
     // counter numbers in first-use order, and emits one
-    // `js_register_function_name` call in `__perry_init_strings_*`. Iterating
+    // `js_register_function_name_static` call in `__perry_init_strings_*`. Iterating
     // the map directly made both a per-process permutation, so the same source
     // compiled by the same binary produced different `.ll` on every run — which
     // silently invalidates any A/B that compares raw IR (the primary evidence

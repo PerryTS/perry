@@ -106,8 +106,11 @@ pub(crate) use crate::JSValue;
 // be nameable from the registration list.
 pub(crate) mod arithmetic;
 mod console;
+// #9188: the function-name / function-source sidecar registries, split out
+// of `formatting` when the copying and borrowing entry points were separated.
+mod fn_metadata;
+pub(crate) use fn_metadata::function_registries_census;
 mod formatting;
-pub(crate) use formatting::function_registries_census;
 mod globals;
 mod numbers;
 mod table;
@@ -144,15 +147,18 @@ pub(crate) use console::{
 #[cfg(test)]
 pub(crate) use console::{test_console_instance_count, test_seed_console_instance};
 
-pub use formatting::{
+pub use fn_metadata::{
     function_is_non_strict_ordinary_for_ptr, function_name_for_ptr, function_name_registry_entries,
     function_name_registry_len, function_source_for_func_ptr, function_source_for_ptr,
+    js_register_function_name, js_register_function_name_static, js_register_function_source,
+    js_register_function_source_static, register_function_name_if_absent,
+};
+
+pub use formatting::{
     js_array_print, js_boxed_bigint_new, js_boxed_boolean_new, js_boxed_number_new,
-    js_boxed_string_new, js_boxed_symbol_new, js_register_function_name,
-    js_register_function_source, js_util_format, js_util_format_with_options, js_util_inspect,
-    js_util_is_deep_strict_equal, js_util_is_deep_strict_equal_skip_prototype,
-    js_util_strip_vt_control_characters, register_function_name_if_absent,
-    scan_boxed_primitive_payload_roots_mut,
+    js_boxed_string_new, js_boxed_symbol_new, js_util_format, js_util_format_with_options,
+    js_util_inspect, js_util_is_deep_strict_equal, js_util_is_deep_strict_equal_skip_prototype,
+    js_util_strip_vt_control_characters, scan_boxed_primitive_payload_roots_mut,
 };
 
 pub(crate) use formatting::{

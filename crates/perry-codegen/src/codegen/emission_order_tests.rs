@@ -8,7 +8,7 @@
 //! * **Function-name registration** (`codegen/artifacts.rs`). Every inline
 //!   closure carrying a HIR display name mints a rodata constant through
 //!   `add_string_constant` — whose `@.str.N` counter numbers in first-use order
-//!   — and emits one `js_register_function_name` call into
+//!   — and emits one `js_register_function_name_static` call into
 //!   `__perry_init_strings_*`. Iterating `hir.closure_display_names` permuted
 //!   both. (#7038 fixed the identical defect in the `closure_source_text` loop
 //!   directly below it and left this one standing.)
@@ -167,7 +167,7 @@ fn ir(module: &Module) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Shape 1: `js_register_function_name` / `@.str.N`
+// Shape 1: `js_register_function_name_static` / `@.str.N`
 // ---------------------------------------------------------------------------
 
 /// `let _fK = () => {}` for `K` in `0..N`, each carrying a HIR display name.
@@ -207,10 +207,10 @@ fn closure_display_module() -> Module {
     m
 }
 
-/// The `func_id` of every `js_register_function_name` call, in emission order.
+/// The `func_id` of every `js_register_function_name_static` call, in emission order.
 fn registered_closure_ids(ir: &str) -> Vec<u32> {
     ir.lines()
-        .filter(|l| l.contains("call void @js_register_function_name("))
+        .filter(|l| l.contains("call void @js_register_function_name_static("))
         .filter_map(|l| {
             let at = l.find("@perry_closure_")?;
             let rest = &l[at..];
@@ -227,14 +227,14 @@ fn closure_display_names_are_emitted_in_func_id_order() {
     assert_eq!(
         ids.len(),
         N as usize,
-        "expected one js_register_function_name per closure display name; \
+        "expected one js_register_function_name_static per closure display name; \
          the fixture stopped exercising the emission path"
     );
     let mut sorted = ids.clone();
     sorted.sort_unstable();
     assert_eq!(
         ids, sorted,
-        "js_register_function_name calls must be emitted in FuncId order, not \
+        "js_register_function_name_static calls must be emitted in FuncId order, not \
          `hir.closure_display_names` hash order (#7622)"
     );
 }
@@ -247,7 +247,7 @@ fn closure_display_name_emission_is_run_to_run_deterministic() {
     let first = ir(&closure_display_module());
     let second = ir(&closure_display_module());
     assert!(
-        first.contains("call void @js_register_function_name("),
+        first.contains("call void @js_register_function_name_static("),
         "liveness: fixture emitted no function-name registrations"
     );
     assert_eq!(
