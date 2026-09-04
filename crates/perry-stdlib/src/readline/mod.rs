@@ -360,6 +360,28 @@ extern "C" fn stdin_listeners_provider(name_ptr: *const u8, name_len: usize) -> 
     f64::from_bits(JSValue::array_ptr(arr).bits())
 }
 
+/// `stdin.pause()` reached as an OBJECT method (an aliased binding). Bridged so
+/// it latches the SAME `STDIN_PAUSED` flag as codegen's literal
+/// `process.stdin.pause()` extern (#9676).
+extern "C" fn stdin_pause_op() {
+    STDIN_PAUSED.store(true, Ordering::Release);
+}
+
+/// `stdin.resume()` reached as an OBJECT method. This is the half that was
+/// missing: `rl.close()` and the literal `process.stdin.pause()` both set
+/// `STDIN_PAUSED`, and the pump's paused branch then leaves `PENDING_DATA`
+/// undrained while the reader keeps consuming bytes off the terminal. Only the
+/// literal `process.stdin.resume()` could clear it, so a TUI that holds stdin
+/// in a variable (`const s = process.stdin; ... s.resume()`) went permanently
+/// deaf — bytes consumed, CPU burnt on every keystroke, nothing dispatched.
+extern "C" fn stdin_resume_op() {
+    if !STDIN_DESTROYED.load(Ordering::Acquire) {
+        STDIN_PAUSED.store(false, Ordering::Release);
+        try_register_pump();
+        ensure_reader_started();
+    }
+}
+
 /// `stdin.addListener/on(event, cb)` reached as an OBJECT method (an aliased
 /// binding, e.g. `const {stdin} = props; stdin.addListener("readable", h)`).
 /// Registered with the runtime so both that form and codegen's direct
@@ -491,10 +513,13 @@ fn ensure_stdin_listeners_provider_registered() {
                 on: extern "C" fn(*const u8, usize, i64, i32),
                 off: extern "C" fn(*const u8, usize, i64),
             );
+            // #9676: the flow half of the same bridge — see `stdin_pause_op`.
+            fn js_register_stdin_flow_ops(pause: extern "C" fn(), resume: extern "C" fn());
         }
         unsafe {
             js_register_stdin_listeners_provider(stdin_listeners_provider);
             js_register_stdin_listener_ops(stdin_on_op, stdin_off_op);
+            js_register_stdin_flow_ops(stdin_pause_op, stdin_resume_op);
         }
     });
 }
