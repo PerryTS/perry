@@ -141,6 +141,7 @@ mod polymorphic_index_symbol_tests;
 mod primitive_proto_thunks;
 mod property_key;
 pub(crate) mod prototype_chain;
+pub(crate) mod shape_carriers;
 pub(crate) mod shapes;
 pub(crate) use shapes::ShapeTable;
 mod prototype_helpers;
@@ -687,6 +688,7 @@ fn shape_cache_insert(shape_id: u32, keys_array: *mut ArrayHeader) {
         .borrow_mut()
         .insert(shape_id, (keys_array, runtime_shape_id));
     crate::gc::runtime_write_barrier_root_raw_ptr(keys_array);
+    shape_carriers::note_shape_id(runtime_shape_id);
 }
 
 /// Thread-local shape-transition cache for the dynamic-key write path
@@ -988,6 +990,10 @@ fn transition_cache_lookup(
                 return None;
             }
         }
+        // A weak, unstabilized entry must not publish a retired id.
+        if !shape_carriers::unstable_target_resolves(entry) {
+            return None;
+        }
         Some((entry.next_keys, entry_slot_idx, entry.target_shape_id))
     } else {
         None
@@ -1048,6 +1054,9 @@ fn transition_cache_insert(
         entry.slot_idx = slot_idx | (len_marker << 24);
         entry.target_len = target_len;
     });
+    if target_len != 0 {
+        shape_carriers::note_shape_id(target_shape_id);
+    }
     if !array_tail_owner.is_null() {
         array_tail_transition::record_numeric_tail_transition(
             array_tail_owner,

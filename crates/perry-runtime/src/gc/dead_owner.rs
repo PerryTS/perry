@@ -203,17 +203,27 @@ fn owner_type_matches(header: &GcHeader, expected_obj_type: Option<u8>) -> bool 
 /// Post-trace fan-out (full mark-sweep + fallback minor). Runs at sweep
 /// entry, before any header is finalized or freed, so deadness probes read
 /// intact headers.
-pub(super) fn prune_dead_owner_side_tables_post_trace(full_trace: bool) {
+pub(super) fn prune_dead_owner_side_tables_post_trace(
+    full_trace: bool,
+    synchronous_full_trace: bool,
+) {
+    debug_assert!(!synchronous_full_trace || full_trace);
     if full_trace {
+        // Rebuild every restamping table's ownership before consulting the
+        // complete receiver census. An evicted cache entry releases its id in
+        // this same post-trace window.
+        crate::object::shape_carriers::recompute_after_full_trace();
+        if synchronous_full_trace {
+            crate::object::shapes::prune_uncarried_shape_descriptors_after_full_trace();
+        }
         // #8112: a full trace enumerated every live object, so the old-carrier
         // notes it accumulated are exactly the shapes old objects still carry.
         // Adopting them here is what lets the gate SHED a shape — minors only
         // ever add notes, so without this the table's root set would grow
         // monotonically and no keys array would ever be reclaimed again.
+        // #9726: this also clears the all-generation carried note after the
+        // synchronous prune consumed it. Budgeted traces only clear the note.
         crate::object::shapes::rotate_old_carrier_epoch_after_full_trace();
-        // The same rule for the array-tail transition caches: their carrier
-        // bits are exact only when rebuilt from live occupancy.
-        crate::object::array_tail_transition::recompute_cache_carriers_after_full_trace();
     }
     let probe = PostTraceProbe::new(full_trace);
     fan_out(

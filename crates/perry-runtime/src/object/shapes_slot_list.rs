@@ -517,7 +517,7 @@ pub(super) fn install_external_shape_id(
         return false;
     }
     let keys = keys as usize as u64;
-    let record = ShapeRecord::new(
+    let mut record = ShapeRecord::new(
         keys,
         logical_key_count,
         live_inline_slot_count,
@@ -525,10 +525,12 @@ pub(super) fn install_external_shape_id(
         super::ShapeObjectKind::Ordinary,
         0,
     );
+    record.set(super::shapes_store::RECORD_FLAG_EXTERNAL_CARRIER, true);
     let table = &crate::state::state().shapes;
     let mut inner = table.inner.borrow_mut();
-    if let Some(existing) = table.slab().get(id) {
-        return existing.facts_match(
+    if let Some(existing) = table.slab().record_ptr(id) {
+        // SAFETY: live slab record, single-threaded agent.
+        let matches = unsafe { &*existing }.facts_match(
             keys,
             logical_key_count,
             live_inline_slot_count,
@@ -536,6 +538,11 @@ pub(super) fn install_external_shape_id(
             super::ShapeObjectKind::Ordinary,
             0,
         );
+        if matches {
+            // SAFETY: same record and agent discipline as above.
+            unsafe { (*existing).set(super::shapes_store::RECORD_FLAG_EXTERNAL_CARRIER, true) };
+        }
+        return matches;
     }
     // A worker can have minted an equivalent local descriptor before module
     // initialization installs the process-global codegen id. Keep both id

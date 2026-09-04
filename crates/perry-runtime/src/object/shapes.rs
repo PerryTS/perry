@@ -48,8 +48,9 @@ pub(crate) use shapes_slot_list::{
     try_update_stable_tombstone_shape, try_update_stable_tombstone_shape_cached, SlotList,
 };
 use shapes_store::{
-    IdList, ShapeRecord, ShapeSlab, RECORD_FLAG_CACHE_CARRIER, RECORD_FLAG_FACTS_INDEXED,
-    RECORD_FLAG_OLD_CARRIER, RECORD_FLAG_OLD_CARRIER_SEEN,
+    IdList, ShapeRecord, ShapeSlab, RECORD_FLAG_CACHE_CARRIER, RECORD_FLAG_CARRIED_SEEN,
+    RECORD_FLAG_EXTERNAL_CARRIER, RECORD_FLAG_FACTS_INDEXED, RECORD_FLAG_OLD_CARRIER,
+    RECORD_FLAG_OLD_CARRIER_SEEN,
 };
 
 #[derive(Clone)]
@@ -634,6 +635,29 @@ pub(crate) unsafe fn note_old_generation_carrier(descriptor: Option<ShapeDescrip
     (*record).set(RECORD_FLAG_OLD_CARRIER | RECORD_FLAG_OLD_CARRIER_SEEN, true);
 }
 
+/// Note that a complete full trace visited a receiver carrying this shape.
+/// Unlike the old-generation gate, this answers receiver liveness regardless
+/// of generation and is consumed by post-trace descriptor retirement.
+#[inline]
+pub(crate) unsafe fn note_full_trace_carrier(descriptor: Option<ShapeDescriptor>) {
+    let Some(descriptor) = descriptor else {
+        return;
+    };
+    if descriptor.record != 0 {
+        (*(descriptor.record as *mut ShapeRecord)).set(RECORD_FLAG_CARRIED_SEEN, true);
+    }
+}
+
+#[inline]
+pub(crate) unsafe fn note_external_shape_carrier(descriptor: Option<ShapeDescriptor>) {
+    let Some(descriptor) = descriptor else {
+        return;
+    };
+    if descriptor.record != 0 {
+        (*(descriptor.record as *mut ShapeRecord)).set(RECORD_FLAG_EXTERNAL_CARRIER, true);
+    }
+}
+
 /// Retain a descriptor while an agent-local optimization cache can reinstall
 /// its ShapeId. Cache tables live with `RuntimeState`; the bit is recomputed
 /// from live table occupancy after every full trace
@@ -700,10 +724,11 @@ pub(crate) fn clear_all_cache_carriers() {
 /// Recompute the old-carrier gate from the trace that just finished.
 ///
 /// A FULL trace enumerates every live object, so the notes it accumulated are
-/// exactly the shapes old objects still carry; adopt them and clear the
-/// accumulator. Minors only ever ADD notes, which is why the gate needs a full
-/// trace to shed a shape whose last old carrier died — the same rule that
-/// governs every other old-generation reclamation.
+/// exactly the shapes old objects still carry; adopt them and clear both the
+/// old-carrier accumulator and the all-generation carried note. The latter is
+/// consumed by synchronous-full descriptor retirement immediately before this
+/// rotation. Budgeted full cycles clear it without retiring because their
+/// sliced trace is not a complete carrier census.
 pub(crate) fn rotate_old_carrier_epoch_after_full_trace() {
     crate::state::state().shapes.slab().for_each(|_, record| {
         // SAFETY: live slab record, single-threaded agent.
@@ -711,6 +736,7 @@ pub(crate) fn rotate_old_carrier_epoch_after_full_trace() {
             let seen = (*record).has(RECORD_FLAG_OLD_CARRIER_SEEN);
             (*record).set(RECORD_FLAG_OLD_CARRIER, seen);
             (*record).set(RECORD_FLAG_OLD_CARRIER_SEEN, false);
+            (*record).set(RECORD_FLAG_CARRIED_SEEN, false);
         }
     });
 }
@@ -724,7 +750,10 @@ pub(crate) fn rotate_old_carrier_epoch_after_full_trace() {
 /// rooted keys global as an integer heap word on every target.
 #[no_mangle]
 pub extern "C" fn js_object_shape_id_for_keys(keys: u64, key_count: u32) -> u32 {
-    shape_id_for_keys_ensure(keys as usize as *const ArrayHeader, key_count)
+    let id = shape_id_for_keys_ensure(keys as usize as *const ArrayHeader, key_count);
+    // SAFETY: `id` was resolved from this agent's live slab record above.
+    unsafe { note_external_shape_carrier(shape_descriptor_by_id(id)) };
+    id
 }
 
 /// Mint a process-global ShapeId for a codegen-registered typed layout and
@@ -1323,10 +1352,9 @@ fn retire_owned_shape_siblings(keys: u64, keep: u32) {
                 .copied()
                 .filter(|&id| {
                     id != keep
-                        && table
-                            .slab()
-                            .get(id)
-                            .is_some_and(|record| !record.has(RECORD_FLAG_CACHE_CARRIER))
+                        && table.slab().get(id).is_some_and(|record| {
+                            !record.has(RECORD_FLAG_CACHE_CARRIER | RECORD_FLAG_EXTERNAL_CARRIER)
+                        })
                 })
                 .collect()
         })
@@ -1753,6 +1781,29 @@ fn shape_keys_address_is_recycled(addr: usize) -> bool {
     }
 }
 
+/// Retire descriptors no live receiver carried during the just-completed
+/// synchronous full trace and no runtime metadata owner can reinstall.
+///
+/// The caller must run this while the full trace's `CARRIED_SEEN` notes are
+/// intact and only after cache-carrier bits have been rebuilt from live table
+/// occupancy. Minor and budgeted cycles are deliberately ineligible: neither
+/// provides an exact, stop-the-world enumeration of every live receiver.
+pub(crate) fn prune_uncarried_shape_descriptors_after_full_trace() {
+    let table = &crate::state::state().shapes;
+    let mut inner = table.inner.borrow_mut();
+    let mut stale = Vec::new();
+    table.slab().for_each(|id, record| {
+        // SAFETY: live slab record, read immediately under agent ownership.
+        let record = unsafe { &*record };
+        if !record.has(RECORD_FLAG_CARRIED_SEEN) && !record.cache_carrier() {
+            stale.push(id);
+        }
+    });
+    for id in stale {
+        remove_descriptor_and_reverse_indices(&mut inner, id);
+    }
+}
+
 /// Post-trace weak-table prune: drop slot indices and by-id descriptors whose
 /// keys array is dead. A live object has already traced its authoritative
 /// header edge and synchronized the descriptor named by its ShapeId, so a
@@ -2066,7 +2117,7 @@ pub(crate) fn shape_table_liveness_census(
         uncarried += 1;
         // SAFETY: live slab record, read immediately.
         let record = unsafe { *record };
-        if record.has(RECORD_FLAG_CACHE_CARRIER) {
+        if record.cache_carrier() {
             uncarried_cache += 1;
         } else if record.has(RECORD_FLAG_OLD_CARRIER) {
             uncarried_old += 1;

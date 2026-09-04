@@ -24,7 +24,10 @@
 //! alive by something else entirely".
 
 use super::super::*;
-use super::support::{collect_minor_trace, init_test_closure, ptr_bits, CopyingNurseryTestGuard};
+use super::support::{
+    collect_minor_trace, complete_budgeted_gc_cycle, init_test_closure, ptr_bits,
+    CopyingNurseryTestGuard, GcTriggerThresholdTestGuard,
+};
 use crate::object::shapes;
 
 /// Facts the assertions compare, read exclusively through the descriptor.
@@ -486,5 +489,182 @@ fn metadata_rewrite_validates_the_post_visit_non_array_address() {
             && shapes::test_shape_id_for_keys(to).is_none(),
         "the descriptor must validate the rewritten address before publishing it"
     );
+    shapes::test_clear_shape_table();
+}
+
+fn collect_synchronous_full_trace() {
+    let _ =
+        gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Direct));
+}
+
+fn build_unrooted_keyless_semantic_shape(slot: u32) -> u32 {
+    js_shadow_slot_set(
+        slot,
+        ptr_bits(crate::object::js_object_alloc(0, 0) as usize),
+    );
+    let obj = (js_shadow_slot_get(slot) & POINTER_MASK) as *mut crate::ObjectHeader;
+    let predecessor = unsafe { shapes::object_shape_stamp(obj) };
+    let shape_id = unsafe { shapes::transition_object_shape_semantics(obj) };
+    assert_ne!(shape_id, predecessor, "semantic transition must mint an id");
+    assert_ne!(
+        shapes::shape_descriptor_by_id(shape_id)
+            .expect("semantic descriptor")
+            .semantic_generation,
+        0,
+        "test premise: this must be a per-object semantic generation"
+    );
+    js_shadow_slot_set(slot, crate::value::TAG_UNDEFINED);
+    shape_id
+}
+
+/// #9726: keyless semantic generations used to be immortal because dead-key
+/// pruning asks about address zero, which is never a dead GC owner. A complete
+/// receiver census must retire that descriptor while preserving the inverse:
+/// the same kind of generation stays authoritative when its object is live.
+#[test]
+fn synchronous_full_trace_retires_only_uncarried_semantic_shapes() {
+    let _guard = CopyingNurseryTestGuard::new(2);
+    shapes::test_clear_shape_table();
+    crate::arena::arena_reset_all_blocks_to_zero();
+    gc_register_mutable_root_scanner(shapes::scan_shape_table_rekey_mut);
+
+    let dead_shape = build_unrooted_keyless_semantic_shape(0);
+    collect_synchronous_full_trace();
+    assert!(
+        shapes::shape_descriptor_by_id(dead_shape).is_none(),
+        "#9726: a keyless per-object generation with no live carrier survived a complete full trace"
+    );
+
+    build_two_key_object(0, b"e9726_live_");
+    let live_before = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::ObjectHeader;
+    let live_shape = unsafe { shapes::transition_object_shape_semantics(live_before) };
+    assert_ne!(
+        shapes::shape_descriptor_by_id(live_shape)
+            .expect("live semantic descriptor before collection")
+            .semantic_generation,
+        0
+    );
+
+    collect_synchronous_full_trace();
+
+    let live_after = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::ObjectHeader;
+    assert_eq!(
+        unsafe { shapes::object_shape_stamp(live_after) },
+        live_shape
+    );
+    assert!(
+        shapes::shape_descriptor_by_id(live_shape).is_some(),
+        "#9726/#9200: pruning must not leave a live receiver stamped with an unresolved id"
+    );
+    let own_keys = crate::object::js_object_keys(live_after);
+    assert_eq!(
+        unsafe { (*own_keys).length },
+        2,
+        "#9726/#9200: Object.keys() lost the live receiver's descriptor facts"
+    );
+
+    js_shadow_slot_set(0, crate::value::TAG_UNDEFINED);
+    shapes::test_clear_shape_table();
+}
+
+/// Incremental full marking is sliced across mutator turns, so its receiver
+/// notes are deliberately not an exact liveness census. It may rotate the
+/// epoch, but it must leave uncarried retirement to a synchronous full trace.
+#[test]
+fn budgeted_full_trace_does_not_retire_from_a_partial_carrier_census() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    shapes::test_clear_shape_table();
+    crate::arena::arena_reset_all_blocks_to_zero();
+
+    let shape_id = build_unrooted_keyless_semantic_shape(0);
+    GC_OLD_RECLAIM_PENDING.with(|pending| pending.set(true));
+    let mut first = JsGcStepResult::default();
+    assert_eq!(
+        js_gc_step_work_units(1, &mut first),
+        JS_GC_STEP_STATUS_ACTIVE
+    );
+    assert_eq!(first.collection_kind, GcCollectionKind::Full.ffi_code());
+    let completed = complete_budgeted_gc_cycle();
+    assert_eq!(completed.status, JS_GC_STEP_STATUS_COMPLETED);
+    assert!(
+        shapes::shape_descriptor_by_id(shape_id).is_some(),
+        "#9726: a budgeted trace must not retire from its partial carrier notes"
+    );
+
+    collect_synchronous_full_trace();
+    assert!(
+        shapes::shape_descriptor_by_id(shape_id).is_none(),
+        "the next complete full trace must retire the same uncarried descriptor"
+    );
+    shapes::test_clear_shape_table();
+}
+
+fn build_transition_cache_target_then_drop(slot: u32) -> (u32, u32) {
+    // Model the process-lifetime module global that can birth the predecessor
+    // again after no receiver currently carries it.
+    let predecessor = shapes::js_object_shape_id_for_keys(0, 0);
+    js_shadow_slot_set(
+        slot,
+        ptr_bits(crate::object::js_object_alloc(0, 0) as usize),
+    );
+    let key = crate::string::js_string_from_bytes(b"cache6".as_ptr(), 6);
+    let obj = (js_shadow_slot_get(slot) & POINTER_MASK) as *mut crate::ObjectHeader;
+    assert_eq!(unsafe { shapes::object_shape_stamp(obj) }, predecessor);
+    crate::object::js_object_set_field_by_name(obj, key, 9726.0);
+    let obj = (js_shadow_slot_get(slot) & POINTER_MASK) as *mut crate::ObjectHeader;
+    let target = unsafe { shapes::object_shape_stamp(obj) };
+    assert_ne!(target, predecessor);
+    js_shadow_slot_set(slot, crate::value::TAG_UNDEFINED);
+    (predecessor, target)
+}
+
+/// The transition table is a real ShapeId publisher: generated write sites
+/// read its target id and stamp it directly. Park a target with no receiver,
+/// collect, then prove a later receiver can still take the cached transition.
+#[test]
+fn transition_cache_target_survives_and_can_restamp_after_full_trace() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    shapes::test_clear_shape_table();
+    crate::arena::arena_reset_all_blocks_to_zero();
+    gc_register_mutable_root_scanner(shapes::scan_shape_table_rekey_mut);
+    gc_register_mutable_root_scanner(crate::object::scan_transition_cache_roots_mut);
+
+    let (predecessor, target) = build_transition_cache_target_then_drop(0);
+    collect_synchronous_full_trace();
+    assert!(
+        shapes::shape_descriptor_by_id(predecessor).is_some(),
+        "a process-lifetime generated-code id must remain installed"
+    );
+    let cached = shapes::shape_descriptor_by_id(target)
+        .expect("a live transition-cache entry must retain its target descriptor");
+    assert!(
+        cached.cache_carrier,
+        "the transition target must own its id"
+    );
+
+    js_shadow_slot_set(0, ptr_bits(crate::object::js_object_alloc(0, 0) as usize));
+    let key = crate::string::js_string_from_bytes(b"cache6".as_ptr(), 6);
+    let consumer = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::ObjectHeader;
+    shapes::test_watch_cached_transition_stamps(consumer as usize);
+    crate::object::js_object_set_field_by_name(consumer, key, 26.0);
+    assert_eq!(
+        shapes::test_cached_transition_stamps(),
+        1,
+        "the cache path must perform the stamp"
+    );
+    let consumer = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::ObjectHeader;
+    assert_eq!(
+        unsafe { shapes::object_shape_stamp(consumer) },
+        target,
+        "the post-GC transition hit must stamp the retained target id"
+    );
+    assert_eq!(
+        unsafe { (*crate::object::js_object_keys(consumer)).length },
+        1
+    );
+
+    shapes::test_reset_cached_transition_stamps();
+    js_shadow_slot_set(0, crate::value::TAG_UNDEFINED);
     shapes::test_clear_shape_table();
 }
