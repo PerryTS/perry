@@ -601,10 +601,21 @@ pub extern "C" fn js_validate_array_comparator(cmp_boxed: f64) -> i64 {
     if jv.is_undefined() {
         return 0;
     }
-    // Callable function -> comparator path.
+    // Callable closure or callable Proxy -> comparator path. Use the shared
+    // validator rather than probing CLOSURE_MAGIC directly: Proxy values are
+    // small registry ids, not dereferenceable ClosureHeader pointers.
     if jv.is_pointer() {
         let ptr = jv.as_pointer::<ClosureHeader>();
-        if !ptr.is_null() && unsafe { (*ptr).type_tag == crate::closure::CLOSURE_MAGIC } {
+        if !crate::closure::get_valid_func_ptr(ptr).is_null() {
+            return ptr as i64;
+        }
+        // #9681: DirectCall2 deliberately falls back to js_closure_call2 for
+        // this bare proxy id, which then performs the Proxy [[Call]]. Check
+        // callability here so a Proxy of a non-callable still throws before
+        // sorting starts.
+        if crate::proxy::js_proxy_is_proxy(cmp_boxed) == 1
+            && crate::proxy::proxy_wraps_callable(cmp_boxed)
+        {
             return ptr as i64;
         }
     }
@@ -633,6 +644,15 @@ fn throw_invalid_comparator(cmp_boxed: f64) -> ! {
                 std::str::from_utf8(slice).unwrap_or("").to_string()
             }
         }
+    };
+    // V8's diagnostic renderer uses #<Object> for an ordinary object (and a
+    // transparent Proxy of one), while JavaScript ToString yields
+    // [object Object]. Keep the existing ToString spellings for arrays,
+    // symbols, primitives, and other object kinds.
+    let value_str = if value_str == "[object Object]" {
+        "#<Object>".to_string()
+    } else {
+        value_str
     };
     let message = format!(
         "The comparison function must be either a function or undefined: {}",
