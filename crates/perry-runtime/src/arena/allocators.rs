@@ -28,6 +28,7 @@ pub fn arena_alloc(size: usize, align: usize) -> *mut u8 {
             let offset = (*inline_ptr).offset;
             let arena = &mut *arena_ptr;
             let current = arena.current;
+            super::alloc_sample::note_inline_sync(arena.blocks[current].offset, offset);
             arena.blocks[current].offset = offset;
         }
         let ptr = crate::arena::arena_cell_alloc(arena_ptr, size, align);
@@ -41,7 +42,7 @@ pub fn arena_alloc(size: usize, align: usize) -> *mut u8 {
             let inline = &mut *inline_ptr;
             inline.data = data;
             inline.offset = offset;
-            inline.size = block_size;
+            inline.size = super::alloc_sample::inline_limit(offset, block_size);
         }
         ptr
     }
@@ -78,6 +79,7 @@ pub(crate) fn arena_alloc_gc_no_collect(size: usize, align: usize, obj_type: u8)
     use crate::gc::{GcHeader, GC_FLAG_ARENA, GC_HEADER_SIZE};
 
     let total = gc_padded_total_size(size, align);
+    super::alloc_sample::note(total, obj_type);
     // Old-gen birth walks page lists and can reserve — outside the contract.
     if crate::gc::is_large_object_total_size_for_type(total, obj_type) {
         return std::ptr::null_mut();
@@ -123,6 +125,7 @@ fn arena_alloc_no_collect(size: usize, align: usize) -> *mut u8 {
             let offset = (*inline_ptr).offset;
             let arena = &mut *arena_ptr;
             let current = arena.current;
+            super::alloc_sample::note_inline_sync(arena.blocks[current].offset, offset);
             arena.blocks[current].offset = offset;
         }
         let Some(ptr) = crate::arena::arena_cell_try_alloc_current(arena_ptr, size, align) else {
@@ -137,7 +140,7 @@ fn arena_alloc_no_collect(size: usize, align: usize) -> *mut u8 {
             let inline = &mut *inline_ptr;
             inline.data = data;
             inline.offset = offset;
-            inline.size = block_size;
+            inline.size = super::alloc_sample::inline_limit(offset, block_size);
         }
         ptr
     }
@@ -170,6 +173,7 @@ pub fn arena_alloc_gc_longlived(size: usize, align: usize, obj_type: u8) -> *mut
     // assumes this invariant.
     let pad = align.max(8);
     let total = (GC_HEADER_SIZE + size + pad - 1) & !(pad - 1);
+    super::alloc_sample::note(total, obj_type);
     let raw = arena_alloc_longlived(total, align);
 
     unsafe {
@@ -275,6 +279,7 @@ pub fn arena_alloc_gc_old(size: usize, align: usize, obj_type: u8) -> *mut u8 {
 pub(crate) fn arena_alloc_gc_old_born_tenured(size: usize, align: usize, obj_type: u8) -> *mut u8 {
     use crate::gc::{GcHeader, GC_FLAG_TENURED, GC_HEADER_SIZE};
 
+    super::alloc_sample::note(gc_padded_total_size(size, align), obj_type);
     let user_ptr = arena_alloc_gc_old(size, align, obj_type);
     unsafe {
         let header = user_ptr.sub(GC_HEADER_SIZE) as *mut GcHeader;
@@ -422,6 +427,7 @@ pub fn arena_alloc_gc(size: usize, align: usize, obj_type: u8) -> *mut u8 {
     // (`shapes.ts` sat 16 bytes over the flat 16 KB line and re-marked 118 006
     // slots per minor because of it).
     let total = gc_padded_total_size(size, align);
+    super::alloc_sample::note(total, obj_type);
     if crate::gc::is_large_object_total_size_for_type(total, obj_type) {
         let user_ptr = arena_alloc_gc_old(size, align, obj_type);
         unsafe {
