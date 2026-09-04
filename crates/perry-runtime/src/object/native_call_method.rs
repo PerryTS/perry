@@ -8,6 +8,7 @@
 
 use super::*;
 
+mod bare_receiver;
 mod collection_methods;
 mod common_methods;
 mod disposal;
@@ -26,6 +27,9 @@ mod probe_dispatch_tests;
 mod to_locale_string_tests;
 mod typed_array;
 
+use bare_receiver::{
+    canonicalize_bare_gc_receiver, dispatch_unvouched_bare_as_number, is_unvouched_bare_word,
+};
 use disposal::{
     js_using_check_disposable, try_disposable_stack_method_dispatch, try_symbol_dispose_dispatch,
 };
@@ -1188,6 +1192,27 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
     args_ptr: *const f64,
     args_len: usize,
 ) -> f64 {
+    // #9675: a LEGACY BARE managed receiver — a real GC pointer that was never
+    // NaN-boxed — must be reboxed under its true tag HERE, before the root
+    // below and before the first probe. See `bare_receiver` for why the tail
+    // recovery was too late (an unrooted receiver goes stale mid-dispatch) and
+    // too coarse (its unconditional POINTER_TAG hid strings from
+    // `dispatch_string`). Every NaN-boxed receiver returns from one compare.
+    let object = canonicalize_bare_gc_receiver(object);
+    // #9675: no owner claimed it, so it is not a managed pointer — it is the
+    // number its bits spell. Answer it here rather than letting ~1200 lines of
+    // magnitude-gated probes dereference it: `1e-310` is `0x1268_8b70_e62b`,
+    // address-shaped enough for `try_read_gc_header` to deref `addr - 8` and
+    // SIGSEGV, and `5e-324` is `0x1`, which the handle dispatcher answered.
+    if is_unvouched_bare_word(object) {
+        return dispatch_unvouched_bare_as_number(
+            object,
+            method_name_ptr,
+            method_name_len,
+            args_ptr,
+            args_len,
+        );
+    }
     if !method_name_ptr.is_null() && method_name_len > 0 {
         let method_name_bytes =
             std::slice::from_raw_parts(method_name_ptr as *const u8, method_name_len);
@@ -2388,30 +2413,14 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
             }
         }
     }
-    // A BARE heap pointer — a real object whose value was never NaN-boxed, so its
-    // top 16 bits are zero and it decodes as a denormal double. Classifying it as a
-    // "number" here throws `<method> is not a function` on a perfectly good object.
-    // Validate deref-free (above the handle band + a genuinely tracked allocation),
-    // rebox as a POINTER_TAG value and dispatch on the object it actually is.
-    // Perry already recovers bare pointers on other dispatch paths; this one threw
-    // before it ever got the chance.
-    if jsval().is_number() && (jsval().bits() >> 48) == 0 {
-        let raw = jsval().bits() as usize;
-        if crate::value::addr_class::is_above_handle_band(raw)
-            && crate::value::addr_class::is_valid_obj_ptr(raw as *const u8)
-        {
-            let reboxed = crate::value::JSValue::pointer(raw as *const u8);
-            if reboxed.bits() != jsval().bits() {
-                return js_native_call_method(
-                    f64::from_bits(reboxed.bits()),
-                    method_name_ptr,
-                    method_name_len,
-                    args_ptr,
-                    args_len,
-                );
-            }
-        }
-    }
+    // #9675: the BARE-heap-pointer recovery that used to sit here is gone. It
+    // reboxed any word whose magnitude looked like a heap address, which is what
+    // let a genuine subnormal double be dispatched as an object. Both halves of
+    // that decision now live at this function's ENTRY, where an owner is asked
+    // before the first probe runs: a vouched bare pointer is reboxed under its
+    // true tag AND rooted (this recovery did neither), and an unvouched one is
+    // dispatched as the number it is. Nothing address-shaped reaches this point
+    // any more. See `bare_receiver`.
     let primitive_kind: Option<&'static str> = if jsval().is_any_string() {
         Some("string")
     } else if jsval().is_int32() || jsval().is_number() {
