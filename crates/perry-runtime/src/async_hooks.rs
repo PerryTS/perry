@@ -1602,7 +1602,7 @@ extern "C" fn async_resource_bind_trampoline(closure: *const ClosureHeader, rest
 
 fn register_bind_trampoline_once() {
     thread_local! {
-        // CLOSURE_REST_REGISTRY is thread-local, so each thread that
+        // The closure body registry is thread-local, so each thread that
         // synthesizes a bind() trampoline must register the func_ptr once.
         static REGISTERED: Cell<bool> = const { Cell::new(false) };
     }

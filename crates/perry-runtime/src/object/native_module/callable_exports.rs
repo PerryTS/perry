@@ -1487,7 +1487,7 @@ thread_local! {
     /// Per-closure spec `.length` for built-in *prototype methods*. Those
     /// methods all share one no-op closure thunk
     /// (`global_this_builtin_noop_thunk`), so the func-ptr-keyed
-    /// `CLOSURE_ARITY_REGISTRY` can't give `Array.prototype.map.length === 1`
+    /// the closure body registry can't give `Array.prototype.map.length === 1`
     /// while `Array.prototype.slice.length === 2` — the last install would
     /// win for every method. Recording the length per *closure instance* here
     /// (keyed by the closure pointer, like the user-facing dynamic-prop table

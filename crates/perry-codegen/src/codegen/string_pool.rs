@@ -163,7 +163,7 @@ pub(super) fn emit_string_pool(
     user_fn_wrapper_rest_and_arguments: &std::collections::HashSet<String>,
     // ABI param count for every top-level user-function wrapper
     // (`__perry_wrap_<original_name>`) — used to register the wrapper's
-    // declared arity in the runtime's `CLOSURE_ARITY_REGISTRY` so dynamic
+    // declared arity in the runtime's closure body registry so dynamic
     // dispatch can pad missing trailing args before invoking the wrapper.
     // Entries for wrappers also present in `user_fn_wrapper_rest` are skipped
     // (those go through the rest registry which already controls dispatch).
@@ -735,7 +735,7 @@ pub(super) fn emit_string_pool(
     // length, which mis-split dynamic-parent (capless-sig-with-snapshot) ctors.
     let mut ctor_triples: Vec<(u32, String, u32, u32)> = Vec::new();
     // #wall3: class ctors with a rest param (`constructor(...args)`) need their
-    // standalone `_constructor` func_ptr registered in CLOSURE_REST_REGISTRY so
+    // standalone `_constructor` func_ptr registered as rest-bearing in the closure body registry so
     // a member-new (`new ns.Sub(opts)` → js_new_function_construct →
     // js_native_call_value) BUNDLES trailing args into the rest array. Without
     // this the rest param binds to the first arg as a scalar (a=opts, not
