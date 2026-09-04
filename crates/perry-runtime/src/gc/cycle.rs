@@ -1710,7 +1710,10 @@ impl GcCycleState {
                 // per-object finalizers. Minor traces never mark the old
                 // generation, so deadness there is only trusted for
                 // untenured nursery headers.
-                .with_dead_collection_finalize(full_trace),
+                .with_dead_collection_finalize(
+                    full_trace,
+                    full_trace && !self.progress_kind.is_budgeted(),
+                ),
             );
         }
         let done = self

@@ -1200,12 +1200,19 @@ impl IncrementalSweepState {
     /// 2026-07-09 audit: buffers and typed arrays joined the same pattern —
     /// their registry/side-table entries are pruned when the owner is
     /// genuinely dead (full traces only; they are all tenured old residents).
-    pub(super) fn with_dead_collection_finalize(mut self, full_trace: bool) -> Self {
+    pub(super) fn with_dead_collection_finalize(
+        mut self,
+        full_trace: bool,
+        synchronous_full_trace: bool,
+    ) -> Self {
         // 2026-07-09 GC audit wave 2: death-prune the object-address-keyed
         // side tables in the same marks-fresh window. Cheap (one flag-check
         // walk over tables the root scanners already walk every cycle), so
         // it runs eagerly here rather than budget-chunked.
-        super::dead_owner::prune_dead_owner_side_tables_post_trace(full_trace);
+        super::dead_owner::prune_dead_owner_side_tables_post_trace(
+            full_trace,
+            synchronous_full_trace,
+        );
         self.dead_maps = crate::map::collect_dead_registered_maps_post_trace(full_trace);
         self.dead_sets = crate::set::collect_dead_registered_sets_post_trace(full_trace);
         self.dead_buffers = crate::buffer::collect_dead_registered_buffers_post_trace(full_trace);

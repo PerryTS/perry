@@ -41,6 +41,8 @@ pub(super) const RECORD_FLAG_OLD_CARRIER: u8 = 1 << 2;
 pub(super) const RECORD_FLAG_OLD_CARRIER_SEEN: u8 = 1 << 3;
 pub(super) const RECORD_FLAG_CACHE_CARRIER: u8 = 1 << 4;
 pub(super) const RECORD_FLAG_KIND_CLASS: u8 = 1 << 5;
+pub(super) const RECORD_FLAG_CARRIED_SEEN: u8 = 1 << 6;
+pub(super) const RECORD_FLAG_EXTERNAL_CARRIER: u8 = 1 << 7;
 
 /// The table-owned record of one ShapeId. `keys` is first and 8-aligned: it
 /// is the word the collector marks through and rewrites in place.
@@ -89,6 +91,13 @@ impl ShapeRecord {
         } else {
             self.flags &= !flag;
         }
+    }
+
+    /// A runtime table or process-lifetime generated-code global may reinstall
+    /// this id even while no object currently carries it.
+    #[inline]
+    pub(super) fn cache_carrier(&self) -> bool {
+        self.has(RECORD_FLAG_CACHE_CARRIER | RECORD_FLAG_EXTERNAL_CARRIER)
     }
 
     #[inline]
@@ -171,7 +180,7 @@ impl ShapeRecord {
             keys: self.keys,
             record: record as usize,
             old_carrier: self.has(RECORD_FLAG_OLD_CARRIER),
-            cache_carrier: self.has(RECORD_FLAG_CACHE_CARRIER),
+            cache_carrier: self.cache_carrier(),
             logical_key_count: self.logical_key_count,
             live_inline_slot_count: self.live_inline_slot_count,
             semantic_generation: self.semantic_generation,

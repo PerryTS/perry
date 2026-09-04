@@ -1578,7 +1578,9 @@ fn test_live_transition_cache_entry_survives_full_gc() {
 
     let next_keys = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_ARRAY) as usize;
     let live_key = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_STRING) as usize;
-    let prev_shape_id = crate::object::shapes::shape_id_for_keys_ensure(std::ptr::null(), 0);
+    // This predecessor can recur from a generated module global; without such
+    // an owner, retiring it and the now-unusable cache entry is intentional.
+    let prev_shape_id = crate::object::shapes::js_object_shape_id_for_keys(0, 0);
     js_shadow_slot_set(0, ptr_bits(next_keys));
     js_shadow_slot_set(1, ptr_bits(live_key));
 

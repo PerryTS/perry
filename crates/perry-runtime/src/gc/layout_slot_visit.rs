@@ -51,6 +51,12 @@ pub(super) unsafe fn visit_gc_layout_slot_descriptors(
     // needed: without it the verifier aborts on a `slot_page_ever_dirty=false`
     // old→young edge through this word.
     let shape_keys_edge = if (*header).obj_type == GC_TYPE_OBJECT {
+        // #9726: unlike the minor-rooting gate below, full-trace descriptor
+        // liveness is generation-blind. Every reachable shaped receiver must
+        // note the exact id it carries before synchronous-full pruning.
+        if full_trace_active() {
+            crate::object::shapes::note_full_trace_carrier(child_slots.object_shape);
+        }
         // A receiver the minor will not enumerate for itself arms the table's
         // ephemeron gate. The test is "not in the nursery", not "in old-gen":
         // a `gc_malloc`'d large object and an immortal bootstrap resident are
