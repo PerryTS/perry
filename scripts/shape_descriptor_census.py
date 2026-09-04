@@ -223,6 +223,7 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
     authority_paths = (
         "crates/perry-runtime/src/object/shapes.rs",
         "crates/perry-runtime/src/object/shapes_slot_list.rs",
+        "crates/perry-runtime/src/object/shapes_store.rs",
         "crates/perry-runtime/src/object/mod.rs",
         "crates/perry-runtime/src/object/live_slots.rs",
         "crates/perry-codegen/src/lower_call/new_alloc.rs",
@@ -248,15 +249,18 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
         )
     clean = stripped_sources({path: sources[path] for path in authority_paths})
     # `shapes.rs` sits against the repo's 2000-line cap, so helpers keep being
-    # split into the `shapes_slot_list.rs` sibling as it grows. Read the two as
-    # ONE logical unit: every `function_body(shapes, ...)` below then finds its
-    # target wherever it currently lives, instead of silently matching nothing
-    # the next time a pinned function crosses the split — #8918's exact failure
-    # mode, where a census inspecting an empty body reports success.
+    # split into siblings as it grows (`shapes_slot_list.rs`, and since #9706
+    # the record store `shapes_store.rs`). Read them as ONE logical unit: every
+    # `function_body(shapes, ...)` below then finds its target wherever it
+    # currently lives, instead of silently matching nothing the next time a
+    # pinned function crosses the split — #8918's exact failure mode, where a
+    # census inspecting an empty body reports success.
     shapes = (
         clean["crates/perry-runtime/src/object/shapes.rs"]
         + "\n"
         + clean["crates/perry-runtime/src/object/shapes_slot_list.rs"]
+        + "\n"
+        + clean["crates/perry-runtime/src/object/shapes_store.rs"]
     )
     object_mod = clean["crates/perry-runtime/src/object/mod.rs"]
     live_slots = clean["crates/perry-runtime/src/object/live_slots.rs"]
@@ -301,13 +305,21 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
     raw_write_pics = sources["crates/perry-codegen/src/expr/proxy_reflect.rs"]
 
     for pattern, label in (
-        # `PtrHashMap` since #8157 (SipHash on a bare u32 was 25% of self time in
-        # `shapes`). The hasher is free; the BOX is not. Since #8112 the
-        # collector enumerates `&mut record.keys` as an ordinary GC slot, and a
-        # budgeted dirty scan can hold that address across mutator resumptions
-        # that insert descriptors. Un-boxing the value puts the record back in
-        # the bucket, where a rehash moves it under the collector's feet.
-        (r"descriptors\s*:\s*(?:[\w:]+::)?(?:Ptr)?HashMap\s*<\s*u32\s*,\s*Box\s*<\s*ShapeDescriptor\s*>", "by-id descriptor table, boxed for a stable keys slot"),
+        # #9706: the by-id store is a chunked slab indexed by ShapeId. Since
+        # #8112 the collector enumerates the record's `keys` word as an
+        # ordinary GC slot, and a budgeted dirty scan can hold that address
+        # across mutator resumptions that insert descriptors — so a record's
+        # address must never move for its lifetime. Chunks are individually
+        # boxed and never reallocated; only the directory of chunk pointers
+        # grows. Putting records into one flat `Vec` (or back into a rehashing
+        # bucket) moves them under the collector's feet.
+        (r"slab\s*:\s*(?:std::cell::)?UnsafeCell\s*<\s*ShapeSlab\s*>", "by-id descriptor slab with stable record addresses"),
+        (r"type\s+Chunk\s*=\s*Box\s*<\s*\[\s*UnsafeCell\s*<\s*ShapeRecord\s*>\s*;\s*CHUNK_LEN\s*\]\s*>", "slab chunks individually boxed, never reallocated"),
+        (r"type\s+Page\s*=\s*Box\s*<\s*\[\s*Option\s*<\s*Chunk\s*>\s*;\s*PAGE_LEN\s*\]\s*>", "slab directory pages hold chunk pointers, not records"),
+        (r"pages\s*:\s*Vec\s*<\s*Option\s*<\s*Page\s*>\s*>", "slab directory is a vector of page pointers"),
+        # `keys` must stay the FIRST field of the `#[repr(C)]` record: the
+        # record address IS the rewritable keys slot (`keys_slot`).
+        (r"#\[repr\(C\)\]\s*(?:#\[[^\]]*\]\s*)*pub\(crate\)\s+struct\s+ShapeRecord\s*\{\s*(?://[^\n]*\n\s*)*pub\(super\)\s+keys\s*:\s*u64", "slab record is repr(C) with the keys word first"),
         (r"logical_key_count\s*:\s*u32", "exact logical-key fact"),
         (r"live_inline_slot_count\s*:\s*u32", "exact live-slot fact"),
         (r"semantic_generation\s*:\s*u64", "semantic transition fact"),
@@ -393,8 +405,8 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
     ensure = function_body(shapes, "shape_descriptor_ensure_with_holes")
     assert_before(
         ensure,
-        "inner.descriptors.insert",
-        "inner.ids_by_facts.entry",
+        "slab_mut().insert",
+        "family_push_back",
         "by-id descriptor before reverse accelerator",
     )
     sync = function_body(shapes, "publish_object_shape_from")
@@ -433,18 +445,37 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
         shapes,
     ):
         raise CensusError("clear_object_shape_stamp escaped its #[cfg(test)] gate")
-    retirement = function_body(shapes, "retain_key_count_versions")
+    # #9706: an OWNED keys array's same-address growth history is retired
+    # behind the version its single owner now carries. The retirement must be
+    # scoped to that array's family (never a scan of the whole table), must
+    # keep the cache-carried versions an optimization cache can reinstall,
+    # and must run AFTER the successor is stamped and armed (#9200's order).
+    retirement = function_body(shapes, "retire_owned_shape_siblings")
     require_code(
         retirement,
-        r"ids_by_keys\s*\.\s*remove\s*\(\s*&keys\s*\)",
+        r"families\s*\.\s*get\s*\(\s*&keys\s*\)",
         "keys-scoped descriptor lineage index",
     )
-    if re.search(r"descriptors\s*\.\s*(?:iter|values|keys)\s*\(", retirement):
-        raise CensusError("shape descriptor lineage repair scans the global descriptor table")
-    if "descriptors.remove" in retirement:
-        raise CensusError("live-key lineage repair eagerly deletes published descriptors")
+    if re.search(r"slab\(\)\s*\.\s*for_each\s*\(", retirement):
+        raise CensusError("owned-history retirement scans the global descriptor table")
+    require_code(
+        retirement,
+        r"RECORD_FLAG_CACHE_CARRIER",
+        "cache-carried versions survive same-address retirement",
+    )
+    assert_before(
+        sync,
+        "stamp_object_shape_id_with_carrier_note",
+        "retire_owned_shape_siblings",
+        "successor stamped and armed before the owned history is retired",
+    )
+    # A SHARED array's versions are immutable prefixes other objects may still
+    # carry; growth and drop of the slot index must not touch them.
     for name in ("shape_keys_grown", "shape_drop"):
-        if "descriptors.remove" in function_body(shapes, name):
+        if re.search(
+            r"remove_descriptor_(?:and_reverse_indices|indexed_under)",
+            function_body(shapes, name),
+        ):
             raise CensusError(f"{name} eagerly deletes a sibling descriptor")
 
     require_code(
@@ -747,15 +778,26 @@ def run_sabotage_selftests(sources: dict[str, str], baseline: dict[str, object])
     )
 
     shapes_path = "crates/perry-runtime/src/object/shapes.rs"
-    unboxed_table = dict(sources)
-    unboxed_table[shapes_path] = unboxed_table[shapes_path].replace(
-        "PtrHashMap<u32, Box<ShapeDescriptor>>",
-        "PtrHashMap<u32, ShapeDescriptor>",
+    store_path = "crates/perry-runtime/src/object/shapes_store.rs"
+    flat_slab = dict(sources)
+    flat_slab[store_path] = flat_slab[store_path].replace(
+        "type Chunk = Box<[UnsafeCell<ShapeRecord>; CHUNK_LEN]>;",
+        "type Chunk = Vec<UnsafeCell<ShapeRecord>>;",
         1,
     )
     expect_rejected(
-        "descriptor record un-boxed back into a rehashing bucket",
-        lambda: assert_authority_surfaces(unboxed_table),
+        "slab chunk turned into a reallocating Vec",
+        lambda: assert_authority_surfaces(flat_slab),
+    )
+    keys_not_first = dict(sources)
+    keys_not_first[store_path] = keys_not_first[store_path].replace(
+        "    pub(super) keys: u64,\n    pub(super) semantic_generation: u64,",
+        "    pub(super) semantic_generation: u64,\n    pub(super) keys: u64,",
+        1,
+    )
+    expect_rejected(
+        "keys word moved off the front of the slab record",
+        lambda: assert_authority_surfaces(keys_not_first),
     )
 
     ungated_root = dict(sources)
@@ -804,11 +846,11 @@ def run_sabotage_selftests(sources: dict[str, str], baseline: dict[str, object])
     unscoped_retirement = dict(sources)
     path = "crates/perry-runtime/src/object/shapes.rs"
     retirement_body = function_body(
-        unscoped_retirement[path], "retain_key_count_versions"
+        unscoped_retirement[path], "retire_owned_shape_siblings"
     )
     unscoped_body, substitutions = re.subn(
-        r"ids_by_keys\s*\.\s*remove\s*\(\s*&keys\s*\)",
-        "ids_by_keys.get(&keys).cloned()",
+        r"families\s*\.\s*get\s*\(\s*&keys\s*\)",
+        "families.get(&0)",
         retirement_body,
         count=1,
     )
@@ -820,6 +862,19 @@ def run_sabotage_selftests(sources: dict[str, str], baseline: dict[str, object])
     expect_rejected(
         "descriptor retirement without keys index",
         lambda: assert_authority_surfaces(unscoped_retirement),
+    )
+
+    early_retirement = dict(sources)
+    publish_body = function_body(early_retirement[path], "publish_object_shape_from")
+    early_body = swap_once(
+        publish_body,
+        "stamp_object_shape_id_with_carrier_note",
+        "retire_owned_shape_siblings",
+    )
+    early_retirement[path] = early_retirement[path].replace(publish_body, early_body, 1)
+    expect_rejected(
+        "owned history retired before the successor is stamped",
+        lambda: assert_authority_surfaces(early_retirement),
     )
 
     legacy_ir = dict(sources)

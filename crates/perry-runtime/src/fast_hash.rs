@@ -197,13 +197,13 @@ impl Hasher for FastKeyHasherImpl {
     // Integer writes fold one word per call instead of falling into `Hasher`'s
     // default `write_uN` -> `write(&n.to_ne_bytes())` byte loop.
     //
-    // This is what the shape table's `ids_by_facts` key pays for: `ShapeFacts`
-    // is six integer fields (two `u64`, three `u32`, one enum discriminant, an
-    // `isize`), so the derived `Hash` fed ~36 bytes -- ~36 serial multiplies --
-    // through the byte loop for a key that six folds mix just as well. That
-    // lookup runs on every shape publish (`shape_descriptor_ensure_with_holes`
-    // probes `ids_by_facts` before minting an id), i.e. on every object
-    // property add/delete that transitions a shape.
+    // This was written for the shape table's `ShapeFacts` key (six integer
+    // fields: two `u64`, three `u32`, one enum discriminant, an `isize`), whose
+    // derived `Hash` fed ~36 bytes -- ~36 serial multiplies -- through the byte
+    // loop for a key that six folds mix just as well. #9706 replaced that map
+    // with a pre-folded `u64` key (`object/shapes_store.rs::facts_key`), but
+    // the same shape of key remains on this hasher: `RegisteredTypedShapeKey`
+    // (`gc/layout/typed_shape.rs`) and the `(usize, String)` descriptor keys.
     //
     // `write_u8` is deliberately included even though it is exactly equivalent
     // to the byte path for a single byte: routing it here keeps every integer
