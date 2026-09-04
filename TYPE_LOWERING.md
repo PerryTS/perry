@@ -654,7 +654,7 @@ Every allocation is preceded by an 8-byte `GcHeader`: `obj_type` (u8), `gc_flags
 
 ### Closures
 
-`ClosureHeader`: `func_ptr` (usize), `capture_count` (u32, high bit = `CAPTURES_THIS_FLAG`), `type_tag` (`CLOSURE_MAGIC 0x434C_4F53`), variadic `captures[]` (u64 slots). Mutable captures are heap-boxed. Side-tables: `CLOSURE_REST_REGISTRY`, `CLOSURE_ARITY_REGISTRY`, `DISPATCH_CACHE`. Public closure dispatch still uses the generic closure pointer plus boxed `double` argument/return model. Eligible typed closure clones now use an internal `i64 this_closure, typed args...` ABI so immutable f64/i1 captures can be loaded as native values before the body is lowered.
+`ClosureHeader`: `func_ptr` (usize), `capture_count` (u32, high bit = `CAPTURES_THIS_FLAG`), `type_tag` (`CLOSURE_MAGIC 0x434C_4F53`), variadic `captures[]` (u64 slots). Mutable captures are heap-boxed. Side-table: `CLOSURE_BODY_REGISTRY` (one packed record per body: rest/arity/length/flags, #9707) plus the `DISPATCH_RECENT` four-entry cache. Public closure dispatch still uses the generic closure pointer plus boxed `double` argument/return model. Eligible typed closure clones now use an internal `i64 this_closure, typed args...` ABI so immutable f64/i1 captures can be loaded as native values before the body is lowered.
 
 ### Async/Await
 

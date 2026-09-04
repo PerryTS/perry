@@ -191,9 +191,15 @@
     },
     {
       "file": "crates/perry-runtime/src/closure/registry.rs",
-      "name": "CLOSURE_VERSIONED_LOOP_REGISTRY",
+      "name": "CLOSURE_BODY_REGISTRY",
       "verdict": "not_a_gc_pointer",
-      "why": "Maps a closure body `func_ptr` (a code pointer, never moved) to TrustedDirectTarget{func_ptr:*const u8, capture_count:u32, boxed_capture_mask:u64}. Both key and value are code pointers and plain integers; no field can hold a heap pointer, so the table cannot hold a GC root. Same shape as its sibling CLOSURE_ARROW_FUNCTION_REGISTRY in the same thread_local block."
+      "why": "#9707: the unified per-body record table. Keyed by a closure body `func_ptr` (a CODE address the collector neither moves nor traces); the value is `ClosureBodyRecord` = three plain integers (arity, rest arity, `.length`), a flags word, and a 1-based index into TRUSTED_TARGETS. No field can hold a heap pointer, so the table cannot hold a GC root. It replaced the ten `CLOSURE_*_REGISTRY` / `DISPATCH_CACHE` maps that carried the same verdict."
+    },
+    {
+      "file": "crates/perry-runtime/src/closure/registry.rs",
+      "name": "TRUSTED_TARGETS",
+      "verdict": "not_a_gc_pointer",
+      "why": "#9707: dense side array of `TrustedTargets`, two `Option<TrustedDirectTarget>` per eligible arrow. TrustedDirectTarget{func_ptr:*const u8, capture_count:u32, boxed_capture_mask:u64} is a static code pointer plus plain integers \u2014 the same payload the deleted CLOSURE_ARROW_FUNCTION_REGISTRY / CLOSURE_VERSIONED_LOOP_REGISTRY held under this verdict. Nothing for the collector."
     },
     {
       "file": "crates/perry-runtime/src/fs/filehandle.rs",
@@ -2042,34 +2048,6 @@
     {
       "file": "crates/perry-runtime/src/closure/dynamic_props.rs",
       "name": "IN_FN_PROTO_FALLBACK"
-    },
-    {
-      "file": "crates/perry-runtime/src/closure/registry.rs",
-      "name": "CLOSURE_ARROW_FUNCTION_REGISTRY"
-    },
-    {
-      "file": "crates/perry-runtime/src/closure/registry.rs",
-      "name": "CLOSURE_ASYNC_FUNCTION_REGISTRY"
-    },
-    {
-      "file": "crates/perry-runtime/src/closure/registry.rs",
-      "name": "CLOSURE_ASYNC_GENERATOR_FUNCTION_REGISTRY"
-    },
-    {
-      "file": "crates/perry-runtime/src/closure/registry.rs",
-      "name": "CLOSURE_GENERATOR_FUNCTION_REGISTRY"
-    },
-    {
-      "file": "crates/perry-runtime/src/closure/registry.rs",
-      "name": "CLOSURE_REST_REGISTRY"
-    },
-    {
-      "file": "crates/perry-runtime/src/closure/registry.rs",
-      "name": "CLOSURE_STRICT_FUNCTION_REGISTRY"
-    },
-    {
-      "file": "crates/perry-runtime/src/closure/registry.rs",
-      "name": "DISPATCH_CACHE"
     },
     {
       "file": "crates/perry-runtime/src/closure/registry.rs",
