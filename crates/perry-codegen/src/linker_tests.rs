@@ -224,6 +224,23 @@ fn size_optimization_is_on_unless_explicitly_disabled() {
 }
 
 #[test]
+fn explicit_application_opt_level_overrides_the_size_default() {
+    for (spelling, expected) in [
+        ("0", "-O0"),
+        ("o0", "-O0"),
+        ("1", "-O1"),
+        ("O2", "-O2"),
+        ("3", "-O3"),
+        ("s", "-Os"),
+        ("Oz", "-Oz"),
+    ] {
+        assert_eq!(application_opt_flag(Some(spelling), None), expected);
+    }
+    assert_eq!(application_opt_flag(Some("unknown"), None), "-Os");
+    assert_eq!(application_opt_flag(Some("unknown"), Some("0")), "-O3");
+}
+
+#[test]
 fn compile_plan_skips_native_tuning_for_explicit_target() {
     let plan = build_clang_compile_plan(
         PathBuf::from("clang"),
