@@ -40,8 +40,8 @@ pub(crate) use closure_analysis::{
 };
 pub(crate) use exact_receivers::{
     apply_exact_receiver_stmt_effect, apply_exact_receiver_stmt_effects,
-    intersect_exact_receiver_facts, invalidate_exact_receivers_for_expr,
-    kill_referenced_exact_receivers,
+    collect_module_prototype_facts, intersect_exact_receiver_facts,
+    invalidate_exact_receivers_for_expr, kill_referenced_exact_receivers,
 };
 pub(crate) use factory_specialize::specialize_captured_class_factories;
 pub(crate) use imul::{detect_math_imul_polyfill, rewrite_imul_calls_in_stmts};
@@ -557,6 +557,10 @@ fn inline_functions_inner(
     // class regardless of native_extends), so it lives at the top of
     // the loop body before the native_extends short-circuit for method
     // collection.
+    // A fresh exact receiver still observes later prototype replacement. The
+    // receiver proof used by the call inliner therefore needs an independent,
+    // module-wide stable-method-table proof (#9239).
+    let prototype_facts = collect_module_prototype_facts(module);
     let mut method_candidates: HashMap<(String, String), MethodCandidate> = HashMap::new();
     let mut class_names: HashMap<String, String> = HashMap::new();
     // (class_name, field_name) → field's class type (when the field is
@@ -604,6 +608,9 @@ fn inline_functions_inner(
     // `import_function_prefixes`.
     let mut needed_imports: BTreeMap<String, Vec<String>> = BTreeMap::new();
     method_candidates.extend(extra_methods.iter().filter_map(|(k, v)| {
+        if !prototype_facts.method_table_is_stable(&module.classes, &k.0) {
+            return None;
+        }
         // If any required (name, path) is missing from dest, queue an import.
         // We always admit when the path is reachable from the destination —
         // if dest has no import that resolves to that path, we synthesize
@@ -681,7 +688,9 @@ fn inline_functions_inner(
         // EventEmitter) — the `this` reference needs special handling
         // in those contexts. The class_name lookup above still records
         // the type so other passes can reference it.
-        if class.native_extends.is_some() {
+        if class.native_extends.is_some()
+            || !prototype_facts.method_table_is_stable(&module.classes, &class.name)
+        {
             continue;
         }
         for method in &class.methods {
@@ -912,6 +921,30 @@ mod tests {
             byte_offset: 0,
             cap_args_appended: 0,
         })
+    }
+
+    #[test]
+    fn prototype_mutation_facts_are_module_wide_and_class_specific() {
+        let base = anon_class(1, "Base");
+        let mut derived = anon_class(2, "Derived");
+        derived.extends_name = Some("Base".to_string());
+        let unrelated = anon_class(3, "Unrelated");
+
+        let mut module = Module::new("prototype-facts");
+        module.classes = vec![base, derived, unrelated];
+        module.functions.push(function(
+            10,
+            vec![Stmt::Expr(Expr::RegisterPrototypeMethod {
+                class_name: "Base".to_string(),
+                method_name: "m".to_string(),
+                value: Box::new(Expr::Integer(1)),
+            })],
+        ));
+
+        let facts = collect_module_prototype_facts(&module);
+        assert!(!facts.method_table_is_stable(&module.classes, "Base"));
+        assert!(!facts.method_table_is_stable(&module.classes, "Derived"));
+        assert!(facts.method_table_is_stable(&module.classes, "Unrelated"));
     }
 
     #[test]
