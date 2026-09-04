@@ -1215,7 +1215,7 @@ pub(crate) fn js_value_is_constructor(value: f64) -> bool {
     // number of `.bind()` layers first so the checks below (class ref,
     // proxy, arrow, non-constructable builtin) see the real callee.
     let value = resolve_bound_target(value);
-    if constructor_class_ref_id(value).is_some() {
+    if constructor_class_ref_id(value).is_some() || is_class_object_value(value) {
         return true;
     }
     if crate::proxy::js_proxy_is_proxy(value) == 1 {

@@ -157,6 +157,7 @@ pub(crate) unsafe fn meta_capable_object(obj_ptr: usize) -> Option<*mut crate::O
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum PrototypeLinkKind {
     ClassDefault,
+    ClassEvaluation,
     RuntimeWiring,
     UserOverride,
 }
@@ -189,6 +190,13 @@ pub(crate) fn object_link_class_default_prototype(obj_ptr: usize, proto_bits: u6
     object_set_static_prototype_impl(obj_ptr, proto_bits, PrototypeLinkKind::ClassDefault)
 }
 
+/// An evaluated class and its instances share a prototype within that
+/// evaluation, but not with other evaluations of the same template (#9502).
+/// Preserve that distinction for property/method lookup and class-keyed caches.
+pub(crate) fn object_link_class_evaluation_prototype(obj_ptr: usize, proto_bits: u64) {
+    object_set_static_prototype_impl(obj_ptr, proto_bits, PrototypeLinkKind::ClassEvaluation)
+}
+
 fn object_set_static_prototype_impl(obj_ptr: usize, proto_bits: u64, link_kind: PrototypeLinkKind) {
     let prototype_diverged = link_kind != PrototypeLinkKind::ClassDefault;
     let user_override = link_kind == PrototypeLinkKind::UserOverride;
@@ -213,13 +221,16 @@ fn object_set_static_prototype_impl(obj_ptr: usize, proto_bits: u64, link_kind: 
     // A per-instance prototype override invalidates class-keyed interception
     // verdicts (the overridden chain can differ from the class chain), and the
     // object itself must never satisfy a class-keyed plan again.
-    if prototype_diverged {
+    if matches!(
+        link_kind,
+        PrototypeLinkKind::RuntimeWiring | PrototypeLinkKind::UserOverride
+    ) {
         crate::object::prop_plan::prop_plan_epoch_bump();
         // #7480: a `[[Prototype]]` swap on a live instance is prototype
         // surgery — the same class of event as writing onto `C.prototype`, so
         // it retires every outstanding element-shape proof. Deliberately
-        // inside the `prototype_diverged` gate: the quiet sibling
-        // (`object_link_class_default_prototype`) fires on every `new F()`.
+        // restricted to changes of existing chains: fresh default/evaluation
+        // links cannot invalidate a proof about a previously allocated object.
         crate::array::invalidate_all_element_shapes();
     }
     // #6759 Phase B: shaped objects store the recorded prototype in their
@@ -243,6 +254,9 @@ fn object_set_static_prototype_impl(obj_ptr: usize, proto_bits: u64, link_kind: 
             }
             if user_override {
                 (*meta).flags |= crate::object::OBJECT_META_FLAG_USER_PROTO_OVERRIDE;
+            }
+            if link_kind == PrototypeLinkKind::ClassEvaluation {
+                (*meta).flags |= crate::object::OBJECT_META_FLAG_CLASS_EVALUATION_PROTO;
             }
             // GC_STORE_AUDIT(BARRIERED): meta-record prototype slot store —
             // the record is an arena allocation, so the ordinary object-slot
@@ -338,6 +352,18 @@ pub(crate) fn object_has_prototype_divergence(obj_ptr: usize) -> bool {
 #[inline]
 pub(crate) fn object_has_user_prototype_override(obj_ptr: usize) -> bool {
     object_has_prototype_flag(obj_ptr, crate::object::OBJECT_META_FLAG_USER_PROTO_OVERRIDE)
+}
+
+/// Whether ordinary property lookup must consult the receiver's own chain
+/// before the shared class vtable: user overrides and evaluated classes both
+/// have this requirement; unrelated runtime prototype wiring does not.
+#[inline]
+pub(crate) fn object_has_individual_class_prototype(obj_ptr: usize) -> bool {
+    object_has_prototype_flag(
+        obj_ptr,
+        crate::object::OBJECT_META_FLAG_USER_PROTO_OVERRIDE
+            | crate::object::OBJECT_META_FLAG_CLASS_EVALUATION_PROTO,
+    )
 }
 
 pub(crate) fn default_object_prototype_bits() -> Option<u64> {
@@ -646,6 +672,18 @@ mod tests {
             "class-default links must publish neither divergence signal"
         );
         assert!(!object_has_prototype_divergence(class_default as usize));
+
+        let evaluated = crate::object::js_object_alloc(0, 0);
+        object_link_class_evaluation_prototype(evaluated as usize, crate::value::TAG_NULL);
+        assert!(object_has_prototype_divergence(evaluated as usize));
+        assert!(object_has_individual_class_prototype(evaluated as usize));
+        assert!(!object_has_user_prototype_override(evaluated as usize));
+        assert!(!object_has_individual_class_prototype(
+            class_default as usize
+        ));
+        assert!(!object_has_individual_class_prototype(
+            runtime_wired as usize
+        ));
 
         let user_overridden = crate::object::js_object_alloc(0, 0);
         object_set_user_prototype(user_overridden as usize, crate::value::TAG_NULL);

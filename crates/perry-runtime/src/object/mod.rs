@@ -1640,6 +1640,7 @@ pub struct ObjectMeta {
 
 pub(crate) const OBJECT_META_FLAG_PROTO_DIVERGED: u64 = 1;
 pub(crate) const OBJECT_META_FLAG_USER_PROTO_OVERRIDE: u64 = 1 << 3;
+pub(crate) const OBJECT_META_FLAG_CLASS_EVALUATION_PROTO: u64 = 1 << 4;
 
 /// Authoritative ordinary-object discriminator. RegExp has its own GC kind,
 /// and heap class-expression values carry their kind in the immutable ShapeId

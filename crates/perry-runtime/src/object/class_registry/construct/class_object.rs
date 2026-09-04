@@ -11,7 +11,7 @@ fn link_class_object_instance_prototype(class_value: f64, instance: *mut ObjectH
         unsafe { super::super::field_get_set::class_object_prototype_value(class_obj) };
     let prototype = scope.root_heap_word_u64(prototype.bits());
     instance.with_mut_ptr::<ObjectHeader, _>(|instance| {
-        super::super::prototype_chain::object_link_class_default_prototype(
+        super::super::prototype_chain::object_link_class_evaluation_prototype(
             instance as usize,
             prototype.get_heap_word_u64(),
         )

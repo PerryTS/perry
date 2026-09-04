@@ -364,24 +364,16 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                         captures: captured_exprs.clone(),
                     }));
                 }
-                // #6465: a capturing class DECLARATION in a factory needs
-                // per-evaluation semantics, same as a class expression.
-                // `RegisterClassCaptures` above is a class-id-keyed,
-                // last-wins registry — when the enclosing function runs more
-                // than once (effect's `makeException`, called once per
-                // exception kind), every escaped class value replayed the
-                // LAST call's captures: all of effect's core error classes
-                // reported `_tag` "TimeoutException", masking the real error
-                // in any `Cause.pretty` output and breaking every
-                // `catchTag`-style dispatch. Bind the declared name to a
-                // `ClassExprFresh` value (the #1772/#1787 machinery class
-                // EXPRESSIONS already use) so each evaluation carries its own
-                // captured environment on its own heap class object. Capturing
-                // classes with public static state retain the shared-template
-                // path for now, but private elements always require a fresh
-                // evaluation — including private static state. Prototype
-                // identity is still shared per template — the remaining gap
-                // tracked on #6465.
+                // Captures (#6465), private brands (#5893), computed names,
+                // and dynamic heritage (#9502) belong to each evaluation.
+                // The class-id-keyed registries above are last-wins: a factory
+                // whose only varying input is its superclass would otherwise
+                // return one ClassRef every time, collapsing its heritage chain.
+                // ClassExprFresh snapshots the parent on the heap class object
+                // as well as carrying that evaluation's captures and statics.
+                // Capture-only classes with public static state retain the
+                // shared-template path unless another condition requires a
+                // fresh evaluation.
                 let has_static_state = !class.static_fields.is_empty()
                     || class
                         .static_methods
@@ -389,6 +381,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                         .any(|m| m.name.starts_with("__perry_static_init_"));
                 let has_private_elements = class.has_private_elements();
                 let fresh_binding = has_private_elements
+                    || class.extends_expr.is_some()
                     || !computed_keys.is_empty()
                     || (!captured_exprs.is_empty() && !has_static_state);
                 let named_statics: Vec<(String, Expr)> = if fresh_binding {
@@ -451,11 +444,11 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                 }
                 let template_name = class.name.clone();
                 ctx.pending_classes.push(class);
-                // #6465/#5893 (see `fresh_binding` above): bind the declared
-                // name to a per-evaluation heap class object. Capturing classes
-                // carry this invocation's environment; private classes use the
-                // object's identity as their fresh brand. Because this is a
-                // real local (not an inferred static class alias), `new C()`
+                // #6465/#5893/#9502 (see `fresh_binding` above): bind the
+                // declared name to a per-evaluation heap class object carrying
+                // its environment, private brand, and evaluated parent.
+                // Because this is a real local rather than an inferred static
+                // class alias, `new C()`
                 // constructs through the evaluated class VALUE.
                 if fresh_binding {
                     // `class_name` is the collision-safe template key (`C$0`),

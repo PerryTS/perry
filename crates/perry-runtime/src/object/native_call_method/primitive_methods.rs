@@ -325,6 +325,37 @@ pub(super) unsafe fn dispatch_primitive(
                 args.len(),
             ));
         }
+        // #9502: a fresh Promise subclass inherits reified builtin statics.
+        // Read the property first so own fields/accessors keep their precedence,
+        // then call with the evaluated subclass as the capability constructor.
+        if crate::object::promise_parent_in_chain(class_id)
+            && crate::object::promise_static_function_spec(method_name).is_some()
+        {
+            let key = crate::string::js_string_from_bytes(
+                method_name_ptr as *const u8,
+                method_name_len as u32,
+            );
+            let receiver = JSValue::from_bits(object_handle.get_nanbox_f64().to_bits())
+                .as_pointer::<ObjectHeader>();
+            let method = js_object_get_field_by_name(receiver, key);
+            if method.is_pointer()
+                && crate::closure::is_closure_ptr(crate::value::js_nanbox_get_pointer(
+                    f64::from_bits(method.bits()),
+                ) as usize)
+            {
+                let method = root_scope.root_nanbox_u64(method.bits());
+                let receiver = object_handle.get_nanbox_f64();
+                let bound =
+                    crate::closure::clone_closure_rebind_this(method.get_nanbox_u64(), receiver);
+                let _this = ImplicitThisScope::bind(object_handle.get_nanbox_f64());
+                let args = refreshed_args();
+                return Some(crate::closure::js_native_call_value(
+                    f64::from_bits(bound),
+                    args.as_ptr(),
+                    args.len(),
+                ));
+            }
+        }
     }
 
     // #5142: a promise can carry user-attached own expando methods.
