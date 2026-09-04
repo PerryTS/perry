@@ -1597,6 +1597,21 @@ pub fn linearize_body(
                     | Stmt::DoWhile { body, .. } => {
                         rewrite_labeled_bc_in_stmts(body, label, next_local_id);
                     }
+                    // A statically-typed array `for...of` lowers to a runtime
+                    // `ArrayIterationPatched` guard whose two branches contain
+                    // the iterator-protocol and indexed loops, respectively.
+                    // The source label still targets either generated loop,
+                    // but wrapping the guard means neither loop sees the label
+                    // directly. Rewrite the completions in both loop bodies
+                    // before the guard is split into generator states (#9198).
+                    Stmt::If {
+                        condition: Expr::ArrayIterationPatched,
+                        then_branch,
+                        else_branch: Some(else_branch),
+                    } => {
+                        rewrite_labeled_bc_in_lowered_for_of_arm(then_branch, label, next_local_id);
+                        rewrite_labeled_bc_in_lowered_for_of_arm(else_branch, label, next_local_id);
+                    }
                     // A labeled yielding SWITCH: `break label` at case-body
                     // level is the switch's own break — rewrite it to plain
                     // `break` so the yielding-switch desugar below folds it
@@ -1663,6 +1678,25 @@ pub fn linearize_body(
             other => {
                 current.push(other.clone());
             }
+        }
+    }
+}
+
+/// Rewrite completions targeting a source label in one branch of the
+/// `ArrayIterationPatched` for-of guard. Each branch consists of setup
+/// statements followed by the generated loop; nested loops in the user's body
+/// remain boundaries inside [`rewrite_labeled_bc_in_stmts`].
+fn rewrite_labeled_bc_in_lowered_for_of_arm(
+    stmts: &mut [Stmt],
+    label: &str,
+    next_local_id: &mut u32,
+) {
+    for stmt in stmts.iter_mut() {
+        match stmt {
+            Stmt::For { body, .. } | Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
+                rewrite_labeled_bc_in_stmts(body, label, next_local_id);
+            }
+            _ => {}
         }
     }
 }
