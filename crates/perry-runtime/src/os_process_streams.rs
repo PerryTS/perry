@@ -135,26 +135,90 @@ extern "C" fn process_stream_set_encoding_stub(
     crate::object::js_implicit_this_get()
 }
 
-/// #3962: set when a TUI tears down stdin via `process.stdin.destroy()`,
-/// `.pause()`, or `.unref()`. `perry-stdlib`'s readline `has_active` consults
+/// #3962: set when a TUI tears down stdin via `process.stdin.destroy()` or
+/// `.pause()`. `perry-stdlib`'s readline `has_active` consults
 /// `stdin_is_detached()` so the runtime stops holding the event loop open for
 /// the stdin reader, letting the process quiesce after teardown without an
 /// explicit `process.exit()`.
+///
+/// #9676: this used to cover `.unref()` too, and that was the TUI-input-death
+/// bug. `unref()` set this latch, the fd-0 reader below breaks its loop on it
+/// and EXITS — and `ref()` was wired to a no-op stub, so nothing ever cleared
+/// the latch or restarted the reader. One `unref()`/`ref()` pair (ink performs
+/// exactly that pair every time its raw-mode refcount drops to zero and comes
+/// back, i.e. whenever the last `useInput` component unmounts and a new one
+/// mounts around a tool call) therefore left the process with NO reader on fd 0
+/// for the rest of its life: the terminal stayed in raw mode, the loop kept
+/// ticking, and not one further keystroke ever reached JS.
 static STDIN_DETACHED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// True once `process.stdin` has been detached (`destroy`/`pause`/`unref`).
+/// #9676: set by `process.stdin.unref()`, cleared by `.ref()`.
+///
+/// Node's `ref`/`unref` govern ONLY whether the handle keeps the event loop
+/// alive — an unref'd stdin still delivers data. So this flag feeds the
+/// liveness view (`stdin_is_detached`) but NOT the reader loop, which keeps
+/// reading. That separation is what makes the pair symmetric: `ref()` restores
+/// the hold, and no keystroke is lost in between.
+static STDIN_UNREFED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// True once `process.stdin` no longer holds the event loop open — either it
+/// was detached (`destroy`/`pause`) or it was `unref()`d. This is the LIVENESS
+/// view; the fd-0 reader uses `stdin_reader_should_stop()` instead, which
+/// deliberately ignores `unref`.
 pub fn stdin_is_detached() -> bool {
+    STDIN_DETACHED.load(std::sync::atomic::Ordering::Acquire)
+        || STDIN_UNREFED.load(std::sync::atomic::Ordering::Acquire)
+}
+
+/// Whether the fd-0 reader thread should stop. `unref()` must NOT stop it
+/// (#9676) — only an explicit `destroy()`/`pause()` does.
+fn stdin_reader_should_stop() -> bool {
     STDIN_DETACHED.load(std::sync::atomic::Ordering::Acquire)
 }
 
-/// `destroy`/`pause`/`unref` impl for `process.stdin` — releases the stdin
-/// reader's hold on the event loop. No-op return (`undefined`).
+/// `destroy`/`pause` impl for `process.stdin` — releases the stdin reader's
+/// hold on the event loop and stops the reader. No-op return (`undefined`).
 extern "C" fn process_stdin_detach_stub(
     _closure: *const crate::closure::ClosureHeader,
     _arg: f64,
 ) -> f64 {
     STDIN_DETACHED.store(true, std::sync::atomic::Ordering::Release);
+    // #9676: mirror it into readline's flow state, so `pause()` means the same
+    // thing whichever spelling reached it (and so the `resume()` below is a
+    // true inverse rather than a partial one).
+    if let Some(pause) = stdin_flow_op(&STDIN_FLOW_PAUSE_FN) {
+        pause();
+    }
     f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+/// `process.stdin.unref()` — drop the event-loop hold WITHOUT stopping
+/// delivery (#9676). Node's contract: an unref'd stdin still emits `'data'`.
+extern "C" fn process_stdin_unref_stub(
+    _closure: *const crate::closure::ClosureHeader,
+    _arg: f64,
+) -> f64 {
+    STDIN_UNREFED.store(true, std::sync::atomic::Ordering::Release);
+    crate::object::js_implicit_this_get()
+}
+
+/// `process.stdin.ref()` — restore the event-loop hold (#9676). Was a no-op
+/// stub, which is what made `unref()` a one-way latch.
+///
+/// Deliberately does NOT start a reader. `ref` is the inverse of `unref` and
+/// nothing more, exactly as in Node: it does not resume a `pause()`d stream,
+/// and starting one here would be actively harmful — perry-stdlib's readline
+/// runs its own fd-0 reader, both readers take `std::io::stdin()`'s process
+/// lock, and a program whose listeners live in readline's registry would end
+/// up with the runtime's reader parked on that lock (or, worse, consuming
+/// bytes into a buffer those listeners never see). `resume()` remains the one
+/// call that restarts a stopped reader.
+extern "C" fn process_stdin_ref_stub(
+    _closure: *const crate::closure::ClosureHeader,
+    _arg: f64,
+) -> f64 {
+    STDIN_UNREFED.store(false, std::sync::atomic::Ordering::Release);
+    crate::object::js_implicit_this_get()
 }
 
 thread_local! {
@@ -253,7 +317,10 @@ fn ensure_stdin_reader() {
             // while a burst collapses into one lock + one notify.
             let mut buf = [0u8; 4096];
             loop {
-                if stdin_is_detached() {
+                // #9676: `stdin_reader_should_stop`, NOT `stdin_is_detached` —
+                // an `unref()`d stdin still delivers data in Node, and reading
+                // the liveness view here is what killed the reader for good.
+                if stdin_reader_should_stop() {
                     break;
                 }
                 match handle.read(&mut buf) {
@@ -453,6 +520,40 @@ pub extern "C" fn js_register_stdin_listener_ops(
 ) {
     STDIN_ON_FN.store(on as *mut (), std::sync::atomic::Ordering::Release);
     STDIN_OFF_FN.store(off as *mut (), std::sync::atomic::Ordering::Release);
+}
+
+/// #9676: perry-stdlib's readline `pause`/`resume`, so the stdin OBJECT's
+/// `pause()`/`resume()` reach the same flow state as codegen's literal
+/// `process.stdin.pause()` / `.resume()`.
+///
+/// Without this bridge the two spellings latched DIFFERENT flags. `rl.close()`
+/// and a literal `process.stdin.pause()` both set readline's `STDIN_PAUSED`,
+/// whose pump branch returns without draining `PENDING_DATA` — while readline's
+/// fd-0 reader keeps reading and keeps notifying the main thread. Recovering
+/// with an ALIASED `stdin.resume()` (`const s = process.stdin; s.resume()`, and
+/// every TUI that holds stdin in a variable) landed on the runtime object stub,
+/// which cleared only the runtime's own flags and left `STDIN_PAUSED` set for
+/// the life of the process. The result is exactly the reported wedge: bytes are
+/// consumed off the terminal, the process wakes and burns CPU on every
+/// keystroke, and nothing is ever dispatched to JS.
+static STDIN_FLOW_PAUSE_FN: std::sync::atomic::AtomicPtr<()> =
+    std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+static STDIN_FLOW_RESUME_FN: std::sync::atomic::AtomicPtr<()> =
+    std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+
+#[no_mangle]
+pub extern "C" fn js_register_stdin_flow_ops(pause: extern "C" fn(), resume: extern "C" fn()) {
+    STDIN_FLOW_PAUSE_FN.store(pause as *mut (), std::sync::atomic::Ordering::Release);
+    STDIN_FLOW_RESUME_FN.store(resume as *mut (), std::sync::atomic::Ordering::Release);
+}
+
+fn stdin_flow_op(slot: &std::sync::atomic::AtomicPtr<()>) -> Option<extern "C" fn()> {
+    let p = slot.load(std::sync::atomic::Ordering::Acquire);
+    if p.is_null() {
+        return None;
+    }
+    // SAFETY: `js_register_stdin_flow_ops` only ever stores this exact ABI.
+    Some(unsafe { std::mem::transmute::<*mut (), extern "C" fn()>(p) })
 }
 
 /// True when readline owns the stdin listener registry (it always does once
@@ -810,12 +911,22 @@ extern "C" fn process_stdin_read(_closure: *const crate::closure::ClosureHeader,
 }
 
 /// `process.stdin.resume()` — flowing mode. Clears any prior detach (from
-/// `pause`/`unref`) and (re)starts the reader, so a paused stdin can resume.
+/// `pause`/`destroy`) and any prior `unref()`, and (re)starts the reader, so a
+/// paused stdin can resume.
 extern "C" fn process_stdin_resume(
     _closure: *const crate::closure::ClosureHeader,
     _arg: f64,
 ) -> f64 {
     STDIN_DETACHED.store(false, std::sync::atomic::Ordering::Release);
+    STDIN_UNREFED.store(false, std::sync::atomic::Ordering::Release);
+    // #9676: clear readline's `STDIN_PAUSED` too. `rl.close()` and a literal
+    // `process.stdin.pause()` set it, its pump branch stops draining
+    // `PENDING_DATA`, and before this bridge only the LITERAL
+    // `process.stdin.resume()` could clear it — an aliased `s.resume()` left
+    // stdin permanently deaf while the reader kept consuming bytes.
+    if let Some(resume) = stdin_flow_op(&STDIN_FLOW_RESUME_FN) {
+        resume();
+    }
     ensure_stdin_reader();
     crate::object::js_implicit_this_get()
 }
@@ -1254,9 +1365,18 @@ fn build_stream_object_with_write(
                 process_stream_on_once_stub
             },
         ); // resume
-        set_field_with_stub(start + 6, lifecycle); // unref
+           // #9676: on stdin, `unref`/`ref` are a SYMMETRIC pair that only moves
+           // the event-loop hold; on stdout/stderr `unref` stays the shared no-op.
+        set_field_with_stub(
+            start + 6,
+            if is_stdin {
+                process_stdin_unref_stub
+            } else {
+                process_stream_on_once_stub
+            },
+        ); // unref
         if is_stdin {
-            set_field_with_stub(start + 7, process_stream_on_once_stub); // ref
+            set_field_with_stub(start + 7, process_stdin_ref_stub); // ref
             set_field_with_stub(start + 8, lifecycle); // destroy
             if is_stdin {
                 let se =
