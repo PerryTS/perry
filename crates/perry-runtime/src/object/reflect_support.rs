@@ -27,9 +27,10 @@ pub(crate) fn obj_value_no_extend(value: f64) -> bool {
             return false;
         }
         // Typed arrays use a side table (small ones carry no `GcHeader`, so
-        // the header read below would be allocator-metadata garbage).
-        if crate::typedarray::lookup_typed_array_kind(obj as usize).is_some() {
-            return crate::typedarray_props::typed_array_owner_no_extend(obj as usize);
+        // the header read below would be allocator-metadata garbage). The
+        // helper also recognises BufferHeader-backed Uint8Arrays (#9347).
+        if let Some(owner) = crate::typedarray_props::typed_array_addr_from_value(value) {
+            return crate::typedarray_props::typed_array_owner_no_extend(owner);
         }
         let gc = gc_header_for(obj);
         (*gc)._reserved & crate::gc::OBJ_FLAG_NO_EXTEND != 0

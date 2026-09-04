@@ -30,6 +30,22 @@ fn pointer_owner(env: NapiEnv, value: NapiValue) -> Result<usize, NapiStatus> {
     super::metadata::owner_from_bits(bits).ok_or(NapiStatus::InvalidArg)
 }
 
+#[derive(Clone, Copy)]
+enum NapiTypedArrayOwner {
+    Registered(usize),
+    Uint8Buffer(usize),
+}
+
+fn classify_typed_array_owner(owner: usize) -> Option<NapiTypedArrayOwner> {
+    if crate::typedarray::lookup_typed_array_kind(owner).is_some() {
+        Some(NapiTypedArrayOwner::Registered(owner))
+    } else if crate::object::typed_array_proto_thunks::is_typed_array_buffer(owner) {
+        Some(NapiTypedArrayOwner::Uint8Buffer(owner))
+    } else {
+        None
+    }
+}
+
 fn write_pointer_handle(env: NapiEnv, pointer: *const u8, result: *mut NapiValue) -> NapiStatus {
     if result.is_null() {
         return set_status(env, NapiStatus::InvalidArg, "result must not be null");
@@ -252,7 +268,7 @@ pub unsafe extern "C" fn napi_get_arraybuffer_info(
     };
     let buffer = owner as *const BufferHeader;
     if !data.is_null() {
-        *data = crate::buffer::buffer_data(buffer) as *mut c_void;
+        *data = crate::buffer::resolve_span_data_ptr(buffer) as *mut c_void;
     }
     if !byte_length.is_null() {
         *byte_length = (*buffer).length as usize;
@@ -326,7 +342,9 @@ pub unsafe extern "C" fn napi_is_typedarray(
         return set_status(env, NapiStatus::InvalidArg, "result must not be null");
     }
     *result = pointer_owner(env, value)
-        .is_ok_and(|owner| crate::typedarray::lookup_typed_array_kind(owner).is_some());
+        .ok()
+        .and_then(classify_typed_array_owner)
+        .is_some();
     ok(env)
 }
 
@@ -340,25 +358,51 @@ pub unsafe extern "C" fn napi_get_typedarray_info(
     arraybuffer: *mut NapiValue,
     byte_offset: *mut usize,
 ) -> NapiStatus {
-    let owner = match pointer_owner(env, typedarray) {
-        Ok(owner) if crate::typedarray::lookup_typed_array_kind(owner).is_some() => owner,
+    let owner = match pointer_owner(env, typedarray)
+        .ok()
+        .and_then(classify_typed_array_owner)
+    {
+        Some(owner) => owner,
         _ => return set_status(env, NapiStatus::InvalidArg, "value must be a TypedArray"),
     };
-    let typed_array = owner as *mut TypedArrayHeader;
-    let backing = crate::typedarray_view::js_typed_array_backing_buffer(typed_array);
-    let refreshed_owner = pointer_owner(env, typedarray).unwrap_or(owner);
-    let refreshed = refreshed_owner as *mut TypedArrayHeader;
+    let (reported_kind, reported_length, reported_data, backing, reported_offset) = match owner {
+        NapiTypedArrayOwner::Registered(owner) => {
+            let typed_array = owner as *mut TypedArrayHeader;
+            let backing = crate::typedarray_view::js_typed_array_backing_buffer(typed_array);
+            let refreshed_owner = pointer_owner(env, typedarray).unwrap_or(owner);
+            let refreshed = refreshed_owner as *mut TypedArrayHeader;
+            (
+                std::mem::transmute::<i32, NapiTypedarrayType>((*refreshed).kind as i32),
+                (*refreshed).length as usize,
+                crate::typedarray::data_ptr_mut(refreshed).cast::<c_void>(),
+                backing,
+                crate::typedarray_view::js_typed_array_byte_offset(refreshed) as usize,
+            )
+        }
+        NapiTypedArrayOwner::Uint8Buffer(owner) => {
+            let backing = crate::buffer::buffer_backing_array_buffer(owner);
+            let refreshed_owner = pointer_owner(env, typedarray).unwrap_or(owner);
+            let refreshed = refreshed_owner as *const BufferHeader;
+            (
+                NapiTypedarrayType::Uint8Array,
+                crate::buffer::js_buffer_length(refreshed).max(0) as usize,
+                crate::buffer::resolve_span_data_ptr(refreshed) as *mut c_void,
+                backing as *mut BufferHeader,
+                crate::buffer::buffer_byte_offset(refreshed_owner) as usize,
+            )
+        }
+    };
     if !kind.is_null() {
-        *kind = std::mem::transmute::<i32, NapiTypedarrayType>((*refreshed).kind as i32);
+        *kind = reported_kind;
     }
     if !length.is_null() {
-        *length = (*refreshed).length as usize;
+        *length = reported_length;
     }
     if !data.is_null() {
-        *data = crate::typedarray::data_ptr_mut(refreshed).cast();
+        *data = reported_data;
     }
     if !byte_offset.is_null() {
-        *byte_offset = crate::typedarray_view::js_typed_array_byte_offset(refreshed) as usize;
+        *byte_offset = reported_offset;
     }
     if !arraybuffer.is_null() {
         *arraybuffer =

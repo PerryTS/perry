@@ -1494,7 +1494,7 @@ fn own_set_descriptor(target: f64, key: f64) -> Option<OwnSetDescriptor> {
     // deliberately gated off for typed arrays). Consult that state directly so
     // a non-writable own data property / setter-less accessor rejects the write
     // (test262 TypedArray internals/Set key-is-not-numeric-index).
-    if crate::typedarray::lookup_typed_array_kind(obj_ptr).is_some() {
+    if crate::typedarray_props::is_typed_array_owner(obj_ptr) {
         return match crate::typedarray_props::typed_array_own_set_descriptor(obj_ptr, &key_name) {
             Some(crate::typedarray_props::TypedArrayOwnSetDescriptor::Data { writable }) => {
                 Some(OwnSetDescriptor::Data { writable })
@@ -1857,7 +1857,7 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
         let addr = extract_pointer(target.to_bits()) as usize;
         // Typed arrays must be excluded before the header probe: small TAs
         // are plain-alloc'd without a GcHeader.
-        if crate::typedarray::lookup_typed_array_kind(addr).is_none()
+        if !crate::typedarray_props::is_typed_array_owner(addr)
             && crate::object::exotic_expando::exotic_expando_kind_of_value(target).is_none()
             && !crate::closure::is_closure_ptr(addr)
         {
@@ -2094,7 +2094,7 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
         // ordinary data-descriptor flow (create on receiver); an invalid
         // canonical index is a silent no-op `true`.
         let cur_addr = extract_pointer(current.to_bits()) as usize;
-        if crate::typedarray::lookup_typed_array_kind(cur_addr).is_some() {
+        if crate::typedarray_props::is_typed_array_owner(cur_addr) {
             if let Some(name) = property_key_to_rust_string(key) {
                 match crate::typedarray_props::typed_array_canonical_index_validity(cur_addr, &name)
                 {
@@ -2114,7 +2114,7 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
                         // CreateDataProperty lands in ITS [[DefineOwnProperty]],
                         // which rejects an index that is invalid FOR THE
                         // RECEIVER (`Reflect.set(ta, "0", v, emptyTa)` → false).
-                        if crate::typedarray::lookup_typed_array_kind(recv_addr).is_some() {
+                        if crate::typedarray_props::is_typed_array_owner(recv_addr) {
                             return match crate::typedarray_props::
                                 typed_array_canonical_index_validity(recv_addr, &name)
                             {

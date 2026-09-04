@@ -1178,6 +1178,12 @@ pub(crate) fn finalize_collected_dead_buffer(addr: usize) {
     //    `visit_metadata_usize_slot`, which resolves it against whatever now
     //    occupies those bytes and rewrites the key to the new tenant's address.
     super::own_props::clear_buffer_own_props(addr);
+    // A BufferHeader-backed Uint8Array keeps ordinary expandos and its
+    // non-extensible marker in the TypedArray side tables. Prune those here as
+    // well as in unregister_typed_array: this representation never enters the
+    // typed-array registry, so that unregister path can never see it (#9347).
+    crate::typedarray_props::typed_array_clear_own_props(addr);
+    crate::typedarray_props::typed_array_clear_no_extend(addr);
     super::detach::remove_detached_entry_for_dead_buffer(addr);
     super::view::remove_entries_for_dead_buffer(addr);
     // #9342: drop the dead address from the inline-read admission cache before

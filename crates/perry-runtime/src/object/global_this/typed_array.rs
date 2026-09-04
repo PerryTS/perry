@@ -256,13 +256,55 @@ fn jsvalue_extends_typed_array(value: f64) -> bool {
     }
 }
 
-/// Resolve the `IMPLICIT_THIS` receiver to a `(typed-array ptr, kind)` if it
-/// is a typed array, else `None`. Backs the `%TypedArray%.prototype` accessor
-/// getters installed for reflection (#2060) — these fire when user code does
-/// `desc.get.call(int8arr)` after pulling the descriptor out via
-/// `Object.getOwnPropertyDescriptor`. Mirrors the receiver-extraction the
-/// `Array.prototype.slice` thunk uses (NaN-boxed pointer or raw-i64 form).
-fn typed_array_receiver() -> Option<(*const crate::typedarray::TypedArrayHeader, u8)> {
+#[derive(Clone, Copy)]
+enum TypedArrayAccessorReceiver {
+    Registered(*const crate::typedarray::TypedArrayHeader, u8),
+    Uint8Buffer(usize),
+}
+
+impl TypedArrayAccessorReceiver {
+    fn length(self) -> u32 {
+        match self {
+            Self::Registered(ta, _) => crate::typedarray::js_typed_array_length(ta).max(0) as u32,
+            Self::Uint8Buffer(addr) => {
+                crate::buffer::js_buffer_length(addr as *const crate::buffer::BufferHeader).max(0)
+                    as u32
+            }
+        }
+    }
+
+    fn byte_length(self) -> usize {
+        match self {
+            Self::Registered(_, kind) => {
+                self.length() as usize * crate::typedarray::elem_size_for_kind(kind)
+            }
+            Self::Uint8Buffer(_) => self.length() as usize,
+        }
+    }
+
+    fn byte_offset(self) -> u32 {
+        match self {
+            Self::Registered(ta, _) => crate::typedarray_view::js_typed_array_byte_offset(ta),
+            Self::Uint8Buffer(addr) => crate::buffer::buffer_byte_offset(addr),
+        }
+    }
+
+    fn backing_buffer(self) -> usize {
+        match self {
+            Self::Registered(ta, _) => {
+                crate::typedarray_view::js_typed_array_backing_buffer(ta) as usize
+            }
+            Self::Uint8Buffer(addr) => crate::buffer::buffer_backing_array_buffer(addr),
+        }
+    }
+}
+
+/// Resolve the `IMPLICIT_THIS` receiver for the reflected
+/// `%TypedArray%.prototype` accessors installed by #2060. A Perry
+/// `Uint8Array` (and Node's `Buffer` subclass) uses `BufferHeader`, so a miss
+/// in `lookup_typed_array_kind` must continue through the strict buffer brand
+/// check instead of becoming a `TypeError` (#9347).
+fn typed_array_receiver() -> Option<TypedArrayAccessorReceiver> {
     use crate::value::JSValue;
     let this_bits = IMPLICIT_THIS.with(|c| c.get());
     let this_jsv = JSValue::from_bits(this_bits);
@@ -273,8 +315,14 @@ fn typed_array_receiver() -> Option<(*const crate::typedarray::TypedArrayHeader,
     } else {
         return None;
     };
-    let kind = crate::typedarray::lookup_typed_array_kind(raw)?;
-    Some((raw as *const crate::typedarray::TypedArrayHeader, kind))
+    if let Some(kind) = crate::typedarray::lookup_typed_array_kind(raw) {
+        return Some(TypedArrayAccessorReceiver::Registered(
+            raw as *const _,
+            kind,
+        ));
+    }
+    crate::object::typed_array_proto_thunks::is_typed_array_buffer(raw)
+        .then_some(TypedArrayAccessorReceiver::Uint8Buffer(raw))
 }
 
 fn typed_array_brand_error() -> ! {
@@ -312,12 +360,12 @@ pub(crate) fn typed_array_constructor_this_kind() -> Option<u8> {
     crate::typedarray::kind_for_name(&name)
 }
 
-fn typed_array_buffer_value(ta: *const crate::typedarray::TypedArrayHeader) -> f64 {
-    let buf = crate::typedarray::typed_array_to_array_buffer(ta);
-    if buf.is_null() {
+fn typed_array_buffer_value(receiver: TypedArrayAccessorReceiver) -> f64 {
+    let backing = receiver.backing_buffer();
+    if backing == 0 {
         typed_array_brand_error();
     }
-    crate::value::js_nanbox_pointer(buf as i64)
+    crate::value::js_nanbox_pointer(backing as i64)
 }
 
 /// `%TypedArray%.prototype.length` getter — element count of the receiver.
@@ -325,9 +373,8 @@ extern "C" fn typed_array_length_getter_thunk(
     _closure: *const crate::closure::ClosureHeader,
 ) -> f64 {
     match typed_array_receiver() {
-        Some((ta, _)) => {
-            let len = crate::typedarray::js_typed_array_length(ta);
-            f64::from_bits(crate::value::JSValue::number(len as f64).bits())
+        Some(receiver) => {
+            f64::from_bits(crate::value::JSValue::number(receiver.length() as f64).bits())
         }
         None => typed_array_brand_error(),
     }
@@ -338,36 +385,32 @@ extern "C" fn typed_array_byte_length_getter_thunk(
     _closure: *const crate::closure::ClosureHeader,
 ) -> f64 {
     match typed_array_receiver() {
-        Some((ta, kind)) => {
-            let len = crate::typedarray::js_typed_array_length(ta) as usize;
-            let elem_size = crate::typedarray::elem_size_for_kind(kind);
-            f64::from_bits(crate::value::JSValue::number((len * elem_size) as f64).bits())
+        Some(receiver) => {
+            f64::from_bits(crate::value::JSValue::number(receiver.byte_length() as f64).bits())
         }
         None => typed_array_brand_error(),
     }
 }
 
-/// `%TypedArray%.prototype.byteOffset` getter — always 0 (Perry views are not
-/// backed by an offset into a shared `ArrayBuffer`).
+/// `%TypedArray%.prototype.byteOffset` getter.
 extern "C" fn typed_array_byte_offset_getter_thunk(
     _closure: *const crate::closure::ClosureHeader,
 ) -> f64 {
     match typed_array_receiver() {
-        Some(_) => f64::from_bits(crate::value::JSValue::number(0.0).bits()),
+        Some(receiver) => {
+            f64::from_bits(crate::value::JSValue::number(receiver.byte_offset() as f64).bits())
+        }
         None => typed_array_brand_error(),
     }
 }
 
-/// `%TypedArray%.prototype.buffer` getter. Perry does not yet model a
-/// first-class `ArrayBuffer` behind a view, so this returns `undefined` for
-/// now (matching the existing `int8arr.buffer` data-path behavior). The
-/// accessor still exists so reflection sees a real getter — closing the
-/// `getOwnPropertyDescriptor(...).get` cascade in #2060.
+/// `%TypedArray%.prototype.buffer` getter, with the same stable backing
+/// identity as the direct property path.
 extern "C" fn typed_array_buffer_getter_thunk(
     _closure: *const crate::closure::ClosureHeader,
 ) -> f64 {
     match typed_array_receiver() {
-        Some((ta, _)) => typed_array_buffer_value(ta),
+        Some(receiver) => typed_array_buffer_value(receiver),
         None => typed_array_brand_error(),
     }
 }
