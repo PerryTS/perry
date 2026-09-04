@@ -1739,7 +1739,7 @@ pub(super) fn run_copied_minor_attempt(
     // flip and the new active survivor holds only the copies, so from-space
     // live == from-space high-water.
     crate::arena::record_arena_live_census(arena_live_bytes, None);
-    note_collection_finished_arena_occupancy();
+    note_collection_finished_arena_occupancy(false);
     // The same argument one trigger over: a young generation that did not die
     // is a heap growing by LIVE data, so arena-growth pacing must not read that
     // growth as garbage accumulating. Fed after publishing the census so the
