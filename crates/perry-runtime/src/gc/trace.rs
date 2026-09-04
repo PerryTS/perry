@@ -9,6 +9,29 @@ thread_local! {
         const { std::cell::Cell::new(false) };
 }
 
+crate::perry_thread_local! {
+    /// #9717: array-growth forwarding stubs the classifier admitted into a
+    /// budgeted-cycle valid-pointer set that `plausible_arena_user_ptr_header`
+    /// would have rejected. A non-zero count is a POSITIVE report that a live
+    /// slot pointed at a growth stub during a budgeted full trace — the exact
+    /// edge whose loss swept a private-field array on the idle reclaim. Zero on
+    /// a run with no such edge, so it never perturbs a log a gate parses.
+    static FORWARDED_STUB_MEMBERSHIP_RECOVERIES: std::cell::Cell<u64> =
+        const { std::cell::Cell::new(0) };
+}
+
+#[cold]
+fn note_forwarded_stub_membership_recovery() {
+    FORWARDED_STUB_MEMBERSHIP_RECOVERIES.with(|c| c.set(c.get().saturating_add(1)));
+}
+
+/// Running count of array-growth forwarding stubs the classifier recovered into
+/// a budgeted valid-pointer set (#9717). A test that plants a stub-only-
+/// referenced array can assert this moved.
+pub(crate) fn forwarded_stub_membership_recoveries() -> u64 {
+    FORWARDED_STUB_MEMBERSHIP_RECOVERIES.with(std::cell::Cell::get)
+}
+
 /// #6179 membership classifier: is `addr` a plausible live GC object start?
 /// UNION of the two backends — exact membership in the malloc registry OR a
 /// plausible arena header on an arena-classified page — deliberately NOT the
@@ -25,10 +48,32 @@ pub(super) fn classifier_valid_object_start(addr: usize) -> bool {
     if super::gc_malloc_header_is_tracked(header) {
         return true;
     }
-    !matches!(
+    if matches!(
         crate::arena::classify_heap_generation(addr),
         crate::arena::HeapGeneration::Unknown
-    ) && unsafe { super::barrier::plausible_arena_user_ptr_header(header).is_some() }
+    ) {
+        return false;
+    }
+    if unsafe { super::barrier::plausible_arena_user_ptr_header(header).is_some() } {
+        return true;
+    }
+    // #9717: an array-growth forwarding stub is a real censused arena object a
+    // live slot can still point directly at (references are never rewritten,
+    // #6228). The census path admits it (record_arena_header pushes every arena
+    // object), so this classifier -- which contains() uses for a budgeted,
+    // non-moving cycle and which must be a census SUPERSET -- has to admit it
+    // too. plausible_arena_user_ptr_header rejects FORWARDED headers by design
+    // (a metadata key whose object may have died and been recycled with the bit
+    // set), so the stub was silently dropped: mark_field_into_worklist failed
+    // membership, never marked the stub, and the FORWARDED-follow in
+    // trace_one_worklist_header never ran -- so the live post-growth array,
+    // reachable only through the field to stub edge, was swept. That is the
+    // idle-time (budgeted full) reclaim turning a private-field array empty.
+    if unsafe { super::barrier::plausible_forwarded_arena_stub(header).is_some() } {
+        note_forwarded_stub_membership_recovery();
+        return true;
+    }
+    false
 }
 
 /// #6179: differential-verification mode for the page-metadata classifier.
