@@ -212,6 +212,56 @@ fn a_keys_array_reachable_only_through_the_descriptor_survives_and_is_rewritten(
     );
 }
 
+/// #9706: the reverse indices are keyed by the keys ADDRESS. After a copying
+/// minor moves the keys array, the metadata scan must re-key the family and
+/// the exact-facts accelerator, so that interning the moved facts answers the
+/// SAME id (a fresh id would be a duplicate descriptor per collection) and
+/// the stale address answers nothing.
+#[test]
+fn the_reverse_indices_follow_a_moved_keys_array() {
+    let _guard = CopyingNurseryTestGuard::new(2);
+    // The record rewrite comes from the receiver's own edge; the re-keying
+    // is the metadata scanner's job, which production registers at gc init
+    // and a unit test must register itself (as the recycled-keys fixtures do).
+    gc_register_mutable_root_scanner(shapes::scan_shape_table_rekey_mut);
+    let (before, after) = collect_and_report(false)
+        .expect("#9706: the receiver must move for this cycle to be discriminating");
+    assert_ne!(
+        after.keys, before.keys,
+        "test premise: the keys array moved"
+    );
+    let obj = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::ObjectHeader;
+    let id = unsafe { shapes::object_shape_stamp(obj) };
+    assert!(shapes::is_shape_id(id), "the receiver stays stamped");
+    assert_eq!(
+        shapes::test_shape_ids_for_keys(after.keys as usize),
+        vec![id],
+        "#9706: the family index must be re-keyed to the forwarded address \
+         (before={:#x} after={:#x} under-before={:?} record-keys={:#x})",
+        before.keys,
+        after.keys,
+        shapes::test_shape_ids_for_keys(before.keys as usize),
+        unsafe { shapes::object_shape_descriptor(obj) }
+            .map(|d| d.keys)
+            .unwrap_or(0)
+    );
+    assert!(
+        shapes::test_shape_ids_for_keys(before.keys as usize).is_empty(),
+        "#9706: nothing may stay indexed under the from-space address"
+    );
+    let descriptor = unsafe { shapes::object_shape_descriptor(obj) }.expect("published");
+    assert_eq!(descriptor.keys, after.keys);
+    assert_eq!(
+        shapes::shape_descriptor_ensure(
+            after.keys as usize as *const crate::ArrayHeader,
+            descriptor.logical_key_count,
+            descriptor.live_inline_slot_count,
+        ),
+        Ok(id),
+        "#9706: interning the moved facts must answer the existing id, not mint a duplicate"
+    );
+}
+
 #[test]
 fn keys_edge_sabotage_is_detected() {
     let _guard = CopyingNurseryTestGuard::new(2);

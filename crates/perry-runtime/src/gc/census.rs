@@ -346,6 +346,10 @@ struct Census {
     clo_captures: u64,
     // objects
     obj_meta: u64,
+    /// ShapeId stamp of every live shaped object (duplicates included; sorted
+    /// and deduplicated once the walk is over). Feeds the shape table's
+    /// "carried by a live object" rows (#9706).
+    live_shape_ids: Vec<u32>,
 }
 
 const SPACE_NAMES: [&str; 6] = [
@@ -432,7 +436,11 @@ impl Census {
             self.obj_meta += 1;
         }
         let live = match crate::object::shapes::object_shape_descriptor(obj) {
-            Some(d) => (d.live_inline_slot_count as usize).min(slot_capacity),
+            Some(d) => {
+                self.live_shape_ids
+                    .push(crate::object::shapes::object_shape_stamp(obj));
+                (d.live_inline_slot_count as usize).min(slot_capacity)
+            }
             None => {
                 entry.unshaped += 1;
                 0
@@ -764,7 +772,13 @@ fn take_census(label: &str, pass1: Option<Vec<usize>>) {
         })
         .collect();
 
-    let side: Vec<serde_json::Value> = side_tables()
+    c.live_shape_ids.sort_unstable();
+    c.live_shape_ids.dedup();
+    let mut side_rows = side_tables();
+    side_rows.extend(crate::object::shapes::shape_table_liveness_census(
+        &c.live_shape_ids,
+    ));
+    let side: Vec<serde_json::Value> = side_rows
         .into_iter()
         .map(|(n, e, b)| serde_json::json!({"table": n, "entries": e, "bytes": b}))
         .collect();

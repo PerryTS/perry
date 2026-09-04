@@ -540,7 +540,11 @@ mod descriptor_tests_8067 {
             external,
             "the process-global id should be preferred for later births"
         );
-        retain_key_count_versions(keys as u64);
+        assert_eq!(
+            test_shape_ids_for_keys(keys),
+            vec![external, local],
+            "the external id must lead the family so interning prefers it"
+        );
         assert!(shape_descriptor_by_id(local).is_some());
         assert!(shape_descriptor_by_id(external).is_some());
 
@@ -638,9 +642,9 @@ mod descriptor_tests_8067 {
         );
         assert_eq!(unsafe { *slot }, keys as u64);
         assert_eq!(
-            shape_descriptor_by_id(id).unwrap().indexed_keys,
-            keys as u64,
-            "newly minted descriptor must record its indexed keys address"
+            test_shape_ids_for_keys(keys),
+            vec![id],
+            "newly minted descriptor must be indexed under its keys address"
         );
 
         // Writing THROUGH the slot is what an evacuating visitor does. The
@@ -649,18 +653,20 @@ mod descriptor_tests_8067 {
         unsafe { *slot = moved_keys };
         assert_eq!(shape_descriptor_by_id(id).unwrap().keys, moved_keys);
         assert_eq!(
-            shape_descriptor_by_id(id).unwrap().indexed_keys,
-            keys as u64,
-            "an object-edge rewrite must retain the old indexed address until metadata repair"
+            test_shape_ids_for_keys(keys),
+            vec![id],
+            "an object-edge rewrite must leave the family under the old address until metadata repair"
+        );
+        assert!(
+            test_shape_ids_for_keys(moved_keys as usize).is_empty(),
+            "the store alone must not re-index the family"
         );
 
-        // The keys-address reverse index is repaired incrementally by the
-        // metadata pass, not by the store; force the same one-id repair here.
-        {
-            let mut inner = crate::state::state().shapes.inner.borrow_mut();
-            sync_descriptor_reverse_indices(&mut inner, id);
-        }
-        assert_eq!(shape_descriptor_by_id(id).unwrap().indexed_keys, moved_keys);
+        // The keys-address family index is repaired by the metadata pass, not
+        // by the store; force the same one-family repair here.
+        test_rekey_shape_family(keys, moved_keys as usize);
+        assert_eq!(test_shape_ids_for_keys(moved_keys as usize), vec![id]);
+        assert!(test_shape_ids_for_keys(keys).is_empty());
         assert_eq!(
             shape_descriptor_ensure(moved_keys as *const ArrayHeader, 3, 2),
             Ok(id),
@@ -670,7 +676,7 @@ mod descriptor_tests_8067 {
             .expect("shape range unexpectedly exhausted");
         assert_ne!(
             old_address_id, id,
-            "incremental repair must remove the stale old-address facts entry"
+            "incremental repair must remove the stale old-address family entry"
         );
         test_drop_shape_descriptors(moved_keys as usize);
         assert_eq!(
@@ -679,15 +685,17 @@ mod descriptor_tests_8067 {
             "descriptor rekey did not update the keys-address index"
         );
         test_drop_shape_descriptors(keys);
+        test_drop_shape_descriptors(keys);
     }
 
     #[test]
     fn a_boxed_record_keeps_its_keys_slot_across_table_growth() {
         let _lock = crate::gc::global_side_table_test_lock();
         // The prohibition #8067 recorded — "descriptor insertion can reallocate
-        // the table" — is what BOXING answers. Mint one descriptor, take its
-        // slot, then mint enough siblings to force several rehashes and assert
-        // the address never moved. Without the box this fails.
+        // the table" — is what a stable-address record store answers (a Box
+        // per record before #9706, a chunked slab since). Mint one descriptor,
+        // take its slot, then mint enough siblings to grow the store across
+        // several chunks and assert the address never moved.
         let keys = 0x8112_0000_0000_1000usize;
         let id = shape_descriptor_ensure(keys as *const ArrayHeader, 1, 1)
             .expect("shape range unexpectedly exhausted");
@@ -714,8 +722,11 @@ mod descriptor_tests_8067 {
         }
     }
 
+    /// #9706: an OWNED keys array's growth history is retired behind the
+    /// version its single owner now carries, except for a version an
+    /// optimization cache permanently owns.
     #[test]
-    fn key_count_versions_remain_resolvable_until_the_keys_die() {
+    fn owned_key_count_versions_are_retired_behind_the_current_one() {
         let _lock = crate::gc::global_side_table_test_lock();
         let keys = 0x8067_0000_0000_2100usize;
         let unrelated_keys = 0x8067_0000_0000_2200usize;
@@ -723,27 +734,81 @@ mod descriptor_tests_8067 {
             .expect("shape range unexpectedly exhausted");
         let stale_b = shape_descriptor_ensure(keys as *const ArrayHeader, 1, 2)
             .expect("shape range unexpectedly exhausted");
+        let cached = shape_descriptor_ensure(keys as *const ArrayHeader, 1, 3)
+            .expect("shape range unexpectedly exhausted");
         let current = shape_descriptor_ensure(keys as *const ArrayHeader, 2, 2)
             .expect("shape range unexpectedly exhausted");
         let unrelated = shape_descriptor_ensure(unrelated_keys as *const ArrayHeader, 1, 1)
             .expect("shape range unexpectedly exhausted");
+        // Before retirement every version is resolvable and the family lists
+        // them in mint order.
+        assert_eq!(
+            test_shape_ids_for_keys(keys),
+            vec![stale_a, stale_b, cached, current]
+        );
+        unsafe { note_cache_carrier(shape_descriptor_by_id(cached)) };
 
-        retain_key_count_versions(keys as u64);
+        retire_owned_shape_siblings(keys as u64, current);
 
-        assert!(shape_descriptor_by_id(stale_a).is_some());
-        assert!(shape_descriptor_by_id(stale_b).is_some());
+        assert_eq!(shape_descriptor_by_id(stale_a), None);
+        assert_eq!(shape_descriptor_by_id(stale_b), None);
+        assert!(
+            shape_descriptor_by_id(cached).is_some(),
+            "a cache-carried version must survive same-address retirement"
+        );
         assert!(shape_descriptor_by_id(current).is_some());
         assert!(shape_descriptor_by_id(unrelated).is_some());
-        let inner = crate::state::state().shapes.inner.borrow();
-        let current_ids = inner
-            .ids_by_keys
-            .get(&(keys as u64))
-            .expect("keys identity disappeared from descriptor index");
-        assert_eq!(current_ids.as_slice(), &[stale_a, stale_b, current]);
-        drop(inner);
+        assert_eq!(test_shape_ids_for_keys(keys), vec![cached, current]);
+        // Retired facts re-intern as FRESH ids: nothing can resolve the old ones.
+        let reminted = shape_descriptor_ensure(keys as *const ArrayHeader, 1, 1)
+            .expect("shape range unexpectedly exhausted");
+        assert_ne!(reminted, stale_a);
 
         test_drop_shape_descriptors(keys);
         test_drop_shape_descriptors(unrelated_keys);
+    }
+
+    /// The retirement above is wired to the publish funnel: an in-place
+    /// append on an OWNED keys array must leave exactly one structural
+    /// descriptor under that address.
+    #[test]
+    fn in_place_owned_append_leaves_one_descriptor_per_keys_address() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        unsafe {
+            let obj = crate::object::js_object_alloc(0, 0);
+            let mut keys_before = 0usize;
+            let mut first_addr_count = 0usize;
+            for i in 0..96u32 {
+                let name = format!("owned9706_{i:03}");
+                let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+                crate::object::js_object_set_field_by_name(obj, key, i as f64);
+                let keys = crate::object::object_keys_array(obj) as usize;
+                let stamp = object_shape_stamp(obj);
+                assert!(is_shape_id(stamp), "receiver must stay stamped");
+                let family = test_shape_ids_for_keys(keys);
+                assert!(
+                    family.contains(&stamp),
+                    "the current stamp must be indexed under the current keys address"
+                );
+                if keys == keys_before {
+                    first_addr_count += 1;
+                    let shared = crate::value::addr_class::try_read_gc_header(keys)
+                        .is_some_and(|h| h.gc_flags & crate::gc::GC_FLAG_SHAPE_SHARED != 0);
+                    if !shared {
+                        assert_eq!(
+                            family.len(),
+                            1,
+                            "an owned in-place append left growth history alive: {family:?}"
+                        );
+                    }
+                }
+                keys_before = keys;
+            }
+            assert!(
+                first_addr_count > 0,
+                "fixture premise: some appends must grow the owned array in place"
+            );
+        }
     }
 
     #[test]
@@ -836,22 +901,34 @@ mod descriptor_tests_8067 {
     }
 }
 
-/// `ids_by_facts` moved from std's SipHash `RandomState` to `FastKeyHasher`.
+/// A multi-field shape key hashed with `FastKeyHasher` must fold every field.
 ///
-/// The hazard that motivated the original "deliberately NOT a `PtrHashMap`"
-/// note is real: `PtrHasher`'s `write_*` methods OVERWRITE the accumulator, so
-/// a five-field `ShapeFacts` would collapse to its last field and every
-/// descriptor sharing that field would collide into one bucket.
+/// The shape table's facts-keyed reverse map is gone (#9706 interns through
+/// the keys-address family instead), but the hazard this pinned is still
+/// live for `gc/layout/typed_shape.rs`'s `RegisteredTypedShapeKey`:
+/// `PtrHasher`'s `write_*` methods OVERWRITE the accumulator, so a multi-field
+/// key would collapse to its last field and every entry sharing that field
+/// would collide into one bucket.
 ///
 /// `FastKeyHasher` avoids this by implementing only `write` — the derived
 /// `Hash`'s `write_u32`/`write_u64` calls all forward there and FOLD with
-/// FNV-1a. This test pins that property directly: vary ONE field at a time and
-/// require a distinct hash each time. It fails loudly against any hasher that
-/// overwrites instead of folding.
+/// FNV-1a. This test pins that property directly on the old facts layout:
+/// vary ONE field at a time and require a distinct hash each time. It fails
+/// loudly against any hasher that overwrites instead of folding.
 #[test]
 fn shape_facts_hash_folds_every_field() {
     use crate::fast_hash::FastKeyHasher;
     use std::hash::{BuildHasher, Hash, Hasher};
+
+    #[derive(Clone, Copy, Hash)]
+    struct ShapeFacts {
+        keys: u64,
+        logical_key_count: u32,
+        live_inline_slot_count: u32,
+        semantic_generation: u64,
+        object_kind: ShapeObjectKind,
+        hole_count: u32,
+    }
 
     fn h(f: &ShapeFacts) -> u64 {
         let mut hasher = FastKeyHasher.build_hasher();
@@ -928,14 +1005,12 @@ fn shape_facts_hash_folds_every_field() {
     assert_eq!(h(&base), h(&base.clone()), "hashing must be deterministic");
 }
 
-/// The shape lookup cache holds a record's ADDRESS, so it must stop matching
-/// the moment that address can change under an id still in use.
+/// A removed id must stop resolving at once, and nothing may hand out its
+/// record address afterwards.
 ///
-/// A stale way would hand out a pointer to a dropped `Box<ShapeDescriptor>` —
-/// a use-after-free reachable from the hot property path, not a wrong answer.
-/// Removal is the funnel that frees a record, so it bumps the epoch; this pins
-/// that. Deleting the `invalidate_shape_lookup_cache()` call in
-/// `remove_descriptor_and_reverse_indices` fails this test.
+/// Before #9706 this pinned the lookup-way cache's invalidation epoch; the
+/// slab has no cache in front of it, so the property is asserted directly:
+/// removal clears the record and both by-id entry points report `None`.
 #[test]
 fn shape_lookup_cache_is_invalidated_when_a_record_is_removed() {
     let _lock = crate::gc::global_side_table_test_lock();
@@ -945,35 +1020,38 @@ fn shape_lookup_cache_is_invalidated_when_a_record_is_removed() {
         let id = test_shape_id_for_keys(keys as usize)
             .expect("a fresh object must have a registered shape");
 
-        // Populate the way.
         assert!(
             shape_descriptor_by_id(id).is_some(),
             "the descriptor must resolve before removal"
         );
-        let epoch_before = crate::state::state().shapes.lookup_epoch.get();
+        let record = shape_descriptor_by_id(id).unwrap().record;
+        assert_ne!(record, 0);
 
-        // Drop it through the funnel that frees the box.
+        // Drop it through the funnel that retires a record.
         {
             let mut inner = crate::state::state().shapes.inner.borrow_mut();
             remove_descriptor_and_reverse_indices(&mut inner, id);
         }
 
-        assert_ne!(
-            crate::state::state().shapes.lookup_epoch.get(),
-            epoch_before,
-            "removing a record must bump the lookup epoch — a way still naming \
-             the freed box would hand out a dangling ShapeDescriptor pointer"
-        );
         assert!(
             shape_descriptor_by_id(id).is_none(),
-            "a removed id must not resolve from the cache"
+            "a removed id must not resolve"
+        );
+        assert_eq!(
+            shape_live_inline_slot_count_by_id(id),
+            None,
+            "the field reader must not read a retired record"
+        );
+        assert_eq!(shape_descriptor_keys_slot(id), None);
+        assert!(
+            !shape_id_owns_keys_slot(id, record as *mut u64),
+            "a retired id must not claim its old record address"
         );
     }
 }
 
-/// A fresh-id insert must NOT invalidate the cache: it cannot make any existing
-/// way wrong, and flushing on every shape creation would defeat the cache in
-/// exactly the workloads that build shapes.
+/// Minting fresh ids must not move any existing record: the collector may
+/// hold a record address across the mint.
 #[test]
 fn fresh_shape_creation_does_not_flush_the_lookup_cache() {
     let _lock = crate::gc::global_side_table_test_lock();
@@ -981,8 +1059,8 @@ fn fresh_shape_creation_does_not_flush_the_lookup_cache() {
         let a = crate::object::js_object_alloc(0, 0);
         let keys_a = crate::object::object_keys_array(a);
         let id_a = test_shape_id_for_keys(keys_a as usize).expect("shape for a");
-        assert!(shape_descriptor_by_id(id_a).is_some());
-        let epoch = crate::state::state().shapes.lookup_epoch.get();
+        let record_a = shape_descriptor_by_id(id_a).expect("resolves").record;
+        assert_ne!(record_a, 0);
 
         // Create more objects — each mints shapes through the fresh-id path.
         for _ in 0..8 {
@@ -991,14 +1069,9 @@ fn fresh_shape_creation_does_not_flush_the_lookup_cache() {
         }
 
         assert_eq!(
-            crate::state::state().shapes.lookup_epoch.get(),
-            epoch,
-            "minting fresh shape ids must not bump the epoch; only removal and \
-             the replacing insert may"
-        );
-        assert!(
-            shape_descriptor_by_id(id_a).is_some(),
-            "the earlier descriptor must still resolve"
+            shape_descriptor_by_id(id_a).map(|d| d.record),
+            Some(record_a),
+            "minting fresh shape ids must not move an existing record"
         );
     }
 }

@@ -79,38 +79,7 @@ impl SlotList {
     }
 }
 
-use super::{shape_keys_address_is_recycled, ShapeDescriptor};
-
-/// Per-descriptor bookkeeping after its keys address has been probed.
-///
-/// Lifted out of `scan_shape_table_rekey_mut`'s loop so the memoised path and
-/// the probing path cannot drift apart — the probe is what is deduplicated,
-/// never the bookkeeping, which still runs once per descriptor.
-#[inline]
-pub(crate) fn record_shape_scan_outcome(
-    visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
-    id: &u32,
-    descriptor: &mut ShapeDescriptor,
-    addr: usize,
-    moved: bool,
-    dead_descriptor_ids: &mut Vec<u32>,
-    descriptor_rekeys: &mut Vec<u32>,
-) {
-    // Validate the POST-visit address. A stale shape key can follow the
-    // forwarding record of the non-array tenant that recycled its address;
-    // checking only an unmoved old address misses that case.
-    if visitor.is_metadata_rewrite_phase() && shape_keys_address_is_recycled(addr) {
-        dead_descriptor_ids.push(*id);
-    } else if moved {
-        descriptor.keys = addr as u64;
-    }
-    // A live-object edge can rewrite the boxed `keys` slot before this metadata
-    // pass. Comparing against the address represented in the reverse maps
-    // catches both that ordering and a move observed here.
-    if descriptor.keys != descriptor.indexed_keys {
-        descriptor_rekeys.push(*id);
-    }
-}
+use super::shapes_store::{ShapeRecord, RECORD_FLAG_FACTS_INDEXED};
 
 /// Shift a key index in place after an IN-PLACE delete.
 ///
@@ -233,9 +202,15 @@ pub(crate) unsafe fn retire_owned_shape_history(
     let keys_addr = keys as u64;
     let mut inner = crate::state::state().shapes.inner.borrow_mut();
     let stale: Vec<u32> = inner
-        .ids_by_keys
+        .families
         .get(&keys_addr)
-        .map(|ids| ids.iter().copied().filter(|&id| id != current).collect())
+        .map(|ids| {
+            ids.as_slice()
+                .iter()
+                .copied()
+                .filter(|&id| id != current)
+                .collect()
+        })
         .unwrap_or_default();
     for id in stale {
         super::remove_descriptor_and_reverse_indices(&mut inner, id);
@@ -253,10 +228,10 @@ pub(crate) unsafe fn retire_owned_shape_history(
 /// mint-then-stamp path.
 ///
 /// A mutable private epoch must not participate in exact-facts interning.
-/// Detach it from `ids_by_facts` on entry and leave it in `ids_by_keys`, which
-/// keeps GC relocation and squeeze-time retirement exact without hashing six
-/// changing facts on every delete and re-add. The boxed descriptor address is
-/// stable, so the direct lookup cache observes updated counts immediately.
+/// Detach it on entry and leave it in the keys-address family, which keeps GC
+/// relocation and squeeze-time retirement exact without re-indexing six
+/// changing facts on every delete and re-add. The slab record address is
+/// stable, so every later lookup observes the updated counts immediately.
 pub(crate) unsafe fn try_update_stable_tombstone_shape(
     obj: *mut crate::object::ObjectHeader,
     keys: *mut super::ArrayHeader,
@@ -278,12 +253,14 @@ pub(crate) unsafe fn try_update_stable_tombstone_shape(
         return None;
     }
 
-    let mut inner = crate::state::state().shapes.inner.borrow_mut();
-    super::sync_descriptor_reverse_indices(&mut inner, id);
-    let current = **inner.descriptors.get(&id)?;
+    let table = &crate::state::state().shapes;
+    let record = table.slab().record_ptr(id)?;
+    // SAFETY: live slab record, single-threaded agent; read then written
+    // through the same pointer with nothing else holding a reference.
+    let current = unsafe { *record };
     // A stable id may never silently retarget its collector-owned keys edge.
     // Array growth that reallocates falls back to a fresh descriptor.
-    if current.keys != keys as u64 || current.object_kind != super::ShapeObjectKind::Ordinary {
+    if current.keys != keys as u64 || current.object_kind() != super::ShapeObjectKind::Ordinary {
         return None;
     }
     if current.logical_key_count == logical_key_count
@@ -293,21 +270,21 @@ pub(crate) unsafe fn try_update_stable_tombstone_shape(
         return Some(id);
     }
 
-    if current.facts_indexed {
-        let old_facts = super::descriptor_facts(current);
-        super::remove_descriptor_id_from_facts_index(&mut inner, old_facts, id);
+    // Detach from exact-facts interning, so a mutable private epoch is never
+    // handed to a second receiver. It stays in the family for GC relocation
+    // and squeeze retirement. The accelerator was keyed with the address the
+    // record is indexed under, which is `keys` (the caller proved the edge
+    // did not move).
+    if current.has(RECORD_FLAG_FACTS_INDEXED) {
+        let mut inner = table.inner.borrow_mut();
+        inner.facts_remove(current.facts_key_with_keys(keys as u64), id);
     }
-    {
-        let record = inner
-            .descriptors
-            .get_mut(&id)
-            .expect("stable tombstone descriptor disappeared while borrowed");
-        record.logical_key_count = logical_key_count;
-        record.live_inline_slot_count = live_inline_slot_count;
-        record.hole_count = hole_count;
-        record.facts_indexed = false;
+    unsafe {
+        (*record).logical_key_count = logical_key_count;
+        (*record).live_inline_slot_count = live_inline_slot_count;
+        (*record).hole_count = hole_count;
+        (*record).set(RECORD_FLAG_FACTS_INDEXED, false);
     }
-    drop(inner);
     super::debug_assert_object_shape_parity(obj);
     Some(id)
 }
@@ -316,10 +293,9 @@ pub(crate) unsafe fn try_update_stable_tombstone_shape(
 /// record address returned by `shape_descriptor_by_id`.
 ///
 /// The first stable mutation must use `try_update_stable_tombstone_shape` to
-/// detach exact-facts interning, and a collector-relocated keys edge must use
-/// it to repair the reverse index. Between those events the record address is
-/// stable, its mutable epoch is deliberately absent from `ids_by_facts`, and
-/// no table borrow or hash lookup is needed for a counter-only update.
+/// detach exact-facts interning. Between those events the record address is
+/// stable, its mutable epoch is deliberately invisible to interning, and no
+/// table borrow is needed for a counter-only update.
 pub(crate) unsafe fn try_update_stable_tombstone_shape_cached(
     obj: *mut crate::object::ObjectHeader,
     current: super::ShapeDescriptor,
@@ -341,12 +317,17 @@ pub(crate) unsafe fn try_update_stable_tombstone_shape_cached(
         return None;
     }
 
-    let record = &mut *(current.record as *mut super::ShapeDescriptor);
-    if record.record != current.record
-        || record.keys != current.keys
-        || record.indexed_keys != record.keys
-        || record.facts_indexed
-        || record.object_kind != super::ShapeObjectKind::Ordinary
+    // The caller's copy must still name the live record of THIS id: a
+    // retired id resolves to nothing, and a record reused under another id
+    // (never — ids are not recycled) would resolve to a different address.
+    let live = crate::state::state().shapes.slab().record_ptr(id)?;
+    if live as usize != current.record {
+        return None;
+    }
+    let record = &mut *live;
+    if record.keys != current.keys
+        || record.has(RECORD_FLAG_FACTS_INDEXED)
+        || record.object_kind() != super::ShapeObjectKind::Ordinary
     {
         return None;
     }
@@ -357,11 +338,11 @@ pub(crate) unsafe fn try_update_stable_tombstone_shape_cached(
     Some(id)
 }
 
-/// Retire the token of a detached private epoch while reusing its boxed
-/// descriptor record. This is the stable-tombstone squeeze counterpart to a
-/// full mint: generated caches must observe a new id after slots are
-/// compacted, but no exact-facts interning or new descriptor allocation is
-/// needed for a record that cannot be shared by another receiver.
+/// Retire the token of a detached private epoch while reusing its descriptor
+/// record. This is the stable-tombstone squeeze counterpart to a full mint:
+/// generated caches must observe a new id after slots are compacted, but no
+/// exact-facts interning is needed for a record that cannot be shared by
+/// another receiver.
 pub(crate) unsafe fn rekey_stable_tombstone_shape_after_squeeze(
     obj: *mut crate::object::ObjectHeader,
     current: super::ShapeDescriptor,
@@ -388,36 +369,41 @@ pub(crate) unsafe fn rekey_stable_tombstone_shape_after_squeeze(
         super::shape_id_exhausted_abort();
     }
 
-    let mut inner = crate::state::state().shapes.inner.borrow_mut();
-    super::sync_descriptor_reverse_indices(&mut inner, old_id);
-    let live = **inner.descriptors.get(&old_id)?;
-    if live.record != current.record
-        || live.keys != current.keys
-        || live.indexed_keys != live.keys
-        || live.facts_indexed
-        || live.object_kind != super::ShapeObjectKind::Ordinary
+    let table = &crate::state::state().shapes;
+    let mut inner = table.inner.borrow_mut();
+    let live_ptr = table.slab().record_ptr(old_id)?;
+    if live_ptr as usize != current.record {
+        return None;
+    }
+    // SAFETY: live slab record, read immediately.
+    let live = unsafe { *live_ptr };
+    if live.keys != current.keys
+        || live.has(RECORD_FLAG_FACTS_INDEXED)
+        || live.object_kind() != super::ShapeObjectKind::Ordinary
     {
         return None;
     }
 
-    super::invalidate_shape_lookup_cache();
-    let mut record = inner.descriptors.remove(&old_id)?;
+    // Move the record to its new id in place of the old one. The family entry
+    // is replaced where it stands; a family still keyed under a stale address
+    // (a rewrite the metadata scan has not yet repaired) simply gains the new
+    // id under the current one and sheds the old id on that scan.
+    // SAFETY: no slab reference is held across these two calls.
+    let mut record = unsafe { table.slab_mut().remove(old_id)? };
     record.logical_key_count = logical_key_count;
     record.live_inline_slot_count = live_inline_slot_count;
     record.semantic_generation = generation;
     record.hole_count = hole_count;
-    if let Some(ids) = inner.ids_by_keys.get_mut(&record.indexed_keys) {
-        if let Some(pos) = ids.iter().position(|&id| id == old_id) {
-            ids[pos] = new_id;
-            ids.sort_unstable();
-        } else {
-            super::insert_descriptor_id_sorted(ids, new_id);
-        }
-    } else {
-        inner.ids_by_keys.insert(record.indexed_keys, vec![new_id]);
+    super::retire_cached_shape_object_kind(old_id);
+    unsafe { table.slab_mut().insert(new_id, record) };
+    let replaced = inner
+        .families
+        .get_mut(&record.keys)
+        .is_some_and(|ids| ids.replace(old_id, new_id));
+    if !replaced {
+        inner.family_push_back(record.keys, new_id);
     }
     inner.indices.remove(&(record.keys as usize));
-    inner.descriptors.insert(new_id, record);
     drop(inner);
 
     // #9200: the funnel re-arms the preserved record for a non-nursery
@@ -498,9 +484,15 @@ pub(crate) unsafe fn publish_object_shape_holes(
         // (53.6 s → 25.1 s on the churn benchmark) but ids still accumulated
         // one per iteration from the append publish.
         let stale: Vec<u32> = inner
-            .ids_by_keys
+            .families
             .get(&(current.keys))
-            .map(|ids| ids.iter().copied().filter(|&other| other != id).collect())
+            .map(|ids| {
+                ids.as_slice()
+                    .iter()
+                    .copied()
+                    .filter(|&other| other != id)
+                    .collect()
+            })
             .unwrap_or_default();
         for other in stale {
             super::remove_descriptor_and_reverse_indices(&mut inner, other);
@@ -524,42 +516,37 @@ pub(super) fn install_external_shape_id(
     if !super::is_shape_id(id) || (keys.is_null() && logical_key_count != 0) {
         return false;
     }
-    let descriptor = super::ShapeDescriptor {
-        keys: keys as usize as u64,
-        indexed_keys: keys as usize as u64,
-        facts_indexed: true,
-        record: 0,
-        old_carrier: false,
-        old_carrier_seen: false,
-        cache_carrier: false,
+    let keys = keys as usize as u64;
+    let record = ShapeRecord::new(
+        keys,
         logical_key_count,
         live_inline_slot_count,
-        semantic_generation: 0,
-        object_kind: super::ShapeObjectKind::Ordinary,
-        hole_count: 0,
-    };
-    let facts = super::descriptor_facts(descriptor);
-    let mut inner = crate::state::state().shapes.inner.borrow_mut();
-    if let Some(existing) = inner.descriptors.get(&id) {
-        return **existing == descriptor;
+        0,
+        super::ShapeObjectKind::Ordinary,
+        0,
+    );
+    let table = &crate::state::state().shapes;
+    let mut inner = table.inner.borrow_mut();
+    if let Some(existing) = table.slab().get(id) {
+        return existing.facts_match(
+            keys,
+            logical_key_count,
+            live_inline_slot_count,
+            0,
+            super::ShapeObjectKind::Ordinary,
+            0,
+        );
     }
     // A worker can have minted an equivalent local descriptor before module
     // initialization installs the process-global codegen id. Keep both id
     // descriptors valid for already-published objects and make the external
-    // id canonical for subsequent births in this agent.
-    //
-    // This is the one insert that can REPLACE a live id with a fresh box, so
-    // the lookup_ways cache has to be invalidated here (the fresh-id insert in
-    // `intern_shape_descriptor` cannot, and deliberately does not).
-    super::invalidate_shape_lookup_cache();
-    inner
-        .descriptors
-        .insert(id, super::box_descriptor(descriptor));
-    // An equivalent local descriptor can predate module initialization. Keep
-    // both reverse-index entries and prefer the external id for subsequent
-    // births in this agent; already-published local ids remain resolvable.
-    inner.ids_by_facts.entry(facts).or_default().insert(0, id);
-    super::insert_descriptor_id_sorted(inner.ids_by_keys.entry(descriptor.keys).or_default(), id);
+    // id canonical for subsequent births in this agent: it goes to the FRONT
+    // of its accelerator bucket, which is the order exact-facts interning
+    // walks.
+    // SAFETY: no slab reference is held; `slab().get` above returned a copy.
+    unsafe { table.slab_mut().insert(id, record) };
+    inner.facts_push_front(record.facts_key_with_keys(keys), id);
+    inner.family_push_front(keys, id);
     true
 }
 
@@ -573,9 +560,10 @@ pub(super) fn install_external_shape_id(
 /// descriptor holding the edge, the slot visitor writes the record directly
 /// and there is nothing left to reconcile.
 ///
-/// The returned address belongs to a BOXED record, so it is stable across
-/// descriptor insertion; only `prune_dead_shape_keys` frees one, and that runs
-/// at sweep, after every enumeration of the cycle that produced it.
+/// The returned address belongs to a slab record, so it is stable across
+/// descriptor insertion; a record is only cleared by the table's own
+/// retirement paths, and its chunk released at the end of a major
+/// collection, after every enumeration of the cycle that produced it.
 #[cfg(test)]
 #[inline]
 pub(crate) fn shape_descriptor_keys_slot(shape_id: u32) -> Option<*mut u64> {
@@ -584,11 +572,9 @@ pub(crate) fn shape_descriptor_keys_slot(shape_id: u32) -> Option<*mut u64> {
     }
     crate::state::state()
         .shapes
-        .inner
-        .borrow_mut()
-        .descriptors
-        .get_mut(&shape_id)
-        .map(|record| std::ptr::addr_of_mut!(record.keys))
+        .slab()
+        .record_ptr(shape_id)
+        .map(|record| record as *mut u64)
 }
 
 /// Is `slot` the shared `keys` word of `shape_id`'s descriptor record?
@@ -604,15 +590,14 @@ pub(crate) fn shape_id_owns_keys_slot(shape_id: u32, slot: *mut u64) -> bool {
     if !super::is_shape_id(shape_id) {
         return false;
     }
-    // Immutable borrow on purpose: this runs inside collector walks, and a
-    // `borrow_mut` here would make the predicate itself a re-entrancy hazard.
+    // No table borrow at all: this runs inside collector walks, and a
+    // `RefCell` borrow here would make the predicate itself a re-entrancy
+    // hazard. The slab is read through a raw pointer.
     crate::state::state()
         .shapes
-        .inner
-        .borrow()
-        .descriptors
-        .get(&shape_id)
-        .is_some_and(|record| std::ptr::addr_of!(record.keys) as *mut u64 == slot)
+        .slab()
+        .record_ptr(shape_id)
+        .is_some_and(|record| record as *mut u64 == slot)
 }
 
 #[cfg(test)]
