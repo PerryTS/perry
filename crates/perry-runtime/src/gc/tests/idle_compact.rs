@@ -211,3 +211,132 @@ fn an_owed_compaction_runs_and_records_its_pause() {
     set_test_force_owed(None);
     assert!(!gates_say_compact(IDLE_COMPACT_MIN_INTERVAL_MS - 1));
 }
+
+/// The gate that actually refused the first working build: the pause budget.
+/// It protects a WAITING mutator — "the last collection already cost 20 ms,
+/// do not also evacuate" — and the collection it judged was the idle
+/// reducer's own full, which is long by design. Measured on the #9644
+/// fixture: 37.6 MB of releasable block bytes refused with
+/// `reason=pause_budget_exceeded` off a 149 ms previous pause.
+#[test]
+fn the_idle_compaction_is_exempt_from_the_pause_budget_and_nothing_else_is() {
+    // The #9644 fixture's own shape: 9190 selected pages holding 9.4 MB of
+    // live objects, 37.6 MB of block granule to release, after a 149 ms
+    // reducer full.
+    let snapshot = super::super::oldgen::EvacuationPolicySnapshot {
+        releasable_block_bytes: 37_642_240,
+        old_page_selected_live_bytes: 9_409_616,
+        old_page_reclaimable_bytes: 28_338_544,
+        previous_pause_us: 149_434,
+        rss_bytes: 101_187_584,
+        old_page_selected_pages: 9_190,
+        ..Default::default()
+    };
+    let decide = |idle: bool| {
+        super::super::oldgen::evacuation_policy_final_decision(
+            super::super::oldgen::EvacuationPolicyDecision {
+                allowed: true,
+                considered: true,
+                force: false,
+                idle,
+                enabled: false,
+                reason: "test",
+                snapshot,
+            },
+            snapshot,
+        )
+    };
+
+    let throughput = decide(false);
+    assert!(!throughput.enabled, "a waiting mutator keeps its pause budget");
+    assert_eq!(throughput.reason, "pause_budget_exceeded");
+
+    let idle = decide(true);
+    assert!(
+        idle.enabled,
+        "nobody is waiting on the idle compaction — the previous pause it is \
+         being judged on is the reducer's own full"
+    );
+    assert_eq!(idle.reason, "idle_compaction");
+}
+
+/// The exemption is scoped to the pause gate: an idle compaction with nothing
+/// worth moving is still refused, so the flag cannot become "always evacuate".
+#[test]
+fn the_exemption_does_not_bypass_the_volume_gate() {
+    let snapshot = super::super::oldgen::EvacuationPolicySnapshot {
+        releasable_block_bytes: 0,
+        previous_pause_us: 149_434,
+        old_page_selected_pages: 1,
+        ..Default::default()
+    };
+    let decision = super::super::oldgen::evacuation_policy_final_decision(
+        super::super::oldgen::EvacuationPolicyDecision {
+            allowed: true,
+            considered: true,
+            force: false,
+            idle: true,
+            enabled: false,
+            reason: "test",
+            snapshot,
+        },
+        snapshot,
+    );
+    assert!(!decision.enabled, "no candidates means no compaction");
+}
+
+/// The purge that made compaction affordable must drop exactly the holes on
+/// the pages being evacuated — no more. Dropping a hole that is NOT on an
+/// evacuated page would leak reusable old-gen space on every compaction;
+/// keeping one that IS on such a page is what cost 139 s per pass.
+#[test]
+fn the_hole_purge_drops_only_the_excluded_pages() {
+    let _isolation = copying_nursery_isolation_lock();
+    super::super::old_free::old_free_reset_for_test();
+
+    let excluded_user = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_OBJECT) as usize;
+    let kept_user = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_OBJECT) as usize;
+    let excluded_total =
+        unsafe { (*header_from_user_ptr(excluded_user as *const u8)).size as usize };
+    let kept_total = unsafe { (*header_from_user_ptr(kept_user as *const u8)).size as usize };
+    super::super::old_free::old_free_push_for_test(excluded_user, excluded_total);
+    super::super::old_free::old_free_push_for_test(kept_user, kept_total);
+    let bytes_before = old_free_bytes();
+    assert_eq!(
+        super::super::old_free::old_free_entry_count(),
+        2,
+        "premise: two holes are published"
+    );
+
+    let excluded_page =
+        crate::arena::generation_page_for_addr(excluded_user - crate::gc::GC_HEADER_SIZE);
+    let kept_page = crate::arena::generation_page_for_addr(kept_user - crate::gc::GC_HEADER_SIZE);
+    if excluded_page == kept_page {
+        // Both fixture holes landed on one page; the page-granular purge
+        // cannot separate them and this case proves nothing either way.
+        super::super::old_free::old_free_reset_for_test();
+        return;
+    }
+    let mut excluded = crate::fast_hash::new_ptr_hash_set();
+    excluded.insert(excluded_page);
+
+    let removed = super::super::old_free::old_free_filter_pages(&excluded);
+
+    assert_eq!(removed, excluded_total, "exactly the excluded hole's bytes");
+    assert_eq!(
+        super::super::old_free::old_free_entry_count(),
+        1,
+        "the hole off the evacuated pages must survive"
+    );
+    assert_eq!(
+        old_free_bytes(),
+        bytes_before - excluded_total,
+        "the byte counter follows the entries"
+    );
+    assert_eq!(
+        super::super::old_free::old_free_take_exact(kept_total, None),
+        Some(kept_user),
+        "and it must still be reusable"
+    );
+    super::super::old_free::old_free_reset_for_test();
+}
