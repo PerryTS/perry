@@ -90,11 +90,20 @@ pub fn declare_phase1(module: &mut LlModule) {
     // globals live for the life of the image — a promise the plain
     // `js_register_function_name` does NOT make of its callers, which is why
     // the two are separate symbols rather than one with a tightened contract.
-    // Only the borrowing spelling is declared here: this table is what codegen
-    // CALLS, and the copying one is the runtime's entry point for callers that
-    // are not codegen (FFI, separately-loaded provider images), which reach it
-    // as a Rust or C symbol and never through generated IR.
+    // BOTH spellings are declared, because "life of the image" and "life of
+    // the process" are the same lifetime for an executable and NOT for a
+    // plugin. Perry compiles TypeScript to a dylib plugin as well as an
+    // executable, `codegen/entry.rs` emits the `perry_plugin_abi_version` /
+    // `plugin_activate` shim for it, and `perry_plugin_unload`
+    // (`perry-runtime/src/plugin.rs`) ends in `dlclose` — which unmaps that
+    // image's rodata while the registries still borrow into it. The registries
+    // have no unregister path, so those entries would outlive their bytes and
+    // the next `fn.name` / `fn.toString()` / stack frame that resolved one
+    // would read unmapped memory. `emit_string_pool` therefore picks the
+    // spelling from the output kind: `_static` for an executable, the copying
+    // one for `dylib` / `staticlib`.
     module.declare_function("js_register_function_name_static", VOID, &[PTR, PTR, I32]);
+    module.declare_function("js_register_function_name", VOID, &[PTR, PTR, I32]);
     // #4101: register a user function's original source text (keyed by the
     // same wrapper/closure address as the name) so `fn.toString()` and
     // `Function.prototype.toString.call(fn)` reconstruct the source.
@@ -103,6 +112,7 @@ pub fn declare_phase1(module: &mut LlModule) {
         VOID,
         &[PTR, PTR, I32, I32],
     );
+    module.declare_function("js_register_function_source", VOID, &[PTR, PTR, I32, I32]);
 
     // Console.
     module.declare_function("js_console_log_dynamic", VOID, &[DOUBLE]);

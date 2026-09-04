@@ -105,6 +105,12 @@ pub(super) fn emit_string_pool(
     llmod: &mut LlModule,
     strings: &StringPool,
     module_prefix: &str,
+    // #9188 follow-up: which registration spelling the name/source loops below
+    // may use. `_static` hands the registry the `@.str.N` constant itself
+    // instead of a slice to copy, which is sound only while this image stays
+    // mapped — true for an executable, NOT for a `dylib` plugin that
+    // `perry_plugin_unload` will `dlclose`. See `runtime_decls`.
+    output_type: &str,
     class_keys_init_data: &[(String, String, u32, Vec<u64>, Vec<u64>)],
     class_header_image_inits: &std::collections::HashMap<String, (u32, u64)>,
     class_ids: &HashMap<String, u32>,
@@ -443,6 +449,26 @@ pub(super) fn emit_string_pool(
         blk.call_void("js_gc_register_global_root", &[(I64, &addr_i64)]);
     }
 
+    // An image that can be UNLOADED cannot lend its rodata to a registry that
+    // never drops entries. Perry compiles TypeScript to a dylib plugin as well
+    // as an executable, and `perry_plugin_unload` ends in `dlclose` — after
+    // which a borrowed `@.str.N` names unmapped memory, and the next
+    // `fn.name` / `fn.toString()` / stack frame that resolves it reads that.
+    // `staticlib` is included because its objects are linked into whatever
+    // consumes them, which may itself be a plugin. Executables keep the
+    // borrow, which is where all the volume is.
+    let strings_outlive_registry = output_type != "dylib" && output_type != "staticlib";
+    let register_name_fn = if strings_outlive_registry {
+        "js_register_function_name_static"
+    } else {
+        "js_register_function_name"
+    };
+    let register_source_fn = if strings_outlive_registry {
+        "js_register_function_source_static"
+    } else {
+        "js_register_function_source"
+    };
+
     // Register display names for top-level user functions so
     // `console.log(myFn)` prints `[Function: myFn]` instead of
     // `[Function (anonymous)]`. The runtime registry is keyed on the
@@ -455,12 +481,12 @@ pub(super) fn emit_string_pool(
         let wrapper_ref = format!("@{}", wrapper_sym);
         let name_ref = format!("@{}", name_const);
         let len_str = name_len.to_string();
-        // `_static`, not the copying spelling: `@.str.N` is a `private
-        // unnamed_addr constant` in this module's rodata, which satisfies the
-        // process-lifetime contract that lets the registry borrow it instead of
-        // copying every name at startup (#9188).
+        // `_static` when this image outlives the registry, else the copying
+        // spelling: `@.str.N` is a `private unnamed_addr constant` in this
+        // module's rodata, which satisfies the process-lifetime contract only
+        // for an image nothing unloads (#9188).
         blk.call_void(
-            "js_register_function_name_static",
+            register_name_fn,
             &[(PTR, &wrapper_ref), (PTR, &name_ref), (I32, &len_str)],
         );
     }
@@ -475,12 +501,12 @@ pub(super) fn emit_string_pool(
         let wrapper_ref = format!("@{}", wrapper_sym);
         let source_ref = format!("@{}", source_const);
         let len_str = source_len.to_string();
-        // `_static` for the same reason as the names above (#9188), and the
-        // bigger half of the win: source text is registered for every function
-        // the bundle CONTAINS, to serve a `Function.prototype.toString()` that
-        // most programs never call.
+        // Same spelling choice as the names above (#9188), and the bigger half
+        // of the win: source text is registered for every function the bundle
+        // CONTAINS, to serve a `Function.prototype.toString()` that most
+        // programs never call.
         blk.call_void(
-            "js_register_function_source_static",
+            register_source_fn,
             &[
                 (PTR, &wrapper_ref),
                 (PTR, &source_ref),

@@ -166,6 +166,13 @@ fn ir(module: &Module) -> String {
         .expect("LLVM IR should be UTF-8")
 }
 
+fn ir_for_output_type(module: &Module, output_type: &str) -> String {
+    let mut opts = ir_opts();
+    opts.output_type = output_type.to_string();
+    String::from_utf8(compile_module(module, opts).expect("codegen should succeed"))
+        .expect("LLVM IR should be UTF-8")
+}
+
 // ---------------------------------------------------------------------------
 // Shape 1: `js_register_function_name_static` / `@.str.N`
 // ---------------------------------------------------------------------------
@@ -438,4 +445,50 @@ fn dispatch_tower_emission_is_run_to_run_deterministic() {
         first, second,
         "two compiles of the same module must emit byte-identical IR (#7622)"
     );
+}
+
+/// #9188 follow-up: the borrowing (`_static`) registration spelling lends the
+/// registry a `@.str.N` constant in THIS image's rodata, and neither registry
+/// has an unregister path. That is sound only while the image stays mapped.
+///
+/// An executable qualifies. A `dylib` does not: perry compiles TypeScript to a
+/// plugin (`codegen/entry.rs` emits its `perry_plugin_abi_version` /
+/// `plugin_activate` shim) and `perry_plugin_unload` ends in `dlclose`, which
+/// unmaps that rodata underneath the borrowed entries — after which the next
+/// `fn.name` / `fn.toString()` / stack frame that resolved one would read
+/// unmapped memory, or, since the registries are address-keyed, whatever image
+/// was later mapped over the same range.
+///
+/// So the spelling must follow the output kind, in BOTH directions: losing the
+/// executable's `_static` silently restores the startup copy this optimisation
+/// removed, and losing the dylib's copy reintroduces the use-after-free.
+#[test]
+fn registration_spelling_follows_output_kind() {
+    let module = closure_display_module();
+
+    let executable = ir_for_output_type(&module, "executable");
+    assert!(
+        executable.contains("call void @js_register_function_name_static("),
+        "an executable outlives its own registry and must keep the borrow"
+    );
+    assert!(
+        !executable.contains("call void @js_register_function_name("),
+        "an executable must not pay the startup copy this optimisation removed"
+    );
+
+    for unloadable in ["dylib", "staticlib"] {
+        let ir = ir_for_output_type(&module, unloadable);
+        assert!(
+            ir.contains("call void @js_register_function_name("),
+            "{unloadable} can be unloaded, so its names must be COPIED into the registry"
+        );
+        assert!(
+            !ir.contains("call void @js_register_function_name_static("),
+            "{unloadable} must not lend rodata that `dlclose` will unmap"
+        );
+        assert!(
+            !ir.contains("call void @js_register_function_source_static("),
+            "{unloadable} must not lend source text that `dlclose` will unmap"
+        );
+    }
 }

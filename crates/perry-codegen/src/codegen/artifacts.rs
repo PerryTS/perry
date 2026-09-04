@@ -1897,6 +1897,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
         llmod,
         strings,
         module_prefix,
+        output_type,
         class_keys_init_data,
         class_header_image_inits,
         class_ids,
