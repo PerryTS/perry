@@ -103,6 +103,48 @@ fn emit(debug: bool, source: Option<&str>) -> String {
         .expect("LLVM IR should be UTF-8")
 }
 
+#[test]
+fn imported_variable_read_preserves_class_tags_and_calls_the_live_getter_once() {
+    let mut module = Module::new("imported_class_9366.ts");
+    module.init.push(Stmt::Expr(Expr::PropertyGet {
+        object: Box::new(Expr::ExternFuncRef {
+            name: "Renamed".to_string(),
+            param_types: vec![],
+            return_type: perry_hir::types::Type::Any,
+        }),
+        property: "prototype".to_string(),
+        byte_offset: 0,
+    }));
+    let mut opts = ir_opts(false, None);
+    opts.imported_vars.insert("Renamed".to_string());
+    opts.import_function_prefixes
+        .insert("Renamed".to_string(), "remote".to_string());
+    opts.import_function_origin_names
+        .insert("Renamed".to_string(), "Expr".to_string());
+    let ir = String::from_utf8(compile_module(&module, opts).unwrap()).unwrap();
+    let getter = "perry_fn_remote__Expr";
+    assert_eq!(
+        ir.matches(&format!("call double @{getter}(")).count(),
+        1,
+        "{ir}"
+    );
+    let value = crate::testing::temp_slots::first_call_result(&ir, getter).unwrap();
+    let bits = ir
+        .lines()
+        .find_map(|line| {
+            let (result, operand) = line.trim().split_once(" = bitcast double ")?;
+            (operand == format!("{value} to i64")).then_some(result)
+        })
+        .expect("getter result must be classified by its intact value tag");
+    assert!(
+        ir.lines().any(|line| {
+            line.contains("call double @js_typed_feedback_object_get_field_by_name_f64(")
+                && line.contains(&format!(", i64 {bits},"))
+        }),
+        "class dispatch must receive the getter's unmasked value bits:\n{ir}"
+    );
+}
+
 fn emit_guarded_length_read() -> String {
     let mut module = Module::new("guarded_length_read.ts");
     module.init = vec![

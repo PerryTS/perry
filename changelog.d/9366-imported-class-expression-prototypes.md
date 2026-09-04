@@ -1,0 +1,1 @@
+Fix property reads on imported class-expression bindings, including `.prototype` returning `undefined` across module boundaries (#9366). Imported variables now use the ordinary property dispatcher after loading their current value, preserving class tags and live bindings through renamed re-exports.
