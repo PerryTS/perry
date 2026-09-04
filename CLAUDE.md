@@ -211,6 +211,7 @@ to the same physical root still deduplicate by canonical path.
 ### LLVM Type Mismatches
 - Loop counter optimization produces i32 — always convert before passing to f64/i64 functions
 - Constructor parameters always f64 (NaN-boxed) at signature level
+- A new `PERRY_*` environment variable read in codegen must be added to `BUILD_CACHE_ENV_VARS` in `crates/perry/src/commands/compile/build_cache.rs`, or to `BUILD_CACHE_ENV_EXCLUSIONS` with a reason it cannot change emitted code. Otherwise cached objects can silently serve a different setting. Run `cargo test -p perry codegen_env_vars_are_build_cache_inputs` to check registration.
 
 ### Async / Threading
 - Thread-local arenas: JSValues from tokio workers invalid on main thread
