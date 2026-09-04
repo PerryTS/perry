@@ -82,7 +82,7 @@ struct ArenaRightSizeState {
     last_usage: ArenaUsage,
 }
 
-thread_local! {
+crate::perry_thread_local! {
     static STATE: RefCell<ArenaRightSizeState> =
         RefCell::new(ArenaRightSizeState::default());
     #[cfg(test)]
