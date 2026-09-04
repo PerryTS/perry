@@ -5,6 +5,34 @@
 use super::test_support::*;
 use super::*;
 
+struct ForcedEvacuationGuard {
+    frame: u64,
+    previous_force_evacuation: i32,
+}
+
+impl ForcedEvacuationGuard {
+    fn new() -> Self {
+        // Compiled programs initialize the runtime-handle scanner at startup.
+        // This standalone crate test must do the equivalent before collecting.
+        perry_runtime::gc::gc_init();
+        let previous_force_evacuation = perry_runtime::gc::js_gc_force_evacuation_test_override(1);
+        perry_runtime::gc::js_gc_write_barriers_emitted(1);
+        let frame = perry_runtime::gc::js_shadow_frame_push(0);
+        Self {
+            frame,
+            previous_force_evacuation,
+        }
+    }
+}
+
+impl Drop for ForcedEvacuationGuard {
+    fn drop(&mut self) {
+        perry_runtime::gc::js_shadow_frame_pop(self.frame);
+        perry_runtime::gc::js_gc_write_barriers_emitted(0);
+        perry_runtime::gc::js_gc_force_evacuation_test_override(self.previous_force_evacuation);
+    }
+}
+
 #[test]
 fn close_without_callbacks_is_noop() {
     let _g = reset();
@@ -160,6 +188,38 @@ fn provider_path_removes_end_listeners() {
         STDIN_END_CALLBACKS.lock().map(|v| v.len()).unwrap_or(0),
         0,
         "removing an aliased end listener must clear it"
+    );
+}
+
+#[test]
+fn listeners_provider_roots_readable_snapshot_across_array_allocation() {
+    let _g = reset();
+    let _gc = ForcedEvacuationGuard::new();
+    ensure_gc_scanner_registered();
+
+    let before = readable_counter_callback();
+    stdin_on_op(b"readable".as_ptr(), 8, before, 0);
+    let snapshot = stdin_listener_snapshot(b"readable".as_ptr(), 8);
+    let listeners = listener_array_from_snapshot_impl(snapshot, || {
+        perry_runtime::gc::js_gc_collect();
+    });
+
+    let current = READABLE_CALLBACKS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())[0];
+    assert_ne!(
+        before, current,
+        "the forced collection must relocate the callback to exercise the regression"
+    );
+
+    let array = JSValue::from_bits(listeners.to_bits())
+        .as_pointer::<perry_runtime::array::ArrayHeader>()
+        as *mut perry_runtime::array::ArrayHeader;
+    let returned = perry_runtime::array::js_array_get_f64(array, 0);
+    let returned = JSValue::from_bits(returned.to_bits()).as_pointer::<ClosureHeader>() as i64;
+    assert_eq!(
+        returned, current,
+        "listeners() must return the collector-rewritten callback, not its stale snapshot"
     );
 }
 
