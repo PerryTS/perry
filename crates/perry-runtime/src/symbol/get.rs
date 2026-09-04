@@ -88,6 +88,26 @@ pub(crate) unsafe fn own_symbol_property(obj_f64: f64, sym_f64: f64) -> Option<f
     None
 }
 
+/// Words in a per-site Symbol-keyed read cache: `[epoch, obj_bits, sym_bits,
+/// value_bits]`. Word 0 is published last with release ordering and read
+/// first with acquire by the emitted hit path.
+pub const SYMBOL_PIC_WORDS: usize = 4;
+/// A per-site Symbol-keyed read cache, as the emitted slot resolves it.
+pub type SymbolPicCache = [u64; SYMBOL_PIC_WORDS];
+/// The emitted `@perry_ic_N = private global ptr null` for a Symbol site:
+/// null until the site's first priming miss (#9708).
+pub type SymbolPicCacheSlot = *mut SymbolPicCache;
+
+/// The cache a Symbol slot currently holds, without allocating: null for a
+/// site that has never primed.
+///
+/// # Safety
+/// `slot` must be null or a live Symbol cache slot.
+#[inline]
+unsafe fn symbol_cache_of(slot: *mut SymbolPicCacheSlot) -> *mut u64 {
+    crate::object::pic_slot_peek(slot) as *mut u64
+}
+
 /// Miss path for the generated weak own-Symbol-property IC.
 ///
 /// Cache layout (all `u64`): epoch, receiver bits, symbol bits, value bits.
@@ -99,14 +119,17 @@ pub(crate) unsafe fn own_symbol_property(obj_f64: f64, sym_f64: f64) -> Option<f
 /// Only an exact own DATA property on a real `ObjectHeader` is cacheable. All
 /// exotic receivers, accessors, inherited properties and misses retain the
 /// canonical resolver below, including Proxy traps and prototype semantics.
+///
+/// `cache_slot` is the site's [`SymbolPicCacheSlot`] address; the cache is
+/// allocated on the first successful prime (#9708).
 #[no_mangle]
 pub unsafe extern "C" fn js_object_get_symbol_property_ic_miss(
     obj_f64: f64,
     sym_f64: f64,
-    cache: *mut u64,
+    cache_slot: *mut SymbolPicCacheSlot,
 ) -> f64 {
     let obj_bits = obj_f64.to_bits();
-    if !cache.is_null() && (obj_bits >> 48) == 0x7FFD {
+    if !cache_slot.is_null() && (obj_bits >> 48) == 0x7FFD {
         let obj_key = (obj_bits & POINTER_MASK) as usize;
         if let Some(header) = crate::value::addr_class::try_read_gc_header(obj_key) {
             if header.obj_type == crate::gc::GC_TYPE_OBJECT {
@@ -128,6 +151,10 @@ pub unsafe extern "C" fn js_object_get_symbol_property_ic_miss(
                     if let Some(value_bits) = value_bits {
                         let epoch = PERRY_SYMBOL_PROPERTY_IC_EPOCH
                             .load(std::sync::atomic::Ordering::Acquire);
+                        // #9708: the cache is allocated here, on the first
+                        // successful prime, never for a miss that cannot
+                        // prime.
+                        let cache = crate::object::pic_slot_resolve(cache_slot) as *mut u64;
                         // Publish identity/value first and epoch last. The
                         // generated hit path acquire-loads this first word.
                         *cache.add(1) = obj_bits;
@@ -160,9 +187,12 @@ pub unsafe extern "C" fn js_object_get_symbol_then_field_ic_miss(
     sym_f64: f64,
     key: *const crate::StringHeader,
     feedback_site_id: u64,
-    symbol_cache: *mut u64,
-    field_cache: *mut crate::object::PicCache,
+    symbol_cache_slot: *mut SymbolPicCacheSlot,
+    field_cache_slot: *mut crate::object::PicCacheSlot,
 ) -> f64 {
+    // #9708: both caches sit behind slots. Each is re-read after the miss
+    // that may allocate it; before that, a null cache is simply "not primed".
+    let symbol_cache = symbol_cache_of(symbol_cache_slot);
     if key.is_null() {
         if !symbol_cache.is_null() {
             (&*(symbol_cache as *const std::sync::atomic::AtomicU64))
@@ -175,8 +205,10 @@ pub unsafe extern "C" fn js_object_get_symbol_then_field_ic_miss(
     // whose accessor/prototype fallback may allocate before the named read.
     let scope = crate::gc::RuntimeHandleScope::new();
     let key_handle = scope.root_nanbox_f64(crate::value::js_nanbox_string(key as i64));
-    let intermediate = js_object_get_symbol_property_ic_miss(obj_f64, sym_f64, symbol_cache);
+    let intermediate = js_object_get_symbol_property_ic_miss(obj_f64, sym_f64, symbol_cache_slot);
     let intermediate_handle = scope.root_nanbox_f64(intermediate);
+    let symbol_cache = symbol_cache_of(symbol_cache_slot);
+    let field_cache = crate::object::pic_slot_peek(field_cache_slot);
 
     // Do not mistake an entry retained from the previously cached
     // intermediate object for a prime performed by this miss.
@@ -192,9 +224,11 @@ pub unsafe extern "C" fn js_object_get_symbol_then_field_ic_miss(
             current.to_bits() as i64,
             key_now,
             feedback_site_id,
-            field_cache,
+            field_cache_slot,
         )
     });
+    // The named read may have been the site's first prime, which allocates.
+    let field_cache = crate::object::pic_slot_peek(field_cache_slot);
 
     // `cache[3]` is dereferenced by generated code only after cache[0]'s
     // acquire-load succeeds. Leave that epoch published solely when both miss
@@ -1352,8 +1386,9 @@ mod own_data_ic_tests {
             let first = 41.0_f64;
             super::properties::js_object_set_symbol_property(obj, sym, first);
 
-            let mut cache = [0_u64; 12];
-            let got = js_object_get_symbol_property_ic_miss(obj, sym, cache.as_mut_ptr());
+            let mut cache: SymbolPicCache = [0; SYMBOL_PIC_WORDS];
+            let mut cache_slot: SymbolPicCacheSlot = &mut cache;
+            let got = js_object_get_symbol_property_ic_miss(obj, sym, &mut cache_slot);
             assert_eq!(got.to_bits(), first.to_bits());
             assert_eq!(cache[1], obj.to_bits());
             assert_eq!(cache[2], sym.to_bits());
@@ -1371,7 +1406,7 @@ mod own_data_ic_tests {
                 PERRY_SYMBOL_PROPERTY_IC_EPOCH.load(Ordering::Acquire),
                 "a Symbol data write must make the generated hit guard fail"
             );
-            let got = js_object_get_symbol_property_ic_miss(obj, sym, cache.as_mut_ptr());
+            let got = js_object_get_symbol_property_ic_miss(obj, sym, &mut cache_slot);
             assert_eq!(got.to_bits(), second.to_bits());
             assert_eq!(cache[3], second.to_bits());
         }
@@ -1382,10 +1417,11 @@ mod own_data_ic_tests {
         let _global = crate::gc::global_side_table_test_lock();
         unsafe {
             let sym = super::constructors::js_symbol_new_empty();
-            let mut cache = [0_u64; 12];
-            let got = js_object_get_symbol_property_ic_miss(7.0, sym, cache.as_mut_ptr());
+            let mut cache: SymbolPicCache = [0; SYMBOL_PIC_WORDS];
+            let mut cache_slot: SymbolPicCacheSlot = &mut cache;
+            let got = js_object_get_symbol_property_ic_miss(7.0, sym, &mut cache_slot);
             assert_eq!(got.to_bits(), TAG_UNDEFINED);
-            assert_eq!(cache, [0_u64; 12]);
+            assert_eq!(cache, [0; SYMBOL_PIC_WORDS]);
         }
     }
 
@@ -1404,15 +1440,17 @@ mod own_data_ic_tests {
             crate::object::js_object_set_field_by_name(metadata_ptr, key, 41.0);
             super::properties::js_object_set_symbol_property(owner, sym, metadata);
 
-            let mut symbol_cache = [0_u64; 12];
+            let mut symbol_cache: SymbolPicCache = [0; SYMBOL_PIC_WORDS];
+            let mut symbol_cache_slot: SymbolPicCacheSlot = &mut symbol_cache;
             let mut field_cache: crate::object::PicCache = [0; crate::object::PIC_CACHE_WORDS];
+            let mut field_cache_slot: crate::object::PicCacheSlot = &mut field_cache;
             let first = js_object_get_symbol_then_field_ic_miss(
                 owner,
                 sym,
                 key,
                 0,
-                symbol_cache.as_mut_ptr(),
-                &mut field_cache,
+                &mut symbol_cache_slot,
+                &mut field_cache_slot,
             );
             let epoch_before_named_write = symbol_cache[0];
             let slot = field_cache[1] as usize;
@@ -1430,8 +1468,8 @@ mod own_data_ic_tests {
                 sym,
                 key,
                 0,
-                symbol_cache.as_mut_ptr(),
-                &mut field_cache,
+                &mut symbol_cache_slot,
+                &mut field_cache_slot,
             );
             let epoch_after_named_write = PERRY_SYMBOL_PROPERTY_IC_EPOCH.load(Ordering::Acquire);
             crate::gc::gc_unsuppress();
@@ -1459,15 +1497,17 @@ mod own_data_ic_tests {
             let sym = super::constructors::js_symbol_new_empty();
             let key = js_string_from_bytes(b"id".as_ptr(), 2);
             super::properties::js_object_set_symbol_property(owner, sym, 7.0);
-            let mut symbol_cache = [0_u64; 12];
+            let mut symbol_cache: SymbolPicCache = [0; SYMBOL_PIC_WORDS];
+            let mut symbol_cache_slot: SymbolPicCacheSlot = &mut symbol_cache;
             let mut field_cache: crate::object::PicCache = [0; crate::object::PIC_CACHE_WORDS];
+            let mut field_cache_slot: crate::object::PicCacheSlot = &mut field_cache;
             let got = js_object_get_symbol_then_field_ic_miss(
                 owner,
                 sym,
                 key,
                 0,
-                symbol_cache.as_mut_ptr(),
-                &mut field_cache,
+                &mut symbol_cache_slot,
+                &mut field_cache_slot,
             );
             crate::gc::gc_unsuppress();
 

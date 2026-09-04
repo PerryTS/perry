@@ -1391,7 +1391,7 @@ fn representation_lowering_helpers_have_lto_keepalive_anchors() {
         (
             guards,
             "static G3C",
-            "static G3C: unsafe extern \"C\" fn(f64, u32, u32, *const i8, usize, *const u8, *mut u64) -> u64",
+            "static G3C: unsafe extern \"C\" fn(f64, u32, u32, *const i8, usize, *const u8, *mut MethodPicCacheSlot) -> u64",
             "js_object_own_method_cache_miss",
         ),
         (
@@ -2517,7 +2517,8 @@ fn own_method_cache_accepts_appends_and_rejects_live_method_mutation() {
     let closure_value = crate::value::js_nanbox_pointer(closure as i64);
     crate::object::js_object_set_field_by_name(object, method_key, closure_value);
     let receiver = crate::value::js_nanbox_pointer(object as i64);
-    let mut cache = 0;
+    let mut cache: MethodPicCache = [0];
+    let mut cache_slot: MethodPicCacheSlot = &mut cache;
 
     let first = unsafe {
         js_object_own_method_cache_miss(
@@ -2527,12 +2528,12 @@ fn own_method_cache_accepts_appends_and_rejects_live_method_mutation() {
             b"method".as_ptr() as *const i8,
             6,
             fn_ptr,
-            &mut cache,
+            &mut cache_slot,
         )
     };
     assert_eq!(first, closure as u64);
-    assert_ne!(cache, 0);
-    let initial_shape_token = cache;
+    assert_ne!(cache[0], 0);
+    let initial_shape_token = cache[0];
 
     crate::object::js_object_set_field_by_name(object, extra_key, 42.0);
     let after_append = unsafe {
@@ -2543,12 +2544,12 @@ fn own_method_cache_accepts_appends_and_rejects_live_method_mutation() {
             b"method".as_ptr() as *const i8,
             6,
             fn_ptr,
-            &mut cache,
+            &mut cache_slot,
         )
     };
     assert_eq!(after_append, closure as u64);
     assert_ne!(
-        cache, initial_shape_token,
+        cache[0], initial_shape_token,
         "append must publish the live successor shape"
     );
 
@@ -2565,11 +2566,11 @@ fn own_method_cache_accepts_appends_and_rejects_live_method_mutation() {
             b"method".as_ptr() as *const i8,
             6,
             fn_ptr,
-            &mut cache,
+            &mut cache_slot,
         )
     };
     assert_eq!(after_spilled_append, closure as u64);
-    assert_ne!(cache, 0);
+    assert_ne!(cache[0], 0);
 
     let replacement = crate::closure::js_closure_alloc_singleton(test_direct_method_ptr());
     crate::object::js_object_set_field_by_name(
@@ -2585,11 +2586,11 @@ fn own_method_cache_accepts_appends_and_rejects_live_method_mutation() {
             b"method".as_ptr() as *const i8,
             6,
             fn_ptr,
-            &mut cache,
+            &mut cache_slot,
         )
     };
     assert_eq!(replaced, 0);
-    assert_eq!(cache, 0);
+    assert_eq!(cache[0], 0);
 
     crate::object::js_object_set_field_by_name(object, method_key, closure_value);
     crate::object::js_object_delete_field(object, method_key);
@@ -2601,11 +2602,11 @@ fn own_method_cache_accepts_appends_and_rejects_live_method_mutation() {
             b"method".as_ptr() as *const i8,
             6,
             fn_ptr,
-            &mut cache,
+            &mut cache_slot,
         )
     };
     assert_eq!(deleted, 0);
-    assert_eq!(cache, 0);
+    assert_eq!(cache[0], 0);
 }
 
 #[test]

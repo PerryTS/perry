@@ -16,6 +16,11 @@ use crate::value::JSValue;
 
 #[path = "subclass_loop_guard.rs"]
 pub(super) mod loop_guard;
+#[path = "subclass_packed_index.rs"]
+pub(super) mod packed_index;
+#[cfg(test)]
+pub(super) use packed_index::js_packed_arraylike_index_get;
+pub use packed_index::{ArrayLikePicCache, ArrayLikePicCacheSlot, ARRAYLIKE_PIC_WORDS};
 // The loop-guard entry points are exported C symbols; only the unit tests
 // reach them through Rust paths.
 #[cfg(test)]
@@ -905,8 +910,15 @@ pub(crate) fn array_subclass_fast_length(value: f64) -> Option<f64> {
 /// Array-subclass named-prefix token used by the dense indexed-read IC.  The
 /// payload is published before the identity, and no managed pointer escapes
 /// into the cache, so moving GC needs neither a root nor a rewrite hook.
+///
+/// `cache_slot` is the site's slot (#9708); the cache is allocated only on
+/// the publishing path below, so the elements-backed early return never
+/// allocates one.
 #[inline]
-pub(crate) fn array_subclass_fast_length_with_ic(value: f64, cache: *mut u64) -> Option<f64> {
+pub(crate) fn array_subclass_fast_length_with_ic(
+    value: f64,
+    cache_slot: *mut crate::value::LengthPicCacheSlot,
+) -> Option<f64> {
     if let Some(elements) = validated_object_receiver_for_value(value)
         .and_then(|r| super::subclass_elements::elements_for_validated(&r))
     {
@@ -916,7 +928,10 @@ pub(crate) fn array_subclass_fast_length_with_ic(value: f64, cache: *mut u64) ->
     }
     let (obj, layout) = dense_layout_for_value(value)?;
     let result = f64::from_bits(layout_length_value(obj, layout).bits());
-    if !cache.is_null() {
+    if !cache_slot.is_null() {
+        // SAFETY: a non-null slot is the emitted pointer global or a test's
+        // stack slot; resolving it allocates the cache on the first prime.
+        let cache = unsafe { crate::object::pic_slot_resolve(cache_slot) } as *mut u64;
         let family_token = if crate::object::object_spill_enabled() {
             unsafe { array_subclass_named_prefix_token_for_slot(obj, layout.length_slot as usize) }
         } else {
@@ -1530,94 +1545,6 @@ fn canonical_u32_index(value: f64) -> Option<u32> {
         && value <= (u32::MAX - 1) as f64)
         .then_some(value as u32)
 }
-
-/// Unknown-receiver numeric read used by codegen's guarded typed-array miss
-/// block. Stable real arrays and Array subclasses terminate here; every other
-/// receiver/key keeps the established tag-aware dispatcher as a cold side
-/// exit. Keeping that call behind this ABI boundary removes `js_dyn_index_get`
-/// from the emitted hot-loop artifact without weakening its semantics.
-#[no_mangle]
-/// The five optional IC words are
-/// scalar layout facts, never heap pointers:
-/// `(class_id, ShapeId)`, length slot, element base, dense prefix, inline bound.
-/// The emitted hit path reloads the live object/meta/spill pointers, so moving
-/// GC never has to trace or rewrite this cache.
-pub extern "C" fn js_packed_arraylike_index_get(receiver: f64, index: f64, cache: *mut u64) -> f64 {
-    if let Some(index_u32) = canonical_u32_index(index) {
-        let js = JSValue::from_bits(receiver.to_bits());
-        if js.is_pointer() {
-            let raw = js.as_pointer::<u8>();
-            if let Some(header) =
-                unsafe { crate::value::addr_class::try_read_gc_header(raw as usize) }
-            {
-                if matches!(
-                    header.obj_type,
-                    crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY
-                ) {
-                    return crate::array::js_array_get_f64(
-                        raw as *const crate::array::ArrayHeader,
-                        index_u32,
-                    );
-                }
-                if header.obj_type == crate::gc::GC_TYPE_OBJECT
-                    && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
-                {
-                    let obj = raw.cast::<ObjectHeader>();
-                    // Elements-backed instance: an in-bounds non-hole element
-                    // answers directly; a hole continues to the complete
-                    // dispatcher (prototype chain).
-                    let elements = unsafe { super::subclass_elements::elements_of(obj) };
-                    if !elements.is_null() {
-                        if let Some(value) =
-                            super::subclass_elements::elements_index_get(elements, index_u32)
-                        {
-                            return value;
-                        }
-                    } else if let Some(layout) = dense_layout_for_validated_object(obj) {
-                        // The codegen hit path handles both inline and
-                        // object-owned spill slots.  In spill mode, publish a
-                        // class-wide dense-tail identity when the owner has
-                        // proved one.  Exact push/pop transitions preserve
-                        // that move-stable token, so a lifecycle loop does not
-                        // miss once for every historical tail ShapeId.  The
-                        // cached dense-prefix word remains the admitted high
-                        // water mark: a generic `length` grow beyond it still
-                        // side-exits and re-establishes the complete proof.
-                        if !cache.is_null() && crate::object::object_spill_enabled() {
-                            let family_token = unsafe {
-                                array_subclass_named_prefix_token_for_slot(
-                                    obj,
-                                    layout.length_slot as usize,
-                                )
-                            };
-                            unsafe {
-                                // GC_STORE_AUDIT(POINTER_FREE): generated IC
-                                // words are scalar layout facts, not heap edges.
-                                cache.add(1).write(layout.length_slot as u64);
-                                cache.add(2).write(layout.element_base as u64);
-                                cache.add(3).write(layout.dense_prefix_len as u64);
-                                cache.add(4).write(layout.live_inline_slots as u64);
-                                cache.write(if family_token != 0 {
-                                    family_token
-                                } else {
-                                    dense_cache_key((*obj).class_id, (*obj).parent_class_id)
-                                });
-                            }
-                        }
-                        if let Some(value) = dense_index_get_with_layout(obj, layout, index_u32) {
-                            return value;
-                        }
-                    }
-                }
-            }
-        }
-    }
-    crate::value::js_dyn_index_get(receiver, index)
-}
-#[cfg(feature = "keepalive-anchors")]
-#[used]
-static KEEP_JS_PACKED_ARRAYLIKE_INDEX_GET: extern "C" fn(f64, f64, *mut u64) -> f64 =
-    js_packed_arraylike_index_get;
 
 /// True when `class_id` is a user class that extends `Array` (the reserved
 /// parent id `0xFFFF0024` appears in its class chain), i.e. `class X extends

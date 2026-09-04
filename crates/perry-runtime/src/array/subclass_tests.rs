@@ -366,9 +366,10 @@ fn array_subclass_length_ic_publishes_only_scalar_exact_or_family_facts() {
     let receiver = crate::value::js_nanbox_pointer(obj as i64);
     crate::node_stream::js_array_subclass_init(receiver, 0.0);
 
-    let mut cache = [0_u64; 3];
+    let mut cache: crate::value::LengthPicCache = [0; crate::value::LENGTH_PIC_WORDS];
+    let mut cache_slot: crate::value::LengthPicCacheSlot = &mut cache;
     assert_eq!(
-        array_subclass_fast_length_with_ic(receiver, cache.as_mut_ptr()),
+        array_subclass_fast_length_with_ic(receiver, &mut cache_slot),
         Some(0.0)
     );
     if crate::object::object_spill_enabled() {
@@ -392,7 +393,7 @@ fn array_subclass_length_ic_publishes_only_scalar_exact_or_family_facts() {
 
     js_array_push_f64(obj as *mut ArrayHeader, 11.0);
     assert_eq!(
-        array_subclass_fast_length_with_ic(receiver, cache.as_mut_ptr()),
+        array_subclass_fast_length_with_ic(receiver, &mut cache_slot),
         Some(1.0)
     );
     if crate::object::object_spill_enabled() {
@@ -677,7 +678,8 @@ fn array_subclass_named_prefix_token_survives_only_exact_numeric_tail_transition
     js_array_push_f64(obj as *mut ArrayHeader, 22.0);
     let mask_key = crate::string::js_string_from_bytes(b"mask".as_ptr(), 4);
     let mut cache = [0i64; crate::object::PIC_CACHE_WORDS];
-    crate::object::js_object_get_field_ic_miss(obj, mask_key, &mut cache);
+    let mut cache_slot: crate::object::PicCacheSlot = &mut cache;
+    crate::object::js_object_get_field_ic_miss(obj, mask_key, &mut cache_slot);
     let token = cache[2] as u64;
     assert_ne!(token, 0);
     assert!(unsafe { array_subclass_named_prefix_token_matches_class(obj, class_id) });
@@ -691,9 +693,10 @@ fn array_subclass_named_prefix_token_survives_only_exact_numeric_tail_transition
         "the IC miss must publish the same owner-side token it caches"
     );
 
-    let mut index_ic = [0u64; 5];
+    let mut index_ic: super::ArrayLikePicCache = [0; super::ARRAYLIKE_PIC_WORDS];
+    let mut index_ic_slot: super::ArrayLikePicCacheSlot = &mut index_ic;
     assert_eq!(
-        js_packed_arraylike_index_get(receiver, 0.0, index_ic.as_mut_ptr()),
+        js_packed_arraylike_index_get(receiver, 0.0, &mut index_ic_slot),
         11.0
     );
     assert_eq!(
@@ -711,8 +714,9 @@ fn array_subclass_named_prefix_token_survives_only_exact_numeric_tail_transition
 
     let zero_key = crate::string::js_string_from_bytes(b"0".as_ptr(), 1);
     let mut element_cache = [0i64; crate::object::PIC_CACHE_WORDS];
+    let mut element_cache_slot: crate::object::PicCacheSlot = &mut element_cache;
     assert_eq!(
-        crate::object::js_object_get_field_ic_miss(obj, zero_key, &mut element_cache),
+        crate::object::js_object_get_field_ic_miss(obj, zero_key, &mut element_cache_slot),
         11.0
     );
     assert_eq!(
@@ -857,7 +861,8 @@ fn empty_array_subclass_named_prefix_token_survives_warm_tail_cycle() {
 
     let change_key = crate::string::js_string_from_bytes(b"change".as_ptr(), 6);
     let mut cache = [0i64; crate::object::PIC_CACHE_WORDS];
-    let via_ic = crate::object::js_object_get_field_ic_miss(obj, change_key, &mut cache);
+    let mut cache_slot: crate::object::PicCacheSlot = &mut cache;
+    let via_ic = crate::object::js_object_get_field_ic_miss(obj, change_key, &mut cache_slot);
     let via_ladder = crate::object::js_object_get_field_by_name_f64(obj, change_key);
     assert_eq!(via_ic.to_bits(), via_ladder.to_bits());
     let token = cache[2] as u64;

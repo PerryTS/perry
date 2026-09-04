@@ -60,7 +60,6 @@ fn emit_cached_own_method_guard(
     ctx.ic_site_counter += 1;
     let cache_name = crate::expr::inline_cache_global_name(ctx, cache_site);
     ctx.ic_globals.push(cache_name.clone());
-    let cache_ref = format!("@{cache_name}");
 
     let deref_idx = ctx.new_block("object_method_cache.deref");
     let fast_idx = ctx.new_block("object_method_cache.fast");
@@ -85,6 +84,15 @@ fn emit_cached_own_method_guard(
     let below_ceiling = ctx.block().icmp_ult(I64, &recv_handle, &heap_ceiling);
     let in_range = ctx.block().and(I1, &above_floor, &below_ceiling);
     let safe = ctx.block().and(I1, &tagged, &in_range);
+    // #9708: the token lives behind a pointer slot the miss handler fills on
+    // the first prime. `deref` reads it in a flat predicate, so it reads
+    // through `token_cache`: the real cache when present, else the slot itself
+    // — 8 bytes of null, a zero token, which fails `cache_populated` exactly as
+    // the all-zero global did and takes the same revalidate edge.
+    let ic_slot = crate::expr::emit_inline_cache_slot(ctx, &cache_name);
+    let token_cache =
+        ctx.block()
+            .select(I1, &ic_slot.present, PTR, &ic_slot.cache, &ic_slot.slot_ref);
     ctx.block().cond_br(&safe, &deref_label, miss_label);
 
     ctx.current_block = deref_idx;
@@ -96,7 +104,7 @@ fn emit_cached_own_method_guard(
         .and(I32, &gc_header, GC_OBJECT_METHOD_GUARD_MASK_I32);
     let gc_header_ok = ctx.block().icmp_eq(I32, &guarded_gc_bits, GC_TYPE_OBJECT);
     let live_class_shape = ctx.block().load(I64, &object_ptr);
-    let cache_token_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "0")]);
+    let cache_token_ptr = ctx.block().gep(I64, &token_cache, &[(I64, "0")]);
     let cached_class_shape = ctx.block().load(I64, &cache_token_ptr);
     let cache_populated = ctx.block().icmp_ne(I64, &cached_class_shape, "0");
     let shape_matches = ctx
@@ -137,7 +145,7 @@ fn emit_cached_own_method_guard(
             (PTR, &bytes_global),
             (I64, &name_len),
             (PTR, &format!("@{closure_symbol}")),
-            (PTR, &cache_token_ptr),
+            (PTR, &ic_slot.slot_ref),
         ],
     );
     let cold_passes = ctx.block().icmp_ne(I64, &cold_handle, "0");

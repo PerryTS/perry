@@ -276,12 +276,13 @@ fn fs_parent_promises_property_installs_before_resolution() {
 /// #7753, paired with `pic_cache_words_match_codegen` in
 /// `perry-runtime/src/object/field_get_set/ic_miss.rs`.
 ///
-/// The runtime writes a `@perry_ic_N` global through `*mut [i64;
-/// PIC_CACHE_WORDS]`. If codegen emits a NARROWER global, `pic_prime_get`'s way
-/// stores run past the end of it into whatever global the linker placed next —
-/// silent memory corruption that no property-read test would notice. This pins
-/// the emitted width to the constant both sides share, and pins the constant
-/// itself so the runtime's copy cannot drift.
+/// The runtime writes a site's cache through `*mut [i64; PIC_CACHE_WORDS]`
+/// and the emitted ways read words up to `PIC_WAY_BASE + PIC_WAYS * 2`. Since
+/// #9708 the cache words are allocated by the runtime (`pic_slot_resolve`
+/// sizes them from its own `PicCache`), so the two constants pinned here are
+/// what keeps the emitted way GEPs inside that allocation. The emitted global
+/// itself is the 8-byte SLOT, never the words: a `[N x i64]` IC global would
+/// be the pre-#9708 shape coming back, with its 96 B of zero-fill per site.
 #[test]
 fn pic_cache_layout_matches_runtime() {
     use crate::expr::property_get::generic_dispatch::{
@@ -301,11 +302,25 @@ fn pic_cache_layout_matches_runtime() {
         "runtime PicCache word 2 carries the Array-subclass named-prefix token"
     );
     let ir = emit(false, None);
+    let ic_defs: Vec<&str> = ir
+        .lines()
+        .filter(|l| l.starts_with("@perry_ic_") && l.contains(" = "))
+        .collect();
     assert!(
-        ir.contains(&format!(
-            "= private global [{PIC_CACHE_WORDS} x i64] zeroinitializer"
-        )),
-        "every @perry_ic_N must be emitted at the width the runtime writes:\n{ir}"
+        !ic_defs.is_empty(),
+        "test premise: the generic read emits a per-site cache slot:\n{ir}"
+    );
+    for def in &ic_defs {
+        assert!(
+            def.ends_with(" = private global ptr null"),
+            "every @perry_ic_N must be an 8-byte null pointer slot the runtime \
+             fills on the first prime (#9708), got:\n{def}\n\nIR:\n{ir}"
+        );
+    }
+    assert!(
+        ir.contains("load ptr, ptr @perry_ic_") && ir.contains("icmp ne ptr "),
+        "the hit path must load the slot and prove it non-null before reading \
+         a cache word:\n{ir}"
     );
 }
 

@@ -184,11 +184,11 @@ fn a_bound_timer_method_from_the_ic_miss_path_never_captures_the_key() {
         let id = live_timer();
         let (key, key_interior) = heap_key("hasRef");
         let mut cache = crate::object::PicCache::default();
-
+        let mut cache_slot: crate::object::PicCacheSlot = &mut cache;
         let bits = crate::object::js_object_get_field_ic_miss(
             id as *const crate::ObjectHeader,
             key,
-            &mut cache,
+            &mut cache_slot,
         );
         assert_names_the_literal(
             crate::value::JSValue::from_bits(bits.to_bits()),

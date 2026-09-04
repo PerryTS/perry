@@ -31,9 +31,11 @@ fn unrelated_accessor_does_not_poison_plain_receiver_pic() {
     });
 
     let mut cache = [0i64; super::PIC_CACHE_WORDS];
+
+    let mut cache_slot: crate::object::PicCacheSlot = &mut cache;
     assert_eq!(
         obj.with_mut_ptr(
-            |o| key.with_const_ptr(|k| super::js_object_get_field_ic_miss(o, k, &mut cache))
+            |o| key.with_const_ptr(|k| super::js_object_get_field_ic_miss(o, k, &mut cache_slot))
         ),
         42.0
     );
@@ -66,8 +68,10 @@ fn accessor_bearing_receiver_does_not_prime_plain_data_pic() {
     );
 
     let mut cache = [0i64; super::PIC_CACHE_WORDS];
+
+    let mut cache_slot: crate::object::PicCacheSlot = &mut cache;
     let via_pic = obj.with_mut_ptr(|o| {
-        key.with_const_ptr(|k| super::js_object_get_field_ic_miss(o, k, &mut cache))
+        key.with_const_ptr(|k| super::js_object_get_field_ic_miss(o, k, &mut cache_slot))
     });
     let via_ladder =
         obj.with_mut_ptr(|o| key.with_const_ptr(|k| super::js_object_get_field_by_name_f64(o, k)));
@@ -96,7 +100,9 @@ fn a_class_instance_primes_an_id_token_after_rung1() {
         assert_eq!((*obj).class_id, 0x6080, "test premise: a class instance");
 
         let mut cache = [0i64; super::PIC_CACHE_WORDS];
-        let v = super::js_object_get_field_ic_miss(obj, key, &mut cache);
+
+        let mut cache_slot: crate::object::PicCacheSlot = &mut cache;
+        let v = super::js_object_get_field_ic_miss(obj, key, &mut cache_slot);
         assert_eq!(v, 7.0);
 
         let stamp = crate::object::shapes::object_shape_stamp(obj);
@@ -169,11 +175,17 @@ fn a_compacted_class_instance_primes_a_token_a_pristine_sibling_cannot_match() {
         );
 
         let mut c_pristine = [0i64; super::PIC_CACHE_WORDS];
-        let vp = super::js_object_get_field_ic_miss(pristine, key("picdel_c"), &mut c_pristine);
+
+        let mut c_pristine_slot: crate::object::PicCacheSlot = &mut c_pristine;
+        let vp =
+            super::js_object_get_field_ic_miss(pristine, key("picdel_c"), &mut c_pristine_slot);
         assert_eq!(vp, 3.0, "pristine `c` is slot 2");
 
         let mut c_compacted = [0i64; super::PIC_CACHE_WORDS];
-        let vc = super::js_object_get_field_ic_miss(compacted, key("picdel_c"), &mut c_compacted);
+
+        let mut c_compacted_slot: crate::object::PicCacheSlot = &mut c_compacted;
+        let vc =
+            super::js_object_get_field_ic_miss(compacted, key("picdel_c"), &mut c_compacted_slot);
         assert_eq!(
             vc, 3.0,
             "compacted `c` shifted to slot 1 and must still read 3"
@@ -254,8 +266,10 @@ fn a_fresh_class_instance_computes_the_token_the_miss_handler_primed() {
         );
 
         let mut cache = [0i64; super::PIC_CACHE_WORDS];
+
+        let mut cache_slot: crate::object::PicCacheSlot = &mut cache;
         assert_eq!(
-            super::js_object_get_field_ic_miss(primed_from, key, &mut cache),
+            super::js_object_get_field_ic_miss(primed_from, key, &mut cache_slot),
             5.0,
             "test premise: the miss handler resolved the field"
         );
@@ -279,7 +293,8 @@ fn a_fresh_class_instance_computes_the_token_the_miss_handler_primed() {
         // And the same must hold once the fresh one has itself resolved:
         // priming from either instance is interchangeable.
         let mut cache2 = [0i64; super::PIC_CACHE_WORDS];
-        super::js_object_get_field_ic_miss(fresh, key, &mut cache2);
+        let mut cache2_slot: crate::object::PicCacheSlot = &mut cache2;
+        super::js_object_get_field_ic_miss(fresh, key, &mut cache2_slot);
         assert_eq!(
             cache2[0], cache[0],
             "two instances of one class primed two different tokens — the \

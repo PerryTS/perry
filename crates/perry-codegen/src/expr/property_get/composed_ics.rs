@@ -42,27 +42,42 @@ pub(super) fn lower_symbol_then_named_property_ic(
 
         let symbol_site = ctx.ic_site_counter;
         ctx.ic_site_counter += 1;
-        let symbol_cache = super::super::inline_cache_global_name(ctx, symbol_site);
-        ctx.ic_globals.push(symbol_cache.clone());
-        let symbol_cache = format!("@{symbol_cache}");
+        let symbol_cache_name = super::super::inline_cache_global_name(ctx, symbol_site);
+        ctx.ic_globals.push(symbol_cache_name.clone());
 
         let field_site = ctx.ic_site_counter;
         ctx.ic_site_counter += 1;
-        let field_cache = super::super::inline_cache_global_name(ctx, field_site);
-        ctx.ic_globals.push(field_cache.clone());
-        let field_cache = format!("@{field_cache}");
+        let field_cache_name = super::super::inline_cache_global_name(ctx, field_site);
+        ctx.ic_globals.push(field_cache_name.clone());
 
+        let probe_idx = ctx.new_block("symfield.probe");
         let identity_idx = ctx.new_block("symfield.identity");
         let hit_idx = ctx.new_block("symfield.hit");
         let live_idx = ctx.new_block("symfield.live");
         let miss_idx = ctx.new_block("symfield.miss");
         let merge_idx = ctx.new_block("symfield.merge");
+        let probe_label = ctx.block_label(probe_idx);
         let identity_label = ctx.block_label(identity_idx);
         let hit_label = ctx.block_label(hit_idx);
         let live_label = ctx.block_label(live_idx);
         let miss_label = ctx.block_label(miss_idx);
         let merge_label = ctx.block_label(merge_idx);
 
+        // #9708: both caches sit behind pointer slots the miss handler fills
+        // on the first prime. The probe, identity and hit blocks read through
+        // the two pointers, so they are reached only once both are present;
+        // an absent cache is the miss edge a zero epoch always took.
+        let symbol_slot = crate::expr::emit_inline_cache_slot(ctx, &symbol_cache_name);
+        let field_slot = crate::expr::emit_inline_cache_slot(ctx, &field_cache_name);
+        let symbol_cache = symbol_slot.cache.clone();
+        let field_cache = field_slot.cache.clone();
+        let both_present = ctx
+            .block()
+            .and(I1, &symbol_slot.present, &field_slot.present);
+        ctx.block()
+            .cond_br(&both_present, &probe_label, &miss_label);
+
+        ctx.current_block = probe_idx;
         let epoch = ctx
             .block()
             .load_atomic_acquire(I64, "@PERRY_SYMBOL_PROPERTY_IC_EPOCH", 8);
@@ -144,8 +159,8 @@ pub(super) fn lower_symbol_then_named_property_ic(
                 (DOUBLE, &symbol_box),
                 (PTR, &key_ptr),
                 (I64, &feedback_site_id),
-                (PTR, &symbol_cache),
-                (PTR, &field_cache),
+                (PTR, &symbol_slot.slot_ref),
+                (PTR, &field_slot.slot_ref),
             ],
         );
         let miss_end = ctx.block().label.clone();
@@ -175,10 +190,10 @@ pub(super) fn emit_array_subclass_length_ic(
     ctx.ic_site_counter += 1;
     let cache_name = super::super::inline_cache_global_name(ctx, site_id);
     ctx.ic_globals.push(cache_name.clone());
-    let cache_ref = format!("@{cache_name}");
 
     let header_idx = ctx.new_block("plen.ic.header");
     let shape_idx = ctx.new_block("plen.ic.shape");
+    let shape_probe_idx = ctx.new_block("plen.ic.shape.probe");
     let identity_idx = ctx.new_block("plen.ic.identity");
     let exact_idx = ctx.new_block("plen.ic.exact");
     let family_meta_idx = ctx.new_block("plen.ic.family_meta");
@@ -192,6 +207,7 @@ pub(super) fn emit_array_subclass_length_ic(
     let merge_idx = ctx.new_block("plen.ic.merge");
     let header_label = ctx.block_label(header_idx);
     let shape_label = ctx.block_label(shape_idx);
+    let shape_probe_label = ctx.block_label(shape_probe_idx);
     let identity_label = ctx.block_label(identity_idx);
     let exact_label = ctx.block_label(exact_idx);
     let family_meta_label = ctx.block_label(family_meta_idx);
@@ -219,6 +235,14 @@ pub(super) fn emit_array_subclass_length_ic(
     let below_ceiling = ctx.block().icmp_ult(I64, recv_handle, &heap_ceiling);
     let in_heap = ctx.block().and(I1, &pointer_tag, &above_floor);
     let in_heap = ctx.block().and(I1, &in_heap, &below_ceiling);
+    // #9708: the cache sits behind a pointer slot the runtime fills on the
+    // first shape-carried prime. It is loaded here, off the receiver's
+    // dependency chain, and tested at `plen.ic.shape` — NOT folded into the
+    // header guard, because the elements-backed arm between them serves
+    // `length` without ever publishing a cache, and a site whose receivers
+    // are all elements-backed must keep that arm with a slot that stays null.
+    let ic_slot = crate::expr::emit_inline_cache_slot(ctx, &cache_name);
+    let cache_ref = ic_slot.cache.clone();
     ctx.block().cond_br(&in_heap, &header_label, &miss_label);
 
     ctx.current_block = header_idx;
@@ -281,6 +305,10 @@ pub(super) fn emit_array_subclass_length_ic(
     ctx.block().br(&merge_label);
 
     ctx.current_block = shape_idx;
+    ctx.block()
+        .cond_br(&ic_slot.present, &shape_probe_label, &miss_label);
+
+    ctx.current_block = shape_probe_idx;
     let object_ptr = ctx.block().inttoptr(I64, recv_handle);
     let class_id = ctx.block().load(I32, &object_ptr);
     let shape_addr = ctx.block().add(I64, recv_handle, "4");
@@ -395,7 +423,7 @@ pub(super) fn emit_array_subclass_length_ic(
     let miss_length = ctx.block().call(
         DOUBLE,
         "js_value_length_property_ic_f64",
-        &[(DOUBLE, recv_box), (PTR, &cache_ref)],
+        &[(DOUBLE, recv_box), (PTR, &ic_slot.slot_ref)],
     );
     let miss_end = ctx.block().label.clone();
     ctx.block().br(&merge_label);

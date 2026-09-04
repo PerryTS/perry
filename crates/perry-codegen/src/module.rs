@@ -1447,14 +1447,15 @@ mod tests {
         // `zeroinitializer` global that only ONE unit defines moves it out of
         // zerofill `__DATA,__bss` and writes its zeros into the file — 25.16 MB
         // (8.2%) of the Claude Code binary, all of it per-site inline caches
-        // (`[12 x i64] zeroinitializer`, one per property-access site, each
-        // referenced by exactly one function and so by exactly one unit).
+        // (`[12 x i64] zeroinitializer` then; an 8-byte `ptr null` slot since
+        // #9708 — one per property-access site either way, each referenced by
+        // exactly one function and so by exactly one unit).
         // Promote only what a link would otherwise see defined twice; ELF/COFF
         // are unaffected either way (their BSS choice ignores linkage).
         let mut m = LlModule::new("arm64-apple-macosx15.0.0");
         m.declare_function("js_ic_touch", VOID, &[PTR]);
-        m.add_raw_global("@perry_ic_m__0 = private global [12 x i64] zeroinitializer".to_string());
-        m.add_raw_global("@perry_ic_m__1 = private global [12 x i64] zeroinitializer".to_string());
+        m.add_raw_global(crate::expr::inline_cache_global_definition("perry_ic_m__0"));
+        m.add_raw_global(crate::expr::inline_cache_global_definition("perry_ic_m__1"));
         m.add_internal_global("perry_class_keys_m__C", I64, "0");
         m.add_global("perry_class_shape_id_m__C", I32, "0");
 
@@ -1481,9 +1482,7 @@ mod tests {
         for ic in ["@perry_ic_m__0", "@perry_ic_m__1"] {
             let defs: Vec<&String> = units
                 .iter()
-                .filter(|u| {
-                    u.contains(&format!("{ic} = private global [12 x i64] zeroinitializer"))
-                })
+                .filter(|u| u.contains(&format!("{ic} = private global ptr null")))
                 .collect();
             assert_eq!(
                 defs.len(),

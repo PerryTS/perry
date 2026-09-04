@@ -34,6 +34,7 @@ pub use put_value::{js_proxy_set, js_put_value_set};
 pub(crate) use put_value::{
     js_put_value_set_ic_miss, proxy_set_with_receiver, IC_SLOT_OVERFLOW_BIT,
 };
+pub use put_value::{write_pic_way_entry, WritePicCache, WritePicCacheSlot, WRITE_PIC_WORDS};
 mod json;
 mod metadata;
 mod own_keys;
@@ -3280,8 +3281,10 @@ mod tests {
         let key_ptr = crate::string::js_string_from_bytes(b"n".as_ptr(), 1);
         let key_ptr = crate::string::js_string_intern(key_ptr, fnv1a(b"n"));
 
-        let mut cache = [0i64; 2];
-        let stored = put_value::js_put_value_set_ic_miss(target, key_ptr, 7.0, 0, &mut cache);
+        let mut cache: put_value::WritePicCache = [0; put_value::WRITE_PIC_WORDS];
+        let mut cache_slot: put_value::WritePicCacheSlot = &mut cache;
+        let stored =
+            put_value::js_put_value_set_ic_miss(target, key_ptr, 7.0, 0, &mut cache_slot, 0);
         assert_eq!(stored, 7.0);
         let expected_token = unsafe {
             crate::object::shapes::PIC_ID_TOKEN_BIT
@@ -3303,13 +3306,15 @@ mod tests {
                 (unmarked as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
             (*header)._reserved &= !crate::gc::OBJ_FLAG_PLAIN_ORDINARY;
         }
-        let mut cache2 = [0i64; 2];
+        let mut cache2: put_value::WritePicCache = [0; put_value::WRITE_PIC_WORDS];
+        let mut cache2_slot: put_value::WritePicCacheSlot = &mut cache2;
         let stored = put_value::js_put_value_set_ic_miss(
             f64::from_bits(value.bits()),
             key_ptr,
             9.0,
             0,
-            &mut cache2,
+            &mut cache2_slot,
+            0,
         );
         assert_eq!(stored, 9.0, "the write itself still succeeds");
         assert_eq!(

@@ -1213,6 +1213,15 @@ pub extern "C" fn js_closure_exact_func_guard(
     }
 }
 
+/// Words in a per-site imported-object own-method cache: the one
+/// `(ShapeId << 32 | class_id)` token the emitted guard compares.
+pub const METHOD_PIC_WORDS: usize = 1;
+/// A per-site own-method cache, as the emitted slot resolves it.
+pub type MethodPicCache = [u64; METHOD_PIC_WORDS];
+/// The emitted `@perry_ic_N = private global ptr null` for such a site: null
+/// until the site's first priming miss (#9708).
+pub type MethodPicCacheSlot = *mut MethodPicCache;
+
 /// Revalidate and prime the shape token for an own object-literal method.
 ///
 /// The exported adapter object may append ordinary state fields during
@@ -1228,6 +1237,10 @@ pub extern "C" fn js_closure_exact_func_guard(
 /// or mints a semantic successor. A spill-only metadata record is allowed:
 /// appending past the object's inline birth width creates one even though the
 /// original method slot and its lookup semantics remain unchanged.
+///
+/// `cache_slot` is the site's [`MethodPicCacheSlot`] address (#9708). A miss
+/// that cannot prime clears an existing cache's token but never allocates
+/// one; only the publishing tail below resolves the slot.
 #[no_mangle]
 pub unsafe extern "C" fn js_object_own_method_cache_miss(
     receiver: f64,
@@ -1236,12 +1249,15 @@ pub unsafe extern "C" fn js_object_own_method_cache_miss(
     method_name_ptr: *const i8,
     method_name_len: usize,
     expected_func_ptr: *const u8,
-    cache_token: *mut u64,
+    cache_slot: *mut MethodPicCacheSlot,
 ) -> u64 {
-    if !cache_token.is_null() {
-        *cache_token = 0;
+    {
+        let cache = crate::object::pic_slot_peek(cache_slot);
+        if !cache.is_null() {
+            (*cache)[0] = 0;
+        }
     }
-    if expected_class_id == 0 || expected_func_ptr.is_null() || cache_token.is_null() {
+    if expected_class_id == 0 || expected_func_ptr.is_null() || cache_slot.is_null() {
         return 0;
     }
     let Some(method_bytes) = method_name_bytes(method_name_ptr, method_name_len) else {
@@ -1303,7 +1319,8 @@ pub unsafe extern "C" fn js_object_own_method_cache_miss(
     if !crate::object::shapes::is_shape_id(shape_id) {
         return 0;
     }
-    *cache_token = ((shape_id as u64) << 32) | expected_class_id as u64;
+    let cache = crate::object::pic_slot_resolve(cache_slot);
+    (*cache)[0] = ((shape_id as u64) << 32) | expected_class_id as u64;
     closure as u64
 }
 
@@ -1339,7 +1356,7 @@ mod keep_guard_symbols {
     #[cfg(feature = "keepalive-anchors")]
     #[used] static G3B: extern "C" fn(f64, *const u8) -> u64 = js_closure_exact_func_guard;
     #[cfg(feature = "keepalive-anchors")]
-    #[used] static G3C: unsafe extern "C" fn(f64, u32, u32, *const i8, usize, *const u8, *mut u64) -> u64 = js_object_own_method_cache_miss;
+    #[used] static G3C: unsafe extern "C" fn(f64, u32, u32, *const i8, usize, *const u8, *mut MethodPicCacheSlot) -> u64 = js_object_own_method_cache_miss;
     #[cfg(feature = "keepalive-anchors")]
     #[used] static G4: unsafe extern "C" fn(f64, u32, u32, u32) -> i32 = js_method_direct_shape_guard;
     #[cfg(feature = "keepalive-anchors")]

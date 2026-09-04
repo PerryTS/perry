@@ -72,15 +72,27 @@ pub(crate) fn lower_symbol_property_get_ic(
     ctx.ic_site_counter += 1;
     let cache_name = super::inline_cache_global_name(ctx, site_id);
     ctx.ic_globals.push(cache_name.clone());
-    let cache_ref = format!("@{cache_name}");
 
+    let probe_idx = ctx.new_block("symic.probe");
     let hit_idx = ctx.new_block("symic.hit");
     let miss_idx = ctx.new_block("symic.miss");
     let merge_idx = ctx.new_block("symic.merge");
+    let probe_label = ctx.block_label(probe_idx);
     let hit_label = ctx.block_label(hit_idx);
     let miss_label = ctx.block_label(miss_idx);
     let merge_label = ctx.block_label(merge_idx);
 
+    // #9708: the cache sits behind a pointer slot that the miss handler fills
+    // on the first prime. The probe's three loads go through the pointer, so
+    // an absent cache branches straight to the miss — the edge a fresh
+    // (all-zero) global took anyway, since a zero epoch never matches.
+    let ic_slot = super::emit_inline_cache_slot(ctx, &cache_name);
+    let cache_ref = ic_slot.cache.clone();
+    let cache_slot_ref = ic_slot.slot_ref.clone();
+    ctx.block()
+        .cond_br(&ic_slot.present, &probe_label, &miss_label);
+
+    ctx.current_block = probe_idx;
     let epoch = ctx
         .block()
         .load_atomic_acquire(I64, "@PERRY_SYMBOL_PROPERTY_IC_EPOCH", 8);
@@ -110,7 +122,7 @@ pub(crate) fn lower_symbol_property_get_ic(
     let miss_value = ctx.block().call(
         DOUBLE,
         "js_object_get_symbol_property_ic_miss",
-        &[(DOUBLE, obj_box), (DOUBLE, sym_box), (PTR, &cache_ref)],
+        &[(DOUBLE, obj_box), (DOUBLE, sym_box), (PTR, &cache_slot_ref)],
     );
     let miss_end = ctx.block().label.clone();
     ctx.block().br(&merge_label);

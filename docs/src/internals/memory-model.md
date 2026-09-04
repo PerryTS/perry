@@ -291,6 +291,17 @@ macOS keeps such pages counted in RSS and `phys_footprint` until memory
 pressure, so headline RSS numbers overstate what the process would actually
 hold onto under pressure.
 
+- **`__DATA` dirty is not the inline caches any more.** Every property-access
+  site used to own a 96-byte `[12 x i64]` cache global — 25 MB of `__bss` on
+  a Claude Code build, 18.7 MB of it dirty at idle because a page is dirtied
+  by the first cache touched on it (#9708). A site now owns an 8-byte pointer
+  **slot** (`@perry_ic_N = private global ptr null`); the cache words are
+  allocated from a runtime arena on the site's first *priming* miss and
+  published into the slot, so an unexecuted site costs its zero-filled slot
+  and nothing resident. The arena is one row of `PERRY_GC_CENSUS`'s
+  `side_tables` (`ic.lazy_caches`: resolved sites, arena bytes); a program
+  that reports `0` there executed no property site that could prime.
+
 ## Source map
 
 Paths, not line numbers: a line number is a claim nothing re-derives, and every

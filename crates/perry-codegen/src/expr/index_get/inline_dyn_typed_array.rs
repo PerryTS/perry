@@ -340,7 +340,17 @@ pub(super) fn lower_inline_dyn_typed_array_get(
     ctx.ic_site_counter += 1;
     let cache_name = super::super::inline_cache_global_name(ctx, site_id);
     ctx.ic_globals.push(cache_name.clone());
-    let cache_ref = format!("@{cache_name}");
+    // #9708: the cache sits behind a pointer slot the runtime fills on the
+    // first shape-carried prime. `arrlike.ic.shape` reads word 0 inside a
+    // flat predicate, so it reads through `key_cache`: the real cache when
+    // present, else the slot itself — 8 bytes of null, i.e. a zero identity,
+    // which fails `key_nonzero` exactly as the all-zero global did. Every
+    // later word is read only past that edge, through the real pointer.
+    let ic_slot = crate::expr::emit_inline_cache_slot(ctx, &cache_name);
+    let cache_ref = ic_slot.cache.clone();
+    let key_cache = ctx
+        .block()
+        .select(I1, &ic_slot.present, PTR, &cache_ref, &ic_slot.slot_ref);
 
     let object_header_idx = ctx.new_block("arrlike.ic.header");
     let object_brand_idx = ctx.new_block("arrlike.ic.brand");
@@ -613,7 +623,7 @@ pub(super) fn lower_inline_dyn_typed_array_get(
     let shape64 = ctx.block().zext(I32, &shape_id, I64);
     let class_high = ctx.block().shl(I64, &class64, "32");
     let live_key = ctx.block().or(I64, &class_high, &shape64);
-    let cached_key_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "0")]);
+    let cached_key_ptr = ctx.block().gep(I64, &key_cache, &[(I64, "0")]);
     let cached_key = ctx.block().load(I64, &cached_key_ptr);
     let key_nonzero = ctx.block().icmp_ne(I64, &cached_key, "0");
     let object_ok = ctx.block().and(I1, &is_object, &key_nonzero);
@@ -843,7 +853,7 @@ pub(super) fn lower_inline_dyn_typed_array_get(
     let slow_raw = ctx.block().call(
         DOUBLE,
         "js_packed_arraylike_index_get",
-        &[(DOUBLE, obj_box), (DOUBLE, idx_d), (PTR, &cache_ref)],
+        &[(DOUBLE, obj_box), (DOUBLE, idx_d), (PTR, &ic_slot.slot_ref)],
     );
     // In a number context, coerce the (possibly boxed) slow result here so the
     // merge phi is uniformly a Number and the arithmetic caller skips its own
