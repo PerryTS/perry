@@ -16,6 +16,9 @@ pub(super) struct OldPageDefragSelection {
     /// (selection skips pinned pages, so in practice the full granule).
     pub(super) selected_releasable_block_bytes: usize,
     pub(super) skipped_pinned_pages: usize,
+    /// Selection stopped at [`IDLE_COMPACT_MOVE_BUDGET_BYTES`] rather than
+    /// running out of candidates — the rest wait for the next idle compaction.
+    pub(super) budget_stopped: bool,
 }
 
 #[inline]
@@ -27,6 +30,16 @@ pub(super) fn old_page_defrag_eligible(meta: crate::arena::OldPageMeta) -> bool 
 pub(super) fn old_page_defrag_skipped_for_pin(meta: crate::arena::OldPageMeta) -> bool {
     meta.allocated_bytes > 0 && meta.live_bytes > 0 && meta.dead_bytes > 0 && meta.pinned_bytes > 0
 }
+
+/// Live bytes one idle compaction will move before it stops selecting pages.
+///
+/// The pass is linear in moved objects once the free-list pathology is gone
+/// (`gc/old_free.rs::old_free_filter_pages`): the #9644 fixture moved 9.4 MB
+/// in 235,241 objects in 132 ms, i.e. ~0.56 us per object. A budget keeps the
+/// pause bounded on a heap far larger than that fixture's — the candidate
+/// pages are sorted most-fragmented-first, so the bytes this leaves behind are
+/// the least profitable ones, and the next idle compaction takes them.
+pub(super) const IDLE_COMPACT_MOVE_BUDGET_BYTES: usize = 8 * 1024 * 1024;
 
 pub(super) fn select_old_page_defrag_pages_from_snapshot(
     snapshot: &[crate::arena::OldPageMeta],
@@ -57,7 +70,15 @@ pub(super) fn select_old_page_defrag_pages_from_snapshot(
             .then_with(|| a.page_base.cmp(&b.page_base))
     });
 
+    // The idle compaction pays for its pass with a mutator pause, so it takes
+    // the most profitable pages and stops. Every other caller selects the
+    // whole candidate set as before.
+    let move_budget = idle_compact_armed().then_some(IDLE_COMPACT_MOVE_BUDGET_BYTES);
     for meta in candidates {
+        if move_budget.is_some_and(|budget| selection.selected_live_bytes >= budget) {
+            selection.budget_stopped = true;
+            break;
+        }
         let page = crate::arena::generation_page_for_addr(meta.page_base);
         if selection.pages.insert(page) {
             selection.page_order.push(page);
@@ -199,7 +220,22 @@ pub(super) fn select_old_page_defrag_pages(force: bool) -> OldPageDefragSelectio
         return OldPageDefragSelection::default();
     }
     let snapshot = crate::arena::old_page_meta_snapshot();
-    select_old_page_defrag_pages_from_snapshot(&snapshot, force)
+    let selection = select_old_page_defrag_pages_from_snapshot(&snapshot, force);
+    if idle_compact_armed() && crate::gc::gc_diag_enabled() {
+        let dead: usize = snapshot.iter().map(|m| m.dead_bytes).sum();
+        let live: usize = snapshot.iter().map(|m| m.live_bytes).sum();
+        eprintln!(
+            "[gc-idle-compact] selection pages={} dead_bytes={dead} live_bytes={live} candidates={} selected={}              selected_live={} releasable={} skipped_pinned={} budget_stopped={}",
+            snapshot.len(),
+            selection.candidate_pages,
+            selection.selected_pages,
+            selection.selected_live_bytes,
+            selection.selected_releasable_block_bytes,
+            selection.skipped_pinned_pages,
+            selection.budget_stopped,
+        );
+    }
+    selection
 }
 
 #[cfg(test)]

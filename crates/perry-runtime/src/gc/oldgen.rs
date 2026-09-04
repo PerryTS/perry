@@ -87,6 +87,9 @@ pub(super) struct EvacuationPolicyDecision {
     pub(super) allowed: bool,
     pub(super) considered: bool,
     pub(super) force: bool,
+    /// This collection is the idle-time compaction (`gc/idle_compact.rs`),
+    /// which exempts it from the PAUSE-BUDGET gate below and nothing else.
+    pub(super) idle: bool,
     pub(super) enabled: bool,
     pub(super) reason: &'static str,
     pub(super) snapshot: EvacuationPolicySnapshot,
@@ -98,6 +101,7 @@ impl Default for EvacuationPolicyDecision {
             allowed: true,
             considered: false,
             force: false,
+            idle: false,
             enabled: false,
             reason: "not_evaluated",
             snapshot: EvacuationPolicySnapshot::default(),
@@ -150,6 +154,7 @@ pub(super) fn evacuation_policy_initial_decision(
     pre_evac_pause_us: u64,
     allowed: bool,
     force: bool,
+    idle: bool,
     disabled_reason: &'static str,
     old_to_young_tracking_complete: bool,
     old_page_selected_pages: usize,
@@ -167,7 +172,7 @@ pub(super) fn evacuation_policy_initial_decision(
             force,
             reason: disabled_reason,
             snapshot,
-            ..EvacuationPolicyDecision::default()
+            ..EvacuationPolicyDecision { idle, ..EvacuationPolicyDecision::default() }
         };
     }
     if !old_to_young_tracking_complete {
@@ -176,7 +181,7 @@ pub(super) fn evacuation_policy_initial_decision(
             force,
             reason: "barriers_inactive",
             snapshot,
-            ..EvacuationPolicyDecision::default()
+            ..EvacuationPolicyDecision { idle, ..EvacuationPolicyDecision::default() }
         };
     }
     if force {
@@ -186,7 +191,7 @@ pub(super) fn evacuation_policy_initial_decision(
             force,
             reason: "force_considered",
             snapshot,
-            ..EvacuationPolicyDecision::default()
+            ..EvacuationPolicyDecision { idle, ..EvacuationPolicyDecision::default() }
         };
     }
     if tenured_still_in_nursery_bytes >= MIN_TENURED_NURSERY_BYTES {
@@ -196,7 +201,7 @@ pub(super) fn evacuation_policy_initial_decision(
             force,
             reason: "nursery_pressure",
             snapshot,
-            ..EvacuationPolicyDecision::default()
+            ..EvacuationPolicyDecision { idle, ..EvacuationPolicyDecision::default() }
         };
     }
     if rss_bytes >= gc_rss_pressure_dyn_bytes() {
@@ -206,7 +211,7 @@ pub(super) fn evacuation_policy_initial_decision(
             force,
             reason: "rss_pressure",
             snapshot,
-            ..EvacuationPolicyDecision::default()
+            ..EvacuationPolicyDecision { idle, ..EvacuationPolicyDecision::default() }
         };
     }
     if old_page_selected_pages > 0 {
@@ -216,7 +221,7 @@ pub(super) fn evacuation_policy_initial_decision(
             force,
             reason: "old_page_fragmentation",
             snapshot,
-            ..EvacuationPolicyDecision::default()
+            ..EvacuationPolicyDecision { idle, ..EvacuationPolicyDecision::default() }
         };
     }
     EvacuationPolicyDecision {
@@ -224,7 +229,7 @@ pub(super) fn evacuation_policy_initial_decision(
         force,
         reason: "low_pressure",
         snapshot,
-        ..EvacuationPolicyDecision::default()
+        ..EvacuationPolicyDecision { idle, ..EvacuationPolicyDecision::default() }
     }
 }
 
@@ -399,14 +404,25 @@ pub(super) fn evacuation_policy_final_decision(
         decision.reason = "reclaimable_candidate_ratio_below_threshold";
         return decision;
     }
-    let pause_budget_exceeded = snapshot.previous_pause_us > MAX_PREVIOUS_PAUSE_US
-        || snapshot.pre_evac_pause_us > MAX_PREVIOUS_PAUSE_US;
+    // The pause-budget gate protects a WAITING mutator: a collection that
+    // already spent 20 ms must not also evacuate. The idle compaction has no
+    // waiting mutator by construction — the park hook refuses to start one
+    // with a wake pending — and the pause it is being judged on is the idle
+    // reducer's own full, which is long on purpose. Measured on the #9644
+    // fixture: `releasable_block_bytes=37642240` with the volume gate passed
+    // and `reason=pause_budget_exceeded` off a 149 ms previous pause, i.e.
+    // 37 MB refused because the collection before it did its job.
+    let pause_budget_exceeded = !decision.idle
+        && (snapshot.previous_pause_us > MAX_PREVIOUS_PAUSE_US
+            || snapshot.pre_evac_pause_us > MAX_PREVIOUS_PAUSE_US);
     if pause_budget_exceeded {
         decision.reason = "pause_budget_exceeded";
         return decision;
     }
     decision.enabled = true;
-    decision.reason = if !object_bytes_pass && block_bytes_pass {
+    decision.reason = if decision.idle {
+        "idle_compaction"
+    } else if !object_bytes_pass && block_bytes_pass {
         // Only the granule metric cleared the bar — the new W3 path.
         "releasable_block_bytes"
     } else if snapshot.rss_bytes >= gc_rss_pressure_dyn_bytes() {
@@ -1884,6 +1900,17 @@ pub(super) fn evacuate_selected_old_pages_collecting(
     // source blocks and evacuate the block all-or-nothing. Dead old objects
     // remain indexed until a full trace proves them dead, so conservatively
     // copying them here preserves the same minor-GC retention contract.
+    // Every hole on a page this pass is evacuating is unusable for the rest
+    // of it, and the block is released at the end. Drop them once, so the
+    // per-allocation exclusion scan in `old_free_take_exact` has nothing to
+    // walk: it is a linear scan of the size bucket, and with the fragmented
+    // pages excluded it used to fail over the whole bucket for every moved
+    // object. See `old_free_filter_pages` for the measurement.
+    let dropped_holes = crate::gc::old_free_filter_pages(excluded_pages);
+    if crate::gc::gc_diag_enabled() && dropped_holes > 0 {
+        eprintln!("[gc-old-page-defrag] dropped_excluded_holes_bytes={dropped_holes}");
+    }
+
     let mut source_headers = Vec::new();
     crate::arena::old_arena_walk_objects_on_pages(excluded_pages, |header_ptr| {
         source_headers.push(header_ptr as *mut GcHeader);

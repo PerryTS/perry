@@ -690,6 +690,9 @@ struct MinorCycleContext {
     malloc_sweep_due: bool,
     evacuation_policy_allowed: bool,
     force_evacuation: bool,
+    /// The idle-time compaction's own collection: exempt from the
+    /// pause-budget gate, since nothing is waiting on it.
+    idle_compaction: bool,
     evacuation_policy_disabled_reason: &'static str,
     old_page_selection: OldPageDefragSelection,
     old_page_source_blocks: crate::arena::OldArenaSourceBlockSelection,
@@ -910,6 +913,7 @@ impl GcCycleState {
                 malloc_sweep_due,
                 evacuation_policy_allowed,
                 force_evacuation,
+                idle_compaction: matches!(trigger_kind, GcTriggerKind::IdleCompact),
                 evacuation_policy_disabled_reason,
                 old_page_selection,
                 old_page_source_blocks,
@@ -1089,6 +1093,7 @@ impl GcCycleState {
                 active_elapsed_us,
                 minor.evacuation_policy_allowed,
                 minor.force_evacuation,
+                minor.idle_compaction,
                 minor.evacuation_policy_disabled_reason,
                 old_to_young_tracking_complete(),
                 minor.old_page_selection.selected_pages,

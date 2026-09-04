@@ -283,11 +283,20 @@ pub(super) fn maybe_compact(now: u64) -> bool {
     }
 
     let start = Instant::now();
-    let freed = super::gc_collect_compacting_minor(GcTriggerSnapshot::capture(
+    let outcome = super::gc_collect_compacting_minor(GcTriggerSnapshot::capture(
         GcTriggerKind::IdleCompact,
-    ))
-    .emit_after_current();
+    ));
+    let moved_objects = outcome
+        .trace
+        .as_ref()
+        .map(|trace| trace.evacuation.old_page_moved_objects);
+    let freed = outcome.emit_after_current();
     let pause_us = start.elapsed().as_micros() as u64;
+    if gc_diag_enabled() {
+        if let Some(moved) = moved_objects {
+            eprintln!("[gc-idle-compact] moved_objects={moved}");
+        }
+    }
 
     let after_occupancy = crate::arena::old_gen_in_use_bytes();
     let after_residue = residue_bytes();

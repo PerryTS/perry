@@ -182,6 +182,55 @@ pub(crate) fn old_free_filter_range(base: usize, size: usize) {
     OLD_FREE_BYTES.with(|c| c.set(c.get().saturating_sub(removed_bytes)));
 }
 
+/// Drop every hole that lies on one of `excluded_pages`, returning the bytes
+/// removed.
+///
+/// An evacuation pass may not reuse a hole on a page it is evacuating, and
+/// `old_free_take_exact` enforces that per allocation by scanning the size
+/// bucket for the first entry that is not excluded. When the excluded pages
+/// are exactly the fragmented ones — which is the whole point of a defrag
+/// pass — essentially every hole in the list is excluded, so that scan walks
+/// the entire bucket, fails, and falls through to the bump allocator, once
+/// per moved object. Measured on the #9644 fixture before this existed:
+/// 235,241 objects evacuated in 139 SECONDS, all of it inside the evacuation
+/// phase (`phase_us.evacuation = 139381527`).
+///
+/// The holes on those pages are unusable for the duration of the pass and the
+/// block is released at the end of it, so drop them once here — an O(free
+/// list) pass instead of O(moved objects x free list).
+pub(crate) fn old_free_filter_pages(excluded_pages: &crate::fast_hash::PtrHashSet<usize>) -> usize {
+    if !OLD_FREE_NONEMPTY.with(Cell::get) || excluded_pages.is_empty() {
+        return 0;
+    }
+    let mut removed_bytes = 0usize;
+    OLD_FREE_MAP.with(|m| {
+        let mut map = m.borrow_mut();
+        map.retain(|&slot_size, bucket| {
+            bucket.retain(|&ptr| {
+                let header = ptr - GC_HEADER_SIZE;
+                let first = crate::arena::generation_page_for_addr(header);
+                let last = crate::arena::generation_page_for_addr(header + slot_size - 1);
+                let excluded = (first..=last).any(|page| excluded_pages.contains(&page));
+                if excluded {
+                    removed_bytes = removed_bytes.saturating_add(slot_size);
+                }
+                !excluded
+            });
+            !bucket.is_empty()
+        });
+        if map.is_empty() {
+            OLD_FREE_NONEMPTY.with(|c| c.set(false));
+        }
+    });
+    OLD_FREE_BYTES.with(|c| c.set(c.get().saturating_sub(removed_bytes)));
+    removed_bytes
+}
+
+#[cfg(test)]
+pub(super) fn old_free_push_for_test(user_ptr: usize, total_size: usize) {
+    old_free_push(user_ptr, total_size);
+}
+
 #[cfg(test)]
 pub(super) fn old_free_reset_for_test() {
     OLD_FREE_MAP.with(|m| m.borrow_mut().clear());
