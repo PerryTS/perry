@@ -802,15 +802,28 @@ pub(super) unsafe fn dispatch_common(
                         } else {
                             payload
                         };
-                        let s = if n.fract() == 0.0
-                            && n.abs() < crate::builtins::INT_EXACT_FASTPATH_LIMIT
-                        {
-                            (n as i64).to_string()
-                        } else {
-                            n.to_string()
-                        };
-                        let str_ptr =
-                            crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+                        // #9713: `NumberToString`, not Rust's `{}`. A bare
+                        // `f64::to_string()` prints `inf` for Infinity and the
+                        // full decimal expansion past the exponential
+                        // thresholds (`1e21` → `1000000000000000000000`,
+                        // `Number.EPSILON` → `0.000…0002220446049250313`).
+                        // `js_number_to_string` carries the spec's
+                        // `|n| >= 1e21 || |n| < 1e-6` switch and its own
+                        // integer fast path, so the local one is redundant too.
+                        //
+                        // A boxed receiver takes a radix like an unboxed one
+                        // (`new Number(255).toString(16)` is "ff"); this arm
+                        // dropped the argument entirely and answered "255".
+                        // `js_jsvalue_to_string_radix` already accepts a boxed
+                        // Number receiver, so hand it the box, not the payload.
+                        let radix_arg = refreshed_args().first().copied();
+                        if let Some(r) = radix_arg {
+                            if !JSValue::from_bits(r.to_bits()).is_undefined() {
+                                let str_ptr = crate::value::js_jsvalue_to_string_radix(object, r);
+                                return Some(f64::from_bits(JSValue::string_ptr(str_ptr).bits()));
+                            }
+                        }
+                        let str_ptr = crate::string::js_number_to_string(n);
                         return Some(f64::from_bits(JSValue::string_ptr(str_ptr).bits()));
                     }
                     Some("Boolean") => {
@@ -861,12 +874,10 @@ pub(super) unsafe fn dispatch_common(
                         crate::value::js_jsvalue_to_string_radix(object, radix_arg.unwrap());
                     return Some(f64::from_bits(JSValue::string_ptr(str_ptr).bits()));
                 }
-                let s = if n.fract() == 0.0 && n.abs() < crate::builtins::INT_EXACT_FASTPATH_LIMIT {
-                    (n as i64).to_string()
-                } else {
-                    n.to_string()
-                };
-                let str_ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+                // #9713: same as the boxed-Number arm above — `NumberToString`,
+                // not Rust's `f64` Display. This is the arm a dynamic
+                // `x["toString"]()` on a plain number reaches.
+                let str_ptr = crate::string::js_number_to_string(n);
                 return Some(f64::from_bits(JSValue::string_ptr(str_ptr).bits()));
             } else if jsval.is_bool() {
                 let s = if jsval.as_bool() { "true" } else { "false" };
