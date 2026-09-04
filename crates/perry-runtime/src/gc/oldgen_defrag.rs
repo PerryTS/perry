@@ -100,7 +100,7 @@ pub(super) fn select_old_page_defrag_pages_from_snapshot(
     selection
 }
 
-thread_local! {
+crate::perry_thread_local! {
     /// Set for the duration of one `gc/idle_compact.rs` collection.
     static IDLE_COMPACT_ARMED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
@@ -128,7 +128,7 @@ impl Drop for IdleCompactDefragArm {
 // Test override for selection-policy tests. Thread-local so parallel tests do
 // not race with the production default or one another.
 #[cfg(test)]
-thread_local! {
+crate::perry_thread_local! {
     pub(crate) static OLD_DEFRAG_TEST_OVERRIDE: std::cell::Cell<Option<bool>> =
         const { std::cell::Cell::new(None) };
 }

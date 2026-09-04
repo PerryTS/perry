@@ -189,7 +189,7 @@ struct IdleReclaimState {
     work_in_window_ms: u64,
 }
 
-thread_local! {
+crate::perry_thread_local! {
     static STATE: RefCell<IdleReclaimState> = RefCell::new(IdleReclaimState::default());
     #[cfg(test)]
     static TEST_NOW_MS: Cell<Option<u64>> = const { Cell::new(None) };

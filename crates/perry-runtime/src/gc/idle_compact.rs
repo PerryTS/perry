@@ -110,7 +110,7 @@ struct IdleCompactState {
     backoff_shift: u32,
 }
 
-thread_local! {
+crate::perry_thread_local! {
     static STATE: RefCell<IdleCompactState> = RefCell::new(IdleCompactState::default());
     #[cfg(test)]
     static TEST_ENABLED: Cell<Option<bool>> = const { Cell::new(None) };

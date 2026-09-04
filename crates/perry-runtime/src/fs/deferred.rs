@@ -65,7 +65,7 @@ const MODE_WRITE_CALLBACK: f64 = 3.0;
 const MODE_UNLINK_PROMISE: f64 = 4.0;
 const MODE_UNLINK_CALLBACK: f64 = 5.0;
 
-thread_local! {
+crate::perry_thread_local! {
     /// Number of parked writes by decoded path. File-descriptor writes do not
     /// participate: an unlink has no fd form, so they can never alias it.
     static PENDING_PATH_WRITES: RefCell<HashMap<String, usize>> = RefCell::new(HashMap::new());

@@ -214,6 +214,12 @@
       "why": "#9707: dense side array of `TrustedTargets`, two `Option<TrustedDirectTarget>` per eligible arrow. TrustedDirectTarget{func_ptr:*const u8, capture_count:u32, boxed_capture_mask:u64} is a static code pointer plus plain integers \u2014 the same payload the deleted CLOSURE_ARROW_FUNCTION_REGISTRY / CLOSURE_VERSIONED_LOOP_REGISTRY held under this verdict. Nothing for the collector."
     },
     {
+      "file": "crates/perry-runtime/src/fs/deferred.rs",
+      "name": "PENDING_PATH_WRITES",
+      "verdict": "not_a_gc_pointer",
+      "why": "#9541: parked-write counts keyed by decoded path. `String` keys are Rust-owned heap, not GC heap, and the values are counts. No field can hold a managed pointer."
+    },
+    {
       "file": "crates/perry-runtime/src/fs/dir_glob_watch/watch_backend.rs",
       "name": "QUEUE",
       "verdict": "not_a_gc_pointer",
