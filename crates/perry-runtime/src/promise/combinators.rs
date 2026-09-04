@@ -613,12 +613,66 @@ pub extern "C" fn js_promise_new_with_executor(
 ) -> *mut Promise {
     use crate::closure::js_closure_call2;
 
-    let promise = js_promise_new();
+    // #9587: the executor is ARBITRARY USER JS and it runs while this function
+    // still owns the promise it is about to return. Claude Code's dialog helper
+    // is the shape that exposed it:
+    //
+    //     new Promise((res) => { let z = (y) => void res(y); root.render(ui(z)) })
+    //
+    // — a whole ink/React render (megabytes of allocation) inside the executor.
+    // The evacuating young collection that lands there MOVES the Promise. The
+    // resolving closures survive it correctly (their capture slots are GC
+    // slots, so the collector rewrites them), but pre-fix `promise`,
+    // `resolve_closure` and `reject_closure` lived in bare Rust locals across
+    // `js_closure_call2`, so this function handed the caller the
+    // PRE-COLLECTION address. From-space is reset and reused at the end of the
+    // same cycle, so the returned pointer names recycled memory, and `await`ing
+    // it goes one of two ways — both observed on cc 2.1.112:
+    //
+    //   * the recycled header decodes as `Fulfilled`, so the `await` never
+    //     suspends and resumes immediately with a garbage value (cc's setup
+    //     screen advanced past the onboarding dialog nobody had answered); or
+    //   * it still decodes as `Pending`, so the async step parks its
+    //     continuation on the dead copy. `resolve()` then settles the LIVE
+    //     promise — which has no reaction — and nothing ever resumes: a silent,
+    //     permanent hang with no throw and no rejection (cc's trust dialog
+    //     wedged 100% of the time on a fresh HOME).
+    //
+    // Root all three for the duration of the call and take every address back
+    // out of a handle afterwards.
+    // `executor` arrives as a bare pointer and is first USED after two
+    // allocating steps (`js_promise_new`, `make_resolving_functions`), so it
+    // needs the same treatment — `js_promise_subclass_init` already roots its
+    // own executor for exactly this reason. Classify it BEFORE the first
+    // allocation and root it only when it really is a closure: a non-callable
+    // executor (`new Promise(42)`) is not a heap pointer at all, and handing
+    // that to the root set would have the collector trace an address that was
+    // never an object.
+    let executor_is_closure = crate::closure::is_closure_ptr(executor as usize);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let ptr_of = |h: &crate::gc::RuntimeHandle<'_>| -> i64 {
+        crate::value::js_nanbox_get_pointer(h.get_nanbox_f64())
+    };
+    let executor_h = if executor_is_closure {
+        Some(scope.root_nanbox_f64(crate::value::js_nanbox_pointer(executor as i64)))
+    } else {
+        None
+    };
+    let rooted_executor = || -> *const crate::closure::ClosureHeader {
+        match &executor_h {
+            Some(h) => ptr_of(h) as *const crate::closure::ClosureHeader,
+            None => executor,
+        }
+    };
+    let promise_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(js_promise_new() as i64));
 
     // Create the resolve/reject pair sharing a [[AlreadyResolved]] guard, so
     // calling one disables the other (27.2.1.3 CreateResolvingFunctions). The
     // resolve fn also assimilates thenables/promises and rejects self-resolution.
-    let (resolve_closure, reject_closure) = make_resolving_functions(promise);
+    let (resolve_closure, reject_closure) =
+        make_resolving_functions(ptr_of(&promise_h) as *mut Promise);
+    let resolve_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(resolve_closure as i64));
+    let reject_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(reject_closure as i64));
 
     // Call the executor with (resolve_closure, reject_closure) as proper
     // NaN-boxed POINTER_TAG closure values — so user code that *reflects* on
@@ -627,28 +681,37 @@ pub extern "C" fn js_promise_new_with_executor(
     // object, not a bare number. The call path already accepts POINTER_TAG
     // closures (this mirrors `NewPromiseCapability`'s fast path, which has
     // always boxed them). test262 `resolve-function-*` / `reject-function-*`.
-    let resolve_f64: f64 = crate::value::js_nanbox_pointer(resolve_closure as i64);
-    let reject_f64: f64 = crate::value::js_nanbox_pointer(reject_closure as i64);
     // 27.2.3.1: a non-callable executor throws a TypeError SYNCHRONOUSLY at
     // step 2 (before/instead of being run) — that throw must propagate out of
     // `new Promise(...)`, not be converted into a rejection. Only a genuinely
     // callable executor's abrupt completion (step 10) is caught and rejected.
-    if crate::closure::is_closure_ptr(executor as usize) {
+    if executor_is_closure {
         // Callable executor: catch a throw from its body and reject the promise
         // with the thrown value via the resolving `reject` function (so the
         // shared [[AlreadyResolved]] guard makes a throw AFTER a resolve/reject a
         // no-op). test262 reject-via-abrupt / exception-after-resolve-in-executor.
-        if let Err(reason) =
-            combinator_catch_js(|| js_closure_call2(executor, resolve_f64, reject_f64))
-        {
-            crate::closure::js_closure_call1(reject_closure, reason);
+        if let Err(reason) = combinator_catch_js(|| {
+            js_closure_call2(
+                rooted_executor(),
+                resolve_h.get_nanbox_f64(),
+                reject_h.get_nanbox_f64(),
+            )
+        }) {
+            crate::closure::js_closure_call1(
+                ptr_of(&reject_h) as *mut crate::closure::ClosureHeader,
+                reason,
+            );
         }
     } else {
         // Non-callable: preserve the prior synchronous TypeError (uncaught).
-        js_closure_call2(executor, resolve_f64, reject_f64);
+        js_closure_call2(
+            rooted_executor(),
+            resolve_h.get_nanbox_f64(),
+            reject_h.get_nanbox_f64(),
+        );
     }
 
-    promise
+    ptr_of(&promise_h) as *mut Promise
 }
 
 /// A resolving function's shared `[[AlreadyResolved]]` record. Per ECMA-262
@@ -727,13 +790,18 @@ pub(super) fn make_resolving_functions(
     *mut crate::closure::ClosureHeader,
 ) {
     use crate::closure::{js_closure_alloc, js_closure_set_capture_ptr};
-    ensure_native_resolving_arity_registered();
     // #7497: four allocations follow, and `promise` / `guard` are STORED into
     // capture slots after them. Pre-fix all three lived in bare Rust locals, so
     // a copying minor here wrote pre-collection addresses into the two closures
     // — the from-space-publishing shape, not merely a stale read.
+    //
+    // #9587: `ensure_native_resolving_arity_registered` registers four closure
+    // arities and so can allocate on its first call per thread — root `promise`
+    // BEFORE it, not after, or the very first `new Promise(executor)` on a
+    // thread can publish a pre-collection address into the capture slots.
     let scope = crate::gc::RuntimeHandleScope::new();
     let promise_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(promise as i64));
+    ensure_native_resolving_arity_registered();
     let guard_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
         alloc_already_resolved_guard() as i64,
     ));
