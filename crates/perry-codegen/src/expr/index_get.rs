@@ -53,7 +53,8 @@ use foreign_counter::{
 mod inline_dyn_typed_array;
 
 use guarded_array::{
-    lower_guarded_array_index_get, lower_packed_f64_loop_index_get, packed_f64_loop_fact,
+    lower_guarded_array_index_get, lower_packed_f64_loop_index_get,
+    lower_region_validated_array_index_get, packed_f64_loop_fact,
 };
 use inline_dyn_typed_array::lower_inline_dyn_typed_array_get;
 
@@ -837,8 +838,9 @@ pub(crate) fn lower_numeric_index_get_for_number_context(
                 let repair_slot = receiver_repair_slot(ctx, object);
                 let arr_box = lower_expr(ctx, object)?;
                 let idx_i32 = ctx.block().load(I32, &i32_slot);
-                return lower_guarded_array_index_get(
+                return lower_region_validated_array_index_get(
                     ctx,
+                    *arr_id,
                     &arr_box,
                     &idx_i32,
                     "bidx.num",
@@ -969,6 +971,44 @@ pub(crate) fn lower_unknown_local_index_get_for_number_context(
 }
 
 fn lower_bounded_array_index_get(
+    ctx: &mut FnCtx<'_>,
+    arr_id: u32,
+    arr_box: &str,
+    idx_i32: &str,
+) -> Result<String> {
+    let Some(access) = ctx.receiver_descriptors.array_access(arr_id, false) else {
+        return lower_bounded_array_index_get_checked(ctx, arr_box, idx_i32);
+    };
+
+    let fast_idx = ctx.new_block("bidx.receiver_region.fast");
+    let fallback_idx = ctx.new_block("bidx.receiver_region.fallback");
+    let merge_idx = ctx.new_block("bidx.receiver_region.merge");
+    let fast_label = ctx.block_label(fast_idx);
+    let fallback_label = ctx.block_label(fallback_idx);
+    let merge_label = ctx.block_label(merge_idx);
+    ctx.block()
+        .cond_br(&access.valid_i1, &fast_label, &fallback_label);
+
+    ctx.current_block = fast_idx;
+    let array_handle = ctx.block().load(I64, &access.base_handle_slot);
+    let fast_value =
+        guarded_array::lower_trusted_plain_array_index_get(ctx, &array_handle, idx_i32);
+    let fast_end = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+
+    ctx.current_block = fallback_idx;
+    let fallback_value = lower_bounded_array_index_get_checked(ctx, arr_box, idx_i32)?;
+    let fallback_end = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+
+    ctx.current_block = merge_idx;
+    Ok(ctx.block().phi(
+        DOUBLE,
+        &[(&fast_value, &fast_end), (&fallback_value, &fallback_end)],
+    ))
+}
+
+fn lower_bounded_array_index_get_checked(
     ctx: &mut FnCtx<'_>,
     arr_box: &str,
     idx_i32: &str,
@@ -1646,8 +1686,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             let arr_box = lower_expr(ctx, object)?;
                             let idx_i32 = ctx.block().load(I32, &i32_slot);
                             if require_numeric_layout {
-                                return lower_guarded_array_index_get(
+                                return lower_region_validated_array_index_get(
                                     ctx,
+                                    *arr_id,
                                     &arr_box,
                                     &idx_i32,
                                     "bidx.num",
@@ -1656,7 +1697,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                     repair_slot.as_deref(),
                                 );
                             }
-                            return lower_bounded_array_index_get(ctx, &arr_box, &idx_i32);
+                            return lower_bounded_array_index_get(ctx, *arr_id, &arr_box, &idx_i32);
                         }
                     }
                 }

@@ -35,8 +35,11 @@
 //! the packed/versioned clone's receiver hoist through
 //! [`ReceiverDescriptorTable`]: the table owns the rooted box, pre-masked base
 //! handle and poll refresh recipe as one entry, and asks [`boundary_admits`]
-//! before carrying that address across a back-edge poll. Other fact tables are
-//! migrated one consumer at a time.
+//! before carrying that address across a back-edge poll. Phase 3 lets ordinary
+//! counted loops attach a conditional plain/numeric-array validation to the
+//! same entry, but only after this module proves the loop region contains no
+//! ender other than the poll covered by that refresh recipe. Other fact tables
+//! are migrated one consumer at a time.
 //!
 //! The precedent is `TypeFacts::purity` / `TypeFacts::shape_stability`
 //! (`collectors/hir_facts.rs`, #854): a subgraph the collector populates and
@@ -55,12 +58,10 @@
 //! what keeps this file honest: the model is checked against a shipping,
 //! audited predicate rather than against its own restatement.
 
-// #9254 phase 2: `ReceiverDescriptorTable` and the poll boundary algebra are
-// production consumers. Region formation remains lint-only until ordinary
-// counted loops migrate in phase 3, so the rest of this module is still dead
-// in a non-test build. Keep that incomplete state explicit rather than
-// scattering per-item allows; this attribute can go when region formation is
-// itself consumed.
+// #9254 phases 2/3: `ReceiverDescriptorTable`, the poll boundary algebra and
+// region formation are production consumers. Some inventory/lint helpers stay
+// test-only while the remaining fact tables await phase 4, so keep that
+// incomplete state explicit rather than scattering per-item allows.
 #![allow(dead_code)]
 
 use crate::loop_purity;
@@ -261,10 +262,39 @@ pub(crate) struct ReceiverPollRefresh {
     pub(crate) source_root: String,
 }
 
+/// Strength of the one-time array validation attached by an ordinary counted
+/// loop. Numeric validation includes every plain-array invariant and also
+/// proves raw-f64 element representation, so it may serve a plain read too.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReceiverArrayValidationKind {
+    Plain,
+    Numeric,
+}
+
+/// Descriptor data consumed at an ordinary bounded array read.
+///
+/// `valid_i1` is loop-invariant. When false the read takes its established
+/// guarded fallback and never consumes `base_handle_slot`; when true the
+/// region contract guarantees the cached handle remains usable until the next
+/// poll refresh.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ReceiverArrayAccess {
+    pub(crate) valid_i1: String,
+    pub(crate) base_handle_slot: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ActiveArrayValidation {
+    contract: ReceiverDescriptor,
+    kind: ReceiverArrayValidationKind,
+    valid_i1: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ActiveReceiverDescriptor {
     contract: ReceiverDescriptor,
     refresh: ReceiverPollRefresh,
+    array_validation: Option<ActiveArrayValidation>,
 }
 
 /// Active materialised receiver descriptors for one function lowering.
@@ -321,8 +351,69 @@ impl ReceiverDescriptorTable {
                 base_handle_slot,
                 source_root,
             },
+            array_validation: None,
         });
         true
+    }
+
+    /// Install phase 3's ordinary-counted-loop descriptor.
+    ///
+    /// The caller supplies the exact region enders after replacing only the
+    /// indexed read that will consume this validation with its trusted form.
+    /// Both the cached-address and representation contracts must admit every
+    /// ender before the entry becomes visible to lowering. A duplicate reuses
+    /// an outer descriptor; callers can query [`Self::array_access`] to learn
+    /// whether that outer entry is strong enough for their read.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn materialize_region_validated_array(
+        &mut self,
+        receiver: u32,
+        rooted_box_slot: String,
+        base_handle_slot: String,
+        source_root: String,
+        kind: ReceiverArrayValidationKind,
+        valid_i1: String,
+        enders: &[RegionEnder],
+    ) -> Result<bool, BoundaryViolation> {
+        if self.contains(receiver) {
+            return Ok(false);
+        }
+        let address_contract = ReceiverDescriptor {
+            table: "receiver_descriptors",
+            receiver,
+            claim: ReceiverClaim::Address,
+            boundary: FactBoundary::PollRefresh,
+            // The supplied ender list is the proof: an unwind edge below is
+            // rejected rather than excused by claiming it was excluded.
+            excludes_try: false,
+        };
+        for &ender in enders {
+            boundary_admits(&address_contract, ender)?;
+        }
+        let representation_contract = ReceiverDescriptor {
+            table: "receiver_descriptors[array_validation]",
+            receiver,
+            claim: ReceiverClaim::Representation,
+            boundary: FactBoundary::DynamicExtent,
+            excludes_try: false,
+        };
+        for &ender in enders {
+            boundary_admits(&representation_contract, ender)?;
+        }
+        self.entries.push(ActiveReceiverDescriptor {
+            contract: address_contract,
+            refresh: ReceiverPollRefresh {
+                rooted_box_slot,
+                base_handle_slot,
+                source_root,
+            },
+            array_validation: Some(ActiveArrayValidation {
+                contract: representation_contract,
+                kind,
+                valid_i1,
+            }),
+        });
+        Ok(true)
     }
 
     /// End the dynamic extent of one materialised receiver.
@@ -354,6 +445,28 @@ impl ReceiverDescriptorTable {
             .map(|entry| entry.refresh.base_handle_slot.as_str())
     }
 
+    /// Conditional validation and refreshed base handle for an ordinary array
+    /// read. A numeric consumer requires the stronger numeric validation; a
+    /// plain consumer may reuse either kind.
+    pub(crate) fn array_access(
+        &self,
+        receiver: u32,
+        require_numeric: bool,
+    ) -> Option<ReceiverArrayAccess> {
+        let entry = self
+            .entries
+            .iter()
+            .find(|entry| entry.contract.receiver == receiver)?;
+        let validation = entry.array_validation.as_ref()?;
+        if require_numeric && validation.kind != ReceiverArrayValidationKind::Numeric {
+            return None;
+        }
+        Some(ReceiverArrayAccess {
+            valid_i1: validation.valid_i1.clone(),
+            base_handle_slot: entry.refresh.base_handle_slot.clone(),
+        })
+    }
+
     /// Refresh recipes admitted at a back-edge poll.
     ///
     /// Every active entry is checked at the boundary before its recipe is
@@ -364,6 +477,9 @@ impl ReceiverDescriptorTable {
         let mut refreshes = Vec::with_capacity(self.entries.len());
         for entry in &self.entries {
             boundary_admits(&entry.contract, RegionEnder::BackEdgePoll)?;
+            if let Some(validation) = &entry.array_validation {
+                boundary_admits(&validation.contract, RegionEnder::BackEdgePoll)?;
+            }
             refreshes.push(entry.refresh.clone());
         }
         Ok(refreshes)
@@ -390,6 +506,21 @@ pub(crate) fn violations_for(
 /// Returns the *first* reason found; an expression can qualify several ways
 /// and the caller only needs to know the region ends.
 pub(crate) fn expr_region_ender(e: &Expr, is_inert: &dyn Fn(&Expr) -> bool) -> Option<RegionEnder> {
+    expr_region_ender_with_trusted_operation(e, is_inert, &|_| false)
+}
+
+fn expr_region_ender_with_trusted_operation(
+    e: &Expr,
+    is_inert: &dyn Fn(&Expr) -> bool,
+    is_trusted_operation: &dyn Fn(&Expr) -> bool,
+) -> Option<RegionEnder> {
+    // A production consumer may replace one exact operation with a form whose
+    // guard establishes that it cannot dispatch or allocate. Children still
+    // run through the ordinary walker before this classification, so trusting
+    // `arr[i]` never accidentally trusts an effectful `i`.
+    if is_trusted_operation(e) {
+        return None;
+    }
     match e {
         // ---- Provably not a relocation point -------------------------------
         // Constants, reads of a local/global, and references. No dispatch.
@@ -522,36 +653,60 @@ pub(crate) fn region_enders_in_stmts(
     controls: &[&Expr],
     is_inert: &dyn Fn(&Expr) -> bool,
 ) -> Vec<RegionEnder> {
+    region_enders_in_stmts_with_trusted_operations(stmts, controls, is_inert, &|_| false)
+}
+
+/// Region walk used by a guarded consumer that replaces a precisely matched
+/// operation with a non-dispatching form. Only the operation node is trusted;
+/// its children retain normal ender classification and execution order.
+pub(crate) fn region_enders_in_stmts_with_trusted_operations(
+    stmts: &[Stmt],
+    controls: &[&Expr],
+    is_inert: &dyn Fn(&Expr) -> bool,
+    is_trusted_operation: &dyn Fn(&Expr) -> bool,
+) -> Vec<RegionEnder> {
     let mut out = Vec::new();
     for s in stmts {
-        enders_in_stmt(s, is_inert, &mut out);
+        enders_in_stmt(s, is_inert, is_trusted_operation, &mut out);
     }
     for c in controls {
-        enders_in_expr(c, is_inert, &mut out);
+        enders_in_expr(c, is_inert, is_trusted_operation, &mut out);
     }
     out
 }
 
-fn enders_in_expr(e: &Expr, is_inert: &dyn Fn(&Expr) -> bool, out: &mut Vec<RegionEnder>) {
+fn enders_in_expr(
+    e: &Expr,
+    is_inert: &dyn Fn(&Expr) -> bool,
+    is_trusted_operation: &dyn Fn(&Expr) -> bool,
+    out: &mut Vec<RegionEnder>,
+) {
     // Child expressions execute before the operation represented by their
     // parent (`f(makeClosure())` allocates the closure before it calls `f`).
     // Region boundaries are ordered data once a lowering path consumes them,
     // so a pre-order walk would put the call before the allocation.
-    perry_hir::walker::walk_expr_children(e, &mut |child| enders_in_expr(child, is_inert, out));
-    if let Some(r) = expr_region_ender(e, is_inert) {
+    perry_hir::walker::walk_expr_children(e, &mut |child| {
+        enders_in_expr(child, is_inert, is_trusted_operation, out)
+    });
+    if let Some(r) = expr_region_ender_with_trusted_operation(e, is_inert, is_trusted_operation) {
         out.push(r);
     }
 }
 
-fn enders_in_stmt(s: &Stmt, is_inert: &dyn Fn(&Expr) -> bool, out: &mut Vec<RegionEnder>) {
+fn enders_in_stmt(
+    s: &Stmt,
+    is_inert: &dyn Fn(&Expr) -> bool,
+    is_trusted_operation: &dyn Fn(&Expr) -> bool,
+    out: &mut Vec<RegionEnder>,
+) {
     match s {
         // A throw is an unwind edge *and* the helper allocates the Error.
         Stmt::Throw(e) => {
-            enders_in_expr(e, is_inert, out);
+            enders_in_expr(e, is_inert, is_trusted_operation, out);
             out.push(RegionEnder::UnwindEdge);
         }
         Stmt::Let { init: Some(e), .. } | Stmt::Expr(e) | Stmt::Return(Some(e)) => {
-            enders_in_expr(e, is_inert, out)
+            enders_in_expr(e, is_inert, is_trusted_operation, out)
         }
         Stmt::Let { init: None, .. } | Stmt::Return(None) => {}
         Stmt::If {
@@ -559,13 +714,13 @@ fn enders_in_stmt(s: &Stmt, is_inert: &dyn Fn(&Expr) -> bool, out: &mut Vec<Regi
             then_branch,
             else_branch,
         } => {
-            enders_in_expr(condition, is_inert, out);
+            enders_in_expr(condition, is_inert, is_trusted_operation, out);
             for st in then_branch {
-                enders_in_stmt(st, is_inert, out);
+                enders_in_stmt(st, is_inert, is_trusted_operation, out);
             }
             if let Some(else_branch) = else_branch {
                 for st in else_branch {
-                    enders_in_stmt(st, is_inert, out);
+                    enders_in_stmt(st, is_inert, is_trusted_operation, out);
                 }
             }
         }
@@ -573,17 +728,17 @@ fn enders_in_stmt(s: &Stmt, is_inert: &dyn Fn(&Expr) -> bool, out: &mut Vec<Regi
         // *enclosing* region too — this is why the armed-poll refresh reloads
         // every active receiver cache, not just the innermost scope's.
         Stmt::While { condition, body } => {
-            enders_in_expr(condition, is_inert, out);
+            enders_in_expr(condition, is_inert, is_trusted_operation, out);
             for st in body {
-                enders_in_stmt(st, is_inert, out);
+                enders_in_stmt(st, is_inert, is_trusted_operation, out);
             }
             out.push(RegionEnder::BackEdgePoll);
         }
         Stmt::DoWhile { body, condition } => {
             for st in body {
-                enders_in_stmt(st, is_inert, out);
+                enders_in_stmt(st, is_inert, is_trusted_operation, out);
             }
-            enders_in_expr(condition, is_inert, out);
+            enders_in_expr(condition, is_inert, is_trusted_operation, out);
             out.push(RegionEnder::BackEdgePoll);
         }
         Stmt::For {
@@ -593,20 +748,20 @@ fn enders_in_stmt(s: &Stmt, is_inert: &dyn Fn(&Expr) -> bool, out: &mut Vec<Regi
             body,
         } => {
             if let Some(init) = init {
-                enders_in_stmt(init, is_inert, out);
+                enders_in_stmt(init, is_inert, is_trusted_operation, out);
             }
             if let Some(condition) = condition {
-                enders_in_expr(condition, is_inert, out);
+                enders_in_expr(condition, is_inert, is_trusted_operation, out);
             }
             for st in body {
-                enders_in_stmt(st, is_inert, out);
+                enders_in_stmt(st, is_inert, is_trusted_operation, out);
             }
             if let Some(update) = update {
-                enders_in_expr(update, is_inert, out);
+                enders_in_expr(update, is_inert, is_trusted_operation, out);
             }
             out.push(RegionEnder::BackEdgePoll);
         }
-        Stmt::Labeled { body, .. } => enders_in_stmt(body, is_inert, out),
+        Stmt::Labeled { body, .. } => enders_in_stmt(body, is_inert, is_trusted_operation, out),
         // Every statement in a `try` body may divert to the handler.
         Stmt::Try {
             body,
@@ -614,17 +769,17 @@ fn enders_in_stmt(s: &Stmt, is_inert: &dyn Fn(&Expr) -> bool, out: &mut Vec<Regi
             finally,
         } => {
             for st in body {
-                enders_in_stmt(st, is_inert, out);
+                enders_in_stmt(st, is_inert, is_trusted_operation, out);
             }
             out.push(RegionEnder::UnwindEdge);
             if let Some(catch) = catch {
                 for st in &catch.body {
-                    enders_in_stmt(st, is_inert, out);
+                    enders_in_stmt(st, is_inert, is_trusted_operation, out);
                 }
             }
             if let Some(finally) = finally {
                 for st in finally {
-                    enders_in_stmt(st, is_inert, out);
+                    enders_in_stmt(st, is_inert, is_trusted_operation, out);
                 }
             }
         }
@@ -632,13 +787,13 @@ fn enders_in_stmt(s: &Stmt, is_inert: &dyn Fn(&Expr) -> bool, out: &mut Vec<Regi
             discriminant,
             cases,
         } => {
-            enders_in_expr(discriminant, is_inert, out);
+            enders_in_expr(discriminant, is_inert, is_trusted_operation, out);
             for c in cases {
                 if let Some(t) = &c.test {
-                    enders_in_expr(t, is_inert, out);
+                    enders_in_expr(t, is_inert, is_trusted_operation, out);
                 }
                 for st in &c.body {
-                    enders_in_stmt(st, is_inert, out);
+                    enders_in_stmt(st, is_inert, is_trusted_operation, out);
                 }
             }
         }

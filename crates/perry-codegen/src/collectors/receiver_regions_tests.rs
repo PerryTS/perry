@@ -263,6 +263,94 @@ fn active_descriptor_table_owns_lookup_refresh_and_dynamic_extent() {
     assert!(!table.dematerialize(OBJ));
 }
 
+#[test]
+fn ordinary_loop_descriptor_carries_conditional_array_validation() {
+    let mut table = ReceiverDescriptorTable::default();
+    assert!(table
+        .materialize_region_validated_array(
+            OBJ,
+            "%region.box".into(),
+            "%region.handle".into(),
+            "%region.source".into(),
+            ReceiverArrayValidationKind::Numeric,
+            "%region.valid".into(),
+            &[RegionEnder::BackEdgePoll],
+        )
+        .expect("the poll is covered by the refresh recipe"));
+
+    let expected = ReceiverArrayAccess {
+        valid_i1: "%region.valid".into(),
+        base_handle_slot: "%region.handle".into(),
+    };
+    assert_eq!(table.array_access(OBJ, false), Some(expected.clone()));
+    assert_eq!(table.array_access(OBJ, true), Some(expected));
+    assert_eq!(
+        table.poll_refreshes().unwrap(),
+        vec![ReceiverPollRefresh {
+            rooted_box_slot: "%region.box".into(),
+            base_handle_slot: "%region.handle".into(),
+            source_root: "%region.source".into(),
+        }]
+    );
+}
+
+#[test]
+fn plain_validation_cannot_serve_a_numeric_read() {
+    let mut table = ReceiverDescriptorTable::default();
+    table
+        .materialize_region_validated_array(
+            OBJ,
+            "%box".into(),
+            "%handle".into(),
+            "%source".into(),
+            ReceiverArrayValidationKind::Plain,
+            "%valid".into(),
+            &[],
+        )
+        .unwrap();
+    assert!(table.array_access(OBJ, false).is_some());
+    assert_eq!(table.array_access(OBJ, true), None);
+}
+
+#[test]
+fn ordinary_loop_descriptor_is_not_installed_across_a_call() {
+    let mut table = ReceiverDescriptorTable::default();
+    let violation = table
+        .materialize_region_validated_array(
+            OBJ,
+            "%box".into(),
+            "%handle".into(),
+            "%source".into(),
+            ReceiverArrayValidationKind::Numeric,
+            "%valid".into(),
+            &[RegionEnder::CollectingCall],
+        )
+        .expect_err("a call can move and mutate the receiver");
+    assert_eq!(violation.ender, RegionEnder::CollectingCall);
+    assert!(!table.contains(OBJ));
+}
+
+#[test]
+fn trusting_an_operation_does_not_trust_its_effectful_children() {
+    let read = Expr::IndexGet {
+        object: Box::new(num(OBJ)),
+        index: Box::new(call(vec![])),
+    };
+    let ordinary = region_enders_in_stmts(&[Stmt::Expr(read.clone())], &[], &stub_inert);
+    assert_eq!(
+        ordinary,
+        vec![RegionEnder::CollectingCall, RegionEnder::CollectingCall]
+    );
+
+    let trusted = region_enders_in_stmts_with_trusted_operations(
+        &[Stmt::Expr(read)],
+        &[],
+        &stub_inert,
+        &|expr| matches!(expr, Expr::IndexGet { .. }),
+    );
+    assert_eq!(trusted, vec![RegionEnder::CollectingCall]);
+}
+
 /// A cached address dies at a call no matter how the table scopes itself —
 /// scoping is not a substitute for the region being call-free.
 #[test]
