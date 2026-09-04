@@ -868,6 +868,35 @@ pub fn lower_module_full(
     is_entry_module: bool,
     is_external_module: bool,
 ) -> Result<(Module, ClassId)> {
+    lower_module_full_with_platform_globals(
+        ast_module,
+        name,
+        source_file_path,
+        start_class_id,
+        resolved_types,
+        imported_class_fields,
+        imported_class_accessors,
+        is_entry_module,
+        is_external_module,
+        &[],
+    )
+}
+
+/// Lower with names supplied on globalThis by the selected platform (#9745).
+/// These names suppress unknown-identifier warnings while retaining ordinary
+/// lexical shadowing and the same runtime lookup as an undeclared global.
+pub fn lower_module_full_with_platform_globals(
+    ast_module: &ast::Module,
+    name: &str,
+    source_file_path: &str,
+    start_class_id: ClassId,
+    resolved_types: Option<std::collections::HashMap<u32, Type>>,
+    imported_class_fields: Option<&std::collections::HashMap<String, Vec<(String, Type)>>>,
+    imported_class_accessors: Option<&std::collections::HashMap<String, crate::ClassAccessorNames>>,
+    is_entry_module: bool,
+    is_external_module: bool,
+    platform_globals: &[&str],
+) -> Result<(Module, ClassId)> {
     // #6812: fold straight-line builder sequences (`const o = {…}; o.k = v;`)
     // into the literal they spell out, so they lower through the anon-shape
     // literal machinery (shape-cached keys, typed slots, direct stores)
@@ -880,6 +909,8 @@ pub fn lower_module_full(
     // same `__perry_cap_*` symbols.
     let mut ctx =
         LoweringContext::with_class_id_start_salted(source_file_path, name, start_class_id);
+    ctx.platform_globals
+        .extend(platform_globals.iter().map(|name| (*name).to_string()));
     // Static imports are hoisted. Register `perry/native` type and value
     // aliases before any pre-pass extracts annotations or lowers expressions,
     // including when the declaration appears after its first source use.

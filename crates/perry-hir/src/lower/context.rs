@@ -223,6 +223,7 @@ impl LoweringContext {
             object_static_method_aliases: HashMap::new(),
             array_static_method_aliases: HashMap::new(),
             is_entry_module: false,
+            platform_globals: HashSet::new(),
             saw_global_this_expr: false,
             reassigned_top_level_identifiers: HashSet::new(),
             module_strict: false,

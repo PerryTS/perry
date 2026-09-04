@@ -972,6 +972,10 @@ pub struct LoweringContext {
     /// module reports `true` and every imported module reports `false`. Set
     /// by `lower_module_with_class_id_types_seed_and_entry`; default false.
     pub(crate) is_entry_module: bool,
+    /// Names installed on globalThis by the selected platform before module
+    /// initialization. They still use the by-name runtime lookup; this set
+    /// only prevents unknown-identifier diagnostics after lexical resolution.
+    pub(crate) platform_globals: HashSet<String>,
     /// #5833: true once lowering has produced at least one `Expr::GlobalThisExpr`
     /// from a top-level `this` (global-script mode, `PERRY_GLOBAL_SCRIPT_THIS`).
     /// `Module::references_global_this` gates codegen's reflection of
