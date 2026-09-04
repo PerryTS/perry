@@ -826,7 +826,28 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
             if cid == 0 {
                 return undef;
             }
-            let new_target = crate::object::class_constructor_ref_value(cid);
+            // A per-evaluation class object is its own newTarget. Collapsing it
+            // to the shared template ClassRef loses that evaluation's
+            // prototype and private brand when the builtin allocates a
+            // replacement receiver (#9503). Static/inlined construction does
+            // not always publish the runtime cell, so retain the ClassRef
+            // fallback when no matching dynamic newTarget is active.
+            let active_new_target = crate::object::js_new_target_get();
+            let active_matches = crate::object::class_ref_id(active_new_target) == Some(cid)
+                || if super::super::class_registry::is_class_object_value(active_new_target) {
+                    let class_object =
+                        crate::value::JSValue::from_bits(active_new_target.to_bits())
+                            .as_pointer::<crate::object::ObjectHeader>();
+                    !class_object.is_null()
+                        && crate::object::js_object_get_class_id(class_object) == cid
+                } else {
+                    false
+                };
+            let new_target = if active_matches {
+                active_new_target
+            } else {
+                crate::object::class_constructor_ref_value(cid)
+            };
             return crate::object::js_new_function_construct_with_new_target(
                 parent_val, args_ptr, args_len, new_target,
             );
@@ -923,7 +944,7 @@ pub unsafe extern "C" fn js_fetch_or_value_super(
                             // `tag`. Use the class-object replay path so this
                             // exact parent's `__perry_ctor_caps` supplies its
                             // synthesized capture params.
-                            super::super::class_constructors::replay_class_object_constructor(
+                            return super::super::class_constructors::replay_class_object_constructor(
                                 parent_val, parent_cid, obj, args_ptr, args_len,
                             );
                         }

@@ -964,15 +964,44 @@ pub unsafe extern "C-unwind" fn js_new_function_construct(
             // capture params from the snapshotted `__perry_ctor_caps`. The
             // mechanism lives in `class_constructors` to keep this file under
             // the 2,000-line CI gate.
-            inst_handle.with_mut_ptr::<ObjectHeader, _>(|inst| {
+            // Publish this exact class evaluation as newTarget while replaying
+            // the standalone constructor. Dynamic builtin `super()` uses it
+            // to give a replacement receiver the evaluation-specific
+            // prototype and private brand (#9503).
+            let prev_new_target = crate::object::js_new_target_get();
+            let prev_new_target_handle = scope.root_nanbox_f64(prev_new_target);
+            let active_new_target = class_handle.get_nanbox_f64();
+            crate::object::js_new_target_set(active_new_target);
+            let prev_current_new_target =
+                CURRENT_NEW_TARGET.with(|value| value.replace(active_new_target.to_bits()));
+            let prev_current_new_target_handle = scope.root_nanbox_u64(prev_current_new_target);
+            let ctor_result = inst_handle.with_mut_ptr::<ObjectHeader, _>(|inst| {
                 super::super::class_constructors::replay_class_object_constructor(
                     class_handle.get_nanbox_f64(),
                     class_cid,
                     inst,
                     args_ptr,
                     args_len,
-                );
+                )
             });
+            CURRENT_NEW_TARGET
+                .with(|value| value.set(prev_current_new_target_handle.get_nanbox_u64()));
+            crate::object::js_new_target_set(prev_new_target_handle.get_nanbox_f64());
+            // The standalone constructor publishes its final `this` when a
+            // dynamic super-constructor can replace the provisional receiver.
+            // A class-object replay used to discard that result and return the
+            // allocation above, so writes after `super()` landed on an object
+            // that `new` never exposed (#9503). Return an actual replacement
+            // immediately; when the constructor retained the allocation, keep
+            // the native-backing completion paths below unchanged.
+            let current_inst = crate::value::js_nanbox_pointer(
+                inst_handle.get_raw_mut_ptr::<ObjectHeader>() as i64,
+            );
+            if constructor_return_overrides_this(ctor_result)
+                && ctor_result.to_bits() != current_inst.to_bits()
+            {
+                return ctor_result;
+            }
             // `class X extends Request/Response {}` constructed via the dynamic
             // (class-expression value) path: the replayed ctor's `super()`
             // can't statically route an aliased parent, so attach the native
@@ -1499,12 +1528,22 @@ unsafe fn construct_registered_class_ref(
     let prev_current_new_target =
         CURRENT_NEW_TARGET.with(|value| value.replace(new_target.to_bits()));
     let prev_current_new_target_handle = scope.root_nanbox_u64(prev_current_new_target);
-    super::super::class_constructors::replay_registered_class_constructor(
+    let ctor_result = super::super::class_constructors::replay_registered_class_constructor(
         target_cid, inst, args_ptr, args_len,
     );
     let inst: *mut ObjectHeader = inst_handle.get_raw_mut_ptr();
     CURRENT_NEW_TARGET.with(|value| value.set(prev_current_new_target_handle.get_nanbox_u64()));
     crate::object::js_new_target_set(prev_new_target_handle.get_nanbox_f64());
+    // A replayed standalone constructor can bind a replacement `this` from
+    // its dynamic super-constructor. Preserve that result across the runtime
+    // ClassRef construction boundary instead of publishing the provisional
+    // allocation whose fields the constructor stopped updating (#9503).
+    let current_inst = crate::value::js_nanbox_pointer(inst as i64);
+    if constructor_return_overrides_this(ctor_result)
+        && ctor_result.to_bits() != current_inst.to_bits()
+    {
+        return ctor_result;
+    }
     // ClassRef `new` of a Request/Response subclass — attach the native fetch
     // handle on the dynamic path (mirrors the class-expression arm above).
     if let Some(kind) = fetch_parent_kind_in_chain(target_cid) {
@@ -1635,6 +1674,9 @@ pub unsafe extern "C" fn js_new_function_construct_with_new_target(
             } else {
                 crate::error::js_throw_bigint_constructor_type_error()
             };
+        }
+        if ta_name == "Object" {
+            return construct_object_with_new_target(nt);
         }
         // `Reflect.construct(Date, args, newTarget)` (#5989) — Next.js 16's
         // cacheComponents Date extension constructs through exactly this
