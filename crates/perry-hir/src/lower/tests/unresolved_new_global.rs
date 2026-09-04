@@ -1,8 +1,6 @@
 //! #8882/#8730: an unresolved `new` names the identifier and defers to a
 //! runtime global lookup. Split from `tests.rs` for the 2000-line cap.
 
-use super::*;
-
 /// #8882 / #8730: a constructor name that resolves to nothing in the module
 /// is read off `globalThis` when the `new` executes — exactly like a bare
 /// identifier read — so a runtime-created global constructs and a true miss
