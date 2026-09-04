@@ -497,3 +497,7 @@ pub fn transform_plain_async_closure_body(
     );
     synth.body
 }
+
+#[cfg(test)]
+#[path = "dispatch_growth_tests.rs"]
+mod dispatch_growth_tests;
