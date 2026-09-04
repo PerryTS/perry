@@ -256,6 +256,16 @@ jobs:
           print("ci-tiers.md tier table matches ci_plan.py")
           PY
 
+      # #8855: keep the failure-bypassing guards above the sweep/full tier.
+      # This is build-free and belongs in the required PR tier; otherwise a
+      # broken compiler-output job would only diagnose its own wiring after it
+      # had already landed on main.
+      - name: Compiler-output gate liveness
+        if: ${{ !cancelled() }}
+        run: |
+          python3 scripts/compiler_output_step_liveness.py --self-test
+          python3 scripts/compiler_output_step_liveness.py
+
       - name: Audit workspace architecture
         if: ${{ !cancelled() }}
         run: |
@@ -1998,15 +2008,24 @@ jobs:
           sudo apt-get install -y clang
 
       - name: Build compiler
+        id: compiler_output_build
         run: cargo build -p perry
 
+      # #8855: these are independent subjects. A red subject must fail the job,
+      # but it must not hide every subject below it. `!cancelled()` bypasses the
+      # implicit success() guard without swallowing failures. Unit tests remain
+      # useful after a build failure; the build outcome keeps only the checks
+      # that consume the compiler from running when their prerequisite failed.
       - name: Run harness unit tests
+        if: ${{ !cancelled() }}
         run: python3 -m unittest tests.test_compiler_output_regression
 
       - name: Run native ABI evidence report unit tests
+        if: ${{ !cancelled() }}
         run: python3 -m unittest tests.test_native_abi_evidence_report
 
       - name: Gate native-region proof compiler output
+        if: ${{ !cancelled() && steps.compiler_output_build.outcome == 'success' }}
         run: |
           python3 scripts/compiler_output_regression.py suite \
             --suite native-region-proof \
@@ -2018,6 +2037,7 @@ jobs:
             --print-summary
 
       - name: Gate native-ABI proof compiler output
+        if: ${{ !cancelled() && steps.compiler_output_build.outcome == 'success' }}
         run: |
           python3 scripts/compiler_output_regression.py suite \
             --suite native-abi-proof \
@@ -2029,11 +2049,13 @@ jobs:
             --print-summary
 
       - name: Gate typed feedback runtime evidence
+        if: ${{ !cancelled() && steps.compiler_output_build.outcome == 'success' }}
         env:
           PERRY_BIN: ${{ github.workspace }}/target/debug/perry
         run: python3 -m unittest tests.test_typed_feedback_runtime_evidence
 
       - name: Gate positive vectorization compiler output
+        if: ${{ !cancelled() && steps.compiler_output_build.outcome == 'success' }}
         run: |
           python3 scripts/compiler_output_regression.py capture \
             --perry target/debug/perry \
@@ -2045,6 +2067,7 @@ jobs:
             --print-summary
 
       - name: Gate HIR fact rewrite compiler output
+        if: ${{ !cancelled() && steps.compiler_output_build.outcome == 'success' }}
         run: |
           python3 scripts/compiler_output_regression.py capture \
             --perry target/debug/perry \
@@ -2055,7 +2078,8 @@ jobs:
             --gate \
             --print-summary
 
-      - name: Gate FP contraction modes
+      - name: Gate FP contraction compiler output
+        if: ${{ !cancelled() && steps.compiler_output_build.outcome == 'success' }}
         run: |
           python3 scripts/compiler_output_regression.py capture \
             --perry target/debug/perry \
@@ -2068,6 +2092,10 @@ jobs:
             --clang-arg=-march=haswell \
             --expect-fma=on \
             --out-dir target/compiler-output-regression/fma_contract-fp-contract-on
+
+      - name: Gate fast-math no-contraction compiler output
+        if: ${{ !cancelled() && steps.compiler_output_build.outcome == 'success' }}
+        run: |
           python3 scripts/compiler_output_regression.py capture \
             --perry target/debug/perry \
             --workload fma_contract \
