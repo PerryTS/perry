@@ -14,21 +14,17 @@
 //!       // key = { name, ctrl, shift, meta, sequence }
 //!   });
 //!
-//! Architecture: a single background thread reads stdin one byte at a
-//! time. When raw mode is OFF (default), bytes accumulate into a line
-//! buffer and the line is queued on `\n`. When raw mode is ON, byte
-//! chunks are queued immediately for `'data'`/`'keypress'` dispatch.
-//! Mode flips are observed at the start of each byte read, so toggling
-//! mid-stream is supported (the next byte routes to the new mode's
-//! queue). The main event-loop pump drains both queues every tick via
-//! `js_readline_process_pending`.
+//! Architecture: perry-runtime owns the single background fd-0 reader and
+//! forwards each block here. When raw mode is OFF (default), bytes accumulate
+//! into lines or cooked `'data'` chunks. When raw mode is ON, byte chunks are
+//! queued immediately for `'data'`/`'keypress'` dispatch. The main event-loop
+//! pump classifies each ordered block after synchronous listener changes have
+//! settled, then drains both queues via `js_readline_process_pending`.
 //!
 //! Phase 3 (`tty.isatty`, `process.stdout.columns/rows`, SIGWINCH) is
 //! independent of this file.
 
 use std::cell::RefCell;
-#[cfg(not(test))]
-use std::io::Read;
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
@@ -116,6 +112,14 @@ impl ReadlineInterfaceState {
 
 /// Lines waiting for the main thread to dispatch.
 static PENDING_LINES: Mutex<Vec<String>> = Mutex::new(Vec::new());
+/// Ordered blocks received from perry-runtime's sole fd-0 reader. The reader
+/// thread deliberately does not classify them: synchronous JS can remove and
+/// replace listeners before the next event-loop turn, and Node applies the
+/// settled stream mode when it delivers that turn's bytes.
+static PENDING_INPUT: Mutex<Vec<Vec<u8>>> = Mutex::new(Vec::new());
+/// Partial cooked-mode line carried between reads from the runtime-owned fd-0
+/// reader. Classification and line splitting happen on the main thread.
+static PENDING_LINE_BYTES: Mutex<Vec<u8>> = Mutex::new(Vec::new());
 /// Raw byte chunks waiting for the main thread to dispatch as 'data' /
 /// 'keypress' events.
 static PENDING_DATA: Mutex<Vec<Vec<u8>>> = Mutex::new(Vec::new());
@@ -470,8 +474,12 @@ extern "C" fn stdin_on_op(name_ptr: *const u8, name_len: usize, cb: i64, _once: 
         }
         _ => return,
     }
-    try_register_pump();
-    ensure_reader_started();
+    // The provider is already installed before this callback can run. Avoid
+    // re-entering bridge registration while pre-provider listeners are being
+    // migrated; only the pump and shared reader need arming here.
+    #[cfg(all(feature = "async-runtime", not(test)))]
+    crate::common::async_bridge::ensure_pump_registered();
+    start_shared_stdin_reader();
 }
 
 extern "C" fn stdin_off_op(name_ptr: *const u8, name_len: usize, cb: i64) {
@@ -521,6 +529,61 @@ extern "C" fn stdin_off_op(name_ptr: *const u8, name_len: usize, cb: i64) {
     }
 }
 
+/// `stdin.removeAllListeners([event])` reached through the runtime-owned stdin
+/// object. `has_event == 0` distinguishes the no-argument form from an empty
+/// event name.
+extern "C" fn stdin_remove_all_op(name_ptr: *const u8, name_len: usize, has_event: i32) {
+    let name = if has_event == 0 || name_ptr.is_null() {
+        None
+    } else {
+        Some(
+            std::str::from_utf8(unsafe { std::slice::from_raw_parts(name_ptr, name_len) })
+                .unwrap_or(""),
+        )
+    };
+    match name {
+        Some("data") => {
+            if let Ok(mut callbacks) = DATA_CALLBACKS.lock() {
+                callbacks.clear();
+            }
+            STDIN_DATA_FLOWING.store(false, Ordering::Release);
+            perry_runtime::os::disable_process_stdin_keypress_events();
+        }
+        Some("readable") => {
+            if let Ok(mut callbacks) = READABLE_CALLBACKS.lock() {
+                callbacks.clear();
+            }
+            STDIN_PULL_MODE.store(false, Ordering::Release);
+        }
+        Some("keypress") => {
+            if let Ok(mut callbacks) = KEYPRESS_CALLBACKS.lock() {
+                callbacks.clear();
+            }
+        }
+        Some("end") | Some("close") => {
+            if let Ok(mut callbacks) = STDIN_END_CALLBACKS.lock() {
+                callbacks.clear();
+            }
+        }
+        Some(_) => {}
+        None => {
+            for callbacks in [
+                &DATA_CALLBACKS,
+                &READABLE_CALLBACKS,
+                &KEYPRESS_CALLBACKS,
+                &STDIN_END_CALLBACKS,
+            ] {
+                if let Ok(mut callbacks) = callbacks.lock() {
+                    callbacks.clear();
+                }
+            }
+            STDIN_DATA_FLOWING.store(false, Ordering::Release);
+            STDIN_PULL_MODE.store(false, Ordering::Release);
+            perry_runtime::os::disable_process_stdin_keypress_events();
+        }
+    }
+}
+
 /// A `data` chunk as Node would deliver it: a Buffer by default, a decoded
 /// string once an encoding has been set with `setEncoding`. `None` means the
 /// chunk was absorbed into the UTF-8 decoder's held partial and Node would
@@ -548,14 +611,39 @@ fn ensure_stdin_listeners_provider_registered() {
             fn js_register_stdin_listener_ops(
                 on: extern "C" fn(*const u8, usize, i64, i32),
                 off: extern "C" fn(*const u8, usize, i64),
+                remove_all: extern "C" fn(*const u8, usize, i32),
             );
             // #9676: the flow half of the same bridge — see `stdin_pause_op`.
             fn js_register_stdin_flow_ops(pause: extern "C" fn(), resume: extern "C" fn());
         }
         unsafe {
             js_register_stdin_listeners_provider(stdin_listeners_provider);
-            js_register_stdin_listener_ops(stdin_on_op, stdin_off_op);
+            js_register_stdin_listener_ops(stdin_on_op, stdin_off_op, stdin_remove_all_op);
             js_register_stdin_flow_ops(stdin_pause_op, stdin_resume_op);
+        }
+    });
+
+    // Registrations made through an alias before readline initialized live in
+    // the runtime fallback lists. Adopt them before fd-0's already-buffered
+    // bytes are handed to `stdin_reader_data`, preserving both ownership and
+    // event order.
+    extern "C" {
+        fn js_migrate_stdin_listeners_to_provider();
+    }
+    unsafe {
+        js_migrate_stdin_listeners_to_provider();
+    }
+
+    static READER_CONSUMER_ONCE: Once = Once::new();
+    READER_CONSUMER_ONCE.call_once(|| {
+        extern "C" {
+            fn js_register_stdin_reader_consumer(
+                on_data: extern "C" fn(*const u8, usize),
+                on_eof: extern "C" fn(),
+            );
+        }
+        unsafe {
+            js_register_stdin_reader_consumer(stdin_reader_data, stdin_reader_eof);
         }
     });
 }
@@ -1137,164 +1225,40 @@ fn create_interface_from_options(opts: f64) -> i64 {
 }
 
 // ---------------------------------------------------------------------------
-// Background reader
+// Runtime-owned stdin reader consumer
 // ---------------------------------------------------------------------------
 
-/// Spawn the background byte-mode reader if it isn't already running.
-/// Idempotent across threads via `READER_STARTED.compare_exchange`.
-fn ensure_reader_started() {
-    if READER_STARTED
-        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-        .is_err()
-    {
+/// Enqueue one block from perry-runtime's sole fd-0 reader. This callback runs
+/// on the reader thread and must never call JS or touch the GC. In particular,
+/// it leaves mode classification to the main-thread pump so a synchronous
+/// remove/re-add sequence cannot race the producer thread.
+extern "C" fn stdin_reader_data(bytes_ptr: *const u8, bytes_len: usize) {
+    if bytes_ptr.is_null() || bytes_len == 0 || STDIN_DESTROYED.load(Ordering::Acquire) {
         return;
     }
-    // Under `cargo test` never spawn the real reader: it would block on the
-    // test runner's stdin and flip EOF_REACHED / push to the shared queues
-    // at arbitrary points mid-test. The flag still flips so the has-active
-    // logic sees the same state it would in production, and `reset()` can
-    // clear it between tests.
+    let bytes = unsafe { std::slice::from_raw_parts(bytes_ptr, bytes_len) };
+    if let Ok(mut pending) = PENDING_INPUT.lock() {
+        pending.push(bytes.to_vec());
+    }
+}
+
+/// EOF notification from the runtime-owned reader. Queued input is flushed by
+/// `route_pending_stdin_input` on the main thread before EOF events dispatch.
+extern "C" fn stdin_reader_eof() {
+    EOF_REACHED.store(true, Ordering::Release);
+}
+
+/// Connect readline to perry-runtime's reader and ask that single owner to
+/// start. Under unit tests we keep the historical no-I/O behavior.
+fn start_shared_stdin_reader() {
+    READER_STARTED.store(true, Ordering::Release);
     #[cfg(not(test))]
-    std::thread::spawn(move || {
-        let stdin = io::stdin();
-        let mut reader = stdin.lock();
-        // #9489: read a BLOCK per syscall, and cut `'data'` chunks at the
-        // block boundary. This loop used to `read(2)` ONE BYTE at a time and
-        // flush a chunk at every `\n`, so 1 MB of `"line\n"` cost 1,048,576
-        // read syscalls and produced 200,000 `'data'` events in 2.10 s where
-        // Node delivers 16 in 0.04 s.
-        //
-        // 64 KiB is Node's own pipe read size, and `read` still returns as
-        // soon as ANY bytes are available — it does not wait to fill the
-        // buffer — so a lone keystroke is still delivered immediately and
-        // three spaced writes are still three chunks.
-        let mut buf = [0u8; 65536];
-        // Bytes accumulated for the CURRENT read: in cooked flowing / pull
-        // mode this becomes one `'data'` chunk per read; in line mode it is
-        // the partial line carried to the next `\n`.
-        let mut line_buf: Vec<u8> = Vec::with_capacity(65536);
-        // Raw-mode chunks staged for one lock acquisition per read instead of
-        // one per byte. The per-BYTE chunking itself is preserved on purpose:
-        // the keypress path reassembles escape sequences from single-byte
-        // chunks (`pump::coalesce_escape_sequences`), and a paste must still
-        // fire one `'keypress'` per character.
-        let mut raw_chunks: Vec<Vec<u8>> = Vec::new();
-        // #9588: set whenever this read(2) put something the MAIN THREAD has to
-        // dispatch into a shared queue. See the notify below.
-        let mut queued_for_main: bool;
-        loop {
-            let n = match reader.read(&mut buf) {
-                Ok(0) => break, // EOF
-                Ok(n) => n,
-                Err(_) => break,
-            };
-            if STDIN_DESTROYED.load(Ordering::Acquire) {
-                break;
-            }
-            queued_for_main = false;
-            // The mode atomics are still consulted PER BYTE, exactly as
-            // before: a mode flip from the main thread mid-block must land on
-            // the same byte it used to. Only the syscall and the chunk
-            // boundary changed.
-            for &b in &buf[..n] {
-                if RAW_MODE.load(Ordering::Acquire) {
-                    raw_chunks.push(vec![b]);
-                } else if STDIN_DATA_FLOWING.load(Ordering::Acquire)
-                    || STDIN_PULL_MODE.load(Ordering::Acquire)
-                {
-                    // Cooked flowing mode (#5227): a `process.stdin.on('data')`
-                    // listener is attached but raw mode is off. Deliver input
-                    // as 'data' chunks (newline INCLUDED, matching Node's
-                    // piped-stream chunks) rather than routing it to the
-                    // readline 'line' queue. #9489: the chunk is cut at the
-                    // end of this read, NOT at each newline.
-                    line_buf.push(b);
-                } else if b == b'\n' {
-                    // Strip trailing CR for Windows CRLF input.
-                    if line_buf.last() == Some(&b'\r') {
-                        line_buf.pop();
-                    }
-                    let line = String::from_utf8_lossy(&line_buf).into_owned();
-                    line_buf.clear();
-                    if let Ok(mut q) = PENDING_LINES.lock() {
-                        q.push(line);
-                    }
-                    queued_for_main = true;
-                } else {
-                    line_buf.push(b);
-                }
-            }
-            if !raw_chunks.is_empty() {
-                if let Ok(mut q) = PENDING_DATA.lock() {
-                    q.append(&mut raw_chunks);
-                }
-                raw_chunks.clear();
-                queued_for_main = true;
-            }
-            // One `'data'` chunk per read(2) — Node's contract. Line splitting
-            // is the CONSUMER's job (readline does its own, above); imposing
-            // it on the shared `'data'` path is what #9489 fixed.
-            if !line_buf.is_empty()
-                && !RAW_MODE.load(Ordering::Acquire)
-                && (STDIN_DATA_FLOWING.load(Ordering::Acquire)
-                    || STDIN_PULL_MODE.load(Ordering::Acquire))
-            {
-                if let Ok(mut q) = PENDING_DATA.lock() {
-                    q.push(std::mem::take(&mut line_buf));
-                }
-                line_buf = Vec::with_capacity(65536);
-                queued_for_main = true;
-            }
-            // #9588 — WAKE THE PUMP. This reader is a cross-thread producer for
-            // queues only the main thread drains (`js_readline_process_pending`,
-            // reached from `js_run_stdlib_pump`), and it used to push and loop
-            // straight back into `read(2)` without telling anyone. The main loop
-            // therefore learned about a keystroke only when it happened to wake
-            // for some *other* reason, so input latency was the whole
-            // `js_wait_for_event` budget: the next timer deadline, or — for a TUI
-            // sitting idle with no timer armed — the full `IDLE_CAP_MS` (1 s)
-            // safety cap. Measured on the claude-code bundle before this line:
-            // 695-963 ms from keypress to the `'data'` handler, against Node's
-            // sub-millisecond. That is the protocol the event pump documents
-            // ("producer: push_to_queue(); js_notify_main_thread()") and the one
-            // perry-runtime's own stdin reader in `os_process_streams` already
-            // follows; readline's reader was the one producer that skipped it.
-            //
-            // Once per read(2), not per byte: a paste arrives as one syscall and
-            // needs exactly one wake, and the flag keeps a read that queued
-            // nothing (a raw-mode byte absorbed with no listener, a partial line
-            // still accumulating) from waking the loop for no work.
-            if queued_for_main {
-                perry_runtime::event_pump::js_notify_main_thread();
-            }
-        }
-        // Flush any trailing bytes not terminated by a newline. In cooked
-        // flowing mode this is the last 'data' chunk for input like
-        // `printf "abc"` (no final newline); otherwise it's a final 'line'.
-        if !line_buf.is_empty() && !STDIN_DESTROYED.load(Ordering::Acquire) {
-            if (STDIN_DATA_FLOWING.load(Ordering::Acquire)
-                || STDIN_PULL_MODE.load(Ordering::Acquire))
-                && !RAW_MODE.load(Ordering::Acquire)
-            {
-                if let Ok(mut q) = PENDING_DATA.lock() {
-                    q.push(std::mem::take(&mut line_buf));
-                }
-            } else if !RAW_MODE.load(Ordering::Acquire) {
-                if line_buf.last() == Some(&b'\r') {
-                    line_buf.pop();
-                }
-                let line = String::from_utf8_lossy(&line_buf).into_owned();
-                if let Ok(mut q) = PENDING_LINES.lock() {
-                    q.push(line);
-                }
-            }
-        }
-        EOF_REACHED.store(true, Ordering::Release);
-        // #9588: EOF is main-thread-visible work too — the `'end'`/`'close'`
-        // dispatch and the liveness flip that lets the loop exit. Without a wake
-        // here a piped program's exit was delayed by up to `IDLE_CAP_MS`.
-        perry_runtime::event_pump::js_notify_main_thread();
-    });
+    perry_runtime::os::ensure_process_stdin_reader();
+}
+
+fn ensure_reader_started() {
+    ensure_stdin_listeners_provider_registered();
+    start_shared_stdin_reader();
 }
 
 // ---------------------------------------------------------------------------
@@ -1939,6 +1903,12 @@ pub extern "C" fn js_readline_stdin_destroy() -> f64 {
         *deadline = None;
     }
     if let Ok(mut q) = PENDING_LINES.lock() {
+        q.clear();
+    }
+    if let Ok(mut q) = PENDING_INPUT.lock() {
+        q.clear();
+    }
+    if let Ok(mut q) = PENDING_LINE_BYTES.lock() {
         q.clear();
     }
     if let Ok(mut v) = DATA_CALLBACKS.lock() {
