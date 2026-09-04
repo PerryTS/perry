@@ -45,6 +45,9 @@ const BUILD_CACHE_ENV_VARS: &[&str] = &[
     "PERRY_RS4GC",
     // `-Os` vs `-O3` for every native module.
     "PERRY_LL_SIZE_OPT",
+    // Explicit application-module LLVM optimization level. This overrides the
+    // normal `PERRY_LL_SIZE_OPT` selection and changes every emitted object.
+    "PERRY_LL_OPT_LEVEL",
     // The post-RS4GC per-function instruction budget (#8583/#8679): a function
     // one setting re-lowers must not be served from a build another kept on
     // statepoints.
