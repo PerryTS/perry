@@ -134,6 +134,44 @@ pub use framework::*;
 // independent from the external node:http implementation.
 #[cfg(feature = "web-fetch")]
 pub mod fetch;
+
+// #9719: `perry-ext-http`'s `server/bun_server.rs` declares these two bridge
+// symbols in an UNCONDITIONAL `extern "C"` block (only its `#[cfg(test)]` arm
+// stubs them), but their definitions live in `fetch::bun_server_bridge`, which
+// this crate compiles only under `web-fetch`. The auto-optimize feature set for
+// a `node:http` program does not include `web-fetch`, so a cold link of any
+// program importing `node:http` failed with
+// `Undefined symbols: _js_bun_http_response_snapshot_json`. CI never saw it:
+// plain `cargo build` / `cargo test` do not link the auto-optimize ext-http
+// path, and any warm `target/perry-auto-*` cache hides it from a manual check.
+//
+// The definitions genuinely need Fetch machinery (`FETCH_RESPONSES`,
+// `consume_response_body`), so they cannot simply move out; and making the http
+// features depend on `web-fetch` would link `reqwest` — an HTTP *client* — into
+// every `node:http` *server* build. Instead the symbols always exist, and
+// without Web Fetch they answer "nothing to bridge", which is exactly right:
+// with no `fetch` module there are no `Response` objects to snapshot.
+#[cfg(not(feature = "web-fetch"))]
+mod bun_server_bridge_absent {
+    use perry_runtime::string::StringHeader;
+
+    /// No Web Fetch in this build, so no `Response` registry to snapshot from.
+    /// Matches the real symbol's own not-found return (`null_mut`).
+    #[no_mangle]
+    pub extern "C" fn js_bun_http_response_snapshot_json(
+        _response_handle: f64,
+    ) -> *mut StringHeader {
+        std::ptr::null_mut()
+    }
+
+    /// Mirrors the real bridge's failure return for an unusable snapshot.
+    #[no_mangle]
+    pub unsafe extern "C" fn js_bun_http_request_from_json(
+        _snapshot_ptr: *const StringHeader,
+    ) -> f64 {
+        f64::from_bits(perry_runtime::value::JSValue::undefined().bits())
+    }
+}
 #[cfg(feature = "web-fetch")]
 pub use fetch::*;
 // Issue #1211: Blob/File constructors + object-URL helpers split out
