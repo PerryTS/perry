@@ -863,7 +863,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 emit_root_nanbox_store_on_block(ctx.block(), &v, &g_ref);
             }
             super::record_native_arena_owner_assignment(ctx, *id, value.as_ref());
-            if ctx.buffer_view_slots.contains_key(id)
+            if ctx.receiver_descriptors.contains_buffer_view(id)
                 || matches!(
                     value.as_ref(),
                     Expr::BufferAlloc { .. } | Expr::BufferAllocUnsafe(_) | Expr::Uint8ArrayNew(_)

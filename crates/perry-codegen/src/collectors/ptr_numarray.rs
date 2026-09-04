@@ -73,7 +73,7 @@
 //!   has `int_range` proof `[0, max]` with `max < proven_initial_length`
 //!   (length can only grow — `pop`-class shrinkers are disqualified — so
 //!   `idx < initial_length <= current length` holds forever), or the site is
-//!   a `bounded_index_pairs` loop read. Everything unproven falls back to the
+//!   a bounded-index receiver descriptor read. Everything unproven falls back to the
 //!   Phase 4a.1/4a.2 guarded tiers, which maintain the same invariants.
 //! * **Hole observability (density gating)**: guard-free READS are emitted
 //!   only in ToNumber contexts (the Phase 4a number-context reader), where a

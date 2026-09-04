@@ -18,9 +18,9 @@ use crate::collectors::NativeRegionFactGraph;
 use crate::function::LlFunction;
 use crate::nanbox::double_literal;
 use crate::native_value::{
-    AliasState, BoundedBufferIndex, BoundsProof, BoundsState, BufferAccessMode, BufferViewSlot,
-    ExpectedNativeRep, GuardedBufferIndex, LoweredValue, MaterializationReason, NativeFactUse,
-    NativeRep, NativeRepRecord,
+    AliasState, BoundedBufferIndex, BoundsProof, BoundsState, BufferAccessMode, ExpectedNativeRep,
+    GuardedBufferIndex, LoweredValue, MaterializationReason, NativeFactUse, NativeRep,
+    NativeRepRecord,
 };
 use crate::strings::StringPool;
 use crate::type_analysis::{is_bigint_expr, is_bool_expr, is_numeric_expr};
@@ -971,49 +971,12 @@ pub(crate) struct FnCtx<'a> {
     /// as the fallback, an SSA value composed in the entry region.
     pub class_header_images: std::collections::HashMap<(String, u64), HeaderImageSource>,
 
-    /// Per-arr-local cached `arr.length` slots — populated by
-    /// `lower_for` when it spots the well-known shape
-    /// `for (...; i < arr.length; ...) { body }` and proves via
-    /// `stmt_preserves_array_length` that the body doesn't change
-    /// `arr.length`. The `PropertyGet { object: LocalGet(arr_id),
-    /// property: "length" }` lowering checks this map and, if found,
-    /// emits a `load double, ptr <slot>` instead of unboxing the
-    /// array and doing a fresh `load i32` of the length field.
-    ///
-    /// Saves the per-iteration length reload (which LLVM's LICM
-    /// declines to do because the IndexSet slow path is an external
-    /// call that LLVM can't prove won't modify the length).
-    pub cached_lengths: std::collections::HashMap<u32, String>,
-
     /// Immutable locals initialized from an exact `receiver.length` read,
     /// keyed by the snapshot local. The read itself retains ordinary property
     /// semantics; a later counted-loop guard may use the association only
     /// after proving the receiver is a packed Array/Array-subclass.
     pub array_length_snapshots: std::collections::HashMap<u32, u32>,
 
-    /// `(counter_local_id, array_local_id)` pairs that are guaranteed
-    /// inbounds inside the current loop nest — populated by
-    /// `lower_for` when it detects the same `for (...; i < arr.length;
-    /// ...)` shape that drives `cached_lengths`. The IndexSet codegen
-    /// (`lower_index_set_fast`) checks this set: if `arr[i] = expr`
-    /// where `(i, arr)` is in the set, the IndexSet skips its
-    /// runtime bound check + cap check + realloc fallback entirely
-    /// and emits a single inline-store sequence.
-    ///
-    /// The for-loop guarantees `i < arr.length` is true at the cond
-    /// check, and `stmt_preserves_array_length` already proved the
-    /// body can't change `arr.length` or reassign `i`, so the
-    /// IndexSet site can rely on `i < arr.length` without rechecking.
-    pub bounded_index_pairs: Vec<BoundedIndexPair>,
-
-    /// Scoped loop-versioning facts for `for (...; i < arr.length; i++)`
-    /// clones guarded by `js_typed_feedback_packed_f64_array_loop_guard`.
-    /// Inside the fast clone, `arr[i]` and `arr[i] = numeric_expr` can lower
-    /// directly to raw `double` load/store because the loop-entry guard proves
-    /// the array is a live packed raw-f64 plain Array and the loop proof keeps
-    /// `i` in bounds.
-    pub packed_f64_loop_facts: Vec<PackedF64LoopFact>,
-    pub masked_window_array_facts: Vec<MaskedWindowArrayFact>,
     /// Scoped facts established by the string-array masked-window loop
     /// versioner. The entry guard proves every slot in the window is an
     /// in-bounds SSO-or-heap string, so reads may bypass ordinary array
@@ -1061,7 +1024,7 @@ pub(crate) struct FnCtx<'a> {
 
     /// Parallel i32 counter slots for integer loop counters that are
     /// used as bounded array indices. When a for-loop counter is in
-    /// `integer_locals` AND appears in `bounded_index_pairs`, `lower_for`
+    /// `integer_locals` AND has a bounded-index descriptor, `lower_for`
     /// allocates a parallel i32 alloca tracked here. The `Expr::Update`
     /// lowering increments the i32 slot alongside the normal double slot,
     /// and the IndexGet/IndexSet bounded fast-path loads the i32 directly
@@ -1083,13 +1046,11 @@ pub(crate) struct FnCtx<'a> {
     /// root slot during the clone is harmless to a GC scan.
     pub numeric_accumulator_f64_slots: std::collections::HashMap<u32, String>,
     pub transition_cache_base_slot: Option<String>,
-    /// #9254 phase 2: active materialised receiver descriptors. The first
-    /// consumer is the packed fast clone's #9111 cache: one entry owns the
-    /// frame-rooted receiver box, its pre-masked base-handle slot and the
-    /// source-root refresh recipe. `LocalGet`, packed address math and the
-    /// armed poll all query this table instead of coordinating three parallel
-    /// maps. The table checks its address claim against the shared region
-    /// boundary algebra before carrying it across a fired poll.
+    /// #9254 active materialised receiver descriptors. Entries carry
+    /// poll-refreshed receiver addresses, cached scalar lengths and bounds,
+    /// scoped packed/masked representation proofs, or non-moving native
+    /// buffer views. Lookup, nested-scope teardown and boundary validation
+    /// live in that table instead of independent `FnCtx` maps.
     pub receiver_descriptors: crate::collectors::ReceiverDescriptorTable,
     /// When set, `emit_armed_gc_loop_safepoint` gates its VOLATILE armed
     /// load on `(counter & 63) == 0`, so the poll's serialization cost (and
@@ -1598,11 +1559,6 @@ pub(crate) struct FnCtx<'a> {
     /// different buffers don't alias (fixes the vectorizer's "unsafe
     /// dependent memory operations" remark).
     pub buffer_data_slots: std::collections::HashMap<u32, (String, u32)>,
-    /// Codegen-level native buffer views keyed by LocalId. This is the
-    /// representation model behind `buffer_data_slots`: raw pointer access can
-    /// exist with `AliasState::Unknown`, while noalias metadata requires a
-    /// proven/guarded alias state at the consumer.
-    pub buffer_view_slots: std::collections::HashMap<u32, BufferViewSlot>,
     /// Local owner-handle aliases for native arenas. Values are canonical
     /// owner local ids used by native-owned typed-array view proof state.
     pub native_arena_owner_aliases: std::collections::HashMap<u32, u32>,
@@ -1704,13 +1660,6 @@ pub struct I18nLowerCtx {
     /// prelude's `perry_i18n_set_currencies` call; empty when the project
     /// doesn't configure the table.
     pub currencies: Vec<(String, String)>,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct BoundedIndexPair {
-    pub index_local_id: u32,
-    pub array_local_id: u32,
-    pub scope_id: u32,
 }
 
 #[derive(Clone, Debug)]

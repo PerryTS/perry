@@ -568,7 +568,7 @@ fn lower_arithmetic_operand(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<(String,
             return Ok((value, true));
         }
         // #7494: the guarded tier above declines outright for a receiver
-        // tracked in `ctx.buffer_view_slots` (its own "don't shadow" comment)
+        // tracked by a buffer-view descriptor (its own "don't shadow" comment)
         // because that tracked view owns a STRONGER-bounds native path
         // (`lower_typed_array_load`). Nothing routed a number-context read to
         // it, so a proven in-bounds buffer-view typed-array read still fell

@@ -252,7 +252,7 @@ pub(super) fn find_candidate(
                 || ctx.boxed_vars.contains(&id)
                 || ctx.closure_captures.contains_key(&id)
                 || ctx.reassigned_locals.contains(&id)
-                || ctx.buffer_view_slots.contains_key(&id)
+                || ctx.receiver_descriptors.contains_buffer_view(id)
                 || !matches!(
                     crate::type_analysis::static_type_of(ctx, &Expr::LocalGet(id)),
                     None | Some(perry_hir::types::Type::Any)
@@ -332,7 +332,7 @@ fn reserve_alias_scope(ctx: &mut FnCtx<'_>, data_slot: &str) -> u32 {
     while ctx.locals.contains_key(&reservation)
         || ctx.module_globals.contains_key(&reservation)
         || ctx.buffer_data_slots.contains_key(&reservation)
-        || ctx.buffer_view_slots.contains_key(&reservation)
+        || ctx.receiver_descriptors.contains_buffer_view(reservation)
     {
         reservation = reservation.wrapping_sub(1);
     }
@@ -362,7 +362,7 @@ pub(super) fn install_views(ctx: &mut FnCtx<'_>, admission: &Admission) -> Insta
             length.clone()
         });
         let scope_idx = reserve_alias_scope(ctx, &data_slot);
-        let old = ctx.buffer_view_slots.insert(
+        let old = ctx.receiver_descriptors.materialize_buffer_view(
             *id,
             BufferViewSlot {
                 data_slot,
@@ -393,9 +393,9 @@ pub(super) fn install_views(ctx: &mut FnCtx<'_>, admission: &Admission) -> Insta
 pub(super) fn restore_views(ctx: &mut FnCtx<'_>, installed: InstalledViews) {
     for (id, old) in installed.previous {
         if let Some(old) = old {
-            ctx.buffer_view_slots.insert(id, old);
+            ctx.receiver_descriptors.materialize_buffer_view(id, old);
         } else {
-            ctx.buffer_view_slots.remove(&id);
+            ctx.receiver_descriptors.dematerialize_buffer_view(id);
         }
     }
 }

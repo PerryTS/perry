@@ -176,12 +176,12 @@ fn proven_view(
     let Expr::LocalGet(local_id) = expr else {
         return None;
     };
-    // `buffer_view_slots` below is the representation proof and every write
+    // The buffer-view descriptor below is the representation proof and every write
     // invalidates its pointer state. The type is only an early dispatch hint.
     if !is_native_memory_typed_view(ctx.local_type_hint(local_id)) {
         return None;
     }
-    let slot = ctx.buffer_view_slots.get(local_id)?.clone();
+    let slot = ctx.receiver_descriptors.buffer_view(local_id)?.clone();
     if !slot.pointer_state.is_stable() {
         return None;
     }

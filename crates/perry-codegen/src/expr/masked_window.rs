@@ -33,8 +33,8 @@ pub(crate) fn masked_window_fact_for_index(
     index: &Expr,
 ) -> Option<MaskedWindowArrayFact> {
     let (lo, hi) = crate::collectors::static_index_window(index)?;
-    ctx.masked_window_array_facts
-        .iter()
+    ctx.receiver_descriptors
+        .masked_window_array_facts()
         .rev()
         .find(|fact| {
             fact.array_local_id == arr_id && lo >= fact.min_idx && hi < fact.max_idx_exclusive

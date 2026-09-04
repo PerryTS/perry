@@ -24,8 +24,8 @@ pub(crate) fn foreign_packed_loop_read(
         return None;
     }
     let fact = ctx
-        .packed_f64_loop_facts
-        .iter()
+        .receiver_descriptors
+        .packed_f64_loop_facts()
         .rev()
         .find(|fact| {
             fact.array_local_id == arr_id
@@ -169,8 +169,8 @@ pub(crate) fn affine_packed_loop_read(
         return None;
     }
     let fact = ctx
-        .packed_f64_loop_facts
-        .iter()
+        .receiver_descriptors
+        .packed_f64_loop_facts()
         .rev()
         .find(|fact| fact.array_local_id == arr_id && fact.affine_indices)?
         .clone();

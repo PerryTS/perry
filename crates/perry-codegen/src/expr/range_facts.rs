@@ -224,7 +224,7 @@ fn int_typed_array_load_range(
     let Expr::LocalGet(id) = object else {
         return None;
     };
-    let view = ctx.buffer_view_slots.get(id)?;
+    let view = ctx.receiver_descriptors.buffer_view(id)?;
     if view.index_unit != BufferIndexUnit::Element
         || !view.alias.allows_noalias()
         || view.scope_idx.is_none()
@@ -548,18 +548,18 @@ pub(crate) fn invalidate_local_write_facts(ctx: &mut FnCtx<'_>, id: u32) {
         .retain(|fact| fact.index_local_id != id && fact.buffer_local_id != id);
     ctx.guarded_buffer_index_pairs
         .retain(|fact| fact.index_local_id != id && fact.buffer_local_id != id);
-    ctx.bounded_index_pairs
-        .retain(|fact| fact.index_local_id != id && fact.array_local_id != id);
+    ctx.receiver_descriptors
+        .invalidate_bounded_indices_for_local(id);
 
     let mut stale_length_views = Vec::new();
     let mut owner_reassignment_views = Vec::new();
-    for (view_id, view) in ctx.buffer_view_slots.iter_mut() {
+    for (view_id, view) in ctx.receiver_descriptors.buffer_views_mut() {
         if matches!(
             view.length_source.as_ref(),
             Some(LengthSource::Local { id: source_id, .. }) if *source_id == id
         ) {
             view.length_source = Some(LengthSource::Unknown);
-            stale_length_views.push(*view_id);
+            stale_length_views.push(view_id);
         }
         if view
             .native_owned
@@ -571,7 +571,7 @@ pub(crate) fn invalidate_local_write_facts(ctx: &mut FnCtx<'_>, id: u32) {
             if let Some(native) = view.native_owned.as_mut() {
                 native.owner_rooted = false;
             }
-            owner_reassignment_views.push(*view_id);
+            owner_reassignment_views.push(view_id);
         }
     }
     for view_id in stale_length_views {
@@ -746,7 +746,7 @@ pub(crate) fn bounds_for_buffer_access_width(
     // Deliberately narrow: a non-constant length (a parameter, a grown array)
     // still declines, because then there is nothing to compare the interval
     // against.
-    if let Some(view) = ctx.buffer_view_slots.get(&buffer_local_id) {
+    if let Some(view) = ctx.receiver_descriptors.buffer_view(buffer_local_id) {
         if let Some(length) = view
             .length_source
             .as_ref()
@@ -768,7 +768,7 @@ pub(crate) fn bounds_for_buffer_access_width(
         }
     }
     if let Some(index_value) = constant_i64_expr(ctx, index) {
-        let Some(view) = ctx.buffer_view_slots.get(&buffer_local_id) else {
+        let Some(view) = ctx.receiver_descriptors.buffer_view(buffer_local_id) else {
             return BoundsState::Unknown;
         };
         let length = view
@@ -798,7 +798,7 @@ fn range_bounds_for_buffer_access(
     index: &Expr,
     bounds_width_units: u32,
 ) -> BoundsState {
-    let Some(view) = ctx.buffer_view_slots.get(&buffer_local_id) else {
+    let Some(view) = ctx.receiver_descriptors.buffer_view(buffer_local_id) else {
         return BoundsState::Unknown;
     };
     // Ctx-aware range facts first; fall back to the ctx-free syntactic window
@@ -935,7 +935,10 @@ fn guarded_buffer_index(
     if width < 1 || width > u32::MAX as i64 {
         return None;
     }
-    if !ctx.buffer_view_slots.contains_key(&buffer_local_id) {
+    if !ctx
+        .receiver_descriptors
+        .contains_buffer_view(buffer_local_id)
+    {
         return None;
     }
     let nonnegative = ctx.nonnegative_integer_locals.contains(&index_local_id)
@@ -1022,8 +1025,9 @@ pub(crate) fn effective_alias_state_for_access(
         };
     }
     let noalias_candidate_count = ctx
-        .buffer_view_slots
-        .values()
+        .receiver_descriptors
+        .buffer_views()
+        .map(|(_, view)| view)
         .filter(|slot| slot.scope_idx.is_some() && slot.alias.allows_noalias())
         .count();
     if noalias_candidate_count >= 2 {
@@ -1038,7 +1042,7 @@ fn native_owned_view_has_overlapping_alias(ctx: &FnCtx<'_>, view: &BufferViewSlo
         return false;
     };
     let scope_idx = view.scope_idx;
-    ctx.buffer_view_slots.values().any(|other| {
+    ctx.receiver_descriptors.buffer_views().any(|(_, other)| {
         if other.scope_idx == scope_idx {
             return false;
         }

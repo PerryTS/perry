@@ -76,8 +76,8 @@ fn exact_alias_root(ctx: &FnCtx<'_>, mut id: u32) -> u32 {
 fn receiver_is_uint32_candidate(ctx: &FnCtx<'_>, id: u32) -> Option<u32> {
     let root = exact_alias_root(ctx, id);
     if ctx
-        .buffer_view_slots
-        .get(&root)
+        .receiver_descriptors
+        .buffer_view(root)
         .is_some_and(|view| matches!(view.elem, BufferElem::U32))
     {
         return Some(root);

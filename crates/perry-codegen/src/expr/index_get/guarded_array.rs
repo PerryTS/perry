@@ -646,8 +646,8 @@ pub(super) fn packed_f64_loop_fact(
     arr_id: u32,
     idx_id: u32,
 ) -> Option<PackedF64LoopFact> {
-    ctx.packed_f64_loop_facts
-        .iter()
+    ctx.receiver_descriptors
+        .packed_f64_loop_facts()
         .find(|fact| fact.array_local_id == arr_id && fact.index_local_id == idx_id)
         .cloned()
 }

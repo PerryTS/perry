@@ -90,7 +90,7 @@ pub(crate) fn buffer_view_lowered_value(
 
 pub(crate) fn downgrade_buffer_alias(ctx: &mut FnCtx<'_>, id: u32, reason: MaterializationReason) {
     let mut effective_reason = reason.clone();
-    if let Some(view) = ctx.buffer_view_slots.get_mut(&id) {
+    if let Some(view) = ctx.receiver_descriptors.buffer_view_mut(id) {
         if view.native_owned.is_some() && matches!(reason, MaterializationReason::UnknownCallEscape)
         {
             effective_reason = MaterializationReason::EscapingUnownedPointer;
@@ -120,19 +120,19 @@ pub(crate) fn invalidate_buffer_view_pointer(
     reason: MaterializationReason,
 ) {
     let affected_ids = if let Some(data_slot) = ctx
-        .buffer_view_slots
-        .get(&id)
+        .receiver_descriptors
+        .buffer_view(id)
         .map(|view| view.data_slot.clone())
     {
-        ctx.buffer_view_slots
-            .iter()
-            .filter_map(|(view_id, view)| (view.data_slot == data_slot).then_some(*view_id))
+        ctx.receiver_descriptors
+            .buffer_views()
+            .filter_map(|(view_id, view)| (view.data_slot == data_slot).then_some(view_id))
             .collect::<Vec<_>>()
     } else {
         vec![id]
     };
     for affected_id in affected_ids {
-        if let Some(view) = ctx.buffer_view_slots.get_mut(&affected_id) {
+        if let Some(view) = ctx.receiver_descriptors.buffer_view_mut(affected_id) {
             view.pointer_state = BufferViewPointerState::Invalidated {
                 reason: reason.clone(),
             };
@@ -172,7 +172,7 @@ pub(crate) fn invalidate_native_owned_views_for_owner(
     reason: MaterializationReason,
 ) {
     let mut invalidated = Vec::new();
-    for (view_id, view) in ctx.buffer_view_slots.iter_mut() {
+    for (view_id, view) in ctx.receiver_descriptors.buffer_views_mut() {
         let Some(native) = view.native_owned.as_ref() else {
             continue;
         };
@@ -180,7 +180,7 @@ pub(crate) fn invalidate_native_owned_views_for_owner(
             continue;
         }
         invalidate_native_owned_view(view, &reason);
-        invalidated.push(*view_id);
+        invalidated.push(view_id);
     }
     for view_id in invalidated {
         ctx.buffer_hazard_reasons.insert(view_id, reason.clone());
@@ -200,12 +200,12 @@ pub(crate) fn invalidate_native_owned_views_for_dispose(ctx: &mut FnCtx<'_>, own
 
 fn invalidate_all_native_owned_views(ctx: &mut FnCtx<'_>, reason: MaterializationReason) {
     let mut invalidated = Vec::new();
-    for (view_id, view) in ctx.buffer_view_slots.iter_mut() {
+    for (view_id, view) in ctx.receiver_descriptors.buffer_views_mut() {
         if view.native_owned.is_none() {
             continue;
         }
         invalidate_native_owned_view(view, &reason);
-        invalidated.push(*view_id);
+        invalidated.push(view_id);
     }
     for view_id in invalidated {
         ctx.buffer_hazard_reasons.insert(view_id, reason.clone());
@@ -238,7 +238,7 @@ pub(crate) fn alias_buffer_view_slot(
     source_id: u32,
     reason: MaterializationReason,
 ) {
-    let Some(mut view) = ctx.buffer_view_slots.get(&source_id).cloned() else {
+    let Some(mut view) = ctx.receiver_descriptors.buffer_view(source_id).cloned() else {
         return;
     };
     let reason = if view.native_owned.is_some() {
@@ -249,7 +249,8 @@ pub(crate) fn alias_buffer_view_slot(
     downgrade_buffer_alias(ctx, source_id, reason.clone());
     view.alias = AliasState::MayAlias;
     view.scope_idx = None;
-    ctx.buffer_view_slots.insert(alias_id, view);
+    ctx.receiver_descriptors
+        .materialize_buffer_view(alias_id, view);
     ctx.buffer_hazard_reasons.insert(alias_id, reason);
 }
 
@@ -275,8 +276,8 @@ pub(crate) fn attach_buffer_view_pointer_state_for_expr(ctx: &mut FnCtx<'_>, exp
         return;
     };
     let Some(state) = ctx
-        .buffer_view_slots
-        .get(id)
+        .receiver_descriptors
+        .buffer_view(id)
         .map(|view| view.pointer_state.clone())
     else {
         return;
@@ -311,12 +312,12 @@ pub(crate) fn update_buffer_view_for_assignment(
         let handle_ptr = blk.inttoptr(I64, &handle);
         let data_ptr = blk.gep(I8, &handle_ptr, &[(I32, "8")]);
         let data_slot = ctx
-            .buffer_view_slots
-            .get(&id)
+            .receiver_descriptors
+            .buffer_view(id)
             .map(|view| view.data_slot.clone())
             .unwrap_or_else(|| ctx.func.alloca_entry(PTR));
         ctx.block().store(PTR, &data_ptr, &data_slot);
-        ctx.buffer_view_slots.insert(
+        ctx.receiver_descriptors.materialize_buffer_view(
             id,
             BufferViewSlot {
                 data_slot,
@@ -338,7 +339,7 @@ pub(crate) fn update_buffer_view_for_assignment(
             },
         );
     } else {
-        ctx.buffer_view_slots.remove(&id);
+        ctx.receiver_descriptors.dematerialize_buffer_view(id);
     }
     ctx.buffer_hazard_reasons
         .insert(id, MaterializationReason::Reassignment);

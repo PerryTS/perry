@@ -97,7 +97,7 @@ fn checked_typed_array_f64_kind(
     };
     // A tracked buffer view owns this receiver via its own (stronger-bounds)
     // native path; don't shadow it.
-    if ctx.buffer_view_slots.contains_key(id) {
+    if ctx.receiver_descriptors.contains_buffer_view(id) {
         return None;
     }
     // Class proof: first the function-local proof, then — for a MODULE-GLOBAL

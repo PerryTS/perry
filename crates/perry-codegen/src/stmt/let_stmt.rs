@@ -350,7 +350,7 @@ pub(crate) fn lower_let(
         let auto_captures =
             crate::type_analysis::compute_auto_captures(ctx, params, body, captures);
         for cap_id in auto_captures {
-            if ctx.buffer_view_slots.contains_key(&cap_id)
+            if ctx.receiver_descriptors.contains_buffer_view(cap_id)
                 || ctx.known_noalias_buffer_locals.contains(&cap_id)
             {
                 crate::expr::downgrade_buffer_alias(
