@@ -222,15 +222,34 @@ pub(super) unsafe fn dispatch_primitive(
                         } else {
                             payload
                         };
-                        let s = if n.fract() == 0.0
-                            && n.abs() < crate::builtins::INT_EXACT_FASTPATH_LIMIT
-                        {
-                            (n as i64).to_string()
+                        // #9713: `NumberToString`, not Rust's `{}`. A bare
+                        // `f64::to_string()` prints `inf` for Infinity and the
+                        // full decimal expansion past the exponential
+                        // thresholds (`1e21` → `1000000000000000000000`,
+                        // `Number.EPSILON` → `0.000…0002220446049250313`).
+                        // `js_number_to_string` carries the spec's
+                        // `|n| >= 1e21 || |n| < 1e-6` switch and its own
+                        // integer fast path, so the local one is redundant too.
+                        //
+                        // A boxed receiver takes a radix like an unboxed one
+                        // (`new Number(255).toString(16)` is "ff"); this arm
+                        // dropped the argument entirely and answered "255".
+                        // `js_jsvalue_to_string_radix` already accepts a boxed
+                        // Number receiver, so hand it the box, not the payload.
+                        // `toLocaleString`'s argument is a locale, not a
+                        // radix, so only `toString` consumes it here.
+                        let radix_arg = if method_name == "toString" {
+                            refreshed_args().first().copied()
                         } else {
-                            n.to_string()
+                            None
                         };
-                        let str_ptr =
-                            crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+                        if let Some(r) = radix_arg {
+                            if !JSValue::from_bits(r.to_bits()).is_undefined() {
+                                let str_ptr = crate::value::js_jsvalue_to_string_radix(object, r);
+                                return Some(f64::from_bits(JSValue::string_ptr(str_ptr).bits()));
+                            }
+                        }
+                        let str_ptr = crate::string::js_number_to_string(n);
                         return Some(f64::from_bits(JSValue::string_ptr(str_ptr).bits()));
                     }
                     Some("Boolean") => {
