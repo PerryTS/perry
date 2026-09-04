@@ -88,6 +88,7 @@ pub mod ffi;
 pub mod frame;
 pub mod fs;
 pub mod gc;
+pub mod hot_diag;
 pub mod intl;
 pub mod iter_result;
 pub mod iterator_helpers;

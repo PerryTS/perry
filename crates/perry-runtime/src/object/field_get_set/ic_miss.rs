@@ -476,23 +476,50 @@ pub extern "C" fn js_object_get_field_ic_overflow_load(
 /// Overflow fields (slot >= alloc_limit) are NOT cached and fall through to
 /// the slow path — the fast path loads from `obj_ptr + 24 + slot*8` which
 /// would read past the inline allocation.
+/// `PERRY_IC_DIAG`: record why this miss took the arm it took. `key` may be
+/// null on the earliest exits.
+#[inline(never)]
+#[cold]
+fn ic_diag_note(
+    cache_slot: *mut PicCacheSlot,
+    key: *const crate::StringHeader,
+    reason: crate::hot_diag::IcMissReason,
+) {
+    let bytes: &[u8] = if key.is_null() || (key as usize) < 0x1000 {
+        b""
+    } else {
+        unsafe {
+            std::slice::from_raw_parts(crate::string::string_data(key), (*key).byte_len as usize)
+        }
+    };
+    crate::hot_diag::ic_note(cache_slot as usize, bytes, reason);
+}
+
 #[no_mangle]
 pub extern "C" fn js_object_get_field_ic_miss(
     obj: *const ObjectHeader,
     key: *const crate::StringHeader,
     cache_slot: *mut PicCacheSlot,
 ) -> f64 {
+    use crate::hot_diag::IcMissReason as R;
+    let diag = crate::hot_diag::ic_on();
     // SSO receiver — never cacheable. Route through the SSO-aware
     // `js_object_get_field_by_name` which handles `.length` inline
     // and returns undefined for other keys.
     if !key.is_null() {
         let obj_bits = obj as u64;
         if (obj_bits & crate::value::TAG_MASK) == crate::value::SHORT_STRING_TAG {
+            if diag {
+                ic_diag_note(cache_slot, key, R::SsoReceiver);
+            }
             let v = js_object_get_field_by_name(obj, key);
             return f64::from_bits(v.bits());
         }
     }
     if obj.is_null() || key.is_null() {
+        if diag {
+            ic_diag_note(cache_slot, key, R::NullArgs);
+        }
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
     // A Proxy value may reach the inline-cache miss handler when a fused
@@ -511,6 +538,9 @@ pub extern "C" fn js_object_get_field_ic_miss(
             const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
             let boxed = f64::from_bits(POINTER_TAG | (addr & 0x0000_FFFF_FFFF_FFFF));
             if crate::proxy::js_proxy_is_proxy(boxed) != 0 {
+                if diag {
+                    ic_diag_note(cache_slot, key, R::Proxy);
+                }
                 let key_f64 = f64::from_bits(crate::value::js_nanbox_string(key as i64).to_bits());
                 return crate::proxy::js_proxy_get(boxed, key_f64);
             }
@@ -532,6 +562,9 @@ pub extern "C" fn js_object_get_field_ic_miss(
                 if let Some(value) =
                     crate::async_hooks::try_async_resource_property_dispatch(obj as i64, name)
                 {
+                    if diag {
+                        ic_diag_note(cache_slot, key, R::AsyncResource);
+                    }
                     return value;
                 }
             }
@@ -570,6 +603,9 @@ pub extern "C" fn js_object_get_field_ic_miss(
                 if let Some(value) =
                     unsafe { crate::array::subclass_elements::get_by_key(elements, elements_key) }
                 {
+                    if diag {
+                        ic_diag_note(cache_slot, key, R::SubclassElements);
+                    }
                     return value;
                 }
             }
@@ -577,6 +613,9 @@ pub extern "C" fn js_object_get_field_ic_miss(
         if unsafe { key_bytes_are(key, b"length") } {
             match unsafe { gc_type_of(obj) } {
                 Some(crate::gc::GC_TYPE_ARRAY) => {
+                    if diag {
+                        ic_diag_note(cache_slot, key, R::ArrayLength);
+                    }
                     let arr = obj as *const crate::array::ArrayHeader;
                     return crate::array::js_array_length(arr) as f64;
                 }
@@ -592,6 +631,9 @@ pub extern "C" fn js_object_get_field_ic_miss(
                     // lookup below for every case it cannot prove.
                     let receiver = crate::value::js_nanbox_pointer(obj as i64);
                     if let Some(length) = crate::array::array_subclass_fast_length(receiver) {
+                        if diag {
+                            ic_diag_note(cache_slot, key, R::ArrayLength);
+                        }
                         return length;
                     }
                 }
@@ -600,16 +642,25 @@ pub extern "C" fn js_object_get_field_ic_miss(
         }
         unsafe {
             if let Some(val) = closure_dynamic_prop_by_key(obj as usize, key) {
+                if diag {
+                    ic_diag_note(cache_slot, key, R::ClosureProp);
+                }
                 return val;
             }
             // Buffers have no GcHeader. The generic IC-miss object path below may
             // inspect GC/object metadata, so mirror js_object_get_field_by_name's
             // buffer-first dispatch here.
             if crate::buffer::is_registered_buffer(obj as usize) {
+                if diag {
+                    ic_diag_note(cache_slot, key, R::Buffer);
+                }
                 let value = js_object_get_field_by_name(obj, key);
                 return f64::from_bits(value.bits());
             }
             if crate::typedarray::lookup_typed_array_kind(obj as usize).is_some() {
+                if diag {
+                    ic_diag_note(cache_slot, key, R::TypedArray);
+                }
                 let value = js_object_get_field_by_name(obj, key);
                 return f64::from_bits(value.bits());
             }
@@ -624,6 +675,9 @@ pub extern "C" fn js_object_get_field_ic_miss(
     // dispatch to the per-module accessor instead of silently
     // returning undefined.
     if crate::value::addr_class::is_small_handle(obj as usize) {
+        if diag {
+            ic_diag_note(cache_slot, key, R::SmallHandle);
+        }
         // #2846: a revocable Proxy is encoded as a small fake pointer in the
         // proxy-id range (also `< 0x100000`). A generic `proxy.key` read funnels
         // here via the IC-miss path; route it to the proxy get dispatch (which
@@ -718,8 +772,12 @@ pub extern "C" fn js_object_get_field_ic_miss(
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
     if (obj as usize) < 0x10000 {
+        if diag {
+            ic_diag_note(cache_slot, key, R::SmallHandle);
+        }
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
+    let mut miss_reason = R::NotOwn;
     unsafe {
         // Issue #72: validate this really is a GC_TYPE_OBJECT before reading
         // crate::object::object_keys_array(obj) — otherwise an Array/String/Buffer/etc. receiver
@@ -758,6 +816,15 @@ pub extern "C" fn js_object_get_field_ic_miss(
         let is_regular = shape.is_some_and(|shape| {
             shape.object_kind == crate::object::shapes::ShapeObjectKind::Ordinary
         });
+        if diag {
+            miss_reason = if !is_object {
+                R::NonObjectGcType
+            } else if !is_regular {
+                R::ObjectIrregular
+            } else {
+                R::NotOwn
+            };
+        }
         // Descriptor-bearing receivers ordinarily must not prime a raw-load
         // PIC. One narrow exception is an object-backed Array subclass whose
         // complete class-declared prefix has been proved data-only: its
@@ -772,6 +839,9 @@ pub extern "C" fn js_object_get_field_ic_miss(
             };
             let keys = shape.keys as usize as *mut crate::array::ArrayHeader;
             if keys.is_null() || (keys as usize) <= 0x10000 {
+                if diag {
+                    ic_diag_note(cache_slot, key, R::ObjectNoKeys);
+                }
                 let value = js_object_get_field_by_name(obj, key);
                 return f64::from_bits(value.bits());
             }
@@ -811,12 +881,16 @@ pub extern "C" fn js_object_get_field_ic_miss(
                                         token,
                                         (i as u32 | crate::proxy::IC_SLOT_OVERFLOW_BIT) as i64,
                                     );
+                                    if diag {
+                                        ic_diag_note(cache_slot, key, R::OwnOverflowPrimed);
+                                    }
                                     return f64::from_bits(bits);
                                 }
                             }
                         }
                         // Field is in the overflow map — fall through to the
                         // slow path which handles overflow correctly.
+                        miss_reason = R::OwnDescriptorFallthrough;
                         break;
                     }
                     // The codegen IC fast path computes `obj + object_header_size + slot*8`
@@ -852,11 +926,15 @@ pub extern "C" fn js_object_get_field_ic_miss(
                         0
                     };
                     if has_own_descriptors && named_prefix_token == 0 {
+                        miss_reason = R::OwnDescriptorFallthrough;
                         break;
                     }
                     let cache = pic_slot_resolve(cache_slot);
                     (*cache)[2] = named_prefix_token;
                     pic_prime_get(cache, token, i as i64);
+                    if diag {
+                        ic_diag_note(cache_slot, key, R::OwnInlinePrimed);
+                    }
                     let field_ptr = (obj as *const u8)
                         .add(std::mem::size_of::<ObjectHeader>() + i * 8)
                         as *const f64;
@@ -864,6 +942,9 @@ pub extern "C" fn js_object_get_field_ic_miss(
                 }
             }
         }
+    }
+    if diag {
+        ic_diag_note(cache_slot, key, miss_reason);
     }
     let value = js_object_get_field_by_name(obj, key);
     f64::from_bits(value.bits())

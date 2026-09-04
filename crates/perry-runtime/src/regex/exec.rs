@@ -20,6 +20,10 @@ pub extern "C" fn js_regexp_exec(
         return ptr::null_mut();
     }
 
+    if crate::hot_diag::regex_on() {
+        super::diag_note_op(re, crate::hot_diag::RegexOp::Exec);
+    }
+
     // Spec RegExpBuiltinExec step 4 is `ToLength(Get(R, "lastIndex"))`, and it
     // runs before anything else. The ToNumber half may execute user JS, so root
     // both arguments and take the subject payload borrow only after it returns
@@ -150,6 +154,15 @@ pub extern "C" fn js_regexp_exec(
         (owned, has_indices)
     };
 
+    if crate::hot_diag::regex_on() {
+        let (slots, bytes) = owned.capture_stats();
+        crate::hot_diag::regex_with(|d| {
+            d.exec_matched += 1;
+            d.exec_capture_slots += slots as u64;
+            d.exec_capture_bytes += bytes as u64;
+        });
+    }
+
     // Phase 2 (allocating, no subject borrow): copy each snapshotted range from
     // the current rooted subject address. `string_copy_range` roots and re-reads
     // the source after its destination allocation.
@@ -159,4 +172,73 @@ pub extern "C" fn js_regexp_exec(
     LAST_EXEC_INDEX.with(|idx| *idx.borrow_mut() = owned.match_index);
     LAST_EXEC_GROUPS.with(|g| *g.borrow_mut() = groups);
     result
+}
+
+/// The engine phase of `RegExpBuiltinExec` for a global/sticky receiver,
+/// without the result: search from `lastIndex`, honour `sticky`, and advance
+/// or reset `lastIndex` exactly as [`js_regexp_exec`] does — but stop at the
+/// full-match byte range. `test` needs nothing more, and the captures array
+/// plus one string per capture that `exec` builds is pure allocation on that
+/// path (every `ansi-regex`-style `/…/g.test(segment)` paid it).
+///
+/// Engine order (backtracking matcher, fancy fallback, standard) and the
+/// `lastIndex > length` / no-match resets mirror `js_regexp_exec` line for
+/// line; a divergence here would make `test` and `exec` disagree on where the
+/// next search starts.
+#[cfg(feature = "regex-engine")]
+pub(super) fn regexp_find_advancing(
+    re: *mut RegExpHeader,
+    s: *const StringHeader,
+) -> Option<(usize, usize)> {
+    // Same rooting discipline as `js_regexp_exec`: the `ToLength(lastIndex)`
+    // read may run user JS.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let re_handle = scope.root_raw_mut_ptr(re);
+    let s_handle = scope.root_string_ptr(s);
+    let ((last_index, re), s) = s_handle.across_const::<StringHeader, _>(|| {
+        re_handle
+            .across_mut::<RegExpHeader, _>(|| re_handle.with_const_ptr(regex_last_index_offset))
+    });
+    unsafe {
+        let str_data = string_as_str(s);
+        let regex = super::lazy::header_std_regex(re);
+        let sticky = (*re).sticky;
+        if last_index > (*s).utf16_len as usize {
+            set_last_index_throwing(re, 0);
+            return None;
+        }
+        let search_start_byte = if last_index > 0 {
+            super::exec_array::utf16_index_to_byte(str_data, last_index)
+        } else {
+            0
+        };
+        let found = if let Some(repeat_matcher) = lookup_repeat_matcher(re) {
+            repeat_matcher
+                .regex
+                .find_from(str_data, search_start_byte)
+                .next()
+                .filter(|matched| !sticky || matched.start() == search_start_byte)
+                .map(|matched| (matched.start(), matched.end()))
+        } else if let Some(fre) = lookup_fancy_regex(re) {
+            match fre.find_from_pos(str_data, search_start_byte) {
+                Ok(Some(matched)) if !sticky || matched.start() == search_start_byte => {
+                    Some((matched.start(), matched.end()))
+                }
+                _ => None,
+            }
+        } else {
+            regex
+                .find_at(str_data, search_start_byte)
+                .filter(|matched| !sticky || matched.start() == search_start_byte)
+                .map(|matched| (matched.start(), matched.end()))
+        };
+        match found {
+            Some((_, end)) => set_last_index_throwing(
+                re,
+                super::exec_array::byte_index_to_utf16_index(str_data, end),
+            ),
+            None => set_last_index_throwing(re, 0),
+        }
+        found
+    }
 }

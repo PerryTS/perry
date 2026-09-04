@@ -304,7 +304,8 @@ fn source_and_flags(re: *const super::RegExpHeader) -> (String, String) {
     // One definition, shared with the lazy first-use builder: both need the
     // `(source, flags)` a header was constructed from, and a second copy of
     // the side-table-then-header fallback would be a place for them to drift.
-    super::lazy::source_and_flags(re)
+    let (source, flags) = super::lazy::source_and_flags(re);
+    (source.to_string(), flags.to_string())
 }
 
 fn decode_wtf8_units(bytes: &[u8]) -> Vec<u16> {
