@@ -1577,7 +1577,7 @@ fn throw_radix_range_error() -> ! {
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 
-/// V8-style `DoubleToRadixCString`: render a finite, non-integer f64 in
+/// V8-style `DoubleToRadixCString`: render a finite f64 in
 /// `radix` (2..=36) producing the shortest digit sequence that round-trips
 /// back to the same double. Mirrors ECMAScript `Number::toString` for
 /// non-decimal radices, including the fractional part (`(10.5).toString(2)`
@@ -1610,7 +1610,7 @@ fn double_to_radix_string(value: f64, radix: u32) -> String {
             let digit = fraction.floor() as usize;
             frac_buf.push(CHARS[digit] as char);
             fraction -= digit as f64;
-            if fraction >= 0.5 && fraction > delta {
+            if fraction > 0.5 || (fraction == 0.5 && digit & 1 != 0) {
                 // Round up: carry into the already-emitted digits.
                 if fraction + delta > 1.0 {
                     // Propagate the carry through fraction digits, possibly
@@ -1654,13 +1654,23 @@ fn double_to_radix_string(value: f64, radix: u32) -> String {
 
     // Integer part: repeated division. `integer` may have grown via carry.
     let mut int_buf = String::new();
+    // V8's Double(integer / radix).Exponent() > 0 means the quotient's
+    // least significant binary digit is above the units place (>= 2^53).
+    // Such radix digits are unrepresented: emit zeros until the quotient
+    // fits, retaining the rounded quotient rather than flooring it.
+    while integer / radix as f64 >= crate::builtins::INT_EXACT_FASTPATH_LIMIT {
+        integer /= radix as f64;
+        int_buf.push('0');
+    }
     if integer == 0.0 {
         int_buf.push('0');
     } else {
         while integer >= 1.0 {
             let remainder = (integer % radix as f64) as usize;
             int_buf.push(CHARS[remainder] as char);
-            integer = (integer / radix as f64).floor();
+            // Subtract before dividing: a rounded quotient can otherwise
+            // cross an integer boundary and invent a carry above 2^53.
+            integer = (integer - remainder as f64) / radix as f64;
         }
     }
     let int_part: String = int_buf.chars().rev().collect();
@@ -1891,6 +1901,40 @@ mod radix_tostring_tests {
     }
 
     #[test]
+    fn large_integer_radix_formatting_matches_node() {
+        // Node 26.5.1: preserve represented digits at the 2^53 boundary,
+        // then zero-fill digits beyond the double's precision (#9725).
+        for (value, radix, expected) in [
+            (255.0, 36, "73"),
+            (1e15, 36, "9ugxnorjls"),
+            (9_007_199_254_740_991.0, 36, "2gosa7pa2gv"),
+            (9_007_199_254_740_992.0, 36, "2gosa7pa2gw"),
+            (9_007_199_254_740_994.0, 36, "2gosa7pa2gy"),
+            (
+                9_007_199_254_740_994.0,
+                3,
+                "1121202011211211122211100012101111",
+            ),
+            (1e21, 36, "5v1j4f4ds7c000"),
+            (1e21, 7, "5135235413265003022600000"),
+            (1e30, 36, "2oy99wnkl1a000000000"),
+            (1e30, 7, "243230604464041356220000000000000000"),
+            (1e21, 16, "3635c9adc5dea00000"),
+            (1e30, 16, "c9f2c9cd04675000000000000"),
+        ] {
+            assert_eq!(double_to_radix_string(value, radix), expected);
+            assert_eq!(
+                double_to_radix_string(-value, radix),
+                format!("-{expected}")
+            );
+        }
+        assert_eq!(
+            double_to_radix_string(f64::MAX, 36),
+            format!("1a1e4vngaiqo{}", "0".repeat(187))
+        );
+    }
+
+    #[test]
     fn fractional_radix_formatting_matches_v8() {
         // Terminating fractions.
         assert_eq!(double_to_radix_string(10.5, 2), "1010.1");
@@ -1905,6 +1949,9 @@ mod radix_tostring_tests {
             double_to_radix_string(0.1, 2),
             "0.0001100110011001100110011001100110011001100110011001101"
         );
+        // Rounding is still needed when the residual is within delta.
+        assert_eq!(double_to_radix_string(0.1, 36), "0.3lllllllllm");
+        assert_eq!(double_to_radix_string(10.5, 7), "13.333333333333333334");
     }
 
     #[test]
