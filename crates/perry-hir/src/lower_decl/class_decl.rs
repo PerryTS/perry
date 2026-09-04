@@ -7,37 +7,35 @@ use crate::lower::{lower_expr, LoweringContext};
 use crate::lower_patterns::*;
 use crate::lower_types::*;
 
-/// The four classic node:stream base-class names (`Readable`/`Writable`/
-/// `Duplex`/`Transform`). When a class extends a parent with one of these
-/// textual names, perry routes `super()` to the native `js_node_stream_*`
-/// shim (which installs the native stream surface but never sets the
-/// `_readableState`/`_writableState`/`_transformState` objects). That is only
-/// correct when the name actually resolves to the `node:stream` builtin —
-/// i.e. it was imported from `stream`/`node:stream`, in which case the import
-/// machinery registered it as the `stream` native module
-/// (`register_native_module(binding, "stream", Some(name))`, see
-/// `var_decl_sources::register_destructured_stream_ctors` and the import
-/// arms in `lower/module_decl.rs`).
-///
-/// The same textual name can instead be a userland binding from a
-/// stream-shim npm package — `const { Transform } =
-/// require('readable-stream')` in winston's `logger.js`, where
-/// `class Logger extends Transform` then reads `this._readableState.pipes`
-/// directly. Such a binding never registers as the `stream` native module
-/// (readable-stream is not a node builtin), so the package's real constructor
-/// must run instead. Returning `false` here lets the unknown-Ident arm
-/// capture the parent as `extends_expr` and route `super()` through the
-/// dynamic-parent path (`js_register_class_parent_dynamic` + the
-/// `js_fetch_or_value_super` dispatch), which runs the real `Transform`
-/// function body on the subclass instance.
-fn is_genuine_node_stream_parent(ctx: &LoweringContext, name: &str) -> bool {
-    if !matches!(name, "Readable" | "Writable" | "Duplex" | "Transform") {
-        return false;
+/// Recover the exported constructor name behind a minified native import used
+/// as class heritage (`import { Readable as ut }; class R extends ut`). Native
+/// imports are registered under the local binding while preserving this export.
+fn canonical_native_parent_name<'a>(ctx: &'a LoweringContext, name: &str) -> Option<&'a str> {
+    match ctx.lookup_native_module(name) {
+        Some(("stream", Some(class @ ("Readable" | "Writable" | "Duplex" | "Transform"))))
+        | Some(("events", Some(class @ ("EventEmitter" | "EventEmitterAsyncResource"))))
+        | Some(("async_hooks", Some(class @ ("AsyncLocalStorage" | "AsyncResource"))))
+        | Some(("ws", Some(class @ "WebSocketServer")))
+        | Some((
+            "stream/web" | "node:stream/web",
+            Some(class @ ("ReadableStream" | "WritableStream" | "TransformStream")),
+        )) => Some(class),
+        _ => None,
     }
-    // Only the genuine `node:stream` builtin import registers these names as
-    // the `stream` native module. Anything else (a userland require/import of
-    // a stream-shim package, or an unbound reference) is not the builtin.
-    matches!(ctx.lookup_native_module(name), Some(("stream", _)))
+}
+
+/// Only genuine `node:stream` bindings use Perry's native subclass shims. A
+/// userland binding from `readable-stream` must keep the dynamic parent path so
+/// its real constructor runs. Inspecting the preserved export also supports a
+/// minified local binding such as `Readable as ut`.
+fn is_genuine_node_stream_parent(ctx: &LoweringContext, name: &str) -> bool {
+    match ctx.lookup_native_module(name) {
+        Some(("stream", Some("Readable" | "Writable" | "Duplex" | "Transform"))) => true,
+        // Preserve the historical name-based treatment of a namespace/default
+        // binding whose local name itself is a classic stream constructor.
+        Some(("stream", None)) => matches!(name, "Readable" | "Writable" | "Duplex" | "Transform"),
+        _ => false,
+    }
 }
 
 mod class_heritage;
@@ -331,8 +329,11 @@ pub fn lower_class_decl(
             )
         } else if let ast::Expr::Ident(ident) = super_class.as_ref() {
             let parent_name = ident.sym.to_string();
+            let canonical_parent_name = canonical_native_parent_name(ctx, &parent_name)
+                .unwrap_or(&parent_name)
+                .to_string();
             // First check if it's a native module class
-            let native_parent = match parent_name.as_str() {
+            let native_parent = match canonical_parent_name.as_str() {
                 "EventEmitter" => Some(("events".to_string(), "EventEmitter".to_string())),
                 "EventEmitterAsyncResource" => Some((
                     "events".to_string(),
@@ -379,7 +380,7 @@ pub fn lower_class_decl(
                 "Readable" | "Writable" | "Duplex" | "Transform"
                     if is_genuine_node_stream_parent(ctx, &parent_name) =>
                 {
-                    Some(("node_stream".to_string(), parent_name.clone()))
+                    Some(("node_stream".to_string(), canonical_parent_name.clone()))
                 }
                 _ => None,
             };
@@ -399,7 +400,7 @@ pub fn lower_class_decl(
                 // dispatch resolves through the existing extends_name
                 // path while the native_extends carries the (module,
                 // class) tag for the runtime shim).
-                (None, Some(parent_name), native_parent, None)
+                (None, Some(canonical_parent_name), native_parent, None)
             } else if locally_shadowed {
                 // Lexical local shadow → dynamic parent via `extends_expr` (the
                 // in-scope local value), invoked by `super()` through
@@ -1385,7 +1386,10 @@ pub fn lower_class_from_ast(
             )
         } else if let ast::Expr::Ident(ident) = super_class.as_ref() {
             let parent_name = ident.sym.to_string();
-            let native_parent = match parent_name.as_str() {
+            let canonical_parent_name = canonical_native_parent_name(ctx, &parent_name)
+                .unwrap_or(&parent_name)
+                .to_string();
+            let native_parent = match canonical_parent_name.as_str() {
                 "EventEmitter" => Some(("events".to_string(), "EventEmitter".to_string())),
                 "EventEmitterAsyncResource" => Some((
                     "events".to_string(),
@@ -1416,7 +1420,7 @@ pub fn lower_class_from_ast(
                 "Readable" | "Writable" | "Duplex" | "Transform"
                     if is_genuine_node_stream_parent(ctx, &parent_name) =>
                 {
-                    Some(("node_stream".to_string(), parent_name.clone()))
+                    Some(("node_stream".to_string(), canonical_parent_name.clone()))
                 }
                 _ => None,
             };
@@ -1430,7 +1434,7 @@ pub fn lower_class_from_ast(
             let locally_shadowed = !ctx.class_renames.contains_key(&parent_name)
                 && ctx.locals.lookup(&parent_name).is_some();
             if native_parent.is_some() && !locally_shadowed {
-                (None, Some(parent_name), native_parent, None)
+                (None, Some(canonical_parent_name), native_parent, None)
             } else if locally_shadowed {
                 // #5437 (Next.js p-queue `PQueue` inside a minified bundle): a
                 // class EXPRESSION whose parent Ident is an IN-SCOPE LOCAL
