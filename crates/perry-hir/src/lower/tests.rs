@@ -1884,6 +1884,50 @@ fn bun_transpiler_and_build_lower_to_native_dispatch() {
     );
 }
 
+/// #9680: native constructors retain their exported identity when a bundler
+/// minifies the local import name used by a class declaration or expression.
+#[test]
+fn aliased_native_imports_canonicalize_class_heritage() {
+    let source = r#"
+        import { Readable as ut } from "node:stream";
+        import { EventEmitter as jt } from "node:events";
+
+        class ReaddirpStream extends ut {
+            _read() {}
+        }
+        const Watcher = class extends jt {};
+    "#;
+    let module = perry_parser::parse_typescript(source, "watcher.js").expect("source parses");
+    let hir = super::lower_module(&module, "watcher", "watcher.js").expect("source lowers");
+
+    let stream = hir
+        .classes
+        .iter()
+        .find(|class| class.name == "ReaddirpStream")
+        .expect("stream class is lowered");
+    assert_eq!(stream.extends_name.as_deref(), Some("Readable"));
+    assert_eq!(
+        stream.native_extends,
+        Some(("node_stream".to_string(), "Readable".to_string()))
+    );
+    assert!(
+        stream.extends_expr.is_none(),
+        "aliased native heritage must not use replacement-object construction"
+    );
+
+    let watcher = hir
+        .classes
+        .iter()
+        .find(|class| class.name == "Watcher")
+        .expect("inferred-name class expression is lowered");
+    assert_eq!(watcher.extends_name.as_deref(), Some("EventEmitter"));
+    assert_eq!(
+        watcher.native_extends,
+        Some(("events".to_string(), "EventEmitter".to_string()))
+    );
+    assert!(watcher.extends_expr.is_none());
+}
+
 /// #8882: a module-level class constructing a sibling class that is declared
 /// inside a function body lowered LATER. This is the shape the CJS wrap
 /// produces for Next's `server/lib/lru-cache.js`: `LRUCache` is hoisted out of
