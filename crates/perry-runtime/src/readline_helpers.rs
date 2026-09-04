@@ -153,16 +153,18 @@ fn build_keypress_object(name: &str, ctrl: bool, shift: bool, meta: bool, seq: &
     let packed = b"name\0ctrl\0shift\0meta\0sequence\0";
     let obj = js_object_alloc_with_shape(0x7FFF_FF48, 5, packed.as_ptr(), packed.len() as u32);
     let obj_handle = scope.root_raw_mut_ptr(obj);
-    let name_str = js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    let obj = obj_handle.get_raw_mut_ptr();
+    let (name_str, obj) = obj_handle.across_mut::<crate::object::ObjectHeader, _>(|| {
+        js_string_from_bytes(name.as_ptr(), name.len() as u32)
+    });
     js_object_set_field(obj, 0, JSValue::string_ptr(name_str));
     js_object_set_field(obj, 1, JSValue::bool(ctrl));
     js_object_set_field(obj, 2, JSValue::bool(shift));
     js_object_set_field(obj, 3, JSValue::bool(meta));
-    let seq_str = js_string_from_bytes(seq.as_ptr(), seq.len() as u32);
-    let obj = obj_handle.get_raw_mut_ptr();
+    let (seq_str, obj) = obj_handle.across_mut::<crate::object::ObjectHeader, _>(|| {
+        js_string_from_bytes(seq.as_ptr(), seq.len() as u32)
+    });
     js_object_set_field(obj, 4, JSValue::string_ptr(seq_str));
-    f64::from_bits(JSValue::pointer(obj as *const u8).bits())
+    obj_handle.with_const_ptr::<u8, _>(|obj| f64::from_bits(JSValue::pointer(obj).bits()))
 }
 
 fn parse_keypress(chunk: &[u8]) -> Option<(Option<String>, String, bool, bool, bool, String)> {
@@ -264,18 +266,24 @@ extern "C" fn emit_keypress_data(closure: *const ClosureHeader, chunk: f64) -> f
         let key = build_keypress_object(&name, ctrl, shift, meta, &seq);
         let key = scope.root_nanbox_f64(key);
         let args = scope.root_raw_mut_ptr(js_array_alloc(0));
-        let pushed = js_array_push_f64(args.get_raw_mut_ptr(), first.get_nanbox_f64());
+        let pushed = args.with_mut_ptr::<crate::array::ArrayHeader, _>(|args| {
+            js_array_push_f64(args, first.get_nanbox_f64())
+        });
         args.set_raw_mut_ptr(pushed);
-        let pushed = js_array_push_f64(args.get_raw_mut_ptr(), key.get_nanbox_f64());
+        let pushed = args.with_mut_ptr::<crate::array::ArrayHeader, _>(|args| {
+            js_array_push_f64(args, key.get_nanbox_f64())
+        });
         args.set_raw_mut_ptr(pushed);
         let Some(raw) = raw_ptr_from_value(stream.get_nanbox_f64()) else {
             return undefined();
         };
-        crate::node_stream::js_node_stream_method_emit_args(
-            raw,
-            event.get_nanbox_f64(),
-            args.get_raw_mut_ptr::<crate::array::ArrayHeader>() as i64,
-        );
+        args.with_mut_ptr::<crate::array::ArrayHeader, _>(|args| {
+            crate::node_stream::js_node_stream_method_emit_args(
+                raw,
+                event.get_nanbox_f64(),
+                args as i64,
+            )
+        });
     }
     undefined()
 }
@@ -296,15 +304,19 @@ pub extern "C" fn js_readline_emit_keypress_events_args(
         return undefined();
     };
     if crate::os::is_process_stdin_handle(raw) {
-        crate::os::enable_process_stdin_keypress_events(
-            listener.get_raw_const_ptr::<ClosureHeader>() as i64,
-        );
+        listener.with_const_ptr::<ClosureHeader, _>(|listener| {
+            crate::os::enable_process_stdin_keypress_events(listener as i64)
+        });
     } else {
         let event = scope.root_nanbox_f64(boxed_str(b"data"));
-        let listener_value = f64::from_bits(
-            JSValue::pointer(listener.get_raw_const_ptr::<ClosureHeader>() as *const u8).bits(),
-        );
-        crate::node_stream::js_node_stream_method_on(raw, event.get_nanbox_f64(), listener_value);
+        listener.with_const_ptr::<ClosureHeader, _>(|listener| {
+            let listener_value = f64::from_bits(JSValue::pointer(listener as *const u8).bits());
+            crate::node_stream::js_node_stream_method_on(
+                raw,
+                event.get_nanbox_f64(),
+                listener_value,
+            )
+        });
     }
     undefined()
 }
