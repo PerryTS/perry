@@ -137,7 +137,7 @@ unsafe fn append_one_blob_part(part: f64, out: &mut Vec<u8>) {
 /// Normalize a Blob/File `type` per the WHATWG Blob spec: if every
 /// character is in the printable ASCII range U+0020–U+007E it is
 /// lowercased; otherwise the type is treated as the empty string.
-fn normalize_blob_type(raw: &str) -> String {
+pub(crate) fn normalize_blob_type(raw: &str) -> String {
     if raw.bytes().all(|b| (0x20..=0x7E).contains(&b)) {
         raw.to_ascii_lowercase()
     } else {
@@ -206,9 +206,9 @@ pub unsafe extern "C" fn js_blob_new(parts: f64, content_type: f64) -> f64 {
 /// `new File(parts, name, { type, lastModified })` — same registry as
 /// Blob, with `name` / `last_modified_ms` populated so
 /// `js_file_name` / `js_file_last_modified` can read them back. The
-/// returned handle is `instanceof Blob` (same registry); dispatch
-/// routes File-specific property reads via `module == "blob",
-/// class_name == "File"` in codegen.
+/// returned handle is both `instanceof File` and `instanceof Blob` (same
+/// registry, distinguished by file metadata); dispatch routes File-specific
+/// property reads via `module == "blob", class_name == "File"` in codegen.
 #[no_mangle]
 pub unsafe extern "C" fn js_file_new(
     parts: f64,
