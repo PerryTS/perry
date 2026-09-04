@@ -311,3 +311,33 @@ run();
     );
     assert_eq!(stdout, "in-case\nafter\n");
 }
+
+/// Issue #9198: labeled loop completions from an awaited switch must target
+/// the enclosing for-of loop instead of becoming dispatch-loop completions.
+#[test]
+fn awaited_switch_inside_labeled_for_of() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let stdout = compile_and_run(
+        dir.path(),
+        r#"
+async function run(xs: number[]) {
+  const out: string[] = [];
+  outer: for (const x of xs) {
+    switch (x % 4) {
+      case 0: out.push("z" + x); break;
+      case 1: await Promise.resolve(); out.push("a" + x); break;
+      case 2: if (x > 5) break outer; out.push("b" + x); break;
+      default: await Promise.resolve(); if (x > 10) continue outer; out.push("d" + x);
+    }
+    out.push("|");
+  }
+  return out.join("");
+}
+(async () => {
+  console.log(await run([0, 1, 2, 3, 4, 5, 6, 7, 11, 12]));
+  console.log(await run([7, 11, 3]));
+})();
+"#,
+    );
+    assert_eq!(stdout, "z0|a1|b2|d3|z4|a5|\nd7|d3|\n");
+}
