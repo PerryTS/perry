@@ -479,6 +479,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // `Blob` — stream consumers allocate a scoped Blob-shaped
                 // ObjectHeader tagged with this reserved class id.
                 "Blob" => 0xFFFF0026u32,
+                // `File` — Blob registry handles with file metadata. Keep the
+                // distinct id in sync with the fetch kind-probe in runtime.
+                "File" => 0xFFFF002Fu32,
                 // `Promise` — runtime detects via GC_TYPE_PROMISE because
                 // Promise values are raw promise allocations, not ObjectHeader
                 // instances with a class_id field.

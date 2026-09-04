@@ -832,7 +832,8 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
         );
     }
 
-    // `instanceof` for WHATWG fetch handles (Response/Request/Headers/Blob).
+    // `instanceof` for WHATWG fetch handles
+    // (Response/Request/Headers/Blob/File).
     // They are pointer-tagged small-integer ids, not heap objects, so the
     // runtime can't walk a prototype chain — register a kind-probe so
     // `x instanceof Response` (Hono's route-fallback guard) resolves. Gated on

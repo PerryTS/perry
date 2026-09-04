@@ -149,6 +149,7 @@ fn builtin_ctor_class_id_from_value(type_ref: f64) -> Option<u32> {
         "Request" => 0xFFFF_0029,
         "Headers" => 0xFFFF_002A,
         "Blob" => 0xFFFF_0026,
+        "File" => 0xFFFF_002F,
         _ => return None,
     };
     // The name alone is forgeable (`function Response() {}` in user code).
@@ -1391,7 +1392,8 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
         return false_val;
     }
 
-    // WHATWG fetch: `instanceof Response` / `Request` / `Headers` / `Blob`.
+    // WHATWG fetch: `instanceof Response` / `Request` / `Headers` / `Blob` /
+    // `File`.
     // These are pointer-tagged small-integer handles (stdlib fetch registries),
     // not heap objects, so consult the stdlib fetch kind-probe rather than the
     // class chain. Without this, Hono's `res instanceof Response` route-fallback
@@ -1400,20 +1402,25 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
     const CLASS_ID_REQUEST: u32 = 0xFFFF0029;
     const CLASS_ID_HEADERS: u32 = 0xFFFF002A;
     const CLASS_ID_BLOB: u32 = 0xFFFF0026;
+    const CLASS_ID_FILE: u32 = 0xFFFF002F;
     if class_id == CLASS_ID_RESPONSE
         || class_id == CLASS_ID_REQUEST
         || class_id == CLASS_ID_HEADERS
         || class_id == CLASS_ID_BLOB
+        || class_id == CLASS_ID_FILE
     {
         let want = match class_id {
             CLASS_ID_RESPONSE => 1u8,
             CLASS_ID_REQUEST => 2,
             CLASS_ID_HEADERS => 3,
-            _ => 4, // CLASS_ID_BLOB
+            CLASS_ID_BLOB => 4,
+            _ => 5, // CLASS_ID_FILE
         };
         if let Some(handle) = small_native_handle_id(value) {
             if let Some(probe) = crate::object::fetch_handle_kind_probe() {
-                if unsafe { probe(handle as usize) } == want {
+                let kind = unsafe { probe(handle as usize) };
+                // File inherits Blob, so a File handle satisfies both brands.
+                if kind == want || (class_id == CLASS_ID_BLOB && kind == 5) {
                     return true_val;
                 }
             }
@@ -1426,7 +1433,8 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
             let raw = jsval.as_pointer::<u8>() as usize;
             if let Some(id) = unsafe { crate::object::fetch_subclass_handle_id(raw) } {
                 if let Some(probe) = crate::object::fetch_handle_kind_probe() {
-                    if unsafe { probe(id as usize) } == want {
+                    let kind = unsafe { probe(id as usize) };
+                    if kind == want || (class_id == CLASS_ID_BLOB && kind == 5) {
                         return true_val;
                     }
                 }

@@ -83,6 +83,12 @@ pub mod querystring;
 pub mod vm;
 pub mod worker_threads;
 
+// Binary-safe multipart parsing is shared by the independent HTTP-server and
+// Web Fetch feature families. Keep the core outside `framework`, which is not
+// compiled for a minimal `web-fetch` build.
+#[cfg(any(feature = "http-server", feature = "web-fetch"))]
+mod multipart_parser;
+
 // Re-export core
 pub use async_local_storage::*;
 #[cfg(feature = "bundled-commander")]

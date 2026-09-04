@@ -89,10 +89,10 @@ pub type StreamHandleKindProbeFn = unsafe extern "C" fn(id: usize) -> u8;
 
 /// Probe for WHATWG fetch handles (`Response`/`Request`/`Headers`/`Blob`),
 /// which are pointer-tagged small-integer ids, not heap objects with a class
-/// chain. Returns 0 = none, 1 = Response, 2 = Request, 3 = Headers, 4 = Blob.
-/// Lets `x instanceof Response` (etc.) resolve for fetch handles — Hono guards
-/// route fallbacks with `res instanceof Response`, so without this the bare
-/// handle fails the `instanceof` and the guard is skipped.
+/// chain. Returns 0 = none, 1 = Response, 2 = Request, 3 = Headers, 4 = Blob,
+/// 5 = File. Lets `x instanceof Response` (etc.) resolve for fetch handles —
+/// Hono guards route fallbacks with `res instanceof Response`, so without this
+/// the bare handle fails the `instanceof` and the guard is skipped.
 pub type FetchHandleKindProbeFn = unsafe extern "C" fn(id: usize) -> u8;
 
 /// Probe for stdlib `events.EventEmitter` handles. The handles are returned as

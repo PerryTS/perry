@@ -278,6 +278,15 @@ fn response_headers_snapshot(response: &FetchResponse) -> HeadersStore {
         .unwrap_or_else(|| response.headers.clone())
 }
 
+/// Snapshot the observable Request headers, including mutations made through
+/// the lazily cached `request.headers` object.
+fn request_headers_snapshot(request: &RequestRecord) -> HeadersStore {
+    request
+        .cached_headers_id
+        .and_then(|id| HEADERS_REGISTRY.lock().unwrap().get(&id).cloned())
+        .unwrap_or_else(|| request.headers.clone())
+}
+
 thread_local! {
     static PENDING_FETCH_BODY_STREAM_ID: Cell<usize> = const { Cell::new(0) };
     // Codegen coerces BodyInit to a StringHeader before js_response_new, so
