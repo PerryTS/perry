@@ -1429,15 +1429,22 @@ fn typeof_owned_string(v: f64) -> String {
 
 /// Resolve a higher-order callback argument to its `ClosureHeader*` (as
 /// `i64`). Returns `Some(ptr)` only for values the runtime can actually
-/// invoke (real closures, bound methods/functions); `None` for any
-/// non-callable so the caller can throw the spec `TypeError`.
+/// invoke (real closures, bound methods/functions, callable Proxies); `None`
+/// for any non-callable so the caller can throw the spec `TypeError`.
 #[inline]
 fn resolve_callback_ptr(cb_boxed: f64) -> Option<i64> {
     use crate::value::JSValue;
     let jv = JSValue::from_bits(cb_boxed.to_bits());
     if jv.is_pointer() {
         let ptr = jv.as_pointer::<ClosureHeader>();
-        if !crate::closure::get_valid_func_ptr(ptr).is_null() {
+        // #9681: a callable Proxy is a small registry id, so the hardened
+        // closure validator correctly rejects it as a ClosureHeader. Return
+        // that bare id anyway: DirectCallN falls back to js_closure_callN,
+        // whose proxy-callee path performs the Proxy [[Call]].
+        if !crate::closure::get_valid_func_ptr(ptr).is_null()
+            || (crate::proxy::js_proxy_is_proxy(cb_boxed) == 1
+                && crate::proxy::proxy_wraps_callable(cb_boxed))
+        {
             return Some(ptr as i64);
         }
     }
