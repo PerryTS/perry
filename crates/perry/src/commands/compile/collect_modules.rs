@@ -661,7 +661,7 @@ fn collect_module_one(
         collected: Some(ctx.native_modules.len() + ctx.js_modules.len()),
         ..Default::default()
     });
-    let lower_result = perry_hir::lower_module_full(
+    let lower_result = perry_hir::lower_module_full_with_platform_globals(
         ast_module,
         &module_name,
         &source_file_path,
@@ -671,6 +671,7 @@ fn collect_module_one(
         imported_class_accessors,
         is_entry_module,
         is_external_module,
+        if ctx.bun_platform { &["Bun"] } else { &[] },
     );
     progress.heartbeat(ProgressSnapshot {
         stage: "lower",

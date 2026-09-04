@@ -300,7 +300,10 @@ pub(crate) fn lower_ident_expr(ctx: &mut LoweringContext, ident: &ast::Ident) ->
             // WithBaseObject is undefined; Node: `toString()` →
             // "[object Undefined]" even in sloppy CJS), which the generic
             // call path already provides.
-            if ctx.unresolved_ident_as_global {
+            // Platform globals (Bun in Bun mode) are supplied at module
+            // initialization. Keep the same lookup so replacement on
+            // globalThis remains observable; only the warning is suppressed.
+            if ctx.unresolved_ident_as_global && !ctx.platform_globals.contains(&name) {
                 eprintln!(
                     "  Warning: unknown identifier '{}' in {} — assuming global; resolved by name on globalThis (incl. Object.prototype-inherited members) at runtime",
                     name,

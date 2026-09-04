@@ -111,9 +111,9 @@ pub(crate) use array_fold::{
 
 mod lower_module_fn;
 pub use lower_module_fn::{
-    lower_module, lower_module_full, lower_module_with_class_id,
-    lower_module_with_class_id_and_types, lower_module_with_class_id_types_and_seed,
-    lower_module_with_class_id_types_seed_and_entry,
+    lower_module, lower_module_full, lower_module_full_with_platform_globals,
+    lower_module_with_class_id, lower_module_with_class_id_and_types,
+    lower_module_with_class_id_types_and_seed, lower_module_with_class_id_types_seed_and_entry,
 };
 
 mod lower_expr;
