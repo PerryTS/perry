@@ -52,6 +52,12 @@ pub(crate) fn function_body_returns_generator_object(body: &[perry_hir::Stmt]) -
 /// Cached at first call so subsequent compile_* calls skip the
 /// env-var lookup.
 ///
+/// When adding a `PERRY_*` reader using this pattern, register it in
+/// `BUILD_CACHE_ENV_VARS` in `crates/perry/src/commands/compile/build_cache.rs`.
+/// Only readers that cannot change emitted code belong in that file's
+/// `BUILD_CACHE_ENV_EXCLUSIONS`, with a reason. The OnceLock caches the reader;
+/// the registry keeps compiled objects from being reused across settings.
+///
 /// Why on by default now: the shadow stack precisely covers every
 /// pointer-typed local in compiled JS frames, complementing the
 /// conservative C-stack scan. With Phase A complete and the GC

@@ -141,6 +141,8 @@ const BUILD_CACHE_ENV_VARS: &[&str] = &[
     "PERRY_CODEGEN_UNITS",
     "PERRY_CODEGEN_UNIT_BYTES",
     "PERRY_CODEGEN_UNIT_SIZE",
+    // Enables per-site concatenation tables and changes the emitted calls.
+    "PERRY_CONCAT_SITE_CACHE",
     "PERRY_ENTRY_SYMBOL",
     "PERRY_FULL_OUTLINE_IC",
     "PERRY_FULL_OUTLINE_IC_MIN_FUNCS",
@@ -410,9 +412,13 @@ mod tests {
         assert!(
             missing.is_empty(),
             "these codegen env vars key neither the build cache nor an \
-             exclusion (#6394's rule): {missing:?}. Add each to \
-             BUILD_CACHE_ENV_VARS, or to BUILD_CACHE_ENV_EXCLUSIONS with a \
-             reason it cannot change emitted code."
+             exclusion (#6394's rule): {missing:?}.\n\
+             Edit crates/perry/src/commands/compile/build_cache.rs:\n\
+             - Add switches that change emitted code at `const BUILD_CACHE_ENV_VARS`.\n\
+             - Otherwise add them at `const BUILD_CACHE_ENV_EXCLUSIONS`, with a \
+             reason they cannot change emitted code.\n\
+             Unregistered switches can reuse objects compiled with a different setting.\n\
+             Verify with: cargo test -p perry codegen_env_vars_are_build_cache_inputs"
         );
 
         // A stale exclusion is also a defect: it claims a var exists and is
