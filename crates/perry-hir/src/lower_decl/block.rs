@@ -178,6 +178,32 @@ pub(crate) fn pre_register_forward_captured_lets(
                     ast::VarDeclKind::Let | ast::VarDeclKind::Const
                 ) {
                     for decl in &var_decl.decls {
+                        // A closure in a declarator's OWN initializer can
+                        // reference the binding that declarator introduces:
+                        //   `const off = ev.on(() => off())`
+                        //   `const { unmount: O } = await render({ onDone: () => O() })`
+                        // (claude-code's `install` subcommand, #9718). The
+                        // closure body does not run until after initialization,
+                        // so this is legal — node only has a TDZ window here.
+                        // Record this declarator's closure refs BEFORE deciding
+                        // whether its own bindings are forward-captured; doing
+                        // it only afterwards (which is all the LATER-declarator
+                        // case below needs) left the self-referential shape
+                        // unregistered, so the reference fell through to
+                        // `js_global_get_or_throw_unresolved` and threw
+                        // `ReferenceError: <name> is not defined`.
+                        //
+                        // Recording early is a superset of recording late: later
+                        // declarators of the same declaration still see these
+                        // refs, which is what the intra-declaration case wants:
+                        //   `let z = (w) => { … O … }, O = setTimeout(z, K);`
+                        // (the minified `new Promise` executor shape — without
+                        // it the `resolve` never fires and the awaiting caller
+                        // hangs). Cross-statement forward-refs are handled by
+                        // the trailing `cic_stmt`.
+                        if let Some(init) = &decl.init {
+                            cic_expr(init, false, &mut seen_closure_refs);
+                        }
                         let mut binding_idents: Vec<(String, u32)> = Vec::new();
                         collect_pat_forward_idents(&decl.name, &mut binding_idents);
                         for (name, span_lo) in binding_idents {
@@ -212,27 +238,6 @@ pub(crate) fn pre_register_forward_captured_lets(
                                     registered_here.insert(name);
                                 }
                             }
-                        }
-                        // A closure in an EARLIER declarator of THIS same
-                        // `let`/`const` can forward-reference a name bound by a LATER
-                        // declarator in the SAME declaration:
-                        //   `let z = (w) => { … O … Y … A … },
-                        //        Y = () => z(false),
-                        //        A = () => clearTimeout(O),
-                        //        O = setTimeout(z, K);`
-                        // (the minified `new Promise` executor shape). Record this
-                        // declarator's closure refs NOW so the later declarators are
-                        // seen as forward-captured too — `seen_closure_refs` is
-                        // otherwise only updated by the trailing `cic_stmt` AFTER the
-                        // whole declaration, so intra-declaration forward-refs were
-                        // missed: the later names never got pre-registered, so the
-                        // ref fell through to `js_global_get_or_throw_unresolved` and
-                        // the closure captured a global instead of the local box —
-                        // e.g. a `new Promise` `resolve` that never fires, hanging
-                        // the awaiting caller. Cross-statement forward-refs were
-                        // already handled by the trailing `cic_stmt`.
-                        if let Some(init) = &decl.init {
-                            cic_expr(init, false, &mut seen_closure_refs);
                         }
                     }
                 } else {
