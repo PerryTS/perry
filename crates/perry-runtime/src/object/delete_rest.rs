@@ -1487,9 +1487,8 @@ mod sso_tests_1781 {
     }
 }
 
-/// Gate for O(1) tombstone deletes (`PERRY_OBJECT_TOMBSTONES=1`). Default OFF
-/// while the walker audit and differentials bake; the sibling Map tombstones
-/// (#9020) shipped default-on after the same sequence.
+/// Gate for O(1) tombstone deletes (`PERRY_OBJECT_TOMBSTONES`).
+/// The default and its rationale live beside the environment parsing below.
 fn object_tombstone_deletes_enabled() -> bool {
     // Test override first: the OnceLock latches at the FIRST delete anywhere
     // in the test process, which is long before a tombstone test's own
