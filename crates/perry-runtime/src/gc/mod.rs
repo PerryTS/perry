@@ -47,6 +47,10 @@ mod heap_budget;
 pub(crate) use heap_budget::*;
 mod pressure;
 pub use pressure::*;
+mod arena_right_size;
+pub use arena_right_size::{
+    arena_right_size_episodes, arena_right_size_released_capacity_bytes, arena_right_size_starts,
+};
 mod idle_compact;
 mod idle_reclaim;
 pub use idle_compact::{
@@ -1371,6 +1375,7 @@ fn emit_incremental_liveness_diag() {
     );
     idle_reclaim::emit_diag();
     idle_compact::emit_diag();
+    arena_right_size::emit_diag();
     emit_step_bounds_diag();
     emit_gc_time_share_diag();
 }

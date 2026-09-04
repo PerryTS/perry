@@ -120,7 +120,8 @@ fn idle_reclaim_runs_a_full_at_the_park_when_owed() {
         "rooted survivor intact and unmoved"
     );
 
-    // Gate 1: activity. Nothing collected since — no second attempt, ever.
+    // Gate 1: activity. Nothing collected since, and this test guard keeps the
+    // arena right-size gate below its capacity floor, so no second attempt.
     set_test_now_ms(Some(
         IDLE_RECLAIM_QUIET_MS + IDLE_RECLAIM_MIN_INTERVAL_MS + 1,
     ));
@@ -145,6 +146,81 @@ fn idle_reclaim_runs_a_full_at_the_park_when_owed() {
     );
     assert_eq!(thread_attempts(), 2);
     drive_until_idle(t + IDLE_RECLAIM_QUIET_MS, 1000);
+}
+
+/// #9709: general-arena block release deliberately needs two full collection
+/// observations. One external collection plus the ordinary idle-reducer full
+/// establishes sustained low utilization; that full is observation one, and
+/// the right-sizer must grant observation two without demanding new mutator
+/// activity. The episode then disarms, so the bypass cannot become a periodic
+/// full-GC loop.
+#[test]
+fn sustained_arena_slack_gets_one_bounded_followup_without_mutator_activity() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _reducer = IdleReclaimTestGuard::new(0);
+    let capacity = 100 * 1024 * 1024;
+    super::super::arena_right_size::test_support::set_test_usage(Some(
+        super::super::arena_right_size::ArenaUsage {
+            live_bytes: capacity / 2,
+            capacity_bytes: capacity,
+        },
+    ));
+    let right_size_starts_before = arena_right_size_starts();
+
+    // First low sample, and the only mutator-driven collection in this test.
+    external_collection_observed_at(0);
+    assert_eq!(
+        super::super::arena_right_size::test_support::state_snapshot().0,
+        1
+    );
+
+    // The ordinary activity arm starts the first full. Its post-collection
+    // sample opens the episode and counts as the first full observation.
+    set_test_now_ms(Some(IDLE_RECLAIM_QUIET_MS));
+    assert!(resumes(idle_reclaim_park_hook(1000)));
+    drive_until_idle(IDLE_RECLAIM_QUIET_MS, 1000);
+    assert_eq!(thread_attempts(), 1);
+    assert_eq!(
+        super::super::arena_right_size::test_support::state_snapshot().1,
+        1,
+        "one full observation remains"
+    );
+
+    // The normal activity gate is not re-armed. The capacity debt alone must
+    // cross the same rate floor and start the second full.
+    set_test_now_ms(Some(
+        IDLE_RECLAIM_QUIET_MS + IDLE_RECLAIM_MIN_INTERVAL_MS - 1,
+    ));
+    assert!(parks(idle_reclaim_park_hook(1000)));
+    assert_eq!(thread_attempts(), 1, "the rate floor still applies");
+
+    let followup_at = IDLE_RECLAIM_QUIET_MS + IDLE_RECLAIM_MIN_INTERVAL_MS;
+    set_test_now_ms(Some(followup_at));
+    assert!(resumes(idle_reclaim_park_hook(1000)));
+    assert_eq!(thread_attempts(), 2);
+    assert_eq!(
+        arena_right_size_starts(),
+        right_size_starts_before + 1,
+        "LIVE SUBJECT: the follow-up must identify the capacity debt as its reason"
+    );
+    drive_until_idle(followup_at, 1000);
+
+    let (_, fulls_remaining, disarmed, _) =
+        super::super::arena_right_size::test_support::state_snapshot();
+    assert_eq!(fulls_remaining, 0);
+    assert!(
+        disarmed,
+        "unchanged low utilization ends the bounded episode"
+    );
+
+    set_test_now_ms(Some(followup_at + IDLE_RECLAIM_MIN_INTERVAL_MS + 1));
+    assert!(parks(idle_reclaim_park_hook(1000)));
+    assert_eq!(
+        thread_attempts(),
+        2,
+        "no third full without utilization or material-capacity hysteresis"
+    );
 }
 
 #[test]

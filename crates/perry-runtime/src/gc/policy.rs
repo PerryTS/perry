@@ -1904,12 +1904,14 @@ pub(super) fn pacing_arena_in_use_bytes() -> usize {
 }
 
 /// Record the post-collection live arena bytes arena-growth pacing tests
-/// against. Called once at the end of every cycle, minor and full alike. The
-/// copying fast path publishes directly; non-copying cycles publish from
+/// against, and feed the same exact census to the idle arena right-sizer.
+/// Called once at the end of every cycle, minor and full alike. The copying
+/// fast path publishes directly; non-copying cycles publish from
 /// `GcCycle::publish_reclaim_outcome` after their sweep census.
-pub(super) fn note_collection_finished_arena_occupancy() {
+pub(super) fn note_collection_finished_arena_occupancy(full: bool) {
     let bytes = pacing_arena_in_use_bytes();
     GC_LAST_COLLECTION_POST_IN_USE_BYTES.with(|cell| cell.set(bytes));
+    super::arena_right_size::note_collection_finished(bytes, full);
 }
 
 /// The arena reading [`arena_growth_full_escalation_due`] tests — see

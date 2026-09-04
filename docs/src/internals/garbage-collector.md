@@ -208,7 +208,34 @@ of what it started with (or by less than 4 MiB
 <!-- gc-fact: IDLE_RECLAIM_MAX_BACKOFF_SHIFT = 5 in crates/perry-runtime/src/gc/idle_reclaim.rs -->
 (two to that power); a productive full resets the requirement to one. The same
 slicing finishes a budgeted cycle the pacer left open when the mutator went
-quiet. `PERRY_GC_DIAG=1` reports the reducer's counters on the
+quiet.
+
+Arena capacity has a second re-arm signal because returning a proven-empty
+block deliberately takes two full collection observations, while the activity
+clock above excludes the reducer's own fulls. Above a 32 MiB capacity floor,
+<!-- gc-fact: ARENA_RIGHT_SIZE_MIN_CAPACITY_BYTES = 32 * 1024 * 1024 in crates/perry-runtime/src/gc/arena_right_size.rs -->
+two consecutive post-collection live/capacity readings
+<!-- gc-fact: ARENA_RIGHT_SIZE_LOW_COLLECTIONS = 2 in crates/perry-runtime/src/gc/arena_right_size.rs -->
+at or below 50 percent
+<!-- gc-fact: ARENA_RIGHT_SIZE_TRIGGER_PCT = 50 in crates/perry-runtime/src/gc/arena_right_size.rs -->
+open a bounded right-size episode. It grants only enough idle fulls to reach
+two full observations
+<!-- gc-fact: ARENA_RIGHT_SIZE_FULL_OBSERVATIONS = 2 in crates/perry-runtime/src/gc/arena_right_size.rs -->
+(counting any full already in the low-utilization streak), and stops early once
+live data reaches 60 percent of capacity.
+<!-- gc-fact: ARENA_RIGHT_SIZE_TARGET_PCT = 60 in crates/perry-runtime/src/gc/arena_right_size.rs -->
+After a bounded episode, stable low occupancy cannot immediately repeat it: a
+new episode re-arms only after utilization reaches 70 percent
+<!-- gc-fact: ARENA_RIGHT_SIZE_REARM_PCT = 70 in crates/perry-runtime/src/gc/arena_right_size.rs -->
+or capacity grows by at least both 25 percent and 8 MiB.
+<!-- gc-fact: ARENA_RIGHT_SIZE_REARM_GROWTH_PCT = 25 in crates/perry-runtime/src/gc/arena_right_size.rs -->
+<!-- gc-fact: ARENA_RIGHT_SIZE_REARM_GROWTH_MIN_BYTES = 8 * 1024 * 1024 in crates/perry-runtime/src/gc/arena_right_size.rs -->
+That hysteresis preserves burst headroom and prevents an unreleasably
+fragmented heap from buying a full every ten seconds. The right-size debt still
+passes through the reducer's quiet, rate, wake, and work-budget gates.
+<!-- gc-symbol: sustained_arena_slack_gets_one_bounded_followup_without_mutator_activity in crates/perry-runtime/src/gc/tests/idle_reclaim.rs -->
+
+`PERRY_GC_DIAG=1` reports the reducer's counters on the
 `[gc-idle-reclaim]` exit line, and `PERRY_GC_IDLE_RECLAIM=0` disables it.
 <!-- gc-symbol: idle_reclaim_runs_a_full_at_the_park_when_owed in crates/perry-runtime/src/gc/tests/idle_reclaim.rs -->
 <!-- gc-symbol: kill_switch_off_leaves_the_heap_alone in crates/perry-runtime/src/gc/tests/idle_reclaim.rs -->

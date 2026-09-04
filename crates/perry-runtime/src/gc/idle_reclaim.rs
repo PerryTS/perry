@@ -48,10 +48,12 @@
 //!
 //! Three gates, all O(1), evaluated at every park:
 //!
-//! 1. **Activity.** At least `2^backoff` collections the reducer did not start
-//!    itself have completed since its last full. A collection is the one
-//!    signal that the mutator allocated enough to matter; a heap nobody has
-//!    touched since the last idle full has nothing new for another to find.
+//! 1. **Activity or arena debt.** Normally at least `2^backoff` collections
+//!    the reducer did not start itself have completed since its last full. A
+//!    collection is the signal that the mutator allocated enough to matter.
+//!    The exception is a bounded [`super::arena_right_size`] episode: arena
+//!    blocks need two full observations before their mappings can be returned,
+//!    and an idle heap cannot create the second through mutator activity.
 //! 2. **Quiet.** At least [`IDLE_RECLAIM_QUIET_MS`] since the last such
 //!    collection was observed — a burst still in progress collects every few
 //!    hundred milliseconds and must not be interleaved with a whole-heap mark.
@@ -135,6 +137,25 @@ pub(crate) enum ParkVerdict {
     Resume,
     /// Park, for at most this many milliseconds of the caller's budget.
     Park(u64),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StartReason {
+    /// The existing memory-reducer signal: the mutator completed enough
+    /// collections and then went quiet.
+    Activity,
+    /// Sustained arena slack still needs full observations before empty blocks
+    /// can be returned, even though the mutator has done nothing new.
+    ArenaRightSize,
+}
+
+impl StartReason {
+    fn as_str(self) -> &'static str {
+        match self {
+            StartReason::Activity => "activity",
+            StartReason::ArenaRightSize => "arena_right_size",
+        }
+    }
 }
 
 #[derive(Default)]
@@ -319,7 +340,7 @@ fn old_gen_occupancy() -> usize {
 
 /// Observe the external-collection counter and decide whether a reducer full
 /// is owed right now. Pure bookkeeping — no collector state is touched.
-fn should_start(now: u64) -> bool {
+fn start_reason(now: u64) -> Option<StartReason> {
     // Read the counters BEFORE taking the state borrow: `external_collections`
     // borrows the same cell.
     let external = external_collections();
@@ -330,22 +351,29 @@ fn should_start(now: u64) -> bool {
             st.last_seen_external = external;
             st.last_external_change_ms = now;
         }
-        let since_attempt = external.saturating_sub(st.external_at_last_attempt);
-        if since_attempt < (1u64 << st.backoff_shift) {
-            return false;
-        }
         if now.saturating_sub(st.last_external_change_ms) < IDLE_RECLAIM_QUIET_MS {
-            return false;
+            return None;
         }
         if st.attempts > 0 && now.saturating_sub(st.last_attempt_ms) < IDLE_RECLAIM_MIN_INTERVAL_MS
         {
-            return false;
+            return None;
         }
-        true
+        // Arena capacity release itself needs multiple full observations. Once
+        // sustained low utilization has created that bounded debt, requiring
+        // another mutator collection here recreates #9709's deadlock: the
+        // mutator is idle precisely because there is no more activity.
+        if super::arena_right_size::owed() {
+            return Some(StartReason::ArenaRightSize);
+        }
+        let since_attempt = external.saturating_sub(st.external_at_last_attempt);
+        if since_attempt < (1u64 << st.backoff_shift) {
+            return None;
+        }
+        Some(StartReason::Activity)
     })
 }
 
-fn note_started(now: u64) {
+fn note_started(now: u64, reason: StartReason) {
     STATE.with(|s| {
         let mut st = s.borrow_mut();
         st.attempts += 1;
@@ -353,10 +381,23 @@ fn note_started(now: u64) {
         st.external_at_last_attempt = st.last_seen_external;
         st.old_in_use_at_start = old_gen_occupancy();
         ATTEMPTS.fetch_add(1, Ordering::Relaxed);
+        if reason == StartReason::ArenaRightSize {
+            super::arena_right_size::note_started();
+        }
         if gc_diag_enabled() {
+            let (_, right_size_fulls_remaining, _, usage) = super::arena_right_size::snapshot();
             eprintln!(
-                "[gc-idle-reclaim] start attempt={} external_collections={} backoff_shift={} old_in_use={}",
-                st.attempts, st.last_seen_external, st.backoff_shift, st.old_in_use_at_start
+                "[gc-idle-reclaim] start attempt={} reason={} external_collections={} \
+                 backoff_shift={} old_in_use={} arena_live={} arena_capacity={} \
+                 right_size_fulls_remaining={}",
+                st.attempts,
+                reason.as_str(),
+                st.last_seen_external,
+                st.backoff_shift,
+                st.old_in_use_at_start,
+                usage.live_bytes,
+                usage.capacity_bytes,
+                right_size_fulls_remaining,
             );
         }
     });
@@ -491,14 +532,14 @@ pub(crate) fn park_hook(budget_ms: u64) -> ParkVerdict {
     if super::idle_compact::maybe_compact(now) {
         return ParkVerdict::Resume;
     }
-    if !should_start(now) {
+    let Some(reason) = start_reason(now) else {
         return ParkVerdict::Park(budget_ms);
-    }
+    };
     if !policy::gc_idle_reclaim_try_start() {
         START_BLOCKED.fetch_add(1, Ordering::Relaxed);
         return ParkVerdict::Park(budget_ms);
     }
-    note_started(now);
+    note_started(now, reason);
     drive_active_cycle(deadline)
 }
 
@@ -580,6 +621,14 @@ pub(super) mod test_support {
             // before the hook runs.
             crate::event_pump::clear_main_thread_notified_for_test();
             reset_state();
+            super::super::arena_right_size::test_support::reset_state();
+            super::super::arena_right_size::test_support::set_test_usage(Some(
+                super::super::arena_right_size::ArenaUsage {
+                    live_bytes: super::super::arena_right_size::ARENA_RIGHT_SIZE_MIN_CAPACITY_BYTES,
+                    capacity_bytes:
+                        super::super::arena_right_size::ARENA_RIGHT_SIZE_MIN_CAPACITY_BYTES,
+                },
+            ));
             set_test_now_ms(Some(now_ms));
             set_test_enabled(Some(true));
             set_test_max_slices(None);
@@ -597,6 +646,8 @@ pub(super) mod test_support {
             set_test_slice_us(None);
             set_test_work_charge_ms(None);
             reset_state();
+            super::super::arena_right_size::test_support::set_test_usage(None);
+            super::super::arena_right_size::test_support::reset_state();
         }
     }
 }
