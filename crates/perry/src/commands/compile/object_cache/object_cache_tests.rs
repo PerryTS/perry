@@ -1137,3 +1137,15 @@ fn toml_overrides_pkg_via_readers_and_resolver() {
     let resolved = resolve_cache_dir(root.path(), chosen.as_deref());
     assert_eq!(resolved, root.path().join("toml-cache"));
 }
+
+#[test]
+fn pinned_build_id_parses_hex_and_ignores_garbage() {
+    assert_eq!(
+        super::pinned_build_id(Some(" 5458fd55d49a4640\n".to_string())),
+        Some(0x5458_fd55_d49a_4640)
+    );
+    assert_eq!(super::pinned_build_id(Some("0".to_string())), Some(0));
+    assert_eq!(super::pinned_build_id(Some("not-hex".to_string())), None);
+    assert_eq!(super::pinned_build_id(Some(String::new())), None);
+    assert_eq!(super::pinned_build_id(None), None);
+}
