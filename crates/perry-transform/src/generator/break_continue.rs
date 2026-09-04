@@ -817,3 +817,288 @@ pub fn stmts_have_continue_inside_try_finally(stmts: &[Stmt]) -> bool {
         _ => false,
     })
 }
+
+// ── #9199: labeled break/continue that escapes a NESTED loop ──────────────
+//
+// `rewrite_labeled_bc_in_stmts` converts `break label` / `continue label` to
+// plain completions only at the labeled loop's OWN body level, and stops at
+// nested loops (a plain completion there would bind to the nested loop). The
+// linearizer's single break/continue sentinel per loop then has no way to name
+// an outer loop's target, so a labeled completion crossing a loop boundary
+// survived verbatim into a state body and the dispatch lowering dropped it:
+// `break` produced a malformed iterator result ("Cannot read properties of
+// undefined (reading 'done')"), `continue` silently produced nothing at all.
+//
+// The fix is to stop asking the state machine to name a distant target. A
+// carrier local unwinds the escape one loop at a time, so every completion the
+// linearizer sees is plain and binds to the loop it sits in:
+//
+//     __esc = 0;
+//     inner: while (…) { … __esc = 1; break; … }   // `break label`
+//     if (__esc == 1) break;                        // in the labeled loop
+//     if (__esc == 2) continue;
+//
+// Deeper nesting reuses the same carrier and propagates with a bare
+// `if (__esc != 0) break;` after each intermediate loop, so an escape from any
+// depth walks out to the labeled loop without the linearizer ever seeing a
+// labeled completion.
+
+/// Carrier value for a `break <label>` in flight.
+const ESCAPE_BREAK: f64 = 1.0;
+/// Carrier value for a `continue <label>` in flight.
+const ESCAPE_CONTINUE: f64 = 2.0;
+
+fn escape_set(carrier: LocalId, value: f64) -> Stmt {
+    Stmt::Expr(Expr::LocalSet(carrier, Box::new(Expr::Number(value))))
+}
+
+fn escape_is(carrier: LocalId, op: CompareOp, value: f64) -> Expr {
+    Expr::Compare {
+        op,
+        left: Box::new(Expr::LocalGet(carrier)),
+        right: Box::new(Expr::Number(value)),
+    }
+}
+
+fn is_loop_stmt(s: &Stmt) -> bool {
+    match s {
+        Stmt::While { .. } | Stmt::DoWhile { .. } | Stmt::For { .. } => true,
+        Stmt::Labeled { body, .. } => is_loop_stmt(body),
+        _ => false,
+    }
+}
+
+/// The body statements of a loop-shaped statement, seeing through `Labeled`.
+fn loop_body_mut(s: &mut Stmt) -> Option<&mut Vec<Stmt>> {
+    match s {
+        Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+            Some(body)
+        }
+        Stmt::Labeled { body, .. } => loop_body_mut(body),
+        _ => None,
+    }
+}
+
+/// Whether `stmts` can reach `break label` / `continue label` at any depth,
+/// including through nested loops — the question "does anything in here escape
+/// to `label`", not "does it escape without crossing a loop".
+pub fn stmts_can_escape_to_label(stmts: &[Stmt], label: &str) -> bool {
+    stmts.iter().any(|s| stmt_can_escape_to_label(s, label))
+}
+
+fn stmt_can_escape_to_label(s: &Stmt, label: &str) -> bool {
+    match s {
+        Stmt::LabeledBreak(l) | Stmt::LabeledContinue(l) => l == label,
+        Stmt::If {
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            stmts_can_escape_to_label(then_branch, label)
+                || else_branch
+                    .as_ref()
+                    .is_some_and(|eb| stmts_can_escape_to_label(eb, label))
+        }
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            stmts_can_escape_to_label(body, label)
+                || catch
+                    .as_ref()
+                    .is_some_and(|c| stmts_can_escape_to_label(&c.body, label))
+                || finally
+                    .as_ref()
+                    .is_some_and(|f| stmts_can_escape_to_label(f, label))
+        }
+        Stmt::Switch { cases, .. } => cases
+            .iter()
+            .any(|c| stmts_can_escape_to_label(&c.body, label)),
+        Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+            stmts_can_escape_to_label(body, label)
+        }
+        // A nested statement that re-declares the same label shadows it, so
+        // completions inside it target the inner one, not ours.
+        Stmt::Labeled { label: l, body } => l != label && stmt_can_escape_to_label(body, label),
+        _ => false,
+    }
+}
+
+/// At a labeled loop's own body level: replace every nested loop that can
+/// escape to `label` with `carrier = 0; <loop>; if (carrier == 1) break;
+/// if (carrier == 2) continue;`, having rewritten the escape inside the loop
+/// into carrier writes plus plain completions.
+///
+/// Only nested loops are touched. Same-level `break label` / `continue label`
+/// stay for [`super::linearize::rewrite_labeled_bc_in_stmts`], which maps them
+/// to plain completions directly — no carrier needed there.
+pub fn desugar_labeled_escape_across_nested_loops(
+    stmts: &mut Vec<Stmt>,
+    label: &str,
+    next_local_id: &mut u32,
+) {
+    let mut i = 0;
+    while i < stmts.len() {
+        // Non-loop containers do not capture a completion: recurse and move on.
+        match &mut stmts[i] {
+            Stmt::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                desugar_labeled_escape_across_nested_loops(then_branch, label, next_local_id);
+                if let Some(eb) = else_branch.as_mut() {
+                    desugar_labeled_escape_across_nested_loops(eb, label, next_local_id);
+                }
+                i += 1;
+                continue;
+            }
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                desugar_labeled_escape_across_nested_loops(body, label, next_local_id);
+                if let Some(c) = catch.as_mut() {
+                    desugar_labeled_escape_across_nested_loops(&mut c.body, label, next_local_id);
+                }
+                if let Some(f) = finally.as_mut() {
+                    desugar_labeled_escape_across_nested_loops(f, label, next_local_id);
+                }
+                i += 1;
+                continue;
+            }
+            Stmt::Switch { cases, .. } => {
+                for case in cases.iter_mut() {
+                    desugar_labeled_escape_across_nested_loops(
+                        &mut case.body,
+                        label,
+                        next_local_id,
+                    );
+                }
+                i += 1;
+                continue;
+            }
+            _ => {}
+        }
+
+        if !is_loop_stmt(&stmts[i]) || !stmt_can_escape_to_label(&stmts[i], label) {
+            i += 1;
+            continue;
+        }
+
+        let carrier = alloc_local(next_local_id);
+        if let Some(body) = loop_body_mut(&mut stmts[i]) {
+            rewrite_escape_in_stmts(body, label, carrier, next_local_id);
+        }
+        let nested = stmts[i].clone();
+        let replacement = vec![
+            escape_set(carrier, 0.0),
+            nested,
+            Stmt::If {
+                condition: escape_is(carrier, CompareOp::Eq, ESCAPE_BREAK),
+                then_branch: vec![Stmt::Break],
+                else_branch: None,
+            },
+            Stmt::If {
+                condition: escape_is(carrier, CompareOp::Eq, ESCAPE_CONTINUE),
+                then_branch: vec![Stmt::Continue],
+                else_branch: None,
+            },
+        ];
+        let advance = replacement.len();
+        stmts.splice(i..=i, replacement);
+        i += advance;
+    }
+}
+
+/// Inside a nested loop: turn `break label` / `continue label` into a carrier
+/// write plus a plain `break` out of THIS loop, and make a deeper loop's escape
+/// propagate outward the same way.
+fn rewrite_escape_in_stmts(
+    stmts: &mut Vec<Stmt>,
+    label: &str,
+    carrier: LocalId,
+    next_local_id: &mut u32,
+) {
+    let mut i = 0;
+    while i < stmts.len() {
+        // A plain `break` inside a switch binds to the switch, so a switch that
+        // carries an escape has to become `if`s before the rewrite below can
+        // use one. (`continue` is never captured by a switch, so a switch that
+        // only carries `continue label` needs no desugaring.)
+        let desugared = match &stmts[i] {
+            Stmt::Switch {
+                discriminant,
+                cases,
+            } if cases
+                .iter()
+                .any(|c| stmts_can_escape_to_label(&c.body, label)) =>
+            {
+                Some(desugar_switch_to_ifs(discriminant, cases, next_local_id))
+            }
+            _ => None,
+        };
+        if let Some(desugared) = desugared {
+            stmts.splice(i..=i, desugared);
+            continue;
+        }
+
+        match &mut stmts[i] {
+            Stmt::LabeledBreak(l) if l == label => {
+                stmts.splice(i..=i, [escape_set(carrier, ESCAPE_BREAK), Stmt::Break]);
+                i += 2;
+                continue;
+            }
+            Stmt::LabeledContinue(l) if l == label => {
+                stmts.splice(i..=i, [escape_set(carrier, ESCAPE_CONTINUE), Stmt::Break]);
+                i += 2;
+                continue;
+            }
+            Stmt::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                rewrite_escape_in_stmts(then_branch, label, carrier, next_local_id);
+                if let Some(eb) = else_branch.as_mut() {
+                    rewrite_escape_in_stmts(eb, label, carrier, next_local_id);
+                }
+            }
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                rewrite_escape_in_stmts(body, label, carrier, next_local_id);
+                if let Some(c) = catch.as_mut() {
+                    rewrite_escape_in_stmts(&mut c.body, label, carrier, next_local_id);
+                }
+                if let Some(f) = finally.as_mut() {
+                    rewrite_escape_in_stmts(f, label, carrier, next_local_id);
+                }
+            }
+            _ => {
+                if is_loop_stmt(&stmts[i]) && stmt_can_escape_to_label(&stmts[i], label) {
+                    if let Some(body) = loop_body_mut(&mut stmts[i]) {
+                        rewrite_escape_in_stmts(body, label, carrier, next_local_id);
+                    }
+                    // Unwind one more level: the carrier is already set, so
+                    // leaving this loop is all that is left to do here.
+                    stmts.insert(
+                        i + 1,
+                        Stmt::If {
+                            condition: escape_is(carrier, CompareOp::Ne, 0.0),
+                            then_branch: vec![Stmt::Break],
+                            else_branch: None,
+                        },
+                    );
+                    i += 2;
+                    continue;
+                }
+            }
+        }
+        i += 1;
+    }
+}
