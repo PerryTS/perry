@@ -259,8 +259,8 @@ fn build_and_install_programs(re: *const RegExpHeader) {
 ///
 /// # Safety
 /// `re` must be a live `RegExpHeader` (all callers gate on
-/// `is_valid_regex_ptr`); the returned reference borrows a leaked `Arc` the
-/// header owns for its lifetime.
+/// `is_valid_regex_ptr`); the returned reference borrows a raw `Arc` the
+/// header owns until its GC finalizer runs.
 pub(crate) unsafe fn header_std_regex<'a>(re: *const RegExpHeader) -> &'a Regex {
     ensure_regex_compiled(re);
     &*(*re).regex_ptr

@@ -59,6 +59,85 @@ fn malloc_finalize_clears_regexp_address_owned_tables() {
     assert!(!crate::object::exotic_expando::test_exotic_expando_entry_exists(addr));
 }
 
+fn clone_raw_arc<T>(raw: *const T) -> std::sync::Arc<T> {
+    unsafe {
+        let arc = std::sync::Arc::from_raw(raw);
+        let observer = arc.clone();
+        let _ = std::sync::Arc::into_raw(arc);
+        observer
+    }
+}
+
+#[test]
+fn regexp_finalize_releases_all_header_owned_programs() {
+    let _lock = crate::gc::global_side_table_test_lock();
+
+    fn compile(pattern: &str, subject: &str) -> *mut RegExpHeader {
+        let re = js_regexp_new(make_string(pattern), make_string(""));
+        assert!(js_regexp_test(re, make_string(subject)) != 0);
+        re
+    }
+
+    // Every compiled header owns the standard-engine program, including the
+    // never-match placeholder used by fancy-regex patterns.
+    let standard = compile(r"needle\d+", "needle42");
+    let standard_raw = unsafe { (*standard).regex_ptr as *const Regex };
+    assert!(!standard_raw.is_null());
+    let standard_observer = clone_raw_arc(standard_raw);
+    let standard_before = std::sync::Arc::strong_count(&standard_observer);
+    unsafe {
+        crate::gc::gc_type_finalize_unmarked_payload(
+            crate::gc::GC_TYPE_REGEXP,
+            standard.cast::<u8>(),
+        );
+    }
+    assert_eq!(
+        std::sync::Arc::strong_count(&standard_observer) + 1,
+        standard_before
+    );
+    assert!(unsafe { (*standard).regex_ptr.is_null() });
+
+    let fancy = compile(r"(?<=pre)\d+", "pre77");
+    let fancy_raw = unsafe { (*fancy).fancy_ptr as *const fancy_regex::Regex };
+    assert!(!fancy_raw.is_null());
+    let fancy_observer = clone_raw_arc(fancy_raw);
+    let fancy_before = std::sync::Arc::strong_count(&fancy_observer);
+    unsafe {
+        crate::gc::gc_type_finalize_unmarked_payload(crate::gc::GC_TYPE_REGEXP, fancy.cast::<u8>());
+    }
+    assert_eq!(
+        std::sync::Arc::strong_count(&fancy_observer) + 1,
+        fancy_before
+    );
+    assert!(unsafe { (*fancy).fancy_ptr.is_null() });
+
+    let repeat = compile(r"(a?b??)*", "ab");
+    let repeat_raw =
+        unsafe { (*repeat).repeat_matcher_ptr as *const repeat_matcher::RepeatMatcherRegex };
+    assert!(!repeat_raw.is_null());
+    let repeat_observer = clone_raw_arc(repeat_raw);
+    let repeat_before = std::sync::Arc::strong_count(&repeat_observer);
+    unsafe {
+        crate::gc::gc_type_finalize_unmarked_payload(
+            crate::gc::GC_TYPE_REGEXP,
+            repeat.cast::<u8>(),
+        );
+    }
+    let repeat_after = std::sync::Arc::strong_count(&repeat_observer);
+    assert_eq!(repeat_after + 1, repeat_before);
+    assert!(unsafe { (*repeat).repeat_matcher_ptr.is_null() });
+
+    // Arena overflow cleanup and finalization can overlap. A second finalizer
+    // must observe null pointers rather than release an owned reference twice.
+    unsafe {
+        crate::gc::gc_type_finalize_unmarked_payload(
+            crate::gc::GC_TYPE_REGEXP,
+            repeat.cast::<u8>(),
+        );
+    }
+    assert_eq!(std::sync::Arc::strong_count(&repeat_observer), repeat_after);
+}
+
 #[test]
 fn js_replacement_expands_special_patterns() {
     let re = regex::Regex::new(r"(\w+)\s(\w+)").unwrap();
