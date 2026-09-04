@@ -195,30 +195,7 @@ mod walk {
 
     #[cfg(all(target_os = "linux", not(target_vendor = "apple")))]
     fn stack_top_uncached() -> usize {
-        unsafe extern "C" {
-            fn pthread_self() -> usize;
-            fn pthread_getattr_np(thread: usize, attr: *mut u8) -> i32;
-            fn pthread_attr_getstack(
-                attr: *const u8,
-                stackaddr: *mut *mut core::ffi::c_void,
-                stacksize: *mut usize,
-            ) -> i32;
-            fn pthread_attr_destroy(attr: *mut u8) -> i32;
-        }
-        let mut attr = [0u8; 128];
-        let mut addr: *mut core::ffi::c_void = core::ptr::null_mut();
-        let mut size: usize = 0;
-        unsafe {
-            if pthread_getattr_np(pthread_self(), attr.as_mut_ptr()) != 0 {
-                return 0;
-            }
-            let ok = pthread_attr_getstack(attr.as_ptr(), &mut addr, &mut size) == 0;
-            pthread_attr_destroy(attr.as_mut_ptr());
-            if !ok {
-                return 0;
-            }
-        }
-        (addr as usize).saturating_add(size)
+        crate::native_stack::stack_top()
     }
 
     // The bound is a property of the thread, and `new Error` is frequent
