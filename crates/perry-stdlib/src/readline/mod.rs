@@ -335,6 +335,10 @@ fn scan_readline_roots_mut(visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'
 /// live here. Registered with the runtime at init so the object's `listeners()`
 /// method can see them.
 extern "C" fn stdin_listeners_provider(name_ptr: *const u8, name_len: usize) -> f64 {
+    listener_array_from_snapshot(stdin_listener_snapshot(name_ptr, name_len))
+}
+
+fn stdin_listener_snapshot(name_ptr: *const u8, name_len: usize) -> Vec<i64> {
     let name = if name_ptr.is_null() {
         ""
     } else {
@@ -352,12 +356,44 @@ extern "C" fn stdin_listeners_provider(name_ptr: *const u8, name_len: usize) -> 
             .unwrap_or_default(),
         _ => Vec::new(),
     };
-    let mut arr = perry_runtime::array::js_array_alloc(list.len() as u32);
-    for cb in list {
-        let v = f64::from_bits(JSValue::pointer(cb as *const u8).bits());
-        arr = perry_runtime::array::js_array_push_f64(arr, v);
+    list
+}
+
+fn listener_array_from_snapshot(list: Vec<i64>) -> f64 {
+    listener_array_from_snapshot_impl(list, || {})
+}
+
+fn listener_array_from_snapshot_impl<F>(list: Vec<i64>, before_array_alloc: F) -> f64
+where
+    F: FnOnce(),
+{
+    // `listeners()` is used by Ink to suspend terminal input: it snapshots
+    // every `readable` callback, removes it, then restores that snapshot. The
+    // array allocation below can run a moving collection. The mutable-root
+    // scanner rewrites the callbacks in the authoritative listener list, but
+    // it cannot see raw pointers copied into this local Vec. Root the entire
+    // snapshot before the first Perry allocation so a collection cannot make
+    // Ink remove/re-add stale from-space closures (#9672).
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let listeners: Vec<_> = list
+        .into_iter()
+        .map(|cb| scope.root_raw_const_ptr(cb as *const ClosureHeader))
+        .collect();
+
+    // The callback makes the collection boundary deterministic in the unit
+    // test and compiles to a no-op at the production call site.
+    before_array_alloc();
+
+    let arr = perry_runtime::array::js_array_alloc(listeners.len() as u32);
+    let arr_handle = scope.root_raw_mut_ptr(arr);
+    for cb in listeners {
+        let v = f64::from_bits(
+            JSValue::pointer(cb.get_raw_const_ptr::<ClosureHeader>() as *const u8).bits(),
+        );
+        let arr = perry_runtime::array::js_array_push_f64(arr_handle.get_raw_mut_ptr(), v);
+        arr_handle.set_raw_mut_ptr(arr);
     }
-    f64::from_bits(JSValue::array_ptr(arr).bits())
+    f64::from_bits(JSValue::array_ptr(arr_handle.get_raw_mut_ptr()).bits())
 }
 
 /// `stdin.pause()` reached as an OBJECT method (an aliased binding). Bridged so
