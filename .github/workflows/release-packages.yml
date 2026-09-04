@@ -398,6 +398,52 @@ jobs:
       - name: Compile dependencies for x86_64-apple-darwin
         run: cargo build --profile dist --target x86_64-apple-darwin -p perry
 
+      # The build leg's "Build native ext libraries (Unix)" step is the whole
+      # cost of this platform: 40 governed ext packages, each its own cargo
+      # invocation carrying `-p perry -p perry-runtime-static
+      # -p perry-stdlib-static` (#7358 requires that, so features unify per
+      # wrapper). A different package set per iteration means a different
+      # feature union, so each one largely rebuilds the compiler+runtime+stdlib.
+      #
+      # Measured in run 33861357826: that step ran 304 min (~7.6 min x 40) and
+      # the job was killed at GitHub's HARD 360-min hosted-runner ceiling, which
+      # no `timeout-minutes` can raise. The macos-14 aarch64 leg finished the
+      # same work in 291 min -- 69 min of margin -- so both architectures are
+      # running against the ceiling and Intel simply lost.
+      #
+      # Priming only `-p perry` above warms none of those 40 feature unions.
+      # Running the identical loop here fills them into the SAME shared-key
+      # cache the build leg reads, so its step 13 hits cache instead of
+      # rebuilding. Best-effort per package and `continue-on-error: true` on the
+      # job: this is a cache warmer, so a miss must never fail the release --
+      # it just leaves the build leg to do that package itself.
+      - name: Prime native ext libraries for x86_64-apple-darwin
+        # BUDGETED on purpose. The job cap is 330 min, and a job killed at its
+        # cap is CANCELLED -- which skips rust-cache's post save step, so a
+        # timed-out prime warms NOTHING and the next attempt starts equally
+        # cold. (That is precisely why the simctl retries in runs 33709079451 /
+        # 33718460967 could never improve.) So stop priming with time to spare
+        # and let the job end normally, which is what actually writes the cache.
+        run: |
+          set -uo pipefail
+          DEADLINE=$((250 * 60))   # leave ~80 min of the 330-min cap for the save
+          primed=0; skipped=0
+          governed_ext_packages=$(./scripts/release_ext_packages.sh)
+          while IFS= read -r name; do
+            if [ "$SECONDS" -ge "$DEADLINE" ]; then
+              skipped=$((skipped + 1)); continue
+            fi
+            echo "::group::prime $name"
+            if cargo build --profile dist --target x86_64-apple-darwin \
+              -p perry -p perry-runtime-static -p perry-stdlib-static -p "$name"; then
+              primed=$((primed + 1))
+            else
+              echo "  (skipped $name — prime only, the build leg will retry)"
+            fi
+            echo "::endgroup::"
+          done <<< "$governed_ext_packages"
+          echo "::notice::primed $primed ext package(s); $skipped left for the build leg (budget $((DEADLINE / 60)) min, used $((SECONDS / 60)) min)"
+
   # ---------------------------------------------------------------------------
   # Build release binaries for all platforms
   # ---------------------------------------------------------------------------
