@@ -139,7 +139,10 @@ fn the_ratchet_sees_every_arm_and_rejects_the_old_shape() {
     }
     // The pre-fix shape — a bare `cb_site.call(callback, …)` with no rebind
     // above it — must be rejected, or the scan above proves nothing.
-    let pre_fix = ["    let cb_site = X::resolve(callback);", "    cb_site.call(callback, a, b, c);"];
+    let pre_fix = [
+        "    let cb_site = X::resolve(callback);",
+        "    cb_site.call(callback, a, b, c);",
+    ];
     assert!(
         !is_rooted_dispatch(&pre_fix, 1),
         "the ratchet accepts the shape #9673 removed"
