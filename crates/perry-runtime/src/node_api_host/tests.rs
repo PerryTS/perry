@@ -756,6 +756,133 @@ fn buffers_views_detach_and_promises_keep_backing_identity() {
     );
 }
 
+#[test]
+fn buffer_backed_uint8arrays_report_typedarray_info() {
+    let env = test_env();
+
+    let inspect = |value: NapiValue,
+                   expected_length: usize,
+                   expected_offset: usize,
+                   expected_data: *mut c_void,
+                   expected_backing: Option<NapiValue>| {
+        let mut is_typed_array = false;
+        assert_eq!(
+            unsafe { napi_is_typedarray(env, value, &mut is_typed_array) },
+            NapiStatus::Ok
+        );
+        assert!(is_typed_array);
+
+        let mut kind = NapiTypedarrayType::Int8Array;
+        let mut length = 0;
+        let mut data = std::ptr::null_mut();
+        let mut backing = std::ptr::null_mut();
+        let mut offset = usize::MAX;
+        assert_eq!(
+            unsafe {
+                napi_get_typedarray_info(
+                    env,
+                    value,
+                    &mut kind,
+                    &mut length,
+                    &mut data,
+                    &mut backing,
+                    &mut offset,
+                )
+            },
+            NapiStatus::Ok
+        );
+        assert_eq!(kind, NapiTypedarrayType::Uint8Array);
+        assert_eq!((length, offset), (expected_length, expected_offset));
+        assert_eq!(data, expected_data);
+
+        let mut is_array_buffer = false;
+        assert_eq!(
+            unsafe { napi_is_arraybuffer(env, backing, &mut is_array_buffer) },
+            NapiStatus::Ok
+        );
+        assert!(is_array_buffer);
+        if let Some(expected) = expected_backing {
+            let mut same = false;
+            assert_eq!(
+                unsafe { napi_strict_equals(env, backing, expected, &mut same) },
+                NapiStatus::Ok
+            );
+            assert!(same);
+        }
+
+        let mut backing_data = std::ptr::null_mut();
+        let mut backing_length = 0;
+        assert_eq!(
+            unsafe {
+                napi_get_arraybuffer_info(env, backing, &mut backing_data, &mut backing_length)
+            },
+            NapiStatus::Ok
+        );
+        assert!(backing_length >= expected_offset + expected_length);
+        assert_eq!(
+            data,
+            unsafe { (backing_data as *mut u8).add(expected_offset) }.cast()
+        );
+
+        let mut backing_again = std::ptr::null_mut();
+        assert_eq!(
+            unsafe {
+                napi_get_typedarray_info(
+                    env,
+                    value,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    &mut backing_again,
+                    std::ptr::null_mut(),
+                )
+            },
+            NapiStatus::Ok
+        );
+        let mut same = false;
+        assert_eq!(
+            unsafe { napi_strict_equals(env, backing, backing_again, &mut same) },
+            NapiStatus::Ok
+        );
+        assert!(
+            same,
+            "the reported backing ArrayBuffer identity must be stable"
+        );
+    };
+
+    let mut arraybuffer = std::ptr::null_mut();
+    let mut arraybuffer_data = std::ptr::null_mut();
+    assert_eq!(
+        unsafe { napi_create_arraybuffer(env, 8, &mut arraybuffer_data, &mut arraybuffer) },
+        NapiStatus::Ok
+    );
+    let arraybuffer_bits = value_bits(env, arraybuffer).unwrap();
+    let view_ptr = crate::buffer::js_uint8array_view(f64::from_bits(arraybuffer_bits), 2.0, 3.0);
+    let view = add_handle(env, crate::value::JSValue::pointer(view_ptr.cast()).bits()).unwrap();
+    inspect(
+        view,
+        3,
+        2,
+        unsafe { (arraybuffer_data as *mut u8).add(2) }.cast(),
+        Some(arraybuffer),
+    );
+
+    let mut node_buffer = std::ptr::null_mut();
+    let mut node_buffer_data = std::ptr::null_mut();
+    assert_eq!(
+        unsafe { napi_create_buffer(env, 4, &mut node_buffer_data, &mut node_buffer) },
+        NapiStatus::Ok
+    );
+    inspect(node_buffer, 4, 0, node_buffer_data, None);
+
+    let mut is_typed_array = true;
+    assert_eq!(
+        unsafe { napi_is_typedarray(env, arraybuffer, &mut is_typed_array) },
+        NapiStatus::Ok
+    );
+    assert!(!is_typed_array, "an ArrayBuffer is not a TypedArray");
+}
+
 static ASYNC_EXECUTED: AtomicUsize = AtomicUsize::new(0);
 static ASYNC_COMPLETED: AtomicUsize = AtomicUsize::new(0);
 static ASYNC_OFF_THREAD_REJECTED: AtomicUsize = AtomicUsize::new(0);

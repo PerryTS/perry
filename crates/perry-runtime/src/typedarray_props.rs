@@ -267,6 +267,17 @@ fn barrier_typed_array_own_props(owner: usize, props: &mut [TypedArrayOwnProp]) 
 }
 
 fn upsert_typed_array_own_prop(owner: usize, key: String, value: f64, is_data: bool) {
+    // A constructor-created Uint8Array uses BufferHeader rather than
+    // TypedArrayHeader. Store its ordinary properties in the existing GC-traced
+    // Buffer table, so direct assignment, Reflect.set, descriptors, and
+    // enumeration all observe one value instead of two invisible side tables (#9347).
+    if matches!(
+        typed_array_owner_kind(owner),
+        Some(TypedArrayOwnerKind::Uint8ArrayBuffer)
+    ) {
+        crate::buffer::buffer_define_own_data_prop(owner, &key, value);
+        return;
+    }
     TYPED_ARRAY_OWN_PROPS.with(|m| {
         let mut map = m.borrow_mut();
         let props = map.entry(owner).or_default();
@@ -285,7 +296,7 @@ fn upsert_typed_array_own_prop(owner: usize, key: String, value: f64, is_data: b
 }
 
 fn remove_typed_array_own_prop(owner: usize, key: &str) -> bool {
-    TYPED_ARRAY_OWN_PROPS.with(|m| {
+    let removed_typed_array = TYPED_ARRAY_OWN_PROPS.with(|m| {
         let mut map = m.borrow_mut();
         let Some(props) = map.get_mut(&owner) else {
             return false;
@@ -298,23 +309,38 @@ fn remove_typed_array_own_prop(owner: usize, key: &str) -> bool {
             map.remove(&owner);
         }
         true
-    })
+    });
+    let removed_buffer = matches!(
+        typed_array_owner_kind(owner),
+        Some(TypedArrayOwnerKind::Uint8ArrayBuffer)
+    ) && crate::buffer::buffer_delete_own_prop(owner, key);
+    removed_typed_array || removed_buffer
 }
 
 fn typed_array_own_prop_snapshot(owner: usize, key: &str) -> Option<TypedArrayOwnProp> {
-    TYPED_ARRAY_OWN_PROPS.with(|m| {
+    let typed_array_prop = TYPED_ARRAY_OWN_PROPS.with(|m| {
         m.borrow()
             .get(&owner)
             .and_then(|props| props.iter().find(|prop| prop.key == key).cloned())
+    });
+    if typed_array_prop.is_some() {
+        return typed_array_prop;
+    }
+    if !matches!(
+        typed_array_owner_kind(owner),
+        Some(TypedArrayOwnerKind::Uint8ArrayBuffer)
+    ) {
+        return None;
+    }
+    crate::buffer::buffer_get_own_prop(owner, key).map(|value| TypedArrayOwnProp {
+        key: key.to_string(),
+        value,
+        is_data: crate::object::get_accessor_descriptor(owner, key).is_none(),
     })
 }
 
 fn typed_array_has_ordinary_own_prop(owner: usize, key: &str) -> bool {
-    TYPED_ARRAY_OWN_PROPS.with(|m| {
-        m.borrow()
-            .get(&owner)
-            .is_some_and(|props| props.iter().any(|prop| prop.key == key))
-    })
+    typed_array_own_prop_snapshot(owner, key).is_some()
 }
 
 unsafe fn descriptor_has(desc_ptr: *mut crate::object::ObjectHeader, name: &[u8]) -> bool {
@@ -1170,6 +1196,23 @@ fn typed_array_non_index_keys(owner: usize, enumerable_only: bool) -> Vec<String
             })
             .unwrap_or_default()
     });
+    if matches!(
+        typed_array_owner_kind(owner),
+        Some(TypedArrayOwnerKind::Uint8ArrayBuffer)
+    ) {
+        for key in crate::buffer::buffer_own_prop_names(owner) {
+            if keys.iter().any(|existing| existing == &key) {
+                continue;
+            }
+            if enumerable_only
+                && crate::object::get_property_attrs(owner, &key)
+                    .is_some_and(|attrs| !attrs.enumerable())
+            {
+                continue;
+            }
+            keys.push(key);
+        }
+    }
     for key in crate::object::accessor_descriptor_keys_for_obj(owner) {
         if keys.iter().any(|existing| existing == &key) {
             continue;

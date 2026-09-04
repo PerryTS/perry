@@ -67,8 +67,18 @@ pub fn buffer_set_own_prop(addr: usize, prop: &str, value: f64) {
         }
         return;
     }
-    if crate::object::get_property_attrs(addr, prop).is_some_and(|attrs| !attrs.writable())
-        && buffer_get_own_prop(addr, prop).is_some()
+    let existing = buffer_get_own_prop(addr, prop).is_some();
+    if existing
+        && crate::object::get_property_attrs(addr, prop).is_some_and(|attrs| !attrs.writable())
+    {
+        return;
+    }
+    // BufferHeader-backed typed arrays have no GcHeader flag. Their
+    // preventExtensions state lives in the TypedArray side table, so ordinary
+    // direct writes must consult it before adding a fresh expando (#9347).
+    if !existing
+        && crate::typedarray_props::is_typed_array_owner(addr)
+        && crate::typedarray_props::typed_array_owner_no_extend(addr)
     {
         return;
     }

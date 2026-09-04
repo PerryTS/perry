@@ -270,6 +270,59 @@ fn test_dead_buffer_own_property_entry_pruned_on_full_gc() {
     );
 }
 
+/// Buffer-backed Uint8Arrays use TypedArray metadata tables even though their
+/// owners are swept through the buffer finalizer. The finalizer must clear the
+/// non-extensible marker before the old-arena address can be reused (#9347).
+#[test]
+fn test_dead_uint8array_extensibility_entry_pruned_on_full_gc() {
+    let _guard = GcTestIsolationGuard::new();
+
+    let addr = crate::buffer::js_uint8array_alloc(32) as usize;
+    assert!(unsafe {
+        crate::typedarray_props::typed_array_set_property_by_name(addr, "existing", 1.0)
+    });
+    assert_eq!(
+        crate::buffer::buffer_get_own_prop(addr, "existing"),
+        Some(1.0),
+        "the typed-array Set path must use the canonical Buffer property table"
+    );
+    crate::typedarray_props::typed_array_mark_no_extend(addr);
+    assert!(
+        crate::typedarray_props::typed_array_owner_no_extend(addr),
+        "test premise: the Uint8Array has a side-table marker"
+    );
+    assert!(unsafe {
+        crate::typedarray_props::typed_array_set_property_by_name(addr, "existing", 2.0)
+    });
+    assert_eq!(
+        crate::buffer::buffer_get_own_prop(addr, "existing"),
+        Some(2.0)
+    );
+    assert!(!unsafe {
+        crate::typedarray_props::typed_array_set_property_by_name(addr, "fresh", 3.0)
+    });
+    crate::buffer::buffer_set_own_prop(addr, "direct_fresh", 4.0);
+    assert!(
+        crate::buffer::buffer_get_own_prop(addr, "fresh").is_none()
+            && crate::buffer::buffer_get_own_prop(addr, "direct_fresh").is_none(),
+        "neither reflected nor direct Set may add a key after preventExtensions"
+    );
+
+    // No roots: dead at the full trace. Buffer-backed Uint8Arrays never enter
+    // unregister_typed_array, so only finalize_collected_dead_buffer can
+    // remove this address-keyed entry.
+    full_gc();
+
+    assert!(
+        !crate::typedarray_props::typed_array_owner_no_extend(addr),
+        "a recycled address must not inherit a dead Uint8Array's integrity state"
+    );
+    assert!(
+        crate::buffer::buffer_get_own_prop(addr, "existing").is_none(),
+        "the canonical property table must be pruned with its dead owner"
+    );
+}
+
 /// A LIVE buffer keeps its own properties across a full collection. Without
 /// this the prune above could pass by dropping everything unconditionally.
 ///
