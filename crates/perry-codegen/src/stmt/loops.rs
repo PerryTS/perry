@@ -3,9 +3,10 @@
 use super::*;
 
 use crate::expr::{
-    array_kind_fact, effect_fact, emit_typed_feedback_register_site, nanbox_pointer_inline,
-    raw_f64_layout_fact, BoundedIndexPair, PackedF64LoopFact, PackedNumericLoopKind,
-    TypedFeedbackContract, TypedFeedbackKind,
+    array_kind_fact, effect_fact, emit_typed_feedback_register_site,
+    expr_has_numeric_pointer_free_array_layout, nanbox_pointer_inline, raw_f64_layout_fact,
+    BoundedIndexPair, PackedF64LoopFact, PackedNumericLoopKind, TypedFeedbackContract,
+    TypedFeedbackKind,
 };
 use crate::loop_purity::body_needs_asm_barrier;
 use crate::lower_conditional::lower_truthy;
@@ -76,6 +77,61 @@ struct LengthHoist {
     op: perry_hir::CompareOp,
     lhs_addend: i32,
     buffer_bounds_width_units: Option<u32>,
+}
+
+/// #9254 phase 3: prove the dynamic extent in which an ordinary
+/// `i < arr.length` loop may consume a one-time receiver validation.
+///
+/// Only the exact bounded `arr[i]` operation is replaced by the descriptor's
+/// non-dispatching load. Its children and every surrounding operation retain
+/// the conservative region classification. The outer back-edge poll is added
+/// explicitly because the caller passes the loop body rather than a `Stmt::For`
+/// node; nested-loop polls are discovered by the statement walker itself.
+fn ordinary_counted_array_region_enders(
+    ctx: &FnCtx<'_>,
+    hoist: LengthHoist,
+    update: Option<&perry_hir::Expr>,
+    body: &[Stmt],
+) -> Option<Vec<crate::collectors::RegionEnder>> {
+    use std::cell::Cell;
+
+    if !matches!(hoist.op, perry_hir::CompareOp::Lt)
+        || hoist.lhs_addend != 0
+        || !loop_counter_bounds_are_safe(ctx, hoist.counter_id, update, body)
+    {
+        return None;
+    }
+
+    let saw_bounded_read = Cell::new(false);
+    let is_trusted_operation = |expr: &perry_hir::Expr| {
+        let trusted = matches!(
+            expr,
+            perry_hir::Expr::IndexGet { object, index }
+                if matches!(object.as_ref(), perry_hir::Expr::LocalGet(id) if *id == hoist.arr_id)
+                    && matches!(index.as_ref(), perry_hir::Expr::LocalGet(id) if *id == hoist.counter_id)
+        );
+        if trusted {
+            saw_bounded_read.set(true);
+        }
+        trusted
+    };
+    let is_inert = |expr: &perry_hir::Expr| crate::rooting::expr_is_inert_primitive(ctx, expr);
+    let controls: Vec<&perry_hir::Expr> = update.into_iter().collect();
+    let mut enders = crate::collectors::region_enders_in_stmts_with_trusted_operations(
+        body,
+        &controls,
+        &is_inert,
+        &is_trusted_operation,
+    );
+    if !saw_bounded_read.get()
+        || enders
+            .iter()
+            .any(|ender| !matches!(ender, crate::collectors::RegionEnder::BackEdgePoll))
+    {
+        return None;
+    }
+    enders.push(crate::collectors::RegionEnder::BackEdgePoll);
+    Some(enders)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -826,6 +882,113 @@ struct PackedAccumulatorScope {
     hoisted_receivers: Vec<u32>,
 }
 
+/// Materialize the address half shared by packed clones and phase 3 ordinary
+/// counted loops. The returned box is a precise root, while the handle slot is
+/// refreshed from it after every fired loop poll.
+fn create_poll_refreshed_receiver_cache(
+    ctx: &mut FnCtx<'_>,
+    arr_id: u32,
+) -> Option<(String, String, String)> {
+    let source_ref = if let Some(slot) = ctx.locals.get(&arr_id) {
+        slot.clone()
+    } else {
+        format!("@{}", ctx.module_globals.get(&arr_id)?)
+    };
+    let current = ctx.block().load(DOUBLE, &source_ref);
+    let rooted_box_slot = ctx.func.alloca_entry(DOUBLE);
+    let base_handle_slot = ctx.func.alloca_entry(I64);
+    // `root_entry_alloca` hoists the bind into entry setup, so seed the cache
+    // before that bind can make the collector dereference it. The later store
+    // publishes the live receiver and the bind makes evacuation rewrite this
+    // cache itself.
+    let undefined = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+    ctx.func
+        .entry_allocas_push_store(DOUBLE, &undefined, &rooted_box_slot);
+    ctx.block().store(DOUBLE, &current, &rooted_box_slot);
+    crate::expr::root_entry_alloca(ctx, &rooted_box_slot);
+    {
+        let blk = ctx.block();
+        let bits = blk.bitcast_double_to_i64(&current);
+        let handle = blk.and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
+        blk.store(I64, &handle, &base_handle_slot);
+    }
+    Some((rooted_box_slot, base_handle_slot, source_ref))
+}
+
+/// Attach a numeric-array validation to an ordinary counted loop. This is
+/// intentionally narrower than the descriptor model: phase 3 targets the
+/// numeric `arr[i]` shape whose guarded header chain dominates matmul-style
+/// kernels. A false one-time guard keeps the established per-read fallback;
+/// a true guard makes every exact bounded read a raw load from the refreshed
+/// handle slot.
+fn materialize_ordinary_counted_array_descriptor(
+    ctx: &mut FnCtx<'_>,
+    hoist: LengthHoist,
+    update: Option<&perry_hir::Expr>,
+    body: &[Stmt],
+) -> bool {
+    if ctx.receiver_descriptors.contains(hoist.arr_id)
+        || !expr_has_numeric_pointer_free_array_layout(
+            ctx,
+            &perry_hir::Expr::LocalGet(hoist.arr_id),
+        )
+    {
+        return false;
+    }
+    let Some(enders) = ordinary_counted_array_region_enders(ctx, hoist, update, body) else {
+        return false;
+    };
+    let Some((rooted_box_slot, base_handle_slot, source_root)) =
+        create_poll_refreshed_receiver_cache(ctx, hoist.arr_id)
+    else {
+        return false;
+    };
+
+    let feedback_site_id = emit_typed_feedback_register_site(
+        ctx,
+        TypedFeedbackKind::ArrayElement,
+        "array[index].receiver_region",
+        TypedFeedbackContract::numeric_array_get_index(),
+    );
+    let receiver = ctx.block().load(DOUBLE, &rooted_box_slot);
+    let guard_i32 = ctx.block().call(
+        I32,
+        "js_typed_feedback_numeric_array_index_get_guard",
+        &[
+            (I64, &feedback_site_id),
+            (DOUBLE, &receiver),
+            // Receiver-only validation: the surrounding strict length bound
+            // supplies the per-use index proof.
+            (I32, "0"),
+            (I32, "0"),
+        ],
+    );
+    let valid_i1 = ctx.block().icmp_ne(I32, &guard_i32, "0");
+
+    // The numeric guard is non-collecting, but it may verify/rewrite boxed
+    // numeric slots into raw-f64 representation. Derive the cached handle
+    // after that operation so the ordering is explicit in the IR contract.
+    {
+        let blk = ctx.block();
+        let fresh = blk.load(DOUBLE, &rooted_box_slot);
+        let bits = blk.bitcast_double_to_i64(&fresh);
+        let handle = blk.and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
+        blk.store(I64, &handle, &base_handle_slot);
+    }
+
+    ctx.receiver_descriptors
+        .materialize_region_validated_array(
+            hoist.arr_id,
+            rooted_box_slot,
+            base_handle_slot,
+            source_root,
+            crate::collectors::ReceiverArrayValidationKind::Numeric,
+            valid_i1,
+            &enders,
+        )
+        .expect("region analysis admitted only poll-refreshable boundaries")
+}
+
 impl PackedAccumulatorScope {
     fn empty() -> Self {
         Self {
@@ -933,40 +1096,15 @@ impl PackedAccumulatorScope {
             if ctx.receiver_descriptors.contains(*arr_id) {
                 continue;
             }
-            let source_ref = if let Some(slot) = ctx.locals.get(arr_id) {
-                slot.clone()
-            } else if let Some(global_name) = ctx.module_globals.get(arr_id) {
-                format!("@{}", global_name)
-            } else {
+            let Some((rooted_box_slot, base_handle_slot, source_ref)) =
+                create_poll_refreshed_receiver_cache(ctx, *arr_id)
+            else {
                 continue;
             };
-            let current = ctx.block().load(DOUBLE, &source_ref);
-            let alloca = ctx.func.alloca_entry(DOUBLE);
-            let handle_alloca = ctx.func.alloca_entry(I64);
-            // `root_entry_alloca` hoists the bind into entry setup, so seed
-            // the cache before that bind can make the collector dereference
-            // it. The later store publishes the live receiver and the bind
-            // makes evacuation rewrite this cache itself. Under native roots
-            // the bind becomes an addrspace(1) value that mem2reg can still
-            // promote, retaining the receiver-cache fast path while making
-            // its liveness across a strided poll explicit to the checker.
-            let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-            ctx.func.entry_allocas_push_store(DOUBLE, &undef, &alloca);
-            {
-                let blk = ctx.block();
-                blk.store(DOUBLE, &current, &alloca);
-            }
-            crate::expr::root_entry_alloca(ctx, &alloca);
-            {
-                let blk = ctx.block();
-                let bits = blk.bitcast_double_to_i64(&current);
-                let handle = blk.and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
-                blk.store(I64, &handle, &handle_alloca);
-            }
             let installed = ctx.receiver_descriptors.materialize_poll_refreshed_address(
                 *arr_id,
-                alloca,
-                handle_alloca,
+                rooted_box_slot,
+                base_handle_slot,
                 source_ref,
                 // Packed loop admission rejects Stmt::Try. A throw may
                 // leave the clone, but no descriptor is live in the
@@ -6890,6 +7028,19 @@ pub(super) fn lower_for_after_init_with_i32_bound(
         None
     };
 
+    // #9254 phase 3: once both the strict loop bound and its i32 storage are
+    // concrete, validate a numeric receiver once for the dynamic extent of
+    // this ordinary loop. Specialized clones keep precedence and own their
+    // existing descriptors; this path is for the generic counted-loop tier.
+    let ordinary_receiver_descriptor_installed =
+        if !in_call_free_clone && hoisted_length_slot.is_some() && i32_length_slot.is_some() {
+            hoist_classification.is_some_and(|hoist| {
+                materialize_ordinary_counted_array_descriptor(ctx, hoist, update, body)
+            })
+        } else {
+            false
+        };
+
     // Issue #168: when the `i < arr.length` peephole didn't fire, also
     // detect the simpler `i < n` shape where `n` is a statically proven
     // loop-invariant i32 local. Emitting `fptosi(n)` once at the loop head
@@ -7241,6 +7392,12 @@ pub(super) fn lower_for_after_init_with_i32_bound(
     ctx.active_region_id = previous_region_id;
 
     ctx.loop_targets.pop();
+
+    if ordinary_receiver_descriptor_installed {
+        let arr_id = hoisted_length_arr_id.expect("installed descriptor has a length receiver");
+        let removed = ctx.receiver_descriptors.dematerialize(arr_id);
+        debug_assert!(removed, "loop owns the receiver descriptor it installed");
+    }
 
     // Pop the hoisted-length entry so nested loops or sibling loops
     // don't see a stale slot. Repsel Phase 1: only when THIS site inserted

@@ -20,7 +20,8 @@ use anyhow::Result;
 
 use crate::nanbox::POINTER_MASK_I64;
 use crate::native_value::{
-    BoundsState, BufferAccessMode, LoweredValue, MaterializationReason, NativeRep, SemanticKind,
+    BoundsProof, BoundsState, BufferAccessMode, LoweredValue, MaterializationReason, NativeRep,
+    SemanticKind,
 };
 use crate::types::{DOUBLE, I1, I16, I32, I64, I8};
 
@@ -50,6 +51,134 @@ pub(super) fn lower_trusted_plain_array_index_get(
     let is_hole = blk.icmp_eq(I64, &raw_bits, crate::nanbox::TAG_HOLE_I64);
     let undefined = blk.bitcast_i64_to_double(crate::nanbox::TAG_UNDEFINED_I64);
     blk.select(I1, &is_hole, DOUBLE, &undefined, &raw)
+}
+
+fn lower_trusted_numeric_array_index_get(
+    ctx: &mut FnCtx<'_>,
+    array_handle: &str,
+    idx_i32: &str,
+    coerce_numeric_fallback: bool,
+) -> String {
+    let blk = ctx.block();
+    let idx_i64 = blk.zext(I32, idx_i32, I64);
+    let byte_offset = blk.shl(I64, &idx_i64, "3");
+    let with_header = blk.add(I64, &byte_offset, "8");
+    let element_addr = blk.add(I64, array_handle, &with_header);
+    let element_ptr = blk.inttoptr(I64, &element_addr);
+    let raw = blk.load(DOUBLE, &element_ptr);
+    if coerce_numeric_fallback {
+        // A number-context consumer accepts the same raw-f64-or-holes
+        // contract as the established guarded tier. Phase 3 currently installs
+        // only the stronger dense numeric descriptor, but retaining the
+        // canonicalization here keeps this consumer correct if that admission
+        // widens later.
+        let is_ordered = blk.fcmp("ord", &raw, &raw);
+        blk.select(I1, &is_ordered, DOUBLE, &raw, "0x7FF8000000000000")
+    } else {
+        raw
+    }
+}
+
+/// Consume #9254 phase 3's one-time receiver validation at an exact bounded
+/// read. `valid_i1` dominates the loop and is invariant; the true arm needs
+/// only the refreshed handle load and raw element access, while the false arm
+/// is the pre-existing guarded implementation in full.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn lower_region_validated_array_index_get(
+    ctx: &mut FnCtx<'_>,
+    arr_id: u32,
+    arr_box: &str,
+    idx_i32: &str,
+    block_prefix: &str,
+    require_numeric_layout: bool,
+    coerce_numeric_fallback: bool,
+    receiver_slot: Option<&str>,
+) -> Result<String> {
+    let Some(access) = ctx
+        .receiver_descriptors
+        .array_access(arr_id, require_numeric_layout)
+    else {
+        return lower_guarded_array_index_get(
+            ctx,
+            arr_box,
+            idx_i32,
+            block_prefix,
+            require_numeric_layout,
+            coerce_numeric_fallback,
+            receiver_slot,
+        );
+    };
+
+    let fast_idx = ctx.new_block(&format!("{}.receiver_region.fast", block_prefix));
+    let fallback_idx = ctx.new_block(&format!("{}.receiver_region.fallback", block_prefix));
+    let merge_idx = ctx.new_block(&format!("{}.receiver_region.merge", block_prefix));
+    let fast_label = ctx.block_label(fast_idx);
+    let fallback_label = ctx.block_label(fallback_idx);
+    let merge_label = ctx.block_label(merge_idx);
+    ctx.block()
+        .cond_br(&access.valid_i1, &fast_label, &fallback_label);
+
+    ctx.current_block = fast_idx;
+    let array_handle = ctx.block().load(I64, &access.base_handle_slot);
+    let fast_value = if require_numeric_layout {
+        lower_trusted_numeric_array_index_get(ctx, &array_handle, idx_i32, coerce_numeric_fallback)
+    } else {
+        lower_trusted_plain_array_index_get(ctx, &array_handle, idx_i32)
+    };
+    let fast_end = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+
+    if require_numeric_layout {
+        let lowered = LoweredValue {
+            semantic: SemanticKind::JsNumber,
+            rep: NativeRep::F64,
+            llvm_ty: DOUBLE,
+            value: fast_value.clone(),
+        };
+        ctx.record_lowered_value_with_access_mode_and_facts(
+            "NumericArrayIndexGet",
+            Some(arr_id),
+            "receiver_descriptor",
+            &lowered,
+            Some(BoundsState::Proven {
+                proof: BoundsProof::LoopGuard,
+            }),
+            None,
+            Some(BufferAccessMode::CheckedNative),
+            None,
+            None,
+            None,
+            vec![raw_f64_layout_fact(
+                Some(arr_id),
+                "consumed",
+                "receiver_descriptor",
+                None,
+            )],
+            Vec::new(),
+            false,
+            false,
+            vec!["receiver_region=validated_once".to_string()],
+        );
+    }
+
+    ctx.current_block = fallback_idx;
+    let fallback_value = lower_guarded_array_index_get(
+        ctx,
+        arr_box,
+        idx_i32,
+        &format!("{}.receiver_region.checked", block_prefix),
+        require_numeric_layout,
+        coerce_numeric_fallback,
+        receiver_slot,
+    )?;
+    let fallback_end = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
+
+    ctx.current_block = merge_idx;
+    Ok(ctx.block().phi(
+        DOUBLE,
+        &[(&fast_value, &fast_end), (&fallback_value, &fallback_end)],
+    ))
 }
 
 pub(super) fn lower_guarded_array_index_get(
