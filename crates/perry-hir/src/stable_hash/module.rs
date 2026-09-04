@@ -110,7 +110,7 @@ impl SH for Module {
             name.hash(h);
         }
         // #4101: function source text participates in codegen (drives the
-        // js_register_function_source calls), so include it in the hash.
+        // js_register_function_source_static calls), so include it in the hash.
         let mut source_pairs: Vec<(u32, &FunctionSourceMetadata)> =
             closure_source_text.iter().map(|(k, v)| (*k, v)).collect();
         source_pairs.sort_unstable_by_key(|(k, _)| *k);

@@ -81,14 +81,28 @@ pub fn declare_phase1(module: &mut LlModule) {
     // NaN-boxed count value) -> category (0=zero 1=one 2=two 3=few 4=many
     // 5=other).
     module.declare_function("perry_i18n_plural_category", I32, &[I32, DOUBLE]);
-    // Function-name registry — populated by `main()` once per top-level
+    // Function-name registry — populated by module init once per top-level
     // named function so `console.log(named)` prints `[Function: named]`
     // instead of `[Function (anonymous)]`. See #1202.
-    module.declare_function("js_register_function_name", VOID, &[PTR, PTR, I32]);
+    //
+    // #9188: the `_static` spelling hands the registry the `@.str.N` constant
+    // itself instead of a slice to copy, which is sound only because those
+    // globals live for the life of the image — a promise the plain
+    // `js_register_function_name` does NOT make of its callers, which is why
+    // the two are separate symbols rather than one with a tightened contract.
+    // Only the borrowing spelling is declared here: this table is what codegen
+    // CALLS, and the copying one is the runtime's entry point for callers that
+    // are not codegen (FFI, separately-loaded provider images), which reach it
+    // as a Rust or C symbol and never through generated IR.
+    module.declare_function("js_register_function_name_static", VOID, &[PTR, PTR, I32]);
     // #4101: register a user function's original source text (keyed by the
     // same wrapper/closure address as the name) so `fn.toString()` and
     // `Function.prototype.toString.call(fn)` reconstruct the source.
-    module.declare_function("js_register_function_source", VOID, &[PTR, PTR, I32, I32]);
+    module.declare_function(
+        "js_register_function_source_static",
+        VOID,
+        &[PTR, PTR, I32, I32],
+    );
 
     // Console.
     module.declare_function("js_console_log_dynamic", VOID, &[DOUBLE]);

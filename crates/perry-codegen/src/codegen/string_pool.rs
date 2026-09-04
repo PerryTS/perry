@@ -189,13 +189,13 @@ pub(super) fn emit_string_pool(
     user_fn_wrapper_strict: &std::collections::HashSet<String>,
     // `(wrapper_symbol, display_name)` for every top-level user function
     // we want `console.log` / `util.inspect` to label with the original
-    // JS name. Each entry produces one `js_register_function_name` call
+    // JS name. Each entry produces one `js_register_function_name_static` call
     // in `__perry_init_strings_<prefix>` so the registry is populated
     // before user code runs. See #1202.
     user_fn_display_names: &[(String, String)],
     // #4101: `(wrapper_symbol, source_text)` for every user function whose
     // original source we retained. Each entry produces one
-    // `js_register_function_source` call in `__perry_init_strings_<prefix>`
+    // `js_register_function_source_static` call in `__perry_init_strings_<prefix>`
     // so `fn.toString()` can reconstruct the source.
     user_fn_source: &[(String, String, bool)],
 ) {
@@ -254,7 +254,7 @@ pub(super) fn emit_string_pool(
     // Pre-allocate string constants for function-name registration. Same
     // borrow-ordering constraint as the class-name constants below: we
     // must mint the rodata globals BEFORE `init_fn` claims `&mut llmod`.
-    // Each entry becomes one `js_register_function_name(<sym>, <str>,
+    // Each entry becomes one `js_register_function_name_static(<sym>, <str>,
     // <len>)` call inside the init function. See #1202.
     let mut user_fn_name_constants: Vec<(String, String, usize)> = Vec::new();
     // Deduplicated by CONTENT (#9486): the same display name is now registered
@@ -455,8 +455,12 @@ pub(super) fn emit_string_pool(
         let wrapper_ref = format!("@{}", wrapper_sym);
         let name_ref = format!("@{}", name_const);
         let len_str = name_len.to_string();
+        // `_static`, not the copying spelling: `@.str.N` is a `private
+        // unnamed_addr constant` in this module's rodata, which satisfies the
+        // process-lifetime contract that lets the registry borrow it instead of
+        // copying every name at startup (#9188).
         blk.call_void(
-            "js_register_function_name",
+            "js_register_function_name_static",
             &[(PTR, &wrapper_ref), (PTR, &name_ref), (I32, &len_str)],
         );
     }
@@ -471,8 +475,12 @@ pub(super) fn emit_string_pool(
         let wrapper_ref = format!("@{}", wrapper_sym);
         let source_ref = format!("@{}", source_const);
         let len_str = source_len.to_string();
+        // `_static` for the same reason as the names above (#9188), and the
+        // bigger half of the win: source text is registered for every function
+        // the bundle CONTAINS, to serve a `Function.prototype.toString()` that
+        // most programs never call.
         blk.call_void(
-            "js_register_function_source",
+            "js_register_function_source_static",
             &[
                 (PTR, &wrapper_ref),
                 (PTR, &source_ref),
@@ -1164,7 +1172,7 @@ pub(super) fn emit_string_pool(
     // #9413: mirror each class's retained source text into the runtime so
     // `Function.prototype.toString` on a class REF (an INT32 immediate, not a
     // ClosureHeader) answers with the class source. Same shape as the
-    // `js_register_function_source` loop above.
+    // `js_register_function_source_static` loop above.
     for (cid, const_name, byte_len) in &class_source_constants {
         chunker.roll_if_full();
         let blk = chunker.current_block();

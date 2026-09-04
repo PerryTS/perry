@@ -57,7 +57,7 @@ pub(super) fn extend_body_symbol_display_names(
         // carries entries this module never defines a body for (an accessor
         // reached only through a cross-module or typed path, a stale key from
         // a shape that lowered elsewhere). Registering one of those emits a
-        // `js_register_function_name(ptr @perry_method_…)` against a symbol
+        // `js_register_function_name_static(ptr @perry_method_…)` against a symbol
         // that does not exist, and the module fails to build with "reference
         // to unknown global" — measured on the claude-code bundle, where
         // exactly one getter (`UT7.__get_get_extensionName`) had a registry

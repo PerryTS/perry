@@ -56,6 +56,11 @@ SENTINELS=(
   js_closure_set_box_capture_ptr
   js_closure_resolve_arrow_direct_call
   js_register_closure_trusted_direct
+  # #9188: codegen switched module init from the copying spellings to these.
+  # A runtime archive predating the split defines neither, and every program
+  # with a named function would fail to link on a build worker instead of here.
+  js_register_function_name_static
+  js_register_function_source_static
   js_object_get_field_by_property_id_f64
   js_object_set_field_by_property_id
   js_native_call_method_by_id

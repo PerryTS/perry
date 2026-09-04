@@ -24,7 +24,7 @@
 //! including the overwhelming majority whose `.stack` is never read.
 //!
 //! **Resolution** happens on first `.stack` read and reuses the registry
-//! codegen already fills: `js_register_function_name` records
+//! codegen already fills: `js_register_function_name_static` records
 //! `(compiled address, JS display name)` once per function in
 //! `__perry_init_strings_*` (72,713 entries for the claude-code bundle) so
 //! `fn.name` and `[Function: f]` work. That table is keyed by exact function

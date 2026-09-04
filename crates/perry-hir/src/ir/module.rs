@@ -157,7 +157,7 @@ pub struct Module {
     ///   • named function expressions (`const x = function f(){}` → `"f"`)
     ///   • object-literal shorthand/method properties (`{m(){}}` → `"m"`)
     /// Keyed by the closure/function's HIR FuncId; consumed by codegen
-    /// when emitting `js_register_function_name` calls.
+    /// when emitting `js_register_function_name_static` calls.
     pub closure_display_names: std::collections::HashMap<crate::types::FuncId, String>,
     /// #5592: user-visible `.name` overrides for classes whose HIR
     /// registration key differs from their JS name. The only producer
@@ -171,7 +171,7 @@ pub struct Module {
     /// #4101: original source text for each user function, keyed by HIR
     /// FuncId. Populated at lowering by slicing the module source against the
     /// AST span of every function declaration / expression / arrow. Consumed
-    /// by codegen to emit `js_register_function_source` so `fn.toString()`
+    /// by codegen to emit `js_register_function_source_static` so `fn.toString()`
     /// (and `Function.prototype.toString.call(fn)`) reconstruct the source
     /// instead of returning the generic `"[object Object]"`.
     pub closure_source_text:
