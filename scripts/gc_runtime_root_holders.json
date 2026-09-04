@@ -19,7 +19,18 @@
     "  open_gap           - a real unrooted GC pointer. `issue` says where it is tracked; this",
     "                       verdict FAILS while old-page relocation ships enabled.",
     "  unverified         - enumerated, verdict NOT established. This also FAILS: an unknown",
-    "                       movable-address contract cannot be a production exemption."
+    "                       movable-address contract cannot be a production exemption.",
+    "",
+    "  non_moving_snapshot - real GC addresses deliberately untraced inside one non-moving",
+    "                        collector window. window names start/end/owner functions and",
+    "                        SHA-256 source pins for the holder and reviewed control flow.",
+    "                        Source changes or new holder/boundary references fail the gate;",
+    "                        re-audit the window before updating a pin. This is a review",
+    "                        contract, not a static proof of arbitrary callees being safe.",
+    "",
+    "#9740 extends the existing rule-T identity ratchet to raw TLS as well as Perry TLS.",
+    "The newly visible historical frontier is debt, not a safety verdict or scanner exemption.",
+    "Known census holders have explicit verdicts, including PASS1_MARKED's window contract."
   ],
   "holders": [
     {
@@ -1965,9 +1976,60 @@
       "name": "WINDOW_ROOTS",
       "verdict": "not_a_gc_pointer",
       "why": "Window-root registry maps numeric window handles to numeric root-widget handles; neither value is a JavaScript heap pointer."
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/census.rs",
+      "name": "ARMED",
+      "verdict": "not_a_gc_pointer",
+      "why": "Boolean census request latch, set by census_arm and consumed at full-sweep entry; contains no address or JS value."
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/census.rs",
+      "name": "LABEL",
+      "verdict": "not_a_gc_pointer",
+      "why": "Borrowed static Rust label (manual/signal) for the requested census, not a GC string or a NaN-boxed JS value."
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/census.rs",
+      "name": "PASS1_MARKED",
+      "verdict": "non_moving_snapshot",
+      "why": "Real GC header addresses, deliberately untraced so the diagnostic does not keep its observed objects alive. Populated only at the end of mark propagation of a synchronous full cycle; consumed at sweep entry in the same run_to_completion invocation. The intervening full-cycle phases do not relocate or run JS callbacks. The Vec is used for membership comparisons and dropped with the census before sweep. Budgeted and minor cycles skip both boundaries.",
+      "window": {
+        "start": {
+          "file": "crates/perry-runtime/src/gc/census.rs",
+          "function": "census_pass1_if_armed"
+        },
+        "end": {
+          "file": "crates/perry-runtime/src/gc/census.rs",
+          "function": "census_take_if_armed_at_full_sweep_start"
+        },
+        "owner": {
+          "file": "crates/perry-runtime/src/gc/cycle.rs",
+          "function": "run_to_completion"
+        },
+        "sources": {
+          "crates/perry-runtime/src/gc/census.rs": "0d5c6fcec6500692f702c8e7422e255b224de968febdb441b235b14358684b00",
+          "crates/perry-runtime/src/gc/cycle.rs": "4acea623de941aac70d38a4c993a3cd23135152e51f24b11bacd3d68e2571208",
+          "crates/perry-runtime/src/gc/mod.rs": "b60ad64b976801527e03f872b19787f72525f78c2f4056af2b2189e6bf75a581",
+          "crates/perry-runtime/src/gc/policy.rs": "319ed42f1a985c88f6362657a08518077283fe5216d6055fc82343b34dec50f9",
+          "crates/perry-runtime/src/gc/progress.rs": "a5ad3971bbe4047229ca57325234780daa85921dbc778e1c08dff4ad07ccfb96"
+        }
+      }
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/census.rs",
+      "name": "SEQ",
+      "verdict": "not_a_gc_pointer",
+      "why": "u32 JSON census sequence counter, incremented once per emitted report; it never carries an object address."
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/census.rs",
+      "name": "TEST_PATH_OVERRIDE",
+      "verdict": "test_only",
+      "why": "Declared under cfg(test); holds an explicitly leaked Rust path string used by the isolated census unit tests."
     }
   ],
-  "_FRONTIER_README": "Identity-pinned debt ratchet over new perry-ui* candidates and otherwise-unclassified core perry_thread_local! declarations (see the census docstring, \u201cThe identity-pinned frontier\u201d). A new uncovered holder fails until it is scanned, receives a researched holders verdict, or is deliberately pinned as debt. Moving a researched false positive to holders graduates it from this list. A fixed or classified holder makes its old frontier pin stale, so the receipt must be deleted.",
+  "_FRONTIER_README": "Identity-pinned debt ratchet over new perry-ui* candidates and otherwise-unclassified core raw/Perry TLS declarations (see the census docstring, \u201cThe identity-pinned frontier\u201d). A new uncovered holder fails until it is scanned, receives a researched holders verdict, or is deliberately pinned as debt. Moving a researched false positive to holders graduates it from this list. A fixed or classified holder makes its old frontier pin stale, so the receipt must be deleted.",
   "frontier": [
     {
       "file": "crates/perry-runtime/src/array/element_shape.rs",
@@ -2562,6 +2624,1078 @@
     {
       "file": "crates/perry-runtime/src/yoga.rs",
       "name": "GC_SCANNER_REGISTERED"
+    },
+    {
+      "file": "crates/perry-runtime/src/abi_trampoline.rs",
+      "name": "SEEN_FROM_CALLEE"
+    },
+    {
+      "file": "crates/perry-runtime/src/arena/block.rs",
+      "name": "ACTIVE_SURVIVOR"
+    },
+    {
+      "file": "crates/perry-runtime/src/arena/block.rs",
+      "name": "ARENA"
+    },
+    {
+      "file": "crates/perry-runtime/src/arena/block.rs",
+      "name": "BLOCK_POOL"
+    },
+    {
+      "file": "crates/perry-runtime/src/arena/block.rs",
+      "name": "BLOCK_POOL_BYTES"
+    },
+    {
+      "file": "crates/perry-runtime/src/arena/block.rs",
+      "name": "FORCE_BLOCK_ALLOC_FAILURE"
+    },
+    {
+      "file": "crates/perry-runtime/src/arena/block.rs",
+      "name": "GC_TRIGGER_BORROW_DEPTH"
+    },
+    {
+      "file": "crates/perry-runtime/src/arena/block.rs",
+      "name": "GC_TRIGGER_CALLS"
+    },
+    {
+      "file": "crates/perry-runtime/src/arena/block.rs",
+      "name": "INLINE_STATE"
+    },
+    {
+      "file": "crates/perry-runtime/src/arena/block.rs",
+      "name": "LONGLIVED_ARENA"
+    },
+    {
+      "file": "crates/perry-runtime/src/arena/block.rs",
+      "name": "OLD_ARENA"
+    },
+    {
+      "file": "crates/perry-runtime/src/arena/block.rs",
+      "name": "OLD_GEN_IN_USE_BYTES"
+    },
+    {
+      "file": "crates/perry-runtime/src/arena/block.rs",
+      "name": "SURVIVOR_ARENA_0"
+    },
+    {
+      "file": "crates/perry-runtime/src/arena/block.rs",
+      "name": "SURVIVOR_ARENA_1"
+    },
+    {
+      "file": "crates/perry-runtime/src/arena/page_meta.rs",
+      "name": "OLD_GEN_PAGE_DIRTY_EPOCH"
+    },
+    {
+      "file": "crates/perry-runtime/src/arena/page_meta.rs",
+      "name": "OLD_GEN_RECLAIM_POOLED_BYTES"
+    },
+    {
+      "file": "crates/perry-runtime/src/arena/page_meta.rs",
+      "name": "OLD_GEN_RECLAIM_RETURNED_BYTES"
+    },
+    {
+      "file": "crates/perry-runtime/src/arena/page_meta.rs",
+      "name": "OLD_GEN_RECLAIM_REUSABLE_BYTES"
+    },
+    {
+      "file": "crates/perry-runtime/src/arena/page_meta.rs",
+      "name": "OLD_PAGE_META_SNAPSHOT_CALLS"
+    },
+    {
+      "file": "crates/perry-runtime/src/arena/page_meta.rs",
+      "name": "PAGE_GENERATION_CACHE"
+    },
+    {
+      "file": "crates/perry-runtime/src/array/element_shape.rs",
+      "name": "ARRAY_SUBCLASS_PREFIX_STORE_HITS"
+    },
+    {
+      "file": "crates/perry-runtime/src/array/element_shape.rs",
+      "name": "EXACT_SHAPE_STORE_HITS"
+    },
+    {
+      "file": "crates/perry-runtime/src/array/indexing.rs",
+      "name": "STRICT_DENSE_POINTER_OVERWRITE_HITS"
+    },
+    {
+      "file": "crates/perry-runtime/src/array/indexing_support.rs",
+      "name": "KEYS_ARRAY_SLOT_FALLBACKS"
+    },
+    {
+      "file": "crates/perry-runtime/src/async_context.rs",
+      "name": "HANDLE_GENERATIONS"
+    },
+    {
+      "file": "crates/perry-runtime/src/async_hooks.rs",
+      "name": "HOOK_CALLBACK_DEPTH"
+    },
+    {
+      "file": "crates/perry-runtime/src/async_hooks.rs",
+      "name": "PENDING_HOOK_STATES"
+    },
+    {
+      "file": "crates/perry-runtime/src/async_hooks.rs",
+      "name": "REGISTERED"
+    },
+    {
+      "file": "crates/perry-runtime/src/buffer/header.rs",
+      "name": "TEST_BUFFER_REGISTRY_PROBES"
+    },
+    {
+      "file": "crates/perry-runtime/src/buffer/header.rs",
+      "name": "TEST_UINT8ARRAY_REGISTRY_PROBES"
+    },
+    {
+      "file": "crates/perry-runtime/src/builtins/console.rs",
+      "name": "CONSOLE_COUNTERS"
+    },
+    {
+      "file": "crates/perry-runtime/src/builtins/console.rs",
+      "name": "CONSOLE_GROUP_INDENT"
+    },
+    {
+      "file": "crates/perry-runtime/src/builtins/console.rs",
+      "name": "CONSOLE_TIMERS"
+    },
+    {
+      "file": "crates/perry-runtime/src/builtins/formatting.rs",
+      "name": "INSPECT_CIRCULAR"
+    },
+    {
+      "file": "crates/perry-runtime/src/child_process/reactor.rs",
+      "name": "CP_PUMPING"
+    },
+    {
+      "file": "crates/perry-runtime/src/child_process/v8_serde.rs",
+      "name": "DESERIALIZERS"
+    },
+    {
+      "file": "crates/perry-runtime/src/child_process/v8_serde.rs",
+      "name": "SERIALIZERS"
+    },
+    {
+      "file": "crates/perry-runtime/src/closure/dispatch/errors.rs",
+      "name": "THROW_NOT_CALLABLE_COUNT"
+    },
+    {
+      "file": "crates/perry-runtime/src/closure/registry.rs",
+      "name": "RESOLVE_STRATEGY_SLOW_CALLS"
+    },
+    {
+      "file": "crates/perry-runtime/src/cluster.rs",
+      "name": "CLUSTER_GC_REGISTERED"
+    },
+    {
+      "file": "crates/perry-runtime/src/dyn_eval/mod.rs",
+      "name": "CALL_DEPTH"
+    },
+    {
+      "file": "crates/perry-runtime/src/dyn_eval/mod.rs",
+      "name": "FN_REGISTRY"
+    },
+    {
+      "file": "crates/perry-runtime/src/dyn_eval/mod.rs",
+      "name": "NEXT_FN_ID"
+    },
+    {
+      "file": "crates/perry-runtime/src/dyn_eval/mod.rs",
+      "name": "SOURCE_FN_CACHE"
+    },
+    {
+      "file": "crates/perry-runtime/src/dyn_eval/mod.rs",
+      "name": "SOURCE_FN_CACHE_BYTES"
+    },
+    {
+      "file": "crates/perry-runtime/src/eh.rs",
+      "name": "EXC_OBJECT"
+    },
+    {
+      "file": "crates/perry-runtime/src/eh_walker.rs",
+      "name": "PREDICTION"
+    },
+    {
+      "file": "crates/perry-runtime/src/error.rs",
+      "name": "CURRENT_CALL_LOCATION"
+    },
+    {
+      "file": "crates/perry-runtime/src/error.rs",
+      "name": "INTERNED_ERROR_CODES"
+    },
+    {
+      "file": "crates/perry-runtime/src/error.rs",
+      "name": "RUNTIME_SOURCE_LOCATION"
+    },
+    {
+      "file": "crates/perry-runtime/src/event_pump.rs",
+      "name": "SPIN_STREAK"
+    },
+    {
+      "file": "crates/perry-runtime/src/fs/dir_glob_watch/watch.rs",
+      "name": "GLOB_ITERATORS"
+    },
+    {
+      "file": "crates/perry-runtime/src/fs/dir_glob_watch/watch.rs",
+      "name": "NEXT_GLOB_ITERATOR_ID"
+    },
+    {
+      "file": "crates/perry-runtime/src/fs/dir_glob_watch/watch.rs",
+      "name": "NEXT_WATCH_ID"
+    },
+    {
+      "file": "crates/perry-runtime/src/fs/dir_glob_watch/watch.rs",
+      "name": "WATCH_FILE_PATHS"
+    },
+    {
+      "file": "crates/perry-runtime/src/fs/filehandle.rs",
+      "name": "NEXT_STREAM_ITER_ID"
+    },
+    {
+      "file": "crates/perry-runtime/src/fs/filehandle.rs",
+      "name": "NEXT_WRITER_ID"
+    },
+    {
+      "file": "crates/perry-runtime/src/fs/mod.rs",
+      "name": "DIR_REGISTRY"
+    },
+    {
+      "file": "crates/perry-runtime/src/fs/mod.rs",
+      "name": "FD_APPEND_MODE"
+    },
+    {
+      "file": "crates/perry-runtime/src/fs/mod.rs",
+      "name": "FD_PATHS"
+    },
+    {
+      "file": "crates/perry-runtime/src/fs/mod.rs",
+      "name": "FD_REGISTRY"
+    },
+    {
+      "file": "crates/perry-runtime/src/fs/mod.rs",
+      "name": "NEXT_DIR_ID"
+    },
+    {
+      "file": "crates/perry-runtime/src/fs/stream.rs",
+      "name": "FS_STREAM_NEXT_ID"
+    },
+    {
+      "file": "crates/perry-runtime/src/fs/stream.rs",
+      "name": "FS_UTF8_STREAM_NEXT_ID"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/barrier/mod.rs",
+      "name": "CONS_PINNED"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/barrier/mod.rs",
+      "name": "DIRTY_OLD_PAGES"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/barrier/mod.rs",
+      "name": "EVER_DIRTY_OLD_PAGES"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/barrier/mod.rs",
+      "name": "EXTERNAL_DIRTY_SLOT_PAGES"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/barrier/mod.rs",
+      "name": "GC_BIRTH_EXTRA_FLAGS"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/barrier/mod.rs",
+      "name": "INCREMENTAL_MARK_BARRIER_MINOR_ONLY"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/barrier/mod.rs",
+      "name": "INCREMENTAL_MARK_BARRIER_VALID_PTRS"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/barrier/mod.rs",
+      "name": "REMEMBERED_SET"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/barrier_arming.rs",
+      "name": "RECONSTRUCT_CENSUS"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/barrier_arming.rs",
+      "name": "REMEMBERED_SET_RECONSTRUCTED"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/barrier_arming.rs",
+      "name": "TEST_ARMED_OVERRIDE"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/copying.rs",
+      "name": "UNTRACED_DECLINE_REASON"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/cycle_malloc_trim.rs",
+      "name": "TEST_MALLOC_TRIM_CALLS"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/cycle_malloc_trim.rs",
+      "name": "TEST_MALLOC_TRIM_EXECUTED"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/cycle_malloc_trim.rs",
+      "name": "TEST_MIMALLOC_PURGES"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/fromspace_scan.rs",
+      "name": "SNAPSHOT_PAGES"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/layout.rs",
+      "name": "SHAPE_LAYOUTS"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/layout.rs",
+      "name": "TRACE_SLOT_READS"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/layout.rs",
+      "name": "TYPED_RAW_F64_DESCRIPTOR_QUERIES"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/layout.rs",
+      "name": "TYPED_SLOT_DESCRIPTOR_PROBES"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/layout_tables.rs",
+      "name": "LAYOUT_SLOT_MASKS"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/layout_tables.rs",
+      "name": "PER_OBJECT_LAYOUTS_NONEMPTY"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/layout_tables.rs",
+      "name": "TYPED_LAYOUTS"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/malloc.rs",
+      "name": "ARENA_FREE_LIST"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/malloc.rs",
+      "name": "ARENA_FREE_LIST_NONEMPTY"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/mod.rs",
+      "name": "AUTO_GC_INIT_SUPPRESSED"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/mod.rs",
+      "name": "GC_INIT_DONE"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/mod.rs",
+      "name": "GC_SCAVENGE_TEST_OVERRIDE"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/mod.rs",
+      "name": "IN_EMERGENCY"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/old_free.rs",
+      "name": "OLD_FREE_BYTES"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/old_free.rs",
+      "name": "OLD_FREE_MAP"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/old_free.rs",
+      "name": "OLD_FREE_NONEMPTY"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/policy.rs",
+      "name": "GC_BUDGETED_CYCLE"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/policy.rs",
+      "name": "GC_BUDGETED_CYCLE_ACTIVE"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/policy.rs",
+      "name": "GC_DEFERRED_REQUEST"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/policy.rs",
+      "name": "GC_EXTERNAL_SIDE_ALLOC_PENDING"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/policy.rs",
+      "name": "GC_EXTERNAL_SIDE_LIVE_BYTES"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/policy.rs",
+      "name": "GC_FULL_CYCLE_PRE_IN_USE_BYTES"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/policy.rs",
+      "name": "GC_LAST_COLLECTION_POST_IN_USE_BYTES"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/policy.rs",
+      "name": "GC_LAST_FULL_ARENA_IN_USE_BYTES"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/policy.rs",
+      "name": "GC_LAST_OLD_RECLAIM_IN_USE_BYTES"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/policy.rs",
+      "name": "GC_MAJOR_PACING_BACKOFF_SHIFT"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/policy.rs",
+      "name": "GC_MAJOR_PACING_RETAINING"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/policy.rs",
+      "name": "GC_OLD_RECLAIM_PENDING"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/policy.rs",
+      "name": "GC_SAFEPOINT_DEFER_ARENA_BASE"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/policy.rs",
+      "name": "GC_SAFEPOINT_PENDING"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/policy.rs",
+      "name": "GC_SUPPRESSED_TINY_PARSE_COLLECTION_PENDING"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/policy.rs",
+      "name": "GC_TRIGGER_ARMED"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/policy.rs",
+      "name": "OVERRIDE"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/policy.rs",
+      "name": "SURVIVOR_HANDOFF_AWAITING_MINOR"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/policy.rs",
+      "name": "SURVIVOR_HANDOFF_SUPPRESSIONS"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/policy.rs",
+      "name": "TEST_PACING_ARENA_IN_USE"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/promote_in_place.rs",
+      "name": "FIRST_CYCLE_PROMOTION_ATTEMPTS"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/promote_in_place.rs",
+      "name": "FIRST_CYCLE_PROMOTION_ROLLBACKS"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/promote_in_place.rs",
+      "name": "IN_PLACE_PROMOTED_OBJECTS"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/promote_in_place.rs",
+      "name": "IN_PLACE_PROMOTION_CYCLES"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/promote_in_place.rs",
+      "name": "UNTRACED_PROMOTED_OBJECTS"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/promote_in_place.rs",
+      "name": "UNTRACED_PROMOTION_CYCLES"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/promote_in_place.rs",
+      "name": "YOUNG_CAPACITY_CREDIT"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/roots/runtime_handles.rs",
+      "name": "RUNTIME_HANDLE_STACK_HOT_GUARD"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/roots/shadow_stack.rs",
+      "name": "SHADOW_BUFFER_GUARD"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/scan_fallback.rs",
+      "name": "SAFEPOINT_DRAINS"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/scan_fallback.rs",
+      "name": "SCAN_FALLBACKS"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/shape_install.rs",
+      "name": "SHAPE_INSTALL_MEMO"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/telemetry.rs",
+      "name": "GC_STATS"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/telemetry.rs",
+      "name": "TEST_LAST_GC_TRACE_JSON"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/tenuring.rs",
+      "name": "CAP_GROW_STREAK"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/tenuring.rs",
+      "name": "CAP_SHRINK_STREAK"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/tenuring.rs",
+      "name": "MEAN_SURVIVING_OBJECT_BYTES"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/tenuring.rs",
+      "name": "NURSERY_CAP_SCALE"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/tenuring.rs",
+      "name": "OBJECT_CENSUS_SEEDED"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/tenuring.rs",
+      "name": "PREV_COPIED_BYTES"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/tenuring.rs",
+      "name": "PROMOTE_LOCK"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/tenuring.rs",
+      "name": "RAISE_STREAK"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/tenuring.rs",
+      "name": "UNLOCK_STREAK"
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/trace.rs",
+      "name": "CLASSIFIER_VERIFY_SUPPRESSED"
+    },
+    {
+      "file": "crates/perry-runtime/src/intl/number_format.rs",
+      "name": "ROUND_CTX"
+    },
+    {
+      "file": "crates/perry-runtime/src/json/mod.rs",
+      "name": "OBJECT_PROTO_TOJSON_STATE"
+    },
+    {
+      "file": "crates/perry-runtime/src/json/mod.rs",
+      "name": "STRINGIFY_BUF"
+    },
+    {
+      "file": "crates/perry-runtime/src/json/mod.rs",
+      "name": "STRINGIFY_DEPTH"
+    },
+    {
+      "file": "crates/perry-runtime/src/json/mod.rs",
+      "name": "STRINGIFY_STACK"
+    },
+    {
+      "file": "crates/perry-runtime/src/json/mod.rs",
+      "name": "SUPPRESS_NEXT_TO_JSON"
+    },
+    {
+      "file": "crates/perry-runtime/src/json/mod.rs",
+      "name": "TO_JSON_KEY"
+    },
+    {
+      "file": "crates/perry-runtime/src/json_tape.rs",
+      "name": "JSON_TAPE_SAFEPOINT_HOOK"
+    },
+    {
+      "file": "crates/perry-runtime/src/json_tape.rs",
+      "name": "REPARSE_MATERIALIZATIONS"
+    },
+    {
+      "file": "crates/perry-runtime/src/json_tape.rs",
+      "name": "TAPE_SCRATCH"
+    },
+    {
+      "file": "crates/perry-runtime/src/map.rs",
+      "name": "TEST_MAP_REGISTRY_PROBES"
+    },
+    {
+      "file": "crates/perry-runtime/src/media_playback.rs",
+      "name": "GC_SCANNER_REGISTERED"
+    },
+    {
+      "file": "crates/perry-runtime/src/native_arena.rs",
+      "name": "OWNER_REGISTRY"
+    },
+    {
+      "file": "crates/perry-runtime/src/native_arena.rs",
+      "name": "POD_VIEW_REGISTRY"
+    },
+    {
+      "file": "crates/perry-runtime/src/native_arena.rs",
+      "name": "VIEW_REGISTRY"
+    },
+    {
+      "file": "crates/perry-runtime/src/node_http2_constants.rs",
+      "name": "SENSITIVE_HEADERS_SYMBOL"
+    },
+    {
+      "file": "crates/perry-runtime/src/node_repl.rs",
+      "name": "RECOVERABLE_ERRORS"
+    },
+    {
+      "file": "crates/perry-runtime/src/node_stream_constructors.rs",
+      "name": "DEFAULT_HWM_BYTE"
+    },
+    {
+      "file": "crates/perry-runtime/src/node_stream_constructors.rs",
+      "name": "DEFAULT_HWM_OBJECT"
+    },
+    {
+      "file": "crates/perry-runtime/src/node_stream_constructors.rs",
+      "name": "ITER_HELPER_ARITIES_REGISTERED"
+    },
+    {
+      "file": "crates/perry-runtime/src/node_submodules/blob.rs",
+      "name": "FILE_BLOBS"
+    },
+    {
+      "file": "crates/perry-runtime/src/node_submodules/blob.rs",
+      "name": "NEXT_FILE_BLOB_ID"
+    },
+    {
+      "file": "crates/perry-runtime/src/node_submodules/diagnostics.rs",
+      "name": "DIAG_PENDING_UNCAUGHT"
+    },
+    {
+      "file": "crates/perry-runtime/src/node_submodules/diagnostics.rs",
+      "name": "DIAG_SUPPRESS_UNCAUGHT_DRAIN"
+    },
+    {
+      "file": "crates/perry-runtime/src/node_submodules/diagnostics.rs",
+      "name": "ERROR_DIAGNOSTICS"
+    },
+    {
+      "file": "crates/perry-runtime/src/node_submodules/diagnostics.rs",
+      "name": "NEXT_DIAG_ID"
+    },
+    {
+      "file": "crates/perry-runtime/src/node_submodules/diagnostics.rs",
+      "name": "PENDING_ERROR_DIAGNOSTICS"
+    },
+    {
+      "file": "crates/perry-runtime/src/node_submodules/test.rs",
+      "name": "CURRENT_ASSERT_COUNT"
+    },
+    {
+      "file": "crates/perry-runtime/src/node_submodules/test.rs",
+      "name": "CURRENT_DIAGNOSTICS"
+    },
+    {
+      "file": "crates/perry-runtime/src/node_submodules/test.rs",
+      "name": "CURRENT_PLAN"
+    },
+    {
+      "file": "crates/perry-runtime/src/node_submodules/test.rs",
+      "name": "CURRENT_SNAPSHOT_INDEX"
+    },
+    {
+      "file": "crates/perry-runtime/src/node_submodules/test.rs",
+      "name": "CURRENT_TEST_NAME"
+    },
+    {
+      "file": "crates/perry-runtime/src/node_submodules/test.rs",
+      "name": "CURRENT_TEST_OVERRIDE"
+    },
+    {
+      "file": "crates/perry-runtime/src/node_submodules/test.rs",
+      "name": "NEXT_MOCK_ID"
+    },
+    {
+      "file": "crates/perry-runtime/src/node_submodules/trace_events.rs",
+      "name": "NEXT_TRACE_ID"
+    },
+    {
+      "file": "crates/perry-runtime/src/node_submodules/trace_events.rs",
+      "name": "TRACE_ENABLED_COUNTS"
+    },
+    {
+      "file": "crates/perry-runtime/src/node_submodules/trace_events.rs",
+      "name": "TRACE_ENABLED_OBJECTS"
+    },
+    {
+      "file": "crates/perry-runtime/src/node_submodules/trace_events.rs",
+      "name": "TRACE_OUTPUT"
+    },
+    {
+      "file": "crates/perry-runtime/src/node_submodules/trace_events.rs",
+      "name": "TRACE_WARNING_EMITTED"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/arguments.rs",
+      "name": "TEST_ARGUMENTS_REGISTRY_PROBES"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/class_registry/parent_static.rs",
+      "name": "TEST_CLASS_PROTOTYPE_SCANS"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/delete_rest.rs",
+      "name": "TOMBSTONE_TEST_OVERRIDE"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/native_module.rs",
+      "name": "TEST_COLLECT_BOUND_METHOD_AFTER_CAPTURE_INIT"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/native_module/callable_exports.rs",
+      "name": "TEST_COLLECT_NATIVE_EXPORT_AFTER_ALLOC"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/shapes.rs",
+      "name": "KEYS_EDGE_SUPPRESSED"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/shapes.rs",
+      "name": "TEST_CACHED_TRANSITION_STAMPS"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/shapes.rs",
+      "name": "TEST_CACHED_TRANSITION_WATCH"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/spill.rs",
+      "name": "LEARNED_INLINE_FIELDS"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/spill.rs",
+      "name": "SPILL_SAFEPOINT_HOOK"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/typed_array_proto_thunks.rs",
+      "name": "TEST_BUFFER_GATE_PROBES"
+    },
+    {
+      "file": "crates/perry-runtime/src/per_test_global.rs",
+      "name": "SLOTS"
+    },
+    {
+      "file": "crates/perry-runtime/src/perf_hooks.rs",
+      "name": "FLUSH_SCHEDULED"
+    },
+    {
+      "file": "crates/perry-runtime/src/process.rs",
+      "name": "MODULE_LOADER_HOOKS"
+    },
+    {
+      "file": "crates/perry-runtime/src/process.rs",
+      "name": "MODULE_LOADER_HOOK_NEXT_ID"
+    },
+    {
+      "file": "crates/perry-runtime/src/process.rs",
+      "name": "PROCESS_FINALIZATION_BEFORE_EXIT_LISTENER_INSTALLED"
+    },
+    {
+      "file": "crates/perry-runtime/src/process.rs",
+      "name": "PROCESS_FINALIZATION_BEFORE_EXIT_RAN"
+    },
+    {
+      "file": "crates/perry-runtime/src/process.rs",
+      "name": "PROCESS_FINALIZATION_EXIT_RAN"
+    },
+    {
+      "file": "crates/perry-runtime/src/process.rs",
+      "name": "PROCESS_FINALIZATION_OBJECT"
+    },
+    {
+      "file": "crates/perry-runtime/src/process.rs",
+      "name": "PROCESS_FINALIZATION_REGISTRY"
+    },
+    {
+      "file": "crates/perry-runtime/src/process.rs",
+      "name": "PROCESS_PERMISSION_DROPS"
+    },
+    {
+      "file": "crates/perry-runtime/src/process.rs",
+      "name": "PROCESS_TITLE"
+    },
+    {
+      "file": "crates/perry-runtime/src/process/env_misc.rs",
+      "name": "ENV_CACHE_MUTATION"
+    },
+    {
+      "file": "crates/perry-runtime/src/process/env_misc.rs",
+      "name": "ENV_KEY_CASING"
+    },
+    {
+      "file": "crates/perry-runtime/src/process/env_misc.rs",
+      "name": "PROCESS_EXIT_CODE"
+    },
+    {
+      "file": "crates/perry-runtime/src/proxy.rs",
+      "name": "PROXY_FULL_TRACE_LIVE"
+    },
+    {
+      "file": "crates/perry-runtime/src/proxy.rs",
+      "name": "PROXY_GC_RECLAIMED_TOTAL"
+    },
+    {
+      "file": "crates/perry-runtime/src/proxy.rs",
+      "name": "PROXY_ID_BAND_LEN_OVERRIDE"
+    },
+    {
+      "file": "crates/perry-runtime/src/pty/reactor.rs",
+      "name": "PTY_PUMPING"
+    },
+    {
+      "file": "crates/perry-runtime/src/registry_latch_probes.rs",
+      "name": "TABLE"
+    },
+    {
+      "file": "crates/perry-runtime/src/set.rs",
+      "name": "TEST_SET_REGISTRY_PROBES"
+    },
+    {
+      "file": "crates/perry-runtime/src/static_plugins.rs",
+      "name": "STATIC_PLUGINS"
+    },
+    {
+      "file": "crates/perry-runtime/src/string/concat.rs",
+      "name": "CONCAT_CHAIN_NO_COLLECT_HITS"
+    },
+    {
+      "file": "crates/perry-runtime/src/symbol.rs",
+      "name": "TEST_DISABLE_SYMBOL_MAGIC_SCREEN"
+    },
+    {
+      "file": "crates/perry-runtime/src/symbol.rs",
+      "name": "TEST_SYMBOL_FILTER_ADMITTED_PROBES"
+    },
+    {
+      "file": "crates/perry-runtime/src/symbol.rs",
+      "name": "TEST_SYMBOL_REGISTRY_PROBES"
+    },
+    {
+      "file": "crates/perry-runtime/src/timer.rs",
+      "name": "TIMER_CALLBACK_DISPATCH_DEPTH"
+    },
+    {
+      "file": "crates/perry-runtime/src/tls_hot.rs",
+      "name": "AFTER_PROBE"
+    },
+    {
+      "file": "crates/perry-runtime/src/tls_hot.rs",
+      "name": "HOT"
+    },
+    {
+      "file": "crates/perry-runtime/src/typedarray/mod.rs",
+      "name": "TEST_TA_REGISTRY_PROBES"
+    },
+    {
+      "file": "crates/perry-runtime/src/typedarray/mod.rs",
+      "name": "TEST_TA_WINDOW_ADMITTED_PROBES"
+    },
+    {
+      "file": "crates/perry-runtime/src/util_debuglog.rs",
+      "name": "REGISTERED"
+    },
+    {
+      "file": "crates/perry-runtime/src/util_promisify.rs",
+      "name": "REGISTERED"
+    },
+    {
+      "file": "crates/perry-runtime/src/v8.rs",
+      "name": "IN_PROMISE_HOOK_CALLBACK"
+    },
+    {
+      "file": "crates/perry-runtime/src/v8.rs",
+      "name": "REGISTERED"
+    },
+    {
+      "file": "crates/perry-runtime/src/value/dyn_index.rs",
+      "name": "TEST_DYN_INDEX_DISPATCH_COUNTS"
+    },
+    {
+      "file": "crates/perry-runtime/src/wasi.rs",
+      "name": "WASI_EXIT_CODE"
+    },
+    {
+      "file": "crates/perry-runtime/src/weakref/test_support.rs",
+      "name": "WEAK_READ_BARRIER_SHADES"
+    },
+    {
+      "file": "crates/perry-runtime/src/web_storage.rs",
+      "name": "LOCAL_STORE"
+    },
+    {
+      "file": "crates/perry-runtime/src/web_storage.rs",
+      "name": "SESSION_STORE"
+    },
+    {
+      "file": "crates/perry-stdlib/src/commander.rs",
+      "name": "GC_REGISTERED"
+    },
+    {
+      "file": "crates/perry-stdlib/src/common/async_bridge.rs",
+      "name": "GC_SCANNER_REGISTERED"
+    },
+    {
+      "file": "crates/perry-stdlib/src/cron.rs",
+      "name": "CRON_GC_REGISTERED"
+    },
+    {
+      "file": "crates/perry-stdlib/src/crypto/hash_handles.rs",
+      "name": "CRYPTO_STREAM_GC_REGISTERED"
+    },
+    {
+      "file": "crates/perry-stdlib/src/crypto/random.rs",
+      "name": "CB_ERR_NULLISH"
+    },
+    {
+      "file": "crates/perry-stdlib/src/crypto/random.rs",
+      "name": "CB_FIRED"
+    },
+    {
+      "file": "crates/perry-stdlib/src/crypto/random.rs",
+      "name": "CB_VALUE_PTR"
+    },
+    {
+      "file": "crates/perry-stdlib/src/domain.rs",
+      "name": "ACTIVE_DOMAINS"
+    },
+    {
+      "file": "crates/perry-stdlib/src/domain.rs",
+      "name": "ACTIVE_DOMAINS_TOUCHED"
+    },
+    {
+      "file": "crates/perry-stdlib/src/domain.rs",
+      "name": "DOMAIN_GC_REGISTERED"
+    },
+    {
+      "file": "crates/perry-stdlib/src/events.rs",
+      "name": "EVENTS_GC_REGISTERED"
+    },
+    {
+      "file": "crates/perry-stdlib/src/exponential_backoff.rs",
+      "name": "GC_REGISTERED"
+    },
+    {
+      "file": "crates/perry-stdlib/src/fetch/gc.rs",
+      "name": "GC_REGISTERED"
+    },
+    {
+      "file": "crates/perry-stdlib/src/fetch/mod.rs",
+      "name": "PENDING_FETCH_BODY_CONTENT_TYPE"
+    },
+    {
+      "file": "crates/perry-stdlib/src/fetch/mod.rs",
+      "name": "PENDING_FETCH_BODY_STREAM_ID"
+    },
+    {
+      "file": "crates/perry-stdlib/src/net/mod.rs",
+      "name": "NET_GC_REGISTERED"
+    },
+    {
+      "file": "crates/perry-stdlib/src/net/mod.rs",
+      "name": "SCRATCH"
+    },
+    {
+      "file": "crates/perry-stdlib/src/readline/mod.rs",
+      "name": "CLOSE_FIRED"
+    },
+    {
+      "file": "crates/perry-stdlib/src/readline/mod.rs",
+      "name": "NEXT_READLINE_HANDLE"
+    },
+    {
+      "file": "crates/perry-stdlib/src/readline/mod.rs",
+      "name": "READLINE_GC_REGISTERED"
+    },
+    {
+      "file": "crates/perry-stdlib/src/sqlite.rs",
+      "name": "NODE_SQLITE_GC_SCANNER"
+    },
+    {
+      "file": "crates/perry-stdlib/src/streams/gc.rs",
+      "name": "GC_REGISTERED"
+    },
+    {
+      "file": "crates/perry-stdlib/src/tls.rs",
+      "name": "TLS_GC_REGISTERED"
+    },
+    {
+      "file": "crates/perry-stdlib/src/worker_threads.rs",
+      "name": "CURRENT_RESOURCE_LIMITS"
+    },
+    {
+      "file": "crates/perry-stdlib/src/worker_threads.rs",
+      "name": "CURRENT_THREAD_NAME"
+    },
+    {
+      "file": "crates/perry-stdlib/src/worker_threads.rs",
+      "name": "CURRENT_WORKER_CLOSE_REQUESTED"
+    },
+    {
+      "file": "crates/perry-stdlib/src/worker_threads.rs",
+      "name": "CURRENT_WORKER_DATA"
+    },
+    {
+      "file": "crates/perry-stdlib/src/worker_threads.rs",
+      "name": "ENVIRONMENT_DATA_GC_REGISTERED"
+    },
+    {
+      "file": "crates/perry-stdlib/src/worker_threads.rs",
+      "name": "NEXT_BROADCAST_ID"
+    },
+    {
+      "file": "crates/perry-stdlib/src/worker_threads.rs",
+      "name": "PARENT_PORT_EVENT_GC_REGISTERED"
+    },
+    {
+      "file": "crates/perry-stdlib/src/worker_threads.rs",
+      "name": "PENDING_MESSAGES"
+    },
+    {
+      "file": "crates/perry-stdlib/src/worker_threads.rs",
+      "name": "STDIN_EOF"
+    },
+    {
+      "file": "crates/perry-stdlib/src/worker_threads.rs",
+      "name": "STDIN_READER_STARTED"
+    },
+    {
+      "file": "crates/perry-stdlib/src/worker_threads.rs",
+      "name": "UNCLONEABLE_OBJECTS"
+    },
+    {
+      "file": "crates/perry-stdlib/src/worker_threads.rs",
+      "name": "UNTRANSFERABLE_OBJECTS"
+    },
+    {
+      "file": "crates/perry-stdlib/src/worker_threads.rs",
+      "name": "WORKER_GC_REGISTERED"
+    },
+    {
+      "file": "crates/perry-stdlib/src/ws.rs",
+      "name": "SCRATCH"
+    },
+    {
+      "file": "crates/perry-stdlib/src/ws.rs",
+      "name": "WS_GC_REGISTERED"
+    },
+    {
+      "file": "crates/perry-stdlib/src/zlib.rs",
+      "name": "ZLIB_GC_REGISTERED"
     }
   ]
 }

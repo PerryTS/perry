@@ -43,7 +43,7 @@ static SIGNAL_PENDING: AtomicBool = AtomicBool::new(false);
 static SIGNAL_INSTALLED: AtomicBool = AtomicBool::new(false);
 static MAIN_THREAD: OnceLock<std::thread::ThreadId> = OnceLock::new();
 
-thread_local! {
+crate::perry_thread_local! {
     static ARMED: Cell<bool> = const { Cell::new(false) };
     static SEQ: Cell<u32> = const { Cell::new(0) };
     static LABEL: RefCell<&'static str> = const { RefCell::new("manual") };
@@ -177,10 +177,16 @@ fn census_service_signal() {
     super::js_gc_collect();
 }
 
-thread_local! {
+crate::perry_thread_local! {
     /// Pass-1 snapshot: sorted header addresses that were marked when mark
     /// propagation finished (see the module docs).
     static PASS1_MARKED: RefCell<Option<Vec<usize>>> = const { RefCell::new(None) };
+}
+
+/// The snapshot must be consumed before the collector returns to the mutator.
+#[cfg(test)]
+pub(crate) fn test_has_pass1_snapshot() -> bool {
+    PASS1_MARKED.with(|p| p.borrow().is_some())
 }
 
 #[inline]
