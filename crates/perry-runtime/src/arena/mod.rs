@@ -8,6 +8,7 @@ pub(crate) use std::alloc::{alloc, Layout};
 pub(crate) use std::cell::{Cell, RefCell, UnsafeCell};
 pub(crate) use std::collections::hash_map::Entry;
 
+pub(crate) mod alloc_sample;
 mod allocators;
 mod block;
 mod inline;

@@ -57,6 +57,7 @@ mod shape_keys_descriptor_edge;
 mod smoke;
 mod step_bounds;
 pub(super) mod support;
+mod survival_diag;
 mod teardown;
 mod telemetry_verifier;
 mod temp_roots;
