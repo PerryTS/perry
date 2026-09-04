@@ -386,6 +386,18 @@ pub fn short_spread_method_capabilities(hir: &HirModule) -> Vec<ShortSpreadMetho
     out
 }
 
+/// Return the exact LLVM symbol used for a top-level HIR function.
+///
+/// The module prefix and function component deliberately use different
+/// manglers: module names keep the stable public ABI, while function names
+/// use the injective member mangler so `$a` and `_a` cannot collide. Compile
+/// orchestration that prepares cross-module metadata must call this helper
+/// instead of reconstructing the symbol with the module-name sanitizer.
+pub fn user_function_symbol(module_name: &str, function_name: &str) -> String {
+    let module_prefix = sanitize(module_name);
+    helpers::scoped_fn_name(&module_prefix, function_name)
+}
+
 /// Compile a Perry HIR module to an object file via LLVM IR.
 ///
 /// CRITICAL (#686): `hir` MUST be `&HirModule` (shared reference), never
