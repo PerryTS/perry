@@ -1355,7 +1355,7 @@ fn emit_incremental_liveness_diag() {
          safepoints_blocked(in_alloc={blocked_alloc} unsafe_zone={blocked_unsafe_zone} \
          root_lock={blocked_root_lock}) \
          copying_minors={} loop_polls={} poll_arm_events={} \
-         poll_armed_at_exit={}",
+         poll_armed_at_exit={} forwarded_stub_recoveries={}",
         instruments::incremental_cycle_starts(),
         instruments::incremental_steps(),
         instruments::incremental_completions(),
@@ -1368,6 +1368,7 @@ fn emit_incremental_liveness_diag() {
         instruments::loop_polls_reached(),
         poll_arm::poll_arm_events(),
         poll_arm::poll_armed_count(),
+        trace::forwarded_stub_membership_recoveries(),
     );
     idle_reclaim::emit_diag();
     idle_compact::emit_diag();

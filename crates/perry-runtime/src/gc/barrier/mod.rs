@@ -960,6 +960,44 @@ pub(super) unsafe fn plausible_arena_user_ptr_header(
     }
 }
 
+/// A plausible ARENA object whose header carries `GC_FLAG_FORWARDED` — i.e. an
+/// array-growth forwarding stub (#6228: growth installs a PERMANENT stub at the
+/// pre-grow address, and a live slot can keep pointing directly at it because
+/// references are never rewritten).
+///
+/// This is [`plausible_arena_user_ptr_header`] with the FORWARDED test
+/// inverted: same alignment / `obj_type` / size / `GC_FLAG_ARENA` gate, but the
+/// header MUST be forwarded. `GC_FLAG_ARENA` is what separates a genuine stub
+/// from an off-heap region whose bytes coincidentally set FORWARDED (#8040) —
+/// the census (`ValidPointerSetBuilder::record_arena_header`) admits exactly
+/// these real arena allocations, so the classifier must too (#9717). The
+/// forwarding TARGET is deliberately NOT validated here: the caller follows it
+/// through `trace_one_worklist_header`, which re-checks membership before
+/// marking it, so a garbage target simply stops the walk.
+#[inline]
+pub(super) unsafe fn plausible_forwarded_arena_stub(
+    header: *mut GcHeader,
+) -> Option<*mut GcHeader> {
+    if header.is_null() {
+        return None;
+    }
+    if !(header as usize).is_multiple_of(std::mem::align_of::<GcHeader>()) {
+        return None;
+    }
+    let obj_type = (*header).obj_type;
+    let size = (*header).size as usize;
+    if gc_type_info(obj_type).is_none()
+        || size < GC_HEADER_SIZE
+        || size as u64 > (1u64 << 34)
+        || (*header).gc_flags & GC_FLAG_ARENA == 0
+        || (*header).gc_flags & GC_FLAG_FORWARDED == 0
+    {
+        None
+    } else {
+        Some(header)
+    }
+}
+
 pub(super) fn current_heap_header_for_user_ptr(
     user_ptr: usize,
     valid_ptrs: Option<&ValidPointerSet>,

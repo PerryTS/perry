@@ -1953,6 +1953,12 @@
       "name": "NEXT_TOKEN",
       "verdict": "not_a_gc_pointer",
       "why": "Monotonic AtomicU64 that mints write-token ids for TOKENS. A counter: incremented and used as a map key, never dereferenced and never derived from an address."
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/trace.rs",
+      "name": "FORWARDED_STUB_MEMBERSHIP_RECOVERIES",
+      "verdict": "not_a_gc_pointer",
+      "why": "#9717 diagnostic counter: a thread_local Cell<u64> incremented when a budgeted-cycle classifier admits an array-growth forwarding stub, read by forwarded_stub_membership_recoveries() for the [gc-incremental] diag line. Holds a count, never a JSValue or heap pointer, so there is nothing for a scanner to visit."
     }
   ],
   "_FRONTIER_README": "Identity-pinned debt ratchet over new perry-ui* candidates and otherwise-unclassified core perry_thread_local! declarations (see the census docstring, \u201cThe identity-pinned frontier\u201d). A new uncovered holder fails until it is scanned, receives a researched holders verdict, or is deliberately pinned as debt. Moving a researched false positive to holders graduates it from this list. A fixed or classified holder makes its old frontier pin stale, so the receipt must be deleted.",

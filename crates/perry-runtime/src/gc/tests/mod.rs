@@ -19,6 +19,7 @@ mod dirty_page_cache;
 mod env_knob_parse;
 mod error_side_tables;
 mod evacuation;
+mod forwarded_stub_membership;
 mod forwarding_target_validation;
 mod fromspace_protect;
 mod fromspace_scan;
