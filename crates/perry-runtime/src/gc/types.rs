@@ -270,10 +270,10 @@ pub(crate) enum GcFinalizeHookKind {
     /// #7539: free a dead lazy JSON array's tape bytes, which
     /// `json_tape_store` owns outside the GC heap.
     LazyArrayTape,
-    /// Drop a dead RegExp cell's entries from every payload-address-keyed
-    /// registry. Arena reclamation reaches the equivalent cleanup through the
-    /// move-hook dead-owner fan-out; malloc-tracked cells use this finalize
-    /// hook instead.
+    /// Release a dead RegExp cell's header-owned compiled programs and drop
+    /// its entries from every payload-address-keyed registry. Moved arena
+    /// stubs use only the move-hook dead-owner fan-out so ownership transfers
+    /// to the relocated header instead of being released with the old copy.
     RegExpSideTables,
 }
 
@@ -879,7 +879,7 @@ pub(crate) unsafe fn gc_type_finalize_unmarked_payload(obj_type: u8, user_ptr: *
             crate::json_tape_store::release(user_ptr as usize);
         }
         GcFinalizeHookKind::RegExpSideTables => {
-            crate::regex::regex_header_clear_dead_for_gc(user_ptr as usize);
+            crate::regex::regex_header_finalize_for_gc(user_ptr as *mut crate::regex::RegExpHeader);
         }
     }
 }

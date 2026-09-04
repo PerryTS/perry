@@ -196,6 +196,41 @@ pub(crate) fn regex_header_clear_dead_for_gc(addr: usize) {
     crate::object::exotic_expando::exotic_expando_owner_clear_dead(addr);
 }
 
+/// Release the compiled programs owned by a dead `RegExpHeader`, then remove
+/// its address-owned metadata.
+///
+/// The program pointers are raw `Arc` references installed by
+/// `lazy::build_and_install_programs` or `RegExp.prototype.compile`. Null them
+/// before reconstructing the `Arc`s because arena cleanup can visit the
+/// metadata and finalizer paths for the same dead cell.
+pub(crate) unsafe fn regex_header_finalize_for_gc(re: *mut RegExpHeader) {
+    if re.is_null() {
+        return;
+    }
+    #[cfg(feature = "regex-engine")]
+    {
+        let regex_ptr = (*re).regex_ptr;
+        let fancy_ptr = (*re).fancy_ptr;
+        let repeat_matcher_ptr = (*re).repeat_matcher_ptr;
+        (*re).regex_ptr = ptr::null_mut();
+        (*re).fancy_ptr = ptr::null();
+        (*re).repeat_matcher_ptr = ptr::null();
+
+        if !regex_ptr.is_null() {
+            drop(Arc::from_raw(regex_ptr as *const Regex));
+        }
+        if !fancy_ptr.is_null() {
+            drop(Arc::from_raw(fancy_ptr as *const fancy_regex::Regex));
+        }
+        if !repeat_matcher_ptr.is_null() {
+            drop(Arc::from_raw(
+                repeat_matcher_ptr as *const repeat_matcher::RepeatMatcherRegex,
+            ));
+        }
+    }
+    regex_header_clear_dead_for_gc(re as usize);
+}
+
 #[cfg(test)]
 pub(crate) fn test_regex_pointer_entry_exists(addr: usize) -> bool {
     REGEX_POINTERS.with(|table| table.borrow().contains(&addr))
@@ -416,8 +451,8 @@ pub(crate) fn build_fancy_regex(pattern: &str) -> Result<fancy_regex::Regex, fan
 /// up to [`REGEX_SIZE_LIMIT`] — `new RegExp(userInput)` was an attacker-driven
 /// OOM). When an insert would exceed the cap the whole map is cleared — the
 /// `PARSE_KEY_CACHE` precedent: cheap, no LRU bookkeeping, recompilation is
-/// the fallback. Live `RegExpHeader`s are unaffected: each header OWNS a
-/// leaked `Arc` reference to its compiled program(s),
+/// the fallback. Live `RegExpHeader`s are unaffected: each header OWNS a raw
+/// `Arc` reference to its compiled program(s), released by its GC finalizer,
 /// so dropping the cache's references cannot free a program still in use.
 #[cfg(feature = "regex-engine")]
 const REGEX_CACHE_MAX_ENTRIES: usize = 512;

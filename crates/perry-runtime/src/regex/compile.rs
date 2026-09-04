@@ -145,7 +145,7 @@ pub extern "C" fn js_regexp_compile_value(
         ));
     }
 
-    // The header OWNS leaked `Arc` references to its compiled program(s)
+    // The header OWNS raw `Arc` references to its compiled program(s)
     // (mirrors `js_regexp_new`), so the capped `REGEX_CACHE`/`FANCY_CACHE`
     // (see `REGEX_CACHE_MAX_ENTRIES`) can evict without invalidating this
     // receiver. Refresh `fancy_ptr` too — it must track the NEW pattern, not
