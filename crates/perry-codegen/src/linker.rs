@@ -342,6 +342,31 @@ fn size_optimization_requested(value: Option<&str>) -> bool {
     }
 }
 
+/// Select the LLVM optimization level for generated application modules.
+///
+/// Normal builds retain Perry's measured `-Os` default (or the existing
+/// `PERRY_LL_SIZE_OPT=0` opt-out to `-O3`). `PERRY_LL_OPT_LEVEL` is an explicit
+/// diagnostic/build-through override for dependency bundles whose generated
+/// functions are too large for a useful optimized build. It accepts the same
+/// level spellings as clang and deliberately leaves an unrecognized value on
+/// the normal default instead of silently disabling optimization.
+fn application_opt_flag(explicit: Option<&str>, size_opt: Option<&str>) -> &'static str {
+    match explicit
+        .map(str::trim)
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("0" | "o0") => "-O0",
+        Some("1" | "o1") => "-O1",
+        Some("2" | "o2") => "-O2",
+        Some("3" | "o3") => "-O3",
+        Some("s" | "os") => "-Os",
+        Some("z" | "oz") => "-Oz",
+        _ if size_optimization_requested(size_opt) => "-Os",
+        _ => "-O3",
+    }
+}
+
 fn build_clang_compile_plan(
     clang: PathBuf,
     ll_path: PathBuf,
@@ -361,13 +386,11 @@ fn build_clang_compile_plan(
     // Perry defaults to SIZE-optimized native output: `-Os` measured no runtime
     // cost on the benchmark corpus (see `size_optimization_requested`), and it
     // materially shrinks dense generated bundles. `PERRY_LL_SIZE_OPT=0` restores
-    // `-O3`. There is no module-size-driven policy change.
+    // `-O3`; the explicit `PERRY_LL_OPT_LEVEL` override wins over both. There is
+    // no implicit module-size-driven policy change.
     let size_opt = env::var("PERRY_LL_SIZE_OPT").ok();
-    let opt_flag = if size_optimization_requested(size_opt.as_deref()) {
-        "-Os"
-    } else {
-        "-O3"
-    };
+    let explicit_opt = env::var("PERRY_LL_OPT_LEVEL").ok();
+    let opt_flag = application_opt_flag(explicit_opt.as_deref(), size_opt.as_deref());
 
     // Compacting the stack map means going through assembly, because that is
     // where LLVM prints the map's function addresses as symbol *names* — the

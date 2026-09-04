@@ -1021,6 +1021,10 @@ fn compute_object_cache_key_with_env(
         "env_ll_size_opt",
         env_var("PERRY_LL_SIZE_OPT").as_deref().unwrap_or(""),
     );
+    h.field(
+        "env_ll_opt_level",
+        env_var("PERRY_LL_OPT_LEVEL").as_deref().unwrap_or(""),
+    );
     // #8583/#8679: the post-RS4GC instruction budget decides whether functions
     // are re-lowered onto shadow frames; two settings must never share an object.
     h.field(
