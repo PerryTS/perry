@@ -726,26 +726,28 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 Ok(obj_box)
             })
         }
-        // Issue #711 part 2: `<expr>.prototype = <expr>` pattern.
-        // Calls `js_set_function_prototype(func, proto)`, which (when
-        // func is a closure and proto is an object) allocates a
-        // synthetic class id and binds the proto object as that
-        // class's vtable source. Method dispatch later consults
-        // CLASS_PROTOTYPE_OBJECTS to resolve methods.
-        Expr::SetFunctionPrototype { func, proto } => {
-            let func_val = lower_expr(ctx, func)?;
-            let proto_val = lower_expr(ctx, proto)?;
-            // Discard the returned synthetic class id — it's stored in
-            // the runtime side-table keyed by func_val and consulted
-            // later by `js_register_class_parent_dynamic`. User code
-            // gets the assigned value (proto_val) as the expression
-            // result, matching JS semantics for `x.foo = bar`.
-            let _ = ctx.block().call(
-                crate::types::I32,
-                "js_set_function_prototype",
-                &[(DOUBLE, &func_val), (DOUBLE, &proto_val)],
-            );
-            Ok(proto_val)
+        Expr::SetFunctionPrototype {
+            func,
+            proto,
+            strict,
+        } => {
+            with_rooted_group(ctx, 1, |ctx, group| {
+                let protect_receiver = any_operand_may_collect(ctx, [proto.as_ref()]);
+                let receiver = group.lower(ctx, func, protect_receiver)?;
+                let value = lower_expr(ctx, proto)?;
+                let receiver = group.reread(ctx, receiver)?;
+                // The setter can run user code and collect. Its rooted return
+                // supplies the assignment result after any evacuation.
+                Ok(ctx.block().call(
+                    DOUBLE,
+                    "js_set_prototype_property",
+                    &[
+                        (DOUBLE, &receiver),
+                        (DOUBLE, &value),
+                        (I32, if *strict { "1" } else { "0" }),
+                    ],
+                ))
+            })
         }
         // Link a generator/async-generator instance into the spec prototype
         // chain. Closure bodies can use their own closure pointer to preserve

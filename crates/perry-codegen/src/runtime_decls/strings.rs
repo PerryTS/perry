@@ -1479,13 +1479,10 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         &[I32, PTR, I64, DOUBLE, DOUBLE],
     );
     module.declare_function("js_array_push_spread_any", I64, &[I64, DOUBLE]);
-    // Issue #711 part 2: prototype-based class declaration via
-    // `<func>.prototype = <obj>`. Binds an object as the function's
-    // prototype source; subsequent `class X extends <func>` lookups
-    // dispatch into the object's methods. Returns the synthetic
-    // class id allocated for the function value (or 0 on validation
-    // failure). Codegen discards the return.
+    // Retain the legacy registration ABI. New assignments use ordinary
+    // PutValue and synchronize function metadata only from the stored value.
     module.declare_function("js_set_function_prototype", I32, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_set_prototype_property", DOUBLE, &[DOUBLE, DOUBLE, I32]);
     // Issue #838: JS-classic prototype-method assignment.
     // `Class.prototype.method = fn` (or the aliased
     // `let p = Class.prototype; p.method = fn` shape) registers the
