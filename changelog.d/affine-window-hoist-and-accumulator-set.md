@@ -1,6 +1,6 @@
-**`16_matrix_multiply` is now twice as fast as node** (100 ms → 16 ms against
-node's 32 on an idle machine; checksums identical) — the last benchmark in
-the suite crosses parity, via two changes and one guard fix.
+**Fixes #9248: `16_matrix_multiply` is now twice as fast as node** (100 ms →
+16 ms against node's 32 on an idle machine; checksums identical) — the last
+benchmark in the suite crosses parity, via two changes and one guard fix.
 
 **The affine window is proven at the loop's endpoints.** An index tree linear
 in the counter takes its extremes at the interval's ends, so the entry guard
