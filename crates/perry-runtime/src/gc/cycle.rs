@@ -1991,13 +1991,5 @@ impl Drop for GcCycleState {
     }
 }
 
-pub(super) fn restore_minor_in_alloc(prev_in_alloc: u8) {
-    GC_FLAGS.with(|f| {
-        let cur = f.get();
-        if prev_in_alloc != 0 {
-            f.set(cur | GC_FLAG_IN_ALLOC);
-        } else {
-            f.set(cur & !GC_FLAG_IN_ALLOC);
-        }
-    });
-}
+mod alloc_flag;
+pub(super) use alloc_flag::restore_minor_in_alloc;
