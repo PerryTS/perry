@@ -697,12 +697,9 @@ pub extern "C" fn js_migrate_stdin_listeners_to_provider() {
             })
             .collect();
         for callback in callbacks {
-            on(
-                name.as_ptr(),
-                name.len(),
-                callback.get_raw_const_ptr::<crate::closure::ClosureHeader>() as i64,
-                once,
-            );
+            callback.with_const_ptr::<crate::closure::ClosureHeader, _>(|callback| {
+                on(name.as_ptr(), name.len(), callback as i64, once)
+            });
         }
     }
 }
@@ -1070,6 +1067,30 @@ fn register_stdin_listener(
     }
 }
 
+fn register_generic_stdin_keypress_listener(event: f64, callback: f64, once: bool) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let stream = scope.root_nanbox_f64(stdin_this_value());
+    let event = scope.root_nanbox_f64(event);
+    let callback = scope.root_nanbox_f64(callback);
+    let stream_raw = crate::value::js_nanbox_get_pointer(stream.get_nanbox_f64()) as i64;
+    if stream_raw == 0 {
+        return;
+    }
+    if once {
+        let _ = crate::node_stream::js_node_stream_method_once(
+            stream_raw,
+            event.get_nanbox_f64(),
+            callback.get_nanbox_f64(),
+        );
+    } else {
+        let _ = crate::node_stream::js_node_stream_method_on(
+            stream_raw,
+            event.get_nanbox_f64(),
+            callback.get_nanbox_f64(),
+        );
+    }
+}
+
 /// `process.stdin.on(event, cb)` — registers a persistent `data`/`readable`
 /// listener and starts the reader. Returns `this` so callers can chain.
 extern "C" fn process_stdin_on(
@@ -1103,13 +1124,7 @@ extern "C" fn process_stdin_on(
                 &STDIN_END_ONCE,
                 false,
             ),
-            Some("keypress") => {
-                let stream_raw = crate::value::js_nanbox_get_pointer(stdin_this_value()) as i64;
-                if stream_raw != 0 {
-                    let _ =
-                        crate::node_stream::js_node_stream_method_on(stream_raw, event, callback);
-                }
-            }
+            Some("keypress") => register_generic_stdin_keypress_listener(event, callback, false),
             _ => {}
         }
     }
@@ -1146,13 +1161,7 @@ extern "C" fn process_stdin_once(
                 &STDIN_END_ONCE,
                 true,
             ),
-            Some("keypress") => {
-                let stream_raw = crate::value::js_nanbox_get_pointer(stdin_this_value()) as i64;
-                if stream_raw != 0 {
-                    let _ =
-                        crate::node_stream::js_node_stream_method_once(stream_raw, event, callback);
-                }
-            }
+            Some("keypress") => register_generic_stdin_keypress_listener(event, callback, true),
             _ => {}
         }
     }
