@@ -1,6 +1,6 @@
 use perry_hir::types::LocalId;
 use perry_hir::walker::walk_expr_children;
-use perry_hir::{Expr, Stmt};
+use perry_hir::{Class, Expr, Module, Stmt};
 use std::collections::{HashMap, HashSet};
 
 use super::*;
@@ -33,6 +33,239 @@ pub fn resolve_receiver_class(
         }
         _ => None,
     }
+}
+
+/// Module-wide proof that a declared class's prototype chain keeps the method
+/// table recorded by its class declaration.
+///
+/// Exact-receiver facts only prove that a local came from `new C()`. They do
+/// not make `C.prototype` immutable: after `C.prototype.m = replacement`, a
+/// later fresh `C` is still exact while its `m` lookup no longer resolves to
+/// the declaration-time body. Keep prototype stability separate from receiver
+/// identity so the method inliner needs both proofs (#9239).
+#[derive(Debug, Default)]
+pub(crate) struct ModulePrototypeFacts {
+    touched_classes: HashSet<String>,
+    opaque_prototype_access: bool,
+}
+
+impl ModulePrototypeFacts {
+    /// True when neither this class nor a known parent has a prototype that is
+    /// named or replaced anywhere in the module.
+    pub(crate) fn method_table_is_stable(&self, classes: &[Class], class_name: &str) -> bool {
+        if self.opaque_prototype_access {
+            return false;
+        }
+
+        let mut current = Some(class_name);
+        let mut seen = HashSet::new();
+        while let Some(name) = current {
+            if !seen.insert(name) || self.touched_classes.contains(name) {
+                return false;
+            }
+
+            let Some(class) = classes.iter().find(|class| class.name == name) else {
+                // Cross-module candidates do not carry their source module's
+                // class table. A destination-side named touch was checked
+                // above; otherwise preserve their existing eligibility.
+                return true;
+            };
+            if class.extends_expr.is_some() || class.native_extends.is_some() {
+                return false;
+            }
+            current = class.extends_name.as_deref();
+        }
+        true
+    }
+}
+
+/// Collect every module site that can expose or replace a declared class
+/// prototype. Naming a prototype is conservatively a touch because it can be
+/// retained in an alias and mutated by a later statement or closure.
+pub(crate) fn collect_module_prototype_facts(module: &Module) -> ModulePrototypeFacts {
+    fn note_holder(object: &Expr, facts: &mut ModulePrototypeFacts) {
+        match object {
+            Expr::ClassRef(name) => {
+                facts.touched_classes.insert(name.clone());
+            }
+            // Function-classic prototypes use runtime synthetic class ids and
+            // cannot replace a declared class's method table.
+            Expr::FuncRef(_) => {}
+            _ => facts.opaque_prototype_access = true,
+        }
+    }
+
+    fn visit_expr(expr: &Expr, facts: &mut ModulePrototypeFacts) {
+        match expr {
+            Expr::RegisterPrototypeMethod { class_name, .. }
+            | Expr::RegisterClassParentDynamic { class_name, .. } => {
+                facts.touched_classes.insert(class_name.clone());
+            }
+            Expr::SetFunctionPrototype { func, .. } => {
+                if let Expr::ClassRef(name) = func.as_ref() {
+                    facts.touched_classes.insert(name.clone());
+                }
+            }
+            Expr::PropertyGet {
+                object, property, ..
+            }
+            | Expr::PropertySet {
+                object, property, ..
+            }
+            | Expr::PropertyUpdate {
+                object, property, ..
+            } if property == "prototype" || property == "__proto__" => {
+                note_holder(object, facts);
+            }
+            Expr::IndexGet { object, index } | Expr::IndexSet { object, index, .. } if matches!(index.as_ref(), Expr::String(key) if key == "prototype" || key == "__proto__") =>
+            {
+                note_holder(object, facts);
+            }
+            Expr::PutValueSet { target, key, .. } if matches!(key.as_ref(), Expr::String(name) if name == "prototype" || name == "__proto__") =>
+            {
+                note_holder(target, facts);
+            }
+            _ => {}
+        }
+
+        // The ordinary expression walker deliberately treats a closure body
+        // as non-executing. Prototype stability is module-wide, so a mutation
+        // in that body still has to participate in this proof.
+        if let Expr::Closure { body, .. } = expr {
+            visit_stmts(body, facts);
+        }
+        walk_expr_children(expr, &mut |child| visit_expr(child, facts));
+    }
+
+    fn visit_stmt(stmt: &Stmt, facts: &mut ModulePrototypeFacts) {
+        match stmt {
+            Stmt::Let { init, .. } => {
+                if let Some(init) = init {
+                    visit_expr(init, facts);
+                }
+            }
+            Stmt::Expr(expr) | Stmt::Throw(expr) | Stmt::Return(Some(expr)) => {
+                visit_expr(expr, facts);
+            }
+            Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                visit_expr(condition, facts);
+                visit_stmts(then_branch, facts);
+                if let Some(else_branch) = else_branch {
+                    visit_stmts(else_branch, facts);
+                }
+            }
+            Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
+                visit_expr(condition, facts);
+                visit_stmts(body, facts);
+            }
+            Stmt::For {
+                init,
+                condition,
+                update,
+                body,
+            } => {
+                if let Some(init) = init {
+                    visit_stmt(init, facts);
+                }
+                if let Some(condition) = condition {
+                    visit_expr(condition, facts);
+                }
+                if let Some(update) = update {
+                    visit_expr(update, facts);
+                }
+                visit_stmts(body, facts);
+            }
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                visit_stmts(body, facts);
+                if let Some(catch) = catch {
+                    visit_stmts(&catch.body, facts);
+                }
+                if let Some(finally) = finally {
+                    visit_stmts(finally, facts);
+                }
+            }
+            Stmt::Switch {
+                discriminant,
+                cases,
+            } => {
+                visit_expr(discriminant, facts);
+                for case in cases {
+                    if let Some(test) = &case.test {
+                        visit_expr(test, facts);
+                    }
+                    visit_stmts(&case.body, facts);
+                }
+            }
+            Stmt::Labeled { body, .. } => visit_stmt(body, facts),
+            Stmt::Return(None)
+            | Stmt::Break
+            | Stmt::Continue
+            | Stmt::LabeledBreak(_)
+            | Stmt::LabeledContinue(_)
+            | Stmt::PreallocateBoxes(_)
+            | Stmt::PreallocateTdzBoxes(_)
+            | Stmt::ReleaseBoxes(_) => {}
+        }
+    }
+
+    fn visit_stmts(stmts: &[Stmt], facts: &mut ModulePrototypeFacts) {
+        for stmt in stmts {
+            visit_stmt(stmt, facts);
+        }
+    }
+
+    fn visit_function(function: &perry_hir::Function, facts: &mut ModulePrototypeFacts) {
+        for param in &function.params {
+            if let Some(default) = &param.default {
+                visit_expr(default, facts);
+            }
+        }
+        visit_stmts(&function.body, facts);
+    }
+
+    let mut facts = ModulePrototypeFacts::default();
+    visit_stmts(&module.init, &mut facts);
+    for function in &module.functions {
+        visit_function(function, &mut facts);
+    }
+    for class in &module.classes {
+        if let Some(extends) = &class.extends_expr {
+            visit_expr(extends, &mut facts);
+        }
+        if let Some(constructor) = &class.constructor {
+            visit_function(constructor, &mut facts);
+        }
+        for method in class
+            .methods
+            .iter()
+            .chain(class.static_methods.iter())
+            .chain(class.getters.iter().map(|(_, function)| function))
+            .chain(class.setters.iter().map(|(_, function)| function))
+            .chain(class.computed_members.iter().map(|member| &member.function))
+        {
+            visit_function(method, &mut facts);
+        }
+        for field in class.fields.iter().chain(class.static_fields.iter()) {
+            if let Some(init) = &field.init {
+                visit_expr(init, &mut facts);
+            }
+            if let Some(key) = &field.key_expr {
+                visit_expr(key, &mut facts);
+            }
+        }
+        for member in &class.computed_members {
+            visit_expr(&member.key_expr, &mut facts);
+        }
+    }
+    facts
 }
 
 pub fn intersect_exact_receiver_facts(

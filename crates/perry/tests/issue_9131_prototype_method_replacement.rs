@@ -102,6 +102,49 @@ console.log("swap-after:", readA(a));
     );
 }
 
+/// #9239: constructing another exact receiver after replacing a prototype
+/// method must not let the HIR inliner substitute the declaration-time body.
+/// Keep both a stored fresh receiver and a dynamic-constructor call here: the
+/// direct `new C().m()` shape already stays on runtime dispatch and would not
+/// catch a stale exact-receiver optimization fact.
+#[test]
+fn fresh_instances_observe_replaced_prototype_methods() {
+    let stdout = compile_and_run(
+        r#"
+class C {
+  m() { return "orig"; }
+}
+
+const old = new C();
+console.log("before:", old.m());
+(C.prototype as any).m = function () { return "replaced"; };
+console.log("old:", old.m());
+
+const fresh = new C();
+console.log("fresh:", fresh.m());
+console.log("direct:", new C().m());
+
+const DynamicC: any = C;
+console.log("dynamic:", new DynamicC().m());
+
+class HelperC {
+  m() { return "helper-orig"; }
+}
+function replaceThroughHelper() {
+  (HelperC.prototype as any).m = function () { return "helper-replaced"; };
+}
+replaceThroughHelper();
+const helperFresh = new HelperC();
+console.log("helper:", helperFresh.m());
+"#,
+    );
+
+    assert_eq!(
+        stdout,
+        "before: orig\nold: replaced\nfresh: replaced\ndirect: replaced\ndynamic: replaced\nhelper: helper-replaced\n"
+    );
+}
+
 /// #9244: the per-instance prototype-override fast path in
 /// `js_native_call_method` resolves the method by ordinary property lookup.
 /// Before #9251, a runtime-wired generator carried the shared override flag but
