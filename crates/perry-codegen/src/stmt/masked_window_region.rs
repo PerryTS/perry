@@ -515,8 +515,8 @@ pub(super) fn try_match_masked_window_region(
         // range-loop fast copy) — its reads inline through that fact; a
         // second, nested versioning would only add per-iteration probes.
         if ctx
-            .masked_window_array_facts
-            .iter()
+            .receiver_descriptors
+            .masked_window_array_facts()
             .any(|fact| fact.array_local_id == access.array_id)
         {
             continue;
@@ -530,8 +530,8 @@ pub(super) fn try_match_masked_window_region(
         // escape, aliasing) clear those markers when the tracked data slot can
         // no longer be trusted, and this tier emits NO runtime re-validation.
         let proven_ta_i32 = ctx
-            .buffer_view_slots
-            .get(&access.array_id)
+            .receiver_descriptors
+            .buffer_view(access.array_id)
             .is_some_and(|view| {
                 view.pointer_state.is_stable()
                     && view.storage_inline_proven
@@ -872,23 +872,24 @@ pub(super) fn lower_masked_window_region(
         let ta_scope_id = ctx.next_loop_proof_scope_id();
         for array in &region.arrays {
             let view = ctx
-                .buffer_view_slots
-                .get(&array.array_id)
+                .receiver_descriptors
+                .buffer_view(array.array_id)
                 .cloned()
                 .expect("proven region array must have a view slot");
             let data_ptr_val = ctx.block().load(crate::types::PTR, &view.data_slot);
             let data_i64 = ctx.block().ptrtoint(&data_ptr_val, I64);
-            ctx.masked_window_array_facts.push(MaskedWindowArrayFact {
-                array_local_id: array.array_id,
-                scope_id: ta_scope_id,
-                guard_id: "masked_region_ta_i32_proven".to_string(),
-                min_idx: array.lo,
-                max_idx_exclusive: array.hi + 1,
-                values_i32: true,
-                allows_stores: false,
-                elem: MaskedWindowElem::TaI32 { data_ptr: data_i64 },
-                numeric_accumulators: Vec::new(),
-            });
+            ctx.receiver_descriptors
+                .materialize_masked_window_array(MaskedWindowArrayFact {
+                    array_local_id: array.array_id,
+                    scope_id: ta_scope_id,
+                    guard_id: "masked_region_ta_i32_proven".to_string(),
+                    min_idx: array.lo,
+                    max_idx_exclusive: array.hi + 1,
+                    values_i32: true,
+                    allows_stores: false,
+                    elem: MaskedWindowElem::TaI32 { data_ptr: data_i64 },
+                    numeric_accumulators: Vec::new(),
+                });
         }
         let privatize = ctx.try_depth == 0;
         let result = lower_region_copy(
@@ -900,8 +901,7 @@ pub(super) fn lower_masked_window_region(
             privatize,
             true,
         );
-        ctx.masked_window_array_facts
-            .retain(|fact| fact.scope_id != ta_scope_id);
+        ctx.receiver_descriptors.dematerialize_scope(ta_scope_id);
         return result;
     }
 
@@ -995,17 +995,18 @@ pub(super) fn lower_masked_window_region(
     }
     let ta_scope_id = ctx.next_loop_proof_scope_id();
     for (array, (arr_id, data_ptr)) in region.arrays.iter().zip(hoisted) {
-        ctx.masked_window_array_facts.push(MaskedWindowArrayFact {
-            array_local_id: arr_id,
-            scope_id: ta_scope_id,
-            guard_id: "masked_region_ta_i32".to_string(),
-            min_idx: array.lo,
-            max_idx_exclusive: array.hi + 1,
-            values_i32: true,
-            allows_stores: false,
-            elem: MaskedWindowElem::TaI32 { data_ptr },
-            numeric_accumulators: Vec::new(),
-        });
+        ctx.receiver_descriptors
+            .materialize_masked_window_array(MaskedWindowArrayFact {
+                array_local_id: arr_id,
+                scope_id: ta_scope_id,
+                guard_id: "masked_region_ta_i32".to_string(),
+                min_idx: array.lo,
+                max_idx_exclusive: array.hi + 1,
+                values_i32: true,
+                allows_stores: false,
+                elem: MaskedWindowElem::TaI32 { data_ptr },
+                numeric_accumulators: Vec::new(),
+            });
     }
     let privatize = ctx.try_depth == 0;
     lower_region_copy(
@@ -1020,8 +1021,7 @@ pub(super) fn lower_masked_window_region(
         // towers (#6794 follow-up (a)).
         true,
     )?;
-    ctx.masked_window_array_facts
-        .retain(|fact| fact.scope_id != ta_scope_id);
+    ctx.receiver_descriptors.dematerialize_scope(ta_scope_id);
     if !ctx.block().is_terminated() {
         ctx.block().br(&merge_label);
     }
@@ -1030,17 +1030,18 @@ pub(super) fn lower_masked_window_region(
     ctx.current_block = plain_pre_idx;
     let plain_scope_id = ctx.next_loop_proof_scope_id();
     for array in &region.arrays {
-        ctx.masked_window_array_facts.push(MaskedWindowArrayFact {
-            array_local_id: array.array_id,
-            scope_id: plain_scope_id,
-            guard_id: "masked_region_plain_f64".to_string(),
-            min_idx: array.lo,
-            max_idx_exclusive: array.hi + 1,
-            values_i32: false,
-            allows_stores: false,
-            elem: MaskedWindowElem::PlainF64,
-            numeric_accumulators: Vec::new(),
-        });
+        ctx.receiver_descriptors
+            .materialize_masked_window_array(MaskedWindowArrayFact {
+                array_local_id: array.array_id,
+                scope_id: plain_scope_id,
+                guard_id: "masked_region_plain_f64".to_string(),
+                min_idx: array.lo,
+                max_idx_exclusive: array.hi + 1,
+                values_i32: false,
+                allows_stores: false,
+                elem: MaskedWindowElem::PlainF64,
+                numeric_accumulators: Vec::new(),
+            });
     }
     lower_region_copy(
         ctx,
@@ -1053,8 +1054,7 @@ pub(super) fn lower_masked_window_region(
         // maintained by no write — keep the ordinary Number lowering here.
         false,
     )?;
-    ctx.masked_window_array_facts
-        .retain(|fact| fact.scope_id != plain_scope_id);
+    ctx.receiver_descriptors.dematerialize_scope(plain_scope_id);
     if !ctx.block().is_terminated() {
         ctx.block().br(&merge_label);
     }

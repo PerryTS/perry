@@ -110,10 +110,11 @@ fn desc(
     }
 }
 
-/// `cached_lengths` / `bounded_index_pairs`: a value, not an address.
+/// Cached-length and bounded-index descriptor payloads are values, not
+/// addresses.
 fn cached_length_desc() -> ReceiverDescriptor {
     desc(
-        "cached_lengths",
+        "receiver_descriptors[cached_length]",
         ReceiverClaim::ScalarRelation,
         FactBoundary::DynamicExtent,
         false,
@@ -131,22 +132,22 @@ fn poll_refreshed_receiver_desc() -> ReceiverDescriptor {
     )
 }
 
-/// `buffer_view_slots`: an address, function-lifetime, degraded in place, and
-/// with no region that excludes `Stmt::Try`.
+/// A buffer-view descriptor names non-moving storage, is function-lifetime,
+/// degrades in place, and has no region that excludes `Stmt::Try`.
 fn buffer_view_desc() -> ReceiverDescriptor {
     desc(
-        "buffer_view_slots",
-        ReceiverClaim::Address,
+        "receiver_descriptors[buffer_view]",
+        ReceiverClaim::NonMovingAddress,
         FactBoundary::InPlaceDegradation,
         false,
     )
 }
 
-/// `packed_f64_loop_facts`: a representation claim, scope-id bounded, inside a
-/// matcher that rejects `Stmt::Try`.
+/// The packed-f64 descriptor payload is a representation claim, scope-id
+/// bounded, inside a matcher that rejects `Stmt::Try`.
 fn packed_f64_desc() -> ReceiverDescriptor {
     desc(
-        "packed_f64_loop_facts",
+        "receiver_descriptors[packed_f64_loop]",
         ReceiverClaim::Representation,
         FactBoundary::ScopeId,
         true,
@@ -167,8 +168,8 @@ const ALL_ENDERS: [RegionEnder; 6] = [
 // ---------------------------------------------------------------------------
 
 /// A moving collection changes an object's ADDRESS, never its length. This is
-/// the reason `cached_lengths` needs no safepoint logic at all, and it has to
-/// fall out of the model rather than be special-cased per table.
+/// the reason a cached-length descriptor needs no safepoint logic at all, and
+/// it has to fall out of the model rather than be special-cased per table.
 #[test]
 fn a_scalar_relation_survives_every_relocation_point() {
     let d = cached_length_desc();
@@ -261,6 +262,136 @@ fn active_descriptor_table_owns_lookup_refresh_and_dynamic_extent() {
     assert_eq!(table.rooted_box_slot(OBJ), None);
     assert!(table.poll_refreshes().unwrap().is_empty());
     assert!(!table.dematerialize(OBJ));
+}
+
+#[test]
+fn cached_length_is_a_coexisting_descriptor_payload_with_its_own_extent() {
+    let mut table = ReceiverDescriptorTable::default();
+    assert!(table.materialize_cached_length(OBJ, "%length".into()));
+    assert_eq!(table.cached_length_slot(OBJ), Some("%length"));
+    assert!(table.materialize_cached_length(OBJ, "%nested".into()));
+    assert_eq!(table.cached_length_slot(OBJ), Some("%nested"));
+    assert!(table.dematerialize_cached_length(OBJ));
+    assert_eq!(table.cached_length_slot(OBJ), Some("%length"));
+
+    // A scalar fact and a poll-refreshed address for one receiver coexist;
+    // ending either extent must leave the other one intact.
+    assert!(table.materialize_poll_refreshed_address(
+        OBJ,
+        "%box.root".into(),
+        "%base.handle".into(),
+        "%source.root".into(),
+        true,
+    ));
+    assert!(table.dematerialize_cached_length(OBJ));
+    assert_eq!(table.cached_length_slot(OBJ), None);
+    assert_eq!(table.base_handle_slot(OBJ), Some("%base.handle"));
+    assert!(!table.dematerialize_cached_length(OBJ));
+    assert!(table.dematerialize(OBJ));
+}
+
+#[test]
+fn bounded_indices_share_scope_and_reassignment_invalidation() {
+    let mut table = ReceiverDescriptorTable::default();
+    table.materialize_bounded_index(OBJ, NUM, 7);
+    table.materialize_bounded_index(OBJ, NUM, 8);
+    table.materialize_bounded_index(OBJ + 1, NUM2, 8);
+    assert!(table.has_bounded_index(OBJ, NUM));
+
+    assert_eq!(table.dematerialize_scope(7), 1);
+    assert!(table.has_bounded_index(OBJ, NUM));
+    table.invalidate_bounded_indices_for_local(NUM);
+    assert!(!table.has_bounded_index(OBJ, NUM));
+    assert!(table.has_bounded_index(OBJ + 1, NUM2));
+    table.invalidate_bounded_indices_for_local(OBJ + 1);
+    assert!(!table.has_bounded_index(OBJ + 1, NUM2));
+}
+
+#[test]
+fn representation_payloads_use_the_common_scope_boundary() {
+    let mut table = ReceiverDescriptorTable::default();
+    table.materialize_packed_f64_loop(crate::expr::PackedF64LoopFact {
+        index_local_id: NUM,
+        array_local_id: OBJ,
+        scope_id: 17,
+        guard_id: "%guard".into(),
+        store_side_exit_label: "slow".into(),
+        array_kind: crate::expr::PackedNumericLoopKind::F64,
+        allow_holes: false,
+        numeric_accumulators: vec![NUM2],
+        window_validated: true,
+        affine_indices: false,
+    });
+    let fact = table
+        .packed_f64_loop_facts()
+        .next()
+        .expect("packed descriptor must be queryable");
+    assert_eq!(fact.array_local_id, OBJ);
+    assert_eq!(fact.numeric_accumulators, vec![NUM2]);
+    assert!(table.has_packed_f64_loop_facts());
+    table.materialize_masked_window_array(crate::expr::MaskedWindowArrayFact {
+        array_local_id: OBJ + 1,
+        scope_id: 17,
+        guard_id: "%window.guard".into(),
+        min_idx: 0,
+        max_idx_exclusive: 16,
+        values_i32: false,
+        numeric_accumulators: Vec::new(),
+        elem: crate::expr::MaskedWindowElem::PlainF64,
+        allows_stores: false,
+    });
+    assert_eq!(
+        table
+            .masked_window_array_facts()
+            .next()
+            .expect("masked descriptor must be queryable")
+            .max_idx_exclusive,
+        16
+    );
+    assert_eq!(table.dematerialize_scope(17), 2);
+    assert!(!table.has_packed_f64_loop_facts());
+    assert!(table.masked_window_array_facts().next().is_none());
+}
+
+fn test_buffer_view(data_slot: &str) -> crate::native_value::BufferViewSlot {
+    crate::native_value::BufferViewSlot {
+        data_slot: data_slot.into(),
+        length_slot: None,
+        scope_idx: Some(3),
+        elem: crate::native_value::BufferElem::U8,
+        element_width_bytes: 1,
+        index_unit: crate::native_value::BufferIndexUnit::Byte,
+        view_byte_offset: Some(0),
+        length_offset_from_data: -8,
+        alias: crate::native_value::AliasState::NoAliasProven,
+        length_source: Some(crate::native_value::LengthSource::Constant(32)),
+        native_owned: None,
+        pointer_state: crate::native_value::BufferViewPointerState::Stable,
+        storage_inline_proven: true,
+    }
+}
+
+#[test]
+fn non_moving_buffer_view_uses_descriptor_lookup_and_in_place_degradation() {
+    let mut table = ReceiverDescriptorTable::default();
+    assert!(table
+        .materialize_buffer_view(OBJ, test_buffer_view("%data"))
+        .is_none());
+    assert!(table.contains_buffer_view(OBJ));
+    table.buffer_view_mut(OBJ).unwrap().alias = crate::native_value::AliasState::MayAlias;
+    let (view_id, view) = table.buffer_views().next().unwrap();
+    assert_eq!(view_id, OBJ);
+    assert_eq!(view.data_slot, "%data");
+    let old = table
+        .materialize_buffer_view(OBJ, test_buffer_view("%replacement"))
+        .expect("replacement returns the prior payload");
+    assert_eq!(old.data_slot, "%data");
+    assert_eq!(
+        table.buffer_view(OBJ).map(|view| view.data_slot.as_str()),
+        Some("%replacement")
+    );
+    assert!(table.dematerialize_buffer_view(OBJ).is_some());
+    assert!(!table.contains_buffer_view(OBJ));
 }
 
 #[test]
@@ -370,27 +501,16 @@ fn a_cached_address_dies_at_a_collecting_call_under_every_boundary() {
     }
 }
 
-/// THE phase-1 finding. `buffer_view_slots` caches a raw data pointer, is
-/// function-lifetime, and is never removed — only downgraded in place. Nothing
-/// structurally stops an entry registered before a `try` from being consulted
-/// inside the `catch` handler, and `lower_try` clears no fact table.
-///
-/// It is sound in the shipped compiler for a reason outside the model (typed
-/// and buffer storage is marked non-movable and never relocates). The model
-/// flags it anyway, and that is correct behaviour for phase 1: the tier is
-/// relying on a property of the storage kind that its own boundary mechanism
-/// does not state. When phase 2 gives descriptors a non-movable-storage
-/// attribute this becomes a clean pass; until then a flag is the honest answer.
+/// Phase 4 closes the phase-1 finding for buffer views: their descriptor now
+/// states that the pointed-to allocation is non-moving. Safepoints and unwind
+/// cannot stale that address; assignment, backing replacement, disposal and
+/// alias escape still degrade or remove the payload through table APIs.
 #[test]
-fn an_address_claim_with_no_try_exclusion_is_flagged_on_the_unwind_edge() {
-    let v = boundary_admits(&buffer_view_desc(), RegionEnder::UnwindEdge)
-        .expect_err("function-lifetime address claim reaches the catch handler");
-    assert_eq!(v.table, "buffer_view_slots");
-    assert_eq!(v.ender, RegionEnder::UnwindEdge);
+fn a_non_moving_address_survives_every_relocation_boundary() {
+    for ender in ALL_ENDERS {
+        assert!(boundary_admits(&buffer_view_desc(), ender).is_ok());
+    }
 
-    // A tier that DOES exclude `Try` from its region is not flagged: the
-    // packed matcher rejects `Stmt::Try` outright, so no handler can observe
-    // its cache.
     assert!(boundary_admits(&poll_refreshed_receiver_desc(), RegionEnder::UnwindEdge).is_ok());
 }
 
@@ -813,14 +933,14 @@ struct TableRow {
 fn inventory() -> Vec<TableRow> {
     vec![
         TableRow {
-            table: "cached_lengths",
+            table: "receiver_descriptors[cached_length]",
             claim: ReceiverClaim::ScalarRelation,
             boundary: FactBoundary::DynamicExtent,
             excludes_try: false,
             unwind_safe_by: "a length is a value; relocation moves the object, not the number",
         },
         TableRow {
-            table: "bounded_index_pairs",
+            table: "receiver_descriptors[bounded_index]",
             claim: ReceiverClaim::ScalarRelation,
             boundary: FactBoundary::ScopeId,
             excludes_try: false,
@@ -850,7 +970,7 @@ fn inventory() -> Vec<TableRow> {
                              lexical-order invalidation precedes catch lowering",
         },
         TableRow {
-            table: "packed_f64_loop_facts",
+            table: "receiver_descriptors[packed_f64_loop]",
             claim: ReceiverClaim::Representation,
             boundary: FactBoundary::ScopeId,
             excludes_try: true,
@@ -858,7 +978,7 @@ fn inventory() -> Vec<TableRow> {
                              only with the #9185 accumulator flush at the throw site",
         },
         TableRow {
-            table: "masked_window_array_facts",
+            table: "receiver_descriptors[masked_window_array]",
             claim: ReceiverClaim::Representation,
             boundary: FactBoundary::ScopeId,
             excludes_try: true,
@@ -914,8 +1034,8 @@ fn inventory() -> Vec<TableRow> {
                              before every call/invoke (capture/nested modes)",
         },
         TableRow {
-            table: "buffer_view_slots",
-            claim: ReceiverClaim::Address,
+            table: "receiver_descriptors[buffer_view]",
+            claim: ReceiverClaim::NonMovingAddress,
             boundary: FactBoundary::InPlaceDegradation,
             excludes_try: false,
             unwind_safe_by: "storage kind is non-movable (GC_TYPE_TYPED_ARRAY/BUFFER); the fact \
@@ -940,13 +1060,40 @@ fn inventory() -> Vec<TableRow> {
     ]
 }
 
+/// The six mechanisms named by #9254 must no longer own independent `FnCtx`
+/// fields or lifecycle rules. Their inventory rows now identify payloads of
+/// the one descriptor table (the base address/refresh payload keeps the table's
+/// unqualified name).
+#[test]
+fn the_original_six_mechanisms_are_receiver_descriptor_payloads() {
+    let migrated = inventory()
+        .into_iter()
+        .filter(|row| {
+            row.table == "receiver_descriptors" || row.table.starts_with("receiver_descriptors[")
+        })
+        .map(|row| row.table)
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        migrated,
+        std::collections::BTreeSet::from([
+            "receiver_descriptors",
+            "receiver_descriptors[bounded_index]",
+            "receiver_descriptors[buffer_view]",
+            "receiver_descriptors[cached_length]",
+            "receiver_descriptors[masked_window_array]",
+            "receiver_descriptors[packed_f64_loop]",
+        ])
+    );
+}
+
 /// The inventory, run through the model.
 ///
 /// A flag here is NOT a bug report. It says: *this table's stated boundary
 /// does not by itself license its claim across an unwind edge* — the safety
 /// comes from somewhere the boundary mechanism cannot express, recorded in
-/// `unwind_safe_by`. That gap is the thing #9254 proposes to close, and
-/// pinning the exact set is how phase 2 proves it closed one.
+/// `unwind_safe_by`. Phase 4 removes the original proposal's buffer-view row
+/// from this set; pinning the remaining expanded-audit rows keeps follow-up
+/// migrations honest.
 #[test]
 fn the_inventory_flags_exactly_the_tables_whose_unwind_safety_is_external() {
     let flagged: Vec<&str> = inventory()
@@ -978,12 +1125,9 @@ fn the_inventory_flags_exactly_the_tables_whose_unwind_safety_is_external() {
             // unconstrained. Safety rests on a post-hoc call-free scan in one
             // mode and a before-call dirty bit in the others.
             "stable_packed_loop_facts",
-            // Immutable-fact tables: a cached pointer into storage the GC
-            // marks non-movable, or a root the collector rewrites in place.
-            // Sound, but for a reason the boundary vocabulary cannot state —
-            // which is exactly why phase 2 needs a non-movable-storage
-            // attribute on the descriptor.
-            "buffer_view_slots",
+            // The remaining immutable-fact tables still rely on a non-moving
+            // allocation or a root rewritten in place without stating that
+            // property in their boundary contract.
             "buffer_data_slots",
             "class_keys_slots",
         ],
@@ -1049,6 +1193,7 @@ fn the_inventory_covers_every_claim_kind_and_every_boundary_mechanism() {
         ReceiverClaim::ScalarRelation,
         ReceiverClaim::Representation,
         ReceiverClaim::Address,
+        ReceiverClaim::NonMovingAddress,
     ] {
         assert!(
             rows.iter().any(|r| r.claim == claim),

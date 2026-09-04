@@ -94,7 +94,7 @@ pub(super) fn register_noalias_buffer_view(
         }
         None => None,
     };
-    ctx.buffer_view_slots.insert(
+    ctx.receiver_descriptors.materialize_buffer_view(
         id,
         BufferViewSlot {
             data_slot,

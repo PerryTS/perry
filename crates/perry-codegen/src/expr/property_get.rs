@@ -133,7 +133,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         }
         if property == "buffer" {
             if let Expr::LocalGet(id) = object.as_ref() {
-                if ctx.buffer_view_slots.contains_key(id) {
+                if ctx.receiver_descriptors.contains_buffer_view(id) {
                     super::invalidate_buffer_view_pointer(
                         ctx,
                         *id,
@@ -299,9 +299,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // data_ptr 16 bytes past the header, so the hardcoded `-8` here read
             // the packed `kind|elem_size` bytes (Int32→0x404=1028,
             // Float64→0x807=2055) instead of `.length`. Prefer the co-registered
-            // `buffer_view_slots` entry, which carries the correct
+            // buffer-view descriptor, which carries the correct
             // `length_offset_from_data` (and a `length_slot` for native views).
-            let view = ctx.buffer_view_slots.get(&arr_id).cloned();
+            let view = ctx.receiver_descriptors.buffer_view(arr_id).cloned();
             let length_slot = view.as_ref().and_then(|v| v.length_slot.clone());
             let length_offset = view
                 .as_ref()
@@ -419,7 +419,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // iteration — LLVM's LICM declines to hoist it because the
             // IndexSet's slow path is an opaque external call.
             if let Expr::LocalGet(arr_id) = object.as_ref() {
-                if let Some(slot) = ctx.cached_lengths.get(arr_id).cloned() {
+                if let Some(slot) = ctx
+                    .receiver_descriptors
+                    .cached_length_slot(*arr_id)
+                    .map(str::to_owned)
+                {
                     return Ok(ctx.block().load(DOUBLE, &slot));
                 }
             }

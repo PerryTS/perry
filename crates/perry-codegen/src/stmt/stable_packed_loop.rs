@@ -1384,8 +1384,8 @@ pub(crate) fn has_numeric_index_fact(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
     // to the slow clone before the value is consumed. I32/U32 kinds
     // materialize via sitofp/uitofp — numeric by construction.
     if ctx
-        .packed_f64_loop_facts
-        .iter()
+        .receiver_descriptors
+        .packed_f64_loop_facts()
         .any(|fact| fact.array_local_id == *array_id && fact.index_local_id == *counter_id)
     {
         return true;

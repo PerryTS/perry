@@ -181,8 +181,8 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
                 // in-clone write is numeric-preserving by the accumulator
                 // walk.
                 || ctx
-                    .packed_f64_loop_facts
-                    .iter()
+                    .receiver_descriptors
+                    .packed_f64_loop_facts()
                     .rev()
                     .any(|fact| fact.numeric_accumulators.contains(id))
                 // #9160: the string-window clone admits the accumulator only
@@ -192,8 +192,8 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
                 // The dense masked-window clone's twin: same entry tag
                 // check, same numeric-preserving write proof.
                 || ctx
-                    .masked_window_array_facts
-                    .iter()
+                    .receiver_descriptors
+                    .masked_window_array_facts()
                     .rev()
                     .any(|fact| fact.numeric_accumulators.contains(id))
                 || ctx
@@ -500,8 +500,8 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
             // and every representable element kind is numeric. This runtime
             // fact is stronger than the erasable declaration consulted below.
             if ctx
-                .buffer_view_slots
-                .get(arr_id)
+                .receiver_descriptors
+                .buffer_view(arr_id)
                 .is_some_and(|view| view.elem.is_number_valued())
             {
                 return true;

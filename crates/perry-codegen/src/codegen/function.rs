@@ -1137,11 +1137,7 @@ pub(super) fn compile_function(
         class_keys_slots: HashMap::new(),
         class_shape_slots: HashMap::new(),
         class_header_images: HashMap::new(),
-        cached_lengths: HashMap::new(),
         array_length_snapshots: HashMap::new(),
-        bounded_index_pairs: Vec::new(),
-        packed_f64_loop_facts: Vec::new(),
-        masked_window_array_facts: Vec::new(),
         string_window_array_facts: Vec::new(),
         masked_region_scalar_locals: std::collections::HashSet::new(),
         suppressed_cleared_shadow_slots: std::collections::HashSet::new(),
@@ -1250,7 +1246,6 @@ pub(super) fn compile_function(
         property_get_ic_override: None,
         typed_parse_rodata: Vec::new(),
         buffer_data_slots: HashMap::new(),
-        buffer_view_slots: HashMap::new(),
         native_arena_owner_aliases: HashMap::new(),
         native_arena_ambiguous_owner_aliases: HashSet::new(),
         disable_buffer_fast_path: cross_module.disable_buffer_fast_path,
@@ -1319,7 +1314,7 @@ pub(super) fn compile_function(
         let scope_idx = ctx.buffer_alias_base + ctx.buffer_data_slots.len() as u32;
         ctx.buffer_data_slots
             .insert(p.id, (buf_slot.clone(), scope_idx));
-        ctx.buffer_view_slots.insert(
+        ctx.receiver_descriptors.materialize_buffer_view(
             p.id,
             BufferViewSlot {
                 data_slot: buf_slot,
@@ -1383,7 +1378,7 @@ pub(super) fn compile_function(
             let scope_idx = ctx.buffer_alias_base + ctx.buffer_data_slots.len() as u32;
             ctx.buffer_data_slots
                 .insert(p.id, (data_slot.clone(), scope_idx));
-            ctx.buffer_view_slots.insert(
+            ctx.receiver_descriptors.materialize_buffer_view(
                 p.id,
                 BufferViewSlot {
                     data_slot,

@@ -253,7 +253,7 @@ pub(crate) fn can_lower_buffer_access_without_calls(
     }
 
     let (buffer_local_id, view) = match buffer_expr {
-        Expr::LocalGet(id) => match ctx.buffer_view_slots.get(id) {
+        Expr::LocalGet(id) => match ctx.receiver_descriptors.buffer_view(id) {
             Some(view) => (*id, view),
             None => return false,
         },
@@ -293,7 +293,7 @@ pub(crate) fn lower_buffer_access_proof(
     }
 
     let (buffer_local_id, view) = match buffer_expr {
-        Expr::LocalGet(id) => match ctx.buffer_view_slots.get(id).cloned() {
+        Expr::LocalGet(id) => match ctx.receiver_descriptors.buffer_view(id).cloned() {
             Some(view) => (*id, view),
             None => return Ok(None),
         },
@@ -526,8 +526,8 @@ pub(crate) fn lower_buffer_store(
     // view storage must use the dynamic path when the RHS can collect.
     let value_crosses_cached_view = match buffer_expr {
         Expr::LocalGet(id) => ctx
-            .buffer_view_slots
-            .get(id)
+            .receiver_descriptors
+            .buffer_view(id)
             .is_some_and(|view| !view.storage_inline_proven),
         _ => false,
     } && rooting::operand_may_collect(ctx, value_expr);
@@ -629,7 +629,7 @@ pub(crate) fn lower_typed_array_load(
     index_expr: &Expr,
 ) -> Result<Option<LoweredValue>> {
     let view = match array_expr {
-        Expr::LocalGet(id) => match ctx.buffer_view_slots.get(id).cloned() {
+        Expr::LocalGet(id) => match ctx.receiver_descriptors.buffer_view(id).cloned() {
             Some(view) if view.index_unit == BufferIndexUnit::Element => view,
             _ => return Ok(None),
         },
@@ -704,7 +704,7 @@ pub(crate) fn lower_typed_array_load(
 /// Numeric-context sink for a buffer-view-tracked typed-array element read.
 ///
 /// `ta_param_f64_read::checked_typed_array_f64_kind` declines outright for a
-/// receiver tracked in `ctx.buffer_view_slots` — its own doc comment says the
+/// receiver tracked by a buffer-view descriptor — its own doc comment says the
 /// tracked view "owns this receiver via its own (stronger-bounds) native
 /// path", i.e. [`lower_typed_array_load`] above. That path is real (the
 /// general, non-arithmetic `IndexGet` dispatch already calls it), but until
@@ -747,7 +747,7 @@ pub(crate) fn lower_typed_array_store(
     value_expr: &Expr,
 ) -> Result<Option<StoreResult>> {
     let view = match array_expr {
-        Expr::LocalGet(id) => match ctx.buffer_view_slots.get(id).cloned() {
+        Expr::LocalGet(id) => match ctx.receiver_descriptors.buffer_view(id).cloned() {
             Some(view) if view.index_unit == BufferIndexUnit::Element => view,
             _ => return Ok(None),
         },

@@ -117,7 +117,7 @@ fn lower_value_for_dynamic_index_set(
 
 /// #7494: `static_type_of`, not `receiver_class_name` — see the sibling in
 /// `index_get.rs` for the full rationale. In short: every tier this predicate
-/// gates is either `ctx.buffer_view_slots`-tracked (which reassignment
+/// gates is either tracked by a buffer-view descriptor (which reassignment
 /// already invalidates on its own) or a genuinely dynamic runtime call that
 /// re-validates the object's actual GC kind, so `receiver_class_name`'s
 /// blanket "reassigned local → unknown" answer only broke the dynamic-
@@ -128,7 +128,7 @@ fn lower_value_for_dynamic_index_set(
 /// typed-array object (data at byte 16): a type-confused write, not a missed
 /// optimization.
 fn is_width_tracked_typed_array_receiver(ctx: &FnCtx<'_>, object: &Expr) -> bool {
-    if matches!(object, Expr::LocalGet(id) if ctx.buffer_view_slots.contains_key(id)) {
+    if matches!(object, Expr::LocalGet(id) if ctx.receiver_descriptors.contains_buffer_view(id)) {
         return true;
     }
     let ty = match object {
@@ -203,8 +203,8 @@ pub(super) fn packed_f64_loop_fact(
     arr_id: u32,
     idx_id: u32,
 ) -> Option<PackedF64LoopFact> {
-    ctx.packed_f64_loop_facts
-        .iter()
+    ctx.receiver_descriptors
+        .packed_f64_loop_facts()
         .find(|fact| fact.array_local_id == arr_id && fact.index_local_id == idx_id)
         .cloned()
 }
@@ -247,11 +247,7 @@ fn numeric_index_has_loop_array_index_proof(ctx: &FnCtx<'_>, object: &Expr, inde
     if packed_f64_loop_fact_for_index(ctx, *arr_id, index).is_some() {
         return true;
     }
-    offset == 0
-        && ctx
-            .bounded_index_pairs
-            .iter()
-            .any(|fact| fact.array_local_id == *arr_id && fact.index_local_id == idx_id)
+    offset == 0 && ctx.receiver_descriptors.has_bounded_index(*arr_id, idx_id)
 }
 
 fn numeric_index_needs_runtime_key(ctx: &FnCtx<'_>, object: &Expr, index: &Expr) -> bool {
@@ -954,9 +950,7 @@ pub(crate) fn lower(
                 if let (Expr::LocalGet(arr_id), Expr::LocalGet(idx_id)) =
                     (object.as_ref(), index.as_ref())
                 {
-                    if ctx.bounded_index_pairs.iter().any(|fact| {
-                        fact.index_local_id == *idx_id && fact.array_local_id == *arr_id
-                    }) {
+                    if ctx.receiver_descriptors.has_bounded_index(*arr_id, *idx_id) {
                         let Some(i32_slot) = ctx.i32_counter_slots.get(idx_id).cloned() else {
                             return lower_array_index_set_via_runtime_key(
                                 ctx,

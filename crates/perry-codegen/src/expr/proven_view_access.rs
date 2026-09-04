@@ -118,23 +118,25 @@ pub(crate) fn local_is_proven_int_store_view(ctx: &FnCtx<'_>, id: u32) -> bool {
     if ctx.closure_captures.contains_key(&id) {
         return false;
     }
-    ctx.buffer_view_slots.get(&id).is_some_and(|view| {
-        view.pointer_state.is_stable()
-            && view.storage_inline_proven
-            && view.native_owned.is_none()
-            && view.index_unit == BufferIndexUnit::Element
-            && view.alias.allows_noalias()
-            && view.scope_idx.is_some()
-            && matches!(
-                view.elem,
-                BufferElem::I8
-                    | BufferElem::U8
-                    | BufferElem::I16
-                    | BufferElem::U16
-                    | BufferElem::I32
-                    | BufferElem::U32
-            )
-    })
+    ctx.receiver_descriptors
+        .buffer_view(id)
+        .is_some_and(|view| {
+            view.pointer_state.is_stable()
+                && view.storage_inline_proven
+                && view.native_owned.is_none()
+                && view.index_unit == BufferIndexUnit::Element
+                && view.alias.allows_noalias()
+                && view.scope_idx.is_some()
+                && matches!(
+                    view.elem,
+                    BufferElem::I8
+                        | BufferElem::U8
+                        | BufferElem::I16
+                        | BufferElem::U16
+                        | BufferElem::I32
+                        | BufferElem::U32
+                )
+        })
 }
 
 /// The proven view for `object`, when every gate for the checked tier holds.
@@ -149,7 +151,7 @@ fn proven_view_for(
     let Expr::LocalGet(id) = object else {
         return None;
     };
-    let view = ctx.buffer_view_slots.get(id)?.clone();
+    let view = ctx.receiver_descriptors.buffer_view(id)?.clone();
     if !view.pointer_state.is_stable()
         || !view.storage_inline_proven
         || view.native_owned.is_some()
@@ -205,16 +207,18 @@ pub(crate) fn is_proven_u32_view_read(ctx: &FnCtx<'_>, value: &Expr) -> bool {
     let Expr::LocalGet(id) = object.as_ref() else {
         return false;
     };
-    ctx.buffer_view_slots.get(id).is_some_and(|view| {
-        view.pointer_state.is_stable()
-            && view.storage_inline_proven
-            && view.native_owned.is_none()
-            && view.index_unit == BufferIndexUnit::Element
-            && view.alias.allows_noalias()
-            && view.scope_idx.is_some()
-            && matches!(view.elem, BufferElem::U32)
-            && crate::stmt::stable_packed_loop::has_u32_index_fact(ctx, index)
-    })
+    ctx.receiver_descriptors
+        .buffer_view(id)
+        .is_some_and(|view| {
+            view.pointer_state.is_stable()
+                && view.storage_inline_proven
+                && view.native_owned.is_none()
+                && view.index_unit == BufferIndexUnit::Element
+                && view.alias.allows_noalias()
+                && view.scope_idx.is_some()
+                && matches!(view.elem, BufferElem::U32)
+                && crate::stmt::stable_packed_loop::has_u32_index_fact(ctx, index)
+        })
 }
 
 fn proven_u32_view_value(ctx: &FnCtx<'_>, value: &Expr) -> bool {

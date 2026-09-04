@@ -62,7 +62,7 @@ fn u8_buffer_receiver_eligible(ctx: &FnCtx<'_>, object: &Expr) -> bool {
     let Expr::LocalGet(id) = object else {
         return false;
     };
-    if ctx.buffer_view_slots.contains_key(id) {
+    if ctx.receiver_descriptors.contains_buffer_view(id) {
         return false;
     }
     let class = crate::type_analysis::receiver_class_name(ctx, object)

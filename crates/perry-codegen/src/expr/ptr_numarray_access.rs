@@ -138,11 +138,7 @@ pub(crate) fn try_lower_num_array_guard_free_get(
         );
     }
     if let Expr::LocalGet(idx_id) = index {
-        if ctx
-            .bounded_index_pairs
-            .iter()
-            .any(|f| f.index_local_id == *idx_id && f.array_local_id == *arr_id)
-        {
+        if ctx.receiver_descriptors.has_bounded_index(*arr_id, *idx_id) {
             if let Some(i32_slot) = ctx.i32_counter_slots.get(idx_id).cloned() {
                 let arr_box = lower_expr(ctx, &Expr::LocalGet(*arr_id))?;
                 let idx_i32 = ctx.block().load(I32, &i32_slot);
@@ -189,10 +185,7 @@ pub(crate) fn try_lower_num_array_guard_free_set(
     } else {
         match index {
             Expr::LocalGet(idx_id)
-                if ctx
-                    .bounded_index_pairs
-                    .iter()
-                    .any(|f| f.index_local_id == *idx_id && f.array_local_id == *arr_id) =>
+                if ctx.receiver_descriptors.has_bounded_index(*arr_id, *idx_id) =>
             {
                 ctx.i32_counter_slots.get(idx_id).cloned()
             }

@@ -3,22 +3,26 @@
 //!
 //! # Why this exists
 //!
-//! Phase 1 found sixteen separate receiver-keyed fact mechanisms on `FnCtx`
-//! (`cached_lengths`, `bounded_index_pairs`, `packed_f64_loop_facts`,
-//! `masked_window_array_facts`, `buffer_view_slots`, `int_range_facts`,
+//! Phase 1 found sixteen separate receiver-keyed fact mechanisms on `FnCtx`.
+//! The original issue singled out six (`cached_lengths`,
+//! `bounded_index_pairs`, `packed_f64_loop_facts`,
+//! `masked_window_array_facts`, `buffer_view_slots`, and the
+//! `packed_receiver_*` trio); Phase 4 has now moved all six into this table.
+//! The expanded audit also records `int_range_facts`,
+//! `bounded_buffer_index_pairs`, `guarded_buffer_index_pairs`,
 //! `element_shape_loop_facts`, `class_field_loop_facts`,
 //! `versioned_indexed_loop_facts`, `stable_packed_loop_facts`,
-//! `string_window_array_facts`, `buffer_data_slots`, the two class-shape slot
-//! maps and the `packed_receiver_*` trio). Each answers the same two questions
+//! `string_window_array_facts`, `buffer_data_slots`, and `class_keys_slots`.
+//! Historically, each answered the same two questions
 //! — *what do we know about this receiver* and *how long may we believe it* —
 //! and each answers the second question in a different, hand-rolled way:
 //!
 //! | mechanism | tables |
 //! |---|---|
-//! | `retain(|f| f.scope_id != id)` at scope exit | `bounded_index_pairs`, `packed_f64_loop_facts`, `masked_window_array_facts` |
-//! | insert/remove pair with no id | `cached_lengths`, `packed_receiver_*` |
-//! | mutable field downgraded in place, never removed | `buffer_view_slots` |
-//! | reloaded at the safepoint instead of invalidated | `packed_receiver_*` |
+//! | `retain(|f| f.scope_id != id)` at scope exit | `receiver_descriptors[bounded_index]` / `[packed_f64_loop]` / `[masked_window_array]` (formerly three independent tables) |
+//! | insert/remove pair with no id | `receiver_descriptors[cached_length]` and the base address payload (formerly `cached_lengths` and `packed_receiver_*`) |
+//! | mutable field downgraded in place, never removed | `receiver_descriptors[buffer_view]` (formerly `buffer_view_slots`) |
+//! | reloaded at the safepoint instead of invalidated | base address payload (formerly `packed_receiver_*`) |
 //!
 //! and a fifth boundary — the **unwind edge** — is expressed by none of them.
 //! It is honoured today only indirectly: the packed matcher rejects
@@ -38,8 +42,10 @@
 //! before carrying that address across a back-edge poll. Phase 3 lets ordinary
 //! counted loops attach a conditional plain/numeric-array validation to the
 //! same entry, but only after this module proves the loop region contains no
-//! ender other than the poll covered by that refresh recipe. Other fact tables
-//! are migrated one consumer at a time.
+//! ender other than the poll covered by that refresh recipe. Phase 4 folds the
+//! five remaining mechanisms named by the proposal into this table: cached
+//! lengths, bounded indices, packed and masked representations, and
+//! non-moving buffer views.
 //!
 //! The precedent is `TypeFacts::purity` / `TypeFacts::shape_stability`
 //! (`collectors/hir_facts.rs`, #854): a subgraph the collector populates and
@@ -58,13 +64,14 @@
 //! what keeps this file honest: the model is checked against a shipping,
 //! audited predicate rather than against its own restatement.
 
-// #9254 phases 2/3: `ReceiverDescriptorTable`, the poll boundary algebra and
-// region formation are production consumers. Some inventory/lint helpers stay
-// test-only while the remaining fact tables await phase 4, so keep that
-// incomplete state explicit rather than scattering per-item allows.
+// `ReceiverDescriptorTable`, the poll boundary algebra and region formation
+// are production consumers. Inventory/lint helpers remain test-only, so keep
+// their allowance central rather than scattering per-item attributes.
 #![allow(dead_code)]
 
+use crate::expr::{MaskedWindowArrayFact, PackedF64LoopFact};
 use crate::loop_purity;
+use crate::native_value::BufferViewSlot;
 use perry_hir::{CompareOp, Expr, Stmt, UnaryOp};
 
 /// Why a no-relocation region ends.
@@ -160,6 +167,11 @@ pub(crate) enum ReceiverClaim {
     /// outright; this is the only claim for which a region boundary is
     /// load-bearing rather than incidental.
     Address,
+    /// A raw address into storage whose allocation is explicitly non-moving.
+    /// Collection and unwind do not stale it; receiver reassignment, backing
+    /// replacement, disposal and alias escape are handled by descriptor-table
+    /// degradation APIs instead.
+    NonMovingAddress,
 }
 
 /// One table's claim about one receiver, in the shared vocabulary.
@@ -172,8 +184,8 @@ pub(crate) struct ReceiverDescriptor {
     pub(crate) claim: ReceiverClaim,
     pub(crate) boundary: FactBoundary,
     /// Whether the tier that owns this table structurally excludes `Stmt::Try`
-    /// from the region it forms (the packed matcher does; `buffer_view_slots`
-    /// has no region at all).
+    /// from the region it forms (the packed matcher does; a buffer-view
+    /// descriptor has no region at all).
     pub(crate) excludes_try: bool,
 }
 
@@ -207,7 +219,7 @@ pub(crate) fn boundary_admits(
     match desc.claim {
         // A length or an index range is a value. Relocation does not touch it.
         // It dies at mutation, which no ender in this enum implies on its own.
-        ReceiverClaim::ScalarRelation => Ok(()),
+        ReceiverClaim::ScalarRelation | ReceiverClaim::NonMovingAddress => Ok(()),
 
         // A representation claim survives relocation but not arbitrary user
         // code, which can convert the receiver's storage out from under it.
@@ -290,11 +302,28 @@ struct ActiveArrayValidation {
     valid_i1: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 struct ActiveReceiverDescriptor {
     contract: ReceiverDescriptor,
-    refresh: ReceiverPollRefresh,
-    array_validation: Option<ActiveArrayValidation>,
+    data: ActiveReceiverData,
+}
+
+#[derive(Debug, Clone)]
+enum ActiveReceiverData {
+    Address {
+        refresh: ReceiverPollRefresh,
+        array_validation: Option<ActiveArrayValidation>,
+    },
+    CachedLength {
+        slot: String,
+    },
+    BoundedIndex {
+        index_local_id: u32,
+        scope_id: u32,
+    },
+    PackedF64Loop(PackedF64LoopFact),
+    MaskedWindowArray(MaskedWindowArrayFact),
+    BufferView(BufferViewSlot),
 }
 
 /// Active materialised receiver descriptors for one function lowering.
@@ -310,9 +339,10 @@ pub(crate) struct ReceiverDescriptorTable {
 impl ReceiverDescriptorTable {
     /// Whether an active scope has already materialised `receiver`.
     pub(crate) fn contains(&self, receiver: u32) -> bool {
-        self.entries
-            .iter()
-            .any(|entry| entry.contract.receiver == receiver)
+        self.entries.iter().any(|entry| {
+            entry.contract.receiver == receiver
+                && matches!(&entry.data, ActiveReceiverData::Address { .. })
+        })
     }
 
     /// Install the first production descriptor consumer (#9254 phase 2): a
@@ -346,12 +376,14 @@ impl ReceiverDescriptorTable {
             .expect("a poll-refreshed receiver descriptor must survive its poll boundary");
         self.entries.push(ActiveReceiverDescriptor {
             contract,
-            refresh: ReceiverPollRefresh {
-                rooted_box_slot,
-                base_handle_slot,
-                source_root,
+            data: ActiveReceiverData::Address {
+                refresh: ReceiverPollRefresh {
+                    rooted_box_slot,
+                    base_handle_slot,
+                    source_root,
+                },
+                array_validation: None,
             },
-            array_validation: None,
         });
         true
     }
@@ -402,27 +434,307 @@ impl ReceiverDescriptorTable {
         }
         self.entries.push(ActiveReceiverDescriptor {
             contract: address_contract,
-            refresh: ReceiverPollRefresh {
-                rooted_box_slot,
-                base_handle_slot,
-                source_root,
+            data: ActiveReceiverData::Address {
+                refresh: ReceiverPollRefresh {
+                    rooted_box_slot,
+                    base_handle_slot,
+                    source_root,
+                },
+                array_validation: Some(ActiveArrayValidation {
+                    contract: representation_contract,
+                    kind,
+                    valid_i1,
+                }),
             },
-            array_validation: Some(ActiveArrayValidation {
-                contract: representation_contract,
-                kind,
-                valid_i1,
-            }),
         });
         Ok(true)
     }
 
+    /// Install a loop-invariant `receiver.length` value for one dynamic
+    /// extent. Unlike an address, this scalar survives every relocation
+    /// boundary; ownership still belongs in the descriptor table so the
+    /// extent cannot drift from the receiver fact it serves.
+    pub(crate) fn materialize_cached_length(&mut self, receiver: u32, slot: String) -> bool {
+        let contract = ReceiverDescriptor {
+            table: "receiver_descriptors[cached_length]",
+            receiver,
+            claim: ReceiverClaim::ScalarRelation,
+            boundary: FactBoundary::DynamicExtent,
+            excludes_try: false,
+        };
+        self.entries.push(ActiveReceiverDescriptor {
+            contract,
+            data: ActiveReceiverData::CachedLength { slot },
+        });
+        true
+    }
+
+    /// End the dynamic extent of a cached length without disturbing another
+    /// active descriptor payload for the same receiver.
+    pub(crate) fn dematerialize_cached_length(&mut self, receiver: u32) -> bool {
+        let Some(index) = self.entries.iter().rposition(|entry| {
+            entry.contract.receiver == receiver
+                && matches!(&entry.data, ActiveReceiverData::CachedLength { .. })
+        }) else {
+            return false;
+        };
+        self.entries.remove(index);
+        true
+    }
+
+    /// The loop-invariant boxed-double length slot for `receiver`.
+    pub(crate) fn cached_length_slot(&self, receiver: u32) -> Option<&str> {
+        self.entries.iter().rev().find_map(|entry| {
+            if entry.contract.receiver != receiver {
+                return None;
+            }
+            match &entry.data {
+                ActiveReceiverData::CachedLength { slot } => Some(slot.as_str()),
+                ActiveReceiverData::Address { .. }
+                | ActiveReceiverData::BoundedIndex { .. }
+                | ActiveReceiverData::PackedF64Loop(_)
+                | ActiveReceiverData::MaskedWindowArray(_)
+                | ActiveReceiverData::BufferView(_) => None,
+            }
+        })
+    }
+
+    /// Record that `index_local_id` is in bounds for `receiver` throughout a
+    /// lexical loop-proof scope. Scalar relations survive safepoints, while
+    /// reassignment and scope exit invalidate them through the table APIs
+    /// below.
+    pub(crate) fn materialize_bounded_index(
+        &mut self,
+        receiver: u32,
+        index_local_id: u32,
+        scope_id: u32,
+    ) {
+        let contract = ReceiverDescriptor {
+            table: "receiver_descriptors[bounded_index]",
+            receiver,
+            claim: ReceiverClaim::ScalarRelation,
+            boundary: FactBoundary::ScopeId,
+            excludes_try: false,
+        };
+        self.entries.push(ActiveReceiverDescriptor {
+            contract,
+            data: ActiveReceiverData::BoundedIndex {
+                index_local_id,
+                scope_id,
+            },
+        });
+    }
+
+    /// Whether the current descriptor scope proves this exact receiver/index
+    /// pair in bounds.
+    pub(crate) fn has_bounded_index(&self, receiver: u32, index_local_id: u32) -> bool {
+        self.entries.iter().any(|entry| {
+            entry.contract.receiver == receiver
+                && matches!(
+                    &entry.data,
+                    ActiveReceiverData::BoundedIndex {
+                        index_local_id: active_index,
+                        ..
+                    } if *active_index == index_local_id
+                )
+        })
+    }
+
+    /// Invalidate bounded-index relations whose receiver or index binding was
+    /// reassigned.
+    pub(crate) fn invalidate_bounded_indices_for_local(&mut self, local_id: u32) {
+        self.entries.retain(|entry| {
+            !(entry.contract.receiver == local_id
+                && matches!(&entry.data, ActiveReceiverData::BoundedIndex { .. }))
+                && !matches!(
+                    &entry.data,
+                    ActiveReceiverData::BoundedIndex { index_local_id, .. }
+                        if *index_local_id == local_id
+                )
+        });
+    }
+
+    /// Install a packed numeric-array representation fact for one guarded
+    /// clone. The producing matcher excludes calls and `try`; the remaining
+    /// back-edge poll is admitted here by the shared boundary algebra.
+    pub(crate) fn materialize_packed_f64_loop(&mut self, fact: PackedF64LoopFact) {
+        let contract = ReceiverDescriptor {
+            table: "receiver_descriptors[packed_f64_loop]",
+            receiver: fact.array_local_id,
+            claim: ReceiverClaim::Representation,
+            boundary: FactBoundary::ScopeId,
+            excludes_try: true,
+        };
+        boundary_admits(&contract, RegionEnder::BackEdgePoll)
+            .expect("a packed representation descriptor must survive its loop poll");
+        self.entries.push(ActiveReceiverDescriptor {
+            contract,
+            data: ActiveReceiverData::PackedF64Loop(fact),
+        });
+    }
+
+    /// Packed representation facts in installation order. Nested consumers
+    /// may reverse this iterator to prefer their innermost scope.
+    pub(crate) fn packed_f64_loop_facts(
+        &self,
+    ) -> impl DoubleEndedIterator<Item = &PackedF64LoopFact> {
+        self.entries.iter().filter_map(|entry| match &entry.data {
+            ActiveReceiverData::PackedF64Loop(fact) => Some(fact),
+            _ => None,
+        })
+    }
+
+    pub(crate) fn has_packed_f64_loop_facts(&self) -> bool {
+        self.packed_f64_loop_facts().next().is_some()
+    }
+
+    /// Install a statically bounded masked-window representation fact for one
+    /// guarded clone. Its producer admits only a call-free scalar region and
+    /// excludes `try`, leaving the loop poll as the sole region boundary.
+    pub(crate) fn materialize_masked_window_array(&mut self, fact: MaskedWindowArrayFact) {
+        let contract = ReceiverDescriptor {
+            table: "receiver_descriptors[masked_window_array]",
+            receiver: fact.array_local_id,
+            claim: ReceiverClaim::Representation,
+            boundary: FactBoundary::ScopeId,
+            excludes_try: true,
+        };
+        boundary_admits(&contract, RegionEnder::BackEdgePoll)
+            .expect("a masked-window representation descriptor must survive its loop poll");
+        self.entries.push(ActiveReceiverDescriptor {
+            contract,
+            data: ActiveReceiverData::MaskedWindowArray(fact),
+        });
+    }
+
+    pub(crate) fn masked_window_array_facts(
+        &self,
+    ) -> impl DoubleEndedIterator<Item = &MaskedWindowArrayFact> {
+        self.entries.iter().filter_map(|entry| match &entry.data {
+            ActiveReceiverData::MaskedWindowArray(fact) => Some(fact),
+            _ => None,
+        })
+    }
+
+    /// Install or replace the function-lifetime native storage descriptor for
+    /// a Buffer/TypedArray receiver. The pointed-to allocation is non-moving;
+    /// all semantic invalidation is expressed by mutating or removing this
+    /// payload through the APIs below.
+    pub(crate) fn materialize_buffer_view(
+        &mut self,
+        receiver: u32,
+        view: BufferViewSlot,
+    ) -> Option<BufferViewSlot> {
+        let previous = self.dematerialize_buffer_view(receiver);
+        let contract = ReceiverDescriptor {
+            table: "receiver_descriptors[buffer_view]",
+            receiver,
+            claim: ReceiverClaim::NonMovingAddress,
+            boundary: FactBoundary::InPlaceDegradation,
+            excludes_try: false,
+        };
+        for ender in [RegionEnder::BackEdgePoll, RegionEnder::UnwindEdge] {
+            boundary_admits(&contract, ender)
+                .expect("a non-moving buffer-view address survives relocation boundaries");
+        }
+        self.entries.push(ActiveReceiverDescriptor {
+            contract,
+            data: ActiveReceiverData::BufferView(view),
+        });
+        previous
+    }
+
+    pub(crate) fn dematerialize_buffer_view(
+        &mut self,
+        receiver: impl std::borrow::Borrow<u32>,
+    ) -> Option<BufferViewSlot> {
+        let receiver = *receiver.borrow();
+        let index = self.entries.iter().position(|entry| {
+            entry.contract.receiver == receiver
+                && matches!(&entry.data, ActiveReceiverData::BufferView(_))
+        })?;
+        let entry = self.entries.remove(index);
+        let ActiveReceiverData::BufferView(view) = entry.data else {
+            unreachable!("buffer-view lookup selected another descriptor payload")
+        };
+        Some(view)
+    }
+
+    pub(crate) fn contains_buffer_view(&self, receiver: impl std::borrow::Borrow<u32>) -> bool {
+        self.buffer_view(receiver).is_some()
+    }
+
+    pub(crate) fn buffer_view(
+        &self,
+        receiver: impl std::borrow::Borrow<u32>,
+    ) -> Option<&BufferViewSlot> {
+        let receiver = *receiver.borrow();
+        self.entries.iter().find_map(|entry| {
+            if entry.contract.receiver != receiver {
+                return None;
+            }
+            match &entry.data {
+                ActiveReceiverData::BufferView(view) => Some(view),
+                _ => None,
+            }
+        })
+    }
+
+    pub(crate) fn buffer_view_mut(
+        &mut self,
+        receiver: impl std::borrow::Borrow<u32>,
+    ) -> Option<&mut BufferViewSlot> {
+        let receiver = *receiver.borrow();
+        self.entries.iter_mut().find_map(|entry| {
+            if entry.contract.receiver != receiver {
+                return None;
+            }
+            match &mut entry.data {
+                ActiveReceiverData::BufferView(view) => Some(view),
+                _ => None,
+            }
+        })
+    }
+
+    pub(crate) fn buffer_views(&self) -> impl Iterator<Item = (u32, &BufferViewSlot)> {
+        self.entries.iter().filter_map(|entry| match &entry.data {
+            ActiveReceiverData::BufferView(view) => Some((entry.contract.receiver, view)),
+            _ => None,
+        })
+    }
+
+    pub(crate) fn buffer_views_mut(&mut self) -> impl Iterator<Item = (u32, &mut BufferViewSlot)> {
+        self.entries
+            .iter_mut()
+            .filter_map(|entry| match &mut entry.data {
+                ActiveReceiverData::BufferView(view) => Some((entry.contract.receiver, view)),
+                _ => None,
+            })
+    }
+
+    /// End every descriptor fact owned by a lexical proof scope. Each Phase 4
+    /// migration adds its scoped payload here, replacing a separate
+    /// `retain(scope_id)` discipline at the lowering site.
+    pub(crate) fn dematerialize_scope(&mut self, scope_id: u32) -> usize {
+        let before = self.entries.len();
+        self.entries.retain(|entry| {
+            let active_scope = match &entry.data {
+                ActiveReceiverData::BoundedIndex { scope_id, .. } => Some(*scope_id),
+                ActiveReceiverData::PackedF64Loop(fact) => Some(fact.scope_id),
+                ActiveReceiverData::MaskedWindowArray(fact) => Some(fact.scope_id),
+                _ => None,
+            };
+            active_scope != Some(scope_id)
+        });
+        before - self.entries.len()
+    }
+
     /// End the dynamic extent of one materialised receiver.
     pub(crate) fn dematerialize(&mut self, receiver: u32) -> bool {
-        let Some(index) = self
-            .entries
-            .iter()
-            .position(|entry| entry.contract.receiver == receiver)
-        else {
+        let Some(index) = self.entries.iter().position(|entry| {
+            entry.contract.receiver == receiver
+                && matches!(&entry.data, ActiveReceiverData::Address { .. })
+        }) else {
             return false;
         };
         self.entries.remove(index);
@@ -431,18 +743,22 @@ impl ReceiverDescriptorTable {
 
     /// The promotable, precise-root box slot consumed by `LocalGet`.
     pub(crate) fn rooted_box_slot(&self, receiver: u32) -> Option<&str> {
-        self.entries
-            .iter()
-            .find(|entry| entry.contract.receiver == receiver)
-            .map(|entry| entry.refresh.rooted_box_slot.as_str())
+        self.entries.iter().find_map(|entry| match &entry.data {
+            ActiveReceiverData::Address { refresh, .. } if entry.contract.receiver == receiver => {
+                Some(refresh.rooted_box_slot.as_str())
+            }
+            _ => None,
+        })
     }
 
     /// The pre-masked base-handle slot consumed by packed address math.
     pub(crate) fn base_handle_slot(&self, receiver: u32) -> Option<&str> {
-        self.entries
-            .iter()
-            .find(|entry| entry.contract.receiver == receiver)
-            .map(|entry| entry.refresh.base_handle_slot.as_str())
+        self.entries.iter().find_map(|entry| match &entry.data {
+            ActiveReceiverData::Address { refresh, .. } if entry.contract.receiver == receiver => {
+                Some(refresh.base_handle_slot.as_str())
+            }
+            _ => None,
+        })
     }
 
     /// Conditional validation and refreshed base handle for an ordinary array
@@ -453,17 +769,24 @@ impl ReceiverDescriptorTable {
         receiver: u32,
         require_numeric: bool,
     ) -> Option<ReceiverArrayAccess> {
-        let entry = self
-            .entries
-            .iter()
-            .find(|entry| entry.contract.receiver == receiver)?;
-        let validation = entry.array_validation.as_ref()?;
+        let entry = self.entries.iter().find(|entry| {
+            entry.contract.receiver == receiver
+                && matches!(&entry.data, ActiveReceiverData::Address { .. })
+        })?;
+        let ActiveReceiverData::Address {
+            refresh,
+            array_validation,
+        } = &entry.data
+        else {
+            unreachable!("address lookup selected a non-address descriptor")
+        };
+        let validation = array_validation.as_ref()?;
         if require_numeric && validation.kind != ReceiverArrayValidationKind::Numeric {
             return None;
         }
         Some(ReceiverArrayAccess {
             valid_i1: validation.valid_i1.clone(),
-            base_handle_slot: entry.refresh.base_handle_slot.clone(),
+            base_handle_slot: refresh.base_handle_slot.clone(),
         })
     }
 
@@ -476,11 +799,18 @@ impl ReceiverDescriptorTable {
     pub(crate) fn poll_refreshes(&self) -> Result<Vec<ReceiverPollRefresh>, BoundaryViolation> {
         let mut refreshes = Vec::with_capacity(self.entries.len());
         for entry in &self.entries {
+            let ActiveReceiverData::Address {
+                refresh,
+                array_validation,
+            } = &entry.data
+            else {
+                continue;
+            };
             boundary_admits(&entry.contract, RegionEnder::BackEdgePoll)?;
-            if let Some(validation) = &entry.array_validation {
+            if let Some(validation) = array_validation {
                 boundary_admits(&validation.contract, RegionEnder::BackEdgePoll)?;
             }
-            refreshes.push(entry.refresh.clone());
+            refreshes.push(refresh.clone());
         }
         Ok(refreshes)
     }

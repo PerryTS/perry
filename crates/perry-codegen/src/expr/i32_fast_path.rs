@@ -516,7 +516,7 @@ fn ta_int_elem_load_is_i32_provable(ctx: &FnCtx<'_>, object: &Expr, index: &Expr
     let Expr::LocalGet(id) = object else {
         return false;
     };
-    let Some(view) = ctx.buffer_view_slots.get(id) else {
+    let Some(view) = ctx.receiver_descriptors.buffer_view(id) else {
         return false;
     };
     if !view.pointer_state.is_stable()
@@ -612,7 +612,7 @@ fn checked_typed_array_i32_kind(
     };
     // A tracked buffer view (proven-bounds unchecked path, or a Buffer param)
     // owns this receiver; don't shadow it.
-    if ctx.buffer_view_slots.contains_key(id) {
+    if ctx.receiver_descriptors.contains_buffer_view(id) {
         return None;
     }
     // Class proof: function-local first, then — for a MODULE-GLOBAL typed array
@@ -793,8 +793,8 @@ fn packed_i32_loop_index_get_fact(ctx: &FnCtx<'_>, e: &Expr) -> Option<super::Pa
     let (Expr::LocalGet(arr_id), Expr::LocalGet(idx_id)) = (object.as_ref(), index.as_ref()) else {
         return None;
     };
-    ctx.packed_f64_loop_facts
-        .iter()
+    ctx.receiver_descriptors
+        .packed_f64_loop_facts()
         .find(|fact| {
             fact.array_local_id == *arr_id
                 && fact.index_local_id == *idx_id
@@ -810,8 +810,8 @@ fn packed_u32_loop_index_get_fact(ctx: &FnCtx<'_>, e: &Expr) -> Option<super::Pa
     let (Expr::LocalGet(arr_id), Expr::LocalGet(idx_id)) = (object.as_ref(), index.as_ref()) else {
         return None;
     };
-    ctx.packed_f64_loop_facts
-        .iter()
+    ctx.receiver_descriptors
+        .packed_f64_loop_facts()
         .find(|fact| {
             fact.array_local_id == *arr_id
                 && fact.index_local_id == *idx_id

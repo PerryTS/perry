@@ -586,8 +586,8 @@ pub(crate) fn numeric_proof_is_declared_only(ctx: &FnCtx<'_>, expr: &Expr) -> bo
                 // Do not discard that stronger fact and reclassify the read
                 // from its erasable source annotation.
                 if ctx
-                    .buffer_view_slots
-                    .get(arr_id)
+                    .receiver_descriptors
+                    .buffer_view(arr_id)
                     .is_some_and(|view| view.elem.is_number_valued())
                 {
                     return false;
