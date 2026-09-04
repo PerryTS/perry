@@ -73,6 +73,9 @@ pub extern "C" fn js_string_match(
     if !is_valid_ptr(s) || !is_valid_regex_ptr(re) {
         return ptr::null_mut();
     }
+    if crate::hot_diag::regex_on() {
+        super::diag_note_op(re, crate::hot_diag::RegexOp::Match);
+    }
 
     // Phase 1 (borrowing, no JS allocation): capture byte ranges and all
     // UTF-16/WTF-8 metadata while the engine's `Captures` may borrow `s`.

@@ -208,10 +208,8 @@ pub extern "C" fn js_regexp_compile_value(
         (*re).unicode = flags_str.contains('u') || flags_str.contains('v');
         (*re).has_indices = flags_str.contains('d');
         super::REGEX_SOURCE_TABLE.with(|t| {
-            t.borrow_mut().insert(
-                re as usize,
-                (pattern_str.to_string(), flags_str.to_string()),
-            );
+            t.borrow_mut()
+                .insert(re as usize, (Arc::from(pattern_str), Arc::from(flags_str)));
         });
     }
     // Spec RegExpInitialize step 12: `Set(obj, "lastIndex", 0, true)` runs LAST,
