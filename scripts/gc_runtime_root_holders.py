@@ -57,8 +57,9 @@ What it does
      by an identity-pinned ratchet instead of per-holder verdicts. See
      "The frontier tier" below.
 
-   Perry's custom TLS macro is also a deliberate fourth rule: every
-   `perry_thread_local!` / `crate::perry_thread_local!` declaration in the core
+   TLS macros are also a deliberate fourth rule: every raw `thread_local!`
+   (including `std::thread_local!`) or `perry_thread_local!` (including
+   `crate::perry_thread_local!`) declaration in the core
    crates that rules A/B do not already recognize is enumerated as rule T. The
    macro accepts arbitrary crate-local types, so treating an unfamiliar type as
    safe would recreate the blind spot this census exists to close. Rule-T
@@ -110,7 +111,7 @@ crate gains real scanner coverage, its holders read as covered, their entries
 go stale, and the deletion is the receipt.
 
 The same ratchet also carries otherwise-unclassified core declarations inside
-`perry_thread_local!`. Unlike a plain `static` declaration, each of these is a
+raw or Perry TLS macros. Unlike a plain `static` declaration, each of these is a
 known state-holding TLS slot even when its type is a crate-local struct that
 rules A/B cannot resolve (`PathModuleRegistry`, `ExceptionState`, and
 `YogaNode` are real examples). A newly declared slot therefore fails until it
@@ -125,6 +126,7 @@ How it fails
 * an inventory entry that no longer matches a declaration -> exit 1
 * an `open_gap` or `unverified` verdict -> exit 1; old-page relocation ships
   enabled, so a known or unevaluated movable-address holder cannot be exempted
+* a `non_moving_snapshot` whose source pins or closed reference set changed -> exit 1
 * a frontier/rule-T holder not in the pinned `frontier` list -> exit 1 (ratchet up)
 * a `frontier` entry matching no holder -> exit 1 (ratchet down / stale)
 * fewer than MIN_HOLDERS declarations matched -> exit 2, because a regex that
@@ -152,7 +154,7 @@ Named, because an unstated limit is how a gate gets trusted past its subject.
   `scan_exotic_expando_roots_mut`. A new field added there is invisible here.
   `STATE_FIELD_FLOOR` below asserts the struct has not grown past the field
   count this was checked at, so growth is at least *loud*.
-* **An integer-typed holder whose own file never calls an allocator, in a CORE
+* **A non-TLS integer-typed holder whose own file never calls an allocator, in a CORE
   crate.** Rule B needs a function that both names the holder and allocates; a
   cell written purely from a value handed in across a module boundary has
   neither, and is invisible. The ffi-side shape rules (V/S/E/F) close exactly
@@ -186,6 +188,8 @@ import re
 import sys
 import tempfile
 from pathlib import Path, PurePath, PureWindowsPath
+
+from gc_snapshot_contracts import snapshot_contract_problems, snapshot_contract_self_test
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 INVENTORY_PATH = REPO_ROOT / "scripts" / "gc_runtime_root_holders.json"
@@ -358,11 +362,13 @@ DECL = re.compile(
     r"(?P<name>[A-Z][A-Z0-9_]*)\s*:\s*(?P<type>.*)$"
 )
 
-# Perry's hot-TLS macro accepts the same declaration syntax as
-# `thread_local!`, but a declaration may name an opaque crate-local type that
-# core rules A/B cannot see through. `declarations_in_perry_tls` makes the
-# macro boundary explicit instead of relying on DECL's context-free match.
-PERRY_TLS_BLOCK = re.compile(r"(?m)^[ \t]*(?:crate::)?perry_thread_local!\s*\{")
+# Raw and Perry TLS accept opaque crate-local types that core rules A/B
+# cannot see through. Skipping the hot-TLS convention must not skip custody.
+# `declarations_in_tls` makes the macro boundary explicit rather than relying
+# on DECL's context-free match.
+TLS_BLOCK = re.compile(
+    r"(?m)^[ \t]*(?:(?:crate::)?perry_thread_local|(?:std::)?thread_local)!\s*\{"
+)
 
 MAX_SCANNER_DEPTH = 3
 
@@ -533,17 +539,16 @@ def declarations(rel: str, text: str) -> list[tuple[str, int, str]]:
     return out
 
 
-def declarations_in_perry_tls(text: str) -> set[tuple[str, int]]:
-    """Return (name, line) for declarations inside Perry TLS macro blocks.
+def declarations_in_tls(text: str) -> set[tuple[str, int]]:
+    """Return (name, line) for declarations inside raw or Perry TLS blocks.
 
     Brace matching runs on comment/string-stripped source, so braces in docs
-    and initializers cannot terminate a block early. Both the exported and
-    `crate::` spellings are accepted; the declaration syntax inside is the
-    same as `thread_local!`.
+    and initializers cannot terminate a block early. Both qualified and
+    unqualified spellings of the raw and Perry macros are accepted.
     """
     code = strip_comments(text)
     found: set[tuple[str, int]] = set()
-    for match in PERRY_TLS_BLOCK.finditer(code):
+    for match in TLS_BLOCK.finditer(code):
         open_at = code.find("{", match.start(), match.end())
         if open_at < 0:
             continue
@@ -984,9 +989,7 @@ def scan(root: Path) -> tuple[list[dict], int, set[str]]:
     for path, text in texts.items():
         rel = repo_relative(path, root)
         tier = tier_of[path]
-        perry_tls_declarations = (
-            declarations_in_perry_tls(text) if tier == "core" else set()
-        )
+        tls_declarations = declarations_in_tls(text) if tier == "core" else set()
         bodies_here = function_bodies(text)
         covered_text = (
             reachable_text_by_file if tier == "frontier" else legacy_reachable_text_by_file
@@ -1008,7 +1011,7 @@ def scan(root: Path) -> tuple[list[dict], int, set[str]]:
         for name, lineno, type_text in declarations(rel, text):
             if tier == "core":
                 rule = holder_is_candidate(name, type_text, allocating_context)
-                if rule is None and (name, lineno) in perry_tls_declarations:
+                if rule is None and (name, lineno) in tls_declarations:
                     rule = "T"
             else:
                 rule = ffi_holder_is_candidate(name, type_text, type_index, closure_context)
@@ -1037,6 +1040,7 @@ VERDICTS = {
     "covered_elsewhere",  # a registered scanner in ANOTHER file visits it
     "not_a_gc_pointer",  # id, counter, epoch, code address, .rodata, Rust-owned
     "test_only",  # #[cfg(test)] storage
+    "non_moving_snapshot",  # deliberately untraced within a pinned collector window
     "open_gap",  # a real unrooted GC pointer, with an issue
     "unverified",  # enumerated, verdict not established — a dated TODO
 }
@@ -1106,7 +1110,7 @@ def apply_frontier(
     return unpinned, stale
 
 
-def inventory_problems(inventory: list[dict]) -> list[str]:
+def inventory_problems(inventory: list[dict], root: Path | None = None) -> list[str]:
     """Structural checks on the inventory itself.
 
     Without these, `apply_inventory` accepts any object carrying a matching
@@ -1138,6 +1142,8 @@ def inventory_problems(inventory: list[dict]) -> list[str]:
                 f"{label}: covered_elsewhere must name the `scanner` that covers it, or "
                 f"the claim cannot be checked or maintained"
             )
+        if verdict == "non_moving_snapshot":
+            problems.extend(snapshot_contract_problems(entry, root))
         if verdict == "open_gap" and not (entry.get("issue") or "").strip():
             problems.append(f"{label}: open_gap must cite an `issue`")
         if verdict in {"open_gap", "unverified"}:
@@ -1221,7 +1227,7 @@ def report(root: Path, quiet: bool = False) -> int:
 
     inventory = load_inventory(INVENTORY_PATH)
     unclassified, stale = apply_inventory(holders, inventory)
-    malformed = inventory_problems(inventory)
+    malformed = inventory_problems(inventory, root)
     frontier = load_frontier(INVENTORY_PATH)
     frontier_new, frontier_stale = apply_frontier(
         holders, frontier, registered_scanners, inventory
@@ -1233,7 +1239,7 @@ def report(root: Path, quiet: bool = False) -> int:
         print(
             "\ngc_runtime_root_holders: NEW identity-ratcheted holders not pinned in\n"
             "the inventory's `frontier` list. This covers perry-ui* callback tables\n"
-            "and otherwise-unclassified core `perry_thread_local!` declarations.\n"
+            "and otherwise-unclassified core raw/Perry thread-local declarations.\n"
             "Register a scanner that reaches the holder, record a researched verdict\n"
             "where the gated rules apply, or pin existing debt deliberately — with the\n"
             "understanding that a pinned entry is not a GC-safety verdict.\n",
@@ -1311,7 +1317,7 @@ def report(root: Path, quiet: bool = False) -> int:
         # docstring under "What this gate CANNOT see").
         print(
             "  UNVERIFIED by this gate: RuntimeState struct fields "
-            "(growth-floor only); core-crate integer tables in files that "
+            "(growth-floor only); non-TLS core-crate integer tables in files that "
             f"never call an allocator (rule B's limit); and the "
             f"{len(frontier)} pinned frontier holders, which are ENUMERATED "
             "and RATCHETED but scanned by nothing — a value parked there may "
@@ -1598,6 +1604,29 @@ def self_test() -> int:
         False,
         "unqualified perry_thread_local! declaration with an opaque type",
     )
+    # Raw TLS must have the same custody policy as Perry TLS, even when no
+    # allocator or recognized heap type appears in the declaring file (#9740).
+    for macro in ("thread_local", "std::thread_local"):
+        raw = _scan_tree({"crates/perry-runtime/src/raw_tls.rs": f"""
+{macro}! {{
+    static RAW_OPAQUE: RefCell<OpaqueState> = RefCell::new(OpaqueState::new());
+    static RAW_ADDRESSES: RefCell<Option<Vec<usize>>> = RefCell::new(None);
+}}
+"""})
+        raw_holders = [h for h in raw if h["file"].endswith("/raw_tls.rs")]
+        if {h["name"] for h in raw_holders} != {"RAW_OPAQUE", "RAW_ADDRESSES"}:
+            failures.append(f"{macro}! escaped opaque/address holder enumeration")
+        unpinned, _stale = apply_frontier(raw_holders, [])
+        if len(unpinned) != 2:
+            failures.append(f"{macro}! new unclassified holders did not fail the ratchet")
+        pins = [{"file": h["file"], "name": h["name"]} for h in raw_holders]
+        if apply_frontier(raw_holders, pins) != ([], []):
+            failures.append(f"{macro}! existing debt did not match its identity pins")
+        if apply_frontier([], pins)[1] != pins:
+            failures.append(f"{macro}! removed holders left live frontier pins")
+        covered_raw = [{**h, "covered": True} for h in raw_holders]
+        if apply_frontier(covered_raw, pins) != ([], pins):
+            failures.append(f"{macro}! scanner coverage did not retire debt pins")
     if by_key.get(
         ("crates/perry-runtime/src/thing.rs", "COVERED_OPAQUE_TLS"), {}
     ).get("rule") != "T":
@@ -1893,7 +1922,8 @@ def self_test() -> int:
                 ", ".join(f"{e['file']}:{e['name']}" for e in frontier_stale[:5]),
             )
         )
-    failures.extend(inventory_problems(inventory))
+    failures.extend(inventory_problems(inventory, REPO_ROOT))
+    failures.extend(snapshot_contract_self_test())
     # …and the structural checker must itself be able to fail.
     long_why = "x" * 30
     for bad, expect in (
