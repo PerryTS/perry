@@ -53,6 +53,10 @@ const BUILD_CACHE_ENV_VARS: &[&str] = &[
     // `disable-tail-calls` before the optimizer. It changes the generated
     // code of the functions it trips on, so it is a cache input.
     "PERRY_LL_TRE_MAX_ALLOCA_WALK",
+    // A unit over this post-optimization per-function ceiling uses LLVM's O0
+    // machine pipeline for bounded ISel/regalloc. That changes object bytes,
+    // so both the build and object caches must distinguish its settings.
+    "PERRY_LL_FAST_EMIT_MAX_INSTRS",
     // #9071: gates resolving a loop-called immutable callee binding once at
     // body entry instead of per call — the two settings emit different call
     // sequences, so a cached object from one must not serve the other.

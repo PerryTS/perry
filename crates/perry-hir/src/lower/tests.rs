@@ -1707,6 +1707,30 @@ fn test_create_require_local_keeps_the_native_namespace_fast_path() {
     );
 }
 
+/// Bun exposes a synchronous module loader as `import.meta.require`.  It must
+/// share Perry's synchronous dynamic-require path; the generic import.meta
+/// member lowering intentionally maps unknown properties to `undefined`.
+#[test]
+fn import_meta_require_lowers_to_synchronous_module_dispatch() {
+    let source = r#"
+        const direct = import.meta.require("/$bunfs/root/chunk-a.js");
+        const computed = import.meta["require"]("./chunk-b.js");
+        console.log(direct, computed);
+    "#;
+    let module = perry_parser::parse_typescript(source, "t.ts").expect("source parses");
+    let hir = super::lower_module(&module, "t", "t.ts").expect("source lowers");
+    let dump = format!("{hir:#?}");
+    assert_eq!(
+        dump.matches("synchronous: true").count(),
+        2,
+        "both import.meta.require spellings must use synchronous module dispatch: {dump}"
+    );
+    assert!(
+        dump.contains("/$bunfs/root/chunk-a.js") && dump.contains("./chunk-b.js"),
+        "the original specifiers must reach the module collector: {dump}"
+    );
+}
+
 /// The #8465 counterpart, complementary to
 /// `test_user_require_function_with_body_still_shadows_the_intrinsic` above:
 /// that one pins that a real `function require` body suppresses the fold; this

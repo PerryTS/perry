@@ -702,8 +702,8 @@ impl LlModule {
     ///     `external` *declarations* are replicated as-is;
     ///   * the module's external `declare`s plus a synthesized `declare` for
     ///     every locally-defined function the unit does NOT itself define, so
-    ///     cross-unit calls resolve at link time (deduped by name, existing
-    ///     declarations win);
+    ///     cross-unit calls resolve at link time (deduped by name, local
+    ///     definitions supply the authoritative signature);
     ///   * each function rendered with external linkage forced (the lone
     ///     `internal` init/wrapper is promoted so cross-unit calls bind);
     ///   * the shared attribute groups + metadata (so `#N`/`!N` refs resolve).
@@ -759,18 +759,19 @@ impl LlModule {
         let shared_strings: Vec<String> = self.string_constants.clone();
         let shared_globals: Vec<String> = self.globals.clone();
 
-        // name -> declare line. Existing module declarations (runtime, FFI,
-        // cross-module) take precedence; every locally-defined function without
-        // one gets a synthesized declare. Deduped by name so no unit emits a
-        // duplicate declaration. BTreeMap for deterministic unit output.
+        // name -> declare line. Start with module declarations (runtime, FFI,
+        // cross-module), then replace any entry that is also defined locally
+        // with a declaration synthesized from that definition. Import metadata
+        // can contain an earlier, less precise signature; the definition is what
+        // the whole-module renderer and LLVM see, so split units must agree with
+        // it too. Deduped by name so no unit emits a duplicate declaration.
+        // BTreeMap keeps unit output deterministic.
         let mut decl_by_name: BTreeMap<&str, String> = BTreeMap::new();
         for (name, decl) in &self.declarations {
             decl_by_name.insert(name.as_str(), decl.clone());
         }
         for f in &funcs {
-            decl_by_name
-                .entry(f.name.as_str())
-                .or_insert_with(|| declare_line_for(f));
+            decl_by_name.insert(f.name.as_str(), declare_line_for(f));
         }
 
         // #7174 (real-app scaling): scan each bucket's functions first, then
@@ -1767,6 +1768,74 @@ mod tests {
         let ir = m.to_ir();
         assert!(!ir.contains("declare i32 @main"));
         assert!(ir.contains("define i32 @main"));
+    }
+
+    #[test]
+    fn split_unit_declaration_uses_local_definition_signature() {
+        let mut m = LlModule::new("arm64-apple-macosx15.0.0");
+
+        // Import metadata may register a constructor before its source module
+        // is lowered, with a stale arity. Once this module defines the symbol,
+        // its definition is authoritative for callers placed in another unit.
+        m.declare_function("constructor", DOUBLE, &[DOUBLE]);
+        let constructor = m.define_function(
+            "constructor",
+            DOUBLE,
+            vec![
+                (DOUBLE, "this_arg".into()),
+                (DOUBLE, "arg0".into()),
+                (DOUBLE, "arg1".into()),
+            ],
+        );
+        constructor.create_block("entry").ret(DOUBLE, "this_arg");
+
+        let caller = m.define_function("caller", DOUBLE, vec![]);
+        let entry = caller.create_block("entry");
+        let result = entry.call(
+            DOUBLE,
+            "constructor",
+            &[(DOUBLE, "0.0"), (DOUBLE, "1.0"), (DOUBLE, "2.0")],
+        );
+        entry.ret(DOUBLE, &result);
+
+        let units = m.render_codegen_units(2);
+        let caller_unit = units
+            .iter()
+            .find(|unit| unit.contains("define double @caller("))
+            .expect("caller unit");
+        assert!(caller_unit.contains("declare double @constructor(double, double, double)"));
+        assert!(!caller_unit.contains("declare double @constructor(double)"));
+    }
+
+    #[test]
+    fn split_unit_declares_local_function_used_as_pointer_argument() {
+        let mut m = LlModule::new("arm64-apple-macosx15.0.0");
+        m.declare_function("js_closure_alloc_singleton", I64, &[PTR]);
+
+        let wrapper_name = "__perry_wrap_perry_fn_m___a";
+        let wrapper = m.define_function(
+            wrapper_name,
+            DOUBLE,
+            vec![(I64, "%this_closure".into()), (DOUBLE, "%a0".into())],
+        );
+        wrapper.create_block("entry").ret(DOUBLE, "%a0");
+
+        let init = m.define_function("m__init_body", VOID, vec![]);
+        let entry = init.create_block("entry");
+        entry.call(
+            I64,
+            "js_closure_alloc_singleton",
+            &[(PTR, &format!("@{wrapper_name}"))],
+        );
+        entry.ret_void();
+
+        let units = m.render_codegen_units(2);
+        let init_unit = units
+            .iter()
+            .find(|unit| unit.contains("define void @m__init_body("))
+            .expect("init unit");
+        assert!(!init_unit.contains(&format!("define double @{wrapper_name}(")));
+        assert!(init_unit.contains(&format!("declare double @{wrapper_name}(i64, double)")));
     }
 
     #[test]

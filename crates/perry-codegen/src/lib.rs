@@ -73,10 +73,10 @@ pub mod types;
 
 pub use codegen::{
     compile_module, namespace_member_class_key, namespace_member_func_key,
-    namespace_member_var_key, resolve_target_triple, short_spread_method_capabilities, AppMetadata,
-    CompileOptions, ExportedObjectLiteralCapability, FpContractMode, ImportedClass,
-    ImportedObjectLiteral, ImportedObjectLiteralMethod, NamespaceEntry, NamespaceEntryKind,
-    ObjectLiteralMethodCandidate, ShortSpreadMethodCandidate,
+    namespace_member_var_key, resolve_target_triple, short_spread_method_capabilities,
+    user_function_symbol, AppMetadata, CompileOptions, ExportedObjectLiteralCapability,
+    FpContractMode, ImportedClass, ImportedObjectLiteral, ImportedObjectLiteralMethod,
+    NamespaceEntry, NamespaceEntryKind, ObjectLiteralMethodCandidate, ShortSpreadMethodCandidate,
 };
 pub use collectors::CjsPreambleCensus;
 

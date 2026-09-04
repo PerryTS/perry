@@ -511,6 +511,18 @@ fn lower_new_impl_inner<'a>(
     let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
     for a in args {
         let value = lower_constructor_arg(ctx, a)?;
+        // An argument can complete abruptly while still returning a sentinel
+        // value to the lowering API.  The unresolved dynamic-Worker fallback
+        // is one such expression: it emits the runtime throw followed by
+        // `unreachable`.  Do not root that sentinel or continue into instance
+        // allocation / constructor diamonds.  `LlBlock` drops instructions
+        // appended after a terminator, while those diamonds create fresh
+        // blocks that would refer to the dropped registers (Claude Code's
+        // `{ worker: new Worker(dynamicPath), stamp: ... }` object literal was
+        // the reproducer).
+        if ctx.block().is_terminated() {
+            return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+        }
         // `collects` is unconditionally true: the instance allocation below
         // always collects, so every argument is live across it. That is the
         // same answer the pre-migration code gave by consulting
