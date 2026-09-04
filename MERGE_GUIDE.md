@@ -56,6 +56,27 @@ wrong code silently — the only tell is the diffstat drifting from what
 `gh pr list` reports. Re-fetch immediately before building the train, and
 compare `git rev-list --count origin/main..t<n>` against the PR's commit count.
 
+**Re-fetch again at assembly time, not just at audit time.** Auditing a PR and
+building the train are minutes-to-hours apart, and reviewed follow-ups land in
+that window. Trains 119 and 120 shipped the pre-review version of #9731 —
+losing a `thread_local!` → `perry_thread_local!` conversion and adding a
+`tls-budget` failure to `main` — plus two changelog fragments and a follow-up
+gap test from other PRs. The author had to open #9736 to fix it.
+
+**After landing, audit what actually arrived — by PATCH-ID.**
+
+```bash
+git fetch -q origin refs/pull/<n>/head:chk<n> --force
+git cherry -v origin/main chk<n>      # lines starting '+' are NOT in main
+```
+
+`git rev-list origin/main..chk<n>` is the wrong tool: rebase-merge rewrites
+every SHA, so it reports *every* landed PR as unlanded. `git cherry` compares
+patch-ids and survives that. It still yields false positives when a train
+reshaped commit boundaries — confirm each hit with
+`git diff origin/main chk<n> -- <file>` before believing content is missing.
+(#9732 flagged both commits that way and was fully landed.)
+
 ## 3. Auditing a PR
 
 Read the diff, not the PR body. The body says what the author meant; the diff
