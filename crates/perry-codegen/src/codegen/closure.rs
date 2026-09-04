@@ -1408,11 +1408,7 @@ pub(super) fn compile_closure(
         llmod.declare_function(&name, ret, &params);
     }
     for ic_name in &ic_globals {
-        llmod.add_raw_global(format!(
-            "@{} = private global [{} x i64] zeroinitializer",
-            ic_name,
-            crate::expr::property_get::generic_dispatch::PIC_CACHE_WORDS
-        ));
+        llmod.add_raw_global(crate::expr::inline_cache_global_definition(ic_name));
     }
     for raw in &typed_parse_rodata {
         llmod.add_raw_global(raw.clone());

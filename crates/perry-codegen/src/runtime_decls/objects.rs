@@ -527,10 +527,11 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         DOUBLE,
         &[PTR, DOUBLE, DOUBLE, DOUBLE, I32],
     );
+    // #9708: takes the site's cache SLOT plus the way index to prime.
     module.declare_function(
         "js_put_value_set_ic_miss",
         DOUBLE,
-        &[DOUBLE, I64, DOUBLE, I32, PTR],
+        &[DOUBLE, I64, DOUBLE, I32, PTR, I32],
     );
     // #9287: validate-and-store for a constant-key IC hit whose slot word
     // carries the overflow bit (property lives in the spill buffer).

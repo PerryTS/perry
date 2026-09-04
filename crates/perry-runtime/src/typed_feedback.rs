@@ -1153,6 +1153,7 @@ pub use guards::{
     js_typed_feedback_class_field_get_guard, js_typed_feedback_class_field_set_guard,
     js_typed_feedback_closure_direct_call_guard, js_typed_feedback_method_direct_call_guard,
     js_typed_feedback_native_call_method, js_typed_feedback_native_call_method_apply,
+    MethodPicCache, MethodPicCacheSlot, METHOD_PIC_WORDS,
 };
 
 #[path = "typed_feedback/trace.rs"]

@@ -119,7 +119,6 @@ pub(super) fn try_emit_cached_field_index_return(
     }
 
     let cache_name = allocate_shared_cache(ctx, &candidate);
-    let cache_ref = format!("@{cache_name}");
     let base_box = lower_expr(ctx, &Expr::LocalGet(candidate.base_local_id))?;
     let index_i32 = ctx.block().load(I32, &index_slot);
 
@@ -169,7 +168,15 @@ pub(super) fn try_emit_cached_field_index_return(
     let gc_flags = ctx.block().load(I8, &gc_flags_ptr);
     let forwarded_bits = ctx.block().and(I8, &gc_flags, "128");
     let not_forwarded = ctx.block().icmp_eq(I8, &forwarded_bits, "0");
+    // #9708: the shared cache sits behind a pointer slot that the generic
+    // property-get miss handler fills on the first prime. Every cache read
+    // below (`exact_token`, `prefix_meta`, `field_load`) is dominated by this
+    // edge, so the non-null test joins the header predicate; a site whose
+    // cache is still unallocated simply takes the normal lowering.
+    let ic_slot = crate::expr::emit_inline_cache_slot(ctx, &cache_name);
+    let cache_ref = ic_slot.cache.clone();
     let object_ok = ctx.block().and(I1, &is_object, &not_forwarded);
+    let object_ok = ctx.block().and(I1, &object_ok, &ic_slot.present);
     ctx.block()
         .cond_br(&object_ok, &exact_or_prefix_label, &normal_label);
 

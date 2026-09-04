@@ -328,13 +328,56 @@ pub extern "C" fn js_put_value_set(
     }
     value_handle.get_nanbox_f64()
 }
+
+/// Words in a per-site static-key write cache (`[shape_token, slot]` × the
+/// four inline ways) and in its outlined poly tail. Both are views of the
+/// same `PicCacheSlot` family the read PIC uses; the arena hands out exactly
+/// this many words for them (#9708).
+pub const WRITE_PIC_WORDS: usize = 8;
+
+/// A per-site write cache, as the emitted slot resolves it.
+pub type WritePicCache = [i64; WRITE_PIC_WORDS];
+/// The emitted `@perry_ic_N = private global ptr null` for a write site:
+/// null until the site's first priming miss (#9708).
+pub type WritePicCacheSlot = *mut WritePicCache;
+
+/// Address of way `way` (a `[token, slot]` pair) inside the cache `slot`
+/// resolves to, allocating the cache on first use. A null `slot` yields null:
+/// the poly tail passes that to mean "prime nothing".
+///
+/// # Safety
+/// `slot` must be null or a live write-cache slot; `way` must index a pair
+/// inside `WRITE_PIC_WORDS`.
+#[inline]
+pub unsafe fn write_pic_way_entry(slot: *mut WritePicCacheSlot, way: i32) -> *mut [i64; 2] {
+    if slot.is_null() {
+        return std::ptr::null_mut();
+    }
+    debug_assert!(
+        (0..(WRITE_PIC_WORDS / 2) as i32).contains(&way),
+        "way {way} is outside the {WRITE_PIC_WORDS}-word write cache"
+    );
+    let cache = crate::object::pic_slot_resolve(slot);
+    (cache as *mut i64).add(way as usize * 2) as *mut [i64; 2]
+}
+
+/// Miss path for one way of the codegen-emitted polymorphic PutValue cache.
+///
+/// The full strict/sloppy `[[Set]]` semantics run first. Only a successful
+/// ordinary own-data overwrite may prime `[shape_token, slot]`; every
+/// exotic, descriptor-bearing, frozen, or typed-layout-intact receiver
+/// remains on the miss path. `cache_slot` is the site's
+/// [`WritePicCacheSlot`] address and `way` the pair to prime; the cache is
+/// allocated only when a prime actually happens (#9708), so a site that never
+/// sees a primeable receiver never allocates.
 #[no_mangle]
 pub extern "C" fn js_put_value_set_ic_miss(
     target: f64,
     key: *const crate::StringHeader,
     value: f64,
     strict: i32,
-    cache: *mut [i64; 2],
+    cache_slot: *mut WritePicCacheSlot,
+    way: i32,
 ) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let target_handle = scope.root_nanbox_f64(target);
@@ -357,7 +400,7 @@ pub extern "C" fn js_put_value_set_ic_miss(
         )
     });
 
-    if cache.is_null() {
+    if cache_slot.is_null() {
         return result;
     }
 
@@ -464,8 +507,9 @@ pub extern "C" fn js_put_value_set_ic_miss(
         // Publish the token last conceptually: a zero-initialized or stale
         // token cannot hit this slot until it matches this receiver's current
         // discriminated shape token. Perry's read PIC uses the same format.
-        (*cache)[1] = slot_word as i64;
-        (*cache)[0] = shape_token as i64;
+        let entry = write_pic_way_entry(cache_slot, way);
+        (*entry)[1] = slot_word as i64;
+        (*entry)[0] = shape_token as i64;
         // Rotating-key sites overflow the single-slot site cache immediately;
         // the global stub is what lets them hit. Key bits from the rooted key.
         // `key_handle` here roots a raw STRING pointer (this entry's key arrives
@@ -497,23 +541,33 @@ const STATIC_PIC_TAIL_WAYS: usize = 4;
 /// semantics. Empty ways are filled in order and a full cache is never
 /// overwritten, so a stable eight-shape site settles instead of continuously
 /// replacing its fourth entry.
+///
+/// `tail_slot` is the tail's own [`WritePicCacheSlot`]: a site reaches this
+/// helper only once its four inline ways are full, so the tail cache is not
+/// allocated before a fifth shape actually shows up (#9708). An unallocated
+/// tail reads as four empty ways.
 #[no_mangle]
 pub extern "C" fn js_put_value_set_ic_poly_tail(
-    cache: *mut [i64; 8],
+    tail_slot: *mut WritePicCacheSlot,
     target: f64,
     key: *const crate::StringHeader,
     value: f64,
     strict: i32,
 ) -> f64 {
-    if !cache.is_null() {
+    if !tail_slot.is_null() {
         unsafe {
+            let cache = crate::object::pic_slot_peek(tail_slot);
+            if cache.is_null() {
+                return js_put_value_set_ic_miss(target, key, value, strict, tail_slot, 0);
+            }
             let c = &mut *cache;
             for way in 0..STATIC_PIC_TAIL_WAYS {
                 let word = way * 2;
                 let token = c[word] as u64;
                 if token == 0 {
-                    let entry = c.as_mut_ptr().add(word) as *mut [i64; 2];
-                    return js_put_value_set_ic_miss(target, key, value, strict, entry);
+                    return js_put_value_set_ic_miss(
+                        target, key, value, strict, tail_slot, way as i32,
+                    );
                 }
                 if let Some(result) = dyn_ic_try_store(target, token, c[word + 1] as u32, value) {
                     return result;
@@ -524,7 +578,7 @@ pub extern "C" fn js_put_value_set_ic_poly_tail(
 
     // More than eight stable shapes remain bounded and semantically correct:
     // execute the ordinary write without evicting a useful settled entry.
-    js_put_value_set_ic_miss(target, key, value, strict, std::ptr::null_mut())
+    js_put_value_set_ic_miss(target, key, value, strict, std::ptr::null_mut(), 0)
 }
 
 // ---------------------------------------------------------------------------
@@ -547,14 +601,21 @@ const DYN_IC_WAYS: usize = 3;
 /// Outlined dynamic-key PutValue with per-site cache. Fast path: shape token
 /// + key-bits match -> validated own-slot overwrite. Everything else falls
 /// through to the full `[[Set]]` semantics and re-primes.
+///
+/// `cache_slot` is the site's [`WritePicCacheSlot`] address; the cache is read
+/// through it here and allocated by the miss handler on the first prime
+/// (#9708).
 #[no_mangle]
 pub extern "C" fn js_put_value_set_dyn_ic(
-    cache: *mut [i64; 8],
+    cache_slot: *mut WritePicCacheSlot,
     target: f64,
     key: f64,
     value: f64,
     strict: i32,
 ) -> f64 {
+    // SAFETY: a non-null slot is the emitted pointer global (or a test's
+    // stack slot); reading it is the same load the inline hit path performs.
+    let cache = unsafe { crate::object::pic_slot_peek(cache_slot) };
     if !cache.is_null() {
         let hit = unsafe {
             let c = &*cache;
@@ -585,7 +646,7 @@ pub extern "C" fn js_put_value_set_dyn_ic(
             return ret;
         }
     }
-    js_put_value_set_dyn_ic_miss(cache, target, key, value, strict)
+    js_put_value_set_dyn_ic_miss(cache_slot, target, key, value, strict)
 }
 
 /// Megamorphic stub cache for dynamic string-keyed WRITES — V8's answer to a
@@ -832,8 +893,13 @@ unsafe fn dyn_ic_try_store(target: f64, token: u64, slot: u32, value: f64) -> Op
 // link would otherwise dead-strip the IC entry.
 #[cfg(feature = "keepalive-anchors")]
 #[used]
-static KEEP_JS_PUT_VALUE_SET_DYN_IC: extern "C" fn(*mut [i64; 8], f64, f64, f64, i32) -> f64 =
-    js_put_value_set_dyn_ic;
+static KEEP_JS_PUT_VALUE_SET_DYN_IC: extern "C" fn(
+    *mut WritePicCacheSlot,
+    f64,
+    f64,
+    f64,
+    i32,
+) -> f64 = js_put_value_set_dyn_ic;
 
 /// #9287 transition-IC: the emitted hit's SPILL-APPEND arm.
 ///
@@ -923,12 +989,16 @@ extern "C" fn transition_ic_report_shim() {
 /// its VALUE (SSO or heap) instead of requiring an interned pointer.
 #[no_mangle]
 pub extern "C" fn js_put_value_set_dyn_ic_miss(
-    cache: *mut [i64; 8],
+    cache_slot: *mut WritePicCacheSlot,
     target: f64,
     key: f64,
     value: f64,
     strict: i32,
 ) -> f64 {
+    // The slot is read once here; a null cache means the site has never
+    // primed, which the stub probe below treats as "no site token" exactly as
+    // it treated an all-zero global (#9708).
+    let cache = unsafe { crate::object::pic_slot_peek(cache_slot) };
     // The compiled inline IC (`lower_put_value_dyn_ic_inline`) walks its three
     // ways in GENERATED code and calls straight here on a way miss — it never
     // enters `js_put_value_set_dyn_ic` above. A rotating-key site therefore
@@ -1026,7 +1096,7 @@ pub extern "C" fn js_put_value_set_dyn_ic_miss(
         target_handle.get_nanbox_f64(),
         strict,
     );
-    if cache.is_null() {
+    if cache_slot.is_null() {
         return result;
     }
     unsafe {
@@ -1121,7 +1191,7 @@ pub extern "C" fn js_put_value_set_dyn_ic_miss(
         if idx >= alloc_limit {
             return result;
         }
-        let c = &mut *cache;
+        let c = &mut *crate::object::pic_slot_resolve(cache_slot);
         if c[0] as u64 != shape_token {
             // New shape at this site: restart the way set.
             *c = [0; 8];
@@ -1173,13 +1243,14 @@ mod tests {
             scope.root_raw_mut_ptr(crate::object::js_object_alloc(ANON_CLASS_ID, 0));
         let user_class_handle =
             scope.root_raw_mut_ptr(crate::object::js_object_alloc(USER_CLASS_ID, 0));
-        let mut cache = [0i64; 8];
+        let mut cache: WritePicCache = [0; WRITE_PIC_WORDS];
+        let mut cache_slot: WritePicCacheSlot = &mut cache;
 
         let first = first_handle.get_raw_mut_ptr::<crate::ObjectHeader>();
         let learned_predecessor = unsafe { crate::object::shapes::object_shape_stamp(first) };
         assert_eq!(
             js_put_value_set_dyn_ic_miss(
-                &mut cache,
+                &mut cache_slot,
                 crate::value::js_nanbox_pointer(first as i64),
                 key_handle.get_nanbox_f64(),
                 11.0,
@@ -1209,7 +1280,7 @@ mod tests {
         );
         assert_eq!(
             js_put_value_set_dyn_ic_miss(
-                &mut cache,
+                &mut cache_slot,
                 crate::value::js_nanbox_pointer(second as i64),
                 key_handle.get_nanbox_f64(),
                 29.0,
@@ -1238,7 +1309,7 @@ mod tests {
         let user_class = user_class_handle.get_raw_mut_ptr::<crate::ObjectHeader>();
         assert_eq!(
             js_put_value_set_dyn_ic_miss(
-                &mut cache,
+                &mut cache_slot,
                 crate::value::js_nanbox_pointer(user_class as i64),
                 key_handle.get_nanbox_f64(),
                 47.0,

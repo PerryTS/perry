@@ -13,15 +13,19 @@ use perry_hir::Expr;
 use crate::nanbox::POINTER_MASK_I64;
 use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
 
-/// Words in a per-site `@perry_ic_N` property-read cache global.
+/// Words in a per-site property-read cache.
 ///
-/// **Must equal `perry_runtime::object::field_get_set::PIC_CACHE_WORDS`** —
-/// the runtime writes this memory through a `*mut [i64; PIC_CACHE_WORDS]`, so a
-/// smaller global here is an out-of-bounds store. perry-codegen does not depend
-/// on perry-runtime (the same reason `INLINE_SLOT_FLOOR` is duplicated in
+/// **Must equal `perry_runtime::object::field_get_set::PIC_CACHE_WORDS`.**
+/// Since #9708 codegen emits only the 8-byte slot (`@perry_ic_N = private
+/// global ptr null`) and the runtime allocates the words itself, sized from
+/// its own `PicCache` — so the constant is no longer an emission width, but
+/// the emitted way GEPs (`PIC_WAY_BASE + PIC_WAYS * 2` words) must still
+/// land inside that allocation. perry-codegen does not depend on
+/// perry-runtime (the same reason `INLINE_SLOT_FLOOR` is duplicated in
 /// `target_layout`), so the pairing is held by `pic_cache_layout_matches_runtime`
 /// here and `pic_cache_words_match_codegen` in the runtime: change one and both
 /// fail.
+#[cfg(test)]
 pub(crate) const PIC_CACHE_WORDS: usize = 12;
 /// First word of the polymorphic way array (words 0..2 are the MRU entry and
 /// word 3 is the gate). Mirrors the runtime's `PIC_WAY_BASE`.
@@ -136,7 +140,9 @@ pub(crate) fn lower_generic_property_get(
         // unchanged.
         let cache_name = overridden_cache_name(ctx, object, property)
             .unwrap_or_else(|| allocate_property_cache(ctx));
-        let cache_ref = format!("@{}", cache_name);
+        // #9708: the helper takes the site's SLOT and resolves the cache
+        // itself; nothing is read inline here, so no load is emitted.
+        let cache_slot_ref = format!("@{}", cache_name);
         let key_handle = emit_key_handle(ctx, &key_handle_global);
         let val = ctx.block().call(
             DOUBLE,
@@ -145,7 +151,7 @@ pub(crate) fn lower_generic_property_get(
                 (I64, &obj_bits),
                 (I64, &key_handle),
                 (I64, &feedback_site_id),
-                (PTR, &cache_ref),
+                (PTR, &cache_slot_ref),
             ],
         );
         return Ok(val);
@@ -354,7 +360,6 @@ pub(crate) fn lower_generic_property_get(
     //
     // Threshold matches `js_native_call_method`'s small-handle
     // detection (raw_ptr < 0x100000).
-    let cache_ref = format!("@{}", cache_name);
     let is_real_ptr = ctx.block().icmp_ugt(I64, &obj_handle, "1048575"); // 0x100000
 
     // #7883: the hit/miss/merge blocks are minted here so the guard chain
@@ -462,7 +467,21 @@ pub(crate) fn lower_generic_property_get(
     let reserved = ctx.block().load(crate::types::I16, &reserved_ptr);
     let has_desc = ctx.block().and(crate::types::I16, &reserved, "2048"); // OBJ_FLAG_HAS_DESCRIPTORS (0x800)
     let no_desc = ctx.block().icmp_eq(crate::types::I16, &has_desc, "0");
+    // #9708: the site's cache lives behind a pointer slot that is null until
+    // the first priming miss. The slot load does not depend on the receiver,
+    // so it issues alongside the header loads, and its non-null test joins
+    // the flat header predicate as one more fused compare. Both edges that
+    // read a cache word (`pic.token` and the descriptor prefix path) require
+    // `cache_present`; the slot itself is what the miss handler takes, so a
+    // fresh site goes straight to it. `cache_ref` is the LOADED pointer from
+    // here on, never the global: every GEP below goes through it, and only
+    // the runtime calls take `cache_slot_ref`.
+    let ic_slot = crate::expr::emit_inline_cache_slot(ctx, &cache_name);
+    let cache_ref = ic_slot.cache.clone();
+    let cache_slot_ref = ic_slot.slot_ref.clone();
+    let cache_present = ic_slot.present.clone();
     let is_plain_object = ctx.block().and(I1, &is_object_kind, &no_desc);
+    let is_plain_object = ctx.block().and(I1, &is_plain_object, &cache_present);
 
     // #7883: first exit. The header predicates above are kept as one flat
     // `and` on purpose — they are loads from the same cache line and LLVM
@@ -485,8 +504,15 @@ pub(crate) fn lower_generic_property_get(
     // is unrelated to all class-declared named fields and arm word 2. Keep
     // this classification off the ordinary descriptor-free hit path.
     ctx.current_block = desc_classify_idx;
-    ctx.block()
-        .cond_br(&is_object_kind, &desc_prefix_guard_label, &cold_label);
+    // #9708: the descriptor prefix path reads cache word 2, so it needs the
+    // same non-null proof `pic.token` has; without a cache the receiver is
+    // simply a cold miss.
+    let desc_object_with_cache = ctx.block().and(I1, &is_object_kind, &cache_present);
+    ctx.block().cond_br(
+        &desc_object_with_cache,
+        &desc_prefix_guard_label,
+        &cold_label,
+    );
     ctx.current_block = tok_idx;
 
     // The receiver token is derived solely from its authoritative ShapeId.
@@ -578,7 +604,7 @@ pub(crate) fn lower_generic_property_get(
             (I64, &obj_handle),
             (I64, &ovf_key_handle),
             (I32, &ovf_slot_i32),
-            (PTR, &cache_ref),
+            (PTR, &cache_slot_ref),
         ],
     );
     let ovf_end_label = ctx.block().label.clone();
@@ -931,7 +957,7 @@ pub(crate) fn lower_generic_property_get(
         &[
             (I64, &obj_handle),
             (I64, &miss_key_handle),
-            (PTR, &cache_ref),
+            (PTR, &cache_slot_ref),
         ],
     );
     let miss_end_label = ctx.block().label.clone();

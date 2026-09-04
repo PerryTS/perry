@@ -1556,8 +1556,10 @@ pub(crate) struct FnCtx<'a> {
     pub ic_site_counter: u32,
 
     /// (Issue #51) Names of IC globals created during lowering. After
-    /// the function is emitted, the caller emits `@<name> = private
-    /// global [2 x i64] zeroinitializer` for each entry.
+    /// the function is emitted, the caller emits one
+    /// [`inline_cache_global_definition`] — `@<name> = private global ptr
+    /// null`, an 8-byte slot the runtime fills with an arena cache on the
+    /// site's first priming miss (#9708) — for each entry.
     pub ic_globals: Vec<String>,
 
     /// Region-scoped cache selected by a guarded statement fusion. Generic
@@ -2284,6 +2286,50 @@ pub(crate) fn class_field_loop_fact_lookup<'f>(
 /// `perry_ic_N` symbol at the final application link.
 pub(crate) fn inline_cache_global_name(ctx: &FnCtx<'_>, site_id: u32) -> String {
     inline_cache_global_name_for_prefix(ctx.strings.module_prefix(), site_id)
+}
+
+/// The definition emitted for every name in `FnCtx::ic_globals`.
+///
+/// #9708: an inline-cache site owns an 8-byte pointer **slot**, not its cache
+/// words. The slot is zero-initialised (so it lands in `__bss` and costs
+/// nothing until touched) and stays null until the runtime's miss handler
+/// primes the site, at which point it publishes a cache allocated from the
+/// runtime's IC arena (`perry_runtime::object::pic_slot_resolve`). A site
+/// the program never executes therefore costs 8 bytes of zero-fill instead
+/// of a 96-byte cache that dirtied a resident page on first touch. Every
+/// inline hit path loads the slot through [`emit_inline_cache_slot`] and
+/// proves it non-null before reading a cache word; every runtime miss entry
+/// takes the slot's address.
+pub(crate) fn inline_cache_global_definition(name: &str) -> String {
+    format!("@{name} = private global ptr null")
+}
+
+/// A site's inline-cache slot, loaded in the current block (#9708).
+///
+/// `slot_ref` is the `@perry_ic_N` global — what the runtime miss entries
+/// take. `cache` is the `ptr` loaded from it and `present` the `i1` proving
+/// it non-null: a site must branch (or fold `present` into a guard that
+/// dominates) before it emits any load through `cache`, because the slot is
+/// null until the site's first priming miss.
+pub(crate) struct InlineCacheSlot {
+    pub slot_ref: String,
+    pub cache: String,
+    pub present: String,
+}
+
+/// Load `@<cache_name>`'s cache pointer in the current block and test it.
+/// The load has no dependency on the receiver, so it is free to issue early;
+/// folding `present` into the receiver guard the site already evaluates costs
+/// a single fused compare on the hit path.
+pub(crate) fn emit_inline_cache_slot(ctx: &mut FnCtx<'_>, cache_name: &str) -> InlineCacheSlot {
+    let slot_ref = format!("@{cache_name}");
+    let cache = ctx.block().load(PTR, &slot_ref);
+    let present = ctx.block().icmp_ne(PTR, &cache, "null");
+    InlineCacheSlot {
+        slot_ref,
+        cache,
+        present,
+    }
 }
 
 /// Record a cold-arm bailout for a compiler-private versioned-loop callback.

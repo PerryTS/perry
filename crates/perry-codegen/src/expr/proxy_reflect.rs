@@ -510,13 +510,21 @@ fn lower_put_value_static_write_ic(
     ctx.pending_declares
         .push((format!("__ic_decl_{}", site_id), DOUBLE, vec![]));
     ctx.ic_globals.push(cache_name.clone());
-    let cache_ref = format!("@{}", cache_name);
     // Keep the first four ways inline. Shapes 5–8 use a separate cache in a
     // compact outlined helper, avoiding four more copies of the generated
     // receiver guards while preventing the fourth inline way from thrashing.
     let tail_cache_name = format!("{}_poly_tail", cache_name);
     ctx.ic_globals.push(tail_cache_name.clone());
-    let tail_cache_ref = format!("@{}", tail_cache_name);
+    // #9708: both caches sit behind pointer slots. The inline ways read the
+    // primary cache through the pointer loaded here, so its non-null test
+    // joins `heap_candidate` (every way guard is dominated by that edge); a
+    // site that has never primed goes to the way-0 miss, which allocates. The
+    // tail is only ever handed to the runtime, which resolves it itself —
+    // so a tail cache is not allocated until a fifth shape actually arrives.
+    let ic_slot = crate::expr::emit_inline_cache_slot(ctx, &cache_name);
+    let cache_ref = ic_slot.cache.clone();
+    let cache_slot_ref = ic_slot.slot_ref.clone();
+    let tail_cache_slot_ref = format!("@{}", tail_cache_name);
 
     // Branch before the first header load so primitives, forged non-pointer
     // bit patterns, and native handle ids can never be dereferenced by the
@@ -525,6 +533,7 @@ fn lower_put_value_static_write_ic(
     let pointer_tag = ctx.block().icmp_eq(I64, &target_tag, "32765"); // 0x7FFD
     let above_handles = ctx.block().icmp_ugt(I64, &target_handle, "1048575"); // 0x100000
     let heap_candidate = ctx.block().and(I1, &pointer_tag, &above_handles);
+    let heap_candidate = ctx.block().and(I1, &heap_candidate, &ic_slot.present);
     let guard_idx = ctx.new_block("put.pic.guard");
     let guard2_idx = ctx.new_block("put.pic.guard2");
     let guard3_idx = ctx.new_block("put.pic.guard3");
@@ -854,7 +863,8 @@ fn lower_put_value_static_write_ic(
             (I64, &key_handle),
             (DOUBLE, &stored_value),
             (I32, strict_i32),
-            (PTR, &cache_ref),
+            (PTR, &cache_slot_ref),
+            (I32, "0"),
         ],
     );
     let deleted_end_label = ctx.block().label.clone();
@@ -869,7 +879,8 @@ fn lower_put_value_static_write_ic(
             (I64, &key_handle),
             (DOUBLE, &stored_value),
             (I32, strict_i32),
-            (PTR, &cache_ref),
+            (PTR, &cache_slot_ref),
+            (I32, "0"),
         ],
     );
     let miss_end_label = ctx.block().label.clone();
@@ -884,7 +895,8 @@ fn lower_put_value_static_write_ic(
             (I64, &key_handle),
             (DOUBLE, &stored_value),
             (I32, strict_i32),
-            (PTR, &cached2_token_ptr),
+            (PTR, &cache_slot_ref),
+            (I32, "1"),
         ],
     );
     let miss2_end_label = ctx.block().label.clone();
@@ -899,7 +911,8 @@ fn lower_put_value_static_write_ic(
             (I64, &key_handle),
             (DOUBLE, &stored_value),
             (I32, strict_i32),
-            (PTR, &cached3_token_ptr),
+            (PTR, &cache_slot_ref),
+            (I32, "2"),
         ],
     );
     let miss3_end_label = ctx.block().label.clone();
@@ -914,7 +927,8 @@ fn lower_put_value_static_write_ic(
             (I64, &key_handle),
             (DOUBLE, &stored_value),
             (I32, strict_i32),
-            (PTR, &cached4_token_ptr),
+            (PTR, &cache_slot_ref),
+            (I32, "3"),
         ],
     );
     let miss4_end_label = ctx.block().label.clone();
@@ -925,7 +939,7 @@ fn lower_put_value_static_write_ic(
         DOUBLE,
         "js_put_value_set_ic_poly_tail",
         &[
-            (PTR, &tail_cache_ref),
+            (PTR, &tail_cache_slot_ref),
             (DOUBLE, &target_value),
             (I64, &key_handle),
             (DOUBLE, &stored_value),
@@ -974,7 +988,25 @@ fn lower_put_value_dyn_ic_inline(
     ctx.ic_site_counter += 1;
     let cache_name = super::inline_cache_global_name(ctx, site_id);
     ctx.ic_globals.push(cache_name.clone());
-    let cache_ref = format!("@{}", cache_name);
+    // #9708: the site cache sits behind a pointer slot that is null until the
+    // miss handler's first prime. The guard block below reads word 0 in a
+    // flat predicate, so it reads through `token_cache`: the real cache when
+    // present, else the SLOT ITSELF — an 8-byte null, i.e. a zero token, which
+    // is exactly what the all-zero global used to read as. A zero token fails
+    // `token_nonzero`, so the ways (which read words 1..6 through the real
+    // pointer) are unreachable for an absent cache, and the transition probe
+    // is reached on the same edge it always was. The outlined slow entry and
+    // the miss handler take the slot.
+    let ic_slot = crate::expr::emit_inline_cache_slot(ctx, &cache_name);
+    let cache_ref = ic_slot.cache.clone();
+    let cache_slot_ref = ic_slot.slot_ref.clone();
+    let token_cache = ctx.block().select(
+        I1,
+        &ic_slot.present,
+        crate::types::PTR,
+        &cache_ref,
+        &cache_slot_ref,
+    );
 
     // #9287: this thread's transition-cache base, loaded once per function
     // (the table is thread-local; a link-time constant would alias one
@@ -1094,7 +1126,7 @@ fn lower_put_value_dyn_ic_inline(
     let shape_token = ctx
         .block()
         .select(I1, &has_shape_id, I64, &shape_id_token, "0");
-    let cached_token_ptr = ctx.block().gep(I64, &cache_ref, &[(I64, "0")]);
+    let cached_token_ptr = ctx.block().gep(I64, &token_cache, &[(I64, "0")]);
     let cached_token = ctx.block().load(I64, &cached_token_ptr);
     let token_match = ctx.block().icmp_eq(I64, &shape_token, &cached_token);
     let token_nonzero = ctx.block().icmp_ne(I64, &shape_token, "0");
@@ -1433,7 +1465,7 @@ fn lower_put_value_dyn_ic_inline(
         DOUBLE,
         "js_put_value_set_dyn_ic",
         &[
-            (crate::types::PTR, &cache_ref),
+            (crate::types::PTR, &cache_slot_ref),
             (DOUBLE, t),
             (DOUBLE, k),
             (DOUBLE, v),
@@ -2049,12 +2081,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     ctx.ic_site_counter += 1;
                     let cache_name = super::inline_cache_global_name(ctx, site_id);
                     ctx.ic_globals.push(cache_name.clone());
-                    let cache_ref = format!("@{}", cache_name);
+                    // #9708: the outlined entry takes the site's slot.
+                    let cache_slot_ref = format!("@{}", cache_name);
                     Ok(ctx.block().call(
                         DOUBLE,
                         "js_put_value_set_dyn_ic",
                         &[
-                            (crate::types::PTR, &cache_ref),
+                            (crate::types::PTR, &cache_slot_ref),
                             (DOUBLE, &t),
                             (DOUBLE, &k),
                             (DOUBLE, &v),

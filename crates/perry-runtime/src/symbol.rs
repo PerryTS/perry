@@ -58,7 +58,7 @@ pub use properties::{
 pub(crate) use get::{has_own_symbol_property, inherited_symbol_property, own_symbol_property};
 pub use get::{
     js_object_get_symbol_property, js_object_get_symbol_property_ic_miss,
-    js_object_get_symbol_then_field_ic_miss,
+    js_object_get_symbol_then_field_ic_miss, SymbolPicCache, SymbolPicCacheSlot, SYMBOL_PIC_WORDS,
 };
 
 // Iterator protocol, getOwnPropertySymbols, ToPrimitive.

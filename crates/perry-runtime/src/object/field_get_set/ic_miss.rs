@@ -239,6 +239,13 @@ pub const PIC_CACHE_WORDS: usize = 12;
 /// | 11 | round-robin victim index for the ways |
 pub type PicCache = [i64; PIC_CACHE_WORDS];
 
+/// The per-site slot codegen emits for a property-read cache — `@perry_ic_N =
+/// private global ptr null` — holding null until the site's first priming
+/// miss, then the arena cache `pic_slot_resolve` published (#9708). The
+/// emitted hit path reads the cache words through this pointer; every runtime
+/// entry that primes takes the slot's address and resolves it here.
+pub type PicCacheSlot = *mut PicCache;
+
 /// First word of the polymorphic way array.
 ///
 /// The ways start at 4, not 3, so that [`PIC_WAY_STATE`] can sit at word 3 —
@@ -434,7 +441,7 @@ pub extern "C" fn js_object_get_field_ic_overflow_load(
     obj: *const ObjectHeader,
     key: *const crate::StringHeader,
     slot: i32,
-    cache: *mut PicCache,
+    cache_slot: *mut PicCacheSlot,
 ) -> f64 {
     let idx = (slot as u32 & !crate::proxy::IC_SLOT_OVERFLOW_BIT) as usize;
     if !obj.is_null() {
@@ -444,7 +451,7 @@ pub extern "C" fn js_object_get_field_ic_overflow_load(
             }
         }
     }
-    js_object_get_field_ic_miss(obj, key, cache)
+    js_object_get_field_ic_miss(obj, key, cache_slot)
 }
 
 /// Monomorphic inline cache miss handler (issue #51).
@@ -454,9 +461,13 @@ pub extern "C" fn js_object_get_field_ic_overflow_load(
 /// then populates the per-site cache so subsequent calls with the same shape
 /// hit the inline fast path (no function call, direct field load).
 ///
-/// `cache` layout: see [`PicCache`]. Words 0..1 are the ShapeId-token MRU entry;
-/// word 2 is reserved scratch, and words 3.. are the polymorphic ways filled by
-/// [`pic_prime_get`] (#7753).
+/// `cache_slot` is the address of the site's [`PicCacheSlot`]; the cache it
+/// resolves to (allocated on the first priming miss, #9708) has the layout in
+/// [`PicCache`]. Words 0..1 are the ShapeId-token MRU entry; word 2 is
+/// reserved scratch, and words 3.. are the polymorphic ways filled by
+/// [`pic_prime_get`] (#7753). A miss that cannot prime — SSO or proxy
+/// receiver, a missing key, an accessor — never touches the slot, so a site
+/// that only ever sees such receivers costs its 8-byte slot and nothing else.
 ///
 /// Only caches when:
 /// - obj is a valid ObjectHeader (not null, not handle, not string/array/etc.)
@@ -469,7 +480,7 @@ pub extern "C" fn js_object_get_field_ic_overflow_load(
 pub extern "C" fn js_object_get_field_ic_miss(
     obj: *const ObjectHeader,
     key: *const crate::StringHeader,
-    cache: *mut PicCache,
+    cache_slot: *mut PicCacheSlot,
 ) -> f64 {
     // SSO receiver — never cacheable. Route through the SSO-aware
     // `js_object_get_field_by_name` which handles `.length` inline
@@ -795,6 +806,7 @@ pub extern "C" fn js_object_get_field_ic_miss(
                                     // the prefix paths compute inline
                                     // addresses and must never fire from an
                                     // overflow-primed entry.
+                                    let cache = pic_slot_resolve(cache_slot);
                                     (*cache)[2] = 0;
                                     pic_prime_get(
                                         cache,
@@ -844,6 +856,7 @@ pub extern "C" fn js_object_get_field_ic_miss(
                     if has_own_descriptors && named_prefix_token == 0 {
                         break;
                     }
+                    let cache = pic_slot_resolve(cache_slot);
                     (*cache)[2] = named_prefix_token;
                     pic_prime_get(cache, token, i as i64);
                     let field_ptr = (obj as *const u8)
@@ -877,13 +890,14 @@ pub extern "C" fn js_object_get_field_ic_miss(
 /// - `obj_bits`: the receiver's full (unmasked) NaN-box bits
 /// - `key`: the property-name `StringHeader`, already masked to a raw pointer
 /// - `site_id`: the typed-feedback site id
-/// - `cache`: the per-site monomorphic IC cache global (primed by `..._ic_miss`)
+/// - `cache_slot`: the per-site [`PicCacheSlot`] (resolved and primed by
+///   `..._ic_miss`)
 #[no_mangle]
 pub extern "C" fn js_object_get_field_ic(
     obj_bits: i64,
     key: *const crate::StringHeader,
     site_id: u64,
-    cache: *mut PicCache,
+    cache_slot: *mut PicCacheSlot,
 ) -> f64 {
     // POINTER_MASK: lower 48 bits — strips the NaN-box tag to a raw heap pointer.
     const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
@@ -917,7 +931,7 @@ pub extern "C" fn js_object_get_field_ic(
     // is primed for any future inline sites sharing this global).
     if (tag & 0xFFFD) == 0x7FFD {
         crate::typed_feedback::js_typed_feedback_observe_property_get(site_id, obj_handle, key);
-        return js_object_get_field_ic_miss(obj_handle, key, cache);
+        return js_object_get_field_ic_miss(obj_handle, key, cache_slot);
     }
     // Invalid (non-pointer) receiver. `undefined`/`null` throw a TypeError (#462 —
     // matches the inline nullish path, which aborts with a node-shaped message);

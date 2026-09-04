@@ -255,15 +255,31 @@ pub extern "C" fn js_value_length_property_f64(value: f64) -> f64 {
     value_length_property_with_cache(value, std::ptr::null_mut())
 }
 
+/// Words in a per-site Array-subclass `length` cache: `(identity, length
+/// slot, inline bound)`. See `array_subclass_fast_length_with_ic`.
+pub const LENGTH_PIC_WORDS: usize = 3;
+/// A per-site `length` cache, as the emitted slot resolves it.
+pub type LengthPicCache = [u64; LENGTH_PIC_WORDS];
+/// The emitted `@perry_ic_N = private global ptr null` for a `length` site:
+/// null until the site's first priming read (#9708).
+pub type LengthPicCacheSlot = *mut LengthPicCache;
+
 /// Property-semantic `.length` read whose Array-subclass arm primes the
 /// generated scalar IC. All non-subclass cases deliberately share the exact
 /// implementation used by `js_value_length_property_f64`.
+///
+/// `cache_slot` is the site's [`LengthPicCacheSlot`] address; the cache is
+/// allocated on the first prime (#9708), so an elements-backed receiver —
+/// which never publishes shape words — never allocates one.
 #[no_mangle]
-pub extern "C" fn js_value_length_property_ic_f64(value: f64, cache: *mut u64) -> f64 {
-    value_length_property_with_cache(value, cache)
+pub extern "C" fn js_value_length_property_ic_f64(
+    value: f64,
+    cache_slot: *mut LengthPicCacheSlot,
+) -> f64 {
+    value_length_property_with_cache(value, cache_slot)
 }
 
-fn value_length_property_with_cache(value: f64, cache: *mut u64) -> f64 {
+fn value_length_property_with_cache(value: f64, cache_slot: *mut LengthPicCacheSlot) -> f64 {
     let jsval = JSValue::from_bits(value.to_bits());
     if jsval.is_undefined() || jsval.is_null() {
         crate::error::js_throw_type_error_property_access(
@@ -278,7 +294,7 @@ fn value_length_property_with_cache(value: f64, cache: *mut u64) -> f64 {
             crate::builtins::boxed_primitive_to_string_tag(value),
             Some("String")
         ) {
-            return value_length_property_with_cache(payload, cache);
+            return value_length_property_with_cache(payload, cache_slot);
         }
     }
 
@@ -287,7 +303,7 @@ fn value_length_property_with_cache(value: f64, cache: *mut u64) -> f64 {
         return crate::string::js_string_length(string) as f64;
     }
 
-    if let Some(length) = crate::array::array_subclass_fast_length_with_ic(value, cache) {
+    if let Some(length) = crate::array::array_subclass_fast_length_with_ic(value, cache_slot) {
         return length;
     }
 
@@ -854,7 +870,7 @@ mod length_handle_band_tests {
         let console_ptr = crate::value::js_nanbox_get_pointer(console_ctor) as usize;
         let length_key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
         let mut cache = [0_i64; crate::object::PIC_CACHE_WORDS];
-
+        let mut cache_slot: crate::object::PicCacheSlot = &mut cache;
         assert_eq!(js_value_length_f64(console_ctor), 1.0);
         assert_eq!(
             crate::closure::closure_get_dynamic_prop(console_ptr, "length"),
@@ -864,7 +880,7 @@ mod length_handle_band_tests {
             crate::object::js_object_get_field_ic_miss(
                 console_ptr as *const crate::ObjectHeader,
                 length_key,
-                &mut cache,
+                &mut cache_slot,
             ),
             1.0
         );
@@ -872,9 +888,10 @@ mod length_handle_band_tests {
 
     #[test]
     fn property_length_preserves_missing_and_non_numeric_values() {
-        let mut cache = [0_u64; 3];
+        let mut cache: LengthPicCache = [0; LENGTH_PIC_WORDS];
+        let mut cache_slot: LengthPicCacheSlot = &mut cache;
         assert_eq!(
-            js_value_length_property_ic_f64(42.0, cache.as_mut_ptr()).to_bits(),
+            js_value_length_property_ic_f64(42.0, &mut cache_slot).to_bits(),
             crate::value::TAG_UNDEFINED,
             "a number has no length property"
         );
@@ -888,7 +905,7 @@ mod length_handle_band_tests {
         let boxed_obj = crate::value::js_nanbox_pointer(obj as i64);
 
         assert_eq!(
-            js_value_length_property_ic_f64(boxed_obj, cache.as_mut_ptr()).to_bits(),
+            js_value_length_property_ic_f64(boxed_obj, &mut cache_slot).to_bits(),
             seven_value.to_bits(),
             "a source-level property read must not coerce its value"
         );

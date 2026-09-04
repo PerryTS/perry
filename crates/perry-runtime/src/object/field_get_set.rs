@@ -216,6 +216,7 @@ mod ic_miss;
 #[cfg(test)]
 #[path = "field_get_set/ic_miss_array_length_tests.rs"]
 mod ic_miss_array_length_tests;
+mod ic_slot;
 mod map_set_receiver;
 mod probe_dispatch;
 /// #9131: per-instance `[[Prototype]]` override lookup, split out of
@@ -304,8 +305,10 @@ pub use ic_miss::{
     js_class_field_add, js_object_get_field_by_name_f64, js_object_get_field_by_property_id_f64,
     js_object_get_field_ic, js_object_get_field_ic_miss, js_object_set_field_by_property_id,
     js_private_brand_add, js_private_brand_check, js_private_field_add, js_private_guard, PicCache,
-    PIC_CACHE_WORDS,
+    PicCacheSlot, PIC_CACHE_WORDS,
 };
+pub(crate) use ic_slot::pic_slot_census;
+pub use ic_slot::{pic_arena_bytes, pic_slot_peek, pic_slot_resolve, pic_slots_resolved};
 
 #[cfg(test)]
 mod buffer_ic_miss_tests {
@@ -337,24 +340,25 @@ mod buffer_ic_miss_tests {
             for len in [16usize, 24, 32] {
                 let buf = secret_buffer(len);
                 let mut cache = [0i64; crate::object::PIC_CACHE_WORDS];
-
+                let mut cache_slot: crate::object::PicCacheSlot = &mut cache;
                 let ty = js_object_get_field_ic_miss(
                     buf as *const ObjectHeader,
                     key(b"type"),
-                    &mut cache,
+                    &mut cache_slot,
                 );
                 assert_eq!(string_value_bytes(ty), b"secret");
 
                 let size = js_object_get_field_ic_miss(
                     buf as *const ObjectHeader,
                     key(b"symmetricKeySize"),
-                    &mut cache,
+                    &mut cache_slot,
                 );
                 assert_eq!(size, len as f64);
 
                 let raw = dispatch_buffer_method(buf as usize, "export", std::ptr::null(), 0);
                 let raw_addr = (raw.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *const ObjectHeader;
-                let raw_len = js_object_get_field_ic_miss(raw_addr, key(b"length"), &mut cache);
+                let raw_len =
+                    js_object_get_field_ic_miss(raw_addr, key(b"length"), &mut cache_slot);
                 assert_eq!(raw_len, len as f64);
             }
         }

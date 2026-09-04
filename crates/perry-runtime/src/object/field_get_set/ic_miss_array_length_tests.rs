@@ -21,7 +21,8 @@ fn array_length_short_circuit_agrees_with_the_full_ladder() {
             }
             let obj = arr as *const super::ObjectHeader;
             let mut cache = [0i64; super::PIC_CACHE_WORDS];
-            let via_ic = super::js_object_get_field_ic_miss(obj, len_key, &mut cache);
+            let mut cache_slot: crate::object::PicCacheSlot = &mut cache;
+            let via_ic = super::js_object_get_field_ic_miss(obj, len_key, &mut cache_slot);
             let via_ladder = super::js_object_get_field_by_name_f64(obj, len_key);
             assert_eq!(
                 via_ic.to_bits(),
@@ -32,7 +33,7 @@ fn array_length_short_circuit_agrees_with_the_full_ladder() {
             // A same-length key that is not `length` must not be captured
             // by the fast path.
             assert_eq!(
-                super::js_object_get_field_ic_miss(obj, other_key, &mut cache).to_bits(),
+                super::js_object_get_field_ic_miss(obj, other_key, &mut cache_slot).to_bits(),
                 super::js_object_get_field_by_name_f64(obj, other_key).to_bits(),
                 "a non-`length` key on an array must take the normal path"
             );
@@ -41,8 +42,9 @@ fn array_length_short_circuit_agrees_with_the_full_ladder() {
         // short-circuit — it is an ordinary (absent) property there.
         let plain = crate::object::js_object_alloc(0, 0);
         let mut cache = [0i64; super::PIC_CACHE_WORDS];
+        let mut cache_slot: crate::object::PicCacheSlot = &mut cache;
         assert_eq!(
-            super::js_object_get_field_ic_miss(plain, len_key, &mut cache).to_bits(),
+            super::js_object_get_field_ic_miss(plain, len_key, &mut cache_slot).to_bits(),
             super::js_object_get_field_by_name_f64(plain, len_key).to_bits(),
             "`length` on a plain object must keep its normal answer"
         );
@@ -70,7 +72,8 @@ fn array_subclass_length_short_circuit_preserves_object_semantics() {
 
     let len_key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
     let mut cache = [0i64; super::PIC_CACHE_WORDS];
-    let via_ic = super::js_object_get_field_ic_miss(obj, len_key, &mut cache);
+    let mut cache_slot: crate::object::PicCacheSlot = &mut cache;
+    let via_ic = super::js_object_get_field_ic_miss(obj, len_key, &mut cache_slot);
     let via_ladder = super::js_object_get_field_by_name_f64(obj, len_key);
     assert_eq!(via_ic.to_bits(), via_ladder.to_bits());
     assert_eq!(via_ic, 3.0, "the fast path must observe the live length");
@@ -78,8 +81,9 @@ fn array_subclass_length_short_circuit_preserves_object_semantics() {
     let plain = crate::object::js_object_alloc(0, 1);
     crate::object::js_object_set_field_by_name(plain, len_key, 123.0);
     let mut plain_cache = [0i64; super::PIC_CACHE_WORDS];
+    let mut plain_cache_slot: crate::object::PicCacheSlot = &mut plain_cache;
     assert_eq!(
-        super::js_object_get_field_ic_miss(plain, len_key, &mut plain_cache),
+        super::js_object_get_field_ic_miss(plain, len_key, &mut plain_cache_slot),
         123.0,
         "ordinary objects must retain their own `length` property semantics"
     );

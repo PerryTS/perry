@@ -551,6 +551,7 @@ fn side_tables() -> Vec<SideTableRow> {
     rows.extend(crate::object::shapes::shape_table_census());
     rows.extend(crate::object::class_registry_census());
     rows.extend(crate::object::object_tables_census());
+    rows.extend(crate::object::pic_slot_census());
     rows.extend(super::roots::stack_map_index_census());
     let (slots, bytes) = crate::string::intern_table_census();
     rows.push(("string.intern_table(fixed)", slots, bytes));
