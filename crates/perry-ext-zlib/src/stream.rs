@@ -19,8 +19,8 @@
 
 use perry_ffi::{
     alloc_buffer, alloc_string, gc_register_mutable_root_scanner_named, notify_main_thread,
-    BufferHeader, ErrorKind, GcRootVisitor, JsClosure, JsValue, RawClosureHeader, StringHeader,
-    TransientRootScope, TransientRootedAddr,
+    register_aux_event_pump, BufferHeader, ErrorKind, GcRootVisitor, JsClosure, JsValue,
+    RawClosureHeader, StringHeader, TransientRootScope, TransientRootedAddr,
 };
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::c_void;
@@ -41,8 +41,6 @@ const TRUE_BITS: u64 = 0x7FFC_0000_0000_0004;
 // perry-runtime `#[no_mangle]` symbols, resolved at final link (perry-runtime
 // is always linked). Mirrors perry-ext-net's extern usage.
 extern "C" {
-    fn js_register_aux_has_active(f: extern "C" fn() -> i32);
-    fn js_register_aux_pump(f: extern "C" fn() -> i32);
     fn js_buffer_is_buffer(ptr: i64) -> i32;
     fn js_get_string_pointer_unified(value: f64) -> i64;
     // #2935: resolve + validate a `{ level }` option to a flate2 level
@@ -100,9 +98,8 @@ extern "C" fn process_pending_aux() -> i32 {
 
 fn ensure_aux_pump_registered() {
     static REGISTER: std::sync::Once = std::sync::Once::new();
-    REGISTER.call_once(|| unsafe {
-        js_register_aux_pump(process_pending_aux);
-        js_register_aux_has_active(js_ext_zlib_has_active_handles);
+    REGISTER.call_once(|| {
+        register_aux_event_pump(process_pending_aux, js_ext_zlib_has_active_handles);
     });
 }
 
@@ -1170,7 +1167,7 @@ fn enforce_global_output_cap(g: &mut Statics, total_cap: usize) {
     }
 }
 
-// ── dispatch (called from perry-stdlib's external-zlib-pump arm) ───────────────
+// ── dynamic method dispatch for external zlib handles ─────────────────────────
 
 /// True iff `handle` indexes a live zlib stream.
 #[no_mangle]
@@ -1557,8 +1554,8 @@ pub unsafe extern "C" fn js_ext_zlib_process_pending() -> i32 {
     count
 }
 
-/// Keep the event loop alive while zlib stream events are queued. Wired into
-/// perry-stdlib's `js_stdlib_has_active_handles`.
+/// Keep the event loop alive while zlib stream events are queued. Registered
+/// directly with perry-runtime alongside the extension pump.
 #[no_mangle]
 pub extern "C" fn js_ext_zlib_has_active_handles() -> i32 {
     if statics().lock().unwrap().pending.is_empty() {

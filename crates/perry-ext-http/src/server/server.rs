@@ -1409,7 +1409,7 @@ async fn handle_websocket_upgrade(
 }
 
 // ============================================================================
-// Issue #604 — main-thread pump exposed to perry-stdlib's stdlib pump.
+// Issue #604/#9696 — main-thread pump registered with perry-runtime.
 //
 // Pre-#604, `js_node_http_server_listen` ended in `event_loop(...)` —
 // an infinite blocking loop on the main TS thread that drained pending
@@ -1421,12 +1421,10 @@ async fn handle_websocket_upgrade(
 // Replacement: `listen()` returns immediately after spawning the
 // accept loop on the tokio runtime. The new
 // `js_node_http_server_has_active` and `js_node_http_server_process_pending`
-// externs are wired into perry-stdlib's `js_stdlib_has_active_handles` /
-// `js_stdlib_process_pending` (gated on the `external-http-server-pump`
-// feature). The codegen-emitted main loop calls those each tick, so
-// requests + upgrades are dispatched on the same main thread as
-// before — just driven from the outer event loop instead of an inner
-// blocking one.
+// callbacks are registered with the runtime when this extension initializes.
+// The codegen-emitted main loop invokes the registry each tick, so requests +
+// upgrades are dispatched on the same main thread as before — just driven
+// from the outer event loop instead of an inner blocking one.
 //
 // Both externs walk the global handle registry via `iter_handles_of`
 // (covers HTTP/1, HTTPS, and HTTP/2 — HTTPS / HTTP/2 wrap an
@@ -1436,10 +1434,9 @@ async fn handle_websocket_upgrade(
 
 /// Returns 1 if any registered HTTP/HTTPS/HTTP/2 server is currently
 /// listening, has pending requests, or has pending upgrade events.
-/// Wired into perry-stdlib's `js_stdlib_has_active_handles` via the
-/// `external-http-server-pump` feature. Without this gate, the
-/// codegen-emitted main loop would exit before the accept loop has
-/// a chance to push the first request through the channel.
+/// Registered as a runtime keepalive contributor so the codegen-emitted main
+/// loop cannot exit before the accept loop has a chance to push the first
+/// request through the channel.
 #[no_mangle]
 pub extern "C" fn js_node_http_server_has_active() -> i32 {
     let mut active = 0i32;

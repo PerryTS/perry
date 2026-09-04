@@ -23,19 +23,13 @@
 //! ```
 //!
 //! Wrappers manage their own per-module pending-events queue
-//! (`Mutex<Vec<MyEvent>>` typical). They expose a
-//! `js_<name>_process_pending() -> i32` extern that perry-codegen's
-//! event-loop pump calls every tick to drain. The queue's producer
-//! side calls `notify_main_thread()` after pushing so the main loop
-//! wakes promptly instead of waiting on the 1-second heartbeat cap.
-//!
-//! # Today's surface (v0.5.x)
-//!
-//! Just `notify_main_thread`. The dispatch — `js_<name>_process_pending`
-//! / `js_<name>_has_pending` — is wrapper-specific and doesn't need a
-//! perry-ffi entry; codegen knows about each wrapper's tick symbols by
-//! name, the same way it does for perry-stdlib's pumps (cron, http, ws,
-//! readline, …).
+//! (`Mutex<Vec<MyEvent>>` typical). At initialization they pass their
+//! `process_pending` and `has_active` callbacks to
+//! [`register_aux_event_pump`]. The runtime invokes those callbacks through
+//! its registry, so neither codegen nor stdlib hard-references extension
+//! symbols. The queue's producer side calls [`notify_main_thread`] after
+//! pushing so the main loop wakes promptly instead of waiting on the
+//! heartbeat cap.
 
 extern "C" {
     /// Wake the main thread from `js_wait_for_event`.

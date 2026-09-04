@@ -59,7 +59,10 @@
 
 use std::sync::Once;
 
-use perry_ffi::{gc_register_mutable_root_scanner_named, iter_handles_of_mut, GcRootVisitor};
+use perry_ffi::{
+    gc_register_mutable_root_scanner_named, iter_handles_of_mut, register_aux_event_pump,
+    GcRootVisitor,
+};
 
 mod app;
 mod cluster_bind;
@@ -85,9 +88,15 @@ static GC_REGISTERED: Once = Once::new();
 /// Without this scanner, a malloc-triggered GC between registration
 /// and incoming-request dispatch would sweep the handler closures —
 /// same root cause as issue #35 for net.Socket listeners.
+/// The same one-time hook registers Fastify's event pump and keepalive
+/// contributor directly with the runtime.
 pub(crate) fn ensure_gc_scanner_registered() {
     GC_REGISTERED.call_once(|| {
         gc_register_mutable_root_scanner_named("perry-ext-fastify", scan_fastify_roots);
+        register_aux_event_pump(
+            server::js_fastify_process_pending,
+            server::js_fastify_has_active,
+        );
     });
 }
 

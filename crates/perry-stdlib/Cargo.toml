@@ -110,14 +110,9 @@ bundled-ws = ["dep:tokio-tungstenite", "dep:futures-util", "dep:rustls", "async-
 
 # Activated by `optimized_libs::build_optimized_libs` when the
 # well-known flip strips `bundled-ws` and routes `import 'ws'` to
-# perry-ext-ws. Tells perry-stdlib's `js_stdlib_process_pending`
-# to call `js_ws_process_pending` even though `pub mod ws` isn't
-# compiled in — the symbol is provided by perry-ext-ws at link
-# time. Mirrors `external-net-pump` (v0.5.579). Closes #606's
-# follow-up: without this, perry-ext-ws's accept-loop tokio task
-# pushes `Listening` / `Connection` / `Message` events to its
-# event queue but the main thread never drains them, so handlers
-# never fire and the program hangs after the SIGABRT fix.
+# perry-ext-ws. Retains the shared async runtime needed by that extension;
+# the extension registers its pump and keepalive contributor directly with
+# perry-runtime (#9696).
 external-ws-pump = ["async-runtime"]
 
 # Raw TCP sockets (`net.Socket` — Postgres wire driver, custom protocols).
@@ -129,61 +124,35 @@ bundled-net = ["async-runtime"]
 
 # Activated by `optimized_libs::build_optimized_libs` (v0.5.579) when
 # the well-known flip strips `bundled-net` and routes `import 'net'`
-# to perry-ext-net. Tells perry-stdlib's `js_stdlib_process_pending`
-# to call `js_net_process_pending` even though `pub mod net` isn't
-# compiled in — the symbol is provided by perry-ext-net at link
-# time. No fallback no-op stub: gating on this feature ensures
-# perry-stdlib only emits the call site (and thus the undefined
-# extern reference) when perry-ext-net is guaranteed to be linked.
+# to perry-ext-net. Selects ext-net dispatch adapters and the shared async
+# runtime. The extension itself registers its pump and keepalive contributor.
 external-net-pump = ["async-runtime"]
 
 # Activated by `optimized_libs::build_optimized_libs` (#1843) when the
 # well-known flip routes `node:zlib` to perry-ext-zlib and strips
-# `compression`. Tells perry-stdlib's `js_stdlib_process_pending` /
-# `js_stdlib_has_active_handles` to drain perry-ext-zlib's deferred
-# stream-event queue (`js_ext_zlib_process_pending` /
-# `js_ext_zlib_has_active_handles`), and routes lost-static-type
-# `gz.write()` / `.on()` / `.pipe()` calls through
-# `js_ext_zlib_dispatch_method`. It also registers
+# `compression`. Routes lost-static-type `gz.write()` / `.on()` /
+# `.pipe()` calls through `js_ext_zlib_dispatch_method`. It also registers
 # `js_ext_zlib_native_dispatch` for captured module exports such as
-# `util.promisify(zlib.gzip)`. Mirrors `external-net-pump`. No async runtime
-# needed (zlib compression is synchronous), but the pump call sites live in
-# the async-bridge module which is `async-runtime`-gated.
+# `util.promisify(zlib.gzip)`; pump and keepalive registration is owned by
+# perry-ext-zlib.
 external-zlib-pump = ["async-runtime"]
 
 # Activated by `optimized_libs::build_optimized_libs` (v0.5.714) when
 # the well-known flip routes `node:http` / `node:https` / `node:http2`
-# to perry-ext-http (which contains the server implementation). Tells
-# perry-stdlib's `js_stdlib_process_pending` and
-# `js_stdlib_has_active_handles` to call into perry-ext-http's
-# `js_node_http_server_process_pending` / `js_node_http_server_has_active`
-# externs each tick. Without this, the http server's accept-loop
-# tokio task pushes pending requests that nobody drains and the
-# program either hangs (pre-fix listen() blocked the main thread)
-# or exits before the listener task can dispatch any request.
-# Mirrors `external-net-pump` and `external-ws-pump`. Closes #604.
+# to perry-ext-http. Selects the HTTP server dispatch adapters and shared async
+# runtime; perry-ext-http registers its pump and keepalive contributor.
 external-http-server-pump = ["async-runtime"]
 
 # Activated by `optimized_libs::build_optimized_libs` when the well-known
 # flip routes `node:http` / `node:https` to perry-ext-http and the user
-# code calls `http.request` / `http.get` (client side). Tells
-# perry-stdlib's `js_stdlib_process_pending` and
-# `js_stdlib_has_active_handles` to call into perry-ext-http's
-# `js_http_process_pending` / `js_http_has_pending` externs each tick.
-# Without this the client-side response/error events stay queued and
-# the program exits before any callback fires. Issue #769.
+# code calls `http.request` / `http.get`. Selects client dispatch adapters
+# and the shared async runtime; perry-ext-http registers its own callbacks.
 external-http-client-pump = ["async-runtime"]
 
 # Activated by `optimized_libs::build_optimized_libs` whenever the well-known
 # flip routes `import 'fastify'` to perry-ext-fastify (the only fastify path —
-# the in-stdlib adapter was removed). Tells perry-stdlib's
-# `js_stdlib_process_pending` / `js_stdlib_has_active_handles` to call
-# into perry-ext-fastify's `js_fastify_process_pending` /
-# `js_fastify_has_active` externs each tick. Without this, the
-# (now non-blocking) `listen()` returns but no main-thread code ever
-# drains pending requests — programs that combine fastify with an
-# in-process `fetch` against itself, lifecycle hooks, or async route
-# handlers hang. Mirrors `external-http-server-pump`.
+# the in-stdlib adapter was removed). Selects Fastify dispatch adapters and the
+# shared async runtime. perry-ext-fastify owns pump/keepalive registration.
 external-fastify-pump = ["async-runtime"]
 
 # Activated by `optimized_libs::build_optimized_libs` when the well-known
