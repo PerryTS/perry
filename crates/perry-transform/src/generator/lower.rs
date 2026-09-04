@@ -1090,10 +1090,10 @@ pub fn transform_generator_function_with_extra_captures(
         // inside a `yield *` and `gen.throw(e)` is called, forward the error into
         // the delegated iterator's `throw` (re-yielding or, on a `done` result,
         // resuming the outer body past the `yield *`) rather than routing it into
-        // the outer generator's own catch handlers. Each route re-drives the
-        // state machine via the `while_body_for_throw` continuation loop, so it
-        // is built BEFORE the loop is moved into `throw_continuation` below.
-        // Empty for sync generators (`delegations` is only recorded for async).
+        // the outer generator's own catch handlers. Delegation routes and the
+        // ordinary catch/throw fallback share one continuation dispatcher below;
+        // copying that full dispatcher into every route makes HIR grow
+        // quadratically for generators with many `yield*` sites.
         // #6709: for async generators `.throw(e)` is the error arm of the
         // shared step closure, so the thrown value arrives through the step's
         // value param (`next_param_id`) rather than a dedicated `.throw`
@@ -1103,41 +1103,14 @@ pub fn transform_generator_function_with_extra_captures(
         } else {
             throw_param_id
         };
-        let yield_star_throw_routes = build_yield_star_throw_routes(
-            &delegations,
-            &catches,
-            &finallys,
-            state_id,
-            throw_val_id,
-            pending_type_id,
-            pending_value_id,
-            &while_body_for_throw,
-            &hoisted_ids,
-            next_local_id,
-        );
-        // #4374: continue the state machine after a catch — run the inlined
-        // finally and reach the next yield/completion within the `.throw()` call.
-        //
-        // Async generators took the legacy deferred-resume path here, which inlines
-        // the catch body into the `.throw()` closure. That only works when the catch
-        // body is still inline; once the `try` contains a `yield` the linearizer has
-        // moved the catch into its own states, so the inlined copy had nothing to run
-        // and `gen.throw(e)` resolved to `{value: undefined, done: false}` instead of
-        // the value the catch yields. Routing to the catch's states (as sync
-        // generators do) is what Node's semantics require.
-        let throw_continuation = Some(while_body_for_throw);
         // #4374: fresh binding for the inner catch that re-runs a try's finally
         // when its catch handler itself throws (catch-rethrow-with-finally).
         let inner_catch_id = alloc_local(next_local_id);
-        let mut throw_resume_body = vec![Stmt::Expr(Expr::LocalSet(
-            executing_id,
-            Box::new(Expr::Bool(true)),
-        ))];
-        // The `yield *` throw routes return/throw from inside their own
-        // continuation loop on a match, so they precede the catch-routing body
-        // and only fall through to it when not suspended in a delegation.
-        throw_resume_body.extend(yield_star_throw_routes);
-        throw_resume_body.extend(build_async_throw_body(
+        // #4374: continue the state machine after a catch — run the inlined
+        // finally and reach the next yield/completion within the `.throw()` call.
+        // The returned routing body deliberately excludes the dispatcher: all
+        // routes below fall through to one shared copy.
+        let ordinary_throw_fallback = build_async_throw_body(
             &catches,
             &finallys,
             state_id,
@@ -1147,8 +1120,31 @@ pub fn transform_generator_function_with_extra_captures(
             pending_type_id,
             pending_value_id,
             &hoisted_ids,
-            throw_continuation,
-        ));
+            true,
+        );
+        let yield_star_throw_routes = build_yield_star_throw_routes(
+            &delegations,
+            &catches,
+            &finallys,
+            state_id,
+            throw_val_id,
+            pending_type_id,
+            pending_value_id,
+            &hoisted_ids,
+            next_local_id,
+            ordinary_throw_fallback,
+        );
+        let mut throw_resume_body = vec![Stmt::Expr(Expr::LocalSet(
+            executing_id,
+            Box::new(Expr::Bool(true)),
+        ))];
+        // Exactly one delegation route or the ordinary catch/throw fallback
+        // runs, then every non-throwing path resumes through this shared loop.
+        throw_resume_body.extend(yield_star_throw_routes);
+        throw_resume_body.push(Stmt::While {
+            condition: Expr::Bool(true),
+            body: while_body_for_throw,
+        });
         // #6709: for async generators, `.next`/`.throw` are thin outer closures
         // driving a shared async-step `__agstep` closure so inner `await`s
         // suspend on the microtask queue; sync generators keep direct closures.

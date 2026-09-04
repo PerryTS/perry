@@ -40,14 +40,12 @@ pub(crate) fn build_async_throw_body(
     pending_type_id: LocalId,
     pending_value_id: LocalId,
     hoisted_ids: &std::collections::HashSet<LocalId>,
-    // #4374: for sync generators, the cloned state-dispatch loop. When present,
-    // a matched catch route sets the resume state and *falls through* to this
-    // loop, so the inlined finally runs and the generator continues to the next
-    // yield / completion within the `.throw()` call. When `None` (async
-    // generators) the catch route returns {undefined, false} as before.
-    continuation: Option<Vec<Stmt>>,
+    // #4374: when true, a matched catch route sets the resume state and falls
+    // through to the state dispatcher that the caller appends. When false, use
+    // the legacy inline-catch behavior that returns from this body directly.
+    fall_through_to_dispatch: bool,
 ) -> Vec<Stmt> {
-    let fall_through = continuation.is_some();
+    let fall_through = fall_through_to_dispatch;
     // #4374: when no catch handles the throw, run any pending non-yielding
     // `finally` before propagating the error. A `finally` that `return`s
     // supersedes the thrown value (rewritten to an iter-result return inside
@@ -66,7 +64,7 @@ pub(crate) fn build_async_throw_body(
     fallback.extend(build_finally_run_stmts(finallys, state_id, hoisted_ids));
     fallback.push(Stmt::Throw(Expr::LocalGet(throw_param_id)));
 
-    let mut body = if fall_through {
+    if fall_through {
         // #4438: sync generators route the thrown error to the innermost
         // enclosing catch (jump to its linearized states) or yielding finally
         // (record the pending throw + jump in), then fall through to the
@@ -105,19 +103,7 @@ pub(crate) fn build_async_throw_body(
             }];
         }
         fallback
-    };
-
-    // #4374: append the continuation loop. Only a fallen-through catch/finally
-    // route reaches it (the unhandled branch throws; matched routes set the
-    // resume state and fall through).
-    if let Some(cont) = continuation {
-        body.push(Stmt::While {
-            condition: Expr::Bool(true),
-            body: cont,
-        });
     }
-
-    body
 }
 
 pub(crate) fn catch_route_condition(
@@ -797,11 +783,9 @@ pub(crate) fn build_yield_star_return_routes(
 /// completion). Both the done (resume) and not-done (re-yield) cases are handled
 /// uniformly: the awaited inner result is stored into the delegation's
 /// `result_id`, the state is set to the drive loop's condition state
-/// (`resume_state`), and a clone of the state-dispatch loop (`while_body`) is
-/// re-driven. The condition state reads `result.done` and either exits the loop
-/// (continuing the outer body) or re-yields `result.value`. This continuation
-/// loop is the async-generator abrupt-resume machinery the `.return()` path does
-/// not need (a `return` always completes or re-yields, never resumes the body).
+/// (`resume_state`), and control falls through to the caller's single shared
+/// state dispatcher. The condition state reads `result.done` and either exits
+/// the delegation (continuing the outer body) or re-yields `result.value`.
 ///
 /// An abrupt completion *of the delegation protocol itself* — `iterator.throw`
 /// rejecting, a non-object inner result, or the `throw`-undefined TypeError —
@@ -813,9 +797,11 @@ pub(crate) fn build_yield_star_return_routes(
 /// inside that catch suspends) or, when no catch matches, runs pending
 /// non-yielding finallys and re-throws to reject the generator.
 ///
-/// Each route returns or throws from inside its `while(true)` continuation loop,
-/// so control falls through to the catch-routing fallback only when not
-/// suspended in a delegation. Empty for sync generators (no routes recorded).
+/// The routes form one mutually-exclusive if/else chain around `fallback`.
+/// Successful delegation and catch-routing paths fall through to the one state
+/// dispatcher appended by the caller. Keeping that dispatcher outside the
+/// chain is load-bearing: cloning it into every route makes transformed HIR
+/// quadratic in the number of `yield*` sites.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn build_yield_star_throw_routes(
     delegations: &[DelegationRoute],
@@ -825,11 +811,11 @@ pub(crate) fn build_yield_star_throw_routes(
     throw_param_id: LocalId,
     pending_type_id: LocalId,
     pending_value_id: LocalId,
-    while_body: &[Stmt],
     hoisted_ids: &std::collections::HashSet<LocalId>,
     next_local_id: &mut u32,
+    fallback: Vec<Stmt>,
 ) -> Vec<Stmt> {
-    let mut out = Vec::with_capacity(delegations.len());
+    let mut branches = Vec::with_capacity(delegations.len());
     for route in delegations {
         let m_id = alloc_local(next_local_id); // captured `throw` method
         let ret_m_id = alloc_local(next_local_id); // `return` method (close path)
@@ -1019,19 +1005,16 @@ pub(crate) fn build_yield_star_throw_routes(
             }),
             finally: None,
         };
-        // Both the success path (state = resume_state) and a routed catch (state
-        // = catch_entry_state) fall through to this loop, which dispatches from
-        // the freshly-set state.
-        let drive = Stmt::While {
-            condition: Expr::Bool(true),
-            body: while_body.to_vec(),
-        };
+        branches.push((in_interval, vec![protocol]));
+    }
 
-        out.push(Stmt::If {
-            condition: in_interval,
-            then_branch: vec![protocol, drive],
-            else_branch: None,
-        });
+    let mut out = fallback;
+    for (condition, then_branch) in branches.into_iter().rev() {
+        out = vec![Stmt::If {
+            condition,
+            then_branch,
+            else_branch: Some(out),
+        }];
     }
     out
 }
