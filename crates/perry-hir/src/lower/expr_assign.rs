@@ -1108,23 +1108,15 @@ fn lower_assignment_target(
             match &member.prop {
                 ast::MemberProp::Ident(ident) => {
                     let property = ident.sym.to_string();
-                    // Issue #711 part 2: route `<expr>.prototype =
-                    // <value>` through SetFunctionPrototype so the
-                    // runtime binds the proto object as the function
-                    // value's class-prototype source. Effect's
-                    // effectable.ts uses this to declare classes via
-                    // prototype assignment on a plain function. The
-                    // runtime helper is a no-op when `object` doesn't
-                    // resolve to a function at runtime (preserves the
-                    // baseline for arbitrary `obj.prototype = X`
-                    // writes — those are rare and meaningless on
-                    // non-functions in practice).
+                    // Ordinary property assignment, with function prototype
+                    // metadata synchronized for dynamic class parents (#711).
                     if property == "prototype" {
                         return Ok(wrap_assign_object_prelude(
                             prelude.take(),
                             Expr::SetFunctionPrototype {
                                 func: object,
                                 proto: value,
+                                strict: ctx.current_strict,
                             },
                         ));
                     }

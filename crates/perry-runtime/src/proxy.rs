@@ -1469,7 +1469,10 @@ fn own_set_descriptor(target: f64, key: f64) -> Option<OwnSetDescriptor> {
     // The null-receiver guard stays BEFORE the coercion: `key_to_rust_string`
     // can run a user `toString`, and moving it earlier would make that side
     // effect observable on a path that previously short-circuited.
-    if extract_pointer(target.to_bits()) as usize == 0 {
+    // ClassRef constructors are non-pointer values with an own prototype.
+    if extract_pointer(target.to_bits()) as usize == 0
+        && crate::object::class_ref_id(target).is_none()
+    {
         return None;
     }
     // #6943: `key_to_rust_string` runs the GC-capable `js_string_coerce`, and
@@ -1485,6 +1488,14 @@ fn own_set_descriptor(target: f64, key: f64) -> Option<OwnSetDescriptor> {
     let target_handle = scope.root_heap_word_u64(target.to_bits());
     let key_name = key_to_rust_string(key)?;
     let target = f64::from_bits(target_handle.get_heap_word_u64());
+    // Class constructors have an immutable own prototype even though their
+    // ClassRef representation has no heap address or descriptor side table.
+    if key_name == "prototype"
+        && crate::object::class_ref_id(target).is_some()
+        && crate::object::class_prototype_ref_id(target).is_none()
+    {
+        return Some(OwnSetDescriptor::Data { writable: false });
+    }
     let obj_ptr = extract_pointer(target.to_bits()) as usize;
     if obj_ptr == 0 {
         return None;
@@ -1532,6 +1543,16 @@ fn own_set_descriptor(target: f64, key: f64) -> Option<OwnSetDescriptor> {
     }
     if crate::closure::is_closure_ptr(obj_ptr) {
         if crate::object::has_own_helpers::closure_own_key_present(obj_ptr, &key_name) {
+            // A function's lazily synthesized prototype is already an own
+            // property. Preserve its attributes when the first operation is
+            // an assignment, before any read materializes the default object.
+            if key_name == "prototype" && crate::object::function_would_have_own_prototype(target) {
+                crate::object::set_builtin_property_attrs(
+                    obj_ptr,
+                    key_name.clone(),
+                    crate::object::PropertyAttrs::new(true, false, false),
+                );
+            }
             return Some(OwnSetDescriptor::Data {
                 writable: !matches!(key_name.as_str(), "name" | "length"),
             });

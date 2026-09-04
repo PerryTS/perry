@@ -1276,6 +1276,7 @@ fn infers_class_prototype_and_super_meta_value_shapes() {
             &Expr::SetFunctionPrototype {
                 func: Box::new(Expr::FuncRef(1)),
                 proto: Box::new(Expr::String("proto".to_string())),
+                strict: false,
             },
             &env,
         ),

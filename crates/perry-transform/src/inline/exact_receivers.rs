@@ -102,9 +102,7 @@ pub(crate) fn collect_module_prototype_facts(module: &Module) -> ModulePrototype
                 facts.touched_classes.insert(class_name.clone());
             }
             Expr::SetFunctionPrototype { func, .. } => {
-                if let Expr::ClassRef(name) = func.as_ref() {
-                    facts.touched_classes.insert(name.clone());
-                }
+                note_holder(func, facts);
             }
             Expr::PropertyGet {
                 object, property, ..

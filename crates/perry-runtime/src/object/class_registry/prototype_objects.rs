@@ -156,9 +156,67 @@ per_test_global! {
         std::sync::atomic::AtomicU32::new(0x8000_0000);
 }
 
-/// Register a function's prototype object. Called by codegen-emitted
-/// init code whenever the HIR detects `<expr>.prototype = <expr>` at
-/// the assignment-statement level (lower_expr_assignment Member arm).
+/// Perform ordinary `.prototype` assignment, then synchronize the synthetic
+/// class metadata used when a class extends a function (#711, #9365).
+#[no_mangle]
+pub extern "C" fn js_set_prototype_property(receiver: f64, value: f64, strict: i32) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(receiver);
+    let value = scope.root_nanbox_f64(value);
+    let key = scope.root_string_ptr(crate::string::js_string_from_bytes(
+        b"prototype".as_ptr(),
+        9,
+    ));
+    let key = key
+        .with_const_ptr::<crate::StringHeader, _>(|key| crate::value::js_nanbox_string(key as i64));
+    crate::proxy::js_put_value_set(
+        receiver.get_nanbox_f64(),
+        key,
+        value.get_nanbox_f64(),
+        receiver.get_nanbox_f64(),
+        strict,
+    );
+
+    // Synchronize from the actual own property. A sloppy rejected write or an
+    // accessor must not install the attempted RHS as a class prototype, and
+    // synchronization must not reset the property's descriptor attributes.
+    // These probes and side-table updates have no JS/GC safepoints; the receiver
+    // keeps its own prototype live throughout. Ownership is checked before any
+    // header read so proxies and other synthetic pointer values are harmless.
+    let func = receiver.get_nanbox_f64();
+    let func_value = JSValue::from_bits(func.to_bits());
+    if func_value.is_pointer() {
+        let func_ptr = func_value.as_pointer::<u8>() as usize;
+        let header = unsafe { crate::value::addr_class::try_read_tracked_gc_header(func_ptr) };
+        if header
+            .is_some_and(|header| unsafe { header.as_ref().obj_type == crate::gc::GC_TYPE_CLOSURE })
+            && get_accessor_descriptor(func_ptr, "prototype").is_none()
+        {
+            if let Some(proto) = crate::closure::closure_get_own_dynamic_prop(func_ptr, "prototype")
+            {
+                let proto = JSValue::from_bits(proto.to_bits());
+                if proto.is_pointer() {
+                    let proto_ptr = proto.as_pointer::<ObjectHeader>() as *mut ObjectHeader;
+                    let header = unsafe {
+                        crate::value::addr_class::try_read_tracked_gc_header(proto_ptr as usize)
+                    };
+                    if header.is_some_and(|header| unsafe {
+                        header.as_ref().obj_type == crate::gc::GC_TYPE_OBJECT
+                    }) {
+                        let class_id = synthetic_class_id_for_function(func);
+                        class_prototype_object_root_store(class_id, proto_ptr);
+                        crate::typed_feedback::invalidate_method_change(class_id);
+                        crate::object::prop_plan::prop_plan_epoch_bump();
+                    }
+                }
+            }
+        }
+    }
+    value.get_nanbox_f64()
+}
+
+/// Legacy function-prototype registration ABI. New codegen uses
+/// `js_set_prototype_property` to preserve ordinary property semantics.
 ///
 /// Returns the synthetic class_id allocated for this function (0 if
 /// validation fails). The synthetic id is folded into CLASS_REGISTRY

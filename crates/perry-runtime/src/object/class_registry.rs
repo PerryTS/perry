@@ -96,7 +96,9 @@ pub(crate) use prototype_objects::{
     function_value_for_class_id, resolve_proto_chain_field,
     resolve_proto_chain_field_with_receiver, resolve_proto_chain_symbol,
 };
-pub use prototype_objects::{js_set_function_prototype, NEXT_SYNTHETIC_CLASS_ID};
+pub use prototype_objects::{
+    js_set_function_prototype, js_set_prototype_property, NEXT_SYNTHETIC_CLASS_ID,
+};
 
 // ── class_meta.rs ───────────────────────────────────────────────────────────
 #[cfg(test)]
