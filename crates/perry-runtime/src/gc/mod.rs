@@ -158,6 +158,7 @@ mod prefetch;
 mod copying;
 mod copying_first_cycle;
 mod copying_pointer_set;
+mod diag_sites;
 /// #8174: shared validation for the TARGET of a forwarding pointer.
 mod forwarding;
 /// Per-scanner root attribution for the copied-minor root scan (#7915).
@@ -167,6 +168,7 @@ mod sticky_remembered;
 /// side tables), so a minor-scoped root scan visits only the entries that
 /// can hold a pointer a minor acts on.
 pub(crate) mod young_log;
+mod survival_diag;
 use copying::*;
 use copying_first_cycle::*;
 // Named rather than glob-imported: a glob does not propagate through the
@@ -798,6 +800,7 @@ fn gc_collect_full_mark_sweep_with_trigger(trigger: GcTriggerSnapshot) -> GcColl
     let _contract_heal = policy::contract_scan_heal_guard();
     gc_drain_active_budgeted_cycle();
     GC_TRIGGER_BUMPED.with(|c| c.set(false));
+    diag_sites::full_started(diag_sites::take_full_site(), trigger.kind);
     GcCycleState::new_full(trigger).run_to_completion()
 }
 
@@ -947,6 +950,7 @@ pub fn gc_init() {
     census::census_on_gc_init();
     #[cfg(feature = "alloc-census")]
     crate::alloc_census::alloc_census_init();
+    crate::arena::alloc_sample::init_from_env();
     reg_budgeted_scanner!(
         scan_runtime_handle_roots_mut,
         scan_runtime_handle_roots_mut_step,
@@ -1335,6 +1339,8 @@ pub extern "C" fn js_gc_release_current_thread_collection_side_allocations() {
     // once-only when the mode is off.
     schedule::report_exit_summary();
     crate::r#box::report_box_stats_at_exit();
+    crate::arena::alloc_sample::report("exit");
+    diag_sites::report_charges("exit");
     emit_incremental_liveness_diag();
     emit_schedule_liveness_verdict();
 }

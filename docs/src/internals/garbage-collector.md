@@ -255,7 +255,8 @@ These are the operational controls most useful outside collector development:
 | `PERRY_RS4GC=0` | select shadow roots on a native-root-capable target |
 | `PERRY_CONSERVATIVE_STACK_SCAN=full` | diagnostic full native-stack scan; disables copying |
 | `PERRY_GC_TRACE=1` | emit structured per-cycle trace records |
-| `PERRY_GC_DIAG=1` | emit human-readable collector diagnostics |
+| `PERRY_GC_DIAG=1` | emit human-readable collector diagnostics (per cycle, plus `[gc-trigger]`/`[gc-full]`/`[gc-budgeted]`/`[gc-charge]` decision and charge attribution and the per-minor `[gc-survival]` root attribution) |
+| `PERRY_ALLOC_SITE_SAMPLE=N` | sample the arena allocation-site histogram every N bytes (`[alloc-site]`); `1`/`on` selects the default interval |
 
 Rooting stress uses `PERRY_GC_SCHEDULE_SEED`,
 `PERRY_GC_SCHEDULE_RATE`, `PERRY_GC_SCHEDULE_ALLOC_KB`,
