@@ -45,6 +45,8 @@ mod subclass;
 pub(crate) mod subclass_elements;
 
 #[cfg(test)]
+mod callback_rooting_tests;
+#[cfg(test)]
 mod collection_tag_tests;
 #[cfg(test)]
 mod forwarding_tests;

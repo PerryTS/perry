@@ -271,6 +271,14 @@ pub extern "C" fn js_array_forEach(arr: *const ArrayHeader, callback: *const Clo
         // fixed closure (see closure/dispatch/direct.rs), and this loop calls
         // exactly one.
         let cb_site = crate::closure::DirectCall3::resolve(callback);
+        // #9673: root the callback for the loop and re-read it at every
+        // dispatch — an inline-arrow callback is reachable only through this
+        // raw parameter, every dispatch allocates, and an evacuating minor
+        // retires the closure out from under the loop (see `js_array_map`).
+        let cb_handle = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(callback as i64));
+        let current_callback = || {
+            crate::value::js_nanbox_get_pointer(cb_handle.get_nanbox_f64()) as *const ClosureHeader
+        };
         // The override is a movable `ObjectHeader` held across user callbacks
         // that allocate — root it for the duration of the loop.
         let self_handle = self_override.map(|recv| scope.root_nanbox_f64(recv));
@@ -286,7 +294,7 @@ pub extern "C" fn js_array_forEach(arr: *const ArrayHeader, callback: *const Clo
                     continue;
                 }
                 let element = crate::array::array_spec_get(arr, i as u32);
-                cb_site.call(callback, element, i as f64, self_value(&rooted));
+                cb_site.call(current_callback(), element, i as f64, self_value(&rooted));
             }
             return;
         }
@@ -298,7 +306,7 @@ pub extern "C" fn js_array_forEach(arr: *const ArrayHeader, callback: *const Clo
             // dispatch path supports call3 safely, so bound native
             // methods like `array.forEach(console.log)` can observe the
             // source array just like Node.
-            cb_site.call(callback, element, i as f64, self_value(&rooted));
+            cb_site.call(current_callback(), element, i as f64, self_value(&rooted));
         }
     }
 }
@@ -625,6 +633,14 @@ pub extern "C" fn js_array_find(arr: *const ArrayHeader, callback: *const Closur
         // fixed closure (see closure/dispatch/direct.rs), and this loop calls
         // exactly one.
         let cb_site = crate::closure::DirectCall3::resolve(callback);
+        // #9673: root the callback for the loop and re-read it at every
+        // dispatch — an inline-arrow callback is reachable only through this
+        // raw parameter, every dispatch allocates, and an evacuating minor
+        // retires the closure out from under the loop (see `js_array_map`).
+        let cb_handle = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(callback as i64));
+        let current_callback = || {
+            crate::value::js_nanbox_get_pointer(cb_handle.get_nanbox_f64()) as *const ClosureHeader
+        };
         let _tg = DenseThisGuard::bind_undefined();
         let exotic = crate::array::array_iteration_is_exotic(arr);
 
@@ -634,7 +650,7 @@ pub extern "C" fn js_array_find(arr: *const ArrayHeader, callback: *const Closur
             } else {
                 rooted.get_or_undefined(i)
             };
-            let result = cb_site.call(callback, element, i as f64, rooted.receiver());
+            let result = cb_site.call(current_callback(), element, i as f64, rooted.receiver());
             // Proper truthy check: handles NaN-boxed booleans
             if crate::value::js_is_truthy(result) != 0 {
                 return element;
@@ -687,6 +703,14 @@ pub extern "C" fn js_array_findIndex(
         // fixed closure (see closure/dispatch/direct.rs), and this loop calls
         // exactly one.
         let cb_site = crate::closure::DirectCall3::resolve(callback);
+        // #9673: root the callback for the loop and re-read it at every
+        // dispatch — an inline-arrow callback is reachable only through this
+        // raw parameter, every dispatch allocates, and an evacuating minor
+        // retires the closure out from under the loop (see `js_array_map`).
+        let cb_handle = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(callback as i64));
+        let current_callback = || {
+            crate::value::js_nanbox_get_pointer(cb_handle.get_nanbox_f64()) as *const ClosureHeader
+        };
         let _tg = DenseThisGuard::bind_undefined();
         let exotic = crate::array::array_iteration_is_exotic(arr);
 
@@ -696,7 +720,7 @@ pub extern "C" fn js_array_findIndex(
             } else {
                 rooted.get_or_undefined(i)
             };
-            let result = cb_site.call(callback, element, i as f64, rooted.receiver());
+            let result = cb_site.call(current_callback(), element, i as f64, rooted.receiver());
             // Proper truthy check: handles NaN-boxed booleans
             if crate::value::js_is_truthy(result) != 0 {
                 return i as i32;
@@ -734,6 +758,14 @@ pub extern "C" fn js_array_find_last(
         // fixed closure (see closure/dispatch/direct.rs), and this loop calls
         // exactly one.
         let cb_site = crate::closure::DirectCall3::resolve(callback);
+        // #9673: root the callback for the loop and re-read it at every
+        // dispatch — an inline-arrow callback is reachable only through this
+        // raw parameter, every dispatch allocates, and an evacuating minor
+        // retires the closure out from under the loop (see `js_array_map`).
+        let cb_handle = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(callback as i64));
+        let current_callback = || {
+            crate::value::js_nanbox_get_pointer(cb_handle.get_nanbox_f64()) as *const ClosureHeader
+        };
         let _tg = DenseThisGuard::bind_undefined();
         let exotic = crate::array::array_iteration_is_exotic(arr);
         for i in (0..length).rev() {
@@ -742,7 +774,7 @@ pub extern "C" fn js_array_find_last(
             } else {
                 rooted.get_or_undefined(i)
             };
-            let result = cb_site.call(callback, element, i as f64, rooted.receiver());
+            let result = cb_site.call(current_callback(), element, i as f64, rooted.receiver());
             if crate::value::js_is_truthy(result) != 0 {
                 return element;
             }
@@ -778,6 +810,14 @@ pub extern "C" fn js_array_find_last_index(
         // fixed closure (see closure/dispatch/direct.rs), and this loop calls
         // exactly one.
         let cb_site = crate::closure::DirectCall3::resolve(callback);
+        // #9673: root the callback for the loop and re-read it at every
+        // dispatch — an inline-arrow callback is reachable only through this
+        // raw parameter, every dispatch allocates, and an evacuating minor
+        // retires the closure out from under the loop (see `js_array_map`).
+        let cb_handle = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(callback as i64));
+        let current_callback = || {
+            crate::value::js_nanbox_get_pointer(cb_handle.get_nanbox_f64()) as *const ClosureHeader
+        };
         let _tg = DenseThisGuard::bind_undefined();
         let exotic = crate::array::array_iteration_is_exotic(arr);
         for i in (0..length).rev() {
@@ -786,7 +826,7 @@ pub extern "C" fn js_array_find_last_index(
             } else {
                 rooted.get_or_undefined(i)
             };
-            let result = cb_site.call(callback, element, i as f64, rooted.receiver());
+            let result = cb_site.call(current_callback(), element, i as f64, rooted.receiver());
             if crate::value::js_is_truthy(result) != 0 {
                 return i as i32;
             }
@@ -879,6 +919,14 @@ pub extern "C" fn js_array_some(arr: *const ArrayHeader, callback: *const Closur
         // fixed closure (see closure/dispatch/direct.rs), and this loop calls
         // exactly one.
         let cb_site = crate::closure::DirectCall3::resolve(callback);
+        // #9673: root the callback for the loop and re-read it at every
+        // dispatch — an inline-arrow callback is reachable only through this
+        // raw parameter, every dispatch allocates, and an evacuating minor
+        // retires the closure out from under the loop (see `js_array_map`).
+        let cb_handle = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(callback as i64));
+        let current_callback = || {
+            crate::value::js_nanbox_get_pointer(cb_handle.get_nanbox_f64()) as *const ClosureHeader
+        };
         let _tg = DenseThisGuard::bind_undefined();
         let exotic = crate::array::array_iteration_is_exotic(arr);
 
@@ -895,7 +943,7 @@ pub extern "C" fn js_array_some(arr: *const ArrayHeader, callback: *const Closur
                     None => continue,
                 }
             };
-            let result = cb_site.call(callback, element, i as f64, rooted.receiver());
+            let result = cb_site.call(current_callback(), element, i as f64, rooted.receiver());
             if crate::value::js_is_truthy(result) != 0 {
                 return f64::from_bits(TAG_TRUE);
             }
@@ -1032,6 +1080,14 @@ pub extern "C" fn js_array_every(arr: *const ArrayHeader, callback: *const Closu
         // fixed closure (see closure/dispatch/direct.rs), and this loop calls
         // exactly one.
         let cb_site = crate::closure::DirectCall3::resolve(callback);
+        // #9673: root the callback for the loop and re-read it at every
+        // dispatch — an inline-arrow callback is reachable only through this
+        // raw parameter, every dispatch allocates, and an evacuating minor
+        // retires the closure out from under the loop (see `js_array_map`).
+        let cb_handle = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(callback as i64));
+        let current_callback = || {
+            crate::value::js_nanbox_get_pointer(cb_handle.get_nanbox_f64()) as *const ClosureHeader
+        };
         let _tg = DenseThisGuard::bind_undefined();
         let exotic = crate::array::array_iteration_is_exotic(arr);
 
@@ -1048,7 +1104,7 @@ pub extern "C" fn js_array_every(arr: *const ArrayHeader, callback: *const Closu
                     None => continue,
                 }
             };
-            let result = cb_site.call(callback, element, i as f64, rooted.receiver());
+            let result = cb_site.call(current_callback(), element, i as f64, rooted.receiver());
             if crate::value::js_is_truthy(result) == 0 {
                 return f64::from_bits(TAG_FALSE);
             }
@@ -1077,6 +1133,14 @@ pub extern "C" fn js_array_flatMap(
         // fixed closure (see closure/dispatch/direct.rs), and this loop calls
         // exactly one.
         let cb_site = crate::closure::DirectCall3::resolve(callback);
+        // #9673: root the callback for the loop and re-read it at every
+        // dispatch — an inline-arrow callback is reachable only through this
+        // raw parameter, every dispatch allocates, and an evacuating minor
+        // retires the closure out from under the loop (see `js_array_map`).
+        let cb_handle = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(callback as i64));
+        let current_callback = || {
+            crate::value::js_nanbox_get_pointer(cb_handle.get_nanbox_f64()) as *const ClosureHeader
+        };
         // Root the result across callbacks and pushes (a push both allocates
         // — possibly triggering a moving GC — and may reallocate the array).
         let result_rooted = scope.root_nanbox_f64(f64::from_bits(
@@ -1099,7 +1163,7 @@ pub extern "C" fn js_array_flatMap(
             let Some(element) = rooted.present(i) else {
                 continue;
             };
-            let mapped = cb_site.call(callback, element, i as f64, rooted.receiver());
+            let mapped = cb_site.call(current_callback(), element, i as f64, rooted.receiver());
             // Root first: detecting a lazy array may materialize it, and a
             // push in the inner loop can move the callback result's target.
             sub_rooted.set_nanbox_f64(mapped);
@@ -1194,6 +1258,14 @@ pub extern "C" fn js_array_reduce(
             throw_reduce_of_empty();
         }
 
+        // #9673: root the callback for the loop and re-read it at every
+        // dispatch — an inline-arrow callback is reachable only through this
+        // raw parameter, every dispatch allocates, and an evacuating minor
+        // retires the closure out from under the loop (see `js_array_map`).
+        let cb_handle = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(callback as i64));
+        let current_callback = || {
+            crate::value::js_nanbox_get_pointer(cb_handle.get_nanbox_f64()) as *const ClosureHeader
+        };
         let exotic = crate::array::array_iteration_is_exotic(arr);
         let present = |i: usize| -> Option<f64> {
             if exotic {
@@ -1232,7 +1304,7 @@ pub extern "C" fn js_array_reduce(
             };
             // Spec callback is `(accumulator, currentValue, currentIndex, array)`.
             let next = cb_site.call(
-                callback,
+                current_callback(),
                 acc_rooted.get_nanbox_f64(),
                 element,
                 i as f64,
