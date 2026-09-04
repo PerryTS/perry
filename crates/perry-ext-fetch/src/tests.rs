@@ -2,6 +2,7 @@
 //! that file under the 2,000-line lint gate. As a child module of the
 //! crate root, `use super::*` reaches every crate-private item.
 
+use super::request_fields::*;
 use super::*;
 
 /// Keeps the tests that exercise the process-global request registry from
