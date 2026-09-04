@@ -79,7 +79,6 @@
     "crates/perry-runtime/src/process/report.rs": 1,
     "crates/perry-runtime/src/proxy.rs": 1,
     "crates/perry-runtime/src/pty/reactor.rs": 1,
-    "crates/perry-runtime/src/readline_helpers.rs": 1,
     "crates/perry-runtime/src/static_plugins.rs": 1,
     "crates/perry-runtime/src/timer.rs": 1,
     "crates/perry-runtime/src/tty.rs": 1,
