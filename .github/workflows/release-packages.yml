@@ -649,16 +649,105 @@ jobs:
         # per crate: a wrapper that can't build on this host must not fail the
         # whole release — packaging below ships whatever was produced.
         if: runner.os != 'Windows' && matrix.old_glibc_image == '' && matrix.musl_image == ''
+        #
+        # ONE invocation for all 40, with a per-package fallback (#9661).
+        # Measured in run 33861357826: this step took 304 min on macOS x86_64
+        # (killed at GitHub's hard 360-min cap) and 291 min on aarch64, while
+        # Windows -- which skips ext libs entirely -- finished in 35-54 min. So
+        # this step IS the release's duration.
+        #
+        # The cost was 40 SEPARATE cargo invocations. #7358 requires each
+        # wrapper be built ALONGSIDE stdlib so their feature unions agree; it
+        # does not require them to be built one at a time. A different `-p` set
+        # per iteration is a different feature union, so each of the 40 largely
+        # rebuilt compiler+runtime+stdlib: ~7.6 min x 40. Naming all of them in
+        # ONE invocation satisfies the same constraint and builds the shared
+        # dependencies once.
+        #
+        # Fallback matters: the old loop was best-effort per crate, so a wrapper
+        # that cannot build on this host does not fail the release. A single
+        # invocation is all-or-nothing, so if it fails we drop back to the loop
+        # and keep that property.
+        #
+        # The coherence check below is what makes this safe to change: if the
+        # unified build ever bundles a tokio different from stdlib's, the
+        # release fails HERE instead of shipping binaries that SIGABRT at their
+        # first socket with "there is no reactor running" (#507, #7629).
         run: |
-          set -euo pipefail
+          set -uo pipefail
           governed_ext_packages=$(./scripts/release_ext_packages.sh)
+          pkg_args=()
           while IFS= read -r name; do
-            echo "::group::build $name"
-            cargo build --profile dist --target ${{ matrix.target }} \
-              -p perry -p perry-runtime-static -p perry-stdlib-static -p "$name" \
-              || echo "  (skipped $name — failed to build on this host)"
-            echo "::endgroup::"
+            [ -n "$name" ] && pkg_args+=(-p "$name")
           done <<< "$governed_ext_packages"
+          echo "::group::build all ${#pkg_args[@]} ext packages in one invocation"
+          if cargo build --profile dist --target ${{ matrix.target }} \
+            -p perry -p perry-runtime-static -p perry-stdlib-static \
+            "${pkg_args[@]+"${pkg_args[@]}"}"; then
+            echo "::endgroup::"
+            echo "::notice::built $(( ${#pkg_args[@]} / 2 )) ext packages in a single cargo invocation"
+          else
+            echo "::endgroup::"
+            echo "::warning::unified ext build failed — falling back to per-package builds"
+            while IFS= read -r name; do
+              echo "::group::build $name"
+              cargo build --profile dist --target ${{ matrix.target }} \
+                -p perry -p perry-runtime-static -p perry-stdlib-static -p "$name" \
+                || echo "  (skipped $name — failed to build on this host)"
+              echo "::endgroup::"
+            done <<< "$governed_ext_packages"
+          fi
+
+      # #507/#7629 invariant, asserted on the artifacts we are about to ship.
+      # rustc names each codegen unit `…tokio-<metadata-hash>.tokio.<cgu>…`, so
+      # the bundled tokio is readable straight out of an archive's member names
+      # (this is exactly what crates/perry/src/commands/compile/shared_tokio.rs
+      # does at link time). Two tokio compilations in one binary means two
+      # independent `tokio::runtime::context::CONTEXT` thread-locals: stdlib's
+      # runtime enters one, the wrapper reads the other, and the program aborts
+      # at its first socket. Fail the release instead.
+      - name: Verify ext archives share stdlib's tokio (#507)
+        if: runner.os != 'Windows' && matrix.old_glibc_image == '' && matrix.musl_image == ''
+        run: |
+          set -uo pipefail
+          dist_dir="target/${{ matrix.target }}/dist"
+          stdlib="$dist_dir/libperry_stdlib.a"
+          if [ ! -f "$stdlib" ]; then
+            echo "::error::$stdlib missing — cannot verify tokio coherence"; exit 1
+          fi
+          tokio_of() { ar t "$1" 2>/dev/null | grep -oE 'tokio-[0-9a-f]+' | sort -u | head -1; }
+          want=$(tokio_of "$stdlib")
+          if [ -z "$want" ]; then
+            echo "::notice::stdlib archive bundles no tokio; nothing to compare"; exit 0
+          fi
+          echo "stdlib bundles $want"
+          bad=0; checked=0
+          for a in "$dist_dir"/libperry_ext_*.a; do
+            [ -e "$a" ] || continue
+            got=$(tokio_of "$a")
+            [ -z "$got" ] && continue          # wrapper does not use tokio
+            checked=$((checked + 1))
+            if [ "$got" != "$want" ]; then
+              echo "::error::$(basename "$a") bundles $got but stdlib bundles $want"
+              bad=$((bad + 1))
+            fi
+          done
+          if [ "$bad" -gt 0 ]; then
+            echo "::error::$bad ext archive(s) disagree with stdlib's tokio — refusing to ship (#507)"
+            exit 1
+          fi
+          # A gate must assert its subject was live. Perry ships tokio-using
+          # wrappers (mysql2, http, ws, fastify, …), so seeing NONE means the
+          # ext build produced nothing, the archives landed elsewhere, or rustc
+          # changed the `tokio-<hash>` member naming this check reads -- in every
+          # case the comparison above verified nothing and must not read green.
+          if [ "$checked" -eq 0 ]; then
+            echo "::error::no tokio-using ext archive was compared — this check verified NOTHING"
+            echo "  looked in: $dist_dir"
+            ls -1 "$dist_dir"/libperry_ext_*.a 2>/dev/null | head -20 || echo "  (no libperry_ext_*.a present)"
+            exit 1
+          fi
+          echo "::notice::$checked tokio-using ext archive(s) all bundle $want"
 
       # #6351: only GTK4 needs noble. Build the compiler, runtime, stdlib and
       # extension archives in a Debian 11 container so their ABI floor is
