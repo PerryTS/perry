@@ -630,6 +630,50 @@ pub(super) fn try_array_only_methods(
                     || chain_roots_at_stream(ctx, member_obj)
                     || chain_roots_at_builtin_iterator(ctx, member_obj)
                     || is_util_mime_params_receiver(ctx, member_obj);
+                // #9701: a nested property receiver is not evidence of an
+                // Array. React exposes `Children.map(children, callback)` on a
+                // plain-object facade; treating that call as
+                // `Array.prototype.map(callback, thisArg)` made `children` the
+                // callback and failed with "object is not a function" before
+                // React's own method was entered. The same ambiguity applies
+                // to the other callback/comparator-taking Array names below.
+                //
+                // Defer unknown property receivers to shape-aware dynamic
+                // dispatch, which still selects the dense helper for a real
+                // Array and preserves an object's own method. Statically typed
+                // Array fields keep the specialized HIR path.
+                let nested_callback_receiver_is_ambiguous =
+                    matches!(member_obj, ast::Expr::Member(_))
+                        && matches!(
+                            method_name,
+                            "map"
+                                | "filter"
+                                | "forEach"
+                                | "find"
+                                | "findIndex"
+                                | "findLast"
+                                | "findLastIndex"
+                                | "some"
+                                | "every"
+                                | "reduce"
+                                | "reduceRight"
+                                | "sort"
+                                | "toSorted"
+                        )
+                        && {
+                            let recv_ty =
+                                crate::lower_types::infer_type_from_expr(&member.obj, ctx);
+                            !matches!(recv_ty, Type::Array(_) | Type::Tuple(_))
+                                && !matches!(
+                                    &recv_ty,
+                                    Type::Generic { base, .. }
+                                        if base == "Array" || base == "ReadonlyArray"
+                                )
+                                && !chain_roots_at_array(ctx, &member.obj)
+                        };
+                if nested_callback_receiver_is_ambiguous {
+                    return Ok(Err(args));
+                }
                 // `entries` / `keys` / `values` are not Array-only names.
                 // Maps, Sets, iterator-like facades, and ordinary user objects
                 // can all provide them. In particular, OpenCode's

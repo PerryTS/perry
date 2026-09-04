@@ -53,6 +53,8 @@ fn typed_array_lacks_array_method(name: &str) -> bool {
 }
 
 mod array_only_methods;
+#[cfg(test)]
+mod array_only_methods_tests;
 mod crypto;
 mod globals;
 mod imported_array_methods;
