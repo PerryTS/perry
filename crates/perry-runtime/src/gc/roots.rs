@@ -755,30 +755,7 @@ pub(super) fn get_stack_bottom() -> usize {
 
 #[cfg(target_os = "linux")]
 pub(super) fn get_stack_bottom() -> usize {
-    extern "C" {
-        fn pthread_self() -> usize;
-        fn pthread_attr_init(attr: *mut [u64; 8]) -> i32;
-        fn pthread_getattr_np(thread: usize, attr: *mut [u64; 8]) -> i32;
-        fn pthread_attr_getstack(
-            attr: *const [u64; 8],
-            stackaddr: *mut *mut u8,
-            stacksize: *mut usize,
-        ) -> i32;
-        fn pthread_attr_destroy(attr: *mut [u64; 8]) -> i32;
-    }
-    unsafe {
-        let thread = pthread_self();
-        let mut attr = [0u64; 8];
-        pthread_attr_init(&mut attr);
-        if pthread_getattr_np(thread, &mut attr) != 0 {
-            return 0;
-        }
-        let mut stackaddr: *mut u8 = std::ptr::null_mut();
-        let mut stacksize: usize = 0;
-        pthread_attr_getstack(&attr, &mut stackaddr, &mut stacksize);
-        pthread_attr_destroy(&mut attr);
-        stackaddr as usize + stacksize
-    }
+    crate::native_stack::stack_top()
 }
 
 // Windows: read TEB.StackBase. Works on every supported Windows version
