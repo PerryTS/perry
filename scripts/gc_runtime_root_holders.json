@@ -72,22 +72,34 @@
       "why": "InFlightRequest = three perry-ffi registry handle ids + a deadline Instant. The JS-value-bearing objects behind the ids (IncomingMessage/ServerResponse) are registered handles scanned by scan_http_server_roots via iter_handles_of_mut."
     },
     {
+      "file": "crates/perry-ext-net/src/bun_tcp.rs",
+      "name": "NEXT_TOKEN",
+      "verdict": "not_a_gc_pointer",
+      "why": "Monotonic AtomicU64 that mints write-token ids for TOKENS. A counter: incremented and used as a map key, never dereferenced and never derived from an address."
+    },
+    {
+      "file": "crates/perry-ext-net/src/bun_tcp.rs",
+      "name": "TOKENS",
+      "verdict": "not_a_gc_pointer",
+      "why": "write_tokens(): HashMap<u64 write-token, i64 socket HANDLE>. Each i64 is the same handle-band id ABORTS holds \u2014 the key used to look the socket up in crate::statics::sockets(), never a heap address. Entries are removed on write completion (bun_tcp.rs) and retained-out when a handle closes, so no id outlives its facade."
+    },
+    {
       "file": "crates/perry-ext-net/src/lib.rs",
       "name": "P",
       "verdict": "not_a_gc_pointer",
       "why": "pending_events(): Vec<PendingNetEvent>; every variant carries socket/server ids, Bytes, String, bool, or DropInfo (SocketAddrs) \u2014 no closures or NaN-boxed values. Listener closures live in listeners(), visited by scan_net_roots."
     },
     {
-      "file": "crates/perry-ext-net/src/socket_events.rs",
-      "name": "SCRATCH",
-      "verdict": "not_a_gc_pointer",
-      "why": "Drain-side reusable Vec<PendingNetEvent> inside js_ext_net_drain_pending; same payload as P (ids/Bytes/strings), emptied within the drain call. No JS values."
-    },
-    {
       "file": "crates/perry-ext-net/src/server_state.rs",
       "name": "STATE",
       "verdict": "not_a_gc_pointer",
       "why": "ConnectionOrderState = socket-id VecDeques, per-server usize credits, and buffered Bytes chunks keyed by socket id. Pure ids and bytes; no NaN-boxed values."
+    },
+    {
+      "file": "crates/perry-ext-net/src/socket_events.rs",
+      "name": "SCRATCH",
+      "verdict": "not_a_gc_pointer",
+      "why": "Drain-side reusable Vec<PendingNetEvent> inside js_ext_net_drain_pending; same payload as P (ids/Bytes/strings), emptied within the drain call. No JS values."
     },
     {
       "file": "crates/perry-ext-net/src/tls.rs",
@@ -202,19 +214,28 @@
       "why": "#9707: dense side array of `TrustedTargets`, two `Option<TrustedDirectTarget>` per eligible arrow. TrustedDirectTarget{func_ptr:*const u8, capture_count:u32, boxed_capture_mask:u64} is a static code pointer plus plain integers \u2014 the same payload the deleted CLOSURE_ARROW_FUNCTION_REGISTRY / CLOSURE_VERSIONED_LOOP_REGISTRY held under this verdict. Nothing for the collector."
     },
     {
+      "file": "crates/perry-runtime/src/fs/dir_glob_watch/watch_backend.rs",
+      "name": "QUEUE",
+      "verdict": "not_a_gc_pointer",
+      "why": "#9613: per-JS-thread Arc<EventQueue> of fs.watch RawEvents \u2014 PathBufs, EventClass tags and WatchError strings from the OS backends. Pure Rust data; no NaN-boxed values or heap object pointers ever enter the queue (events are converted to JS values only in the pump drain, under a fresh handle scope)."
+    },
+    {
+      "file": "crates/perry-runtime/src/fs/dir_glob_watch/watch_backend.rs",
+      "name": "SHARED",
+      "verdict": "not_a_gc_pointer",
+      "why": "#9613: RefCell<Option<Option<SharedInstance>>> caching the notify watcher instance (OS watcher handles + channel). Holds no JS-heap pointers; watch registrations are keyed by usize ids, targets are PathBufs."
+    },
+    {
       "file": "crates/perry-runtime/src/fs/filehandle.rs",
       "name": "NEXT_READ_LINES_ID",
       "verdict": "not_a_gc_pointer",
       "why": "Monotonic id counter for READ_LINES_REGISTRY keys. The registry's own heap values are visited by scan_filehandle_roots_mut (fs/filehandle.rs:65), reached from scan_fs_handle_roots_mut."
     },
     {
-      "file": "crates/perry-runtime/src/map.rs",
-      "name": "MAP_FOREACH_STACK",
-      "count": 1,
-      "classification": "not_a_gc_pointer",
+      "file": "crates/perry-runtime/src/gc/trace.rs",
+      "name": "FORWARDED_STUB_MEMBERSHIP_RECOVERIES",
       "verdict": "not_a_gc_pointer",
-      "why": "Holds Set/Map header ADDRESSES as identity keys for in-flight forEach walks (#9082); the values are only ever compared (`contains`, `pop` equality) and truncated, never dereferenced, so no collector edge originates here. Correctness across evacuation is maintained by set_header_moved_for_gc / map_header_moved_for_gc, which rewrite every matching entry when a header moves \u2014 see the SET_FOREACH_STACK/MAP_FOREACH_STACK rewrite loops there.",
-      "reason": "Holds Set/Map header ADDRESSES as identity keys for in-flight forEach walks (#9082); the values are only ever compared (`contains`, `pop` equality) and truncated, never dereferenced, so no collector edge originates here. Correctness across evacuation is maintained by set_header_moved_for_gc / map_header_moved_for_gc, which rewrite every matching entry when a header moves \u2014 see the SET_FOREACH_STACK/MAP_FOREACH_STACK rewrite loops there."
+      "why": "#9717: monotonic count of array-growth forwarding stubs a budgeted full cycle admitted through `classifier_valid_object_start`, reported as `forwarded_stub_recoveries=` on the PERRY_GC_DIAG `[gc-incremental]` line. A `Cell<u64>` holding a tally, never an address \u2014 the stubs it counts are reached through the worklist, not retained here. Nothing for the collector."
     },
     {
       "file": "crates/perry-runtime/src/map.rs",
@@ -224,6 +245,15 @@
       "verdict": "not_a_gc_pointer",
       "why": "Per-Map compaction log for the epoch-based for-of/iterator cursor rebase: keyed by MapHeader ADDRESS (identity only, never dereferenced), values are VecDeque<{epoch: u32, removed: Prefix(u32) | Indices(Vec<u32>)}> \u2014 raw entry indices, no heap references, so no collector edge originates here. Correctness across evacuation is maintained by map_header_moved_for_gc, which re-keys the entry when a header moves; js_map_alloc drops any stale entry for a reused address; prune_dead_map_compaction_log_owners is registered in gc/dead_owner.rs (table MAP_COMPACTION_LOG) so a dead Map's history is dropped.",
       "reason": "Per-Map compaction log for the epoch-based for-of/iterator cursor rebase: keyed by MapHeader ADDRESS (identity only, never dereferenced), values are VecDeque<{epoch: u32, removed: Prefix(u32) | Indices(Vec<u32>)}> \u2014 raw entry indices, no heap references, so no collector edge originates here. Correctness across evacuation is maintained by map_header_moved_for_gc, which re-keys the entry when a header moves; js_map_alloc drops any stale entry for a reused address; prune_dead_map_compaction_log_owners is registered in gc/dead_owner.rs (table MAP_COMPACTION_LOG) so a dead Map's history is dropped."
+    },
+    {
+      "file": "crates/perry-runtime/src/map.rs",
+      "name": "MAP_FOREACH_STACK",
+      "count": 1,
+      "classification": "not_a_gc_pointer",
+      "verdict": "not_a_gc_pointer",
+      "why": "Holds Set/Map header ADDRESSES as identity keys for in-flight forEach walks (#9082); the values are only ever compared (`contains`, `pop` equality) and truncated, never dereferenced, so no collector edge originates here. Correctness across evacuation is maintained by set_header_moved_for_gc / map_header_moved_for_gc, which rewrite every matching entry when a header moves \u2014 see the SET_FOREACH_STACK/MAP_FOREACH_STACK rewrite loops there.",
+      "reason": "Holds Set/Map header ADDRESSES as identity keys for in-flight forEach walks (#9082); the values are only ever compared (`contains`, `pop` equality) and truncated, never dereferenced, so no collector edge originates here. Correctness across evacuation is maintained by set_header_moved_for_gc / map_header_moved_for_gc, which rewrite every matching entry when a header moves \u2014 see the SET_FOREACH_STACK/MAP_FOREACH_STACK rewrite loops there."
     },
     {
       "file": "crates/perry-runtime/src/net.rs",
@@ -465,21 +495,21 @@
     },
     {
       "file": "crates/perry-runtime/src/set.rs",
-      "name": "SET_FOREACH_STACK",
-      "count": 1,
-      "classification": "not_a_gc_pointer",
-      "verdict": "not_a_gc_pointer",
-      "why": "Holds Set/Map header ADDRESSES as identity keys for in-flight forEach walks (#9082); the values are only ever compared (`contains`, `pop` equality) and truncated, never dereferenced, so no collector edge originates here. Correctness across evacuation is maintained by set_header_moved_for_gc / map_header_moved_for_gc, which rewrite every matching entry when a header moves \u2014 see the SET_FOREACH_STACK/MAP_FOREACH_STACK rewrite loops there.",
-      "reason": "Holds Set/Map header ADDRESSES as identity keys for in-flight forEach walks (#9082); the values are only ever compared (`contains`, `pop` equality) and truncated, never dereferenced, so no collector edge originates here. Correctness across evacuation is maintained by set_header_moved_for_gc / map_header_moved_for_gc, which rewrite every matching entry when a header moves \u2014 see the SET_FOREACH_STACK/MAP_FOREACH_STACK rewrite loops there."
-    },
-    {
-      "file": "crates/perry-runtime/src/set.rs",
       "name": "SET_COMPACTION_LOG",
       "count": 1,
       "classification": "not_a_gc_pointer",
       "verdict": "not_a_gc_pointer",
       "why": "Per-Set compaction log for the epoch-based for-of/iterator cursor rebase: keyed by SetHeader ADDRESS (identity only, never dereferenced), values are VecDeque<{epoch: u32, removed: Prefix(u32) | Indices(Vec<u32>)}> \u2014 raw element indices, no heap references, so no collector edge originates here. Correctness across evacuation is maintained by set_header_moved_for_gc, which re-keys the entry when a header moves; js_set_alloc drops any stale entry for a reused address; prune_dead_set_compaction_log_owners is registered in gc/dead_owner.rs (table SET_COMPACTION_LOG).",
       "reason": "Per-Set compaction log for the epoch-based for-of/iterator cursor rebase: keyed by SetHeader ADDRESS (identity only, never dereferenced), values are VecDeque<{epoch: u32, removed: Prefix(u32) | Indices(Vec<u32>)}> \u2014 raw element indices, no heap references, so no collector edge originates here. Correctness across evacuation is maintained by set_header_moved_for_gc, which re-keys the entry when a header moves; js_set_alloc drops any stale entry for a reused address; prune_dead_set_compaction_log_owners is registered in gc/dead_owner.rs (table SET_COMPACTION_LOG)."
+    },
+    {
+      "file": "crates/perry-runtime/src/set.rs",
+      "name": "SET_FOREACH_STACK",
+      "count": 1,
+      "classification": "not_a_gc_pointer",
+      "verdict": "not_a_gc_pointer",
+      "why": "Holds Set/Map header ADDRESSES as identity keys for in-flight forEach walks (#9082); the values are only ever compared (`contains`, `pop` equality) and truncated, never dereferenced, so no collector edge originates here. Correctness across evacuation is maintained by set_header_moved_for_gc / map_header_moved_for_gc, which rewrite every matching entry when a header moves \u2014 see the SET_FOREACH_STACK/MAP_FOREACH_STACK rewrite loops there.",
+      "reason": "Holds Set/Map header ADDRESSES as identity keys for in-flight forEach walks (#9082); the values are only ever compared (`contains`, `pop` equality) and truncated, never dereferenced, so no collector edge originates here. Correctness across evacuation is maintained by set_header_moved_for_gc / map_header_moved_for_gc, which rewrite every matching entry when a header moves \u2014 see the SET_FOREACH_STACK/MAP_FOREACH_STACK rewrite loops there."
     },
     {
       "file": "crates/perry-runtime/src/set.rs",
@@ -1929,30 +1959,6 @@
       "name": "WINDOW_ROOTS",
       "verdict": "not_a_gc_pointer",
       "why": "Window-root registry maps numeric window handles to numeric root-widget handles; neither value is a JavaScript heap pointer."
-    },
-    {
-      "file": "crates/perry-runtime/src/fs/dir_glob_watch/watch_backend.rs",
-      "name": "QUEUE",
-      "verdict": "not_a_gc_pointer",
-      "why": "#9613: per-JS-thread Arc<EventQueue> of fs.watch RawEvents \u2014 PathBufs, EventClass tags and WatchError strings from the OS backends. Pure Rust data; no NaN-boxed values or heap object pointers ever enter the queue (events are converted to JS values only in the pump drain, under a fresh handle scope)."
-    },
-    {
-      "file": "crates/perry-runtime/src/fs/dir_glob_watch/watch_backend.rs",
-      "name": "SHARED",
-      "verdict": "not_a_gc_pointer",
-      "why": "#9613: RefCell<Option<Option<SharedInstance>>> caching the notify watcher instance (OS watcher handles + channel). Holds no JS-heap pointers; watch registrations are keyed by usize ids, targets are PathBufs."
-    },
-    {
-      "file": "crates/perry-ext-net/src/bun_tcp.rs",
-      "name": "TOKENS",
-      "verdict": "not_a_gc_pointer",
-      "why": "write_tokens(): HashMap<u64 write-token, i64 socket HANDLE>. Each i64 is the same handle-band id ABORTS holds \u2014 the key used to look the socket up in crate::statics::sockets(), never a heap address. Entries are removed on write completion (bun_tcp.rs) and retained-out when a handle closes, so no id outlives its facade."
-    },
-    {
-      "file": "crates/perry-ext-net/src/bun_tcp.rs",
-      "name": "NEXT_TOKEN",
-      "verdict": "not_a_gc_pointer",
-      "why": "Monotonic AtomicU64 that mints write-token ids for TOKENS. A counter: incremented and used as a map key, never dereferenced and never derived from an address."
     }
   ],
   "_FRONTIER_README": "Identity-pinned debt ratchet over new perry-ui* candidates and otherwise-unclassified core perry_thread_local! declarations (see the census docstring, \u201cThe identity-pinned frontier\u201d). A new uncovered holder fails until it is scanned, receives a researched holders verdict, or is deliberately pinned as debt. Moving a researched false positive to holders graduates it from this list. A fixed or classified holder makes its old frontier pin stale, so the receipt must be deleted.",
