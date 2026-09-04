@@ -14,7 +14,7 @@ stays disarmed until utilization reaches 70% or capacity grows materially
 into a periodic full-GC loop.
 
 On the compiled Claude Code 2.1.112 workload from the report, arena capacity
-fell from 96.5 MiB before the episode to 36.7 MiB, then 35.7 MiB and 35.7 MiB
-across a five-minute idle soak with about 23 MiB live. RSS fell from 401 MiB at
-the first census to 132 MiB at the last, and exactly one idle full was attributed
+fell from 96.5 MB before the episode to 36.7 MB, then 35.7 MB and 35.7 MB
+across a five-minute idle soak with about 23 MB live. RSS fell from 401 MB at
+the first census to 132 MB at the last, and exactly one idle full was attributed
 to arena right-sizing.
