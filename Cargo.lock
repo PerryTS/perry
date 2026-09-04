@@ -6527,6 +6527,7 @@ dependencies = [
  "p521",
  "pbkdf2 0.13.0",
  "perry-container-compose",
+ "perry-ffi",
  "perry-runtime",
  "perry-updater",
  "proptest",

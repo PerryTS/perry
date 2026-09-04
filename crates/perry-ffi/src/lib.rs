@@ -53,6 +53,9 @@ pub use async_runtime::{
     PERRY_NATIVE_ASYNC_THREAD_MAIN, PERRY_NATIVE_ASYNC_WRONG_THREAD,
 };
 
+mod tls_environment;
+pub use tls_environment::{node_tls_client_environment, NodeTlsClientEnvironment};
+
 mod types;
 pub use types::{
     ArrayHeader, BigIntHeader, BufferHeader, ClosureHeader, NativeAsyncCompletion, ObjectHeader,

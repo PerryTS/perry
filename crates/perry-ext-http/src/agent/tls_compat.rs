@@ -37,7 +37,7 @@ pub(crate) fn client_for_agent_tls(
     handle: Handle,
     tls: &crate::tls_client::TlsOptions,
 ) -> Result<reqwest::Client, String> {
-    let env_disabled = crate::tls_client::node_tls_reject_unauthorized_disabled();
+    let env_disabled = perry_ffi::node_tls_client_environment().accepts_invalid_certificates();
     let key = (handle, tls.clone(), env_disabled);
     if let Some(client) = AGENT_TLS_CLIENTS.lock().unwrap().get(&key) {
         return Ok(client.clone());

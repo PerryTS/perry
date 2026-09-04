@@ -147,12 +147,14 @@ impl TlsOptions {
     /// instead of reusing the pooled default. `NODE_TLS_REJECT_UNAUTHORIZED=0`
     /// alone counts (it disables verification process-wide).
     pub(crate) fn needs_custom_client(&self) -> bool {
+        let environment = perry_ffi::node_tls_client_environment();
         self.reject_unauthorized == Some(false)
             || self.check_server_identity_callback != 0
             || self.servername.is_some()
             || !self.ca_pems.is_empty()
             || !self.client_pfx.is_empty()
-            || node_tls_reject_unauthorized_disabled()
+            || environment.accepts_invalid_certificates()
+            || !environment.ca_pems().is_empty()
     }
 
     /// Resolve whether the cert chain should be accepted without
@@ -161,7 +163,8 @@ impl TlsOptions {
     /// replaces only hostname verification; the certificate chain must still
     /// validate.
     pub(crate) fn accept_invalid_certs(&self) -> bool {
-        self.reject_unauthorized == Some(false) || node_tls_reject_unauthorized_disabled()
+        self.reject_unauthorized == Some(false)
+            || perry_ffi::node_tls_client_environment().accepts_invalid_certificates()
     }
 
     /// Build a per-request `reqwest::Client` honoring these options.
@@ -174,35 +177,44 @@ impl TlsOptions {
         let mut builder = crate::apply_node_proxy_policy(
             reqwest::Client::builder().tcp_keepalive(std::time::Duration::from_secs(60)),
         );
+        let environment = perry_ffi::node_tls_client_environment();
+        let has_explicit_ca = !self.ca_pems.is_empty();
+        let ca_pems = if has_explicit_ca {
+            self.ca_pems.as_slice()
+        } else {
+            environment.ca_pems()
+        };
+        let accept_invalid_certs = self.accept_invalid_certs();
 
-        // Node/OpenSSL accepts an explicitly trusted self-signed CA
-        // certificate as the endpoint certificate. webpki rejects that shape
-        // as `CaUsedAsEndEntity`, even when the exact DER is in its root store.
-        // A small verifier wrapper preserves normal chain validation, ignores
+        // Node/OpenSSL accepts a configured self-signed CA certificate as the
+        // endpoint certificate. webpki rejects that shape as
+        // `CaUsedAsEndEntity`, even when the exact DER is in its root store. A
+        // small verifier wrapper preserves normal chain validation, ignores
         // only the hostname result (our Node-CN compatibility layer owns it),
-        // and accepts that one exact-leaf trust case.
+        // and accepts that one exact-leaf trust case. An explicit `ca` option
+        // replaces public roots; environment CAs extend them.
         let custom_tls_config = !self.client_pfx.is_empty()
-            || (!self.accept_invalid_certs()
-                && (!self.ca_pems.is_empty() || self.servername.is_some()));
+            || (!accept_invalid_certs && (!ca_pems.is_empty() || self.servername.is_some()));
         if custom_tls_config {
             builder = builder.use_preconfigured_tls(build_node_tls_config(
-                &self.ca_pems,
+                ca_pems,
+                !has_explicit_ca,
                 self.servername.clone(),
                 self.check_server_identity_callback != 0,
-                self.accept_invalid_certs(),
+                accept_invalid_certs,
                 self.client_pfx.first(),
             )?);
         } else {
-            if self.accept_invalid_certs() {
+            if accept_invalid_certs {
                 builder = builder.danger_accept_invalid_certs(true);
             }
             if self.servername.is_some()
                 || self.check_server_identity_callback != 0
-                || !self.ca_pems.is_empty()
+                || !ca_pems.is_empty()
             {
                 builder = builder.danger_accept_invalid_hostnames(true);
             }
-            for pem in &self.ca_pems {
+            for pem in ca_pems {
                 // A `ca` entry may be a single cert or a bundle; try the
                 // bundle parser first, then fall back to the single-cert one.
                 match reqwest::Certificate::from_pem_bundle(pem) {
@@ -520,13 +532,14 @@ fn legacy_direct_certificate_is_valid(
 
 fn build_node_tls_config(
     ca_pems: &[Vec<u8>],
+    include_default_roots: bool,
     expected_server_name: Option<String>,
     skip_hostname: bool,
     accept_invalid_certs: bool,
     client_pfx: Option<&(Vec<u8>, String)>,
 ) -> Result<rustls::ClientConfig, String> {
     let mut roots = rustls::RootCertStore::empty();
-    if ca_pems.is_empty() {
+    if include_default_roots {
         roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     }
     let mut exact_trust = Vec::new();
@@ -658,16 +671,6 @@ fn dns_name_matches(pattern: &str, expected: &str) -> bool {
     expected
         .strip_suffix(suffix)
         .is_some_and(|prefix| prefix.ends_with('.') && !prefix[..prefix.len() - 1].contains('.'))
-}
-
-/// `NODE_TLS_REJECT_UNAUTHORIZED=0` disables client cert verification
-/// process-wide. JS-side `process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0'`
-/// writes through to the OS environment (`js_setenv` → `std::env::set_var`),
-/// so reading it here at dispatch time sees runtime assignments.
-pub(crate) fn node_tls_reject_unauthorized_disabled() -> bool {
-    std::env::var("NODE_TLS_REJECT_UNAUTHORIZED")
-        .map(|v| v == "0")
-        .unwrap_or(false)
 }
 
 /// Parse the client TLS options off a NaN-boxed request options object.
@@ -1167,7 +1170,9 @@ mod tests {
     #[test]
     fn builds_node_ca_config_for_explicit_endpoint_certificate() {
         let certificate = fixture(include_str!("../tests/fixtures/rsa_cert.crt.b64"));
-        assert!(build_node_tls_config(&[certificate.clone()], None, false, false, None,).is_ok());
+        assert!(
+            build_node_tls_config(&[certificate.clone()], false, None, false, false, None,).is_ok()
+        );
         let certificate_der = rustls_pemfile::certs(&mut std::io::Cursor::new(&certificate))
             .next()
             .expect("fixture contains a certificate")

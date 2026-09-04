@@ -216,11 +216,37 @@ lazy_static! {
 
 /// Shared builder options for every fetch client (direct or proxied).
 fn fetch_client_builder() -> reqwest::ClientBuilder {
-    reqwest::Client::builder()
+    let builder = reqwest::Client::builder()
         .user_agent(concat!("perry/", env!("CARGO_PKG_VERSION")))
         .pool_idle_timeout(std::time::Duration::from_secs(90))
         .pool_max_idle_per_host(16)
-        .tcp_keepalive(std::time::Duration::from_secs(60))
+        .tcp_keepalive(std::time::Duration::from_secs(60));
+    apply_node_tls_environment(builder)
+}
+
+/// Apply the process-wide Node TLS environment to a fetch client. The
+/// variable/file resolution is shared with `node:https` through perry-ffi;
+/// this layer only translates the result into reqwest builder options.
+fn apply_node_tls_environment(mut builder: reqwest::ClientBuilder) -> reqwest::ClientBuilder {
+    let environment = perry_ffi::node_tls_client_environment();
+    if environment.accepts_invalid_certificates() {
+        builder = builder.danger_accept_invalid_certs(true);
+    }
+    for pem in environment.ca_pems() {
+        match reqwest::Certificate::from_pem_bundle(pem) {
+            Ok(certificates) => {
+                for certificate in certificates {
+                    builder = builder.add_root_certificate(certificate);
+                }
+            }
+            Err(_) => {
+                if let Ok(certificate) = reqwest::Certificate::from_pem(pem) {
+                    builder = builder.add_root_certificate(certificate);
+                }
+            }
+        }
+    }
+    builder
 }
 
 /// The client every fetch path must use: the proxied client when a global

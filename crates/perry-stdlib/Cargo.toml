@@ -346,6 +346,7 @@ async-runtime = ["dep:tokio"]
 container = ["dep:perry-container-compose", "async-runtime"]
 
 [dependencies]
+perry-ffi.workspace = true
 perry-runtime = { workspace = true, features = ["stdlib"] }
 # Re-bundle updater symbols into libperry_stdlib.a so user binaries that
 # call `perry/updater` resolve at link time without extra wiring.
