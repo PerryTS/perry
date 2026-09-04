@@ -169,7 +169,7 @@ struct FrozenUnit {
     function_count: usize,
 }
 
-/// Apply a typed post-RS4GC budget request to the lowering-owned functions
+/// Apply a typed pre- or post-RS4GC budget request to the lowering-owned functions
 /// that produced a module/unit. The request is expected to make progress for
 /// every named function; otherwise retrying would either preserve the refusal
 /// or loop forever, so fail with the original names and counts instead.
@@ -187,17 +187,37 @@ pub(crate) fn apply_budget_spill_retry<'a>(
         };
         if function.request_shadow_frame_spill() {
             changed.insert(violation.name.clone());
-            eprintln!(
-                "perry: `{}` exceeded the post-RS4GC instruction budget ({} -> {} \
-                     instructions; cap {}); retrying it with precise GC roots in a shadow \
-                     frame at the requested optimization level (#8679)",
-                violation.name,
-                violation
-                    .pre_instructions
-                    .map_or_else(|| "unknown".to_string(), |n| n.to_string()),
-                violation.post_instructions,
-                violation.cap,
-            );
+            match &violation.cause {
+                crate::inprocess::Rs4gcBudgetCause::PreRewrite {
+                    root_allocas,
+                    safepoints,
+                    estimated_relocations,
+                } => eprintln!(
+                    "perry: `{}` exceeded the pre-RS4GC relocation estimate ({} managed-root \
+                     allocas + {} non-leaf call-result temporaries across {} call sites = {} \
+                     estimated relocations; cap {}); retrying it with precise GC roots in a \
+                     shadow frame at the requested optimization level (#8583)",
+                    violation.name,
+                    root_allocas,
+                    safepoints,
+                    safepoints,
+                    estimated_relocations,
+                    violation.cap,
+                ),
+                crate::inprocess::Rs4gcBudgetCause::PostRewrite { post_instructions } => {
+                    eprintln!(
+                        "perry: `{}` exceeded the post-RS4GC instruction budget ({} -> {} \
+                         instructions; cap {}); retrying it with precise GC roots in a shadow \
+                         frame at the requested optimization level (#8679)",
+                        violation.name,
+                        violation
+                            .pre_instructions
+                            .map_or_else(|| "unknown".to_string(), |n| n.to_string()),
+                        post_instructions,
+                        violation.cap,
+                    );
+                }
+            }
         }
     }
     let missing: Vec<&str> = violations
@@ -209,7 +229,7 @@ pub(crate) fn apply_budget_spill_retry<'a>(
         Ok(())
     } else {
         Err(anyhow!(
-            "post-RS4GC budget requested a shadow-frame retry for {}, but those \
+            "RS4GC budget requested a shadow-frame retry for {}, but those \
              functions were not available for a new lowering (or were already retried)",
             missing.join(", ")
         ))
@@ -421,7 +441,7 @@ pub fn compile_module_units_native(
     let target_triple = llmod.target_triple.clone();
     let owned_module = std::mem::replace(llmod, LlModule::new(target_triple));
     // Keep at most a bounded window of lowering-owned units alive after they
-    // are frozen. A post-RS4GC budget miss needs that source graph exactly
+    // are frozen. A pre- or post-RS4GC budget miss needs that source graph exactly
     // once so the named functions can switch root lowering and be frozen
     // again; successful units are still dropped immediately (#8679).
     let mut parts: Vec<Option<crate::module::OwnedCodegenUnitPart>> = owned_module
@@ -671,6 +691,14 @@ pub fn compile_module_units_native(
                         }
                     }
                 } else {
+                    if show_progress {
+                        eprintln!(
+                            "[perry] codegen: {module_prefix}: LLVM unit {}/{} failed after {:.1}s: {error:#}",
+                            i + 1,
+                            unit_total,
+                            attempt_elapsed.as_secs_f64()
+                        );
+                    }
                     slots[i] = Some(out);
                 }
             } else {

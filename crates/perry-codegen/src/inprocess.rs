@@ -308,7 +308,8 @@ pub(crate) fn optimize_and_emit_module(
 }
 
 /// [`optimize_and_emit_module`] that also fills `stats` (sizes before and
-/// after RS4GC, widest functions, phase times) for the per-unit report.
+/// after RS4GC, widest functions, phase times, and any bounded-emission
+/// fallback) for the per-unit report.
 pub(crate) fn optimize_and_emit_module_with_stats(
     module: &inkwell::module::Module<'_>,
     effective_target: &str,
@@ -348,6 +349,9 @@ pub struct UnitCodegenStats {
     /// Functions stamped `"disable-tail-calls"` because their alloca-walk
     /// estimate exceeded [`DEFAULT_TRE_MAX_ALLOCA_WALK`] (#8883).
     pub tail_call_elim_skipped: Vec<TreWalkOverBudget>,
+    /// The widest function which made this unit use LLVM's bounded O0 machine
+    /// pipeline after completing the requested IR optimization pipeline.
+    pub fast_emit_fallback: Option<FastEmitFallback>,
 }
 
 fn function_instruction_count(function: inkwell::values::FunctionValue<'_>) -> usize {
@@ -385,6 +389,133 @@ fn module_instruction_census(
     (functions, total, widest)
 }
 
+/// Per-function instruction ceiling for LLVM's optimized machine pipeline.
+///
+/// This budget is checked *after* the requested `default<O*>` IR pipeline has
+/// completed. It changes neither JS lowering nor middle-end optimization; it
+/// only asks the target machine to use its O0 instruction-selection,
+/// live-interval and register-allocation pipeline for a unit containing an
+/// extreme generated function.
+///
+/// The threshold is bracketed by real arm64/LLVM 22 measurements. Machine-IR
+/// expansion depends on CFG shape, so raw IR size is deliberately only a
+/// conservative guard: one 161k-instruction function emitted normally in
+/// ~19s, while a different 100,152-instruction Claude Code 2.1.259 function
+/// grew past ~10 GiB RSS in the optimized machine pipeline. The same function
+/// emitted through an O0 target machine in 6s. Another 277k-instruction async
+/// state-machine function remained in LiveIntervals / register allocation for
+/// more than 16 minutes at ~10 GiB RSS; its already-Os-optimized IR emitted
+/// through an O0 target machine in 3.5s at ~550 MiB RSS. 100k is immediately
+/// below the smallest observed pathological case.
+///
+/// `PERRY_LL_FAST_EMIT_MAX_INSTRS=<n>` raises or lowers the ceiling; `0` /
+/// `off` disables the fallback.
+const DEFAULT_FAST_EMIT_MAX_INSTRS: usize = 100_000;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FastEmitBudget {
+    Off,
+    Cap(usize),
+}
+
+fn parse_fast_emit_budget(value: Option<&str>) -> FastEmitBudget {
+    match value.map(str::trim) {
+        None | Some("") => FastEmitBudget::Cap(DEFAULT_FAST_EMIT_MAX_INSTRS),
+        Some("0") | Some("off") | Some("false") => FastEmitBudget::Off,
+        Some(v) => match v.parse::<usize>() {
+            Ok(0) => FastEmitBudget::Off,
+            Ok(n) => FastEmitBudget::Cap(n),
+            Err(_) => FastEmitBudget::Cap(DEFAULT_FAST_EMIT_MAX_INSTRS),
+        },
+    }
+}
+
+fn fast_emit_budget() -> FastEmitBudget {
+    #[cfg(test)]
+    if let Some(budget) = TEST_FAST_EMIT_BUDGET.with(std::cell::Cell::get) {
+        return budget;
+    }
+    parse_fast_emit_budget(
+        std::env::var("PERRY_LL_FAST_EMIT_MAX_INSTRS")
+            .ok()
+            .as_deref(),
+    )
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_FAST_EMIT_BUDGET: std::cell::Cell<Option<FastEmitBudget>> = const {
+        std::cell::Cell::new(None)
+    };
+}
+
+/// Thread-local budget seam; mutating the process environment would race the
+/// other LLVM tests in this binary.
+#[cfg(test)]
+fn with_test_fast_emit_budget<T>(cap: usize, run: impl FnOnce() -> T) -> T {
+    struct Restore(Option<FastEmitBudget>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            TEST_FAST_EMIT_BUDGET.with(|budget| budget.set(self.0));
+        }
+    }
+    let old = TEST_FAST_EMIT_BUDGET.replace(Some(FastEmitBudget::Cap(cap)));
+    let _restore = Restore(old);
+    run()
+}
+
+/// The extreme function which selected bounded machine-code emission.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FastEmitFallback {
+    pub name: String,
+    pub instructions: usize,
+    pub cap: usize,
+}
+
+impl std::fmt::Display for FastEmitFallback {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "`{}` has {} instructions after IR optimization, above the optimized machine-pipeline \
+             budget {}; keeping the requested IR optimization, then emitting this unit through \
+             LLVM's O0 machine pipeline to bound instruction selection, live intervals and \
+             register allocation. Override with PERRY_LL_FAST_EMIT_MAX_INSTRS=<n> (raise) or \
+             =0 (disable).",
+            self.name, self.instructions, self.cap
+        )
+    }
+}
+
+fn fast_emit_fallback(
+    module: &inkwell::module::Module<'_>,
+    budget: FastEmitBudget,
+) -> Option<FastEmitFallback> {
+    let cap = match budget {
+        FastEmitBudget::Off => return None,
+        FastEmitBudget::Cap(cap) => cap,
+    };
+    let mut widest: Option<FastEmitFallback> = None;
+    let mut function = module.get_first_function();
+    while let Some(f) = function {
+        if f.count_basic_blocks() > 0 {
+            let instructions = function_instruction_count(f);
+            if instructions > cap
+                && widest
+                    .as_ref()
+                    .is_none_or(|current| instructions > current.instructions)
+            {
+                widest = Some(FastEmitFallback {
+                    name: f.get_name().to_string_lossy().into_owned(),
+                    instructions,
+                    cap,
+                });
+            }
+        }
+        function = f.get_next_function();
+    }
+    widest
+}
+
 /// Instruction budget for ONE function after `rewrite-statepoints-for-gc`.
 ///
 /// This is the measured backstop for the estimate that keeps relocation
@@ -410,14 +541,30 @@ enum RewriteBudget {
 /// One function that must be re-lowered onto a shadow frame before LLVM can
 /// safely optimize its codegen unit.
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Rs4gcBudgetCause {
+    /// The constructed function is already large enough that RS4GC's own
+    /// liveness/rewrite walk may not finish.  The estimate uses the roots and
+    /// non-leaf call sites LLVM will actually see, rather than another source
+    /// syntax approximation.
+    PreRewrite {
+        root_allocas: usize,
+        safepoints: usize,
+        estimated_relocations: usize,
+    },
+    /// RS4GC finished, but its relocation fan-out made the rewritten body too
+    /// large for the normal optimization pipeline.
+    PostRewrite { post_instructions: usize },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Rs4gcBudgetViolation {
     /// LLVM symbol of the function to spill.
     pub name: String,
     /// Instruction count before RS4GC, when the caller requested a census.
     pub pre_instructions: Option<usize>,
-    /// Instruction count after RS4GC and before the optimizer.
-    pub post_instructions: usize,
-    /// Active per-function instruction limit.
+    /// The pre- or post-rewrite condition that requested the retry.
+    pub cause: Rs4gcBudgetCause,
+    /// Active limit for the cause's estimate.
     pub cap: usize,
 }
 
@@ -547,6 +694,120 @@ fn rs4gc_functions(module: &inkwell::module::Module<'_>) -> std::collections::Ha
     names
 }
 
+/// The two constructed-IR factors that bound RS4GC relocation fan-out.
+///
+/// Count only allocas whose payload is a managed pointer and call sites which
+/// are not explicitly marked as GC leaves. LLVM intrinsics are also leaves:
+/// they cannot enter Perry's runtime or collect. This is deliberately the
+/// same conservative model as the source-level spill estimate — each
+/// safepoint can leave one additional pointer result live across later calls —
+/// but it observes the calls codegen actually emitted. That closes estimator
+/// holes where one source expression expands into several collecting helpers.
+fn rs4gc_preflight_factors(function: inkwell::values::FunctionValue<'_>) -> (usize, usize) {
+    let mut root_allocas = 0usize;
+    let mut safepoints = 0usize;
+    for bb in function.get_basic_blocks() {
+        let mut inst = bb.get_first_instruction();
+        while let Some(i) = inst {
+            match i.get_opcode() {
+                inkwell::values::InstructionOpcode::Alloca => {
+                    if matches!(
+                        i.get_allocated_type(),
+                        Ok(inkwell::types::BasicTypeEnum::PointerType(ptr))
+                            if ptr.get_address_space() == inkwell::AddressSpace::from(1u16)
+                    ) {
+                        root_allocas += 1;
+                    }
+                }
+                inkwell::values::InstructionOpcode::Call
+                | inkwell::values::InstructionOpcode::CallBr
+                | inkwell::values::InstructionOpcode::Invoke => {
+                    // Call, invoke and callbr are all LLVM CallBase values, so
+                    // the call-site attribute API is valid for each opcode.
+                    let call = unsafe { inkwell::values::CallSiteValue::new(i.as_value_ref()) };
+                    let gc_leaf = call
+                        .get_string_attribute(
+                            inkwell::attributes::AttributeLoc::Function,
+                            "gc-leaf-function",
+                        )
+                        .is_some();
+                    let intrinsic = call
+                        .get_called_fn_value()
+                        .map_or(false, |callee| callee.get_intrinsic_id() != 0);
+                    if !gc_leaf && !intrinsic {
+                        safepoints += 1;
+                    }
+                }
+                _ => {}
+            }
+            inst = i.get_next_instruction();
+        }
+    }
+    (root_allocas, safepoints)
+}
+
+/// Every RS4GC-participating function whose constructed IR predicts more
+/// relocation work than the source-level spill budget permits.
+fn rs4gc_preflight_violations(
+    module: &inkwell::module::Module<'_>,
+    cap: usize,
+    rewritten_functions: &std::collections::HashSet<String>,
+) -> Vec<(String, usize, usize, usize)> {
+    if cap == 0 {
+        return Vec::new();
+    }
+    let mut over = Vec::new();
+    let mut function = module.get_first_function();
+    while let Some(f) = function {
+        if f.count_basic_blocks() > 0 {
+            let name = f.get_name().to_string_lossy().into_owned();
+            if rewritten_functions.contains(&name) {
+                let (root_allocas, safepoints) = rs4gc_preflight_factors(f);
+                let live_roots =
+                    crate::codegen::helpers::spill_live_root_count(root_allocas, safepoints);
+                let estimate =
+                    crate::codegen::helpers::root_relocation_estimate(live_roots, safepoints);
+                if estimate > cap {
+                    over.push((name, root_allocas, safepoints, estimate));
+                }
+            }
+        }
+        function = f.get_next_function();
+    }
+    over
+}
+
+/// Stop before RS4GC itself enters its super-linear liveness/rewrite walk and
+/// ask codegen to re-lower the named functions with precise shadow roots.
+fn enforce_rs4gc_preflight_budget(
+    module: &inkwell::module::Module<'_>,
+    cap: usize,
+    pre: &std::collections::HashMap<String, usize>,
+    rewritten_functions: &std::collections::HashSet<String>,
+) -> Result<()> {
+    let violations: Vec<Rs4gcBudgetViolation> =
+        rs4gc_preflight_violations(module, cap, rewritten_functions)
+            .into_iter()
+            .map(
+                |(name, root_allocas, safepoints, estimated_relocations)| Rs4gcBudgetViolation {
+                    pre_instructions: pre.get(&name).copied(),
+                    name,
+                    cause: Rs4gcBudgetCause::PreRewrite {
+                        root_allocas,
+                        safepoints,
+                        estimated_relocations,
+                    },
+                    cap,
+                },
+            )
+            .collect();
+    if violations.is_empty() {
+        Ok(())
+    } else {
+        Err(anyhow::Error::new(Rs4gcBudgetExceeded { violations }))
+    }
+}
+
 /// Every RS4GC-participating function whose post-rewrite body exceeds `cap`.
 fn rs4gc_budget_violations(
     module: &inkwell::module::Module<'_>,
@@ -569,23 +830,40 @@ fn rs4gc_budget_violations(
 }
 
 fn rewrite_budget_message(violation: &Rs4gcBudgetViolation, retry: bool) -> String {
-    let before = violation
-        .pre_instructions
-        .map(|n| format!(" (it was {n} before the rewrite)"))
-        .unwrap_or_default();
     let outcome = if retry {
         "Perry will re-lower this function with precise roots in a shadow frame, then retry the \
          unit at the requested optimization level"
     } else {
         "the warning-only budget override leaves the function for LLVM to optimize"
     };
-    format!(
-        "rewrite-statepoints-for-gc grew `{}` to {} instructions{before}; the \
-         per-function budget is {}. LLVM's optimizer is super-linear on statepoint \
-         relocation fan-out of this size; {outcome} (#8679). Override with \
-         PERRY_LL_RS4GC_MAX_INSTRS=<n> (raise), =warn:<n> (warn only) or =0 (disable).",
-        violation.name, violation.post_instructions, violation.cap
-    )
+    match &violation.cause {
+        Rs4gcBudgetCause::PreRewrite {
+            root_allocas,
+            safepoints,
+            estimated_relocations,
+        } => format!(
+            "before rewrite-statepoints-for-gc, `{}` has {root_allocas} managed-root allocas and \
+             {safepoints} non-leaf call sites; accounting for call-result temporaries predicts \
+             {estimated_relocations} relocations, above the pre-rewrite budget {}. RS4GC's own \
+             liveness/rewrite walk is super-linear on fan-out of this size; {outcome} (#8583). \
+             Override with PERRY_ROOT_SPILL_RELOCATIONS=<n> (raise) or =0 (disable).",
+            violation.name, violation.cap
+        ),
+        Rs4gcBudgetCause::PostRewrite { post_instructions } => {
+            let before = violation
+                .pre_instructions
+                .map(|n| format!(" (it was {n} before the rewrite)"))
+                .unwrap_or_default();
+            format!(
+                "rewrite-statepoints-for-gc grew `{}` to {post_instructions} \
+                 instructions{before}; the per-function budget is {}. LLVM's optimizer is \
+                 super-linear on statepoint relocation fan-out of this size; {outcome} (#8679). \
+                 Override with PERRY_LL_RS4GC_MAX_INSTRS=<n> (raise), =warn:<n> (warn only) or \
+                 =0 (disable).",
+                violation.name, violation.cap
+            )
+        }
+    }
 }
 
 /// Apply [`RewriteBudget`] to a rewritten module. `pre` gives each function's
@@ -610,7 +888,7 @@ fn enforce_rs4gc_instruction_budget(
         .map(|(name, post_instructions)| Rs4gcBudgetViolation {
             pre_instructions: pre.get(&name).copied(),
             name,
-            post_instructions,
+            cause: Rs4gcBudgetCause::PostRewrite { post_instructions },
             cap,
         })
         .collect();
@@ -907,8 +1185,9 @@ fn optimize_and_emit(
         // Sizes before the rewrite: the budget message below names them, and
         // the per-unit report compares them with the post-rewrite census.
         let budget = rs4gc_instruction_budget();
+        let preflight_cap = crate::codegen::helpers::root_spill_relocation_threshold();
         let rewritten_functions = rs4gc_functions(module);
-        let pre_sizes = if budget == RewriteBudget::Off && stats.is_none() {
+        let pre_sizes = if budget == RewriteBudget::Off && preflight_cap == 0 && stats.is_none() {
             std::collections::HashMap::new()
         } else {
             pre_rewrite_sizes(module)
@@ -921,6 +1200,11 @@ fn optimize_and_emit(
                 .max_by_key(|(_, n)| **n)
                 .map(|(name, n)| (name.clone(), *n));
         }
+        // The source-level estimate is intentionally cheap but can miss
+        // codegen expansion (one expression becoming many collecting helper
+        // calls). Check the actual constructed CallBase/root shape before
+        // asking RS4GC to perform the potentially super-linear rewrite.
+        enforce_rs4gc_preflight_budget(module, preflight_cap, &pre_sizes, &rewritten_functions)?;
         let rewrite_started = std::time::Instant::now();
         module
             .run_passes(STATEPOINT_REWRITE_PASSES, &tm, PassBuilderOptions::create())
@@ -985,13 +1269,53 @@ fn optimize_and_emit(
         stats.optimize_secs = optimize_started.elapsed().as_secs_f64();
     }
 
+    // The IR pipeline above has already done the requested optimization. For
+    // an extreme generated function, LLVM's optimized *machine* pipeline can
+    // still become super-linear in instruction selection / LiveIntervals /
+    // register allocation. Use an O0 target machine only for final emission
+    // of that unit; ordinary units keep `tm`, and the optimized IR is not
+    // rebuilt or demoted.
+    let fast_emit = if opt == '0' {
+        None
+    } else {
+        fast_emit_fallback(module, fast_emit_budget())
+    };
+    if let Some(fallback) = &fast_emit {
+        eprintln!("perry: {fallback}");
+    }
+    if let Some(stats) = stats.as_deref_mut() {
+        stats.fast_emit_fallback = fast_emit.clone();
+    }
+    let fast_tm = if fast_emit.is_some() {
+        Some(
+            target
+                .create_target_machine(
+                    &triple,
+                    &cpu,
+                    &features,
+                    OptimizationLevel::None,
+                    RelocMode::PIC,
+                    CodeModel::Default,
+                )
+                .ok_or_else(|| {
+                    anyhow!(
+                        "failed to create bounded O0 emission TargetMachine for \
+                         `{effective_target}`"
+                    )
+                })?,
+        )
+    } else {
+        None
+    };
+    let emit_tm = fast_tm.as_ref().unwrap_or(&tm);
+
     let kind = if emit_asm {
         FileType::Assembly
     } else {
         FileType::Object
     };
     let emit_started = std::time::Instant::now();
-    let obj = tm
+    let obj = emit_tm
         .write_to_memory_buffer(module, kind)
         .map_err(|e| anyhow!("{kind:?} emission failed:\n{}", e.to_string()))?;
     if let Some(stats) = stats {
@@ -1105,6 +1429,97 @@ mod tests {
         );
     }
 
+    /// The source-level estimate is only a fast first line of defence. This
+    /// fixture pins the constructed-IR backstop: managed-root allocas count,
+    /// ordinary calls count, explicit GC-leaf calls and LLVM intrinsics do
+    /// not, and only functions which will actually enter RS4GC are governed.
+    #[test]
+    fn rs4gc_preflight_uses_constructed_roots_and_non_leaf_calls() {
+        let fixture = r#"
+declare i64 @may_collect()
+declare i64 @leaf()
+declare void @llvm.donothing()
+
+define i64 @hot() gc "statepoint-example" {
+entry:
+  %root = alloca ptr addrspace(1)
+  %plain = alloca i64
+  %a = call i64 @may_collect()
+  %b = call i64 @may_collect()
+  %c = call i64 @leaf() "gc-leaf-function"
+  call void @llvm.donothing()
+  %p = load ptr addrspace(1), ptr %root
+  %bits = ptrtoint ptr addrspace(1) %p to i64
+  %sum = add i64 %a, %b
+  %sum2 = add i64 %sum, %c
+  %out = add i64 %sum2, %bits
+  ret i64 %out
+}
+
+define i64 @shadow() {
+entry:
+  %root = alloca ptr addrspace(1)
+  %a = call i64 @may_collect()
+  ret i64 %a
+}
+"#;
+        let context = Context::create();
+        let module = parse_ir_text(&context, fixture, "preflight_fixture").expect("fixture parses");
+        let hot = module.get_function("hot").expect("hot");
+        assert_eq!(
+            rs4gc_preflight_factors(hot),
+            (1, 2),
+            "plain allocas, leaf calls and intrinsics do not add RS4GC work"
+        );
+
+        // (one constructed root + two possible call-result roots) x two
+        // safepoints = six estimated relocations. The boundary is exclusive.
+        let rewritten_functions = rs4gc_functions(&module);
+        assert_eq!(
+            rs4gc_preflight_violations(&module, 5, &rewritten_functions),
+            vec![("hot".to_string(), 1, 2, 6)]
+        );
+        assert!(rs4gc_preflight_violations(&module, 6, &rewritten_functions).is_empty());
+        assert!(rs4gc_preflight_violations(&module, 0, &rewritten_functions).is_empty());
+
+        let pre = pre_rewrite_sizes(&module);
+        let err = enforce_rs4gc_preflight_budget(&module, 5, &pre, &rewritten_functions)
+            .expect_err("the constructed shape requests a spill retry");
+        let retry = rs4gc_budget_retry(&err).expect("the request stays typed");
+        assert_eq!(retry.len(), 1);
+        assert_eq!(retry[0].name, "hot");
+        assert_eq!(retry[0].pre_instructions, pre.get("hot").copied());
+        assert_eq!(
+            retry[0].cause,
+            Rs4gcBudgetCause::PreRewrite {
+                root_allocas: 1,
+                safepoints: 2,
+                estimated_relocations: 6,
+            }
+        );
+        assert_eq!(retry[0].cap, 5);
+        let msg = format!("{err:#}");
+        for needle in [
+            "before rewrite-statepoints-for-gc",
+            "`hot`",
+            "1 managed-root allocas",
+            "2 non-leaf call sites",
+            "predicts 6 relocations",
+            "budget 5",
+            "PERRY_ROOT_SPILL_RELOCATIONS",
+            "re-lower",
+        ] {
+            assert!(
+                msg.contains(needle),
+                "message must carry {needle:?}:\n{msg}"
+            );
+        }
+
+        let no_rewritten_functions = std::collections::HashSet::new();
+        enforce_rs4gc_preflight_budget(&module, 1, &pre, &no_rewritten_functions)
+            .expect("a shadow-root function is outside the preflight budget");
+    }
+
     /// Six gc values live across forty safepoints: ~60 instructions before
     /// `rewrite-statepoints-for-gc`, a few hundred after (each statepoint
     /// relocates every live value). A budget between the two is exceeded
@@ -1185,7 +1600,12 @@ mod tests {
         assert_eq!(retry.len(), 1);
         assert_eq!(retry[0].name, "f");
         assert_eq!(retry[0].pre_instructions, Some(pre_f));
-        assert_eq!(retry[0].post_instructions, post_f);
+        assert_eq!(
+            retry[0].cause,
+            Rs4gcBudgetCause::PostRewrite {
+                post_instructions: post_f
+            }
+        );
         assert_eq!(retry[0].cap, cap);
         let msg = format!("{err:#}");
         for needle in [
@@ -1694,6 +2114,29 @@ entry:
         );
     }
 
+    #[test]
+    fn fast_emit_budget_spellings() {
+        assert_eq!(
+            parse_fast_emit_budget(None),
+            FastEmitBudget::Cap(DEFAULT_FAST_EMIT_MAX_INSTRS)
+        );
+        assert_eq!(
+            parse_fast_emit_budget(Some("")),
+            FastEmitBudget::Cap(DEFAULT_FAST_EMIT_MAX_INSTRS)
+        );
+        assert_eq!(parse_fast_emit_budget(Some("0")), FastEmitBudget::Off);
+        assert_eq!(parse_fast_emit_budget(Some("off")), FastEmitBudget::Off);
+        assert_eq!(parse_fast_emit_budget(Some("false")), FastEmitBudget::Off);
+        assert_eq!(
+            parse_fast_emit_budget(Some(" 250000 ")),
+            FastEmitBudget::Cap(250_000)
+        );
+        assert_eq!(
+            parse_fast_emit_budget(Some("lots")),
+            FastEmitBudget::Cap(DEFAULT_FAST_EMIT_MAX_INSTRS)
+        );
+    }
+
     /// Two functions: `wide` has 4 allocas across 9 instructions (estimate
     /// 36), `narrow` has one across 3 (estimate 3), and `decl` has no body.
     fn alloca_walk_fixture() -> &'static str {
@@ -1786,6 +2229,42 @@ entry:
             !message.contains("optnone"),
             "the budget must never read as a demotion:\n{message}"
         );
+    }
+
+    /// Selection is per function, the boundary is inclusive, declarations do
+    /// not count, and the diagnostic names the widest violating function.
+    #[test]
+    fn fast_emit_budget_selects_only_above_the_boundary() {
+        let context = Context::create();
+        let module = parse_ir_text(&context, alloca_walk_fixture(), "fast_emit_fixture")
+            .expect("fixture parses");
+        assert!(fast_emit_fallback(&module, FastEmitBudget::Off).is_none());
+        assert!(fast_emit_fallback(&module, FastEmitBudget::Cap(9)).is_none());
+
+        let fallback = fast_emit_fallback(&module, FastEmitBudget::Cap(8))
+            .expect("wide is one instruction over the budget");
+        assert_eq!(
+            fallback,
+            FastEmitFallback {
+                name: "wide".to_string(),
+                instructions: 9,
+                cap: 8,
+            }
+        );
+        let message = fallback.to_string();
+        for needle in [
+            "`wide`",
+            "9 instructions",
+            "budget 8",
+            "requested IR optimization",
+            "O0 machine pipeline",
+            "PERRY_LL_FAST_EMIT_MAX_INSTRS",
+        ] {
+            assert!(
+                message.contains(needle),
+                "{needle:?} missing from:\n{message}"
+            );
+        }
     }
 
     /// A self-recursive tail call that TailCallElim turns into a loop at
@@ -1885,5 +2364,53 @@ entry:
         .expect("-O0 emits");
         assert!(stats.tail_call_elim_skipped.is_empty());
         assert!(!has_disable_tail_calls(&module, "wide"));
+    }
+
+    /// A tiny test cap proves the shipped path records and successfully uses
+    /// the second, O0 target machine only after running the requested Os IR
+    /// pipeline. The production threshold is pinned by the parser test and
+    /// the real Claude-Code measurement in its constant's documentation.
+    #[test]
+    fn fast_emit_budget_is_applied_by_the_shipped_pipeline() {
+        global_init(&[]);
+        let target = crate::codegen::default_target_triple();
+        let context = Context::create();
+        let module = parse_ir_text(&context, alloca_walk_fixture(), "fast_emit_shipped")
+            .expect("fixture parses");
+        let mut stats = UnitCodegenStats::default();
+        let object = with_test_fast_emit_budget(1, || {
+            optimize_and_emit_module_with_stats(
+                &module,
+                &target,
+                &["-Os".into(), "-c".into()],
+                false,
+                Some(&mut stats),
+            )
+        })
+        .expect("the already-optimized module emits through the bounded target machine");
+        assert!(!object.is_empty());
+        let fallback = stats
+            .fast_emit_fallback
+            .expect("the shipped path must report the selected fallback");
+        assert_eq!(fallback.name, "wide");
+        assert!(fallback.instructions > fallback.cap);
+        assert_eq!(fallback.cap, 1);
+
+        // A requested O0 compile already uses the bounded target machine; it
+        // neither needs nor reports a fallback.
+        let module =
+            parse_ir_text(&context, alloca_walk_fixture(), "fast_emit_o0").expect("fixture parses");
+        let mut stats = UnitCodegenStats::default();
+        with_test_fast_emit_budget(1, || {
+            optimize_and_emit_module_with_stats(
+                &module,
+                &target,
+                &["-O0".into(), "-c".into()],
+                false,
+                Some(&mut stats),
+            )
+        })
+        .expect("-O0 emits");
+        assert!(stats.fast_emit_fallback.is_none());
     }
 }

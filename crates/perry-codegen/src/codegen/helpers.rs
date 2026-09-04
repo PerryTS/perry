@@ -524,7 +524,7 @@ pub(crate) fn inline_hot_small_max_call_sites() -> u32 {
 /// (every function stays on native statepoints, the pre-#8583 behavior).
 const DEFAULT_ROOT_SPILL_RELOCATIONS: usize = 32_000_000;
 
-fn root_spill_relocation_threshold() -> usize {
+pub(crate) fn root_spill_relocation_threshold() -> usize {
     std::env::var("PERRY_ROOT_SPILL_RELOCATIONS")
         .ok()
         .and_then(|v| v.trim().parse::<usize>().ok())

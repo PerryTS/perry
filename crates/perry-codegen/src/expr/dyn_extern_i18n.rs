@@ -489,8 +489,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             is_eval: _,
         } => {
             let _ = lower_expr(ctx, filename)?;
+            if ctx.block().is_terminated() {
+                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+            }
             let options_val = if let Some(options) = options {
-                lower_expr(ctx, options)?
+                let value = lower_expr(ctx, options)?;
+                if ctx.block().is_terminated() {
+                    return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+                }
+                value
             } else {
                 double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
             };

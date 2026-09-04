@@ -7346,6 +7346,93 @@ fn abrupt_captured_local_assignment_does_not_emit_orphan_write_barrier() {
     );
 }
 
+#[test]
+fn abrupt_constructor_argument_stops_anonymous_object_construction() {
+    // Closed object literals are `new __AnonShape_*(field0, field1, ...)` by
+    // the time codegen sees them.  Claude Code returns an object whose first
+    // field constructs an unresolved dynamic Worker and whose second field
+    // constructs an Int32Array.  The Worker emits throw + unreachable, so the
+    // later field, allocation and constructor diamond must not be emitted:
+    // their definitions would be dropped from the terminated block while the
+    // newly-created blocks still used their registers.
+    let mut record = class(
+        80,
+        "__AnonShape_abrupt_constructor_arg",
+        vec![
+            class_field("worker", Type::Any),
+            class_field("stamp", Type::Any),
+        ],
+    );
+    record.constructor = Some(Function {
+        id: 81,
+        name: "__AnonShape_abrupt_constructor_arg_constructor".to_string(),
+        type_params: Vec::new(),
+        params: vec![
+            param(82, "worker", Type::Any),
+            param(83, "stamp", Type::Any),
+        ],
+        return_type: Type::Any,
+        body: vec![
+            Stmt::Expr(Expr::PropertySet {
+                object: Box::new(Expr::This),
+                property: "worker".to_string(),
+                value: Box::new(local(82)),
+            }),
+            Stmt::Expr(Expr::PropertySet {
+                object: Box::new(Expr::This),
+                property: "stamp".to_string(),
+                value: Box::new(local(83)),
+            }),
+        ],
+        is_async: false,
+        is_generator: false,
+        is_strict: false,
+        is_exported: false,
+        captures: Vec::new(),
+        decorators: Vec::new(),
+        was_plain_async: false,
+        was_unrolled: false,
+    });
+    let module = module_with_classes_and_params(
+        "abrupt_anonymous_object_constructor_arg.ts",
+        vec![record],
+        vec![param(99, "filename", Type::Any)],
+        Type::Any,
+        vec![Stmt::Return(Some(Expr::New {
+            class_name: "__AnonShape_abrupt_constructor_arg".to_string(),
+            args: vec![
+                Expr::WorkerNew {
+                    paths: Vec::new(),
+                    filename: Box::new(local(99)),
+                    options: None,
+                    is_eval: false,
+                },
+                Expr::Array(Vec::new()),
+            ],
+            type_args: Vec::new(),
+            byte_offset: 0,
+            cap_args_appended: 0,
+        }))],
+    );
+    let ir = String::from_utf8(compile_module(&module, empty_opts()).unwrap()).unwrap();
+    let body = probe_body(&ir);
+    let throw = body
+        .find("call void @js_throw_error_with_code")
+        .expect("unresolved Worker construction should emit its runtime throw");
+    let after_throw = &body[throw..];
+
+    assert!(
+        after_throw.contains("\n  unreachable"),
+        "the dynamic Worker fallback must terminate the path:\n{after_throw}"
+    );
+    assert!(
+        !after_throw.contains("js_array_alloc")
+            && !after_throw.contains("js_object_alloc")
+            && !after_throw.contains("ctor_prologue"),
+        "nothing after an abruptly-completing constructor argument may be lowered:\n{after_throw}"
+    );
+}
+
 fn boxed_param_capture_module(name: &str) -> Module {
     module_with_classes_and_params(
         name,

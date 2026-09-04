@@ -1072,6 +1072,15 @@ fn compute_object_cache_key_with_env(
             .as_deref()
             .unwrap_or(""),
     );
+    // Oversized post-optimization functions can use LLVM's O0 machine
+    // pipeline for bounded ISel/regalloc; the resulting object differs from
+    // normal optimized machine emission.
+    h.field(
+        "env_ll_fast_emit_max_instrs",
+        env_var("PERRY_LL_FAST_EMIT_MAX_INSTRS")
+            .as_deref()
+            .unwrap_or(""),
+    );
     // #8583: root-spill threshold changes which functions carry statepoints.
     h.field(
         "env_root_spill_relocations",

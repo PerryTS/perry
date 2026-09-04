@@ -733,6 +733,7 @@ fn key_changes_with_codegen_env_vars() {
         "PERRY_LL_SIZE_OPT",
         "PERRY_LL_RS4GC_MAX_INSTRS",
         "PERRY_LL_TRE_MAX_ALLOCA_WALK",
+        "PERRY_LL_FAST_EMIT_MAX_INSTRS",
         "PERRY_ROOT_SPILL_RELOCATIONS",
         "PERRY_GC_SAFEPOINT_ONLY",
         "PERRY_DISABLE_BUFFER_FAST_PATH",
