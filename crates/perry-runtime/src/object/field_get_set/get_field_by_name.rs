@@ -610,6 +610,17 @@ pub extern "C" fn js_object_get_field_by_name(
                     {
                         return JSValue::from_bits(v.to_bits());
                     }
+                    // Fresh nested Promise subclasses inherit the same reified
+                    // statics as ClassRef receivers (`P.all`, `P.resolve`, ...).
+                    if super::super::promise_parent_in_chain(class_id)
+                        && super::super::promise_static_function_spec(name).is_some()
+                    {
+                        let value =
+                            super::super::js_promise_static_function_value(name_ptr, name_len);
+                        if value.to_bits() != crate::value::TAG_UNDEFINED {
+                            return JSValue::from_bits(value.to_bits());
+                        }
+                    }
                 }
             }
         }

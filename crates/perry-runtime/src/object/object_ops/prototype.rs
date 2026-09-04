@@ -531,6 +531,22 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
                     }
                     return function_prototype_or_null();
                 }
+                // #9502: a fresh class value is a constructor, not an instance
+                // of its template. Its [[Prototype]] is the evaluated parent;
+                // `.prototype` is a separate object with a separate chain.
+                if super::super::class_registry::is_class_object_ptr(obj as *const u8) {
+                    if let Some(parent) =
+                        super::super::class_registry::class_object_pinned_parent(obj)
+                    {
+                        if !matches!(
+                            parent.to_bits(),
+                            crate::value::TAG_NULL | crate::value::TAG_UNDEFINED
+                        ) {
+                            return parent;
+                        }
+                    }
+                    return function_prototype_or_null();
+                }
                 // Fast [[Prototype]] for a DECLARED-class instance: resolve
                 // directly from the class id instead of the generic
                 // `constructor_dynamic_prototype` probe, which reads the
