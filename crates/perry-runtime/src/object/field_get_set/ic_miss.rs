@@ -526,11 +526,9 @@ pub extern "C" fn js_object_get_field_ic_miss(
     // `< 0x100000` proxy / HANDLE_PROPERTY_DISPATCH routing below — matching
     // the ordering in `js_object_get_field_by_name`. The macOS heap floor
     // (0x200_0000_0000 in is_valid_obj_ptr) masked this; Linux's is 0x1000.
-    if !key.is_null() {
+    if !key.is_null() && crate::async_hooks::is_async_resource_handle(obj as i64) {
         unsafe {
-            let key_ptr = crate::string::string_data(key);
-            let key_len = (*key).byte_len as usize;
-            if let Ok(name) = std::str::from_utf8(std::slice::from_raw_parts(key_ptr, key_len)) {
+            if let Some(name) = crate::string::header_str_checked(key) {
                 if let Some(value) =
                     crate::async_hooks::try_async_resource_property_dispatch(obj as i64, name)
                 {

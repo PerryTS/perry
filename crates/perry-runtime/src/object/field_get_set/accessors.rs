@@ -623,9 +623,7 @@ pub(crate) unsafe fn primitive_builtin_prototype_property(
     // inside `invoke_accessor_getter` — not the prototype object the accessor
     // happens to live on (which a plain field read below would hand it).
     if crate::state::state().descriptors.accessors_in_use.get() {
-        let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-        let key_len = (*key).byte_len as usize;
-        if let Ok(name) = std::str::from_utf8(std::slice::from_raw_parts(key_ptr, key_len)) {
+        if let Some(name) = crate::string::header_str_checked(key) {
             if let Some(acc) = get_accessor_descriptor(proto_ptr as usize, name) {
                 if acc.get == 0 {
                     return Some(JSValue::undefined());
@@ -678,9 +676,7 @@ pub(crate) unsafe fn array_subclass_prototype_field(
     {
         return None;
     }
-    let key_ptr = crate::object::string_header_payload(key);
-    let key_len = (*key).byte_len as usize;
-    let name = std::str::from_utf8(std::slice::from_raw_parts(key_ptr, key_len)).ok()?;
+    let name = crate::string::header_str_checked(key)?;
     // `array_prototype_property_value` copies `name` before its first
     // allocation and roots the receiver across the prototype lookup.
     array_prototype_property_value(name, obj as usize)

@@ -172,9 +172,7 @@ unsafe fn string_header_str<'a>(key: *const crate::string::StringHeader) -> Opti
     if key.is_null() || (key as usize) < 0x10000 {
         return None;
     }
-    let len = (*key).byte_len as usize;
-    let data = (key as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
-    std::str::from_utf8(std::slice::from_raw_parts(data, len)).ok()
+    crate::string::header_str_checked(key)
 }
 
 fn unsigned_canonical_index(name: &str) -> Option<u32> {

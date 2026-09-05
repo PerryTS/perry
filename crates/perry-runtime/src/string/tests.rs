@@ -1296,3 +1296,36 @@ mod split_empty_delimiter_code_units {
         assert_eq!(crate::array::js_array_length(arr), 3);
     }
 }
+
+/// `header_str_checked` answers exactly like `from_utf8(..).ok()` — a pure
+/// ASCII key without the scan, a non-ASCII scalar key by validation, and a
+/// WTF-8 payload (lone surrogate) as `None`.
+#[test]
+fn header_str_checked_matches_from_utf8_on_every_payload_class() {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let ascii = scope.root_string_ptr(js_string_from_bytes(b"userName".as_ptr(), 8));
+    let cjk = "名前";
+    let scalar = scope.root_string_ptr(js_string_from_bytes(cjk.as_ptr(), cjk.len() as u32));
+    let lone = [0xEDu8, 0xA0, 0x80, b'x'];
+    let wtf8 = scope.root_string_ptr(js_string_from_wtf8_bytes(lone.as_ptr(), lone.len() as u32));
+    let empty = scope.root_string_ptr(js_string_from_bytes(b"".as_ptr(), 0));
+    for (root, expect) in [
+        (&ascii, Some("userName")),
+        (&scalar, Some(cjk)),
+        (&wtf8, None),
+        (&empty, Some("")),
+    ] {
+        let got = root.with_const_ptr::<StringHeader, _>(|s| unsafe { header_str_checked(s) });
+        assert_eq!(got, expect);
+        let via_std = root.with_const_ptr::<StringHeader, _>(|s| {
+            std::str::from_utf8(string_as_bytes_for_test(s))
+                .ok()
+                .map(|s| s.to_string())
+        });
+        assert_eq!(got.map(|s| s.to_string()), via_std);
+    }
+}
+
+fn string_as_bytes_for_test<'a>(s: *const StringHeader) -> &'a [u8] {
+    unsafe { slice::from_raw_parts(string_data(s), (*s).byte_len as usize) }
+}

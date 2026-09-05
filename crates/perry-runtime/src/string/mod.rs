@@ -1027,6 +1027,32 @@ pub(crate) fn is_ascii_string(s: *const StringHeader) -> bool {
     unsafe { (*s).utf16_len == (*s).byte_len }
 }
 
+/// Borrow a header's payload as `&str`, answering `None` for a WTF-8 payload
+/// (lone surrogates), like `std::str::from_utf8(..).ok()` — but without the
+/// scan when the header already proves the answer: `utf16_len == byte_len`
+/// holds iff every byte is a one-byte code unit, i.e. pure ASCII, which is
+/// what nearly every property key is. The generic property-read ladder
+/// decodes the key at several layers per read (`ic_miss`, closure expandos,
+/// accessor and reflection probes, async-resource dispatch), and
+/// `core::str::from_utf8` was 2 % of the claude-code keystroke profile on
+/// those decodes alone.
+///
+/// Same borrow rule as [`string_as_str`]: the slice must not outlive any
+/// call that can move the payload.
+///
+/// # Safety
+/// `s` must point at a live `StringHeader`.
+#[inline]
+pub(crate) unsafe fn header_str_checked<'a>(s: *const StringHeader) -> Option<&'a str> {
+    let len = (*s).byte_len as usize;
+    let bytes = slice::from_raw_parts(string_data(s), len);
+    if (*s).utf16_len as usize == len {
+        Some(str::from_utf8_unchecked(bytes))
+    } else {
+        str::from_utf8(bytes).ok()
+    }
+}
+
 /// `PERRY_GC_CENSUS`: the fixed-size intern table (slots, bytes). Entries
 /// point into the GC heap; only the table itself is counted.
 pub(crate) fn intern_table_census() -> (usize, usize) {
