@@ -794,7 +794,8 @@ pub(super) fn scan_remembered_dirty_slots_copying(
             visit(slot, header, external, stats);
             changed |= *slot != before;
         };
-        let complete = scan_dirty_object_slots(header, &snapshot.dirty_pages, stats, &mut visit_slot);
+        let complete =
+            scan_dirty_object_slots(header, &snapshot.dirty_pages, stats, &mut visit_slot);
         if complete {
             if let Some(covered) = covered.as_deref_mut() {
                 covered.insert(header as usize);
@@ -1064,9 +1065,13 @@ impl CopiedMinorEligibility {
         let snapshot = remembered_dirty_snapshot();
         let mut dirty_checker =
             CopyingNurseryPreflight::new(ptrs, CopiedMinorFallbackReason::PinnedYoungDirtySlot);
-        scan_remembered_dirty_slots_copying(&snapshot, None, |slot, _header, _external, _stats| unsafe {
-            dirty_checker.check_bits(*slot);
-        });
+        scan_remembered_dirty_slots_copying(
+            &snapshot,
+            None,
+            |slot, _header, _external, _stats| unsafe {
+                dirty_checker.check_bits(*slot);
+            },
+        );
         unsafe {
             dirty_checker.drain();
         }

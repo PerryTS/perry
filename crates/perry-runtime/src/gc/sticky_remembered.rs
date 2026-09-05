@@ -82,7 +82,10 @@ impl StickyRememberedSet {
     pub(super) fn count_not_yet_dirty(&self) -> usize {
         let old_missing = super::barrier::DIRTY_OLD_PAGES.with(|s| {
             let s = s.borrow();
-            self.old_pages.iter().filter(|page| !s.contains(page)).count()
+            self.old_pages
+                .iter()
+                .filter(|page| !s.contains(page))
+                .count()
         });
         let external_missing = super::barrier::EXTERNAL_DIRTY_SLOT_PAGES.with(|s| {
             let s = s.borrow();

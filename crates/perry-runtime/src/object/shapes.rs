@@ -2135,7 +2135,8 @@ fn scan_shape_table_young(
                 continue;
             }
             visited += 1;
-            let (post, relevant) = scan_shape_keys_address(visitor, table, inner, rewrite_phase, keys);
+            let (post, relevant) =
+                scan_shape_keys_address(visitor, table, inner, rewrite_phase, keys);
             if relevant {
                 kept.push(post);
             }
@@ -2237,7 +2238,10 @@ fn scan_shape_keys_address(
             inner.indices.remove(&addr);
         }
     }
-    (post, crate::gc::young_log::addr_is_minor_relevant(post as usize))
+    (
+        post,
+        crate::gc::young_log::addr_is_minor_relevant(post as usize),
+    )
 }
 
 // #8112 sabotage switch. Suppressing the descriptor edge proves the fixture's
