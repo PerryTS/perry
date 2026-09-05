@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "_comment": [
+    "Workload applicability records for codegen mechanisms, starting with #9824.",
+    "This is an evidence index, not an exhaustive census or an automated admission gate.",
+    "An absent mechanism/workload is unrecorded, not evidence that a lowering never fires.",
+    "Update snapshot observations when the compiler, bundle, flags, or admission proof changes."
+  ],
+  "mechanisms": [
+    {
+      "id": "concat_site_cache",
+      "introduced_by": "https://github.com/PerryTS/perry/pull/9514",
+      "codegen": "crates/perry-codegen/src/concat_site_cache.rs::try_lower_concat_site_cached",
+      "caller": "crates/perry-codegen/src/lower_string_concat.rs::coerce_concat_body",
+      "runtime": "crates/perry-runtime/src/string/concat_site.rs",
+      "fill_symbol": "js_string_concat_site_value",
+      "global_prefix": "perry_concat_site_",
+      "compile_time_disable": "PERRY_CONCAT_SITE_CACHE=0",
+      "admission": {
+        "left": "HIR Expr::String literal",
+        "right_alternatives": [
+          "Compile-time integer in 0..=255, including supported constant arithmetic and integer-constant locals",
+          "LocalGet with a loop-induction interval whose lower bound is nonnegative and upper bound is at most 255",
+          "Remainder x % C with a compile-time integer C in 1..=256; negative remainders use the runtime plain arm"
+        ],
+        "maximum_proven_value": 255,
+        "cache_slots": 32,
+        "runtime_hit": "Integral numeric value in 0..31 with a filled slot; ordered comparisons reject NaN and boxed non-numbers"
+      },
+      "workloads": [
+        {
+          "id": "bench_object_property",
+          "source": "benchmarks/suite/bench_object_property.ts",
+          "expected_lowering": "emitted",
+          "why": "The field_ literal is concatenated with j bounded by FIELDS=20; the constant FIELDS-1 is admitted too.",
+          "observation": {
+            "date": "2026-09-05",
+            "codegen_revision": "d36a1af0c205ebdc7cf7f75b351ea34b5bc0fc0b",
+            "target": "aarch64-apple-darwin",
+            "method": "Fresh no-link compilation, retained pre-LLVM-optimization IR, and nm -u on the generated object",
+            "enabled": { "site_tables": 3, "fill_call_sites": 3, "object_fill_reference": true },
+            "disabled": { "site_tables": 0, "fill_call_sites": 0, "object_fill_reference": false },
+            "control": "Both arms retain calls to js_string_concat_value_box; these are code-presence observations, not execution counts or timing results."
+          }
+        },
+        {
+          "id": "cc_parity_bundle",
+          "expected_lowering": "not_emitted_on_reported_snapshot",
+          "why": "The reported bundle has no retained sites meeting this admission proof; its concat volume alone does not imply eligibility.",
+          "observation": {
+            "date": "2026-09-05",
+            "provenance": "reported in issue #9824; not a fresh measurement made by this record",
+            "source": "https://github.com/PerryTS/perry/issues/9824#issuecomment-5554137476",
+            "bundle": "cli_2.1.112.js",
+            "compiler_snapshot": "c7361c87c plus perf/for-in-deferred-shadow-set (#9823), as reported",
+            "workload": "offline mock API, one 400-character streamed reply, chunk 100",
+            "runtime_fill_calls": [0, 0, 0],
+            "linked_binary_fill_symbol_present": false,
+            "limit": "No artifact hash or retained IR is supplied here. Symbol absence proves no surviving reference in the inspected artifact; inspect pre-optimization IR to distinguish non-emission from later elimination. Re-audit another compiler or bundle."
+          }
+        }
+      ],
+      "regression_tests": [
+        "crates/perry/tests/concat_site_cache.rs::site_cache_fires_and_matches_node_under_evacuation",
+        "crates/perry/tests/concat_site_cache.rs::admission_follows_the_proven_bound",
+        "crates/perry/tests/concat_site_cache.rs::kill_switch_restores_the_plain_helper_and_stays_correct",
+        "crates/perry-runtime/src/gc/tests/concat_site.rs::test_filled_slot_is_rewritten_by_a_copied_minor"
+      ]
+    }
+  ]
+}
