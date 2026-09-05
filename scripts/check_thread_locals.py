@@ -211,11 +211,23 @@ def cfg_test_module_files(root: Path, crates: list[str]) -> set[str]:
     return test_only
 
 
-def shipping_raw_blocks(src: str) -> int:
-    """Raw `thread_local!` blocks that survive into a non-test build.
+def shipping_raw_declarations(src: str) -> int:
+    """Raw `thread_local!` DECLARATIONS that survive into a non-test build.
 
     Skips a block carrying `#[cfg(test)]` directly above it, and any block
     inside an inline `#[cfg(test)] mod … { … }`.
+
+    Declarations, not blocks. `_tlv_get_addr` is paid per *declaration* read,
+    and `thread_local! { … }` holds any number of them, so a block-denominated
+    ratchet cannot see the thing it exists to bound. Measured on this
+    repository at `d36a1af0c`: the 122 recorded cold BLOCKS were **339 cold
+    declarations**, `gc/policy.rs` alone recorded as 6 while declaring 28 —
+    and a `static` added to an already-recorded block passed the gate in
+    silence, which is how the allocation path re-accumulated the cost #7469
+    removed. Counting declarations also makes the two halves of the report
+    commensurable: the hot side was already counted in declarations, so
+    "318 hot / 122 cold" was comparing unlike units and read as a 2.6:1
+    majority for the mechanism when cold was in fact the larger number.
     """
     gated_spans = [brace_span(src, m.start()) for m in CFG_TEST_INLINE_MOD_RE.finditer(src)]
     count = 0
@@ -226,12 +238,13 @@ def shipping_raw_blocks(src: str) -> int:
         line = preceding[preceding.rfind("\n") + 1 :].strip()
         if line == "#[cfg(test)]":
             continue
-        count += 1
+        open_at, close_at = brace_span(src, m.start())
+        count += len(DECL_RE.findall(src[open_at + 1 : close_at]))
     return count
 
 
 def scan(root: Path, crates: list[str]) -> tuple[dict[str, int], int]:
-    """Raw `thread_local!` blocks per file, and total hot declarations."""
+    """Raw `thread_local!` declarations per file, and total hot declarations."""
     raw: dict[str, int] = {}
     hot_declarations = 0
     test_only_files = cfg_test_module_files(root, crates)
@@ -249,7 +262,7 @@ def scan(root: Path, crates: list[str]) -> tuple[dict[str, int], int]:
                 )
                 if rel in EXCLUDED or rel in test_only_files:
                     continue
-                count = shipping_raw_blocks(src)
+                count = shipping_raw_declarations(src)
                 if count:
                     raw[rel] = count
     return raw, hot_declarations
@@ -271,7 +284,7 @@ def verify(root: Path, crates: list[str], allowlist_path: Path) -> list[str]:
     for rel, count in sorted(raw.items()):
         if rel not in recorded:
             problems.append(
-                f"{rel}: {count} raw `thread_local!` block(s), none allowed.\n"
+                f"{rel}: {count} raw `thread_local!` declaration(s), none allowed.\n"
                 f"    Use `crate::perry_thread_local!` — same syntax, same "
                 f"`.with()` at every call site, and the address lands in this "
                 f"thread's hot cache instead of costing a `_tlv_get_addr` call "
@@ -281,7 +294,7 @@ def verify(root: Path, crates: list[str], allowlist_path: Path) -> list[str]:
         elif recorded[rel] != count:
             direction = "gained" if count > recorded[rel] else "lost"
             problems.append(
-                f"{rel}: {direction} raw `thread_local!` blocks "
+                f"{rel}: {direction} raw `thread_local!` declarations "
                 f"({recorded[rel]} recorded, {count} found). "
                 f"Convert it, or run --update to re-record."
             )
@@ -290,7 +303,7 @@ def verify(root: Path, crates: list[str], allowlist_path: Path) -> list[str]:
         if rel not in raw:
             problems.append(
                 f"{rel}: recorded as having {recorded[rel]} cold "
-                f"`thread_local!` block(s), but has none. A stale entry is one "
+                f"`thread_local!` declaration(s), but has none. A stale entry is one "
                 f"nobody has to justify — delete it with --update."
             )
 
@@ -311,9 +324,11 @@ def write_allowlist(root: Path, crates: list[str], allowlist_path: Path) -> None
         json.dumps(
             {
                 "_comment": (
-                    "Files still declaring raw `thread_local!`. Every entry is a "
-                    "declaration that pays `_tlv_get_addr` on Darwin; the count is "
-                    "a ratchet, so adding one to an already-listed file fails too. "
+                    "Files still declaring raw `thread_local!`. The count is the "
+                    "number of DECLARATIONS that survive into a shipping build — "
+                    "each one pays `_tlv_get_addr` per read on Darwin — and it is a "
+                    "ratchet, so adding a `static` to an already-listed file fails "
+                    "whether or not it opens a new block. "
                     "New code should use `crate::perry_thread_local!` — see "
                     "crates/perry-runtime/src/tls_hot.rs. Regenerate with "
                     "scripts/check_thread_locals.py --update."
@@ -364,13 +379,30 @@ def self_test() -> int:
             failures.append("a new raw `thread_local!` in an unlisted file passed")
         (src_dir / "new.rs").unlink()
 
-        # 2. A second raw declaration in an already-listed file must fail.
+        # 2. A second raw declaration in an already-listed file must fail —
+        #    in a NEW block…
         write_source(src_dir / "cold.rs", 
             "thread_local! { static A: u8 = const { 0 }; }\n"
             "thread_local! { static D: u8 = const { 0 }; }\n"
         )
         if not verify(root, CRATES, allowlist):
-            failures.append("a raw `thread_local!` added to a listed file passed")
+            failures.append("a raw `thread_local!` block added to a listed file passed")
+
+        # 2b. …and, the half a block-denominated ratchet could not see, inside
+        #     the block that is ALREADY recorded. This is how the allocation
+        #     path re-accumulated the cost #7469 removed: `gc/policy.rs`
+        #     declared 28 cold thread-locals while the allowlist read "6", and
+        #     every one after the first was free to add.
+        write_source(src_dir / "cold.rs", 
+            "thread_local! {\n"
+            "    static A: u8 = const { 0 };\n"
+            "    static D: u8 = const { 0 };\n"
+            "}\n"
+        )
+        if not verify(root, CRATES, allowlist):
+            failures.append(
+                "a raw `static` added to a listed file's EXISTING block passed"
+            )
 
         # 3. A stale entry must fail.
         write_source(src_dir / "cold.rs", 
@@ -429,7 +461,7 @@ def self_test() -> int:
         print(f"SELF-TEST FAILED: {f}", file=sys.stderr)
     if failures:
         return 1
-    print("self-test: the checker can fail in all six directions")
+    print("self-test: the checker can fail in all seven directions")
     return 0
 
 
@@ -455,7 +487,7 @@ def main() -> int:
     raw, hot_declarations = scan(REPO, CRATES)
     print(
         f"thread-local policy OK: {hot_declarations} hot declarations, "
-        f"{sum(raw.values())} raw blocks in {len(raw)} recorded cold files, "
+        f"{sum(raw.values())} cold declarations in {len(raw)} recorded files, "
         f"capacity {hot_slot_capacity(REPO)}"
     )
     return 0
