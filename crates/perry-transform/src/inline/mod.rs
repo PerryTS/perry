@@ -1329,6 +1329,96 @@ mod tests {
     }
 
     #[test]
+    fn cross_module_imported_class_dependencies_stay_in_the_source_module() {
+        for (specifier, class_name) in [
+            (
+                ImportSpecifier::Named {
+                    imported: "Bag".into(),
+                    local: "ImportedBag".into(),
+                },
+                "ImportedBag",
+            ),
+            (
+                ImportSpecifier::Default {
+                    local: "ImportedBag".into(),
+                },
+                "ImportedBag",
+            ),
+            (
+                ImportSpecifier::Namespace {
+                    local: "bags".into(),
+                },
+                "bags.Bag",
+            ),
+        ] {
+            let mut source = Module::new("/src/helpers.ts");
+            source.imports.push(perry_hir::Import {
+                source: "./bag".into(),
+                specifiers: vec![specifier],
+                is_native: false,
+                module_kind: ModuleKind::NativeCompiled,
+                resolved_path: Some("/src/bag.ts".into()),
+                type_only: false,
+                runtime_erased: false,
+                is_dynamic: false,
+                is_dynamic_target: false,
+                is_deferred_require: false,
+                is_adopted_require: false,
+            });
+            let mut factory = function(1, vec![anon_new(class_name)]);
+            factory.name = "make".into();
+            factory.is_exported = true;
+            source.functions.push(factory.clone());
+            source.exported_functions.push(("make".into(), 1));
+
+            // There is no class declaration in this module: the old local-only
+            // dependency census admitted the imported constructor.
+            assert!(
+                gather_cross_module_functions(&source).is_empty(),
+                "{class_name}"
+            );
+
+            let mut builder = anon_class(2, "Builder");
+            builder.is_exported = true;
+            builder.methods.push(factory);
+            source.classes.push(builder);
+            assert!(
+                gather_cross_module_methods(&source).is_empty(),
+                "{class_name}"
+            );
+            assert!(
+                gather_cross_module_methods_with_extern_imports(&source).is_empty(),
+                "{class_name}"
+            );
+
+            let Stmt::Expr(constructor) = anon_new(class_name) else {
+                unreachable!()
+            };
+            source.functions[0].body = vec![Stmt::Return(Some(Expr::LocalGet(1)))];
+            source.functions[0].params.push(Param {
+                id: 1,
+                name: "value".into(),
+                ty: Type::Any,
+                default: Some(constructor),
+                decorators: Vec::new(),
+                is_rest: false,
+                arguments_object: None,
+            });
+            assert!(
+                gather_cross_module_functions(&source).is_empty(),
+                "default {class_name}"
+            );
+
+            // Importing a class must not disable unrelated helper inlining.
+            source.functions[0].params[0].default = Some(Expr::Integer(7));
+            assert!(
+                gather_cross_module_functions(&source).contains_key("make"),
+                "independent {class_name}"
+            );
+        }
+    }
+
+    #[test]
     fn cross_module_free_function_with_module_local_is_rejected() {
         let mut source = Module::new("/src/constants.ts");
         let mut reads_module_binding = function(1, vec![Stmt::Return(Some(Expr::LocalGet(99)))]);
