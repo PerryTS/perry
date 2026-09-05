@@ -135,45 +135,45 @@ strip = false
 # UI crates must NOT strip — they export #[no_mangle] extern "C" symbols
 [profile.release.package.perry-ui-macos]
 strip = false
-codegen-units = 16
+codegen-units = 1
 
 [profile.release.package.perry-ui-gtk4]
 strip = false
-codegen-units = 16
+codegen-units = 1
 
 [profile.release.package.perry-ui-windows]
 strip = false
-codegen-units = 16
+codegen-units = 1
 
 # WinUI scaffold (#4680): re-exports perry-ui-windows; the staticlib bundles
 # its #[no_mangle] extern "C" symbols, so it must not be stripped either.
 [profile.release.package.perry-ui-windows-winui]
 strip = false
-codegen-units = 16
+codegen-units = 1
 
 [profile.release.package.perry-ui-geisterhand]
 strip = false
-codegen-units = 16
+codegen-units = 1
 
 [profile.release.package.perry-ui-ios]
 strip = false
-codegen-units = 16
+codegen-units = 1
 
 [profile.release.package.perry-ui-visionos]
 strip = false
-codegen-units = 16
+codegen-units = 1
 
 [profile.release.package.perry-ui-tvos]
 strip = false
-codegen-units = 16
+codegen-units = 1
 
 [profile.release.package.perry-ui-android]
 strip = false
-codegen-units = 16
+codegen-units = 1
 
 [profile.release.package.perry-ui-watchos]
 strip = false
-codegen-units = 16
+codegen-units = 1
 
 [profile.release.package.perry-stdlib]
 opt-level = "s"       # Optimize for size in stdlib
@@ -190,7 +190,7 @@ opt-level = "s"       # Optimize for size in stdlib
 # units + no strip keeps the exported C API in the staticlib.
 [profile.release.package.perry-ext-events]
 strip = false
-codegen-units = 16
+codegen-units = 1
 
 # Staticlib wrapper crates (#5422). perry-runtime / perry-stdlib are now
 # rlib-only; these wrappers re-export their #[no_mangle] C API into
@@ -200,10 +200,10 @@ codegen-units = 16
 # in the archive.
 [profile.release.package.perry-runtime-static]
 strip = false
-codegen-units = 16
+codegen-units = 1
 [profile.release.package.perry-stdlib-static]
 strip = false
-codegen-units = 16
+codegen-units = 1
 
 # Issue #5928: well-known "shared tokio" wrapper crates (#507) are built in
 # the SAME cargo invocation as perry-stdlib-static so cargo unifies their
@@ -223,17 +223,17 @@ codegen-units = 16
 # strip-dedup mechanism assumes same-named codegen units are byte-identical
 # and safe to drop duplicates from — an assumption this mismatch violated.
 [profile.release.package.perry-ext-fastify]
-codegen-units = 16
+codegen-units = 1
 [profile.release.package.perry-ext-http]
-codegen-units = 16
+codegen-units = 1
 [profile.release.package.perry-ext-ioredis]
-codegen-units = 16
+codegen-units = 1
 [profile.release.package.perry-ext-net]
-codegen-units = 16
+codegen-units = 1
 [profile.release.package.perry-ext-undici]
-codegen-units = 16
+codegen-units = 1
 [profile.release.package.perry-ext-ws]
-codegen-units = 16
+codegen-units = 1
 
 # Fast developer profile (#5422). Optimized enough for realistic local runs but
 # without the distribution-grade settings that dominate compile time, so the
@@ -243,7 +243,7 @@ codegen-units = 16
 [profile.perry-dev]
 inherits = "release"
 lto = false
-codegen-units = 16
+codegen-units = 1
 incremental = true
 strip = false
 opt-level = 1
@@ -278,61 +278,61 @@ opt-level = 3
 strip = false
 [profile.dist.package.perry-ui-macos]
 strip = false
-codegen-units = 16
+codegen-units = 1
 [profile.dist.package.perry-ui-gtk4]
 strip = false
-codegen-units = 16
+codegen-units = 1
 [profile.dist.package.perry-ui-windows]
 strip = false
-codegen-units = 16
+codegen-units = 1
 [profile.dist.package.perry-ui-windows-winui]
 strip = false
-codegen-units = 16
+codegen-units = 1
 [profile.dist.package.perry-ui-geisterhand]
 strip = false
-codegen-units = 16
+codegen-units = 1
 [profile.dist.package.perry-ui-ios]
 strip = false
-codegen-units = 16
+codegen-units = 1
 [profile.dist.package.perry-ui-visionos]
 strip = false
-codegen-units = 16
+codegen-units = 1
 [profile.dist.package.perry-ui-tvos]
 strip = false
-codegen-units = 16
+codegen-units = 1
 [profile.dist.package.perry-ui-android]
 strip = false
-codegen-units = 16
+codegen-units = 1
 [profile.dist.package.perry-ui-watchos]
 strip = false
-codegen-units = 16
+codegen-units = 1
 [profile.dist.package.perry-stdlib]
 opt-level = "s"
 [profile.dist.package.perry-ext-events]
 strip = false
-codegen-units = 16
+codegen-units = 1
 [profile.dist.package.perry-runtime-static]
 strip = false
-codegen-units = 16
+codegen-units = 1
 [profile.dist.package.perry-stdlib-static]
 strip = false
-codegen-units = 16
+codegen-units = 1
 
 # Issue #5928: mirrors the [profile.release.package.perry-ext-*] block above
 # — see its comment for why matching `codegen-units` across every crate in
 # the "shared tokio" (#507) cargo invocation is required.
 [profile.dist.package.perry-ext-fastify]
-codegen-units = 16
+codegen-units = 1
 [profile.dist.package.perry-ext-http]
-codegen-units = 16
+codegen-units = 1
 [profile.dist.package.perry-ext-ioredis]
-codegen-units = 16
+codegen-units = 1
 [profile.dist.package.perry-ext-net]
-codegen-units = 16
+codegen-units = 1
 [profile.dist.package.perry-ext-undici]
-codegen-units = 16
+codegen-units = 1
 [profile.dist.package.perry-ext-ws]
-codegen-units = 16
+codegen-units = 1
 
 [workspace.package]
 version = "0.5.1520"
@@ -532,3 +532,18 @@ perry-codegen-wasm = { path = "crates/perry-codegen-wasm" }
 perry-ui-testkit = { path = "crates/perry-ui-testkit" }
 perry-audio-miniaudio = { path = "crates/perry-audio-miniaudio" }
 perry-updater = { path = "crates/perry-updater" }
+
+# Release codegen with debug assertions ON, for the GC root-scanning guards
+# that only exist under `cfg(debug_assertions)` — above all
+# `gc::young_log::debug_assert_logged`, rule 2 of the young-entry-log design,
+# which re-derives each table's minor-relevant set and panics on any key the
+# log does not name. `[profile.release]` leaves debug-assertions off, so a
+# release `cargo test` run does not enforce rule 1 at all, and the plain `dev`
+# profile is too slow to run the GC suite comfortably.
+#
+#   cargo test --profile gcaudit -p perry-runtime -- --test-threads=1
+[profile.gcaudit]
+inherits = "release"
+debug-assertions = true
+lto = false
+codegen-units = 1

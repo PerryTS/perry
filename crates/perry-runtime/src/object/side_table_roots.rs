@@ -244,6 +244,26 @@ pub(crate) fn test_transition_cache_occupancy() -> usize {
     })
 }
 
+/// Drive the PRODUCTION transition-cache writer from a test. Nothing but a
+/// call, so it cannot drift from the writer it stands in for.
+#[cfg(test)]
+pub(crate) fn test_transition_cache_insert(
+    prev_shape_id: u32,
+    interned_key: *const crate::StringHeader,
+    next_keys: usize,
+    slot_idx: u32,
+    target_shape_id: u32,
+) {
+    super::transition_cache_insert(
+        std::ptr::null(),
+        prev_shape_id,
+        interned_key,
+        next_keys,
+        slot_idx,
+        target_shape_id,
+    );
+}
+
 #[cfg(test)]
 pub(crate) fn test_seed_transition_cache_entry(
     prev_shape_id: u32,
@@ -251,11 +271,9 @@ pub(crate) fn test_seed_transition_cache_entry(
     next_keys: usize,
 ) {
     let slot = transition_cache_slot(prev_shape_id, key_ptr);
-    if crate::gc::young_log::addr_is_minor_relevant(next_keys)
-        || crate::gc::young_log::addr_is_minor_relevant(key_ptr)
-    {
-        TRANSITION_CACHE_YOUNG.with(|log| log.borrow_mut().note(slot as u32));
-    }
+    // The seed writes `slot_idx: 0`, i.e. no length marker, so `key_ptr` is an
+    // address here — which is the `len_marker == 0` arm of the shared predicate.
+    arm_transition_cache_young(slot, next_keys, key_ptr, 0);
     with_transition_cache(|table| unsafe {
         (*table)[slot] = TransitionEntry {
             key_ptr,
