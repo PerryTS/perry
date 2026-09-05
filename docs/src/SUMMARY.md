@@ -188,6 +188,7 @@
 - [Explicit Memory Control](internals/explicit-memory.md)
 - [The GC rooting invariant (codegen)](internals/gc-rooting-invariant.md)
 - [Local binding type evidence](internals/local-binding-type-evidence.md)
+- [Codegen mechanisms and workload evidence](internals/codegen-mechanisms.md)
 - [Incremental GC step bounds](internals/gc-step-bounds.md)
 - [RFC: rooting by construction](internals/rfc-rooting-by-construction.md)
 - [Node-API host design](internals/node-api-host.md)
