@@ -257,7 +257,7 @@ class CurrentCounterDeterminismTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             probes_dir = Path(tmp)
             for name in ("01_probe", "02_other"):
-                (probes_dir / f"{name}.ts").write_text("// stub\n")
+                (probes_dir / f"{name}.ts").write_text("// stub\n", encoding="utf-8")
             with mock.patch(
                 "benchmarks.gc_ratchet.gc_ratchet.compile_probe", return_value=Path("stub")
             ), mock.patch(
@@ -317,7 +317,7 @@ class CurrentCounterDeterminismTests(unittest.TestCase):
                 ))
 
     def test_array_growth_exclusions_match_the_recorded_samples(self):
-        receipt = json.loads((REPO_ROOT / "benchmarks/gc_ratchet/evidence/9790-array-growth-pacing.json").read_text())
+        receipt = json.loads((REPO_ROOT / "benchmarks/gc_ratchet/evidence/9790-array-growth-pacing.json").read_text(encoding="utf-8"))
         entries = _shipped_tolerances()["probe_overrides"]["07_array_grow_evacuate"]
         self.assertEqual(set(entries), {"copied_bytes", "freed_bytes"})
         for metric, entry in entries.items():
@@ -1037,13 +1037,13 @@ class ClassifyTests(unittest.TestCase):
     def _fixture(self, tmp, *, precise=5_329_880, excess=1_048_576, checksum=1, probes=("05_stub",)):
         root = Path(tmp)
         perry = root / "stub-perry"
-        perry.write_text(_STUB_PERRY.format(python=sys.executable), encoding="utf-8")
+        perry.write_text(_STUB_PERRY.format(python=sys.executable, encoding="utf-8"), encoding="utf-8")
         perry.chmod(perry.stat().st_mode | stat.S_IEXEC)
         probes_dir = root / "probes"
         probes_dir.mkdir()
         for name in probes:
             (probes_dir / f"{name}.ts").write_text(
-                _STUB_PROBE.format(precise=precise, excess=excess, checksum=checksum),
+                _STUB_PROBE.format(precise=precise, excess=excess, checksum=checksum, encoding="utf-8"),
                 encoding="utf-8",
             )
         return perry, probes_dir
@@ -1074,7 +1074,7 @@ class ClassifyTests(unittest.TestCase):
             perry, probes_dir = self._fixture(tmp)
             (probes_dir / "05_stub.ts").write_text(
                 "import os, random, sys\n"
-                'sys.stdout.write("probe:stub\\nchecksum:1\\n")\n'
+                'sys.stdout.write("probe:stub\\nchecksum:1\\n", encoding="utf-8")\n'
                 'sys.stderr.write("#gcmetric heap_used_bytes=%d\\n" % (5000000 + random.randrange(1, 99)))\n'
                 'sys.stderr.write("#gcmetric heap_total_bytes=20971520\\n")\n'
                 'sys.stderr.write("#gcmetric rss_bytes=30000000\\n")\n',
@@ -1092,7 +1092,7 @@ class ClassifyTests(unittest.TestCase):
             perry, probes_dir = self._fixture(tmp)
             (probes_dir / "05_stub.ts").write_text(
                 "import os, sys\n"
-                'off = os.environ.get("PERRY_CONSERVATIVE_STACK_SCAN") == "off"\n'
+                'off = os.environ.get("PERRY_CONSERVATIVE_STACK_SCAN", encoding="utf-8") == "off"\n'
                 'sys.stdout.write("probe:stub\\nchecksum:%d\\n" % (0 if off else 1))\n'
                 'sys.stderr.write("#gcmetric heap_used_bytes=5000000\\n")\n'
                 'sys.stderr.write("#gcmetric heap_total_bytes=20971520\\n")\n'
@@ -1111,7 +1111,7 @@ class ClassifyTests(unittest.TestCase):
             perry, probes_dir = self._fixture(tmp)
             (probes_dir / "05_stub.ts").write_text(
                 "import os, sys\n"
-                'off = os.environ.get("PERRY_CONSERVATIVE_STACK_SCAN") == "off"\n'
+                'off = os.environ.get("PERRY_CONSERVATIVE_STACK_SCAN", encoding="utf-8") == "off"\n'
                 "state = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'n')\n"
                 "n = 0\n"
                 "if not off:\n"
@@ -1246,7 +1246,7 @@ class FailOpenPerCellTests(unittest.TestCase):
                 )
                 with tempfile.TemporaryDirectory() as tmp:
                     path = Path(tmp) / "artifact.json"
-                    path.write_text(json.dumps(baseline), encoding="utf-8")
+                    path.write_text(json.dumps(baseline, encoding="utf-8"), encoding="utf-8")
                     # Preflight lets it through, so the probes run...
                     self.assertEqual(
                         main(["validate", "--artifact", str(path), "--scope", "structural"]),
@@ -1272,7 +1272,7 @@ class FailOpenPerCellTests(unittest.TestCase):
         self.assertTrue(any(defect.fatal for defect in inspect_artifact(baseline)))
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "artifact.json"
-            path.write_text(json.dumps(baseline), encoding="utf-8")
+            path.write_text(json.dumps(baseline, encoding="utf-8"), encoding="utf-8")
             self.assertEqual(
                 main(["validate", "--artifact", str(path), "--scope", "structural"]),
                 2,
@@ -1286,7 +1286,7 @@ class FailOpenPerCellTests(unittest.TestCase):
         # hand gets the full refusal; only the CI preflight asks for less.
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "artifact.json"
-            path.write_text(json.dumps(self._unfit_cell_baseline()), encoding="utf-8")
+            path.write_text(json.dumps(self._unfit_cell_baseline(, encoding="utf-8")), encoding="utf-8")
             self.assertEqual(main(["validate", "--artifact", str(path)]), 1)
 
     def test_pinning_an_unfit_artifact_is_still_refused(self):
@@ -1465,13 +1465,13 @@ class ProbeRunEnvDeliveryTests(unittest.TestCase):
         root = Path(tmp)
         perry = root / "stub-perry"
         perry.write_text(
-            _STUB_PERRY_RECORDING_COMPILE_ENV.format(python=sys.executable), encoding="utf-8"
+            _STUB_PERRY_RECORDING_COMPILE_ENV.format(python=sys.executable, encoding="utf-8"), encoding="utf-8"
         )
         perry.chmod(perry.stat().st_mode | stat.S_IEXEC)
         probes_dir = root / "probes"
         probes_dir.mkdir()
         (probes_dir / "13_stub.ts").write_text(
-            (_ARM_DIRECTIVE if armed else "") + _STUB_ARMED_PROBE, encoding="utf-8"
+            (_ARM_DIRECTIVE if armed else "", encoding="utf-8") + _STUB_ARMED_PROBE, encoding="utf-8"
         )
         return perry, probes_dir
 

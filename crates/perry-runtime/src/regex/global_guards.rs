@@ -2,7 +2,7 @@
 //!
 //! Split out of `regex.rs` to keep that file under the 2000-line size gate.
 
-use super::{js_string_from_str, RegExpHeader};
+use super::RegExpHeader;
 
 pub(super) fn throw_replace_all_non_global_regex() -> ! {
     let message = b"String.prototype.replaceAll called with a non-global RegExp argument";
