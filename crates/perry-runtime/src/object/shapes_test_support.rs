@@ -158,3 +158,78 @@ pub(crate) fn test_seed_shape_entry(keys_id: usize) {
 pub(crate) fn test_shape_id_for_keys(keys_id: usize) -> Option<u32> {
     test_shape_ids_for_keys(keys_id).first().copied()
 }
+
+/// Number of indexed slots recorded for `keys_id`, or 0 when the address has
+/// no `indices` entry. Used by the `shapes.indices` arming tests.
+#[cfg(test)]
+pub(crate) fn test_shape_index_len(keys_id: usize) -> u32 {
+    let inner = crate::state::state().shapes.inner.borrow();
+    inner
+        .indices
+        .get(&keys_id)
+        .map(|ix| ix.indexed_len)
+        .unwrap_or(0)
+}
+
+/// A process-global shape id no descriptor in this agent has claimed, for the
+/// `install_external_shape_id` path.
+#[cfg(test)]
+pub(crate) fn test_unused_external_shape_id() -> u32 {
+    let table = &crate::state::state().shapes;
+    let mut id = super::SHAPE_ID_END - 1;
+    while table.slab().record_ptr(id).is_some() {
+        id -= 1;
+    }
+    id
+}
+
+/// Build the slot index for `keys` through the PRODUCTION path
+/// (`shape_slot_lookup` with `build = true`), which is the `indices` arm site.
+/// Nothing but a call, so it cannot drift from the writer it stands in for.
+///
+/// # Safety
+/// `keys` must be a live keys array of `key_count` dense string slots.
+#[cfg(test)]
+pub(crate) unsafe fn test_build_slot_index(
+    keys: *const super::ArrayHeader,
+    probe: &[u8],
+    key_count: u32,
+) {
+    let h = crate::object::keys_lookup::key_bytes_hash(probe.as_ptr(), probe.len());
+    let _ = super::shape_slot_lookup(keys, probe, h, key_count, true);
+}
+
+/// `shapes_slot_list::shape_index_migrate_after_delete`, reachable from the
+/// `gc::tests` suites (the module is private to `shapes`).
+#[cfg(test)]
+pub(crate) fn test_shape_index_migrate_after_delete(
+    old_keys_id: usize,
+    new_keys_id: usize,
+    removed_slot: u32,
+    old_key_count: u32,
+    old_keys_shared: bool,
+) -> bool {
+    super::shapes_slot_list::shape_index_migrate_after_delete(
+        old_keys_id,
+        new_keys_id,
+        removed_slot,
+        old_key_count,
+        old_keys_shared,
+    )
+}
+
+/// `shapes_slot_list::install_external_shape_id`, same reason.
+#[cfg(test)]
+pub(crate) fn test_install_external_shape_id(
+    id: u32,
+    keys: *const super::ArrayHeader,
+    logical_key_count: u32,
+    live_inline_slot_count: u32,
+) -> bool {
+    super::shapes_slot_list::install_external_shape_id(
+        id,
+        keys,
+        logical_key_count,
+        live_inline_slot_count,
+    )
+}

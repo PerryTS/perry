@@ -459,3 +459,136 @@ fn young_shape_cache_entry_is_moved_through_the_log() {
     assert!(row.partial);
     assert!(row.visited >= 1, "{row:?}");
 }
+
+// ---------------------------------------------------------------------------
+// `shapes.indices` arming (#9756 restructures this table; nothing exercised
+// its four arm sites, so a missed `note` there was a collected live object
+// that this suite would not have caught).
+// ---------------------------------------------------------------------------
+
+/// Keys count above `KEYS_INDEX_THRESHOLD` (32), so the index is built at all.
+const INDEXED_KEYS: u32 = 40;
+
+/// A YOUNG keys array of `INDEXED_KEYS` young string keys, in the dense
+/// NaN-boxed layout `keys_array_dense_slots` reads.
+unsafe fn young_indexed_keys_array() -> (*mut crate::array::ArrayHeader, Vec<Vec<u8>>) {
+    let arr = crate::array::js_array_alloc_with_length(INDEXED_KEYS);
+    let slots = (arr as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *mut f64;
+    let mut names = Vec::new();
+    for i in 0..INDEXED_KEYS {
+        let name = format!("young_key_{i:04}");
+        let s = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        *slots.add(i as usize) = f64::from_bits(string_bits(s as usize));
+        names.push(name.into_bytes());
+    }
+    (*arr).length = INDEXED_KEYS;
+    (arr, names)
+}
+
+unsafe fn build_index_for(keys: *mut crate::array::ArrayHeader, names: &[Vec<u8>]) {
+    // `build = true` is the arm site: it inserts the `indices` entry.
+    crate::object::shapes::test_build_slot_index(keys, &names[0], INDEXED_KEYS);
+}
+
+/// S17 — `shape_slot_lookup_verdict`'s build arm publishes an `indices` entry
+/// keyed by a YOUNG keys address.
+#[test]
+fn building_a_slot_index_on_a_young_keys_array_arms_the_log() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
+    crate::object::shapes::test_clear_shape_table();
+
+    let (keys, names) = unsafe { young_indexed_keys_array() };
+    js_shadow_slot_set(0, ptr_bits(keys as usize));
+    assert!(crate::arena::pointer_in_nursery(keys as usize));
+    unsafe { build_index_for(keys, &names) };
+    assert!(crate::object::shapes::test_shape_index_len(keys as usize) > 0);
+
+    // Rule 2 re-derives the relevant set from `indices` during the walk and
+    // panics if the log does not name this address.
+    let _ = gc_collect_minor();
+
+    let moved = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+    assert_ne!(
+        moved, keys as usize,
+        "the keys array must have been evacuated"
+    );
+    assert!(
+        crate::object::shapes::test_shape_index_len(moved) > 0,
+        "the index must follow the keys array to its new address"
+    );
+}
+
+/// S18 — `shape_keys_grown` re-keys the index onto the grown array's address.
+#[test]
+fn growing_an_indexed_keys_array_arms_the_log_for_the_new_address() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
+    crate::object::shapes::test_clear_shape_table();
+
+    let (old_keys, names) = unsafe { young_indexed_keys_array() };
+    unsafe { build_index_for(old_keys, &names) };
+    let (new_keys, _) = unsafe { young_indexed_keys_array() };
+    js_shadow_slot_set(0, ptr_bits(new_keys as usize));
+
+    crate::object::shapes::shape_keys_grown(old_keys as usize, new_keys);
+    assert!(crate::object::shapes::test_shape_index_len(new_keys as usize) > 0);
+
+    let _ = gc_collect_minor();
+    let moved = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+    assert_ne!(moved, new_keys as usize);
+    assert!(crate::object::shapes::test_shape_index_len(moved) > 0);
+}
+
+/// S19 — `shape_index_migrate_after_delete` moves a complete index onto the
+/// compacted array's address.
+#[test]
+fn migrating_an_index_after_a_delete_arms_the_log_for_the_new_address() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
+    crate::object::shapes::test_clear_shape_table();
+
+    let (old_keys, names) = unsafe { young_indexed_keys_array() };
+    unsafe { build_index_for(old_keys, &names) };
+    let (new_keys, _) = unsafe { young_indexed_keys_array() };
+    js_shadow_slot_set(0, ptr_bits(new_keys as usize));
+
+    let migrated = crate::object::shapes::test_shape_index_migrate_after_delete(
+        old_keys as usize,
+        new_keys as usize,
+        /* removed_slot = */ 0,
+        INDEXED_KEYS,
+        /* old_keys_shared = */ false,
+    );
+    assert!(migrated, "a complete index must migrate");
+
+    let _ = gc_collect_minor();
+    let moved = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+    assert_ne!(moved, new_keys as usize);
+    assert!(crate::object::shapes::test_shape_index_len(moved) > 0);
+}
+
+/// S16 — `family_push_front`, the external-id install path, publishes a family
+/// under a YOUNG keys address.
+#[test]
+fn installing_an_external_shape_id_arms_the_family_log() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
+    crate::object::shapes::test_clear_shape_table();
+
+    let keys = unsafe { young_keys_array() };
+    js_shadow_slot_set(0, ptr_bits(keys as usize));
+    let id = crate::object::shapes::test_unused_external_shape_id();
+    assert!(
+        crate::object::shapes::test_install_external_shape_id(id, keys, 0, 0),
+        "the external id must install"
+    );
+
+    let _ = gc_collect_minor();
+    let moved = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+    assert_ne!(moved, keys as usize);
+    assert!(
+        !crate::object::shapes::test_shape_ids_for_keys(moved).is_empty(),
+        "the family must have followed the keys array"
+    );
+}
