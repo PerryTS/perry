@@ -324,6 +324,154 @@ fn ic_sink() -> &'static Option<Sink> {
     })
 }
 
+// ---------------------------------------------------------------------------
+// Per-object layout tables: occupancy vs the address filter that gates them
+// ---------------------------------------------------------------------------
+
+static LAYOUT_SINK: OnceLock<Option<Sink>> = OnceLock::new();
+static LAYOUT_ON: AtomicBool = AtomicBool::new(false);
+
+fn layout_sink() -> &'static Option<Sink> {
+    LAYOUT_SINK.get_or_init(|| {
+        let sink = sink_from_env("PERRY_LAYOUT_DIAG");
+        LAYOUT_ON.store(sink.is_some(), Ordering::Relaxed);
+        sink
+    })
+}
+
+/// Is the per-object-layout occupancy instrument armed?
+#[inline]
+pub fn layout_on() -> bool {
+    if LAYOUT_SINK.get().is_none() {
+        layout_sink();
+    }
+    LAYOUT_ON.load(Ordering::Relaxed)
+}
+
+/// One collection's view of the per-object layout tables and the 4096-bit
+/// address filter that is supposed to keep evacuation off them.
+///
+/// The question this exists to settle: `layout_addr_filter_may_hold` is
+/// documented for "one or two entries … ~0.05 % false-positive rate", and
+/// `transfer_per_object_descriptor` / `transfer_per_object_slot_mask` return
+/// early only when it says no. If the tables hold far more keys than the
+/// filter has bits, it answers "maybe" for every address, both early returns
+/// stop firing, and every evacuated object pays the full two-map hash path —
+/// while nothing in the system says so out loud.
+///
+/// `keys` is also what a filter rebuild used to cost: one `Vec<usize>` of
+/// every live key per prune, plus a second full walk to recount the young
+/// records.
+#[derive(Default)]
+pub struct LayoutDiag {
+    prunes: u64,
+    typed_len: usize,
+    masks_len: usize,
+    typed_max: usize,
+    masks_max: usize,
+    /// Set bits in the address filter, and its capacity in bits.
+    filter_bits_set: usize,
+    filter_bits_total: usize,
+    filter_bits_set_max: usize,
+    /// Live keys past which a rebuild stops producing a selective filter.
+    useful_keys: usize,
+    /// Prunes that rebuilt the filter from the survivors, and prunes that
+    /// found it already outgrown and skipped the walk.
+    rebuilt: u64,
+    outgrown: u64,
+    /// Keys visited by prunes that DID rebuild — the walk that is still paid.
+    rebuilt_keys: u64,
+}
+
+crate::perry_thread_local! {
+    static LAYOUT_DIAG: RefCell<LayoutDiag> = RefCell::new(LayoutDiag::default());
+}
+
+/// Record one death-prune's occupancy. `rebuilt_filter` says whether this
+/// prune rebuilt the address filter from its survivors, or found the tables
+/// too full for a 4,096-bit sketch to discriminate and saturated it instead.
+pub fn layout_note_prune(
+    typed_len: usize,
+    masks_len: usize,
+    filter_bits_set: usize,
+    filter_bits_total: usize,
+    rebuilt_filter: bool,
+    useful_keys: usize,
+) {
+    LAYOUT_DIAG.with(|d| {
+        let mut d = d.borrow_mut();
+        d.prunes += 1;
+        d.typed_len = typed_len;
+        d.masks_len = masks_len;
+        d.typed_max = d.typed_max.max(typed_len);
+        d.masks_max = d.masks_max.max(masks_len);
+        d.filter_bits_set = filter_bits_set;
+        d.filter_bits_total = filter_bits_total;
+        d.filter_bits_set_max = d.filter_bits_set_max.max(filter_bits_set);
+        d.useful_keys = useful_keys;
+        if rebuilt_filter {
+            d.rebuilt += 1;
+            d.rebuilt_keys += (typed_len + masks_len) as u64;
+        } else {
+            d.outgrown += 1;
+        }
+        let text = d.render();
+        if let Some(sink) = layout_sink() {
+            write_sink(sink, &text);
+        }
+    });
+}
+
+impl LayoutDiag {
+    fn render(&self) -> String {
+        use std::fmt::Write as _;
+        let mut out = String::with_capacity(512);
+        let pct = |n: usize, d: usize| {
+            if d == 0 {
+                0.0
+            } else {
+                100.0 * n as f64 / d as f64
+            }
+        };
+        let keys = self.typed_len + self.masks_len;
+        let _ = writeln!(
+            out,
+            "[layout-diag] prunes={} keys_now={} (typed={} masks={}) keys_max={} \
+             (typed={} masks={})",
+            self.prunes,
+            keys,
+            self.typed_len,
+            self.masks_len,
+            self.typed_max + self.masks_max,
+            self.typed_max,
+            self.masks_max
+        );
+        let _ = writeln!(
+            out,
+            "  filter: {}/{} bits set ({:.1} %), max {}/{} ({:.1} %); selective up to \
+             {} keys, so this table is {}",
+            self.filter_bits_set,
+            self.filter_bits_total,
+            pct(self.filter_bits_set, self.filter_bits_total),
+            self.filter_bits_set_max,
+            self.filter_bits_total,
+            pct(self.filter_bits_set_max, self.filter_bits_total),
+            self.useful_keys,
+            if keys > self.useful_keys {
+                "OUTGROWN it -- every probe answers `may hold`"
+            } else {
+                "within it"
+            }
+        );
+        let _ = writeln!(
+            out,
+            "  filter rebuilds={} over {} keys walked; outgrown-and-skipped={}",
+            self.rebuilt, self.rebuilt_keys, self.outgrown
+        );
+        out
+    }
+}
+
 /// Is the IC-miss instrument armed? One relaxed load once initialised.
 #[inline]
 pub fn ic_on() -> bool {
