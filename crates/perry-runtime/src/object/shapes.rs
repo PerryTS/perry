@@ -268,7 +268,8 @@ impl ShapeTableInner {
     /// Rule 1 of `gc/young_log.rs`: log a keys address BEFORE a family or a
     /// slot index is published under it, when the keys array is not old.
     /// Every family insert funnels through `family_push_back` /
-    /// `family_push_front`; the slot-index inserts call this themselves.
+    /// `family_append_fresh` / `family_push_front`; the slot-index inserts
+    /// call this themselves.
     #[inline]
     fn note_young_keys(&mut self, keys: u64) {
         if crate::gc::young_log::addr_is_minor_relevant(keys as usize) {
@@ -288,6 +289,7 @@ impl ShapeTableInner {
     /// linear in the number of descriptors this keys array has ever had.
     #[inline]
     fn family_append_fresh(&mut self, keys: u64, id: u32) {
+        self.note_young_keys(keys);
         self.families.entry(keys).or_default().append_unchecked(id);
     }
 
