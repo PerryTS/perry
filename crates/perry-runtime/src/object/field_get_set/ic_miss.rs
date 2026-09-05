@@ -1013,6 +1013,115 @@ pub extern "C" fn js_object_get_field_ic_miss(
 /// - `site_id`: the typed-feedback site id
 /// - `cache_slot`: the per-site [`PicCacheSlot`] (resolved and primed by
 ///   `..._ic_miss`)
+/// `PERRY_IC_OUTLINE_FASTPATH=0` sends every outlined read back to the miss
+/// handler, so the same binary can be measured with and without the hit path
+/// one environment variable apart. Measurement only — nothing in the runtime
+/// branches on it for behaviour, and the two settings are observationally
+/// identical.
+#[inline]
+fn outlined_mru_hit_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        crate::gc::env_default_on_from_value(
+            std::env::var("PERRY_IC_OUTLINE_FASTPATH").ok().as_deref(),
+        )
+    })
+}
+
+/// The inline-cache HIT the full-outline path never had.
+///
+/// # Why this exists
+///
+/// `js_object_get_field_ic` (#5391 path 3) replaces the inline generic-get
+/// diamond with one call in oversized modules. The diamond's monomorphic
+/// fast-load was traded away with it, and nothing replaced it: the helper
+/// observed feedback and then called `js_object_get_field_ic_miss`
+/// **unconditionally, on every read**, which primed the site's cache and
+/// returned. The cache was written by every read and consulted by nobody.
+///
+/// That is not a small trade on a minified bundle, because the threshold that
+/// turns full-outlining on (4,000 callables) is met by the *whole module*, so
+/// EVERY generic property read in such a program takes it. Measured on the
+/// compiled claude-code TUI, one 400-character reply: 2,663,424 entries to the
+/// miss handler over 12,326 sites, of which 2,122,626 primed, and **95.2 % of
+/// those primes wrote the token the site's MRU entry already held**
+/// (`PERRY_IC_DIAG`'s prime split). The four hottest sites — `.done`,
+/// `.ambiguousAsWide`, `.value`, `.segment`, ~195k reads each — each recorded
+/// exactly ONE new-token prime and ~195k same-token primes, with
+/// `PIC_WAY_STATE` still 0. Perfectly monomorphic sites, a cache holding the
+/// right answer, and the full miss ladder walked every time.
+///
+/// So this is not a new cache or a new policy: it is the *existing* per-site
+/// cache being read on the path that writes it.
+///
+/// # The guards are the emitted diamond's, one for one
+///
+/// Receiver is a real heap pointer (`>= HANDLE_BAND_MAX`), a `GC_TYPE_OBJECT`
+/// with `OBJ_FLAG_HAS_DESCRIPTORS` clear, its shape stamp is non-zero and
+/// equal to the cached token, and the cached slot carries no
+/// `IC_SLOT_OVERFLOW_BIT`. Those are exactly the predicates
+/// `lower_generic_property_get` emits before `pic.hit`, evaluated in the same
+/// order, and the raw header loads are the same ones it emits — the caller has
+/// already established the pointer tag, which is what licenses them there and
+/// here. A `TAG_HOLE` in the slot is a deleted field and misses, as it does
+/// there.
+///
+/// Word 2 (the Array-subclass named-prefix token) and the polymorphic ways are
+/// deliberately NOT served here: they are 2.5 % of primes between them and
+/// each needs its own proof. They keep falling through to the handler.
+///
+/// # Safety
+/// `obj_handle` is the receiver with the NaN-box tag already masked off, and
+/// the caller has established that the tag was `POINTER`/`STRING`. `cache_slot`
+/// is the codegen-emitted per-site slot or null.
+#[inline]
+unsafe fn pic_outlined_mru_hit(
+    obj_handle: *const ObjectHeader,
+    cache_slot: *mut PicCacheSlot,
+) -> Option<f64> {
+    if !outlined_mru_hit_enabled() {
+        return None;
+    }
+    let addr = obj_handle as usize;
+    if !crate::value::addr_class::is_above_handle_band(addr) {
+        return None;
+    }
+    // The site has never primed: there is nothing to hit, and resolving the
+    // slot is the miss handler's job.
+    let cache = pic_slot_peek(cache_slot);
+    if cache.is_null() {
+        return None;
+    }
+    let header = &*((addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader);
+    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+        || header._reserved & crate::gc::OBJ_FLAG_HAS_DESCRIPTORS != 0
+    {
+        return None;
+    }
+    // `object_shape_stamp` answers 0 for a receiver whose `parent_class_id` is
+    // not a ShapeId, which is what keeps a keyless receiver out of an empty
+    // cache slot (#809).
+    let stamp = crate::object::shapes::object_shape_stamp(obj_handle);
+    if stamp == 0 {
+        return None;
+    }
+    let c = &*cache;
+    if c[0] != (stamp as u64 | crate::object::shapes::PIC_ID_TOKEN_BIT) as i64 {
+        return None;
+    }
+    let slot = c[1];
+    if (slot as u64) & u64::from(crate::proxy::IC_SLOT_OVERFLOW_BIT) != 0 {
+        return None;
+    }
+    let field = *((obj_handle as *const u8)
+        .add(std::mem::size_of::<ObjectHeader>() + slot as usize * 8)
+        as *const f64);
+    if field.to_bits() == crate::value::TAG_HOLE {
+        return None;
+    }
+    Some(field)
+}
+
 #[no_mangle]
 pub extern "C" fn js_object_get_field_ic(
     obj_bits: i64,
@@ -1052,6 +1161,13 @@ pub extern "C" fn js_object_get_field_ic(
     // is primed for any future inline sites sharing this global).
     if (tag & 0xFFFD) == 0x7FFD {
         crate::typed_feedback::js_typed_feedback_observe_property_get(site_id, obj_handle, key);
+        // The monomorphic hit the emitted diamond does inline. Everything it
+        // declines still reaches the handler below, so this only ever removes
+        // work. See `pic_outlined_mru_hit`.
+        if let Some(value) = unsafe { pic_outlined_mru_hit(obj_handle, cache_slot) } {
+            crate::typed_feedback::js_typed_feedback_record_guard_pass(site_id);
+            return value;
+        }
         return js_object_get_field_ic_miss(obj_handle, key, cache_slot);
     }
     // Invalid (non-pointer) receiver. `undefined`/`null` throw a TypeError (#462 —
