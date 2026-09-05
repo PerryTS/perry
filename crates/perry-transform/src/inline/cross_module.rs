@@ -155,12 +155,13 @@ pub fn gather_cross_module_functions(module: &Module) -> HashMap<String, Functio
     // the source module's classes. Anon-shape classes are the one safe
     // exception: their names are content-addressed and the existing anon-class
     // propagation pass installs their definitions in the destination.
-    let source_class_names: HashSet<String> = module
+    let mut source_class_names: HashSet<String> = module
         .classes
         .iter()
         .flat_map(|class| std::iter::once(class.name.clone()).chain(class.aliases.iter().cloned()))
         .filter(|name| !name.starts_with("__AnonShape_"))
         .collect();
+    source_class_names.extend(imported_binding_names(module));
 
     let mut out = HashMap::new();
     for (exported_name, root_id) in &module.exported_functions {
@@ -193,7 +194,7 @@ pub fn gather_cross_module_functions(module: &Module) -> HashMap<String, Functio
             stmt_count = stmt_count.saturating_add(recursive_stmt_count(&function.body));
             if stmt_count > MAX_CROSS_MODULE_FUNCTION_STMTS
                 || !function_shell_is_cross_module_safe(function, &allowed_ids, &mut extern_names)
-                || body_references_class_in_set(&function.body, &source_class_names)
+                || function_references_class_in_set(function, &source_class_names)
             {
                 safe = false;
                 break;
@@ -1016,7 +1017,7 @@ pub fn gather_cross_module_methods(module: &Module) -> HashMap<(String, String),
             if !is_cross_module_safe(&method.body) {
                 continue;
             }
-            if body_references_class_in_set(&method.body, &nonexported) {
+            if function_references_class_in_set(method, &nonexported) {
                 continue;
             }
             out.insert(
@@ -1095,7 +1096,7 @@ pub fn gather_cross_module_methods_with_extern_imports(
             // so the source module's codegen — which DOES have the class
             // metadata — emits the correct inline-alloc with the right
             // class_id.
-            if body_references_class_in_set(&method.body, &nonexported) {
+            if function_references_class_in_set(method, &nonexported) {
                 continue;
             }
             extern_names.sort();
@@ -1242,13 +1243,13 @@ pub fn is_cross_module_safe_with_externs(body: &[Stmt], extern_names: &mut Vec<S
 /// `Expr::ClassRef` / `Expr::StaticFieldGet` / etc. that names one of these
 /// classes will lose its class metadata at codegen time. Refs #486.
 ///
-/// The `__AnonShape_*` content-addressed shapes are deliberately INCLUDED in
-/// the set despite never being marked `is_exported` — but the inliner already
-/// propagates them via `extra_anon_classes` so the destination module
-/// synthesizes the same definition. We exclude them here so methods that
-/// `new __AnonShape_<hash>()` keep their inlinability.
+/// Imported bindings are also source-local dependencies (#9023): exporting a
+/// method does not export the classes that its module imports.
+///
+/// The `__AnonShape_*` content-addressed shapes are excluded: the inliner
+/// propagates their definitions via `extra_anon_classes`.
 pub fn collect_nonexported_class_names(module: &Module) -> HashSet<String> {
-    let mut set = HashSet::new();
+    let mut set: HashSet<String> = imported_binding_names(module).collect();
     for c in &module.classes {
         if c.is_exported {
             // Refs #486: even for an EXPORTED class, the inner self-binding
@@ -1278,98 +1279,86 @@ pub fn collect_nonexported_class_names(module: &Module) -> HashSet<String> {
     set
 }
 
+/// Imported class bindings belong to the source module just like local class
+/// names. Copying `new ImportedBag()` does not copy its import or class metadata
+/// (#9023). Include every import binding: the class-reference check below only
+/// consults this set for class-bearing expressions, so ordinary imported calls
+/// still use the existing extern-import localization path.
+fn imported_binding_names(module: &Module) -> impl Iterator<Item = String> + '_ {
+    module.imports.iter().flat_map(|import| {
+        import.specifiers.iter().map(|specifier| match specifier {
+            ImportSpecifier::Named { local, .. }
+            | ImportSpecifier::Default { local }
+            | ImportSpecifier::Namespace { local } => local.clone(),
+        })
+    })
+}
+
+fn function_references_class_in_set(function: &Function, set: &HashSet<String>) -> bool {
+    body_references_class_in_set(&function.body, set)
+        || function.params.iter().any(|param| {
+            param
+                .default
+                .as_ref()
+                .is_some_and(|default| expr_references_class_in_set(default, set))
+        })
+}
+
+fn expr_references_class_in_set(expr: &Expr, set: &HashSet<String>) -> bool {
+    let contains = |name: &str| {
+        set.contains(name)
+            || name
+                .split_once('.')
+                .is_some_and(|(namespace, _)| set.contains(namespace))
+    };
+    match expr {
+        Expr::New { class_name, .. }
+        | Expr::ClassRef(class_name)
+        | Expr::StaticFieldGet { class_name, .. }
+        | Expr::StaticFieldSet { class_name, .. }
+        | Expr::ClassStaticSymbolSet { class_name, .. }
+        | Expr::RegisterClassParentDynamic { class_name, .. }
+        | Expr::RegisterClassStaticSymbol { class_name, .. }
+        | Expr::StaticMethodCall { class_name, .. }
+            if contains(class_name) =>
+        {
+            return true;
+        }
+        Expr::ClassExprFresh { template, .. } if contains(template) => {
+            return true;
+        }
+        Expr::Closure { params, body, .. } => {
+            if body_references_class_in_set(body, set)
+                || params.iter().any(|param| {
+                    param
+                        .default
+                        .as_ref()
+                        .is_some_and(|default| expr_references_class_in_set(default, set))
+                })
+            {
+                return true;
+            }
+        }
+        _ => {}
+    }
+    let mut hit = false;
+    walk_expr_children(expr, &mut |child| {
+        if expr_references_class_in_set(child, set) {
+            hit = true;
+        }
+    });
+    hit
+}
+
 /// Returns true iff `stmts` references any class whose name is in `set`.
 /// Walks every Expr variant that carries a `class_name` string. Used by
 /// the cross-module method gathering passes to reject candidates whose
 /// body would dangle (or worse: silently fall to a class_id=0 placeholder)
 /// after being copied into a destination module.
 pub fn body_references_class_in_set(stmts: &[Stmt], set: &HashSet<String>) -> bool {
-    fn check_expr(expr: &Expr, set: &HashSet<String>) -> bool {
-        match expr {
-            Expr::New { class_name, .. }
-            | Expr::ClassRef(class_name)
-            | Expr::StaticFieldGet { class_name, .. }
-            | Expr::StaticFieldSet { class_name, .. }
-            | Expr::ClassStaticSymbolSet { class_name, .. }
-            | Expr::RegisterClassParentDynamic { class_name, .. }
-            | Expr::RegisterClassStaticSymbol { class_name, .. }
-            | Expr::StaticMethodCall { class_name, .. }
-                if set.contains(class_name) =>
-            {
-                return true;
-            }
-            Expr::ClassExprFresh { template, .. } if set.contains(template) => {
-                return true;
-            }
-            _ => {}
-        }
-        let mut hit = false;
-        walk_expr_children(expr, &mut |child| {
-            if check_expr(child, set) {
-                hit = true;
-            }
-        });
-        hit
-    }
-    fn check_stmt(s: &Stmt, set: &HashSet<String>) -> bool {
-        match s {
-            Stmt::Let { init, .. } => init.as_ref().is_some_and(|e| check_expr(e, set)),
-            Stmt::Expr(e) | Stmt::Throw(e) | Stmt::Return(Some(e)) => check_expr(e, set),
-            Stmt::Return(None) | Stmt::Break | Stmt::Continue => false,
-            Stmt::LabeledBreak(_) | Stmt::LabeledContinue(_) => false,
-            Stmt::If {
-                condition,
-                then_branch,
-                else_branch,
-            } => {
-                check_expr(condition, set)
-                    || then_branch.iter().any(|s| check_stmt(s, set))
-                    || else_branch
-                        .as_ref()
-                        .is_some_and(|eb| eb.iter().any(|s| check_stmt(s, set)))
-            }
-            Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
-                check_expr(condition, set) || body.iter().any(|s| check_stmt(s, set))
-            }
-            Stmt::For {
-                init,
-                condition,
-                update,
-                body,
-            } => {
-                init.as_ref().is_some_and(|s| check_stmt(s, set))
-                    || condition.as_ref().is_some_and(|e| check_expr(e, set))
-                    || update.as_ref().is_some_and(|e| check_expr(e, set))
-                    || body.iter().any(|s| check_stmt(s, set))
-            }
-            Stmt::Switch {
-                discriminant,
-                cases,
-            } => {
-                check_expr(discriminant, set)
-                    || cases.iter().any(|c| {
-                        c.test.as_ref().is_some_and(|e| check_expr(e, set))
-                            || c.body.iter().any(|s| check_stmt(s, set))
-                    })
-            }
-            Stmt::Try {
-                body,
-                catch,
-                finally,
-            } => {
-                body.iter().any(|s| check_stmt(s, set))
-                    || catch
-                        .as_ref()
-                        .is_some_and(|c| c.body.iter().any(|s| check_stmt(s, set)))
-                    || finally
-                        .as_ref()
-                        .is_some_and(|f| f.iter().any(|s| check_stmt(s, set)))
-            }
-            Stmt::Labeled { body, .. } => check_stmt(body.as_ref(), set),
-            Stmt::PreallocateBoxes(_) | Stmt::PreallocateTdzBoxes(_) | Stmt::ReleaseBoxes(_) => {
-                false
-            }
-        }
-    }
-    stmts.iter().any(|s| check_stmt(s, set))
+    let mut referenced = false;
+    walk_stmts(stmts, &mut |expr| {
+        referenced |= expr_references_class_in_set(expr, set);
+    });
+    referenced
 }
