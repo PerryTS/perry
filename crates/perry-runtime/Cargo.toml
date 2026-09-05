@@ -49,6 +49,14 @@ keepalive-anchors = []
 # leaves it off and falls back to the system allocator. The #6882 VM-tag
 # retag rides the same gate (it only exists to label mimalloc's mappings).
 alloc-mimalloc = ["dep:mimalloc", "dep:libmimalloc-sys"]
+
+# `PERRY_ALLOC_CENSUS` — a sampling profiler for the Rust heap
+# (`alloc_census`). OFF by default and compiled out entirely: the census wraps
+# the `#[global_allocator]`, and `gc_malloc` runs ~1M times/sec, so even the
+# one relaxed load its disabled state costs has no business in a shipped
+# build. Enable it to attribute native-heap bytes to call sites; see the
+# module docs.
+alloc-census = []
 # DIAGNOSTIC ONLY — never in `default`, never in a shipping build.
 #
 # Builds mimalloc in secure + debug mode to hunt heap corruption that is
