@@ -151,48 +151,6 @@ pub extern "C" fn js_object_keys_value(value: f64) -> *mut ArrayHeader {
         }
         return arr;
     }
-    if crate::builtins::boxed_primitive_to_string_tag(value) == Some("String") {
-        if let Some((_, payload)) = crate::builtins::boxed_primitive_payload(value) {
-            let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
-            let len = match crate::string::str_bytes_from_jsvalue(payload, &mut scratch) {
-                Some((ptr, blen)) if !ptr.is_null() => crate::string::compute_utf16_len(ptr, blen),
-                _ => 0,
-            };
-            let arr = crate::array::js_array_alloc(len.max(1));
-            for i in 0..len {
-                let s = i.to_string();
-                let k = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
-                crate::array::js_array_push(arr, JSValue::string_ptr(k));
-            }
-            if jv.is_pointer() {
-                let ptr = jv.as_pointer::<ObjectHeader>();
-                let own = js_object_keys(ptr);
-                let own_len = crate::array::js_array_length(own);
-                for i in 0..own_len {
-                    let key_val = crate::array::js_array_get(own, i);
-                    // The wrapper's character indices are installed as REAL
-                    // own fields at construction (install_string_wrapper_
-                    // indices), so they come back from `js_object_keys` too —
-                    // skip them here or `Object.keys(Object("abc"))` lists
-                    // every index twice. Only canonical indices below the
-                    // string length are virtual; expando keys pass through.
-                    let key_ptr =
-                        (key_val.bits() & crate::value::POINTER_MASK) as *const crate::StringHeader;
-                    if let Some(name) =
-                        unsafe { super::super::has_own_helpers::str_from_string_header(key_ptr) }
-                    {
-                        if let Ok(idx) = name.parse::<u32>() {
-                            if idx.to_string() == name && (idx as usize) < len as usize {
-                                continue;
-                            }
-                        }
-                    }
-                    crate::array::js_array_push_f64(arr, f64::from_bits(key_val.bits()));
-                }
-            }
-            return arr;
-        }
-    }
     if let Some(addr) = crate::typedarray_props::typed_array_addr_from_value(value) {
         return unsafe {
             crate::typedarray_props::typed_array_own_property_names(
@@ -1249,6 +1207,12 @@ fn js_object_keys_shape(obj: *const ObjectHeader) -> *mut ArrayHeader {
         }
     }
     unsafe {
+        if let Some(result) = super::super::string_wrapper::enumerate(
+            obj,
+            super::super::string_wrapper::Enumeration::Keys,
+        ) {
+            return result;
+        }
         if (*obj).class_id == NATIVE_MODULE_CLASS_ID {
             // Relocated to native_module.rs::vt_own_keys_array so the
             // module key tables are reachable only through the vtable
@@ -1547,6 +1511,12 @@ fn js_object_values_shape(obj: *const ObjectHeader) -> *mut ArrayHeader {
         return crate::array::js_array_alloc(0);
     }
     unsafe {
+        if let Some(result) = super::super::string_wrapper::enumerate(
+            obj,
+            super::super::string_wrapper::Enumeration::Values,
+        ) {
+            return result;
+        }
         if (*obj).class_id == NATIVE_MODULE_CLASS_ID {
             if let Some(result) = native_module_enum(obj, MapSetEnum::Values) {
                 return result;
@@ -1758,6 +1728,12 @@ fn js_object_entries_shape(obj: *const ObjectHeader) -> *mut ArrayHeader {
         return crate::array::js_array_alloc(0);
     }
     unsafe {
+        if let Some(result) = super::super::string_wrapper::enumerate(
+            obj,
+            super::super::string_wrapper::Enumeration::Entries,
+        ) {
+            return result;
+        }
         if (*obj).class_id == NATIVE_MODULE_CLASS_ID {
             if let Some(result) = native_module_enum(obj, MapSetEnum::Entries) {
                 return result;

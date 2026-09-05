@@ -89,12 +89,18 @@ unsafe fn boxed_string_own_property_names(obj_value: f64, str_value: f64) -> f64
     }
 
     sort_property_names_ecma(&mut names);
+    let scope = crate::gc::RuntimeHandleScope::new();
     let result = crate::array::js_array_alloc(names.len() as u32);
+    let result_h = scope.root_raw_mut_ptr(result);
     for name in names {
         let str_ptr = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-        crate::array::js_array_push(result, JSValue::string_ptr(str_ptr));
+        result_h.with_mut_ptr(|result| {
+            crate::array::js_array_push(result, JSValue::string_ptr(str_ptr))
+        });
     }
-    f64::from_bits((result as u64) | 0x7FFD_0000_0000_0000)
+    result_h.with_mut_ptr(|result: *mut crate::ArrayHeader| {
+        f64::from_bits(JSValue::array_ptr(result).bits())
+    })
 }
 
 /// Object.getOwnPropertyDescriptor(obj, key) — returns a data descriptor
@@ -1214,16 +1220,15 @@ unsafe fn string_primitive_descriptor(str_value: f64, key_value: f64) -> f64 {
 
     if let Some(index) = super::canonical_array_index(name) {
         if index < utf16_len {
-            // Materialize the single UTF-16 unit at `index` as a 1-char string.
-            let bytes = std::slice::from_raw_parts(sptr, sblen as usize);
-            let s = std::str::from_utf8(bytes).unwrap_or("");
-            if let Some(ch) = s.chars().nth(index as usize) {
-                let mut buf = [0u8; 4];
-                let cs = ch.encode_utf8(&mut buf);
-                let cstr = crate::string::js_string_from_bytes(cs.as_ptr(), cs.len() as u32);
-                let char_val = f64::from_bits(JSValue::string_ptr(cstr).bits());
-                return build_data_descriptor(char_val, false, true, false);
-            }
+            // String exotic indices are UTF-16 code units, including lone
+            // surrogate halves. Use the same read path as s[index]; `.chars()`
+            // counts Unicode scalars and returned the wrong descriptors.
+            let string = crate::value::js_get_string_pointer_unified(f64::from_bits(
+                str_handle.get_heap_word_u64(),
+            )) as *const crate::StringHeader;
+            let cstr = crate::string::js_string_char_at(string, index as i32);
+            let char_val = f64::from_bits(JSValue::string_ptr(cstr).bits());
+            return build_data_descriptor(char_val, false, true, false);
         }
     }
     f64::from_bits(crate::value::TAG_UNDEFINED)
