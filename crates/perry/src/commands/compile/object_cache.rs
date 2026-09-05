@@ -260,6 +260,28 @@ pub fn compute_object_cache_key(
     })
 }
 
+/// Replay freshness uses the normal complete lowering key, excluding only
+/// instrumentation/reporting switches that capture and replay intentionally vary.
+pub(super) fn typed_feedback_lowering_key(
+    opts: &perry_codegen::CompileOptions,
+    hir_hash: u64,
+    version: &str,
+) -> u64 {
+    let mut opts = opts.clone();
+    opts.emit_ir_only = false;
+    opts.verify_native_regions = false;
+    compute_object_cache_key_with_env(&opts, hir_hash, version, |name| {
+        if matches!(
+            name,
+            "PERRY_TYPED_FEEDBACK" | "PERRY_TYPED_FEEDBACK_TRACE" | "PERRY_VERIFY_NATIVE_REGIONS"
+        ) {
+            None
+        } else {
+            std::env::var(name).ok()
+        }
+    })
+}
+
 fn compute_object_cache_key_with_env(
     opts: &perry_codegen::CompileOptions,
     hir_hash: u64,

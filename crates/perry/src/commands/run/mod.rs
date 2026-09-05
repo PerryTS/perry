@@ -229,6 +229,8 @@ pub fn run(args: RunArgs, format: OutputFormat, use_color: bool, verbose: u8) ->
         verify_native_regions: false,
         disable_buffer_fast_path: false,
         explain_lowering: false,
+        typed_feedback_profile: None,
+        typed_feedback_sites: None,
         opt_report: None,
         statepoint_report: None,
         emit_attest: false,
