@@ -63,7 +63,7 @@ mod number_format_options;
 mod numbering_system;
 use numbering_system::{is_well_formed_numbering_system, resolve_numbering_system};
 mod canon_aliases;
-mod segmenter;
+pub(crate) mod segmenter;
 use canon_aliases::canonicalize_unicode_extension_types;
 
 pub(crate) use date_collator::{
