@@ -53,6 +53,11 @@ fn walk(table: &'static str) -> young_log::YoungLogWalk {
     young_log::last_walk(table).unwrap_or_else(|| panic!("no walk recorded for {table}"))
 }
 
+/// For a table that is deliberately NOT young-logged: no walk row at all.
+fn walk_opt(table: &'static str) -> Option<young_log::YoungLogWalk> {
+    young_log::last_walk(table)
+}
+
 // ---------------------------------------------------------------- closures
 
 #[test]
@@ -430,15 +435,18 @@ fn young_transition_key_under_an_old_target_arms_the_log_through_the_writer() {
     );
 }
 
+/// The shape cache is deliberately NOT young-logged (see
+/// `scan_shape_cache_roots_mut`): its keys arrays are longlived, so a log
+/// there names every entry forever and skips nothing. This pins the walk that
+/// replaced it — a young entry reachable only through the cache still moves
+/// and is re-keyed in both the inline slot and the overflow map.
 #[test]
-fn young_shape_cache_entry_is_moved_through_the_log() {
+fn shape_cache_entry_is_moved_by_the_plain_walk() {
     let _guard = CopyingNurseryTestGuard::new(0);
     gc_register_mutable_root_scanner(crate::object::scan_shape_cache_roots_mut);
 
-    // Reachable ONLY through the cache (which roots it). Seeded through the
-    // PRODUCTION writer (`shape_cache_insert`), not a test seam: a seam that
-    // arms the log itself makes this test pass with the writer's own arm site
-    // deleted, which is how #9755 shipped an unenforced rule 1.
+    // Reachable ONLY through the cache (which roots it), seeded through the
+    // PRODUCTION writer (`shape_cache_insert`), not a test seam.
     let keys = unsafe { young_keys_array() };
     let shape_id = 0x9754_0001;
     crate::object::test_shape_cache_insert(shape_id, keys);
@@ -455,9 +463,11 @@ fn young_shape_cache_entry_is_moved_through_the_log() {
         inline, overflow,
         "inline and overflow must agree on the new address"
     );
-    let row = walk("object.shape_cache");
-    assert!(row.partial);
-    assert!(row.visited >= 1, "{row:?}");
+    assert!(
+        walk_opt("object.shape_cache").is_none(),
+        "the shape cache must not report a young-log walk: #9755's log for it \
+         skipped 0 % and cost 35 % more than this walk, and was removed"
+    );
 }
 
 // ---------------------------------------------------------------------------
