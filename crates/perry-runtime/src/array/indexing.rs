@@ -1221,8 +1221,7 @@ fn js_array_set_f64_extend_strict_impl(
     // the inherited [[Set]] walk. This includes both a retargeted receiver and
     // the default chain after an index is installed on `Array.prototype` or
     // `Object.prototype`. `array_custom_prototype` is the #9219 classification
-    // shared with reads/HasProperty and deliberately returns None for a Proxy
-    // prototype, whose dedicated dispatch must remain single-shot. Existing
+    // shared with reads/HasProperty, including a Proxy prototype. Existing
     // own elements have already had every applicable dense lane above; the
     // fallback still needs the ownership check for descriptor/restricted
     // shapes that correctly declined those lanes.
@@ -1676,9 +1675,11 @@ pub(crate) fn array_spec_set(
                 inherited_owner = array_object_proto_index_owner(bits, &key);
             }
             Some(ArrayCustomProto::Array(proto_arr)) => {
-                if array_has_own_index(proto_arr, index) {
-                    inherited_owner = proto_arr as usize;
-                }
+                default_chain = false;
+                inherited_owner = array_object_proto_index_owner(
+                    crate::value::js_nanbox_pointer(proto_arr as i64).to_bits(),
+                    &key,
+                );
             }
             None => {}
         }

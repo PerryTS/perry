@@ -1,0 +1,3 @@
+Array indexed reads and membership checks now follow the full custom prototype chain, stop at explicit null prototypes, and invoke Proxy traps with the original receiver. Strict indexed writes also find inherited accessors and readonly properties beyond an array prototype, while writable own properties on intermediate prototypes continue to shadow ancestors. Fixes #9785 and #9786.
+
+Regression fixtures cover the reported chain-depth and Proxy cases plus accessor receivers, grown prototypes, undefined shadows, negative Proxy membership checks, nested reads inside traps, and trapless Proxy targets. No version bump.
