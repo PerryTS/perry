@@ -1805,7 +1805,9 @@ fn a_single_program_cache_clear_cannot_disarm_a_lookbehind_literal() {
     // never-match placeholder for this pattern survives in `REGEX_CACHE`.
     FANCY_CACHE.with(|fc| fc.borrow_mut().clear());
     assert!(
-        REGEX_CACHE.with(|c| c.borrow().contains_key(&(source.to_string(), String::new()))),
+        REGEX_CACHE.with(|c| c
+            .borrow()
+            .contains_key(&(source.to_string(), String::new()))),
         "the placeholder must survive, or this test exercises nothing"
     );
     // A fresh literal site, so the construction cache cannot answer from the

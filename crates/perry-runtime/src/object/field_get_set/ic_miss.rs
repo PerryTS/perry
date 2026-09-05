@@ -328,13 +328,7 @@ pub(crate) unsafe fn pic_prime_get(cache: *mut PicCache, token: i64, slot: i64) 
         // from one whose cached answer the emitted gate never consulted. Read
         // here, before the loop below evicts `token` from its way.
         let in_ways = (0..PIC_WAYS).any(|w| c[PIC_WAY_BASE + w * 2] == token);
-        crate::hot_diag::ic_note_prime(
-            cache as usize,
-            prev_tok,
-            token,
-            c[PIC_WAY_STATE],
-            in_ways,
-        );
+        crate::hot_diag::ic_note_prime(cache as usize, prev_tok, token, c[PIC_WAY_STATE], in_ways);
     }
     c[0] = token;
     c[1] = slot;
