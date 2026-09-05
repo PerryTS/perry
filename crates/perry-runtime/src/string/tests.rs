@@ -1295,7 +1295,6 @@ mod split_empty_delimiter_code_units {
         });
         assert_eq!(crate::array::js_array_length(arr), 3);
     }
-
 }
 
 /// The canonical one-ASCII-character string table (`string::format`).

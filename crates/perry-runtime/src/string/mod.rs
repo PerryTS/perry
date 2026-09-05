@@ -165,9 +165,9 @@ pub use concat::{
     scan_concat_memo_roots, scan_concat_memo_roots_mut,
 };
 pub use concat_site::{js_string_concat_site_value, CONCAT_SITE_SLOTS};
+pub(crate) use format::ascii_char_string;
 pub(crate) use format::fix_exponent_format;
 pub(crate) use format::js_format_f64;
-pub(crate) use format::ascii_char_string;
 
 /// The canonical `StringHeader` for a runtime-internal constant property name.
 ///

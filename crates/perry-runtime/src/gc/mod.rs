@@ -166,11 +166,11 @@ mod forwarding;
 /// Per-scanner root attribution for the copied-minor root scan (#7915).
 mod scanner_profile;
 mod sticky_remembered;
+mod survival_diag;
 /// #9754: per-side-table young-entry logs (remembered sets for the runtime
 /// side tables), so a minor-scoped root scan visits only the entries that
 /// can hold a pointer a minor acts on.
 pub(crate) mod young_log;
-mod survival_diag;
 use copying::*;
 use copying_first_cycle::*;
 // Named rather than glob-imported: a glob does not propagate through the
