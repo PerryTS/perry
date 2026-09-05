@@ -503,7 +503,7 @@ fn test_class_inheritance_side_table_roots_mark_and_rewrite() {
     // A verify pass must not panic now that the slots point at the live
     // (non-forwarded) evacuated objects.
     scan_class_inheritance_roots_mut(&mut RuntimeRootVisitor::for_verify(
-        &valid_ptrs,
+        EvacuationVerifier::all_forwarded(&valid_ptrs),
         "class inheritance side-table roots (test)",
     ));
 

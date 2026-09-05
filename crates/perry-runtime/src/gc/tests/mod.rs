@@ -22,6 +22,7 @@ mod error_side_tables;
 mod evacuation;
 mod forwarded_stub_membership;
 mod forwarding_target_validation;
+mod forwarding_verification;
 mod fromspace_protect;
 mod fromspace_scan;
 mod global_bootstrap;

@@ -728,7 +728,7 @@ pub(super) enum RuntimeRootVisitMode<'a> {
         valid_ptrs: &'a ValidPointerSet,
     },
     Verify {
-        valid_ptrs: &'a ValidPointerSet,
+        verifier: EvacuationVerifier<'a>,
         surface: &'static str,
     },
     Copy {
@@ -807,12 +807,9 @@ impl<'a> RuntimeRootVisitor<'a> {
         }
     }
 
-    pub(super) fn for_verify(valid_ptrs: &'a ValidPointerSet, surface: &'static str) -> Self {
+    pub(super) fn for_verify(verifier: EvacuationVerifier<'a>, surface: &'static str) -> Self {
         Self {
-            mode: RuntimeRootVisitMode::Verify {
-                valid_ptrs,
-                surface,
-            },
+            mode: RuntimeRootVisitMode::Verify { verifier, surface },
             root_source_stats: None,
             young_scope: false,
         }
@@ -909,11 +906,8 @@ impl<'a> RuntimeRootVisitor<'a> {
             RuntimeRootVisitMode::Rewrite { valid_ptrs } => {
                 try_rewrite_nanboxed_value(bits, valid_ptrs)
             }
-            RuntimeRootVisitMode::Verify {
-                valid_ptrs,
-                surface,
-            } => {
-                if let Some(new_bits) = try_rewrite_nanboxed_value(bits, valid_ptrs) {
+            RuntimeRootVisitMode::Verify { verifier, surface } => {
+                if let Some(new_bits) = verifier.stale_nanboxed_value(bits) {
                     panic_stale_forwarded_reference(surface, 0, bits, new_bits);
                 }
                 None
@@ -941,11 +935,8 @@ impl<'a> RuntimeRootVisitor<'a> {
                 collector.rewrite_value_bits(bits)
             }
             RuntimeRootVisitMode::Rewrite { valid_ptrs } => try_rewrite_value(bits, valid_ptrs),
-            RuntimeRootVisitMode::Verify {
-                valid_ptrs,
-                surface,
-            } => {
-                if let Some(new_bits) = try_rewrite_value(bits, valid_ptrs) {
+            RuntimeRootVisitMode::Verify { verifier, surface } => {
+                if let Some(new_bits) = verifier.stale_value(bits) {
                     panic_stale_forwarded_reference(surface, 0, bits, new_bits);
                 }
                 None
@@ -981,11 +972,8 @@ impl<'a> RuntimeRootVisitor<'a> {
             RuntimeRootVisitMode::CopyingMark { collector } => collector.visit_raw_addr(addr),
             RuntimeRootVisitMode::CopyingRewrite { collector } => collector.rewrite_raw_addr(addr),
             RuntimeRootVisitMode::Rewrite { valid_ptrs } => try_rewrite_raw_addr(addr, valid_ptrs),
-            RuntimeRootVisitMode::Verify {
-                valid_ptrs,
-                surface,
-            } => {
-                if let Some(new_addr) = try_rewrite_raw_addr(addr, valid_ptrs) {
+            RuntimeRootVisitMode::Verify { verifier, surface } => {
+                if let Some(new_addr) = verifier.stale_raw_addr(addr) {
                     panic_stale_forwarded_reference(
                         surface,
                         0,
@@ -1012,11 +1000,8 @@ impl<'a> RuntimeRootVisitor<'a> {
             RuntimeRootVisitMode::CopyingCheck { .. } => None,
             RuntimeRootVisitMode::CopyingMark { .. } => None,
             RuntimeRootVisitMode::CopyingRewrite { collector } => collector.rewrite_raw_addr(addr),
-            RuntimeRootVisitMode::Verify {
-                valid_ptrs,
-                surface,
-            } => {
-                if let Some(new_addr) = try_rewrite_raw_addr(addr, valid_ptrs) {
+            RuntimeRootVisitMode::Verify { verifier, surface } => {
+                if let Some(new_addr) = verifier.stale_raw_addr(addr) {
                     panic_stale_forwarded_reference(surface, 0, addr as u64, new_addr as u64);
                 }
                 None
