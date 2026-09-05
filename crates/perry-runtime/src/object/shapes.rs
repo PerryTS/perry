@@ -264,6 +264,15 @@ impl ShapeTableInner {
         self.families.entry(keys).or_default().push_back(id);
     }
 
+    /// Append a FRESHLY allocated id (see [`IdList::append_unchecked`]): the
+    /// id came from `alloc_shape_id`, which never reuses a value, so the
+    /// membership scan `family_push_back` would run is dead work that is
+    /// linear in the number of descriptors this keys array has ever had.
+    #[inline]
+    fn family_append_fresh(&mut self, keys: u64, id: u32) {
+        self.families.entry(keys).or_default().append_unchecked(id);
+    }
+
     #[inline]
     fn family_push_front(&mut self, keys: u64, id: u32) {
         self.families.entry(keys).or_default().push_front(id);
@@ -285,6 +294,12 @@ impl ShapeTableInner {
     #[inline]
     fn facts_push_back(&mut self, facts: u64, id: u32) {
         self.by_facts.entry(facts).or_default().push_back(id);
+    }
+
+    /// Fresh-id twin of [`ShapeTableInner::facts_push_back`]; same argument.
+    #[inline]
+    fn facts_append_fresh(&mut self, facts: u64, id: u32) {
+        self.by_facts.entry(facts).or_default().append_unchecked(id);
     }
 
     #[inline]
@@ -507,8 +522,12 @@ pub(crate) fn shape_descriptor_ensure_with_holes(
     // complete descriptor.
     // SAFETY: no slab reference is held; `slab()` above went out of scope.
     unsafe { table.slab_mut().insert(id, record) };
-    inner.facts_push_back(facts, id);
-    inner.family_push_back(keys_id, id);
+    // `id` was just handed out by `alloc_shape_id`, which never reuses a
+    // value, so neither accelerator can already hold it: append without the
+    // membership scan, whose cost is linear in this keys array's descriptor
+    // history (see `IdList::append_unchecked`).
+    inner.facts_append_fresh(facts, id);
+    inner.family_append_fresh(keys_id, id);
     Ok(id)
 }
 

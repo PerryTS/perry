@@ -537,6 +537,27 @@ impl IdList {
         if self.contains(id) {
             return;
         }
+        self.append_unchecked(id);
+    }
+
+    /// Append an id the caller knows is not in this list.
+    ///
+    /// `alloc_shape_id` hands out a strictly increasing counter that is never
+    /// reused (it parks at `SHAPE_ID_END` rather than wrapping), so an id that
+    /// was allocated after this list was built cannot be in it, in this family
+    /// or in any other. The membership scan in [`push_back`] is therefore dead
+    /// work at the two interning sites, and it is not O(1) dead work: a family
+    /// holds every descriptor ever created for one keys array, so the scan is
+    /// linear in the history of that keys array and interning the *n*-th
+    /// descriptor for it costs O(n) — quadratic over a render that keeps
+    /// bumping a shape's semantic generation. `IdList::contains` was 6.2 % of
+    /// main-thread leaf samples on a claude-code streamed reply, 95 % of it
+    /// under `ShapeTableInner::family_push_back`.
+    ///
+    /// Callers that re-file an EXISTING id (the metadata rekey when a keys
+    /// array moves) must keep using [`push_back`]: those ids can already be in
+    /// the destination list.
+    pub(super) fn append_unchecked(&mut self, id: u32) {
         match self {
             IdList::Inline { len, ids } if (*len as usize) < ids.len() => {
                 ids[*len as usize] = id;
