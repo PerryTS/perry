@@ -136,6 +136,20 @@ pub(super) unsafe fn dispatch_string(
                 "charCodeAt" => {
                     return Some(crate::string::js_string_char_code_at(s_ptr, arg_i32(0)));
                 }
+                // #9761: `codePointAt` had a `String.prototype` thunk but no
+                // arm here, so it was the ONE method name the compiled
+                // claude-code TUI drove into the primitive-method FALLBACK:
+                // 99,008 calls per 400-character reply, each of which looked
+                // `globalThis.String` up, cloned the prototype closure to
+                // rebind `this`, and — because the callee is sloppy — ran
+                // `ToObject` on the receiver, minting a `String` wrapper with
+                // its own index property. Grapheme-aware text measurement
+                // calls it once per character, so a missing arm here is a
+                // per-character wrapper. It is the sibling of `charCodeAt`
+                // one line up and reads the same receiver the same way.
+                "codePointAt" => {
+                    return Some(crate::string::js_string_code_point_at(s_ptr, arg_i32(0)));
+                }
                 "slice" => {
                     // Coerce args first (`arg_i32` may run user `valueOf` and move
                     // the receiver under GC), then re-fetch the rooted receiver.
