@@ -253,12 +253,16 @@ pub extern "C" fn js_string_char_at(s: *const StringHeader, index: i32) -> *mut 
         return js_string_from_bytes(std::ptr::null(), 0);
     }
 
-    // ASCII fast path: skip utf16_len scan
+    // ASCII fast path: skip utf16_len scan. The result is one of exactly 128
+    // possible strings, so it comes from the canonical per-thread table
+    // (`ascii_char_string`) instead of being minted: `s[i]` / `charAt` /
+    // `[...s]` / every runtime character walk stops allocating. The table's
+    // entries are `refcount = 0` (shared, never mutated in place), which is
+    // what makes returning the same pointer to every caller sound.
     if is_ascii_string(s) {
         unsafe {
             let data = string_data(s);
-            let char_ptr = data.add(index as usize);
-            return js_string_from_ascii_bytes(char_ptr, 1);
+            return crate::string::ascii_char_string(*data.add(index as usize));
         }
     }
 
@@ -369,8 +373,9 @@ fn encode_3byte_wtf8(unit: u16) -> [u8; 3] {
 /// for the old `char::from_u32(..).unwrap_or('\u{FFFD}')` lossy path.
 pub(crate) fn string_from_code_unit(unit: u16) -> *mut StringHeader {
     if unit < 0x80 {
-        let byte = unit as u8;
-        return js_string_from_bytes(&byte as *const u8, 1);
+        // Canonical table (see `ascii_char_string`): a one-ASCII-character
+        // string has 128 possible contents and is never mutated in place.
+        return crate::string::ascii_char_string(unit as u8);
     }
     if (0xD800..=0xDFFF).contains(&unit) {
         let buf = encode_3byte_wtf8(unit);

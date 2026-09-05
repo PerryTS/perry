@@ -159,6 +159,8 @@ mod copying;
 mod copying_first_cycle;
 mod copying_pointer_set;
 mod diag_sites;
+pub(crate) use diag_sites::primitive_dispatch as diag_primitive_dispatch;
+pub(crate) use diag_sites::string_wrapper_materialized as diag_string_wrapper_materialized;
 /// #8174: shared validation for the TARGET of a forwarding pointer.
 mod forwarding;
 /// Per-scanner root attribution for the copied-minor root scan (#7915).
@@ -1337,6 +1339,7 @@ pub extern "C" fn js_gc_release_current_thread_collection_side_allocations() {
     crate::r#box::report_box_stats_at_exit();
     crate::arena::alloc_sample::report("exit");
     diag_sites::report_charges("exit");
+    diag_sites::report_primitive_dispatch("exit");
     emit_incremental_liveness_diag();
     emit_schedule_liveness_verdict();
 }

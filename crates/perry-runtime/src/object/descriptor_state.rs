@@ -531,15 +531,73 @@ pub(crate) fn get_property_attrs(obj: usize, key: &str) -> Option<PropertyAttrs>
     // #6759 Phase C2: the meta-record summary proves most misses without
     // the `String` build + table probe (and shields a fresh object at a
     // recycled address from a dead owner's not-yet-pruned entries).
-    if !may_have_descriptor_entry(obj, key, false) {
+    if may_have_descriptor_entry(obj, key, false) {
+        if let Some(attrs) = state()
+            .descriptors
+            .property_descriptors
+            .borrow()
+            .get(&(obj, key.to_string()))
+            .copied()
+        {
+            return Some(attrs);
+        }
+    }
+    string_wrapper_index_attrs(obj, key)
+}
+
+/// ECMA-262 §10.4.3: every in-range integer index of a `String` exotic object
+/// (`new String("abc")`, and the wrapper `ToObject` mints for a sloppy method
+/// call on a string primitive) has the descriptor
+/// `{ writable: false, enumerable: true, configurable: false }`. That is a
+/// property of the CLASS and of the boxed length — never of the individual
+/// object — so it is answered from the wrapper's own payload instead of being
+/// stored once per character in `PROPERTY_DESCRIPTORS`.
+///
+/// Storing it cost, per boxed character: a `String` key on the Rust heap, a
+/// hash-map entry that only a full collection's dead-owner prune can reclaim,
+/// an owner-index entry, a meta-descriptor key bit, and one program-wide
+/// `prop_plan_epoch_bump()`. On the compiled claude-code TUI, whose render
+/// path boxes a receiver per string method call, those entries were the
+/// unbounded half of the process's resident growth during a turn.
+///
+/// A REAL entry still wins (the probe above runs first): `Object.freeze` or
+/// an explicit `defineProperty` on a wrapper installs one and is observed.
+///
+/// The first byte is checked before anything else: an index key starts with an
+/// ASCII digit, so every ordinary property name leaves through one compare.
+#[inline]
+fn string_wrapper_index_attrs(obj: usize, key: &str) -> Option<PropertyAttrs> {
+    let bytes = key.as_bytes();
+    if !bytes.first().is_some_and(u8::is_ascii_digit) {
         return None;
     }
-    state()
-        .descriptors
-        .property_descriptors
-        .borrow()
-        .get(&(obj, key.to_string()))
-        .copied()
+    let index = canonical_index_key(bytes)?;
+    let len = crate::builtins::boxed_string_wrapper_utf16_len(obj)?;
+    (index < len).then(|| PropertyAttrs::new(false, true, false))
+}
+
+/// `CanonicalNumericIndexString` for the digits-only case: the key must be the
+/// exact `ToString` of the integer it names, so `"0"` is an index but `"01"`,
+/// `"1.0"` and `""` are not (mirrors `string::canonical_string_index`).
+#[inline]
+fn canonical_index_key(bytes: &[u8]) -> Option<u32> {
+    if bytes.is_empty() || bytes.len() > 10 {
+        return None;
+    }
+    if bytes[0] == b'0' {
+        return (bytes.len() == 1).then_some(0);
+    }
+    let mut value: u64 = 0;
+    for &b in bytes {
+        if !b.is_ascii_digit() {
+            return None;
+        }
+        value = value * 10 + (b - b'0') as u64;
+        if value > u32::MAX as u64 {
+            return None;
+        }
+    }
+    u32::try_from(value).ok()
 }
 
 /// Whether this specific object has ever had a property descriptor installed on
@@ -1811,5 +1869,93 @@ mod c5a_tests {
         );
 
         test_reset_class_field_inline_guard();
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn test_property_descriptor_entry_count(obj: usize) -> usize {
+    state()
+        .descriptors
+        .property_descriptors
+        .borrow()
+        .keys()
+        .filter(|(owner, _)| *owner == obj)
+        .count()
+}
+
+#[cfg(test)]
+mod string_wrapper_index_attrs_tests {
+    use super::*;
+
+    fn boxed(text: &str) -> usize {
+        let s = crate::string::js_string_from_bytes(text.as_ptr(), text.len() as u32);
+        let value = f64::from_bits(crate::value::JSValue::string_ptr(s).bits());
+        let boxed = crate::builtins::js_boxed_string_new(value, 1);
+        crate::value::js_nanbox_get_pointer(boxed) as usize
+    }
+
+    /// The index descriptors of a `String` exotic object are answered from the
+    /// wrapper's payload, not from `PROPERTY_DESCRIPTORS`. Both halves matter:
+    /// the ANSWER must still be the spec's
+    /// `{ writable: false, enumerable: true, configurable: false }` (delete
+    /// this synthesis and `str[0] = "x"` starts mutating the wrapper), and the
+    /// STORAGE must be one entry — `length` — however long the string is
+    /// (that is the allocation this exists to remove).
+    #[test]
+    fn in_range_indices_are_synthesized_and_not_stored() {
+        let obj = boxed("hello world");
+        for index in ["0", "1", "10"] {
+            let attrs = get_property_attrs(obj, index)
+                .unwrap_or_else(|| panic!("index {index} must have a descriptor"));
+            assert!(!attrs.writable(), "index {index} is not writable");
+            assert!(attrs.enumerable(), "index {index} is enumerable");
+            assert!(!attrs.configurable(), "index {index} is not configurable");
+        }
+        assert_eq!(
+            test_property_descriptor_entry_count(obj),
+            1,
+            "only `length` is stored; the 11 index descriptors are synthesized"
+        );
+    }
+
+    /// Out of range, non-canonical, and non-index keys get the ordinary
+    /// answer, so the synthesis cannot invent properties the object does not
+    /// have. `"01"` and `"1.0"` are NOT canonical index strings.
+    #[test]
+    fn only_canonical_in_range_indices_are_synthesized() {
+        let obj = boxed("abc");
+        assert!(get_property_attrs(obj, "3").is_none(), "past the end");
+        assert!(get_property_attrs(obj, "01").is_none(), "not canonical");
+        assert!(get_property_attrs(obj, "1.0").is_none(), "not canonical");
+        assert!(get_property_attrs(obj, "").is_none());
+        assert!(get_property_attrs(obj, "toString").is_none());
+        assert!(
+            get_property_attrs(obj, "0").is_some(),
+            "the positive control: the same call answers for a real index"
+        );
+    }
+
+    /// Nothing but a String wrapper answers. A plain object with an index-named
+    /// property keeps the JS default (writable, enumerable, configurable), which
+    /// is what `None` means to every caller.
+    #[test]
+    fn a_plain_object_is_never_treated_as_a_string_wrapper() {
+        let obj = crate::object::js_object_alloc(0, 1) as usize;
+        let key = crate::string::js_string_from_bytes(b"0".as_ptr(), 1);
+        crate::object::js_object_set_field_by_name(obj as *mut _, key, 1.0);
+        assert!(get_property_attrs(obj, "0").is_none());
+        assert!(get_property_attrs(0, "0").is_none(), "null address");
+    }
+
+    /// A REAL entry still wins: `Object.defineProperty` / `Object.freeze` on a
+    /// wrapper installs one, and the synthesized default must not shadow it.
+    #[test]
+    fn a_stored_descriptor_overrides_the_synthesized_one() {
+        let obj = boxed("xy");
+        set_property_attrs(obj, "1".to_string(), PropertyAttrs::new(true, false, true));
+        let attrs = get_property_attrs(obj, "1").expect("stored entry");
+        assert!(attrs.writable() && !attrs.enumerable() && attrs.configurable());
+        let other = get_property_attrs(obj, "0").expect("synthesized entry");
+        assert!(!other.writable() && other.enumerable() && !other.configurable());
     }
 }
