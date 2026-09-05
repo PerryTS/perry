@@ -1786,27 +1786,31 @@ mod fp_chain {
     /// back to the platform unwinder (fail-closed like every other anomaly).
     #[cfg(target_os = "linux")]
     fn stack_top() -> usize {
+        // Identical to `gc::roots::get_stack_bottom` and the Error-stack
+        // capture in `error_stack_frames.rs`: one crate may not declare the
+        // same `extern "C"` symbol with two different signatures
+        // (`clashing_extern_declarations`, denied via `-D warnings`).
         unsafe extern "C" {
             fn pthread_self() -> usize;
-            fn pthread_getattr_np(thread: usize, attr: *mut u8) -> i32;
+            fn pthread_getattr_np(thread: usize, attr: *mut [u64; 8]) -> i32;
             fn pthread_attr_getstack(
-                attr: *const u8,
-                stackaddr: *mut *mut c_void,
+                attr: *const [u64; 8],
+                stackaddr: *mut *mut u8,
                 stacksize: *mut usize,
             ) -> i32;
-            fn pthread_attr_destroy(attr: *mut u8) -> i32;
+            fn pthread_attr_destroy(attr: *mut [u64; 8]) -> i32;
         }
         // pthread_attr_t is at most 64 bytes on glibc/musl for the supported
-        // targets; over-allocate defensively.
-        let mut attr = [0u8; 128];
-        let mut addr: *mut c_void = std::ptr::null_mut();
+        // targets, and `[u64; 8]` is both that size and correctly aligned.
+        let mut attr = [0u64; 8];
+        let mut addr: *mut u8 = std::ptr::null_mut();
         let mut size: usize = 0;
         unsafe {
-            if pthread_getattr_np(pthread_self(), attr.as_mut_ptr()) != 0 {
+            if pthread_getattr_np(pthread_self(), &mut attr) != 0 {
                 return 0;
             }
-            let ok = pthread_attr_getstack(attr.as_ptr(), &mut addr, &mut size) == 0;
-            pthread_attr_destroy(attr.as_mut_ptr());
+            let ok = pthread_attr_getstack(&attr, &mut addr, &mut size) == 0;
+            pthread_attr_destroy(&mut attr);
             if !ok {
                 return 0;
             }

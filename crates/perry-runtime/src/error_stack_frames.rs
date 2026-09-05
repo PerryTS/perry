@@ -195,25 +195,33 @@ mod walk {
 
     #[cfg(all(target_os = "linux", not(target_vendor = "apple")))]
     fn stack_top_uncached() -> usize {
+        // These signatures must stay identical to the ones in
+        // `gc::roots::get_stack_bottom` and `gc::roots::stack_maps::fp_chain`.
+        // Two `extern "C"` blocks in one crate that declare the same symbol
+        // with different argument types are a hard error under `-D warnings`
+        // (`clashing_extern_declarations`), and `[u64; 8]` — 64 bytes, which
+        // covers `pthread_attr_t` on every supported glibc/musl target — is
+        // the spelling the collector has always used. Unlike a `[u8; N]`
+        // buffer it is also correctly aligned for the attr union.
         unsafe extern "C" {
             fn pthread_self() -> usize;
-            fn pthread_getattr_np(thread: usize, attr: *mut u8) -> i32;
+            fn pthread_getattr_np(thread: usize, attr: *mut [u64; 8]) -> i32;
             fn pthread_attr_getstack(
-                attr: *const u8,
-                stackaddr: *mut *mut core::ffi::c_void,
+                attr: *const [u64; 8],
+                stackaddr: *mut *mut u8,
                 stacksize: *mut usize,
             ) -> i32;
-            fn pthread_attr_destroy(attr: *mut u8) -> i32;
+            fn pthread_attr_destroy(attr: *mut [u64; 8]) -> i32;
         }
-        let mut attr = [0u8; 128];
-        let mut addr: *mut core::ffi::c_void = core::ptr::null_mut();
+        let mut attr = [0u64; 8];
+        let mut addr: *mut u8 = core::ptr::null_mut();
         let mut size: usize = 0;
         unsafe {
-            if pthread_getattr_np(pthread_self(), attr.as_mut_ptr()) != 0 {
+            if pthread_getattr_np(pthread_self(), &mut attr) != 0 {
                 return 0;
             }
-            let ok = pthread_attr_getstack(attr.as_ptr(), &mut addr, &mut size) == 0;
-            pthread_attr_destroy(attr.as_mut_ptr());
+            let ok = pthread_attr_getstack(&attr, &mut addr, &mut size) == 0;
+            pthread_attr_destroy(&mut attr);
             if !ok {
                 return 0;
             }
