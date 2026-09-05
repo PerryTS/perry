@@ -944,3 +944,142 @@ impl EnumDiag {
         out
     }
 }
+
+// ---------------------------------------------------------------------------
+// `is_registered_buffer`: is the min/max window still rejecting?
+// ---------------------------------------------------------------------------
+
+use std::sync::atomic::{AtomicU64, AtomicUsize};
+
+static BUFFER_SINK: OnceLock<Option<Sink>> = OnceLock::new();
+static BUFFER_ON: AtomicBool = AtomicBool::new(false);
+
+fn buffer_sink() -> &'static Option<Sink> {
+    BUFFER_SINK.get_or_init(|| {
+        let sink = sink_from_env("PERRY_BUFFER_DIAG");
+        BUFFER_ON.store(sink.is_some(), Ordering::Relaxed);
+        sink
+    })
+}
+
+/// Is the buffer-probe instrument armed? One relaxed load once initialised.
+#[inline]
+pub fn buffer_on() -> bool {
+    if BUFFER_SINK.get().is_none() {
+        buffer_sink();
+    }
+    BUFFER_ON.load(Ordering::Relaxed)
+}
+
+// Plain relaxed atomics rather than the thread-local `RefCell` the other
+// instruments use: this probe runs millions of times per turn, and a borrow
+// per probe would dominate the thing being measured.
+static BUF_PROBES: AtomicU64 = AtomicU64::new(0);
+static BUF_ADMITS: AtomicU64 = AtomicU64::new(0);
+static BUF_TRUE_POS: AtomicU64 = AtomicU64::new(0);
+static BUF_ADDR_MIN: AtomicUsize = AtomicUsize::new(usize::MAX);
+static BUF_ADDR_MAX: AtomicUsize = AtomicUsize::new(0);
+static BUF_WIN_LO: AtomicUsize = AtomicUsize::new(usize::MAX);
+static BUF_WIN_HI: AtomicUsize = AtomicUsize::new(0);
+static BUF_REGS: AtomicU64 = AtomicU64::new(0);
+static BUF_UNREGS: AtomicU64 = AtomicU64::new(0);
+static BUF_LIVE_MAX: AtomicUsize = AtomicUsize::new(0);
+
+/// One `is_registered_buffer` probe that got past the "ever registered" latch.
+/// `admitted` is what the inline min/max window answered — the whole question,
+/// because only an admitted address pays the out-of-line call.
+#[inline]
+pub fn buffer_note_probe(addr: usize, admitted: bool, window: Option<(usize, usize)>) {
+    let n = BUF_PROBES.fetch_add(1, Ordering::Relaxed);
+    if admitted {
+        BUF_ADMITS.fetch_add(1, Ordering::Relaxed);
+    }
+    BUF_ADDR_MIN.fetch_min(addr, Ordering::Relaxed);
+    BUF_ADDR_MAX.fetch_max(addr, Ordering::Relaxed);
+    if let Some((lo, hi)) = window {
+        BUF_WIN_LO.store(lo, Ordering::Relaxed);
+        BUF_WIN_HI.store(hi, Ordering::Relaxed);
+    }
+    // Dump roughly every million probes; the rig SIGKILLs, so an exit hook
+    // would never fire.
+    if n & 0xF_FFFF == 0 {
+        buffer_dump();
+    }
+}
+
+/// The slow path found a real registered buffer.
+#[inline]
+pub fn buffer_note_true_positive() {
+    BUF_TRUE_POS.fetch_add(1, Ordering::Relaxed);
+}
+
+/// One buffer registration, with the registry's size after it. Registrations
+/// are what a Bloom filter would have to hold, and `RegistryAddrFilter` accrues
+/// bits **per admission, not per live entry** — so for a high-churn set the
+/// number that decides whether that structure can work is the CUMULATIVE
+/// count, not the live one. Both are recorded.
+pub fn buffer_note_registration(live_now: usize) {
+    BUF_REGS.fetch_add(1, Ordering::Relaxed);
+    BUF_LIVE_MAX.fetch_max(live_now, Ordering::Relaxed);
+}
+
+/// One buffer leaving the registry.
+pub fn buffer_note_unregistration() {
+    BUF_UNREGS.fetch_add(1, Ordering::Relaxed);
+}
+
+#[cold]
+fn buffer_dump() {
+    let probes = BUF_PROBES.load(Ordering::Relaxed);
+    let admits = BUF_ADMITS.load(Ordering::Relaxed);
+    let tp = BUF_TRUE_POS.load(Ordering::Relaxed);
+    let amin = BUF_ADDR_MIN.load(Ordering::Relaxed);
+    let amax = BUF_ADDR_MAX.load(Ordering::Relaxed);
+    let wlo = BUF_WIN_LO.load(Ordering::Relaxed);
+    let whi = BUF_WIN_HI.load(Ordering::Relaxed);
+    let pct = |a: u64, b: u64| if b == 0 { 0.0 } else { 100.0 * a as f64 / b as f64 };
+    let mb = |n: usize| n as f64 / (1024.0 * 1024.0);
+    let win_span = whi.saturating_sub(wlo);
+    let probe_span = amax.saturating_sub(amin);
+    let mut out = String::with_capacity(768);
+    use std::fmt::Write as _;
+    let _ = writeln!(
+        out,
+        "[buffer-diag] probes={probes} admits={admits} ({:.2} %) rejected={} ({:.2} %) \
+         true_positives={tp} ({:.6} % of admits)",
+        pct(admits, probes),
+        probes - admits,
+        pct(probes - admits, probes),
+        pct(tp, admits)
+    );
+    let _ = writeln!(
+        out,
+        "  window   [{wlo:#x}, {whi:#x}] span {:.1} MB",
+        mb(win_span)
+    );
+    let _ = writeln!(
+        out,
+        "  probed   [{amin:#x}, {amax:#x}] span {:.1} MB  -- window covers {:.1} % of the probed range",
+        mb(probe_span),
+        if probe_span == 0 { 0.0 } else { 100.0 * win_span as f64 / probe_span as f64 }
+    );
+    let regs = BUF_REGS.load(Ordering::Relaxed);
+    let unregs = BUF_UNREGS.load(Ordering::Relaxed);
+    let live_max = BUF_LIVE_MAX.load(Ordering::Relaxed);
+    // A 1,024-bit, 3-hash Bloom filter (`RegistryAddrFilter`) accrues bits per
+    // ADMISSION and never clears them, so `regs` — not `live_max` — is what it
+    // would have to hold. (1 - e^(-3n/1024))^3 at that n:
+    let fp = |n: f64| {
+        let x = 1.0 - (-3.0 * n / 1024.0).exp();
+        100.0 * x * x * x
+    };
+    let _ = writeln!(
+        out,
+        "  registrations={regs} unregistrations={unregs} live_max={live_max}           => a 1024-bit/3-hash Bloom holding all admissions would be {:.1} % false-positive          (and {:.1} % if it could hold only the live set)",
+        fp(regs as f64),
+        fp(live_max as f64)
+    );
+    if let Some(sink) = buffer_sink() {
+        write_sink(sink, &out);
+    }
+}
