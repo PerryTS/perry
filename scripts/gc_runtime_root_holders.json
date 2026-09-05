@@ -325,6 +325,12 @@
     },
     {
       "file": "crates/perry-runtime/src/hot_diag.rs",
+      "name": "LAYOUT_DIAG",
+      "verdict": "not_a_gc_pointer",
+      "why": "#9807 layout-prune diagnostics (`PERRY_LAYOUT_DIAG`), off unless armed. Every field is a count, a length, or a running maximum (`prunes`, `typed_len`, `masks_len`, `typed_max`, `masks_max`, `filter_bits_*`, `useful_keys`, `rebuilt`). No field stores an address."
+    },
+    {
+      "file": "crates/perry-runtime/src/hot_diag.rs",
       "name": "REGEX_DIAG",
       "verdict": "not_a_gc_pointer",
       "why": "RegExp construction/exec diagnostics (`PERRY_REGEX_DIAG`), off unless armed. Every field is a counter or an `Instant` except `per_pattern: HashMap<usize, PatStat>`, whose VALUE is Rust-owned (an owned prefix `String`, a flags `String`, counters). The KEY is a pattern `StringHeader` address, so it is a heap address \u2014 but it is used ONLY as an opaque grouping id and is never dereferenced: `PatStat::prefix` and `byte_len` are filled from the `&[u8]` argument at first insert, never by reading the key. Nothing here is traced, rooted or rewritten. The one consequence of the address being reused after a pattern dies is that two patterns' diagnostic counters merge into one row \u2014 an inaccuracy in an off-by-default diagnostic, with no collector implication. Distinct from `PASS1_MARKED`, whose addresses ARE walked and which therefore carries `non_moving_snapshot` with a pinned window."
