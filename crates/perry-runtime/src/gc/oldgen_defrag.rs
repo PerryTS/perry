@@ -33,18 +33,20 @@ pub(super) fn old_page_defrag_skipped_for_pin(meta: crate::arena::OldPageMeta) -
 
 /// Live bytes one idle compaction will move before it stops selecting.
 ///
-/// This is a PAUSE budget, and it is calibrated against the measured rate of
-/// the pass it bounds. The #9644 fixture moved 9.4 MB in 235,241 objects in
-/// 132 ms once the free-list pathology was gone
-/// (`gc/old_free.rs::old_free_filter_pages`), which is where 8 MiB came from.
-/// On the compiled claude-code TUI the same 8 MiB budget moved 8.39 MB across
-/// 50 blocks in **1.64 s** — ~195 ms per MiB, twelve times the fixture's rate,
-/// because a real old generation's occupants are far smaller and far more
-/// numerous than that corpus's. 1 MiB holds the pause near the 190-230 ms the
-/// pass already cost before #9772 made it productive, so the change returns
-/// tens of megabytes for the pause budget the old pass spent returning
-/// nothing. Selection is cheapest-block-first, so what a pass leaves behind is
-/// what the next one takes.
+/// This bounds how much a single pass MOVES. 8 MiB came from the #9644
+/// fixture (9.4 MB in 235,241 objects in 132 ms once the free-list pathology
+/// was gone, `gc/old_free.rs::old_free_filter_pages`).
+///
+/// Measured on the compiled claude-code TUI, cutting it to 1 MiB moved the
+/// selection from ~50 blocks to ~15 and left the pause UNCHANGED — three
+/// interleaved pairs gave a 1,070 ms mean against the old selection's
+/// 1,044 ms, with a 515-1,375 ms spread that tracks machine load rather than
+/// the arm. So this pass is dominated by fixed per-pass cost (the old-page
+/// meta snapshot, the walk over the selected blocks' pages, the sweep), not by
+/// moving, and the budget's job is bounding the moved volume rather than
+/// buying back pause. 1 MiB is enough to release ~15 MB of whole blocks per
+/// pass; selection is cheapest-block-first, so what one pass leaves behind is
+/// what the next one takes. Lowering the fixed cost is separate work.
 pub(super) const IDLE_COMPACT_MOVE_BUDGET_BYTES: usize = 1024 * 1024;
 
 pub(super) fn select_old_page_defrag_pages_from_snapshot(
