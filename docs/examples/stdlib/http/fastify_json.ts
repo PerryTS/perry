@@ -11,6 +11,7 @@
 //
 // docs: docs/src/stdlib/http.md
 // platforms: macos, linux, windows
+// requires: auto-optimize
 // run: false
 
 import Fastify from "fastify"
