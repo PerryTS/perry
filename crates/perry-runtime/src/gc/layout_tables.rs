@@ -168,21 +168,11 @@ fn note_new_layout_record(user_ptr: usize) {
     }
 }
 
-/// Re-derive this thread's young-record count from the live keys and publish
-/// the delta. Runs after every death prune (all cycle kinds) and whenever the
-/// tables empty, so promotion (a key moving to an old page) and death both
-/// bring the count back down.
-fn recount_young_layout_records() {
-    let live = {
-        let masks = hot_layout_slot_masks().borrow();
-        let typed = hot_typed_layouts().borrow();
-        masks
-            .keys()
-            .chain(typed.keys())
-            .filter(|key| layout_key_may_be_nursery(**key))
-            .count()
-    };
-    let live = u32::try_from(live).unwrap_or(u32::MAX);
+/// Publish this thread's young-record count and the delta to the process
+/// total. The count itself is derived by the death prune's single pass over
+/// the live keys (all cycle kinds), so promotion (a key moving to an old page)
+/// and death both bring it back down without a walk of their own.
+fn publish_young_layout_records(live: u32) {
     let prev = hot_per_object_layout_hint().young_records.replace(live);
     use std::sync::atomic::Ordering::SeqCst;
     if live > prev {
@@ -204,26 +194,95 @@ pub(in crate::gc) fn prune_dead_per_object_layout_owners(is_dead_owner: &dyn Fn(
     if !per_object_layouts_maybe_nonempty() {
         return;
     }
+    // ONE pass over each table, not three. The old shape visited every live
+    // key three times per collection — `retain`, then
+    // `layout_addr_filter_rebuild` (which first collected them all into a
+    // `Vec<usize>`), then `recount_young_layout_records` — and the survivor
+    // set the last two want is exactly what `retain` is already walking. On cc
+    // that was 162k keys x 47 prunes per 400-character reply, with the `Vec`
+    // alone allocating 50.6 MB of the turn's 304 MB (#9792).
+    let hint = hot_per_object_layout_hint();
+    // A filter this occupancy has outgrown is not worth rebuilding: see
+    // [`layout_addr_filter_saturating_occupancy`]. Decide from the pre-prune
+    // size, which bounds the survivor count from above, so the decision is one
+    // branch captured by the closure rather than a test per key.
+    let occupancy = hot_layout_slot_masks().borrow().len() + hot_typed_layouts().borrow().len();
+    let rebuild_filter = occupancy <= layout_addr_filter_saturating_occupancy();
+    if rebuild_filter {
+        // Cleared FIRST so the bits set below describe survivors only — a key
+        // that dies in this pass must leave no bit behind, which is the whole
+        // point of rebuilding.
+        layout_addr_filter_clear();
+    } else {
+        layout_addr_filter_saturate();
+    }
+    let mut young: u32 = 0;
+    let mut keep = |key: usize| {
+        if is_dead_owner(key) {
+            return false;
+        }
+        if rebuild_filter {
+            let (word, bit) = layout_addr_filter_slot(key);
+            // SAFETY: the filter is a plain `UnsafeCell` in this thread's own
+            // hot slot and nothing else holds a reference to it here. This is
+            // the same single-threaded access every probe makes; the tables
+            // borrowed around it are different thread-locals.
+            unsafe {
+                (*hint.filter.get())[word] |= bit;
+            }
+        }
+        if layout_key_may_be_nursery(key) {
+            young = young.saturating_add(1);
+        }
+        true
+    };
     let masks_emptied = {
         let mut masks = hot_layout_slot_masks().borrow_mut();
         let had = !masks.is_empty();
-        masks.retain(|key, _| !is_dead_owner(*key));
+        masks.retain(|key, _| keep(*key));
         had && masks.is_empty()
     };
     let typed_emptied = {
         let mut typed = hot_typed_layouts().borrow_mut();
         let had = !typed.is_empty();
-        typed.retain(|key, _| !is_dead_owner(*key));
+        typed.retain(|key, _| keep(*key));
         had && typed.is_empty()
     };
+    publish_young_layout_records(young);
+    // Runs last: when it finds both tables empty it disarms the flag, zeroes
+    // the young count published above and clears the filter, which is the
+    // correct end state whichever branch the pass took.
     refresh_per_object_layouts_flag(masks_emptied || typed_emptied);
-    if per_object_layouts_maybe_nonempty() {
-        // Stale filter bits are what the pruned keys leave behind; rebuilding
-        // from the survivors keeps the runtime probes as selective as the
-        // tables really are.
-        layout_addr_filter_rebuild();
-        recount_young_layout_records();
+    if crate::hot_diag::layout_on() {
+        layout_diag_note_prune(rebuild_filter);
     }
+}
+
+/// `PERRY_LAYOUT_DIAG`'s per-prune sample. Out of line and behind
+/// [`crate::hot_diag::layout_on`] so an unarmed build pays one relaxed load.
+#[cold]
+fn layout_diag_note_prune(rebuilt_filter: bool) {
+    let (typed_len, masks_len) = (
+        hot_typed_layouts().borrow().len(),
+        hot_layout_slot_masks().borrow().len(),
+    );
+    let hint = hot_per_object_layout_hint();
+    // SAFETY: as in the pass above — this thread's own filter, no other
+    // reference live.
+    let set = unsafe {
+        (*hint.filter.get())
+            .iter()
+            .map(|w| w.count_ones() as usize)
+            .sum::<usize>()
+    };
+    crate::hot_diag::layout_note_prune(
+        typed_len,
+        masks_len,
+        set,
+        LAYOUT_ADDR_FILTER_BITS,
+        rebuilt_filter,
+        layout_addr_filter_saturating_occupancy(),
+    );
 }
 
 #[cfg(test)]
@@ -366,18 +425,74 @@ pub(in crate::gc) fn layout_addr_filter_note(user_ptr: usize) {
 /// their own (two keys may share one), so this is what keeps a workload that
 /// genuinely churns per-object records from saturating the filter forever.
 fn layout_addr_filter_rebuild() {
+    let occupancy = hot_layout_slot_masks().borrow().len() + hot_typed_layouts().borrow().len();
+    if occupancy > layout_addr_filter_saturating_occupancy() {
+        // Walking the keys would set almost every bit, so this is where the
+        // rebuild lands anyway — reached in O(1) instead of O(live keys).
+        layout_addr_filter_saturate();
+        return;
+    }
     layout_addr_filter_clear();
-    let keys: Vec<usize> = {
-        let masks = hot_layout_slot_masks().borrow();
-        let typed = hot_typed_layouts().borrow();
-        masks.keys().copied().chain(typed.keys().copied()).collect()
-    };
     let hint = hot_per_object_layout_hint();
-    for k in keys {
+    // Straight from the tables: the `Vec<usize>` of every live key that used
+    // to buffer this walk allocated 50.6 MB per 400-character cc reply, and
+    // bought nothing — no borrow held here conflicts with the filter, which
+    // lives in a different thread-local.
+    let set_bit = |k: usize| {
         let (word, bit) = layout_addr_filter_slot(k);
+        // SAFETY: this thread's own filter, no other reference live; the
+        // tables borrowed around it are different thread-locals.
         unsafe {
             (*hint.filter.get())[word] |= bit;
         }
+    };
+    for k in hot_layout_slot_masks().borrow().keys() {
+        set_bit(*k);
+    }
+    for k in hot_typed_layouts().borrow().keys() {
+        set_bit(*k);
+    }
+    hint.sets.set(0);
+}
+
+/// Live keys past which the 4,096-bit sketch stops being an accelerator.
+///
+/// The filter is a one-hash bitmap, so `n` live keys leave it answering
+/// "may hold" for about `1 - e^(-n/4096)` of all addresses: 12 % at 512 keys,
+/// 63 % at 4,096, and indistinguishable from "always yes" past ~16k. cc holds
+/// **162,258** (`PERRY_LAYOUT_DIAG`, one 400-character reply), i.e. every bit
+/// set, every probe positive, and every rebuild an O(live keys) walk that
+/// restores exactly the all-ones state it started from.
+///
+/// Sizing the filter up is not available here: the geometry and hash are
+/// mirrored in generated code (`perry-codegen`'s
+/// `emit_gated_forget_object_layout`), so widening it is a codegen change, and
+/// a sketch that discriminated at 162k keys would need ~1.5 Mbit — 190 KB of
+/// inline thread-local storage on every thread, to serve a workload that has
+/// already lost the fast path. What is available is to stop *paying* for a
+/// gate that cannot pay back: past this occupancy the filter is set to all
+/// ones, which is the conservative answer it would have reached anyway, and
+/// the walk is skipped. Nothing downstream changes behaviour — `may_hold` is
+/// a hint whose `true` every caller already handles.
+///
+/// Four times the bit count is deliberately far past the point where the
+/// filter merely *degrades*: at 16,384 keys its false-positive rate is 98.2 %,
+/// so a rebuilt filter still proves absence for under one address in fifty
+/// while costing a walk of every live key. Below that the filter is left
+/// exactly as it was — a workload holding a few thousand records keeps the
+/// selectivity it has today, and this branch never fires for it.
+#[inline]
+fn layout_addr_filter_saturating_occupancy() -> usize {
+    LAYOUT_ADDR_FILTER_BITS * 4
+}
+
+/// Set every bit: "may hold" for any address. Conservative by construction —
+/// the filter's `false` is the only load-bearing answer.
+fn layout_addr_filter_saturate() {
+    let hint = hot_per_object_layout_hint();
+    // SAFETY: this thread's own filter, no other reference live.
+    unsafe {
+        (*hint.filter.get()).fill(u64::MAX);
     }
     hint.sets.set(0);
 }
@@ -809,6 +924,15 @@ pub(in crate::gc) fn transfer_per_object_descriptor(old_user: usize, new_user: u
         return false;
     }
     let mut typed = hot_typed_layouts().borrow_mut();
+    // The flag and the filter above are shared with `LAYOUT_SLOT_MASKS`, so a
+    // full mask table drags every relocation in here even when this map is
+    // empty — which is cc's steady state (`PERRY_LAYOUT_DIAG`: typed=0,
+    // masks=162,258). An empty map has nothing to remove at either address, so
+    // the two hashes below are pure loss; the `len` test that proves it is one
+    // load. #9792.
+    if typed.is_empty() {
+        return false;
+    }
     typed.remove(&new_user);
     match typed.remove(&old_user) {
         Some(layout) => {
