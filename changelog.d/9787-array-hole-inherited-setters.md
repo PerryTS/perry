@@ -1,0 +1,1 @@
+Fix numeric writes into array holes bypassing inherited setters and read-only properties on `Array.prototype` and `Object.prototype`. Existing own elements and arrays with unmodified prototype chains keep their fast path.
