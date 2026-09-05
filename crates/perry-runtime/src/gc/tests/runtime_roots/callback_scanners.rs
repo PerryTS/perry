@@ -976,7 +976,7 @@ fn test_evacuation_verify_detects_stale_forwarded_root_slot() {
     js_shadow_slot_set(0, fixture.nursery_bits);
 
     assert_panics_with("shadow stack roots", || {
-        verify_mutable_root_slots(&fixture.valid_ptrs);
+        verify_mutable_root_slots(EvacuationVerifier::all_forwarded(&fixture.valid_ptrs));
     });
 
     js_shadow_frame_pop(shadow);
@@ -994,8 +994,10 @@ fn test_evacuation_verify_detects_stale_forwarded_runtime_scanner_slot() {
     );
 
     assert_panics_with("runtime mutable root scanner", || {
-        let mut visitor =
-            RuntimeRootVisitor::for_verify(&fixture.valid_ptrs, "runtime mutable root scanner");
+        let mut visitor = RuntimeRootVisitor::for_verify(
+            EvacuationVerifier::all_forwarded(&fixture.valid_ptrs),
+            "runtime mutable root scanner",
+        );
         promise_mutable_root_scanner(&mut visitor);
     });
 
@@ -1020,7 +1022,7 @@ fn test_evacuation_verify_detects_stale_forwarded_dirty_range_slot() {
     }
 
     assert_panics_with("remembered dirty ranges", || {
-        verify_remembered_dirty_ranges(&valid_ptrs);
+        verify_remembered_dirty_ranges(EvacuationVerifier::all_forwarded(&valid_ptrs));
     });
 
     remembered_set_clear();
@@ -1036,7 +1038,11 @@ fn test_evacuation_verify_detects_stale_forwarded_heap_field() {
         let header = header_from_user_ptr(old_obj as *const u8);
         (*header).gc_flags |= GC_FLAG_MARKED;
         assert_panics_with("heap fields", || {
-            verify_heap_object_fields(header, &fixture.valid_ptrs, "heap fields");
+            verify_heap_object_fields(
+                header,
+                EvacuationVerifier::all_forwarded(&fixture.valid_ptrs),
+                "heap fields",
+            );
         });
         (*header).gc_flags &= !GC_FLAG_MARKED;
     }
@@ -1051,7 +1057,7 @@ fn test_evacuation_verify_copy_only_pinned_root_allows_non_forwarded_target() {
     }
     verify_copy_only_scanner_bits(
         POINTER_TAG | (user as u64 & POINTER_MASK),
-        &valid_ptrs,
+        EvacuationVerifier::all_forwarded(&valid_ptrs),
         "copy-only root scanner",
     );
     unsafe {
@@ -1065,7 +1071,7 @@ fn test_evacuation_verify_copy_only_root_rejects_forwarded_target() {
     assert_panics_with("copy-only root scanner", || {
         verify_copy_only_scanner_bits(
             fixture.nursery_bits,
-            &fixture.valid_ptrs,
+            EvacuationVerifier::all_forwarded(&fixture.valid_ptrs),
             "copy-only root scanner",
         );
     });

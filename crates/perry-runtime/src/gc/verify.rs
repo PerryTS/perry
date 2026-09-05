@@ -26,9 +26,11 @@ pub(super) fn try_rewrite_nanboxed_value(bits: u64, valid_ptrs: &ValidPointerSet
 /// #8174: refuses a forwarding target that is not a heap object start, in
 /// lockstep with [`CopyingNurseryCollector::rewrite_raw_addr`](super::copying).
 ///
-/// The lockstep is the point. This function is what the VERIFY pass runs
-/// (`RuntimeRootVisitMode::Verify`), and it panics whenever it can rewrite a
-/// slot the rewrite pass left alone. Tightening only the rewrite pass would
+/// The lockstep is the point. The VERIFY pass shares this forwarding walker
+/// and panics when it finds a stale alias the rewrite pass left alone.
+/// Copying verification permits retained array-growth aliases through
+/// [`EvacuationVerifier`], without changing source/target validation.
+/// Tightening only the rewrite pass would
 /// therefore have turned a silently-corrupt rewrite into a `PERRY_GC_VERIFY_
 /// EVACUATION` abort blaming an innocent scanner — the two walkers must reach
 /// the same verdict or the verifier is measuring the difference between them
@@ -36,6 +38,82 @@ pub(super) fn try_rewrite_nanboxed_value(bits: u64, valid_ptrs: &ValidPointerSet
 /// stronger than the copier's heap-region test, so this only changes the case
 /// where a genuinely LIVE forwarded object's target word is corrupt.
 pub(super) fn try_rewrite_raw_addr(ptr_addr: usize, valid_ptrs: &ValidPointerSet) -> Option<usize> {
+    follow_forwarding_raw_addr(ptr_addr, valid_ptrs, |_, _| true)
+}
+
+/// The copying minor retains non-moving array-growth stubs. Other evacuation
+/// paths rewrite every forwarding alias before releasing moved originals.
+/// Carry that distinction through every verifier surface, including FFI roots.
+#[derive(Clone, Copy)]
+pub(super) struct EvacuationVerifier<'a> {
+    valid_ptrs: &'a ValidPointerSet,
+    copying_minor: bool,
+}
+
+impl<'a> EvacuationVerifier<'a> {
+    pub(super) fn all_forwarded(valid_ptrs: &'a ValidPointerSet) -> Self {
+        Self {
+            valid_ptrs,
+            copying_minor: false,
+        }
+    }
+
+    /// Must run before the copying minor resets from-space and flips survivors.
+    pub(super) fn copying_minor(valid_ptrs: &'a ValidPointerSet) -> Self {
+        Self {
+            valid_ptrs,
+            copying_minor: true,
+        }
+    }
+
+    pub(super) fn stale_raw_addr(self, addr: usize) -> Option<usize> {
+        follow_forwarding_raw_addr(addr, self.valid_ptrs, |source, target| {
+            if !self.copying_minor {
+                return true;
+            }
+            // Only array growth creates permanent forwarding aliases. The
+            // copying minor neither moves nor frees these non-moving sources.
+            // Both ends must be retained arrays. An old -> young growth edge
+            // is forbidden even if the young target was never forwarded.
+            // Follow the whole chain so an indirect unsafe hop is also caught.
+            !self.retained_growth_array(source) || !self.retained_growth_array(target)
+        })
+    }
+
+    fn retained_growth_array(self, addr: usize) -> bool {
+        if !self.valid_ptrs.contains(&addr) {
+            return false;
+        }
+        let header = unsafe { header_from_user_ptr(addr as *const u8) };
+        (unsafe { (*header).obj_type == GC_TYPE_ARRAY })
+            && matches!(
+                crate::arena::classify_heap_space(addr),
+                crate::arena::HeapSpace::Old
+                    | crate::arena::HeapSpace::Longlived
+                    | crate::arena::HeapSpace::PromotedYoung
+            )
+    }
+
+    pub(super) fn stale_value(self, bits: u64) -> Option<u64> {
+        let word = decode_root_word(bits)?;
+        Some(word.encode(self.stale_raw_addr(word.addr())?))
+    }
+
+    pub(super) fn stale_nanboxed_value(self, bits: u64) -> Option<u64> {
+        let tag = bits & TAG_MASK;
+        if tag != POINTER_TAG && tag != STRING_TAG && tag != BIGINT_TAG {
+            return None;
+        }
+        let addr = self.stale_raw_addr((bits & POINTER_MASK) as usize)?;
+        Some(tag | (addr as u64 & POINTER_MASK))
+    }
+}
+
+fn follow_forwarding_raw_addr(
+    ptr_addr: usize,
+    valid_ptrs: &ValidPointerSet,
+    must_rewrite: impl Fn(usize, usize) -> bool,
+) -> Option<usize> {
     if ptr_addr == 0 {
         return None;
     }
@@ -57,8 +135,8 @@ pub(super) fn try_rewrite_raw_addr(ptr_addr: usize, valid_ptrs: &ValidPointerSet
             if !accept_forwarding_target(next) {
                 return None;
             }
+            rewrote |= must_rewrite(current, next);
             current = next;
-            rewrote = true;
         }
     }
     rewrote.then_some(current)
@@ -87,9 +165,13 @@ pub(super) unsafe fn rewrite_slot(slot: *mut u64, valid_ptrs: &ValidPointerSet) 
 }
 
 #[inline]
-pub(super) unsafe fn verify_slot(slot: *const u64, valid_ptrs: &ValidPointerSet, surface: &str) {
+pub(super) unsafe fn verify_slot(
+    slot: *const u64,
+    verifier: EvacuationVerifier<'_>,
+    surface: &str,
+) {
     let bits = *slot;
-    if let Some(new_bits) = try_rewrite_value(bits, valid_ptrs) {
+    if let Some(new_bits) = verifier.stale_value(bits) {
         panic_stale_forwarded_reference(surface, slot as usize, bits, new_bits);
     }
 }
@@ -1122,7 +1204,7 @@ pub(super) fn verify_minor_unmarked_young_children_report(phase: &str) {
 
 pub(super) unsafe fn verify_heap_object_fields(
     header: *mut GcHeader,
-    valid_ptrs: &ValidPointerSet,
+    verifier: EvacuationVerifier<'_>,
     surface: &'static str,
 ) {
     let flags = (*header).gc_flags;
@@ -1131,7 +1213,7 @@ pub(super) unsafe fn verify_heap_object_fields(
     }
     visit_gc_rewrite_slots(header, |slot| unsafe {
         slot.record_layout_read();
-        verify_slot(slot.slot as *const u64, valid_ptrs, surface);
+        verify_slot(slot.slot as *const u64, verifier, surface);
     });
 }
 
@@ -1263,13 +1345,13 @@ pub(super) fn rewrite_mutable_registered_roots_with_sources(
     visit_ffi_mutable_registered_roots_with_sources(&mut visitor, root_sources);
 }
 
-pub(super) fn verify_mutable_root_slots(valid_ptrs: &ValidPointerSet) {
+pub(super) fn verify_mutable_root_slots(verifier: EvacuationVerifier<'_>) {
     visit_mutable_root_slots(|slot| unsafe {
         let bits = slot.read();
         if bits == 0 {
             return;
         }
-        if let Some(new_bits) = try_rewrite_value(bits, valid_ptrs) {
+        if let Some(new_bits) = verifier.stale_value(bits) {
             let surface = match slot.kind {
                 MutableRootSlotKind::ShadowStack => "shadow stack roots",
                 MutableRootSlotKind::NativeStack => "native stack-map roots",
@@ -1280,9 +1362,9 @@ pub(super) fn verify_mutable_root_slots(valid_ptrs: &ValidPointerSet) {
     });
 }
 
-pub(super) fn verify_mutable_registered_roots(valid_ptrs: &ValidPointerSet) {
+pub(super) fn verify_mutable_registered_roots(verifier: EvacuationVerifier<'_>) {
     let scanners: Vec<MutableRootScannerEntry> = MUTABLE_ROOT_SCANNERS.with(|s| s.borrow().clone());
-    let mut visitor = RuntimeRootVisitor::for_verify(valid_ptrs, "runtime mutable root scanner");
+    let mut visitor = RuntimeRootVisitor::for_verify(verifier, "runtime mutable root scanner");
     for entry in scanners {
         (entry.scanner)(&mut visitor);
     }
@@ -1291,72 +1373,67 @@ pub(super) fn verify_mutable_registered_roots(valid_ptrs: &ValidPointerSet) {
 
 pub(super) fn verify_copy_only_scanner_bits(
     bits: u64,
-    valid_ptrs: &ValidPointerSet,
+    verifier: EvacuationVerifier<'_>,
     surface: &'static str,
 ) {
-    if let Some(new_bits) = try_rewrite_nanboxed_value(bits, valid_ptrs) {
+    if let Some(new_bits) = verifier.stale_nanboxed_value(bits) {
         panic_stale_forwarded_reference(surface, 0, bits, new_bits);
     }
-}
-
-pub(super) struct RegisteredRootVerifyContext {
-    pub(super) valid_ptrs: *const ValidPointerSet,
 }
 
 pub(super) extern "C" fn perry_ffi_verify_root(value: f64, ctx: *mut c_void) {
     if ctx.is_null() {
         return;
     }
-    let ctx = unsafe { &*(ctx as *const RegisteredRootVerifyContext) };
-    if ctx.valid_ptrs.is_null() {
-        return;
-    }
-    let valid_ptrs = unsafe { &*ctx.valid_ptrs };
-    verify_copy_only_scanner_bits(value.to_bits(), valid_ptrs, "ffi copy-only root scanner");
+    let verifier = unsafe { *(ctx as *const EvacuationVerifier<'_>) };
+    verify_copy_only_scanner_bits(value.to_bits(), verifier, "ffi copy-only root scanner");
 }
 
-pub(super) fn verify_copy_only_registered_roots(valid_ptrs: &ValidPointerSet) {
+pub(super) fn verify_copy_only_registered_roots(verifier: EvacuationVerifier<'_>) {
     let scanners: Vec<fn(&mut dyn FnMut(f64))> = ROOT_SCANNERS.with(|s| s.borrow().clone());
     for scanner in scanners {
         scanner(&mut |value: f64| {
-            verify_copy_only_scanner_bits(value.to_bits(), valid_ptrs, "copy-only root scanner");
+            verify_copy_only_scanner_bits(value.to_bits(), verifier, "copy-only root scanner");
         });
     }
 
     let ffi_scanners: Vec<PerryFfiRootScanner> = FFI_ROOT_SCANNERS.with(|s| s.borrow().clone());
-    let mut ctx = RegisteredRootVerifyContext {
-        valid_ptrs: valid_ptrs as *const ValidPointerSet,
-    };
-    let ctx = &mut ctx as *mut RegisteredRootVerifyContext as *mut c_void;
+    let mut ctx = verifier;
+    let ctx = &mut ctx as *mut EvacuationVerifier<'_> as *mut c_void;
     for scanner in ffi_scanners {
         scanner(perry_ffi_verify_root, ctx);
     }
 }
 
-pub(super) fn verify_remembered_dirty_ranges(valid_ptrs: &ValidPointerSet) {
+pub(super) fn verify_remembered_dirty_ranges(verifier: EvacuationVerifier<'_>) {
     let snapshot = remembered_dirty_snapshot();
     let mut stats = RememberedSetTraceStats::default();
     let mut verify_dirty_slot = |slot: *mut u64, _stats: &mut RememberedSetTraceStats| unsafe {
-        verify_slot(slot as *const u64, valid_ptrs, "remembered dirty ranges");
+        verify_slot(slot as *const u64, verifier, "remembered dirty ranges");
     };
-    scan_remembered_dirty_slot_ranges(&snapshot, valid_ptrs, &mut stats, &mut verify_dirty_slot);
+    scan_remembered_dirty_slot_ranges(
+        &snapshot,
+        verifier.valid_ptrs,
+        &mut stats,
+        &mut verify_dirty_slot,
+    );
 
     for header_addr in snapshot.fallback_headers {
         let user_ptr = header_addr + GC_HEADER_SIZE;
-        if !valid_ptrs.contains(&user_ptr) {
+        if !verifier.valid_ptrs.contains(&user_ptr) {
             continue;
         }
         unsafe {
             verify_heap_object_fields(
                 header_addr as *mut GcHeader,
-                valid_ptrs,
+                verifier,
                 "remembered fallback headers",
             );
         }
     }
 }
 
-pub(super) fn verify_heap_objects(valid_ptrs: &ValidPointerSet) {
+pub(super) fn verify_heap_objects(verifier: EvacuationVerifier<'_>) {
     let verify_one = |header: *mut GcHeader| unsafe {
         let flags = (*header).gc_flags;
         if flags & GC_FLAG_FORWARDED != 0 {
@@ -1373,7 +1450,7 @@ pub(super) fn verify_heap_objects(valid_ptrs: &ValidPointerSet) {
                 return;
             }
         }
-        verify_heap_object_fields(header, valid_ptrs, "heap fields");
+        verify_heap_object_fields(header, verifier, "heap fields");
     };
     crate::arena::arena_walk_objects(|hp| verify_one(hp as *mut GcHeader));
     MALLOC_STATE.with(|s| {
@@ -1384,12 +1461,12 @@ pub(super) fn verify_heap_objects(valid_ptrs: &ValidPointerSet) {
     });
 }
 
-pub(super) fn verify_evacuated_no_stale_forwarded_refs(valid_ptrs: &ValidPointerSet) {
-    verify_mutable_root_slots(valid_ptrs);
-    verify_mutable_registered_roots(valid_ptrs);
-    verify_copy_only_registered_roots(valid_ptrs);
-    verify_remembered_dirty_ranges(valid_ptrs);
-    verify_heap_objects(valid_ptrs);
+pub(super) fn verify_evacuated_no_stale_forwarded_refs(verifier: EvacuationVerifier<'_>) {
+    verify_mutable_root_slots(verifier);
+    verify_mutable_registered_roots(verifier);
+    verify_copy_only_registered_roots(verifier);
+    verify_remembered_dirty_ranges(verifier);
+    verify_heap_objects(verifier);
 }
 
 /// Top-level Phase C4b-γ-2 entry: rewrite every reference site we
