@@ -50,7 +50,7 @@ crate::perry_thread_local! {
 }
 
 #[cfg(test)]
-thread_local! {
+crate::perry_thread_local! {
     /// Test-only per-thread override of the output path, so a unit test can
     /// enable the census without touching the process env (the env read is a
     /// process-wide OnceLock that any earlier collection would latch).
