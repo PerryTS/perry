@@ -69,6 +69,30 @@ console.log(hits, nums.length, nums[7]);
 }
 
 #[test]
+fn default_array_prototype_setter_intercepts_in_bounds_holes() {
+    compile_and_run(
+        include_str!("../../../test-files/test_gap_9787_array_hole_inherited_setter.ts"),
+        "true:31 false array-proto-three 1\n\
+         true:31,true:37 false array-proto-three 5\n\
+         own 2 true 41 4\n\
+         deleted true:31,true:37,true:43 false array-proto-three 4\n\
+         removed true 47 5\n",
+        "array_prototype_holes",
+    );
+}
+
+#[test]
+fn default_object_prototype_descriptors_intercept_in_bounds_holes() {
+    compile_and_run(
+        include_str!("../../../test-files/test_gap_9787_object_prototype_hole_setter.ts"),
+        "1 true 53 false object-proto-eight 10\n\
+         TypeError false getter-only 10\n\
+         TypeError false locked 10\n",
+        "object_prototype_holes",
+    );
+}
+
+#[test]
 fn define_properties_array_prototype_index_setter_intercepts_boolean_store() {
     compile_and_run(
         r#"
