@@ -152,7 +152,7 @@ const RAISE_DEBOUNCE_CYCLES: u8 = 2;
 /// adaptive threshold has eliminated the re-copying).
 const NURSERY_CAP_SCALE_MAX: u8 = 4;
 
-thread_local! {
+crate::perry_thread_local! {
     static TENURING_SURVIVALS: Cell<u8> = const { Cell::new(GC_TENURING_SURVIVALS_MAX) };
     static RAISE_STREAK: Cell<u8> = const { Cell::new(0) };
     /// Survival-rate lock: promote-on-first-copy until influx goes quiet.
@@ -354,7 +354,7 @@ pub(super) fn note_surviving_object_census(moved_bytes: usize, moved_objects: us
         return;
     }
     OBJECT_CENSUS_SEEDED.with(|seeded| seeded.set(true));
-    let previous = MEAN_SURVIVING_OBJECT_BYTES.replace(mean);
+    let previous = MEAN_SURVIVING_OBJECT_BYTES.with(|c| c.replace(mean));
     if previous != mean && crate::gc::gc_diag_enabled() {
         eprintln!(
             "[gc-tenuring] nursery cap object denomination: mean_surviving_object_bytes {} -> {} \
@@ -417,7 +417,7 @@ pub(super) fn maybe_seed_object_census_from_allocation(from_space_in_use_bytes: 
     if mean == 0 {
         return;
     }
-    let previous = MEAN_SURVIVING_OBJECT_BYTES.replace(mean);
+    let previous = MEAN_SURVIVING_OBJECT_BYTES.with(|c| c.replace(mean));
     if crate::gc::gc_diag_enabled() {
         eprintln!(
             "[gc-tenuring] nursery cap object denomination: allocation census seeded \

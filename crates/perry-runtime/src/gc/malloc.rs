@@ -196,7 +196,7 @@ pub(super) const MALLOC_STATE_HEAVY_LEN_THRESHOLD: usize = 64 * 1024;
 /// 7/8 load factor without further rehashes).
 pub(super) const MALLOC_STATE_HEAVY_CAPACITY: usize = 256 * 1024;
 
-thread_local! {
+crate::perry_thread_local! {
     pub(crate) static MALLOC_STATE: RefCell<MallocState> = RefCell::new(MallocState {
         objects: Vec::with_capacity(MALLOC_STATE_INITIAL_CAPACITY),
         set: crate::fast_hash::PtrHashSet::with_capacity_and_hasher(
@@ -209,10 +209,23 @@ thread_local! {
         heavy_capacity_reserved: false,
         kind_telemetry: [MallocKindTelemetry::zero(); MALLOC_KIND_BUCKET_COUNT],
     });
+}
 
+// `ARENA_FREE_LIST` / `ARENA_FREE_LIST_NONEMPTY` stay raw: they are NAMED
+// `HotTls` fields (`arena_free_list`, `arena_free_list_nonempty`), one
+// dependent load cheaper than a claimed slot.
+thread_local! {
     pub(crate) static ARENA_FREE_LIST: RefCell<Vec<(*mut u8, usize)>> = const { RefCell::new(Vec::new()) };
     pub(crate) static ARENA_FREE_LIST_NONEMPTY: std::cell::Cell<bool> =
         const { std::cell::Cell::new(false) };
+}
+
+/// Hot-cache slot claimed by `MALLOC_STATE`, whose length is the
+/// `MallocCount` trigger's basis on every `gc_malloc`. Liveness
+/// instrumentation for `gc::tests::trigger_path_tls`.
+#[cfg(test)]
+pub(crate) fn malloc_state_slot_index() -> u32 {
+    MALLOC_STATE.slot_index()
 }
 
 pub fn gc_malloc(size: usize, obj_type: u8) -> *mut u8 {
@@ -480,7 +493,7 @@ pub(super) fn malloc_sweep_revalidate_header(
     })
 }
 
-thread_local! {
+crate::perry_thread_local! {
     pub(super) static MALLOC_REGISTRY_REBUILD_COUNT: Cell<u64> = const { Cell::new(0) };
 }
 

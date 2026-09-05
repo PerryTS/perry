@@ -58,6 +58,8 @@ mod smoke;
 mod step_bounds;
 pub(super) mod support;
 mod teardown;
+mod tls_fill_reentrancy;
+mod trigger_path_tls;
 mod telemetry_verifier;
 mod temp_roots;
 mod triggers;

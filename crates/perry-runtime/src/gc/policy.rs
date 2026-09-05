@@ -5,7 +5,7 @@ pub(super) const GC_FLAG_IN_ALLOC: u8 = 0b01;
 /// Bit 1 of GC_FLAGS — suppression flag (JSON.parse).
 pub(super) const GC_FLAG_SUPPRESSED: u8 = 0b10;
 
-thread_local! {
+crate::perry_thread_local! {
     pub(super) static GC_FLAGS: Cell<u8> = const { Cell::new(0) };
 }
 
@@ -292,7 +292,7 @@ thread_local! {
     static GC_NURSERY_CAP_TEST_SUPPRESSED: Cell<bool> = const { Cell::new(false) };
 }
 
-thread_local! {
+crate::perry_thread_local! {
     /// Lower bound for the next GC trigger. Bumped after each
     /// `gc_collect_inner` based on collection effectiveness (see the
     /// adaptive logic in `gc_check_trigger`).
@@ -401,7 +401,7 @@ pub(super) const GC_MALLOC_COUNT_STEP_INITIAL: usize = 100_000;
 pub(super) const GC_MALLOC_COUNT_STEP_MAX: usize = 2_000_000;
 pub(super) const GC_MALLOC_COUNT_STEP_MIN: usize = 10_000;
 
-thread_local! {
+crate::perry_thread_local! {
     /// Per-program adaptive malloc-count step. Mirrors `GC_STEP_BYTES`
     /// behaviour: doubles when mostly-garbage, halves when mostly-live.
     pub(super) static GC_MALLOC_COUNT_STEP: std::cell::Cell<usize> =
@@ -431,7 +431,7 @@ thread_local! {
 ///   the Map/Set side-allocation finalizers) instead of leaking.
 const GC_EXTERNAL_SIDE_ALLOC_STEP: usize = 16 * 1024 * 1024;
 
-thread_local! {
+crate::perry_thread_local! {
     static GC_EXTERNAL_SIDE_ALLOC_PENDING: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static GC_EXTERNAL_SIDE_LIVE_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
@@ -942,7 +942,7 @@ impl GcTriggerSnapshot {
     }
 }
 
-thread_local! {
+crate::perry_thread_local! {
     pub(super) static GC_DEFERRED_REQUEST: Cell<DeferredGcRequest> =
         const { Cell::new(DeferredGcRequest::None) };
     pub(super) static GC_OLD_RECLAIM_PENDING: Cell<bool> = const { Cell::new(false) };
@@ -2655,7 +2655,7 @@ enum BudgetedGcTrigger {
     MallocCount,
 }
 
-thread_local! {
+crate::perry_thread_local! {
     static GC_BUDGETED_CYCLE: RefCell<Option<BudgetedGcCycle>> = const { RefCell::new(None) };
     static GC_BUDGETED_CYCLE_ACTIVE: Cell<bool> = const { Cell::new(false) };
     static GC_BUDGETED_STEP_ACTIVE: Cell<bool> = const { Cell::new(false) };
@@ -2688,6 +2688,56 @@ pub(super) fn gc_old_reclaim_debt_bytes(old_in_use: usize, baseline: usize) -> u
         baseline.saturating_add(gc_old_reclaim_growth_band_bytes(baseline))
     };
     old_in_use.saturating_sub(trigger) as u64
+}
+
+/// The thread-locals [`gc_budgeted_due_trigger`] reads on its fast path, with
+/// the hot-cache slot each one claimed.
+///
+/// Enumerating them in the module that reads them is what makes the coverage
+/// test able to fail: reverting any declaration below to a raw
+/// `thread_local!` removes `slot_index` and breaks this function's build at
+/// the declaration's own name, rather than leaving a silently slow path — the
+/// failure mode `tls_hot.rs` was written to abolish and that this path
+/// nonetheless kept for three years.
+#[cfg(test)]
+pub(crate) fn trigger_path_hot_slot_indices() -> Vec<(&'static str, u32)> {
+    // Touch each one first: a slot is claimed on first read, not at
+    // declaration, so an unread declaration reports the unassigned sentinel.
+    //
+    // `GC_DEFERRED_REQUEST` is deliberately absent: `defer_gc_request` reads it
+    // only when `GC_ROOT_LOCK_DEPTH` is non-zero, so on the fast path it is
+    // never touched and never claims a slot. Listing it made this function's
+    // own test fail with `index 4294967295` on the first run — which is the
+    // evidence that the test can fail, and the reason the list is "what the
+    // fast path reads" rather than "what the module declares".
+    let _ = gc_budgeted_due_trigger();
+    vec![
+        ("GC_OLD_RECLAIM_PENDING", GC_OLD_RECLAIM_PENDING.slot_index()),
+        (
+            "GC_LAST_OLD_RECLAIM_IN_USE_BYTES",
+            GC_LAST_OLD_RECLAIM_IN_USE_BYTES.slot_index(),
+        ),
+        ("GC_NEXT_MALLOC_TRIGGER", GC_NEXT_MALLOC_TRIGGER.slot_index()),
+        ("GC_NEXT_TRIGGER_BYTES", GC_NEXT_TRIGGER_BYTES.slot_index()),
+        ("GC_TRIGGER_ARMED", GC_TRIGGER_ARMED.slot_index()),
+        (
+            "GC_EXTERNAL_SIDE_LIVE_BYTES",
+            GC_EXTERNAL_SIDE_LIVE_BYTES.slot_index(),
+        ),
+        ("GC_MAJOR_PACING_RETAINING", GC_MAJOR_PACING_RETAINING.slot_index()),
+        ("GC_FLAGS", GC_FLAGS.slot_index()),
+        (
+            "GC_BUDGETED_CYCLE_ACTIVE",
+            GC_BUDGETED_CYCLE_ACTIVE.slot_index(),
+        ),
+        ("GC_BUDGETED_STEP_ACTIVE", GC_BUDGETED_STEP_ACTIVE.slot_index()),
+        (
+            "OLD_GEN_IN_USE_BYTES",
+            crate::arena::old_gen_in_use_bytes_slot_index(),
+        ),
+        ("OLD_FREE_BYTES", super::old_free_bytes_slot_index()),
+        ("MALLOC_STATE", super::malloc_state_slot_index()),
+    ]
 }
 
 fn gc_budgeted_due_trigger() -> Option<BudgetedGcTrigger> {
