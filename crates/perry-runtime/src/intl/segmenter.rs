@@ -142,7 +142,8 @@ unsafe fn build_shared_segment_keys(shape: SegmentRecordShape) {
     // address is taken back out of its handle ACROSS them.
     let mut handles = Vec::with_capacity(n);
     for name in NAMES.iter().take(n) {
-        let (bits, _) = keys_h.across_mut::<crate::array::ArrayHeader, _>(|| interned_key_bits(name));
+        let (bits, _) =
+            keys_h.across_mut::<crate::array::ArrayHeader, _>(|| interned_key_bits(name));
         handles.push(scope.root_nanbox_u64(bits));
     }
     let keys = keys_h.get_raw_mut_ptr::<crate::array::ArrayHeader>();
@@ -229,9 +230,7 @@ pub(crate) fn make_segment_record(
             build_shared_segment_keys(shape);
         }
 
-        let obj_h = scope.root_nanbox_f64(js_nanbox_pointer(
-            js_object_alloc(0, n as u32) as i64,
-        ));
+        let obj_h = scope.root_nanbox_f64(js_nanbox_pointer(js_object_alloc(0, n as u32) as i64));
         // Everything below re-reads through storage the collector rewrites:
         // the record from its handle, the keys array from the scanned
         // thread-local. No address here predates the allocation above.

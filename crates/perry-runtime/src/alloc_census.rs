@@ -203,7 +203,11 @@ fn sample(ptr: *mut u8, size: usize) {
     let skip = 3usize;
     let n = n.max(0) as usize;
     for i in 0..FRAMES {
-        frames[i] = if i + skip < n { raw[i + skip] as usize } else { 0 };
+        frames[i] = if i + skip < n {
+            raw[i + skip] as usize
+        } else {
+            0
+        };
     }
     if let Ok(mut guard) = SITES.lock() {
         {

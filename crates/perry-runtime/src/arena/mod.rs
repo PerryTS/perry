@@ -140,14 +140,14 @@ pub(crate) use stats::{old_gen_in_use_bytes_recomputed, old_gen_in_use_bytes_res
 pub(crate) use page_meta::{
     arena_header_is_object_start, classify_heap_generation, classify_heap_space,
     classify_heap_space_in_range, generation_page_for_addr, materialize_all_promoted_page_runs,
-    old_arena_page_index_remove_object, old_arena_source_blocks_for_pages,
-    old_arena_walk_objects_on_pages, old_object_page_overlaps, old_page_account_dirty_slot,
-    old_page_account_dirty_slots, old_page_account_promoted_object, old_page_account_swept_object,
-    old_page_clear_dirty, old_page_mark_dirty, old_page_meta_snapshot, old_page_summary,
-    old_pages_begin_gc_cycle, old_pages_reset_sweep_accounting, record_arena_object_start,
-    unregister_old_object_pages, HeapGeneration, HeapSpace, OldArenaPageObjectCursor,
-    old_arena_block_range_index, old_arena_block_ranges, OldArenaSourceBlockSelection,
-    OldPageMeta, OldPageSummary,
+    old_arena_block_range_index, old_arena_block_ranges, old_arena_page_index_remove_object,
+    old_arena_source_blocks_for_pages, old_arena_walk_objects_on_pages, old_object_page_overlaps,
+    old_page_account_dirty_slot, old_page_account_dirty_slots, old_page_account_promoted_object,
+    old_page_account_swept_object, old_page_clear_dirty, old_page_mark_dirty,
+    old_page_meta_snapshot, old_page_summary, old_pages_begin_gc_cycle,
+    old_pages_reset_sweep_accounting, record_arena_object_start, unregister_old_object_pages,
+    HeapGeneration, HeapSpace, OldArenaPageObjectCursor, OldArenaSourceBlockSelection, OldPageMeta,
+    OldPageSummary,
 };
 
 #[cfg(test)]

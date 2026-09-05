@@ -422,7 +422,11 @@ fn select_whole_blocks(
         })
         .collect();
     selection.candidate_pages = order.iter().map(|&i| blocks[i].pages.len()).sum();
-    selection.skipped_pinned_pages = blocks.iter().filter(|b| b.pinned).map(|b| b.pages.len()).sum();
+    selection.skipped_pinned_pages = blocks
+        .iter()
+        .filter(|b| b.pinned)
+        .map(|b| b.pages.len())
+        .sum();
     // Cheapest to empty first; among equals prefer the one that gives back the
     // most dead bytes.
     order.sort_unstable_by(|&a, &b| {
@@ -445,9 +449,8 @@ fn select_whole_blocks(
                 selection.selected_pages = selection.selected_pages.saturating_add(1);
             }
         }
-        selection.selected_live_bytes = selection
-            .selected_live_bytes
-            .saturating_add(acc.live_bytes);
+        selection.selected_live_bytes =
+            selection.selected_live_bytes.saturating_add(acc.live_bytes);
         selection.selected_reclaimable_bytes = selection
             .selected_reclaimable_bytes
             .saturating_add(acc.dead_bytes);

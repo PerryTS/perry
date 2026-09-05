@@ -41,7 +41,11 @@ static GLOBAL: std::alloc::System = std::alloc::System;
 // `alloc-census` builds wrap whichever allocator the target would have used.
 // The wrapper is the only way to attribute native-heap bytes to a call site,
 // and it is compiled out of every build that does not ask for it.
-#[cfg(all(target_pointer_width = "64", feature = "alloc-mimalloc", feature = "alloc-census"))]
+#[cfg(all(
+    target_pointer_width = "64",
+    feature = "alloc-mimalloc",
+    feature = "alloc-census"
+))]
 #[global_allocator]
 static GLOBAL: alloc_census::CensusAlloc<mimalloc::MiMalloc> =
     alloc_census::CensusAlloc(mimalloc::MiMalloc);
@@ -59,11 +63,11 @@ static GLOBAL: alloc_census::CensusAlloc<std::alloc::System> =
 pub mod per_test_global;
 
 pub mod abi_trampoline;
-#[cfg(feature = "alloc-census")]
-pub mod alloc_census;
 pub mod agent;
 #[cfg(test)]
 mod agent_dispatch_tests;
+#[cfg(feature = "alloc-census")]
+pub mod alloc_census;
 pub mod app_group;
 pub mod arena;
 pub mod array;

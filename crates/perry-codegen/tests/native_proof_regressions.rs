@@ -7479,9 +7479,21 @@ fn tdz_numeric_const_read_is_not_constant_folded() {
     ];
 
     let ir = String::from_utf8(compile_module(&fixture, empty_opts()).unwrap()).unwrap();
+    // The property under test is that the read goes through a BOX — which is
+    // what carries the TDZ check — not which helper spells it. #9721 added
+    // `js_box_get_bits_named`, which additionally passes the binding name so
+    // the thrown ReferenceError can identify it. Both variants perform the same
+    // check, so pinning only the older spelling made a strictly better error
+    // message look like a lost guard.
     assert!(
-        ir.contains("call i64 @js_box_get_bits(i64 "),
+        ir.contains("call i64 @js_box_get_bits(i64 ")
+            || ir.contains("call i64 @js_box_get_bits_named(i64 "),
         "the pre-declaration read must retain the TDZ box check:\n{ir}"
+    );
+    // And the read must not be folded to the value the later `Let` installs.
+    assert!(
+        !ir.contains("double 4.200000e+01"),
+        "the pre-declaration read must NOT be constant-folded to its later value:\n{ir}"
     );
 }
 
