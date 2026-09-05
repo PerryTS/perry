@@ -552,6 +552,43 @@ mod descriptor_tests_8067 {
     }
 
     #[test]
+    fn interning_appends_each_new_descriptor_to_the_family_exactly_once() {
+        // `shape_descriptor_ensure` appends a FRESHLY allocated id with
+        // `IdList::append_unchecked`, skipping the membership scan whose cost
+        // is linear in the family's history. The scan is skippable only
+        // because `alloc_shape_id` never reuses a value; this pins the
+        // observable consequence — every distinct descriptor for one keys
+        // array appears in its family exactly once, in birth order — so a
+        // later change that feeds a recycled id through the fresh path fails
+        // here instead of silently duplicating a family entry.
+        let _lock = crate::gc::global_side_table_test_lock();
+        let keys = 0x8067_0000_0000_2900usize;
+        let mut born = Vec::new();
+        for n in 1..=6u32 {
+            born.push(
+                shape_descriptor_ensure(keys as *const ArrayHeader, n, n)
+                    .expect("shape range unexpectedly exhausted"),
+            );
+        }
+        assert_eq!(
+            test_shape_ids_for_keys(keys),
+            born,
+            "each new descriptor is appended once, in birth order"
+        );
+        // Re-interning the same facts must hit the accelerator and add nothing.
+        for (i, n) in (1..=6u32).enumerate() {
+            assert_eq!(
+                shape_descriptor_ensure(keys as *const ArrayHeader, n, n).unwrap(),
+                born[i],
+                "an existing descriptor must be reused, not re-appended"
+            );
+        }
+        assert_eq!(test_shape_ids_for_keys(keys), born);
+
+        test_drop_shape_descriptors(keys);
+    }
+
+    #[test]
     fn a_foreign_agent_id_misses_instead_of_aliasing_same_address() {
         let _lock = crate::gc::global_side_table_test_lock();
         let fake_keys = 0x8067_0000_0000_1000usize;

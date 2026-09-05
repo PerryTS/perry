@@ -401,7 +401,9 @@ pub(crate) unsafe fn rekey_stable_tombstone_shape_after_squeeze(
         .get_mut(&record.keys)
         .is_some_and(|ids| ids.replace(old_id, new_id));
     if !replaced {
-        inner.family_push_back(record.keys, new_id);
+        // `new_id` came from `alloc_shape_id` a few lines above and is in no
+        // list yet (see `IdList::append_unchecked`).
+        inner.family_append_fresh(record.keys, new_id);
     }
     inner.indices.remove(&(record.keys as usize));
     drop(inner);
