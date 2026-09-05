@@ -58,7 +58,6 @@ pub(crate) fn test_transition_cache_root() -> usize {
 #[cfg(test)]
 pub(crate) fn test_clear_transition_cache_root() {
     super::TRANSITION_CACHE_YOUNG.with(|log| log.borrow_mut().clear());
-    super::SHAPE_CACHE_YOUNG.with(|log| log.borrow_mut().clear());
     with_transition_cache(|t| unsafe {
         for i in 0..TRANSITION_CACHE_SIZE {
             // GC_STORE_AUDIT(ROOT): test clear writes non-pointer sentinels into scanned TRANSITION_CACHE_GLOBAL roots.
