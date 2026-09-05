@@ -143,7 +143,9 @@ pub extern "C" fn perry_ui_stack_set_distribution(handle: i64, distribution: f64
 }
 
 #[no_mangle]
-pub extern "C" fn perry_ui_widget_reorder_child(_parent: i64, _child: i64, _index: i64) {}
+pub extern "C" fn perry_ui_widget_reorder_child(parent: i64, from: f64, to: f64) {
+    widgets::reorder_child(parent, from as i64, to as i64);
+}
 
 // perry_debug_trace_init and perry_debug_trace_init_done are provided by perry_runtime
 
