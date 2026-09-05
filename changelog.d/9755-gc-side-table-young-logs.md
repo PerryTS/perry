@@ -3,9 +3,9 @@
 - **Minor collections no longer walk every runtime side table.** A copying
   minor's three root-scan passes — and a budgeted minor's initial root scan
   and final remark — visited every entry of the closure dynamic-prop tables,
-  the string-keyed descriptor tables, the shape family/slot-index maps, the
-  transition cache and the shape cache on every collection, to discover that
-  nothing in them pointed at the nursery. On the compiled claude-code TUI
+  the string-keyed descriptor tables, the shape family/slot-index maps and
+  the transition cache on every collection, to discover that nothing in them
+  pointed at the nursery. On the compiled claude-code TUI
   that was ~35k shape families, ~120k descriptors and ~13k closure owners
   per walk, 41 minors per streamed reply, all reporting `slots=0`: 34–56 ms
   of scanner time per minor.
@@ -25,6 +25,13 @@
   a red test rather than a silently collected object. `PERRY_GC_DIAG=1`
   prints `[gc-young-log]` rows (logged / visited / kept / table size) per
   table and cycle.
+
+  The **shape cache** was measured and deliberately left on its plain walk.
+  Its canonical keys arrays are allocated in the longlived arena, which
+  `addr_is_minor_relevant` must answer `true` for, so no entry ever leaves a
+  log there: on the claude-code TUI the log named 100 % of the table in every
+  one of 107 collections (0 % skipped) and cost **35 % more** than the walk it
+  replaced. The four tables above skip 75–93 %.
 
 - **The post-minor remembered-set coverage restore is proportional to what
   the dirty scan could not cover.** `restore_surviving_dirty_coverage`
