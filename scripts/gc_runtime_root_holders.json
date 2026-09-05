@@ -131,6 +131,12 @@
       "why": "HashSet of perry-ffi registry handle ids already found stale, kept only to log each once. Registry ids are indices into the ffi DashMap, not heap addresses."
     },
     {
+      "file": "crates/perry-runtime/src/alloc_census.rs",
+      "name": "CREDIT",
+      "verdict": "not_a_gc_pointer",
+      "why": "#9771: bytes remaining to allocate before the next native-heap sample. A `Cell<i64>` counter, const-initialised so the TLS access itself never allocates."
+    },
+    {
       "file": "crates/perry-runtime/src/async_hooks.rs",
       "name": "ASYNC_HOOK_HANDLES",
       "verdict": "not_a_gc_pointer",
@@ -298,6 +304,12 @@
       "name": "TEST_PATH_OVERRIDE",
       "verdict": "test_only",
       "why": "Declared under cfg(test); holds an explicitly leaked Rust path string used by the isolated census unit tests."
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/oldgen_defrag.rs",
+      "name": "LAST_IDLE_PREDICTED_RELEASE",
+      "verdict": "not_a_gc_pointer",
+      "why": "#9772: releasable block BYTES the last idle selection promised \u2014 a size, not an address. A `Cell<usize>` compared against what the collection actually released."
     },
     {
       "file": "crates/perry-runtime/src/gc/trace.rs",
