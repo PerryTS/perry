@@ -8,7 +8,8 @@
 //! as a **numeric-array pointer local** when static analysis proves that for
 //! the local's entire lifetime:
 //!
-//! 1. every element slot in `[0, length)` holds canonical raw-f64 number bits
+//! 1. the initial length fits in the allocated backing store, and every
+//!    element slot in `[0, length)` holds canonical raw-f64 number bits
 //!    or `TAG_HOLE` (never a NaN-boxed pointer/string/bool/undefined), and
 //! 2. `length` never shrinks below the allocation length, and
 //! 3. the binding can never go stale (no growth path exists that fails to
@@ -22,7 +23,8 @@
 //! ## Why it is sound (provenance + containment + density)
 //!
 //! * **Provenance**: the local is initialized by exactly one `Stmt::Let` whose
-//!   init is `new Array(<static n>)` (runtime hole-fills every slot, sets
+//!   init is `new Array(<static n>)` within the runtime's fresh dense limit
+//!   (runtime hole-fills every slot, sets
 //!   `GC_ARRAY_RAW_F64_HOLES`, and stamps the pointer-free GC layout —
 //!   `js_array_constructor_single`) or an EMPTY array literal `[]` (length 0;
 //!   nothing to observe until a numeric push). Density: `new Array(n)` ⇒
@@ -382,6 +384,7 @@ struct UseWalk<'a> {
 impl<'a> UseWalk<'a> {
     /// Resolve a static non-negative array-allocation length: an integer
     /// literal or a module-level `const` recorded in `compile_time_constants`.
+    /// The length must also be backed by dense storage at allocation time.
     fn static_alloc_length(&self, e: &Expr) -> Option<i64> {
         let value = match e {
             Expr::Integer(v) => *v as f64,
@@ -389,7 +392,11 @@ impl<'a> UseWalk<'a> {
             Expr::LocalGet(id) => *self.compile_time_constants.get(id)?,
             _ => return None,
         };
-        if !value.is_finite() || value.fract() != 0.0 || !(0.0..=16_000_000.0).contains(&value) {
+        // #9784: match MAX_FRESH_DENSE_ARRAY_LENGTH in runtime/array/alloc.rs.
+        // Above this limit `new Array(n)` has logical length n but only a
+        // small backing store. A length proof cannot justify an unchecked
+        // slot access there; the guarded tiers must grow/consult storage.
+        if !value.is_finite() || value.fract() != 0.0 || !(0.0..=1_000_000.0).contains(&value) {
             return None;
         }
         Some(value as i64)
@@ -1021,6 +1028,30 @@ mod tests {
         let fact = empty.get(&ARR).expect("[] should promote");
         assert_eq!(fact.density, NumArrayDensity::Dense);
         assert_eq!(fact.proven_initial_length, 0);
+    }
+
+    #[test]
+    fn fresh_array_proof_requires_allocated_storage_for_the_initial_length() {
+        for (length, should_promote) in [(1_000_000, true), (1_000_001, false)] {
+            assert_eq!(is_promoted(&[alloc_let(length)]), should_promote);
+
+            // Module-level constants take a separate provenance input from
+            // literal lengths; both must respect the runtime allocation cap.
+            let stmts = [let_with(
+                ARR,
+                num_array_ty(),
+                new_array(vec![Expr::LocalGet(OTHER)]),
+            )];
+            let collected = collect_num_array_locals(
+                &stmts,
+                &HashSet::new(),
+                &HashMap::new(),
+                &facts_for(vec![]),
+                &HashMap::from([(OTHER, length as f64)]),
+                &HashSet::new(),
+            );
+            assert_eq!(collected.contains_key(&ARR), should_promote);
+        }
     }
 
     #[test]
