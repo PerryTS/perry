@@ -623,8 +623,7 @@ unsafe fn array_prototype_to_string_override(value: f64) -> ArrayToStringOutcome
     // collector and re-read its address after every allocation.
     let scope = crate::gc::RuntimeHandleScope::new();
     let value_handle = scope.root_nanbox_f64(value);
-    let key_handle =
-        scope.root_string_ptr(crate::string::canonical_key(b"toString"));
+    let key_handle = scope.root_string_ptr(crate::string::canonical_key(b"toString"));
     let proto = crate::object::builtin_prototype_value("Array");
     let proto_handle = scope.root_nanbox_f64(proto);
     let proto_bits = proto_handle.get_nanbox_f64().to_bits();
@@ -690,8 +689,7 @@ pub(crate) fn call_array_prototype_to_string_method(
     unsafe {
         let scope = crate::gc::RuntimeHandleScope::new();
         let receiver_handle = scope.root_nanbox_f64(value);
-        let key_handle =
-            scope.root_string_ptr(crate::string::canonical_key(b"toString"));
+        let key_handle = scope.root_string_ptr(crate::string::canonical_key(b"toString"));
         let prototype_handle =
             scope.root_nanbox_f64(crate::object::builtin_prototype_value("Array"));
         let prototype_bits = prototype_handle.get_nanbox_f64().to_bits();
