@@ -403,10 +403,25 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
     # the tombstone-delete work; `_with_generation` is a thin forwarding
     # wrapper. The authority ordering is checked where the writes are.
     ensure = function_body(shapes, "shape_descriptor_ensure_with_holes")
+    # The property is that the by-id descriptor is installed BEFORE the reverse
+    # accelerator points at it — never which append spells it. #9768 added
+    # `family_append_fresh`, which is `family_push_back` minus a membership scan
+    # that is dead work for an id `alloc_shape_id` just minted and never reuses.
+    # Both append to the same family list, so pinning only the older name made a
+    # strictly cheaper append look like a lost ordering guarantee.
+    ensure_append = next(
+        (m for m in ("family_append_fresh", "family_push_back") if m in ensure),
+        None,
+    )
+    if ensure_append is None:
+        raise CensusError(
+            "shape descriptor authority surface missing: family append in "
+            "shape_descriptor_ensure_with_holes"
+        )
     assert_before(
         ensure,
         "slab_mut().insert",
-        "family_push_back",
+        ensure_append,
         "by-id descriptor before reverse accelerator",
     )
     sync = function_body(shapes, "publish_object_shape_from")

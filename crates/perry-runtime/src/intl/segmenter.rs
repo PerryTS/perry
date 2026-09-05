@@ -146,20 +146,25 @@ unsafe fn build_shared_segment_keys(shape: SegmentRecordShape) {
             keys_h.across_mut::<crate::array::ArrayHeader, _>(|| interned_key_bits(name));
         handles.push(scope.root_nanbox_u64(bits));
     }
-    let keys = keys_h.get_raw_mut_ptr::<crate::array::ArrayHeader>();
+    // Every call below is non-allocating (`store_array_slot` writes one slot;
+    // `rebuild_array_layout_exact` only clears and recomputes layout metadata),
+    // so the pointer is scoped rather than carried across a collection point.
+    keys_h.with_mut_ptr::<crate::array::ArrayHeader, _>(|keys| {
+        (*keys).length = n as u32;
+        for (i, h) in handles.iter().enumerate() {
+            crate::array::store_array_slot(keys, i, h.get_nanbox_u64());
+        }
+        crate::array::rebuild_array_layout_exact(keys);
 
-    (*keys).length = n as u32;
-    for (i, h) in handles.iter().enumerate() {
-        crate::array::store_array_slot(keys, i, h.get_nanbox_u64());
-    }
-    crate::array::rebuild_array_layout_exact(keys);
+        // Copy-on-write marker. Without it, `record.extra = 1` on ONE record would
+        // append to the array every other record shares.
+        crate::gc::mark_shape_shared(keys as *mut u8);
 
-    // Copy-on-write marker. Without it, `record.extra = 1` on ONE record would
-    // append to the array every other record shares.
-    crate::gc::mark_shape_shared(keys as *mut u8);
-
-    SEGMENT_RECORD_KEYS.with(|c| (*c.get())[shape as usize] = keys);
-    crate::gc::runtime_write_barrier_root_raw_ptr(keys);
+        // The table this publishes into is scanned by
+        // `scan_segment_record_keys_roots_mut`, registered in `gc/mod.rs`.
+        SEGMENT_RECORD_KEYS.with(|c| (*c.get())[shape as usize] = keys);
+        crate::gc::runtime_write_barrier_root_raw_ptr(keys);
+    });
 }
 
 /// GC root scanner for the shared segment-record keys arrays. See
