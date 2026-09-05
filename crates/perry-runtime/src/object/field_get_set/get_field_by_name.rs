@@ -928,25 +928,16 @@ pub extern "C" fn js_object_get_field_by_name(
             return JSValue::undefined();
         }
     }
-    // A primitive string receiver inherits `.constructor` from String.prototype:
-    // `"x".constructor === String` (test262 language/types/string/S8.4_A9/A12).
-    // The common string members (`.length`, indices, methods) are served by the
-    // codegen fast paths and never reach this generic slow path, so only the
-    // inherited `constructor` read needs routing here; resolve it to the same
-    // global `String` value bare-`String` yields so identity holds.
-    {
-        let bits = obj as u64;
-        if !key.is_null() && crate::value::JSValue::from_bits(bits).is_any_string() {
-            unsafe {
-                let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-                let key_len = (*key).byte_len as usize;
-                if std::slice::from_raw_parts(key_ptr, key_len) == b"constructor" {
-                    let ctor =
-                        super::super::js_get_global_this_builtin_value(b"String".as_ptr(), 6);
-                    return JSValue::from_bits(ctor.to_bits());
-                }
-            }
-        }
+    // A named read on a primitive string uses the same own/prototype lookup
+    // as a computed read, including SSO receivers and function identity.
+    if crate::value::JSValue::from_bits(obj as u64).is_any_string() {
+        return JSValue::from_bits(
+            crate::string::js_string_index_get_boxed(
+                f64::from_bits(obj as u64),
+                crate::value::js_nanbox_string(key as i64),
+            )
+            .to_bits(),
+        );
     }
     // Native module registry handles can arrive here either as raw small
     // integers or as POINTER_TAG-boxed small integers. Route them before any
@@ -1637,34 +1628,6 @@ pub extern "C" fn js_object_get_field_by_name(
                     }
                 }
             }
-        }
-    }
-    // SSO property access (v0.5.213 Step 1 gate). The codegen inline
-    // `.length` path routes SHORT_STRING_TAG receivers here because
-    // it doesn't yet know about the SSO tag. Handle `.length` by
-    // reading the length byte directly from the NaN-box payload.
-    // Other property accesses on an SSO string (e.g. `.charAt` via
-    // `[0]`, `.slice`) aren't yet routed here — handled by the
-    // string method dispatch in a future migration step; today they
-    // fall through to "undefined" which matches the behavior for
-    // string-valued property access on untyped locals in general.
-    {
-        let obj_bits = obj as u64;
-        if (obj_bits & crate::value::TAG_MASK) == crate::value::SHORT_STRING_TAG {
-            if !key.is_null() {
-                unsafe {
-                    let key_ptr =
-                        (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-                    let key_len = (*key).byte_len as usize;
-                    let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
-                    if key_bytes == b"length" {
-                        let len = (obj_bits & crate::value::SHORT_STRING_LEN_MASK)
-                            >> crate::value::SHORT_STRING_LEN_SHIFT;
-                        return JSValue::number(len as f64);
-                    }
-                }
-            }
-            return JSValue::undefined();
         }
     }
     // #1670: Web Streams handles are returned as `id as f64` (a normal

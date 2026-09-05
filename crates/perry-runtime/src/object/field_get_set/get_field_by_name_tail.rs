@@ -1002,14 +1002,6 @@ pub(crate) fn get_field_by_name_object_tail(
                     let s = obj as *const crate::StringHeader;
                     return JSValue::number((*s).utf16_len as f64);
                 }
-                // A primitive string inherits `.constructor` from String.prototype:
-                // `"x".constructor === String` (test262 language/types/string/
-                // S8.4_A9/A12). Resolve to the same global `String` value bare-
-                // `String` yields so identity holds — mirrors the Array branch above.
-                if key_bytes == b"constructor" {
-                    let v = js_get_global_this_builtin_value(b"String".as_ptr(), 6);
-                    return JSValue::from_bits(v.to_bits());
-                }
                 if let Some((kind, asym_type)) = crate::buffer::asymmetric_key_meta(obj as usize) {
                     if key_bytes == b"type" {
                         let label = if kind == 1 {
@@ -1069,7 +1061,13 @@ pub(crate) fn get_field_by_name_object_tail(
                     }
                 }
             }
-            return JSValue::undefined();
+            return JSValue::from_bits(
+                crate::string::js_string_index_get_boxed(
+                    crate::value::js_nanbox_string(obj as i64),
+                    crate::value::js_nanbox_string(key as i64),
+                )
+                .to_bits(),
+            );
         }
         // Maps/Sets: `.size`, expando keys, and prototype member values —
         // see `map_set_receiver.rs` (extracted for the file-size gate).
