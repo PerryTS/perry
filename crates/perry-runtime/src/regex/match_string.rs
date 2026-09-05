@@ -85,7 +85,7 @@ pub extern "C" fn js_string_match(
         let global = (*re).global;
         let has_indices = (*re).has_indices;
 
-        if let Some(repeat_matcher) = lookup_repeat_matcher(re) {
+        if let Some(repeat_matcher) = lookup_repeat_matcher_for(re, str_data, 0) {
             if global {
                 let matches: Vec<OwnedCapture> = repeat_matcher
                     .regex

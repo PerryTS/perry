@@ -97,7 +97,7 @@ unsafe fn materialize_match_all_results(
     let search_start = utf16_index_to_byte(str_data, start_char_index);
 
     let mut owned: Vec<OwnedMatchAllData> = Vec::new();
-    if let Some(repeat_matcher) = super::lookup_repeat_matcher(re) {
+    if let Some(repeat_matcher) = super::lookup_repeat_matcher_for(re, str_data, search_start) {
         // `regress`'s own iterator is positional and already advances one
         // position past a zero-width match, which is the ECMAScript rule.
         for matched in repeat_matcher.regex.find_from(str_data, search_start) {

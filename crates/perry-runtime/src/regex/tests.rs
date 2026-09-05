@@ -905,7 +905,10 @@ fn regex_cache_capped_and_prior_headers_survive_eviction() {
 
     // Flood the cache with distinct patterns — far past the cap.
     for i in 0..(REGEX_CACHE_MAX_ENTRIES * 2 + 10) {
-        let _ = get_or_compile_regex(&format!("cachefill{i}[a-z]+"), "");
+        let _ = get_or_compile_regex(
+            &Arc::from(format!("cachefill{i}[a-z]+").as_str()),
+            &Arc::from(""),
+        );
     }
     let std_len = REGEX_CACHE.with(|c| c.borrow().len());
     assert!(
@@ -915,7 +918,10 @@ fn regex_cache_capped_and_prior_headers_survive_eviction() {
 
     // Flood the fancy cache as well (each pattern rejected by the std engine).
     for i in 0..(REGEX_CACHE_MAX_ENTRIES + 10) {
-        let _ = get_or_compile_regex(&format!("(?<=fill{i})x"), "");
+        let _ = get_or_compile_regex(
+            &Arc::from(format!("(?<=fill{i})x").as_str()),
+            &Arc::from(""),
+        );
     }
     let fancy_len = FANCY_CACHE.with(|c| c.borrow().len());
     assert!(
@@ -925,7 +931,7 @@ fn regex_cache_capped_and_prior_headers_survive_eviction() {
 
     // Quantified captures populate the ECMAScript RepeatMatcher cache.
     for i in 0..(REGEX_CACHE_MAX_ENTRIES + 10) {
-        let _ = get_or_compile_regex(&format!("(repeat{i})*"), "");
+        let _ = get_or_compile_regex(&Arc::from(format!("(repeat{i})*").as_str()), &Arc::from(""));
     }
     let repeat_len = REPEAT_MATCHER_CACHE.with(|c| c.borrow().len());
     assert!(
@@ -1828,5 +1834,51 @@ fn a_single_program_cache_clear_cannot_disarm_a_lookbehind_literal() {
         subject.with_const_ptr::<StringHeader, _>(|s| js_regexp_test(cold, s)),
         1,
         "the literal must still match after an unrelated cache reached capacity"
+
+/// The backtracking cliff: a capture group under a quantifier takes a pattern
+/// off the linear engine, and the ECMAScript backtracker has no step budget.
+/// `/^(a+)+$/.test("a"*28 + "!")` measured 16.5 s against 4.8 s for node and
+/// 0 ms for the identical-language `/^(?:a+)+$/`.
+///
+/// The linear program proves the answer in O(n) — the two engines accept the
+/// same language and disagree only about capture ASSIGNMENT — so the
+/// backtracker must not be entered for a subject the linear engine has already
+/// ruled out. This test would take minutes without that gate.
+#[test]
+fn quantified_capture_pattern_does_not_backtrack_on_a_non_matching_subject() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let pattern = scope.root_string_ptr(make_string("^(a+)+$"));
+    let flags = scope.root_string_ptr(make_string(""));
+    let re = pattern.with_mut_ptr::<StringHeader, _>(|pattern| {
+        flags.with_mut_ptr::<StringHeader, _>(|flags| js_regexp_new(pattern, flags))
+    });
+    // The pattern really is on the backtracker — that is the premise.
+    assert!(
+        lookup_repeat_matcher(re).is_some(),
+        "a capture under a quantifier must route to the ECMAScript matcher"
+    );
+
+    let hay = format!("{}!", "a".repeat(40));
+    let subject = scope.root_string_ptr(make_string(&hay));
+    let started = std::time::Instant::now();
+    assert_eq!(
+        subject.with_const_ptr::<StringHeader, _>(|s| js_regexp_test(re, s)),
+        0,
+        "no match: the subject ends in '!'"
+    );
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(2),
+        "a non-matching subject must not be handed to the backtracker \
+         (took {:?} for 40 characters)",
+        started.elapsed()
+    );
+
+    // A subject that DOES match still goes through the backtracker and still
+    // reports the spec's captures.
+    let good = scope.root_string_ptr(make_string("aaaa"));
+    assert_eq!(
+        good.with_const_ptr::<StringHeader, _>(|s| js_regexp_test(re, s)),
+        1
     );
 }
