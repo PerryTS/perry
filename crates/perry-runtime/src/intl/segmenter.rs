@@ -65,21 +65,195 @@ unsafe fn segmenter_input_text(ptr: *const StringHeader) -> String {
     text
 }
 
+/// The two shapes a segment record can have. ECMA-402 18.5.1 attaches
+/// `isWordLike` only to word granularity, so there are exactly two.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum SegmentRecordShape {
+    /// `{ segment, index, input }`
+    Plain = 0,
+    /// `{ segment, index, input, isWordLike }`
+    WordLike = 1,
+}
+
+/// Every shape, for the root-scanner tests.
+#[cfg(test)]
+pub(crate) const SEGMENT_RECORD_SHAPE_LIST: [SegmentRecordShape; SEGMENT_RECORD_SHAPES] =
+    [SegmentRecordShape::Plain, SegmentRecordShape::WordLike];
+
+const SEGMENT_RECORD_SHAPES: usize = 2;
+
+crate::perry_thread_local! {
+    /// Per-thread shared keys arrays for segment records, indexed by
+    /// [`SegmentRecordShape`].
+    ///
+    /// Same construction, and the same reason, as `iter_result`'s
+    /// `ITER_RESULT_KEYS` (#7564): `set_field`-by-name clones an object's key
+    /// list before writing, so building a record property-by-property gave
+    /// EVERY record its own keys array — a fresh array address per record,
+    /// therefore a fresh ShapeId per record (`shape_id_for_keys_ensure` keys
+    /// the shape table on the array's address), therefore a guaranteed inline
+    /// -cache miss on every `.segment` / `.index` / `.input` read and one more
+    /// descriptor in the shape table per segment. On the claude-code TUI,
+    /// whose text measurement segments every string it renders, that was
+    /// 175,797 misses on `.segment` alone in one 400-character reply
+    /// (`PERRY_IC_DIAG`). One shared array per shape means one ShapeId for
+    /// every segment record in the program.
+    ///
+    /// Per-thread and not process-global for the same reason the intern table
+    /// is: each `perry/thread` worker has its own arena.
+    ///
+    /// GC-visible through [`scan_segment_record_keys_roots_mut`], which both
+    /// MARKS (nothing else references these arrays; the records that use them
+    /// are short-lived and the cache outlives them) and REWRITES them.
+    static SEGMENT_RECORD_KEYS: std::cell::UnsafeCell<[*mut crate::array::ArrayHeader; SEGMENT_RECORD_SHAPES]> =
+        std::cell::UnsafeCell::new([std::ptr::null_mut(); SEGMENT_RECORD_SHAPES]);
+}
+
+#[inline(always)]
+fn cached_segment_keys(shape: SegmentRecordShape) -> *mut crate::array::ArrayHeader {
+    SEGMENT_RECORD_KEYS.with(|c| unsafe { (*c.get())[shape as usize] })
+}
+
+/// NaN-boxed bits of an interned constant property name.
+#[inline]
+fn interned_key_bits(bytes: &[u8]) -> u64 {
+    JSValue::string_ptr(crate::string::intern_ascii_literal(bytes) as *mut _).bits()
+}
+
+/// Build this thread's shared keys array for `shape`, if it has none.
+///
+/// Cold and at most twice per thread for the program's lifetime, so it is
+/// written for obviousness rather than speed: every intermediate is rooted
+/// across every allocation that follows it. Interning makes the names
+/// pointer-identical to the `"segment"` / `"index"` / `"input"` the READ side
+/// hashes, and gives them a second independent root in the intern table.
+#[cold]
+unsafe fn build_shared_segment_keys(shape: SegmentRecordShape) {
+    const NAMES: [&[u8]; 4] = [b"segment", b"index", b"input", b"isWordLike"];
+    let n = match shape {
+        SegmentRecordShape::Plain => 3usize,
+        SegmentRecordShape::WordLike => 4usize,
+    };
+
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let keys_h = scope.root_raw_mut_ptr(js_array_alloc(n as u32));
+
+    // Each intern ALLOCATES on a first-call-per-thread miss, so the array's
+    // address is taken back out of its handle ACROSS them.
+    let mut handles = Vec::with_capacity(n);
+    for name in NAMES.iter().take(n) {
+        let (bits, _) = keys_h.across_mut::<crate::array::ArrayHeader, _>(|| interned_key_bits(name));
+        handles.push(scope.root_nanbox_u64(bits));
+    }
+    let keys = keys_h.get_raw_mut_ptr::<crate::array::ArrayHeader>();
+
+    (*keys).length = n as u32;
+    for (i, h) in handles.iter().enumerate() {
+        crate::array::store_array_slot(keys, i, h.get_nanbox_u64());
+    }
+    crate::array::rebuild_array_layout_exact(keys);
+
+    // Copy-on-write marker. Without it, `record.extra = 1` on ONE record would
+    // append to the array every other record shares.
+    crate::gc::mark_shape_shared(keys as *mut u8);
+
+    SEGMENT_RECORD_KEYS.with(|c| (*c.get())[shape as usize] = keys);
+    crate::gc::runtime_write_barrier_root_raw_ptr(keys);
+}
+
+/// GC root scanner for the shared segment-record keys arrays. See
+/// `SEGMENT_RECORD_KEYS`.
+pub fn scan_segment_record_keys_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    SEGMENT_RECORD_KEYS.with(|c| unsafe {
+        for slot in (*c.get()).iter_mut() {
+            visitor.visit_raw_mut_ptr_slot(slot);
+        }
+    });
+}
+
+/// Drop the cached arrays. The unit-test harness resets arenas between tests
+/// while thread-locals persist, which would leave these pointing into a
+/// deallocated block.
+#[cfg(test)]
+pub(crate) fn populate_shared_segment_keys_for_test() -> Vec<*mut crate::array::ArrayHeader> {
+    for shape in SEGMENT_RECORD_SHAPE_LIST {
+        if cached_segment_keys(shape).is_null() {
+            unsafe { build_shared_segment_keys(shape) };
+        }
+    }
+    SEGMENT_RECORD_SHAPE_LIST
+        .iter()
+        .map(|shape| cached_segment_keys(*shape))
+        .collect()
+}
+
+#[cfg(test)]
+pub(crate) fn shared_segment_keys_peek_for_test(
+    shape: SegmentRecordShape,
+) -> *mut crate::array::ArrayHeader {
+    cached_segment_keys(shape)
+}
+
+#[cfg(test)]
+pub(crate) fn reset_shared_segment_keys_for_test() {
+    SEGMENT_RECORD_KEYS.with(|c| unsafe {
+        (*c.get()) = [std::ptr::null_mut(); SEGMENT_RECORD_SHAPES];
+    });
+}
+
 pub(crate) fn make_segment_record(
     segment_value: f64,
     index: u32,
     input_value: f64,
     word_like: Option<bool>,
 ) -> f64 {
-    let obj = js_object_alloc(0, 4);
-    set_field(obj, "segment", segment_value);
-    // `index` is a plain Number (UTF-16 code-unit offset into the input).
-    set_field(obj, "index", index as f64);
-    set_field(obj, "input", input_value);
-    if let Some(word_like) = word_like {
-        set_field(obj, "isWordLike", bool_value(word_like));
+    let shape = if word_like.is_some() {
+        SegmentRecordShape::WordLike
+    } else {
+        SegmentRecordShape::Plain
+    };
+    let n = match shape {
+        SegmentRecordShape::Plain => 3usize,
+        SegmentRecordShape::WordLike => 4usize,
+    };
+    unsafe {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        // Both caller-supplied values are heap pointers; the allocations below
+        // can collect and move them.
+        let segment_h = scope.root_nanbox_f64(segment_value);
+        let input_h = scope.root_nanbox_f64(input_value);
+
+        // Fill the keys cache BEFORE the record exists, so its cold
+        // allocations cannot invalidate a pointer already being held.
+        if cached_segment_keys(shape).is_null() {
+            build_shared_segment_keys(shape);
+        }
+
+        let obj_h = scope.root_nanbox_f64(js_nanbox_pointer(
+            js_object_alloc(0, n as u32) as i64,
+        ));
+        // Everything below re-reads through storage the collector rewrites:
+        // the record from its handle, the keys array from the scanned
+        // thread-local. No address here predates the allocation above.
+        let obj = || crate::js_nanbox_get_pointer(obj_h.get_nanbox_f64()) as *mut ObjectHeader;
+        crate::object::js_object_set_keys(obj(), cached_segment_keys(shape));
+        crate::object::js_object_set_field(
+            obj(),
+            0,
+            JSValue::from_bits(segment_h.get_nanbox_f64().to_bits()),
+        );
+        // `index` is a plain Number (UTF-16 code-unit offset into the input).
+        crate::object::js_object_set_field(obj(), 1, JSValue::number(index as f64));
+        crate::object::js_object_set_field(
+            obj(),
+            2,
+            JSValue::from_bits(input_h.get_nanbox_f64().to_bits()),
+        );
+        if let Some(word_like) = word_like {
+            crate::object::js_object_set_field(obj(), 3, JSValue::bool(word_like));
+        }
+        js_nanbox_pointer(obj() as i64)
     }
-    js_nanbox_pointer(obj as i64)
 }
 
 /// Build the segment list for `input` under `granularity`. The backing array

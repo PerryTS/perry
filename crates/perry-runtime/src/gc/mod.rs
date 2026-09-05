@@ -1099,6 +1099,9 @@ pub fn gc_init() {
     // REWRITES: an evacuating collection moves them like any other array, and
     // the thread-local slot is the only place the new address can be recorded.
     reg_scanner!(crate::iter_result::scan_iter_result_keys_roots_mut);
+    // Same shape as the line above: the shared keys arrays behind
+    // `Intl.Segmenter`'s segment records are referenced only by this cache.
+    reg_scanner!(crate::intl::segmenter::scan_segment_record_keys_roots_mut);
     reg_scanner!(small_int_cache_mutable_root_scanner);
     reg_scanner!(concat_memo_mutable_root_scanner);
     reg_scanner!(crate::builtins::scan_console_log_singleton_roots_mut);
