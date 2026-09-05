@@ -1427,6 +1427,10 @@ mod own_data_ic_tests {
 
     #[test]
     fn composed_symbol_field_cache_reloads_mutated_final_slot() {
+        crate::test_support::isolated_test(composed_symbol_field_cache_body);
+    }
+
+    fn composed_symbol_field_cache_body() {
         let _global = crate::gc::global_side_table_test_lock();
         unsafe {
             crate::gc::gc_suppress();

@@ -511,6 +511,10 @@ fn foreign_pointer_release_is_a_total_noop() {
 /// asyncpipe_big).
 #[test]
 fn completed_activation_residue_is_bounded_not_linear() {
+    crate::test_support::isolated_test(completed_activation_residue_body);
+}
+
+fn completed_activation_residue_body() {
     super::test_clear_box_registry();
     const TURNS: usize = 100;
     const ACTIVATIONS_PER_TURN: usize = 20;
@@ -544,22 +548,18 @@ fn completed_activation_residue_is_bounded_not_linear() {
         flush_released_boxes();
     }
     let (a1, r1, _) = box_release_stats();
-    // The counters are process-global; sibling tests on other threads
-    // also allocate boxes, so assert lower bounds and give the residue
-    // bound slack instead of demanding exact equality.
+    // These process-global counters now measure only this fixture, so a
+    // sibling's allocations cannot hide reuse or push residue over the bound.
     let total_allocs = (a1 - a0) as usize;
     let residue = total_allocs.saturating_sub((r1 - r0) as usize);
     let own_allocs = TURNS * ACTIVATIONS_PER_TURN * CELLS_PER_ACTIVATION;
-    assert!(
-        total_allocs >= own_allocs,
-        "every lifecycle allocates its frame ({total_allocs} < {own_allocs})"
+    assert_eq!(
+        total_allocs, own_allocs,
+        "every lifecycle allocates exactly its frame"
     );
     // One turn's working set (the first turn mints real cells; every
-    // later turn reuses them), plus generous slack for whatever the
-    // parallel sibling tests allocate (they use a handful of cells
-    // each). The pre-fix residue is TURNS * the per-turn bound, two
-    // orders of magnitude past this.
-    let bound = 4 * ACTIVATIONS_PER_TURN * CELLS_PER_ACTIVATION;
+    // later turn reuses them). The pre-fix residue is TURNS * this bound.
+    let bound = ACTIVATIONS_PER_TURN * CELLS_PER_ACTIVATION;
     assert!(
         residue <= bound,
         "malloc residue must be bounded by one turn's working set: \

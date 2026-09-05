@@ -1,5 +1,4 @@
-//! Test-only serialization for PROCESS-global state that is neither a runtime
-//! side table (those use `gc::global_side_table_test_lock`) nor thread-local.
+//! Test-only isolation and serialization for process-global fixtures.
 //!
 //! First resident: the process working directory. `std::env::set_current_dir`
 //! is process-wide, so a test that changes it (`typed_feedback`'s
@@ -20,4 +19,36 @@ pub(crate) fn process_cwd_test_lock() -> std::sync::MutexGuard<'static, ()> {
     PROCESS_CWD_TEST_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Run a libtest case in its own process when its fixture needs exclusive
+/// ownership of process-global state (#9197). A lock shared by only a few
+/// tests cannot exclude the runtime's other side-table readers or counters.
+///
+/// Use the harness's current test name so renaming/moving a test cannot leave
+/// a stale filter. Require a marker emitted AFTER the body as well as a clean
+/// exit: selecting zero tests or exiting early must not produce a false pass.
+pub(crate) fn isolated_test(body: impl FnOnce()) {
+    const CHILD_ENV: &str = "PERRY_RUNTIME_ISOLATED_TEST_NAME";
+    let thread = std::thread::current();
+    let name = thread.name().expect("libtest must name the test thread");
+    let completed = format!("perry isolated test completed: {name}");
+    if std::env::var(CHILD_ENV).ok().as_deref() == Some(name) {
+        body();
+        println!("{completed}");
+        return;
+    }
+
+    let output = std::process::Command::new(std::env::current_exe().expect("current test binary"))
+        .args(["--exact", name, "--nocapture", "--test-threads=1"])
+        .env(CHILD_ENV, name)
+        .output()
+        .expect("launch isolated runtime test");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success() && stdout.lines().any(|line| line.ends_with(&completed)),
+        "isolated test {name} did not complete: {}\nstdout:\n{stdout}\nstderr:\n{stderr}",
+        output.status
+    );
 }
