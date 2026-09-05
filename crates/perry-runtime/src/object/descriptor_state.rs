@@ -562,6 +562,9 @@ pub(crate) fn note_descriptor_target(obj: usize) {
 /// Look up the property descriptor for (obj, key). Returns None if no entry exists,
 /// in which case the JS default `{ writable: true, enumerable: true, configurable: true }` applies.
 pub(crate) fn get_property_attrs(obj: usize, key: &str) -> Option<PropertyAttrs> {
+    if super::string_wrapper::has_index(obj, key) {
+        return Some(PropertyAttrs::new(false, true, false));
+    }
     // #6759 Phase C2: the meta-record summary proves most misses without
     // the `String` build + table probe (and shields a fresh object at a
     // recycled address from a dead owner's not-yet-pruned entries).
