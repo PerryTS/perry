@@ -19,6 +19,8 @@ mod proto_dispatch;
 mod string_methods;
 
 #[cfg(test)]
+mod code_point_at_dispatch_tests;
+#[cfg(test)]
 mod dispatch_arg_coercion_tests;
 #[cfg(test)]
 mod probe_dispatch_tests;
