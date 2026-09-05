@@ -1302,7 +1302,7 @@ pub extern "C" fn js_object_define_property(
                                 desc_ptr as *const ObjectHeader,
                                 value_key,
                             );
-                            crate::symbol::js_object_set_symbol_property(
+                            crate::symbol::define_symbol_data_property(
                                 obj_value,
                                 key_value,
                                 f64::from_bits(value_field.bits()),

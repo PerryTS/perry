@@ -652,7 +652,9 @@ pub unsafe extern "C-unwind" fn js_native_call_method_value(
     let key_jsval = JSValue::from_bits(key.to_bits());
     let is_symbol_key = crate::symbol::js_is_symbol(key) != 0;
 
-    if is_symbol_key {
+    // Well-known symbol calls must use the current property value below;
+    // direct registry dispatch bypasses own/prototype replacements (#9788).
+    if is_symbol_key && !crate::symbol::is_well_known_symbol(crate::symbol::sym_key_from_f64(key)) {
         let sym_key = crate::symbol::sym_key_from_f64(key);
         if sym_key != 0 {
             let bits = object.to_bits();
@@ -886,7 +888,7 @@ pub unsafe extern "C-unwind" fn js_native_call_method_value(
     // (whose slot is already the receiver), effect's Tag-class symbol *statics*
     // (plain data values), and any closure that doesn't read `this` are all left
     // untouched — keeping the #1758/#36/#321 closure-proto-chain paths intact.
-    let field = if is_symbol_key && crate::symbol::own_symbol_property(object, key).is_none() {
+    let field = if is_symbol_key && !crate::symbol::has_own_symbol_property(object, key) {
         f64::from_bits(crate::closure::clone_closure_rebind_this(
             field.to_bits(),
             object,
