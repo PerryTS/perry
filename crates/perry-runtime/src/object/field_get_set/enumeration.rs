@@ -318,7 +318,18 @@ pub extern "C" fn js_object_keys_value(value: f64) -> *mut ArrayHeader {
 /// non-enumerable) as "seen" after emitting that level's enumerable subset.
 #[no_mangle]
 pub extern "C" fn js_for_in_keys_value(value: f64) -> *mut ArrayHeader {
+    for_in_keys_with(value, lazy_shadow_enabled())
+}
+
+/// The walk itself, with the shadow-set strategy as a parameter so a test can
+/// run BOTH and assert they agree. `js_for_in_keys_value` reads the env once
+/// and delegates here.
+pub(crate) fn for_in_keys_with(value: f64, lazy_shadow: bool) -> *mut ArrayHeader {
     let jv = JSValue::from_bits(value.to_bits());
+    let diag = crate::hot_diag::enum_on();
+    if diag {
+        crate::hot_diag::enum_with(|d| d.for_in_calls += 1);
+    }
     if jv.is_null() || jv.is_undefined() {
         return crate::array::js_array_alloc(0);
     }
@@ -326,6 +337,9 @@ pub extern "C" fn js_for_in_keys_value(value: f64) -> *mut ArrayHeader {
     // Non-pointer primitives (number/boolean, boxed string) have only their own
     // enumerable keys; every prototype property they inherit is non-enumerable.
     if !jv.is_pointer() {
+        if diag {
+            crate::hot_diag::enum_with(|d| d.for_in_primitive += 1);
+        }
         let own = js_object_keys_value(value);
         let n = crate::array::js_array_length(own);
         for i in 0..n {
@@ -335,12 +349,53 @@ pub extern "C" fn js_for_in_keys_value(value: f64) -> *mut ArrayHeader {
         return out;
     }
     let key_string = |kv: JSValue, scratch: &mut [u8; crate::value::SHORT_STRING_MAX_LEN]| {
-        unsafe { crate::string::js_string_key_bytes(kv, scratch) }
-            .and_then(|b| std::str::from_utf8(b).ok().map(|s| s.to_string()))
+        let made = unsafe { crate::string::js_string_key_bytes(kv, scratch) }
+            .and_then(|b| std::str::from_utf8(b).ok().map(|s| s.to_string()));
+        if diag {
+            if let Some(ref s) = made {
+                let n = s.len() as u64;
+                crate::hot_diag::enum_with(|d| {
+                    d.for_in_key_strings += 1;
+                    d.for_in_key_string_bytes += n;
+                });
+            }
+        }
+        made
     };
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
     let mut current = value;
+
+    // #9792 follow-up: the shadow set is DEFERRED.
+    //
+    // `seen` exists for one purpose — a name owned at a closer level hides the
+    // same name further along the chain (§14.7.5 / 12.6.4-2). That filter can
+    // only ever apply to a level >= 1, so nothing at level 0 needs it, and a
+    // level that contributes no enumerable keys of its own never consults it.
+    //
+    // The old shape paid for it unconditionally: at EVERY level it materialised
+    // the all-own-names array (a second key array, including non-enumerable
+    // names) and turned every name at every level into a heap `String` so it
+    // could be hashed into the set. Measured on the compiled claude-code TUI,
+    // one 400-character reply: 17,272 `for-in` calls, 4.00 key arrays per call,
+    // and **159,752 `String` allocations and SipHash inserts to emit 11,276
+    // keys** — an emitted/String ratio of 0.071, for 1.90 MB of bytes. The
+    // bytes are why no allocation-share ranking could see this; the executions
+    // are the cost.
+    //
+    // So: remember the levels walked, and build the set only at the moment a
+    // level >= 1 actually has an enumerable key to filter. When it is built it
+    // is built from exactly the levels already visited, which is the same
+    // content the eager version would have had at that point, so the emitted
+    // key sequence is unchanged.
+    // The levels walked so far, for the rebuild that almost never happens.
+    // Inline: the measurement says 2.00 prototype levels per call, so a spill
+    // to the heap is the pathological case, not the common one — and a `Vec`
+    // here would just reintroduce one malloc per `for-in` in place of the
+    // 159,947 this change removes.
+    let mut visited = VisitedLevels::default();
+    let mut shadow_live = !lazy_shadow;
+    let mut level: u32 = 0;
     // Depth cap guards against pathological / cyclic prototype graphs.
     for _ in 0..1000 {
         let cv = JSValue::from_bits(current.to_bits());
@@ -351,32 +406,202 @@ pub extern "C" fn js_for_in_keys_value(value: f64) -> *mut ArrayHeader {
         // skipping any name already shadowed by a closer level.
         let enum_arr = js_object_keys_value(current);
         let en = crate::array::js_array_length(enum_arr);
-        for i in 0..en {
-            let kv = crate::array::js_array_get(enum_arr, i);
-            let name = match key_string(kv, &mut scratch) {
-                Some(s) => s,
-                None => continue,
-            };
-            if seen.insert(name) {
+        if diag {
+            let en64 = en as u64;
+            crate::hot_diag::enum_with(|d| {
+                d.for_in_levels += 1;
+                d.for_in_key_arrays += 1;
+                d.for_in_keys_seen += en64;
+            });
+        }
+        // Level 0 can be shadowed by nothing, so its own enumerable names go
+        // straight out — own property names are unique within one object, which
+        // is the only thing the set was doing for this level.
+        if lazy_shadow && level == 0 && !shadow_live {
+            for i in 0..en {
+                let kv = crate::array::js_array_get(enum_arr, i);
                 out = crate::array::js_array_push_f64(out, f64::from_bits(kv.bits()));
             }
-        }
-        // Mark ALL own names (incl non-enumerable) seen so they shadow the
-        // remainder of the chain.
-        let all_f64 = super::super::descriptors::js_object_get_own_property_names(current);
-        let all_arr = (all_f64.to_bits() & crate::value::POINTER_MASK) as *mut ArrayHeader;
-        if !all_arr.is_null() {
-            let an = crate::array::js_array_length(all_arr);
-            for i in 0..an {
-                let kv = crate::array::js_array_get(all_arr, i);
-                if let Some(name) = key_string(kv, &mut scratch) {
-                    seen.insert(name);
+            if diag {
+                let en64 = en as u64;
+                crate::hot_diag::enum_with(|d| d.for_in_keys_emitted += en64);
+            }
+        } else {
+            if en > 0 && !shadow_live {
+                // First level >= 1 with something to filter: pay for the set
+                // now, over exactly the levels already walked.
+                build_shadow_set(visited.as_slice(), &mut seen, &mut scratch, diag);
+                shadow_live = true;
+                if diag {
+                    crate::hot_diag::enum_with(|d| d.for_in_shadow_built += 1);
+                }
+            }
+            for i in 0..en {
+                let kv = crate::array::js_array_get(enum_arr, i);
+                let name = match key_string(kv, &mut scratch) {
+                    Some(s) => s,
+                    None => continue,
+                };
+                let fresh = seen.insert(name);
+                if diag {
+                    let deep = level > 0;
+                    crate::hot_diag::enum_with(|d| {
+                        d.for_in_seen_inserts += 1;
+                        if !fresh {
+                            d.for_in_seen_dupes += 1;
+                        } else {
+                            d.for_in_keys_emitted += 1;
+                            if deep {
+                                d.for_in_keys_emitted_deep += 1;
+                            }
+                        }
+                    });
+                }
+                if fresh {
+                    out = crate::array::js_array_push_f64(out, f64::from_bits(kv.bits()));
                 }
             }
         }
+        // Mark ALL own names (incl non-enumerable) so they shadow the remainder
+        // of the chain — but only once the set is live. Until then the level is
+        // recorded and the array is not materialised at all: this is the second
+        // of the four key arrays per call that the measurement found.
+        if shadow_live {
+            mark_own_names(current, &mut seen, &mut scratch, diag);
+        } else {
+            visited.push(current);
+        }
         current = super::super::object_ops::js_object_get_prototype_of(current);
+        level += 1;
     }
     out
+}
+
+/// Prototype levels recorded for a possible shadow-set rebuild, inline for the
+/// depths that actually occur.
+///
+/// `INLINE` is 8 against a measured 2.00 levels per `for-in` call on the
+/// compiled claude-code TUI, so the heap arm is for prototype chains an order
+/// of magnitude deeper than anything the workload produces. It exists because
+/// the depth cap is 1000, not because it is expected.
+struct VisitedLevels {
+    inline: [f64; Self::INLINE],
+    len: usize,
+    spill: Vec<f64>,
+}
+
+impl Default for VisitedLevels {
+    fn default() -> Self {
+        Self {
+            inline: [0.0; Self::INLINE],
+            len: 0,
+            spill: Vec::new(),
+        }
+    }
+}
+
+impl VisitedLevels {
+    const INLINE: usize = 8;
+
+    fn push(&mut self, v: f64) {
+        if self.len < Self::INLINE {
+            self.inline[self.len] = v;
+            self.len += 1;
+        } else {
+            self.spill.push(v);
+        }
+    }
+
+    /// The recorded levels in walk order. Borrows rather than copies, and the
+    /// spill arm concatenates only when it is non-empty.
+    fn as_slice(&self) -> VisitedSlice<'_> {
+        VisitedSlice {
+            head: &self.inline[..self.len],
+            tail: &self.spill,
+        }
+    }
+}
+
+struct VisitedSlice<'a> {
+    head: &'a [f64],
+    tail: &'a [f64],
+}
+
+impl VisitedSlice<'_> {
+    fn iter(&self) -> impl Iterator<Item = &f64> {
+        self.head.iter().chain(self.tail.iter())
+    }
+}
+
+/// `PERRY_FORIN_LAZY_SHADOW=0` restores the eager shadow set, so one binary
+/// carries both paths and an A/B is one environment variable.
+fn lazy_shadow_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        !matches!(
+            std::env::var("PERRY_FORIN_LAZY_SHADOW").ok().as_deref(),
+            Some("0") | Some("off") | Some("false") | Some("no")
+        )
+    })
+}
+
+/// Add every own name of `recv` — enumerable or not — to the shadow set.
+fn mark_own_names(
+    recv: f64,
+    seen: &mut std::collections::HashSet<String>,
+    scratch: &mut [u8; crate::value::SHORT_STRING_MAX_LEN],
+    diag: bool,
+) {
+    let all_f64 = super::super::descriptors::js_object_get_own_property_names(recv);
+    let all_arr = (all_f64.to_bits() & crate::value::POINTER_MASK) as *mut ArrayHeader;
+    if all_arr.is_null() {
+        return;
+    }
+    let an = crate::array::js_array_length(all_arr);
+    if diag {
+        let an64 = an as u64;
+        crate::hot_diag::enum_with(|d| {
+            d.for_in_key_arrays += 1;
+            d.for_in_keys_seen += an64;
+        });
+    }
+    for i in 0..an {
+        let kv = crate::array::js_array_get(all_arr, i);
+        let name = unsafe { crate::string::js_string_key_bytes(kv, scratch) }
+            .and_then(|b| std::str::from_utf8(b).ok().map(|s| s.to_string()));
+        if let Some(name) = name {
+            if diag {
+                let n = name.len() as u64;
+                crate::hot_diag::enum_with(|d| {
+                    d.for_in_key_strings += 1;
+                    d.for_in_key_string_bytes += n;
+                });
+            }
+            let fresh = seen.insert(name);
+            if diag {
+                crate::hot_diag::enum_with(|d| {
+                    d.for_in_seen_inserts += 1;
+                    if !fresh {
+                        d.for_in_seen_dupes += 1;
+                    }
+                });
+            }
+        }
+    }
+}
+
+/// Materialise the shadow set for the levels already walked, in order. Called
+/// at most once per `for-in`, and only when a level >= 1 has an enumerable key
+/// that something closer might hide.
+fn build_shadow_set(
+    visited: VisitedSlice<'_>,
+    seen: &mut std::collections::HashSet<String>,
+    scratch: &mut [u8; crate::value::SHORT_STRING_MAX_LEN],
+    diag: bool,
+) {
+    for recv in visited.iter() {
+        mark_own_names(*recv, seen, scratch, diag);
+    }
 }
 
 fn closure_dynamic_enumerable_props(ptr: usize) -> Vec<(String, f64)> {
@@ -1857,5 +2082,174 @@ fn js_object_entries_shape(obj: *const ObjectHeader) -> *mut ArrayHeader {
         }
 
         result
+    }
+}
+
+#[cfg(test)]
+mod lazy_shadow_tests {
+    use super::*;
+
+    fn s(bytes: &str) -> *mut crate::StringHeader {
+        crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32)
+    }
+
+    fn obj_value(o: *mut ObjectHeader) -> f64 {
+        f64::from_bits(JSValue::object_ptr(o as *mut u8).bits())
+    }
+
+    /// Read a key array back as owned strings, in order.
+    fn keys_of(arr: *mut ArrayHeader) -> Vec<String> {
+        let mut out = Vec::new();
+        let n = crate::array::js_array_length(arr);
+        let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+        for i in 0..n {
+            let kv = crate::array::js_array_get(arr, i);
+            if let Some(b) = unsafe { crate::string::js_string_key_bytes(kv, &mut scratch) } {
+                if let Ok(t) = std::str::from_utf8(b) {
+                    out.push(t.to_string());
+                }
+            }
+        }
+        out
+    }
+
+    /// The deferred shadow set must produce the SAME key sequence as the eager
+    /// one, including the case the deferral exists to skip and the case it
+    /// cannot skip.
+    ///
+    /// This is the assertion the optimisation lives or dies on: `for_in_keys_with`
+    /// is run both ways over the same object graph and the two key sequences are
+    /// compared element by element. Deleting the `build_shadow_set` call, or
+    /// emitting level 0 through the set instead of directly, makes the
+    /// shadowing case below disagree and fails this test by name.
+    #[test]
+    fn deferring_the_shadow_set_does_not_change_the_key_sequence() {
+        // 1. Flat object, prototype contributes nothing enumerable — the case
+        //    the deferral is FOR. Both paths must agree.
+        let flat = crate::object::js_object_alloc(0, 0);
+        crate::object::js_object_set_field_by_name(flat, s("alpha"), 1.0);
+        crate::object::js_object_set_field_by_name(flat, s("beta"), 2.0);
+        let flat_v = obj_value(flat);
+        let lazy = keys_of(for_in_keys_with(flat_v, true));
+        let eager = keys_of(for_in_keys_with(flat_v, false));
+        assert_eq!(
+            lazy, eager,
+            "a flat object's for-in keys must not depend on when the shadow set is built"
+        );
+        assert_eq!(lazy, vec!["alpha".to_string(), "beta".to_string()]);
+
+        // 2. Prototype WITH enumerable keys, one of them shadowed by an own
+        //    property. This is the case the shadow set exists for, so the
+        //    deferred build must fire and produce the same answer.
+        let proto = crate::object::js_object_alloc(0, 0);
+        crate::object::js_object_set_field_by_name(proto, s("beta"), 20.0);
+        crate::object::js_object_set_field_by_name(proto, s("gamma"), 30.0);
+        let child = crate::object::js_object_alloc(0, 0);
+        crate::object::js_object_set_field_by_name(child, s("alpha"), 1.0);
+        crate::object::js_object_set_field_by_name(child, s("beta"), 2.0);
+        let child_v = obj_value(child);
+        crate::object::object_ops::js_object_set_prototype_of(child_v, obj_value(proto));
+
+        let lazy = keys_of(for_in_keys_with(child_v, true));
+        let eager = keys_of(for_in_keys_with(child_v, false));
+        assert_eq!(
+            lazy, eager,
+            "an inherited enumerable key, and an own key shadowing one on the \
+             prototype, must come out identically whether the shadow set was \
+             built eagerly or on demand"
+        );
+        // `beta` is owned by the child, so it appears once, at the child's
+        // position — never again from the prototype.
+        assert_eq!(
+            lazy,
+            vec![
+                "alpha".to_string(),
+                "beta".to_string(),
+                "gamma".to_string()
+            ],
+            "own keys first in insertion order, then unshadowed inherited ones"
+        );
+    }
+
+    /// A prototype chain deeper than `VisitedLevels::INLINE` where the ONLY
+    /// level that shadows the name lives PAST the inline array.
+    ///
+    /// This arm never runs on the measured workload (the shadow set was built 0
+    /// times in 17,266 `for-in` calls), so a test is its only coverage — and it
+    /// has to be built so that losing the spilled levels actually changes the
+    /// answer. An earlier version of this test put the shadowing property on
+    /// every level including the leaf, so deleting the spill left the leaf's
+    /// copy doing the shadowing and the test passed under sabotage. Here levels
+    /// 0..INLINE own nothing at all, level INLINE+2 owns `marker`
+    /// non-enumerably, and only the root owns it enumerably: drop the spill and
+    /// `marker` leaks into the result.
+    #[test]
+    fn only_a_spilled_level_shadows_the_root_and_the_rebuild_must_see_it() {
+        let shadow_level = VisitedLevels::INLINE + 2;
+        let depth = shadow_level + 2;
+
+        // Root (deepest): the enumerable `marker` that must stay hidden.
+        let root = crate::object::js_object_alloc(0, 0);
+        crate::object::js_object_set_field_by_name(root, s("marker"), 1.0);
+        crate::object::js_object_set_field_by_name(root, s("deep_only"), 2.0);
+
+        // Build downwards from the root; `chain[i]` is at prototype level
+        // `depth - 1 - i` when walked from the leaf.
+        let mut chain = vec![root];
+        for _ in 1..depth {
+            let o = crate::object::js_object_alloc(0, 0);
+            let ov = obj_value(o);
+            crate::object::object_ops::js_object_set_prototype_of(
+                ov,
+                obj_value(*chain.last().unwrap()),
+            );
+            chain.push(o);
+        }
+        // Exactly one level shadows `marker`, and it is past the inline array.
+        let shadower = chain[depth - 1 - shadow_level];
+        crate::object::js_object_set_field_by_name_nonenum(shadower, s("marker"), 0.0);
+
+        let leaf_v = obj_value(*chain.last().unwrap());
+        let lazy = keys_of(for_in_keys_with(leaf_v, true));
+        let eager = keys_of(for_in_keys_with(leaf_v, false));
+        assert_eq!(
+            lazy, eager,
+            "a chain whose only shadowing level spilled past the inline array \
+             must give the same keys eagerly and on demand"
+        );
+        assert!(
+            !lazy.contains(&"marker".to_string()),
+            "the only level owning `marker` sits past VisitedLevels::INLINE, so \
+             a rebuild that cannot see the spilled levels would leak the root's \
+             enumerable `marker` — got {lazy:?}"
+        );
+        assert_eq!(lazy, vec!["deep_only".to_string()]);
+    }
+
+    /// A NON-enumerable own property still shadows the same name on the
+    /// prototype (12.6.4-2). The deferred set only marks all-own-names for a
+    /// level once it goes live, so this is exactly where a wrong deferral would
+    /// leak the prototype's copy through.
+    #[test]
+    fn a_non_enumerable_own_name_still_shadows_the_prototype_under_deferral() {
+        let proto = crate::object::js_object_alloc(0, 0);
+        crate::object::js_object_set_field_by_name(proto, s("hidden"), 9.0);
+        crate::object::js_object_set_field_by_name(proto, s("shown"), 8.0);
+
+        let child = crate::object::js_object_alloc(0, 0);
+        // Own but NOT enumerable: must not be emitted, must still shadow.
+        crate::object::js_object_set_field_by_name_nonenum(child, s("hidden"), 1.0);
+        let child_v = obj_value(child);
+        crate::object::object_ops::js_object_set_prototype_of(child_v, obj_value(proto));
+
+        let lazy = keys_of(for_in_keys_with(child_v, true));
+        let eager = keys_of(for_in_keys_with(child_v, false));
+        assert_eq!(lazy, eager, "deferral must not change shadowing by a non-enumerable own name");
+        assert!(
+            !lazy.contains(&"hidden".to_string()),
+            "a non-enumerable own `hidden` must hide the prototype's enumerable \
+             `hidden` rather than letting it through — got {lazy:?}"
+        );
+        assert_eq!(lazy, vec!["shown".to_string()]);
     }
 }
