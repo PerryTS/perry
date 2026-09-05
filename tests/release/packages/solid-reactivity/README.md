@@ -81,3 +81,11 @@ stub and its target are tenured. Array growth deliberately retains such
 aliases for `clean_arr_ptr` to follow, whereas the verifier currently rejects
 any forwarded reference. The follow-up needs to distinguish those retained
 growth aliases from evacuation originals that are about to be reclaimed.
+
+The correction is proposed in [#9822](https://github.com/PerryTS/perry/pull/9822).
+With that change, this fixture matches all 20 oracle lines with both protected
+from-space and evacuation verification enabled: seed 4644/rate 1 completes
+22 copying minors and moves 14,022 objects. Seeds 1/rate 0.25 and 42/rate 0.1
+also pass, completing six and one copying minors respectively. The runtime
+regressions also check that direct and indirect nursery forwarding references
+are still rejected.
