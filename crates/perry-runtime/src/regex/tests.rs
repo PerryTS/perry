@@ -1649,6 +1649,62 @@ fn global_replace_substitutes_at_every_empty_match() {
     assert_eq!(string_as_str(out), "[a][]");
 }
 
+/// #9764 + the regex lane's #9796 finding: the construction cache must never
+/// memoize an INCOHERENT program triple.
+///
+/// `REGEX_CACHE` holds a never-match placeholder for a lookbehind /
+/// backreference pattern whose real program lives in `FANCY_CACHE`, and the two
+/// maps have independent clear-on-overflow caps. So `FANCY_CACHE` can drop a
+/// pattern while `REGEX_CACHE` still answers for it, and a build then reads
+/// (never-match, no fancy) — a pair that matches nothing.
+///
+/// The maps heal on their next clear. A site-cache entry does not: a
+/// construction that hits it is born built and never consults the maps again.
+/// Memoizing the incoherent pair therefore makes the literal PERMANENTLY
+/// non-matching. Without the guard in `build_and_install_programs` the first
+/// assertion below reads `Some(true)` and the last one reads `-1`.
+#[test]
+fn an_incoherent_program_pair_is_never_memoized_by_the_site_cache() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    // A fixed-width lookbehind: the linear engine rejects it, so the standard
+    // cache gets the placeholder and the real program goes to `FANCY_CACHE`.
+    let pat = r"(?<=Q9zq)zz";
+    site_cache::test_reset();
+    test_clear_std_cache();
+    test_clear_fancy_cache();
+
+    let re1 = js_regexp_new(make_string(pat), make_string(""));
+    assert_eq!(
+        js_string_search_regex(make_string("aQ9zqzz"), re1),
+        5,
+        "the fancy fallback matches on a coherent runtime"
+    );
+
+    // `FANCY_CACHE` overflows and clears; `REGEX_CACHE` keeps the placeholder.
+    // Drop the site entry too, so the next construction takes the build path.
+    site_cache::test_reset();
+    test_clear_fancy_cache();
+
+    let re2 = js_regexp_new(make_string(pat), make_string(""));
+    let _ = js_string_search_regex(make_string("aQ9zqzz"), re2);
+    assert_eq!(
+        site_cache::test_has_programs(pat, ""),
+        Some(false),
+        "a (never-match, no-fancy) pair must not be remembered against the text"
+    );
+
+    // The maps heal — and because nothing incoherent was memoized, so does the
+    // pattern. With the pair memoized this construction is born built from it
+    // and returns -1 forever.
+    test_clear_std_cache();
+    let re3 = js_regexp_new(make_string(pat), make_string(""));
+    assert_eq!(
+        js_string_search_regex(make_string("aQ9zqzz"), re3),
+        5,
+        "the literal must recover once the program caches heal"
+    );
+}
+
 /// The construction cache (`regex::site_cache`): once a header built from
 /// some `(pattern, flags)` has been executed, the next construction of the
 /// same text is born built — it shares the executed header's program and

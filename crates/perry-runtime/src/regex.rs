@@ -242,6 +242,24 @@ pub(crate) unsafe fn regex_header_finalize_for_gc(re: *mut RegExpHeader) {
     regex_header_clear_dead_for_gc(re as usize);
 }
 
+/// Model one `evict_regex_cache_if_full` overflow clear of `FANCY_CACHE`.
+///
+/// The production guard's entire action on overflow is `cache.clear()` (see
+/// [`evict_regex_cache_if_full`]) — this seam re-implements no predicate, only
+/// spares a test 512 fancy compiles to reach the cap. What matters for the test
+/// is that the two program caches have INDEPENDENT caps, so one can drop a
+/// pattern the other still holds.
+#[cfg(all(test, feature = "regex-engine"))]
+pub(crate) fn test_clear_fancy_cache() {
+    FANCY_CACHE.with(|fc| fc.borrow_mut().clear());
+}
+
+/// The same, for `REGEX_CACHE` — the clear that lets an incoherent pair heal.
+#[cfg(all(test, feature = "regex-engine"))]
+pub(crate) fn test_clear_std_cache() {
+    REGEX_CACHE.with(|c| c.borrow_mut().clear());
+}
+
 #[cfg(test)]
 pub(crate) fn test_regex_pointer_entry_exists(addr: usize) -> bool {
     REGEX_POINTERS.with(|table| table.borrow().contains(&addr))
@@ -481,6 +499,29 @@ fn evict_regex_cache_if_full<V>(cache: &mut HashMap<(String, String), V>) {
     }
 }
 
+/// The never-match program `REGEX_CACHE` holds for a pattern only `fancy-regex`
+/// can match (lookbehind, backreferences), and for one both engines rejected.
+///
+/// It is a process-wide singleton so that "is this entry a placeholder?" is an
+/// `Arc::ptr_eq`, not a pattern-text compare. That question has to be asked
+/// before anything MEMOIZES a `(std, fancy, repeat)` triple: a placeholder with
+/// no fancy twin is an incoherent triple, and memoizing it makes the pattern
+/// permanently non-matching (see `lazy::build_and_install_programs`).
+#[cfg(feature = "regex-engine")]
+fn never_match_program() -> Arc<Regex> {
+    static NEVER: std::sync::OnceLock<Arc<Regex>> = std::sync::OnceLock::new();
+    NEVER
+        .get_or_init(|| Arc::new(Regex::new(r"[^\s\S]").unwrap()))
+        .clone()
+}
+
+/// Is `program` the shared never-match placeholder rather than a real compiled
+/// program? See [`never_match_program`].
+#[cfg(feature = "regex-engine")]
+pub(crate) fn is_never_match_program(program: &Arc<Regex>) -> bool {
+    Arc::ptr_eq(program, &never_match_program())
+}
+
 /// Compile `(pattern, flags)` into the caches if absent, reporting whether
 /// SOME engine accepted the flag-prefixed pattern. One NFA build total.
 ///
@@ -526,8 +567,8 @@ fn compile_and_cache_regex_checked(pattern: &str, flags: &str) -> bool {
     // prefix the flags imply. Shared with `lazy::std_engine_syntax_ok` so the
     // eager syntax check and this build can never inspect different strings.
     let regex_pattern = lazy::flag_prefixed_pattern(pattern, flags);
-    let regex = match build_std_regex(&regex_pattern) {
-        Ok(re) => re,
+    let regex: Arc<Regex> = match build_std_regex(&regex_pattern) {
+        Ok(re) => Arc::new(re),
         Err(_) => {
             // Pattern has features regex crate doesn't support
             // (lookbehind, lookahead). Try fancy-regex which supports
@@ -554,7 +595,7 @@ fn compile_and_cache_regex_checked(pattern: &str, flags: &str) -> bool {
             if !fancy_ok {
                 return false;
             }
-            Regex::new(r"[^\s\S]").unwrap()
+            never_match_program()
         }
     };
     if crate::hot_diag::regex_on() {
@@ -563,7 +604,7 @@ fn compile_and_cache_regex_checked(pattern: &str, flags: &str) -> bool {
     REGEX_CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
         evict_regex_cache_if_full(&mut cache);
-        cache.insert((pattern.to_string(), flags.to_string()), Arc::new(regex));
+        cache.insert((pattern.to_string(), flags.to_string()), regex);
     });
     true
 }
@@ -587,7 +628,7 @@ fn get_or_compile_regex(pattern: &str, flags: &str) -> Arc<Regex> {
         }
         // Both engines rejected it (validation normally throws before this
         // point) — keep the historical behavior: cache + return never-match.
-        let arc = Arc::new(Regex::new(r"[^\s\S]").unwrap());
+        let arc = never_match_program();
         evict_regex_cache_if_full(&mut cache);
         cache.insert((pattern.to_string(), flags.to_string()), arc.clone());
         arc

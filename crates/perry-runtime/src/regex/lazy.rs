@@ -257,15 +257,33 @@ fn build_and_install_programs(re: *const RegExpHeader) {
         });
     // Remember the built programs against the pattern text, so the next
     // construction of the same literal is born built (`js_regexp_new`).
-    super::site_cache::install_programs(
-        &pattern,
-        &flags,
-        super::site_cache::Programs {
-            std: std_arc.clone(),
-            fancy: fancy_arc.clone(),
-            repeat: repeat_arc.clone(),
-        },
-    );
+    //
+    // ONLY a coherent triple may be memoized. `get_or_compile_regex` answers
+    // from `REGEX_CACHE`, and for a lookbehind / backreference pattern the
+    // entry it finds there is the never-match PLACEHOLDER whose real program
+    // lives in `FANCY_CACHE`. Those two maps have independent
+    // clear-on-overflow caps (`evict_regex_cache_if_full`), so `FANCY_CACHE`
+    // can have dropped the pattern while `REGEX_CACHE` still holds its
+    // placeholder — and then the pair read here is (never-match, None), which
+    // matches nothing.
+    //
+    // Left alone, the maps heal: the next `REGEX_CACHE` clear makes the
+    // pattern recompile and repopulate both. A site-cache entry never heals —
+    // a construction that hits it is born built and never consults the maps
+    // again — so memoizing the incoherent pair would make a lookbehind literal
+    // PERMANENTLY non-matching, silently, for the life of the thread. Declining
+    // to memoize costs one recompile and keeps the self-healing behaviour.
+    if !(super::is_never_match_program(&std_arc) && fancy_arc.is_none()) {
+        super::site_cache::install_programs(
+            &pattern,
+            &flags,
+            super::site_cache::Programs {
+                std: std_arc.clone(),
+                fancy: fancy_arc.clone(),
+                repeat: repeat_arc.clone(),
+            },
+        );
+    }
     let regex_ptr = Arc::into_raw(std_arc) as *mut Regex;
     let fancy_ptr: *const () =
         fancy_arc.map_or(std::ptr::null(), |arc| Arc::into_raw(arc) as *const ());
