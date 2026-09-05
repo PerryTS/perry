@@ -1538,6 +1538,45 @@ fn normalize_dirty_slots_for_epoch(mut page_meta: OldPageMeta, current_epoch: u6
     page_meta
 }
 
+/// Address ranges of the live old-generation blocks, as
+/// `(base, end_exclusive, global_block_index, size)` sorted by base.
+///
+/// Old-gen memory is released a BLOCK at a time (`old_arena_reclaim_*`), so a
+/// pass that wants its bytes back has to reason in blocks. `OldPageMeta` is
+/// page-granular and carries no block identity, which is why #9772's selection
+/// could predict 44 MB of "releasable block bytes" from page granules and
+/// release nothing.
+pub(crate) fn old_arena_block_ranges() -> Vec<(usize, usize, usize, usize)> {
+    let old_block_start = longlived_end();
+    OLD_ARENA.with(|arena| {
+        let arena = unsafe { &*arena.get() };
+        let mut out: Vec<(usize, usize, usize, usize)> = arena
+            .blocks
+            .iter()
+            .enumerate()
+            .filter_map(|(i, block)| {
+                if block.data.is_null() || block.size == 0 {
+                    return None;
+                }
+                let base = block.data as usize;
+                Some((base, base + block.size, old_block_start + i, block.size))
+            })
+            .collect();
+        out.sort_unstable_by_key(|r| r.0);
+        out
+    })
+}
+
+/// Index into [`old_arena_block_ranges`] output for the block containing
+/// `addr`, or `None` when the address is not in a live old-gen block.
+pub(crate) fn old_arena_block_range_index(
+    ranges: &[(usize, usize, usize, usize)],
+    addr: usize,
+) -> Option<usize> {
+    let idx = ranges.partition_point(|r| r.0 <= addr).checked_sub(1)?;
+    (addr < ranges[idx].1).then_some(idx)
+}
+
 pub(crate) fn old_arena_source_blocks_for_pages(
     selected_pages: &crate::fast_hash::PtrHashSet<usize>,
 ) -> OldArenaSourceBlockSelection {
@@ -1895,4 +1934,32 @@ pub(crate) fn page_meta_census() -> Vec<crate::gc::census::SideTableRow> {
         ));
     });
     rows
+}
+
+#[cfg(test)]
+mod block_range_tests {
+    use super::old_arena_block_range_index;
+
+    /// `old_arena_block_range_index` is the whole reason #9772's selection can
+    /// group pages by block, so it gets a test that can fail: gaps between
+    /// blocks must not be attributed to the block below them.
+    #[test]
+    fn block_range_lookup_respects_gaps_and_ends() {
+        // Two 1 MiB blocks with a 1 MiB hole between them.
+        let ranges = vec![
+            (0x1000_0000, 0x1010_0000, 7, 0x10_0000),
+            (0x1020_0000, 0x1030_0000, 9, 0x10_0000),
+        ];
+        assert_eq!(old_arena_block_range_index(&ranges, 0x1000_0000), Some(0));
+        assert_eq!(old_arena_block_range_index(&ranges, 0x100F_FFFF), Some(0));
+        // One past the end of block 0 is the gap, not block 0.
+        assert_eq!(old_arena_block_range_index(&ranges, 0x1010_0000), None);
+        assert_eq!(old_arena_block_range_index(&ranges, 0x1018_0000), None);
+        assert_eq!(old_arena_block_range_index(&ranges, 0x1020_0000), Some(1));
+        assert_eq!(old_arena_block_range_index(&ranges, 0x102F_FFFF), Some(1));
+        // Above every block, and below every block.
+        assert_eq!(old_arena_block_range_index(&ranges, 0x1030_0000), None);
+        assert_eq!(old_arena_block_range_index(&ranges, 0x0FFF_FFFF), None);
+        assert_eq!(old_arena_block_range_index(&[], 0x1000_0000), None);
+    }
 }

@@ -533,6 +533,32 @@ enum GeneralResetSubphase {
     Done,
 }
 
+/// Why a general-arena block was not released this cycle. Empty eden capacity
+/// is the largest single piece of arena slack on the compiled claude-code TUI
+/// (51-56 blocks holding 1-9 MB of objects), and `PERRY_GC_DIAG=1` could say
+/// only that the blocks were still there. One counter per guard says which
+/// guard is actually holding them.
+#[derive(Clone, Copy, Default)]
+struct GeneralDeallocDiag {
+    examined: usize,
+    no_snapshot: usize,
+    snapshot_moved: usize,
+    keep_window: usize,
+    has_live: usize,
+    in_use: usize,
+    aging: usize,
+    released: usize,
+}
+
+enum DeallocReject {
+    NoSnapshot,
+    SnapshotMoved,
+    KeepWindow,
+    HasLive,
+    InUse,
+    Aging,
+}
+
 pub(crate) struct ArenaResetEmptyBlocksState {
     block_has_live: Vec<bool>,
     snapshots: Vec<ArenaBlockSnapshot>,
@@ -542,6 +568,7 @@ pub(crate) struct ArenaResetEmptyBlocksState {
     reset_ranges: Vec<(usize, usize, usize)>,
     removed_ranges: Vec<(usize, usize)>,
     stats: ArenaResetStats,
+    diag: GeneralDeallocDiag,
 }
 
 impl ArenaResetEmptyBlocksState {
@@ -555,6 +582,7 @@ impl ArenaResetEmptyBlocksState {
             reset_ranges: Vec::new(),
             removed_ranges: Vec::new(),
             stats: ArenaResetStats::default(),
+            diag: GeneralDeallocDiag::default(),
         }
     }
 
@@ -649,38 +677,58 @@ impl ArenaResetEmptyBlocksState {
         &mut self,
         block_idx: usize,
     ) -> Option<(usize, usize, ArenaBlockRelease)> {
+        self.diag.examined += 1;
+        let outcome = self.dealloc_block_inner(block_idx);
+        match &outcome {
+            Ok(_) => self.diag.released += 1,
+            Err(DeallocReject::NoSnapshot) => self.diag.no_snapshot += 1,
+            Err(DeallocReject::SnapshotMoved) => self.diag.snapshot_moved += 1,
+            Err(DeallocReject::KeepWindow) => self.diag.keep_window += 1,
+            Err(DeallocReject::HasLive) => self.diag.has_live += 1,
+            Err(DeallocReject::InUse) => self.diag.in_use += 1,
+            Err(DeallocReject::Aging) => self.diag.aging += 1,
+        }
+        outcome.ok()
+    }
+
+    fn dealloc_block_inner(
+        &mut self,
+        block_idx: usize,
+    ) -> Result<(usize, usize, ArenaBlockRelease), DeallocReject> {
         let snapshot = self.snapshots.get(block_idx).copied().unwrap_or_default();
         if snapshot.data == 0 {
-            return None;
+            return Err(DeallocReject::NoSnapshot);
         }
 
         ARENA.with(|arena| unsafe {
             let arena = &mut *arena.get();
             let current = arena.current;
             let keep_low = current.saturating_sub(4);
-            let block = arena.blocks.get_mut(block_idx)?;
+            let Some(block) = arena.blocks.get_mut(block_idx) else {
+                return Err(DeallocReject::NoSnapshot);
+            };
             if block.data.is_null()
                 || block.data as usize != snapshot.data
                 || block.size != snapshot.size
             {
-                return None;
+                return Err(DeallocReject::SnapshotMoved);
             }
             if block_idx == current || (block_idx >= keep_low && block_idx <= current) {
                 block.dead_cycles = 0;
-                return None;
+                return Err(DeallocReject::KeepWindow);
             }
             if self.block_has_live.get(block_idx).copied().unwrap_or(false) {
                 block.dead_cycles = 0;
-                return None;
+                return Err(DeallocReject::HasLive);
             }
             if block.offset != 0 {
                 block.dead_cycles = 0;
-                return None;
+                return Err(DeallocReject::InUse);
             }
 
             block.dead_cycles = block.dead_cycles.saturating_add(1);
             if block.dead_cycles < GENERAL_DEALLOC_DEAD_CYCLES {
-                return None;
+                return Err(DeallocReject::Aging);
             }
 
             let base = block.data as usize;
@@ -694,7 +742,7 @@ impl ArenaResetEmptyBlocksState {
             block.offset = 0;
             block.dead_cycles = 0;
             self.changed = true;
-            Some((base, size, release))
+            Ok((base, size, release))
         })
     }
 
@@ -717,6 +765,21 @@ impl ArenaResetEmptyBlocksState {
             ..self.stats
         };
 
+        if crate::gc::gc_diag_enabled() && self.diag.examined > 0 {
+            let d = self.diag;
+            eprintln!(
+                "[gc-general-reclaim] examined={} released={} rejected: no_snapshot={} \
+                 snapshot_moved={} keep_window={} has_live={} in_use={} aging={}",
+                d.examined,
+                d.released,
+                d.no_snapshot,
+                d.snapshot_moved,
+                d.keep_window,
+                d.has_live,
+                d.in_use,
+                d.aging,
+            );
+        }
         if !self.changed {
             return;
         }
@@ -1011,6 +1074,20 @@ impl SurvivorArenaReclaimDeadBlocksState {
     }
 }
 
+/// #9772: a compaction that evacuates pages and then releases nothing is
+/// indistinguishable, from the outside, from one that had nothing to do. These
+/// count why each TARGETED old block survived its reclaim, so an unproductive
+/// pass names its own obstacle instead of costing a pause silently.
+#[derive(Clone, Copy, Default)]
+struct OldReclaimDiag {
+    targeted: usize,
+    no_snapshot: usize,
+    snapshot_moved: usize,
+    has_live: usize,
+    released: usize,
+    released_bytes: usize,
+}
+
 pub(crate) struct OldArenaReclaimDeadBlocksState {
     block_has_live: Vec<bool>,
     snapshots: Vec<ArenaBlockSnapshot>,
@@ -1019,6 +1096,8 @@ pub(crate) struct OldArenaReclaimDeadBlocksState {
     subphase: RegionReclaimSubphase,
     changed: bool,
     stats: ArenaResetStats,
+    diag: OldReclaimDiag,
+    targeted_mode: bool,
 }
 
 impl OldArenaReclaimDeadBlocksState {
@@ -1042,11 +1121,13 @@ impl OldArenaReclaimDeadBlocksState {
         Self {
             block_has_live: block_has_live.to_vec(),
             snapshots: snapshots.to_vec(),
+            targeted_mode: selected_old_blocks.is_some(),
             selected_old_blocks,
             cursor: 0,
             subphase: RegionReclaimSubphase::Reclaim,
             changed: false,
             stats: ArenaResetStats::default(),
+            diag: OldReclaimDiag::default(),
         }
     }
 
@@ -1067,6 +1148,22 @@ impl OldArenaReclaimDeadBlocksState {
                 }
                 RegionReclaimSubphase::Finish => {
                     self.finish();
+                    if crate::gc::gc_diag_enabled() && self.targeted_mode {
+                        let d = self.diag;
+                        eprintln!(
+                            "[gc-old-block-reclaim] targeted={} released={} released_bytes={} \
+                             kept: has_live={} snapshot_moved={} no_snapshot={} \
+                             pooled_bytes={} deallocated_bytes={}",
+                            d.targeted,
+                            d.released,
+                            d.released_bytes,
+                            d.has_live,
+                            d.snapshot_moved,
+                            d.no_snapshot,
+                            self.stats.pooled_bytes,
+                            self.stats.deallocated_bytes,
+                        );
+                    }
                     OLD_GEN_RECLAIM_REUSABLE_BYTES
                         .with(|bytes| bytes.set(self.stats.reusable_bytes));
                     OLD_GEN_RECLAIM_POOLED_BYTES.with(|bytes| bytes.set(self.stats.pooled_bytes));
@@ -1096,15 +1193,22 @@ impl OldArenaReclaimDeadBlocksState {
             return;
         }
 
+        self.diag.targeted += 1;
         let snapshot = self.snapshots.get(block_idx).copied().unwrap_or_default();
         if snapshot.data == 0 {
+            self.diag.no_snapshot += 1;
             return;
         }
 
+        let diag = &mut self.diag;
+        let block_has_live = &self.block_has_live;
+        let changed = &mut self.changed;
+        let stats = &mut self.stats;
         OLD_ARENA.with(|arena| unsafe {
             let arena = &mut *arena.get();
             let original_current = arena.current;
             let Some(block) = arena.blocks.get_mut(local_idx) else {
+                diag.no_snapshot += 1;
                 return;
             };
             if block.data.is_null()
@@ -1112,12 +1216,16 @@ impl OldArenaReclaimDeadBlocksState {
                 || block.size != snapshot.size
                 || block.offset != snapshot.offset
             {
+                diag.snapshot_moved += 1;
                 return;
             }
-            if self.block_has_live.get(block_idx).copied().unwrap_or(false) {
+            if block_has_live.get(block_idx).copied().unwrap_or(false) {
+                diag.has_live += 1;
                 block.dead_cycles = 0;
                 return;
             }
+            diag.released += 1;
+            diag.released_bytes += block.size;
 
             let base = block.data as usize;
             let size = block.size;
@@ -1131,16 +1239,16 @@ impl OldArenaReclaimDeadBlocksState {
             crate::gc::old_free_filter_range(base, size);
 
             if used != 0 {
-                self.stats.reset_blocks = self.stats.reset_blocks.saturating_add(1);
+                stats.reset_blocks = stats.reset_blocks.saturating_add(1);
             }
             block.clear_object_starts();
             block.offset = 0;
             block.dead_cycles = 0;
             old_gen_in_use_bytes_sub(used);
-            self.changed = true;
+            *changed = true;
 
             if local_idx == original_current {
-                self.stats.reusable_bytes = self.stats.reusable_bytes.saturating_add(used);
+                stats.reusable_bytes = stats.reusable_bytes.saturating_add(used);
                 return;
             }
 
@@ -1152,7 +1260,7 @@ impl OldArenaReclaimDeadBlocksState {
             block.object_starts = Box::new([]);
             block.offset = 0;
             block.dead_cycles = 0;
-            self.stats.record_block_release(size, release);
+            stats.record_block_release(size, release);
         });
     }
 

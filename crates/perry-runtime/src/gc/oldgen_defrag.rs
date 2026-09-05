@@ -31,21 +31,39 @@ pub(super) fn old_page_defrag_skipped_for_pin(meta: crate::arena::OldPageMeta) -
     meta.allocated_bytes > 0 && meta.live_bytes > 0 && meta.dead_bytes > 0 && meta.pinned_bytes > 0
 }
 
-/// Live bytes one idle compaction will move before it stops selecting pages.
+/// Live bytes one idle compaction will move before it stops selecting.
 ///
-/// The pass is linear in moved objects once the free-list pathology is gone
-/// (`gc/old_free.rs::old_free_filter_pages`): the #9644 fixture moved 9.4 MB
-/// in 235,241 objects in 132 ms, i.e. ~0.56 us per object. A budget keeps the
-/// pause bounded on a heap far larger than that fixture's — the candidate
-/// pages are sorted most-fragmented-first, so the bytes this leaves behind are
-/// the least profitable ones, and the next idle compaction takes them.
-pub(super) const IDLE_COMPACT_MOVE_BUDGET_BYTES: usize = 8 * 1024 * 1024;
+/// This is a PAUSE budget, and it is calibrated against the measured rate of
+/// the pass it bounds. The #9644 fixture moved 9.4 MB in 235,241 objects in
+/// 132 ms once the free-list pathology was gone
+/// (`gc/old_free.rs::old_free_filter_pages`), which is where 8 MiB came from.
+/// On the compiled claude-code TUI the same 8 MiB budget moved 8.39 MB across
+/// 50 blocks in **1.64 s** — ~195 ms per MiB, twelve times the fixture's rate,
+/// because a real old generation's occupants are far smaller and far more
+/// numerous than that corpus's. 1 MiB holds the pause near the 190-230 ms the
+/// pass already cost before #9772 made it productive, so the change returns
+/// tens of megabytes for the pause budget the old pass spent returning
+/// nothing. Selection is cheapest-block-first, so what a pass leaves behind is
+/// what the next one takes.
+pub(super) const IDLE_COMPACT_MOVE_BUDGET_BYTES: usize = 1024 * 1024;
 
 pub(super) fn select_old_page_defrag_pages_from_snapshot(
     snapshot: &[crate::arena::OldPageMeta],
     force: bool,
 ) -> OldPageDefragSelection {
     let mut selection = OldPageDefragSelection::default();
+    // #9772: the idle compaction's release unit is a BLOCK, so selecting the
+    // globally most-fragmented PAGES predicts bytes it cannot return — the
+    // emptied pages are scattered over blocks that keep other live occupants,
+    // and `old_arena_reclaim_selected_dead_blocks` frees none of them. It
+    // picked 10,740 pages promising 44 MB, ran 228 ms and released 0 on the
+    // compiled claude-code TUI. Selecting whole blocks, cheapest-to-empty
+    // first, makes the prediction achievable by construction: every selected
+    // block ends the pass with no live occupant, which is exactly what the
+    // reclaim tests.
+    if idle_compact_armed() && idle_compact_block_selection_enabled() {
+        return select_whole_blocks(snapshot, selection);
+    }
     let mut candidates = Vec::new();
     for &meta in snapshot {
         if old_page_defrag_skipped_for_pin(meta) {
@@ -70,15 +88,8 @@ pub(super) fn select_old_page_defrag_pages_from_snapshot(
             .then_with(|| a.page_base.cmp(&b.page_base))
     });
 
-    // The idle compaction pays for its pass with a mutator pause, so it takes
-    // the most profitable pages and stops. Every other caller selects the
-    // whole candidate set as before.
-    let move_budget = idle_compact_armed().then_some(IDLE_COMPACT_MOVE_BUDGET_BYTES);
+    // Every non-idle caller takes the whole candidate set, as before.
     for meta in candidates {
-        if move_budget.is_some_and(|budget| selection.selected_live_bytes >= budget) {
-            selection.budget_stopped = true;
-            break;
-        }
         let page = crate::arena::generation_page_for_addr(meta.page_base);
         if selection.pages.insert(page) {
             selection.page_order.push(page);
@@ -103,6 +114,22 @@ pub(super) fn select_old_page_defrag_pages_from_snapshot(
 crate::perry_thread_local! {
     /// Set for the duration of one `gc/idle_compact.rs` collection.
     static IDLE_COMPACT_ARMED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Releasable block bytes the last idle selection promised (#9772).
+    static LAST_IDLE_PREDICTED_RELEASE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// `PERRY_GC_IDLE_COMPACT_BLOCKS` — ON by default. `=0`/`off`/`false` restores
+/// the pre-#9772 page-granular selection, which predicts releasable bytes it
+/// cannot return. Present so the two selections can be compared in one binary.
+fn idle_compact_block_selection_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| crate::gc::env_default_on_enabled("PERRY_GC_IDLE_COMPACT_BLOCKS"))
+}
+
+/// Block bytes the most recent idle-compaction selection predicted it could
+/// hand back. `gc/idle_compact.rs` checks the pass against it.
+pub(super) fn last_idle_predicted_release_bytes() -> usize {
+    LAST_IDLE_PREDICTED_RELEASE.with(|c| c.get())
 }
 
 fn idle_compact_armed() -> bool {
@@ -221,6 +248,12 @@ pub(super) fn select_old_page_defrag_pages(force: bool) -> OldPageDefragSelectio
     }
     let snapshot = crate::arena::old_page_meta_snapshot();
     let selection = select_old_page_defrag_pages_from_snapshot(&snapshot, force);
+    if idle_compact_armed() {
+        // #9772: publish what this pass PROMISED, so the pass that consumes it
+        // can be judged against its own prediction instead of reporting a
+        // pause and no bytes.
+        LAST_IDLE_PREDICTED_RELEASE.with(|c| c.set(selection.selected_releasable_block_bytes));
+    }
     if idle_compact_armed() && crate::gc::gc_diag_enabled() {
         let dead: usize = snapshot.iter().map(|m| m.dead_bytes).sum();
         let live: usize = snapshot.iter().map(|m| m.live_bytes).sum();
@@ -336,4 +369,90 @@ mod tests {
         // rather than the disabled default, i.e. the two paths are distinct.
         let _ = enabled;
     }
+}
+
+/// Block-granular selection for the idle compaction (#9772).
+///
+/// Groups every old page with live bytes by its containing arena block, drops
+/// blocks that hold pinned bytes (those can never be emptied), ranks the rest
+/// by how much live data must move to empty them, and takes whole blocks until
+/// [`IDLE_COMPACT_MOVE_BUDGET_BYTES`] of live bytes is committed.
+/// `selected_releasable_block_bytes` is then the sum of the selected blocks'
+/// sizes — memory the reclaim actually hands back — rather than a sum of page
+/// granules nothing releases.
+fn select_whole_blocks(
+    snapshot: &[crate::arena::OldPageMeta],
+    mut selection: OldPageDefragSelection,
+) -> OldPageDefragSelection {
+    let ranges = crate::arena::old_arena_block_ranges();
+    if ranges.is_empty() {
+        return selection;
+    }
+    #[derive(Default, Clone)]
+    struct BlockAcc {
+        live_bytes: usize,
+        dead_bytes: usize,
+        pinned: bool,
+        pages: Vec<usize>,
+    }
+    let mut blocks: Vec<BlockAcc> = vec![BlockAcc::default(); ranges.len()];
+    for &meta in snapshot {
+        if meta.allocated_bytes == 0 {
+            continue;
+        }
+        let Some(bi) = crate::arena::old_arena_block_range_index(&ranges, meta.page_base) else {
+            continue;
+        };
+        let acc = &mut blocks[bi];
+        acc.live_bytes = acc.live_bytes.saturating_add(meta.live_bytes);
+        acc.dead_bytes = acc.dead_bytes.saturating_add(meta.dead_bytes);
+        acc.pinned |= meta.pinned_bytes > 0;
+        acc.pages
+            .push(crate::arena::generation_page_for_addr(meta.page_base));
+    }
+
+    let mut order: Vec<usize> = (0..blocks.len())
+        .filter(|&i| {
+            let b = &blocks[i];
+            // A block with no live occupant is already the ordinary sweep's
+            // job; a pinned one can never be emptied by moving.
+            !b.pinned && b.live_bytes > 0 && b.dead_bytes > 0 && !b.pages.is_empty()
+        })
+        .collect();
+    selection.candidate_pages = order.iter().map(|&i| blocks[i].pages.len()).sum();
+    selection.skipped_pinned_pages = blocks.iter().filter(|b| b.pinned).map(|b| b.pages.len()).sum();
+    // Cheapest to empty first; among equals prefer the one that gives back the
+    // most dead bytes.
+    order.sort_unstable_by(|&a, &b| {
+        blocks[a]
+            .live_bytes
+            .cmp(&blocks[b].live_bytes)
+            .then_with(|| blocks[b].dead_bytes.cmp(&blocks[a].dead_bytes))
+            .then_with(|| ranges[a].0.cmp(&ranges[b].0))
+    });
+
+    for bi in order {
+        if selection.selected_live_bytes >= IDLE_COMPACT_MOVE_BUDGET_BYTES {
+            selection.budget_stopped = true;
+            break;
+        }
+        let acc = &blocks[bi];
+        for &page in &acc.pages {
+            if selection.pages.insert(page) {
+                selection.page_order.push(page);
+                selection.selected_pages = selection.selected_pages.saturating_add(1);
+            }
+        }
+        selection.selected_live_bytes = selection
+            .selected_live_bytes
+            .saturating_add(acc.live_bytes);
+        selection.selected_reclaimable_bytes = selection
+            .selected_reclaimable_bytes
+            .saturating_add(acc.dead_bytes);
+        // The whole block comes back once its live occupants are gone.
+        selection.selected_releasable_block_bytes = selection
+            .selected_releasable_block_bytes
+            .saturating_add(ranges[bi].3);
+    }
+    selection
 }
