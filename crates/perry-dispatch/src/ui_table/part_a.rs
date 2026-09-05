@@ -934,7 +934,7 @@ pub(crate) const PERRY_UI_TABLE_PART_A: &[MethodRow] = &[
     MethodRow {
         method: "widgetReorderChild",
         runtime: "perry_ui_widget_reorder_child",
-        args: &[ArgKind::Widget, ArgKind::I64Raw, ArgKind::I64Raw],
+        args: &[ArgKind::Widget, ArgKind::F64, ArgKind::F64],
         ret: ReturnKind::Void,
     },
     MethodRow {
