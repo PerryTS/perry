@@ -109,6 +109,8 @@ pub use live_slots::{
 };
 pub use null_stub::{js_unresolved_default_call, js_unresolved_namespace_stub};
 pub(crate) use null_stub::{NullObjectBytes, NULL_OBJECT_BYTES};
+#[cfg(test)]
+pub(crate) use side_table_roots::test_transition_cache_insert;
 pub(crate) use side_table_roots::{
     prune_dead_transition_cache_entries, prune_dead_transition_cache_entries_young,
 };
@@ -660,6 +662,21 @@ fn shape_cache_get_with_id(shape_id: u32) -> (*mut ArrayHeader, u32) {
         .unwrap_or((std::ptr::null_mut(), 0))
 }
 
+/// Rule 1 of `gc/young_log.rs` for the shape cache: log `shape_id` BEFORE the
+/// entry naming `keys_array` becomes findable.
+///
+/// Every writer of the cache — the production `shape_cache_insert` and the
+/// `#[cfg(test)]` seed seam — arms through this one function. A seam that
+/// re-implements the predicate is the failure mode this exists to prevent:
+/// the tests then validate an arming rule that is not the one that ships, and
+/// deleting the production arm site stays green.
+#[inline]
+pub(super) fn arm_shape_cache_young(shape_id: u32, keys_array: *mut ArrayHeader) {
+    if crate::gc::young_log::addr_is_minor_relevant(keys_array as usize) {
+        SHAPE_CACHE_YOUNG.with(|log| log.borrow_mut().note(shape_id));
+    }
+}
+
 /// Insert a keys_array into the cache. Updates the inline slot
 /// (evicting any prior entry there) and also writes to the overflow
 /// map so misses on the inline cache still find the value.
@@ -691,9 +708,7 @@ fn shape_cache_insert(shape_id: u32, keys_array: *mut ArrayHeader) {
     let slot = (shape_id as usize) & (SHAPE_INLINE_CACHE_SIZE - 1);
     // #9754 rule 1: log the id BEFORE the entry is published when the keys
     // array can matter to a minor.
-    if crate::gc::young_log::addr_is_minor_relevant(keys_array as usize) {
-        SHAPE_CACHE_YOUNG.with(|log| log.borrow_mut().note(shape_id));
-    }
+    arm_shape_cache_young(shape_id, keys_array);
     unsafe {
         // GC_STORE_AUDIT(ROOT): shape_inline_cache entries are scanned by scan_shape_cache_roots_mut.
         let entry = &mut (*st.object_hot.shape_inline_cache.get())[slot];
@@ -1058,6 +1073,28 @@ unsafe fn transition_cache_stamp_shape_shared(next_keys: usize) -> bool {
     true
 }
 
+/// Rule 1 of `gc/young_log.rs` for the transition cache: log `slot` BEFORE the
+/// entry becomes findable.
+///
+/// `kid` is only an address when `len_marker == 0`; with a length marker set
+/// it is a packed length, not a pointer, so classifying it would be a category
+/// error. Both writers — `transition_cache_insert` and the `#[cfg(test)]` seed
+/// seam — arm through here, so that distinction cannot be dropped in one and
+/// kept in the other (it was: the seam classified `key_ptr` unconditionally).
+#[inline]
+pub(super) fn arm_transition_cache_young(
+    slot: usize,
+    next_keys: usize,
+    kid: usize,
+    len_marker: u32,
+) {
+    if crate::gc::young_log::addr_is_minor_relevant(next_keys)
+        || (len_marker == 0 && crate::gc::young_log::addr_is_minor_relevant(kid))
+    {
+        TRANSITION_CACHE_YOUNG.with(|log| log.borrow_mut().note(slot as u32));
+    }
+}
+
 fn transition_cache_insert(
     array_tail_owner: *const ObjectHeader,
     prev_shape_id: u32,
@@ -1088,11 +1125,7 @@ fn transition_cache_insert(
     }
     // #9754 rule 1: log the slot BEFORE the entry is published when either
     // address can matter to a minor.
-    if crate::gc::young_log::addr_is_minor_relevant(next_keys)
-        || (len_marker == 0 && crate::gc::young_log::addr_is_minor_relevant(kid))
-    {
-        TRANSITION_CACHE_YOUNG.with(|log| log.borrow_mut().note(slot as u32));
-    }
+    arm_transition_cache_young(slot, next_keys, kid, len_marker);
     with_transition_cache(|t| unsafe {
         // GC_STORE_AUDIT(ROOT): TRANSITION_CACHE_GLOBAL entries are scanned by scan_transition_cache_roots_mut.
         let entry = &mut (*t)[slot];
@@ -1289,13 +1322,19 @@ pub fn scan_object_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'
     }
 }
 
+/// Drive the PRODUCTION shape-cache writer from a test. Deliberately nothing
+/// but a call: a seam with logic of its own can drift from the writer it
+/// stands in for, which is exactly what let a deleted arm site stay green.
+#[cfg(test)]
+pub(crate) fn test_shape_cache_insert(shape_id: u32, keys_array: *mut ArrayHeader) {
+    shape_cache_insert(shape_id, keys_array);
+}
+
 #[cfg(test)]
 pub(crate) fn test_seed_shape_cache_root(shape_id: u32, keys_array: *mut ArrayHeader) {
     let st = crate::state::state();
     let slot = (shape_id as usize) & (SHAPE_INLINE_CACHE_SIZE - 1);
-    if crate::gc::young_log::addr_is_minor_relevant(keys_array as usize) {
-        SHAPE_CACHE_YOUNG.with(|log| log.borrow_mut().note(shape_id));
-    }
+    arm_shape_cache_young(shape_id, keys_array);
     unsafe {
         // GC_STORE_AUDIT(ROOT): test seed mirrors shape_inline_cache roots scanned by scan_shape_cache_roots_mut.
         let entry = &mut (*st.object_hot.shape_inline_cache.get())[slot];

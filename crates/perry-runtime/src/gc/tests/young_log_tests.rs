@@ -386,15 +386,62 @@ fn young_transition_cache_target_is_rewritten_through_the_log() {
     );
 }
 
+/// The PRODUCTION transition-cache writer arms on EITHER address, and the
+/// second clause — a young interned KEY under an old target — was covered by
+/// no test: all three `#[cfg(test)]` seeds either ignored the key or
+/// classified it unconditionally, so `transition_cache_insert`'s own
+/// `(len_marker == 0 && addr_is_minor_relevant(kid))` arm could be deleted
+/// while the suite stayed green. This drives the real writer.
+#[test]
+fn young_transition_key_under_an_old_target_arms_the_log_through_the_writer() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    gc_register_mutable_root_scanner(crate::object::scan_transition_cache_roots_mut);
+    crate::object::test_clear_transition_cache_root();
+
+    // Target OLD: the first clause of the predicate is false for it.
+    let old_target = unsafe {
+        let arr = crate::arena::arena_alloc_gc_old(
+            std::mem::size_of::<crate::array::ArrayHeader>(),
+            std::mem::align_of::<crate::array::ArrayHeader>(),
+            GC_TYPE_ARRAY,
+        ) as *mut crate::array::ArrayHeader;
+        (*arr).length = 0;
+        (*arr).capacity = 0;
+        arr as usize
+    };
+    assert!(!crate::arena::pointer_in_nursery(old_target));
+
+    // Key YOUNG, and long enough that `transition_key_id` keeps it a POINTER
+    // (`len_marker == 0`) rather than packing it as a length.
+    let key = crate::string::js_string_from_bytes(b"young-transition-key".as_ptr(), 20);
+    assert!(crate::arena::pointer_in_nursery(key as usize));
+
+    let before = young_log::last_walk("object.transition_cache");
+    crate::object::test_transition_cache_insert(0, key, old_target, 0, 0);
+
+    // The log must now name the slot the writer published into. Reading it
+    // through a minor is the same observation the scanner makes.
+    let _ = gc_collect_minor();
+    let row = walk("object.transition_cache");
+    assert!(row.partial, "{row:?}");
+    assert!(
+        row.visited >= 1,
+        "the young KEY must have armed the log: {row:?} (before: {before:?})"
+    );
+}
+
 #[test]
 fn young_shape_cache_entry_is_moved_through_the_log() {
     let _guard = CopyingNurseryTestGuard::new(0);
     gc_register_mutable_root_scanner(crate::object::scan_shape_cache_roots_mut);
 
-    // Reachable ONLY through the cache (which roots it).
+    // Reachable ONLY through the cache (which roots it). Seeded through the
+    // PRODUCTION writer (`shape_cache_insert`), not a test seam: a seam that
+    // arms the log itself makes this test pass with the writer's own arm site
+    // deleted, which is how #9755 shipped an unenforced rule 1.
     let keys = unsafe { young_keys_array() };
     let shape_id = 0x9754_0001;
-    crate::object::test_seed_shape_cache_root(shape_id, keys);
+    crate::object::test_shape_cache_insert(shape_id, keys);
 
     let _ = gc_collect_minor();
 

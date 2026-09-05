@@ -22,9 +22,11 @@ pub(crate) fn test_shape_cache_root(shape_id: u32) -> (usize, usize) {
 
 #[cfg(test)]
 pub(crate) fn test_seed_transition_cache_root(next_keys: usize) {
-    if crate::gc::young_log::addr_is_minor_relevant(next_keys) {
-        super::TRANSITION_CACHE_YOUNG.with(|log| log.borrow_mut().note(0));
-    }
+    // Slot 0, no key and no length marker: the `len_marker == 0` arm of the
+    // shared predicate with `kid == 0`, which classifies as not-relevant.
+    // Arming through the shared helper is what keeps every writer of this
+    // table on one rule (this seam used to carry a third variant of it).
+    super::arm_transition_cache_young(0, next_keys, 0, 0);
     with_transition_cache(|t| unsafe {
         // GC_STORE_AUDIT(ROOT): test seed mirrors TRANSITION_CACHE_GLOBAL roots scanned by scan_transition_cache_roots_mut.
         let entry = &mut (*t)[0];
