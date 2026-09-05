@@ -477,7 +477,7 @@ pub fn scan_closure_dynamic_props_roots_mut(visitor: &mut crate::gc::RuntimeRoot
     // log and are kept — they name entries this walk already visited under
     // their old key, so the duplicate is harmless.
     let _ = CLOSURE_YOUNG_OWNERS.with(|log| log.borrow_mut().take_sorted());
-    let mut kept = Vec::new();
+    let mut kept = CLOSURE_YOUNG_OWNERS.with(|log| log.borrow_mut().take_spare());
     for owner in owners {
         let (new_owner, relevant) = scan_closure_owner(visitor, owner);
         if relevant {
@@ -519,7 +519,7 @@ fn scan_closure_side_tables_young(visitor: &mut crate::gc::RuntimeRootVisitor<'_
     debug_assert_closure_young_log_complete();
     let mut logged = 0u64;
     let mut visited = 0u64;
-    let mut kept = Vec::new();
+    let mut kept = CLOSURE_YOUNG_OWNERS.with(|log| log.borrow_mut().take_spare());
     loop {
         let batch = CLOSURE_YOUNG_OWNERS.with(|log| log.borrow_mut().take_sorted());
         if batch.is_empty() {
