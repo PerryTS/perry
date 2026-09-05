@@ -71,13 +71,14 @@ sessions x 7 repeats (21 runs per probe), plus 5 traced runs per probe:
 The GC accounting family is parsed from `PERRY_GC_DIAG=1` output in a separate,
 untimed pass; enabling the trace was verified not to change `heap_used_bytes`,
 so the traced pass observes the same collector the untimed pass measures. The
-harness takes two traced runs on every invocation and fails if they disagree —
-that is the harness proving, each time it runs, that the counters it is about to
-gate on really are deterministic.
+harness records two traced runs on every invocation. `check` fails if a gated
+counter disagrees, even within its tolerance band. Documented probe overrides
+apply here too; the measurement keeps both samples and runs every later probe.
 
-Retention and GC accounting are semantic: they are a function of the allocation
-sequence and collector policy, not of CPU speed, core count, or machine load.
-That is why they can be gated on a shared CI runner and memory and time cannot.
+Retention and GC accounting usually transfer across machine classes because
+they describe allocation and collector work rather than CPU speed. They must
+still demonstrate repeatability: block placement can change the collection
+point and therefore the live cohort, as the #9790 investigation below shows.
 
 ## A probe may declare the collector it is a probe *of* (the large-Eden arm)
 
@@ -332,10 +333,63 @@ carrying a non-deterministic gating cell cannot be *pinned*. Before #7554 the
 rule existed only in `tests/test_gc_ratchet.py`, which is why a bad pin could
 be committed and only wedge CI afterwards.
 
-The section is currently **empty**, which is the goal state and not an
-oversight. Its one entry — `12_large_live_set.heap_used_bytes` — was deleted by
-#7558, which removed the *cause* rather than the cell. That is rule 4 working
-as designed.
+The former `12_large_live_set.heap_used_bytes` entry was deleted by #7558,
+which removed its cause. The two current entries exclude only
+`07_array_grow_evacuate.copied_bytes` and `.freed_bytes`, with the following
+evidence. Removing the placement dependency would allow deleting these entries.
+
+### Array growth: placement changes the collection point (#9790)
+
+Twenty-one executions of one unchanged binary produced two counter tuples.
+Every stdout matched Node 26.5.1. Retained heap, arena capacity, minor/step
+counts, copied/promoted object counts, and promoted bytes were identical.
+The [receipt](evidence/9790-array-growth-pacing.json) records raw byte-counter
+samples, stable metrics, and compiler/runtime/probe hashes.
+
+Temporary logging in `move_young` cross-checked the counters against the actual
+headers moved. Only the fifth minor's live cohort differed: an 8,208-byte array
+with length 640, capacity 1,024, and seed 5,207 was reached through the ring's
+remembered edge in one run. The other run instead copied a 144-byte array with
+length 1, capacity 16, and seed 5,240 from the native stack. The difference is
+exactly **8,064 bytes**, while both runs copy one object. Summing the other
+copied headers gives the same result in both runs.
+
+The freed-byte difference also balances against the actual from-space usage:
+
+| Fifth minor | Higher copied bytes | Lower copied bytes |
+|---|---:|---:|
+| Eden bytes | 16,775,936 | 16,776,080 |
+| Active survivor bytes | 517,248 | 517,248 |
+| Copied bytes | 525,312 | 517,248 |
+| Promoted bytes | 131,328 | 131,328 |
+| Freed bytes | 16,636,544 | 16,644,752 |
+
+In each column, freed = Eden + active survivor - copied - promoted; malloc
+reclamation is zero. There is no unexplained accounting remainder.
+
+Block-boundary logging located the pacing cause. `arena_cell_alloc` checks GC
+pressure when its current block cannot satisfy an allocation. Promotion walks
+address-keyed root tables, so equal total promoted bytes can fill individual
+old blocks differently. In the higher-copy run, an old block overflowed on a
+4,112-byte growth request after young occupancy had crossed the cap. In the
+lower-copy run, that old-block rollover occurred earlier, below the cap; the
+next nursery block overflow armed collection while starting the next array.
+`js_array_grow` can fall back to old allocation when a growth cannot fit the
+current nursery block, connecting this workload to that old-block geometry.
+The earlier dirty-page statistics also vary with placement; they alone would
+not have established the cause.
+
+The two byte counters therefore describe real, placement-dependent work on
+this workload. They remain measured and displayed, with their existing bands;
+only their ability to fail the gate is excluded. The probe's correctness,
+retention, cycle counts, copied/promoted object counts, and promoted bytes
+remain gated, as do these byte counters on every other probe. Runtime pacing
+and the probe's allocation sequence are unchanged.
+
+The determinism check now runs in `check`, where the baseline's reviewed
+overrides are available. An unlisted disagreement still fails even if its
+median equals the baseline, and the full measurement artifact survives for
+inspection. `assemble` still refuses to pin any nondeterministic gated cell.
 
 ### What that probe's non-determinism was, and where it went (#7558)
 

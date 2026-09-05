@@ -103,12 +103,12 @@
       "job red. Every entry carries evidence that is checked, not merely stored --",
       "at least 21 runs (the same number every band above is justified by) and a",
       "spread that is actually non-zero, so a cell cannot be excluded on a hunch.",
-      "The section is EMPTY, and that is the goal state. Its one entry --",
-      "12_large_live_set.heap_used_bytes, added by #7554 -- was deleted by #7558,",
-      "which removed the cause rather than the cell: explicit gc() no longer forces",
-      "the conservative native-stack scan, so that reading is bit-identical again",
-      "and gates again. An empty section is not a disarmed rule; the evidence",
-      "checks and the never-gate-nothing rule still fail any entry added back.",
+      "The former 12_large_live_set.heap_used_bytes exclusion was removed by #7558.",
+      "#9790 excludes only 07_array_grow_evacuate.copied_bytes and freed_bytes:",
+      "promotion order changes block packing and when nursery pressure is checked.",
+      "The receipt records 21 runs and an allocation-level accounting cross-check.",
+      "Both cells remain measured and reported. All other cells retain their bands.",
+      "Deleting the placement dependency means deleting these exclusions.",
       "",
       "#7559 -- A heap_used_bytes band used to NOT be a statement about how much",
       "the collector retained. The reading is taken after the probe's own gc(),",
@@ -295,7 +295,30 @@
         "rationale": "GATED HERE ONLY. Worst cross-session spread of medians-of-7 was 0.751% on an idle box (load 1.7-2.0); worst raw within-session spread was 5.3%, which the median-of-7 damps out. 10% is ~13x the cross-session figure and ~2x the worst raw spread, so it will not fire on scheduler jitter but will catch the tens-of-percent slowdown a whole-stack conservative scan would introduce. The 15 ms floor covers the fastest probe (126 ms)."
       }
     },
-    "probe_overrides": {}
+    "probe_overrides": {
+      "07_array_grow_evacuate": {
+        "copied_bytes": {
+          "gating": false,
+          "rationale": "NOT GATED ON THIS PROBE (#9790). Address-dependent promotion order changes old-block packing and the allocation boundary where nursery pressure is checked. The fifth minor observes a different live cohort: a completed 8,208-byte array or a new 144-byte array. Header-size sums and from-space reclamation account for the byte deltas; this is placement-dependent pacing, not an accounting discrepancy. Keep this cell visible; correctness, retention, cycle counts, object counts and promoted bytes remain gated. See evidence/9790-array-growth-pacing.json and the README investigation.",
+          "evidence": {
+            "observed_runs": 21,
+            "observed_spread": 8064,
+            "measured_on": "2026-09-05, macOS arm64, Perry 0.5.1520; 21 executions of one unchanged binary. Compiler/runtime hashes and raw counters: benchmarks/gc_ratchet/evidence/9790-array-growth-pacing.json.",
+            "issue": "https://github.com/PerryTS/perry/issues/9790"
+          }
+        },
+        "freed_bytes": {
+          "gating": false,
+          "rationale": "NOT GATED ON THIS PROBE (#9790). Address-dependent promotion order changes old-block packing and the allocation boundary where nursery pressure is checked. The fifth minor observes a different live cohort: a completed 8,208-byte array or a new 144-byte array. Header-size sums and from-space reclamation account for the byte deltas; this is placement-dependent pacing, not an accounting discrepancy. Keep this cell visible; correctness, retention, cycle counts, object counts and promoted bytes remain gated. See evidence/9790-array-growth-pacing.json and the README investigation.",
+          "evidence": {
+            "observed_runs": 21,
+            "observed_spread": 8208,
+            "measured_on": "2026-09-05, macOS arm64, Perry 0.5.1520; 21 executions of one unchanged binary. Compiler/runtime hashes and raw counters: benchmarks/gc_ratchet/evidence/9790-array-growth-pacing.json.",
+            "issue": "https://github.com/PerryTS/perry/issues/9790"
+          }
+        }
+      }
+    }
   },
   "notes": "Re-pinned for #8122-recover: the allocation census before minor #0 object-denominates the first nursery cap (first cycle fires earlier on small-object workloads), one descriptor lookup per traced object, untraced-promotion threshold 990 -> 980. Every GC-accounting fingerprint shifts; retention improves on 12_large_live_set (-75%) and 13_large_eden_survivors moves +85 KB because its cycle 0 now holds up an in-place promotion at 581 permille (main at cap 49 retains 651 KB the same way).",
   "probes": {

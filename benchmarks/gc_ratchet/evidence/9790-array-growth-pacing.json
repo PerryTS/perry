@@ -1,0 +1,177 @@
+{
+  "issue": 9790,
+  "measured_at": "2026-09-05",
+  "platform": "darwin-arm64",
+  "runtime_version": "0.5.1520",
+  "source": "benchmarks/gc_ratchet/probes/07_array_grow_evacuate.ts (unchanged workload)",
+  "run_env": {
+    "PERRY_GC_DIAG": "1",
+    "PERRY_GC_TRACE": "1"
+  },
+  "oracle": {
+    "version": "v26.5.1",
+    "matching_runs": 21,
+    "stdout": "probe:07_array_grow_evacuate\nchecksum:21891160\nsurvivors:94\n"
+  },
+  "binaries": {
+    "perry": {
+      "bytes": 152440456,
+      "sha256": "0e482d4099c396832d57acd1ed9a974107735901cafeeac609ae04ec7a3beb69"
+    },
+    "libperry_runtime.a": {
+      "bytes": 87787184,
+      "sha256": "f979e631e6e1d468db1b40bc85882660afe7c79d75c9fc11c18a71fe58c5d591"
+    },
+    "probe": {
+      "bytes": 16811144,
+      "sha256": "1f5e3b44052edf6c63fdb1cb51e3f62ec819db50435f264c6ef218da23f230d5"
+    }
+  },
+  "constant_counters": {
+    "minor_cycles": 5,
+    "step_cycles": 5,
+    "copied_objects": 6745,
+    "promoted_objects": 6197,
+    "promoted_bytes": 844600
+  },
+  "constant_retention": {
+    "heap_used_bytes": 1214784,
+    "heap_total_bytes": 25165824
+  },
+  "samples": [
+    {
+      "copied_bytes": 2648008,
+      "freed_bytes": 83558840
+    },
+    {
+      "copied_bytes": 2639944,
+      "freed_bytes": 83567048
+    },
+    {
+      "copied_bytes": 2648008,
+      "freed_bytes": 83558840
+    },
+    {
+      "copied_bytes": 2639944,
+      "freed_bytes": 83567048
+    },
+    {
+      "copied_bytes": 2648008,
+      "freed_bytes": 83558840
+    },
+    {
+      "copied_bytes": 2639944,
+      "freed_bytes": 83567048
+    },
+    {
+      "copied_bytes": 2648008,
+      "freed_bytes": 83558840
+    },
+    {
+      "copied_bytes": 2639944,
+      "freed_bytes": 83567048
+    },
+    {
+      "copied_bytes": 2648008,
+      "freed_bytes": 83558840
+    },
+    {
+      "copied_bytes": 2648008,
+      "freed_bytes": 83558840
+    },
+    {
+      "copied_bytes": 2648008,
+      "freed_bytes": 83558840
+    },
+    {
+      "copied_bytes": 2639944,
+      "freed_bytes": 83567048
+    },
+    {
+      "copied_bytes": 2648008,
+      "freed_bytes": 83558840
+    },
+    {
+      "copied_bytes": 2648008,
+      "freed_bytes": 83558840
+    },
+    {
+      "copied_bytes": 2648008,
+      "freed_bytes": 83558840
+    },
+    {
+      "copied_bytes": 2648008,
+      "freed_bytes": 83558840
+    },
+    {
+      "copied_bytes": 2648008,
+      "freed_bytes": 83558840
+    },
+    {
+      "copied_bytes": 2639944,
+      "freed_bytes": 83567048
+    },
+    {
+      "copied_bytes": 2648008,
+      "freed_bytes": 83558840
+    },
+    {
+      "copied_bytes": 2648008,
+      "freed_bytes": 83558840
+    },
+    {
+      "copied_bytes": 2648008,
+      "freed_bytes": 83558840
+    }
+  ],
+  "diagnostic": {
+    "method": "Temporary move/header and block-boundary logging in runtime source at c7361c87c73738fe97cf352c75c9f00ce0a9b346; manually relinked the same generated object. Both original counter tuples and Node stdout reproduced. Diagnostic edits are not part of the runtime fix.",
+    "high": {
+      "copied_bytes": 2648008,
+      "freed_bytes": 83558840,
+      "fifth_minor_copied_bytes": 525312,
+      "fifth_minor_promoted_bytes": 131328,
+      "fifth_minor_freed_bytes": 16636544,
+      "fifth_minor_eden_bytes": 16775936,
+      "fifth_minor_survivor_bytes": 517248,
+      "extra_array": {
+        "seed": 5207,
+        "length": 640,
+        "capacity": 1024,
+        "header_size": 8208,
+        "source": "remembered_set"
+      },
+      "last_block_trigger": {
+        "generation": "Old",
+        "request": 4112,
+        "offset": 1045352,
+        "block_size": 1048576,
+        "young_bytes": 17293184
+      }
+    },
+    "low": {
+      "copied_bytes": 2639944,
+      "freed_bytes": 83567048,
+      "fifth_minor_copied_bytes": 517248,
+      "fifth_minor_promoted_bytes": 131328,
+      "fifth_minor_freed_bytes": 16644752,
+      "fifth_minor_eden_bytes": 16776080,
+      "fifth_minor_survivor_bytes": 517248,
+      "extra_array": {
+        "seed": 5240,
+        "length": 1,
+        "capacity": 16,
+        "header_size": 144,
+        "source": "mutable_root_slots/native_stack"
+      },
+      "last_block_trigger": {
+        "generation": "Nursery",
+        "request": 144,
+        "offset": 1048496,
+        "block_size": 1048576,
+        "young_bytes": 17293184
+      }
+    },
+    "conservation": "fifth_minor_freed_bytes = fifth_minor_eden_bytes + fifth_minor_survivor_bytes - fifth_minor_copied_bytes - fifth_minor_promoted_bytes in both arms; malloc freed bytes are zero. Total copied-byte delta = 8208 - 144 = 8064."
+  }
+}
