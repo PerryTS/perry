@@ -1552,7 +1552,7 @@ pub(super) fn run_copied_minor_attempt(
     if gc_verify_evacuation_enabled() {
         let phase_start = trace_phase_start(trace);
         let valid_ptrs = build_valid_pointer_set();
-        verify_evacuated_no_stale_forwarded_refs(&valid_ptrs);
+        verify_evacuated_no_stale_forwarded_refs(EvacuationVerifier::copying_minor(&valid_ptrs));
         trace_phase_record(trace, "evacuation_verify", phase_start);
     }
 

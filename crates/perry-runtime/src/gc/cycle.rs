@@ -1411,7 +1411,9 @@ impl GcCycleState {
                 trace_phase_record(&mut self.trace, "reference_rewrite", phase_start);
                 if gc_verify_evacuation_enabled() {
                     let phase_start = trace_phase_start(&self.trace);
-                    verify_evacuated_no_stale_forwarded_refs(valid_ptrs);
+                    verify_evacuated_no_stale_forwarded_refs(EvacuationVerifier::all_forwarded(
+                        valid_ptrs,
+                    ));
                     trace_phase_record(&mut self.trace, "evacuation_verify", phase_start);
                 }
                 let released =
