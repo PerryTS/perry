@@ -172,6 +172,29 @@ fn install_string_wrapper_length(
     );
 }
 
+/// UTF-16 length of the primitive a `String` wrapper boxes, or `None` when
+/// `addr` is not one. Two header reads and a side-table probe: no content
+/// copy, no allocation, so a descriptor lookup can afford to ask.
+pub(crate) fn boxed_string_wrapper_utf16_len(addr: usize) -> Option<u32> {
+    unsafe {
+        let header = crate::value::addr_class::try_read_gc_header(addr)?;
+        if header.obj_type != crate::gc::GC_TYPE_OBJECT {
+            return None;
+        }
+        let obj_ptr = addr as *const crate::object::ObjectHeader;
+        let (class_id, payload) = boxed_primitive_payload_for_object(obj_ptr)?;
+        if class_id != CLASS_ID_BOXED_STRING {
+            return None;
+        }
+        let str_ptr = crate::value::js_get_string_pointer_unified(payload)
+            as *const crate::string::StringHeader;
+        if str_ptr.is_null() {
+            return None;
+        }
+        Some(crate::string::js_string_length(str_ptr))
+    }
+}
+
 /// String exotic objects (ECMA-262 §10.4.3) expose each UTF-16 code unit as an
 /// integer-indexed own property `"0".."len-1"` with the descriptor
 /// `{ value: <char>, writable: false, enumerable: true, configurable: false }`.
@@ -187,20 +210,42 @@ fn install_string_wrapper_indices(
         return;
     }
     let len = crate::string::js_string_length(string_ptr);
+    if len == 0 {
+        return;
+    }
+    // The index descriptors are a fact of the CLASS, not of this object:
+    // every in-range index of every String wrapper is
+    // `{ writable: false, enumerable: true, configurable: false }`. They are
+    // therefore answered by `descriptor_state::string_wrapper_index_attrs`
+    // from the wrapper's own payload rather than stored, and the loop below
+    // installs only the key/value pair.
+    //
+    // What that removes, per boxed character: a `String` (Rust heap), a
+    // `(usize, String)` hash entry in `PROPERTY_DESCRIPTORS`, an owner-index
+    // entry, a meta-descriptor key bit — and a `prop_plan_epoch_bump()`, a
+    // PROGRAM-WIDE property-plan invalidation, once per character. A sloppy
+    // method call on a string primitive boxes its receiver
+    // (`call_primitive_closure_value` -> `js_object_coerce`), so on the
+    // compiled claude-code TUI that ran over every rendered line: measured at
+    // 295 MB of the 990 MB a 3300-character reply allocates.
+    //
+    // `note_descriptor_target` still marks the wrapper, so every caller that
+    // gates on "does this object have non-default descriptors?" before
+    // consulting `get_property_attrs` keeps reaching the synthesized answer.
+    crate::object::note_descriptor_target(obj as usize);
+    crate::gc::diag_string_wrapper_materialized(len as u64);
     for i in 0..len {
         let ch = crate::string::js_string_char_at(string_ptr, i as i32);
         if ch.is_null() {
             continue;
         }
-        let name = i.to_string();
-        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        // Canonical (cached, longlived) decimal key for 0..=255 and the
+        // canonical one-character string for ASCII: both come out of the
+        // string caches, so a boxed ASCII string of up to 256 characters
+        // installs its indices without allocating a single string.
+        let key = crate::string::js_number_to_string(i as f64);
         let ch_value = f64::from_bits(crate::value::JSValue::string_ptr(ch).bits());
         crate::object::js_object_set_field_by_name(obj, key, ch_value);
-        crate::object::set_builtin_property_attrs(
-            obj as usize,
-            name,
-            crate::object::PropertyAttrs::new(false, true, false),
-        );
     }
 }
 
