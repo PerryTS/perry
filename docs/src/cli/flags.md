@@ -157,13 +157,20 @@ For source extracted from a Bun standalone executable, mount its extracted
 perry compile --bunfs-root ./fixture/root ./fixture/root/entry.js -o app
 ```
 
-Static imports, re-exports, literal dynamic imports, and literal `require()`
-calls below `/$bunfs/root/` resolve against that directory. Perry canonicalizes
+Static imports, re-exports, literal dynamic imports, literal `require()`, and
+`import.meta.require()` calls below `/$bunfs/root/` resolve against that directory.
+Perry canonicalizes
 their real targets, so importing the same module through `./chunk.js` and
 `/$bunfs/root/chunk.js` still initializes one module. Literal mapped file paths
 are embedded under their original names and work through both `node:fs` and
 `Bun.file()` after the extracted directory is removed. No host-level
 `/$bunfs` directory or compatibility symlink is needed.
+
+Bun bundles can load compiled chunks synchronously with
+`import.meta.require("./chunk.js")` or `import.meta["require"]("./chunk.js")`.
+Both return the module namespace immediately and initialize the target once,
+at its first load. Computed paths use the existing bounded synchronous
+`require(expr)` resolver; unknown targets throw `MODULE_NOT_FOUND` at the call.
 
 Some build pipelines inject a generated module rather than writing it into the
 source checkout. Reproduce that file-map step with `--asset-module`. Perry

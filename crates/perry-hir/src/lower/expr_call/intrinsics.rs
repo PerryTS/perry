@@ -41,4 +41,4 @@ pub(super) use native_arena::{
 };
 pub(super) use native_scalars::validate_native_scalar_conversion_call;
 pub(super) use precompile_wasm::{try_embed_wasm, try_precompile};
-pub(super) use require::{try_dynamic_require, try_require_literal};
+pub(super) use require::{try_dynamic_require, try_import_meta_require, try_require_literal};
