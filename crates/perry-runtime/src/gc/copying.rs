@@ -1837,6 +1837,7 @@ pub(super) fn run_copied_minor_attempt(
         d.report(super::survival_diag::next_minor_seq());
     }
     crate::arena::alloc_sample::report("minor");
+    super::diag_sites::report_primitive_dispatch("minor");
     report_forwarding_refusals("copying_minor");
     super::scanner_profile::report_and_reset("copying_minor");
     CopiedMinorAttempt::Done(Some(CopiedMinorFastPathOutcome {
