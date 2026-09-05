@@ -16,6 +16,16 @@
     "  not_a_gc_pointer   - the stored value is an id, a counter, an epoch, a code address, a",
     "                       .rodata object, or Rust-owned state. Nothing for the collector.",
     "  test_only          - #[cfg(test)] storage; never live in a shipped binary.",
+    "  untraced_in_nonmoving_window",
+    "                     - the stored value IS a GC heap address and is correct BECAUSE it is",
+    "                       untraced: written and consumed inside ONE window in which nothing",
+    "                       moves, nothing is freed and the mutator never runs, and used as a",
+    "                       key rather than dereferenced. `window_opens` / `window_closes` name",
+    "                       the two functions that bound it; the gate checks that both still",
+    "                       exist in the holder's file and both still name the holder, so",
+    "                       widening the window fails. Do NOT reach for this to avoid arguing",
+    "                       a holder is not a pointer \u2014 if the addresses outlive a collection,",
+    "                       the honest verdict is open_gap.",
     "  open_gap           - a real unrooted GC pointer. `issue` says where it is tracked; this",
     "                       verdict FAILS while old-page relocation ships enabled.",
     "  unverified         - enumerated, verdict NOT established. This also FAILS: an unknown",
@@ -236,6 +246,38 @@
       "name": "NEXT_READ_LINES_ID",
       "verdict": "not_a_gc_pointer",
       "why": "Monotonic id counter for READ_LINES_REGISTRY keys. The registry's own heap values are visited by scan_filehandle_roots_mut (fs/filehandle.rs:65), reached from scan_fs_handle_roots_mut."
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/census.rs",
+      "name": "ARMED",
+      "verdict": "not_a_gc_pointer",
+      "why": "#9740: `Cell<bool>` saying whether a PERRY_GC_CENSUS census is armed on this thread. Set by census_arm, cleared by census_take_if_armed_at_full_sweep_start; false unless PERRY_GC_CENSUS is set. A flag, never an address."
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/census.rs",
+      "name": "SEQ",
+      "verdict": "not_a_gc_pointer",
+      "why": "#9740: `Cell<u32>` monotonic census sequence number, incremented once per emitted census and written to the JSON line as `seq`. A counter, exactly what this verdict names."
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/census.rs",
+      "name": "LABEL",
+      "verdict": "not_a_gc_pointer",
+      "why": "#9740: `RefCell<&'static str>` holding what triggered the armed census \u2014 \"manual\" (explicit gc()), \"signal\" (SIGUSR2), or a test literal. `&'static str` from string literals is .rodata, which this verdict names; the census never constructs one from the JS heap."
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/census.rs",
+      "name": "PASS1_MARKED",
+      "verdict": "untraced_in_nonmoving_window",
+      "window_opens": "census_pass1_if_armed",
+      "window_closes": "census_take_if_armed_at_full_sweep_start",
+      "why": "#9740: sorted GC header addresses of the objects marked when mark propagation finished. These ARE heap addresses, so `not_a_gc_pointer` (an id, a counter, a code address, .rodata or Rust-owned state) would be a false statement about them; they are correct because they are untraced, not because they are not pointers. Written at the end of mark propagation and `take()`n at sweep entry of the SAME cycle \u2014 both call sites are guarded by the identical predicate `self.minor.is_none() && !self.progress_kind.is_budgeted()` (gc/cycle.rs:1182 and :1670, where `full_trace = self.minor.is_none()`), so pass 1 running implies pass 2 consuming it. Not minor means no evacuation and no rewrite_forwarded_references in that cycle; not budgeted means run_to_completion drives every phase on an unbounded budget, so no mutator window exists between the two. Nothing moves, nothing is freed, and the vector is used only as `binary_search` keys at census.rs:389 \u2014 compared, never dereferenced. Deliberately untraced: the marked set is the census's observation, and tracing it would make the observer a participant in the reachability it reports. Distinct from map.rs's MAP_COMPACTION_LOG, which is also address-keyed but LONG-LIVED and stays valid across moves via map_header_moved_for_gc; this holder has no such maintenance and needs none, because it cannot survive a move. The window is the whole safety argument, so the window is what is pinned."
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/census.rs",
+      "name": "TEST_PATH_OVERRIDE",
+      "verdict": "test_only",
+      "why": "#9740: `#[cfg(test)]` per-thread override of the PERRY_GC_CENSUS output path, so a unit test can enable a census without latching the process-wide OnceLock that reads the env var. Holds `Option<&'static str>` \u2014 a leaked path string \u2014 and is absent from shipped binaries."
     },
     {
       "file": "crates/perry-runtime/src/gc/trace.rs",

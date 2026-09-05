@@ -83,6 +83,16 @@ What it does
    (a stale exemption is how these gates rot — same rule as
    `scripts/gc_root_dominance_allowlist.json`).
 
+   One verdict carries a machine-checked side condition rather than only prose.
+   `untraced_in_nonmoving_window` (#9740) covers the holder whose stored value
+   really is a GC heap address and is correct BECAUSE it is untraced — written
+   and consumed inside one window in which nothing moves, nothing is freed and
+   the mutator never runs, and used as a key rather than dereferenced. Such an
+   entry must name the window with `window_opens` / `window_closes`, and both
+   functions must still exist in the holder's own file and still name the
+   holder. The safety argument is entirely "the window is shut", so the window
+   is what the gate pins; see `VERDICTS` for why no older verdict fit.
+
 The identity-pinned frontier
 ----------------------------
 
@@ -125,6 +135,9 @@ How it fails
 * an inventory entry that no longer matches a declaration -> exit 1
 * an `open_gap` or `unverified` verdict -> exit 1; old-page relocation ships
   enabled, so a known or unevaluated movable-address holder cannot be exempted
+* an `untraced_in_nonmoving_window` verdict whose named window no longer bounds
+  the holder — a renamed or deleted boundary, or a boundary that no longer
+  touches the holder -> exit 1
 * a frontier/rule-T holder not in the pinned `frontier` list -> exit 1 (ratchet up)
 * a `frontier` entry matching no holder -> exit 1 (ratchet down / stale)
 * fewer than MIN_HOLDERS declarations matched -> exit 2, because a regex that
@@ -1037,9 +1050,34 @@ VERDICTS = {
     "covered_elsewhere",  # a registered scanner in ANOTHER file visits it
     "not_a_gc_pointer",  # id, counter, epoch, code address, .rodata, Rust-owned
     "test_only",  # #[cfg(test)] storage
+    "untraced_in_nonmoving_window",  # GC addresses, untraced, bounded by a named window
     "open_gap",  # a real unrooted GC pointer, with an issue
     "unverified",  # enumerated, verdict not established — a dated TODO
 }
+
+# `untraced_in_nonmoving_window` (#9740) is for the holder whose stored value IS
+# a GC heap address and which is nonetheless correct BECAUSE it is untraced.
+#
+# `gc/census.rs`'s `PASS1_MARKED` is the case that forced it: a sorted vector of
+# header addresses snapshotted at the end of mark propagation and consumed at
+# sweep entry OF THE SAME synchronous full cycle, used only as `binary_search`
+# keys — compared, never dereferenced, and deliberately not traced (tracing the
+# marked set would make the census a participant in the reachability it exists
+# to observe). Every other verdict would have been a false statement about it:
+# `not_a_gc_pointer` is defined as an id/counter/code address/Rust-owned state
+# and a heap address is none of those; `covered_elsewhere` names a scanner, and
+# no root scan can even observe this holder, which is empty outside the window;
+# `open_gap` and `unverified` assert a defect or an unanswered question, and
+# both fail the gate.
+#
+# The verdict is only worth more than an exemption if the WINDOW is the thing
+# pinned, so `window_opens` / `window_closes` name the two functions that bound
+# it and `window_problems` checks, against the holder's own source, that both
+# still exist and both still name the holder. Renaming a boundary, deleting one,
+# or moving the write or the take out of it turns this gate red — which is the
+# regression the verdict exists to catch, since a holder of stale heap addresses
+# is safe only for as long as its window stays shut.
+WINDOW_FIELDS = ("window_opens", "window_closes")
 
 # `unverified` is the one verdict that classifies nothing. It exists so a hole
 # the gate CAN see is named rather than silent, and it is capped so the list
@@ -1106,7 +1144,43 @@ def apply_frontier(
     return unpinned, stale
 
 
-def inventory_problems(inventory: list[dict]) -> list[str]:
+def window_problems(entry: dict, root: Path, label: str) -> list[str]:
+    """Check a window verdict against the holder's own source.
+
+    The claim `untraced_in_nonmoving_window` makes is not "this value is
+    harmless" but "this value never outlives the window between these two
+    functions". That is checkable in the same shallow, same-file way the rest of
+    this script computes coverage: both boundaries must still be functions in
+    the holder's file, and both must still name the holder. A `why` string
+    cannot notice that the take moved; this can.
+    """
+    problems: list[str] = []
+    path = root / entry["file"]
+    if not path.exists():
+        return [
+            f"{label}: {entry['file']} does not exist, so the window this verdict "
+            f"names cannot be checked"
+        ]
+    bodies = function_bodies(path.read_text(encoding="utf-8", errors="replace"))
+    name = entry["name"]
+    for field in WINDOW_FIELDS:
+        fn = entry[field].strip()
+        body = bodies.get(fn)
+        if body is None:
+            problems.append(
+                f"{label}: {field} names `{fn}`, which is not a function in "
+                f"{entry['file']} — the window's boundary was renamed or removed, so "
+                f"this verdict no longer describes the holder"
+            )
+        elif not re.search(rf"\b{re.escape(name)}\b", body):
+            problems.append(
+                f"{label}: `{fn}` ({field}) no longer mentions `{name}` — the holder "
+                f"outlives the window the verdict was granted for"
+            )
+    return problems
+
+
+def inventory_problems(inventory: list[dict], root: Path | None = None) -> list[str]:
     """Structural checks on the inventory itself.
 
     Without these, `apply_inventory` accepts any object carrying a matching
@@ -1140,6 +1214,16 @@ def inventory_problems(inventory: list[dict]) -> list[str]:
             )
         if verdict == "open_gap" and not (entry.get("issue") or "").strip():
             problems.append(f"{label}: open_gap must cite an `issue`")
+        if verdict == "untraced_in_nonmoving_window":
+            missing = [f for f in WINDOW_FIELDS if not (entry.get(f) or "").strip()]
+            if missing:
+                problems.append(
+                    f"{label}: untraced_in_nonmoving_window must name the window that "
+                    f"bounds the holder — missing {', '.join(missing)}. Without both "
+                    f"boundaries this verdict is an exemption, not a contract"
+                )
+            elif root is not None:
+                problems.extend(window_problems(entry, root, label))
         if verdict in {"open_gap", "unverified"}:
             problems.append(
                 f"{label}: `{verdict}` is not a shippable old-page relocation verdict. "
@@ -1221,7 +1305,7 @@ def report(root: Path, quiet: bool = False) -> int:
 
     inventory = load_inventory(INVENTORY_PATH)
     unclassified, stale = apply_inventory(holders, inventory)
-    malformed = inventory_problems(inventory)
+    malformed = inventory_problems(inventory, root)
     frontier = load_frontier(INVENTORY_PATH)
     frontier_new, frontier_stale = apply_frontier(
         holders, frontier, registered_scanners, inventory
@@ -1893,7 +1977,7 @@ def self_test() -> int:
                 ", ".join(f"{e['file']}:{e['name']}" for e in frontier_stale[:5]),
             )
         )
-    failures.extend(inventory_problems(inventory))
+    failures.extend(inventory_problems(inventory, REPO_ROOT))
     # …and the structural checker must itself be able to fail.
     long_why = "x" * 30
     for bad, expect in (
@@ -1906,6 +1990,48 @@ def self_test() -> int:
             failures.append(
                 f"inventory_problems did not reject the malformed {expect!r} entry: {bad}"
             )
+    # The window verdict's boundaries are checked against real source, so its
+    # rejections need a real tree. Planting one is what keeps the check from
+    # degrading into "the field is non-empty".
+    with tempfile.TemporaryDirectory() as tmp:
+        window_root = Path(tmp)
+        (window_root / "src").mkdir()
+        (window_root / "src" / "w.rs").write_text(
+            "crate::perry_thread_local! {\n"
+            "    static SNAP: RefCell<Option<Vec<usize>>> = const { RefCell::new(None) };\n"
+            "}\n"
+            "fn opens() {\n    SNAP.with(|p| *p.borrow_mut() = Some(Vec::new()));\n}\n"
+            "fn closes() {\n    SNAP.with(|p| p.borrow_mut().take());\n}\n"
+            "fn unrelated() {\n    let _ = 1;\n}\n",
+            encoding="utf-8",
+        )
+        bounded = {
+            "file": "src/w.rs",
+            "name": "SNAP",
+            "verdict": "untraced_in_nonmoving_window",
+            "why": long_why,
+            "window_opens": "opens",
+            "window_closes": "closes",
+        }
+        if inventory_problems([bounded], window_root):
+            failures.append(
+                "the window verdict rejected a holder its own named window bounds"
+            )
+        for field, value, expect in (
+            ("window_opens", "", "window_opens"),
+            ("window_closes", "renamed", "not a function"),
+            ("window_closes", "unrelated", "no longer mentions"),
+        ):
+            broken = dict(bounded, **{field: value})
+            if not any(
+                expect in problem
+                for problem in inventory_problems([broken], window_root)
+            ):
+                failures.append(
+                    f"the window verdict accepted {field}={value!r}, which widens the "
+                    f"window it claims to be bounded by"
+                )
+
     over_cap = [
         {"file": f"f{i}", "name": "N", "verdict": "unverified", "why": long_why}
         for i in range(MAX_UNVERIFIED + 1)

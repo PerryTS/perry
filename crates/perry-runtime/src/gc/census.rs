@@ -43,17 +43,17 @@ static SIGNAL_PENDING: AtomicBool = AtomicBool::new(false);
 static SIGNAL_INSTALLED: AtomicBool = AtomicBool::new(false);
 static MAIN_THREAD: OnceLock<std::thread::ThreadId> = OnceLock::new();
 
-thread_local! {
+crate::perry_thread_local! {
     static ARMED: Cell<bool> = const { Cell::new(false) };
     static SEQ: Cell<u32> = const { Cell::new(0) };
     static LABEL: RefCell<&'static str> = const { RefCell::new("manual") };
 }
 
-#[cfg(test)]
-thread_local! {
+crate::perry_thread_local! {
     /// Test-only per-thread override of the output path, so a unit test can
     /// enable the census without touching the process env (the env read is a
     /// process-wide OnceLock that any earlier collection would latch).
+    #[cfg(test)]
     static TEST_PATH_OVERRIDE: RefCell<Option<&'static str>> = const { RefCell::new(None) };
 }
 
@@ -177,9 +177,29 @@ fn census_service_signal() {
     super::js_gc_collect();
 }
 
-thread_local! {
+crate::perry_thread_local! {
     /// Pass-1 snapshot: sorted header addresses that were marked when mark
     /// propagation finished (see the module docs).
+    ///
+    /// These are real GC header addresses and they are deliberately NOT traced:
+    /// the marked set is what the census observes, so tracing it would make the
+    /// observer a participant in the reachability it reports. That is sound
+    /// only inside one window — written by `census_pass1_if_armed` at the end
+    /// of mark propagation, `take()`n by
+    /// `census_take_if_armed_at_full_sweep_start` at sweep entry of the SAME
+    /// synchronous full cycle. Both call sites in `gc/cycle.rs` are guarded by
+    /// the identical predicate (`self.minor.is_none() && !is_budgeted()`), so
+    /// pass 1 running implies pass 2 consuming it; not-minor means no
+    /// evacuation in that cycle and not-budgeted means no mutator window, so
+    /// nothing moves and nothing is freed while the vector is alive. The
+    /// addresses are only ever `binary_search` keys — compared, never
+    /// dereferenced.
+    ///
+    /// KEEP THE WINDOW SHUT. If the write or the take ever leaves those two
+    /// functions the addresses can go stale, and the census silently
+    /// misclassifies live objects. `scripts/gc_runtime_root_holders.json`
+    /// records this as `untraced_in_nonmoving_window` and pins both boundary
+    /// names, so widening the window turns that gate red (#9740).
     static PASS1_MARKED: RefCell<Option<Vec<usize>>> = const { RefCell::new(None) };
 }
 
