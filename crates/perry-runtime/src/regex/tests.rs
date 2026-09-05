@@ -1948,3 +1948,4 @@ fn a_regexp_with_a_non_writable_lastindex_is_still_found_by_the_probe() {
         "an unrelated key on the same RegExp must still take the fast negative"
     );
 }
+

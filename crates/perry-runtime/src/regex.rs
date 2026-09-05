@@ -532,7 +532,7 @@ fn shared_never_match_program() -> Arc<Regex> {
     }
     NEVER_MATCH.with(|slot| {
         slot.borrow_mut()
-            .get_or_insert_with(|| Arc::new(Regex::new(NEVER_MATCH_SOURCE).unwrap()))
+            .get_or_insert_with(|| Arc::new(Regex::new(NEVER_MATCH_PATTERN).unwrap()))
             .clone()
     })
 }
@@ -1484,7 +1484,7 @@ fn linear_rules_out_match(re: *const RegExpHeader, subject: &str, start: usize) 
             return false;
         }
         let program: &Regex = &*program;
-        if program.as_str() == NEVER_MATCH_SOURCE {
+        if program.as_str() == NEVER_MATCH_PATTERN {
             // The `regex` crate refused this pattern (lookaround /
             // backreference); it has no opinion about the subject.
             return false;
@@ -1493,12 +1493,6 @@ fn linear_rules_out_match(re: *const RegExpHeader, subject: &str, start: usize) 
     }
 }
 
-/// The source of the never-match program `compile_and_cache_regex_checked`
-/// installs for a pattern only another engine can serve. Compared by TEXT
-/// rather than by `Arc` identity so this stays independent of how the
-/// placeholder is allocated.
-#[cfg(feature = "regex-engine")]
-const NEVER_MATCH_SOURCE: &str = r"[^\s\S]";
 
 /// [`lookup_repeat_matcher`] with the linear pre-check applied: `None` also
 /// when the linear program proves no match at or after `start`, so the
