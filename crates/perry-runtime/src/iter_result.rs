@@ -189,6 +189,71 @@ pub(crate) unsafe fn make_sqlite_iter_result(value: JSValue, done: bool) -> f64 
     build_iter_result_ordered(JSValue::bool(done), value, IterResultOrder::DoneValue)
 }
 
+/// Emit a `{ value, done }` for the FUSED `for…of` driver, recycling ONE
+/// result object per ITERATOR instead of allocating one per element.
+///
+/// `emit_cached == false` — every manual `.next()` and both public
+/// dispatchers — allocates a fresh object, exactly as before, so a result the
+/// caller retains behaves per spec.
+///
+/// `emit_cached == true` is reserved for
+/// [`crate::collection_iter_object::js_for_of_next`], whose only caller is the
+/// compiler's `for…of` desugar. There the result local is a compiler temporary
+/// the loop body cannot name, and the driver reads `done` and `value` out of it
+/// before the next advance — so mutating one cached object per ITERATOR is
+/// unobservable. The cache lives in the iterator object's `cache_field`, so the
+/// GC traces and rewrites it like any other field.
+///
+/// The Map/Set iterators have worked this way since the fused driver landed;
+/// this is the same routine, lifted here so the array iterator uses the ONE
+/// implementation rather than a second copy — which is the drift `#7564`
+/// removed from the five result constructors this module replaced.
+pub(crate) unsafe fn emit_iter_result_cached(
+    scope: &crate::gc::RuntimeHandleScope,
+    iter_h: &crate::gc::RuntimeHandle<'_>,
+    cache_field: u32,
+    emit_cached: bool,
+    order: IterResultOrder,
+    value: JSValue,
+    done: bool,
+) -> f64 {
+    let (first, second) = match order {
+        IterResultOrder::ValueDone => (value, JSValue::bool(done)),
+        IterResultOrder::DoneValue => (JSValue::bool(done), value),
+    };
+    if !emit_cached {
+        return build_iter_result_ordered(first, second, order);
+    }
+    let iter_obj = || crate::js_nanbox_get_pointer(iter_h.get_nanbox_f64()) as *mut ObjectHeader;
+    let cached = crate::object::js_object_get_field(iter_obj(), cache_field);
+    if JSValue::from_bits(cached.bits()).is_pointer() {
+        let res = crate::js_nanbox_get_pointer(f64::from_bits(cached.bits())) as *mut ObjectHeader;
+        // Barriered field stores: the iterator (and its cached result) may be
+        // tenured while `value` is young.
+        crate::object::js_object_set_field(res, 0, first);
+        crate::object::js_object_set_field(res, 1, second);
+        return crate::js_nanbox_pointer(res as i64);
+    }
+    // First fused advance on this iterator: build the result once and cache it.
+    // `build_iter_result_ordered` allocates, so root both field values across
+    // it, and re-read the iterator and the result through storage the collector
+    // rewrites afterwards.
+    let first_h = scope.root_nanbox_u64(first.bits());
+    let second_h = scope.root_nanbox_u64(second.bits());
+    let res = build_iter_result_ordered(
+        JSValue::from_bits(first_h.get_nanbox_u64()),
+        JSValue::from_bits(second_h.get_nanbox_u64()),
+        order,
+    );
+    let res_h = scope.root_nanbox_f64(res);
+    crate::object::js_object_set_field(
+        iter_obj(),
+        cache_field,
+        JSValue::from_bits(res_h.get_nanbox_f64().to_bits()),
+    );
+    res_h.get_nanbox_f64()
+}
+
 /// GC root scanner for the shared keys arrays.
 ///
 /// MARKING: nothing else in the heap references these arrays — the result
