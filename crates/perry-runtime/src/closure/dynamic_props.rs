@@ -505,8 +505,14 @@ pub fn scan_closure_dynamic_props_roots_mut(visitor: &mut crate::gc::RuntimeRoot
 fn scan_closure_side_tables_young(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     let table_len = {
         let props = get_closure_props().lock().map(|m| m.len()).unwrap_or(0);
-        let prototypes = get_closure_prototypes().lock().map(|m| m.len()).unwrap_or(0);
-        let deleted = get_closure_deleted_keys().lock().map(|m| m.len()).unwrap_or(0);
+        let prototypes = get_closure_prototypes()
+            .lock()
+            .map(|m| m.len())
+            .unwrap_or(0);
+        let deleted = get_closure_deleted_keys()
+            .lock()
+            .map(|m| m.len())
+            .unwrap_or(0);
         (props + prototypes + deleted) as u64
     };
     #[cfg(debug_assertions)]

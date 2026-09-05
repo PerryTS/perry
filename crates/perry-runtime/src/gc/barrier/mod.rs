@@ -596,7 +596,8 @@ pub(super) unsafe fn scan_dirty_object_slots(
                 if crate::weakref::is_weak_target_trace_slot(header, slot.slot) {
                     return;
                 }
-                complete &= in_body(slot.slot) && dirty_pages_contains_addr(dirty_pages, slot.slot as usize);
+                complete &= in_body(slot.slot)
+                    && dirty_pages_contains_addr(dirty_pages, slot.slot as usize);
                 if let Some(layout_kind) = slot.layout_kind {
                     scan_dirty_slot_with_layout(
                         slot.slot,

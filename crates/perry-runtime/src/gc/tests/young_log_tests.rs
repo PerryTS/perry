@@ -69,22 +69,37 @@ fn young_closure_prop_value_is_moved_through_the_log() {
     let _ = gc_collect_minor();
 
     let owner_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
-    assert_ne!(owner_after, owner, "the rooted owner must have been evacuated");
+    assert_ne!(
+        owner_after, owner,
+        "the rooted owner must have been evacuated"
+    );
     let bits = crate::closure::closure_get_own_dynamic_prop(owner_after, "memo")
         .expect("entry must follow its owner to the new address")
         .to_bits();
     let value_after = (bits & POINTER_MASK) as usize;
     assert_eq!(bits & TAG_MASK, STRING_TAG);
-    assert_ne!(value_after, value, "the value must have been evacuated, not left in from-space");
+    assert_ne!(
+        value_after, value,
+        "the value must have been evacuated, not left in from-space"
+    );
     assert!(crate::arena::pointer_in_nursery(value_after));
     assert!(
         crate::closure::closure_get_own_dynamic_prop(owner, "memo").is_none(),
         "the stale owner key must be gone"
     );
     let row = walk("closure.dynamic_props");
-    assert!(row.partial, "a copying minor must take the young-scoped walk");
-    assert!(row.visited >= 1, "the logged owner must have been visited: {row:?}");
-    assert!(row.kept >= 1, "a survivor still young must stay logged: {row:?}");
+    assert!(
+        row.partial,
+        "a copying minor must take the young-scoped walk"
+    );
+    assert!(
+        row.visited >= 1,
+        "the logged owner must have been visited: {row:?}"
+    );
+    assert!(
+        row.kept >= 1,
+        "a survivor still young must stay logged: {row:?}"
+    );
 }
 
 #[test]
@@ -284,8 +299,7 @@ fn young_keys_array_family_is_rekeyed_through_the_log() {
 
     let keys = unsafe { young_keys_array() };
     js_shadow_slot_set(0, ptr_bits(keys as usize));
-    let id = crate::object::shapes::shape_descriptor_ensure(keys, 0, 0)
-        .expect("shape id");
+    let id = crate::object::shapes::shape_descriptor_ensure(keys, 0, 0).expect("shape id");
     assert_eq!(
         crate::object::shapes::shape_descriptor_by_id(id).map(|d| d.keys),
         Some(keys as u64)
@@ -294,7 +308,10 @@ fn young_keys_array_family_is_rekeyed_through_the_log() {
     let _ = gc_collect_minor();
 
     let keys_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
-    assert_ne!(keys_after, keys as usize, "the rooted keys array must have moved");
+    assert_ne!(
+        keys_after, keys as usize,
+        "the rooted keys array must have moved"
+    );
     assert_eq!(
         crate::object::shapes::shape_descriptor_by_id(id).map(|d| d.keys),
         Some(keys_after as u64),
@@ -319,8 +336,7 @@ fn old_shape_families_are_skipped_by_a_minor() {
         (*keys).length = 0;
         (*keys).capacity = 0;
     }
-    let id = crate::object::shapes::shape_descriptor_ensure(keys, 0, 0)
-        .expect("shape id");
+    let id = crate::object::shapes::shape_descriptor_ensure(keys, 0, 0).expect("shape id");
 
     let _ = gc_collect_minor();
 
@@ -331,7 +347,10 @@ fn old_shape_families_are_skipped_by_a_minor() {
     let row = walk("shapes.families+indices");
     assert!(row.partial);
     assert!(row.table_len >= 1, "{row:?}");
-    assert_eq!(row.visited, 0, "an old keys array's family must not be visited: {row:?}");
+    assert_eq!(
+        row.visited, 0,
+        "an old keys array's family must not be visited: {row:?}"
+    );
 }
 
 // ------------------------------------------------------------------- caches
@@ -345,8 +364,8 @@ fn young_transition_cache_target_is_rewritten_through_the_log() {
     js_shadow_slot_set(0, ptr_bits(keys));
     // A predecessor that resolves, or the copied-minor prune retires the entry
     // (`shape_descriptor_by_id(0)` is `None`) before the assertion reads it.
-    let prev = crate::object::shapes::shape_descriptor_ensure(std::ptr::null(), 0, 1)
-        .expect("shape id");
+    let prev =
+        crate::object::shapes::shape_descriptor_ensure(std::ptr::null(), 0, 1).expect("shape id");
     crate::object::test_seed_transition_cache_root_for_shape(prev, keys);
 
     let _ = gc_collect_minor();
@@ -361,7 +380,10 @@ fn young_transition_cache_target_is_rewritten_through_the_log() {
     let row = walk("object.transition_cache");
     assert!(row.partial);
     assert!(row.visited >= 1, "{row:?}");
-    assert!(row.visited < row.table_len, "a 16k-slot table must not be walked whole: {row:?}");
+    assert!(
+        row.visited < row.table_len,
+        "a 16k-slot table must not be walked whole: {row:?}"
+    );
 }
 
 #[test]
@@ -377,9 +399,15 @@ fn young_shape_cache_entry_is_moved_through_the_log() {
     let _ = gc_collect_minor();
 
     let (inline, overflow) = crate::object::test_shape_cache_root(shape_id);
-    assert_ne!(overflow, keys as usize, "the overflow entry must have been evacuated");
+    assert_ne!(
+        overflow, keys as usize,
+        "the overflow entry must have been evacuated"
+    );
     assert!(crate::arena::pointer_in_nursery(overflow));
-    assert_eq!(inline, overflow, "inline and overflow must agree on the new address");
+    assert_eq!(
+        inline, overflow,
+        "inline and overflow must agree on the new address"
+    );
     let row = walk("object.shape_cache");
     assert!(row.partial);
     assert!(row.visited >= 1, "{row:?}");

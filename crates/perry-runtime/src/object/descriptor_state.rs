@@ -130,15 +130,23 @@ impl DescriptorTables {
 
 const DESCRIPTOR_YOUNG_LOG_NAME: &str = "object.descriptors";
 
+mod young;
+use young::{relevant_descriptor_owners, scan_descriptor_roots_young};
+
 /// Rule 1 of `gc/young_log.rs`: log `owner` BEFORE its descriptor is
 /// published when the owner, or the accessor closure being stored, can
 /// matter to a minor. Data descriptors carry no pointer, so `acc` is `None`
 /// for them and only the owner decides.
 #[inline]
-fn note_young_descriptor_owner(st: &crate::state::RuntimeState, owner: usize, acc: Option<&AccessorDescriptor>) {
+fn note_young_descriptor_owner(
+    st: &crate::state::RuntimeState,
+    owner: usize,
+    acc: Option<&AccessorDescriptor>,
+) {
     use crate::gc::young_log::{addr_is_minor_relevant, bits_are_minor_relevant};
     if addr_is_minor_relevant(owner)
-        || acc.is_some_and(|acc| bits_are_minor_relevant(acc.get) || bits_are_minor_relevant(acc.set))
+        || acc
+            .is_some_and(|acc| bits_are_minor_relevant(acc.get) || bits_are_minor_relevant(acc.set))
     {
         st.descriptors.young_owners.borrow_mut().note(owner);
     }
@@ -1361,13 +1369,23 @@ pub(crate) fn prune_dead_descriptor_owner_entries_young(is_dead_owner: &dyn Fn(u
 /// Drop every entry `owner` holds in both tables and both indexes, through
 /// the owner index (O(owner's keys), not O(table)).
 fn remove_descriptor_owner_entries(st: &crate::state::RuntimeState, owner: usize) {
-    if let Some(keys) = st.descriptors.attr_keys_by_owner.borrow_mut().remove(&owner) {
+    if let Some(keys) = st
+        .descriptors
+        .attr_keys_by_owner
+        .borrow_mut()
+        .remove(&owner)
+    {
         let mut attrs = st.descriptors.property_descriptors.borrow_mut();
         for key in keys {
             attrs.remove(&(owner, key));
         }
     }
-    if let Some(keys) = st.descriptors.accessor_keys_by_owner.borrow_mut().remove(&owner) {
+    if let Some(keys) = st
+        .descriptors
+        .accessor_keys_by_owner
+        .borrow_mut()
+        .remove(&owner)
+    {
         let mut accessors = st.descriptors.accessor_descriptors.borrow_mut();
         for key in keys {
             accessors.remove(&(owner, key));
@@ -1626,81 +1644,6 @@ pub(crate) fn scan_descriptor_roots_mut(visitor: &mut crate::gc::RuntimeRootVisi
             partial: false,
             logged: table_len,
             visited: table_len,
-            kept: kept_len,
-            table_len,
-        },
-    );
-}
-
-/// Every owner whose entry can matter to a minor, re-derived from the
-/// authoritative tables: a non-old owner, or an accessor whose getter or
-/// setter is non-old.
-fn relevant_descriptor_owners(st: &crate::state::RuntimeState) -> Vec<usize> {
-    use crate::gc::young_log::{addr_is_minor_relevant, bits_are_minor_relevant};
-    let mut relevant = Vec::new();
-    for &owner in st.descriptors.attr_keys_by_owner.borrow().keys() {
-        if addr_is_minor_relevant(owner) {
-            relevant.push(owner);
-        }
-    }
-    for &owner in st.descriptors.accessor_keys_by_owner.borrow().keys() {
-        if addr_is_minor_relevant(owner) {
-            relevant.push(owner);
-        }
-    }
-    for ((owner, _), acc) in st.descriptors.accessor_descriptors.borrow().iter() {
-        if bits_are_minor_relevant(acc.get) || bits_are_minor_relevant(acc.set) {
-            relevant.push(*owner);
-        }
-    }
-    relevant.sort_unstable();
-    relevant.dedup();
-    relevant
-}
-
-/// The minor-scoped walk (#9754): only the young-logged owners, each visited
-/// exactly as the full walk visits it — accessor get/set rooted in every
-/// phase, owner re-keyed across both tables and both indexes in the rewrite
-/// phase — and re-logged iff still relevant afterwards.
-fn scan_descriptor_roots_young(
-    visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
-    st: &crate::state::RuntimeState,
-) {
-    let table_len = st.descriptors.attr_keys_by_owner.borrow().len() as u64
-        + st.descriptors.accessor_keys_by_owner.borrow().len() as u64;
-    #[cfg(debug_assertions)]
-    {
-        let relevant = relevant_descriptor_owners(st);
-        st.descriptors
-            .young_owners
-            .borrow()
-            .debug_assert_logged(DESCRIPTOR_YOUNG_LOG_NAME, &relevant);
-    }
-    let mut logged = 0u64;
-    let mut visited = 0u64;
-    let mut kept = Vec::new();
-    loop {
-        let batch = st.descriptors.young_owners.borrow_mut().take_sorted();
-        if batch.is_empty() {
-            break;
-        }
-        logged += batch.len() as u64;
-        for owner in batch {
-            visited += 1;
-            let (new_owner, relevant) = scan_descriptor_owner(visitor, st, owner);
-            if relevant {
-                kept.push(new_owner);
-            }
-        }
-    }
-    let kept_len = kept.len() as u64;
-    st.descriptors.young_owners.borrow_mut().extend(kept);
-    crate::gc::young_log::note_walk(
-        DESCRIPTOR_YOUNG_LOG_NAME,
-        crate::gc::young_log::YoungLogWalk {
-            partial: true,
-            logged,
-            visited,
             kept: kept_len,
             table_len,
         },
