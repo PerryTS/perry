@@ -78,3 +78,38 @@ fn the_wrapper_counter_moves_when_a_receiver_is_boxed() {
         "if this cannot move, the codePointAt assertion above is vacuous"
     );
 }
+
+/// #9761 follow-up: the discriminator `call_primitive_closure_value` uses to
+/// decide whether a callee is owed a `ToObject` wrapper.
+///
+/// ECMA-262 §10.3.1 gives a built-in's `[[Call]]` the `thisArg` unchanged, so
+/// only a sloppy USER callee gets the wrapper. `builtin_closure_length` is the
+/// registry that separates them, and this pins both directions — a
+/// `String.prototype` method closure is recognised, a closure the runtime
+/// merely allocated is not. Without the negative case the predicate could be
+/// "always true" and still pass.
+#[test]
+fn builtin_prototype_method_closures_are_distinguishable_from_ordinary_ones() {
+    let proto = crate::object::global_this::builtin_prototype_value("String");
+    let proto_ptr = crate::value::js_nanbox_get_pointer(proto) as *mut crate::object::ObjectHeader;
+    assert!(!proto_ptr.is_null(), "String.prototype must exist");
+
+    let key = crate::string::js_string_from_bytes(b"codePointAt".as_ptr(), 11);
+    let method = crate::object::js_object_get_field_by_name(proto_ptr, key);
+    let method_ptr = crate::value::js_nanbox_get_pointer(f64::from_bits(method.bits())) as usize;
+    assert!(method_ptr != 0, "String.prototype.codePointAt must resolve");
+    assert!(
+        crate::object::builtin_closure_length(method_ptr).is_some(),
+        "a String.prototype method closure must read as a built-in"
+    );
+
+    extern "C" fn not_a_builtin(_c: *const crate::closure::ClosureHeader) -> f64 {
+        0.0
+    }
+    let ordinary = crate::closure::js_closure_alloc(not_a_builtin as *const u8, 0);
+    assert!(
+        crate::object::builtin_closure_length(ordinary as usize).is_none(),
+        "an ordinary closure must NOT read as a built-in, or every sloppy user \
+         callee would silently lose its ToObject wrapper"
+    );
+}

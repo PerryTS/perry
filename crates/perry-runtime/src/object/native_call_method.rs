@@ -319,7 +319,23 @@ unsafe fn call_primitive_closure_value(
     let func_ptr = crate::closure::get_valid_func_ptr(ptr as *const crate::closure::ClosureHeader);
     let strict_callee =
         !func_ptr.is_null() && crate::closure::is_registered_strict_function(func_ptr);
-    let this_receiver = if strict_callee {
+    // ECMA-262 §10.3.1: a BUILT-IN function's [[Call]] does not run
+    // OrdinaryCallBindThis. It receives `thisArg` unchanged and performs its
+    // own coercion if it needs one — which every thunk in
+    // `primitive_proto_thunks` already does, accepting the raw primitive
+    // BEFORE it looks for a wrapper payload (`string_receiver_or_throw`,
+    // `number_receiver_or_throw`, …). Perry boxed for them anyway, and for a
+    // string receiver that wrapper materialises an own index property per
+    // UTF-16 code unit. `codePointAt` (#9761) showed the price of ONE method
+    // name reaching this path: 99,008 wrappers per 400-character claude-code
+    // reply. This closes the class instead of the instance — the next builtin
+    // that has a prototype thunk but no native dispatch arm costs a lookup,
+    // not a wrapper per character.
+    //
+    // Only a SLOPPY USER callee is still owed the wrapper, which is the
+    // distinction the spec actually draws.
+    let builtin_callee = crate::object::builtin_closure_length(ptr).is_some();
+    let this_receiver = if strict_callee || builtin_callee {
         receiver_h.get_nanbox_f64()
     } else {
         crate::object::js_object_coerce(receiver_h.get_nanbox_f64())
