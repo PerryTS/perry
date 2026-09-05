@@ -624,6 +624,9 @@ pub extern "C" fn js_string_concat(
     a: *const StringHeader,
     b: *const StringHeader,
 ) -> *mut StringHeader {
+    if crate::hot_diag::enum_on() {
+        crate::hot_diag::enum_with(|d| d.concat_calls += 1);
+    }
     let scope = crate::gc::RuntimeHandleScope::new();
     let a_handle = scope.root_string_ptr(a);
     let b_handle = scope.root_string_ptr(b);
@@ -980,6 +983,9 @@ const CONCAT_CHAIN_MAX_PARTS: usize = 32;
 /// with STRING_TAG via the standard `nanbox_string_inline` helper.
 #[no_mangle]
 pub extern "C" fn js_string_concat_chain(parts: *const f64, n: i32) -> *mut StringHeader {
+    if crate::hot_diag::enum_on() {
+        crate::hot_diag::enum_with(|d| d.concat_chain_calls += 1);
+    }
     let n = (n as usize).min(CONCAT_CHAIN_MAX_PARTS);
     if n == 0 || parts.is_null() {
         return crate::string::js_string_from_bytes(b"".as_ptr(), 0);
