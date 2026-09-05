@@ -2350,6 +2350,9 @@ pub fn gc_check_trigger() {
     {
         let _reentry = OldReclaimReentryGuard::enter();
         GC_OLD_RECLAIM_PENDING.with(|pending| pending.set(false));
+        super::diag_sites::trigger_decision("alloc_point", "OldReclaim");
+        super::diag_sites::set_full_site("alloc_point_old_reclaim");
+        let probe = super::diag_sites::ChargeProbe::begin();
         let _scan = super::roots::ManualGcScanGuard::force_full_scan(
             super::ConservativeScanSite::OldReclaimAllocPoint,
         );
@@ -2357,6 +2360,7 @@ pub fn gc_check_trigger() {
             GcTriggerKind::OldGenBytes,
         ))
         .emit_after_current();
+        probe.end(0, super::diag_sites::ChargeKind::SyncFull);
         return;
     }
 
@@ -2476,6 +2480,8 @@ pub fn gc_check_trigger() {
             }
             let pre_in_use = crate::arena::arena_in_use_bytes();
             let pre_malloc_count = malloc_object_count();
+            super::diag_sites::trigger_decision("alloc_point_slack", "nursery");
+            let probe = super::diag_sites::ChargeProbe::begin();
             // THE ALLOC POINT IS REGISTER-IMPRECISE, SO THIS MINOR MUST NOT
             // MOVE. Unconditional, and the unconditionality is the fix for
             // #7682.
@@ -2557,6 +2563,7 @@ pub fn gc_check_trigger() {
                     gc_finish_arena_trigger_collection(pre_in_use, outcome);
                 }
             }
+            probe.end(0, super::diag_sites::ChargeKind::DirectMinor);
             return;
         }
     }
@@ -2565,10 +2572,11 @@ pub fn gc_check_trigger() {
         return;
     }
 
-    let _ = gc_mutator_assist_step_work_units_inner_with_progress(
-        gc_mutator_assist_scaled_work_units(),
-        GcProgressKind::MutatorAssist,
-    );
+    let units = gc_mutator_assist_scaled_work_units();
+    let probe = super::diag_sites::ChargeProbe::begin();
+    let _ =
+        gc_mutator_assist_step_work_units_inner_with_progress(units, GcProgressKind::MutatorAssist);
+    probe.end(units, super::diag_sites::ChargeKind::Assist);
 }
 
 /// Debt-proportional assist pacing (#6180 Stage 2, measured 2026-07-10).
@@ -2795,6 +2803,8 @@ pub(crate) fn gc_safepoint_moving_minor() -> bool {
             }
             let _reentry = OldReclaimReentryGuard::enter();
             GC_OLD_RECLAIM_PENDING.with(|pending| pending.set(false));
+            super::diag_sites::trigger_decision("safepoint", "OldReclaim");
+            super::diag_sites::set_full_site("safepoint_old_reclaim");
             // No `force_full_scan`: roots are precise at this safepoint.
             gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(
                 GcTriggerKind::OldGenBytes,
@@ -2821,6 +2831,13 @@ pub(crate) fn gc_safepoint_moving_minor() -> bool {
     };
     let pre_in_use = crate::arena::arena_in_use_bytes();
     let pre_malloc_count = malloc_object_count();
+    super::diag_sites::trigger_decision(
+        "safepoint",
+        match kind {
+            GcTriggerKind::MallocCount => "MallocCount",
+            _ => "ArenaBytes",
+        },
+    );
     // No `force_full_scan`: roots are precise at this safepoint.
     let outcome = super::gc_collect_minor_with_trigger(GcTriggerSnapshot::capture(kind));
     match kind {
@@ -3348,6 +3365,7 @@ fn gc_finish_budgeted_cycle(mut cycle: BudgetedGcCycle) -> JsGcStepResult {
         .state
         .take_outcome()
         .expect("completed budgeted GC cycle must produce an outcome");
+    let freed_for_diag = outcome.freed_bytes;
     match cycle.rebaseline {
         BudgetedGcRebaseline::ArenaBytes { pre_in_use } => {
             gc_finish_arena_trigger_collection(pre_in_use, outcome);
@@ -3363,6 +3381,7 @@ fn gc_finish_budgeted_cycle(mut cycle: BudgetedGcCycle) -> JsGcStepResult {
         }
     }
     GC_BUDGETED_CYCLE_ACTIVE.with(|active| active.set(false));
+    super::diag_sites::budgeted_completed(freed_for_diag);
     gc_step_result(
         JS_GC_STEP_STATUS_COMPLETED,
         GcCyclePhase::Complete.ffi_code(),
@@ -3543,8 +3562,14 @@ fn gc_budgeted_step_work_units_inner_with_progress(
             );
             return gc_budgeted_skipped_result();
         }
+        super::diag_sites::trigger_decision("budgeted_start", "due");
         let cycle = gc_start_budgeted_cycle_for_pressure(start_progress_kind)
             .expect("budgeted GC pressure was observed before starting cycle");
+        super::diag_sites::budgeted_started(
+            cycle.trigger_kind,
+            cycle.collection_kind,
+            start_progress_kind,
+        );
         GC_BUDGETED_CYCLE.with(|slot| {
             *slot.borrow_mut() = Some(cycle);
         });
@@ -3570,10 +3595,11 @@ fn gc_budgeted_step_work_units_inner_with_progress(
         // for. `js_gc_step_us` can only consult its clock BETWEEN units, so the
         // only honest statement about pause is a measured maximum.
         let step_started = std::time::Instant::now();
+        let phase_code = cycle.state.phase().ffi_code();
         let step = cycle.state.step(GcWorkBudget::bounded(work_units));
-        super::instruments::note_budgeted_step_duration(
-            step_started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64,
-        );
+        let step_us = step_started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64;
+        super::instruments::note_budgeted_step_duration(step_us);
+        super::diag_sites::budgeted_step_done(phase_code, step_us, work_units);
         super::instruments::note_incremental_step();
         if step.completed {
             super::instruments::note_incremental_completion();

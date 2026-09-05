@@ -1936,7 +1936,8 @@ static KEEP_ERROR_IS_ERROR: extern "C" fn(f64) -> f64 = js_error_is_error;
 #[path = "error_stack_frames.rs"]
 mod stack_frames;
 pub(crate) use stack_frames::{
-    capture_frames_payload, frames_payload_to_lines, materialize_error_stack,
+    capture_frames_payload, capture_ips, describe_chain, frames_payload_to_lines,
+    materialize_error_stack, MAX_CAPTURED_FRAMES,
 };
 
 #[path = "error_subclass_stack.rs"]

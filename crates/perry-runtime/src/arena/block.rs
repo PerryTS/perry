@@ -623,7 +623,7 @@ impl Arena {
                 let block = &self.blocks[self.current];
                 inline.data = block.data;
                 inline.offset = block.offset;
-                inline.size = block.size;
+                inline.size = super::alloc_sample::inline_limit(block.offset, block.size);
             }
         });
     }

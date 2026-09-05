@@ -321,6 +321,60 @@ pub(crate) fn capture_encoded() -> ([u8; MAX_CAPTURED_FRAMES * PC_CHARS], usize)
     (blob, len)
 }
 
+/// Raw return addresses of the current native stack, innermost first, for
+/// the GC's site-attribution diagnostics (`gc/diag_sites.rs`, the
+/// `PERRY_ALLOC_SITE_SAMPLE` sampler). Same walk as `capture_encoded`, no
+/// encoding.
+pub(crate) fn capture_ips(out: &mut [usize; MAX_CAPTURED_FRAMES]) -> usize {
+    walk::capture(out)
+}
+
+/// Best-effort one-line description of a code address for diagnostics: the
+/// registered JS display name when `ip` is inside a compiled user function,
+/// else the nearest linker symbol (`dladdr`), else the bare address. Never
+/// called on a hot path — the JS-name index takes a lock and may rebuild.
+pub(crate) fn describe_ip(ip: usize) -> String {
+    let js = with_index(|index| {
+        name_for_ip(index, ip.saturating_sub(1))
+            .and_then(|n| std::str::from_utf8(n).ok().map(|s| s.to_string()))
+    })
+    .flatten();
+    if let Some(name) = js.filter(|n| !n.is_empty()) {
+        return format!("js:{name}");
+    }
+    #[cfg(unix)]
+    {
+        let mut info: libc::Dl_info = unsafe { std::mem::zeroed() };
+        // SAFETY: `dladdr` only reads the address and fills `info`.
+        if unsafe { libc::dladdr(ip as *const libc::c_void, &mut info) } != 0
+            && !info.dli_sname.is_null()
+        {
+            let name = unsafe { std::ffi::CStr::from_ptr(info.dli_sname) }.to_string_lossy();
+            let off = ip.saturating_sub(info.dli_saddr as usize);
+            let mut n = name.into_owned();
+            if n.len() > 72 {
+                n.truncate(72);
+            }
+            return format!("{n}+{off:#x}");
+        }
+    }
+    format!("{ip:#x}")
+}
+
+/// `describe_ip` for a chain, innermost first, skipping frames inside `skip`
+/// (a set of symbol-name substrings the caller considers plumbing). Returns
+/// up to `max` descriptions joined by ` < `.
+pub(crate) fn describe_chain(pcs: &[usize], max: usize) -> String {
+    let mut out = Vec::with_capacity(max);
+    for &pc in pcs {
+        if out.len() >= max {
+            break;
+        }
+        out.push(describe_ip(pc));
+    }
+    out.join(" < ")
+}
+
 // ---------------------------------------------------------------------------
 // Resolution: address -> JS display name.
 // ---------------------------------------------------------------------------

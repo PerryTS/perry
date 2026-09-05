@@ -19,6 +19,8 @@ mod proto_dispatch;
 mod string_methods;
 
 #[cfg(test)]
+mod code_point_at_dispatch_tests;
+#[cfg(test)]
 mod dispatch_arg_coercion_tests;
 #[cfg(test)]
 mod probe_dispatch_tests;
@@ -317,7 +319,23 @@ unsafe fn call_primitive_closure_value(
     let func_ptr = crate::closure::get_valid_func_ptr(ptr as *const crate::closure::ClosureHeader);
     let strict_callee =
         !func_ptr.is_null() && crate::closure::is_registered_strict_function(func_ptr);
-    let this_receiver = if strict_callee {
+    // ECMA-262 §10.3.1: a BUILT-IN function's [[Call]] does not run
+    // OrdinaryCallBindThis. It receives `thisArg` unchanged and performs its
+    // own coercion if it needs one — which every thunk in
+    // `primitive_proto_thunks` already does, accepting the raw primitive
+    // BEFORE it looks for a wrapper payload (`string_receiver_or_throw`,
+    // `number_receiver_or_throw`, …). Perry boxed for them anyway, and for a
+    // string receiver that wrapper materialises an own index property per
+    // UTF-16 code unit. `codePointAt` (#9761) showed the price of ONE method
+    // name reaching this path: 99,008 wrappers per 400-character claude-code
+    // reply. This closes the class instead of the instance — the next builtin
+    // that has a prototype thunk but no native dispatch arm costs a lookup,
+    // not a wrapper per character.
+    //
+    // Only a SLOPPY USER callee is still owed the wrapper, which is the
+    // distinction the spec actually draws.
+    let builtin_callee = crate::object::builtin_closure_length(ptr).is_some();
+    let this_receiver = if strict_callee || builtin_callee {
         receiver_h.get_nanbox_f64()
     } else {
         crate::object::js_object_coerce(receiver_h.get_nanbox_f64())
@@ -335,6 +353,20 @@ unsafe fn call_primitive_closure_value(
     Some(result)
 }
 
+/// UTF-16 length of a string receiver, 0 for every other primitive — the
+/// number of own index properties its `ToObject` wrapper would materialise.
+unsafe fn primitive_receiver_utf16_len(receiver: f64) -> u64 {
+    let jsval = JSValue::from_bits(receiver.to_bits());
+    if !jsval.is_any_string() {
+        return 0;
+    }
+    let ptr = crate::value::js_get_string_pointer_unified(receiver) as *const crate::StringHeader;
+    if ptr.is_null() {
+        return 0;
+    }
+    crate::string::js_string_length(ptr) as u64
+}
+
 unsafe fn call_primitive_builtin_prototype_method(
     receiver: f64,
     builtin_name: &[u8],
@@ -342,6 +374,12 @@ unsafe fn call_primitive_builtin_prototype_method(
     args_ptr: *const f64,
     args_len: usize,
 ) -> Option<f64> {
+    // #9761 attribution: this is the fork where an unrecognised primitive
+    // method name turns into a `globalThis` lookup plus, for a sloppy callee,
+    // a `ToObject` wrapper whose own index properties are O(receiver length).
+    crate::gc::diag_primitive_dispatch(builtin_name, method_name, unsafe {
+        primitive_receiver_utf16_len(receiver)
+    });
     let ctor =
         crate::object::js_get_global_this_builtin_value(builtin_name.as_ptr(), builtin_name.len());
     let ctor_value = JSValue::from_bits(ctor.to_bits());
@@ -374,7 +412,9 @@ unsafe fn call_primitive_builtin_prototype_method(
     if let Some(value) = builtin_proto_accessor_method(proto_ptr, method_name, receiver) {
         return call_primitive_closure_value(receiver, value, args_ptr, args_len);
     }
-    let key = crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);
+    // A method name is a literal at the call site; the canonical interned
+    // header is allocated once per thread instead of once per dispatch.
+    let key = crate::string::canonical_key(method_name.as_bytes());
     let value = js_object_get_field_by_name(proto_ptr, key);
     call_primitive_closure_value(receiver, value, args_ptr, args_len)
 }

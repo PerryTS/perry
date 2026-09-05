@@ -170,6 +170,8 @@ pub(super) struct CopyingNurseryCollector {
     /// skipped. `debug_assert_no_remembering_possible` re-derives the premise at
     /// runtime in debug builds.
     pub(super) skip_remembering: bool,
+    /// `PERRY_GC_DIAG=1`: per-minor survival attribution (gc/survival_diag.rs).
+    pub(super) survival: Option<Box<super::survival_diag::SurvivalDiag>>,
     /// Weak target slots (WeakRef referent / WeakMap-WeakSet entry key /
     /// FinalizationRegistry record target) seen during the copy scan. The
     /// scan must NOT evacuate through them (that would strengthen the weak
@@ -242,9 +244,19 @@ impl CopyingNurseryCollector {
             live_from_bytes: 0,
             tenuring_survivals,
             skip_remembering: false,
+            survival: crate::gc::gc_diag_enabled()
+                .then(|| Box::new(super::survival_diag::SurvivalDiag::new())),
             weak_slots: Vec::new(),
             memo_addr: 0,
             memo_result: 0,
+        }
+    }
+
+    /// Mirror a `worklist.push` into the survival diag's origin vector.
+    #[inline]
+    fn survival_push(&mut self) {
+        if let Some(d) = self.survival.as_mut() {
+            d.note_worklist_push();
         }
     }
 
@@ -390,6 +402,7 @@ impl CopyingNurseryCollector {
                     if flags & (GC_FLAG_MARKED | GC_FLAG_PINNED) == 0 {
                         (*ptr.header).gc_flags = flags | GC_FLAG_MARKED;
                         self.worklist.push(ptr.header);
+                        self.survival_push();
                         self.marked_headers.push(ptr.header);
                     }
                 }
@@ -432,6 +445,10 @@ impl CopyingNurseryCollector {
             (*header).gc_flags = flags | GC_FLAG_MARKED;
             let total = (*header).size as usize;
             self.worklist.push(header);
+            self.survival_push();
+            if let Some(d) = self.survival.as_mut() {
+                d.record((*header).obj_type, total, true);
+            }
             self.moved_headers.push(header);
             self.stats.promoted_objects += 1;
             self.stats.promoted_bytes += total;
@@ -550,6 +567,10 @@ impl CopyingNurseryCollector {
         gc_type_after_payload_move((*header).obj_type, old_user as usize, new_user as usize);
 
         self.worklist.push(new_header);
+        self.survival_push();
+        if let Some(d) = self.survival.as_mut() {
+            d.record((*new_header).obj_type, total, promote);
+        }
         self.moved_headers.push(new_header);
         self.live_from_bytes += total;
         if promote {
@@ -633,10 +654,16 @@ impl CopyingNurseryCollector {
             }
             let header = self.worklist[i];
             i += 1;
+            if let Some(d) = self.survival.as_mut() {
+                d.begin_drain_entry(i - 1);
+            }
             if (*header).gc_flags & GC_FLAG_FORWARDED != 0 {
                 continue;
             }
             self.scan_object_fields(header);
+        }
+        if let Some(d) = self.survival.as_mut() {
+            d.end_drain();
         }
     }
 
@@ -1348,6 +1375,9 @@ pub(super) fn run_copied_minor_attempt(
         let remembered_stats = scan_remembered_dirty_slots_copying(
             &snapshot,
             |slot, header, external, stats| unsafe {
+                if let Some(d) = collector.survival.as_mut() {
+                    d.remembered_parent_type = (*header).obj_type;
+                }
                 let before = *slot;
                 collector.visit_slot_with_parent(slot, header, external);
                 if *slot != before {
@@ -1788,6 +1818,11 @@ pub(super) fn run_copied_minor_attempt(
             super::policy::GC_AT_DECLARED_SAFEPOINT.with(std::cell::Cell::get)
         );
     }
+    if let Some(d) = collector.survival.as_ref() {
+        d.report(super::survival_diag::next_minor_seq());
+    }
+    crate::arena::alloc_sample::report("minor");
+    super::diag_sites::report_primitive_dispatch("minor");
     report_forwarding_refusals("copying_minor");
     super::scanner_profile::report_and_reset("copying_minor");
     CopiedMinorAttempt::Done(Some(CopiedMinorFastPathOutcome {

@@ -253,7 +253,7 @@ pub(crate) use descriptor_state::{
     class_instance_set_may_intercept, clear_accessor_descriptor, clear_property_attrs,
     constructor_accessor_ever_installed, descriptors_in_use, disable_class_field_inline_guard,
     get_accessor_descriptor, get_property_attrs, install_fresh_accessor_property,
-    json_object_getter_value, mark_all_keys, object_has_descriptors,
+    json_object_getter_value, mark_all_keys, note_descriptor_target, object_has_descriptors,
     object_proto_may_intercept_key, owner_has_property_descriptors,
     owner_may_have_descriptor_entries, plain_data_write_may_intercept,
     prune_dead_descriptor_owner_entries, reflect_getter_closure_bits, set_accessor_descriptor,
