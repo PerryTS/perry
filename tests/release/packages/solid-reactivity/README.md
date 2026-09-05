@@ -74,3 +74,10 @@ the fifth scheduled collection. A store-only reduction also reproduces a
 stale pointer in `heap fields`. The signal-only probe passes verification.
 This finding needs resolution before declaring the native bridge's GC audit
 complete; normal output parity alone does not resolve it.
+
+Further isolation identified the reported field as the effect computation's
+`sources` array after growing from capacity 8 to 16. Both the old forwarding
+stub and its target are tenured. Array growth deliberately retains such
+aliases for `clean_arr_ptr` to follow, whereas the verifier currently rejects
+any forwarded reference. The follow-up needs to distinguish those retained
+growth aliases from evacuation originals that are about to be reclaimed.
