@@ -485,7 +485,13 @@ fn ic_diag_note(
     key: *const crate::StringHeader,
     reason: crate::hot_diag::IcMissReason,
 ) {
-    let bytes: &[u8] = if key.is_null() || (key as usize) < 0x1000 {
+    // #9219 class: a bare `< 0x1000` floor admits the whole handle band, which
+    // holds REAL addresses on Linux (mmap base 0x1000) while macOS's higher base
+    // hides it. Ask the canonical predicate instead — this is a `#[cold]`
+    // diagnostic path, so the extra check costs nothing on the hot IC route.
+    let bytes: &[u8] = if key.is_null()
+        || !crate::value::addr_class::is_above_handle_band(key as usize)
+    {
         b""
     } else {
         unsafe {

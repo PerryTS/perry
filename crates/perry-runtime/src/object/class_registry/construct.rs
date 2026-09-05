@@ -994,9 +994,8 @@ pub unsafe extern "C-unwind" fn js_new_function_construct(
             // that `new` never exposed (#9503). Return an actual replacement
             // immediately; when the constructor retained the allocation, keep
             // the native-backing completion paths below unchanged.
-            let current_inst = crate::value::js_nanbox_pointer(
-                inst_handle.get_raw_mut_ptr::<ObjectHeader>() as i64,
-            );
+            let current_inst = inst_handle
+                .with_mut_ptr::<ObjectHeader, _>(|i| crate::value::js_nanbox_pointer(i as i64));
             if constructor_return_overrides_this(ctor_result)
                 && ctor_result.to_bits() != current_inst.to_bits()
             {

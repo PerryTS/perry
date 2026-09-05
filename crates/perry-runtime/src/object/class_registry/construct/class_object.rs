@@ -58,5 +58,5 @@ unsafe fn construct_object_with_new_target(new_target: f64) -> f64 {
             )
         });
     }
-    crate::value::js_nanbox_pointer(instance.get_raw_mut_ptr::<ObjectHeader>() as i64)
+    instance.with_mut_ptr::<ObjectHeader, _>(|i| crate::value::js_nanbox_pointer(i as i64))
 }

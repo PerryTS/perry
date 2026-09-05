@@ -21,13 +21,13 @@ fn object(scope: &RuntimeHandleScope, capacity: usize) -> RuntimeHandle<'_> {
 
 fn number(target: &RuntimeHandle<'_>, name: &str, value: u64) {
     let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    js_object_set_field_by_name(target.get_raw_mut_ptr(), key, value as f64);
+    target.with_mut_ptr(|t| js_object_set_field_by_name(t, key, value as f64));
 }
 
 fn nested(target: &RuntimeHandle<'_>, name: &str, value: &RuntimeHandle<'_>) {
     let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    let value = JSValue::pointer(value.get_raw_mut_ptr::<ObjectHeader>().cast());
-    js_object_set_field_by_name(target.get_raw_mut_ptr(), key, f64::from_bits(value.bits()));
+    let value = value.with_mut_ptr::<ObjectHeader, _>(|v| JSValue::pointer(v.cast()));
+    target.with_mut_ptr(|t| js_object_set_field_by_name(t, key, f64::from_bits(value.bits())));
 }
 
 /// Bun's optional compatibility argument is accepted and ignored. Taking a
@@ -65,5 +65,5 @@ pub extern "C" fn js_bun_jsc_heap_stats(_compatibility: f64) -> f64 {
     number(&allocator, "gcMallocBytes", stats.malloc_bytes);
     number(&allocator, "gcMallocObjectCount", stats.malloc_count);
     nested(&report, "mimalloc", &allocator);
-    f64::from_bits(JSValue::pointer(report.get_raw_mut_ptr::<ObjectHeader>().cast()).bits())
+    report.with_mut_ptr::<ObjectHeader, _>(|r| f64::from_bits(JSValue::pointer(r.cast()).bits()))
 }

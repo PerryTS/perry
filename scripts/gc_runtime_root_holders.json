@@ -249,10 +249,73 @@
       "why": "Monotonic id counter for READ_LINES_REGISTRY keys. The registry's own heap values are visited by scan_filehandle_roots_mut (fs/filehandle.rs:65), reached from scan_fs_handle_roots_mut."
     },
     {
+      "file": "crates/perry-runtime/src/gc/census.rs",
+      "name": "ARMED",
+      "verdict": "not_a_gc_pointer",
+      "why": "Boolean census request latch, set by census_arm and consumed at full-sweep entry; contains no address or JS value."
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/census.rs",
+      "name": "LABEL",
+      "verdict": "not_a_gc_pointer",
+      "why": "Borrowed static Rust label (manual/signal) for the requested census, not a GC string or a NaN-boxed JS value."
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/census.rs",
+      "name": "PASS1_MARKED",
+      "verdict": "non_moving_snapshot",
+      "why": "Real GC header addresses, deliberately untraced so the diagnostic does not keep its observed objects alive. Populated only at the end of mark propagation of a synchronous full cycle; consumed at sweep entry in the same run_to_completion invocation. The intervening full-cycle phases do not relocate or run JS callbacks. The Vec is used for membership comparisons and dropped with the census before sweep. Budgeted and minor cycles skip both boundaries. Pin re-audited 2026-09-05 after #9760 touched `gc/mod.rs`: that change is `mod heap_stats;` plus a `pub(crate) use` re-export and alters no mark/sweep control flow. `heap_stats()` is reached only from `js_bun_jsc_heap_stats` (the JS-facing `bun:jsc.heapStats()`), i.e. from mutator code, never inside a cycle, and its own module contract forbids allocation or collection during its walk. The mark-complete \u2192 sweep-entry window is unchanged.",
+      "window": {
+        "start": {
+          "file": "crates/perry-runtime/src/gc/census.rs",
+          "function": "census_pass1_if_armed"
+        },
+        "end": {
+          "file": "crates/perry-runtime/src/gc/census.rs",
+          "function": "census_take_if_armed_at_full_sweep_start"
+        },
+        "owner": {
+          "file": "crates/perry-runtime/src/gc/cycle.rs",
+          "function": "run_to_completion"
+        },
+        "sources": {
+          "crates/perry-runtime/src/gc/census.rs": "0d5c6fcec6500692f702c8e7422e255b224de968febdb441b235b14358684b00",
+          "crates/perry-runtime/src/gc/cycle.rs": "4acea623de941aac70d38a4c993a3cd23135152e51f24b11bacd3d68e2571208",
+          "crates/perry-runtime/src/gc/mod.rs": "6d138d48e496160e711fa4389f5fd9eb12787e0a869b87da3e5a8c27719ef3ee",
+          "crates/perry-runtime/src/gc/policy.rs": "319ed42f1a985c88f6362657a08518077283fe5216d6055fc82343b34dec50f9",
+          "crates/perry-runtime/src/gc/progress.rs": "a5ad3971bbe4047229ca57325234780daa85921dbc778e1c08dff4ad07ccfb96"
+        }
+      }
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/census.rs",
+      "name": "SEQ",
+      "verdict": "not_a_gc_pointer",
+      "why": "u32 JSON census sequence counter, incremented once per emitted report; it never carries an object address."
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/census.rs",
+      "name": "TEST_PATH_OVERRIDE",
+      "verdict": "test_only",
+      "why": "Declared under cfg(test); holds an explicitly leaked Rust path string used by the isolated census unit tests."
+    },
+    {
       "file": "crates/perry-runtime/src/gc/trace.rs",
       "name": "FORWARDED_STUB_MEMBERSHIP_RECOVERIES",
       "verdict": "not_a_gc_pointer",
       "why": "#9717: monotonic count of array-growth forwarding stubs a budgeted full cycle admitted through `classifier_valid_object_start`, reported as `forwarded_stub_recoveries=` on the PERRY_GC_DIAG `[gc-incremental]` line. A `Cell<u64>` holding a tally, never an address \u2014 the stubs it counts are reached through the worklist, not retained here. Nothing for the collector."
+    },
+    {
+      "file": "crates/perry-runtime/src/hot_diag.rs",
+      "name": "IC_DIAG",
+      "verdict": "not_a_gc_pointer",
+      "why": "Inline-cache miss diagnostics (`PERRY_IC_DIAG`). `IcDiag` is two `Instant`s, three counters, and `sites: HashMap<usize, SiteStat>` whose KEY is a PIC cache-slot address \u2014 malloc'd arena storage from `field_get_set/ic_slot.rs`, never GC heap \u2014 and whose value is a `String` plus counters. Nothing here is a managed pointer."
+    },
+    {
+      "file": "crates/perry-runtime/src/hot_diag.rs",
+      "name": "REGEX_DIAG",
+      "verdict": "not_a_gc_pointer",
+      "why": "RegExp construction/exec diagnostics (`PERRY_REGEX_DIAG`), off unless armed. Every field is a counter or an `Instant` except `per_pattern: HashMap<usize, PatStat>`, whose VALUE is Rust-owned (an owned prefix `String`, a flags `String`, counters). The KEY is a pattern `StringHeader` address, so it is a heap address \u2014 but it is used ONLY as an opaque grouping id and is never dereferenced: `PatStat::prefix` and `byte_len` are filled from the `&[u8]` argument at first insert, never by reading the key. Nothing here is traced, rooted or rewritten. The one consequence of the address being reused after a pattern dies is that two patterns' diagnostic counters merge into one row \u2014 an inaccuracy in an off-by-default diagnostic, with no collector implication. Distinct from `PASS1_MARKED`, whose addresses ARE walked and which therefore carries `non_moving_snapshot` with a pinned window."
     },
     {
       "file": "crates/perry-runtime/src/map.rs",
@@ -1976,57 +2039,6 @@
       "name": "WINDOW_ROOTS",
       "verdict": "not_a_gc_pointer",
       "why": "Window-root registry maps numeric window handles to numeric root-widget handles; neither value is a JavaScript heap pointer."
-    },
-    {
-      "file": "crates/perry-runtime/src/gc/census.rs",
-      "name": "ARMED",
-      "verdict": "not_a_gc_pointer",
-      "why": "Boolean census request latch, set by census_arm and consumed at full-sweep entry; contains no address or JS value."
-    },
-    {
-      "file": "crates/perry-runtime/src/gc/census.rs",
-      "name": "LABEL",
-      "verdict": "not_a_gc_pointer",
-      "why": "Borrowed static Rust label (manual/signal) for the requested census, not a GC string or a NaN-boxed JS value."
-    },
-    {
-      "file": "crates/perry-runtime/src/gc/census.rs",
-      "name": "PASS1_MARKED",
-      "verdict": "non_moving_snapshot",
-      "why": "Real GC header addresses, deliberately untraced so the diagnostic does not keep its observed objects alive. Populated only at the end of mark propagation of a synchronous full cycle; consumed at sweep entry in the same run_to_completion invocation. The intervening full-cycle phases do not relocate or run JS callbacks. The Vec is used for membership comparisons and dropped with the census before sweep. Budgeted and minor cycles skip both boundaries.",
-      "window": {
-        "start": {
-          "file": "crates/perry-runtime/src/gc/census.rs",
-          "function": "census_pass1_if_armed"
-        },
-        "end": {
-          "file": "crates/perry-runtime/src/gc/census.rs",
-          "function": "census_take_if_armed_at_full_sweep_start"
-        },
-        "owner": {
-          "file": "crates/perry-runtime/src/gc/cycle.rs",
-          "function": "run_to_completion"
-        },
-        "sources": {
-          "crates/perry-runtime/src/gc/census.rs": "0d5c6fcec6500692f702c8e7422e255b224de968febdb441b235b14358684b00",
-          "crates/perry-runtime/src/gc/cycle.rs": "4acea623de941aac70d38a4c993a3cd23135152e51f24b11bacd3d68e2571208",
-          "crates/perry-runtime/src/gc/mod.rs": "b60ad64b976801527e03f872b19787f72525f78c2f4056af2b2189e6bf75a581",
-          "crates/perry-runtime/src/gc/policy.rs": "319ed42f1a985c88f6362657a08518077283fe5216d6055fc82343b34dec50f9",
-          "crates/perry-runtime/src/gc/progress.rs": "a5ad3971bbe4047229ca57325234780daa85921dbc778e1c08dff4ad07ccfb96"
-        }
-      }
-    },
-    {
-      "file": "crates/perry-runtime/src/gc/census.rs",
-      "name": "SEQ",
-      "verdict": "not_a_gc_pointer",
-      "why": "u32 JSON census sequence counter, incremented once per emitted report; it never carries an object address."
-    },
-    {
-      "file": "crates/perry-runtime/src/gc/census.rs",
-      "name": "TEST_PATH_OVERRIDE",
-      "verdict": "test_only",
-      "why": "Declared under cfg(test); holds an explicitly leaked Rust path string used by the isolated census unit tests."
     }
   ],
   "_FRONTIER_README": "Identity-pinned debt ratchet over new perry-ui* candidates and otherwise-unclassified core raw/Perry TLS declarations (see the census docstring, \u201cThe identity-pinned frontier\u201d). A new uncovered holder fails until it is scanned, receives a researched holders verdict, or is deliberately pinned as debt. Moving a researched false positive to holders graduates it from this list. A fixed or classified holder makes its old frontier pin stale, so the receipt must be deleted.",
