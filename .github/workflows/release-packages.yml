@@ -715,7 +715,12 @@ jobs:
           if [ ! -f "$stdlib" ]; then
             echo "::error::$stdlib missing — cannot verify tokio coherence"; exit 1
           fi
-          tokio_of() { ar t "$1" 2>/dev/null | grep -oE 'tokio-[0-9a-f]+' | sort -u | head -1; }
+          # `|| true` is load-bearing. This pipeline ends in grep, which exits 1
+          # when an archive bundles no tokio -- a normal case. With `pipefail`
+          # the pipeline carries that 1, `got=$(tokio_of …)` inherits it, and
+          # GitHub's `bash -e` then kills the step on the first non-tokio
+          # archive, having compared nothing.
+          tokio_of() { ar t "$1" 2>/dev/null | grep -oE 'tokio-[0-9a-f]+' | sort -u | head -1 || true; }
           want=$(tokio_of "$stdlib")
           if [ -z "$want" ]; then
             echo "::notice::stdlib archive bundles no tokio; nothing to compare"; exit 0
@@ -725,7 +730,12 @@ jobs:
           for a in "$dist_dir"/libperry_ext_*.a; do
             [ -e "$a" ] || continue
             got=$(tokio_of "$a")
-            [ -z "$got" ] && continue          # wrapper does not use tokio
+            # `[ -z "$got" ] && continue` would EXIT here: GitHub runs steps with
+            # `bash -e`, and that compound returns 1 whenever $got is non-empty --
+            # i.e. on the first archive that actually uses tokio, which is the
+            # normal case. Run 33940039247 died exactly there, having compared
+            # nothing. Use a plain `if` so the status is never the step's.
+            if [ -z "$got" ]; then continue; fi   # wrapper does not use tokio
             checked=$((checked + 1))
             if [ "$got" != "$want" ]; then
               echo "::error::$(basename "$a") bundles $got but stdlib bundles $want"
