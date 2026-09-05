@@ -405,6 +405,26 @@ struct SiteStat {
     key: String,
     misses: u64,
     by_reason: [u32; IC_MISS_REASONS],
+    /// Primes at this site whose token equals the one the site's MRU entry
+    /// ALREADY held. The cache was written with this shape, the next read of
+    /// the same shape came back to the miss handler anyway, and the handler
+    /// wrote the identical value again: the prime is not sticking. See
+    /// [`IcDiag::prime_same_token`].
+    prime_same_token: u64,
+    /// Primes whose token differs from the MRU entry's — the site really is
+    /// seeing more than one receiver shape (polymorphism / megamorphism).
+    prime_new_token: u64,
+    /// Primes taken while the site's `PIC_WAY_STATE` was < 0, i.e. the ways
+    /// are latched off because the rotation was wider than they hold.
+    prime_while_megamorphic: u64,
+    /// Primes taken while the site had no way populated yet (state == 0).
+    prime_while_fresh: u64,
+    /// Primes taken while the site's ways were populated and live (state > 0).
+    prime_while_armed: u64,
+    /// Primes whose token was ALREADY sitting in one of the site's ways. The
+    /// cache held the right answer in a way and the read came back to the miss
+    /// handler regardless. See [`IcDiag::prime_in_ways`].
+    prime_in_ways: u64,
 }
 
 #[derive(Default)]
@@ -415,14 +435,96 @@ pub struct IcDiag {
     pub misses: u64,
     by_reason: [u64; IC_MISS_REASONS],
     sites: HashMap<usize, SiteStat>,
+    /// THE SPLIT. A site classified `own_inline_primed` misses, finds the
+    /// property as an own inline slot, and primes the cache — and then misses
+    /// again. Two mutually exclusive explanations, and the fix differs:
+    ///
+    /// * `prime_new_token` — the receiver's shape really did change between
+    ///   the two reads. The site is polymorphic and the ways are (or should
+    ///   be) doing their job; a fix would widen or re-tier them.
+    /// * `prime_same_token` — the site re-primed the shape it already had.
+    ///   The cache holds the right answer and the emitted hit path did not
+    ///   use it, or something invalidated it in between. That is a
+    ///   priming/invalidation or IC-layout bug, not polymorphism.
+    ///
+    /// Measured on the claude-code TUI, shape identity is NOT the explanation
+    /// for the bulk of the misses (`{value, done}` iterator results share one
+    /// keys array since #7564 and their read sites still miss ~178k times per
+    /// turn), which is what this counter exists to settle.
+    pub prime_same_token: u64,
+    pub prime_new_token: u64,
+    pub prime_while_megamorphic: u64,
+    pub prime_while_fresh: u64,
+    pub prime_while_armed: u64,
+    /// The decisive counter for the `new_token` half. `prime_same_token` only
+    /// compares against the MRU entry (word 0), so a site rotating k <= 5
+    /// shapes reports `new_token` on every prime even when the ways are doing
+    /// exactly what they were built for. This counts the primes whose token was
+    /// found in one of the four ways at prime time: the polymorphic cache
+    /// ALREADY held that shape's slot, and the emitted hit path still fell
+    /// through to the miss handler.
+    ///
+    /// So the three-way split of every prime is:
+    /// * `same_token` — re-primed the MRU shape (priming/invalidation),
+    /// * `new_token` + `in_ways` — the ways held it and were not consulted
+    ///   (emitted gate / IC layout, i.e. codegen),
+    /// * `new_token` + not `in_ways` — a shape neither the MRU entry nor the
+    ///   ways had (genuine polymorphism, or a first sighting).
+    pub prime_in_ways: u64,
 }
 
 crate::perry_thread_local! {
     static IC_DIAG: RefCell<IcDiag> = RefCell::new(IcDiag::default());
 }
 
-/// Record one IC miss. `site` is the per-site cache slot address (stable for
-/// the process lifetime), `key` the property-name string bytes.
+/// Record one `pic_prime_get`, splitting it by whether the token the site is
+/// being primed with is one it already held — in the MRU entry (`same`) or in
+/// one of the ways (`in_ways`). See [`IcDiag::prime_same_token`] and
+/// [`IcDiag::prime_in_ways`].
+///
+/// Diagnostic only: called from `pic_prime_get` behind [`ic_on`], and every
+/// value it reads (`prev_tok`, `token`, `state`, the ways) is one the caller
+/// already has in a register or in the cache line it has just touched.
+pub fn ic_note_prime(site: usize, prev_tok: i64, token: i64, state: i64, in_ways: bool) {
+    IC_DIAG.with(|d| {
+        let mut d = d.borrow_mut();
+        if d.started.is_none() {
+            d.started = Some(Instant::now());
+            d.last_dump = d.started;
+        }
+        let same = prev_tok != 0 && prev_tok == token;
+        if same {
+            d.prime_same_token += 1;
+        } else {
+            d.prime_new_token += 1;
+        }
+        if in_ways {
+            d.prime_in_ways += 1;
+        }
+        match state.cmp(&0) {
+            std::cmp::Ordering::Less => d.prime_while_megamorphic += 1,
+            std::cmp::Ordering::Equal => d.prime_while_fresh += 1,
+            std::cmp::Ordering::Greater => d.prime_while_armed += 1,
+        }
+        let s = d.sites.entry(site).or_default();
+        if same {
+            s.prime_same_token += 1;
+        } else {
+            s.prime_new_token += 1;
+        }
+        if in_ways {
+            s.prime_in_ways += 1;
+        }
+        match state.cmp(&0) {
+            std::cmp::Ordering::Less => s.prime_while_megamorphic += 1,
+            std::cmp::Ordering::Equal => s.prime_while_fresh += 1,
+            std::cmp::Ordering::Greater => s.prime_while_armed += 1,
+        }
+    });
+}
+
+/// Record one IC miss. `site` is the per-site cache address (stable for the
+/// process lifetime), `key` the property-name string bytes.
 pub fn ic_note(site: usize, key: &[u8], reason: IcMissReason) {
     IC_DIAG.with(|d| {
         let mut d = d.borrow_mut();
@@ -470,9 +572,33 @@ impl IcDiag {
             }
         }
         out.push('\n');
+        // THE SPLIT: of every prime, how many re-primed the token the site
+        // already held (the cache was right and was not used) versus a token
+        // it had not seen (real polymorphism)?
+        let primes = self.prime_same_token + self.prime_new_token;
+        if primes != 0 {
+            let pct = |n: u64| 100.0 * n as f64 / primes as f64;
+            let _ = writeln!(
+                out,
+                "  primes={primes} same_token={} ({:.1} %) new_token={} ({:.1} %) \
+                 in_ways={} ({:.1} %) | way_state: fresh={} armed={} megamorphic={}",
+                self.prime_same_token,
+                pct(self.prime_same_token),
+                self.prime_new_token,
+                pct(self.prime_new_token),
+                self.prime_in_ways,
+                pct(self.prime_in_ways),
+                self.prime_while_fresh,
+                self.prime_while_armed,
+                self.prime_while_megamorphic
+            );
+        }
         let mut rows: Vec<&SiteStat> = self.sites.values().collect();
         rows.sort_by_key(|s| std::cmp::Reverse(s.misses));
-        let _ = writeln!(out, "  misses  key  reasons");
+        let _ = writeln!(
+            out,
+            "  misses   same/new/inways   fresh/armed/mega   key  reasons"
+        );
         for s in rows.iter().take(40) {
             let mut reasons = String::new();
             let mut idx: Vec<usize> = (0..IC_MISS_REASONS)
@@ -482,7 +608,18 @@ impl IcDiag {
             for i in idx.iter().take(3) {
                 let _ = write!(reasons, " {}={}", IC_REASON_NAMES[*i], s.by_reason[*i]);
             }
-            let _ = writeln!(out, "  {:6}  {:<24}{reasons}", s.misses, s.key);
+            let _ = writeln!(
+                out,
+                "  {:6}  {:>8}/{}/{:<8}  {:>7}/{}/{:<8}  {:<24}{reasons}",
+                s.misses,
+                s.prime_same_token,
+                s.prime_new_token,
+                s.prime_in_ways,
+                s.prime_while_fresh,
+                s.prime_while_armed,
+                s.prime_while_megamorphic,
+                s.key
+            );
         }
         out
     }
