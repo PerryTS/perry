@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 2091 entries across 136 modules
+// Coverage: 2092 entries across 137 modules
 
 type PerryI8 = number & { readonly __perryI8?: never };
 type PerryI16 = number & { readonly __perryI16?: never };
@@ -439,6 +439,11 @@ declare module "bun:ffi" {
   export function toBuffer(...args: any[]): any;
   /** stdlib */
   export function viewSource(...args: any[]): any;
+}
+
+declare module "bun:jsc" {
+  /** stdlib */
+  export function heapStats(...args: any[]): any;
 }
 
 declare module "bun:sqlite" {

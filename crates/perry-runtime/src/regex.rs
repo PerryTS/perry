@@ -34,6 +34,7 @@ mod compile;
 mod escape;
 #[cfg(feature = "regex-engine")]
 mod exec_array;
+#[cfg(feature = "regex-engine")]
 mod flags;
 #[cfg(feature = "regex-engine")]
 mod global_scan;
@@ -66,6 +67,7 @@ use exec_array::{
     byte_index_to_utf16_index, materialize_exec_match, materialize_match_list,
     set_exec_array_metadata_value, utf16_index_to_byte, OwnedCapture, OwnedExecMatch,
 };
+#[cfg(feature = "regex-engine")]
 use flags::validate_and_canonicalize_flags;
 #[cfg(feature = "regex-engine")]
 use grammar::{
