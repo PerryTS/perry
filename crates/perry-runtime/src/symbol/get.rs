@@ -25,6 +25,41 @@ fn well_known_symbol_method_name(sym_key: usize) -> Option<&'static str> {
     None
 }
 
+/// An iterator dispatch alias is a fallback for the method declared in source.
+/// Check writes on the intervening prototypes first, but stop at the nearest
+/// declaration so a subclass method still shadows a replaced base method.
+unsafe fn class_iterator_prototype_override(
+    receiver: f64,
+    sym: f64,
+    mut class_id: u32,
+    method_owner: u32,
+) -> Option<f64> {
+    for _ in 0..32 {
+        let declared = crate::object::class_decl_prototype_object(class_id);
+        let dynamic = crate::object::class_prototype_object(class_id);
+        for proto in [declared, dynamic] {
+            if proto.is_null() {
+                continue;
+            }
+            let proto_value = crate::value::js_nanbox_pointer(proto as i64);
+            if let Some(acc) = accessors::symbol_accessor_property(proto_value, sym) {
+                return Some(accessors::invoke_symbol_accessor_getter(acc.get, receiver));
+            }
+            if let Some(value) = own_symbol_property(proto_value, sym) {
+                return Some(value);
+            }
+        }
+        if class_id == method_owner {
+            break;
+        }
+        match crate::object::get_parent_class_id(class_id) {
+            Some(parent) if parent != 0 && parent != class_id => class_id = parent,
+            _ => break,
+        }
+    }
+    None
+}
+
 /// Does `obj` carry an OWN symbol-keyed property under `sym`, **without
 /// invoking** an accessor for it?
 ///
@@ -812,7 +847,14 @@ pub unsafe extern "C" fn js_object_get_symbol_property(obj_f64: f64, sym_f64: f6
                     // on `method_owner_class_id` first: `js_class_method_bind`
                     // otherwise mints a bound closure for a non-existent method.
                     if let Some(method_name) = well_known_symbol_method_name(sym_key) {
-                        if crate::object::method_owner_class_id(class_id, method_name).is_some() {
+                        if let Some(owner) =
+                            crate::object::method_owner_class_id(class_id, method_name)
+                        {
+                            if let Some(value) =
+                                class_iterator_prototype_override(obj_f64, sym_f64, class_id, owner)
+                            {
+                                return value;
+                            }
                             return crate::object::js_class_method_bind(
                                 obj_f64,
                                 method_name.as_ptr(),

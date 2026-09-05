@@ -1326,13 +1326,10 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
             {
                 let scope_mark = ctx.push_block_scope();
                 let iter_expr_raw = lower_expr(ctx, &for_of_stmt.right)?;
-                let iter_expr = if let Some(iter_fn_id) = iter_from_class {
-                    Expr::Call {
-                        callee: Box::new(Expr::FuncRef(iter_fn_id)),
-                        args: vec![iter_expr_raw],
-                        type_args: vec![],
-                        byte_offset: 0,
-                    }
+                let iter_expr = if iter_from_class.is_some() {
+                    // Resolve the current Symbol.iterator property, including
+                    // prototype replacements, once at loop entry (#9788).
+                    Expr::GetIterator(Box::new(iter_expr_raw))
                 } else if is_filehandle_readlines_for_await || is_fs_dir_for_await {
                     async_iterator_method_call(iter_expr_raw)
                 } else if is_node_readable_for_await {

@@ -866,8 +866,8 @@ pub(super) fn lower_stmt_for_of_inner(
     // Also detect: for (const x of new Range(...)) where Range
     // defines `*[Symbol.iterator]()`. We lowered that method as
     // a synthesized top-level generator function taking `this`
-    // as its first parameter; the for-of here dispatches by
-    // calling that function with the lowered receiver.
+    // as its first parameter; this identifies the iterator-protocol loop.
+    // The actual iterator method is looked up at runtime so mutations count.
     let iter_from_class: Option<crate::types::FuncId> =
         if let ast::Expr::New(new_expr) = &*for_of_stmt.right {
             if let ast::Expr::Ident(ident) = new_expr.callee.as_ref() {
@@ -902,22 +902,17 @@ pub(super) fn lower_stmt_for_of_inner(
     {
         // Lower to iterator protocol:
         //   let __iter = genFunc(...);                     // generator-fn path
-        //   let __iter = __perry_iter_Range(new Range(...));  // class path
+        //   let __iter = GetIterator(new Range(...));      // class path
         //   let __iter = readable.iterator();              // node:stream path
         //   let __result = __iter.next();
         //   while (!__result.done) { const x = __result.value; body; __result = __iter.next(); }
         let for_scope_mark = ctx.push_block_scope();
         let iter_expr = lower_expr(ctx, &for_of_stmt.right)?;
-        // For the class path we wrap the lowered `new Range(..)`
-        // in a direct FuncRef call to the synthesized iterator
-        // function (which has `this` as its first parameter).
-        let iter_expr = if let Some(iter_fn_id) = iter_from_class {
-            Expr::Call {
-                callee: Box::new(Expr::FuncRef(iter_fn_id)),
-                args: vec![iter_expr],
-                type_args: vec![],
-                byte_offset: 0,
-            }
+        // A fresh instance still observes prototype mutations at loop entry.
+        let iter_expr = if iter_from_class.is_some() {
+            // Resolve the current Symbol.iterator property, including
+            // prototype replacements, once at loop entry (#9788).
+            Expr::GetIterator(Box::new(iter_expr))
         } else if is_filehandle_readlines_for_await || is_fs_dir_for_await {
             async_iterator_method_call(iter_expr)
         } else if is_node_readable_for_await {
