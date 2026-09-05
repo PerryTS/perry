@@ -941,6 +941,8 @@ pub fn gc_init() {
     // `PERRY_GC_CENSUS`: remember the main thread and install the SIGUSR2
     // trigger. No-op (one OnceLock read) when the env var is unset.
     census::census_on_gc_init();
+    #[cfg(feature = "alloc-census")]
+    crate::alloc_census::alloc_census_init();
     reg_budgeted_scanner!(
         scan_runtime_handle_roots_mut,
         scan_runtime_handle_roots_mut_step,

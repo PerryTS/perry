@@ -25,12 +25,33 @@
 // watchOS) on 32-bit. Keep mimalloc's speed on 64-bit.
 // `alloc-mimalloc` (default-on) can be dropped by a size-optimized rebuild
 // (`PERRY_SIZE_OPT`), trading the faster allocator for ~140 KB of binary.
-#[cfg(all(target_pointer_width = "64", feature = "alloc-mimalloc"))]
+#[cfg(all(
+    target_pointer_width = "64",
+    feature = "alloc-mimalloc",
+    not(feature = "alloc-census")
+))]
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
-#[cfg(not(all(target_pointer_width = "64", feature = "alloc-mimalloc")))]
+#[cfg(all(
+    not(all(target_pointer_width = "64", feature = "alloc-mimalloc")),
+    not(feature = "alloc-census")
+))]
 #[global_allocator]
 static GLOBAL: std::alloc::System = std::alloc::System;
+// `alloc-census` builds wrap whichever allocator the target would have used.
+// The wrapper is the only way to attribute native-heap bytes to a call site,
+// and it is compiled out of every build that does not ask for it.
+#[cfg(all(target_pointer_width = "64", feature = "alloc-mimalloc", feature = "alloc-census"))]
+#[global_allocator]
+static GLOBAL: alloc_census::CensusAlloc<mimalloc::MiMalloc> =
+    alloc_census::CensusAlloc(mimalloc::MiMalloc);
+#[cfg(all(
+    not(all(target_pointer_width = "64", feature = "alloc-mimalloc")),
+    feature = "alloc-census"
+))]
+#[global_allocator]
+static GLOBAL: alloc_census::CensusAlloc<std::alloc::System> =
+    alloc_census::CensusAlloc(std::alloc::System);
 
 // Declared FIRST and with `#[macro_use]`: `per_test_global!` has to be in
 // scope for every module below it. See its module docs for #7672.
@@ -38,6 +59,8 @@ static GLOBAL: std::alloc::System = std::alloc::System;
 pub mod per_test_global;
 
 pub mod abi_trampoline;
+#[cfg(feature = "alloc-census")]
+pub mod alloc_census;
 pub mod agent;
 #[cfg(test)]
 mod agent_dispatch_tests;

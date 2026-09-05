@@ -654,6 +654,13 @@ fn take_census(label: &str, pass1: Option<Vec<usize>>) {
     let Some(path) = census_path() else {
         return;
     };
+    // The Rust-heap census first: the GC walk below allocates, and the point
+    // of that census is what was resident before this collection started.
+    #[cfg(feature = "alloc-census")]
+    {
+        crate::alloc_census::alloc_census_dump(label);
+        crate::alloc_census::mimalloc_stats_print();
+    }
     let started = Instant::now();
     let mut c = Census {
         pass1,
