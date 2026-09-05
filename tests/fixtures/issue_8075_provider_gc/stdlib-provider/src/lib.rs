@@ -25,6 +25,7 @@ unsafe extern "C" fn pin_issue_8038_response_surface() {
     let _ = perry_stdlib::js_headers_set(0.0, std::ptr::null(), std::ptr::null());
     let _ = perry_stdlib::js_headers_append(0.0, std::ptr::null(), std::ptr::null());
     let _ = perry_stdlib::js_headers_get(0.0, std::ptr::null());
+    let _ = perry_stdlib::js_response_body_init_reset();
     let _ = perry_stdlib::js_response_body_init_ptr(0.0);
     let _ = perry_stdlib::js_response_new(std::ptr::null(), 0.0, std::ptr::null(), 0.0);
     let _ = perry_stdlib::js_response_get_headers(0.0);

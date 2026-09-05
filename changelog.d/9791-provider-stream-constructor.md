@@ -1,3 +1,3 @@
 Fix the native-root provider gate's stdlib fixture to retain and export the
-strategy-aware ReadableStream constructor used by its compiled Response app.
-This lets the app resolve the constructor when loaded as a separate dylib.
+strategy-aware ReadableStream constructor and Response body-init reset helper
+used by its compiled app, so it can load as a separate dylib.

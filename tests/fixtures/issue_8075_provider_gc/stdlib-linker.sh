@@ -22,6 +22,7 @@ stdlib_provider_exports=(
   js_reader_read
   js_response_body
   js_response_body_init_ptr
+  js_response_body_init_reset
   js_response_get_headers
   js_response_new
   js_stdlib_init_dispatch
