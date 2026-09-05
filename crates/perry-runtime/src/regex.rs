@@ -896,6 +896,32 @@ pub extern "C" fn js_regexp_new(
     let canonical_flags = validate_and_canonicalize_flags(raw_flags_str);
     let flags_str = canonical_flags.as_str();
 
+    // ★ Share the caller's flags string when it is ALREADY the canonical text.
+    //
+    // `flags_ptr` used to be a fresh `js_string_from_str` on every
+    // construction. A JS regex literal evaluates to a fresh RegExp object
+    // every time it is reached, so that is one 32-byte GC string per
+    // evaluation: `PERRY_REGEX_DIAG` counts 161,897 constructions per
+    // 400-character claude-code reply, ~5.2 MB of identical one- and two-byte
+    // strings, and ~44 MB on a 3300-character reply.
+    //
+    // JS strings are immutable and have no identity semantics, and a literal's
+    // flags text is written by the author in spec order (`/x/gi`, not
+    // `/x/ig`), so the caller's string usually IS the canonical text and can
+    // simply be shared. Nothing downstream depends on the pointer being fresh:
+    // `flags_ptr`-keyed lookups (`FANCY_CACHE`, `lookup_fancy_regex`) read it
+    // through `string_as_str` and compare CONTENT, and the header keeping a
+    // pointer to it is what keeps it alive.
+    //
+    // This comparison must happen HERE, before the validation block below,
+    // because `raw_flags_str` borrows the caller's GC string and that block
+    // can allocate. The root is taken here for the same reason: the raw
+    // `flags` argument may name from-space after any allocation, exactly as
+    // the ★ note on `pattern_root` says, and this one is stored into the
+    // header too.
+    let shared_flags_root = (is_valid_ptr(flags) && raw_flags_str == flags_str)
+        .then(|| scope.root_string_ptr(flags));
+
     let case_insensitive = flags_str.contains('i');
     let global = flags_str.contains('g');
     let multiline = flags_str.contains('m');
@@ -1055,11 +1081,21 @@ pub extern "C" fn js_regexp_new(
     // leaked every header, which was a 64-byte-per-call leak on top of the
     // (now-fixed) regex object leak.
     let header_size = std::mem::size_of::<RegExpHeader>();
-    // Materialize the canonical flags into a fresh StringHeader so that
-    // `flags_ptr`-keyed lookups (FANCY_CACHE, lookup_fancy_regex) and the
-    // GC-survivable source table all agree on the canonical form, and the
-    // header never holds the caller's possibly-temporary input flags.
-    let canonical_flags_ptr = js_string_from_str(flags_str);
+    // `flags_ptr` must hold the CANONICAL form, so that `flags_ptr`-keyed
+    // lookups (FANCY_CACHE, lookup_fancy_regex) and the GC-survivable source
+    // table all agree. When the caller's string already is that text it is
+    // shared (rooted above); only a non-canonical spelling (`/x/ig` → `"gi"`,
+    // or a computed `new RegExp(p, f)`) still has to materialize one. The
+    // counter makes the removal provable rather than asserted.
+    let flags_root = match shared_flags_root {
+        Some(root) => root,
+        None => {
+            if crate::hot_diag::regex_on() {
+                crate::hot_diag::regex_with(|d| d.new_flags_allocated += 1);
+            }
+            scope.root_string_ptr(js_string_from_str(flags_str))
+        }
+    };
     // ★ #7341: root the canonical flags string too. The `gc_malloc` below is an
     // allocation and therefore a collection point, exactly as the comment above
     // `pattern_root` says — but only the PATTERN was rooted and re-read. The
@@ -1072,7 +1108,7 @@ pub extern "C" fn js_regexp_new(
     //
     // The write barrier below already treated this as a real GC edge; what was
     // missing is that the value written had to survive the allocation first.
-    let flags_root = scope.root_string_ptr(canonical_flags_ptr);
+
     unsafe {
         let raw = crate::gc::gc_malloc(header_size, crate::gc::GC_TYPE_REGEXP);
         if raw.is_null() {

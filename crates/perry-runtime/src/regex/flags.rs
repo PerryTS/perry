@@ -14,7 +14,28 @@ use super::throw_regexp_syntax_error;
 /// its set-notation matching semantics are not implemented (the regex crate
 /// has no equivalent); it behaves like an ordinary unicode pattern.
 #[cfg(feature = "regex-engine")]
-pub(super) fn validate_and_canonicalize_flags(flags: &str) -> String {
+/// The canonical flag text, held inline.
+///
+/// There are eight legal flags and each may appear once, so the canonical form
+/// is at most eight ASCII bytes and never needs the heap. It used to be a
+/// `String`, i.e. one heap allocation on **every** `RegExp` construction — and
+/// a JS regex literal constructs a fresh object every time it is evaluated, so
+/// on the claude-code TUI that was ~162,000 allocations per 400-character
+/// reply for text that is almost always one or two bytes.
+#[derive(Clone, Copy)]
+pub(super) struct CanonicalFlags {
+    buf: [u8; 8],
+    len: u8,
+}
+
+impl CanonicalFlags {
+    pub(super) fn as_str(&self) -> &str {
+        // Every byte written below comes from `FLAG_ORDER`, which is ASCII.
+        std::str::from_utf8(&self.buf[..self.len as usize]).unwrap_or("")
+    }
+}
+
+pub(super) fn validate_and_canonicalize_flags(flags: &str) -> CanonicalFlags {
     // Spec order of the flag bits: d g i m s u v y.
     const FLAG_ORDER: &[char] = &['d', 'g', 'i', 'm', 's', 'u', 'v', 'y'];
     let mut seen = [false; 8];
@@ -37,10 +58,15 @@ pub(super) fn validate_and_canonicalize_flags(flags: &str) -> String {
             }
         }
     }
-    FLAG_ORDER
-        .iter()
-        .enumerate()
-        .filter(|(i, _)| seen[*i])
-        .map(|(_, c)| *c)
-        .collect()
+    let mut out = CanonicalFlags {
+        buf: [0; 8],
+        len: 0,
+    };
+    for (i, c) in FLAG_ORDER.iter().enumerate() {
+        if seen[i] {
+            out.buf[out.len as usize] = *c as u8;
+            out.len += 1;
+        }
+    }
+    out
 }
