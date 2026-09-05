@@ -47,7 +47,7 @@ pub mod zstack;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject};
 use objc2::{msg_send, AnyThread, DefinedClass};
-use objc2_app_kit::{NSStackView, NSView};
+use objc2_app_kit::{NSStackView, NSStackViewGravity, NSView};
 use objc2_foundation::NSObjectProtocol;
 use std::cell::RefCell;
 
@@ -284,13 +284,13 @@ pub fn set_hidden(handle: i64, hidden: bool) {
                         if is_stack {
                             let stack: &NSStackView =
                                 unsafe { &*(Retained::as_ptr(&parent) as *const NSStackView) };
-                            let count = stack.arrangedSubviews().len();
-                            let insert_idx = index.min(count);
-                            unsafe {
-                                let _: () = objc2::msg_send![
-                                    stack, insertArrangedSubview: &*view, atIndex: insert_idx
-                                ];
-                            }
+                            let count = stack.viewsInGravity(NSStackViewGravity::Top).len();
+                            stack.insertView_atIndex_inGravity(
+                                &view,
+                                index.min(count),
+                                NSStackViewGravity::Top,
+                            );
+                            refresh_stack_parent_map(parent_handle, stack);
                         }
                     }
                 }
@@ -486,27 +486,50 @@ pub fn clear_children(handle: i64) {
     }
 }
 
-/// Add a child view to a parent view at a specific index.
+/// Refresh positions used when AppKit detaches and later reattaches hidden views.
+fn refresh_stack_parent_map(parent_handle: i64, stack: &NSStackView) {
+    let views = stack.viewsInGravity(NSStackViewGravity::Top);
+    WIDGETS.with(|widgets| {
+        let widgets = widgets.borrow();
+        PARENT_MAP.with(|parents| {
+            let mut parents = parents.borrow_mut();
+            for (index, view) in views.iter().enumerate() {
+                if let Some(handle_index) = widgets
+                    .iter()
+                    .position(|registered| Retained::as_ptr(registered) == Retained::as_ptr(&view))
+                {
+                    parents.insert(handle_index as i64 + 1, (parent_handle, index));
+                }
+            }
+        });
+    });
+}
+
+/// Insert or move a child at an index, retaining its own layout metadata.
+/// Perry stacks use the top/leading gravity area for both orientations.
 pub fn add_child_at(parent_handle: i64, child_handle: i64, index: i64) {
     if let (Some(parent), Some(child)) = (get_widget(parent_handle), get_widget(child_handle)) {
-        let is_stack = if let Some(cls) = AnyClass::get(c"NSStackView") {
-            parent.isKindOfClass(cls)
-        } else {
-            false
-        };
-
+        let is_stack = AnyClass::get(c"NSStackView")
+            .map(|class| parent.isKindOfClass(class))
+            .unwrap_or(false);
         if is_stack {
-            let stack: &NSStackView =
-                unsafe { &*(Retained::as_ptr(&parent) as *const NSStackView) };
-            // Use addView:inGravity: with top/leading gravity for consistent packing
-            unsafe {
-                let _: () = objc2::msg_send![stack, addView: &*child, inGravity: 1i64];
+            // A move must detach from the previous arranged-view list without
+            // remove_child's disposal cleanup (which deactivates width/height).
+            let previous = PARENT_MAP.with(|parents| parents.borrow().get(&child_handle).copied());
+            if let Some((old_handle, _)) = previous {
+                if let Some(old_view) = get_widget(old_handle) {
+                    let old_stack =
+                        unsafe { &*(Retained::as_ptr(&old_view) as *const NSStackView) };
+                    old_stack.removeView(&child);
+                    refresh_stack_parent_map(old_handle, old_stack);
+                }
             }
-            // Track parent-child for re-attachment after hide/show
-            PARENT_MAP.with(|m| {
-                m.borrow_mut()
-                    .insert(child_handle, (parent_handle, index as usize));
-            });
+            child.removeFromSuperview();
+            let stack = unsafe { &*(Retained::as_ptr(&parent) as *const NSStackView) };
+            let count = stack.viewsInGravity(NSStackViewGravity::Top).len();
+            let index = index.max(0) as usize;
+            stack.insertView_atIndex_inGravity(&child, index.min(count), NSStackViewGravity::Top);
+            refresh_stack_parent_map(parent_handle, stack);
         } else if zstack::is_zstack(parent_handle) {
             zstack::add_child(parent_handle, child_handle);
         } else {
@@ -530,17 +553,8 @@ pub fn add_child(parent_handle: i64, child_handle: i64) {
             // Safety: we verified the type with isKindOfClass
             let stack: &NSStackView =
                 unsafe { &*(Retained::as_ptr(&parent) as *const NSStackView) };
-            let index = stack.arrangedSubviews().len();
-            // Use addView:inGravity: with Top/Leading gravity (1) so children
-            // pack tightly from the top (VStack) or leading edge (HStack)
-            // instead of defaulting to center gravity area.
-            unsafe {
-                let _: () = objc2::msg_send![stack, addView: &*child, inGravity: 1i64];
-            }
-            // Track parent-child for re-attachment after hide/show
-            PARENT_MAP.with(|m| {
-                m.borrow_mut().insert(child_handle, (parent_handle, index));
-            });
+            let count = stack.viewsInGravity(NSStackViewGravity::Top).len();
+            add_child_at(parent_handle, child_handle, count as i64);
         } else if zstack::is_zstack(parent_handle) {
             zstack::add_child(parent_handle, child_handle);
         } else {
@@ -573,6 +587,10 @@ pub fn remove_child(parent_handle: i64, child_handle: i64) {
 
         // Clean up metadata maps
         cleanup_widget_maps(&handles_to_clean);
+        if is_stack {
+            let stack = unsafe { &*(Retained::as_ptr(&parent) as *const NSStackView) };
+            refresh_stack_parent_map(parent_handle, stack);
+        }
     }
 }
 
@@ -601,31 +619,22 @@ pub fn set_overlay_frame(handle: i64, x: f64, y: f64, w: f64, h: f64) {
     }
 }
 
-/// Reorder a child within an NSStackView by moving from one index to another.
+/// Reorder a child within a stack, preserving gravity and hidden-view positions.
 pub fn reorder_child(parent_handle: i64, from_index: i64, to_index: i64) {
     if let Some(parent) = get_widget(parent_handle) {
-        let is_stack = if let Some(cls) = AnyClass::get(c"NSStackView") {
-            parent.isKindOfClass(cls)
-        } else {
-            false
-        };
-
+        let is_stack = AnyClass::get(c"NSStackView")
+            .map(|class| parent.isKindOfClass(class))
+            .unwrap_or(false);
         if is_stack {
-            let stack: &NSStackView =
-                unsafe { &*(Retained::as_ptr(&parent) as *const NSStackView) };
-            let subviews = stack.arrangedSubviews();
-            let count = subviews.len();
-            let fi = from_index as usize;
-            let ti = to_index as usize;
-            if fi < count && ti < count {
-                let child: *const NSView =
-                    unsafe { objc2::msg_send![&subviews, objectAtIndex: fi] };
-                let child_ref: &NSView = unsafe { &*child };
-                stack.removeArrangedSubview(child_ref);
-                unsafe {
-                    let _: () =
-                        objc2::msg_send![stack, insertArrangedSubview: child_ref, atIndex: ti];
-                }
+            let stack = unsafe { &*(Retained::as_ptr(&parent) as *const NSStackView) };
+            let views = stack.viewsInGravity(NSStackViewGravity::Top);
+            let from = from_index as usize;
+            let to = to_index as usize;
+            if from < views.len() && to < views.len() && from != to {
+                let child = views.objectAtIndex(from);
+                stack.removeView(&child);
+                stack.insertView_atIndex_inGravity(&child, to, NSStackViewGravity::Top);
+                refresh_stack_parent_map(parent_handle, stack);
             }
         }
     }

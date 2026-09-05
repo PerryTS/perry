@@ -1,0 +1,43 @@
+{
+  "name": "perry-solid",
+  "version": "0.1.0",
+  "description": "Solid's universal renderer for Perry native widgets",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./renderer": "./src/renderer.ts"
+  },
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "license": "MIT",
+  "peerDependencies": {
+    "solid-js": "^1.9.15"
+  },
+  "devDependencies": {
+    "@types/node": "26.4.1",
+    "solid-js": "1.9.15",
+    "typescript": "5.9.3"
+  },
+  "scripts": {
+    "test": "node --conditions=browser test/renderer.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "perry": {
+    "nativeModule": true,
+    "compilePackages": [
+      "solid-js"
+    ],
+    "allow": {
+      "compilePackages": [
+        "solid-js"
+      ]
+    },
+    "packageAliases": {
+      "solid-js": "solid-js/dist/solid.js"
+    }
+  }
+}

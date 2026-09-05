@@ -69,3 +69,11 @@ objc2-app-kit = { version = "0.3", features = [
     "NSStatusItem",
     "NSStatusBarButton",
 ] }
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+perry-runtime.workspace = true
+
+[[test]]
+name = "native_widget_order"
+path = "tests/native_widget_order.rs"
+harness = false
