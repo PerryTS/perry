@@ -181,6 +181,9 @@ pub(crate) fn obj_value_has_own_key(value: f64, key: f64) -> bool {
         if let Some(present) = crate::process::process_env_has_field(obj, key_str) {
             return present;
         }
+        if super::string_wrapper::has_index_key(obj as usize, key_str) {
+            return true;
+        }
         // #9190 replaced the allocating per-element `js_array_get` walk with
         // the consult-only key index below, so no handle round-trip is needed:
         // there is no collection point between reading these pointers and

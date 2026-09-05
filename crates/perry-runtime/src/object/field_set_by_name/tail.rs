@@ -234,6 +234,11 @@ pub(crate) fn set_field_by_name_object_tail(
             }
         }
 
+        if super::super::string_wrapper::has_index_key(obj as usize, key) {
+            let name = key_to_str_for_diag(key);
+            crate::error::throw_immutable_write(0, &name);
+        }
+
         // Resolve the interned key EARLY (hoisted from below the interception
         // vet): the store-plan cache and the shape-transition cache both key
         // on interned pointer identity. If the key is already interned

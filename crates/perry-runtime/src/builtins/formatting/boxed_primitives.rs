@@ -44,9 +44,8 @@ pub(super) unsafe fn boxed_primitive_base_for_object(
 /// String, otherwise `None`.
 ///
 /// The count is in UTF-16 code units, NOT Unicode scalar values: the index
-/// properties are installed over `0..js_string_length` (`utf16_len`) by
-/// `install_string_wrapper_indices`, so a non-BMP char (e.g. an emoji, two
-/// UTF-16 units) occupies two indices. Counting `.chars()` would under-count
+/// properties span `0..js_string_length` (`utf16_len`), so a non-BMP char
+/// (e.g. an emoji, two UTF-16 units) occupies two indices. Counting `.chars()` would under-count
 /// and leak a trailing index (e.g. `new String("a😀b")` → `{ 3: 'b' }`).
 pub(super) unsafe fn boxed_string_char_index_count(
     obj_ptr: *const crate::object::ObjectHeader,
@@ -139,6 +138,8 @@ fn attach_boxed_primitive_prototype(obj: *mut crate::object::ObjectHeader, class
     if obj.is_null() {
         return;
     }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj_h = scope.root_raw_mut_ptr(obj);
     let Some(name) = boxed_constructor_name(class_id) else {
         return;
     };
@@ -151,7 +152,12 @@ fn attach_boxed_primitive_prototype(obj: *mut crate::object::ObjectHeader, class
     let proto = crate::closure::closure_get_dynamic_prop(ctor_ptr, "prototype");
     let proto_value = crate::value::JSValue::from_bits(proto.to_bits());
     if proto_value.is_pointer() {
-        crate::object::prototype_chain::object_set_static_prototype(obj as usize, proto.to_bits());
+        obj_h.with_mut_ptr(|obj: *mut crate::object::ObjectHeader| {
+            crate::object::prototype_chain::object_set_static_prototype(
+                obj as usize,
+                proto.to_bits(),
+            )
+        });
     }
 }
 
@@ -162,46 +168,18 @@ fn install_string_wrapper_length(
     if obj.is_null() || string_ptr.is_null() {
         return;
     }
-    let key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
     let len = crate::string::js_string_length(string_ptr) as f64;
-    crate::object::js_object_set_field_by_name(obj, key, len);
-    crate::object::set_builtin_property_attrs(
-        obj as usize,
-        "length".to_string(),
-        crate::object::PropertyAttrs::new(false, false, false),
-    );
-}
-
-/// String exotic objects (ECMA-262 §10.4.3) expose each UTF-16 code unit as an
-/// integer-indexed own property `"0".."len-1"` with the descriptor
-/// `{ value: <char>, writable: false, enumerable: true, configurable: false }`.
-/// `new String("abc")` therefore reports `getOwnPropertyDescriptor(s, "0")`,
-/// `s.hasOwnProperty("0")`, and `Object.keys(s)`/enumeration over the indices.
-/// Installed eagerly at construction (typical `new String` receivers are
-/// short); the wrapper's `length` is installed separately and stays last.
-fn install_string_wrapper_indices(
-    obj: *mut crate::object::ObjectHeader,
-    string_ptr: *const crate::string::StringHeader,
-) {
-    if obj.is_null() || string_ptr.is_null() {
-        return;
-    }
-    let len = crate::string::js_string_length(string_ptr);
-    for i in 0..len {
-        let ch = crate::string::js_string_char_at(string_ptr, i as i32);
-        if ch.is_null() {
-            continue;
-        }
-        let name = i.to_string();
-        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-        let ch_value = f64::from_bits(crate::value::JSValue::string_ptr(ch).bits());
-        crate::object::js_object_set_field_by_name(obj, key, ch_value);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj_h = scope.root_raw_mut_ptr(obj);
+    let key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
+    obj_h.with_mut_ptr(|obj| crate::object::js_object_set_field_by_name(obj, key, len));
+    obj_h.with_mut_ptr(|obj: *mut crate::object::ObjectHeader| {
         crate::object::set_builtin_property_attrs(
             obj as usize,
-            name,
-            crate::object::PropertyAttrs::new(false, true, false),
-        );
-    }
+            "length".to_string(),
+            crate::object::PropertyAttrs::new(false, false, false),
+        )
+    });
 }
 
 pub fn scan_boxed_primitive_payload_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
@@ -327,8 +305,8 @@ pub extern "C" fn js_boxed_string_new(value: f64, has_arg: i32) -> f64 {
     // empty-string case and `js_string_coerce` otherwise, the latter running a
     // user `toString`/`valueOf` for a POINTER_TAG value — so either can collect
     // and EVACUATE while `obj` sits in a raw Rust local. Every use below
-    // (`register_boxed_primitive_payload`, the two `install_string_wrapper_*`
-    // calls, `attach_boxed_primitive_prototype`, and the returned NaN-box)
+    // (`register_boxed_primitive_payload`, the `install_string_wrapper_length`
+    // call, `attach_boxed_primitive_prototype`, and the returned NaN-box)
     // dereferences or keys on it.
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj_handle = scope.root_raw_mut_ptr(obj);
@@ -348,10 +326,13 @@ pub extern "C" fn js_boxed_string_new(value: f64, has_arg: i32) -> f64 {
     });
     let boxed = f64::from_bits(crate::value::JSValue::string_ptr(ptr).bits());
     register_boxed_primitive_payload(obj, boxed);
-    install_string_wrapper_indices(obj, ptr);
+    // #9810: character indices are virtual String exotic properties. Index
+    // keys and values are produced on demand; boxing never walks the string.
     install_string_wrapper_length(obj, ptr);
-    attach_boxed_primitive_prototype(obj, CLASS_ID_BOXED_STRING);
-    crate::value::js_nanbox_pointer(obj as i64)
+    obj_handle.with_mut_ptr(|obj| attach_boxed_primitive_prototype(obj, CLASS_ID_BOXED_STRING));
+    obj_handle.with_mut_ptr(|obj: *mut crate::object::ObjectHeader| {
+        crate::value::js_nanbox_pointer(obj as i64)
+    })
 }
 
 #[no_mangle]

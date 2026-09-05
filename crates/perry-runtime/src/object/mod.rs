@@ -102,6 +102,7 @@ pub(crate) mod has_own_helpers;
 mod instanceof;
 mod live_slots;
 mod null_stub;
+mod string_wrapper;
 pub(crate) use live_slots::set_object_live_slot_count;
 pub use live_slots::{
     js_object_live_slot_count, object_live_slot_count, perry_object_header_abi_revision,
