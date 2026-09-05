@@ -856,6 +856,13 @@ pub(super) enum RuntimeRootVisitMode<'a> {
 pub struct RuntimeRootVisitor<'a> {
     pub(super) mode: RuntimeRootVisitMode<'a>,
     pub(super) root_source_stats: Option<*mut RootSourceSlotTraceStats>,
+    /// #9754: this visit belongs to a MINOR-scoped pass — the copying minor's
+    /// preflight/mark/rewrite, or a `GcCollectionKind::Minor` trace's root
+    /// scan — which neither moves nor sweeps an old-generation object. A
+    /// side table with a young-entry log (`gc/young_log.rs`) may then visit
+    /// only its logged entries. A full trace, an evacuation rewrite/verify
+    /// pass and the legacy copy mode walk everything.
+    pub(super) young_scope: bool,
 }
 
 impl<'a> RuntimeRootVisitor<'a> {
@@ -863,6 +870,18 @@ impl<'a> RuntimeRootVisitor<'a> {
         Self {
             mode: RuntimeRootVisitMode::Mark { valid_ptrs },
             root_source_stats: None,
+            young_scope: false,
+        }
+    }
+
+    /// `for_mark` for a cycle whose trace is minor-only: old objects are
+    /// black leaves and their marks are consumed by nothing, so the
+    /// young-logged side tables may skip their old entries (#9754).
+    pub(super) fn for_mark_scoped(valid_ptrs: &'a ValidPointerSet, minor_only: bool) -> Self {
+        Self {
+            mode: RuntimeRootVisitMode::Mark { valid_ptrs },
+            root_source_stats: None,
+            young_scope: minor_only,
         }
     }
 
@@ -870,6 +889,7 @@ impl<'a> RuntimeRootVisitor<'a> {
         Self {
             mode: RuntimeRootVisitMode::Rewrite { valid_ptrs },
             root_source_stats: None,
+            young_scope: false,
         }
     }
 
@@ -877,6 +897,7 @@ impl<'a> RuntimeRootVisitor<'a> {
         Self {
             mode: RuntimeRootVisitMode::CopyingCheck { checker },
             root_source_stats: None,
+            young_scope: true,
         }
     }
 
@@ -884,6 +905,7 @@ impl<'a> RuntimeRootVisitor<'a> {
         Self {
             mode: RuntimeRootVisitMode::CopyingMark { collector },
             root_source_stats: None,
+            young_scope: true,
         }
     }
 
@@ -891,6 +913,7 @@ impl<'a> RuntimeRootVisitor<'a> {
         Self {
             mode: RuntimeRootVisitMode::CopyingRewrite { collector },
             root_source_stats: None,
+            young_scope: true,
         }
     }
 
@@ -901,6 +924,7 @@ impl<'a> RuntimeRootVisitor<'a> {
                 surface,
             },
             root_source_stats: None,
+            young_scope: false,
         }
     }
 
@@ -908,7 +932,16 @@ impl<'a> RuntimeRootVisitor<'a> {
         Self {
             mode: RuntimeRootVisitMode::Copy { mark },
             root_source_stats: None,
+            young_scope: false,
         }
+    }
+
+    /// #9754: true when this pass can only act on non-old objects, so a
+    /// young-logged side table may confine its walk to the logged entries.
+    /// See `gc/young_log.rs` for the argument.
+    #[inline]
+    pub(crate) fn young_scope(&self) -> bool {
+        self.young_scope
     }
 
     #[inline]

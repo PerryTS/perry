@@ -170,6 +170,7 @@ pub(crate) fn shape_index_migrate_after_delete(
         !list.is_empty()
     });
     index.indexed_len = old_key_count - 1;
+    inner.note_young_keys(new_keys_id as u64);
     inner.indices.insert(new_keys_id, index);
     true
 }

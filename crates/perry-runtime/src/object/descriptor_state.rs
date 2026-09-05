@@ -107,6 +107,11 @@ pub(crate) struct DescriptorTables {
     pub(crate) attr_keys_by_owner: RefCell<FastKeyHashMap<usize, Vec<String>>>,
     /// Accessor twin of [`Self::attr_keys_by_owner`].
     pub(crate) accessor_keys_by_owner: RefCell<FastKeyHashMap<usize, Vec<String>>>,
+    /// #9754: owners whose entries may hold a pointer a minor can act on —
+    /// a young owner, or an accessor whose getter/setter closure is young.
+    /// A minor-scoped `scan_descriptor_roots_mut` visits only these; see
+    /// `gc/young_log.rs`.
+    pub(crate) young_owners: RefCell<crate::gc::young_log::YoungLog<usize>>,
 }
 
 impl DescriptorTables {
@@ -118,7 +123,24 @@ impl DescriptorTables {
             property_attrs_in_use: Cell::new(false),
             attr_keys_by_owner: RefCell::new(new_fast_key_hash_map()),
             accessor_keys_by_owner: RefCell::new(new_fast_key_hash_map()),
+            young_owners: RefCell::new(crate::gc::young_log::YoungLog::new()),
         }
+    }
+}
+
+const DESCRIPTOR_YOUNG_LOG_NAME: &str = "object.descriptors";
+
+/// Rule 1 of `gc/young_log.rs`: log `owner` BEFORE its descriptor is
+/// published when the owner, or the accessor closure being stored, can
+/// matter to a minor. Data descriptors carry no pointer, so `acc` is `None`
+/// for them and only the owner decides.
+#[inline]
+fn note_young_descriptor_owner(st: &crate::state::RuntimeState, owner: usize, acc: Option<&AccessorDescriptor>) {
+    use crate::gc::young_log::{addr_is_minor_relevant, bits_are_minor_relevant};
+    if addr_is_minor_relevant(owner)
+        || acc.is_some_and(|acc| bits_are_minor_relevant(acc.get) || bits_are_minor_relevant(acc.set))
+    {
+        st.descriptors.young_owners.borrow_mut().note(owner);
     }
 }
 
@@ -774,6 +796,7 @@ pub(crate) fn set_property_attrs(obj: usize, key: String, attrs: PropertyAttrs) 
     GLOBAL_DESCRIPTORS_IN_USE.store(true, Ordering::Relaxed);
     disable_inline_guards_for_descriptor_target(obj, &key);
     note_meta_descriptor_key(obj, &key, false);
+    note_young_descriptor_owner(st, obj, None);
     owner_index_add(&st.descriptors.attr_keys_by_owner, obj, &key);
     st.descriptors
         .property_descriptors
@@ -996,6 +1019,7 @@ pub(crate) fn set_accessor_descriptor(obj: usize, key: String, acc: AccessorDesc
     disable_inline_guards_for_descriptor_target(obj, &key);
     note_accessor_descriptor_key(&key);
     note_meta_descriptor_key(obj, &key, true);
+    note_young_descriptor_owner(st, obj, Some(&acc));
     owner_index_add(&st.descriptors.accessor_keys_by_owner, obj, &key);
     st.descriptors
         .accessor_descriptors
@@ -1064,6 +1088,7 @@ pub(crate) fn install_fresh_accessor_property(
     GLOBAL_DESCRIPTORS_IN_USE.store(true, Ordering::Relaxed);
     disable_inline_guards_for_descriptor_target(obj, &key);
     note_accessor_descriptor_key(&key);
+    note_young_descriptor_owner(st, obj, Some(&acc));
     match note_meta_descriptor_key_both(obj, &key) {
         Some((accessor_bit_was_set, attr_bit_was_set)) => {
             if accessor_bit_was_set {
@@ -1181,6 +1206,7 @@ pub(crate) fn set_builtin_accessor_descriptor(
     note_meta_descriptor_key(obj, &key, true);
     note_meta_descriptor_key(obj, &key, false);
     let st = state();
+    note_young_descriptor_owner(st, obj, Some(&acc));
     owner_index_add(&st.descriptors.accessor_keys_by_owner, obj, &key);
     owner_index_add(&st.descriptors.attr_keys_by_owner, obj, &key);
     st.descriptors
@@ -1214,6 +1240,7 @@ pub(crate) fn set_builtin_property_attrs(obj: usize, key: String, attrs: Propert
     // #6759 Phase C2: see `set_builtin_accessor_descriptor`.
     note_meta_descriptor_key(obj, &key, false);
     let st = state();
+    note_young_descriptor_owner(st, obj, None);
     owner_index_add(&st.descriptors.attr_keys_by_owner, obj, &key);
     st.descriptors
         .property_descriptors
@@ -1313,6 +1340,41 @@ pub(crate) fn prune_dead_descriptor_owner_entries(is_dead_owner: &dyn Fn(usize) 
     }
 }
 
+/// [`prune_dead_descriptor_owner_entries`] for a MINOR (#9754): only a young
+/// owner can be dead, and a young owner is always in the young log (noted at
+/// insert, re-logged by every minor-scoped walk while it stays young), so the
+/// log is the complete candidate set.
+pub(crate) fn prune_dead_descriptor_owner_entries_young(is_dead_owner: &dyn Fn(usize) -> bool) {
+    let st = state();
+    let candidates = st.descriptors.young_owners.borrow_mut().take_sorted();
+    let mut kept = Vec::with_capacity(candidates.len());
+    for owner in candidates {
+        if is_dead_owner(owner) {
+            remove_descriptor_owner_entries(st, owner);
+        } else {
+            kept.push(owner);
+        }
+    }
+    st.descriptors.young_owners.borrow_mut().extend(kept);
+}
+
+/// Drop every entry `owner` holds in both tables and both indexes, through
+/// the owner index (O(owner's keys), not O(table)).
+fn remove_descriptor_owner_entries(st: &crate::state::RuntimeState, owner: usize) {
+    if let Some(keys) = st.descriptors.attr_keys_by_owner.borrow_mut().remove(&owner) {
+        let mut attrs = st.descriptors.property_descriptors.borrow_mut();
+        for key in keys {
+            attrs.remove(&(owner, key));
+        }
+    }
+    if let Some(keys) = st.descriptors.accessor_keys_by_owner.borrow_mut().remove(&owner) {
+        let mut accessors = st.descriptors.accessor_descriptors.borrow_mut();
+        for key in keys {
+            accessors.remove(&(owner, key));
+        }
+    }
+}
+
 /// #6710: drop every property-attr + accessor descriptor owned by `obj`.
 ///
 /// The generic descriptor tables are keyed by owner address; for a native
@@ -1357,6 +1419,10 @@ pub(crate) fn transfer_descriptor_owner(old_owner: usize, new_owner: usize) {
         return;
     }
     let st = state();
+    // The moved entries keep their accessor values, so the new owner is
+    // logged unconditionally; the next minor-scoped walk drops it if nothing
+    // in it is relevant any more.
+    st.descriptors.young_owners.borrow_mut().note(new_owner);
     // The owner index names exactly this owner's keys, so neither table is
     // walked in full any more. Array growth calls this on every reallocation.
     {
@@ -1452,6 +1518,14 @@ fn rewrite_descriptor_owner(
 /// reused address).
 pub(crate) fn scan_descriptor_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     let st = state();
+    // #9754: a minor-scoped pass visits only the young-logged owners; the
+    // full walk below rebuilds the log from what it finds.
+    if visitor.young_scope() {
+        scan_descriptor_roots_young(visitor, st);
+        return;
+    }
+    let table_len = st.descriptors.attr_keys_by_owner.borrow().len() as u64
+        + st.descriptors.accessor_keys_by_owner.borrow().len() as u64;
     {
         // Probe DISTINCT OWNERS via the index, not every `(owner, key)` pair.
         // This runs on every GC cycle, and since the moving young-gen scavenge
@@ -1537,6 +1611,161 @@ pub(crate) fn scan_descriptor_roots_mut(visitor: &mut crate::gc::RuntimeRootVisi
             }
         }
     }
+
+    // A full walk is authoritative: rebuild the young log from the tables.
+    let kept = relevant_descriptor_owners(st);
+    let kept_len = kept.len() as u64;
+    {
+        let mut log = st.descriptors.young_owners.borrow_mut();
+        let _ = log.take_sorted();
+        log.extend(kept);
+    }
+    crate::gc::young_log::note_walk(
+        DESCRIPTOR_YOUNG_LOG_NAME,
+        crate::gc::young_log::YoungLogWalk {
+            partial: false,
+            logged: table_len,
+            visited: table_len,
+            kept: kept_len,
+            table_len,
+        },
+    );
+}
+
+/// Every owner whose entry can matter to a minor, re-derived from the
+/// authoritative tables: a non-old owner, or an accessor whose getter or
+/// setter is non-old.
+fn relevant_descriptor_owners(st: &crate::state::RuntimeState) -> Vec<usize> {
+    use crate::gc::young_log::{addr_is_minor_relevant, bits_are_minor_relevant};
+    let mut relevant = Vec::new();
+    for &owner in st.descriptors.attr_keys_by_owner.borrow().keys() {
+        if addr_is_minor_relevant(owner) {
+            relevant.push(owner);
+        }
+    }
+    for &owner in st.descriptors.accessor_keys_by_owner.borrow().keys() {
+        if addr_is_minor_relevant(owner) {
+            relevant.push(owner);
+        }
+    }
+    for ((owner, _), acc) in st.descriptors.accessor_descriptors.borrow().iter() {
+        if bits_are_minor_relevant(acc.get) || bits_are_minor_relevant(acc.set) {
+            relevant.push(*owner);
+        }
+    }
+    relevant.sort_unstable();
+    relevant.dedup();
+    relevant
+}
+
+/// The minor-scoped walk (#9754): only the young-logged owners, each visited
+/// exactly as the full walk visits it — accessor get/set rooted in every
+/// phase, owner re-keyed across both tables and both indexes in the rewrite
+/// phase — and re-logged iff still relevant afterwards.
+fn scan_descriptor_roots_young(
+    visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
+    st: &crate::state::RuntimeState,
+) {
+    let table_len = st.descriptors.attr_keys_by_owner.borrow().len() as u64
+        + st.descriptors.accessor_keys_by_owner.borrow().len() as u64;
+    #[cfg(debug_assertions)]
+    {
+        let relevant = relevant_descriptor_owners(st);
+        st.descriptors
+            .young_owners
+            .borrow()
+            .debug_assert_logged(DESCRIPTOR_YOUNG_LOG_NAME, &relevant);
+    }
+    let mut logged = 0u64;
+    let mut visited = 0u64;
+    let mut kept = Vec::new();
+    loop {
+        let batch = st.descriptors.young_owners.borrow_mut().take_sorted();
+        if batch.is_empty() {
+            break;
+        }
+        logged += batch.len() as u64;
+        for owner in batch {
+            visited += 1;
+            let (new_owner, relevant) = scan_descriptor_owner(visitor, st, owner);
+            if relevant {
+                kept.push(new_owner);
+            }
+        }
+    }
+    let kept_len = kept.len() as u64;
+    st.descriptors.young_owners.borrow_mut().extend(kept);
+    crate::gc::young_log::note_walk(
+        DESCRIPTOR_YOUNG_LOG_NAME,
+        crate::gc::young_log::YoungLogWalk {
+            partial: true,
+            logged,
+            visited,
+            kept: kept_len,
+            table_len,
+        },
+    );
+}
+
+/// Visit one owner's descriptors. Returns the post-visit owner address and
+/// whether the entry can still matter to a minor.
+fn scan_descriptor_owner(
+    visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
+    st: &crate::state::RuntimeState,
+    owner: usize,
+) -> (usize, bool) {
+    use crate::gc::young_log::{addr_is_minor_relevant, bits_are_minor_relevant};
+    let new_owner = rewrite_descriptor_owner(visitor, owner);
+    let mut relevant = false;
+    let accessor_keys = st
+        .descriptors
+        .accessor_keys_by_owner
+        .borrow()
+        .get(&owner)
+        .cloned()
+        .unwrap_or_default();
+    if !accessor_keys.is_empty() {
+        let mut accessors = st.descriptors.accessor_descriptors.borrow_mut();
+        for key in &accessor_keys {
+            if let Some(acc) = accessors.get_mut(&(owner, key.clone())) {
+                if acc.get != 0 {
+                    visitor.visit_nanbox_u64_slot(&mut acc.get);
+                }
+                if acc.set != 0 {
+                    visitor.visit_nanbox_u64_slot(&mut acc.set);
+                }
+                relevant |= bits_are_minor_relevant(acc.get) || bits_are_minor_relevant(acc.set);
+            }
+        }
+        if new_owner != owner {
+            for key in accessor_keys {
+                if let Some(acc) = accessors.remove(&(owner, key.clone())) {
+                    accessors.insert((new_owner, key), acc);
+                }
+            }
+        }
+    }
+    if new_owner != owner {
+        let attr_keys = st
+            .descriptors
+            .attr_keys_by_owner
+            .borrow()
+            .get(&owner)
+            .cloned()
+            .unwrap_or_default();
+        if !attr_keys.is_empty() {
+            let mut attrs = st.descriptors.property_descriptors.borrow_mut();
+            for key in attr_keys {
+                if let Some(value) = attrs.remove(&(owner, key.clone())) {
+                    attrs.insert((new_owner, key), value);
+                }
+            }
+        }
+        owner_index_transfer(&st.descriptors.attr_keys_by_owner, owner, new_owner);
+        owner_index_transfer(&st.descriptors.accessor_keys_by_owner, owner, new_owner);
+    }
+    relevant |= addr_is_minor_relevant(new_owner);
+    (new_owner, relevant)
 }
 
 /// The owner index (`attr_keys_by_owner` / `accessor_keys_by_owner`) exists

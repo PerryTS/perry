@@ -256,7 +256,8 @@ pub(crate) use descriptor_state::{
     json_object_getter_value, mark_all_keys, object_has_descriptors,
     object_proto_may_intercept_key, owner_has_property_descriptors,
     owner_may_have_descriptor_entries, plain_data_write_may_intercept,
-    prune_dead_descriptor_owner_entries, reflect_getter_closure_bits, set_accessor_descriptor,
+    prune_dead_descriptor_owner_entries, prune_dead_descriptor_owner_entries_young,
+    reflect_getter_closure_bits, set_accessor_descriptor,
     set_builtin_accessor_descriptor, set_builtin_property_attrs, set_property_attrs,
     transfer_descriptor_owner, AccessorDescriptor, DescriptorTables, PropertyAttrs,
 };
@@ -676,6 +677,11 @@ fn shape_cache_insert(shape_id: u32, keys_array: *mut ArrayHeader) {
     };
     let st = crate::state::state();
     let slot = (shape_id as usize) & (SHAPE_INLINE_CACHE_SIZE - 1);
+    // #9754 rule 1: log the id BEFORE the entry is published when the keys
+    // array can matter to a minor.
+    if crate::gc::young_log::addr_is_minor_relevant(keys_array as usize) {
+        SHAPE_CACHE_YOUNG.with(|log| log.borrow_mut().note(shape_id));
+    }
     unsafe {
         // GC_STORE_AUDIT(ROOT): shape_inline_cache entries are scanned by scan_shape_cache_roots_mut.
         let entry = &mut (*st.object_hot.shape_inline_cache.get())[slot];
@@ -783,6 +789,30 @@ const TRANSITION_CACHE_SIZE: usize = 16384;
 /// against this value even when no Rust path consults it directly.
 #[allow(dead_code)]
 const TRANSITION_CACHE_MASK: usize = TRANSITION_CACHE_SIZE - 1;
+crate::perry_thread_local! {
+    /// #9754: transition-cache slots whose `key_ptr` / `next_keys` may still be
+    /// acted on by a minor (see `gc/young_log.rs`); a minor-scoped
+    /// `scan_transition_cache_roots_mut` visits only these.
+    static TRANSITION_CACHE_YOUNG: RefCell<crate::gc::young_log::YoungLog<u32>> =
+        const { RefCell::new(crate::gc::young_log::YoungLog::new()) };
+    /// #9754: shape-cache ids (inline slot and overflow key alike) whose keys
+    /// array may still be acted on by a minor.
+    static SHAPE_CACHE_YOUNG: RefCell<crate::gc::young_log::YoungLog<u32>> =
+        const { RefCell::new(crate::gc::young_log::YoungLog::new()) };
+}
+
+const TRANSITION_CACHE_YOUNG_LOG_NAME: &str = "object.transition_cache";
+const SHAPE_CACHE_YOUNG_LOG_NAME: &str = "object.shape_cache";
+
+/// Is a transition-cache entry still something a minor can act on?
+#[inline]
+fn transition_entry_is_minor_relevant(entry: &TransitionEntry) -> bool {
+    use crate::gc::young_log::addr_is_minor_relevant;
+    entry.next_keys != 0
+        && (addr_is_minor_relevant(entry.next_keys)
+            || ((entry.slot_idx >> 24) == 0 && addr_is_minor_relevant(entry.key_ptr)))
+}
+
 
 // Per-thread transition cache (`ObjectHotTables::transition_cache`). Was a
 // process-wide `static mut`, but with `perry/thread` user code allocating
@@ -798,6 +828,7 @@ const TRANSITION_CACHE_MASK: usize = TRANSITION_CACHE_SIZE - 1;
 // thread-locals (confirmed on a real Series 7: shrinking OR boxing removes
 // the corruption). `vec!` builds directly on the heap (no 320KB stack
 // temporary).
+
 #[inline]
 fn with_transition_cache<R>(
     f: impl FnOnce(*mut [TransitionEntry; TRANSITION_CACHE_SIZE]) -> R,
@@ -1044,6 +1075,13 @@ fn transition_cache_insert(
             }
         }
     }
+    // #9754 rule 1: log the slot BEFORE the entry is published when either
+    // address can matter to a minor.
+    if crate::gc::young_log::addr_is_minor_relevant(next_keys)
+        || (len_marker == 0 && crate::gc::young_log::addr_is_minor_relevant(kid))
+    {
+        TRANSITION_CACHE_YOUNG.with(|log| log.borrow_mut().note(slot as u32));
+    }
     with_transition_cache(|t| unsafe {
         // GC_STORE_AUDIT(ROOT): TRANSITION_CACHE_GLOBAL entries are scanned by scan_transition_cache_roots_mut.
         let entry = &mut (*t)[slot];
@@ -1088,50 +1126,168 @@ pub fn scan_transition_cache_roots(mark: &mut dyn FnMut(f64)) {
 }
 
 pub fn scan_transition_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    // #9754: a minor-scoped pass visits only the young-logged slots; a full
+    // pass walks the table and rebuilds the log. Both share
+    // `scan_transition_cache_slot`.
+    if visitor.young_scope() {
+        let mut logged = 0u64;
+        let mut visited = 0u64;
+        let mut kept = Vec::new();
+        #[cfg(debug_assertions)]
+        with_transition_cache(|table| unsafe {
+            let relevant: Vec<u32> = (0..TRANSITION_CACHE_SIZE)
+                .filter(|&i| transition_entry_is_minor_relevant(&(*table)[i]))
+                .map(|i| i as u32)
+                .collect();
+            TRANSITION_CACHE_YOUNG.with(|log| {
+                log.borrow()
+                    .debug_assert_logged(TRANSITION_CACHE_YOUNG_LOG_NAME, &relevant)
+            });
+        });
+        let batch = TRANSITION_CACHE_YOUNG.with(|log| log.borrow_mut().take_sorted());
+        logged += batch.len() as u64;
+        with_transition_cache(|table| unsafe {
+            for slot in batch {
+                visited += 1;
+                if scan_transition_cache_slot(visitor, table, slot as usize) {
+                    kept.push(slot);
+                }
+            }
+        });
+        let kept_len = kept.len() as u64;
+        TRANSITION_CACHE_YOUNG.with(|log| log.borrow_mut().extend(kept));
+        crate::gc::young_log::note_walk(
+            TRANSITION_CACHE_YOUNG_LOG_NAME,
+            crate::gc::young_log::YoungLogWalk {
+                partial: true,
+                logged,
+                visited,
+                kept: kept_len,
+                table_len: TRANSITION_CACHE_SIZE as u64,
+            },
+        );
+        array_tail_transition::scan_roots_mut(visitor);
+        return;
+    }
+    let _ = TRANSITION_CACHE_YOUNG.with(|log| log.borrow_mut().take_sorted());
+    let mut kept = Vec::new();
     with_transition_cache(|table| unsafe {
         for i in 0..TRANSITION_CACHE_SIZE {
-            let entry = &mut (*table)[i];
-            if entry.next_keys != 0 {
-                let mut invalidate = false;
-                // Content-namespace ids (len marker != 0) are string BYTES,
-                // not addresses — the visitor must not rewrite them.
-                if (entry.slot_idx >> 24) == 0 {
-                    invalidate |= visitor.visit_metadata_usize_slot(&mut entry.key_ptr);
-                }
-                // #6759 phase 3: `next_keys` is WEAK, not a strong root.
-                //
-                // `visit_usize_slot` MARKS. With 16384 slots this cache was
-                // therefore keeping up to 16384 keys arrays — and, through
-                // them, their shape descriptors — alive whether or not any live
-                // object still had that shape. That is a direct contributor to
-                // the shape table growing without bound between full
-                // collections (measured: 786k descriptors on a workload holding
-                // under 400 live objects).
-                //
-                // A transition entry is a pure cache: it answers "adding key k
-                // to shape S yields shape T". If nothing has shape T any more,
-                // the answer is worthless, so pinning T's keys array to keep it
-                // answerable is backwards. `key_ptr` was already weak for the
-                // same reason; this makes the pair consistent.
-                //
-                // Rewrite-only keeps a surviving target's address correct;
-                // `prune_dead_transition_cache_entries` drops the entry when the
-                // target did not survive.
-                visitor.visit_metadata_usize_slot(&mut entry.next_keys);
-                if invalidate {
-                    *entry = TransitionEntry {
-                        key_ptr: 0,
-                        next_keys: 0,
-                        prev_shape_id: 0,
-                        target_shape_id: 0,
-                        slot_idx: 0,
-                        target_len: 0,
-                    };
-                }
+            if scan_transition_cache_slot(visitor, table, i) {
+                kept.push(i as u32);
             }
         }
     });
+    let kept_len = kept.len() as u64;
+    TRANSITION_CACHE_YOUNG.with(|log| log.borrow_mut().extend(kept));
+    crate::gc::young_log::note_walk(
+        TRANSITION_CACHE_YOUNG_LOG_NAME,
+        crate::gc::young_log::YoungLogWalk {
+            partial: false,
+            logged: TRANSITION_CACHE_SIZE as u64,
+            visited: TRANSITION_CACHE_SIZE as u64,
+            kept: kept_len,
+            table_len: TRANSITION_CACHE_SIZE as u64,
+        },
+    );
     array_tail_transition::scan_roots_mut(visitor);
+}
+
+/// Visit one transition-cache slot. Returns whether the entry can still
+/// matter to a minor afterwards.
+///
+/// # Safety
+/// `table` must be this thread's transition cache.
+unsafe fn scan_transition_cache_slot(
+    visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
+    table: *mut [TransitionEntry; TRANSITION_CACHE_SIZE],
+    i: usize,
+) -> bool {
+    let entry = &mut (*table)[i];
+    if entry.next_keys == 0 {
+        return false;
+    }
+    let mut invalidate = false;
+    // Content-namespace ids (len marker != 0) are string BYTES,
+    // not addresses — the visitor must not rewrite them.
+    if (entry.slot_idx >> 24) == 0 {
+        invalidate |= visitor.visit_metadata_usize_slot(&mut entry.key_ptr);
+    }
+    // #6759 phase 3: `next_keys` is WEAK, not a strong root.
+    //
+    // `visit_usize_slot` MARKS. With 16384 slots this cache was
+    // therefore keeping up to 16384 keys arrays — and, through
+    // them, their shape descriptors — alive whether or not any live
+    // object still had that shape. That is a direct contributor to
+    // the shape table growing without bound between full
+    // collections (measured: 786k descriptors on a workload holding
+    // under 400 live objects).
+    //
+    // A transition entry is a pure cache: it answers "adding key k
+    // to shape S yields shape T". If nothing has shape T any more,
+    // the answer is worthless, so pinning T's keys array to keep it
+    // answerable is backwards. `key_ptr` was already weak for the
+    // same reason; this makes the pair consistent.
+    //
+    // Rewrite-only keeps a surviving target's address correct;
+    // `prune_dead_transition_cache_entries` drops the entry when the
+    // target did not survive.
+    visitor.visit_metadata_usize_slot(&mut entry.next_keys);
+    if invalidate {
+        *entry = TransitionEntry {
+            key_ptr: 0,
+            next_keys: 0,
+            prev_shape_id: 0,
+            target_shape_id: 0,
+            slot_idx: 0,
+            target_len: 0,
+        };
+        return false;
+    }
+    transition_entry_is_minor_relevant(entry)
+}
+
+/// [`prune_dead_transition_cache_entries`] for a MINOR (#9754): only a slot
+/// in the young log can name a young — hence possibly dead — address.
+#[cold]
+pub(crate) fn prune_dead_transition_cache_entries_young(is_dead_owner: &dyn Fn(usize) -> bool) {
+    let candidates = TRANSITION_CACHE_YOUNG.with(|log| log.borrow_mut().take_sorted());
+    let mut kept = Vec::with_capacity(candidates.len());
+    with_transition_cache(|table| unsafe {
+        for slot in candidates {
+            let entry = &mut (*table)[slot as usize];
+            if entry.next_keys == 0 {
+                continue;
+            }
+            if transition_entry_is_dead(entry, is_dead_owner) {
+                *entry = TransitionEntry {
+                    key_ptr: 0,
+                    next_keys: 0,
+                    prev_shape_id: 0,
+                    target_shape_id: 0,
+                    slot_idx: 0,
+                    target_len: 0,
+                };
+            } else {
+                kept.push(slot);
+            }
+        }
+    });
+    TRANSITION_CACHE_YOUNG.with(|log| log.borrow_mut().extend(kept));
+    array_tail_transition::prune_invalid_entries();
+}
+
+/// The death test of `prune_dead_transition_cache_entries`, shared with the
+/// young-only variant.
+fn transition_entry_is_dead(entry: &TransitionEntry, is_dead_owner: &dyn Fn(usize) -> bool) -> bool {
+    ((entry.slot_idx >> 24) == 0 && entry.key_ptr != 0 && is_dead_owner(entry.key_ptr))
+        // #6759 phase 3: `next_keys` stopped being a strong root, so a
+        // dead target is now possible and must be reaped here — this is
+        // the half that makes weakening it safe.
+        || is_dead_owner(entry.next_keys)
+        || shapes::shape_descriptor_by_id(entry.prev_shape_id).is_none()
+        || (entry.target_shape_id != 0
+            && shapes::shape_descriptor_by_id(entry.target_shape_id).is_none())
 }
 
 /// #8192: death pruning for the transition cache.
@@ -1158,17 +1314,7 @@ pub(crate) fn prune_dead_transition_cache_entries(is_dead_owner: &dyn Fn(usize) 
             if entry.next_keys == 0 {
                 continue;
             }
-            let dead = ((entry.slot_idx >> 24) == 0
-                && entry.key_ptr != 0
-                && is_dead_owner(entry.key_ptr))
-                // #6759 phase 3: `next_keys` stopped being a strong root, so a
-                // dead target is now possible and must be reaped here — this is
-                // the half that makes weakening it safe.
-                || is_dead_owner(entry.next_keys)
-                || shapes::shape_descriptor_by_id(entry.prev_shape_id).is_none()
-                || (entry.target_shape_id != 0
-                    && shapes::shape_descriptor_by_id(entry.target_shape_id).is_none());
-            if dead {
+            if transition_entry_is_dead(entry, is_dead_owner) {
                 *entry = TransitionEntry {
                     key_ptr: 0,
                     next_keys: 0,
@@ -1199,6 +1345,11 @@ pub(crate) fn test_seed_transition_cache_entry(
     next_keys: usize,
 ) {
     let slot = transition_cache_slot(prev_shape_id, key_ptr);
+    if crate::gc::young_log::addr_is_minor_relevant(next_keys)
+        || crate::gc::young_log::addr_is_minor_relevant(key_ptr)
+    {
+        TRANSITION_CACHE_YOUNG.with(|log| log.borrow_mut().note(slot as u32));
+    }
     with_transition_cache(|table| unsafe {
         (*table)[slot] = TransitionEntry {
             key_ptr,
@@ -1221,19 +1372,75 @@ pub fn scan_shape_cache_roots(mark: &mut dyn FnMut(f64)) {
 }
 
 pub fn scan_shape_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    use crate::gc::young_log::addr_is_minor_relevant;
     let st = crate::state::state();
-    {
-        let entries = unsafe { &mut *st.object_hot.shape_inline_cache.get() };
-        for entry in entries.iter_mut() {
-            visitor.visit_raw_mut_ptr_slot(&mut entry.keys_array);
+    // The inline array is 256 fixed slots: always walked. The overflow map
+    // holds every shape id ever cached; #9754: a minor-scoped pass visits
+    // only the young-logged ids there, a full pass rebuilds the log.
+    let entries = unsafe { &mut *st.object_hot.shape_inline_cache.get() };
+    for entry in entries.iter_mut() {
+        visitor.visit_raw_mut_ptr_slot(&mut entry.keys_array);
+    }
+    let mut cache = st.object_hot.shape_cache_overflow.borrow_mut();
+    let table_len = cache.len() as u64;
+    if visitor.young_scope() {
+        #[cfg(debug_assertions)]
+        {
+            let relevant: Vec<u32> = cache
+                .iter()
+                .filter(|(_, (arr_ptr, _))| addr_is_minor_relevant(*arr_ptr as usize))
+                .map(|(&id, _)| id)
+                .collect();
+            SHAPE_CACHE_YOUNG.with(|log| {
+                log.borrow()
+                    .debug_assert_logged(SHAPE_CACHE_YOUNG_LOG_NAME, &relevant)
+            });
+        }
+        let batch = SHAPE_CACHE_YOUNG.with(|log| log.borrow_mut().take_sorted());
+        let logged = batch.len() as u64;
+        let mut kept = Vec::new();
+        for id in batch {
+            if let Some((arr_ptr, _)) = cache.get_mut(&id) {
+                visitor.visit_raw_mut_ptr_slot(arr_ptr);
+                if addr_is_minor_relevant(*arr_ptr as usize) {
+                    kept.push(id);
+                }
+            }
+        }
+        let kept_len = kept.len() as u64;
+        SHAPE_CACHE_YOUNG.with(|log| log.borrow_mut().extend(kept));
+        crate::gc::young_log::note_walk(
+            SHAPE_CACHE_YOUNG_LOG_NAME,
+            crate::gc::young_log::YoungLogWalk {
+                partial: true,
+                logged,
+                visited: logged,
+                kept: kept_len,
+                table_len,
+            },
+        );
+        return;
+    }
+    let _ = SHAPE_CACHE_YOUNG.with(|log| log.borrow_mut().take_sorted());
+    let mut kept = Vec::new();
+    for (&id, (arr_ptr, _runtime_shape_id)) in cache.iter_mut() {
+        visitor.visit_raw_mut_ptr_slot(arr_ptr);
+        if addr_is_minor_relevant(*arr_ptr as usize) {
+            kept.push(id);
         }
     }
-    {
-        let mut cache = st.object_hot.shape_cache_overflow.borrow_mut();
-        for (arr_ptr, _runtime_shape_id) in cache.values_mut() {
-            visitor.visit_raw_mut_ptr_slot(arr_ptr);
-        }
-    }
+    let kept_len = kept.len() as u64;
+    SHAPE_CACHE_YOUNG.with(|log| log.borrow_mut().extend(kept));
+    crate::gc::young_log::note_walk(
+        SHAPE_CACHE_YOUNG_LOG_NAME,
+        crate::gc::young_log::YoungLogWalk {
+            partial: false,
+            logged: table_len,
+            visited: table_len,
+            kept: kept_len,
+            table_len,
+        },
+    );
 }
 
 /// GC root scanner: mark all JSValues stored in OVERFLOW_FIELDS.
@@ -1407,6 +1614,9 @@ pub fn scan_object_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'
 pub(crate) fn test_seed_shape_cache_root(shape_id: u32, keys_array: *mut ArrayHeader) {
     let st = crate::state::state();
     let slot = (shape_id as usize) & (SHAPE_INLINE_CACHE_SIZE - 1);
+    if crate::gc::young_log::addr_is_minor_relevant(keys_array as usize) {
+        SHAPE_CACHE_YOUNG.with(|log| log.borrow_mut().note(shape_id));
+    }
     unsafe {
         // GC_STORE_AUDIT(ROOT): test seed mirrors shape_inline_cache roots scanned by scan_shape_cache_roots_mut.
         let entry = &mut (*st.object_hot.shape_inline_cache.get())[slot];

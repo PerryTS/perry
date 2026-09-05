@@ -226,10 +226,14 @@ pub(super) fn prune_dead_owner_side_tables_post_trace(
         crate::object::shapes::rotate_old_carrier_epoch_after_full_trace();
     }
     let probe = PostTraceProbe::new(full_trace);
+    // #9754: a minor can only find a young owner dead (`owner_is_dead` refuses
+    // tenured and old-generation owners on a minor), so the young-logged
+    // tables prune from their logs instead of walking.
     fan_out(
         &|addr| probe.owner_is_dead(addr, None),
         &|addr| probe.owner_is_dead(addr, Some(GC_TYPE_CLOSURE)),
         &|addr| probe.owner_is_dead(addr, Some(GC_TYPE_STRING)),
+        /* young_only = */ !full_trace,
     );
     // #6182: drop dead weak-target HOLDERS (WeakRef / FinalizationRegistry /
     // WeakMap-WeakSet entry — all GC_TYPE_OBJECT) from the registry so the
@@ -251,6 +255,7 @@ pub(super) fn prune_dead_owner_side_tables_copied_minor() {
         &|addr| owner_is_dead_copied_minor_from_space(addr, None),
         &|addr| owner_is_dead_copied_minor_from_space(addr, Some(GC_TYPE_CLOSURE)),
         &|addr| owner_is_dead_copied_minor_from_space(addr, Some(GC_TYPE_STRING)),
+        /* young_only = */ true,
     );
 }
 
@@ -279,8 +284,17 @@ pub(super) struct DeadKeyPrune {
     #[cfg_attr(not(test), allow(dead_code))]
     pub(super) table: &'static str,
     pub(super) owner: DeadKeyOwner,
-    pub(super) prune: fn(&dyn Fn(usize) -> bool),
+    pub(super) prune: DeadKeyPruneFn,
+    /// #9754: the same prune restricted to the table's young-entry log
+    /// (`gc/young_log.rs`). A MINOR can only find a young owner dead, and a
+    /// young owner is always in the log, so on a minor's fan-out this visits
+    /// the candidates instead of the whole table. `None` keeps the full walk
+    /// on every cycle.
+    pub(super) young_prune: Option<DeadKeyPruneFn>,
 }
+
+/// A prune: drops every entry whose owner the predicate reports dead.
+pub(super) type DeadKeyPruneFn = fn(&dyn Fn(usize) -> bool);
 
 /// THE REGISTRY (#8174).
 ///
@@ -306,11 +320,13 @@ pub(super) const DEAD_KEY_PRUNES: &[DeadKeyPrune] = &[
         table: "WASM_MEMORY_BINDINGS",
         owner: DeadKeyOwner::Any,
         prune: crate::webassembly::prune_dead_wasm_memory_bindings,
+        young_prune: None,
     },
     DeadKeyPrune {
         table: "ARRAY_NAMED_PROPS",
         owner: DeadKeyOwner::Any,
         prune: crate::array::prune_dead_array_named_property_owners,
+        young_prune: None,
     },
     // Re-keyed by the per-object move hook (`transfer_per_object_slot_mask` /
     // `transfer_per_object_descriptor`), not by a metadata visitor. Dropping
@@ -320,17 +336,20 @@ pub(super) const DEAD_KEY_PRUNES: &[DeadKeyPrune] = &[
         table: "LAYOUT_SLOT_MASKS + TYPED_LAYOUTS",
         owner: DeadKeyOwner::Any,
         prune: crate::gc::layout_tables::prune_dead_per_object_layout_owners,
+        young_prune: None,
     },
     // Re-keyed by the per-object move hook, not by a metadata visitor.
     DeadKeyPrune {
         table: "ELEMENT_SHAPES",
         owner: DeadKeyOwner::Any,
         prune: crate::array::prune_dead_element_shape_owners,
+        young_prune: None,
     },
     DeadKeyPrune {
         table: "MAP_ITERATOR_ARRAYS",
         owner: DeadKeyOwner::Any,
         prune: crate::map::prune_dead_map_iterator_array_owners,
+        young_prune: None,
     },
     // Re-keyed by `map_header_moved_for_gc`; a dead Map's squeeze history
     // serves no cursor.
@@ -338,32 +357,38 @@ pub(super) const DEAD_KEY_PRUNES: &[DeadKeyPrune] = &[
         table: "MAP_COMPACTION_LOG",
         owner: DeadKeyOwner::Any,
         prune: crate::map::prune_dead_map_compaction_log_owners,
+        young_prune: None,
     },
     DeadKeyPrune {
         table: "SET_ITERATOR_ARRAYS",
         owner: DeadKeyOwner::Any,
         prune: crate::set::prune_dead_set_iterator_array_owners,
+        young_prune: None,
     },
     DeadKeyPrune {
         table: "SET_COMPACTION_LOG",
         owner: DeadKeyOwner::Any,
         prune: crate::set::prune_dead_set_compaction_log_owners,
+        young_prune: None,
     },
     DeadKeyPrune {
         table: "state().descriptors.property_descriptors + .accessor_descriptors",
         owner: DeadKeyOwner::Any,
         prune: crate::object::prune_dead_descriptor_owner_entries,
+        young_prune: Some(crate::object::prune_dead_descriptor_owner_entries_young),
     },
     DeadKeyPrune {
         table: "ARGUMENTS_OBJECTS",
         owner: DeadKeyOwner::Any,
         prune: crate::object::prune_dead_arguments_object_entries,
+        young_prune: None,
     },
     // Re-keyed by the per-object move hook, not by a metadata visitor.
     DeadKeyPrune {
         table: "OBJECT_PROTOTYPES",
         owner: DeadKeyOwner::Any,
         prune: crate::object::prototype_chain::prune_dead_object_prototype_owners,
+        young_prune: None,
     },
     // #6759 C1: shape records are keyed on keys_array addresses; drop the
     // ones whose keys_array died (memory only — per-hit validation covers
@@ -372,33 +397,39 @@ pub(super) const DEAD_KEY_PRUNES: &[DeadKeyPrune] = &[
         table: "state().shapes.inner (descriptors + indices)",
         owner: DeadKeyOwner::Any,
         prune: crate::object::shapes::prune_dead_shape_keys,
+        young_prune: Some(crate::object::shapes::prune_dead_shape_keys_young),
     },
     // Re-keyed by the per-object move hook, not by a metadata visitor.
     DeadKeyPrune {
         table: "state().exotic_expando.entries",
         owner: DeadKeyOwner::Any,
         prune: crate::object::exotic_expando::prune_dead_exotic_expando_owners,
+        young_prune: None,
     },
     DeadKeyPrune {
         table: "SYMBOL_PROPERTIES + SYMBOL_PROPERTY_ATTRS",
         owner: DeadKeyOwner::Any,
         prune: crate::symbol::prune_dead_symbol_property_owners,
+        young_prune: None,
     },
     DeadKeyPrune {
         table: "SYMBOL_POINTERS",
         owner: DeadKeyOwner::Symbol,
         prune: crate::symbol::prune_dead_symbol_pointers,
+        young_prune: None,
     },
     DeadKeyPrune {
         table:
             "CLOSURE_PROPS + CLOSURE_STATIC_PROTOTYPES + CLOSURE_DELETED_KEYS + CLOSURE_BOX_CELLS",
         owner: DeadKeyOwner::Closure,
         prune: crate::closure::prune_dead_closure_side_table_owners,
+        young_prune: Some(crate::closure::prune_dead_closure_side_table_owners_young),
     },
     DeadKeyPrune {
         table: "BUILTIN_CLOSURE_LENGTH + BUILTIN_CLOSURE_NON_CONSTRUCTABLE",
         owner: DeadKeyOwner::Closure,
         prune: crate::object::prune_dead_builtin_closure_metadata_owners,
+        young_prune: None,
     },
     // #8040: `FUNCTION_CLASS_IDS` is keyed by a synthetic-class function
     // value's closure address, and is REKEYED (not re-derived) when that
@@ -408,16 +439,19 @@ pub(super) const DEAD_KEY_PRUNES: &[DeadKeyPrune] = &[
         table: "FUNCTION_CLASS_IDS",
         owner: DeadKeyOwner::Closure,
         prune: crate::object::prune_dead_function_class_id_keys,
+        young_prune: None,
     },
     DeadKeyPrune {
         table: "VM_CONTEXTS + VM_SCRIPTS + VM_FUNCTIONS",
         owner: DeadKeyOwner::Any,
         prune: crate::node_vm::prune_dead_vm_owner_entries,
+        young_prune: None,
     },
     DeadKeyPrune {
         table: "FILEHANDLE_OBJECT_FDS",
         owner: DeadKeyOwner::Any,
         prune: crate::fs::prune_dead_filehandle_fd_entries,
+        young_prune: None,
     },
     // #8190/#8191/#8192/#8194: four more REKEYED tables that the #8174 audit
     // found had no death story at all. Each is the #8040 shape — see this
@@ -427,27 +461,32 @@ pub(super) const DEAD_KEY_PRUNES: &[DeadKeyPrune] = &[
         table: "CONSOLE_INSTANCES",
         owner: DeadKeyOwner::Any,
         prune: crate::builtins::prune_dead_console_instance_owners,
+        young_prune: None,
     },
     DeadKeyPrune {
         table: "BOXED_PRIMITIVE_PAYLOADS",
         owner: DeadKeyOwner::Any,
         prune: crate::builtins::prune_dead_boxed_primitive_payload_owners,
+        young_prune: None,
     },
     DeadKeyPrune {
         table: "TRANSITION_CACHE_GLOBAL",
         owner: DeadKeyOwner::Any,
         prune: crate::object::prune_dead_transition_cache_entries,
+        young_prune: Some(crate::object::prune_dead_transition_cache_entries_young),
     },
     DeadKeyPrune {
         table: "REFLECT_METADATA",
         owner: DeadKeyOwner::Any,
         prune: crate::proxy::prune_dead_reflect_metadata_targets,
+        young_prune: None,
     },
     #[cfg(feature = "node-api-host")]
     DeadKeyPrune {
         table: "NODE_API_OBJECT_METADATA",
         owner: DeadKeyOwner::Any,
         prune: crate::node_api_host::prune_dead_object_meta_owners,
+        young_prune: None,
     },
 ];
 
@@ -455,6 +494,7 @@ fn fan_out(
     is_dead_owner: &dyn Fn(usize) -> bool,
     is_dead_closure: &dyn Fn(usize) -> bool,
     is_dead_symbol: &dyn Fn(usize) -> bool,
+    young_only: bool,
 ) {
     // Interned key pointers cached in the store-plan cache may die in this
     // collection — flush every cached verdict. Pointer identity only: the
@@ -468,6 +508,9 @@ fn fan_out(
             DeadKeyOwner::Closure => is_dead_closure,
             DeadKeyOwner::Symbol => is_dead_symbol,
         };
-        (entry.prune)(is_dead);
+        match entry.young_prune {
+            Some(young_prune) if young_only => young_prune(is_dead),
+            _ => (entry.prune)(is_dead),
+        }
     }
 }

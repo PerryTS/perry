@@ -83,6 +83,7 @@ pub(crate) fn test_clear_shape_table() {
     inner.indices.clear();
     inner.by_facts.clear();
     inner.families.clear();
+    inner.young_keys.clear();
     // SAFETY: test-only reset with no slab reference held.
     unsafe { table.slab_mut().clear() };
     drop(inner);

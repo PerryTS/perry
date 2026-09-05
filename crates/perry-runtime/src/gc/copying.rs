@@ -750,6 +750,7 @@ pub(super) fn last_untraced_decline_reason() -> &'static str {
 
 pub(super) fn scan_remembered_dirty_slots_copying(
     snapshot: &RememberedDirtySnapshot,
+    mut covered: Option<&mut crate::fast_hash::PtrHashSet<usize>>,
     mut visit: impl FnMut(*mut u64, *mut GcHeader, bool, &mut RememberedSetTraceStats),
 ) -> RememberedSetTraceStats {
     let mut stats = RememberedSetTraceStats {
@@ -793,7 +794,12 @@ pub(super) fn scan_remembered_dirty_slots_copying(
             visit(slot, header, external, stats);
             changed |= *slot != before;
         };
-        scan_dirty_object_slots(header, &snapshot.dirty_pages, stats, &mut visit_slot);
+        let complete = scan_dirty_object_slots(header, &snapshot.dirty_pages, stats, &mut visit_slot);
+        if complete {
+            if let Some(covered) = covered.as_deref_mut() {
+                covered.insert(header as usize);
+            }
+        }
         if changed {
             run_gc_rewrite_hook((*header).obj_type, user);
         }
@@ -1058,7 +1064,7 @@ impl CopiedMinorEligibility {
         let snapshot = remembered_dirty_snapshot();
         let mut dirty_checker =
             CopyingNurseryPreflight::new(ptrs, CopiedMinorFallbackReason::PinnedYoungDirtySlot);
-        scan_remembered_dirty_slots_copying(&snapshot, |slot, _header, _external, _stats| unsafe {
+        scan_remembered_dirty_slots_copying(&snapshot, None, |slot, _header, _external, _stats| unsafe {
             dirty_checker.check_bits(*slot);
         });
         unsafe {
@@ -1343,10 +1349,14 @@ pub(super) fn run_copied_minor_attempt(
     // arming happens. Skipping it would leave the barrier unarmed for the next
     // cycle — a missing-edge bug one collection later.
     let snapshot = remembered_dirty_snapshot();
+    // #9754: objects whose every slot the dirty scan visited in-body — the
+    // post-cycle coverage restore skips them (see `scan_dirty_object_slots`).
+    let mut dirty_scan_covered = crate::fast_hash::new_ptr_hash_set();
     if !untraced {
         let _phase = super::pin::CopyingWalkPhaseGuard::enter("remembered_set");
         let remembered_stats = scan_remembered_dirty_slots_copying(
             &snapshot,
+            Some(&mut dirty_scan_covered),
             |slot, header, external, stats| unsafe {
                 let before = *slot;
                 collector.visit_slot_with_parent(slot, header, external);
@@ -1600,7 +1610,7 @@ pub(super) fn run_copied_minor_attempt(
     remembered_set_clear();
     collector.sticky.restore();
     if !collector.skip_remembering {
-        restore_surviving_dirty_coverage(&snapshot);
+        restore_surviving_dirty_coverage(&snapshot, &dirty_scan_covered, "copying_minor");
     }
     let malloc_freed_bytes = if malloc_sweep_due {
         let phase_start = trace_phase_start(trace);
