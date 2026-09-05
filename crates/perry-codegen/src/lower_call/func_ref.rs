@@ -145,6 +145,21 @@ fn try_emit_spec_static_call(
         raw_args_storage
     }
 
+    // TaPtr entries hoist raw header/data pointers and rely on caller roots.
+    // The caller's binding can otherwise die at its last use while preparing
+    // this call: native GC liveness follows SSA uses, not lexical scope. Keep
+    // the boxed owner live through the call, even when no later JS read exists.
+    fn keep_ta_owners_alive(ctx: &mut FnCtx<'_>, raw_plan: &[RawArg], lowered: &[String]) {
+        for entry in raw_plan {
+            if let RawArg::TaPtr(i) = entry {
+                let bits = ctx.block().bitcast_double_to_i64(&lowered[*i]);
+                ctx.block().emit_raw(format!(
+                    "call void asm sideeffect \"\", \"r\"(i64 {bits}) \"gc-leaf-function\""
+                ));
+            }
+        }
+    }
+
     let check_descriptors = matches!(plan.dispatch, crate::codegen::SpecDispatch::Static);
     if !range_checked.is_empty() || (check_descriptors && plan.guards.iter().any(Option::is_some)) {
         // One diamond for the whole call: every range-checked slot's test is
@@ -206,6 +221,7 @@ fn try_emit_spec_static_call(
             .map(|(ty, v)| (*ty, v.as_str()))
             .collect();
         let fast_value = ctx.block().call(DOUBLE, &spec_name, &call_args);
+        keep_ta_owners_alive(ctx, &raw_plan, lowered);
         let after_fast = ctx.block().label.clone();
         if !ctx.block().is_terminated() {
             ctx.block().br(&merge_label);
@@ -263,6 +279,7 @@ fn try_emit_spec_static_call(
         .map(|(ty, v)| (*ty, v.as_str()))
         .collect();
     let result = ctx.block().call(DOUBLE, &spec_name, &call_args);
+    keep_ta_owners_alive(ctx, &raw_plan, lowered);
     ctx.record_lowered_value(
         "Call",
         None,
