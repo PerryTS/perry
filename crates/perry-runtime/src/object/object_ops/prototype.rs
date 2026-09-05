@@ -37,8 +37,14 @@ pub extern "C" fn js_get_global_this_builtin_value(name_ptr: *const u8, name_len
     // one of them straddles the collection.
     let scope = crate::gc::RuntimeHandleScope::new();
     let global_handle = scope.root_nanbox_f64(js_get_global_this());
-    let (key, global_this_f64) = global_handle
-        .across_nanbox(|| crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32));
+    // #9761: this lookup used to MINT the name string on every call — the
+    // comment below still records why that allocation is a collection point.
+    // It is now the canonical interned header, so the allocation happens once
+    // per thread per name instead of once per lookup: on the compiled cc TUI
+    // this single site was 133 MB of the 990 MB a 3300-character reply
+    // allocates (every primitive method call asks for `globalThis.String`).
+    let (key, global_this_f64) =
+        global_handle.across_nanbox(|| crate::string::canonical_key(name.as_bytes()));
     let global_obj = crate::value::js_nanbox_get_pointer(global_this_f64) as *const ObjectHeader;
     if global_obj.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);

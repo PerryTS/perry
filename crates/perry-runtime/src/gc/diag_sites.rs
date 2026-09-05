@@ -362,3 +362,81 @@ pub(super) fn report_charges(label: &str) {
         );
     }
 }
+
+// --- primitive-method dispatch tower -------------------------------------
+//
+// A method call whose receiver is a string/number/boolean/bigint primitive and
+// whose method the native dispatch tower does not recognise falls through to
+// `native_call_method::call_primitive_builtin_prototype_method`: it resolves
+// `globalThis.<Builtin>.prototype[<method>]` and, for a SLOPPY callee, boxes
+// the receiver with `ToObject`. For a string that wrapper materialises one own
+// property per UTF-16 code unit. So a single unrecognised method name on a hot
+// render path turns into O(length) allocations per call, and the only way to
+// tell WHICH names those are is to count them at the fork.
+
+thread_local! {
+    /// `"<Builtin>.prototype.<method>" -> (calls, receiver_utf16_chars)`.
+    static PRIMITIVE_DISPATCH: RefCell<HashMap<String, (u64, u64)>> =
+        RefCell::new(HashMap::new());
+    /// String wrappers actually materialised: (wrappers, index properties).
+    static STRING_WRAPPERS: Cell<(u64, u64)> = const { Cell::new((0, 0)) };
+}
+
+/// Record one trip through the primitive-method fallback. `recv_chars` is the
+/// receiver's UTF-16 length (0 when the receiver is not a string) — the number
+/// of own index properties a sloppy callee's `ToObject` wrapper costs.
+pub(crate) fn primitive_dispatch(builtin: &[u8], method: &str, recv_chars: u64) {
+    if !gc_diag_enabled() {
+        return;
+    }
+    let name = format!("{}.prototype.{method}", String::from_utf8_lossy(builtin));
+    PRIMITIVE_DISPATCH.with(|m| {
+        let mut m = m.borrow_mut();
+        let entry = m.entry(name).or_insert((0, 0));
+        entry.0 += 1;
+        entry.1 += recv_chars;
+    });
+}
+
+/// Record one `String` wrapper materialisation and how many index properties
+/// it installed. This is the counter that proves the wrapper fix: the wrapper
+/// count must NOT move (semantics unchanged) while the bytes those wrappers
+/// allocate collapse.
+pub(crate) fn string_wrapper_materialized(indices: u64) {
+    if !gc_diag_enabled() {
+        return;
+    }
+    STRING_WRAPPERS.with(|c| {
+        let (w, i) = c.get();
+        c.set((w + 1, i + indices));
+    });
+}
+
+/// Print the fallback histogram, hottest first.
+pub(super) fn report_primitive_dispatch(label: &str) {
+    if !gc_diag_enabled() {
+        return;
+    }
+    let (wrappers, indices) = STRING_WRAPPERS.with(Cell::get);
+    if wrappers > 0 {
+        eprintln!(
+            "[gc-primitive-dispatch] {label}: string_wrappers={wrappers} index_properties={indices}"
+        );
+    }
+    let rows: Vec<(String, (u64, u64))> =
+        PRIMITIVE_DISPATCH.with(|m| m.borrow().iter().map(|(k, v)| (k.clone(), *v)).collect());
+    if rows.is_empty() {
+        return;
+    }
+    let calls: u64 = rows.iter().map(|(_, v)| v.0).sum();
+    let chars: u64 = rows.iter().map(|(_, v)| v.1).sum();
+    let mut rows = rows;
+    rows.sort_by_key(|(_, v)| std::cmp::Reverse(v.0));
+    eprintln!(
+        "[gc-primitive-dispatch] {label}: names={} calls={calls} receiver_chars={chars}",
+        rows.len()
+    );
+    for (name, (n, ch)) in rows.iter().take(20) {
+        eprintln!("[gc-primitive-dispatch]   calls={n} receiver_chars={ch} {name}");
+    }
+}

@@ -5,7 +5,7 @@ pub(crate) fn constructor_dynamic_prototype(obj: *const ObjectHeader) -> Option<
         return None;
     }
     let key =
-        crate::string::js_string_from_bytes(b"constructor".as_ptr(), b"constructor".len() as u32);
+        crate::string::canonical_key(b"constructor");
     let constructor = js_object_get_field_by_name_f64(obj, key);
     let bits = constructor.to_bits();
     let top16 = bits >> 48;

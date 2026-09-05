@@ -335,6 +335,20 @@ unsafe fn call_primitive_closure_value(
     Some(result)
 }
 
+/// UTF-16 length of a string receiver, 0 for every other primitive — the
+/// number of own index properties its `ToObject` wrapper would materialise.
+unsafe fn primitive_receiver_utf16_len(receiver: f64) -> u64 {
+    let jsval = JSValue::from_bits(receiver.to_bits());
+    if !jsval.is_any_string() {
+        return 0;
+    }
+    let ptr = crate::value::js_get_string_pointer_unified(receiver) as *const crate::StringHeader;
+    if ptr.is_null() {
+        return 0;
+    }
+    crate::string::js_string_length(ptr) as u64
+}
+
 unsafe fn call_primitive_builtin_prototype_method(
     receiver: f64,
     builtin_name: &[u8],
@@ -342,6 +356,12 @@ unsafe fn call_primitive_builtin_prototype_method(
     args_ptr: *const f64,
     args_len: usize,
 ) -> Option<f64> {
+    // #9761 attribution: this is the fork where an unrecognised primitive
+    // method name turns into a `globalThis` lookup plus, for a sloppy callee,
+    // a `ToObject` wrapper whose own index properties are O(receiver length).
+    crate::gc::diag_primitive_dispatch(builtin_name, method_name, unsafe {
+        primitive_receiver_utf16_len(receiver)
+    });
     let ctor =
         crate::object::js_get_global_this_builtin_value(builtin_name.as_ptr(), builtin_name.len());
     let ctor_value = JSValue::from_bits(ctor.to_bits());
@@ -374,7 +394,9 @@ unsafe fn call_primitive_builtin_prototype_method(
     if let Some(value) = builtin_proto_accessor_method(proto_ptr, method_name, receiver) {
         return call_primitive_closure_value(receiver, value, args_ptr, args_len);
     }
-    let key = crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);
+    // A method name is a literal at the call site; the canonical interned
+    // header is allocated once per thread instead of once per dispatch.
+    let key = crate::string::canonical_key(method_name.as_bytes());
     let value = js_object_get_field_by_name(proto_ptr, key);
     call_primitive_closure_value(receiver, value, args_ptr, args_len)
 }
