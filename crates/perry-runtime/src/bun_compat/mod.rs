@@ -26,6 +26,7 @@ mod cli_utils;
 #[cfg(not(feature = "bun-cli-utils"))]
 mod cli_utils_stub;
 mod glob;
+mod jsc;
 mod spawn;
 mod string_width;
 mod width_tables;
@@ -48,6 +49,7 @@ pub use cli_utils::*;
 #[cfg(not(feature = "bun-cli-utils"))]
 pub use cli_utils_stub::*;
 pub use glob::js_bun_glob_new;
+pub use jsc::js_bun_jsc_heap_stats;
 pub use spawn::{js_bun_spawn, js_bun_terminal_new};
 pub use string_width::bun_string_width;
 pub use wyhash::wyhash;

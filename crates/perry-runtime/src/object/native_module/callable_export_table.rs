@@ -126,6 +126,7 @@ pub(super) static CALLABLE_EXPORT_TABLE: &[(&str, &[&str])] = &[
             "viewSource",
         ],
     ),
+    ("bun:jsc", &["heapStats"]),
     (
         "child_process",
         &[

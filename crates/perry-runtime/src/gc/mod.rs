@@ -247,9 +247,11 @@ pub use verify::*;
 pub(crate) mod census;
 #[cfg(feature = "diagnostics")]
 mod heap_snapshot;
+mod heap_stats;
 pub use census::{census_poll_signal, gc_census_enabled};
 #[cfg(feature = "diagnostics")]
 pub use heap_snapshot::gc_build_v8_heap_snapshot_json;
+pub(crate) use heap_stats::heap_stats;
 
 pub fn gc_collect_minor() -> u64 {
     if defer_gc_request(DeferredGcRequest::DirectMinor) {

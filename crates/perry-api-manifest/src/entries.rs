@@ -59,6 +59,7 @@ pub const NATIVE_MODULES: &[&str] = &[
     // #6562: Bun FFI (C-ABI). The `bun:` prefix is part of the specifier
     // (unlike `node:`, which is stripped) — `import { dlopen } from "bun:ffi"`.
     "bun:ffi",
+    "bun:jsc",
     "ffi",        // node:ffi (the node: prefix is normalized away)
     "bun:sqlite", // Bun facade over Perry's native SQLite engine
     "node-cron",  // cron-style scheduler (npm node-cron; aliases `cron`)
@@ -245,6 +246,7 @@ pub const RUNTIME_ONLY_MODULES: &[&str] = &[
     "buffer",
     // #6562: bun:ffi is implemented entirely in perry-runtime.
     "bun:ffi",
+    "bun:jsc",
     "ffi",
     "assert",
     "assert/strict",
