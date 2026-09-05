@@ -2175,14 +2175,31 @@ mod lazy_shadow_tests {
     /// level that shadows the name lives PAST the inline array.
     ///
     /// This arm never runs on the measured workload (the shadow set was built 0
-    /// times in 17,266 `for-in` calls), so a test is its only coverage — and it
-    /// has to be built so that losing the spilled levels actually changes the
-    /// answer. An earlier version of this test put the shadowing property on
-    /// every level including the leaf, so deleting the spill left the leaf's
-    /// copy doing the shadowing and the test passed under sabotage. Here levels
-    /// 0..INLINE own nothing at all, level INLINE+2 owns `marker`
-    /// non-enumerably, and only the root owns it enumerably: drop the spill and
-    /// `marker` leaks into the result.
+    /// times in 17,266 `for-in` calls), so a test is its only coverage.
+    ///
+    /// # Why this test is shaped the way it is — do not "simplify" it
+    ///
+    /// The obvious way to write it is to give EVERY level the shadowing
+    /// property, which reads as a stronger test and is not one. The first
+    /// version of this test did exactly that: `marker` was owned
+    /// non-enumerably at every level *including the leaf*. Deleting
+    /// `VisitedLevels`' spill arm — so a rebuild cannot see any level past
+    /// `INLINE` — left that test still passing, because the LEAF's own
+    /// `marker` was already in the set and shadowed the root's copy on its
+    /// own. The assertion was true no matter what the spill did, so it could
+    /// not fail, and it certified nothing.
+    ///
+    /// The fix is not more levels or more assertions, it is making the
+    /// spilled level the *only* thing that can produce the expected answer:
+    /// levels `0..INLINE` own nothing at all, exactly one level past the
+    /// inline array (`INLINE + 2`) owns `marker` non-enumerably, and only the
+    /// root owns it enumerably. Now dropping the spill leaks `marker` into the
+    /// result and the test fails by name — verified by making that edit.
+    ///
+    /// The general rule this is an instance of: after writing a test for a
+    /// rarely-taken path, delete the code it covers and check the test
+    /// actually fails. A test whose expected value is reachable by a second
+    /// route is measuring the second route.
     #[test]
     fn only_a_spilled_level_shadows_the_root_and_the_rebuild_must_see_it() {
         let shadow_level = VisitedLevels::INLINE + 2;
