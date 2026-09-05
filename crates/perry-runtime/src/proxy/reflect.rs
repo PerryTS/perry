@@ -10,9 +10,7 @@ use super::{
 ///
 /// - throws `TypeError` for a non-object target,
 /// - uses `receiver` as the `this` binding for accessor getters,
-/// - dispatches proxy `get` traps (forwarding `(target, key)` to the existing
-///   proxy path; the three-argument trap receiver is out of scope - Perry's
-///   proxy traps are two-argument).
+/// - dispatches proxy `get` traps with `(target, key, receiver)`.
 ///
 /// `receiver` is the optional third argument; codegen passes `target` when the
 /// call site omits it (matching the spec default), and `undefined` is treated
@@ -30,9 +28,6 @@ pub extern "C" fn js_reflect_get(target: f64, key: f64, receiver: f64) -> f64 {
         .root_nanbox_f64(unsafe { crate::object::js_to_property_key(key_handle.get_nanbox_f64()) });
     let target = target_handle.get_nanbox_f64();
     let property_key = property_key_handle.get_nanbox_f64();
-    if lookup(target).is_some() {
-        return js_proxy_get(target, property_key);
-    }
     // Default receiver to target when undefined.
     let receiver = receiver_handle.get_nanbox_f64();
     let recv = if receiver.to_bits() == TAG_UNDEFINED {
@@ -40,6 +35,9 @@ pub extern "C" fn js_reflect_get(target: f64, key: f64, receiver: f64) -> f64 {
     } else {
         receiver
     };
+    if lookup(target).is_some() {
+        return super::proxy_get_with_receiver(target, property_key, recv);
+    }
     // #2766: if `key` resolves to an accessor *getter* on `target`, rebind its
     // `this` to the receiver and invoke it - object-literal getters capture
     // `this` in a reserved closure slot (not `IMPLICIT_THIS`), so plain

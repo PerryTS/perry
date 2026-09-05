@@ -571,16 +571,9 @@ pub(crate) fn resolve_inherited_field_from_prototype(
                 return None;
             }
             let key_val = f64::from_bits(crate::value::js_nanbox_string(key as i64).to_bits());
-            let receiver =
-                f64::from_bits(crate::value::js_nanbox_pointer(obj_ptr as i64).to_bits());
-            let scope = crate::gc::RuntimeHandleScope::new();
-            let previous_this = super::js_implicit_this_set(receiver);
-            let previous_this_handle = scope.root_nanbox_f64(previous_this);
-            let v = crate::proxy::js_proxy_get(proto_val, key_val);
-            super::js_implicit_this_set(previous_this_handle.get_nanbox_f64());
-            if v.to_bits() == crate::value::TAG_UNDEFINED {
-                return None;
-            }
+            let receiver = super::field_get_set::accessor_receiver_override_take()
+                .unwrap_or_else(|| crate::value::js_nanbox_pointer(obj_ptr as i64));
+            let v = crate::proxy::proxy_get_with_receiver(proto_val, key_val, receiver);
             return Some(crate::value::JSValue::from_bits(v.to_bits()));
         }
     }

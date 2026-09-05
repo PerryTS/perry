@@ -874,14 +874,8 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
                 // Issue #233: resolve a grow forwarding pointer so `index in arr`
                 // / `arr.hasOwnProperty(i)` stay correct after `arr.length = N`.
                 let arr = crate::array::clean_arr_ptr(obj_ptr as *const crate::array::ArrayHeader);
-                let length = (*arr).length;
-                // A Proxy installed as the array's `[[Prototype]]`
-                // (`Object.setPrototypeOf(arr, proxy)`) — `array_spec_has_index`
-                // only recognizes a *real array* custom prototype, so a Proxy
-                // hop is silently treated as absent. Recover it here so the
-                // idx/string-key misses below can fall back to the proxy's
-                // `[[HasProperty]]` instead of a bare `false` (ECMA-262 10.1.7.1
-                // step 5).
+                // Named keys still need Proxy dispatch below. Indexed keys use
+                // array_spec_has_index, which owns the complete prototype walk.
                 let proxy_proto =
                     super::super::prototype_chain::object_static_prototype(obj_ptr as usize)
                         .filter(|&b| (b >> 48) == 0x7FFD)
@@ -908,38 +902,11 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
                     None
                 };
                 if let Some(idx) = idx {
-                    let _ = length;
-                    // Spec HasProperty: own (dense slot / sparse named prop /
-                    // accessor descriptor) OR inherited — a custom array
-                    // [[Prototype]], `Array.prototype[i]`, or an
-                    // `Object.prototype` index (data or accessor; test262
-                    // sort/precise-comparefn-throws checks `'2' in array`
-                    // against an Object.prototype accessor).
-                    if crate::array::array_spec_has_index(arr, idx) {
-                        return nanbox_true;
-                    }
-                    if crate::array::object_prototype_has_index_prop(idx) {
-                        return nanbox_true;
-                    }
-                    if let Some(proxy) = proxy_proto {
-                        let idx_str = idx.to_string();
-                        let key_ptr = crate::string::js_string_from_bytes(
-                            idx_str.as_ptr(),
-                            idx_str.len() as u32,
-                        );
-                        let key_val = f64::from_bits(
-                            crate::value::js_nanbox_string(key_ptr as i64).to_bits(),
-                        );
-                        return if crate::value::js_is_truthy(crate::proxy::js_proxy_has(
-                            proxy, key_val,
-                        )) != 0
-                        {
-                            nanbox_true
-                        } else {
-                            nanbox_false
-                        };
-                    }
-                    return nanbox_false;
+                    return if crate::array::array_spec_has_index(arr, idx) {
+                        nanbox_true
+                    } else {
+                        nanbox_false
+                    };
                 }
                 if key_val.is_any_string() {
                     let key_str = crate::value::js_get_string_pointer_unified(key)
@@ -952,17 +919,11 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
                                 return nanbox_true;
                             }
                             if let Some(idx) = super::super::canonical_array_index(key_name) {
-                                // Same spec HasProperty protocol as the
-                                // numeric-key arm above: own + inherited
-                                // (custom array proto / Array.prototype /
-                                // Object.prototype data-or-accessor index;
-                                // test262 sort/precise-comparefn-throws does
-                                // `'2' in array`).
-                                if crate::array::array_spec_has_index(arr, idx)
-                                    || crate::array::object_prototype_has_index_prop(idx)
-                                {
-                                    return nanbox_true;
-                                }
+                                return if crate::array::array_spec_has_index(arr, idx) {
+                                    nanbox_true
+                                } else {
+                                    nanbox_false
+                                };
                             } else if array_prototype_property_value(key_name, obj_ptr as usize)
                                 .is_some()
                             {
