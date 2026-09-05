@@ -250,6 +250,27 @@ snapshot taken before allocating the report itself.
 
 Only `heapStats` is implemented from this module.
 
+Worker entries can also pass through small module-local helper chains:
+
+```typescript,no-test
+const workerUrl = (name: string) => new URL(`./${name}.ts`, import.meta.url);
+function entry() { return workerUrl("worker"); }
+const worker = new Worker(entry());
+```
+
+Helpers must have simple parameters, static string or URL arguments, and a body
+containing only one return expression (including concise arrows). Supported
+return expressions include string concatenation, static path operations, module
+URLs, and bounded path registries. Reassigned bindings, effectful bodies, opaque
+calls, and recursion remain unresolved. URL arguments can be passed through
+helpers, but coercing them to strings is outside this static subset.
+
+Collection must identify exactly one entry per Worker. Helper resolution is
+bounded to 64 candidates, 64 expression levels, 4096 resolution steps, and 64 KiB
+per path; unsupported or over-budget helpers emit a diagnostic and throw if the
+Worker is constructed. The original filename expression still runs at runtime.
+Static `file:` URLs are decoded before file lookup, including Bun embedded paths
+such as `file:///$bunfs/root/worker.js` mapped through `--bunfs-root`.
 ## commander (CLI Parsing)
 
 ```typescript,no-test

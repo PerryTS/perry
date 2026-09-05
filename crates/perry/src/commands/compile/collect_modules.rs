@@ -931,13 +931,24 @@ fn collect_module_one(
             // doesn't misclassify multi-line filenames).
             let eval_mode = *is_eval;
             let mut visiting: std::collections::HashSet<u32> = std::collections::HashSet::new();
-            match perry_hir::resolve_import_path_with_context(
-                filename.as_ref(),
-                &module_const_locals,
-                &dynamic_param_literals,
-                &dynamic_local_literals,
-                &mut visiting,
-            ) {
+            let resolution = if eval_mode {
+                perry_hir::resolve_import_path_with_context(
+                    filename.as_ref(),
+                    &module_const_locals,
+                    &dynamic_param_literals,
+                    &dynamic_local_literals,
+                    &mut visiting,
+                )
+            } else {
+                perry_hir::resolve_worker_path(
+                    filename.as_ref(),
+                    &hir_module,
+                    &module_const_locals,
+                    &dynamic_param_literals,
+                    &dynamic_local_literals,
+                )
+            };
+            match resolution {
                 perry_hir::Resolution::Set(mut set) => {
                     if !eval_mode && set.len() > perry_hir::DYNAMIC_IMPORT_PATH_CAP {
                         dyn_errors.push(format!(
@@ -971,6 +982,24 @@ fn collect_module_one(
                                     "worker_threads eval Worker in module {}: failed to \
                                      materialize inline source: {}",
                                     module_name, e
+                                ));
+                                return;
+                            }
+                        }
+                    } else if set[0].starts_with("file:") {
+                        // Helper-returned URLs carry a URL spelling, while the
+                        // module resolver (including --bunfs-root) consumes a
+                        // filesystem spelling. Decode through the URL parser
+                        // before recording both the import edge and Worker path.
+                        match url::Url::parse(&set[0])
+                            .ok()
+                            .and_then(|url| url.to_file_path().ok())
+                        {
+                            Some(path) => set[0] = path.to_string_lossy().into_owned(),
+                            None => {
+                                dyn_errors.push(format!(
+                                    "worker_threads Worker in module {}: invalid file URL {:?}",
+                                    module_name, set[0]
                                 ));
                                 return;
                             }
