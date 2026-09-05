@@ -138,18 +138,16 @@ pub(crate) fn test_shape_ids_for_keys(keys_id: usize) -> Vec<u32> {
 
 #[cfg(test)]
 pub(crate) fn test_seed_shape_entry(keys_id: usize) {
-    crate::state::state()
-        .shapes
-        .inner
-        .borrow_mut()
-        .indices
-        .insert(
-            keys_id,
-            ShapeIndex {
-                indexed_len: 0,
-                slots: crate::fast_hash::new_ptr_hash_map(),
-            },
-        );
+    let mut inner = crate::state::state().shapes.inner.borrow_mut();
+    inner.note_young_keys(keys_id as u64);
+    inner.indices.insert(
+        keys_id,
+        ShapeIndex {
+            indexed_len: 0,
+            slots: SlotIndex::new(),
+        },
+    );
+    drop(inner);
     let _ = shape_descriptor_ensure(keys_id as *const ArrayHeader, 0, 0)
         .expect("test shape id range unexpectedly exhausted");
 }

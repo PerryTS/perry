@@ -1,81 +1,283 @@
-//! `SlotList` — the shape key index's per-hash slot list, in a sibling file.
+//! `SlotIndex` — the shape key index's content-hash → slot table, in a
+//! sibling file.
 //!
 //! Extracted from `shapes.rs` to keep it under the repo's 2000-line cap.
-//! Also carries the two helpers that are mostly `SlotList` manipulation:
+//! Also carries the two helpers that are mostly index manipulation:
 //! `record_shape_scan_outcome` (the shape scanner's per-descriptor
 //! bookkeeping) and `shape_index_migrate_after_delete`.
 
-/// Slots sharing one content hash.
+/// Content hash → candidate slots for one shape, as an open-addressing table
+/// of packed `(hash tag, slot)` cells.
 ///
-/// Almost always exactly one: the key is an FNV-1a hash of distinct property
-/// names, so a bucket with two entries is a genuine hash collision. Storing
-/// that common case inline removes a heap allocation PER KEY from every index
-/// build — and the index is rebuilt on every populated delete, so a 500-key
-/// object was making ~500 `Vec` allocations per `delete`. Allocator and page
-/// churn is the dominant cost on that benchmark (`clear_page_erms` 5.6%,
-/// `mi_free` 4.2%, `RawVecInner::finish_grow` 2.9%), well above the lookup
-/// work itself.
+/// #9754 memory. This used to be a `PtrHashMap<u64, SlotList>` per shape —
+/// a 33-byte hashbrown bucket (`(u64, enum { One(u32), Many(Vec<u32>) })`
+/// plus its control byte) for every key, in a power-of-two table. The
+/// compiled claude-code TUI holds ~34.5k of these indices, one per keys array
+/// past `KEYS_INDEX_THRESHOLD`, at **2.6 KB each: 89 MB** of the process's
+/// 170 MB of side tables (`PERRY_GC_CENSUS`, 2026-09-04), while the objects
+/// they describe are ~40 keys wide.
+///
+/// The table's only job is to answer "which slots might hold a key with this
+/// hash" — every hit is then re-validated against the key BYTES
+/// (`shape_slot_lookup_verdict`), so a wrong or colliding answer is a miss,
+/// never a wrong property. That validation is what lets the stored hash be
+/// narrow: a cell is a 16-bit tag (the top of a golden-ratio fold of the FNV-1a
+/// hash) and a
+/// 16-bit slot (`Narrow`, 4 bytes), widened to a 16-bit tag and a 32-bit slot
+/// (`Wide`, 8 bytes) only for a shape with 65 535 or more keys. The probe
+/// position is a function of the tag alone, so a cell can be re-placed from
+/// its own bits when the table grows or is rebuilt after a delete. Same
+/// hash, several slots (a genuine collision, or a note-hit under a stale
+/// index) is just several cells with one tag on the probe chain. Load is
+/// kept at or below 7/8.
+///
+/// 40 keys: 64 cells × 4 B = 256 B against the 2.1 KB hashbrown table.
 #[derive(Clone, Debug)]
-pub(crate) enum SlotList {
-    One(u32),
-    Many(Vec<u32>),
+pub(crate) struct SlotIndex {
+    cells: SlotCells,
+    len: u32,
 }
 
-impl SlotList {
-    #[inline]
-    pub(crate) fn push(&mut self, slot: u32) {
-        match self {
-            SlotList::One(existing) => {
-                *self = SlotList::Many(vec![*existing, slot]);
-            }
-            SlotList::Many(v) => v.push(slot),
+#[derive(Clone, Debug)]
+enum SlotCells {
+    /// `(tag16 << 16) | slot16`; slots up to `NARROW_MAX_SLOT`.
+    Narrow(Box<[u32]>),
+    /// `(tag16 << 32) | slot32`.
+    Wide(Box<[u64]>),
+}
+
+const NARROW_EMPTY: u32 = u32::MAX;
+const WIDE_EMPTY: u64 = u64::MAX;
+/// Slot `0xFFFF` is never stored narrow, so `NARROW_EMPTY` is unambiguous.
+const NARROW_MAX_SLOT: u32 = 0xFFFE;
+const MIN_CELLS: usize = 8;
+
+impl Default for SlotIndex {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SlotIndex {
+    pub(crate) fn new() -> Self {
+        Self {
+            cells: SlotCells::Narrow(Box::new([])),
+            len: 0,
         }
     }
 
-    /// Drop `removed` and shift every slot above it down by one.
     #[inline]
-    pub(crate) fn retain_shift(&mut self, removed: u32) {
-        let shift = |s: u32| -> Option<u32> {
-            match s.cmp(&removed) {
-                std::cmp::Ordering::Equal => None,
-                std::cmp::Ordering::Less => Some(s),
-                std::cmp::Ordering::Greater => Some(s - 1),
-            }
-        };
-        match self {
-            SlotList::One(slot) => match shift(*slot) {
-                Some(s) => *slot = s,
-                None => *self = SlotList::Many(Vec::new()),
-            },
-            SlotList::Many(v) => {
-                v.retain_mut(|s| match shift(*s) {
-                    Some(n) => {
-                        *s = n;
-                        true
+    fn capacity(&self) -> usize {
+        match &self.cells {
+            SlotCells::Narrow(cells) => cells.len(),
+            SlotCells::Wide(cells) => cells.len(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.len as usize
+    }
+
+    /// Bytes of the cell array (`PERRY_GC_CENSUS`).
+    pub(crate) fn heap_bytes(&self) -> usize {
+        match &self.cells {
+            SlotCells::Narrow(cells) => cells.len() * std::mem::size_of::<u32>(),
+            SlotCells::Wide(cells) => cells.len() * std::mem::size_of::<u64>(),
+        }
+    }
+
+    /// The 16-bit tag of a key hash. FNV-1a's HIGH bits barely move for
+    /// short keys (`"a"` and `"b"` share their top 16), so fold the whole
+    /// word through a golden-ratio multiply first and take the top of that.
+    #[inline]
+    fn tag_of(hash: u64) -> u32 {
+        (hash.wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 48) as u32
+    }
+
+    /// Where a tag's probe chain starts. Below 65 536 cells the tag itself
+    /// indexes the table; above, its two copies cover the extra bits (two
+    /// tags then share a chain, which is a longer probe, never a wrong answer).
+    #[inline]
+    fn home(tag: u32, mask: usize) -> usize {
+        ((tag as usize) | ((tag as usize) << 16)) & mask
+    }
+
+    /// Record that `slot` holds a key hashing to `hash`. A cell already
+    /// naming exactly this pair is left alone (a note-hit on an indexed key).
+    pub(crate) fn push(&mut self, hash: u64, slot: u32) {
+        self.insert(Self::tag_of(hash), slot);
+    }
+
+    fn insert(&mut self, tag: u32, slot: u32) {
+        if slot > NARROW_MAX_SLOT {
+            self.widen();
+        }
+        if (self.len as usize + 1) * 8 > self.capacity() * 7 {
+            self.grow();
+        }
+        let mask = self.capacity() - 1;
+        let mut pos = Self::home(tag, mask);
+        match &mut self.cells {
+            SlotCells::Narrow(cells) => {
+                let cell = (tag << 16) | slot;
+                loop {
+                    let existing = cells[pos];
+                    if existing == NARROW_EMPTY {
+                        cells[pos] = cell;
+                        self.len += 1;
+                        return;
                     }
-                    None => false,
-                });
-                if v.len() == 1 {
-                    *self = SlotList::One(v[0]);
+                    if existing == cell {
+                        return;
+                    }
+                    pos = (pos + 1) & mask;
+                }
+            }
+            SlotCells::Wide(cells) => {
+                let cell = (u64::from(tag) << 32) | u64::from(slot);
+                loop {
+                    let existing = cells[pos];
+                    if existing == WIDE_EMPTY {
+                        cells[pos] = cell;
+                        self.len += 1;
+                        return;
+                    }
+                    if existing == cell {
+                        return;
+                    }
+                    pos = (pos + 1) & mask;
                 }
             }
         }
     }
 
-    #[inline]
-    pub(crate) fn is_empty(&self) -> bool {
-        match self {
-            SlotList::One(_) => false,
-            SlotList::Many(v) => v.is_empty(),
+    /// Every slot recorded under `hash`, in probe order. Each must still be
+    /// validated against the key bytes by the caller.
+    pub(crate) fn candidates(&self, hash: u64) -> SlotCandidates<'_> {
+        let capacity = self.capacity();
+        let tag = Self::tag_of(hash);
+        SlotCandidates {
+            index: self,
+            pos: if capacity == 0 {
+                0
+            } else {
+                Self::home(tag, capacity - 1)
+            },
+            remaining: capacity,
+            tag,
         }
     }
 
-    #[inline]
-    pub(crate) fn iter(&self) -> impl Iterator<Item = &u32> {
-        match self {
-            SlotList::One(slot) => std::slice::from_ref(slot).iter(),
-            SlotList::Many(v) => v.iter(),
+    /// Drop the cell(s) for `removed` and shift every slot above it down by
+    /// one — the index of a keys array after an in-place or cloned delete.
+    pub(crate) fn retain_shift(&mut self, removed: u32) {
+        let pairs = self.drain_pairs();
+        for (tag, slot) in pairs {
+            match slot.cmp(&removed) {
+                std::cmp::Ordering::Equal => {}
+                std::cmp::Ordering::Less => self.insert(tag, slot),
+                std::cmp::Ordering::Greater => self.insert(tag, slot - 1),
+            }
         }
+    }
+
+    /// Take every `(tag, slot)` pair out, leaving the cells empty at the same
+    /// capacity.
+    fn drain_pairs(&mut self) -> Vec<(u32, u32)> {
+        let mut pairs = Vec::with_capacity(self.len as usize);
+        match &mut self.cells {
+            SlotCells::Narrow(cells) => {
+                for cell in cells.iter_mut() {
+                    if *cell != NARROW_EMPTY {
+                        pairs.push((*cell >> 16, *cell & 0xFFFF));
+                        *cell = NARROW_EMPTY;
+                    }
+                }
+            }
+            SlotCells::Wide(cells) => {
+                for cell in cells.iter_mut() {
+                    if *cell != WIDE_EMPTY {
+                        pairs.push(((*cell >> 32) as u32, (*cell & 0xFFFF_FFFF) as u32));
+                        *cell = WIDE_EMPTY;
+                    }
+                }
+            }
+        }
+        self.len = 0;
+        pairs
+    }
+
+    fn grow(&mut self) {
+        let new_capacity = (self.capacity() * 2).max(MIN_CELLS);
+        let pairs = self.drain_pairs();
+        self.cells = match self.cells {
+            SlotCells::Narrow(_) => SlotCells::Narrow(vec![NARROW_EMPTY; new_capacity].into()),
+            SlotCells::Wide(_) => SlotCells::Wide(vec![WIDE_EMPTY; new_capacity].into()),
+        };
+        for (tag, slot) in pairs {
+            self.insert(tag, slot);
+        }
+    }
+
+    fn widen(&mut self) {
+        if matches!(self.cells, SlotCells::Wide(_)) {
+            return;
+        }
+        let capacity = self.capacity().max(MIN_CELLS);
+        let pairs = self.drain_pairs();
+        self.cells = SlotCells::Wide(vec![WIDE_EMPTY; capacity].into());
+        for (tag, slot) in pairs {
+            self.insert(tag, slot);
+        }
+    }
+}
+
+/// The probe chain of [`SlotIndex::candidates`].
+pub(crate) struct SlotCandidates<'a> {
+    index: &'a SlotIndex,
+    pos: usize,
+    remaining: usize,
+    tag: u32,
+}
+
+impl Iterator for SlotCandidates<'_> {
+    type Item = u32;
+
+    fn next(&mut self) -> Option<u32> {
+        let capacity = self.index.capacity();
+        if capacity == 0 {
+            return None;
+        }
+        let mask = capacity - 1;
+        while self.remaining != 0 {
+            self.remaining -= 1;
+            let pos = self.pos;
+            self.pos = (pos + 1) & mask;
+            match &self.index.cells {
+                SlotCells::Narrow(cells) => {
+                    let cell = cells[pos];
+                    if cell == NARROW_EMPTY {
+                        self.remaining = 0;
+                        return None;
+                    }
+                    if cell >> 16 == self.tag {
+                        return Some(cell & 0xFFFF);
+                    }
+                }
+                SlotCells::Wide(cells) => {
+                    let cell = cells[pos];
+                    if cell == WIDE_EMPTY {
+                        self.remaining = 0;
+                        return None;
+                    }
+                    if (cell >> 32) as u32 == self.tag {
+                        return Some((cell & 0xFFFF_FFFF) as u32);
+                    }
+                }
+            }
+        }
+        None
     }
 }
 
@@ -108,10 +310,7 @@ pub(crate) fn shape_index_shift_in_place(
         inner.indices.remove(&keys_id);
         return false;
     }
-    index.slots.retain(|_, list| {
-        list.retain_shift(removed_slot);
-        !list.is_empty()
-    });
+    index.slots.retain_shift(removed_slot);
     index.indexed_len = old_key_count - 1;
     true
 }
@@ -165,10 +364,7 @@ pub(crate) fn shape_index_migrate_after_delete(
         // misaligned. Dropping it preserves the previous behaviour exactly.
         return false;
     }
-    index.slots.retain(|_, list| {
-        list.retain_shift(removed_slot);
-        !list.is_empty()
-    });
+    index.slots.retain_shift(removed_slot);
     index.indexed_len = old_key_count - 1;
     inner.note_young_keys(new_keys_id as u64);
     inner.indices.insert(new_keys_id, index);
@@ -690,5 +886,81 @@ mod tests {
                 "the deleting object did not receive the shifted index"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod slot_index_tests {
+    use super::SlotIndex;
+
+    fn fnv(bytes: &[u8]) -> u64 {
+        crate::object::key_bytes_hash(bytes.as_ptr(), bytes.len())
+    }
+
+    #[test]
+    fn every_pushed_pair_is_a_candidate_and_nothing_else_is() {
+        let mut index = SlotIndex::new();
+        let names: Vec<String> = (0..3000).map(|i| format!("key_{i}")).collect();
+        for (slot, name) in names.iter().enumerate() {
+            index.push(fnv(name.as_bytes()), slot as u32);
+        }
+        assert_eq!(index.len(), 3000);
+        for (slot, name) in names.iter().enumerate() {
+            let found: Vec<u32> = index.candidates(fnv(name.as_bytes())).collect();
+            assert!(found.contains(&(slot as u32)), "{name} missing: {found:?}");
+        }
+        let absent: Vec<u32> = index.candidates(fnv(b"never_inserted")).collect();
+        assert!(
+            absent.len() <= 2,
+            "a narrow tag should almost never alias: {absent:?}"
+        );
+        assert!(
+            index.heap_bytes() <= 4096 * 4,
+            "3000 keys must fit 4096 narrow cells"
+        );
+    }
+
+    #[test]
+    fn a_repeated_note_hit_does_not_grow_the_table() {
+        let mut index = SlotIndex::new();
+        let hash = fnv(b"hit");
+        for _ in 0..100 {
+            index.push(hash, 7);
+        }
+        assert_eq!(index.len(), 1);
+        assert_eq!(index.candidates(hash).collect::<Vec<_>>(), vec![7]);
+    }
+
+    #[test]
+    fn retain_shift_drops_the_removed_slot_and_shifts_the_rest() {
+        let mut index = SlotIndex::new();
+        let names: Vec<String> = (0..50).map(|i| format!("k{i}")).collect();
+        for (slot, name) in names.iter().enumerate() {
+            index.push(fnv(name.as_bytes()), slot as u32);
+        }
+        index.retain_shift(10);
+        assert_eq!(index.len(), 49);
+        assert!(index.candidates(fnv(b"k10")).next().is_none());
+        for (slot, name) in names.iter().enumerate() {
+            if slot == 10 {
+                continue;
+            }
+            let expected = if slot > 10 { slot - 1 } else { slot } as u32;
+            let found: Vec<u32> = index.candidates(fnv(name.as_bytes())).collect();
+            assert_eq!(found, vec![expected], "{name}");
+        }
+    }
+
+    #[test]
+    fn a_slot_past_the_narrow_range_widens_the_table() {
+        let mut index = SlotIndex::new();
+        index.push(fnv(b"a"), 3);
+        index.push(fnv(b"b"), 70_000);
+        assert_eq!(index.candidates(fnv(b"a")).collect::<Vec<_>>(), vec![3]);
+        assert_eq!(
+            index.candidates(fnv(b"b")).collect::<Vec<_>>(),
+            vec![70_000]
+        );
+        assert!(index.heap_bytes() >= 8 * 8, "wide cells are 8 bytes");
     }
 }
