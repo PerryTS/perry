@@ -672,6 +672,25 @@ pub(crate) fn transfer_element_shape(old_user: usize, new_user: usize) {
         // exactly the versioning a consumer guards on.
         let had_bit = array_gc_header(old_user as *const ArrayHeader)
             .is_some_and(|old_header| header_has_bit(old_header));
+        // #9792: neither address advertises a proof, so there is nothing to
+        // move and nothing to fail closed about — the `clear_bit` below would
+        // clear a bit that is already clear. Skipping is what the siblings in
+        // `gc::layout_tables` do with their emptiness flag, decided here from
+        // the header words this function has already read rather than from a
+        // side-table probe.
+        //
+        // What it leaves behind is a record at an address whose bit is clear,
+        // and that state is already part of the design: the bit is the sole
+        // authority for a read (`element_shape_proof` returns `None` without
+        // touching the table), and `establish` draws every identity from
+        // `ELEMENT_SHAPE_PROOF_SEQ` rather than from whatever record sits at
+        // the address, precisely so a survivor cannot donate its epoch to the
+        // next array established there. `prune_dead_element_shape_owners`
+        // drops it on the next collection, which is the same footprint-only
+        // guarantee a fail-closed transfer already relied on.
+        if !had_bit && !header_has_bit(new_header) {
+            return;
+        }
         let moved = ELEMENT_SHAPES.with(|m| {
             let mut map = m.borrow_mut();
             map.remove(&new_user);
@@ -793,6 +812,16 @@ pub(crate) fn test_exact_shape_store_hits() -> u64 {
 #[cfg(test)]
 pub(crate) unsafe fn test_element_shape_bit_set(arr: *const ArrayHeader) -> bool {
     array_gc_header(arr).is_some_and(|header| header_has_bit(header))
+}
+
+/// Clear the advertising bit and leave the record in the table — the survivor
+/// state a skipped [`transfer_element_shape`] produces, and the one the
+/// bit-is-authority rule has to hold up under.
+#[cfg(test)]
+pub(crate) unsafe fn test_clear_element_shape_bit_only(arr: *mut ArrayHeader) {
+    if let Some(header) = array_gc_header(arr) {
+        clear_bit(header);
+    }
 }
 
 #[cfg(test)]
