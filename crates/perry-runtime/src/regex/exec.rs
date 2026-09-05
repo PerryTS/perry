@@ -78,7 +78,9 @@ pub extern "C" fn js_regexp_exec(
         // `fancy_regex::Regex::captures_from_pos` and
         // `regress::Regex::find_from`. Their reported offsets are absolute, so
         // nothing downstream re-bases them.
-        let owned = if let Some(repeat_matcher) = lookup_repeat_matcher(re) {
+        let owned = if let Some(repeat_matcher) =
+            lookup_repeat_matcher_for(re, str_data, search_start_byte)
+        {
             repeat_matcher
                 .regex
                 .find_from(str_data, search_start_byte)
@@ -212,7 +214,9 @@ pub(super) fn regexp_find_advancing(
         } else {
             0
         };
-        let found = if let Some(repeat_matcher) = lookup_repeat_matcher(re) {
+        let found = if let Some(repeat_matcher) =
+            lookup_repeat_matcher_for(re, str_data, search_start_byte)
+        {
             repeat_matcher
                 .regex
                 .find_from(str_data, search_start_byte)

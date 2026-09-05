@@ -365,14 +365,14 @@ pub(crate) unsafe fn regex_gc_slot_ptrs(re: *mut RegExpHeader) -> (*mut u64, usi
 #[cfg(feature = "regex-engine")]
 crate::perry_thread_local! {
     /// Cache of compiled regex objects, keyed by (pattern, flags).
-    static REGEX_CACHE: RefCell<HashMap<(String, String), Arc<Regex>>> = RefCell::new(HashMap::new());
+    static REGEX_CACHE: RefCell<HashMap<ProgramKey, Arc<Regex>>> = RefCell::new(HashMap::new());
     /// Fancy-regex fallback cache for patterns with lookbehind/lookahead.
-    static FANCY_CACHE: RefCell<HashMap<(String, String), Arc<fancy_regex::Regex>>> = RefCell::new(HashMap::new());
+    static FANCY_CACHE: RefCell<HashMap<ProgramKey, Arc<fancy_regex::Regex>>> = RefCell::new(HashMap::new());
 
     /// ECMAScript backtracking matchers for quantified capture groups. These
     /// are the patterns where `regex`/`fancy-regex` cannot reproduce
     /// `RepeatMatcher` capture reset and nullable-iteration semantics (#5897).
-    static REPEAT_MATCHER_CACHE: RefCell<HashMap<(String, String), Arc<repeat_matcher::RepeatMatcherRegex>>> = RefCell::new(HashMap::new());
+    static REPEAT_MATCHER_CACHE: RefCell<HashMap<ProgramKey, Arc<repeat_matcher::RepeatMatcherRegex>>> = RefCell::new(HashMap::new());
 
     /// `(pattern, flags)` pairs that have already cleared construction-time
     /// validation. Validity is a pure function of the pair, so the answer is
@@ -476,6 +476,29 @@ pub(crate) fn build_fancy_regex(pattern: &str) -> Result<fancy_regex::Regex, fan
 #[cfg(feature = "regex-engine")]
 pub(crate) const NEVER_MATCH_PATTERN: &str = r"[^\s\S]";
 
+/// Key of the three compiled-program caches.
+///
+/// `(String, String)` looks harmless and is not: `HashMap::get` needs a
+/// `&(String, String)`, so **every probe materialised the key** — two heap
+/// allocations and two copies of the pattern text, on a path that runs once
+/// per RegExp OBJECT, and a JS regex literal evaluates to a fresh object every
+/// time it is reached. A native-churn census of the claude-code binary
+/// (2026-09-05) put `js_regexp_test` → `lookup_repeat_matcher` →
+/// `build_and_install_programs` at **6,044 MB of 8,334 MB of estimated
+/// allocation with zero live bytes** — 73 % of all remaining native churn —
+/// split across the three probe sites: the `get_or_compile_regex` probe
+/// (2,071 MB) and two `core::fmt::Formatter::pad` frames (1,989 MB and
+/// 1,984 MB), which is what `.to_string()` on an `Arc<str>` lowers to.
+///
+/// Keying by `Arc<str>` makes a probe two refcount increments and no
+/// allocation: every caller that matters already holds those `Arc`s, because
+/// `REGEX_SOURCE_TABLE` and `regex::site_cache` share one allocation of a
+/// literal's text with every header built from it. Hashing still walks the
+/// pattern bytes — the allocation is what the census measured, and what this
+/// removes.
+#[cfg(feature = "regex-engine")]
+pub(crate) type ProgramKey = (Arc<str>, Arc<str>);
+
 /// Entry cap for the compiled-regex caches (2026-07-09 GC audit: one entry
 /// per distinct `(pattern, flags)` ever compiled, no cap of any kind, entries
 /// up to [`REGEX_SIZE_LIMIT`] — `new RegExp(userInput)` was an attacker-driven
@@ -491,7 +514,7 @@ const REGEX_CACHE_MAX_ENTRIES: usize = 512;
 /// validated-pattern set: make room for one more entry, wiping the map when it
 /// is at capacity.
 #[cfg(feature = "regex-engine")]
-fn evict_regex_cache_if_full<V>(cache: &mut HashMap<(String, String), V>) {
+fn evict_regex_cache_if_full<K, V>(cache: &mut HashMap<K, V>) {
     if cache.len() >= REGEX_CACHE_MAX_ENTRIES {
         cache.clear();
         if crate::hot_diag::regex_on() {
@@ -518,28 +541,65 @@ fn evict_regex_cache_if_full<V>(cache: &mut HashMap<(String, String), V>) {
 /// Returns `false` when BOTH engines reject it — nothing is cached and the
 /// caller decides whether that is a SyntaxError (see `js_regexp_new`'s
 /// bare-pattern fallback for the flag-prefix size edge).
+/// One shared never-match program per thread.
+///
+/// Only used by the `PERRY_REGEX_ENGINE=regress` measurement path, where every
+/// pattern needs a value in `regex_ptr` (the built/not-built flag) but no NFA:
+/// building a fresh one per pattern would be exactly the compile cost the
+/// experiment exists to remove from the measurement.
 #[cfg(feature = "regex-engine")]
-fn compile_and_cache_regex_checked(pattern: &str, flags: &str) -> bool {
+fn shared_never_match_program() -> Arc<Regex> {
+    crate::perry_thread_local! {
+        static NEVER_MATCH: RefCell<Option<Arc<Regex>>> = const { RefCell::new(None) };
+    }
+    NEVER_MATCH.with(|slot| {
+        slot.borrow_mut()
+            .get_or_insert_with(|| Arc::new(Regex::new(NEVER_MATCH_SOURCE).unwrap()))
+            .clone()
+    })
+}
+
+#[cfg(feature = "regex-engine")]
+fn compile_and_cache_regex_checked(pattern: &Arc<str>, flags: &Arc<str>) -> bool {
     let already = REGEX_CACHE.with(|cache| {
         cache
             .borrow()
-            .contains_key(&(pattern.to_string(), flags.to_string()))
+            .contains_key(&(pattern.clone(), flags.clone()))
     });
     if already {
         return true;
     }
-    if let Some(repeat_matcher) = repeat_matcher::compile(pattern, flags) {
+    let regress_covers = if let Some(repeat_matcher) = repeat_matcher::compile(pattern, flags) {
         if crate::hot_diag::regex_on() {
             crate::hot_diag::regex_with(|d| d.compiles_repeat += 1);
         }
         REPEAT_MATCHER_CACHE.with(|cache| {
             let mut cache = cache.borrow_mut();
             evict_regex_cache_if_full(&mut cache);
+            cache.insert((pattern.clone(), flags.clone()), Arc::new(repeat_matcher));
+        });
+        true
+    } else {
+        false
+    };
+    // `PERRY_REGEX_ENGINE=regress` (measurement only — see
+    // `repeat_matcher::regress_first`): the ECMAScript backtracker is the
+    // primary engine, so stop here. Every exec-family entry point consults the
+    // repeat matcher first, and the shared never-match placeholder gives the
+    // header's `regex_ptr` built-flag a value WITHOUT building an NFA — which
+    // is the whole point of the experiment (the linear engine's program is
+    // ~12.5 KB median against regress's 512 B, measured over 4,463 literals
+    // from seven real bundles).
+    if regress_covers && repeat_matcher::regress_first() {
+        REGEX_CACHE.with(|cache| {
+            let mut cache = cache.borrow_mut();
+            evict_regex_cache_if_full(&mut cache);
             cache.insert(
-                (pattern.to_string(), flags.to_string()),
-                Arc::new(repeat_matcher),
+                (pattern.clone(), flags.clone()),
+                shared_never_match_program(),
             );
         });
+        return true;
     }
     // Translate JS regex to Rust-compatible pattern, with the inline mode
     // prefix the flags imply. Shared with `lazy::std_engine_syntax_ok` so the
@@ -561,10 +621,7 @@ fn compile_and_cache_regex_checked(pattern: &str, flags: &str) -> bool {
                     }
                     let mut fc = fc.borrow_mut();
                     evict_regex_cache_if_full(&mut fc);
-                    fc.insert(
-                        (pattern.to_string(), flags.to_string()),
-                        std::sync::Arc::new(fre),
-                    );
+                    fc.insert((pattern.clone(), flags.clone()), std::sync::Arc::new(fre));
                     true
                 } else {
                     false
@@ -582,17 +639,17 @@ fn compile_and_cache_regex_checked(pattern: &str, flags: &str) -> bool {
     REGEX_CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
         evict_regex_cache_if_full(&mut cache);
-        cache.insert((pattern.to_string(), flags.to_string()), Arc::new(regex));
+        cache.insert((pattern.clone(), flags.clone()), Arc::new(regex));
     });
     true
 }
 
 #[cfg(feature = "regex-engine")]
-fn get_or_compile_regex(pattern: &str, flags: &str) -> Arc<Regex> {
+fn get_or_compile_regex(pattern: &Arc<str>, flags: &Arc<str>) -> Arc<Regex> {
     let hit = REGEX_CACHE.with(|cache| {
         cache
             .borrow()
-            .get(&(pattern.to_string(), flags.to_string()))
+            .get(&(pattern.clone(), flags.clone()))
             .cloned()
     });
     if let Some(re) = hit {
@@ -601,14 +658,14 @@ fn get_or_compile_regex(pattern: &str, flags: &str) -> Arc<Regex> {
     let _ = compile_and_cache_regex_checked(pattern, flags);
     REGEX_CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
-        if let Some(re) = cache.get(&(pattern.to_string(), flags.to_string())) {
+        if let Some(re) = cache.get(&(pattern.clone(), flags.clone())) {
             return re.clone();
         }
         // Both engines rejected it (validation normally throws before this
         // point) — keep the historical behavior: cache + return never-match.
         let arc = Arc::new(Regex::new(NEVER_MATCH_PATTERN).unwrap());
         evict_regex_cache_if_full(&mut cache);
-        cache.insert((pattern.to_string(), flags.to_string()), arc.clone());
+        cache.insert((pattern.clone(), flags.clone()), arc.clone());
         arc
     })
 }
@@ -943,7 +1000,14 @@ pub extern "C" fn js_regexp_new(
             // SyntaxError decision and populates the caches for the fancy
             // fallback.
             if !lazy::std_engine_syntax_ok(pattern_str, flags_str)
-                && !compile_and_cache_regex_checked(pattern_str, flags_str)
+                // Cold: the linear engine's parser refused, so only a BUILD
+                // can tell a fancy-regex pattern from a SyntaxError.
+                // Materialising the `Arc` key happens once per distinct
+                // pattern that needs the fallback, not per object.
+                && !compile_and_cache_regex_checked(
+                    &Arc::from(pattern_str),
+                    &Arc::from(flags_str),
+                )
             {
                 // Preserve the historical edge: validation used to test the
                 // BARE translated pattern (no `(?ims)` prefix). A pattern that
@@ -1278,7 +1342,7 @@ pub extern "C" fn js_regexp_test(re: *const RegExpHeader, s: *const StringHeader
             };
         }
 
-        if let Some(repeat_matcher) = lookup_repeat_matcher(re) {
+        if let Some(repeat_matcher) = lookup_repeat_matcher_for(re, str_data, 0) {
             return if repeat_matcher.regex.find(str_data).is_some() {
                 1
             } else {
@@ -1359,10 +1423,85 @@ pub(crate) fn lookup_fancy_regex(re: *const RegExpHeader) -> Option<Arc<fancy_re
         let flags_str = string_as_str((*re).flags_ptr);
         FANCY_CACHE.with(|fc| {
             fc.borrow()
-                .get(&(pat.to_string(), flags_str.to_string()))
+                .get(&(Arc::from(pat), Arc::from(flags_str)))
                 .cloned()
         })
     }
+}
+
+/// Can the linear program prove there is no match at or after `start`?
+///
+/// # The cliff this closes
+///
+/// `repeat_matcher::capture_layout` takes a pattern OFF the linear engine when
+/// ECMA-262's RepeatMatcher capture semantics are observable — a capture group
+/// directly under a quantifier, or a capture inside a negative lookaround. That
+/// is a correctness requirement (the linear engine keeps the last value of a
+/// capture nested in a quantified group; the spec clears it every iteration),
+/// but it means adding parentheses moves a pattern onto `regress`, a classical
+/// backtracker with no step budget. Measured: `/^(a+)+$/.test("a"*28 + "!")`
+/// costs **16.5 s** while `/^(?:a+)+$/` — the same language, no capture — is
+/// instant, and node does the same test in 4.8 s. **6.3 %** of the 4,463
+/// distinct regex literals across seven real bundles take this route
+/// (claude-code 7.1 %, dayjs 25 %, luxon 29 %).
+///
+/// The two engines accept exactly the same LANGUAGE for a pattern they both
+/// compile; they disagree only about which capture assignment to report. So a
+/// linear "there is no match here" is a real no, reachable in O(n) where the
+/// backtracker's no can cost O(2^n). Ask it first, and the exponential case —
+/// which is always a NON-matching subject, because that is what a ReDoS input
+/// is — never reaches the backtracker.
+///
+/// Returns false (i.e. "cannot rule it out, run the backtracker") whenever the
+/// linear program is not authoritative: not built, or the never-match
+/// placeholder installed for a pattern the `regex` crate could not compile at
+/// all. That is what makes the gate safe for the lookaround shapes, which have
+/// no linear program to consult.
+///
+/// This does NOT bound the worst case; it removes the reachable one. A real
+/// step budget has to be counted by the backtracker — `regress` has none
+/// today, `fancy-regex` ships `backtrack_limit: 1_000_000` — and is pending
+/// upstream.
+#[cfg(feature = "regex-engine")]
+fn linear_rules_out_match(re: *const RegExpHeader, subject: &str, start: usize) -> bool {
+    unsafe {
+        let program = (*re).regex_ptr;
+        if program.is_null() {
+            return false;
+        }
+        let program: &Regex = &*program;
+        if program.as_str() == NEVER_MATCH_SOURCE {
+            // The `regex` crate refused this pattern (lookaround /
+            // backreference); it has no opinion about the subject.
+            return false;
+        }
+        start <= subject.len() && !program.is_match_at(subject, start)
+    }
+}
+
+/// The source of the never-match program `compile_and_cache_regex_checked`
+/// installs for a pattern only another engine can serve. Compared by TEXT
+/// rather than by `Arc` identity so this stays independent of how the
+/// placeholder is allocated.
+#[cfg(feature = "regex-engine")]
+const NEVER_MATCH_SOURCE: &str = r"[^\s\S]";
+
+/// [`lookup_repeat_matcher`] with the linear pre-check applied: `None` also
+/// when the linear program proves no match at or after `start`, so the
+/// backtracker is never entered on a subject that cannot match. Every
+/// `&str`-subject call site uses this; the WTF-8/UTF-16 replace path, which has
+/// no `&str` to hand, uses the bare lookup.
+#[cfg(feature = "regex-engine")]
+fn lookup_repeat_matcher_for(
+    re: *const RegExpHeader,
+    subject: &str,
+    start: usize,
+) -> Option<Arc<repeat_matcher::RepeatMatcherRegex>> {
+    let matcher = lookup_repeat_matcher(re)?;
+    if linear_rules_out_match(re, subject, start) {
+        return None;
+    }
+    Some(matcher)
 }
 
 /// Look up the ECMAScript-native matcher used when quantified capture groups
@@ -1393,7 +1532,7 @@ fn lookup_repeat_matcher(
         REPEAT_MATCHER_CACHE.with(|cache| {
             cache
                 .borrow()
-                .get(&(pat.to_string(), flags_str.to_string()))
+                .get(&(Arc::from(pat), Arc::from(flags_str)))
                 .cloned()
         })
     }
@@ -1597,7 +1736,7 @@ pub extern "C" fn js_string_replace_regex(
             "undefined"
         };
 
-        if let Some(repeat_matcher) = lookup_repeat_matcher(re) {
+        if let Some(repeat_matcher) = lookup_repeat_matcher_for(re, str_data, 0) {
             let result = repeat_matcher.replace(str_data, repl_str, (*re).global);
             return finish_replace_bytes(result.as_bytes());
         }
@@ -1720,18 +1859,19 @@ pub extern "C" fn js_string_split_regex_n(
     unsafe {
         // Each element is either a substring (`Some`) or `undefined` (`None`,
         // for an unmatched capture group spliced into the result).
-        let parts: Vec<Option<String>> = if let Some(repeat_matcher) = lookup_repeat_matcher(re) {
-            repeat_matcher.split(&str_data, limit)
-        } else if let Some(fre) = lookup_fancy_regex(re) {
-            crate::string::spec_fancy_regex_split(&fre, &str_data, limit)
-        } else {
-            // Standard engine: the JS `RegExp.prototype[Symbol.split]` algorithm
-            // (21.2.5.11). The `regex` crate's own `split` diverges from JS for
-            // zero-width matches (it emits leading/trailing/consecutive empty
-            // strings the spec's `e == p` skip suppresses) and never splices
-            // captured groups, so walk the string the spec's way instead.
-            crate::string::spec_regex_split(lazy::header_std_regex(re), &str_data, limit)
-        };
+        let parts: Vec<Option<String>> =
+            if let Some(repeat_matcher) = lookup_repeat_matcher_for(re, &str_data, 0) {
+                repeat_matcher.split(&str_data, limit)
+            } else if let Some(fre) = lookup_fancy_regex(re) {
+                crate::string::spec_fancy_regex_split(&fre, &str_data, limit)
+            } else {
+                // Standard engine: the JS `RegExp.prototype[Symbol.split]` algorithm
+                // (21.2.5.11). The `regex` crate's own `split` diverges from JS for
+                // zero-width matches (it emits leading/trailing/consecutive empty
+                // strings the spec's `e == p` skip suppresses) and never splices
+                // captured groups, so walk the string the spec's way instead.
+                crate::string::spec_regex_split(lazy::header_std_regex(re), &str_data, limit)
+            };
 
         let arr = crate::array::js_array_alloc(parts.len() as u32);
         let scope = crate::gc::RuntimeHandleScope::new();
@@ -1765,7 +1905,7 @@ pub extern "C" fn js_string_search_regex(s: *const StringHeader, re: *const RegE
     let str_data = string_as_str(s);
 
     unsafe {
-        if let Some(repeat_matcher) = lookup_repeat_matcher(re) {
+        if let Some(repeat_matcher) = lookup_repeat_matcher_for(re, str_data, 0) {
             return repeat_matcher
                 .regex
                 .find(str_data)
