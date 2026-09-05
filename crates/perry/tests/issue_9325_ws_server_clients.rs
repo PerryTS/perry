@@ -27,7 +27,6 @@ fn compile_and_run(dir: &Path, source: &str) -> String {
         .arg("-o")
         .arg(&output)
         .arg("--no-cache")
-        .env_remove("PERRY_NO_AUTO_OPTIMIZE")
         .env("PERRY_WORKSPACE_ROOT", workspace_root())
         .output()
         .expect("run perry compile");
@@ -69,6 +68,7 @@ console.log(typeof first[Symbol.iterator]);
 let count = 0;
 for (const _client of first) count += 1;
 console.log(first === second, count, first.size);
+wss.close();
 "#,
     );
 
