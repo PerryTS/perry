@@ -721,9 +721,11 @@ def measure(
 
             # Separate traced pass. PERRY_GC_DIAG writes one line per collection
             # phase, which perturbs wall time, so it must not share a pass with
-            # the timing samples. Two traced runs are taken and required to
-            # agree: that is the harness proving, every time it runs, that the
-            # counters it is about to gate on are actually deterministic.
+            # the timing samples. Keep both traced runs, including disagreement.
+            # `check` owns the gating policy (and documented probe overrides),
+            # so it rejects disagreement in every counter that remains gated.
+            # Aborting here would bypass those overrides and discard all later
+            # probes before the gate could report their results (#9790).
             traced = [
                 parse_gc_diag(
                     run_once(
@@ -733,12 +735,6 @@ def measure(
                 )
                 for _ in range(2)
             ]
-            if traced[0] != traced[1]:
-                differing = sorted(k for k in traced[0] if traced[0][k] != traced[1][k])
-                raise RatchetError(
-                    f"{name}: GC counters are not deterministic across traced runs "
-                    f"({', '.join(differing)}); they cannot be gated"
-                )
             # Deliberately NOT rejecting minor_cycles == 0 here. A collector that
             # has stopped running copying minors at all is the single largest
             # regression this ratchet exists to catch, and it must surface as a
@@ -1862,6 +1858,19 @@ def evaluate(
 
         for metric in ALL_METRICS:
             tolerance = resolve_tolerance(tolerances, overrides, name, metric)
+            # The two traced samples are an independent premise of the band:
+            # even a one-byte disagreement inside the allowance invalidates a
+            # gated counter. Read the samples themselves, not a cached spread.
+            # Only an explicit probe override (or the profile) can exclude it.
+            current_samples = cur_entry["metrics"][metric].get("samples", [])
+            unstable_current = metric in GC_METRICS and tolerance.gating and (
+                len(current_samples) < 2 or len(set(current_samples)) != 1
+            )
+            if unstable_current:
+                failures.append(
+                    f"{name}: {metric} is not deterministic across traced runs; "
+                    "it cannot be gated"
+                )
             # A cell the pinned artifact cannot support is demoted rather than
             # trusted: comparing against a number whose own premise failed would
             # dress a defect up as a verdict. The defect is already in
@@ -1882,7 +1891,9 @@ def evaluate(
             else:
                 breach = False
 
-            if breach and quarantined:
+            if unstable_current:
+                status = "UNFIT (traced samples disagree)"
+            elif breach and quarantined:
                 status = "UNFIT (pinned cell unusable)"
             elif breach:
                 status = "REGRESSION" if tolerance.gating else "drift (informational)"

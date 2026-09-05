@@ -237,6 +237,95 @@ def _hard(failures):
     return [failure for failure in failures if not failure.startswith("NOTE")]
 
 
+class CurrentCounterDeterminismTests(unittest.TestCase):
+    def test_measure_keeps_disagreement_and_runs_the_remaining_probes(self):
+        stderr = (
+            "#gcmetric heap_used_bytes=1000000\n"
+            "#gcmetric heap_total_bytes=20971520\n"
+            "#gcmetric rss_bytes=30000000\n"
+        )
+
+        def run(copied_bytes=1500000):
+            return {
+                "returncode": 0, "stdout": "ok\n", "wall_ms": 200,
+                "peak_rss_bytes": 31000000,
+                "stderr": stderr + "[gc-copy-minor] ran copied_objects=20000 "
+                f"copied_bytes={copied_bytes} promoted_objects=4000 "
+                "promoted_bytes=500000 freed_bytes=100000000\n[gc-step]\n",
+            }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            probes_dir = Path(tmp)
+            for name in ("01_probe", "02_other"):
+                (probes_dir / f"{name}.ts").write_text("// stub\n")
+            with mock.patch(
+                "benchmarks.gc_ratchet.gc_ratchet.compile_probe", return_value=Path("stub")
+            ), mock.patch(
+                "benchmarks.gc_ratchet.gc_ratchet.run_once",
+                side_effect=[run()] * 4 + [run(1500002)] + [run()] * 5,
+            ) as runner:
+                result = measure(
+                    perry=Path("stub"), probes_dir=probes_dir, repeats=3, node=None, warmup=0
+                )
+        self.assertEqual(runner.call_count, 10)
+        self.assertEqual(set(result["probes"]), {"01_probe", "02_other"})
+        metric = result["probes"]["01_probe"]["metrics"]["copied_bytes"]
+        self.assertEqual(metric["samples"], [1500000, 1500002])
+        self.assertEqual(metric["spread"], 2)
+
+    def test_every_gated_counter_rejects_disagreement_inside_its_band(self):
+        for profile in PROFILES:
+            for metric in GC_METRICS:
+                with self.subTest(profile=profile, metric=metric):
+                    current = _measurement(_pair())
+                    value = BASE_VALUES[metric]
+                    dist = distribution([value - 1, value + 1])
+                    # A stale cached spread must not hide the disagreeing samples.
+                    dist["spread"] = 0
+                    current["probes"]["01_probe"]["metrics"][metric] = dist
+                    rows, failures = evaluate(_baseline(_pair()), current, profile=profile)
+                    self.assertTrue(any(
+                        metric in failure and "not deterministic" in failure
+                        for failure in _hard(failures)
+                    ))
+                    self.assertEqual(len(rows), 2 * len(ALL_METRICS))
+                    row = next(r for r in rows if r.probe == "01_probe" and r.metric == metric)
+                    self.assertEqual(row.status, "UNFIT (traced samples disagree)")
+
+    def test_only_the_documented_cells_may_vary(self):
+        payload = _with_override(metric="copied_bytes")
+        payload["probe_overrides"]["01_probe"]["freed_bytes"] = _override_entry()
+        baseline = _baseline(_pair(), payload)
+        current = _measurement(_pair())
+        for metric in ("copied_bytes", "freed_bytes"):
+            value = BASE_VALUES[metric]
+            current["probes"]["01_probe"]["metrics"][metric] = distribution([value, value + 1])
+        for profile in PROFILES:
+            rows, failures = evaluate(baseline, current, profile=profile)
+            self.assertEqual(_hard(failures), [])
+            excluded = [r for r in rows if not r.gating and r.probe == "01_probe"]
+            self.assertTrue({"copied_bytes", "freed_bytes"} <= {r.metric for r in excluded})
+        for probe, metric in (("01_probe", "copied_objects"), ("02_other", "copied_bytes")):
+            with self.subTest(probe=probe, metric=metric):
+                perturbed = copy.deepcopy(current)
+                value = BASE_VALUES[metric]
+                perturbed["probes"][probe]["metrics"][metric] = distribution([value, value + 1])
+                _, failures = evaluate(baseline, perturbed, profile="shared_ci")
+                self.assertTrue(any(
+                    probe in failure and metric in failure and "not deterministic" in failure
+                    for failure in _hard(failures)
+                ))
+
+    def test_array_growth_exclusions_match_the_recorded_samples(self):
+        receipt = json.loads((REPO_ROOT / "benchmarks/gc_ratchet/evidence/9790-array-growth-pacing.json").read_text())
+        entries = _shipped_tolerances()["probe_overrides"]["07_array_grow_evacuate"]
+        self.assertEqual(set(entries), {"copied_bytes", "freed_bytes"})
+        for metric, entry in entries.items():
+            values = [sample[metric] for sample in receipt["samples"]]
+            self.assertEqual(entry["evidence"]["observed_runs"], len(values))
+            self.assertEqual(entry["evidence"]["observed_spread"], max(values) - min(values))
+
+
 class ParsingTests(unittest.TestCase):
     def test_measurement_refuses_a_host_without_wait4_before_launching(self):
         with mock.patch.object(os, "wait4", None, create=True):

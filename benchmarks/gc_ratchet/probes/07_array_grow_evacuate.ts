@@ -1,11 +1,13 @@
 // GC ratchet probe: array element storage growth and reallocation.
 //
-// A growing array repeatedly abandons its previous element storage, which is a
-// separate allocation from the array header. Evacuation has to rewrite the
-// header's pointer to the moved storage; per-object pinning would leave the old
-// storage in place and fragment the region. The probe grows many arrays past
+// A growing array replaces its inline header-plus-elements allocation and
+// leaves a forwarding stub at the old address. Evacuation must repair holders
+// of the current allocation. The probe grows many arrays past
 // several reallocation boundaries, keeps a small live sample, cycles the rest
 // through a ring so they are genuinely heap-allocated, then drops them.
+// #9790: copied_bytes/freed_bytes remain informational on this probe because
+// block placement changes when nursery pressure is checked. See the ratchet
+// README and evidence/9790-array-growth-pacing.json; all other gates remain.
 
 declare function gc(): void;
 
