@@ -42,6 +42,8 @@ mod exec_array;
 #[cfg(feature = "regex-engine")]
 mod flags;
 #[cfg(feature = "regex-engine")]
+mod global_guards;
+#[cfg(feature = "regex-engine")]
 mod global_scan;
 #[cfg(feature = "regex-engine")]
 mod grammar;
@@ -74,6 +76,8 @@ use exec_array::{
 };
 #[cfg(feature = "regex-engine")]
 use flags::validate_and_canonicalize_flags;
+#[cfg(feature = "regex-engine")]
+use global_guards::{ensure_replace_all_regex_global, throw_match_all_non_global_regex};
 #[cfg(feature = "regex-engine")]
 use grammar::{
     collapse_redos_guard_quantifiers, has_invalid_repeated_quantifier,
@@ -782,31 +786,6 @@ pub(super) fn js_string_from_str(s: &str) -> *mut StringHeader {
 }
 
 #[cfg(feature = "regex-engine")]
-fn throw_replace_all_non_global_regex() -> ! {
-    let message = b"String.prototype.replaceAll called with a non-global RegExp argument";
-    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
-}
-
-#[cfg(feature = "regex-engine")]
-fn throw_match_all_non_global_regex() -> ! {
-    let message = b"String.prototype.matchAll called with a non-global RegExp argument";
-    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
-}
-
-#[cfg(feature = "regex-engine")]
-#[inline]
-fn ensure_replace_all_regex_global(re: *const RegExpHeader) {
-    unsafe {
-        if !(*re).global {
-            throw_replace_all_non_global_regex();
-        }
-    }
-}
-
 /// Throw a `SyntaxError` with the given message and never return.
 #[cfg(feature = "regex-engine")]
 pub(super) fn throw_regexp_syntax_error(message: &str) -> ! {
