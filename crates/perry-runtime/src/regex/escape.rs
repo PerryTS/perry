@@ -142,3 +142,44 @@ pub extern "C" fn js_regexp_escape(input: f64) -> f64 {
 #[cfg(feature = "keepalive-anchors")]
 #[used]
 static KEEP_REGEXP_ESCAPE: extern "C" fn(f64) -> f64 = js_regexp_escape;
+
+/// ECMA-262 22.2.6.10 EscapeRegExpPattern: produce a string that, placed
+/// between two `/` characters, parses as the same pattern. An empty pattern
+/// becomes `"(?:)"`; an unescaped `/` outside a character class becomes `\/`;
+/// the four LineTerminators become their `\n`/`\r`/` `/` ` escapes
+/// (even inside a character class). A backslash escapes the following code
+/// point, which is copied verbatim.
+pub(super) fn escape_regexp_source(pattern: &str) -> String {
+    if pattern.is_empty() {
+        return "(?:)".to_string();
+    }
+    let mut out = String::with_capacity(pattern.len() + 2);
+    let mut in_class = false;
+    let mut chars = pattern.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => {
+                out.push('\\');
+                if let Some(&next) = chars.peek() {
+                    out.push(next);
+                    chars.next();
+                }
+            }
+            '[' if !in_class => {
+                in_class = true;
+                out.push('[');
+            }
+            ']' if in_class => {
+                in_class = false;
+                out.push(']');
+            }
+            '/' if !in_class => out.push_str("\\/"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\u{2028}' => out.push_str("\\u2028"),
+            '\u{2029}' => out.push_str("\\u2029"),
+            _ => out.push(c),
+        }
+    }
+    out
+}

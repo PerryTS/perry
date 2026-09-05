@@ -34,6 +34,7 @@ mod compile;
 mod escape;
 #[cfg(feature = "regex-engine")]
 mod exec_array;
+mod flags;
 #[cfg(feature = "regex-engine")]
 mod global_scan;
 #[cfg(feature = "regex-engine")]
@@ -58,12 +59,14 @@ mod utf16;
 use class_range_validate::has_out_of_order_double_dash_class_range;
 #[cfg(feature = "regex-engine")]
 pub use compile::js_regexp_compile_value;
+use escape::escape_regexp_source;
 pub use escape::js_regexp_escape;
 #[cfg(feature = "regex-engine")]
 use exec_array::{
     byte_index_to_utf16_index, materialize_exec_match, materialize_match_list,
     set_exec_array_metadata_value, utf16_index_to_byte, OwnedCapture, OwnedExecMatch,
 };
+use flags::validate_and_canonicalize_flags;
 #[cfg(feature = "regex-engine")]
 use grammar::{
     collapse_redos_guard_quantifiers, has_invalid_repeated_quantifier,
@@ -789,51 +792,10 @@ fn ensure_replace_all_regex_global(re: *const RegExpHeader) {
 
 /// Throw a `SyntaxError` with the given message and never return.
 #[cfg(feature = "regex-engine")]
-fn throw_regexp_syntax_error(message: &str) -> ! {
+pub(super) fn throw_regexp_syntax_error(message: &str) -> ! {
     let msg = js_string_from_str(message);
     let err = crate::error::js_syntaxerror_new(msg);
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
-}
-
-/// #2829: validate a RegExp flags string the way the spec's
-/// `RegExpInitialize` does — each flag must be one of `dgimsuvy` and must not
-/// repeat. Returns the flags in canonical (sorted) order, or throws a
-/// `SyntaxError` mirroring Node's "Invalid flags supplied to RegExp
-/// constructor '<flags>'" message.
-///
-/// Note: the `v` flag (unicodeSets) is accepted as a valid flag for parity but
-/// its set-notation matching semantics are not implemented (the regex crate
-/// has no equivalent); it behaves like an ordinary unicode pattern.
-#[cfg(feature = "regex-engine")]
-fn validate_and_canonicalize_flags(flags: &str) -> String {
-    // Spec order of the flag bits: d g i m s u v y.
-    const FLAG_ORDER: &[char] = &['d', 'g', 'i', 'm', 's', 'u', 'v', 'y'];
-    let mut seen = [false; 8];
-    for ch in flags.chars() {
-        match FLAG_ORDER.iter().position(|&f| f == ch) {
-            Some(idx) => {
-                if seen[idx] {
-                    throw_regexp_syntax_error(&format!(
-                        "Invalid flags supplied to RegExp constructor '{}'",
-                        flags
-                    ));
-                }
-                seen[idx] = true;
-            }
-            None => {
-                throw_regexp_syntax_error(&format!(
-                    "Invalid flags supplied to RegExp constructor '{}'",
-                    flags
-                ));
-            }
-        }
-    }
-    FLAG_ORDER
-        .iter()
-        .enumerate()
-        .filter(|(i, _)| seen[*i])
-        .map(|(_, c)| *c)
-        .collect()
 }
 
 /// Create a new RegExp from pattern and flags strings
@@ -1961,47 +1923,6 @@ pub extern "C" fn js_regexp_get_source(re: *const RegExpHeader) -> *mut StringHe
 #[no_mangle]
 pub extern "C" fn js_regexp_empty_source() -> *mut StringHeader {
     js_string_from_str("(?:)")
-}
-
-/// ECMA-262 22.2.6.10 EscapeRegExpPattern: produce a string that, placed
-/// between two `/` characters, parses as the same pattern. An empty pattern
-/// becomes `"(?:)"`; an unescaped `/` outside a character class becomes `\/`;
-/// the four LineTerminators become their `\n`/`\r`/` `/` ` escapes
-/// (even inside a character class). A backslash escapes the following code
-/// point, which is copied verbatim.
-fn escape_regexp_source(pattern: &str) -> String {
-    if pattern.is_empty() {
-        return "(?:)".to_string();
-    }
-    let mut out = String::with_capacity(pattern.len() + 2);
-    let mut in_class = false;
-    let mut chars = pattern.chars().peekable();
-    while let Some(c) = chars.next() {
-        match c {
-            '\\' => {
-                out.push('\\');
-                if let Some(&next) = chars.peek() {
-                    out.push(next);
-                    chars.next();
-                }
-            }
-            '[' if !in_class => {
-                in_class = true;
-                out.push('[');
-            }
-            ']' if in_class => {
-                in_class = false;
-                out.push(']');
-            }
-            '/' if !in_class => out.push_str("\\/"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\u{2028}' => out.push_str("\\u2028"),
-            '\u{2029}' => out.push_str("\\u2029"),
-            _ => out.push(c),
-        }
-    }
-    out
 }
 
 /// Get regex.flags — returns the flags string
