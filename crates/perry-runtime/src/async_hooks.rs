@@ -207,8 +207,15 @@ pub struct AsyncResourceHandle {
     event_emitter: i64,
 }
 
+/// Is `handle` a live `AsyncResource` backing? One relaxed load answers "no"
+/// while none was ever created; only then the registry lock. The generic
+/// property-read ladder asks this BEFORE decoding or copying the key, so an
+/// ordinary receiver — the overwhelming case — pays neither.
+#[inline]
 pub(crate) fn is_async_resource_handle(handle: i64) -> bool {
-    handle != 0 && ASYNC_RESOURCE_HANDLES.lock().unwrap().contains(&handle)
+    ASYNC_RESOURCE_HANDLE_COUNT.load(Ordering::Relaxed) != 0
+        && handle != 0
+        && ASYNC_RESOURCE_HANDLES.lock().unwrap().contains(&handle)
 }
 
 /// Resolve either a native `AsyncResource` handle or the ordinary object used
@@ -1371,9 +1378,7 @@ fn async_resource_bind_method_value(handle: i64) -> f64 {
 }
 
 pub fn try_async_resource_property_dispatch(handle: i64, property: &str) -> Option<f64> {
-    if ASYNC_RESOURCE_HANDLE_COUNT.load(Ordering::Relaxed) == 0
-        || !ASYNC_RESOURCE_HANDLES.lock().unwrap().contains(&handle)
-    {
+    if !is_async_resource_handle(handle) {
         return None;
     }
     // User-defined own properties shadow AsyncResource.prototype just as they

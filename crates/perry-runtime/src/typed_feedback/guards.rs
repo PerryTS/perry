@@ -147,17 +147,17 @@ fn method_direct_call_contract(
     (shape_addr, class_id, gc_type, name_hash, valid)
 }
 
-fn key_as_str(key: *const crate::StringHeader) -> Option<String> {
+/// Borrow the key text for the guard's side-table lookups. Every consumer
+/// (`class_getter_in_chain`, `descriptor_blocks_class_field_*`,
+/// `get_accessor_descriptor`, `get_property_attrs`) reads Rust-side tables
+/// and allocates nothing on the GC heap, so the payload cannot move while the
+/// borrow is live; the `String` this used to return was one `malloc` + UTF-8
+/// scan per guarded class-field access.
+fn key_as_str<'a>(key: *const crate::StringHeader) -> Option<&'a str> {
     if !valid_string_key(key) {
         return None;
     }
-    unsafe {
-        let len = (*key).byte_len as usize;
-        let data = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-        std::str::from_utf8(std::slice::from_raw_parts(data, len))
-            .ok()
-            .map(|s| s.to_string())
-    }
+    unsafe { crate::string::header_str_checked(key) }
 }
 
 fn class_setter_in_chain(class_id: u32, key_name: &str) -> bool {
@@ -314,8 +314,8 @@ fn class_field_get_contract(
                 expected_field_index,
                 require_raw_f64,
             )
-            && !class_getter_in_chain(class_id, &key_name)
-            && !descriptor_blocks_class_field_get(object_addr, class_id, &key_name);
+            && !class_getter_in_chain(class_id, key_name)
+            && !descriptor_blocks_class_field_get(object_addr, class_id, key_name);
         (shape_addr, class_id, gc_type, valid)
     }
 }
@@ -596,8 +596,8 @@ fn class_field_set_contract(
                         expected_field_index,
                         true,
                     )))
-            && !class_setter_in_chain(class_id, &key_name)
-            && !descriptor_blocks_class_field_set(object_addr, class_id, &key_name);
+            && !class_setter_in_chain(class_id, key_name)
+            && !descriptor_blocks_class_field_set(object_addr, class_id, key_name);
         (shape_addr, class_id, gc_type, valid)
     }
 }

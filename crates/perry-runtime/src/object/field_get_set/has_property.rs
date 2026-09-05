@@ -1387,9 +1387,7 @@ pub(crate) unsafe fn closure_dynamic_prop_by_key(
     if key.is_null() {
         return None;
     }
-    let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-    let key_len = (*key).byte_len as usize;
-    let name = std::str::from_utf8(std::slice::from_raw_parts(key_ptr, key_len)).ok()?;
+    let name = crate::string::header_str_checked(key)?;
     let val = crate::closure::closure_get_dynamic_prop(obj, name);
     if val.to_bits() != crate::value::TAG_UNDEFINED {
         return Some(val);
