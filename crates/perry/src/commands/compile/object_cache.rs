@@ -1114,6 +1114,12 @@ fn compute_object_cache_key_with_env(
             .as_deref()
             .unwrap_or(""),
     );
+    // Also consumed by the replay freshness fingerprint. A changed concat
+    // lane must not reuse a catalog produced with different lowering inputs.
+    h.field(
+        "env_concat_site_cache",
+        env_var("PERRY_CONCAT_SITE_CACHE").as_deref().unwrap_or(""),
+    );
     h.field(
         "env_full_outline_ic",
         env_var("PERRY_FULL_OUTLINE_IC").as_deref().unwrap_or(""),

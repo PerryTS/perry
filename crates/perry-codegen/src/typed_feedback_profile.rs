@@ -93,7 +93,7 @@ impl Session {
         let diagnostic = || {
             format!("invalid --typed-feedback-profile {}: expected a versioned replay profile; create one with scripts/typed-feedback-profile.py", path.display())
         };
-        let value: serde_json::Value = serde_json::from_slice(&bytes).with_context(&diagnostic)?;
+        let value: serde_json::Value = serde_json::from_slice(&bytes).with_context(diagnostic)?;
         // A future schema may use a different body. Its version is sufficient
         // to reject the whole profile without interpreting unknown fields.
         if let Some(version) = value
