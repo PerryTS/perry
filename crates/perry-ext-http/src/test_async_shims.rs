@@ -64,3 +64,9 @@ pub extern "C" fn perry_ffi_spawn_blocking_with_reactor(
 // host stdlib archive, which unit-test binaries do not link.
 #[no_mangle]
 pub extern "C" fn perry_ffi_spawn_async(_ctx: *mut c_void) {}
+
+// Same story: `js_bun_tcp_listen` drives the shared runtime from its bind-poll
+// loop (`perry_ffi::run_pending`), so linking perry-ext-net's object code into
+// this crate's test binaries pulls the extern in with it.
+#[no_mangle]
+pub extern "C" fn perry_ffi_run_pending(_budget_ms: u64) {}
