@@ -168,6 +168,9 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
         return js_dyn_index_get(boxed, index.get_nanbox_f64());
     }
     let jsval = JSValue::from_bits(bits);
+    if jsval.is_any_string() {
+        return crate::string::js_string_index_get_boxed(value, index);
+    }
     // #5525: a Symbol *index* (`obj[Symbol.iterator]`) must resolve through the
     // symbol side-table, never the integer-index / stringify paths below (which
     // would coerce the symbol's NaN-boxed bits to a garbage i32). The codegen
@@ -190,20 +193,6 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
                 return v;
             }
         }
-    }
-    if jsval.is_string() || jsval.is_short_string() {
-        // Spec: string INDEXING `s[i]` returns `undefined` for a non-canonical
-        // or out-of-bounds index — unlike `s.charAt(i)`, which returns "".
-        // Route through the canonical-index helper (`js_string_index_get`,
-        // #3987) so an OOB read here is `undefined`. Calling `js_string_char_at`
-        // directly (charAt semantics) returned "" for OOB, which every
-        // generator/async LOCAL string read hit: the CPS box pass erases the
-        // local's static type, so `line[i]` reaches this dyn path instead of the
-        // `is_string_expr` static path — the `yaml` lexer's `parseDocument`
-        // `switch (line[n])` then never observed `undefined` at line-ends and
-        // its `*lex` state machine spun forever (#6067).
-        let s_ptr = js_get_string_pointer_unified(value) as *const crate::StringHeader;
-        return crate::string::js_string_index_get(s_ptr, index);
     }
     // Class-ref value (INT32-tagged, top16 == 0x7FFE): `C[key]` where `C` is a
     // runtime class-ref value (e.g. a function parameter). Member-expression
