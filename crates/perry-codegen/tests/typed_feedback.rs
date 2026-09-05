@@ -1331,3 +1331,139 @@ fn typed_feedback_guards_computed_numeric_array_index_hot_path() {
     assert!(!ir.contains("call double @js_array_numeric_get_f64_unboxed"));
     assert!(ir.contains("load double"));
 }
+
+#[test]
+fn profile_replay_selects_numeric_read_with_guard_fallback_and_deterministic_ir() {
+    use perry_codegen::typed_feedback_profile::{ModuleIdentity, Profile, Session};
+    let _lock = env_lock();
+    let _feedback = EnvVarGuard::set("PERRY_TYPED_FEEDBACK", None);
+    let _trace = EnvVarGuard::set("PERRY_TYPED_FEEDBACK_TRACE", None);
+    let dir = std::env::temp_dir().join(format!("perry-replay-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let source = module(
+        "replay.ts",
+        vec![param(1, "xs", Type::Array(Box::new(Type::Any)))],
+        Type::Any,
+        vec![Stmt::Return(Some(Expr::IndexGet {
+            object: Box::new(Expr::LocalGet(1)),
+            index: Box::new(Expr::Number(0.0)),
+        }))],
+    );
+    let identity = ModuleIdentity {
+        module: source.name.clone(),
+        source_hash: "source".into(),
+        hir_hash: "hir".into(),
+        lowering_hash: "opts".into(),
+        target: "host".into(),
+    };
+    let mut opts = empty_opts();
+    opts.verify_native_regions = true;
+    let catalog = Session::new("compiler".into(), None);
+    let baseline = catalog
+        .compile_module(&source, opts.clone(), identity.clone())
+        .unwrap();
+    catalog.finish(Some(&dir.join("sites.json"))).unwrap();
+    let mut profile: Profile = Session::read_profile(&dir.join("sites.json")).unwrap();
+    let sites = &mut profile.modules[0].sites;
+    sites.retain(|site| site.kind == "array_element" && site.operation == "array[index]");
+    assert!(
+        !sites.is_empty(),
+        "fixture must reach a supported array read"
+    );
+    for site in sites {
+        site.observation_kind = "numeric_array_element".into();
+    }
+    let _reps = EnvVarGuard::set("PERRY_NATIVE_REPS", Some("1"));
+    let _reps_dir = EnvVarGuard::set("PERRY_NATIVE_REPS_DIR", Some(dir.to_str().unwrap()));
+    let replay = Session::new("compiler".into(), Some(profile.clone()));
+    let selected = replay
+        .compile_module(&source, opts.clone(), identity.clone())
+        .unwrap();
+    let decisions = replay.finish(None).unwrap();
+    assert!(decisions.iter().any(|d| d.accepted), "{decisions:?}");
+    let ir = String::from_utf8(selected.clone()).unwrap();
+    assert!(ir.contains("call i32 @js_typed_feedback_numeric_array_index_get_guard"));
+    assert!(ir.contains("call double @js_typed_feedback_array_index_get_fallback_boxed"));
+    assert!(ir.contains("br i1"));
+    assert_ne!(baseline, selected);
+    let replay2 = Session::new("compiler".into(), Some(profile.clone()));
+    assert_eq!(
+        selected,
+        replay2
+            .compile_module(&source, opts.clone(), identity.clone())
+            .unwrap()
+    );
+    assert_eq!(decisions, replay2.finish(None).unwrap());
+    // Every well-formed mismatch must leave lowering byte-for-byte identical.
+    let cases: &[(&str, fn(&mut Profile))] = &[
+        ("source_hash_mismatch", |p| {
+            p.modules[0].identity.source_hash.push('x')
+        }),
+        ("hir_hash_mismatch", |p| {
+            p.modules[0].identity.hir_hash.push('x')
+        }),
+        ("lowering_inputs_mismatch", |p| {
+            p.modules[0].identity.lowering_hash.push('x')
+        }),
+        ("target_mismatch", |p| {
+            p.modules[0].identity.target.push('x')
+        }),
+        ("compiler_mismatch", |p| p.compiler.push('x')),
+        ("schema_mismatch", |p| p.schema_version += 1),
+        ("unknown_module", |p| p.modules[0].identity.module.push('x')),
+        ("unknown_site", |p| {
+            for s in &mut p.modules[0].sites {
+                s.site_id += 1000;
+            }
+        }),
+        ("site_identity_mismatch", |p| {
+            for s in &mut p.modules[0].sites {
+                s.function.push('x');
+            }
+        }),
+        ("unsupported_observation_kind", |p| {
+            for s in &mut p.modules[0].sites {
+                s.observation_kind = "method_address".into();
+            }
+        }),
+    ];
+    for (reason, mutate) in cases {
+        let mut stale_profile = profile.clone();
+        mutate(&mut stale_profile);
+        let stale = Session::new("compiler".into(), Some(stale_profile));
+        assert_eq!(
+            baseline,
+            stale
+                .compile_module(&source, opts.clone(), identity.clone())
+                .unwrap(),
+            "{reason}"
+        );
+        let rejected = stale.finish(None).unwrap();
+        assert!(!rejected.is_empty(), "{reason}");
+        assert!(
+            rejected.iter().all(|d| !d.accepted && d.reason == *reason),
+            "{rejected:?}"
+        );
+    }
+    let artifacts: Vec<serde_json::Value> = std::fs::read_dir(&dir)
+        .unwrap()
+        .filter_map(|entry| {
+            let path = entry.unwrap().path();
+            (path.extension().and_then(|s| s.to_str()) == Some("json")
+                && path.file_name().unwrap() != "sites.json")
+                .then(|| serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap())
+        })
+        .collect();
+    assert!(artifacts
+        .iter()
+        .any(|a| a["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["consumed_facts"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|f| f["kind"] == "typed_feedback_replay"))));
+    std::fs::remove_dir_all(&dir).unwrap();
+}

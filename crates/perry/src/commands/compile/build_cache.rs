@@ -821,6 +821,9 @@ fn eligibility(args: &CompileArgs, project_root: &Path) -> Result<(), String> {
     if args.print_hir || args.trace.is_some() || args.focus.is_some() {
         return Err("diagnostic-mode".to_string());
     }
+    if args.typed_feedback_profile.is_some() || args.typed_feedback_sites.is_some() {
+        return Err("typed-feedback-profile".to_string());
+    }
     if args.explain_lowering {
         return Err("explain-lowering".to_string());
     }

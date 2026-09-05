@@ -190,6 +190,20 @@ pub(super) fn lower_guarded_array_index_get(
     coerce_numeric_fallback: bool,
     receiver_slot: Option<&str>,
 ) -> Result<String> {
+    let site_id = ctx.typed_feedback_site_id(ctx.ic_site_counter);
+    crate::typed_feedback_profile::register_site(
+        site_id,
+        &ctx.func.name,
+        "array_element",
+        "array[index]",
+    );
+    let replay_fact =
+        crate::typed_feedback_profile::select_numeric_array(site_id, require_numeric_layout);
+    // Preserve the original consumer's coercion contract. A replay hint can
+    // select representation handling, but cannot turn a JS-value read into
+    // a numeric-context read.
+    let coerce_numeric_fallback = require_numeric_layout && coerce_numeric_fallback;
+    let require_numeric_layout = require_numeric_layout || replay_fact.is_some();
     let contract = if require_numeric_layout {
         TypedFeedbackContract::numeric_array_get_index()
     } else {
@@ -201,6 +215,10 @@ pub(super) fn lower_guarded_array_index_get(
         "array[index]",
         contract,
     );
+    // Replay selects the existing numeric tier, including its full inline
+    // receiver/layout/bounds checks and cold runtime guard. The observation
+    // itself never admits a load or suppresses a check.
+    let inline_guard = !typed_feedback_emission_enabled();
     let fast_idx = ctx.new_block(&format!("{}.fast", block_prefix));
     let fallback_idx = ctx.new_block(&format!("{}.fallback", block_prefix));
     // A non-negative ordinary-array index at or above `length` has no own
@@ -210,7 +228,7 @@ pub(super) fn lower_guarded_array_index_get(
     // properties, that result is `undefined` without consulting the generic
     // polymorphic getter. Sparse-set membership tests hit exactly this arm for
     // absent ids, so keep it separate from the in-bounds raw-load block.
-    let inline_oob_idx = if !typed_feedback_emission_enabled() {
+    let inline_oob_idx = if inline_guard {
         Some(ctx.new_block(&format!("{}.guard.oob", block_prefix)))
     } else {
         None
@@ -226,7 +244,7 @@ pub(super) fn lower_guarded_array_index_get(
     let mut inline_fast_handle: Option<(String, String)> = None;
     let mut runtime_fast_handle: Option<(String, String)> = None;
 
-    if !typed_feedback_emission_enabled() {
+    if inline_guard {
         // Normal builds do not collect feedback. Inline the plain-array
         // structural guard instead of paying an out-of-line call merely to
         // rediscover the same header facts before the direct slot load below.
@@ -535,7 +553,10 @@ pub(super) fn lower_guarded_array_index_get(
             ],
             false,
             false,
-            Vec::new(),
+            replay_fact
+                .as_ref()
+                .map(|fact| vec![format!("typed_feedback_replay_fallback={}", fact.fact_id)])
+                .unwrap_or_default(),
         );
     }
 
@@ -617,16 +638,27 @@ pub(super) fn lower_guarded_array_index_get(
             None,
             None,
             None,
-            vec![raw_f64_layout_fact(
-                None,
-                "consumed",
-                "numeric_array_index_get_guard",
-                None,
-            )],
+            {
+                let mut facts = vec![raw_f64_layout_fact(
+                    None,
+                    "consumed",
+                    "numeric_array_index_get_guard",
+                    None,
+                )];
+                if let Some(fact) = &replay_fact {
+                    facts.push(fact.clone());
+                }
+                facts
+            },
             Vec::new(),
             false,
             false,
-            Vec::new(),
+            replay_fact
+                .as_ref()
+                .map(|_| {
+                    vec!["typed_feedback_replay_selected=fresh_numeric_array_observation".into()]
+                })
+                .unwrap_or_default(),
         );
     }
 

@@ -336,6 +336,15 @@ pub struct CompileArgs {
     #[arg(long)]
     pub explain_lowering: bool,
 
+    /// Replay advisory typed-feedback observations with exact freshness checks.
+    #[arg(long)]
+    pub typed_feedback_profile: Option<PathBuf>,
+
+    /// Write a versioned site catalog to join with a runtime typed-feedback
+    /// trace. Compile with PERRY_TYPED_FEEDBACK=1 to record runtime sites.
+    #[arg(long)]
+    pub typed_feedback_sites: Option<PathBuf>,
+
     /// #504 — emit `<binary>.attest.json` next to the compiled
     /// executable. The sidecar carries SHA-256 of the binary +
     /// provenance (perry version, git commit, build timestamp) so

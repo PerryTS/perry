@@ -3664,6 +3664,8 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     progress.phase(1, "lowering complete; finalizing generated IR");
     crate::root_reload::apply_to_module(&mut llmod);
 
+    crate::typed_feedback_profile::finish_module(&mut llmod.native_rep_records);
+
     let verify_native_regions = opts.verify_native_regions
         || std::env::var("PERRY_VERIFY_NATIVE_REGIONS").ok().as_deref() == Some("1");
     if verify_native_regions {
