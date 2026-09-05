@@ -128,7 +128,7 @@ pub struct RegexDiag {
     per_pattern: HashMap<usize, PatStat>,
 }
 
-thread_local! {
+crate::perry_thread_local! {
     static REGEX_DIAG: RefCell<RegexDiag> = RefCell::new(RegexDiag::default());
 }
 
@@ -417,7 +417,7 @@ pub struct IcDiag {
     sites: HashMap<usize, SiteStat>,
 }
 
-thread_local! {
+crate::perry_thread_local! {
     static IC_DIAG: RefCell<IcDiag> = RefCell::new(IcDiag::default());
 }
 

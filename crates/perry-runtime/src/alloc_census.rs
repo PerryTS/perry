@@ -78,7 +78,7 @@ struct Sites {
 
 static SITES: Mutex<Option<Sites>> = Mutex::new(None);
 
-thread_local! {
+crate::perry_thread_local! {
     /// Bytes still to allocate before the next sample. Const-initialised so
     /// the TLS access itself never allocates.
     static CREDIT: Cell<i64> = const { Cell::new(1 << 20) };
