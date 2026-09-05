@@ -35,7 +35,7 @@ pub fn scan_transition_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisit
     if visitor.young_scope() {
         let mut logged = 0u64;
         let mut visited = 0u64;
-        let mut kept = Vec::new();
+        let mut kept = TRANSITION_CACHE_YOUNG.with(|log| log.borrow_mut().take_spare());
         #[cfg(debug_assertions)]
         with_transition_cache(|table| unsafe {
             let relevant: Vec<u32> = (0..TRANSITION_CACHE_SIZE)
@@ -322,7 +322,7 @@ pub fn scan_shape_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_
         }
         let batch = SHAPE_CACHE_YOUNG.with(|log| log.borrow_mut().take_sorted());
         let logged = batch.len() as u64;
-        let mut kept = Vec::new();
+        let mut kept = SHAPE_CACHE_YOUNG.with(|log| log.borrow_mut().take_spare());
         for id in batch {
             if let Some((arr_ptr, _)) = cache.get_mut(&id) {
                 visitor.visit_raw_mut_ptr_slot(arr_ptr);

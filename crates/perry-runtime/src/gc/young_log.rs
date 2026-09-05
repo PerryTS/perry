@@ -76,11 +76,22 @@ use crate::value::{BIGINT_TAG, POINTER_MASK, POINTER_TAG, STRING_TAG, TAG_MASK};
 /// Keys of side-table entries that may hold a pointer a minor can act on.
 pub(crate) struct YoungLog<K> {
     keys: Vec<K>,
+    /// A recycled buffer, so the log does not grow from ZERO CAPACITY every
+    /// collection. `take_sorted` hands `keys` out and installs this in its
+    /// place, so the notes made while the caller walks the batch land in a Vec
+    /// that already has room; `extend` and `take_spare` round the buffers
+    /// back. Without it every cycle re-grew a 20k-entry Vec from empty — the
+    /// same allocate-from-scratch shape these logs exist to remove from the
+    /// scanners, reintroduced one level down.
+    spare: Vec<K>,
 }
 
 impl<K: Copy + Ord> YoungLog<K> {
     pub(crate) const fn new() -> Self {
-        Self { keys: Vec::new() }
+        Self {
+            keys: Vec::new(),
+            spare: Vec::new(),
+        }
     }
 
     /// Record `key` as possibly minor-relevant. MUST run before the entry it
@@ -98,18 +109,39 @@ impl<K: Copy + Ord> YoungLog<K> {
     /// from inside a visit) land in the emptied log and are picked up by the
     /// caller's next `take_sorted` round.
     pub(crate) fn take_sorted(&mut self) -> Vec<K> {
-        let mut keys = std::mem::take(&mut self.keys);
+        // Swap the recycled buffer in rather than leaving a zero-capacity Vec
+        // behind: the notes made while the caller walks the batch land here.
+        let mut keys = std::mem::replace(&mut self.keys, std::mem::take(&mut self.spare));
+        self.keys.clear();
         keys.sort_unstable();
         keys.dedup();
         keys
     }
 
+    /// A buffer for a walk's `kept` list, reusing the log's spare capacity.
+    /// Hand it back through [`extend`](Self::extend).
+    pub(crate) fn take_spare(&mut self) -> Vec<K> {
+        let mut buf = std::mem::take(&mut self.spare);
+        buf.clear();
+        buf
+    }
+
+    /// Keep the larger of the two drained buffers for the next cycle.
+    fn stash_spare(&mut self, mut buf: Vec<K>) {
+        buf.clear();
+        if buf.capacity() > self.spare.capacity() {
+            self.spare = buf;
+        }
+    }
+
     /// Re-log the keys a walk found still relevant.
     pub(crate) fn extend(&mut self, kept: Vec<K>) {
         if self.keys.is_empty() {
-            self.keys = kept;
+            let drained = std::mem::replace(&mut self.keys, kept);
+            self.stash_spare(drained);
         } else {
-            self.keys.extend(kept);
+            self.keys.extend_from_slice(&kept);
+            self.stash_spare(kept);
         }
     }
 
@@ -117,6 +149,7 @@ impl<K: Copy + Ord> YoungLog<K> {
     #[cfg(test)]
     pub(crate) fn clear(&mut self) {
         self.keys.clear();
+        self.spare.clear();
     }
 
     /// Rule 2: the log must name every key in `relevant`. `relevant` is the

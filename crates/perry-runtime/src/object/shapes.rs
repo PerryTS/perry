@@ -2123,7 +2123,7 @@ fn scan_shape_table_young(
     }
     let mut logged = 0u64;
     let mut visited = 0u64;
-    let mut kept = Vec::new();
+    let mut kept = inner.young_keys.take_spare();
     loop {
         let batch = inner.young_keys.take_sorted();
         if batch.is_empty() {

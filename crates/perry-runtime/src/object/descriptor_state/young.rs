@@ -55,7 +55,7 @@ pub(super) fn scan_descriptor_roots_young(
     }
     let mut logged = 0u64;
     let mut visited = 0u64;
-    let mut kept = Vec::new();
+    let mut kept = st.descriptors.young_owners.borrow_mut().take_spare();
     loop {
         let batch = st.descriptors.young_owners.borrow_mut().take_sorted();
         if batch.is_empty() {
