@@ -79,6 +79,7 @@ pub(crate) use dynamic_props::{
     clear_closure_side_tables_for_dead_ptr, clone_closure_rebind_this,
     closure_dynamic_props_owner_moved, closure_dynamic_side_tables_nonempty,
     closure_set_via_function_prototype_descriptor, prune_dead_closure_side_table_owners,
+    prune_dead_closure_side_table_owners_young,
     visit_closure_dynamic_prop_value_slots_mut, visit_closure_static_prototype_slot_mut,
 };
 pub use dynamic_props::{

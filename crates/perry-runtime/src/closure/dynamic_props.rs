@@ -95,6 +95,38 @@ fn get_closure_props() -> &'static Mutex<PtrHashMap<usize, ClosureProps>> {
     CLOSURE_PROPS.get_or_init(|| Mutex::new(new_ptr_hash_map()))
 }
 
+crate::perry_thread_local! {
+    /// #9754: this thread's young-entry log for the three closure side tables
+    /// (`CLOSURE_PROPS`, `CLOSURE_STATIC_PROTOTYPES`, `CLOSURE_DELETED_KEYS`) —
+    /// the owners whose entry may hold a pointer a minor can act on, as key
+    /// or as value. Thread-local although the tables are process-global: an
+    /// entry's addresses belong to the inserting thread's heap, and only that
+    /// thread's minors can move or free them. See `gc/young_log.rs`.
+    static CLOSURE_YOUNG_OWNERS: std::cell::RefCell<crate::gc::young_log::YoungLog<usize>> =
+        const { std::cell::RefCell::new(crate::gc::young_log::YoungLog::new()) };
+}
+
+const CLOSURE_YOUNG_LOG_NAME: &str = "closure.dynamic_props";
+
+/// Rule 1 of `gc/young_log.rs`: log `owner` BEFORE the entry is published
+/// when the owner or the value being stored can matter to a minor.
+#[inline]
+fn note_young_closure_owner(owner: usize, value_bits: u64) {
+    if crate::gc::young_log::addr_is_minor_relevant(owner)
+        || crate::gc::young_log::bits_are_minor_relevant(value_bits)
+    {
+        CLOSURE_YOUNG_OWNERS.with(|log| log.borrow_mut().note(owner));
+    }
+}
+
+/// A re-keyed entry keeps whatever values it had, so the new owner is logged
+/// unconditionally; the next minor-scoped walk drops it if nothing in it is
+/// relevant any more.
+#[inline]
+fn note_young_closure_owner_rekeyed(new_owner: usize) {
+    CLOSURE_YOUNG_OWNERS.with(|log| log.borrow_mut().note(new_owner));
+}
+
 per_test_global! {
     /// #3655: keys deleted off a closure via `delete fn.name` etc.
     ///
@@ -123,6 +155,7 @@ pub fn closure_mark_key_deleted(ptr: usize, key: &str) {
     if ptr == 0 {
         return;
     }
+    note_young_closure_owner(ptr, 0);
     if let Ok(mut map) = get_closure_deleted_keys().lock() {
         map.entry(ptr).or_default().insert(key.to_string());
     }
@@ -177,6 +210,7 @@ pub fn closure_set_static_prototype(closure_ptr: usize, proto_bits: u64) {
         return;
     }
     let mut slot_addr = 0usize;
+    note_young_closure_owner(closure_ptr, proto_bits);
     if let Ok(mut map) = get_closure_prototypes().lock() {
         let slot = map.entry(closure_ptr).or_insert(0);
         *slot = proto_bits;
@@ -301,10 +335,29 @@ pub(crate) fn prune_dead_closure_side_table_owners(is_dead_closure: &dyn Fn(usiz
     }
 }
 
+/// [`prune_dead_closure_side_table_owners`] for a MINOR: only a young owner
+/// can be dead, and a young owner is always in the young log (it was noted
+/// at insert and is re-logged by every minor-scoped walk while it stays
+/// young), so the log is the complete candidate set (#9754).
+pub(crate) fn prune_dead_closure_side_table_owners_young(is_dead_closure: &dyn Fn(usize) -> bool) {
+    super::prune_dead_closure_box_capture_owners(is_dead_closure);
+    let candidates = CLOSURE_YOUNG_OWNERS.with(|log| log.borrow_mut().take_sorted());
+    let mut kept = Vec::with_capacity(candidates.len());
+    for owner in candidates {
+        if is_dead_closure(owner) {
+            clear_closure_side_tables_for_dead_ptr(owner);
+        } else {
+            kept.push(owner);
+        }
+    }
+    CLOSURE_YOUNG_OWNERS.with(|log| log.borrow_mut().extend(kept));
+}
+
 pub(crate) fn closure_dynamic_props_owner_moved(old_owner: usize, new_owner: usize) {
     if old_owner == 0 || new_owner == 0 || old_owner == new_owner {
         return;
     }
+    note_young_closure_owner_rekeyed(new_owner);
     if let Ok(mut props) = get_closure_props().lock() {
         if let Some(old_props) = props.remove(&old_owner) {
             merge_closure_prop_map(&mut props, new_owner, old_props);
@@ -396,21 +449,153 @@ pub(crate) fn visit_closure_static_prototype_slot_mut(
 /// transitive contents were reachable only via the side table (e.g.
 /// ajv's `validate.errors = [{ msg }]`) had its element objects freed
 /// behind the still-live array.
+///
+/// #9754: a minor-scoped pass (`visitor.young_scope()`) visits only the
+/// owners in `CLOSURE_YOUNG_OWNERS`; a full pass walks every owner and
+/// rebuilds the log. Both go through [`scan_closure_owner`], so the per-entry
+/// work is identical and only the candidate set differs.
 pub fn scan_closure_dynamic_props_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    let prop_owners = get_closure_props()
+    if visitor.young_scope() {
+        scan_closure_side_tables_young(visitor);
+        return;
+    }
+    let mut owners: Vec<usize> = Vec::new();
+    if let Ok(props) = get_closure_props().lock() {
+        owners.extend(props.keys().copied());
+    }
+    if let Ok(prototypes) = get_closure_prototypes().lock() {
+        owners.extend(prototypes.keys().copied());
+    }
+    if let Ok(deleted) = get_closure_deleted_keys().lock() {
+        owners.extend(deleted.keys().copied());
+    }
+    owners.sort_unstable();
+    owners.dedup();
+    let table_len = owners.len() as u64;
+    // A full walk is authoritative: rebuild the log from what it finds.
+    // Notes made by owner-move hooks while the walk runs land in the emptied
+    // log and are kept — they name entries this walk already visited under
+    // their old key, so the duplicate is harmless.
+    let _ = CLOSURE_YOUNG_OWNERS.with(|log| log.borrow_mut().take_sorted());
+    let mut kept = Vec::new();
+    for owner in owners {
+        let (new_owner, relevant) = scan_closure_owner(visitor, owner);
+        if relevant {
+            kept.push(new_owner);
+        }
+    }
+    let kept_len = kept.len() as u64;
+    CLOSURE_YOUNG_OWNERS.with(|log| log.borrow_mut().extend(kept));
+    crate::gc::young_log::note_walk(
+        CLOSURE_YOUNG_LOG_NAME,
+        crate::gc::young_log::YoungLogWalk {
+            partial: false,
+            logged: table_len,
+            visited: table_len,
+            kept: kept_len,
+            table_len,
+        },
+    );
+}
+
+/// The minor-scoped walk: only logged owners. Rounds repeat while visits
+/// trigger owner-move hooks that log new keys (`note_young_closure_owner_rekeyed`),
+/// which is also what closes the pre-#9754 gap where an entry re-keyed
+/// mid-walk was skipped by the mark pass and only rewritten later.
+fn scan_closure_side_tables_young(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    let table_len = {
+        let props = get_closure_props().lock().map(|m| m.len()).unwrap_or(0);
+        let prototypes = get_closure_prototypes().lock().map(|m| m.len()).unwrap_or(0);
+        let deleted = get_closure_deleted_keys().lock().map(|m| m.len()).unwrap_or(0);
+        (props + prototypes + deleted) as u64
+    };
+    #[cfg(debug_assertions)]
+    debug_assert_closure_young_log_complete();
+    let mut logged = 0u64;
+    let mut visited = 0u64;
+    let mut kept = Vec::new();
+    loop {
+        let batch = CLOSURE_YOUNG_OWNERS.with(|log| log.borrow_mut().take_sorted());
+        if batch.is_empty() {
+            break;
+        }
+        logged += batch.len() as u64;
+        for owner in batch {
+            visited += 1;
+            let (new_owner, relevant) = scan_closure_owner(visitor, owner);
+            if relevant {
+                kept.push(new_owner);
+            }
+        }
+    }
+    let kept_len = kept.len() as u64;
+    CLOSURE_YOUNG_OWNERS.with(|log| log.borrow_mut().extend(kept));
+    crate::gc::young_log::note_walk(
+        CLOSURE_YOUNG_LOG_NAME,
+        crate::gc::young_log::YoungLogWalk {
+            partial: true,
+            logged,
+            visited,
+            kept: kept_len,
+            table_len,
+        },
+    );
+}
+
+/// Rule 2 of `gc/young_log.rs`: re-derive the relevant owners from the three
+/// tables and require the log to name each one.
+#[cfg(debug_assertions)]
+fn debug_assert_closure_young_log_complete() {
+    use crate::gc::young_log::{addr_is_minor_relevant, bits_are_minor_relevant};
+    let mut relevant = Vec::new();
+    if let Ok(props) = get_closure_props().lock() {
+        for (&owner, entry) in props.iter() {
+            if addr_is_minor_relevant(owner)
+                || entry
+                    .values
+                    .values()
+                    .any(|value| bits_are_minor_relevant(value.to_bits()))
+            {
+                relevant.push(owner);
+            }
+        }
+    }
+    if let Ok(prototypes) = get_closure_prototypes().lock() {
+        for (&owner, &proto_bits) in prototypes.iter() {
+            if addr_is_minor_relevant(owner) || bits_are_minor_relevant(proto_bits) {
+                relevant.push(owner);
+            }
+        }
+    }
+    if let Ok(deleted) = get_closure_deleted_keys().lock() {
+        for &owner in deleted.keys() {
+            if addr_is_minor_relevant(owner) {
+                relevant.push(owner);
+            }
+        }
+    }
+    CLOSURE_YOUNG_OWNERS.with(|log| {
+        log.borrow()
+            .debug_assert_logged(CLOSURE_YOUNG_LOG_NAME, &relevant)
+    });
+}
+
+/// Visit one owner's entries in all three tables — the per-entry body both
+/// walks share. Returns the owner's post-visit key and whether the entry can
+/// still matter to a minor (its key or any value is not old).
+fn scan_closure_owner(
+    visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
+    owner: usize,
+) -> (usize, bool) {
+    use crate::gc::young_log::{addr_is_minor_relevant, bits_are_minor_relevant};
+    let mut relevant = false;
+    let mut current_owner = owner;
+
+    if let Some(mut closure_props) = get_closure_props()
         .lock()
         .ok()
-        .map(|props| props.keys().copied().collect::<Vec<_>>())
-        .unwrap_or_default();
-    for owner in prop_owners {
-        let Some(mut closure_props) = get_closure_props()
-            .lock()
-            .ok()
-            .and_then(|mut props| props.remove(&owner))
-        else {
-            continue;
-        };
-
+        .and_then(|mut props| props.remove(&owner))
+    {
         // Metadata key rewrite. Only fires in rewrite-phase modes; mark phases
         // return `false` here without recording the key as a root (so the
         // side-table entry doesn't itself keep the closure alive).
@@ -422,58 +607,52 @@ pub fn scan_closure_dynamic_props_roots_mut(visitor: &mut crate::gc::RuntimeRoot
         // value was forwarded.
         for value in closure_props.values.values_mut() {
             visitor.visit_nanbox_f64_slot(value);
+            relevant |= bits_are_minor_relevant(value.to_bits());
         }
         if new_owner == owner {
             new_owner = forwarded_heap_owner(owner).unwrap_or(owner);
         }
-
+        current_owner = new_owner;
         if let Ok(mut props) = get_closure_props().lock() {
             merge_closure_prop_map(&mut props, new_owner, closure_props);
         }
     }
 
-    let prototype_owners = get_closure_prototypes()
+    if let Some(mut proto_bits) = get_closure_prototypes()
         .lock()
         .ok()
-        .map(|prototypes| prototypes.keys().copied().collect::<Vec<_>>())
-        .unwrap_or_default();
-    for owner in prototype_owners {
-        let Some(mut proto_bits) = get_closure_prototypes()
-            .lock()
-            .ok()
-            .and_then(|mut prototypes| prototypes.remove(&owner))
-        else {
-            continue;
-        };
-
+        .and_then(|mut prototypes| prototypes.remove(&owner))
+    {
         let mut new_owner = owner;
         visitor.visit_metadata_usize_slot(&mut new_owner);
         visitor.visit_nanbox_u64_slot(&mut proto_bits);
+        relevant |= bits_are_minor_relevant(proto_bits);
         if new_owner == owner {
             new_owner = forwarded_heap_owner(owner).unwrap_or(owner);
         }
-
+        current_owner = new_owner;
         if let Ok(mut prototypes) = get_closure_prototypes().lock() {
             prototypes.insert(new_owner, proto_bits);
         }
     }
+
     // #3655: re-key the deleted-keys side table when a closure moves. The
     // entries are pure metadata (string keys, no JS references), so the
     // metadata-key visitor only records a re-key; nothing to trace.
-    let mut moved_deleted = Vec::new();
     if let Ok(mut deleted) = get_closure_deleted_keys().lock() {
-        for owner in deleted.keys().copied().collect::<Vec<_>>() {
+        if deleted.contains_key(&owner) {
             let mut new_owner = owner;
-            if visitor.visit_metadata_usize_slot(&mut new_owner) {
-                moved_deleted.push((owner, new_owner));
-            }
-        }
-        for (old_owner, new_owner) in moved_deleted {
-            if let Some(keys) = deleted.remove(&old_owner) {
-                deleted.entry(new_owner).or_default().extend(keys);
+            if visitor.visit_metadata_usize_slot(&mut new_owner) && new_owner != owner {
+                if let Some(keys) = deleted.remove(&owner) {
+                    deleted.entry(new_owner).or_default().extend(keys);
+                }
+                current_owner = new_owner;
             }
         }
     }
+
+    relevant |= addr_is_minor_relevant(current_owner);
+    (current_owner, relevant)
 }
 
 /// Check if a raw pointer points to a ClosureHeader by checking CLOSURE_MAGIC at offset 12.
@@ -852,6 +1031,7 @@ pub(crate) fn closure_set_via_function_prototype_descriptor(
 
 /// Set a dynamic property on a closure.
 pub fn closure_set_dynamic_prop(ptr: usize, prop: &str, value: f64) {
+    note_young_closure_owner(ptr, value.to_bits());
     if let Ok(mut props) = get_closure_props().lock() {
         let closure_props = props.entry(ptr).or_default();
         closure_props.insert(prop.to_string(), value);
@@ -890,6 +1070,7 @@ pub fn closure_delete_own_dynamic_prop(ptr: usize, prop: &str) -> bool {
 
 #[cfg(test)]
 pub(crate) fn test_clear_closure_side_tables() {
+    CLOSURE_YOUNG_OWNERS.with(|log| log.borrow_mut().clear());
     if let Ok(mut props) = get_closure_props().lock() {
         props.clear();
     }

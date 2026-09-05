@@ -132,6 +132,7 @@ pub(super) fn report_and_reset(cycle_label: &str) {
     if !scanner_profile_enabled() {
         return;
     }
+    super::young_log::report_and_reset(cycle_label);
     let mut rows = SCANNER_PROFILE.with(|rows| std::mem::take(&mut *rows.borrow_mut()));
     if rows.is_empty() {
         return;

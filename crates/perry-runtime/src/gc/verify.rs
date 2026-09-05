@@ -212,8 +212,28 @@ pub(super) unsafe fn remember_evacuated_old_copy_young_slots(
 /// construction. Pages whose every slot now points old (the common case
 /// after evacuation rewrites) are still dropped, so the remembered set keeps
 /// shrinking as before.
-pub(super) fn restore_surviving_dirty_coverage(snapshot: &RememberedDirtySnapshot) {
+///
+/// #9754: `covered` names the objects the cycle's own dirty scan visited
+/// COMPLETELY (every pointer slot on a dirty page and inside the body —
+/// `scan_dirty_object_slots`). For those, `visit_slot_with_parent` already
+/// re-remembered every slot whose post-visit child still needs tracking with
+/// the same predicate this walk applies, so re-walking them can only re-insert
+/// pages the sticky restore just inserted. They are skipped; the walk is then
+/// proportional to the objects the dirty scan could NOT fully cover
+/// (multi-page arrays, owners of out-of-body buffers) instead of to every slot
+/// on every dirty page. Under `debug_assertions` the skipped objects are
+/// walked anyway and any page the walk would have ADDED is a panic — the
+/// machine check of the equivalence argument above.
+pub(super) fn restore_surviving_dirty_coverage(
+    snapshot: &RememberedDirtySnapshot,
+    covered: &crate::fast_hash::PtrHashSet<usize>,
+    cycle_label: &str,
+) {
     let mut sticky = StickyRememberedSet::default();
+    let mut walked = 0usize;
+    let mut skipped = 0usize;
+    #[cfg(debug_assertions)]
+    let mut skipped_sticky = StickyRememberedSet::default();
     // Mirror scan_remembered_dirty_slots_copying's scan_header guards: the
     // external dirty entries can carry headers the harness seeded
     // synthetically, and a dead entry may point at reclaimed memory — never
@@ -249,6 +269,13 @@ pub(super) fn restore_surviving_dirty_coverage(snapshot: &RememberedDirtySnapsho
     };
     if !snapshot.dirty_old_pages.is_empty() {
         crate::arena::old_arena_walk_objects_on_pages(&snapshot.dirty_old_pages, |hp| {
+            if covered.contains(&(hp as usize)) {
+                skipped += 1;
+                #[cfg(debug_assertions)]
+                debug_visit_covered_parent(hp as *mut GcHeader, &mut skipped_sticky);
+                return;
+            }
+            walked += 1;
             visit_parent(hp as *mut GcHeader);
         });
     }
@@ -257,6 +284,13 @@ pub(super) fn restore_surviving_dirty_coverage(snapshot: &RememberedDirtySnapsho
         if !seen_external.insert(header_addr) {
             continue;
         }
+        if covered.contains(&header_addr) {
+            skipped += 1;
+            #[cfg(debug_assertions)]
+            debug_visit_covered_parent(header_addr as *mut GcHeader, &mut skipped_sticky);
+            continue;
+        }
+        walked += 1;
         // External entries may be stale (or, in the GC unit tests,
         // synthetic). Establish that the address is dereference-safe
         // WITHOUT touching it: old/longlived arena pages are always
@@ -275,7 +309,60 @@ pub(super) fn restore_surviving_dirty_coverage(snapshot: &RememberedDirtySnapsho
             visit_parent(header_addr as *mut GcHeader);
         }
     }
-    sticky.restore();
+    let added = sticky.restore_counted();
+    #[cfg(debug_assertions)]
+    {
+        let would_add = skipped_sticky.count_not_yet_dirty();
+        assert_eq!(
+            would_add, 0,
+            "restore_surviving_dirty_coverage: {would_add} page(s) of {skipped} \
+             dirty-scan-covered object(s) are not remembered — the dirty scan's \
+             per-slot re-remembering disagrees with the coverage walk for an \
+             object `scan_dirty_object_slots` reported complete"
+        );
+    }
+    if crate::gc::gc_diag_enabled() {
+        eprintln!(
+            "[gc-restore-coverage] {cycle_label} dirty_pages={} objects_walked={walked} objects_skipped={skipped} pages_added={added}",
+            snapshot.dirty_pages.len()
+        );
+    }
+}
+
+/// Debug twin of the restore's `visit_parent` for a skipped object: re-derive
+/// what the full walk would have remembered so the caller can assert it adds
+/// nothing beyond what the dirty scan already restored.
+#[cfg(debug_assertions)]
+fn debug_visit_covered_parent(header: *mut GcHeader, sticky: &mut StickyRememberedSet) {
+    unsafe {
+        if header.is_null() {
+            return;
+        }
+        let arena_parent = plausible_gc_header(header, true);
+        let malloc_parent = !arena_parent && plausible_gc_header(header, false);
+        if !arena_parent && !malloc_parent {
+            return;
+        }
+        if (*header).gc_flags & GC_FLAG_FORWARDED != 0 {
+            return;
+        }
+        let user = (header as *mut u8).add(GC_HEADER_SIZE) as usize;
+        if arena_parent
+            && !matches!(
+                crate::arena::classify_heap_generation(user),
+                crate::arena::HeapGeneration::Old
+            )
+        {
+            return;
+        }
+        visit_gc_rewrite_slots(header, |slot| {
+            if crate::weakref::is_weak_target_trace_slot(header, slot.slot) {
+                return;
+            }
+            slot.record_layout_read();
+            remember_evacuated_old_to_young_slot(sticky, header, slot.slot);
+        });
+    }
 }
 
 pub(super) fn rebuild_evacuated_old_to_young_remembered_set(

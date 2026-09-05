@@ -333,6 +333,7 @@ impl MutableRegisteredRootScanState {
         mut root_sources: Option<&mut RootSourcesTraceStats>,
         budget: usize,
         allow_synchronous_scanners: bool,
+        minor_only: bool,
     ) -> bool {
         if !self.recorded_counts {
             if let Some(sources) = &mut root_sources {
@@ -358,7 +359,9 @@ impl MutableRegisteredRootScanState {
         }
 
         let mut remaining = budget;
-        let mut visitor = RuntimeRootVisitor::for_mark(valid_ptrs);
+        // #9754: a minor-only trace is a young-scoped visit for the logged
+        // side tables (`gc/young_log.rs`); a full trace walks everything.
+        let mut visitor = RuntimeRootVisitor::for_mark_scoped(valid_ptrs, minor_only);
         while self.scanner_cursor < self.scanners.len() {
             if remaining == 0 {
                 return false;
@@ -648,8 +651,15 @@ impl RootScanCycleState {
                         Some(&mut trace.root_sources),
                         budget,
                         allow_synchronous_scanners,
+                        self.minor_only,
                     ),
-                    None => state.step(valid_ptrs, None, budget, allow_synchronous_scanners),
+                    None => state.step(
+                        valid_ptrs,
+                        None,
+                        budget,
+                        allow_synchronous_scanners,
+                        self.minor_only,
+                    ),
                 };
                 if done {
                     self.subphase = RootScanSubphase::LegacyRegisteredScanners;
@@ -1805,7 +1815,15 @@ impl GcCycleState {
                             sticky.restore();
                         }
                         if let Some(snapshot) = self.pre_clear_dirty_snapshot.take() {
-                            restore_surviving_dirty_coverage(&snapshot);
+                            // No coverage set: a budgeted cycle interleaves
+                            // with the mutator, and a store into an already
+                            // dirty page leaves no trace, so nothing scanned
+                            // earlier can be declared covered here.
+                            restore_surviving_dirty_coverage(
+                                &snapshot,
+                                &crate::fast_hash::new_ptr_hash_set(),
+                                "budgeted_cycle",
+                            );
                         }
                         let reclaim_state =
                             self.reclaim_state.as_mut().expect("reclaim state exists");
@@ -1914,6 +1932,13 @@ impl GcCycleState {
                 ReclaimSubphase::Publish => {
                     let reclaim_start = trace_phase_start(&self.trace);
                     self.publish_reclaim_outcome();
+                    // #9754: per-table young-log rows for this cycle's root
+                    // scans (initial + final remark), labelled by cycle kind.
+                    super::young_log::report_and_reset(if self.minor.is_some() {
+                        "budgeted_minor"
+                    } else {
+                        "budgeted_full"
+                    });
                     trace_phase_record(&mut self.trace, "reclaim", reclaim_start);
                     self.reclaim_state
                         .as_mut()

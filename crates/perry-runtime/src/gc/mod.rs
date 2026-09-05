@@ -162,6 +162,10 @@ mod copying_pointer_set;
 mod forwarding;
 /// Per-scanner root attribution for the copied-minor root scan (#7915).
 mod scanner_profile;
+/// #9754: per-side-table young-entry logs (remembered sets for the runtime
+/// side tables), so a minor-scoped root scan visits only the entries that
+/// can hold a pointer a minor acts on.
+pub(crate) mod young_log;
 mod sticky_remembered;
 use copying::*;
 use copying_first_cycle::*;

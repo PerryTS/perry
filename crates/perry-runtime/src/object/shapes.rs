@@ -256,11 +256,29 @@ struct ShapeTableInner {
     ///
     /// Single-word key, so `PtrHasher` (#8125).
     families: crate::fast_hash::PtrHashMap<u64, IdList>,
+    /// #9754: keys-array addresses a minor can act on — the families and
+    /// slot indices whose keys array is not (yet) old. A minor-scoped
+    /// `scan_shape_table_rekey_mut` visits only these; see `gc/young_log.rs`.
+    young_keys: crate::gc::young_log::YoungLog<u64>,
 }
 
+const SHAPE_YOUNG_LOG_NAME: &str = "shapes.families+indices";
+
 impl ShapeTableInner {
+    /// Rule 1 of `gc/young_log.rs`: log a keys address BEFORE a family or a
+    /// slot index is published under it, when the keys array is not old.
+    /// Every family insert funnels through `family_push_back` /
+    /// `family_push_front`; the slot-index inserts call this themselves.
+    #[inline]
+    fn note_young_keys(&mut self, keys: u64) {
+        if crate::gc::young_log::addr_is_minor_relevant(keys as usize) {
+            self.young_keys.note(keys);
+        }
+    }
+
     #[inline]
     fn family_push_back(&mut self, keys: u64, id: u32) {
+        self.note_young_keys(keys);
         self.families.entry(keys).or_default().push_back(id);
     }
 
@@ -275,6 +293,7 @@ impl ShapeTableInner {
 
     #[inline]
     fn family_push_front(&mut self, keys: u64, id: u32) {
+        self.note_young_keys(keys);
         self.families.entry(keys).or_default().push_front(id);
     }
 
@@ -340,6 +359,7 @@ impl ShapeTable {
                 indices: crate::fast_hash::new_ptr_hash_map(),
                 by_facts: crate::fast_hash::new_ptr_hash_map(),
                 families: crate::fast_hash::new_ptr_hash_map(),
+                young_keys: crate::gc::young_log::YoungLog::new(),
             }),
         }
     }
@@ -1674,6 +1694,7 @@ pub(crate) unsafe fn shape_slot_lookup_verdict(
             if !build {
                 return KeysIndexVerdict::Unindexed;
             }
+            inner.note_young_keys(keys_id as u64);
             inner.indices.entry(keys_id).or_insert(ShapeIndex {
                 indexed_len: 0,
                 slots: crate::fast_hash::new_ptr_hash_map(),
@@ -1767,6 +1788,7 @@ pub(crate) fn shape_keys_grown(old_keys: usize, new_keys: *const ArrayHeader) {
     }
     let mut inner = crate::state::state().shapes.inner.borrow_mut();
     if let Some(shape) = inner.indices.remove(&old_keys) {
+        inner.note_young_keys(new_id as u64);
         inner.indices.insert(new_id, shape);
     }
 }
@@ -1860,6 +1882,34 @@ pub(crate) fn prune_dead_shape_keys(is_dead_owner: &dyn Fn(usize) -> bool) {
     }
 }
 
+/// [`prune_dead_shape_keys`] for a MINOR (#9754): only a young keys array can
+/// die, and a young keys address is always in the young log (noted at
+/// insert, re-logged by every minor-scoped walk while it stays young), so the
+/// log is the complete candidate set.
+pub(crate) fn prune_dead_shape_keys_young(is_dead_owner: &dyn Fn(usize) -> bool) {
+    let table = &crate::state::state().shapes;
+    let mut inner = table.inner.borrow_mut();
+    let candidates = inner.young_keys.take_sorted();
+    let mut kept = Vec::with_capacity(candidates.len());
+    for keys in candidates {
+        let addr = keys as usize;
+        if !is_dead_owner(addr) && !shape_keys_address_is_recycled(addr) {
+            kept.push(keys);
+            continue;
+        }
+        inner.indices.remove(&addr);
+        let ids: Vec<u32> = inner
+            .families
+            .get(&keys)
+            .map(|ids| ids.as_slice().to_vec())
+            .unwrap_or_default();
+        for id in ids {
+            remove_descriptor_indexed_under(&mut inner, id, keys);
+        }
+    }
+    inner.young_keys.extend(kept);
+}
+
 /// Metadata-only forwarding repair for the weak descriptor table and
 /// pointer-keyed slot indices. Mark/copy mode does not root anything; live
 /// object scans provide descriptor reachability, and post-copy rewrite follows
@@ -1877,6 +1927,13 @@ pub(crate) fn scan_shape_table_rekey_mut(visitor: &mut crate::gc::RuntimeRootVis
     let table = &crate::state::state().shapes;
     let mut inner = table.inner.borrow_mut();
     let rewrite_phase = visitor.is_metadata_rewrite_phase();
+    // #9754: a minor-scoped pass visits only the young-logged keys addresses;
+    // the full walk below rebuilds the log from what it finds.
+    if visitor.young_scope() {
+        scan_shape_table_young(visitor, table, &mut inner, rewrite_phase);
+        return;
+    }
+    let table_len = (inner.families.len() + inner.indices.len()) as u64;
     let mut moved_families: Vec<(u64, u64)> = Vec::new();
     let mut dead_descriptor_ids: Vec<(u32, u64)> = Vec::new();
     // The shared slab view is scoped to the probe loop: retirement below
@@ -1947,59 +2004,240 @@ pub(crate) fn scan_shape_table_rekey_mut(visitor: &mut crate::gc::RuntimeRootVis
         remove_descriptor_indexed_under(&mut inner, id, indexed);
     }
     for (old, new) in moved_families {
-        let Some(ids) = inner.families.remove(&old) else {
-            continue;
-        };
-        if new == 0 {
-            continue;
-        }
-        for &id in ids.as_slice() {
-            let Some(record) = table.slab().get(id) else {
-                continue;
-            };
-            // The accelerator was keyed with the OLD address; the other five
-            // facts never change under the collector.
-            if record.has(RECORD_FLAG_FACTS_INDEXED) {
-                inner.facts_remove(record.facts_key_with_keys(old), id);
-                inner.facts_push_back(record.facts_key_with_keys(new), id);
+        move_shape_family(table, &mut inner, old, new);
+    }
+
+    if rewrite_phase && !inner.indices.is_empty() {
+        let moved: Vec<(usize, usize)> = inner
+            .indices
+            .keys()
+            .filter_map(|&keys_id| {
+                let mut addr = keys_id;
+                visitor.visit_metadata_usize_slot(&mut addr);
+                (addr != keys_id).then_some((keys_id, addr))
+            })
+            .collect();
+        for (old, new) in moved {
+            if let Some(shape) = inner.indices.remove(&old) {
+                inner.indices.insert(new, shape);
             }
-            inner.family_push_back(new, id);
+        }
+        // Drop indices entries whose keys-array address was recycled: the
+        // forwarding record at the old address points to a DIFFERENT object
+        // (not a keys array), so `visit_metadata_usize_slot` either rekeyed
+        // it to the wrong address (caught above by the type mismatch on the
+        // new address) or returned false because the forwarding walk could
+        // not classify the address. Either way the keys array is dead; remove
+        // the stale entry so property lookups don't resolve the wrong shape.
+        let recycled: Vec<usize> = inner
+            .indices
+            .keys()
+            .filter(|&&keys_id| shape_keys_address_is_recycled(keys_id))
+            .copied()
+            .collect();
+        for old in recycled {
+            inner.indices.remove(&old);
         }
     }
 
-    if !rewrite_phase || inner.indices.is_empty() {
+    // A full walk is authoritative: rebuild the young log from the tables.
+    let kept = relevant_shape_keys(&inner);
+    let kept_len = kept.len() as u64;
+    let _ = inner.young_keys.take_sorted();
+    inner.young_keys.extend(kept);
+    crate::gc::young_log::note_walk(
+        SHAPE_YOUNG_LOG_NAME,
+        crate::gc::young_log::YoungLogWalk {
+            partial: false,
+            logged: table_len,
+            visited: table_len,
+            kept: kept_len,
+            table_len,
+        },
+    );
+}
+
+/// Re-index a family that the collector moved from `old` to `new` (`new ==
+/// 0`: every member retired, drop it).
+fn move_shape_family(table: &ShapeTable, inner: &mut ShapeTableInner, old: u64, new: u64) {
+    let Some(ids) = inner.families.remove(&old) else {
+        return;
+    };
+    if new == 0 {
         return;
     }
-    let moved: Vec<(usize, usize)> = inner
-        .indices
+    for &id in ids.as_slice() {
+        let Some(record) = table.slab().get(id) else {
+            continue;
+        };
+        // The accelerator was keyed with the OLD address; the other five
+        // facts never change under the collector.
+        if record.has(RECORD_FLAG_FACTS_INDEXED) {
+            inner.facts_remove(record.facts_key_with_keys(old), id);
+            inner.facts_push_back(record.facts_key_with_keys(new), id);
+        }
+        inner.family_push_back(new, id);
+    }
+}
+
+/// Every keys address a minor can act on, re-derived from the authoritative
+/// tables (families and slot indices whose keys array is not old).
+fn relevant_shape_keys(inner: &ShapeTableInner) -> Vec<u64> {
+    use crate::gc::young_log::addr_is_minor_relevant;
+    let mut relevant: Vec<u64> = inner
+        .families
         .keys()
-        .filter_map(|&keys_id| {
-            let mut addr = keys_id;
-            visitor.visit_metadata_usize_slot(&mut addr);
-            (addr != keys_id).then_some((keys_id, addr))
-        })
+        .copied()
+        .filter(|&keys| keys != 0 && addr_is_minor_relevant(keys as usize))
         .collect();
-    for (old, new) in moved {
-        if let Some(shape) = inner.indices.remove(&old) {
-            inner.indices.insert(new, shape);
+    relevant.extend(
+        inner
+            .indices
+            .keys()
+            .copied()
+            .filter(|&keys| addr_is_minor_relevant(keys))
+            .map(|keys| keys as u64),
+    );
+    relevant.sort_unstable();
+    relevant.dedup();
+    relevant
+}
+
+/// The minor-scoped walk (#9754): only the young-logged keys addresses, each
+/// visited exactly as the full walk visits it — the family's carrier gate,
+/// the record rewrite, the recycled-address retirement, the slot-index
+/// re-key — and re-logged iff the keys array is still not old afterwards.
+fn scan_shape_table_young(
+    visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
+    table: &ShapeTable,
+    inner: &mut ShapeTableInner,
+    rewrite_phase: bool,
+) {
+    let table_len = (inner.families.len() + inner.indices.len()) as u64;
+    #[cfg(debug_assertions)]
+    {
+        let relevant = relevant_shape_keys(inner);
+        inner
+            .young_keys
+            .debug_assert_logged(SHAPE_YOUNG_LOG_NAME, &relevant);
+    }
+    let mut logged = 0u64;
+    let mut visited = 0u64;
+    let mut kept = Vec::new();
+    loop {
+        let batch = inner.young_keys.take_sorted();
+        if batch.is_empty() {
+            break;
+        }
+        logged += batch.len() as u64;
+        for keys in batch {
+            if keys == 0 {
+                continue;
+            }
+            visited += 1;
+            let (post, relevant) = scan_shape_keys_address(visitor, table, inner, rewrite_phase, keys);
+            if relevant {
+                kept.push(post);
+            }
+            // The family moves in the MARK pass (a carrier's `visit_usize_slot`
+            // copies the keys array) while the slot index is re-keyed only in
+            // the REWRITE pass, so between the two the index still sits under
+            // the from-space address: keep that key logged as well.
+            if post != keys && inner.indices.contains_key(&(keys as usize)) {
+                kept.push(keys);
+            }
         }
     }
-    // Drop indices entries whose keys-array address was recycled: the
-    // forwarding record at the old address points to a DIFFERENT object
-    // (not a keys array), so `visit_metadata_usize_slot` either rekeyed
-    // it to the wrong address (caught above by the type mismatch on the
-    // new address) or returned false because the forwarding walk could
-    // not classify the address. Either way the keys array is dead; remove
-    // the stale entry so property lookups don't resolve the wrong shape.
-    let recycled: Vec<usize> = inner
-        .indices
-        .keys()
-        .filter(|&&keys_id| shape_keys_address_is_recycled(keys_id))
-        .copied()
-        .collect();
-    for old in recycled {
-        inner.indices.remove(&old);
+    let kept_len = kept.len() as u64;
+    inner.young_keys.extend(kept);
+    crate::gc::young_log::note_walk(
+        SHAPE_YOUNG_LOG_NAME,
+        crate::gc::young_log::YoungLogWalk {
+            partial: true,
+            logged,
+            visited,
+            kept: kept_len,
+            table_len,
+        },
+    );
+}
+
+/// Visit one keys address — its family and its slot index — with the same
+/// per-entry body as the full walk. Returns the post-visit address and
+/// whether the keys array can still matter to a minor.
+fn scan_shape_keys_address(
+    visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
+    table: &ShapeTable,
+    inner: &mut ShapeTableInner,
+    rewrite_phase: bool,
+    indexed: u64,
+) -> (u64, bool) {
+    let mut post = indexed;
+    let ids: Vec<u32> = inner
+        .families
+        .get(&indexed)
+        .map(|ids| ids.as_slice().to_vec())
+        .unwrap_or_default();
+    if !ids.is_empty() {
+        let slab = table.slab();
+        let mut descriptor: Option<ShapeDescriptor> = None;
+        for &id in &ids {
+            if let Some(lifted) = slab.lift(id) {
+                if lifted.old_carrier || lifted.cache_carrier {
+                    descriptor = Some(lifted);
+                    break;
+                }
+                descriptor.get_or_insert(lifted);
+            }
+        }
+        match descriptor {
+            None => {
+                // Every id retired under a stale address; the family is empty.
+                move_shape_family(table, inner, indexed, 0);
+            }
+            Some(descriptor) => {
+                let mut addr = indexed as usize;
+                let moved = if descriptor.old_carrier || descriptor.cache_carrier {
+                    visitor.visit_usize_slot(&mut addr)
+                } else {
+                    visitor.visit_metadata_usize_slot(&mut addr)
+                };
+                if rewrite_phase && shape_keys_address_is_recycled(addr) {
+                    for id in ids {
+                        remove_descriptor_indexed_under(inner, id, indexed);
+                    }
+                } else {
+                    if moved {
+                        for &id in &ids {
+                            if let Some(record) = slab.record_ptr(id) {
+                                // SAFETY: live slab record, single-threaded agent;
+                                // the store is idempotent (see the full walk).
+                                unsafe { (*record).keys = addr as u64 };
+                            }
+                        }
+                    }
+                    if addr as u64 != indexed {
+                        move_shape_family(table, inner, indexed, addr as u64);
+                        post = addr as u64;
+                    }
+                }
+            }
+        }
     }
+    if rewrite_phase && inner.indices.contains_key(&(indexed as usize)) {
+        let mut addr = indexed as usize;
+        visitor.visit_metadata_usize_slot(&mut addr);
+        if addr != indexed as usize {
+            if let Some(shape) = inner.indices.remove(&(indexed as usize)) {
+                inner.indices.insert(addr, shape);
+            }
+            post = addr as u64;
+        }
+        if shape_keys_address_is_recycled(addr) {
+            inner.indices.remove(&addr);
+        }
+    }
+    (post, crate::gc::young_log::addr_is_minor_relevant(post as usize))
 }
 
 // #8112 sabotage switch. Suppressing the descriptor edge proves the fixture's
