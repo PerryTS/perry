@@ -428,6 +428,8 @@ pub(crate) const API_MANIFEST_PART_1: &[ApiEntry] = &[
     // #1113 — `wss.handleUpgrade(req, socket, head, cb)` for a
     // `new WebSocketServer({ noServer: true })`.
     method("ws", "handleUpgrade", true, None),
+    method("ws", "address", true, None),
+    method("ws", "emit", true, None),
     // Issue #577 Phase 4 — Client-class methods for the upgrade-path wsId.
     method("ws", "on", true, Some("Client")),
     method("ws", "addListener", true, Some("Client")),

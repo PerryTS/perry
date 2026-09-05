@@ -64,3 +64,9 @@ pub extern "C" fn perry_ffi_spawn_blocking_with_reactor(
 // host stdlib archive, which unit-test binaries do not link.
 #[no_mangle]
 pub extern "C" fn perry_ffi_spawn_async(_ctx: *mut c_void) {}
+
+// Linking the ws dispatch extension also retains its synchronous polling
+// helper. These unit tests use the no-op task shim above; real networking is
+// exercised by the compiled HTTP/WebSocket integration tests.
+#[no_mangle]
+pub extern "C" fn perry_ffi_run_pending(_budget_ms: u64) {}

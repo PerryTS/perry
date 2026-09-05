@@ -130,6 +130,8 @@ pub(crate) fn declare_web(module: &mut LlModule) {
     module.declare_function("js_ws_on_client_i64", I64, &[I64, I64, I64]);
     module.declare_function("js_ws_server_close", VOID, &[I64]);
     module.declare_function("js_ws_server_clients", DOUBLE, &[I64]);
+    module.declare_function("js_ws_server_address", DOUBLE, &[I64]);
+    module.declare_function("js_ws_server_emit", I32, &[I64, I64, DOUBLE, DOUBLE]);
     module.declare_function("js_ws_server_new", I64, &[DOUBLE]);
     // #1113 — `wss.handleUpgrade(req, socket, head, cb)`. Receiver
     // (the noServer WsServerHandle) is passed as I64 (post-unbox_to_i64
@@ -138,7 +140,7 @@ pub(crate) fn declare_web(module: &mut LlModule) {
     // cb is the unboxed closure pointer (I64).
     module.declare_function(
         "js_ws_handle_upgrade",
-        I64,
+        VOID,
         &[I64, DOUBLE, DOUBLE, DOUBLE, I64],
     );
     module.declare_function("js_ws_wait_for_message", I64, &[I64, DOUBLE]);

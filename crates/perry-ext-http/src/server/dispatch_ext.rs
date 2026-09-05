@@ -68,6 +68,7 @@ extern "C" {
 pub(crate) fn ensure_dispatch_extensions_registered() {
     static REGISTER: Once = Once::new();
     REGISTER.call_once(|| unsafe {
+        perry_ext_ws::register_http_address_reader(crate::server::upgrade::attached_address);
         js_register_handle_method_dispatch_extension(http_server_method_dispatch_ext);
         js_register_handle_property_dispatch_extension(http_server_property_dispatch_ext);
         js_register_handle_property_set_dispatch_extension(http_server_property_set_dispatch_ext);

@@ -1220,7 +1220,9 @@ async fn handle_request(
         let has_upgrade_listeners = get_handle::<HttpServer>(server_handle)
             .map(|server| server_has_event_listener(server, "upgrade"))
             .unwrap_or(false);
-        if has_upgrade_listeners && req.headers().contains_key("sec-websocket-key") {
+        if (has_upgrade_listeners || perry_ext_ws::has_attached_server(server_handle))
+            && req.headers().contains_key("sec-websocket-key")
+        {
             return handle_websocket_upgrade(
                 server_handle,
                 peer,
@@ -1582,6 +1584,11 @@ pub extern "C" fn js_node_http_server_process_pending() -> i32 {
                     up.head,
                 );
             } else {
+                perry_ext_ws::accept_attached_connection(
+                    up.server_handle,
+                    handle_to_pointer_f64(up.request_handle),
+                    up.ws_id,
+                );
                 crate::server::upgrade::fire_upgrade_listeners(
                     up.server_handle,
                     up.request_handle,
