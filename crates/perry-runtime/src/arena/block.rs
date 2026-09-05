@@ -122,6 +122,29 @@ impl Drop for BlockPool {
     }
 }
 
+// ---------------------------------------------------------------------------
+// These three stay RAW, and not because nobody got to them: they are read from
+// inside `Arena::new`, which runs as `ARENA`'s lazy initializer — and `ARENA`
+// is the FIRST provider `tls_hot::fill` resolves. Routing them through the hot
+// cache closes a cycle that ends in a stack overflow at thread start:
+//
+//     HotKey::get -> hot() -> hot_uncached -> hot_via_tls
+//       -> (temp_roots still null) fill()
+//         -> arena_hot_addr() -> ARENA.with(..) -> Arena::new
+//           -> ARENA_TOTAL_BYTES / BLOCK_POOL{,_BYTES}.with(..)
+//             -> HotKey::get -> hot() -> ... (temp_roots STILL null) ...
+//
+// `fill` writes `temp_roots` last precisely so a re-entrant reader cannot see a
+// half-filled cache as ready — which makes the nesting re-run `fill`, and
+// re-run `ARENA`'s initializer, without bound. It bites on any thread where
+// the first `hot()` precedes the first arena touch, i.e. every freshly spawned
+// one, and it fails as a crash rather than as a slow path.
+//
+// The rule this is an instance of: a declaration read from the dynamic extent
+// of a `tls_hot::fill` provider cannot use `crate::perry_thread_local!`. Today
+// `ARENA` is the only provider whose initializer runs code, so this is the
+// whole set.
+// ---------------------------------------------------------------------------
 thread_local! {
     static BLOCK_POOL: RefCell<BlockPool> = const { RefCell::new(BlockPool {
         blocks: Vec::new(),
@@ -981,7 +1004,9 @@ thread_local! {
     /// alloc into a tombstone slot or the end, and release inside
     /// `arena_reset_empty_blocks`).
     pub(crate) static ARENA_TOTAL_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 
+crate::perry_thread_local! {
     /// Cached running sum of `block.offset` across the old-gen arena —
     /// the delta-maintained twin of `ARENA_TOTAL_BYTES` above, same
     /// rationale: `gc_budgeted_due_trigger()` reads the old-gen in-use
@@ -1007,8 +1032,18 @@ thread_local! {
     /// the OldReclaim trigger.
     pub(crate) static OLD_GEN_IN_USE_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 
+}
+
+// `ARENA` and `INLINE_STATE` below stay raw: they are NAMED `HotTls` fields
+// (`arena`, `inline_state`) whose addresses `tls_hot::fill` reads through the
+// providers further down, and a named field is one dependent load cheaper
+// than a claimed slot. Their neighbours in this block were never migrated.
+thread_local! {
     pub(crate) static ARENA: UnsafeCell<Arena> =
         UnsafeCell::new(Arena::new(HeapGeneration::Nursery, HeapSpace::NurseryEden));
+}
+
+crate::perry_thread_local! {
 
     /// Segregated long-lived arena (issue #179). Holds objects that are
     /// intentionally pinned for the lifetime of the program by explicit
@@ -1056,6 +1091,9 @@ thread_local! {
     pub(crate) static OLD_ARENA: UnsafeCell<Arena> =
         UnsafeCell::new(Arena::new_lazy(HeapGeneration::Old, HeapSpace::Old));
 
+}
+
+thread_local! {
     /// Inline allocator state — a cache of the current arena block's
     /// `(data, offset, size)` tuple, exposed via a stable pointer so
     /// codegen can emit inline bump-allocate IR without going through
@@ -1070,6 +1108,12 @@ thread_local! {
         offset: 0,
         size: 0,
     }) };
+}
+
+/// Hot-cache slot claimed by `OLD_GEN_IN_USE_BYTES`. See above.
+#[cfg(test)]
+pub(crate) fn old_gen_in_use_bytes_slot_index() -> u32 {
+    OLD_GEN_IN_USE_BYTES.slot_index()
 }
 
 // --- #7469 hot-TLS address providers. See `crate::tls_hot`. ---

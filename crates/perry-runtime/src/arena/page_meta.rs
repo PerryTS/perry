@@ -319,13 +319,20 @@ pub(crate) struct OldArenaSourceBlockSelection {
     pub(crate) pages: crate::fast_hash::PtrHashSet<usize>,
 }
 
+// `PAGE_GENERATIONS` and `PAGE_GENERATION_CACHE` stay raw because they are
+// NAMED fields of `HotTls` (`page_generations`, `page_generation_cache`), whose
+// providers below hand `tls_hot::fill` their addresses. A named field is one
+// dependent load cheaper than a claimed slot, which is why the closed set
+// exists; everything else in this file was simply never migrated.
 thread_local! {
     static PAGE_GENERATIONS: RefCell<PageGenerationMap> =
         RefCell::new(crate::fast_hash::new_ptr_hash_map());
 
     static PAGE_GENERATION_CACHE: UnsafeCell<PageGenerationCacheSet> =
         const { UnsafeCell::new(PageGenerationCacheSet::empty()) };
+}
 
+crate::perry_thread_local! {
     static OLD_GEN_PAGE_OBJECTS: RefCell<OldGenPageObjectMap> =
         RefCell::new(crate::fast_hash::new_ptr_hash_map());
 
@@ -1138,7 +1145,7 @@ pub(crate) fn register_old_object_pages(header_addr: usize, total_size: usize) {
 // which fails if a new toucher of either table appears without one.
 // ---------------------------------------------------------------------------
 
-thread_local! {
+crate::perry_thread_local! {
     /// Old-object page registrations not yet folded into `OLD_GEN_PAGE_OBJECTS`.
     /// Entries are `(header_addr, total_size)`; nothing here is dereferenced, so
     /// a deferred entry never keeps an object alive and is not a GC root — and

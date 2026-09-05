@@ -697,6 +697,10 @@ pub(super) unsafe fn scan_dirty_object_slots(
 // retained only as a test fallback for the previous object-level
 // HashSet behavior.
 
+// The three declarations below stay raw: they are NAMED `HotTls` fields
+// (`incremental_mark_valid_ptrs`, `birth_extra_flags`,
+// `incremental_mark_minor_only`), one dependent load cheaper than a claimed
+// slot. Everything after them was simply never migrated.
 thread_local! {
     /// Active incremental mark barrier state (Full AND budgeted Minor
     /// cycles — a Minor cycle sliced across mutator turns has exactly the
@@ -737,7 +741,9 @@ thread_local! {
     /// later. Old children need no shading in a minor anyway: minors never
     /// collect live old-gen objects.
     pub(super) static INCREMENTAL_MARK_BARRIER_MINOR_ONLY: Cell<bool> = const { Cell::new(false) };
+}
 
+crate::perry_thread_local! {
     /// Dirty old-generation pages that have received a YOUNG-gen
     /// pointer since the last collection. This is Perry's compact
     /// modbuf: barriers log bounded page regions, and minor GC scans
@@ -1761,7 +1767,7 @@ fn mark_dirty_old_page_uncached(page: usize) -> bool {
     inserted
 }
 
-thread_local! {
+crate::perry_thread_local! {
     /// PERRY_GC_VERIFY_EVACUATION diagnostic only: every old page EVER marked
     /// dirty over the process lifetime (never cleared). Lets the verifier's
     /// missing-edge report say whether the slot's page was recorded at some
