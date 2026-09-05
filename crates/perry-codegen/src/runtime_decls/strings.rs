@@ -1079,8 +1079,10 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // both inc() and get() in a returned object literal).
     module.declare_function("js_box_alloc_bits", I64, &[I64]);
     module.declare_function("js_box_get_bits", I64, &[I64]);
+    module.declare_function("js_box_get_bits_named", I64, &[I64, DOUBLE]);
     module.declare_function("js_box_set_bits", VOID, &[I64, I64]);
     module.declare_function("js_box_get_bits_trusted", I64, &[I64]);
+    module.declare_function("js_box_get_bits_trusted_named", I64, &[I64, DOUBLE]);
     module.declare_function("js_box_set_bits_trusted_no_barrier", VOID, &[I64, I64]);
     module.declare_function("js_box_alloc", I64, &[DOUBLE]);
     module.declare_function("js_box_get", DOUBLE, &[I64]);
