@@ -1772,9 +1772,12 @@ fn global_test_advances_and_resets_last_index() {
 /// the triple against the pattern text, that is not one bad header: every
 /// later construction of the same literal is born with it.
 ///
-/// The fix is that the three program caches clear as a group, so
-/// "`REGEX_CACHE` still has this pattern" implies the other two have not been
-/// cleared since it was compiled.
+/// The fix is that `lazy::build_and_install_programs` REPAIRS the header
+/// before publishing it and before memoizing the triple: a standard program
+/// that is the never-match placeholder with no fancy program beside it means
+/// the fancy program is missing, so it is rebuilt. (Clearing the three caches
+/// as a group was built first and dropped: it closes the route into the bad
+/// state but cannot repair a header already in it, so this test still failed.)
 #[test]
 fn a_single_program_cache_clear_cannot_disarm_a_lookbehind_literal() {
     let _lock = crate::gc::global_side_table_test_lock();
