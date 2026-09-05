@@ -1852,17 +1852,6 @@ pub(super) fn evacuate_selected_old_pages_collecting(
     // source blocks and evacuate the block all-or-nothing. Dead old objects
     // remain indexed until a full trace proves them dead, so conservatively
     // copying them here preserves the same minor-GC retention contract.
-    // Every hole on a page this pass is evacuating is unusable for the rest
-    // of it, and the block is released at the end. Drop them once, so the
-    // per-allocation exclusion scan in `old_free_take_exact` has nothing to
-    // walk: it is a linear scan of the size bucket, and with the fragmented
-    // pages excluded it used to fail over the whole bucket for every moved
-    // object. See `old_free_filter_pages` for the measurement.
-    let dropped_holes = crate::gc::old_free_filter_pages(excluded_pages);
-    if crate::gc::gc_diag_enabled() && dropped_holes > 0 {
-        eprintln!("[gc-old-page-defrag] dropped_excluded_holes_bytes={dropped_holes}");
-    }
-
     let mut source_headers = Vec::new();
     crate::arena::old_arena_walk_objects_on_pages(excluded_pages, |header_ptr| {
         source_headers.push(header_ptr as *mut GcHeader);
@@ -1880,7 +1869,24 @@ pub(super) fn evacuate_selected_old_pages_collecting(
             && !is_conservatively_pinned(header)
     });
     if source_headers.is_empty() || !source_block_is_movable {
+        // #9772: a declined pass must not also DESTROY the free list. Dropping
+        // the excluded pages' holes is only justified by "this pass is about to
+        // empty and release these blocks"; doing it before the all-or-nothing
+        // movability check meant one immovable occupant anywhere in the
+        // selection cost the whole old-gen residue and returned nothing.
+        // Measured on the compiled claude-code TUI: `reusable` 40.7 MB ->
+        // 0.87 MB, `released=0`, 189 ms of pause, and the bytes were neither
+        // returned to the OS nor available to the next allocation.
         return evacuated;
+    }
+
+    // Every hole on a page this pass is evacuating is unusable for the rest of
+    // it, and the block is released at the end. Drop them once, so the
+    // per-allocation exclusion scan in `old_free_take_exact` has nothing to
+    // walk (see `old_free_filter_pages` for the #9644 measurement).
+    let dropped_holes = crate::gc::old_free_filter_pages(excluded_pages);
+    if crate::gc::gc_diag_enabled() && dropped_holes > 0 {
+        eprintln!("[gc-old-page-defrag] dropped_excluded_holes_bytes={dropped_holes}");
     }
 
     for header in source_headers {

@@ -300,6 +300,15 @@ pub(super) fn maybe_compact(now: u64) -> bool {
     let after_occupancy = crate::arena::old_gen_in_use_bytes();
     let after_residue = residue_bytes();
     let released = before_occupancy.saturating_sub(after_occupancy);
+    // #9772: judge the pass against its OWN prediction. Selecting whole blocks
+    // makes `predicted` achievable by construction, so a pass that returns far
+    // less than it promised is a defect, not a quiet no-op — it has spent a
+    // mutator pause on a process already far above node's idle CPU.
+    let predicted = super::oldgen_defrag::last_idle_predicted_release_bytes();
+    let kept_promise = predicted == 0 || released.saturating_mul(2) >= predicted;
+    if !kept_promise {
+        BROKEN_PROMISES.fetch_add(1, Ordering::Relaxed);
+    }
     let productive = released >= IDLE_COMPACT_PRODUCTIVE_MIN_BYTES;
 
     ATTEMPTS.fetch_add(1, Ordering::Relaxed);
@@ -322,6 +331,7 @@ pub(super) fn maybe_compact(now: u64) -> bool {
         if gc_diag_enabled() {
             eprintln!(
                 "[gc-idle-compact] done old_in_use={before_occupancy}->{after_occupancy} released={released} \
+                 predicted={predicted} kept_promise={kept_promise} \
                  reusable={before_residue}->{after_residue} freed={freed} pause_us={pause_us} \
                  productive={productive} backoff_shift={}",
                 st.backoff_shift
@@ -336,14 +346,24 @@ pub(super) fn maybe_compact(now: u64) -> bool {
     true
 }
 
+/// Idle compactions that released less than half the block bytes their own
+/// selection predicted (#9772).
+static BROKEN_PROMISES: AtomicU64 = AtomicU64::new(0);
+
+/// See [`BROKEN_PROMISES`].
+pub fn idle_compact_broken_promises() -> u64 {
+    BROKEN_PROMISES.load(Ordering::Relaxed)
+}
+
 /// `PERRY_GC_DIAG=1` exit line.
 pub(super) fn emit_diag() {
     eprintln!(
-        "[gc-idle-compact] enabled={} attempts={} productive={} released_bytes={} \
+        "[gc-idle-compact] enabled={} attempts={} productive={} broken_promises={} released_bytes={} \
          pause_us_total={} pause_us_max={} wake_declined={} backoff_shift={}",
         idle_compact_enabled(),
         idle_compact_attempts(),
         idle_compact_productive(),
+        idle_compact_broken_promises(),
         idle_compact_released_bytes(),
         idle_compact_pause_us_total(),
         idle_compact_pause_us_max(),

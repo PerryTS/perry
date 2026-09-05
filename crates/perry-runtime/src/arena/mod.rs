@@ -146,7 +146,8 @@ pub(crate) use page_meta::{
     old_page_clear_dirty, old_page_mark_dirty, old_page_meta_snapshot, old_page_summary,
     old_pages_begin_gc_cycle, old_pages_reset_sweep_accounting, record_arena_object_start,
     unregister_old_object_pages, HeapGeneration, HeapSpace, OldArenaPageObjectCursor,
-    OldArenaSourceBlockSelection, OldPageMeta, OldPageSummary,
+    old_arena_block_range_index, old_arena_block_ranges, OldArenaSourceBlockSelection,
+    OldPageMeta, OldPageSummary,
 };
 
 #[cfg(test)]
