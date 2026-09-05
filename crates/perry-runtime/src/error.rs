@@ -1081,17 +1081,16 @@ fn throw_reference_error_message(message: &'static [u8]) -> ! {
 /// `class` binding is read, `typeof`-d, or compound-assigned before its
 /// declaration has been evaluated — i.e. while its box still holds the
 /// `TAG_TDZ` sentinel. `name` is the NaN-boxed binding name (or `undefined`
-/// for legacy unnamed box reads).
-/// Message matches V8/Node byte-for-byte: `Cannot access 'x' before
+/// when codegen could not thread a name through, e.g. a captured box read).
+/// Message matches V8/Node byte-for-byte: `Cannot access x before
 /// initialization`.
 #[no_mangle]
 pub extern "C" fn js_throw_reference_error_tdz(name: f64) -> f64 {
-    let unnamed = name.to_bits() == crate::value::TAG_UNDEFINED;
     let name = value_to_lossy_string(name);
-    let msg = if unnamed || name.is_empty() {
+    let msg = if name.is_empty() {
         "Cannot access uninitialized variable before initialization".to_string()
     } else {
-        format!("Cannot access '{}' before initialization", name)
+        format!("Cannot access {} before initialization", name)
     };
     let msg_str = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
     let err_ptr = js_referenceerror_new(msg_str);

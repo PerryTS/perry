@@ -970,18 +970,6 @@ pub fn scan_box_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
 /// rather than dereferencing. See perry#393 for the failure mode.
 #[no_mangle]
 pub extern "C" fn js_box_get_bits(ptr: *mut Box) -> i64 {
-    box_get_bits_named(ptr, f64::from_bits(crate::value::TAG_UNDEFINED))
-}
-
-/// Checked lexical read with the source binding name supplied by codegen.
-/// The name is consumed only on the TDZ error path, before any GC allocation.
-#[no_mangle]
-pub extern "C" fn js_box_get_bits_named(ptr: *mut Box, name: f64) -> i64 {
-    box_get_bits_named(ptr, name)
-}
-
-#[inline]
-fn box_get_bits_named(ptr: *mut Box, name: f64) -> i64 {
     unsafe {
         if !is_registered_box_ptr(ptr) {
             // perry#924: production services see these in tight bursts of
@@ -1032,7 +1020,7 @@ fn box_get_bits_named(ptr: *mut Box, name: f64) -> i64 {
             if TDZ_SUPPRESS_DEPTH.with(|d| d.get()) > 0 {
                 return crate::value::TAG_UNDEFINED as i64;
             }
-            crate::error::js_throw_reference_error_tdz(name);
+            crate::error::js_throw_reference_error_tdz(f64::from_bits(crate::value::TAG_UNDEFINED));
         }
         bits as i64
     }
@@ -1085,21 +1073,12 @@ pub extern "C" fn js_box_capture_cell_ptr(bits: i64) -> i64 {
 
 #[no_mangle]
 pub unsafe extern "C" fn js_box_get_bits_trusted(ptr: *mut Box) -> i64 {
-    unsafe { js_box_get_bits_trusted_named(ptr, f64::from_bits(crate::value::TAG_UNDEFINED)) }
-}
-
-/// Named counterpart of `js_box_get_bits_trusted`.
-///
-/// # Safety
-/// `ptr` must be a live box cell, as for `js_box_get_bits_trusted`.
-#[no_mangle]
-pub unsafe extern "C" fn js_box_get_bits_trusted_named(ptr: *mut Box, name: f64) -> i64 {
     let bits = unsafe { (*ptr).value };
     if bits == crate::value::TAG_TDZ {
         if TDZ_SUPPRESS_DEPTH.with(|d| d.get()) > 0 {
             return crate::value::TAG_UNDEFINED as i64;
         }
-        crate::error::js_throw_reference_error_tdz(name);
+        crate::error::js_throw_reference_error_tdz(f64::from_bits(crate::value::TAG_UNDEFINED));
     }
     bits as i64
 }
@@ -1434,13 +1413,6 @@ static KEEP_JS_BOX_SET_BITS: extern "C" fn(*mut Box, i64) = js_box_set_bits;
 #[used]
 static KEEP_JS_BOX_GET_BITS_TRUSTED: unsafe extern "C" fn(*mut Box) -> i64 =
     js_box_get_bits_trusted;
-#[cfg(feature = "keepalive-anchors")]
-#[used]
-static KEEP_JS_BOX_GET_BITS_NAMED: extern "C" fn(*mut Box, f64) -> i64 = js_box_get_bits_named;
-#[cfg(feature = "keepalive-anchors")]
-#[used]
-static KEEP_JS_BOX_GET_BITS_TRUSTED_NAMED: unsafe extern "C" fn(*mut Box, f64) -> i64 =
-    js_box_get_bits_trusted_named;
 #[cfg(feature = "keepalive-anchors")]
 #[used]
 static KEEP_JS_BOX_SET_BITS_TRUSTED_NO_BARRIER: unsafe extern "C" fn(*mut Box, i64) =

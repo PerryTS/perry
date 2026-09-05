@@ -872,12 +872,7 @@ mod tests {
     /// symbol can be admitted; this one cannot.
     #[test]
     fn the_tdz_capable_box_getter_stays_a_safepoint() {
-        for name in [
-            "js_box_get_bits",
-            "js_box_get_bits_trusted",
-            "js_box_get_bits_named",
-            "js_box_get_bits_trusted_named",
-        ] {
+        for name in ["js_box_get_bits", "js_box_get_bits_trusted"] {
             assert_eq!(
                 classify_direct_callee(name),
                 GcCallEffect::Unknown,

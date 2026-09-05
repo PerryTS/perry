@@ -186,18 +186,9 @@ fn select(closures: Vec<(u32, Expr)>, direct: impl IntoIterator<Item = u32>) -> 
 }
 
 fn emit(direct_literal: bool) -> String {
-    emit_with_tdz(direct_literal, false)
-}
-
-fn emit_with_tdz(direct_literal: bool, tdz: bool) -> String {
     let mut module = Module::new("trusted_box_callback.ts");
     module.init_kind = ModuleInitKind::Eager;
     module.functions = vec![consume_function(), outer_function(direct_literal)];
-    if tdz {
-        module.functions[1]
-            .body
-            .insert(0, Stmt::PreallocateTdzBoxes(vec![COUNT]));
-    }
     module.init.push(Stmt::Expr(Expr::Call {
         callee: Box::new(Expr::FuncRef(3)),
         args: Vec::new(),
@@ -267,23 +258,6 @@ fn named_block_body<'a>(function: &'a str, prefix: &str) -> String {
         .take_while(|line| !line.ends_with(':'))
         .collect::<Vec<_>>()
         .join("\n")
-}
-
-#[test]
-fn named_tdz_reads_reach_public_and_trusted_callbacks() {
-    let ir = emit_with_tdz(true, true);
-    let public = function_body(&ir, "perry_closure_trusted_box_callback_ts__99");
-    let trusted = function_body(
-        &ir,
-        "perry_closure_trusted_box_callback_ts__99$trusted_boxes",
-    );
-    assert!(public.contains("@js_box_get_bits_named("), "{public}");
-    let cold = named_block_body(&trusted, "trusted_box.tdz");
-    assert!(cold.contains("@js_box_get_bits_trusted_named("), "{cold}");
-    assert!(
-        ir.contains("c\"count\\00\""),
-        "binding name must be in the string pool"
-    );
 }
 
 #[test]
