@@ -6,6 +6,11 @@
 #[cfg(feature = "regex-engine")]
 use regex::Regex;
 use std::cell::RefCell;
+// Every use of `HashMap` in this file is inside a `#[cfg(feature = "regex-engine")]`
+// block, so an unconditional import is an unused-import error under the
+// `warnings` job's `-D warnings` when `perry`'s own binaries pull the runtime
+// in without that feature.
+#[cfg(feature = "regex-engine")]
 use std::collections::HashMap;
 use std::ptr;
 use std::sync::Arc;
