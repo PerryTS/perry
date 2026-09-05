@@ -295,74 +295,24 @@ pub fn scan_shape_cache_roots(mark: &mut dyn FnMut(f64)) {
     scan_shape_cache_roots_mut(&mut visitor);
 }
 
+/// #9754 measured this table and left it alone: a young-entry log here skipped
+/// NOTHING on the compiled claude-code TUI (0.0 % of 3.85 M entry visits over
+/// 107 collections) and cost 35 % MORE than this plain walk, because the
+/// canonical keys arrays live in the LONGLIVED arena, which
+/// `addr_is_minor_relevant` must answer `true` for, so no entry ever leaves
+/// the log. See the four tables that do skip 75-93 % in `gc/young_log.rs`.
 pub fn scan_shape_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    use crate::gc::young_log::addr_is_minor_relevant;
     let st = crate::state::state();
-    // The inline array is 256 fixed slots: always walked. The overflow map
-    // holds every shape id ever cached; #9754: a minor-scoped pass visits
-    // only the young-logged ids there, a full pass rebuilds the log.
-    let entries = unsafe { &mut *st.object_hot.shape_inline_cache.get() };
-    for entry in entries.iter_mut() {
-        visitor.visit_raw_mut_ptr_slot(&mut entry.keys_array);
-    }
-    let mut cache = st.object_hot.shape_cache_overflow.borrow_mut();
-    let table_len = cache.len() as u64;
-    if visitor.young_scope() {
-        #[cfg(debug_assertions)]
-        {
-            let relevant: Vec<u32> = cache
-                .iter()
-                .filter(|(_, (arr_ptr, _))| addr_is_minor_relevant(*arr_ptr as usize))
-                .map(|(&id, _)| id)
-                .collect();
-            SHAPE_CACHE_YOUNG.with(|log| {
-                log.borrow()
-                    .debug_assert_logged(SHAPE_CACHE_YOUNG_LOG_NAME, &relevant)
-            });
-        }
-        let batch = SHAPE_CACHE_YOUNG.with(|log| log.borrow_mut().take_sorted());
-        let logged = batch.len() as u64;
-        let mut kept = SHAPE_CACHE_YOUNG.with(|log| log.borrow_mut().take_spare());
-        for id in batch {
-            if let Some((arr_ptr, _)) = cache.get_mut(&id) {
-                visitor.visit_raw_mut_ptr_slot(arr_ptr);
-                if addr_is_minor_relevant(*arr_ptr as usize) {
-                    kept.push(id);
-                }
-            }
-        }
-        let kept_len = kept.len() as u64;
-        SHAPE_CACHE_YOUNG.with(|log| log.borrow_mut().extend(kept));
-        crate::gc::young_log::note_walk(
-            SHAPE_CACHE_YOUNG_LOG_NAME,
-            crate::gc::young_log::YoungLogWalk {
-                partial: true,
-                logged,
-                visited: logged,
-                kept: kept_len,
-                table_len,
-            },
-        );
-        return;
-    }
-    let _ = SHAPE_CACHE_YOUNG.with(|log| log.borrow_mut().take_sorted());
-    let mut kept = Vec::new();
-    for (&id, (arr_ptr, _runtime_shape_id)) in cache.iter_mut() {
-        visitor.visit_raw_mut_ptr_slot(arr_ptr);
-        if addr_is_minor_relevant(*arr_ptr as usize) {
-            kept.push(id);
+    {
+        let entries = unsafe { &mut *st.object_hot.shape_inline_cache.get() };
+        for entry in entries.iter_mut() {
+            visitor.visit_raw_mut_ptr_slot(&mut entry.keys_array);
         }
     }
-    let kept_len = kept.len() as u64;
-    SHAPE_CACHE_YOUNG.with(|log| log.borrow_mut().extend(kept));
-    crate::gc::young_log::note_walk(
-        SHAPE_CACHE_YOUNG_LOG_NAME,
-        crate::gc::young_log::YoungLogWalk {
-            partial: false,
-            logged: table_len,
-            visited: table_len,
-            kept: kept_len,
-            table_len,
-        },
-    );
+    {
+        let mut cache = st.object_hot.shape_cache_overflow.borrow_mut();
+        for (arr_ptr, _runtime_shape_id) in cache.values_mut() {
+            visitor.visit_raw_mut_ptr_slot(arr_ptr);
+        }
+    }
 }
