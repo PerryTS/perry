@@ -150,13 +150,16 @@ pub extern "C" fn js_regexp_compile_value(
     // (see `REGEX_CACHE_MAX_ENTRIES`) can evict without invalidating this
     // receiver. Refresh `fancy_ptr` too — it must track the NEW pattern, not
     // the one the receiver was constructed with.
-    let arc = get_or_compile_regex(pattern_str, flags_str);
+    // `RegExp.prototype.compile` re-initialises an existing receiver — once per
+    // call from user code, not per object — so materialising the shared key
+    // here costs nothing measurable, and the same `Arc`s go into the source
+    // table below.
+    let pattern_key: std::sync::Arc<str> = std::sync::Arc::from(pattern_str);
+    let flags_key: std::sync::Arc<str> = std::sync::Arc::from(flags_str);
+    let arc = get_or_compile_regex(&pattern_key, &flags_key);
     let regex_ptr = Arc::into_raw(arc) as *mut Regex;
     let fancy_ptr: *const () = super::FANCY_CACHE.with(|fc| {
-        match fc
-            .borrow()
-            .get(&(pattern_str.to_string(), flags_str.to_string()))
-        {
+        match fc.borrow().get(&(pattern_key.clone(), flags_key.clone())) {
             Some(arc) => Arc::into_raw(arc.clone()) as *const (),
             None => std::ptr::null(),
         }
@@ -164,7 +167,7 @@ pub extern "C" fn js_regexp_compile_value(
     let repeat_matcher_ptr: *const () = super::REPEAT_MATCHER_CACHE.with(|cache| {
         match cache
             .borrow()
-            .get(&(pattern_str.to_string(), flags_str.to_string()))
+            .get(&(pattern_key.clone(), flags_key.clone()))
         {
             Some(arc) => Arc::into_raw(arc.clone()) as *const (),
             None => std::ptr::null(),

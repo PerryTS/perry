@@ -233,7 +233,7 @@ fn build_and_install_programs(re: *const RegExpHeader) {
         let cache_hit = super::REGEX_CACHE.with(|cache| {
             cache
                 .borrow()
-                .contains_key(&(pattern.to_string(), flags.to_string()))
+                .contains_key(&(pattern.clone(), flags.clone()))
         });
         unsafe {
             let pattern_ptr = (*re).pattern_ptr;
@@ -243,16 +243,13 @@ fn build_and_install_programs(re: *const RegExpHeader) {
         }
     }
     let std_arc = get_or_compile_regex(&pattern, &flags);
-    let fancy_arc: Option<Arc<fancy_regex::Regex>> = FANCY_CACHE.with(|fc| {
-        fc.borrow()
-            .get(&(pattern.to_string(), flags.to_string()))
-            .cloned()
-    });
+    let fancy_arc: Option<Arc<fancy_regex::Regex>> =
+        FANCY_CACHE.with(|fc| fc.borrow().get(&(pattern.clone(), flags.clone())).cloned());
     let repeat_arc: Option<Arc<super::repeat_matcher::RepeatMatcherRegex>> = REPEAT_MATCHER_CACHE
         .with(|cache| {
             cache
                 .borrow()
-                .get(&(pattern.to_string(), flags.to_string()))
+                .get(&(pattern.clone(), flags.clone()))
                 .cloned()
         });
     // ── Repair before publishing ──────────────────────────────────────────

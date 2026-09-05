@@ -477,7 +477,7 @@ pub extern "C" fn js_string_replace_regex_named(
     }
 
     unsafe {
-        if let Some(repeat_matcher) = lookup_repeat_matcher(re) {
+        if let Some(repeat_matcher) = lookup_repeat_matcher_for(re, str_data, 0) {
             let result = repeat_matcher.replace(str_data, repl_str, (*re).global);
             return finish_replace_bytes(result.as_bytes());
         }
