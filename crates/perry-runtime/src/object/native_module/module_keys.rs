@@ -1628,6 +1628,7 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
         "sqlite.constants" => Some(SQLITE_CONSTANTS_KEYS),
         // #9599: the opt-in globalThis.Bun object and `import * as bun from
         // "bun"` share this one enumerable native-module surface.
+        "bun:jsc" => Some(&[b"heapStats"]),
         "bun" => Some(&[
             b"Glob",
             b"JSONL",

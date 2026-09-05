@@ -1,8 +1,7 @@
 # Other Modules
 
-Additional npm packages and Node.js APIs supported by Perry. All listed here
-are wired through Perry's well-known native bindings registry (#466) and
-compile to native code with no JavaScript runtime involvement.
+Additional npm packages and runtime APIs supported by Perry. These APIs compile
+to native code.
 
 ## sharp (Image Processing)
 
@@ -212,6 +211,44 @@ onmessage = (event) => {
   close();
 };
 ```
+
+
+## bun:jsc
+
+`heapStats()` and `heapStats(true)` return memory diagnostics for the calling
+thread. Static imports, dynamic imports, and `require("bun:jsc")` expose the same
+function. The optional argument is accepted for Bun compatibility and ignored.
+
+```typescript,no-test
+import { heapStats } from "bun:jsc";
+const stats = heapStats();
+console.log(stats.heapSize, stats.objectCount, stats.objectTypeCounts);
+```
+
+The [Bun HeapStats API](https://bun.com/reference/bun/jsc/HeapStats) uses
+JavaScriptCore measurements. Perry supplies its own heap and allocator counters:
+
+| Field | Perry meaning |
+| --- | --- |
+| `heapSize` | Allocated arena bytes plus tracked malloc GC blocks, including headers. |
+| `heapCapacity` | Reserved arena bytes plus tracked malloc GC blocks; at least `heapSize`. |
+| `extraMemorySize` | Zero; external backing storage is not separately measured. |
+| `objectCount` | Allocated GC cells found by the heap walk. |
+| `objectTypeCounts` | Cell counts keyed by Perry's GC type names. |
+| `protectedObjectCount` | Pinned GC cells, approximating native protection. |
+| `protectedObjectTypeCounts` | Pinned cell counts by Perry GC type. |
+| `globalObjectCount` | One context for the calling thread. |
+| `protectedGlobalObjectCount` | Zero; protected globals are not separately counted. |
+| `mimalloc` | Object with `arenaUsed`, `arenaReserved`, `gcMallocBytes`, and `gcMallocObjectCount`. |
+
+All counters are finite, non-negative numbers; sizes are bytes. The snapshot
+covers the calling thread's heap and does not force collection. It excludes free
+slots and forwarding headers, but can include garbage awaiting collection or
+unreclaimed arena residents. For comparisons, retain the objects of interest
+and call `gc(true)` from `bun` before each measurement. The returned report is a
+snapshot taken before allocating the report itself.
+
+Only `heapStats` is implemented from this module.
 
 ## commander (CLI Parsing)
 

@@ -10,6 +10,15 @@ use super::*;
 /// `js_native_module_property_by_name`), not rows here.
 pub(crate) const BUN_ROWS: &[NativeModSig] = &[
     NativeModSig {
+        module: "bun:jsc",
+        has_receiver: false,
+        method: "heapStats",
+        class_filter: None,
+        runtime: "js_bun_jsc_heap_stats",
+        args: &[NA_F64],
+        ret: NR_F64,
+    },
+    NativeModSig {
         module: "bun",
         has_receiver: false,
         method: "spawn",
