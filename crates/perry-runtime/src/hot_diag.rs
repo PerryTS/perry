@@ -105,6 +105,12 @@ pub struct RegexDiag {
     /// Sum of pattern bytes seen by `js_regexp_new` (what a content hash or
     /// copy of the pattern costs per construction).
     pub new_pattern_bytes: u64,
+    /// `js_regexp_new` had to allocate a GC string for the canonical flags
+    /// because the caller's flags string was not already in canonical form.
+    /// The common case — a regex literal, whose flags text the author wrote in
+    /// spec order — shares the caller's immutable string instead, so this
+    /// counter is the per-construction flags allocation that remains.
+    pub new_flags_allocated: u64,
     pub compiles_std: u64,
     pub compiles_fancy: u64,
     pub compiles_repeat: u64,
@@ -238,7 +244,7 @@ impl RegexDiag {
             "[regex-diag] t={secs:.1}s new={} validated_hit={} site_hit={} pattern_bytes={} \
              compiles std={} fancy={} repeat={} cache_clears={} lazy_builds={} lazy_cache_hits={} \
              exec={} exec_matched={} capture_slots={} capture_bytes={} test={} test_global={} \
-             match={} replace={} replace_matches={} split={}",
+             match={} replace={} replace_matches={} split={} flags_alloc={}",
             self.new_calls,
             self.new_validated_hit,
             self.new_site_hit,
@@ -259,6 +265,7 @@ impl RegexDiag {
             self.replace_calls,
             self.replace_matches,
             self.split_calls,
+            self.new_flags_allocated,
         );
         // Merge by content (prefix, len, flags): distinct literal sites with
         // the same pattern are one row.
