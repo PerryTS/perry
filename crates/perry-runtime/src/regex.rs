@@ -457,6 +457,16 @@ pub(crate) fn build_fancy_regex(pattern: &str) -> Result<fancy_regex::Regex, fan
         .build()
 }
 
+/// The pattern of the never-match program `compile_and_cache_regex_checked`
+/// installs in `REGEX_CACHE` for a pattern only `fancy-regex` accepts, so a
+/// caller reaching for the standard program does not crash.
+///
+/// Named because `lazy::build_and_install_programs` has to RECOGNISE it: a
+/// header whose standard program is this placeholder is usable only through
+/// its fancy fallback, so the fallback has to exist beside it.
+#[cfg(feature = "regex-engine")]
+pub(crate) const NEVER_MATCH_PATTERN: &str = r"[^\s\S]";
+
 /// Entry cap for the compiled-regex caches (2026-07-09 GC audit: one entry
 /// per distinct `(pattern, flags)` ever compiled, no cap of any kind, entries
 /// up to [`REGEX_SIZE_LIMIT`] — `new RegExp(userInput)` was an attacker-driven
@@ -554,7 +564,7 @@ fn compile_and_cache_regex_checked(pattern: &str, flags: &str) -> bool {
             if !fancy_ok {
                 return false;
             }
-            Regex::new(r"[^\s\S]").unwrap()
+            Regex::new(NEVER_MATCH_PATTERN).unwrap()
         }
     };
     if crate::hot_diag::regex_on() {
@@ -587,7 +597,7 @@ fn get_or_compile_regex(pattern: &str, flags: &str) -> Arc<Regex> {
         }
         // Both engines rejected it (validation normally throws before this
         // point) — keep the historical behavior: cache + return never-match.
-        let arc = Arc::new(Regex::new(r"[^\s\S]").unwrap());
+        let arc = Arc::new(Regex::new(NEVER_MATCH_PATTERN).unwrap());
         evict_regex_cache_if_full(&mut cache);
         cache.insert((pattern.to_string(), flags.to_string()), arc.clone());
         arc

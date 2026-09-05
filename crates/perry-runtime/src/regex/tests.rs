@@ -1757,3 +1757,71 @@ fn global_test_advances_and_resets_last_index() {
     assert_eq!(js_regexp_get_last_index(repeat), 5.0);
     assert_eq!(js_regexp_test(repeat, r), 0);
 }
+
+/// A capacity event in one compiled-program cache must not leave a pattern
+/// whose real program lives in ANOTHER of them permanently non-matching.
+///
+/// `compile_and_cache_regex_checked` returns early when `REGEX_CACHE` already
+/// holds the pattern, so it never re-runs the fancy build; for a lookbehind
+/// pattern that `REGEX_CACHE` entry is the never-match placeholder and the
+/// real program is the one in `FANCY_CACHE`. Clear `FANCY_CACHE` on its own —
+/// which is exactly what its independent 512-entry overflow used to do — and
+/// `get_or_compile_regex` hands back a program that matches nothing while
+/// nothing rebuilds the fallback. Since `lookup_fancy_regex` now treats a
+/// built header as authoritative and `site_cache::install_programs` memoizes
+/// the triple against the pattern text, that is not one bad header: every
+/// later construction of the same literal is born with it.
+///
+/// The fix is that the three program caches clear as a group, so
+/// "`REGEX_CACHE` still has this pattern" implies the other two have not been
+/// cleared since it was compiled.
+#[test]
+fn a_single_program_cache_clear_cannot_disarm_a_lookbehind_literal() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let source = "(?<=foo)bar";
+    let scope = crate::gc::RuntimeHandleScope::new();
+    site_cache::test_reset();
+
+    let build = || {
+        let pattern = scope.root_string_ptr(make_string(source));
+        let flags = scope.root_string_ptr(make_string(""));
+        pattern.with_mut_ptr::<StringHeader, _>(|pattern| {
+            flags.with_mut_ptr::<StringHeader, _>(|flags| js_regexp_new(pattern, flags))
+        })
+    };
+    let subject = scope.root_string_ptr(make_string("foobar"));
+
+    let warm = build();
+    assert_eq!(
+        subject.with_const_ptr::<StringHeader, _>(|s| js_regexp_test(warm, s)),
+        1,
+        "a lookbehind pattern must match through the fancy fallback"
+    );
+
+    // The state a `FANCY_CACHE` overflow produces: its programs are gone, the
+    // never-match placeholder for this pattern survives in `REGEX_CACHE`.
+    FANCY_CACHE.with(|fc| fc.borrow_mut().clear());
+    assert!(
+        REGEX_CACHE.with(|c| c.borrow().contains_key(&(source.to_string(), String::new()))),
+        "the placeholder must survive, or this test exercises nothing"
+    );
+    // A fresh literal site, so the construction cache cannot answer from the
+    // programs the first header built.
+    site_cache::test_reset();
+
+    let cold = build();
+    unsafe {
+        lazy::ensure_regex_compiled(cold);
+        assert!(
+            !(*cold).fancy_ptr.is_null(),
+            "a built header must carry every program its pattern needs — a null \
+             fancy_ptr here is memoized by site_cache::install_programs and makes \
+             the breakage permanent for this literal"
+        );
+    }
+    assert_eq!(
+        subject.with_const_ptr::<StringHeader, _>(|s| js_regexp_test(cold, s)),
+        1,
+        "the literal must still match after an unrelated cache reached capacity"
+    );
+}
