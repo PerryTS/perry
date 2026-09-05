@@ -3,6 +3,9 @@
 
 use super::*;
 
+#[cfg(test)]
+mod computed_property_tests;
+
 /// JS index coercion for the String character-access methods (#2787).
 /// Applies `ToIntegerOrInfinity`: a non-numeric argument is first run through
 /// the full `ToNumber` (`js_number_coerce`) so an object index with a custom
@@ -139,19 +142,66 @@ pub extern "C" fn js_string_index_get_boxed(value: f64, key: f64) -> f64 {
     const UNDEFINED: f64 = f64::from_bits(crate::value::TAG_UNDEFINED);
     let jsval = crate::value::JSValue::from_bits(value.to_bits());
     if jsval.is_short_string() {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let key = scope.root_nanbox_f64(key);
         let hdr = crate::string::js_string_materialize_to_heap(value);
         if hdr.is_null() {
             return UNDEFINED;
         }
-        return js_string_index_get(hdr, key);
+        let own = js_string_index_get(hdr, key.get_nanbox_f64());
+        return if own.to_bits() != crate::value::TAG_UNDEFINED {
+            own
+        } else {
+            string_property_get_miss(value, key.get_nanbox_f64())
+        };
     }
     // Heap strings and every non-string receiver keep the existing behavior:
     // `js_string_index_get` already guards invalid pointers and delegates
     // non-string heap objects to the polymorphic index path.
-    js_string_index_get(
+    let own = js_string_index_get(
         (value.to_bits() & crate::value::POINTER_MASK) as *const StringHeader,
         key,
-    )
+    );
+    if !jsval.is_string() || own.to_bits() != crate::value::TAG_UNDEFINED {
+        return own;
+    }
+    string_property_get_miss(value, key)
+}
+
+/// Complete a primitive string Get after its own character lookup misses.
+/// Keep the raw index helper own-only: boxed strings also use it while walking
+/// their own properties, before consulting their potentially custom prototype.
+fn string_property_get_miss(value: f64, key: f64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(value);
+    let key = scope.root_nanbox_f64(key);
+    let key =
+        scope.root_nanbox_f64(unsafe { crate::object::js_to_property_key(key.get_nanbox_f64()) });
+    // Object / bigint keys can coerce to an own index or to `length`.
+    if let Some(name) = crate::builtins::jsvalue_string_content(key.get_nanbox_f64()) {
+        let value = receiver.get_nanbox_f64();
+        if name == "length" {
+            let bits = value.to_bits();
+            if crate::value::JSValue::from_bits(bits).is_short_string() {
+                return ((bits & crate::value::SHORT_STRING_LEN_MASK)
+                    >> crate::value::SHORT_STRING_LEN_SHIFT) as f64;
+            }
+            let string = (bits & crate::value::POINTER_MASK) as *const StringHeader;
+            return unsafe { (*string).utf16_len as f64 };
+        }
+        if canonical_string_index(&name).is_some() {
+            let string = crate::value::js_get_string_pointer_unified(value) as *const StringHeader;
+            let own = js_string_index_get(string, key.get_nanbox_f64());
+            if own.to_bits() != crate::value::TAG_UNDEFINED {
+                return own;
+            }
+        }
+    }
+    // Reflect.get preserves the original function value (no binding wrapper),
+    // and gives inherited accessors the primitive as their receiver. Both
+    // operands stay rooted across lazy prototype creation and user code.
+    let prototype = crate::object::builtin_prototype_value("String");
+    crate::proxy::js_reflect_get(prototype, key.get_nanbox_f64(), receiver.get_nanbox_f64())
 }
 
 /// `s[key]` indexed read with ECMAScript CanonicalNumericIndexString semantics
