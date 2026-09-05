@@ -315,6 +315,27 @@ pub(crate) unsafe fn pic_prime_get(cache: *mut PicCache, token: i64, slot: i64) 
     let c = &mut *cache;
     let prev_tok = c[0];
     let prev_slot = c[1];
+    // `PERRY_IC_DIAG`: the prime split. `prev_tok == token` means this site is
+    // being primed with the shape its MRU entry ALREADY held — the cache was
+    // written, the next read of that same shape came back here anyway, and we
+    // are about to write the identical value again. That is a priming or
+    // invalidation problem, not polymorphism, and it is a different fix from
+    // `prev_tok != token` (the receiver really did change shape). Read before
+    // the write below, because the write destroys the evidence.
+    if crate::hot_diag::ic_on() {
+        // Was `token` already sitting in a WAY? The MRU comparison alone cannot
+        // tell a site rotating k <= PIC_WAYS+1 shapes (the ways doing their job)
+        // from one whose cached answer the emitted gate never consulted. Read
+        // here, before the loop below evicts `token` from its way.
+        let in_ways = (0..PIC_WAYS).any(|w| c[PIC_WAY_BASE + w * 2] == token);
+        crate::hot_diag::ic_note_prime(
+            cache as usize,
+            prev_tok,
+            token,
+            c[PIC_WAY_STATE],
+            in_ways,
+        );
+    }
     c[0] = token;
     c[1] = slot;
     // Megamorphic. A rotation wider than the ways hold never hits one, so the
@@ -498,7 +519,22 @@ fn ic_diag_note(
             std::slice::from_raw_parts(crate::string::string_data(key), (*key).byte_len as usize)
         }
     };
-    crate::hot_diag::ic_note(cache_slot as usize, bytes, reason);
+    // Key the site by the RESOLVED cache, not by the slot that points at it, so
+    // these rows merge with the ones `pic_prime_get` records (it only ever has
+    // the resolved cache). A site that has never primed has no cache yet; key
+    // it by the slot, which is stable and has no prime rows to merge with.
+    // SAFETY: `cache_slot` is the codegen-emitted per-site slot (or null on the
+    // earliest exits, which `pic_slot_peek` handles); peeking only reads the
+    // published pointer and never allocates.
+    let site = unsafe {
+        let cache = pic_slot_peek(cache_slot);
+        if cache.is_null() {
+            cache_slot as usize
+        } else {
+            cache as usize
+        }
+    };
+    crate::hot_diag::ic_note(site, bytes, reason);
 }
 
 #[no_mangle]
