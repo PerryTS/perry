@@ -1,8 +1,9 @@
 # Perry Doc Examples
 
 Every `.ts` file under this directory is a real, compilable program that is
-verified by `cargo run -p perry-doc-tests` on every PR. Documentation pages in
-`docs/src/` pull these files in via mdBook's `{{#include}}` directive, so the
+verified by `cargo run -p perry-doc-tests` in the full doc-tests CI job.
+Documentation pages in `docs/src/` pull these files in via mdBook's
+`{{#include}}` directive, so the
 code you see on the rendered docs site is the same code CI is checking.
 
 ## Adding an example
@@ -19,6 +20,18 @@ code you see on the rendered docs site is the same code CI is checking.
 Runtime examples (non-UI) should list all three platforms. UI examples list
 whichever platforms their widgets support. The harness skips an example whose
 banner doesn't include the current host platform.
+
+Examples that need specialized runtime libraries, such as Fastify's request
+pump, add `// requires: auto-optimize` to the opening banner (within its first
+15 lines). The harness removes `PERRY_NO_AUTO_OPTIMIZE` from that example's
+compiler process, so it builds the required libraries and participates in the
+normal pass/fail report. Other examples keep using the host runner's prebuilt
+libraries. Unknown requirements fail discovery rather than silently being
+ignored.
+
+Use `// run: false` for examples that need external services or run indefinitely.
+They still compile and link; combining it with `requires: auto-optimize` tests
+the specialized build without starting a server or connecting to a database.
 
 3. Reference it from markdown:
 
