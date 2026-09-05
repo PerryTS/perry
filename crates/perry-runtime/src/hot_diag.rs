@@ -772,3 +772,168 @@ impl IcDiag {
         out
     }
 }
+
+// ---------------------------------------------------------------------------
+// Enumeration and concatenation: EXECUTIONS per site, not bytes
+// ---------------------------------------------------------------------------
+
+static ENUM_SINK: OnceLock<Option<Sink>> = OnceLock::new();
+static ENUM_ON: AtomicBool = AtomicBool::new(false);
+
+fn enum_sink() -> &'static Option<Sink> {
+    ENUM_SINK.get_or_init(|| {
+        let sink = sink_from_env("PERRY_ENUM_DIAG");
+        ENUM_ON.store(sink.is_some(), Ordering::Relaxed);
+        sink
+    })
+}
+
+/// Is the enumeration/concat execution counter armed?
+#[inline]
+pub fn enum_on() -> bool {
+    if ENUM_SINK.get().is_none() {
+        enum_sink();
+    }
+    ENUM_ON.load(Ordering::Relaxed)
+}
+
+/// What actually runs at the two allocation sites the byte-share ranking put
+/// at 7.8 % (`for-in` key arrays) and 6.9 % (string concat).
+///
+/// The campaign's 19:30 correction is the reason this counts executions rather
+/// than bytes: a category's byte share bounds the collection *schedule* it can
+/// move, and nothing else. The cost that a small category can still carry is
+/// whatever runs per allocation — here, for `for-in`, a heap `String` and a
+/// SipHash insert for **every key at every prototype level**, allocated only to
+/// be hashed for shadowing and dropped. Those `String`s are native-heap, so
+/// they are not even in the 7.8 %.
+#[derive(Default)]
+pub struct EnumDiag {
+    started: Option<Instant>,
+    last_dump: Option<Instant>,
+    events: u32,
+    /// Entries to `js_for_in_keys_value`.
+    pub for_in_calls: u64,
+    /// `for-in` calls that took the non-pointer (primitive receiver) path.
+    pub for_in_primitive: u64,
+    /// Prototype levels walked, summed over all calls.
+    pub for_in_levels: u64,
+    /// Key arrays materialised by the walk: one `js_object_keys_value` plus one
+    /// `js_object_get_own_property_names` per level.
+    pub for_in_key_arrays: u64,
+    /// Keys seen at any level — each one costs a `String` and a hash.
+    pub for_in_keys_seen: u64,
+    /// `String` allocations made by `key_string`.
+    pub for_in_key_strings: u64,
+    /// Bytes in those `String`s.
+    pub for_in_key_string_bytes: u64,
+    /// `seen.insert` calls (SipHash of the whole key each time).
+    pub for_in_seen_inserts: u64,
+    /// Of those, inserts that found the name already present — pure waste, the
+    /// name was already shadowed.
+    pub for_in_seen_dupes: u64,
+    /// Keys actually emitted into the result array.
+    pub for_in_keys_emitted: u64,
+    /// Of those, keys emitted at prototype level >= 1 — the only ones for which
+    /// the shadow set is load-bearing. If this is ~0, every `String` and every
+    /// hash spent building that set was spent for nothing.
+    pub for_in_keys_emitted_deep: u64,
+    /// Times the deferred shadow set was actually materialised.
+    pub for_in_shadow_built: u64,
+    /// String concatenations, by entry point.
+    pub concat_calls: u64,
+    pub concat_site_calls: u64,
+    pub concat_chain_calls: u64,
+    /// Bytes produced by concatenation.
+    pub concat_out_bytes: u64,
+}
+
+crate::perry_thread_local! {
+    static ENUM_DIAG: RefCell<EnumDiag> = RefCell::new(EnumDiag::default());
+}
+
+/// Run `f` against this thread's enumeration counters, then maybe dump.
+#[inline]
+pub fn enum_with(f: impl FnOnce(&mut EnumDiag)) {
+    ENUM_DIAG.with(|d| {
+        let mut d = d.borrow_mut();
+        if d.started.is_none() {
+            d.started = Some(Instant::now());
+            d.last_dump = d.started;
+        }
+        f(&mut d);
+        d.events = d.events.wrapping_add(1);
+        if d.events % TICK_EVERY == 0 {
+            let due = d
+                .last_dump
+                .is_some_and(|t| t.elapsed().as_millis() >= DUMP_INTERVAL_MS);
+            if due {
+                d.last_dump = Some(Instant::now());
+                if let Some(sink) = enum_sink() {
+                    write_sink(sink, &d.render());
+                }
+            }
+        }
+    });
+}
+
+impl EnumDiag {
+    fn render(&self) -> String {
+        use std::fmt::Write as _;
+        let mut out = String::with_capacity(1024);
+        let per = |n: u64, d: u64| if d == 0 { 0.0 } else { n as f64 / d as f64 };
+        let _ = writeln!(
+            out,
+            "[enum-diag] for_in calls={} (primitive={}) levels={} ({:.2}/call)",
+            self.for_in_calls,
+            self.for_in_primitive,
+            self.for_in_levels,
+            per(self.for_in_levels, self.for_in_calls)
+        );
+        let _ = writeln!(
+            out,
+            "  key arrays materialised={} ({:.2}/call)   keys seen={} ({:.1}/call)   emitted={} ({:.1}/call)",
+            self.for_in_key_arrays,
+            per(self.for_in_key_arrays, self.for_in_calls),
+            self.for_in_keys_seen,
+            per(self.for_in_keys_seen, self.for_in_calls),
+            self.for_in_keys_emitted,
+            per(self.for_in_keys_emitted, self.for_in_calls)
+        );
+        let _ = writeln!(
+            out,
+            "  PER-KEY WORK: String allocs={} ({:.2} MB) seen.insert={} of which duplicate={} ({:.1} %)",
+            self.for_in_key_strings,
+            self.for_in_key_string_bytes as f64 / (1024.0 * 1024.0),
+            self.for_in_seen_inserts,
+            self.for_in_seen_dupes,
+            100.0 * per(self.for_in_seen_dupes, self.for_in_seen_inserts)
+        );
+        let _ = writeln!(
+            out,
+            "  emitted/String ratio = {:.3}  (1.0 would mean every String earned a key)",
+            per(self.for_in_keys_emitted, self.for_in_key_strings)
+        );
+        let _ = writeln!(
+            out,
+            "  LOAD-BEARING: keys emitted at proto level >=1 = {} ({:.2} % of emitted); shadow set built {} times ({:.2}/call)",
+            self.for_in_keys_emitted_deep,
+            100.0 * per(self.for_in_keys_emitted_deep, self.for_in_keys_emitted),
+            self.for_in_shadow_built,
+            per(self.for_in_shadow_built, self.for_in_calls)
+        );
+        let _ = writeln!(
+            out,
+            "[enum-diag] concat calls={} site={} chain={} out_bytes={:.2} MB ({:.1} B/call)",
+            self.concat_calls,
+            self.concat_site_calls,
+            self.concat_chain_calls,
+            self.concat_out_bytes as f64 / (1024.0 * 1024.0),
+            per(
+                self.concat_out_bytes,
+                self.concat_calls + self.concat_site_calls + self.concat_chain_calls
+            )
+        );
+        out
+    }
+}
