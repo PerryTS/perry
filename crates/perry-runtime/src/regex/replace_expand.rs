@@ -374,7 +374,7 @@ pub extern "C" fn js_string_replace_regex_fn(
 
         // If the `regex` crate couldn't compile this pattern (lookahead,
         // backreferences, …), `get_or_compile_regex` stashed a never-match
-        // placeholder in `(*re).regex_ptr` and the real pattern in
+        // placeholder in the header's standard program and the real pattern in
         // `FANCY_CACHE`. Route the callback-replace through fancy-regex so the
         // callback actually fires — otherwise `captures_iter` below would
         // silently match nothing and return the input unchanged. (get-intrinsic's

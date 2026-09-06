@@ -1035,7 +1035,7 @@ fn nursery_regexp_that_dies_young_is_finalized_by_the_copied_minor() {
     );
     assert!(crate::regex::test_regex_pointer_entry_exists(dead_addr));
     // Both headers share one program through the site cache.
-    let count_before = crate::regex::test_regexp_std_program_strong_count(live);
+    let count_before = crate::regex::test_regexp_program_set_strong_count(live);
     assert!(count_before >= 2);
 
     // Only `live` is rooted; `dead` is garbage.
@@ -1053,7 +1053,7 @@ fn nursery_regexp_that_dies_young_is_finalized_by_the_copied_minor() {
         "a nursery RegExp that died must be removed from REGEX_POINTERS by the copied minor"
     );
     assert_eq!(
-        crate::regex::test_regexp_std_program_strong_count(live_new as *const _),
+        crate::regex::test_regexp_program_set_strong_count(live_new as *const _),
         count_before - 1,
         "the dead header's Arc clone of the shared program must have been dropped"
     );

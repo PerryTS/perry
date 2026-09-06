@@ -15,6 +15,18 @@ fn string_payload(s: *const StringHeader) -> Vec<u8> {
     }
 }
 
+fn regex_is_built(re: *const RegExpHeader) -> bool {
+    !unsafe { (*re).programs_ptr.is_null() }
+}
+
+fn regex_has_fancy_program(re: *const RegExpHeader) -> bool {
+    regex_is_built(re) && unsafe { (*(*re).programs_ptr).fancy.is_some() }
+}
+
+fn regex_has_repeat_program(re: *const RegExpHeader) -> bool {
+    regex_is_built(re) && unsafe { (*(*re).programs_ptr).repeat.is_some() }
+}
+
 #[test]
 fn regexp_has_dedicated_gc_kind_and_is_not_a_shaped_object() {
     let _lock = crate::gc::global_side_table_test_lock();
@@ -29,6 +41,16 @@ fn regexp_has_dedicated_gc_kind_and_is_not_a_shaped_object() {
     assert_eq!(gc.obj_type, crate::gc::GC_TYPE_REGEXP);
     assert!(regex_header_has_magic(re));
     assert!(!unsafe { crate::object::object_is_shaped(re.cast::<crate::object::ObjectHeader>()) });
+}
+
+#[test]
+#[cfg(target_pointer_width = "64")]
+fn regexp_header_is_one_56_byte_per_object_record() {
+    assert_eq!(
+        std::mem::size_of::<RegExpHeader>(),
+        56,
+        "the three per-program matcher pointers must stay collapsed into one handle"
+    );
 }
 
 #[test]
@@ -76,10 +98,10 @@ fn regexp_finalize_releases_all_header_owned_programs() {
         re
     }
 
-    // Every compiled header owns the standard-engine program, including the
-    // never-match placeholder used by fancy-regex patterns.
+    // Every compiled header owns one shared program bundle, including the
+    // never-match placeholder and any fallback matcher.
     let standard = compile(r"needle\d+", "needle42");
-    let standard_raw = unsafe { (*standard).regex_ptr as *const Regex };
+    let standard_raw = unsafe { (*standard).programs_ptr };
     assert!(!standard_raw.is_null());
     let standard_observer = clone_raw_arc(standard_raw);
     let standard_before = std::sync::Arc::strong_count(&standard_observer);
@@ -93,11 +115,11 @@ fn regexp_finalize_releases_all_header_owned_programs() {
         std::sync::Arc::strong_count(&standard_observer) + 1,
         standard_before
     );
-    assert!(unsafe { (*standard).regex_ptr.is_null() });
+    assert!(!regex_is_built(standard));
 
     let fancy = compile(r"(?<=pre)\d+", "pre77");
-    let fancy_raw = unsafe { (*fancy).fancy_ptr as *const fancy_regex::Regex };
-    assert!(!fancy_raw.is_null());
+    let fancy_raw = unsafe { (*fancy).programs_ptr };
+    assert!(regex_has_fancy_program(fancy));
     let fancy_observer = clone_raw_arc(fancy_raw);
     let fancy_before = std::sync::Arc::strong_count(&fancy_observer);
     unsafe {
@@ -107,12 +129,11 @@ fn regexp_finalize_releases_all_header_owned_programs() {
         std::sync::Arc::strong_count(&fancy_observer) + 1,
         fancy_before
     );
-    assert!(unsafe { (*fancy).fancy_ptr.is_null() });
+    assert!(!regex_is_built(fancy));
 
     let repeat = compile(r"(a?b??)*", "ab");
-    let repeat_raw =
-        unsafe { (*repeat).repeat_matcher_ptr as *const repeat_matcher::RepeatMatcherRegex };
-    assert!(!repeat_raw.is_null());
+    let repeat_raw = unsafe { (*repeat).programs_ptr };
+    assert!(regex_has_repeat_program(repeat));
     let repeat_observer = clone_raw_arc(repeat_raw);
     let repeat_before = std::sync::Arc::strong_count(&repeat_observer);
     unsafe {
@@ -123,7 +144,7 @@ fn regexp_finalize_releases_all_header_owned_programs() {
     }
     let repeat_after = std::sync::Arc::strong_count(&repeat_observer);
     assert_eq!(repeat_after + 1, repeat_before);
-    assert!(unsafe { (*repeat).repeat_matcher_ptr.is_null() });
+    assert!(!regex_is_built(repeat));
 
     // Arena overflow cleanup and finalization can overlap. A second finalizer
     // must observe null pointers rather than release an owned reference twice.
@@ -951,7 +972,7 @@ fn regex_cache_capped_and_prior_headers_survive_eviction() {
     assert!(
         js_regexp_test(fancy, make_string("pre77")) != 0,
         "fancy-fallback header must keep matching after cache eviction \
-         (header-resident fancy_ptr, not the cleared FANCY_CACHE)"
+         (header-resident program set, not the cleared FANCY_CACHE)"
     );
     assert!(
         js_regexp_test(fancy, make_string("nope77")) == 0,
@@ -1175,7 +1196,7 @@ fn syntax_check_agrees_with_full_build() {
 /// fixture whose 200 literals cost 73 ms to construct before and ~0 after. A
 /// regression here (something re-introducing an eager build) would not fail any
 /// behavioural test, only make every program slower, so assert the state
-/// directly: `regex_ptr` is the built/not-built flag.
+/// directly: `programs_ptr` is the built/not-built flag.
 #[test]
 fn construction_defers_the_program_build_until_first_use() {
     let re = js_regexp_new(
@@ -1183,7 +1204,7 @@ fn construction_defers_the_program_build_until_first_use() {
         make_string("i"),
     );
     assert!(
-        unsafe { (*re).regex_ptr.is_null() },
+        !regex_is_built(re),
         "constructing a RegExp must not build its program"
     );
     // Everything observable without matching stays available.
@@ -1194,13 +1215,13 @@ fn construction_defers_the_program_build_until_first_use() {
     assert_eq!(string_payload(js_regexp_get_flags(re)), b"i".to_vec());
     assert!(unsafe { (*re).case_insensitive });
     assert!(
-        unsafe { (*re).regex_ptr.is_null() },
+        !regex_is_built(re),
         "reading .source/.flags must not build the program either"
     );
 
     assert!(js_regexp_test(re, make_string("XFOO12")) != 0);
     assert!(
-        !unsafe { (*re).regex_ptr.is_null() },
+        regex_is_built(re),
         "the first match must build and install the program"
     );
 }
@@ -1271,19 +1292,19 @@ fn regexp_source_round_trips_wtf8_lone_surrogates_from_the_header() {
 #[test]
 fn deferred_build_installs_the_fancy_and_repeat_matcher_fallbacks() {
     let fancy = js_regexp_new(make_string(r"(?<=pre)\d+"), make_string(""));
-    assert!(unsafe { (*fancy).fancy_ptr.is_null() });
+    assert!(!regex_is_built(fancy));
     assert!(js_regexp_test(fancy, make_string("pre77")) != 0);
     assert!(
-        !unsafe { (*fancy).fancy_ptr.is_null() },
+        regex_has_fancy_program(fancy),
         "first use must install the fancy-regex fallback"
     );
     assert!(js_regexp_test(fancy, make_string("nope77")) == 0);
 
     let repeat = js_regexp_new(make_string(r"(a?b??)*"), make_string(""));
-    assert!(unsafe { (*repeat).repeat_matcher_ptr.is_null() });
+    assert!(!regex_is_built(repeat));
     assert!(js_regexp_test(repeat, make_string("ab")) != 0);
     assert!(
-        !unsafe { (*repeat).repeat_matcher_ptr.is_null() },
+        regex_has_repeat_program(repeat),
         "first use must install the ECMAScript RepeatMatcher"
     );
 }
@@ -1723,10 +1744,7 @@ fn site_cache_reconstruction_is_born_built() {
     let _lock = crate::gc::global_side_table_test_lock();
     site_cache::test_reset();
     let re1 = js_regexp_new(make_string("born[0-9]+built"), make_string("g"));
-    assert!(
-        unsafe { (*re1).regex_ptr.is_null() },
-        "construction stays lazy"
-    );
+    assert!(!regex_is_built(re1), "construction stays lazy");
     assert_eq!(
         site_cache::test_has_programs("born[0-9]+built", "g"),
         Some(false),
@@ -1740,18 +1758,20 @@ fn site_cache_reconstruction_is_born_built() {
     );
     let re2 = js_regexp_new(make_string("born[0-9]+built"), make_string("g"));
     assert!(
-        !unsafe { (*re2).regex_ptr.is_null() },
+        regex_is_built(re2),
         "the second construction installs the programs eagerly"
     );
     assert!(
-        std::ptr::eq(unsafe { (*re1).regex_ptr }, unsafe { (*re2).regex_ptr }),
+        std::ptr::eq(unsafe { (*re1).programs_ptr }, unsafe {
+            (*re2).programs_ptr
+        }),
         "both headers share one compiled program"
     );
     assert_eq!(js_regexp_test(re2, make_string("born7built")), 1);
     assert_eq!(js_regexp_test(re2, make_string("nothing")), 0);
     // Different flags are a different entry.
     let re3 = js_regexp_new(make_string("born[0-9]+built"), make_string("i"));
-    assert!(unsafe { (*re3).regex_ptr.is_null() });
+    assert!(!regex_is_built(re3));
 }
 
 /// `test` on a global/sticky receiver advances `lastIndex` exactly like
@@ -1872,9 +1892,9 @@ fn a_single_program_cache_clear_cannot_disarm_a_lookbehind_literal() {
     unsafe {
         lazy::ensure_regex_compiled(cold);
         assert!(
-            !(*cold).fancy_ptr.is_null(),
+            regex_has_fancy_program(cold),
             "a built header must carry every program its pattern needs — a null \
-             fancy_ptr here is memoized by site_cache::install_programs and makes \
+             the fancy program here is memoized by site_cache::install_programs and makes \
              the breakage permanent for this literal"
         );
     }
@@ -2118,7 +2138,7 @@ fn a_dynamic_construction_records_nothing_in_the_site_table() {
 
 /// A site hit must be born built: the second construction at a site whose
 /// first header has already executed installs the compiled programs eagerly,
-/// so `regex_ptr` is non-null before any match runs.
+/// so `programs_ptr` is non-null before any match runs.
 ///
 /// This is what makes the fast path complete — a hit that skipped the content
 /// cache but arrived unbuilt would push the pattern's hash back onto the first
@@ -2131,19 +2151,19 @@ fn a_site_hit_after_the_first_execution_is_born_built() {
 
     let first = js_regexp_new_site(make_string("bo+rn"), make_string(""), key);
     assert!(
-        unsafe { (*first).regex_ptr }.is_null(),
+        !regex_is_built(first),
         "construction must not build the program (that is #5777's deferred build)"
     );
     assert!(js_regexp_test(first, make_string("boorn")) != 0);
     assert!(
-        !unsafe { (*first).regex_ptr }.is_null(),
+        regex_is_built(first),
         "the first execution installs the programs"
     );
 
     // Second construction at the SAME site.
     let second = js_regexp_new_site(make_string("bo+rn"), make_string(""), key);
     assert!(
-        !unsafe { (*second).regex_ptr }.is_null(),
+        regex_is_built(second),
         "a site hit must install the programs the site already compiled, so the header is born \
          built and the first match pays no lookup"
     );

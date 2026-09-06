@@ -23,14 +23,14 @@ use crate::value::js_nanbox_string;
 
 use crate::object::ObjectHeader;
 
-/// The compiled standard-engine regex type. When the regex engine is gated
-/// off, `RegExpHeader::regex_ptr` is typed `*mut ()` (a never-dereferenced
-/// dangling field) so the identity/display layer keeps the same struct
-/// layout without pulling in the `regex` crate.
+/// The shared compiled-program set. When the regex engine is gated off,
+/// `RegExpHeader::programs_ptr` is typed `*const ()` (a never-dereferenced
+/// field) so the identity/display layer keeps the same struct layout without
+/// pulling in the matcher crates.
 #[cfg(feature = "regex-engine")]
-type CompiledRegex = regex::Regex;
+type CompiledPrograms = site_cache::Programs;
 #[cfg(not(feature = "regex-engine"))]
-type CompiledRegex = ();
+type CompiledPrograms = ();
 
 #[cfg(feature = "regex-engine")]
 mod class_range_validate;
@@ -224,7 +224,7 @@ pub(crate) fn regex_header_clear_dead_for_gc(addr: usize) {
 /// Release the compiled programs owned by a dead `RegExpHeader`, then remove
 /// its address-owned metadata.
 ///
-/// The program pointers are raw `Arc` references installed by
+/// The program pointer is a raw `Arc` reference installed by
 /// `lazy::build_and_install_programs` or `RegExp.prototype.compile`. Null them
 /// before reconstructing the `Arc`s because arena cleanup can visit the
 /// metadata and finalizer paths for the same dead cell.
@@ -234,23 +234,11 @@ pub(crate) unsafe fn regex_header_finalize_for_gc(re: *mut RegExpHeader) {
     }
     #[cfg(feature = "regex-engine")]
     {
-        let regex_ptr = (*re).regex_ptr;
-        let fancy_ptr = (*re).fancy_ptr;
-        let repeat_matcher_ptr = (*re).repeat_matcher_ptr;
-        (*re).regex_ptr = ptr::null_mut();
-        (*re).fancy_ptr = ptr::null();
-        (*re).repeat_matcher_ptr = ptr::null();
+        let programs_ptr = (*re).programs_ptr;
+        (*re).programs_ptr = ptr::null();
 
-        if !regex_ptr.is_null() {
-            drop(Arc::from_raw(regex_ptr as *const Regex));
-        }
-        if !fancy_ptr.is_null() {
-            drop(Arc::from_raw(fancy_ptr as *const fancy_regex::Regex));
-        }
-        if !repeat_matcher_ptr.is_null() {
-            drop(Arc::from_raw(
-                repeat_matcher_ptr as *const repeat_matcher::RepeatMatcherRegex,
-            ));
+        if !programs_ptr.is_null() {
+            drop(Arc::from_raw(programs_ptr));
         }
     }
     regex_header_clear_dead_for_gc(re as usize);
@@ -260,7 +248,7 @@ pub(crate) unsafe fn regex_header_finalize_for_gc(re: *mut RegExpHeader) {
 ///
 /// The copying minor's from-space flip runs no per-object finalize hooks, so
 /// a nursery header that was neither evacuated nor pinned would otherwise keep
-/// its `Arc` programs and its `REGEX_POINTERS` / expando
+/// its program-set `Arc` and its `REGEX_POINTERS` / expando
 /// entries forever. Same shape as `map::finalize_dead_copied_minor_from_space_maps`:
 /// walk the registry after the flip, collect the provably-dead addresses, then
 /// finalize each (the finalizer removes its own registry entries, which is why
@@ -359,14 +347,14 @@ pub(crate) fn test_construct_regexp_and_exec_once(pattern: &str, flags: &str) ->
 /// Test support: strong count of the standard program a header holds (the
 /// observer clone taken here is released before returning).
 #[cfg(all(test, feature = "regex-engine"))]
-pub(crate) fn test_regexp_std_program_strong_count(re: *const RegExpHeader) -> usize {
+pub(crate) fn test_regexp_program_set_strong_count(re: *const RegExpHeader) -> usize {
     unsafe {
-        let raw = (*re).regex_ptr as *const Regex;
-        assert!(!raw.is_null(), "program must be installed");
-        let arc = Arc::from_raw(raw);
-        let n = Arc::strong_count(&arc);
+        let programs = (*re).programs_ptr;
+        assert!(!programs.is_null(), "program must be installed");
+        let arc = Arc::from_raw(programs);
+        let count = Arc::strong_count(&arc);
         std::mem::forget(arc);
-        n
+        count
     }
 }
 
@@ -394,7 +382,7 @@ pub(crate) fn test_alloc_nursery_regexp_for_move(source: &str, flags: &str) -> *
         // Neither `gc_malloc` nor the arena zeroes reused memory, so this
         // must be set explicitly or the GC follows a garbage pointer.
         (*ptr).meta = std::ptr::null_mut();
-        (*ptr).regex_ptr = std::ptr::null_mut();
+        (*ptr).programs_ptr = std::ptr::null();
         (*ptr).pattern_ptr = pattern.get_raw_const_ptr::<StringHeader>();
         (*ptr).flags_ptr = flags_string.get_raw_const_ptr::<StringHeader>();
         (*ptr).case_insensitive = flags.contains('i');
@@ -406,8 +394,6 @@ pub(crate) fn test_alloc_nursery_regexp_for_move(source: &str, flags: &str) -> *
         (*ptr).has_indices = flags.contains('d');
         (*ptr).last_index = crate::value::JSValue::number(0.0).bits();
         (*ptr).magic = REGEXP_MAGIC;
-        (*ptr).fancy_ptr = std::ptr::null();
-        (*ptr).repeat_matcher_ptr = std::ptr::null();
 
         REGEX_EVER_REGISTERED.arm();
         REGEX_POINTERS.with(|table| {
@@ -456,7 +442,7 @@ pub(crate) fn regex_header_has_magic(re: *const RegExpHeader) -> bool {
 ///   * `flags_ptr`   — the flags `StringHeader`,
 ///   * `last_index`  — a writable JSValue (`re.lastIndex = …`) that may be a
 ///     NaN-boxed heap pointer.
-/// The compiled matcher pointers point to OFF-heap leaked Rust allocations and the
+/// The compiled-program pointer points to an OFF-heap Rust allocation and the
 /// bool/`magic` fields are never heap refs, so they must NOT be scanned.
 ///
 /// `pattern_ptr` and `flags_ptr` are consecutive equal-width fields, so under
@@ -623,7 +609,7 @@ fn evict_regex_cache_if_full<K, V>(cache: &mut HashMap<K, V>) {
 /// One shared never-match program per thread.
 ///
 /// Only used by the `PERRY_REGEX_ENGINE=regress` measurement path, where every
-/// pattern needs a value in `regex_ptr` (the built/not-built flag) but no NFA:
+/// pattern needs a value in `programs_ptr` (the built/not-built flag) but no NFA:
 /// building a fresh one per pattern would be exactly the compile cost the
 /// experiment exists to remove from the measurement.
 #[cfg(feature = "regex-engine")]
@@ -665,7 +651,7 @@ fn compile_and_cache_regex_checked(pattern: &Arc<str>, flags: &Arc<str>) -> bool
     // `repeat_matcher::regress_first`): the ECMAScript backtracker is the
     // primary engine, so stop here. Every exec-family entry point consults the
     // repeat matcher first, and the shared never-match placeholder gives the
-    // header's `regex_ptr` built-flag a value WITHOUT building an NFA — which
+    // header's `programs_ptr` built-flag a value WITHOUT building an NFA — which
     // is the whole point of the experiment (the linear engine's program is
     // ~12.5 KB median against regress's 512 B, measured over 4,463 literals
     // from seven real bundles).
@@ -752,11 +738,12 @@ fn get_or_compile_regex(pattern: &Arc<str>, flags: &Arc<str>) -> Arc<Regex> {
 /// Header for heap-allocated RegExp objects
 #[repr(C)]
 pub struct RegExpHeader {
-    /// Pointer to the compiled Regex object (boxed). Typed via the
-    /// `CompiledRegex` alias so the struct layout is identical whether or not
-    /// the regex engine is linked (it's `*mut ()` when gated off and never
-    /// dereferenced — all dereferencing sites are themselves engine-gated).
-    regex_ptr: *mut CompiledRegex,
+    /// Header-owned `Arc<Programs>` raw pointer, or null until first use.
+    /// The program set contains the standard engine and optional fancy/repeat
+    /// matchers once per pattern instead of repeating three pointers in every
+    /// RegExp object. Typed through `CompiledPrograms` so the layout is stable
+    /// when the regex engine is gated off.
+    programs_ptr: *const CompiledPrograms,
     /// Original pattern string (for debugging/serialization)
     pattern_ptr: *const StringHeader,
     /// Flags string (e.g., "gi" for global+ignoreCase)
@@ -795,15 +782,6 @@ pub struct RegExpHeader {
     /// identity + fancy-fallback resolution independent of WHICH runtime copy's
     /// thread-locals are live. Set to `REGEXP_MAGIC` by `js_regexp_new`.
     pub magic: u64,
-    /// Leaked `Arc<fancy_regex::Regex>` (as a raw pointer) for patterns the
-    /// `regex` crate can't compile (lookahead/lookbehind/backrefs), or null.
-    /// Header-resident twin of the `FANCY_CACHE` thread-local so the fancy
-    /// fallback survives the duplicate-runtime split described above.
-    pub fancy_ptr: *const (),
-    /// Header-owned `Arc<RepeatMatcherRegex>` for quantified capture groups,
-    /// or null for the ordinary linear/fancy paths. Like `fancy_ptr`, this
-    /// survives cache eviction and duplicate statically-linked runtime copies.
-    pub repeat_matcher_ptr: *const (),
     /// #6759 phase 1 (header unification): per-object metadata record, or
     /// null. Appended LAST so `regex_gc_slot_ptrs`' adjacency assertion on
     /// `pattern_ptr`/`flags_ptr` and every other offset are undisturbed.
@@ -953,8 +931,8 @@ fn newborn_barrier_gate_enabled() -> bool {
 ///
 /// Validates the pattern and allocates the header; it does NOT build the
 /// compiled program. That happens on the first operation that needs a matcher
-/// — see `regex::lazy`, and the `regex_ptr`/`fancy_ptr`/`repeat_matcher_ptr`
-/// fields, which are null until then. A fresh header per call is required:
+/// — see `regex::lazy`; `programs_ptr` is null until then. A fresh header per
+/// call is required:
 /// ECMA-262 evaluates a regex literal to a NEW object every time, and the
 /// distinction is observable through `===`, expandos and `lastIndex`.
 #[cfg(feature = "regex-engine")]
@@ -1255,7 +1233,7 @@ fn js_regexp_new_impl(
             // established that the pattern is legal, and a bundle evaluates hundreds
             // of module-level literals it never matches with — building each one's
             // NFA at construction is what put ~14% of a claude-code `--help` run
-            // inside `regex_syntax`/`regex_automata`. `regex_ptr` stays null (the
+            // inside `regex_syntax`/`regex_automata`. `programs_ptr` stays null (the
             // "not built yet" state) and `lazy::ensure_regex_compiled` installs the
             // owned `Arc`s on the first operation that needs a matcher.
 
@@ -1334,7 +1312,7 @@ fn js_regexp_new_impl(
     // exercised the arena arm all along. What kept production on malloc was
     // finalization: the copying minor's from-space flip runs no per-object
     // finalize hooks (`gc::copying`), so a nursery header that dies young
-    // would leak its three `Arc` programs and its registry entries. That is
+    // would leak its program-set `Arc` and its registry entries. That is
     // now handled the way Map/Set/Error handle theirs —
     // `finalize_dead_copied_minor_from_space_regexps` after a copied minor and
     // `collect_dead_registered_regexps_post_trace` at sweep entry for the
@@ -1399,7 +1377,7 @@ fn js_regexp_new_impl(
         // must be set explicitly or the GC follows a garbage pointer.
         (*ptr).meta = std::ptr::null_mut();
         // Null = not compiled yet; see `lazy::ensure_regex_compiled`.
-        (*ptr).regex_ptr = std::ptr::null_mut();
+        (*ptr).programs_ptr = std::ptr::null();
         (*ptr).pattern_ptr = pattern;
         (*ptr).flags_ptr = canonical_flags_ptr;
         // `pattern_ptr` / `flags_ptr` are GC-managed StringHeaders — the GC scans
@@ -1479,26 +1457,11 @@ fn js_regexp_new_impl(
         // Wall 18: self-identifying marker so identity checks survive a
         // duplicate-runtime thread-local split.
         (*ptr).magic = REGEXP_MAGIC;
-        // The header-resident fancy-regex fallback (lookahead/lookbehind/
-        // backrefs) and the ECMAScript backtracking matcher are installed
-        // alongside `regex_ptr` by `lazy::ensure_regex_compiled`, from the
-        // same caches, on the first operation that needs a matcher. Keeping
-        // all three on one publish point is what makes `regex_ptr.is_null()`
-        // a sound built/not-built flag.
-        (*ptr).fancy_ptr = std::ptr::null();
-        (*ptr).repeat_matcher_ptr = std::ptr::null();
-        // Born built: the site cache already holds the programs the first
-        // execution of this text compiled. Install the same three owned
-        // references `lazy::build_and_install_programs` would, publishing
-        // `regex_ptr` last for the same reason it does.
+        // Born built: the site cache already holds the shared program set the
+        // first execution of this text compiled. Install one owned reference;
+        // null remains the sound not-built state.
         if let Some(programs) = programs {
-            (*ptr).fancy_ptr = programs
-                .fancy
-                .map_or(std::ptr::null(), |arc| Arc::into_raw(arc) as *const ());
-            (*ptr).repeat_matcher_ptr = programs
-                .repeat
-                .map_or(std::ptr::null(), |arc| Arc::into_raw(arc) as *const ());
-            (*ptr).regex_ptr = Arc::into_raw(programs.std) as *mut Regex;
+            (*ptr).programs_ptr = Arc::into_raw(programs);
         }
 
         // Record the pointer so that js_string_split can detect
@@ -1785,32 +1748,14 @@ pub(super) fn diag_note_op(re: *const RegExpHeader, op: crate::hot_diag::RegexOp
 /// pattern (backreferences, lookbehind, etc.).
 #[cfg(feature = "regex-engine")]
 pub(crate) fn lookup_fancy_regex(re: *const RegExpHeader) -> Option<Arc<fancy_regex::Regex>> {
-    // The header's programs are built on first use; `fancy_ptr` is null until
-    // then, and a null there is indistinguishable from "this pattern has no
-    // fancy fallback" — so build before reading it.
+    // The header's shared program set is built on first use.
     lazy::ensure_regex_compiled(re);
     unsafe {
-        // Wall 18: header-resident fancy Arc first (duplicate-runtime
-        // thread-local resilient). `fancy_ptr` is a leaked `Arc` raw pointer; to
-        // hand back an owned `Arc` clone WITHOUT consuming the header's
-        // reference, reconstruct, clone, then `mem::forget` the reconstructed
-        // one so the header's strong count is preserved.
+        // Wall 18: header-resident program set first (duplicate-runtime
+        // thread-local resilient).
         if regex_header_has_magic(re) {
-            if (*re).fancy_ptr.is_null() {
-                // Built (see `ensure_regex_compiled` above) with no fancy
-                // fallback: every install path (`lazy`, `compile`, the site
-                // cache) publishes all three program pointers together, so a
-                // null here is the answer, not "not looked up yet". Falling
-                // through to the cache probe re-hashed the whole pattern on
-                // EVERY exec of every ordinary regex (#keystroke profile:
-                // 514 samples under this function alone).
-                return None;
-            }
-            let raw = (*re).fancy_ptr as *const fancy_regex::Regex;
-            let arc = Arc::from_raw(raw);
-            let cloned = arc.clone();
-            std::mem::forget(arc);
-            return Some(cloned);
+            let programs = &*(*re).programs_ptr;
+            return programs.fancy.clone();
         }
         let pat = string_as_str((*re).pattern_ptr);
         let flags_str = string_as_str((*re).flags_ptr);
@@ -1858,11 +1803,11 @@ pub(crate) fn lookup_fancy_regex(re: *const RegExpHeader) -> Option<Arc<fancy_re
 #[cfg(feature = "regex-engine")]
 fn linear_rules_out_match(re: *const RegExpHeader, subject: &str, start: usize) -> bool {
     unsafe {
-        let program = (*re).regex_ptr;
-        if program.is_null() {
+        let programs = (*re).programs_ptr;
+        if programs.is_null() {
             return false;
         }
-        let program: &Regex = &*program;
+        let program: &Regex = &(*programs).std;
         if program.as_str() == NEVER_MATCH_PATTERN {
             // The `regex` crate refused this pattern (lookaround /
             // backreference); it has no opinion about the subject.
@@ -1896,22 +1841,11 @@ fn lookup_repeat_matcher_for(
 fn lookup_repeat_matcher(
     re: *const RegExpHeader,
 ) -> Option<Arc<repeat_matcher::RepeatMatcherRegex>> {
-    // Same first-use build as `lookup_fancy_regex`: a null
-    // `repeat_matcher_ptr` means "not built yet" before it can mean "this
-    // pattern needs no backtracking matcher".
     lazy::ensure_regex_compiled(re);
     unsafe {
         if regex_header_has_magic(re) {
-            if (*re).repeat_matcher_ptr.is_null() {
-                // Same reasoning as `lookup_fancy_regex`: a built header with
-                // a null pointer has no backtracking matcher.
-                return None;
-            }
-            let raw = (*re).repeat_matcher_ptr as *const repeat_matcher::RepeatMatcherRegex;
-            let arc = Arc::from_raw(raw);
-            let cloned = arc.clone();
-            std::mem::forget(arc);
-            return Some(cloned);
+            let programs = &*(*re).programs_ptr;
+            return programs.repeat.clone();
         }
         let pat = string_as_str((*re).pattern_ptr);
         let flags_str = string_as_str((*re).flags_ptr);
