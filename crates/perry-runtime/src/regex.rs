@@ -62,6 +62,7 @@ mod grammar;
 mod lazy;
 #[cfg(feature = "regex-engine")]
 mod match_all;
+mod properties;
 #[cfg(feature = "regex-engine")]
 mod repeat_matcher;
 #[cfg(feature = "regex-engine")]
@@ -83,7 +84,6 @@ mod utf16;
 use class_range_validate::has_out_of_order_double_dash_class_range;
 #[cfg(feature = "regex-engine")]
 pub use compile::js_regexp_compile_value;
-use escape::escape_regexp_source;
 pub use escape::js_regexp_escape;
 #[cfg(feature = "regex-engine")]
 use exec_array::{
@@ -104,6 +104,10 @@ pub(crate) use match_all::dispatch_regexp_string_iterator_method_builtin;
 #[cfg(feature = "regex-engine")]
 pub use match_all::{
     dispatch_regexp_string_iterator_method, js_string_match_all, js_string_match_all_value,
+};
+pub use properties::{
+    js_regexp_empty_source, js_regexp_get_flags, js_regexp_get_last_index, js_regexp_get_source,
+    js_regexp_set_last_index, js_regexp_to_string,
 };
 
 /// Class id for `RegExp String Iterator` exotic objects. Referenced by the
@@ -1989,77 +1993,7 @@ pub(crate) fn test_last_exec_groups() -> usize {
     LAST_EXEC_GROUPS.with(|g| *g.borrow() as usize)
 }
 
-/// Get regex.source — returns the pattern string
-#[no_mangle]
-pub extern "C" fn js_regexp_get_source(re: *const RegExpHeader) -> *mut StringHeader {
-    if !is_valid_regex_ptr(re) {
-        return js_string_from_str("(?:)");
-    }
-    unsafe {
-        if is_valid_ptr((*re).pattern_ptr) {
-            let escaped = escape_regexp_source(string_as_bytes((*re).pattern_ptr));
-            crate::string::js_string_from_wtf8_bytes(escaped.as_ptr(), escaped.len() as u32)
-        } else {
-            js_string_from_str("(?:)")
-        }
-    }
-}
-
-/// `RegExp.prototype.source` for the prototype object itself (no
-/// `[[OriginalSource]]`) returns the canonical empty source `"(?:)"`.
-#[no_mangle]
-pub extern "C" fn js_regexp_empty_source() -> *mut StringHeader {
-    js_string_from_str("(?:)")
-}
-
-/// Get regex.flags — returns the flags string
-#[no_mangle]
-pub extern "C" fn js_regexp_get_flags(re: *const RegExpHeader) -> *mut StringHeader {
-    if !is_valid_regex_ptr(re) {
-        return js_string_from_str("");
-    }
-    unsafe {
-        if is_valid_ptr((*re).flags_ptr) {
-            let flags_str = string_as_str((*re).flags_ptr);
-            js_string_from_str(flags_str)
-        } else {
-            js_string_from_str("")
-        }
-    }
-}
-
-/// `RegExp.prototype.toString()` — `/source/flags`. Used by both the
-/// `regex.toString()` method dispatch and ToString coercion (`String(re)`,
-/// template literals). Node never produces `"[object Object]"` for a RegExp.
-#[no_mangle]
-pub extern "C" fn js_regexp_to_string(re: *const RegExpHeader) -> *mut StringHeader {
-    let src = js_regexp_get_source(re);
-    let flg = js_regexp_get_flags(re);
-    let out = format!("/{}/{}", string_as_str(src), string_as_str(flg));
-    js_string_from_str(&out)
-}
-
-/// Get regex.lastIndex — returns the stored value (NaN-boxed JSValue bits as
-/// f64). Usually a number, but `re.lastIndex = obj` round-trips the object.
-#[no_mangle]
-pub extern "C" fn js_regexp_get_last_index(re: *const RegExpHeader) -> f64 {
-    if !is_valid_regex_ptr(re) {
-        return 0.0;
-    }
-    unsafe { f64::from_bits((*re).last_index) }
-}
-
-/// Set regex.lastIndex — stores the value verbatim (no coercion on write, per
-/// spec `Set(R, "lastIndex", v)`).
-#[no_mangle]
-pub extern "C" fn js_regexp_set_last_index(re: *mut RegExpHeader, value: f64) {
-    if !is_valid_regex_ptr(re) {
-        return;
-    }
-    unsafe {
-        (*re).last_index = value.to_bits();
-    }
-}
-
 #[cfg(all(test, feature = "regex-engine"))]
 mod tests;
+#[cfg(all(test, feature = "regex-engine"))]
+mod tests_header;
