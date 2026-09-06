@@ -1568,6 +1568,17 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // Iterator-protocol result validation (for-of lazy loop).
     module.declare_function("js_iterator_result_validate", DOUBLE, &[DOUBLE]);
     module.declare_function("js_for_of_next", DOUBLE, &[DOUBLE]);
+    // #9843: Intl.Segmenter view mode. The segment-view tier emits calls to
+    // these when it fires; without a `declare` the module references an
+    // undefined value and the in-process LLVM parse rejects the whole module
+    // ("use of undefined value '@js_segments_view_next'"). Signatures are
+    // taken from `perry-runtime/src/intl/segments_view.rs` (#9870) — note that
+    // `regexp_test` is (cursor, regex), cursor first.
+    module.declare_function("js_segments_view_open", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_segments_view_next", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_segments_view_code_point_at", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_segments_view_segment", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_segments_view_regexp_test", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_global_get_or_throw_unresolved", DOUBLE, &[DOUBLE]);
     // Ambient `require` for compiled external / compilePackages modules (#5373):
     // bind a bare `require` to a createRequire-backed closure instead of throwing

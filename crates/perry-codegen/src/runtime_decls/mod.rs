@@ -25,6 +25,9 @@ pub use objects::declare_phase_b_objects;
 pub use stdlib_ffi::declare_stdlib_ffi;
 pub(crate) use stdlib_ffi_part2::declare_stdlib_ffi_part2;
 pub use strings::declare_phase_b_strings;
+
+#[cfg(test)]
+mod segview_decls_tests;
 pub(crate) use strings_part2::declare_phase_b_strings_part2;
 
 /// Declare the minimum set of runtime functions needed by Phase 1
