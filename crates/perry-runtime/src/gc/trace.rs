@@ -9,6 +9,78 @@ crate::perry_thread_local! {
         const { std::cell::Cell::new(false) };
 }
 
+#[derive(Clone, Copy, Default)]
+struct ValidPointerDiag {
+    contains: u64,
+    page_hits: u64,
+    page_rejects: u64,
+    run_fallbacks: u64,
+    malloc_probes: u64,
+    malloc_hits: u64,
+    enclosing: u64,
+}
+
+crate::perry_thread_local! {
+    static VALID_POINTER_DIAG: std::cell::Cell<ValidPointerDiag> =
+        const { std::cell::Cell::new(ValidPointerDiag {
+            contains: 0,
+            page_hits: 0,
+            page_rejects: 0,
+            run_fallbacks: 0,
+            malloc_probes: 0,
+            malloc_hits: 0,
+            enclosing: 0,
+        }) };
+}
+
+#[inline(always)]
+fn valid_pointer_diag_note(update: impl FnOnce(&mut ValidPointerDiag)) {
+    if !super::gc_diag_enabled() {
+        return;
+    }
+    VALID_POINTER_DIAG.with(|cell| {
+        let mut diag = cell.get();
+        update(&mut diag);
+        cell.set(diag);
+    });
+}
+
+pub(super) fn emit_valid_pointer_diag() {
+    if !super::gc_diag_enabled() {
+        return;
+    }
+    VALID_POINTER_DIAG.with(|cell| {
+        let d = cell.get();
+        eprintln!(
+            "[gc-pointer-validation] contains={} page_hits={} page_rejects={} \
+             run_fallbacks={} malloc_probes={} malloc_hits={} enclosing={}",
+            d.contains,
+            d.page_hits,
+            d.page_rejects,
+            d.run_fallbacks,
+            d.malloc_probes,
+            d.malloc_hits,
+            d.enclosing,
+        );
+    });
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_PAGE_CLASS_EXACT_START_ANSWERS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static TEST_DISABLE_PAGE_CLASS_EXACT_START: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+pub(super) fn page_class_exact_start_answers_for_tests() -> u64 {
+    TEST_PAGE_CLASS_EXACT_START_ANSWERS.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+pub(super) fn disable_page_class_exact_start_for_tests(disabled: bool) -> bool {
+    TEST_DISABLE_PAGE_CLASS_EXACT_START.with(|state| state.replace(disabled))
+}
+
 crate::perry_thread_local! {
     /// #9717: array-growth forwarding stubs the classifier admitted into a
     /// budgeted-cycle valid-pointer set that `plausible_arena_user_ptr_header`
@@ -256,6 +328,7 @@ impl ValidPointerSet {
     }
     #[inline]
     pub(crate) fn contains(&self, ptr: &usize) -> bool {
+        valid_pointer_diag_note(|d| d.contains = d.contains.saturating_add(1));
         if self.classifier_mode {
             // No census was built: classify live. FORWARDED rejects are
             // correct here (budgeted cycles are non-moving; a forwarded
@@ -274,8 +347,18 @@ impl ValidPointerSet {
         // malloc-tracked starts, which have no usable order, need the B-tree.
         // Arena first because arena hits dominate every workload that reaches
         // here — a malloc pointer pays one extra run-level binary search.
-        let exact = self.arena_start_censused(*ptr)
-            || (!self.malloc_lookup.is_empty() && self.malloc_lookup.contains(ptr));
+        let arena_exact = self.arena_start_censused(*ptr);
+        let malloc_exact = if arena_exact || self.malloc_lookup.is_empty() {
+            false
+        } else {
+            valid_pointer_diag_note(|d| d.malloc_probes = d.malloc_probes.saturating_add(1));
+            let found = self.malloc_lookup.contains(ptr);
+            if found {
+                valid_pointer_diag_note(|d| d.malloc_hits = d.malloc_hits.saturating_add(1));
+            }
+            found
+        };
+        let exact = arena_exact || malloc_exact;
         // #6179 differential verification (PERRY_GC_VERIFY_CLASSIFIER=1):
         // before the exact set can be replaced by page-metadata
         // classification on precise cycles, the classifier must be proven a
@@ -313,6 +396,7 @@ impl ValidPointerSet {
     /// iteration. Find the largest entry `<= query`, then validate via
     /// the GcHeader's size field.
     pub(crate) fn enclosing_object(&self, ptr: usize) -> Option<usize> {
+        valid_pointer_diag_note(|d| d.enclosing = d.enclosing.saturating_add(1));
         let candidate = self.find_arena_floor(ptr)?;
         unsafe {
             let header = (candidate as *const u8).sub(GC_HEADER_SIZE) as *const GcHeader;
@@ -353,6 +437,35 @@ impl ValidPointerSet {
              {} censused starts are invisible to this lookup",
             self.current_arena_run.len()
         );
+        #[cfg(test)]
+        let fast_enabled = !TEST_DISABLE_PAGE_CLASS_EXACT_START.with(std::cell::Cell::get);
+        #[cfg(not(test))]
+        let fast_enabled = true;
+
+        if fast_enabled {
+            if let Some(exact) = crate::arena::page_class_exact_object_start(ptr) {
+                valid_pointer_diag_note(|d| {
+                    if exact {
+                        d.page_hits = d.page_hits.saturating_add(1);
+                    } else {
+                        d.page_rejects = d.page_rejects.saturating_add(1);
+                    }
+                });
+                #[cfg(test)]
+                TEST_PAGE_CLASS_EXACT_START_ANSWERS
+                    .with(|count| count.set(count.get().wrapping_add(1)));
+                #[cfg(debug_assertions)]
+                if !exact {
+                    debug_assert_ne!(
+                        self.find_arena_floor(ptr),
+                        Some(ptr),
+                        "page-class exact-start bitmap rejected a censused arena object; an allocation route failed to stamp its header"
+                    );
+                }
+                return exact;
+            }
+        }
+        valid_pointer_diag_note(|d| d.run_fallbacks = d.run_fallbacks.saturating_add(1));
         self.find_arena_floor(ptr) == Some(ptr)
     }
 
@@ -418,18 +531,27 @@ impl ValidPointerSetBuilder {
     /// into the exact set; membership resolves via the classifier. Saves the
     /// O(heap) BTreeSet held across the whole sliced cycle.
     pub(super) fn new_classifier() -> Self {
-        let mut b = Self::new();
-        b.set.classifier_mode = true;
-        b
+        Self::new_with_mode(true)
     }
 
     pub(super) fn new() -> Self {
+        Self::new_with_mode(false)
+    }
+
+    fn new_with_mode(classifier_mode: bool) -> Self {
+        let rebuild_exact_starts =
+            !classifier_mode && crate::arena::page_class_exact_start_enabled();
+        let mut set = ValidPointerSet::new();
+        set.classifier_mode = classifier_mode;
         Self {
-            set: ValidPointerSet::new(),
+            set,
             phase: ValidPointerSetBuildPhase::ArenaCursorSetup,
-            arena_cursor_builder: Some(crate::arena::ArenaObjectCursorBuilder::new(
-                crate::arena::ArenaWalkOrder::Address,
-            )),
+            arena_cursor_builder: Some(
+                crate::arena::ArenaObjectCursorBuilder::new_with_object_start_reset(
+                    crate::arena::ArenaWalkOrder::Address,
+                    rebuild_exact_starts,
+                ),
+            ),
             arena_cursor: None,
             malloc_index: 0,
         }
@@ -529,6 +651,9 @@ impl ValidPointerSetBuilder {
     }
 
     fn record_arena_header(&mut self, header_ptr: *mut u8) {
+        if !self.set.classifier_mode {
+            crate::arena::record_censused_arena_object_start(header_ptr as usize);
+        }
         let user_ptr = unsafe { header_ptr.add(GC_HEADER_SIZE) };
         self.set.push_arena(user_ptr as usize);
         unsafe {

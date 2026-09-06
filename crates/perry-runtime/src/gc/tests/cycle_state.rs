@@ -343,6 +343,53 @@ fn valid_pointer_membership_spans_every_census_run_including_the_partial_one_764
     );
 }
 
+/// The direct page-class membership answer must be live, exact, and bounded by
+/// the registered arena range. Named sabotage: the test disables the bitmap
+/// answer and requires the independently-correct census-run fallback to take
+/// over without moving the bitmap-answer counter. Delete the optimized arm and
+/// the positive half fails because that counter stays flat.
+#[test]
+fn page_class_exact_membership_rejects_pointer_just_outside_arena_chunk() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+
+    let object = young_leaf();
+    let (_, range_base, _) = crate::arena::classify_heap_space_in_range(object)
+        .expect("test object must belong to a registered arena chunk");
+    let valid_ptrs = ValidPointerSetBuilder::new().finish();
+
+    if crate::arena::page_class_exact_start_enabled() {
+        let before = page_class_exact_start_answers_for_tests();
+        assert!(valid_ptrs.contains(&object));
+        assert_eq!(
+            page_class_exact_start_answers_for_tests(),
+            before + 1,
+            "the direct table must answer exact membership for a real arena start"
+        );
+
+        let restore = disable_page_class_exact_start_for_tests(true);
+        let fallback_before = page_class_exact_start_answers_for_tests();
+        assert!(
+            valid_ptrs.contains(&object),
+            "the census fallback must agree"
+        );
+        disable_page_class_exact_start_for_tests(restore);
+        assert_eq!(
+            page_class_exact_start_answers_for_tests(),
+            fallback_before,
+            "sabotage must force the independently-correct census fallback"
+        );
+    }
+
+    let outside = range_base
+        .checked_sub(GC_HEADER_SIZE)
+        .expect("arena chunk base must be above the first page");
+    assert!(
+        !valid_ptrs.contains(&outside),
+        "a pointer immediately before the registered chunk must be rejected"
+    );
+}
+
 #[test]
 fn build_valid_pointer_set_finalize_is_separate_bounded_phase() {
     let _guard = CopyingNurseryTestGuard::new(0);

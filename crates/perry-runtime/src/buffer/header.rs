@@ -278,11 +278,33 @@ thread_local! {
 /// registry it guards is thread-local and `cargo test` gives each case its own
 /// thread inside one process.
     static TEST_BUFFER_REGISTRY_PROBES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static TEST_DISABLE_BUFFER_HEADER_CLASS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 #[cfg(test)]
 pub(crate) fn test_buffer_registry_probe_count() -> u64 {
     TEST_BUFFER_REGISTRY_PROBES.with(|c| c.get())
+}
+
+#[cfg(test)]
+pub(crate) fn test_disable_buffer_header_class(disabled: bool) -> bool {
+    TEST_DISABLE_BUFFER_HEADER_CLASS.with(|state| state.replace(disabled))
+}
+
+#[inline(always)]
+fn managed_header_rejects_buffer(addr: usize) -> bool {
+    #[cfg(test)]
+    if TEST_DISABLE_BUFFER_HEADER_CLASS.with(std::cell::Cell::get) {
+        return false;
+    }
+    // A real managed Buffer must carry GC_TYPE_BUFFER. Page/registry ownership
+    // makes the header read safe; only a negative class answer is authoritative
+    // here. A class match still falls through to exact Buffer registries, so an
+    // aligned interior pointer cannot become a false positive.
+    unsafe {
+        crate::value::addr_class::try_read_tracked_gc_header(addr)
+            .is_some_and(|header| (*header.as_ptr()).obj_type != crate::gc::GC_TYPE_BUFFER)
+    }
 }
 
 #[cfg(test)]
@@ -491,6 +513,17 @@ pub fn is_registered_buffer(addr: usize) -> bool {
     // `js_buffer_register_external` also routes through) and
     // `shared_sab::alloc_shared_sab` both arm this latch before they publish.
     if BUFFER_LIKE_EVER_REGISTERED.is_idle() {
+        return false;
+    }
+    // Since the 2026-07-09 allocator audit, every runtime-owned Buffer has a
+    // real `GC_TYPE_BUFFER` header. Reject a tracked non-Buffer before the
+    // address-filter hashes, TLS resolution, RefCell borrow and registry hash.
+    // Headerless external buffers and positive class matches retain the exact
+    // registry path below.
+    if managed_header_rejects_buffer(addr) {
+        if crate::hot_diag::buffer_on() {
+            crate::hot_diag::buffer_note_header_reject();
+        }
         return false;
     }
     // An address outside the registered window cannot be in any of the three
