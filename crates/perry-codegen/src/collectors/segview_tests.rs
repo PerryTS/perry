@@ -1,4 +1,4 @@
-//! #9846: the segment-view for-of matcher, pinned against the HIR shape that
+//! #9843: the segment-view for-of matcher, pinned against the HIR shape that
 //! `--trace hir` actually produces for
 //! `for (let {segment: O} of X.segment(q))`.
 //!
