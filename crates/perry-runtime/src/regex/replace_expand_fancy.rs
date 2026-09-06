@@ -197,7 +197,7 @@ pub extern "C" fn js_string_replace_regex(
 
         // Pattern the `regex` crate couldn't compile (lookbehind/backreferences)
         // → drive the replacement through fancy-regex. Otherwise the never-match
-        // placeholder in `regex_ptr` would leave the input unchanged.
+        // placeholder standard program would leave the input unchanged.
         if let Some(fre) = lookup_fancy_regex(re) {
             return replace_regex_str_fancy(str_data, &fre, (*re).global, repl_str);
         }
@@ -369,7 +369,7 @@ pub extern "C" fn js_string_search_regex(s: *const StringHeader, re: *const RegE
         }
 
         // Fancy-regex fallback (lookbehind/backreferences): the never-match
-        // placeholder in `regex_ptr` would always report -1 otherwise.
+        // placeholder standard program would always report -1 otherwise.
         if let Some(fre) = lookup_fancy_regex(re) {
             return match fre.find(str_data) {
                 Ok(Some(m)) => byte_index_to_utf16_index(str_data, m.start()) as i32,
