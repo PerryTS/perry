@@ -856,3 +856,6 @@ test_gap_gc_string_repeat_reentrant_count
 # Pre-fix: SIGBUS after the first copying minor under
 # PERRY_GC_PROTECT_FROMSPACE=1; post-fix: `600000 0.35 0.25 0.1 100000 0.35`.
 test_gap_gc_coalesce_local_root
+
+# for-in output/receiver custody across Proxy callbacks (#4644)
+test_gap_gc_for_in_proxy_callback_roots

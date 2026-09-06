@@ -236,10 +236,11 @@ fn descriptor_key(name: &[u8]) -> (*const crate::StringHeader, f64) {
 }
 
 pub(super) unsafe fn descriptor_field_present(desc: f64, name: &[u8]) -> bool {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let desc_handle = scope.root_nanbox_f64(desc);
     let (key, key_value) = descriptor_key(name);
+    let desc = desc_handle.get_nanbox_f64();
     if lookup(desc).is_some() {
-        let scope = crate::gc::RuntimeHandleScope::new();
-        let desc_handle = scope.root_nanbox_f64(desc);
         let key_handle = scope.root_nanbox_f64(key_value);
         return crate::value::js_is_truthy(js_proxy_has(
             desc_handle.get_nanbox_f64(),
@@ -251,10 +252,11 @@ pub(super) unsafe fn descriptor_field_present(desc: f64, name: &[u8]) -> bool {
 }
 
 unsafe fn descriptor_field(desc: f64, name: &[u8]) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let desc_handle = scope.root_nanbox_f64(desc);
     let (key, key_value) = descriptor_key(name);
+    let desc = desc_handle.get_nanbox_f64();
     if lookup(desc).is_some() {
-        let scope = crate::gc::RuntimeHandleScope::new();
-        let desc_handle = scope.root_nanbox_f64(desc);
         let key_handle = scope.root_nanbox_f64(key_value);
         return js_proxy_get(desc_handle.get_nanbox_f64(), key_handle.get_nanbox_f64());
     }
@@ -266,10 +268,12 @@ unsafe fn descriptor_field(desc: f64, name: &[u8]) -> f64 {
 }
 
 pub(super) unsafe fn descriptor_bool_field(desc: f64, name: &[u8]) -> Option<bool> {
-    if !descriptor_field_present(desc, name) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let desc_handle = scope.root_nanbox_f64(desc);
+    if !descriptor_field_present(desc_handle.get_nanbox_f64(), name) {
         return None;
     }
-    Some(crate::value::js_is_truthy(descriptor_field(desc, name)) != 0)
+    Some(crate::value::js_is_truthy(descriptor_field(desc_handle.get_nanbox_f64(), name)) != 0)
 }
 
 unsafe fn complete_proxy_descriptor_result(desc: f64) -> f64 {
@@ -278,36 +282,42 @@ unsafe fn complete_proxy_descriptor_result(desc: f64) -> f64 {
     }
     let scope = crate::gc::RuntimeHandleScope::new();
     let desc_handle = scope.root_nanbox_f64(desc);
-    let desc = desc_handle.get_nanbox_f64();
 
-    let has_enumerable = descriptor_field_present(desc, b"enumerable");
-    let has_configurable = descriptor_field_present(desc, b"configurable");
-    let has_value = descriptor_field_present(desc, b"value");
-    let has_writable = descriptor_field_present(desc, b"writable");
-    let has_get = descriptor_field_present(desc, b"get");
-    let has_set = descriptor_field_present(desc, b"set");
+    let has_enumerable = descriptor_field_present(desc_handle.get_nanbox_f64(), b"enumerable");
+    let has_configurable = descriptor_field_present(desc_handle.get_nanbox_f64(), b"configurable");
+    let has_value = descriptor_field_present(desc_handle.get_nanbox_f64(), b"value");
+    let has_writable = descriptor_field_present(desc_handle.get_nanbox_f64(), b"writable");
+    let has_get = descriptor_field_present(desc_handle.get_nanbox_f64(), b"get");
+    let has_set = descriptor_field_present(desc_handle.get_nanbox_f64(), b"set");
 
-    let enumerable =
-        has_enumerable && crate::value::js_is_truthy(descriptor_field(desc, b"enumerable")) != 0;
+    let enumerable = has_enumerable
+        && crate::value::js_is_truthy(descriptor_field(
+            desc_handle.get_nanbox_f64(),
+            b"enumerable",
+        )) != 0;
     let configurable = has_configurable
-        && crate::value::js_is_truthy(descriptor_field(desc, b"configurable")) != 0;
+        && crate::value::js_is_truthy(descriptor_field(
+            desc_handle.get_nanbox_f64(),
+            b"configurable",
+        )) != 0;
     let value = if has_value {
-        descriptor_field(desc, b"value")
+        descriptor_field(desc_handle.get_nanbox_f64(), b"value")
     } else {
         f64::from_bits(TAG_UNDEFINED)
     };
     let value_handle = scope.root_nanbox_f64(value);
-    let writable =
-        has_writable && crate::value::js_is_truthy(descriptor_field(desc, b"writable")) != 0;
+    let writable = has_writable
+        && crate::value::js_is_truthy(descriptor_field(desc_handle.get_nanbox_f64(), b"writable"))
+            != 0;
 
     let getter = if has_get {
-        descriptor_field(desc, b"get")
+        descriptor_field(desc_handle.get_nanbox_f64(), b"get")
     } else {
         f64::from_bits(TAG_UNDEFINED)
     };
     let getter_handle = scope.root_nanbox_f64(getter);
     let setter = if has_set {
-        descriptor_field(desc, b"set")
+        descriptor_field(desc_handle.get_nanbox_f64(), b"set")
     } else {
         f64::from_bits(TAG_UNDEFINED)
     };
@@ -360,40 +370,61 @@ pub extern "C" fn js_reflect_get_own_property_descriptor(target: f64, key: f64) 
         return revoked_return();
     }
 
-    let trap = handler_trap(handler, "getOwnPropertyDescriptor");
+    // The handler lookup, trap, and descriptor field getters can all run JS.
+    // A root is useful only if each post-callback read reloads its current value.
+    let inner_handle = scope.root_nanbox_f64(inner);
+    let handler_handle = scope.root_nanbox_f64(handler);
+    let trap = handler_trap(handler_handle.get_nanbox_f64(), "getOwnPropertyDescriptor");
     let trap_bits = trap.to_bits();
     if trap_bits == TAG_UNDEFINED || trap_bits == TAG_NULL {
         // No trap — forward to the target's [[GetOwnProperty]]. When the target
         // is itself a Proxy, recurse through the Reflect entry point rather than
         // the ordinary object path, which would deref the fake proxy pointer.
-        if lookup(inner).is_some() {
-            return js_reflect_get_own_property_descriptor(inner, property_key);
+        if lookup(inner_handle.get_nanbox_f64()).is_some() {
+            return js_reflect_get_own_property_descriptor(
+                inner_handle.get_nanbox_f64(),
+                property_key_handle.get_nanbox_f64(),
+            );
         }
-        return crate::object::js_object_get_own_property_descriptor(inner, property_key);
+        return crate::object::js_object_get_own_property_descriptor(
+            inner_handle.get_nanbox_f64(),
+            property_key_handle.get_nanbox_f64(),
+        );
     }
     if !is_callable_function(trap) {
         return throw_type_error("proxy getOwnPropertyDescriptor trap is not a function");
     }
 
-    let rebound = crate::closure::clone_closure_rebind_this(trap_bits, handler);
+    let rebound =
+        crate::closure::clone_closure_rebind_this(trap_bits, handler_handle.get_nanbox_f64());
     let closure = closure_from(f64::from_bits(rebound));
     if closure.is_null() {
         return throw_type_error("proxy getOwnPropertyDescriptor trap is not a function");
     }
     let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
-    let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(handler));
-    let result = js_closure_call2(closure, inner, property_key);
+    let prev = this_scope.root_nanbox_f64(crate::object::js_implicit_this_set(
+        handler_handle.get_nanbox_f64(),
+    ));
+    let result = js_closure_call2(
+        closure,
+        inner_handle.get_nanbox_f64(),
+        property_key_handle.get_nanbox_f64(),
+    );
     crate::object::js_implicit_this_set(prev.get_nanbox_f64());
     let result_handle = scope.root_nanbox_f64(result);
 
-    let target_desc = crate::object::js_object_get_own_property_descriptor(inner, property_key);
+    let target_desc = crate::object::js_object_get_own_property_descriptor(
+        inner_handle.get_nanbox_f64(),
+        property_key_handle.get_nanbox_f64(),
+    );
     let target_desc_handle = scope.root_nanbox_f64(target_desc);
     let result = result_handle.get_nanbox_f64();
-    let target_desc = target_desc_handle.get_nanbox_f64();
     if result.to_bits() == TAG_UNDEFINED {
-        if target_desc.to_bits() != TAG_UNDEFINED
-            && (crate::object::obj_value_no_extend(inner)
-                || unsafe { descriptor_bool_field(target_desc, b"configurable") } == Some(false))
+        if target_desc_handle.get_nanbox_u64() != TAG_UNDEFINED
+            && (crate::object::obj_value_no_extend(inner_handle.get_nanbox_f64())
+                || unsafe {
+                    descriptor_bool_field(target_desc_handle.get_nanbox_f64(), b"configurable")
+                } == Some(false))
         {
             return throw_type_error(
                 "proxy getOwnPropertyDescriptor trap cannot hide target property",
@@ -407,16 +438,17 @@ pub extern "C" fn js_reflect_get_own_property_descriptor(target: f64, key: f64) 
     }
     let result = unsafe { complete_proxy_descriptor_result(result) };
     let result_handle = scope.root_nanbox_f64(result);
-    let result = result_handle.get_nanbox_f64();
 
-    if target_desc.to_bits() == TAG_UNDEFINED {
-        if crate::object::obj_value_no_extend(inner) {
+    if target_desc_handle.get_nanbox_u64() == TAG_UNDEFINED {
+        if crate::object::obj_value_no_extend(inner_handle.get_nanbox_f64()) {
             return throw_type_error(
                 "proxy getOwnPropertyDescriptor trap reports new property on non-extensible target",
             );
         }
-    } else if unsafe { descriptor_bool_field(target_desc, b"configurable") } == Some(false)
-        && unsafe { descriptor_bool_field(result, b"configurable") } == Some(true)
+    } else if unsafe { descriptor_bool_field(target_desc_handle.get_nanbox_f64(), b"configurable") }
+        == Some(false)
+        && unsafe { descriptor_bool_field(result_handle.get_nanbox_f64(), b"configurable") }
+            == Some(true)
     {
         return throw_type_error(
             "proxy getOwnPropertyDescriptor trap reports incompatible descriptor",
@@ -425,9 +457,13 @@ pub extern "C" fn js_reflect_get_own_property_descriptor(target: f64, key: f64) 
 
     // [[GetOwnProperty]] step 21.a: a non-configurable result descriptor is only
     // valid for a non-configurable existing target property.
-    if unsafe { descriptor_bool_field(result, b"configurable") } == Some(false) {
-        let target_configurable = target_desc.to_bits() == TAG_UNDEFINED
-            || unsafe { descriptor_bool_field(target_desc, b"configurable") } != Some(false);
+    if unsafe { descriptor_bool_field(result_handle.get_nanbox_f64(), b"configurable") }
+        == Some(false)
+    {
+        let target_configurable = target_desc_handle.get_nanbox_u64() == TAG_UNDEFINED
+            || unsafe {
+                descriptor_bool_field(target_desc_handle.get_nanbox_f64(), b"configurable")
+            } != Some(false);
         if target_configurable {
             return throw_type_error(
                 "proxy getOwnPropertyDescriptor trap reports a non-configurable descriptor for a configurable or absent target property",
@@ -435,5 +471,5 @@ pub extern "C" fn js_reflect_get_own_property_descriptor(target: f64, key: f64) 
         }
     }
 
-    result
+    result_handle.get_nanbox_f64()
 }

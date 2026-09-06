@@ -280,17 +280,25 @@ pub extern "C" fn js_for_in_keys_value(value: f64) -> *mut ArrayHeader {
     if jv.is_null() || jv.is_undefined() {
         return crate::array::js_array_alloc(0);
     }
-    let mut out = crate::array::js_array_alloc(8);
+    // ownKeys, getOwnPropertyDescriptor and getPrototypeOf can invoke user
+    // callbacks. Keep every value needed after them in relocatable handles,
+    // including the output accumulated while walking earlier prototypes.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let current = scope.root_nanbox_f64(value);
+    let out = scope.root_raw_mut_ptr(crate::array::js_array_alloc(8));
     // Non-pointer primitives (number/boolean, boxed string) have only their own
     // enumerable keys; every prototype property they inherit is non-enumerable.
     if !jv.is_pointer() {
-        let own = js_object_keys_value(value);
-        let n = crate::array::js_array_length(own);
+        let own = scope.root_raw_const_ptr(js_object_keys_value(current.get_nanbox_f64()));
+        let n = own.with_const_ptr(|array| crate::array::js_array_length(array));
         for i in 0..n {
-            let kv = crate::array::js_array_get(own, i);
-            out = crate::array::js_array_push_f64(out, f64::from_bits(kv.bits()));
+            let kv = own.with_const_ptr(|own| crate::array::js_array_get(own, i));
+            let updated = out.with_mut_ptr(|out| {
+                crate::array::js_array_push_f64(out, f64::from_bits(kv.bits()))
+            });
+            out.set_raw_mut_ptr(updated);
         }
-        return out;
+        return out.with_mut_ptr(|out: *mut ArrayHeader| out);
     }
     let key_string = |kv: JSValue, scratch: &mut [u8; crate::value::SHORT_STRING_MAX_LEN]| {
         unsafe { crate::string::js_string_key_bytes(kv, scratch) }
@@ -298,30 +306,34 @@ pub extern "C" fn js_for_in_keys_value(value: f64) -> *mut ArrayHeader {
     };
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
-    let mut current = value;
     // Depth cap guards against pathological / cyclic prototype graphs.
     for _ in 0..1000 {
-        let cv = JSValue::from_bits(current.to_bits());
+        let cv = JSValue::from_bits(current.get_nanbox_u64());
         if cv.is_null() || cv.is_undefined() || !cv.is_pointer() {
             break;
         }
         // Emit this level's enumerable own keys (OrdinaryOwnPropertyKeys order),
         // skipping any name already shadowed by a closer level.
-        let enum_arr = js_object_keys_value(current);
-        let en = crate::array::js_array_length(enum_arr);
+        let level = crate::gc::RuntimeHandleScope::new();
+        let enum_arr = level.root_raw_const_ptr(js_object_keys_value(current.get_nanbox_f64()));
+        let en = enum_arr.with_const_ptr(|array| crate::array::js_array_length(array));
         for i in 0..en {
-            let kv = crate::array::js_array_get(enum_arr, i);
+            let kv = enum_arr.with_const_ptr(|keys| crate::array::js_array_get(keys, i));
             let name = match key_string(kv, &mut scratch) {
                 Some(s) => s,
                 None => continue,
             };
             if seen.insert(name) {
-                out = crate::array::js_array_push_f64(out, f64::from_bits(kv.bits()));
+                let updated = out.with_mut_ptr(|out| {
+                    crate::array::js_array_push_f64(out, f64::from_bits(kv.bits()))
+                });
+                out.set_raw_mut_ptr(updated);
             }
         }
         // Mark ALL own names (incl non-enumerable) seen so they shadow the
         // remainder of the chain.
-        let all_f64 = super::super::descriptors::js_object_get_own_property_names(current);
+        let all_f64 =
+            super::super::descriptors::js_object_get_own_property_names(current.get_nanbox_f64());
         let all_arr = (all_f64.to_bits() & crate::value::POINTER_MASK) as *mut ArrayHeader;
         if !all_arr.is_null() {
             let an = crate::array::js_array_length(all_arr);
@@ -332,9 +344,11 @@ pub extern "C" fn js_for_in_keys_value(value: f64) -> *mut ArrayHeader {
                 }
             }
         }
-        current = super::super::object_ops::js_object_get_prototype_of(current);
+        current.set_nanbox_f64(super::super::object_ops::js_object_get_prototype_of(
+            current.get_nanbox_f64(),
+        ));
     }
-    out
+    out.with_mut_ptr(|out: *mut ArrayHeader| out)
 }
 
 fn closure_dynamic_enumerable_props(ptr: usize) -> Vec<(String, f64)> {
