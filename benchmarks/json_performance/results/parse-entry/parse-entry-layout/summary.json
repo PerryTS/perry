@@ -1,0 +1,26 @@
+[
+  {
+    "arm": "bounded-preflight",
+    "command": [
+      "xcrun",
+      "llvm-objdump",
+      "--disassemble-symbols=_js_json_parse",
+      "--no-show-raw-insn",
+      "/Users/amlug/projects/perry/codex-json-fastpaths-artifacts/bounded-preflight-worker"
+    ],
+    "worker_sha256": "5bb1ba59ea15057192df3f63f452982c87dbdf8ac8c6825af5d925477861a0b9",
+    "instruction_addresses": 372
+  },
+  {
+    "arm": "parse-entry",
+    "command": [
+      "xcrun",
+      "llvm-objdump",
+      "--disassemble-symbols=_js_json_parse",
+      "--no-show-raw-insn",
+      "/Users/amlug/projects/perry/codex-json-fastpaths-artifacts/parse-entry-worker"
+    ],
+    "worker_sha256": "546f7e10c07a618495174cdef8a774817874ccde63d5f369cddd9be48e804598",
+    "instruction_addresses": 17
+  }
+]

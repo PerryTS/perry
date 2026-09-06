@@ -1,0 +1,38 @@
+[
+  {
+    "file": "bounded-preflight-heterogeneous_1m.stderr",
+    "old_reclaim_alloc_point_scans": 5,
+    "final_arena_live_bytes": 1397080,
+    "final_arena_capacity_bytes": 5242880
+  },
+  {
+    "file": "bounded-preflight-numbers_1m.stderr",
+    "old_reclaim_alloc_point_scans": 6,
+    "final_arena_live_bytes": 3350824,
+    "final_arena_capacity_bytes": 8388608
+  },
+  {
+    "file": "bounded-preflight-records_array_1m.stderr",
+    "old_reclaim_alloc_point_scans": 4,
+    "final_arena_live_bytes": 1268128,
+    "final_arena_capacity_bytes": 5242880
+  },
+  {
+    "file": "parse-entry-heterogeneous_1m.stderr",
+    "old_reclaim_alloc_point_scans": 5,
+    "final_arena_live_bytes": 1397256,
+    "final_arena_capacity_bytes": 5242880
+  },
+  {
+    "file": "parse-entry-numbers_1m.stderr",
+    "old_reclaim_alloc_point_scans": 6,
+    "final_arena_live_bytes": 3350824,
+    "final_arena_capacity_bytes": 8388608
+  },
+  {
+    "file": "parse-entry-records_array_1m.stderr",
+    "old_reclaim_alloc_point_scans": 4,
+    "final_arena_live_bytes": 1268304,
+    "final_arena_capacity_bytes": 5242880
+  }
+]

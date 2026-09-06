@@ -1,0 +1,6 @@
+ACQUIRED json-perf-30689-1788714131 load (2.58984375, 1.9208984375, 1.677734375)
+RELEASED
+Traceback (most recent call last):
+  File "/Users/perry/json-parse-entry-20260906-codex/with_lock.py", line 22, in <module>
+    if os.getloadavg()[0]>2.5: raise RuntimeError('Host too busy for timing')
+RuntimeError: Host too busy for timing

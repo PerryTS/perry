@@ -1,0 +1,102 @@
+[
+  {
+    "fixture": "wide_1m",
+    "operation": "stringify",
+    "calls": 128,
+    "median_process_instructions": {
+      "bounded-preflight": 3977592967,
+      "parse-entry": 3976659237
+    },
+    "candidate_vs_reference": 0.9997652525012622
+  },
+  {
+    "fixture": "heterogeneous_1m",
+    "operation": "stringify",
+    "calls": 128,
+    "median_process_instructions": {
+      "bounded-preflight": 11009110484,
+      "parse-entry": 10613026175
+    },
+    "candidate_vs_reference": 0.9640221333435025
+  },
+  {
+    "fixture": "small_record",
+    "operation": "parse",
+    "calls": 500000,
+    "median_process_instructions": {
+      "bounded-preflight": 5186280544,
+      "parse-entry": 5195137232
+    },
+    "candidate_vs_reference": 1.0017077147919131
+  },
+  {
+    "fixture": "small_record",
+    "operation": "stringify",
+    "calls": 500000,
+    "median_process_instructions": {
+      "bounded-preflight": 4688554628,
+      "parse-entry": 4693524709
+    },
+    "candidate_vs_reference": 1.001060045449896
+  },
+  {
+    "fixture": "records_object_1m",
+    "operation": "parse",
+    "calls": 64,
+    "median_process_instructions": {
+      "bounded-preflight": 4556793466,
+      "parse-entry": 4572579709
+    },
+    "candidate_vs_reference": 1.0034643314685616
+  },
+  {
+    "fixture": "records_object_1m",
+    "operation": "stringify",
+    "calls": 128,
+    "median_process_instructions": {
+      "bounded-preflight": 3393952747,
+      "parse-entry": 3396306795
+    },
+    "candidate_vs_reference": 1.00069360069968
+  },
+  {
+    "fixture": "null",
+    "operation": "parse",
+    "calls": 2000000,
+    "median_process_instructions": {
+      "bounded-preflight": 557388451,
+      "parse-entry": 573669756
+    },
+    "candidate_vs_reference": 1.0292099790923008
+  },
+  {
+    "fixture": "string_a",
+    "operation": "parse",
+    "calls": 2000000,
+    "median_process_instructions": {
+      "bounded-preflight": 675531455,
+      "parse-entry": 691988083
+    },
+    "candidate_vs_reference": 1.0243610092145894
+  },
+  {
+    "fixture": "empty_object",
+    "operation": "parse",
+    "calls": 2000000,
+    "median_process_instructions": {
+      "bounded-preflight": 8529112524,
+      "parse-entry": 8504888325
+    },
+    "candidate_vs_reference": 0.9971598218534653
+  },
+  {
+    "fixture": "tiny_object",
+    "operation": "parse",
+    "calls": 2000000,
+    "median_process_instructions": {
+      "bounded-preflight": 9711957039,
+      "parse-entry": 9684579602
+    },
+    "candidate_vs_reference": 0.9971810586795162
+  }
+]

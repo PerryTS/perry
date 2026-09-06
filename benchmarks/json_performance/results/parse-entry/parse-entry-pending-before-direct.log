@@ -1,0 +1,10 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.26s
+     Running unittests src/lib.rs (/Users/amlug/projects/perry/codex-json-changed-target/debug/build/perry-runtime/77f7d5e322249c1d/out/perry_runtime-77f7d5e322249c1d)
+
+running 1 test
+test gc::tests::json_parse_scalar::json_direct_parse_input_survives_pending_collection ... SyntaxError: JSON parse error: malformed input
+    at <anonymous>
+error: test failed, to rerun pass `-p perry-runtime --lib`
+
+Caused by:
+  process didn't exit successfully: `/Users/amlug/projects/perry/codex-json-changed-target/debug/build/perry-runtime/77f7d5e322249c1d/out/perry_runtime-77f7d5e322249c1d json_direct_parse_input_survives_pending_collection --test-threads=1 --nocapture` (exit status: 1)

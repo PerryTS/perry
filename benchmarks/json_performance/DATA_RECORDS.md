@@ -1,4 +1,42 @@
-The current source adds allocation-free scalar parsing, guarded record emission,
+The current source fixes parse-input rooting before pending collection,
+separates scalar decoding from the container entry, and restores direct
+primitive emission for nested one-field objects. **All-row parity and
+no-regression acceptance remain open: 11/38 CPU, 58/74 peak RSS and 28/36
+retained RSS targets are met.**
+
+The new forced-collection tests reproduce valid-input SyntaxErrors on the
+preceding ordinary direct/lazy entry; the fallible entry is a passing control.
+The input now stays rooted before collection and is re-read afterward. All
+144 runtime tests, 34 compiled Node comparisons and 26 moving-GC runs pass.
+GC production policy and thresholds are unchanged. Tape input borrowing and
+suppression ordering change locally to keep references out of collection.
+All 44 recorded source hashes match a7fda79684c60f79311e4c19d5aabf0436f7772e.
+
+The full matrix has 152 verifications, 456 timing trials and 432 memory trials
+with 32 clean observations. The paired retry has 616 trials across 44 cases
+with 42 clean observations; a load rejection before its first admission is
+preserved. Both completed windows pass their load and process gates.
+
+Paired heterogeneous stringify uses 4.85% less CPU than bounded-preflight and
+3.37% less than primitive-object, recovering its recent regression. Tiny-object
+parse improves 1.12%, small-record parse 0.95%, and 16 KB record-array stringify
+1.56%. Large record parsing recovers about 0.8–1.0% versus bounded-preflight,
+but 8/20 MB cases remain 1.26–1.63% slower than primitive-object.
+
+New failures remain explicit: null/inline-string parsing is 2.31%/2.05% slower,
+escaped stringify 2.52% slower, and 1 MB record-array parse 0.23% slower, with
+separated paired ranges. Peak RSS rises 4.73 MiB for 1 MB record-array parse
+and 3.77 MiB for heterogeneous parse. Their final arena sizes and old-reclaim
+scan counts are essentially unchanged in local diagnostics, which do not
+explain transient/system allocator memory or prove equal GC time.
+
+[Current 38 CPU rows and RAM](results/parse-entry/tables.md),
+[every target](results/parse-entry/parity.md),
+[paired CPU/RSS ranges](results/parse-entry/recheck-parse-entry/summary.json),
+and [implementation, reproducer and validation](results/parse-entry/README.md).
+The preceding checkpoints below remain historical evidence.
+
+The preceding bounded-preflight checkpoint adds scalar parsing, guarded record emission,
 bounded depth preflight and direct emission of wide primitive objects. **This
 is a development checkpoint. CPU/RSS parity and no-regression acceptance remain
 open: 11/38 CPU, 58/74 peak RSS and 28/36 retained RSS targets are met.**

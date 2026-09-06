@@ -1,0 +1,14 @@
+[
+  {
+    "engine": "node",
+    "exit": 0,
+    "stdout": "128 384 0 161235953\n[{\"yes\":true},{},{\"yes\":\"\u6771\u4eac\ud83d\ude42\"}]\n{\"nested\":{\"yes\":\"getter\"}} 1\n{\"nested\":{}} 1\n{\"nested\":\"custom:nested\"}\n{\"nested\":\"nested\"}\n{\n  \"nested\": {\n    \"yes\": true\n  }\n}\n",
+    "stderr": ""
+  },
+  {
+    "engine": "baseline",
+    "exit": 0,
+    "stdout": "128 384 0 161235953\n[{\"yes\":true},{},{\"yes\":\"\u6771\u4eac\ud83d\ude42\"}]\n{\"nested\":{\"yes\":\"getter\"}} 1\n{\"nested\":{}} 1\n{\"nested\":\"custom:nested\"}\n{\"nested\":\"nested\"}\n{\n  \"nested\": {\n    \"yes\": true\n  }\n}\n",
+    "stderr": ""
+  }
+]
