@@ -208,3 +208,79 @@ export function widthLike(q: any): number {
          {arm_b}"
     );
 }
+
+const NEW_ASSIGNMENT_FIXTURE: &str = r#"
+import { BlockList } from "net";
+
+export function maker(): any {
+  let O: any;
+  O = new BlockList();
+  O.addSubnet("10.0.0.0", 8);
+  return O;
+}
+
+export function widthLike(q: any): number {
+  let Y = 0;
+  for (let { segment: O } of q) {
+    Y += O.codePointAt(0) >= 4352 ? 2 : 1;
+  }
+  return Y;
+}
+"#;
+
+const PROPAGATED_ASSIGNMENT_FIXTURE: &str = r#"
+import * as cp from "child_process";
+
+export function copier(): any {
+  let source: any;
+  source = cp.spawn("true", []);
+  let O: any;
+  O = source;
+  O.kill();
+  return O;
+}
+
+export function widthLike(q: any): number {
+  let Y = 0;
+  for (let { segment: O } of q) {
+    Y += O.codePointAt(0) >= 4352 ? 2 : 1;
+  }
+  return Y;
+}
+"#;
+
+fn assert_unrelated_width_binding_is_ordinary(module: &perry_hir::Module) {
+    let width_like = body_of(module, "widthLike");
+    assert!(
+        !width_like.contains("method: \"codePointAt\""),
+        "the unrelated for-of binding must not inherit a native-instance tag: \
+         {width_like}"
+    );
+    assert!(
+        width_like.contains("property: \"codePointAt\""),
+        "the string binding's method should remain an ordinary property call: \
+         {width_like}"
+    );
+}
+
+#[test]
+fn a_native_constructor_assignment_does_not_tag_an_unrelated_homonym() {
+    let module = lower(NEW_ASSIGNMENT_FIXTURE);
+    let maker = body_of(&module, "maker");
+    assert!(
+        maker.contains("module: \"net\"") && maker.contains("method: \"addSubnet\""),
+        "the assigned BlockList binding must retain native dispatch: {maker}"
+    );
+    assert_unrelated_width_binding_is_ordinary(&module);
+}
+
+#[test]
+fn a_propagated_native_assignment_does_not_tag_an_unrelated_homonym() {
+    let module = lower(PROPAGATED_ASSIGNMENT_FIXTURE);
+    let copier = body_of(&module, "copier");
+    assert!(
+        copier.contains("module: \"child_process\"") && copier.contains("method: \"kill\""),
+        "the propagated handle binding must retain native dispatch: {copier}"
+    );
+    assert_unrelated_width_binding_is_ordinary(&module);
+}
