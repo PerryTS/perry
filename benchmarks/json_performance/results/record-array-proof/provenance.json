@@ -61,5 +61,6 @@
   ],
   "gc_policy_unchanged_from": "454daac4f8fc667ab4bc85b7b5b36c8bae56ae28",
   "note": "Primitive-array emission reuses the record preflight; no callback, managed allocation or safepoint intervenes. Callback-free record emission and descriptor fallback; input rooted before initial allocating prototype probe. Allocation-free scalar parsing before the existing pending-collection hook, preserving oversized key-cache cleanup and inlining the eligibility helper; ordinary rooted parse bodies stay in separate slow functions. No intermediate managed root or suppressed allocation window on successful scalar paths. GC policy unchanged; parse_api.rs deliberately changed. Same pinned compiler/application object and matched runtime/stdlib feature unification.",
-  "reference_source_commit": "df32314ace602869c8a75584981a0e7bd0d0f7f0"
+  "reference_source_commit": "df32314ace602869c8a75584981a0e7bd0d0f7f0",
+  "source_commit": "d84315485e68f86c18e0564497a96ae8213f0e17"
 }
