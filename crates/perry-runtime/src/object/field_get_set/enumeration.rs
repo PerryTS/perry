@@ -2138,11 +2138,7 @@ mod lazy_shadow_tests {
         // position — never again from the prototype.
         assert_eq!(
             lazy,
-            vec![
-                "alpha".to_string(),
-                "beta".to_string(),
-                "gamma".to_string()
-            ],
+            vec!["alpha".to_string(), "beta".to_string(), "gamma".to_string()],
             "own keys first in insertion order, then unshadowed inherited ones"
         );
     }
@@ -2237,7 +2233,10 @@ mod lazy_shadow_tests {
 
         let lazy = keys_of(for_in_keys_with(child_v, true));
         let eager = keys_of(for_in_keys_with(child_v, false));
-        assert_eq!(lazy, eager, "deferral must not change shadowing by a non-enumerable own name");
+        assert_eq!(
+            lazy, eager,
+            "deferral must not change shadowing by a non-enumerable own name"
+        );
         assert!(
             !lazy.contains(&"hidden".to_string()),
             "a non-enumerable own `hidden` must hide the prototype's enumerable \
