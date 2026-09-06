@@ -1,0 +1,4931 @@
+{
+  "issue": 9829,
+  "source_commit": "3e3e652e007ac853bf934daa86fa36c870b0e3e2",
+  "compiler_commit": "d36a1af0c205ebdc7cf7f75b351ea34b5bc0fc0b",
+  "code_tree": "ea7b395f07b51662a4c94ae5a16e61a5f7b5aeaa",
+  "build": {
+    "command": "cargo build --release -p perry -p perry-runtime-static -p perry-stdlib-static",
+    "env": {
+      "CARGO_PROFILE_RELEASE_CODEGEN_UNITS": "16",
+      "CARGO_PROFILE_RELEASE_LTO": "false",
+      "PERRY_NO_AUTO_OPTIMIZE": "1"
+    },
+    "binaries": {
+      "perry": {
+        "size": 117268864,
+        "sha256": "6fde7dcbb9be714705cc0ebe84e5ab8a0549a1b0e12796fc294c7e872fe32cf0"
+      },
+      "libperry_runtime.a": {
+        "size": 108253612,
+        "sha256": "9abf7b9fa1e94f84e6bd1ff4f40c662633491d9267482ebd848e7aa32d14c802"
+      },
+      "libperry_stdlib.a": {
+        "size": 244536102,
+        "sha256": "b4e9a0f948da340032c83fa958f959071a2f7fc5428cf899acca9019a0dee2ab"
+      }
+    }
+  },
+  "main_ci": {
+    "run_id": 33989581881,
+    "url": "https://github.com/PerryTS/perry/actions/runs/33989581881",
+    "measurement_sha256": "c84af230345b664beeb7845420dec58159e58ff5310dc553e2fe7b737f6231a0",
+    "measurement": {
+      "generated_at": "2026-09-05T22:14:04+00:00",
+      "platform": "darwin-arm64",
+      "run_config": {
+        "repeats": 7,
+        "warmup": 1,
+        "traced_runs": 2,
+        "probes": [
+          "01_nursery_churn",
+          "02_survivor_promotion",
+          "03_cross_gen_writes",
+          "04_dead_after_deep_stack",
+          "05_closure_capture",
+          "06_string_retention",
+          "07_array_grow_evacuate",
+          "08_map_set_sidetables",
+          "09_try_catch_roots",
+          "10_store_receiver_across_alloc",
+          "11_collect_at_depth",
+          "12_large_live_set",
+          "13_large_eden_survivors",
+          "14_grow_then_churn"
+        ]
+      },
+      "probes": {
+        "01_nursery_churn": {
+          "stdout": "probe:01_nursery_churn\nchecksum:-1399701504\n",
+          "correctness": {
+            "status": "pass",
+            "oracle_version": "v26.5.1",
+            "reason": ""
+          },
+          "run_env": {},
+          "samples": {
+            "heap_used_bytes": [236616, 236616, 236616, 236616, 236616, 236616, 236616],
+            "heap_total_bytes": [14680064, 14680064, 14680064, 14680064, 14680064, 14680064, 14680064],
+            "minor_cycles": [1, 1],
+            "step_cycles": [1, 1],
+            "copied_objects": [4977, 4977],
+            "copied_bytes": [234536, 234536],
+            "promoted_objects": [0, 0],
+            "promoted_bytes": [0, 0],
+            "freed_bytes": [11299648, 11299648]
+          }
+        },
+        "02_survivor_promotion": {
+          "stdout": "probe:02_survivor_promotion\nchecksum:1679883264\nlive:40000\n",
+          "correctness": {
+            "status": "pass",
+            "oracle_version": "v26.5.1",
+            "reason": ""
+          },
+          "run_env": {},
+          "samples": {
+            "heap_used_bytes": [2358144, 2358144, 2358144, 2358144, 2358144, 2358144, 2358144],
+            "heap_total_bytes": [15728640, 15728640, 15728640, 15728640, 15728640, 15728640, 15728640],
+            "minor_cycles": [1, 1],
+            "step_cycles": [1, 1],
+            "copied_objects": [35465, 35465],
+            "copied_bytes": [1450992, 1450992],
+            "promoted_objects": [0, 0],
+            "promoted_bytes": [0, 0],
+            "freed_bytes": [9034672, 9034672]
+          }
+        },
+        "03_cross_gen_writes": {
+          "stdout": "probe:03_cross_gen_writes\nchecksum:2034120704\n",
+          "correctness": {
+            "status": "pass",
+            "oracle_version": "v26.5.1",
+            "reason": ""
+          },
+          "run_env": {},
+          "samples": {
+            "heap_used_bytes": [528, 528, 528, 528, 528, 528, 528],
+            "heap_total_bytes": [12582912, 12582912, 12582912, 12582912, 12582912, 12582912, 12582912],
+            "minor_cycles": [1, 1],
+            "step_cycles": [1, 1],
+            "copied_objects": [4107, 4107],
+            "copied_bytes": [197056, 197056],
+            "promoted_objects": [0, 0],
+            "promoted_bytes": [0, 0],
+            "freed_bytes": [9240008, 9240008]
+          }
+        },
+        "04_dead_after_deep_stack": {
+          "stdout": "probe:04_dead_after_deep_stack\nchecksum:9814000\n",
+          "correctness": {
+            "status": "pass",
+            "oracle_version": "v26.5.1",
+            "reason": ""
+          },
+          "run_env": {},
+          "samples": {
+            "heap_used_bytes": [536, 536, 536, 536, 536, 536, 536],
+            "heap_total_bytes": [18874368, 18874368, 18874368, 18874368, 18874368, 18874368, 18874368],
+            "minor_cycles": [7, 7],
+            "step_cycles": [7, 7],
+            "copied_objects": [3622, 3622],
+            "copied_bytes": [149400, 149400],
+            "promoted_objects": [682, 682],
+            "promoted_bytes": [27320, 27320],
+            "freed_bytes": [73346416, 73346416]
+          }
+        },
+        "05_closure_capture": {
+          "stdout": "probe:05_closure_capture\nchecksum:399974400\n",
+          "correctness": {
+            "status": "pass",
+            "oracle_version": "v26.5.1",
+            "reason": ""
+          },
+          "run_env": {},
+          "samples": {
+            "heap_used_bytes": [544, 544, 544, 544, 544, 544, 544],
+            "heap_total_bytes": [14680064, 14680064, 14680064, 14680064, 14680064, 14680064, 14680064],
+            "minor_cycles": [3, 3],
+            "step_cycles": [3, 3],
+            "copied_objects": [20079, 20079],
+            "copied_bytes": [743384, 743384],
+            "promoted_objects": [3390, 3390],
+            "promoted_bytes": [122120, 122120],
+            "freed_bytes": [26862320, 26862320]
+          }
+        },
+        "06_string_retention": {
+          "stdout": "probe:06_string_retention\nchecksum:1112804\n",
+          "correctness": {
+            "status": "pass",
+            "oracle_version": "v26.5.1",
+            "reason": ""
+          },
+          "run_env": {},
+          "samples": {
+            "heap_used_bytes": [1072, 1072, 1072, 1072, 1072, 1072, 1072],
+            "heap_total_bytes": [22020096, 22020096, 22020096, 22020096, 22020096, 22020096, 22020096],
+            "minor_cycles": [4, 4],
+            "step_cycles": [4, 4],
+            "copied_objects": [298, 298],
+            "copied_bytes": [72288, 72288],
+            "promoted_objects": [14, 14],
+            "promoted_bytes": [1072, 1072],
+            "freed_bytes": [68136816, 68136816]
+          }
+        },
+        "07_array_grow_evacuate": {
+          "stdout": "probe:07_array_grow_evacuate\nchecksum:21891160\nsurvivors:94\n",
+          "correctness": {
+            "status": "pass",
+            "oracle_version": "v26.5.1",
+            "reason": ""
+          },
+          "run_env": {},
+          "samples": {
+            "heap_used_bytes": [1072456, 1072456, 1072456, 1072456, 1072456, 1072456, 1072456],
+            "heap_total_bytes": [25165824, 25165824, 25165824, 25165824, 25165824, 25165824, 25165824],
+            "minor_cycles": [5, 5],
+            "step_cycles": [5, 5],
+            "copied_objects": [4991, 4991],
+            "copied_bytes": [2404720, 2404720],
+            "promoted_objects": [4769, 4769],
+            "promoted_bytes": [623120, 623120],
+            "freed_bytes": [83788528, 83788528]
+          }
+        },
+        "08_map_set_sidetables": {
+          "stdout": "probe:08_map_set_sidetables\nchecksum:1109446656\nfinal_sizes:0,0\n",
+          "correctness": {
+            "status": "pass",
+            "oracle_version": "v26.5.1",
+            "reason": ""
+          },
+          "run_env": {},
+          "samples": {
+            "heap_used_bytes": [688, 688, 688, 688, 688, 688, 688],
+            "heap_total_bytes": [14680064, 14680064, 14680064, 14680064, 14680064, 14680064, 14680064],
+            "minor_cycles": [6, 6],
+            "step_cycles": [6, 6],
+            "copied_objects": [2489, 2489],
+            "copied_bytes": [99656, 99656],
+            "promoted_objects": [14, 14],
+            "promoted_bytes": [592, 592],
+            "freed_bytes": [56598904, 56598904]
+          }
+        },
+        "09_try_catch_roots": {
+          "stdout": "probe:09_try_catch_roots\nchecksum:-1465100498\n",
+          "correctness": {
+            "status": "pass",
+            "oracle_version": "v26.5.1",
+            "reason": ""
+          },
+          "run_env": {},
+          "samples": {
+            "heap_used_bytes": [247392, 247392, 247392, 247392, 247392, 247392, 247392],
+            "heap_total_bytes": [14680064, 14680064, 14680064, 14680064, 14680064, 14680064, 14680064],
+            "minor_cycles": [1, 1],
+            "step_cycles": [1, 1],
+            "copied_objects": [4962, 4962],
+            "copied_bytes": [230352, 230352],
+            "promoted_objects": [0, 0],
+            "promoted_bytes": [0, 0],
+            "freed_bytes": [10255312, 10255312]
+          }
+        },
+        "10_store_receiver_across_alloc": {
+          "stdout": "probe:10_store_receiver_across_alloc\nchecksum:204277248\n",
+          "correctness": {
+            "status": "pass",
+            "oracle_version": "v26.5.1",
+            "reason": ""
+          },
+          "run_env": {},
+          "samples": {
+            "heap_used_bytes": [464072, 464072, 464072, 464072, 464072, 464072, 464072],
+            "heap_total_bytes": [10485760, 10485760, 10485760, 10485760, 10485760, 10485760, 10485760],
+            "minor_cycles": [0, 0],
+            "step_cycles": [0, 0],
+            "copied_objects": [0, 0],
+            "copied_bytes": [0, 0],
+            "promoted_objects": [0, 0],
+            "promoted_bytes": [0, 0],
+            "freed_bytes": [0, 0]
+          }
+        },
+        "11_collect_at_depth": {
+          "stdout": "probe:11_collect_at_depth\nchecksum:-1569838524\n",
+          "correctness": {
+            "status": "pass",
+            "oracle_version": "v26.5.1",
+            "reason": ""
+          },
+          "run_env": {},
+          "samples": {
+            "heap_used_bytes": [247712, 247712, 247712, 247712, 247712, 247712, 247712],
+            "heap_total_bytes": [12582912, 12582912, 12582912, 12582912, 12582912, 12582912, 12582912],
+            "minor_cycles": [1, 1],
+            "step_cycles": [1, 1],
+            "copied_objects": [4975, 4975],
+            "copied_bytes": [230872, 230872],
+            "promoted_objects": [0, 0],
+            "promoted_bytes": [0, 0],
+            "freed_bytes": [9206240, 9206240]
+          }
+        },
+        "12_large_live_set": {
+          "stdout": "probe:12_large_live_set\nchecksum:1678627152\nwalked:700000\nsum:186514128\nkept:10938\nkeptSum:-466842304\n",
+          "correctness": {
+            "status": "pass",
+            "oracle_version": "v26.5.1",
+            "reason": ""
+          },
+          "run_env": {},
+          "samples": {
+            "heap_used_bytes": [569448, 569448, 569448, 569448, 569448, 569448, 569448],
+            "heap_total_bytes": [72351744, 72351744, 72351744, 72351744, 72351744, 72351744, 72351744],
+            "minor_cycles": [5, 5],
+            "step_cycles": [5, 5],
+            "copied_objects": [58175, 58175],
+            "copied_bytes": [2327008, 2327008],
+            "promoted_objects": [530030, 530030],
+            "promoted_bytes": [21201208, 21201208],
+            "freed_bytes": [63732784, 63732784]
+          }
+        },
+        "13_large_eden_survivors": {
+          "stdout": "probe:13_large_eden_survivors\nchecksum:1846988256\nhits:3000000\ntagChars:1722368\npeerIds:-131072\nnotes:11719\nnoteSum:22499072\n",
+          "correctness": {
+            "status": "pass",
+            "oracle_version": "v26.5.1",
+            "reason": ""
+          },
+          "run_env": {
+            "PERRY_GC_SCAVENGE_NURSERY_MB": "64"
+          },
+          "samples": {
+            "heap_used_bytes": [227048, 227048, 227048, 227048, 227048, 227048, 227048],
+            "heap_total_bytes": [61865984, 61865984, 61865984, 61865984, 61865984, 61865984, 63963136],
+            "minor_cycles": [3, 3],
+            "step_cycles": [3, 3],
+            "copied_objects": [377569, 377569],
+            "copied_bytes": [21429712, 21429712],
+            "promoted_objects": [386271, 386271],
+            "promoted_bytes": [21777792, 21777792],
+            "freed_bytes": [108243696, 108243696]
+          }
+        },
+        "14_grow_then_churn": {
+          "stdout": "probe:14_grow_then_churn\ncacheSum:2050177040\nchurnSum:815300000\nliveSum:2008997952\n",
+          "correctness": {
+            "status": "pass",
+            "oracle_version": "v26.5.1",
+            "reason": ""
+          },
+          "run_env": {
+            "PERRY_GC_SCAVENGE_NURSERY_MB": "1",
+            "PERRY_GC_MAJOR_PACING_FLOOR_MB": "1"
+          },
+          "samples": {
+            "heap_used_bytes": [430584, 430584, 430584, 430584, 430584, 430584, 430584],
+            "heap_total_bytes": [23068672, 23068672, 23068672, 23068672, 23068672, 23068672, 23068672],
+            "minor_cycles": [22, 22],
+            "step_cycles": [23, 23],
+            "copied_objects": [330, 330],
+            "copied_bytes": [1277072, 1277072],
+            "promoted_objects": [406707, 406707],
+            "promoted_bytes": [147967960, 147967960],
+            "freed_bytes": [119606864, 119606864]
+          }
+        }
+      }
+    }
+  },
+  "main_before": {
+    "generated_at": "2026-09-06T03:44:09+00:00",
+    "platform": "linux-x86_64",
+    "run_config": {
+      "repeats": 7,
+      "warmup": 1,
+      "traced_runs": 2,
+      "probes": [
+        "01_nursery_churn",
+        "02_survivor_promotion",
+        "03_cross_gen_writes",
+        "04_dead_after_deep_stack",
+        "05_closure_capture",
+        "06_string_retention",
+        "07_array_grow_evacuate",
+        "08_map_set_sidetables",
+        "09_try_catch_roots",
+        "10_store_receiver_across_alloc",
+        "11_collect_at_depth",
+        "12_large_live_set",
+        "13_large_eden_survivors",
+        "14_grow_then_churn"
+      ]
+    },
+    "probes": {
+      "01_nursery_churn": {
+        "stdout": "probe:01_nursery_churn\nchecksum:-1399701504\n",
+        "correctness": {
+          "status": "pass",
+          "oracle_version": "v26.5.1",
+          "reason": ""
+        },
+        "run_env": {},
+        "samples": {
+          "heap_used_bytes": [236616, 236616, 236616, 236616, 236616, 236616, 236616],
+          "heap_total_bytes": [14680064, 14680064, 14680064, 14680064, 14680064, 14680064, 14680064],
+          "minor_cycles": [1, 1],
+          "step_cycles": [1, 1],
+          "copied_objects": [4977, 4977],
+          "copied_bytes": [234536, 234536],
+          "promoted_objects": [0, 0],
+          "promoted_bytes": [0, 0],
+          "freed_bytes": [11299648, 11299648]
+        }
+      },
+      "02_survivor_promotion": {
+        "stdout": "probe:02_survivor_promotion\nchecksum:1679883264\nlive:40000\n",
+        "correctness": {
+          "status": "pass",
+          "oracle_version": "v26.5.1",
+          "reason": ""
+        },
+        "run_env": {},
+        "samples": {
+          "heap_used_bytes": [2358144, 2358144, 2358144, 2358144, 2358144, 2358144, 2358144],
+          "heap_total_bytes": [15728640, 15728640, 15728640, 15728640, 15728640, 15728640, 15728640],
+          "minor_cycles": [1, 1],
+          "step_cycles": [1, 1],
+          "copied_objects": [35465, 35465],
+          "copied_bytes": [1450992, 1450992],
+          "promoted_objects": [0, 0],
+          "promoted_bytes": [0, 0],
+          "freed_bytes": [9034672, 9034672]
+        }
+      },
+      "03_cross_gen_writes": {
+        "stdout": "probe:03_cross_gen_writes\nchecksum:2034120704\n",
+        "correctness": {
+          "status": "pass",
+          "oracle_version": "v26.5.1",
+          "reason": ""
+        },
+        "run_env": {},
+        "samples": {
+          "heap_used_bytes": [528, 528, 528, 528, 528, 528, 528],
+          "heap_total_bytes": [12582912, 12582912, 12582912, 12582912, 12582912, 12582912, 12582912],
+          "minor_cycles": [1, 1],
+          "step_cycles": [1, 1],
+          "copied_objects": [4107, 4107],
+          "copied_bytes": [197056, 197056],
+          "promoted_objects": [0, 0],
+          "promoted_bytes": [0, 0],
+          "freed_bytes": [9240008, 9240008]
+        }
+      },
+      "04_dead_after_deep_stack": {
+        "stdout": "probe:04_dead_after_deep_stack\nchecksum:9814000\n",
+        "correctness": {
+          "status": "pass",
+          "oracle_version": "v26.5.1",
+          "reason": ""
+        },
+        "run_env": {},
+        "samples": {
+          "heap_used_bytes": [536, 536, 536, 536, 536, 536, 536],
+          "heap_total_bytes": [18874368, 18874368, 18874368, 18874368, 18874368, 18874368, 18874368],
+          "minor_cycles": [7, 7],
+          "step_cycles": [7, 7],
+          "copied_objects": [3622, 3622],
+          "copied_bytes": [149400, 149400],
+          "promoted_objects": [682, 682],
+          "promoted_bytes": [27320, 27320],
+          "freed_bytes": [73346416, 73346416]
+        }
+      },
+      "05_closure_capture": {
+        "stdout": "probe:05_closure_capture\nchecksum:399974400\n",
+        "correctness": {
+          "status": "pass",
+          "oracle_version": "v26.5.1",
+          "reason": ""
+        },
+        "run_env": {},
+        "samples": {
+          "heap_used_bytes": [544, 544, 544, 544, 544, 544, 544],
+          "heap_total_bytes": [14680064, 14680064, 14680064, 14680064, 14680064, 14680064, 14680064],
+          "minor_cycles": [3, 3],
+          "step_cycles": [3, 3],
+          "copied_objects": [20079, 20079],
+          "copied_bytes": [743384, 743384],
+          "promoted_objects": [3390, 3390],
+          "promoted_bytes": [122120, 122120],
+          "freed_bytes": [26862320, 26862320]
+        }
+      },
+      "06_string_retention": {
+        "stdout": "probe:06_string_retention\nchecksum:1112804\n",
+        "correctness": {
+          "status": "pass",
+          "oracle_version": "v26.5.1",
+          "reason": ""
+        },
+        "run_env": {},
+        "samples": {
+          "heap_used_bytes": [1072, 1072, 1072, 1072, 1072, 1072, 1072],
+          "heap_total_bytes": [22020096, 22020096, 22020096, 22020096, 22020096, 22020096, 22020096],
+          "minor_cycles": [4, 4],
+          "step_cycles": [4, 4],
+          "copied_objects": [298, 298],
+          "copied_bytes": [72288, 72288],
+          "promoted_objects": [14, 14],
+          "promoted_bytes": [1072, 1072],
+          "freed_bytes": [68136816, 68136816]
+        }
+      },
+      "07_array_grow_evacuate": {
+        "stdout": "probe:07_array_grow_evacuate\nchecksum:21891160\nsurvivors:94\n",
+        "correctness": {
+          "status": "pass",
+          "oracle_version": "v26.5.1",
+          "reason": ""
+        },
+        "run_env": {},
+        "samples": {
+          "heap_used_bytes": [1072456, 1072456, 1072456, 1072456, 1072456, 1072456, 1072456],
+          "heap_total_bytes": [25165824, 25165824, 25165824, 25165824, 25165824, 25165824, 25165824],
+          "minor_cycles": [5, 5],
+          "step_cycles": [5, 5],
+          "copied_objects": [4991, 4991],
+          "copied_bytes": [2404720, 2404720],
+          "promoted_objects": [4769, 4769],
+          "promoted_bytes": [623120, 623120],
+          "freed_bytes": [83788528, 83788528]
+        }
+      },
+      "08_map_set_sidetables": {
+        "stdout": "probe:08_map_set_sidetables\nchecksum:1109446656\nfinal_sizes:0,0\n",
+        "correctness": {
+          "status": "pass",
+          "oracle_version": "v26.5.1",
+          "reason": ""
+        },
+        "run_env": {},
+        "samples": {
+          "heap_used_bytes": [688, 688, 688, 688, 688, 688, 688],
+          "heap_total_bytes": [14680064, 14680064, 14680064, 14680064, 14680064, 14680064, 14680064],
+          "minor_cycles": [6, 6],
+          "step_cycles": [6, 6],
+          "copied_objects": [2489, 2489],
+          "copied_bytes": [99656, 99656],
+          "promoted_objects": [14, 14],
+          "promoted_bytes": [592, 592],
+          "freed_bytes": [56598904, 56598904]
+        }
+      },
+      "09_try_catch_roots": {
+        "stdout": "probe:09_try_catch_roots\nchecksum:-1465100498\n",
+        "correctness": {
+          "status": "pass",
+          "oracle_version": "v26.5.1",
+          "reason": ""
+        },
+        "run_env": {},
+        "samples": {
+          "heap_used_bytes": [247392, 247392, 247392, 247392, 247392, 247392, 247392],
+          "heap_total_bytes": [14680064, 14680064, 14680064, 14680064, 14680064, 14680064, 14680064],
+          "minor_cycles": [1, 1],
+          "step_cycles": [1, 1],
+          "copied_objects": [4962, 4962],
+          "copied_bytes": [230352, 230352],
+          "promoted_objects": [0, 0],
+          "promoted_bytes": [0, 0],
+          "freed_bytes": [10255312, 10255312]
+        }
+      },
+      "10_store_receiver_across_alloc": {
+        "stdout": "probe:10_store_receiver_across_alloc\nchecksum:204277248\n",
+        "correctness": {
+          "status": "pass",
+          "oracle_version": "v26.5.1",
+          "reason": ""
+        },
+        "run_env": {},
+        "samples": {
+          "heap_used_bytes": [464072, 464072, 464072, 464072, 464072, 464072, 464072],
+          "heap_total_bytes": [10485760, 10485760, 10485760, 10485760, 10485760, 10485760, 10485760],
+          "minor_cycles": [0, 0],
+          "step_cycles": [0, 0],
+          "copied_objects": [0, 0],
+          "copied_bytes": [0, 0],
+          "promoted_objects": [0, 0],
+          "promoted_bytes": [0, 0],
+          "freed_bytes": [0, 0]
+        }
+      },
+      "11_collect_at_depth": {
+        "stdout": "probe:11_collect_at_depth\nchecksum:-1569838524\n",
+        "correctness": {
+          "status": "pass",
+          "oracle_version": "v26.5.1",
+          "reason": ""
+        },
+        "run_env": {},
+        "samples": {
+          "heap_used_bytes": [247712, 247712, 247712, 247712, 247712, 247712, 247712],
+          "heap_total_bytes": [12582912, 12582912, 12582912, 12582912, 12582912, 12582912, 12582912],
+          "minor_cycles": [1, 1],
+          "step_cycles": [1, 1],
+          "copied_objects": [4975, 4975],
+          "copied_bytes": [230872, 230872],
+          "promoted_objects": [0, 0],
+          "promoted_bytes": [0, 0],
+          "freed_bytes": [9206240, 9206240]
+        }
+      },
+      "12_large_live_set": {
+        "stdout": "probe:12_large_live_set\nchecksum:1678627152\nwalked:700000\nsum:186514128\nkept:10938\nkeptSum:-466842304\n",
+        "correctness": {
+          "status": "pass",
+          "oracle_version": "v26.5.1",
+          "reason": ""
+        },
+        "run_env": {},
+        "samples": {
+          "heap_used_bytes": [569448, 569448, 569448, 569448, 569448, 569448, 569448],
+          "heap_total_bytes": [72351744, 72351744, 72351744, 72351744, 72351744, 72351744, 72351744],
+          "minor_cycles": [5, 5],
+          "step_cycles": [5, 5],
+          "copied_objects": [58175, 58175],
+          "copied_bytes": [2327008, 2327008],
+          "promoted_objects": [530030, 530030],
+          "promoted_bytes": [21201208, 21201208],
+          "freed_bytes": [63732784, 63732784]
+        }
+      },
+      "13_large_eden_survivors": {
+        "stdout": "probe:13_large_eden_survivors\nchecksum:1846988256\nhits:3000000\ntagChars:1722368\npeerIds:-131072\nnotes:11719\nnoteSum:22499072\n",
+        "correctness": {
+          "status": "pass",
+          "oracle_version": "v26.5.1",
+          "reason": ""
+        },
+        "run_env": {
+          "PERRY_GC_SCAVENGE_NURSERY_MB": "64"
+        },
+        "samples": {
+          "heap_used_bytes": [227048, 227048, 227048, 227048, 227048, 227048, 227048],
+          "heap_total_bytes": [61865984, 61865984, 61865984, 61865984, 61865984, 61865984, 61865984],
+          "minor_cycles": [3, 3],
+          "step_cycles": [3, 3],
+          "copied_objects": [377569, 377569],
+          "copied_bytes": [21429712, 21429712],
+          "promoted_objects": [386271, 386271],
+          "promoted_bytes": [21777792, 21777792],
+          "freed_bytes": [108243696, 108243696]
+        }
+      },
+      "14_grow_then_churn": {
+        "stdout": "probe:14_grow_then_churn\ncacheSum:2050177040\nchurnSum:815300000\nliveSum:2008997952\n",
+        "correctness": {
+          "status": "pass",
+          "oracle_version": "v26.5.1",
+          "reason": ""
+        },
+        "run_env": {
+          "PERRY_GC_SCAVENGE_NURSERY_MB": "1",
+          "PERRY_GC_MAJOR_PACING_FLOOR_MB": "1"
+        },
+        "samples": {
+          "heap_used_bytes": [430584, 430584, 430584, 430584, 430584, 430584, 430584],
+          "heap_total_bytes": [23068672, 23068672, 23068672, 23068672, 23068672, 23068672, 23068672],
+          "minor_cycles": [22, 22],
+          "step_cycles": [23, 23],
+          "copied_objects": [330, 330],
+          "copied_bytes": [1277072, 1277072],
+          "promoted_objects": [406707, 406707],
+          "promoted_bytes": [147967960, 147967960],
+          "freed_bytes": [119606864, 119606864]
+        }
+      }
+    }
+  },
+  "main_with_repaired_probe": {
+    "generated_at": "2026-09-06T03:44:52+00:00",
+    "platform": "linux-x86_64",
+    "run_config": {
+      "repeats": 7,
+      "warmup": 1,
+      "traced_runs": 2,
+      "probes": [
+        "01_nursery_churn",
+        "02_survivor_promotion",
+        "03_cross_gen_writes",
+        "04_dead_after_deep_stack",
+        "05_closure_capture",
+        "06_string_retention",
+        "07_array_grow_evacuate",
+        "08_map_set_sidetables",
+        "09_try_catch_roots",
+        "10_store_receiver_across_alloc",
+        "11_collect_at_depth",
+        "12_large_live_set",
+        "13_large_eden_survivors",
+        "14_grow_then_churn"
+      ]
+    },
+    "probes": {
+      "01_nursery_churn": {
+        "stdout": "probe:01_nursery_churn\nchecksum:-1399701504\n",
+        "correctness": {
+          "status": "pass",
+          "oracle_version": "v26.5.1",
+          "reason": ""
+        },
+        "run_env": {},
+        "samples": {
+          "heap_used_bytes": [236616, 236616, 236616, 236616, 236616, 236616, 236616],
+          "heap_total_bytes": [14680064, 14680064, 14680064, 14680064, 14680064, 14680064, 14680064],
+          "minor_cycles": [1, 1],
+          "step_cycles": [1, 1],
+          "copied_objects": [4977, 4977],
+          "copied_bytes": [234536, 234536],
+          "promoted_objects": [0, 0],
+          "promoted_bytes": [0, 0],
+          "freed_bytes": [11299648, 11299648]
+        }
+      },
+      "02_survivor_promotion": {
+        "stdout": "probe:02_survivor_promotion\nchecksum:1679883264\nlive:40000\n",
+        "correctness": {
+          "status": "pass",
+          "oracle_version": "v26.5.1",
+          "reason": ""
+        },
+        "run_env": {},
+        "samples": {
+          "heap_used_bytes": [2358144, 2358144, 2358144, 2358144, 2358144, 2358144, 2358144],
+          "heap_total_bytes": [15728640, 15728640, 15728640, 15728640, 15728640, 15728640, 15728640],
+          "minor_cycles": [1, 1],
+          "step_cycles": [1, 1],
+          "copied_objects": [35465, 35465],
+          "copied_bytes": [1450992, 1450992],
+          "promoted_objects": [0, 0],
+          "promoted_bytes": [0, 0],
+          "freed_bytes": [9034672, 9034672]
+        }
+      },
+      "03_cross_gen_writes": {
+        "stdout": "probe:03_cross_gen_writes\nchecksum:2034120704\n",
+        "correctness": {
+          "status": "pass",
+          "oracle_version": "v26.5.1",
+          "reason": ""
+        },
+        "run_env": {},
+        "samples": {
+          "heap_used_bytes": [528, 528, 528, 528, 528, 528, 528],
+          "heap_total_bytes": [12582912, 12582912, 12582912, 12582912, 12582912, 12582912, 12582912],
+          "minor_cycles": [1, 1],
+          "step_cycles": [1, 1],
+          "copied_objects": [4107, 4107],
+          "copied_bytes": [197056, 197056],
+          "promoted_objects": [0, 0],
+          "promoted_bytes": [0, 0],
+          "freed_bytes": [9240008, 9240008]
+        }
+      },
+      "04_dead_after_deep_stack": {
+        "stdout": "probe:04_dead_after_deep_stack\nchecksum:9814000\n",
+        "correctness": {
+          "status": "pass",
+          "oracle_version": "v26.5.1",
+          "reason": ""
+        },
+        "run_env": {},
+        "samples": {
+          "heap_used_bytes": [536, 536, 536, 536, 536, 536, 536],
+          "heap_total_bytes": [18874368, 18874368, 18874368, 18874368, 18874368, 18874368, 18874368],
+          "minor_cycles": [7, 7],
+          "step_cycles": [7, 7],
+          "copied_objects": [3622, 3622],
+          "copied_bytes": [149400, 149400],
+          "promoted_objects": [682, 682],
+          "promoted_bytes": [27320, 27320],
+          "freed_bytes": [73346416, 73346416]
+        }
+      },
+      "05_closure_capture": {
+        "stdout": "probe:05_closure_capture\nchecksum:399974400\n",
+        "correctness": {
+          "status": "pass",
+          "oracle_version": "v26.5.1",
+          "reason": ""
+        },
+        "run_env": {},
+        "samples": {
+          "heap_used_bytes": [544, 544, 544, 544, 544, 544, 544],
+          "heap_total_bytes": [14680064, 14680064, 14680064, 14680064, 14680064, 14680064, 14680064],
+          "minor_cycles": [3, 3],
+          "step_cycles": [3, 3],
+          "copied_objects": [20079, 20079],
+          "copied_bytes": [743384, 743384],
+          "promoted_objects": [3390, 3390],
+          "promoted_bytes": [122120, 122120],
+          "freed_bytes": [26862320, 26862320]
+        }
+      },
+      "06_string_retention": {
+        "stdout": "probe:06_string_retention\nchecksum:1112804\n",
+        "correctness": {
+          "status": "pass",
+          "oracle_version": "v26.5.1",
+          "reason": ""
+        },
+        "run_env": {},
+        "samples": {
+          "heap_used_bytes": [1072, 1072, 1072, 1072, 1072, 1072, 1072],
+          "heap_total_bytes": [22020096, 22020096, 22020096, 22020096, 22020096, 22020096, 22020096],
+          "minor_cycles": [4, 4],
+          "step_cycles": [4, 4],
+          "copied_objects": [298, 298],
+          "copied_bytes": [72288, 72288],
+          "promoted_objects": [14, 14],
+          "promoted_bytes": [1072, 1072],
+          "freed_bytes": [68136816, 68136816]
+        }
+      },
+      "07_array_grow_evacuate": {
+        "stdout": "probe:07_array_grow_evacuate\nchecksum:21891160\nsurvivors:94\n",
+        "correctness": {
+          "status": "pass",
+          "oracle_version": "v26.5.1",
+          "reason": ""
+        },
+        "run_env": {},
+        "samples": {
+          "heap_used_bytes": [1072456, 1072456, 1072456, 1072456, 1072456, 1072456, 1072456],
+          "heap_total_bytes": [25165824, 25165824, 25165824, 25165824, 25165824, 25165824, 25165824],
+          "minor_cycles": [5, 5],
+          "step_cycles": [5, 5],
+          "copied_objects": [4991, 4991],
+          "copied_bytes": [2404720, 2404720],
+          "promoted_objects": [4769, 4769],
+          "promoted_bytes": [623120, 623120],
+          "freed_bytes": [83788528, 83788528]
+        }
+      },
+      "08_map_set_sidetables": {
+        "stdout": "probe:08_map_set_sidetables\nchecksum:1109446656\nfinal_sizes:0,0\n",
+        "correctness": {
+          "status": "pass",
+          "oracle_version": "v26.5.1",
+          "reason": ""
+        },
+        "run_env": {},
+        "samples": {
+          "heap_used_bytes": [688, 688, 688, 688, 688, 688, 688],
+          "heap_total_bytes": [14680064, 14680064, 14680064, 14680064, 14680064, 14680064, 14680064],
+          "minor_cycles": [6, 6],
+          "step_cycles": [6, 6],
+          "copied_objects": [2489, 2489],
+          "copied_bytes": [99656, 99656],
+          "promoted_objects": [14, 14],
+          "promoted_bytes": [592, 592],
+          "freed_bytes": [56598904, 56598904]
+        }
+      },
+      "09_try_catch_roots": {
+        "stdout": "probe:09_try_catch_roots\nchecksum:-1465100498\n",
+        "correctness": {
+          "status": "pass",
+          "oracle_version": "v26.5.1",
+          "reason": ""
+        },
+        "run_env": {},
+        "samples": {
+          "heap_used_bytes": [247392, 247392, 247392, 247392, 247392, 247392, 247392],
+          "heap_total_bytes": [14680064, 14680064, 14680064, 14680064, 14680064, 14680064, 14680064],
+          "minor_cycles": [1, 1],
+          "step_cycles": [1, 1],
+          "copied_objects": [4962, 4962],
+          "copied_bytes": [230352, 230352],
+          "promoted_objects": [0, 0],
+          "promoted_bytes": [0, 0],
+          "freed_bytes": [10255312, 10255312]
+        }
+      },
+      "10_store_receiver_across_alloc": {
+        "stdout": "probe:10_store_receiver_across_alloc\nchecksum:-1837890048\n",
+        "correctness": {
+          "status": "pass",
+          "oracle_version": "v26.5.1",
+          "reason": ""
+        },
+        "run_env": {},
+        "samples": {
+          "heap_used_bytes": [244648, 244648, 244648, 244648, 244648, 244648, 244648],
+          "heap_total_bytes": [16777216, 16777216, 16777216, 16777216, 16777216, 16777216, 16777216],
+          "minor_cycles": [9, 9],
+          "step_cycles": [9, 9],
+          "copied_objects": [18660, 18660],
+          "copied_bytes": [825520, 825520],
+          "promoted_objects": [4722, 4722],
+          "promoted_bytes": [228440, 228440],
+          "freed_bytes": [88858544, 88858544]
+        }
+      },
+      "11_collect_at_depth": {
+        "stdout": "probe:11_collect_at_depth\nchecksum:-1569838524\n",
+        "correctness": {
+          "status": "pass",
+          "oracle_version": "v26.5.1",
+          "reason": ""
+        },
+        "run_env": {},
+        "samples": {
+          "heap_used_bytes": [247712, 247712, 247712, 247712, 247712, 247712, 247712],
+          "heap_total_bytes": [12582912, 12582912, 12582912, 12582912, 12582912, 12582912, 12582912],
+          "minor_cycles": [1, 1],
+          "step_cycles": [1, 1],
+          "copied_objects": [4975, 4975],
+          "copied_bytes": [230872, 230872],
+          "promoted_objects": [0, 0],
+          "promoted_bytes": [0, 0],
+          "freed_bytes": [9206240, 9206240]
+        }
+      },
+      "12_large_live_set": {
+        "stdout": "probe:12_large_live_set\nchecksum:1678627152\nwalked:700000\nsum:186514128\nkept:10938\nkeptSum:-466842304\n",
+        "correctness": {
+          "status": "pass",
+          "oracle_version": "v26.5.1",
+          "reason": ""
+        },
+        "run_env": {},
+        "samples": {
+          "heap_used_bytes": [569448, 569448, 569448, 569448, 569448, 569448, 569448],
+          "heap_total_bytes": [72351744, 72351744, 72351744, 72351744, 72351744, 72351744, 72351744],
+          "minor_cycles": [5, 5],
+          "step_cycles": [5, 5],
+          "copied_objects": [58175, 58175],
+          "copied_bytes": [2327008, 2327008],
+          "promoted_objects": [530030, 530030],
+          "promoted_bytes": [21201208, 21201208],
+          "freed_bytes": [63732784, 63732784]
+        }
+      },
+      "13_large_eden_survivors": {
+        "stdout": "probe:13_large_eden_survivors\nchecksum:1846988256\nhits:3000000\ntagChars:1722368\npeerIds:-131072\nnotes:11719\nnoteSum:22499072\n",
+        "correctness": {
+          "status": "pass",
+          "oracle_version": "v26.5.1",
+          "reason": ""
+        },
+        "run_env": {
+          "PERRY_GC_SCAVENGE_NURSERY_MB": "64"
+        },
+        "samples": {
+          "heap_used_bytes": [227048, 227048, 227048, 227048, 227048, 227048, 227048],
+          "heap_total_bytes": [61865984, 61865984, 61865984, 61865984, 61865984, 63963136, 61865984],
+          "minor_cycles": [3, 3],
+          "step_cycles": [3, 3],
+          "copied_objects": [377569, 377569],
+          "copied_bytes": [21429712, 21429712],
+          "promoted_objects": [386271, 386271],
+          "promoted_bytes": [21777792, 21777792],
+          "freed_bytes": [108243696, 108243696]
+        }
+      },
+      "14_grow_then_churn": {
+        "stdout": "probe:14_grow_then_churn\ncacheSum:2050177040\nchurnSum:815300000\nliveSum:2008997952\n",
+        "correctness": {
+          "status": "pass",
+          "oracle_version": "v26.5.1",
+          "reason": ""
+        },
+        "run_env": {
+          "PERRY_GC_SCAVENGE_NURSERY_MB": "1",
+          "PERRY_GC_MAJOR_PACING_FLOOR_MB": "1"
+        },
+        "samples": {
+          "heap_used_bytes": [430584, 430584, 430584, 430584, 430584, 430584, 430584],
+          "heap_total_bytes": [23068672, 23068672, 23068672, 23068672, 23068672, 23068672, 23068672],
+          "minor_cycles": [22, 22],
+          "step_cycles": [23, 23],
+          "copied_objects": [330, 330],
+          "copied_bytes": [1277072, 1277072],
+          "promoted_objects": [406707, 406707],
+          "promoted_bytes": [147967960, 147967960],
+          "freed_bytes": [119606864, 119606864]
+        }
+      }
+    }
+  },
+  "historical_builds": {
+    "066f9d5953f4dabbe2a792b6026944e256ac32e0": {
+      "code_tree": "fb6ba697b0fde68a41485f6920cbd4acea98cba8",
+      "measurement_sha256": "f8992a9901aa6a78659850bb06a3eb726e56b621aab549d01b957935e33648d7",
+      "measurement": {
+        "generated_at": "2026-09-06T03:57:33+00:00",
+        "platform": "linux-x86_64",
+        "run_config": {
+          "repeats": 3,
+          "warmup": 1,
+          "traced_runs": 2,
+          "probes": [
+            "01_nursery_churn",
+            "02_survivor_promotion",
+            "03_cross_gen_writes",
+            "04_dead_after_deep_stack",
+            "05_closure_capture",
+            "06_string_retention",
+            "07_array_grow_evacuate",
+            "08_map_set_sidetables",
+            "09_try_catch_roots",
+            "10_store_receiver_across_alloc",
+            "11_collect_at_depth",
+            "12_large_live_set",
+            "13_large_eden_survivors",
+            "14_grow_then_churn"
+          ]
+        },
+        "probes": {
+          "01_nursery_churn": {
+            "stdout": "probe:01_nursery_churn\nchecksum:-1399701504\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [225680, 225680, 225680],
+              "heap_total_bytes": [14680064, 14680064, 14680064],
+              "minor_cycles": [1, 1],
+              "step_cycles": [1, 1],
+              "copied_objects": [6650, 6650],
+              "copied_bytes": [448432, 448432],
+              "promoted_objects": [0, 0],
+              "promoted_bytes": [0, 0],
+              "freed_bytes": [11085768, 11085768]
+            }
+          },
+          "02_survivor_promotion": {
+            "stdout": "probe:02_survivor_promotion\nchecksum:1679883264\nlive:40000\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [2349952, 2349952, 2349952],
+              "heap_total_bytes": [15728640, 15728640, 15728640],
+              "minor_cycles": [1, 1],
+              "step_cycles": [1, 1],
+              "copied_objects": [37171, 37171],
+              "copied_bytes": [1667008, 1667008],
+              "promoted_objects": [0, 0],
+              "promoted_bytes": [0, 0],
+              "freed_bytes": [8818632, 8818632]
+            }
+          },
+          "03_cross_gen_writes": {
+            "stdout": "probe:03_cross_gen_writes\nchecksum:2034120704\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [528, 528, 528],
+              "heap_total_bytes": [12582912, 12582912, 12582912],
+              "minor_cycles": [1, 1],
+              "step_cycles": [1, 1],
+              "copied_objects": [4107, 4107],
+              "copied_bytes": [197056, 197056],
+              "promoted_objects": [0, 0],
+              "promoted_bytes": [0, 0],
+              "freed_bytes": [9240008, 9240008]
+            }
+          },
+          "04_dead_after_deep_stack": {
+            "stdout": "probe:04_dead_after_deep_stack\nchecksum:9814000\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [27416, 27416, 27416],
+              "heap_total_bytes": [18874368, 18874368, 18874368],
+              "minor_cycles": [7, 7],
+              "step_cycles": [7, 7],
+              "copied_objects": [3622, 3622],
+              "copied_bytes": [149400, 149400],
+              "promoted_objects": [682, 682],
+              "promoted_bytes": [27320, 27320],
+              "freed_bytes": [73346416, 73346416]
+            }
+          },
+          "05_closure_capture": {
+            "stdout": "probe:05_closure_capture\nchecksum:399974400\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [252112, 252112, 252112],
+              "heap_total_bytes": [14680064, 14680064, 14680064],
+              "minor_cycles": [3, 3],
+              "step_cycles": [3, 3],
+              "copied_objects": [20335, 20335],
+              "copied_bytes": [752600, 752600],
+              "promoted_objects": [3518, 3518],
+              "promoted_bytes": [126728, 126728],
+              "freed_bytes": [26857712, 26857712]
+            }
+          },
+          "06_string_retention": {
+            "stdout": "probe:06_string_retention\nchecksum:1112804\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [226152, 226152, 226152],
+              "heap_total_bytes": [23068672, 23068672, 23068672],
+              "minor_cycles": [5, 5],
+              "step_cycles": [5, 5],
+              "copied_objects": [11691, 11691],
+              "copied_bytes": [720120, 720120],
+              "promoted_objects": [5210, 5210],
+              "promoted_bytes": [262224, 262224],
+              "freed_bytes": [74180784, 74180784]
+            }
+          },
+          "07_array_grow_evacuate": {
+            "stdout": "probe:07_array_grow_evacuate\nchecksum:21891160\nsurvivors:94\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [998352, 998352, 998352],
+              "heap_total_bytes": [25165824, 25165824, 25165824],
+              "minor_cycles": [5, 5],
+              "step_cycles": [5, 5],
+              "copied_objects": [6671, 6671],
+              "copied_bytes": [2620776, 2620776],
+              "promoted_objects": [5128, 5128],
+              "promoted_bytes": [628168, 628168],
+              "freed_bytes": [83783560, 83783560]
+            }
+          },
+          "08_map_set_sidetables": {
+            "stdout": "probe:08_map_set_sidetables\nchecksum:1109446656\nfinal_sizes:0,0\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [672, 672, 672],
+              "heap_total_bytes": [14680064, 14680064, 14680064],
+              "minor_cycles": [6, 6],
+              "step_cycles": [6, 6],
+              "copied_objects": [3388, 3388],
+              "copied_bytes": [135448, 135448],
+              "promoted_objects": [15, 15],
+              "promoted_bytes": [576, 576],
+              "freed_bytes": [56606720, 56606720]
+            }
+          },
+          "09_try_catch_roots": {
+            "stdout": "probe:09_try_catch_roots\nchecksum:-1465100498\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [225680, 225680, 225680],
+              "heap_total_bytes": [13631488, 13631488, 13631488],
+              "minor_cycles": [1, 1],
+              "step_cycles": [1, 1],
+              "copied_objects": [0, 0],
+              "copied_bytes": [0, 0],
+              "promoted_objects": [6524, 6524],
+              "promoted_bytes": [438784, 438784],
+              "freed_bytes": [10046896, 10046896]
+            }
+          },
+          "10_store_receiver_across_alloc": {
+            "stdout": "probe:10_store_receiver_across_alloc\nchecksum:204277248\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [233896, 233896, 233896],
+              "heap_total_bytes": [12582912, 12582912, 12582912],
+              "minor_cycles": [1, 1],
+              "step_cycles": [1, 1],
+              "copied_objects": [8452, 8452],
+              "copied_bytes": [516712, 516712],
+              "promoted_objects": [0, 0],
+              "promoted_bytes": [0, 0],
+              "freed_bytes": [8920520, 8920520]
+            }
+          },
+          "11_collect_at_depth": {
+            "stdout": "probe:11_collect_at_depth\nchecksum:-1569838524\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [225680, 225680, 225680],
+              "heap_total_bytes": [12582912, 12582912, 12582912],
+              "minor_cycles": [1, 1],
+              "step_cycles": [1, 1],
+              "copied_objects": [6532, 6532],
+              "copied_bytes": [441384, 441384],
+              "promoted_objects": [0, 0],
+              "promoted_bytes": [0, 0],
+              "freed_bytes": [8995680, 8995680]
+            }
+          },
+          "12_large_live_set": {
+            "stdout": "probe:12_large_live_set\nchecksum:1678627152\nwalked:700000\nsum:186514128\nkept:10938\nkeptSum:-466842304\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [1681712, 1681712, 1681712],
+              "heap_total_bytes": [72351744, 72351744, 72351744],
+              "minor_cycles": [5, 5],
+              "step_cycles": [5, 5],
+              "copied_objects": [58175, 58175],
+              "copied_bytes": [2327008, 2327008],
+              "promoted_objects": [530030, 530030],
+              "promoted_bytes": [21201208, 21201208],
+              "freed_bytes": [63732664, 63732664]
+            }
+          },
+          "13_large_eden_survivors": {
+            "stdout": "probe:13_large_eden_survivors\nchecksum:1846988256\nhits:3000000\ntagChars:1722368\npeerIds:-131072\nnotes:11719\nnoteSum:22499072\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {
+              "PERRY_GC_SCAVENGE_NURSERY_MB": "64"
+            },
+            "samples": {
+              "heap_used_bytes": [465848, 465848, 465848],
+              "heap_total_bytes": [56623104, 56623104, 56623104],
+              "minor_cycles": [3, 3],
+              "step_cycles": [3, 3],
+              "copied_objects": [0, 0],
+              "copied_bytes": [0, 0],
+              "promoted_objects": [542500, 542500],
+              "promoted_bytes": [28173424, 28173424],
+              "freed_bytes": [86649800, 86649800]
+            }
+          },
+          "14_grow_then_churn": {
+            "stdout": "probe:14_grow_then_churn\ncacheSum:2050177040\nchurnSum:815300000\nliveSum:2008997952\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {
+              "PERRY_GC_SCAVENGE_NURSERY_MB": "1",
+              "PERRY_GC_MAJOR_PACING_FLOOR_MB": "1"
+            },
+            "samples": {
+              "heap_used_bytes": [415392, 415392, 415392],
+              "heap_total_bytes": [23068672, 23068672, 23068672],
+              "minor_cycles": [22, 22],
+              "step_cycles": [23, 23],
+              "copied_objects": [330, 330],
+              "copied_bytes": [1277072, 1277072],
+              "promoted_objects": [406708, 406708],
+              "promoted_bytes": [147967856, 147967856],
+              "freed_bytes": [119598704, 119598704]
+            }
+          }
+        }
+      },
+      "build_log_sha256": "ea511f11de8bc93afe9be43d8a9e30d9afed00c42f937a7ec6c23fd3c8c163ee"
+    },
+    "06e1ab349c8c6e40587bb3ce2ee9f1c58b20522b": {
+      "code_tree": "7c0231b405413312de85c8e5428e1171267d0150",
+      "measurement_sha256": "64830ae82cf5923726255d2654c7c27d3c419006028e48b43f5d13793dd1ff4d",
+      "measurement": {
+        "generated_at": "2026-09-06T03:50:41+00:00",
+        "platform": "linux-x86_64",
+        "run_config": {
+          "repeats": 3,
+          "warmup": 1,
+          "traced_runs": 2,
+          "probes": [
+            "01_nursery_churn",
+            "02_survivor_promotion",
+            "03_cross_gen_writes",
+            "04_dead_after_deep_stack",
+            "05_closure_capture",
+            "06_string_retention",
+            "07_array_grow_evacuate",
+            "08_map_set_sidetables",
+            "09_try_catch_roots",
+            "10_store_receiver_across_alloc",
+            "11_collect_at_depth",
+            "12_large_live_set",
+            "13_large_eden_survivors",
+            "14_grow_then_churn"
+          ]
+        },
+        "probes": {
+          "01_nursery_churn": {
+            "stdout": "probe:01_nursery_churn\nchecksum:-1399701504\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [225680, 225680, 225680],
+              "heap_total_bytes": [14680064, 14680064, 14680064],
+              "minor_cycles": [1, 1],
+              "step_cycles": [1, 1],
+              "copied_objects": [6650, 6650],
+              "copied_bytes": [448432, 448432],
+              "promoted_objects": [0, 0],
+              "promoted_bytes": [0, 0],
+              "freed_bytes": [11085768, 11085768]
+            }
+          },
+          "02_survivor_promotion": {
+            "stdout": "probe:02_survivor_promotion\nchecksum:1679883264\nlive:40000\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [2349952, 2349952, 2349952],
+              "heap_total_bytes": [15728640, 15728640, 15728640],
+              "minor_cycles": [1, 1],
+              "step_cycles": [1, 1],
+              "copied_objects": [37171, 37171],
+              "copied_bytes": [1667008, 1667008],
+              "promoted_objects": [0, 0],
+              "promoted_bytes": [0, 0],
+              "freed_bytes": [8818632, 8818632]
+            }
+          },
+          "03_cross_gen_writes": {
+            "stdout": "probe:03_cross_gen_writes\nchecksum:2034120704\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [528, 528, 528],
+              "heap_total_bytes": [12582912, 12582912, 12582912],
+              "minor_cycles": [1, 1],
+              "step_cycles": [1, 1],
+              "copied_objects": [4107, 4107],
+              "copied_bytes": [197056, 197056],
+              "promoted_objects": [0, 0],
+              "promoted_bytes": [0, 0],
+              "freed_bytes": [9240008, 9240008]
+            }
+          },
+          "04_dead_after_deep_stack": {
+            "stdout": "probe:04_dead_after_deep_stack\nchecksum:9814000\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [27416, 27416, 27416],
+              "heap_total_bytes": [18874368, 18874368, 18874368],
+              "minor_cycles": [7, 7],
+              "step_cycles": [7, 7],
+              "copied_objects": [3622, 3622],
+              "copied_bytes": [149400, 149400],
+              "promoted_objects": [682, 682],
+              "promoted_bytes": [27320, 27320],
+              "freed_bytes": [73346416, 73346416]
+            }
+          },
+          "05_closure_capture": {
+            "stdout": "probe:05_closure_capture\nchecksum:399974400\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [252112, 252112, 252112],
+              "heap_total_bytes": [14680064, 14680064, 14680064],
+              "minor_cycles": [3, 3],
+              "step_cycles": [3, 3],
+              "copied_objects": [20335, 20335],
+              "copied_bytes": [752600, 752600],
+              "promoted_objects": [3518, 3518],
+              "promoted_bytes": [126728, 126728],
+              "freed_bytes": [26857712, 26857712]
+            }
+          },
+          "06_string_retention": {
+            "stdout": "probe:06_string_retention\nchecksum:1112804\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [226152, 226152, 226152],
+              "heap_total_bytes": [23068672, 23068672, 23068672],
+              "minor_cycles": [10, 10],
+              "step_cycles": [10, 10],
+              "copied_objects": [12141, 12141],
+              "copied_bytes": [1005128, 1005128],
+              "promoted_objects": [5082, 5082],
+              "promoted_bytes": [225840, 225840],
+              "freed_bytes": [160153064, 160153064]
+            }
+          },
+          "07_array_grow_evacuate": {
+            "stdout": "probe:07_array_grow_evacuate\nchecksum:21891160\nsurvivors:94\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [998352, 998352, 998352],
+              "heap_total_bytes": [25165824, 25165824, 25165824],
+              "minor_cycles": [5, 5],
+              "step_cycles": [5, 5],
+              "copied_objects": [6672, 6672],
+              "copied_bytes": [2620920, 2620920],
+              "promoted_objects": [5128, 5128],
+              "promoted_bytes": [628168, 628168],
+              "freed_bytes": [83783560, 83783560]
+            }
+          },
+          "08_map_set_sidetables": {
+            "stdout": "probe:08_map_set_sidetables\nchecksum:1109446656\nfinal_sizes:0,0\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [672, 672, 672],
+              "heap_total_bytes": [14680064, 14680064, 14680064],
+              "minor_cycles": [6, 6],
+              "step_cycles": [6, 6],
+              "copied_objects": [3388, 3388],
+              "copied_bytes": [135448, 135448],
+              "promoted_objects": [15, 15],
+              "promoted_bytes": [576, 576],
+              "freed_bytes": [56606720, 56606720]
+            }
+          },
+          "09_try_catch_roots": {
+            "stdout": "probe:09_try_catch_roots\nchecksum:-1465100498\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [225680, 225680, 225680],
+              "heap_total_bytes": [13631488, 13631488, 13631488],
+              "minor_cycles": [1, 1],
+              "step_cycles": [1, 1],
+              "copied_objects": [0, 0],
+              "copied_bytes": [0, 0],
+              "promoted_objects": [6524, 6524],
+              "promoted_bytes": [438784, 438784],
+              "freed_bytes": [10046896, 10046896]
+            }
+          },
+          "10_store_receiver_across_alloc": {
+            "stdout": "probe:10_store_receiver_across_alloc\nchecksum:204277248\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [233896, 233896, 233896],
+              "heap_total_bytes": [12582912, 12582912, 12582912],
+              "minor_cycles": [1, 1],
+              "step_cycles": [1, 1],
+              "copied_objects": [8455, 8455],
+              "copied_bytes": [517144, 517144],
+              "promoted_objects": [0, 0],
+              "promoted_bytes": [0, 0],
+              "freed_bytes": [8920088, 8920088]
+            }
+          },
+          "11_collect_at_depth": {
+            "stdout": "probe:11_collect_at_depth\nchecksum:-1569838524\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [225680, 225680, 225680],
+              "heap_total_bytes": [12582912, 12582912, 12582912],
+              "minor_cycles": [1, 1],
+              "step_cycles": [1, 1],
+              "copied_objects": [6531, 6531],
+              "copied_bytes": [441240, 441240],
+              "promoted_objects": [0, 0],
+              "promoted_bytes": [0, 0],
+              "freed_bytes": [8995824, 8995824]
+            }
+          },
+          "12_large_live_set": {
+            "stdout": "probe:12_large_live_set\nchecksum:1678627152\nwalked:700000\nsum:186514128\nkept:10938\nkeptSum:-466842304\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [1681712, 1681712, 1681712],
+              "heap_total_bytes": [72351744, 72351744, 72351744],
+              "minor_cycles": [5, 5],
+              "step_cycles": [5, 5],
+              "copied_objects": [58175, 58175],
+              "copied_bytes": [2327008, 2327008],
+              "promoted_objects": [530030, 530030],
+              "promoted_bytes": [21201208, 21201208],
+              "freed_bytes": [63732664, 63732664]
+            }
+          },
+          "13_large_eden_survivors": {
+            "stdout": "probe:13_large_eden_survivors\nchecksum:1846988256\nhits:3000000\ntagChars:1722368\npeerIds:-131072\nnotes:11719\nnoteSum:22499072\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {
+              "PERRY_GC_SCAVENGE_NURSERY_MB": "64"
+            },
+            "samples": {
+              "heap_used_bytes": [465704, 465704, 465704],
+              "heap_total_bytes": [56623104, 56623104, 56623104],
+              "minor_cycles": [3, 3],
+              "step_cycles": [3, 3],
+              "copied_objects": [0, 0],
+              "copied_bytes": [0, 0],
+              "promoted_objects": [542499, 542499],
+              "promoted_bytes": [28173280, 28173280],
+              "freed_bytes": [86649800, 86649800]
+            }
+          },
+          "14_grow_then_churn": {
+            "stdout": "probe:14_grow_then_churn\ncacheSum:2050177040\nchurnSum:815300000\nliveSum:2008997952\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {
+              "PERRY_GC_SCAVENGE_NURSERY_MB": "1",
+              "PERRY_GC_MAJOR_PACING_FLOOR_MB": "1"
+            },
+            "samples": {
+              "heap_used_bytes": [412648, 412648, 412648],
+              "heap_total_bytes": [23068672, 23068672, 23068672],
+              "minor_cycles": [22, 22],
+              "step_cycles": [23, 23],
+              "copied_objects": [330, 330],
+              "copied_bytes": [1277072, 1277072],
+              "promoted_objects": [406708, 406708],
+              "promoted_bytes": [147967856, 147967856],
+              "freed_bytes": [119598704, 119598704]
+            }
+          }
+        }
+      },
+      "build_log_sha256": "c0dcf19af925a494a7177c9e5b793857fa62b64784cdd36a81866610174fd74d"
+    },
+    "3fc54c44144ac6697b521c36d406055d3573e715": {
+      "code_tree": "abb8f937405cabba842f15b7a05b1c23a9c1f6ce",
+      "measurement_sha256": "99b597921ca3844c5609fcc482593ed35c33c22fde1823ccfacab3e2db0ec8a4",
+      "measurement": {
+        "generated_at": "2026-09-06T03:52:23+00:00",
+        "platform": "linux-x86_64",
+        "run_config": {
+          "repeats": 3,
+          "warmup": 1,
+          "traced_runs": 2,
+          "probes": [
+            "01_nursery_churn",
+            "02_survivor_promotion",
+            "03_cross_gen_writes",
+            "04_dead_after_deep_stack",
+            "05_closure_capture",
+            "06_string_retention",
+            "07_array_grow_evacuate",
+            "08_map_set_sidetables",
+            "09_try_catch_roots",
+            "10_store_receiver_across_alloc",
+            "11_collect_at_depth",
+            "12_large_live_set",
+            "13_large_eden_survivors",
+            "14_grow_then_churn"
+          ]
+        },
+        "probes": {
+          "01_nursery_churn": {
+            "stdout": "probe:01_nursery_churn\nchecksum:-1399701504\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [233096, 233096, 233096],
+              "heap_total_bytes": [14680064, 14680064, 14680064],
+              "minor_cycles": [1, 1],
+              "step_cycles": [1, 1],
+              "copied_objects": [5664, 5664],
+              "copied_bytes": [260744, 260744],
+              "promoted_objects": [0, 0],
+              "promoted_bytes": [0, 0],
+              "freed_bytes": [11273440, 11273440]
+            }
+          },
+          "02_survivor_promotion": {
+            "stdout": "probe:02_survivor_promotion\nchecksum:1679883264\nlive:40000\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [2357368, 2357368, 2357368],
+              "heap_total_bytes": [15728640, 15728640, 15728640],
+              "minor_cycles": [1, 1],
+              "step_cycles": [1, 1],
+              "copied_objects": [36152, 36152],
+              "copied_bytes": [1477200, 1477200],
+              "promoted_objects": [0, 0],
+              "promoted_bytes": [0, 0],
+              "freed_bytes": [9008464, 9008464]
+            }
+          },
+          "03_cross_gen_writes": {
+            "stdout": "probe:03_cross_gen_writes\nchecksum:2034120704\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [528, 528, 528],
+              "heap_total_bytes": [12582912, 12582912, 12582912],
+              "minor_cycles": [1, 1],
+              "step_cycles": [1, 1],
+              "copied_objects": [4107, 4107],
+              "copied_bytes": [197056, 197056],
+              "promoted_objects": [0, 0],
+              "promoted_bytes": [0, 0],
+              "freed_bytes": [9240008, 9240008]
+            }
+          },
+          "04_dead_after_deep_stack": {
+            "stdout": "probe:04_dead_after_deep_stack\nchecksum:9814000\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [27416, 27416, 27416],
+              "heap_total_bytes": [18874368, 18874368, 18874368],
+              "minor_cycles": [7, 7],
+              "step_cycles": [7, 7],
+              "copied_objects": [3622, 3622],
+              "copied_bytes": [149400, 149400],
+              "promoted_objects": [682, 682],
+              "promoted_bytes": [27320, 27320],
+              "freed_bytes": [73346416, 73346416]
+            }
+          },
+          "05_closure_capture": {
+            "stdout": "probe:05_closure_capture\nchecksum:399974400\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [247504, 247504, 247504],
+              "heap_total_bytes": [14680064, 14680064, 14680064],
+              "minor_cycles": [3, 3],
+              "step_cycles": [3, 3],
+              "copied_objects": [20079, 20079],
+              "copied_bytes": [743384, 743384],
+              "promoted_objects": [3390, 3390],
+              "promoted_bytes": [122120, 122120],
+              "freed_bytes": [26862320, 26862320]
+            }
+          },
+          "06_string_retention": {
+            "stdout": "probe:06_string_retention\nchecksum:1112804\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [1072, 1072, 1072],
+              "heap_total_bytes": [22020096, 22020096, 22020096],
+              "minor_cycles": [4, 4],
+              "step_cycles": [4, 4],
+              "copied_objects": [298, 298],
+              "copied_bytes": [72288, 72288],
+              "promoted_objects": [14, 14],
+              "promoted_bytes": [1072, 1072],
+              "freed_bytes": [68136816, 68136816]
+            }
+          },
+          "07_array_grow_evacuate": {
+            "stdout": "probe:07_array_grow_evacuate\nchecksum:21891160\nsurvivors:94\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [1005768, 1005768, 1005768],
+              "heap_total_bytes": [25165824, 25165824, 25165824],
+              "minor_cycles": [5, 5],
+              "step_cycles": [5, 5],
+              "copied_objects": [5678, 5678],
+              "copied_bytes": [2430928, 2430928],
+              "promoted_objects": [5130, 5130],
+              "promoted_bytes": [635584, 635584],
+              "freed_bytes": [83776064, 83776064]
+            }
+          },
+          "08_map_set_sidetables": {
+            "stdout": "probe:08_map_set_sidetables\nchecksum:1109446656\nfinal_sizes:0,0\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [688, 688, 688],
+              "heap_total_bytes": [14680064, 14680064, 14680064],
+              "minor_cycles": [6, 6],
+              "step_cycles": [6, 6],
+              "copied_objects": [2489, 2489],
+              "copied_bytes": [99656, 99656],
+              "promoted_objects": [14, 14],
+              "promoted_bytes": [592, 592],
+              "freed_bytes": [56598904, 56598904]
+            }
+          },
+          "09_try_catch_roots": {
+            "stdout": "probe:09_try_catch_roots\nchecksum:-1465100498\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [233096, 233096, 233096],
+              "heap_total_bytes": [13631488, 13631488, 13631488],
+              "minor_cycles": [1, 1],
+              "step_cycles": [1, 1],
+              "copied_objects": [0, 0],
+              "copied_bytes": [0, 0],
+              "promoted_objects": [5633, 5633],
+              "promoted_bytes": [255920, 255920],
+              "freed_bytes": [10229744, 10229744]
+            }
+          },
+          "10_store_receiver_across_alloc": {
+            "stdout": "probe:10_store_receiver_across_alloc\nchecksum:204277248\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [255056, 255056, 255056],
+              "heap_total_bytes": [10485760, 10485760, 10485760],
+              "minor_cycles": [0, 0],
+              "step_cycles": [0, 0],
+              "copied_objects": [0, 0],
+              "copied_bytes": [0, 0],
+              "promoted_objects": [0, 0],
+              "promoted_bytes": [0, 0],
+              "freed_bytes": [0, 0]
+            }
+          },
+          "11_collect_at_depth": {
+            "stdout": "probe:11_collect_at_depth\nchecksum:-1569838524\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [233096, 233096, 233096],
+              "heap_total_bytes": [12582912, 12582912, 12582912],
+              "minor_cycles": [1, 1],
+              "step_cycles": [1, 1],
+              "copied_objects": [5537, 5537],
+              "copied_bytes": [252080, 252080],
+              "promoted_objects": [0, 0],
+              "promoted_bytes": [0, 0],
+              "freed_bytes": [9185032, 9185032]
+            }
+          },
+          "12_large_live_set": {
+            "stdout": "probe:12_large_live_set\nchecksum:1678627152\nwalked:700000\nsum:186514128\nkept:10938\nkeptSum:-466842304\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [1681552, 1681552, 1681552],
+              "heap_total_bytes": [72351744, 72351744, 72351744],
+              "minor_cycles": [5, 5],
+              "step_cycles": [5, 5],
+              "copied_objects": [58175, 58175],
+              "copied_bytes": [2327008, 2327008],
+              "promoted_objects": [530030, 530030],
+              "promoted_bytes": [21201208, 21201208],
+              "freed_bytes": [63732784, 63732784]
+            }
+          },
+          "13_large_eden_survivors": {
+            "stdout": "probe:13_large_eden_survivors\nchecksum:1846988256\nhits:3000000\ntagChars:1722368\npeerIds:-131072\nnotes:11719\nnoteSum:22499072\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {
+              "PERRY_GC_SCAVENGE_NURSERY_MB": "64"
+            },
+            "samples": {
+              "heap_used_bytes": [289992, 289992, 289992],
+              "heap_total_bytes": [58720256, 58720256, 58720256],
+              "minor_cycles": [3, 3],
+              "step_cycles": [3, 3],
+              "copied_objects": [0, 0],
+              "copied_bytes": [0, 0],
+              "promoted_objects": [531314, 531314],
+              "promoted_bytes": [27578240, 27578240],
+              "freed_bytes": [86649800, 86649800]
+            }
+          },
+          "14_grow_then_churn": {
+            "stdout": "probe:14_grow_then_churn\ncacheSum:2050177040\nchurnSum:815300000\nliveSum:2008997952\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {
+              "PERRY_GC_SCAVENGE_NURSERY_MB": "1",
+              "PERRY_GC_MAJOR_PACING_FLOOR_MB": "1"
+            },
+            "samples": {
+              "heap_used_bytes": [233344, 233344, 233344],
+              "heap_total_bytes": [23068672, 23068672, 23068672],
+              "minor_cycles": [22, 22],
+              "step_cycles": [23, 23],
+              "copied_objects": [325, 325],
+              "copied_bytes": [1276352, 1276352],
+              "promoted_objects": [406707, 406707],
+              "promoted_bytes": [147967960, 147967960],
+              "freed_bytes": [118559056, 118559056]
+            }
+          }
+        }
+      },
+      "build_log_sha256": "1b75d54beb25623449556a1c693d87c30c3b7581e1e816075a28db89cc257bf8"
+    },
+    "b3e88f1fb3378fe30b065ed328b73ea0527ab18a": {
+      "code_tree": "2eeef7d284d3dc5a4f96b2947c706b637a6dedfb",
+      "measurement_sha256": "aac277a71373776c3d237509fa091a3aa1dcc26276a2b6ea9f6c7d55206dc72d",
+      "measurement": {
+        "generated_at": "2026-09-06T03:59:06+00:00",
+        "platform": "linux-x86_64",
+        "run_config": {
+          "repeats": 3,
+          "warmup": 1,
+          "traced_runs": 2,
+          "probes": [
+            "01_nursery_churn",
+            "02_survivor_promotion",
+            "03_cross_gen_writes",
+            "04_dead_after_deep_stack",
+            "05_closure_capture",
+            "06_string_retention",
+            "07_array_grow_evacuate",
+            "08_map_set_sidetables",
+            "09_try_catch_roots",
+            "10_store_receiver_across_alloc",
+            "11_collect_at_depth",
+            "12_large_live_set",
+            "13_large_eden_survivors",
+            "14_grow_then_churn"
+          ]
+        },
+        "probes": {
+          "01_nursery_churn": {
+            "stdout": "probe:01_nursery_churn\nchecksum:-1399701504\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [225760, 225760, 225760],
+              "heap_total_bytes": [14680064, 14680064, 14680064],
+              "minor_cycles": [1, 1],
+              "step_cycles": [1, 1],
+              "copied_objects": [6684, 6684],
+              "copied_bytes": [453304, 453304],
+              "promoted_objects": [0, 0],
+              "promoted_bytes": [0, 0],
+              "freed_bytes": [11080896, 11080896]
+            }
+          },
+          "02_survivor_promotion": {
+            "stdout": "probe:02_survivor_promotion\nchecksum:1679883264\nlive:40000\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [2350032, 2350032, 2350032],
+              "heap_total_bytes": [15728640, 15728640, 15728640],
+              "minor_cycles": [1, 1],
+              "step_cycles": [1, 1],
+              "copied_objects": [37199, 37199],
+              "copied_bytes": [1669872, 1669872],
+              "promoted_objects": [0, 0],
+              "promoted_bytes": [0, 0],
+              "freed_bytes": [8815776, 8815776]
+            }
+          },
+          "03_cross_gen_writes": {
+            "stdout": "probe:03_cross_gen_writes\nchecksum:2034120704\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [528, 528, 528],
+              "heap_total_bytes": [12582912, 12582912, 12582912],
+              "minor_cycles": [1, 1],
+              "step_cycles": [1, 1],
+              "copied_objects": [4107, 4107],
+              "copied_bytes": [197056, 197056],
+              "promoted_objects": [0, 0],
+              "promoted_bytes": [0, 0],
+              "freed_bytes": [9240008, 9240008]
+            }
+          },
+          "04_dead_after_deep_stack": {
+            "stdout": "probe:04_dead_after_deep_stack\nchecksum:9814000\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [27416, 27416, 27416],
+              "heap_total_bytes": [18874368, 18874368, 18874368],
+              "minor_cycles": [7, 7],
+              "step_cycles": [7, 7],
+              "copied_objects": [3622, 3622],
+              "copied_bytes": [149400, 149400],
+              "promoted_objects": [682, 682],
+              "promoted_bytes": [27320, 27320],
+              "freed_bytes": [73346416, 73346416]
+            }
+          },
+          "05_closure_capture": {
+            "stdout": "probe:05_closure_capture\nchecksum:399974400\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [252112, 252112, 252112],
+              "heap_total_bytes": [14680064, 14680064, 14680064],
+              "minor_cycles": [3, 3],
+              "step_cycles": [3, 3],
+              "copied_objects": [20335, 20335],
+              "copied_bytes": [752600, 752600],
+              "promoted_objects": [3518, 3518],
+              "promoted_bytes": [126728, 126728],
+              "freed_bytes": [26857712, 26857712]
+            }
+          },
+          "06_string_retention": {
+            "stdout": "probe:06_string_retention\nchecksum:1112804\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [226232, 226232, 226232],
+              "heap_total_bytes": [23068672, 23068672, 23068672],
+              "minor_cycles": [5, 5],
+              "step_cycles": [5, 5],
+              "copied_objects": [11714, 11714],
+              "copied_bytes": [721632, 721632],
+              "promoted_objects": [5212, 5212],
+              "promoted_bytes": [262304, 262304],
+              "freed_bytes": [74180992, 74180992]
+            }
+          },
+          "07_array_grow_evacuate": {
+            "stdout": "probe:07_array_grow_evacuate\nchecksum:21891160\nsurvivors:94\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [998432, 998432, 998432],
+              "heap_total_bytes": [25165824, 25165824, 25165824],
+              "minor_cycles": [5, 5],
+              "step_cycles": [5, 5],
+              "copied_objects": [6695, 6695],
+              "copied_bytes": [2622016, 2622016],
+              "promoted_objects": [5130, 5130],
+              "promoted_bytes": [628248, 628248],
+              "freed_bytes": [83783416, 83783416]
+            }
+          },
+          "08_map_set_sidetables": {
+            "stdout": "probe:08_map_set_sidetables\nchecksum:1109446656\nfinal_sizes:0,0\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [672, 672, 672],
+              "heap_total_bytes": [14680064, 14680064, 14680064],
+              "minor_cycles": [6, 6],
+              "step_cycles": [6, 6],
+              "copied_objects": [3388, 3388],
+              "copied_bytes": [135448, 135448],
+              "promoted_objects": [15, 15],
+              "promoted_bytes": [576, 576],
+              "freed_bytes": [56606720, 56606720]
+            }
+          },
+          "09_try_catch_roots": {
+            "stdout": "probe:09_try_catch_roots\nchecksum:-1465100498\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [225760, 225760, 225760],
+              "heap_total_bytes": [13631488, 13631488, 13631488],
+              "minor_cycles": [1, 1],
+              "step_cycles": [1, 1],
+              "copied_objects": [0, 0],
+              "copied_bytes": [0, 0],
+              "promoted_objects": [6560, 6560],
+              "promoted_bytes": [445288, 445288],
+              "freed_bytes": [10040360, 10040360]
+            }
+          },
+          "10_store_receiver_across_alloc": {
+            "stdout": "probe:10_store_receiver_across_alloc\nchecksum:204277248\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [233976, 233976, 233976],
+              "heap_total_bytes": [12582912, 12582912, 12582912],
+              "minor_cycles": [1, 1],
+              "step_cycles": [1, 1],
+              "copied_objects": [8494, 8494],
+              "copied_bytes": [523992, 523992],
+              "promoted_objects": [0, 0],
+              "promoted_bytes": [0, 0],
+              "freed_bytes": [8913240, 8913240]
+            }
+          },
+          "11_collect_at_depth": {
+            "stdout": "probe:11_collect_at_depth\nchecksum:-1569838524\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [225760, 225760, 225760],
+              "heap_total_bytes": [12582912, 12582912, 12582912],
+              "minor_cycles": [1, 1],
+              "step_cycles": [1, 1],
+              "copied_objects": [6562, 6562],
+              "copied_bytes": [445328, 445328],
+              "promoted_objects": [0, 0],
+              "promoted_bytes": [0, 0],
+              "freed_bytes": [8991784, 8991784]
+            }
+          },
+          "12_large_live_set": {
+            "stdout": "probe:12_large_live_set\nchecksum:1678627152\nwalked:700000\nsum:186514128\nkept:10938\nkeptSum:-466842304\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [1681712, 1681712, 1681712],
+              "heap_total_bytes": [72351744, 72351744, 72351744],
+              "minor_cycles": [5, 5],
+              "step_cycles": [5, 5],
+              "copied_objects": [58175, 58175],
+              "copied_bytes": [2327008, 2327008],
+              "promoted_objects": [530030, 530030],
+              "promoted_bytes": [21201208, 21201208],
+              "freed_bytes": [63732664, 63732664]
+            }
+          },
+          "13_large_eden_survivors": {
+            "stdout": "probe:13_large_eden_survivors\nchecksum:1846988256\nhits:3000000\ntagChars:1722368\npeerIds:-131072\nnotes:11719\nnoteSum:22499072\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {
+              "PERRY_GC_SCAVENGE_NURSERY_MB": "64"
+            },
+            "samples": {
+              "heap_used_bytes": [476088, 476088, 476088],
+              "heap_total_bytes": [56623104, 56623104, 56623104],
+              "minor_cycles": [3, 3],
+              "step_cycles": [3, 3],
+              "copied_objects": [0, 0],
+              "copied_bytes": [0, 0],
+              "promoted_objects": [542533, 542533],
+              "promoted_bytes": [28178696, 28178696],
+              "freed_bytes": [86649800, 86649800]
+            }
+          },
+          "14_grow_then_churn": {
+            "stdout": "probe:14_grow_then_churn\ncacheSum:2050177040\nchurnSum:815300000\nliveSum:2008997952\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {
+              "PERRY_GC_SCAVENGE_NURSERY_MB": "1",
+              "PERRY_GC_MAJOR_PACING_FLOOR_MB": "1"
+            },
+            "samples": {
+              "heap_used_bytes": [419064, 419064, 419064],
+              "heap_total_bytes": [23068672, 23068672, 23068672],
+              "minor_cycles": [22, 22],
+              "step_cycles": [23, 23],
+              "copied_objects": [330, 330],
+              "copied_bytes": [1277072, 1277072],
+              "promoted_objects": [406708, 406708],
+              "promoted_bytes": [147967856, 147967856],
+              "freed_bytes": [119615024, 119615024]
+            }
+          }
+        }
+      },
+      "build_log_sha256": "6c5e83e54c22f5b22e7a5b0b3e60e78633692825803c8819ff6fd0f3277fc82f"
+    },
+    "c2da03439e6e848cfed73163c131acb601ae96dc": {
+      "code_tree": "c201770f043f56ae8a91ba8c17c0ab676c6208ae",
+      "measurement_sha256": "de233972f6b8aa83e39d991cf237ecf47a4e26b4750f3f3ee6618720b4348049",
+      "measurement": {
+        "generated_at": "2026-09-06T03:49:06+00:00",
+        "platform": "linux-x86_64",
+        "run_config": {
+          "repeats": 3,
+          "warmup": 1,
+          "traced_runs": 2,
+          "probes": [
+            "01_nursery_churn",
+            "02_survivor_promotion",
+            "03_cross_gen_writes",
+            "04_dead_after_deep_stack",
+            "05_closure_capture",
+            "06_string_retention",
+            "07_array_grow_evacuate",
+            "08_map_set_sidetables",
+            "09_try_catch_roots",
+            "10_store_receiver_across_alloc",
+            "11_collect_at_depth",
+            "12_large_live_set",
+            "13_large_eden_survivors",
+            "14_grow_then_churn"
+          ]
+        },
+        "probes": {
+          "01_nursery_churn": {
+            "stdout": "probe:01_nursery_churn\nchecksum:-1399701504\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [225344, 225344, 225344],
+              "heap_total_bytes": [14680064, 14680064, 14680064],
+              "minor_cycles": [1, 1],
+              "step_cycles": [1, 1],
+              "copied_objects": [6632, 6632],
+              "copied_bytes": [445800, 445800],
+              "promoted_objects": [0, 0],
+              "promoted_bytes": [0, 0],
+              "freed_bytes": [11088408, 11088408]
+            }
+          },
+          "02_survivor_promotion": {
+            "stdout": "probe:02_survivor_promotion\nchecksum:1679883264\nlive:40000\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [2349616, 2349616, 2349616],
+              "heap_total_bytes": [15728640, 15728640, 15728640],
+              "minor_cycles": [1, 1],
+              "step_cycles": [1, 1],
+              "copied_objects": [37161, 37161],
+              "copied_bytes": [1664616, 1664616],
+              "promoted_objects": [0, 0],
+              "promoted_bytes": [0, 0],
+              "freed_bytes": [8821032, 8821032]
+            }
+          },
+          "03_cross_gen_writes": {
+            "stdout": "probe:03_cross_gen_writes\nchecksum:2034120704\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [528, 528, 528],
+              "heap_total_bytes": [12582912, 12582912, 12582912],
+              "minor_cycles": [1, 1],
+              "step_cycles": [1, 1],
+              "copied_objects": [4107, 4107],
+              "copied_bytes": [197056, 197056],
+              "promoted_objects": [0, 0],
+              "promoted_bytes": [0, 0],
+              "freed_bytes": [9240008, 9240008]
+            }
+          },
+          "04_dead_after_deep_stack": {
+            "stdout": "probe:04_dead_after_deep_stack\nchecksum:9814000\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [536, 536, 536],
+              "heap_total_bytes": [18874368, 18874368, 18874368],
+              "minor_cycles": [6, 6],
+              "step_cycles": [6, 6],
+              "copied_objects": [528, 528],
+              "copied_bytes": [27096, 27096],
+              "promoted_objects": [10, 10],
+              "promoted_bytes": [440, 440],
+              "freed_bytes": [76532640, 76532640]
+            }
+          },
+          "05_closure_capture": {
+            "stdout": "probe:05_closure_capture\nchecksum:399974400\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [5152, 5152, 5152],
+              "heap_total_bytes": [13631488, 13631488, 13631488],
+              "minor_cycles": [3, 3],
+              "step_cycles": [3, 3],
+              "copied_objects": [5648, 5648],
+              "copied_bytes": [225976, 225976],
+              "promoted_objects": [0, 0],
+              "promoted_bytes": [0, 0],
+              "freed_bytes": [29269088, 29269088]
+            }
+          },
+          "06_string_retention": {
+            "stdout": "probe:06_string_retention\nchecksum:1112804\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [225816, 225816, 225816],
+              "heap_total_bytes": [23068672, 23068672, 23068672],
+              "minor_cycles": [10, 10],
+              "step_cycles": [10, 10],
+              "copied_objects": [12116, 12116],
+              "copied_bytes": [986808, 986808],
+              "promoted_objects": [5075, 5075],
+              "promoted_bytes": [225504, 225504],
+              "freed_bytes": [158064256, 158064256]
+            }
+          },
+          "07_array_grow_evacuate": {
+            "stdout": "probe:07_array_grow_evacuate\nchecksum:21891160\nsurvivors:94\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [998016, 998016, 998016],
+              "heap_total_bytes": [23068672, 23068672, 23068672],
+              "minor_cycles": [5, 5],
+              "step_cycles": [5, 5],
+              "copied_objects": [6670, 6670],
+              "copied_bytes": [2694488, 2694488],
+              "promoted_objects": [5122, 5122],
+              "promoted_bytes": [628872, 628872],
+              "freed_bytes": [83708400, 83708400]
+            }
+          },
+          "08_map_set_sidetables": {
+            "stdout": "probe:08_map_set_sidetables\nchecksum:1109446656\nfinal_sizes:0,0\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [672, 672, 672],
+              "heap_total_bytes": [14680064, 14680064, 14680064],
+              "minor_cycles": [6, 6],
+              "step_cycles": [6, 6],
+              "copied_objects": [3388, 3388],
+              "copied_bytes": [135448, 135448],
+              "promoted_objects": [15, 15],
+              "promoted_bytes": [576, 576],
+              "freed_bytes": [56606720, 56606720]
+            }
+          },
+          "09_try_catch_roots": {
+            "stdout": "probe:09_try_catch_roots\nchecksum:-1465100498\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [225344, 225344, 225344],
+              "heap_total_bytes": [13631488, 13631488, 13631488],
+              "minor_cycles": [1, 1],
+              "step_cycles": [1, 1],
+              "copied_objects": [0, 0],
+              "copied_bytes": [0, 0],
+              "promoted_objects": [6513, 6513],
+              "promoted_bytes": [438632, 438632],
+              "freed_bytes": [10047056, 10047056]
+            }
+          },
+          "10_store_receiver_across_alloc": {
+            "stdout": "probe:10_store_receiver_across_alloc\nchecksum:204277248\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [233560, 233560, 233560],
+              "heap_total_bytes": [12582912, 12582912, 12582912],
+              "minor_cycles": [1, 1],
+              "step_cycles": [1, 1],
+              "copied_objects": [8440, 8440],
+              "copied_bytes": [515824, 515824],
+              "promoted_objects": [0, 0],
+              "promoted_bytes": [0, 0],
+              "freed_bytes": [8921344, 8921344]
+            }
+          },
+          "11_collect_at_depth": {
+            "stdout": "probe:11_collect_at_depth\nchecksum:-1569838524\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [225344, 225344, 225344],
+              "heap_total_bytes": [12582912, 12582912, 12582912],
+              "minor_cycles": [1, 1],
+              "step_cycles": [1, 1],
+              "copied_objects": [6527, 6527],
+              "copied_bytes": [442016, 442016],
+              "promoted_objects": [0, 0],
+              "promoted_bytes": [0, 0],
+              "freed_bytes": [8995056, 8995056]
+            }
+          },
+          "12_large_live_set": {
+            "stdout": "probe:12_large_live_set\nchecksum:1678627152\nwalked:700000\nsum:186514128\nkept:10938\nkeptSum:-466842304\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [1681712, 1681712, 1681712],
+              "heap_total_bytes": [72351744, 72351744, 72351744],
+              "minor_cycles": [5, 5],
+              "step_cycles": [5, 5],
+              "copied_objects": [58175, 58175],
+              "copied_bytes": [2327008, 2327008],
+              "promoted_objects": [530030, 530030],
+              "promoted_bytes": [21201208, 21201208],
+              "freed_bytes": [63732664, 63732664]
+            }
+          },
+          "13_large_eden_survivors": {
+            "stdout": "probe:13_large_eden_survivors\nchecksum:1846988256\nhits:3000000\ntagChars:1722368\npeerIds:-131072\nnotes:11719\nnoteSum:22499072\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {
+              "PERRY_GC_SCAVENGE_NURSERY_MB": "64"
+            },
+            "samples": {
+              "heap_used_bytes": [468760, 468760, 468760],
+              "heap_total_bytes": [56623104, 56623104, 56623104],
+              "minor_cycles": [3, 3],
+              "step_cycles": [3, 3],
+              "copied_objects": [0, 0],
+              "copied_bytes": [0, 0],
+              "promoted_objects": [542494, 542494],
+              "promoted_bytes": [28174112, 28174112],
+              "freed_bytes": [86649800, 86649800]
+            }
+          },
+          "14_grow_then_churn": {
+            "stdout": "probe:14_grow_then_churn\ncacheSum:2050177040\nchurnSum:815300000\nliveSum:2008997952\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {
+              "PERRY_GC_SCAVENGE_NURSERY_MB": "1",
+              "PERRY_GC_MAJOR_PACING_FLOOR_MB": "1"
+            },
+            "samples": {
+              "heap_used_bytes": [412224, 412224, 412224],
+              "heap_total_bytes": [23068672, 23068672, 23068672],
+              "minor_cycles": [22, 22],
+              "step_cycles": [23, 23],
+              "copied_objects": [340, 340],
+              "copied_bytes": [1357872, 1357872],
+              "promoted_objects": [406062, 406062],
+              "promoted_bytes": [147510664, 147510664],
+              "freed_bytes": [119662160, 119662160]
+            }
+          }
+        }
+      },
+      "build_log_sha256": "07cf6e14735b3b6a42c3489815ad57d8435f991709f95490ccbf07799fa110cc"
+    },
+    "d02892491563a9f34d5bc78867764fcad0b07a58": {
+      "code_tree": "33e62b3c476f0436663c7412d83a2b94d482361a",
+      "measurement_sha256": "f991086c46123c4ddb078c530e5116dc7854369defd677507f0466cf7b006be6",
+      "measurement": {
+        "generated_at": "2026-09-06T04:01:11+00:00",
+        "platform": "linux-x86_64",
+        "run_config": {
+          "repeats": 3,
+          "warmup": 1,
+          "traced_runs": 2,
+          "probes": [
+            "01_nursery_churn",
+            "02_survivor_promotion",
+            "03_cross_gen_writes",
+            "04_dead_after_deep_stack",
+            "05_closure_capture",
+            "06_string_retention",
+            "07_array_grow_evacuate",
+            "08_map_set_sidetables",
+            "09_try_catch_roots",
+            "10_store_receiver_across_alloc",
+            "11_collect_at_depth",
+            "12_large_live_set",
+            "13_large_eden_survivors",
+            "14_grow_then_churn"
+          ]
+        },
+        "probes": {
+          "01_nursery_churn": {
+            "stdout": "probe:01_nursery_churn\nchecksum:-1399701504\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [600, 600, 600],
+              "heap_total_bytes": [14680064, 14680064, 14680064],
+              "minor_cycles": [1, 1],
+              "step_cycles": [1, 1],
+              "copied_objects": [268, 268],
+              "copied_bytes": [14816, 14816],
+              "promoted_objects": [0, 0],
+              "promoted_bytes": [0, 0],
+              "freed_bytes": [11519392, 11519392]
+            }
+          },
+          "02_survivor_promotion": {
+            "stdout": "probe:02_survivor_promotion\nchecksum:1679883264\nlive:40000\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [2124872, 2124872, 2124872],
+              "heap_total_bytes": [14680064, 14680064, 14680064],
+              "minor_cycles": [1, 1],
+              "step_cycles": [1, 1],
+              "copied_objects": [29198, 29198],
+              "copied_bytes": [1168952, 1168952],
+              "promoted_objects": [0, 0],
+              "promoted_bytes": [0, 0],
+              "freed_bytes": [8268128, 8268128]
+            }
+          },
+          "03_cross_gen_writes": {
+            "stdout": "probe:03_cross_gen_writes\nchecksum:2034120704\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [528, 528, 528],
+              "heap_total_bytes": [12582912, 12582912, 12582912],
+              "minor_cycles": [1, 1],
+              "step_cycles": [1, 1],
+              "copied_objects": [4107, 4107],
+              "copied_bytes": [197056, 197056],
+              "promoted_objects": [0, 0],
+              "promoted_bytes": [0, 0],
+              "freed_bytes": [9240008, 9240008]
+            }
+          },
+          "04_dead_after_deep_stack": {
+            "stdout": "probe:04_dead_after_deep_stack\nchecksum:9814000\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [27416, 27416, 27416],
+              "heap_total_bytes": [18874368, 18874368, 18874368],
+              "minor_cycles": [7, 7],
+              "step_cycles": [7, 7],
+              "copied_objects": [3622, 3622],
+              "copied_bytes": [149400, 149400],
+              "promoted_objects": [682, 682],
+              "promoted_bytes": [27320, 27320],
+              "freed_bytes": [73346416, 73346416]
+            }
+          },
+          "05_closure_capture": {
+            "stdout": "probe:05_closure_capture\nchecksum:399974400\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [252112, 252112, 252112],
+              "heap_total_bytes": [14680064, 14680064, 14680064],
+              "minor_cycles": [3, 3],
+              "step_cycles": [3, 3],
+              "copied_objects": [20335, 20335],
+              "copied_bytes": [752600, 752600],
+              "promoted_objects": [3518, 3518],
+              "promoted_bytes": [126728, 126728],
+              "freed_bytes": [26857712, 26857712]
+            }
+          },
+          "06_string_retention": {
+            "stdout": "probe:06_string_retention\nchecksum:1112804\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [1072, 1072, 1072],
+              "heap_total_bytes": [22020096, 22020096, 22020096],
+              "minor_cycles": [4, 4],
+              "step_cycles": [4, 4],
+              "copied_objects": [298, 298],
+              "copied_bytes": [72288, 72288],
+              "promoted_objects": [14, 14],
+              "promoted_bytes": [1072, 1072],
+              "freed_bytes": [68136816, 68136816]
+            }
+          },
+          "07_array_grow_evacuate": {
+            "stdout": "probe:07_array_grow_evacuate\nchecksum:21891160\nsurvivors:94\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [773272, 773272, 773272],
+              "heap_total_bytes": [23068672, 23068672, 23068672],
+              "minor_cycles": [5, 5],
+              "step_cycles": [5, 5],
+              "copied_objects": [328, 328],
+              "copied_bytes": [2473488, 2473488],
+              "promoted_objects": [60, 60],
+              "promoted_bytes": [403400, 403400],
+              "freed_bytes": [84008304, 84008304]
+            }
+          },
+          "08_map_set_sidetables": {
+            "stdout": "probe:08_map_set_sidetables\nchecksum:1109446656\nfinal_sizes:0,0\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [696, 696, 696],
+              "heap_total_bytes": [14680064, 14680064, 14680064],
+              "minor_cycles": [6, 6],
+              "step_cycles": [6, 6],
+              "copied_objects": [3382, 3382],
+              "copied_bytes": [135280, 135280],
+              "promoted_objects": [15, 15],
+              "promoted_bytes": [600, 600],
+              "freed_bytes": [56606720, 56606720]
+            }
+          },
+          "09_try_catch_roots": {
+            "stdout": "probe:09_try_catch_roots\nchecksum:-1465100498\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [600, 600, 600],
+              "heap_total_bytes": [13631488, 13631488, 13631488],
+              "minor_cycles": [1, 1],
+              "step_cycles": [1, 1],
+              "copied_objects": [0, 0],
+              "copied_bytes": [0, 0],
+              "promoted_objects": [141, 141],
+              "promoted_bytes": [6152, 6152],
+              "freed_bytes": [10479488, 10479488]
+            }
+          },
+          "10_store_receiver_across_alloc": {
+            "stdout": "probe:10_store_receiver_across_alloc\nchecksum:204277248\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [240264, 240264, 240264],
+              "heap_total_bytes": [12582912, 12582912, 12582912],
+              "minor_cycles": [1, 1],
+              "step_cycles": [1, 1],
+              "copied_objects": [8487, 8487],
+              "copied_bytes": [529144, 529144],
+              "promoted_objects": [0, 0],
+              "promoted_bytes": [0, 0],
+              "freed_bytes": [8908040, 8908040]
+            }
+          },
+          "11_collect_at_depth": {
+            "stdout": "probe:11_collect_at_depth\nchecksum:-1569838524\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [600, 600, 600],
+              "heap_total_bytes": [12582912, 12582912, 12582912],
+              "minor_cycles": [1, 1],
+              "step_cycles": [1, 1],
+              "copied_objects": [141, 141],
+              "copied_bytes": [6152, 6152],
+              "promoted_objects": [0, 0],
+              "promoted_bytes": [0, 0],
+              "freed_bytes": [9430952, 9430952]
+            }
+          },
+          "12_large_live_set": {
+            "stdout": "probe:12_large_live_set\nchecksum:1678627152\nwalked:700000\nsum:186514128\nkept:10938\nkeptSum:-466842304\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [1681552, 1681552, 1681552],
+              "heap_total_bytes": [72351744, 72351744, 72351744],
+              "minor_cycles": [5, 5],
+              "step_cycles": [5, 5],
+              "copied_objects": [58175, 58175],
+              "copied_bytes": [2327008, 2327008],
+              "promoted_objects": [530030, 530030],
+              "promoted_bytes": [21201208, 21201208],
+              "freed_bytes": [63732784, 63732784]
+            }
+          },
+          "13_large_eden_survivors": {
+            "stdout": "probe:13_large_eden_survivors\nchecksum:1846988256\nhits:3000000\ntagChars:1722368\npeerIds:-131072\nnotes:11719\nnoteSum:22499072\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {
+              "PERRY_GC_SCAVENGE_NURSERY_MB": "64"
+            },
+            "samples": {
+              "heap_used_bytes": [485992, 485992, 485992],
+              "heap_total_bytes": [56623104, 56623104, 56623104],
+              "minor_cycles": [3, 3],
+              "step_cycles": [3, 3],
+              "copied_objects": [0, 0],
+              "copied_bytes": [0, 0],
+              "promoted_objects": [542546, 542546],
+              "promoted_bytes": [28187176, 28187176],
+              "freed_bytes": [86649800, 86649800]
+            }
+          },
+          "14_grow_then_churn": {
+            "stdout": "probe:14_grow_then_churn\ncacheSum:2050177040\nchurnSum:815300000\nliveSum:2008997952\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {
+              "PERRY_GC_SCAVENGE_NURSERY_MB": "1",
+              "PERRY_GC_MAJOR_PACING_FLOOR_MB": "1"
+            },
+            "samples": {
+              "heap_used_bytes": [425168, 425168, 425168],
+              "heap_total_bytes": [23068672, 23068672, 23068672],
+              "minor_cycles": [22, 22],
+              "step_cycles": [23, 23],
+              "copied_objects": [330, 330],
+              "copied_bytes": [1277072, 1277072],
+              "promoted_objects": [406707, 406707],
+              "promoted_bytes": [147967904, 147967904],
+              "freed_bytes": [119606864, 119606864]
+            }
+          }
+        }
+      },
+      "build_log_sha256": "01cea0e1b00c21fdb0622caa3403ae6c9183051581f1947475ff512edea3e4af"
+    },
+    "d923b8dcf08f2afed71777c33423362411039cf0": {
+      "code_tree": "754b855d450836a70c10c21a6bcfe885fd63cf84",
+      "measurement_sha256": "4ebc31dfd52915755dca716e0ebf32598ce0a57b0409b0b705576c9b5473f170",
+      "measurement": {
+        "generated_at": "2026-09-06T03:53:51+00:00",
+        "platform": "linux-x86_64",
+        "run_config": {
+          "repeats": 3,
+          "warmup": 1,
+          "traced_runs": 2,
+          "probes": [
+            "01_nursery_churn",
+            "02_survivor_promotion",
+            "03_cross_gen_writes",
+            "04_dead_after_deep_stack",
+            "05_closure_capture",
+            "06_string_retention",
+            "07_array_grow_evacuate",
+            "08_map_set_sidetables",
+            "09_try_catch_roots",
+            "10_store_receiver_across_alloc",
+            "11_collect_at_depth",
+            "12_large_live_set",
+            "13_large_eden_survivors",
+            "14_grow_then_churn"
+          ]
+        },
+        "probes": {
+          "01_nursery_churn": {
+            "stdout": "probe:01_nursery_churn\nchecksum:-1399701504\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [233096, 233096, 233096],
+              "heap_total_bytes": [14680064, 14680064, 14680064],
+              "minor_cycles": [1, 1],
+              "step_cycles": [1, 1],
+              "copied_objects": [5664, 5664],
+              "copied_bytes": [260744, 260744],
+              "promoted_objects": [0, 0],
+              "promoted_bytes": [0, 0],
+              "freed_bytes": [11273440, 11273440]
+            }
+          },
+          "02_survivor_promotion": {
+            "stdout": "probe:02_survivor_promotion\nchecksum:1679883264\nlive:40000\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [2357368, 2357368, 2357368],
+              "heap_total_bytes": [15728640, 15728640, 15728640],
+              "minor_cycles": [1, 1],
+              "step_cycles": [1, 1],
+              "copied_objects": [36152, 36152],
+              "copied_bytes": [1477200, 1477200],
+              "promoted_objects": [0, 0],
+              "promoted_bytes": [0, 0],
+              "freed_bytes": [9008464, 9008464]
+            }
+          },
+          "03_cross_gen_writes": {
+            "stdout": "probe:03_cross_gen_writes\nchecksum:2034120704\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [528, 528, 528],
+              "heap_total_bytes": [12582912, 12582912, 12582912],
+              "minor_cycles": [1, 1],
+              "step_cycles": [1, 1],
+              "copied_objects": [4107, 4107],
+              "copied_bytes": [197056, 197056],
+              "promoted_objects": [0, 0],
+              "promoted_bytes": [0, 0],
+              "freed_bytes": [9240008, 9240008]
+            }
+          },
+          "04_dead_after_deep_stack": {
+            "stdout": "probe:04_dead_after_deep_stack\nchecksum:9814000\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [27416, 27416, 27416],
+              "heap_total_bytes": [18874368, 18874368, 18874368],
+              "minor_cycles": [7, 7],
+              "step_cycles": [7, 7],
+              "copied_objects": [3622, 3622],
+              "copied_bytes": [149400, 149400],
+              "promoted_objects": [682, 682],
+              "promoted_bytes": [27320, 27320],
+              "freed_bytes": [73346416, 73346416]
+            }
+          },
+          "05_closure_capture": {
+            "stdout": "probe:05_closure_capture\nchecksum:399974400\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [247504, 247504, 247504],
+              "heap_total_bytes": [14680064, 14680064, 14680064],
+              "minor_cycles": [3, 3],
+              "step_cycles": [3, 3],
+              "copied_objects": [20079, 20079],
+              "copied_bytes": [743384, 743384],
+              "promoted_objects": [3390, 3390],
+              "promoted_bytes": [122120, 122120],
+              "freed_bytes": [26862320, 26862320]
+            }
+          },
+          "06_string_retention": {
+            "stdout": "probe:06_string_retention\nchecksum:1112804\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [1072, 1072, 1072],
+              "heap_total_bytes": [22020096, 22020096, 22020096],
+              "minor_cycles": [4, 4],
+              "step_cycles": [4, 4],
+              "copied_objects": [298, 298],
+              "copied_bytes": [72288, 72288],
+              "promoted_objects": [14, 14],
+              "promoted_bytes": [1072, 1072],
+              "freed_bytes": [68136816, 68136816]
+            }
+          },
+          "07_array_grow_evacuate": {
+            "stdout": "probe:07_array_grow_evacuate\nchecksum:21891160\nsurvivors:94\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [1005768, 1005768, 1005768],
+              "heap_total_bytes": [25165824, 25165824, 25165824],
+              "minor_cycles": [5, 5],
+              "step_cycles": [5, 5],
+              "copied_objects": [5678, 5678],
+              "copied_bytes": [2430928, 2430928],
+              "promoted_objects": [5130, 5130],
+              "promoted_bytes": [635584, 635584],
+              "freed_bytes": [83776064, 83776064]
+            }
+          },
+          "08_map_set_sidetables": {
+            "stdout": "probe:08_map_set_sidetables\nchecksum:1109446656\nfinal_sizes:0,0\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [688, 688, 688],
+              "heap_total_bytes": [14680064, 14680064, 14680064],
+              "minor_cycles": [6, 6],
+              "step_cycles": [6, 6],
+              "copied_objects": [2489, 2489],
+              "copied_bytes": [99656, 99656],
+              "promoted_objects": [14, 14],
+              "promoted_bytes": [592, 592],
+              "freed_bytes": [56598904, 56598904]
+            }
+          },
+          "09_try_catch_roots": {
+            "stdout": "probe:09_try_catch_roots\nchecksum:-1465100498\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [1022296, 1022296, 1022296],
+              "heap_total_bytes": [13631488, 13631488, 13631488],
+              "minor_cycles": [1, 1],
+              "step_cycles": [1, 1],
+              "copied_objects": [0, 0],
+              "copied_bytes": [0, 0],
+              "promoted_objects": [6081, 6081],
+              "promoted_bytes": [273840, 273840],
+              "freed_bytes": [10211824, 10211824]
+            }
+          },
+          "10_store_receiver_across_alloc": {
+            "stdout": "probe:10_store_receiver_across_alloc\nchecksum:204277248\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [255056, 255056, 255056],
+              "heap_total_bytes": [10485760, 10485760, 10485760],
+              "minor_cycles": [0, 0],
+              "step_cycles": [0, 0],
+              "copied_objects": [0, 0],
+              "copied_bytes": [0, 0],
+              "promoted_objects": [0, 0],
+              "promoted_bytes": [0, 0],
+              "freed_bytes": [0, 0]
+            }
+          },
+          "11_collect_at_depth": {
+            "stdout": "probe:11_collect_at_depth\nchecksum:-1569838524\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [1233896, 1233896, 1233896],
+              "heap_total_bytes": [12582912, 12582912, 12582912],
+              "minor_cycles": [1, 1],
+              "step_cycles": [1, 1],
+              "copied_objects": [5985, 5985],
+              "copied_bytes": [270000, 270000],
+              "promoted_objects": [0, 0],
+              "promoted_bytes": [0, 0],
+              "freed_bytes": [9167112, 9167112]
+            }
+          },
+          "12_large_live_set": {
+            "stdout": "probe:12_large_live_set\nchecksum:1678627152\nwalked:700000\nsum:186514128\nkept:10938\nkeptSum:-466842304\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [1681552, 1681552, 1681552],
+              "heap_total_bytes": [72351744, 72351744, 72351744],
+              "minor_cycles": [5, 5],
+              "step_cycles": [5, 5],
+              "copied_objects": [58175, 58175],
+              "copied_bytes": [2327008, 2327008],
+              "promoted_objects": [530030, 530030],
+              "promoted_bytes": [21201208, 21201208],
+              "freed_bytes": [63732784, 63732784]
+            }
+          },
+          "13_large_eden_survivors": {
+            "stdout": "probe:13_large_eden_survivors\nchecksum:1846988256\nhits:3000000\ntagChars:1722368\npeerIds:-131072\nnotes:11719\nnoteSum:22499072\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {
+              "PERRY_GC_SCAVENGE_NURSERY_MB": "64"
+            },
+            "samples": {
+              "heap_used_bytes": [276272, 276272, 276272],
+              "heap_total_bytes": [61865984, 61865984, 61865984],
+              "minor_cycles": [3, 3],
+              "step_cycles": [3, 3],
+              "copied_objects": [356717, 356717],
+              "copied_bytes": [20594360, 20594360],
+              "promoted_objects": [365297, 365297],
+              "promoted_bytes": [20936856, 20936856],
+              "freed_bytes": [111181792, 111181792]
+            }
+          },
+          "14_grow_then_churn": {
+            "stdout": "probe:14_grow_then_churn\ncacheSum:2050177040\nchurnSum:815300000\nliveSum:2008997952\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {
+              "PERRY_GC_SCAVENGE_NURSERY_MB": "1",
+              "PERRY_GC_MAJOR_PACING_FLOOR_MB": "1"
+            },
+            "samples": {
+              "heap_used_bytes": [233344, 233344, 233344],
+              "heap_total_bytes": [23068672, 23068672, 23068672],
+              "minor_cycles": [22, 22],
+              "step_cycles": [23, 23],
+              "copied_objects": [325, 325],
+              "copied_bytes": [1276352, 1276352],
+              "promoted_objects": [406707, 406707],
+              "promoted_bytes": [147967960, 147967960],
+              "freed_bytes": [118559056, 118559056]
+            }
+          }
+        }
+      },
+      "build_log_sha256": "385211916be549de7231872e19689dde0f7cfd8e32c06c27d35b4052c632c0e7"
+    },
+    "e18b24c420c7c2f389607537618699ffc6aa9d1d": {
+      "code_tree": "6b1c14e694c40253f47ef8c09744f662f800ada3",
+      "measurement_sha256": "9656b6f6e30509a26bd5797b94a6701c71c0d2af9a64df9ff5684cb4801332b9",
+      "measurement": {
+        "generated_at": "2026-09-06T04:03:11+00:00",
+        "platform": "linux-x86_64",
+        "run_config": {
+          "repeats": 3,
+          "warmup": 1,
+          "traced_runs": 2,
+          "probes": [
+            "01_nursery_churn",
+            "02_survivor_promotion",
+            "03_cross_gen_writes",
+            "04_dead_after_deep_stack",
+            "05_closure_capture",
+            "06_string_retention",
+            "07_array_grow_evacuate",
+            "08_map_set_sidetables",
+            "09_try_catch_roots",
+            "10_store_receiver_across_alloc",
+            "11_collect_at_depth",
+            "12_large_live_set",
+            "13_large_eden_survivors",
+            "14_grow_then_churn"
+          ]
+        },
+        "probes": {
+          "01_nursery_churn": {
+            "stdout": "probe:01_nursery_churn\nchecksum:-1399701504\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [600, 600, 600],
+              "heap_total_bytes": [14680064, 14680064, 14680064],
+              "minor_cycles": [1, 1],
+              "step_cycles": [1, 1],
+              "copied_objects": [268, 268],
+              "copied_bytes": [14816, 14816],
+              "promoted_objects": [0, 0],
+              "promoted_bytes": [0, 0],
+              "freed_bytes": [11519392, 11519392]
+            }
+          },
+          "02_survivor_promotion": {
+            "stdout": "probe:02_survivor_promotion\nchecksum:1679883264\nlive:40000\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [2124872, 2124872, 2124872],
+              "heap_total_bytes": [14680064, 14680064, 14680064],
+              "minor_cycles": [1, 1],
+              "step_cycles": [1, 1],
+              "copied_objects": [29198, 29198],
+              "copied_bytes": [1168952, 1168952],
+              "promoted_objects": [0, 0],
+              "promoted_bytes": [0, 0],
+              "freed_bytes": [8268128, 8268128]
+            }
+          },
+          "03_cross_gen_writes": {
+            "stdout": "probe:03_cross_gen_writes\nchecksum:2034120704\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [528, 528, 528],
+              "heap_total_bytes": [12582912, 12582912, 12582912],
+              "minor_cycles": [1, 1],
+              "step_cycles": [1, 1],
+              "copied_objects": [4107, 4107],
+              "copied_bytes": [197056, 197056],
+              "promoted_objects": [0, 0],
+              "promoted_bytes": [0, 0],
+              "freed_bytes": [9240008, 9240008]
+            }
+          },
+          "04_dead_after_deep_stack": {
+            "stdout": "probe:04_dead_after_deep_stack\nchecksum:9814000\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [27416, 27416, 27416],
+              "heap_total_bytes": [18874368, 18874368, 18874368],
+              "minor_cycles": [7, 7],
+              "step_cycles": [7, 7],
+              "copied_objects": [3622, 3622],
+              "copied_bytes": [149400, 149400],
+              "promoted_objects": [682, 682],
+              "promoted_bytes": [27320, 27320],
+              "freed_bytes": [73346416, 73346416]
+            }
+          },
+          "05_closure_capture": {
+            "stdout": "probe:05_closure_capture\nchecksum:399974400\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [252112, 252112, 252112],
+              "heap_total_bytes": [14680064, 14680064, 14680064],
+              "minor_cycles": [3, 3],
+              "step_cycles": [3, 3],
+              "copied_objects": [20335, 20335],
+              "copied_bytes": [752600, 752600],
+              "promoted_objects": [3518, 3518],
+              "promoted_bytes": [126728, 126728],
+              "freed_bytes": [26857712, 26857712]
+            }
+          },
+          "06_string_retention": {
+            "stdout": "probe:06_string_retention\nchecksum:1112804\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [1072, 1072, 1072],
+              "heap_total_bytes": [22020096, 22020096, 22020096],
+              "minor_cycles": [4, 4],
+              "step_cycles": [4, 4],
+              "copied_objects": [298, 298],
+              "copied_bytes": [72288, 72288],
+              "promoted_objects": [14, 14],
+              "promoted_bytes": [1072, 1072],
+              "freed_bytes": [68136816, 68136816]
+            }
+          },
+          "07_array_grow_evacuate": {
+            "stdout": "probe:07_array_grow_evacuate\nchecksum:21891160\nsurvivors:94\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [773272, 773272, 773272],
+              "heap_total_bytes": [23068672, 23068672, 23068672],
+              "minor_cycles": [5, 5],
+              "step_cycles": [5, 5],
+              "copied_objects": [328, 328],
+              "copied_bytes": [2473488, 2473488],
+              "promoted_objects": [60, 60],
+              "promoted_bytes": [403400, 403400],
+              "freed_bytes": [84008304, 84008304]
+            }
+          },
+          "08_map_set_sidetables": {
+            "stdout": "probe:08_map_set_sidetables\nchecksum:1109446656\nfinal_sizes:0,0\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [696, 696, 696],
+              "heap_total_bytes": [14680064, 14680064, 14680064],
+              "minor_cycles": [6, 6],
+              "step_cycles": [6, 6],
+              "copied_objects": [3382, 3382],
+              "copied_bytes": [135280, 135280],
+              "promoted_objects": [15, 15],
+              "promoted_bytes": [600, 600],
+              "freed_bytes": [56606720, 56606720]
+            }
+          },
+          "09_try_catch_roots": {
+            "stdout": "probe:09_try_catch_roots\nchecksum:-1465100498\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [600, 600, 600],
+              "heap_total_bytes": [13631488, 13631488, 13631488],
+              "minor_cycles": [1, 1],
+              "step_cycles": [1, 1],
+              "copied_objects": [0, 0],
+              "copied_bytes": [0, 0],
+              "promoted_objects": [141, 141],
+              "promoted_bytes": [6152, 6152],
+              "freed_bytes": [10479488, 10479488]
+            }
+          },
+          "10_store_receiver_across_alloc": {
+            "stdout": "probe:10_store_receiver_across_alloc\nchecksum:204277248\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [240264, 240264, 240264],
+              "heap_total_bytes": [12582912, 12582912, 12582912],
+              "minor_cycles": [1, 1],
+              "step_cycles": [1, 1],
+              "copied_objects": [7457, 7457],
+              "copied_bytes": [327328, 327328],
+              "promoted_objects": [0, 0],
+              "promoted_bytes": [0, 0],
+              "freed_bytes": [9109856, 9109856]
+            }
+          },
+          "11_collect_at_depth": {
+            "stdout": "probe:11_collect_at_depth\nchecksum:-1569838524\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [600, 600, 600],
+              "heap_total_bytes": [12582912, 12582912, 12582912],
+              "minor_cycles": [1, 1],
+              "step_cycles": [1, 1],
+              "copied_objects": [141, 141],
+              "copied_bytes": [6152, 6152],
+              "promoted_objects": [0, 0],
+              "promoted_bytes": [0, 0],
+              "freed_bytes": [9430952, 9430952]
+            }
+          },
+          "12_large_live_set": {
+            "stdout": "probe:12_large_live_set\nchecksum:1678627152\nwalked:700000\nsum:186514128\nkept:10938\nkeptSum:-466842304\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {},
+            "samples": {
+              "heap_used_bytes": [1681552, 1681552, 1681552],
+              "heap_total_bytes": [72351744, 72351744, 72351744],
+              "minor_cycles": [5, 5],
+              "step_cycles": [5, 5],
+              "copied_objects": [58175, 58175],
+              "copied_bytes": [2327008, 2327008],
+              "promoted_objects": [530030, 530030],
+              "promoted_bytes": [21201208, 21201208],
+              "freed_bytes": [63732784, 63732784]
+            }
+          },
+          "13_large_eden_survivors": {
+            "stdout": "probe:13_large_eden_survivors\nchecksum:1846988256\nhits:3000000\ntagChars:1722368\npeerIds:-131072\nnotes:11719\nnoteSum:22499072\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {
+              "PERRY_GC_SCAVENGE_NURSERY_MB": "64"
+            },
+            "samples": {
+              "heap_used_bytes": [294616, 294616, 294616],
+              "heap_total_bytes": [55574528, 55574528, 55574528],
+              "minor_cycles": [3, 3],
+              "step_cycles": [3, 3],
+              "copied_objects": [0, 0],
+              "copied_bytes": [0, 0],
+              "promoted_objects": [541412, 541412],
+              "promoted_bytes": [27981104, 27981104],
+              "freed_bytes": [85605320, 85605320]
+            }
+          },
+          "14_grow_then_churn": {
+            "stdout": "probe:14_grow_then_churn\ncacheSum:2050177040\nchurnSum:815300000\nliveSum:2008997952\n",
+            "correctness": {
+              "status": "pass",
+              "oracle_version": "v26.5.1",
+              "reason": ""
+            },
+            "run_env": {
+              "PERRY_GC_SCAVENGE_NURSERY_MB": "1",
+              "PERRY_GC_MAJOR_PACING_FLOOR_MB": "1"
+            },
+            "samples": {
+              "heap_used_bytes": [232288, 232288, 232288],
+              "heap_total_bytes": [23068672, 23068672, 23068672],
+              "minor_cycles": [22, 22],
+              "step_cycles": [23, 23],
+              "copied_objects": [325, 325],
+              "copied_bytes": [1276352, 1276352],
+              "promoted_objects": [406707, 406707],
+              "promoted_bytes": [147967904, 147967904],
+              "freed_bytes": [118559056, 118559056]
+            }
+          }
+        }
+      },
+      "build_log_sha256": "7eb0d11883e7054a6497d7f7a48847a97537b63cd21da28435d0c1a7a0d5b9bb"
+    }
+  },
+  "protected_probe": {
+    "fixed": {
+      "returncode": 0,
+      "counters": {
+        "minor_cycles": 9,
+        "step_cycles": 9,
+        "copied_objects": 18660,
+        "copied_bytes": 825520,
+        "promoted_objects": 4722,
+        "promoted_bytes": 228440,
+        "freed_bytes": 88858544
+      },
+      "stdout": "probe:10_store_receiver_across_alloc\nchecksum:-1837890048\n"
+    },
+    "nonallocating_rhs": {
+      "returncode": 0,
+      "counters": {
+        "minor_cycles": 0,
+        "step_cycles": 0,
+        "copied_objects": 0,
+        "copied_bytes": 0,
+        "promoted_objects": 0,
+        "promoted_bytes": 0,
+        "freed_bytes": 0
+      },
+      "stdout": "probe:10_store_receiver_across_alloc\nchecksum:0\n"
+    }
+  },
+  "classification": {
+    "schema_version": 1,
+    "kind": "gc-ratchet-classification",
+    "generated_at": "2026-09-06T03:52:11+00:00",
+    "platform": "linux-x86_64",
+    "host": {
+      "platform": "linux-x86_64",
+      "hostname": "ideal-mastodon",
+      "system": "Linux",
+      "release": "6.17.0-23-generic",
+      "machine": "x86_64",
+      "cpu_count": 16,
+      "load_average": {
+        "1m": 6.66,
+        "5m": 5.9,
+        "15m": 3.67
+      },
+      "memory_bytes": 66468130816
+    },
+    "run_config": {
+      "repeats": 3,
+      "warmup": 1,
+      "scan_mode_env": "PERRY_CONSERVATIVE_STACK_SCAN"
+    },
+    "probes": [
+      {
+        "probe": "01_nursery_churn",
+        "run_env": {},
+        "heap_used_bytes": 236616,
+        "heap_used_samples": [236616, 236616, 236616],
+        "heap_used_spread_bytes": 0,
+        "heap_used_precise_bytes": 236616,
+        "false_root_excess_bytes": 0,
+        "false_root_excess_pct": 0,
+        "heap_total_bytes": 14680064,
+        "heap_total_precise_bytes": 14680064,
+        "scan_fallback_sites": {},
+        "automatic_scan_sites": []
+      },
+      {
+        "probe": "02_survivor_promotion",
+        "run_env": {},
+        "heap_used_bytes": 2358144,
+        "heap_used_samples": [2358144, 2358144, 2358144],
+        "heap_used_spread_bytes": 0,
+        "heap_used_precise_bytes": 2358144,
+        "false_root_excess_bytes": 0,
+        "false_root_excess_pct": 0,
+        "heap_total_bytes": 15728640,
+        "heap_total_precise_bytes": 15728640,
+        "scan_fallback_sites": {},
+        "automatic_scan_sites": []
+      },
+      {
+        "probe": "03_cross_gen_writes",
+        "run_env": {},
+        "heap_used_bytes": 528,
+        "heap_used_samples": [528, 528, 528],
+        "heap_used_spread_bytes": 0,
+        "heap_used_precise_bytes": 528,
+        "false_root_excess_bytes": 0,
+        "false_root_excess_pct": 0,
+        "heap_total_bytes": 12582912,
+        "heap_total_precise_bytes": 12582912,
+        "scan_fallback_sites": {},
+        "automatic_scan_sites": []
+      },
+      {
+        "probe": "04_dead_after_deep_stack",
+        "run_env": {},
+        "heap_used_bytes": 536,
+        "heap_used_samples": [536, 536, 536],
+        "heap_used_spread_bytes": 0,
+        "heap_used_precise_bytes": 536,
+        "false_root_excess_bytes": 0,
+        "false_root_excess_pct": 0,
+        "heap_total_bytes": 18874368,
+        "heap_total_precise_bytes": 18874368,
+        "scan_fallback_sites": {},
+        "automatic_scan_sites": []
+      },
+      {
+        "probe": "05_closure_capture",
+        "run_env": {},
+        "heap_used_bytes": 544,
+        "heap_used_samples": [544, 544, 544],
+        "heap_used_spread_bytes": 0,
+        "heap_used_precise_bytes": 544,
+        "false_root_excess_bytes": 0,
+        "false_root_excess_pct": 0,
+        "heap_total_bytes": 14680064,
+        "heap_total_precise_bytes": 14680064,
+        "scan_fallback_sites": {},
+        "automatic_scan_sites": []
+      },
+      {
+        "probe": "06_string_retention",
+        "run_env": {},
+        "heap_used_bytes": 1072,
+        "heap_used_samples": [1072, 1072, 1072],
+        "heap_used_spread_bytes": 0,
+        "heap_used_precise_bytes": 1072,
+        "false_root_excess_bytes": 0,
+        "false_root_excess_pct": 0,
+        "heap_total_bytes": 22020096,
+        "heap_total_precise_bytes": 22020096,
+        "scan_fallback_sites": {},
+        "automatic_scan_sites": []
+      },
+      {
+        "probe": "07_array_grow_evacuate",
+        "run_env": {},
+        "heap_used_bytes": 1072456,
+        "heap_used_samples": [1072456, 1072456, 1072456],
+        "heap_used_spread_bytes": 0,
+        "heap_used_precise_bytes": 1072456,
+        "false_root_excess_bytes": 0,
+        "false_root_excess_pct": 0,
+        "heap_total_bytes": 25165824,
+        "heap_total_precise_bytes": 25165824,
+        "scan_fallback_sites": {},
+        "automatic_scan_sites": []
+      },
+      {
+        "probe": "08_map_set_sidetables",
+        "run_env": {},
+        "heap_used_bytes": 688,
+        "heap_used_samples": [688, 688, 688],
+        "heap_used_spread_bytes": 0,
+        "heap_used_precise_bytes": 688,
+        "false_root_excess_bytes": 0,
+        "false_root_excess_pct": 0,
+        "heap_total_bytes": 14680064,
+        "heap_total_precise_bytes": 14680064,
+        "scan_fallback_sites": {},
+        "automatic_scan_sites": []
+      },
+      {
+        "probe": "09_try_catch_roots",
+        "run_env": {},
+        "heap_used_bytes": 247392,
+        "heap_used_samples": [247392, 247392, 247392],
+        "heap_used_spread_bytes": 0,
+        "heap_used_precise_bytes": 247392,
+        "false_root_excess_bytes": 0,
+        "false_root_excess_pct": 0,
+        "heap_total_bytes": 14680064,
+        "heap_total_precise_bytes": 14680064,
+        "scan_fallback_sites": {},
+        "automatic_scan_sites": []
+      },
+      {
+        "probe": "10_store_receiver_across_alloc",
+        "run_env": {},
+        "heap_used_bytes": 244648,
+        "heap_used_samples": [244648, 244648, 244648],
+        "heap_used_spread_bytes": 0,
+        "heap_used_precise_bytes": 244648,
+        "false_root_excess_bytes": 0,
+        "false_root_excess_pct": 0,
+        "heap_total_bytes": 16777216,
+        "heap_total_precise_bytes": 16777216,
+        "scan_fallback_sites": {},
+        "automatic_scan_sites": []
+      },
+      {
+        "probe": "11_collect_at_depth",
+        "run_env": {},
+        "heap_used_bytes": 247712,
+        "heap_used_samples": [247712, 247712, 247712],
+        "heap_used_spread_bytes": 0,
+        "heap_used_precise_bytes": 247712,
+        "false_root_excess_bytes": 0,
+        "false_root_excess_pct": 0,
+        "heap_total_bytes": 12582912,
+        "heap_total_precise_bytes": 12582912,
+        "scan_fallback_sites": {},
+        "automatic_scan_sites": []
+      },
+      {
+        "probe": "12_large_live_set",
+        "run_env": {},
+        "heap_used_bytes": 569448,
+        "heap_used_samples": [569448, 569448, 569448],
+        "heap_used_spread_bytes": 0,
+        "heap_used_precise_bytes": 569448,
+        "false_root_excess_bytes": 0,
+        "false_root_excess_pct": 0,
+        "heap_total_bytes": 72351744,
+        "heap_total_precise_bytes": 72351744,
+        "scan_fallback_sites": {},
+        "automatic_scan_sites": []
+      },
+      {
+        "probe": "13_large_eden_survivors",
+        "run_env": {
+          "PERRY_GC_SCAVENGE_NURSERY_MB": "64"
+        },
+        "heap_used_bytes": 227048,
+        "heap_used_samples": [227048, 227048, 227048],
+        "heap_used_spread_bytes": 0,
+        "heap_used_precise_bytes": 227048,
+        "false_root_excess_bytes": 0,
+        "false_root_excess_pct": 0,
+        "heap_total_bytes": 63963136,
+        "heap_total_precise_bytes": 61865984,
+        "scan_fallback_sites": {},
+        "automatic_scan_sites": []
+      },
+      {
+        "probe": "14_grow_then_churn",
+        "run_env": {
+          "PERRY_GC_SCAVENGE_NURSERY_MB": "1",
+          "PERRY_GC_MAJOR_PACING_FLOOR_MB": "1"
+        },
+        "heap_used_bytes": 430584,
+        "heap_used_samples": [430584, 430584, 430584],
+        "heap_used_spread_bytes": 0,
+        "heap_used_precise_bytes": 430584,
+        "false_root_excess_bytes": 0,
+        "false_root_excess_pct": 0,
+        "heap_total_bytes": 23068672,
+        "heap_total_precise_bytes": 23068672,
+        "scan_fallback_sites": {
+          "old_reclaim_alloc_point": {
+            "automatic": true,
+            "count": 1
+          }
+        },
+        "automatic_scan_sites": [
+          "old_reclaim_alloc_point"
+        ]
+      }
+    ]
+  },
+  "concat_site_cache_control": {
+    "env": {
+      "PERRY_CONCAT_SITE_CACHE": "0"
+    },
+    "measurement": {
+      "generated_at": "2026-09-06T04:02:46+00:00",
+      "platform": "linux-x86_64",
+      "run_config": {
+        "repeats": 3,
+        "warmup": 1,
+        "traced_runs": 2,
+        "probes": [
+          "01_nursery_churn",
+          "02_survivor_promotion",
+          "03_cross_gen_writes",
+          "04_dead_after_deep_stack",
+          "05_closure_capture",
+          "06_string_retention",
+          "07_array_grow_evacuate",
+          "08_map_set_sidetables",
+          "09_try_catch_roots",
+          "10_store_receiver_across_alloc",
+          "11_collect_at_depth",
+          "12_large_live_set",
+          "13_large_eden_survivors",
+          "14_grow_then_churn"
+        ]
+      },
+      "probes": {
+        "01_nursery_churn": {
+          "stdout": "probe:01_nursery_churn\nchecksum:-1399701504\n",
+          "correctness": {
+            "status": "pass",
+            "oracle_version": "v26.5.1",
+            "reason": ""
+          },
+          "run_env": {},
+          "samples": {
+            "heap_used_bytes": [236616, 236616, 236616],
+            "heap_total_bytes": [14680064, 14680064, 14680064],
+            "minor_cycles": [1, 1],
+            "step_cycles": [1, 1],
+            "copied_objects": [4977, 4977],
+            "copied_bytes": [234536, 234536],
+            "promoted_objects": [0, 0],
+            "promoted_bytes": [0, 0],
+            "freed_bytes": [11299648, 11299648]
+          }
+        },
+        "02_survivor_promotion": {
+          "stdout": "probe:02_survivor_promotion\nchecksum:1679883264\nlive:40000\n",
+          "correctness": {
+            "status": "pass",
+            "oracle_version": "v26.5.1",
+            "reason": ""
+          },
+          "run_env": {},
+          "samples": {
+            "heap_used_bytes": [2358144, 2358144, 2358144],
+            "heap_total_bytes": [15728640, 15728640, 15728640],
+            "minor_cycles": [1, 1],
+            "step_cycles": [1, 1],
+            "copied_objects": [35465, 35465],
+            "copied_bytes": [1450992, 1450992],
+            "promoted_objects": [0, 0],
+            "promoted_bytes": [0, 0],
+            "freed_bytes": [9034672, 9034672]
+          }
+        },
+        "03_cross_gen_writes": {
+          "stdout": "probe:03_cross_gen_writes\nchecksum:2034120704\n",
+          "correctness": {
+            "status": "pass",
+            "oracle_version": "v26.5.1",
+            "reason": ""
+          },
+          "run_env": {},
+          "samples": {
+            "heap_used_bytes": [528, 528, 528],
+            "heap_total_bytes": [12582912, 12582912, 12582912],
+            "minor_cycles": [1, 1],
+            "step_cycles": [1, 1],
+            "copied_objects": [4107, 4107],
+            "copied_bytes": [197056, 197056],
+            "promoted_objects": [0, 0],
+            "promoted_bytes": [0, 0],
+            "freed_bytes": [9240008, 9240008]
+          }
+        },
+        "04_dead_after_deep_stack": {
+          "stdout": "probe:04_dead_after_deep_stack\nchecksum:9814000\n",
+          "correctness": {
+            "status": "pass",
+            "oracle_version": "v26.5.1",
+            "reason": ""
+          },
+          "run_env": {},
+          "samples": {
+            "heap_used_bytes": [536, 536, 536],
+            "heap_total_bytes": [18874368, 18874368, 18874368],
+            "minor_cycles": [7, 7],
+            "step_cycles": [7, 7],
+            "copied_objects": [3622, 3622],
+            "copied_bytes": [149400, 149400],
+            "promoted_objects": [682, 682],
+            "promoted_bytes": [27320, 27320],
+            "freed_bytes": [73346416, 73346416]
+          }
+        },
+        "05_closure_capture": {
+          "stdout": "probe:05_closure_capture\nchecksum:399974400\n",
+          "correctness": {
+            "status": "pass",
+            "oracle_version": "v26.5.1",
+            "reason": ""
+          },
+          "run_env": {},
+          "samples": {
+            "heap_used_bytes": [544, 544, 544],
+            "heap_total_bytes": [14680064, 14680064, 14680064],
+            "minor_cycles": [3, 3],
+            "step_cycles": [3, 3],
+            "copied_objects": [20079, 20079],
+            "copied_bytes": [743384, 743384],
+            "promoted_objects": [3390, 3390],
+            "promoted_bytes": [122120, 122120],
+            "freed_bytes": [26862320, 26862320]
+          }
+        },
+        "06_string_retention": {
+          "stdout": "probe:06_string_retention\nchecksum:1112804\n",
+          "correctness": {
+            "status": "pass",
+            "oracle_version": "v26.5.1",
+            "reason": ""
+          },
+          "run_env": {},
+          "samples": {
+            "heap_used_bytes": [1072, 1072, 1072],
+            "heap_total_bytes": [22020096, 22020096, 22020096],
+            "minor_cycles": [4, 4],
+            "step_cycles": [4, 4],
+            "copied_objects": [298, 298],
+            "copied_bytes": [72288, 72288],
+            "promoted_objects": [14, 14],
+            "promoted_bytes": [1072, 1072],
+            "freed_bytes": [68136816, 68136816]
+          }
+        },
+        "07_array_grow_evacuate": {
+          "stdout": "probe:07_array_grow_evacuate\nchecksum:21891160\nsurvivors:94\n",
+          "correctness": {
+            "status": "pass",
+            "oracle_version": "v26.5.1",
+            "reason": ""
+          },
+          "run_env": {},
+          "samples": {
+            "heap_used_bytes": [1072456, 1072456, 1072456],
+            "heap_total_bytes": [25165824, 25165824, 25165824],
+            "minor_cycles": [5, 5],
+            "step_cycles": [5, 5],
+            "copied_objects": [4991, 4991],
+            "copied_bytes": [2404720, 2404720],
+            "promoted_objects": [4769, 4769],
+            "promoted_bytes": [623120, 623120],
+            "freed_bytes": [83788528, 83788528]
+          }
+        },
+        "08_map_set_sidetables": {
+          "stdout": "probe:08_map_set_sidetables\nchecksum:1109446656\nfinal_sizes:0,0\n",
+          "correctness": {
+            "status": "pass",
+            "oracle_version": "v26.5.1",
+            "reason": ""
+          },
+          "run_env": {},
+          "samples": {
+            "heap_used_bytes": [688, 688, 688],
+            "heap_total_bytes": [14680064, 14680064, 14680064],
+            "minor_cycles": [6, 6],
+            "step_cycles": [6, 6],
+            "copied_objects": [2489, 2489],
+            "copied_bytes": [99656, 99656],
+            "promoted_objects": [14, 14],
+            "promoted_bytes": [592, 592],
+            "freed_bytes": [56598904, 56598904]
+          }
+        },
+        "09_try_catch_roots": {
+          "stdout": "probe:09_try_catch_roots\nchecksum:-1465100498\n",
+          "correctness": {
+            "status": "pass",
+            "oracle_version": "v26.5.1",
+            "reason": ""
+          },
+          "run_env": {},
+          "samples": {
+            "heap_used_bytes": [247392, 247392, 247392],
+            "heap_total_bytes": [14680064, 14680064, 14680064],
+            "minor_cycles": [1, 1],
+            "step_cycles": [1, 1],
+            "copied_objects": [4962, 4962],
+            "copied_bytes": [230352, 230352],
+            "promoted_objects": [0, 0],
+            "promoted_bytes": [0, 0],
+            "freed_bytes": [10255312, 10255312]
+          }
+        },
+        "10_store_receiver_across_alloc": {
+          "stdout": "probe:10_store_receiver_across_alloc\nchecksum:-1837890048\n",
+          "correctness": {
+            "status": "pass",
+            "oracle_version": "v26.5.1",
+            "reason": ""
+          },
+          "run_env": {},
+          "samples": {
+            "heap_used_bytes": [244648, 244648, 244648],
+            "heap_total_bytes": [16777216, 16777216, 16777216],
+            "minor_cycles": [9, 9],
+            "step_cycles": [9, 9],
+            "copied_objects": [18660, 18660],
+            "copied_bytes": [825520, 825520],
+            "promoted_objects": [4722, 4722],
+            "promoted_bytes": [228440, 228440],
+            "freed_bytes": [88858544, 88858544]
+          }
+        },
+        "11_collect_at_depth": {
+          "stdout": "probe:11_collect_at_depth\nchecksum:-1569838524\n",
+          "correctness": {
+            "status": "pass",
+            "oracle_version": "v26.5.1",
+            "reason": ""
+          },
+          "run_env": {},
+          "samples": {
+            "heap_used_bytes": [247712, 247712, 247712],
+            "heap_total_bytes": [12582912, 12582912, 12582912],
+            "minor_cycles": [1, 1],
+            "step_cycles": [1, 1],
+            "copied_objects": [4975, 4975],
+            "copied_bytes": [230872, 230872],
+            "promoted_objects": [0, 0],
+            "promoted_bytes": [0, 0],
+            "freed_bytes": [9206240, 9206240]
+          }
+        },
+        "12_large_live_set": {
+          "stdout": "probe:12_large_live_set\nchecksum:1678627152\nwalked:700000\nsum:186514128\nkept:10938\nkeptSum:-466842304\n",
+          "correctness": {
+            "status": "pass",
+            "oracle_version": "v26.5.1",
+            "reason": ""
+          },
+          "run_env": {},
+          "samples": {
+            "heap_used_bytes": [569448, 569448, 569448],
+            "heap_total_bytes": [72351744, 72351744, 72351744],
+            "minor_cycles": [5, 5],
+            "step_cycles": [5, 5],
+            "copied_objects": [58175, 58175],
+            "copied_bytes": [2327008, 2327008],
+            "promoted_objects": [530030, 530030],
+            "promoted_bytes": [21201208, 21201208],
+            "freed_bytes": [63732784, 63732784]
+          }
+        },
+        "13_large_eden_survivors": {
+          "stdout": "probe:13_large_eden_survivors\nchecksum:1846988256\nhits:3000000\ntagChars:1722368\npeerIds:-131072\nnotes:11719\nnoteSum:22499072\n",
+          "correctness": {
+            "status": "pass",
+            "oracle_version": "v26.5.1",
+            "reason": ""
+          },
+          "run_env": {
+            "PERRY_GC_SCAVENGE_NURSERY_MB": "64"
+          },
+          "samples": {
+            "heap_used_bytes": [227048, 227048, 227048],
+            "heap_total_bytes": [61865984, 61865984, 61865984],
+            "minor_cycles": [3, 3],
+            "step_cycles": [3, 3],
+            "copied_objects": [377569, 377569],
+            "copied_bytes": [21429712, 21429712],
+            "promoted_objects": [386271, 386271],
+            "promoted_bytes": [21777792, 21777792],
+            "freed_bytes": [108243696, 108243696]
+          }
+        },
+        "14_grow_then_churn": {
+          "stdout": "probe:14_grow_then_churn\ncacheSum:2050177040\nchurnSum:815300000\nliveSum:2008997952\n",
+          "correctness": {
+            "status": "pass",
+            "oracle_version": "v26.5.1",
+            "reason": ""
+          },
+          "run_env": {
+            "PERRY_GC_SCAVENGE_NURSERY_MB": "1",
+            "PERRY_GC_MAJOR_PACING_FLOOR_MB": "1"
+          },
+          "samples": {
+            "heap_used_bytes": [430584, 430584, 430584],
+            "heap_total_bytes": [23068672, 23068672, 23068672],
+            "minor_cycles": [22, 22],
+            "step_cycles": [23, 23],
+            "copied_objects": [330, 330],
+            "copied_bytes": [1277072, 1277072],
+            "promoted_objects": [406707, 406707],
+            "promoted_bytes": [147967960, 147967960],
+            "freed_bytes": [119606864, 119606864]
+          }
+        }
+      }
+    },
+    "finding": "All deterministic medians unchanged; do not attribute any accepted cell to #9514."
+  },
+  "capacity_variance": {
+    "generated_at": "2026-09-06T04:11:20+00:00",
+    "probe": "13_large_eden_survivors",
+    "probe_sha256": "07f64b9d0c299fc5d7b0ca1dc625e11d5b101ff04fa904bf981edaaae9150676",
+    "binary_sha256": "6b2bbe0bc23f9e3d1f88b8c32e822880569c0c81c550807e360ddbedf6af75c8",
+    "runs": [
+      {
+        "heap_used_bytes": 227048,
+        "heap_total_bytes": 61865984,
+        "rss_bytes": 163495936,
+        "minor_cycles": 3,
+        "step_cycles": 3,
+        "copied_objects": 377569,
+        "copied_bytes": 21429712,
+        "promoted_objects": 386271,
+        "promoted_bytes": 21777792,
+        "freed_bytes": 108243696
+      },
+      {
+        "heap_used_bytes": 227048,
+        "heap_total_bytes": 61865984,
+        "rss_bytes": 163229696,
+        "minor_cycles": 3,
+        "step_cycles": 3,
+        "copied_objects": 377569,
+        "copied_bytes": 21429712,
+        "promoted_objects": 386271,
+        "promoted_bytes": 21777792,
+        "freed_bytes": 108243696
+      },
+      {
+        "heap_used_bytes": 227048,
+        "heap_total_bytes": 61865984,
+        "rss_bytes": 163131392,
+        "minor_cycles": 3,
+        "step_cycles": 3,
+        "copied_objects": 377569,
+        "copied_bytes": 21429712,
+        "promoted_objects": 386271,
+        "promoted_bytes": 21777792,
+        "freed_bytes": 108243696
+      },
+      {
+        "heap_used_bytes": 227048,
+        "heap_total_bytes": 61865984,
+        "rss_bytes": 163254272,
+        "minor_cycles": 3,
+        "step_cycles": 3,
+        "copied_objects": 377569,
+        "copied_bytes": 21429712,
+        "promoted_objects": 386271,
+        "promoted_bytes": 21777792,
+        "freed_bytes": 108243696
+      },
+      {
+        "heap_used_bytes": 227048,
+        "heap_total_bytes": 63963136,
+        "rss_bytes": 161820672,
+        "minor_cycles": 3,
+        "step_cycles": 3,
+        "copied_objects": 377569,
+        "copied_bytes": 21429712,
+        "promoted_objects": 386271,
+        "promoted_bytes": 21777792,
+        "freed_bytes": 108243696
+      },
+      {
+        "heap_used_bytes": 227048,
+        "heap_total_bytes": 61865984,
+        "rss_bytes": 163164160,
+        "minor_cycles": 3,
+        "step_cycles": 3,
+        "copied_objects": 377569,
+        "copied_bytes": 21429712,
+        "promoted_objects": 386271,
+        "promoted_bytes": 21777792,
+        "freed_bytes": 108243696
+      },
+      {
+        "heap_used_bytes": 227048,
+        "heap_total_bytes": 61865984,
+        "rss_bytes": 163336192,
+        "minor_cycles": 3,
+        "step_cycles": 3,
+        "copied_objects": 377569,
+        "copied_bytes": 21429712,
+        "promoted_objects": 386271,
+        "promoted_bytes": 21777792,
+        "freed_bytes": 108243696
+      },
+      {
+        "heap_used_bytes": 227048,
+        "heap_total_bytes": 61865984,
+        "rss_bytes": 163438592,
+        "minor_cycles": 3,
+        "step_cycles": 3,
+        "copied_objects": 377569,
+        "copied_bytes": 21429712,
+        "promoted_objects": 386271,
+        "promoted_bytes": 21777792,
+        "freed_bytes": 108243696
+      },
+      {
+        "heap_used_bytes": 227048,
+        "heap_total_bytes": 61865984,
+        "rss_bytes": 163450880,
+        "minor_cycles": 3,
+        "step_cycles": 3,
+        "copied_objects": 377569,
+        "copied_bytes": 21429712,
+        "promoted_objects": 386271,
+        "promoted_bytes": 21777792,
+        "freed_bytes": 108243696
+      },
+      {
+        "heap_used_bytes": 227048,
+        "heap_total_bytes": 61865984,
+        "rss_bytes": 163344384,
+        "minor_cycles": 3,
+        "step_cycles": 3,
+        "copied_objects": 377569,
+        "copied_bytes": 21429712,
+        "promoted_objects": 386271,
+        "promoted_bytes": 21777792,
+        "freed_bytes": 108243696
+      },
+      {
+        "heap_used_bytes": 227048,
+        "heap_total_bytes": 61865984,
+        "rss_bytes": 163360768,
+        "minor_cycles": 3,
+        "step_cycles": 3,
+        "copied_objects": 377569,
+        "copied_bytes": 21429712,
+        "promoted_objects": 386271,
+        "promoted_bytes": 21777792,
+        "freed_bytes": 108243696
+      },
+      {
+        "heap_used_bytes": 227048,
+        "heap_total_bytes": 61865984,
+        "rss_bytes": 163606528,
+        "minor_cycles": 3,
+        "step_cycles": 3,
+        "copied_objects": 377569,
+        "copied_bytes": 21429712,
+        "promoted_objects": 386271,
+        "promoted_bytes": 21777792,
+        "freed_bytes": 108243696
+      },
+      {
+        "heap_used_bytes": 227048,
+        "heap_total_bytes": 61865984,
+        "rss_bytes": 163405824,
+        "minor_cycles": 3,
+        "step_cycles": 3,
+        "copied_objects": 377569,
+        "copied_bytes": 21429712,
+        "promoted_objects": 386271,
+        "promoted_bytes": 21777792,
+        "freed_bytes": 108243696
+      },
+      {
+        "heap_used_bytes": 227048,
+        "heap_total_bytes": 61865984,
+        "rss_bytes": 163381248,
+        "minor_cycles": 3,
+        "step_cycles": 3,
+        "copied_objects": 377569,
+        "copied_bytes": 21429712,
+        "promoted_objects": 386271,
+        "promoted_bytes": 21777792,
+        "freed_bytes": 108243696
+      },
+      {
+        "heap_used_bytes": 227048,
+        "heap_total_bytes": 61865984,
+        "rss_bytes": 163532800,
+        "minor_cycles": 3,
+        "step_cycles": 3,
+        "copied_objects": 377569,
+        "copied_bytes": 21429712,
+        "promoted_objects": 386271,
+        "promoted_bytes": 21777792,
+        "freed_bytes": 108243696
+      },
+      {
+        "heap_used_bytes": 227048,
+        "heap_total_bytes": 61865984,
+        "rss_bytes": 163078144,
+        "minor_cycles": 3,
+        "step_cycles": 3,
+        "copied_objects": 377569,
+        "copied_bytes": 21429712,
+        "promoted_objects": 386271,
+        "promoted_bytes": 21777792,
+        "freed_bytes": 108243696
+      },
+      {
+        "heap_used_bytes": 227048,
+        "heap_total_bytes": 63963136,
+        "rss_bytes": 161935360,
+        "minor_cycles": 3,
+        "step_cycles": 3,
+        "copied_objects": 377569,
+        "copied_bytes": 21429712,
+        "promoted_objects": 386271,
+        "promoted_bytes": 21777792,
+        "freed_bytes": 108243696
+      },
+      {
+        "heap_used_bytes": 227048,
+        "heap_total_bytes": 63963136,
+        "rss_bytes": 161914880,
+        "minor_cycles": 3,
+        "step_cycles": 3,
+        "copied_objects": 377569,
+        "copied_bytes": 21429712,
+        "promoted_objects": 386271,
+        "promoted_bytes": 21777792,
+        "freed_bytes": 108243696
+      },
+      {
+        "heap_used_bytes": 227048,
+        "heap_total_bytes": 61865984,
+        "rss_bytes": 163110912,
+        "minor_cycles": 3,
+        "step_cycles": 3,
+        "copied_objects": 377569,
+        "copied_bytes": 21429712,
+        "promoted_objects": 386271,
+        "promoted_bytes": 21777792,
+        "freed_bytes": 108243696
+      },
+      {
+        "heap_used_bytes": 227048,
+        "heap_total_bytes": 61865984,
+        "rss_bytes": 163225600,
+        "minor_cycles": 3,
+        "step_cycles": 3,
+        "copied_objects": 377569,
+        "copied_bytes": 21429712,
+        "promoted_objects": 386271,
+        "promoted_bytes": 21777792,
+        "freed_bytes": 108243696
+      },
+      {
+        "heap_used_bytes": 227048,
+        "heap_total_bytes": 61865984,
+        "rss_bytes": 163471360,
+        "minor_cycles": 3,
+        "step_cycles": 3,
+        "copied_objects": 377569,
+        "copied_bytes": 21429712,
+        "promoted_objects": 386271,
+        "promoted_bytes": 21777792,
+        "freed_bytes": 108243696
+      }
+    ],
+    "distributions": {
+      "heap_used_bytes": {
+        "samples": [227048, 227048, 227048, 227048, 227048, 227048, 227048, 227048, 227048, 227048, 227048, 227048, 227048, 227048, 227048, 227048, 227048, 227048, 227048, 227048, 227048],
+        "sample_count": 21,
+        "median": 227048,
+        "min": 227048,
+        "max": 227048,
+        "stdev": 0,
+        "spread": 0,
+        "spread_pct": 0
+      },
+      "heap_total_bytes": {
+        "samples": [61865984, 61865984, 61865984, 61865984, 63963136, 61865984, 61865984, 61865984, 61865984, 61865984, 61865984, 61865984, 61865984, 61865984, 61865984, 61865984, 63963136, 63963136, 61865984, 61865984, 61865984],
+        "sample_count": 21,
+        "median": 61865984,
+        "min": 61865984,
+        "max": 63963136,
+        "stdev": 733850.330437,
+        "spread": 2097152,
+        "spread_pct": 3.389831
+      },
+      "rss_bytes": {
+        "samples": [163495936, 163229696, 163131392, 163254272, 161820672, 163164160, 163336192, 163438592, 163450880, 163344384, 163360768, 163606528, 163405824, 163381248, 163532800, 163078144, 161935360, 161914880, 163110912, 163225600, 163471360],
+        "sample_count": 21,
+        "median": 163336192,
+        "min": 161820672,
+        "max": 163606528,
+        "stdev": 524430.638193,
+        "spread": 1785856,
+        "spread_pct": 1.093362
+      },
+      "minor_cycles": {
+        "samples": [3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3],
+        "sample_count": 21,
+        "median": 3,
+        "min": 3,
+        "max": 3,
+        "stdev": 0,
+        "spread": 0,
+        "spread_pct": 0
+      },
+      "step_cycles": {
+        "samples": [3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3],
+        "sample_count": 21,
+        "median": 3,
+        "min": 3,
+        "max": 3,
+        "stdev": 0,
+        "spread": 0,
+        "spread_pct": 0
+      },
+      "copied_objects": {
+        "samples": [377569, 377569, 377569, 377569, 377569, 377569, 377569, 377569, 377569, 377569, 377569, 377569, 377569, 377569, 377569, 377569, 377569, 377569, 377569, 377569, 377569],
+        "sample_count": 21,
+        "median": 377569,
+        "min": 377569,
+        "max": 377569,
+        "stdev": 0,
+        "spread": 0,
+        "spread_pct": 0
+      },
+      "copied_bytes": {
+        "samples": [21429712, 21429712, 21429712, 21429712, 21429712, 21429712, 21429712, 21429712, 21429712, 21429712, 21429712, 21429712, 21429712, 21429712, 21429712, 21429712, 21429712, 21429712, 21429712, 21429712, 21429712],
+        "sample_count": 21,
+        "median": 21429712,
+        "min": 21429712,
+        "max": 21429712,
+        "stdev": 0,
+        "spread": 0,
+        "spread_pct": 0
+      },
+      "promoted_objects": {
+        "samples": [386271, 386271, 386271, 386271, 386271, 386271, 386271, 386271, 386271, 386271, 386271, 386271, 386271, 386271, 386271, 386271, 386271, 386271, 386271, 386271, 386271],
+        "sample_count": 21,
+        "median": 386271,
+        "min": 386271,
+        "max": 386271,
+        "stdev": 0,
+        "spread": 0,
+        "spread_pct": 0
+      },
+      "promoted_bytes": {
+        "samples": [21777792, 21777792, 21777792, 21777792, 21777792, 21777792, 21777792, 21777792, 21777792, 21777792, 21777792, 21777792, 21777792, 21777792, 21777792, 21777792, 21777792, 21777792, 21777792, 21777792, 21777792],
+        "sample_count": 21,
+        "median": 21777792,
+        "min": 21777792,
+        "max": 21777792,
+        "stdev": 0,
+        "spread": 0,
+        "spread_pct": 0
+      },
+      "freed_bytes": {
+        "samples": [108243696, 108243696, 108243696, 108243696, 108243696, 108243696, 108243696, 108243696, 108243696, 108243696, 108243696, 108243696, 108243696, 108243696, 108243696, 108243696, 108243696, 108243696, 108243696, 108243696, 108243696],
+        "sample_count": 21,
+        "median": 108243696,
+        "min": 108243696,
+        "max": 108243696,
+        "stdev": 0,
+        "spread": 0,
+        "spread_pct": 0
+      }
+    },
+    "stdout": "probe:13_large_eden_survivors\nchecksum:1846988256\nhits:3000000\ntagChars:1722368\npeerIds:-131072\nnotes:11719\nnoteSum:22499072\n",
+    "correctness": "21/21 equal pinned Node oracle output",
+    "env": {
+      "PERRY_GC_DIAG": "1",
+      "PERRY_GC_SCAVENGE_NURSERY_MB": "64"
+    }
+  },
+  "accepted_cells": [
+    {
+      "probe": "01_nursery_churn",
+      "metric": "copied_objects",
+      "previous_median": 6354.0,
+      "accepted_median": 4977.0,
+      "causes": [
+        "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140",
+        "b3e88f1fb3378fe30b065ed328b73ea0527ab18a",
+        "fc8c9e9a15902f889df2b1aeb280ca6223f6948a"
+      ]
+    },
+    {
+      "probe": "01_nursery_churn",
+      "metric": "copied_bytes",
+      "previous_median": 430008.0,
+      "accepted_median": 234536.0,
+      "causes": [
+        "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140",
+        "b3e88f1fb3378fe30b065ed328b73ea0527ab18a",
+        "fc8c9e9a15902f889df2b1aeb280ca6223f6948a"
+      ]
+    },
+    {
+      "probe": "01_nursery_churn",
+      "metric": "freed_bytes",
+      "previous_median": 13201144.0,
+      "accepted_median": 11299648.0,
+      "causes": [
+        "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140",
+        "b3e88f1fb3378fe30b065ed328b73ea0527ab18a",
+        "fc8c9e9a15902f889df2b1aeb280ca6223f6948a"
+      ]
+    },
+    {
+      "probe": "02_survivor_promotion",
+      "metric": "copied_bytes",
+      "previous_median": 1780080.0,
+      "accepted_median": 1450992.0,
+      "causes": [
+        "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140"
+      ]
+    },
+    {
+      "probe": "03_cross_gen_writes",
+      "metric": "freed_bytes",
+      "previous_median": 11304368.0,
+      "accepted_median": 9240008.0,
+      "causes": [
+        "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140"
+      ]
+    },
+    {
+      "probe": "04_dead_after_deep_stack",
+      "metric": "copied_objects",
+      "previous_median": 450.0,
+      "accepted_median": 3622.0,
+      "causes": [
+        "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140",
+        "06e1ab349c8c6e40587bb3ce2ee9f1c58b20522b"
+      ]
+    },
+    {
+      "probe": "04_dead_after_deep_stack",
+      "metric": "copied_bytes",
+      "previous_median": 25832.0,
+      "accepted_median": 149400.0,
+      "causes": [
+        "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140",
+        "06e1ab349c8c6e40587bb3ce2ee9f1c58b20522b"
+      ]
+    },
+    {
+      "probe": "04_dead_after_deep_stack",
+      "metric": "promoted_objects",
+      "previous_median": 10.0,
+      "accepted_median": 682.0,
+      "causes": [
+        "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140",
+        "06e1ab349c8c6e40587bb3ce2ee9f1c58b20522b"
+      ]
+    },
+    {
+      "probe": "04_dead_after_deep_stack",
+      "metric": "freed_bytes",
+      "previous_median": 83880432.0,
+      "accepted_median": 73346416.0,
+      "causes": [
+        "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140",
+        "06e1ab349c8c6e40587bb3ce2ee9f1c58b20522b"
+      ]
+    },
+    {
+      "probe": "05_closure_capture",
+      "metric": "copied_objects",
+      "previous_median": 5272.0,
+      "accepted_median": 20079.0,
+      "causes": [
+        "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140",
+        "06e1ab349c8c6e40587bb3ce2ee9f1c58b20522b",
+        "aa8d2ade03970ac7eb2065f3eb0e18bb4d2df1c7"
+      ]
+    },
+    {
+      "probe": "05_closure_capture",
+      "metric": "copied_bytes",
+      "previous_median": 233384.0,
+      "accepted_median": 743384.0,
+      "causes": [
+        "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140",
+        "06e1ab349c8c6e40587bb3ce2ee9f1c58b20522b",
+        "aa8d2ade03970ac7eb2065f3eb0e18bb4d2df1c7"
+      ]
+    },
+    {
+      "probe": "05_closure_capture",
+      "metric": "promoted_objects",
+      "previous_median": 0.0,
+      "accepted_median": 3390.0,
+      "causes": [
+        "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140",
+        "06e1ab349c8c6e40587bb3ce2ee9f1c58b20522b",
+        "aa8d2ade03970ac7eb2065f3eb0e18bb4d2df1c7"
+      ]
+    },
+    {
+      "probe": "05_closure_capture",
+      "metric": "promoted_bytes",
+      "previous_median": 0.0,
+      "accepted_median": 122120.0,
+      "causes": [
+        "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140",
+        "06e1ab349c8c6e40587bb3ce2ee9f1c58b20522b",
+        "aa8d2ade03970ac7eb2065f3eb0e18bb4d2df1c7"
+      ]
+    },
+    {
+      "probe": "05_closure_capture",
+      "metric": "freed_bytes",
+      "previous_median": 32422176.0,
+      "accepted_median": 26862320.0,
+      "causes": [
+        "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140",
+        "06e1ab349c8c6e40587bb3ce2ee9f1c58b20522b",
+        "aa8d2ade03970ac7eb2065f3eb0e18bb4d2df1c7"
+      ]
+    },
+    {
+      "probe": "06_string_retention",
+      "metric": "copied_objects",
+      "previous_median": 11138.0,
+      "accepted_median": 298.0,
+      "causes": [
+        "b3e88f1fb3378fe30b065ed328b73ea0527ab18a",
+        "fc8c9e9a15902f889df2b1aeb280ca6223f6948a"
+      ]
+    },
+    {
+      "probe": "06_string_retention",
+      "metric": "copied_bytes",
+      "previous_median": 682240.0,
+      "accepted_median": 72288.0,
+      "causes": [
+        "b3e88f1fb3378fe30b065ed328b73ea0527ab18a",
+        "fc8c9e9a15902f889df2b1aeb280ca6223f6948a"
+      ]
+    },
+    {
+      "probe": "06_string_retention",
+      "metric": "promoted_objects",
+      "previous_median": 4960.0,
+      "accepted_median": 14.0,
+      "causes": [
+        "b3e88f1fb3378fe30b065ed328b73ea0527ab18a",
+        "fc8c9e9a15902f889df2b1aeb280ca6223f6948a"
+      ]
+    },
+    {
+      "probe": "06_string_retention",
+      "metric": "promoted_bytes",
+      "previous_median": 248512.0,
+      "accepted_median": 1072.0,
+      "causes": [
+        "b3e88f1fb3378fe30b065ed328b73ea0527ab18a",
+        "fc8c9e9a15902f889df2b1aeb280ca6223f6948a"
+      ]
+    },
+    {
+      "probe": "06_string_retention",
+      "metric": "freed_bytes",
+      "previous_median": 75244808.0,
+      "accepted_median": 68136816.0,
+      "causes": [
+        "b3e88f1fb3378fe30b065ed328b73ea0527ab18a",
+        "fc8c9e9a15902f889df2b1aeb280ca6223f6948a"
+      ]
+    },
+    {
+      "probe": "07_array_grow_evacuate",
+      "metric": "heap_used_bytes",
+      "previous_median": 984840.0,
+      "accepted_median": 1072456.0,
+      "causes": [
+        "06e1ab349c8c6e40587bb3ce2ee9f1c58b20522b",
+        "fc8c9e9a15902f889df2b1aeb280ca6223f6948a",
+        "5196d830fd0689937db94598d94662d531d4ee92"
+      ]
+    },
+    {
+      "probe": "07_array_grow_evacuate",
+      "metric": "heap_total_bytes",
+      "previous_median": 23068672.0,
+      "accepted_median": 25165824.0,
+      "causes": [
+        "06e1ab349c8c6e40587bb3ce2ee9f1c58b20522b",
+        "fc8c9e9a15902f889df2b1aeb280ca6223f6948a",
+        "5196d830fd0689937db94598d94662d531d4ee92"
+      ]
+    },
+    {
+      "probe": "07_array_grow_evacuate",
+      "metric": "copied_objects",
+      "previous_median": 6387.0,
+      "accepted_median": 4991.0,
+      "causes": [
+        "06e1ab349c8c6e40587bb3ce2ee9f1c58b20522b",
+        "fc8c9e9a15902f889df2b1aeb280ca6223f6948a",
+        "5196d830fd0689937db94598d94662d531d4ee92"
+      ]
+    },
+    {
+      "probe": "08_map_set_sidetables",
+      "metric": "copied_objects",
+      "previous_median": 3017.0,
+      "accepted_median": 2489.0,
+      "causes": [
+        "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140"
+      ]
+    },
+    {
+      "probe": "09_try_catch_roots",
+      "metric": "copied_objects",
+      "previous_median": 0.0,
+      "accepted_median": 4962.0,
+      "causes": [
+        "b3e88f1fb3378fe30b065ed328b73ea0527ab18a",
+        "fc8c9e9a15902f889df2b1aeb280ca6223f6948a",
+        "d923b8dcf08f2afed71777c33423362411039cf0",
+        "aa8d2ade03970ac7eb2065f3eb0e18bb4d2df1c7"
+      ]
+    },
+    {
+      "probe": "09_try_catch_roots",
+      "metric": "copied_bytes",
+      "previous_median": 0.0,
+      "accepted_median": 230352.0,
+      "causes": [
+        "b3e88f1fb3378fe30b065ed328b73ea0527ab18a",
+        "fc8c9e9a15902f889df2b1aeb280ca6223f6948a",
+        "d923b8dcf08f2afed71777c33423362411039cf0",
+        "aa8d2ade03970ac7eb2065f3eb0e18bb4d2df1c7"
+      ]
+    },
+    {
+      "probe": "09_try_catch_roots",
+      "metric": "promoted_objects",
+      "previous_median": 6240.0,
+      "accepted_median": 0.0,
+      "causes": [
+        "b3e88f1fb3378fe30b065ed328b73ea0527ab18a",
+        "fc8c9e9a15902f889df2b1aeb280ca6223f6948a",
+        "d923b8dcf08f2afed71777c33423362411039cf0",
+        "aa8d2ade03970ac7eb2065f3eb0e18bb4d2df1c7"
+      ]
+    },
+    {
+      "probe": "09_try_catch_roots",
+      "metric": "promoted_bytes",
+      "previous_median": 421800.0,
+      "accepted_median": 0.0,
+      "causes": [
+        "b3e88f1fb3378fe30b065ed328b73ea0527ab18a",
+        "fc8c9e9a15902f889df2b1aeb280ca6223f6948a",
+        "d923b8dcf08f2afed71777c33423362411039cf0",
+        "aa8d2ade03970ac7eb2065f3eb0e18bb4d2df1c7"
+      ]
+    },
+    {
+      "probe": "10_store_receiver_across_alloc",
+      "metric": "heap_total_bytes",
+      "previous_median": 12582912.0,
+      "accepted_median": 16777216.0,
+      "causes": [
+        "22c07ac5b44c5ff6a988257067110c7451da0223"
+      ]
+    },
+    {
+      "probe": "10_store_receiver_across_alloc",
+      "metric": "minor_cycles",
+      "previous_median": 1.0,
+      "accepted_median": 9.0,
+      "causes": [
+        "22c07ac5b44c5ff6a988257067110c7451da0223"
+      ]
+    },
+    {
+      "probe": "10_store_receiver_across_alloc",
+      "metric": "step_cycles",
+      "previous_median": 1.0,
+      "accepted_median": 9.0,
+      "causes": [
+        "22c07ac5b44c5ff6a988257067110c7451da0223"
+      ]
+    },
+    {
+      "probe": "10_store_receiver_across_alloc",
+      "metric": "copied_objects",
+      "previous_median": 8160.0,
+      "accepted_median": 18660.0,
+      "causes": [
+        "22c07ac5b44c5ff6a988257067110c7451da0223"
+      ]
+    },
+    {
+      "probe": "10_store_receiver_across_alloc",
+      "metric": "copied_bytes",
+      "previous_median": 506200.0,
+      "accepted_median": 825520.0,
+      "causes": [
+        "22c07ac5b44c5ff6a988257067110c7451da0223"
+      ]
+    },
+    {
+      "probe": "10_store_receiver_across_alloc",
+      "metric": "promoted_objects",
+      "previous_median": 0.0,
+      "accepted_median": 4722.0,
+      "causes": [
+        "22c07ac5b44c5ff6a988257067110c7451da0223"
+      ]
+    },
+    {
+      "probe": "10_store_receiver_across_alloc",
+      "metric": "promoted_bytes",
+      "previous_median": 0.0,
+      "accepted_median": 228440.0,
+      "causes": [
+        "22c07ac5b44c5ff6a988257067110c7451da0223"
+      ]
+    },
+    {
+      "probe": "10_store_receiver_across_alloc",
+      "metric": "freed_bytes",
+      "previous_median": 8930928.0,
+      "accepted_median": 88858544.0,
+      "causes": [
+        "22c07ac5b44c5ff6a988257067110c7451da0223"
+      ]
+    },
+    {
+      "probe": "11_collect_at_depth",
+      "metric": "copied_objects",
+      "previous_median": 6245.0,
+      "accepted_median": 4975.0,
+      "causes": [
+        "b3e88f1fb3378fe30b065ed328b73ea0527ab18a",
+        "fc8c9e9a15902f889df2b1aeb280ca6223f6948a",
+        "d923b8dcf08f2afed71777c33423362411039cf0"
+      ]
+    },
+    {
+      "probe": "11_collect_at_depth",
+      "metric": "copied_bytes",
+      "previous_median": 422744.0,
+      "accepted_median": 230872.0,
+      "causes": [
+        "b3e88f1fb3378fe30b065ed328b73ea0527ab18a",
+        "fc8c9e9a15902f889df2b1aeb280ca6223f6948a",
+        "d923b8dcf08f2afed71777c33423362411039cf0"
+      ]
+    },
+    {
+      "probe": "12_large_live_set",
+      "metric": "copied_bytes",
+      "previous_median": 2851312.0,
+      "accepted_median": 2327008.0,
+      "causes": [
+        "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140"
+      ]
+    },
+    {
+      "probe": "12_large_live_set",
+      "metric": "promoted_bytes",
+      "previous_median": 25395472.0,
+      "accepted_median": 21201208.0,
+      "causes": [
+        "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140"
+      ]
+    },
+    {
+      "probe": "12_large_live_set",
+      "metric": "freed_bytes",
+      "previous_median": 76315456.0,
+      "accepted_median": 63732784.0,
+      "causes": [
+        "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140"
+      ]
+    },
+    {
+      "probe": "13_large_eden_survivors",
+      "metric": "copied_objects",
+      "previous_median": 0.0,
+      "accepted_median": 377569.0,
+      "causes": [
+        "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140",
+        "e18b24c420c7c2f389607537618699ffc6aa9d1d",
+        "d923b8dcf08f2afed71777c33423362411039cf0"
+      ]
+    },
+    {
+      "probe": "13_large_eden_survivors",
+      "metric": "copied_bytes",
+      "previous_median": 0.0,
+      "accepted_median": 21429712.0,
+      "causes": [
+        "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140",
+        "e18b24c420c7c2f389607537618699ffc6aa9d1d",
+        "d923b8dcf08f2afed71777c33423362411039cf0"
+      ]
+    },
+    {
+      "probe": "13_large_eden_survivors",
+      "metric": "promoted_objects",
+      "previous_median": 541614.0,
+      "accepted_median": 386271.0,
+      "causes": [
+        "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140",
+        "e18b24c420c7c2f389607537618699ffc6aa9d1d",
+        "d923b8dcf08f2afed71777c33423362411039cf0"
+      ]
+    },
+    {
+      "probe": "13_large_eden_survivors",
+      "metric": "promoted_bytes",
+      "previous_median": 30316904.0,
+      "accepted_median": 21777792.0,
+      "causes": [
+        "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140",
+        "e18b24c420c7c2f389607537618699ffc6aa9d1d",
+        "d923b8dcf08f2afed71777c33423362411039cf0"
+      ]
+    },
+    {
+      "probe": "13_large_eden_survivors",
+      "metric": "freed_bytes",
+      "previous_median": 97086288.0,
+      "accepted_median": 108243696.0,
+      "causes": [
+        "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140",
+        "e18b24c420c7c2f389607537618699ffc6aa9d1d",
+        "d923b8dcf08f2afed71777c33423362411039cf0"
+      ]
+    },
+    {
+      "probe": "14_grow_then_churn",
+      "metric": "copied_objects",
+      "previous_median": 307.0,
+      "accepted_median": 330.0,
+      "causes": [
+        "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140",
+        "06e1ab349c8c6e40587bb3ce2ee9f1c58b20522b",
+        "e18b24c420c7c2f389607537618699ffc6aa9d1d"
+      ]
+    }
+  ]
+}
