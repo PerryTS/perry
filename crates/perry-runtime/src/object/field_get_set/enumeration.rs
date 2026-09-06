@@ -7,13 +7,16 @@ use super::*;
 /// own enumerable properties — Node: `Object.keys(new Map([...])) === []`),
 /// but user EXPANDOS (`cache.custom = x`) live in the exotic side table
 /// (`ExoticKind::Map`/`Set`). Shared by the keys/values/entries guards.
-enum MapSetEnum {
+pub(super) enum MapSetEnum {
     Keys,
     Values,
     Entries,
 }
 
-fn map_set_exotic_enum(stripped: *const ObjectHeader, what: MapSetEnum) -> *mut ArrayHeader {
+pub(super) fn map_set_exotic_enum(
+    stripped: *const ObjectHeader,
+    what: MapSetEnum,
+) -> *mut ArrayHeader {
     let addr = stripped as usize;
     let kind = if crate::map::is_registered_map(addr) {
         super::super::exotic_expando::ExoticKind::Map
@@ -62,7 +65,7 @@ fn map_set_exotic_enum(stripped: *const ObjectHeader, what: MapSetEnum) -> *mut 
 /// module export tables.  The receiver, key list, output, and per-key values
 /// are rooted because resolving a callable export can allocate and trigger a
 /// moving collection.
-unsafe fn native_module_enum(
+pub(super) unsafe fn native_module_enum(
     obj: *const ObjectHeader,
     what: MapSetEnum,
 ) -> Option<*mut ArrayHeader> {
@@ -1076,7 +1079,7 @@ pub(crate) unsafe fn keys_contain_array_index(keys: *const ArrayHeader) -> bool 
 /// The raw heap address behind a possibly still-NaN-boxed `ObjectHeader`
 /// pointer, as the enumeration entry points receive it.
 #[inline]
-fn strip_nanbox_addr(obj: *const ObjectHeader) -> usize {
+pub(super) fn strip_nanbox_addr(obj: *const ObjectHeader) -> usize {
     let bits = obj as u64;
     let top16 = bits >> 48;
     if top16 == 0x7FFD || top16 >= 0x7FF8 {
@@ -1155,7 +1158,7 @@ pub(crate) fn registered_buffer_own_value(addr: usize, key: &str) -> f64 {
 
 /// Build the `Object.keys` / `.values` / `.entries` answer for a registered
 /// buffer from [`registered_buffer_own_keys`].
-fn registered_buffer_enum(addr: usize, what: MapSetEnum) -> Option<*mut ArrayHeader> {
+pub(super) fn registered_buffer_enum(addr: usize, what: MapSetEnum) -> Option<*mut ArrayHeader> {
     if addr == 0 || !crate::buffer::is_registered_buffer(addr) {
         return None;
     }
@@ -1843,405 +1846,8 @@ pub extern "C" fn js_object_entries(obj: *const ObjectHeader) -> *mut ArrayHeade
     js_object_entries_shape(obj)
 }
 
-/// [`js_object_entries`] over the shape alone.
-fn js_object_entries_shape(obj: *const ObjectHeader) -> *mut ArrayHeader {
-    // #8149: a registered BUFFER receiver — node `Buffer`, `Uint8Array`,
-    // `ArrayBuffer`, `SharedArrayBuffer` or `DataView`. Asked FIRST, above the
-    // `is_valid_obj_ptr` guard: a `BufferHeader` is not an `ObjectHeader`, and
-    // the generic walk below reads its payload bytes as `keys_array` — `[]`
-    // when they are zero, SIGBUS in `js_array_length` when they are not.
-    // See `registered_buffer_own_keys`.
-    if let Some(result) = registered_buffer_enum(strip_nanbox_addr(obj), MapSetEnum::Entries) {
-        return result;
-    }
-    let stripped = {
-        let bits = obj as u64;
-        let top16 = bits >> 48;
-        if top16 == 0x7FFD || top16 >= 0x7FF8 {
-            (bits & 0x0000_FFFF_FFFF_FFFF) as *const ObjectHeader
-        } else {
-            obj
-        }
-    };
-    // Map/Set receiver → no own enumerable properties; see the matching
-    // guard in `js_object_keys` for the rationale.
-    if crate::map::is_registered_map(stripped as usize)
-        || crate::set::is_registered_set(stripped as usize)
-    {
-        return map_set_exotic_enum(stripped, MapSetEnum::Entries);
-    }
-    if let Some(addr) =
-        crate::typedarray_props::typed_array_addr_from_value(f64::from_bits(obj as u64))
-    {
-        return unsafe {
-            crate::typedarray_props::typed_array_own_enumerable_entries(
-                addr as *const crate::typedarray::TypedArrayHeader,
-            )
-        };
-    }
-    if crate::typedarray::lookup_typed_array_kind(stripped as usize).is_some() {
-        return unsafe {
-            crate::typedarray_props::typed_array_own_enumerable_entries(
-                stripped as *const crate::typedarray::TypedArrayHeader,
-            )
-        };
-    }
-    // Arrays: emit [index, value] pairs for present elements, then named props.
-    // `js_object_entries` has no `ArrayHeader` layout, so the generic object
-    // path below would read an array's body as object fields and crash; handle
-    // arrays explicitly (mirrors the `js_object_keys` / `js_object_values`
-    // array branches).
-    if !stripped.is_null() && (stripped as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 {
-        unsafe {
-            let gc_header = (stripped as *const u8).sub(crate::gc::GC_HEADER_SIZE)
-                as *const crate::gc::GcHeader;
-            if (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY {
-                let arr = crate::array::clean_arr_ptr(stripped as *const crate::array::ArrayHeader);
-                let length = (*arr).length;
-                if length > 100_000 {
-                    return crate::array::js_array_alloc(0);
-                }
-                let elements = (arr as *const u8)
-                    .add(std::mem::size_of::<crate::array::ArrayHeader>())
-                    as *const u64;
-                let result = crate::array::js_array_alloc(length);
-                for i in 0..length {
-                    if std::ptr::read(elements.add(i as usize)) == crate::value::TAG_HOLE {
-                        continue;
-                    }
-                    let pair = crate::array::js_array_alloc(2);
-                    let s = i.to_string();
-                    let key_box = crate::string::js_string_new_sso(s.as_ptr(), s.len() as u32);
-                    crate::array::js_array_push_f64(pair, key_box);
-                    let v = crate::array::js_array_get(arr, i);
-                    crate::array::js_array_push_f64(pair, f64::from_bits(v.bits()));
-                    crate::array::js_array_push_f64(
-                        result,
-                        crate::value::js_nanbox_pointer(pair as i64),
-                    );
-                }
-                for name in crate::array::array_named_property_names(arr, true) {
-                    if let Some(v) = crate::array::array_named_property_get_by_name(arr, &name) {
-                        let pair = crate::array::js_array_alloc(2);
-                        let key =
-                            crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-                        crate::array::js_array_push(pair, JSValue::string_ptr(key));
-                        crate::array::js_array_push_f64(pair, v);
-                        crate::array::js_array_push_f64(
-                            result,
-                            crate::value::js_nanbox_pointer(pair as i64),
-                        );
-                    }
-                }
-                return result;
-            }
-        }
-    }
-    if obj.is_null() || !is_valid_obj_ptr(obj as *const u8) {
-        // Issue #893 lineage: chalk's `Object.entries(ansiStyles)` passed a
-        // value whose unboxed low-48 bits weren't a real heap pointer
-        // (cross-module import where the default-export wrapper hasn't
-        // finished initializing). Pre-fix the `crate::object::object_keys_array(obj)` deref
-        // SIGSEGV'd at 0x14; now we return an empty array so the user's
-        // `for (const [k, v] of Object.entries(undefined)) {}` no-ops the
-        // way the spec's "abstract conversion to object" path would for
-        // an unrecognized receiver. Real JS throws TypeError here; we
-        // prefer the empty-array fallback because Perry doesn't have a
-        // clean "throw at codegen-call boundaries" path for these
-        // pointer-typed entry points and a segfault is strictly worse
-        // for the caller.
-        return crate::array::js_array_alloc(0);
-    }
-    unsafe {
-        if let Some(result) = super::super::string_wrapper::enumerate(
-            obj,
-            super::super::string_wrapper::Enumeration::Entries,
-        ) {
-            return result;
-        }
-        if (*obj).class_id == NATIVE_MODULE_CLASS_ID {
-            if let Some(result) = native_module_enum(obj, MapSetEnum::Entries) {
-                return result;
-            }
-        }
-        let keys = crate::object::object_keys_array(obj);
-        // Iterate up to keys_len (the logical property count), not
-        // field_count. Parser-built and dict-built objects with ≥9
-        // fields cap field_count at the inline alloc_limit (8) and
-        // store overflow values in OVERFLOW_FIELDS — for those,
-        // field_count under-counts the actual property count by N-8.
-        // Without this fix, `Object.entries(obj)` on a 50-key dict
-        // returned only the first 8 entries (silent data loss).
-        // Mirrors the same fix in `js_object_keys` and the
-        // `actual_fields = keys_len` line in `json.rs::stringify_object`.
-        let count = if !keys.is_null() {
-            crate::array::js_array_length(keys) as usize
-        } else {
-            crate::object::object_live_slot_count(obj) as usize
-        };
-        let result = crate::array::js_array_alloc(count as u32);
-
-        // #2438: emit pairs in OrdinaryOwnPropertyKeys order (array-index keys
-        // first, ascending; then string keys in insertion order).
-        let order = ecma_own_key_order(keys);
-        let pos = |j: usize| -> u32 {
-            match &order {
-                Some(ord) => ord[j],
-                None => j as u32,
-            }
-        };
-        // Spec (EnumerableOwnProperties): the own key list is determined ONCE up
-        // front, then `[[Get]]` is invoked per key. A getter that adds, removes,
-        // or hides a future key during enumeration must not change the set of
-        // entries reported (test262 entries/getter-adding-key,
-        // getter-removing-future-key, getter-making-future-key-nonenumerable).
-        //
-        // Snapshot the own key *bytes* (not NaN-boxed pointers): a getter fired
-        // by `js_object_get_field_by_name` can delete a future key and
-        // allocate/GC before we visit it, and a key kept only inside this
-        // Rust-heap `Vec` is not a stack-visible GC root — it could dangle.
-        // Owning the bytes and rematerializing the string at read time sidesteps
-        // that. Enumerability is likewise re-evaluated per key in the read phase
-        // (an earlier getter can create a descriptor or flip a future key's
-        // enumerability), so we deliberately do NOT filter it during the snapshot.
-        let mut snapshot_keys: Vec<Vec<u8>> = Vec::with_capacity(count);
-        let mut key_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
-        for j in 0..count {
-            let i = pos(j);
-            if keys.is_null() || i >= crate::array::js_array_length(keys) {
-                continue;
-            }
-            let key_val = crate::array::js_array_get(keys, i);
-            if instance_private_key_hidden(obj, key_val) {
-                continue;
-            }
-            if let Some(bytes) = crate::string::js_string_key_bytes(key_val, &mut key_buf) {
-                snapshot_keys.push(bytes.to_vec());
-            }
-        }
-
-        for key_bytes in snapshot_keys {
-            let key_str =
-                crate::string::js_string_from_bytes(key_bytes.as_ptr(), key_bytes.len() as u32);
-            if key_str.is_null() {
-                continue;
-            }
-            // Spec EnumerableOwnProperties re-reads `[[GetOwnProperty]]` per key
-            // and skips it when the descriptor is now undefined or no longer
-            // enumerable — a getter earlier in the loop may have deleted or
-            // hidden a key that was in the initial snapshot (test262
-            // entries/getter-removing-future-key, getter-making-future-key-
-            // nonenumerable).
-            if !super::super::own_key_present(obj as *mut ObjectHeader, key_str) {
-                continue;
-            }
-            if descriptor_marks_non_enumerable(obj, JSValue::string_ptr(key_str)) {
-                continue;
-            }
-            // Create a pair array [key, value].
-            let pair = crate::array::js_array_alloc(2);
-            crate::array::js_array_push_f64(
-                pair,
-                f64::from_bits(JSValue::string_ptr(key_str).bits()),
-            );
-
-            // Read the value through the name-keyed `[[Get]]`, which fires an
-            // own accessor's getter (the raw index-based field read returned the
-            // empty data slot for accessor-defined properties — test262
-            // entries/getter-adding-key expected the getter's "B").
-            let value = js_object_get_field_by_name(obj as *const ObjectHeader, key_str);
-            crate::array::js_array_push_f64(pair, f64::from_bits(value.bits()));
-
-            // Push the pair to result (NaN-box the array pointer)
-            let pair_boxed = crate::value::js_nanbox_pointer(pair as i64);
-            crate::array::js_array_push_f64(result, pair_boxed);
-        }
-
-        result
-    }
-}
+use super::entries_shape::js_object_entries_shape;
 
 #[cfg(test)]
-mod lazy_shadow_tests {
-    use super::*;
-
-    fn s(bytes: &str) -> *mut crate::StringHeader {
-        crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32)
-    }
-
-    fn obj_value(o: *mut ObjectHeader) -> f64 {
-        f64::from_bits(JSValue::object_ptr(o as *mut u8).bits())
-    }
-
-    /// Read a key array back as owned strings, in order.
-    fn keys_of(arr: *mut ArrayHeader) -> Vec<String> {
-        let mut out = Vec::new();
-        let n = crate::array::js_array_length(arr);
-        let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
-        for i in 0..n {
-            let kv = crate::array::js_array_get(arr, i);
-            if let Some(b) = unsafe { crate::string::js_string_key_bytes(kv, &mut scratch) } {
-                if let Ok(t) = std::str::from_utf8(b) {
-                    out.push(t.to_string());
-                }
-            }
-        }
-        out
-    }
-
-    /// The deferred shadow set must produce the SAME key sequence as the eager
-    /// one, including the case the deferral exists to skip and the case it
-    /// cannot skip.
-    ///
-    /// This is the assertion the optimisation lives or dies on: `for_in_keys_with`
-    /// is run both ways over the same object graph and the two key sequences are
-    /// compared element by element. Deleting the `build_shadow_set` call, or
-    /// emitting level 0 through the set instead of directly, makes the
-    /// shadowing case below disagree and fails this test by name.
-    #[test]
-    fn deferring_the_shadow_set_does_not_change_the_key_sequence() {
-        // 1. Flat object, prototype contributes nothing enumerable — the case
-        //    the deferral is FOR. Both paths must agree.
-        let flat = crate::object::js_object_alloc(0, 0);
-        crate::object::js_object_set_field_by_name(flat, s("alpha"), 1.0);
-        crate::object::js_object_set_field_by_name(flat, s("beta"), 2.0);
-        let flat_v = obj_value(flat);
-        let lazy = keys_of(for_in_keys_with(flat_v, true));
-        let eager = keys_of(for_in_keys_with(flat_v, false));
-        assert_eq!(
-            lazy, eager,
-            "a flat object's for-in keys must not depend on when the shadow set is built"
-        );
-        assert_eq!(lazy, vec!["alpha".to_string(), "beta".to_string()]);
-
-        // 2. Prototype WITH enumerable keys, one of them shadowed by an own
-        //    property. This is the case the shadow set exists for, so the
-        //    deferred build must fire and produce the same answer.
-        let proto = crate::object::js_object_alloc(0, 0);
-        crate::object::js_object_set_field_by_name(proto, s("beta"), 20.0);
-        crate::object::js_object_set_field_by_name(proto, s("gamma"), 30.0);
-        let child = crate::object::js_object_alloc(0, 0);
-        crate::object::js_object_set_field_by_name(child, s("alpha"), 1.0);
-        crate::object::js_object_set_field_by_name(child, s("beta"), 2.0);
-        let child_v = obj_value(child);
-        crate::object::object_ops::js_object_set_prototype_of(child_v, obj_value(proto));
-
-        let lazy = keys_of(for_in_keys_with(child_v, true));
-        let eager = keys_of(for_in_keys_with(child_v, false));
-        assert_eq!(
-            lazy, eager,
-            "an inherited enumerable key, and an own key shadowing one on the \
-             prototype, must come out identically whether the shadow set was \
-             built eagerly or on demand"
-        );
-        // `beta` is owned by the child, so it appears once, at the child's
-        // position — never again from the prototype.
-        assert_eq!(
-            lazy,
-            vec!["alpha".to_string(), "beta".to_string(), "gamma".to_string()],
-            "own keys first in insertion order, then unshadowed inherited ones"
-        );
-    }
-
-    /// A prototype chain deeper than `VisitedLevels::INLINE` where the ONLY
-    /// level that shadows the name lives PAST the inline array.
-    ///
-    /// This arm never runs on the measured workload (the shadow set was built 0
-    /// times in 17,266 `for-in` calls), so a test is its only coverage.
-    ///
-    /// # Why this test is shaped the way it is — do not "simplify" it
-    ///
-    /// The obvious way to write it is to give EVERY level the shadowing
-    /// property, which reads as a stronger test and is not one. The first
-    /// version of this test did exactly that: `marker` was owned
-    /// non-enumerably at every level *including the leaf*. Deleting
-    /// `VisitedLevels`' spill arm — so a rebuild cannot see any level past
-    /// `INLINE` — left that test still passing, because the LEAF's own
-    /// `marker` was already in the set and shadowed the root's copy on its
-    /// own. The assertion was true no matter what the spill did, so it could
-    /// not fail, and it certified nothing.
-    ///
-    /// The fix is not more levels or more assertions, it is making the
-    /// spilled level the *only* thing that can produce the expected answer:
-    /// levels `0..INLINE` own nothing at all, exactly one level past the
-    /// inline array (`INLINE + 2`) owns `marker` non-enumerably, and only the
-    /// root owns it enumerably. Now dropping the spill leaks `marker` into the
-    /// result and the test fails by name — verified by making that edit.
-    ///
-    /// The general rule this is an instance of: after writing a test for a
-    /// rarely-taken path, delete the code it covers and check the test
-    /// actually fails. A test whose expected value is reachable by a second
-    /// route is measuring the second route.
-    #[test]
-    fn only_a_spilled_level_shadows_the_root_and_the_rebuild_must_see_it() {
-        let shadow_level = VisitedLevels::INLINE + 2;
-        let depth = shadow_level + 2;
-
-        // Root (deepest): the enumerable `marker` that must stay hidden.
-        let root = crate::object::js_object_alloc(0, 0);
-        crate::object::js_object_set_field_by_name(root, s("marker"), 1.0);
-        crate::object::js_object_set_field_by_name(root, s("deep_only"), 2.0);
-
-        // Build downwards from the root; `chain[i]` is at prototype level
-        // `depth - 1 - i` when walked from the leaf.
-        let mut chain = vec![root];
-        for _ in 1..depth {
-            let o = crate::object::js_object_alloc(0, 0);
-            let ov = obj_value(o);
-            crate::object::object_ops::js_object_set_prototype_of(
-                ov,
-                obj_value(*chain.last().unwrap()),
-            );
-            chain.push(o);
-        }
-        // Exactly one level shadows `marker`, and it is past the inline array.
-        let shadower = chain[depth - 1 - shadow_level];
-        crate::object::js_object_set_field_by_name_nonenum(shadower, s("marker"), 0.0);
-
-        let leaf_v = obj_value(*chain.last().unwrap());
-        let lazy = keys_of(for_in_keys_with(leaf_v, true));
-        let eager = keys_of(for_in_keys_with(leaf_v, false));
-        assert_eq!(
-            lazy, eager,
-            "a chain whose only shadowing level spilled past the inline array \
-             must give the same keys eagerly and on demand"
-        );
-        assert!(
-            !lazy.contains(&"marker".to_string()),
-            "the only level owning `marker` sits past VisitedLevels::INLINE, so \
-             a rebuild that cannot see the spilled levels would leak the root's \
-             enumerable `marker` — got {lazy:?}"
-        );
-        assert_eq!(lazy, vec!["deep_only".to_string()]);
-    }
-
-    /// A NON-enumerable own property still shadows the same name on the
-    /// prototype (12.6.4-2). The deferred set only marks all-own-names for a
-    /// level once it goes live, so this is exactly where a wrong deferral would
-    /// leak the prototype's copy through.
-    #[test]
-    fn a_non_enumerable_own_name_still_shadows_the_prototype_under_deferral() {
-        let proto = crate::object::js_object_alloc(0, 0);
-        crate::object::js_object_set_field_by_name(proto, s("hidden"), 9.0);
-        crate::object::js_object_set_field_by_name(proto, s("shown"), 8.0);
-
-        let child = crate::object::js_object_alloc(0, 0);
-        // Own but NOT enumerable: must not be emitted, must still shadow.
-        crate::object::js_object_set_field_by_name_nonenum(child, s("hidden"), 1.0);
-        let child_v = obj_value(child);
-        crate::object::object_ops::js_object_set_prototype_of(child_v, obj_value(proto));
-
-        let lazy = keys_of(for_in_keys_with(child_v, true));
-        let eager = keys_of(for_in_keys_with(child_v, false));
-        assert_eq!(
-            lazy, eager,
-            "deferral must not change shadowing by a non-enumerable own name"
-        );
-        assert!(
-            !lazy.contains(&"hidden".to_string()),
-            "a non-enumerable own `hidden` must hide the prototype's enumerable \
-             `hidden` rather than letting it through — got {lazy:?}"
-        );
-        assert_eq!(lazy, vec!["shown".to_string()]);
-    }
-}
+#[path = "enumeration_tests.rs"]
+mod enumeration_tests;
