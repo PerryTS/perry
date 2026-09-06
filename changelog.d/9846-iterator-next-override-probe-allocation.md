@@ -45,3 +45,11 @@
   that 1,000 probes on an unpatched iterator with the tower materialized move
   the arena by ZERO bytes, with the minor-cycle count pinned so a collection
   inside the window cannot manufacture a zero delta.
+
+  Counter on a relinked claude-code binary (this fix plus a measurement-only
+  hit/miss counter; before the fix every probe allocated, so `hits + byname` is
+  the pre-fix count and `byname` is what survives): a 400-character reply runs
+  **144,189 / 144,303** probes and a 3300-character reply **887,076**, with
+  **`byname = 0` on every one of the 173 per-minor reports across three runs**
+  — the proof answers 100 % of probes on a real program. At 32 B a string that
+  is 4.6 MB and 28.4 MB of allocation removed per process respectively.
