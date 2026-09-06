@@ -1,0 +1,20 @@
+{
+  "purpose": "Local sampling diagnostic only; not quiet-window CPU/RSS evidence.",
+  "command": [
+    "/Users/amlug/projects/perry/codex-json-fastpaths-artifacts/empty-parse-worker",
+    "/Users/amlug/projects/perry/codex-json-fastpaths/benchmarks/json_performance/.work/fixtures/empty_object.json",
+    "parse",
+    "100000000",
+    "5000"
+  ],
+  "worker_sha256": "b26049e1e3daa50a80a062414a1df7c317ffde061d9279e78a5fca5f49d84846",
+  "worker_exit": 0,
+  "sample_exit": 0,
+  "sample_stderr": "Sampling process 6207 for 3 seconds with 1 millisecond of run time between samples\nSampling completed, processing symbols...\nSample analysis of process 6207 written to file /Users/amlug/projects/perry/codex-json-fastpaths-artifacts/empty-parse-local-profile/empty_object.sample.txt\n",
+  "cpu": "Apple M1 Max",
+  "load_after": [
+    11.17333984375,
+    8.81884765625,
+    8.19580078125
+  ]
+}

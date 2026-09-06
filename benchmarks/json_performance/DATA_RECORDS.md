@@ -1,4 +1,39 @@
-The latest measured source transfers large completed native tapes into their
+The latest measured source parses complete empty ordinary objects with only
+its final allocation. It validates all input bytes before GC, preserves fresh
+identity, ordinary-object behavior, pending debt and pressure scheduling, and
+removes the leaf's managed scratch and suppression/rebaseline cycle. GC
+production policy and thresholds remain unchanged.
+
+**All-row parity and no-regression acceptance remain open: 11/38 CPU,
+58/74 peak RSS and 28/36 retained RSS medians meet the better Node/Bun median.**
+Measured source 1ebaf1f40eb834dea148461636111acdec14da24 passes 165 JSON runtime
+tests, 37 compiled Node comparisons and 32 moving-GC runs; all 56 source hashes
+match. The full 152-verification / 456-timing / 432-memory matrix passes with
+32 clean observations. A 574-trial paired run plus 24 extra retained-empty
+trials passes its quiet gate with 35 clean observations.
+
+Paired empty-object parse CPU falls 82.08%, from 0.3224685 to 0.0577755
+microseconds (5.58x faster). Bun remains about 2.4x faster in the full matrix.
+Inline-string parse improves 7.18%, recovering the preceding tape-owned
+regression, and 1 MB object-root parse improves 0.78%, with separated ranges.
+
+New confirmed regressions against tape-owned: escaped stringify +2.22%, wide
+stringify +2.14%, and numeric parse +1.52%. Empty-parse peak RSS rises 0.375 MiB;
+several other whole-process RSS medians rise roughly 0.17-0.23 MiB. Retaining
+200,000 empty objects uses 24.86 MiB versus Node 83.42 / Bun 50.19 MiB, but also
+0.17 MiB more than the preceding Perry worker. Older unresolved CPU and memory
+regressions remain requirements. The original target inventory excludes these
+extra retained-empty trials.
+
+[Latest 38 CPU rows](results/empty-parse/cpu-38.md),
+[CPU and RAM](results/empty-parse/tables.md),
+[every target](results/empty-parse/parity.md),
+[paired CPU/RSS ranges](results/empty-parse/recheck-empty-parse/summary.json),
+[retained-empty results](results/empty-parse/retained-empty/summary.json), and
+[implementation and validation](results/empty-parse/README.md).
+Array-root parsing may defer materialization; stringify starts fully materialized.
+
+The preceding tape-owned source transfers large completed native tapes into their
 lazy result's exact-size side storage. Small tapes retain reusable scratch.
 A lazy-array assignment fix roots receiver/key/value through materialization
 and preserves writes and the original alias's length. GC production policy,

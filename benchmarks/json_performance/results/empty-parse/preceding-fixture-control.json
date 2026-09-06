@@ -1,0 +1,14 @@
+{
+  "object_sha256": "209eb1ab417ad5efaeb3baf21d807111a10bcf94811e3ba8bc720adb91f9d896",
+  "node": {
+    "exit": 0,
+    "stdout": "fresh true true\ngrammar 216 11\nmutations {\"4\":true,\"dynamic\":\"\u6771\u4eac\ud83d\ude42\",\"extra\":{\"answer\":42},\"a\":7,\"getter\":\"seen\"} {}\nkeys 4,dynamic,extra,a,getter\nprototype 12 {}\nsetter {\"observed\":42}\nreviver {\"revised\":true} 1\nretained 50000 0 742752340\nlate {\"4\":true,\"dynamic\":\"\u6771\u4eac\ud83d\ude42\",\"extra\":{\"answer\":42},\"a\":7,\"getter\":\"seen\"} {} {\"observed\":42} {\"revised\":true}\n",
+    "stderr": ""
+  },
+  "perry": {
+    "exit": 0,
+    "stdout": "fresh true true\ngrammar 216 11\nmutations {\"4\":true,\"dynamic\":\"\u6771\u4eac\ud83d\ude42\",\"extra\":{\"answer\":42},\"a\":7,\"getter\":\"seen\"} {}\nkeys 4,dynamic,extra,a,getter\nprototype 12 {}\nsetter {\"observed\":42}\nreviver {\"revised\":true} 1\nretained 50000 0 742752340\nlate {\"4\":true,\"dynamic\":\"\u6771\u4eac\ud83d\ude42\",\"extra\":{\"answer\":42},\"a\":7,\"getter\":\"seen\"} {} {\"observed\":42} {\"revised\":true}\n",
+    "stderr": ""
+  },
+  "matches_node": true
+}
