@@ -137,6 +137,12 @@
       "why": "#9771: bytes remaining to allocate before the next native-heap sample. A `Cell<i64>` counter, const-initialised so the TLS access itself never allocates."
     },
     {
+      "file": "crates/perry-runtime/src/arena/alloc_sample.rs",
+      "name": "UNTIL",
+      "verdict": "not_a_gc_pointer",
+      "why": "#9794 allocation-site sampling: bytes remaining until the next sample. A `Cell<usize>` countdown, decremented per allocation and reset on fire \u2014 a quantity, never an address."
+    },
+    {
       "file": "crates/perry-runtime/src/async_hooks.rs",
       "name": "ASYNC_HOOK_HANDLES",
       "verdict": "not_a_gc_pointer",
@@ -306,10 +312,52 @@
       "why": "Declared under cfg(test); holds an explicitly leaked Rust path string used by the isolated census unit tests."
     },
     {
+      "file": "crates/perry-runtime/src/gc/diag_sites.rs",
+      "name": "BUDGETED",
+      "verdict": "not_a_gc_pointer",
+      "why": "#9794 budgeted-cycle attribution: `BudgetedCycleDiag` is counters and byte/slice tallies for the cycle in progress. No address fields."
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/diag_sites.rs",
+      "name": "FULL_SITE",
+      "verdict": "not_a_gc_pointer",
+      "why": "#9794 trigger attribution: the `&'static str` name of the site that requested the current full collection. A pointer into rodata, not a GC allocation."
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/diag_sites.rs",
+      "name": "FULL_SITE_COUNTS",
+      "verdict": "not_a_gc_pointer",
+      "why": "#9794 trigger attribution: per-site full-collection tallies, `Vec<(&'static str, u32)>`. Both members are rodata string literals and counts; nothing the collector traces."
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/diag_sites.rs",
+      "name": "LAST_BUDGETED",
+      "verdict": "not_a_gc_pointer",
+      "why": "#9794: the previous budgeted cycle's four tallies as a `(u64, u64, u64, u64)`. Numbers only."
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/diag_sites.rs",
+      "name": "PRIMITIVE_DISPATCH",
+      "verdict": "not_a_gc_pointer",
+      "why": "#9794: per-method primitive-dispatch counts, `HashMap<String, (u64, u64)>`. Rust-owned method-name strings and counters."
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/diag_sites.rs",
+      "name": "STRING_WRAPPERS",
+      "verdict": "not_a_gc_pointer",
+      "why": "#9794: materialized/elided string-wrapper counts as a `(u64, u64)` pair."
+    },
+    {
       "file": "crates/perry-runtime/src/gc/oldgen_defrag.rs",
       "name": "LAST_IDLE_PREDICTED_RELEASE",
       "verdict": "not_a_gc_pointer",
       "why": "#9772: releasable block BYTES the last idle selection promised \u2014 a size, not an address. A `Cell<usize>` compared against what the collection actually released."
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/survival_diag.rs",
+      "name": "MINOR_SEQ",
+      "verdict": "not_a_gc_pointer",
+      "why": "#9794: monotonic per-minor sequence number used to label survival-origin records. A `Cell<u64>`."
     },
     {
       "file": "crates/perry-runtime/src/gc/trace.rs",
