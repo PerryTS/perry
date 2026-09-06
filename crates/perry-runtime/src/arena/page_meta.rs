@@ -62,6 +62,41 @@ impl PageGenerationRange {
     fn contains(self, addr: usize) -> bool {
         addr >= self.base && addr < self.end
     }
+
+    /// The marker a NEGATIVE table entry carries: "no registered range covers
+    /// any address in this 1 MiB class" (#9852).
+    ///
+    /// `base = usize::MAX, end = 0` makes [`contains`] false for every address
+    /// without a branch of its own, so the hit arm is byte-for-byte the code it
+    /// was before negatives existed and the marker test is reached only after
+    /// `contains` has already failed — i.e. on the miss path only.
+    ///
+    /// [`contains`]: PageGenerationRange::contains
+    const ABSENT: Self = Self {
+        base: usize::MAX,
+        end: 0,
+        generation: HeapGeneration::Unknown,
+        space: HeapSpace::Unknown,
+        object_starts: std::ptr::null_mut(),
+    };
+
+    #[inline]
+    fn is_absent(self) -> bool {
+        self.base == usize::MAX && self.end == 0
+    }
+}
+
+/// What a table probe concluded. Three states, not two, because "the table
+/// knows there is nothing here" and "the table does not know" lead to
+/// different code: the first answers the caller, the second falls through to
+/// the authoritative map.
+#[derive(Clone, Copy)]
+enum ClassLookup {
+    Hit(PageGenerationRange),
+    /// A live NEGATIVE entry: no registered range covers this class, so the
+    /// map has no answer either and does not need to be asked (#9852).
+    KnownAbsent,
+    Unknown,
 }
 
 #[derive(Clone, Debug)]
@@ -236,6 +271,14 @@ const ARM_UNRESOLVED: u8 = 0;
 const ARM_TABLE: u8 = 1;
 const ARM_WAYS: u8 = 2;
 
+/// The negative cache's arm (#9852), resolved separately from `arm` because it
+/// is a separate kill switch: the table can be on with negatives off, which is
+/// the control arm for this change. `NEG_UNRESOLVED` stores nothing, which is
+/// correct for both settings.
+const NEG_UNRESOLVED: u8 = 0;
+const NEG_ON: u8 = 1;
+const NEG_OFF: u8 = 2;
+
 /// The cache in front of [`PageGenerationMap`]: a **direct-indexed table** keyed
 /// by `addr >> GENERATION_CLASS_SHIFT`, with the previous 4-way set retained
 /// behind `PERRY_GC_PAGE_CLASS_TABLE=0` as the control arm.
@@ -332,6 +375,29 @@ struct PageGenerationCacheSet {
     /// Lookups that missed because the key was OUTSIDE `[base, base + len)`.
     /// See the increment site for why this is the counter that matters.
     oos: u64,
+    /// `NEG_UNRESOLVED` / `NEG_ON` / `NEG_OFF` — the negative cache's own kill
+    /// switch (`PERRY_GC_PAGE_CLASS_NEGATIVE`), resolved once per thread on the
+    /// cold store path for the same reason `arm` is a field and not an
+    /// `OnceLock` read: this must not put an acquire load on a path that runs
+    /// hundreds of millions of times per turn.
+    neg_arm: u8,
+    /// Lookups answered `KnownAbsent` from a live negative entry — map lookups
+    /// that did not happen. This is the counter the change is judged on.
+    neg_hits: u64,
+    /// Negative entries written.
+    neg_inserts: u64,
+    /// MEASUREMENT ONLY (#9852). Splits the miss population the map could not
+    /// answer into the two cases `pages.get(&key).and_then(|s| s.find(addr))`
+    /// currently collapses:
+    /// * `neg_class_absent` — `pages.get(&key)` is itself `None`: no
+    ///   registered range covers this 1 MiB class. This is the ONLY sound
+    ///   negative to cache at class granularity.
+    /// * `neg_class_present` — the class exists in the map but no range in it
+    ///   contains `addr`. Caching "absent" for the class would be WRONG for
+    ///   the other addresses in it, so this population is not cacheable by the
+    ///   proposed design.
+    neg_class_absent: u64,
+    neg_class_present: u64,
     // ---- control arm: the 4-way round-robin set, unchanged ----
     ways: [PageGenerationCache; PAGE_GENERATION_CACHE_WAYS],
     /// Round-robin victim for the next insert.
@@ -351,13 +417,18 @@ impl PageGenerationCacheSet {
             rebases: 0,
             refused: 0,
             oos: 0,
+            neg_arm: NEG_UNRESOLVED,
+            neg_hits: 0,
+            neg_inserts: 0,
+            neg_class_absent: 0,
+            neg_class_present: 0,
             ways: [PageGenerationCache::empty(); PAGE_GENERATION_CACHE_WAYS],
             next: 0,
         }
     }
 
     #[inline(always)]
-    fn lookup(&mut self, key: usize, addr: usize) -> Option<PageGenerationRange> {
+    fn lookup(&mut self, key: usize, addr: usize) -> ClassLookup {
         if self.arm != ARM_WAYS {
             // `wrapping_sub` folds `key < base` into the same out-of-range
             // check as `key >= base + len`: a key below the base wraps to a
@@ -365,9 +436,20 @@ impl PageGenerationCacheSet {
             let idx = key.wrapping_sub(self.base);
             if idx < self.table.len() {
                 let e = &self.table[idx];
-                if e.epoch == self.epoch && e.range.contains(addr) {
-                    self.hits += 1;
-                    return Some(e.range);
+                if e.epoch == self.epoch {
+                    if e.range.contains(addr) {
+                        self.hits += 1;
+                        return ClassLookup::Hit(e.range);
+                    }
+                    // Reached only after `contains` has failed, so the hit arm
+                    // is unchanged and this costs nothing on a hit (#9852).
+                    // A negative entry is stamped with the same epoch as a
+                    // positive one, so the registration that would make it
+                    // wrong invalidates it by the same bump.
+                    if e.range.is_absent() {
+                        self.neg_hits += 1;
+                        return ClassLookup::KnownAbsent;
+                    }
                 }
             } else {
                 // Miss-path only, so it costs nothing on a hit — and it is the
@@ -380,16 +462,16 @@ impl PageGenerationCacheSet {
                 self.oos += 1;
             }
             self.misses += 1;
-            return None;
+            return ClassLookup::Unknown;
         }
         for way in self.ways.iter() {
             if way.valid && way.key == key && way.range.contains(addr) {
                 self.hits += 1;
-                return Some(way.range);
+                return ClassLookup::Hit(way.range);
             }
         }
         self.misses += 1;
-        None
+        ClassLookup::Unknown
     }
 
     #[inline]
@@ -409,22 +491,9 @@ impl PageGenerationCacheSet {
                 self.base = key.saturating_sub(PAGE_CLASS_TABLE_BASE_SLACK);
                 self.table = vec![PageClassEntry::DEAD; PAGE_CLASS_TABLE_INITIAL_SPAN];
             }
-            let mut idx = key.wrapping_sub(self.base);
-            if idx >= self.table.len() {
-                if !self.rebase_to_cover(key) {
-                    // Past the cap: leave it uncached. The caller already has
-                    // the authoritative answer and returns it; only the
-                    // acceleration is forgone.
-                    self.refused += 1;
-                    return;
-                }
-                idx = key - self.base;
+            if self.place(key, range) {
+                self.inserts += 1;
             }
-            self.table[idx] = PageClassEntry {
-                range,
-                epoch: self.epoch,
-            };
-            self.inserts += 1;
             return;
         }
         self.inserts += 1;
@@ -435,6 +504,79 @@ impl PageGenerationCacheSet {
             valid: true,
         };
         self.next = slot.wrapping_add(1);
+    }
+
+    /// Write `range` into `key`'s slot, rebasing if the key is outside the
+    /// current span. Returns whether it was stored; `false` means the span cap
+    /// refused the key and the caller must fall through to the map, which it
+    /// already can — only the acceleration is forgone. **Requires a non-empty
+    /// table**: allocating one here would take the base from whatever key
+    /// arrived first, and only a REGISTERED key is guaranteed to sit inside the
+    /// arena's eventual span.
+    #[inline]
+    fn place(&mut self, key: usize, range: PageGenerationRange) -> bool {
+        debug_assert!(!self.table.is_empty(), "place on an unallocated table");
+        let mut idx = key.wrapping_sub(self.base);
+        if idx >= self.table.len() {
+            if !self.rebase_to_cover(key) {
+                self.refused += 1;
+                return false;
+            }
+            idx = key - self.base;
+        }
+        self.table[idx] = PageClassEntry {
+            range,
+            epoch: self.epoch,
+        };
+        true
+    }
+
+    /// Remember that NO registered range covers `key`'s 1 MiB class (#9852).
+    ///
+    /// Called only where the caller has just read `pages.get(&key)` as `None`.
+    /// That is the whole soundness argument and it has to stay exact: a class
+    /// that holds a range but does not contain this particular address is a
+    /// DIFFERENT case, and caching "absent" for it would answer wrongly for
+    /// every other address in the class. Measured on the compiled claude-code
+    /// TUI, that second case is 16-29 % of the population, so this is not a
+    /// theoretical distinction.
+    ///
+    /// Three preconditions, each one a way this could be wrong rather than
+    /// merely slow:
+    /// * **the table arm only** — the 4-way set has no negative concept and its
+    ///   `lookup` does not test for one;
+    /// * **a table that already exists** — see [`place`]: a negative key must
+    ///   never be the one that fixes the base;
+    /// * **the kill switch** — `PERRY_GC_PAGE_CLASS_NEGATIVE=0` stores nothing,
+    ///   which turns the feature off completely because `lookup` can only
+    ///   answer `KnownAbsent` from an entry this function wrote.
+    ///
+    /// Invalidation needs no new rule: the entry carries the current epoch, and
+    /// all three `PageGenerationMap` mutation sites already end with
+    /// `invalidate_generation_cache()`, which bumps it. A registration into
+    /// this class is exactly the event that would make the entry wrong, and it
+    /// is exactly the event that kills it.
+    ///
+    /// [`place`]: PageGenerationCacheSet::place
+    #[inline]
+    fn insert_negative(&mut self, key: usize) {
+        if self.arm != ARM_TABLE || self.table.is_empty() {
+            return;
+        }
+        if self.neg_arm == NEG_UNRESOLVED {
+            // The one env read, on the cold path, once per thread.
+            self.neg_arm = if page_class_negative_enabled() {
+                NEG_ON
+            } else {
+                NEG_OFF
+            };
+        }
+        if self.neg_arm != NEG_ON {
+            return;
+        }
+        if self.place(key, PageGenerationRange::ABSENT) {
+            self.neg_inserts += 1;
+        }
     }
 
     /// Grow the table so that `key` is inside it, keeping every class it
@@ -485,6 +627,17 @@ impl PageGenerationCacheSet {
         }
     }
 
+    /// MEASUREMENT ONLY (#9852). Called from the two `_uncached` arms when the
+    /// authoritative map had no answer, with whether the CLASS was absent.
+    #[inline]
+    fn note_negative(&mut self, class_absent: bool) {
+        if class_absent {
+            self.neg_class_absent += 1;
+        } else {
+            self.neg_class_present += 1;
+        }
+    }
+
     /// `(hits, misses, inserts, span, rebases, refused)` for the diagnostic
     /// line and for the tests.
     fn stats(&self) -> PageClassStats {
@@ -497,6 +650,10 @@ impl PageGenerationCacheSet {
             rebases: self.rebases,
             refused: self.refused,
             oos: self.oos,
+            neg_hits: self.neg_hits,
+            neg_inserts: self.neg_inserts,
+            neg_class_absent: self.neg_class_absent,
+            neg_class_present: self.neg_class_present,
         }
     }
 }
@@ -514,6 +671,10 @@ struct PageClassStats {
     rebases: u64,
     refused: u64,
     oos: u64,
+    neg_hits: u64,
+    neg_inserts: u64,
+    neg_class_absent: u64,
+    neg_class_present: u64,
 }
 
 /// `PERRY_GC_PAGE_CLASS_TABLE=0` restores the 4-way set. The kill switch, and
@@ -525,6 +686,16 @@ fn page_class_table_enabled() -> bool {
     *ENABLED.get_or_init(|| crate::gc::env_default_on_enabled("PERRY_GC_PAGE_CLASS_TABLE"))
 }
 
+/// `PERRY_GC_PAGE_CLASS_NEGATIVE=0` stops the table remembering that a class
+/// holds nothing (#9852), leaving every such lookup to the authoritative map
+/// exactly as before. Mirrors `PERRY_GC_PAGE_CLASS_TABLE` deliberately: both
+/// arms live in ONE binary, so the A/B has no build difference to confound it.
+#[inline(always)]
+fn page_class_negative_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| crate::gc::env_default_on_enabled("PERRY_GC_PAGE_CLASS_NEGATIVE"))
+}
+
 /// One line under `PERRY_GC_DIAG=1`, emitted per copying minor from the
 /// collector (never at exit — the rig SIGKILLs the process).
 pub(crate) fn page_class_table_report() {
@@ -533,7 +704,10 @@ pub(crate) fn page_class_table_report() {
     }
     // SAFETY: thread-local, single-threaded, shared borrow ends here.
     let st = unsafe { (*hot_page_generation_cache()).stats() };
-    let tot = st.hits + st.misses;
+    // `neg_hits` are lookups too: they are answered without touching the map,
+    // so counting them anywhere but the denominator would make the miss RATE
+    // improve by shrinking what it is a rate of.
+    let tot = st.hits + st.neg_hits + st.misses;
     if tot == 0 {
         return;
     }
@@ -551,7 +725,8 @@ pub(crate) fn page_class_table_report() {
     };
     eprintln!(
         "[gc-page-class] arm={} lookups={tot} hit={} ({:.3}%) miss={} ({:.3}%) \
-miss_registered={} miss_unregistered={} miss_out_of_span={} span={} rebases={} refused={}",
+miss_registered={} miss_unregistered={} miss_out_of_span={} span={} rebases={} refused={} \
+neg_hit={} ({:.3}%) neg_stored={} neg_class_absent={} neg_class_present={}",
         arm_name,
         st.hits,
         100.0 * st.hits as f64 / tot as f64,
@@ -563,6 +738,11 @@ miss_registered={} miss_unregistered={} miss_out_of_span={} span={} rebases={} r
         st.span,
         st.rebases,
         st.refused,
+        st.neg_hits,
+        100.0 * st.neg_hits as f64 / tot as f64,
+        st.neg_inserts,
+        st.neg_class_absent,
+        st.neg_class_present,
     );
 }
 
@@ -1305,8 +1485,13 @@ pub(crate) fn classify_heap_generation(addr: usize) -> HeapGeneration {
     // attributed samples) precisely because it resolved two distinct
     // thread-locals per call.
     // SAFETY: thread-local, single-threaded, and the borrow ends here.
-    if let Some(range) = unsafe { (*hot_page_generation_cache()).lookup(key, addr) } {
-        return range.generation;
+    match unsafe { (*hot_page_generation_cache()).lookup(key, addr) } {
+        ClassLookup::Hit(range) => return range.generation,
+        // The map's answer for a class with no registered range IS `Unknown`
+        // (`pages.get(&key)` is `None` -> `HeapGeneration::Unknown`), so this
+        // returns what the fall-through would have returned, without it.
+        ClassLookup::KnownAbsent => return HeapGeneration::Unknown,
+        ClassLookup::Unknown => {}
     }
     classify_heap_generation_uncached(addr, key)
 }
@@ -1315,10 +1500,26 @@ pub(crate) fn classify_heap_generation(addr: usize) -> HeapGeneration {
 /// re-prime the one-entry cache.
 #[inline(never)]
 fn classify_heap_generation_uncached(addr: usize, key: usize) -> HeapGeneration {
-    let found = {
+    // MEASUREMENT ONLY (#9852): the `class_absent` flag splits the two cases
+    // `pages.get(&key).and_then(...)` collapses. Computed inside the borrow,
+    // counted after it drops.
+    let (found, class_absent) = {
         let pages = hot_page_generations().borrow();
-        pages.get(&key).and_then(|slot| slot.find(addr))
+        match pages.get(&key) {
+            None => (None, true),
+            Some(slot) => (slot.find(addr), false),
+        }
     };
+    if found.is_none() {
+        // SAFETY: thread-local, single-threaded, and the borrow ends here.
+        unsafe {
+            let set = &mut *hot_page_generation_cache();
+            set.note_negative(class_absent);
+            if class_absent {
+                set.insert_negative(key);
+            }
+        }
+    }
     if let Some(range) = found {
         // SAFETY: as above.
         unsafe { (*hot_page_generation_cache()).insert(key, range) };
@@ -1357,8 +1558,12 @@ pub(crate) fn classify_heap_space_in_range(addr: usize) -> Option<(HeapSpace, us
     }
     let key = generation_class_key_for_addr(addr);
     // SAFETY: thread-local, single-threaded, and the borrow ends here.
-    if let Some(range) = unsafe { (*hot_page_generation_cache()).lookup(key, addr) } {
-        return Some((range.space, range.base, range.object_starts));
+    match unsafe { (*hot_page_generation_cache()).lookup(key, addr) } {
+        ClassLookup::Hit(range) => return Some((range.space, range.base, range.object_starts)),
+        // As above: `None` is what the map returns for a class it does not
+        // hold, so the negative answers with the same value.
+        ClassLookup::KnownAbsent => return None,
+        ClassLookup::Unknown => {}
     }
     classify_heap_space_in_range_uncached(addr, key)
 }
@@ -1369,10 +1574,24 @@ fn classify_heap_space_in_range_uncached(
     addr: usize,
     key: usize,
 ) -> Option<(HeapSpace, usize, *mut u64)> {
-    let found = {
+    // MEASUREMENT ONLY (#9852) — see `classify_heap_generation_uncached`.
+    let (found, class_absent) = {
         let pages = hot_page_generations().borrow();
-        pages.get(&key).and_then(|slot| slot.find(addr))
+        match pages.get(&key) {
+            None => (None, true),
+            Some(slot) => (slot.find(addr), false),
+        }
     };
+    if found.is_none() {
+        // SAFETY: thread-local, single-threaded, and the borrow ends here.
+        unsafe {
+            let set = &mut *hot_page_generation_cache();
+            set.note_negative(class_absent);
+            if class_absent {
+                set.insert_negative(key);
+            }
+        }
+    }
     let range = found?;
     // SAFETY: thread-local, single-threaded, and the borrow ends here.
     unsafe { (*hot_page_generation_cache()).insert(key, range) };
@@ -2526,6 +2745,168 @@ mod page_class_table_tests {
             assert_eq!(
                 classify_heap_generation(class_base + 8),
                 HeapGeneration::Old
+            );
+        });
+    }
+
+    /// #9852. A repeated classification of an address whose 1 MiB class holds
+    /// no registered range must be answered from the table, not from the map.
+    ///
+    /// Asserted on `neg_hits`, not on the returned value: the value is
+    /// `Unknown` whether or not the negative was consulted, so a test that
+    /// checked only the answer would pass with the whole feature deleted.
+    ///
+    /// Sabotage: drop the `set.insert_negative(key)` call in
+    /// `classify_heap_generation_uncached` — the second classification is a
+    /// miss again and `neg_hits` stays 0, failing here.
+    #[test]
+    fn a_class_with_no_registered_range_is_answered_from_the_negative_entry() {
+        if !page_class_table_enabled() || !page_class_negative_enabled() {
+            return;
+        }
+        fresh(|| {
+            // A registration first: the base must come from a REGISTERED key.
+            let base = 0x9d0_0000_0000usize;
+            register_block_space(base, MB, HeapGeneration::Old, HeapSpace::Old);
+            assert_eq!(classify_heap_generation(base + 8), HeapGeneration::Old);
+            // An address in a neighbouring class that holds nothing at all.
+            let absent = base + 4 * MB + 0x40;
+            assert_eq!(classify_heap_generation(absent), HeapGeneration::Unknown);
+            let after_first = table_stats();
+            assert_eq!(
+                after_first.neg_inserts, 1,
+                "a class the map does not hold must leave a negative entry"
+            );
+            let before = after_first.neg_hits;
+            assert_eq!(classify_heap_generation(absent), HeapGeneration::Unknown);
+            assert_eq!(
+                table_stats().neg_hits,
+                before + 1,
+                "the second classification of an absent class went to the map; \
+                 the negative entry was not consulted"
+            );
+            // And the same class answers `classify_heap_space_in_range` too.
+            assert_eq!(classify_heap_space_in_range(absent + 8), None);
+            assert_eq!(
+                table_stats().neg_hits,
+                before + 2,
+                "the space classifier did not consult the negative entry"
+            );
+        });
+    }
+
+    /// #9852, the unsound case. A class that DOES hold a range, probed at an
+    /// address outside it, must not be remembered as absent — the negative is
+    /// class-granular and would then answer wrongly for the addresses the
+    /// class really covers. Measured on cc, this case is 16-29 % of the
+    /// population, so it is the common case and not a corner.
+    ///
+    /// Sabotage: call `insert_negative` unconditionally instead of under
+    /// `if class_absent` — the final assertion reads `Unknown` for an address
+    /// in a registered half-block.
+    #[test]
+    fn a_partially_registered_class_is_never_remembered_as_absent() {
+        if !page_class_table_enabled() || !page_class_negative_enabled() {
+            return;
+        }
+        fresh(|| {
+            let class_base = 0xae0_0000_0000usize;
+            let half = MB / 2;
+            // Only the FIRST half of the class is registered.
+            register_block_space(class_base, half, HeapGeneration::Old, HeapSpace::Old);
+            // Probe the unregistered half: the class exists, the address is
+            // not in its range.
+            assert_eq!(
+                classify_heap_generation(class_base + half + 8),
+                HeapGeneration::Unknown
+            );
+            let st = table_stats();
+            assert_eq!(
+                st.neg_class_present, 1,
+                "the probe must be counted as class-present, not class-absent"
+            );
+            assert_eq!(
+                st.neg_inserts, 0,
+                "a class that holds a range must never get a negative entry"
+            );
+            // The registered half must still classify correctly.
+            assert_eq!(
+                classify_heap_generation(class_base + 8),
+                HeapGeneration::Old,
+                "a negative cached for a partially registered class answered \
+                 for an address the class really covers"
+            );
+        });
+    }
+
+    /// #9852. A negative is invalidated by the registration that makes it
+    /// wrong, through the epoch bump every mutation site already performs. A
+    /// stale negative is the worst failure this structure can produce: the
+    /// collector declines to trace a live young object.
+    ///
+    /// Sabotage: stamp `epoch: 0` on the negative entry and it can never be
+    /// live (this test still passes but the previous one fails); stamp a
+    /// constant epoch instead of `self.epoch` and this one fails.
+    #[test]
+    fn a_negative_entry_is_killed_by_a_later_registration_in_that_class() {
+        if !page_class_table_enabled() || !page_class_negative_enabled() {
+            return;
+        }
+        fresh(|| {
+            let base = 0xbf0_0000_0000usize;
+            register_block_space(base, MB, HeapGeneration::Old, HeapSpace::Old);
+            assert_eq!(classify_heap_generation(base + 8), HeapGeneration::Old);
+            let later = base + 8 * MB;
+            // Absent now, and remembered as absent.
+            assert_eq!(classify_heap_generation(later + 8), HeapGeneration::Unknown);
+            assert_eq!(table_stats().neg_inserts, 1);
+            // Now that class really is registered.
+            register_block_space(later, MB, HeapGeneration::Nursery, HeapSpace::NurseryEden);
+            assert_eq!(
+                classify_heap_generation(later + 8),
+                HeapGeneration::Nursery,
+                "a stale negative answered after the class was registered — \
+                 the collector would decline to trace a live young object"
+            );
+        });
+    }
+
+    /// #9852. A negative must never be the insert that allocates the table:
+    /// the base is derived from the first key stored, and only a REGISTERED
+    /// key is guaranteed to sit inside the arena's eventual span. An
+    /// unregistered candidate address can be anywhere at all.
+    ///
+    /// Sabotage: drop the `self.table.is_empty()` guard in `insert_negative` —
+    /// the first assertion fails (a table exists with a base taken from a
+    /// garbage address) and the registered address that follows is out of span.
+    #[test]
+    fn a_negative_never_fixes_the_tables_base() {
+        if !page_class_table_enabled() || !page_class_negative_enabled() {
+            return;
+        }
+        fresh(|| {
+            // A wild candidate address, classified before anything is
+            // registered — exactly what a conservative scan produces.
+            let wild = 0x1_0000_0000_0000usize;
+            assert_eq!(classify_heap_generation(wild), HeapGeneration::Unknown);
+            let st = table_stats();
+            assert_eq!(
+                (st.span, st.neg_inserts),
+                (0, 0),
+                "a negative allocated the table and fixed its base from an \
+                 unregistered address"
+            );
+            // The real arena, far away, must still be covered without a rebase.
+            let base = 0xc10_0000_0000usize;
+            register_block_space(base, MB, HeapGeneration::Old, HeapSpace::Old);
+            assert_eq!(classify_heap_generation(base + 8), HeapGeneration::Old);
+            assert_eq!(classify_heap_generation(base + 8), HeapGeneration::Old);
+            let st = table_stats();
+            assert!(st.span > 0, "the first registered insert must allocate");
+            assert_eq!(
+                (st.rebases, st.refused),
+                (0, 0),
+                "the base came from somewhere other than the first registration"
             );
         });
     }
