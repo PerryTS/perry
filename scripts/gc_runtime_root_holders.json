@@ -342,12 +342,6 @@
       "why": "#9794: per-method primitive-dispatch counts, `HashMap<String, (u64, u64)>`. Rust-owned method-name strings and counters."
     },
     {
-      "file": "crates/perry-runtime/src/gc/diag_sites.rs",
-      "name": "STRING_WRAPPERS",
-      "verdict": "not_a_gc_pointer",
-      "why": "#9794: materialized/elided string-wrapper counts as a `(u64, u64)` pair."
-    },
-    {
       "file": "crates/perry-runtime/src/gc/oldgen_defrag.rs",
       "name": "LAST_IDLE_PREDICTED_RELEASE",
       "verdict": "not_a_gc_pointer",
