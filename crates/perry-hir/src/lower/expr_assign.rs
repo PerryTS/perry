@@ -195,11 +195,48 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
                                         _ => Some("Instance"),
                                     };
                                     if let Some(class_name) = class_name {
-                                        ctx.push_module_native_instance((
-                                            var_name.clone(),
-                                            module_name.to_string(),
-                                            class_name.to_string(),
-                                        ));
+                                        // #9847: tag the BINDING this assigns
+                                        // to, not its spelling. The catch-all
+                                        // arm above makes any method on any
+                                        // native module tag the target, and
+                                        // `push_module_native_instance` keyed
+                                        // that on the identifier text for the
+                                        // whole module — so one
+                                        // `O = cp.spawn(...)` in a bundled
+                                        // helper typed all 5,381 bindings named
+                                        // `O` in claude-code's single-module
+                                        // bundle as `child_process::Instance`,
+                                        // including a `for (let {segment: O} of
+                                        // …)` binding holding a grapheme
+                                        // string. When the target resolves to a
+                                        // local we key on its `LocalId`, which
+                                        // keeps the cross-function reach the
+                                        // module-wide table existed for (a
+                                        // module-level `let client;` assigned
+                                        // inside one function and read inside
+                                        // another resolves to the same id in
+                                        // both) without the homonym collision.
+                                        // An unresolvable target — a bare
+                                        // global with no binding — has no id to
+                                        // key on and keeps the old name-keyed
+                                        // registration; see the matching arm in
+                                        // `lookup_native_instance`.
+                                        match ctx.lookup_local(&var_name) {
+                                            Some(local_id) => {
+                                                ctx.register_local_id_native_instance(
+                                                    local_id,
+                                                    module_name.to_string(),
+                                                    class_name.to_string(),
+                                                );
+                                            }
+                                            None => {
+                                                ctx.push_module_native_instance((
+                                                    var_name.clone(),
+                                                    module_name.to_string(),
+                                                    class_name.to_string(),
+                                                ));
+                                            }
+                                        }
                                     }
                                 }
                             }
