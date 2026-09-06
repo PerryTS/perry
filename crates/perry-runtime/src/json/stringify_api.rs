@@ -43,10 +43,11 @@ pub(crate) unsafe fn redirect_lazy_to_materialized(value: f64) -> f64 {
     if (*lazy).magic != crate::json_tape::LAZY_ARRAY_MAGIC {
         return value;
     }
-    if (*lazy).materialized.is_null() {
+    let materialized = crate::json_tape::resolve_materialized_array(lazy.cast_mut());
+    if materialized.is_null() {
         return value;
     }
-    f64::from_bits(JSValue::object_ptr((*lazy).materialized as *mut u8).bits())
+    f64::from_bits(JSValue::object_ptr(materialized as *mut u8).bits())
 }
 
 /// Return one validated JSON number token and its exclusive end offset.

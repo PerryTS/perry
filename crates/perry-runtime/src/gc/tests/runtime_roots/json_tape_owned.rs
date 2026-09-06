@@ -12,6 +12,101 @@ unsafe fn owned_small(input: &[u8]) -> *mut crate::json_tape::LazyArrayHeader {
 }
 
 #[test]
+fn json_lazy_growth_resolves_each_cached_array_consumer() {
+    let _guard = GcTestIsolationGuard::new();
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    for width in [0, 1, 2, 8, 17] {
+        for consumer in 0..4 {
+            let source = format!("[{}]", (0..width).map(|n| n.to_string()).collect::<Vec<_>>().join(","));
+            unsafe {
+                let lazy = owned_small(source.as_bytes());
+                let original = crate::json_tape::force_materialize_lazy(lazy);
+                let mut grown = original;
+                for index in width..70 {
+                    grown = crate::array::js_array_push(grown, crate::JSValue::number(index as f64));
+                }
+                assert_ne!(grown, original, "exercise a real growth forwarding chain");
+                assert_eq!((*lazy).materialized, original, "keep the stale owner edge until the consumer reads it");
+                match consumer {
+                    0 => assert_eq!(crate::array::js_array_length(lazy.cast()), 70),
+                    1 => assert_eq!(crate::json_tape::lazy_get(lazy, 69).as_number(), 69.0),
+                    2 => assert_eq!(crate::json_tape::force_materialize_lazy(lazy), grown),
+                    _ => {
+                        let output = crate::json::js_json_stringify(f64::from_bits(ptr_bits(lazy as usize)), 0);
+                        let bytes = std::slice::from_raw_parts(crate::string::string_data(output), (*output).byte_len as usize);
+                        assert_eq!(serde_json::from_slice::<Vec<u32>>(bytes).unwrap(), (0..70).collect::<Vec<_>>());
+                    }
+                }
+                assert_eq!((*lazy).materialized, grown);
+                assert_eq!((*lazy).cached_length, 70);
+            }
+        }
+    }
+}
+
+#[test]
+fn json_lazy_growth_preserves_holes_and_repeated_mutation_through_owner() {
+    let _guard = GcTestIsolationGuard::new();
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    unsafe {
+        let lazy = owned_small(b"[0,1]");
+        for index in 2..70 {
+            // Always pass the original wrapper, ignoring the returned head.
+            crate::array::js_array_push(lazy.cast(), crate::JSValue::number(index as f64));
+            assert_eq!(crate::json_tape::lazy_get(lazy, index).as_number(), index as f64);
+        }
+        let length = crate::js_string_from_bytes(b"length".as_ptr(), 6);
+        let receiver = f64::from_bits(ptr_bits(lazy as usize));
+        let key = f64::from_bits(string_bits(length as usize));
+        crate::value::js_dyn_index_set_strict(receiver, key, 2.0, 1);
+        crate::value::js_dyn_index_set_strict(receiver, key, 6.0, 1);
+        assert_eq!(crate::array::js_array_length(lazy.cast()), 6);
+        for index in 2..6 {
+            assert_eq!(crate::json_tape::lazy_get(lazy, index).bits(), crate::JSValue::undefined().bits());
+        }
+        crate::value::js_dyn_index_set_strict(receiver, 5.0, 42.0, 1);
+        assert_eq!(crate::json_tape::lazy_get(lazy, 5).as_number(), 42.0);
+        let output = crate::json::js_json_stringify(receiver, 0);
+        let bytes = std::slice::from_raw_parts(crate::string::string_data(output), (*output).byte_len as usize);
+        assert_eq!(bytes, b"[0,1,null,null,null,42]");
+    }
+}
+
+#[test]
+fn json_lazy_growth_owner_alone_retains_forwarded_array_and_children_across_minor() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _evacuation = ForcedEvacuationTestGuard::on();
+    let _protection = crate::arena::ProtectionModeGuard::set(crate::arena::FromSpaceProtection::PoisonOnly);
+    register_runtime_handle_root_scanner_for_tests();
+    let scope = RuntimeHandleScope::new();
+    unsafe {
+        let owner = scope.root_raw_mut_ptr(owned_small(br#"["heap child survives growth"]"#));
+        let lazy = owner.get_raw_mut_ptr::<crate::json_tape::LazyArrayHeader>();
+        let original = crate::json_tape::force_materialize_lazy(lazy);
+        let mut grown = original;
+        for index in 1..70 {
+            grown = crate::array::js_array_push(grown, crate::JSValue::number(index as f64));
+        }
+        assert_ne!(original, grown);
+        let old_child = crate::array::js_array_get(grown, 0).bits();
+        assert_eq!((*lazy).materialized, original);
+        let before = gc_collection_count();
+        let _ = gc_collect_minor_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Direct));
+        assert!(gc_collection_count() > before);
+        let lazy = owner.get_raw_mut_ptr::<crate::json_tape::LazyArrayHeader>();
+        let moved = crate::json_tape::force_materialize_lazy(lazy);
+        assert_ne!(moved, grown, "the live array must actually move");
+        let child = crate::json_tape::lazy_get(lazy, 0);
+        assert_ne!(child.bits(), old_child, "the child must actually move");
+        let text = child.as_string_ptr();
+        assert_eq!(std::slice::from_raw_parts(crate::string::string_data(text), (*text).byte_len as usize), b"heap child survives growth");
+        assert_eq!(crate::array::js_array_length(lazy.cast()), 70);
+        assert_eq!(crate::json_tape::lazy_get(lazy, 69).as_number(), 69.0);
+    }
+}
+
+#[test]
 fn json_owned_tape_transfers_exact_storage_and_releases_after_materialization() {
     let _guard = GcTestIsolationGuard::new();
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();

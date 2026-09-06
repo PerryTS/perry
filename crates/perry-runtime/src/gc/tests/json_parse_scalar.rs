@@ -117,6 +117,99 @@ impl Drop for ParseStateGuard {
 }
 
 #[test]
+fn json_inline_keys_move_at_pending_collection() {
+    assert_inline_keys_move(false, true);
+}
+
+#[test]
+fn json_inline_result_keys_move_at_pending_collection() {
+    assert_inline_keys_move(true, true);
+}
+
+#[test]
+fn json_inline_keys_move_at_final_allocation() {
+    assert_inline_keys_move(false, false);
+}
+
+#[test]
+fn json_inline_result_keys_move_at_final_allocation() {
+    assert_inline_keys_move(true, false);
+}
+
+fn assert_inline_keys_move(fallible: bool, pending: bool) {
+    let _pacing = crate::gc::policy::force_alloc_point_minor_pacing();
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _state = ParseStateGuard::new();
+    let _evacuation = ForcedEvacuationTestGuard::on();
+    let _protection =
+        crate::arena::ProtectionModeGuard::set(crate::arena::FromSpaceProtection::PoisonOnly);
+    register_runtime_handle_root_scanner_for_tests();
+    gc_register_mutable_root_scanner(json_parse_mutable_root_scanner);
+    crate::json::test_clear_parse_roots();
+
+    // Normal canonical arrays are long-lived. Install an equivalent nursery
+    // array explicitly so the test proves its relocation, not just that an
+    // unchanged old-generation keys pointer remains readable.
+    gc_suppress();
+    let keys = crate::array::js_array_alloc_with_length(2);
+    let a = crate::js_string_from_bytes(b"a".as_ptr(), 1);
+    let b = crate::js_string_from_bytes(b"b".as_ptr(), 1);
+    crate::array::js_array_set(keys, 0, crate::JSValue::string_ptr(a));
+    crate::array::js_array_set(keys, 1, crate::JSValue::string_ptr(b));
+    unsafe {
+        let header = (keys as *mut u8).sub(GC_HEADER_SIZE) as *mut GcHeader;
+        (*header).gc_flags |= GC_FLAG_SHAPE_SHARED;
+    }
+    assert!(crate::arena::pointer_in_nursery(keys as usize));
+    crate::json::PARSE_SHAPE_CACHE.with(|cache| {
+        cache.borrow_mut().push(crate::json::ParseShapeCacheEntry {
+            keys: vec![a, b],
+            keys_array: keys,
+        });
+    });
+    gc_unsuppress();
+    let keys_address = keys as usize;
+    let scope = RuntimeHandleScope::new();
+    let text = br#"{"a":17,"b":false}"#;
+    let input = scope.root_string_ptr(crate::js_string_from_bytes(text.as_ptr(), text.len() as u32));
+    let before = gc_collection_count();
+    if pending {
+        GC_SUPPRESSED_TINY_PARSE_COLLECTION_PENDING.with(|c| c.set(true));
+    } else {
+        super::runtime_roots::force_next_general_arena_alloc_slow();
+        triggers.make_arena_trigger_due();
+        GC_TRIGGER_ARMED.with(|c| c.set(true));
+    }
+    let value = unsafe {
+        if fallible {
+            crate::json::js_json_parse_result(input.get_raw_const_ptr()).unwrap()
+        } else {
+            crate::json::js_json_parse(input.get_raw_const_ptr())
+        }
+    };
+    assert!(gc_collection_count() > before);
+    let object = value.as_pointer::<crate::ObjectHeader>();
+    let moved_keys = unsafe { crate::object::object_keys_array(object) };
+    assert_ne!(keys_address, moved_keys as usize, "canonical array must move");
+    let output = scope.root_nanbox_u64(value.bits());
+    crate::json::test_clear_parse_roots();
+    // The result is now the sole managed owner of the canonical keys graph.
+    let _ = gc_collect_minor_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Direct));
+    let object = crate::JSValue::from_bits(output.get_nanbox_f64().to_bits())
+        .as_pointer::<crate::ObjectHeader>();
+    unsafe {
+        let keys = crate::object::object_keys_array(object);
+        assert_eq!((*keys).length, 2);
+        assert!(crate::string::js_string_key_matches_bytes(crate::array::js_array_get(keys, 0), b"a"));
+        assert!(crate::string::js_string_key_matches_bytes(crate::array::js_array_get(keys, 1), b"b"));
+        let fields = (object as *const u8).add(std::mem::size_of::<crate::ObjectHeader>()) as *const crate::JSValue;
+        assert_eq!((*fields).as_number(), 17.0);
+        assert!(!(*fields.add(1)).as_bool());
+    }
+}
+
+#[test]
 fn json_scalar_parse_preserves_blocked_debt_and_services_it_when_safe() {
     let _isolation = GcTestIsolationGuard::new();
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();

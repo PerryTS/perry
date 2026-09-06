@@ -18,7 +18,7 @@ use std::cell::Cell;
 mod iterative;
 pub(crate) use iterative::materialize_iterative;
 mod mutation;
-pub(crate) use mutation::set_lazy_index;
+pub(crate) use mutation::{resolve_materialized_array, set_lazy_index};
 
 /// One tape entry. Kind + byte offset + (for container kinds) a
 /// parent/sibling pointer that lets materialization skip over
@@ -1523,17 +1523,11 @@ pub unsafe fn lazy_get(hdr: *mut LazyArrayHeader, i: u32) -> JSValue {
     if hdr.is_null() {
         return JSValue::from_bits(crate::value::TAG_UNDEFINED);
     }
-    // Fast path 1: full-materialize already triggered. Read from
-    // the real array at arr+8+i*8.
-    let mat = (*hdr).materialized;
+    // Full materialization may have been followed by growth or mutation.
+    // Use the ordinary accessor to preserve forwarding, holes and getters.
+    let mat = resolve_materialized_array(hdr);
     if !mat.is_null() {
-        let length = (*mat).length;
-        if i >= length {
-            return JSValue::from_bits(crate::value::TAG_UNDEFINED);
-        }
-        let elements_ptr =
-            (mat as *const u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *const u64;
-        return JSValue::from_bits(*elements_ptr.add(i as usize));
+        return crate::array::js_array_get(mat, i);
     }
 
     let cached_length = (*hdr).cached_length;
@@ -1840,7 +1834,7 @@ pub unsafe fn force_materialize_lazy(hdr: *mut LazyArrayHeader) -> *mut crate::a
         return std::ptr::null_mut();
     }
     if !(*hdr).materialized.is_null() {
-        return (*hdr).materialized;
+        return resolve_materialized_array(hdr);
     }
     let cached_length = (*hdr).cached_length;
     // Same helper `lazy_get`'s scan-flip trigger consults, so the trigger

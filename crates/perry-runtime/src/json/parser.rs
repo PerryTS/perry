@@ -894,24 +894,76 @@ impl<'a> DirectParser<'a> {
         self.skip_whitespace();
 
         let saved_roots = parse_root_save_len();
+        if self.peek() != Some(b'{') {
+            return self.parse_array_prefix(saved_roots);
+        }
         // Same `[{...}]` pre-size heuristic as the typed path.
-        let mut js_arr = js_array_alloc(if self.peek() == Some(b'{') {
-            // 96 B/object is an empirical average for small JSON objects
-            // (e.g. `{"id":1,"name":"x"}` ≈ 80-120 B with separators).
-            // Clamped to 16..16_384 so tiny payloads stay cheap and
-            // multi-MB documents don't over-commit when the average drifts.
-            ((self.input.len() - self.pos) / 96).clamp(16, 16_384) as u32
-        } else {
-            16
-        });
-        let arr_slot = parse_root_push(JSValue::object_ptr(js_arr as *mut u8));
+        // Preserve the object-leading estimate on large record arrays.
+        let js_arr = js_array_alloc(((self.input.len() - self.pos) / 96).clamp(16, 16_384) as u32);
+        self.parse_array_tail(js_arr, saved_roots)
+    }
 
+    /// The direct parser's existing suppression window protects these native
+    /// value slots, just as it protects parse_object_untyped's inline fields.
+    /// Child allocations belong to the result graph. Delay the array itself
+    /// until its width is known, avoiding sixteen slots for a two-item array.
+    #[inline(never)]
+    unsafe fn parse_array_prefix(&mut self, saved_roots: usize) -> JSValue {
+        let mut values = [JSValue::undefined(); 8];
+        let mut used = 0;
         if self.peek() == Some(b']') {
             self.advance();
-            parse_root_restore(saved_roots);
-            return JSValue::object_ptr(js_arr as *mut u8);
+            return self.finish_short_array(&values[..used], saved_roots);
         }
+        loop {
+            if used == values.len() {
+                // The comma after element eight was consumed. Continue at
+                // the ninth value without reparsing any prefix or child.
+                let array = js_array_alloc(16);
+                for &value in &values {
+                    self.array_push_parse_fast(array, value);
+                }
+                return self.parse_array_tail(array, saved_roots);
+            }
+            let value = self.parse_value();
+            if !self.valid {
+                self.expect(b']');
+                return self.finish_short_array(&values[..used], saved_roots);
+            }
+            values[used] = value;
+            used += 1;
+            self.skip_whitespace();
+            if self.peek() == Some(b',') {
+                self.advance();
+            } else {
+                self.expect(b']');
+                return self.finish_short_array(&values[..used], saved_roots);
+            }
+        }
+    }
 
+    unsafe fn finish_short_array(&self, values: &[JSValue], saved_roots: usize) -> JSValue {
+        let array = crate::array::js_array_alloc_with_length_exact(values.len() as u32);
+        // Match the ordinary array parser's numeric classification: start
+        // raw-f64 and let each slot note revoke it for nonnumeric values.
+        crate::array::set_array_numeric_layout(array, crate::array::NumericArrayLayout::RawF64);
+        let slots = (array as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut JSValue;
+        for (index, &value) in values.iter().enumerate() {
+            // GC_STORE_AUDIT(INIT): fresh array, initialized holes, and the
+            // surrounding direct parse suppresses collection. All children
+            // are final output values; slot notes preserve the tracing map.
+            slots.add(index).write(value);
+            note_array_slot_layout_only(array, index, value.bits());
+        }
+        parse_root_restore(saved_roots);
+        JSValue::object_ptr(array.cast())
+    }
+
+    /// Append the unparsed tail to either the object-leading allocation or
+    /// the already-copied bounded prefix. Parsing and growth keep their
+    /// existing rooting, error handling and forwarding behavior.
+    unsafe fn parse_array_tail(&mut self, mut js_arr: *mut ArrayHeader, saved_roots: usize) -> JSValue {
+        let arr_slot = parse_root_push(JSValue::object_ptr(js_arr as *mut u8));
         loop {
             let value = self.parse_value();
             if !self.valid {
@@ -1109,3 +1161,7 @@ impl<'a> DirectParser<'a> {
 #[cfg(test)]
 #[path = "parser_scan_tests.rs"]
 mod scan_tests;
+
+#[cfg(test)]
+#[path = "parser_short_array_tests.rs"]
+mod short_array_tests;

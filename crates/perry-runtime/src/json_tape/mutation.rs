@@ -25,6 +25,30 @@ pub(crate) unsafe fn set_lazy_index(
     // Length reads can still arrive through the original lazy value. Reflect
     // indexed extension or a "length" assignment in its inline length slot.
     let header = receiver.get_raw_mut_ptr::<super::LazyArrayHeader>();
-    (*header).cached_length = crate::array::js_array_length((*header).materialized);
+    resolve_materialized_array(header);
     value.get_nanbox_f64()
+}
+
+/// Resolve growth forwarding in a cached materialized array and refresh its
+/// owner's edge. The cached value is always an ordinary array, so resolving
+/// it cannot materialize another lazy value, allocate, or invoke user code.
+///
+/// # Safety
+/// `header` must be a live lazy-array header. A non-null materialized edge
+/// must reference a live ordinary array or its growth forwarding chain.
+pub(crate) unsafe fn resolve_materialized_array(
+    header: *mut super::LazyArrayHeader,
+) -> *mut crate::array::ArrayHeader {
+    let cached = (*header).materialized;
+    if cached.is_null() {
+        return cached;
+    }
+    let array = crate::array::clean_arr_ptr_mut(cached);
+    if !array.is_null() {
+        if array != cached {
+            super::install_materialized(header, array);
+        }
+        (*header).cached_length = (*array).length;
+    }
+    array
 }

@@ -330,7 +330,8 @@ pub extern "C" fn js_array_length(arr: *const ArrayHeader) -> u32 {
                     // access forced it), read the authoritative length
                     // from the materialized tree.
                     if !(*lazy).materialized.is_null() {
-                        return (*(*lazy).materialized).length;
+                        let array = crate::json_tape::resolve_materialized_array(lazy.cast_mut());
+                        return if array.is_null() { 0 } else { (*array).length };
                     }
                     return (*lazy).cached_length;
                 }
