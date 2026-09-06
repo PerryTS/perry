@@ -114,13 +114,40 @@ fn set_num_field(obj: *mut ObjectHeader, index: u32, value: usize) {
 /// caller's stack buffer, so neither case allocates and neither case leaks an
 /// address.
 ///
+/// **The UTF-8 validation is done ONCE, in `open`, and is not repeated here.**
+/// Re-validating cost 6.2 % of the loop's thread as `core::str::from_utf8`
+/// self, because every entry point re-derives the borrow per call (the §9a
+/// rooting contract) and each derivation walked the whole input again.
+///
+/// The invariant that makes `from_utf8_unchecked` sound here, stated so it can
+/// be checked rather than trusted:
+///
+/// 1. `F_INPUT` is written exactly once, by `js_segments_view_open`, and never
+///    reassigned — no entry point below stores into it.
+/// 2. `open` refuses any input that is not already a string primitive and runs
+///    `std::str::from_utf8` on its bytes before allocating the cursor, so the
+///    value in that slot has been validated.
+/// 3. A collection may MOVE that string but never rewrites its bytes, and the
+///    traced slot is updated to the new address, so the bytes reachable here
+///    are the same bytes `open` validated.
+/// 4. The SSO path decodes the same value into the stack buffer, so it carries
+///    the same guarantee.
+///
+/// A `debug_assert` re-checks it in debug builds, which is where a future
+/// fourth writer to the slot would be caught.
 #[inline]
 fn with_input<R>(cursor: *mut ObjectHeader, f: impl FnOnce(&str) -> R) -> Option<R> {
     let value = crate::object::js_object_get_field(cursor, F_INPUT);
     let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
     let bytes =
         unsafe { crate::string::js_string_key_bytes(JSValue::from_bits(value.bits()), &mut sso) }?;
-    let text = std::str::from_utf8(bytes).ok()?;
+    debug_assert!(
+        std::str::from_utf8(bytes).is_ok(),
+        "the cursor's input slot is written once, by `open`, from a value it \
+         validated — a failure here means a second writer appeared"
+    );
+    // SAFETY: invariants 1-4 above.
+    let text = unsafe { std::str::from_utf8_unchecked(bytes) };
     Some(f(text))
 }
 
