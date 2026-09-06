@@ -398,20 +398,6 @@ pub(crate) fn primitive_dispatch(builtin: &[u8], method: &str, recv_chars: u64) 
     });
 }
 
-/// Record one `String` wrapper materialisation and how many index properties
-/// it installed. This is the counter that proves the wrapper fix: the wrapper
-/// count must NOT move (semantics unchanged) while the bytes those wrappers
-/// allocate collapse.
-pub(crate) fn string_wrapper_materialized(indices: u64) {
-    if !gc_diag_enabled() {
-        return;
-    }
-    STRING_WRAPPERS.with(|c| {
-        let (w, i) = c.get();
-        c.set((w + 1, i + indices));
-    });
-}
-
 /// Print the fallback histogram, hottest first.
 pub(super) fn report_primitive_dispatch(label: &str) {
     if !gc_diag_enabled() {
