@@ -182,6 +182,12 @@
     },
     {
       "file": "crates/perry-runtime/src/buffer/header.rs",
+      "name": "TEST_DISABLE_BUFFER_HEADER_CLASS",
+      "verdict": "test_only",
+      "why": "Declared under #[cfg(test)] at crates/perry-runtime/src/buffer/header.rs:281; this Cell<bool> holds only the test knob that disables the managed Buffer header-class fast rejection. It is absent from shipped binaries."
+    },
+    {
+      "file": "crates/perry-runtime/src/buffer/header.rs",
       "name": "UINT8ARRAY_ADDR_RANGE",
       "count": 1,
       "classification": "not_a_gc_pointer",
@@ -293,7 +299,7 @@
         "sources": {
           "crates/perry-runtime/src/gc/census.rs": "388414f9629f196e84673e91bebd04bdcdcabdaa180252d2dfe4b82d1b49ca5a",
           "crates/perry-runtime/src/gc/cycle.rs": "2e2f5adca2229f74409e01a1cb571e2147cd8a33f58d0976711fce98d4777309",
-          "crates/perry-runtime/src/gc/mod.rs": "43523b66595c61516ef6fcd4139d3ec5b4768a13c46ae1470c1d45481eacfdd9",
+          "crates/perry-runtime/src/gc/mod.rs": "6bd07a64a2688b4f1282c0b61085cac3fb499f02159401375a8736f7c15161c8",
           "crates/perry-runtime/src/gc/policy.rs": "dc9242ed40c0aa9c411d1ec0235c0219c6716dd82d56eb4d46578f7e889825d2",
           "crates/perry-runtime/src/gc/progress.rs": "a5ad3971bbe4047229ca57325234780daa85921dbc778e1c08dff4ad07ccfb96"
         }
@@ -364,6 +370,24 @@
       "name": "FORWARDED_STUB_MEMBERSHIP_RECOVERIES",
       "verdict": "not_a_gc_pointer",
       "why": "#9717: monotonic count of array-growth forwarding stubs a budgeted full cycle admitted through `classifier_valid_object_start`, reported as `forwarded_stub_recoveries=` on the PERRY_GC_DIAG `[gc-incremental]` line. A `Cell<u64>` holding a tally, never an address \u2014 the stubs it counts are reached through the worklist, not retained here. Nothing for the collector."
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/trace.rs",
+      "name": "TEST_DISABLE_PAGE_CLASS_EXACT_START",
+      "verdict": "test_only",
+      "why": "Declared under #[cfg(test)] at crates/perry-runtime/src/gc/trace.rs:71; this Cell<bool> holds only the test knob that disables the page-class exact-start fast path. It is absent from shipped binaries."
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/trace.rs",
+      "name": "TEST_PAGE_CLASS_EXACT_START_ANSWERS",
+      "verdict": "test_only",
+      "why": "Declared under #[cfg(test)] at crates/perry-runtime/src/gc/trace.rs:70; this Cell<u64> holds only the test count of exact-start answers returned by the page classifier. It is absent from shipped binaries."
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/trace.rs",
+      "name": "VALID_POINTER_DIAG",
+      "verdict": "not_a_gc_pointer",
+      "why": "Declared at crates/perry-runtime/src/gc/trace.rs:24; this Cell<ValidPointerDiag> holds seven u64 diagnostic counters (`contains`, page hits/rejects, run fallbacks, malloc probes/hits, and enclosing queries). No field can hold a heap pointer, so there is nothing for the collector."
     },
     {
       "file": "crates/perry-runtime/src/hot_diag.rs",
