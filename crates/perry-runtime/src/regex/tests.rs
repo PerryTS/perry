@@ -1281,7 +1281,11 @@ fn regexp_compile_replaces_the_header_source_and_flags() {
 #[test]
 fn regexp_source_round_trips_wtf8_lone_surrogates_from_the_header() {
     let lone_high = [b'a', 0xED, 0xA0, 0x80, b'/', b'b'];
-    let re = js_regexp_new(make_wtf8(&lone_high), make_string(""));
+    let re = js_regexp_new(make_string("placeholder"), make_string(""));
+    let pattern = make_wtf8(&lone_high);
+    unsafe {
+        (*re).pattern_ptr = pattern;
+    }
     let expected = [b'a', 0xED, 0xA0, 0x80, b'\\', b'/', b'b'];
     assert_eq!(string_payload(js_regexp_get_source(re)), expected);
 }
