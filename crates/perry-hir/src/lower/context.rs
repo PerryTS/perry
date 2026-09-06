@@ -1641,7 +1641,7 @@ impl LoweringContext {
             .filter(|(_, module, class)| !exposes_plain_object_fields(module, class))
             .map(|(_, module, class)| (module.as_str(), class.as_str()))
             .or_else(|| {
-                // #9847: a bare assignment (`O = cp.spawn(...)`) tags the
+                // #9847/#9858: assignment-derived native tags use the
                 // RESOLVED binding, not the spelling. Consulted before the
                 // name-keyed module-wide table below, so a same-named binding
                 // in another function is simply a different binding and cannot
@@ -1721,8 +1721,8 @@ impl LoweringContext {
 
     /// #9847: tag the RESOLVED binding `id` as holding a native instance.
     ///
-    /// Used by the bare-assignment path (`O = cp.spawn(...)`) in place of
-    /// `push_module_native_instance`, whose name key was module-wide: in a
+    /// Used by native-instance assignment paths in place of name-keyed
+    /// module-wide registration: in a
     /// minified single-module bundle a single native handle poisoned every
     /// homonym in the program. Keyed on the `LocalId` the target resolves to,
     /// this keeps the cross-function reach the module-wide table was there to

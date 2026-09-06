@@ -165,6 +165,26 @@ fn lower_logical_assignment(
     Ok(Expr::Logical { op, left, right })
 }
 
+fn register_assignment_native_instance(
+    ctx: &mut LoweringContext,
+    var_name: String,
+    module_name: String,
+    class_name: String,
+    register_scoped_fallback: bool,
+) {
+    if let Some(local_id) = ctx.lookup_local(&var_name) {
+        ctx.register_local_id_native_instance(local_id, module_name, class_name);
+        return;
+    }
+
+    // An unresolvable assignment target has no LocalId to key on. Preserve
+    // the former name-keyed registrations for that global fallback path.
+    if register_scoped_fallback {
+        ctx.register_native_instance(var_name.clone(), module_name.clone(), class_name.clone());
+    }
+    ctx.push_module_native_instance((var_name, module_name, class_name));
+}
+
 pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) -> Result<Expr> {
     // Detect assignments from native module calls and register for cross-function tracking.
     // e.g., `mongoClient = await MongoClient.connect(uri)` registers mongoClient as a mongodb instance.
@@ -221,22 +241,13 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
                                         // key on and keeps the old name-keyed
                                         // registration; see the matching arm in
                                         // `lookup_native_instance`.
-                                        match ctx.lookup_local(&var_name) {
-                                            Some(local_id) => {
-                                                ctx.register_local_id_native_instance(
-                                                    local_id,
-                                                    module_name.to_string(),
-                                                    class_name.to_string(),
-                                                );
-                                            }
-                                            None => {
-                                                ctx.push_module_native_instance((
-                                                    var_name.clone(),
-                                                    module_name.to_string(),
-                                                    class_name.to_string(),
-                                                ));
-                                            }
-                                        }
+                                        register_assignment_native_instance(
+                                            ctx,
+                                            var_name.clone(),
+                                            module_name.to_string(),
+                                            class_name.to_string(),
+                                            false,
+                                        );
                                     }
                                 }
                             }
@@ -252,16 +263,13 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
                         .lookup_native_module(class_name_str)
                         .map(|(m, _)| m.to_string());
                     if let Some(module_name) = native_info {
-                        ctx.register_native_instance(
-                            var_name.clone(),
-                            module_name.clone(),
-                            class_name_str.to_string(),
-                        );
-                        ctx.push_module_native_instance((
+                        register_assignment_native_instance(
+                            ctx,
                             var_name.clone(),
                             module_name,
                             class_name_str.to_string(),
-                        ));
+                            true,
+                        );
                     }
                 }
             }
@@ -269,12 +277,11 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
             // e.g., `mongoClient = client` where client was tracked from MongoClient.connect().
             if let ast::Expr::Ident(rhs_ident) = inner_rhs {
                 let rhs_name = rhs_ident.sym.as_ref();
-                if let Some((module, class)) = ctx.lookup_native_instance(rhs_name) {
-                    ctx.push_module_native_instance((
-                        var_name,
-                        module.to_string(),
-                        class.to_string(),
-                    ));
+                let native_info = ctx
+                    .lookup_native_instance(rhs_name)
+                    .map(|(module, class)| (module.to_string(), class.to_string()));
+                if let Some((module, class)) = native_info {
+                    register_assignment_native_instance(ctx, var_name, module, class, false);
                 }
             }
         }
