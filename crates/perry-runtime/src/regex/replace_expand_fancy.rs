@@ -306,7 +306,7 @@ pub extern "C" fn js_string_split_regex_n(
             // GC_STORE_AUDIT(BARRIERED): regex split fallback slot uses the shared array slot-store helper.
             crate::array::store_array_slot(arr, 0, nanboxed);
         }
-        return arr_handle.get_raw_mut_ptr::<ArrayHeader>();
+        return arr_handle.with_mut_ptr::<ArrayHeader, _>(|a| a);
     }
 
     const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
@@ -330,7 +330,7 @@ pub extern "C" fn js_string_split_regex_n(
         let arr = crate::array::js_array_alloc(parts.len() as u32);
         let scope = crate::gc::RuntimeHandleScope::new();
         let arr_handle = scope.root_raw_mut_ptr(arr);
-        (*arr_handle.get_raw_mut_ptr::<ArrayHeader>()).length = parts.len() as u32;
+        arr_handle.with_mut_ptr::<ArrayHeader, _>(|a| (*a).length = parts.len() as u32);
 
         for (i, part) in parts.iter().enumerate() {
             let nanboxed = match part {
@@ -340,11 +340,12 @@ pub extern "C" fn js_string_split_regex_n(
                 }
                 None => TAG_UNDEFINED,
             };
-            let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
+            // Re-read per iteration: `js_string_from_str` above allocates.
+            let arr = arr_handle.with_mut_ptr::<ArrayHeader, _>(|a| a);
             // GC_STORE_AUDIT(BARRIERED): regex split result slot uses the shared array slot-store helper.
             crate::array::store_array_slot(arr, i, nanboxed);
         }
-        arr_handle.get_raw_mut_ptr::<ArrayHeader>()
+        arr_handle.with_mut_ptr::<ArrayHeader, _>(|a| a)
     }
 }
 
