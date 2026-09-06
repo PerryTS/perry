@@ -357,24 +357,40 @@ pub extern "C" fn js_segments_view_regexp_test(cursor: f64, regex: f64) -> f64 {
     }
     // `is RegExp` at the call site does not rule out a patched
     // `RegExp.prototype.test`, so the runtime re-checks and declines.
-    if !crate::object::regex_proto_thunks::regexp_prototype_test_is_canonical(regex) {
+    //
+    // Both helpers below are `#[cfg(feature = "regex-engine")]`. This entry
+    // point is NOT gated with them: it is `#[no_mangle]`, so the symbol has to
+    // exist in every configuration or a binary that emits a call to it fails to
+    // link. Without the engine the fast path simply declines, which is the same
+    // contract every other decline here has — the caller materialises and calls
+    // `RegExp.prototype.test` itself.
+    #[cfg(not(feature = "regex-engine"))]
+    {
+        let _ = (c, re);
         bump(&REGEXP_TEST_DECLINED);
         return undef;
     }
-    let start = num_field(c, F_BYTE_START);
-    let end = num_field(c, F_BYTE_END);
-    let verdict = with_input(c, |text| {
-        crate::regex::regexp_test_str_bounded(re, &text[start..end])
-    })
-    .flatten();
-    match verdict {
-        Some(v) => {
-            bump(&REGEXP_TEST_ACCEPTED);
-            f64::from_bits(JSValue::bool(v).bits())
-        }
-        None => {
+    #[cfg(feature = "regex-engine")]
+    {
+        if !crate::object::regex_proto_thunks::regexp_prototype_test_is_canonical(regex) {
             bump(&REGEXP_TEST_DECLINED);
-            undef
+            return undef;
+        }
+        let start = num_field(c, F_BYTE_START);
+        let end = num_field(c, F_BYTE_END);
+        let verdict = with_input(c, |text| {
+            crate::regex::regexp_test_str_bounded(re, &text[start..end])
+        })
+        .flatten();
+        match verdict {
+            Some(v) => {
+                bump(&REGEXP_TEST_ACCEPTED);
+                f64::from_bits(JSValue::bool(v).bits())
+            }
+            None => {
+                bump(&REGEXP_TEST_DECLINED);
+                undef
+            }
         }
     }
 }
