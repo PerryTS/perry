@@ -1052,8 +1052,16 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     module.declare_function("js_response_bytes", I64, &[DOUBLE]);
     module.declare_function("js_response_form_data", I64, &[DOUBLE]);
     module.declare_function("js_form_data_new", DOUBLE, &[]);
-    module.declare_function("js_form_data_append", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
-    module.declare_function("js_form_data_set", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_form_data_append",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE, DOUBLE],
+    );
+    module.declare_function(
+        "js_form_data_set",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE, DOUBLE],
+    );
     module.declare_function("js_form_data_delete", DOUBLE, &[DOUBLE, I64]);
     module.declare_function("js_form_data_get", DOUBLE, &[DOUBLE, I64]);
     module.declare_function("js_form_data_get_all", DOUBLE, &[DOUBLE, I64]);
