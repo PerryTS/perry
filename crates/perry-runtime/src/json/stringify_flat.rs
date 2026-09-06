@@ -23,10 +23,10 @@ impl Piece {
         }
     }
 
-    pub(super) fn lengths(&self) -> (u32, u32) {
+    pub(super) fn lengths(self) -> (u32, u32) {
         match self {
             Self::String { bytes, units } => (bytes + 2, units + 2),
-            Self::Inline { len, .. } => (*len, *len),
+            Self::Inline { len, .. } => (len, len),
         }
     }
 }
@@ -101,13 +101,11 @@ pub(super) unsafe fn scalar_piece(bits: u64) -> Option<Piece> {
     Some(Piece::inline(digits.format_finite(number).as_bytes()))
 }
 
-// The native plan outlives emission. Borrowing it avoids copying each 40-byte
-// piece into a temporary and then copying its inline text a second time.
-pub(super) unsafe fn emit_piece(piece: &Piece, bits: u64, output: *mut u8) -> usize {
+pub(super) unsafe fn emit_piece(piece: Piece, bits: u64, output: *mut u8) -> usize {
     match piece {
         Piece::Inline { bytes, len } => {
-            std::ptr::copy_nonoverlapping(bytes.as_ptr(), output, *len as usize);
-            *len as usize
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), output, len as usize);
+            len as usize
         }
         Piece::String { bytes, .. } => {
             let mut scratch = [0; crate::value::SHORT_STRING_MAX_LEN];
@@ -115,9 +113,9 @@ pub(super) unsafe fn emit_piece(piece: &Piece, bits: u64, output: *mut u8) -> us
                 crate::string::str_bytes_from_jsvalue(f64::from_bits(bits), &mut scratch)
                     .expect("prevalidated string slot");
             output.write(b'"');
-            std::ptr::copy_nonoverlapping(source, output.add(1), *bytes as usize);
-            output.add(*bytes as usize + 1).write(b'"');
-            *bytes as usize + 2
+            std::ptr::copy_nonoverlapping(source, output.add(1), bytes as usize);
+            output.add(bytes as usize + 1).write(b'"');
+            bytes as usize + 2
         }
     }
 }
@@ -231,14 +229,14 @@ unsafe fn emit_object(obj: *const crate::ObjectHeader, fields: usize) -> Option<
             at += 1;
         }
         at += emit_piece(
-            &key_plan[i],
+            key_plan[i],
             slot(keys.cast(), std::mem::size_of::<crate::ArrayHeader>(), i),
             output.add(at),
         );
         output.add(at).write(b':');
         at += 1;
         at += emit_piece(
-            &value_plan[i],
+            value_plan[i],
             slot(obj.cast(), std::mem::size_of::<crate::ObjectHeader>(), i),
             output.add(at),
         );

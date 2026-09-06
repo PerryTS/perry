@@ -142,26 +142,26 @@ unsafe fn emit_record(obj: *const crate::ObjectHeader, fields: usize) -> Option<
             at += 1;
         }
         at += emit_piece(
-            &key_plan[i],
+            key_plan[i],
             slot(keys.cast(), ARRAY_BYTES, i),
             output.add(at),
         );
         output.add(at).write(b':');
         at += 1;
         let bits = slot(obj.cast(), OBJECT_BYTES, i);
-        match &value_plan[i] {
+        match value_plan[i] {
             Field::Scalar(value) => at += emit_piece(value, bits, output.add(at)),
             Field::Array { start, len } => {
                 let arr = (bits & POINTER_MASK) as *const crate::ArrayHeader;
                 output.add(at).write(b'[');
                 at += 1;
-                for j in 0..*len {
+                for j in 0..len {
                     if j != 0 {
                         output.add(at).write(b',');
                         at += 1;
                     }
                     at += emit_piece(
-                        &elements[*start + j],
+                        elements[start + j],
                         slot(arr.cast(), ARRAY_BYTES, j),
                         output.add(at),
                     );
