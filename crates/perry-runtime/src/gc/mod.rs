@@ -160,7 +160,6 @@ mod copying_first_cycle;
 mod copying_pointer_set;
 mod diag_sites;
 pub(crate) use diag_sites::primitive_dispatch as diag_primitive_dispatch;
-pub(crate) use diag_sites::string_wrapper_materialized as diag_string_wrapper_materialized;
 /// #8174: shared validation for the TARGET of a forwarding pointer.
 mod forwarding;
 /// Per-scanner root attribution for the copied-minor root scan (#7915).
