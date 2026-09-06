@@ -40,10 +40,10 @@ All 133 runtime tests selected by the JSON filter pass. New record-leaf tests
 check exact output and 1,000 emissions without managed growth, extra handles,
 collection or stringify-stack changes; complex children and the cold prototype
 probe decline before output. The root-holder inventory passes with its previous
-unverified frontier unchanged. The preceding corrected scalar build passes 30
-compiled Node comparisons and 18 moving-GC stress runs. The new record release
-still needs its 31 compiled comparisons, 20 moving-GC stress runs and qualified
-CPU/RSS measurements. [Current validation evidence](results/data-record/validation.json).
+unverified frontier unchanged. The record release passes all 31 compiled Node comparisons and all 20 moving-GC
+stress runs (10 subjects, seeds 17/9013), with verified copying and object
+movement. The previously failing getter/enumerability witness now matches Node.
+Qualified CPU/RSS measurements remain pending. [Current validation evidence](results/data-record/validation.json).
 
 GC production sources, trigger policy and gc_bump_malloc_trigger remain unchanged
 from v0.5.1520 (454daac4f). parse_api.rs deliberately changes: the scalar decode

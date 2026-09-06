@@ -1,0 +1,9 @@
+{
+  "recorded_busy_process_list_rejected": true,
+  "recorded_quiet_process_list_accepted": true,
+  "busy_matches": [
+    "46676 100.0 /Users/perry/ccperf/bin/cc_tenure_lockfix"
+  ],
+  "limit_unchanged": 2.5,
+  "periodic_external_monitoring_still_required": true
+}

@@ -8,17 +8,21 @@ if custom_command==[]: raise SystemExit('Expected a command after --')
 phases=['custom'] if custom_command else sys.argv[1:] or ['timing','memory','tape']
 lock=Path.home()/'bench.lock'
 token='json-perf-'+str(os.getpid())+'-'+str(int(time.time()))
+def competing_workloads(processes):
+    return [line.strip() for line in processes.splitlines()
+            if any(name in line for name in ['/rustc','/cargo','/ccperf/','/worker'])]
 try: lock.mkdir()
 except FileExistsError:
     print('BUSY', (lock/'owner').read_text());sys.exit(2)
 (lock/'owner').write_text(token)
-meta={'owner':token,'load_before':os.getloadavg(),'started_utc':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime())}
+meta={'owner':token,'load_before':os.getloadavg(),'started_utc':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime()),'quiet_gate_passed':False}
 if custom_command: meta['command']=custom_command
 try:
     print('ACQUIRED',token,'load',os.getloadavg(),flush=True)
     if os.getloadavg()[0]>2.5: raise RuntimeError('Host too busy for timing')
     ps=subprocess.check_output(['ps','-Ao','pid,pcpu,comm'],text=True)
-    if any('/rustc' in line or '/cargo' in line for line in ps.splitlines()): raise RuntimeError('Compiler running on measurement host')
+    meta['competing_workloads_before']=competing_workloads(ps)
+    if meta['competing_workloads_before']: raise RuntimeError('Competing workload on measurement host: '+repr(meta['competing_workloads_before']))
     (root/'results/processes-before.txt').write_text(ps)
     for phase in phases:
         with (root/(phase+'.log')).open('w') as log:
@@ -28,7 +32,8 @@ try:
     meta['load_after']=os.getloadavg()
     ps=subprocess.check_output(['ps','-Ao','pid,pcpu,comm'],text=True)
     (root/'results/processes-after.txt').write_text(ps)
-    meta['quiet_gate_passed']=meta['load_after'][0]<=2.5 and not any('/rustc' in line or '/cargo' in line for line in ps.splitlines())
+    meta['competing_workloads_after']=competing_workloads(ps)
+    meta['quiet_gate_passed']=meta['load_after'][0]<=2.5 and not meta['competing_workloads_after']
     print('QUIET_GATE',meta['quiet_gate_passed'],flush=True)
 finally:
     meta['finished_utc']=time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime())
