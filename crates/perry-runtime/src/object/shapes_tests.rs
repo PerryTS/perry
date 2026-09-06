@@ -777,8 +777,9 @@ mod descriptor_tests_8067 {
             .expect("shape range unexpectedly exhausted");
         let unrelated = shape_descriptor_ensure(unrelated_keys as *const ArrayHeader, 1, 1)
             .expect("shape range unexpectedly exhausted");
-        // Before retirement every version is resolvable and the family lists
-        // them in mint order.
+        // Before retirement every version is resolvable. Adds append, so the
+        // family happens to be in mint order here; that is a property of the
+        // ADD path, not a contract (see the retirement assertion below).
         assert_eq!(
             test_shape_ids_for_keys(keys),
             vec![stale_a, stale_b, cached, current]
@@ -795,7 +796,26 @@ mod descriptor_tests_8067 {
         );
         assert!(shape_descriptor_by_id(current).is_some());
         assert!(shape_descriptor_by_id(unrelated).is_some());
-        assert_eq!(test_shape_ids_for_keys(keys), vec![cached, current]);
+        // MEMBERSHIP, not order. #9706's contract is "the growth history is
+        // retired behind the version its owner now carries, except one an
+        // optimization cache permanently owns" — a statement about WHICH ids
+        // survive. The order they survive in is not part of it, and no
+        // production reader of `families` depends on it: every one either
+        // filters the whole list, snapshots the whole list, aggregates it, or
+        // (the two rekey walks) picks "a carrier if the family has one, else
+        // any present member" and feeds that single choice to exactly one
+        // expression, `old_carrier || cache_carrier`, whose value is the same
+        // for every carrier and the same for every non-carrier. The two
+        // helpers this test uses are `#[cfg(test)]` renderings of the list.
+        //
+        // This assertion compared against a `Vec` because the helper returns
+        // one, which pinned mint order by accident; `families` now removes by
+        // swapping the last element into the hole, so a survivor can move.
+        let mut survivors = test_shape_ids_for_keys(keys);
+        survivors.sort_unstable();
+        let mut expected = vec![cached, current];
+        expected.sort_unstable();
+        assert_eq!(survivors, expected);
         // Retired facts re-intern as FRESH ids: nothing can resolve the old ones.
         let reminted = shape_descriptor_ensure(keys as *const ArrayHeader, 1, 1)
             .expect("shape range unexpectedly exhausted");
