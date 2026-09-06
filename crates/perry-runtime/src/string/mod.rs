@@ -117,6 +117,7 @@ mod pad;
 mod raw;
 mod slice_ops;
 mod split;
+mod utf16_count;
 #[cfg(feature = "regex-engine")]
 pub(crate) use split::{spec_fancy_regex_split, spec_regex_split};
 
@@ -475,6 +476,9 @@ pub(crate) fn compute_utf16_len(data: *const u8, byte_len: u32) -> u32 {
     // ASCII fast path: if no byte has high bit set, utf16_len == byte_len
     if bytes.iter().all(|&b| b < 0x80) {
         return byte_len;
+    }
+    if bytes.len() >= 64 {
+        return utf16_count::count_bytes(bytes);
     }
     match str::from_utf8(bytes) {
         Ok(s) => s.encode_utf16().count() as u32,

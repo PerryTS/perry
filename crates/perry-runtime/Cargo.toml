@@ -315,6 +315,7 @@ ryu.workspace = true
 # ECMAScript shortest-number spelling into a stack buffer (JSON hot path).
 # Already present in the workspace lockfile through SWC.
 ryu-js = "1.0.3"
+simdutf8 = "0.1.5"
 base64.workspace = true
 hostname = { version = "0.4", optional = true }
 dirs = { workspace = true, optional = true }

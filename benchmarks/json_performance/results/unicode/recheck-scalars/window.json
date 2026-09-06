@@ -1,0 +1,21 @@
+{
+  "owner": "json-perf-12151-1788685345",
+  "load_before": [
+    1.39990234375,
+    1.57080078125,
+    1.576171875
+  ],
+  "started_utc": "2026-09-06T09:02:25Z",
+  "command": [
+    "python3",
+    "-c",
+    "import subprocess\nfor fixture in ['null','string_a']:\n subprocess.run(['python3','run.py','--phase','timing','--filter',fixture,'--operations','stringify','--baseline-worker','.work/baseline-worker','--repeat','7','--results-dir','results/recheck-scalars/'+fixture],check=True)\n"
+  ],
+  "load_after": [
+    1.6455078125,
+    1.6171875,
+    1.59228515625
+  ],
+  "quiet_gate_passed": true,
+  "finished_utc": "2026-09-06T09:02:32Z"
+}

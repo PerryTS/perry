@@ -1,8 +1,9 @@
 This study measures `JSON.parse` and `JSON.stringify` in Perry, Node.js and Bun, and identifies an implementation path for improving Perry. Read [the analysis and roadmap](REPORT.md), [all CPU/wall/RSS tables](results/full-tables.md), or [the raw-data summary](results/summary.csv).
 
-Latest: [bounded parse-shape retention](CACHE.md), following [number formatting
-and sustained-load findings](NUMBERS.md), with an [explicit inventory of every
-remaining CPU/RSS gap](results/cache/parity.md).
+Latest candidate: [vectorized Unicode validation and counting](UNICODE.md),
+following [bounded parse-shape retention](CACHE.md) and [number formatting](NUMBERS.md).
+The [full CPU/RSS inventory](results/unicode/parity.md) and documented tiny-call
+regressions keep the performance acceptance work visible.
 
 The recorded run used an Apple M1 / 8 GiB benchmark Mac, Node 26.5.1, Bun 1.3.14, and pinned Perry 0.5.1520 development artifacts. The original audit was run from a dirty 0.5.1512 checkout against those pinned artifacts; its results are explicitly **not** measurements of a fresh build of this branch. Artifact hashes and source provenance are in [toolchain.json](results/toolchain.json). The original audit did not modify runtime/compiler source. The subsequent fast-path implementation and fresh runtime A/B are described in [FASTPATHS.md](FASTPATHS.md).
 

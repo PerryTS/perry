@@ -1,0 +1,53 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.47s
+     Running unittests src/lib.rs (/Users/amlug/projects/perry/codex-json-changed-target/debug/build/perry-runtime/a833890229e85b92/out/perry_runtime-a833890229e85b92)
+
+running 47 tests
+test json::parser::scan_tests::flat_scalar_array_hint_preserves_depth_even_for_malformed_input ... ok
+test json::parser::scan_tests::parse_shape_cache_bounds_retained_keys_and_keeps_small_shape_hits ... ok
+test json::parser::scan_tests::quoted_runs_escapes_and_truncations_keep_depth_semantics ... ok
+test json::parser::scan_tests::random_malformed_bytes_match_depth_oracle ... ok
+test json::parser::scan_tests::wide_object_duplicates_keep_first_position_and_last_value ... ok
+test json::replacer::forwarded_array_pretty_print_tests::pretty_stringify_resolves_array_grown_past_inline_capacity ... ok
+test json::simd::tests::adjacent_byte_borrows_and_unsigned_controls ... ok
+test json::simd::tests::every_byte_at_vector_word_and_tail_boundaries ... ok
+test json::simd::tests::random_byte_strings_match_scalar_contracts ... ok
+test json::stringify_scalars::tests::control_escapes_append_to_existing_output_without_temporary_formatting ... ok
+test json::stringify_scalars::tests::json_number_spelling_matches_ecmascript_boundaries ... ok
+test json::stringify_scalars::tests::tagged_int32_json_numbers_keep_their_signed_value ... ok
+test json::stringify_scalars::tests::vector_escaping_matches_json_encoder_at_every_boundary ... ok
+test json::tests::direct_parse_array_numeric_layout_preserves_and_downgrades ... ok
+test json::tests::direct_parse_shared_shape_preserves_duplicate_key_semantics ... ok
+test json::tests::direct_parse_shared_shape_roundtrips_array_records ... ok
+test json::tests::direct_parser_number_bits_match_strtod ... ok
+test json::tests::direct_parser_validates_json_while_building_the_value ... ok
+test json::tests::nesting_depth::iterative_path_still_rejects_malformed_json ... ok
+test json::tests::nesting_depth::parse_switches_to_the_iterative_path_past_the_recursive_threshold ... ok
+test json::tests::nesting_depth::parses_three_hundred_thousand_levels_on_a_small_worker_stack ... ok
+test json::tests::nesting_depth::rejects_nesting_beyond_the_iterative_resource_budget ... ok
+test json::tests::nesting_depth::the_scan_counts_only_structural_brackets ... ok
+test json::tests::parse_result_direct_validation_rejects_malformed_and_trailing_input ... ok
+test json::tests::stringify_3byte_utf8_below_surrogate_block_is_unchanged ... ok
+test json::tests::stringify_array_keeps_every_property_of_name_grown_elements ... ok
+test json::tests::stringify_array_keeps_nested_objects_and_arrays_past_the_inline_floor ... ok
+test json::tests::stringify_array_omits_a_function_valued_property_of_a_later_element ... ok
+test json::tests::stringify_array_round_trips_every_field_count_across_the_inline_floor ... ok
+test json::tests::stringify_array_stops_at_the_last_real_key_when_slots_were_pre_sized ... ok
+test json::tests::stringify_buffer_pretty_indents_type_and_data ... ok
+test json::tests::stringify_empty_object_emits_braces_not_null ... ok
+test json::tests::stringify_high_surrogate_then_bmp_still_escapes_high ... ok
+test json::tests::stringify_int32_array_elements_emit_integers_not_null ... ok
+test json::tests::stringify_int32_fields_emit_integers_not_null ... ok
+test json::tests::stringify_map_serializes_as_empty_object ... ok
+test json::tests::stringify_nested_empty_object_does_not_segfault ... ok
+test json::tests::stringify_non_ascii_output_keeps_utf16_len_distinct_from_bytes ... ok
+test json::tests::stringify_pairs_adjacent_wtf8_surrogates_as_astral_utf8 ... ok
+test json::tests::stringify_positive_subnormal_is_a_number_not_a_pointer ... ok
+test json::tests::stringify_set_serializes_as_empty_object ... ok
+test json::tests::stringify_subnormal_object_and_array_members ... ok
+test json::tests::stringify_typed_array_emits_node_index_shape ... ok
+test json::tests::stringify_untagged_raw_object_pointer_still_serializes ... ok
+test json::tests::stringify_uses_two_char_short_forms_for_backspace_and_formfeed ... ok
+test json::tests::stringify_wtf8_lone_surrogate_emits_unicode_escape ... ok
+test json::tests::untagged_pointer_bits_cannot_separate_pointers_from_subnormals ... ok
+
+test result: ok. 47 passed; 0 failed; 0 ignored; 0 measured; 3110 filtered out; finished in 2.12s

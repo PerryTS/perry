@@ -1,0 +1,6 @@
+{
+  "counter_sha256": "a17732aaeb58072d9134480695b9d47b210cacd7b75ca9e34cea8672832f3463",
+  "wtf8_fallback_sha256": "d3a475257a39b59c1841d73befdece618ac298e11f5f6acc17eb634436964d0d",
+  "corpus_sha256": "d6a1b972d322f7cda8de67a05f68d1ccdd915afcd064a30fc0f99df3ff588324",
+  "result": "PASS 33793 validated/WTF-8 counts; zero temporary allocations\n"
+}

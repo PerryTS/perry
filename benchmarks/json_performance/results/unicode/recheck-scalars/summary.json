@@ -1,0 +1,46 @@
+{
+  "null": {
+    "baseline": {
+      "median_us": 0.0633655,
+      "min_us": 0.0632885,
+      "max_us": 0.0633775
+    },
+    "perry": {
+      "median_us": 0.065944,
+      "min_us": 0.0658195,
+      "max_us": 0.0660195
+    },
+    "node": {
+      "median_us": 0.027236,
+      "min_us": 0.027216,
+      "max_us": 0.027366
+    },
+    "bun": {
+      "median_us": 0.028773,
+      "min_us": 0.028693,
+      "max_us": 0.028856
+    }
+  },
+  "string_a": {
+    "baseline": {
+      "median_us": 0.071616,
+      "min_us": 0.0715455,
+      "max_us": 0.0717555
+    },
+    "perry": {
+      "median_us": 0.07446,
+      "min_us": 0.074368,
+      "max_us": 0.0745665
+    },
+    "node": {
+      "median_us": 0.030045,
+      "min_us": 0.030008,
+      "max_us": 0.0301015
+    },
+    "bun": {
+      "median_us": 0.0294445,
+      "min_us": 0.028468,
+      "max_us": 0.0296535
+    }
+  }
+}

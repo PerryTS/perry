@@ -1,0 +1,32 @@
+{
+  "owner": "json-perf-9548-1788684418",
+  "load_before": [
+    1.681640625,
+    1.8095703125,
+    1.69384765625
+  ],
+  "started_utc": "2026-09-06T08:46:58Z",
+  "command": [
+    "python3",
+    "run.py",
+    "--phase",
+    "timing",
+    "--filter",
+    "null",
+    "--operations",
+    "stringify",
+    "--baseline-worker",
+    ".work/baseline-worker",
+    "--repeat",
+    "7",
+    "--results-dir",
+    "results/recheck-null"
+  ],
+  "load_after": [
+    1.787109375,
+    1.8291015625,
+    1.701171875
+  ],
+  "quiet_gate_passed": true,
+  "finished_utc": "2026-09-06T08:47:02Z"
+}

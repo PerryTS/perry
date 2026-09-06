@@ -1,5 +1,8 @@
 # Bound retained JSON parse-shape metadata
 
+Follow-up: [Unicode validation and counting](UNICODE.md) measures a further
+candidate. This document preserves the cache-only results.
+
 The parse-shape cache now retains at most **4,096 total key slots**, in
 addition to its existing 256-entry limit. Shapes wider than that bypass the
 cache. Smaller shapes still reuse matching entries; an entry that would exceed
