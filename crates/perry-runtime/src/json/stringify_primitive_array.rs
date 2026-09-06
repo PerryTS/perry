@@ -30,7 +30,33 @@ pub(super) unsafe fn try_emit(arr: *const crate::ArrayHeader, buf: &mut String) 
     let len = (*arr).length as usize;
     let elements = std::slice::from_raw_parts(data, len);
     // The existing layout flag proves every live slot is an unboxed number,
-    // with neither holes nor callbacks. No validation pass is needed.
+    // with neither holes nor callbacks. Otherwise validate before output so
+    // a complex final element cannot make the caller serialize a prefix twice.
+    if flags & crate::gc::GC_ARRAY_RAW_F64_LAYOUT == 0
+        && !elements.iter().all(|value| is_primitive(value.to_bits()))
+    {
+        return false;
+    }
+    emit_validated(arr, buf);
+    true
+}
+
+/// Emit a dense primitive array whose layout, special properties and element
+/// tags have already been checked. The record preflight proves these conditions
+/// for every child before writing anything, so it need not repeat that work.
+///
+/// # Safety
+/// `arr` must remain a resolved, live dense array with no descriptors, named
+/// properties or holes. Its toJSON must be absent or already handled. Every
+/// live slot must be a primitive accepted above (or a raw-f64 layout number).
+/// No callback, managed allocation or GC safepoint may occur between validation
+/// and this call. This function only grows the native output buffer.
+#[inline(always)]
+pub(super) unsafe fn emit_validated(arr: *const crate::ArrayHeader, buf: &mut String) {
+    let header = (arr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+    let flags = (*header)._reserved;
+    let data = (arr as *const u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *const f64;
+    let elements = std::slice::from_raw_parts(data, (*arr).length as usize);
     if flags & crate::gc::GC_ARRAY_RAW_F64_LAYOUT != 0 {
         buf.push('[');
         for (i, &number) in elements.iter().enumerate() {
@@ -40,13 +66,7 @@ pub(super) unsafe fn try_emit(arr: *const crate::ArrayHeader, buf: &mut String) 
             write_number(buf, number);
         }
         buf.push(']');
-        return true;
-    }
-    // Validate before emitting, so an array ending in a complex value does
-    // not speculatively serialize its entire prefix twice. Arrays of records
-    // fail on their first element without growing the output buffer.
-    if !elements.iter().all(|value| is_primitive(value.to_bits())) {
-        return false;
+        return;
     }
     buf.push('[');
     for (i, &value) in elements.iter().enumerate() {
@@ -82,7 +102,6 @@ pub(super) unsafe fn try_emit(arr: *const crate::ArrayHeader, buf: &mut String) 
         }
     }
     buf.push(']');
-    true
 }
 
 #[inline]

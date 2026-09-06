@@ -4,6 +4,14 @@ no-regression acceptance remain open. The record release now has qualified
 full-matrix and paired measurements; it reaches 11/38 CPU, 58/74 peak RSS and
 28/36 retained RSS targets.**
 
+A subsequent change reuses the record preflight when emitting primitive-array
+children. It passes 133 runtime tests, 31 compiled Node comparisons and 20
+moving-GC stress runs, and removes about 5.5% of local process instructions on
+16 KB/1 MB records. Its first benchmark admission was rejected before taking
+measurements because a foreign worker had started. **CPU/RSS results below
+describe the preceding record release, not this unmeasured follow-up.**
+[Validation-reuse implementation and evidence](results/record-array-proof/README.md).
+
 Successful inline scalar parses decode before the existing pending-collection
 hook. They skip the ordinary parser's suppression/rebaseline cycle while
 preserving pending GC debt and the oversized parse-key cache/ring cleanup.
@@ -88,9 +96,19 @@ about 19% fewer process instructions for 1 MB records but only 6% fewer for
 entering GC from the benchmark loop's safepoint, versus 696 entering stringify.
 This supports GC as a major contributor to the 20 MB cost; it is not an exact
 GC CPU percentage or an accepted speed measurement. JSON's final output copy
-accounts for only 37 samples. The next JSON-specific experiment removes
-repeated primitive-array validation inside the already validated record walk.
+accounts for only 37 samples. The follow-up described above removes repeated
+primitive-array validation inside the already validated record walk.
 [Local diagnostics and limitations](results/data-record/README.md).
+
+A separate local parse diagnostic records only 0.23% more instructions for
+numeric parsing than Unicode, despite its qualified 8.03% CPU regression.
+All three instrumented builds report nine old-allocation reclamation scans,
+8 MiB ending arena capacity and roughly 3.35 MB live bytes for the same 128
+calls. This does not prove equal GC time, but it does not support attributing
+the whole slowdown to extra parser instructions or more of those GC scans.
+Tiny-object parse instead retires 2.33% more instructions than tape, directing
+attention to scalar eligibility and wrapper overhead on the container path.
+[Parse counters and diagnostic traces](results/data-record/local-parse-diagnostic/README.md).
 
 GC production sources, trigger policy and gc_bump_malloc_trigger remain unchanged
 from v0.5.1520 (454daac4f). parse_api.rs deliberately changes: the scalar decode

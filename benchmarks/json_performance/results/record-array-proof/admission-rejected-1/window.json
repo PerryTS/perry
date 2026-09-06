@@ -1,0 +1,14 @@
+{
+  "owner": "json-perf-59221-1788705267",
+  "load_before": [
+    1.697265625,
+    1.556640625,
+    1.650390625
+  ],
+  "started_utc": "2026-09-06T14:34:27Z",
+  "quiet_gate_passed": false,
+  "competing_workloads_before": [
+    "58458 100.0 /Users/perry/ccperf/bin/cc_9881_swapremove"
+  ],
+  "finished_utc": "2026-09-06T14:34:27Z"
+}

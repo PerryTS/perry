@@ -152,11 +152,7 @@ pub(super) unsafe fn try_emit(
         buf.push_str(&template.prefixes[i]);
         if !arrays[i].is_null() {
             // No callbacks or managed allocation can invalidate validation.
-            let emitted = super::stringify_primitive_array::try_emit(arrays[i], buf);
-            assert!(
-                emitted,
-                "validated primitive array changed without a callback"
-            );
+            super::stringify_primitive_array::emit_validated(arrays[i], buf);
             continue;
         }
         let bits = values[i];

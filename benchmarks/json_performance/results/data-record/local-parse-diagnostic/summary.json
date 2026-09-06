@@ -1,0 +1,35 @@
+[
+  {
+    "fixture": "numbers_1m",
+    "calls": 128,
+    "median_process_instructions": {
+      "unicode": 3142420681,
+      "tape-scan": 3145650129,
+      "data-record": 3149753291
+    },
+    "record_vs_unicode": 1.0023334272347224,
+    "record_vs_tape": 1.0013043923614304
+  },
+  {
+    "fixture": "heterogeneous_1m",
+    "calls": 128,
+    "median_process_instructions": {
+      "unicode": 3406865855,
+      "tape-scan": 3458647898,
+      "data-record": 3457907845
+    },
+    "record_vs_unicode": 1.0149820956187898,
+    "record_vs_tape": 0.9997860282336263
+  },
+  {
+    "fixture": "tiny_object",
+    "calls": 500000,
+    "median_process_instructions": {
+      "unicode": 2587039609,
+      "tape-scan": 2541439818,
+      "data-record": 2600722099
+    },
+    "record_vs_unicode": 1.005288859881542,
+    "record_vs_tape": 1.023326258044801
+  }
+]

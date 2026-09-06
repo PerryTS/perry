@@ -58,6 +58,7 @@ fn data_records_decline_complex_children_before_output() {
             "{\"id\":1,\"tags\":[1,{\"x\":2}]}",
             "{\"id\":1,\"tags\":[1,[2]]}",
             "{\"id\":1,\"tags\":{\"x\":2}}",
+            "{\"first\":[1,2,3],\"last\":[4,{\"x\":5}]}",
         ] {
             with_record(text, |obj, template| {
                 let mut output = String::from("unchanged");

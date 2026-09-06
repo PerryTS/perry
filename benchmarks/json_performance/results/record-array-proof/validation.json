@@ -1,0 +1,15 @@
+{
+  "runtime_json_tests": 133,
+  "compiled_fixtures": 31,
+  "compiled_matches_node": true,
+  "gc_stress_runs": 20,
+  "all_outputs_match_and_live_movement": true,
+  "root_inventory_exit": 0,
+  "qualified_performance": "pending: first admission rejected before measurements",
+  "goal_complete": false,
+  "local_instruction_diagnostic": {
+    "trials": 36,
+    "purpose": "process-wide counters only, not qualified CPU/RSS measurements",
+    "all_processes_successful": true
+  }
+}

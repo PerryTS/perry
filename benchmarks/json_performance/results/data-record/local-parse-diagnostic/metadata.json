@@ -1,0 +1,28 @@
+{
+  "purpose": "Local parse instruction/GC diagnostic, not qualified CPU/RSS measurements. Process-wide instructions include startup and warmup. GC diagnostic executions separately enable PERRY_GC_DIAG=1.",
+  "cases": [
+    [
+      "numbers_1m",
+      128
+    ],
+    [
+      "heterogeneous_1m",
+      128
+    ],
+    [
+      "tiny_object",
+      500000
+    ]
+  ],
+  "cpu": "Apple M1 Max",
+  "load": [
+    94.951171875,
+    72.248046875,
+    51.3603515625
+  ],
+  "worker_sha256": {
+    "unicode": "85189dd09e2f34151351546aa751100e0480ef8e110c8380dfbb10d53755d938",
+    "tape-scan": "21a1e75beb47e2a12ae066d4991abf7878e48c297b3de55bd5514077f209e7e5",
+    "data-record": "233440ca71ca8411da86db387e8b0898dadda26316e60bf944d4023d81433508"
+  }
+}

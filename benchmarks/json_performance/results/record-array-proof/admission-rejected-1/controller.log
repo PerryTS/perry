@@ -1,0 +1,6 @@
+ACQUIRED json-perf-59221-1788705267 load (1.697265625, 1.556640625, 1.650390625)
+RELEASED
+Traceback (most recent call last):
+  File "/Users/perry/json-record-array-proof-20260906-codex/with_lock.py", line 25, in <module>
+    if meta['competing_workloads_before']: raise RuntimeError('Competing workload on measurement host: '+repr(meta['competing_workloads_before']))
+RuntimeError: Competing workload on measurement host: ['58458 100.0 /Users/perry/ccperf/bin/cc_9881_swapremove']

@@ -1,0 +1,9 @@
+[
+  {
+    "utc": "2026-09-06T14:34:27Z",
+    "monitor_exit": 0,
+    "external": [
+      "58458 58456  98.1 /Users/perry/ccperf/bin/cc_9881_swapremove"
+    ]
+  }
+]
