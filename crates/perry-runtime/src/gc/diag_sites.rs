@@ -369,22 +369,18 @@ pub(super) fn report_charges(label: &str) {
 // whose method the native dispatch tower does not recognise falls through to
 // `native_call_method::call_primitive_builtin_prototype_method`: it resolves
 // `globalThis.<Builtin>.prototype[<method>]` and, for a SLOPPY callee, boxes
-// the receiver with `ToObject`. For a string that wrapper materialises one own
-// property per UTF-16 code unit. So a single unrecognised method name on a hot
-// render path turns into O(length) allocations per call, and the only way to
-// tell WHICH names those are is to count them at the fork.
+// the receiver with `ToObject`. A string wrapper exposes one virtual own index
+// per UTF-16 code unit, so tracking receiver length shows the scale of the
+// boxed surface alongside the method names that reach this fork.
 
 crate::perry_thread_local! {
     /// `"<Builtin>.prototype.<method>" -> (calls, receiver_utf16_chars)`.
     static PRIMITIVE_DISPATCH: RefCell<HashMap<String, (u64, u64)>> =
         RefCell::new(HashMap::new());
-    /// String wrappers actually materialised: (wrappers, index properties).
-    static STRING_WRAPPERS: Cell<(u64, u64)> = const { Cell::new((0, 0)) };
 }
 
 /// Record one trip through the primitive-method fallback. `recv_chars` is the
-/// receiver's UTF-16 length (0 when the receiver is not a string) — the number
-/// of own index properties a sloppy callee's `ToObject` wrapper costs.
+/// receiver's UTF-16 length (0 when the receiver is not a string).
 pub(crate) fn primitive_dispatch(builtin: &[u8], method: &str, recv_chars: u64) {
     if !gc_diag_enabled() {
         return;
@@ -402,12 +398,6 @@ pub(crate) fn primitive_dispatch(builtin: &[u8], method: &str, recv_chars: u64) 
 pub(super) fn report_primitive_dispatch(label: &str) {
     if !gc_diag_enabled() {
         return;
-    }
-    let (wrappers, indices) = STRING_WRAPPERS.with(Cell::get);
-    if wrappers > 0 {
-        eprintln!(
-            "[gc-primitive-dispatch] {label}: string_wrappers={wrappers} index_properties={indices}"
-        );
     }
     let rows: Vec<(String, (u64, u64))> =
         PRIMITIVE_DISPATCH.with(|m| m.borrow().iter().map(|(k, v)| (k.clone(), *v)).collect());
