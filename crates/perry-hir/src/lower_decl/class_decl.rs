@@ -44,7 +44,7 @@ mod member_registration;
 use class_heritage::*;
 pub(crate) use member_helpers::capture_class_source;
 use member_helpers::{
-    computed_member_name, generic_computed_member_key, lower_generic_computed_class_member,
+    generic_computed_member_key, lower_generic_computed_class_member,
     noncomputed_member_registration_name, record_class_accessor, runtime_instance_accessor_names,
 };
 use member_registration::*;
