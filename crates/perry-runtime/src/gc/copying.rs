@@ -1616,6 +1616,9 @@ pub(super) fn run_copied_minor_attempt(
     collector.sticky.restore();
     if !collector.skip_remembering {
         restore_surviving_dirty_coverage(&snapshot, &dirty_scan_covered, "copying_minor");
+        // Per minor, not at exit: the rig SIGKILLs cc. Cumulative counters, so
+        // the last line before the kill is the answer.
+        crate::arena::page_class_table_report();
     }
     let malloc_freed_bytes = if malloc_sweep_due {
         let phase_start = trace_phase_start(trace);
