@@ -145,8 +145,11 @@ impl<K: Copy + Ord> YoungLog<K> {
         }
     }
 
-    /// Test-only: the table resets (`test_clear_*`) clear their log with them.
-    #[cfg(test)]
+    /// Drop every logged key, keeping both buffers' capacity. For a caller
+    /// that has just PROVED its table empty: every key in the log is then
+    /// stale, and a walk that early-returns on that proof would otherwise
+    /// carry them forward for ever (the table resets `test_clear_*` use it
+    /// for the same reason).
     pub(crate) fn clear(&mut self) {
         self.keys.clear();
         self.spare.clear();

@@ -592,3 +592,134 @@ fn installing_an_external_shape_id_arms_the_family_log() {
         "the family must have followed the keys array"
     );
 }
+
+// -------------------------------------------------- per-object layout tables
+//
+// #9841: the DEATH PRUNE of `LAYOUT_SLOT_MASKS + TYPED_LAYOUTS`, not a root
+// scanner. Its predicate is `layout_key_may_be_nursery`, which excludes
+// `Longlived` AND `Old` — strictly stronger than the scanners'
+// `addr_is_minor_relevant` — so an old-keyed record is not merely cheap to
+// visit, it is provably impossible for a minor to remove.
+
+use crate::gc::layout_tables::{test_per_object_layout_present, LAYOUT_YOUNG_LOG_NAME};
+
+/// A nursery object whose header says POINTER_FREE and which then takes a
+/// pointer store — the mutator path that mints a mask from inside
+/// `layout_note_slot`'s own `borrow_mut` (WRITER 3). On cc that is the
+/// dominant insert path: `TYPED_LAYOUTS` is empty there and every one of the
+/// ~66k live keys is a `LAYOUT_SLOT_MASKS` entry.
+fn young_masked_object() -> usize {
+    let obj = crate::object::js_object_alloc(0, 8);
+    crate::object::js_object_set_field(obj, 0, crate::value::JSValue::number(1.0));
+    crate::object::js_object_set_field(obj, 1, crate::value::JSValue::number(2.0));
+    crate::gc::layout_clear_for_ptr(obj as usize);
+    unsafe { crate::gc::layout_init_pointer_free(obj as *mut u8) };
+    let child = crate::string::js_string_from_bytes(b"late-pointer".as_ptr(), 12);
+    crate::object::js_object_set_field(obj, 1, crate::value::JSValue::string_ptr(child));
+    assert!(
+        test_per_object_layout_present(obj as usize),
+        "premise: the in-place mask mint published a per-object record"
+    );
+    obj as usize
+}
+
+/// WRITER 3's arming site. Delete `arm_young_layout_key` from
+/// `gc/layout.rs`'s in-borrow mint and this goes red: under
+/// `debug_assertions` on the log-completeness re-derivation, and in release
+/// on the record the young prune can no longer see.
+#[test]
+fn dead_young_masked_owner_is_pruned_through_the_layout_log() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    // One rooted young object so the minor has real work; the owner is not it.
+    js_shadow_slot_set(0, string_bits(young_leaf()));
+
+    let dead = young_masked_object();
+
+    let _ = gc_collect_minor();
+
+    assert!(
+        !test_per_object_layout_present(dead),
+        "the dead young owner's per-object layout record must be pruned from the log"
+    );
+    let row = walk(LAYOUT_YOUNG_LOG_NAME);
+    assert!(
+        row.partial,
+        "a copying minor must take the young-scoped prune: {row:?}"
+    );
+    assert!(
+        row.visited >= 1,
+        "the logged key must have been visited: {row:?}"
+    );
+}
+
+/// WRITER 4's arming site (`transfer_per_object_slot_mask`, which runs during
+/// evacuation and therefore BEFORE this collection's prune). Delete its
+/// `arm_moved_layout_key` and the re-derivation panics here on the to-space
+/// key.
+#[test]
+fn surviving_young_masked_owner_is_rekeyed_and_stays_logged() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+
+    let obj = young_masked_object();
+    js_shadow_slot_set(0, ptr_bits(obj));
+
+    let _ = gc_collect_minor();
+
+    let after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+    assert_ne!(after, obj, "the rooted owner must have been evacuated");
+    assert!(
+        test_per_object_layout_present(after),
+        "the mask must follow its owner to the new address"
+    );
+    assert!(
+        !test_per_object_layout_present(obj),
+        "the stale from-space key must be gone"
+    );
+    let row = walk(LAYOUT_YOUNG_LOG_NAME);
+    assert!(row.partial, "{row:?}");
+    assert!(
+        row.visited >= 1,
+        "the move hook's key must have been logged and visited: {row:?}"
+    );
+    if crate::arena::pointer_in_nursery(after) {
+        assert!(
+            row.kept >= 1,
+            "a survivor still in the nursery must stay logged: {row:?}"
+        );
+    }
+}
+
+/// Rule 3: the skip has to be observable, or a latch that never fires looks
+/// landed. An OLD-keyed record cannot be found dead by any minor, so the
+/// young prune must not visit it at all.
+#[test]
+fn old_layout_records_are_skipped_by_a_minor() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+
+    // Drain whatever this thread's earlier tests left young, so `visited`
+    // below is about the record installed after it.
+    let _ = gc_collect_minor();
+
+    let (owner, _) = unsafe { alloc_old_test_object(2) };
+    crate::gc::layout_tables::slot_masks_insert(
+        owner as usize,
+        crate::gc::layout::LayoutSlotMask::from_words(&[1]),
+    );
+
+    let _ = gc_collect_minor();
+
+    assert!(
+        test_per_object_layout_present(owner as usize),
+        "an old owner's record must survive a minor"
+    );
+    let row = walk(LAYOUT_YOUNG_LOG_NAME);
+    assert!(row.partial, "{row:?}");
+    assert!(row.table_len >= 1, "{row:?}");
+    assert_eq!(
+        row.visited, 0,
+        "an old-keyed record is not a candidate for any minor and must not be \
+         visited: {row:?}"
+    );
+
+    crate::gc::layout_clear_for_ptr(owner as usize);
+}

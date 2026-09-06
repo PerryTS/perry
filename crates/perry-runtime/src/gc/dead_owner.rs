@@ -336,7 +336,7 @@ pub(super) const DEAD_KEY_PRUNES: &[DeadKeyPrune] = &[
         table: "LAYOUT_SLOT_MASKS + TYPED_LAYOUTS",
         owner: DeadKeyOwner::Any,
         prune: crate::gc::layout_tables::prune_dead_per_object_layout_owners,
-        young_prune: None,
+        young_prune: Some(crate::gc::layout_tables::prune_dead_per_object_layout_owners_young),
     },
     // Re-keyed by the per-object move hook, not by a metadata visitor.
     DeadKeyPrune {
