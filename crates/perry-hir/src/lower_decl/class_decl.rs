@@ -194,6 +194,49 @@ pub(crate) fn capture_class_source(
     }
 }
 
+/// Record one class accessor, honouring ECMA-262's "a later definition of the
+/// same key replaces the earlier one".
+///
+/// `ClassDecl::getters` / `::setters` are consumed with `iter().find(...)`, so
+/// the FIRST entry with a given name wins at lookup time. Appending
+/// unconditionally therefore keeps a *shadowed* accessor alive and silently
+/// drops the one the program actually defines last:
+///
+/// ```js
+/// class Spring3 {
+///   get z() { return this.a.z; }   // damping — shadowed
+///   get z() { return this.c.x; }   // displacement — must win
+/// }
+/// ```
+///
+/// Perry returned `this.a.z` here while every other engine returns
+/// `this.c.x`. In Claude-of-Duty that handed the viewmodel rig a spring's
+/// DAMPING COEFFICIENT (0.46) where it wanted a Z displacement, pushing the
+/// weapon 0.88 m behind the camera, where it clipped and drew nothing.
+///
+/// Static and instance accessors are distinct properties (one lives on the
+/// constructor, one on the prototype) and may legally share a name, so the
+/// replacement is keyed on `(name, is_static)` rather than the name alone.
+fn record_class_accessor(
+    list: &mut Vec<(String, Function)>,
+    statics: &mut Vec<bool>,
+    name: String,
+    func: Function,
+    is_static: bool,
+) {
+    let existing = list
+        .iter()
+        .enumerate()
+        .find_map(|(i, (n, _))| (n == &name && statics[i] == is_static).then_some(i));
+    match existing {
+        Some(i) => list[i] = (name, func),
+        None => {
+            list.push((name, func));
+            statics.push(is_static);
+        }
+    }
+}
+
 pub fn lower_class_decl(
     ctx: &mut LoweringContext,
     class_decl: &ast::ClassDecl,
@@ -683,6 +726,10 @@ pub fn lower_class_decl(
     let mut static_methods = Vec::new();
     let mut getters = Vec::new();
     let mut setters = Vec::new();
+    // Parallel staticness, so `record_class_accessor` can tell a static
+    // accessor from an instance one with the same name.
+    let mut getter_statics: Vec<bool> = Vec::new();
+    let mut setter_statics: Vec<bool> = Vec::new();
     let mut static_accessor_names: Vec<String> = Vec::new();
     let mut static_accessor_fn_ids: Vec<FuncId> = Vec::new();
     let mut computed_members = Vec::new();
@@ -778,7 +825,13 @@ pub fn lower_class_decl(
                             static_accessor_names.push(prop_name.clone());
                             static_accessor_fn_ids.push(func.id);
                         }
-                        getters.push((prop_name, func));
+                        record_class_accessor(
+                            &mut getters,
+                            &mut getter_statics,
+                            prop_name,
+                            func,
+                            method.is_static,
+                        );
                     }
                     ast::MethodKind::Setter => {
                         // Setter: takes one parameter
@@ -797,7 +850,13 @@ pub fn lower_class_decl(
                             static_accessor_names.push(prop_name.clone());
                             static_accessor_fn_ids.push(func.id);
                         }
-                        setters.push((prop_name, func));
+                        record_class_accessor(
+                            &mut setters,
+                            &mut setter_statics,
+                            prop_name,
+                            func,
+                            method.is_static,
+                        );
                     }
                     ast::MethodKind::Method => {
                         let mut func = with_static_member_context(ctx, method.is_static, |ctx| {
@@ -915,7 +974,13 @@ pub fn lower_class_decl(
                             static_accessor_names.push(prop_name.clone());
                             static_accessor_fn_ids.push(func.id);
                         }
-                        getters.push((prop_name, func));
+                        record_class_accessor(
+                            &mut getters,
+                            &mut getter_statics,
+                            prop_name,
+                            func,
+                            method.is_static,
+                        );
                     }
                     ast::MethodKind::Setter => {
                         let prop_name = format!("#{}", method.key.name);
@@ -924,7 +989,13 @@ pub fn lower_class_decl(
                             static_accessor_names.push(prop_name.clone());
                             static_accessor_fn_ids.push(func.id);
                         }
-                        setters.push((prop_name, func));
+                        record_class_accessor(
+                            &mut setters,
+                            &mut setter_statics,
+                            prop_name,
+                            func,
+                            method.is_static,
+                        );
                     }
                 }
             }
@@ -1577,6 +1648,10 @@ pub fn lower_class_from_ast(
     let mut static_methods = Vec::new();
     let mut getters = Vec::new();
     let mut setters = Vec::new();
+    // Parallel staticness, so `record_class_accessor` can tell a static
+    // accessor from an instance one with the same name.
+    let mut getter_statics: Vec<bool> = Vec::new();
+    let mut setter_statics: Vec<bool> = Vec::new();
     let mut static_accessor_names: Vec<String> = Vec::new();
     let mut static_accessor_fn_ids: Vec<FuncId> = Vec::new();
     let mut computed_members = Vec::new();
@@ -1663,7 +1738,13 @@ pub fn lower_class_from_ast(
                             static_accessor_names.push(prop_name.clone());
                             static_accessor_fn_ids.push(func.id);
                         }
-                        getters.push((prop_name, func));
+                        record_class_accessor(
+                            &mut getters,
+                            &mut getter_statics,
+                            prop_name,
+                            func,
+                            method.is_static,
+                        );
                     }
                     ast::MethodKind::Setter => {
                         let func = with_static_member_context(ctx, method.is_static, |ctx| {
@@ -1681,7 +1762,13 @@ pub fn lower_class_from_ast(
                             static_accessor_names.push(prop_name.clone());
                             static_accessor_fn_ids.push(func.id);
                         }
-                        setters.push((prop_name, func));
+                        record_class_accessor(
+                            &mut setters,
+                            &mut setter_statics,
+                            prop_name,
+                            func,
+                            method.is_static,
+                        );
                     }
                     ast::MethodKind::Method => {
                         let mut func = with_static_member_context(ctx, method.is_static, |ctx| {
@@ -1779,7 +1866,13 @@ pub fn lower_class_from_ast(
                             static_accessor_names.push(prop_name.clone());
                             static_accessor_fn_ids.push(func.id);
                         }
-                        getters.push((prop_name, func));
+                        record_class_accessor(
+                            &mut getters,
+                            &mut getter_statics,
+                            prop_name,
+                            func,
+                            method.is_static,
+                        );
                     }
                     ast::MethodKind::Setter => {
                         let prop_name = format!("#{}", method.key.name);
@@ -1788,7 +1881,13 @@ pub fn lower_class_from_ast(
                             static_accessor_names.push(prop_name.clone());
                             static_accessor_fn_ids.push(func.id);
                         }
-                        setters.push((prop_name, func));
+                        record_class_accessor(
+                            &mut setters,
+                            &mut setter_statics,
+                            prop_name,
+                            func,
+                            method.is_static,
+                        );
                     }
                 }
             }
