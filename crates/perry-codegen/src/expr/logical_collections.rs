@@ -1283,15 +1283,79 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let flags_idx = ctx.strings.intern(flags);
             let pattern_global = format!("@{}", ctx.strings.entry(pattern_idx).handle_global);
             let flags_global = format!("@{}", ctx.strings.entry(flags_idx).handle_global);
+            // ★ A literal's SITE IDENTITY, as an immortal address.
+            //
+            // A regex literal evaluates to a fresh object every time it is
+            // reached (ECMA-262), and TUI code reaches them inside hot
+            // functions — `string-width`'s `emojiRegex()` returns a fresh
+            // ~12,807-character `/…/g` per call. The runtime therefore
+            // re-derives "which pattern is this?" per construction from the
+            // TEXT: a content fingerprint plus, on every hit, a full byte
+            // compare to verify it (`regex::site_cache::entry_matches`). On
+            // claude-code that verify is ~2.0 GB of `memcmp` per 400-character
+            // reply, and it is 39.6 % of `js_regexp_new`'s own profile subtree.
+            //
+            // The compiler knows the answer statically: this literal is one
+            // source site whose pattern and flags can never change. What the
+            // runtime was missing is the key, because the lowering passed only
+            // the two string handles. This emits an 8-byte private global per
+            // literal site and passes its ADDRESS — unique by construction
+            // (distinct globals have distinct addresses), immortal (it is not
+            // GC memory, so it can never be freed and reused under a stale
+            // cache entry, which is why the string handles themselves cannot
+            // serve), and stable for the process. The runtime's site table
+            // then verifies a hit by comparing that one word, and never looks
+            // at the pattern at all.
+            //
+            // The slot is zero-initialised so it lands in `__bss` and costs
+            // nothing until the linker lays it out (#9610's lesson about
+            // zero-initialised globals applies: `private global i64 0`, not a
+            // non-zero initialiser). Naming carries the module prefix for the
+            // same reason `inline_cache_global_name` does — codegen-unit
+            // splitting can promote a private global for cross-unit use.
+            //
+            // FAILURE MODE, stated so it is diagnosable rather than surprising:
+            // `typed_parse_rodata` is drained into the module by all five
+            // lowering entry points, but `codegen/method.rs`'s
+            // "parent class has no callable constructor symbol" bail-out
+            // DISCARDS it (along with `ic_globals` and `pending_declares`)
+            // after having lowered the body. A regex literal inside such a
+            // constructor would therefore reference a global that is never
+            // defined. That is a LOUD compile-time failure — the in-process
+            // LLVM parse rejects it with `use of undefined value`, exactly as
+            // it rejected #9859's undeclared externs — and never a wrong
+            // answer at runtime. The same bail-out already discards IC globals
+            // and pending declares, so the path is either unreachable for
+            // non-trivial constructors or already broken for them; this note
+            // is here so the next person to see that message knows where to
+            // look.
+            let site_id = ctx.ic_site_counter;
+            ctx.ic_site_counter += 1;
+            let slot_name = {
+                let prefix = ctx.strings.module_prefix();
+                if prefix.is_empty() {
+                    format!("perry_regexp_site_{site_id}")
+                } else {
+                    format!("perry_regexp_site_{prefix}__{site_id}")
+                }
+            };
+            ctx.typed_parse_rodata
+                .push(format!("@{slot_name} = private global i64 0"));
+            let slot_ref = format!("@{slot_name}");
             let blk = ctx.block();
             let pattern_box = blk.load(DOUBLE, &pattern_global);
             let flags_box = blk.load(DOUBLE, &flags_global);
             let pattern_handle = unbox_to_i64(blk, &pattern_box);
             let flags_handle = unbox_to_i64(blk, &flags_box);
+            let site_key = blk.ptrtoint(&slot_ref, I64);
             let result = blk.call(
                 I64,
-                "js_regexp_new",
-                &[(I64, &pattern_handle), (I64, &flags_handle)],
+                "js_regexp_new_site",
+                &[
+                    (I64, &pattern_handle),
+                    (I64, &flags_handle),
+                    (I64, &site_key),
+                ],
             );
             Ok(nanbox_pointer_inline(blk, &result))
         }
