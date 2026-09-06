@@ -1,0 +1,34 @@
+[
+  {
+    "arm": "unicode",
+    "executable_name_length": 6,
+    "trials": 7,
+    "sha256": "85189dd09e2f34151351546aa751100e0480ef8e110c8380dfbb10d53755d938",
+    "median_cpu_us": 1576.1458333333333,
+    "median_peak_rss_mib": 64.53125
+  },
+  {
+    "arm": "unicode",
+    "executable_name_length": 15,
+    "trials": 7,
+    "sha256": "85189dd09e2f34151351546aa751100e0480ef8e110c8380dfbb10d53755d938",
+    "median_cpu_us": 1577.09375,
+    "median_peak_rss_mib": 64.53125
+  },
+  {
+    "arm": "primitive",
+    "executable_name_length": 6,
+    "trials": 7,
+    "sha256": "f877e0f32f6b03528b8b5654108efacfd9b0f489e90e740cb354e4763922e25c",
+    "median_cpu_us": 1579.0208333333333,
+    "median_peak_rss_mib": 66.78125
+  },
+  {
+    "arm": "primitive",
+    "executable_name_length": 15,
+    "trials": 7,
+    "sha256": "f877e0f32f6b03528b8b5654108efacfd9b0f489e90e740cb354e4763922e25c",
+    "median_cpu_us": 1577.25,
+    "median_peak_rss_mib": 66.78125
+  }
+]

@@ -1447,6 +1447,12 @@ pub(crate) unsafe fn stringify_array_depth(ptr: *const u8, buf: &mut String, dep
         SUPPRESS_NEXT_TO_JSON.with(|c| c.set(false));
         return;
     }
+    // A primitive-only array cannot recurse, invoke user code or collect.
+    // Its emitter borrows the resolved element storage for this call only;
+    // complex values fall back before writing any output.
+    if super::stringify_primitive_array::try_emit(arr, buf) {
+        return;
+    }
     // Circular-reference detection (ECMA-262 25.5.2 SerializeJSONArray step
     // 1-2). Unlike objects, the compact array path does NOT bump `depth`, so
     // an all-array cycle (`a=[]; a.push(a)`) would otherwise recurse until the

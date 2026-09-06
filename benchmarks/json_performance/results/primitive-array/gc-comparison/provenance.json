@@ -1,0 +1,38 @@
+[
+  {
+    "case": "numbers_1m-parse-baseline",
+    "iterations": 96,
+    "worker_sha256": "85189dd09e2f34151351546aa751100e0480ef8e110c8380dfbb10d53755d938",
+    "diagnostic_env": {
+      "PERRY_GC_DIAG": "1"
+    },
+    "exit": 0
+  },
+  {
+    "case": "numbers_1m-parse-candidate",
+    "iterations": 96,
+    "worker_sha256": "f877e0f32f6b03528b8b5654108efacfd9b0f489e90e740cb354e4763922e25c",
+    "diagnostic_env": {
+      "PERRY_GC_DIAG": "1"
+    },
+    "exit": 0
+  },
+  {
+    "case": "wide_1m-parse-baseline",
+    "iterations": 36,
+    "worker_sha256": "85189dd09e2f34151351546aa751100e0480ef8e110c8380dfbb10d53755d938",
+    "diagnostic_env": {
+      "PERRY_GC_DIAG": "1"
+    },
+    "exit": 0
+  },
+  {
+    "case": "wide_1m-parse-candidate",
+    "iterations": 36,
+    "worker_sha256": "f877e0f32f6b03528b8b5654108efacfd9b0f489e90e740cb354e4763922e25c",
+    "diagnostic_env": {
+      "PERRY_GC_DIAG": "1"
+    },
+    "exit": 0
+  }
+]

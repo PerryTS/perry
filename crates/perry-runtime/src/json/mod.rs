@@ -33,6 +33,7 @@ mod simd;
 mod stringify;
 mod stringify_api;
 mod stringify_buffer;
+mod stringify_primitive_array;
 mod stringify_scalars;
 pub(crate) mod stringify_shape_template;
 mod stringify_small;
