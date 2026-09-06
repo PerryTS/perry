@@ -1,0 +1,49 @@
+{
+  "arm": "changed",
+  "source_head": "454daac4f8fc667ab4bc85b7b5b36c8bae56ae28",
+  "build": "release defaults: runtime O3, stdlib Os; runtime and stdlib CGU=16; wrapper thin LTO",
+  "artifacts": {
+    "libperry_runtime.a": {
+      "sha256": "b4c1f6b7c3702c4d40a48957833e18fc35f1be52bcb3cbbca5436643f568494e",
+      "mtime": 1788675887.0474784
+    },
+    "libperry_stdlib.a": {
+      "sha256": "bbfee0152a6bd01fdb761ae3e7d2e18aeb71448920c609fb11edf9605b5baded",
+      "mtime": 1788676097.6551073
+    }
+  },
+  "compiler_sha256": "f3508db38600d0c3651d74b8a56a612601cc6c2498cfa336961e46e535391ef4",
+  "json_source_sha256": {
+    "crates/perry-runtime/src/json/stringify_scalars.rs": "5ab0c3c5d141a30d26dbb909c70cd18714422cbde84ed89541ea0ec5a5a7eaa1",
+    "crates/perry-runtime/src/json/simd.rs": "d203683b4382333ea7e96d2277d6a079ff2831ad71b67b2193c511ea2533a0bb",
+    "crates/perry-runtime/src/json/stringify.rs": "61ac39b564306be378ad4834ab450c7da150c02bac172a442f1bda03b3258a75",
+    "crates/perry-runtime/src/json/reviver.rs": "515c63f715c3340f3e99dfd6d69a31bb077b9b8f0452fb3ab01d014b4bb013ef",
+    "crates/perry-runtime/src/json/stringify_shape_template.rs": "cfbe754081c32a64cab183335c0080b856f7e9548b49048c37798af3035aa3e8",
+    "crates/perry-runtime/src/json/stringify_tojson_probe.rs": "de9c3bad6a2ea054ec12bda832bbfaa4914d21c296a28b2c640386b1d4e06dc9",
+    "crates/perry-runtime/src/json/raw_json.rs": "ba8e92d7cd1d902bb96fd29793f1a4608644bff02d0e7d32e06894b5e6b435f7",
+    "crates/perry-runtime/src/json/mod.rs": "6c3908dbaf5a01f987e76ff44e2fdf48b34dc007b7ca0d2112f1add2924d35ab",
+    "crates/perry-runtime/src/json/replacer.rs": "08a9fd4a1a9f27843039fab3e8e00a5ce8c08a6c9c0b4810e6d6d30ba3a5205e",
+    "crates/perry-runtime/src/json/simd_tests.rs": "7a404261f6716b2c3d58b34485a56a89b765339c97b5a40b0494fc2e2707a34a",
+    "crates/perry-runtime/src/json/stringify_api.rs": "baf3ab8e236c669be2c20bc0083546fa725ace39ec7c83989bf5c1ada9ee9d40",
+    "crates/perry-runtime/src/json/stringify_scalars_tests.rs": "8e0a20d255f1ce6c89f25950cb1f826a6a0990dbdbf91e88e78dbd65fffd380f",
+    "crates/perry-runtime/src/json/stringify_buffer.rs": "289d52bdfb552462516c182ff9375cb3319a0dde30604d1fc235a9e1dc69e74d",
+    "crates/perry-runtime/src/json/parser.rs": "288f1edb9190909a415acdd9d6b3ab0f167247176bdbd3e89ac0ed0f7ef254cf",
+    "crates/perry-runtime/src/json/parser_scan_tests.rs": "55aea2334a8a4a165b9a354aafd19d617e6966594849db5c99d76b71b3918449",
+    "crates/perry-runtime/src/json/parse_api.rs": "f4440313a9191af2ecbed2a9f67494be0cb85a7baafeecce314c5931b0f92ece"
+  },
+  "application_object_sha256": "28a4483ebffc124debdb5e223f4972cf9cdb27bdae59476981539cd7a27b5618",
+  "link_command": [
+    "cc",
+    "worker.o",
+    "changed-runtime/libperry_runtime.a",
+    "-lc",
+    "-Wl,-dead_strip",
+    "-Wl,-no_exported_symbols",
+    "-o",
+    "changed-worker"
+  ],
+  "linked_archives": [
+    "libperry_runtime.a"
+  ],
+  "compiler_note": "Pinned development compiler, exact same generated object for both runtime arms; explicit native linking for controlled A/B; build stamps left intact."
+}

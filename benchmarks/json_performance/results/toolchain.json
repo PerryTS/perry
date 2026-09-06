@@ -1,0 +1,87 @@
+{
+  "perry": {
+    "sha256": "f3508db38600d0c3651d74b8a56a612601cc6c2498cfa336961e46e535391ef4",
+    "origin": "/Users/amlug/projects/perry/wt-cc-recover-target/release/perry",
+    "mtime": 1788667320.6610794
+  },
+  "libperry_runtime.a": {
+    "sha256": "06bbd3a3a20860bafcec1244b2006c3ec666f629c6a4e33dba0f3e7381db7e3b",
+    "origin": "/Users/amlug/projects/perry/wt-cc-recover-target/release/libperry_runtime.a",
+    "mtime": 1788667709.555712
+  },
+  "libperry_stdlib.a": {
+    "sha256": "254b97b4314688d052f95745013c07e67df089e22df7f7450d6f8db83240b44c",
+    "origin": "/Users/amlug/projects/perry/wt-cc-recover-target/release/libperry_stdlib.a",
+    "mtime": 1788667780.5272927
+  },
+  "source_head": "454daac4f8fc667ab4bc85b7b5b36c8bae56ae28",
+  "source_status": " M crates/perry-codegen/src/dialect/mod.rs\n M crates/perry-codegen/src/expr/call_spread.rs\n M crates/perry-codegen/src/expr/dyn_extern_i18n.rs\n M crates/perry-codegen/src/expr/index_get.rs\n M crates/perry-codegen/src/expr/property_get.rs\n M crates/perry-codegen/src/expr/static_method.rs\n M crates/perry-codegen/src/function.rs\n M crates/perry-codegen/src/lib.rs\n M crates/perry-codegen/src/linker.rs\n M crates/perry-codegen/src/linker_tests.rs\n M crates/perry-codegen/src/native_emit.rs\n M crates/perry-hir/src/lower/context.rs\n M crates/perry-hir/src/lower/expr_call/array_only_methods.rs\n M crates/perry-hir/src/lower/expr_call/module_static.rs\n M crates/perry-hir/src/lower/expr_member.rs\n M crates/perry-hir/src/lower/expr_member/member_tail.rs\n M crates/perry-hir/src/lower/expr_misc.rs\n M crates/perry-hir/src/lower/lower_module_fn.rs\n M crates/perry-hir/src/lower/lowering_context.rs\n M crates/perry-hir/src/lower/module_decl.rs\n M crates/perry-runtime/src/embedded.rs\n M crates/perry-runtime/src/module_require.rs\n M crates/perry-transform/src/inline/cross_module.rs\n M crates/perry-transform/src/inline/mod.rs\n M crates/perry/src/commands/compile/build_cache.rs\n M crates/perry/src/commands/compile/embed.rs\n M crates/perry/src/commands/compile/run_pipeline.rs\n?? crates/perry-codegen/src/unit_cache.rs\n?? crates/perry-codegen/tests/generated_inline_budget.rs\n?? crates/perry-codegen/tests/size_function_attributes.rs\n?? crates/perry-hir/tests/exported_local_variables.rs\n?? crates/perry-hir/tests/import_meta_require_value.rs\n?? crates/perry-hir/tests/object_array_method_names.rs\n?? crates/perry-hir/tests/string_static_spread.rs\n?? scripts/test-codegen-unit-resume.mjs\n?? scripts/test-imported-value-class-collision.mjs\n?? scripts/test-xmod-imported-static-receiver.mjs\n?? tests/modules/bunfs_text_require/\n?? tests/modules/codegen_unit_resume/\n?? tests/modules/exported_local_variables/\n?? tests/modules/fs_named_dispatch/\n?? tests/modules/import_meta_require_value/\n?? tests/modules/imported_value_class_collision/\n?? tests/modules/large_minified_inline/\n?? tests/modules/object_array_method_names/\n?? tests/modules/string_static_spread/\n?? tests/modules/weakmap_state_factory/\n?? tests/modules/xmod_imported_static_receiver/\n",
+  "version": "perry 0.5.1520",
+  "json_sources": {
+    "crates/perry-runtime/src/json/stringify_scalars.rs": {
+      "sha256": "ae3d99dd82d61018e1b62e02f4b3607768ff3d14104947b6f1a548e1aac899d3",
+      "mtime": 1788552956.2586315
+    },
+    "crates/perry-runtime/src/json/simd.rs": {
+      "sha256": "be778313fdac5a818d1f951f788c658d279b93dbfc74bc01add3bc196b3e6cb8",
+      "mtime": 1788552956.257662
+    },
+    "crates/perry-runtime/src/json/stringify.rs": {
+      "sha256": "61ac39b564306be378ad4834ab450c7da150c02bac172a442f1bda03b3258a75",
+      "mtime": 1788552956.2578661
+    },
+    "crates/perry-runtime/src/json/reviver.rs": {
+      "sha256": "515c63f715c3340f3e99dfd6d69a31bb077b9b8f0452fb3ab01d014b4bb013ef",
+      "mtime": 1788552956.2574425
+    },
+    "crates/perry-runtime/src/json/stringify_shape_template.rs": {
+      "sha256": "cfbe754081c32a64cab183335c0080b856f7e9548b49048c37798af3035aa3e8",
+      "mtime": 1788552956.2587519
+    },
+    "crates/perry-runtime/src/json/stringify_tojson_probe.rs": {
+      "sha256": "de9c3bad6a2ea054ec12bda832bbfaa4914d21c296a28b2c640386b1d4e06dc9",
+      "mtime": 1788552956.2589014
+    },
+    "crates/perry-runtime/src/json/raw_json.rs": {
+      "sha256": "ba8e92d7cd1d902bb96fd29793f1a4608644bff02d0e7d32e06894b5e6b435f7",
+      "mtime": 1788552956.2567334
+    },
+    "crates/perry-runtime/src/json/mod.rs": {
+      "sha256": "6c3908dbaf5a01f987e76ff44e2fdf48b34dc007b7ca0d2112f1add2924d35ab",
+      "mtime": 1788552956.25592
+    },
+    "crates/perry-runtime/src/json/replacer.rs": {
+      "sha256": "08a9fd4a1a9f27843039fab3e8e00a5ce8c08a6c9c0b4810e6d6d30ba3a5205e",
+      "mtime": 1788552956.2571123
+    },
+    "crates/perry-runtime/src/json/stringify_api.rs": {
+      "sha256": "baf3ab8e236c669be2c20bc0083546fa725ace39ec7c83989bf5c1ada9ee9d40",
+      "mtime": 1788552956.2581656
+    },
+    "crates/perry-runtime/src/json/stringify_buffer.rs": {
+      "sha256": "289d52bdfb552462516c182ff9375cb3319a0dde30604d1fc235a9e1dc69e74d",
+      "mtime": 1788552956.258477
+    },
+    "crates/perry-runtime/src/json/parser.rs": {
+      "sha256": "8bbdeaa7e242a0c4b4fded0babf9d9e2e3321762006d9f718e34db39da918732",
+      "mtime": 1788552956.2563257
+    },
+    "crates/perry-runtime/src/json/parse_api.rs": {
+      "sha256": "f4440313a9191af2ecbed2a9f67494be0cb85a7baafeecce314c5931b0f92ece",
+      "mtime": 1788552956.256049
+    }
+  },
+  "libperry_wasm_host.a": {
+    "origin": "/Users/amlug/projects/perry/agent-trees/fixed-cost/target/release/libperry_wasm_host.a",
+    "sha256": "004847fd86956ac68110d675f67cc56db0e3920be59a8eed3b9b952f936a6db2",
+    "purpose": "Prebuilt runtime link dependency; no WebAssembly operations in workload."
+  },
+  "worker_sha256": "d831004a7363c9a2b7461c57d97ff352598f1442b5104a8b00ba8b02b31697ce",
+  "compile_flags": [
+    "--no-auto-optimize",
+    "--no-cache",
+    "--enable-wasm-runtime"
+  ],
+  "compiler_invocation_directory": "/tmp/perry-json-perf-20260906",
+  "profile_worker_sha256": "24a23390f1cf20ef49a928a81e1252712c6dd718d04d16507894f151ff5513ef"
+}

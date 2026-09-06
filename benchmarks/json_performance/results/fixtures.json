@@ -1,0 +1,223 @@
+[
+  {
+    "name": "null",
+    "bytes": 4,
+    "utf16_units": 4,
+    "kind": "small",
+    "sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "operations": [
+      "parse",
+      "stringify"
+    ]
+  },
+  {
+    "name": "string_a",
+    "bytes": 3,
+    "utf16_units": 3,
+    "kind": "small",
+    "sha256": "ac8d8342bbb2362d13f0a559a3621bb407011368895164b628a54f7fc33fc43c",
+    "operations": [
+      "parse",
+      "stringify"
+    ]
+  },
+  {
+    "name": "empty_object",
+    "bytes": 2,
+    "utf16_units": 2,
+    "kind": "small",
+    "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+    "operations": [
+      "parse",
+      "stringify"
+    ]
+  },
+  {
+    "name": "tiny_object",
+    "bytes": 7,
+    "utf16_units": 7,
+    "kind": "small",
+    "sha256": "015abd7f5cc57a2dd94b7590f04ad8084273905ee33ec5cebeae62276a97f862",
+    "operations": [
+      "parse",
+      "stringify"
+    ]
+  },
+  {
+    "name": "small_record",
+    "bytes": 109,
+    "utf16_units": 109,
+    "kind": "small",
+    "sha256": "e8d7bd409aeaba5d0aa3ce4046609ff7abdd3b88fc422903982ed7e58bc8f340",
+    "operations": [
+      "parse",
+      "stringify"
+    ]
+  },
+  {
+    "name": "object_1k",
+    "bytes": 1021,
+    "utf16_units": 1021,
+    "kind": "object",
+    "sha256": "75f531e0014758b782c6940849abdb74f1bd5c9aa365124ab3c2fd70964b9fc5",
+    "operations": [
+      "parse",
+      "stringify"
+    ]
+  },
+  {
+    "name": "records_array_16k",
+    "bytes": 13197,
+    "utf16_units": 13197,
+    "kind": "records_array",
+    "sha256": "1545f910dad456bca2fcd7c43c2e4de63caf851f59424f8b56b0c2da08c29b63",
+    "operations": [
+      "parse",
+      "stringify",
+      "sparse",
+      "scan",
+      "roundtrip"
+    ]
+  },
+  {
+    "name": "records_array_1m",
+    "bytes": 888597,
+    "utf16_units": 888597,
+    "kind": "records_array",
+    "sha256": "b827b3f0f5ee2a0eed75ace761a1bdd6424d6a0b524654516503a3265a5685de",
+    "operations": [
+      "parse",
+      "stringify",
+      "sparse",
+      "scan",
+      "roundtrip"
+    ]
+  },
+  {
+    "name": "records_object_1m",
+    "bytes": 888609,
+    "utf16_units": 888609,
+    "kind": "records_object",
+    "sha256": "f025e38ef9df42216a5fadc3232f300ab1dae1d291c5aee1c288a72d83f83471",
+    "operations": [
+      "parse",
+      "stringify"
+    ]
+  },
+  {
+    "name": "records_array_8m",
+    "bytes": 7117930,
+    "utf16_units": 7117930,
+    "kind": "records_array",
+    "sha256": "e8b5fef7f0e95e158e556ed0ed2714f81d808da8fa89f0d73a56ff0a6f22ef45",
+    "operations": [
+      "parse",
+      "stringify",
+      "sparse",
+      "scan",
+      "roundtrip"
+    ]
+  },
+  {
+    "name": "records_object_8m",
+    "bytes": 7117942,
+    "utf16_units": 7117942,
+    "kind": "records_object",
+    "sha256": "4ca542eae78e77fa05f1232785712f37b92c45a30ebfb6931816ff8b8e056c9c",
+    "operations": [
+      "parse",
+      "stringify"
+    ]
+  },
+  {
+    "name": "records_array_20m",
+    "bytes": 17765930,
+    "utf16_units": 17765930,
+    "kind": "records_array",
+    "sha256": "554f4c3a4ff68567a10c21b07da3b4cb221abc8aa09a04595fc927aa07974265",
+    "operations": [
+      "parse",
+      "stringify",
+      "sparse",
+      "scan",
+      "roundtrip"
+    ]
+  },
+  {
+    "name": "records_object_20m",
+    "bytes": 17765942,
+    "utf16_units": 17765942,
+    "kind": "records_object",
+    "sha256": "356c7f6f75c99f8664bb5e45a2fe7c37f06cbd74494da6943754676804304e80",
+    "operations": [
+      "parse",
+      "stringify"
+    ]
+  },
+  {
+    "name": "numbers_1m",
+    "bytes": 1067371,
+    "utf16_units": 1067371,
+    "kind": "numbers",
+    "sha256": "16a8954573cfc1090e79c3c2b27d0fc8c89dabc501aee6cbfeb44c1c1bc4c0fc",
+    "operations": [
+      "parse",
+      "stringify"
+    ]
+  },
+  {
+    "name": "long_string_1m",
+    "bytes": 1048594,
+    "utf16_units": 1048594,
+    "kind": "string",
+    "sha256": "ea77e5d1ebb84c30a920d4de6aee5c5c92c2aba6cf060c30f1933e1e000e9081",
+    "operations": [
+      "parse",
+      "stringify"
+    ]
+  },
+  {
+    "name": "escaped_1m",
+    "bytes": 990018,
+    "utf16_units": 990018,
+    "kind": "string",
+    "sha256": "52f2e30ddc036b9c0600a1ab088c7d00f6e40558540efa1f9315a0579bec8f56",
+    "operations": [
+      "parse",
+      "stringify"
+    ]
+  },
+  {
+    "name": "unicode_1m",
+    "bytes": 884018,
+    "utf16_units": 468018,
+    "kind": "string",
+    "sha256": "b58eea42a50190b7675886030ef6875b25bb0a6d50632d9cbc5a918ea4ad9bd9",
+    "operations": [
+      "parse",
+      "stringify"
+    ]
+  },
+  {
+    "name": "wide_1m",
+    "bytes": 977781,
+    "utf16_units": 977781,
+    "kind": "wide",
+    "sha256": "97f24b77b98ccfd85db41fb44f0316e27c87fdff4cec53e9d763a696f3611747",
+    "operations": [
+      "parse",
+      "stringify"
+    ]
+  },
+  {
+    "name": "heterogeneous_1m",
+    "bytes": 914291,
+    "utf16_units": 914291,
+    "kind": "heterogeneous",
+    "sha256": "3cad453a41f7a501e6c34c79df2a76356aa2eb2c53b88b5d5b72c45aad67fd3a",
+    "operations": [
+      "parse",
+      "stringify"
+    ]
+  }
+]

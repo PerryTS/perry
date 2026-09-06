@@ -1,0 +1,208 @@
+{
+  "runtime_tests": {
+    "profile": "debug",
+    "filter": "json::",
+    "threads": 1,
+    "passed": 44
+  },
+  "optimized_leaf_tests": {
+    "scanner_and_escaping": 5,
+    "final_depth_and_scanner": 6
+  },
+  "x86_64_scanner": "compiled for x86_64-unknown-linux-gnu; not executed",
+  "compiled_fixtures": [
+    {
+      "name": "test_gap_json_scanning_boundaries",
+      "object_sha256": "ea2670de8bb22a03f5eeb4c08c1ad1f700d6bdd548dbbcd3ec755d879c45e8dd",
+      "baseline_matches_node": true,
+      "changed_matches_node": true
+    },
+    {
+      "name": "test_issue_9184_json_parse_strict",
+      "object_sha256": "fb31ec6fb7181b1b7d07d69d03d3b9118634ed397ddfd1db41f0c85240d75f7a",
+      "baseline_matches_node": true,
+      "changed_matches_node": true
+    },
+    {
+      "name": "test_json",
+      "object_sha256": "2ec349674d8a18682516c52927578e0f789374f5c6a7ca71030bd1098ef8c138",
+      "baseline_matches_node": true,
+      "changed_matches_node": true
+    },
+    {
+      "name": "test_json_sso_strings",
+      "object_sha256": "17771487aaa2746fe320c3e21c1388be632e81e884078f8337dc944a6d17b477",
+      "baseline_matches_node": true,
+      "changed_matches_node": true
+    },
+    {
+      "name": "test_gap_json_advanced",
+      "object_sha256": "33b8ef0e4b9825229eccb25f9d50fe013433bd16e2e8e247facf672f24e7e229",
+      "baseline_matches_node": true,
+      "changed_matches_node": true
+    },
+    {
+      "name": "test_gap_json_stringify_replacer_tojson",
+      "object_sha256": "0500aff3aae37c0e839d02459ebf707d50db716c0a973be8975d49f92cf6cdd9",
+      "baseline_matches_node": true,
+      "changed_matches_node": true
+    },
+    {
+      "name": "test_gap_json_prototype_tojson",
+      "object_sha256": "aeb881dc01bb3dddcf966ccda93419867d9583a259c5b8cb8a8d3e5f82497e70",
+      "baseline_matches_node": true,
+      "changed_matches_node": true
+    },
+    {
+      "name": "test_gap_json_replacer_sparse_hole",
+      "object_sha256": "f0ee63df4839a69e93e662c4a474de83a63d1ed02d335640d86c30991566cbcb",
+      "baseline_matches_node": true,
+      "changed_matches_node": true
+    },
+    {
+      "name": "test_gap_json_array_element_overflow_fields",
+      "object_sha256": "754f0c60ece43ebde16edf9079e9922a660b93cfd23075e5d780bef2defd1e98",
+      "baseline_matches_node": true,
+      "changed_matches_node": true
+    },
+    {
+      "name": "test_issue_9398_json_pretty_tombstoned_key",
+      "object_sha256": "fdb69eedf1fbfcfccc56c5a5f0ed2fd94f565fbebfa232a1f01be473a027d357",
+      "baseline_matches_node": true,
+      "changed_matches_node": true
+    },
+    {
+      "name": "test_json_typed_basic",
+      "object_sha256": "ac82359fad71ade7f4ece53bb2f517e3b97386459ba4a783f00ac2da5790f675",
+      "baseline_matches_node": true,
+      "changed_matches_node": true
+    },
+    {
+      "name": "test_json_typed_array",
+      "object_sha256": "f4982974b2b32e69144ecca450181bf5c97549f8be563c3afa547f98a3c83288",
+      "baseline_matches_node": true,
+      "changed_matches_node": true
+    },
+    {
+      "name": "test_json_typed_nested",
+      "object_sha256": "bec9f4e2f621d5215dcc9d8d666dbec3e67f322da2d5f88177251d4b6225d9b1",
+      "baseline_matches_node": true,
+      "changed_matches_node": true
+    },
+    {
+      "name": "test_json_typed_mismatch",
+      "object_sha256": "66515b090c501841e2f1f5be438af1096a997307827790e52f6cc032d507ca00",
+      "baseline_matches_node": true,
+      "changed_matches_node": true
+    },
+    {
+      "name": "test_json_lazy_edge_cases",
+      "object_sha256": "631318098c8cc878c9b240bf994309fe352f754b497a84c73919f691579af104",
+      "baseline_matches_node": true,
+      "changed_matches_node": true
+    },
+    {
+      "name": "test_json_lazy_predicates",
+      "object_sha256": "312ad5307c5c2ab746ef516cc1c9272e5444522eff775ce05272e9e5fbc68f36",
+      "baseline_matches_node": true,
+      "changed_matches_node": true
+    },
+    {
+      "name": "test_json_lazy_iteration",
+      "object_sha256": "0c6b90b692c8e70a27f3dba420b040f5f3d7ab15a8b26bff98768d72a4993b6d",
+      "baseline_matches_node": true,
+      "changed_matches_node": true
+    },
+    {
+      "name": "test_json_lazy_indexed",
+      "object_sha256": "8852db3927334039be59a60634baf78ba8ae532453c849045cd6f0446f1b9cf3",
+      "baseline_matches_node": true,
+      "changed_matches_node": true
+    },
+    {
+      "name": "test_json_lazy_reviver",
+      "object_sha256": "8cea305fcf617c4953f918793ca8a35293b9da43db6dbc87b03164160f7daf8a",
+      "baseline_matches_node": true,
+      "changed_matches_node": true
+    },
+    {
+      "name": "test_json_lazy_per_element",
+      "object_sha256": "b85a735dc358fe2e69b0accabf94aadc00d9cc3301c8a7dac449177bdd80c54a",
+      "baseline_matches_node": true,
+      "changed_matches_node": true
+    },
+    {
+      "name": "test_gap_json_flat_scalar_depth",
+      "object_sha256": "30800d1d2834ed88ca1007dac60d096afd1eb6ceb75180ee02dbcb33d0bde3a3",
+      "baseline_matches_node": true,
+      "changed_matches_node": true
+    }
+  ],
+  "gc_stress": {
+    "baseline": [
+      {
+        "seed": 17,
+        "exit": 0,
+        "counters": {
+          "scheduled_collections": 9,
+          "copying_minors": 9,
+          "moved_objects": 19278,
+          "loop_polls": 2331144
+        },
+        "matches_node": true,
+        "live_subject": true
+      },
+      {
+        "seed": 9013,
+        "exit": 0,
+        "counters": {
+          "scheduled_collections": 11,
+          "copying_minors": 11,
+          "moved_objects": 19101,
+          "loop_polls": 2331144
+        },
+        "matches_node": true,
+        "live_subject": true
+      }
+    ],
+    "changed": [
+      {
+        "seed": 17,
+        "exit": 0,
+        "counters": {
+          "scheduled_collections": 9,
+          "copying_minors": 9,
+          "moved_objects": 19278,
+          "loop_polls": 2331144
+        },
+        "matches_node": true,
+        "live_subject": true
+      },
+      {
+        "seed": 9013,
+        "exit": 0,
+        "counters": {
+          "scheduled_collections": 11,
+          "copying_minors": 11,
+          "moved_objects": 19101,
+          "loop_polls": 2331144
+        },
+        "matches_node": true,
+        "live_subject": true
+      }
+    ]
+  },
+  "gc_stress_settings": {
+    "rate": 0.1,
+    "protect_fromspace": true,
+    "verify_evacuation": true
+  },
+  "checks": {
+    "rustfmt": "passed",
+    "git_diff_check": "passed",
+    "node_version_consistency": "passed",
+    "gc_root_holders": "passed",
+    "addr_class_inventory": "passed; pre-existing stale ratchet notice in crypto/kdf.rs",
+    "file_size": "pre-existing failures in perry-codegen/src/inprocess.rs (2416 lines) and perry-hir/src/lower/tests.rs (2009 lines); unchanged from baseline"
+  }
+}

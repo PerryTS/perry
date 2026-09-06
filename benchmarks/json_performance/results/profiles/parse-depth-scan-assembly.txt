@@ -1,0 +1,78 @@
+
+benchmarks/json_performance/.work/profile_worker:	file format mach-o arm64
+
+Disassembly of section __TEXT,__text:
+
+00000001007e5528 <_js_json_parse>:
+1007e5528: d104c3ff    	sub	sp, sp, #0x130
+1007e552c: a90d6ffc    	stp	x28, x27, [sp, #0xd0]
+1007e5530: a90e67fa    	stp	x26, x25, [sp, #0xe0]
+1007e5534: a90f5ff8    	stp	x24, x23, [sp, #0xf0]
+1007e5538: a91057f6    	stp	x22, x21, [sp, #0x100]
+1007e553c: a9114ff4    	stp	x20, x19, [sp, #0x110]
+1007e5540: a9127bfd    	stp	x29, x30, [sp, #0x120]
+1007e5544: 910483fd    	add	x29, sp, #0x120
+1007e5548: b4007be0    	cbz	x0, 0x1007e64c4 <_js_json_parse+0xf9c>
+1007e554c: aa0003f4    	mov	x20, x0
+1007e5550: b9400413    	ldr	w19, [x0, #0x4]
+1007e5554: 34007b93    	cbz	w19, 0x1007e64c4 <_js_json_parse+0xf9c>
+1007e5558: d2800009    	mov	x9, #0x0                ; =0
+1007e555c: 5280000c    	mov	w12, #0x0               ; =0
+1007e5560: 5280000a    	mov	w10, #0x0               ; =0
+1007e5564: 91005296    	add	x22, x20, #0x14
+1007e5568: 8b1302c8    	add	x8, x22, x19
+1007e556c: 5280002b    	mov	w11, #0x1               ; =1
+1007e5570: 9100528e    	add	x14, x20, #0x14
+1007e5574: aa0e03ed    	mov	x13, x14
+1007e5578: 14000009    	b	0x1007e559c <_js_json_parse+0x74>
+1007e557c: 7101f5ff    	cmp	w15, #0x7d
+1007e5580: 54000081    	b.ne	0x1007e5590 <_js_json_parse+0x68>
+1007e5584: 5280000c    	mov	w12, #0x0               ; =0
+1007e5588: f1000529    	subs	x9, x9, #0x1
+1007e558c: 9a8933e9    	csel	x9, xzr, x9, lo
+1007e5590: aa0d03ee    	mov	x14, x13
+1007e5594: eb0801bf    	cmp	x13, x8
+1007e5598: 54000440    	b.eq	0x1007e5620 <_js_json_parse+0xf8>
+1007e559c: 384015af    	ldrb	w15, [x13], #0x1
+1007e55a0: 3700028c    	tbnz	w12, #0x0, 0x1007e55f0 <_js_json_parse+0xc8>
+1007e55a4: 5280000c    	mov	w12, #0x0               ; =0
+1007e55a8: 710171ff    	cmp	w15, #0x5c
+1007e55ac: 540000cd    	b.le	0x1007e55c4 <_js_json_parse+0x9c>
+1007e55b0: 710175ff    	cmp	w15, #0x5d
+1007e55b4: 54fffe80    	b.eq	0x1007e5584 <_js_json_parse+0x5c>
+1007e55b8: 7101edff    	cmp	w15, #0x7b
+1007e55bc: 54fffe01    	b.ne	0x1007e557c <_js_json_parse+0x54>
+1007e55c0: 14000005    	b	0x1007e55d4 <_js_json_parse+0xac>
+1007e55c4: 710089ff    	cmp	w15, #0x22
+1007e55c8: 54000100    	b.eq	0x1007e55e8 <_js_json_parse+0xc0>
+1007e55cc: 71016dff    	cmp	w15, #0x5b
+1007e55d0: 54fffe01    	b.ne	0x1007e5590 <_js_json_parse+0x68>
+1007e55d4: 91000529    	add	x9, x9, #0x1
+1007e55d8: f10fa53f    	cmp	x9, #0x3e9
+1007e55dc: 54000bc2    	b.hs	0x1007e5754 <_js_json_parse+0x22c>
+1007e55e0: 5280000c    	mov	w12, #0x0               ; =0
+1007e55e4: 17ffffeb    	b	0x1007e5590 <_js_json_parse+0x68>
+1007e55e8: 5280002c    	mov	w12, #0x1               ; =1
+1007e55ec: 17ffffe9    	b	0x1007e5590 <_js_json_parse+0x68>
+1007e55f0: 910005ce    	add	x14, x14, #0x1
+1007e55f4: 710171ff    	cmp	w15, #0x5c
+1007e55f8: 1a9f17ec    	cset	w12, eq
+1007e55fc: 1a9f056d    	csinc	w13, w11, wzr, eq
+1007e5600: 710089ff    	cmp	w15, #0x22
+1007e5604: 1a8c03ec    	csel	w12, wzr, w12, eq
+1007e5608: 1a8d03ed    	csel	w13, wzr, w13, eq
+1007e560c: 7200015f    	tst	w10, #0x1
+1007e5610: 1a8c13ea    	csel	w10, wzr, w12, ne
+1007e5614: 1a9f05ac    	csinc	w12, w13, wzr, eq
+1007e5618: eb0801df    	cmp	x14, x8
+1007e561c: 54fffac1    	b.ne	0x1007e5574 <_js_json_parse+0x4c>
+1007e5620: b00043a0    	adrp	x0, 0x10105a000 <__RNvNCNKNvNtNtCs8fTlwEPzH6i_13perry_runtime11node_stream12constructors16DEFAULT_HWM_BYTE0s_023___RUST_STD_INTERNAL_VAL+0x10>
+1007e5624: 9127e000    	add	x0, x0, #0x9f8
+1007e5628: f9400008    	ldr	x8, [x0]
+1007e562c: d63f0100    	blr	x8
+1007e5630: aa0003f7    	mov	x23, x0
+1007e5634: 39400008    	ldrb	w8, [x0]
+1007e5638: 3900001f    	strb	wzr, [x0]
+1007e563c: b00043b8    	adrp	x24, 0x10105a000 <__RNvNCNKNvNtNtCs8fTlwEPzH6i_13perry_runtime11node_stream12constructors16DEFAULT_HWM_BYTE0s_023___RUST_STD_INTERNAL_VAL+0x10>
+1007e5640: 91284318    	add	x24, x24, #0xa10
+1007e5644: 350003e8    	cbnz	w8, 0x1007e56c0 <_js_json_parse+0x198>

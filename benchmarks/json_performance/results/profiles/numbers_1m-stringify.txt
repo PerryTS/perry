@@ -1,0 +1,251 @@
+Analysis of sampling profile_worker (pid 88116) every 1 millisecond
+Process:         profile_worker [88116]
+Path:            /Users/USER/*/profile_worker
+Load Address:    0x104730000
+Identifier:      profile_worker
+Version:         0
+Code Type:       ARM64
+Platform:        macOS
+Parent Process:  Python [88098]
+Target Type:     live task
+
+Date/Time:       2026-09-05 21:37:38.141 -0700
+Launch Time:     2026-09-05 21:37:37.102 -0700
+OS Version:      macOS 26.5.1 (25F80)
+Report Version:  7
+Analysis Tool:   /usr/bin/sample
+
+Physical footprint:         52.5M
+Physical footprint (peak):  53.4M
+Idle exit:                  untracked
+----
+
+Call graph:
+    3033 Thread_7052404   DispatchQueue_1: com.apple.main-thread  (serial)
+      3033 start  (in dyld) + 6992  [0x181357e00]
+        3033 main  (in profile_worker) + 2816  [0x104737728]
+          3033 perry_fn_worker_ts__run$spec_b  (in profile_worker) + 9528  [0x104732df8]
+            2979 js_json_stringify_full  (in profile_worker) + 6716  [0x104f190c0]
+            + 2856 _RNvNtNtCs8fTlwEPzH6i_13perry_runtime4json9stringify21stringify_array_depth  (in profile_worker) + 3092  [0x104c00b60]
+            + ! 2531 _RNvNtNtCs8fTlwEPzH6i_13perry_runtime4json17stringify_scalars12write_number  (in profile_worker) + 252  [0x104bf152c]
+            + ! : 2302 _RNvNtNtCs8fTlwEPzH6i_13perry_runtime6string6format13js_format_f64  (in profile_worker) + 440  [0x104ccb9b8]
+            + ! : | 2178 _RNvNvNtCsctvjasLqLe9_5alloc3fmt6format12format_inner  (in profile_worker) + 304  [0x104753dc4]
+            + ! : | + 2112 _RNvNtCsjgY6bXVaRmE_4core3fmt5write  (in profile_worker) + 96  [0x10475d8f0]
+            + ! : | + ! 957 _RINvNtNtCsjgY6bXVaRmE_4core3fmt5float32float_to_decimal_common_shortestdEB6_  (in profile_worker) + 420  [0x1047583a4]
+            + ! : | + ! : 957 _RNvNtNtNtNtNtCsjgY6bXVaRmE_4core3num3imp7flt2dec8strategy5grisu19format_shortest_opt  (in profile_worker) + 596,672,...  [0x1047605d4,0x104760620,...]
+            + ! : | + ! 880 _RINvNtNtCsjgY6bXVaRmE_4core3fmt5float32float_to_decimal_common_shortestdEB6_  (in profile_worker) + 620  [0x10475846c]
+            + ! : | + ! : 643 _RNvMsa_NtCsjgY6bXVaRmE_4core3fmtNtB5_9Formatter21write_formatted_parts  (in profile_worker) + 552  [0x10475b9c0]
+            + ! : | + ! : | 276 _RNvXsZ_NtCsctvjasLqLe9_5alloc6stringNtB5_6StringNtNtCsjgY6bXVaRmE_4core3fmt5Write9write_str  (in profile_worker) + 112  [0x104754234]
+            + ! : | + ! : | + 223 _RINvNvMs2_NtCsctvjasLqLe9_5alloc7raw_vecINtB8_11RawVecInnerpE7reserve21do_reserve_and_handleNtNtBa_5alloc6GlobalEBa_  (in profile_worker) + 68  [0x1052dbbb8]
+            + ! : | + ! : | + ! 89 _RNvMs5_NtCsctvjasLqLe9_5alloc7raw_vecNtB5_11RawVecInner11finish_growB7_  (in profile_worker) + 84  [0x1052dbc98]
+            + ! : | + ! : | + ! : 84 mi_malloc_aligned  (in profile_worker) + 4  [0x10532060c]
+            + ! : | + ! : | + ! : 5 OUTLINED_FUNCTION_32  (in profile_worker) + 0  [0x1051d8b7c]
+            + ! : | + ! : | + ! 80 _RNvMs5_NtCsctvjasLqLe9_5alloc7raw_vecNtB5_11RawVecInner11finish_growB7_  (in profile_worker) + 44  [0x1052dbc70]
+            + ! : | + ! : | + ! : 24 mi_realloc_aligned  (in profile_worker) + 12  [0x1051c783c]
+            + ! : | + ! : | + ! : 16 mi_free  (in profile_worker) + 32,88  [0x1053203a0,0x1053203d8]
+            + ! : | + ! : | + ! : 13 _mi_theap_realloc_zero  (in profile_worker) + 352  [0x105320590]
+            + ! : | + ! : | + ! : | 12 _platform_memmove  (in libsystem_platform.dylib) + 460,428,...  [0x18171f52c,0x18171f50c,...]
+            + ! : | + ! : | + ! : | 1 DYLD-STUB$$memcpy  (in profile_worker) + 4  [0x10532d190]
+            + ! : | + ! : | + ! : 10 _mi_theap_realloc_zero  (in profile_worker) + 28,332,...  [0x10532044c,0x10532057c,...]
+            + ! : | + ! : | + ! : 9 _mi_theap_realloc_zero  (in profile_worker) + 356  [0x105320594]
+            + ! : | + ! : | + ! : | 9 mi_free  (in profile_worker) + 0  [0x105320380]
+            + ! : | + ! : | + ! : 5 mi_free  (in profile_worker) + 8  [0x105320388]
+            + ! : | + ! : | + ! : | 3 mi_free  (in profile_worker) + 8  [0x105320388]
+            + ! : | + ! : | + ! : | 2 OUTLINED_FUNCTION_41  (in profile_worker) + 16  [0x1051d8bbc]
+            + ! : | + ! : | + ! : 3 _mi_theap_realloc_zero  (in profile_worker) + 280  [0x105320548]
+            + ! : | + ! : | + ! :   3 OUTLINED_FUNCTION_16  (in profile_worker) + 16,4  [0x1051d8aac,0x1051d8aa0]
+            + ! : | + ! : | + ! 36 _RNvMs5_NtCsctvjasLqLe9_5alloc7raw_vecNtB5_11RawVecInner11finish_growB7_  (in profile_worker) + 72,4,...  [0x1052dbc8c,0x1052dbc48,...]
+            + ! : | + ! : | + ! 13 mi_malloc_aligned  (in profile_worker) + 64  [0x105320648]
+            + ! : | + ! : | + ! : 10 mi_malloc_aligned  (in profile_worker) + 64  [0x105320648]
+            + ! : | + ! : | + ! : 3 OUTLINED_FUNCTION_58  (in profile_worker) + 12  [0x1051d8c74]
+            + ! : | + ! : | + ! 5 mi_malloc_aligned  (in profile_worker) + 88  [0x105320660]
+            + ! : | + ! : | + !   5 mi_malloc_aligned  (in profile_worker) + 88  [0x105320660]
+            + ! : | + ! : | + 45 _RINvNvMs2_NtCsctvjasLqLe9_5alloc7raw_vecINtB8_11RawVecInnerpE7reserve21do_reserve_and_handleNtNtBa_5alloc6GlobalEBa_  (in profile_worker) + 52,8,...  [0x1052dbba8,0x1052dbb7c,...]
+            + ! : | + ! : | + 8 _RNvMs5_NtCsctvjasLqLe9_5alloc7raw_vecNtB5_11RawVecInner11finish_growB7_  (in profile_worker) + 128  [0x1052dbcc4]
+            + ! : | + ! : | 252 _RNvXsZ_NtCsctvjasLqLe9_5alloc6stringNtB5_6StringNtNtCsjgY6bXVaRmE_4core3fmt5Write9write_str  (in profile_worker) + 64  [0x104754204]
+            + ! : | + ! : | + 199 _platform_memmove  (in libsystem_platform.dylib) + 452,428,...  [0x18171f524,0x18171f50c,...]
+            + ! : | + ! : | + 53 DYLD-STUB$$memcpy  (in profile_worker) + 4  [0x10532d190]
+            + ! : | + ! : | 104 _RNvXsZ_NtCsctvjasLqLe9_5alloc6stringNtB5_6StringNtNtCsjgY6bXVaRmE_4core3fmt5Write9write_str  (in profile_worker) + 28,48,...  [0x1047541e0,0x1047541f4,...]
+            + ! : | + ! : | 11 _RINvNvMs2_NtCsctvjasLqLe9_5alloc7raw_vecINtB8_11RawVecInnerpE7reserve21do_reserve_and_handleNtNtBa_5alloc6GlobalEBa_  (in profile_worker) + 88  [0x1052dbbcc]
+            + ! : | + ! : 154 _RNvMsa_NtCsjgY6bXVaRmE_4core3fmtNtB5_9Formatter21write_formatted_parts  (in profile_worker) + 552,156,...  [0x10475b9c0,0x10475b834,...]
+            + ! : | + ! : 68 _RNvXsZ_NtCsctvjasLqLe9_5alloc6stringNtB5_6StringNtNtCsjgY6bXVaRmE_4core3fmt5Write9write_str  (in profile_worker) + 84  [0x104754218]
+            + ! : | + ! : 15 _RNvMsa_NtCsjgY6bXVaRmE_4core3fmtNtB5_9Formatter19pad_formatted_parts  (in profile_worker) + 20,40,...  [0x10475b554,0x10475b568,...]
+            + ! : | + ! 133 _RINvNtNtCsjgY6bXVaRmE_4core3fmt5float32float_to_decimal_common_shortestdEB6_  (in profile_worker) + 88,408,...  [0x104758258,0x104758398,...]
+            + ! : | + ! 76 _RINvNtNtCsjgY6bXVaRmE_4core3fmt5float32float_to_decimal_common_shortestdEB6_  (in profile_worker) + 536  [0x104758418]
+            + ! : | + ! : 76 _RNvNtNtNtCsjgY6bXVaRmE_4core3num3imp7flt2dec17digits_to_dec_str  (in profile_worker) + 104,40,...  [0x10475ea68,0x10475ea28,...]
+            + ! : | + ! 44 _RNvMsa_NtCsjgY6bXVaRmE_4core3fmtNtB5_9Formatter21write_formatted_parts  (in profile_worker) + 624,616,...  [0x10475ba08,0x10475ba00,...]
+            + ! : | + ! 16 _RNvNtNtNtNtNtCsjgY6bXVaRmE_4core3num3imp7flt2dec8strategy5grisu19format_shortest_opt  (in profile_worker) + 1260  [0x10476086c]
+            + ! : | + ! 4 _RNvMsa_NtCsjgY6bXVaRmE_4core3fmtNtB5_9Formatter19pad_formatted_parts  (in profile_worker) + 108  [0x10475b5ac]
+            + ! : | + ! 2 _RNvNtNtNtCsjgY6bXVaRmE_4core3num3imp7flt2dec17digits_to_dec_str  (in profile_worker) + 252  [0x10475eafc]
+            + ! : | + 50 _RNvNtCsjgY6bXVaRmE_4core3fmt5write  (in profile_worker) + 96,116,...  [0x10475d8f0,0x10475d904,...]
+            + ! : | + 16 _RINvNtNtCsjgY6bXVaRmE_4core3fmt5float32float_to_decimal_common_shortestdEB6_  (in profile_worker) + 632  [0x104758478]
+            + ! : | 99 _RNvNvNtCsctvjasLqLe9_5alloc3fmt6format12format_inner  (in profile_worker) + 192,200,...  [0x104753d54,0x104753d5c,...]
+            + ! : | 25 _RNvNtCsjgY6bXVaRmE_4core3fmt5write  (in profile_worker) + 424  [0x10475da38]
+            + ! : 95 _RNvNtNtCs8fTlwEPzH6i_13perry_runtime6string6format13js_format_f64  (in profile_worker) + 24,292,...  [0x104ccb818,0x104ccb924,...]
+            + ! : 81 _RNvNtNtCs8fTlwEPzH6i_13perry_runtime4json17stringify_scalars12write_number  (in profile_worker) + 300  [0x104bf155c]
+            + ! : | 69 _platform_memmove  (in libsystem_platform.dylib) + 452,12,...  [0x18171f524,0x18171f36c,...]
+            + ! : | 12 DYLD-STUB$$memcpy  (in profile_worker) + 4  [0x10532d190]
+            + ! : 26 _RNvNvNtCsctvjasLqLe9_5alloc3fmt6format12format_inner  (in profile_worker) + 336  [0x104753de4]
+            + ! : 17 _RNvNtNtCs8fTlwEPzH6i_13perry_runtime4json17stringify_scalars12write_number  (in profile_worker) + 404  [0x104bf15c4]
+            + ! : | 15 _platform_memmove  (in libsystem_platform.dylib) + 452,0,...  [0x18171f524,0x18171f360,...]
+            + ! : | 2 DYLD-STUB$$memcpy  (in profile_worker) + 4  [0x10532d190]
+            + ! : 10 _RNvNtNtCs8fTlwEPzH6i_13perry_runtime4json17stringify_scalars12write_number  (in profile_worker) + 324  [0x104bf1574]
+            + ! :   10 mi_free  (in profile_worker) + 0  [0x105320380]
+            + ! 177 _RNvNtNtCs8fTlwEPzH6i_13perry_runtime4json17stringify_scalars12write_number  (in profile_worker) + 436,308,...  [0x104bf15e4,0x104bf1564,...]
+            + ! 95 mi_free  (in profile_worker) + 32,88,...  [0x1053203a0,0x1053203d8,...]
+            + ! 27 mi_free  (in profile_worker) + 8  [0x105320388]
+            + ! : 17 OUTLINED_FUNCTION_41  (in profile_worker) + 16  [0x1051d8bbc]
+            + ! : 10 mi_free  (in profile_worker) + 8  [0x105320388]
+            + ! 21 _RNvNtNtCs8fTlwEPzH6i_13perry_runtime4json17stringify_scalars12write_number  (in profile_worker) + 460  [0x104bf15fc]
+            + ! : 21 _RNvXsu_Cs8xF4iOrs9m2_4itoayNtB5_8Unsigned3fmt  (in profile_worker) + 80,0,...  [0x1047c9dfc,0x1047c9dac,...]
+            + ! 5 _RNvNtNtCs8fTlwEPzH6i_13perry_runtime6string6format13js_format_f64  (in profile_worker) + 204  [0x104ccb8cc]
+            + 118 _RNvNtNtCs8fTlwEPzH6i_13perry_runtime4json9stringify21stringify_array_depth  (in profile_worker) + 2348,2300,...  [0x104c00878,0x104c00848,...]
+            + 5 _RNvNtNtCs8fTlwEPzH6i_13perry_runtime4json17stringify_scalars12write_number  (in profile_worker) + 424  [0x104bf15d8]
+            25 js_json_stringify_full  (in profile_worker) + 5464  [0x104f18bdc]
+            + 25 _RNvNtCs8fTlwEPzH6i_13perry_runtime6string20string_storage_alloc  (in profile_worker) + 60  [0x104a59178]
+            +   25 _RNvNtNtCs8fTlwEPzH6i_13perry_runtime5arena10allocators18arena_alloc_gc_old  (in profile_worker) + 520  [0x104c045a0]
+            +     25 _RNvNtNtCs8fTlwEPzH6i_13perry_runtime5arena5block16arena_cell_alloc  (in profile_worker) + 140  [0x104c0bc98]
+            +       25 _RNvNtNtCs8fTlwEPzH6i_13perry_runtime2gc6policy16gc_check_trigger  (in profile_worker) + 1480  [0x104b67f88]
+            +         24 _RNvNtCs8fTlwEPzH6i_13perry_runtime2gc39gc_collect_full_mark_sweep_with_trigger  (in profile_worker) + 308  [0x104a0e7dc]
+            +         ! 12 _RNvMs7_NtNtCs8fTlwEPzH6i_13perry_runtime2gc5cycleNtB5_12GcCycleState4step  (in profile_worker) + 14244  [0x1049898a4]
+            +         ! : 4 _RNvMs1_NtNtCs8fTlwEPzH6i_13perry_runtime2gc6oldgenNtB5_21IncrementalSweepState4step  (in profile_worker) + 6256  [0x10496b7c8]
+            +         ! : | 2 _RNvNtNtCs8fTlwEPzH6i_13perry_runtime2gc6oldgen32invalidate_dead_old_arena_header  (in profile_worker) + 1164,1196  [0x104b66d90,0x104b66db0]
+            +         ! : | 1 _RNvMs3_NtNtCs8fTlwEPzH6i_13perry_runtime2gc6oldgenNtB5_22ArenaSweepObjectsState19reclaim_dead_object  (in profile_worker) + 68  [0x10497c5e4]
+            +         ! : | + 1 _RNvNtNtCs8fTlwEPzH6i_13perry_runtime5arena9page_meta29old_page_account_swept_object  (in profile_worker) + 172  [0x104c0f858]
+            +         ! : | 1 _RNvMs3_NtNtCs8fTlwEPzH6i_13perry_runtime2gc6oldgenNtB5_22ArenaSweepObjectsState19reclaim_dead_object  (in profile_worker) + 248  [0x10497c698]
+            +         ! : |   1 _RNvNtNtCs8fTlwEPzH6i_13perry_runtime2gc5types38gc_type_clear_dead_payload_side_tables  (in profile_worker) + 60  [0x104b56ec4]
+            +         ! : 4 _RNvMs1_NtNtCs8fTlwEPzH6i_13perry_runtime2gc6oldgenNtB5_21IncrementalSweepState4step  (in profile_worker) + 14700  [0x10496d8c4]
+            +         ! : | 4 _RNvNtNtCs8fTlwEPzH6i_13perry_runtime5arena5block19release_arena_block  (in profile_worker) + 216  [0x104c0bfd8]
+            +         ! : |   4 madvise  (in libsystem_kernel.dylib) + 8  [0x1816d49b0]
+            +         ! : 2 _RNvMs1_NtNtCs8fTlwEPzH6i_13perry_runtime2gc6oldgenNtB5_21IncrementalSweepState4step  (in profile_worker) + 14688  [0x10496d8b8]
+            +         ! : | 2 _RNvNtNtCs8fTlwEPzH6i_13perry_runtime5arena9page_meta27unregister_block_generation  (in profile_worker) + 1604  [0x104c0f604]
+            +         ! : |   2 _RNvNtNtCs8fTlwEPzH6i_13perry_runtime5arena9page_meta26unregister_old_block_pages  (in profile_worker) + 260,516  [0x104c0eb2c,0x104c0ec2c]
+            +         ! : 1 _RNvMs1_NtNtCs8fTlwEPzH6i_13perry_runtime2gc6oldgenNtB5_21IncrementalSweepState4step  (in profile_worker) + 13956  [0x10496d5dc]
+            +         ! : | 1 _RNvNtNtCs8fTlwEPzH6i_13perry_runtime5arena9page_meta26unregister_old_block_pages  (in profile_worker) + 572  [0x104c0ec64]
+            +         ! : 1 _RNvMs1_NtNtCs8fTlwEPzH6i_13perry_runtime2gc6oldgenNtB5_21IncrementalSweepState4step  (in profile_worker) + 6140  [0x10496b754]
+            +         ! 5 _RNvMs7_NtNtCs8fTlwEPzH6i_13perry_runtime2gc5cycleNtB5_12GcCycleState4step  (in profile_worker) + 1772  [0x1049867ec]
+            +         ! : 5 _RNvMs4_NtNtCs8fTlwEPzH6i_13perry_runtime2gc5cycleNtB5_18RootScanCycleState21step_current_subphase  (in profile_worker) + 11828  [0x10497f534]
+            +         ! :   5 _RNvMs2_NtNtCs8fTlwEPzH6i_13perry_runtime2gc5cycleNtB5_30MutableRegisteredRootScanState4step  (in profile_worker) + 1544  [0x104971848]
+            +         ! :     1 _RNvNtNtCs8fTlwEPzH6i_13perry_runtime6object21array_tail_transition10scan_table  (in profile_worker) + 268  [0x104cad4c4]
+            +         ! :     1 _RNvNtNtCs8fTlwEPzH6i_13perry_runtime6object6shapes26scan_shape_table_rekey_mut  (in profile_worker) + 812  [0x104cc3328]
+            +         ! :     | 1 _RNvMs1_NtNtCs8fTlwEPzH6i_13perry_runtime2gc5rootsNtB5_18RuntimeRootVisitor21visit_tagged_raw_addr  (in profile_worker) + 180  [0x1049692cc]
+            +         ! :     1 _RNvNtNtCs8fTlwEPzH6i_13perry_runtime6object6shapes26scan_shape_table_rekey_mut  (in profile_worker) + 316  [0x104cc3138]
+            +         ! :     1 _RNvNtNtCs8fTlwEPzH6i_13perry_runtime7closure13dynamic_props36scan_closure_dynamic_props_roots_mut  (in profile_worker) + 1840  [0x104ce350c]
+            +         ! :     | 1 _RNvNtNtCs8fTlwEPzH6i_13perry_runtime7closure13dynamic_props22merge_closure_prop_map  (in profile_worker) + 1108  [0x104cdef04]
+            +         ! :     1 _RNvNtNtCs8fTlwEPzH6i_13perry_runtime7closure13dynamic_props36scan_closure_dynamic_props_roots_mut  (in profile_worker) + 1860  [0x104ce3520]
+            +         ! :       1 pthread_mutex_unlock  (in libsystem_pthread.dylib) + 12  [0x181710950]
+            +         ! 4 _RNvMs7_NtNtCs8fTlwEPzH6i_13perry_runtime2gc5cycleNtB5_12GcCycleState4step  (in profile_worker) + 2516  [0x104986ad4]
+            +         ! : 1 _RNvNtNtCs8fTlwEPzH6i_13perry_runtime2gc5trace25drain_trace_worklist_step  (in profile_worker) + 1032  [0x104b50dc8]
+            +         ! : | 1 _RNvNtNtCs8fTlwEPzH6i_13perry_runtime2gc17layout_slot_visit32visit_gc_layout_slot_descriptors  (in profile_worker) + 296  [0x104b4af28]
+            +         ! : 1 _RNvNtNtCs8fTlwEPzH6i_13perry_runtime2gc5trace25drain_trace_worklist_step  (in profile_worker) + 1720  [0x104b51078]
+            +         ! : | 1 _RNvNtNtCs8fTlwEPzH6i_13perry_runtime2gc17layout_slot_visit32visit_gc_layout_slot_descriptors  (in profile_worker) + 3432  [0x104b4bb68]
+            +         ! : |   1 _RNCNvNtNtCs8fTlwEPzH6i_13perry_runtime2gc5trace24trace_heap_rewrite_slots0B7_  (in profile_worker) + 140  [0x1049310fc]
+            +         ! : |     1 _RNvMs2_NtNtCs8fTlwEPzH6i_13perry_runtime2gc6layoutNtB5_23GcMutableSlotDescriptor11visit_slots  (in profile_worker) + 128  [0x104971a50]
+            +         ! : |       1 _RNCNCNvNtNtCs8fTlwEPzH6i_13perry_runtime2gc5trace24trace_heap_rewrite_slots00B9_  (in profile_worker) + 436  [0x1049275f4]
+            +         ! : |         1 _RNvMNtNtCs8fTlwEPzH6i_13perry_runtime2gc5traceNtB2_15ValidPointerSet8contains  (in profile_worker) + 264  [0x104948ea8]
+            +         ! : 1 _RNvNtNtCs8fTlwEPzH6i_13perry_runtime2gc5trace25drain_trace_worklist_step  (in profile_worker) + 7588  [0x104b52764]
+            +         ! : | 1 _RNvNtNtCs8fTlwEPzH6i_13perry_runtime2gc17layout_slot_visit10fixed_slot  (in profile_worker) + 4  [0x104b4ac84]
+            +         ! : 1 _RNvNtNtCs8fTlwEPzH6i_13perry_runtime2gc5trace25drain_trace_worklist_step  (in profile_worker) + 592  [0x104b50c10]
+            +         ! 1 _RNvMs7_NtNtCs8fTlwEPzH6i_13perry_runtime2gc5cycleNtB5_12GcCycleState4step  (in profile_worker) + 3472  [0x104986e90]
+            +         ! : 1 _RNvMs_NtNtCs8fTlwEPzH6i_13perry_runtime5arena4walkNtB4_17ArenaObjectCursor13next_budgeted  (in profile_worker) + 380  [0x104995d9c]
+            +         ! 1 _RNvMs7_NtNtCs8fTlwEPzH6i_13perry_runtime2gc5cycleNtB5_12GcCycleState4step  (in profile_worker) + 13624  [0x104989638]
+            +         ! : 1 _RNvNtNtCs8fTlwEPzH6i_13perry_runtime2gc10dead_owner39prune_dead_owner_side_tables_post_trace  (in profile_worker) + 3596  [0x104b41b9c]
+            +         ! :   1 _RNvNtNtCs8fTlwEPzH6i_13perry_runtime2gc10dead_owner7fan_out  (in profile_worker) + 172  [0x105306e80]
+            +         ! :     1 _RNvNtNtCs8fTlwEPzH6i_13perry_runtime6object16descriptor_state35prune_dead_descriptor_owner_entries  (in profile_worker) + 332  [0x104c9aa78]
+            +         ! :       1 _RNCNvNtNtCs8fTlwEPzH6i_13perry_runtime6object16descriptor_state35prune_dead_descriptor_owner_entries0B7_  (in profile_worker) + 132  [0x10493a640]
+            +         ! 1 _RNvMs7_NtNtCs8fTlwEPzH6i_13perry_runtime2gc5cycleNtB5_12GcCycleState4step  (in profile_worker) + 19464  [0x10498ad08]
+            +         !   1 mi_theap_collect_ex  (in profile_worker) + 420  [0x1051d42d4]
+            +         !     1 _mi_arenas_collect  (in profile_worker) + 584  [0x1051c8c84]
+            +         !       1 _mi_bitmap_forall_setc_ranges  (in profile_worker) + 372  [0x1051cbe7c]
+            +         !         1 mi_arena_try_purge_visitor  (in profile_worker) + 48  [0x1051d6c48]
+            +         !           1 mi_arena_try_purge_range  (in profile_worker) + 112  [0x1051d6d28]
+            +         !             1 _mi_os_purge_ex  (in profile_worker) + 332  [0x1051d1478]
+            +         !               1 mi_os_decommit_ex  (in profile_worker) + 152  [0x1051d1138]
+            +         !                 1 madvise  (in libsystem_kernel.dylib) + 8  [0x1816d49b0]
+            +         1 _RNvNtCs8fTlwEPzH6i_13perry_runtime2gc39gc_collect_full_mark_sweep_with_trigger  (in profile_worker) + 280  [0x104a0e7c0]
+            +           1 _RNvMs7_NtNtCs8fTlwEPzH6i_13perry_runtime2gc5cycleNtB5_12GcCycleState8new_full  (in profile_worker) + 1232  [0x10498c6d0]
+            +             1 _RNvNtNtCs8fTlwEPzH6i_13perry_runtime5arena9page_meta43flush_deferred_old_page_registrations_batch  (in profile_worker) + 860  [0x105309108]
+            +               1 _RNvMs4_NtCsctvjasLqLe9_5alloc7raw_vecINtB5_6RawVecjE8grow_oneCs1skvzrip2fo_5tokio  (in profile_worker) + 60  [0x10531f180]
+            +                 1 _RNvMs5_NtCsctvjasLqLe9_5alloc7raw_vecNtB5_11RawVecInner11finish_growCs1skvzrip2fo_5tokio  (in profile_worker) + 116  [0x10531f21c]
+            +                   1 mi_malloc_aligned  (in profile_worker) + 4  [0x10532060c]
+            25 js_json_stringify_full  (in profile_worker) + 5500  [0x104f18c00]
+            + 25 _platform_memmove  (in libsystem_platform.dylib) + 88  [0x18171f3b8]
+            4 js_json_stringify_full  (in profile_worker) + 5096  [0x104f18a6c]
+              4 js_json_stringify_full  (in profile_worker) + 5364,5372  [0x104f18b78,0x104f18b80]
+
+Total number in stack (recursive counted multiple, when >=5):
+        6       mi_free  (in profile_worker) + 0  [0x105320380]
+        5       _platform_memmove  (in libsystem_platform.dylib) + 0  [0x18171f360]
+
+Sort by top of stack, same collapsed (when >= 5):
+        _RNvNtNtNtNtNtCsjgY6bXVaRmE_4core3num3imp7flt2dec8strategy5grisu19format_shortest_opt  (in profile_worker)        973
+        _platform_memmove  (in libsystem_platform.dylib)        320
+        _RNvMsa_NtCsjgY6bXVaRmE_4core3fmtNtB5_9Formatter21write_formatted_parts  (in profile_worker)        198
+        _RNvNtNtCs8fTlwEPzH6i_13perry_runtime4json17stringify_scalars12write_number  (in profile_worker)        182
+        _RNvXsZ_NtCsctvjasLqLe9_5alloc6stringNtB5_6StringNtNtCsjgY6bXVaRmE_4core3fmt5Write9write_str  (in profile_worker)        172
+        _RINvNtNtCsjgY6bXVaRmE_4core3fmt5float32float_to_decimal_common_shortestdEB6_  (in profile_worker)        149
+        mi_free  (in profile_worker)        143
+        _RNvNvNtCsctvjasLqLe9_5alloc3fmt6format12format_inner  (in profile_worker)        125
+        _RNvNtNtCs8fTlwEPzH6i_13perry_runtime4json9stringify21stringify_array_depth  (in profile_worker)        118
+        _RNvNtNtCs8fTlwEPzH6i_13perry_runtime6string6format13js_format_f64  (in profile_worker)        100
+        mi_malloc_aligned  (in profile_worker)        100
+        _RNvNtNtNtCsjgY6bXVaRmE_4core3num3imp7flt2dec17digits_to_dec_str  (in profile_worker)        78
+        _RNvNtCsjgY6bXVaRmE_4core3fmt5write  (in profile_worker)        75
+        DYLD-STUB$$memcpy  (in profile_worker)        68
+        _RINvNvMs2_NtCsctvjasLqLe9_5alloc7raw_vecINtB8_11RawVecInnerpE7reserve21do_reserve_and_handleNtNtBa_5alloc6GlobalEBa_  (in profile_worker)        56
+        _RNvMs5_NtCsctvjasLqLe9_5alloc7raw_vecNtB5_11RawVecInner11finish_growB7_  (in profile_worker)        44
+        mi_realloc_aligned  (in profile_worker)        24
+        _RNvXsu_Cs8xF4iOrs9m2_4itoayNtB5_8Unsigned3fmt  (in profile_worker)        21
+        OUTLINED_FUNCTION_41  (in profile_worker)        19
+        _RNvMsa_NtCsjgY6bXVaRmE_4core3fmtNtB5_9Formatter19pad_formatted_parts  (in profile_worker)        19
+        _mi_theap_realloc_zero  (in profile_worker)        10
+        OUTLINED_FUNCTION_32  (in profile_worker)        5
+        madvise  (in libsystem_kernel.dylib)        5
+
+Binary Images:
+       0x104730000 -        0x105693df7 +profile_worker (0) <32B02033-0537-3350-8BC0-76D908ADB34A> /Users/*/profile_worker
+       0x1812b0000 -        0x181302b4b  libobjc.A.dylib (951.7) <FF1D8AE4-ABEF-35F1-A30A-1183B9CB414F> /usr/lib/libobjc.A.dylib
+       0x181303000 -        0x181337d07  libdyld.dylib (1378) <B147D877-D0C2-388F-B38D-D3132E39905F> /usr/lib/system/libdyld.dylib
+       0x181338000 -        0x1813de217  dyld (1.0.0 - 1378) <A237EF81-B68B-37BA-A165-92C965529534> /usr/lib/dyld
+       0x1813df000 -        0x1813e2228  libsystem_blocks.dylib (96) <CC947089-488D-316B-A9C7-46DEC0F73145> /usr/lib/system/libsystem_blocks.dylib
+       0x1813e3000 -        0x18143755f  libxpc.dylib (3102.120.13) <C40FCAE8-7A17-3D82-87CB-3DA4802ADEF1> /usr/lib/system/libxpc.dylib
+       0x181438000 -        0x1814589ff  libsystem_trace.dylib (1861.120.4) <D0FABAB3-5AE7-3F10-8C62-60CBF5D70850> /usr/lib/system/libsystem_trace.dylib
+       0x181459000 -        0x1815075f7  libcorecrypto.dylib (1922.121.1) <A01A158D-6FE7-3B1C-A2C4-6BCB90D7314A> /usr/lib/system/libcorecrypto.dylib
+       0x181508000 -        0x1815581d7  libsystem_malloc.dylib (812.100.31) <5FAE4807-4D2B-3A95-A63A-DD96D3DA11B4> /usr/lib/system/libsystem_malloc.dylib
+       0x181559000 -        0x1815a023f  libdispatch.dylib (1542.100.32) <F071EFE4-299F-3089-ACC4-0025B8FFB52A> /usr/lib/system/libdispatch.dylib
+       0x1815a1000 -        0x1815a3ffb  libsystem_featureflags.dylib (103) <71FCFFBD-85F8-3365-AFE0-BECEA4369122> /usr/lib/system/libsystem_featureflags.dylib
+       0x1815a4000 -        0x181624d9f  libsystem_c.dylib (1752.120.2) <694B7881-1BF3-3D0F-8F19-B50AE4E8EF8A> /usr/lib/system/libsystem_c.dylib
+       0x181625000 -        0x1816b5ae7  libc++.1.dylib (2100.43) <5013C0F8-84A9-3B56-9FEB-C353816A750F> /usr/lib/libc++.1.dylib
+       0x1816b6000 -        0x1816d075f  libc++abi.dylib (2100.43) <E482D257-E5A0-3816-BD97-7B39342958DA> /usr/lib/libc++abi.dylib
+       0x1816d1000 -        0x18170e2af  libsystem_kernel.dylib (12377.121.6) <CC1CF985-BC65-3725-809F-4C1E36B8F4BA> /usr/lib/system/libsystem_kernel.dylib
+       0x18170f000 -        0x18171bb3b  libsystem_pthread.dylib (539.100.4) <4F33683C-18C8-39A1-800B-2E3BD43BCC13> /usr/lib/system/libsystem_pthread.dylib
+       0x18171c000 -        0x181724963  libsystem_platform.dylib (375.120.2) <160FD864-8D15-36FC-9E97-9725388CFAFE> /usr/lib/system/libsystem_platform.dylib
+       0x181725000 -        0x1817546eb  libsystem_info.dylib (600) <3D62F2D9-F516-31BF-83C7-E203D872300B> /usr/lib/system/libsystem_info.dylib
+       0x1856ec000 -        0x1856f5e5f  libsystem_darwin.dylib (1752.120.2) <8858F025-745A-388E-9544-080781CC9A69> /usr/lib/system/libsystem_darwin.dylib
+       0x185b57000 -        0x185b691b6  libsystem_notify.dylib (348.120.4) <64D76451-1E0C-369B-A631-54DA3140E083> /usr/lib/system/libsystem_notify.dylib
+       0x187e24000 -        0x187e3ef7b  libsystem_networkextension.dylib (2226.121.1) <0331EE20-A1FB-3C0D-990A-F65939CFF505> /usr/lib/system/libsystem_networkextension.dylib
+       0x187ec1000 -        0x187ed8fdf  libsystem_asl.dylib (406) <F40838DF-2F15-3F62-970F-DEE25706BF1B> /usr/lib/system/libsystem_asl.dylib
+       0x189a7f000 -        0x189a87387  libsystem_symptoms.dylib (2169.120.7) <F5029F5C-1BF3-31C7-892E-BC8606AC829E> /usr/lib/system/libsystem_symptoms.dylib
+       0x18dd23000 -        0x18dd5b257  libsystem_containermanager.dylib (725.120.2) <518BE44D-AA31-31E6-B44B-A37AD5E47040> /usr/lib/system/libsystem_containermanager.dylib
+       0x18f134000 -        0x18f1385d7  libsystem_configuration.dylib (1405.120.5) <0F7BBC1C-3D50-3E59-A31F-E4672A80BCEB> /usr/lib/system/libsystem_configuration.dylib
+       0x18f139000 -        0x18f13f8cf  libsystem_sandbox.dylib (2680.120.12) <EC3A75EA-44C0-3A0B-9BF7-71C117B0A9C6> /usr/lib/system/libsystem_sandbox.dylib
+       0x190793000 -        0x1907961fb  libquarantine.dylib (196.120.2) <5849009B-ACA3-3796-94C4-BBDF8D300EBA> /usr/lib/system/libquarantine.dylib
+       0x190f32000 -        0x190f38d03  libsystem_coreservices.dylib (191.4.5) <9576143B-C303-35A3-BA63-1FD06EDA2BB1> /usr/lib/system/libsystem_coreservices.dylib
+       0x1914bd000 -        0x1914faa77  libsystem_m.dylib (3312.100.1) <A7E0863C-101A-31A0-922B-ED9B02626151> /usr/lib/system/libsystem_m.dylib
+       0x1914fc000 -        0x1914ff527  libmacho.dylib (1378) <755441B4-C034-3E3A-8E3C-F424FBB28261> /usr/lib/system/libmacho.dylib
+       0x191519000 -        0x1915263a7  libcommonCrypto.dylib (600035) <CE357BB1-2D49-37CC-9FFE-D093936B1475> /usr/lib/system/libcommonCrypto.dylib
+       0x191527000 -        0x191530ca3  libunwind.dylib (2100.2) <FC8F0C4E-6FB0-3E27-ABEF-B0FA720CD5E4> /usr/lib/system/libunwind.dylib
+       0x191539000 -        0x1915437ff  libcopyfile.dylib (240) <8ACFAC7A-88E9-3EF4-853F-A9140FF110E5> /usr/lib/system/libcopyfile.dylib
+       0x191544000 -        0x191547987  libcompiler_rt.dylib (103.3) <AA79151F-C19D-3C7C-92F8-B10F04D82C1C> /usr/lib/system/libcompiler_rt.dylib
+       0x191548000 -        0x19154c78b  libsystem_collections.dylib (1752.120.2) <72DB5BE7-EF78-37D0-8AAD-53E37CFE4287> /usr/lib/system/libsystem_collections.dylib
+       0x19154d000 -        0x1915504cf  libsystem_secinit.dylib (168.100.7) <E525C566-CDA4-3D99-B12B-1615FD54A1F3> /usr/lib/system/libsystem_secinit.dylib
+       0x191551000 -        0x191553bf7  libremovefile.dylib (85.100.6) <635E661D-80A7-340D-A165-3F7D318FDFC9> /usr/lib/system/libremovefile.dylib
+       0x191554000 -        0x191554f27  libkeymgr.dylib (31) <8C08891A-DF1C-3DCC-AB64-4742FD6BE9BA> /usr/lib/system/libkeymgr.dylib
+       0x191555000 -        0x19155de37  libsystem_dnssd.dylib (2881.120.11) <6F45DF3F-233B-3BC3-BA8C-B43E7DA884BF> /usr/lib/system/libsystem_dnssd.dylib
+       0x19155e000 -        0x19156309b  libcache.dylib (95) <189B576E-6176-3F82-8FA4-5914B0BEAEE7> /usr/lib/system/libcache.dylib
+       0x191564000 -        0x191565ce3  libSystem.B.dylib (1356) <D65E4112-C151-3FF8-BEB7-4841436012D6> /usr/lib/libSystem.B.dylib
+       0x28479b000 -        0x2847a2349  libRosetta.dylib (367.9) <8651ED4F-6506-3788-B56B-32EE414A85CA> /usr/lib/libRosetta.dylib
+       0x2863b8000 -        0x2863bba4b  libsystem_darwindirectory.dylib (122) <CF277A2C-C818-3F16-8B3F-3C7B39FCD164> /usr/lib/system/libsystem_darwindirectory.dylib
+       0x2863bc000 -        0x2863c55d3  libsystem_eligibility.dylib (319.121.1) <DDAC0531-0262-3DDC-8EC8-80EB9438847A> /usr/lib/system/libsystem_eligibility.dylib
+       0x2863c6000 -        0x2863cd88b  libsystem_sanitizers.dylib (26.1) <44C4234F-8B2D-38D3-A774-B4B3C75AF3A7> /usr/lib/system/libsystem_sanitizers.dylib
+       0x2863ce000 -        0x2863cebb7  libsystem_trial.dylib (474.2.18.2) <68C583BA-AFF5-3916-86AE-6E38BFEF98D6> /usr/lib/system/libsystem_trial.dylib
