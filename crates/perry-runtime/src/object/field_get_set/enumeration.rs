@@ -294,20 +294,28 @@ pub(crate) fn for_in_keys_with(value: f64, lazy_shadow: bool) -> *mut ArrayHeade
     if jv.is_null() || jv.is_undefined() {
         return crate::array::js_array_alloc(0);
     }
-    let mut out = crate::array::js_array_alloc(8);
+    // #9864: ownKeys, getOwnPropertyDescriptor and getPrototypeOf can invoke
+    // user callbacks. Keep every value needed after them in relocatable
+    // handles, including the output accumulated while walking earlier
+    // prototypes.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let current = scope.root_nanbox_f64(value);
+    let out = scope.root_raw_mut_ptr(crate::array::js_array_alloc(8));
     // Non-pointer primitives (number/boolean, boxed string) have only their own
     // enumerable keys; every prototype property they inherit is non-enumerable.
     if !jv.is_pointer() {
         if diag {
             crate::hot_diag::enum_with(|d| d.for_in_primitive += 1);
         }
-        let own = js_object_keys_value(value);
-        let n = crate::array::js_array_length(own);
+        let own = scope.root_raw_const_ptr(js_object_keys_value(current.get_nanbox_f64()));
+        let n = own.with_const_ptr(|array| crate::array::js_array_length(array));
         for i in 0..n {
-            let kv = crate::array::js_array_get(own, i);
-            out = crate::array::js_array_push_f64(out, f64::from_bits(kv.bits()));
+            let kv = own.with_const_ptr(|own| crate::array::js_array_get(own, i));
+            let updated = out
+                .with_mut_ptr(|out| crate::array::js_array_push_f64(out, f64::from_bits(kv.bits())));
+            out.set_raw_mut_ptr(updated);
         }
-        return out;
+        return out.with_mut_ptr(|out: *mut ArrayHeader| out);
     }
     let key_string = |kv: JSValue, scratch: &mut [u8; crate::value::SHORT_STRING_MAX_LEN]| {
         let made = unsafe { crate::string::js_string_key_bytes(kv, scratch) }
@@ -325,7 +333,6 @@ pub(crate) fn for_in_keys_with(value: f64, lazy_shadow: bool) -> *mut ArrayHeade
     };
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
-    let mut current = value;
 
     // #9792 follow-up: the shadow set is DEFERRED.
     //
@@ -359,14 +366,16 @@ pub(crate) fn for_in_keys_with(value: f64, lazy_shadow: bool) -> *mut ArrayHeade
     let mut level: u32 = 0;
     // Depth cap guards against pathological / cyclic prototype graphs.
     for _ in 0..1000 {
-        let cv = JSValue::from_bits(current.to_bits());
+        let cv = JSValue::from_bits(current.get_nanbox_u64());
         if cv.is_null() || cv.is_undefined() || !cv.is_pointer() {
             break;
         }
         // Emit this level's enumerable own keys (OrdinaryOwnPropertyKeys order),
         // skipping any name already shadowed by a closer level.
-        let enum_arr = js_object_keys_value(current);
-        let en = crate::array::js_array_length(enum_arr);
+        let level_scope = crate::gc::RuntimeHandleScope::new();
+        let enum_arr =
+            level_scope.root_raw_const_ptr(js_object_keys_value(current.get_nanbox_f64()));
+        let en = enum_arr.with_const_ptr(|array| crate::array::js_array_length(array));
         if diag {
             let en64 = en as u64;
             crate::hot_diag::enum_with(|d| {
@@ -380,8 +389,11 @@ pub(crate) fn for_in_keys_with(value: f64, lazy_shadow: bool) -> *mut ArrayHeade
         // is the only thing the set was doing for this level.
         if lazy_shadow && level == 0 && !shadow_live {
             for i in 0..en {
-                let kv = crate::array::js_array_get(enum_arr, i);
-                out = crate::array::js_array_push_f64(out, f64::from_bits(kv.bits()));
+                let kv = enum_arr.with_const_ptr(|keys| crate::array::js_array_get(keys, i));
+                let updated = out.with_mut_ptr(|out| {
+                    crate::array::js_array_push_f64(out, f64::from_bits(kv.bits()))
+                });
+                out.set_raw_mut_ptr(updated);
             }
             if diag {
                 let en64 = en as u64;
@@ -398,7 +410,7 @@ pub(crate) fn for_in_keys_with(value: f64, lazy_shadow: bool) -> *mut ArrayHeade
                 }
             }
             for i in 0..en {
-                let kv = crate::array::js_array_get(enum_arr, i);
+                let kv = enum_arr.with_const_ptr(|keys| crate::array::js_array_get(keys, i));
                 let name = match key_string(kv, &mut scratch) {
                     Some(s) => s,
                     None => continue,
@@ -419,7 +431,10 @@ pub(crate) fn for_in_keys_with(value: f64, lazy_shadow: bool) -> *mut ArrayHeade
                     });
                 }
                 if fresh {
-                    out = crate::array::js_array_push_f64(out, f64::from_bits(kv.bits()));
+                    let updated = out.with_mut_ptr(|out| {
+                        crate::array::js_array_push_f64(out, f64::from_bits(kv.bits()))
+                    });
+                    out.set_raw_mut_ptr(updated);
                 }
             }
         }
@@ -428,14 +443,16 @@ pub(crate) fn for_in_keys_with(value: f64, lazy_shadow: bool) -> *mut ArrayHeade
         // recorded and the array is not materialised at all: this is the second
         // of the four key arrays per call that the measurement found.
         if shadow_live {
-            mark_own_names(current, &mut seen, &mut scratch, diag);
+            mark_own_names(current.get_nanbox_f64(), &mut seen, &mut scratch, diag);
         } else {
-            visited.push(current);
+            visited.push(current.get_nanbox_f64());
         }
-        current = super::super::object_ops::js_object_get_prototype_of(current);
+        current.set_nanbox_f64(super::super::object_ops::js_object_get_prototype_of(
+            current.get_nanbox_f64(),
+        ));
         level += 1;
     }
-    out
+    out.with_mut_ptr(|out: *mut ArrayHeader| out)
 }
 
 /// Prototype levels recorded for a possible shadow-set rebuild, inline for the
