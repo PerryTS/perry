@@ -460,7 +460,7 @@ pub extern "C" fn js_string_split_n(
     // both. Detect regex delimiters by checking whether the pointer was
     // recorded by `js_regexp_new` and delegate to `js_string_split_regex`
     // on a match. Otherwise the regex header would be read as a
-    // StringHeader and segfault on the first byte of its `regex_ptr`.
+    // StringHeader and segfault on the first byte of its program-set pointer.
     #[cfg(feature = "regex-engine")]
     if crate::regex::is_regex_pointer(delimiter as *const u8) {
         return crate::regex::js_string_split_regex_n(
