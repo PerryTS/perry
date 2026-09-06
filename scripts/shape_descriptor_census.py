@@ -569,10 +569,15 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
         require_code(body, r"obj_type\s*==\s*crate::gc::GC_TYPE_OBJECT", f"{name} GC kind")
         if re.search(r"regex_header_has_magic|object_type", body):
             raise CensusError(f"{name} reintroduced an old payload discriminator")
+    # #9845 moved the header off the malloc arm into the nursery, so the birth
+    # site is now `arena_alloc_gc`. What this asserts is unchanged and is the
+    # point of the check: whichever allocator RegExp is born from, it is born
+    # with its OWN GcHeader kind, never as a generic object that something later
+    # has to re-identify by payload magic.
     regexp_alloc = function_body(regex_runtime, "js_regexp_new")
     require_code(
         regexp_alloc,
-        r"gc_malloc\s*\([^;]*crate::gc::GC_TYPE_REGEXP",
+        r"(?:gc_malloc|arena_alloc_gc)\s*\([^;]*crate::gc::GC_TYPE_REGEXP",
         "RegExp dedicated GC birth kind",
     )
     expando_kind = function_body(exotic_expando, "exotic_expando_kind")
