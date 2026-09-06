@@ -1813,7 +1813,7 @@ fn a_single_program_cache_clear_cannot_disarm_a_lookbehind_literal() {
     assert!(
         REGEX_CACHE.with(|c| c
             .borrow()
-            .contains_key(&(source.to_string(), String::new()))),
+            .contains_key(&(std::sync::Arc::from(source), std::sync::Arc::from("")))),
         "the placeholder must survive, or this test exercises nothing"
     );
     // A fresh literal site, so the construction cache cannot answer from the
