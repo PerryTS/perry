@@ -88,6 +88,48 @@ fn event_data(event: f64) -> f64 {
     object_property(event, b"data").unwrap_or(undefined_value())
 }
 
+fn reporter_directive(data: f64) -> Option<(&'static str, String)> {
+    for (key, label) in [(b"skip".as_slice(), "SKIP"), (b"todo".as_slice(), "TODO")] {
+        let Some(value) = object_property(data, key) else {
+            continue;
+        };
+        if crate::value::js_is_truthy(value) == 0 {
+            continue;
+        }
+        let reason = if JSValue::from_bits(value.to_bits()).is_any_string() {
+            value_to_string(value).unwrap_or_default()
+        } else {
+            String::new()
+        };
+        return Some((label, reason));
+    }
+    None
+}
+
+fn directive_suffix(data: f64) -> String {
+    reporter_directive(data)
+        .map(|(label, reason)| {
+            if reason.is_empty() {
+                format!(" # {label}")
+            } else {
+                format!(" # {label} {reason}")
+            }
+        })
+        .unwrap_or_default()
+}
+
+fn spec_directive_suffix(data: f64) -> String {
+    reporter_directive(data)
+        .map(|(label, reason)| {
+            if reason.is_empty() {
+                format!(" # {label}")
+            } else {
+                format!(" # {reason}")
+            }
+        })
+        .unwrap_or_default()
+}
+
 fn format_reporter_events(kind: i32, events: &[f64]) -> String {
     if kind == REPORTER_LCOV {
         return String::new();
@@ -118,7 +160,15 @@ fn format_reporter_event(kind: i32, event: f64) -> String {
     match kind {
         REPORTER_SPEC => match typ.as_str() {
             "test:pass" => object_string(data, b"name")
-                .map(|name| format!("✔ {name}\n"))
+                .map(|name| {
+                    let marker =
+                        if reporter_directive(data).is_some_and(|(label, _)| label == "SKIP") {
+                            "﹣"
+                        } else {
+                            "✔"
+                        };
+                    format!("{marker} {name}{}\n", spec_directive_suffix(data))
+                })
                 .unwrap_or_default(),
             "test:diagnostic" => object_string(data, b"message")
                 .map(|message| format!("ℹ {message}\n"))
@@ -134,7 +184,10 @@ fn format_reporter_event(kind: i32, event: f64) -> String {
                 let detail_type = object_property(data, b"details")
                     .and_then(|details| object_string(details, b"type"))
                     .unwrap_or_else(|| "test".to_string());
-                format!("ok undefined - {name}\n  ---\n  type: '{detail_type}'\n  ...\n")
+                format!(
+                    "ok undefined - {name}{}\n  ---\n  type: '{detail_type}'\n  ...\n",
+                    directive_suffix(data)
+                )
             }
             "test:diagnostic" => object_string(data, b"message")
                 .map(|message| format!("# {message}\n"))
