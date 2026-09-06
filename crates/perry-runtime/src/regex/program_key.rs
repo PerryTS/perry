@@ -29,9 +29,8 @@ pub(crate) const NEVER_MATCH_PATTERN: &str = r"[^\s\S]";
 /// 1,984 MB), which is what `.to_string()` on an `Arc<str>` lowers to.
 ///
 /// Keying by `Arc<str>` makes a probe two refcount increments and no
-/// allocation: every caller that matters already holds those `Arc`s, because
-/// `REGEX_SOURCE_TABLE` and `regex::site_cache` share one allocation of a
-/// literal's text with every header built from it. Hashing still walks the
+/// allocation: every caller that matters already holds those `Arc`s through
+/// `regex::site_cache`. Hashing still walks the
 /// pattern bytes — the allocation is what the census measured, and what this
 /// removes.
 #[cfg(feature = "regex-engine")]

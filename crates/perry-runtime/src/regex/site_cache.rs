@@ -8,8 +8,8 @@
 //! `/…/g` on every call, once per text segment per layout pass, and
 //! `ansi-regex` builds the same `new RegExp(parts.join("|"), "g")` per call.
 //! Each construction used to copy the pattern three times (the
-//! `VALIDATED_PATTERNS` probe key, `owned_pattern`, the `REGEX_SOURCE_TABLE`
-//! entry) and SipHash all of it once; the first operation on each header then
+//! `VALIDATED_PATTERNS` probe key and `owned_pattern`) and SipHash all of it
+//! once; the first operation on each header then
 //! did the same three more times — `build_and_install_programs` probes the
 //! three `(String, String)`-keyed program caches — and, for the common
 //! no-fallback pattern, `lookup_fancy_regex` / `lookup_repeat_matcher`
@@ -24,9 +24,8 @@
 //! full byte compare — identity never depends on an address, so nothing is
 //! rekeyed on a GC move and a dynamic `new RegExp(sameText)` hits too; a hit
 //! costs one `memcmp` instead of a hash plus three copies. An entry owns the
-//! pattern and canonical flags as `Arc<str>` (shared into
-//! `REGEX_SOURCE_TABLE`, so a header costs two refcount bumps instead of two
-//! `String`s) and, once the first header built from it has been executed, the
+//! pattern and canonical flags as `Arc<str>` and, once the first header built
+//! from it has been executed, the
 //! compiled programs: a later construction installs those eagerly, so the
 //! header is born built and never touches the `(pattern, flags)` caches.
 //!
@@ -48,12 +47,14 @@ pub(super) struct Programs {
     pub(super) repeat: Option<Arc<super::repeat_matcher::RepeatMatcherRegex>>,
 }
 
-impl Clone for Programs {
-    fn clone(&self) -> Self {
-        Self {
-            std: self.std.clone(),
-            fancy: self.fancy.clone(),
-            repeat: self.repeat.clone(),
+impl Programs {
+    pub(super) fn matcher_kind(&self) -> super::MatcherKind {
+        if self.repeat.is_some() {
+            super::MatcherKind::Repeat
+        } else if self.fancy.is_some() {
+            super::MatcherKind::Fancy
+        } else {
+            super::MatcherKind::Standard
         }
     }
 }
@@ -62,14 +63,14 @@ impl Clone for Programs {
 pub(super) struct Hit {
     pub(super) pattern: Arc<str>,
     pub(super) flags: Arc<str>,
-    pub(super) programs: Option<Programs>,
+    pub(super) programs: Option<Arc<Programs>>,
 }
 
 struct Entry {
     fp: u64,
     pattern: Arc<str>,
     flags: Arc<str>,
-    programs: Option<Programs>,
+    programs: Option<Arc<Programs>>,
 }
 
 /// Direct-mapped slots (2-way: a fingerprint may live in `slot` or
@@ -140,6 +141,16 @@ pub(super) fn lookup(pattern: &str, flags: &str) -> Option<Hit> {
         for s in [slot, slot ^ 1] {
             if let Some(entry) = &cache[s] {
                 if entry_matches(entry, fp, pattern, flags) {
+                    // The verify is a FULL byte compare, so its cost is
+                    // linear in the pattern and this counter — not
+                    // `pattern_bytes`, which counts every construction
+                    // whether it probed or not — is the `memcmp` volume.
+                    // Counted at the construction probe only; `insert` and
+                    // `install_programs` verify too and are not counted here.
+                    if crate::hot_diag::regex_on() {
+                        let n = pattern.len() as u64;
+                        crate::hot_diag::regex_counters(|d| d.new_site_verify_bytes += n);
+                    }
                     return Some(Hit {
                         pattern: entry.pattern.clone(),
                         flags: entry.flags.clone(),
@@ -195,7 +206,7 @@ pub(super) fn insert(pattern: &str, flags: &str) -> (Arc<str>, Arc<str>) {
 /// Attach the programs the first execution built to the entry for
 /// `(pattern, canonical flags)`, so every later construction of the same
 /// text is born built. Inserts the entry if it was evicted meanwhile.
-pub(super) fn install_programs(pattern: &str, flags: &str, programs: Programs) {
+pub(super) fn install_programs(pattern: &str, flags: &str, programs: Arc<Programs>) {
     if !enabled() {
         return;
     }

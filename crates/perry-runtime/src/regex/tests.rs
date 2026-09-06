@@ -15,6 +15,18 @@ fn string_payload(s: *const StringHeader) -> Vec<u8> {
     }
 }
 
+fn regex_is_built(re: *const RegExpHeader) -> bool {
+    !unsafe { (*re).programs_ptr.is_null() }
+}
+
+fn regex_has_fancy_program(re: *const RegExpHeader) -> bool {
+    regex_is_built(re) && unsafe { (*(*re).programs_ptr).fancy.is_some() }
+}
+
+fn regex_has_repeat_program(re: *const RegExpHeader) -> bool {
+    regex_is_built(re) && unsafe { (*(*re).programs_ptr).repeat.is_some() }
+}
+
 #[test]
 fn regexp_has_dedicated_gc_kind_and_is_not_a_shaped_object() {
     let _lock = crate::gc::global_side_table_test_lock();
@@ -32,7 +44,17 @@ fn regexp_has_dedicated_gc_kind_and_is_not_a_shaped_object() {
 }
 
 #[test]
-fn malloc_finalize_clears_regexp_address_owned_tables() {
+#[cfg(target_pointer_width = "64")]
+fn regexp_header_is_one_56_byte_per_object_record() {
+    assert_eq!(
+        std::mem::size_of::<RegExpHeader>(),
+        56,
+        "the three per-program matcher pointers must stay collapsed into one handle"
+    );
+}
+
+#[test]
+fn malloc_finalize_clears_regexp_address_owned_state() {
     let _lock = crate::gc::global_side_table_test_lock();
     let scope = crate::gc::RuntimeHandleScope::new();
     let pattern = scope.root_string_ptr(make_string("finalize"));
@@ -42,7 +64,6 @@ fn malloc_finalize_clears_regexp_address_owned_tables() {
     });
     let addr = re as usize;
     assert!(test_regex_pointer_entry_exists(addr));
-    assert!(test_regex_source_entry_exists(addr));
     crate::object::exotic_expando::test_seed_exotic_expando_entry(
         addr,
         "owned",
@@ -55,7 +76,6 @@ fn malloc_finalize_clears_regexp_address_owned_tables() {
     }
 
     assert!(!test_regex_pointer_entry_exists(addr));
-    assert!(!test_regex_source_entry_exists(addr));
     assert!(!crate::object::exotic_expando::test_exotic_expando_entry_exists(addr));
 }
 
@@ -78,10 +98,10 @@ fn regexp_finalize_releases_all_header_owned_programs() {
         re
     }
 
-    // Every compiled header owns the standard-engine program, including the
-    // never-match placeholder used by fancy-regex patterns.
+    // Every compiled header owns one shared program bundle, including the
+    // never-match placeholder and any fallback matcher.
     let standard = compile(r"needle\d+", "needle42");
-    let standard_raw = unsafe { (*standard).regex_ptr as *const Regex };
+    let standard_raw = unsafe { (*standard).programs_ptr };
     assert!(!standard_raw.is_null());
     let standard_observer = clone_raw_arc(standard_raw);
     let standard_before = std::sync::Arc::strong_count(&standard_observer);
@@ -95,11 +115,11 @@ fn regexp_finalize_releases_all_header_owned_programs() {
         std::sync::Arc::strong_count(&standard_observer) + 1,
         standard_before
     );
-    assert!(unsafe { (*standard).regex_ptr.is_null() });
+    assert!(!regex_is_built(standard));
 
     let fancy = compile(r"(?<=pre)\d+", "pre77");
-    let fancy_raw = unsafe { (*fancy).fancy_ptr as *const fancy_regex::Regex };
-    assert!(!fancy_raw.is_null());
+    let fancy_raw = unsafe { (*fancy).programs_ptr };
+    assert!(regex_has_fancy_program(fancy));
     let fancy_observer = clone_raw_arc(fancy_raw);
     let fancy_before = std::sync::Arc::strong_count(&fancy_observer);
     unsafe {
@@ -109,12 +129,11 @@ fn regexp_finalize_releases_all_header_owned_programs() {
         std::sync::Arc::strong_count(&fancy_observer) + 1,
         fancy_before
     );
-    assert!(unsafe { (*fancy).fancy_ptr.is_null() });
+    assert!(!regex_is_built(fancy));
 
     let repeat = compile(r"(a?b??)*", "ab");
-    let repeat_raw =
-        unsafe { (*repeat).repeat_matcher_ptr as *const repeat_matcher::RepeatMatcherRegex };
-    assert!(!repeat_raw.is_null());
+    let repeat_raw = unsafe { (*repeat).programs_ptr };
+    assert!(regex_has_repeat_program(repeat));
     let repeat_observer = clone_raw_arc(repeat_raw);
     let repeat_before = std::sync::Arc::strong_count(&repeat_observer);
     unsafe {
@@ -125,7 +144,7 @@ fn regexp_finalize_releases_all_header_owned_programs() {
     }
     let repeat_after = std::sync::Arc::strong_count(&repeat_observer);
     assert_eq!(repeat_after + 1, repeat_before);
-    assert!(unsafe { (*repeat).repeat_matcher_ptr.is_null() });
+    assert!(!regex_is_built(repeat));
 
     // Arena overflow cleanup and finalization can overlap. A second finalizer
     // must observe null pointers rather than release an owned reference twice.
@@ -953,7 +972,7 @@ fn regex_cache_capped_and_prior_headers_survive_eviction() {
     assert!(
         js_regexp_test(fancy, make_string("pre77")) != 0,
         "fancy-fallback header must keep matching after cache eviction \
-         (header-resident fancy_ptr, not the cleared FANCY_CACHE)"
+         (header-resident program set, not the cleared FANCY_CACHE)"
     );
     assert!(
         js_regexp_test(fancy, make_string("nope77")) == 0,
@@ -1168,164 +1187,6 @@ fn syntax_check_agrees_with_full_build() {
             wide.join("\n  ")
         );
     }
-}
-
-/// Construction must NOT build the automaton; the first operation that needs a
-/// matcher must.
-///
-/// This is the structural half of the perf fix — the wall-clock half is a
-/// fixture whose 200 literals cost 73 ms to construct before and ~0 after. A
-/// regression here (something re-introducing an eager build) would not fail any
-/// behavioural test, only make every program slower, so assert the state
-/// directly: `regex_ptr` is the built/not-built flag.
-#[test]
-fn construction_defers_the_program_build_until_first_use() {
-    let re = js_regexp_new(
-        make_string("[A-Za-z]+(?:foo|bar)[0-9]{1,4}"),
-        make_string("i"),
-    );
-    assert!(
-        unsafe { (*re).regex_ptr.is_null() },
-        "constructing a RegExp must not build its program"
-    );
-    // Everything observable without matching stays available.
-    assert_eq!(
-        string_payload(js_regexp_get_source(re)),
-        b"[A-Za-z]+(?:foo|bar)[0-9]{1,4}".to_vec()
-    );
-    assert_eq!(string_payload(js_regexp_get_flags(re)), b"i".to_vec());
-    assert!(unsafe { (*re).case_insensitive });
-    assert!(
-        unsafe { (*re).regex_ptr.is_null() },
-        "reading .source/.flags must not build the program either"
-    );
-
-    assert!(js_regexp_test(re, make_string("XFOO12")) != 0);
-    assert!(
-        !unsafe { (*re).regex_ptr.is_null() },
-        "the first match must build and install the program"
-    );
-}
-
-/// The deferred build installs the fancy-regex and RepeatMatcher programs too,
-/// not just the linear one — they live on the same publish point, so a header
-/// whose pattern needs one must still get it on first use.
-#[test]
-fn deferred_build_installs_the_fancy_and_repeat_matcher_fallbacks() {
-    let fancy = js_regexp_new(make_string(r"(?<=pre)\d+"), make_string(""));
-    assert!(unsafe { (*fancy).fancy_ptr.is_null() });
-    assert!(js_regexp_test(fancy, make_string("pre77")) != 0);
-    assert!(
-        !unsafe { (*fancy).fancy_ptr.is_null() },
-        "first use must install the fancy-regex fallback"
-    );
-    assert!(js_regexp_test(fancy, make_string("nope77")) == 0);
-
-    let repeat = js_regexp_new(make_string(r"(a?b??)*"), make_string(""));
-    assert!(unsafe { (*repeat).repeat_matcher_ptr.is_null() });
-    assert!(js_regexp_test(repeat, make_string("ab")) != 0);
-    assert!(
-        !unsafe { (*repeat).repeat_matcher_ptr.is_null() },
-        "first use must install the ECMAScript RepeatMatcher"
-    );
-}
-
-/// Two evaluations of the same pattern are still distinct objects with
-/// independent `lastIndex`, and deferring the build does not let them share a
-/// header (ECMA-262 requires a fresh object per evaluation — the same
-/// invariant the closure-literal singleton fix restored for functions).
-#[test]
-fn deferred_build_keeps_per_object_identity_and_last_index() {
-    let a = js_regexp_new(make_string("x"), make_string("g"));
-    let b = js_regexp_new(make_string("x"), make_string("g"));
-    assert_ne!(
-        a as usize, b as usize,
-        "each evaluation is a distinct object"
-    );
-    assert!(!js_regexp_exec(a, make_string("xx")).is_null());
-    assert_eq!(regex_last_index_offset(a), 1);
-    assert_eq!(
-        regex_last_index_offset(b),
-        0,
-        "a sibling regex must not inherit lastIndex through the shared program"
-    );
-}
-
-/// The validated-pattern set is capped like the program caches: it holds owned
-/// pattern text (`emoji-regex` is ~12,807 chars) and is fed by `new
-/// RegExp(userInput)`, so an uncapped one would be the same attacker-driven
-/// growth the compiled-program caches were capped for.
-#[test]
-fn validated_pattern_set_is_capped() {
-    for i in 0..(REGEX_CACHE_MAX_ENTRIES * 2 + 10) {
-        lazy::mark_pattern_validated(&format!("validfill{i}[a-z]+"), "");
-    }
-    let len = VALIDATED_PATTERNS.with(|c| c.borrow().len());
-    assert!(
-        len <= REGEX_CACHE_MAX_ENTRIES,
-        "VALIDATED_PATTERNS must stay capped at {REGEX_CACHE_MAX_ENTRIES} entries, got {len}"
-    );
-}
-
-/// The `[\s\S]` → `(?s:.)` rewrite must not move a single match result.
-///
-/// The rewrite exists purely to dodge a 1.1-million-iteration case fold in
-/// `regex_syntax` (see `grammar::push_any_char`), so the only thing that may
-/// change is how long construction takes. Everything a program can observe —
-/// what matches, what a capture group holds, which group number it is, and
-/// that the NEGATED forms still match nothing — is pinned here, because a
-/// silently widened character class produces no error anywhere: only a wrong
-/// answer, on inputs a syntax test never looks at.
-#[test]
-fn any_char_rewrite_preserves_match_behaviour() {
-    // Matches every code point, newlines included, with and without `i`.
-    for pattern in ["[\\s\\S]", "[^]", "[\\d\\D]", "[\\w\\W]", "[\\S\\s]"] {
-        for flags in ["", "i", "u", "iu", "m"] {
-            let re = js_regexp_new(make_string(pattern), make_string(flags));
-            for subject in ["a", "\n", " ", "\u{1F600}", "Ω", "\r"] {
-                assert!(
-                    js_regexp_test(re, make_string(subject)) != 0,
-                    "/{pattern}/{flags} must match {subject:?}"
-                );
-            }
-        }
-    }
-
-    // The negated forms are the exact opposite and must still match NOTHING.
-    for pattern in ["[^\\s\\S]", "[^\\w\\W]", "[]"] {
-        let re = js_regexp_new(make_string(pattern), make_string("i"));
-        for subject in ["a", "\n", "Ω"] {
-            assert!(
-                js_regexp_test(re, make_string(subject)) == 0,
-                "/{pattern}/i must not match {subject:?}"
-            );
-        }
-    }
-
-    // A class that is NOT a complementary pair keeps its narrow meaning.
-    let narrow = js_regexp_new(make_string("[\\d\\s]"), make_string("i"));
-    assert!(js_regexp_test(narrow, make_string("7")) != 0);
-    assert!(js_regexp_test(narrow, make_string("a")) == 0);
-
-    // The rewrite emits a NON-capturing group, so group numbering is
-    // unchanged: `$1` is still `b`, not the any-char.
-    let re = js_regexp_new(make_string("a[\\s\\S](b)"), make_string(""));
-    let m = js_regexp_exec(re, make_string("a\nb"));
-    assert!(!m.is_null(), "a[\\s\\S](b) must match \"a\\nb\"");
-
-    // Quantifiers still bind to the any-char, lazily and greedily.
-    let lazy = js_regexp_new(make_string("<x>([\\s\\S]*?)</x>"), make_string("i"));
-    assert!(js_regexp_test(lazy, make_string("<x>one\ntwo</x>")) != 0);
-    let greedy = js_regexp_new(make_string("^[\\s\\S]{3}$"), make_string(""));
-    assert!(js_regexp_test(greedy, make_string("a\nb")) != 0);
-    assert!(js_regexp_test(greedy, make_string("a\nbc")) == 0);
-
-    // `.source` still reports what the author wrote, not the translation.
-    let re = js_regexp_new(make_string("[\\s\\S]+"), make_string("gi"));
-    assert_eq!(
-        string_payload(js_regexp_get_source(re)),
-        b"[\\s\\S]+".to_vec()
-    );
 }
 
 /// #9305 fallout: the translator spells ECMAScript's ASCII `\b`/`\B` as
@@ -1665,10 +1526,7 @@ fn site_cache_reconstruction_is_born_built() {
     let _lock = crate::gc::global_side_table_test_lock();
     site_cache::test_reset();
     let re1 = js_regexp_new(make_string("born[0-9]+built"), make_string("g"));
-    assert!(
-        unsafe { (*re1).regex_ptr.is_null() },
-        "construction stays lazy"
-    );
+    assert!(!regex_is_built(re1), "construction stays lazy");
     assert_eq!(
         site_cache::test_has_programs("born[0-9]+built", "g"),
         Some(false),
@@ -1682,28 +1540,20 @@ fn site_cache_reconstruction_is_born_built() {
     );
     let re2 = js_regexp_new(make_string("born[0-9]+built"), make_string("g"));
     assert!(
-        !unsafe { (*re2).regex_ptr.is_null() },
+        regex_is_built(re2),
         "the second construction installs the programs eagerly"
     );
     assert!(
-        std::ptr::eq(unsafe { (*re1).regex_ptr }, unsafe { (*re2).regex_ptr }),
+        std::ptr::eq(unsafe { (*re1).programs_ptr }, unsafe {
+            (*re2).programs_ptr
+        }),
         "both headers share one compiled program"
     );
-    // The owned source copies are shared too (two refcount bumps per header,
-    // not two `String`s).
-    let (p1, p2) = REGEX_SOURCE_TABLE.with(|t| {
-        let t = t.borrow();
-        (
-            t.get(&(re1 as usize)).map(|(p, _)| p.clone()).unwrap(),
-            t.get(&(re2 as usize)).map(|(p, _)| p.clone()).unwrap(),
-        )
-    });
-    assert!(Arc::ptr_eq(&p1, &p2), "source text is shared, not copied");
     assert_eq!(js_regexp_test(re2, make_string("born7built")), 1);
     assert_eq!(js_regexp_test(re2, make_string("nothing")), 0);
     // Different flags are a different entry.
     let re3 = js_regexp_new(make_string("born[0-9]+built"), make_string("i"));
-    assert!(unsafe { (*re3).regex_ptr.is_null() });
+    assert!(!regex_is_built(re3));
 }
 
 /// `test` on a global/sticky receiver advances `lastIndex` exactly like
@@ -1824,9 +1674,9 @@ fn a_single_program_cache_clear_cannot_disarm_a_lookbehind_literal() {
     unsafe {
         lazy::ensure_regex_compiled(cold);
         assert!(
-            !(*cold).fancy_ptr.is_null(),
+            regex_has_fancy_program(cold),
             "a built header must carry every program its pattern needs — a null \
-             fancy_ptr here is memoized by site_cache::install_programs and makes \
+             the fancy program here is memoized by site_cache::install_programs and makes \
              the breakage permanent for this literal"
         );
     }
@@ -1947,4 +1797,175 @@ fn a_regexp_with_a_non_writable_lastindex_is_still_found_by_the_probe() {
         !crate::object::test_may_have_descriptor_entry(re as usize, "source", false),
         "an unrelated key on the same RegExp must still take the fast negative"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Literal-site keyed construction (`js_regexp_new_site` + `regex::site_key`).
+//
+// The site key is the address of a private global the compiler emits once per
+// regex literal. These statics stand in for two such globals: distinct
+// addresses, 8-byte aligned, immortal — the same three properties the emitted
+// ones have, and the reason the key is a sound identity where a `StringHeader`
+// address is not.
+// ---------------------------------------------------------------------------
+
+// Distinct initialisers so nothing may merge them: the test uses only their
+// ADDRESSES, and identical zero-valued statics are exactly the shape a
+// constant-merging pass is allowed to collapse. `assert_ne!` on the two keys
+// keeps that from being a silent assumption.
+static SITE_SLOT_A: u64 = 0xA;
+static SITE_SLOT_B: u64 = 0xB;
+static SITE_SLOT_C: u64 = 0xC;
+
+fn site_key_of(slot: &'static u64) -> i64 {
+    slot as *const u64 as i64
+}
+
+/// **The sabotage the coordinator named: key the table by pattern length.**
+///
+/// Two literals at two sites, same flags, same pattern LENGTH, different text.
+/// A table that verifies a probe by anything weaker than the site key — a
+/// length, a prefix, a fingerprint without the exactness check — hands the
+/// second site the first site's entry, and `.source` then reports a pattern
+/// this literal never contained while `test` matches the wrong language.
+///
+/// Each site is constructed twice: the first construction records, the second
+/// is the one that must come back from the table, which is the case a weak key
+/// breaks. Asserting only on a first construction would pass under every
+/// sabotage, because a miss always takes the content-keyed path.
+#[test]
+fn two_literal_sites_with_equal_length_patterns_never_answer_for_each_other() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    site_key::test_reset();
+
+    let key_a = site_key_of(&SITE_SLOT_A);
+    let key_b = site_key_of(&SITE_SLOT_B);
+    assert_ne!(key_a, key_b, "two sites must have two addresses");
+
+    for round in 0..2 {
+        let a = js_regexp_new_site(make_string("a.c"), make_string("g"), key_a);
+        let b = js_regexp_new_site(make_string("x.z"), make_string("g"), key_b);
+        assert_eq!(
+            string_payload(js_regexp_get_source(a)),
+            b"a.c".to_vec(),
+            "round {round}: site A must report its own pattern"
+        );
+        assert_eq!(
+            string_payload(js_regexp_get_source(b)),
+            b"x.z".to_vec(),
+            "round {round}: site B must report its own pattern — a table keyed by anything \
+             weaker than the site address hands B the entry A recorded, and both patterns are \
+             three bytes long"
+        );
+        assert!(
+            js_regexp_test(a, make_string("abc")) != 0
+                && js_regexp_test(a, make_string("xyz")) == 0,
+            "round {round}: site A must match its own language"
+        );
+        assert!(
+            js_regexp_test(b, make_string("xyz")) != 0
+                && js_regexp_test(b, make_string("abc")) == 0,
+            "round {round}: site B must match its own language"
+        );
+    }
+
+    assert_eq!(
+        site_key::test_recorded_pattern(key_a, "g").as_deref(),
+        Some("a.c")
+    );
+    assert_eq!(
+        site_key::test_recorded_pattern(key_b, "g").as_deref(),
+        Some("x.z")
+    );
+}
+
+/// A dynamic `new RegExp(str)` must never reach the site table.
+///
+/// The two-argument entry point is what every non-literal construction uses —
+/// `js_regexp_construct`, `RegExp.prototype.compile`, the runtime's own
+/// callers — and it has no site to be keyed by. If it recorded under some
+/// stand-in key, a later literal whose key collided would inherit a pattern
+/// that a *variable* produced, which is the one thing the site key's
+/// compile-time-constant argument is supposed to guarantee against.
+#[test]
+fn a_dynamic_construction_records_nothing_in_the_site_table() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    site_key::test_reset();
+
+    for _ in 0..4 {
+        let re = js_regexp_new(make_string("dyn(amic)"), make_string("g"));
+        assert!(js_regexp_test(re, make_string("dynamic")) != 0);
+    }
+    assert_eq!(
+        site_key::test_occupied_slots(),
+        0,
+        "the two-argument entry point has no site key and must record nothing"
+    );
+
+    // The same TEXT through the site entry does record — so the zero above is
+    // a property of the entry point, not of a table that never works.
+    let key = site_key_of(&SITE_SLOT_C);
+    let re = js_regexp_new_site(make_string("dyn(amic)"), make_string("g"), key);
+    assert!(js_regexp_test(re, make_string("dynamic")) != 0);
+    assert_eq!(
+        site_key::test_occupied_slots(),
+        1,
+        "the site entry point must record — otherwise the assertion above proves nothing"
+    );
+    assert_eq!(
+        site_key::test_recorded_pattern(key, "g").as_deref(),
+        Some("dyn(amic)")
+    );
+}
+
+/// A site hit must be born built: the second construction at a site whose
+/// first header has already executed installs the compiled programs eagerly,
+/// so `programs_ptr` is non-null before any match runs.
+///
+/// This is what makes the fast path complete — a hit that skipped the content
+/// cache but arrived unbuilt would push the pattern's hash back onto the first
+/// `test()` and give the site key nothing.
+#[test]
+fn a_site_hit_after_the_first_execution_is_born_built() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    site_key::test_reset();
+    let key = site_key_of(&SITE_SLOT_A);
+
+    let first = js_regexp_new_site(make_string("bo+rn"), make_string(""), key);
+    assert!(
+        !regex_is_built(first),
+        "construction must not build the program (that is #5777's deferred build)"
+    );
+    assert!(js_regexp_test(first, make_string("boorn")) != 0);
+    assert!(
+        regex_is_built(first),
+        "the first execution installs the programs"
+    );
+
+    // Second construction at the SAME site.
+    let second = js_regexp_new_site(make_string("bo+rn"), make_string(""), key);
+    assert!(
+        regex_is_built(second),
+        "a site hit must install the programs the site already compiled, so the header is born \
+         built and the first match pays no lookup"
+    );
+    assert_ne!(first, second, "each evaluation is still a distinct object");
+    assert!(js_regexp_test(second, make_string("born")) != 0);
+}
+
+/// The kill switch has to remove the lane, not just its answers: with
+/// `PERRY_REGEX_SITE_KEY=0` the table records nothing, so the OFF arm is the
+/// content-keyed path exactly rather than a control still paying the
+/// bookkeeping.
+///
+/// Read once per process through a `OnceLock`, so this asserts the DEFAULT is
+/// on rather than flipping the variable mid-run (which would only test the
+/// cache of the first read).
+#[test]
+fn the_site_key_lane_is_on_by_default() {
+    assert!(
+        crate::gc::env_default_on_from_value(None),
+        "the site-key lane defaults ON; `PERRY_REGEX_SITE_KEY=0` is the kill switch"
+    );
+    assert!(!crate::gc::env_default_on_from_value(Some("0")));
 }

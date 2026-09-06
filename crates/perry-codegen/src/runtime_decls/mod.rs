@@ -213,3 +213,56 @@ pub fn declare_phase_a_strings(module: &mut LlModule) {
     // function once they grow.
     declare_phase_b_strings(module);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A lowering that introduces a new runtime call needs one test that
+    /// reaches the DECLARATION, not just the HIR.
+    ///
+    /// #9859 emitted five `js_segments_view_*` calls whose symbols were never
+    /// declared in the LLVM module: twelve HIR-level unit tests passed and the
+    /// first real compile died at the in-process LLVM parse with `use of
+    /// undefined value`. The arity half matters just as much and fails more
+    /// quietly — a wrong arity PARSES and miscompiles, handing the runtime a
+    /// garbage argument.
+    ///
+    /// `Expr::RegExp` lowers to `js_regexp_new_site(pattern, flags, site_key)`
+    /// (`expr/logical_collections.rs`), so the declaration must be exactly
+    /// three `i64` parameters returning `i64`.
+    #[test]
+    fn the_literal_site_regexp_entry_is_declared_with_its_exact_arity() {
+        let mut module = crate::module::LlModule::new("arm64-apple-macosx");
+        declare_phase_b_strings(&mut module);
+
+        let line = module
+            .declaration_lines()
+            .find(|(name, _)| *name == "js_regexp_new_site")
+            .map(|(_, line)| line.to_string())
+            .expect(
+                "`Expr::RegExp` emits a call to `js_regexp_new_site`; without a `declare` the \
+                 module fails the in-process LLVM parse with `use of undefined value`, which no \
+                 HIR-level test can see",
+            );
+        assert!(
+            line.starts_with("declare i64 @js_regexp_new_site(i64, i64, i64)"),
+            "the site-keyed entry takes (pattern handle, flags handle, site key) and returns a \
+             RegExpHeader handle — a wrong arity parses and miscompiles instead of failing. Got: \
+             {line}"
+        );
+
+        // The two-argument form stays, because every non-literal construction
+        // (`new RegExp(str)`, `js_regexp_construct`, the runtime's own
+        // callers) uses it and must never reach the site table.
+        let plain = module
+            .declaration_lines()
+            .find(|(name, _)| *name == "js_regexp_new")
+            .map(|(_, line)| line.to_string())
+            .expect("the dynamic form must remain declared");
+        assert!(
+            plain.starts_with("declare i64 @js_regexp_new(i64, i64)"),
+            "got: {plain}"
+        );
+    }
+}

@@ -37,14 +37,13 @@
 //!   lookbehind/backreferences still decides, and still throws when both
 //!   engines refuse);
 //! * `.source` / `.flags` / `.global` / `.sticky` / `lastIndex` are header
-//!   and side-table reads that never touched the compiled program;
+//!   reads that never touched the compiled program;
 //! * identity is untouched — `js_regexp_new` still allocates a fresh header
 //!   per evaluation.
 //!
 //! The build itself happens on the first operation that needs a matcher,
-//! through [`ensure_regex_compiled`], and installs exactly the pointers
-//! `js_regexp_new` used to install eagerly (`regex_ptr`, `fancy_ptr`,
-//! `repeat_matcher_ptr`), each a leaked `Arc` the header owns.
+//! through [`ensure_regex_compiled`], and installs one leaked `Arc` to the
+//! shared standard/fancy/repeat program set.
 
 use std::sync::Arc;
 
@@ -53,8 +52,7 @@ use regex::Regex;
 use super::grammar::{collapse_redos_guard_quantifiers, js_regex_to_rust_with_flags};
 use super::{
     evict_regex_cache_if_full, get_or_compile_regex, is_valid_ptr, is_valid_regex_ptr,
-    string_as_str, RegExpHeader, FANCY_CACHE, REGEX_SOURCE_TABLE, REPEAT_MATCHER_CACHE,
-    VALIDATED_PATTERNS,
+    string_as_str, RegExpHeader, FANCY_CACHE, REPEAT_MATCHER_CACHE, VALIDATED_PATTERNS,
 };
 
 /// The exact string `build_std_regex` is handed for `(pattern, flags)`: the
@@ -160,15 +158,10 @@ pub(super) fn mark_pattern_validated(pattern: &str, flags: &str) {
 
 /// The `(source, flags)` a header was built from.
 ///
-/// Prefers the GC-survivable side table (issue #637) and falls back to the
-/// header's own string payloads, which — unlike the thread-local table — are
-/// readable from a second statically-linked copy of the runtime (Wall 18).
+/// Since #9845 the header's string slots are traced GC edges, so the payloads
+/// are both collection-safe and readable from a second statically-linked copy
+/// of the runtime (Wall 18).
 pub(super) fn source_and_flags(re: *const RegExpHeader) -> (Arc<str>, Arc<str>) {
-    if let Some(source) =
-        REGEX_SOURCE_TABLE.with(|table| table.borrow().get(&(re as usize)).cloned())
-    {
-        return source;
-    }
     unsafe {
         let pattern: Arc<str> = if is_valid_ptr((*re).pattern_ptr) {
             Arc::from(string_as_str((*re).pattern_ptr))
@@ -186,16 +179,12 @@ pub(super) fn source_and_flags(re: *const RegExpHeader) -> (Arc<str>, Arc<str>) 
 
 /// Build this header's compiled program(s) if it has none yet.
 ///
-/// `regex_ptr == null` is the "not built yet" state. It is published LAST so
-/// a header is never observable as built while `fancy_ptr` /
-/// `repeat_matcher_ptr` are still stale — every reader that consults those
-/// two goes through [`lookup_fancy_regex`](super::lookup_fancy_regex) /
-/// `lookup_repeat_matcher`, which call this first.
+/// `programs_ptr == null` is the "not built yet" state. The one-pointer
+/// publication keeps the three engines coherent.
 ///
-/// The header OWNS a leaked `Arc` reference to each program (mirroring what
-/// `js_regexp_new` used to do inline), so the capped `REGEX_CACHE` /
-/// `FANCY_CACHE` / `REPEAT_MATCHER_CACHE` can evict without invalidating a
-/// live receiver.
+/// The header OWNS one leaked `Arc` to the complete program set, so the capped
+/// `REGEX_CACHE` / `FANCY_CACHE` / `REPEAT_MATCHER_CACHE` can evict without
+/// invalidating a live receiver.
 ///
 /// Contains no JS allocation and cannot re-enter the interpreter, so it is
 /// safe to call from inside a phase that holds a borrow of a GC string.
@@ -215,7 +204,7 @@ pub(crate) fn ensure_regex_compiled(re: *const RegExpHeader) {
     if !is_valid_ptr(re) {
         return;
     }
-    if unsafe { !(*re).regex_ptr.is_null() } {
+    if unsafe { !(*re).programs_ptr.is_null() } {
         return;
     }
     build_and_install_programs(re);
@@ -254,9 +243,7 @@ fn build_and_install_programs(re: *const RegExpHeader) {
         });
     // ── Repair before publishing ──────────────────────────────────────────
     //
-    // A built header is treated as AUTHORITATIVE — `lookup_fancy_regex` /
-    // `lookup_repeat_matcher` read a null slot beside a non-null `regex_ptr`
-    // as "this pattern has no such program" — and `install_programs` below
+    // A built header is treated as AUTHORITATIVE, and `install_programs` below
     // memoizes the triple against the pattern text, so whatever is assembled
     // here becomes the answer for every later construction of the same
     // literal. It therefore has to be complete, and the probes above cannot
@@ -306,32 +293,22 @@ fn build_and_install_programs(re: *const RegExpHeader) {
 
     // Remember the built programs against the pattern text, so the next
     // construction of the same literal is born built (`js_regexp_new`).
-    super::site_cache::install_programs(
-        &pattern,
-        &flags,
-        super::site_cache::Programs {
-            std: std_arc.clone(),
-            fancy: fancy_arc.clone(),
-            repeat: repeat_arc.clone(),
-        },
-    );
-    let regex_ptr = Arc::into_raw(std_arc) as *mut Regex;
-    let fancy_ptr: *const () =
-        fancy_arc.map_or(std::ptr::null(), |arc| Arc::into_raw(arc) as *const ());
-    let repeat_matcher_ptr: *const () =
-        repeat_arc.map_or(std::ptr::null(), |arc| Arc::into_raw(arc) as *const ());
+    let programs = Arc::new(super::site_cache::Programs {
+        std: std_arc.clone(),
+        fancy: fancy_arc.clone(),
+        repeat: repeat_arc.clone(),
+    });
+    super::site_cache::install_programs(&pattern, &flags, programs.clone());
     unsafe {
         let re = re as *mut RegExpHeader;
-        (*re).fancy_ptr = fancy_ptr;
-        (*re).repeat_matcher_ptr = repeat_matcher_ptr;
-        // Publish last: `regex_ptr` is the built/not-built flag.
-        (*re).regex_ptr = regex_ptr;
+        (*re).matcher_kind = programs.matcher_kind();
+        (*re).programs_ptr = Arc::into_raw(programs);
     }
 }
 
 /// The header's standard-engine program, building it on first use.
 ///
-/// Every `&*(*re).regex_ptr` in the tree goes through here — the field is
+/// Every standard-program borrow in the tree goes through here — the field is
 /// null until something needs a matcher.
 ///
 /// # Safety
@@ -340,5 +317,5 @@ fn build_and_install_programs(re: *const RegExpHeader) {
 /// header owns until its GC finalizer runs.
 pub(crate) unsafe fn header_std_regex<'a>(re: *const RegExpHeader) -> &'a Regex {
     ensure_regex_compiled(re);
-    &*(*re).regex_ptr
+    &(*(*re).programs_ptr).std
 }

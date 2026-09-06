@@ -4,8 +4,6 @@
 
 use std::sync::Arc;
 
-use regex::Regex;
-
 use super::class_range_validate::has_out_of_order_double_dash_class_range;
 use super::grammar::{
     has_invalid_repeated_quantifier, has_unicode_forbidden_legacy_escape,
@@ -145,34 +143,31 @@ pub extern "C" fn js_regexp_compile_value(
         ));
     }
 
-    // The header OWNS raw `Arc` references to its compiled program(s)
+    // The header OWNS one raw `Arc` reference to its compiled program set
     // (mirrors `js_regexp_new`), so the capped `REGEX_CACHE`/`FANCY_CACHE`
     // (see `REGEX_CACHE_MAX_ENTRIES`) can evict without invalidating this
-    // receiver. Refresh `fancy_ptr` too — it must track the NEW pattern, not
-    // the one the receiver was constructed with.
+    // receiver. Refresh the whole program set so it tracks the NEW pattern,
+    // not the one the receiver was constructed with.
     // `RegExp.prototype.compile` re-initialises an existing receiver — once per
     // call from user code, not per object — so materialising the shared key
-    // here costs nothing measurable, and the same `Arc`s go into the source
-    // table below.
+    // here costs nothing measurable.
     let pattern_key: std::sync::Arc<str> = std::sync::Arc::from(pattern_str);
     let flags_key: std::sync::Arc<str> = std::sync::Arc::from(flags_str);
-    let arc = get_or_compile_regex(&pattern_key, &flags_key);
-    let regex_ptr = Arc::into_raw(arc) as *mut Regex;
-    let fancy_ptr: *const () = super::FANCY_CACHE.with(|fc| {
-        match fc.borrow().get(&(pattern_key.clone(), flags_key.clone())) {
-            Some(arc) => Arc::into_raw(arc.clone()) as *const (),
-            None => std::ptr::null(),
-        }
+    let std = get_or_compile_regex(&pattern_key, &flags_key);
+    let fancy = super::FANCY_CACHE.with(|fc| {
+        fc.borrow()
+            .get(&(pattern_key.clone(), flags_key.clone()))
+            .cloned()
     });
-    let repeat_matcher_ptr: *const () = super::REPEAT_MATCHER_CACHE.with(|cache| {
-        match cache
+    let repeat = super::REPEAT_MATCHER_CACHE.with(|cache| {
+        cache
             .borrow()
             .get(&(pattern_key.clone(), flags_key.clone()))
-        {
-            Some(arc) => Arc::into_raw(arc.clone()) as *const (),
-            None => std::ptr::null(),
-        }
+            .cloned()
     });
+    let programs = Arc::new(super::site_cache::Programs { std, fancy, repeat });
+    let matcher_kind = programs.matcher_kind();
+    let programs_ptr = Arc::into_raw(programs);
     let (canonical_flags_ptr, _) =
         re_handle.across_mut::<RegExpHeader, _>(|| js_string_from_str(flags_str));
     let canonical_flags_handle = scope.root_string_ptr(canonical_flags_ptr);
@@ -181,28 +176,31 @@ pub extern "C" fn js_regexp_compile_value(
             .across_const::<crate::StringHeader, _>(|| js_string_from_str(pattern_str))
     });
     unsafe {
-        let old_regex_ptr = (*re).regex_ptr;
-        let old_fancy_ptr = (*re).fancy_ptr;
-        let old_repeat_matcher_ptr = (*re).repeat_matcher_ptr;
-        (*re).regex_ptr = regex_ptr;
-        (*re).fancy_ptr = fancy_ptr;
-        (*re).repeat_matcher_ptr = repeat_matcher_ptr;
+        let old_programs_ptr = (*re).programs_ptr;
+        (*re).matcher_kind = matcher_kind;
+        (*re).programs_ptr = programs_ptr;
         // Release the receiver's PREVIOUS owned references now that the new
         // ones are installed (recompiling the same pattern is fine: the fresh
         // `into_raw` reference above keeps the shared program alive).
-        if !old_regex_ptr.is_null() {
-            drop(Arc::from_raw(old_regex_ptr as *const Regex));
-        }
-        if !old_fancy_ptr.is_null() {
-            drop(Arc::from_raw(old_fancy_ptr as *const fancy_regex::Regex));
-        }
-        if !old_repeat_matcher_ptr.is_null() {
-            drop(Arc::from_raw(
-                old_repeat_matcher_ptr as *const super::repeat_matcher::RepeatMatcherRegex,
-            ));
+        if !old_programs_ptr.is_null() {
+            drop(Arc::from_raw(old_programs_ptr));
         }
         (*re).pattern_ptr = pattern_ptr;
         (*re).flags_ptr = canonical_flags_ptr;
+        // These are traced header edges. Unlike construction, `compile` can
+        // rewrite a tenured receiver with newly allocated nursery strings, so
+        // both stores need the ordinary runtime barrier.
+        let parent = re as usize;
+        crate::gc::runtime_write_barrier_gc_slot(
+            parent,
+            std::ptr::addr_of!((*re).pattern_ptr) as usize,
+            crate::value::js_nanbox_string(pattern_ptr as i64).to_bits(),
+        );
+        crate::gc::runtime_write_barrier_gc_slot(
+            parent,
+            std::ptr::addr_of!((*re).flags_ptr) as usize,
+            crate::value::js_nanbox_string(canonical_flags_ptr as i64).to_bits(),
+        );
         (*re).case_insensitive = flags_str.contains('i');
         (*re).global = flags_str.contains('g');
         (*re).multiline = flags_str.contains('m');
@@ -210,10 +208,6 @@ pub extern "C" fn js_regexp_compile_value(
         (*re).dot_all = flags_str.contains('s');
         (*re).unicode = flags_str.contains('u') || flags_str.contains('v');
         (*re).has_indices = flags_str.contains('d');
-        super::REGEX_SOURCE_TABLE.with(|t| {
-            t.borrow_mut()
-                .insert(re as usize, (Arc::from(pattern_str), Arc::from(flags_str)));
-        });
     }
     // Spec RegExpInitialize step 12: `Set(obj, "lastIndex", 0, true)` runs LAST,
     // with the *Throw* flag. A user-frozen `lastIndex`

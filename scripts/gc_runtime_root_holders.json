@@ -698,13 +698,6 @@
     },
     {
       "file": "crates/perry-runtime/src/regex.rs",
-      "name": "REGEX_SOURCE_TABLE",
-      "verdict": "covered_elsewhere",
-      "scanner": "regex::regex_header_moved_for_gc / regex_header_clear_dead_for_gc (regex.rs)",
-      "why": "Address-KEYED owner table (owned String copies of pattern/flags); rekeyed on move, cleared on death, same hooks as REGEX_POINTERS."
-    },
-    {
-      "file": "crates/perry-runtime/src/regex.rs",
       "name": "VALIDATED_PATTERNS",
       "count": 1,
       "classification": "not_a_gc_pointer",
