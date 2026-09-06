@@ -1,9 +1,18 @@
+import { Buffer } from "node:buffer";
+
 let hash = 0;
 const retained: string[] = [];
+function hashText(text: string, seed: number): number {
+    // Sequential byte access checks the entire output without repeated UTF-16
+    // indexing rescanning long non-ASCII strings in the validation harness.
+    const bytes = Buffer.from(text, "utf8");
+    for (let i = 0; i < bytes.length; i++) seed = (seed * 33 + bytes[i]) % 1000000007;
+    return seed;
+}
 function inspect(value: any): void {
     const text = JSON.stringify(value);
     retained.push(text);
-    for (let i = 0; i < text.length; i++) hash = (hash * 33 + text.charCodeAt(i)) % 1000000007;
+    hash = hashText(text, hash);
     console.log(text.length, hash, text.length < 240 ? text : "large");
 }
 for (let code = 0; code < 128; code++) {
@@ -40,7 +49,6 @@ inspect(callbacks);
 console.log(calls);
 let retainedHash = 0;
 for (let i = 0; i < retained.length; i++) {
-    const text = retained[i];
-    for (let j = 0; j < text.length; j++) retainedHash = (retainedHash * 33 + text.charCodeAt(j)) % 1000000007;
+    retainedHash = hashText(retained[i], retainedHash);
 }
 console.log(retained.length, hash, retainedHash, hash === retainedHash);
