@@ -65,6 +65,22 @@ pub(super) fn try_rewrite_raw_addr(ptr_addr: usize, valid_ptrs: &ValidPointerSet
 }
 
 #[cold]
+pub(super) fn check_forwarded_reference(
+    surface: &str,
+    slot_addr: usize,
+    old_bits: u64,
+    new_bits: u64,
+) {
+    // Old-to-old array-growth aliases are intentionally retained. Require
+    // explicit growth provenance throughout a non-copying chain; ordinary
+    // evacuation stubs (including array stubs) must still fail verification.
+    if crate::array::is_retained_growth_alias(old_bits, new_bits) {
+        return;
+    }
+    panic_stale_forwarded_reference(surface, slot_addr, old_bits, new_bits);
+}
+
+#[cold]
 pub(super) fn panic_stale_forwarded_reference(
     surface: &str,
     slot_addr: usize,
@@ -90,7 +106,7 @@ pub(super) unsafe fn rewrite_slot(slot: *mut u64, valid_ptrs: &ValidPointerSet) 
 pub(super) unsafe fn verify_slot(slot: *const u64, valid_ptrs: &ValidPointerSet, surface: &str) {
     let bits = *slot;
     if let Some(new_bits) = try_rewrite_value(bits, valid_ptrs) {
-        panic_stale_forwarded_reference(surface, slot as usize, bits, new_bits);
+        check_forwarded_reference(surface, slot as usize, bits, new_bits);
     }
 }
 
@@ -1188,7 +1204,7 @@ pub(super) fn verify_mutable_root_slots(valid_ptrs: &ValidPointerSet) {
                 MutableRootSlotKind::NativeStack => "native stack-map roots",
                 MutableRootSlotKind::GlobalRoot => "global roots",
             };
-            panic_stale_forwarded_reference(surface, slot.ptr as usize, bits, new_bits);
+            check_forwarded_reference(surface, slot.ptr as usize, bits, new_bits);
         }
     });
 }
@@ -1208,7 +1224,7 @@ pub(super) fn verify_copy_only_scanner_bits(
     surface: &'static str,
 ) {
     if let Some(new_bits) = try_rewrite_nanboxed_value(bits, valid_ptrs) {
-        panic_stale_forwarded_reference(surface, 0, bits, new_bits);
+        check_forwarded_reference(surface, 0, bits, new_bits);
     }
 }
 

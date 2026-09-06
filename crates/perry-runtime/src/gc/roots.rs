@@ -1014,7 +1014,7 @@ impl<'a> RuntimeRootVisitor<'a> {
                 surface,
             } => {
                 if let Some(new_bits) = try_rewrite_nanboxed_value(bits, valid_ptrs) {
-                    panic_stale_forwarded_reference(surface, 0, bits, new_bits);
+                    check_forwarded_reference(surface, 0, bits, new_bits);
                 }
                 None
             }
@@ -1046,7 +1046,7 @@ impl<'a> RuntimeRootVisitor<'a> {
                 surface,
             } => {
                 if let Some(new_bits) = try_rewrite_value(bits, valid_ptrs) {
-                    panic_stale_forwarded_reference(surface, 0, bits, new_bits);
+                    check_forwarded_reference(surface, 0, bits, new_bits);
                 }
                 None
             }
@@ -1086,7 +1086,7 @@ impl<'a> RuntimeRootVisitor<'a> {
                 surface,
             } => {
                 if let Some(new_addr) = try_rewrite_raw_addr(addr, valid_ptrs) {
-                    panic_stale_forwarded_reference(
+                    check_forwarded_reference(
                         surface,
                         0,
                         copy_tag | (addr as u64 & POINTER_MASK),
@@ -1117,6 +1117,8 @@ impl<'a> RuntimeRootVisitor<'a> {
                 surface,
             } => {
                 if let Some(new_addr) = try_rewrite_raw_addr(addr, valid_ptrs) {
+                    // Metadata keys must name the canonical owner even when
+                    // an ordinary value may retain a permanent growth alias.
                     panic_stale_forwarded_reference(surface, 0, addr as u64, new_addr as u64);
                 }
                 None

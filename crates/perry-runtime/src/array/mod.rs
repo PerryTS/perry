@@ -9,6 +9,7 @@ mod from_concat;
 mod generic;
 mod generic_mutators;
 mod generic_object;
+mod growth_forwarding;
 mod header;
 mod header_gc_slots;
 mod immutable;
@@ -70,6 +71,7 @@ mod typed_array_receiver_tests;
 pub(crate) use self::alloc::{
     array_length_range_error, js_array_alloc_pointer_elements, js_array_alloc_with_length_exact,
 };
+pub(crate) use growth_forwarding::is_retained_growth_alias;
 pub use self::alloc::{
     js_array_alloc, js_array_alloc_literal, js_array_alloc_with_length,
     js_array_alloc_with_length_longlived, js_array_constructor_single, js_array_create,

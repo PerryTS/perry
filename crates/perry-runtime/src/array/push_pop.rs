@@ -71,6 +71,10 @@ pub(super) unsafe fn install_array_growth_forwarding_with(
         return false;
     }
     crate::gc::set_forwarding_address(header, new_user_addr);
+    // This retained growth stub is distinct from GC's temporary evacuation
+    // stubs. Its old payload is no longer an array layout; the target's layout
+    // has already been transferred before entering this install helper.
+    (*header)._reserved |= super::growth_forwarding::GROWTH_STUB_LAYOUT;
     true
 }
 

@@ -1,6 +1,7 @@
 mod alloc;
 mod arena_right_size;
 mod array_pointer_slot_enumeration;
+mod array_growth_verifier;
 mod barrier;
 mod barrier_arming;
 mod barrier_decoded_parent;
