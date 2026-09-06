@@ -45,9 +45,11 @@
     "2026-08-08 re-pin every probe's conservative reading equals its precise one",
     "(gc_ratchet.py classify, excess 0.00% on all twelve), so heap_used_bytes now",
     "means what it says. `classify` is still the first step on a breach -- it is",
-    "now also the check that the term has not come back."
+    "now also the check that the term has not come back.",
+    "#9829 excludes only 13_large_eden_survivors.heap_total_bytes after 21 executions",
+    "of one binary varied by 2 MiB of reserved capacity with identical live bytes",
+    "and all seven GC counters. This is not a wider band or a retention exemption."
   ],
-
   "shared_ci": {
     "heap_used_bytes": {
       "pct": 2.0,
@@ -134,7 +136,6 @@
       "rationale": "EXCLUDED FROM THE SHARED-CI GATE. Wall time on a shared runner is dominated by neighbour noise; no band both survives that and catches a real GC slowdown. Rather than widen it until it cannot fire, it is marked non-gating and reported. The GC-work dimension is covered on this runner by the deterministic counters (minor_cycles, copied_objects, freed_bytes), which measure how much work the collector did without measuring how fast the machine was."
     }
   },
-
   "pinned_host": {
     "heap_used_bytes": {
       "pct": 2.0,
@@ -221,7 +222,6 @@
       "rationale": "GATED HERE ONLY. Worst cross-session spread of medians-of-7 was 0.751% on an idle box (load 1.7-2.0); worst raw within-session spread was 5.3%, which the median-of-7 damps out. 10% is ~13x the cross-session figure and ~2x the worst raw spread, so it will not fire on scheduler jitter but will catch the tens-of-percent slowdown a whole-stack conservative scan would introduce. The 15 ms floor covers the fastest probe (126 ms)."
     }
   },
-
   "probe_overrides": {
     "07_array_grow_evacuate": {
       "copied_bytes": {
@@ -242,6 +242,18 @@
           "observed_spread": 8208,
           "measured_on": "2026-09-05, macOS arm64, Perry 0.5.1520; 21 executions of one unchanged binary. Compiler/runtime hashes and raw counters: benchmarks/gc_ratchet/evidence/9790-array-growth-pacing.json.",
           "issue": "https://github.com/PerryTS/perry/issues/9790"
+        }
+      }
+    },
+    "13_large_eden_survivors": {
+      "heap_total_bytes": {
+        "gating": false,
+        "rationale": "NOT GATED ON THIS PROBE (#9829). Total reserved arena capacity varies by 2 MiB across executions of one unchanged binary: 18/21 runs reserve 61865984 bytes and 3/21 reserve 63963136. All 21 report the same 227048 live bytes and identical seven GC counters (including three minors and 377569 copied objects), with Node-equivalent output. js_arena_stats sums reserved block sizes for heapTotal, separately from its exact live-object census for heapUsed. This is spare-capacity/placement variation, not changing live retention or GC work; the precise allocating block/order is not isolated. CI run 33989581881 independently contains the same two capacities. Keep the cell visible, while heapUsed, liveness, copying/promotion/reclamation, and all other probes remain gated. Raw 21-run evidence and binary/source hashes: evidence/9829-recovery.json.",
+        "evidence": {
+          "observed_runs": 21,
+          "observed_spread": 2097152,
+          "measured_on": "2026-09-06, linux-x86_64, clean main d36a1af0c compiler and matching runtime/stdlib archives. One unchanged probe binary, 21 traced executions with PERRY_GC_SCAVENGE_NURSERY_MB=64. See evidence/9829-recovery.json capacity_variance.",
+          "issue": "https://github.com/PerryTS/perry/issues/9829"
         }
       }
     }
