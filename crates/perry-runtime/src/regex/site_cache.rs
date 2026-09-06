@@ -47,6 +47,18 @@ pub(super) struct Programs {
     pub(super) repeat: Option<Arc<super::repeat_matcher::RepeatMatcherRegex>>,
 }
 
+impl Programs {
+    pub(super) fn matcher_kind(&self) -> super::MatcherKind {
+        if self.repeat.is_some() {
+            super::MatcherKind::Repeat
+        } else if self.fancy.is_some() {
+            super::MatcherKind::Fancy
+        } else {
+            super::MatcherKind::Standard
+        }
+    }
+}
+
 /// What a construction gets back on a hit.
 pub(super) struct Hit {
     pub(super) pattern: Arc<str>,

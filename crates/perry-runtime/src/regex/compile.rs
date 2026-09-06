@@ -166,6 +166,7 @@ pub extern "C" fn js_regexp_compile_value(
             .cloned()
     });
     let programs = Arc::new(super::site_cache::Programs { std, fancy, repeat });
+    let matcher_kind = programs.matcher_kind();
     let programs_ptr = Arc::into_raw(programs);
     let (canonical_flags_ptr, _) =
         re_handle.across_mut::<RegExpHeader, _>(|| js_string_from_str(flags_str));
@@ -176,6 +177,7 @@ pub extern "C" fn js_regexp_compile_value(
     });
     unsafe {
         let old_programs_ptr = (*re).programs_ptr;
+        (*re).matcher_kind = matcher_kind;
         (*re).programs_ptr = programs_ptr;
         // Release the receiver's PREVIOUS owned references now that the new
         // ones are installed (recompiling the same pattern is fine: the fresh
