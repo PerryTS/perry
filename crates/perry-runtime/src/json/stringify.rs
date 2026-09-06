@@ -1157,13 +1157,11 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
     // already matches spec and the loop walks `0..actual_fields` directly.
     let key_order = crate::object::ecma_own_key_order(keys_arr);
 
-    // Small objects already have direct-output and shape paths. Speculating
-    // on their remaining complex fields added work without a useful fast
-    // result. Wide inline objects can instead prove primitive fields by one
-    // raw walk, avoiding both the generic closure scan's handle retrievals
+    // Nested one-field leaves and wide inline objects can prove primitive
+    // fields by one raw walk, avoiding the generic closure scan's handle retrievals
     // and repeated retrievals during emission. No pointer/BigInt field,
     // descriptor or class can reach the borrowed emit interval.
-    if actual_fields > 32
+    if (actual_fields == 1 || actual_fields > 32)
         && !has_overflow_fields
         && (*obj).class_id == 0
         && !crate::object::object_has_descriptors(ptr as usize)
