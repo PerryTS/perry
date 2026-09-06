@@ -225,6 +225,9 @@ pub(super) fn previous_dirty_covered_estimate() -> usize {
     PREVIOUS_DIRTY_COVERED_ESTIMATE.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// LAST-VALUE. **Do not "just reserve the peak" — that was tried and it cost
+/// 400 MB of settled footprint for no time gain.**
+///
 /// LAST-VALUE, and a high-water mark was tried and REJECTED.
 ///
 /// `[gc-dirty-covered]` shows this set is far more volatile than the survivor
