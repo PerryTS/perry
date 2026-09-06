@@ -57,6 +57,7 @@ pub(crate) use block::{
     reset_gc_trigger_arena_probe,
 };
 pub(crate) use page_meta::{
+    page_class_table_report,
     address_span_overlaps_pages, defer_old_object_page_registration,
     register_block_space_with_object_starts, register_old_object_pages,
     unregister_block_generation, unregister_old_block_pages, OLD_GEN_RECLAIM_POOLED_BYTES,
