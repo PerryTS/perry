@@ -1032,7 +1032,10 @@ fn nursery_regexp_that_dies_young_is_finalized_by_the_copied_minor() {
     let dead_addr = dead as usize;
     let live_addr = live as usize;
     // Premise: production construction is nursery-allocated now.
-    assert!(crate::arena::pointer_in_nursery(dead_addr), "the header must be nursery-allocated");
+    assert!(
+        crate::arena::pointer_in_nursery(dead_addr),
+        "the header must be nursery-allocated"
+    );
     assert!(crate::regex::test_regex_pointer_entry_exists(dead_addr));
     assert!(crate::regex::test_regex_source_entry_exists(dead_addr));
     // Both headers share one program through the site cache.

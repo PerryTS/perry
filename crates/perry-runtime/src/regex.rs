@@ -281,7 +281,12 @@ pub(crate) fn finalize_dead_copied_minor_from_space_regexps() -> usize {
             .borrow()
             .iter()
             .copied()
-            .filter(|&addr| crate::gc::owner_is_dead_copied_minor_from_space_of_type(addr, crate::gc::GC_TYPE_REGEXP))
+            .filter(|&addr| {
+                crate::gc::owner_is_dead_copied_minor_from_space_of_type(
+                    addr,
+                    crate::gc::GC_TYPE_REGEXP,
+                )
+            })
             .collect()
     });
     let count = dead.len();
@@ -1635,7 +1640,6 @@ fn linear_rules_out_match(re: *const RegExpHeader, subject: &str, start: usize) 
         start <= subject.len() && !program.is_match_at(subject, start)
     }
 }
-
 
 /// [`lookup_repeat_matcher`] with the linear pre-check applied: `None` also
 /// when the linear program proves no match at or after `start`, so the

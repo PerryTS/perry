@@ -32,12 +32,8 @@ fn lower(src: &str) -> perry_hir::Module {
             let parsed =
                 parse_typescript_with_cache(&src, "native_instance_binding_scope.ts", &mut cache)
                     .expect("parse should succeed");
-            lower_module(
-                &parsed.module,
-                "test",
-                "native_instance_binding_scope.ts",
-            )
-            .expect("lowering should succeed")
+            lower_module(&parsed.module, "test", "native_instance_binding_scope.ts")
+                .expect("lowering should succeed")
         })
         .expect("spawn lower thread")
         .join()

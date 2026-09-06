@@ -311,8 +311,9 @@ pub(crate) fn for_in_keys_with(value: f64, lazy_shadow: bool) -> *mut ArrayHeade
         let n = own.with_const_ptr(|array| crate::array::js_array_length(array));
         for i in 0..n {
             let kv = own.with_const_ptr(|own| crate::array::js_array_get(own, i));
-            let updated = out
-                .with_mut_ptr(|out| crate::array::js_array_push_f64(out, f64::from_bits(kv.bits())));
+            let updated = out.with_mut_ptr(|out| {
+                crate::array::js_array_push_f64(out, f64::from_bits(kv.bits()))
+            });
             out.set_raw_mut_ptr(updated);
         }
         return out.with_mut_ptr(|out: *mut ArrayHeader| out);
@@ -484,7 +485,6 @@ impl Default for VisitedLevels<'_> {
 }
 
 impl<'s> VisitedLevels<'s> {
-
     /// #9864 follow-up: a recorded level is a NaN-boxed heap pointer that is
     /// dereferenced later, by `build_shadow_set`, after the walk has crossed
     /// `js_object_keys_value` (which allocates) and `getPrototypeOf` (which
