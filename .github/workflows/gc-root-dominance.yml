@@ -345,13 +345,14 @@ jobs:
       - name: Check root-store dominance (dependency-scale)
         run: |
           set -euo pipefail
-          # Floors from the corpus as of this commit (81 modules, ~12900
-          # functions, ~7700 root stores), set below that with room for the
-          # dependency's own churn. `zod` growing is fine; `zod` no longer
-          # compiling natively is the finding, and these are what make it one.
+          # The corpus retained 81 modules and ~14,000 root stores while
+          # compiler pruning reduced its function count from 12,909 to a
+          # stable 5,615-5,920. Keep the breadth floor below that measured
+          # population; module and root-store floors independently reject a
+          # compile that silently loses the dependency or the gate's subject.
           python3 scripts/gc_root_dominance_check.py ir-corpus-dep \
             --moving-only \
-            --min-files 60 --min-binds 4000 --min-funcs 6000 \
+            --min-files 60 --min-binds 4000 --min-funcs 5000 \
             --allowlist scripts/gc_root_dominance_allowlist.json \
             --seeded-violations 40 \
             -v
@@ -362,7 +363,7 @@ jobs:
           python3 scripts/gc_root_dominance_check.py ir-corpus-dep \
             --unrooted-allocas \
             --moving-only \
-            --min-files 60 --min-binds 4000 --min-funcs 6000 \
+            --min-files 60 --min-binds 4000 --min-funcs 5000 \
             --allowlist scripts/gc_root_dominance_allowlist.json \
             -v
 
@@ -401,7 +402,7 @@ jobs:
           set -euo pipefail
           python3 scripts/gc_root_dominance_check.py ir-corpus-dep \
             --stale-registers --moving-only \
-            --min-files 60 --min-binds 4000 --min-funcs 6000 \
+            --min-files 60 --min-binds 4000 --min-funcs 5000 \
             --max-stale 118
 
       - name: Upload the IR corpus on failure

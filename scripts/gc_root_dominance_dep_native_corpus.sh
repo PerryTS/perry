@@ -29,18 +29,11 @@ case "$PERRY_BIN" in /*) ;; *) PERRY_BIN="$PWD/$PERRY_BIN" ;; esac
 [ -x "$PERRY_BIN" ] || { echo "::error::$PERRY_BIN not found or not executable" >&2; exit 2; }
 ENTRY="${ENTRY:-test-files/gc-dep-corpus/main.ts}"
 
-# Single-sourced from the Rust const, never retyped (same reason the curated
-# script gives: a fourth copy is how the pass string drifts from production).
-# Join continuation lines up to the `;` first: rustfmt wraps the initializer
-# when the line grows (#8068 did), and a single-line match then reads nothing.
-PASSES="$(awk '/const STATEPOINT_REWRITE_PASSES: &str/ {
-    buf = $0
-    while (buf !~ /;[[:space:]]*$/ && (getline line) > 0) buf = buf " " line
-    if (match(buf, /"[^"]*"/)) print substr(buf, RSTART + 1, RLENGTH - 2)
-    exit
-  }' crates/perry-codegen/src/inprocess.rs)"
-[ -n "$PASSES" ] || { echo "could not read STATEPOINT_REWRITE_PASSES" >&2; exit 2; }
-OPT_BIN="${PERRY_LLVM_OPT:-/opt/homebrew/opt/llvm/bin/opt}"
+# Single-sourced from the Rust const through the same reader as the curated
+# native corpus. The reader requires one literal declaration anywhere under
+# perry-codegen/src, so a module split cannot leave this arm on a stale path.
+PASSES="$(python3 scripts/read_statepoint_rewrite_passes.py)" || exit 2
+OPT_BIN="${PERRY_LLVM_OPT:-}"
 if [ ! -x "$OPT_BIN" ]; then
   for c in "${LLVM_SYS_221_PREFIX:-}/bin/opt" /opt/homebrew/opt/llvm/bin/opt /usr/local/opt/llvm/bin/opt; do
     [ -n "$c" ] && [ -x "$c" ] && OPT_BIN="$c" && break
