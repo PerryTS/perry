@@ -661,8 +661,14 @@ fn collect_module_one(
         collected: Some(ctx.native_modules.len() + ctx.js_modules.len()),
         ..Default::default()
     });
+    // Expand only in the selected mode. Ordinary accessor/closure lowering then
+    // owns captures, source-order semantics and the generated renderer imports.
+    let solid_module = ctx
+        .solid_jsx
+        .then(|| perry_hir::solid_jsx::lower_solid_jsx(ast_module, "perry-solid"))
+        .flatten();
     let lower_result = perry_hir::lower_module_full_with_platform_globals(
-        ast_module,
+        solid_module.as_ref().unwrap_or(ast_module),
         &module_name,
         &source_file_path,
         *next_class_id,

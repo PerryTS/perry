@@ -7,7 +7,8 @@
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
-    "./renderer": "./src/renderer.ts"
+    "./renderer": "./src/renderer.ts",
+    "./jsx-runtime": "./src/jsx-runtime.ts"
   },
   "files": [
     "src",
@@ -18,13 +19,16 @@
     "solid-js": "^1.9.15"
   },
   "devDependencies": {
+    "@babel/core": "7.29.7",
     "@types/node": "26.4.1",
+    "babel-preset-solid": "1.9.15",
     "solid-js": "1.9.15",
     "typescript": "5.9.3"
   },
   "scripts": {
     "test": "node --conditions=browser test/renderer.test.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:jsx:oracle": "node test/jsx/oracle.cjs && node --conditions=browser test/jsx/generated.ts"
   },
   "perry": {
     "nativeModule": true,
@@ -38,6 +42,7 @@
     },
     "packageAliases": {
       "solid-js": "solid-js/dist/solid.js"
-    }
+    },
+    "jsx": "solid"
   }
 }
