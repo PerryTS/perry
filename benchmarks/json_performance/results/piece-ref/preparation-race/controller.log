@@ -1,0 +1,11 @@
+Traceback (most recent call last):
+  File "/Users/amlug/projects/perry/codex-json-fastpaths-artifacts/piece_ref_instructions.py", line 7, in <module>
+    meta={'purpose':'Local instruction-count diagnostic only; no quiet CPU/RSS acceptance. Process-wide instructions include startup and warmup, unlike loop CPU. Identical fixed calls and worker.o across Perry arms.','utc':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime()),'cpu':subprocess.check_output(['sysctl','-n','machdep.cpu.brand_string'],text=True).strip(),'load':os.getloadavg(),'cases':cases,'worker_sha256':{e:hashlib.sha256(Path(cmd[0]).read_bytes()).hexdigest() for e,cmd in r.ENGINES.items()}}
+                                                                                                                                                                                                                                                                                                                                                                                                                                                    ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.6/Frameworks/Python.framework/Versions/3.14/lib/python3.14/pathlib/__init__.py", line 777, in read_bytes
+    with self.open(mode='rb', buffering=0) as f:
+         ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.6/Frameworks/Python.framework/Versions/3.14/lib/python3.14/pathlib/__init__.py", line 771, in open
+    return io.open(self, mode, buffering, encoding, errors, newline)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/Users/amlug/projects/perry/codex-json-fastpaths-artifacts/piece-ref-worker'

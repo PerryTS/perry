@@ -1,0 +1,20 @@
+{
+  "purpose": "Local sampling diagnostic only; not quiet-window CPU/RSS evidence.",
+  "command": [
+    "/Users/amlug/projects/perry/codex-json-fastpaths-artifacts/piece-ref-worker",
+    "/Users/amlug/projects/perry/codex-json-fastpaths/benchmarks/json_performance/.work/fixtures/escaped_1m.json",
+    "stringify",
+    "4096",
+    "2"
+  ],
+  "worker_sha256": "52eb93942df564effe07091ec1536a886ebe2f9f67f22b63b78549401f3d9a30",
+  "worker_exit": 0,
+  "sample_exit": 0,
+  "sample_stderr": "Sampling process 21479 for 3 seconds with 1 millisecond of run time between samples\nSampling completed, processing symbols...\nSample analysis of process 21479 written to file /Users/amlug/projects/perry/codex-json-fastpaths-artifacts/piece-ref-escaped-profile/escaped_1m.sample.txt\n",
+  "cpu": "Apple M1 Max",
+  "load_after": [
+    6.0546875,
+    9.12841796875,
+    9.71435546875
+  ]
+}

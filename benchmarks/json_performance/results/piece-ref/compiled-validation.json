@@ -1,0 +1,631 @@
+[
+  {
+    "name": "test_gap_json_scanning_boundaries",
+    "arm": "piece-ref",
+    "compile_exit": 0,
+    "object_sha256": "ea2670de8bb22a03f5eeb4c08c1ad1f700d6bdd548dbbcd3ec755d879c45e8dd",
+    "node": {
+      "exit": 0,
+      "stdout": "scan 255 0 730561117\nwide 0 624430645\n",
+      "stderr": ""
+    },
+    "perry": {
+      "exit": 0,
+      "stdout": "scan 255 0 730561117\nwide 0 624430645\n",
+      "stderr": ""
+    },
+    "matches_node": true
+  },
+  {
+    "name": "test_issue_9184_json_parse_strict",
+    "arm": "piece-ref",
+    "compile_exit": 0,
+    "object_sha256": "fb31ec6fb7181b1b7d07d69d03d3b9118634ed397ddfd1db41f0c85240d75f7a",
+    "node": {
+      "exit": 0,
+      "stdout": "invalid:43/43:0\nvalid:28/28:0\ntyped:SyntaxError:2:1:2\n",
+      "stderr": ""
+    },
+    "perry": {
+      "exit": 0,
+      "stdout": "invalid:43/43:0\nvalid:28/28:0\ntyped:SyntaxError:2:1:2\n",
+      "stderr": ""
+    },
+    "matches_node": true
+  },
+  {
+    "name": "test_json",
+    "arm": "piece-ref",
+    "compile_exit": 0,
+    "object_sha256": "2ec349674d8a18682516c52927578e0f789374f5c6a7ca71030bd1098ef8c138",
+    "node": {
+      "exit": 0,
+      "stdout": "\"hello\"\n42\n3.14\n\"world\"\n100\n42\n3.14\nJSON test passed!\n",
+      "stderr": ""
+    },
+    "perry": {
+      "exit": 0,
+      "stdout": "\"hello\"\n42\n3.14\n\"world\"\n100\n42\n3.14\nJSON test passed!\n",
+      "stderr": ""
+    },
+    "matches_node": true
+  },
+  {
+    "name": "test_json_sso_strings",
+    "arm": "piece-ref",
+    "compile_exit": 0,
+    "object_sha256": "17771487aaa2746fe320c3e21c1388be632e81e884078f8337dc944a6d17b477",
+    "node": {
+      "exit": 0,
+      "stdout": "a.foo: perry\nperry\nv= perry /end\nv === u: true\nv == u: true\nv === \"perry\": true\nString(v): perry\n\"X\" + v: Xperry\n{ name: 'alice', tag: 'vip' }\n[ 'a', 'bb', 'ccc', 'dddd', 'eeeee' ]\narr.length: 5\nkeys: [ 'foo' ]\nstringify: {\"foo\":\"perry\"}\n",
+      "stderr": ""
+    },
+    "perry": {
+      "exit": 0,
+      "stdout": "a.foo: perry\nperry\nv= perry /end\nv === u: true\nv == u: true\nv === \"perry\": true\nString(v): perry\n\"X\" + v: Xperry\n{ name: 'alice', tag: 'vip' }\n[ 'a', 'bb', 'ccc', 'dddd', 'eeeee' ]\narr.length: 5\nkeys: [ 'foo' ]\nstringify: {\"foo\":\"perry\"}\n",
+      "stderr": ""
+    },
+    "matches_node": true
+  },
+  {
+    "name": "test_gap_json_advanced",
+    "arm": "piece-ref",
+    "compile_exit": 0,
+    "object_sha256": "33b8ef0e4b9825229eccb25f9d50fe013433bd16e2e8e247facf672f24e7e229",
+    "node": {
+      "exit": 0,
+      "stdout": "{\n  \"a\": 1,\n  \"b\": \"hello\",\n  \"c\": [\n    1,\n    2,\n    3\n  ]\n}\n{\n\t\"x\": 1\n}\n{\"name\":\"Alice\",\"age\":30}\n{\"name\":\"Bob\",\"city\":\"NYC\"}\n42\nnumber\n2024-01-15\nundefined\ntrue\n{\"a\":1,\"c\":3}\n[1,null,3]\ntrue\ntrue\n{\"formatted\":\"12,345\"}\n{\"inner\":\"custom-42\"}\n",
+      "stderr": ""
+    },
+    "perry": {
+      "exit": 0,
+      "stdout": "{\n  \"a\": 1,\n  \"b\": \"hello\",\n  \"c\": [\n    1,\n    2,\n    3\n  ]\n}\n{\n\t\"x\": 1\n}\n{\"name\":\"Alice\",\"age\":30}\n{\"name\":\"Bob\",\"city\":\"NYC\"}\n42\nnumber\n2024-01-15\nundefined\ntrue\n{\"a\":1,\"c\":3}\n[1,null,3]\ntrue\ntrue\n{\"formatted\":\"12,345\"}\n{\"inner\":\"custom-42\"}\n",
+      "stderr": ""
+    },
+    "matches_node": true
+  },
+  {
+    "name": "test_gap_json_stringify_replacer_tojson",
+    "arm": "piece-ref",
+    "compile_exit": 0,
+    "object_sha256": "0500aff3aae37c0e839d02459ebf707d50db716c0a973be8975d49f92cf6cdd9",
+    "node": {
+      "exit": 0,
+      "stdout": "{\"id\":\"X\",\"items\":[1,2]}\n{\n  \"id\": \"X\",\n  \"items\": [\n    1,\n    2\n  ]\n}\n{\n  \"a\": [\n    1,\n    2\n  ]\n}\n{\n  \"wrap\": [\n    9,\n    8\n  ]\n}\n{\"a\":1}\n{\"a\":10,\"b\":20}\n{\n  \"list\": [\n    {\n      \"x\": 1\n    },\n    {\n      \"x\": 2\n    }\n  ],\n  \"n\": 3\n}\n[\n  1,\n  {\n    \"a\": 2\n  },\n  [\n    3,\n    4\n  ]\n]\n{\"s\":\"hi\",\"b\":true,\"n\":null,\"x\":5}\n{\n  \"_tag\": \"Box\",\n  \"value\": 42\n}\n",
+      "stderr": ""
+    },
+    "perry": {
+      "exit": 0,
+      "stdout": "{\"id\":\"X\",\"items\":[1,2]}\n{\n  \"id\": \"X\",\n  \"items\": [\n    1,\n    2\n  ]\n}\n{\n  \"a\": [\n    1,\n    2\n  ]\n}\n{\n  \"wrap\": [\n    9,\n    8\n  ]\n}\n{\"a\":1}\n{\"a\":10,\"b\":20}\n{\n  \"list\": [\n    {\n      \"x\": 1\n    },\n    {\n      \"x\": 2\n    }\n  ],\n  \"n\": 3\n}\n[\n  1,\n  {\n    \"a\": 2\n  },\n  [\n    3,\n    4\n  ]\n]\n{\"s\":\"hi\",\"b\":true,\"n\":null,\"x\":5}\n{\n  \"_tag\": \"Box\",\n  \"value\": 42\n}\n",
+      "stderr": ""
+    },
+    "matches_node": true
+  },
+  {
+    "name": "test_gap_json_prototype_tojson",
+    "arm": "piece-ref",
+    "compile_exit": 0,
+    "object_sha256": "aeb881dc01bb3dddcf966ccda93419867d9583a259c5b8cb8a8d3e5f82497e70",
+    "node": {
+      "exit": 0,
+      "stdout": "{\"tag\":\"C\",\"x\":1}\n{\"tag\":\"C\",\"x\":1}\n\"PVAL\"\n\"ROOT\"\n99\n\"str\"\ntrue\nnull\n{\"base\":10}\n\"D2\"\n{\"x\":1}\n{\"x\":1}\n{\"inner\":{\"tag\":\"C\",\"x\":1}}\n[{\"tag\":\"C\",\"x\":1},{\"tag\":\"C\",\"x\":1}]\n{\n  \"p\": {\n    \"tag\": \"C\",\n    \"x\": 1\n  }\n}\n{\n  \"pt\": {\n    \"tag\": \"C\",\n    \"x\": 1\n  }\n}\n{}\n{\"a\":1,\"b\":\"x\",\"c\":[1,2,3]}\n5\n{\"z\":9}\n{\"a\":1,\"b\":2}\n{\"y\":9}\n42\n\"hi\"\nnull\n[1,\"a\",true,null]\n\"1970-01-01T00:00:00.000Z\"\n{\"d\":\"1970-01-02T00:00:00.000Z\"}\n",
+      "stderr": ""
+    },
+    "perry": {
+      "exit": 0,
+      "stdout": "{\"tag\":\"C\",\"x\":1}\n{\"tag\":\"C\",\"x\":1}\n\"PVAL\"\n\"ROOT\"\n99\n\"str\"\ntrue\nnull\n{\"base\":10}\n\"D2\"\n{\"x\":1}\n{\"x\":1}\n{\"inner\":{\"tag\":\"C\",\"x\":1}}\n[{\"tag\":\"C\",\"x\":1},{\"tag\":\"C\",\"x\":1}]\n{\n  \"p\": {\n    \"tag\": \"C\",\n    \"x\": 1\n  }\n}\n{\n  \"pt\": {\n    \"tag\": \"C\",\n    \"x\": 1\n  }\n}\n{}\n{\"a\":1,\"b\":\"x\",\"c\":[1,2,3]}\n5\n{\"z\":9}\n{\"a\":1,\"b\":2}\n{\"y\":9}\n42\n\"hi\"\nnull\n[1,\"a\",true,null]\n\"1970-01-01T00:00:00.000Z\"\n{\"d\":\"1970-01-02T00:00:00.000Z\"}\n",
+      "stderr": ""
+    },
+    "matches_node": true
+  },
+  {
+    "name": "test_gap_json_replacer_sparse_hole",
+    "arm": "piece-ref",
+    "compile_exit": 0,
+    "object_sha256": "f0ee63df4839a69e93e662c4a474de83a63d1ed02d335640d86c30991566cbcb",
+    "node": {
+      "exit": 0,
+      "stdout": "[1,\"$undefined\",3]\n[\"\",{\"children\":[\"plain\",{}]},\"$undefined\",\"$undefined\",16]\nundefined true false\n[null,7]\n[\n 1,\n \"$undefined\",\n 3\n]\n{\"a\":[1,null,3]}\n[\"$NaN\",\"$undefined\",2]\n{\"p1\":1,\"p2\":2,\"p3\":3,\"p4\":4,\"p5\":5,\"p6\":6,\"p7\":7,\"p8\":8,\"p9\":9,\"p10\":10,\"p11\":11,\"p12\":12,\"p13\":13,\"notFound\":\"$undefined\",\"forbidden\":\"$undefined\",\"unauthorized\":\"$undefined\"}\n{\"a1\":1,\"a2\":2,\"a3\":3,\"a4\":4,\"a5\":5,\"a6\":6,\"a7\":7,\"a8\":8,\"a9\":\"$undefined\"}\n18\n{\"p9\":9,\"p13\":13}\n",
+      "stderr": ""
+    },
+    "perry": {
+      "exit": 0,
+      "stdout": "[1,\"$undefined\",3]\n[\"\",{\"children\":[\"plain\",{}]},\"$undefined\",\"$undefined\",16]\nundefined true false\n[null,7]\n[\n 1,\n \"$undefined\",\n 3\n]\n{\"a\":[1,null,3]}\n[\"$NaN\",\"$undefined\",2]\n{\"p1\":1,\"p2\":2,\"p3\":3,\"p4\":4,\"p5\":5,\"p6\":6,\"p7\":7,\"p8\":8,\"p9\":9,\"p10\":10,\"p11\":11,\"p12\":12,\"p13\":13,\"notFound\":\"$undefined\",\"forbidden\":\"$undefined\",\"unauthorized\":\"$undefined\"}\n{\"a1\":1,\"a2\":2,\"a3\":3,\"a4\":4,\"a5\":5,\"a6\":6,\"a7\":7,\"a8\":8,\"a9\":\"$undefined\"}\n18\n{\"p9\":9,\"p13\":13}\n",
+      "stderr": ""
+    },
+    "matches_node": true
+  },
+  {
+    "name": "test_gap_json_array_element_overflow_fields",
+    "arm": "piece-ref",
+    "compile_exit": 0,
+    "object_sha256": "754f0c60ece43ebde16edf9079e9922a660b93cfd23075e5d780bef2defd1e98",
+    "node": {
+      "exit": 0,
+      "stdout": "1 0 311 [{\"f0\":0},{\"f0\":1},{\"f0\":2},{\"f0\":3},{\"f0\":4},{\"f0\":5},{\"f0\":6},{\"f0\":7}\n2 0 558 [{\"f0\":0,\"f1\":1},{\"f0\":1,\"f1\":2},{\"f0\":2,\"f1\":3},{\"f0\":3,\"f1\":4},{\"f0\":4\n3 0 806 [{\"f0\":0,\"f1\":1,\"f2\":2},{\"f0\":1,\"f1\":2,\"f2\":3},{\"f0\":2,\"f1\":3,\"f2\":4},{\"\n4 0 1055 [{\"f0\":0,\"f1\":1,\"f2\":2,\"f3\":3},{\"f0\":1,\"f1\":2,\"f2\":3,\"f3\":4},{\"f0\":2,\"f1\n5 0 1305 [{\"f0\":0,\"f1\":1,\"f2\":2,\"f3\":3,\"f4\":4},{\"f0\":1,\"f1\":2,\"f2\":3,\"f3\":4,\"f4\":\n6 0 1556 [{\"f0\":0,\"f1\":1,\"f2\":2,\"f3\":3,\"f4\":4,\"f5\":5},{\"f0\":1,\"f1\":2,\"f2\":3,\"f3\":\n8 0 2061 [{\"f0\":0,\"f1\":1,\"f2\":2,\"f3\":3,\"f4\":4,\"f5\":5,\"f6\":6,\"f7\":7},{\"f0\":1,\"f1\":\n12 0 3146 [{\"f0\":0,\"f1\":1,\"f2\":2,\"f3\":3,\"f4\":4,\"f5\":5,\"f6\":6,\"f7\":7,\"f8\":8,\"f9\":9,\nuntouched 1556\none-read 0 1556\nloop-read 560 1556\nagree true true true\nkeys 6 0\nelement {\"f0\":0,\"f1\":1,\"f2\":2,\"f3\":3,\"f4\":4,\"f5\":5}\nmapped true\nnested 496 true\nnested-tail \",\"value\":93,\"tags\":[\"tag_1\",\"tag_1\"],\"nested\":{\"x\":31,\"y\":62}}]\nmixed 0 [{\"f0\":0,\"f1\":1,\"f2\":2,\"f3\":3,\"f4\":4,\"f5\":5},{\"f0\":1,\"f1\":2,\"f2\":3,\"f3\":4,\"f4\":5},{\"f0\":2,\"f1\":3,\"f2\":4,\"f3\":5,\"f5\":7},\"replaced\",{\"f0\":4,\"f1\":5,\"f2\":6,\"f3\":7,\"f4\":8,\"f5\":9}]\nsparse 0 [{\"a\":0,\"b\":1},{\"a\":1,\"b\":2},{\"a\":2,\"b\":\nhetero 1 [{\"a\":1,\"b\":2,\"c\":3,\"d\":4,\"e\":5,\"f\":6},{\"a\":1,\"b\":2},{\"a\":1,\"b\":2,\"c\":3,\"d\":4,\"e\":5,\"f\":6,\"g\":7}]\n",
+      "stderr": ""
+    },
+    "perry": {
+      "exit": 0,
+      "stdout": "1 0 311 [{\"f0\":0},{\"f0\":1},{\"f0\":2},{\"f0\":3},{\"f0\":4},{\"f0\":5},{\"f0\":6},{\"f0\":7}\n2 0 558 [{\"f0\":0,\"f1\":1},{\"f0\":1,\"f1\":2},{\"f0\":2,\"f1\":3},{\"f0\":3,\"f1\":4},{\"f0\":4\n3 0 806 [{\"f0\":0,\"f1\":1,\"f2\":2},{\"f0\":1,\"f1\":2,\"f2\":3},{\"f0\":2,\"f1\":3,\"f2\":4},{\"\n4 0 1055 [{\"f0\":0,\"f1\":1,\"f2\":2,\"f3\":3},{\"f0\":1,\"f1\":2,\"f2\":3,\"f3\":4},{\"f0\":2,\"f1\n5 0 1305 [{\"f0\":0,\"f1\":1,\"f2\":2,\"f3\":3,\"f4\":4},{\"f0\":1,\"f1\":2,\"f2\":3,\"f3\":4,\"f4\":\n6 0 1556 [{\"f0\":0,\"f1\":1,\"f2\":2,\"f3\":3,\"f4\":4,\"f5\":5},{\"f0\":1,\"f1\":2,\"f2\":3,\"f3\":\n8 0 2061 [{\"f0\":0,\"f1\":1,\"f2\":2,\"f3\":3,\"f4\":4,\"f5\":5,\"f6\":6,\"f7\":7},{\"f0\":1,\"f1\":\n12 0 3146 [{\"f0\":0,\"f1\":1,\"f2\":2,\"f3\":3,\"f4\":4,\"f5\":5,\"f6\":6,\"f7\":7,\"f8\":8,\"f9\":9,\nuntouched 1556\none-read 0 1556\nloop-read 560 1556\nagree true true true\nkeys 6 0\nelement {\"f0\":0,\"f1\":1,\"f2\":2,\"f3\":3,\"f4\":4,\"f5\":5}\nmapped true\nnested 496 true\nnested-tail \",\"value\":93,\"tags\":[\"tag_1\",\"tag_1\"],\"nested\":{\"x\":31,\"y\":62}}]\nmixed 0 [{\"f0\":0,\"f1\":1,\"f2\":2,\"f3\":3,\"f4\":4,\"f5\":5},{\"f0\":1,\"f1\":2,\"f2\":3,\"f3\":4,\"f4\":5},{\"f0\":2,\"f1\":3,\"f2\":4,\"f3\":5,\"f5\":7},\"replaced\",{\"f0\":4,\"f1\":5,\"f2\":6,\"f3\":7,\"f4\":8,\"f5\":9}]\nsparse 0 [{\"a\":0,\"b\":1},{\"a\":1,\"b\":2},{\"a\":2,\"b\":\nhetero 1 [{\"a\":1,\"b\":2,\"c\":3,\"d\":4,\"e\":5,\"f\":6},{\"a\":1,\"b\":2},{\"a\":1,\"b\":2,\"c\":3,\"d\":4,\"e\":5,\"f\":6,\"g\":7}]\n",
+      "stderr": ""
+    },
+    "matches_node": true
+  },
+  {
+    "name": "test_issue_9398_json_pretty_tombstoned_key",
+    "arm": "piece-ref",
+    "compile_exit": 0,
+    "object_sha256": "fdb69eedf1fbfcfccc56c5a5f0ed2fd94f565fbebfa232a1f01be473a027d357",
+    "node": {
+      "exit": 0,
+      "stdout": "pretty own: {}\npretty nested: {\n  \"mcpServers\": {}\n}\nfn replacer: {\"mcpServers\":{},\"keep\":1}\nfn replacer pretty: {\n  \"mcpServers\": {},\n  \"keep\": 1\n}\narray replacer: {\"mcpServers\":{},\"keep\":1}\narray replacer pretty: {\n  \"mcpServers\": {},\n  \"keep\": 1\n}\npartial pretty: {\n  \"a\": 1,\n  \"c\": 3\n}\npartial replacer: {\n  \"a\": 1,\n  \"c\": 3\n}\npartial keys: [\"a\",\"c\"]\nreadded pretty: {\n  \"y\": 2\n}\nemptied pretty: {\n  \"w\": {}\n}\n",
+      "stderr": ""
+    },
+    "perry": {
+      "exit": 0,
+      "stdout": "pretty own: {}\npretty nested: {\n  \"mcpServers\": {}\n}\nfn replacer: {\"mcpServers\":{},\"keep\":1}\nfn replacer pretty: {\n  \"mcpServers\": {},\n  \"keep\": 1\n}\narray replacer: {\"mcpServers\":{},\"keep\":1}\narray replacer pretty: {\n  \"mcpServers\": {},\n  \"keep\": 1\n}\npartial pretty: {\n  \"a\": 1,\n  \"c\": 3\n}\npartial replacer: {\n  \"a\": 1,\n  \"c\": 3\n}\npartial keys: [\"a\",\"c\"]\nreadded pretty: {\n  \"y\": 2\n}\nemptied pretty: {\n  \"w\": {}\n}\n",
+      "stderr": ""
+    },
+    "matches_node": true
+  },
+  {
+    "name": "test_json_typed_basic",
+    "arm": "piece-ref",
+    "compile_exit": 0,
+    "object_sha256": "ac82359fad71ade7f4ece53bb2f517e3b97386459ba4a783f00ac2da5790f675",
+    "node": {
+      "exit": 0,
+      "stdout": "typed.id:42\ntyped.name:alpha\ntyped.active:true\nuntyped.id:42\nuntyped.name:alpha\nuntyped.active:true\n",
+      "stderr": ""
+    },
+    "perry": {
+      "exit": 0,
+      "stdout": "typed.id:42\ntyped.name:alpha\ntyped.active:true\nuntyped.id:42\nuntyped.name:alpha\nuntyped.active:true\n",
+      "stderr": ""
+    },
+    "matches_node": true
+  },
+  {
+    "name": "test_json_typed_array",
+    "arm": "piece-ref",
+    "compile_exit": 0,
+    "object_sha256": "f4982974b2b32e69144ecca450181bf5c97549f8be563c3afa547f98a3c83288",
+    "node": {
+      "exit": 0,
+      "stdout": "length:3\n[0] id=1 name=alpha active=true\n[1] id=2 name=beta active=false\n[2] id=3 name=gamma active=true\noo.id:4\noo.name:delta\noo.active:false\nextra.id:5\nextra.bonus:42\nuntyped.length:3\nuntyped[1].name:beta\n",
+      "stderr": ""
+    },
+    "perry": {
+      "exit": 0,
+      "stdout": "length:3\n[0] id=1 name=alpha active=true\n[1] id=2 name=beta active=false\n[2] id=3 name=gamma active=true\noo.id:4\noo.name:delta\noo.active:false\nextra.id:5\nextra.bonus:42\nuntyped.length:3\nuntyped[1].name:beta\n",
+      "stderr": ""
+    },
+    "matches_node": true
+  },
+  {
+    "name": "test_json_typed_nested",
+    "arm": "piece-ref",
+    "compile_exit": 0,
+    "object_sha256": "bec9f4e2f621d5215dcc9d8d666dbec3e67f322da2d5f88177251d4b6225d9b1",
+    "node": {
+      "exit": 0,
+      "stdout": "len:2\nid=1 x=10 y=20 tags=a,b\nid=2 x=30 y=40 tags=c\n",
+      "stderr": ""
+    },
+    "perry": {
+      "exit": 0,
+      "stdout": "len:2\nid=1 x=10 y=20 tags=a,b\nid=2 x=30 y=40 tags=c\n",
+      "stderr": ""
+    },
+    "matches_node": true
+  },
+  {
+    "name": "test_json_typed_mismatch",
+    "arm": "piece-ref",
+    "compile_exit": 0,
+    "object_sha256": "66515b090c501841e2f1f5be438af1096a997307827790e52f6cc032d507ca00",
+    "node": {
+      "exit": 0,
+      "stdout": "r1.id:1\nr2.length:1\nr2[0].id:not_a_number\nr2[0].name:42\n",
+      "stderr": ""
+    },
+    "perry": {
+      "exit": 0,
+      "stdout": "r1.id:1\nr2.length:1\nr2[0].id:not_a_number\nr2[0].name:42\n",
+      "stderr": ""
+    },
+    "matches_node": true
+  },
+  {
+    "name": "test_json_lazy_edge_cases",
+    "arm": "piece-ref",
+    "compile_exit": 0,
+    "object_sha256": "631318098c8cc878c9b240bf994309fe352f754b497a84c73919f691579af104",
+    "node": {
+      "exit": 0,
+      "stdout": "empty.length:0\nscalars.length:5\nscalars[2]:3\nscalars.sum:15\nmixed.length:5\nmixed[0]:1\nmixed[1]:two\nmixed[2]:true\nmixed[3]:null\nmixed[4]:3.14\ndeep[0].a.b.c.d:42\nuni.text:\u00e9\u00e8\u00ea\nuni.newline:a\nb\nuni.tab:a\tb\nuni.quote:he said \"hi\"\nnums.length:6\nnums[0]:0\nnums[1]:-1\nnums[2]:15000000000\nnums[3]:-0.0025\nnums[4]:0.001\nnums[5]:1000000\nws.empty.len:0\nws.space:' '\nnested.length:3\nnested[0].length:2\nnested[1][1]:4\nnested[2][0]:5\nbig.sum:34650\nbig[50]:350\nreparsed.length:2\nreparsed[1].v:two\nedge.len:4\nedge[0]:null\nedge[2]:0\nedge[3]:0\n",
+      "stderr": ""
+    },
+    "perry": {
+      "exit": 0,
+      "stdout": "empty.length:0\nscalars.length:5\nscalars[2]:3\nscalars.sum:15\nmixed.length:5\nmixed[0]:1\nmixed[1]:two\nmixed[2]:true\nmixed[3]:null\nmixed[4]:3.14\ndeep[0].a.b.c.d:42\nuni.text:\u00e9\u00e8\u00ea\nuni.newline:a\nb\nuni.tab:a\tb\nuni.quote:he said \"hi\"\nnums.length:6\nnums[0]:0\nnums[1]:-1\nnums[2]:15000000000\nnums[3]:-0.0025\nnums[4]:0.001\nnums[5]:1000000\nws.empty.len:0\nws.space:' '\nnested.length:3\nnested[0].length:2\nnested[1][1]:4\nnested[2][0]:5\nbig.sum:34650\nbig[50]:350\nreparsed.length:2\nreparsed[1].v:two\nedge.len:4\nedge[0]:null\nedge[2]:0\nedge[3]:0\n",
+      "stderr": ""
+    },
+    "matches_node": true
+  },
+  {
+    "name": "test_json_lazy_predicates",
+    "arm": "piece-ref",
+    "compile_exit": 0,
+    "object_sha256": "312ad5307c5c2ab746ef516cc1c9272e5444522eff775ce05272e9e5fbc68f36",
+    "node": {
+      "exit": 0,
+      "stdout": "isArray:true\ninstanceof:true\ntypeof:object\nstr-isArray:false\nobj-isArray:false\nnum-isArray:false\nnull-isArray:false\nundefined-isArray:false\neager-isArray:true\neager-instanceof:true\nafter-length-isArray:true\nafter-index-isArray:true\nafter-map-isArray:true\nmap-result-isArray:true\n",
+      "stderr": ""
+    },
+    "perry": {
+      "exit": 0,
+      "stdout": "isArray:true\ninstanceof:true\ntypeof:object\nstr-isArray:false\nobj-isArray:false\nnum-isArray:false\nnull-isArray:false\nundefined-isArray:false\neager-isArray:true\neager-instanceof:true\nafter-length-isArray:true\nafter-index-isArray:true\nafter-map-isArray:true\nmap-result-isArray:true\n",
+      "stderr": ""
+    },
+    "matches_node": true
+  },
+  {
+    "name": "test_json_lazy_iteration",
+    "arm": "piece-ref",
+    "compile_exit": 0,
+    "object_sha256": "0c6b90b692c8e70a27f3dba420b040f5f3d7ab15a8b26bff98768d72a4993b6d",
+    "node": {
+      "exit": 0,
+      "stdout": "seq-sum:360\nrev-sum:360\nrnd-sum:360\nstringify-after-iter-len:129\nidentity-ok\ntrip-sum:410\ntrip-stringify-len:129\n",
+      "stderr": ""
+    },
+    "perry": {
+      "exit": 0,
+      "stdout": "seq-sum:360\nrev-sum:360\nrnd-sum:360\nstringify-after-iter-len:129\nidentity-ok\ntrip-sum:410\ntrip-stringify-len:129\n",
+      "stderr": ""
+    },
+    "matches_node": true
+  },
+  {
+    "name": "test_json_lazy_indexed",
+    "arm": "piece-ref",
+    "compile_exit": 0,
+    "object_sha256": "8852db3927334039be59a60634baf78ba8ae532453c849045cd6f0446f1b9cf3",
+    "node": {
+      "exit": 0,
+      "stdout": "len:3\n0.id:1\n1.name:beta\n2.score:7.75\n1.nested.a:30\n2.nested.b:60\nsum:216\nlen-after:3\nroundtrip-len:185\n",
+      "stderr": ""
+    },
+    "perry": {
+      "exit": 0,
+      "stdout": "len:3\n0.id:1\n1.name:beta\n2.score:7.75\n1.nested.a:30\n2.nested.b:60\nsum:216\nlen-after:3\nroundtrip-len:185\n",
+      "stderr": ""
+    },
+    "matches_node": true
+  },
+  {
+    "name": "test_json_lazy_reviver",
+    "arm": "piece-ref",
+    "compile_exit": 0,
+    "object_sha256": "8cea305fcf617c4953f918793ca8a35293b9da43db6dbc87b03164160f7daf8a",
+    "node": {
+      "exit": 0,
+      "stdout": "len 300\nfirst 1\nlast 300\ncalls 301\n",
+      "stderr": ""
+    },
+    "perry": {
+      "exit": 0,
+      "stdout": "len 300\nfirst 1\nlast 300\ncalls 301\n",
+      "stderr": ""
+    },
+    "matches_node": true
+  },
+  {
+    "name": "test_json_lazy_per_element",
+    "arm": "piece-ref",
+    "compile_exit": 0,
+    "object_sha256": "b85a735dc358fe2e69b0accabf94aadc00d9cc3301c8a7dac449177bdd80c54a",
+    "node": {
+      "exit": 0,
+      "stdout": "len:5\n[0].id:0\n[4].id:4\n[2].id:2\n[0].name:a\n[1].nested.x:11\n[3].tags[0]:t3\n[3].tags[1]:z3\n[5]:undefined\n[100]:undefined\nid0===id0:true\nid4===id4:true\nid0!==id4:true\n[0].name-after-mutate:mutated\nid0===id0-post-mutate:true\niter-sum:10\nstringify-len:292\nstringify-has-mutated:true\n",
+      "stderr": ""
+    },
+    "perry": {
+      "exit": 0,
+      "stdout": "len:5\n[0].id:0\n[4].id:4\n[2].id:2\n[0].name:a\n[1].nested.x:11\n[3].tags[0]:t3\n[3].tags[1]:z3\n[5]:undefined\n[100]:undefined\nid0===id0:true\nid4===id4:true\nid0!==id4:true\n[0].name-after-mutate:mutated\nid0===id0-post-mutate:true\niter-sum:10\nstringify-len:292\nstringify-has-mutated:true\n",
+      "stderr": ""
+    },
+    "matches_node": true
+  },
+  {
+    "name": "test_gap_json_flat_scalar_depth",
+    "arm": "piece-ref",
+    "compile_exit": 0,
+    "object_sha256": "30800d1d2834ed88ca1007dac60d096afd1eb6ceb75180ee02dbcb33d0bde3a3",
+    "node": {
+      "exit": 0,
+      "stdout": "flat scalar validation 42 0\n",
+      "stderr": ""
+    },
+    "perry": {
+      "exit": 0,
+      "stdout": "flat scalar validation 42 0\n",
+      "stderr": ""
+    },
+    "matches_node": true
+  },
+  {
+    "name": "test_gap_json_number_formatting",
+    "arm": "piece-ref",
+    "compile_exit": 0,
+    "object_sha256": "237cf8f8a19f34eaeee1f3f539e15fc366aa2e0f9683b13bdc18160dc57f7911",
+    "node": {
+      "exit": 0,
+      "stdout": "0\n{\"n\":0}\n[0]\n0\n{\"n\":0}\n[0]\nnull\n{\"n\":null}\n[null]\nnull\n{\"n\":null}\n[null]\nnull\n{\"n\":null}\n[null]\n5e-324\n{\"n\":5e-324}\n[5e-324]\n2.2250738585072014e-308\n{\"n\":2.2250738585072014e-308}\n[2.2250738585072014e-308]\n1.7976931348623157e+308\n{\"n\":1.7976931348623157e+308}\n[1.7976931348623157e+308]\n1e-7\n{\"n\":1e-7}\n[1e-7]\n0.000001\n{\"n\":0.000001}\n[0.000001]\n100000000000000000000\n{\"n\":100000000000000000000}\n[100000000000000000000]\n1e+21\n{\"n\":1e+21}\n[1e+21]\n9007199254740991\n{\"n\":9007199254740991}\n[9007199254740991]\n9007199254740992\n{\"n\":9007199254740992}\n[9007199254740992]\n288230376151711740\n{\"n\":288230376151711740}\n[288230376151711740]\n1000000000000000100\n{\"n\":1000000000000000100}\n[1000000000000000100]\n0.1\n{\"n\":0.1}\n[0.1]\n0.3\n{\"n\":0.3}\n[0.3]\n0.3333333333333333\n{\"n\":0.3333333333333333}\n[0.3333333333333333]\n3.141592653589793\n{\"n\":3.141592653589793}\n[3.141592653589793]\n562949953421312.2\n{\"n\":562949953421312.2}\n[562949953421312.2]\n-562949953421312.2\n{\"n\":-562949953421312.2}\n[-562949953421312.2]\n1125899906842624.2\n{\"n\":1125899906842624.2}\n[1125899906842624.2]\n100000000000000.12\n{\"n\":100000000000000.12}\n[100000000000000.12]\n-28008981190621.562\n{\"n\":-28008981190621.562}\n[-28008981190621.562]\n562949953421312.2\n{\n  \"n\": 562949953421312.2\n}\n{\"n\":562949953421312.2}\n562949953421312.2\n",
+      "stderr": ""
+    },
+    "perry": {
+      "exit": 0,
+      "stdout": "0\n{\"n\":0}\n[0]\n0\n{\"n\":0}\n[0]\nnull\n{\"n\":null}\n[null]\nnull\n{\"n\":null}\n[null]\nnull\n{\"n\":null}\n[null]\n5e-324\n{\"n\":5e-324}\n[5e-324]\n2.2250738585072014e-308\n{\"n\":2.2250738585072014e-308}\n[2.2250738585072014e-308]\n1.7976931348623157e+308\n{\"n\":1.7976931348623157e+308}\n[1.7976931348623157e+308]\n1e-7\n{\"n\":1e-7}\n[1e-7]\n0.000001\n{\"n\":0.000001}\n[0.000001]\n100000000000000000000\n{\"n\":100000000000000000000}\n[100000000000000000000]\n1e+21\n{\"n\":1e+21}\n[1e+21]\n9007199254740991\n{\"n\":9007199254740991}\n[9007199254740991]\n9007199254740992\n{\"n\":9007199254740992}\n[9007199254740992]\n288230376151711740\n{\"n\":288230376151711740}\n[288230376151711740]\n1000000000000000100\n{\"n\":1000000000000000100}\n[1000000000000000100]\n0.1\n{\"n\":0.1}\n[0.1]\n0.3\n{\"n\":0.3}\n[0.3]\n0.3333333333333333\n{\"n\":0.3333333333333333}\n[0.3333333333333333]\n3.141592653589793\n{\"n\":3.141592653589793}\n[3.141592653589793]\n562949953421312.2\n{\"n\":562949953421312.2}\n[562949953421312.2]\n-562949953421312.2\n{\"n\":-562949953421312.2}\n[-562949953421312.2]\n1125899906842624.2\n{\"n\":1125899906842624.2}\n[1125899906842624.2]\n100000000000000.12\n{\"n\":100000000000000.12}\n[100000000000000.12]\n-28008981190621.562\n{\"n\":-28008981190621.562}\n[-28008981190621.562]\n562949953421312.2\n{\n  \"n\": 562949953421312.2\n}\n{\"n\":562949953421312.2}\n562949953421312.2\n",
+      "stderr": ""
+    },
+    "matches_node": true
+  },
+  {
+    "name": "test_gap_json_wide_cache_lifetime",
+    "arm": "piece-ref",
+    "compile_exit": 0,
+    "object_sha256": "75959ac2bf37c45e8c391e6eff4d4c985502bfd3123572fca383913b80d0bf16",
+    "node": {
+      "exit": 0,
+      "stdout": "wide cache lifetime 4 331992 0\n",
+      "stderr": ""
+    },
+    "perry": {
+      "exit": 0,
+      "stdout": "wide cache lifetime 4 331992 0\n",
+      "stderr": ""
+    },
+    "matches_node": true
+  },
+  {
+    "name": "test_gap_json_unicode_lengths",
+    "arm": "piece-ref",
+    "compile_exit": 0,
+    "object_sha256": "9e7b329b38df119933e15e85408cc59d34e0a8f986bda3a05b7b60a4633184fe",
+    "node": {
+      "exit": 0,
+      "stdout": "unicode lengths 120 0 179240214 35809\n",
+      "stderr": ""
+    },
+    "perry": {
+      "exit": 0,
+      "stdout": "unicode lengths 120 0 179240214 35809\n",
+      "stderr": ""
+    },
+    "matches_node": true
+  },
+  {
+    "name": "test_gap_json_small_results",
+    "arm": "piece-ref",
+    "compile_exit": 0,
+    "object_sha256": "7b661ad4bad7dce5c3fa73b19bdf588f6687ca5cae5e766454531a8041bb9173",
+    "node": {
+      "exit": 0,
+      "stdout": "small results 2600 0 8810967 23001\n\"replacement\"\nnull\nspace observed\n{\"a\":\"\\\"a\\\"\",\"b\":\"null\",\"c\":true}\n{\n  \"a\": \"\\\"a\\\"\",\n  \"b\": \"null\",\n  \"c\": true\n}\nreplacer:,space,toJSON,toJSON\nnull \"a\" {}\n",
+      "stderr": ""
+    },
+    "perry": {
+      "exit": 0,
+      "stdout": "small results 2600 0 8810967 23001\n\"replacement\"\nnull\nspace observed\n{\"a\":\"\\\"a\\\"\",\"b\":\"null\",\"c\":true}\n{\n  \"a\": \"\\\"a\\\"\",\n  \"b\": \"null\",\n  \"c\": true\n}\nreplacer:,space,toJSON,toJSON\nnull \"a\" {}\n",
+      "stderr": ""
+    },
+    "matches_node": true
+  },
+  {
+    "name": "test_gap_json_primitive_arrays",
+    "arm": "piece-ref",
+    "compile_exit": 0,
+    "object_sha256": "8923547bc2a236e36075c23d3de0a8d0169d7215e8b241657209a35666655235",
+    "node": {
+      "exit": 0,
+      "stdout": "primitive arrays 640 0 682075754 279681\n[1,2,3]\n[1,\"two\",3]\n[1,null,3]\n[1,{\"x\":2},3]\n[1,2,{\"inner\":\"[\\\"\\\",\\\"a\\\",\\\"abc\\\",\\\"longer string\\\",\\\"\u00e9\\\",\\\"\u6771\u4eac\\\",\\\"\ud83d\ude42\\\",\\\"\\\\ud800\\\",\\\"\\\\udfff\\\",\\\"\\\\n\\\\\\\"\\\\\\\\\\\"]\",\"array\":[\"custom\",\"array\"]}]\n{\"value\":[\"custom\",\"value\"]}\nobject:2,array:array,array:value\nTypeError\n[\"after\",\"cycle\"]\n",
+      "stderr": ""
+    },
+    "perry": {
+      "exit": 0,
+      "stdout": "primitive arrays 640 0 682075754 279681\n[1,2,3]\n[1,\"two\",3]\n[1,null,3]\n[1,{\"x\":2},3]\n[1,2,{\"inner\":\"[\\\"\\\",\\\"a\\\",\\\"abc\\\",\\\"longer string\\\",\\\"\u00e9\\\",\\\"\u6771\u4eac\\\",\\\"\ud83d\ude42\\\",\\\"\\\\ud800\\\",\\\"\\\\udfff\\\",\\\"\\\\n\\\\\\\"\\\\\\\\\\\"]\",\"array\":[\"custom\",\"array\"]}]\n{\"value\":[\"custom\",\"value\"]}\nobject:2,array:array,array:value\nTypeError\n[\"after\",\"cycle\"]\n",
+      "stderr": ""
+    },
+    "matches_node": true
+  },
+  {
+    "name": "test_gap_json_direct_strings",
+    "arm": "piece-ref",
+    "compile_exit": 0,
+    "object_sha256": "c063046cfb96a79d31f9bfd55ebc2604f62495a42fb443ef23d8f578fc8c7099",
+    "node": {
+      "exit": 0,
+      "stdout": "direct strings 1536 0 827775247\n\"replaced\"\ntrue\nspace observed\n313 replacer:,space,next,\n290 true\n",
+      "stderr": ""
+    },
+    "perry": {
+      "exit": 0,
+      "stdout": "direct strings 1536 0 827775247\n\"replaced\"\ntrue\nspace observed\n313 replacer:,space,next,\n290 true\n",
+      "stderr": ""
+    },
+    "matches_node": true
+  },
+  {
+    "name": "test_gap_json_direct_objects",
+    "arm": "piece-ref",
+    "compile_exit": 0,
+    "object_sha256": "ce416b083da1ca6e3fde2f2b86571bc65d657f49413abceffaadbc8d28bede94",
+    "node": {
+      "exit": 0,
+      "stdout": "direct objects 672 0 162323450\n{\"id\":1,\"text\":\"observed\"} get,\n{\"visible\":1}\n\"own-result\"\n\"proto-result\"\n{\"id\":1,\"text\":\"plain\"}\n\"default-result\"\n{\"id\":1,\"text\":\"plain\"} get,own:,proto:,default:,\n{\"1\":1,\"2\":2,\"a\":0}\n{\"a\":1,\"b\":2,\"c\":3,\"d\":4,\"e\":5,\"f\":6}\n{\"a\":3,\"b\":{}}\n",
+      "stderr": ""
+    },
+    "perry": {
+      "exit": 0,
+      "stdout": "direct objects 672 0 162323450\n{\"id\":1,\"text\":\"observed\"} get,\n{\"visible\":1}\n\"own-result\"\n\"proto-result\"\n{\"id\":1,\"text\":\"plain\"}\n\"default-result\"\n{\"id\":1,\"text\":\"plain\"} get,own:,proto:,default:,\n{\"1\":1,\"2\":2,\"a\":0}\n{\"a\":1,\"b\":2,\"c\":3,\"d\":4,\"e\":5,\"f\":6}\n{\"a\":3,\"b\":{}}\n",
+      "stderr": ""
+    },
+    "matches_node": true
+  },
+  {
+    "name": "test_gap_json_tape_scanning",
+    "arm": "piece-ref",
+    "compile_exit": 0,
+    "object_sha256": "39dc3f8bdac967740ac47c90124234b45b0f06de85399419de24ac7ec8756983",
+    "node": {
+      "exit": 0,
+      "stdout": "tape scanning 1088 49 0 669014417\n",
+      "stderr": ""
+    },
+    "perry": {
+      "exit": 0,
+      "stdout": "tape scanning 1088 49 0 669014417\n",
+      "stderr": ""
+    },
+    "matches_node": true
+  },
+  {
+    "name": "test_gap_json_parse_scalars",
+    "arm": "piece-ref",
+    "compile_exit": 0,
+    "object_sha256": "92f27702f3856e318d73aeb3942022cb26b3bb2596bd075d1d8b314aded9a9fb",
+    "node": {
+      "exit": 0,
+      "stdout": "scalar parse 992 0 40864826\nscalar invalid 30 0\n{\"wrapped\":null}\n{\"wrapped\":true}\n{\"wrapped\":false}\n{\"wrapped\":0}\n{\"wrapped\":0}\n{\"wrapped\":42}\n{\"wrapped\":-123}\n{\"wrapped\":9007199254740992}\n{\"wrapped\":18446744073709552000}\n{\"wrapped\":260.75197}\n{\"wrapped\":1.2345678901234568e+29}\n{\"wrapped\":null}\n{\"wrapped\":null}\n{\"wrapped\":0}\n{\"wrapped\":0}\n{\"wrapped\":5e-324}\n{\"wrapped\":5e-324}\n{\"wrapped\":1.7976931348623157e+308}\n{\"wrapped\":\"\"}\n{\"wrapped\":\"a\"}\n{\"wrapped\":\"abcde\"}\n{\"wrapped\":\"abcdef\"}\n{\"wrapped\":\"\u00e9\"}\n{\"wrapped\":\"\u6771\u4eac\"}\n{\"wrapped\":\"\ud83d\ude42\"}\n{\"wrapped\":\"\u00e9abc\"}\n{\"wrapped\":\"\\n\"}\n{\"wrapped\":\"a\"}\n{\"wrapped\":\"\\ud800\"}\n{\"wrapped\":\"\\udfff\"}\n{\"wrapped\":\"\ud83d\ude00\"}\n:object,:boolean,:boolean,:number,:number,:number,:number,:number,:number,:number,:number,:number,:number,:number,:number,:number,:number,:number,:string,:string,:string,:string,:string,:string,:string,:string,:string,:string,:string,:string,:string,\n123 null true 12\nTypeError\ntrue\n",
+      "stderr": ""
+    },
+    "perry": {
+      "exit": 0,
+      "stdout": "scalar parse 992 0 40864826\nscalar invalid 30 0\n{\"wrapped\":null}\n{\"wrapped\":true}\n{\"wrapped\":false}\n{\"wrapped\":0}\n{\"wrapped\":0}\n{\"wrapped\":42}\n{\"wrapped\":-123}\n{\"wrapped\":9007199254740992}\n{\"wrapped\":18446744073709552000}\n{\"wrapped\":260.75197}\n{\"wrapped\":1.2345678901234568e+29}\n{\"wrapped\":null}\n{\"wrapped\":null}\n{\"wrapped\":0}\n{\"wrapped\":0}\n{\"wrapped\":5e-324}\n{\"wrapped\":5e-324}\n{\"wrapped\":1.7976931348623157e+308}\n{\"wrapped\":\"\"}\n{\"wrapped\":\"a\"}\n{\"wrapped\":\"abcde\"}\n{\"wrapped\":\"abcdef\"}\n{\"wrapped\":\"\u00e9\"}\n{\"wrapped\":\"\u6771\u4eac\"}\n{\"wrapped\":\"\ud83d\ude42\"}\n{\"wrapped\":\"\u00e9abc\"}\n{\"wrapped\":\"\\n\"}\n{\"wrapped\":\"a\"}\n{\"wrapped\":\"\\ud800\"}\n{\"wrapped\":\"\\udfff\"}\n{\"wrapped\":\"\ud83d\ude00\"}\n:object,:boolean,:boolean,:number,:number,:number,:number,:number,:number,:number,:number,:number,:number,:number,:number,:number,:number,:number,:string,:string,:string,:string,:string,:string,:string,:string,:string,:string,:string,:string,:string,\n123 null true 12\nTypeError\ntrue\n",
+      "stderr": ""
+    },
+    "matches_node": true
+  },
+  {
+    "name": "test_gap_json_data_records",
+    "arm": "piece-ref",
+    "compile_exit": 0,
+    "object_sha256": "6ac52a28b9ea9bccebf110d8af13a35de0bc9b10e10bf8a61771cbd196dc3b37",
+    "node": {
+      "exit": 0,
+      "stdout": "[{\"id\":0,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0,\"tags\":[\"tag0\",null,false,0]},{\"id\":1,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0.125,\"tags\":[\"tag1\",null,false,1.5]},{\"id\":2,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0.25,\"tags\":[\"tag2\",null,false,3]},{\"id\":3,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0,\"tags\":[\"tag3\",null,false,4.5]},{\"id\":4,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0.5,\"tags\":[\"tag4\",null,false,6]},{\"id\":5,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0.625,\"tags\":[\"tag5\",null,false,7.5]},{\"id\":6,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0,\"tags\":[\"tag6\",null,false,9]},{\"id\":7,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0.875,\"tags\":[\"tag7\",null,false,10.5]},{\"id\":8,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":1,\"tags\":[\"tag8\",null,false,12]},{\"id\":9,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0,\"tags\":[\"tag9\",null,false,13.5]},{\"id\":10,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":1.25,\"tags\":[\"tag10\",null,false,15]},{\"id\":11,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":1.375,\"tags\":[\"tag11\",null,false,16.5]},{\"id\":12,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0,\"tags\":[\"tag12\",null,false,18]},{\"id\":13,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":1.625,\"tags\":[\"tag13\",null,false,19.5]},{\"id\":14,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":1.75,\"tags\":[\"tag14\",null,false,21]},{\"id\":15,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0,\"tags\":[\"tag15\",null,false,22.5]},{\"id\":16,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":2,\"tags\":[\"tag16\",null,false,24]},{\"id\":17,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":2.125,\"tags\":[\"tag17\",null,false,25.5]},{\"id\":18,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0,\"tags\":[\"tag18\",null,false,27]},{\"id\":19,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":2.375,\"tags\":[\"tag19\",null,false,28.5]},{\"id\":20,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":2.5,\"tags\":[\"tag20\",null,false,30]},{\"id\":21,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0,\"tags\":[\"tag21\",null,false,31.5]},{\"id\":22,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":2.75,\"tags\":[\"tag22\",null,false,33]},{\"id\":23,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":2.875,\"tags\":[\"tag23\",null,false,34.5]},{\"id\":24,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0,\"tags\":[\"tag24\",null,false,36]},{\"id\":25,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":3.125,\"tags\":[\"tag25\",null,false,37.5]},{\"id\":26,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":3.25,\"tags\":[\"tag26\",null,false,39]},{\"id\":27,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0,\"tags\":[\"tag27\",null,false,40.5]},{\"id\":28,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":3.5,\"tags\":[\"tag28\",null,false,42]},{\"id\":29,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":3.625,\"tags\":[\"tag29\",null,false,43.5]},{\"id\":30,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0,\"tags\":[\"tag30\",null,false,45]},{\"id\":31,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":3.875,\"tags\":[\"tag31\",null,false,46.5]},{\"id\":32,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":4,\"tags\":[\"tag32\",null,false,48]},{\"id\":33,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0,\"tags\":[\"tag33\",null,false,49.5]},{\"id\":34,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":4.25,\"tags\":[\"tag34\",null,false,51]},{\"id\":35,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":4.375,\"tags\":[\"tag35\",null,false,52.5]},{\"id\":36,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0,\"tags\":[\"tag36\",null,false,54]},{\"id\":37,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":4.625,\"tags\":[\"tag37\",null,false,55.5]},{\"id\":38,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":4.75,\"tags\":[\"tag38\",null,false,57]},{\"id\":39,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0,\"tags\":[\"tag39\",null,false,58.5]},{\"id\":40,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":5,\"tags\":[\"tag40\",null,false,60]},{\"id\":41,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":5.125,\"tags\":[\"tag41\",null,false,61.5]},{\"id\":42,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0,\"tags\":[\"tag42\",null,false,63]},{\"id\":43,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":5.375,\"tags\":[\"tag43\",null,false,64.5]},{\"id\":44,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":5.5,\"tags\":[\"tag44\",null,false,66]},{\"id\":45,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0,\"tags\":[\"tag45\",null,false,67.5]},{\"id\":46,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":5.75,\"tags\":[\"tag46\",null,false,69]},{\"id\":47,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":5.875,\"tags\":[\"tag47\",null,false,70.5]}]\n{\"records\":[{\"id\":0,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0,\"tags\":[\"tag0\",null,false,0]},{\"id\":1,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0.125,\"tags\":[\"tag1\",null,false,1.5]},{\"id\":2,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0.25,\"tags\":[\"tag2\",null,false,3]},{\"id\":3,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0,\"tags\":[\"tag3\",null,false,4.5]},{\"id\":4,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0.5,\"tags\":[\"tag4\",null,false,6]},{\"id\":5,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0.625,\"tags\":[\"tag5\",null,false,7.5]},{\"id\":6,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0,\"tags\":[\"tag6\",null,false,9]},{\"id\":7,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0.875,\"tags\":[\"tag7\",null,false,10.5]},{\"id\":8,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":1,\"tags\":[\"tag8\",null,false,12]},{\"id\":9,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0,\"tags\":[\"tag9\",null,false,13.5]},{\"id\":10,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":1.25,\"tags\":[\"tag10\",null,false,15]},{\"id\":11,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":1.375,\"tags\":[\"tag11\",null,false,16.5]},{\"id\":12,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0,\"tags\":[\"tag12\",null,false,18]},{\"id\":13,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":1.625,\"tags\":[\"tag13\",null,false,19.5]},{\"id\":14,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":1.75,\"tags\":[\"tag14\",null,false,21]},{\"id\":15,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0,\"tags\":[\"tag15\",null,false,22.5]},{\"id\":16,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":2,\"tags\":[\"tag16\",null,false,24]},{\"id\":17,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":2.125,\"tags\":[\"tag17\",null,false,25.5]},{\"id\":18,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0,\"tags\":[\"tag18\",null,false,27]},{\"id\":19,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":2.375,\"tags\":[\"tag19\",null,false,28.5]},{\"id\":20,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":2.5,\"tags\":[\"tag20\",null,false,30]},{\"id\":21,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0,\"tags\":[\"tag21\",null,false,31.5]},{\"id\":22,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":2.75,\"tags\":[\"tag22\",null,false,33]},{\"id\":23,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":2.875,\"tags\":[\"tag23\",null,false,34.5]},{\"id\":24,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0,\"tags\":[\"tag24\",null,false,36]},{\"id\":25,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":3.125,\"tags\":[\"tag25\",null,false,37.5]},{\"id\":26,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":3.25,\"tags\":[\"tag26\",null,false,39]},{\"id\":27,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0,\"tags\":[\"tag27\",null,false,40.5]},{\"id\":28,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":3.5,\"tags\":[\"tag28\",null,false,42]},{\"id\":29,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":3.625,\"tags\":[\"tag29\",null,false,43.5]},{\"id\":30,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0,\"tags\":[\"tag30\",null,false,45]},{\"id\":31,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":3.875,\"tags\":[\"tag31\",null,false,46.5]},{\"id\":32,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":4,\"tags\":[\"tag32\",null,false,48]},{\"id\":33,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0,\"tags\":[\"tag33\",null,false,49.5]},{\"id\":34,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":4.25,\"tags\":[\"tag34\",null,false,51]},{\"id\":35,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":4.375,\"tags\":[\"tag35\",null,false,52.5]},{\"id\":36,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0,\"tags\":[\"tag36\",null,false,54]},{\"id\":37,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":4.625,\"tags\":[\"tag37\",null,false,55.5]},{\"id\":38,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":4.75,\"tags\":[\"tag38\",null,false,57]},{\"id\":39,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0,\"tags\":[\"tag39\",null,false,58.5]},{\"id\":40,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":5,\"tags\":[\"tag40\",null,false,60]},{\"id\":41,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":5.125,\"tags\":[\"tag41\",null,false,61.5]},{\"id\":42,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0,\"tags\":[\"tag42\",null,false,63]},{\"id\":43,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":5.375,\"tags\":[\"tag43\",null,false,64.5]},{\"id\":44,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":5.5,\"tags\":[\"tag44\",null,false,66]},{\"id\":45,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0,\"tags\":[\"tag45\",null,false,67.5]},{\"id\":46,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":5.75,\"tags\":[\"tag46\",null,false,69]},{\"id\":47,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":5.875,\"tags\":[\"tag47\",null,false,70.5]}]}\n[{\"id\":1,\"tags\":[1,2]},{\"id\":2,\"tags\":\"array:tags\"}]\n[{\"id\":1,\"tags\":[1,2]},{\"id\":2,\"tags\":[null,null,null,null]}]\n[{\"id\":1,\"tags\":[1,2]},{\"id\":2,\"tags\":[\"x\",\"child:1\"]}]\n[{\"id\":1,\"tags\":[1,2]},{\"tags\":[1,2]}]\n[{\"id\":1,\"tags\":[1,2]},{\"tags\":[1,2]}]\n[{\"id\":1,\"tags\":[1,2]},{\"tags\":[1,2]}]\n[{\"id\":1,\"tags\":[1,2]},{\"tags\":[1,2]}]\n[{\"id\":1,\"tags\":[1,2]},{\"id\":99,\"tags\":[1,2]}]\n1\n",
+      "stderr": ""
+    },
+    "perry": {
+      "exit": 0,
+      "stdout": "[{\"id\":0,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0,\"tags\":[\"tag0\",null,false,0]},{\"id\":1,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0.125,\"tags\":[\"tag1\",null,false,1.5]},{\"id\":2,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0.25,\"tags\":[\"tag2\",null,false,3]},{\"id\":3,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0,\"tags\":[\"tag3\",null,false,4.5]},{\"id\":4,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0.5,\"tags\":[\"tag4\",null,false,6]},{\"id\":5,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0.625,\"tags\":[\"tag5\",null,false,7.5]},{\"id\":6,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0,\"tags\":[\"tag6\",null,false,9]},{\"id\":7,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0.875,\"tags\":[\"tag7\",null,false,10.5]},{\"id\":8,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":1,\"tags\":[\"tag8\",null,false,12]},{\"id\":9,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0,\"tags\":[\"tag9\",null,false,13.5]},{\"id\":10,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":1.25,\"tags\":[\"tag10\",null,false,15]},{\"id\":11,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":1.375,\"tags\":[\"tag11\",null,false,16.5]},{\"id\":12,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0,\"tags\":[\"tag12\",null,false,18]},{\"id\":13,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":1.625,\"tags\":[\"tag13\",null,false,19.5]},{\"id\":14,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":1.75,\"tags\":[\"tag14\",null,false,21]},{\"id\":15,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0,\"tags\":[\"tag15\",null,false,22.5]},{\"id\":16,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":2,\"tags\":[\"tag16\",null,false,24]},{\"id\":17,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":2.125,\"tags\":[\"tag17\",null,false,25.5]},{\"id\":18,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0,\"tags\":[\"tag18\",null,false,27]},{\"id\":19,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":2.375,\"tags\":[\"tag19\",null,false,28.5]},{\"id\":20,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":2.5,\"tags\":[\"tag20\",null,false,30]},{\"id\":21,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0,\"tags\":[\"tag21\",null,false,31.5]},{\"id\":22,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":2.75,\"tags\":[\"tag22\",null,false,33]},{\"id\":23,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":2.875,\"tags\":[\"tag23\",null,false,34.5]},{\"id\":24,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0,\"tags\":[\"tag24\",null,false,36]},{\"id\":25,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":3.125,\"tags\":[\"tag25\",null,false,37.5]},{\"id\":26,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":3.25,\"tags\":[\"tag26\",null,false,39]},{\"id\":27,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0,\"tags\":[\"tag27\",null,false,40.5]},{\"id\":28,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":3.5,\"tags\":[\"tag28\",null,false,42]},{\"id\":29,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":3.625,\"tags\":[\"tag29\",null,false,43.5]},{\"id\":30,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0,\"tags\":[\"tag30\",null,false,45]},{\"id\":31,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":3.875,\"tags\":[\"tag31\",null,false,46.5]},{\"id\":32,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":4,\"tags\":[\"tag32\",null,false,48]},{\"id\":33,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0,\"tags\":[\"tag33\",null,false,49.5]},{\"id\":34,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":4.25,\"tags\":[\"tag34\",null,false,51]},{\"id\":35,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":4.375,\"tags\":[\"tag35\",null,false,52.5]},{\"id\":36,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0,\"tags\":[\"tag36\",null,false,54]},{\"id\":37,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":4.625,\"tags\":[\"tag37\",null,false,55.5]},{\"id\":38,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":4.75,\"tags\":[\"tag38\",null,false,57]},{\"id\":39,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0,\"tags\":[\"tag39\",null,false,58.5]},{\"id\":40,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":5,\"tags\":[\"tag40\",null,false,60]},{\"id\":41,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":5.125,\"tags\":[\"tag41\",null,false,61.5]},{\"id\":42,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0,\"tags\":[\"tag42\",null,false,63]},{\"id\":43,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":5.375,\"tags\":[\"tag43\",null,false,64.5]},{\"id\":44,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":5.5,\"tags\":[\"tag44\",null,false,66]},{\"id\":45,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0,\"tags\":[\"tag45\",null,false,67.5]},{\"id\":46,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":5.75,\"tags\":[\"tag46\",null,false,69]},{\"id\":47,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":5.875,\"tags\":[\"tag47\",null,false,70.5]}]\n{\"records\":[{\"id\":0,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0,\"tags\":[\"tag0\",null,false,0]},{\"id\":1,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0.125,\"tags\":[\"tag1\",null,false,1.5]},{\"id\":2,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0.25,\"tags\":[\"tag2\",null,false,3]},{\"id\":3,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0,\"tags\":[\"tag3\",null,false,4.5]},{\"id\":4,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0.5,\"tags\":[\"tag4\",null,false,6]},{\"id\":5,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0.625,\"tags\":[\"tag5\",null,false,7.5]},{\"id\":6,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0,\"tags\":[\"tag6\",null,false,9]},{\"id\":7,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0.875,\"tags\":[\"tag7\",null,false,10.5]},{\"id\":8,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":1,\"tags\":[\"tag8\",null,false,12]},{\"id\":9,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0,\"tags\":[\"tag9\",null,false,13.5]},{\"id\":10,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":1.25,\"tags\":[\"tag10\",null,false,15]},{\"id\":11,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":1.375,\"tags\":[\"tag11\",null,false,16.5]},{\"id\":12,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0,\"tags\":[\"tag12\",null,false,18]},{\"id\":13,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":1.625,\"tags\":[\"tag13\",null,false,19.5]},{\"id\":14,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":1.75,\"tags\":[\"tag14\",null,false,21]},{\"id\":15,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0,\"tags\":[\"tag15\",null,false,22.5]},{\"id\":16,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":2,\"tags\":[\"tag16\",null,false,24]},{\"id\":17,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":2.125,\"tags\":[\"tag17\",null,false,25.5]},{\"id\":18,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0,\"tags\":[\"tag18\",null,false,27]},{\"id\":19,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":2.375,\"tags\":[\"tag19\",null,false,28.5]},{\"id\":20,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":2.5,\"tags\":[\"tag20\",null,false,30]},{\"id\":21,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0,\"tags\":[\"tag21\",null,false,31.5]},{\"id\":22,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":2.75,\"tags\":[\"tag22\",null,false,33]},{\"id\":23,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":2.875,\"tags\":[\"tag23\",null,false,34.5]},{\"id\":24,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0,\"tags\":[\"tag24\",null,false,36]},{\"id\":25,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":3.125,\"tags\":[\"tag25\",null,false,37.5]},{\"id\":26,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":3.25,\"tags\":[\"tag26\",null,false,39]},{\"id\":27,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0,\"tags\":[\"tag27\",null,false,40.5]},{\"id\":28,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":3.5,\"tags\":[\"tag28\",null,false,42]},{\"id\":29,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":3.625,\"tags\":[\"tag29\",null,false,43.5]},{\"id\":30,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0,\"tags\":[\"tag30\",null,false,45]},{\"id\":31,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":3.875,\"tags\":[\"tag31\",null,false,46.5]},{\"id\":32,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":4,\"tags\":[\"tag32\",null,false,48]},{\"id\":33,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0,\"tags\":[\"tag33\",null,false,49.5]},{\"id\":34,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":4.25,\"tags\":[\"tag34\",null,false,51]},{\"id\":35,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":4.375,\"tags\":[\"tag35\",null,false,52.5]},{\"id\":36,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0,\"tags\":[\"tag36\",null,false,54]},{\"id\":37,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":4.625,\"tags\":[\"tag37\",null,false,55.5]},{\"id\":38,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":4.75,\"tags\":[\"tag38\",null,false,57]},{\"id\":39,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0,\"tags\":[\"tag39\",null,false,58.5]},{\"id\":40,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":5,\"tags\":[\"tag40\",null,false,60]},{\"id\":41,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":5.125,\"tags\":[\"tag41\",null,false,61.5]},{\"id\":42,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0,\"tags\":[\"tag42\",null,false,63]},{\"id\":43,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":5.375,\"tags\":[\"tag43\",null,false,64.5]},{\"id\":44,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":5.5,\"tags\":[\"tag44\",null,false,66]},{\"id\":45,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0,\"tags\":[\"tag45\",null,false,67.5]},{\"id\":46,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":5.75,\"tags\":[\"tag46\",null,false,69]},{\"id\":47,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":5.875,\"tags\":[\"tag47\",null,false,70.5]}]}\n[{\"id\":1,\"tags\":[1,2]},{\"id\":2,\"tags\":\"array:tags\"}]\n[{\"id\":1,\"tags\":[1,2]},{\"id\":2,\"tags\":[null,null,null,null]}]\n[{\"id\":1,\"tags\":[1,2]},{\"id\":2,\"tags\":[\"x\",\"child:1\"]}]\n[{\"id\":1,\"tags\":[1,2]},{\"tags\":[1,2]}]\n[{\"id\":1,\"tags\":[1,2]},{\"tags\":[1,2]}]\n[{\"id\":1,\"tags\":[1,2]},{\"tags\":[1,2]}]\n[{\"id\":1,\"tags\":[1,2]},{\"tags\":[1,2]}]\n[{\"id\":1,\"tags\":[1,2]},{\"id\":99,\"tags\":[1,2]}]\n1\n",
+      "stderr": ""
+    },
+    "matches_node": true
+  },
+  {
+    "name": "test_gap_json_empty_object",
+    "arm": "piece-ref",
+    "compile_exit": 0,
+    "object_sha256": "fbf249b144a3191ad820ff5a1ff4cf4d3580f35b9255806a8519fd7e6729358c",
+    "node": {
+      "exit": 0,
+      "stdout": "cold {}\nretained 4096 0\ninstalled \"default-result\"\nremoved {}\ngetter \"getter-result\"\ngetter removed {}\ncustom \"custom-result\"\nnull prototype {}\nhidden callback \"own-result\"\nreplacer {\"changed\":true} 2\nspacer {}\nmutated {\"answer\":42} {}\ncalls default:,get,getter-call:,custom:,own:,\n",
+      "stderr": ""
+    },
+    "perry": {
+      "exit": 0,
+      "stdout": "cold {}\nretained 4096 0\ninstalled \"default-result\"\nremoved {}\ngetter \"getter-result\"\ngetter removed {}\ncustom \"custom-result\"\nnull prototype {}\nhidden callback \"own-result\"\nreplacer {\"changed\":true} 2\nspacer {}\nmutated {\"answer\":42} {}\ncalls default:,get,getter-call:,custom:,own:,\n",
+      "stderr": ""
+    },
+    "matches_node": true
+  },
+  {
+    "name": "test_gap_json_primitive_object",
+    "arm": "piece-ref",
+    "compile_exit": 0,
+    "object_sha256": "c207f0eb2592ccf60fa5aca1973db62f5efcb9309c9df94fc4e51ee1e597b84d",
+    "node": {
+      "exit": 0,
+      "stdout": "{\"3\":3,\"20\":20,\"field_0\":0,\"field_1\":1,\"field_2\":2,\"field_3\":3,\"field_4\":4,\"field_5\":5,\"field_6\":6,\"field_7\":7,\"field_8\":8,\"field_9\":9,\"field_10\":10,\"field_11\":11,\"field_12\":12,\"field_13\":13,\"field_14\":14,\"field_15\":15,\"field_16\":16,\"field_17\":17,\"field_18\":18,\"field_19\":19,\"field_20\":20,\"field_21\":21,\"field_22\":22,\"field_23\":23,\"field_24\":24,\"field_25\":25,\"field_26\":26,\"field_27\":27,\"field_28\":28,\"field_29\":29,\"field_30\":30,\"field_31\":31,\"field_32\":32,\"field_33\":33,\"field_34\":34,\"field_35\":35,\"field_36\":36,\"field_37\":37,\"field_38\":38,\"field_39\":39,\"field_40\":40,\"field_41\":41,\"field_42\":42,\"field_43\":43,\"field_44\":44,\"field_45\":45,\"field_46\":46,\"field_47\":47,\"field_48\":48,\"field_49\":49,\"field_50\":50,\"field_51\":51,\"field_52\":52,\"field_53\":53,\"field_54\":54,\"field_55\":55,\"field_56\":56,\"field_57\":57,\"field_58\":58,\"field_59\":59,\"field_60\":60,\"field_61\":61,\"field_62\":62,\"field_63\":63,\"field_64\":64,\"field_65\":65,\"field_66\":66,\"field_67\":67,\"field_68\":68,\"field_69\":69,\"field_70\":70,\"field_71\":71,\"field_72\":72,\"field_73\":73,\"field_74\":74,\"field_75\":75,\"field_76\":76,\"field_77\":77,\"field_78\":78,\"field_79\":79,\"field_80\":80,\"field_81\":81,\"field_82\":82,\"field_83\":83,\"field_84\":84,\"field_85\":85,\"field_86\":86,\"field_87\":87,\"field_88\":88,\"field_89\":89,\"field_90\":90,\"field_91\":91,\"field_92\":92,\"field_93\":93,\"field_94\":94,\"field_95\":95,\"field_96\":96,\"field_97\":97,\"field_98\":98,\"field_99\":99,\"field_100\":100,\"field_101\":101,\"field_102\":102,\"field_103\":103,\"field_104\":104,\"field_105\":105,\"field_106\":106,\"field_107\":107,\"field_108\":108,\"field_109\":109,\"field_110\":110,\"field_111\":111,\"field_112\":112,\"field_113\":113,\"field_114\":114,\"field_115\":115,\"field_116\":116,\"field_117\":117,\"field_118\":118,\"field_119\":119,\"field_120\":120,\"field_121\":121,\"field_122\":122,\"field_123\":123,\"field_124\":124,\"field_125\":125,\"field_126\":126,\"quote\\\"\":\"line\\n\u6771\u4eac\ud83d\ude42\"}\n{\"data\":{\"3\":3,\"20\":20,\"field_0\":0,\"field_1\":1,\"field_2\":2,\"field_3\":3,\"field_4\":4,\"field_5\":5,\"field_6\":6,\"field_7\":7,\"field_8\":8,\"field_9\":9,\"field_10\":10,\"field_11\":11,\"field_12\":12,\"field_13\":13,\"field_14\":14,\"field_15\":15,\"field_16\":16,\"field_17\":17,\"field_18\":18,\"field_19\":19,\"field_20\":20,\"field_21\":21,\"field_22\":22,\"field_23\":23,\"field_24\":24,\"field_25\":25,\"field_26\":26,\"field_27\":27,\"field_28\":28,\"field_29\":29,\"field_30\":30,\"field_31\":31,\"field_32\":32,\"field_33\":33,\"field_34\":34,\"field_35\":35,\"field_36\":36,\"field_37\":37,\"field_38\":38,\"field_39\":39,\"field_40\":40,\"field_41\":41,\"field_42\":42,\"field_43\":43,\"field_44\":44,\"field_45\":45,\"field_46\":46,\"field_47\":47,\"field_48\":48,\"field_49\":49,\"field_50\":50,\"field_51\":51,\"field_52\":52,\"field_53\":53,\"field_54\":54,\"field_55\":55,\"field_56\":56,\"field_57\":57,\"field_58\":58,\"field_59\":59,\"field_60\":60,\"field_61\":61,\"field_62\":62,\"field_63\":63,\"field_64\":64,\"field_65\":65,\"field_66\":66,\"field_67\":67,\"field_68\":68,\"field_69\":69,\"field_70\":70,\"field_71\":71,\"field_72\":72,\"field_73\":73,\"field_74\":74,\"field_75\":75,\"field_76\":76,\"field_77\":77,\"field_78\":78,\"field_79\":79,\"field_80\":80,\"field_81\":81,\"field_82\":82,\"field_83\":83,\"field_84\":84,\"field_85\":85,\"field_86\":86,\"field_87\":87,\"field_88\":88,\"field_89\":89,\"field_90\":90,\"field_91\":91,\"field_92\":92,\"field_93\":93,\"field_94\":94,\"field_95\":95,\"field_96\":96,\"field_97\":97,\"field_98\":98,\"field_99\":99,\"field_100\":100,\"field_101\":101,\"field_102\":102,\"field_103\":103,\"field_104\":104,\"field_105\":105,\"field_106\":106,\"field_107\":107,\"field_108\":108,\"field_109\":109,\"field_110\":110,\"field_111\":111,\"field_112\":112,\"field_113\":113,\"field_114\":114,\"field_115\":115,\"field_116\":116,\"field_117\":117,\"field_118\":118,\"field_119\":119,\"field_120\":120,\"field_121\":121,\"field_122\":122,\"field_123\":123,\"field_124\":124,\"field_125\":125,\"field_126\":126,\"quote\\\"\":\"line\\n\u6771\u4eac\ud83d\ude42\"}}\n[{\"3\":3,\"20\":20,\"field_0\":0,\"field_1\":1,\"field_2\":2,\"field_3\":3,\"field_4\":4,\"field_5\":5,\"field_6\":6,\"field_7\":7,\"field_8\":8,\"field_9\":9,\"field_10\":10,\"field_11\":11,\"field_12\":12,\"field_13\":13,\"field_14\":14,\"field_15\":15,\"field_16\":16,\"field_17\":17,\"field_18\":18,\"field_19\":19,\"field_20\":20,\"field_21\":21,\"field_22\":22,\"field_23\":23,\"field_24\":24,\"field_25\":25,\"field_26\":26,\"field_27\":27,\"field_28\":28,\"field_29\":29,\"field_30\":30,\"field_31\":31,\"field_32\":32,\"field_33\":33,\"field_34\":34,\"field_35\":35,\"field_36\":36,\"field_37\":37,\"field_38\":38,\"field_39\":39,\"field_40\":40,\"field_41\":41,\"field_42\":42,\"field_43\":43,\"field_44\":44,\"field_45\":45,\"field_46\":46,\"field_47\":47,\"field_48\":48,\"field_49\":49,\"field_50\":50,\"field_51\":51,\"field_52\":52,\"field_53\":53,\"field_54\":54,\"field_55\":55,\"field_56\":56,\"field_57\":57,\"field_58\":58,\"field_59\":59,\"field_60\":60,\"field_61\":61,\"field_62\":62,\"field_63\":63,\"field_64\":64,\"field_65\":65,\"field_66\":66,\"field_67\":67,\"field_68\":68,\"field_69\":69,\"field_70\":70,\"field_71\":71,\"field_72\":72,\"field_73\":73,\"field_74\":74,\"field_75\":75,\"field_76\":76,\"field_77\":77,\"field_78\":78,\"field_79\":79,\"field_80\":80,\"field_81\":81,\"field_82\":82,\"field_83\":83,\"field_84\":84,\"field_85\":85,\"field_86\":86,\"field_87\":87,\"field_88\":88,\"field_89\":89,\"field_90\":90,\"field_91\":91,\"field_92\":92,\"field_93\":93,\"field_94\":94,\"field_95\":95,\"field_96\":96,\"field_97\":97,\"field_98\":98,\"field_99\":99,\"field_100\":100,\"field_101\":101,\"field_102\":102,\"field_103\":103,\"field_104\":104,\"field_105\":105,\"field_106\":106,\"field_107\":107,\"field_108\":108,\"field_109\":109,\"field_110\":110,\"field_111\":111,\"field_112\":112,\"field_113\":113,\"field_114\":114,\"field_115\":115,\"field_116\":116,\"field_117\":117,\"field_118\":118,\"field_119\":119,\"field_120\":120,\"field_121\":121,\"field_122\":122,\"field_123\":123,\"field_124\":124,\"field_125\":125,\"field_126\":126,\"quote\\\"\":\"line\\n\u6771\u4eac\ud83d\ude42\"},{\"3\":3,\"20\":20,\"field_0\":0,\"field_1\":1,\"field_2\":2,\"field_3\":3,\"field_4\":4,\"field_5\":5,\"field_6\":6,\"field_7\":7,\"field_8\":8,\"field_9\":9,\"field_10\":10,\"field_11\":11,\"field_12\":12,\"field_13\":13,\"field_14\":14,\"field_15\":15,\"field_16\":16,\"field_17\":17,\"field_18\":18,\"field_19\":19,\"field_20\":20,\"field_21\":21,\"field_22\":22,\"field_23\":23,\"field_24\":24,\"field_25\":25,\"field_26\":26,\"field_27\":27,\"field_28\":28,\"field_29\":29,\"field_30\":30,\"field_31\":31,\"field_32\":32,\"field_33\":33,\"field_34\":34,\"field_35\":35,\"field_36\":36,\"field_37\":37,\"field_38\":38,\"field_39\":39,\"field_40\":40,\"field_41\":41,\"field_42\":42,\"field_43\":43,\"field_44\":44,\"field_45\":45,\"field_46\":46,\"field_47\":47,\"field_48\":48,\"field_49\":49,\"field_50\":50,\"field_51\":51,\"field_52\":52,\"field_53\":53,\"field_54\":54,\"field_55\":55,\"field_56\":56,\"field_57\":57,\"field_58\":58,\"field_59\":59,\"field_60\":60,\"field_61\":61,\"field_62\":62,\"field_63\":63,\"field_64\":64,\"field_65\":65,\"field_66\":66,\"field_67\":67,\"field_68\":68,\"field_69\":69,\"field_70\":70,\"field_71\":71,\"field_72\":72,\"field_73\":73,\"field_74\":74,\"field_75\":75,\"field_76\":76,\"field_77\":77,\"field_78\":78,\"field_79\":79,\"field_80\":80,\"field_81\":81,\"field_82\":82,\"field_83\":83,\"field_84\":84,\"field_85\":85,\"field_86\":86,\"field_87\":87,\"field_88\":88,\"field_89\":89,\"field_90\":90,\"field_91\":91,\"field_92\":92,\"field_93\":93,\"field_94\":94,\"field_95\":95,\"field_96\":96,\"field_97\":97,\"field_98\":98,\"field_99\":99,\"field_100\":100,\"field_101\":101,\"field_102\":102,\"field_103\":103,\"field_104\":104,\"field_105\":105,\"field_106\":106,\"field_107\":107,\"field_108\":108,\"field_109\":109,\"field_110\":110,\"field_111\":111,\"field_112\":112,\"field_113\":113,\"field_114\":114,\"field_115\":115,\"field_116\":116,\"field_117\":117,\"field_118\":118,\"field_119\":119,\"field_120\":120,\"field_121\":121,\"field_122\":122,\"field_123\":123,\"field_124\":124,\"field_125\":125,\"field_126\":126,\"quote\\\"\":\"line\\n\u6771\u4eac\ud83d\ude42\"}]\n{\"3\":3,\"20\":20,\"field_0\":0,\"field_1\":1,\"field_2\":2,\"field_3\":3,\"field_4\":4,\"field_5\":5,\"field_6\":6,\"field_7\":7,\"field_8\":8,\"field_9\":9,\"field_10\":10,\"field_11\":11,\"field_12\":12,\"field_13\":13,\"field_14\":14,\"field_15\":15,\"field_16\":16,\"field_17\":17,\"field_18\":18,\"field_19\":19,\"field_20\":20,\"field_21\":21,\"field_22\":22,\"field_23\":23,\"field_24\":24,\"field_25\":25,\"field_26\":26,\"field_27\":27,\"field_28\":28,\"field_29\":29,\"field_30\":30,\"field_31\":31,\"field_32\":32,\"field_33\":33,\"field_34\":34,\"field_35\":35,\"field_36\":36,\"field_37\":37,\"field_38\":38,\"field_39\":39,\"field_40\":40,\"field_41\":41,\"field_42\":42,\"field_43\":43,\"field_44\":44,\"field_45\":45,\"field_46\":46,\"field_47\":47,\"field_48\":48,\"field_49\":49,\"field_50\":50,\"field_51\":51,\"field_52\":52,\"field_53\":53,\"field_54\":54,\"field_55\":55,\"field_56\":56,\"field_57\":57,\"field_58\":58,\"field_59\":59,\"field_60\":60,\"field_61\":61,\"field_62\":62,\"field_63\":63,\"field_64\":64,\"field_65\":65,\"field_66\":66,\"field_67\":67,\"field_68\":68,\"field_69\":69,\"field_70\":70,\"field_71\":71,\"field_72\":72,\"field_73\":73,\"field_74\":74,\"field_75\":75,\"field_76\":76,\"field_77\":77,\"field_78\":78,\"field_79\":79,\"field_80\":80,\"field_81\":81,\"field_82\":82,\"field_83\":83,\"field_84\":84,\"field_85\":85,\"field_86\":86,\"field_87\":87,\"field_88\":88,\"field_89\":89,\"field_90\":90,\"field_91\":91,\"field_92\":92,\"field_93\":93,\"field_94\":94,\"field_95\":95,\"field_96\":96,\"field_97\":97,\"field_98\":98,\"field_99\":99,\"field_100\":100,\"field_101\":101,\"field_102\":102,\"field_103\":103,\"field_104\":104,\"field_105\":105,\"field_106\":106,\"field_107\":107,\"field_108\":108,\"field_109\":109,\"field_110\":110,\"field_111\":111,\"field_112\":112,\"field_113\":113,\"field_114\":114,\"field_115\":115,\"field_116\":116,\"field_117\":117,\"field_118\":118,\"field_119\":119,\"field_120\":120,\"field_121\":121,\"field_122\":122,\"field_123\":123,\"field_124\":124,\"field_125\":125,\"field_126\":126,\"quote\\\"\":\"line\\n\u6771\u4eac\ud83d\ude42\"}\n{\"3\":3,\"20\":20,\"field_0\":63,\"field_1\":1,\"field_2\":2,\"field_3\":3,\"field_4\":4,\"field_5\":5,\"field_6\":6,\"field_7\":7,\"field_8\":8,\"field_9\":9,\"field_10\":10,\"field_11\":11,\"field_12\":12,\"field_13\":13,\"field_14\":14,\"field_15\":15,\"field_16\":16,\"field_17\":17,\"field_18\":18,\"field_19\":19,\"field_20\":20,\"field_21\":21,\"field_22\":22,\"field_23\":23,\"field_24\":24,\"field_25\":25,\"field_26\":26,\"field_27\":27,\"field_28\":28,\"field_29\":29,\"field_30\":30,\"field_31\":31,\"field_32\":32,\"field_33\":33,\"field_34\":34,\"field_35\":35,\"field_36\":36,\"field_37\":37,\"field_38\":38,\"field_39\":39,\"field_40\":40,\"field_41\":41,\"field_42\":42,\"field_43\":43,\"field_44\":44,\"field_45\":45,\"field_46\":46,\"field_47\":47,\"field_48\":48,\"field_49\":49,\"field_50\":50,\"field_51\":51,\"field_52\":52,\"field_53\":53,\"field_54\":54,\"field_55\":55,\"field_56\":56,\"field_57\":57,\"field_58\":58,\"field_59\":59,\"field_60\":60,\"field_61\":61,\"field_62\":62,\"field_63\":63,\"field_64\":64,\"field_65\":65,\"field_66\":66,\"field_67\":67,\"field_68\":68,\"field_69\":69,\"field_70\":70,\"field_71\":71,\"field_72\":72,\"field_73\":73,\"field_74\":74,\"field_75\":75,\"field_76\":76,\"field_77\":77,\"field_78\":78,\"field_79\":79,\"field_80\":80,\"field_81\":81,\"field_82\":82,\"field_83\":83,\"field_84\":84,\"field_85\":85,\"field_86\":86,\"field_87\":87,\"field_88\":88,\"field_89\":89,\"field_90\":90,\"field_91\":91,\"field_92\":92,\"field_93\":93,\"field_94\":94,\"field_95\":95,\"field_96\":96,\"field_97\":97,\"field_98\":98,\"field_99\":99,\"field_100\":100,\"field_101\":101,\"field_102\":102,\"field_103\":103,\"field_104\":104,\"field_105\":105,\"field_106\":106,\"field_107\":107,\"field_108\":108,\"field_109\":109,\"field_110\":110,\"field_111\":111,\"field_112\":112,\"field_113\":113,\"field_114\":114,\"field_115\":115,\"field_116\":116,\"field_117\":117,\"field_118\":118,\"field_119\":119,\"field_120\":120,\"field_121\":121,\"field_122\":122,\"field_123\":123,\"field_124\":124,\"field_125\":125,\"field_126\":126,\"quote\\\"\":\"line\\n\u6771\u4eac\ud83d\ude42\"}\n{\"3\":3,\"20\":20,\"field_0\":63,\"field_1\":1,\"field_2\":2,\"field_3\":3,\"field_4\":4,\"field_5\":5,\"field_6\":6,\"field_7\":7,\"field_8\":8,\"field_9\":9,\"field_10\":10,\"field_11\":11,\"field_12\":12,\"field_13\":13,\"field_14\":14,\"field_15\":15,\"field_16\":16,\"field_17\":17,\"field_18\":18,\"field_19\":19,\"field_20\":20,\"field_21\":21,\"field_22\":22,\"field_23\":23,\"field_24\":24,\"field_25\":25,\"field_26\":26,\"field_27\":27,\"field_28\":28,\"field_29\":29,\"field_30\":30,\"field_31\":31,\"field_32\":32,\"field_33\":33,\"field_34\":34,\"field_35\":35,\"field_36\":36,\"field_37\":37,\"field_38\":38,\"field_39\":39,\"field_40\":40,\"field_41\":41,\"field_42\":42,\"field_43\":43,\"field_44\":44,\"field_45\":45,\"field_46\":46,\"field_47\":47,\"field_48\":48,\"field_49\":49,\"field_50\":50,\"field_51\":51,\"field_52\":52,\"field_53\":53,\"field_54\":54,\"field_55\":55,\"field_56\":56,\"field_57\":57,\"field_58\":58,\"field_59\":59,\"field_60\":60,\"field_61\":61,\"field_62\":62,\"field_63\":63,\"field_64\":\"getter\",\"field_66\":66,\"field_67\":67,\"field_68\":68,\"field_69\":69,\"field_70\":70,\"field_71\":71,\"field_72\":72,\"field_73\":73,\"field_74\":74,\"field_75\":75,\"field_76\":76,\"field_77\":77,\"field_78\":78,\"field_79\":79,\"field_80\":80,\"field_81\":81,\"field_82\":82,\"field_83\":83,\"field_84\":84,\"field_85\":85,\"field_86\":86,\"field_87\":87,\"field_88\":88,\"field_89\":89,\"field_90\":90,\"field_91\":91,\"field_92\":92,\"field_93\":93,\"field_94\":94,\"field_95\":95,\"field_96\":96,\"field_97\":97,\"field_98\":98,\"field_99\":99,\"field_100\":100,\"field_101\":101,\"field_102\":102,\"field_103\":103,\"field_104\":104,\"field_105\":105,\"field_106\":106,\"field_107\":107,\"field_108\":108,\"field_109\":109,\"field_110\":110,\"field_111\":111,\"field_112\":112,\"field_113\":113,\"field_114\":114,\"field_115\":115,\"field_116\":116,\"field_117\":117,\"field_118\":118,\"field_119\":119,\"field_120\":120,\"field_121\":121,\"field_122\":122,\"field_123\":123,\"field_124\":124,\"field_125\":125,\"field_126\":126,\"quote\\\"\":\"line\\n\u6771\u4eac\ud83d\ude42\"}\n1\n{\"field_0\":0,\"field_1\":1,\"field_2\":2,\"field_3\":3,\"field_4\":4,\"field_5\":5,\"field_6\":6,\"field_7\":7,\"field_8\":8,\"field_9\":9,\"field_10\":10,\"field_11\":11,\"field_12\":12,\"field_13\":13,\"field_14\":14,\"field_15\":15,\"field_16\":16,\"field_17\":17,\"field_18\":18,\"field_19\":19,\"field_20\":20,\"field_21\":21,\"field_22\":22,\"field_23\":23,\"field_24\":24,\"field_25\":25,\"field_26\":26,\"field_27\":27,\"field_28\":28,\"field_29\":29,\"field_30\":30,\"field_31\":31,\"field_32\":32,\"field_33\":33,\"field_34\":34,\"field_35\":35,\"field_36\":36,\"field_37\":37,\"field_38\":38,\"field_39\":39,\"field_40\":40,\"field_41\":41,\"field_42\":42,\"field_43\":43,\"field_44\":44,\"field_45\":45,\"field_46\":46,\"field_47\":47,\"field_48\":48,\"field_49\":49,\"field_50\":50,\"field_51\":51,\"field_52\":52,\"field_53\":53,\"field_54\":54,\"field_55\":55,\"field_56\":56,\"field_57\":57,\"field_58\":58,\"field_59\":59,\"field_60\":60,\"field_61\":61,\"field_62\":62,\"field_63\":63,\"field_64\":64,\"field_65\":65,\"field_66\":66,\"field_67\":67,\"field_68\":68,\"field_69\":69,\"field_70\":70,\"field_71\":71,\"field_72\":72,\"field_73\":73,\"field_74\":74,\"field_75\":75,\"field_76\":76,\"field_77\":77,\"field_78\":78,\"field_79\":79,\"field_80\":80,\"field_81\":81,\"field_82\":82,\"field_83\":83,\"field_84\":84,\"field_85\":85,\"field_86\":86,\"field_87\":87,\"field_88\":88,\"field_89\":89,\"field_90\":90,\"field_91\":91,\"field_92\":92,\"field_93\":93,\"field_94\":94,\"field_95\":95,\"field_96\":96,\"field_97\":97,\"field_98\":98,\"field_99\":99,\"field_100\":100,\"field_101\":101,\"field_102\":102,\"field_103\":103,\"field_104\":104,\"field_105\":105,\"field_106\":106,\"field_107\":107,\"field_108\":108,\"field_109\":109,\"field_110\":110,\"field_111\":111,\"field_112\":112,\"field_113\":113,\"field_114\":114,\"field_115\":115,\"field_116\":116,\"field_117\":117,\"field_118\":118,\"field_119\":119,\"field_120\":120,\"field_121\":121,\"field_122\":122,\"field_123\":123,\"field_124\":124,\"field_125\":125,\"field_126\":126,\"field_127\":\"key:field_127\"}\n{\"field_0\":0,\"field_1\":1,\"field_2\":2,\"field_3\":3,\"field_4\":4,\"field_5\":5,\"field_6\":6,\"field_7\":7,\"field_8\":8,\"field_9\":9,\"field_10\":10,\"field_11\":11,\"field_12\":12,\"field_13\":13,\"field_14\":14,\"field_15\":15,\"field_16\":16,\"field_17\":17,\"field_18\":18,\"field_19\":19,\"field_20\":20,\"field_21\":21,\"field_22\":22,\"field_23\":23,\"field_24\":24,\"field_25\":25,\"field_26\":26,\"field_27\":27,\"field_28\":28,\"field_29\":29,\"field_30\":30,\"field_31\":31,\"field_32\":32,\"field_33\":33,\"field_34\":34,\"field_35\":35,\"field_36\":36,\"field_37\":37,\"field_38\":38,\"field_39\":39,\"field_40\":40,\"field_41\":41,\"field_42\":42,\"field_43\":43,\"field_44\":44,\"field_45\":45,\"field_46\":46,\"field_47\":47,\"field_48\":48,\"field_49\":49,\"field_50\":50,\"field_51\":51,\"field_52\":52,\"field_53\":53,\"field_54\":54,\"field_55\":55,\"field_56\":56,\"field_57\":57,\"field_58\":58,\"field_59\":59,\"field_60\":60,\"field_61\":61,\"field_62\":62,\"field_63\":63,\"field_64\":64,\"field_65\":65,\"field_66\":66,\"field_67\":67,\"field_68\":68,\"field_69\":69,\"field_70\":70,\"field_71\":71,\"field_72\":72,\"field_73\":73,\"field_74\":74,\"field_75\":75,\"field_76\":76,\"field_77\":77,\"field_78\":78,\"field_79\":79,\"field_80\":80,\"field_81\":81,\"field_82\":82,\"field_83\":83,\"field_84\":84,\"field_85\":85,\"field_86\":86,\"field_87\":87,\"field_88\":88,\"field_89\":89,\"field_90\":90,\"field_91\":91,\"field_92\":92,\"field_93\":93,\"field_94\":94,\"field_95\":95,\"field_96\":96,\"field_97\":97,\"field_98\":98,\"field_99\":99,\"field_100\":100,\"field_101\":101,\"field_102\":102,\"field_103\":103,\"field_104\":104,\"field_105\":105,\"field_106\":106,\"field_107\":107,\"field_108\":108,\"field_109\":109,\"field_110\":110,\"field_111\":111,\"field_112\":112,\"field_113\":113,\"field_114\":114,\"field_115\":115,\"field_116\":116,\"field_117\":117,\"field_118\":118,\"field_119\":119,\"field_120\":120,\"field_121\":121,\"field_122\":122,\"field_123\":123,\"field_124\":124,\"field_125\":125,\"field_126\":126}\n\"prototype:\"\n{\"field_0\":0,\"field_1\":1,\"field_2\":2,\"field_3\":3,\"field_4\":4,\"field_5\":5,\"field_6\":6,\"field_7\":7,\"field_8\":8,\"field_9\":9,\"field_10\":10,\"field_11\":11,\"field_12\":12,\"field_13\":13,\"field_14\":14,\"field_15\":15,\"field_16\":16,\"field_17\":17,\"field_18\":18,\"field_19\":19,\"field_20\":20,\"field_21\":21,\"field_22\":22,\"field_23\":23,\"field_24\":24,\"field_25\":25,\"field_26\":26,\"field_27\":27,\"field_28\":28,\"field_29\":29,\"field_30\":30,\"field_31\":31,\"field_32\":32,\"field_33\":33,\"field_34\":34,\"field_35\":35,\"field_36\":36,\"field_37\":37,\"field_38\":38,\"field_39\":39,\"field_40\":40,\"field_41\":41,\"field_42\":42,\"field_43\":43,\"field_44\":44,\"field_45\":45,\"field_46\":46,\"field_47\":47,\"field_48\":48,\"field_49\":49,\"field_50\":50,\"field_51\":51,\"field_52\":52,\"field_53\":53,\"field_54\":54,\"field_55\":55,\"field_56\":56,\"field_57\":57,\"field_58\":58,\"field_59\":59,\"field_60\":60,\"field_61\":61,\"field_62\":62,\"field_63\":63,\"field_64\":64,\"field_65\":65,\"field_66\":66,\"field_67\":67,\"field_68\":68,\"field_69\":69,\"field_70\":70,\"field_71\":71,\"field_72\":72,\"field_73\":73,\"field_74\":74,\"field_75\":75,\"field_76\":76,\"field_77\":77,\"field_78\":78,\"field_79\":79,\"field_80\":80,\"field_81\":81,\"field_82\":82,\"field_83\":83,\"field_84\":84,\"field_85\":85,\"field_86\":86,\"field_87\":87,\"field_88\":88,\"field_89\":89,\"field_90\":90,\"field_91\":91,\"field_92\":92,\"field_93\":93,\"field_94\":94,\"field_95\":95,\"field_96\":96,\"field_97\":97,\"field_98\":98,\"field_99\":99,\"field_100\":100,\"field_101\":101,\"field_102\":102,\"field_103\":103,\"field_104\":104,\"field_105\":105,\"field_106\":106,\"field_107\":107,\"field_108\":108,\"field_109\":109,\"field_110\":110,\"field_111\":111,\"field_112\":112,\"field_113\":113,\"field_114\":114,\"field_115\":115,\"field_116\":116,\"field_117\":117,\"field_118\":118,\"field_119\":119,\"field_120\":120,\"field_121\":121,\"field_122\":122,\"field_123\":123,\"field_124\":124,\"field_125\":125,\"field_126\":126,\"field_127\":127}\n\"custom\"\n{\n  \"field_1\": 1,\n  \"field_127\": 127\n}\n",
+      "stderr": ""
+    },
+    "perry": {
+      "exit": 0,
+      "stdout": "{\"3\":3,\"20\":20,\"field_0\":0,\"field_1\":1,\"field_2\":2,\"field_3\":3,\"field_4\":4,\"field_5\":5,\"field_6\":6,\"field_7\":7,\"field_8\":8,\"field_9\":9,\"field_10\":10,\"field_11\":11,\"field_12\":12,\"field_13\":13,\"field_14\":14,\"field_15\":15,\"field_16\":16,\"field_17\":17,\"field_18\":18,\"field_19\":19,\"field_20\":20,\"field_21\":21,\"field_22\":22,\"field_23\":23,\"field_24\":24,\"field_25\":25,\"field_26\":26,\"field_27\":27,\"field_28\":28,\"field_29\":29,\"field_30\":30,\"field_31\":31,\"field_32\":32,\"field_33\":33,\"field_34\":34,\"field_35\":35,\"field_36\":36,\"field_37\":37,\"field_38\":38,\"field_39\":39,\"field_40\":40,\"field_41\":41,\"field_42\":42,\"field_43\":43,\"field_44\":44,\"field_45\":45,\"field_46\":46,\"field_47\":47,\"field_48\":48,\"field_49\":49,\"field_50\":50,\"field_51\":51,\"field_52\":52,\"field_53\":53,\"field_54\":54,\"field_55\":55,\"field_56\":56,\"field_57\":57,\"field_58\":58,\"field_59\":59,\"field_60\":60,\"field_61\":61,\"field_62\":62,\"field_63\":63,\"field_64\":64,\"field_65\":65,\"field_66\":66,\"field_67\":67,\"field_68\":68,\"field_69\":69,\"field_70\":70,\"field_71\":71,\"field_72\":72,\"field_73\":73,\"field_74\":74,\"field_75\":75,\"field_76\":76,\"field_77\":77,\"field_78\":78,\"field_79\":79,\"field_80\":80,\"field_81\":81,\"field_82\":82,\"field_83\":83,\"field_84\":84,\"field_85\":85,\"field_86\":86,\"field_87\":87,\"field_88\":88,\"field_89\":89,\"field_90\":90,\"field_91\":91,\"field_92\":92,\"field_93\":93,\"field_94\":94,\"field_95\":95,\"field_96\":96,\"field_97\":97,\"field_98\":98,\"field_99\":99,\"field_100\":100,\"field_101\":101,\"field_102\":102,\"field_103\":103,\"field_104\":104,\"field_105\":105,\"field_106\":106,\"field_107\":107,\"field_108\":108,\"field_109\":109,\"field_110\":110,\"field_111\":111,\"field_112\":112,\"field_113\":113,\"field_114\":114,\"field_115\":115,\"field_116\":116,\"field_117\":117,\"field_118\":118,\"field_119\":119,\"field_120\":120,\"field_121\":121,\"field_122\":122,\"field_123\":123,\"field_124\":124,\"field_125\":125,\"field_126\":126,\"quote\\\"\":\"line\\n\u6771\u4eac\ud83d\ude42\"}\n{\"data\":{\"3\":3,\"20\":20,\"field_0\":0,\"field_1\":1,\"field_2\":2,\"field_3\":3,\"field_4\":4,\"field_5\":5,\"field_6\":6,\"field_7\":7,\"field_8\":8,\"field_9\":9,\"field_10\":10,\"field_11\":11,\"field_12\":12,\"field_13\":13,\"field_14\":14,\"field_15\":15,\"field_16\":16,\"field_17\":17,\"field_18\":18,\"field_19\":19,\"field_20\":20,\"field_21\":21,\"field_22\":22,\"field_23\":23,\"field_24\":24,\"field_25\":25,\"field_26\":26,\"field_27\":27,\"field_28\":28,\"field_29\":29,\"field_30\":30,\"field_31\":31,\"field_32\":32,\"field_33\":33,\"field_34\":34,\"field_35\":35,\"field_36\":36,\"field_37\":37,\"field_38\":38,\"field_39\":39,\"field_40\":40,\"field_41\":41,\"field_42\":42,\"field_43\":43,\"field_44\":44,\"field_45\":45,\"field_46\":46,\"field_47\":47,\"field_48\":48,\"field_49\":49,\"field_50\":50,\"field_51\":51,\"field_52\":52,\"field_53\":53,\"field_54\":54,\"field_55\":55,\"field_56\":56,\"field_57\":57,\"field_58\":58,\"field_59\":59,\"field_60\":60,\"field_61\":61,\"field_62\":62,\"field_63\":63,\"field_64\":64,\"field_65\":65,\"field_66\":66,\"field_67\":67,\"field_68\":68,\"field_69\":69,\"field_70\":70,\"field_71\":71,\"field_72\":72,\"field_73\":73,\"field_74\":74,\"field_75\":75,\"field_76\":76,\"field_77\":77,\"field_78\":78,\"field_79\":79,\"field_80\":80,\"field_81\":81,\"field_82\":82,\"field_83\":83,\"field_84\":84,\"field_85\":85,\"field_86\":86,\"field_87\":87,\"field_88\":88,\"field_89\":89,\"field_90\":90,\"field_91\":91,\"field_92\":92,\"field_93\":93,\"field_94\":94,\"field_95\":95,\"field_96\":96,\"field_97\":97,\"field_98\":98,\"field_99\":99,\"field_100\":100,\"field_101\":101,\"field_102\":102,\"field_103\":103,\"field_104\":104,\"field_105\":105,\"field_106\":106,\"field_107\":107,\"field_108\":108,\"field_109\":109,\"field_110\":110,\"field_111\":111,\"field_112\":112,\"field_113\":113,\"field_114\":114,\"field_115\":115,\"field_116\":116,\"field_117\":117,\"field_118\":118,\"field_119\":119,\"field_120\":120,\"field_121\":121,\"field_122\":122,\"field_123\":123,\"field_124\":124,\"field_125\":125,\"field_126\":126,\"quote\\\"\":\"line\\n\u6771\u4eac\ud83d\ude42\"}}\n[{\"3\":3,\"20\":20,\"field_0\":0,\"field_1\":1,\"field_2\":2,\"field_3\":3,\"field_4\":4,\"field_5\":5,\"field_6\":6,\"field_7\":7,\"field_8\":8,\"field_9\":9,\"field_10\":10,\"field_11\":11,\"field_12\":12,\"field_13\":13,\"field_14\":14,\"field_15\":15,\"field_16\":16,\"field_17\":17,\"field_18\":18,\"field_19\":19,\"field_20\":20,\"field_21\":21,\"field_22\":22,\"field_23\":23,\"field_24\":24,\"field_25\":25,\"field_26\":26,\"field_27\":27,\"field_28\":28,\"field_29\":29,\"field_30\":30,\"field_31\":31,\"field_32\":32,\"field_33\":33,\"field_34\":34,\"field_35\":35,\"field_36\":36,\"field_37\":37,\"field_38\":38,\"field_39\":39,\"field_40\":40,\"field_41\":41,\"field_42\":42,\"field_43\":43,\"field_44\":44,\"field_45\":45,\"field_46\":46,\"field_47\":47,\"field_48\":48,\"field_49\":49,\"field_50\":50,\"field_51\":51,\"field_52\":52,\"field_53\":53,\"field_54\":54,\"field_55\":55,\"field_56\":56,\"field_57\":57,\"field_58\":58,\"field_59\":59,\"field_60\":60,\"field_61\":61,\"field_62\":62,\"field_63\":63,\"field_64\":64,\"field_65\":65,\"field_66\":66,\"field_67\":67,\"field_68\":68,\"field_69\":69,\"field_70\":70,\"field_71\":71,\"field_72\":72,\"field_73\":73,\"field_74\":74,\"field_75\":75,\"field_76\":76,\"field_77\":77,\"field_78\":78,\"field_79\":79,\"field_80\":80,\"field_81\":81,\"field_82\":82,\"field_83\":83,\"field_84\":84,\"field_85\":85,\"field_86\":86,\"field_87\":87,\"field_88\":88,\"field_89\":89,\"field_90\":90,\"field_91\":91,\"field_92\":92,\"field_93\":93,\"field_94\":94,\"field_95\":95,\"field_96\":96,\"field_97\":97,\"field_98\":98,\"field_99\":99,\"field_100\":100,\"field_101\":101,\"field_102\":102,\"field_103\":103,\"field_104\":104,\"field_105\":105,\"field_106\":106,\"field_107\":107,\"field_108\":108,\"field_109\":109,\"field_110\":110,\"field_111\":111,\"field_112\":112,\"field_113\":113,\"field_114\":114,\"field_115\":115,\"field_116\":116,\"field_117\":117,\"field_118\":118,\"field_119\":119,\"field_120\":120,\"field_121\":121,\"field_122\":122,\"field_123\":123,\"field_124\":124,\"field_125\":125,\"field_126\":126,\"quote\\\"\":\"line\\n\u6771\u4eac\ud83d\ude42\"},{\"3\":3,\"20\":20,\"field_0\":0,\"field_1\":1,\"field_2\":2,\"field_3\":3,\"field_4\":4,\"field_5\":5,\"field_6\":6,\"field_7\":7,\"field_8\":8,\"field_9\":9,\"field_10\":10,\"field_11\":11,\"field_12\":12,\"field_13\":13,\"field_14\":14,\"field_15\":15,\"field_16\":16,\"field_17\":17,\"field_18\":18,\"field_19\":19,\"field_20\":20,\"field_21\":21,\"field_22\":22,\"field_23\":23,\"field_24\":24,\"field_25\":25,\"field_26\":26,\"field_27\":27,\"field_28\":28,\"field_29\":29,\"field_30\":30,\"field_31\":31,\"field_32\":32,\"field_33\":33,\"field_34\":34,\"field_35\":35,\"field_36\":36,\"field_37\":37,\"field_38\":38,\"field_39\":39,\"field_40\":40,\"field_41\":41,\"field_42\":42,\"field_43\":43,\"field_44\":44,\"field_45\":45,\"field_46\":46,\"field_47\":47,\"field_48\":48,\"field_49\":49,\"field_50\":50,\"field_51\":51,\"field_52\":52,\"field_53\":53,\"field_54\":54,\"field_55\":55,\"field_56\":56,\"field_57\":57,\"field_58\":58,\"field_59\":59,\"field_60\":60,\"field_61\":61,\"field_62\":62,\"field_63\":63,\"field_64\":64,\"field_65\":65,\"field_66\":66,\"field_67\":67,\"field_68\":68,\"field_69\":69,\"field_70\":70,\"field_71\":71,\"field_72\":72,\"field_73\":73,\"field_74\":74,\"field_75\":75,\"field_76\":76,\"field_77\":77,\"field_78\":78,\"field_79\":79,\"field_80\":80,\"field_81\":81,\"field_82\":82,\"field_83\":83,\"field_84\":84,\"field_85\":85,\"field_86\":86,\"field_87\":87,\"field_88\":88,\"field_89\":89,\"field_90\":90,\"field_91\":91,\"field_92\":92,\"field_93\":93,\"field_94\":94,\"field_95\":95,\"field_96\":96,\"field_97\":97,\"field_98\":98,\"field_99\":99,\"field_100\":100,\"field_101\":101,\"field_102\":102,\"field_103\":103,\"field_104\":104,\"field_105\":105,\"field_106\":106,\"field_107\":107,\"field_108\":108,\"field_109\":109,\"field_110\":110,\"field_111\":111,\"field_112\":112,\"field_113\":113,\"field_114\":114,\"field_115\":115,\"field_116\":116,\"field_117\":117,\"field_118\":118,\"field_119\":119,\"field_120\":120,\"field_121\":121,\"field_122\":122,\"field_123\":123,\"field_124\":124,\"field_125\":125,\"field_126\":126,\"quote\\\"\":\"line\\n\u6771\u4eac\ud83d\ude42\"}]\n{\"3\":3,\"20\":20,\"field_0\":0,\"field_1\":1,\"field_2\":2,\"field_3\":3,\"field_4\":4,\"field_5\":5,\"field_6\":6,\"field_7\":7,\"field_8\":8,\"field_9\":9,\"field_10\":10,\"field_11\":11,\"field_12\":12,\"field_13\":13,\"field_14\":14,\"field_15\":15,\"field_16\":16,\"field_17\":17,\"field_18\":18,\"field_19\":19,\"field_20\":20,\"field_21\":21,\"field_22\":22,\"field_23\":23,\"field_24\":24,\"field_25\":25,\"field_26\":26,\"field_27\":27,\"field_28\":28,\"field_29\":29,\"field_30\":30,\"field_31\":31,\"field_32\":32,\"field_33\":33,\"field_34\":34,\"field_35\":35,\"field_36\":36,\"field_37\":37,\"field_38\":38,\"field_39\":39,\"field_40\":40,\"field_41\":41,\"field_42\":42,\"field_43\":43,\"field_44\":44,\"field_45\":45,\"field_46\":46,\"field_47\":47,\"field_48\":48,\"field_49\":49,\"field_50\":50,\"field_51\":51,\"field_52\":52,\"field_53\":53,\"field_54\":54,\"field_55\":55,\"field_56\":56,\"field_57\":57,\"field_58\":58,\"field_59\":59,\"field_60\":60,\"field_61\":61,\"field_62\":62,\"field_63\":63,\"field_64\":64,\"field_65\":65,\"field_66\":66,\"field_67\":67,\"field_68\":68,\"field_69\":69,\"field_70\":70,\"field_71\":71,\"field_72\":72,\"field_73\":73,\"field_74\":74,\"field_75\":75,\"field_76\":76,\"field_77\":77,\"field_78\":78,\"field_79\":79,\"field_80\":80,\"field_81\":81,\"field_82\":82,\"field_83\":83,\"field_84\":84,\"field_85\":85,\"field_86\":86,\"field_87\":87,\"field_88\":88,\"field_89\":89,\"field_90\":90,\"field_91\":91,\"field_92\":92,\"field_93\":93,\"field_94\":94,\"field_95\":95,\"field_96\":96,\"field_97\":97,\"field_98\":98,\"field_99\":99,\"field_100\":100,\"field_101\":101,\"field_102\":102,\"field_103\":103,\"field_104\":104,\"field_105\":105,\"field_106\":106,\"field_107\":107,\"field_108\":108,\"field_109\":109,\"field_110\":110,\"field_111\":111,\"field_112\":112,\"field_113\":113,\"field_114\":114,\"field_115\":115,\"field_116\":116,\"field_117\":117,\"field_118\":118,\"field_119\":119,\"field_120\":120,\"field_121\":121,\"field_122\":122,\"field_123\":123,\"field_124\":124,\"field_125\":125,\"field_126\":126,\"quote\\\"\":\"line\\n\u6771\u4eac\ud83d\ude42\"}\n{\"3\":3,\"20\":20,\"field_0\":63,\"field_1\":1,\"field_2\":2,\"field_3\":3,\"field_4\":4,\"field_5\":5,\"field_6\":6,\"field_7\":7,\"field_8\":8,\"field_9\":9,\"field_10\":10,\"field_11\":11,\"field_12\":12,\"field_13\":13,\"field_14\":14,\"field_15\":15,\"field_16\":16,\"field_17\":17,\"field_18\":18,\"field_19\":19,\"field_20\":20,\"field_21\":21,\"field_22\":22,\"field_23\":23,\"field_24\":24,\"field_25\":25,\"field_26\":26,\"field_27\":27,\"field_28\":28,\"field_29\":29,\"field_30\":30,\"field_31\":31,\"field_32\":32,\"field_33\":33,\"field_34\":34,\"field_35\":35,\"field_36\":36,\"field_37\":37,\"field_38\":38,\"field_39\":39,\"field_40\":40,\"field_41\":41,\"field_42\":42,\"field_43\":43,\"field_44\":44,\"field_45\":45,\"field_46\":46,\"field_47\":47,\"field_48\":48,\"field_49\":49,\"field_50\":50,\"field_51\":51,\"field_52\":52,\"field_53\":53,\"field_54\":54,\"field_55\":55,\"field_56\":56,\"field_57\":57,\"field_58\":58,\"field_59\":59,\"field_60\":60,\"field_61\":61,\"field_62\":62,\"field_63\":63,\"field_64\":64,\"field_65\":65,\"field_66\":66,\"field_67\":67,\"field_68\":68,\"field_69\":69,\"field_70\":70,\"field_71\":71,\"field_72\":72,\"field_73\":73,\"field_74\":74,\"field_75\":75,\"field_76\":76,\"field_77\":77,\"field_78\":78,\"field_79\":79,\"field_80\":80,\"field_81\":81,\"field_82\":82,\"field_83\":83,\"field_84\":84,\"field_85\":85,\"field_86\":86,\"field_87\":87,\"field_88\":88,\"field_89\":89,\"field_90\":90,\"field_91\":91,\"field_92\":92,\"field_93\":93,\"field_94\":94,\"field_95\":95,\"field_96\":96,\"field_97\":97,\"field_98\":98,\"field_99\":99,\"field_100\":100,\"field_101\":101,\"field_102\":102,\"field_103\":103,\"field_104\":104,\"field_105\":105,\"field_106\":106,\"field_107\":107,\"field_108\":108,\"field_109\":109,\"field_110\":110,\"field_111\":111,\"field_112\":112,\"field_113\":113,\"field_114\":114,\"field_115\":115,\"field_116\":116,\"field_117\":117,\"field_118\":118,\"field_119\":119,\"field_120\":120,\"field_121\":121,\"field_122\":122,\"field_123\":123,\"field_124\":124,\"field_125\":125,\"field_126\":126,\"quote\\\"\":\"line\\n\u6771\u4eac\ud83d\ude42\"}\n{\"3\":3,\"20\":20,\"field_0\":63,\"field_1\":1,\"field_2\":2,\"field_3\":3,\"field_4\":4,\"field_5\":5,\"field_6\":6,\"field_7\":7,\"field_8\":8,\"field_9\":9,\"field_10\":10,\"field_11\":11,\"field_12\":12,\"field_13\":13,\"field_14\":14,\"field_15\":15,\"field_16\":16,\"field_17\":17,\"field_18\":18,\"field_19\":19,\"field_20\":20,\"field_21\":21,\"field_22\":22,\"field_23\":23,\"field_24\":24,\"field_25\":25,\"field_26\":26,\"field_27\":27,\"field_28\":28,\"field_29\":29,\"field_30\":30,\"field_31\":31,\"field_32\":32,\"field_33\":33,\"field_34\":34,\"field_35\":35,\"field_36\":36,\"field_37\":37,\"field_38\":38,\"field_39\":39,\"field_40\":40,\"field_41\":41,\"field_42\":42,\"field_43\":43,\"field_44\":44,\"field_45\":45,\"field_46\":46,\"field_47\":47,\"field_48\":48,\"field_49\":49,\"field_50\":50,\"field_51\":51,\"field_52\":52,\"field_53\":53,\"field_54\":54,\"field_55\":55,\"field_56\":56,\"field_57\":57,\"field_58\":58,\"field_59\":59,\"field_60\":60,\"field_61\":61,\"field_62\":62,\"field_63\":63,\"field_64\":\"getter\",\"field_66\":66,\"field_67\":67,\"field_68\":68,\"field_69\":69,\"field_70\":70,\"field_71\":71,\"field_72\":72,\"field_73\":73,\"field_74\":74,\"field_75\":75,\"field_76\":76,\"field_77\":77,\"field_78\":78,\"field_79\":79,\"field_80\":80,\"field_81\":81,\"field_82\":82,\"field_83\":83,\"field_84\":84,\"field_85\":85,\"field_86\":86,\"field_87\":87,\"field_88\":88,\"field_89\":89,\"field_90\":90,\"field_91\":91,\"field_92\":92,\"field_93\":93,\"field_94\":94,\"field_95\":95,\"field_96\":96,\"field_97\":97,\"field_98\":98,\"field_99\":99,\"field_100\":100,\"field_101\":101,\"field_102\":102,\"field_103\":103,\"field_104\":104,\"field_105\":105,\"field_106\":106,\"field_107\":107,\"field_108\":108,\"field_109\":109,\"field_110\":110,\"field_111\":111,\"field_112\":112,\"field_113\":113,\"field_114\":114,\"field_115\":115,\"field_116\":116,\"field_117\":117,\"field_118\":118,\"field_119\":119,\"field_120\":120,\"field_121\":121,\"field_122\":122,\"field_123\":123,\"field_124\":124,\"field_125\":125,\"field_126\":126,\"quote\\\"\":\"line\\n\u6771\u4eac\ud83d\ude42\"}\n1\n{\"field_0\":0,\"field_1\":1,\"field_2\":2,\"field_3\":3,\"field_4\":4,\"field_5\":5,\"field_6\":6,\"field_7\":7,\"field_8\":8,\"field_9\":9,\"field_10\":10,\"field_11\":11,\"field_12\":12,\"field_13\":13,\"field_14\":14,\"field_15\":15,\"field_16\":16,\"field_17\":17,\"field_18\":18,\"field_19\":19,\"field_20\":20,\"field_21\":21,\"field_22\":22,\"field_23\":23,\"field_24\":24,\"field_25\":25,\"field_26\":26,\"field_27\":27,\"field_28\":28,\"field_29\":29,\"field_30\":30,\"field_31\":31,\"field_32\":32,\"field_33\":33,\"field_34\":34,\"field_35\":35,\"field_36\":36,\"field_37\":37,\"field_38\":38,\"field_39\":39,\"field_40\":40,\"field_41\":41,\"field_42\":42,\"field_43\":43,\"field_44\":44,\"field_45\":45,\"field_46\":46,\"field_47\":47,\"field_48\":48,\"field_49\":49,\"field_50\":50,\"field_51\":51,\"field_52\":52,\"field_53\":53,\"field_54\":54,\"field_55\":55,\"field_56\":56,\"field_57\":57,\"field_58\":58,\"field_59\":59,\"field_60\":60,\"field_61\":61,\"field_62\":62,\"field_63\":63,\"field_64\":64,\"field_65\":65,\"field_66\":66,\"field_67\":67,\"field_68\":68,\"field_69\":69,\"field_70\":70,\"field_71\":71,\"field_72\":72,\"field_73\":73,\"field_74\":74,\"field_75\":75,\"field_76\":76,\"field_77\":77,\"field_78\":78,\"field_79\":79,\"field_80\":80,\"field_81\":81,\"field_82\":82,\"field_83\":83,\"field_84\":84,\"field_85\":85,\"field_86\":86,\"field_87\":87,\"field_88\":88,\"field_89\":89,\"field_90\":90,\"field_91\":91,\"field_92\":92,\"field_93\":93,\"field_94\":94,\"field_95\":95,\"field_96\":96,\"field_97\":97,\"field_98\":98,\"field_99\":99,\"field_100\":100,\"field_101\":101,\"field_102\":102,\"field_103\":103,\"field_104\":104,\"field_105\":105,\"field_106\":106,\"field_107\":107,\"field_108\":108,\"field_109\":109,\"field_110\":110,\"field_111\":111,\"field_112\":112,\"field_113\":113,\"field_114\":114,\"field_115\":115,\"field_116\":116,\"field_117\":117,\"field_118\":118,\"field_119\":119,\"field_120\":120,\"field_121\":121,\"field_122\":122,\"field_123\":123,\"field_124\":124,\"field_125\":125,\"field_126\":126,\"field_127\":\"key:field_127\"}\n{\"field_0\":0,\"field_1\":1,\"field_2\":2,\"field_3\":3,\"field_4\":4,\"field_5\":5,\"field_6\":6,\"field_7\":7,\"field_8\":8,\"field_9\":9,\"field_10\":10,\"field_11\":11,\"field_12\":12,\"field_13\":13,\"field_14\":14,\"field_15\":15,\"field_16\":16,\"field_17\":17,\"field_18\":18,\"field_19\":19,\"field_20\":20,\"field_21\":21,\"field_22\":22,\"field_23\":23,\"field_24\":24,\"field_25\":25,\"field_26\":26,\"field_27\":27,\"field_28\":28,\"field_29\":29,\"field_30\":30,\"field_31\":31,\"field_32\":32,\"field_33\":33,\"field_34\":34,\"field_35\":35,\"field_36\":36,\"field_37\":37,\"field_38\":38,\"field_39\":39,\"field_40\":40,\"field_41\":41,\"field_42\":42,\"field_43\":43,\"field_44\":44,\"field_45\":45,\"field_46\":46,\"field_47\":47,\"field_48\":48,\"field_49\":49,\"field_50\":50,\"field_51\":51,\"field_52\":52,\"field_53\":53,\"field_54\":54,\"field_55\":55,\"field_56\":56,\"field_57\":57,\"field_58\":58,\"field_59\":59,\"field_60\":60,\"field_61\":61,\"field_62\":62,\"field_63\":63,\"field_64\":64,\"field_65\":65,\"field_66\":66,\"field_67\":67,\"field_68\":68,\"field_69\":69,\"field_70\":70,\"field_71\":71,\"field_72\":72,\"field_73\":73,\"field_74\":74,\"field_75\":75,\"field_76\":76,\"field_77\":77,\"field_78\":78,\"field_79\":79,\"field_80\":80,\"field_81\":81,\"field_82\":82,\"field_83\":83,\"field_84\":84,\"field_85\":85,\"field_86\":86,\"field_87\":87,\"field_88\":88,\"field_89\":89,\"field_90\":90,\"field_91\":91,\"field_92\":92,\"field_93\":93,\"field_94\":94,\"field_95\":95,\"field_96\":96,\"field_97\":97,\"field_98\":98,\"field_99\":99,\"field_100\":100,\"field_101\":101,\"field_102\":102,\"field_103\":103,\"field_104\":104,\"field_105\":105,\"field_106\":106,\"field_107\":107,\"field_108\":108,\"field_109\":109,\"field_110\":110,\"field_111\":111,\"field_112\":112,\"field_113\":113,\"field_114\":114,\"field_115\":115,\"field_116\":116,\"field_117\":117,\"field_118\":118,\"field_119\":119,\"field_120\":120,\"field_121\":121,\"field_122\":122,\"field_123\":123,\"field_124\":124,\"field_125\":125,\"field_126\":126}\n\"prototype:\"\n{\"field_0\":0,\"field_1\":1,\"field_2\":2,\"field_3\":3,\"field_4\":4,\"field_5\":5,\"field_6\":6,\"field_7\":7,\"field_8\":8,\"field_9\":9,\"field_10\":10,\"field_11\":11,\"field_12\":12,\"field_13\":13,\"field_14\":14,\"field_15\":15,\"field_16\":16,\"field_17\":17,\"field_18\":18,\"field_19\":19,\"field_20\":20,\"field_21\":21,\"field_22\":22,\"field_23\":23,\"field_24\":24,\"field_25\":25,\"field_26\":26,\"field_27\":27,\"field_28\":28,\"field_29\":29,\"field_30\":30,\"field_31\":31,\"field_32\":32,\"field_33\":33,\"field_34\":34,\"field_35\":35,\"field_36\":36,\"field_37\":37,\"field_38\":38,\"field_39\":39,\"field_40\":40,\"field_41\":41,\"field_42\":42,\"field_43\":43,\"field_44\":44,\"field_45\":45,\"field_46\":46,\"field_47\":47,\"field_48\":48,\"field_49\":49,\"field_50\":50,\"field_51\":51,\"field_52\":52,\"field_53\":53,\"field_54\":54,\"field_55\":55,\"field_56\":56,\"field_57\":57,\"field_58\":58,\"field_59\":59,\"field_60\":60,\"field_61\":61,\"field_62\":62,\"field_63\":63,\"field_64\":64,\"field_65\":65,\"field_66\":66,\"field_67\":67,\"field_68\":68,\"field_69\":69,\"field_70\":70,\"field_71\":71,\"field_72\":72,\"field_73\":73,\"field_74\":74,\"field_75\":75,\"field_76\":76,\"field_77\":77,\"field_78\":78,\"field_79\":79,\"field_80\":80,\"field_81\":81,\"field_82\":82,\"field_83\":83,\"field_84\":84,\"field_85\":85,\"field_86\":86,\"field_87\":87,\"field_88\":88,\"field_89\":89,\"field_90\":90,\"field_91\":91,\"field_92\":92,\"field_93\":93,\"field_94\":94,\"field_95\":95,\"field_96\":96,\"field_97\":97,\"field_98\":98,\"field_99\":99,\"field_100\":100,\"field_101\":101,\"field_102\":102,\"field_103\":103,\"field_104\":104,\"field_105\":105,\"field_106\":106,\"field_107\":107,\"field_108\":108,\"field_109\":109,\"field_110\":110,\"field_111\":111,\"field_112\":112,\"field_113\":113,\"field_114\":114,\"field_115\":115,\"field_116\":116,\"field_117\":117,\"field_118\":118,\"field_119\":119,\"field_120\":120,\"field_121\":121,\"field_122\":122,\"field_123\":123,\"field_124\":124,\"field_125\":125,\"field_126\":126,\"field_127\":127}\n\"custom\"\n{\n  \"field_1\": 1,\n  \"field_127\": 127\n}\n",
+      "stderr": ""
+    },
+    "matches_node": true
+  },
+  {
+    "name": "test_gap_json_parse_entry",
+    "arm": "piece-ref",
+    "compile_exit": 0,
+    "object_sha256": "4f9647a6935b926a7e84a7e1764dc0a3d99b9ef3e70e4b5a9c7689603f866678",
+    "node": {
+      "exit": 0,
+      "stdout": "128 384 0 161235953\n[{\"yes\":true},{},{\"yes\":\"\u6771\u4eac\ud83d\ude42\"}]\n{\"nested\":{\"yes\":\"getter\"}} 1\n{\"nested\":{}} 1\n{\"nested\":\"custom:nested\"}\n{\"nested\":\"nested\"}\n{\n  \"nested\": {\n    \"yes\": true\n  }\n}\n",
+      "stderr": ""
+    },
+    "perry": {
+      "exit": 0,
+      "stdout": "128 384 0 161235953\n[{\"yes\":true},{},{\"yes\":\"\u6771\u4eac\ud83d\ude42\"}]\n{\"nested\":{\"yes\":\"getter\"}} 1\n{\"nested\":{}} 1\n{\"nested\":\"custom:nested\"}\n{\"nested\":\"nested\"}\n{\n  \"nested\": {\n    \"yes\": true\n  }\n}\n",
+      "stderr": ""
+    },
+    "matches_node": true
+  },
+  {
+    "name": "test_gap_json_record_output",
+    "arm": "piece-ref",
+    "compile_exit": 0,
+    "object_sha256": "a877a7e45d7c3d5f02c4d08ff6909685bda651d55082a1cac04d2ce7b031f44d",
+    "node": {
+      "exit": 0,
+      "stdout": "1024 247483439 {\"id\":0,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[\"tag_alpha\",\"item_0\"]} {\"id\":1023,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[\"tag_alpha\",\"item_1023\"]}\n{\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[]}\n{\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[0]}\n{\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[0,0.25]}\n{\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[0,0.25,0.5]}\n{\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[0,0.25,0.5,0.75]}\n{\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[0,0.25,0.5,0.75,1]}\n{\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[0,0.25,0.5,0.75,1,1.25]}\n{\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[0,0.25,0.5,0.75,1,1.25,1.5]}\n{\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[0,0.25,0.5,0.75,1,1.25,1.5,1.75]}\n{\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[0,0.25,0.5,0.75,1,1.25,1.5,1.75,2]}\n{\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[0,0.25,0.5,0.75,1,1.25,1.5,1.75,2,2.25]}\n{\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[0,0.25,0.5,0.75,1,1.25,1.5,1.75,2,2.25,2.5]}\n{\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[0,0.25,0.5,0.75,1,1.25,1.5,1.75,2,2.25,2.5,2.75]}\n{\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[0,0.25,0.5,0.75,1,1.25,1.5,1.75,2,2.25,2.5,2.75,3]}\n{\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[0,0.25,0.5,0.75,1,1.25,1.5,1.75,2,2.25,2.5,2.75,3,3.25]}\n{\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[0,0.25,0.5,0.75,1,1.25,1.5,1.75,2,2.25,2.5,2.75,3,3.25,3.5]}\n{\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[0,0.25,0.5,0.75,1,1.25,1.5,1.75,2,2.25,2.5,2.75,3,3.25,3.5,3.75]}\n{\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[0,0.25,0.5,0.75,1,1.25,1.5,1.75,2,2.25,2.5,2.75,3,3.25,3.5,3.75,4]}\n{\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[0,0.25,0.5,0.75,1,1.25,1.5,1.75,2,2.25,2.5,2.75,3,3.25,3.5,3.75,4,4.25]}\n{\"a\":[1,2],\"b\":[3,4],\"c\":[5,6],\"d\":[7,8],\"e\":[9,10],\"f\":[11,12],\"g\":[13,14],\"h\":[15,16]}\n{\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[null,\"tag_bravo\"]}\n{\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[true,\"tag_bravo\"]}\n{\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[false,\"tag_bravo\"]}\n{\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[0,\"tag_bravo\"]}\n{\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[1e-7,\"tag_bravo\"]}\n{\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[1e+21,\"tag_bravo\"]}\n{\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[null,\"tag_bravo\"]}\n{\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[null,\"tag_bravo\"]}\n{\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[\"\u6771\u4eac\ud83d\ude42\",\"tag_bravo\"]}\n{\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[\"quote\\\"\\n\",\"tag_bravo\"]}\n{\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[null,\"tag_bravo\"]}\n{\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[null,\"tag_bravo\"]}\n{\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[\"array getter\",\"tag_bravo\"]} 1\n{\"id\":42,\"name\":\"user_42\",\"active\":false,\"score\":123,\"tags\":[\"array getter\",\"tag_bravo\"]} 2\n{\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":\"array:tags\"}\n{\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[\"tag_alpha\",\"nested:1\"]}\n\"record:\"\n{\n  \"id\": 42,\n  \"tags\": [\n    \"tag_alpha\",\n    \"tag_bravo\"\n  ]\n}\n{\"id\":42,\"name\":\"user_42\",\"active\":false,\"score\":63,\"tags\":[\"tag_alpha\",\"tag_bravo\"]}\n{\"3\":3,\"20\":20,\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[\"tag_alpha\",\"tag_bravo\"]}\n",
+      "stderr": ""
+    },
+    "perry": {
+      "exit": 0,
+      "stdout": "1024 247483439 {\"id\":0,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[\"tag_alpha\",\"item_0\"]} {\"id\":1023,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[\"tag_alpha\",\"item_1023\"]}\n{\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[]}\n{\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[0]}\n{\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[0,0.25]}\n{\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[0,0.25,0.5]}\n{\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[0,0.25,0.5,0.75]}\n{\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[0,0.25,0.5,0.75,1]}\n{\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[0,0.25,0.5,0.75,1,1.25]}\n{\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[0,0.25,0.5,0.75,1,1.25,1.5]}\n{\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[0,0.25,0.5,0.75,1,1.25,1.5,1.75]}\n{\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[0,0.25,0.5,0.75,1,1.25,1.5,1.75,2]}\n{\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[0,0.25,0.5,0.75,1,1.25,1.5,1.75,2,2.25]}\n{\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[0,0.25,0.5,0.75,1,1.25,1.5,1.75,2,2.25,2.5]}\n{\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[0,0.25,0.5,0.75,1,1.25,1.5,1.75,2,2.25,2.5,2.75]}\n{\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[0,0.25,0.5,0.75,1,1.25,1.5,1.75,2,2.25,2.5,2.75,3]}\n{\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[0,0.25,0.5,0.75,1,1.25,1.5,1.75,2,2.25,2.5,2.75,3,3.25]}\n{\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[0,0.25,0.5,0.75,1,1.25,1.5,1.75,2,2.25,2.5,2.75,3,3.25,3.5]}\n{\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[0,0.25,0.5,0.75,1,1.25,1.5,1.75,2,2.25,2.5,2.75,3,3.25,3.5,3.75]}\n{\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[0,0.25,0.5,0.75,1,1.25,1.5,1.75,2,2.25,2.5,2.75,3,3.25,3.5,3.75,4]}\n{\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[0,0.25,0.5,0.75,1,1.25,1.5,1.75,2,2.25,2.5,2.75,3,3.25,3.5,3.75,4,4.25]}\n{\"a\":[1,2],\"b\":[3,4],\"c\":[5,6],\"d\":[7,8],\"e\":[9,10],\"f\":[11,12],\"g\":[13,14],\"h\":[15,16]}\n{\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[null,\"tag_bravo\"]}\n{\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[true,\"tag_bravo\"]}\n{\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[false,\"tag_bravo\"]}\n{\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[0,\"tag_bravo\"]}\n{\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[1e-7,\"tag_bravo\"]}\n{\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[1e+21,\"tag_bravo\"]}\n{\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[null,\"tag_bravo\"]}\n{\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[null,\"tag_bravo\"]}\n{\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[\"\u6771\u4eac\ud83d\ude42\",\"tag_bravo\"]}\n{\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[\"quote\\\"\\n\",\"tag_bravo\"]}\n{\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[null,\"tag_bravo\"]}\n{\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[null,\"tag_bravo\"]}\n{\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[\"array getter\",\"tag_bravo\"]} 1\n{\"id\":42,\"name\":\"user_42\",\"active\":false,\"score\":123,\"tags\":[\"array getter\",\"tag_bravo\"]} 2\n{\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":\"array:tags\"}\n{\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[\"tag_alpha\",\"nested:1\"]}\n\"record:\"\n{\n  \"id\": 42,\n  \"tags\": [\n    \"tag_alpha\",\n    \"tag_bravo\"\n  ]\n}\n{\"id\":42,\"name\":\"user_42\",\"active\":false,\"score\":63,\"tags\":[\"tag_alpha\",\"tag_bravo\"]}\n{\"3\":3,\"20\":20,\"id\":42,\"name\":\"user_42\",\"email\":\"user_42@example.com\",\"active\":false,\"score\":63,\"tags\":[\"tag_alpha\",\"tag_bravo\"]}\n",
+      "stderr": ""
+    },
+    "matches_node": true
+  },
+  {
+    "name": "test_gap_json_owned_tape",
+    "arm": "piece-ref",
+    "compile_exit": 0,
+    "object_sha256": "7991a3a075b685f9d04f07a623d95647ec9190559a305ccf704be32033746b5a",
+    "node": {
+      "exit": 0,
+      "stdout": "invalid true 3\nretained 0 100000 1 7 0\ncomplete true 200002\nretained 1 100000 1 7 0\ncomplete true 200002\nretained 2 100000 1 7 0\ncomplete true 200002\nretained 3 100000 1 7 0\ncomplete true 200002\nretained 4 100000 1 7 0\ncomplete true 200002\nretained 5 100000 1 7 0\ncomplete true 200002\nretained 6 100000 1 7 0\ncomplete true 200002\nretained 7 100000 1 7 0\ncomplete true 200002\nhash 114711381\nchurn 0 100000 1 7\nchurn 8 100000 1 7\nchurn 16 100000 1 7\nnested 30000 true\nindependent true\neager 100000 true\nextend 100002 9\ntruncate 2 [1,0]\n",
+      "stderr": ""
+    },
+    "perry": {
+      "exit": 0,
+      "stdout": "invalid true 3\nretained 0 100000 1 7 0\ncomplete true 200002\nretained 1 100000 1 7 0\ncomplete true 200002\nretained 2 100000 1 7 0\ncomplete true 200002\nretained 3 100000 1 7 0\ncomplete true 200002\nretained 4 100000 1 7 0\ncomplete true 200002\nretained 5 100000 1 7 0\ncomplete true 200002\nretained 6 100000 1 7 0\ncomplete true 200002\nretained 7 100000 1 7 0\ncomplete true 200002\nhash 114711381\nchurn 0 100000 1 7\nchurn 8 100000 1 7\nchurn 16 100000 1 7\nnested 30000 true\nindependent true\neager 100000 true\nextend 100002 9\ntruncate 2 [1,0]\n",
+      "stderr": ""
+    },
+    "matches_node": true
+  },
+  {
+    "name": "test_gap_json_parse_empty",
+    "arm": "piece-ref",
+    "compile_exit": 0,
+    "object_sha256": "209eb1ab417ad5efaeb3baf21d807111a10bcf94811e3ba8bc720adb91f9d896",
+    "node": {
+      "exit": 0,
+      "stdout": "fresh true true\ngrammar 216 11\nmutations {\"4\":true,\"dynamic\":\"\u6771\u4eac\ud83d\ude42\",\"extra\":{\"answer\":42},\"a\":7,\"getter\":\"seen\"} {}\nkeys 4,dynamic,extra,a,getter\nprototype 12 {}\nsetter {\"observed\":42}\nreviver {\"revised\":true} 1\nretained 50000 0 742752340\nlate {\"4\":true,\"dynamic\":\"\u6771\u4eac\ud83d\ude42\",\"extra\":{\"answer\":42},\"a\":7,\"getter\":\"seen\"} {} {\"observed\":42} {\"revised\":true}\n",
+      "stderr": ""
+    },
+    "perry": {
+      "exit": 0,
+      "stdout": "fresh true true\ngrammar 216 11\nmutations {\"4\":true,\"dynamic\":\"\u6771\u4eac\ud83d\ude42\",\"extra\":{\"answer\":42},\"a\":7,\"getter\":\"seen\"} {}\nkeys 4,dynamic,extra,a,getter\nprototype 12 {}\nsetter {\"observed\":42}\nreviver {\"revised\":true} 1\nretained 50000 0 742752340\nlate {\"4\":true,\"dynamic\":\"\u6771\u4eac\ud83d\ude42\",\"extra\":{\"answer\":42},\"a\":7,\"getter\":\"seen\"} {} {\"observed\":42} {\"revised\":true}\n",
+      "stderr": ""
+    },
+    "matches_node": true
+  }
+]

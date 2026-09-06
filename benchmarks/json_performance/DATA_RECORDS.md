@@ -1,3 +1,10 @@
+The Piece-borrowing experiment (96cda0524) is rejected and reverted in
+7eb11ae1d. Its qualified full and 616-trial paired matrices show 4.99-5.53%
+slower record-array parsing and 1.27% slower small-record stringify, with
+separated paired ranges. Smaller stringify gains do not justify these
+regressions. All 56 restored source hashes match the empty-parse checkpoint
+below. [Complete rejected experiment](results/piece-ref/README.md).
+
 The latest measured source parses complete empty ordinary objects with only
 its final allocation. It validates all input bytes before GC, preserves fresh
 identity, ordinary-object behavior, pending debt and pressure scheduling, and

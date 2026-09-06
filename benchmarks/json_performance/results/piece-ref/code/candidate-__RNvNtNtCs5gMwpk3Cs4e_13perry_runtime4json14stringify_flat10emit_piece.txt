@@ -1,0 +1,82 @@
+
+/Users/amlug/projects/perry/codex-json-fastpaths-artifacts/piece-ref-worker:    file format mach-o arm64
+
+Disassembly of section __TEXT,__text:
+
+00000001003db5a4 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json14stringify_flat10emit_piece>:
+1003db5a4:      sub sp, sp, #0x40
+1003db5a8:      stp x22, x21, [sp, #0x10]
+1003db5ac:      stp x20, x19, [sp, #0x20]
+1003db5b0:      stp x29, x30, [sp, #0x30]
+1003db5b4:      add x29, sp, #0x30
+1003db5b8:      ldr w8, [x0]
+1003db5bc:      cbz w8, 0x1003db5d8 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json14stringify_flat10emit_piece+0x34>
+1003db5c0:      ldr w19, [x0, #0x4]
+1003db5c4:      add x1, x0, #0x8
+1003db5c8:      mov x0, x2
+1003db5cc:      mov x2, x19
+1003db5d0:      bl  0x100cd8a2c <_writev+0x100cd8a2c>
+1003db5d4:      b   0x1003db690 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json14stringify_flat10emit_piece+0xec>
+1003db5d8:      strb    wzr, [sp, #0xc]
+1003db5dc:      str wzr, [sp, #0x8]
+1003db5e0:      and x8, x1, #0xffff000000000000
+1003db5e4:      mov x9, #0x7fff000000000000 ; =9223090561878065152
+1003db5e8:      cmp x8, x9
+1003db5ec:      b.eq    0x1003db658 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json14stringify_flat10emit_piece+0xb4>
+1003db5f0:      mov x9, #0x7ff9000000000000 ; =9221401712017801216
+1003db5f4:      cmp x8, x9
+1003db5f8:      b.ne    0x1003db6a8 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json14stringify_flat10emit_piece+0x104>
+1003db5fc:      ubfx    x8, x1, #40, #8
+1003db600:      cbz x8, 0x1003db650 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json14stringify_flat10emit_piece+0xac>
+1003db604:      strb    w1, [sp, #0x8]
+1003db608:      cmp x8, #0x1
+1003db60c:      b.eq    0x1003db650 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json14stringify_flat10emit_piece+0xac>
+1003db610:      lsr x9, x1, #8
+1003db614:      strb    w9, [sp, #0x9]
+1003db618:      cmp x8, #0x2
+1003db61c:      b.eq    0x1003db650 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json14stringify_flat10emit_piece+0xac>
+1003db620:      lsr x9, x1, #16
+1003db624:      strb    w9, [sp, #0xa]
+1003db628:      cmp x8, #0x3
+1003db62c:      b.eq    0x1003db650 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json14stringify_flat10emit_piece+0xac>
+1003db630:      lsr x9, x1, #24
+1003db634:      strb    w9, [sp, #0xb]
+1003db638:      cmp x8, #0x4
+1003db63c:      b.eq    0x1003db650 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json14stringify_flat10emit_piece+0xac>
+1003db640:      lsr x9, x1, #32
+1003db644:      strb    w9, [sp, #0xc]
+1003db648:      cmp x8, #0x5
+1003db64c:      b.ne    0x1003db6c0 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json14stringify_flat10emit_piece+0x11c>
+1003db650:      add x1, sp, #0x8
+1003db654:      b   0x1003db664 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json14stringify_flat10emit_piece+0xc0>
+1003db658:      ands    x8, x1, #0xffffffffffff
+1003db65c:      add x8, x8, #0x14
+1003db660:      csel    x1, xzr, x8, eq
+1003db664:      mov w20, #0x22              ; =34
+1003db668:      mov x8, x2
+1003db66c:      strb    w20, [x8], #0x1
+1003db670:      ldr w19, [x0, #0x4]
+1003db674:      mov x0, x8
+1003db678:      mov x21, x2
+1003db67c:      mov x2, x19
+1003db680:      bl  0x100cd8a2c <_writev+0x100cd8a2c>
+1003db684:      add x8, x21, x19
+1003db688:      strb    w20, [x8, #0x1]
+1003db68c:      add x19, x19, #0x2
+1003db690:      mov x0, x19
+1003db694:      ldp x29, x30, [sp, #0x30]
+1003db698:      ldp x20, x19, [sp, #0x20]
+1003db69c:      ldp x22, x21, [sp, #0x10]
+1003db6a0:      add sp, sp, #0x40
+1003db6a4:      ret
+1003db6a8:      adrp    x0, 0x100dc4000 <__RNvNtCs5gMwpk3Cs4e_13perry_runtime4text17SB_X_USER_DEFINED+0x106>
+1003db6ac:      add x0, x0, #0xed7
+1003db6b0:      adrp    x2, 0x1010a0000 <_anon.8cac605e8a9c9c4bef59eadb9be5524c.100+0x98>
+1003db6b4:      add x2, x2, #0x878
+1003db6b8:      mov w1, #0x18               ; =24
+1003db6bc:      bl  0x100c896c0 <__RNvNtCsjgY6bXVaRmE_4core6option13expect_failed>
+1003db6c0:      adrp    x2, 0x1010a0000 <_anon.8cac605e8a9c9c4bef59eadb9be5524c.100+0x98>
+1003db6c4:      add x2, x2, #0x2c0
+1003db6c8:      mov w0, #0x5                ; =5
+1003db6cc:      mov w1, #0x5                ; =5
+1003db6d0:      bl  0x100c8978c <__RNvNtCsjgY6bXVaRmE_4core9panicking18panic_bounds_check>

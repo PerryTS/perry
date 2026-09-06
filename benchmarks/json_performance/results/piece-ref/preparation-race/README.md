@@ -1,0 +1,1 @@
+The diagnostic was started before prepare returned terminal completion. It failed before measuring any trial because the worker did not exist. Preparation is now terminal and its source/archive hashes verified; the complete diagnostic is repeated in the normal directory.

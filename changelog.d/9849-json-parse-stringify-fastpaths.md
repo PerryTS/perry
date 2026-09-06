@@ -5,3 +5,7 @@ Root general parse inputs before pending collection and rederive moved bytes. En
 The latest measured source passes 165 JSON runtime tests, 37 compiled Node comparisons and 32 moving-GC runs. Its full M1 CPU/RSS matrix, 574-trial paired comparison and 24 extra retained-empty trials pass quiet gates and external monitoring. Against tape-owned, empty-object parse CPU falls 82.08%, from 0.32247 to 0.05778 microseconds (5.58x); inline-string parse improves 7.18%, and 1 MB object-root parse 0.78%.
 
 This remains a development checkpoint: 11/38 CPU, 58/74 peak RSS and 28/36 retained RSS medians meet the better Node/Bun median. Escaped stringify regresses 2.22%, wide stringify 2.14%, and numeric parse 1.52%. Empty-parse peak RSS rises 0.375 MiB; several other rows rise about 0.17-0.23 MiB. Retaining 200,000 empty objects uses 24.86 MiB versus Node 83.42 / Bun 50.19 MiB, but also 0.17 MiB more than preceding Perry. Older unresolved regressions remain documented; no-regression acceptance fails. Array-root parsing may defer materialization; stringify inputs are fully materialized. RSS is whole-process memory. Full results and rejected experiments are in benchmarks/json_performance/DATA_RECORDS.md. No version bump.
+
+The Piece-borrowing experiment was measured and reverted: paired large-array
+parse regressed about 5-5.5% and small-record stringify 1.27%. Complete raw,
+validation and paired evidence is retained under results/piece-ref.

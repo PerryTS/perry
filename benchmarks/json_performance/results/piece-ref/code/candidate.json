@@ -1,0 +1,54 @@
+[
+  {
+    "symbol": "__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json14stringify_flat10emit_piece",
+    "reference_instructions": 78,
+    "candidate_instructions": 76,
+    "command": [
+      "xcrun",
+      "llvm-objdump",
+      "--disassemble-symbols=__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json14stringify_flat10emit_piece",
+      "--no-show-raw-insn",
+      "/Users/amlug/projects/perry/codex-json-fastpaths-artifacts/piece-ref-worker"
+    ],
+    "worker_sha256": "52eb93942df564effe07091ec1536a886ebe2f9f67f22b63b78549401f3d9a30"
+  },
+  {
+    "symbol": "__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json14stringify_flat12scalar_piece",
+    "reference_instructions": 177,
+    "candidate_instructions": 177,
+    "command": [
+      "xcrun",
+      "llvm-objdump",
+      "--disassemble-symbols=__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json14stringify_flat12scalar_piece",
+      "--no-show-raw-insn",
+      "/Users/amlug/projects/perry/codex-json-fastpaths-artifacts/piece-ref-worker"
+    ],
+    "worker_sha256": "52eb93942df564effe07091ec1536a886ebe2f9f67f22b63b78549401f3d9a30"
+  },
+  {
+    "symbol": "__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json14stringify_flat12string_piece",
+    "reference_instructions": 329,
+    "candidate_instructions": 329,
+    "command": [
+      "xcrun",
+      "llvm-objdump",
+      "--disassemble-symbols=__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json14stringify_flat12string_piece",
+      "--no-show-raw-insn",
+      "/Users/amlug/projects/perry/codex-json-fastpaths-artifacts/piece-ref-worker"
+    ],
+    "worker_sha256": "52eb93942df564effe07091ec1536a886ebe2f9f67f22b63b78549401f3d9a30"
+  },
+  {
+    "symbol": "__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json23stringify_record_output11emit_record",
+    "reference_instructions": 836,
+    "candidate_instructions": 836,
+    "command": [
+      "xcrun",
+      "llvm-objdump",
+      "--disassemble-symbols=__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json23stringify_record_output11emit_record",
+      "--no-show-raw-insn",
+      "/Users/amlug/projects/perry/codex-json-fastpaths-artifacts/piece-ref-worker"
+    ],
+    "worker_sha256": "52eb93942df564effe07091ec1536a886ebe2f9f67f22b63b78549401f3d9a30"
+  }
+]
