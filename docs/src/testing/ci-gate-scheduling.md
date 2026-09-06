@@ -215,6 +215,30 @@ queued/in-progress/cancelled runs, and a gate whose only recent results are
 its `main` arm was dark), and asserts the verdict for each. A green `--self-test`
 means the detector works, not that nothing was tried.
 
+## A completed red gate must create work (#9830)
+
+Fresh execution is only half of the contract. A scheduled gate can run, fail
+correctly, and stay red in the Actions list without anyone owning the failure.
+`gate-failure-watch.yml` observes the completed post-merge workflows in
+`scripts/gate_failure_watch.json` and maintains one issue per failing workflow.
+The issue records the run URL, head SHA, failed job/step rows, the rows added or
+removed since the previous failure, and the last green main SHA. Repeated failures
+update the same issue; the next green run comments and closes it.
+
+The observer accepts scheduled and main-branch dispatch runs, main pushes, and
+release-tag pushes. It ignores pull-request and feature-branch runs. Its
+`workflow_run` job has `issues: write`, so it always checks out the trusted `main`
+copy of the script; pull requests run only the offline self-test and configuration
+check with read-only permissions.
+
+When adding or renaming a post-merge gate, update `gate_failure_watch.json` and the
+observer's `workflow_run.workflows` list together. The configuration check also
+requires every workflow tracked by `gate_freshness.json` to be watched or explicitly
+excluded with a reason.
+
+For every gate, ask: if this fails on `main` tonight, who finds out, and how? A run
+visible only in the Actions list has no owner.
+
 ## The queue in front of the schedule (#7966)
 
 A six-hourly sweep only helps if the queue drains faster than six hours. On
