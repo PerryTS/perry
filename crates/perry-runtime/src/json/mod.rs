@@ -29,7 +29,7 @@ mod parser;
 pub(crate) mod raw_json;
 mod replacer;
 mod reviver;
-mod simd;
+pub(crate) mod simd;
 mod stringify;
 mod stringify_api;
 mod stringify_buffer;

@@ -8,6 +8,55 @@
 
 use super::*;
 
+#[test]
+fn tape_scans_strings_and_numbers_across_word_boundaries() {
+    for n in [
+        0, 1, 7, 8, 9, 15, 16, 17, 31, 32, 33, 63, 64, 65, 127, 128, 129,
+    ] {
+        let pad = "a".repeat(n);
+        for token in [
+            "0",
+            "-0",
+            "123456789012345678901234567890",
+            "0.01234567890123456789",
+            "-1234.125e+12345",
+        ] {
+            let input = format!(r#"["{pad}",{token},"\u1234\n\"\\",true]"#);
+            let tape = build_tape(input.as_bytes()).expect("valid token grammar");
+            assert_eq!(
+                tape.entries.iter().map(|e| e.kind).collect::<Vec<_>>(),
+                [
+                    KIND_ARR_START,
+                    KIND_STRING,
+                    KIND_NUMBER,
+                    KIND_STRING,
+                    KIND_TRUE,
+                    KIND_ARR_END
+                ]
+            );
+            assert_eq!(tape.entries[2].offset as usize, n + 4);
+            assert_eq!(tape.entries[3].offset as usize, n + 5 + token.len());
+            assert_eq!(tape.entries[0].link, 5);
+            assert_eq!(tape.entries[5].link, 0);
+        }
+        for token in [
+            "-", "01", "-01", "1.", "1e", "1e+", "1e-", "1e+-1", "1x", "1.2.3", "0x1", "1e1.0",
+            "1e00x",
+        ] {
+            let input = format!("[\"{pad}\",{token}]");
+            assert!(build_tape(input.as_bytes()).is_none(), "accepted {input:?}");
+        }
+        for token in [r#""\x""#, r#""\u12xz""#, r#""\u123""#, r#""unterminated"#] {
+            let input = format!("[\"{pad}\",{token}]");
+            assert!(build_tape(input.as_bytes()).is_none(), "accepted {input:?}");
+        }
+        for control in 0..32u8 {
+            let input = format!("[\"{pad}{}\"]", control as char);
+            assert!(build_tape(input.as_bytes()).is_none(), "accepted {input:?}");
+        }
+    }
+}
+
 /// Tape structure invariants on a simple object — exercises the
 /// OBJ_START → KEY → scalar → OBJ_END chain and the backfilled
 /// `link` for skip-over.

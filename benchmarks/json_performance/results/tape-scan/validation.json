@@ -1,0 +1,32 @@
+{
+  "runtime_json_tests": 121,
+  "compiled_fixtures": 29,
+  "compiled_fixtures_match_node": true,
+  "gc_stress_subjects": 8,
+  "gc_stress_runs": 16,
+  "gc_stress_seeds": [
+    17,
+    9013
+  ],
+  "gc_stress_all_outputs_and_live_movement": true,
+  "tape_builder_differential_inputs": 323211,
+  "tape_builder_differential_compares": [
+    "acceptance",
+    "token offset",
+    "token kind",
+    "container link"
+  ],
+  "x86_64_leaf_compile": "passed; not executed",
+  "root_holder_inventory": "passed; existing unverified frontier unchanged",
+  "format": "passed",
+  "gc_and_parse_boundary_unchanged_from": "454daac4f8fc667ab4bc85b7b5b36c8bae56ae28",
+  "benchmark_output_checks": 152,
+  "benchmark_timing_trials": 456,
+  "benchmark_memory_trials": 432,
+  "paired_timing_trials": 182,
+  "full_quiet_gate": true,
+  "paired_quiet_gate": true,
+  "full_external_monitor_clean_observations": 34,
+  "paired_external_monitor_clean_observations": 11,
+  "goal_complete": false
+}

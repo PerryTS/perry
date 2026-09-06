@@ -200,6 +200,11 @@ fn build_tape_into(bytes: &[u8], entries: &mut Vec<TapeEntry>, stack: &mut Vec<u
         debug_assert_eq!(bytes[*pos], b'"');
         *pos += 1;
         while *pos < bytes.len() {
+            let Some(offset) = crate::json::simd::find_string_terminator(&bytes[*pos..]) else {
+                *pos = bytes.len();
+                return false;
+            };
+            *pos += offset;
             let c = bytes[*pos];
             if c == b'"' {
                 *pos += 1;
@@ -242,18 +247,14 @@ fn build_tape_into(bytes: &[u8], entries: &mut Vec<TapeEntry>, stack: &mut Vec<u
             Some(b'0') => *pos += 1,
             Some(b'1'..=b'9') => {
                 *pos += 1;
-                while *pos < bytes.len() && bytes[*pos].is_ascii_digit() {
-                    *pos += 1;
-                }
+                *pos += crate::json::simd::count_ascii_digits(&bytes[*pos..]);
             }
             _ => return false,
         }
         if *pos < bytes.len() && bytes[*pos] == b'.' {
             *pos += 1;
             let fraction_start = *pos;
-            while *pos < bytes.len() && bytes[*pos].is_ascii_digit() {
-                *pos += 1;
-            }
+            *pos += crate::json::simd::count_ascii_digits(&bytes[*pos..]);
             if *pos == fraction_start {
                 return false;
             }
@@ -264,9 +265,7 @@ fn build_tape_into(bytes: &[u8], entries: &mut Vec<TapeEntry>, stack: &mut Vec<u
                 *pos += 1;
             }
             let exponent_start = *pos;
-            while *pos < bytes.len() && bytes[*pos].is_ascii_digit() {
-                *pos += 1;
-            }
+            *pos += crate::json::simd::count_ascii_digits(&bytes[*pos..]);
             if *pos == exponent_start {
                 return false;
             }

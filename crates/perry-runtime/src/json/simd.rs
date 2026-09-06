@@ -1,5 +1,30 @@
 //! Bounded byte scanners shared by JSON parsing, depth checks and escaping.
 
+/// Count leading ASCII digits eight bytes at a time, without reading outside
+/// the slice. Before the first non-digit, neither arithmetic expression can
+/// carry/borrow between byte lanes. The first marked lane is therefore exact,
+/// even if a later lane's mask is affected by that first non-digit.
+#[inline(always)]
+pub(crate) fn count_ascii_digits(bytes: &[u8]) -> usize {
+    let mut i = 0;
+    while bytes.len() - i >= 8 {
+        // Normalize byte order so the first input byte is the low lane on
+        // every target and trailing_zeros identifies the first non-digit.
+        let word = u64::from_le(unsafe { bytes.as_ptr().add(i).cast::<u64>().read_unaligned() });
+        let non_digits = (word.wrapping_sub(0x3030_3030_3030_3030)
+            | word.wrapping_add(0x4646_4646_4646_4646))
+            & 0x8080_8080_8080_8080;
+        if non_digits != 0 {
+            return i + non_digits.trailing_zeros() as usize / 8;
+        }
+        i += 8;
+    }
+    while i < bytes.len() && bytes[i].is_ascii_digit() {
+        i += 1;
+    }
+    i
+}
+
 /// Find a string terminator or an illegal unescaped control byte.
 #[inline(always)]
 pub(crate) fn find_string_terminator(bytes: &[u8]) -> Option<usize> {

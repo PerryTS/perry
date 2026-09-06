@@ -1,0 +1,20 @@
+{
+  "owner": "json-perf-9554-1788695612",
+  "load_before": [
+    1.45751953125,
+    1.50732421875,
+    1.45458984375
+  ],
+  "started_utc": "2026-09-06T11:53:32Z",
+  "command": [
+    "python3",
+    "recheck_tape_scan.py"
+  ],
+  "load_after": [
+    1.73486328125,
+    1.57861328125,
+    1.48388671875
+  ],
+  "quiet_gate_passed": true,
+  "finished_utc": "2026-09-06T11:54:29Z"
+}

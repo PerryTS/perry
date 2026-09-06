@@ -1,0 +1,82 @@
+{
+  "time_utc": "2026-09-06T11:53:32Z",
+  "load_before": [
+    1.45751953125,
+    1.50732421875,
+    1.45458984375
+  ],
+  "cases": [
+    [
+      "unicode",
+      "numbers_1m",
+      "parse"
+    ],
+    [
+      "unicode",
+      "heterogeneous_1m",
+      "parse"
+    ],
+    [
+      "unicode",
+      "escaped_1m",
+      "stringify"
+    ],
+    [
+      "direct",
+      "numbers_1m",
+      "parse"
+    ],
+    [
+      "direct",
+      "records_array_16k",
+      "parse"
+    ],
+    [
+      "direct",
+      "records_array_1m",
+      "parse"
+    ],
+    [
+      "direct",
+      "records_array_8m",
+      "parse"
+    ],
+    [
+      "direct",
+      "records_array_20m",
+      "parse"
+    ],
+    [
+      "direct",
+      "records_object_8m",
+      "parse"
+    ],
+    [
+      "direct",
+      "records_object_20m",
+      "parse"
+    ],
+    [
+      "direct",
+      "small_record",
+      "stringify"
+    ],
+    [
+      "direct",
+      "records_array_16k",
+      "stringify"
+    ],
+    [
+      "direct",
+      "string_a",
+      "parse"
+    ]
+  ],
+  "repetitions": 7,
+  "notes": "Same worker entry, default GC, fresh processes. Call counts are fixed from the full matrix. Randomized two-arm order per repetition. CPU includes user and system time.",
+  "worker_sha256": {
+    "unicode": "85189dd09e2f34151351546aa751100e0480ef8e110c8380dfbb10d53755d938",
+    "direct": "7cbedf7177d31793978f7bda97a30da9c9b7c7a9dd41c7f7c93acdeb714d4e1b",
+    "candidate": "21a1e75beb47e2a12ae066d4991abf7878e48c297b3de55bd5514077f209e7e5"
+  }
+}
