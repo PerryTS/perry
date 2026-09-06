@@ -121,7 +121,7 @@ fn flat_direct_number_spelling_matches_the_existing_emitter() {
             let mut expected = String::new();
             super::super::write_number(&mut expected, f64::from_bits(bits));
             let mut bytes = [0; 32];
-            let len = emit_piece(piece, bits, bytes.as_mut_ptr());
+            let len = emit_piece(&piece, bits, bytes.as_mut_ptr());
             assert_eq!(&bytes[..len], expected.as_bytes(), "{bits:016x}");
         };
         for number in [
@@ -160,7 +160,7 @@ fn flat_direct_integer_boundaries_match_ecmascript_spelling() {
             let bits = number.to_bits();
             let piece = scalar_piece(bits).expect("finite numeric value");
             let mut bytes = [0; 32];
-            let len = emit_piece(piece, bits, bytes.as_mut_ptr());
+            let len = emit_piece(&piece, bits, bytes.as_mut_ptr());
             let mut oracle = ryu_js::Buffer::new();
             assert_eq!(
                 &bytes[..len],
