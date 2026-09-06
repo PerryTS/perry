@@ -278,3 +278,39 @@ fn an_unrelated_for_of_is_not_a_candidate() {
     ];
     assert!(collect_segment_for_of_sites(&stmts).is_empty());
 }
+
+/// The bundle regression. `O.codePointAt(0)` survives as a generic
+/// `Call(PropertyGet…)` when the receiver's type is unknown — which is what a
+/// TypeScript probe produces — but perry's JS pipeline folds it into
+/// `Expr::StringCodePointAt`. The first version of the classifier matched only
+/// the former, so on `cli_2.1.112.js` the loop that is 60-85 % of claude-code's
+/// CPU reported `code_point_at=0, materialise=1`.
+///
+/// The reconciliation against the sound counter is why that read as a blind
+/// spot rather than as a correct answer, and this test is why it cannot come
+/// back.
+#[test]
+fn the_folded_code_point_at_node_is_classified_like_the_generic_call() {
+    let body = vec![let_(
+        10,
+        "w",
+        Expr::StringCodePointAt {
+            string: Box::new(Expr::LocalGet(SEG)),
+            index: Box::new(Expr::Integer(0)),
+        },
+    )];
+    let sites = collect_segment_for_of_sites(&region(body));
+    assert_eq!(sites[0].verdict, SegViewVerdict::Fires);
+    assert_eq!(
+        sites[0].segment_uses.code_point_at, 1,
+        "the folded node must count as a code_point_at use, not a materialisation"
+    );
+    assert_eq!(
+        sites[0].segment_uses.materialise, 0,
+        "nothing is left over for the sound counter to book conservatively"
+    );
+    assert!(
+        sites[0].segment_uses.view_answerable_v1(),
+        "a loop whose only use is the folded codePointAt is answerable by v1 alone"
+    );
+}

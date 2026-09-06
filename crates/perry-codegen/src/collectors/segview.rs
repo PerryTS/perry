@@ -59,6 +59,17 @@
 //! unclassified use can therefore only make a site look *less* optimisable
 //! than it is; it can never make one look more.
 //!
+//! That property is not decorative: it is what caught this pass's own blind
+//! spot. The first version matched only the generic
+//! `Call(PropertyGet(O, "codePointAt"), [k])` shape — which is what a
+//! TypeScript probe produces — and on `cli_2.1.112.js` it reported
+//! `code_point_at=0, materialise=1` for the one loop that is 60-85 % of
+//! claude-code's CPU, because the JS pipeline folds that call into
+//! `Expr::StringCodePointAt`. A classifier that guessed instead of
+//! reconciling would have reported `code_point_at=0, materialise=0` and looked
+//! correct. **A shape that reproduces on a probe is not proof it reproduces on
+//! the bundle**; run the bundle counter (32 seconds) after every change here.
+//!
 //! # The counter is the falsifier
 //!
 //! A tier can be correct and never match (#9824). `PERRY_SEGVIEW_DIAG=1`
@@ -592,6 +603,20 @@ fn classify_segment_uses_in_expr(e: &Expr, seg: u32, t: &mut SegmentUseTally) {
                     classify_segment_uses_in_expr(object, seg, t);
                     return;
                 }
+            }
+        }
+        // `O.codePointAt(k)` AFTER the JS pipeline has folded it. This arm is
+        // the one the real bundle needed and the TypeScript probe did not:
+        // perry lowers a proven string receiver's `.codePointAt` to this
+        // dedicated node, while the probe kept the generic `Call(PropertyGet…)`
+        // shape above. Measuring the bundle is what found it — the sound count
+        // saw the occurrence, this match did not, and the difference was booked
+        // as `materialise`, so the tally under-reported and never over-reported.
+        Expr::StringCodePointAt { string, index } => {
+            if matches!(string.as_ref(), Expr::LocalGet(id) if *id == seg) {
+                t.code_point_at += 1;
+                classify_segment_uses_in_expr(index, seg, t);
+                return;
             }
         }
         Expr::RegExpTest { regex, string } => {
