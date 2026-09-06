@@ -1589,7 +1589,7 @@ jobs:
           python scripts/check_gc_doc_claims.py
           python scripts/check_thread_locals.py --self-test
           python scripts/check_thread_locals.py
-          python -m unittest discover -s tests -p 'test_gc_ratchet.py' -v
+          python -m unittest discover -s tests -p 'test*gc_ratchet.py' -v
           python benchmarks/gc_ratchet/gc_ratchet.py validate --scope structural
 
       - name: Install Rust toolchain

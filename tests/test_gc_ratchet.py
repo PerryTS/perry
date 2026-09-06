@@ -326,6 +326,29 @@ class CurrentCounterDeterminismTests(unittest.TestCase):
             self.assertEqual(entry["evidence"]["observed_spread"], max(values) - min(values))
 
 
+class DistributionRoundTripTests(unittest.TestCase):
+    def test_summaries_survive_json_round_trip(self):
+        # Timings arrive at higher precision than the six decimals we persist.
+        # Validation must derive exactly the summary written by measurement.
+        samples = [
+            [27.105318423, 27.418923761, 28.075891629],
+            [0.0000004, 0.0000014, 0.0000024],
+            [1.0000001, 1.0000008],
+            [100, 200, 300],
+        ]
+        for values in samples:
+            with self.subTest(values=values), tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / "measurement.json"
+                path.write_text(json.dumps(distribution(values)), encoding="utf-8")
+                stored = json.loads(path.read_text(encoding="utf-8"))
+                self.assertEqual(stored, distribution(stored["samples"]))
+
+    def test_non_finite_samples_are_still_rejected(self):
+        for value in (float("nan"), float("inf"), -float("inf")):
+            with self.subTest(value=value), self.assertRaises(RatchetError):
+                distribution([1, value, 3])
+
+
 class ParsingTests(unittest.TestCase):
     def test_measurement_refuses_a_host_without_wait4_before_launching(self):
         with mock.patch.object(os, "wait4", None, create=True):

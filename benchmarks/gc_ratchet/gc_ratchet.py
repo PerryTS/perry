@@ -518,11 +518,15 @@ def distribution(values: Sequence[float]) -> dict[str, Any]:
         raise RatchetError("distribution has no samples")
     if any(not math.isfinite(value) for value in samples):
         raise RatchetError("distribution has a non-finite sample")
+    # Derive the summary from exactly the samples persisted below. Otherwise
+    # rounding timing samples can change spread_pct (or even the median) when
+    # validate_artifact recomputes it after a JSON round trip (#9834).
+    samples = [_clean(value) for value in samples]
     ordered = sorted(samples)
     median = statistics.median(ordered)
     spread = ordered[-1] - ordered[0]
     return {
-        "samples": [_clean(value) for value in samples],
+        "samples": samples,
         "sample_count": len(samples),
         "median": _clean(median),
         "min": _clean(ordered[0]),
