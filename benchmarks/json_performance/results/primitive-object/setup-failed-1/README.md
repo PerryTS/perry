@@ -1,0 +1,1 @@
+Staging omitted results/fixtures.json. The runner stopped before any trial. The manifest was copied from the qualified reference, all 19 fixture hashes verified, and the terminal attempt retried. These files are setup failure evidence, not performance results.

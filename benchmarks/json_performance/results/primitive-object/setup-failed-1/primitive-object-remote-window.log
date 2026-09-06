@@ -1,0 +1,8 @@
+ACQUIRED json-perf-20468-1788710282 load (1.744140625, 1.58447265625, 1.56201171875)
+RELEASED
+Traceback (most recent call last):
+  File "/Users/perry/json-primitive-object-20260906-codex/with_lock.py", line 30, in <module>
+    subprocess.run(cmd,stdout=log,stderr=subprocess.STDOUT,check=True)
+  File "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/subprocess.py", line 528, in run
+    raise CalledProcessError(retcode, process.args,
+subprocess.CalledProcessError: Command '['python3', '/Users/perry/json-primitive-object-20260906-codex/fastpaths.py']' returned non-zero exit status 1.

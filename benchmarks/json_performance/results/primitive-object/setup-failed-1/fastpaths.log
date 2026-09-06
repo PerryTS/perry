@@ -1,0 +1,16 @@
+Traceback (most recent call last):
+  File "/Users/perry/json-primitive-object-20260906-codex/run.py", line 19, in <module>
+    FIXTURES=json.loads((ROOT/'results/fixtures.json').read_text())
+  File "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/pathlib.py", line 1256, in read_text
+    with self.open(mode='r', encoding=encoding, errors=errors) as f:
+  File "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/pathlib.py", line 1242, in open
+    return io.open(self, mode, buffering, encoding, errors, newline,
+  File "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/pathlib.py", line 1110, in _opener
+    return self._accessor.open(self, flags, mode)
+FileNotFoundError: [Errno 2] No such file or directory: '/Users/perry/json-primitive-object-20260906-codex/results/fixtures.json'
+Traceback (most recent call last):
+  File "/Users/perry/json-primitive-object-20260906-codex/fastpaths.py", line 13, in <module>
+    subprocess.run([
+  File "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/subprocess.py", line 528, in run
+    raise CalledProcessError(retcode, process.args,
+subprocess.CalledProcessError: Command '['python3', '/Users/perry/json-primitive-object-20260906-codex/run.py', '--phase', 'verify', '--worker', '/Users/perry/json-primitive-object-20260906-codex/.work/worker', '--baseline-worker', '/Users/perry/json-primitive-object-20260906-codex/.work/baseline-worker', '--operations', 'parse,stringify', '--results-dir', '/Users/perry/json-primitive-object-20260906-codex/results/fastpaths']' returned non-zero exit status 1.

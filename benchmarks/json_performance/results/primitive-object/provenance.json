@@ -65,5 +65,7 @@
     "/Users/amlug/projects/perry/codex-json-fastpaths-artifacts/primitive-object-worker"
   ],
   "gc_policy_unchanged_from": "454daac4f8fc667ab4bc85b7b5b36c8bae56ae28",
-  "note": "Primitive inline objects reuse the generic preflight and key order, then borrow the rooted input once for callback-free emission. Descriptors, class instances, overflow and pointer/BigInt values retain the general traversal. No managed scratch or GC policy change. Same compiler/application object and matched build settings."
+  "note": "Primitive inline objects reuse the generic preflight and key order, then borrow the rooted input once for callback-free emission. Descriptors, class instances, overflow and pointer/BigInt values retain the general traversal. No managed scratch or GC policy change. Same compiler/application object and matched build settings.",
+  "measured_source_commit": "1196a5f84c2976d126bd193839ed00588643234a",
+  "all_recorded_source_hashes_match_commit": true
 }

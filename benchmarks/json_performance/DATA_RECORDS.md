@@ -1,16 +1,37 @@
-The current source adds allocation-free scalar parsing and a guarded record
-stringify path. **This is a development checkpoint. Full CPU/RSS parity and
-no-regression acceptance remain open. The preceding empty-object release has
-qualified full-matrix and paired measurements; it reaches 11/38 CPU, 58/74 peak RSS and
-28/36 retained RSS targets.**
+The current source adds allocation-free scalar parsing, guarded record emission
+and a direct walk of prevalidated primitive object fields. **This is a development
+checkpoint. CPU/RSS parity and no-regression acceptance remain open: the current
+qualified build meets 11/38 CPU, 58/74 peak RSS and 28/36 retained RSS targets.**
 
-The current candidate reuses the general object walker's preflight and key
-order to emit primitive inline fields without repeated handle retrieval. Its
-successful interval cannot invoke user code, allocate managed scratch or
-collect. It passes 138 runtime tests, 33 compiled Node comparisons and 24
-moving-GC runs. Local wide-object stringify instructions fall 23.46%, but
-qualified CPU/RSS measurements are still running; the standings above describe
-the preceding release. [Primitive-object evidence](results/primitive-object/README.md).
+The primitive-object walk reuses the generic input root, prototype handling,
+field preflight and key order, then borrows inline keys and values once. Its
+successful interval cannot invoke callbacks, allocate managed scratch or collect.
+Descriptors, class instances, overflow and complex fields retain the general walk.
+138 runtime tests, 33 compiled Node comparisons and 24 moving-GC runs pass.
+All 43 recorded source hashes match 1196a5f84c2976d126bd193839ed00588643234a.
+
+The full matrix contains 152 verifications, 456 timing trials and 432 memory
+trials, with 33 clean external observations. A separate 350-trial paired check
+covers 25 cases with 25 clean observations. Both windows pass their load and
+competing-process gates. Paired wide-object stringify CPU falls 26.28% versus
+the empty-object release, from 2.475 ms to 1.825 ms, with about 71 MiB peak RSS.
+The full matrix has Node at 6.368 ms and Bun at 0.665 ms: Perry still needs
+2.75 times Bun's CPU on this case.
+
+Paired tiny-object parse regresses 2.21%, small-record stringify 2.15%, null
+parse 4.80% (about 0.63 ns), inline-string parse 3.96%, small-record parse 0.73%,
+wide-object parse 0.98%, and empty-object parse 0.22%. Escaped stringify's
+apparent full-matrix regression does not reproduce. Numeric parse improves
+1.36% against the immediate reference; its older Unicode regression remains
+open. Reducing speculative primitive preflight on small records and investigating
+container/scalar wrapper costs are the next steps. These rows are not accepted
+as regression-free merely because the wide-object result improved.
+
+[Current 38 CPU rows and RAM](results/primitive-object/tables.md),
+[every target](results/primitive-object/parity.md),
+[paired ranges](results/primitive-object/recheck-primitive-object/summary.json),
+and [implementation and validation](results/primitive-object/README.md).
+The earlier checkpoints below remain as historical evidence.
 
 A subsequent change reuses the record preflight when emitting primitive-array
 children. It passes 133 runtime tests, 31 compiled Node comparisons and 20
@@ -21,7 +42,7 @@ unqualified because foreign workers started midway. Its implementation is
 included in the current qualified empty-object release below.
 [Validation-reuse implementation and evidence](results/record-array-proof/README.md).
 
-The current empty-object follow-up returns its inline output before field
+The preceding empty-object follow-up returns its inline output before field
 planning and temporary rooting, using only the probe that cannot allocate.
 Cold prototype lookup declines to the rooted general serializer. It passes
 135 runtime tests, 32 compiled Node comparisons and 22 moving-GC stress runs;
@@ -37,10 +58,10 @@ record-object stringify by 4.00%/3.53%/1.27%. Escaped parsing is 0.65% slower
 and 1 MB object-root parsing is 0.31% slower, with separated paired ranges.
 Numeric parsing's apparent 1.43% full-matrix regression does not reproduce in
 the paired check; the older regression versus Unicode remains unresolved.
-[Current 38 CPU rows and RAM](results/empty-object-leaf/tables.md),
+[Empty-object 38 CPU rows and RAM](results/empty-object-leaf/tables.md),
 [every target](results/empty-object-leaf/parity.md), and
 [paired ranges](results/empty-object-leaf/recheck-empty-object-leaf/summary.json).
-Current measured source is f7bc8848770d5b03422478de6e44384feeae6015;
+That measured source is f7bc8848770d5b03422478de6e44384feeae6015;
 all 40 recorded source hashes match it.
 
 A subsequent ARM mask-search experiment passed correctness but regressed
