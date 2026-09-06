@@ -612,6 +612,40 @@ pub(crate) fn test_descriptor_key_bit(key: &str) -> u64 {
     descriptor_key_bit(key)
 }
 
+/// #6759 phase 1 follow-up: the owner's meta record for descriptor-summary
+/// purposes, for ANY cell type that owns one.
+///
+/// [`super::prototype_chain::meta_capable_object`] answers only for
+/// `GC_TYPE_OBJECT`, because its other callers need an `ObjectHeader` to work
+/// with. The descriptor summary does not — it needs the `ObjectMeta` edge and
+/// nothing else — and every exotic cell has carried that edge since #6759
+/// phase 1 unified it behind [`super::cell_meta_slot`]. Asking the narrower
+/// question is what lets a `RegExp` receiver answer a summary probe at all.
+///
+/// * `None` — the cell type has no meta edge, so the caller must stay
+///   conservative and probe the tables.
+/// * `Some(null)` — the cell HAS the edge and no record was ever installed,
+///   which proves the tables hold no entry for this owner.
+/// * `Some(meta)` — read the summary words.
+///
+/// The three-way answer is the whole contract: collapsing "no edge" and "edge,
+/// but null" into one `None` would turn a conservative *maybe* into a false
+/// *no* for the cell types that still lack an edge.
+#[inline]
+unsafe fn descriptor_summary_meta(owner: usize) -> Option<*mut ObjectMeta> {
+    Some(*super::cell_meta_slot(owner)?)
+}
+
+/// Installing twin of [`descriptor_summary_meta`]. Install and probe MUST use
+/// the same predicate: a probe that admits a cell type whose installs do not
+/// set the key bits would answer a proven-absent for an owner that really has
+/// a descriptor — e.g. `Object.defineProperty(re, "lastIndex", {writable:false})`
+/// would stop throwing (test262 prototype/{exec,test}/y-fail-lastindex-no-write).
+#[inline]
+unsafe fn descriptor_summary_meta_ensure(owner: usize) -> Option<*mut ObjectMeta> {
+    super::object_meta_ensure_for_cell(owner)
+}
+
 /// #6759 Phase C2: record `key` in the owner's per-object meta summary so
 /// hot-path probes for OTHER keys can skip the descriptor tables. No-op for
 /// owners that cannot carry a meta record (handle-band ids, typed arrays,
@@ -628,13 +662,11 @@ pub(crate) fn test_descriptor_key_bit(key: &str) -> u64 {
 /// owner left behind can no longer be misread as the new tenant's.
 fn note_meta_descriptor_key(owner: usize, key: &str, accessor: bool) {
     unsafe {
-        if let Some(obj) = super::prototype_chain::meta_capable_object(owner) {
-            // No-move window: `object_meta_ensure` allocates, and a
-            // triggered collection could MOVE `owner` — installers
-            // (freeze/seal loops, defineProperty) hold raw owner pointers
-            // across repeated installs.
-            let _no_gc = crate::gc::GcSuppressScope::new();
-            let meta = super::object_meta_ensure(obj);
+        // No-move window: the ensure below allocates, and a triggered
+        // collection could MOVE `owner` — installers (freeze/seal loops,
+        // defineProperty) hold raw owner pointers across repeated installs.
+        let _no_gc = crate::gc::GcSuppressScope::new();
+        if let Some(meta) = descriptor_summary_meta_ensure(owner) {
             let bit = descriptor_key_bit(key);
             if accessor {
                 (*meta).accessor_key_bits |= bit;
@@ -652,22 +684,60 @@ fn note_meta_descriptor_key(owner: usize, key: &str, accessor: bool) {
 #[inline]
 pub(crate) fn may_have_descriptor_entry(owner: usize, key: &str, accessor: bool) -> bool {
     unsafe {
-        match super::prototype_chain::meta_capable_object(owner) {
-            Some(obj) => {
-                let meta = (*obj).meta;
+        let answer = match descriptor_summary_meta(owner) {
+            Some(meta) => {
                 if meta.is_null() {
-                    return false;
-                }
-                let word = if accessor {
-                    (*meta).accessor_key_bits
+                    false
                 } else {
-                    (*meta).attr_key_bits
-                };
-                word & descriptor_key_bit(key) != 0
+                    let word = if accessor {
+                        (*meta).accessor_key_bits
+                    } else {
+                        (*meta).attr_key_bits
+                    };
+                    word & descriptor_key_bit(key) != 0
+                }
             }
             None => true,
+        };
+        // Diagnostic only, and only when the instrument is armed: one relaxed
+        // load otherwise. Counts the RegExp receivers this filter sees and how
+        // many it now proves absent — before the meta edge was wired for
+        // RegExp the second number was 0 by construction.
+        if crate::hot_diag::regex_on() {
+            note_regexp_descriptor_probe(owner, answer);
         }
+        answer
     }
+}
+
+/// Test-only view of [`may_have_descriptor_entry`], so a test can assert the
+/// FILTER's answer rather than only the value it filters to. Without this a
+/// test can see that `get_property_attrs` returns `None`, which is equally
+/// true when the fast negative never fired — it would pass against a change
+/// that did nothing.
+#[cfg(test)]
+pub(crate) fn test_may_have_descriptor_entry(owner: usize, key: &str, accessor: bool) -> bool {
+    may_have_descriptor_entry(owner, key, accessor)
+}
+
+/// Diagnostic counter for [`may_have_descriptor_entry`]: is this owner a
+/// RegExp cell, and did the summary prove the key absent? Split out and marked
+/// cold so the armed check costs the hot path a predictable branch and nothing
+/// else.
+#[cold]
+unsafe fn note_regexp_descriptor_probe(owner: usize, answer: bool) {
+    let Some(header) = crate::value::addr_class::try_read_gc_header(owner) else {
+        return;
+    };
+    if header.obj_type != crate::gc::GC_TYPE_REGEXP {
+        return;
+    }
+    crate::hot_diag::regex_with(|d| {
+        d.desc_regexp_probes += 1;
+        if !answer {
+            d.desc_regexp_meta_negative += 1;
+        }
+    });
 }
 
 /// #6759 Phase C2: can an OWN string-keyed descriptor (attr or accessor)
@@ -682,9 +752,8 @@ unsafe fn own_descriptor_may_cover_key(addr: usize, key: f64) -> bool {
     ) else {
         return true;
     };
-    match super::prototype_chain::meta_capable_object(addr) {
-        Some(obj) => {
-            let meta = (*obj).meta;
+    match descriptor_summary_meta(addr) {
+        Some(meta) => {
             if meta.is_null() {
                 return false;
             }
@@ -702,9 +771,8 @@ unsafe fn own_descriptor_may_cover_key(addr: usize, key: f64) -> bool {
 #[inline]
 pub(crate) fn owner_may_have_descriptor_entries(owner: usize, accessor: bool) -> bool {
     unsafe {
-        match super::prototype_chain::meta_capable_object(owner) {
-            Some(obj) => {
-                let meta = (*obj).meta;
+        match descriptor_summary_meta(owner) {
+            Some(meta) => {
                 if meta.is_null() {
                     return false;
                 }
@@ -1148,11 +1216,10 @@ fn owner_index_push_proven_new(
 /// single-kind form's no-op arm).
 fn note_meta_descriptor_key_both(owner: usize, key: &str) -> Option<(bool, bool)> {
     unsafe {
-        let obj = super::prototype_chain::meta_capable_object(owner)?;
-        // No-move window: `object_meta_ensure` allocates (see
+        // No-move window: the ensure allocates (see
         // `note_meta_descriptor_key`).
         let _no_gc = crate::gc::GcSuppressScope::new();
-        let meta = super::object_meta_ensure(obj);
+        let meta = descriptor_summary_meta_ensure(owner)?;
         let bit = descriptor_key_bit(key);
         let accessor_bit_was_set = (*meta).accessor_key_bits & bit != 0;
         let attr_bit_was_set = (*meta).attr_key_bits & bit != 0;

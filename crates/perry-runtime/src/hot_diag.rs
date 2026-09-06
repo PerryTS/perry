@@ -125,6 +125,15 @@ pub struct RegexDiag {
     pub replace_calls: u64,
     pub replace_matches: u64,
     pub split_calls: u64,
+    /// `may_have_descriptor_entry` calls whose owner is a `GC_TYPE_REGEXP`
+    /// cell — the `lastIndex` writability question `set_last_index_throwing`
+    /// asks on every global/sticky `test()`/`exec()`.
+    pub desc_regexp_probes: u64,
+    /// Of those, the ones the per-object meta summary proved absent, so no
+    /// `key.to_string()` and no SipHash of `(usize, String)` ran. Before the
+    /// meta edge was wired for RegExp this was 0 by construction: the filter
+    /// answered "maybe" for every one of them.
+    pub desc_regexp_meta_negative: u64,
     per_pattern: HashMap<usize, PatStat>,
 }
 
@@ -238,7 +247,8 @@ impl RegexDiag {
             "[regex-diag] t={secs:.1}s new={} validated_hit={} site_hit={} pattern_bytes={} \
              compiles std={} fancy={} repeat={} cache_clears={} lazy_builds={} lazy_cache_hits={} \
              exec={} exec_matched={} capture_slots={} capture_bytes={} test={} test_global={} \
-             match={} replace={} replace_matches={} split={}",
+             match={} replace={} replace_matches={} split={} \
+             desc_regexp_probes={} desc_regexp_meta_negative={}",
             self.new_calls,
             self.new_validated_hit,
             self.new_site_hit,
@@ -259,6 +269,8 @@ impl RegexDiag {
             self.replace_calls,
             self.replace_matches,
             self.split_calls,
+            self.desc_regexp_probes,
+            self.desc_regexp_meta_negative,
         );
         // Merge by content (prefix, len, flags): distinct literal sites with
         // the same pattern are one row.
