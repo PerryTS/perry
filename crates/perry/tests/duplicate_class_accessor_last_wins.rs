@@ -94,7 +94,9 @@ console.log("expr", new Expr().w);
         String::from_utf8_lossy(&compile.stderr)
     );
 
-    let run = Command::new(&output).output().expect("run compiled fixture");
+    let run = Command::new(&output)
+        .output()
+        .expect("run compiled fixture");
     assert!(
         run.status.success(),
         "compiled fixture failed\nstdout:\n{}\nstderr:\n{}",
