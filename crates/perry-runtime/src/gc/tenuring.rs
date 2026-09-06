@@ -199,7 +199,17 @@ const RAISE_DEBOUNCE_CYCLES: u8 = 2;
 const NURSERY_CAP_SCALE_MAX: u8 = 4;
 
 crate::perry_thread_local! {
-    static TENURING_SURVIVALS: Cell<u8> = const { Cell::new(GC_TENURING_SURVIVALS_MAX) };
+    /// Power-on threshold. This is `OCCUPANCY_MIN_SURVIVALS`, not the ceiling:
+    /// see `SURVIVOR_ROUND_MEASURED`. Starting at the ceiling is a claim that
+    /// young objects live long, made before a single object has been given the
+    /// chance to die, and it is the expensive direction of that claim -- every
+    /// survivor is copied three times before it can be promoted.
+    static TENURING_SURVIVALS: Cell<u8> = const { Cell::new(OCCUPANCY_MIN_SURVIVALS) };
+    /// Has any survivor round been RATED yet on this thread -- i.e. did some
+    /// cycle put a cohort into the survivor space that the next cycle could
+    /// then follow? Until this is true the loop has no lifetime evidence of
+    /// any kind, and the occupancy rule may not move off the floor.
+    static SURVIVOR_ROUND_MEASURED: Cell<bool> = const { Cell::new(false) };
     static RAISE_STREAK: Cell<u8> = const { Cell::new(0) };
     /// Survival-rate lock: promote-on-first-copy until influx goes quiet.
     static PROMOTE_LOCK: Cell<bool> = const { Cell::new(false) };
@@ -546,6 +556,12 @@ pub(super) fn retune_after_scavenge(
     let desired = desired_survivor_bytes();
     let substantial = desired / 4;
     let prev_cohort_copied = PREV_COPIED_BYTES.with(|c| c.replace(eden_copied_bytes));
+    // A cohort went into the survivor space last cycle, so THIS cycle is the
+    // one that could follow it: from here on the loop has lifetime evidence and
+    // the occupancy rule is allowed to move off the floor.
+    if prev_cohort_copied > 0 {
+        SURVIVOR_ROUND_MEASURED.with(|m| m.set(true));
+    }
     let current = TENURING_SURVIVALS.with(Cell::get);
 
     if PROMOTE_LOCK.with(Cell::get) {
@@ -597,7 +613,28 @@ pub(super) fn retune_after_scavenge(
     // sweep seed on `... != 1` ("would occupancy alone already promote on first
     // copy?"). Clamping the shared function would silently disarm the sweep
     // seed, which is one of the two paths that IS allowed to reach 1.
-    let target = compute_target_survivals(eden_live_bytes, desired).max(OCCUPANCY_MIN_SURVIVALS);
+    //
+    // The startup follow-up makes that rule SYMMETRIC. `1 + desired / influx`
+    // returns the ceiling for a tiny influx and for a zero one, so on the first
+    // minors of a process — when the heap is nearly empty and no cohort has
+    // ever been followed — occupancy claims the maximum. That is the same
+    // category error in the other direction: a claim about LIFETIME from a
+    // measurement of SPACE, made before any evidence exists, and the expensive
+    // one, because every survivor is then copied up to three times before it
+    // may be promoted. Measured on the compiled claude-code TUI, the whole
+    // adaptive-vs-pinned difference was this startup excursion —
+    // `4 -> 2 (occupancy) -> 1 (lock)` inside turn 1 and nothing afterwards,
+    // worth +0.35..0.45 s at 3300 chars and +50 % at 400.
+    //
+    // So until one survivor round has actually been rated, occupancy holds at
+    // the floor: the lowest threshold that PRODUCES the measurement it needs to
+    // say anything at all. Evidence, not the ladder, is what lets it move.
+    let measured = SURVIVOR_ROUND_MEASURED.with(Cell::get);
+    let target = if measured {
+        compute_target_survivals(eden_live_bytes, desired).max(OCCUPANCY_MIN_SURVIVALS)
+    } else {
+        OCCUPANCY_MIN_SURVIVALS
+    };
     let next = if target < current {
         RAISE_STREAK.with(|s| s.set(0));
         target
@@ -763,7 +800,8 @@ fn set_survivals(current: u8, next: u8, eden_live_bytes: usize, why: &str) {
 
 #[cfg(test)]
 pub(super) fn reset_for_test() {
-    TENURING_SURVIVALS.with(|s| s.set(GC_TENURING_SURVIVALS_MAX));
+    TENURING_SURVIVALS.with(|s| s.set(OCCUPANCY_MIN_SURVIVALS));
+    SURVIVOR_ROUND_MEASURED.with(|m| m.set(false));
     RAISE_STREAK.with(|s| s.set(0));
     PROMOTE_LOCK.with(|l| l.set(false));
     UNLOCK_STREAK.with(|s| s.set(0));
@@ -956,7 +994,17 @@ mod tests {
     fn drops_immediately_and_rises_debounced() {
         reset_for_test();
         let desired = desired_survivor_bytes();
-        assert_eq!(tenuring_survivals(), 4);
+        // Power-on is the FLOOR now, not the ceiling (startup follow-up): the
+        // ladder may not claim a lifetime in either direction without evidence.
+        assert_eq!(tenuring_survivals(), OCCUPANCY_MIN_SURVIVALS);
+
+        // Give the loop its evidence, because this test is about the ladder's
+        // ASYMMETRY and not about the startup gate. Two cycles with a cohort
+        // that fully dies: the second rates the first, so a survivor round has
+        // been measured, and 0 % survival keeps the lock out of it.
+        retune_after_scavenge(desired * 2, 3 * desired, 0);
+        retune_after_scavenge(desired * 2, 3 * desired, 0);
+        assert_eq!(tenuring_survivals(), OCCUPANCY_MIN_SURVIVALS);
 
         // Heavy influx: instant drop, no debounce. #9851 changed the FLOOR this
         // lands on (2, not 1 — the occupancy rule may not claim a lifetime), not
@@ -1079,6 +1127,73 @@ mod tests {
              promote-on-first-copy — the measured path is untouched"
         );
         assert!(PROMOTE_LOCK.with(Cell::get), "...through the lock");
+        reset_for_test();
+    }
+
+    /// STARTUP FOLLOW-UP — the occupancy rule may not claim the CEILING either.
+    ///
+    /// `1 + desired / influx` returns the ceiling for a tiny influx and for a
+    /// zero one, so on the first minors of a process — heap nearly empty, no
+    /// cohort ever followed — occupancy claims the maximum. That is the same
+    /// category error as claiming 1: a statement about LIFETIME derived from a
+    /// measurement of SPACE, made before any evidence exists. It is also the
+    /// expensive direction, because every survivor is then copied up to three
+    /// times before it may be promoted.
+    ///
+    /// Measured on the compiled claude-code TUI, this was the WHOLE difference
+    /// between the adaptive loop and a pinned threshold: a single startup
+    /// excursion `4 -> 2 (occupancy) -> 1 (lock)` inside turn 1, nothing
+    /// afterwards, worth +0.35..0.45 s at 3300 characters and +50 % at 400.
+    ///
+    /// Sabotage: delete the `SURVIVOR_ROUND_MEASURED` gate in
+    /// `retune_after_scavenge` (or restore the power-on value to
+    /// `GC_TENURING_SURVIVALS_MAX`) and phase 1 fails — the loop reports the
+    /// ceiling on a heap where nothing has ever been rated.
+    #[test]
+    fn occupancy_may_not_claim_the_ceiling_before_any_round_is_measured() {
+        reset_for_test();
+        let d = desired_survivor_bytes();
+
+        // Precondition: the ARITHMETIC still says "ceiling" for a startup-sized
+        // influx. This change gates what the loop may do with that, exactly as
+        // #9851 did at the other end of the range.
+        assert_eq!(compute_target_survivals(0, d), GC_TENURING_SURVIVALS_MAX);
+        assert_eq!(compute_target_survivals(d / 64, d), GC_TENURING_SURVIVALS_MAX);
+
+        // Phase 1: power-on, then many startup-shaped minors — tiny influx,
+        // nothing copied, so nothing rateable. The loop must sit at the floor
+        // and never climb.
+        assert_eq!(tenuring_survivals(), OCCUPANCY_MIN_SURVIVALS);
+        for _ in 0..8 {
+            retune_after_scavenge(d / 64, 0, 0);
+            assert_eq!(
+                tenuring_survivals(),
+                OCCUPANCY_MIN_SURVIVALS,
+                "no survivor round has been rated, so occupancy has no lifetime \
+                 evidence and may not leave the floor"
+            );
+        }
+        assert!(
+            !PROMOTE_LOCK.with(Cell::get),
+            "and it must not have reached the floor via the lock either"
+        );
+
+        // Phase 2: once a cohort has actually gone through the survivor space
+        // and been followed, the ladder is allowed to move again. A cohort that
+        // fully dies keeps the lock out, so what is observed here is the
+        // occupancy rule being re-enabled and nothing else.
+        retune_after_scavenge(d / 64, 3 * d, 0);
+        retune_after_scavenge(d / 64, 3 * d, 0);
+        for _ in 0..8 {
+            retune_after_scavenge(d / 64, 0, 0);
+        }
+        assert_eq!(
+            tenuring_survivals(),
+            GC_TENURING_SURVIVALS_MAX,
+            "with a round measured and the influx quiet, the debounced rise must \
+             still reach the ceiling — the gate delays the claim until there is \
+             evidence, it does not remove the ladder"
+        );
         reset_for_test();
     }
 
@@ -1333,7 +1448,10 @@ mod tests {
         reset_for_test();
         let d = desired_survivor_bytes();
         seed_promote_lock_from_sweep(d / 8, 0);
-        assert_eq!(tenuring_survivals(), 4);
+        // Unchanged from power-on, which is the floor now rather than the
+        // ceiling (startup follow-up). The property under test is that the
+        // sweep seed REFUSED — it left the threshold where it found it.
+        assert_eq!(tenuring_survivals(), OCCUPANCY_MIN_SURVIVALS);
         reset_for_test();
     }
 
