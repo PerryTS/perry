@@ -167,6 +167,17 @@ pub(crate) struct EscapeFacts {
     pub fusible_uppercase_locals: HashSet<u32>,
     pub non_escaping_object_literals: HashMap<u32, Vec<String>>,
     pub non_escaping_object_literal_used_fields: HashMap<u32, HashSet<String>>,
+    /// #9846, the fourth member of this family: `for (let {segment: O} of
+    /// X.segment(q))` sites whose segment RECORD provably never escapes, so
+    /// the loop can drive a native cursor instead of materialising one record
+    /// per grapheme (census site 1 — 172,032 allocations per 400-character cc
+    /// reply, the largest single site by count).
+    ///
+    /// Populated but not yet consumed: the lowering waits on the runtime's
+    /// view-mode entry points (`INTERFACE_segments_view.md` §9b). Same
+    /// in-progress shape as `PurityFacts` / `ShapeStabilityFacts` above.
+    #[allow(dead_code)]
+    pub segment_for_of_sites: Vec<super::segview::SegmentForOfSite>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -677,6 +688,10 @@ pub(crate) fn collect_type_facts(
             stmts,
             &non_escaping_object_literals,
         );
+    // #9846: the segment-record member of the escape family. Cheap by
+    // construction — `collect_segment_for_of_sites` walks the region only
+    // when it holds a `for…of` whose subject is an `X.segment(q)` call.
+    let segment_for_of_sites = super::segview::collect_segment_for_of_sites(stmts);
     let scalar_replaceable_object_locals = non_escaping_news
         .keys()
         .chain(non_escaping_object_literals.keys())
@@ -773,6 +788,7 @@ pub(crate) fn collect_type_facts(
             fusible_uppercase_locals,
             non_escaping_object_literals,
             non_escaping_object_literal_used_fields,
+            segment_for_of_sites,
         },
         purity: PurityFacts {
             pure_helper_function_ids: clamp_fn_ids.clone(),

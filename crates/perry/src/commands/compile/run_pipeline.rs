@@ -1024,6 +1024,21 @@ pub fn run_with_parse_cache(
         perry_transform::module_const_fold::run(hir_module);
     }
 
+    // #9846: the segment-view for-of matcher's hit counter, taken here for
+    // the same reason the HIR trace is taken here — this is the last point
+    // before codegen, so the statements scanned are exactly the statements
+    // codegen consumes. Running it at this point (rather than only inside
+    // `collect_type_facts` on a rayon worker) is what makes "does the tier
+    // fire on the real bundle?" answerable in HIR-lowering time instead of a
+    // full LLVM build. Gated on `PERRY_SEGVIEW_DIAG`; costs nothing otherwise.
+    if perry_codegen::segview_diag_enabled() {
+        let mut diag = perry_codegen::SegViewDiag::default();
+        for (path, hir_module) in &ctx.native_modules {
+            diag.scan_module(&path.display().to_string(), hir_module);
+        }
+        diag.report();
+    }
+
     if trace_hir {
         dump_hir_for_debug(&ctx, args.focus.as_deref());
     }
