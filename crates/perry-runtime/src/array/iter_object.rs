@@ -734,8 +734,9 @@ unsafe fn dispatch_array_iterator_method_inner(
             // Field 0: backing array pointer (NaN-boxed).
             let backing_field = js_object_get_field(iter_obj(), 0);
             let backing_f64 = f64::from_bits(backing_field.bits());
-            // Array iterators clear their backing array at exhaustion. SQLite's
-            // statement iterator restarts a completed execution on the next call.
+            // Iterators clear their backing array at exhaustion. A completed
+            // SQLite statement iterator is also permanently closed; calling
+            // `StatementSync::iterate()` again creates a separate iterator.
             if JSValue::from_bits(backing_f64.to_bits()).is_undefined() {
                 return crate::iter_result::emit_iter_result_cached(
                     &scope,
@@ -763,12 +764,7 @@ unsafe fn dispatch_array_iterator_method_inner(
             };
 
             if idx >= len {
-                if kind == KIND_VALUES_NULL_DONE {
-                    // SQLite's statement iterator restarts on the next call.
-                    js_object_set_field(iter_obj(), 1, JSValue::number(0.0));
-                } else {
-                    js_object_set_field(iter_obj(), 0, JSValue::undefined());
-                }
+                js_object_set_field(iter_obj(), 0, JSValue::undefined());
                 return crate::iter_result::emit_iter_result_cached(
                     &scope,
                     &iter_h,
@@ -849,5 +845,57 @@ unsafe fn dispatch_array_iterator_method_inner(
             }
         }
         _ => f64::from_bits(TAG_UNDEFINED),
+    }
+}
+
+#[cfg(test)]
+mod sqlite_iterator_tests {
+    use super::*;
+    use std::sync::atomic::AtomicU64;
+
+    unsafe fn result_fields(result: f64) -> (u64, u64) {
+        let result = js_nanbox_get_pointer(result) as *mut ObjectHeader;
+        (
+            js_object_get_field(result, 0).bits(),
+            js_object_get_field(result, 1).bits(),
+        )
+    }
+
+    #[test]
+    fn sqlite_iterator_stays_exhausted_after_fused_for_of_drain() {
+        let _serialized = crate::array::test_serialize();
+        let epoch = AtomicU64::new(0);
+        let rows = crate::array::js_array_push_f64(crate::array::js_array_alloc(1), 7.0);
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let iter_h = scope.root_nanbox_f64(array_values_iter_null_done(
+            js_nanbox_pointer(rows as i64),
+            &epoch,
+            0,
+        ));
+        let iter = || js_nanbox_get_pointer(iter_h.get_nanbox_f64()) as *mut ObjectHeader;
+
+        unsafe {
+            // Model the optimized `for...of` driver: one yielded row followed
+            // by its terminal advance.
+            let first = dispatch_array_iterator_method_emit(iter(), "next", true, true);
+            assert_eq!(
+                result_fields(first),
+                (crate::value::TAG_FALSE, 7.0f64.to_bits())
+            );
+            let done = dispatch_array_iterator_method_emit(iter(), "next", true, true);
+            assert_eq!(
+                result_fields(done),
+                (crate::value::TAG_TRUE, crate::value::TAG_NULL)
+            );
+
+            // The same iterator must remain closed when user code calls
+            // `.next()` after the loop. Resetting its cursor used to return
+            // the first row again here.
+            let after = dispatch_array_iterator_method(iter(), "next");
+            assert_eq!(
+                result_fields(after),
+                (crate::value::TAG_TRUE, crate::value::TAG_NULL)
+            );
+        }
     }
 }
