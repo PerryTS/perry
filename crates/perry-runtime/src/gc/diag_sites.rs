@@ -374,7 +374,7 @@ pub(super) fn report_charges(label: &str) {
 // render path turns into O(length) allocations per call, and the only way to
 // tell WHICH names those are is to count them at the fork.
 
-thread_local! {
+crate::perry_thread_local! {
     /// `"<Builtin>.prototype.<method>" -> (calls, receiver_utf16_chars)`.
     static PRIMITIVE_DISPATCH: RefCell<HashMap<String, (u64, u64)>> =
         RefCell::new(HashMap::new());
