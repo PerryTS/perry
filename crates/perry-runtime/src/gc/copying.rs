@@ -1690,6 +1690,9 @@ pub(super) fn run_copied_minor_attempt(
     collector.sticky.restore();
     if !collector.skip_remembering {
         restore_surviving_dirty_coverage(&snapshot, &dirty_scan_covered, "copying_minor");
+        // Per minor, not at exit: the rig SIGKILLs cc. Cumulative counters, so
+        // the last line before the kill is the answer.
+        crate::arena::page_class_table_report();
     }
     // The mechanism, counted rather than assumed: with the pre-size working,
     // `capacity` is already >= `len` on entry and hashbrown never grows the
