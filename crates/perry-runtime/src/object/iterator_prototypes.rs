@@ -494,6 +494,31 @@ pub(crate) unsafe fn call_overridden_iterator_next(
     if proto.with_const_ptr::<ObjectHeader, _>(|proto| proto.is_null()) {
         return None;
     }
+    // The null-tower proof above is dead on any program that has allocated
+    // one iterator: `attach_iterator_prototype` materializes the tower at the
+    // FIRST iterator allocation, so every builtin advance after that reached
+    // the by-name lookup below and minted a fresh "next" key string just to
+    // learn nothing was patched — one 24-byte string per `for…of` step, on
+    // every array / Map / Set / string iterator in the program (~137,000 per
+    // 400-character claude-code reply; the second 32-byte site of the
+    // 2026-09-06 allocation census).
+    //
+    // Allocation-free proof of "not overridden": the prototype's OWN `next`
+    // slot still holds a closure whose native entry is the canonical thunk,
+    // AND no accessor descriptor is recorded for "next" on it. The own read
+    // is the certified non-allocating leaf (#9480); the accessor check is
+    // the per-key Bloom bit `set_accessor_descriptor` sets BEFORE inserting
+    // (#6759 C2), needed because `defineProperty(proto, "next", {get})` on
+    // an existing data property leaves the old closure in the slot and puts
+    // the accessor in the side table. Anything else — replaced, deleted,
+    // accessor, a bound copy — takes the by-name path, unchanged.
+    // The closure body is NOT covered by the enclosing `unsafe fn`'s implicit
+    // unsafe block, so the call is spelled out.
+    if proto.with_const_ptr::<ObjectHeader, _>(|proto| unsafe {
+        prototype_next_is_canonical(proto, canonical)
+    }) {
+        return None;
+    }
     let key = scope.root_raw_const_ptr(crate::string::js_string_from_bytes(b"next".as_ptr(), 4));
     let method = proto.with_const_ptr::<ObjectHeader, _>(|proto| {
         key.with_const_ptr::<crate::string::StringHeader, _>(|key| {
@@ -515,5 +540,223 @@ pub(crate) unsafe fn call_overridden_iterator_next(
     match result {
         Ok(value) => Some(value),
         Err(error) => crate::exception::js_throw(error),
+    }
+}
+
+/// Does `proto`'s OWN `next` data slot hold a closure whose native entry is
+/// `canonical`, with no accessor descriptor recorded for `"next"`? A `true`
+/// proves the prototype's `next` is the builtin (a user restoring the
+/// original closure object after a patch matches too, by entry rather than
+/// by object identity); a `false` proves nothing and the caller must run the
+/// full by-name lookup. Reads only: no allocation, no collection point.
+#[inline]
+unsafe fn prototype_next_is_canonical(proto: *const ObjectHeader, canonical: *const u8) -> bool {
+    let own = super::js_object_get_own_field_or_undef(
+        crate::value::js_nanbox_pointer(proto as i64),
+        b"next".as_ptr(),
+        4,
+    );
+    if !JSValue::from_bits(own.to_bits()).is_pointer() {
+        return false;
+    }
+    let own_ptr = crate::value::js_nanbox_get_pointer(own) as *const crate::closure::ClosureHeader;
+    if own_ptr.is_null() || crate::closure::get_valid_func_ptr(own_ptr) != canonical {
+        return false;
+    }
+    !super::descriptor_state::may_have_descriptor_entry(proto as usize, "next", true)
+}
+
+/// The prototype-override probe must be free on the path every real program
+/// takes: tower materialized (any iterator allocation does that), nothing
+/// patched. Before this module's `prototype_next_is_canonical`, that path
+/// allocated a "next" key string per call — the second-largest 32-byte
+/// allocation site of a claude-code reply (2026-09-06 census, ~137,000 per
+/// 400 characters), mislabelled there as a substring copy.
+#[cfg(test)]
+mod override_probe_allocation_tests {
+    use super::*;
+    use crate::closure::ClosureHeader;
+    use crate::value::{js_nanbox_get_pointer, js_nanbox_pointer, TAG_UNDEFINED};
+
+    const PATCHED_SENTINEL: f64 = 4242.0;
+
+    extern "C" fn patched_next_thunk(_closure: *const ClosureHeader) -> f64 {
+        PATCHED_SENTINEL
+    }
+
+    extern "C" fn accessor_getter_thunk(_closure: *const ClosureHeader) -> f64 {
+        f64::from_bits(TAG_UNDEFINED)
+    }
+
+    /// One array iterator, rooted; materializes the tower as a side effect.
+    unsafe fn rooted_array_iterator(
+        scope: &crate::gc::RuntimeHandleScope,
+    ) -> crate::gc::RuntimeHandle<'_> {
+        let arr = crate::array::js_array_alloc(1);
+        crate::array::js_array_push_f64(arr, 1.0);
+        let iter = crate::array::array_values_iter(js_nanbox_pointer(arr as i64));
+        assert!(
+            iterator_prototypes_materialized(),
+            "premise: allocating an iterator materializes the tower"
+        );
+        scope.root_nanbox_f64(iter)
+    }
+
+    unsafe fn array_proto() -> *mut ObjectHeader {
+        ARRAY_ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) as *mut ObjectHeader
+    }
+
+    unsafe fn set_proto_next(value: f64) {
+        let key = crate::string::js_string_from_bytes(b"next".as_ptr(), 4);
+        super::super::js_object_set_field_by_name(array_proto(), key, value);
+    }
+
+    unsafe fn own_next(proto: *const ObjectHeader) -> f64 {
+        super::super::js_object_get_own_field_or_undef(
+            js_nanbox_pointer(proto as i64),
+            b"next".as_ptr(),
+            4,
+        )
+    }
+
+    /// The counter, and the falsifier for the fix: N probes on an unpatched
+    /// iterator with the tower up must bump the arena by ZERO bytes. Before
+    /// the fix every probe minted a 24-byte "next" string (32 B rounded), so
+    /// this read N × 32 — the number the census reported per grapheme.
+    #[test]
+    fn probe_on_an_unpatched_iterator_allocates_nothing() {
+        unsafe {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let iter_h = rooted_array_iterator(&scope);
+            let iter_obj = || js_nanbox_get_pointer(iter_h.get_nanbox_f64()) as *mut ObjectHeader;
+
+            // Warm once: a first call may lazily build anything it builds.
+            assert!(
+                call_overridden_iterator_next(iter_obj(), crate::array::ARRAY_ITERATOR_CLASS_ID)
+                    .is_none()
+            );
+            const N: usize = 1000;
+            let minors_before = crate::gc::instruments::copying_minor_cycles();
+            let bytes_before = crate::arena::arena_in_use_bytes();
+            for _ in 0..N {
+                assert!(
+                    call_overridden_iterator_next(
+                        iter_obj(),
+                        crate::array::ARRAY_ITERATOR_CLASS_ID
+                    )
+                    .is_none(),
+                    "nothing is patched, so the probe must decline"
+                );
+            }
+            let bytes_after = crate::arena::arena_in_use_bytes();
+            assert_eq!(
+                crate::gc::instruments::copying_minor_cycles(),
+                minors_before,
+                "a collection inside the window would make a zero delta prove nothing"
+            );
+            assert_eq!(
+                bytes_after.saturating_sub(bytes_before),
+                0,
+                "the override probe allocated {} bytes over {N} calls on an unpatched \
+                 iterator with the tower materialized (it minted a \"next\" key string per call)",
+                bytes_after.saturating_sub(bytes_before)
+            );
+        }
+    }
+
+    /// The fast path must not be too eager: a replaced prototype `next` is
+    /// still honoured, and restoring the ORIGINAL closure object (what
+    /// `test_gap_array_iterator_manual_next.ts` (7) does) returns the probe
+    /// to its allocation-free decline — by native entry, not by identity.
+    #[test]
+    fn probe_honours_a_replaced_prototype_next_and_a_restored_one() {
+        unsafe {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let iter_h = rooted_array_iterator(&scope);
+            let iter_obj = || js_nanbox_get_pointer(iter_h.get_nanbox_f64()) as *mut ObjectHeader;
+
+            let original = scope.root_nanbox_f64(own_next(array_proto()));
+            assert!(
+                JSValue::from_bits(original.get_nanbox_f64().to_bits()).is_pointer(),
+                "premise: the prototype carries an own `next` closure"
+            );
+
+            let patched = crate::closure::js_closure_alloc(patched_next_thunk as *const u8, 0);
+            crate::closure::js_register_closure_arity(patched_next_thunk as *const u8, 0);
+            let patched_h = scope.root_nanbox_f64(js_nanbox_pointer(patched as i64));
+            set_proto_next(patched_h.get_nanbox_f64());
+            assert!(
+                !prototype_next_is_canonical(array_proto(), array_iterator_next_thunk as *const u8),
+                "a replaced prototype `next` must defeat the allocation-free proof"
+            );
+            assert_eq!(
+                call_overridden_iterator_next(iter_obj(), crate::array::ARRAY_ITERATOR_CLASS_ID),
+                Some(PATCHED_SENTINEL),
+                "the replacement installed on the prototype must be the one called"
+            );
+
+            set_proto_next(original.get_nanbox_f64());
+            assert!(
+                prototype_next_is_canonical(array_proto(), array_iterator_next_thunk as *const u8),
+                "restoring the original closure must re-enable the allocation-free proof"
+            );
+            assert!(
+                call_overridden_iterator_next(iter_obj(), crate::array::ARRAY_ITERATOR_CLASS_ID)
+                    .is_none(),
+                "after the restore the builtin advance is back"
+            );
+        }
+    }
+
+    /// `Object.defineProperty(proto, "next", { get })` records the accessor in
+    /// the descriptor side table and leaves the old data slot behind, so the
+    /// own-slot read alone would still see the canonical closure. The per-key
+    /// accessor bit is what makes the proof decline; without it the getter
+    /// would be silently bypassed.
+    #[test]
+    fn probe_declines_when_an_accessor_next_is_defined_on_the_prototype() {
+        unsafe {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let _iter_h = rooted_array_iterator(&scope);
+            let original = scope.root_nanbox_f64(own_next(array_proto()));
+            assert!(
+                prototype_next_is_canonical(array_proto(), array_iterator_next_thunk as *const u8),
+                "premise: unpatched prototype passes the proof"
+            );
+
+            let getter = crate::closure::js_closure_alloc(accessor_getter_thunk as *const u8, 0);
+            crate::closure::js_register_closure_arity(accessor_getter_thunk as *const u8, 0);
+            let getter_h = scope.root_nanbox_f64(js_nanbox_pointer(getter as i64));
+            let key = scope.root_string_ptr(crate::string::js_string_from_bytes(b"next".as_ptr(), 4));
+            super::super::js_object_define_accessor(
+                js_nanbox_pointer(array_proto() as i64),
+                key.with_const_ptr::<crate::StringHeader, _>(|k| {
+                    f64::from_bits(JSValue::string_ptr(k as *mut crate::StringHeader).bits())
+                }),
+                getter_h.get_nanbox_f64(),
+                f64::from_bits(TAG_UNDEFINED),
+            );
+            assert!(
+                !prototype_next_is_canonical(array_proto(), array_iterator_next_thunk as *const u8),
+                "an accessor `next` on the prototype must defeat the allocation-free proof \
+                 even though the data slot may still hold the canonical closure"
+            );
+
+            // Delete the accessor and put the data property back. The Bloom
+            // bit is sticky (zeroed only at meta creation), so the PROOF stays
+            // declined on this prototype for good — conservative: the by-name
+            // path runs, exactly as before the fix. Only the semantics are
+            // pinned here: the builtin advance is back.
+            key.with_const_ptr::<crate::StringHeader, _>(|k| {
+                super::super::js_object_delete_field(array_proto(), k);
+            });
+            set_proto_next(original.get_nanbox_f64());
+            let iter_obj = js_nanbox_get_pointer(_iter_h.get_nanbox_f64()) as *mut ObjectHeader;
+            assert!(
+                call_overridden_iterator_next(iter_obj, crate::array::ARRAY_ITERATOR_CLASS_ID)
+                    .is_none(),
+                "after delete + restore the builtin advance must be back"
+            );
+        }
     }
 }
