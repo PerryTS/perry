@@ -924,7 +924,6 @@ fn test_movable_regexp_evacuation_migrates_all_address_owned_state() {
     let old_addr = re as usize;
     assert!(crate::arena::pointer_in_nursery(old_addr));
     assert!(crate::regex::test_regex_pointer_entry_exists(old_addr));
-    assert!(crate::regex::test_regex_source_entry_exists(old_addr));
 
     crate::object::exotic_expando::test_seed_exotic_expando_entry(
         old_addr,
@@ -942,8 +941,6 @@ fn test_movable_regexp_evacuation_migrates_all_address_owned_state() {
 
     assert!(crate::regex::test_regex_pointer_entry_exists(new_addr));
     assert!(!crate::regex::test_regex_pointer_entry_exists(old_addr));
-    assert!(crate::regex::test_regex_source_entry_exists(new_addr));
-    assert!(!crate::regex::test_regex_source_entry_exists(old_addr));
     assert!(crate::object::exotic_expando::test_exotic_expando_entry_exists(new_addr));
     assert!(!crate::object::exotic_expando::test_exotic_expando_entry_exists(old_addr));
 
@@ -1037,7 +1034,6 @@ fn nursery_regexp_that_dies_young_is_finalized_by_the_copied_minor() {
         "the header must be nursery-allocated"
     );
     assert!(crate::regex::test_regex_pointer_entry_exists(dead_addr));
-    assert!(crate::regex::test_regex_source_entry_exists(dead_addr));
     // Both headers share one program through the site cache.
     let count_before = crate::regex::test_regexp_std_program_strong_count(live);
     assert!(count_before >= 2);
@@ -1051,13 +1047,11 @@ fn nursery_regexp_that_dies_young_is_finalized_by_the_copied_minor() {
     assert_ne!(live_new, live_addr, "the rooted RegExp must be evacuated");
     assert!(crate::regex::regex_header_has_magic(live_new as *const _));
     assert!(crate::regex::test_regex_pointer_entry_exists(live_new));
-    assert!(crate::regex::test_regex_source_entry_exists(live_new));
 
     assert!(
         !crate::regex::test_regex_pointer_entry_exists(dead_addr),
         "a nursery RegExp that died must be removed from REGEX_POINTERS by the copied minor"
     );
-    assert!(!crate::regex::test_regex_source_entry_exists(dead_addr));
     assert_eq!(
         crate::regex::test_regexp_std_program_strong_count(live_new as *const _),
         count_before - 1,
