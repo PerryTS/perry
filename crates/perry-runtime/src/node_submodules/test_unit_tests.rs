@@ -175,3 +175,21 @@ fn mock_timers_exposes_dispose_as_reset() {
     assert!(is_callable_value(symbol_method));
     assert_ne!(symbol_method.to_bits(), reset.to_bits());
 }
+
+#[test]
+fn mock_timers_accepts_null_and_primitives_as_default_options() {
+    for options in [f64::from_bits(crate::value::TAG_NULL), 1.0] {
+        let (apis, now) = parse_mock_timer_options(options);
+
+        assert_eq!(apis, crate::timer::MOCK_TIMERS_ALL_APIS);
+        assert_eq!(now, 0.0);
+    }
+}
+
+#[test]
+fn mock_timer_clock_values_accept_positive_infinity() {
+    assert_eq!(
+        validate_mock_timer_number("time", f64::INFINITY, false),
+        f64::INFINITY
+    );
+}
