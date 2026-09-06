@@ -420,7 +420,10 @@ impl PageGenerationCacheSet {
                 }
                 idx = key - self.base;
             }
-            self.table[idx] = PageClassEntry { range, epoch: self.epoch };
+            self.table[idx] = PageClassEntry {
+                range,
+                epoch: self.epoch,
+            };
             self.inserts += 1;
             return;
         }
@@ -2356,7 +2359,9 @@ mod page_class_table_tests {
 
     fn fresh<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
         // Thread-local table, thread-local map: a fresh thread is a fresh world.
-        std::thread::spawn(f).join().expect("page-class table test panicked")
+        std::thread::spawn(f)
+            .join()
+            .expect("page-class table test panicked")
     }
 
     fn table_stats() -> PageClassStats {
@@ -2474,7 +2479,10 @@ mod page_class_table_tests {
             assert_eq!(s2.span, s1.span);
             assert!(s2.refused >= 1, "the refusal must be counted, not silent");
             // Classify it again: still correct, still uncached.
-            assert_eq!(classify_heap_generation(wild + 8), HeapGeneration::Longlived);
+            assert_eq!(
+                classify_heap_generation(wild + 8),
+                HeapGeneration::Longlived
+            );
         });
     }
 
@@ -2505,14 +2513,20 @@ mod page_class_table_tests {
                 HeapGeneration::Nursery,
                 HeapSpace::NurseryEden,
             );
-            assert_eq!(classify_heap_generation(class_base + 8), HeapGeneration::Old);
+            assert_eq!(
+                classify_heap_generation(class_base + 8),
+                HeapGeneration::Old
+            );
             // Same key, other half: the cached entry (Old) must NOT answer.
             assert_eq!(
                 classify_heap_generation(class_base + half + 8),
                 HeapGeneration::Nursery,
                 "an entry for another range in the same class answered for this address"
             );
-            assert_eq!(classify_heap_generation(class_base + 8), HeapGeneration::Old);
+            assert_eq!(
+                classify_heap_generation(class_base + 8),
+                HeapGeneration::Old
+            );
         });
     }
 
