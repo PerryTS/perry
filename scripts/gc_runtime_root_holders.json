@@ -396,6 +396,54 @@
       "why": "RegExp construction/exec diagnostics (`PERRY_REGEX_DIAG`), off unless armed. Every field is a counter or an `Instant` except `per_pattern: HashMap<usize, PatStat>`, whose VALUE is Rust-owned (an owned prefix `String`, a flags `String`, counters). The KEY is a pattern `StringHeader` address, so it is a heap address \u2014 but it is used ONLY as an opaque grouping id and is never dereferenced: `PatStat::prefix` and `byte_len` are filled from the `&[u8]` argument at first insert, never by reading the key. Nothing here is traced, rooted or rewritten. The one consequence of the address being reused after a pattern dies is that two patterns' diagnostic counters merge into one row \u2014 an inaccuracy in an off-by-default diagnostic, with no collector implication. Distinct from `PASS1_MARKED`, whose addresses ARE walked and which therefore carries `non_moving_snapshot` with a pinned window."
     },
     {
+      "file": "crates/perry-runtime/src/intl/segments_view.rs",
+      "name": "DECLINE_EMPTY",
+      "verdict": "not_a_gc_pointer",
+      "why": "#9870: `PERRY_SEGVIEW_DIAG` tally for the Intl.Segmenter view mode \u2014 how often the fast path opened, and which check declined it. A plain `AtomicU64` written only through `bump()`'s `fetch_add(1, Relaxed)` and read only by the diagnostic dump: it holds a COUNT, never an address or a NaN-boxed value, so there is no slot for the collector to mark or rewrite."
+    },
+    {
+      "file": "crates/perry-runtime/src/intl/segments_view.rs",
+      "name": "DECLINE_NOT_GRAPHEME",
+      "verdict": "not_a_gc_pointer",
+      "why": "#9870: `PERRY_SEGVIEW_DIAG` tally for the Intl.Segmenter view mode \u2014 how often the fast path opened, and which check declined it. A plain `AtomicU64` written only through `bump()`'s `fetch_add(1, Relaxed)` and read only by the diagnostic dump: it holds a COUNT, never an address or a NaN-boxed value, so there is no slot for the collector to mark or rewrite."
+    },
+    {
+      "file": "crates/perry-runtime/src/intl/segments_view.rs",
+      "name": "DECLINE_NOT_SEGMENTER",
+      "verdict": "not_a_gc_pointer",
+      "why": "#9870: `PERRY_SEGVIEW_DIAG` tally for the Intl.Segmenter view mode \u2014 how often the fast path opened, and which check declined it. A plain `AtomicU64` written only through `bump()`'s `fetch_add(1, Relaxed)` and read only by the diagnostic dump: it holds a COUNT, never an address or a NaN-boxed value, so there is no slot for the collector to mark or rewrite."
+    },
+    {
+      "file": "crates/perry-runtime/src/intl/segments_view.rs",
+      "name": "DECLINE_NOT_STRING",
+      "verdict": "not_a_gc_pointer",
+      "why": "#9870: `PERRY_SEGVIEW_DIAG` tally for the Intl.Segmenter view mode \u2014 how often the fast path opened, and which check declined it. A plain `AtomicU64` written only through `bump()`'s `fetch_add(1, Relaxed)` and read only by the diagnostic dump: it holds a COUNT, never an address or a NaN-boxed value, so there is no slot for the collector to mark or rewrite."
+    },
+    {
+      "file": "crates/perry-runtime/src/intl/segments_view.rs",
+      "name": "DECLINE_NOT_UTF8",
+      "verdict": "not_a_gc_pointer",
+      "why": "#9870: `PERRY_SEGVIEW_DIAG` tally for the Intl.Segmenter view mode \u2014 how often the fast path opened, and which check declined it. A plain `AtomicU64` written only through `bump()`'s `fetch_add(1, Relaxed)` and read only by the diagnostic dump: it holds a COUNT, never an address or a NaN-boxed value, so there is no slot for the collector to mark or rewrite."
+    },
+    {
+      "file": "crates/perry-runtime/src/intl/segments_view.rs",
+      "name": "DECLINE_SEGMENT_PATCHED",
+      "verdict": "not_a_gc_pointer",
+      "why": "#9870: `PERRY_SEGVIEW_DIAG` tally for the Intl.Segmenter view mode \u2014 how often the fast path opened, and which check declined it. A plain `AtomicU64` written only through `bump()`'s `fetch_add(1, Relaxed)` and read only by the diagnostic dump: it holds a COUNT, never an address or a NaN-boxed value, so there is no slot for the collector to mark or rewrite."
+    },
+    {
+      "file": "crates/perry-runtime/src/intl/segments_view.rs",
+      "name": "MATERIALISE_SEGMENT",
+      "verdict": "not_a_gc_pointer",
+      "why": "#9870: `PERRY_SEGVIEW_DIAG` tally for the Intl.Segmenter view mode \u2014 how often the fast path opened, and which check declined it. A plain `AtomicU64` written only through `bump()`'s `fetch_add(1, Relaxed)` and read only by the diagnostic dump: it holds a COUNT, never an address or a NaN-boxed value, so there is no slot for the collector to mark or rewrite."
+    },
+    {
+      "file": "crates/perry-runtime/src/intl/segments_view.rs",
+      "name": "OPENS",
+      "verdict": "not_a_gc_pointer",
+      "why": "#9870: `PERRY_SEGVIEW_DIAG` tally for the Intl.Segmenter view mode \u2014 how often the fast path opened, and which check declined it. A plain `AtomicU64` written only through `bump()`'s `fetch_add(1, Relaxed)` and read only by the diagnostic dump: it holds a COUNT, never an address or a NaN-boxed value, so there is no slot for the collector to mark or rewrite."
+    },
+    {
       "file": "crates/perry-runtime/src/map.rs",
       "name": "MAP_COMPACTION_LOG",
       "count": 1,

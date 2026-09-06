@@ -1471,10 +1471,6 @@ fn regexp_pattern_is_regexp_like(pattern: f64) -> bool {
     }
 }
 
-/// Test if a string matches the regex pattern
-/// regex.test(string) -> boolean
-#[cfg(feature = "regex-engine")]
-#[no_mangle]
 /// `regex.test(haystack)` where `haystack` is a **bounded slice whose bounds
 /// ARE the string's ends** — the primitive the `Intl.Segmenter` view mode needs
 /// so a segment can be tested without being materialised.
@@ -1490,6 +1486,9 @@ fn regexp_pattern_is_regexp_like(pattern: f64) -> bool {
 /// and advance `lastIndex`, and that bookkeeping (`regexp_find_advancing`) is
 /// written against a `StringHeader`, not a slice. Answering it from a slice
 /// would either lose the update or invent one.
+// Its body reaches `diag_note_op` and `exec::`, both engine-gated, and its only
+// caller (`js_segments_view_regexp_test`) references it only under this feature.
+#[cfg(feature = "regex-engine")]
 pub(crate) fn regexp_test_str_bounded(re: *const RegExpHeader, hay: &str) -> Option<bool> {
     if !is_valid_regex_ptr(re) {
         return None;
@@ -1514,6 +1513,10 @@ pub(crate) fn regexp_test_str_bounded(re: *const RegExpHeader, hay: &str) -> Opt
     }
 }
 
+/// Test if a string matches the regex pattern
+/// regex.test(string) -> boolean
+#[cfg(feature = "regex-engine")]
+#[no_mangle]
 pub extern "C" fn js_regexp_test(re: *const RegExpHeader, s: *const StringHeader) -> i32 {
     if !is_valid_regex_ptr(re) || !is_valid_ptr(s) {
         return 0;
