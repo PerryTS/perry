@@ -1,0 +1,9 @@
+{
+  "worker_sha256": "b7d7c80538807d56832567f2ff3f90045e248237ca3a1048ba03053d6b7861fd",
+  "instructions_by_symbol": {
+    "__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json14stringify_flat10emit_piece": 193,
+    "__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json14stringify_flat12string_piece": 391,
+    "__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json14stringify_flat11emit_object": 713,
+    "__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json23stringify_record_output11emit_record": 809
+  }
+}

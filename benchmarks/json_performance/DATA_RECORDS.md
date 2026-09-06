@@ -1,4 +1,26 @@
-The latest source writes validated escaped UTF-8 strings directly into final
+The latest completed experiment, short-tail (090e120f3), reduces paired
+small-record stringify CPU 9.82%, from 0.3212 to 0.2897 microseconds. It also
+introduces confirmed regressions, including long-ASCII parse +3.69%, 1 KB object
+parse +1.51%, escaped stringify +1.36%, wide stringify +0.87%, and numeric parse
++0.69%. Scalar peak RSS rises by 0.03125–0.078125 MiB and retained-empty RSS by
+0.203125 MiB. No-regression acceptance fails; escaped-count remains the retained
+comparison reference. The next experiment limits the new scan to scalar output
+planning to test whether the small-record benefit survives that restriction.
+
+172 runtime tests, 38 pinned compiled Node comparisons, 34 moving-GC runs and
+59 source hashes pass. Full 152/456/432 and paired 700-trial matrices plus 24
+retained-empty trials qualify with 32/42 clean observations. All-row acceptance
+remains open at **12/38 CPU, 58/74 peak RSS and 28/36 retained RSS**. All older
+unresolved regressions remain requirements.
+[All 38 experimental CPU rows](results/short-tail/cpu-38.md),
+[CPU and RAM](results/short-tail/tables.md),
+[paired ranges](results/short-tail/recheck-short-tail/summary.json),
+[validation and limitations](results/short-tail/README.md), and
+[next comparison](results/short-tail/next-steps.md).
+
+The retained escaped-count checkpoint follows.
+
+This source writes validated escaped UTF-8 strings directly into final
 output, using bounded vector blocks to count expansion on ARM and a scalar
 lookup table elsewhere. Native plans contain only counts; input pointers are
 rederived after final allocation. Malformed UTF-8/WTF-8 retains the general

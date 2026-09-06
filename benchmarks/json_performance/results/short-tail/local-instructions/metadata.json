@@ -1,0 +1,66 @@
+{
+  "purpose": "Local instruction-count diagnostic only; no quiet CPU/RSS acceptance. Process-wide instructions include startup and warmup, unlike loop CPU. Identical fixed calls and worker.o across Perry arms.",
+  "utc": "2026-09-06T20:52:54Z",
+  "cpu": "Apple M1 Max",
+  "load": [
+    96.73583984375,
+    99.7529296875,
+    78.05029296875
+  ],
+  "cases": [
+    [
+      "small_record",
+      "stringify",
+      500000
+    ],
+    [
+      "tiny_object",
+      "stringify",
+      2000000
+    ],
+    [
+      "object_1k",
+      "stringify",
+      500000
+    ],
+    [
+      "long_string_1m",
+      "stringify",
+      1100
+    ],
+    [
+      "unicode_1m",
+      "stringify",
+      1400
+    ],
+    [
+      "escaped_1m",
+      "stringify",
+      84
+    ],
+    [
+      "wide_1m",
+      "stringify",
+      216
+    ],
+    [
+      "numbers_1m",
+      "parse",
+      92
+    ],
+    [
+      "empty_object",
+      "parse",
+      2000000
+    ],
+    [
+      "small_record",
+      "parse",
+      500000
+    ]
+  ],
+  "worker_sha256": {
+    "escaped-count": "3edcd36fee828b666699a173f85badce0e7f65d4d65d45299c2214ef967ea624",
+    "short-tail": "b7d7c80538807d56832567f2ff3f90045e248237ca3a1048ba03053d6b7861fd"
+  }
+}

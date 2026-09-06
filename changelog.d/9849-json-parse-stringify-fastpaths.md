@@ -25,3 +25,10 @@ The compact-plan experiment was measured and reverted: smaller generated
 emitters still regressed small-record stringify 3.62%, escaped stringify 1.56%
 and record-array parse 1.26–1.55%. Full validation and paired evidence are
 preserved under results/compact-piece; escaped-count remains the reference.
+
+The short-tail experiment validates with 172 runtime tests, 38 compiled
+comparisons, 34 moving-GC runs and complete quiet CPU/RSS matrices. It lowers
+paired small-record stringify CPU 9.82% but regresses long-ASCII parse 3.69%,
+escaped stringify 1.36% and other rows. Scalar peak and retained-empty RSS also
+rise. It remains experimental; results/short-tail contains all raw results and
+ranges. The next comparison limits the short scan to scalar output planning.
