@@ -1124,6 +1124,24 @@ fn rewrite_site(list: &mut Vec<Stmt>, i: usize, site: &SegmentForOfSite, fresh: 
         }
     }
 
+    if segview_diag_enabled() {
+        // What was actually EMITTED, per site. Pairs with the classifier's
+        // `[segview]` line: that one says what each use of the segment binding
+        // COULD be answered by, this one says which entry point it now IS.
+        // v1 emits `_segment` once per step and leaves the body alone, so
+        // `code_point_at` and `regexp_test` are 0 here even on a site the
+        // classifier scored as answerable -- that difference is the v1/v2 gap,
+        // stated by the instrument instead of being inferred from the design.
+        let u = &site.segment_uses;
+        eprintln!(
+            "[segview-lower] {} open=1 next=1 segment=1 code_point_at=0 regexp_test=0 \
+             declined=none (classifier: code_point_at={} regexp_test={} materialise={})",
+            site.record_name,
+            u.code_point_at,
+            u.regexp_test_static + u.regexp_test_dynamic,
+            u.materialise,
+        );
+    }
     // Statement rewrite: hoist, open, and the conditional iterator.
     list[i] = let_any(recv, "__segview_recv", recv_expr);
     list.insert(i + 1, let_any(inp, "__segview_input", input_expr));
@@ -1285,7 +1303,7 @@ fn for_each_expr_in_stmt_shallow_mut(stmt: &mut Stmt, f: &mut impl FnMut(&mut Ex
 /// with it.
 fn max_local_id_in_module(m: &perry_hir::Module) -> u32 {
     let mut max = 0u32;
-    let mut note_stmts = |stmts: &[Stmt], max: &mut u32| {
+    let note_stmts = |stmts: &[Stmt], max: &mut u32| {
         for_each_stmt_list(stmts, &mut |list| {
             for s in list {
                 match s {
