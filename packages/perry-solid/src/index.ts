@@ -82,6 +82,7 @@ export const render = native.render;
 export const createElement = native.createElement;
 export const createTextNode = native.createTextNode;
 export const insert = native.insert;
+export const insertNode = native.insertNode;
 export const spread = native.spread;
 export const setProp = native.setProp;
 export const createComponent = native.createComponent;

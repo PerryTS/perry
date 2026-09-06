@@ -1,0 +1,1 @@
+PASS Solid JSX: native updates, components, keyed identity, conditionals, spreads, refs, fragments, disposal

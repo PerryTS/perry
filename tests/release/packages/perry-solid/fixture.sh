@@ -18,3 +18,12 @@ if ! grep -Eq 'Found [0-9]+ module\(s\): [1-9][0-9]* native, 0 JavaScript' perry
   echo 'FAIL perry-solid — expected every module to compile natively'
   exit 1
 fi
+cp perry-compile.log perry-renderer-compile.log
+node test/jsx/oracle.cjs
+node --conditions=browser test/jsx/generated.ts > jsx-node-out.txt
+diff -u "$fixture_dir/expected-jsx.txt" jsx-node-out.txt
+PERRY_DISABLE_BUILD_CACHE=1 fixture_compile_run_diff perry-solid-jsx test/jsx/main.tsx "$fixture_dir/expected-jsx.txt"
+if ! grep -Eq 'Found [0-9]+ module\(s\): [1-9][0-9]* native, 0 JavaScript' perry-compile.log; then
+  echo 'FAIL perry-solid-jsx — expected every module to compile natively'
+  exit 1
+fi
