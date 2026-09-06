@@ -39,6 +39,14 @@ pub(crate) unsafe fn nm_dispatch_v8(ctx: &NmCtx, module_name: &str, method_name:
         typed_kind
     );
     match (module_name, method_name) {
+        ("v8", name @ ("Serializer" | "Deserializer")) => {
+            let message = format!("Class constructor {name} cannot be invoked without 'new'");
+            crate::fs::validate::throw_type_error_with_code(&message, "ERR_CONSTRUCT_CALL_REQUIRED")
+        }
+        ("v8", name @ ("DefaultSerializer" | "DefaultDeserializer" | "GCProfiler")) => {
+            let message = format!("Class constructor {name} cannot be invoked without 'new'");
+            crate::node_submodules::diagnostics::throw_type_error_no_code(message.as_bytes())
+        }
         ("v8", "serialize") => crate::node_v8::js_v8_serialize(arg(0)),
         ("v8", "deserialize") => crate::node_v8::js_v8_deserialize(arg(0)),
         ("v8", "getHeapStatistics") => crate::node_v8::js_v8_get_heap_statistics(),
