@@ -373,6 +373,31 @@ extern "C" fn ns_finished_error_false_close(closure: *const ClosureHeader) -> f6
     f64::from_bits(TAG_UNDEFINED)
 }
 
+extern "C" fn ns_finished_default_completion(closure: *const ClosureHeader) -> f64 {
+    if closure.is_null() || js_closure_get_capture_f64(closure, 2).to_bits() == TAG_TRUE {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let stream = js_closure_get_capture_f64(closure, 0);
+    let readable_done = !js_node_stream_has_readable_side(stream)
+        || has_truthy_hidden(stream, hidden_end_emitted_key());
+    let writable_done = !js_node_stream_has_writable_side(stream)
+        || has_truthy_hidden(stream, hidden_finish_emitted_key());
+    let closed = has_truthy_hidden(stream, hidden_key(b"closed"));
+    let error = readable_hidden_error(stream);
+    if error.is_none() && !closed && !(readable_done && writable_done) {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+
+    js_closure_set_capture_f64(closure as *mut ClosureHeader, 2, f64::from_bits(TAG_TRUE));
+    let callback = js_closure_get_capture_f64(closure, 1);
+    if let Some(error) = error {
+        call_listener_args(stream, callback, &[error]);
+    } else {
+        call_listener_args(stream, callback, &[]);
+    }
+    f64::from_bits(TAG_UNDEFINED)
+}
+
 extern "C" fn ns_finished_signal_abort(closure: *const ClosureHeader) -> f64 {
     if closure.is_null() {
         return f64::from_bits(TAG_UNDEFINED);

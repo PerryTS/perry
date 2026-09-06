@@ -28,10 +28,39 @@ thread_local! {
     static TRANSFORM_THIS_HAS_STREAM_STATE: RefCell<Vec<bool>> = const { RefCell::new(Vec::new()) };
     static TRANSFORM_FLUSH_COUNT: RefCell<usize> = const { RefCell::new(0) };
     static UNCAUGHT_STREAM_ERROR_COUNT: RefCell<usize> = const { RefCell::new(0) };
+    static FINISHED_CALLBACK_COUNT: RefCell<usize> = const { RefCell::new(0) };
 }
 
 fn catches_runtime_throw(f: impl FnOnce()) -> bool {
     crate::exception::catch_js_throw(f).is_err()
+}
+
+extern "C" fn capture_finished_callback(_closure: *const ClosureHeader) -> f64 {
+    FINISHED_CALLBACK_COUNT.with(|count| *count.borrow_mut() += 1);
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+#[test]
+fn finished_waits_for_both_passthrough_sides() {
+    FINISHED_CALLBACK_COUNT.with(|count| *count.borrow_mut() = 0);
+    crate::closure::js_register_closure_arity(capture_finished_callback as *const u8, 0);
+
+    let stream = js_node_stream_passthrough_new(f64::from_bits(TAG_UNDEFINED));
+    let callback =
+        box_pointer(js_closure_alloc(capture_finished_callback as *const u8, 0) as *const u8);
+    let mut args = crate::array::js_array_alloc(2);
+    args = crate::array::js_array_push_f64(args, stream);
+    args = crate::array::js_array_push_f64(args, callback);
+    js_node_stream_finished(args);
+
+    let handle = raw_ptr_from_value(stream) as i64;
+    js_node_stream_method_end(handle, string_value("done"));
+    let _ = crate::promise::js_promise_run_microtasks();
+    FINISHED_CALLBACK_COUNT.with(|count| assert_eq!(*count.borrow(), 0));
+
+    js_node_stream_method_resume(handle);
+    let _ = crate::promise::js_promise_run_microtasks();
+    FINISHED_CALLBACK_COUNT.with(|count| assert_eq!(*count.borrow(), 1));
 }
 
 pub(super) fn string_value(s: &str) -> f64 {
