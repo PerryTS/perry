@@ -373,76 +373,83 @@ pub(crate) fn for_in_keys_with(value: f64, lazy_shadow: bool) -> *mut ArrayHeade
         }
         // Emit this level's enumerable own keys (OrdinaryOwnPropertyKeys order),
         // skipping any name already shadowed by a closer level.
-        let level_scope = crate::gc::RuntimeHandleScope::new();
-        let enum_arr =
-            level_scope.root_raw_const_ptr(js_object_keys_value(current.get_nanbox_f64()));
-        let en = enum_arr.with_const_ptr(|array| crate::array::js_array_length(array));
-        if diag {
-            let en64 = en as u64;
-            crate::hot_diag::enum_with(|d| {
-                d.for_in_levels += 1;
-                d.for_in_key_arrays += 1;
-                d.for_in_keys_seen += en64;
-            });
-        }
-        // Level 0 can be shadowed by nothing, so its own enumerable names go
-        // straight out — own property names are unique within one object, which
-        // is the only thing the set was doing for this level.
-        if lazy_shadow && level == 0 && !shadow_live {
-            for i in 0..en {
-                let kv = enum_arr.with_const_ptr(|keys| crate::array::js_array_get(keys, i));
-                let updated = out.with_mut_ptr(|out| {
-                    crate::array::js_array_push_f64(out, f64::from_bits(kv.bits()))
-                });
-                out.set_raw_mut_ptr(updated);
-            }
+        // The runtime handle stack is strictly LIFO: dropping this per-level
+        // scope truncates everything pushed after it, including a push into an
+        // OUTER scope. `visited.push` roots into `scope`, so it must happen
+        // after this block closes, not inside it.
+        {
+            let level_scope = crate::gc::RuntimeHandleScope::new();
+            let enum_arr =
+                level_scope.root_raw_const_ptr(js_object_keys_value(current.get_nanbox_f64()));
+            let en = enum_arr.with_const_ptr(|array| crate::array::js_array_length(array));
             if diag {
                 let en64 = en as u64;
-                crate::hot_diag::enum_with(|d| d.for_in_keys_emitted += en64);
+                crate::hot_diag::enum_with(|d| {
+                    d.for_in_levels += 1;
+                    d.for_in_key_arrays += 1;
+                    d.for_in_keys_seen += en64;
+                });
             }
-        } else {
-            if en > 0 && !shadow_live {
-                // First level >= 1 with something to filter: pay for the set
-                // now, over exactly the levels already walked.
-                build_shadow_set(visited.as_slice(), &mut seen, &mut scratch, diag);
-                shadow_live = true;
-                if diag {
-                    crate::hot_diag::enum_with(|d| d.for_in_shadow_built += 1);
-                }
-            }
-            for i in 0..en {
-                let kv = enum_arr.with_const_ptr(|keys| crate::array::js_array_get(keys, i));
-                let name = match key_string(kv, &mut scratch) {
-                    Some(s) => s,
-                    None => continue,
-                };
-                let fresh = seen.insert(name);
-                if diag {
-                    let deep = level > 0;
-                    crate::hot_diag::enum_with(|d| {
-                        d.for_in_seen_inserts += 1;
-                        if !fresh {
-                            d.for_in_seen_dupes += 1;
-                        } else {
-                            d.for_in_keys_emitted += 1;
-                            if deep {
-                                d.for_in_keys_emitted_deep += 1;
-                            }
-                        }
-                    });
-                }
-                if fresh {
+            // Level 0 can be shadowed by nothing, so its own enumerable names go
+            // straight out — own property names are unique within one object, which
+            // is the only thing the set was doing for this level.
+            if lazy_shadow && level == 0 && !shadow_live {
+                for i in 0..en {
+                    let kv = enum_arr.with_const_ptr(|keys| crate::array::js_array_get(keys, i));
                     let updated = out.with_mut_ptr(|out| {
                         crate::array::js_array_push_f64(out, f64::from_bits(kv.bits()))
                     });
                     out.set_raw_mut_ptr(updated);
                 }
+                if diag {
+                    let en64 = en as u64;
+                    crate::hot_diag::enum_with(|d| d.for_in_keys_emitted += en64);
+                }
+            } else {
+                if en > 0 && !shadow_live {
+                    // First level >= 1 with something to filter: pay for the set
+                    // now, over exactly the levels already walked.
+                    build_shadow_set(visited.as_slice(), &mut seen, &mut scratch, diag);
+                    shadow_live = true;
+                    if diag {
+                        crate::hot_diag::enum_with(|d| d.for_in_shadow_built += 1);
+                    }
+                }
+                for i in 0..en {
+                    let kv = enum_arr.with_const_ptr(|keys| crate::array::js_array_get(keys, i));
+                    let name = match key_string(kv, &mut scratch) {
+                        Some(s) => s,
+                        None => continue,
+                    };
+                    let fresh = seen.insert(name);
+                    if diag {
+                        let deep = level > 0;
+                        crate::hot_diag::enum_with(|d| {
+                            d.for_in_seen_inserts += 1;
+                            if !fresh {
+                                d.for_in_seen_dupes += 1;
+                            } else {
+                                d.for_in_keys_emitted += 1;
+                                if deep {
+                                    d.for_in_keys_emitted_deep += 1;
+                                }
+                            }
+                        });
+                    }
+                    if fresh {
+                        let updated = out.with_mut_ptr(|out| {
+                            crate::array::js_array_push_f64(out, f64::from_bits(kv.bits()))
+                        });
+                        out.set_raw_mut_ptr(updated);
+                    }
+                }
             }
+            // Mark ALL own names (incl non-enumerable) so they shadow the remainder
+            // of the chain — but only once the set is live. Until then the level is
+            // recorded and the array is not materialised at all: this is the second
+            // of the four key arrays per call that the measurement found.
         }
-        // Mark ALL own names (incl non-enumerable) so they shadow the remainder
-        // of the chain — but only once the set is live. Until then the level is
-        // recorded and the array is not materialised at all: this is the second
-        // of the four key arrays per call that the measurement found.
+
         if shadow_live {
             mark_own_names(current.get_nanbox_f64(), &mut seen, &mut scratch, diag);
         } else {
