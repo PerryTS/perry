@@ -253,13 +253,37 @@ const NON_COLLECTING: &[&str] = &[
 ];
 
 /// Guard against a pathological function turning this pass into the compile's
-/// bottleneck: the reachability walk is O(blocks) per slot load, so the product
-/// is what matters. Above the cap the function keeps today's IR — the pass is
-/// an improvement, not a correctness precondition, so declining is safe.
+/// bottleneck: the reachability walk is O(blocks) per ROOT LOAD — one walk per
+/// `groups` entry below, not one per reloadable value — so `blocks × groups` is
+/// the product that bounds the cost.
 ///
 /// Sized from the corpora: the largest function in the dependency-scale corpus
 /// (`zod`'s parse core) is ~1400 blocks with ~90 slot loads, an order of
 /// magnitude under this.
+///
+/// # Declining is NOT correctness-neutral (#9135 follow-up)
+///
+/// The previous comment here read "the pass is an improvement, not a
+/// correctness precondition, so declining is safe". Under the NATIVE root
+/// lowering that is false, and Claude-of-Duty's `Arm.constructor` is the
+/// counterexample: the receiver of an inline class-field store is read out of
+/// its slot, unmasked to an `i64`/`double`, and carried across `buildSleeve`.
+/// RS4GC relocates the `addrspace(1)` load but cannot touch the unmasked copy
+/// (the "case 2" shape in this module's header), so when this pass declines
+/// NOTHING re-reads the slot and the store lands in a from-space object. It
+/// faults under `PERRY_GC_PROTECT_FROMSPACE=1` and silently corrupts the field
+/// without it.
+///
+/// That function measured 4924 blocks × 747 root loads = 3.7M — comfortably
+/// under this cap — but the check multiplied by `values.len()` (2102, every
+/// pure-bit-op derivation counted separately since #7664) for 10.4M, so it
+/// declined on a metric ~2.8x larger than the cost it was guarding.
+///
+/// So the bound stays (a real pathological function must still be able to opt
+/// out), but it is measured against the walk's actual driver. A function that
+/// genuinely exceeds it still keeps today's IR and can still carry a stale
+/// register: the cap trades a compile-time cliff for a correctness risk, and
+/// that residual risk is why the number is generous rather than tight.
 const MAX_BLOCK_LOAD_PRODUCT: usize = 8_000_000;
 
 /// How long a derivation may get before the pass declines to re-materialise it.
@@ -549,7 +573,27 @@ pub(crate) fn apply_to_function(func: &mut LlFunction) -> usize {
             break;
         }
     }
-    if blocks.len().saturating_mul(values.len()) > MAX_BLOCK_LOAD_PRODUCT {
+    // Built BEFORE the cap check: `groups` is what the reachability walk below
+    // iterates (one walk per root load), so it is the term the cap must be
+    // measured against. See `MAX_BLOCK_LOAD_PRODUCT`.
+    //
+    // Keyed on `(recipe[0], root_ptr)`, not `recipe[0]` alone — #7725's capture-GET extension is
+    // the one case where a chain's `root_ptr` CHANGES partway through (the closure-ptr slot
+    // becomes a synthetic per-index key once the derivation passes through
+    // `js_closure_get_capture_bits`), so two sub-chains sharing one root LOAD can need two
+    // different invalidation conditions. Before #7725 every member of a `recipe[0]` group had
+    // the identical `root_ptr` by construction (it was always inherited, never overridden), so
+    // this is additive: it can only split a group that would otherwise have mixed two
+    // conditions under one, never change the grouping of any existing (non-capture) chain.
+    let mut groups: HashMap<((usize, usize), String), Vec<usize>> = HashMap::new();
+    for (i, v) in values.iter().enumerate() {
+        groups
+            .entry((v.recipe[0], v.root_ptr.clone()))
+            .or_default()
+            .push(i);
+    }
+
+    if blocks.len().saturating_mul(groups.len()) > MAX_BLOCK_LOAD_PRODUCT {
         return 0;
     }
 
@@ -604,21 +648,6 @@ pub(crate) fn apply_to_function(func: &mut LlFunction) -> usize {
     //
     // Grouping by root load also puts the cost back at O(blocks × loads).
     //
-    // Keyed on `(recipe[0], root_ptr)`, not `recipe[0]` alone — #7725's capture-GET extension is
-    // the one case where a chain's `root_ptr` CHANGES partway through (the closure-ptr slot
-    // becomes a synthetic per-index key once the derivation passes through
-    // `js_closure_get_capture_bits`), so two sub-chains sharing one root LOAD can need two
-    // different invalidation conditions. Before #7725 every member of a `recipe[0]` group had
-    // the identical `root_ptr` by construction (it was always inherited, never overridden), so
-    // this is additive: it can only split a group that would otherwise have mixed two
-    // conditions under one, never change the grouping of any existing (non-capture) chain.
-    let mut groups: HashMap<((usize, usize), String), Vec<usize>> = HashMap::new();
-    for (i, v) in values.iter().enumerate() {
-        groups
-            .entry((v.recipe[0], v.root_ptr.clone()))
-            .or_default()
-            .push(i);
-    }
     let mut group_keys: Vec<((usize, usize), String)> = groups.keys().cloned().collect();
     group_keys.sort_unstable();
 
