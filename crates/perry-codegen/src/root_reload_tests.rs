@@ -1076,3 +1076,79 @@ fn the_slot_layout_note_helpers_are_non_collecting() {
          transposition of js_gc_note_slot_layout"
     );
 }
+
+/// The cost cap must be measured against the number of ROOT LOADS, not the
+/// number of reloadable values.
+///
+/// `MAX_BLOCK_LOAD_PRODUCT` guards the reachability walk, and that walk runs
+/// once per `groups` entry — one per root load — not once per reloadable
+/// value. Since #7664 extended a recipe through pure bit ops, `values` counts
+/// every derivation separately, so `blocks * values` can be several times
+/// `blocks * groups`. Measuring the cap against `values` declined functions
+/// whose real cost was well inside the bound, and a declined function keeps
+/// every stale register: under the native root lowering nothing else re-reads
+/// the slot.
+///
+/// Each block below carries one root load plus a `MAX_RECIPE`-length pure
+/// derivation off it — the `masked_receiver` shape, replicated — so `values`
+/// is 8x `groups`. At 1100 blocks that is ~9.7M by the old metric against an
+/// 8M cap, and ~1.2M by the new one. The reloads must still be inserted.
+///
+/// Found on Claude-of-Duty's `Arm.constructor` (4924 blocks, 747 root loads,
+/// 2102 values): 10.35M by the old metric, 3.68M by the new. Declining there
+/// left the receiver of an inline class-field store unrooted across a call,
+/// and the store landed in a from-space object.
+#[test]
+fn the_cap_counts_root_loads_not_derived_values() {
+    // `load + bitcast + 6 * and` is exactly MAX_RECIPE (8) steps. A longer
+    // chain is refused outright by the recipe fixpoint, which is a different
+    // decline and would not exercise the cap at all.
+    const BLOCKS: usize = 1100;
+    const MASKS: usize = 6;
+
+    let mut f = LlFunction::new("wide", DOUBLE, vec![(DOUBLE, "%arg".into())]);
+    let mut labels = Vec::with_capacity(BLOCKS + 1);
+    labels.push(f.create_block("entry").label.clone());
+    for i in 0..BLOCKS {
+        labels.push(f.create_block(&format!("b{i}")).label.clone());
+    }
+
+    let slot;
+    {
+        let b = f.block_mut(0).unwrap();
+        slot = b.alloca(DOUBLE);
+        b.store(DOUBLE, "%arg", &slot);
+        b.call_void(
+            "js_shadow_slot_bind",
+            &[(crate::types::I32, "0"), (PTR, &slot)],
+        );
+        b.br(&labels[1]);
+    }
+
+    for i in 0..BLOCKS {
+        let next = labels.get(i + 2).cloned();
+        let b = f.block_mut(i + 1).unwrap();
+        let boxed = b.load(DOUBLE, &slot);
+        let mut cur = b.bitcast_double_to_i64(&boxed);
+        for _ in 0..MASKS {
+            cur = b.and(I64, &cur, "281474976710655");
+        }
+        b.call(DOUBLE, "js_object_get_field_by_name_f64", &[]);
+        b.call_void(
+            "js_object_set_field_by_name",
+            &[(I64, &cur), (DOUBLE, "0.0")],
+        );
+        match next {
+            Some(n) => b.br(&n),
+            None => b.ret(DOUBLE, "0.0"),
+        }
+    }
+
+    let rewrites = apply_to_function(&mut f);
+    assert_eq!(
+        rewrites, BLOCKS,
+        "every block holds one stale masked receiver across a collecting call; \
+         measuring the cap against the derived-value count declines the whole \
+         function and silently leaves all of them in place"
+    );
+}
