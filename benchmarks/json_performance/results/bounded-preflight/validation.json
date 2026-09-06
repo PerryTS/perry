@@ -1,0 +1,11 @@
+{
+  "runtime_json_tests": 139,
+  "compiled_node_comparisons": 33,
+  "moving_gc_stress_runs": 24,
+  "all_outputs_match": true,
+  "all_stress_runs_show_live_movement": true,
+  "source_hashes": 43,
+  "qualified_performance": "full matrix running",
+  "no_regression_acceptance": false,
+  "goal_complete": false
+}

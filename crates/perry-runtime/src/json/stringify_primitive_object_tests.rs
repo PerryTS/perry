@@ -20,6 +20,7 @@ fn primitive_object_leaf_preserves_wide_output_without_managed_scratch() {
         let keys = crate::object::object_keys_array(obj);
         assert_eq!((*keys).length, 128);
         assert!((*keys).length <= crate::object::object_live_slot_count(obj));
+        assert!(fields_are_primitive(obj, (*keys).length));
         let fields = (obj as *const u8)
             .add(std::mem::size_of::<crate::ObjectHeader>())
             .cast::<u64>();

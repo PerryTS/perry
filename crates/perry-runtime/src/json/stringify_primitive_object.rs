@@ -18,6 +18,18 @@ pub(super) fn field_is_primitive(bits: u64) -> bool {
         && !untagged_pointer_bits(bits)
 }
 
+/// The caller has proved that `count` logical slots fit the live inline
+/// allocation. Checking these slots cannot call user code or collect, so the
+/// field base can be borrowed once for the whole preflight too.
+pub(super) unsafe fn fields_are_primitive(obj: *const crate::ObjectHeader, count: u32) -> bool {
+    let fields = (obj as *const u8)
+        .add(std::mem::size_of::<crate::ObjectHeader>())
+        .cast::<u64>();
+    std::slice::from_raw_parts(fields, count as usize)
+        .iter()
+        .all(|&bits| field_is_primitive(bits))
+}
+
 /// # Safety
 /// The caller has resolved object/toJSON handling, rejected descriptors and
 /// class instances, and proved that every logical field is inline and passes

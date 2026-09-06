@@ -3,6 +3,15 @@ and a direct walk of prevalidated primitive object fields. **This is a developme
 checkpoint. CPU/RSS parity and no-regression acceptance remain open: the current
 qualified build meets 11/38 CPU, 58/74 peak RSS and 28/36 retained RSS targets.**
 
+The next candidate skips depth scans when input length alone bounds nesting,
+and moves primitive preflight into a direct borrow for wide inline objects.
+It passes 139 runtime tests, 33 compiled Node comparisons and 24 moving-GC runs;
+its full performance matrix is running. The qualified standings below still
+describe the preceding primitive-object release. Local sampling also shows
+the small record uses the shape path before the modified generic preflight,
+so those speculative checks do not explain that row's regression by themselves.
+[Bounded-preflight evidence](results/bounded-preflight/README.md).
+
 The primitive-object walk reuses the generic input root, prototype handling,
 field preflight and key order, then borrows inline keys and values once. Its
 successful interval cannot invoke callbacks, allocate managed scratch or collect.

@@ -167,3 +167,16 @@ fn parse_shape_cache_bounds_retained_keys_and_keeps_small_shape_hits() {
         crate::gc::gc_unsuppress();
     }
 }
+#[test]
+fn depth_preflight_byte_bound_keeps_the_first_excess_opening() {
+    use super::nesting_depth_exceeds;
+    for limit in [0, 1, 31, super::MAX_RECURSIVE_NESTING_DEPTH] {
+        // All opening bytes is the worst possible depth for a given length,
+        // including malformed input that must still take the bounded path.
+        assert!(!nesting_depth_exceeds(&vec![b'['; limit], limit));
+        assert!(nesting_depth_exceeds(&vec![b'['; limit + 1], limit));
+        assert!(!nesting_depth_exceeds(&vec![b'}'; limit + 1], limit));
+    }
+    assert!(!nesting_depth_exceeds(b"\"[[[[\"", 1));
+    assert!(nesting_depth_exceeds(b"[\"[\",[]]", 1));
+}

@@ -1,0 +1,519 @@
+Analysis of sampling bounded-preflight-worker (pid 8836) every 1 millisecond
+Process:         bounded-preflight-worker [8836]
+Path:            /Users/USER/*/bounded-preflight-worker
+Load Address:    0x1045d0000
+Identifier:      bounded-preflight-worker
+Version:         0
+Code Type:       ARM64
+Platform:        macOS
+Parent Process:  Python [8835]
+Target Type:     live task
+
+Date/Time:       2026-09-06 18:25:43.470 +0200
+Launch Time:     2026-09-06 18:25:43.153 +0200
+OS Version:      macOS 26.5 (25F71)
+Report Version:  7
+Analysis Tool:   /usr/bin/sample
+
+Physical footprint:         28.0M
+Physical footprint (peak):  28.9M
+Idle exit:                  untracked
+----
+
+Call graph:
+    2180 Thread_88526459   DispatchQueue_1: com.apple.main-thread  (serial)
+      2164 start  (in dyld) + 6992  [0x189b13e00]
+      + 2164 main  (in bounded-preflight-worker) + 2764  [0x1045d7484]
+      +   2115 perry_fn_baseline_worker_ts__run$spec_b  (in bounded-preflight-worker) + 9428  [0x1045d2d94]
+      +   ! 1587 js_json_stringify_full  (in bounded-preflight-worker) + 5764  [0x1048b7904]
+      +   ! : 677 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify22stringify_object_inner  (in bounded-preflight-worker) + 1268  [0x104884fb4]
+      +   ! : | 155 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template22try_emit_shape_element  (in bounded-preflight-worker) + 3688,3708,...  [0x10486f028,0x10486f03c,...]
+      +   ! : | 110 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template22try_emit_shape_element  (in bounded-preflight-worker) + 4360  [0x10486f2c8]
+      +   ! : | + 88 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json17stringify_scalars20write_escaped_string  (in bounded-preflight-worker) + 444,140,...  [0x10486d2fc,0x10486d1cc,...]
+      +   ! : | + 22 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json17stringify_scalars20write_escaped_string  (in bounded-preflight-worker) + 576  [0x10486d380]
+      +   ! : | +   18 _platform_memmove  (in libsystem_platform.dylib) + 452,444,...  [0x189edb524,0x189edb51c,...]
+      +   ! : | +   4 DYLD-STUB$$memcpy  (in bounded-preflight-worker) + 4  [0x1052ab7f0]
+      +   ! : | 92 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template22try_emit_shape_element  (in bounded-preflight-worker) + 444  [0x10486e37c]
+      +   ! : | + 45 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json22stringify_tojson_probe25to_json_definitely_absent  (in bounded-preflight-worker) + 192  [0x104a0d680]
+      +   ! : | + ! 45 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json22stringify_tojson_probe28keys_array_may_carry_to_json  (in bounded-preflight-worker) + 312,252,...  [0x104a0d8d4,0x104a0d898,...]
+      +   ! : | + 23 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json22stringify_tojson_probe25to_json_definitely_absent  (in bounded-preflight-worker) + 72,8,...  [0x104a0d608,0x104a0d5c8,...]
+      +   ! : | + 9 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json22stringify_tojson_probe25to_json_definitely_absent  (in bounded-preflight-worker) + 336  [0x104a0d710]
+      +   ! : | + ! 9 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime6object15prototype_chain23object_static_prototype  (in bounded-preflight-worker) + 24,48,...  [0x10498e200,0x10498e218,...]
+      +   ! : | + 7 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json22stringify_tojson_probe25to_json_definitely_absent  (in bounded-preflight-worker) + 368  [0x104a0d730]
+      +   ! : | + ! 7 _tlv_get_addr  (in libdyld.dylib) + 4,0  [0x189adc38c,0x189adc388]
+      +   ! : | + 5 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json22stringify_tojson_probe36to_json_definitely_absent_without_gc  (in bounded-preflight-worker) + 40  [0x104a0da00]
+      +   ! : | + ! 5 _tlv_get_addr  (in libdyld.dylib) + 4  [0x189adc38c]
+      +   ! : | + 2 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json22stringify_tojson_probe36to_json_definitely_absent_without_gc  (in bounded-preflight-worker) + 60  [0x104a0da14]
+      +   ! : | + ! 2 _tlv_get_addr  (in libdyld.dylib) + 4  [0x189adc38c]
+      +   ! : | + 1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json22stringify_tojson_probe36to_json_definitely_absent_without_gc  (in bounded-preflight-worker) + 60  [0x104a0da14]
+      +   ! : | 52 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template22try_emit_shape_element  (in bounded-preflight-worker) + 636  [0x10486e43c]
+      +   ! : | + 24 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json21stringify_data_record15primitive_array  (in bounded-preflight-worker) + 84  [0x10486de80]
+      +   ! : | + ! 24 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime5array6header35array_has_named_properties_resolved  (in bounded-preflight-worker) + 64,52,...  [0x1048889fc,0x1048889f0,...]
+      +   ! : | + 12 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json21stringify_data_record15primitive_array  (in bounded-preflight-worker) + 24  [0x10486de44]
+      +   ! : | + ! 12 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime5value10addr_class26try_read_tracked_gc_header  (in bounded-preflight-worker) + 56,156,...  [0x10488b57c,0x10488b5e0,...]
+      +   ! : | + 9 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json21stringify_data_record15primitive_array  (in bounded-preflight-worker) + 152  [0x10486dec4]
+      +   ! : | + ! 9 _RINvXs2J_NtNtCsjgY6bXVaRmE_4core5slice4iterINtB7_4IterdENtNtNtNtBb_4iter6traits8iterator8Iterator3allNCNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json25stringify_primitive_array8try_emit0EB1J_  (in bounded-preflight-worker) + 56,68,...  [0x1048346f4,0x104834700,...]
+      +   ! : | + 5 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json21stringify_data_record15primitive_array  (in bounded-preflight-worker) + 28,52,...  [0x10486de48,0x10486de60,...]
+      +   ! : | + 2 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime5value10addr_class26try_read_tracked_gc_header  (in bounded-preflight-worker) + 408  [0x10488b6dc]
+      +   ! : | 41 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template22try_emit_shape_element  (in bounded-preflight-worker) + 4328  [0x10486f2a8]
+      +   ! : | + 27 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json17stringify_scalars12write_number  (in bounded-preflight-worker) + 832,24,...  [0x10486c1b8,0x10486be90,...]
+      +   ! : | + 13 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json17stringify_scalars12write_number  (in bounded-preflight-worker) + 788  [0x10486c18c]
+      +   ! : | + ! 13 _RNvXsu_Cs8xF4iOrs9m2_4itoayNtB5_8Unsigned3fmt  (in bounded-preflight-worker) + 544,0,...  [0x10466950c,0x1046692ec,...]
+      +   ! : | + 1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json21stringify_data_record15primitive_array  (in bounded-preflight-worker) + 152  [0x10486dec4]
+      +   ! : | +   1 0x0
+      +   ! : | +     1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json17stringify_scalars12write_number  (in bounded-preflight-worker) + 740  [0x10486c15c]
+      +   ! : | +       1 _platform_memmove  (in libsystem_platform.dylib) + 448  [0x189edb520]
+      +   ! : | 36 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template22try_emit_shape_element  (in bounded-preflight-worker) + 3476  [0x10486ef54]
+      +   ! : | + 31 _platform_memmove  (in libsystem_platform.dylib) + 452,12,...  [0x189edb524,0x189edb36c,...]
+      +   ! : | + 5 DYLD-STUB$$memcpy  (in bounded-preflight-worker) + 4  [0x1052ab7f0]
+      +   ! : | 35 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template22try_emit_shape_element  (in bounded-preflight-worker) + 4464  [0x10486f330]
+      +   ! : | + 28 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json17stringify_scalars20write_escaped_string  (in bounded-preflight-worker) + 192,420,...  [0x10486d200,0x10486d2e4,...]
+      +   ! : | + 7 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json17stringify_scalars20write_escaped_string  (in bounded-preflight-worker) + 576  [0x10486d380]
+      +   ! : | +   6 _platform_memmove  (in libsystem_platform.dylib) + 452,460,...  [0x189edb524,0x189edb52c,...]
+      +   ! : | +   1 DYLD-STUB$$memcpy  (in bounded-preflight-worker) + 4  [0x1052ab7f0]
+      +   ! : | 34 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template22try_emit_shape_element  (in bounded-preflight-worker) + 616  [0x10486e428]
+      +   ! : | + 21 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json21stringify_data_record13array_pointer  (in bounded-preflight-worker) + 40  [0x10486dce8]
+      +   ! : | + ! 21 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime5value10addr_class26try_read_tracked_gc_header  (in bounded-preflight-worker) + 56,44,...  [0x10488b57c,0x10488b570,...]
+      +   ! : | + 9 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json21stringify_data_record13array_pointer  (in bounded-preflight-worker) + 56,4,...  [0x10486dcf8,0x10486dcc4,...]
+      +   ! : | + 4 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime5value10addr_class26try_read_tracked_gc_header  (in bounded-preflight-worker) + 408  [0x10488b6dc]
+      +   ! : | 34 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template22try_emit_shape_element  (in bounded-preflight-worker) + 4908  [0x10486f4ec]
+      +   ! : | + 32 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json17stringify_scalars20write_escaped_string  (in bounded-preflight-worker) + 456,472,...  [0x10486d308,0x10486d318,...]
+      +   ! : | + 2 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json17stringify_scalars20write_escaped_string  (in bounded-preflight-worker) + 576  [0x10486d380]
+      +   ! : | +   1 DYLD-STUB$$memcpy  (in bounded-preflight-worker) + 4  [0x1052ab7f0]
+      +   ! : | +   1 _platform_memmove  (in libsystem_platform.dylib) + 452  [0x189edb524]
+      +   ! : | 33 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template22try_emit_shape_element  (in bounded-preflight-worker) + 416  [0x10486e360]
+      +   ! : | + 15 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json21stringify_data_record13inline_fields  (in bounded-preflight-worker) + 32  [0x10486dda0]
+      +   ! : | + ! 15 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime5value10addr_class26try_read_tracked_gc_header  (in bounded-preflight-worker) + 56,372,...  [0x10488b57c,0x10488b6b8,...]
+      +   ! : | + 10 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json21stringify_data_record13inline_fields  (in bounded-preflight-worker) + 144  [0x10486de10]
+      +   ! : | + ! 10 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime6object6shapes34shape_live_inline_slot_count_by_id  (in bounded-preflight-worker) + 52,20,...  [0x1049a11ac,0x1049a118c,...]
+      +   ! : | + 6 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json21stringify_data_record13inline_fields  (in bounded-preflight-worker) + 0,124,...  [0x10486dd80,0x10486ddfc,...]
+      +   ! : | + 2 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime5value10addr_class26try_read_tracked_gc_header  (in bounded-preflight-worker) + 408  [0x10488b6dc]
+      +   ! : | 16 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template22try_emit_shape_element  (in bounded-preflight-worker) + 4176  [0x10486f210]
+      +   ! : | + 16 _RNvNtNtCsjgY6bXVaRmE_4core3str8converts9from_utf8  (in bounded-preflight-worker) + 120,52,...  [0x1045fdc10,0x1045fdbcc,...]
+      +   ! : | 14 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template22try_emit_shape_element  (in bounded-preflight-worker) + 4844  [0x10486f4ac]
+      +   ! : | + 14 _RNvNtNtCsjgY6bXVaRmE_4core3str8converts9from_utf8  (in bounded-preflight-worker) + 128,52,...  [0x1045fdc18,0x1045fdbcc,...]
+      +   ! : | 13 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json17stringify_scalars20write_escaped_string  (in bounded-preflight-worker) + 2772,2780  [0x10486dc14,0x10486dc1c]
+      +   ! : | 5 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template22try_emit_shape_element  (in bounded-preflight-worker) + 364  [0x10486e32c]
+      +   ! : | + 5 _tlv_get_addr  (in libdyld.dylib) + 4  [0x189adc38c]
+      +   ! : | 4 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template22try_emit_shape_element  (in bounded-preflight-worker) + 4828  [0x10486f49c]
+      +   ! : | + 4 _RNvMNtNtCs5gMwpk3Cs4e_13perry_runtime5value7jsvalueNtB2_7JSValue19short_string_to_buf  (in bounded-preflight-worker) + 0,28,...  [0x104837484,0x1048374a0,...]
+      +   ! : | 2 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json17stringify_scalars12write_number  (in bounded-preflight-worker) + 756  [0x10486c16c]
+      +   ! : | 1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template22try_emit_shape_element  (in bounded-preflight-worker) + 4160  [0x10486f200]
+      +   ! : |   1 _RNvMNtNtCs5gMwpk3Cs4e_13perry_runtime5value7jsvalueNtB2_7JSValue19short_string_to_buf  (in bounded-preflight-worker) + 76  [0x1048374d0]
+      +   ! : 612 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify22stringify_object_inner  (in bounded-preflight-worker) + 1132  [0x104884f2c]
+      +   ! : | 180 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template27build_shape_prefix_template  (in bounded-preflight-worker) + 812,772,...  [0x10486fb6c,0x10486fb44,...]
+      +   ! : | 96 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template27build_shape_prefix_template  (in bounded-preflight-worker) + 1520  [0x10486fe30]
+      +   ! : | + 96 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime6object6shapes34shape_live_inline_slot_count_by_id  (in bounded-preflight-worker) + 52,68,...  [0x1049a11ac,0x1049a11bc,...]
+      +   ! : | 75 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template27build_shape_prefix_template  (in bounded-preflight-worker) + 764  [0x10486fb3c]
+      +   ! : | + 75 _RNvNtNtCsjgY6bXVaRmE_4core3str8converts9from_utf8  (in bounded-preflight-worker) + 60,44,...  [0x1045fdbd4,0x1045fdbc4,...]
+      +   ! : | 63 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template27build_shape_prefix_template  (in bounded-preflight-worker) + 1636  [0x10486fea4]
+      +   ! : | + 22 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json21stringify_data_record18template_candidate  (in bounded-preflight-worker) + 168,196,...  [0x10486dfa8,0x10486dfc4,...]
+      +   ! : | + 11 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json21stringify_data_record18template_candidate  (in bounded-preflight-worker) + 108  [0x10486df6c]
+      +   ! : | + ! 11 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime6object6shapes34shape_live_inline_slot_count_by_id  (in bounded-preflight-worker) + 52,20,...  [0x1049a11ac,0x1049a118c,...]
+      +   ! : | + 10 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json21stringify_data_record18template_candidate  (in bounded-preflight-worker) + 36  [0x10486df24]
+      +   ! : | + ! 10 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime5value10addr_class26try_read_tracked_gc_header  (in bounded-preflight-worker) + 56,372,...  [0x10488b57c,0x10488b6b8,...]
+      +   ! : | + 10 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json21stringify_data_record18template_candidate  (in bounded-preflight-worker) + 260  [0x10486e004]
+      +   ! : | + ! 10 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime5value10addr_class26try_read_tracked_gc_header  (in bounded-preflight-worker) + 56,72,...  [0x10488b57c,0x10488b58c,...]
+      +   ! : | + 10 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime5value10addr_class26try_read_tracked_gc_header  (in bounded-preflight-worker) + 408  [0x10488b6dc]
+      +   ! : | 54 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template27build_shape_prefix_template  (in bounded-preflight-worker) + 864  [0x10486fba0]
+      +   ! : | + 44 mi_malloc_aligned  (in bounded-preflight-worker) + 4,72,...  [0x1052a8bcc,0x1052a8c10,...]
+      +   ! : | + 8 OUTLINED_FUNCTION_32  (in bounded-preflight-worker) + 0  [0x10525aa7c]
+      +   ! : | + 2 mi_theap_malloc_zero_aligned_at_generic  (in bounded-preflight-worker) + 428  [0x105257274]
+      +   ! : | +   2 _mi_malloc_generic  (in bounded-preflight-worker) + 184,220  [0x1052a9c20,0x1052a9c44]
+      +   ! : | 32 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template27build_shape_prefix_template  (in bounded-preflight-worker) + 500  [0x10486fa34]
+      +   ! : | + 29 mi_malloc_aligned  (in bounded-preflight-worker) + 4,72,...  [0x1052a8bcc,0x1052a8c10,...]
+      +   ! : | + 1 OUTLINED_FUNCTION_32  (in bounded-preflight-worker) + 0  [0x10525aa7c]
+      +   ! : | + 1 OUTLINED_FUNCTION_4  (in bounded-preflight-worker) + 0  [0x10525a900]
+      +   ! : | + 1 mi_theap_malloc_zero_aligned_at_generic  (in bounded-preflight-worker) + 28  [0x1052570e4]
+      +   ! : | 29 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template27build_shape_prefix_template  (in bounded-preflight-worker) + 184  [0x10486f8f8]
+      +   ! : | + 15 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime3url9url_class19is_url_object_shape  (in bounded-preflight-worker) + 164,56,...  [0x104bd0de4,0x104bd0d78,...]
+      +   ! : | + 14 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime3url9url_class19is_url_object_shape  (in bounded-preflight-worker) + 88  [0x104bd0d98]
+      +   ! : | +   14 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime6object6shapes34shape_live_inline_slot_count_by_id  (in bounded-preflight-worker) + 52,80,...  [0x1049a11ac,0x1049a11c8,...]
+      +   ! : | 28 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template27build_shape_prefix_template  (in bounded-preflight-worker) + 460  [0x10486fa0c]
+      +   ! : | + 28 _RNvNtNtNtCs5gMwpk3Cs4e_13perry_runtime6object13field_get_set11enumeration24keys_contain_array_index  (in bounded-preflight-worker) + 656,684,...  [0x1047d41e8,0x1047d4204,...]
+      +   ! : | 27 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template27build_shape_prefix_template  (in bounded-preflight-worker) + 984  [0x10486fc18]
+      +   ! : | + 24 _platform_memmove  (in libsystem_platform.dylib) + 452,12,...  [0x189edb524,0x189edb36c,...]
+      +   ! : | + 3 DYLD-STUB$$memcpy  (in bounded-preflight-worker) + 4  [0x1052ab7f0]
+      +   ! : | 11 mi_malloc_aligned  (in bounded-preflight-worker) + 64  [0x1052a8c08]
+      +   ! : | + 8 OUTLINED_FUNCTION_58  (in bounded-preflight-worker) + 12,16  [0x10525ab74,0x10525ab78]
+      +   ! : | + 3 mi_malloc_aligned  (in bounded-preflight-worker) + 64  [0x1052a8c08]
+      +   ! : | 7 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json21stringify_data_record18template_candidate  (in bounded-preflight-worker) + 376  [0x10486e078]
+      +   ! : | 6 mi_malloc_aligned  (in bounded-preflight-worker) + 88  [0x1052a8c20]
+      +   ! : | + 4 mi_malloc_aligned  (in bounded-preflight-worker) + 88  [0x1052a8c20]
+      +   ! : | + 2 OUTLINED_FUNCTION_18  (in bounded-preflight-worker) + 20  [0x10525a9d8]
+      +   ! : | 4 _RNvNtNtNtCs5gMwpk3Cs4e_13perry_runtime6object13field_get_set11enumeration24keys_contain_array_index  (in bounded-preflight-worker) + 1156  [0x1047d43dc]
+      +   ! : 81 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify15stringify_value  (in bounded-preflight-worker) + 2676  [0x104880e4c]
+      +   ! : | 81 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime11node_stream11json_stream30try_stringify_node_stream_json  (in bounded-preflight-worker) + 920,364,...  [0x1049fbdd8,0x1049fbbac,...]
+      +   ! : 71 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify15stringify_value  (in bounded-preflight-worker) + 2688  [0x104880e58]
+      +   ! : | 31 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify17is_object_pointer  (in bounded-preflight-worker) + 236,44,...  [0x104881a2c,0x10488196c,...]
+      +   ! : | 23 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify17is_object_pointer  (in bounded-preflight-worker) + 28  [0x10488195c]
+      +   ! : | + 23 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify26ptr_is_tracked_heap_object  (in bounded-preflight-worker) + 56,44,...  [0x104886a94,0x104886a88,...]
+      +   ! : | 8 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify17is_object_pointer  (in bounded-preflight-worker) + 204  [0x104881a0c]
+      +   ! : | + 8 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify26ptr_is_tracked_heap_object  (in bounded-preflight-worker) + 56,16,...  [0x104886a94,0x104886a6c,...]
+      +   ! : | 8 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify17is_object_pointer  (in bounded-preflight-worker) + 332  [0x104881a8c]
+      +   ! : | + 8 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime6object6shapes34shape_live_inline_slot_count_by_id  (in bounded-preflight-worker) + 120,52,...  [0x1049a11f0,0x1049a11ac,...]
+      +   ! : | 1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify26ptr_is_tracked_heap_object  (in bounded-preflight-worker) + 352  [0x104886bbc]
+      +   ! : 36 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify15stringify_value  (in bounded-preflight-worker) + 200,1956,...  [0x1048804a0,0x104880b7c,...]
+      +   ! : 30 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify22stringify_object_inner  (in bounded-preflight-worker) + 344,960,...  [0x104884c18,0x104884e80,...]
+      +   ! : 19 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify22stringify_object_inner  (in bounded-preflight-worker) + 64  [0x104884b00]
+      +   ! : | 16 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime3url9url_class19is_url_object_shape  (in bounded-preflight-worker) + 88  [0x104bd0d98]
+      +   ! : | + 16 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime6object6shapes34shape_live_inline_slot_count_by_id  (in bounded-preflight-worker) + 52,20,...  [0x1049a11ac,0x1049a118c,...]
+      +   ! : | 3 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime3url9url_class19is_url_object_shape  (in bounded-preflight-worker) + 56,164  [0x104bd0d78,0x104bd0de4]
+      +   ! : 16 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify22stringify_object_inner  (in bounded-preflight-worker) + 1180  [0x104884f5c]
+      +   ! : | 6 _RINvMs2_NtNtCs8BpVhDwHqJW_3std6thread5localINtB6_8LocalKeyINtNtCsjgY6bXVaRmE_4core4cell7RefCellINtNtCsctvjasLqLe9_5alloc3vec3VecIB1w_INtNtB1A_5boxed3BoxNtNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template13ShapeTemplateEEEEE4withNCINvB2u_22with_shape_cache_frameINtNtBZ_6option6OptionPB2q_ENCNvB2s_18shape_template_fors0_0E0B4q_EB2w_  (in bounded-preflight-worker) + 36  [0x10470086c]
+      +   ! : | + 5 _RNvYNCNKNvNtCs5gMwpk3Cs4e_13perry_runtime4json11SHAPE_CACHE00INtNtNtCsjgY6bXVaRmE_4core3ops8function6FnOnceTINtNtB14_6option6OptionQIB1J_INtNtB14_4cell7RefCellINtNtCsctvjasLqLe9_5alloc3vec3VecIB2y_INtNtB2C_5boxed3BoxNtNtB8_24stringify_shape_template13ShapeTemplateEEEEEEEE9call_onceBa_  (in bounded-preflight-worker) + 28  [0x1048a2400]
+      +   ! : | + ! 5 _tlv_get_addr  (in libdyld.dylib) + 4,0  [0x189adc38c,0x189adc388]
+      +   ! : | + 1 _RNvYNCNKNvNtCs5gMwpk3Cs4e_13perry_runtime4json11SHAPE_CACHE00INtNtNtCsjgY6bXVaRmE_4core3ops8function6FnOnceTINtNtB14_6option6OptionQIB1J_INtNtB14_4cell7RefCellINtNtCsctvjasLqLe9_5alloc3vec3VecIB2y_INtNtB2C_5boxed3BoxNtNtB8_24stringify_shape_template13ShapeTemplateEEEEEEEE9call_onceBa_  (in bounded-preflight-worker) + 40  [0x1048a240c]
+      +   ! : | 6 _RINvMs2_NtNtCs8BpVhDwHqJW_3std6thread5localINtB6_8LocalKeyINtNtCsjgY6bXVaRmE_4core4cell7RefCellINtNtCsctvjasLqLe9_5alloc3vec3VecIB1w_INtNtB1A_5boxed3BoxNtNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template13ShapeTemplateEEEEE4withNCINvB2u_22with_shape_cache_frameINtNtBZ_6option6OptionPB2q_ENCNvB2s_18shape_template_fors0_0E0B4q_EB2w_  (in bounded-preflight-worker) + 156  [0x1047008e4]
+      +   ! : | + 5 mi_malloc_aligned  (in bounded-preflight-worker) + 4,72  [0x1052a8bcc,0x1052a8c10]
+      +   ! : | + 1 mi_theap_malloc_zero_aligned_at_overalloc  (in bounded-preflight-worker) + 244  [0x10525741c]
+      +   ! : | +   1 _mi_malloc_generic  (in bounded-preflight-worker) + 52  [0x1052a9b9c]
+      +   ! : | 3 _RINvMs2_NtNtCs8BpVhDwHqJW_3std6thread5localINtB6_8LocalKeyINtNtCsjgY6bXVaRmE_4core4cell7RefCellINtNtCsctvjasLqLe9_5alloc3vec3VecIB1w_INtNtB1A_5boxed3BoxNtNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template13ShapeTemplateEEEEE4withNCINvB2u_22with_shape_cache_frameINtNtBZ_6option6OptionPB2q_ENCNvB2s_18shape_template_fors0_0E0B4q_EB2w_  (in bounded-preflight-worker) + 280,24  [0x104700960,0x104700860]
+      +   ! : | 1 mi_malloc_aligned  (in bounded-preflight-worker) + 64  [0x1052a8c08]
+      +   ! : |   1 mi_malloc_aligned  (in bounded-preflight-worker) + 64  [0x1052a8c08]
+      +   ! : 12 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify22stringify_object_inner  (in bounded-preflight-worker) + 308  [0x104884bf4]
+      +   ! : | 11 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime6object6shapes34shape_live_inline_slot_count_by_id  (in bounded-preflight-worker) + 52,4,...  [0x1049a11ac,0x1049a117c,...]
+      +   ! : | 1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify22stringify_object_inner  (in bounded-preflight-worker) + 1092  [0x104884f04]
+      +   ! : |   1 _RINvMs2_NtNtCs8BpVhDwHqJW_3std6thread5localINtB6_8LocalKeyINtNtCsjgY6bXVaRmE_4core4cell7RefCellINtNtCsctvjasLqLe9_5alloc3vec3VecIB1w_INtNtB1A_5boxed3BoxNtNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template13ShapeTemplateEEEEE4withNCINvB2u_22with_shape_cache_frameINtNtBZ_6option6OptionPB2q_ENCNvB2s_18shape_template_for0E0B4q_EB2w_  (in bounded-preflight-worker) + 0  [0x104700784]
+      +   ! : 10 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify15stringify_value  (in bounded-preflight-worker) + 408  [0x104880570]
+      +   ! : | 3 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify15stringify_value  (in bounded-preflight-worker) + 2504  [0x104880da0]
+      +   ! : | + 3 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify15is_symbol_value  (in bounded-preflight-worker) + 12,36,...  [0x10488030c,0x104880324,...]
+      +   ! : | 3 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify15stringify_value  (in bounded-preflight-worker) + 2520  [0x104880db0]
+      +   ! : | + 3 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime5array17subclass_elements6backed  (in bounded-preflight-worker) + 52,32  [0x104987f0c,0x104987ef8]
+      +   ! : | 2 _RNvNtNtNtCs5gMwpk3Cs4e_13perry_runtime8builtins10formatting16boxed_primitives34boxed_primitive_payload_for_object  (in bounded-preflight-worker) + 16,112  [0x104efd504,0x104efd564]
+      +   ! : | 1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify15stringify_value  (in bounded-preflight-worker) + 2392  [0x104880d30]
+      +   ! : | + 1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime6buffer6header20is_registered_buffer  (in bounded-preflight-worker) + 48  [0x104890638]
+      +   ! : | 1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify15stringify_value  (in bounded-preflight-worker) + 2676  [0x104880e4c]
+      +   ! : |   1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime11node_stream11json_stream30try_stringify_node_stream_json  (in bounded-preflight-worker) + 0  [0x1049fba40]
+      +   ! : 10 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify22stringify_object_inner  (in bounded-preflight-worker) + 1112  [0x104884f18]
+      +   ! : | 8 _RINvMs2_NtNtCs8BpVhDwHqJW_3std6thread5localINtB6_8LocalKeyINtNtCsjgY6bXVaRmE_4core4cell7RefCellINtNtCsctvjasLqLe9_5alloc3vec3VecIB1w_INtNtB1A_5boxed3BoxNtNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template13ShapeTemplateEEEEE4withNCINvB2u_22with_shape_cache_framebNCNvB2s_18shape_template_fors_0E0bEB2w_  (in bounded-preflight-worker) + 20  [0x1047009d4]
+      +   ! : | + 7 _RNvYNCNKNvNtCs5gMwpk3Cs4e_13perry_runtime4json11SHAPE_CACHE00INtNtNtCsjgY6bXVaRmE_4core3ops8function6FnOnceTINtNtB14_6option6OptionQIB1J_INtNtB14_4cell7RefCellINtNtCsctvjasLqLe9_5alloc3vec3VecIB2y_INtNtB2C_5boxed3BoxNtNtB8_24stringify_shape_template13ShapeTemplateEEEEEEEE9call_onceBa_  (in bounded-preflight-worker) + 28  [0x1048a2400]
+      +   ! : | + ! 7 _tlv_get_addr  (in libdyld.dylib) + 4  [0x189adc38c]
+      +   ! : | + 1 _RNvYNCNKNvNtCs5gMwpk3Cs4e_13perry_runtime4json11SHAPE_CACHE00INtNtNtCsjgY6bXVaRmE_4core3ops8function6FnOnceTINtNtB14_6option6OptionQIB1J_INtNtB14_4cell7RefCellINtNtCsctvjasLqLe9_5alloc3vec3VecIB2y_INtNtB2C_5boxed3BoxNtNtB8_24stringify_shape_template13ShapeTemplateEEEEEEEE9call_onceBa_  (in bounded-preflight-worker) + 20  [0x1048a23f8]
+      +   ! : | 2 _RINvMs2_NtNtCs8BpVhDwHqJW_3std6thread5localINtB6_8LocalKeyINtNtCsjgY6bXVaRmE_4core4cell7RefCellINtNtCsctvjasLqLe9_5alloc3vec3VecIB1w_INtNtB1A_5boxed3BoxNtNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template13ShapeTemplateEEEEE4withNCINvB2u_22with_shape_cache_framebNCNvB2s_18shape_template_fors_0E0bEB2w_  (in bounded-preflight-worker) + 8,32  [0x1047009c8,0x1047009e0]
+      +   ! : 7 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify22stringify_object_inner  (in bounded-preflight-worker) + 1092  [0x104884f04]
+      +   ! : | 6 _RINvMs2_NtNtCs8BpVhDwHqJW_3std6thread5localINtB6_8LocalKeyINtNtCsjgY6bXVaRmE_4core4cell7RefCellINtNtCsctvjasLqLe9_5alloc3vec3VecIB1w_INtNtB1A_5boxed3BoxNtNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template13ShapeTemplateEEEEE4withNCINvB2u_22with_shape_cache_frameINtNtBZ_6option6OptionPB2q_ENCNvB2s_18shape_template_for0E0B4q_EB2w_  (in bounded-preflight-worker) + 28  [0x1047007a0]
+      +   ! : | + 5 _RNvYNCNKNvNtCs5gMwpk3Cs4e_13perry_runtime4json11SHAPE_CACHE00INtNtNtCsjgY6bXVaRmE_4core3ops8function6FnOnceTINtNtB14_6option6OptionQIB1J_INtNtB14_4cell7RefCellINtNtCsctvjasLqLe9_5alloc3vec3VecIB2y_INtNtB2C_5boxed3BoxNtNtB8_24stringify_shape_template13ShapeTemplateEEEEEEEE9call_onceBa_  (in bounded-preflight-worker) + 28  [0x1048a2400]
+      +   ! : | + ! 5 _tlv_get_addr  (in libdyld.dylib) + 4  [0x189adc38c]
+      +   ! : | + 1 _RNvYNCNKNvNtCs5gMwpk3Cs4e_13perry_runtime4json11SHAPE_CACHE00INtNtNtCsjgY6bXVaRmE_4core3ops8function6FnOnceTINtNtB14_6option6OptionQIB1J_INtNtB14_4cell7RefCellINtNtCsctvjasLqLe9_5alloc3vec3VecIB2y_INtNtB2C_5boxed3BoxNtNtB8_24stringify_shape_template13ShapeTemplateEEEEEEEE9call_onceBa_  (in bounded-preflight-worker) + 20  [0x1048a23f8]
+      +   ! : | 1 _RINvMs2_NtNtCs8BpVhDwHqJW_3std6thread5localINtB6_8LocalKeyINtNtCsjgY6bXVaRmE_4core4cell7RefCellINtNtCsctvjasLqLe9_5alloc3vec3VecIB1w_INtNtB1A_5boxed3BoxNtNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template13ShapeTemplateEEEEE4withNCINvB2u_22with_shape_cache_frameINtNtBZ_6option6OptionPB2q_ENCNvB2s_18shape_template_for0E0B4q_EB2w_  (in bounded-preflight-worker) + 44  [0x1047007b0]
+      +   ! : 4 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template22try_emit_shape_element  (in bounded-preflight-worker) + 912,896,...  [0x10486e550,0x10486e540,...]
+      +   ! : 1 _RINvMs2_NtNtCs8BpVhDwHqJW_3std6thread5localINtB6_8LocalKeyINtNtCsjgY6bXVaRmE_4core4cell7RefCellINtNtCsctvjasLqLe9_5alloc3vec3VecIB1w_INtNtB1A_5boxed3BoxNtNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template13ShapeTemplateEEEEE4withNCINvB2u_22with_shape_cache_frameINtNtBZ_6option6OptionPB2q_ENCNvB2s_18shape_template_fors0_0E0B4q_EB2w_  (in bounded-preflight-worker) + 284  [0x104700964]
+      +   ! : 1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime11node_stream11json_stream30try_stringify_node_stream_json  (in bounded-preflight-worker) + 940  [0x1049fbdec]
+      +   ! 206 js_json_stringify_full  (in bounded-preflight-worker) + 4464  [0x1048b73f0]
+      +   ! : 174 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json8replacer19apply_to_json_keyed  (in bounded-preflight-worker) + 440  [0x104878578]
+      +   ! : | 165 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify18object_get_to_json  (in bounded-preflight-worker) + 164  [0x104881bd8]
+      +   ! : | + 92 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json22stringify_tojson_probe25to_json_definitely_absent  (in bounded-preflight-worker) + 464  [0x104a0d790]
+      +   ! : | + ! 67 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json22stringify_tojson_probe33compute_object_proto_tojson_state  (in bounded-preflight-worker) + 280  [0x105281198]
+      +   ! : | + ! : 67 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json22stringify_tojson_probe28keys_array_may_carry_to_json  (in bounded-preflight-worker) + 304,276,...  [0x104a0d8cc,0x104a0d8b0,...]
+      +   ! : | + ! 20 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json22stringify_tojson_probe33compute_object_proto_tojson_state  (in bounded-preflight-worker) + 152,260,...  [0x105281118,0x105281184,...]
+      +   ! : | + ! 2 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json22stringify_tojson_probe33compute_object_proto_tojson_state  (in bounded-preflight-worker) + 32  [0x1052810a0]
+      +   ! : | + ! : 2 _tlv_get_addr  (in libdyld.dylib) + 0,4  [0x189adc388,0x189adc38c]
+      +   ! : | + ! 2 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime6object15prototype_chain23object_static_prototype  (in bounded-preflight-worker) + 612  [0x10498e44c]
+      +   ! : | + ! 1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json22stringify_tojson_probe33compute_object_proto_tojson_state  (in bounded-preflight-worker) + 92  [0x1052810dc]
+      +   ! : | + !   1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime6object15prototype_chain23object_static_prototype  (in bounded-preflight-worker) + 84  [0x10498e23c]
+      +   ! : | + 46 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json22stringify_tojson_probe25to_json_definitely_absent  (in bounded-preflight-worker) + 192  [0x104a0d680]
+      +   ! : | + ! 46 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json22stringify_tojson_probe28keys_array_may_carry_to_json  (in bounded-preflight-worker) + 252,276,...  [0x104a0d898,0x104a0d8b0,...]
+      +   ! : | + 17 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json22stringify_tojson_probe25to_json_definitely_absent  (in bounded-preflight-worker) + 192,72,...  [0x104a0d680,0x104a0d608,...]
+      +   ! : | + 5 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json22stringify_tojson_probe25to_json_definitely_absent  (in bounded-preflight-worker) + 336  [0x104a0d710]
+      +   ! : | + ! 5 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime6object15prototype_chain23object_static_prototype  (in bounded-preflight-worker) + 48,84,...  [0x10498e218,0x10498e23c,...]
+      +   ! : | + 2 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json22stringify_tojson_probe25to_json_definitely_absent  (in bounded-preflight-worker) + 368  [0x104a0d730]
+      +   ! : | + ! 2 _tlv_get_addr  (in libdyld.dylib) + 4,20  [0x189adc38c,0x189adc39c]
+      +   ! : | + 2 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime6object15prototype_chain23object_static_prototype  (in bounded-preflight-worker) + 612  [0x10498e44c]
+      +   ! : | + 1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json22stringify_tojson_probe33compute_object_proto_tojson_state  (in bounded-preflight-worker) + 464  [0x105281250]
+      +   ! : | 5 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify18object_get_to_json  (in bounded-preflight-worker) + 104,40,...  [0x104881b9c,0x104881b5c,...]
+      +   ! : | 3 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify18object_get_to_json  (in bounded-preflight-worker) + 48  [0x104881b64]
+      +   ! : | + 3 _tlv_get_addr  (in libdyld.dylib) + 4  [0x189adc38c]
+      +   ! : | 1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json22stringify_tojson_probe25to_json_definitely_absent  (in bounded-preflight-worker) + 392  [0x104a0d748]
+      +   ! : 24 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json8replacer19apply_to_json_keyed  (in bounded-preflight-worker) + 588  [0x10487860c]
+      +   ! : | 9 _RINvMs2_NtNtCs8BpVhDwHqJW_3std6thread5localINtB6_8LocalKeyINtNtCsjgY6bXVaRmE_4core4cell7RefCellNtNtCsctvjasLqLe9_5alloc6string6StringEE4withNCNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json22stringify_tojson_probe21set_to_json_key_value0uEB2m_  (in bounded-preflight-worker) + 40  [0x10473466c]
+      +   ! : | + 5 _RNvYNCNKNvNtCs5gMwpk3Cs4e_13perry_runtime4json11TO_JSON_KEY00INtNtNtCsjgY6bXVaRmE_4core3ops8function6FnOnceTINtNtB14_6option6OptionQIB1J_INtNtB14_4cell7RefCellNtNtCsctvjasLqLe9_5alloc6string6StringEEEEE9call_onceBa_  (in bounded-preflight-worker) + 28  [0x1048a2438]
+      +   ! : | + ! 5 _tlv_get_addr  (in libdyld.dylib) + 4  [0x189adc38c]
+      +   ! : | + 4 _RNvYNCNKNvNtCs5gMwpk3Cs4e_13perry_runtime4json11TO_JSON_KEY00INtNtNtCsjgY6bXVaRmE_4core3ops8function6FnOnceTINtNtB14_6option6OptionQIB1J_INtNtB14_4cell7RefCellNtNtCsctvjasLqLe9_5alloc6string6StringEEEEE9call_onceBa_  (in bounded-preflight-worker) + 36  [0x1048a2440]
+      +   ! : | 8 _RINvMs2_NtNtCs8BpVhDwHqJW_3std6thread5localINtB6_8LocalKeyINtNtCsjgY6bXVaRmE_4core4cell7RefCellNtNtCsctvjasLqLe9_5alloc6string6StringEE4withNCNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json22stringify_tojson_probe21set_to_json_key_value0uEB2m_  (in bounded-preflight-worker) + 84  [0x104734698]
+      +   ! : | + 5 _RNvMNtCsctvjasLqLe9_5alloc6stringNtB2_6String15from_utf8_lossy  (in bounded-preflight-worker) + 52  [0x1045f1f7c]
+      +   ! : | + ! 5 _RNvXs2_NtNtCsjgY6bXVaRmE_4core3str5lossyNtB5_10Utf8ChunksNtNtNtNtB9_4iter6traits8iterator8Iterator4next  (in bounded-preflight-worker) + 440  [0x104603a68]
+      +   ! : | + 3 _RNvMNtCsctvjasLqLe9_5alloc6stringNtB2_6String15from_utf8_lossy  (in bounded-preflight-worker) + 20,392  [0x1045f1f5c,0x1045f20d0]
+      +   ! : | 4 _RNvMNtCsctvjasLqLe9_5alloc6stringNtB2_6String15from_utf8_lossy  (in bounded-preflight-worker) + 416,428,...  [0x1045f20e8,0x1045f20f4,...]
+      +   ! : | 3 _RINvMs2_NtNtCs8BpVhDwHqJW_3std6thread5localINtB6_8LocalKeyINtNtCsjgY6bXVaRmE_4core4cell7RefCellNtNtCsctvjasLqLe9_5alloc6string6StringEE4withNCNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json22stringify_tojson_probe21set_to_json_key_value0uEB2m_  (in bounded-preflight-worker) + 48,84  [0x104734674,0x104734698]
+      +   ! : 5 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json8replacer19apply_to_json_keyed  (in bounded-preflight-worker) + 168,180,...  [0x104878468,0x104878474,...]
+      +   ! : 2 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify18object_get_to_json  (in bounded-preflight-worker) + 192  [0x104881bf4]
+      +   ! : 1 _RINvMs2_NtNtCs8BpVhDwHqJW_3std6thread5localINtB6_8LocalKeyINtNtCsjgY6bXVaRmE_4core4cell7RefCellNtNtCsctvjasLqLe9_5alloc6string6StringEE4withNCNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json22stringify_tojson_probe21set_to_json_key_value0uEB2m_  (in bounded-preflight-worker) + 184  [0x1047346fc]
+      +   ! 73 js_json_stringify_full  (in bounded-preflight-worker) + 5416  [0x1048b77a8]
+      +   ! : 46 mi_free  (in bounded-preflight-worker) + 32,88,...  [0x1052a8960,0x1052a8998,...]
+      +   ! : 11 _RINvMs2_NtNtCs8BpVhDwHqJW_3std6thread5localINtB6_8LocalKeyINtNtCsjgY6bXVaRmE_4core4cell7RefCellINtNtCsctvjasLqLe9_5alloc3vec3VecIB1w_INtNtB1A_5boxed3BoxNtNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template13ShapeTemplateEEEEE4withNCNvB2u_17clear_shape_cache0uEB2w_  (in bounded-preflight-worker) + 36  [0x104700a84]
+      +   ! : | 9 _RNvYNCNKNvNtCs5gMwpk3Cs4e_13perry_runtime4json11SHAPE_CACHE00INtNtNtCsjgY6bXVaRmE_4core3ops8function6FnOnceTINtNtB14_6option6OptionQIB1J_INtNtB14_4cell7RefCellINtNtCsctvjasLqLe9_5alloc3vec3VecIB2y_INtNtB2C_5boxed3BoxNtNtB8_24stringify_shape_template13ShapeTemplateEEEEEEEE9call_onceBa_  (in bounded-preflight-worker) + 28  [0x1048a2400]
+      +   ! : | + 9 _tlv_get_addr  (in libdyld.dylib) + 4,20  [0x189adc38c,0x189adc39c]
+      +   ! : | 2 _RNvYNCNKNvNtCs5gMwpk3Cs4e_13perry_runtime4json11SHAPE_CACHE00INtNtNtCsjgY6bXVaRmE_4core3ops8function6FnOnceTINtNtB14_6option6OptionQIB1J_INtNtB14_4cell7RefCellINtNtCsctvjasLqLe9_5alloc3vec3VecIB2y_INtNtB2C_5boxed3BoxNtNtB8_24stringify_shape_template13ShapeTemplateEEEEEEEE9call_onceBa_  (in bounded-preflight-worker) + 20,40  [0x1048a23f8,0x1048a240c]
+      +   ! : 10 _RINvMs2_NtNtCs8BpVhDwHqJW_3std6thread5localINtB6_8LocalKeyINtNtCsjgY6bXVaRmE_4core4cell7RefCellINtNtCsctvjasLqLe9_5alloc3vec3VecIB1w_INtNtB1A_5boxed3BoxNtNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template13ShapeTemplateEEEEE4withNCNvB2u_17clear_shape_cache0uEB2w_  (in bounded-preflight-worker) + 168,80,...  [0x104700b08,0x104700ab0,...]
+      +   ! : 5 mi_free  (in bounded-preflight-worker) + 8  [0x1052a8948]
+      +   ! : | 4 mi_free  (in bounded-preflight-worker) + 8  [0x1052a8948]
+      +   ! : | 1 OUTLINED_FUNCTION_41  (in bounded-preflight-worker) + 16  [0x10525aabc]
+      +   ! : 1 _RINvMs2_NtNtCs8BpVhDwHqJW_3std6thread5localINtB6_8LocalKeyINtNtCsjgY6bXVaRmE_4core4cell7RefCellINtNtCsctvjasLqLe9_5alloc3vec3VecIB1w_INtNtB1A_5boxed3BoxNtNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template13ShapeTemplateEEEEE4withNCNvB2u_17clear_shape_cache0uEB2w_  (in bounded-preflight-worker) + 72  [0x104700aa8]
+      +   ! :   1 _RNvMs_NtCsctvjasLqLe9_5alloc3vecINtB4_3VecIBv_INtNtB6_5boxed3BoxNtNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template13ShapeTemplateEEE8truncateB16_  (in bounded-preflight-worker) + 40  [0x104b0fc30]
+      +   ! 51 js_json_stringify_full  (in bounded-preflight-worker) + 4324,4304,...  [0x1048b7364,0x1048b7350,...]
+      +   ! 36 js_json_stringify_full  (in bounded-preflight-worker) + 4436  [0x1048b73d4]
+      +   ! : 24 _RNvNtCs5gMwpk3Cs4e_13perry_runtime6string20string_storage_alloc  (in bounded-preflight-worker) + 280,120,...  [0x1048559ec,0x10485594c,...]
+      +   ! : 11 _RNvNtCs5gMwpk3Cs4e_13perry_runtime6string20string_storage_alloc  (in bounded-preflight-worker) + 260  [0x1048559d8]
+      +   ! : | 11 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime5arena10allocators11arena_alloc  (in bounded-preflight-worker) + 172,44,...  [0x104886c8c,0x104886c0c,...]
+      +   ! : 1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime5arena10allocators11arena_alloc  (in bounded-preflight-worker) + 716  [0x104886eac]
+      +   ! 28 js_json_stringify_full  (in bounded-preflight-worker) + 4352  [0x1048b7380]
+      +   ! : 17 _RNvNtCs5gMwpk3Cs4e_13perry_runtime6string20string_storage_alloc  (in bounded-preflight-worker) + 120,136,...  [0x10485594c,0x10485595c,...]
+      +   ! : 11 _RNvNtCs5gMwpk3Cs4e_13perry_runtime6string20string_storage_alloc  (in bounded-preflight-worker) + 260  [0x1048559d8]
+      +   ! :   7 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime5arena10allocators11arena_alloc  (in bounded-preflight-worker) + 44,712,...  [0x104886c0c,0x104886ea8,...]
+      +   ! :   4 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime5arena10allocators11arena_alloc  (in bounded-preflight-worker) + 252  [0x104886cdc]
+      +   ! :     4 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc6policy16gc_check_trigger  (in bounded-preflight-worker) + 352  [0x104bcb0a0]
+      +   ! :       3 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc6policy23gc_budgeted_due_trigger  (in bounded-preflight-worker) + 156,0  [0x104bcc84c,0x104bcc7b0]
+      +   ! :       1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc6policy23gc_budgeted_due_trigger  (in bounded-preflight-worker) + 68  [0x104bcc7f4]
+      +   ! :         1 _RNvYNCNKNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc8old_free14OLD_FREE_BYTES0s_0INtNtNtCsjgY6bXVaRmE_4core3ops8function6FnOnceTINtNtB1i_6option6OptionQIB1X_INtNtB1i_4cell4CelljEEEEE9call_onceBc_  (in bounded-preflight-worker) + 0  [0x104e5d4f4]
+      +   ! 19 js_json_stringify_full  (in bounded-preflight-worker) + 5800  [0x1048b7928]
+      +   ! : 19 _RNvNtCs5gMwpk3Cs4e_13perry_runtime6object17object_keys_array  (in bounded-preflight-worker) + 56,24,...  [0x104855718,0x1048556f8,...]
+      +   ! 16 js_json_stringify_full  (in bounded-preflight-worker) + 3632  [0x1048b70b0]
+      +   ! : 16 _tlv_get_addr  (in libdyld.dylib) + 4  [0x189adc38c]
+      +   ! 15 js_json_stringify_full  (in bounded-preflight-worker) + 4388  [0x1048b73a4]
+      +   ! : 15 _platform_memmove  (in libsystem_platform.dylib) + 180,188,...  [0x189edb414,0x189edb41c,...]
+      +   ! 11 js_json_stringify_full  (in bounded-preflight-worker) + 1476  [0x1048b6844]
+      +   ! : 11 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime5value10addr_class26try_read_tracked_gc_header  (in bounded-preflight-worker) + 56,44,...  [0x10488b57c,0x10488b570,...]
+      +   ! 11 perry_fn_baseline_worker_ts__run$spec_b  (in bounded-preflight-worker) + 10032,10092,...  [0x1045d2ff0,0x1045d302c,...]
+      +   ! 10 js_json_stringify_full  (in bounded-preflight-worker) + 1776  [0x1048b6970]
+      +   ! : 9 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json13stringify_api24try_stringify_lazy_array  (in bounded-preflight-worker) + 52  [0x104867b2c]
+      +   ! : | 9 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify26ptr_is_tracked_heap_object  (in bounded-preflight-worker) + 0,56,...  [0x104886a5c,0x104886a94,...]
+      +   ! : 1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json13stringify_api24try_stringify_lazy_array  (in bounded-preflight-worker) + 20  [0x104867b0c]
+      +   ! 8 js_json_stringify_full  (in bounded-preflight-worker) + 3320  [0x1048b6f78]
+      +   ! : 8 _tlv_get_addr  (in libdyld.dylib) + 0,4  [0x189adc388,0x189adc38c]
+      +   ! 8 js_json_stringify_full  (in bounded-preflight-worker) + 5780  [0x1048b7914]
+      +   ! : 8 _tlv_get_addr  (in libdyld.dylib) + 4,0  [0x189adc38c,0x189adc388]
+      +   ! 7 js_json_stringify_full  (in bounded-preflight-worker) + 1816  [0x1048b6998]
+      +   ! : 7 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify26ptr_is_tracked_heap_object  (in bounded-preflight-worker) + 56,0  [0x104886a94,0x104886a5c]
+      +   ! 6 js_json_stringify_full  (in bounded-preflight-worker) + 4500  [0x1048b7414]
+      +   ! : 6 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify15is_symbol_value  (in bounded-preflight-worker) + 12,88,...  [0x10488030c,0x104880358,...]
+      +   ! 5 js_json_stringify_full  (in bounded-preflight-worker) + 3476  [0x1048b7014]
+      +   ! : 5 _tlv_get_addr  (in libdyld.dylib) + 0,4  [0x189adc388,0x189adc38c]
+      +   ! 4 js_json_stringify_full  (in bounded-preflight-worker) + 3496  [0x1048b7028]
+      +   ! : 4 _tlv_get_addr  (in libdyld.dylib) + 4  [0x189adc38c]
+      +   ! 3 js_json_stringify_full  (in bounded-preflight-worker) + 3516  [0x1048b703c]
+      +   ! : 3 _tlv_get_addr  (in libdyld.dylib) + 4,20  [0x189adc38c,0x189adc39c]
+      +   ! 3 js_json_stringify_full  (in bounded-preflight-worker) + 4488  [0x1048b7408]
+      +   ! : 3 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify16is_closure_value  (in bounded-preflight-worker) + 104  [0x104881084]
+      +   ! 2 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify16is_closure_value  (in bounded-preflight-worker) + 112  [0x10488108c]
+      +   ! 2 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime5value10addr_class26try_read_tracked_gc_header  (in bounded-preflight-worker) + 408  [0x10488b6dc]
+      +   ! 1 _RINvMs2_NtNtCs8BpVhDwHqJW_3std6thread5localINtB6_8LocalKeyINtNtCsjgY6bXVaRmE_4core4cell7RefCellINtNtCsctvjasLqLe9_5alloc3vec3VecIB1w_INtNtB1A_5boxed3BoxNtNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template13ShapeTemplateEEEEE4withNCNvB2u_17clear_shape_cache0uEB2w_  (in bounded-preflight-worker) + 228  [0x104700b44]
+      +   ! 1 _RNvNtCs5gMwpk3Cs4e_13perry_runtime6string20string_storage_alloc  (in bounded-preflight-worker) + 532  [0x104855ae8]
+      +   ! 1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify22stringify_object_inner  (in bounded-preflight-worker) + 1444  [0x104885064]
+      +   ! 1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify26ptr_is_tracked_heap_object  (in bounded-preflight-worker) + 352  [0x104886bbc]
+      +   37 perry_fn_baseline_worker_ts__run$spec_b  (in bounded-preflight-worker) + 10708  [0x1045d3294]
+      +   ! 37 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc6policy25gc_safepoint_moving_minor  (in bounded-preflight-worker) + 2204  [0x104bcdc80]
+      +   !   37 _RNvNtCs5gMwpk3Cs4e_13perry_runtime2gc35gc_collect_minor_with_trigger_inner  (in bounded-preflight-worker) + 2520  [0x104b732d8]
+      +   !     17 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc7copying24run_copied_minor_attempt  (in bounded-preflight-worker) + 8152  [0x104a0979c]
+      +   !     : 17 <deduplicated_symbol>  (in bounded-preflight-worker) + 348  [0x1048e44f8]
+      +   !     :   5 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime6object6shapes26scan_shape_table_rekey_mut  (in bounded-preflight-worker) + 452  [0x10499e9b8]
+      +   !     :   3 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime7closure13dynamic_props36scan_closure_dynamic_props_roots_mut  (in bounded-preflight-worker) + 1020  [0x104ee8e34]
+      +   !     :   | 2 _RNvMs1_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc5rootsNtB5_18RuntimeRootVisitor17visit_nanbox_bits  (in bounded-preflight-worker) + 56  [0x1049f0d54]
+      +   !     :   | + 1 _RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc7copyingNtB4_23CopyingNurseryCollector18rewrite_value_bits  (in bounded-preflight-worker) + 76  [0x1049f34c4]
+      +   !     :   | + ! 1 _RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc7copyingNtB4_23CopyingNurseryCollector16rewrite_raw_addr  (in bounded-preflight-worker) + 48  [0x1049f2f5c]
+      +   !     :   | + 1 _RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc7copyingNtB4_23CopyingNurseryCollector18rewrite_value_bits  (in bounded-preflight-worker) + 60  [0x1049f34b4]
+      +   !     :   | 1 _RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc7copyingNtB4_23CopyingNurseryCollector18rewrite_value_bits  (in bounded-preflight-worker) + 268  [0x1049f3584]
+      +   !     :   2 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime6string6intern27scan_intern_table_roots_mut  (in bounded-preflight-worker) + 320  [0x1048988dc]
+      +   !     :   | 2 _RNvMs1_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc5rootsNtB5_18RuntimeRootVisitor21visit_tagged_raw_addr  (in bounded-preflight-worker) + 24,284  [0x1049f121c,0x1049f1320]
+      +   !     :   2 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime7closure13dynamic_props36scan_closure_dynamic_props_roots_mut  (in bounded-preflight-worker) + 1940  [0x104ee91cc]
+      +   !     :   | 2 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime7closure13dynamic_props36scan_closure_dynamic_props_roots_mut  (in bounded-preflight-worker) + 1940  [0x104ee91cc]
+      +   !     :   |   2 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime7closure13dynamic_props22merge_closure_prop_map  (in bounded-preflight-worker) + 1704  [0x104ee4634]
+      +   !     :   1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime6object16descriptor_state25scan_descriptor_roots_mut  (in bounded-preflight-worker) + 2000  [0x1047b7b60]
+      +   !     :   | 1 _RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc7copyingNtB4_23CopyingNurseryCollector16rewrite_raw_addr  (in bounded-preflight-worker) + 468  [0x1049f3100]
+      +   !     :   1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime6symbol8gc_roots32scan_symbol_side_table_roots_mut  (in bounded-preflight-worker) + 184  [0x10490f708]
+      +   !     :   1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime7closure13dynamic_props36scan_closure_dynamic_props_roots_mut  (in bounded-preflight-worker) + 372  [0x104ee8bac]
+      +   !     :   | 1 pthread_mutex_lock  (in libsystem_pthread.dylib) + 52  [0x189ecc430]
+      +   !     :   1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime7closure13dynamic_props36scan_closure_dynamic_props_roots_mut  (in bounded-preflight-worker) + 580  [0x104ee8c7c]
+      +   !     :   | 1 pthread_mutex_unlock  (in libsystem_pthread.dylib) + 104  [0x189ecc9ac]
+      +   !     :   1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime7closure13dynamic_props36scan_closure_dynamic_props_roots_mut  (in bounded-preflight-worker) + 1296  [0x104ee8f48]
+      +   !     :     1 pthread_mutex_lock  (in libsystem_pthread.dylib) + 52  [0x189ecc430]
+      +   !     12 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc7copying24run_copied_minor_attempt  (in bounded-preflight-worker) + 3836  [0x104a086c0]
+      +   !     : 12 <deduplicated_symbol>  (in bounded-preflight-worker) + 348  [0x1048e44f8]
+      +   !     :   4 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime6object6shapes26scan_shape_table_rekey_mut  (in bounded-preflight-worker) + 452,272  [0x10499e9b8,0x10499e904]
+      +   !     :   2 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime6string6intern27scan_intern_table_roots_mut  (in bounded-preflight-worker) + 320  [0x1048988dc]
+      +   !     :   | 1 _RNvMs1_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc5rootsNtB5_18RuntimeRootVisitor21visit_tagged_raw_addr  (in bounded-preflight-worker) + 224  [0x1049f12e4]
+      +   !     :   | + 1 _RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc7copyingNtB4_23CopyingNurseryCollector9mark_addr  (in bounded-preflight-worker) + 68  [0x1049f39c4]
+      +   !     :   | 1 _RNvMs1_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc5rootsNtB5_18RuntimeRootVisitor21visit_tagged_raw_addr  (in bounded-preflight-worker) + 24  [0x1049f121c]
+      +   !     :   1 _RNvMs1_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc5rootsNtB5_18RuntimeRootVisitor21visit_tagged_raw_addr  (in bounded-preflight-worker) + 304  [0x1049f1334]
+      +   !     :   1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime6object6shapes26scan_shape_table_rekey_mut  (in bounded-preflight-worker) + 736  [0x10499ead4]
+      +   !     :   | 1 _RNvMs1_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc5rootsNtB5_18RuntimeRootVisitor21visit_tagged_raw_addr  (in bounded-preflight-worker) + 224  [0x1049f12e4]
+      +   !     :   |   1 _RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc7copyingNtB4_23CopyingNurseryCollector9mark_addr  (in bounded-preflight-worker) + 68  [0x1049f39c4]
+      +   !     :   |     1 _RNvMNtNtCs5gMwpk3Cs4e_13perry_runtime2gc19copying_pointer_setNtB2_17CopyingPointerSet14classify_arena  (in bounded-preflight-worker) + 384  [0x1049ed590]
+      +   !     :   1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime6symbol8gc_roots32scan_symbol_side_table_roots_mut  (in bounded-preflight-worker) + 756  [0x10490f944]
+      +   !     :   | 1 _RNvMs1_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc5rootsNtB5_18RuntimeRootVisitor17visit_nanbox_bits  (in bounded-preflight-worker) + 368  [0x1049f0e8c]
+      +   !     :   |   1 _RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc7copyingNtB4_23CopyingNurseryCollector16visit_value_bits  (in bounded-preflight-worker) + 60  [0x1049f3388]
+      +   !     :   1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime7closure13dynamic_props36scan_closure_dynamic_props_roots_mut  (in bounded-preflight-worker) + 216  [0x104ee8b10]
+      +   !     :   | 1 _RNvXNtNtCsctvjasLqLe9_5alloc3vec21spec_from_iter_nestedINtB4_3VecjEINtB2_18SpecFromIterNestedjINtNtNtNtCsjgY6bXVaRmE_4core4iter8adapters6copied6CopiedINtNtNtNtCs8BpVhDwHqJW_3std11collections4hash3map4KeysjNtNtNtCs5gMwpk3Cs4e_13perry_runtime7closure13dynamic_props12ClosurePropsEEE9from_iterB3n_  (in bounded-preflight-worker) + 220  [0x104b30fac]
+      +   !     :   |   1 mi_theap_malloc_zero_aligned_at_overalloc  (in bounded-preflight-worker) + 244  [0x10525741c]
+      +   !     :   |     1 _mi_malloc_generic  (in bounded-preflight-worker) + 468  [0x1052a9d3c]
+      +   !     :   |       1 mi_page_queue_find_free_ex  (in bounded-preflight-worker) + 108  [0x105259fa4]
+      +   !     :   |         1 mi_page_fresh_alloc  (in bounded-preflight-worker) + 40  [0x105259d0c]
+      +   !     :   |           1 mi_arenas_page_regular_alloc  (in bounded-preflight-worker) + 348  [0x105249d4c]
+      +   !     :   |             1 mi_arenas_page_alloc_fresh  (in bounded-preflight-worker) + 976  [0x1052582a4]
+      +   !     :   |               1 mi_page_map_set_range_prim  (in bounded-preflight-worker) + 4  [0x10525a370]
+      +   !     :   1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime7closure13dynamic_props36scan_closure_dynamic_props_roots_mut  (in bounded-preflight-worker) + 496  [0x104ee8c28]
+      +   !     :   | 1 <deduplicated_symbol>  (in bounded-preflight-worker) + 260  [0x1048d6fe8]
+      +   !     :   1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime7closure13dynamic_props36scan_closure_dynamic_props_roots_mut  (in bounded-preflight-worker) + 1328  [0x104ee8f68]
+      +   !     7 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc7copying24run_copied_minor_attempt  (in bounded-preflight-worker) + 15580  [0x104a0b4a0]
+      +   !     : 5 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc10dead_owner7fan_out  (in bounded-preflight-worker) + 160  [0x1052960f4]
+      +   !     : | 3 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime6object16descriptor_state35prune_dead_descriptor_owner_entries  (in bounded-preflight-worker) + 208  [0x1047ba0f8]
+      +   !     : | + 1 _RINvMs0_NtCshsF3QZNC8Sh_9hashbrown3mapINtB6_7HashMapTjNtNtCsctvjasLqLe9_5alloc6string6StringENtNtNtCs5gMwpk3Cs4e_13perry_runtime6object16descriptor_state13PropertyAttrsNtNtB1z_9fast_hash13FastKeyHasherE6retainNCNvB1v_35prune_dead_descriptor_owner_entriess_0EB1z_  (in bounded-preflight-worker) + 184  [0x104a6ad38]
+      +   !     : | + ! 1 <deduplicated_symbol>  (in bounded-preflight-worker) + 272  [0x104deb260]
+      +   !     : | + 1 _RINvMs0_NtCshsF3QZNC8Sh_9hashbrown3mapINtB6_7HashMapTjNtNtCsctvjasLqLe9_5alloc6string6StringENtNtNtCs5gMwpk3Cs4e_13perry_runtime6object16descriptor_state13PropertyAttrsNtNtB1z_9fast_hash13FastKeyHasherE6retainNCNvB1v_35prune_dead_descriptor_owner_entriess_0EB1z_  (in bounded-preflight-worker) + 356  [0x104a6ade4]
+      +   !     : | + ! 1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc10dead_owner37owner_is_dead_copied_minor_from_space  (in bounded-preflight-worker) + 72  [0x10501c558]
+      +   !     : | + 1 _RINvMs0_NtCshsF3QZNC8Sh_9hashbrown3mapINtB6_7HashMapTjNtNtCsctvjasLqLe9_5alloc6string6StringENtNtNtCs5gMwpk3Cs4e_13perry_runtime6object16descriptor_state13PropertyAttrsNtNtB1z_9fast_hash13FastKeyHasherE6retainNCNvB1v_35prune_dead_descriptor_owner_entriess_0EB1z_  (in bounded-preflight-worker) + 268  [0x104a6ad8c]
+      +   !     : | 1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime6object16descriptor_state35prune_dead_descriptor_owner_entries  (in bounded-preflight-worker) + 260  [0x1047ba12c]
+      +   !     : | + 1 _RINvMs0_NtCshsF3QZNC8Sh_9hashbrown3mapINtB6_7HashMapTjNtNtCsctvjasLqLe9_5alloc6string6StringENtNtNtCs5gMwpk3Cs4e_13perry_runtime6object16descriptor_state18AccessorDescriptorNtNtB1z_9fast_hash13FastKeyHasherE6retainNCNvB1v_35prune_dead_descriptor_owner_entriess0_0EB1z_  (in bounded-preflight-worker) + 468  [0x104a6b184]
+      +   !     : | 1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime6object16descriptor_state35prune_dead_descriptor_owner_entries  (in bounded-preflight-worker) + 312  [0x1047ba160]
+      +   !     : |   1 _RINvMs0_NtCshsF3QZNC8Sh_9hashbrown3mapINtB6_7HashMapjINtNtCsctvjasLqLe9_5alloc3vec3VecNtNtBU_6string6StringENtNtCs5gMwpk3Cs4e_13perry_runtime9fast_hash13FastKeyHasherE6retainNCNvNtNtB1M_6object16descriptor_state35prune_dead_descriptor_owner_entriess1_0EB1M_  (in bounded-preflight-worker) + 224  [0x104a6b67c]
+      +   !     : 1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc10dead_owner7fan_out  (in bounded-preflight-worker) + 196  [0x105296118]
+      +   !     : | 1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime6object6shapes21prune_dead_shape_keys  (in bounded-preflight-worker) + 188  [0x10499d1b8]
+      +   !     : |   1 _RINvMs_NtNtNtCs5gMwpk3Cs4e_13perry_runtime6object6shapes12shapes_storeNtB5_9ShapeSlab8for_eachNCNvB7_21prune_dead_shape_keyss_0EBb_  (in bounded-preflight-worker) + 288  [0x1047429a0]
+      +   !     : |     1 _RINvMs_NtNtNtCs5gMwpk3Cs4e_13perry_runtime6object6shapes12shapes_storeNtB5_9ShapeSlab8for_eachNCNvB7_21prune_dead_shape_keyss_0EBb_  (in bounded-preflight-worker) + 204  [0x10474294c]
+      +   !     : 1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc10dead_owner7fan_out  (in bounded-preflight-worker) + 720  [0x105296324]
+      +   !     :   1 _RNvNtCs5gMwpk3Cs4e_13perry_runtime6object35prune_dead_transition_cache_entries  (in bounded-preflight-worker) + 320  [0x1052808e0]
+      +   !     1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc7copying24run_copied_minor_attempt  (in bounded-preflight-worker) + 18244  [0x104a0bf08]
+      +   !       1 _RINvMs2_NtNtCs8BpVhDwHqJW_3std6thread5localINtB6_8LocalKeyINtNtCsjgY6bXVaRmE_4core4cell10UnsafeCellNtNtNtCs5gMwpk3Cs4e_13perry_runtime5arena5block5ArenaEE4withNCNvNtB1D_5reset34copying_reset_from_spaces_and_flip0uEB1F_  (in bounded-preflight-worker) + 44  [0x1046fb790]
+      +   !         1 _RNvYNCNKNvNtNtCs5gMwpk3Cs4e_13perry_runtime5arena5block5ARENA00INtNtNtCsjgY6bXVaRmE_4core3ops8function6FnOnceTINtNtB16_6option6OptionQIB1L_INtNtB16_4cell10UnsafeCellNtB8_5ArenaEEEEE9call_onceBc_  (in bounded-preflight-worker) + 40  [0x104a4f7f0]
+      +   10 perry_fn_baseline_worker_ts__run$spec_b  (in bounded-preflight-worker) + 10180  [0x1045d3084]
+      +   ! 5 <deduplicated_symbol>  (in bounded-preflight-worker) + 0,16  [0x1049d5000,0x1049d5010]
+      +   ! 5 perry_fn_baseline_worker_ts__run$spec_b  (in bounded-preflight-worker) + 10684,9396,...  [0x1045d327c,0x1045d2d74,...]
+      +   1 js_json_stringify_full  (in bounded-preflight-worker) + 5540  [0x1048b7824]
+      +   1 perry_fn_baseline_worker_ts__run$spec_b  (in bounded-preflight-worker) + 10160  [0x1045d3070]
+      +     1 perry_fn_baseline_worker_ts__run$spec_b  (in bounded-preflight-worker) + 10168  [0x1045d3078]
+      8 ???  (in <unknown binary>)  [0x5a1e991d63b6]
+      + 8 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json17stringify_scalars12write_number  (in bounded-preflight-worker) + 740  [0x10486c15c]
+      +   7 _platform_memmove  (in libsystem_platform.dylib) + 12,452,...  [0x189edb36c,0x189edb524,...]
+      +   1 DYLD-STUB$$memcpy  (in bounded-preflight-worker) + 4  [0x1052ab7f0]
+      3 ???  (in <unknown binary>)  [0xffff85325f676174]
+      + 3 0x0
+      +   3 0x0
+      +     3 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json17stringify_scalars12write_number  (in bounded-preflight-worker) + 740  [0x10486c15c]
+      +       3 _platform_memmove  (in libsystem_platform.dylib) + 452,436  [0x189edb524,0x189edb514]
+      2 ???  (in <unknown binary>)  [0x10a43]
+      + 2 0x0
+      +   2 gettimeofday  (in libsystem_c.dylib) + 56  [0x189d66dc0]
+      +     2 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json17stringify_scalars12write_number  (in bounded-preflight-worker) + 740  [0x10486c15c]
+      +       2 _platform_memmove  (in libsystem_platform.dylib) + 12,452  [0x189edb36c,0x189edb524]
+      1 ???  (in <unknown binary>)  [0xa9d4d]
+      + 1 0x0
+      +   1 gettimeofday  (in libsystem_c.dylib) + 56  [0x189d66dc0]
+      +     1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json17stringify_scalars12write_number  (in bounded-preflight-worker) + 740  [0x10486c15c]
+      +       1 _platform_memmove  (in libsystem_platform.dylib) + 12  [0x189edb36c]
+      1 ???  (in <unknown binary>)  [0x3a81a801ee0]
+      + 1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json17stringify_scalars12write_number  (in bounded-preflight-worker) + 740  [0x10486c15c]
+      +   1 _platform_memmove  (in libsystem_platform.dylib) + 444  [0x189edb51c]
+      1 _mach_boottime_usec  (in libsystem_c.dylib) + 64  [0x189d944c8]
+        1 gettimeofday  (in libsystem_c.dylib) + 56  [0x189d66dc0]
+          1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json17stringify_scalars12write_number  (in bounded-preflight-worker) + 740  [0x10486c15c]
+            1 _platform_memmove  (in libsystem_platform.dylib) + 452  [0x189edb524]
+
+Total number in stack (recursive counted multiple, when >=5):
+        18       _tlv_get_addr  (in libdyld.dylib) + 0  [0x189adc388]
+        13       _platform_memmove  (in libsystem_platform.dylib) + 0  [0x189edb360]
+        11       _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime5value10addr_class26try_read_tracked_gc_header  (in bounded-preflight-worker) + 0  [0x10488b544]
+        7       _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json17stringify_scalars12write_number  (in bounded-preflight-worker) + 740  [0x10486c15c]
+        7       _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime6object6shapes34shape_live_inline_slot_count_by_id  (in bounded-preflight-worker) + 0  [0x1049a1178]
+        6       DYLD-STUB$$memcpy  (in bounded-preflight-worker) + 0  [0x1052ab7ec]
+        6       _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify26ptr_is_tracked_heap_object  (in bounded-preflight-worker) + 0  [0x104886a5c]
+        6       mi_malloc_aligned  (in bounded-preflight-worker) + 0  [0x1052a8bc8]
+        5       0x0
+        5       _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime6object15prototype_chain23object_static_prototype  (in bounded-preflight-worker) + 0  [0x10498e1e8]
+
+Sort by top of stack, same collapsed (when >= 5):
+        _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template27build_shape_prefix_template  (in bounded-preflight-worker)        180
+        _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime6object6shapes34shape_live_inline_slot_count_by_id  (in bounded-preflight-worker)        166
+        _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json17stringify_scalars20write_escaped_string  (in bounded-preflight-worker)        161
+        _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template22try_emit_shape_element  (in bounded-preflight-worker)        159
+        _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json22stringify_tojson_probe28keys_array_may_carry_to_json  (in bounded-preflight-worker)        158
+        _platform_memmove  (in libsystem_platform.dylib)        111
+        _RNvNtNtCsjgY6bXVaRmE_4core3str8converts9from_utf8  (in bounded-preflight-worker)        105
+        _tlv_get_addr  (in libdyld.dylib)        101
+        _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime5value10addr_class26try_read_tracked_gc_header  (in bounded-preflight-worker)        99
+        mi_malloc_aligned  (in bounded-preflight-worker)        86
+        _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime11node_stream11json_stream30try_stringify_node_stream_json  (in bounded-preflight-worker)        83
+        js_json_stringify_full  (in bounded-preflight-worker)        52
+        mi_free  (in bounded-preflight-worker)        50
+        _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify26ptr_is_tracked_heap_object  (in bounded-preflight-worker)        49
+        _RNvNtCs5gMwpk3Cs4e_13perry_runtime6string20string_storage_alloc  (in bounded-preflight-worker)        42
+        _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json22stringify_tojson_probe25to_json_definitely_absent  (in bounded-preflight-worker)        41
+        _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify15stringify_value  (in bounded-preflight-worker)        36
+        _RNvNtNtNtCs5gMwpk3Cs4e_13perry_runtime6object13field_get_set11enumeration24keys_contain_array_index  (in bounded-preflight-worker)        32
+        _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify17is_object_pointer  (in bounded-preflight-worker)        31
+        _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify22stringify_object_inner  (in bounded-preflight-worker)        31
+        _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json17stringify_scalars12write_number  (in bounded-preflight-worker)        29
+        _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json21stringify_data_record18template_candidate  (in bounded-preflight-worker)        29
+        _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime5array6header35array_has_named_properties_resolved  (in bounded-preflight-worker)        24
+        _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json22stringify_tojson_probe33compute_object_proto_tojson_state  (in bounded-preflight-worker)        21
+        _RNvNtCs5gMwpk3Cs4e_13perry_runtime6object17object_keys_array  (in bounded-preflight-worker)        19
+        _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime5arena10allocators11arena_alloc  (in bounded-preflight-worker)        19
+        _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime6object15prototype_chain23object_static_prototype  (in bounded-preflight-worker)        19
+        _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime3url9url_class19is_url_object_shape  (in bounded-preflight-worker)        18
+        perry_fn_baseline_worker_ts__run$spec_b  (in bounded-preflight-worker)        17
+        DYLD-STUB$$memcpy  (in bounded-preflight-worker)        15
+        _RNvXsu_Cs8xF4iOrs9m2_4itoayNtB5_8Unsigned3fmt  (in bounded-preflight-worker)        13
+        _RINvMs2_NtNtCs8BpVhDwHqJW_3std6thread5localINtB6_8LocalKeyINtNtCsjgY6bXVaRmE_4core4cell7RefCellINtNtCsctvjasLqLe9_5alloc3vec3VecIB1w_INtNtB1A_5boxed3BoxNtNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template13ShapeTemplateEEEEE4withNCNvB2u_17clear_shape_cache0uEB2w_  (in bounded-preflight-worker)        11
+        OUTLINED_FUNCTION_32  (in bounded-preflight-worker)        9
+        _RINvXs2J_NtNtCsjgY6bXVaRmE_4core5slice4iterINtB7_4IterdENtNtNtNtBb_4iter6traits8iterator8Iterator3allNCNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json25stringify_primitive_array8try_emit0EB1J_  (in bounded-preflight-worker)        9
+        _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json21stringify_data_record13array_pointer  (in bounded-preflight-worker)        9
+        _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify15is_symbol_value  (in bounded-preflight-worker)        9
+        _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime6object6shapes26scan_shape_table_rekey_mut  (in bounded-preflight-worker)        9
+        OUTLINED_FUNCTION_58  (in bounded-preflight-worker)        8
+        <deduplicated_symbol>  (in bounded-preflight-worker)        7
+        _RNvMNtCsctvjasLqLe9_5alloc6stringNtB2_6String15from_utf8_lossy  (in bounded-preflight-worker)        7
+        _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify18object_get_to_json  (in bounded-preflight-worker)        7
+        _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json21stringify_data_record13inline_fields  (in bounded-preflight-worker)        6
+        _RNvMNtNtCs5gMwpk3Cs4e_13perry_runtime5value7jsvalueNtB2_7JSValue19short_string_to_buf  (in bounded-preflight-worker)        5
+        _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json21stringify_data_record15primitive_array  (in bounded-preflight-worker)        5
+        _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json8replacer19apply_to_json_keyed  (in bounded-preflight-worker)        5
+        _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify16is_closure_value  (in bounded-preflight-worker)        5
+        _RNvXs2_NtNtCsjgY6bXVaRmE_4core3str5lossyNtB5_10Utf8ChunksNtNtNtNtB9_4iter6traits8iterator8Iterator4next  (in bounded-preflight-worker)        5
+        _RNvYNCNKNvNtCs5gMwpk3Cs4e_13perry_runtime4json11SHAPE_CACHE00INtNtNtCsjgY6bXVaRmE_4core3ops8function6FnOnceTINtNtB14_6option6OptionQIB1J_INtNtB14_4cell7RefCellINtNtCsctvjasLqLe9_5alloc3vec3VecIB2y_INtNtB2C_5boxed3BoxNtNtB8_24stringify_shape_template13ShapeTemplateEEEEEEEE9call_onceBa_  (in bounded-preflight-worker)        5
+
+Binary Images:
+       0x1045d0000 -        0x105607777 +bounded-preflight-worker (0) <6D6A5A4E-B87D-3689-A138-A0D2AD734C11> /Users/*/bounded-preflight-worker
+       0x189a6c000 -        0x189abeb4b  libobjc.A.dylib (951.7) <FF1D8AE4-ABEF-35F1-A30A-1183B9CB414F> /usr/lib/libobjc.A.dylib
+       0x189abf000 -        0x189af3d07  libdyld.dylib (1378) <B147D877-D0C2-388F-B38D-D3132E39905F> /usr/lib/system/libdyld.dylib
+       0x189af4000 -        0x189b9a217  dyld (1.0.0 - 1378) <A237EF81-B68B-37BA-A165-92C965529534> /usr/lib/dyld
+       0x189b9b000 -        0x189b9e228  libsystem_blocks.dylib (96) <CC947089-488D-316B-A9C7-46DEC0F73145> /usr/lib/system/libsystem_blocks.dylib
+       0x189b9f000 -        0x189bf355f  libxpc.dylib (3102.120.13) <C40FCAE8-7A17-3D82-87CB-3DA4802ADEF1> /usr/lib/system/libxpc.dylib
+       0x189bf4000 -        0x189c149ff  libsystem_trace.dylib (1861.120.4) <D0FABAB3-5AE7-3F10-8C62-60CBF5D70850> /usr/lib/system/libsystem_trace.dylib
+       0x189c15000 -        0x189cc35f7  libcorecrypto.dylib (1922.121.1) <A01A158D-6FE7-3B1C-A2C4-6BCB90D7314A> /usr/lib/system/libcorecrypto.dylib
+       0x189cc4000 -        0x189d141d7  libsystem_malloc.dylib (812.100.31) <5FAE4807-4D2B-3A95-A63A-DD96D3DA11B4> /usr/lib/system/libsystem_malloc.dylib
+       0x189d15000 -        0x189d5c23f  libdispatch.dylib (1542.100.32) <F071EFE4-299F-3089-ACC4-0025B8FFB52A> /usr/lib/system/libdispatch.dylib
+       0x189d5d000 -        0x189d5fffb  libsystem_featureflags.dylib (103) <71FCFFBD-85F8-3365-AFE0-BECEA4369122> /usr/lib/system/libsystem_featureflags.dylib
+       0x189d60000 -        0x189de0d9f  libsystem_c.dylib (1752.120.2) <694B7881-1BF3-3D0F-8F19-B50AE4E8EF8A> /usr/lib/system/libsystem_c.dylib
+       0x189de1000 -        0x189e71ae7  libc++.1.dylib (2100.43) <5013C0F8-84A9-3B56-9FEB-C353816A750F> /usr/lib/libc++.1.dylib
+       0x189e72000 -        0x189e8c75f  libc++abi.dylib (2100.43) <E482D257-E5A0-3816-BD97-7B39342958DA> /usr/lib/libc++abi.dylib
+       0x189e8d000 -        0x189eca2af  libsystem_kernel.dylib (12377.121.6) <CC1CF985-BC65-3725-809F-4C1E36B8F4BA> /usr/lib/system/libsystem_kernel.dylib
+       0x189ecb000 -        0x189ed7b3b  libsystem_pthread.dylib (539.100.4) <4F33683C-18C8-39A1-800B-2E3BD43BCC13> /usr/lib/system/libsystem_pthread.dylib
+       0x189ed8000 -        0x189ee0963  libsystem_platform.dylib (375.120.2) <160FD864-8D15-36FC-9E97-9725388CFAFE> /usr/lib/system/libsystem_platform.dylib
+       0x189ee1000 -        0x189f106eb  libsystem_info.dylib (600) <3D62F2D9-F516-31BF-83C7-E203D872300B> /usr/lib/system/libsystem_info.dylib
+       0x18dea8000 -        0x18deb1e5f  libsystem_darwin.dylib (1752.120.2) <8858F025-745A-388E-9544-080781CC9A69> /usr/lib/system/libsystem_darwin.dylib
+       0x18e313000 -        0x18e3251b6  libsystem_notify.dylib (348.120.4) <64D76451-1E0C-369B-A631-54DA3140E083> /usr/lib/system/libsystem_notify.dylib
+       0x1905e0000 -        0x1905faf7b  libsystem_networkextension.dylib (2226.120.19) <3A1DAD41-F14F-3595-B9BB-058A84308BE7> /usr/lib/system/libsystem_networkextension.dylib
+       0x19067d000 -        0x190694fdf  libsystem_asl.dylib (406) <F40838DF-2F15-3F62-970F-DEE25706BF1B> /usr/lib/system/libsystem_asl.dylib
+       0x19223b000 -        0x192243387  libsystem_symptoms.dylib (2169.120.7) <F5029F5C-1BF3-31C7-892E-BC8606AC829E> /usr/lib/system/libsystem_symptoms.dylib
+       0x1964df000 -        0x196517257  libsystem_containermanager.dylib (725.120.2) <518BE44D-AA31-31E6-B44B-A37AD5E47040> /usr/lib/system/libsystem_containermanager.dylib
+       0x1978f0000 -        0x1978f45d7  libsystem_configuration.dylib (1405.120.5) <0F7BBC1C-3D50-3E59-A31F-E4672A80BCEB> /usr/lib/system/libsystem_configuration.dylib
+       0x1978f5000 -        0x1978fb8cf  libsystem_sandbox.dylib (2680.120.12) <EC3A75EA-44C0-3A0B-9BF7-71C117B0A9C6> /usr/lib/system/libsystem_sandbox.dylib
+       0x198f4f000 -        0x198f521fb  libquarantine.dylib (196.120.2) <5849009B-ACA3-3796-94C4-BBDF8D300EBA> /usr/lib/system/libquarantine.dylib
+       0x1996ee000 -        0x1996f4d03  libsystem_coreservices.dylib (191.4.5) <9576143B-C303-35A3-BA63-1FD06EDA2BB1> /usr/lib/system/libsystem_coreservices.dylib
+       0x199c79000 -        0x199cb6a77  libsystem_m.dylib (3312.100.1) <A7E0863C-101A-31A0-922B-ED9B02626151> /usr/lib/system/libsystem_m.dylib
+       0x199cb8000 -        0x199cbb527  libmacho.dylib (1378) <755441B4-C034-3E3A-8E3C-F424FBB28261> /usr/lib/system/libmacho.dylib
+       0x199cd5000 -        0x199ce23a7  libcommonCrypto.dylib (600035) <CE357BB1-2D49-37CC-9FFE-D093936B1475> /usr/lib/system/libcommonCrypto.dylib
+       0x199ce3000 -        0x199cecca3  libunwind.dylib (2100.2) <FC8F0C4E-6FB0-3E27-ABEF-B0FA720CD5E4> /usr/lib/system/libunwind.dylib
+       0x199cf5000 -        0x199cff7ff  libcopyfile.dylib (240) <8ACFAC7A-88E9-3EF4-853F-A9140FF110E5> /usr/lib/system/libcopyfile.dylib
+       0x199d00000 -        0x199d03987  libcompiler_rt.dylib (103.3) <AA79151F-C19D-3C7C-92F8-B10F04D82C1C> /usr/lib/system/libcompiler_rt.dylib
+       0x199d04000 -        0x199d0878b  libsystem_collections.dylib (1752.120.2) <72DB5BE7-EF78-37D0-8AAD-53E37CFE4287> /usr/lib/system/libsystem_collections.dylib
+       0x199d09000 -        0x199d0c4cf  libsystem_secinit.dylib (168.100.7) <E525C566-CDA4-3D99-B12B-1615FD54A1F3> /usr/lib/system/libsystem_secinit.dylib
+       0x199d0d000 -        0x199d0fbf7  libremovefile.dylib (85.100.6) <635E661D-80A7-340D-A165-3F7D318FDFC9> /usr/lib/system/libremovefile.dylib
+       0x199d10000 -        0x199d10f27  libkeymgr.dylib (31) <8C08891A-DF1C-3DCC-AB64-4742FD6BE9BA> /usr/lib/system/libkeymgr.dylib
+       0x199d11000 -        0x199d19e37  libsystem_dnssd.dylib (2881.120.11) <6F45DF3F-233B-3BC3-BA8C-B43E7DA884BF> /usr/lib/system/libsystem_dnssd.dylib
+       0x199d1a000 -        0x199d1f09b  libcache.dylib (95) <189B576E-6176-3F82-8FA4-5914B0BEAEE7> /usr/lib/system/libcache.dylib
+       0x199d20000 -        0x199d21ce3  libSystem.B.dylib (1356) <D65E4112-C151-3FF8-BEB7-4841436012D6> /usr/lib/libSystem.B.dylib
+       0x28cf57000 -        0x28cf5e349  libRosetta.dylib (367.9) <8651ED4F-6506-3788-B56B-32EE414A85CA> /usr/lib/libRosetta.dylib
+       0x28eb74000 -        0x28eb77a4b  libsystem_darwindirectory.dylib (122) <CF277A2C-C818-3F16-8B3F-3C7B39FCD164> /usr/lib/system/libsystem_darwindirectory.dylib
+       0x28eb78000 -        0x28eb815d3  libsystem_eligibility.dylib (319.121.1) <DDAC0531-0262-3DDC-8EC8-80EB9438847A> /usr/lib/system/libsystem_eligibility.dylib
+       0x28eb82000 -        0x28eb8988b  libsystem_sanitizers.dylib (26.1) <44C4234F-8B2D-38D3-A774-B4B3C75AF3A7> /usr/lib/system/libsystem_sanitizers.dylib
+       0x28eb8a000 -        0x28eb8abb7  libsystem_trial.dylib (474.2.18.2) <68C583BA-AFF5-3916-86AE-6E38BFEF98D6> /usr/lib/system/libsystem_trial.dylib

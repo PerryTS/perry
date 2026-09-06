@@ -1,0 +1,26 @@
+[
+  {
+    "arm": "empty-object-leaf",
+    "command": [
+      "xcrun",
+      "llvm-objdump",
+      "--disassemble-symbols=_js_json_parse",
+      "--no-show-raw-insn",
+      "/Users/amlug/projects/perry/codex-json-fastpaths-artifacts/empty-object-leaf-worker"
+    ],
+    "worker_sha256": "58401d3da75b7cd1f63e58c4d808af72b0fbfbe3a91b8d6a91c2194df8fc3a15",
+    "instruction_addresses": 372
+  },
+  {
+    "arm": "primitive-object",
+    "command": [
+      "xcrun",
+      "llvm-objdump",
+      "--disassemble-symbols=_js_json_parse",
+      "--no-show-raw-insn",
+      "/Users/amlug/projects/perry/codex-json-fastpaths-artifacts/primitive-object-worker"
+    ],
+    "worker_sha256": "fd61390f9df7a77a54c70fedeb0454ca90598847de6d0136695760109a95cceb",
+    "instruction_addresses": 372
+  }
+]

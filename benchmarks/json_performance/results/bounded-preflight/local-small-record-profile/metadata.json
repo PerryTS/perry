@@ -1,0 +1,14 @@
+{
+  "purpose": "Local stack diagnosis only; not qualified CPU/RSS evidence.",
+  "command": [
+    "/Users/amlug/projects/perry/codex-json-fastpaths-artifacts/bounded-preflight-worker",
+    "/Users/amlug/projects/perry/codex-json-fastpaths/benchmarks/json_performance/.work/fixtures/small_record.json",
+    "stringify",
+    "20000000",
+    "5000"
+  ],
+  "worker_sha256": "5bb1ba59ea15057192df3f63f452982c87dbdf8ac8c6825af5d925477861a0b9",
+  "worker_exit": 0,
+  "sample_exit": 0,
+  "sample_stderr": "Sampling process 8836 for 3 seconds with 1 millisecond of run time between samples\nSampling completed, processing symbols...\nSample analysis of process 8836 written to file /Users/amlug/projects/perry/codex-json-fastpaths-artifacts/bounded-preflight-small-record-profile/small-record.sample.txt\n"
+}

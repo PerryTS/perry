@@ -1157,6 +1157,25 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
     // already matches spec and the loop walks `0..actual_fields` directly.
     let key_order = crate::object::ecma_own_key_order(keys_arr);
 
+    // Small objects already have direct-output and shape paths. Speculating
+    // on their remaining complex fields added work without a useful fast
+    // result. Wide inline objects can instead prove primitive fields by one
+    // raw walk, avoiding both the generic closure scan's handle retrievals
+    // and repeated retrievals during emission. No pointer/BigInt field,
+    // descriptor or class can reach the borrowed emit interval.
+    if actual_fields > 32
+        && !has_overflow_fields
+        && (*obj).class_id == 0
+        && !crate::object::object_has_descriptors(ptr as usize)
+        && super::stringify_primitive_object::fields_are_primitive(obj, actual_fields)
+    {
+        super::stringify_primitive_object::emit_validated(obj, keys_arr, key_order.as_deref(), buf);
+        if depth > MAX_FAST_DEPTH {
+            STRINGIFY_STACK.with(|s| s.borrow_mut().pop());
+        }
+        return;
+    }
+
     // Deferred toJSON + closure checks (issue #67 tightening): scan fields
     // once to detect if any field is actually a closure. For data-only
     // objects with nested arrays/objects (e.g. `{a:1, b:"", c:[...]}`) the
@@ -1166,12 +1185,10 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
     // be a closure. Reading offset 12 (CLOSURE_MAGIC) per pointer field is
     // cheaper (~3ns/field) than walking the keys array looking for a
     // "toJSON" string that almost never exists (~15ns).
-    let (has_closure_field, has_only_primitive_fields) = {
+    let has_closure_field = {
         let mut found = false;
-        let mut primitives = !has_overflow_fields;
         for f in 0..actual_fields {
             let bits = read_field_bits(f);
-            primitives = primitives && super::stringify_primitive_object::field_is_primitive(bits);
             let tag = bits & 0xFFFF_0000_0000_0000;
             let ptr_candidate = if tag == POINTER_TAG {
                 (bits & POINTER_MASK) as *const u8
@@ -1203,7 +1220,7 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
                 }
             }
         }
-        (found, primitives)
+        found
     };
 
     // A `toJSON` can live as an OWN closure-typed field (a plain object
@@ -1247,25 +1264,6 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
     // `json_object_getter_value`) on objects that never had a descriptor.
     let filter_non_enum =
         crate::object::descriptors_in_use() && crate::object::object_has_descriptors(ptr as usize);
-    if has_only_primitive_fields && !has_overflow_fields && !filter_non_enum && !has_prototype_chain
-    {
-        // The scan above proved that no value can call user code. With no
-        // descriptors, class fields or overflow, the remaining walk cannot
-        // allocate managed storage or collect. Borrow the rooted input once
-        // instead of retrieving its keys and slots through the handle for
-        // every field. The same key order and scalar encoders still apply.
-        let obj = cur_obj();
-        super::stringify_primitive_object::emit_validated(
-            obj,
-            crate::object::object_keys_array(obj),
-            key_order.as_deref(),
-            buf,
-        );
-        if depth > MAX_FAST_DEPTH {
-            STRINGIFY_STACK.with(|s| s.borrow_mut().pop());
-        }
-        return;
-    }
     buf.push('{');
     let mut first = true;
     // `pos(j)` maps the j-th enumerated slot to its key/field index: spec

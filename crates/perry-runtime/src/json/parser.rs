@@ -114,6 +114,12 @@ pub(crate) const MAX_ITERATIVE_NESTING_DEPTH: usize = 500_000;
 /// syntax validation, so it must not assume the input is well-formed — an
 /// unbalanced `]` clamps at zero rather than underflowing.
 pub(crate) fn nesting_depth_exceeds(bytes: &[u8], limit: usize) -> bool {
+    // Every level needs at least one opening byte, even in malformed input.
+    // Short input cannot exceed the limit; syntax validation still runs in
+    // the actual parser. Avoid a separate depth scan for ordinary tiny JSON.
+    if bytes.len() <= limit {
+        return false;
+    }
     // A flat scalar array cannot exceed depth one. Slice byte searches skip
     // the byte-by-byte state machine for large numeric/boolean/null arrays.
     // Test for an object first so record arrays reject this hint immediately.
