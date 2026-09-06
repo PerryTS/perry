@@ -152,3 +152,43 @@ fn flat_direct_number_spelling_matches_the_existing_emitter() {
         }
     }
 }
+
+#[test]
+fn flat_direct_integer_boundaries_match_ecmascript_spelling() {
+    unsafe {
+        let check = |number: f64| {
+            let bits = number.to_bits();
+            let piece = scalar_piece(bits).expect("finite numeric value");
+            let mut bytes = [0; 32];
+            let len = emit_piece(piece, bits, bytes.as_mut_ptr());
+            let mut oracle = ryu_js::Buffer::new();
+            assert_eq!(
+                &bytes[..len],
+                oracle.format_finite(number).as_bytes(),
+                "{bits:016x}"
+            );
+        };
+        for number in [0.0, -0.0, 0.1, -0.1, 1.5, -1.5, 1e20, 1e21] {
+            check(number);
+        }
+        // Include adjacent fractional floats and integers around powers of two,
+        // especially 2^53 and the shortest-spelling boundary cases above it.
+        for exponent in 0..=63 {
+            let center = (1u64 << exponent) as f64;
+            for bits in [center.to_bits() - 1, center.to_bits(), center.to_bits() + 1] {
+                let number = f64::from_bits(bits);
+                check(number);
+                check(-number);
+            }
+        }
+        let mut state = 0x9176_25bc_d803_4aefu64;
+        for _ in 0..16384 {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            let integer = (state & ((1u64 << 53) - 1)) as f64;
+            check(integer);
+            check(-integer);
+        }
+    }
+}

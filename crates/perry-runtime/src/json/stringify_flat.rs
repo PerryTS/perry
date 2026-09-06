@@ -88,6 +88,15 @@ pub(super) unsafe fn scalar_piece(bits: u64) -> Option<Piece> {
     if !number.is_finite() {
         return Some(Piece::inline(b"null"));
     }
+    if number.abs() < crate::builtins::INT_EXACT_FASTPATH_LIMIT {
+        let integer = number as i64;
+        if integer as f64 == number {
+            // Below 2^53 an exact integer has the ECMAScript decimal spelling.
+            // Converting either signed zero to i64 also emits JSON's "0".
+            let mut digits = itoa::Buffer::new();
+            return Some(Piece::inline(digits.format(integer).as_bytes()));
+        }
+    }
     let mut digits = ryu_js::Buffer::new();
     Some(Piece::inline(digits.format_finite(number).as_bytes()))
 }
