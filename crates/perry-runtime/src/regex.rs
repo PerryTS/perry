@@ -898,8 +898,8 @@ pub extern "C" fn js_regexp_new(
     // `flags` argument may name from-space after any allocation, exactly as
     // the ★ note on `pattern_root` says, and this one is stored into the
     // header too.
-    let shared_flags_root = (is_valid_ptr(flags) && raw_flags_str == flags_str)
-        .then(|| scope.root_string_ptr(flags));
+    let shared_flags_root =
+        (is_valid_ptr(flags) && raw_flags_str == flags_str).then(|| scope.root_string_ptr(flags));
 
     let case_insensitive = flags_str.contains('i');
     let global = flags_str.contains('g');
