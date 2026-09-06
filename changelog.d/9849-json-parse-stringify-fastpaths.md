@@ -32,3 +32,8 @@ paired small-record stringify CPU 9.82% but regresses long-ASCII parse 3.69%,
 escaped stringify 1.36% and other rows. Scalar peak and retained-empty RSS also
 rise. It remains experimental; results/short-tail contains all raw results and
 ranges. The next comparison limits the short scan to scalar output planning.
+
+The follow-up restores the shared scanner and applies bounded short-word
+packing only in scalar output planning. Its 172 runtime tests and root-holder
+gate pass. Release CPU/RSS and new compiled/moving-GC comparisons are pending;
+the measured short-tail gains cannot yet be attributed to this follow-up.

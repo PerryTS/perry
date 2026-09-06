@@ -1,0 +1,13 @@
+{
+  "reference_source": "4b9d577d4e81518f83a8b4a1e4f319d328597f74",
+  "matched_function_bodies": {
+    "find_word": "006b7d9acc041c386ac892b2055ca489f82aea8d00f74fc067e8807d98ade3a4",
+    "find_special": "8a9df01d5403f0ba97b03a85da12c6f3523b278f04478f74905587a9a5dbc302",
+    "find_neon": "8b9cdcc15ca467f9f4b61fba73a2ec6af0258adcd94676f958fd07ae166d8906",
+    "find_sse2": "052b70d1b453683951d164fac9bc448eb6142f03686726a1525e84bf36bca352",
+    "find_string_escape": "4fe66d007f8475761c83baf094fd4854342165e120a5887bd53d085f2e778071",
+    "find_string_terminator": "7f1a9409622b2dbbdce6adf54478f4d61815f9913e1ea36e74a0a524cb5ff253",
+    "find_quote_or_backslash": "86d04e2ffcaa6b9539e3491d5866941356c4c1d1584dfe728abd00e200d6d436"
+  },
+  "scope": "Source identity only; compiled performance needs a new complete comparison."
+}

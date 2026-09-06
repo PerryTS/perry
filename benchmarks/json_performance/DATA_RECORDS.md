@@ -1,3 +1,9 @@
+The current follow-up, plan-scan (7117f9e67), restores the shared scanner and
+limits short-word packing to scalar output planning. Its 172 JSON runtime tests
+and root-holder gate pass; the release build and new complete comparisons are
+pending. [Pinned follow-up source checks](results/plan-scan-checks/README.md).
+No performance result below is attributed to this unmeasured follow-up.
+
 The latest completed experiment, short-tail (090e120f3), reduces paired
 small-record stringify CPU 9.82%, from 0.3212 to 0.2897 microseconds. It also
 introduces confirmed regressions, including long-ASCII parse +3.69%, 1 KB object
