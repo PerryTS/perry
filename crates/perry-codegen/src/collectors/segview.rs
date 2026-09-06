@@ -958,10 +958,17 @@ fn describe(v: &SegViewVerdict) -> String {
 // labels correct and avoids duplicating any closure the body contains — a
 // duplicated `Expr::Closure` would carry a duplicate `FuncId`.
 
-/// `PERRY_SEGVIEW=1`. **Default OFF**: the runtime's view entry points do not
-/// exist yet, so an on-by-default rewrite would emit calls that fail to link.
+/// **Default ON.** `PERRY_SEGVIEW=0` opts out.
+///
+/// It shipped default OFF because the runtime's view entry points did not
+/// exist; #9870 landed them on main, and on claude-code the tier with #9893's
+/// levers is -14 % CPU and -30…-42 MB peak RSS with identical output.
+///
+/// The opt-out stays: a program whose loops the tier declines pays nothing,
+/// but a switch that changes emitted code needs an off position that does not
+/// require a rebuild of the compiler.
 pub fn segview_lowering_enabled() -> bool {
-    matches!(std::env::var("PERRY_SEGVIEW"), Ok(v) if !v.is_empty() && v != "0")
+    !matches!(std::env::var("PERRY_SEGVIEW"), Ok(v) if v == "0")
 }
 
 fn extern_call(name: &str, args: Vec<Expr>) -> Expr {
@@ -1221,7 +1228,26 @@ fn rewrite_site(list: &mut Vec<Stmt>, i: usize, site: &SegmentForOfSite, fresh: 
             pick(cur, Expr::Undefined, decline_iter),
         ),
     );
-    3
+    // Clear the cursor at loop exit. The cursor local is declared in the
+    // ENCLOSING statement list, not inside the loop, so without this its slot
+    // stays a live GC root until the function returns. A cursor that spans a
+    // minor while the loop runs is promoted, and because it holds the input
+    // string in a traced slot it drags that string into the old generation
+    // with it — one per `open`, and `string-width` is entered thousands of
+    // times per reply. That is a candidate mechanism for I4 settling 45-65 MB
+    // ABOVE I3 after idle despite winning 20-50 MB of peak.
+    //
+    // One unconditional clear covers both paths: on the declined path the
+    // local holds `0.0`, a number, so clearing it is a no-op. `break` reaches
+    // this statement; `return` inside the body pops the frame, which is
+    // equally fine. It does not prevent promotion DURING the loop — nothing
+    // in the compiler can, since the cursor is genuinely live there — it stops
+    // the slot from keeping a dead cursor rooted for the rest of the function.
+    list.insert(
+        i + 5,
+        Stmt::Expr(Expr::LocalSet(cur, Box::new(Expr::Undefined))),
+    );
+    4
 }
 
 fn unwrap_for_mut(s: &mut Stmt) -> &mut Stmt {

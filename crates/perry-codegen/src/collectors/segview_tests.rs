@@ -509,3 +509,70 @@ fn a_site_with_an_unanswerable_use_stays_on_v1() {
         "v1 does not rewrite uses: {out}"
     );
 }
+
+/// The cursor local is declared in the enclosing statement list, so its slot is
+/// a live GC root until the function returns unless the lowering clears it. A
+/// cursor promoted during the loop holds the input string in a traced slot and
+/// drags it into the old generation; leaving the slot rooted afterwards keeps a
+/// DEAD cursor doing that for the rest of the function.
+#[test]
+fn the_cursor_is_cleared_at_loop_exit() {
+    let mut m = module_with(region(cc_body()));
+    assert_eq!(segview_rewrite_module(&mut m), 1);
+
+    // Structural, not string-matched: the statement AFTER the `For` must be a
+    // `LocalSet(<cursor>, Undefined)`, and the cursor is the local the `For`'s
+    // condition tests against zero.
+    let for_idx = m
+        .init
+        .iter()
+        .position(|s| matches!(s, Stmt::For { .. }))
+        .expect("the rewritten loop");
+    let cursor_id = match &m.init[for_idx] {
+        Stmt::For {
+            condition: Some(Expr::Conditional { condition, .. }),
+            ..
+        } => match condition.as_ref() {
+            Expr::Compare { left, .. } => match left.as_ref() {
+                Expr::LocalGet(id) => *id,
+                other => panic!("expected the cursor guard, got {other:?}"),
+            },
+            other => panic!("expected a compare, got {other:?}"),
+        },
+        _ => unreachable!(),
+    };
+    match m.init.get(for_idx + 1) {
+        Some(Stmt::Expr(Expr::LocalSet(id, v))) => {
+            assert_eq!(*id, cursor_id, "the cleared local must be the cursor");
+            assert!(
+                matches!(v.as_ref(), Expr::Undefined),
+                "the cursor slot must be cleared to undefined, got {v:?}"
+            );
+        }
+        other => panic!("no cursor clear after the loop: {other:?}"),
+    }
+}
+
+/// The default is ON, and `PERRY_SEGVIEW=0` is the opt-out.
+///
+/// Asserted rather than assumed because the switch is read through the
+/// environment: a typo in the predicate that made it always-false would leave
+/// every test above passing (they call the rewrite directly) while the tier
+/// silently never fired in a real compile — the #9824 shape.
+#[test]
+fn the_lowering_is_on_by_default_and_zero_opts_out() {
+    use super::segview::segview_lowering_enabled;
+    // These mutate process-wide state, so they live in one test rather than
+    // three; `cargo test` runs test fns concurrently and separate tests would
+    // race on the same variable.
+    std::env::remove_var("PERRY_SEGVIEW");
+    assert!(
+        segview_lowering_enabled(),
+        "unset must mean ON — that is what 'default on' means"
+    );
+    std::env::set_var("PERRY_SEGVIEW", "0");
+    assert!(!segview_lowering_enabled(), "`0` is the opt-out");
+    std::env::set_var("PERRY_SEGVIEW", "1");
+    assert!(segview_lowering_enabled(), "`1` stays on");
+    std::env::remove_var("PERRY_SEGVIEW");
+}
