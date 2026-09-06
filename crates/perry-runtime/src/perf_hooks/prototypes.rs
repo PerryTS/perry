@@ -1,5 +1,12 @@
 use super::*;
 
+mod performance_methods;
+use performance_methods::{
+    clear_marks, clear_measures, clear_resource_timings, event_loop_utilization, get_entries,
+    get_entries_by_name, get_entries_by_type, mark, mark_resource_timing, measure, now,
+    set_resource_timing_buffer_size, timerify, to_json,
+};
+
 const PERF_CONSTRUCTOR_NAMES: &[&str] = &[
     "Performance",
     "PerformanceEntry",
@@ -216,6 +223,41 @@ fn perf_constructor_prototype(class_name: &str) -> f64 {
     crate::closure::closure_get_dynamic_prop(ptr, "prototype")
 }
 
+/// Return the shared method installed on `Performance.prototype`.
+///
+/// The `performance` object uses the same native-module tag as the top-level
+/// `perf_hooks` namespace, whose generic bind path creates module-bound
+/// closures.  Route reads on the exact singleton back through its prototype so
+/// extracted methods retain their receiver checks.
+pub(crate) fn performance_prototype_method_value(name: &str) -> Option<f64> {
+    if !matches!(
+        name,
+        "clearMarks"
+            | "clearMeasures"
+            | "clearResourceTimings"
+            | "getEntries"
+            | "getEntriesByName"
+            | "getEntriesByType"
+            | "mark"
+            | "measure"
+            | "now"
+            | "setResourceTimingBufferSize"
+            | "toJSON"
+            | "eventLoopUtilization"
+            | "markResourceTiming"
+            | "timerify"
+    ) {
+        return None;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let proto = scope.root_nanbox_f64(perf_constructor_prototype("Performance"));
+    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let obj =
+        JSValue::from_bits(proto.get_nanbox_u64()).as_pointer::<crate::object::ObjectHeader>();
+    let value = js_object_get_field_by_name(obj, key);
+    (value.bits() != crate::value::TAG_UNDEFINED).then(|| f64::from_bits(value.bits()))
+}
+
 /// Link runtime-created perf objects through their built-in class hierarchy.
 ///
 /// This is class-default wiring, not a user `Object.setPrototypeOf` override.
@@ -261,25 +303,59 @@ pub(crate) unsafe fn attach_perf_hooks_constructor(
 
     match class_name {
         "Performance" => {
-            for method in [
-                "clearMarks",
-                "clearMeasures",
-                "clearResourceTimings",
-                "getEntries",
-                "getEntriesByName",
-                "getEntriesByType",
-                "mark",
-                "measure",
-                "now",
-                "setResourceTimingBufferSize",
-                "toJSON",
-            ] {
-                let value = crate::object::bound_native_callable_export_value("perf_hooks", method);
-                install_perf_method(proto, method, value, true);
-            }
-            for method in ["eventLoopUtilization", "markResourceTiming", "timerify"] {
-                let value = crate::object::bound_native_callable_export_value("perf_hooks", method);
-                install_perf_method(proto, method, value, false);
+            let methods = [
+                ("clearMarks", clear_marks as *const u8, 0, true),
+                ("clearMeasures", clear_measures as *const u8, 0, true),
+                (
+                    "clearResourceTimings",
+                    clear_resource_timings as *const u8,
+                    0,
+                    true,
+                ),
+                ("getEntries", get_entries as *const u8, 0, true),
+                (
+                    "getEntriesByName",
+                    get_entries_by_name as *const u8,
+                    1,
+                    true,
+                ),
+                (
+                    "getEntriesByType",
+                    get_entries_by_type as *const u8,
+                    1,
+                    true,
+                ),
+                ("mark", mark as *const u8, 1, true),
+                ("measure", measure as *const u8, 1, true),
+                ("now", now as *const u8, 0, true),
+                (
+                    "setResourceTimingBufferSize",
+                    set_resource_timing_buffer_size as *const u8,
+                    1,
+                    true,
+                ),
+                ("toJSON", to_json as *const u8, 0, true),
+                (
+                    "eventLoopUtilization",
+                    event_loop_utilization as *const u8,
+                    2,
+                    false,
+                ),
+                (
+                    "markResourceTiming",
+                    mark_resource_timing as *const u8,
+                    7,
+                    false,
+                ),
+                ("timerify", timerify as *const u8, 1, false),
+            ];
+            for (method, thunk, arity, enumerable) in methods {
+                install_perf_method(
+                    proto,
+                    method,
+                    perf_method_value(thunk, method, arity),
+                    enumerable,
+                );
             }
             let getter = perf_method_value(
                 perf_time_origin_getter_thunk as *const u8,

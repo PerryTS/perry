@@ -38,7 +38,10 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 mod prototypes;
 
-pub(crate) use prototypes::{attach_perf_hooks_constructor, perf_supported_entry_types_value};
+pub(crate) use prototypes::{
+    attach_perf_hooks_constructor, perf_supported_entry_types_value,
+    performance_prototype_method_value,
+};
 use prototypes::{is_perf_constructor_name, link_perf_prototype};
 
 const ENTRY_TYPE_MARK: u8 = 0;
@@ -260,6 +263,17 @@ pub(crate) fn is_performance_object_value(value: f64) -> bool {
         }
     }
     false
+}
+
+/// True only for the canonical `performance` singleton.  The broader
+/// `is_performance_object_value` predicate also accepts legacy perf-hooks
+/// namespace objects for `instanceof` compatibility, but Performance
+/// prototype methods require the object's actual internal brand.
+pub(crate) fn is_performance_namespace_value(value: f64) -> bool {
+    PERFORMANCE_NS.with(|c| {
+        let cached = c.get();
+        cached != 0 && cached == value.to_bits()
+    })
 }
 
 pub(crate) fn is_perf_observer_list_value(value: f64) -> bool {
