@@ -788,6 +788,56 @@ fn a_first_cycle_attempt_that_its_own_trace_refutes_rolls_back_and_evacuates() {
     );
 }
 
+/// A speculative promotion temporarily gives every nursery block old-gen
+/// semantics. Young-entry root logs must nevertheless survive an attempt that
+/// is rolled back: the evacuation retry still depends on them to find values
+/// reachable only through a side table.
+#[test]
+fn first_cycle_rollback_preserves_young_side_table_roots_for_the_retry() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _promote = InPlacePromotionTestGuard::enabled(1000);
+    clear_young_survival_for_tests();
+    // Exhaust the blind-promotion budget so the speculative attempt performs
+    // the mutable-root mark/rewrite walks that consume young logs.
+    seed_untraced_promoted_bytes_for_tests(usize::MAX);
+    gc_register_mutable_root_scanner(crate::closure::scan_closure_dynamic_props_roots_mut);
+
+    let owner = crate::arena::arena_alloc_gc_old(
+        std::mem::size_of::<crate::closure::ClosureHeader>(),
+        std::mem::align_of::<crate::closure::ClosureHeader>(),
+        GC_TYPE_CLOSURE,
+    ) as usize;
+    unsafe { init_test_closure(owner as *mut u8) };
+    // Arm the remembered-set reconstruction before publishing the value, then
+    // remove the ordinary old-object edge so the young log is the only root.
+    let _ = remembered_dirty_snapshot();
+    let value = young_leaf();
+    crate::closure::closure_set_dynamic_prop(owner, "memo", f64::from_bits(string_bits(value)));
+    remembered_set_clear();
+    for _ in 0..64 {
+        let _garbage = young_leaf();
+    }
+
+    let attempts_before = first_cycle_promotion_attempts();
+    let rollbacks_before = first_cycle_promotion_rollbacks();
+    let trace = collect_minor_trace(GcTriggerKind::Direct);
+
+    assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
+    assert_eq!(first_cycle_promotion_attempts() - attempts_before, 1);
+    assert_eq!(first_cycle_promotion_rollbacks() - rollbacks_before, 1);
+    let bits = crate::closure::closure_get_own_dynamic_prop(owner, "memo")
+        .expect("the old owner must retain its side-table value")
+        .to_bits();
+    let value_after = (bits & POINTER_MASK) as usize;
+    assert_eq!(bits & TAG_MASK, STRING_TAG);
+    assert_ne!(
+        value_after, value,
+        "the retry must evacuate a value reachable only through the young log"
+    );
+    assert!(crate::arena::pointer_in_nursery(value_after));
+}
+
 // ---------------------------------------------------------------------------
 // #7913 interaction: old-page relocation vs a still-DESCRIBED promoted run
 // ---------------------------------------------------------------------------
