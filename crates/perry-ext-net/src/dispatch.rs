@@ -180,7 +180,11 @@ fn socket_method_name(prop: &str) -> Option<&'static [u8]> {
         "upgradeToTLS" => Some(b"upgradeToTLS"),
         "getSession" => Some(b"getSession"),
         "isSessionReused" => Some(b"isSessionReused"),
-        "getPeerCertificate" => Some(b"getPeerCertificate"),
+        // The primary stdlib dispatcher owns `getPeerCertificate`: it builds
+        // the complete legacy certificate object from the DER recorded at the
+        // handshake. Claiming it here returned the extension's reduced JSON
+        // facade, whose optional CN is populated only for adopted HTTPS
+        // sockets, so direct `tls.connect()` handles produced `{}`.
         "setDefaultEncoding" => Some(b"setDefaultEncoding"),
         "cork" => Some(b"cork"),
         "uncork" => Some(b"uncork"),
@@ -281,9 +285,6 @@ unsafe fn socket_method(handle: i64, method: &str, args: &[f64]) -> Option<f64> 
         }
         "getSession" => nanbox_ptr(crate::js_ext_net_socket_tls_session(handle)),
         "isSessionReused" => crate::js_ext_net_socket_tls_session_reused(handle),
-        "getPeerCertificate" => {
-            json_str_to_value(crate::js_ext_net_socket_peer_certificate_json(handle))
-        }
         "once" if args.len() >= 2 => {
             crate::js_net_socket_once(handle, unbox_to_i64(args[0]), unbox_to_i64(args[1]));
             nanbox_handle(handle)
