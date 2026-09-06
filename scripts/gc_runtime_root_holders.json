@@ -537,12 +537,6 @@
     },
     {
       "file": "crates/perry-runtime/src/object/mod.rs",
-      "name": "SHAPE_CACHE_YOUNG",
-      "verdict": "not_a_gc_pointer",
-      "why": "#9754 remembered set: `YoungLog<u32>` of shape-cache IDs (inline slot and overflow key alike) whose keys array a minor may act on. Ids, not addresses; the arrays themselves are visited by the registered shape-cache scanner."
-    },
-    {
-      "file": "crates/perry-runtime/src/object/mod.rs",
       "name": "TRANSITION_CACHE_YOUNG",
       "verdict": "not_a_gc_pointer",
       "why": "#9754 remembered set: `YoungLog<u32>` = two `Vec<u32>` (live + recycled spare) holding transition-cache SLOT INDICES whose `key_ptr`/`next_keys` a minor may act on. Indices, not addresses \u2014 a `u32` cannot hold a 48-bit pointer. The pointer-bearing entries they index are visited by `scan_transition_cache_roots_mut`, which is registered."
@@ -628,6 +622,12 @@
       "name": "PTY_REFED_COUNT",
       "verdict": "not_a_gc_pointer",
       "why": "Atomic count of live PTY handles that currently keep the event loop active. It stores only a scalar count; PTY JS values live in PTY_LIVE and are visited by pty_reactor_scan_roots_mut."
+    },
+    {
+      "file": "crates/perry-runtime/src/regex.rs",
+      "name": "NEVER_MATCH",
+      "verdict": "not_a_gc_pointer",
+      "why": "#9796: the memoized never-match placeholder program installed for a pattern only `fancy-regex` accepts. `Arc<regex::Regex>` is a Rust-allocator compiled program \u2014 the collector neither traces nor moves it \u2014 and the `Arc` keeps it alive independently."
     },
     {
       "file": "crates/perry-runtime/src/regex.rs",
