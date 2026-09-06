@@ -24,6 +24,12 @@
 //!   decline; without it the getter is silently bypassed and `gets` stays 0.
 //! * `H true` — a deleted `next` must throw a TypeError, not fall through to
 //!   the builtin advance.
+//! * `I <type> true` x5 — a non-callable prototype `next` (a number, a string,
+//!   `undefined`, `null`, a plain object) must throw a TypeError. The proof
+//!   reads the own slot as a RAW value, so each of these has to defeat it: the
+//!   number and the string never reach `is_pointer`/`get_valid_func_ptr` as a
+//!   closure, and the plain object passes `is_pointer` but fails the
+//!   CLOSURE_MAGIC probe inside `get_valid_func_ptr`.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -51,7 +57,13 @@ F-restored 3\n\
 G-accessor 1,2 true\n\
 G-restored 4\n\
 H true\n\
-H-restored 5,6\n";
+H-restored 5,6\n\
+I number true\n\
+I string true\n\
+I undefined true\n\
+I object true\n\
+I object true\n\
+I-restored 7,8\n";
 
 fn perry_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_perry"))
