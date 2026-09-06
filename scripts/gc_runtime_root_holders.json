@@ -614,6 +614,12 @@
       "why": "Megamorphic property-read stub cache, the read twin of WRITE_STUB: 2-way ways of (shape_token, key_bits, slot) plain u64s. The token is a shape id and the slot an index; key_bits are content-derived by construction, because read_stub_key_bits returns short_ascii_sso_bits(key) \u2014 the key's characters packed inline \u2014 and yields None for any key that would otherwise be stored under a pointer. No way holds a heap address, so nothing here keeps an object alive, and a stale entry cannot hit: receiver_shape_token returns None for a receiver with no live shape, and the token identifies the exact key set and order, so a shape change yields a different token."
     },
     {
+      "file": "crates/perry-runtime/src/object/shapes_store.rs",
+      "name": "ID_LIST_OP_STATS",
+      "verdict": "not_a_gc_pointer",
+      "why": "#9881: the IdList operation tally that measures the swap-remove win \u2014 `removals`, `elems_moved`, `positions_scanned`, three plain `u64` counts in a `Cell`. It holds NUMBERS, never an address or a NaN-boxed value: written only by the `IdList` remove/scan paths incrementing them and read only by the diagnostic that reports the memmove volume, so there is no slot for the collector to mark or rewrite."
+    },
+    {
       "file": "crates/perry-runtime/src/os/os_process_emitter.rs",
       "name": "PROCESS_EXIT_EVENT_EMITTED",
       "verdict": "not_a_gc_pointer",

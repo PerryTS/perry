@@ -487,7 +487,7 @@ pub(crate) struct IdListOpStats {
     pub(crate) positions_scanned: u64,
 }
 
-thread_local! {
+crate::perry_thread_local! {
     pub(crate) static ID_LIST_OP_STATS: std::cell::Cell<IdListOpStats> =
         const {
             std::cell::Cell::new(IdListOpStats {
