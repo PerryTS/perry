@@ -1,0 +1,9 @@
+{
+  "worker_sha256": "56b822b01e5cbed1df34d26d8023b467c4139c89cc9a1674e853ebc5f1412df6",
+  "instructions_by_symbol": {
+    "__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow": 506,
+    "__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api17parse_result_slow": 398,
+    "parse_inline_object6decode": null,
+    "parse_inline_object8allocate": null
+  }
+}

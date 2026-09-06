@@ -1,3 +1,28 @@
+The latest measured source, inline-object (9187bd95), reduces paired tiny-object
+parse CPU **67.04%**, from 0.363078 to 0.1196715 microseconds (3.03x faster).
+It decodes eligible flat objects into inline native storage before collection,
+then allocates only their fresh result with the ordinary allocator. GC policy
+and hook implementations remain unchanged; JSON call sequences are documented.
+
+All-row acceptance remains **12/38 CPU, 58/74 peak RSS and 28/36 retained RSS**.
+No-regression acceptance fails: escaped stringify +1.41%, 16 KB array parse
++0.66% and 1 MB array parse +0.39% versus marker-probe are confirmed. Older
+small/object-root parse and memory regressions remain. Full tiny parse is still
+2.64x Bun. Most peak RSS rows recover roughly 0.1-0.2 MiB versus marker-probe.
+
+182 runtime tests, 39 compiled comparisons, 36 moving-GC runs and 63 hashes pass.
+Complete full and 854-trial paired matrices plus 24 retained-empty trials qualify
+with 31/50 clean observations. A stronger direct keys-array relocation test remains
+follow-up validation and is not claimed as completed.
+
+[Latest 38 CPU rows](results/inline-object/cpu-38.md),
+[CPU and RAM](results/inline-object/tables.md),
+[complete tradeoffs and validation](results/inline-object/README.md),
+[GC boundary](results/inline-object/gc-coordination.md), and
+[next work](results/inline-object/next-steps.md).
+
+Earlier checkpoints follow.
+
 The latest measured source, marker-probe (7be2932fa), reduces paired stringify CPU
 3.10% for tiny objects, 4.36% for 16 KB record arrays, and 2.36-2.78% for
 1-8 MB records versus plan-scan. It also introduces confirmed parse regressions:

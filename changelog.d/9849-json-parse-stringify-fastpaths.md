@@ -1,3 +1,5 @@
+Bounded inline-object parsing decodes before collection and allocates only a fresh final object. Paired tiny-object parse CPU drops 67.04% to 0.1196715 microseconds; escaped stringify and array parse regressions remain. Full/854-trial paired matrices qualify, alongside 182 runtime tests, 39 compiled comparisons, 36 moving-GC runs and 63 hashes. All-row/no-regression acceptance remains open. See benchmarks/json_performance/results/inline-object/README.md.
+
 Latest marker-probe checkpoint reduces paired tiny/16 KB array/1-8 MB record stringify CPU by 3.10%/4.36%/2.36-2.78% versus plan-scan, but introduces small-object parse and whole-process RSS regressions. All-row and no-regression acceptance remain open (12/38 CPU, 58/74 peak, 28/36 retained). 176 runtime tests, 38 compiled comparisons, 34 moving-GC runs and complete qualified full/784-trial paired matrices pass. See benchmarks/json_performance/results/marker-probe/README.md for exact tradeoffs and earlier requirements.
 
 Accelerate JSON parse and stringify with bounded scanners, vectorized Unicode
