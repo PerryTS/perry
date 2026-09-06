@@ -1948,3 +1948,174 @@ fn a_regexp_with_a_non_writable_lastindex_is_still_found_by_the_probe() {
         "an unrelated key on the same RegExp must still take the fast negative"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Literal-site keyed construction (`js_regexp_new_site` + `regex::site_key`).
+//
+// The site key is the address of a private global the compiler emits once per
+// regex literal. These statics stand in for two such globals: distinct
+// addresses, 8-byte aligned, immortal — the same three properties the emitted
+// ones have, and the reason the key is a sound identity where a `StringHeader`
+// address is not.
+// ---------------------------------------------------------------------------
+
+// Distinct initialisers so nothing may merge them: the test uses only their
+// ADDRESSES, and identical zero-valued statics are exactly the shape a
+// constant-merging pass is allowed to collapse. `assert_ne!` on the two keys
+// keeps that from being a silent assumption.
+static SITE_SLOT_A: u64 = 0xA;
+static SITE_SLOT_B: u64 = 0xB;
+static SITE_SLOT_C: u64 = 0xC;
+
+fn site_key_of(slot: &'static u64) -> i64 {
+    slot as *const u64 as i64
+}
+
+/// **The sabotage the coordinator named: key the table by pattern length.**
+///
+/// Two literals at two sites, same flags, same pattern LENGTH, different text.
+/// A table that verifies a probe by anything weaker than the site key — a
+/// length, a prefix, a fingerprint without the exactness check — hands the
+/// second site the first site's entry, and `.source` then reports a pattern
+/// this literal never contained while `test` matches the wrong language.
+///
+/// Each site is constructed twice: the first construction records, the second
+/// is the one that must come back from the table, which is the case a weak key
+/// breaks. Asserting only on a first construction would pass under every
+/// sabotage, because a miss always takes the content-keyed path.
+#[test]
+fn two_literal_sites_with_equal_length_patterns_never_answer_for_each_other() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    site_key::test_reset();
+
+    let key_a = site_key_of(&SITE_SLOT_A);
+    let key_b = site_key_of(&SITE_SLOT_B);
+    assert_ne!(key_a, key_b, "two sites must have two addresses");
+
+    for round in 0..2 {
+        let a = js_regexp_new_site(make_string("a.c"), make_string("g"), key_a);
+        let b = js_regexp_new_site(make_string("x.z"), make_string("g"), key_b);
+        assert_eq!(
+            string_payload(js_regexp_get_source(a)),
+            b"a.c".to_vec(),
+            "round {round}: site A must report its own pattern"
+        );
+        assert_eq!(
+            string_payload(js_regexp_get_source(b)),
+            b"x.z".to_vec(),
+            "round {round}: site B must report its own pattern — a table keyed by anything \
+             weaker than the site address hands B the entry A recorded, and both patterns are \
+             three bytes long"
+        );
+        assert!(
+            js_regexp_test(a, make_string("abc")) != 0
+                && js_regexp_test(a, make_string("xyz")) == 0,
+            "round {round}: site A must match its own language"
+        );
+        assert!(
+            js_regexp_test(b, make_string("xyz")) != 0
+                && js_regexp_test(b, make_string("abc")) == 0,
+            "round {round}: site B must match its own language"
+        );
+    }
+
+    assert_eq!(
+        site_key::test_recorded_pattern(key_a, "g").as_deref(),
+        Some("a.c")
+    );
+    assert_eq!(
+        site_key::test_recorded_pattern(key_b, "g").as_deref(),
+        Some("x.z")
+    );
+}
+
+/// A dynamic `new RegExp(str)` must never reach the site table.
+///
+/// The two-argument entry point is what every non-literal construction uses —
+/// `js_regexp_construct`, `RegExp.prototype.compile`, the runtime's own
+/// callers — and it has no site to be keyed by. If it recorded under some
+/// stand-in key, a later literal whose key collided would inherit a pattern
+/// that a *variable* produced, which is the one thing the site key's
+/// compile-time-constant argument is supposed to guarantee against.
+#[test]
+fn a_dynamic_construction_records_nothing_in_the_site_table() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    site_key::test_reset();
+
+    for _ in 0..4 {
+        let re = js_regexp_new(make_string("dyn(amic)"), make_string("g"));
+        assert!(js_regexp_test(re, make_string("dynamic")) != 0);
+    }
+    assert_eq!(
+        site_key::test_occupied_slots(),
+        0,
+        "the two-argument entry point has no site key and must record nothing"
+    );
+
+    // The same TEXT through the site entry does record — so the zero above is
+    // a property of the entry point, not of a table that never works.
+    let key = site_key_of(&SITE_SLOT_C);
+    let re = js_regexp_new_site(make_string("dyn(amic)"), make_string("g"), key);
+    assert!(js_regexp_test(re, make_string("dynamic")) != 0);
+    assert_eq!(
+        site_key::test_occupied_slots(),
+        1,
+        "the site entry point must record — otherwise the assertion above proves nothing"
+    );
+    assert_eq!(
+        site_key::test_recorded_pattern(key, "g").as_deref(),
+        Some("dyn(amic)")
+    );
+}
+
+/// A site hit must be born built: the second construction at a site whose
+/// first header has already executed installs the compiled programs eagerly,
+/// so `regex_ptr` is non-null before any match runs.
+///
+/// This is what makes the fast path complete — a hit that skipped the content
+/// cache but arrived unbuilt would push the pattern's hash back onto the first
+/// `test()` and give the site key nothing.
+#[test]
+fn a_site_hit_after_the_first_execution_is_born_built() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    site_key::test_reset();
+    let key = site_key_of(&SITE_SLOT_A);
+
+    let first = js_regexp_new_site(make_string("bo+rn"), make_string(""), key);
+    assert!(
+        unsafe { (*first).regex_ptr }.is_null(),
+        "construction must not build the program (that is #5777's deferred build)"
+    );
+    assert!(js_regexp_test(first, make_string("boorn")) != 0);
+    assert!(
+        !unsafe { (*first).regex_ptr }.is_null(),
+        "the first execution installs the programs"
+    );
+
+    // Second construction at the SAME site.
+    let second = js_regexp_new_site(make_string("bo+rn"), make_string(""), key);
+    assert!(
+        !unsafe { (*second).regex_ptr }.is_null(),
+        "a site hit must install the programs the site already compiled, so the header is born \
+         built and the first match pays no lookup"
+    );
+    assert_ne!(first, second, "each evaluation is still a distinct object");
+    assert!(js_regexp_test(second, make_string("born")) != 0);
+}
+
+/// The kill switch has to remove the lane, not just its answers: with
+/// `PERRY_REGEX_SITE_KEY=0` the table records nothing, so the OFF arm is the
+/// content-keyed path exactly rather than a control still paying the
+/// bookkeeping.
+///
+/// Read once per process through a `OnceLock`, so this asserts the DEFAULT is
+/// on rather than flipping the variable mid-run (which would only test the
+/// cache of the first read).
+#[test]
+fn the_site_key_lane_is_on_by_default() {
+    assert!(
+        crate::gc::env_default_on_from_value(None),
+        "the site-key lane defaults ON; `PERRY_REGEX_SITE_KEY=0` is the kill switch"
+    );
+    assert!(!crate::gc::env_default_on_from_value(Some("0")));
+}

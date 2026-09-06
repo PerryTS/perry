@@ -69,6 +69,11 @@ mod replace_expand;
 mod replace_fn;
 #[cfg(feature = "regex-engine")]
 mod site_cache;
+/// Literal-site keyed construction cache — identity by an immortal address
+/// emitted per regex literal, so a hit costs one word compare instead of a
+/// fingerprint plus a full byte compare of the pattern.
+#[cfg(feature = "regex-engine")]
+mod site_key;
 #[cfg(feature = "regex-engine")]
 mod unicode17;
 #[cfg(feature = "regex-engine")]
@@ -976,6 +981,49 @@ pub extern "C" fn js_regexp_new(
     pattern: *const StringHeader,
     flags: *const StringHeader,
 ) -> *mut RegExpHeader {
+    js_regexp_new_impl(pattern, flags, 0)
+}
+
+/// [`js_regexp_new`] for a **regex literal**, which the compiler can identify
+/// by its source site instead of by its text.
+///
+/// `site_key` is the address of an 8-byte private global the `Expr::RegExp`
+/// lowering emits once per literal (`expr/logical_collections.rs`). It is
+/// unique by construction, immortal, and never moves, which is what makes it a
+/// sound identity where a `StringHeader` address is not: string headers are
+/// GC-managed, so an address is freed and reused and a moving collector
+/// relocates them, and a pointer-keyed cache over them would answer for a
+/// different pattern.
+///
+/// A hit therefore verifies with ONE word compare (plus the site's ≤ 8-byte
+/// flags text) and never reads the pattern at all — no fingerprint, no
+/// `memcmp`, no validation, no flag canonicalization. On claude-code the
+/// segment loop constructs `string-width`'s ~12,807-character `/…/g` once per
+/// grapheme, and the content cache's exactness verify alone is ~2.0 GB of
+/// `memcmp` per 400-character reply.
+///
+/// A `site_key` of 0 means "no site" and behaves exactly like
+/// [`js_regexp_new`]; every dynamic construction (`new RegExp(s)`,
+/// [`js_regexp_construct`], the runtime's own callers) keeps the two-argument
+/// form and never touches the site table.
+///
+/// Kill switch: `PERRY_REGEX_SITE_KEY=0`.
+#[cfg(feature = "regex-engine")]
+#[no_mangle]
+pub extern "C" fn js_regexp_new_site(
+    pattern: *const StringHeader,
+    flags: *const StringHeader,
+    site_key: i64,
+) -> *mut RegExpHeader {
+    js_regexp_new_impl(pattern, flags, site_key as usize)
+}
+
+#[cfg(feature = "regex-engine")]
+fn js_regexp_new_impl(
+    pattern: *const StringHeader,
+    flags: *const StringHeader,
+    site_key: usize,
+) -> *mut RegExpHeader {
     // ★ `pattern` is a raw `StringHeader*` in a Rust local, and this function
     // allocates twice below (`js_string_from_str` for the canonical flags, then
     // `arena_alloc_gc` for the header). Either can drive an evacuating minor that
@@ -991,151 +1039,215 @@ pub extern "C" fn js_regexp_new(
     // in `js_regexp_new` itself, on BOTH sides of an unrelated codegen change.
     let scope = crate::gc::RuntimeHandleScope::new();
     let pattern_root = scope.root_string_ptr(pattern);
-    let pattern_str = if is_valid_ptr(pattern) {
-        string_as_str(pattern)
-    } else {
-        ""
-    };
     let raw_flags_str = if is_valid_ptr(flags) {
         string_as_str(flags)
     } else {
         ""
     };
 
-    // #2829: reject duplicate/unknown flags (SyntaxError) and store the
-    // canonical sorted form so `.flags` reflects Node's ordering.
-    let canonical_flags = validate_and_canonicalize_flags(raw_flags_str);
-    let flags_str = canonical_flags.as_str();
-
-    // ★ Share the caller's flags string when it is ALREADY the canonical text.
+    // ★ LITERAL-SITE FAST PATH — identity by an immortal address.
     //
-    // `flags_ptr` used to be a fresh `js_string_from_str` on every
-    // construction. A JS regex literal evaluates to a fresh RegExp object
-    // every time it is reached, so that is one 32-byte GC string per
-    // evaluation: `PERRY_REGEX_DIAG` counts 161,897 constructions per
-    // 400-character claude-code reply, ~5.2 MB of identical one- and two-byte
-    // strings, and ~44 MB on a 3300-character reply.
+    // `site_key` is the address of a private global the compiler emits once
+    // per regex literal, so a match on it proves this is the SAME SOURCE SITE
+    // that recorded the entry, whose pattern and flags are fixed at compile
+    // time. Nothing about the pattern text is read: no fingerprint, no
+    // `memcmp`, no validation, no flag canonicalization. The flags text IS
+    // compared, because it is at most eight bytes and because two spellings of
+    // one canonical form (`/x/ig`, `/x/gi`) must not answer for each other.
     //
-    // JS strings are immutable and have no identity semantics, and a literal's
-    // flags text is written by the author in spec order (`/x/gi`, not
-    // `/x/ig`), so the caller's string usually IS the canonical text and can
-    // simply be shared. Nothing downstream depends on the pointer being fresh:
-    // `flags_ptr`-keyed lookups (`FANCY_CACHE`, `lookup_fancy_regex`) read it
-    // through `string_as_str` and compare CONTENT, and the header keeping a
-    // pointer to it is what keeps it alive.
-    //
-    // This comparison must happen HERE, before the validation block below,
-    // because `raw_flags_str` borrows the caller's GC string and that block
-    // can allocate. The root is taken here for the same reason: the raw
-    // `flags` argument may name from-space after any allocation, exactly as
-    // the ★ note on `pattern_root` says, and this one is stored into the
-    // header too.
-    let shared_flags_root =
-        (is_valid_ptr(flags) && raw_flags_str == flags_str).then(|| scope.root_string_ptr(flags));
-
-    let case_insensitive = flags_str.contains('i');
-    let global = flags_str.contains('g');
-    let multiline = flags_str.contains('m');
-    let sticky = flags_str.contains('y');
-    let dot_all = flags_str.contains('s');
-    let unicode = flags_str.contains('u') || flags_str.contains('v');
-    let has_indices = flags_str.contains('d');
-
-    // Content-keyed construction cache (`regex::site_cache`): a verified hit
-    // means this exact `(pattern, canonical flags)` already cleared the
-    // validation below — validity is a pure function of the pair — and hands
-    // back the shared owned copies plus, once some header built from this
-    // text has been executed, its compiled programs. The probe is one
-    // fingerprint and one byte compare; everything below it that copies or
-    // hashes the pattern is skipped.
-    let site_hit = site_cache::lookup(pattern_str, flags_str);
-    let validated_hit =
-        site_hit.is_some() || lazy::pattern_already_validated(pattern_str, flags_str);
-    if crate::hot_diag::regex_on() {
-        crate::hot_diag::regex_with(|d| {
-            d.note_new(
-                pattern as usize,
-                pattern_str.as_bytes(),
-                flags_str,
-                validated_hit && site_hit.is_none(),
-                site_hit.is_some(),
+    // A `site_key` of 0 (every dynamic construction, and every runtime caller)
+    // misses by construction and takes the content-keyed path below unchanged.
+    let site_entry = site_key::lookup(site_key, raw_flags_str);
+    let (owned_pattern, owned_flags, programs, bits, shared_flags_root) = match site_entry {
+        Some(hit) => {
+            // The site's own flags literal, so this is the same sharing
+            // decision the first construction at this site made (#9819).
+            let shared_flags_root = (hit.flags_are_canonical && is_valid_ptr(flags))
+                .then(|| scope.root_string_ptr(flags));
+            debug_assert!(
+                !is_valid_ptr(pattern) || string_as_str(pattern) == &*hit.pattern,
+                "a site key names ONE source literal, whose pattern text cannot change; a \
+                 caller that reuses a key for different text would silently take another \
+                 site's program"
+            );
+            if crate::hot_diag::regex_on() {
+                let bytes: &[u8] = hit.pattern.as_bytes();
+                let flags_text: &str = &hit.flags;
+                crate::hot_diag::regex_with(|d| {
+                    d.new_site_key_hit += 1;
+                    d.note_new(pattern as usize, bytes, flags_text, false, true);
+                });
+            }
+            // Until the site's first execution installs the compiled programs,
+            // pick them up from the content cache — one probe per construction,
+            // and in a loop that matches immediately that is exactly one.
+            let programs = match hit.programs {
+                Some(programs) => Some(programs),
+                None => {
+                    let picked =
+                        site_cache::lookup(&hit.pattern, &hit.flags).and_then(|h| h.programs);
+                    if let Some(programs) = picked.clone() {
+                        site_key::install_programs(site_key, programs);
+                    }
+                    picked
+                }
+            };
+            (
+                hit.pattern,
+                hit.flags,
+                programs,
+                hit.bits,
+                shared_flags_root,
             )
-        });
-    }
+        }
+        None => {
+            let pattern_str = if is_valid_ptr(pattern) {
+                string_as_str(pattern)
+            } else {
+                ""
+            };
 
-    // #2829: reject invalid pattern syntax with a SyntaxError. A pattern the
-    // `regex` crate rejects is only a real error if `fancy-regex` (which
-    // covers the full JS feature set: lookbehind/lookahead/backreferences)
-    // ALSO rejects it — otherwise it is a valid JS pattern we route through
-    // the fancy fallback. `get_or_compile_regex` populates FANCY_CACHE when
-    // the regex crate fails but fancy-regex succeeds; check both here.
-    //
-    // PERF (#5777 follow-up): the ENTIRE validation block runs at most once
-    // per (pattern, flags). Regex validity is a pure function of the pair, so
-    // a pattern that has already cleared it can never fail it later; the
-    // cheap JS-syntax checks are not actually cheap
-    // (`has_invalid_repeated_quantifier` does a
-    // `pattern.chars().collect::<Vec<char>>()` — a ~51 KB allocation for a
-    // 12,807-char pattern — plus an O(n) scan on EVERY `new RegExp(...)`),
-    // and the common `string-width`/`emoji-regex` npm packages construct a
-    // fresh ~12,807-char `/…/g` literal on every measurement, which a layout
-    // pass calls thousands of times. #5777 keyed that skip off a REGEX_CACHE
-    // hit, which worked only because construction also COMPILED; with the
-    // build deferred, the fact is recorded directly in `VALIDATED_PATTERNS`.
-    {
-        if !validated_hit {
-            if has_invalid_repeated_quantifier(pattern_str) {
-                throw_regexp_syntax_error(&format!(
-                    "Invalid regular expression: /{}/: invalid pattern",
-                    pattern_str
-                ));
-            }
-            // `--` is the real ClassSetExpression subtraction operator under
-            // the `v` flag (UTS #51) — `[a--z]` there means "a minus z", not
-            // a malformed range — so only legacy/`u`-mode patterns are
-            // subject to the doubled-hyphen range-order check.
-            if !flags_str.contains('v') && has_out_of_order_double_dash_class_range(pattern_str) {
-                throw_regexp_syntax_error(&format!(
-                    "Invalid regular expression: /{}/: invalid pattern",
-                    pattern_str
-                ));
-            }
-            // Annex B.1.4 legacy escapes (`\1` non-backref octal, `\0DD`, `\8`/`\9`,
-            // `\c` without a control letter) are accepted in sloppy patterns but are
-            // a hard SyntaxError under the `/u` (and `/v`) flag — `js_regex_to_rust`
-            // would otherwise silently relax them. (test262 RegExp/
-            // unicode_restricted_octal_escape + unicode_restricted_identity_escape_c)
-            if unicode && has_unicode_forbidden_legacy_escape(pattern_str) {
-                throw_regexp_syntax_error(&format!(
-                    "Invalid regular expression: /{}/: invalid pattern",
-                    pattern_str
-                ));
-            }
-            // The remaining Annex B.1.4 leniencies (lone `]`/`}`, incomplete `{`
-            // quantifiers, `\d`-style range endpoints, quantified lookarounds, and
-            // forbidden IdentityEscapes) are likewise hard errors under `/u`. Gated
-            // on `u` specifically — `/v`'s ClassSetExpression grammar differs.
-            if flags_str.contains('u') && has_unicode_forbidden_pattern(pattern_str) {
-                throw_regexp_syntax_error(&format!(
-                    "Invalid regular expression: /{}/: invalid pattern",
-                    pattern_str
-                ));
-            }
-            // The remaining question — "is this a SyntaxError?" — used to be
-            // answered by BUILDING the pattern, which is why constructing a
-            // regex cost an NFA. Ask the standard engine's PARSER instead
-            // (`lazy::std_engine_syntax_ok`, the same `regex_syntax` parse
-            // `build_std_regex` performs, on the same string): 17.8x cheaper,
-            // and it agrees with the full build on every one of the 2,378
-            // regex literals in the claude-code bundle (asserted over a
-            // corpus by `tests::syntax_check_agrees_with_full_build`).
+            // #2829: reject duplicate/unknown flags (SyntaxError) and store the
+            // canonical sorted form so `.flags` reflects Node's ordering.
+            let canonical_flags = validate_and_canonicalize_flags(raw_flags_str);
+            let flags_str = canonical_flags.as_str();
+
+            // ★ Share the caller's flags string when it is ALREADY the canonical text.
             //
-            // A parser rejection is NOT a verdict: every lookbehind /
-            // backreference pattern is rejected by the linear engine too. Fall
-            // through to the unchanged both-engines path, which owns the
-            // SyntaxError decision and populates the caches for the fancy
-            // fallback.
-            if !lazy::std_engine_syntax_ok(pattern_str, flags_str)
+            // `flags_ptr` used to be a fresh `js_string_from_str` on every
+            // construction. A JS regex literal evaluates to a fresh RegExp object
+            // every time it is reached, so that is one 32-byte GC string per
+            // evaluation: `PERRY_REGEX_DIAG` counts 161,897 constructions per
+            // 400-character claude-code reply, ~5.2 MB of identical one- and two-byte
+            // strings, and ~44 MB on a 3300-character reply.
+            //
+            // JS strings are immutable and have no identity semantics, and a literal's
+            // flags text is written by the author in spec order (`/x/gi`, not
+            // `/x/ig`), so the caller's string usually IS the canonical text and can
+            // simply be shared. Nothing downstream depends on the pointer being fresh:
+            // `flags_ptr`-keyed lookups (`FANCY_CACHE`, `lookup_fancy_regex`) read it
+            // through `string_as_str` and compare CONTENT, and the header keeping a
+            // pointer to it is what keeps it alive.
+            //
+            // This comparison must happen HERE, before the validation block below,
+            // because `raw_flags_str` borrows the caller's GC string and that block
+            // can allocate. The root is taken here for the same reason: the raw
+            // `flags` argument may name from-space after any allocation, exactly as
+            // the ★ note on `pattern_root` says, and this one is stored into the
+            // header too.
+            let flags_are_canonical = raw_flags_str == flags_str;
+            let shared_flags_root =
+                (is_valid_ptr(flags) && flags_are_canonical).then(|| scope.root_string_ptr(flags));
+            // Materialized HERE, while `raw_flags_str`'s borrow of the caller's
+            // GC string is still guaranteed live: the validation block below
+            // can allocate, and the site record is written after it.
+            let raw_flags_owned: Arc<str> = Arc::from(raw_flags_str);
+
+            let case_insensitive = flags_str.contains('i');
+            let global = flags_str.contains('g');
+            let multiline = flags_str.contains('m');
+            let sticky = flags_str.contains('y');
+            let dot_all = flags_str.contains('s');
+            let unicode = flags_str.contains('u') || flags_str.contains('v');
+            let has_indices = flags_str.contains('d');
+
+            // Content-keyed construction cache (`regex::site_cache`): a verified hit
+            // means this exact `(pattern, canonical flags)` already cleared the
+            // validation below — validity is a pure function of the pair — and hands
+            // back the shared owned copies plus, once some header built from this
+            // text has been executed, its compiled programs. The probe is one
+            // fingerprint and one byte compare; everything below it that copies or
+            // hashes the pattern is skipped.
+            let site_hit = site_cache::lookup(pattern_str, flags_str);
+            let validated_hit =
+                site_hit.is_some() || lazy::pattern_already_validated(pattern_str, flags_str);
+            if crate::hot_diag::regex_on() {
+                crate::hot_diag::regex_with(|d| {
+                    d.note_new(
+                        pattern as usize,
+                        pattern_str.as_bytes(),
+                        flags_str,
+                        validated_hit && site_hit.is_none(),
+                        site_hit.is_some(),
+                    )
+                });
+            }
+
+            // #2829: reject invalid pattern syntax with a SyntaxError. A pattern the
+            // `regex` crate rejects is only a real error if `fancy-regex` (which
+            // covers the full JS feature set: lookbehind/lookahead/backreferences)
+            // ALSO rejects it — otherwise it is a valid JS pattern we route through
+            // the fancy fallback. `get_or_compile_regex` populates FANCY_CACHE when
+            // the regex crate fails but fancy-regex succeeds; check both here.
+            //
+            // PERF (#5777 follow-up): the ENTIRE validation block runs at most once
+            // per (pattern, flags). Regex validity is a pure function of the pair, so
+            // a pattern that has already cleared it can never fail it later; the
+            // cheap JS-syntax checks are not actually cheap
+            // (`has_invalid_repeated_quantifier` does a
+            // `pattern.chars().collect::<Vec<char>>()` — a ~51 KB allocation for a
+            // 12,807-char pattern — plus an O(n) scan on EVERY `new RegExp(...)`),
+            // and the common `string-width`/`emoji-regex` npm packages construct a
+            // fresh ~12,807-char `/…/g` literal on every measurement, which a layout
+            // pass calls thousands of times. #5777 keyed that skip off a REGEX_CACHE
+            // hit, which worked only because construction also COMPILED; with the
+            // build deferred, the fact is recorded directly in `VALIDATED_PATTERNS`.
+            {
+                if !validated_hit {
+                    if has_invalid_repeated_quantifier(pattern_str) {
+                        throw_regexp_syntax_error(&format!(
+                            "Invalid regular expression: /{}/: invalid pattern",
+                            pattern_str
+                        ));
+                    }
+                    // `--` is the real ClassSetExpression subtraction operator under
+                    // the `v` flag (UTS #51) — `[a--z]` there means "a minus z", not
+                    // a malformed range — so only legacy/`u`-mode patterns are
+                    // subject to the doubled-hyphen range-order check.
+                    if !flags_str.contains('v')
+                        && has_out_of_order_double_dash_class_range(pattern_str)
+                    {
+                        throw_regexp_syntax_error(&format!(
+                            "Invalid regular expression: /{}/: invalid pattern",
+                            pattern_str
+                        ));
+                    }
+                    // Annex B.1.4 legacy escapes (`\1` non-backref octal, `\0DD`, `\8`/`\9`,
+                    // `\c` without a control letter) are accepted in sloppy patterns but are
+                    // a hard SyntaxError under the `/u` (and `/v`) flag — `js_regex_to_rust`
+                    // would otherwise silently relax them. (test262 RegExp/
+                    // unicode_restricted_octal_escape + unicode_restricted_identity_escape_c)
+                    if unicode && has_unicode_forbidden_legacy_escape(pattern_str) {
+                        throw_regexp_syntax_error(&format!(
+                            "Invalid regular expression: /{}/: invalid pattern",
+                            pattern_str
+                        ));
+                    }
+                    // The remaining Annex B.1.4 leniencies (lone `]`/`}`, incomplete `{`
+                    // quantifiers, `\d`-style range endpoints, quantified lookarounds, and
+                    // forbidden IdentityEscapes) are likewise hard errors under `/u`. Gated
+                    // on `u` specifically — `/v`'s ClassSetExpression grammar differs.
+                    if flags_str.contains('u') && has_unicode_forbidden_pattern(pattern_str) {
+                        throw_regexp_syntax_error(&format!(
+                            "Invalid regular expression: /{}/: invalid pattern",
+                            pattern_str
+                        ));
+                    }
+                    // The remaining question — "is this a SyntaxError?" — used to be
+                    // answered by BUILDING the pattern, which is why constructing a
+                    // regex cost an NFA. Ask the standard engine's PARSER instead
+                    // (`lazy::std_engine_syntax_ok`, the same `regex_syntax` parse
+                    // `build_std_regex` performs, on the same string): 17.8x cheaper,
+                    // and it agrees with the full build on every one of the 2,378
+                    // regex literals in the claude-code bundle (asserted over a
+                    // corpus by `tests::syntax_check_agrees_with_full_build`).
+                    //
+                    // A parser rejection is NOT a verdict: every lookbehind /
+                    // backreference pattern is rejected by the linear engine too. Fall
+                    // through to the unchanged both-engines path, which owns the
+                    // SyntaxError decision and populates the caches for the fancy
+                    // fallback.
+                    if !lazy::std_engine_syntax_ok(pattern_str, flags_str)
                 // Cold: the linear engine's parser refused, so only a BUILD
                 // can tell a fancy-regex pattern from a SyntaxError.
                 // Materialising the `Arc` key happens once per distinct
@@ -1143,49 +1255,91 @@ pub extern "C" fn js_regexp_new(
                 && !compile_and_cache_regex_checked(
                     &Arc::from(pattern_str),
                     &Arc::from(flags_str),
-                )
-            {
-                // Preserve the historical edge: validation used to test the
-                // BARE translated pattern (no `(?ims)` prefix). A pattern that
-                // compiles bare but blows the size limit with the flag prefix
-                // must stay a silent never-match (matching prior behavior),
-                // not a SyntaxError.
-                let translated = js_regex_to_rust(pattern_str);
-                if build_std_regex(&translated).is_err() && build_fancy_regex(&translated).is_err()
-                {
-                    throw_regexp_syntax_error(&format!(
-                        "Invalid regular expression: /{}/: invalid pattern",
-                        pattern_str
-                    ));
+                ) {
+                        // Preserve the historical edge: validation used to test the
+                        // BARE translated pattern (no `(?ims)` prefix). A pattern that
+                        // compiles bare but blows the size limit with the flag prefix
+                        // must stay a silent never-match (matching prior behavior),
+                        // not a SyntaxError.
+                        let translated = js_regex_to_rust(pattern_str);
+                        if build_std_regex(&translated).is_err()
+                            && build_fancy_regex(&translated).is_err()
+                        {
+                            throw_regexp_syntax_error(&format!(
+                                "Invalid regular expression: /{}/: invalid pattern",
+                                pattern_str
+                            ));
+                        }
+                    }
+                    lazy::mark_pattern_validated(pattern_str, flags_str);
                 }
             }
-            lazy::mark_pattern_validated(pattern_str, flags_str);
-        }
-    }
 
-    // The compiled program is NOT built here. Validation above has already
-    // established that the pattern is legal, and a bundle evaluates hundreds
-    // of module-level literals it never matches with — building each one's
-    // NFA at construction is what put ~14% of a claude-code `--help` run
-    // inside `regex_syntax`/`regex_automata`. `regex_ptr` stays null (the
-    // "not built yet" state) and `lazy::ensure_regex_compiled` installs the
-    // owned `Arc`s on the first operation that needs a matcher.
+            // The compiled program is NOT built here. Validation above has already
+            // established that the pattern is legal, and a bundle evaluates hundreds
+            // of module-level literals it never matches with — building each one's
+            // NFA at construction is what put ~14% of a claude-code `--help` run
+            // inside `regex_syntax`/`regex_automata`. `regex_ptr` stays null (the
+            // "not built yet" state) and `lazy::ensure_regex_compiled` installs the
+            // owned `Arc`s on the first operation that needs a matcher.
 
-    // ★ Last use of the borrowed pattern text before this function allocates.
-    // `pattern_str` borrows the GC string; the two allocations below can move
-    // it, and everything after this point reads the pattern from `owned_pattern`
-    // (a shared `Arc<str>`, which relocation cannot invalidate) or from
-    // `pattern_root` (a runtime handle the collector rewrites). Nothing below
-    // may use `pattern_str` or the incoming `pattern` argument again.
-    let (owned_pattern, owned_flags, programs) = match site_hit {
-        Some(hit) => (hit.pattern, hit.flags, hit.programs),
-        None => {
-            let (p, f) = site_cache::insert(pattern_str, flags_str);
-            (p, f, None)
+            // ★ Last use of the borrowed pattern text before this function allocates.
+            // `pattern_str` borrows the GC string; the two allocations below can move
+            // it, and everything after this point reads the pattern from `owned_pattern`
+            // (a shared `Arc<str>`, which relocation cannot invalidate) or from
+            // `pattern_root` (a runtime handle the collector rewrites). Nothing below
+            // may use `pattern_str` or the incoming `pattern` argument again.
+            let (owned_pattern, owned_flags, programs) = match site_hit {
+                Some(hit) => (hit.pattern, hit.flags, hit.programs),
+                None => {
+                    let (p, f) = site_cache::insert(pattern_str, flags_str);
+                    (p, f, None)
+                }
+            };
+            #[allow(unused_variables)]
+            let pattern_str: () = ();
+
+            // Record what this construction established, so every later
+            // evaluation of this literal answers from the site key. Only ever
+            // written on the path that has already validated the pair — a
+            // hit legitimately skips validation because validity is a pure
+            // function of `(pattern, flags)`.
+            let bits = site_key::FlagBits {
+                case_insensitive,
+                global,
+                multiline,
+                sticky,
+                dot_all,
+                unicode,
+                has_indices,
+            };
+            site_key::record(
+                site_key,
+                raw_flags_owned,
+                owned_pattern.clone(),
+                owned_flags.clone(),
+                flags_are_canonical,
+                bits,
+                programs.clone(),
+            );
+            (
+                owned_pattern,
+                owned_flags,
+                programs,
+                bits,
+                shared_flags_root,
+            )
         }
     };
-    #[allow(unused_variables)]
-    let pattern_str: () = ();
+    let site_key::FlagBits {
+        case_insensitive,
+        global,
+        multiline,
+        sticky,
+        dot_all,
+        unicode,
+        has_indices,
+    } = bits;
 
     // ★ The header is NURSERY-allocated, like an ordinary object.
     //
@@ -1229,7 +1383,11 @@ pub extern "C" fn js_regexp_new(
             if crate::hot_diag::regex_on() {
                 crate::hot_diag::regex_with(|d| d.new_flags_allocated += 1);
             }
-            scope.root_string_ptr(js_string_from_str(flags_str))
+            // `owned_flags` IS the canonical text (the shared `Arc<str>` the
+            // site or content cache handed back), and unlike `flags_str` it
+            // does not borrow the caller's GC string, so it is still valid
+            // here after the analysis above.
+            scope.root_string_ptr(js_string_from_str(&owned_flags))
         }
     };
     // ★ #7341: root the canonical flags string too. The header allocation below
