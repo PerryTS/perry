@@ -46,9 +46,58 @@
 //! exactly as before this existed).
 
 use std::cell::RefCell;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use super::site_cache::Programs;
+
+/// The site entry's view of a pattern's compiled programs: **weak**, so the
+/// table can hand them out but can never be the reason they stay alive.
+///
+/// Measured cost of holding them strongly (cc, one 3300-char reply): settled
+/// footprint 478/474 MB → 500/527 MB and idle CPU 2.37 → 2.68 s. The site
+/// table is 1,024 entries and a compiled program is ~19 KB, so a table that
+/// outlives the content cache's own eviction retains programs nothing else
+/// wants. The campaign's directive is both metrics together, and a CPU win
+/// bought with resident memory does not land.
+///
+/// Strong references remain where they belong: the `(pattern, flags)` program
+/// caches, and every live header that installed them via `Arc::into_raw`. A
+/// site entry whose programs have been dropped simply reports "not built
+/// yet", and the next construction re-picks them up from the content cache —
+/// the same path the site's very first construction takes.
+struct WeakPrograms {
+    std: Weak<::regex::Regex>,
+    fancy: Option<Weak<::fancy_regex::Regex>>,
+    repeat: Option<Weak<super::repeat_matcher::RepeatMatcherRegex>>,
+}
+
+impl WeakPrograms {
+    fn downgrade(programs: &Programs) -> Self {
+        Self {
+            std: Arc::downgrade(&programs.std),
+            fancy: programs.fancy.as_ref().map(Arc::downgrade),
+            repeat: programs.repeat.as_ref().map(Arc::downgrade),
+        }
+    }
+
+    /// ALL-OR-NOTHING. A header must carry **every** program its pattern needs
+    /// — that is #9801's coherence rule, and a partial upgrade is exactly the
+    /// incoherent triple it fixed: a standard program installed beside a
+    /// missing fancy fallback silently never-matches instead of falling back.
+    /// So a single dead reference makes the whole entry report unbuilt.
+    fn upgrade(&self) -> Option<Programs> {
+        let std = self.std.upgrade()?;
+        let fancy = match &self.fancy {
+            None => None,
+            Some(weak) => Some(weak.upgrade()?),
+        };
+        let repeat = match &self.repeat {
+            None => None,
+            Some(weak) => Some(weak.upgrade()?),
+        };
+        Some(Programs { std, fancy, repeat })
+    }
+}
 
 /// The flag bits `js_regexp_new` derives from the canonical flags text. They
 /// are a pure function of the site's flags literal, so a hit reads them
@@ -79,7 +128,7 @@ struct Entry {
     /// of the site: the author wrote `/x/gi` or `/x/ig` once.
     flags_are_canonical: bool,
     bits: FlagBits,
-    programs: Option<Programs>,
+    programs: Option<WeakPrograms>,
 }
 
 /// What a construction gets back on a site hit.
@@ -136,7 +185,7 @@ pub(super) fn lookup(key: usize, raw_flags: &str) -> Option<SiteHit> {
                         flags: entry.flags.clone(),
                         flags_are_canonical: entry.flags_are_canonical,
                         bits: entry.bits,
-                        programs: entry.programs.clone(),
+                        programs: entry.programs.as_ref().and_then(WeakPrograms::upgrade),
                     });
                 }
             }
@@ -169,8 +218,19 @@ pub(super) fn record(
         for s in [slot, slot ^ 1] {
             if let Some(entry) = &mut table[s] {
                 if entry.key == key && entry.raw_flags == raw_flags {
-                    if entry.programs.is_none() {
-                        entry.programs = programs;
+                    // Refresh a reference whose programs have been dropped,
+                    // rather than only filling an empty one: a dead weak and
+                    // an absent entry mean the same thing here, and the
+                    // former must be able to heal.
+                    if let Some(programs) = &programs {
+                        if entry
+                            .programs
+                            .as_ref()
+                            .and_then(WeakPrograms::upgrade)
+                            .is_none()
+                        {
+                            entry.programs = Some(WeakPrograms::downgrade(programs));
+                        }
                     }
                     return;
                 }
@@ -193,7 +253,7 @@ pub(super) fn record(
             flags,
             flags_are_canonical,
             bits,
-            programs,
+            programs: programs.as_ref().map(WeakPrograms::downgrade),
         });
     });
 }
@@ -212,8 +272,14 @@ pub(super) fn install_programs(key: usize, programs: Programs) {
         }
         for s in [slot, slot ^ 1] {
             if let Some(entry) = &mut table[s] {
-                if entry.key == key && entry.programs.is_none() {
-                    entry.programs = Some(programs);
+                if entry.key == key
+                    && entry
+                        .programs
+                        .as_ref()
+                        .and_then(WeakPrograms::upgrade)
+                        .is_none()
+                {
+                    entry.programs = Some(WeakPrograms::downgrade(&programs));
                     return;
                 }
             }
@@ -246,4 +312,106 @@ pub(super) fn test_recorded_pattern(key: i64, raw_flags: &str) -> Option<String>
 #[cfg(test)]
 pub(super) fn test_occupied_slots() -> usize {
     SITE_KEY_TABLE.with(|table| table.borrow().iter().filter(|e| e.is_some()).count())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// **The all-or-nothing rule, made able to fail.**
+    ///
+    /// #9801 fixed an incoherent triple — a standard program memoized beside a
+    /// missing fancy fallback — which does not error: it silently never
+    /// matches. Holding the site entry's programs weakly reintroduces exactly
+    /// that shape unless a dead reference invalidates the WHOLE entry, because
+    /// the three `Arc`s have independent lifetimes and the fancy fallback is
+    /// the one a pattern the linear engine refused depends on.
+    ///
+    /// A sabotage that upgrades each field independently — the natural way to
+    /// write it — returns `Some(Programs { std, fancy: None, .. })` here and
+    /// fails on the second assertion.
+    #[test]
+    fn one_dead_reference_invalidates_the_whole_entry() {
+        let std_program = Arc::new(::regex::Regex::new("a(b)c").expect("linear program"));
+        let fancy_program = Arc::new(::fancy_regex::Regex::new("a(?=b)c").expect("fancy program"));
+        let programs = Programs {
+            std: std_program.clone(),
+            fancy: Some(fancy_program.clone()),
+            repeat: None,
+        };
+        let weak = WeakPrograms::downgrade(&programs);
+        drop(programs);
+
+        let upgraded = weak
+            .upgrade()
+            .expect("both strong references are still held here");
+        assert!(
+            upgraded.fancy.is_some(),
+            "the fancy fallback must survive the round trip while its Arc is alive"
+        );
+        drop(upgraded);
+
+        // Only the FANCY program dies. The standard one is still strongly held.
+        drop(fancy_program);
+        assert!(
+            weak.upgrade().is_none(),
+            "one dead reference must invalidate the whole entry — handing back a header with a \
+             standard program and no fancy fallback is #9801's incoherent triple, which never \
+             matches instead of failing"
+        );
+        drop(std_program);
+        assert!(weak.upgrade().is_none());
+    }
+
+    /// The table must not be the reason a program stays alive: once nothing
+    /// else holds it, a recorded entry reports "not built yet" and the next
+    /// construction re-picks it up from the content cache.
+    #[test]
+    fn the_site_table_does_not_keep_a_program_alive() {
+        test_reset();
+        let key = 0x5171_E000_usize;
+        let std_program = Arc::new(::regex::Regex::new("keepalive").expect("linear program"));
+        let programs = Programs {
+            std: std_program.clone(),
+            fancy: None,
+            repeat: None,
+        };
+        record(
+            key,
+            Arc::from("g"),
+            Arc::from("keepalive"),
+            Arc::from("g"),
+            true,
+            FlagBits {
+                case_insensitive: false,
+                global: true,
+                multiline: false,
+                sticky: false,
+                dot_all: false,
+                unicode: false,
+                has_indices: false,
+            },
+            Some(programs),
+        );
+        assert!(
+            lookup(key, "g")
+                .expect("the entry was just recorded")
+                .programs
+                .is_some(),
+            "precondition: the entry answers with its programs while they are alive"
+        );
+
+        drop(std_program);
+        let hit = lookup(key, "g").expect("the entry itself survives");
+        assert!(
+            hit.programs.is_none(),
+            "the site table holds programs WEAKLY: with every other reference gone the entry must \
+             report unbuilt rather than keeping ~19 KB per slot alive on its own"
+        );
+        assert_eq!(
+            &*hit.pattern, "keepalive",
+            "the entry's identity is unaffected — only its programs expire"
+        );
+        test_reset();
+    }
 }

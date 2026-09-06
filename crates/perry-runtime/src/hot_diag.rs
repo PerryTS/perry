@@ -187,6 +187,33 @@ crate::perry_thread_local! {
     static REGEX_DIAG: RefCell<RegexDiag> = RefCell::new(RegexDiag::default());
 }
 
+/// Accumulate into the thread's regex counters WITHOUT ticking the dump clock.
+///
+/// `regex_with` counts every call as an "event" and dumps every `TICK_EVERY`
+/// events once a second has passed, so the snapshot a `SIGKILL`ed process
+/// leaves behind lands wherever the event stream happened to be. Adding a
+/// second probe to a path that already had one therefore does not just add a
+/// counter — it **doubles that path's event rate and moves the last snapshot**,
+/// which makes two arms' absolute counts describe different windows of the
+/// same workload.
+///
+/// Measured, on the I6 cc arm: the extra per-construction probes took
+/// `new / t` from 206 k/s to 173 k/s between two arms whose per-call ratios
+/// agree to 0.13 %. Counters that ride along on an already-instrumented path
+/// use this entry point so the cadence stays the pre-change one and the
+/// windows stay comparable.
+#[inline]
+pub fn regex_counters(f: impl FnOnce(&mut RegexDiag)) {
+    REGEX_DIAG.with(|d| {
+        let mut d = d.borrow_mut();
+        if d.started.is_none() {
+            d.started = Some(Instant::now());
+            d.last_dump = None;
+        }
+        f(&mut d);
+    });
+}
+
 /// Run `f` against the thread's regex counters, then maybe dump.
 #[inline]
 pub fn regex_with(f: impl FnOnce(&mut RegexDiag)) {
