@@ -2720,25 +2720,37 @@ pub(crate) fn trigger_path_hot_slot_indices() -> Vec<(&'static str, u32)> {
     // fast path reads" rather than "what the module declares".
     let _ = gc_budgeted_due_trigger();
     vec![
-        ("GC_OLD_RECLAIM_PENDING", GC_OLD_RECLAIM_PENDING.slot_index()),
+        (
+            "GC_OLD_RECLAIM_PENDING",
+            GC_OLD_RECLAIM_PENDING.slot_index(),
+        ),
         (
             "GC_LAST_OLD_RECLAIM_IN_USE_BYTES",
             GC_LAST_OLD_RECLAIM_IN_USE_BYTES.slot_index(),
         ),
-        ("GC_NEXT_MALLOC_TRIGGER", GC_NEXT_MALLOC_TRIGGER.slot_index()),
+        (
+            "GC_NEXT_MALLOC_TRIGGER",
+            GC_NEXT_MALLOC_TRIGGER.slot_index(),
+        ),
         ("GC_NEXT_TRIGGER_BYTES", GC_NEXT_TRIGGER_BYTES.slot_index()),
         ("GC_TRIGGER_ARMED", GC_TRIGGER_ARMED.slot_index()),
         (
             "GC_EXTERNAL_SIDE_LIVE_BYTES",
             GC_EXTERNAL_SIDE_LIVE_BYTES.slot_index(),
         ),
-        ("GC_MAJOR_PACING_RETAINING", GC_MAJOR_PACING_RETAINING.slot_index()),
+        (
+            "GC_MAJOR_PACING_RETAINING",
+            GC_MAJOR_PACING_RETAINING.slot_index(),
+        ),
         ("GC_FLAGS", GC_FLAGS.slot_index()),
         (
             "GC_BUDGETED_CYCLE_ACTIVE",
             GC_BUDGETED_CYCLE_ACTIVE.slot_index(),
         ),
-        ("GC_BUDGETED_STEP_ACTIVE", GC_BUDGETED_STEP_ACTIVE.slot_index()),
+        (
+            "GC_BUDGETED_STEP_ACTIVE",
+            GC_BUDGETED_STEP_ACTIVE.slot_index(),
+        ),
         (
             "OLD_GEN_IN_USE_BYTES",
             crate::arena::old_gen_in_use_bytes_slot_index(),
