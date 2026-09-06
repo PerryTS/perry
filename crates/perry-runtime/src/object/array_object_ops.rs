@@ -399,7 +399,10 @@ pub(crate) unsafe fn define_array_property(
     // attribute overrides, so they must decline to the descriptor-aware
     // element get/set (OBJ_FLAG_ARRAY_DESCRIPTORS gates them).
     {
-        let gc = gc_header_for(obj);
+        // The caller may retain a pre-growth alias. Accessors are installed
+        // on current_arr() below, so flag that same live header; marking the
+        // forwarding stub leaves numeric reads/stringify skipping getters.
+        let gc = gc_header_for(current_arr().cast());
         (*gc)._reserved |= crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS;
     }
 

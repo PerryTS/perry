@@ -62,6 +62,65 @@ fn json_array_getter_runs_once_and_rederives_later_elements_after_movement() {
 }
 
 #[test]
+fn json_grown_array_getter_flags_live_head_and_survives_movement() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _evacuation = ForcedEvacuationTestGuard::on();
+    let _protection =
+        crate::arena::ProtectionModeGuard::set(crate::arena::FromSpaceProtection::PoisonOnly);
+    register_runtime_handle_root_scanner_for_tests();
+    gc_register_mutable_root_scanner(json_parse_mutable_root_scanner);
+    let source = br#"[1,"tail after getter"]"#;
+    let text = crate::js_string_from_bytes(source.as_ptr(), source.len() as u32);
+    let value = unsafe { crate::json::test_json_parse_direct(text) };
+    let scope = RuntimeHandleScope::new();
+    let array = scope.root_nanbox_u64(value.bits());
+    let original = value.as_pointer::<crate::array::ArrayHeader>() as *mut crate::array::ArrayHeader;
+    let mut grown = original;
+    for index in 2..20 {
+        grown = crate::array::js_array_push(grown, crate::JSValue::number(index as f64));
+    }
+    assert_ne!(grown, original, "the descriptor must be defined through a forwarding alias");
+    let getter = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
+        array_getter_collects as *const u8,
+        0,
+    ));
+    let descriptor = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
+    let get_key = crate::js_string_from_bytes(b"get".as_ptr(), 3);
+    crate::object::js_object_set_field_by_name(
+        descriptor.get_raw_mut_ptr(),
+        get_key,
+        f64::from_bits(ptr_bits(getter.get_raw_mut_ptr::<u8>() as usize)),
+    );
+    let index_key = crate::js_string_from_bytes(b"0".as_ptr(), 1);
+    crate::object::js_object_define_property(
+        array.get_nanbox_f64(),
+        f64::from_bits(string_bits(index_key as usize)),
+        f64::from_bits(ptr_bits(descriptor.get_raw_mut_ptr::<u8>() as usize)),
+    );
+    GETTER_CALLS.with(|c| c.set(0));
+    let before_ptr = array.get_nanbox_u64();
+    let before = gc_collection_count();
+    let output = unsafe { crate::json::js_json_stringify(array.get_nanbox_f64(), 2) };
+    assert_eq!(GETTER_CALLS.with(|c| c.get()), 1);
+    assert!(gc_collection_count() > before);
+    assert_ne!(
+        array.get_nanbox_u64(),
+        before_ptr,
+        "getter must move its array"
+    );
+    assert_eq!(
+        unsafe {
+            std::slice::from_raw_parts(
+                crate::string::string_data(output),
+                (*output).byte_len as usize,
+            )
+        },
+        br#"[17,"tail after getter",2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19]"#
+    );
+}
+
+#[test]
 fn json_record_output_rederives_children_after_cold_prototype_collection() {
     assert_record_children_move(true, false);
 }
