@@ -319,3 +319,60 @@ pub(super) fn barrier_remembering_active() -> bool {
     bump_write_barrier_trace_counter(BarrierTraceCounter::UnarmedSkips);
     false
 }
+
+/// The runtime twin of codegen's `emit_parent_may_need_remembering_check`
+/// (#7511): may a store into a **freshly allocated** GC parent be skipped
+/// outright?
+///
+/// # Why this exists on the runtime side too
+///
+/// Every store emitted by the compiler is already gated this way — the
+/// generated code reads the parent's `gc_flags` and, when `GC_FLAG_TENURED`
+/// is clear *and* no incremental cycle is live anywhere, jumps over the
+/// barrier call entirely. Runtime-Rust construction paths call
+/// [`runtime_write_barrier_gc_slot`] unconditionally instead, so a native
+/// header born in the nursery pays, per pointer slot: a page-map
+/// classification for the malloc-parent probe, `barrier_child_prologue`, the
+/// armed check, the dereferenceability test, the dirty-page-cache probe and a
+/// second page-map classification in `barrier_parent_needs_remembering` —
+/// all of which end at `ParentNotOldSkips` because the parent is young.
+///
+/// Measured on the segment-loop probe (region B, 60,000 reps, `sample`, main
+/// thread): `js_regexp_new` constructs one `RegExp` per grapheme and its
+/// barrier subtree — `runtime_write_barrier_gc_slot` /
+/// `write_barrier_slot_decoded` / `write_barrier_decoded_parent` /
+/// `mark_dirty_external_slot_page` / `remembered_child_needs_tracking` /
+/// `classify_heap_generation_uncached` — is 739 of the 14,628 main-thread
+/// samples, 32 % of that function's own subtree.
+///
+/// # Why it is sound
+///
+/// Exactly the two clauses the emitted gate uses, for exactly the two reasons
+/// its doc comment gives:
+///
+///   * **`GC_FLAG_TENURED` clear** ⇒ the parent is not in the old generation,
+///     so no old→young remembered-set entry can be owed. The flag is read
+///     LIVE at the store, not claimed statically, because promotion can move
+///     an object under any static proof (#7501) — a header that a collection
+///     promoted between its allocation and this store reads TENURED here and
+///     takes the full barrier.
+///   * **`PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT == 0`** ⇒ no thread has
+///     an incremental mark barrier installed, which is what makes it legal to
+///     skip the SATB/insertion shading as well
+///     ([`incremental_mark_barrier_globally_idle`]). Shading is not a
+///     generational question and must never be dropped while a cycle is live,
+///     so a non-zero count sends the store down the ordinary path.
+///
+/// # Safety
+///
+/// Dereferences `parent_addr - GC_HEADER_SIZE`. The caller must pass a live,
+/// non-forwarded GC user pointer it has just allocated (or otherwise
+/// validated) — the same contract `emit_parent_may_need_remembering_check`
+/// places on its caller.
+#[inline]
+pub(crate) unsafe fn newborn_parent_needs_barrier(parent_addr: usize) -> bool {
+    if !super::barrier::incremental_mark_barrier_globally_idle() {
+        return true;
+    }
+    (*super::layout::header_from_user_ptr(parent_addr as *const u8)).gc_flags & GC_FLAG_TENURED != 0
+}
