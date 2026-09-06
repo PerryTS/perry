@@ -639,6 +639,12 @@
       "why": "#[cfg(test)] diagnostic trace for the bound-method moving-GC regression: records the (before, after) addresses a test-forced minor produced so the test can assert the relocation happened. The addresses are compared as integers, never dereferenced, and the cell is dead in a shipped binary."
     },
     {
+      "file": "crates/perry-runtime/src/object/regex_proto_thunks.rs",
+      "name": "REGEXP_PROTOTYPE_TEST_WALKS",
+      "verdict": "not_a_gc_pointer",
+      "why": "View-mode diagnostic tally of install-time RegExp.prototype.test walks. A plain AtomicU64 incremented once by record_canonical_test_site and read as a count by tests; it never stores an address or NaN-boxed value. The actual prototype and closure roots live together in REGEXP_PROTOTYPE_TEST_SITE and are visited by scan_canonical_test_site_roots_mut."
+    },
+    {
       "file": "crates/perry-runtime/src/object/read_stub.rs",
       "name": "READ_STUB",
       "verdict": "not_a_gc_pointer",
