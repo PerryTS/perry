@@ -264,6 +264,15 @@ struct ShapeTableInner {
 
 const SHAPE_YOUNG_LOG_NAME: &str = "shapes.families+indices";
 
+/// Re-export of the id-list operation counters' report, so the collector does
+/// not have to name a private sibling module. One `[gc-idlist]` line per
+/// copying minor under `PERRY_GC_DIAG=1`; `elems_moved` is the falsifier for
+/// the swap-remove change.
+#[inline]
+pub(crate) fn id_list_report() {
+    shapes_store::id_list_report();
+}
+
 impl ShapeTableInner {
     /// Rule 1 of `gc/young_log.rs`: log a keys address BEFORE a family or a
     /// slot index is published under it, when the keys array is not old.
@@ -305,7 +314,14 @@ impl ShapeTableInner {
         let Some(ids) = self.families.get_mut(&keys) else {
             return false;
         };
-        let removed = ids.remove(id);
+        // UNORDERED: a family's readers are set-valued (see `IdList`'s type
+        // doc), and the ordered removal was memmoving the whole tail of a list
+        // measured at up to 514,030 entries, from position ~0.31, 3.7 M times
+        // per 3300-char reply. The dominant caller is the dead-owner prune
+        // (`prune_dead_owner_side_tables_post_trace` ->
+        // `remove_descriptor_indexed_under`); `retire_owned_shape_siblings`
+        // never sees a family longer than 16.
+        let removed = ids.remove_unordered(id);
         if ids.is_empty() {
             self.families.remove(&keys);
         }
@@ -334,7 +350,11 @@ impl ShapeTableInner {
         let Some(ids) = self.by_facts.get_mut(&facts) else {
             return false;
         };
-        let removed = ids.remove(id);
+        // ORDERED, and it must stay ordered: `facts_push_front` is how an
+        // installed process-global id becomes the canonical answer ahead of an
+        // equivalent local one, and this list is read first-wins. Measured at
+        // max length 1 on cc, so the order costs nothing to keep.
+        let removed = ids.remove_ordered(id);
         if ids.is_empty() {
             self.by_facts.remove(&facts);
         }

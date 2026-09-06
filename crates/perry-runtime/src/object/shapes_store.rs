@@ -467,23 +467,225 @@ impl ShapeSlab {
     }
 }
 
-/// A compact list of descriptor ids: up to three inline, then a spilled
-/// `Vec`. Sized so a family-index bucket is `(u64, IdList)` = 24 bytes.
+/// MEASUREMENT that this structure is judged on, and the test's instrument.
 ///
-/// Order is meaningful: [`IdList::push_front`] is how an installed
-/// process-global id becomes the canonical answer for exact-facts interning
-/// ahead of an equivalent local id (`install_external_shape_id`).
+/// Two counters on the id-list mutation path, kept unconditionally because the
+/// rig falsifier and the unit guard both read them and a `cfg(test)` counter
+/// can only prove the test's own arithmetic. Deliberately a THREE-field struct
+/// in one `Cell`: a thread-local `Cell<T>` get/set copies `T` on every
+/// operation, and this path runs millions of times per turn, so the width of
+/// this type is itself a cost.
+#[derive(Default, Clone, Copy)]
+pub(crate) struct IdListOpStats {
+    /// Removals that found their id.
+    pub(crate) removals: u64,
+    /// Elements shifted by a removal. Bytes = this x 4. Swap-remove moves
+    /// none; `Vec::remove` moves the whole tail past the removed position.
+    pub(crate) elems_moved: u64,
+    /// Entries touched by a linear membership or position scan. The other
+    /// half of the same defect: the index removes this too.
+    pub(crate) positions_scanned: u64,
+}
+
+thread_local! {
+    pub(crate) static ID_LIST_OP_STATS: std::cell::Cell<IdListOpStats> =
+        const {
+            std::cell::Cell::new(IdListOpStats {
+                removals: 0,
+                elems_moved: 0,
+                positions_scanned: 0,
+            })
+        };
+}
+
+#[inline]
+fn note_scan(entries: usize) {
+    ID_LIST_OP_STATS.with(|c| {
+        let mut st = c.get();
+        st.positions_scanned += entries as u64;
+        c.set(st);
+    });
+}
+
+#[inline]
+fn note_removal(elems_moved: usize) {
+    ID_LIST_OP_STATS.with(|c| {
+        let mut st = c.get();
+        st.removals += 1;
+        st.elems_moved += elems_moved as u64;
+        c.set(st);
+    });
+}
+
+/// One `[gc-idlist]` line per copying minor under `PERRY_GC_DIAG=1`,
+/// cumulative. `elems_moved` is the rig falsifier for this change.
+pub(crate) fn id_list_report() {
+    if !crate::gc::gc_diag_enabled() {
+        return;
+    }
+    let st = ID_LIST_OP_STATS.with(std::cell::Cell::get);
+    if st.removals == 0 {
+        return;
+    }
+    eprintln!(
+        "[gc-idlist] removals={} elems_moved={} bytes_moved={} positions_scanned={}",
+        st.removals,
+        st.elems_moved,
+        st.elems_moved * 4,
+        st.positions_scanned,
+    );
+}
+
+/// A spilled id list: the ids, plus an `id -> index` map built once the list
+/// is large enough for a linear scan to cost more than a hash probe.
+///
+/// The index is what makes `remove_unordered`, `contains` and `position` O(1)
+/// on the lists that actually get long. Below [`SPILL_INDEX_MIN`] it stays
+/// empty and every operation is the linear scan it always was, because for a
+/// handful of entries the scan is a single cache line and the map is not.
+#[derive(Clone, Debug, Default)]
+pub(super) struct SpillList {
+    ids: Vec<u32>,
+    /// Empty while `ids.len() < SPILL_INDEX_MIN`; complete above it.
+    ///
+    /// `PtrHasher` (#8125) is the right hasher here for the same reason it is
+    /// on the maps around it: shape ids come from a monotonic counter, so the
+    /// key is a small dense integer and the avalanche step is what keeps every
+    /// one of them off bucket 0.
+    pos: crate::fast_hash::PtrHashMap<u32, u32>,
+}
+
+/// Where the index starts paying. Measured shape of the problem: `families`
+/// lists reach 514,030 entries on a claude-code reply while `by_facts` lists
+/// are length 1, so anything in the low tens is far below the case that hurts
+/// and far above the case where the map would be pure overhead.
+const SPILL_INDEX_MIN: usize = 32;
+
+impl SpillList {
+    #[inline]
+    fn indexed(&self) -> bool {
+        !self.pos.is_empty()
+    }
+
+    /// Build the index if the list has just crossed the threshold. Called
+    /// after every growth, so the map exists from the first entry past it.
+    #[inline]
+    fn maybe_build_index(&mut self) {
+        if self.pos.is_empty() && self.ids.len() >= SPILL_INDEX_MIN {
+            self.pos.reserve(self.ids.len());
+            for (i, &id) in self.ids.iter().enumerate() {
+                self.pos.insert(id, i as u32);
+            }
+        }
+    }
+
+    /// Position of `id`, O(1) when indexed and a counted linear scan below the
+    /// threshold.
+    #[inline]
+    fn position(&self, id: u32) -> Option<usize> {
+        if self.indexed() {
+            return self.pos.get(&id).map(|&i| i as usize);
+        }
+        note_scan(self.ids.len());
+        self.ids.iter().position(|&x| x == id)
+    }
+
+    #[inline]
+    fn push(&mut self, id: u32) {
+        let i = self.ids.len();
+        self.ids.push(id);
+        if self.indexed() {
+            self.pos.insert(id, i as u32);
+        } else {
+            self.maybe_build_index();
+        }
+    }
+
+    /// ORDER-PRESERVING removal, for a list whose order is load-bearing.
+    /// O(n) in the tail by construction — that is what "preserve the order"
+    /// costs — and it reindexes the shifted suffix.
+    fn remove_ordered(&mut self, id: u32) -> Option<usize> {
+        let pos = self.position(id)?;
+        let moved = self.ids.len() - 1 - pos;
+        note_removal(moved);
+        self.ids.remove(pos);
+        if self.indexed() {
+            self.pos.remove(&id);
+            for (i, &other) in self.ids.iter().enumerate().skip(pos) {
+                self.pos.insert(other, i as u32);
+            }
+        }
+        Some(pos)
+    }
+
+    /// UNORDERED removal: the last element takes the removed one's slot.
+    /// Moves ONE element regardless of position, which is the whole point —
+    /// the measured removals sit at position ~0.31 of a list up to 514,030
+    /// long, so `Vec::remove` was shifting essentially the entire list every
+    /// time.
+    ///
+    /// What this does NOT claim: that the memmove explains the bimodal turn
+    /// CPU. On perrymaster one draw moved 335 GB and was as fast as a draw
+    /// that moved 16 GB, so bytes moved is necessary but not sufficient for
+    /// the slow mode. This removes work that is unambiguously wasted; how much
+    /// TIME it removes is the A/B's to say.
+    fn remove_unordered(&mut self, id: u32) -> Option<usize> {
+        let pos = self.position(id)?;
+        note_removal(if pos + 1 == self.ids.len() { 0 } else { 1 });
+        let last = self.ids.len() - 1;
+        self.ids.swap_remove(pos);
+        if self.indexed() {
+            self.pos.remove(&id);
+            if pos != last {
+                // The element that was last now lives at `pos`.
+                self.pos.insert(self.ids[pos], pos as u32);
+            }
+        }
+        Some(pos)
+    }
+
+    #[inline]
+    fn replace(&mut self, old: u32, new: u32) -> bool {
+        let Some(pos) = self.position(old) else {
+            return false;
+        };
+        self.ids[pos] = new;
+        if self.indexed() {
+            self.pos.remove(&old);
+            self.pos.insert(new, pos as u32);
+        }
+        true
+    }
+}
+
+/// A compact list of descriptor ids: up to three inline, then a spilled
+/// `Vec` with an `id -> index` map (see [`SpillList`]). Sized so a family-index
+/// bucket is `(u64, IdList)` = 24 bytes.
+///
+/// # Order
+/// Order is meaningful **for `by_facts` only**: [`IdList::push_front`] is how
+/// an installed process-global id becomes the canonical answer for exact-facts
+/// interning ahead of an equivalent local id (`install_external_shape_id`), and
+/// that list is read first-wins. `families` is NOT order-sensitive: its only
+/// order-touching reader is the "one descriptor stands for the family" choice
+/// in the two rekey walks, which breaks on the first carrier and otherwise
+/// takes any present member — and the chosen descriptor feeds exactly one
+/// expression, `old_carrier || cache_carrier`, whose value is the same for
+/// every carrier and the same for every non-carrier. The outcome is a function
+/// of the SET, not of the order.
+///
+/// That asymmetry is why removal comes in two flavours:
+/// [`IdList::remove_ordered`] for `by_facts` and [`IdList::remove_unordered`]
+/// for `families`. **The caller declares the contract**, because the caller is
+/// the one that knows whether its order is load-bearing; a single `remove` that
+/// guessed would be the bug.
 #[derive(Clone, Debug)]
 pub(super) enum IdList {
-    Inline {
-        len: u8,
-        ids: [u32; 3],
-    },
-    // The `Box` is the point: an inline `Vec` is 24 bytes and would make every
-    // bucket 32; the spill is the rare case, so its extra indirection is
-    // cheaper than eight bytes on every family.
-    #[allow(clippy::box_collection)]
-    Spill(Box<Vec<u32>>),
+    Inline { len: u8, ids: [u32; 3] },
+    // The `Box` is the point: an inline `SpillList` is far wider and would make
+    // every bucket pay for it; the spill is the rare case, so its extra
+    // indirection is cheaper than those bytes on every family.
+    Spill(Box<SpillList>),
 }
 
 const _: () = assert!(std::mem::size_of::<IdList>() == 16);
@@ -502,7 +704,7 @@ impl IdList {
     pub(super) fn as_slice(&self) -> &[u32] {
         match self {
             IdList::Inline { len, ids } => &ids[..*len as usize],
-            IdList::Spill(v) => v.as_slice(),
+            IdList::Spill(v) => v.ids.as_slice(),
         }
     }
 
@@ -518,12 +720,18 @@ impl IdList {
 
     #[inline]
     pub(super) fn contains(&self, id: u32) -> bool {
-        self.as_slice().contains(&id)
+        match self {
+            IdList::Inline { len, ids } => ids[..*len as usize].contains(&id),
+            IdList::Spill(v) => v.position(id).is_some(),
+        }
     }
 
-    fn spill(&mut self) -> &mut Vec<u32> {
+    fn spill(&mut self) -> &mut SpillList {
         if let IdList::Inline { len, ids } = self {
-            let v = ids[..*len as usize].to_vec();
+            let v = SpillList {
+                ids: ids[..*len as usize].to_vec(),
+                pos: crate::fast_hash::new_ptr_hash_map(),
+            };
             *self = IdList::Spill(Box::new(v));
         }
         match self {
@@ -554,6 +762,11 @@ impl IdList {
     /// main-thread leaf samples on a claude-code streamed reply, 95 % of it
     /// under `ShapeTableInner::family_push_back`.
     ///
+    /// The spill index now removes that scan for the callers that cannot use
+    /// this entry point, which is why `contains` is O(1) above
+    /// [`SPILL_INDEX_MIN`]. This function stays because skipping the probe
+    /// entirely is still cheaper than performing it.
+    ///
     /// Callers that re-file an EXISTING id (the metadata rekey when a keys
     /// array moves) must keep using [`push_back`]: those ids can already be in
     /// the destination list.
@@ -567,7 +780,9 @@ impl IdList {
         }
     }
 
-    /// Prepend `id` unless already present.
+    /// Prepend `id` unless already present. Order-preserving by definition, so
+    /// it stays O(n) on a spilled list; only `by_facts` and the external-id
+    /// install use it, and neither is on a hot path.
     pub(super) fn push_front(&mut self, id: u32) {
         if self.contains(id) {
             return;
@@ -578,31 +793,53 @@ impl IdList {
                 ids[0] = id;
                 *len += 1;
             }
-            _ => self.spill().insert(0, id),
+            _ => {
+                let v = self.spill();
+                v.ids.insert(0, id);
+                if v.indexed() {
+                    v.pos.clear();
+                }
+                v.maybe_build_index();
+            }
         }
     }
 
-    /// Drop `id` if present; returns whether it was.
-    pub(super) fn remove(&mut self, id: u32) -> bool {
+    /// Drop `id` if present, PRESERVING the order of what remains; returns
+    /// whether it was there. For a list whose order is load-bearing —
+    /// `by_facts`, where the first entry is the canonical answer.
+    pub(super) fn remove_ordered(&mut self, id: u32) -> bool {
         match self {
-            IdList::Inline { len, ids } => {
-                let n = *len as usize;
-                let Some(pos) = ids[..n].iter().position(|&x| x == id) else {
-                    return false;
-                };
-                ids.copy_within(pos + 1..n, pos);
-                ids[n - 1] = 0;
-                *len -= 1;
-                true
-            }
-            IdList::Spill(v) => {
-                let Some(pos) = v.iter().position(|&x| x == id) else {
-                    return false;
-                };
-                v.remove(pos);
-                true
-            }
+            IdList::Inline { len, ids } => Self::remove_inline(len, ids, id),
+            IdList::Spill(v) => v.remove_ordered(id).is_some(),
         }
+    }
+
+    /// Drop `id` if present, WITHOUT preserving order; returns whether it was
+    /// there. For `families`, whose readers are set-valued (see the type doc).
+    ///
+    /// This is the change: on a spilled list it moves ONE element instead of
+    /// the whole tail.
+    pub(super) fn remove_unordered(&mut self, id: u32) -> bool {
+        match self {
+            // Three entries: the inline shift is a single register move and
+            // there is nothing to gain from disturbing the order.
+            IdList::Inline { len, ids } => Self::remove_inline(len, ids, id),
+            IdList::Spill(v) => v.remove_unordered(id).is_some(),
+        }
+    }
+
+    #[inline]
+    fn remove_inline(len: &mut u8, ids: &mut [u32; 3], id: u32) -> bool {
+        let n = *len as usize;
+        note_scan(n);
+        let Some(pos) = ids[..n].iter().position(|&x| x == id) else {
+            return false;
+        };
+        note_removal(n - 1 - pos);
+        ids.copy_within(pos + 1..n, pos);
+        ids[n - 1] = 0;
+        *len -= 1;
+        true
     }
 
     /// Replace `old` with `new` in place (keeps its position); returns
@@ -611,6 +848,7 @@ impl IdList {
         match self {
             IdList::Inline { len, ids } => {
                 let n = *len as usize;
+                note_scan(n);
                 match ids[..n].iter().position(|&x| x == old) {
                     Some(pos) => {
                         ids[pos] = new;
@@ -619,21 +857,20 @@ impl IdList {
                     None => false,
                 }
             }
-            IdList::Spill(v) => match v.iter().position(|&x| x == old) {
-                Some(pos) => {
-                    v[pos] = new;
-                    true
-                }
-                None => false,
-            },
+            IdList::Spill(v) => v.replace(old, new),
         }
     }
 
-    /// Bytes held outside the containing bucket.
     pub(super) fn heap_bytes(&self) -> usize {
         match self {
             IdList::Inline { .. } => 0,
-            IdList::Spill(v) => std::mem::size_of::<Vec<u32>>() + v.capacity() * 4,
+            IdList::Spill(v) => {
+                std::mem::size_of::<SpillList>()
+                    + v.ids.capacity() * 4
+                    // The index is the structure's memory cost and is reported
+                    // rather than hidden: it exists only above SPILL_INDEX_MIN.
+                    + v.pos.capacity() * (std::mem::size_of::<(u32, u32)>() + 1)
+            }
         }
     }
 }
@@ -782,8 +1019,10 @@ mod tests {
         assert_eq!(list.as_slice(), &[1, 2, 3, 4]);
         list.push_front(0);
         assert_eq!(list.as_slice(), &[0, 1, 2, 3, 4]);
-        assert!(list.remove(2));
-        assert!(!list.remove(2));
+        // The ORDERED removal keeps this list's order, which is what
+        // `by_facts` depends on.
+        assert!(list.remove_ordered(2));
+        assert!(!list.remove_ordered(2));
         assert_eq!(list.as_slice(), &[0, 1, 3, 4]);
         assert!(list.replace(3, 30));
         assert!(!list.replace(3, 300));
@@ -794,13 +1033,136 @@ mod tests {
         inline.push_back(7);
         inline.push_back(8);
         inline.push_back(9);
-        assert!(inline.remove(8));
+        assert!(inline.remove_ordered(8));
         assert_eq!(inline.as_slice(), &[7, 9]);
         assert!(inline.replace(9, 10));
         assert_eq!(inline.as_slice(), &[7, 10]);
-        assert!(inline.remove(7));
-        assert!(inline.remove(10));
+        assert!(inline.remove_ordered(7));
+        assert!(inline.remove_ordered(10));
         assert!(inline.is_empty());
         assert_eq!(inline.heap_bytes(), 0);
+    }
+
+    /// THE GUARD for this change, and it is an asymmetric one: the unordered
+    /// removal must move O(1) elements per call, and the ordered one is
+    /// allowed to move O(n) because that is what preserving the order costs.
+    ///
+    /// Front removal is the measured shape of the defect — removals sit at
+    /// position ~0.31 of a list up to 514,030 long — so the test removes from
+    /// the front, which is the worst case for `Vec::remove` and the best case
+    /// for nothing.
+    ///
+    /// **Sabotage: point `remove_unordered` at `remove_ordered`.** The bound
+    /// below is `4 * N`; the O(n) path moves `N * (N - 1) / 2` = 1,999,000
+    /// elements for N = 2,000, i.e. 250x the bound, and this fails. A bound
+    /// expressed as a MULTIPLE of N rather than an absolute is what makes the
+    /// assertion about the complexity class instead of about one N.
+    #[test]
+    fn unordered_removal_moves_o1_elements_and_scans_o1_entries() {
+        const N: u32 = 2_000;
+
+        let baseline = ID_LIST_OP_STATS.with(std::cell::Cell::get);
+        let mut list = IdList::default();
+        for id in 1..=N {
+            // The interning sites' entry point: no membership probe.
+            list.append_unchecked(id);
+        }
+        assert_eq!(list.len(), N as usize);
+        assert!(matches!(list, IdList::Spill(_)));
+
+        // Remove every id from the FRONT of the list, in insertion order.
+        for id in 1..=N {
+            assert!(list.remove_unordered(id), "id {id} was not present");
+        }
+        assert!(list.is_empty());
+
+        let after = ID_LIST_OP_STATS.with(std::cell::Cell::get);
+        let moved = after.elems_moved - baseline.elems_moved;
+        let scanned = after.positions_scanned - baseline.positions_scanned;
+        let removals = after.removals - baseline.removals;
+        assert_eq!(removals, u64::from(N));
+
+        // O(1) per removal, with room for the swap itself.
+        assert!(
+            moved <= 4 * u64::from(N),
+            "unordered removal moved {moved} elements for {N} removals — that \
+             is the O(n) tail shift this structure exists to remove \
+             (the ordered path would move {})",
+            u64::from(N) * (u64::from(N) - 1) / 2
+        );
+        // The index answers `position`, so no linear scan may be charged for
+        // a list this long. Sabotage: raise SPILL_INDEX_MIN above N and this
+        // fails with ~N*N/2 scanned entries.
+        assert!(
+            scanned <= 4 * u64::from(N),
+            "unordered removal scanned {scanned} entries for {N} removals — \
+             the spill index is not answering `position`"
+        );
+    }
+
+    /// The index must agree with the vector after every operation, including
+    /// the swap that moves a third element nobody named. Checked exhaustively
+    /// against a plain `Vec` oracle, because an index that drifts is a wrong
+    /// ANSWER (a descriptor that cannot be found, or one found under the wrong
+    /// id), not a slow one.
+    ///
+    /// Sabotage: drop the `self.pos.insert(self.ids[pos], pos as u32)` fixup
+    /// in `remove_unordered` — the element the swap relocated keeps a stale
+    /// index and the `contains` check below fails.
+    #[test]
+    fn the_spill_index_agrees_with_the_vector_after_every_operation() {
+        let mut list = IdList::default();
+        let mut oracle: Vec<u32> = Vec::new();
+        for id in 1..=200u32 {
+            list.append_unchecked(id);
+            oracle.push(id);
+        }
+        // Remove a scattered third of them, front, middle and back.
+        for &id in &[1u32, 2, 3, 100, 101, 199, 200, 50, 150, 7] {
+            assert!(list.remove_unordered(id));
+            oracle.retain(|&x| x != id);
+        }
+        // Same SET, whatever the order.
+        let mut got = list.as_slice().to_vec();
+        got.sort_unstable();
+        let mut want = oracle.clone();
+        want.sort_unstable();
+        assert_eq!(got, want);
+        // And every survivor is still findable through the index.
+        for &id in &want {
+            assert!(list.contains(id), "id {id} lost its index entry");
+        }
+        for &id in &[1u32, 2, 3, 100, 101, 199, 200, 50, 150, 7] {
+            assert!(!list.contains(id), "removed id {id} is still findable");
+        }
+        // `replace` must keep the index coherent too.
+        let survivor = want[0];
+        assert!(list.replace(survivor, 9_999));
+        assert!(!list.contains(survivor));
+        assert!(list.contains(9_999));
+    }
+
+    /// A list that never reaches `SPILL_INDEX_MIN` must not allocate an index
+    /// — the map is the structure's memory cost and it is only worth paying
+    /// where the scan hurts. `by_facts` lists, measured at length 1 on cc,
+    /// live entirely in this regime.
+    #[test]
+    fn a_short_spilled_list_builds_no_index() {
+        let mut list = IdList::default();
+        for id in 1..=8u32 {
+            list.append_unchecked(id);
+        }
+        assert!(matches!(list, IdList::Spill(_)));
+        match &list {
+            IdList::Spill(v) => assert!(
+                !v.indexed(),
+                "a list of 8 built an index; SPILL_INDEX_MIN is {SPILL_INDEX_MIN}"
+            ),
+            IdList::Inline { .. } => unreachable!(),
+        }
+        // Still correct without one.
+        assert!(list.remove_unordered(4));
+        assert!(!list.contains(4));
+        assert!(list.contains(8));
     }
 }
