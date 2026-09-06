@@ -3,9 +3,10 @@
 use crate::array::{js_array_alloc, js_array_get_f64, js_array_length, js_array_push_f64};
 use crate::object::{
     js_object_alloc, js_object_get_field_by_name_f64, js_object_get_field_f64, js_object_keys,
-    js_object_set_field_by_name, js_object_set_field_f64, js_object_set_keys, js_register_class_id,
-    js_register_class_method, js_register_class_name, js_register_class_setter,
-    set_builtin_property_attrs, ObjectHeader, PropertyAttrs,
+    js_object_set_field_by_name, js_object_set_field_f64, js_object_set_keys,
+    js_register_class_getter, js_register_class_id, js_register_class_method,
+    js_register_class_name, js_register_class_setter, set_builtin_property_attrs, ObjectHeader,
+    PropertyAttrs,
 };
 use crate::string::js_string_from_bytes;
 use crate::value::{js_jsvalue_to_string, js_nanbox_pointer, JSValue};
@@ -300,42 +301,81 @@ fn mime_type_parts(this: *mut ObjectHeader) -> (String, String, *mut ObjectHeade
     (type_name, subtype, params)
 }
 
-fn update_mime_type_essence(this: *mut ObjectHeader) {
-    let type_name = value_to_string(js_object_get_field_f64(this, MIME_TYPE_TYPE));
-    let subtype = value_to_string(js_object_get_field_f64(this, MIME_TYPE_SUBTYPE));
-    js_object_set_field_f64(
-        this,
-        MIME_TYPE_ESSENCE,
-        string_value(&format!("{type_name}/{subtype}")),
-    );
+fn update_mime_type_essence(this: f64) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let this = scope.root_nanbox_f64(this);
+    let Some(obj) = object_ptr_from_value(this.get_nanbox_f64()) else {
+        return;
+    };
+    let type_name = scope.root_nanbox_f64(js_object_get_field_f64(obj, MIME_TYPE_TYPE));
+    let Some(obj) = object_ptr_from_value(this.get_nanbox_f64()) else {
+        return;
+    };
+    let subtype = scope.root_nanbox_f64(js_object_get_field_f64(obj, MIME_TYPE_SUBTYPE));
+    let type_name = value_to_string(type_name.get_nanbox_f64());
+    let subtype = value_to_string(subtype.get_nanbox_f64());
+    let essence = string_value(&format!("{type_name}/{subtype}"));
+    let Some(obj) = object_ptr_from_value(this.get_nanbox_f64()) else {
+        return;
+    };
+    js_object_set_field_f64(obj, MIME_TYPE_ESSENCE, essence);
 }
 
 fn create_mime_type_object(input: &str) -> *mut ObjectHeader {
     ensure_mime_classes();
     let (type_name, subtype, params) = parse_mime(input);
     let params_obj = create_mime_params_object(params);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let params_obj = scope.root_nanbox_f64(ptr_value(params_obj));
     let obj = js_object_alloc(CLASS_ID_MIME_TYPE, MIME_TYPE_FIELD_COUNT);
-    let mut keys = js_array_alloc(MIME_TYPE_FIELD_COUNT);
-    for key in ["type", "subtype", "essence", "params"] {
-        keys = js_array_push_f64(keys, string_value(key));
-    }
-    js_object_set_keys(obj, keys);
-    for key in ["type", "subtype", "essence", "params"] {
-        set_builtin_property_attrs(
-            obj as usize,
-            key.to_string(),
-            PropertyAttrs::new(true, false, true),
-        );
-    }
-    js_object_set_field_f64(obj, MIME_TYPE_TYPE, string_value(&type_name));
-    js_object_set_field_f64(obj, MIME_TYPE_SUBTYPE, string_value(&subtype));
+    let obj = scope.root_nanbox_f64(ptr_value(obj));
+    let value = string_value(&type_name);
     js_object_set_field_f64(
-        obj,
-        MIME_TYPE_ESSENCE,
-        string_value(&format!("{type_name}/{subtype}")),
+        object_ptr_from_value(obj.get_nanbox_f64()).unwrap(),
+        MIME_TYPE_TYPE,
+        value,
     );
-    js_object_set_field_f64(obj, MIME_TYPE_PARAMS, ptr_value(params_obj));
-    obj
+    let value = string_value(&subtype);
+    js_object_set_field_f64(
+        object_ptr_from_value(obj.get_nanbox_f64()).unwrap(),
+        MIME_TYPE_SUBTYPE,
+        value,
+    );
+    let value = string_value(&format!("{type_name}/{subtype}"));
+    js_object_set_field_f64(
+        object_ptr_from_value(obj.get_nanbox_f64()).unwrap(),
+        MIME_TYPE_ESSENCE,
+        value,
+    );
+    js_object_set_field_f64(
+        object_ptr_from_value(obj.get_nanbox_f64()).unwrap(),
+        MIME_TYPE_PARAMS,
+        params_obj.get_nanbox_f64(),
+    );
+    object_ptr_from_value(obj.get_nanbox_f64()).unwrap()
+}
+
+fn mime_type_get_field(this: f64, field: u32) -> f64 {
+    let Some(obj) = object_ptr_from_value(this) else {
+        return undefined();
+    };
+    js_object_get_field_f64(obj, field)
+}
+
+extern "C" fn mime_type_get_type_vtable(this: f64) -> f64 {
+    mime_type_get_field(this, MIME_TYPE_TYPE)
+}
+
+extern "C" fn mime_type_get_subtype_vtable(this: f64) -> f64 {
+    mime_type_get_field(this, MIME_TYPE_SUBTYPE)
+}
+
+extern "C" fn mime_type_get_essence_vtable(this: f64) -> f64 {
+    mime_type_get_field(this, MIME_TYPE_ESSENCE)
+}
+
+extern "C" fn mime_type_get_params_vtable(this: f64) -> f64 {
+    mime_type_get_field(this, MIME_TYPE_PARAMS)
 }
 
 extern "C" fn mime_type_to_string_vtable(this: f64) -> f64 {
@@ -353,24 +393,38 @@ extern "C" fn mime_type_to_string_vtable(this: f64) -> f64 {
 }
 
 extern "C" fn mime_type_set_type_vtable(this: f64, value: f64) -> f64 {
-    let Some(obj) = object_ptr_from_value(this) else {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let this = scope.root_nanbox_f64(this);
+    let value = scope.root_nanbox_f64(value);
+    if object_ptr_from_value(this.get_nanbox_f64()).is_none() {
+        return undefined();
+    }
+    let type_name = value_to_string(value.get_nanbox_f64()).to_ascii_lowercase();
+    validate_token("type", &type_name, &type_name);
+    let value = string_value(&type_name);
+    let Some(obj) = object_ptr_from_value(this.get_nanbox_f64()) else {
         return undefined();
     };
-    let type_name = value_to_string(value).to_ascii_lowercase();
-    validate_token("type", &type_name, &type_name);
-    js_object_set_field_f64(obj, MIME_TYPE_TYPE, string_value(&type_name));
-    update_mime_type_essence(obj);
+    js_object_set_field_f64(obj, MIME_TYPE_TYPE, value);
+    update_mime_type_essence(this.get_nanbox_f64());
     undefined()
 }
 
 extern "C" fn mime_type_set_subtype_vtable(this: f64, value: f64) -> f64 {
-    let Some(obj) = object_ptr_from_value(this) else {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let this = scope.root_nanbox_f64(this);
+    let value = scope.root_nanbox_f64(value);
+    if object_ptr_from_value(this.get_nanbox_f64()).is_none() {
+        return undefined();
+    }
+    let subtype = value_to_string(value.get_nanbox_f64()).to_ascii_lowercase();
+    validate_token("subtype", &subtype, &subtype);
+    let value = string_value(&subtype);
+    let Some(obj) = object_ptr_from_value(this.get_nanbox_f64()) else {
         return undefined();
     };
-    let subtype = value_to_string(value).to_ascii_lowercase();
-    validate_token("subtype", &subtype, &subtype);
-    js_object_set_field_f64(obj, MIME_TYPE_SUBTYPE, string_value(&subtype));
-    update_mime_type_essence(obj);
+    js_object_set_field_f64(obj, MIME_TYPE_SUBTYPE, value);
+    update_mime_type_essence(this.get_nanbox_f64());
     undefined()
 }
 
@@ -493,6 +547,17 @@ fn register_setter(class_id: u32, name: &'static str, func_ptr: usize) {
     }
 }
 
+fn register_getter(class_id: u32, name: &'static str, func_ptr: usize) {
+    unsafe {
+        js_register_class_getter(
+            class_id as i64,
+            name.as_ptr(),
+            name.len() as i64,
+            func_ptr as i64,
+        );
+    }
+}
+
 pub fn ensure_mime_classes() {
     INIT_MIME_CLASSES.call_once(|| unsafe {
         js_register_class_id(CLASS_ID_MIME_TYPE);
@@ -520,6 +585,20 @@ pub fn ensure_mime_classes() {
             mime_type_to_string_vtable as *const () as usize,
             0,
         );
+        for (name, getter) in [
+            ("type", mime_type_get_type_vtable as *const () as usize),
+            (
+                "subtype",
+                mime_type_get_subtype_vtable as *const () as usize,
+            ),
+            (
+                "essence",
+                mime_type_get_essence_vtable as *const () as usize,
+            ),
+            ("params", mime_type_get_params_vtable as *const () as usize),
+        ] {
+            register_getter(CLASS_ID_MIME_TYPE, name, getter);
+        }
         register_setter(
             CLASS_ID_MIME_TYPE,
             "type",
