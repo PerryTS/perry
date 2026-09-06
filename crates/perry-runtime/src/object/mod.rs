@@ -1295,23 +1295,13 @@ pub fn scan_object_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'
         &iterator_prototypes::STRING_ITERATOR_PROTOTYPE_PTR,
         &iterator_prototypes::REGEXP_STRING_ITERATOR_PROTOTYPE_PTR,
         &iterator_prototypes::ITERATOR_HELPER_PROTOTYPE_PTR,
-        // The realm's `RegExp.prototype`, recorded by `regex_proto_thunks` so
-        // the view mode's canonicality proof is three loads instead of a walk.
-        // A recorded address MUST be scanned: unscanned, it is a stale pointer
-        // the first time the collector moves the prototype.
-        #[cfg(feature = "regex-engine")]
-        &regex_proto_thunks::REGEXP_PROTOTYPE_PTR,
     ] {
         slot.with_slot(|slot| {
             visitor.visit_atomic_i64_slot(slot, Ordering::Acquire, Ordering::Release);
         });
     }
-    // The canonical `test` closure is a NaN-boxed word, not a bare address, so
-    // it is visited as one — the collector rewrites the pointer inside it.
     #[cfg(feature = "regex-engine")]
-    regex_proto_thunks::REGEXP_PROTOTYPE_TEST_CLOSURE.with_slot(|slot| {
-        visitor.visit_atomic_nanbox_u64_slot(slot, Ordering::Acquire, Ordering::Release);
-    });
+    regex_proto_thunks::scan_canonical_test_site_roots_mut(visitor);
 }
 
 /// Drive the PRODUCTION shape-cache writer from a test. Deliberately nothing
