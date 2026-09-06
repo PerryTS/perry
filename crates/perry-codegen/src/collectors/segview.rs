@@ -1100,48 +1100,105 @@ fn rewrite_site(list: &mut Vec<Stmt>, i: usize, site: &SegmentForOfSite, fresh: 
                 Stmt::Let { name, .. } => name.clone(),
                 _ => "O".to_string(),
             };
-            let bind = Stmt::Let {
-                id: seg_id,
-                name: seg_name,
-                ty: perry_hir::types::Type::Any,
-                mutable: false,
-                init: Some(pick(
-                    cur,
-                    extern_call("js_segments_view_segment", vec![Expr::LocalGet(cur)]),
-                    Expr::PropertyGet {
-                        object: Box::new(Expr::PropertyGet {
-                            object: Box::new(Expr::LocalGet(result_id)),
-                            property: "value".to_string(),
-                            byte_offset: 0,
-                        }),
-                        property: "segment".to_string(),
-                        byte_offset: 0,
-                    },
-                )),
+            let spec_bind = Expr::PropertyGet {
+                object: Box::new(Expr::PropertyGet {
+                    object: Box::new(Expr::LocalGet(result_id)),
+                    property: "value".to_string(),
+                    byte_offset: 0,
+                }),
+                property: "segment".to_string(),
+                byte_offset: 0,
             };
-            body.remove(0); // the `Let __destruct_N = R.value`
-            body[0] = bind; // was `Let O = __destruct_N.segment`
+
+            // v2 is attempted only when the classifier found NO use that needs
+            // the substring. If even one does, materialising once (v1) is
+            // strictly better than materialising once AND paying the guards.
+            let answerable = site.segment_uses.regexp_test_static
+                + site.segment_uses.regexp_test_dynamic
+                + site.segment_uses.code_point_at;
+            let mut v2: Option<(V2Emission, Vec<Stmt>)> = None;
+            if site.segment_uses.materialise == 0 && answerable > 0 {
+                // Rewrite a CLONE and keep it only if the emission matches the
+                // classification exactly. This check stands in for the tests
+                // this pass could not be run against: if the two disagree, some
+                // use was not rewritten and would read an unbound segment on
+                // the accepted path, so the clone is discarded and v1 is used.
+                let mut trial: Vec<Stmt> = body[2..].to_vec();
+                let mut probe_fresh = *fresh;
+                let mut emitted = V2Emission {
+                    code_point_at: 0,
+                    regexp_test: 0,
+                    decls: Vec::new(),
+                };
+                for st in trial.iter_mut() {
+                    rewrite_uses_in_stmt(st, seg_id, cur, &mut probe_fresh, &mut emitted);
+                }
+                let agrees = emitted.code_point_at == site.segment_uses.code_point_at
+                    && emitted.regexp_test
+                        == site.segment_uses.regexp_test_static
+                            + site.segment_uses.regexp_test_dynamic;
+                if agrees {
+                    *fresh = probe_fresh;
+                    v2 = Some((emitted, trial));
+                }
+            }
+
+            match v2 {
+                Some((emitted, trial)) => {
+                    // The segment is never materialised on the accepted path:
+                    // `O` is bound only for the decline arm, and every use is
+                    // guarded, so on acceptance it is undefined and never read.
+                    let bind = Stmt::Let {
+                        id: seg_id,
+                        name: seg_name,
+                        ty: perry_hir::types::Type::Any,
+                        mutable: false,
+                        init: Some(pick(cur, Expr::Undefined, spec_bind)),
+                    };
+                    let mut new_body = vec![bind];
+                    new_body.extend(emitted.decls.iter().cloned());
+                    new_body.extend(trial);
+                    *body = new_body;
+                    if segview_diag_enabled() {
+                        eprintln!(
+                            "[segview-lower] {} open=1 next=1 segment=0 code_point_at={} \
+                             regexp_test={} declined=none (v2: nothing materialised on the \
+                             accepted path)",
+                            site.record_name, emitted.code_point_at, emitted.regexp_test,
+                        );
+                    }
+                }
+                None => {
+                    let bind = Stmt::Let {
+                        id: seg_id,
+                        name: seg_name,
+                        ty: perry_hir::types::Type::Any,
+                        mutable: false,
+                        init: Some(pick(
+                            cur,
+                            extern_call("js_segments_view_segment", vec![Expr::LocalGet(cur)]),
+                            spec_bind,
+                        )),
+                    };
+                    body.remove(0); // the `Let __destruct_N = R.value`
+                    body[0] = bind; // was `Let O = __destruct_N.segment`
+                    if segview_diag_enabled() {
+                        let u = &site.segment_uses;
+                        eprintln!(
+                            "[segview-lower] {} open=1 next=1 segment=1 code_point_at=0 \
+                             regexp_test=0 declined=none (v1: classifier code_point_at={} \
+                             regexp_test={} materialise={})",
+                            site.record_name,
+                            u.code_point_at,
+                            u.regexp_test_static + u.regexp_test_dynamic,
+                            u.materialise,
+                        );
+                    }
+                }
+            }
         }
     }
 
-    if segview_diag_enabled() {
-        // What was actually EMITTED, per site. Pairs with the classifier's
-        // `[segview]` line: that one says what each use of the segment binding
-        // COULD be answered by, this one says which entry point it now IS.
-        // v1 emits `_segment` once per step and leaves the body alone, so
-        // `code_point_at` and `regexp_test` are 0 here even on a site the
-        // classifier scored as answerable -- that difference is the v1/v2 gap,
-        // stated by the instrument instead of being inferred from the design.
-        let u = &site.segment_uses;
-        eprintln!(
-            "[segview-lower] {} open=1 next=1 segment=1 code_point_at=0 regexp_test=0 \
-             declined=none (classifier: code_point_at={} regexp_test={} materialise={})",
-            site.record_name,
-            u.code_point_at,
-            u.regexp_test_static + u.regexp_test_dynamic,
-            u.materialise,
-        );
-    }
     // Statement rewrite: hoist, open, and the conditional iterator.
     list[i] = let_any(recv, "__segview_recv", recv_expr);
     list.insert(i + 1, let_any(inp, "__segview_input", input_expr));
@@ -1384,4 +1441,196 @@ pub fn segview_rewrite_module(m: &mut perry_hir::Module) -> usize {
         eprintln!("[segview] REWROTE {count} site(s) in module {}", m.name);
     }
     count
+}
+
+// ── v2: answer the uses from the view instead of materialising ─────────────
+//
+// v1 binds the segment with `_segment` once per step and leaves the body
+// alone, so it removes the record and keeps the substring. v2 rewrites the
+// USES, so on a site the classifier scored `materialise=0` nothing is
+// materialised at all and the loop reaches zero allocations per grapheme.
+//
+// Two substitutions, and they have very different risk.
+//
+// `O.codePointAt(k)` -> `js_segments_view_code_point_at(cursor, k)` is a pure
+// expression swap: same arity, same value, no temporaries, no control flow.
+// `k` stays as written -- it is segment-relative and segment-bounded by the
+// runtime's contract (§9d), which is the same bound the materialised substring
+// had, so no clamping is added or removed here.
+//
+// `recv.test(O)` is the hard one, because `js_segments_view_regexp_test`
+// returns THREE values: true, false, or `undefined` meaning "I declined"
+// (global/sticky regex, or a patched `RegExp.prototype.test`). Read from
+// #9870: the runtime does NOT fall back internally, so the compiler must. And
+// `recv` is an arbitrary expression -- in cc it is `g54.default()`, an opaque
+// call that must run exactly once per evaluation -- so it cannot simply be
+// repeated in the fallback arm.
+//
+// The emitted form is a pure expression, so it works in any position without
+// restructuring the body's control flow:
+//
+// ```text
+//   Sequence([
+//     LocalSet(t_recv, <recv>),                        // opaque call, ONCE
+//     LocalSet(t_res,  _regexp_test(cursor, t_recv)),
+//     Conditional { cond:  t_res === undefined,
+//                   then:  t_recv.test(_segment(cursor)),   // materialise LAZILY,
+//                   else:  t_res }                          // only on decline
+//   ])
+// ```
+//
+// The materialisation sits inside the `then` arm, so the accepted path -- which
+// is every step unless the program patched `RegExp.prototype.test` -- allocates
+// nothing. Both temporaries are declared at the top of the loop body, because
+// a bare `LocalSet` to an id with no `Stmt::Let` has no slot.
+
+struct V2Emission {
+    code_point_at: u32,
+    regexp_test: u32,
+    decls: Vec<Stmt>,
+}
+
+fn is_undefined_cmp(id: u32) -> Expr {
+    Expr::Compare {
+        op: perry_hir::CompareOp::Eq,
+        left: Box::new(Expr::LocalGet(id)),
+        right: Box::new(Expr::Undefined),
+    }
+}
+
+/// Rewrite the answerable uses of `seg` in one expression. Returns how many of
+/// each kind were replaced and any temporaries that must be declared.
+fn rewrite_uses_in_expr(e: &mut Expr, seg: u32, cur: u32, fresh: &mut u32, out: &mut V2Emission) {
+    // `O.codePointAt(k)` -> `cur != 0 ? _code_point_at(cursor, k) : <original>`
+    let e_original = e.clone();
+    let mut replaced = None;
+    if let Expr::Call { callee, args, .. } = e {
+        if let Expr::PropertyGet {
+            object, property, ..
+        } = callee.as_ref()
+        {
+            if property == "codePointAt"
+                && args.len() == 1
+                && matches!(object.as_ref(), Expr::LocalGet(id) if *id == seg)
+            {
+                // Guarded, NOT replaced. The loop body is shared between the
+                // accepted and declined paths, so the original expression must
+                // survive for the decline arm, where `O` holds a real string.
+                replaced = Some(pick(
+                    cur,
+                    extern_call(
+                        "js_segments_view_code_point_at",
+                        vec![Expr::LocalGet(cur), args[0].clone()],
+                    ),
+                    e_original.clone(),
+                ));
+                out.code_point_at += 1;
+            } else if property == "test"
+                && args.len() == 1
+                && matches!(&args[0], Expr::LocalGet(id) if *id == seg)
+                && !matches!(object.as_ref(), Expr::LocalGet(id) if *id == seg)
+            {
+                let t_recv = *fresh;
+                let t_res = *fresh + 1;
+                *fresh += 2;
+                out.decls
+                    .push(let_any(t_recv, "__segview_test_recv", Expr::Undefined));
+                out.decls
+                    .push(let_any(t_res, "__segview_test_res", Expr::Undefined));
+                let recv_expr = object.as_ref().clone();
+                let view_form = Expr::Sequence(vec![
+                    Expr::LocalSet(t_recv, Box::new(recv_expr)),
+                    Expr::LocalSet(
+                        t_res,
+                        Box::new(extern_call(
+                            "js_segments_view_regexp_test",
+                            vec![Expr::LocalGet(cur), Expr::LocalGet(t_recv)],
+                        )),
+                    ),
+                    Expr::Conditional {
+                        condition: Box::new(is_undefined_cmp(t_res)),
+                        then_expr: Box::new(Expr::Call {
+                            callee: Box::new(Expr::PropertyGet {
+                                object: Box::new(Expr::LocalGet(t_recv)),
+                                property: "test".to_string(),
+                                byte_offset: 0,
+                            }),
+                            args: vec![extern_call(
+                                "js_segments_view_segment",
+                                vec![Expr::LocalGet(cur)],
+                            )],
+                            type_args: vec![],
+                            byte_offset: 0,
+                        }),
+                        else_expr: Box::new(Expr::LocalGet(t_res)),
+                    },
+                ]);
+                replaced = Some(pick(cur, view_form, e_original.clone()));
+                out.regexp_test += 1;
+            }
+        }
+    }
+    if let Some(new_e) = replaced {
+        *e = new_e;
+        return;
+    }
+    if let Expr::Closure { body, .. } = e {
+        for s in body.iter_mut() {
+            rewrite_uses_in_stmt(s, seg, cur, fresh, out);
+        }
+    }
+    perry_hir::walker::walk_expr_children_mut(e, &mut |child| {
+        rewrite_uses_in_expr(child, seg, cur, fresh, out)
+    });
+}
+
+fn rewrite_uses_in_stmt(s: &mut Stmt, seg: u32, cur: u32, fresh: &mut u32, out: &mut V2Emission) {
+    for_each_expr_in_stmt_shallow_mut(s, &mut |e| rewrite_uses_in_expr(e, seg, cur, fresh, out));
+    let mut kids: Vec<&mut Stmt> = Vec::new();
+    collect_child_stmts_mut(s, &mut kids);
+    for k in kids {
+        rewrite_uses_in_stmt(k, seg, cur, fresh, out);
+    }
+}
+
+fn collect_child_stmts_mut<'a>(s: &'a mut Stmt, out: &mut Vec<&'a mut Stmt>) {
+    match s {
+        Stmt::If {
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            out.extend(then_branch.iter_mut());
+            if let Some(e) = else_branch {
+                out.extend(e.iter_mut());
+            }
+        }
+        Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => out.extend(body.iter_mut()),
+        Stmt::For { init, body, .. } => {
+            if let Some(i) = init {
+                out.push(i.as_mut());
+            }
+            out.extend(body.iter_mut());
+        }
+        Stmt::Labeled { body, .. } => out.push(body.as_mut()),
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            out.extend(body.iter_mut());
+            if let Some(c) = catch {
+                out.extend(c.body.iter_mut());
+            }
+            if let Some(f) = finally {
+                out.extend(f.iter_mut());
+            }
+        }
+        Stmt::Switch { cases, .. } => {
+            for c in cases.iter_mut() {
+                out.extend(c.body.iter_mut());
+            }
+        }
+        _ => {}
+    }
 }

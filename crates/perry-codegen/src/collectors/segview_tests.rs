@@ -415,3 +415,90 @@ fn a_declining_site_is_not_rewritten() {
     assert_eq!(segview_rewrite_module(&mut m), 0);
     assert_eq!(before, render(&m), "a declining site must be untouched");
 }
+
+/// v2: on a site where every use of the segment is view-answerable, nothing is
+/// materialised on the accepted path. `N$6` is exactly this shape — one
+/// `codePointAt` and two opaque-receiver `.test()` calls.
+#[test]
+fn v2_answers_every_use_from_the_view_and_materialises_nothing() {
+    let mut m = module_with(region(cc_body()));
+    assert_eq!(segview_rewrite_module(&mut m), 1);
+    let out = render(&m);
+
+    assert!(
+        out.contains("js_segments_view_code_point_at"),
+        "the codePointAt use must be answered from the cursor: {out}"
+    );
+    assert!(
+        out.contains("js_segments_view_regexp_test"),
+        "the regex test must be answered from the cursor"
+    );
+    assert!(
+        out.contains("__segview_test_recv"),
+        "the opaque receiver must be hoisted so it is evaluated exactly once"
+    );
+
+    // The decisive property, checked on the tree rather than on its Debug
+    // rendering: the segment binding's ACCEPTED arm must be `Undefined`. If it
+    // were `_segment(cursor)` the loop would still allocate a substring per
+    // grapheme and v2 would buy nothing — and a string-contains assertion
+    // would not have caught it, because `_segment` legitimately appears inside
+    // the regexp_test decline arm.
+    let seg_bind_accept_is_undefined = m.init.iter().any(|s| match s {
+        Stmt::For { body, .. } => matches!(
+            body.first(),
+            Some(Stmt::Let {
+                init: Some(Expr::Conditional { then_expr, .. }),
+                ..
+            }) if matches!(then_expr.as_ref(), Expr::Undefined)
+        ),
+        _ => false,
+    });
+    assert!(
+        seg_bind_accept_is_undefined,
+        "the segment must NOT be materialised on the accepted path: {out}"
+    );
+}
+
+/// The receiver of `.test(O)` is `g54.default()` in cc — an opaque call that
+/// must run exactly once per evaluation. It is bound to a temporary and the
+/// fallback arm reuses the temporary rather than re-evaluating it.
+#[test]
+fn v2_evaluates_an_opaque_test_receiver_exactly_once() {
+    let body = vec![Stmt::Expr(call(
+        pget(call(pget(Expr::LocalGet(54), "default"), vec![]), "test"),
+        vec![Expr::LocalGet(SEG)],
+    ))];
+    let mut m = module_with(region(body));
+    assert_eq!(segview_rewrite_module(&mut m), 1);
+    let out = render(&m);
+    assert_eq!(
+        out.matches("property: \"default\"").count(),
+        2,
+        "once in the view arm's hoist and once in the decline arm's original — \
+         never twice within one arm: {out}"
+    );
+}
+
+/// A site with a use the classifier cannot answer keeps v1: materialise once
+/// and leave the body alone. Paying the per-use guards on top of a
+/// materialisation that happens anyway would be strictly worse.
+#[test]
+fn a_site_with_an_unanswerable_use_stays_on_v1() {
+    let mut body = cc_body();
+    body.push(Stmt::Expr(call(
+        Expr::LocalGet(42),
+        vec![Expr::LocalGet(SEG)],
+    )));
+    let mut m = module_with(region(body));
+    assert_eq!(segview_rewrite_module(&mut m), 1);
+    let out = render(&m);
+    assert!(
+        out.contains("js_segments_view_segment"),
+        "v1 binds the segment by materialising it once"
+    );
+    assert!(
+        !out.contains("js_segments_view_code_point_at"),
+        "v1 does not rewrite uses: {out}"
+    );
+}
