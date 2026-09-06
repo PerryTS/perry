@@ -301,6 +301,7 @@ fn build_and_install_programs(re: *const RegExpHeader) {
     super::site_cache::install_programs(&pattern, &flags, programs.clone());
     unsafe {
         let re = re as *mut RegExpHeader;
+        (*re).matcher_kind = programs.matcher_kind();
         (*re).programs_ptr = Arc::into_raw(programs);
     }
 }

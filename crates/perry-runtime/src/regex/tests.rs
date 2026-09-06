@@ -1309,6 +1309,38 @@ fn deferred_build_installs_the_fancy_and_repeat_matcher_fallbacks() {
     );
 }
 
+/// Sabotage for the bounded Segmenter lane: this pattern's standard program
+/// is the never-match placeholder, so a wrong `Standard` tag returns false.
+/// Exercise all three installation routes that must publish the tag beside the
+/// program handle: lazy build, born-built cache hit, and `compile`.
+#[test]
+fn bounded_test_matcher_tag_routes_fancy_patterns_to_fancy_regex() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    site_cache::test_reset();
+    let pattern = r"(?<=left)right";
+
+    let cold = js_regexp_new(make_string(pattern), make_string(""));
+    assert_eq!(unsafe { (*cold).matcher_kind }, MatcherKind::Unbuilt);
+    assert_eq!(regexp_test_str_bounded(cold, "leftright"), Some(true));
+    assert_eq!(unsafe { (*cold).matcher_kind }, MatcherKind::Fancy);
+
+    let born_built = js_regexp_new(make_string(pattern), make_string(""));
+    assert!(regex_is_built(born_built));
+    assert_eq!(unsafe { (*born_built).matcher_kind }, MatcherKind::Fancy);
+    assert_eq!(
+        regexp_test_str_bounded(born_built, "leftwrong"),
+        Some(false)
+    );
+
+    let compiled = js_regexp_new(make_string("plain"), make_string(""));
+    let pattern_value = crate::value::js_nanbox_string(make_string(pattern) as i64);
+    let flags_value = crate::value::js_nanbox_string(make_string("") as i64);
+    let result = js_regexp_compile_value(compiled, pattern_value, flags_value);
+    let compiled = crate::value::JSValue::from_bits(result.to_bits()).as_pointer::<RegExpHeader>();
+    assert_eq!(unsafe { (*compiled).matcher_kind }, MatcherKind::Fancy);
+    assert_eq!(regexp_test_str_bounded(compiled, "leftright"), Some(true));
+}
+
 /// Two evaluations of the same pattern are still distinct objects with
 /// independent `lastIndex`, and deferring the build does not let them share a
 /// header (ECMA-262 requires a fresh object per evaluation — the same

@@ -392,6 +392,7 @@ pub(crate) fn test_alloc_nursery_regexp_for_move(source: &str, flags: &str) -> *
         (*ptr).dot_all = flags.contains('s');
         (*ptr).unicode = flags.contains('u') || flags.contains('v');
         (*ptr).has_indices = flags.contains('d');
+        (*ptr).matcher_kind = MatcherKind::Unbuilt;
         (*ptr).last_index = crate::value::JSValue::number(0.0).bits();
         (*ptr).magic = REGEXP_MAGIC;
 
@@ -735,6 +736,15 @@ fn get_or_compile_regex(pattern: &Arc<str>, flags: &Arc<str>) -> Arc<Regex> {
     })
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub(super) enum MatcherKind {
+    Unbuilt,
+    Standard,
+    Fancy,
+    Repeat,
+}
+
 /// Header for heap-allocated RegExp objects
 #[repr(C)]
 pub struct RegExpHeader {
@@ -759,6 +769,9 @@ pub struct RegExpHeader {
     pub dot_all: bool,
     pub unicode: bool,
     pub has_indices: bool,
+    /// Selected engine after the first build. This occupies the byte that was
+    /// padding before `last_index`, so it does not grow the 56-byte header.
+    matcher_kind: MatcherKind,
     /// `lastIndex` is a writable data property holding an *arbitrary* JSValue
     /// (spec: `Set(R, "lastIndex", v)` with no coercion on write). Stored as the
     /// raw NaN-boxed bits; `exec`/`test` apply `ToLength` on read to derive the
@@ -778,8 +791,8 @@ pub struct RegExpHeader {
     /// string pattern → never matches → get-intrinsic's `stringToPath` returns
     /// `[]` → `intrinsic %% does not exist!` → express adapter load `exit(1)`.
     ///
-    /// Storing the marker (and the fancy-regex Arc) ON the heap header makes
-    /// identity + fancy-fallback resolution independent of WHICH runtime copy's
+    /// Storing the marker and program-set handle ON the heap header makes
+    /// identity + fallback resolution independent of WHICH runtime copy's
     /// thread-locals are live. Set to `REGEXP_MAGIC` by `js_regexp_new`.
     pub magic: u64,
     /// #6759 phase 1 (header unification): per-object metadata record, or
@@ -1453,6 +1466,7 @@ fn js_regexp_new_impl(
         (*ptr).dot_all = dot_all;
         (*ptr).unicode = unicode;
         (*ptr).has_indices = has_indices;
+        (*ptr).matcher_kind = MatcherKind::Unbuilt;
         (*ptr).last_index = crate::value::JSValue::number(0.0).bits();
         // Wall 18: self-identifying marker so identity checks survive a
         // duplicate-runtime thread-local split.
@@ -1461,6 +1475,7 @@ fn js_regexp_new_impl(
         // first execution of this text compiled. Install one owned reference;
         // null remains the sound not-built state.
         if let Some(programs) = programs {
+            (*ptr).matcher_kind = programs.matcher_kind();
             (*ptr).programs_ptr = Arc::into_raw(programs);
         }
 
@@ -1652,16 +1667,32 @@ pub(crate) fn regexp_test_str_bounded(re: *const RegExpHeader, hay: &str) -> Opt
         if crate::hot_diag::regex_on() {
             diag_note_op(re, crate::hot_diag::RegexOp::Test);
         }
-        if let Some(repeat_matcher) = lookup_repeat_matcher(re) {
-            return Some(repeat_matcher.regex.find(hay).is_some());
+        lazy::ensure_regex_compiled(re);
+        let programs = &*(*re).programs_ptr;
+        match (*re).matcher_kind {
+            MatcherKind::Repeat => {
+                let repeat = programs
+                    .repeat
+                    .as_ref()
+                    .expect("repeat matcher tag must name a repeat program");
+                Some(repeat.regex.find(hay).is_some())
+            }
+            MatcherKind::Fancy => {
+                let fancy = programs
+                    .fancy
+                    .as_ref()
+                    .expect("fancy matcher tag must name a fancy program");
+                match fancy.is_match(hay) {
+                    Ok(v) => Some(v),
+                    Err(_) => None,
+                }
+            }
+            MatcherKind::Standard => Some(programs.std.is_match(hay)),
+            MatcherKind::Unbuilt => {
+                debug_assert!(false, "compiled header kept the unbuilt matcher tag");
+                Some(programs.std.is_match(hay))
+            }
         }
-        if let Some(fre) = lookup_fancy_regex(re) {
-            return match fre.is_match(hay) {
-                Ok(v) => Some(v),
-                Err(_) => None,
-            };
-        }
-        Some(lazy::header_std_regex(re).is_match(hay))
     }
 }
 
