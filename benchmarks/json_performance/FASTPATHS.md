@@ -5,6 +5,10 @@ Branch: `codex/json-fastpaths-1520`.
 Draft PR: [#9849](https://github.com/PerryTS/perry/pull/9849).
 Runtime implementation commit: `2a05ac309`.
 
+Follow-up: [number formatting and the full parity target](NUMBERS.md). The
+sustained wide-object profile there qualifies the short-run wide-object figures
+below: 36 repeated parses expose GC/cache costs absent from the 3-call comparison.
+
 ## Measured results
 
 The final quiet-M1 run passed all 152 output comparisons, 456 timing trials and 432 retained-output memory trials. Each timing cell uses three fresh processes and identical iteration counts across freshly built baseline Perry, patched Perry, Node 26.5.1 and Bun 1.3.14. CPU is process user + system time. The [quiet-window record](results/fastpaths/window.json), [full tables](results/fastpaths/tables.md), [raw-data summary](results/fastpaths/summary.csv), [provenance](results/fastpaths/changed-provenance.json) and [validation record](results/fastpaths/validation.json) accompany these results.

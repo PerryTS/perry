@@ -1,0 +1,435 @@
+{
+  "runtime_json_tests": {
+    "passed": 46,
+    "failed": 0
+  },
+  "number_leaf": {
+    "node": {
+      "version": "v26.5.1",
+      "sha256": "cfbdd129d45d56f5db30f0fc3f28ab31a9bdf0fcfe29c819f01924e6ce165de7"
+    },
+    "bun": {
+      "version": "1.3.14",
+      "sha256": "cfbdd129d45d56f5db30f0fc3f28ab31a9bdf0fcfe29c819f01924e6ce165de7"
+    },
+    "emitter_sha256": "6306521194b646dea4cc3a97a19ee83d5194dff80384d3108eb37649aebc3f17",
+    "result": "PASS 1050129 exact number spellings; zero temporary allocations\nOLD_DIFFERENCE 4300000000000002 562949953421312.3 -> 562949953421312.2\nOLD_DIFFERENCE c300000000000002 -562949953421312.3 -> -562949953421312.2\nOLD_DIFFERENCE 4310000000000001 1125899906842624.3 -> 1125899906842624.2\nOLD_DIFFERENCE c310000000000001 -1125899906842624.3 -> -1125899906842624.2\nOLD_DIFFERENCE 42d6bcc41e900008 100000000000000.13 -> 100000000000000.12\nOLD_DIFFERENCE c2d6bcc41e900008 -100000000000000.13 -> -100000000000000.12\nOLD_DIFFERENCE 430c6bf52633fffa 999999999999999.3 -> 999999999999999.2\nOLD_DIFFERENCE c30c6bf52633fffa -999999999999999.3 -> -999999999999999.2\nOLD_DIFFERENCE 430c6bf526340002 1000000000000000.3 -> 1000000000000000.2\nOLD_DIFFERENCE c30c6bf526340002 -1000000000000000.3 -> -1000000000000000.2\nOLD_DIFFERENCE c2b979595fd7dd90 -28008981190621.563 -> -28008981190621.562\nOLD_DIFFERENCE 42e6e42552236994 201353075956556.63 -> 201353075956556.62\n"
+  },
+  "compiled_fixtures": [
+    {
+      "name": "test_gap_json_scanning_boundaries",
+      "arm": "number",
+      "compile_exit": 0,
+      "object_sha256": "ea2670de8bb22a03f5eeb4c08c1ad1f700d6bdd548dbbcd3ec755d879c45e8dd",
+      "node": {
+        "exit": 0,
+        "stdout": "scan 255 0 730561117\nwide 0 624430645\n",
+        "stderr": ""
+      },
+      "perry": {
+        "exit": 0,
+        "stdout": "scan 255 0 730561117\nwide 0 624430645\n",
+        "stderr": ""
+      },
+      "matches_node": true
+    },
+    {
+      "name": "test_issue_9184_json_parse_strict",
+      "arm": "number",
+      "compile_exit": 0,
+      "object_sha256": "fb31ec6fb7181b1b7d07d69d03d3b9118634ed397ddfd1db41f0c85240d75f7a",
+      "node": {
+        "exit": 0,
+        "stdout": "invalid:43/43:0\nvalid:28/28:0\ntyped:SyntaxError:2:1:2\n",
+        "stderr": ""
+      },
+      "perry": {
+        "exit": 0,
+        "stdout": "invalid:43/43:0\nvalid:28/28:0\ntyped:SyntaxError:2:1:2\n",
+        "stderr": ""
+      },
+      "matches_node": true
+    },
+    {
+      "name": "test_json",
+      "arm": "number",
+      "compile_exit": 0,
+      "object_sha256": "2ec349674d8a18682516c52927578e0f789374f5c6a7ca71030bd1098ef8c138",
+      "node": {
+        "exit": 0,
+        "stdout": "\"hello\"\n42\n3.14\n\"world\"\n100\n42\n3.14\nJSON test passed!\n",
+        "stderr": ""
+      },
+      "perry": {
+        "exit": 0,
+        "stdout": "\"hello\"\n42\n3.14\n\"world\"\n100\n42\n3.14\nJSON test passed!\n",
+        "stderr": ""
+      },
+      "matches_node": true
+    },
+    {
+      "name": "test_json_sso_strings",
+      "arm": "number",
+      "compile_exit": 0,
+      "object_sha256": "17771487aaa2746fe320c3e21c1388be632e81e884078f8337dc944a6d17b477",
+      "node": {
+        "exit": 0,
+        "stdout": "a.foo: perry\nperry\nv= perry /end\nv === u: true\nv == u: true\nv === \"perry\": true\nString(v): perry\n\"X\" + v: Xperry\n{ name: 'alice', tag: 'vip' }\n[ 'a', 'bb', 'ccc', 'dddd', 'eeeee' ]\narr.length: 5\nkeys: [ 'foo' ]\nstringify: {\"foo\":\"perry\"}\n",
+        "stderr": ""
+      },
+      "perry": {
+        "exit": 0,
+        "stdout": "a.foo: perry\nperry\nv= perry /end\nv === u: true\nv == u: true\nv === \"perry\": true\nString(v): perry\n\"X\" + v: Xperry\n{ name: 'alice', tag: 'vip' }\n[ 'a', 'bb', 'ccc', 'dddd', 'eeeee' ]\narr.length: 5\nkeys: [ 'foo' ]\nstringify: {\"foo\":\"perry\"}\n",
+        "stderr": ""
+      },
+      "matches_node": true
+    },
+    {
+      "name": "test_gap_json_advanced",
+      "arm": "number",
+      "compile_exit": 0,
+      "object_sha256": "33b8ef0e4b9825229eccb25f9d50fe013433bd16e2e8e247facf672f24e7e229",
+      "node": {
+        "exit": 0,
+        "stdout": "{\n  \"a\": 1,\n  \"b\": \"hello\",\n  \"c\": [\n    1,\n    2,\n    3\n  ]\n}\n{\n\t\"x\": 1\n}\n{\"name\":\"Alice\",\"age\":30}\n{\"name\":\"Bob\",\"city\":\"NYC\"}\n42\nnumber\n2024-01-15\nundefined\ntrue\n{\"a\":1,\"c\":3}\n[1,null,3]\ntrue\ntrue\n{\"formatted\":\"12,345\"}\n{\"inner\":\"custom-42\"}\n",
+        "stderr": ""
+      },
+      "perry": {
+        "exit": 0,
+        "stdout": "{\n  \"a\": 1,\n  \"b\": \"hello\",\n  \"c\": [\n    1,\n    2,\n    3\n  ]\n}\n{\n\t\"x\": 1\n}\n{\"name\":\"Alice\",\"age\":30}\n{\"name\":\"Bob\",\"city\":\"NYC\"}\n42\nnumber\n2024-01-15\nundefined\ntrue\n{\"a\":1,\"c\":3}\n[1,null,3]\ntrue\ntrue\n{\"formatted\":\"12,345\"}\n{\"inner\":\"custom-42\"}\n",
+        "stderr": ""
+      },
+      "matches_node": true
+    },
+    {
+      "name": "test_gap_json_stringify_replacer_tojson",
+      "arm": "number",
+      "compile_exit": 0,
+      "object_sha256": "0500aff3aae37c0e839d02459ebf707d50db716c0a973be8975d49f92cf6cdd9",
+      "node": {
+        "exit": 0,
+        "stdout": "{\"id\":\"X\",\"items\":[1,2]}\n{\n  \"id\": \"X\",\n  \"items\": [\n    1,\n    2\n  ]\n}\n{\n  \"a\": [\n    1,\n    2\n  ]\n}\n{\n  \"wrap\": [\n    9,\n    8\n  ]\n}\n{\"a\":1}\n{\"a\":10,\"b\":20}\n{\n  \"list\": [\n    {\n      \"x\": 1\n    },\n    {\n      \"x\": 2\n    }\n  ],\n  \"n\": 3\n}\n[\n  1,\n  {\n    \"a\": 2\n  },\n  [\n    3,\n    4\n  ]\n]\n{\"s\":\"hi\",\"b\":true,\"n\":null,\"x\":5}\n{\n  \"_tag\": \"Box\",\n  \"value\": 42\n}\n",
+        "stderr": ""
+      },
+      "perry": {
+        "exit": 0,
+        "stdout": "{\"id\":\"X\",\"items\":[1,2]}\n{\n  \"id\": \"X\",\n  \"items\": [\n    1,\n    2\n  ]\n}\n{\n  \"a\": [\n    1,\n    2\n  ]\n}\n{\n  \"wrap\": [\n    9,\n    8\n  ]\n}\n{\"a\":1}\n{\"a\":10,\"b\":20}\n{\n  \"list\": [\n    {\n      \"x\": 1\n    },\n    {\n      \"x\": 2\n    }\n  ],\n  \"n\": 3\n}\n[\n  1,\n  {\n    \"a\": 2\n  },\n  [\n    3,\n    4\n  ]\n]\n{\"s\":\"hi\",\"b\":true,\"n\":null,\"x\":5}\n{\n  \"_tag\": \"Box\",\n  \"value\": 42\n}\n",
+        "stderr": ""
+      },
+      "matches_node": true
+    },
+    {
+      "name": "test_gap_json_prototype_tojson",
+      "arm": "number",
+      "compile_exit": 0,
+      "object_sha256": "aeb881dc01bb3dddcf966ccda93419867d9583a259c5b8cb8a8d3e5f82497e70",
+      "node": {
+        "exit": 0,
+        "stdout": "{\"tag\":\"C\",\"x\":1}\n{\"tag\":\"C\",\"x\":1}\n\"PVAL\"\n\"ROOT\"\n99\n\"str\"\ntrue\nnull\n{\"base\":10}\n\"D2\"\n{\"x\":1}\n{\"x\":1}\n{\"inner\":{\"tag\":\"C\",\"x\":1}}\n[{\"tag\":\"C\",\"x\":1},{\"tag\":\"C\",\"x\":1}]\n{\n  \"p\": {\n    \"tag\": \"C\",\n    \"x\": 1\n  }\n}\n{\n  \"pt\": {\n    \"tag\": \"C\",\n    \"x\": 1\n  }\n}\n{}\n{\"a\":1,\"b\":\"x\",\"c\":[1,2,3]}\n5\n{\"z\":9}\n{\"a\":1,\"b\":2}\n{\"y\":9}\n42\n\"hi\"\nnull\n[1,\"a\",true,null]\n\"1970-01-01T00:00:00.000Z\"\n{\"d\":\"1970-01-02T00:00:00.000Z\"}\n",
+        "stderr": ""
+      },
+      "perry": {
+        "exit": 0,
+        "stdout": "{\"tag\":\"C\",\"x\":1}\n{\"tag\":\"C\",\"x\":1}\n\"PVAL\"\n\"ROOT\"\n99\n\"str\"\ntrue\nnull\n{\"base\":10}\n\"D2\"\n{\"x\":1}\n{\"x\":1}\n{\"inner\":{\"tag\":\"C\",\"x\":1}}\n[{\"tag\":\"C\",\"x\":1},{\"tag\":\"C\",\"x\":1}]\n{\n  \"p\": {\n    \"tag\": \"C\",\n    \"x\": 1\n  }\n}\n{\n  \"pt\": {\n    \"tag\": \"C\",\n    \"x\": 1\n  }\n}\n{}\n{\"a\":1,\"b\":\"x\",\"c\":[1,2,3]}\n5\n{\"z\":9}\n{\"a\":1,\"b\":2}\n{\"y\":9}\n42\n\"hi\"\nnull\n[1,\"a\",true,null]\n\"1970-01-01T00:00:00.000Z\"\n{\"d\":\"1970-01-02T00:00:00.000Z\"}\n",
+        "stderr": ""
+      },
+      "matches_node": true
+    },
+    {
+      "name": "test_gap_json_replacer_sparse_hole",
+      "arm": "number",
+      "compile_exit": 0,
+      "object_sha256": "f0ee63df4839a69e93e662c4a474de83a63d1ed02d335640d86c30991566cbcb",
+      "node": {
+        "exit": 0,
+        "stdout": "[1,\"$undefined\",3]\n[\"\",{\"children\":[\"plain\",{}]},\"$undefined\",\"$undefined\",16]\nundefined true false\n[null,7]\n[\n 1,\n \"$undefined\",\n 3\n]\n{\"a\":[1,null,3]}\n[\"$NaN\",\"$undefined\",2]\n{\"p1\":1,\"p2\":2,\"p3\":3,\"p4\":4,\"p5\":5,\"p6\":6,\"p7\":7,\"p8\":8,\"p9\":9,\"p10\":10,\"p11\":11,\"p12\":12,\"p13\":13,\"notFound\":\"$undefined\",\"forbidden\":\"$undefined\",\"unauthorized\":\"$undefined\"}\n{\"a1\":1,\"a2\":2,\"a3\":3,\"a4\":4,\"a5\":5,\"a6\":6,\"a7\":7,\"a8\":8,\"a9\":\"$undefined\"}\n18\n{\"p9\":9,\"p13\":13}\n",
+        "stderr": ""
+      },
+      "perry": {
+        "exit": 0,
+        "stdout": "[1,\"$undefined\",3]\n[\"\",{\"children\":[\"plain\",{}]},\"$undefined\",\"$undefined\",16]\nundefined true false\n[null,7]\n[\n 1,\n \"$undefined\",\n 3\n]\n{\"a\":[1,null,3]}\n[\"$NaN\",\"$undefined\",2]\n{\"p1\":1,\"p2\":2,\"p3\":3,\"p4\":4,\"p5\":5,\"p6\":6,\"p7\":7,\"p8\":8,\"p9\":9,\"p10\":10,\"p11\":11,\"p12\":12,\"p13\":13,\"notFound\":\"$undefined\",\"forbidden\":\"$undefined\",\"unauthorized\":\"$undefined\"}\n{\"a1\":1,\"a2\":2,\"a3\":3,\"a4\":4,\"a5\":5,\"a6\":6,\"a7\":7,\"a8\":8,\"a9\":\"$undefined\"}\n18\n{\"p9\":9,\"p13\":13}\n",
+        "stderr": ""
+      },
+      "matches_node": true
+    },
+    {
+      "name": "test_gap_json_array_element_overflow_fields",
+      "arm": "number",
+      "compile_exit": 0,
+      "object_sha256": "754f0c60ece43ebde16edf9079e9922a660b93cfd23075e5d780bef2defd1e98",
+      "node": {
+        "exit": 0,
+        "stdout": "1 0 311 [{\"f0\":0},{\"f0\":1},{\"f0\":2},{\"f0\":3},{\"f0\":4},{\"f0\":5},{\"f0\":6},{\"f0\":7}\n2 0 558 [{\"f0\":0,\"f1\":1},{\"f0\":1,\"f1\":2},{\"f0\":2,\"f1\":3},{\"f0\":3,\"f1\":4},{\"f0\":4\n3 0 806 [{\"f0\":0,\"f1\":1,\"f2\":2},{\"f0\":1,\"f1\":2,\"f2\":3},{\"f0\":2,\"f1\":3,\"f2\":4},{\"\n4 0 1055 [{\"f0\":0,\"f1\":1,\"f2\":2,\"f3\":3},{\"f0\":1,\"f1\":2,\"f2\":3,\"f3\":4},{\"f0\":2,\"f1\n5 0 1305 [{\"f0\":0,\"f1\":1,\"f2\":2,\"f3\":3,\"f4\":4},{\"f0\":1,\"f1\":2,\"f2\":3,\"f3\":4,\"f4\":\n6 0 1556 [{\"f0\":0,\"f1\":1,\"f2\":2,\"f3\":3,\"f4\":4,\"f5\":5},{\"f0\":1,\"f1\":2,\"f2\":3,\"f3\":\n8 0 2061 [{\"f0\":0,\"f1\":1,\"f2\":2,\"f3\":3,\"f4\":4,\"f5\":5,\"f6\":6,\"f7\":7},{\"f0\":1,\"f1\":\n12 0 3146 [{\"f0\":0,\"f1\":1,\"f2\":2,\"f3\":3,\"f4\":4,\"f5\":5,\"f6\":6,\"f7\":7,\"f8\":8,\"f9\":9,\nuntouched 1556\none-read 0 1556\nloop-read 560 1556\nagree true true true\nkeys 6 0\nelement {\"f0\":0,\"f1\":1,\"f2\":2,\"f3\":3,\"f4\":4,\"f5\":5}\nmapped true\nnested 496 true\nnested-tail \",\"value\":93,\"tags\":[\"tag_1\",\"tag_1\"],\"nested\":{\"x\":31,\"y\":62}}]\nmixed 0 [{\"f0\":0,\"f1\":1,\"f2\":2,\"f3\":3,\"f4\":4,\"f5\":5},{\"f0\":1,\"f1\":2,\"f2\":3,\"f3\":4,\"f4\":5},{\"f0\":2,\"f1\":3,\"f2\":4,\"f3\":5,\"f5\":7},\"replaced\",{\"f0\":4,\"f1\":5,\"f2\":6,\"f3\":7,\"f4\":8,\"f5\":9}]\nsparse 0 [{\"a\":0,\"b\":1},{\"a\":1,\"b\":2},{\"a\":2,\"b\":\nhetero 1 [{\"a\":1,\"b\":2,\"c\":3,\"d\":4,\"e\":5,\"f\":6},{\"a\":1,\"b\":2},{\"a\":1,\"b\":2,\"c\":3,\"d\":4,\"e\":5,\"f\":6,\"g\":7}]\n",
+        "stderr": ""
+      },
+      "perry": {
+        "exit": 0,
+        "stdout": "1 0 311 [{\"f0\":0},{\"f0\":1},{\"f0\":2},{\"f0\":3},{\"f0\":4},{\"f0\":5},{\"f0\":6},{\"f0\":7}\n2 0 558 [{\"f0\":0,\"f1\":1},{\"f0\":1,\"f1\":2},{\"f0\":2,\"f1\":3},{\"f0\":3,\"f1\":4},{\"f0\":4\n3 0 806 [{\"f0\":0,\"f1\":1,\"f2\":2},{\"f0\":1,\"f1\":2,\"f2\":3},{\"f0\":2,\"f1\":3,\"f2\":4},{\"\n4 0 1055 [{\"f0\":0,\"f1\":1,\"f2\":2,\"f3\":3},{\"f0\":1,\"f1\":2,\"f2\":3,\"f3\":4},{\"f0\":2,\"f1\n5 0 1305 [{\"f0\":0,\"f1\":1,\"f2\":2,\"f3\":3,\"f4\":4},{\"f0\":1,\"f1\":2,\"f2\":3,\"f3\":4,\"f4\":\n6 0 1556 [{\"f0\":0,\"f1\":1,\"f2\":2,\"f3\":3,\"f4\":4,\"f5\":5},{\"f0\":1,\"f1\":2,\"f2\":3,\"f3\":\n8 0 2061 [{\"f0\":0,\"f1\":1,\"f2\":2,\"f3\":3,\"f4\":4,\"f5\":5,\"f6\":6,\"f7\":7},{\"f0\":1,\"f1\":\n12 0 3146 [{\"f0\":0,\"f1\":1,\"f2\":2,\"f3\":3,\"f4\":4,\"f5\":5,\"f6\":6,\"f7\":7,\"f8\":8,\"f9\":9,\nuntouched 1556\none-read 0 1556\nloop-read 560 1556\nagree true true true\nkeys 6 0\nelement {\"f0\":0,\"f1\":1,\"f2\":2,\"f3\":3,\"f4\":4,\"f5\":5}\nmapped true\nnested 496 true\nnested-tail \",\"value\":93,\"tags\":[\"tag_1\",\"tag_1\"],\"nested\":{\"x\":31,\"y\":62}}]\nmixed 0 [{\"f0\":0,\"f1\":1,\"f2\":2,\"f3\":3,\"f4\":4,\"f5\":5},{\"f0\":1,\"f1\":2,\"f2\":3,\"f3\":4,\"f4\":5},{\"f0\":2,\"f1\":3,\"f2\":4,\"f3\":5,\"f5\":7},\"replaced\",{\"f0\":4,\"f1\":5,\"f2\":6,\"f3\":7,\"f4\":8,\"f5\":9}]\nsparse 0 [{\"a\":0,\"b\":1},{\"a\":1,\"b\":2},{\"a\":2,\"b\":\nhetero 1 [{\"a\":1,\"b\":2,\"c\":3,\"d\":4,\"e\":5,\"f\":6},{\"a\":1,\"b\":2},{\"a\":1,\"b\":2,\"c\":3,\"d\":4,\"e\":5,\"f\":6,\"g\":7}]\n",
+        "stderr": ""
+      },
+      "matches_node": true
+    },
+    {
+      "name": "test_issue_9398_json_pretty_tombstoned_key",
+      "arm": "number",
+      "compile_exit": 0,
+      "object_sha256": "fdb69eedf1fbfcfccc56c5a5f0ed2fd94f565fbebfa232a1f01be473a027d357",
+      "node": {
+        "exit": 0,
+        "stdout": "pretty own: {}\npretty nested: {\n  \"mcpServers\": {}\n}\nfn replacer: {\"mcpServers\":{},\"keep\":1}\nfn replacer pretty: {\n  \"mcpServers\": {},\n  \"keep\": 1\n}\narray replacer: {\"mcpServers\":{},\"keep\":1}\narray replacer pretty: {\n  \"mcpServers\": {},\n  \"keep\": 1\n}\npartial pretty: {\n  \"a\": 1,\n  \"c\": 3\n}\npartial replacer: {\n  \"a\": 1,\n  \"c\": 3\n}\npartial keys: [\"a\",\"c\"]\nreadded pretty: {\n  \"y\": 2\n}\nemptied pretty: {\n  \"w\": {}\n}\n",
+        "stderr": ""
+      },
+      "perry": {
+        "exit": 0,
+        "stdout": "pretty own: {}\npretty nested: {\n  \"mcpServers\": {}\n}\nfn replacer: {\"mcpServers\":{},\"keep\":1}\nfn replacer pretty: {\n  \"mcpServers\": {},\n  \"keep\": 1\n}\narray replacer: {\"mcpServers\":{},\"keep\":1}\narray replacer pretty: {\n  \"mcpServers\": {},\n  \"keep\": 1\n}\npartial pretty: {\n  \"a\": 1,\n  \"c\": 3\n}\npartial replacer: {\n  \"a\": 1,\n  \"c\": 3\n}\npartial keys: [\"a\",\"c\"]\nreadded pretty: {\n  \"y\": 2\n}\nemptied pretty: {\n  \"w\": {}\n}\n",
+        "stderr": ""
+      },
+      "matches_node": true
+    },
+    {
+      "name": "test_json_typed_basic",
+      "arm": "number",
+      "compile_exit": 0,
+      "object_sha256": "ac82359fad71ade7f4ece53bb2f517e3b97386459ba4a783f00ac2da5790f675",
+      "node": {
+        "exit": 0,
+        "stdout": "typed.id:42\ntyped.name:alpha\ntyped.active:true\nuntyped.id:42\nuntyped.name:alpha\nuntyped.active:true\n",
+        "stderr": ""
+      },
+      "perry": {
+        "exit": 0,
+        "stdout": "typed.id:42\ntyped.name:alpha\ntyped.active:true\nuntyped.id:42\nuntyped.name:alpha\nuntyped.active:true\n",
+        "stderr": ""
+      },
+      "matches_node": true
+    },
+    {
+      "name": "test_json_typed_array",
+      "arm": "number",
+      "compile_exit": 0,
+      "object_sha256": "f4982974b2b32e69144ecca450181bf5c97549f8be563c3afa547f98a3c83288",
+      "node": {
+        "exit": 0,
+        "stdout": "length:3\n[0] id=1 name=alpha active=true\n[1] id=2 name=beta active=false\n[2] id=3 name=gamma active=true\noo.id:4\noo.name:delta\noo.active:false\nextra.id:5\nextra.bonus:42\nuntyped.length:3\nuntyped[1].name:beta\n",
+        "stderr": ""
+      },
+      "perry": {
+        "exit": 0,
+        "stdout": "length:3\n[0] id=1 name=alpha active=true\n[1] id=2 name=beta active=false\n[2] id=3 name=gamma active=true\noo.id:4\noo.name:delta\noo.active:false\nextra.id:5\nextra.bonus:42\nuntyped.length:3\nuntyped[1].name:beta\n",
+        "stderr": ""
+      },
+      "matches_node": true
+    },
+    {
+      "name": "test_json_typed_nested",
+      "arm": "number",
+      "compile_exit": 0,
+      "object_sha256": "bec9f4e2f621d5215dcc9d8d666dbec3e67f322da2d5f88177251d4b6225d9b1",
+      "node": {
+        "exit": 0,
+        "stdout": "len:2\nid=1 x=10 y=20 tags=a,b\nid=2 x=30 y=40 tags=c\n",
+        "stderr": ""
+      },
+      "perry": {
+        "exit": 0,
+        "stdout": "len:2\nid=1 x=10 y=20 tags=a,b\nid=2 x=30 y=40 tags=c\n",
+        "stderr": ""
+      },
+      "matches_node": true
+    },
+    {
+      "name": "test_json_typed_mismatch",
+      "arm": "number",
+      "compile_exit": 0,
+      "object_sha256": "66515b090c501841e2f1f5be438af1096a997307827790e52f6cc032d507ca00",
+      "node": {
+        "exit": 0,
+        "stdout": "r1.id:1\nr2.length:1\nr2[0].id:not_a_number\nr2[0].name:42\n",
+        "stderr": ""
+      },
+      "perry": {
+        "exit": 0,
+        "stdout": "r1.id:1\nr2.length:1\nr2[0].id:not_a_number\nr2[0].name:42\n",
+        "stderr": ""
+      },
+      "matches_node": true
+    },
+    {
+      "name": "test_json_lazy_edge_cases",
+      "arm": "number",
+      "compile_exit": 0,
+      "object_sha256": "631318098c8cc878c9b240bf994309fe352f754b497a84c73919f691579af104",
+      "node": {
+        "exit": 0,
+        "stdout": "empty.length:0\nscalars.length:5\nscalars[2]:3\nscalars.sum:15\nmixed.length:5\nmixed[0]:1\nmixed[1]:two\nmixed[2]:true\nmixed[3]:null\nmixed[4]:3.14\ndeep[0].a.b.c.d:42\nuni.text:\u00e9\u00e8\u00ea\nuni.newline:a\nb\nuni.tab:a\tb\nuni.quote:he said \"hi\"\nnums.length:6\nnums[0]:0\nnums[1]:-1\nnums[2]:15000000000\nnums[3]:-0.0025\nnums[4]:0.001\nnums[5]:1000000\nws.empty.len:0\nws.space:' '\nnested.length:3\nnested[0].length:2\nnested[1][1]:4\nnested[2][0]:5\nbig.sum:34650\nbig[50]:350\nreparsed.length:2\nreparsed[1].v:two\nedge.len:4\nedge[0]:null\nedge[2]:0\nedge[3]:0\n",
+        "stderr": ""
+      },
+      "perry": {
+        "exit": 0,
+        "stdout": "empty.length:0\nscalars.length:5\nscalars[2]:3\nscalars.sum:15\nmixed.length:5\nmixed[0]:1\nmixed[1]:two\nmixed[2]:true\nmixed[3]:null\nmixed[4]:3.14\ndeep[0].a.b.c.d:42\nuni.text:\u00e9\u00e8\u00ea\nuni.newline:a\nb\nuni.tab:a\tb\nuni.quote:he said \"hi\"\nnums.length:6\nnums[0]:0\nnums[1]:-1\nnums[2]:15000000000\nnums[3]:-0.0025\nnums[4]:0.001\nnums[5]:1000000\nws.empty.len:0\nws.space:' '\nnested.length:3\nnested[0].length:2\nnested[1][1]:4\nnested[2][0]:5\nbig.sum:34650\nbig[50]:350\nreparsed.length:2\nreparsed[1].v:two\nedge.len:4\nedge[0]:null\nedge[2]:0\nedge[3]:0\n",
+        "stderr": ""
+      },
+      "matches_node": true
+    },
+    {
+      "name": "test_json_lazy_predicates",
+      "arm": "number",
+      "compile_exit": 0,
+      "object_sha256": "312ad5307c5c2ab746ef516cc1c9272e5444522eff775ce05272e9e5fbc68f36",
+      "node": {
+        "exit": 0,
+        "stdout": "isArray:true\ninstanceof:true\ntypeof:object\nstr-isArray:false\nobj-isArray:false\nnum-isArray:false\nnull-isArray:false\nundefined-isArray:false\neager-isArray:true\neager-instanceof:true\nafter-length-isArray:true\nafter-index-isArray:true\nafter-map-isArray:true\nmap-result-isArray:true\n",
+        "stderr": ""
+      },
+      "perry": {
+        "exit": 0,
+        "stdout": "isArray:true\ninstanceof:true\ntypeof:object\nstr-isArray:false\nobj-isArray:false\nnum-isArray:false\nnull-isArray:false\nundefined-isArray:false\neager-isArray:true\neager-instanceof:true\nafter-length-isArray:true\nafter-index-isArray:true\nafter-map-isArray:true\nmap-result-isArray:true\n",
+        "stderr": ""
+      },
+      "matches_node": true
+    },
+    {
+      "name": "test_json_lazy_iteration",
+      "arm": "number",
+      "compile_exit": 0,
+      "object_sha256": "0c6b90b692c8e70a27f3dba420b040f5f3d7ab15a8b26bff98768d72a4993b6d",
+      "node": {
+        "exit": 0,
+        "stdout": "seq-sum:360\nrev-sum:360\nrnd-sum:360\nstringify-after-iter-len:129\nidentity-ok\ntrip-sum:410\ntrip-stringify-len:129\n",
+        "stderr": ""
+      },
+      "perry": {
+        "exit": 0,
+        "stdout": "seq-sum:360\nrev-sum:360\nrnd-sum:360\nstringify-after-iter-len:129\nidentity-ok\ntrip-sum:410\ntrip-stringify-len:129\n",
+        "stderr": ""
+      },
+      "matches_node": true
+    },
+    {
+      "name": "test_json_lazy_indexed",
+      "arm": "number",
+      "compile_exit": 0,
+      "object_sha256": "8852db3927334039be59a60634baf78ba8ae532453c849045cd6f0446f1b9cf3",
+      "node": {
+        "exit": 0,
+        "stdout": "len:3\n0.id:1\n1.name:beta\n2.score:7.75\n1.nested.a:30\n2.nested.b:60\nsum:216\nlen-after:3\nroundtrip-len:185\n",
+        "stderr": ""
+      },
+      "perry": {
+        "exit": 0,
+        "stdout": "len:3\n0.id:1\n1.name:beta\n2.score:7.75\n1.nested.a:30\n2.nested.b:60\nsum:216\nlen-after:3\nroundtrip-len:185\n",
+        "stderr": ""
+      },
+      "matches_node": true
+    },
+    {
+      "name": "test_json_lazy_reviver",
+      "arm": "number",
+      "compile_exit": 0,
+      "object_sha256": "8cea305fcf617c4953f918793ca8a35293b9da43db6dbc87b03164160f7daf8a",
+      "node": {
+        "exit": 0,
+        "stdout": "len 300\nfirst 1\nlast 300\ncalls 301\n",
+        "stderr": ""
+      },
+      "perry": {
+        "exit": 0,
+        "stdout": "len 300\nfirst 1\nlast 300\ncalls 301\n",
+        "stderr": ""
+      },
+      "matches_node": true
+    },
+    {
+      "name": "test_json_lazy_per_element",
+      "arm": "number",
+      "compile_exit": 0,
+      "object_sha256": "b85a735dc358fe2e69b0accabf94aadc00d9cc3301c8a7dac449177bdd80c54a",
+      "node": {
+        "exit": 0,
+        "stdout": "len:5\n[0].id:0\n[4].id:4\n[2].id:2\n[0].name:a\n[1].nested.x:11\n[3].tags[0]:t3\n[3].tags[1]:z3\n[5]:undefined\n[100]:undefined\nid0===id0:true\nid4===id4:true\nid0!==id4:true\n[0].name-after-mutate:mutated\nid0===id0-post-mutate:true\niter-sum:10\nstringify-len:292\nstringify-has-mutated:true\n",
+        "stderr": ""
+      },
+      "perry": {
+        "exit": 0,
+        "stdout": "len:5\n[0].id:0\n[4].id:4\n[2].id:2\n[0].name:a\n[1].nested.x:11\n[3].tags[0]:t3\n[3].tags[1]:z3\n[5]:undefined\n[100]:undefined\nid0===id0:true\nid4===id4:true\nid0!==id4:true\n[0].name-after-mutate:mutated\nid0===id0-post-mutate:true\niter-sum:10\nstringify-len:292\nstringify-has-mutated:true\n",
+        "stderr": ""
+      },
+      "matches_node": true
+    },
+    {
+      "name": "test_gap_json_flat_scalar_depth",
+      "arm": "number",
+      "compile_exit": 0,
+      "object_sha256": "30800d1d2834ed88ca1007dac60d096afd1eb6ceb75180ee02dbcb33d0bde3a3",
+      "node": {
+        "exit": 0,
+        "stdout": "flat scalar validation 42 0\n",
+        "stderr": ""
+      },
+      "perry": {
+        "exit": 0,
+        "stdout": "flat scalar validation 42 0\n",
+        "stderr": ""
+      },
+      "matches_node": true
+    },
+    {
+      "name": "test_gap_json_number_formatting",
+      "arm": "number",
+      "compile_exit": 0,
+      "object_sha256": "237cf8f8a19f34eaeee1f3f539e15fc366aa2e0f9683b13bdc18160dc57f7911",
+      "node": {
+        "exit": 0,
+        "stdout": "0\n{\"n\":0}\n[0]\n0\n{\"n\":0}\n[0]\nnull\n{\"n\":null}\n[null]\nnull\n{\"n\":null}\n[null]\nnull\n{\"n\":null}\n[null]\n5e-324\n{\"n\":5e-324}\n[5e-324]\n2.2250738585072014e-308\n{\"n\":2.2250738585072014e-308}\n[2.2250738585072014e-308]\n1.7976931348623157e+308\n{\"n\":1.7976931348623157e+308}\n[1.7976931348623157e+308]\n1e-7\n{\"n\":1e-7}\n[1e-7]\n0.000001\n{\"n\":0.000001}\n[0.000001]\n100000000000000000000\n{\"n\":100000000000000000000}\n[100000000000000000000]\n1e+21\n{\"n\":1e+21}\n[1e+21]\n9007199254740991\n{\"n\":9007199254740991}\n[9007199254740991]\n9007199254740992\n{\"n\":9007199254740992}\n[9007199254740992]\n288230376151711740\n{\"n\":288230376151711740}\n[288230376151711740]\n1000000000000000100\n{\"n\":1000000000000000100}\n[1000000000000000100]\n0.1\n{\"n\":0.1}\n[0.1]\n0.3\n{\"n\":0.3}\n[0.3]\n0.3333333333333333\n{\"n\":0.3333333333333333}\n[0.3333333333333333]\n3.141592653589793\n{\"n\":3.141592653589793}\n[3.141592653589793]\n562949953421312.2\n{\"n\":562949953421312.2}\n[562949953421312.2]\n-562949953421312.2\n{\"n\":-562949953421312.2}\n[-562949953421312.2]\n1125899906842624.2\n{\"n\":1125899906842624.2}\n[1125899906842624.2]\n100000000000000.12\n{\"n\":100000000000000.12}\n[100000000000000.12]\n-28008981190621.562\n{\"n\":-28008981190621.562}\n[-28008981190621.562]\n562949953421312.2\n{\n  \"n\": 562949953421312.2\n}\n{\"n\":562949953421312.2}\n562949953421312.2\n",
+        "stderr": ""
+      },
+      "perry": {
+        "exit": 0,
+        "stdout": "0\n{\"n\":0}\n[0]\n0\n{\"n\":0}\n[0]\nnull\n{\"n\":null}\n[null]\nnull\n{\"n\":null}\n[null]\nnull\n{\"n\":null}\n[null]\n5e-324\n{\"n\":5e-324}\n[5e-324]\n2.2250738585072014e-308\n{\"n\":2.2250738585072014e-308}\n[2.2250738585072014e-308]\n1.7976931348623157e+308\n{\"n\":1.7976931348623157e+308}\n[1.7976931348623157e+308]\n1e-7\n{\"n\":1e-7}\n[1e-7]\n0.000001\n{\"n\":0.000001}\n[0.000001]\n100000000000000000000\n{\"n\":100000000000000000000}\n[100000000000000000000]\n1e+21\n{\"n\":1e+21}\n[1e+21]\n9007199254740991\n{\"n\":9007199254740991}\n[9007199254740991]\n9007199254740992\n{\"n\":9007199254740992}\n[9007199254740992]\n288230376151711740\n{\"n\":288230376151711740}\n[288230376151711740]\n1000000000000000100\n{\"n\":1000000000000000100}\n[1000000000000000100]\n0.1\n{\"n\":0.1}\n[0.1]\n0.3\n{\"n\":0.3}\n[0.3]\n0.3333333333333333\n{\"n\":0.3333333333333333}\n[0.3333333333333333]\n3.141592653589793\n{\"n\":3.141592653589793}\n[3.141592653589793]\n562949953421312.2\n{\"n\":562949953421312.2}\n[562949953421312.2]\n-562949953421312.2\n{\"n\":-562949953421312.2}\n[-562949953421312.2]\n1125899906842624.2\n{\"n\":1125899906842624.2}\n[1125899906842624.2]\n100000000000000.12\n{\"n\":100000000000000.12}\n[100000000000000.12]\n-28008981190621.562\n{\"n\":-28008981190621.562}\n[-28008981190621.562]\n562949953421312.2\n{\n  \"n\": 562949953421312.2\n}\n{\"n\":562949953421312.2}\n562949953421312.2\n",
+        "stderr": ""
+      },
+      "matches_node": true
+    }
+  ],
+  "gc_stress": [
+    {
+      "arm": "number",
+      "seed": 17,
+      "exit": 0,
+      "stdout": "scan 255 0 730561117\nwide 0 624430645\n",
+      "stderr": "[gc-schedule] seeded GC-schedule fuzzing ACTIVE: seed=17 rate=0.1\n[gc-schedule] reproduce with: PERRY_GC_SCHEDULE_SEED=17 PERRY_GC_SCHEDULE_RATE=0.1\n[gc-schedule] done: seed=17 safepoints=91 scheduled_collections=9 polls_paced=2331059 copying_minors=9 moved_objects=19278 loop_polls=2331144\n",
+      "counters": {
+        "scheduled_collections": 9,
+        "copying_minors": 9,
+        "moved_objects": 19278,
+        "loop_polls": 2331144
+      },
+      "matches_node": true,
+      "live_subject": true
+    },
+    {
+      "arm": "number",
+      "seed": 9013,
+      "exit": 0,
+      "stdout": "scan 255 0 730561117\nwide 0 624430645\n",
+      "stderr": "[gc-schedule] seeded GC-schedule fuzzing ACTIVE: seed=9013 rate=0.1\n[gc-schedule] reproduce with: PERRY_GC_SCHEDULE_SEED=9013 PERRY_GC_SCHEDULE_RATE=0.1\n[gc-schedule] done: seed=9013 safepoints=91 scheduled_collections=11 polls_paced=2331059 copying_minors=11 moved_objects=19101 loop_polls=2331144\n",
+      "counters": {
+        "scheduled_collections": 11,
+        "copying_minors": 11,
+        "moved_objects": 19101,
+        "loop_polls": 2331144
+      },
+      "matches_node": true,
+      "live_subject": true
+    }
+  ],
+  "benchmark_output_checks": 152,
+  "timing_trials": 456,
+  "memory_trials": 432,
+  "goal_complete": false,
+  "notes": [
+    "Tiny/small CPU changes around one percent require repeat validation before a no-regression claim.",
+    "Sustained wide-object parsing exposes preexisting retained shape-cache GC costs.",
+    "Unchanged base file-size gate failures and lazy-stringify whitespace issue remain documented in FASTPATHS.md."
+  ]
+}

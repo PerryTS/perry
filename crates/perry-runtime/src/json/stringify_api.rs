@@ -353,7 +353,8 @@ pub unsafe extern "C" fn js_json_stringify_number(value: f64) -> *mut StringHead
     }
     // #6127: at/above 2^53 the exact integer can carry more digits than the
     // shortest round-trip (`2**58`), so defer to the shortest-round-trip formatter.
-    let s = crate::string::js_format_f64(value);
+    let mut number = ryu_js::Buffer::new();
+    let s = number.format_finite(value);
     js_string_from_bytes(s.as_ptr(), s.len() as u32)
 }
 

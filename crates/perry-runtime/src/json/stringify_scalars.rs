@@ -39,17 +39,17 @@ pub(crate) unsafe fn write_number(buf: &mut String, value: f64) {
         // Fast path for in-range integers (the overwhelming majority of JSON
         // numbers); identical to ECMAScript NumberToString below 2^53. Above it
         // the exact integer can carry more digits than the shortest round-trip
-        // (`2**58`), so those fall through to `js_format_f64` in the else (#6127).
+        // (`2**58`), so those use shortest-round-trip formatting below (#6127).
         let mut itoa_buf = itoa::Buffer::new();
         buf.push_str(itoa_buf.format(value as i64));
     } else {
-        // ECMAScript Number::toString (spec 6.1.6.1.20): fixed notation for an
-        // exponent in -6..=20, else exponential with an `e+`/`e-` sign. `ryu`
-        // emits shortest round-trip digits but its own notation (`1e20`,
-        // `1e-6`, `1e21`), so JSON.stringify diverged from `String(n)` and
-        // Node. Reuse the shared JS formatter so `JSON.stringify(1e20)` is
-        // `100000000000000000000` (not `1e20`) and `1e21` is `1e+21`.
-        buf.push_str(&crate::string::js_format_f64(value));
+        // ECMAScript shortest-round-trip digits and notation, directly into
+        // stack storage. The general Rust formatter allocated a temporary
+        // String for every non-integer element and could choose a different
+        // final digit at a tie. Plain `ryu` also uses different exponent
+        // thresholds; `ryu-js` implements Number::toString's spelling.
+        let mut number = ryu_js::Buffer::new();
+        buf.push_str(number.format_finite(value));
     }
 }
 

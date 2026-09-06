@@ -1,0 +1,302 @@
+Analysis of sampling profile_worker (pid 96651) every 1 millisecond
+Process:         profile_worker [96651]
+Path:            /Users/USER/*/profile_worker
+Load Address:    0x100c94000
+Identifier:      profile_worker
+Version:         0
+Code Type:       ARM64
+Platform:        macOS
+Parent Process:  Python [96650]
+Target Type:     live task
+
+Date/Time:       2026-09-06 00:53:02.446 -0700
+Launch Time:     2026-09-06 00:53:01.400 -0700
+OS Version:      macOS 26.5.1 (25F80)
+Report Version:  7
+Analysis Tool:   /usr/bin/sample
+
+Physical footprint:         52.5M
+Physical footprint (peak):  53.8M
+Idle exit:                  untracked
+----
+
+Call graph:
+    3044 Thread_7165387   DispatchQueue_1: com.apple.main-thread  (serial)
+      1159 start  (in dyld) + 6992  [0x181357e00]
+      + 1159 main  (in profile_worker) + 2764  [0x100c9b484]
+      +   1159 perry_fn_baseline_worker_ts__run$spec_b  (in profile_worker) + 9428  [0x100c96d94]
+      +     1085 js_json_stringify_full  (in profile_worker) + 6420  [0x10151383c]
+      +     ! 828 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime4json9stringify21stringify_array_depth  (in profile_worker) + 3192  [0x101079c00]
+      +     ! : 598 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime4json17stringify_scalars12write_number  (in profile_worker) + 240  [0x101075034]
+      +     ! : | 310 _RNvNtCs4O8lUOgDc5C_6ryu_js6pretty8format64  (in profile_worker) + 1900  [0x1017f842c]
+      +     ! : | + 277 _platform_memmove  (in libsystem_platform.dylib) + 444,452,...  [0x18171f51c,0x18171f524,...]
+      +     ! : | + 25 DYLD-STUB$$memmove  (in profile_worker) + 4  [0x10196ac7c]
+      +     ! : | + 8 _RNvNtCs4O8lUOgDc5C_6ryu_js6pretty8format64  (in profile_worker) + 2260  [0x1017f8594]
+      +     ! : | 158 _RNvNtCs4O8lUOgDc5C_6ryu_js6pretty8format64  (in profile_worker) + 1880  [0x1017f8418]
+      +     ! : | + 144 _RNvNtNtCs4O8lUOgDc5C_6ryu_js6pretty8mantissa19write_mantissa_long  (in profile_worker) + 268,0,...  [0x1017f86b8,0x1017f85ac,...]
+      +     ! : | + 14 _RNvNtCs4O8lUOgDc5C_6ryu_js6pretty8format64  (in profile_worker) + 1880,1892  [0x1017f8418,0x1017f8424]
+      +     ! : | 98 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime4json17stringify_scalars12write_number  (in profile_worker) + 288  [0x101075064]
+      +     ! : | + 82 _platform_memmove  (in libsystem_platform.dylib) + 452,428,...  [0x18171f524,0x18171f50c,...]
+      +     ! : | + 16 DYLD-STUB$$memcpy  (in profile_worker) + 4  [0x10196ac70]
+      +     ! : | 20 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime4json17stringify_scalars12write_number  (in profile_worker) + 240  [0x101075034]
+      +     ! : | + 20 _RNvNtCs4O8lUOgDc5C_6ryu_js6pretty8format64  (in profile_worker) + 0,2280  [0x1017f7cc0,0x1017f85a8]
+      +     ! : | 12 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime4json17stringify_scalars12write_number  (in profile_worker) + 376  [0x1010750bc]
+      +     ! : |   11 _platform_memmove  (in libsystem_platform.dylib) + 452,436,...  [0x18171f524,0x18171f514,...]
+      +     ! : |   1 DYLD-STUB$$memcpy  (in profile_worker) + 4  [0x10196ac70]
+      +     ! : 220 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime4json17stringify_scalars12write_number  (in profile_worker) + 404,232,...  [0x1010750d8,0x10107502c,...]
+      +     ! : 10 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime4json17stringify_scalars12write_number  (in profile_worker) + 424  [0x1010750ec]
+      +     ! :   10 _RNvXsu_Cs8xF4iOrs9m2_4itoayNtB5_8Unsigned3fmt  (in profile_worker) + 80,0,...  [0x100d2d33c,0x100d2d2ec,...]
+      +     ! 230 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime4json9stringify21stringify_array_depth  (in profile_worker) + 2312,2244,...  [0x101079890,0x10107984c,...]
+      +     ! 27 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime4json17stringify_scalars12write_number  (in profile_worker) + 392,400  [0x1010750cc,0x1010750d4]
+      +     35 js_json_stringify_full  (in profile_worker) + 4892  [0x101513244]
+      +     ! 35 _RNvNtCs6DZSOtmrM1U_13perry_runtime6string20string_storage_alloc  (in profile_worker) + 60  [0x10147e4c0]
+      +     !   35 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime5arena10allocators18arena_alloc_gc_old  (in profile_worker) + 508  [0x1016db0c0]
+      +     !     34 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime5arena5block16arena_cell_alloc  (in profile_worker) + 160  [0x100e0126c]
+      +     !     : 34 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime2gc6policy16gc_check_trigger  (in profile_worker) + 936  [0x100ea52a8]
+      +     !     :   32 _RNvNtCs6DZSOtmrM1U_13perry_runtime2gc39gc_collect_full_mark_sweep_with_trigger  (in profile_worker) + 292  [0x100e9e71c]
+      +     !     :   | 32 _RNvMs7_NtNtCs6DZSOtmrM1U_13perry_runtime2gc5cycleNtB5_12GcCycleState17run_to_completion  (in profile_worker) + 56  [0x101215990]
+      +     !     :   |   8 _RNvMs7_NtNtCs6DZSOtmrM1U_13perry_runtime2gc5cycleNtB5_12GcCycleState4step  (in profile_worker) + 12124  [0x10121909c]
+      +     !     :   |   + 7 _RNvMs4_NtNtCs6DZSOtmrM1U_13perry_runtime2gc5cycleNtB5_18RootScanCycleState21step_current_subphase  (in profile_worker) + 2752  [0x10121586c]
+      +     !     :   |   + ! 7 _RNvMs2_NtNtCs6DZSOtmrM1U_13perry_runtime2gc5cycleNtB5_30MutableRegisteredRootScanState4step  (in profile_worker) + 1544  [0x101214adc]
+      +     !     :   |   + !   2 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime7closure13dynamic_props36scan_closure_dynamic_props_roots_mut  (in profile_worker) + 2100  [0x1011debc0]
+      +     !     :   |   + !   : 2 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime7closure13dynamic_props22merge_closure_prop_map  (in profile_worker) + 164,1336  [0x1011d8ef4,0x1011d9388]
+      +     !     :   |   + !   1 _RINvMs2_NtNtCs8BpVhDwHqJW_3std6thread5localINtB6_8LocalKeyINtNtCsjgY6bXVaRmE_4core4cell7RefCellINtNtNtNtBa_11collections4hash3set7HashSetjNtNtCs6DZSOtmrM1U_13perry_runtime9fast_hash9PtrHasherEEE4withNCNvNtNtNtB2g_6object13native_module16callable_exports39scan_builtin_closure_metadata_roots_muts_0uEB2g_  (in profile_worker) + 160  [0x100df49a0]
+      +     !     :   |   + !   1 _RNvMs1_NtNtCs6DZSOtmrM1U_13perry_runtime2gc5rootsNtB5_18RuntimeRootVisitor21visit_tagged_raw_addr  (in profile_worker) + 296  [0x101105f08]
+      +     !     :   |   + !   1 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime6object21array_tail_transition14scan_roots_mut  (in profile_worker) + 392  [0x100e357d0]
+      +     !     :   |   + !   1 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime6string6intern27scan_intern_table_roots_mut  (in profile_worker) + 320  [0x1014e8a00]
+      +     !     :   |   + !   : 1 _RNvMs1_NtNtCs6DZSOtmrM1U_13perry_runtime2gc5rootsNtB5_18RuntimeRootVisitor21visit_tagged_raw_addr  (in profile_worker) + 60  [0x101105e1c]
+      +     !     :   |   + !   1 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime7closure13dynamic_props36scan_closure_dynamic_props_roots_mut  (in profile_worker) + 1604  [0x1011de9d0]
+      +     !     :   |   + !     1 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime7closure13dynamic_props20forwarded_heap_owner  (in profile_worker) + 40  [0x1011d8a30]
+      +     !     :   |   + 1 _RNvMs4_NtNtCs6DZSOtmrM1U_13perry_runtime2gc5cycleNtB5_18RootScanCycleState21step_current_subphase  (in profile_worker) + 216  [0x101214e84]
+      +     !     :   |   +   1 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime2gc5roots29mark_stack_roots_for_decision  (in profile_worker) + 1580  [0x10111c0ec]
+      +     !     :   |   +     1 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime2gc5roots21try_mark_value_or_raw  (in profile_worker) + 56  [0x10111af64]
+      +     !     :   |   8 _RNvMs7_NtNtCs6DZSOtmrM1U_13perry_runtime2gc5cycleNtB5_12GcCycleState4step  (in profile_worker) + 18048  [0x10121a7c0]
+      +     !     :   |   + 8 _RNvMNtNtNtCs6DZSOtmrM1U_13perry_runtime2gc6oldgen13sweep_cleanupNtB2_22ArenaSweepCleanupState4step  (in profile_worker) + 120  [0x10153a950]
+      +     !     :   |   +   8 _RNvMs1_NtNtCs6DZSOtmrM1U_13perry_runtime5arena5resetNtB5_30OldArenaReclaimDeadBlocksState4step  (in profile_worker) + 588  [0x101213a7c]
+      +     !     :   |   +     5 _RINvMs2_NtNtCs8BpVhDwHqJW_3std6thread5localINtB6_8LocalKeyINtNtCsjgY6bXVaRmE_4core4cell10UnsafeCellNtNtNtCs6DZSOtmrM1U_13perry_runtime5arena5block5ArenaEE4withNCNvMs1_NtB1D_5resetNtB2F_30OldArenaReclaimDeadBlocksState13process_blocks_0uEB1F_  (in profile_worker) + 424  [0x100dbf370]
+      +     !     :   |   +     ! 5 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime5arena5block19release_arena_block  (in profile_worker) + 216  [0x1014c26e0]
+      +     !     :   |   +     !   5 madvise  (in libsystem_kernel.dylib) + 8  [0x1816d49b0]
+      +     !     :   |   +     3 _RINvMs2_NtNtCs8BpVhDwHqJW_3std6thread5localINtB6_8LocalKeyINtNtCsjgY6bXVaRmE_4core4cell10UnsafeCellNtNtNtCs6DZSOtmrM1U_13perry_runtime5arena5block5ArenaEE4withNCNvMs1_NtB1D_5resetNtB2F_30OldArenaReclaimDeadBlocksState13process_blocks_0uEB1F_  (in profile_worker) + 248  [0x100dbf2c0]
+      +     !     :   |   +       3 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime5arena9page_meta26unregister_old_block_pages  (in profile_worker) + 344,356,...  [0x1011c20cc,0x1011c20d8,...]
+      +     !     :   |   5 _RNvMs7_NtNtCs6DZSOtmrM1U_13perry_runtime2gc5cycleNtB5_12GcCycleState4step  (in profile_worker) + 13636  [0x101219684]
+      +     !     :   |   + 5 _RNvMs0_NtNtCs6DZSOtmrM1U_13perry_runtime2gc5cycleNtB5_23TraceWorklistCycleState4step  (in profile_worker) + 180  [0x101210f98]
+      +     !     :   |   +   3 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime2gc5trace25drain_trace_worklist_step  (in profile_worker) + 636  [0x1013752a0]
+      +     !     :   |   +   ! 3 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime2gc17layout_slot_visit32visit_gc_layout_slot_descriptors  (in profile_worker) + 1456  [0x101374aa0]
+      +     !     :   |   +   !   3 _RNCNvNtNtCs6DZSOtmrM1U_13perry_runtime2gc5trace24trace_heap_rewrite_slots0B7_  (in profile_worker) + 140  [0x10132fac4]
+      +     !     :   |   +   !     3 _RNvMs2_NtNtCs6DZSOtmrM1U_13perry_runtime2gc6layoutNtB5_23GcMutableSlotDescriptor11visit_slots  (in profile_worker) + 132  [0x101106ae4]
+      +     !     :   |   +   !       2 _RNCNCNvNtNtCs6DZSOtmrM1U_13perry_runtime2gc5trace24trace_heap_rewrite_slots00B9_  (in profile_worker) + 204,436  [0x10132dd8c,0x10132de74]
+      +     !     :   |   +   !       1 _RNCNCNvNtNtCs6DZSOtmrM1U_13perry_runtime2gc5trace24trace_heap_rewrite_slots00B9_  (in profile_worker) + 436  [0x10132de74]
+      +     !     :   |   +   !         1 _RNvMNtNtCs6DZSOtmrM1U_13perry_runtime2gc5traceNtB2_15ValidPointerSet8contains  (in profile_worker) + 88  [0x10133355c]
+      +     !     :   |   +   !           1 _RNvMNtNtCs6DZSOtmrM1U_13perry_runtime2gc5traceNtB2_15ValidPointerSet16find_arena_floor  (in profile_worker) + 160  [0x1013334b0]
+      +     !     :   |   +   2 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime2gc5trace25drain_trace_worklist_step  (in profile_worker) + 1088  [0x101375464]
+      +     !     :   |   +     1 _RINvNtNtCs6DZSOtmrM1U_13perry_runtime7closure13dynamic_props37visit_closure_dynamic_prop_values_mutNCINvB2_42visit_closure_dynamic_prop_value_slots_mutNCINvNtNtB6_2gc17layout_slot_visit33visit_gc_rewrite_slot_descriptorsNCNvNtB2w_5trace24trace_heap_rewrite_slots0Es1_0E0EB6_  (in profile_worker) + 808  [0x10119d904]
+      +     !     :   |   +     : 1 _RNvMs2_NtNtCs6DZSOtmrM1U_13perry_runtime2gc6layoutNtB5_23GcMutableSlotDescriptor11visit_slots  (in profile_worker) + 432  [0x101106c10]
+      +     !     :   |   +     :   1 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime2gc5trace24mark_field_into_worklist  (in profile_worker) + 160  [0x101374fa0]
+      +     !     :   |   +     :     1 _RNvMNtNtCs6DZSOtmrM1U_13perry_runtime2gc5traceNtB2_15ValidPointerSet8contains  (in profile_worker) + 88  [0x10133355c]
+      +     !     :   |   +     :       1 _RNvMNtNtCs6DZSOtmrM1U_13perry_runtime2gc5traceNtB2_15ValidPointerSet8contains  (in profile_worker) + 260  [0x101333608]
+      +     !     :   |   +     :         1 _tlv_get_addr  (in libdyld.dylib) + 4  [0x18132038c]
+      +     !     :   |   +     1 _RINvNtNtCs6DZSOtmrM1U_13perry_runtime7closure13dynamic_props37visit_closure_dynamic_prop_values_mutNCINvB2_42visit_closure_dynamic_prop_value_slots_mutNCINvNtNtB6_2gc17layout_slot_visit33visit_gc_rewrite_slot_descriptorsNCNvNtB2w_5trace24trace_heap_rewrite_slots0Es1_0E0EB6_  (in profile_worker) + 884  [0x10119d950]
+      +     !     :   |   +       1 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime2gc17layout_slot_visit10fixed_slot  (in profile_worker) + 232  [0x10137447c]
+      +     !     :   |   +         1 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime5arena9page_meta33classify_heap_generation_uncached  (in profile_worker) + 40  [0x1011c2f38]
+      +     !     :   |   5 _RNvMs7_NtNtCs6DZSOtmrM1U_13perry_runtime2gc5cycleNtB5_12GcCycleState4step  (in profile_worker) + 17248  [0x10121a4a0]
+      +     !     :   |   + 5 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime2gc10dead_owner39prune_dead_owner_side_tables_post_trace  (in profile_worker) + 1356  [0x101070e9c]
+      +     !     :   |   +   3 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime2gc10dead_owner7fan_out  (in profile_worker) + 248  [0x10193f81c]
+      +     !     :   |   +   ! 2 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime7closure13dynamic_props36prune_dead_closure_side_table_owners  (in profile_worker) + 672  [0x1011ddaac]
+      +     !     :   |   +   ! : 1 <deduplicated_symbol>  (in profile_worker) + 272  [0x10191c5b4]
+      +     !     :   |   +   ! : 1 _RINvYNtNtNtCs8BpVhDwHqJW_3std4hash6random11RandomStateNtNtCsjgY6bXVaRmE_4core4hash11BuildHasher8hash_oneRjECsbfrV4gKhFso_11fancy_regex  (in profile_worker) + 268  [0x100ccfaac]
+      +     !     :   |   +   ! 1 <deduplicated_symbol>  (in profile_worker) + 276  [0x1011a38d4]
+      +     !     :   |   +   2 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime2gc10dead_owner7fan_out  (in profile_worker) + 160  [0x10193f7c4]
+      +     !     :   |   +     2 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime6object16descriptor_state35prune_dead_descriptor_owner_entries  (in profile_worker) + 208  [0x10166da70]
+      +     !     :   |   +       2 _RINvMs0_NtCshsF3QZNC8Sh_9hashbrown3mapINtB6_7HashMapTjNtNtCsctvjasLqLe9_5alloc6string6StringENtNtNtCs6DZSOtmrM1U_13perry_runtime6object16descriptor_state13PropertyAttrsNtNtB1z_9fast_hash13FastKeyHasherE6retainNCNvB1v_35prune_dead_descriptor_owner_entriess_0EB1z_  (in profile_worker) + 224,268  [0x101190fac,0x101190fd8]
+      +     !     :   |   5 _RNvMs7_NtNtCs6DZSOtmrM1U_13perry_runtime2gc5cycleNtB5_12GcCycleState4step  (in profile_worker) + 18524  [0x10121a99c]
+      +     !     :   |   + 4 _RNvMs3_NtNtCs6DZSOtmrM1U_13perry_runtime2gc6oldgenNtB5_22ArenaSweepObjectsState19reclaim_dead_object  (in profile_worker) + 300  [0x101214d90]
+      +     !     :   |   + ! 4 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime5arena9page_meta27unregister_old_object_pages  (in profile_worker) + 644  [0x1011c2b6c]
+      +     !     :   |   + !   2 _RINvMs2_NtNtCs8BpVhDwHqJW_3std6thread5localINtB6_8LocalKeyINtNtCsjgY6bXVaRmE_4core4cell7RefCellINtNtNtNtBa_11collections4hash3map7HashMapjINtNtCsctvjasLqLe9_5alloc3vec3VecjENtNtCs6DZSOtmrM1U_13perry_runtime9fast_hash9PtrHasherEEE4withNCNvNtNtB2P_5arena9page_meta27unregister_old_object_pagess_0uEB2P_  (in profile_worker) + 176,368  [0x100dd27cc,0x100dd288c]
+      +     !     :   |   + !   1 _RINvMs2_NtNtCs8BpVhDwHqJW_3std6thread5localINtB6_8LocalKeyINtNtCsjgY6bXVaRmE_4core4cell7RefCellINtNtNtNtBa_11collections4hash3map7HashMapjINtNtCsctvjasLqLe9_5alloc3vec3VecjENtNtCs6DZSOtmrM1U_13perry_runtime9fast_hash9PtrHasherEEE4withNCNvNtNtB2P_5arena9page_meta27unregister_old_object_pagess_0uEB2P_  (in profile_worker) + 380  [0x100dd2898]
+      +     !     :   |   + !   : 1 <deduplicated_symbol>  (in profile_worker) + 212  [0x100e033bc]
+      +     !     :   |   + !   1 mi_free  (in profile_worker) + 68  [0x101967e04]
+      +     !     :   |   + 1 _RNvMs3_NtNtCs6DZSOtmrM1U_13perry_runtime2gc6oldgenNtB5_22ArenaSweepObjectsState19reclaim_dead_object  (in profile_worker) + 128  [0x101214ce4]
+      +     !     :   |   +   1 _RINvMs2_NtNtCs8BpVhDwHqJW_3std6thread5localINtB6_8LocalKeyINtNtCsjgY6bXVaRmE_4core4cell7RefCellINtNtNtNtBa_11collections4hash3map7HashMapjNtNtNtCs6DZSOtmrM1U_13perry_runtime5arena9page_meta11OldPageMetaNtNtB2i_9fast_hash9PtrHasherEEE4withNCNvB2e_29old_page_account_swept_object0uEB2i_  (in profile_worker) + 164  [0x100de29a8]
+      +     !     :   |   1 _RNvMs7_NtNtCs6DZSOtmrM1U_13perry_runtime2gc5cycleNtB5_12GcCycleState4step  (in profile_worker) + 14656  [0x101219a80]
+      +     !     :   |     1 _RNvMs_NtNtCs6DZSOtmrM1U_13perry_runtime2gc5traceNtB4_22ValidPointerSetBuilder4step  (in profile_worker) + 688  [0x10133c948]
+      +     !     :   2 _RNvNtCs6DZSOtmrM1U_13perry_runtime2gc39gc_collect_full_mark_sweep_with_trigger  (in profile_worker) + 280  [0x100e9e710]
+      +     !     :     2 _RNvMs7_NtNtCs6DZSOtmrM1U_13perry_runtime2gc5cycleNtB5_12GcCycleState8new_full  (in profile_worker) + 88  [0x10121d498]
+      +     !     :       2 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime5arena9page_meta24old_pages_begin_gc_cycle  (in profile_worker) + 164  [0x1011c1bb8]
+      +     !     :         2 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime5arena9page_meta43flush_deferred_old_page_registrations_batch  (in profile_worker) + 116  [0x10194494c]
+      +     !     :           2 _RINvMs2_NtNtCs8BpVhDwHqJW_3std6thread5localINtB6_8LocalKeyINtNtCsjgY6bXVaRmE_4core4cell7RefCellINtNtNtNtBa_11collections4hash3map7HashMapjINtNtCsctvjasLqLe9_5alloc3vec3VecjENtNtCs6DZSOtmrM1U_13perry_runtime9fast_hash9PtrHasherEEE4withNCNvNtNtB2P_5arena9page_meta43flush_deferred_old_page_registrations_batchs_0uEB2P_  (in profile_worker) + 856,908  [0x100dd3194,0x100dd31c8]
+      +     !     1 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime5arena5block16arena_cell_alloc  (in profile_worker) + 608  [0x100e0142c]
+      +     !       1 _RNvMs1_NtNtCs6DZSOtmrM1U_13perry_runtime5arena5blockNtB5_5Arena22install_reserved_block  (in profile_worker) + 52  [0x10146faa4]
+      +     !         1 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime5arena9page_meta39register_block_space_with_object_starts  (in profile_worker) + 160  [0x1011c3aa0]
+      +     !           1 _RINvMs2_NtNtCs8BpVhDwHqJW_3std6thread5localINtB6_8LocalKeyINtNtCsjgY6bXVaRmE_4core4cell7RefCellINtNtNtNtBa_11collections4hash3map7HashMapjNtNtNtCs6DZSOtmrM1U_13perry_runtime5arena9page_meta11OldPageMetaNtNtB2i_9fast_hash9PtrHasherEEE4withNCNvB2e_24register_old_block_pages0uEB2i_  (in profile_worker) + 300  [0x100de23f8]
+      +     34 js_json_stringify_full  (in profile_worker) + 4928  [0x101513268]
+      +     ! 34 _platform_memmove  (in libsystem_platform.dylib) + 88  [0x18171f3b8]
+      +     5 js_json_stringify_full  (in profile_worker) + 4524  [0x1015130d4]
+      +       5 js_json_stringify_full  (in profile_worker) + 4792,4796,...  [0x1015131e0,0x1015131e4,...]
+      73 ???  (in <unknown binary>)  [0x484e8ae0000]
+      + 73 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime4json17stringify_scalars12write_number  (in profile_worker) + 240  [0x101075034]
+      +   73 _RNvNtCs4O8lUOgDc5C_6ryu_js6pretty8format64  (in profile_worker) + 1172,1184,...  [0x1017f8154,0x1017f8160,...]
+      64 ???  (in <unknown binary>)  [0x484e8420000]
+      + 64 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime4json17stringify_scalars12write_number  (in profile_worker) + 240  [0x101075034]
+      +   64 _RNvNtCs4O8lUOgDc5C_6ryu_js6pretty8format64  (in profile_worker) + 1172,1168,...  [0x1017f8154,0x1017f8150,...]
+      63 ???  (in <unknown binary>)  [0x484e8e20000]
+      + 63 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime4json17stringify_scalars12write_number  (in profile_worker) + 240  [0x101075034]
+      +   63 _RNvNtCs4O8lUOgDc5C_6ryu_js6pretty8format64  (in profile_worker) + 1172,1188,...  [0x1017f8154,0x1017f8164,...]
+      62 ???  (in <unknown binary>)  [0x484e7720000]
+      + 62 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime4json17stringify_scalars12write_number  (in profile_worker) + 240  [0x101075034]
+      +   62 _RNvNtCs4O8lUOgDc5C_6ryu_js6pretty8format64  (in profile_worker) + 1172,1168,...  [0x1017f8154,0x1017f8150,...]
+      62 ???  (in <unknown binary>)  [0x484e8f40000]
+      + 62 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime4json17stringify_scalars12write_number  (in profile_worker) + 240  [0x101075034]
+      +   62 _RNvNtCs4O8lUOgDc5C_6ryu_js6pretty8format64  (in profile_worker) + 1172,1184,...  [0x1017f8154,0x1017f8160,...]
+      61 ???  (in <unknown binary>)  [0x484e9180000]
+      + 61 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime4json17stringify_scalars12write_number  (in profile_worker) + 240  [0x101075034]
+      +   61 _RNvNtCs4O8lUOgDc5C_6ryu_js6pretty8format64  (in profile_worker) + 1172,1168,...  [0x1017f8154,0x1017f8150,...]
+      60 ???  (in <unknown binary>)  [0x484e89c0000]
+      + 60 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime4json17stringify_scalars12write_number  (in profile_worker) + 240  [0x101075034]
+      +   60 _RNvNtCs4O8lUOgDc5C_6ryu_js6pretty8format64  (in profile_worker) + 1172,1184,...  [0x1017f8154,0x1017f8160,...]
+      60 ???  (in <unknown binary>)  [0x484e9640000]
+      + 60 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime4json17stringify_scalars12write_number  (in profile_worker) + 240  [0x101075034]
+      +   60 _RNvNtCs4O8lUOgDc5C_6ryu_js6pretty8format64  (in profile_worker) + 1172,1184,...  [0x1017f8154,0x1017f8160,...]
+      60 ???  (in <unknown binary>)  [0x484ea790000]
+      + 60 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime4json17stringify_scalars12write_number  (in profile_worker) + 240  [0x101075034]
+      +   60 _RNvNtCs4O8lUOgDc5C_6ryu_js6pretty8format64  (in profile_worker) + 1172,1184,...  [0x1017f8154,0x1017f8160,...]
+      59 ???  (in <unknown binary>)  [0x484e8540000]
+      + 59 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime4json17stringify_scalars12write_number  (in profile_worker) + 240  [0x101075034]
+      +   59 _RNvNtCs4O8lUOgDc5C_6ryu_js6pretty8format64  (in profile_worker) + 1172,1184,...  [0x1017f8154,0x1017f8160,...]
+      59 ???  (in <unknown binary>)  [0x484e8d00000]
+      + 59 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime4json17stringify_scalars12write_number  (in profile_worker) + 240  [0x101075034]
+      +   59 _RNvNtCs4O8lUOgDc5C_6ryu_js6pretty8format64  (in profile_worker) + 1172,1180,...  [0x1017f8154,0x1017f815c,...]
+      58 ???  (in <unknown binary>)  [0x484e8780000]
+      + 58 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime4json17stringify_scalars12write_number  (in profile_worker) + 240  [0x101075034]
+      +   58 _RNvNtCs4O8lUOgDc5C_6ryu_js6pretty8format64  (in profile_worker) + 1172,1180,...  [0x1017f8154,0x1017f815c,...]
+      58 ???  (in <unknown binary>)  [0x484e88a0000]
+      + 58 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime4json17stringify_scalars12write_number  (in profile_worker) + 240  [0x101075034]
+      +   58 _RNvNtCs4O8lUOgDc5C_6ryu_js6pretty8format64  (in profile_worker) + 1172,1168,...  [0x1017f8154,0x1017f8150,...]
+      58 ???  (in <unknown binary>)  [0x484e9400000]
+      + 58 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime4json17stringify_scalars12write_number  (in profile_worker) + 240  [0x101075034]
+      +   58 _RNvNtCs4O8lUOgDc5C_6ryu_js6pretty8format64  (in profile_worker) + 1172,1168,...  [0x1017f8154,0x1017f8150,...]
+      57 ???  (in <unknown binary>)  [0x484e9520000]
+      + 57 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime4json17stringify_scalars12write_number  (in profile_worker) + 240  [0x101075034]
+      +   57 _RNvNtCs4O8lUOgDc5C_6ryu_js6pretty8format64  (in profile_worker) + 1172,1168,...  [0x1017f8154,0x1017f8150,...]
+      57 ???  (in <unknown binary>)  [0x484ea3e0000]
+      + 57 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime4json17stringify_scalars12write_number  (in profile_worker) + 240  [0x101075034]
+      +   57 _RNvNtCs4O8lUOgDc5C_6ryu_js6pretty8format64  (in profile_worker) + 1172,1168,...  [0x1017f8154,0x1017f8150,...]
+      57 ???  (in <unknown binary>)  [0x484ea8b0000]
+      + 57 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime4json17stringify_scalars12write_number  (in profile_worker) + 240  [0x101075034]
+      +   57 _RNvNtCs4O8lUOgDc5C_6ryu_js6pretty8format64  (in profile_worker) + 1172,1184,...  [0x1017f8154,0x1017f8160,...]
+      56 ???  (in <unknown binary>)  [0x484e9060000]
+      + 56 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime4json17stringify_scalars12write_number  (in profile_worker) + 240  [0x101075034]
+      +   56 _RNvNtCs4O8lUOgDc5C_6ryu_js6pretty8format64  (in profile_worker) + 1172,1184,...  [0x1017f8154,0x1017f8160,...]
+      56 ???  (in <unknown binary>)  [0x484ea1a0000]
+      + 56 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime4json17stringify_scalars12write_number  (in profile_worker) + 240  [0x101075034]
+      +   56 _RNvNtCs4O8lUOgDc5C_6ryu_js6pretty8format64  (in profile_worker) + 1172,1168,...  [0x1017f8154,0x1017f8150,...]
+      55 ???  (in <unknown binary>)  [0x484e7600000]
+      + 55 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime4json17stringify_scalars12write_number  (in profile_worker) + 240  [0x101075034]
+      +   55 _RNvNtCs4O8lUOgDc5C_6ryu_js6pretty8format64  (in profile_worker) + 1172,1180,...  [0x1017f8154,0x1017f815c,...]
+      55 ???  (in <unknown binary>)  [0x484e7960000]
+      + 55 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime4json17stringify_scalars12write_number  (in profile_worker) + 240  [0x101075034]
+      +   55 _RNvNtCs4O8lUOgDc5C_6ryu_js6pretty8format64  (in profile_worker) + 1172,1184,...  [0x1017f8154,0x1017f8160,...]
+      55 ???  (in <unknown binary>)  [0x484e9760000]
+      + 55 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime4json17stringify_scalars12write_number  (in profile_worker) + 240  [0x101075034]
+      +   55 _RNvNtCs4O8lUOgDc5C_6ryu_js6pretty8format64  (in profile_worker) + 1172,1180,...  [0x1017f8154,0x1017f815c,...]
+      54 ???  (in <unknown binary>)  [0x484e8660000]
+      + 54 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime4json17stringify_scalars12write_number  (in profile_worker) + 240  [0x101075034]
+      +   54 _RNvNtCs4O8lUOgDc5C_6ryu_js6pretty8format64  (in profile_worker) + 1172,1184,...  [0x1017f8154,0x1017f8160,...]
+      54 ???  (in <unknown binary>)  [0x484e92a0000]
+      + 54 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime4json17stringify_scalars12write_number  (in profile_worker) + 240  [0x101075034]
+      +   54 _RNvNtCs4O8lUOgDc5C_6ryu_js6pretty8format64  (in profile_worker) + 1172,1184,...  [0x1017f8154,0x1017f8160,...]
+      54 ???  (in <unknown binary>)  [0x484e99a0000]
+      + 54 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime4json17stringify_scalars12write_number  (in profile_worker) + 240  [0x101075034]
+      +   54 _RNvNtCs4O8lUOgDc5C_6ryu_js6pretty8format64  (in profile_worker) + 1172,1184,...  [0x1017f8154,0x1017f8160,...]
+      53 ???  (in <unknown binary>)  [0x484e7840000]
+      + 53 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime4json17stringify_scalars12write_number  (in profile_worker) + 240  [0x101075034]
+      +   53 _RNvNtCs4O8lUOgDc5C_6ryu_js6pretty8format64  (in profile_worker) + 1172,1184,...  [0x1017f8154,0x1017f8160,...]
+      53 ???  (in <unknown binary>)  [0x484e9be0000]
+      + 53 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime4json17stringify_scalars12write_number  (in profile_worker) + 240  [0x101075034]
+      +   53 _RNvNtCs4O8lUOgDc5C_6ryu_js6pretty8format64  (in profile_worker) + 1172,1180,...  [0x1017f8154,0x1017f815c,...]
+      53 ???  (in <unknown binary>)  [0x484e9f60000]
+      + 53 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime4json17stringify_scalars12write_number  (in profile_worker) + 240  [0x101075034]
+      +   53 _RNvNtCs4O8lUOgDc5C_6ryu_js6pretty8format64  (in profile_worker) + 1172,1184,...  [0x1017f8154,0x1017f8160,...]
+      53 ???  (in <unknown binary>)  [0x484ea080000]
+      + 53 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime4json17stringify_scalars12write_number  (in profile_worker) + 240  [0x101075034]
+      +   53 _RNvNtCs4O8lUOgDc5C_6ryu_js6pretty8format64  (in profile_worker) + 1172,1168,...  [0x1017f8154,0x1017f8150,...]
+      52 ???  (in <unknown binary>)  [0x484e7400000]
+      + 52 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime4json17stringify_scalars12write_number  (in profile_worker) + 240  [0x101075034]
+      +   52 _RNvNtCs4O8lUOgDc5C_6ryu_js6pretty8format64  (in profile_worker) + 1172,1168,...  [0x1017f8154,0x1017f8150,...]
+      51 ???  (in <unknown binary>)  [0x484e9ac0000]
+      + 51 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime4json17stringify_scalars12write_number  (in profile_worker) + 240  [0x101075034]
+      +   51 _RNvNtCs4O8lUOgDc5C_6ryu_js6pretty8format64  (in profile_worker) + 1172,1168,...  [0x1017f8154,0x1017f8150,...]
+      49 ???  (in <unknown binary>)  [0x484e9880000]
+      + 49 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime4json17stringify_scalars12write_number  (in profile_worker) + 240  [0x101075034]
+      +   49 _RNvNtCs4O8lUOgDc5C_6ryu_js6pretty8format64  (in profile_worker) + 1172,1168,...  [0x1017f8154,0x1017f8150,...]
+      46 ???  (in <unknown binary>)  [0x484ea2c0000]
+      + 46 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime4json17stringify_scalars12write_number  (in profile_worker) + 240  [0x101075034]
+      +   46 _RNvNtCs4O8lUOgDc5C_6ryu_js6pretty8format64  (in profile_worker) + 1172,1168,...  [0x1017f8154,0x1017f8150,...]
+      5 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime4json17stringify_scalars12write_number  (in profile_worker) + 240  [0x101075034]
+      + 5 _RNvNtCs4O8lUOgDc5C_6ryu_js6pretty8format64  (in profile_worker) + 1172,1168,...  [0x1017f8154,0x1017f8150,...]
+      3 ???  (in <unknown binary>)  [0x484ea9d0000]
+        3 _RNvNtNtCs6DZSOtmrM1U_13perry_runtime4json17stringify_scalars12write_number  (in profile_worker) + 240  [0x101075034]
+          3 _RNvNtCs4O8lUOgDc5C_6ryu_js6pretty8format64  (in profile_worker) + 1172,1180,...  [0x1017f8154,0x1017f815c,...]
+
+Total number in stack (recursive counted multiple, when >=5):
+        38       _RNvNtCs4O8lUOgDc5C_6ryu_js6pretty8format64  (in profile_worker) + 0  [0x1017f7cc0]
+        37       _RNvNtNtCs6DZSOtmrM1U_13perry_runtime4json17stringify_scalars12write_number  (in profile_worker) + 240  [0x101075034]
+
+Sort by top of stack, same collapsed (when >= 5):
+        _RNvNtCs4O8lUOgDc5C_6ryu_js6pretty8format64  (in profile_worker)        1927
+        _platform_memmove  (in libsystem_platform.dylib)        404
+        _RNvNtNtCs6DZSOtmrM1U_13perry_runtime4json17stringify_scalars12write_number  (in profile_worker)        247
+        _RNvNtNtCs6DZSOtmrM1U_13perry_runtime4json9stringify21stringify_array_depth  (in profile_worker)        230
+        _RNvNtNtCs4O8lUOgDc5C_6ryu_js6pretty8mantissa19write_mantissa_long  (in profile_worker)        144
+        DYLD-STUB$$memmove  (in profile_worker)        25
+        DYLD-STUB$$memcpy  (in profile_worker)        17
+        _RNvXsu_Cs8xF4iOrs9m2_4itoayNtB5_8Unsigned3fmt  (in profile_worker)        10
+        js_json_stringify_full  (in profile_worker)        5
+        madvise  (in libsystem_kernel.dylib)        5
+
+Binary Images:
+       0x100c94000 -        0x101cc6907 +profile_worker (0) <A84A3348-973F-3C2F-B14B-8703851AB589> /Users/*/profile_worker
+       0x1812b0000 -        0x181302b4b  libobjc.A.dylib (951.7) <FF1D8AE4-ABEF-35F1-A30A-1183B9CB414F> /usr/lib/libobjc.A.dylib
+       0x181303000 -        0x181337d07  libdyld.dylib (1378) <B147D877-D0C2-388F-B38D-D3132E39905F> /usr/lib/system/libdyld.dylib
+       0x181338000 -        0x1813de217  dyld (1.0.0 - 1378) <A237EF81-B68B-37BA-A165-92C965529534> /usr/lib/dyld
+       0x1813df000 -        0x1813e2228  libsystem_blocks.dylib (96) <CC947089-488D-316B-A9C7-46DEC0F73145> /usr/lib/system/libsystem_blocks.dylib
+       0x1813e3000 -        0x18143755f  libxpc.dylib (3102.120.13) <C40FCAE8-7A17-3D82-87CB-3DA4802ADEF1> /usr/lib/system/libxpc.dylib
+       0x181438000 -        0x1814589ff  libsystem_trace.dylib (1861.120.4) <D0FABAB3-5AE7-3F10-8C62-60CBF5D70850> /usr/lib/system/libsystem_trace.dylib
+       0x181459000 -        0x1815075f7  libcorecrypto.dylib (1922.121.1) <A01A158D-6FE7-3B1C-A2C4-6BCB90D7314A> /usr/lib/system/libcorecrypto.dylib
+       0x181508000 -        0x1815581d7  libsystem_malloc.dylib (812.100.31) <5FAE4807-4D2B-3A95-A63A-DD96D3DA11B4> /usr/lib/system/libsystem_malloc.dylib
+       0x181559000 -        0x1815a023f  libdispatch.dylib (1542.100.32) <F071EFE4-299F-3089-ACC4-0025B8FFB52A> /usr/lib/system/libdispatch.dylib
+       0x1815a1000 -        0x1815a3ffb  libsystem_featureflags.dylib (103) <71FCFFBD-85F8-3365-AFE0-BECEA4369122> /usr/lib/system/libsystem_featureflags.dylib
+       0x1815a4000 -        0x181624d9f  libsystem_c.dylib (1752.120.2) <694B7881-1BF3-3D0F-8F19-B50AE4E8EF8A> /usr/lib/system/libsystem_c.dylib
+       0x181625000 -        0x1816b5ae7  libc++.1.dylib (2100.43) <5013C0F8-84A9-3B56-9FEB-C353816A750F> /usr/lib/libc++.1.dylib
+       0x1816b6000 -        0x1816d075f  libc++abi.dylib (2100.43) <E482D257-E5A0-3816-BD97-7B39342958DA> /usr/lib/libc++abi.dylib
+       0x1816d1000 -        0x18170e2af  libsystem_kernel.dylib (12377.121.6) <CC1CF985-BC65-3725-809F-4C1E36B8F4BA> /usr/lib/system/libsystem_kernel.dylib
+       0x18170f000 -        0x18171bb3b  libsystem_pthread.dylib (539.100.4) <4F33683C-18C8-39A1-800B-2E3BD43BCC13> /usr/lib/system/libsystem_pthread.dylib
+       0x18171c000 -        0x181724963  libsystem_platform.dylib (375.120.2) <160FD864-8D15-36FC-9E97-9725388CFAFE> /usr/lib/system/libsystem_platform.dylib
+       0x181725000 -        0x1817546eb  libsystem_info.dylib (600) <3D62F2D9-F516-31BF-83C7-E203D872300B> /usr/lib/system/libsystem_info.dylib
+       0x1856ec000 -        0x1856f5e5f  libsystem_darwin.dylib (1752.120.2) <8858F025-745A-388E-9544-080781CC9A69> /usr/lib/system/libsystem_darwin.dylib
+       0x185b57000 -        0x185b691b6  libsystem_notify.dylib (348.120.4) <64D76451-1E0C-369B-A631-54DA3140E083> /usr/lib/system/libsystem_notify.dylib
+       0x187e24000 -        0x187e3ef7b  libsystem_networkextension.dylib (2226.121.1) <0331EE20-A1FB-3C0D-990A-F65939CFF505> /usr/lib/system/libsystem_networkextension.dylib
+       0x187ec1000 -        0x187ed8fdf  libsystem_asl.dylib (406) <F40838DF-2F15-3F62-970F-DEE25706BF1B> /usr/lib/system/libsystem_asl.dylib
+       0x189a7f000 -        0x189a87387  libsystem_symptoms.dylib (2169.120.7) <F5029F5C-1BF3-31C7-892E-BC8606AC829E> /usr/lib/system/libsystem_symptoms.dylib
+       0x18dd23000 -        0x18dd5b257  libsystem_containermanager.dylib (725.120.2) <518BE44D-AA31-31E6-B44B-A37AD5E47040> /usr/lib/system/libsystem_containermanager.dylib
+       0x18f134000 -        0x18f1385d7  libsystem_configuration.dylib (1405.120.5) <0F7BBC1C-3D50-3E59-A31F-E4672A80BCEB> /usr/lib/system/libsystem_configuration.dylib
+       0x18f139000 -        0x18f13f8cf  libsystem_sandbox.dylib (2680.120.12) <EC3A75EA-44C0-3A0B-9BF7-71C117B0A9C6> /usr/lib/system/libsystem_sandbox.dylib
+       0x190793000 -        0x1907961fb  libquarantine.dylib (196.120.2) <5849009B-ACA3-3796-94C4-BBDF8D300EBA> /usr/lib/system/libquarantine.dylib
+       0x190f32000 -        0x190f38d03  libsystem_coreservices.dylib (191.4.5) <9576143B-C303-35A3-BA63-1FD06EDA2BB1> /usr/lib/system/libsystem_coreservices.dylib
+       0x1914bd000 -        0x1914faa77  libsystem_m.dylib (3312.100.1) <A7E0863C-101A-31A0-922B-ED9B02626151> /usr/lib/system/libsystem_m.dylib
+       0x1914fc000 -        0x1914ff527  libmacho.dylib (1378) <755441B4-C034-3E3A-8E3C-F424FBB28261> /usr/lib/system/libmacho.dylib
+       0x191519000 -        0x1915263a7  libcommonCrypto.dylib (600035) <CE357BB1-2D49-37CC-9FFE-D093936B1475> /usr/lib/system/libcommonCrypto.dylib
+       0x191527000 -        0x191530ca3  libunwind.dylib (2100.2) <FC8F0C4E-6FB0-3E27-ABEF-B0FA720CD5E4> /usr/lib/system/libunwind.dylib
+       0x191539000 -        0x1915437ff  libcopyfile.dylib (240) <8ACFAC7A-88E9-3EF4-853F-A9140FF110E5> /usr/lib/system/libcopyfile.dylib
+       0x191544000 -        0x191547987  libcompiler_rt.dylib (103.3) <AA79151F-C19D-3C7C-92F8-B10F04D82C1C> /usr/lib/system/libcompiler_rt.dylib
+       0x191548000 -        0x19154c78b  libsystem_collections.dylib (1752.120.2) <72DB5BE7-EF78-37D0-8AAD-53E37CFE4287> /usr/lib/system/libsystem_collections.dylib
+       0x19154d000 -        0x1915504cf  libsystem_secinit.dylib (168.100.7) <E525C566-CDA4-3D99-B12B-1615FD54A1F3> /usr/lib/system/libsystem_secinit.dylib
+       0x191551000 -        0x191553bf7  libremovefile.dylib (85.100.6) <635E661D-80A7-340D-A165-3F7D318FDFC9> /usr/lib/system/libremovefile.dylib
+       0x191554000 -        0x191554f27  libkeymgr.dylib (31) <8C08891A-DF1C-3DCC-AB64-4742FD6BE9BA> /usr/lib/system/libkeymgr.dylib
+       0x191555000 -        0x19155de37  libsystem_dnssd.dylib (2881.120.11) <6F45DF3F-233B-3BC3-BA8C-B43E7DA884BF> /usr/lib/system/libsystem_dnssd.dylib
+       0x19155e000 -        0x19156309b  libcache.dylib (95) <189B576E-6176-3F82-8FA4-5914B0BEAEE7> /usr/lib/system/libcache.dylib
+       0x191564000 -        0x191565ce3  libSystem.B.dylib (1356) <D65E4112-C151-3FF8-BEB7-4841436012D6> /usr/lib/libSystem.B.dylib
+       0x28479b000 -        0x2847a2349  libRosetta.dylib (367.9) <8651ED4F-6506-3788-B56B-32EE414A85CA> /usr/lib/libRosetta.dylib
+       0x2863b8000 -        0x2863bba4b  libsystem_darwindirectory.dylib (122) <CF277A2C-C818-3F16-8B3F-3C7B39FCD164> /usr/lib/system/libsystem_darwindirectory.dylib
+       0x2863bc000 -        0x2863c55d3  libsystem_eligibility.dylib (319.121.1) <DDAC0531-0262-3DDC-8EC8-80EB9438847A> /usr/lib/system/libsystem_eligibility.dylib
+       0x2863c6000 -        0x2863cd88b  libsystem_sanitizers.dylib (26.1) <44C4234F-8B2D-38D3-A774-B4B3C75AF3A7> /usr/lib/system/libsystem_sanitizers.dylib
+       0x2863ce000 -        0x2863cebb7  libsystem_trial.dylib (474.2.18.2) <68C583BA-AFF5-3916-86AE-6E38BFEF98D6> /usr/lib/system/libsystem_trial.dylib

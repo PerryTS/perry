@@ -1,5 +1,8 @@
 This study measures `JSON.parse` and `JSON.stringify` in Perry, Node.js and Bun, and identifies an implementation path for improving Perry. Read [the analysis and roadmap](REPORT.md), [all CPU/wall/RSS tables](results/full-tables.md), or [the raw-data summary](results/summary.csv).
 
+Latest: [number formatting, sustained-load findings and the full parity target](NUMBERS.md),
+with an [explicit inventory of every remaining CPU/RSS gap](results/numbers/parity.md).
+
 The recorded run used an Apple M1 / 8 GiB benchmark Mac, Node 26.5.1, Bun 1.3.14, and pinned Perry 0.5.1520 development artifacts. The original audit was run from a dirty 0.5.1512 checkout against those pinned artifacts; its results are explicitly **not** measurements of a fresh build of this branch. Artifact hashes and source provenance are in [toolchain.json](results/toolchain.json). The original audit did not modify runtime/compiler source. The subsequent fast-path implementation and fresh runtime A/B are described in [FASTPATHS.md](FASTPATHS.md).
 
 The scripts use Python's standard library except `analyze.py`, which uses Matplotlib and NumPy for the exported charts. `worker.ts` is compiled by Perry. `worker.js` contains the same executable statements, with type annotations erased, and is run by Node and Bun so Node's TypeScript loader does not inflate startup memory.

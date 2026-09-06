@@ -312,6 +312,9 @@ taffy = { version = "0.13", default-features = false, features = ["std", "flexbo
 fancy-regex = { version = "0.18", optional = true }
 itoa.workspace = true
 ryu.workspace = true
+# ECMAScript shortest-number spelling into a stack buffer (JSON hot path).
+# Already present in the workspace lockfile through SWC.
+ryu-js = "1.0.3"
 base64.workspace = true
 hostname = { version = "0.4", optional = true }
 dirs = { workspace = true, optional = true }

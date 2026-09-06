@@ -6448,6 +6448,7 @@ dependencies = [
  "regress",
  "resolv-conf",
  "ryu",
+ "ryu-js",
  "serde",
  "serde_json",
  "sha2 0.11.0",

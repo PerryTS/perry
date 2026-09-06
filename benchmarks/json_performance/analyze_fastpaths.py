@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 """Validate and summarize the four-arm runtime A/B without dropping trials."""
 import collections
+import argparse
 import csv
 import json
 import statistics
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-OUT = ROOT / 'results/fastpaths'
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--results-dir', type=Path, default=ROOT / 'results/fastpaths')
+args = parser.parse_args()
+OUT = args.results_dir
 ENGINES = ['baseline', 'perry', 'node', 'bun']
 
 
