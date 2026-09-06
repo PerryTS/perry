@@ -1,0 +1,24 @@
+{
+  "purpose": "No-JSON ordinary array-growth reproducer, not a passing acceptance test",
+  "source_sha256": "f6c32eb6e860abe82ed23ca474461a6ca1011fe3c7355e7a35f1f15277601555",
+  "object_sha256": "6b0b2c81bd718a3c1efe308360495d20522aa24f3bedaa1136362f845ceed0f7",
+  "compiler": "/tmp/perry-json-fastpaths-20260906/perry",
+  "compiler_flags": [
+    "--no-auto-optimize",
+    "--no-cache",
+    "--no-link"
+  ],
+  "seed": 17,
+  "rate": 0.1,
+  "protect_fromspace": true,
+  "verify_evacuation": true,
+  "source_commits": {
+    "reference": "9187bd95d9ff6ddb541a0f548203c47d060a76dd",
+    "candidate": "2e79d122ba72e879a21ae6db65962339dc79c68d"
+  },
+  "runtime_sha256": {
+    "inline-object": "a5fa19dc156283961269ec238c1f307e2c25c4c333db3d685d17bbfc47588347",
+    "short-array": "9a8968d705cbbf98ddd6230df8118ff527fba9f6984fa2590a8c8cfa05ea28f5"
+  },
+  "observed": "Both runtimes abort in heap-fields stale-forwarded verification at safepoint219/collection21 with the same pinned application object."
+}

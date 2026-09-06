@@ -1,0 +1,13 @@
+{
+  "fixture": "test_gap_json_short_array_storage",
+  "arm": "reference",
+  "seed": 9013,
+  "exit": -6,
+  "stdout": "growth 0 36 [0,null,null,null,\"filled\",null]\ngetter [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19] 0\nmutated [\"inserted\",\"front\",\"end\"] 0,1,2\nmutated [null,false,true,\"inserted\",\"front\",\"end\"] 0,1,2,3,4,5\nmutated [\"tag_b\",\"tag_a\",\"inserted\",\"front\",\"end\"] 0,1,2,3,4\nmutated [\"tail\",[true,false],{\"x\":\"heap child\"},0,\"inserted\",\"front\",\"end\"] 0,1,2,3,4,5,6\nmutated [9,8,7,6,5,4,3,2,1,\"inserted\",\"front\",\"end\"] 0,1,2,3,4,5,6,7,8,9,10,11\ninvalid 8\n",
+  "stderr": "[gc-schedule] seeded GC-schedule fuzzing ACTIVE: seed=9013 rate=0.1\n[gc-schedule] reproduce with: PERRY_GC_SCHEDULE_SEED=9013 PERRY_GC_SCHEDULE_RATE=0.1\n\n[gc-schedule] FAILURE (panic) under seed=9013\n[gc-schedule]   safepoints=2194 scheduled_collections=131\n[gc-schedule]   REPRODUCER: re-run this exact command with PERRY_GC_SCHEDULE_SEED=9013 set.\n\nthread '<unnamed>' (90977531) panicked at crates/perry-runtime/src/gc/verify.rs:74:5:\ngc evacuation verification failed: stale forwarded pointer in native stack-map roots: slot=0x16f16e570 old=0x7ffd020ea81bae58 forwarded_to=0x7ffd020ef4fc0008\nstack backtrace:\n   0: __rustc::rust_begin_unwind\n             at /rustc/f7d782a3be46d6bb4b9792fe69a61db389ba1769/library/std/src/panicking.rs:679:5\n   1: core::panicking::panic_fmt\n             at /rustc/f7d782a3be46d6bb4b9792fe69a61db389ba1769/library/core/src/panicking.rs:80:14\n   2: perry_runtime::gc::verify::panic_stale_forwarded_reference\n   3: <perry_runtime::gc::roots::stack_maps::ResolvedRoot>::visit_with_context::<&mut perry_runtime::gc::verify::verify_mutable_root_slots::{closure#0}>\n   4: perry_runtime::gc::roots::stack_maps::visit_record_slots\n   5: perry_runtime::gc::roots::stack_maps::fp_chain::visit::<perry_runtime::gc::roots::stack_maps::visit_stack_map_root_slots<&mut perry_runtime::gc::verify::verify_mutable_root_slots::{closure#0}>::{closure#1}>\n   6: perry_runtime::gc::verify::verify_evacuated_no_stale_forwarded_refs\n   7: perry_runtime::gc::copying::run_copied_minor_attempt\n   8: perry_runtime::gc::gc_collect_minor_with_trigger_inner\n   9: perry_runtime::gc::policy::gc_safepoint_moving_minor\n  10: _main\nnote: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.\n\n[gc-schedule] FAILURE (signal 6) under seed=9013\n[gc-schedule]   safepoints=2194 scheduled_collections=131\n[gc-schedule]   REPRODUCER: re-run with PERRY_GC_SCHEDULE_SEED=9013\n",
+  "counters": {
+    "scheduled_collections": 131
+  },
+  "matches_node": false,
+  "live_subject": false
+}

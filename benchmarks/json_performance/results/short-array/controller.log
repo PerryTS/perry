@@ -1,0 +1,929 @@
+VERIFY null parse [('perry', True), ('node', True), ('bun', True), ('baseline', True)]
+VERIFY null stringify [('perry', True), ('node', True), ('bun', True), ('baseline', True)]
+VERIFY string_a parse [('perry', True), ('node', True), ('bun', True), ('baseline', True)]
+VERIFY string_a stringify [('perry', True), ('node', True), ('bun', True), ('baseline', True)]
+VERIFY empty_object parse [('perry', True), ('node', True), ('bun', True), ('baseline', True)]
+VERIFY empty_object stringify [('perry', True), ('node', True), ('bun', True), ('baseline', True)]
+VERIFY tiny_object parse [('perry', True), ('node', True), ('bun', True), ('baseline', True)]
+VERIFY tiny_object stringify [('perry', True), ('node', True), ('bun', True), ('baseline', True)]
+VERIFY small_record parse [('perry', True), ('node', True), ('bun', True), ('baseline', True)]
+VERIFY small_record stringify [('perry', True), ('node', True), ('bun', True), ('baseline', True)]
+VERIFY object_1k parse [('perry', True), ('node', True), ('bun', True), ('baseline', True)]
+VERIFY object_1k stringify [('perry', True), ('node', True), ('bun', True), ('baseline', True)]
+VERIFY records_array_16k parse [('perry', True), ('node', True), ('bun', True), ('baseline', True)]
+VERIFY records_array_16k stringify [('perry', True), ('node', True), ('bun', True), ('baseline', True)]
+VERIFY records_array_1m parse [('perry', True), ('node', True), ('bun', True), ('baseline', True)]
+VERIFY records_array_1m stringify [('perry', True), ('node', True), ('bun', True), ('baseline', True)]
+VERIFY records_object_1m parse [('perry', True), ('node', True), ('bun', True), ('baseline', True)]
+VERIFY records_object_1m stringify [('perry', True), ('node', True), ('bun', True), ('baseline', True)]
+VERIFY records_array_8m parse [('perry', True), ('node', True), ('bun', True), ('baseline', True)]
+VERIFY records_array_8m stringify [('perry', True), ('node', True), ('bun', True), ('baseline', True)]
+VERIFY records_object_8m parse [('perry', True), ('node', True), ('bun', True), ('baseline', True)]
+VERIFY records_object_8m stringify [('perry', True), ('node', True), ('bun', True), ('baseline', True)]
+VERIFY records_array_20m parse [('perry', True), ('node', True), ('bun', True), ('baseline', True)]
+VERIFY records_array_20m stringify [('perry', True), ('node', True), ('bun', True), ('baseline', True)]
+VERIFY records_object_20m parse [('perry', True), ('node', True), ('bun', True), ('baseline', True)]
+VERIFY records_object_20m stringify [('perry', True), ('node', True), ('bun', True), ('baseline', True)]
+VERIFY numbers_1m parse [('perry', True), ('node', True), ('bun', True), ('baseline', True)]
+VERIFY numbers_1m stringify [('perry', True), ('node', True), ('bun', True), ('baseline', True)]
+VERIFY long_string_1m parse [('perry', True), ('node', True), ('bun', True), ('baseline', True)]
+VERIFY long_string_1m stringify [('perry', True), ('node', True), ('bun', True), ('baseline', True)]
+VERIFY escaped_1m parse [('perry', True), ('node', True), ('bun', True), ('baseline', True)]
+VERIFY escaped_1m stringify [('perry', True), ('node', True), ('bun', True), ('baseline', True)]
+VERIFY unicode_1m parse [('perry', True), ('node', True), ('bun', True), ('baseline', True)]
+VERIFY unicode_1m stringify [('perry', True), ('node', True), ('bun', True), ('baseline', True)]
+VERIFY wide_1m parse [('perry', True), ('node', True), ('bun', True), ('baseline', True)]
+VERIFY wide_1m stringify [('perry', True), ('node', True), ('bun', True), ('baseline', True)]
+VERIFY heterogeneous_1m parse [('perry', True), ('node', True), ('bun', True), ('baseline', True)]
+VERIFY heterogeneous_1m stringify [('perry', True), ('node', True), ('bun', True), ('baseline', True)]
+PASSED verify 152
+RUN null parse baseline None 0 2000000 26.25
+RUN null parse perry None 0 2000000 27.52
+RUN null parse bun None 0 2000000 34.29
+RUN null parse node None 0 2000000 53.44
+RUN null parse perry None 1 2000000 27.5
+RUN null parse baseline None 1 2000000 26.26
+RUN null parse node None 1 2000000 53.37
+RUN null parse bun None 1 2000000 34.15
+RUN null parse node None 2 2000000 53.28
+RUN null parse perry None 2 2000000 27.63
+RUN null parse bun None 2 2000000 34.43
+RUN null parse baseline None 2 2000000 26.25
+RUN null stringify node None 0 2000000 52.67
+RUN null stringify perry None 0 2000000 13.13
+RUN null stringify baseline None 0 2000000 13.12
+RUN null stringify bun None 0 2000000 52.79
+RUN null stringify bun None 1 2000000 53.06
+RUN null stringify baseline None 1 2000000 13.13
+RUN null stringify node None 1 2000000 52.64
+RUN null stringify perry None 1 2000000 13.13
+RUN null stringify baseline None 2 2000000 13.13
+RUN null stringify bun None 2 2000000 53.36
+RUN null stringify perry None 2 2000000 13.13
+RUN null stringify node None 2 2000000 52.68
+RUN string_a parse baseline None 0 2000000 31.25
+RUN string_a parse node None 0 2000000 62.36
+RUN string_a parse perry None 0 2000000 32.5
+RUN string_a parse bun None 0 2000000 40.86
+RUN string_a parse node None 1 2000000 62.25
+RUN string_a parse baseline None 1 2000000 31.28
+RUN string_a parse perry None 1 2000000 32.67
+RUN string_a parse bun None 1 2000000 41.49
+RUN string_a parse bun None 2 2000000 41.0
+RUN string_a parse perry None 2 2000000 32.52
+RUN string_a parse baseline None 2 2000000 31.24
+RUN string_a parse node None 2 2000000 62.06
+RUN string_a stringify bun None 0 2000000 54.65
+RUN string_a stringify baseline None 0 2000000 19.39
+RUN string_a stringify node None 0 2000000 58.34
+RUN string_a stringify perry None 0 2000000 19.51
+RUN string_a stringify node None 1 2000000 58.53
+RUN string_a stringify baseline None 1 2000000 19.36
+RUN string_a stringify bun None 1 2000000 53.12
+RUN string_a stringify perry None 1 2000000 19.36
+RUN string_a stringify bun None 2 2000000 52.78
+RUN string_a stringify perry None 2 2000000 19.4
+RUN string_a stringify baseline None 2 2000000 19.37
+RUN string_a stringify node None 2 2000000 58.24
+RUN empty_object parse perry None 0 2000000 114.33
+RUN empty_object parse baseline None 0 2000000 112.36
+RUN empty_object parse bun None 0 2000000 43.27
+RUN empty_object parse node None 0 2000000 88.58
+RUN empty_object parse baseline None 1 2000000 112.78
+RUN empty_object parse node None 1 2000000 88.62
+RUN empty_object parse perry None 1 2000000 114.27
+RUN empty_object parse bun None 1 2000000 43.28
+RUN empty_object parse perry None 2 2000000 114.34
+RUN empty_object parse node None 2 2000000 88.66
+RUN empty_object parse bun None 2 2000000 43.5
+RUN empty_object parse baseline None 2 2000000 112.44
+RUN empty_object stringify baseline None 0 2000000 95.27
+RUN empty_object stringify bun None 0 2000000 55.83
+RUN empty_object stringify node None 0 2000000 62.2
+RUN empty_object stringify perry None 0 2000000 94.32
+RUN empty_object stringify bun None 1 2000000 55.48
+RUN empty_object stringify perry None 1 2000000 94.21
+RUN empty_object stringify node None 1 2000000 62.22
+RUN empty_object stringify baseline None 1 2000000 95.13
+RUN empty_object stringify baseline None 2 2000000 95.05
+RUN empty_object stringify perry None 2 2000000 94.24
+RUN empty_object stringify node None 2 2000000 62.25
+RUN empty_object stringify bun None 2 2000000 55.33
+RUN tiny_object parse perry None 0 2000000 239.96
+RUN tiny_object parse baseline None 0 2000000 239.04
+RUN tiny_object parse bun None 0 2000000 85.39
+RUN tiny_object parse node None 0 2000000 161.01
+RUN tiny_object parse bun None 1 2000000 85.37
+RUN tiny_object parse node None 1 2000000 159.97
+RUN tiny_object parse baseline None 1 2000000 240.03
+RUN tiny_object parse perry None 1 2000000 240.91
+RUN tiny_object parse node None 2 2000000 161.38
+RUN tiny_object parse perry None 2 2000000 239.77
+RUN tiny_object parse bun None 2 2000000 85.42
+RUN tiny_object parse baseline None 2 2000000 238.84
+RUN tiny_object stringify node None 0 2000000 72.64
+RUN tiny_object stringify bun None 0 2000000 74.44
+RUN tiny_object stringify baseline None 0 2000000 182.25
+RUN tiny_object stringify perry None 0 2000000 182.15
+RUN tiny_object stringify bun None 1 2000000 75.45
+RUN tiny_object stringify node None 1 2000000 72.71
+RUN tiny_object stringify perry None 1 2000000 182.09
+RUN tiny_object stringify baseline None 1 2000000 182.02
+RUN tiny_object stringify node None 2 2000000 72.65
+RUN tiny_object stringify perry None 2 2000000 182.18
+RUN tiny_object stringify bun None 2 2000000 75.36
+RUN tiny_object stringify baseline None 2 2000000 182.12
+RUN small_record parse baseline None 0 585269 396.75
+RUN small_record parse bun None 0 585269 143.09
+RUN small_record parse node None 0 585269 197.15
+RUN small_record parse perry None 0 585269 394.76
+RUN small_record parse perry None 1 585269 396.43
+RUN small_record parse node None 1 585269 190.1
+RUN small_record parse baseline None 1 585269 396.17
+RUN small_record parse bun None 1 585269 143.0
+RUN small_record parse node None 2 585269 204.81
+RUN small_record parse bun None 2 585269 165.34
+RUN small_record parse perry None 2 585269 394.64
+RUN small_record parse baseline None 2 585269 397.14
+RUN small_record stringify baseline None 0 1259620 353.48
+RUN small_record stringify bun None 0 1259620 147.25
+RUN small_record stringify perry None 0 1259620 358.16
+RUN small_record stringify node None 0 1259620 135.08
+RUN small_record stringify node None 1 1259620 134.45
+RUN small_record stringify baseline None 1 1259620 353.32
+RUN small_record stringify perry None 1 1259620 358.68
+RUN small_record stringify bun None 1 1259620 147.46
+RUN small_record stringify perry None 2 1259620 357.57
+RUN small_record stringify node None 2 1259620 135.58
+RUN small_record stringify bun None 2 1259620 147.72
+RUN small_record stringify baseline None 2 1259620 353.73
+RUN object_1k parse perry None 0 547445 321.97
+RUN object_1k parse baseline None 0 547445 324.53
+RUN object_1k parse bun None 0 547445 124.67
+RUN object_1k parse node None 0 547445 293.13
+RUN object_1k parse perry None 1 547445 322.69
+RUN object_1k parse node None 1 547445 293.3
+RUN object_1k parse baseline None 1 547445 322.59
+RUN object_1k parse bun None 1 547445 123.55
+RUN object_1k parse baseline None 2 547445 322.87
+RUN object_1k parse node None 2 547445 293.07
+RUN object_1k parse bun None 2 547445 123.45
+RUN object_1k parse perry None 2 547445 322.66
+RUN object_1k stringify node None 0 650993 126.63
+RUN object_1k stringify baseline None 0 650993 152.73
+RUN object_1k stringify perry None 0 650993 152.68
+RUN object_1k stringify bun None 0 650993 133.35
+RUN object_1k stringify bun None 1 650993 133.76
+RUN object_1k stringify node None 1 650993 126.76
+RUN object_1k stringify baseline None 1 650993 152.94
+RUN object_1k stringify perry None 1 650993 152.89
+RUN object_1k stringify bun None 2 650993 134.05
+RUN object_1k stringify perry None 2 650993 152.82
+RUN object_1k stringify node None 2 650993 127.77
+RUN object_1k stringify baseline None 2 650993 153.22
+RUN records_array_16k parse bun None 0 6697 227.22
+RUN records_array_16k parse baseline None 0 6697 162.28
+RUN records_array_16k parse node None 0 6697 259.91
+RUN records_array_16k parse perry None 0 6697 159.34
+RUN records_array_16k parse bun None 1 6697 226.16
+RUN records_array_16k parse baseline None 1 6697 160.52
+RUN records_array_16k parse perry None 1 6697 159.31
+RUN records_array_16k parse node None 1 6697 280.19
+RUN records_array_16k parse perry None 2 6697 159.18
+RUN records_array_16k parse node None 2 6697 255.3
+RUN records_array_16k parse bun None 2 6697 226.34
+RUN records_array_16k parse baseline None 2 6697 160.86
+RUN records_array_16k stringify bun None 0 10126 233.72
+RUN records_array_16k stringify node None 0 10126 132.69
+RUN records_array_16k stringify perry None 0 10126 235.47
+RUN records_array_16k stringify baseline None 0 10126 236.86
+RUN records_array_16k stringify perry None 1 10126 235.54
+RUN records_array_16k stringify baseline None 1 10126 237.97
+RUN records_array_16k stringify bun None 1 10126 234.38
+RUN records_array_16k stringify node None 1 10126 131.41
+RUN records_array_16k stringify perry None 2 10126 235.69
+RUN records_array_16k stringify baseline None 2 10126 237.01
+RUN records_array_16k stringify bun None 2 10126 234.39
+RUN records_array_16k stringify node None 2 10126 132.35
+RUN records_array_1m parse node None 0 95 265.56
+RUN records_array_1m parse perry None 0 95 147.68
+RUN records_array_1m parse baseline None 0 95 148.07
+RUN records_array_1m parse bun None 0 95 225.65
+RUN records_array_1m parse baseline None 1 95 148.36
+RUN records_array_1m parse bun None 1 95 199.71
+RUN records_array_1m parse perry None 1 95 147.13
+RUN records_array_1m parse node None 1 95 263.3
+RUN records_array_1m parse baseline None 2 95 148.24
+RUN records_array_1m parse node None 2 95 260.17
+RUN records_array_1m parse bun None 2 95 199.42
+RUN records_array_1m parse perry None 2 95 147.77
+RUN records_array_1m stringify bun None 0 177 170.37
+RUN records_array_1m stringify node None 0 177 143.42
+RUN records_array_1m stringify perry None 0 177 263.08
+RUN records_array_1m stringify baseline None 0 177 264.55
+RUN records_array_1m stringify perry None 1 177 263.77
+RUN records_array_1m stringify node None 1 177 144.89
+RUN records_array_1m stringify baseline None 1 177 264.05
+RUN records_array_1m stringify bun None 1 177 170.41
+RUN records_array_1m stringify bun None 2 177 170.2
+RUN records_array_1m stringify node None 2 177 144.9
+RUN records_array_1m stringify perry None 2 177 265.54
+RUN records_array_1m stringify baseline None 2 177 267.58
+RUN records_object_1m parse baseline None 0 71 287.2
+RUN records_object_1m parse bun None 0 71 149.53
+RUN records_object_1m parse node None 0 71 199.94
+RUN records_object_1m parse perry None 0 71 283.17
+RUN records_object_1m parse bun None 1 71 149.07
+RUN records_object_1m parse node None 1 71 193.87
+RUN records_object_1m parse perry None 1 71 283.19
+RUN records_object_1m parse baseline None 1 71 287.2
+RUN records_object_1m parse bun None 2 71 148.66
+RUN records_object_1m parse baseline None 2 71 287.85
+RUN records_object_1m parse node None 2 71 187.28
+RUN records_object_1m parse perry None 2 71 283.67
+RUN records_object_1m stringify baseline None 0 176 264.33
+RUN records_object_1m stringify node None 0 176 142.99
+RUN records_object_1m stringify perry None 0 176 263.63
+RUN records_object_1m stringify bun None 0 176 169.57
+RUN records_object_1m stringify baseline None 1 176 264.29
+RUN records_object_1m stringify bun None 1 176 169.99
+RUN records_object_1m stringify perry None 1 176 262.67
+RUN records_object_1m stringify node None 1 176 143.05
+RUN records_object_1m stringify baseline None 2 176 263.46
+RUN records_object_1m stringify node None 2 176 143.26
+RUN records_object_1m stringify bun None 2 176 170.94
+RUN records_object_1m stringify perry None 2 176 265.49
+RUN records_array_8m parse bun None 0 10 179.0
+RUN records_array_8m parse perry None 0 10 133.66
+RUN records_array_8m parse baseline None 0 10 134.68
+RUN records_array_8m parse node None 0 10 231.14
+RUN records_array_8m parse perry None 1 10 133.68
+RUN records_array_8m parse node None 1 10 227.63
+RUN records_array_8m parse baseline None 1 10 134.59
+RUN records_array_8m parse bun None 1 10 177.91
+RUN records_array_8m parse perry None 2 10 133.62
+RUN records_array_8m parse node None 2 10 219.75
+RUN records_array_8m parse baseline None 2 10 134.66
+RUN records_array_8m parse bun None 2 10 178.21
+RUN records_array_8m stringify bun None 0 20 156.45
+RUN records_array_8m stringify baseline None 0 20 262.08
+RUN records_array_8m stringify perry None 0 20 259.7
+RUN records_array_8m stringify node None 0 20 133.36
+RUN records_array_8m stringify perry None 1 20 260.31
+RUN records_array_8m stringify bun None 1 20 157.82
+RUN records_array_8m stringify node None 1 20 133.7
+RUN records_array_8m stringify baseline None 1 20 261.2
+RUN records_array_8m stringify perry None 2 20 260.12
+RUN records_array_8m stringify bun None 2 20 156.69
+RUN records_array_8m stringify node None 2 20 133.62
+RUN records_array_8m stringify baseline None 2 20 262.23
+RUN records_object_8m parse perry None 0 8 247.52
+RUN records_object_8m parse baseline None 0 8 252.8
+RUN records_object_8m parse node None 0 8 169.53
+RUN records_object_8m parse bun None 0 8 143.55
+RUN records_object_8m parse baseline None 1 8 252.28
+RUN records_object_8m parse perry None 1 8 247.34
+RUN records_object_8m parse node None 1 8 164.9
+RUN records_object_8m parse bun None 1 8 143.39
+RUN records_object_8m parse perry None 2 8 247.86
+RUN records_object_8m parse bun None 2 8 145.73
+RUN records_object_8m parse node None 2 8 175.18
+RUN records_object_8m parse baseline None 2 8 251.96
+RUN records_object_8m stringify baseline None 0 20 261.48
+RUN records_object_8m stringify node None 0 20 134.39
+RUN records_object_8m stringify perry None 0 20 259.77
+RUN records_object_8m stringify bun None 0 20 155.73
+RUN records_object_8m stringify baseline None 1 20 262.02
+RUN records_object_8m stringify bun None 1 20 155.13
+RUN records_object_8m stringify node None 1 20 132.5
+RUN records_object_8m stringify perry None 1 20 259.43
+RUN records_object_8m stringify node None 2 20 133.77
+RUN records_object_8m stringify bun None 2 20 156.35
+RUN records_object_8m stringify perry None 2 20 259.1
+RUN records_object_8m stringify baseline None 2 20 261.95
+RUN records_array_20m parse baseline None 0 3 234.55
+RUN records_array_20m parse perry None 0 3 228.45
+RUN records_array_20m parse bun None 0 3 133.84
+RUN records_array_20m parse node None 0 3 172.7
+RUN records_array_20m parse perry None 1 3 228.28
+RUN records_array_20m parse baseline None 1 3 235.18
+RUN records_array_20m parse node None 1 3 176.47
+RUN records_array_20m parse bun None 1 3 133.39
+RUN records_array_20m parse bun None 2 3 133.8
+RUN records_array_20m parse node None 2 3 182.38
+RUN records_array_20m parse perry None 2 3 228.38
+RUN records_array_20m parse baseline None 2 3 234.3
+RUN records_array_20m stringify bun None 0 8 155.36
+RUN records_array_20m stringify baseline None 0 8 680.0
+RUN records_array_20m stringify node None 0 8 136.92
+RUN records_array_20m stringify perry None 0 8 641.4
+RUN records_array_20m stringify baseline None 1 8 679.74
+RUN records_array_20m stringify perry None 1 8 644.21
+RUN records_array_20m stringify bun None 1 8 156.89
+RUN records_array_20m stringify node None 1 8 138.42
+RUN records_array_20m stringify baseline None 2 8 680.17
+RUN records_array_20m stringify bun None 2 8 155.29
+RUN records_array_20m stringify node None 2 8 137.96
+RUN records_array_20m stringify perry None 2 8 641.74
+RUN records_object_20m parse bun None 0 3 134.23
+RUN records_object_20m parse perry None 0 3 228.14
+RUN records_object_20m parse node None 0 3 181.14
+RUN records_object_20m parse baseline None 0 3 235.23
+RUN records_object_20m parse node None 1 3 182.23
+RUN records_object_20m parse perry None 1 3 228.53
+RUN records_object_20m parse baseline None 1 3 234.31
+RUN records_object_20m parse bun None 1 3 132.84
+RUN records_object_20m parse node None 2 3 176.36
+RUN records_object_20m parse bun None 2 3 132.75
+RUN records_object_20m parse baseline None 2 3 234.59
+RUN records_object_20m parse perry None 2 3 228.64
+RUN records_object_20m stringify bun None 0 8 155.75
+RUN records_object_20m stringify node None 0 8 138.06
+RUN records_object_20m stringify baseline None 0 8 682.27
+RUN records_object_20m stringify perry None 0 8 643.27
+RUN records_object_20m stringify baseline None 1 8 679.19
+RUN records_object_20m stringify perry None 1 8 643.18
+RUN records_object_20m stringify node None 1 8 139.41
+RUN records_object_20m stringify bun None 1 8 156.19
+RUN records_object_20m stringify node None 2 8 137.37
+RUN records_object_20m stringify baseline None 2 8 678.31
+RUN records_object_20m stringify perry None 2 8 644.28
+RUN records_object_20m stringify bun None 2 8 155.89
+RUN numbers_1m parse baseline None 0 91 156.08
+RUN numbers_1m parse node None 0 91 279.81
+RUN numbers_1m parse perry None 0 91 155.93
+RUN numbers_1m parse bun None 0 91 291.09
+RUN numbers_1m parse bun None 1 91 291.77
+RUN numbers_1m parse node None 1 91 279.84
+RUN numbers_1m parse perry None 1 91 155.94
+RUN numbers_1m parse baseline None 1 91 156.44
+RUN numbers_1m parse perry None 2 91 155.79
+RUN numbers_1m parse node None 2 91 279.28
+RUN numbers_1m parse baseline None 2 91 156.01
+RUN numbers_1m parse bun None 2 91 289.65
+RUN numbers_1m stringify bun None 0 96 282.87
+RUN numbers_1m stringify perry None 0 96 154.53
+RUN numbers_1m stringify baseline None 0 96 153.86
+RUN numbers_1m stringify node None 0 96 185.96
+RUN numbers_1m stringify bun None 1 96 284.73
+RUN numbers_1m stringify node None 1 96 185.91
+RUN numbers_1m stringify perry None 1 96 154.51
+RUN numbers_1m stringify baseline None 1 96 154.1
+RUN numbers_1m stringify bun None 2 96 282.39
+RUN numbers_1m stringify baseline None 2 96 154.41
+RUN numbers_1m stringify perry None 2 96 153.98
+RUN numbers_1m stringify node None 2 96 186.2
+RUN long_string_1m parse baseline None 0 1334 271.18
+RUN long_string_1m parse perry None 0 1334 270.82
+RUN long_string_1m parse bun None 0 1334 89.46
+RUN long_string_1m parse node None 0 1334 487.23
+RUN long_string_1m parse perry None 1 1334 271.94
+RUN long_string_1m parse node None 1 1334 487.87
+RUN long_string_1m parse baseline None 1 1334 271.68
+RUN long_string_1m parse bun None 1 1334 88.93
+RUN long_string_1m parse bun None 2 1334 88.49
+RUN long_string_1m parse perry None 2 1334 271.91
+RUN long_string_1m parse baseline None 2 1334 270.74
+RUN long_string_1m parse node None 2 1334 487.72
+RUN long_string_1m stringify bun None 0 1098 105.51
+RUN long_string_1m stringify baseline None 0 1098 188.38
+RUN long_string_1m stringify perry None 0 1098 187.03
+RUN long_string_1m stringify node None 0 1098 115.2
+RUN long_string_1m stringify bun None 1 1098 103.96
+RUN long_string_1m stringify perry None 1 1098 190.26
+RUN long_string_1m stringify node None 1 1098 111.85
+RUN long_string_1m stringify baseline None 1 1098 192.59
+RUN long_string_1m stringify perry None 2 1098 191.85
+RUN long_string_1m stringify node None 2 1098 118.43
+RUN long_string_1m stringify bun None 2 1098 106.19
+RUN long_string_1m stringify baseline None 2 1098 192.9
+RUN escaped_1m parse node None 0 82 141.39
+RUN escaped_1m parse bun None 0 82 170.41
+RUN escaped_1m parse perry None 0 82 167.44
+RUN escaped_1m parse baseline None 0 82 167.44
+RUN escaped_1m parse bun None 1 82 170.54
+RUN escaped_1m parse perry None 1 82 167.35
+RUN escaped_1m parse baseline None 1 82 167.22
+RUN escaped_1m parse node None 1 82 141.44
+RUN escaped_1m parse bun None 2 82 170.42
+RUN escaped_1m parse node None 2 82 141.58
+RUN escaped_1m parse perry None 2 82 167.23
+RUN escaped_1m parse baseline None 2 82 167.1
+RUN escaped_1m stringify baseline None 0 168 162.49
+RUN escaped_1m stringify node None 0 168 314.0
+RUN escaped_1m stringify bun None 0 168 350.86
+RUN escaped_1m stringify perry None 0 168 160.42
+RUN escaped_1m stringify perry None 1 168 160.07
+RUN escaped_1m stringify node None 1 168 315.8
+RUN escaped_1m stringify baseline None 1 168 162.05
+RUN escaped_1m stringify bun None 1 168 348.93
+RUN escaped_1m stringify perry None 2 168 159.86
+RUN escaped_1m stringify node None 2 168 314.08
+RUN escaped_1m stringify baseline None 2 168 162.09
+RUN escaped_1m stringify bun None 2 168 349.03
+RUN unicode_1m parse bun None 0 1470 85.4
+RUN unicode_1m parse baseline None 0 1470 379.54
+RUN unicode_1m parse perry None 0 1470 375.52
+RUN unicode_1m parse node None 0 1470 639.74
+RUN unicode_1m parse bun None 1 1470 87.42
+RUN unicode_1m parse node None 1 1470 639.11
+RUN unicode_1m parse baseline None 1 1470 383.89
+RUN unicode_1m parse perry None 1 1470 383.4
+RUN unicode_1m parse perry None 2 1470 377.87
+RUN unicode_1m parse bun None 2 1470 85.66
+RUN unicode_1m parse node None 2 1470 639.59
+RUN unicode_1m parse baseline None 2 1470 377.26
+RUN unicode_1m stringify perry None 0 1413 194.83
+RUN unicode_1m stringify node None 0 1413 578.71
+RUN unicode_1m stringify baseline None 0 1413 195.82
+RUN unicode_1m stringify bun None 0 1413 635.26
+RUN unicode_1m stringify node None 1 1413 577.61
+RUN unicode_1m stringify perry None 1 1413 194.98
+RUN unicode_1m stringify bun None 1 1413 636.28
+RUN unicode_1m stringify baseline None 1 1413 202.65
+RUN unicode_1m stringify perry None 2 1413 196.64
+RUN unicode_1m stringify bun None 2 1413 637.07
+RUN unicode_1m stringify node None 2 1413 583.78
+RUN unicode_1m stringify baseline None 2 1413 194.18
+RUN wide_1m parse perry None 0 36 752.3
+RUN wide_1m parse bun None 0 36 149.32
+RUN wide_1m parse baseline None 0 36 754.75
+RUN wide_1m parse node None 0 36 177.48
+RUN wide_1m parse node None 1 36 176.82
+RUN wide_1m parse perry None 1 36 752.73
+RUN wide_1m parse bun None 1 36 150.06
+RUN wide_1m parse baseline None 1 36 756.15
+RUN wide_1m parse bun None 2 36 149.49
+RUN wide_1m parse perry None 2 36 751.61
+RUN wide_1m parse node None 2 36 176.39
+RUN wide_1m parse baseline None 2 36 754.68
+RUN wide_1m stringify perry None 0 216 365.16
+RUN wide_1m stringify bun None 0 216 143.0
+RUN wide_1m stringify baseline None 0 216 364.93
+RUN wide_1m stringify node None 0 216 1360.82
+RUN wide_1m stringify bun None 1 216 145.03
+RUN wide_1m stringify perry None 1 216 365.21
+RUN wide_1m stringify baseline None 1 216 365.36
+RUN wide_1m stringify node None 1 216 1366.63
+RUN wide_1m stringify baseline None 2 216 365.18
+RUN wide_1m stringify node None 2 216 1364.76
+RUN wide_1m stringify perry None 2 216 364.7
+RUN wide_1m stringify bun None 2 216 142.88
+RUN heterogeneous_1m parse bun None 0 79 229.41
+RUN heterogeneous_1m parse node None 0 79 313.83
+RUN heterogeneous_1m parse baseline None 0 79 153.26
+RUN heterogeneous_1m parse perry None 0 79 152.7
+RUN heterogeneous_1m parse baseline None 1 79 153.41
+RUN heterogeneous_1m parse perry None 1 79 152.87
+RUN heterogeneous_1m parse node None 1 79 305.59
+RUN heterogeneous_1m parse bun None 1 79 227.13
+RUN heterogeneous_1m parse bun None 2 79 225.95
+RUN heterogeneous_1m parse perry None 2 79 152.66
+RUN heterogeneous_1m parse node None 2 79 297.56
+RUN heterogeneous_1m parse baseline None 2 79 153.59
+RUN heterogeneous_1m stringify baseline None 0 167 727.97
+RUN heterogeneous_1m stringify node None 0 167 144.69
+RUN heterogeneous_1m stringify bun None 0 167 175.75
+RUN heterogeneous_1m stringify perry None 0 167 722.36
+RUN heterogeneous_1m stringify baseline None 1 167 728.91
+RUN heterogeneous_1m stringify bun None 1 167 176.47
+RUN heterogeneous_1m stringify node None 1 167 145.18
+RUN heterogeneous_1m stringify perry None 1 167 722.64
+RUN heterogeneous_1m stringify node None 2 167 144.44
+RUN heterogeneous_1m stringify baseline None 2 167 728.66
+RUN heterogeneous_1m stringify perry None 2 167 721.91
+RUN heterogeneous_1m stringify bun None 2 167 175.87
+PASSED timing 456
+MEM tiny_object retain-parse perry 1 12.5
+MEM tiny_object retain-parse node 1 52.6
+MEM tiny_object retain-parse bun 1 28.3
+MEM tiny_object retain-parse baseline 1 12.2
+MEM tiny_object retain-parse perry 1 12.4
+MEM tiny_object retain-parse node 1 52.7
+MEM tiny_object retain-parse bun 1 28.2
+MEM tiny_object retain-parse baseline 1 12.2
+MEM tiny_object retain-parse perry 1 12.4
+MEM tiny_object retain-parse node 1 52.6
+MEM tiny_object retain-parse bun 1 28.3
+MEM tiny_object retain-parse baseline 1 12.2
+MEM tiny_object retain-parse perry 200000 25.0
+MEM tiny_object retain-parse node 200000 74.9
+MEM tiny_object retain-parse bun 200000 50.2
+MEM tiny_object retain-parse baseline 200000 24.8
+MEM tiny_object retain-parse perry 200000 25.0
+MEM tiny_object retain-parse node 200000 74.9
+MEM tiny_object retain-parse bun 200000 50.2
+MEM tiny_object retain-parse baseline 200000 24.8
+MEM tiny_object retain-parse perry 200000 25.0
+MEM tiny_object retain-parse node 200000 74.8
+MEM tiny_object retain-parse bun 200000 50.2
+MEM tiny_object retain-parse baseline 200000 24.8
+MEM tiny_object retain-stringify perry 1 12.6
+MEM tiny_object retain-stringify node 1 52.8
+MEM tiny_object retain-stringify bun 1 28.3
+MEM tiny_object retain-stringify baseline 1 12.3
+MEM tiny_object retain-stringify perry 1 12.6
+MEM tiny_object retain-stringify node 1 52.8
+MEM tiny_object retain-stringify bun 1 28.3
+MEM tiny_object retain-stringify baseline 1 12.3
+MEM tiny_object retain-stringify perry 1 12.6
+MEM tiny_object retain-stringify node 1 52.7
+MEM tiny_object retain-stringify bun 1 28.4
+MEM tiny_object retain-stringify baseline 1 12.3
+MEM tiny_object retain-stringify perry 200000 25.2
+MEM tiny_object retain-stringify node 200000 71.1
+MEM tiny_object retain-stringify bun 200000 47.0
+MEM tiny_object retain-stringify baseline 200000 24.9
+MEM tiny_object retain-stringify perry 200000 25.2
+MEM tiny_object retain-stringify node 200000 71.3
+MEM tiny_object retain-stringify bun 200000 47.0
+MEM tiny_object retain-stringify baseline 200000 24.9
+MEM tiny_object retain-stringify perry 200000 25.2
+MEM tiny_object retain-stringify node 200000 71.2
+MEM tiny_object retain-stringify bun 200000 47.0
+MEM tiny_object retain-stringify baseline 200000 24.9
+MEM small_record retain-parse perry 1 12.5
+MEM small_record retain-parse node 1 52.6
+MEM small_record retain-parse bun 1 28.3
+MEM small_record retain-parse baseline 1 12.2
+MEM small_record retain-parse perry 1 12.5
+MEM small_record retain-parse node 1 52.7
+MEM small_record retain-parse bun 1 28.3
+MEM small_record retain-parse baseline 1 12.2
+MEM small_record retain-parse perry 1 12.5
+MEM small_record retain-parse node 1 52.7
+MEM small_record retain-parse bun 1 28.3
+MEM small_record retain-parse baseline 1 12.2
+MEM small_record retain-parse perry 100000 45.1
+MEM small_record retain-parse node 100000 85.4
+MEM small_record retain-parse bun 100000 52.7
+MEM small_record retain-parse baseline 100000 56.8
+MEM small_record retain-parse perry 100000 45.1
+MEM small_record retain-parse node 100000 85.4
+MEM small_record retain-parse bun 100000 52.8
+MEM small_record retain-parse baseline 100000 56.8
+MEM small_record retain-parse perry 100000 45.1
+MEM small_record retain-parse node 100000 85.7
+MEM small_record retain-parse bun 100000 52.7
+MEM small_record retain-parse baseline 100000 56.8
+MEM small_record retain-stringify perry 1 12.7
+MEM small_record retain-stringify node 1 52.8
+MEM small_record retain-stringify bun 1 28.3
+MEM small_record retain-stringify baseline 1 12.3
+MEM small_record retain-stringify perry 1 12.7
+MEM small_record retain-stringify node 1 52.7
+MEM small_record retain-stringify bun 1 28.3
+MEM small_record retain-stringify baseline 1 12.4
+MEM small_record retain-stringify perry 1 12.7
+MEM small_record retain-stringify node 1 52.7
+MEM small_record retain-stringify bun 1 28.4
+MEM small_record retain-stringify baseline 1 12.3
+MEM small_record retain-stringify perry 100000 28.4
+MEM small_record retain-stringify node 100000 80.4
+MEM small_record retain-stringify bun 100000 51.0
+MEM small_record retain-stringify baseline 100000 28.1
+MEM small_record retain-stringify perry 100000 28.4
+MEM small_record retain-stringify node 100000 80.3
+MEM small_record retain-stringify bun 100000 51.1
+MEM small_record retain-stringify baseline 100000 28.0
+MEM small_record retain-stringify perry 100000 28.4
+MEM small_record retain-stringify node 100000 80.3
+MEM small_record retain-stringify bun 100000 51.1
+MEM small_record retain-stringify baseline 100000 28.1
+MEM records_array_1m retain-parse perry 1 16.6
+MEM records_array_1m retain-parse node 1 58.3
+MEM records_array_1m retain-parse bun 1 31.6
+MEM records_array_1m retain-parse baseline 1 16.3
+MEM records_array_1m retain-parse perry 1 16.6
+MEM records_array_1m retain-parse node 1 58.4
+MEM records_array_1m retain-parse bun 1 31.7
+MEM records_array_1m retain-parse baseline 1 16.3
+MEM records_array_1m retain-parse perry 1 16.6
+MEM records_array_1m retain-parse node 1 58.4
+MEM records_array_1m retain-parse bun 1 31.7
+MEM records_array_1m retain-parse baseline 1 16.3
+MEM records_array_1m retain-parse perry 16 41.8
+MEM records_array_1m retain-parse node 16 88.6
+MEM records_array_1m retain-parse bun 16 55.9
+MEM records_array_1m retain-parse baseline 16 41.5
+MEM records_array_1m retain-parse perry 16 41.8
+MEM records_array_1m retain-parse node 16 88.7
+MEM records_array_1m retain-parse bun 16 55.9
+MEM records_array_1m retain-parse baseline 16 41.5
+MEM records_array_1m retain-parse perry 16 41.8
+MEM records_array_1m retain-parse node 16 88.6
+MEM records_array_1m retain-parse bun 16 55.9
+MEM records_array_1m retain-parse baseline 16 41.5
+MEM records_array_1m retain-stringify perry 1 19.5
+MEM records_array_1m retain-stringify node 1 60.5
+MEM records_array_1m retain-stringify bun 1 34.4
+MEM records_array_1m retain-stringify baseline 1 20.0
+MEM records_array_1m retain-stringify perry 1 19.5
+MEM records_array_1m retain-stringify node 1 60.5
+MEM records_array_1m retain-stringify bun 1 34.4
+MEM records_array_1m retain-stringify baseline 1 20.0
+MEM records_array_1m retain-stringify perry 1 19.5
+MEM records_array_1m retain-stringify node 1 60.5
+MEM records_array_1m retain-stringify bun 1 34.5
+MEM records_array_1m retain-stringify baseline 1 20.0
+MEM records_array_1m retain-stringify perry 16 33.4
+MEM records_array_1m retain-stringify node 16 76.4
+MEM records_array_1m retain-stringify bun 16 47.2
+MEM records_array_1m retain-stringify baseline 16 33.9
+MEM records_array_1m retain-stringify perry 16 33.4
+MEM records_array_1m retain-stringify node 16 76.4
+MEM records_array_1m retain-stringify bun 16 47.2
+MEM records_array_1m retain-stringify baseline 16 33.9
+MEM records_array_1m retain-stringify perry 16 33.4
+MEM records_array_1m retain-stringify node 16 76.3
+MEM records_array_1m retain-stringify bun 16 47.2
+MEM records_array_1m retain-stringify baseline 16 33.9
+MEM records_object_1m retain-parse perry 1 15.3
+MEM records_object_1m retain-parse node 1 58.4
+MEM records_object_1m retain-parse bun 1 31.6
+MEM records_object_1m retain-parse baseline 1 15.9
+MEM records_object_1m retain-parse perry 1 15.3
+MEM records_object_1m retain-parse node 1 58.3
+MEM records_object_1m retain-parse bun 1 31.7
+MEM records_object_1m retain-parse baseline 1 15.9
+MEM records_object_1m retain-parse perry 1 15.3
+MEM records_object_1m retain-parse node 1 58.4
+MEM records_object_1m retain-parse bun 1 31.7
+MEM records_object_1m retain-parse baseline 1 15.9
+MEM records_object_1m retain-parse perry 16 56.7
+MEM records_object_1m retain-parse node 16 88.8
+MEM records_object_1m retain-parse bun 16 55.9
+MEM records_object_1m retain-parse baseline 16 66.9
+MEM records_object_1m retain-parse perry 16 56.7
+MEM records_object_1m retain-parse node 16 88.8
+MEM records_object_1m retain-parse bun 16 55.9
+MEM records_object_1m retain-parse baseline 16 66.9
+MEM records_object_1m retain-parse perry 16 56.7
+MEM records_object_1m retain-parse node 16 88.8
+MEM records_object_1m retain-parse bun 16 55.9
+MEM records_object_1m retain-parse baseline 16 66.9
+MEM records_object_1m retain-stringify perry 1 19.5
+MEM records_object_1m retain-stringify node 1 60.6
+MEM records_object_1m retain-stringify bun 1 34.4
+MEM records_object_1m retain-stringify baseline 1 20.0
+MEM records_object_1m retain-stringify perry 1 19.5
+MEM records_object_1m retain-stringify node 1 60.5
+MEM records_object_1m retain-stringify bun 1 34.4
+MEM records_object_1m retain-stringify baseline 1 20.0
+MEM records_object_1m retain-stringify perry 1 19.5
+MEM records_object_1m retain-stringify node 1 60.6
+MEM records_object_1m retain-stringify bun 1 34.5
+MEM records_object_1m retain-stringify baseline 1 20.0
+MEM records_object_1m retain-stringify perry 16 33.4
+MEM records_object_1m retain-stringify node 16 76.4
+MEM records_object_1m retain-stringify bun 16 47.5
+MEM records_object_1m retain-stringify baseline 16 33.9
+MEM records_object_1m retain-stringify perry 16 33.4
+MEM records_object_1m retain-stringify node 16 76.3
+MEM records_object_1m retain-stringify bun 16 47.2
+MEM records_object_1m retain-stringify baseline 16 33.9
+MEM records_object_1m retain-stringify perry 16 33.4
+MEM records_object_1m retain-stringify node 16 76.2
+MEM records_object_1m retain-stringify bun 16 47.2
+MEM records_object_1m retain-stringify baseline 16 33.9
+MEM records_array_8m retain-parse perry 1 48.2
+MEM records_array_8m retain-parse node 1 94.3
+MEM records_array_8m retain-parse bun 1 52.3
+MEM records_array_8m retain-parse baseline 1 48.0
+MEM records_array_8m retain-parse perry 1 48.2
+MEM records_array_8m retain-parse node 1 94.2
+MEM records_array_8m retain-parse bun 1 52.3
+MEM records_array_8m retain-parse baseline 1 48.0
+MEM records_array_8m retain-parse perry 1 48.2
+MEM records_array_8m retain-parse node 1 94.2
+MEM records_array_8m retain-parse bun 1 52.3
+MEM records_array_8m retain-parse baseline 1 48.0
+MEM records_array_8m retain-parse perry 4 86.5
+MEM records_array_8m retain-parse node 4 146.9
+MEM records_array_8m retain-parse bun 4 91.8
+MEM records_array_8m retain-parse baseline 4 86.4
+MEM records_array_8m retain-parse perry 4 86.5
+MEM records_array_8m retain-parse node 4 147.1
+MEM records_array_8m retain-parse bun 4 91.9
+MEM records_array_8m retain-parse baseline 4 86.4
+MEM records_array_8m retain-parse perry 4 86.5
+MEM records_array_8m retain-parse node 4 146.9
+MEM records_array_8m retain-parse bun 4 91.8
+MEM records_array_8m retain-parse baseline 4 86.4
+MEM records_array_8m retain-stringify perry 1 73.1
+MEM records_array_8m retain-stringify node 1 114.2
+MEM records_array_8m retain-stringify bun 1 73.5
+MEM records_array_8m retain-stringify baseline 1 75.5
+MEM records_array_8m retain-stringify perry 1 73.1
+MEM records_array_8m retain-stringify node 1 114.1
+MEM records_array_8m retain-stringify bun 1 73.5
+MEM records_array_8m retain-stringify baseline 1 75.5
+MEM records_array_8m retain-stringify perry 1 73.1
+MEM records_array_8m retain-stringify node 1 114.1
+MEM records_array_8m retain-stringify bun 1 73.5
+MEM records_array_8m retain-stringify baseline 1 75.5
+MEM records_array_8m retain-stringify perry 4 91.8
+MEM records_array_8m retain-stringify node 4 144.0
+MEM records_array_8m retain-stringify bun 4 94.5
+MEM records_array_8m retain-stringify baseline 4 94.8
+MEM records_array_8m retain-stringify perry 4 91.8
+MEM records_array_8m retain-stringify node 4 144.1
+MEM records_array_8m retain-stringify bun 4 94.5
+MEM records_array_8m retain-stringify baseline 4 94.8
+MEM records_array_8m retain-stringify perry 4 91.8
+MEM records_array_8m retain-stringify node 4 143.6
+MEM records_array_8m retain-stringify bun 4 94.5
+MEM records_array_8m retain-stringify baseline 4 94.8
+MEM records_object_8m retain-parse perry 1 36.5
+MEM records_object_8m retain-parse node 1 94.3
+MEM records_object_8m retain-parse bun 1 52.3
+MEM records_object_8m retain-parse baseline 1 42.8
+MEM records_object_8m retain-parse perry 1 36.5
+MEM records_object_8m retain-parse node 1 94.2
+MEM records_object_8m retain-parse bun 1 52.3
+MEM records_object_8m retain-parse baseline 1 42.8
+MEM records_object_8m retain-parse perry 1 36.5
+MEM records_object_8m retain-parse node 1 94.3
+MEM records_object_8m retain-parse bun 1 52.3
+MEM records_object_8m retain-parse baseline 1 42.8
+MEM records_object_8m retain-parse perry 4 97.7
+MEM records_object_8m retain-parse node 4 147.0
+MEM records_object_8m retain-parse bun 4 91.8
+MEM records_object_8m retain-parse baseline 4 113.3
+MEM records_object_8m retain-parse perry 4 97.7
+MEM records_object_8m retain-parse node 4 147.0
+MEM records_object_8m retain-parse bun 4 91.8
+MEM records_object_8m retain-parse baseline 4 113.3
+MEM records_object_8m retain-parse perry 4 97.7
+MEM records_object_8m retain-parse node 4 146.5
+MEM records_object_8m retain-parse bun 4 92.0
+MEM records_object_8m retain-parse baseline 4 113.3
+MEM records_object_8m retain-stringify perry 1 73.1
+MEM records_object_8m retain-stringify node 1 114.1
+MEM records_object_8m retain-stringify bun 1 73.5
+MEM records_object_8m retain-stringify baseline 1 75.6
+MEM records_object_8m retain-stringify perry 1 73.1
+MEM records_object_8m retain-stringify node 1 114.1
+MEM records_object_8m retain-stringify bun 1 73.5
+MEM records_object_8m retain-stringify baseline 1 75.6
+MEM records_object_8m retain-stringify perry 1 73.1
+MEM records_object_8m retain-stringify node 1 114.2
+MEM records_object_8m retain-stringify bun 1 73.5
+MEM records_object_8m retain-stringify baseline 1 75.6
+MEM records_object_8m retain-stringify perry 4 91.8
+MEM records_object_8m retain-stringify node 4 144.1
+MEM records_object_8m retain-stringify bun 4 94.5
+MEM records_object_8m retain-stringify baseline 4 94.9
+MEM records_object_8m retain-stringify perry 4 91.8
+MEM records_object_8m retain-stringify node 4 143.9
+MEM records_object_8m retain-stringify bun 4 94.5
+MEM records_object_8m retain-stringify baseline 4 94.9
+MEM records_object_8m retain-stringify perry 4 91.8
+MEM records_object_8m retain-stringify node 4 143.6
+MEM records_object_8m retain-stringify bun 4 94.0
+MEM records_object_8m retain-stringify baseline 4 94.9
+MEM long_string_1m retain-parse perry 1 15.6
+MEM long_string_1m retain-parse node 1 56.4
+MEM long_string_1m retain-parse bun 1 30.5
+MEM long_string_1m retain-parse baseline 1 15.3
+MEM long_string_1m retain-parse perry 1 15.5
+MEM long_string_1m retain-parse node 1 56.4
+MEM long_string_1m retain-parse bun 1 30.6
+MEM long_string_1m retain-parse baseline 1 15.3
+MEM long_string_1m retain-parse perry 1 15.5
+MEM long_string_1m retain-parse node 1 56.5
+MEM long_string_1m retain-parse bun 1 30.5
+MEM long_string_1m retain-parse baseline 1 15.3
+MEM long_string_1m retain-parse perry 32 56.9
+MEM long_string_1m retain-parse node 32 89.0
+MEM long_string_1m retain-parse bun 32 61.6
+MEM long_string_1m retain-parse baseline 32 56.9
+MEM long_string_1m retain-parse perry 32 56.9
+MEM long_string_1m retain-parse node 32 89.1
+MEM long_string_1m retain-parse bun 32 61.7
+MEM long_string_1m retain-parse baseline 32 56.9
+MEM long_string_1m retain-parse perry 32 56.9
+MEM long_string_1m retain-parse node 32 89.1
+MEM long_string_1m retain-parse bun 32 61.7
+MEM long_string_1m retain-parse baseline 32 56.8
+MEM long_string_1m retain-stringify perry 1 19.0
+MEM long_string_1m retain-stringify node 1 60.6
+MEM long_string_1m retain-stringify bun 1 32.6
+MEM long_string_1m retain-stringify baseline 1 18.8
+MEM long_string_1m retain-stringify perry 1 19.0
+MEM long_string_1m retain-stringify node 1 60.6
+MEM long_string_1m retain-stringify bun 1 32.6
+MEM long_string_1m retain-stringify baseline 1 18.8
+MEM long_string_1m retain-stringify perry 1 19.0
+MEM long_string_1m retain-stringify node 1 60.5
+MEM long_string_1m retain-stringify bun 1 32.7
+MEM long_string_1m retain-stringify baseline 1 18.8
+MEM long_string_1m retain-stringify perry 32 58.9
+MEM long_string_1m retain-stringify node 32 92.2
+MEM long_string_1m retain-stringify bun 32 63.8
+MEM long_string_1m retain-stringify baseline 32 58.8
+MEM long_string_1m retain-stringify perry 32 58.9
+MEM long_string_1m retain-stringify node 32 92.2
+MEM long_string_1m retain-stringify bun 32 63.8
+MEM long_string_1m retain-stringify baseline 32 58.8
+MEM long_string_1m retain-stringify perry 32 58.9
+MEM long_string_1m retain-stringify node 32 92.2
+MEM long_string_1m retain-stringify bun 32 63.8
+MEM long_string_1m retain-stringify baseline 32 58.8
+MEM unicode_1m retain-parse perry 1 14.7
+MEM unicode_1m retain-parse node 1 57.7
+MEM unicode_1m retain-parse bun 1 31.3
+MEM unicode_1m retain-parse baseline 1 14.5
+MEM unicode_1m retain-parse perry 1 14.7
+MEM unicode_1m retain-parse node 1 57.6
+MEM unicode_1m retain-parse bun 1 31.2
+MEM unicode_1m retain-parse baseline 1 14.5
+MEM unicode_1m retain-parse perry 1 14.7
+MEM unicode_1m retain-parse node 1 57.6
+MEM unicode_1m retain-parse bun 1 31.2
+MEM unicode_1m retain-parse baseline 1 14.5
+MEM unicode_1m retain-parse perry 32 44.9
+MEM unicode_1m retain-parse node 32 86.3
+MEM unicode_1m retain-parse bun 32 59.0
+MEM unicode_1m retain-parse baseline 32 44.7
+MEM unicode_1m retain-parse perry 32 44.9
+MEM unicode_1m retain-parse node 32 86.3
+MEM unicode_1m retain-parse bun 32 59.0
+MEM unicode_1m retain-parse baseline 32 44.7
+MEM unicode_1m retain-parse perry 32 44.9
+MEM unicode_1m retain-parse node 32 86.2
+MEM unicode_1m retain-parse bun 32 59.0
+MEM unicode_1m retain-parse baseline 32 44.7
+MEM unicode_1m retain-stringify perry 1 17.0
+MEM unicode_1m retain-stringify node 1 60.8
+MEM unicode_1m retain-stringify bun 1 34.5
+MEM unicode_1m retain-stringify baseline 1 16.7
+MEM unicode_1m retain-stringify perry 1 17.0
+MEM unicode_1m retain-stringify node 1 60.8
+MEM unicode_1m retain-stringify bun 1 34.0
+MEM unicode_1m retain-stringify baseline 1 16.7
+MEM unicode_1m retain-stringify perry 1 17.0
+MEM unicode_1m retain-stringify node 1 60.8
+MEM unicode_1m retain-stringify bun 1 34.1
+MEM unicode_1m retain-stringify baseline 1 16.7
+MEM unicode_1m retain-stringify perry 32 47.0
+MEM unicode_1m retain-stringify node 32 89.1
+MEM unicode_1m retain-stringify bun 32 61.8
+MEM unicode_1m retain-stringify baseline 32 46.7
+MEM unicode_1m retain-stringify perry 32 46.9
+MEM unicode_1m retain-stringify node 32 89.2
+MEM unicode_1m retain-stringify bun 32 61.8
+MEM unicode_1m retain-stringify baseline 32 46.6
+MEM unicode_1m retain-stringify perry 32 47.0
+MEM unicode_1m retain-stringify node 32 89.1
+MEM unicode_1m retain-stringify bun 32 62.2
+MEM unicode_1m retain-stringify baseline 32 46.7
+MEM wide_1m retain-parse perry 1 24.3
+MEM wide_1m retain-parse node 1 65.5
+MEM wide_1m retain-parse bun 1 36.4
+MEM wide_1m retain-parse baseline 1 24.1
+MEM wide_1m retain-parse perry 1 24.3
+MEM wide_1m retain-parse node 1 65.6
+MEM wide_1m retain-parse bun 1 36.3
+MEM wide_1m retain-parse baseline 1 24.1
+MEM wide_1m retain-parse perry 1 24.3
+MEM wide_1m retain-parse node 1 65.6
+MEM wide_1m retain-parse bun 1 36.3
+MEM wide_1m retain-parse baseline 1 24.1
+MEM wide_1m retain-parse perry 16 71.5
+MEM wide_1m retain-parse node 16 112.5
+MEM wide_1m retain-parse bun 16 68.9
+MEM wide_1m retain-parse baseline 16 71.2
+MEM wide_1m retain-parse perry 16 71.5
+MEM wide_1m retain-parse node 16 112.5
+MEM wide_1m retain-parse bun 16 68.9
+MEM wide_1m retain-parse baseline 16 71.2
+MEM wide_1m retain-parse perry 16 71.5
+MEM wide_1m retain-parse node 16 112.5
+MEM wide_1m retain-parse bun 16 68.9
+MEM wide_1m retain-parse baseline 16 71.2
+MEM wide_1m retain-stringify perry 1 30.6
+MEM wide_1m retain-stringify node 1 68.5
+MEM wide_1m retain-stringify bun 1 39.2
+MEM wide_1m retain-stringify baseline 1 30.2
+MEM wide_1m retain-stringify perry 1 30.5
+MEM wide_1m retain-stringify node 1 68.6
+MEM wide_1m retain-stringify bun 1 39.2
+MEM wide_1m retain-stringify baseline 1 30.2
+MEM wide_1m retain-stringify perry 1 30.5
+MEM wide_1m retain-stringify node 1 68.6
+MEM wide_1m retain-stringify bun 1 39.2
+MEM wide_1m retain-stringify baseline 1 30.2
+MEM wide_1m retain-stringify perry 16 45.8
+MEM wide_1m retain-stringify node 16 86.4
+MEM wide_1m retain-stringify bun 16 53.5
+MEM wide_1m retain-stringify baseline 16 45.4
+MEM wide_1m retain-stringify perry 16 45.7
+MEM wide_1m retain-stringify node 16 86.5
+MEM wide_1m retain-stringify bun 16 53.5
+MEM wide_1m retain-stringify baseline 16 45.4
+MEM wide_1m retain-stringify perry 16 45.7
+MEM wide_1m retain-stringify node 16 86.5
+MEM wide_1m retain-stringify bun 16 53.5
+MEM wide_1m retain-stringify baseline 16 45.5
+PASSED memory 432

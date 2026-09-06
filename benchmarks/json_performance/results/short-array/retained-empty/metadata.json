@@ -1,0 +1,8 @@
+{
+  "utc": "2026-09-06T23:12:39Z",
+  "purpose": "Additional empty-object retained-output check; same application object, input, default GC and counts for all four engines. RSS is whole-process. Final output verification occurs after current-RSS reading.",
+  "worker_sha256": {
+    "baseline": "9a36a295d2f35bbb6717da7ad562010e2ef2442ff48d4a02d383d441683cacb7",
+    "perry": "df0b36ba5211ee25a89d0f90d1558e61dd2ec5921de1773e503948eb8bf5848d"
+  }
+}

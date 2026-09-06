@@ -1,0 +1,78 @@
+(lldb) target create "/Users/amlug/projects/perry/codex-json-fastpaths-artifacts/short-array-test_gap_json_short_array_storage"
+Current executable set to '/Users/amlug/projects/perry/codex-json-fastpaths-artifacts/short-array-test_gap_json_short_array_storage' (arm64).
+(lldb) command source -s 0 '/Users/amlug/projects/perry/codex-json-fastpaths-artifacts/short-array-gc-debug-growth.lldb'
+Executing commands in '/Users/amlug/projects/perry/codex-json-fastpaths-artifacts/short-array-gc-debug-growth.lldb'.
+(lldb) settings set target.disable-aslr false
+(lldb) settings set target.env-vars PERRY_GC_SCHEDULE_SEED=17 PERRY_GC_SCHEDULE_RATE=0.1 PERRY_GC_PROTECT_FROMSPACE=1 PERRY_GC_VERIFY_EVACUATION=1
+(lldb) breakpoint set --func-regex panic_stale_forwarded_reference
+Breakpoint 1: where = short-array-test_gap_json_short_array_storage`perry_runtime::gc::verify::panic_stale_forwarded_reference, address = 0x0000000100cbe5ac
+(lldb) run
+[gc-schedule] seeded GC-schedule fuzzing ACTIVE: seed=17 rate=0.1
+[gc-schedule] reproduce with: PERRY_GC_SCHEDULE_SEED=17 PERRY_GC_SCHEDULE_RATE=0.1
+growth 0 36 [0,null,null,null,"filled",null]
+getter [0,"from getter",2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19] 2
+mutated ["inserted","front","end"] 0,1,2
+mutated [null,false,true,"inserted","front","end"] 0,1,2,3,4,5
+mutated ["tag_b","tag_a","inserted","front","end"] 0,1,2,3,4
+mutated ["tail",[true,false],{"x":"heap child"},0,"inserted","front","end"] 0,1,2,3,4,5,6
+mutated [9,8,7,6,5,4,3,2,1,"inserted","front","end"] 0,1,2,3,4,5,6,7,8,9,10,11
+invalid 8
+Process 32563 launched: '/Users/amlug/projects/perry/codex-json-fastpaths-artifacts/short-array-test_gap_json_short_array_storage' (arm64)
+Process 32563 stopped
+* thread #1, queue = 'com.apple.main-thread', stop reason = breakpoint 1.1
+    frame #0: 0x00000001050ba5ac short-array-test_gap_json_short_array_storage`perry_runtime::gc::verify::panic_stale_forwarded_reference
+short-array-test_gap_json_short_array_storage`perry_runtime::gc::verify::panic_stale_forwarded_reference:
+->  0x1050ba5ac <+0>:  sub    sp, sp, #0x80
+    0x1050ba5b0 <+4>:  stp    x29, x30, [sp, #0x70]
+    0x1050ba5b4 <+8>:  add    x29, sp, #0x70
+    0x1050ba5b8 <+12>: stp    x0, x1, [sp, #0x8]
+Target 0: (short-array-test_gap_json_short_array_storage) stopped.
+(lldb) register read x0 x1 x2 x3 x4
+      x0 = 0x00000001051c20cc  short-array-test_gap_json_short_array_storage`anon.438b28c8644b10f28676d307896bf03a.686 + 31
+      x1 = 0x000000000000000b
+      x2 = 0x0000020dd1a71c58
+      x3 = 0x7ffd020dd1a82fe0
+      x4 = 0x7ffd020dd54e2d68
+(lldb) bt 15
+* thread #1, queue = 'com.apple.main-thread', stop reason = breakpoint 1.1
+  * frame #0: 0x00000001050ba5ac short-array-test_gap_json_short_array_storage`perry_runtime::gc::verify::panic_stale_forwarded_reference
+    frame #1: 0x000000010490dde4 short-array-test_gap_json_short_array_storage`perry_runtime::gc::verify::verify_heap_object_fields::{closure#0} + 332
+    frame #2: 0x0000000104bb5c50 short-array-test_gap_json_short_array_storage`<perry_runtime::gc::layout::GcMutableSlotDescriptor>::visit_slots + 132
+    frame #3: 0x000000010494d4a8 short-array-test_gap_json_short_array_storage`perry_runtime::gc::layout_slot_visit::visit_gc_layout_slot_descriptors + 1456
+    frame #4: 0x00000001048ff16c short-array-test_gap_json_short_array_storage`perry_runtime::gc::layout_slot_visit::visit_gc_rewrite_slot_descriptors::<perry_runtime::gc::layout_slot_visit::visit_gc_rewrite_slots<perry_runtime::gc::verify::verify_heap_object_fields::{closure#0}>::{closure#0}> + 508
+    frame #5: 0x0000000104567e1c short-array-test_gap_json_short_array_storage`perry_runtime::gc::verify::verify_heap_objects::{closure#0} + 80
+    frame #6: 0x0000000104575bfc short-array-test_gap_json_short_array_storage`perry_runtime::arena::walk::arena_walk_objects::<perry_runtime::gc::verify::verify_heap_objects::{closure#1}> + 1032
+    frame #7: 0x0000000104749244 short-array-test_gap_json_short_array_storage`perry_runtime::gc::verify::verify_evacuated_no_stale_forwarded_refs + 1876
+    frame #8: 0x0000000104a8bc30 short-array-test_gap_json_short_array_storage`perry_runtime::gc::copying::run_copied_minor_attempt + 8764
+    frame #9: 0x00000001047398e8 short-array-test_gap_json_short_array_storage`perry_runtime::gc::gc_collect_minor_with_trigger_inner + 1768
+    frame #10: 0x0000000104744bec short-array-test_gap_json_short_array_storage`perry_runtime::gc::policy::gc_safepoint_moving_minor + 992
+    frame #11: 0x0000000104744ee8 short-array-test_gap_json_short_array_storage`perry_runtime::gc::policy::js_gc_loop_safepoint_armed + 384
+    frame #12: 0x00000001044007a8 short-array-test_gap_json_short_array_storage`main + 14860
+    frame #13: 0x0000000189b13e00 dyld`start + 6992
+(lldb) memory read --format x --size 8 --count 28 `$x2-96`
+0x20dd1a71bf8: 0x0000000000000000 0x7fff020dd1a82ef8
+0x20dd1a71c08: 0x7ffc000000000001 0x0000002800202202
+0x20dd1a71c18: 0x8000114afffffffe 0x0000000000000000
+0x20dd1a71c28: 0x7fff020dd1a82fb0 0x7ffc000000000001
+0x20dd1a71c38: 0x0000003002202202 0x8000116600000000
+0x20dd1a71c48: 0x0000000000000000 0x0000000000000000
+0x20dd1a71c58: 0x7ffd020dd1a82fe0 0x7ffd020dd1a83000
+0x20dd1a71c68: 0x0000003002202202 0x8000116600000000
+0x20dd1a71c78: 0x0000000000000000 0x3ff0000000000000
+0x20dd1a71c88: 0x7ffd020dd1a83020 0x7ffd020dd1a83040
+0x20dd1a71c98: 0x0000003002202202 0x8000116600000000
+0x20dd1a71ca8: 0x0000000000000000 0x4000000000000000
+0x20dd1a71cb8: 0x7ffd020dd1a83060 0x7ffd020dd1a83080
+0x20dd1a71cc8: 0x0000003002202202 0x8000116600000000
+(lldb) memory read --format x --size 8 --count 8 `($x3 & 0x0000ffffffffffff)-8`
+0x20dd1a82fd8: 0x000000204020a201 0x0000020dd54e2d68
+0x20dd1a82fe8: 0x7ff905615f676174 0x7ff905625f676174
+0x20dd1a82ff8: 0x000000200020a201 0x0000020dd54e2e78
+0x20dd1a83008: 0x0000000000000000 0x7ffd020dd1a8c588
+(lldb) memory read --format x --size 8 --count 8 `($x4 & 0x0000ffffffffffff)-8`
+0x20dd54e2d60: 0x0000011040202201 0x0000002000000016
+0x20dd54e2d70: 0x7ff905615f676174 0x7ff905625f676174
+0x20dd54e2d80: 0x0000000000000000 0x3ff0000000000000
+0x20dd54e2d90: 0x4000000000000000 0x4008000000000000
+(lldb) process kill
+Process 32563 exited with status = 9 (0x00000009) killed

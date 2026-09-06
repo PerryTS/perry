@@ -1,0 +1,5 @@
+{
+  "exit": 1,
+  "stdout": "growth 0 36 [0,null,null,null,\"filled\",null]\ngetter [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19] 0\nmutated [\"inserted\",\"front\",\"end\"] 0,1,2\nmutated [null,false,true,\"inserted\",\"front\",\"end\"] 0,1,2,3,4,5\nmutated [\"tag_b\",\"tag_a\",\"inserted\",\"front\",\"end\"] 0,1,2,3,4\nmutated [\"tail\",[true,false],{\"x\":\"heap child\"},0,\"inserted\",\"front\",\"end\"] 0,1,2,3,4,5,6\nmutated [9,8,7,6,5,4,3,2,1,\"inserted\",\"front\",\"end\"] 0,1,2,3,4,5,6,7,8,9,10,11\ninvalid 8\nretained 2 12000 72294000 {\"id\":11999,\"tags\":[\"tag_a\",\"tag_b\",0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19],\"data\":[0,{\"x\":\"heap child\"},11999]}\nzeros true [null,null]\n",
+  "stderr": "Error: short array failure\n    at new __AnonShape_d8241642917c4fa4 (<anonymous>)\n"
+}

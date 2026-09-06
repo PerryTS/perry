@@ -1,0 +1,10 @@
+settings set target.disable-aslr false
+settings set target.env-vars PERRY_GC_SCHEDULE_SEED=17 PERRY_GC_SCHEDULE_RATE=0.1 PERRY_GC_PROTECT_FROMSPACE=1 PERRY_GC_VERIFY_EVACUATION=1
+breakpoint set --func-regex panic_stale_forwarded_reference
+run
+register read x0 x1 x2 x3 x4
+bt 15
+memory read --format x --size 8 --count 28 `$x2-96`
+memory read --format x --size 8 --count 8 `($x3 & 0x0000ffffffffffff)-8`
+memory read --format x --size 8 --count 8 `($x4 & 0x0000ffffffffffff)-8`
+process kill

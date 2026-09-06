@@ -1,3 +1,13 @@
+The latest measured source, short-array (2e79d122), reduces paired 20 MB array/object-root stringify CPU **5.58%/5.37%** and peak RSS about **12.4 MiB**. Object-root parse peak falls **19.7/64.8/91.8 MiB** at 1/8/20 MB. Short parsed arrays now allocate only their completed width; lazy growth aliases and descriptor flags resolve the live array header.
+
+All-row inventory is **12/38 CPU, 65/74 peak RSS and 33/36 retained RSS**. No-regression acceptance fails: null/string/empty/tiny parse and small-record stringify regress, most other peak rows rise slightly, and older numeric/heterogeneous/small-object regressions remain. Both new broad-fixture GC seeds fail; a no-JSON ordinary-array control fails identically on the reference and candidate. This correctness requirement remains open.
+
+195 runtime tests, 40 default compiled comparisons, one forced-lazy comparison and 68 hashes pass. Moving-GC runs: 38 pass and two fail. Full and complete 896-trial paired matrices plus 24 retained-empty trials qualify with 31/51 clean observations. Four stronger canonical-key relocation tests now pass. Production GC policy and hooks remain unchanged.
+
+[Latest 38 CPU rows](results/short-array/cpu-38.md), [CPU and RAM](results/short-array/tables.md), [complete tradeoffs](results/short-array/README.md), [open GC issue](results/short-array/gc-open-issue.md), [GC boundary](results/short-array/gc-coordination.md), [next work](results/short-array/next-steps.md).
+
+Earlier checkpoints follow.
+
 The latest measured source, inline-object (9187bd95), reduces paired tiny-object
 parse CPU **67.04%**, from 0.363078 to 0.1196715 microseconds (3.03x faster).
 It decodes eligible flat objects into inline native storage before collection,
