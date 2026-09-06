@@ -447,7 +447,29 @@ pub struct LoweringContext {
     pub(crate) current_namespace: Option<String>,
     /// Module-level native instances that survive scope exits.
     /// Used for variables assigned from native calls inside functions (e.g., `mongoClient = await MongoClient.connect(uri)`).
+    ///
+    /// NAME-keyed and module-wide, so it is no longer authoritative for the
+    /// bare-assignment form: see `local_id_native_instances`, which supersedes
+    /// it whenever the assignment target resolves to a binding (#9847). This
+    /// stays the fallback for a target that resolves to no local at all.
     pub(crate) module_native_instances: Vec<(String, String, String)>,
+    /// #9847: the RESOLVED bindings that hold a native instance produced by a
+    /// bare assignment (`O = cp.spawn(...)`), so "this binding is a
+    /// `child_process` handle" stops meaning "something in this module spells
+    /// it this way".
+    ///
+    /// `module_native_instances` alone tagged the NAME for the whole module and
+    /// was never truncated, so one `O = cp.spawn(...)` in a bundled helper made
+    /// every other `O` in a 13 MB single-module bundle a
+    /// `child_process::Instance` — including a `for (let {segment: O} of …)`
+    /// binding holding a grapheme string, whose `O.codePointAt(0)` then lowered
+    /// as `NativeMethodCall{module:"child_process", class_name:Some("Instance")}`
+    /// and only worked because native-instance dispatch falls through to a
+    /// generic path on a string receiver. Same defect class as #7775's
+    /// `proxy_locals` → `proxy_local_ids`, and keyed the same way: a different
+    /// binding has a different `LocalId`, so a stale entry can never be reached
+    /// through a homonym, and no scope-exit truncation is needed.
+    pub(crate) local_id_native_instances: HashMap<LocalId, (String, String)>,
     /// Whether this module uses fetch() — requires perry-stdlib
     pub(crate) uses_fetch: bool,
     /// Issue #76 — set when any `WebAssembly.*` HIR variant is lowered.
