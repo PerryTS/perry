@@ -141,6 +141,52 @@ use super::*;
 /// Ceiling and power-on value: the previous fixed threshold.
 pub(super) const GC_TENURING_SURVIVALS_MAX: u8 = GC_COPY_PROMOTION_SURVIVALS;
 
+/// The lowest threshold the **occupancy rule** may select.
+///
+/// Not a tuned number: it is the lowest S at which `copied_bytes > 0`, i.e. the
+/// lowest value that still PRODUCES the survivor-round measurement. At S=1
+/// nothing enters the survivor space; at S=2 exactly one cohort does.
+///
+/// Why the occupancy rule must not reach 1 (#9851). A threshold of 1 is a claim
+/// about **lifetime** — "this cohort will not die, promote it on first copy" —
+/// and the occupancy rule measures **space**: `(S-1) * influx <= desired` asks
+/// only whether one cohort fits in the desired survivor size. When it does not,
+/// S=1 does not reduce the surviving data; it relocates it, from the survivor
+/// space (where the next minor re-examines it for free) to the old generation
+/// (which only a full can reclaim). The formula has no term for that.
+///
+/// Worse, S=1 is **self-sealing**: with nothing copied, `copied_bytes` is 0, so
+/// next cycle `prev_copied` is 0, so the survival-rate lock's guard
+/// (`prev_copied >= substantial`) is false forever. The state destroys the only
+/// measurement that could refute it, and both remaining exits — the occupancy
+/// recompute and `PROMOTE_LOCK`'s unlock — are *quiet-influx* exits, which say
+/// nothing about lifetime.
+///
+/// Measured on the compiled claude-code TUI, 4 streamed turns in one process,
+/// both arms from one binary via `PERRY_GC_TENURING_SURVIVALS` (3300-char):
+///
+/// | | adaptive | pinned S=2 |
+/// |---|---|---|
+/// | minors at S=1 | 351 of 352, carrying 100 % of promotion | 0 |
+/// | survivor-round mortality samples | **1** | **393** |
+/// | median mortality | **0.9 %** — the first minor of the process | **26.1 %** |
+/// | ...in steady turns 2 / 3 / 4 | not measurable | 26.1 / 26.1 / 26.1 % |
+/// | promoted | 1057 MB | 792 MB |
+///
+/// The loop takes its one and only mortality sample on the first minor of the
+/// process — before any steady state, when the cohort really is immortal —
+/// concludes "nothing dies", and can never sample again. In steady state an
+/// aging round filters about **a quarter** of the cohort.
+///
+/// Reaching 1 still belongs to the two paths that actually MEASURE mortality:
+/// the survival-rate lock (`prev_copied` substantial and >=90 % of it came back
+/// alive) and the sweep seed (the mark-sweep's own Eden live/dead split). Both
+/// are untouched. So the rule is self-limiting: on a workload whose cohort
+/// genuinely does not die, the lock fires after one cohort's copy and takes the
+/// loop back to 1 — measured 5 of 358 substantial cohorts under that threshold
+/// on cc, which is why the clamp sticks there rather than oscillating.
+pub(super) const OCCUPANCY_MIN_SURVIVALS: u8 = 2;
+
 /// Consecutive cycles the computed target must exceed the current threshold
 /// before it is raised (by one step).
 const RAISE_DEBOUNCE_CYCLES: u8 = 2;
@@ -519,7 +565,14 @@ pub(super) fn retune_after_scavenge(
         return;
     }
 
-    let target = compute_target_survivals(eden_live_bytes, desired);
+    // #9851: the occupancy rule measures SPACE and may not conclude 1, which is
+    // a claim about LIFETIME — see `OCCUPANCY_MIN_SURVIVALS`. Deliberately
+    // clamped HERE and not inside `compute_target_survivals`: that pure function
+    // has a second caller, `full_seed_promotes_on_first_copy`, which gates the
+    // sweep seed on `... != 1` ("would occupancy alone already promote on first
+    // copy?"). Clamping the shared function would silently disarm the sweep
+    // seed, which is one of the two paths that IS allowed to reach 1.
+    let target = compute_target_survivals(eden_live_bytes, desired).max(OCCUPANCY_MIN_SURVIVALS);
     let next = if target < current {
         RAISE_STREAK.with(|s| s.set(0));
         target
@@ -880,20 +933,23 @@ mod tests {
         let desired = desired_survivor_bytes();
         assert_eq!(tenuring_survivals(), 4);
 
-        // Heavy influx: instant drop to 1.
+        // Heavy influx: instant drop, no debounce. #9851 changed the FLOOR this
+        // lands on (2, not 1 — the occupancy rule may not claim a lifetime), not
+        // the asymmetry this test is named for: 4 -> 2 in one cycle is the same
+        // "drops immediately" property that 4 -> 1 was.
         retune_after_scavenge(desired * 2, 0, 0);
-        assert_eq!(tenuring_survivals(), 1);
+        assert_eq!(tenuring_survivals(), OCCUPANCY_MIN_SURVIVALS);
 
         // One quiet cycle: no rise yet (debounce).
         retune_after_scavenge(0, 0, 0);
-        assert_eq!(tenuring_survivals(), 1);
+        assert_eq!(tenuring_survivals(), OCCUPANCY_MIN_SURVIVALS);
         // Second quiet cycle: rise by exactly one step, not to the target.
         retune_after_scavenge(0, 0, 0);
-        assert_eq!(tenuring_survivals(), 2);
+        assert_eq!(tenuring_survivals(), 3);
 
         // Heavy again: streak resets and threshold drops straight back.
         retune_after_scavenge(desired * 2, 0, 0);
-        assert_eq!(tenuring_survivals(), 1);
+        assert_eq!(tenuring_survivals(), OCCUPANCY_MIN_SURVIVALS);
 
         // Sustained quiet recovers to the ceiling two cycles per step.
         for _ in 0..6 {
@@ -911,15 +967,115 @@ mod tests {
         // every cycle even while the cap scale walks up underneath it. An
         // influx only marginally above the base desired is a different case:
         // the growing cap re-classifies it as moderate, which is correct.
+        // #9851: the fixed point is now the occupancy floor (2) rather than 1.
+        // Fixed-POINTNESS is what this test protects — no oscillation while the
+        // cap scale walks up underneath — and that is unchanged.
         let heavy = gc_scavenge_nursery_cap_bytes();
         for _ in 0..10 {
             retune_after_scavenge(heavy, 0, 0);
-            assert_eq!(tenuring_survivals(), 1);
+            assert_eq!(tenuring_survivals(), OCCUPANCY_MIN_SURVIVALS);
         }
         assert_eq!(
             scavenge_nursery_cap_effective_bytes(),
             gc_scavenge_nursery_cap_bytes() * NURSERY_CAP_SCALE_MAX as usize,
             "sustained heavy influx must also walk the cap to its ceiling"
+        );
+        reset_for_test();
+    }
+
+    /// #9851, both halves of the rule in one test, in the #7909 two-phase shape
+    /// so the decline is ATTRIBUTED rather than merely absent.
+    ///
+    /// Phase 1 — the occupancy rule alone, on an influx far above `desired`,
+    /// must stop at 2 and NOT claim promote-on-first-copy. That is the whole
+    /// change: 2 is the lowest threshold that still puts a cohort through the
+    /// survivor space, so the loop keeps producing the measurement that could
+    /// refute it.
+    ///
+    /// Phase 2 — the same heap, once a substantial cohort HAS come back fully
+    /// alive, must still reach 1 through the survival-rate lock. The rule
+    /// removes an unmeasured conclusion, not the measured one, and this half is
+    /// what makes it self-limiting rather than a blanket floor.
+    ///
+    /// Sabotage: drop the `.max(OCCUPANCY_MIN_SURVIVALS)` in
+    /// `retune_after_scavenge` and phase 1 fails (the loop reports 1 with no
+    /// evidence). Drop the lock instead and phase 2 fails.
+    #[test]
+    fn occupancy_alone_never_claims_promote_on_first_copy_but_the_lock_still_can() {
+        reset_for_test();
+        let d = desired_survivor_bytes();
+
+        // Phase 1: influx 16x the desired survivor size — the occupancy formula
+        // computes 1 (integer division: 1 + desired/influx). No cohort has been
+        // rated yet, so there is NO lifetime evidence on this heap.
+        assert_eq!(
+            compute_target_survivals(16 * d, d),
+            1,
+            "precondition: the occupancy ARITHMETIC still computes 1 — this \
+             change clamps what the loop may do with it, not the formula"
+        );
+        for _ in 0..5 {
+            retune_after_scavenge(16 * d, 0, 0);
+            assert_eq!(
+                tenuring_survivals(),
+                OCCUPANCY_MIN_SURVIVALS,
+                "occupancy measures SPACE and must not conclude promote-on-first-copy"
+            );
+        }
+        assert!(
+            !PROMOTE_LOCK.with(Cell::get),
+            "and it must not have taken the lock's route to get there"
+        );
+
+        // Phase 2: now a substantial cohort goes through the survivor space and
+        // comes back fully alive. THAT is lifetime evidence, and it must still
+        // reach 1.
+        //
+        // TWO cycles, deliberately: the lock rates `survivor_live_bytes` against
+        // the PREVIOUS cycle's `copied_bytes` (`PREV_COPIED_BYTES`), so the
+        // first call is what puts a cohort in the survivor space and the second
+        // is what reports it coming back alive. Phase 1 above copied nothing, so
+        // there is nothing to rate until this pair runs — which is precisely the
+        // blindness the change is about, here as a test mechanic.
+        retune_after_scavenge(16 * d, 3 * d, 0);
+        assert_eq!(
+            tenuring_survivals(),
+            OCCUPANCY_MIN_SURVIVALS,
+            "one cohort into the survivor space is not yet evidence about it"
+        );
+        retune_after_scavenge(16 * d, 3 * d, 3 * d);
+        assert_eq!(
+            tenuring_survivals(),
+            1,
+            "a substantial intake that fully survives its round must still lock \
+             promote-on-first-copy — the measured path is untouched"
+        );
+        assert!(PROMOTE_LOCK.with(Cell::get), "...through the lock");
+        reset_for_test();
+    }
+
+    /// #9851: a cohort that DIES in its survivor round must keep the loop at the
+    /// occupancy floor rather than being locked to 1 — the case cc actually is.
+    /// Measured there: 26.1 % of each cohort dies in one survivor round, in
+    /// steady state, on 393 samples; the lock needs >=90 % survival, so it
+    /// correctly stays out and the clamp holds instead of oscillating.
+    #[test]
+    fn a_cohort_that_dies_in_its_round_holds_at_the_occupancy_floor() {
+        reset_for_test();
+        let d = desired_survivor_bytes();
+        // Heavy influx (occupancy says 1) AND a substantial cohort of which
+        // ~26 % dies — cc's steady state, in miniature.
+        for _ in 0..8 {
+            retune_after_scavenge(16 * d, 4 * d, 3 * d);
+        }
+        assert!(
+            !PROMOTE_LOCK.with(Cell::get),
+            "74 % survival is below the lock's 90 % bar: the lock must stay out"
+        );
+        assert_eq!(
+            tenuring_survivals(),
+            OCCUPANCY_MIN_SURVIVALS,
+            "so the loop holds at the occupancy floor and keeps aging the cohort"
         );
         reset_for_test();
     }
