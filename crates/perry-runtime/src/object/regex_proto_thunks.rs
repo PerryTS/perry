@@ -469,6 +469,11 @@ fn record_canonical_test_site(proto_obj: *mut ObjectHeader) {
             std::sync::atomic::Ordering::Release,
         );
     });
+    // GC_STORE_AUDIT(ROOT): REGEXP_PROTOTYPE_PTR is a mutable raw-address root
+    // visited by scan_object_cache_roots_mut. `RealmAtomicI64::store` routes
+    // through `runtime_store_root_atomic_raw_i64`, so the heap-word barrier
+    // runs here too — the sibling closure store spells that out only because
+    // it goes through `with_slot` and bypasses the wrapper.
     REGEXP_PROTOTYPE_PTR.store(addr, std::sync::atomic::Ordering::Release);
 }
 

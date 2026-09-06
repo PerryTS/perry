@@ -574,7 +574,10 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
     # point of the check: whichever allocator RegExp is born from, it is born
     # with its OWN GcHeader kind, never as a generic object that something later
     # has to re-identify by payload magic.
-    regexp_alloc = function_body(regex_runtime, "js_regexp_new")
+    # #9892 split construction into a thin `js_regexp_new` / `js_regexp_new_site`
+    # pair over a shared `js_regexp_new_impl`, which is where the allocation now
+    # lives. Follow the birth site rather than the entry point's name.
+    regexp_alloc = function_body(regex_runtime, "js_regexp_new_impl")
     require_code(
         regexp_alloc,
         r"(?:gc_malloc|arena_alloc_gc)\s*\([^;]*crate::gc::GC_TYPE_REGEXP",
