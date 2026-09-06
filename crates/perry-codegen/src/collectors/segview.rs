@@ -204,7 +204,9 @@ impl SegmentForOfSite {
 /// `GetIterator` whose subject is a `.segment(…)` call.
 pub fn collect_segment_for_of_sites(stmts: &[Stmt]) -> Vec<SegmentForOfSite> {
     let mut candidates: Vec<Candidate> = Vec::new();
-    for_each_stmt_list(stmts, &mut |list| find_candidates_in_list(list, &mut candidates));
+    for_each_stmt_list(stmts, &mut |list| {
+        find_candidates_in_list(list, &mut candidates)
+    });
     // A statement list should be visited exactly once by `for_each_stmt_list`;
     // pin that rather than trusting it, so a descent bug shows up as a missing
     // site and never as a double-counted one.
@@ -408,10 +410,9 @@ fn destructure_head(body: &[Stmt]) -> Option<HeadShape> {
     for s in body.iter().skip(1) {
         let Stmt::Let {
             id,
-            init:
-                Some(Expr::PropertyGet {
-                    object, property, ..
-                }),
+            init: Some(Expr::PropertyGet {
+                object, property, ..
+            }),
             ..
         } = s
         else {

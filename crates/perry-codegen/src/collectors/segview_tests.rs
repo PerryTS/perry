@@ -118,7 +118,10 @@ fn cc_body() -> Vec<Stmt> {
         let_(
             10,
             "w",
-            call(pget(Expr::LocalGet(SEG), "codePointAt"), vec![Expr::Integer(0)]),
+            call(
+                pget(Expr::LocalGet(SEG), "codePointAt"),
+                vec![Expr::Integer(0)],
+            ),
         ),
         Stmt::If {
             condition: Expr::RegExpTest {
@@ -141,7 +144,10 @@ fn fires_on_the_cc_shape_and_names_the_two_view_entry_points() {
         SegViewVerdict::Fires,
         "the record's only uses are the head's own field reads"
     );
-    assert!(s.two_arg_open, "the subject is the `X.segment(q)` call itself");
+    assert!(
+        s.two_arg_open,
+        "the subject is the `X.segment(q)` call itself"
+    );
     assert_eq!(s.record_keys, vec!["segment".to_string()]);
     assert_eq!(s.segment_id, Some(SEG));
     assert_eq!(s.segment_uses.code_point_at, 1);
@@ -209,7 +215,13 @@ fn a_record_use_inside_a_closure_rejects() {
     }));
     let sites = collect_segment_for_of_sites(&region(body));
     assert!(
-        matches!(sites[0].verdict, SegViewVerdict::RecordEscapes { uses: 2, destructure_reads: 1 }),
+        matches!(
+            sites[0].verdict,
+            SegViewVerdict::RecordEscapes {
+                uses: 2,
+                destructure_reads: 1
+            }
+        ),
         "expected record_escapes, got {:?}",
         sites[0].verdict
     );
