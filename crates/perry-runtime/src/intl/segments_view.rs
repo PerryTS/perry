@@ -378,6 +378,28 @@ pub extern "C" fn js_segments_view_regexp_test(cursor: f64, regex: f64) -> f64 {
     }
 }
 
+// Keepalive anchors. The compiler emits calls to these only when the view tier
+// fires, so without a reference the bundle link's stub localization can drop
+// them before the lowering that needs them is ever compiled — the same reason
+// `js_for_of_next` carries `KEEP_JS_FOR_OF_NEXT`.
+#[cfg(feature = "keepalive-anchors")]
+#[used]
+static KEEP_JS_SEGMENTS_VIEW_OPEN: extern "C" fn(f64, f64) -> f64 = js_segments_view_open;
+#[cfg(feature = "keepalive-anchors")]
+#[used]
+static KEEP_JS_SEGMENTS_VIEW_NEXT: extern "C" fn(f64) -> f64 = js_segments_view_next;
+#[cfg(feature = "keepalive-anchors")]
+#[used]
+static KEEP_JS_SEGMENTS_VIEW_CODE_POINT_AT: extern "C" fn(f64, f64) -> f64 =
+    js_segments_view_code_point_at;
+#[cfg(feature = "keepalive-anchors")]
+#[used]
+static KEEP_JS_SEGMENTS_VIEW_SEGMENT: extern "C" fn(f64) -> f64 = js_segments_view_segment;
+#[cfg(feature = "keepalive-anchors")]
+#[used]
+static KEEP_JS_SEGMENTS_VIEW_REGEXP_TEST: extern "C" fn(f64, f64) -> f64 =
+    js_segments_view_regexp_test;
+
 // --- the `open` predicates, all non-allocating after the first intern -------
 
 fn interned(name: &[u8]) -> *const StringHeader {
