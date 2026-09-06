@@ -49,8 +49,15 @@
   and the sweep seed (the mark-sweep's own Eden live/dead split). Both are
   untouched, so the rule is self-limiting: on a workload whose cohort genuinely
   does not die, the lock fires after one cohort's copy and takes the loop back
-  to 1. On claude-code it correctly does not — 5 of 358 substantial cohorts sit
-  under the lock's threshold — so the clamp holds rather than oscillating.
+  to 1.
+
+  On claude-code it **does** fire, 8-12 times per four-turn run, and the
+  companion entry below is why: once the clamp lets the ladder climb past 2 the
+  lock is rating a population its own threshold selected. An earlier version of
+  this entry claimed the opposite ("5 of 358 substantial cohorts sit under the
+  lock's threshold, so the clamp holds rather than oscillating"); that figure
+  was measured with the threshold *pinned*, where every cohort the lock can
+  rate is a first-round cohort, and it does not describe the rule running.
 
   Two existing tests change their expected value from 1 to 2 and keep their
   names, structure and invariants: `drops_immediately_and_rises_debounced`
