@@ -52,6 +52,11 @@ static REGEXP_TEST_ACCEPTED: AtomicU64 = AtomicU64::new(0);
 static REGEXP_TEST_DECLINED: AtomicU64 = AtomicU64::new(0);
 
 fn diag_on() -> bool {
+    // Always on under test: a counter nothing increments cannot be asserted on,
+    // and the decline counters exist so a decline names its cause.
+    if cfg!(test) {
+        return true;
+    }
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var("PERRY_SEGVIEW_DIAG").is_ok())
 }
@@ -63,29 +68,18 @@ fn bump(c: &AtomicU64) {
     }
 }
 
-/// One line, on demand. A decline that names its own reason is the difference
-/// between "the tier did not fire" and "the tier fired and found nothing".
-pub fn report_segview_counters() {
-    if !diag_on() {
-        return;
-    }
-    eprintln!(
-        "[segview] opens={} declines: not_segmenter={} not_grapheme={} segment_patched={} \
-         not_string={} not_utf8={} empty={} | nexts={} code_point_at={} materialise_segment={} \
-         regexp_test: accepted={} declined={}",
+/// The counters' consumer today is the test suite, which is why there is no
+/// `report_*` function: a printer with no caller is dead code, and the tally
+/// the campaign reads is the COMPILER-side `PERRY_SEGVIEW_DIAG` one. Wire a
+/// runtime-side printer when a rig run needs these numbers, not before.
+#[cfg(test)]
+fn counters() -> [u64; 4] {
+    [
         OPENS.load(Ordering::Relaxed),
-        DECLINE_NOT_SEGMENTER.load(Ordering::Relaxed),
-        DECLINE_NOT_GRAPHEME.load(Ordering::Relaxed),
-        DECLINE_SEGMENT_PATCHED.load(Ordering::Relaxed),
         DECLINE_NOT_STRING.load(Ordering::Relaxed),
-        DECLINE_NOT_UTF8.load(Ordering::Relaxed),
-        DECLINE_EMPTY.load(Ordering::Relaxed),
         NEXTS.load(Ordering::Relaxed),
-        CODE_POINT_ATS.load(Ordering::Relaxed),
-        MATERIALISE_SEGMENT.load(Ordering::Relaxed),
-        REGEXP_TEST_ACCEPTED.load(Ordering::Relaxed),
-        REGEXP_TEST_DECLINED.load(Ordering::Relaxed),
-    );
+        crate::object::regex_proto_thunks::REGEXP_PROTOTYPE_TEST_WALKS.load(Ordering::Relaxed),
+    ]
 }
 
 // --- cursor plumbing --------------------------------------------------------
@@ -99,6 +93,7 @@ fn cursor_ptr(value: f64) -> Option<*mut ObjectHeader> {
     Some(obj)
 }
 
+#[cfg(test)]
 #[inline(always)]
 fn num_field(obj: *mut ObjectHeader, index: u32) -> usize {
     let bits = crate::object::js_object_get_field(obj, index);
@@ -107,6 +102,49 @@ fn num_field(obj: *mut ObjectHeader, index: u32) -> usize {
         n as usize
     } else {
         0
+    }
+}
+
+/// Direct view of the cursor's fixed inline payload. `cursor_ptr` has already
+/// established the class id, and every cursor is allocated with exactly
+/// `CURSOR_FIELDS`, so these indexed reads need neither a shape-table lookup
+/// nor an overflow check.
+#[derive(Clone, Copy)]
+struct CursorFields(*mut JSValue);
+
+impl CursorFields {
+    #[inline(always)]
+    unsafe fn from_cursor(cursor: *mut ObjectHeader) -> Self {
+        Self((cursor as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut JSValue)
+    }
+
+    #[inline(always)]
+    unsafe fn value(self, index: u32) -> JSValue {
+        *self.0.add(index as usize)
+    }
+
+    #[inline(always)]
+    unsafe fn number(self, index: u32) -> usize {
+        let n = self.value(index).to_number();
+        if n.is_finite() && n >= 0.0 {
+            n as usize
+        } else {
+            0
+        }
+    }
+
+    /// Store a value whose representation is provably an IEEE number. Cursor
+    /// slots 1..=4 are initialized as numbers and no writer stores any other
+    /// kind, so there is no child edge for the write barrier to remember.
+    #[inline(always)]
+    unsafe fn set_number(self, index: u32, value: usize) {
+        debug_assert!((F_BYTE_START..=F_UTF16_LEN).contains(&index));
+        // GC_STORE_AUDIT(NUMBER): `JSValue::number` cannot carry a heap edge;
+        // `cursor_position_fields_are_never_pointer_typed` pins the invariant
+        // across every product writer.
+        self.0
+            .add(index as usize)
+            .write(JSValue::number(value as f64));
     }
 }
 
@@ -119,13 +157,44 @@ fn set_num_field(obj: *mut ObjectHeader, index: u32, value: usize) {
 /// dropped at the end of the call; a short (SSO) string is decoded into the
 /// caller's stack buffer, so neither case allocates and neither case leaks an
 /// address.
+///
+/// **The UTF-8 validation is done ONCE, in `open`, and is not repeated here.**
+/// Re-validating cost 6.2 % of the loop's thread as `core::str::from_utf8`
+/// self, because every entry point re-derives the borrow per call (the §9a
+/// rooting contract) and each derivation walked the whole input again.
+///
+/// The invariant that makes `from_utf8_unchecked` sound here, stated so it can
+/// be checked rather than trusted:
+///
+/// 1. `F_INPUT` is written exactly once, by `js_segments_view_open`, and never
+///    reassigned — no entry point below stores into it.
+/// 2. `open` refuses any input that is not already a string primitive and runs
+///    `std::str::from_utf8` on its bytes before allocating the cursor, so the
+///    value in that slot has been validated.
+/// 3. A collection may MOVE that string but never rewrites its bytes, and the
+///    traced slot is updated to the new address, so the bytes reachable here
+///    are the same bytes `open` validated.
+/// 4. The SSO path decodes the same value into the stack buffer, so it carries
+///    the same guarantee.
+///
+/// A `debug_assert` re-checks it in debug builds, which is where a future
+/// fourth writer to the slot would be caught.
 #[inline]
-fn with_input<R>(cursor: *mut ObjectHeader, f: impl FnOnce(&str) -> R) -> Option<R> {
-    let value = crate::object::js_object_get_field(cursor, F_INPUT);
+fn with_input<R>(fields: CursorFields, f: impl FnOnce(&str) -> R) -> Option<R> {
+    // SAFETY: `fields` was derived at entry from a branded cursor, and slot 0
+    // is the traced input value. Reading it here is the §9a re-derivation; no
+    // address derived from it is retained beyond this call.
+    let value = unsafe { fields.value(F_INPUT) };
     let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
     let bytes =
         unsafe { crate::string::js_string_key_bytes(JSValue::from_bits(value.bits()), &mut sso) }?;
-    let text = std::str::from_utf8(bytes).ok()?;
+    debug_assert!(
+        std::str::from_utf8(bytes).is_ok(),
+        "the cursor's input slot is written once, by `open`, from a value it \
+         validated — a failure here means a second writer appeared"
+    );
+    // SAFETY: invariants 1-4 above.
+    let text = unsafe { std::str::from_utf8_unchecked(bytes) };
     Some(f(text))
 }
 
@@ -227,7 +296,7 @@ pub extern "C" fn js_segments_view_open(segmenter: f64, input: f64) -> f64 {
 }
 
 /// Advance to the next grapheme boundary. `1.0` if a segment is now current,
-/// `0.0` at the end. **Allocation-free by contract**: three integer field
+/// `0.0` at the end. **Allocation-free by contract**: four integer field
 /// writes and a UAX #29 boundary scan, no arena allocation, no owned `String`,
 /// no descriptor insert — which is also why it cannot collect.
 #[no_mangle]
@@ -235,19 +304,23 @@ pub extern "C" fn js_segments_view_next(cursor: f64) -> f64 {
     let Some(c) = cursor_ptr(cursor) else {
         return 0.0;
     };
-    let from = num_field(c, F_BYTE_END);
-    let utf16_start = num_field(c, F_UTF16_START) + num_field(c, F_UTF16_LEN);
-    let step = with_input(c, |text| {
+    // SAFETY: `cursor_ptr` proved the fixed cursor layout.
+    let fields = unsafe { CursorFields::from_cursor(c) };
+    let from = unsafe { fields.number(F_BYTE_END) };
+    let utf16_start = unsafe { fields.number(F_UTF16_START) + fields.number(F_UTF16_LEN) };
+    let step = with_input(fields, |text| {
         next_boundary(text, from).map(|next| (next, super::segmenter::utf16_len(&text[from..next])))
     })
     .flatten();
     let Some((next, seg_u16)) = step else {
         return 0.0;
     };
-    set_num_field(c, F_BYTE_START, from);
-    set_num_field(c, F_UTF16_START, utf16_start);
-    set_num_field(c, F_BYTE_END, next);
-    set_num_field(c, F_UTF16_LEN, seg_u16 as usize);
+    unsafe {
+        fields.set_number(F_BYTE_START, from);
+        fields.set_number(F_UTF16_START, utf16_start);
+        fields.set_number(F_BYTE_END, next);
+        fields.set_number(F_UTF16_LEN, seg_u16 as usize);
+    }
     bump(&NEXTS);
     1.0
 }
@@ -269,14 +342,16 @@ pub extern "C" fn js_segments_view_code_point_at(cursor: f64, k: f64) -> f64 {
     if !k.is_finite() || k < 0.0 || k.fract() != 0.0 {
         return undef;
     }
+    // SAFETY: `cursor_ptr` proved the fixed cursor layout.
+    let fields = unsafe { CursorFields::from_cursor(c) };
     let k = k as usize;
-    if k >= num_field(c, F_UTF16_LEN) {
+    if k >= unsafe { fields.number(F_UTF16_LEN) } {
         return undef;
     }
-    let start = num_field(c, F_BYTE_START);
-    let end = num_field(c, F_BYTE_END);
+    let start = unsafe { fields.number(F_BYTE_START) };
+    let end = unsafe { fields.number(F_BYTE_END) };
     bump(&CODE_POINT_ATS);
-    with_input(c, |text| {
+    with_input(fields, |text| {
         let seg = &text[start..end];
         let mut utf16_pos = 0usize;
         for ch in seg.chars() {
@@ -307,14 +382,16 @@ pub extern "C" fn js_segments_view_segment(cursor: f64) -> f64 {
     let Some(c) = cursor_ptr(cursor) else {
         return undef;
     };
-    let start = num_field(c, F_BYTE_START);
-    let end = num_field(c, F_BYTE_END);
+    // SAFETY: `cursor_ptr` proved the fixed cursor layout.
+    let fields = unsafe { CursorFields::from_cursor(c) };
+    let start = unsafe { fields.number(F_BYTE_START) };
+    let end = unsafe { fields.number(F_BYTE_END) };
     bump(&MATERIALISE_SEGMENT);
     // The allocation happens INSIDE the borrow, so the borrow must not outlive
     // it: take the bytes out first, then allocate from a copy on the stack path
     // `js_string_from_bytes` performs. Nothing derived from the input survives
     // this call.
-    let made = with_input(c, |text| {
+    let made = with_input(fields, |text| {
         let seg = &text[start..end];
         crate::string::js_string_from_bytes(seg.as_ptr(), seg.len() as u32)
     });
@@ -376,9 +453,11 @@ pub extern "C" fn js_segments_view_regexp_test(cursor: f64, regex: f64) -> f64 {
             bump(&REGEXP_TEST_DECLINED);
             return undef;
         }
-        let start = num_field(c, F_BYTE_START);
-        let end = num_field(c, F_BYTE_END);
-        let verdict = with_input(c, |text| {
+        // SAFETY: `cursor_ptr` proved the fixed cursor layout.
+        let fields = unsafe { CursorFields::from_cursor(c) };
+        let start = unsafe { fields.number(F_BYTE_START) };
+        let end = unsafe { fields.number(F_BYTE_END) };
+        let verdict = with_input(fields, |text| {
             crate::regex::regexp_test_str_bounded(re, &text[start..end])
         })
         .flatten();
@@ -596,6 +675,40 @@ mod view_mode_tests {
         );
     }
 
+    /// SABOTAGE-SHAPED: slots 1..=4 are the proof that `_next` may bypass the
+    /// generic JSValue store barrier. A future writer that puts a pointer in
+    /// any position slot makes this fail at the exact step where the invariant
+    /// is broken; slot 0 is intentionally excluded because it is the traced
+    /// input string.
+    #[test]
+    fn cursor_position_fields_are_never_pointer_typed() {
+        let cursor = js_segments_view_open(
+            grapheme_segmenter(),
+            js_string("a\u{301}b\u{1f469}\u{200d}\u{1f4bb}cd"),
+        );
+        assert!(cursor != 0.0);
+        let c = cursor_ptr(cursor).expect("branded cursor");
+        let fields = unsafe { CursorFields::from_cursor(c) };
+        let mut steps = 0usize;
+        loop {
+            for index in F_BYTE_START..=F_UTF16_LEN {
+                let value = unsafe { fields.value(index) };
+                assert!(
+                    value.is_number() && !value.is_pointer(),
+                    "cursor position slot {index} must be number-only before step {steps}"
+                );
+            }
+            if js_segments_view_next(cursor) != 1.0 {
+                break;
+            }
+            steps += 1;
+        }
+        assert!(
+            steps >= 4,
+            "the invariant must be checked across real steps"
+        );
+    }
+
     /// The rooting obligation of §9e, exercised rather than asserted: `open`
     /// allocates the cursor while holding the input, so a collection landing in
     /// that window must not leave a dead value in the traced slot. Force a
@@ -713,6 +826,140 @@ mod view_mode_tests {
         );
     }
 
+    /// The canonicality proof must be a LOAD, not a walk: the only by-name
+    /// lookup is the one-time recording at install. If this ever climbs with
+    /// the number of calls, the fast path is not the path being taken — which
+    /// is exactly the failure the counter exists to catch.
+    #[cfg(feature = "regex-engine")]
+    #[test]
+    fn canonicality_proof_walks_once_per_realm_not_once_per_call() {
+        let cursor = js_segments_view_open(grapheme_segmenter(), js_string("abcdef"));
+        assert!(cursor != 0.0);
+        let re = crate::regex::js_regexp_construct(js_string("[a-z]"), js_string(""));
+        let re_v = f64::from_bits(JSValue::pointer(re as *const u8).bits());
+        assert_eq!(js_segments_view_next(cursor), 1.0);
+        let before = counters()[3];
+        for _ in 0..50 {
+            let v = js_segments_view_regexp_test(cursor, re_v);
+            assert!(!is_undefined(v), "a plain regex must keep being accepted");
+        }
+        assert_eq!(
+            counters()[3],
+            before,
+            "50 accepted calls must add ZERO by-name walks"
+        );
+        // A second cursor and a second regex must not add one either: the
+        // recorded site belongs to the realm, not to the call or the receiver.
+        let cursor2 = js_segments_view_open(grapheme_segmenter(), js_string("xy"));
+        assert_eq!(js_segments_view_next(cursor2), 1.0);
+        let re2 = crate::regex::js_regexp_construct(js_string("[x-z]"), js_string(""));
+        let re2_v = f64::from_bits(JSValue::pointer(re2 as *const u8).bits());
+        assert!(!is_undefined(js_segments_view_regexp_test(cursor2, re2_v)));
+        assert_eq!(
+            counters()[3],
+            before,
+            "a second cursor and regex must add no walks either"
+        );
+        // NOT asserted: an absolute bound like `walks <= 1`. The unit harness
+        // resets arenas between tests and builds the prototype tower more than
+        // once in a process, so the per-process total counts REALMS, not calls.
+        // The property that matters — and the one that fails if the fast path
+        // stops being taken — is the delta above.
+    }
+
+    /// SABOTAGE-SHAPED, kept as a test: patching `RegExp.prototype.test` AFTER
+    /// the site is recorded must make the very next call decline.
+    #[cfg(feature = "regex-engine")]
+    #[test]
+    fn a_patched_prototype_test_declines_on_the_next_call() {
+        let cursor = js_segments_view_open(grapheme_segmenter(), js_string("ab"));
+        assert_eq!(js_segments_view_next(cursor), 1.0);
+        let re = crate::regex::js_regexp_construct(js_string("[a-z]"), js_string(""));
+        let re_v = f64::from_bits(JSValue::pointer(re as *const u8).bits());
+        assert!(
+            !is_undefined(js_segments_view_regexp_test(cursor, re_v)),
+            "accepted before the patch"
+        );
+
+        // Replace `RegExp.prototype.test` the way a program would.
+        let proto_ptr = crate::object::regex_proto_thunks::test_recorded_regexp_prototype();
+        assert!(proto_ptr != 0, "the site must have been recorded");
+        let proto = proto_ptr as *mut ObjectHeader;
+        let key = crate::string::js_string_from_bytes(b"test".as_ptr(), 4);
+        let replacement = crate::closure::js_closure_alloc(patched_test_thunk as *const u8, 0);
+        crate::closure::js_register_closure_arity(patched_test_thunk as *const u8, 0);
+        crate::object::js_object_set_field_by_name(
+            proto,
+            key,
+            crate::value::js_nanbox_pointer(replacement as i64),
+        );
+        assert!(
+            is_undefined(js_segments_view_regexp_test(cursor, re_v)),
+            "a replaced `RegExp.prototype.test` must make the view DECLINE, so \
+             the caller materialises and runs the user's function"
+        );
+    }
+
+    extern "C" fn patched_test_thunk(_c: *const crate::closure::ClosureHeader) -> f64 {
+        f64::from_bits(JSValue::bool(true).bits())
+    }
+
+    /// SABOTAGE-SHAPED: the constant Bloom mask must be the exact bit the
+    /// descriptor writer records. Defining an accessor AFTER the canonical
+    /// site was recorded leaves the old data slot intact; without this bit
+    /// check the fast proof would accept and silently bypass the getter.
+    #[cfg(feature = "regex-engine")]
+    #[test]
+    fn an_accessor_installed_after_recording_makes_the_next_call_decline() {
+        let cursor = js_segments_view_open(grapheme_segmenter(), js_string("ab"));
+        assert_eq!(js_segments_view_next(cursor), 1.0);
+        let re = crate::regex::js_regexp_construct(js_string("[a-z]"), js_string(""));
+        let re_v = f64::from_bits(JSValue::pointer(re as *const u8).bits());
+        assert!(
+            !is_undefined(js_segments_view_regexp_test(cursor, re_v)),
+            "premise: the recorded data property is initially canonical"
+        );
+
+        let proto_ptr = crate::object::regex_proto_thunks::test_recorded_regexp_prototype();
+        assert!(proto_ptr != 0, "the canonical site must have been recorded");
+        let proto = proto_ptr as *mut ObjectHeader;
+        let before = crate::object::js_object_get_field_by_name(
+            proto,
+            crate::string::js_string_from_bytes(b"test".as_ptr(), 4),
+        );
+        crate::object::set_accessor_descriptor(
+            proto as usize,
+            "test".to_string(),
+            crate::object::AccessorDescriptor::default(),
+        );
+        assert_eq!(
+            crate::object::js_object_get_field(proto, unsafe {
+                // The test deliberately uses the recorded data-slot value as
+                // its witness: installing the accessor must not overwrite it.
+                let keys = crate::object::object_keys_array(proto);
+                let count = crate::array::js_array_length(keys);
+                (0..count)
+                    .find(|&i| {
+                        let key = crate::array::js_array_get_f64(keys, i);
+                        unsafe {
+                            crate::string::js_string_key_matches_bytes(
+                                JSValue::from_bits(key.to_bits()),
+                                b"test",
+                            )
+                        }
+                    })
+                    .expect("test key") as u32
+            })
+            .bits(),
+            before.bits(),
+            "premise: the accessor install leaves the canonical data slot intact"
+        );
+        assert!(
+            is_undefined(js_segments_view_regexp_test(cursor, re_v)),
+            "the accessor Bloom bit must force an immediate decline"
+        );
+    }
+
     /// `_regexp_test` answers the same as the materialised call for a plain
     /// regex, and DECLINES (three-valued `undefined`) for a global one, whose
     /// `test` is stateful in `lastIndex`.
@@ -740,6 +987,31 @@ mod view_mode_tests {
         assert!(
             is_undefined(js_segments_view_regexp_test(cursor, global_v)),
             "a global regex is stateful in lastIndex and must DECLINE"
+        );
+    }
+
+    /// SABOTAGE-SHAPED: the exported entry validates a RegExp pointer once;
+    /// the bounded matcher must trust that precondition instead of repeating
+    /// heap-space classification. Reintroducing the old check makes the delta
+    /// two, so this test cannot pass merely because the regex is valid.
+    #[cfg(feature = "regex-engine")]
+    #[test]
+    fn bounded_regex_test_does_not_repeat_entry_pointer_validation() {
+        let cursor = js_segments_view_open(grapheme_segmenter(), js_string("a"));
+        assert_eq!(js_segments_view_next(cursor), 1.0);
+        let re = crate::regex::js_regexp_construct(js_string("a"), js_string(""));
+        let re_v = f64::from_bits(JSValue::pointer(re as *const u8).bits());
+
+        // Warm the lazily compiled matcher before delimiting the validation
+        // window; a cold builder deliberately revalidates at its boundary.
+        assert!(!is_undefined(js_segments_view_regexp_test(cursor, re_v)));
+        let before = crate::regex::test_regex_ptr_validation_calls();
+        assert!(!is_undefined(js_segments_view_regexp_test(cursor, re_v)));
+        let after = crate::regex::test_regex_ptr_validation_calls();
+        assert_eq!(
+            after - before,
+            1,
+            "one exported view call must validate its regex exactly once"
         );
     }
 

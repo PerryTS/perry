@@ -1300,6 +1300,8 @@ pub fn scan_object_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'
             visitor.visit_atomic_i64_slot(slot, Ordering::Acquire, Ordering::Release);
         });
     }
+    #[cfg(feature = "regex-engine")]
+    regex_proto_thunks::scan_canonical_test_site_roots_mut(visitor);
 }
 
 /// Drive the PRODUCTION shape-cache writer from a test. Deliberately nothing

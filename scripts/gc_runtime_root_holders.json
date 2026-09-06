@@ -409,12 +409,6 @@
     },
     {
       "file": "crates/perry-runtime/src/intl/segments_view.rs",
-      "name": "DECLINE_NOT_STRING",
-      "verdict": "not_a_gc_pointer",
-      "why": "#9870: `PERRY_SEGVIEW_DIAG` tally for the Intl.Segmenter view mode \u2014 how often the fast path opened, and which check declined it. A plain `AtomicU64` written only through `bump()`'s `fetch_add(1, Relaxed)` and read only by the diagnostic dump: it holds a COUNT, never an address or a NaN-boxed value, so there is no slot for the collector to mark or rewrite."
-    },
-    {
-      "file": "crates/perry-runtime/src/intl/segments_view.rs",
       "name": "DECLINE_NOT_UTF8",
       "verdict": "not_a_gc_pointer",
       "why": "#9870: `PERRY_SEGVIEW_DIAG` tally for the Intl.Segmenter view mode \u2014 how often the fast path opened, and which check declined it. A plain `AtomicU64` written only through `bump()`'s `fetch_add(1, Relaxed)` and read only by the diagnostic dump: it holds a COUNT, never an address or a NaN-boxed value, so there is no slot for the collector to mark or rewrite."
@@ -428,12 +422,6 @@
     {
       "file": "crates/perry-runtime/src/intl/segments_view.rs",
       "name": "MATERIALISE_SEGMENT",
-      "verdict": "not_a_gc_pointer",
-      "why": "#9870: `PERRY_SEGVIEW_DIAG` tally for the Intl.Segmenter view mode \u2014 how often the fast path opened, and which check declined it. A plain `AtomicU64` written only through `bump()`'s `fetch_add(1, Relaxed)` and read only by the diagnostic dump: it holds a COUNT, never an address or a NaN-boxed value, so there is no slot for the collector to mark or rewrite."
-    },
-    {
-      "file": "crates/perry-runtime/src/intl/segments_view.rs",
-      "name": "OPENS",
       "verdict": "not_a_gc_pointer",
       "why": "#9870: `PERRY_SEGVIEW_DIAG` tally for the Intl.Segmenter view mode \u2014 how often the fast path opened, and which check declined it. A plain `AtomicU64` written only through `bump()`'s `fetch_add(1, Relaxed)` and read only by the diagnostic dump: it holds a COUNT, never an address or a NaN-boxed value, so there is no slot for the collector to mark or rewrite."
     },
@@ -600,6 +588,12 @@
       "name": "TEST_BOUND_METHOD_MOVE",
       "verdict": "test_only",
       "why": "#[cfg(test)] diagnostic trace for the bound-method moving-GC regression: records the (before, after) addresses a test-forced minor produced so the test can assert the relocation happened. The addresses are compared as integers, never dereferenced, and the cell is dead in a shipped binary."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/regex_proto_thunks.rs",
+      "name": "REGEXP_PROTOTYPE_TEST_WALKS",
+      "verdict": "not_a_gc_pointer",
+      "why": "View-mode diagnostic tally of install-time RegExp.prototype.test walks. A plain AtomicU64 incremented once by record_canonical_test_site and read as a count by tests; it never stores an address or NaN-boxed value. The actual prototype and closure roots live together in REGEXP_PROTOTYPE_TEST_SITE and are visited by scan_canonical_test_site_roots_mut."
     },
     {
       "file": "crates/perry-runtime/src/object/read_stub.rs",

@@ -316,39 +316,207 @@ fn regex_instance_or_throw(method: &str) -> *const crate::regex::RegExpHeader {
     ))
 }
 
+/// The complete install-time proof record for `RegExp.prototype.test`.
+///
+/// Keeping the three words behind one [`HotKey`](crate::tls_hot::HotKey) is
+/// load-bearing on Darwin: a call resolves one TLS address, not three. The
+/// first two fields are GC roots and are visited together by
+/// [`scan_canonical_test_site_roots_mut`].
+struct CanonicalTestSite {
+    /// The realm's `RegExp.prototype`, as a raw heap address.
+    prototype: std::sync::atomic::AtomicI64,
+    /// The canonical `test` closure, as a NaN-boxed root word.
+    closure: std::sync::atomic::AtomicU64,
+    /// The field index occupied by the prototype's own `test`.
+    index: std::sync::atomic::AtomicU32,
+}
+
+impl CanonicalTestSite {
+    const EMPTY: Self = Self {
+        prototype: std::sync::atomic::AtomicI64::new(0),
+        closure: std::sync::atomic::AtomicU64::new(0),
+        index: std::sync::atomic::AtomicU32::new(u32::MAX),
+    };
+}
+
+crate::perry_thread_local! {
+    static REGEXP_PROTOTYPE_TEST_SITE: CanonicalTestSite = const { CanonicalTestSite::EMPTY };
+}
+
+/// FNV-1a(`"test"`) & 63 = 37. This is the exact bit
+/// `descriptor_state::note_meta_descriptor_key` sets when an accessor named
+/// `test` is installed. Recording it as a constant removes the four-byte hash
+/// from every view-mode regex call.
+const TEST_ACCESSOR_KEY_BIT: u64 = 1u64 << 37;
+
+/// Visit both pointer-bearing fields in the one per-realm record. The raw
+/// prototype address and the NaN-boxed closure deliberately use different
+/// visitor operations so evacuation rewrites each representation correctly.
+#[cfg(feature = "regex-engine")]
+pub(crate) fn scan_canonical_test_site_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    REGEXP_PROTOTYPE_TEST_SITE.with(|site| {
+        visitor.visit_atomic_i64_slot(
+            &site.prototype,
+            std::sync::atomic::Ordering::Acquire,
+            std::sync::atomic::Ordering::Release,
+        );
+        visitor.visit_atomic_nanbox_u64_slot(
+            &site.closure,
+            std::sync::atomic::Ordering::Acquire,
+            std::sync::atomic::Ordering::Release,
+        );
+    });
+}
+
+#[cfg(all(test, feature = "regex-engine"))]
+pub(crate) fn test_recorded_regexp_prototype() -> i64 {
+    REGEXP_PROTOTYPE_TEST_SITE
+        .with(|site| site.prototype.load(std::sync::atomic::Ordering::Acquire))
+}
+
+/// How many by-name walks the canonicality proof has done in this process.
+/// The fast path does none: the only walk is the one-time recording below, so
+/// this must read **1 per realm**, not one per call. It is the counter that
+/// says the fast path is actually the path being taken.
+pub(crate) static REGEXP_PROTOTYPE_TEST_WALKS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
 /// Is `RegExp.prototype.test` still the builtin, for the regex `value`?
 ///
 /// The `Intl.Segmenter` view mode answers `regex.test(segment)` without
 /// materialising the segment, so it must not silently bypass a user
-/// replacement. Same allocation-free proof as
-/// `iterator_prototypes::prototype_next_is_canonical`: the prototype's OWN
-/// `test` slot still holds a closure whose native entry is this module's
-/// thunk, AND no accessor descriptor is recorded for `"test"` (a
-/// `defineProperty(proto, "test", {get})` leaves the old closure in the data
-/// slot). Any other state returns `false` and the caller declines.
+/// replacement — and it asks this question TWICE PER GRAPHEME, so the question
+/// has to be answered in loads.
+///
+/// It used to be answered by `js_object_get_prototype_of` (the general spec
+/// entry: proxy trap, Temporal cell, primitive-wrapper resolution by name) plus
+/// a by-name own-field lookup that hashes `"test"` on every call. Symbolised,
+/// that proof was **~13 % of the loop's thread** —
+/// `get_field_by_name_object_tail` 3.6, `js_object_get_field_by_name` 3.5,
+/// `get_accessor_descriptor` 2.1, `closure_get_dynamic_prop` 1.75,
+/// `RandomState::hash_one<&str>` 1.4, `js_object_get_prototype_of` 1.3 —
+/// against 0.8 % for the match it was guarding.
+///
+/// The property being tested belongs to `RegExp.prototype`, not to the call, so
+/// it is recorded once at install time: the prototype pointer, the FIELD INDEX
+/// its `test` occupies, and the canonical closure value. A call then reads that
+/// one slot by index and compares. Everything this can get wrong, it gets wrong
+/// in the declining direction:
+///
+/// * `test` replaced or deleted -> the slot no longer holds the recorded
+///   closure -> decline;
+/// * the prototype reshaped so the index means a different key -> the slot does
+///   not hold the recorded closure -> decline;
+/// * an accessor installed with `defineProperty(proto,"test",{get})`, which
+///   leaves the old closure in the data slot -> the per-key accessor Bloom bit
+///   catches it, read straight off the meta record;
+/// * the receiver reparented, so the `test` it would resolve is not this one ->
+///   `object_static_prototype` says a prototype was recorded -> decline.
+///
+/// No invalidation hook on any shared write path, which is the alternative
+/// design and the one that would make every property store in the program pay
+/// for this.
 #[cfg(feature = "regex-engine")]
 pub(crate) fn regexp_prototype_test_is_canonical(value: f64) -> bool {
-    let proto = super::js_object_get_prototype_of(value);
-    let jv = crate::value::JSValue::from_bits(proto.to_bits());
+    let jv_recv = crate::value::JSValue::from_bits(value.to_bits());
+    if !jv_recv.is_pointer() {
+        return false;
+    }
+    let recv_addr = jv_recv.as_pointer::<u8>() as usize;
+    if recv_addr == 0 {
+        return false;
+    }
+    // A regex with no recorded prototype still has its class default, which is
+    // the object recorded below. `object_static_prototype` answers from the
+    // object's own meta record, or from an atomic "nothing was ever recorded"
+    // latch — no mutex, no chain walk.
+    if super::prototype_chain::object_static_prototype_known_non_meta(recv_addr).is_some() {
+        return false;
+    }
+    REGEXP_PROTOTYPE_TEST_SITE.with(|site| {
+        let proto_ptr = site.prototype.load(std::sync::atomic::Ordering::Acquire);
+        let canonical = site.closure.load(std::sync::atomic::Ordering::Acquire);
+        let index = site.index.load(std::sync::atomic::Ordering::Acquire);
+        if proto_ptr == 0 || canonical == 0 || index == u32::MAX {
+            return false;
+        }
+        let proto_obj = proto_ptr as *mut ObjectHeader;
+        // Both reads below are of values the collector maintains: the
+        // prototype address is a scanned root, and the recorded closure is a
+        // scanned nanbox word, so a move rewrites both and this compare stays
+        // an identity compare.
+        let current = crate::object::js_object_get_field(proto_obj, index);
+        if current.bits() != canonical {
+            return false;
+        }
+        // `defineProperty(proto, "test", { get })` leaves the data slot alone
+        // and records the accessor. The prototype is an ObjectHeader, so its
+        // meta edge can be read directly: no cell classification and no key
+        // hash on this per-call path. A null meta proves no accessor was ever
+        // installed; the Bloom bit is monotonic once set.
+        let meta = unsafe { (*proto_obj).meta };
+        meta.is_null() || unsafe { (*meta).accessor_key_bits & TEST_ACCESSOR_KEY_BIT == 0 }
+    })
+}
+
+/// Record the prototype, the index of its own `test`, and the canonical
+/// closure. Called once, from the installer below.
+#[cfg(feature = "regex-engine")]
+fn record_canonical_test_site(proto_obj: *mut ObjectHeader) {
+    REGEXP_PROTOTYPE_TEST_WALKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let proto_value = crate::value::js_nanbox_pointer(proto_obj as i64);
+    let own = super::js_object_get_own_field_or_undef(proto_value, b"test".as_ptr(), 4);
+    let jv = crate::value::JSValue::from_bits(own.to_bits());
     if !jv.is_pointer() {
-        return false;
+        return;
     }
-    let proto_obj = jv.as_pointer::<ObjectHeader>() as *mut ObjectHeader;
-    if proto_obj.is_null() {
-        return false;
+    // The index of the KEY `"test"` in the prototype's keys array IS its field
+    // index. Done once, at install, with the ordinary accessors.
+    let keys = unsafe { super::object_keys_array(proto_obj) };
+    if keys.is_null() {
+        return;
     }
-    let own = super::js_object_get_own_field_or_undef(proto, b"test".as_ptr(), 4);
-    let own_jv = crate::value::JSValue::from_bits(own.to_bits());
-    if !own_jv.is_pointer() {
-        return false;
+    let count = crate::array::js_array_length(keys);
+    let mut found: Option<u32> = None;
+    for i in 0..count {
+        let key = crate::array::js_array_get_f64(keys, i);
+        let matches = unsafe {
+            crate::string::js_string_key_matches_bytes(
+                crate::value::JSValue::from_bits(key.to_bits()),
+                b"test",
+            )
+        };
+        if matches {
+            found = Some(i as u32);
+            break;
+        }
     }
-    let closure = own_jv.as_pointer::<crate::closure::ClosureHeader>();
-    if closure.is_null()
-        || crate::closure::get_valid_func_ptr(closure) != regex_proto_test_thunk as *const u8
-    {
-        return false;
+    let Some(index) = found else {
+        return;
+    };
+    // The recorded index must actually hold the closure we just read, or the
+    // per-call load would compare the wrong slot.
+    if crate::object::js_object_get_field(proto_obj, index).bits() != own.to_bits() {
+        return;
     }
-    !super::descriptor_state::may_have_descriptor_entry(proto_obj as usize, "test", true)
+    REGEXP_PROTOTYPE_TEST_SITE.with(|site| {
+        site.index
+            .store(index, std::sync::atomic::Ordering::Release);
+        // GC_STORE_AUDIT(ROOT): `site.closure` is a mutable nanbox root visited
+        // by `scan_canonical_test_site_roots_mut`.
+        crate::gc::runtime_store_root_atomic_nanbox_u64(
+            &site.closure,
+            own.to_bits(),
+            std::sync::atomic::Ordering::Release,
+        );
+        // GC_STORE_AUDIT(ROOT): `site.prototype` is a mutable raw-address root
+        // visited by `scan_canonical_test_site_roots_mut`.
+        crate::gc::runtime_store_root_atomic_raw_i64(
+            &site.prototype,
+            proto_obj as i64,
+            std::sync::atomic::Ordering::Release,
+        );
+    });
 }
 
 /// Install the real (brand-checking) `exec`/`test`/`toString`/`compile`
@@ -361,6 +529,8 @@ pub(super) fn install_regex_proto_methods(proto_obj: *mut ObjectHeader) {
     ipm(proto_obj, "exec", regex_proto_exec_thunk as *const u8, 1);
     #[cfg(feature = "regex-engine")]
     ipm(proto_obj, "test", regex_proto_test_thunk as *const u8, 1);
+    #[cfg(feature = "regex-engine")]
+    record_canonical_test_site(proto_obj);
     // Annex B `compile` re-initializes the receiver in place. It needs a real
     // brand check so `RegExp.prototype.compile.call(non-regexp)` throws a
     // `TypeError` (test262 annexB `.../compile/this-{not-object,obj-not-regexp}`).
