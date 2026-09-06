@@ -48,6 +48,7 @@ mod retention_9628_9629;
 mod root_words;
 mod rooted_container_values;
 mod rooted_define_property;
+mod rooted_for_in;
 mod roots;
 mod runtime_roots;
 mod scan_fallback;
