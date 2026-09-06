@@ -46,7 +46,7 @@ fn runtime_handle_diag_note(update: impl FnOnce(&mut RuntimeHandleDiag)) {
     });
 }
 
-pub(super) fn emit_runtime_handle_diag() {
+pub(crate) fn emit_runtime_handle_diag() {
     if !crate::gc::gc_diag_enabled() {
         return;
     }
