@@ -1,5 +1,8 @@
 # Number formatting and the full parity target
 
+Follow-up: [bounded parse-shape retention](CACHE.md) reduces the sustained
+wide-object cost identified below. This document preserves the number-only run.
+
 The active target is both parse and stringify, every measured input, CPU and
 RSS, with no correctness or performance regressions. It is **not achieved**.
 The [per-row inventory](results/numbers/parity.md) reports every remaining

@@ -125,3 +125,45 @@ fn wide_object_duplicates_keep_first_position_and_last_value() {
         }
     }
 }
+
+#[test]
+fn parse_shape_cache_bounds_retained_keys_and_keeps_small_shape_hits() {
+    use crate::json::{parse_shape_keys_array, PARSE_SHAPE_CACHE, PARSE_SHAPE_CACHE_KEY_BUDGET};
+    unsafe {
+        crate::gc::gc_suppress();
+        PARSE_SHAPE_CACHE.with(|cache| cache.borrow_mut().clear());
+        // Distinct medium shapes fill the key budget before the entry cap.
+        for shape in 0..20 {
+            let keys: Vec<_> = (0..257)
+                .map(|field| {
+                    let text = format!("shape_{shape}_{field}");
+                    crate::js_string_from_bytes(text.as_ptr(), text.len() as u32) as *const _
+                })
+                .collect();
+            let arr = parse_shape_keys_array(&keys);
+            assert_eq!((*arr).length, 257);
+        }
+        PARSE_SHAPE_CACHE.with(|cache| {
+            let cache = cache.borrow();
+            assert_eq!(cache.len(), 15);
+            assert!(
+                cache.iter().map(|entry| entry.keys.len()).sum::<usize>()
+                    <= PARSE_SHAPE_CACHE_KEY_BUDGET
+            );
+        });
+        PARSE_SHAPE_CACHE.with(|cache| cache.borrow_mut().clear());
+        let key = crate::js_string_from_bytes(b"small".as_ptr(), 5) as *const _;
+        let first = parse_shape_keys_array(&[key]);
+        assert_eq!(first, parse_shape_keys_array(&[key]));
+        // Too-wide shapes belong to the returned graph, not to retained
+        // parser metadata. A repeated request must not add cache entries.
+        let wide = vec![key; PARSE_SHAPE_CACHE_KEY_BUDGET + 1];
+        let wide_a = parse_shape_keys_array(&wide);
+        let wide_b = parse_shape_keys_array(&wide);
+        assert_ne!(wide_a, wide_b);
+        assert_eq!((*wide_a).length as usize, wide.len());
+        PARSE_SHAPE_CACHE.with(|cache| assert_eq!(cache.borrow().len(), 1));
+        PARSE_SHAPE_CACHE.with(|cache| cache.borrow_mut().clear());
+        crate::gc::gc_unsuppress();
+    }
+}

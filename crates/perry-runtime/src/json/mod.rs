@@ -242,6 +242,12 @@ pub(crate) struct ParseShapeCacheEntry {
 }
 
 pub(crate) const PARSE_SHAPE_CACHE_CAP: usize = 256;
+// Bound retained key graphs as well as entry count. Above the parse-key
+// cache's 4096-key limit, that cache is cleared at the parse boundary, so
+// repeated wide documents get new key pointers and cannot hit this
+// pointer-identity cache. Retaining up to 256 such graphs made sustained
+// wide-object parsing spend most of its CPU tracing obsolete metadata.
+pub(crate) const PARSE_SHAPE_CACHE_KEY_BUDGET: usize = 4096;
 
 // ─── Shared file-local NaN-box tag / type-hint constants ─────────────────────
 
@@ -388,6 +394,9 @@ pub(crate) fn clear_parse_key_ring() {
 pub(crate) unsafe fn parse_shape_keys_array(
     keys: &[*const StringHeader],
 ) -> *mut crate::ArrayHeader {
+    if keys.len() > PARSE_SHAPE_CACHE_KEY_BUDGET {
+        return allocate_parse_shape_keys_array(keys);
+    }
     PARSE_SHAPE_CACHE.with(|cache| {
         {
             let cache = cache.borrow();
@@ -404,20 +413,12 @@ pub(crate) unsafe fn parse_shape_keys_array(
             }
         }
 
-        let arr = crate::array::js_array_alloc_with_length_longlived(keys.len() as u32);
-        let elements_ptr =
-            (arr as *mut u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *mut f64;
-        for (i, &key_ptr) in keys.iter().enumerate() {
-            let bits = crate::value::STRING_TAG | (key_ptr as u64 & crate::value::POINTER_MASK);
-            // GC_STORE_AUDIT(INIT): parse shape keys array is filled before cache publication.
-            *elements_ptr.add(i) = f64::from_bits(bits);
-            crate::array::note_array_slot_layout_only(arr, i, bits);
-        }
-        let header = (arr as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
-        (*header).gc_flags |= crate::gc::GC_FLAG_SHAPE_SHARED;
-
+        let arr = allocate_parse_shape_keys_array(keys);
         let mut cache = cache.borrow_mut();
-        if cache.len() < PARSE_SHAPE_CACHE_CAP {
+        if cache.len() < PARSE_SHAPE_CACHE_CAP
+            && cache.iter().map(|entry| entry.keys.len()).sum::<usize>() + keys.len()
+                <= PARSE_SHAPE_CACHE_KEY_BUDGET
+        {
             cache.push(ParseShapeCacheEntry {
                 keys: keys.to_vec(),
                 keys_array: arr,
@@ -425,6 +426,21 @@ pub(crate) unsafe fn parse_shape_keys_array(
         }
         arr
     })
+}
+
+#[inline]
+unsafe fn allocate_parse_shape_keys_array(keys: &[*const StringHeader]) -> *mut crate::ArrayHeader {
+    let arr = crate::array::js_array_alloc_with_length_longlived(keys.len() as u32);
+    let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *mut f64;
+    for (i, &key_ptr) in keys.iter().enumerate() {
+        let bits = crate::value::STRING_TAG | (key_ptr as u64 & crate::value::POINTER_MASK);
+        // GC_STORE_AUDIT(INIT): parse shape keys array is filled before publication.
+        *elements_ptr.add(i) = f64::from_bits(bits);
+        crate::array::note_array_slot_layout_only(arr, i, bits);
+    }
+    let header = (arr as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+    (*header).gc_flags |= crate::gc::GC_FLAG_SHAPE_SHARED;
+    arr
 }
 
 // ─── Stringify scratch / shape-cache lifecycle ───────────────────────────────
