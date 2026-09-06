@@ -29,7 +29,8 @@ pub extern "C" fn js_finalize_namespace(value: f64) -> f64 {
 
 /// Issue #100: build a module-namespace object (the value an `await
 /// import("./foo.ts")` resolves to) from parallel arrays of keys and
-/// values.
+/// values. Entries whose parallel `live_flags` byte is non-zero carry a
+/// zero-argument getter closure instead of a snapshot value.
 ///
 /// Keys are length-prefixed UTF-8 (Perry strings are not guaranteed
 /// null-terminated), passed as parallel `*const *const u8` (data
@@ -58,6 +59,7 @@ pub extern "C" fn js_create_namespace(
     keys: *const *const u8,
     key_lens: *const i32,
     values: *const f64,
+    live_flags: *const u8,
 ) -> f64 {
     let count = if n < 0 { 0 } else { n as usize };
     unsafe {
@@ -106,7 +108,33 @@ pub extern "C" fn js_create_namespace(
             let key_hdr = crate::string::js_string_from_bytes(key_data, key_len_u);
             obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
             let val = value_handles[i].get_nanbox_f64();
-            js_object_set_field_by_name(obj, key_hdr, val);
+            if !live_flags.is_null() && *live_flags.add(i) != 0 {
+                let key_handle = scope.root_string_ptr(key_hdr);
+                obj_handle.with_mut_ptr::<ObjectHeader, _>(|current_obj| {
+                    key_handle.with_const_ptr::<crate::StringHeader, _>(|current_key| {
+                        js_object_define_accessor(
+                            crate::value::js_nanbox_pointer(current_obj as i64),
+                            crate::value::js_nanbox_string(current_key as i64),
+                            val,
+                            f64::from_bits(crate::value::TAG_UNDEFINED),
+                        );
+                    });
+                });
+                let key = String::from_utf8_lossy(std::slice::from_raw_parts(
+                    key_data,
+                    key_len_u as usize,
+                ))
+                .into_owned();
+                obj_handle.with_mut_ptr::<ObjectHeader, _>(|current_obj| {
+                    set_property_attrs(
+                        current_obj as usize,
+                        key,
+                        PropertyAttrs::new(false, true, false),
+                    );
+                });
+            } else {
+                js_object_set_field_by_name(obj, key_hdr, val);
+            }
         }
 
         // NaN-box POINTER_TAG and return.

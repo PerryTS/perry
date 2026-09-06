@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 
 use crate::module::LlModule;
-use crate::types::{DOUBLE, I32, I64, PTR};
+use crate::types::{DOUBLE, I32, I64, I8, PTR};
 
 use super::opts::{NamespaceEntry, NamespaceEntryKind};
 
@@ -1348,14 +1348,15 @@ pub(super) fn register_module_globals_as_gc_roots(
 ///
 /// The IR sequence per call:
 ///
-///   1. Alloca three parallel stack arrays sized `[N x ?]` — keys (ptr),
-///      key_lens (i32), values (double).
+///   1. Alloca four parallel stack arrays sized `[N x ?]` — keys (ptr),
+///      key_lens (i32), values (double), live-binding flags (i8).
 ///   2. For each entry i in `namespace_entries`:
 ///      - Store `getelementptr inbounds [L x i8], ptr @.strK, i64 0, i64 0`
 ///        into `keys[i]` and `L` into `key_lens[i]`.
 ///      - Compute the value JSValue per `NamespaceEntryKind` and store
 ///        into `values[i]`.
-///   3. Call `js_create_namespace(N, ptr keys, ptr key_lens, ptr values)`.
+///   3. Call `js_create_namespace(N, ptr keys, ptr key_lens, ptr values,
+///      ptr live_flags)`.
 ///   4. Store the result into `@__perry_ns_<module_prefix>`.
 ///
 /// Always emits the `js_create_namespace` call + store, even when
@@ -1364,6 +1365,13 @@ pub(super) fn register_module_globals_as_gc_roots(
 /// non-NaN `@__perry_ns_<prefix>` to load). The runtime tolerates
 /// `n == 0` and returns an empty NaN-boxed object. The caller is
 /// responsible for ensuring `key_globals.len() == entries.len()`.
+pub(super) fn namespace_live_getter_wrapper_symbol(
+    module_prefix: &str,
+    entry_index: usize,
+) -> String {
+    format!("__perry_ns_get_{module_prefix}__{entry_index}")
+}
+
 pub(super) fn emit_namespace_populator(
     ctx: &mut crate::expr::FnCtx<'_>,
     entries: &[NamespaceEntry],
@@ -1382,13 +1390,15 @@ pub(super) fn emit_namespace_populator(
     let buf_len = n.max(1);
     let blk = ctx.block();
 
-    // Alloca the three parallel buffers.
+    // Alloca the four parallel buffers.
     let keys_buf = blk.next_reg();
     blk.emit_raw(format!("{} = alloca [{} x ptr]", keys_buf, buf_len));
     let lens_buf = blk.next_reg();
     blk.emit_raw(format!("{} = alloca [{} x i32]", lens_buf, buf_len));
     let vals_buf = blk.next_reg();
     blk.emit_raw(format!("{} = alloca [{} x double]", vals_buf, buf_len));
+    let live_buf = blk.next_reg();
+    blk.emit_raw(format!("{} = alloca [{} x i8]", live_buf, buf_len));
 
     // #7210 (2): `vals_buf` is a plain stack alloca, not a shadow slot the
     // collector scans. Each entry's value is a NaN-boxed JSValue that can be
@@ -1418,12 +1428,26 @@ pub(super) fn emit_namespace_populator(
             let len_slot = blk.gep(I32, &lens_buf, &[(I64, &idx_str)]);
             blk.store(I32, &format!("{}", key_len), &len_slot);
 
+            let is_live_binding = matches!(
+                entry.kind,
+                NamespaceEntryKind::LocalVar { .. } | NamespaceEntryKind::ForeignVar { .. }
+            );
+            let live_slot = blk.gep(I8, &live_buf, &[(I64, &idx_str)]);
+            blk.store(I8, if is_live_binding { "1" } else { "0" }, &live_slot);
+
             // Materialise the value per kind. We drop the `blk` borrow so
             // each sub-emission can re-borrow ctx mutably for runtime calls
             // / declares; then root it in this scope's group.
             let val_str = match &entry.kind {
-                NamespaceEntryKind::LocalVar { global_name } => {
-                    ctx.block().load(DOUBLE, &format!("@{}", global_name))
+                NamespaceEntryKind::LocalVar { .. } | NamespaceEntryKind::ForeignVar { .. } => {
+                    let wrapper = namespace_live_getter_wrapper_symbol(module_prefix, i);
+                    let blk = ctx.block();
+                    let handle = blk.call(
+                        I64,
+                        "js_closure_alloc_singleton",
+                        &[(PTR, &format!("@{}", wrapper))],
+                    );
+                    crate::expr::nanbox_pointer_inline(blk, &handle)
                 }
                 NamespaceEntryKind::LocalFunction { wrap_symbol } => {
                     let blk = ctx.block();
@@ -1439,14 +1463,6 @@ pub(super) fn emit_namespace_populator(
                     // (class_id & 0xFFFFFFFF). Matches `Expr::ClassRef`.
                     let bits = crate::nanbox::INT32_TAG | (*class_id as u64 & 0xFFFF_FFFF);
                     crate::nanbox::double_literal(f64::from_bits(bits))
-                }
-                NamespaceEntryKind::ForeignVar {
-                    source_prefix,
-                    source_local,
-                } => {
-                    let getter = format!("perry_fn_{}__{}", source_prefix, sanitize(source_local));
-                    ctx.pending_declares.push((getter.clone(), DOUBLE, vec![]));
-                    ctx.block().call(DOUBLE, &getter, &[])
                 }
                 NamespaceEntryKind::ForeignFunction {
                     source_prefix,
@@ -1518,7 +1534,7 @@ pub(super) fn emit_namespace_populator(
     })
     .expect("emit_namespace_populator's rooted group body is infallible");
 
-    // Call `js_create_namespace(n, keys, key_lens, values)` and store
+    // Call `js_create_namespace(n, keys, key_lens, values, live_flags)` and store
     // the result into the namespace global. The result is a NaN-boxed
     // POINTER_TAG ObjectHeader; the global is already GC-rooted by
     // `register_module_globals_as_gc_roots` is NOT — namespace globals
@@ -1534,6 +1550,7 @@ pub(super) fn emit_namespace_populator(
             (PTR, &keys_buf),
             (PTR, &lens_buf),
             (PTR, &vals_buf),
+            (PTR, &live_buf),
         ],
     );
     let ns_name = format!("__perry_ns_{}", module_prefix);

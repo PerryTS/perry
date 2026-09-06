@@ -1569,6 +1569,8 @@ pub(crate) fn lower_module_decl(
                                         Expr::Closure { .. }
                                             | Expr::Object(_)
                                             | Expr::Array(_)
+                                            | Expr::SetNew
+                                            | Expr::SetNewFromArray(_)
                                             | Expr::Call { .. }
                                             | Expr::New { .. }
                                             | Expr::JsNew { .. }
