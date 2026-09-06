@@ -6,6 +6,26 @@ use super::*;
 
 pub(crate) const MODULE_NAMESPACE_CLASS_ID: u32 = 0xFFFF_4E53;
 
+/// #9889: Implement the module namespace exotic object's [[GetOwnProperty]]
+/// result while retaining accessors as the internal representation of live
+/// bindings. The getter can allocate and evacuate both the namespace and key,
+/// so keep them rooted until it returns. `build_data_descriptor` roots the
+/// resulting value before allocating the descriptor object.
+pub(crate) unsafe fn module_namespace_own_property_descriptor(
+    obj: *mut ObjectHeader,
+    key: *const crate::StringHeader,
+) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj_handle = scope.root_raw_mut_ptr(obj);
+    let key_handle = scope.root_string_ptr(key);
+    let value = obj_handle.with_mut_ptr::<ObjectHeader, _>(|current_obj| {
+        key_handle.with_const_ptr::<crate::StringHeader, _>(|current_key| {
+            js_object_get_field_by_name(current_obj, current_key)
+        })
+    });
+    super::descriptors::build_data_descriptor(f64::from_bits(value.bits()), true, true, false)
+}
+
 /// Apply the host-defined invariants shared by static and dynamic module
 /// namespace objects.
 #[no_mangle]

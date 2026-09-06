@@ -964,6 +964,12 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
             return f64::from_bits(crate::value::TAG_UNDEFINED);
         }
 
+        // #9889: Hide the live binding's internal accessor behind the module
+        // namespace exotic object's required data-descriptor shape.
+        if (*obj).class_id == MODULE_NAMESPACE_CLASS_ID {
+            return module_namespace_own_property_descriptor(obj, key_str);
+        }
+
         // Look up descriptor flags (default: all true).
         let attrs = key_rust
             .as_ref()

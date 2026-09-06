@@ -3,6 +3,24 @@
 async function main(): Promise<void> {
   const ns = await import("./dynamic_import_alias_binding.ts");
 
+  function logDescriptor(
+    name: "VAR_SET" | "directConst",
+    expected: string,
+  ): void {
+    const descriptor = Object.getOwnPropertyDescriptor(ns, name);
+    console.log(
+      name,
+      descriptor !== undefined,
+      descriptor !== undefined && "value" in descriptor,
+      descriptor?.writable,
+      descriptor?.enumerable,
+      descriptor?.configurable,
+      descriptor?.get === undefined,
+      descriptor?.set === undefined,
+      descriptor !== undefined && ns.checkAlias(descriptor.value, expected),
+    );
+  }
+
   console.log(
     typeof ns.VAR_SET,
     typeof ns.LET_SET,
@@ -16,6 +34,8 @@ async function main(): Promise<void> {
     ns.checkAlias(ns.CONST_SET, "const"),
     ns.checkAlias(ns.directConst, "direct"),
   );
+  logDescriptor("VAR_SET", "var-before");
+  logDescriptor("directConst", "direct");
 
   ns.reassign();
   console.log(
@@ -24,6 +44,7 @@ async function main(): Promise<void> {
     ns.checkAlias(ns.VAR_SET, "var-before"),
     ns.checkAlias(ns.LET_SET, "let-before"),
   );
+  logDescriptor("VAR_SET", "var-after");
 }
 
 main();
