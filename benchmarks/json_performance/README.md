@@ -1,9 +1,10 @@
 This study measures `JSON.parse` and `JSON.stringify` in Perry, Node.js and Bun, and identifies an implementation path for improving Perry. Read [the analysis and roadmap](REPORT.md), [all CPU/wall/RSS tables](results/full-tables.md), or [the raw-data summary](results/summary.csv).
 
-Latest measured implementation: [primitive-array stringify](PRIMITIVE_ARRAYS.md).
-Numeric stringify now beats Node and Bun; general records improve further.
-The [complete CPU/RSS inventory](results/primitive-array/parity.md) and remaining
-regression checks keep full performance acceptance open. Earlier stages cover
+Latest measured candidate: [direct final output](DIRECT_OUTPUT.md).
+String and small-object stringify improve further; repeated parse/escaped-output
+regressions keep performance acceptance open. The
+[complete CPU/RSS inventory](results/direct-string/parity.md) preserves every
+target. Earlier stages cover [primitive-array stringify](PRIMITIVE_ARRAYS.md),
 [inline scalar results and compact decimals](SCALARS.md), [Unicode](UNICODE.md),
 [bounded parse-shape retention](CACHE.md), and [number formatting](NUMBERS.md).
 

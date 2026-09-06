@@ -1,0 +1,291 @@
+
+/Users/amlug/projects/perry/codex-json-fastpaths-artifacts/direct-string-worker:    file format mach-o arm64
+
+Disassembly of section __TEXT,__text:
+
+<__RNvNtNtNtNtCsjgY6bXVaRmE_4core3num3imp7dec2flt5parse12parse_number>:
+                stp x29, x30, [sp, #-0x10]!
+                mov x29, sp
+                cmp x1, #0x8
+                b.lo    0x10002f21c <__RNvNtNtNtNtCsjgY6bXVaRmE_4core3num3imp7dec2flt5parse12parse_number+0xa0>
+                mov x9, #0x0                ; =0
+                mov x11, #-0x3030303030303031 ; =-3472328296227680305
+                movk    x11, #0xcfd0
+                mov x13, #0x606060606060606 ; =434041037028460038
+                orr x13, x13, #0x4444444444444444
+                mov x14, #0x64              ; =100
+                movk    x14, #0x4240, lsl #32
+                movk    x14, #0xf, lsl #48
+                mov x15, #0x1               ; =1
+                movk    x15, #0x2710, lsl #32
+                mov w16, #0xe100            ; =57600
+                movk    w16, #0x5f5, lsl #16
+                mov w17, #0xa               ; =10
+                mov x10, x0
+                mov x12, x1
+                ldr x2, [x10]
+                add x3, x2, x13
+                add x2, x2, x11
+                orr x3, x3, x2
+                tst x3, #0x8080808080808080
+                b.ne    0x10002f22c <__RNvNtNtNtNtCsjgY6bXVaRmE_4core3num3imp7dec2flt5parse12parse_number+0xb0>
+                mul x9, x9, x16
+                mul x3, x2, x17
+                add x2, x3, x2, lsr #8
+                and x3, x2, #0xff000000ff
+                mul x3, x3, x14
+                lsr x2, x2, #16
+                and x2, x2, #0xff000000ff
+                madd    x2, x2, x15, x3
+                add x9, x9, x2, lsr #32
+                sub x12, x12, #0x8
+                add x10, x10, #0x8
+                cmp x12, #0x7
+                b.hi    0x10002f1c8 <__RNvNtNtNtNtCsjgY6bXVaRmE_4core3num3imp7dec2flt5parse12parse_number+0x4c>
+                cbnz    x12, 0x10002f22c <__RNvNtNtNtNtCsjgY6bXVaRmE_4core3num3imp7dec2flt5parse12parse_number+0xb0>
+                b   0x10002f258 <__RNvNtNtNtNtCsjgY6bXVaRmE_4core3num3imp7dec2flt5parse12parse_number+0xdc>
+                mov x9, #0x0                ; =0
+                mov x12, x1
+                mov x10, x0
+                cbz x1, 0x10002f258 <__RNvNtNtNtNtCsjgY6bXVaRmE_4core3num3imp7dec2flt5parse12parse_number+0xdc>
+                mov x13, #0x0               ; =0
+                mov w11, #0xa               ; =10
+                ldrb    w15, [x10, x13]
+                sub w14, w15, #0x30
+                cmp w14, #0x9
+                b.hi    0x10002f340 <__RNvNtNtNtNtCsjgY6bXVaRmE_4core3num3imp7dec2flt5parse12parse_number+0x1c4>
+                mul x9, x9, x11
+                add x9, x9, w14, uxtb
+                add x13, x13, #0x1
+                cmp x12, x13
+                b.ne    0x10002f234 <__RNvNtNtNtNtCsjgY6bXVaRmE_4core3num3imp7dec2flt5parse12parse_number+0xb8>
+                cbz x1, 0x10002f5c4 <__RNvNtNtNtNtCsjgY6bXVaRmE_4core3num3imp7dec2flt5parse12parse_number+0x448>
+                mov x10, #0x0               ; =0
+                mov x13, #0x0               ; =0
+                mov x11, #0x0               ; =0
+                mov w12, #0x1               ; =1
+                mov x16, x1
+                cmp x16, #0x14
+                b.lt    0x10002f32c <__RNvNtNtNtNtCsjgY6bXVaRmE_4core3num3imp7dec2flt5parse12parse_number+0x1b0>
+                cbz x1, 0x10002f5d4 <__RNvNtNtNtNtCsjgY6bXVaRmE_4core3num3imp7dec2flt5parse12parse_number+0x458>
+                sub x14, x16, #0x13
+                mov x15, x1
+                mov x16, x0
+                b   0x10002f2a4 <__RNvNtNtNtNtCsjgY6bXVaRmE_4core3num3imp7dec2flt5parse12parse_number+0x128>
+                add x16, x16, #0x1
+                subs    w17, w17, #0x2f
+                csel    w17, wzr, w17, lo
+                sub x14, x14, x17
+                sub x15, x15, #0x1
+                cbz x15, 0x10002f2b8 <__RNvNtNtNtNtCsjgY6bXVaRmE_4core3num3imp7dec2flt5parse12parse_number+0x13c>
+                ldrb    w17, [x16]
+                cmp w17, #0x2e
+                b.eq    0x10002f28c <__RNvNtNtNtNtCsjgY6bXVaRmE_4core3num3imp7dec2flt5parse12parse_number+0x110>
+                cmp w17, #0x30
+                b.eq    0x10002f28c <__RNvNtNtNtNtCsjgY6bXVaRmE_4core3num3imp7dec2flt5parse12parse_number+0x110>
+                cmp x14, #0x1
+                b.lt    0x10002f32c <__RNvNtNtNtNtCsjgY6bXVaRmE_4core3num3imp7dec2flt5parse12parse_number+0x1b0>
+                mov x9, #0x0                ; =0
+                mov x11, #-0x589c0001       ; =-1486618625
+                movk    x11, #0xb6b3, lsl #32
+                movk    x11, #0xde0, lsl #48
+                neg x14, x1
+                mov w15, #0xa               ; =10
+                mov x16, x14
+                ldrb    w14, [x0]
+                sub w14, w14, #0x30
+                cmp w14, #0x9
+                b.hi    0x10002f438 <__RNvNtNtNtNtCsjgY6bXVaRmE_4core3num3imp7dec2flt5parse12parse_number+0x2bc>
+                add x0, x0, #0x1
+                mul x9, x9, x15
+                add x9, x9, w14, uxtb
+                adds    x14, x16, #0x1
+                cset    w17, hs
+                cmp x9, x11
+                ccmp    w17, #0x0, #0x0, ls
+                b.eq    0x10002f2d8 <__RNvNtNtNtNtCsjgY6bXVaRmE_4core3num3imp7dec2flt5parse12parse_number+0x15c>
+                cmp x9, x11
+                b.ls    0x10002f528 <__RNvNtNtNtNtCsjgY6bXVaRmE_4core3num3imp7dec2flt5parse12parse_number+0x3ac>
+                neg x10, x10
+                sub x10, x10, x14
+                add x11, x10, x13
+                mov w10, #0x1               ; =1
+                cbz w12, 0x10002f5c4 <__RNvNtNtNtNtCsjgY6bXVaRmE_4core3num3imp7dec2flt5parse12parse_number+0x448>
+                b   0x10002f334 <__RNvNtNtNtNtCsjgY6bXVaRmE_4core3num3imp7dec2flt5parse12parse_number+0x1b8>
+                mov w10, #0x0               ; =0
+                cbz w12, 0x10002f5c4 <__RNvNtNtNtNtCsjgY6bXVaRmE_4core3num3imp7dec2flt5parse12parse_number+0x448>
+                stp x11, x9, [x8]
+                strb    wzr, [x8, #0x10]
+                b   0x10002f5c8 <__RNvNtNtNtNtCsjgY6bXVaRmE_4core3num3imp7dec2flt5parse12parse_number+0x44c>
+                add x14, x10, x13
+                sub x10, x12, x13
+                cmp w15, #0x2e
+                b.ne    0x10002f418 <__RNvNtNtNtNtCsjgY6bXVaRmE_4core3num3imp7dec2flt5parse12parse_number+0x29c>
+                mvn x11, x13
+                add x15, x11, x12
+                add x14, x14, #0x1
+                cmp x10, #0x9
+                b.lt    0x10002f3e0 <__RNvNtNtNtNtCsjgY6bXVaRmE_4core3num3imp7dec2flt5parse12parse_number+0x264>
+                mov x11, #-0x3030303030303031 ; =-3472328296227680305
+                movk    x11, #0xcfd0
+                mov x16, #0x606060606060606 ; =434041037028460038
+                orr x16, x16, #0x4444444444444444
+                mov x17, #0x64              ; =100
+                movk    x17, #0x4240, lsl #32
+                movk    x17, #0xf, lsl #48
+                mov x2, #0x1                ; =1
+                movk    x2, #0x2710, lsl #32
+                mov w3, #0xe100             ; =57600
+                movk    w3, #0x5f5, lsl #16
+                mov w4, #0xa                ; =10
+                ldr x5, [x14]
+                add x6, x5, x16
+                add x5, x5, x11
+                orr x6, x6, x5
+                tst x6, #0x8080808080808080
+                b.ne    0x10002f3e4 <__RNvNtNtNtNtCsjgY6bXVaRmE_4core3num3imp7dec2flt5parse12parse_number+0x268>
+                mul x9, x9, x3
+                mul x6, x5, x4
+                add x5, x6, x5, lsr #8
+                and x6, x5, #0xff000000ff
+                mul x6, x6, x17
+                lsr x5, x5, #16
+                and x5, x5, #0xff000000ff
+                madd    x5, x5, x2, x6
+                add x9, x9, x5, lsr #32
+                sub x15, x15, #0x8
+                add x14, x14, #0x8
+                cmp x15, #0x7
+                b.hi    0x10002f394 <__RNvNtNtNtNtCsjgY6bXVaRmE_4core3num3imp7dec2flt5parse12parse_number+0x218>
+                cbz x15, 0x10002f494 <__RNvNtNtNtNtCsjgY6bXVaRmE_4core3num3imp7dec2flt5parse12parse_number+0x318>
+                mov x11, x14
+                add x14, x14, x15
+                mov w16, #0xa               ; =10
+                ldrb    w17, [x11]
+                sub w17, w17, #0x30
+                cmp w17, #0x9
+                b.hi    0x10002f490 <__RNvNtNtNtNtCsjgY6bXVaRmE_4core3num3imp7dec2flt5parse12parse_number+0x314>
+                add x11, x11, #0x1
+                mul x9, x9, x16
+                add x9, x9, w17, uxtb
+                subs    x15, x15, #0x1
+                b.ne    0x10002f3f0 <__RNvNtNtNtNtCsjgY6bXVaRmE_4core3num3imp7dec2flt5parse12parse_number+0x274>
+                b   0x10002f494 <__RNvNtNtNtNtCsjgY6bXVaRmE_4core3num3imp7dec2flt5parse12parse_number+0x318>
+                mov x16, #0x0               ; =0
+                mov x11, #0x0               ; =0
+                sub x15, x12, x13
+                sub x12, x1, x12
+                add x13, x16, x13
+                adds    x16, x13, x12
+                b.ne    0x10002f4bc <__RNvNtNtNtNtCsjgY6bXVaRmE_4core3num3imp7dec2flt5parse12parse_number+0x340>
+                b   0x10002f5c4 <__RNvNtNtNtNtCsjgY6bXVaRmE_4core3num3imp7dec2flt5parse12parse_number+0x448>
+                neg x10, x16
+                subs    x10, x10, #0x1
+                b.eq    0x10002f53c <__RNvNtNtNtNtCsjgY6bXVaRmE_4core3num3imp7dec2flt5parse12parse_number+0x3c0>
+                add x14, x0, #0x1
+                mov w15, #0xa               ; =10
+                mov x16, x10
+                ldrb    w17, [x14], #0x1
+                sub w0, w17, #0x30
+                cmp w0, #0x9
+                b.hi    0x10002f550 <__RNvNtNtNtNtCsjgY6bXVaRmE_4core3num3imp7dec2flt5parse12parse_number+0x3d4>
+                sub x17, x16, #0x1
+                mul x9, x9, x15
+                add x9, x9, w0, uxtb
+                cmp x9, x11
+                ccmp    x16, #0x1, #0x4, ls
+                mov x16, x17
+                b.ne    0x10002f450 <__RNvNtNtNtNtCsjgY6bXVaRmE_4core3num3imp7dec2flt5parse12parse_number+0x2d4>
+                sub x10, x17, x10
+                add x11, x10, x13
+                mov w10, #0x1               ; =1
+                cbz w12, 0x10002f5c4 <__RNvNtNtNtNtCsjgY6bXVaRmE_4core3num3imp7dec2flt5parse12parse_number+0x448>
+                b   0x10002f334 <__RNvNtNtNtNtCsjgY6bXVaRmE_4core3num3imp7dec2flt5parse12parse_number+0x1b8>
+                mov x14, x11
+                mvn x11, x13
+                sub x16, x12, x15
+                add x16, x11, x16
+                sub x11, x15, x12
+                add x11, x11, x13
+                add x11, x11, #0x1
+                sub x12, x1, x12
+                add x13, x16, x13
+                adds    x16, x13, x12
+                b.eq    0x10002f5c4 <__RNvNtNtNtNtCsjgY6bXVaRmE_4core3num3imp7dec2flt5parse12parse_number+0x448>
+                cbz x15, 0x10002f510 <__RNvNtNtNtNtCsjgY6bXVaRmE_4core3num3imp7dec2flt5parse12parse_number+0x394>
+                ldrb    w12, [x14]
+                orr w12, w12, #0x20
+                cmp w12, #0x65
+                b.ne    0x10002f51c <__RNvNtNtNtNtCsjgY6bXVaRmE_4core3num3imp7dec2flt5parse12parse_number+0x3a0>
+                subs    x12, x15, #0x1
+                b.eq    0x10002f5c4 <__RNvNtNtNtNtCsjgY6bXVaRmE_4core3num3imp7dec2flt5parse12parse_number+0x448>
+                mov x17, x14
+                ldrb    w13, [x17, #0x1]!
+                cmp w13, #0x2d
+                b.eq    0x10002f4f0 <__RNvNtNtNtNtCsjgY6bXVaRmE_4core3num3imp7dec2flt5parse12parse_number+0x374>
+                cmp w13, #0x2b
+                b.ne    0x10002f564 <__RNvNtNtNtNtCsjgY6bXVaRmE_4core3num3imp7dec2flt5parse12parse_number+0x3e8>
+                subs    x12, x15, #0x2
+                b.eq    0x10002f5c4 <__RNvNtNtNtNtCsjgY6bXVaRmE_4core3num3imp7dec2flt5parse12parse_number+0x448>
+                ldrb    w15, [x14, #0x2]!
+                mov x17, x14
+                sub w14, w15, #0x30
+                cmp w14, #0x9
+                b.hi    0x10002f5c4 <__RNvNtNtNtNtCsjgY6bXVaRmE_4core3num3imp7dec2flt5parse12parse_number+0x448>
+                b   0x10002f574 <__RNvNtNtNtNtCsjgY6bXVaRmE_4core3num3imp7dec2flt5parse12parse_number+0x3f8>
+                mov x13, #0x0               ; =0
+                mov w12, #0x1               ; =1
+                b   0x10002f270 <__RNvNtNtNtNtCsjgY6bXVaRmE_4core3num3imp7dec2flt5parse12parse_number+0xf4>
+                mov w12, #0x0               ; =0
+                mov x13, #0x0               ; =0
+                b   0x10002f270 <__RNvNtNtNtNtCsjgY6bXVaRmE_4core3num3imp7dec2flt5parse12parse_number+0xf4>
+                cmn x16, #0x1
+                b.eq    0x10002f5d4 <__RNvNtNtNtNtCsjgY6bXVaRmE_4core3num3imp7dec2flt5parse12parse_number+0x458>
+                neg x10, x14
+                subs    x10, x10, #0x1
+                b.ne    0x10002f444 <__RNvNtNtNtNtCsjgY6bXVaRmE_4core3num3imp7dec2flt5parse12parse_number+0x2c8>
+                neg x10, x10
+                add x11, x10, x13
+                mov w10, #0x1               ; =1
+                cbz w12, 0x10002f5c4 <__RNvNtNtNtNtCsjgY6bXVaRmE_4core3num3imp7dec2flt5parse12parse_number+0x448>
+                b   0x10002f334 <__RNvNtNtNtNtCsjgY6bXVaRmE_4core3num3imp7dec2flt5parse12parse_number+0x1b8>
+                sub x10, x16, x10
+                add x11, x10, x13
+                mov w10, #0x1               ; =1
+                cbz w12, 0x10002f5c4 <__RNvNtNtNtNtCsjgY6bXVaRmE_4core3num3imp7dec2flt5parse12parse_number+0x448>
+                b   0x10002f334 <__RNvNtNtNtNtCsjgY6bXVaRmE_4core3num3imp7dec2flt5parse12parse_number+0x1b8>
+                mov x15, x13
+                sub w14, w15, #0x30
+                cmp w14, #0x9
+                b.hi    0x10002f5c4 <__RNvNtNtNtNtCsjgY6bXVaRmE_4core3num3imp7dec2flt5parse12parse_number+0x448>
+                mov x14, #0x0               ; =0
+                mov x15, #0x0               ; =0
+                mov w2, #0xa                ; =10
+                ldrb    w3, [x17], #0x1
+                sub w3, w3, #0x30
+                cmp w3, #0x9
+                b.hi    0x10002f5ac <__RNvNtNtNtNtCsjgY6bXVaRmE_4core3num3imp7dec2flt5parse12parse_number+0x430>
+                mul x4, x15, x2
+                add x3, x4, w3, uxtb
+                cmp x15, #0x10, lsl #12     ; =0x10000
+                csel    x14, x3, x14, lt
+                csel    x15, x3, x15, lt
+                sub x12, x12, #0x1
+                cbnz    x12, 0x10002f580 <__RNvNtNtNtNtCsjgY6bXVaRmE_4core3num3imp7dec2flt5parse12parse_number+0x404>
+                cmp w13, #0x2d
+                cneg    x13, x14, eq
+                add x11, x13, x11
+                cmp x12, #0x0
+                cset    w12, eq
+                b   0x10002f270 <__RNvNtNtNtNtCsjgY6bXVaRmE_4core3num3imp7dec2flt5parse12parse_number+0xf4>
+                mov w10, #0x2               ; =2
+                strb    w10, [x8, #0x11]
+                ldp x29, x30, [sp], #0x10
+                ret
+                adrp    x3, 0x10102a000 <_anon.7f17582b625ed82cc00b776cf4020058.255+0x610>
+                add x3, x3, #0xc50
+                mov w0, #0x1                ; =1
+                mov x1, #0x0                ; =0
+                mov x2, #0x0                ; =0
+                bl  0x100c8038c <__RNvNtNtCsjgY6bXVaRmE_4core5slice5index16slice_index_fail>
+        ...

@@ -1,0 +1,38 @@
+[
+  {
+    "case": "baseline-numbers_1m-parse",
+    "command": [
+      "/Users/perry/json-direct-string-20260906-codex/.work/baseline-worker",
+      "/Users/perry/json-direct-string-20260906-codex/.work/fixtures/numbers_1m.json",
+      "parse",
+      "4000",
+      "2"
+    ],
+    "worker_sha256": "85189dd09e2f34151351546aa751100e0480ef8e110c8380dfbb10d53755d938",
+    "exit": 0
+  },
+  {
+    "case": "candidate-numbers_1m-parse",
+    "command": [
+      "/Users/perry/json-direct-string-20260906-codex/.work/worker",
+      "/Users/perry/json-direct-string-20260906-codex/.work/fixtures/numbers_1m.json",
+      "parse",
+      "4000",
+      "2"
+    ],
+    "worker_sha256": "7cbedf7177d31793978f7bda97a30da9c9b7c7a9dd41c7f7c93acdeb714d4e1b",
+    "exit": 0
+  },
+  {
+    "case": "candidate-long_string_1m-stringify",
+    "command": [
+      "/Users/perry/json-direct-string-20260906-codex/.work/worker",
+      "/Users/perry/json-direct-string-20260906-codex/.work/fixtures/long_string_1m.json",
+      "stringify",
+      "60000",
+      "2"
+    ],
+    "worker_sha256": "7cbedf7177d31793978f7bda97a30da9c9b7c7a9dd41c7f7c93acdeb714d4e1b",
+    "exit": 0
+  }
+]

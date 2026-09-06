@@ -1,0 +1,28 @@
+[
+  {
+    "fixture": "null",
+    "fixture_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "command": [
+      "/Users/perry/json-primitive-array-20260906-codex/.work/worker",
+      "/Users/perry/json-primitive-array-20260906-codex/.work/fixtures/null.json",
+      "parse",
+      "100000000",
+      "8"
+    ],
+    "exit": 0,
+    "worker_sha256": "f877e0f32f6b03528b8b5654108efacfd9b0f489e90e740cb354e4763922e25c"
+  },
+  {
+    "fixture": "tiny_object",
+    "fixture_sha256": "015abd7f5cc57a2dd94b7590f04ad8084273905ee33ec5cebeae62276a97f862",
+    "command": [
+      "/Users/perry/json-primitive-array-20260906-codex/.work/worker",
+      "/Users/perry/json-primitive-array-20260906-codex/.work/fixtures/tiny_object.json",
+      "parse",
+      "100000000",
+      "8"
+    ],
+    "exit": 0,
+    "worker_sha256": "f877e0f32f6b03528b8b5654108efacfd9b0f489e90e740cb354e4763922e25c"
+  }
+]

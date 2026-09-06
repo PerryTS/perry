@@ -1,0 +1,35 @@
+--- unicode
++++ direct-string
+@@ -1325,24 +1325,24 @@
+ ldp	x26, x25, [sp, #0x10]
+ ldp	x28, x27, [sp], #0x60
+ ret
+-adrp	x3, ADDR <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime7bun_ffi4read17READ_OBJECT_CACHE+0x21f8>
+-add	x3, x3, #0x8
++adrp	x3, ADDR <_anon.41480d6667ca646c352510f0813f7c8e.1277+0x10>
++add	x3, x3, #0xa0
+ mov	x0, x8
+ mov	x2, x1
+ mov	x1, x9
+ bl	ADDR <__RNvNtNtCsjgY6bXVaRmE_4core5slice5index16slice_index_fail>
+-adrp	x2, ADDR <_anon.9e9e5bfafd05c422902bcbdd5b0bfbb8.459+0x408>
+-add	x2, x2, #0xaf0
++adrp	x2, ADDR <_anon.41480d6667ca646c352510f0813f7c8e.506+0x40>
++add	x2, x2, #0xb78
+ mov	x0, x28
+ mov	x1, x19
+ bl	ADDR <__RNvNtCsjgY6bXVaRmE_4core9panicking18panic_bounds_check>
+-adrp	x2, ADDR <_anon.9e9e5bfafd05c422902bcbdd5b0bfbb8.459+0x408>
+-add	x2, x2, #0xac0
++adrp	x2, ADDR <_anon.41480d6667ca646c352510f0813f7c8e.506+0x40>
++add	x2, x2, #0xb48
+ mov	x0, x8
+ mov	x1, x9
+ bl	ADDR <__RNvNtCsjgY6bXVaRmE_4core9panicking18panic_bounds_check>
+-adrp	x2, ADDR <_anon.9e9e5bfafd05c422902bcbdd5b0bfbb8.459+0x408>
+-add	x2, x2, #0xad8
++adrp	x2, ADDR <_anon.41480d6667ca646c352510f0813f7c8e.506+0x40>
++add	x2, x2, #0xb60
+ mov	x0, x8
+ mov	x1, x9
+ bl	ADDR <__RNvNtCsjgY6bXVaRmE_4core9panicking18panic_bounds_check>

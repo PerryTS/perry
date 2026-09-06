@@ -1,0 +1,35 @@
+--- primitive-array
++++ direct-string
+@@ -1325,24 +1325,24 @@
+ ldp	x26, x25, [sp, #0x10]
+ ldp	x28, x27, [sp], #0x60
+ ret
+-adrp	x3, ADDR <_anon.1ce557b72cd0833f0de16f51d71b0f04.957>
+-add	x3, x3, #0x758
++adrp	x3, ADDR <_anon.41480d6667ca646c352510f0813f7c8e.1277+0x10>
++add	x3, x3, #0xa0
+ mov	x0, x8
+ mov	x2, x1
+ mov	x1, x9
+ bl	ADDR <__RNvNtNtCsjgY6bXVaRmE_4core5slice5index16slice_index_fail>
+-adrp	x2, ADDR <_anon.1ce557b72cd0833f0de16f51d71b0f04.222+0x38>
+-add	x2, x2, #0xf88
++adrp	x2, ADDR <_anon.41480d6667ca646c352510f0813f7c8e.506+0x40>
++add	x2, x2, #0xb78
+ mov	x0, x28
+ mov	x1, x19
+ bl	ADDR <__RNvNtCsjgY6bXVaRmE_4core9panicking18panic_bounds_check>
+-adrp	x2, ADDR <_anon.1ce557b72cd0833f0de16f51d71b0f04.222+0x38>
+-add	x2, x2, #0xf58
++adrp	x2, ADDR <_anon.41480d6667ca646c352510f0813f7c8e.506+0x40>
++add	x2, x2, #0xb48
+ mov	x0, x8
+ mov	x1, x9
+ bl	ADDR <__RNvNtCsjgY6bXVaRmE_4core9panicking18panic_bounds_check>
+-adrp	x2, ADDR <_anon.1ce557b72cd0833f0de16f51d71b0f04.222+0x38>
+-add	x2, x2, #0xf70
++adrp	x2, ADDR <_anon.41480d6667ca646c352510f0813f7c8e.506+0x40>
++add	x2, x2, #0xb60
+ mov	x0, x8
+ mov	x1, x9
+ bl	ADDR <__RNvNtCsjgY6bXVaRmE_4core9panicking18panic_bounds_check>

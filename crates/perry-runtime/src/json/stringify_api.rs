@@ -262,6 +262,9 @@ pub(crate) unsafe fn try_stringify_lazy_array(value: f64) -> Option<*mut StringH
 
 #[no_mangle]
 pub unsafe extern "C" fn js_json_stringify(value: f64, type_hint: u32) -> *mut StringHeader {
+    if let Some(ptr) = super::stringify_string::try_heap_string(value.to_bits()) {
+        return ptr;
+    }
     if let Some(ptr) = try_stringify_lazy_array(value) {
         return ptr;
     }
@@ -331,6 +334,11 @@ pub unsafe extern "C" fn js_json_stringify(value: f64, type_hint: u32) -> *mut S
 pub unsafe extern "C" fn js_json_stringify_string(
     str_ptr: *const StringHeader,
 ) -> *mut StringHeader {
+    if let Some(ptr) =
+        super::stringify_string::try_heap_string(JSValue::string_ptr(str_ptr as *mut _).bits())
+    {
+        return ptr;
+    }
     let s = match str_from_header(str_ptr) {
         Some(s) => s,
         None => return std::ptr::null_mut(),

@@ -1,0 +1,20 @@
+{
+  "owner": "json-perf-6764-1788693402",
+  "load_before": [
+    1.63134765625,
+    1.67333984375,
+    1.64111328125
+  ],
+  "started_utc": "2026-09-06T11:16:42Z",
+  "command": [
+    "python3",
+    "profile_direct.py"
+  ],
+  "load_after": [
+    1.666015625,
+    1.681640625,
+    1.64501953125
+  ],
+  "quiet_gate_passed": true,
+  "finished_utc": "2026-09-06T11:17:06Z"
+}
