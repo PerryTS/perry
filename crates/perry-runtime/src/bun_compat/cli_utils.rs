@@ -947,7 +947,7 @@ fn yaml_parse(input: f64) -> f64 {
                 let problem = if parser.problem.is_null() {
                     "invalid YAML".to_string()
                 } else {
-                    std::ffi::CStr::from_ptr(parser.problem)
+                    std::ffi::CStr::from_ptr(parser.problem.cast::<std::ffi::c_char>())
                         .to_string_lossy()
                         .into_owned()
                 };
