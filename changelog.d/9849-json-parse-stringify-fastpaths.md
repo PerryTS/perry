@@ -11,3 +11,5 @@ CPU/RSS parity and no-regression acceptance remain open: 11/38 CPU, 58/74 peak R
 A subsequent ARM mask-search experiment passed correctness but regressed escaped parsing 50.63% and record-array parsing 5.89–9.51% in a qualified full matrix. It was reverted. Its reproducible source patch and complete losing results remain available. Historical unqualified runs are labeled explicitly and do not count toward acceptance.
 
 GC production policy and gc_bump_malloc_trigger remain unchanged from v0.5.1520 (454daac4f); parse_api.rs deliberately changes the scalar boundary flow. GC-directory changes are tests only. No version bump is included. Current implementation, all rows and validation limits are in `benchmarks/json_performance/DATA_RECORDS.md`.
+
+The next candidate reuses the object walker's primitive-field preflight to borrow inline keys and values once during emission. It passes 138 JSON runtime tests, 33 compiled Node comparisons and 24 moving-GC runs. Local wide-object stringify instructions fall 23.46%; qualified CPU/RSS measurements are pending, so the standings above still describe the preceding empty-object release.

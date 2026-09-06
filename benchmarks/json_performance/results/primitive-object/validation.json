@@ -1,0 +1,10 @@
+{
+  "runtime_json_tests": 138,
+  "compiled_node_comparisons": 33,
+  "moving_gc_stress_runs": 24,
+  "qualified_performance": "pending",
+  "local_instruction_trials": 36,
+  "goal_complete": false,
+  "all_outputs_match": true,
+  "all_stress_runs_show_live_movement": true
+}

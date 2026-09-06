@@ -74,7 +74,7 @@ pub unsafe fn ptr_is_tracked_heap_object(ptr: *const u8) -> bool {
 /// Dynamic SSO writes keep short property names inline; module-slot shapes may
 /// still carry the legacy validated raw `StringHeader` pointer form.
 #[inline]
-unsafe fn object_key_str<'a>(
+pub(super) unsafe fn object_key_str<'a>(
     key_bits: u64,
     sso: &'a mut [u8; crate::value::SHORT_STRING_MAX_LEN],
 ) -> Option<&'a str> {
@@ -1166,10 +1166,12 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
     // be a closure. Reading offset 12 (CLOSURE_MAGIC) per pointer field is
     // cheaper (~3ns/field) than walking the keys array looking for a
     // "toJSON" string that almost never exists (~15ns).
-    let has_closure_field = {
+    let (has_closure_field, has_only_primitive_fields) = {
         let mut found = false;
+        let mut primitives = !has_overflow_fields;
         for f in 0..actual_fields {
             let bits = read_field_bits(f);
+            primitives = primitives && super::stringify_primitive_object::field_is_primitive(bits);
             let tag = bits & 0xFFFF_0000_0000_0000;
             let ptr_candidate = if tag == POINTER_TAG {
                 (bits & POINTER_MASK) as *const u8
@@ -1201,7 +1203,7 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
                 }
             }
         }
-        found
+        (found, primitives)
     };
 
     // A `toJSON` can live as an OWN closure-typed field (a plain object
@@ -1237,8 +1239,6 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
         }
     }
 
-    buf.push('{');
-    let mut first = true;
     // Only own ENUMERABLE keys are serialized; gated on the process-wide
     // atomic AND the per-object `OBJ_FLAG_HAS_DESCRIPTORS` header flag
     // (#6009) — the global flag flips for good the first time ANY program
@@ -1247,6 +1247,27 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
     // `json_object_getter_value`) on objects that never had a descriptor.
     let filter_non_enum =
         crate::object::descriptors_in_use() && crate::object::object_has_descriptors(ptr as usize);
+    if has_only_primitive_fields && !has_overflow_fields && !filter_non_enum && !has_prototype_chain
+    {
+        // The scan above proved that no value can call user code. With no
+        // descriptors, class fields or overflow, the remaining walk cannot
+        // allocate managed storage or collect. Borrow the rooted input once
+        // instead of retrieving its keys and slots through the handle for
+        // every field. The same key order and scalar encoders still apply.
+        let obj = cur_obj();
+        super::stringify_primitive_object::emit_validated(
+            obj,
+            crate::object::object_keys_array(obj),
+            key_order.as_deref(),
+            buf,
+        );
+        if depth > MAX_FAST_DEPTH {
+            STRINGIFY_STACK.with(|s| s.borrow_mut().pop());
+        }
+        return;
+    }
+    buf.push('{');
+    let mut first = true;
     // `pos(j)` maps the j-th enumerated slot to its key/field index: spec
     // order when array-index keys are present, else slot `j` (no allocation).
     let pos = |j: u32| -> u32 {

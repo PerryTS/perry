@@ -1,8 +1,16 @@
 The current source adds allocation-free scalar parsing and a guarded record
 stringify path. **This is a development checkpoint. Full CPU/RSS parity and
-no-regression acceptance remain open. The current empty-object release has
+no-regression acceptance remain open. The preceding empty-object release has
 qualified full-matrix and paired measurements; it reaches 11/38 CPU, 58/74 peak RSS and
 28/36 retained RSS targets.**
+
+The current candidate reuses the general object walker's preflight and key
+order to emit primitive inline fields without repeated handle retrieval. Its
+successful interval cannot invoke user code, allocate managed scratch or
+collect. It passes 138 runtime tests, 33 compiled Node comparisons and 24
+moving-GC runs. Local wide-object stringify instructions fall 23.46%, but
+qualified CPU/RSS measurements are still running; the standings above describe
+the preceding release. [Primitive-object evidence](results/primitive-object/README.md).
 
 A subsequent change reuses the record preflight when emitting primitive-array
 children. It passes 133 runtime tests, 31 compiled Node comparisons and 20

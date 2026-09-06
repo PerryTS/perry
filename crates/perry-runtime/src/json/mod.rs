@@ -37,6 +37,7 @@ mod stringify_buffer;
 mod stringify_data_record;
 mod stringify_flat;
 mod stringify_primitive_array;
+mod stringify_primitive_object;
 mod stringify_scalars;
 pub(crate) mod stringify_shape_template;
 mod stringify_small;
