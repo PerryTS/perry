@@ -29,7 +29,10 @@ unsafe fn quote_heap_string(source: *const StringHeader) -> Option<*mut StringHe
     let output_len = len.checked_add(2)?;
     let output_units = (*source).utf16_len.checked_add(2)?;
     let bytes = std::slice::from_raw_parts(string_data(source), len as usize);
-    if super::simd::find_string_escape(bytes).is_some() || has_incomplete_tail(bytes) {
+    if super::simd::find_string_escape(bytes).is_some() {
+        return super::stringify_escaped_output::quote(source);
+    }
+    if has_incomplete_tail(bytes) {
         return None;
     }
 

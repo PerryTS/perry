@@ -49,7 +49,6 @@ fn record_final_output_declines_before_allocating_on_ineligible_fields() {
             "{\"x\":{}}",
             "{\"x\":[{}]}",
             "{\"x\":[[1]]}",
-            "{\"x\":[\"\\n\"]}",
             "{\"x\":\"\\ud800\"}",
             "{\"2\":2,\"1\":1}",
         ] {

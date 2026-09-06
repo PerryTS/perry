@@ -101,7 +101,6 @@ fn flat_direct_output_declines_complex_fields_and_reordered_keys() {
             "{\"a\":{}}",
             "{\"a\":1,\"b\":2,\"c\":3,\"d\":4,\"e\":5}",
             "{\"2\":1,\"1\":2}",
-            "{\"a\":\"\\n\"}",
             "{\"a\":\"\\ud800\"}",
         ] {
             let value = parse(text);

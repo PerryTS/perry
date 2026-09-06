@@ -36,6 +36,7 @@ mod stringify;
 mod stringify_api;
 mod stringify_buffer;
 mod stringify_data_record;
+mod stringify_escaped_output;
 mod stringify_flat;
 mod stringify_primitive_array;
 mod stringify_primitive_object;

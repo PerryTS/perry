@@ -63,15 +63,61 @@ fn json_array_getter_runs_once_and_rederives_later_elements_after_movement() {
 
 #[test]
 fn json_record_output_rederives_children_after_cold_prototype_collection() {
-    assert_record_children_move(true);
+    assert_record_children_move(true, false);
 }
 
 #[test]
 fn json_record_output_rederives_children_after_final_string_allocation() {
-    assert_record_children_move(false);
+    assert_record_children_move(false, false);
 }
 
-fn assert_record_children_move(cold: bool) {
+#[test]
+fn json_escaped_record_output_rederives_children_after_cold_prototype_collection() {
+    assert_record_children_move(true, true);
+}
+
+#[test]
+fn json_escaped_record_output_rederives_children_after_final_string_allocation() {
+    assert_record_children_move(false, true);
+}
+
+#[test]
+fn json_escaped_heap_string_rederives_source_after_final_allocation() {
+    let _pacing = crate::gc::policy::force_alloc_point_minor_pacing();
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _evacuation = ForcedEvacuationTestGuard::on();
+    let _protection =
+        crate::arena::ProtectionModeGuard::set(crate::arena::FromSpaceProtection::PoisonOnly);
+    register_runtime_handle_root_scanner_for_tests();
+    let text = "quoted\"\n\\東京🙂".repeat(32);
+    let expected = serde_json::to_string(&text).unwrap();
+    let source = crate::js_string_from_bytes(text.as_ptr(), text.len() as u32);
+    let scope = RuntimeHandleScope::new();
+    let input = scope.root_string_ptr(source);
+    let before_ptr = input.get_raw_const_ptr::<crate::StringHeader>();
+    force_next_general_arena_alloc_slow();
+    triggers.make_arena_trigger_due();
+    let before = gc_collection_count();
+    let output = unsafe { crate::json::js_json_stringify_string(before_ptr) };
+    assert!(gc_collection_count() > before);
+    assert_ne!(input.get_raw_const_ptr::<crate::StringHeader>(), before_ptr);
+    assert_eq!(
+        unsafe {
+            std::slice::from_raw_parts(
+                crate::string::string_data(output),
+                (*output).byte_len as usize,
+            )
+        },
+        expected.as_bytes()
+    );
+    assert_eq!(
+        unsafe { (*output).utf16_len as usize },
+        expected.encode_utf16().count()
+    );
+}
+
+fn assert_record_children_move(cold: bool, escaped: bool) {
     let _pacing = crate::gc::policy::force_alloc_point_minor_pacing();
     let _guard = CopyingNurseryTestGuard::new(0);
     let triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
@@ -81,7 +127,11 @@ fn assert_record_children_move(cold: bool) {
     register_runtime_handle_root_scanner_for_tests();
     gc_register_mutable_root_scanner(json_parse_mutable_root_scanner);
     crate::object::js_get_global_this_builtin_value(b"Object".as_ptr(), 6);
-    let text = br#"{"id":42,"name":"user_42","email":"user_42@example.com","active":false,"score":63,"tags":["tag_alpha","tag_bravo"]}"#;
+    let text: &[u8] = if escaped {
+        br#"{"i\nd":42,"name":"user_\"42","email":"user_42\u0000@example.com","active":false,"score":63,"tags":["tag_\nalpha","tag_\\bravo"]}"#
+    } else {
+        br#"{"id":42,"name":"user_42","email":"user_42@example.com","active":false,"score":63,"tags":["tag_alpha","tag_bravo"]}"#
+    };
     let source = crate::js_string_from_bytes(text.as_ptr(), text.len() as u32);
     let value = unsafe { crate::json::test_json_parse_direct(source) };
     let scope = RuntimeHandleScope::new();

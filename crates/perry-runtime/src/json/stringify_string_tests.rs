@@ -7,7 +7,12 @@ unsafe fn check_accepted(bytes: &[u8]) -> bool {
     };
     let mut expected = Vec::with_capacity(bytes.len() + 2);
     expected.push(b'"');
-    expected.extend_from_slice(bytes);
+    if let Ok(text) = std::str::from_utf8(bytes) {
+        let quoted = serde_json::to_string(text).unwrap();
+        expected.extend_from_slice(&quoted.as_bytes()[1..quoted.len() - 1]);
+    } else {
+        expected.extend_from_slice(bytes);
+    }
     expected.push(b'"');
     assert_eq!(
         std::slice::from_raw_parts(string_data(result), (*result).byte_len as usize),
@@ -37,13 +42,13 @@ fn direct_quoted_strings_preserve_bytes_and_utf16_lengths() {
 }
 
 #[test]
-fn direct_quoted_strings_decline_escapes_and_surrogates() {
+fn direct_quoted_strings_accept_escapes_but_decline_surrogates() {
     unsafe {
         for special in [b'"', b'\\', b'\n', 0, 0x1f, 0xed] {
             for offset in [0, 15, 16, 31, 32, 63, 64, 127] {
                 let mut bytes = vec![b'a'; 128];
                 bytes[offset] = special;
-                assert!(!check_accepted(&bytes));
+                assert_eq!(check_accepted(&bytes), special != 0xed);
             }
         }
     }

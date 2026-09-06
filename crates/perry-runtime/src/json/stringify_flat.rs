@@ -10,6 +10,7 @@ const MAX_FIELDS: usize = 4;
 #[derive(Clone, Copy)]
 pub(super) enum Piece {
     String { bytes: u32, units: u32 },
+    Escaped(super::stringify_escaped_output::Plan),
     Inline { bytes: [u8; 32], len: u32 },
 }
 
@@ -26,6 +27,7 @@ impl Piece {
     pub(super) fn lengths(self) -> (u32, u32) {
         match self {
             Self::String { bytes, units } => (bytes + 2, units + 2),
+            Self::Escaped(plan) => (plan.bytes, plan.units),
             Self::Inline { len, .. } => (len, len),
         }
     }
@@ -43,11 +45,7 @@ pub(super) unsafe fn string_piece(bits: u64) -> Option<Piece> {
         return None;
     }
     let bytes = std::slice::from_raw_parts(ptr, len as usize);
-    if super::simd::find_string_escape(bytes).is_some()
-        || super::stringify_string::has_incomplete_tail(bytes)
-    {
-        return None;
-    }
+    let escaped = super::simd::find_string_escape(bytes).is_some();
     let units = if bits & crate::value::TAG_MASK == STRING_TAG {
         (*((bits & POINTER_MASK) as *const StringHeader)).utf16_len
     } else {
@@ -58,6 +56,12 @@ pub(super) unsafe fn string_piece(bits: u64) -> Option<Piece> {
         }
         len
     };
+    if escaped {
+        return super::stringify_escaped_output::Plan::new(bytes, units).map(Piece::Escaped);
+    }
+    if super::stringify_string::has_incomplete_tail(bytes) {
+        return None;
+    }
     units.checked_add(2)?;
     Some(Piece::String { bytes: len, units })
 }
@@ -103,6 +107,13 @@ pub(super) unsafe fn scalar_piece(bits: u64) -> Option<Piece> {
 
 pub(super) unsafe fn emit_piece(piece: Piece, bits: u64, output: *mut u8) -> usize {
     match piece {
+        Piece::Escaped(plan) => {
+            let mut scratch = [0; crate::value::SHORT_STRING_MAX_LEN];
+            let (source, _) =
+                crate::string::str_bytes_from_jsvalue(f64::from_bits(bits), &mut scratch)
+                    .expect("prevalidated escaped string slot");
+            plan.write(source, output)
+        }
         Piece::Inline { bytes, len } => {
             std::ptr::copy_nonoverlapping(bytes.as_ptr(), output, len as usize);
             len as usize
