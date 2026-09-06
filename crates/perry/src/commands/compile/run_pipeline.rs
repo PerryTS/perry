@@ -1024,7 +1024,7 @@ pub fn run_with_parse_cache(
         perry_transform::module_const_fold::run(hir_module);
     }
 
-    // #9846: the segment-view for-of matcher's hit counter, taken here for
+    // #9843: the segment-view for-of matcher's hit counter, taken here for
     // the same reason the HIR trace is taken here — this is the last point
     // before codegen, so the statements scanned are exactly the statements
     // codegen consumes. Running it at this point (rather than only inside
