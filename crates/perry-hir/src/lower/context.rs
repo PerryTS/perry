@@ -150,6 +150,7 @@ impl LoweringContext {
             namespace_vars: Vec::new(),
             current_namespace: None,
             module_native_instances: Vec::new(),
+            local_id_native_instances: HashMap::new(),
             uses_fetch: false,
             uses_webassembly: false,
             react_default_import_local: None,
@@ -1639,9 +1640,40 @@ impl LoweringContext {
             .filter(|(_, module, class)| !exposes_plain_object_fields(module, class))
             .map(|(_, module, class)| (module.as_str(), class.as_str()))
             .or_else(|| {
+                // #9847: a bare assignment (`O = cp.spawn(...)`) tags the
+                // RESOLVED binding, not the spelling. Consulted before the
+                // name-keyed module-wide table below, so a same-named binding
+                // in another function is simply a different binding and cannot
+                // inherit the tag. A different binding has a different
+                // `LocalId`, so no scope-exit truncation is needed here.
+                //
+                // This arm sits on the miss path of every identifier property
+                // access, so short-circuit the common module that has no
+                // bare-assignment native handle at all before touching the
+                // locals index.
+                if self.local_id_native_instances.is_empty() {
+                    return None;
+                }
+                let id = self.lookup_local(name)?;
+                self.local_id_native_instances
+                    .get(&id)
+                    .filter(|(module, class)| !exposes_plain_object_fields(module, class))
+                    .map(|(module, class)| (module.as_str(), class.as_str()))
+            })
+            .or_else(|| {
                 // Check module-level instances (survive scope exits).
                 // Same last-match-wins rule for consistency — the index stores
                 // the LAST pushed entry per name.
+                //
+                // #9847 KNOWN HOLE, stated plainly (the same one #7775 left for
+                // proxies): a receiver that resolves to NO local — a bare
+                // global, or a module-level binding referenced from a function
+                // body lowered before that binding was pre-registered — is
+                // still answered by spelling alone. That arm is kept because
+                // dropping it would regress the genuine cross-function handles
+                // that reach the lowering only through a name, and it is
+                // strictly no worse than the pre-#9847 behaviour, which used it
+                // for every assignment.
                 self.module_native_instances_index
                     .get(name)
                     .map(|&idx| &self.module_native_instances[idx])
@@ -1683,6 +1715,26 @@ impl LoweringContext {
         self.module_native_instances_index
             .insert(entry.0.clone(), idx);
         self.module_native_instances.push(entry);
+    }
+
+    /// #9847: tag the RESOLVED binding `id` as holding a native instance.
+    ///
+    /// Used by the bare-assignment path (`O = cp.spawn(...)`) in place of
+    /// `push_module_native_instance`, whose name key was module-wide: in a
+    /// minified single-module bundle a single native handle poisoned every
+    /// homonym in the program. Keyed on the `LocalId` the target resolves to,
+    /// this keeps the cross-function reach the module-wide table was there to
+    /// provide (a module-level `let client;` assigned inside `init()` and read
+    /// inside `handler()` resolves to the SAME id in both) while making a
+    /// same-named binding in another scope a different binding.
+    pub(crate) fn register_local_id_native_instance(
+        &mut self,
+        id: LocalId,
+        module_name: String,
+        class_name: String,
+    ) {
+        self.local_id_native_instances
+            .insert(id, (module_name, class_name));
     }
 }
 
