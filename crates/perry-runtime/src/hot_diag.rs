@@ -1037,7 +1037,13 @@ fn buffer_dump() {
     let amax = BUF_ADDR_MAX.load(Ordering::Relaxed);
     let wlo = BUF_WIN_LO.load(Ordering::Relaxed);
     let whi = BUF_WIN_HI.load(Ordering::Relaxed);
-    let pct = |a: u64, b: u64| if b == 0 { 0.0 } else { 100.0 * a as f64 / b as f64 };
+    let pct = |a: u64, b: u64| {
+        if b == 0 {
+            0.0
+        } else {
+            100.0 * a as f64 / b as f64
+        }
+    };
     let mb = |n: usize| n as f64 / (1024.0 * 1024.0);
     let win_span = whi.saturating_sub(wlo);
     let probe_span = amax.saturating_sub(amin);
