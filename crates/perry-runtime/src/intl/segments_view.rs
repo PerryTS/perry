@@ -52,6 +52,11 @@ static REGEXP_TEST_ACCEPTED: AtomicU64 = AtomicU64::new(0);
 static REGEXP_TEST_DECLINED: AtomicU64 = AtomicU64::new(0);
 
 fn diag_on() -> bool {
+    // Always on under test: a counter nothing increments cannot be asserted on,
+    // and the decline counters exist so a decline names its cause.
+    if cfg!(test) {
+        return true;
+    }
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var("PERRY_SEGVIEW_DIAG").is_ok())
 }
@@ -63,29 +68,18 @@ fn bump(c: &AtomicU64) {
     }
 }
 
-/// One line, on demand. A decline that names its own reason is the difference
-/// between "the tier did not fire" and "the tier fired and found nothing".
-pub fn report_segview_counters() {
-    if !diag_on() {
-        return;
-    }
-    eprintln!(
-        "[segview] opens={} declines: not_segmenter={} not_grapheme={} segment_patched={} \
-         not_string={} not_utf8={} empty={} | nexts={} code_point_at={} materialise_segment={} \
-         regexp_test: accepted={} declined={}",
+/// The counters' consumer today is the test suite, which is why there is no
+/// `report_*` function: a printer with no caller is dead code, and the tally
+/// the campaign reads is the COMPILER-side `PERRY_SEGVIEW_DIAG` one. Wire a
+/// runtime-side printer when a rig run needs these numbers, not before.
+#[cfg(test)]
+fn counters() -> [u64; 4] {
+    [
         OPENS.load(Ordering::Relaxed),
-        DECLINE_NOT_SEGMENTER.load(Ordering::Relaxed),
-        DECLINE_NOT_GRAPHEME.load(Ordering::Relaxed),
-        DECLINE_SEGMENT_PATCHED.load(Ordering::Relaxed),
         DECLINE_NOT_STRING.load(Ordering::Relaxed),
-        DECLINE_NOT_UTF8.load(Ordering::Relaxed),
-        DECLINE_EMPTY.load(Ordering::Relaxed),
         NEXTS.load(Ordering::Relaxed),
-        CODE_POINT_ATS.load(Ordering::Relaxed),
-        MATERIALISE_SEGMENT.load(Ordering::Relaxed),
-        REGEXP_TEST_ACCEPTED.load(Ordering::Relaxed),
-        REGEXP_TEST_DECLINED.load(Ordering::Relaxed),
-    );
+        crate::object::regex_proto_thunks::REGEXP_PROTOTYPE_TEST_WALKS.load(Ordering::Relaxed),
+    ]
 }
 
 // --- cursor plumbing --------------------------------------------------------
@@ -119,6 +113,7 @@ fn set_num_field(obj: *mut ObjectHeader, index: u32, value: usize) {
 /// dropped at the end of the call; a short (SSO) string is decoded into the
 /// caller's stack buffer, so neither case allocates and neither case leaks an
 /// address.
+///
 #[inline]
 fn with_input<R>(cursor: *mut ObjectHeader, f: impl FnOnce(&str) -> R) -> Option<R> {
     let value = crate::object::js_object_get_field(cursor, F_INPUT);
@@ -711,6 +706,86 @@ mod view_mode_tests {
             0.0,
             "invalid UTF-8 must decline"
         );
+    }
+
+    /// The canonicality proof must be a LOAD, not a walk: the only by-name
+    /// lookup is the one-time recording at install. If this ever climbs with
+    /// the number of calls, the fast path is not the path being taken — which
+    /// is exactly the failure the counter exists to catch.
+    #[cfg(feature = "regex-engine")]
+    #[test]
+    fn canonicality_proof_walks_once_per_realm_not_once_per_call() {
+        let cursor = js_segments_view_open(grapheme_segmenter(), js_string("abcdef"));
+        assert!(cursor != 0.0);
+        let re = crate::regex::js_regexp_construct(js_string("[a-z]"), js_string(""));
+        let re_v = f64::from_bits(JSValue::pointer(re as *const u8).bits());
+        assert_eq!(js_segments_view_next(cursor), 1.0);
+        let before = counters()[3];
+        for _ in 0..50 {
+            let v = js_segments_view_regexp_test(cursor, re_v);
+            assert!(!is_undefined(v), "a plain regex must keep being accepted");
+        }
+        assert_eq!(
+            counters()[3],
+            before,
+            "50 accepted calls must add ZERO by-name walks"
+        );
+        // A second cursor and a second regex must not add one either: the
+        // recorded site belongs to the realm, not to the call or the receiver.
+        let cursor2 = js_segments_view_open(grapheme_segmenter(), js_string("xy"));
+        assert_eq!(js_segments_view_next(cursor2), 1.0);
+        let re2 = crate::regex::js_regexp_construct(js_string("[x-z]"), js_string(""));
+        let re2_v = f64::from_bits(JSValue::pointer(re2 as *const u8).bits());
+        assert!(!is_undefined(js_segments_view_regexp_test(cursor2, re2_v)));
+        assert_eq!(
+            counters()[3],
+            before,
+            "a second cursor and regex must add no walks either"
+        );
+        // NOT asserted: an absolute bound like `walks <= 1`. The unit harness
+        // resets arenas between tests and builds the prototype tower more than
+        // once in a process, so the per-process total counts REALMS, not calls.
+        // The property that matters — and the one that fails if the fast path
+        // stops being taken — is the delta above.
+    }
+
+    /// SABOTAGE-SHAPED, kept as a test: patching `RegExp.prototype.test` AFTER
+    /// the site is recorded must make the very next call decline.
+    #[cfg(feature = "regex-engine")]
+    #[test]
+    fn a_patched_prototype_test_declines_on_the_next_call() {
+        let cursor = js_segments_view_open(grapheme_segmenter(), js_string("ab"));
+        assert_eq!(js_segments_view_next(cursor), 1.0);
+        let re = crate::regex::js_regexp_construct(js_string("[a-z]"), js_string(""));
+        let re_v = f64::from_bits(JSValue::pointer(re as *const u8).bits());
+        assert!(
+            !is_undefined(js_segments_view_regexp_test(cursor, re_v)),
+            "accepted before the patch"
+        );
+
+        // Replace `RegExp.prototype.test` the way a program would.
+        let proto_ptr = crate::object::regex_proto_thunks::REGEXP_PROTOTYPE_TEST_SITE
+            .load(Ordering::Acquire)
+            & ((1i64 << 48) - 1);
+        assert!(proto_ptr != 0, "the site must have been recorded");
+        let proto = proto_ptr as *mut ObjectHeader;
+        let key = crate::string::js_string_from_bytes(b"test".as_ptr(), 4);
+        let replacement = crate::closure::js_closure_alloc(patched_test_thunk as *const u8, 0);
+        crate::closure::js_register_closure_arity(patched_test_thunk as *const u8, 0);
+        crate::object::js_object_set_field_by_name(
+            proto,
+            key,
+            crate::value::js_nanbox_pointer(replacement as i64),
+        );
+        assert!(
+            is_undefined(js_segments_view_regexp_test(cursor, re_v)),
+            "a replaced `RegExp.prototype.test` must make the view DECLINE, so \
+             the caller materialises and runs the user's function"
+        );
+    }
+
+    extern "C" fn patched_test_thunk(_c: *const crate::closure::ClosureHeader) -> f64 {
+        f64::from_bits(JSValue::bool(true).bits())
     }
 
     /// `_regexp_test` answers the same as the materialised call for a plain
