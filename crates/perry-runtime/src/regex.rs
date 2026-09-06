@@ -1473,7 +1473,7 @@ fn js_regexp_new_impl(
         let needs_barrier = !newborn_barrier_gate_enabled()
             || crate::gc::newborn_parent_needs_barrier(regexp_parent_addr);
         if crate::hot_diag::regex_on() {
-            crate::hot_diag::regex_with(|d| {
+            crate::hot_diag::regex_counters(|d| {
                 if needs_barrier {
                     d.new_barrier_taken += 1;
                 } else {
@@ -1544,7 +1544,7 @@ fn js_regexp_new_impl(
             // hashbrown insert, mirrored by two removals at death and two
             // rekeys per evacuation. Counted so the pair is a number rather
             // than a reading of the profile.
-            crate::hot_diag::regex_with(|d| d.new_side_table_inserts += 2);
+            crate::hot_diag::regex_counters(|d| d.new_side_table_inserts += 2);
         }
 
         // Issue #637: side-table owned copies of pattern + flags so

@@ -148,7 +148,7 @@ pub(super) fn lookup(pattern: &str, flags: &str) -> Option<Hit> {
                     // `install_programs` verify too and are not counted here.
                     if crate::hot_diag::regex_on() {
                         let n = pattern.len() as u64;
-                        crate::hot_diag::regex_with(|d| d.new_site_verify_bytes += n);
+                        crate::hot_diag::regex_counters(|d| d.new_site_verify_bytes += n);
                     }
                     return Some(Hit {
                         pattern: entry.pattern.clone(),
