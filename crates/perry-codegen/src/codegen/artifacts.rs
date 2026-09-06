@@ -17,7 +17,8 @@ use super::closure::{
 use super::ctor_arity::synthesized_ctor_param_count;
 use super::entry::compile_module_entry;
 use super::helpers::{
-    function_body_returns_generator_object, sanitize, scoped_fn_name, unknown_func_wrapper_name,
+    function_body_returns_generator_object, namespace_live_getter_wrapper_symbol, sanitize,
+    scoped_fn_name, unknown_func_wrapper_name,
 };
 use super::indexed_method_artifacts::{compile_indexed_method_clones, IndexedMethodArtifactsCtx};
 use super::method::{
@@ -1347,9 +1348,42 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
         let ns_name = format!("__perry_ns_{}", module_prefix);
         // Hex double literal for TAG_UNDEFINED (0x7FFC_0000_0000_0001).
         llmod.add_global(&ns_name, DOUBLE, "0x7FFC000000000001");
-        for entry in &cross_module.namespace_entries {
+        for (entry_index, entry) in cross_module.namespace_entries.iter().enumerate() {
             let (gname, byte_len) = llmod.add_string_constant(&entry.name);
             namespace_key_globals.push((gname, byte_len));
+
+            let wrapper_name = namespace_live_getter_wrapper_symbol(module_prefix, entry_index);
+            let getter_name = match &entry.kind {
+                crate::NamespaceEntryKind::LocalVar { global_name } => {
+                    let wrapper = llmod.define_function(
+                        &wrapper_name,
+                        DOUBLE,
+                        vec![(I64, "%this_closure".to_string())],
+                    );
+                    let _ = wrapper.create_block("entry");
+                    let blk = wrapper.block_mut(0).unwrap();
+                    let value = blk.load(DOUBLE, &format!("@{global_name}"));
+                    blk.ret(DOUBLE, &value);
+                    continue;
+                }
+                crate::NamespaceEntryKind::ForeignVar {
+                    source_prefix,
+                    source_local,
+                } => format!("perry_fn_{}__{}", source_prefix, sanitize(source_local)),
+                _ => continue,
+            };
+            if !llmod.has_function(&getter_name) {
+                llmod.declare_function(&getter_name, DOUBLE, &[]);
+            }
+            let wrapper = llmod.define_function(
+                &wrapper_name,
+                DOUBLE,
+                vec![(I64, "%this_closure".to_string())],
+            );
+            let _ = wrapper.create_block("entry");
+            let blk = wrapper.block_mut(0).unwrap();
+            let value = blk.call(DOUBLE, &getter_name, &[]);
+            blk.ret(DOUBLE, &value);
         }
     }
     // For each `Expr::DynamicImport` target this module dispatches to,
