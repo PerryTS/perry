@@ -93,6 +93,7 @@ fn cursor_ptr(value: f64) -> Option<*mut ObjectHeader> {
     Some(obj)
 }
 
+#[cfg(test)]
 #[inline(always)]
 fn num_field(obj: *mut ObjectHeader, index: u32) -> usize {
     let bits = crate::object::js_object_get_field(obj, index);
@@ -101,6 +102,49 @@ fn num_field(obj: *mut ObjectHeader, index: u32) -> usize {
         n as usize
     } else {
         0
+    }
+}
+
+/// Direct view of the cursor's fixed inline payload. `cursor_ptr` has already
+/// established the class id, and every cursor is allocated with exactly
+/// `CURSOR_FIELDS`, so these indexed reads need neither a shape-table lookup
+/// nor an overflow check.
+#[derive(Clone, Copy)]
+struct CursorFields(*mut JSValue);
+
+impl CursorFields {
+    #[inline(always)]
+    unsafe fn from_cursor(cursor: *mut ObjectHeader) -> Self {
+        Self((cursor as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut JSValue)
+    }
+
+    #[inline(always)]
+    unsafe fn value(self, index: u32) -> JSValue {
+        *self.0.add(index as usize)
+    }
+
+    #[inline(always)]
+    unsafe fn number(self, index: u32) -> usize {
+        let n = self.value(index).to_number();
+        if n.is_finite() && n >= 0.0 {
+            n as usize
+        } else {
+            0
+        }
+    }
+
+    /// Store a value whose representation is provably an IEEE number. Cursor
+    /// slots 1..=4 are initialized as numbers and no writer stores any other
+    /// kind, so there is no child edge for the write barrier to remember.
+    #[inline(always)]
+    unsafe fn set_number(self, index: u32, value: usize) {
+        debug_assert!((F_BYTE_START..=F_UTF16_LEN).contains(&index));
+        // GC_STORE_AUDIT(NUMBER): `JSValue::number` cannot carry a heap edge;
+        // `cursor_position_fields_are_never_pointer_typed` pins the invariant
+        // across every product writer.
+        self.0
+            .add(index as usize)
+            .write(JSValue::number(value as f64));
     }
 }
 
@@ -136,8 +180,11 @@ fn set_num_field(obj: *mut ObjectHeader, index: u32, value: usize) {
 /// A `debug_assert` re-checks it in debug builds, which is where a future
 /// fourth writer to the slot would be caught.
 #[inline]
-fn with_input<R>(cursor: *mut ObjectHeader, f: impl FnOnce(&str) -> R) -> Option<R> {
-    let value = crate::object::js_object_get_field(cursor, F_INPUT);
+fn with_input<R>(fields: CursorFields, f: impl FnOnce(&str) -> R) -> Option<R> {
+    // SAFETY: `fields` was derived at entry from a branded cursor, and slot 0
+    // is the traced input value. Reading it here is the §9a re-derivation; no
+    // address derived from it is retained beyond this call.
+    let value = unsafe { fields.value(F_INPUT) };
     let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
     let bytes =
         unsafe { crate::string::js_string_key_bytes(JSValue::from_bits(value.bits()), &mut sso) }?;
@@ -249,7 +296,7 @@ pub extern "C" fn js_segments_view_open(segmenter: f64, input: f64) -> f64 {
 }
 
 /// Advance to the next grapheme boundary. `1.0` if a segment is now current,
-/// `0.0` at the end. **Allocation-free by contract**: three integer field
+/// `0.0` at the end. **Allocation-free by contract**: four integer field
 /// writes and a UAX #29 boundary scan, no arena allocation, no owned `String`,
 /// no descriptor insert — which is also why it cannot collect.
 #[no_mangle]
@@ -257,19 +304,23 @@ pub extern "C" fn js_segments_view_next(cursor: f64) -> f64 {
     let Some(c) = cursor_ptr(cursor) else {
         return 0.0;
     };
-    let from = num_field(c, F_BYTE_END);
-    let utf16_start = num_field(c, F_UTF16_START) + num_field(c, F_UTF16_LEN);
-    let step = with_input(c, |text| {
+    // SAFETY: `cursor_ptr` proved the fixed cursor layout.
+    let fields = unsafe { CursorFields::from_cursor(c) };
+    let from = unsafe { fields.number(F_BYTE_END) };
+    let utf16_start = unsafe { fields.number(F_UTF16_START) + fields.number(F_UTF16_LEN) };
+    let step = with_input(fields, |text| {
         next_boundary(text, from).map(|next| (next, super::segmenter::utf16_len(&text[from..next])))
     })
     .flatten();
     let Some((next, seg_u16)) = step else {
         return 0.0;
     };
-    set_num_field(c, F_BYTE_START, from);
-    set_num_field(c, F_UTF16_START, utf16_start);
-    set_num_field(c, F_BYTE_END, next);
-    set_num_field(c, F_UTF16_LEN, seg_u16 as usize);
+    unsafe {
+        fields.set_number(F_BYTE_START, from);
+        fields.set_number(F_UTF16_START, utf16_start);
+        fields.set_number(F_BYTE_END, next);
+        fields.set_number(F_UTF16_LEN, seg_u16 as usize);
+    }
     bump(&NEXTS);
     1.0
 }
@@ -291,14 +342,16 @@ pub extern "C" fn js_segments_view_code_point_at(cursor: f64, k: f64) -> f64 {
     if !k.is_finite() || k < 0.0 || k.fract() != 0.0 {
         return undef;
     }
+    // SAFETY: `cursor_ptr` proved the fixed cursor layout.
+    let fields = unsafe { CursorFields::from_cursor(c) };
     let k = k as usize;
-    if k >= num_field(c, F_UTF16_LEN) {
+    if k >= unsafe { fields.number(F_UTF16_LEN) } {
         return undef;
     }
-    let start = num_field(c, F_BYTE_START);
-    let end = num_field(c, F_BYTE_END);
+    let start = unsafe { fields.number(F_BYTE_START) };
+    let end = unsafe { fields.number(F_BYTE_END) };
     bump(&CODE_POINT_ATS);
-    with_input(c, |text| {
+    with_input(fields, |text| {
         let seg = &text[start..end];
         let mut utf16_pos = 0usize;
         for ch in seg.chars() {
@@ -329,14 +382,16 @@ pub extern "C" fn js_segments_view_segment(cursor: f64) -> f64 {
     let Some(c) = cursor_ptr(cursor) else {
         return undef;
     };
-    let start = num_field(c, F_BYTE_START);
-    let end = num_field(c, F_BYTE_END);
+    // SAFETY: `cursor_ptr` proved the fixed cursor layout.
+    let fields = unsafe { CursorFields::from_cursor(c) };
+    let start = unsafe { fields.number(F_BYTE_START) };
+    let end = unsafe { fields.number(F_BYTE_END) };
     bump(&MATERIALISE_SEGMENT);
     // The allocation happens INSIDE the borrow, so the borrow must not outlive
     // it: take the bytes out first, then allocate from a copy on the stack path
     // `js_string_from_bytes` performs. Nothing derived from the input survives
     // this call.
-    let made = with_input(c, |text| {
+    let made = with_input(fields, |text| {
         let seg = &text[start..end];
         crate::string::js_string_from_bytes(seg.as_ptr(), seg.len() as u32)
     });
@@ -398,9 +453,11 @@ pub extern "C" fn js_segments_view_regexp_test(cursor: f64, regex: f64) -> f64 {
             bump(&REGEXP_TEST_DECLINED);
             return undef;
         }
-        let start = num_field(c, F_BYTE_START);
-        let end = num_field(c, F_BYTE_END);
-        let verdict = with_input(c, |text| {
+        // SAFETY: `cursor_ptr` proved the fixed cursor layout.
+        let fields = unsafe { CursorFields::from_cursor(c) };
+        let start = unsafe { fields.number(F_BYTE_START) };
+        let end = unsafe { fields.number(F_BYTE_END) };
+        let verdict = with_input(fields, |text| {
             crate::regex::regexp_test_str_bounded(re, &text[start..end])
         })
         .flatten();
@@ -615,6 +672,40 @@ mod view_mode_tests {
             0,
             "next + code_point_at allocated {} bytes over {steps} steps",
             bytes_after.saturating_sub(bytes_before)
+        );
+    }
+
+    /// SABOTAGE-SHAPED: slots 1..=4 are the proof that `_next` may bypass the
+    /// generic JSValue store barrier. A future writer that puts a pointer in
+    /// any position slot makes this fail at the exact step where the invariant
+    /// is broken; slot 0 is intentionally excluded because it is the traced
+    /// input string.
+    #[test]
+    fn cursor_position_fields_are_never_pointer_typed() {
+        let cursor = js_segments_view_open(
+            grapheme_segmenter(),
+            js_string("a\u{301}b\u{1f469}\u{200d}\u{1f4bb}cd"),
+        );
+        assert!(cursor != 0.0);
+        let c = cursor_ptr(cursor).expect("branded cursor");
+        let fields = unsafe { CursorFields::from_cursor(c) };
+        let mut steps = 0usize;
+        loop {
+            for index in F_BYTE_START..=F_UTF16_LEN {
+                let value = unsafe { fields.value(index) };
+                assert!(
+                    value.is_number() && !value.is_pointer(),
+                    "cursor position slot {index} must be number-only before step {steps}"
+                );
+            }
+            if js_segments_view_next(cursor) != 1.0 {
+                break;
+            }
+            steps += 1;
+        }
+        assert!(
+            steps >= 4,
+            "the invariant must be checked across real steps"
         );
     }
 
@@ -850,10 +941,12 @@ mod view_mode_tests {
                 (0..count)
                     .find(|&i| {
                         let key = crate::array::js_array_get_f64(keys, i);
-                        crate::string::js_string_key_matches_bytes(
-                            JSValue::from_bits(key.to_bits()),
-                            b"test",
-                        )
+                        unsafe {
+                            crate::string::js_string_key_matches_bytes(
+                                JSValue::from_bits(key.to_bits()),
+                                b"test",
+                            )
+                        }
                     })
                     .expect("test key") as u32
             })
