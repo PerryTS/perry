@@ -1065,3 +1065,79 @@ fn nursery_regexp_that_dies_young_is_finalized_by_the_copied_minor() {
     );
     js_shadow_slot_set(0, 0);
 }
+
+/// #9851 follow-up — THE PREMISE OF THE LOCK REWIRE, on a real heap.
+///
+/// The survival-rate lock used to rate `survivor_live_bytes` (every live byte
+/// leaving the from-survivor space, of any age) against the previous cycle's
+/// whole `copied_bytes`. Those two scopes match — the survivor spaces are a
+/// strict semispace pair, so the from-space holds exactly what the last cycle
+/// copied — and the ratio is well-formed. What is wrong is *which population*
+/// it rates, and that is chosen by the threshold the lock itself sets: at a
+/// threshold of 2 the space holds one fresh cohort, at 3 or 4 it also holds
+/// objects that have already survived a round and are therefore selected for
+/// longevity.
+///
+/// This test pins the fact that makes the rewire meaningful rather than a
+/// rename: **at a threshold above 2 the whole-space number and the fresh-cohort
+/// number are different numbers**, with the aged resident in the first and not
+/// in the second. On cc that difference is the whole finding — the aggregate
+/// clears the lock's 90 % bar while a fresh cohort survives at 74 %.
+///
+/// Shape: at the power-on threshold (promote on the 4th survival) two rooted
+/// objects are introduced one cycle apart, so by the third minor the
+/// from-survivor space holds one age-2 object and one age-1 object.
+#[test]
+fn the_survivor_space_and_the_fresh_cohort_are_different_numbers_above_threshold_two() {
+    // TWO shadow slots: the test needs two independently rooted objects
+    // introduced one cycle apart, so that the survivor space holds two age
+    // classes at once. With one slot B is unrooted, dies immediately, and the
+    // fresh-cohort number is trivially zero.
+    let _guard = CopyingNurseryTestGuard::new(2);
+
+    // Cycle 1: A enters the survivor space from Eden. The from-survivor space
+    // was empty, so both numbers are zero and the cohort is all of nothing.
+    let a = young_leaf();
+    js_shadow_slot_set(0, ptr_bits(a));
+    let _ = gc_collect_minor();
+    let (_, _, survivor_live_1, first_round_1) = crate::gc::copying::test_last_cohort_split();
+    assert_eq!(
+        (survivor_live_1, first_round_1),
+        (0, 0),
+        "cycle 1 evacuates Eden only: nothing came out of the survivor space"
+    );
+
+    // Cycle 2: A is re-copied (age 1 -> 2) and B enters from Eden. The
+    // from-survivor space held ONLY A, which is a first-round object, so the
+    // two numbers must still agree — this is the regime the lock was designed
+    // in, and the assertion that the split is not simply always different.
+    let b = young_leaf();
+    js_shadow_slot_set(1, ptr_bits(b));
+    let _ = gc_collect_minor();
+    let (_, _, survivor_live_2, first_round_2) = crate::gc::copying::test_last_cohort_split();
+    assert!(survivor_live_2 > 0, "A must have come back out of the survivor space");
+    assert_eq!(
+        survivor_live_2, first_round_2,
+        "with a single generation resident the whole-space number IS the \
+         fresh-cohort number — at threshold <= 2 the old rule was correct"
+    );
+
+    // Cycle 3: the from-survivor space now holds A (age 2) and B (age 1).
+    // `survivor_live_bytes` counts both; the fresh cohort is B alone.
+    let _ = gc_collect_minor();
+    let (_, _, survivor_live_3, first_round_3) = crate::gc::copying::test_last_cohort_split();
+    assert!(
+        first_round_3 > 0,
+        "B is a first-round survivor and must be counted as one"
+    );
+    assert!(
+        survivor_live_3 > first_round_3,
+        "the aged resident A is in the whole-space number and must NOT be in \
+         the fresh-cohort number: whole-space {survivor_live_3}, cohort \
+         {first_round_3}. If these are equal the lock is still rating a \
+         population its own threshold selected."
+    );
+
+    js_shadow_slot_set(0, 0);
+    js_shadow_slot_set(1, 0);
+}

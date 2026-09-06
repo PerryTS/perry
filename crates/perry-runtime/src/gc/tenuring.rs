@@ -515,20 +515,37 @@ pub(super) fn compute_target_survivals(eden_live_bytes: usize, desired_bytes: us
 
 /// Feed one finished copying-minor cycle into the feedback loop.
 /// `eden_live_bytes` is the cycle's Eden survivor influx (bytes moved out
-/// of Eden, whether copied to a survivor space or promoted);
-/// `copied_bytes` is what this cycle put into the to-survivor space;
-/// `survivor_live_bytes` is what came back out of the from-survivor space
-/// alive (numerator of the survival rate against the *previous* cycle's
-/// `copied_bytes`).
+/// of Eden, whether copied to a survivor space or promoted).
+///
+/// The other two are **one cohort's** intake and that same cohort's survival,
+/// and they must stay that way (#9851 follow-up):
+/// `eden_copied_bytes` is what this cycle copied out of *Eden* into the
+/// to-survivor space — a fresh cohort, no re-copies — and
+/// `first_round_live_bytes` is what came back out of the from-survivor space
+/// alive with a stored age of 1, i.e. members of the cohort that the
+/// *previous* cycle's `eden_copied_bytes` counted.
+///
+/// Why not the whole space. The survivor spaces are a strict semispace pair,
+/// so the from-space at cycle N holds exactly what cycle N-1 copied, and
+/// `survivor_live_bytes / prev_copied_bytes` is a well-formed survival ratio —
+/// of the whole space. But *what that space contains* is set by the very
+/// threshold this loop controls: at S<=2 it is one fresh cohort, at S=3-4 it
+/// also holds age-2 and age-3 objects, which have already survived a round and
+/// are therefore selected for longevity. Rating that mixture and concluding
+/// "the aging round filters nothing" applies a measurement of an aged,
+/// self-selected population to first-round cohorts. Measured on the compiled
+/// claude-code TUI: a fresh cohort survives at 74 %, and the loop still reached
+/// the lock's 90 % bar 8-12 times per four-turn run once #9851's clamp let the
+/// ladder climb past 2.
 pub(super) fn retune_after_scavenge(
     eden_live_bytes: usize,
-    copied_bytes: usize,
-    survivor_live_bytes: usize,
+    eden_copied_bytes: usize,
+    first_round_live_bytes: usize,
 ) {
     retune_nursery_cap_scale(eden_live_bytes);
     let desired = desired_survivor_bytes();
     let substantial = desired / 4;
-    let prev_copied = PREV_COPIED_BYTES.with(|c| c.replace(copied_bytes));
+    let prev_cohort_copied = PREV_COPIED_BYTES.with(|c| c.replace(eden_copied_bytes));
     let current = TENURING_SURVIVALS.with(Cell::get);
 
     if PROMOTE_LOCK.with(Cell::get) {
@@ -554,10 +571,18 @@ pub(super) fn retune_after_scavenge(
         return;
     }
 
-    // Survival-rate lock: last cycle's survivor intake was substantial and
+    // Survival-rate lock: last cycle's FRESH COHORT was substantial and
     // (nearly) all of it came back out alive, so the aging round filters
     // nothing — every copied byte is a byte that will be promoted anyway.
-    if prev_copied >= substantial && survivor_live_bytes.saturating_mul(10) >= prev_copied * 9 {
+    //
+    // Both sides are scoped to that one cohort (#9851 follow-up). Rating the
+    // whole survivor space instead makes the ratio rise with the threshold
+    // this rule sets, because a higher threshold is precisely what keeps
+    // already-aged objects in the space; the rule then reads its own setting
+    // back as evidence. See `retune_after_scavenge`'s header.
+    if prev_cohort_copied >= substantial
+        && first_round_live_bytes.saturating_mul(10) >= prev_cohort_copied * 9
+    {
         PROMOTE_LOCK.with(|l| l.set(true));
         UNLOCK_STREAK.with(|s| s.set(0));
         RAISE_STREAK.with(|s| s.set(0));
@@ -1031,10 +1056,13 @@ mod tests {
         // comes back fully alive. THAT is lifetime evidence, and it must still
         // reach 1.
         //
-        // TWO cycles, deliberately: the lock rates `survivor_live_bytes` against
-        // the PREVIOUS cycle's `copied_bytes` (`PREV_COPIED_BYTES`), so the
-        // first call is what puts a cohort in the survivor space and the second
-        // is what reports it coming back alive. Phase 1 above copied nothing, so
+        // TWO cycles, deliberately: the lock rates the fresh cohort's survival
+        // against the PREVIOUS cycle's `eden_copied_bytes` (`PREV_COPIED_BYTES`),
+        // so the first call is what puts a cohort in the survivor space and the
+        // second is what reports that same cohort coming back alive. Both
+        // arguments here are cohort-scoped, which is what the follow-up to
+        // #9851 made them: the whole survivor space is a different population
+        // once the threshold rises above 2. Phase 1 above copied nothing, so
         // there is nothing to rate until this pair runs — which is precisely the
         // blindness the change is about, here as a test mechanic.
         retune_after_scavenge(16 * d, 3 * d, 0);
@@ -1058,7 +1086,14 @@ mod tests {
     /// occupancy floor rather than being locked to 1 — the case cc actually is.
     /// Measured there: 26.1 % of each cohort dies in one survivor round, in
     /// steady state, on 393 samples; the lock needs >=90 % survival, so it
-    /// correctly stays out and the clamp holds instead of oscillating.
+    /// correctly stays out.
+    ///
+    /// The arguments are the FRESH COHORT's intake and survival (#9851
+    /// follow-up). Fed the whole survivor space instead — which is what the
+    /// call site used to pass — this same heap locks, because above a threshold
+    /// of 2 that space also holds objects already selected for longevity. That
+    /// is not a hypothetical: on cc the clamp alone left 85 % of promotion at
+    /// S=1, reached through this lock 8-12 times per four-turn run.
     #[test]
     fn a_cohort_that_dies_in_its_round_holds_at_the_occupancy_floor() {
         reset_for_test();
