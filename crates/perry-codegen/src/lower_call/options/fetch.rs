@@ -664,6 +664,11 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
                 } else {
                     double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
                 };
+                let filename = if args.len() >= 3 {
+                    lower_expr(ctx, &args[2])?
+                } else {
+                    double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                };
                 let runtime_fn = if method == "append" {
                     "js_form_data_append"
                 } else {
@@ -672,7 +677,12 @@ pub(in crate::lower_call) fn lower_fetch_native_method(
                 ctx.block().call(
                     DOUBLE,
                     runtime_fn,
-                    &[(DOUBLE, &handle), (DOUBLE, &name), (DOUBLE, &value)],
+                    &[
+                        (DOUBLE, &handle),
+                        (DOUBLE, &name),
+                        (DOUBLE, &value),
+                        (DOUBLE, &filename),
+                    ],
                 );
                 return Ok(Some(double_literal(f64::from_bits(
                     crate::nanbox::TAG_UNDEFINED,

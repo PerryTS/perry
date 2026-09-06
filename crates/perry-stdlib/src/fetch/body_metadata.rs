@@ -157,6 +157,90 @@ fn file_last_modified_now() -> f64 {
         .unwrap_or(0.0)
 }
 
+unsafe fn form_data_entry_from_js(value: f64, filename: f64) -> FormDataValue {
+    let value_id = handle_id(value);
+    let blob = JSValue::from_bits(value.to_bits())
+        .is_pointer()
+        .then(|| BLOB_REGISTRY.lock().unwrap().get(&value_id).cloned())
+        .flatten();
+    let Some(mut blob) = blob else {
+        return FormDataValue::Text(form_data_value_string(value));
+    };
+
+    let filename_override =
+        (filename.to_bits() != TAG_UNDEFINED).then(|| form_data_value_string(filename));
+    if filename_override.is_none() && blob.file_name.is_some() {
+        return FormDataValue::File(value_id);
+    }
+
+    blob.file_name = Some(
+        filename_override
+            .or(blob.file_name)
+            .unwrap_or_else(|| "blob".to_string()),
+    );
+    blob.last_modified_ms = Some(file_last_modified_now());
+    FormDataValue::File(alloc_blob(blob))
+}
+
+fn multipart_quoted(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '\r' => escaped.push_str("%0D"),
+            '\n' => escaped.push_str("%0A"),
+            '"' => escaped.push_str("%22"),
+            _ => escaped.push(ch),
+        }
+    }
+    escaped
+}
+
+pub(super) fn serialize_form_data(handle: usize) -> Option<(Vec<u8>, String)> {
+    static NEXT_BOUNDARY: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+    let entries = FORM_DATA_REGISTRY.lock().unwrap().get(&handle)?.clone();
+    let serial = NEXT_BOUNDARY.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let boundary = format!("----PerryFormDataBoundary{handle:012x}{serial:016x}");
+    let mut body = Vec::new();
+
+    for (name, value) in entries.entries {
+        body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+        match value {
+            FormDataValue::Text(value) => {
+                body.extend_from_slice(
+                    format!(
+                        "Content-Disposition: form-data; name=\"{}\"\r\n\r\n",
+                        multipart_quoted(&name)
+                    )
+                    .as_bytes(),
+                );
+                body.extend_from_slice(value.as_bytes());
+            }
+            FormDataValue::File(blob_id) => {
+                let blob = BLOB_REGISTRY.lock().unwrap().get(&blob_id)?.clone();
+                let filename = blob.file_name.as_deref().unwrap_or("blob");
+                let content_type = if blob.content_type.is_empty() {
+                    "application/octet-stream"
+                } else {
+                    &blob.content_type
+                };
+                body.extend_from_slice(
+                    format!(
+                        "Content-Disposition: form-data; name=\"{}\"; filename=\"{}\"\r\nContent-Type: {content_type}\r\n\r\n",
+                        multipart_quoted(&name),
+                        multipart_quoted(filename),
+                    )
+                    .as_bytes(),
+                );
+                body.extend_from_slice(&blob.body);
+            }
+        }
+        body.extend_from_slice(b"\r\n");
+    }
+    body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+    Some((body, format!("multipart/form-data; boundary={boundary}")))
+}
+
 fn form_data_from_multipart(
     body: &[u8],
     content_type: &str,
@@ -509,23 +593,41 @@ pub extern "C" fn js_form_data_new() -> f64 {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn js_form_data_append(handle: f64, name: f64, value: f64) -> f64 {
+pub unsafe extern "C" fn js_form_data_append(
+    handle: f64,
+    name: f64,
+    value: f64,
+    filename: f64,
+) -> f64 {
     let id = handle_id(handle);
-    let name = form_data_value_string(name);
-    let value = form_data_value_string(value);
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let name = scope.root_nanbox_f64(name);
+    let value = scope.root_nanbox_f64(value);
+    let filename = scope.root_nanbox_f64(filename);
+    let name = form_data_value_string(name.get_nanbox_f64());
+    let value = form_data_entry_from_js(value.get_nanbox_f64(), filename.get_nanbox_f64());
     if let Some(form) = FORM_DATA_REGISTRY.lock().unwrap().get_mut(&id) {
-        form.append(name, FormDataValue::Text(value));
+        form.append(name, value);
     }
     f64::from_bits(TAG_UNDEFINED)
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn js_form_data_set(handle: f64, name: f64, value: f64) -> f64 {
+pub unsafe extern "C" fn js_form_data_set(
+    handle: f64,
+    name: f64,
+    value: f64,
+    filename: f64,
+) -> f64 {
     let id = handle_id(handle);
-    let name = form_data_value_string(name);
-    let value = form_data_value_string(value);
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let name = scope.root_nanbox_f64(name);
+    let value = scope.root_nanbox_f64(value);
+    let filename = scope.root_nanbox_f64(filename);
+    let name = form_data_value_string(name.get_nanbox_f64());
+    let value = form_data_entry_from_js(value.get_nanbox_f64(), filename.get_nanbox_f64());
     if let Some(form) = FORM_DATA_REGISTRY.lock().unwrap().get_mut(&id) {
-        form.set(name, FormDataValue::Text(value));
+        form.set(name, value);
     }
     f64::from_bits(TAG_UNDEFINED)
 }
@@ -695,6 +797,12 @@ pub fn form_data_contains_handle(handle: usize) -> bool {
 mod tests {
     use super::*;
 
+    unsafe fn string_value(value: &str) -> f64 {
+        f64::from_bits(
+            JSValue::string_ptr(js_string_from_bytes(value.as_ptr(), value.len() as u32)).bits(),
+        )
+    }
+
     #[test]
     fn selects_urlencoded_and_multipart_parsers_from_content_type() {
         let encoded = form_data_from_body(
@@ -723,5 +831,112 @@ mod tests {
         assert_eq!(file.content_type, "text/plain");
 
         assert!(form_data_from_body(b"{}", "application/json").is_err());
+    }
+
+    #[test]
+    fn appended_blob_becomes_a_file_and_serializes_binary_multipart() {
+        let blob_id = alloc_blob(BlobData::blob(
+            vec![0, 0xff, b'\r', b'\n'],
+            "application/octet-stream".to_string(),
+        ));
+        let form = js_form_data_new();
+        unsafe {
+            js_form_data_append(
+                form,
+                string_value("bin\r\nname"),
+                handle_to_f64(blob_id),
+                string_value("a\"b.bin"),
+            );
+        }
+
+        let form_id = handle_id(form);
+        let stored_entry = FORM_DATA_REGISTRY
+            .lock()
+            .unwrap()
+            .get(&form_id)
+            .unwrap()
+            .entries[0]
+            .1
+            .clone();
+        let stored_blob_id = match stored_entry {
+            FormDataValue::File(id) => id,
+            FormDataValue::Text(_) => panic!("Blob was stringified"),
+        };
+        let stored_blob = BLOB_REGISTRY
+            .lock()
+            .unwrap()
+            .get(&stored_blob_id)
+            .unwrap()
+            .clone();
+        assert_eq!(stored_blob.file_name.as_deref(), Some("a\"b.bin"));
+
+        let (body, content_type) = serialize_form_data(form_id).unwrap();
+        assert!(content_type.starts_with("multipart/form-data; boundary="));
+        let wire = String::from_utf8_lossy(&body);
+        assert!(wire.contains("name=\"bin%0D%0Aname\""));
+        assert!(wire.contains("filename=\"a%22b.bin\""));
+
+        let parsed = form_data_from_body(&body, &content_type).unwrap();
+        let parsed_blob_id = match &parsed.entries[0].1 {
+            FormDataValue::File(id) => *id,
+            FormDataValue::Text(_) => panic!("serialized Blob parsed as text"),
+        };
+        let parsed_blob = BLOB_REGISTRY
+            .lock()
+            .unwrap()
+            .get(&parsed_blob_id)
+            .unwrap()
+            .clone();
+        assert_eq!(parsed_blob.body, [0, 0xff, b'\r', b'\n']);
+        assert_eq!(parsed_blob.file_name.as_deref(), Some("a%22b.bin"));
+        assert_eq!(parsed_blob.content_type, "application/octet-stream");
+    }
+
+    #[test]
+    fn request_owns_serialized_form_data_and_default_content_type() {
+        let form = js_form_data_new();
+        unsafe {
+            js_form_data_append(
+                form,
+                string_value("caption"),
+                string_value("hello"),
+                f64::from_bits(TAG_UNDEFINED),
+            );
+        }
+        let scope = perry_runtime::gc::RuntimeHandleScope::new();
+        let url = scope.root_string_ptr(js_string_from_bytes(b"http://example.test/".as_ptr(), 20));
+        let method = scope.root_string_ptr(js_string_from_bytes(b"POST".as_ptr(), 4));
+        let request = unsafe {
+            js_request_new(
+                url.get_raw_const_ptr(),
+                method.get_raw_const_ptr(),
+                handle_id(form) as *const StringHeader,
+                0.0,
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                f64::from_bits(TAG_FALSE),
+                std::ptr::null(),
+                f64::from_bits(TAG_UNDEFINED),
+            )
+        };
+        let request_id = handle_id(request);
+        let request = REQUEST_REGISTRY
+            .lock()
+            .unwrap()
+            .get(&request_id)
+            .unwrap()
+            .clone();
+        let content_type = request.headers.get("content-type").unwrap();
+        assert!(content_type.starts_with("multipart/form-data; boundary="));
+        let parsed = form_data_from_body(request.body.as_deref().unwrap(), &content_type).unwrap();
+        assert!(matches!(
+            &parsed.entries[0],
+            (name, FormDataValue::Text(value)) if name == "caption" && value == "hello"
+        ));
     }
 }

@@ -678,9 +678,17 @@ pub unsafe extern "C" fn js_fetch_post(
     // so a binary body (Buffer / Uint8Array / typed array / ArrayBuffer) is sent
     // byte-for-byte instead of being shifted left 12 bytes by the StringHeader
     // data offset (#5757). `reqwest::Body` accepts `Vec<u8>` directly.
-    let body = fetch_request_body_bytes(body_ptr).unwrap_or_default();
-    let content_type =
-        string_from_header(content_type_ptr).unwrap_or_else(|| "application/json".to_string());
+    let form_data_body = body_metadata::serialize_form_data(body_ptr as usize);
+    let form_data_content_type = form_data_body
+        .as_ref()
+        .map(|(_, content_type)| content_type.clone());
+    let body = form_data_body
+        .map(|(body, _)| body)
+        .or_else(|| fetch_request_body_bytes(body_ptr))
+        .unwrap_or_default();
+    let content_type = string_from_header(content_type_ptr)
+        .or(form_data_content_type)
+        .unwrap_or_else(|| "application/json".to_string());
 
     spawn(async move {
         let client = fetch_client();
@@ -763,13 +771,20 @@ pub unsafe extern "C" fn js_fetch_with_options(
     // `Request` object and call `fetch(request, init)`; its handle id lands in
     // the `url_ptr` slot. Recover url/method/body/headers from the Request
     // registry so the request is dispatched (`init` members override).
-    let inputs = match request_handle::resolve_fetch_inputs(
+    let form_data_body = body_metadata::serialize_form_data(body_ptr as usize);
+    let form_data_content_type = form_data_body
+        .as_ref()
+        .map(|(_, content_type)| content_type.clone());
+    let body_bytes = form_data_body
+        .map(|(body, _)| body)
+        .or_else(|| fetch_request_body_bytes(body_ptr));
+    let mut inputs = match request_handle::resolve_fetch_inputs(
         string_from_header(url_ptr),
         string_from_header(method_ptr),
         // Read the body as raw bytes (binary bodies probe the buffer/typed-array
         // registry first) so a Buffer/Uint8Array body isn't corrupted by a lossy
         // StringHeader read (#5757).
-        fetch_request_body_bytes(body_ptr),
+        body_bytes,
         string_from_header(headers_json_ptr),
         url_ptr as usize,
     ) {
@@ -779,6 +794,12 @@ pub unsafe extern "C" fn js_fetch_with_options(
             return promise;
         }
     };
+    if let Some(content_type) = form_data_content_type {
+        inputs
+            .custom_headers
+            .entry("content-type".to_string())
+            .or_insert(content_type);
+    }
 
     // Dispatch + abort handling live in `abort_bridge::run_request` (keeps this
     // file under the line-size lint gate).

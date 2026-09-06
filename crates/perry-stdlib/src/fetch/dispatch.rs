@@ -686,6 +686,9 @@ pub fn dispatch_form_data_method(form_id: usize, method: &str, args: &[f64]) -> 
                 args.get(1)
                     .copied()
                     .unwrap_or(f64::from_bits(TAG_UNDEFINED)),
+                args.get(2)
+                    .copied()
+                    .unwrap_or(f64::from_bits(TAG_UNDEFINED)),
             )),
             "set" => Some(js_form_data_set(
                 form_f64,
@@ -693,6 +696,9 @@ pub fn dispatch_form_data_method(form_id: usize, method: &str, args: &[f64]) -> 
                     .copied()
                     .unwrap_or(f64::from_bits(TAG_UNDEFINED)),
                 args.get(1)
+                    .copied()
+                    .unwrap_or(f64::from_bits(TAG_UNDEFINED)),
+                args.get(2)
                     .copied()
                     .unwrap_or(f64::from_bits(TAG_UNDEFINED)),
             )),
