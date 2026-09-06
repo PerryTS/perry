@@ -164,6 +164,22 @@ pub(crate) fn typed_param_reps_for_params(
         .collect()
 }
 
+/// Parameter representations for a Boolean-returning top-level function.
+///
+/// In addition to declared scalar types, admit erased (`Any`/`Unknown`)
+/// parameters when the complete straight-line body proves that they are used
+/// as numbers. The public JSValue entry guards every inferred F64 parameter
+/// once and retains the unchanged generic body for guard failure. Four
+/// comparisons is the deliberately small profitability floor: below it the
+/// entry guard and duplicate body can cost as much as the generic relational
+/// fast paths they replace.
+pub(crate) fn typed_i1_function_param_reps(function: &Function) -> Option<Vec<TypedParamRep>> {
+    if typed_i1_function_rejection_reason_impl(function).is_none() {
+        return typed_param_reps_for_params(&function.params);
+    }
+    erased_numeric_predicate_param_reps(function)
+}
+
 pub(crate) fn typed_f64_closure_capture_reps(
     expr: &Expr,
     module_local_types: &HashMap<u32, Type>,
@@ -782,7 +798,7 @@ pub(crate) fn is_typed_i32_function_candidate(function: &Function) -> bool {
 
 #[allow(dead_code)]
 pub(crate) fn is_typed_i1_function_candidate(function: &Function) -> bool {
-    typed_i1_function_rejection_reason_impl(function).is_none()
+    typed_i1_function_rejection_reason(function).is_none()
 }
 
 #[allow(dead_code)]
@@ -820,7 +836,14 @@ pub(crate) fn typed_i32_function_rejection_reason(
 pub(crate) fn typed_i1_function_rejection_reason(
     function: &Function,
 ) -> Option<TypedCloneRejectionReason> {
-    typed_i1_function_rejection_reason_impl(function)
+    let declared_reason = typed_i1_function_rejection_reason_impl(function);
+    if matches!(declared_reason, Some(TypedCloneRejectionReason::ParamNotI1))
+        && erased_numeric_predicate_param_reps(function).is_some()
+    {
+        None
+    } else {
+        declared_reason
+    }
 }
 
 pub(crate) fn typed_string_function_rejection_reason(
@@ -1161,6 +1184,85 @@ pub(crate) fn typed_string_closure_rejection_reason_with_types(
     }
 
     typed_string_body_rejection_reason(body, locals)
+}
+
+const ERASED_NUMERIC_PREDICATE_MIN_COMPARISONS: usize = 4;
+
+fn numeric_comparisons_in_typed_i1_expr(
+    expr: &Expr,
+    locals: &HashMap<u32, TypedParamRep>,
+) -> usize {
+    match expr {
+        Expr::Compare { left, right, .. }
+            if expr_is_typed_f64_safe(left, locals) && expr_is_typed_f64_safe(right, locals) =>
+        {
+            1
+        }
+        Expr::Logical { left, right, .. } => {
+            numeric_comparisons_in_typed_i1_expr(left, locals)
+                + numeric_comparisons_in_typed_i1_expr(right, locals)
+        }
+        Expr::Unary { operand, .. } => numeric_comparisons_in_typed_i1_expr(operand, locals),
+        _ => 0,
+    }
+}
+
+fn erased_numeric_predicate_param_reps(function: &Function) -> Option<Vec<TypedParamRep>> {
+    if function.is_async
+        || function.is_generator
+        || function.was_plain_async
+        || !function.captures.is_empty()
+        || !matches!(function.return_type, Type::Boolean)
+        || function.params.iter().any(|param| {
+            param.default.is_some() || param.is_rest || param.arguments_object.is_some()
+        })
+    {
+        return None;
+    }
+
+    let mut referenced = HashSet::new();
+    crate::collectors::collect_ref_ids_in_stmts(&function.body, &mut referenced);
+    let mut inferred_erased = false;
+    let reps: Vec<TypedParamRep> = function
+        .params
+        .iter()
+        .map(|param| {
+            if let Some(rep) = typed_param_rep_for_type(&param.ty) {
+                return Some(rep);
+            }
+            if matches!(param.ty, Type::Any | Type::Unknown) && referenced.contains(&param.id) {
+                inferred_erased = true;
+                return Some(TypedParamRep::F64);
+            }
+            None
+        })
+        .collect::<Option<_>>()?;
+    if !inferred_erased {
+        return None;
+    }
+
+    let locals: HashMap<u32, TypedParamRep> = function
+        .params
+        .iter()
+        .zip(reps.iter().copied())
+        .map(|(param, rep)| (param.id, rep))
+        .collect();
+    if typed_i1_body_rejection_reason(&function.body, locals.clone()).is_some() {
+        return None;
+    }
+    let comparisons = function
+        .body
+        .iter()
+        .filter_map(|stmt| match stmt {
+            Stmt::Let {
+                init: Some(expr), ..
+            }
+            | Stmt::Return(Some(expr)) => Some(expr),
+            _ => None,
+        })
+        .map(|expr| numeric_comparisons_in_typed_i1_expr(expr, &locals))
+        .sum::<usize>();
+    (comparisons >= ERASED_NUMERIC_PREDICATE_MIN_COMPARISONS).then_some(reps)
 }
 
 fn typed_i1_function_rejection_reason_impl(
