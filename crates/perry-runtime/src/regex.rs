@@ -891,6 +891,8 @@ pub(crate) fn is_valid_ptr<T>(p: *const T) -> bool {
 /// read garbage from that object if we didn't gate them on this check.
 #[inline]
 pub(crate) fn is_valid_regex_ptr(p: *const RegExpHeader) -> bool {
+    #[cfg(test)]
+    REGEX_PTR_VALIDATION_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     if !is_valid_ptr(p) {
         return false;
     }
@@ -899,6 +901,15 @@ pub(crate) fn is_valid_regex_ptr(p: *const RegExpHeader) -> bool {
         return true;
     }
     regex_pointers_contains(p as usize)
+}
+
+#[cfg(test)]
+static REGEX_PTR_VALIDATION_CALLS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+#[cfg(test)]
+pub(crate) fn test_regex_ptr_validation_calls() -> u64 {
+    REGEX_PTR_VALIDATION_CALLS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Public: is `addr` a RegExpHeader we allocated via `js_regexp_new`?
@@ -1490,9 +1501,9 @@ fn regexp_pattern_is_regexp_like(pattern: f64) -> bool {
 // caller (`js_segments_view_regexp_test`) references it only under this feature.
 #[cfg(feature = "regex-engine")]
 pub(crate) fn regexp_test_str_bounded(re: *const RegExpHeader, hay: &str) -> Option<bool> {
-    if !is_valid_regex_ptr(re) {
-        return None;
-    }
+    // The view entry point has already established `is_valid_regex_ptr(re)`.
+    // Repeating it here reached heap-space classification on every accepted
+    // call. Keep this helper crate-private and its precondition explicit.
     unsafe {
         if (*re).global || (*re).sticky {
             return None;
