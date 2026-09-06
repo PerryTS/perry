@@ -58,11 +58,13 @@ fn digit_and_string_scans_stop_before_guard_page() {
             let bytes = std::slice::from_raw_parts(start, len);
             assert_eq!(count_ascii_digits(bytes), len);
             assert_eq!(find_string_terminator(bytes), None);
+            assert!(!short_string_needs_escape(bytes));
             if len != 0 {
                 start.add(len - 1).write(b'"');
                 let bytes = std::slice::from_raw_parts(start, len);
                 assert_eq!(count_ascii_digits(bytes), len - 1);
                 assert_eq!(find_string_terminator(bytes), Some(len - 1));
+                assert!(short_string_needs_escape(bytes));
             }
         }
         assert_eq!(libc::munmap(raw, page * 2), 0);
@@ -80,6 +82,11 @@ fn check(bytes: &[u8]) {
     let quotes = bytes.iter().position(|&b| b == b'"' || b == b'\\');
     assert_eq!(find_string_terminator(bytes), parse, "parse {bytes:?}");
     assert_eq!(find_string_escape(bytes), escape, "escape {bytes:?}");
+    assert_eq!(
+        short_string_needs_escape(bytes),
+        escape.is_some(),
+        "short output escape {bytes:?}"
+    );
     assert_eq!(find_quote_or_backslash(bytes), quotes, "quotes {bytes:?}");
     assert_eq!(
         find_word::<true, false>(bytes),

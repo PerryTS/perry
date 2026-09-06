@@ -95,13 +95,22 @@ fn find_word<const CONTROL: bool, const SURROGATE: bool>(bytes: &[u8]) -> Option
         }
         i += 8;
     }
-    let tail = &bytes[i..];
-    if tail.len() >= 4 {
-        return find_padded_tail::<CONTROL, SURROGATE>(tail).map(|j| i + j);
-    }
-    tail.iter()
+    bytes[i..]
+        .iter()
         .position(|&b| special::<CONTROL, SURROGATE>(b))
         .map(|j| i + j)
+}
+
+/// The scalar output planner needs only an escape predicate. Use word
+/// packing for complete short strings here, leaving general scanner tails
+/// unchanged for parsing and the other serializers.
+#[inline(always)]
+pub(super) fn short_string_needs_escape(bytes: &[u8]) -> bool {
+    if (4..8).contains(&bytes.len()) {
+        find_padded_tail::<true, true>(bytes).is_some()
+    } else {
+        find_string_escape(bytes).is_some()
+    }
 }
 
 /// Pack four to seven bytes using only bounded loads, padding with spaces.

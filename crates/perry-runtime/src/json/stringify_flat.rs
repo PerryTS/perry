@@ -45,7 +45,7 @@ pub(super) unsafe fn string_piece(bits: u64) -> Option<Piece> {
         return None;
     }
     let bytes = std::slice::from_raw_parts(ptr, len as usize);
-    let escaped = super::simd::find_string_escape(bytes).is_some();
+    let escaped = super::simd::short_string_needs_escape(bytes);
     let units = if bits & crate::value::TAG_MASK == STRING_TAG {
         (*((bits & POINTER_MASK) as *const StringHeader)).utf16_len
     } else {
@@ -188,8 +188,8 @@ pub(super) unsafe fn try_object(bits: u64) -> Option<JSValue> {
 
 #[inline(never)]
 unsafe fn emit_object(obj: *const crate::ObjectHeader, fields: usize) -> Option<JSValue> {
-    // Every live entry is overwritten before emission. A zero-valued string
-    // placeholder lets the compiler clear native plan storage in bulk.
+    // Every live entry is overwritten before emission. This initialized
+    // placeholder has a smaller active payload than an inline-text piece.
     let empty = Piece::String { bytes: 0, units: 0 };
     let mut key_plan = [empty; MAX_FIELDS];
     let mut value_plan = [empty; MAX_FIELDS];
