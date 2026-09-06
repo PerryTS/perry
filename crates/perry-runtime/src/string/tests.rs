@@ -1361,66 +1361,6 @@ mod canonical_char_cache {
 
 /// The canonical one-ASCII-character string table (`string::format`).
 #[cfg(test)]
-mod canonical_char_cache {
-    use super::*;
-
-    /// A one-ASCII-character string has exactly 128 possible contents, so
-    /// `js_string_char_at` (and everything that funnels through it: `s[i]`,
-    /// `charAt`, `[...s]`, the String-wrapper index installer) hands back the
-    /// canonical per-thread header instead of minting one per read.
-    ///
-    /// The identity assertion is the whole point — it is what makes the
-    /// allocation disappear — and it fails the moment the canonical table is
-    /// bypassed. The `refcount == 0` assertion is the safety half: a shared
-    /// header must never be eligible for the in-place append optimisation.
-    #[test]
-    fn ascii_char_at_returns_one_canonical_shared_header_per_byte() {
-        let scope = crate::gc::RuntimeHandleScope::new();
-        let s = scope.root_string_ptr(js_string_from_bytes(b"abca".as_ptr(), 4));
-        let (a0, b1, a3) = s.with_const_ptr::<StringHeader, _>(|s| {
-            (
-                js_string_char_at(s, 0),
-                js_string_char_at(s, 1),
-                js_string_char_at(s, 3),
-            )
-        });
-        assert_eq!(a0, a3, "the same character must reuse the canonical header");
-        assert_ne!(a0, b1, "different characters are different headers");
-        unsafe {
-            assert_eq!((*a0).byte_len, 1);
-            assert_eq!((*a0).utf16_len, 1);
-            let data = (a0 as *const u8).add(std::mem::size_of::<StringHeader>());
-            assert_eq!(*data, b'a');
-            assert_eq!(
-                (*a0).refcount,
-                0,
-                "a shared header must be ineligible for the in-place append path"
-            );
-        }
-        // A second string with the same character resolves to the same header:
-        // the table is keyed by content, not by source string.
-        let other = scope.root_string_ptr(js_string_from_bytes(b"za".as_ptr(), 2));
-        let a_again = other.with_const_ptr::<StringHeader, _>(|o| js_string_char_at(o, 1));
-        assert_eq!(a0, a_again);
-    }
-
-    /// Non-ASCII keeps the minting path (the canonical table is ASCII-only),
-    /// and the value is still correct — the fast path must not answer for
-    /// characters it does not represent.
-    #[test]
-    fn non_ascii_char_at_is_unaffected_by_the_canonical_table() {
-        let scope = crate::gc::RuntimeHandleScope::new();
-        let s = scope.root_string_ptr(js_string_from_bytes("aé".as_ptr(), 3));
-        let (c0, c1) = s.with_const_ptr::<StringHeader, _>(|s| {
-            (js_string_char_at(s, 0), js_string_char_at(s, 1))
-        });
-        unsafe {
-            assert_eq!((*c0).byte_len, 1);
-            assert_eq!((*c1).byte_len, 2, "é is two UTF-8 bytes");
-        }
-    }
-}
-
 /// `header_str_checked` answers exactly like `from_utf8(..).ok()` — a pure
 /// ASCII key without the scan, a non-ASCII scalar key by validation, and a
 /// WTF-8 payload (lone surrogate) as `None`.
