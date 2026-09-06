@@ -262,6 +262,8 @@ pub use class_meta_registry::{
     js_register_class_extends_error, js_register_class_generic_origin,
     js_register_class_has_instance, js_register_class_to_string_tag,
 };
+#[cfg(test)]
+pub(crate) use descriptor_state::test_may_have_descriptor_entry;
 pub use descriptor_state::PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED;
 pub(crate) use descriptor_state::{
     accessor_descriptor_keys_for_obj, class_field_inline_guard_enabled,
@@ -276,8 +278,6 @@ pub(crate) use descriptor_state::{
     set_builtin_property_attrs, set_property_attrs, transfer_descriptor_owner, AccessorDescriptor,
     DescriptorTables, PropertyAttrs,
 };
-#[cfg(test)]
-pub(crate) use descriptor_state::test_may_have_descriptor_entry;
 pub(crate) use field_get_set::FieldLookupCaches;
 pub(crate) use field_get_set::{
     private_evaluation_brand_value, private_lexical_brand_pop, private_lexical_brand_push,
