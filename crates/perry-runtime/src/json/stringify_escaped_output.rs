@@ -1,6 +1,5 @@
-//! Exact string output with native scalar planning and no scratch buffer.
-//! Escaping requires valid UTF-8; unescaped plans preserve the caller's existing
-//! raw byte/count semantics after its escape and incomplete-tail checks.
+//! Exact escaped-string output with native scalar planning and no scratch buffer.
+//! Invalid UTF-8 (including WTF-8 surrogates) retains the general serializer.
 
 use crate::string::{init_string_header, string_data, string_storage_alloc, StringHeader};
 
@@ -12,12 +11,6 @@ pub(super) struct Plan {
 }
 
 impl Plan {
-    /// The caller has checked that quoting preserves these bytes and units.
-    #[inline]
-    pub(super) fn unescaped(bytes: u32, units: u32) -> Option<Self> {
-        Self::with_expansion(bytes, units, 0)
-    }
-
     #[inline(never)]
     pub(super) fn new(source: &[u8], units: u32) -> Option<Self> {
         let len = u32::try_from(source.len()).ok()?;
@@ -40,22 +33,7 @@ impl Plan {
     /// Source must be rederived after the final allocation, with its original
     /// bytes unchanged. Output has `self.bytes` writable, nonoverlapping bytes.
     /// No allocation, callbacks or collection may occur during this write.
-    #[inline]
     pub(super) unsafe fn write(self, source: *const u8, output: *mut u8) -> usize {
-        // The same String variant covers both modes. Ordinary scalar emitters
-        // keep their two-way String/Inline dispatch and no escaping loop body.
-        if self.bytes - 2 == self.source_bytes {
-            output.write(b'"');
-            std::ptr::copy_nonoverlapping(source, output.add(1), self.source_bytes as usize);
-            output.add(self.bytes as usize - 1).write(b'"');
-            self.bytes as usize
-        } else {
-            self.write_escaped(source, output)
-        }
-    }
-
-    #[inline(never)]
-    unsafe fn write_escaped(self, source: *const u8, output: *mut u8) -> usize {
         const HEX: &[u8; 16] = b"0123456789abcdef";
         output.write(b'"');
         let mut at = 1usize;
