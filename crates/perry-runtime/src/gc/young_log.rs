@@ -70,7 +70,7 @@
 use std::cell::RefCell;
 
 use super::GC_HEADER_SIZE;
-use crate::arena::HeapGeneration;
+use crate::arena::HeapSpace;
 use crate::value::{BIGINT_TAG, POINTER_MASK, POINTER_TAG, STRING_TAG, TAG_MASK};
 
 /// Keys of side-table entries that may hold a pointer a minor can act on.
@@ -179,21 +179,29 @@ impl<K: Copy + Ord> YoungLog<K> {
 
 /// Can a minor-scoped pass act on the object at `addr`?
 ///
-/// `false` is authoritative for the old generation only: an old object is
-/// neither moved nor swept by any minor, and it never becomes young again.
-/// Everything a minor moves, marks-through or sweeps answers `true` —
-/// nursery (eden + both survivor halves), longlived, and malloc-GC objects.
-/// A non-heap word (handle id, foreign-thread address, integer) answers
-/// `false` through the exact malloc-registry probe, never a header sniff.
+/// `false` is authoritative for ordinary old-generation space only: an old
+/// object is neither moved nor swept by any minor, and it never becomes young
+/// again. `PromotedYoung` remains relevant while an in-place promotion is in
+/// flight because a speculative first-cycle attempt can still roll its retag
+/// back and evacuate those objects. Dropping their keys during the attempt
+/// would make the retry skip live side-table roots. Everything else a minor
+/// moves, marks-through or sweeps answers `true` — nursery (eden + both
+/// survivor halves), longlived, and malloc-GC objects. A non-heap word (handle
+/// id, foreign-thread address, integer) answers `false` through the exact
+/// malloc-registry probe, never a header sniff.
 #[inline]
 pub(crate) fn addr_is_minor_relevant(addr: usize) -> bool {
     if addr == 0 {
         return false;
     }
-    match crate::arena::classify_heap_generation(addr) {
-        HeapGeneration::Old => false,
-        HeapGeneration::Nursery | HeapGeneration::Longlived => true,
-        HeapGeneration::Unknown => {
+    match crate::arena::classify_heap_space(addr) {
+        HeapSpace::Old => false,
+        HeapSpace::NurseryEden
+        | HeapSpace::Survivor0
+        | HeapSpace::Survivor1
+        | HeapSpace::Longlived
+        | HeapSpace::PromotedYoung => true,
+        HeapSpace::Unknown => {
             addr > GC_HEADER_SIZE
                 && super::malloc::gc_malloc_header_is_tracked(
                     (addr - GC_HEADER_SIZE) as *const super::GcHeader,
