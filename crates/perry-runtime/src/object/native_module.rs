@@ -23,7 +23,7 @@ mod callable_export_check;
 mod callable_export_table;
 pub(crate) mod callable_exports;
 mod perf_instance_bind;
-pub(crate) use perf_instance_bind::instance_bound_perf_method;
+pub(crate) use perf_instance_bind::{instance_bound_perf_method, performance_namespace_method};
 mod constants;
 mod constants_tables;
 mod constructor_exports;
@@ -1194,6 +1194,12 @@ pub extern "C" fn js_native_module_bind_method(
         }
     }
 
+    if let Some(value) =
+        performance_namespace_method(&module_name, property_name, namespace.get_nanbox_f64())
+    {
+        return value;
+    }
+
     // Check for known constant properties first
     if let Some(val) = unsafe {
         get_native_module_constant(&module_name, property_name, namespace.get_nanbox_f64())
@@ -1832,6 +1838,9 @@ unsafe fn vt_get_own_field(
     }
     if let Some(value) = super::field_get_set::native_module_own_field_by_key(obj, key) {
         return Some(value);
+    }
+    if let Some(value) = performance_namespace_method(&module_name, property_name, nb_ptr) {
+        return Some(JSValue::from_bits(value.to_bits()));
     }
     // #3687: node:cluster default-import EventEmitter methods on the
     // distinct `cluster.default` namespace (see original comment at the

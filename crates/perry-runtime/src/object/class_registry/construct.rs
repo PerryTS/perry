@@ -331,6 +331,11 @@ pub unsafe extern "C-unwind" fn js_new_function_construct(
                 return result;
             }
         }
+        if module == "perf_histogram"
+            && matches!(method.as_str(), "RecordableHistogram" | "ELDHistogram")
+        {
+            return crate::perf_hooks::js_perf_illegal_constructor();
+        }
         if module == "sqlite"
             && matches!(
                 method.as_str(),
