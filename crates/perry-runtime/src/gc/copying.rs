@@ -225,6 +225,17 @@ pub(super) fn previous_dirty_covered_estimate() -> usize {
     PREVIOUS_DIRTY_COVERED_ESTIMATE.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// LAST-VALUE, and a high-water mark was tried and REJECTED.
+///
+/// `[gc-dirty-covered]` shows this set is far more volatile than the survivor
+/// count this pattern was copied from: it ramps 1,028 -> ~119,000 over a turn
+/// and swings between adjacent minors, so a last-value estimate under-shoots on
+/// 57 of 96 minors. A high-water mark fixes that on the mechanism — under-shoots
+/// fall to 21 of 97 — and was still rejected: reserving the peak on EVERY minor
+/// cost settled footprint 763 -> 1165 MB and peak RSS 974 -> 1250 MB at 3300
+/// characters, for no measurable time difference (`reserve_rehash` 167 vs 182
+/// leaf samples, inside run-to-run noise). Trading footprint for CPU is
+/// rejected, and here it did not even buy CPU.
 pub(super) fn note_dirty_covered_for_presizing(count: usize) {
     PREVIOUS_DIRTY_COVERED_ESTIMATE.store(
         count.min(SURVIVOR_ESTIMATE_CAP),
