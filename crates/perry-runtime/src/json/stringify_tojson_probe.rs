@@ -59,22 +59,60 @@ unsafe fn keys_array_may_carry_to_json(keys: *mut crate::ArrayHeader) -> bool {
     let elements = (keys as *const u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *const f64;
     for i in 0..key_count {
         let stored = JSValue::from_bits((*elements.add(i)).to_bits());
-        if crate::string::js_string_key_matches_bytes(stored, b"toJSON")
-            || crate::string::js_string_key_matches_bytes(
-                stored,
-                crate::object::FETCH_SUBCLASS_HANDLE_FIELD,
-            )
-            || crate::string::js_string_key_matches_bytes(stored, b"__module__")
-        {
+        if key_may_carry_to_json(stored) {
             return true;
         }
-        #[cfg(feature = "temporal")]
-        if crate::string::js_string_key_matches_bytes(
-            stored,
-            crate::object::TEMPORAL_SUBCLASS_CELL_FIELD,
-        ) {
-            return true;
-        }
+    }
+    false
+}
+
+// All forwarding markers are longer than the inline-string representation.
+// Keep the short-string and leading-byte exclusions tied to their constants.
+const _: () = {
+    assert!(crate::value::SHORT_STRING_MAX_LEN < b"toJSON".len());
+    assert!(crate::object::FETCH_SUBCLASS_HANDLE_FIELD.len() >= b"toJSON".len());
+    assert!(crate::object::FETCH_SUBCLASS_HANDLE_FIELD[0] == b'_');
+    #[cfg(feature = "temporal")]
+    {
+        assert!(crate::object::TEMPORAL_SUBCLASS_CELL_FIELD.len() >= b"toJSON".len());
+        assert!(crate::object::TEMPORAL_SUBCLASS_CELL_FIELD[0] == b'_');
+    }
+};
+
+#[inline]
+unsafe fn key_may_carry_to_json(stored: JSValue) -> bool {
+    if !stored.is_string() {
+        return false;
+    }
+    let header = stored.as_string_ptr();
+    if header.is_null() {
+        return false;
+    }
+    let len = (*header).byte_len as usize;
+    if len < b"toJSON".len() {
+        return false;
+    }
+    let data = (header as *const u8).add(std::mem::size_of::<StringHeader>());
+    if !matches!(*data, b't' | b'_') {
+        return false;
+    }
+    marker_bytes_may_carry_to_json(std::slice::from_raw_parts(data, len))
+}
+
+/// Ordinary keys do not need the long marker constants in their hot loop.
+/// No verdict is retained: changed keys are read again on the next probe.
+#[cold]
+#[inline(never)]
+fn marker_bytes_may_carry_to_json(bytes: &[u8]) -> bool {
+    if bytes == b"toJSON"
+        || bytes == crate::object::FETCH_SUBCLASS_HANDLE_FIELD
+        || bytes == b"__module__"
+    {
+        return true;
+    }
+    #[cfg(feature = "temporal")]
+    if bytes == crate::object::TEMPORAL_SUBCLASS_CELL_FIELD {
+        return true;
     }
     false
 }
@@ -308,3 +346,7 @@ pub(crate) unsafe fn current_to_json_key_arg() -> f64 {
     let key = crate::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
     f64::from_bits(STRING_TAG | (key as u64 & POINTER_MASK))
 }
+
+#[cfg(test)]
+#[path = "stringify_tojson_probe_tests.rs"]
+mod tests;
