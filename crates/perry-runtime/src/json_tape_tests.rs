@@ -267,9 +267,8 @@ fn tape_entry_layout() {
 /// The claim is structural, not a convention, and this pins the structure:
 /// every `TapeEntry` field is an integer, and `offset`/`link` are `u32` — too
 /// narrow to hold a 48-bit heap address even if some future code tried. `kind`
-/// is a `u8`. There is exactly one writer of the region
-/// (`json_tape_store::allocate`'s `copy_nonoverlapping` from a
-/// `&[TapeEntry]`), so nothing can smuggle a reference in behind it.
+/// is a `u8`. The tape builder writes these integer fields; storage is copied
+/// or transferred intact into the side allocation.
 ///
 /// If someone widens a field to pointer size this fails, and the whole
 /// direction has to be revisited: a tape that can carry a heap edge would need
@@ -726,4 +725,35 @@ fn raw_tape_callback_can_release_source_after_scanning() {
         unsafe { with_built_tape_raw::<()>(b"[".as_ptr(), 1, |_| panic!("invalid tape")) }
             .is_none()
     );
+}
+
+#[test]
+fn owned_tape_callback_transfers_storage_and_recovers_after_large_invalid_input() {
+    let mut invalid = vec![b'['; 100_000];
+    invalid.push(b'?');
+    assert!(unsafe {
+        with_built_tape_mut_raw::<()>(invalid.as_ptr(), invalid.len(), |_| {
+            panic!("invalid input must not produce an owned tape")
+        })
+    }
+    .is_none());
+    let input = br#"[1,{"a":"owned"},true]"#.to_vec();
+    let data = input.as_ptr();
+    let len = input.len();
+    let owned = unsafe {
+        with_built_tape_mut_raw(data, len, |entries| {
+            drop(input);
+            std::mem::take(entries)
+        })
+    }
+    .unwrap();
+    let original = owned.as_ptr();
+    let next = with_built_tape(b"[null]", |entries| {
+        assert_ne!(entries.as_ptr(), original);
+        entries[1].kind
+    });
+    assert_eq!(next, Some(KIND_NULL));
+    assert_eq!(owned[0].kind, KIND_ARR_START);
+    assert_eq!(owned[1].kind, KIND_NUMBER);
+    assert_eq!(owned.last().unwrap().kind, KIND_ARR_END);
 }

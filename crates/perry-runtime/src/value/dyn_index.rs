@@ -664,6 +664,18 @@ pub extern "C" fn js_dyn_index_set_strict(obj: f64, index: f64, value: f64, stri
     // branch would otherwise swallow `view[name] = value`.
     let idx_top16 = index.to_bits() >> 48;
     if idx_top16 == 0x7FFF || idx_top16 == 0x7FF9 {
+        // A lazy JSON array must become its ordinary array before [[Set]].
+        // Use the tracked probe here: buffer/view receivers have not yet been
+        // dispatched and do not necessarily have a GC header before their data.
+        let is_lazy = unsafe {
+            crate::value::addr_class::try_read_tracked_gc_header(raw_ptr)
+                .is_some_and(|h| h.as_ref().obj_type == crate::gc::GC_TYPE_LAZY_ARRAY)
+        };
+        if is_lazy {
+            return unsafe {
+                crate::json_tape::set_lazy_index(raw_ptr as *mut _, index, value, strict)
+            };
+        }
         let target = if jsval.is_pointer() {
             obj
         } else {
@@ -712,6 +724,11 @@ pub extern "C" fn js_dyn_index_set_strict(obj: f64, index: f64, value: f64, stri
     let receiver_tag = receiver_gc_tag(raw_ptr);
     if receiver_tag.is_some_and(|(obj_type, _)| is_registered_collection(raw_ptr, obj_type)) {
         return value;
+    }
+    if receiver_tag.is_some_and(|(obj_type, _)| obj_type == crate::gc::GC_TYPE_LAZY_ARRAY) {
+        return unsafe {
+            crate::json_tape::set_lazy_index(raw_ptr as *mut _, index, value, strict)
+        };
     }
     // An ordinary receiver whose explicit [[Prototype]] is a TypedArray must
     // consult that integer-indexed exotic for canonical but INVALID numeric

@@ -552,7 +552,7 @@ unsafe fn try_parse_via_tape(text_root: usize, len: usize) -> Option<JSValue> {
     // The caller owns the input root. Build the native tape before collecting,
     // as in the original allocation order, but end the input borrow first.
     let text_ptr = parse_root_get(text_root).as_string_ptr();
-    crate::json_tape::with_built_tape_raw(
+    crate::json_tape::with_built_tape_mut_raw(
         crate::string::string_data(text_ptr),
         len,
         |tape_entries| {
@@ -572,7 +572,7 @@ unsafe fn try_parse_via_tape(text_root: usize, len: usize) -> Option<JSValue> {
                 && tape_entries[0].kind == crate::json_tape::KIND_ARR_START
             {
                 let len = crate::json_tape::count_array_length(tape_entries, 0);
-                let hdr = crate::json_tape::alloc_lazy_array(tape_entries, 0, len, text_ptr);
+                let hdr = crate::json_tape::alloc_lazy_array_from_scratch(tape_entries, 0, len, text_ptr);
                 JSValue::object_ptr(hdr as *mut u8)
             } else {
                 crate::json_tape::materialize_from_idx(tape_entries, bytes, 0)

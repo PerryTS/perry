@@ -24,8 +24,8 @@
 //!
 //! * **Pointer-free by construction.** `TapeEntry` is `{ offset: u32, kind:
 //!   u8, link: u32 }` — three integer fields, two of which are too narrow to
-//!   hold a 48-bit heap address, and the only writer of the region is one
-//!   `copy_nonoverlapping` from a `&[TapeEntry]`. It therefore never needs
+//!   hold a 48-bit heap address. The tape builder supplies these integer
+//!   entries by copy or ownership transfer. The region therefore never needs
 //!   scanning, marking, or rewriting.
 //! * **Uniquely owned.** Exactly one `LazyArrayHeader` references a tape and
 //!   nothing else can, so ownership is exact and needs no tracing.
@@ -139,6 +139,46 @@ pub(crate) fn allocate(entries: &[TapeEntry]) -> (*mut TapeEntry, TapeSideAlloca
     };
     note_allocated(allocation.byte_len());
     (raw, allocation)
+}
+
+/// Construction input; neither representation contains managed pointers.
+pub(crate) enum TapeBacking<'a> {
+    Borrowed(&'a [TapeEntry]),
+    Owned(Vec<TapeEntry>),
+}
+
+impl TapeBacking<'_> {
+    pub(crate) fn len(&self) -> usize {
+        match self {
+            Self::Borrowed(entries) => entries.len(),
+            Self::Owned(entries) => entries.len(),
+        }
+    }
+
+    /// Caller must root the blob before the external-pressure accounting hook.
+    pub(crate) fn allocate(self) -> (*mut TapeEntry, TapeSideAllocation) {
+        match self {
+            Self::Borrowed(entries) => allocate(entries),
+            Self::Owned(entries) => adopt(entries),
+        }
+    }
+}
+
+/// Transfer a completed native tape into its result's side allocation.
+/// Shrinking to a boxed slice preserves exact-size accounting and the existing
+/// deallocation layout. Shrinking may reallocate; an already exact-sized Vec
+/// transfers without copying. No intermediate managed allocation is involved.
+fn adopt(entries: Vec<TapeEntry>) -> (*mut TapeEntry, TapeSideAllocation) {
+    if entries.is_empty() {
+        return allocate(&[]);
+    }
+    let entries = entries.into_boxed_slice();
+    let len = entries.len();
+    // GC_STORE_AUDIT(POINTER_FREE): owned offset/kind/link entries, no heap edges.
+    let ptr = Box::into_raw(entries) as *mut TapeEntry;
+    let allocation = TapeSideAllocation { ptr, len };
+    note_allocated(allocation.byte_len());
+    (ptr, allocation)
 }
 
 /// Hand ownership of `allocation` to `header_addr`.
