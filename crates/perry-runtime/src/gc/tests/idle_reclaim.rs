@@ -224,6 +224,147 @@ fn sustained_arena_slack_gets_one_bounded_followup_without_mutator_activity() {
 }
 
 #[test]
+fn a_parked_heap_is_re_armed_by_elapsed_idle_alone() {
+    // #9831. The activity requirement is denominated in collections the
+    // reducer did not start. On a quiet heap the only such collections are the
+    // compactor's, and the compactor runs only once the reducer has already
+    // moved the residue ratio past the compactor's gate — so when that gate
+    // declines, the decline is permanent and the heap parks. Measured on the
+    // claude-code TUI: 23.7 % against a 25 % gate, one reclaim attempt, and
+    // 221 MB never returned. Elapsed idle must be able to start attempt 2 with
+    // no new collection anywhere.
+    //
+    // Sabotage: delete the `StartReason::IdleElapsed` arm from `start_reason`
+    // and this test fails at "a second attempt must start" — attempts stay 1
+    // forever, which is exactly the production symptom.
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _reducer = IdleReclaimTestGuard::new(0);
+    // Dead old-gen litter so the full is PRODUCTIVE and the shift stays 0:
+    // this test is about the re-arm, and the backoff is the next test's
+    // subject. (The guard has already pinned arena usage to live == capacity,
+    // so the `arena_right_size` arm cannot be what starts anything here.)
+    litter_old_gen_with_dead_promises();
+
+    // The ordinary activity arm starts attempt 1. This is the ONLY external
+    // collection in the whole test.
+    external_collection_observed_at(0);
+    set_test_now_ms(Some(IDLE_RECLAIM_QUIET_MS));
+    assert!(resumes(idle_reclaim_park_hook(1000)));
+    drive_until_idle(IDLE_RECLAIM_QUIET_MS, 1000);
+    assert_eq!(thread_attempts(), 1);
+    assert_eq!(
+        idle_reclaim_backoff_shift(),
+        0,
+        "the litter must have made this full productive, or the wait below is \
+         doubled and this test is measuring the backoff instead of the re-arm"
+    );
+    let elapsed_before = idle_reclaim_elapsed_starts();
+
+    // Past the rate floor (10 s) but short of the re-arm (15 s), so the ONLY
+    // thing that can hold the reducer here is the new gate.
+    assert!(IDLE_RECLAIM_REARM_MS > IDLE_RECLAIM_MIN_INTERVAL_MS);
+    set_test_now_ms(Some(IDLE_RECLAIM_QUIET_MS + IDLE_RECLAIM_REARM_MS - 1));
+    assert!(parks(idle_reclaim_park_hook(1000)));
+    assert_eq!(
+        thread_attempts(),
+        1,
+        "elapsed idle must not re-arm before the wait"
+    );
+
+    // At the wait: a second attempt, with no collection having happened.
+    let at = IDLE_RECLAIM_QUIET_MS + IDLE_RECLAIM_REARM_MS;
+    set_test_now_ms(Some(at));
+    assert!(
+        resumes(idle_reclaim_park_hook(1000)),
+        "a second attempt must start on elapsed idle alone"
+    );
+    assert_eq!(thread_attempts(), 2);
+    assert_eq!(
+        idle_reclaim_elapsed_starts(),
+        elapsed_before + 1,
+        "LIVE SUBJECT: the follow-up must identify ELAPSED IDLE as its reason, \
+         not activity and not arena debt"
+    );
+}
+
+#[test]
+fn an_unproductive_elapsed_streak_doubles_the_wait_and_then_disarms() {
+    // The anti-spin argument, and it needs no new rule: the elapsed arm is
+    // priced by the SAME `backoff_shift` as the activity arm, so a heap with
+    // nothing to give is asked at 15 s, 30 s, 60 s, 120 s, 240 s — and then not
+    // again, because the arm is disarmed at the maximum shift. Without the
+    // disarm an idle process would pay a whole-heap mark every 8 minutes
+    // forever.
+    //
+    // Two sabotages, one per guard. Drop `<< st.backoff_shift` from the wait
+    // and the "must not re-arm before the doubled wait" assertions fail. Drop
+    // the `backoff_shift < IDLE_RECLAIM_MAX_BACKOFF_SHIFT` term and the final
+    // assertion fails: the reducer keeps waking a heap that has already proved
+    // five times over that it has nothing to give.
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _reducer = IdleReclaimTestGuard::new(0);
+    // No litter: every full is unproductive, so every attempt doubles the wait.
+
+    external_collection_observed_at(0);
+    set_test_now_ms(Some(IDLE_RECLAIM_QUIET_MS));
+    assert!(resumes(idle_reclaim_park_hook(1000)));
+    drive_until_idle(IDLE_RECLAIM_QUIET_MS, 1000);
+    assert_eq!(thread_attempts(), 1);
+    assert_eq!(idle_reclaim_backoff_shift(), 1);
+
+    let elapsed_before = idle_reclaim_elapsed_starts();
+    let mut now = IDLE_RECLAIM_QUIET_MS;
+    let mut attempts = 1;
+    for shift in 1..IDLE_RECLAIM_MAX_BACKOFF_SHIFT {
+        let wait = IDLE_RECLAIM_REARM_MS << shift;
+        set_test_now_ms(Some(now + wait - 1));
+        assert!(
+            parks(idle_reclaim_park_hook(1000)),
+            "shift {shift}: must not re-arm before the doubled wait"
+        );
+        assert_eq!(thread_attempts(), attempts);
+
+        now += wait;
+        set_test_now_ms(Some(now));
+        assert!(
+            resumes(idle_reclaim_park_hook(1000)),
+            "shift {shift}: the doubled wait has elapsed"
+        );
+        attempts += 1;
+        assert_eq!(thread_attempts(), attempts);
+        drive_until_idle(now, 1000);
+        assert_eq!(
+            idle_reclaim_backoff_shift(),
+            shift + 1,
+            "still unproductive: the shift must keep growing"
+        );
+    }
+    assert_eq!(idle_reclaim_backoff_shift(), IDLE_RECLAIM_MAX_BACKOFF_SHIFT);
+    assert_eq!(
+        idle_reclaim_elapsed_starts(),
+        elapsed_before + u64::from(IDLE_RECLAIM_MAX_BACKOFF_SHIFT - 1),
+        "every follow-up in the streak must have come from the elapsed arm"
+    );
+
+    // Disarmed. However long the heap stays idle, it is not asked again.
+    let far = now + (IDLE_RECLAIM_REARM_MS << IDLE_RECLAIM_MAX_BACKOFF_SHIFT) * 16;
+    set_test_now_ms(Some(far));
+    assert!(
+        parks(idle_reclaim_park_hook(1000)),
+        "at the maximum shift the elapsed arm is disarmed: the hook must park, \
+         not open another whole-heap mark on a heap that has nothing to give"
+    );
+    assert_eq!(
+        thread_attempts(),
+        attempts,
+        "at the maximum shift the elapsed arm must stop entirely: a heap with \
+         nothing to give gets no new collection"
+    );
+}
+
+#[test]
 fn idle_reclaim_rate_floor_holds_between_two_owed_fulls() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
