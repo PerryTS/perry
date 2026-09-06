@@ -1,0 +1,12 @@
+{
+  "node": {
+    "exit": 0,
+    "stdout": "cold {}\nretained 4096 0\ninstalled \"default-result\"\nremoved {}\ngetter \"getter-result\"\ngetter removed {}\ncustom \"custom-result\"\nnull prototype {}\nhidden callback \"own-result\"\nreplacer {\"changed\":true} 2\nspacer {}\nmutated {\"answer\":42} {}\ncalls default:,get,getter-call:,custom:,own:,\n",
+    "stderr": ""
+  },
+  "baseline": {
+    "exit": 0,
+    "stdout": "cold {}\nretained 4096 0\ninstalled \"default-result\"\nremoved {}\ngetter \"getter-result\"\ngetter removed {}\ncustom \"custom-result\"\nnull prototype {}\nhidden callback \"own-result\"\nreplacer {\"changed\":true} 2\nspacer {}\nmutated {\"answer\":42} {}\ncalls default:,get,getter-call:,custom:,own:,\n",
+    "stderr": ""
+  }
+}

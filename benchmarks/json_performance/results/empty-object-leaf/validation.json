@@ -1,0 +1,11 @@
+{
+  "runtime_json_tests": 135,
+  "compiled_node_comparisons": 32,
+  "moving_gc_stress_runs": 22,
+  "all_outputs_match": true,
+  "all_stress_runs_show_live_movement": true,
+  "root_inventory": "pass, prior frontier unchanged",
+  "empty_cold_fallback": "unit test asserts input relocation; 1000 warm leaf calls without managed growth or collection",
+  "qualified_performance": "pending; candidate staged, no measurements started",
+  "goal_complete": false
+}

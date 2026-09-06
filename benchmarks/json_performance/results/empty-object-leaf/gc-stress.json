@@ -1,0 +1,332 @@
+[
+  {
+    "fixture": "test_gap_json_scanning_boundaries",
+    "seed": 17,
+    "exit": 0,
+    "stdout": "scan 255 0 730561117\nwide 0 624430645\n",
+    "stderr": "[gc-schedule] seeded GC-schedule fuzzing ACTIVE: seed=17 rate=0.1\n[gc-schedule] reproduce with: PERRY_GC_SCHEDULE_SEED=17 PERRY_GC_SCHEDULE_RATE=0.1\n[gc-schedule] done: seed=17 safepoints=91 scheduled_collections=9 polls_paced=2331059 copying_minors=9 moved_objects=19278 loop_polls=2331144\n",
+    "counters": {
+      "scheduled_collections": 9,
+      "copying_minors": 9,
+      "moved_objects": 19278,
+      "loop_polls": 2331144
+    },
+    "matches_node": true,
+    "live_subject": true
+  },
+  {
+    "fixture": "test_gap_json_scanning_boundaries",
+    "seed": 9013,
+    "exit": 0,
+    "stdout": "scan 255 0 730561117\nwide 0 624430645\n",
+    "stderr": "[gc-schedule] seeded GC-schedule fuzzing ACTIVE: seed=9013 rate=0.1\n[gc-schedule] reproduce with: PERRY_GC_SCHEDULE_SEED=9013 PERRY_GC_SCHEDULE_RATE=0.1\n[gc-schedule] done: seed=9013 safepoints=91 scheduled_collections=11 polls_paced=2331059 copying_minors=11 moved_objects=19101 loop_polls=2331144\n",
+    "counters": {
+      "scheduled_collections": 11,
+      "copying_minors": 11,
+      "moved_objects": 19101,
+      "loop_polls": 2331144
+    },
+    "matches_node": true,
+    "live_subject": true
+  },
+  {
+    "fixture": "test_gap_json_wide_cache_lifetime",
+    "seed": 17,
+    "exit": 0,
+    "stdout": "wide cache lifetime 4 331992 0\n",
+    "stderr": "[gc-schedule] seeded GC-schedule fuzzing ACTIVE: seed=17 rate=0.1\n[gc-schedule] reproduce with: PERRY_GC_SCHEDULE_SEED=17 PERRY_GC_SCHEDULE_RATE=0.1\n[gc-schedule] done: seed=17 safepoints=144 scheduled_collections=13 polls_paced=4907 copying_minors=13 moved_objects=19880 loop_polls=5045\n",
+    "counters": {
+      "scheduled_collections": 13,
+      "copying_minors": 13,
+      "moved_objects": 19880,
+      "loop_polls": 5045
+    },
+    "matches_node": true,
+    "live_subject": true
+  },
+  {
+    "fixture": "test_gap_json_wide_cache_lifetime",
+    "seed": 9013,
+    "exit": 0,
+    "stdout": "wide cache lifetime 4 331992 0\n",
+    "stderr": "[gc-schedule] seeded GC-schedule fuzzing ACTIVE: seed=9013 rate=0.1\n[gc-schedule] reproduce with: PERRY_GC_SCHEDULE_SEED=9013 PERRY_GC_SCHEDULE_RATE=0.1\n[gc-schedule] done: seed=9013 safepoints=144 scheduled_collections=17 polls_paced=4907 copying_minors=17 moved_objects=26542 loop_polls=5045\n",
+    "counters": {
+      "scheduled_collections": 17,
+      "copying_minors": 17,
+      "moved_objects": 26542,
+      "loop_polls": 5045
+    },
+    "matches_node": true,
+    "live_subject": true
+  },
+  {
+    "fixture": "test_gap_json_unicode_lengths",
+    "seed": 17,
+    "exit": 0,
+    "stdout": "unicode lengths 120 0 179240214 35809\n",
+    "stderr": "[gc-schedule] seeded GC-schedule fuzzing ACTIVE: seed=17 rate=0.1\n[gc-schedule] reproduce with: PERRY_GC_SCHEDULE_SEED=17 PERRY_GC_SCHEDULE_RATE=0.1\n[gc-schedule] done: seed=17 safepoints=46 scheduled_collections=5 polls_paced=71936 copying_minors=5 moved_objects=19124 loop_polls=71976\n",
+    "counters": {
+      "scheduled_collections": 5,
+      "copying_minors": 5,
+      "moved_objects": 19124,
+      "loop_polls": 71976
+    },
+    "matches_node": true,
+    "live_subject": true
+  },
+  {
+    "fixture": "test_gap_json_unicode_lengths",
+    "seed": 9013,
+    "exit": 0,
+    "stdout": "unicode lengths 120 0 179240214 35809\n",
+    "stderr": "[gc-schedule] seeded GC-schedule fuzzing ACTIVE: seed=9013 rate=0.1\n[gc-schedule] reproduce with: PERRY_GC_SCHEDULE_SEED=9013 PERRY_GC_SCHEDULE_RATE=0.1\n[gc-schedule] done: seed=9013 safepoints=46 scheduled_collections=3 polls_paced=71936 copying_minors=3 moved_objects=12800 loop_polls=71976\n",
+    "counters": {
+      "scheduled_collections": 3,
+      "copying_minors": 3,
+      "moved_objects": 12800,
+      "loop_polls": 71976
+    },
+    "matches_node": true,
+    "live_subject": true
+  },
+  {
+    "fixture": "test_gap_json_small_results",
+    "seed": 17,
+    "exit": 0,
+    "stdout": "small results 2600 0 8810967 23001\n\"replacement\"\nnull\nspace observed\n{\"a\":\"\\\"a\\\"\",\"b\":\"null\",\"c\":true}\n{\n  \"a\": \"\\\"a\\\"\",\n  \"b\": \"null\",\n  \"c\": true\n}\nreplacer:,space,toJSON,toJSON\nnull \"a\" {}\n",
+    "stderr": "[gc-schedule] seeded GC-schedule fuzzing ACTIVE: seed=17 rate=0.1\n[gc-schedule] reproduce with: PERRY_GC_SCHEDULE_SEED=17 PERRY_GC_SCHEDULE_RATE=0.1\n[gc-schedule] done: seed=17 safepoints=91 scheduled_collections=9 polls_paced=28715 copying_minors=9 moved_objects=20171 loop_polls=28800\n",
+    "counters": {
+      "scheduled_collections": 9,
+      "copying_minors": 9,
+      "moved_objects": 20171,
+      "loop_polls": 28800
+    },
+    "matches_node": true,
+    "live_subject": true
+  },
+  {
+    "fixture": "test_gap_json_small_results",
+    "seed": 9013,
+    "exit": 0,
+    "stdout": "small results 2600 0 8810967 23001\n\"replacement\"\nnull\nspace observed\n{\"a\":\"\\\"a\\\"\",\"b\":\"null\",\"c\":true}\n{\n  \"a\": \"\\\"a\\\"\",\n  \"b\": \"null\",\n  \"c\": true\n}\nreplacer:,space,toJSON,toJSON\nnull \"a\" {}\n",
+    "stderr": "[gc-schedule] seeded GC-schedule fuzzing ACTIVE: seed=9013 rate=0.1\n[gc-schedule] reproduce with: PERRY_GC_SCHEDULE_SEED=9013 PERRY_GC_SCHEDULE_RATE=0.1\n[gc-schedule] done: seed=9013 safepoints=92 scheduled_collections=12 polls_paced=28714 copying_minors=12 moved_objects=20559 loop_polls=28800\n",
+    "counters": {
+      "scheduled_collections": 12,
+      "copying_minors": 12,
+      "moved_objects": 20559,
+      "loop_polls": 28800
+    },
+    "matches_node": true,
+    "live_subject": true
+  },
+  {
+    "fixture": "test_gap_json_primitive_arrays",
+    "seed": 17,
+    "exit": 0,
+    "stdout": "primitive arrays 640 0 682075754 279681\n[1,2,3]\n[1,\"two\",3]\n[1,null,3]\n[1,{\"x\":2},3]\n[1,2,{\"inner\":\"[\\\"\\\",\\\"a\\\",\\\"abc\\\",\\\"longer string\\\",\\\"\u00e9\\\",\\\"\u6771\u4eac\\\",\\\"\ud83d\ude42\\\",\\\"\\\\ud800\\\",\\\"\\\\udfff\\\",\\\"\\\\n\\\\\\\"\\\\\\\\\\\"]\",\"array\":[\"custom\",\"array\"]}]\n{\"value\":[\"custom\",\"value\"]}\nobject:2,array:array,array:value\nTypeError\n[\"after\",\"cycle\"]\n",
+    "stderr": "[gc-schedule] seeded GC-schedule fuzzing ACTIVE: seed=17 rate=0.1\n[gc-schedule] reproduce with: PERRY_GC_SCHEDULE_SEED=17 PERRY_GC_SCHEDULE_RATE=0.1\n[gc-schedule] done: seed=17 safepoints=91 scheduled_collections=9 polls_paced=553375 copying_minors=9 moved_objects=19903 loop_polls=553460\n",
+    "counters": {
+      "scheduled_collections": 9,
+      "copying_minors": 9,
+      "moved_objects": 19903,
+      "loop_polls": 553460
+    },
+    "matches_node": true,
+    "live_subject": true
+  },
+  {
+    "fixture": "test_gap_json_primitive_arrays",
+    "seed": 9013,
+    "exit": 0,
+    "stdout": "primitive arrays 640 0 682075754 279681\n[1,2,3]\n[1,\"two\",3]\n[1,null,3]\n[1,{\"x\":2},3]\n[1,2,{\"inner\":\"[\\\"\\\",\\\"a\\\",\\\"abc\\\",\\\"longer string\\\",\\\"\u00e9\\\",\\\"\u6771\u4eac\\\",\\\"\ud83d\ude42\\\",\\\"\\\\ud800\\\",\\\"\\\\udfff\\\",\\\"\\\\n\\\\\\\"\\\\\\\\\\\"]\",\"array\":[\"custom\",\"array\"]}]\n{\"value\":[\"custom\",\"value\"]}\nobject:2,array:array,array:value\nTypeError\n[\"after\",\"cycle\"]\n",
+    "stderr": "[gc-schedule] seeded GC-schedule fuzzing ACTIVE: seed=9013 rate=0.1\n[gc-schedule] reproduce with: PERRY_GC_SCHEDULE_SEED=9013 PERRY_GC_SCHEDULE_RATE=0.1\n[gc-schedule] done: seed=9013 safepoints=92 scheduled_collections=12 polls_paced=553374 copying_minors=12 moved_objects=13893 loop_polls=553460\n",
+    "counters": {
+      "scheduled_collections": 12,
+      "copying_minors": 12,
+      "moved_objects": 13893,
+      "loop_polls": 553460
+    },
+    "matches_node": true,
+    "live_subject": true
+  },
+  {
+    "fixture": "test_gap_json_direct_strings",
+    "seed": 17,
+    "exit": 0,
+    "stdout": "direct strings 1536 0 827775247\n\"replaced\"\ntrue\nspace observed\n313 replacer:,space,next,\n290 true\n",
+    "stderr": "[gc-schedule] seeded GC-schedule fuzzing ACTIVE: seed=17 rate=0.1\n[gc-schedule] reproduce with: PERRY_GC_SCHEDULE_SEED=17 PERRY_GC_SCHEDULE_RATE=0.1\n[gc-schedule] done: seed=17 safepoints=379 scheduled_collections=36 polls_paced=2927380 copying_minors=36 moved_objects=5304 loop_polls=2927753\n",
+    "counters": {
+      "scheduled_collections": 36,
+      "copying_minors": 36,
+      "moved_objects": 5304,
+      "loop_polls": 2927753
+    },
+    "matches_node": true,
+    "live_subject": true
+  },
+  {
+    "fixture": "test_gap_json_direct_strings",
+    "seed": 9013,
+    "exit": 0,
+    "stdout": "direct strings 1536 0 827775247\n\"replaced\"\ntrue\nspace observed\n313 replacer:,space,next,\n290 true\n",
+    "stderr": "[gc-schedule] seeded GC-schedule fuzzing ACTIVE: seed=9013 rate=0.1\n[gc-schedule] reproduce with: PERRY_GC_SCHEDULE_SEED=9013 PERRY_GC_SCHEDULE_RATE=0.1\n[gc-schedule] done: seed=9013 safepoints=380 scheduled_collections=44 polls_paced=2927379 copying_minors=44 moved_objects=5800 loop_polls=2927753\n",
+    "counters": {
+      "scheduled_collections": 44,
+      "copying_minors": 44,
+      "moved_objects": 5800,
+      "loop_polls": 2927753
+    },
+    "matches_node": true,
+    "live_subject": true
+  },
+  {
+    "fixture": "test_gap_json_direct_objects",
+    "seed": 17,
+    "exit": 0,
+    "stdout": "direct objects 672 0 162323450\n{\"id\":1,\"text\":\"observed\"} get,\n{\"visible\":1}\n\"own-result\"\n\"proto-result\"\n{\"id\":1,\"text\":\"plain\"}\n\"default-result\"\n{\"id\":1,\"text\":\"plain\"} get,own:,proto:,default:,\n{\"1\":1,\"2\":2,\"a\":0}\n{\"a\":1,\"b\":2,\"c\":3,\"d\":4,\"e\":5,\"f\":6}\n{\"a\":3,\"b\":{}}\n",
+    "stderr": "[gc-schedule] seeded GC-schedule fuzzing ACTIVE: seed=17 rate=0.1\n[gc-schedule] reproduce with: PERRY_GC_SCHEDULE_SEED=17 PERRY_GC_SCHEDULE_RATE=0.1\n[gc-schedule] done: seed=17 safepoints=193 scheduled_collections=17 polls_paced=1324334 copying_minors=17 moved_objects=22096 loop_polls=1324521\n",
+    "counters": {
+      "scheduled_collections": 17,
+      "copying_minors": 17,
+      "moved_objects": 22096,
+      "loop_polls": 1324521
+    },
+    "matches_node": true,
+    "live_subject": true
+  },
+  {
+    "fixture": "test_gap_json_direct_objects",
+    "seed": 9013,
+    "exit": 0,
+    "stdout": "direct objects 672 0 162323450\n{\"id\":1,\"text\":\"observed\"} get,\n{\"visible\":1}\n\"own-result\"\n\"proto-result\"\n{\"id\":1,\"text\":\"plain\"}\n\"default-result\"\n{\"id\":1,\"text\":\"plain\"} get,own:,proto:,default:,\n{\"1\":1,\"2\":2,\"a\":0}\n{\"a\":1,\"b\":2,\"c\":3,\"d\":4,\"e\":5,\"f\":6}\n{\"a\":3,\"b\":{}}\n",
+    "stderr": "[gc-schedule] seeded GC-schedule fuzzing ACTIVE: seed=9013 rate=0.1\n[gc-schedule] reproduce with: PERRY_GC_SCHEDULE_SEED=9013 PERRY_GC_SCHEDULE_RATE=0.1\n[gc-schedule] done: seed=9013 safepoints=193 scheduled_collections=27 polls_paced=1324334 copying_minors=27 moved_objects=15565 loop_polls=1324521\n",
+    "counters": {
+      "scheduled_collections": 27,
+      "copying_minors": 27,
+      "moved_objects": 15565,
+      "loop_polls": 1324521
+    },
+    "matches_node": true,
+    "live_subject": true
+  },
+  {
+    "fixture": "test_gap_json_tape_scanning",
+    "seed": 17,
+    "exit": 0,
+    "stdout": "tape scanning 1088 49 0 669014417\n",
+    "stderr": "[gc-schedule] seeded GC-schedule fuzzing ACTIVE: seed=17 rate=0.1\n[gc-schedule] reproduce with: PERRY_GC_SCHEDULE_SEED=17 PERRY_GC_SCHEDULE_RATE=0.1\n[gc-schedule] done: seed=17 safepoints=1144 scheduled_collections=111 polls_paced=52658 copying_minors=111 moved_objects=38074 loop_polls=53796\n",
+    "counters": {
+      "scheduled_collections": 111,
+      "copying_minors": 111,
+      "moved_objects": 38074,
+      "loop_polls": 53796
+    },
+    "matches_node": true,
+    "live_subject": true
+  },
+  {
+    "fixture": "test_gap_json_tape_scanning",
+    "seed": 9013,
+    "exit": 0,
+    "stdout": "tape scanning 1088 49 0 669014417\n",
+    "stderr": "[gc-schedule] seeded GC-schedule fuzzing ACTIVE: seed=9013 rate=0.1\n[gc-schedule] reproduce with: PERRY_GC_SCHEDULE_SEED=9013 PERRY_GC_SCHEDULE_RATE=0.1\n[gc-schedule] done: seed=9013 safepoints=1144 scheduled_collections=113 polls_paced=52658 copying_minors=113 moved_objects=31201 loop_polls=53796\n",
+    "counters": {
+      "scheduled_collections": 113,
+      "copying_minors": 113,
+      "moved_objects": 31201,
+      "loop_polls": 53796
+    },
+    "matches_node": true,
+    "live_subject": true
+  },
+  {
+    "fixture": "test_gap_json_parse_scalars",
+    "seed": 17,
+    "exit": 0,
+    "stdout": "scalar parse 992 0 40864826\nscalar invalid 30 0\n{\"wrapped\":null}\n{\"wrapped\":true}\n{\"wrapped\":false}\n{\"wrapped\":0}\n{\"wrapped\":0}\n{\"wrapped\":42}\n{\"wrapped\":-123}\n{\"wrapped\":9007199254740992}\n{\"wrapped\":18446744073709552000}\n{\"wrapped\":260.75197}\n{\"wrapped\":1.2345678901234568e+29}\n{\"wrapped\":null}\n{\"wrapped\":null}\n{\"wrapped\":0}\n{\"wrapped\":0}\n{\"wrapped\":5e-324}\n{\"wrapped\":5e-324}\n{\"wrapped\":1.7976931348623157e+308}\n{\"wrapped\":\"\"}\n{\"wrapped\":\"a\"}\n{\"wrapped\":\"abcde\"}\n{\"wrapped\":\"abcdef\"}\n{\"wrapped\":\"\u00e9\"}\n{\"wrapped\":\"\u6771\u4eac\"}\n{\"wrapped\":\"\ud83d\ude42\"}\n{\"wrapped\":\"\u00e9abc\"}\n{\"wrapped\":\"\\n\"}\n{\"wrapped\":\"a\"}\n{\"wrapped\":\"\\ud800\"}\n{\"wrapped\":\"\\udfff\"}\n{\"wrapped\":\"\ud83d\ude00\"}\n:object,:boolean,:boolean,:number,:number,:number,:number,:number,:number,:number,:number,:number,:number,:number,:number,:number,:number,:number,:string,:string,:string,:string,:string,:string,:string,:string,:string,:string,:string,:string,:string,\n123 null true 12\nTypeError\ntrue\n",
+    "stderr": "[gc-schedule] seeded GC-schedule fuzzing ACTIVE: seed=17 rate=0.1\n[gc-schedule] reproduce with: PERRY_GC_SCHEDULE_SEED=17 PERRY_GC_SCHEDULE_RATE=0.1\n[gc-schedule] done: seed=17 safepoints=116 scheduled_collections=11 polls_paced=33199 copying_minors=11 moved_objects=17342 loop_polls=33309\n",
+    "counters": {
+      "scheduled_collections": 11,
+      "copying_minors": 11,
+      "moved_objects": 17342,
+      "loop_polls": 33309
+    },
+    "matches_node": true,
+    "live_subject": true
+  },
+  {
+    "fixture": "test_gap_json_parse_scalars",
+    "seed": 9013,
+    "exit": 0,
+    "stdout": "scalar parse 992 0 40864826\nscalar invalid 30 0\n{\"wrapped\":null}\n{\"wrapped\":true}\n{\"wrapped\":false}\n{\"wrapped\":0}\n{\"wrapped\":0}\n{\"wrapped\":42}\n{\"wrapped\":-123}\n{\"wrapped\":9007199254740992}\n{\"wrapped\":18446744073709552000}\n{\"wrapped\":260.75197}\n{\"wrapped\":1.2345678901234568e+29}\n{\"wrapped\":null}\n{\"wrapped\":null}\n{\"wrapped\":0}\n{\"wrapped\":0}\n{\"wrapped\":5e-324}\n{\"wrapped\":5e-324}\n{\"wrapped\":1.7976931348623157e+308}\n{\"wrapped\":\"\"}\n{\"wrapped\":\"a\"}\n{\"wrapped\":\"abcde\"}\n{\"wrapped\":\"abcdef\"}\n{\"wrapped\":\"\u00e9\"}\n{\"wrapped\":\"\u6771\u4eac\"}\n{\"wrapped\":\"\ud83d\ude42\"}\n{\"wrapped\":\"\u00e9abc\"}\n{\"wrapped\":\"\\n\"}\n{\"wrapped\":\"a\"}\n{\"wrapped\":\"\\ud800\"}\n{\"wrapped\":\"\\udfff\"}\n{\"wrapped\":\"\ud83d\ude00\"}\n:object,:boolean,:boolean,:number,:number,:number,:number,:number,:number,:number,:number,:number,:number,:number,:number,:number,:number,:number,:string,:string,:string,:string,:string,:string,:string,:string,:string,:string,:string,:string,:string,\n123 null true 12\nTypeError\ntrue\n",
+    "stderr": "[gc-schedule] seeded GC-schedule fuzzing ACTIVE: seed=9013 rate=0.1\n[gc-schedule] reproduce with: PERRY_GC_SCHEDULE_SEED=9013 PERRY_GC_SCHEDULE_RATE=0.1\n[gc-schedule] done: seed=9013 safepoints=117 scheduled_collections=14 polls_paced=33198 copying_minors=14 moved_objects=17903 loop_polls=33309\n",
+    "counters": {
+      "scheduled_collections": 14,
+      "copying_minors": 14,
+      "moved_objects": 17903,
+      "loop_polls": 33309
+    },
+    "matches_node": true,
+    "live_subject": true
+  },
+  {
+    "fixture": "test_gap_json_data_records",
+    "seed": 17,
+    "exit": 0,
+    "stdout": "[{\"id\":0,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0,\"tags\":[\"tag0\",null,false,0]},{\"id\":1,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0.125,\"tags\":[\"tag1\",null,false,1.5]},{\"id\":2,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0.25,\"tags\":[\"tag2\",null,false,3]},{\"id\":3,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0,\"tags\":[\"tag3\",null,false,4.5]},{\"id\":4,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0.5,\"tags\":[\"tag4\",null,false,6]},{\"id\":5,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0.625,\"tags\":[\"tag5\",null,false,7.5]},{\"id\":6,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0,\"tags\":[\"tag6\",null,false,9]},{\"id\":7,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0.875,\"tags\":[\"tag7\",null,false,10.5]},{\"id\":8,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":1,\"tags\":[\"tag8\",null,false,12]},{\"id\":9,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0,\"tags\":[\"tag9\",null,false,13.5]},{\"id\":10,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":1.25,\"tags\":[\"tag10\",null,false,15]},{\"id\":11,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":1.375,\"tags\":[\"tag11\",null,false,16.5]},{\"id\":12,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0,\"tags\":[\"tag12\",null,false,18]},{\"id\":13,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":1.625,\"tags\":[\"tag13\",null,false,19.5]},{\"id\":14,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":1.75,\"tags\":[\"tag14\",null,false,21]},{\"id\":15,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0,\"tags\":[\"tag15\",null,false,22.5]},{\"id\":16,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":2,\"tags\":[\"tag16\",null,false,24]},{\"id\":17,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":2.125,\"tags\":[\"tag17\",null,false,25.5]},{\"id\":18,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0,\"tags\":[\"tag18\",null,false,27]},{\"id\":19,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":2.375,\"tags\":[\"tag19\",null,false,28.5]},{\"id\":20,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":2.5,\"tags\":[\"tag20\",null,false,30]},{\"id\":21,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0,\"tags\":[\"tag21\",null,false,31.5]},{\"id\":22,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":2.75,\"tags\":[\"tag22\",null,false,33]},{\"id\":23,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":2.875,\"tags\":[\"tag23\",null,false,34.5]},{\"id\":24,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0,\"tags\":[\"tag24\",null,false,36]},{\"id\":25,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":3.125,\"tags\":[\"tag25\",null,false,37.5]},{\"id\":26,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":3.25,\"tags\":[\"tag26\",null,false,39]},{\"id\":27,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0,\"tags\":[\"tag27\",null,false,40.5]},{\"id\":28,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":3.5,\"tags\":[\"tag28\",null,false,42]},{\"id\":29,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":3.625,\"tags\":[\"tag29\",null,false,43.5]},{\"id\":30,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0,\"tags\":[\"tag30\",null,false,45]},{\"id\":31,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":3.875,\"tags\":[\"tag31\",null,false,46.5]},{\"id\":32,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":4,\"tags\":[\"tag32\",null,false,48]},{\"id\":33,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0,\"tags\":[\"tag33\",null,false,49.5]},{\"id\":34,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":4.25,\"tags\":[\"tag34\",null,false,51]},{\"id\":35,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":4.375,\"tags\":[\"tag35\",null,false,52.5]},{\"id\":36,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0,\"tags\":[\"tag36\",null,false,54]},{\"id\":37,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":4.625,\"tags\":[\"tag37\",null,false,55.5]},{\"id\":38,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":4.75,\"tags\":[\"tag38\",null,false,57]},{\"id\":39,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0,\"tags\":[\"tag39\",null,false,58.5]},{\"id\":40,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":5,\"tags\":[\"tag40\",null,false,60]},{\"id\":41,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":5.125,\"tags\":[\"tag41\",null,false,61.5]},{\"id\":42,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0,\"tags\":[\"tag42\",null,false,63]},{\"id\":43,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":5.375,\"tags\":[\"tag43\",null,false,64.5]},{\"id\":44,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":5.5,\"tags\":[\"tag44\",null,false,66]},{\"id\":45,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0,\"tags\":[\"tag45\",null,false,67.5]},{\"id\":46,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":5.75,\"tags\":[\"tag46\",null,false,69]},{\"id\":47,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":5.875,\"tags\":[\"tag47\",null,false,70.5]}]\n{\"records\":[{\"id\":0,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0,\"tags\":[\"tag0\",null,false,0]},{\"id\":1,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0.125,\"tags\":[\"tag1\",null,false,1.5]},{\"id\":2,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0.25,\"tags\":[\"tag2\",null,false,3]},{\"id\":3,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0,\"tags\":[\"tag3\",null,false,4.5]},{\"id\":4,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0.5,\"tags\":[\"tag4\",null,false,6]},{\"id\":5,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0.625,\"tags\":[\"tag5\",null,false,7.5]},{\"id\":6,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0,\"tags\":[\"tag6\",null,false,9]},{\"id\":7,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0.875,\"tags\":[\"tag7\",null,false,10.5]},{\"id\":8,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":1,\"tags\":[\"tag8\",null,false,12]},{\"id\":9,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0,\"tags\":[\"tag9\",null,false,13.5]},{\"id\":10,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":1.25,\"tags\":[\"tag10\",null,false,15]},{\"id\":11,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":1.375,\"tags\":[\"tag11\",null,false,16.5]},{\"id\":12,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0,\"tags\":[\"tag12\",null,false,18]},{\"id\":13,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":1.625,\"tags\":[\"tag13\",null,false,19.5]},{\"id\":14,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":1.75,\"tags\":[\"tag14\",null,false,21]},{\"id\":15,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0,\"tags\":[\"tag15\",null,false,22.5]},{\"id\":16,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":2,\"tags\":[\"tag16\",null,false,24]},{\"id\":17,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":2.125,\"tags\":[\"tag17\",null,false,25.5]},{\"id\":18,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0,\"tags\":[\"tag18\",null,false,27]},{\"id\":19,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":2.375,\"tags\":[\"tag19\",null,false,28.5]},{\"id\":20,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":2.5,\"tags\":[\"tag20\",null,false,30]},{\"id\":21,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0,\"tags\":[\"tag21\",null,false,31.5]},{\"id\":22,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":2.75,\"tags\":[\"tag22\",null,false,33]},{\"id\":23,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":2.875,\"tags\":[\"tag23\",null,false,34.5]},{\"id\":24,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0,\"tags\":[\"tag24\",null,false,36]},{\"id\":25,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":3.125,\"tags\":[\"tag25\",null,false,37.5]},{\"id\":26,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":3.25,\"tags\":[\"tag26\",null,false,39]},{\"id\":27,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0,\"tags\":[\"tag27\",null,false,40.5]},{\"id\":28,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":3.5,\"tags\":[\"tag28\",null,false,42]},{\"id\":29,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":3.625,\"tags\":[\"tag29\",null,false,43.5]},{\"id\":30,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0,\"tags\":[\"tag30\",null,false,45]},{\"id\":31,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":3.875,\"tags\":[\"tag31\",null,false,46.5]},{\"id\":32,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":4,\"tags\":[\"tag32\",null,false,48]},{\"id\":33,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0,\"tags\":[\"tag33\",null,false,49.5]},{\"id\":34,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":4.25,\"tags\":[\"tag34\",null,false,51]},{\"id\":35,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":4.375,\"tags\":[\"tag35\",null,false,52.5]},{\"id\":36,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0,\"tags\":[\"tag36\",null,false,54]},{\"id\":37,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":4.625,\"tags\":[\"tag37\",null,false,55.5]},{\"id\":38,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":4.75,\"tags\":[\"tag38\",null,false,57]},{\"id\":39,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0,\"tags\":[\"tag39\",null,false,58.5]},{\"id\":40,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":5,\"tags\":[\"tag40\",null,false,60]},{\"id\":41,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":5.125,\"tags\":[\"tag41\",null,false,61.5]},{\"id\":42,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0,\"tags\":[\"tag42\",null,false,63]},{\"id\":43,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":5.375,\"tags\":[\"tag43\",null,false,64.5]},{\"id\":44,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":5.5,\"tags\":[\"tag44\",null,false,66]},{\"id\":45,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0,\"tags\":[\"tag45\",null,false,67.5]},{\"id\":46,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":5.75,\"tags\":[\"tag46\",null,false,69]},{\"id\":47,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":5.875,\"tags\":[\"tag47\",null,false,70.5]}]}\n[{\"id\":1,\"tags\":[1,2]},{\"id\":2,\"tags\":\"array:tags\"}]\n[{\"id\":1,\"tags\":[1,2]},{\"id\":2,\"tags\":[null,null,null,null]}]\n[{\"id\":1,\"tags\":[1,2]},{\"id\":2,\"tags\":[\"x\",\"child:1\"]}]\n[{\"id\":1,\"tags\":[1,2]},{\"tags\":[1,2]}]\n[{\"id\":1,\"tags\":[1,2]},{\"tags\":[1,2]}]\n[{\"id\":1,\"tags\":[1,2]},{\"tags\":[1,2]}]\n[{\"id\":1,\"tags\":[1,2]},{\"tags\":[1,2]}]\n[{\"id\":1,\"tags\":[1,2]},{\"id\":99,\"tags\":[1,2]}]\n1\n",
+    "stderr": "[gc-schedule] seeded GC-schedule fuzzing ACTIVE: seed=17 rate=0.1\n[gc-schedule] reproduce with: PERRY_GC_SCHEDULE_SEED=17 PERRY_GC_SCHEDULE_RATE=0.1\n[gc-schedule] done: seed=17 safepoints=9 scheduled_collections=1 polls_paced=45 copying_minors=1 moved_objects=6515 loop_polls=48\n",
+    "counters": {
+      "scheduled_collections": 1,
+      "copying_minors": 1,
+      "moved_objects": 6515,
+      "loop_polls": 48
+    },
+    "matches_node": true,
+    "live_subject": true
+  },
+  {
+    "fixture": "test_gap_json_data_records",
+    "seed": 9013,
+    "exit": 0,
+    "stdout": "[{\"id\":0,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0,\"tags\":[\"tag0\",null,false,0]},{\"id\":1,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0.125,\"tags\":[\"tag1\",null,false,1.5]},{\"id\":2,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0.25,\"tags\":[\"tag2\",null,false,3]},{\"id\":3,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0,\"tags\":[\"tag3\",null,false,4.5]},{\"id\":4,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0.5,\"tags\":[\"tag4\",null,false,6]},{\"id\":5,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0.625,\"tags\":[\"tag5\",null,false,7.5]},{\"id\":6,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0,\"tags\":[\"tag6\",null,false,9]},{\"id\":7,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0.875,\"tags\":[\"tag7\",null,false,10.5]},{\"id\":8,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":1,\"tags\":[\"tag8\",null,false,12]},{\"id\":9,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0,\"tags\":[\"tag9\",null,false,13.5]},{\"id\":10,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":1.25,\"tags\":[\"tag10\",null,false,15]},{\"id\":11,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":1.375,\"tags\":[\"tag11\",null,false,16.5]},{\"id\":12,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0,\"tags\":[\"tag12\",null,false,18]},{\"id\":13,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":1.625,\"tags\":[\"tag13\",null,false,19.5]},{\"id\":14,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":1.75,\"tags\":[\"tag14\",null,false,21]},{\"id\":15,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0,\"tags\":[\"tag15\",null,false,22.5]},{\"id\":16,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":2,\"tags\":[\"tag16\",null,false,24]},{\"id\":17,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":2.125,\"tags\":[\"tag17\",null,false,25.5]},{\"id\":18,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0,\"tags\":[\"tag18\",null,false,27]},{\"id\":19,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":2.375,\"tags\":[\"tag19\",null,false,28.5]},{\"id\":20,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":2.5,\"tags\":[\"tag20\",null,false,30]},{\"id\":21,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0,\"tags\":[\"tag21\",null,false,31.5]},{\"id\":22,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":2.75,\"tags\":[\"tag22\",null,false,33]},{\"id\":23,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":2.875,\"tags\":[\"tag23\",null,false,34.5]},{\"id\":24,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0,\"tags\":[\"tag24\",null,false,36]},{\"id\":25,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":3.125,\"tags\":[\"tag25\",null,false,37.5]},{\"id\":26,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":3.25,\"tags\":[\"tag26\",null,false,39]},{\"id\":27,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0,\"tags\":[\"tag27\",null,false,40.5]},{\"id\":28,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":3.5,\"tags\":[\"tag28\",null,false,42]},{\"id\":29,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":3.625,\"tags\":[\"tag29\",null,false,43.5]},{\"id\":30,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0,\"tags\":[\"tag30\",null,false,45]},{\"id\":31,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":3.875,\"tags\":[\"tag31\",null,false,46.5]},{\"id\":32,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":4,\"tags\":[\"tag32\",null,false,48]},{\"id\":33,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0,\"tags\":[\"tag33\",null,false,49.5]},{\"id\":34,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":4.25,\"tags\":[\"tag34\",null,false,51]},{\"id\":35,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":4.375,\"tags\":[\"tag35\",null,false,52.5]},{\"id\":36,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0,\"tags\":[\"tag36\",null,false,54]},{\"id\":37,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":4.625,\"tags\":[\"tag37\",null,false,55.5]},{\"id\":38,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":4.75,\"tags\":[\"tag38\",null,false,57]},{\"id\":39,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0,\"tags\":[\"tag39\",null,false,58.5]},{\"id\":40,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":5,\"tags\":[\"tag40\",null,false,60]},{\"id\":41,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":5.125,\"tags\":[\"tag41\",null,false,61.5]},{\"id\":42,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0,\"tags\":[\"tag42\",null,false,63]},{\"id\":43,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":5.375,\"tags\":[\"tag43\",null,false,64.5]},{\"id\":44,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":5.5,\"tags\":[\"tag44\",null,false,66]},{\"id\":45,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0,\"tags\":[\"tag45\",null,false,67.5]},{\"id\":46,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":5.75,\"tags\":[\"tag46\",null,false,69]},{\"id\":47,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":5.875,\"tags\":[\"tag47\",null,false,70.5]}]\n{\"records\":[{\"id\":0,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0,\"tags\":[\"tag0\",null,false,0]},{\"id\":1,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0.125,\"tags\":[\"tag1\",null,false,1.5]},{\"id\":2,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0.25,\"tags\":[\"tag2\",null,false,3]},{\"id\":3,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0,\"tags\":[\"tag3\",null,false,4.5]},{\"id\":4,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0.5,\"tags\":[\"tag4\",null,false,6]},{\"id\":5,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0.625,\"tags\":[\"tag5\",null,false,7.5]},{\"id\":6,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0,\"tags\":[\"tag6\",null,false,9]},{\"id\":7,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0.875,\"tags\":[\"tag7\",null,false,10.5]},{\"id\":8,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":1,\"tags\":[\"tag8\",null,false,12]},{\"id\":9,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0,\"tags\":[\"tag9\",null,false,13.5]},{\"id\":10,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":1.25,\"tags\":[\"tag10\",null,false,15]},{\"id\":11,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":1.375,\"tags\":[\"tag11\",null,false,16.5]},{\"id\":12,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0,\"tags\":[\"tag12\",null,false,18]},{\"id\":13,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":1.625,\"tags\":[\"tag13\",null,false,19.5]},{\"id\":14,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":1.75,\"tags\":[\"tag14\",null,false,21]},{\"id\":15,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0,\"tags\":[\"tag15\",null,false,22.5]},{\"id\":16,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":2,\"tags\":[\"tag16\",null,false,24]},{\"id\":17,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":2.125,\"tags\":[\"tag17\",null,false,25.5]},{\"id\":18,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0,\"tags\":[\"tag18\",null,false,27]},{\"id\":19,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":2.375,\"tags\":[\"tag19\",null,false,28.5]},{\"id\":20,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":2.5,\"tags\":[\"tag20\",null,false,30]},{\"id\":21,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0,\"tags\":[\"tag21\",null,false,31.5]},{\"id\":22,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":2.75,\"tags\":[\"tag22\",null,false,33]},{\"id\":23,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":2.875,\"tags\":[\"tag23\",null,false,34.5]},{\"id\":24,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0,\"tags\":[\"tag24\",null,false,36]},{\"id\":25,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":3.125,\"tags\":[\"tag25\",null,false,37.5]},{\"id\":26,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":3.25,\"tags\":[\"tag26\",null,false,39]},{\"id\":27,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0,\"tags\":[\"tag27\",null,false,40.5]},{\"id\":28,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":3.5,\"tags\":[\"tag28\",null,false,42]},{\"id\":29,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":3.625,\"tags\":[\"tag29\",null,false,43.5]},{\"id\":30,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0,\"tags\":[\"tag30\",null,false,45]},{\"id\":31,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":3.875,\"tags\":[\"tag31\",null,false,46.5]},{\"id\":32,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":4,\"tags\":[\"tag32\",null,false,48]},{\"id\":33,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0,\"tags\":[\"tag33\",null,false,49.5]},{\"id\":34,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":4.25,\"tags\":[\"tag34\",null,false,51]},{\"id\":35,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":4.375,\"tags\":[\"tag35\",null,false,52.5]},{\"id\":36,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0,\"tags\":[\"tag36\",null,false,54]},{\"id\":37,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":4.625,\"tags\":[\"tag37\",null,false,55.5]},{\"id\":38,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":4.75,\"tags\":[\"tag38\",null,false,57]},{\"id\":39,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0,\"tags\":[\"tag39\",null,false,58.5]},{\"id\":40,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":5,\"tags\":[\"tag40\",null,false,60]},{\"id\":41,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":5.125,\"tags\":[\"tag41\",null,false,61.5]},{\"id\":42,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":0,\"tags\":[\"tag42\",null,false,63]},{\"id\":43,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":5.375,\"tags\":[\"tag43\",null,false,64.5]},{\"id\":44,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":5.5,\"tags\":[\"tag44\",null,false,66]},{\"id\":45,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":0,\"tags\":[\"tag45\",null,false,67.5]},{\"id\":46,\"name\":\"\u6771\u4eac\ud83d\ude42\",\"active\":true,\"score\":5.75,\"tags\":[\"tag46\",null,false,69]},{\"id\":47,\"name\":\"line\\n\\\"quote\\\"\",\"active\":true,\"score\":5.875,\"tags\":[\"tag47\",null,false,70.5]}]}\n[{\"id\":1,\"tags\":[1,2]},{\"id\":2,\"tags\":\"array:tags\"}]\n[{\"id\":1,\"tags\":[1,2]},{\"id\":2,\"tags\":[null,null,null,null]}]\n[{\"id\":1,\"tags\":[1,2]},{\"id\":2,\"tags\":[\"x\",\"child:1\"]}]\n[{\"id\":1,\"tags\":[1,2]},{\"tags\":[1,2]}]\n[{\"id\":1,\"tags\":[1,2]},{\"tags\":[1,2]}]\n[{\"id\":1,\"tags\":[1,2]},{\"tags\":[1,2]}]\n[{\"id\":1,\"tags\":[1,2]},{\"tags\":[1,2]}]\n[{\"id\":1,\"tags\":[1,2]},{\"id\":99,\"tags\":[1,2]}]\n1\n",
+    "stderr": "[gc-schedule] seeded GC-schedule fuzzing ACTIVE: seed=9013 rate=0.1\n[gc-schedule] reproduce with: PERRY_GC_SCHEDULE_SEED=9013 PERRY_GC_SCHEDULE_RATE=0.1\n[gc-schedule] done: seed=9013 safepoints=9 scheduled_collections=1 polls_paced=45 copying_minors=1 moved_objects=6483 loop_polls=48\n",
+    "counters": {
+      "scheduled_collections": 1,
+      "copying_minors": 1,
+      "moved_objects": 6483,
+      "loop_polls": 48
+    },
+    "matches_node": true,
+    "live_subject": true
+  },
+  {
+    "fixture": "test_gap_json_empty_object",
+    "seed": 17,
+    "exit": 0,
+    "stdout": "cold {}\nretained 4096 0\ninstalled \"default-result\"\nremoved {}\ngetter \"getter-result\"\ngetter removed {}\ncustom \"custom-result\"\nnull prototype {}\nhidden callback \"own-result\"\nreplacer {\"changed\":true} 2\nspacer {}\nmutated {\"answer\":42} {}\ncalls default:,get,getter-call:,custom:,own:,\n",
+    "stderr": "[gc-schedule] seeded GC-schedule fuzzing ACTIVE: seed=17 rate=0.1\n[gc-schedule] reproduce with: PERRY_GC_SCHEDULE_SEED=17 PERRY_GC_SCHEDULE_RATE=0.1\n[gc-schedule] done: seed=17 safepoints=29 scheduled_collections=2 polls_paced=6122 copying_minors=2 moved_objects=14167 loop_polls=6145\n",
+    "counters": {
+      "scheduled_collections": 2,
+      "copying_minors": 2,
+      "moved_objects": 14167,
+      "loop_polls": 6145
+    },
+    "matches_node": true,
+    "live_subject": true
+  },
+  {
+    "fixture": "test_gap_json_empty_object",
+    "seed": 9013,
+    "exit": 0,
+    "stdout": "cold {}\nretained 4096 0\ninstalled \"default-result\"\nremoved {}\ngetter \"getter-result\"\ngetter removed {}\ncustom \"custom-result\"\nnull prototype {}\nhidden callback \"own-result\"\nreplacer {\"changed\":true} 2\nspacer {}\nmutated {\"answer\":42} {}\ncalls default:,get,getter-call:,custom:,own:,\n",
+    "stderr": "[gc-schedule] seeded GC-schedule fuzzing ACTIVE: seed=9013 rate=0.1\n[gc-schedule] reproduce with: PERRY_GC_SCHEDULE_SEED=9013 PERRY_GC_SCHEDULE_RATE=0.1\n[gc-schedule] done: seed=9013 safepoints=29 scheduled_collections=2 polls_paced=6122 copying_minors=2 moved_objects=14625 loop_polls=6145\n",
+    "counters": {
+      "scheduled_collections": 2,
+      "copying_minors": 2,
+      "moved_objects": 14625,
+      "loop_polls": 6145
+    },
+    "matches_node": true,
+    "live_subject": true
+  }
+]

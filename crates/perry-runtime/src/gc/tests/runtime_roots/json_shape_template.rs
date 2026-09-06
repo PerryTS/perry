@@ -38,6 +38,15 @@ use super::*;
 
 #[test]
 fn flat_json_stringify_survives_the_initial_prototype_lookup() {
+    assert_initial_prototype_lookup_survives(false);
+}
+
+#[test]
+fn empty_json_stringify_survives_the_initial_prototype_fallback() {
+    assert_initial_prototype_lookup_survives(true);
+}
+
+fn assert_initial_prototype_lookup_survives(empty: bool) {
     let _pacing = crate::gc::policy::force_alloc_point_minor_pacing();
     let _guard = CopyingNurseryTestGuard::new(0);
     let triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
@@ -46,16 +55,18 @@ fn flat_json_stringify_survives_the_initial_prototype_lookup() {
     // prototype-probe key, rather than unrelated globalThis bootstrap work.
     crate::object::js_get_global_this_builtin_value(b"Object".as_ptr(), 6);
     let obj = {
-        let obj = crate::object::js_object_alloc(0, 2);
-        let key = crate::string::js_string_from_bytes(b"answer".as_ptr(), 6);
-        crate::object::js_object_set_field_by_name(obj, key, 42.0);
-        let key = crate::string::js_string_from_bytes(b"text".as_ptr(), 4);
-        let text = crate::string::js_string_from_bytes(b"kept".as_ptr(), 4);
-        crate::object::js_object_set_field_by_name(
-            obj,
-            key,
-            f64::from_bits(crate::value::STRING_TAG | text as u64),
-        );
+        let obj = crate::object::js_object_alloc(0, if empty { 0 } else { 2 });
+        if !empty {
+            let key = crate::string::js_string_from_bytes(b"answer".as_ptr(), 6);
+            crate::object::js_object_set_field_by_name(obj, key, 42.0);
+            let key = crate::string::js_string_from_bytes(b"text".as_ptr(), 4);
+            let text = crate::string::js_string_from_bytes(b"kept".as_ptr(), 4);
+            crate::object::js_object_set_field_by_name(
+                obj,
+                key,
+                f64::from_bits(crate::value::STRING_TAG | text as u64),
+            );
+        }
         obj
     };
     let input_scope = RuntimeHandleScope::new();
@@ -83,10 +94,16 @@ fn flat_json_stringify_survives_the_initial_prototype_lookup() {
         before_address,
         "the input must move to exercise the borrowed-pointer hazard"
     );
-    let value = crate::JSValue::from_bits(output.get_nanbox_f64().to_bits());
+    let mut scratch = [0; crate::value::SHORT_STRING_MAX_LEN];
+    let (bytes, len) = crate::string::str_bytes_from_jsvalue(output.get_nanbox_f64(), &mut scratch)
+        .expect("JSON output is a string");
     assert_eq!(
-        string_contents(value.as_string_ptr()),
-        "{\"answer\":42,\"text\":\"kept\"}"
+        unsafe { std::slice::from_raw_parts(bytes, len as usize) },
+        if empty {
+            b"{}".as_slice()
+        } else {
+            b"{\"answer\":42,\"text\":\"kept\"}".as_slice()
+        }
     );
     crate::json::CACHED_OBJECT_PROTO_BITS.with(|c| c.set(0));
     crate::json::OBJECT_PROTO_TOJSON_STATE.with(|c| c.set(0));

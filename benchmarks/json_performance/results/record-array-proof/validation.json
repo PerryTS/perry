@@ -5,11 +5,21 @@
   "gc_stress_runs": 20,
   "all_outputs_match_and_live_movement": true,
   "root_inventory_exit": 0,
-  "qualified_performance": "pending: first admission rejected before measurements",
+  "qualified_performance": "pending: first admission rejected; second full run unqualified due to overlapping foreign workers and failed ending load gate",
   "goal_complete": false,
   "local_instruction_diagnostic": {
     "trials": 36,
     "purpose": "process-wide counters only, not qualified CPU/RSS measurements",
     "all_processes_successful": true
+  },
+  "unqualified_full_run": {
+    "trials": {
+      "verify": 152,
+      "timing": 456,
+      "memory": 432
+    },
+    "external_observations": 33,
+    "observations_with_competing_work": 20,
+    "quiet_gate": false
   }
 }

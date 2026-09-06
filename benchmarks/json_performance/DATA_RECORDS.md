@@ -12,6 +12,15 @@ measurements because a foreign worker had started. **CPU/RSS results below
 describe the preceding record release, not this unmeasured follow-up.**
 [Validation-reuse implementation and evidence](results/record-array-proof/README.md).
 
+The current empty-object follow-up returns its inline output before field
+planning and temporary rooting, using only the probe that cannot allocate.
+Cold prototype lookup declines to the rooted general serializer. It passes
+135 runtime tests, 32 compiled Node comparisons and 22 moving-GC stress runs;
+the cold-empty test explicitly asserts input relocation. Its release binary
+is staged but has no CPU/RSS measurements yet. The validation-reuse build's
+second full run also proved unqualified when foreign workers started midway.
+[Empty-object release evidence](results/empty-object-leaf/README.md).
+
 Successful inline scalar parses decode before the existing pending-collection
 hook. They skip the ordinary parser's suppression/rebaseline cycle while
 preserving pending GC debt and the oversized parse-key cache/ring cleanup.

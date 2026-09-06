@@ -15,6 +15,15 @@ fn output(value: JSValue) -> Vec<u8> {
 #[test]
 fn flat_direct_output_preserves_complete_object_and_string_lengths() {
     unsafe {
+        // A cold prototype lookup belongs to the rooted general serializer.
+        let warm = parse("{}");
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let warm = scope.root_nanbox_u64(warm.bits());
+        assert!(
+            super::super::stringify_tojson_probe::to_json_definitely_absent(
+                (warm.get_nanbox_f64().to_bits() & POINTER_MASK) as *const u8
+            )
+        );
         for text in [
             "{}",
             "{\"a\":1}",
@@ -35,6 +44,51 @@ fn flat_direct_output_preserves_complete_object_and_string_lengths() {
                 text.encode_utf16().count()
             );
         }
+    }
+}
+
+#[test]
+fn flat_empty_output_declines_cold_lookup_and_stays_allocation_free_when_warm() {
+    unsafe {
+        let value = parse("{}");
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let input = scope.root_nanbox_u64(value.bits());
+        let saved_proto = scope.root_nanbox_u64(CACHED_OBJECT_PROTO_BITS.with(|c| c.replace(0)));
+        let saved_state = OBJECT_PROTO_TOJSON_STATE.with(|c| c.replace(0));
+        let before = crate::arena::arena_total_bytes();
+        let cold = try_object(input.get_nanbox_f64().to_bits());
+        CACHED_OBJECT_PROTO_BITS.with(|c| c.set(saved_proto.get_nanbox_f64().to_bits()));
+        OBJECT_PROTO_TOJSON_STATE.with(|c| c.set(saved_state));
+        assert!(cold.is_none());
+        assert_eq!(crate::arena::arena_total_bytes(), before);
+
+        super::super::invalidate_object_proto_tojson_state();
+        assert!(
+            super::super::stringify_tojson_probe::to_json_definitely_absent(
+                (input.get_nanbox_f64().to_bits() & POINTER_MASK) as *const u8
+            )
+        );
+        let before = crate::arena::arena_total_bytes();
+        let roots = crate::gc::RuntimeHandleScope::active_len_for_tests();
+        let mut collections_before = 0;
+        crate::gc::js_gc_stats(
+            &mut collections_before,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        );
+        for _ in 0..1000 {
+            let result = try_object(input.get_nanbox_f64().to_bits()).unwrap();
+            assert_eq!(result.bits(), JSValue::short_string_unchecked(b"{}").bits());
+        }
+        let mut collections_after = 0;
+        crate::gc::js_gc_stats(
+            &mut collections_after,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        );
+        assert_eq!(crate::arena::arena_total_bytes(), before);
+        assert_eq!(crate::gc::RuntimeHandleScope::active_len_for_tests(), roots);
+        assert_eq!(collections_after, collections_before);
     }
 }
 

@@ -1,0 +1,32 @@
+[
+  {
+    "arm": "unicode",
+    "command": [
+      "/Users/amlug/projects/perry/codex-json-fastpaths-artifacts/unicode-worker",
+      "/Users/amlug/projects/perry/codex-json-fastpaths/benchmarks/json_performance/.work/fixtures/numbers_1m.json",
+      "parse",
+      "4096",
+      "2"
+    ],
+    "worker_sha256": "85189dd09e2f34151351546aa751100e0480ef8e110c8380dfbb10d53755d938",
+    "worker_exit": 0,
+    "sample_exit": 0,
+    "sampler_stderr": "Sampling process 72195 for 3 seconds with 1 millisecond of run time between samples\nSampling completed, processing symbols...\nSample analysis of process 72195 written to file /Users/amlug/projects/perry/codex-json-fastpaths-artifacts/numeric-parse-local-profile/unicode.sample.txt\n",
+    "purpose": "Busy local developer-host sample, not qualified CPU/RSS measurements"
+  },
+  {
+    "arm": "data-record",
+    "command": [
+      "/Users/amlug/projects/perry/codex-json-fastpaths-artifacts/data-record-worker",
+      "/Users/amlug/projects/perry/codex-json-fastpaths/benchmarks/json_performance/.work/fixtures/numbers_1m.json",
+      "parse",
+      "4096",
+      "2"
+    ],
+    "worker_sha256": "233440ca71ca8411da86db387e8b0898dadda26316e60bf944d4023d81433508",
+    "worker_exit": 0,
+    "sample_exit": 0,
+    "sampler_stderr": "Sampling process 74350 for 3 seconds with 1 millisecond of run time between samples\nSampling completed, processing symbols...\nSample analysis of process 74350 written to file /Users/amlug/projects/perry/codex-json-fastpaths-artifacts/numeric-parse-local-profile/data-record.sample.txt\n",
+    "purpose": "Busy local developer-host sample, not qualified CPU/RSS measurements"
+  }
+]

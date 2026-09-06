@@ -155,6 +155,14 @@ pub(super) unsafe fn try_object(bits: u64) -> Option<JSValue> {
     if !keys.is_null() && crate::object::keys_contain_array_index(keys) {
         return None;
     }
+    if fields == 0 {
+        // The inline result needs neither an output allocation nor a stack
+        // plan. Refresh the prototype verdict for this call, but decline the
+        // allocating first lookup so the rooted general serializer handles it.
+        super::invalidate_object_proto_tojson_state();
+        return super::stringify_tojson_probe::to_json_definitely_absent_without_gc(obj.cast())
+            .then(|| JSValue::short_string_unchecked(b"{}"));
+    }
     emit_object(obj, fields)
 }
 
@@ -200,10 +208,6 @@ unsafe fn emit_object(obj: *const crate::ObjectHeader, fields: usize) -> Option<
     if !super::stringify_tojson_probe::to_json_definitely_absent(obj.cast()) {
         return None;
     }
-    if fields == 0 {
-        return Some(JSValue::short_string_unchecked(b"{}"));
-    }
-
     let (result, output) = string_storage_alloc(bytes);
     let obj = input.get_raw_const_ptr::<crate::ObjectHeader>();
     let keys = crate::object::object_keys_array(obj);

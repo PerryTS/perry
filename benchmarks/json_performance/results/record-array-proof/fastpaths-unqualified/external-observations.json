@@ -1,0 +1,207 @@
+[
+  {
+    "utc": "2026-09-06T14:57:44Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-06T14:57:49Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-06T14:57:55Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-06T14:58:01Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-06T14:58:06Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-06T14:58:12Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-06T14:58:17Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-06T14:58:23Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-06T14:58:28Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-06T14:58:34Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-06T14:58:39Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-06T14:58:45Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-06T14:58:50Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-06T14:58:56Z",
+    "monitor_exit": 0,
+    "external": [
+      "95430 95422   8.2 /Users/perry/ccperf/bin/cc_tenure_lockfix"
+    ]
+  },
+  {
+    "utc": "2026-09-06T14:59:01Z",
+    "monitor_exit": 0,
+    "external": [
+      "95430 95422  99.6 /Users/perry/ccperf/bin/cc_tenure_lockfix"
+    ]
+  },
+  {
+    "utc": "2026-09-06T14:59:06Z",
+    "monitor_exit": 0,
+    "external": [
+      "95430 95422  99.9 /Users/perry/ccperf/bin/cc_tenure_lockfix"
+    ]
+  },
+  {
+    "utc": "2026-09-06T14:59:12Z",
+    "monitor_exit": 0,
+    "external": [
+      "95430 95422 100.0 /Users/perry/ccperf/bin/cc_tenure_lockfix"
+    ]
+  },
+  {
+    "utc": "2026-09-06T14:59:17Z",
+    "monitor_exit": 0,
+    "external": [
+      "95430 95422  99.3 /Users/perry/ccperf/bin/cc_tenure_lockfix"
+    ]
+  },
+  {
+    "utc": "2026-09-06T14:59:25Z",
+    "monitor_exit": 0,
+    "external": [
+      "95430 95422 100.0 /Users/perry/ccperf/bin/cc_tenure_lockfix"
+    ]
+  },
+  {
+    "utc": "2026-09-06T14:59:30Z",
+    "monitor_exit": 0,
+    "external": [
+      "95430 95422 100.0 /Users/perry/ccperf/bin/cc_tenure_lockfix"
+    ]
+  },
+  {
+    "utc": "2026-09-06T14:59:36Z",
+    "monitor_exit": 0,
+    "external": [
+      "95430 95422 100.0 /Users/perry/ccperf/bin/cc_tenure_lockfix"
+    ]
+  },
+  {
+    "utc": "2026-09-06T14:59:41Z",
+    "monitor_exit": 0,
+    "external": [
+      "95430 95422  99.8 /Users/perry/ccperf/bin/cc_tenure_lockfix"
+    ]
+  },
+  {
+    "utc": "2026-09-06T14:59:47Z",
+    "monitor_exit": 0,
+    "external": [
+      "95430 95422 100.0 /Users/perry/ccperf/bin/cc_tenure_lockfix"
+    ]
+  },
+  {
+    "utc": "2026-09-06T14:59:52Z",
+    "monitor_exit": 0,
+    "external": [
+      "95430 95422 100.0 /Users/perry/ccperf/bin/cc_tenure_lockfix"
+    ]
+  },
+  {
+    "utc": "2026-09-06T14:59:57Z",
+    "monitor_exit": 0,
+    "external": [
+      "95430 95422 100.0 /Users/perry/ccperf/bin/cc_tenure_lockfix"
+    ]
+  },
+  {
+    "utc": "2026-09-06T15:00:03Z",
+    "monitor_exit": 0,
+    "external": [
+      "95430 95422 100.0 /Users/perry/ccperf/bin/cc_tenure_lockfix"
+    ]
+  },
+  {
+    "utc": "2026-09-06T15:00:08Z",
+    "monitor_exit": 0,
+    "external": [
+      "95430 95422   0.6 /Users/perry/ccperf/bin/cc_tenure_lockfix"
+    ]
+  },
+  {
+    "utc": "2026-09-06T15:00:14Z",
+    "monitor_exit": 0,
+    "external": [
+      "95430 95422 100.0 /Users/perry/ccperf/bin/cc_tenure_lockfix"
+    ]
+  },
+  {
+    "utc": "2026-09-06T15:00:19Z",
+    "monitor_exit": 0,
+    "external": [
+      "95430 95422 100.0 /Users/perry/ccperf/bin/cc_tenure_lockfix"
+    ]
+  },
+  {
+    "utc": "2026-09-06T15:00:24Z",
+    "monitor_exit": 0,
+    "external": [
+      "95430 95422  99.8 /Users/perry/ccperf/bin/cc_tenure_lockfix"
+    ]
+  },
+  {
+    "utc": "2026-09-06T15:00:30Z",
+    "monitor_exit": 0,
+    "external": [
+      "95430 95422  99.7 /Users/perry/ccperf/bin/cc_tenure_lockfix"
+    ]
+  },
+  {
+    "utc": "2026-09-06T15:00:35Z",
+    "monitor_exit": 0,
+    "external": [
+      "95430 95422 100.0 /Users/perry/ccperf/bin/cc_tenure_lockfix"
+    ]
+  },
+  {
+    "utc": "2026-09-06T15:00:41Z",
+    "monitor_exit": 0,
+    "external": [
+      "95430 95422 100.0 /Users/perry/ccperf/bin/cc_tenure_lockfix"
+    ]
+  }
+]

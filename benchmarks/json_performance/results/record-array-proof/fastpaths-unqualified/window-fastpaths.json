@@ -1,0 +1,20 @@
+{
+  "owner": "json-perf-94286-1788706664",
+  "load_before": [
+    1.64013671875,
+    1.60791015625,
+    1.64599609375
+  ],
+  "started_utc": "2026-09-06T14:57:44Z",
+  "quiet_gate_passed": false,
+  "competing_workloads_before": [],
+  "load_after": [
+    3.2109375,
+    2.24169921875,
+    1.8896484375
+  ],
+  "competing_workloads_after": [
+    "95430  99.6 /Users/perry/ccperf/bin/cc_tenure_lockfix"
+  ],
+  "finished_utc": "2026-09-06T15:00:43Z"
+}
