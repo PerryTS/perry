@@ -48,8 +48,6 @@ mod replace_expand_fancy;
 #[cfg(feature = "regex-engine")]
 pub(crate) use program_key::{ProgramKey, NEVER_MATCH_PATTERN};
 #[cfg(feature = "regex-engine")]
-use replace_expand_fancy::expand_js_replacement_fancy;
-#[cfg(feature = "regex-engine")]
 pub use replace_expand_fancy::{
     js_string_replace_all_regex, js_string_replace_regex, js_string_search_regex,
     js_string_split_regex, js_string_split_regex_n,
