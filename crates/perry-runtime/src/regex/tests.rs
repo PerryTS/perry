@@ -1884,3 +1884,67 @@ fn quantified_capture_pattern_does_not_backtrack_on_a_non_matching_subject() {
         1
     );
 }
+
+/// #6759 phase 1 follow-up: a `RegExp` receiver can now answer the
+/// descriptor-summary probe. Before the meta edge was wired for
+/// `GC_TYPE_REGEXP`, `may_have_descriptor_entry` answered the conservative
+/// `true` for every RegExp, so `set_last_index_throwing` built a `String` and
+/// SipHashed `(usize, String)` on every global/sticky `test()`/`exec()`.
+#[test]
+fn a_fresh_regexp_proves_lastindex_absent_without_probing_the_tables() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let pattern = scope.root_string_ptr(make_string("x"));
+    let flags = scope.root_string_ptr(make_string("g"));
+    let re = pattern.with_mut_ptr::<StringHeader, _>(|pattern| {
+        flags.with_mut_ptr::<StringHeader, _>(|flags| js_regexp_new(pattern, flags))
+    });
+    // Premise: this really is the dedicated RegExp cell, not a shaped object
+    // that would have answered through the ordinary `GC_TYPE_OBJECT` path.
+    let gc = unsafe { crate::value::addr_class::try_read_gc_header(re as usize) }
+        .expect("RegExp must be a GC allocation");
+    assert_eq!(gc.obj_type, crate::gc::GC_TYPE_REGEXP);
+
+    assert!(
+        !crate::object::test_may_have_descriptor_entry(re as usize, "lastIndex", false),
+        "a fresh RegExp has no descriptors, so the meta summary must prove \
+         `lastIndex` absent instead of sending the caller to the table"
+    );
+    assert!(
+        crate::object::get_property_attrs(re as usize, "lastIndex").is_none(),
+        "and the answer the fast path skips must be the same one"
+    );
+}
+
+/// The other half, and the one that makes the fast negative safe: an owner
+/// that DOES have a descriptor must still be found. Install and probe share
+/// one predicate, so a probe widened without its install would answer
+/// "proven absent" here and `set_last_index_throwing` would silently stop
+/// throwing (test262 prototype/{exec,test}/y-fail-lastindex-no-write).
+#[test]
+fn a_regexp_with_a_non_writable_lastindex_is_still_found_by_the_probe() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let pattern = scope.root_string_ptr(make_string("x"));
+    let flags = scope.root_string_ptr(make_string("g"));
+    let re = pattern.with_mut_ptr::<StringHeader, _>(|pattern| {
+        flags.with_mut_ptr::<StringHeader, _>(|flags| js_regexp_new(pattern, flags))
+    });
+    let attrs = crate::object::PropertyAttrs::new(false, true, true);
+    crate::object::set_property_attrs(re as usize, "lastIndex".to_string(), attrs);
+
+    assert!(
+        crate::object::test_may_have_descriptor_entry(re as usize, "lastIndex", false),
+        "the install set the key bit, so the probe must send the caller to the table"
+    );
+    let found = crate::object::get_property_attrs(re as usize, "lastIndex")
+        .expect("the descriptor the test installed must be readable back");
+    assert!(!found.writable(), "and it must still read as non-writable");
+
+    // A DIFFERENT key on the same owner stays proven-absent: the summary is
+    // per key, not per owner, so widening it must not blunt it.
+    assert!(
+        !crate::object::test_may_have_descriptor_entry(re as usize, "source", false),
+        "an unrelated key on the same RegExp must still take the fast negative"
+    );
+}
