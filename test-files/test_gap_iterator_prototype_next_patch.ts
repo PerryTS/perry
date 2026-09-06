@@ -171,3 +171,22 @@ console.log("E-string-restored", [..."cd"].join(","));
   }
   console.log("H-restored", [...[5, 6]].join(","));
 }
+
+// I: a NON-CALLABLE prototype `next` must throw a TypeError, not be mistaken
+// for a pointer. The allocation-free proof reads the own slot as a raw value
+// first, so a number, a string and `undefined` each have to defeat it.
+for (const bad of [42, "not a function", undefined, null, {}]) {
+  const orig = arrayProto.next;
+  arrayProto.next = bad;
+  try {
+    for (const _v of [1]) {
+      console.log("I-unexpected");
+    }
+    console.log("I", typeof bad, "no-throw");
+  } catch (e: any) {
+    console.log("I", typeof bad, e instanceof TypeError);
+  } finally {
+    arrayProto.next = orig;
+  }
+}
+console.log("I-restored", [...[7, 8]].join(","));
