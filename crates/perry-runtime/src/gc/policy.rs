@@ -367,6 +367,92 @@ pub(super) fn gc_suppressed_parse_is_tiny(parse_growth: usize) -> bool {
     parse_growth <= GC_SUPPRESSED_TINY_PARSE_BYTES
 }
 
+/// #9831: how much the arena must have grown since the last collection ended
+/// before tiny-parse churn may force another one — priced by the part of the
+/// productivity backoff the `ArenaBytes` arm computes and then discards.
+///
+/// `GC_STEP_BYTES` powers on at `GC_THRESHOLD_INITIAL_BYTES`, which equals the
+/// trigger ceiling, and doubles on every collection that frees almost nothing.
+/// The arm's own re-arm (`gc_finish_arena_trigger_collection`) clamps
+/// `new_total + step` at the ceiling, so every doubling past the initial step
+/// is backoff the arm has computed, stored, and cannot express. This rescales
+/// the step so that its power-on value buys exactly the headroom floor, and
+/// each discarded doubling buys the guard one more doubling — up to the same
+/// ceiling, so a run of unproductive collections can never let the guard wait
+/// longer than the arm itself would. A productive collection halves the step
+/// toward its 16 MB floor, which maps below the headroom floor and clamps to
+/// it: a churn loop whose collections pay keeps today's cadence.
+pub(super) fn tiny_parse_pressure_headroom_bytes(step: usize) -> usize {
+    let floor = gc_trigger_headroom_floor_bytes();
+    let ceiling = gc_trigger_absolute_ceiling_bytes();
+    // 64-bit intermediate on purpose: `step` reaches 1 GiB and `floor` 16 MiB,
+    // whose product does not fit a 32-bit `usize` (watchOS/visionOS are ILP32;
+    // see `influx_driven_nursery_cap_bytes` for the same trap).
+    let scaled = (step as u64).saturating_mul(floor as u64) / (GC_THRESHOLD_INITIAL_BYTES as u64);
+    let scaled = scaled.min(usize::MAX as u64) as usize;
+    scaled.max(floor).min(ceiling.max(floor))
+}
+
+/// #9831: whether tiny-parse churn has earned a forced collection.
+///
+/// The guard used to be `in_use >= in_use_trigger` alone — an absolute
+/// threshold on a quantity no collection can lower below the live set. On a
+/// program whose live set sits above it permanently (the compiled claude-code
+/// TUI holds 59–297 MB of arena through one streamed reply) that made every
+/// tiny `JSON.parse` the SSE stream consists of force a collection at the next
+/// safepoint: 51 minors in one 66-delta reply, each freeing a median 131 KB,
+/// while the adaptive step sat at its 1 GiB maximum saying "back off" and
+/// nothing consulted it. The growth clause is what that step is for.
+///
+/// `base` is `arena_in_use_bytes()` as the last collection ended
+/// (`GC_TINY_PARSE_PRESSURE_BASE_BYTES`); `in_use` is the same reading now.
+pub(super) fn tiny_parse_pressure_due_with(
+    in_use: usize,
+    in_use_trigger: usize,
+    base: usize,
+    step: usize,
+) -> bool {
+    in_use >= in_use_trigger
+        && in_use >= base.saturating_add(tiny_parse_pressure_headroom_bytes(step))
+}
+
+/// The live [`tiny_parse_pressure_due_with`]: current base and step.
+pub(super) fn tiny_parse_pressure_due(in_use: usize, in_use_trigger: usize) -> bool {
+    let base = GC_TINY_PARSE_PRESSURE_BASE_BYTES.with(Cell::get);
+    let step = GC_STEP_BYTES.with(Cell::get);
+    tiny_parse_pressure_due_with(in_use, in_use_trigger, base, step)
+}
+
+/// The in-use reading the tiny-parse guard compares against in this collector
+/// mode: the generational collector's guard sits higher than the full
+/// mark-sweep one because a minor is the cheaper collection to force.
+fn tiny_parse_in_use_trigger_for_mode() -> usize {
+    if gen_gc_enabled() {
+        gc_tiny_parse_in_use_trigger_dyn_bytes()
+    } else {
+        gc_tiny_parse_full_gc_in_use_trigger_dyn_bytes()
+    }
+}
+
+/// `PERRY_GC_DIAG=1` witness that the guard is the arm that forced a
+/// collection (CLAUDE.md: a gate must assert its subject was live). One line
+/// per forced collection, tagged with which parse boundary asked for it.
+fn diag_tiny_parse_forced_collection(site: &str, in_use: usize) {
+    if !crate::gc::gc_diag_enabled() {
+        return;
+    }
+    let base = GC_TINY_PARSE_PRESSURE_BASE_BYTES.with(Cell::get);
+    let step = GC_STEP_BYTES.with(Cell::get);
+    eprintln!(
+        "[gc-tiny-parse] forced collection site={} in_use={} base={} headroom={} step={}",
+        site,
+        in_use,
+        base,
+        tiny_parse_pressure_headroom_bytes(step),
+        step
+    );
+}
+
 pub(super) fn gc_bump_arena_trigger_target(
     bytes_now: usize,
     step: usize,
@@ -980,6 +1066,12 @@ thread_local! {
     /// reading and still escalate. Nursery garbage is not.
     pub(super) static GC_LAST_COLLECTION_POST_IN_USE_BYTES: Cell<usize> =
         const { Cell::new(0) };
+    /// #9831: `arena_in_use_bytes()` as the most recent collection of ANY kind
+    /// ended — the base the tiny-parse pressure guard measures growth from.
+    /// The bump-offset reading rather than the live census above, because the
+    /// guard compares against `arena_in_use_bytes()` at every parse boundary,
+    /// and mixing the two would count every swept hole as growth.
+    pub(super) static GC_TINY_PARSE_PRESSURE_BASE_BYTES: Cell<usize> = const { Cell::new(0) };
     /// Yield-adaptive backoff for major-GC pacing (#7726).
     ///
     /// `arena_growth_full_escalation_due` escalates a minor to a full once the
@@ -1347,12 +1439,12 @@ pub fn gc_bump_malloc_trigger() {
     let is_tiny_parse = gc_bump_malloc_trigger_with_snapshot(current, bytes_now);
     if is_tiny_parse {
         let use_gen_gc = gen_gc_enabled();
-        let in_use_trigger = if use_gen_gc {
-            gc_tiny_parse_in_use_trigger_dyn_bytes()
-        } else {
-            gc_tiny_parse_full_gc_in_use_trigger_dyn_bytes()
-        };
-        if crate::arena::arena_in_use_bytes() < in_use_trigger {
+        // #9831: an absolute in-use guard alone forced a collection after
+        // EVERY tiny parse on a program whose live set never drops below it.
+        // The guard now also requires the arena to have grown past the
+        // productivity-priced headroom since the last collection ended.
+        let in_use = crate::arena::arena_in_use_bytes();
+        if !tiny_parse_pressure_due(in_use, tiny_parse_in_use_trigger_for_mode()) {
             return;
         }
         if use_gen_gc {
@@ -1361,6 +1453,7 @@ pub fn gc_bump_malloc_trigger() {
                 return;
             }
             GC_SUPPRESSED_TINY_PARSE_COLLECTION_PENDING.with(|pending| pending.set(true));
+            diag_tiny_parse_forced_collection("parse_end", in_use);
             GC_NEXT_TRIGGER_BYTES.with(|trigger| {
                 if trigger.get() > bytes_now {
                     trigger.set(bytes_now);
@@ -1396,6 +1489,15 @@ pub fn gc_collect_pending_suppressed_parse() {
         GC_SUPPRESSED_TINY_PARSE_COLLECTION_PENDING.with(|pending| pending.set(true));
         return;
     }
+    // #9831: the request was priced when it was made; a collection of any kind
+    // since then has moved the base, and re-pricing here is what keeps the
+    // boundary collection from stacking a second minor on top of it. A request
+    // nothing has satisfied is still due and still collects.
+    let in_use = crate::arena::arena_in_use_bytes();
+    if !tiny_parse_pressure_due(in_use, tiny_parse_in_use_trigger_for_mode()) {
+        return;
+    }
+    diag_tiny_parse_forced_collection("parse_boundary", in_use);
 
     let total = crate::arena::arena_total_bytes();
     GC_NEXT_TRIGGER_BYTES.with(|trigger| {
@@ -1419,7 +1521,12 @@ pub fn gc_schedule_parse_boundary_collection_if_pressure() {
     if !gen_gc_enabled() {
         return;
     }
-    if crate::arena::arena_in_use_bytes() < gc_tiny_parse_in_use_trigger_dyn_bytes() {
+    // #9831: priced the same way as the post-parse guard above — see
+    // `tiny_parse_pressure_due_with`.
+    if !tiny_parse_pressure_due(
+        crate::arena::arena_in_use_bytes(),
+        gc_tiny_parse_in_use_trigger_dyn_bytes(),
+    ) {
         return;
     }
     GC_SUPPRESSED_TINY_PARSE_COLLECTION_PENDING.with(|pending| pending.set(true));
@@ -1911,6 +2018,8 @@ pub(super) fn pacing_arena_in_use_bytes() -> usize {
 pub(super) fn note_collection_finished_arena_occupancy(full: bool) {
     let bytes = pacing_arena_in_use_bytes();
     GC_LAST_COLLECTION_POST_IN_USE_BYTES.with(|cell| cell.set(bytes));
+    // #9831: the same moment, in the units the tiny-parse guard reads.
+    GC_TINY_PARSE_PRESSURE_BASE_BYTES.with(|cell| cell.set(crate::arena::arena_in_use_bytes()));
     super::arena_right_size::note_collection_finished(bytes, full);
 }
 
@@ -2199,6 +2308,19 @@ fn gc_finish_arena_trigger_collection(pre_in_use: usize, outcome: GcCollectOutco
     // `new_total` so a workload whose post-GC live set already
     // approaches the ceiling doesn't thrash on every fresh
     // allocation.
+    //
+    // #9831: above `ceiling - floor` this arithmetic re-arms at `new_total +
+    // floor` whatever `step` says — the productivity backoff the branch above
+    // just computed is not visible to it. That is deliberate, and measured:
+    // pricing the arm's own headroom by the step bought -10.8 % turn CPU on
+    // the compiled claude-code TUI and cost +22 % settled footprint — a
+    // CPU-for-footprint trade this project does not accept (the issue's own
+    // refuted branch). The step is instead consumed where it was
+    // actually being discarded — the tiny-parse pressure guard
+    // (`tiny_parse_pressure_due_with`), which pulled this trigger down to
+    // "now" after every small `JSON.parse` on a heap above its in-use
+    // threshold and so re-fired this arm 51 times in one reply regardless of
+    // what this function armed.
     let stepped = new_total.saturating_add(step);
     let capped = stepped.min(gc_trigger_absolute_ceiling_bytes());
     let floor = new_total.saturating_add(gc_trigger_headroom_floor_bytes());
