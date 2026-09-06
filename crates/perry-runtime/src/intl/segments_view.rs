@@ -897,6 +897,31 @@ mod view_mode_tests {
         );
     }
 
+    /// SABOTAGE-SHAPED: the exported entry validates a RegExp pointer once;
+    /// the bounded matcher must trust that precondition instead of repeating
+    /// heap-space classification. Reintroducing the old check makes the delta
+    /// two, so this test cannot pass merely because the regex is valid.
+    #[cfg(feature = "regex-engine")]
+    #[test]
+    fn bounded_regex_test_does_not_repeat_entry_pointer_validation() {
+        let cursor = js_segments_view_open(grapheme_segmenter(), js_string("a"));
+        assert_eq!(js_segments_view_next(cursor), 1.0);
+        let re = crate::regex::js_regexp_construct(js_string("a"), js_string(""));
+        let re_v = f64::from_bits(JSValue::pointer(re as *const u8).bits());
+
+        // Warm the lazily compiled matcher before delimiting the validation
+        // window; a cold builder deliberately revalidates at its boundary.
+        assert!(!is_undefined(js_segments_view_regexp_test(cursor, re_v)));
+        let before = crate::regex::test_regex_ptr_validation_calls();
+        assert!(!is_undefined(js_segments_view_regexp_test(cursor, re_v)));
+        let after = crate::regex::test_regex_ptr_validation_calls();
+        assert_eq!(
+            after - before,
+            1,
+            "one exported view call must validate its regex exactly once"
+        );
+    }
+
     /// The anchors are segment-local: `^`/`$` must bind to the segment's ends,
     /// not the input's. A start-offset match instead of a bounded haystack
     /// would make this pass for the first segment and fail for the second.
