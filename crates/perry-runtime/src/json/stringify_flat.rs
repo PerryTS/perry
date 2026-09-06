@@ -188,7 +188,9 @@ pub(super) unsafe fn try_object(bits: u64) -> Option<JSValue> {
 
 #[inline(never)]
 unsafe fn emit_object(obj: *const crate::ObjectHeader, fields: usize) -> Option<JSValue> {
-    let empty = Piece::inline(b"");
+    // Every live entry is overwritten before emission. A zero-valued string
+    // placeholder lets the compiler clear native plan storage in bulk.
+    let empty = Piece::String { bytes: 0, units: 0 };
     let mut key_plan = [empty; MAX_FIELDS];
     let mut value_plan = [empty; MAX_FIELDS];
     let keys = crate::object::object_keys_array(obj);

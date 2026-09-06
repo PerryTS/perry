@@ -51,7 +51,7 @@ fn digit_and_string_scans_stop_before_guard_page() {
             0
         );
         for len in [
-            0, 1, 2, 7, 8, 9, 15, 16, 17, 31, 32, 33, 63, 64, 65, 127, 128, 129,
+            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 15, 16, 17, 31, 32, 33, 63, 64, 65, 127, 128, 129,
         ] {
             let start = base.add(page - len);
             std::ptr::write_bytes(start, b'5', len);
@@ -100,7 +100,9 @@ fn check(bytes: &[u8]) {
 
 #[test]
 fn every_byte_at_vector_word_and_tail_boundaries() {
-    for len in [0, 1, 2, 7, 8, 9, 15, 16, 17, 23, 24, 31, 32, 33, 63, 64, 65] {
+    for len in [
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 15, 16, 17, 23, 24, 31, 32, 33, 63, 64, 65,
+    ] {
         for alignment in [0, 1, 7, 15] {
             let mut storage = vec![b'a'; alignment + len + 16];
             // A scanner must ignore even special bytes immediately past the slice.
@@ -123,6 +125,13 @@ fn adjacent_byte_borrows_and_unsigned_controls() {
         for right in 0..=255u8 {
             check(&[left, right, 32, 33, 0x80, 0xFF, b'a', b'b']);
             check(&[b'a', b'b', 0x80, 0xFF, 32, 33, left, right]);
+            for len in 4..8 {
+                check(&[left, right, 32, 33, 0x80, 0xFF, b'a'][..len]);
+                let mut tail = [b'a'; 7];
+                tail[len - 2] = left;
+                tail[len - 1] = right;
+                check(&tail[..len]);
+            }
         }
     }
 }

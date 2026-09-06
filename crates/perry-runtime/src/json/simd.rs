@@ -95,10 +95,45 @@ fn find_word<const CONTROL: bool, const SURROGATE: bool>(bytes: &[u8]) -> Option
         }
         i += 8;
     }
-    bytes[i..]
-        .iter()
+    let tail = &bytes[i..];
+    if tail.len() >= 4 {
+        return find_padded_tail::<CONTROL, SURROGATE>(tail).map(|j| i + j);
+    }
+    tail.iter()
         .position(|&b| special::<CONTROL, SURROGATE>(b))
         .map(|j| i + j)
+}
+
+/// Pack four to seven bytes using only bounded loads, padding with spaces.
+/// Little-endian lane order makes the lowest marked lane the first match:
+/// subtraction can propagate a mark into later lanes, only after a real hit.
+/// A space cannot match any of these scanner contracts, so padding is inert.
+#[inline(always)]
+fn find_padded_tail<const CONTROL: bool, const SURROGATE: bool>(bytes: &[u8]) -> Option<usize> {
+    debug_assert!((4..8).contains(&bytes.len()));
+    const LOW: u64 = 0x0101_0101_0101_0101;
+    const HIGH: u64 = 0x8080_8080_8080_8080;
+    let len = bytes.len();
+    let mut word = unsafe { u32::from_le(bytes.as_ptr().cast::<u32>().read_unaligned()) as u64 };
+    if len & 2 != 0 {
+        word |=
+            unsafe { u16::from_le(bytes.as_ptr().add(4).cast::<u16>().read_unaligned()) as u64 }
+                << 32;
+    }
+    if len & 1 != 0 {
+        word |= u64::from(bytes[len - 1]) << ((len - 1) * 8);
+    }
+    word |= 0x2020_2020_2020_2020u64 << (len * 8);
+    let zero_mask = |x: u64| x.wrapping_sub(LOW) & !x & HIGH;
+    let mut mask =
+        zero_mask(word ^ 0x2222_2222_2222_2222) | zero_mask(word ^ 0x5C5C_5C5C_5C5C_5C5C);
+    if CONTROL {
+        mask |= word.wrapping_sub(0x2020_2020_2020_2020) & !word & HIGH;
+    }
+    if SURROGATE {
+        mask |= zero_mask(word ^ 0xEDED_EDED_EDED_EDED);
+    }
+    (mask != 0).then(|| mask.trailing_zeros() as usize / 8)
 }
 
 #[cfg(target_arch = "aarch64")]

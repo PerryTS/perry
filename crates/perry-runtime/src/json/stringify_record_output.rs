@@ -79,7 +79,9 @@ unsafe fn dense_array(bits: u64) -> Option<(*const crate::ArrayHeader, usize)> {
 
 #[inline(never)]
 unsafe fn emit_record(obj: *const crate::ObjectHeader, fields: usize) -> Option<JSValue> {
-    let empty = Piece::inline(b"");
+    // Every live entry is overwritten before emission. A zero-valued string
+    // placeholder lets the compiler clear native plan storage in bulk.
+    let empty = Piece::String { bytes: 0, units: 0 };
     let mut key_plan = [empty; MAX_FIELDS];
     let mut value_plan = [Field::Scalar(empty); MAX_FIELDS];
     let mut elements = [empty; MAX_ELEMENTS];
