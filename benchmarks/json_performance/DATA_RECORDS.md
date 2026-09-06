@@ -1,16 +1,42 @@
-The current source adds allocation-free scalar parsing, guarded record emission
-and a direct walk of prevalidated primitive object fields. **This is a development
-checkpoint. CPU/RSS parity and no-regression acceptance remain open: the current
-qualified build meets 11/38 CPU, 58/74 peak RSS and 28/36 retained RSS targets.**
+The current source adds allocation-free scalar parsing, guarded record emission,
+bounded depth preflight and direct emission of wide primitive objects. **This
+is a development checkpoint. CPU/RSS parity and no-regression acceptance remain
+open: 11/38 CPU, 58/74 peak RSS and 28/36 retained RSS targets are met.**
 
-The next candidate skips depth scans when input length alone bounds nesting,
-and moves primitive preflight into a direct borrow for wide inline objects.
-It passes 139 runtime tests, 33 compiled Node comparisons and 24 moving-GC runs;
-its full performance matrix is running. The qualified standings below still
-describe the preceding primitive-object release. Local sampling also shows
-the small record uses the shape path before the modified generic preflight,
-so those speculative checks do not explain that row's regression by themselves.
-[Bounded-preflight evidence](results/bounded-preflight/README.md).
+Depth preflight skips inputs too short to exceed the nesting limit; the parser
+still validates syntax. Wide primitive-field preflight borrows inline storage
+once before emission. Small objects keep the prior closure scan. These changes
+pass 139 runtime tests, 33 compiled Node comparisons and 24 moving-GC runs.
+All 43 recorded source hashes match 3ffe5690410f7a8ea110c3f9e356ebb8eb7933b1.
+
+The full matrix has 152 output verifications, 456 timing trials and 432 memory
+trials with 31 clean observations. A separate 546-trial paired check covers
+39 cases with 39 clean observations. Both windows pass load and process gates.
+Paired small-record parsing uses 9.99% less CPU, tiny-object parsing 4.57% less,
+empty-object parsing 2.17% less, and wide-object stringify 7.15% less than the
+preceding primitive-object release. Against the older empty-object release,
+small-record parse improves 9.59%, tiny-object parse 2.46%, and wide-object
+stringify 31.69%. Wide stringify is now about 1.69 ms with peak RSS near 71 MiB.
+
+The no-regression requirement still fails: paired 1/8/20 MB record-object
+parsing is 1.78%/2.13%/2.32% slower than primitive-object; 20 MB record-array
+parsing is 2.80% slower; heterogeneous stringify is 1.60% slower. Small-record
+stringify is unchanged against primitive-object but still 1.68% slower than
+empty-object, and inline-string parse is still 2.03% slower than empty-object.
+All other rows and ranges, including smaller differences, remain in the data.
+
+Local sampling confirms small-record stringify enters shape-template emission
+before the changed generic preflight. Per-call template construction and
+allocation are material costs, weakening the earlier speculative-preflight
+attribution. A bounded direct-output path for primitive-array records and
+outlining the large scalar frame away from container parsing are the next
+investigations. The current preflight changes preserve GC scheduling and policy.
+
+[Current 38 CPU rows and RAM](results/bounded-preflight/tables.md),
+[every target](results/bounded-preflight/parity.md),
+[paired ranges](results/bounded-preflight/recheck-bounded-preflight/summary.json),
+and [validation and diagnostics](results/bounded-preflight/README.md).
+The preceding checkpoints below remain as historical evidence.
 
 The primitive-object walk reuses the generic input root, prototype handling,
 field preflight and key order, then borrows inline keys and values once. Its
@@ -36,7 +62,7 @@ open. Reducing speculative primitive preflight on small records and investigatin
 container/scalar wrapper costs are the next steps. These rows are not accepted
 as regression-free merely because the wide-object result improved.
 
-[Current 38 CPU rows and RAM](results/primitive-object/tables.md),
+[Primitive-object 38 CPU rows and RAM](results/primitive-object/tables.md),
 [every target](results/primitive-object/parity.md),
 [paired ranges](results/primitive-object/recheck-primitive-object/summary.json),
 and [implementation and validation](results/primitive-object/README.md).

@@ -1,0 +1,30 @@
+from pathlib import Path
+import importlib.util,json,random,sys,time,hashlib,subprocess,os
+root=Path.cwd()
+sys.argv=['run.py']
+spec=importlib.util.spec_from_file_location('runner',root/'run.py');r=importlib.util.module_from_spec(spec);spec.loader.exec_module(r)
+manifest={f['name']:f for f in r.FIXTURES}
+rows=[json.loads(s) for s in (root/'results/fastpaths/timing.jsonl').read_text().splitlines()]
+iters={(x['fixture'],x['operation']):x['iterations'] for x in rows}
+cases=[('primitive',f,o) for f,o in [
+ ('null','parse'),('string_a','parse'),('escaped_1m','stringify'),('unicode_1m','stringify'),('empty_object','parse'),('empty_object','stringify'),('tiny_object','parse'),('tiny_object','stringify'),('small_record','parse'),('small_record','stringify'),
+ ('object_1k','parse'),('records_array_16k','parse'),('object_1k','stringify'),('records_array_16k','stringify'),('records_object_1m','parse'),('records_object_1m','stringify'),('records_object_8m','stringify'),('records_object_20m','stringify'),
+ ('numbers_1m','parse'),('numbers_1m','stringify'),('long_string_1m','parse'),('escaped_1m','parse'),('unicode_1m','parse'),('wide_1m','parse'),('wide_1m','stringify'),('heterogeneous_1m','parse'),('heterogeneous_1m','stringify')]]
+cases += [('empty',f,o) for f,o in [('null','parse'),('string_a','parse'),('tiny_object','parse'),('small_record','parse'),('small_record','stringify'),('wide_1m','parse'),('wide_1m','stringify')]]
+cases += [('primitive',f,o) for f,o in [('records_object_8m','parse'),('records_array_20m','parse'),('records_object_20m','parse'),('long_string_1m','stringify'),('records_array_1m','stringify')]]
+out=root/'results/recheck-bounded-preflight';out.mkdir()
+meta={'time_utc':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime()),'load_before':os.getloadavg(),'cases':cases,'repetitions':7,'notes':'Same worker entry, default GC, fresh processes. Call counts are fixed from the full matrix. Randomized two-arm order per repetition. CPU includes user and system time.'}
+meta['worker_sha256']={n:hashlib.sha256((root/'.work'/p).read_bytes()).hexdigest() for n,p in [('primitive','baseline-worker'),('empty','empty-object-worker'),('candidate','worker')]}
+(out/'metadata.json').write_text(json.dumps(meta,indent=2)+'\n')
+rng=random.Random(24019)
+for reference,name,op in cases:
+    f=manifest[name];n=iters[name,op];warm=5000 if f['bytes']<4096 else 2
+    r.ENGINES={'baseline':[str(root/'.work'/{'primitive':'baseline-worker','empty':'empty-object-worker'}[reference])],'perry':[str(root/'.work/worker')]}
+    dest=out/(reference+'-'+name+'-'+op+'.jsonl')
+    for rep in range(7):
+        order=list(r.ENGINES);rng.shuffle(order)
+        for engine in order:
+            row=r.one(engine,f,op,n,warm);row.update(rep=rep,reference=reference,bytes=f['bytes'])
+            with dest.open('a') as file:file.write(json.dumps(row,separators=(',',':'))+'\n')
+            assert 'error' not in row,row
+    print('CHECKED',reference,name,op,n,flush=True)

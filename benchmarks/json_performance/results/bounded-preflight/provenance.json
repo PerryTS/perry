@@ -65,5 +65,7 @@
     "/Users/amlug/projects/perry/codex-json-fastpaths-artifacts/bounded-preflight-worker"
   ],
   "gc_policy_unchanged_from": "454daac4f8fc667ab4bc85b7b5b36c8bae56ae28",
-  "note": "Depth preflight skips inputs whose byte length cannot exceed the nesting limit. Primitive field preflight is confined to wide inline objects and borrows fields once; small objects retain the original closure scan. Same scalar encoders, callback handling and GC scheduling. Same pinned application object and matched build settings."
+  "note": "Depth preflight skips inputs whose byte length cannot exceed the nesting limit. Primitive field preflight is confined to wide inline objects and borrows fields once; small objects retain the original closure scan. Same scalar encoders, callback handling and GC scheduling. Same pinned application object and matched build settings.",
+  "measured_source_commit": "3ffe5690410f7a8ea110c3f9e356ebb8eb7933b1",
+  "all_recorded_source_hashes_match_commit": true
 }

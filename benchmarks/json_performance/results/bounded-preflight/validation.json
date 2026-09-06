@@ -5,7 +5,33 @@
   "all_outputs_match": true,
   "all_stress_runs_show_live_movement": true,
   "source_hashes": 43,
-  "qualified_performance": "full matrix running",
+  "qualified_performance": "Full matrix and paired windows pass load/competing-process gates and external monitoring",
   "no_regression_acceptance": false,
-  "goal_complete": false
+  "goal_complete": false,
+  "full_matrix": {
+    "verifications": 152,
+    "timing_trials": 456,
+    "memory_trials": 432,
+    "clean_external_observations": 31
+  },
+  "paired": {
+    "trials": 546,
+    "cases": 39,
+    "clean_external_observations": 39
+  },
+  "target_medians": {
+    "cpu": [
+      11,
+      38
+    ],
+    "peak_rss": [
+      58,
+      74
+    ],
+    "retained_rss": [
+      28,
+      36
+    ]
+  },
+  "measured_source_commit": "3ffe5690410f7a8ea110c3f9e356ebb8eb7933b1"
 }
