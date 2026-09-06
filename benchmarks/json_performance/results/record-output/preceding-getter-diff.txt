@@ -1,0 +1,13 @@
+--- Node
++++ parse-entry
+@@ -31,8 +31,8 @@
+ {"id":42,"name":"user_42","email":"user_42@example.com","active":false,"score":63,"tags":["quote\"\n","tag_bravo"]}
+ {"id":42,"name":"user_42","email":"user_42@example.com","active":false,"score":63,"tags":[null,"tag_bravo"]}
+ {"id":42,"name":"user_42","email":"user_42@example.com","active":false,"score":63,"tags":[null,"tag_bravo"]}
+-{"id":42,"name":"user_42","email":"user_42@example.com","active":false,"score":63,"tags":["array getter","tag_bravo"]} 1
+-{"id":42,"name":"user_42","active":false,"score":123,"tags":["array getter","tag_bravo"]} 2
++{"id":42,"name":"user_42","email":"user_42@example.com","active":false,"score":63,"tags":["tag_alpha","tag_bravo"]} 0
++{"id":42,"name":"user_42","active":false,"score":63,"tags":["tag_alpha","tag_bravo"]} 0
+ {"id":42,"name":"user_42","email":"user_42@example.com","active":false,"score":63,"tags":"array:tags"}
+ {"id":42,"name":"user_42","email":"user_42@example.com","active":false,"score":63,"tags":["tag_alpha","nested:1"]}
+ "record:"

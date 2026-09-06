@@ -1,0 +1,102 @@
+[
+  {
+    "fixture": "small_record",
+    "operation": "stringify",
+    "calls": 500000,
+    "median_process_instructions": {
+      "parse-entry": 4692389034,
+      "record-output": 3398536970
+    },
+    "candidate_vs_reference": 0.7242658154247148
+  },
+  {
+    "fixture": "tiny_object",
+    "operation": "stringify",
+    "calls": 2000000,
+    "median_process_instructions": {
+      "parse-entry": 4686875895,
+      "record-output": 4662430399
+    },
+    "candidate_vs_reference": 0.9947842664180465
+  },
+  {
+    "fixture": "null",
+    "operation": "stringify",
+    "calls": 2000000,
+    "median_process_instructions": {
+      "parse-entry": 314815282,
+      "record-output": 314790708
+    },
+    "candidate_vs_reference": 0.9999219415276035
+  },
+  {
+    "fixture": "escaped_1m",
+    "operation": "stringify",
+    "calls": 84,
+    "median_process_instructions": {
+      "parse-entry": 1840073745,
+      "record-output": 1839921551
+    },
+    "candidate_vs_reference": 0.9999172891845158
+  },
+  {
+    "fixture": "wide_1m",
+    "operation": "stringify",
+    "calls": 128,
+    "median_process_instructions": {
+      "parse-entry": 3975716281,
+      "record-output": 3975166168
+    },
+    "candidate_vs_reference": 0.9998616317259285
+  },
+  {
+    "fixture": "records_object_1m",
+    "operation": "stringify",
+    "calls": 128,
+    "median_process_instructions": {
+      "parse-entry": 3396361747,
+      "record-output": 3393611287
+    },
+    "candidate_vs_reference": 0.9991901746030353
+  },
+  {
+    "fixture": "heterogeneous_1m",
+    "operation": "stringify",
+    "calls": 128,
+    "median_process_instructions": {
+      "parse-entry": 10616953557,
+      "record-output": 10618948468
+    },
+    "candidate_vs_reference": 1.00018789862735
+  },
+  {
+    "fixture": "records_array_1m",
+    "operation": "parse",
+    "calls": 95,
+    "median_process_instructions": {
+      "parse-entry": 2089462698,
+      "record-output": 2085544694
+    },
+    "candidate_vs_reference": 0.9981248748763257
+  },
+  {
+    "fixture": "heterogeneous_1m",
+    "operation": "parse",
+    "calls": 78,
+    "median_process_instructions": {
+      "parse-entry": 2173246632,
+      "record-output": 2169510015
+    },
+    "candidate_vs_reference": 0.998280629108091
+  },
+  {
+    "fixture": "small_record",
+    "operation": "parse",
+    "calls": 500000,
+    "median_process_instructions": {
+      "parse-entry": 5199075956,
+      "record-output": 5184918603
+    },
+    "candidate_vs_reference": 0.9972769482269899
+  }
+]

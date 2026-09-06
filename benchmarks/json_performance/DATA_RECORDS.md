@@ -1,4 +1,39 @@
-The current source fixes parse-input rooting before pending collection,
+The latest measured record-output source writes bounded ordinary records
+with primitive-array fields directly into the final string. Its stack plan
+holds lengths, indices and inline scalar bytes; the parent root traces its
+children, which are rederived after allocation. An array-getter correctness
+fix routes descriptor/prototype-bearing arrays through ordered Get operations.
+The tape scanner builds before collection through a raw-input API whose byte
+borrow ends before collection. GC production policy remains unchanged.
+
+**All-row parity and no-regression acceptance remain open: 11/38 CPU,
+58/74 peak RSS and 28/36 retained RSS targets are met.** Measured source
+53052fc09d47d956e8decf22f677a773f94d42cb passes 151 JSON runtime tests,
+35 compiled Node comparisons and 28 moving-GC runs. All 49 source hashes match.
+The full matrix passes 152 verifications, 456 timing trials and 432 memory
+trials with 33 clean external observations. Its 686-trial paired run covers
+49 cases with 45 clean observations. Both windows pass their quiet gates.
+
+Paired small-record stringify improves 23.14% against parse-entry, from about
+0.524 to 0.403 microseconds. Tiny stringify improves 2.73%; empty/tiny parsing
+improves 1.76%/0.79%. The earlier 1 MB record-array and heterogeneous parse peak
+RSS regressions recover by 4.86/3.88 MiB. However, 8 MB record-array parse peak
+RSS rises 14.31 MiB, to 102.48 MiB. CPU regressions include inline-string
+stringify +3.22%, numeric stringify +2.19%, wide stringify +1.12%, 16 KB/1 MB/8 MB
+array parse +1.68%/+1.41%/+1.75%, and heterogeneous parse +3.50%, with separated
+observed ranges. Additional smaller differences remain in the complete data.
+
+[Latest 38 CPU rows](results/record-output/cpu-38.md),
+[CPU and RAM](results/record-output/tables.md),
+[every target](results/record-output/parity.md),
+[paired CPU/RSS ranges](results/record-output/recheck-record-output/summary.json),
+and [implementation and validation](results/record-output/README.md).
+Local instruction counts fall 27.57% for small-record stringify. Sampling
+identifies Ryū formatting of integer-valued fields as a remaining cost; the
+next candidate addresses that cost and is not included in these measurements.
+Array-root parsing may defer materialization; stringify starts fully materialized.
+
+The preceding parse-entry source fixes parse-input rooting before pending collection,
 separates scalar decoding from the container entry, and restores direct
 primitive emission for nested one-field objects. **All-row parity and
 no-regression acceptance remain open: 11/38 CPU, 58/74 peak RSS and 28/36
