@@ -316,27 +316,63 @@ fn regex_instance_or_throw(method: &str) -> *const crate::regex::RegExpHeader {
     ))
 }
 
-crate::perry_thread_local! {
-    /// The realm's `RegExp.prototype`. A raw heap address, so it is a GC ROOT:
-    /// visited in `scan_object_cache_roots_mut` beside the iterator-prototype
-    /// towers, which both marks it and rewrites it when the collector moves the
-    /// object. A recorded address that is not scanned is a stale pointer the
-    /// first time the prototype moves — the #9539/#9445 shape.
-    static REGEXP_PROTOTYPE_PTR_SLOT: std::sync::atomic::AtomicI64 =
-        const { std::sync::atomic::AtomicI64::new(0) };
-    /// The canonical `test` closure, NaN-boxed. Also a root, visited as a
-    /// nanbox word so the collector rewrites the pointer inside it.
-    static REGEXP_PROTOTYPE_TEST_CLOSURE_SLOT: std::sync::atomic::AtomicU64 =
-        const { std::sync::atomic::AtomicU64::new(0) };
-    /// The field index its own `test` occupies. Not an address, so not a root.
-    static REGEXP_PROTOTYPE_TEST_INDEX_SLOT: std::sync::atomic::AtomicU32 =
-        const { std::sync::atomic::AtomicU32::new(u32::MAX) };
+/// The complete install-time proof record for `RegExp.prototype.test`.
+///
+/// Keeping the three words behind one [`HotKey`](crate::tls_hot::HotKey) is
+/// load-bearing on Darwin: a call resolves one TLS address, not three. The
+/// first two fields are GC roots and are visited together by
+/// [`scan_canonical_test_site_roots_mut`].
+struct CanonicalTestSite {
+    /// The realm's `RegExp.prototype`, as a raw heap address.
+    prototype: std::sync::atomic::AtomicI64,
+    /// The canonical `test` closure, as a NaN-boxed root word.
+    closure: std::sync::atomic::AtomicU64,
+    /// The field index occupied by the prototype's own `test`.
+    index: std::sync::atomic::AtomicU32,
 }
 
-pub(crate) static REGEXP_PROTOTYPE_PTR: super::RealmAtomicI64 =
-    super::RealmAtomicI64::new(&REGEXP_PROTOTYPE_PTR_SLOT);
-pub(crate) static REGEXP_PROTOTYPE_TEST_CLOSURE: super::RealmAtomicU64 =
-    super::RealmAtomicU64::new(&REGEXP_PROTOTYPE_TEST_CLOSURE_SLOT);
+impl CanonicalTestSite {
+    const EMPTY: Self = Self {
+        prototype: std::sync::atomic::AtomicI64::new(0),
+        closure: std::sync::atomic::AtomicU64::new(0),
+        index: std::sync::atomic::AtomicU32::new(u32::MAX),
+    };
+}
+
+crate::perry_thread_local! {
+    static REGEXP_PROTOTYPE_TEST_SITE: CanonicalTestSite = const { CanonicalTestSite::EMPTY };
+}
+
+/// FNV-1a(`"test"`) & 63 = 37. This is the exact bit
+/// `descriptor_state::note_meta_descriptor_key` sets when an accessor named
+/// `test` is installed. Recording it as a constant removes the four-byte hash
+/// from every view-mode regex call.
+const TEST_ACCESSOR_KEY_BIT: u64 = 1u64 << 37;
+
+/// Visit both pointer-bearing fields in the one per-realm record. The raw
+/// prototype address and the NaN-boxed closure deliberately use different
+/// visitor operations so evacuation rewrites each representation correctly.
+#[cfg(feature = "regex-engine")]
+pub(crate) fn scan_canonical_test_site_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    REGEXP_PROTOTYPE_TEST_SITE.with(|site| {
+        visitor.visit_atomic_i64_slot(
+            &site.prototype,
+            std::sync::atomic::Ordering::Acquire,
+            std::sync::atomic::Ordering::Release,
+        );
+        visitor.visit_atomic_nanbox_u64_slot(
+            &site.closure,
+            std::sync::atomic::Ordering::Acquire,
+            std::sync::atomic::Ordering::Release,
+        );
+    });
+}
+
+#[cfg(all(test, feature = "regex-engine"))]
+pub(crate) fn test_recorded_regexp_prototype() -> i64 {
+    REGEXP_PROTOTYPE_TEST_SITE
+        .with(|site| site.prototype.load(std::sync::atomic::Ordering::Acquire))
+}
 
 /// How many by-name walks the canonicality proof has done in this process.
 /// The fast path does none: the only walk is the one-time recording below, so
@@ -394,27 +430,33 @@ pub(crate) fn regexp_prototype_test_is_canonical(value: f64) -> bool {
     // the object recorded below. `object_static_prototype` answers from the
     // object's own meta record, or from an atomic "nothing was ever recorded"
     // latch — no mutex, no chain walk.
-    if super::prototype_chain::object_static_prototype(recv_addr).is_some() {
+    if super::prototype_chain::object_static_prototype_known_non_meta(recv_addr).is_some() {
         return false;
     }
-    let proto_ptr = REGEXP_PROTOTYPE_PTR.load(std::sync::atomic::Ordering::Acquire);
-    let canonical = REGEXP_PROTOTYPE_TEST_CLOSURE.load(std::sync::atomic::Ordering::Acquire);
-    let index = REGEXP_PROTOTYPE_TEST_INDEX_SLOT
-        .with(|slot| slot.load(std::sync::atomic::Ordering::Acquire));
-    if proto_ptr == 0 || canonical == 0 || index == u32::MAX {
-        return false;
-    }
-    let proto_obj = proto_ptr as *mut ObjectHeader;
-    // Both reads below are of values the collector maintains: the prototype
-    // address is a scanned root, and the recorded closure is a scanned nanbox
-    // word, so a move rewrites both and this compare stays an identity compare.
-    let current = crate::object::js_object_get_field(proto_obj, index);
-    if current.bits() != canonical {
-        return false;
-    }
-    // `defineProperty(proto, "test", { get })` leaves the data slot alone and
-    // records the accessor, so the identity compare above cannot see it.
-    !super::descriptor_state::may_have_descriptor_entry(proto_obj as usize, "test", true)
+    REGEXP_PROTOTYPE_TEST_SITE.with(|site| {
+        let proto_ptr = site.prototype.load(std::sync::atomic::Ordering::Acquire);
+        let canonical = site.closure.load(std::sync::atomic::Ordering::Acquire);
+        let index = site.index.load(std::sync::atomic::Ordering::Acquire);
+        if proto_ptr == 0 || canonical == 0 || index == u32::MAX {
+            return false;
+        }
+        let proto_obj = proto_ptr as *mut ObjectHeader;
+        // Both reads below are of values the collector maintains: the
+        // prototype address is a scanned root, and the recorded closure is a
+        // scanned nanbox word, so a move rewrites both and this compare stays
+        // an identity compare.
+        let current = crate::object::js_object_get_field(proto_obj, index);
+        if current.bits() != canonical {
+            return false;
+        }
+        // `defineProperty(proto, "test", { get })` leaves the data slot alone
+        // and records the accessor. The prototype is an ObjectHeader, so its
+        // meta edge can be read directly: no cell classification and no key
+        // hash on this per-call path. A null meta proves no accessor was ever
+        // installed; the Bloom bit is monotonic once set.
+        let meta = unsafe { (*proto_obj).meta };
+        meta.is_null() || unsafe { (*meta).accessor_key_bits & TEST_ACCESSOR_KEY_BIT == 0 }
+    })
 }
 
 /// Record the prototype, the index of its own `test`, and the canonical
@@ -457,19 +499,24 @@ fn record_canonical_test_site(proto_obj: *mut ObjectHeader) {
     if crate::object::js_object_get_field(proto_obj, index).bits() != own.to_bits() {
         return;
     }
-    let addr = proto_obj as i64;
-    REGEXP_PROTOTYPE_TEST_INDEX_SLOT
-        .with(|slot| slot.store(index, std::sync::atomic::Ordering::Release));
-    // GC_STORE_AUDIT(ROOT): REGEXP_PROTOTYPE_TEST_CLOSURE is a mutable nanbox
-    // root visited by scan_object_cache_roots_mut.
-    REGEXP_PROTOTYPE_TEST_CLOSURE.with_slot(|slot| {
+    REGEXP_PROTOTYPE_TEST_SITE.with(|site| {
+        site.index
+            .store(index, std::sync::atomic::Ordering::Release);
+        // GC_STORE_AUDIT(ROOT): `site.closure` is a mutable nanbox root visited
+        // by `scan_canonical_test_site_roots_mut`.
         crate::gc::runtime_store_root_atomic_nanbox_u64(
-            slot,
+            &site.closure,
             own.to_bits(),
             std::sync::atomic::Ordering::Release,
         );
+        // GC_STORE_AUDIT(ROOT): `site.prototype` is a mutable raw-address root
+        // visited by `scan_canonical_test_site_roots_mut`.
+        crate::gc::runtime_store_root_atomic_raw_i64(
+            &site.prototype,
+            proto_obj as i64,
+            std::sync::atomic::Ordering::Release,
+        );
     });
-    REGEXP_PROTOTYPE_PTR.store(addr, std::sync::atomic::Ordering::Release);
 }
 
 /// Install the real (brand-checking) `exec`/`test`/`toString`/`compile`

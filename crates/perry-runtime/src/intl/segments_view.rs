@@ -791,8 +791,7 @@ mod view_mode_tests {
         );
 
         // Replace `RegExp.prototype.test` the way a program would.
-        let proto_ptr =
-            crate::object::regex_proto_thunks::REGEXP_PROTOTYPE_PTR.load(Ordering::Acquire);
+        let proto_ptr = crate::object::regex_proto_thunks::test_recorded_regexp_prototype();
         assert!(proto_ptr != 0, "the site must have been recorded");
         let proto = proto_ptr as *mut ObjectHeader;
         let key = crate::string::js_string_from_bytes(b"test".as_ptr(), 4);
@@ -812,6 +811,60 @@ mod view_mode_tests {
 
     extern "C" fn patched_test_thunk(_c: *const crate::closure::ClosureHeader) -> f64 {
         f64::from_bits(JSValue::bool(true).bits())
+    }
+
+    /// SABOTAGE-SHAPED: the constant Bloom mask must be the exact bit the
+    /// descriptor writer records. Defining an accessor AFTER the canonical
+    /// site was recorded leaves the old data slot intact; without this bit
+    /// check the fast proof would accept and silently bypass the getter.
+    #[cfg(feature = "regex-engine")]
+    #[test]
+    fn an_accessor_installed_after_recording_makes_the_next_call_decline() {
+        let cursor = js_segments_view_open(grapheme_segmenter(), js_string("ab"));
+        assert_eq!(js_segments_view_next(cursor), 1.0);
+        let re = crate::regex::js_regexp_construct(js_string("[a-z]"), js_string(""));
+        let re_v = f64::from_bits(JSValue::pointer(re as *const u8).bits());
+        assert!(
+            !is_undefined(js_segments_view_regexp_test(cursor, re_v)),
+            "premise: the recorded data property is initially canonical"
+        );
+
+        let proto_ptr = crate::object::regex_proto_thunks::test_recorded_regexp_prototype();
+        assert!(proto_ptr != 0, "the canonical site must have been recorded");
+        let proto = proto_ptr as *mut ObjectHeader;
+        let before = crate::object::js_object_get_field_by_name(
+            proto,
+            crate::string::js_string_from_bytes(b"test".as_ptr(), 4),
+        );
+        crate::object::set_accessor_descriptor(
+            proto as usize,
+            "test".to_string(),
+            crate::object::AccessorDescriptor::default(),
+        );
+        assert_eq!(
+            crate::object::js_object_get_field(proto, unsafe {
+                // The test deliberately uses the recorded data-slot value as
+                // its witness: installing the accessor must not overwrite it.
+                let keys = crate::object::object_keys_array(proto);
+                let count = crate::array::js_array_length(keys);
+                (0..count)
+                    .find(|&i| {
+                        let key = crate::array::js_array_get_f64(keys, i);
+                        crate::string::js_string_key_matches_bytes(
+                            JSValue::from_bits(key.to_bits()),
+                            b"test",
+                        )
+                    })
+                    .expect("test key") as u32
+            })
+            .bits(),
+            before.bits(),
+            "premise: the accessor install leaves the canonical data slot intact"
+        );
+        assert!(
+            is_undefined(js_segments_view_regexp_test(cursor, re_v)),
+            "the accessor Bloom bit must force an immediate decline"
+        );
     }
 
     /// `_regexp_test` answers the same as the materialised call for a plain
