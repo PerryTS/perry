@@ -5,7 +5,7 @@ TUI a 3300-character streamed reply spent 30–41 s of CPU in the base arm and
 post-turn and post-idle RSS flat within the base's own spread and peak RSS
 unchanged.
 
-#9831 measured the `ArenaBytes` arm firing 51 times in one 66-delta reply,
+Issue #9831 measured the `ArenaBytes` arm firing 51 times in one 66-delta reply,
 each collection freeing a median 131 KB, while the adaptive step sat
 saturated at 1 GiB — and located the discarded backoff in the arm's own
 ceiling clamp. That clamp was not what re-fired the arm: between two firings
