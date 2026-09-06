@@ -691,3 +691,16 @@ failure this suite has paid for most often.
 | `run_gc_ratchet_baseline.sh` | quiet-host driver (`--check` / `--pin`) |
 | `../../tests/test_gc_ratchet.py` | proves the gate fails on each failure mode |
 | `../../.github/workflows/gc-ratchet.yml` | CI wiring |
+
+
+## Recovery from the unwatched main failures (#9829)
+
+The [recovery record](evidence/9829-recovery.md) explains the selective counter
+acceptance, repaired receiver-store probe, 21-run large-Eden capacity exclusion,
+historical A/Bs, and evidence grades. Only accepted deterministic distributions
+move; the original quiet-host RSS/time pin remains separate.
+
+Scheduled and main-branch dispatch runs now open or update one GC ratchet issue
+on failure, including the run/SHA, last green, failing rows and their delta.
+The next successful main-line run closes it. Reporting has a separate job and
+does not swallow the measurement/check exit status.

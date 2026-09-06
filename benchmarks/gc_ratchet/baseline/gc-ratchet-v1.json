@@ -121,7 +121,10 @@
       "2026-08-08 re-pin every probe's conservative reading equals its precise one",
       "(gc_ratchet.py classify, excess 0.00% on all twelve), so heap_used_bytes now",
       "means what it says. `classify` is still the first step on a breach -- it is",
-      "now also the check that the term has not come back."
+      "now also the check that the term has not come back.",
+      "#9829 excludes only 13_large_eden_survivors.heap_total_bytes after 21 executions",
+      "of one binary varied by 2 MiB of reserved capacity with identical live bytes",
+      "and all seven GC counters. This is not a wider band or a retention exemption."
     ],
     "shared_ci": {
       "heap_used_bytes": {
@@ -317,10 +320,22 @@
             "issue": "https://github.com/PerryTS/perry/issues/9790"
           }
         }
+      },
+      "13_large_eden_survivors": {
+        "heap_total_bytes": {
+          "gating": false,
+          "rationale": "NOT GATED ON THIS PROBE (#9829). Total reserved arena capacity varies by 2 MiB across executions of one unchanged binary: 18/21 runs reserve 61865984 bytes and 3/21 reserve 63963136. All 21 report the same 227048 live bytes and identical seven GC counters (including three minors and 377569 copied objects), with Node-equivalent output. js_arena_stats sums reserved block sizes for heapTotal, separately from its exact live-object census for heapUsed. This is spare-capacity/placement variation, not changing live retention or GC work; the precise allocating block/order is not isolated. CI run 33989581881 independently contains the same two capacities. Keep the cell visible, while heapUsed, liveness, copying/promotion/reclamation, and all other probes remain gated. Raw 21-run evidence and binary/source hashes: evidence/9829-recovery.json.",
+          "evidence": {
+            "observed_runs": 21,
+            "observed_spread": 2097152,
+            "measured_on": "2026-09-06, linux-x86_64, clean main d36a1af0c compiler and matching runtime/stdlib archives. One unchanged probe binary, 21 traced executions with PERRY_GC_SCAVENGE_NURSERY_MB=64. See evidence/9829-recovery.json capacity_variance.",
+            "issue": "https://github.com/PerryTS/perry/issues/9829"
+          }
+        }
       }
     }
   },
-  "notes": "Re-pinned for #8122-recover: the allocation census before minor #0 object-denominates the first nursery cap (first cycle fires earlier on small-object workloads), one descriptor lookup per traced object, untraced-promotion threshold 990 -> 980. Every GC-accounting fingerprint shifts; retention improves on 12_large_live_set (-75%) and 13_large_eden_survivors moves +85 KB because its cycle 0 now holds up an in-place promotion at 581 permille (main at cap 49 retains 651 KB the same way).",
+  "notes": "Re-pinned for #8122-recover: the allocation census before minor #0 object-denominates the first nursery cap (first cycle fires earlier on small-object workloads), one descriptor lookup per traced object, untraced-promotion threshold 990 -> 980. Every GC-accounting fingerprint shifts; retention improves on 12_large_live_set (-75%) and 13_large_eden_survivors moves +85 KB because its cycle 0 now holds up an in-place promotion at 581 permille (main at cap 49 retains 651 KB the same way).\n\nRecovery of #9829 after scheduled main failures went unwatched from 2026-08-18 to 2026-09-06. Main d36a1af0c205ebdc7cf7f75b351ea34b5bc0fc0b / Actions run 33989581881 had 43 breached cells and an inert probe 10. The set moved 43 -> 48 -> 43 with intervening harness failures; this is one sample of a moving set, not cumulative debt. Accept only the 38 other breached deterministic cells plus 8 cells changed by the included #9833 probe repair. The repaired heap_used cell is already within its original band and is not re-pinned. All 126 original deterministic medians match macOS CI on the remote Linux host; all 46 accepted distributions are stable across the pinning repeats. Evidence grades are explicit: pairwise measurements and window-bracketed changes are not interchangeable. No bands, other deterministic values, RSS, peak RSS, or timing values change. Only 13.heap_total_bytes is excluded after 21 identical-binary runs show 2 MiB reserved-capacity variation with constant live bytes and all GC counters. See evidence/9829-recovery.json and evidence/9829-recovery.md; pinned_host timing for the resized workload requires a separate capture on its original quiet host.",
   "probes": {
     "01_nursery_churn": {
       "stdout": "probe:01_nursery_churn\nchecksum:-1399701504\n",
@@ -449,26 +464,26 @@
         },
         "copied_objects": {
           "samples": [
-            6354,
-            6354
+            4977,
+            4977
           ],
           "sample_count": 2,
-          "median": 6354,
-          "min": 6354,
-          "max": 6354,
+          "median": 4977,
+          "min": 4977,
+          "max": 4977,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "copied_bytes": {
           "samples": [
-            430008,
-            430008
+            234536,
+            234536
           ],
           "sample_count": 2,
-          "median": 430008,
-          "min": 430008,
-          "max": 430008,
+          "median": 234536,
+          "min": 234536,
+          "max": 234536,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
@@ -501,13 +516,13 @@
         },
         "freed_bytes": {
           "samples": [
-            13201144,
-            13201144
+            11299648,
+            11299648
           ],
           "sample_count": 2,
-          "median": 13201144,
-          "min": 13201144,
-          "max": 13201144,
+          "median": 11299648,
+          "min": 11299648,
+          "max": 11299648,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
@@ -654,13 +669,13 @@
         },
         "copied_bytes": {
           "samples": [
-            1780080,
-            1780080
+            1450992,
+            1450992
           ],
           "sample_count": 2,
-          "median": 1780080,
-          "min": 1780080,
-          "max": 1780080,
+          "median": 1450992,
+          "min": 1450992,
+          "max": 1450992,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
@@ -885,13 +900,13 @@
         },
         "freed_bytes": {
           "samples": [
-            11304368,
-            11304368
+            9240008,
+            9240008
           ],
           "sample_count": 2,
-          "median": 11304368,
-          "min": 11304368,
-          "max": 11304368,
+          "median": 9240008,
+          "min": 9240008,
+          "max": 9240008,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
@@ -1025,39 +1040,39 @@
         },
         "copied_objects": {
           "samples": [
-            450,
-            450
+            3622,
+            3622
           ],
           "sample_count": 2,
-          "median": 450,
-          "min": 450,
-          "max": 450,
+          "median": 3622,
+          "min": 3622,
+          "max": 3622,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "copied_bytes": {
           "samples": [
-            25832,
-            25832
+            149400,
+            149400
           ],
           "sample_count": 2,
-          "median": 25832,
-          "min": 25832,
-          "max": 25832,
+          "median": 149400,
+          "min": 149400,
+          "max": 149400,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "promoted_objects": {
           "samples": [
-            10,
-            10
+            682,
+            682
           ],
           "sample_count": 2,
-          "median": 10,
-          "min": 10,
-          "max": 10,
+          "median": 682,
+          "min": 682,
+          "max": 682,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
@@ -1077,13 +1092,13 @@
         },
         "freed_bytes": {
           "samples": [
-            83880432,
-            83880432
+            73346416,
+            73346416
           ],
           "sample_count": 2,
-          "median": 83880432,
-          "min": 83880432,
-          "max": 83880432,
+          "median": 73346416,
+          "min": 73346416,
+          "max": 73346416,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
@@ -1217,65 +1232,65 @@
         },
         "copied_objects": {
           "samples": [
-            5272,
-            5272
+            20079,
+            20079
           ],
           "sample_count": 2,
-          "median": 5272,
-          "min": 5272,
-          "max": 5272,
+          "median": 20079,
+          "min": 20079,
+          "max": 20079,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "copied_bytes": {
           "samples": [
-            233384,
-            233384
+            743384,
+            743384
           ],
           "sample_count": 2,
-          "median": 233384,
-          "min": 233384,
-          "max": 233384,
+          "median": 743384,
+          "min": 743384,
+          "max": 743384,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "promoted_objects": {
           "samples": [
-            0,
-            0
+            3390,
+            3390
           ],
           "sample_count": 2,
-          "median": 0,
-          "min": 0,
-          "max": 0,
+          "median": 3390,
+          "min": 3390,
+          "max": 3390,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "promoted_bytes": {
           "samples": [
-            0,
-            0
+            122120,
+            122120
           ],
           "sample_count": 2,
-          "median": 0,
-          "min": 0,
-          "max": 0,
+          "median": 122120,
+          "min": 122120,
+          "max": 122120,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "freed_bytes": {
           "samples": [
-            32422176,
-            32422176
+            26862320,
+            26862320
           ],
           "sample_count": 2,
-          "median": 32422176,
-          "min": 32422176,
-          "max": 32422176,
+          "median": 26862320,
+          "min": 26862320,
+          "max": 26862320,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
@@ -1409,65 +1424,65 @@
         },
         "copied_objects": {
           "samples": [
-            11138,
-            11138
+            298,
+            298
           ],
           "sample_count": 2,
-          "median": 11138,
-          "min": 11138,
-          "max": 11138,
+          "median": 298,
+          "min": 298,
+          "max": 298,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "copied_bytes": {
           "samples": [
-            682240,
-            682240
+            72288,
+            72288
           ],
           "sample_count": 2,
-          "median": 682240,
-          "min": 682240,
-          "max": 682240,
+          "median": 72288,
+          "min": 72288,
+          "max": 72288,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "promoted_objects": {
           "samples": [
-            4960,
-            4960
+            14,
+            14
           ],
           "sample_count": 2,
-          "median": 4960,
-          "min": 4960,
-          "max": 4960,
+          "median": 14,
+          "min": 14,
+          "max": 14,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "promoted_bytes": {
           "samples": [
-            248512,
-            248512
+            1072,
+            1072
           ],
           "sample_count": 2,
-          "median": 248512,
-          "min": 248512,
-          "max": 248512,
+          "median": 1072,
+          "min": 1072,
+          "max": 1072,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "freed_bytes": {
           "samples": [
-            75244808,
-            75244808
+            68136816,
+            68136816
           ],
           "sample_count": 2,
-          "median": 75244808,
-          "min": 75244808,
-          "max": 75244808,
+          "median": 68136816,
+          "min": 68136816,
+          "max": 68136816,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
@@ -1485,36 +1500,36 @@
       "metrics": {
         "heap_used_bytes": {
           "samples": [
-            984840,
-            984840,
-            984840,
-            984840,
-            984840,
-            984840,
-            984840
+            1072456,
+            1072456,
+            1072456,
+            1072456,
+            1072456,
+            1072456,
+            1072456
           ],
           "sample_count": 7,
-          "median": 984840,
-          "min": 984840,
-          "max": 984840,
+          "median": 1072456,
+          "min": 1072456,
+          "max": 1072456,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "heap_total_bytes": {
           "samples": [
-            23068672,
-            23068672,
-            23068672,
-            23068672,
-            23068672,
-            23068672,
-            23068672
+            25165824,
+            25165824,
+            25165824,
+            25165824,
+            25165824,
+            25165824,
+            25165824
           ],
           "sample_count": 7,
-          "median": 23068672,
-          "min": 23068672,
-          "max": 23068672,
+          "median": 25165824,
+          "min": 25165824,
+          "max": 25165824,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
@@ -1601,13 +1616,13 @@
         },
         "copied_objects": {
           "samples": [
-            6387,
-            6387
+            4991,
+            4991
           ],
           "sample_count": 2,
-          "median": 6387,
-          "min": 6387,
-          "max": 6387,
+          "median": 4991,
+          "min": 4991,
+          "max": 4991,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
@@ -1793,13 +1808,13 @@
         },
         "copied_objects": {
           "samples": [
-            3017,
-            3017
+            2489,
+            2489
           ],
           "sample_count": 2,
-          "median": 3017,
-          "min": 3017,
-          "max": 3017,
+          "median": 2489,
+          "min": 2489,
+          "max": 2489,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
@@ -1985,19 +2000,32 @@
         },
         "copied_objects": {
           "samples": [
-            0,
-            0
+            4962,
+            4962
           ],
           "sample_count": 2,
-          "median": 0,
-          "min": 0,
-          "max": 0,
+          "median": 4962,
+          "min": 4962,
+          "max": 4962,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "copied_bytes": {
           "samples": [
+            230352,
+            230352
+          ],
+          "sample_count": 2,
+          "median": 230352,
+          "min": 230352,
+          "max": 230352,
+          "stdev": 0,
+          "spread": 0,
+          "spread_pct": 0
+        },
+        "promoted_objects": {
+          "samples": [
             0,
             0
           ],
@@ -2009,28 +2037,15 @@
           "spread": 0,
           "spread_pct": 0
         },
-        "promoted_objects": {
-          "samples": [
-            6240,
-            6240
-          ],
-          "sample_count": 2,
-          "median": 6240,
-          "min": 6240,
-          "max": 6240,
-          "stdev": 0,
-          "spread": 0,
-          "spread_pct": 0
-        },
         "promoted_bytes": {
           "samples": [
-            421800,
-            421800
+            0,
+            0
           ],
           "sample_count": 2,
-          "median": 421800,
-          "min": 421800,
-          "max": 421800,
+          "median": 0,
+          "min": 0,
+          "max": 0,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
@@ -2051,7 +2066,7 @@
       }
     },
     "10_store_receiver_across_alloc": {
-      "stdout": "probe:10_store_receiver_across_alloc\nchecksum:204277248\n",
+      "stdout": "probe:10_store_receiver_across_alloc\nchecksum:-1837890048\n",
       "correctness": {
         "status": "pass",
         "oracle_version": "v26.5.1",
@@ -2079,18 +2094,18 @@
         },
         "heap_total_bytes": {
           "samples": [
-            12582912,
-            12582912,
-            12582912,
-            12582912,
-            12582912,
-            12582912,
-            12582912
+            16777216,
+            16777216,
+            16777216,
+            16777216,
+            16777216,
+            16777216,
+            16777216
           ],
           "sample_count": 7,
-          "median": 12582912,
-          "min": 12582912,
-          "max": 12582912,
+          "median": 16777216,
+          "min": 16777216,
+          "max": 16777216,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
@@ -2151,91 +2166,91 @@
         },
         "minor_cycles": {
           "samples": [
-            1,
-            1
+            9,
+            9
           ],
           "sample_count": 2,
-          "median": 1,
-          "min": 1,
-          "max": 1,
+          "median": 9,
+          "min": 9,
+          "max": 9,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "step_cycles": {
           "samples": [
-            1,
-            1
+            9,
+            9
           ],
           "sample_count": 2,
-          "median": 1,
-          "min": 1,
-          "max": 1,
+          "median": 9,
+          "min": 9,
+          "max": 9,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "copied_objects": {
           "samples": [
-            8160,
-            8160
+            18660,
+            18660
           ],
           "sample_count": 2,
-          "median": 8160,
-          "min": 8160,
-          "max": 8160,
+          "median": 18660,
+          "min": 18660,
+          "max": 18660,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "copied_bytes": {
           "samples": [
-            506200,
-            506200
+            825520,
+            825520
           ],
           "sample_count": 2,
-          "median": 506200,
-          "min": 506200,
-          "max": 506200,
+          "median": 825520,
+          "min": 825520,
+          "max": 825520,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "promoted_objects": {
           "samples": [
-            0,
-            0
+            4722,
+            4722
           ],
           "sample_count": 2,
-          "median": 0,
-          "min": 0,
-          "max": 0,
+          "median": 4722,
+          "min": 4722,
+          "max": 4722,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "promoted_bytes": {
           "samples": [
-            0,
-            0
+            228440,
+            228440
           ],
           "sample_count": 2,
-          "median": 0,
-          "min": 0,
-          "max": 0,
+          "median": 228440,
+          "min": 228440,
+          "max": 228440,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "freed_bytes": {
           "samples": [
-            8930928,
-            8930928
+            88858544,
+            88858544
           ],
           "sample_count": 2,
-          "median": 8930928,
-          "min": 8930928,
-          "max": 8930928,
+          "median": 88858544,
+          "min": 88858544,
+          "max": 88858544,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
@@ -2369,26 +2384,26 @@
         },
         "copied_objects": {
           "samples": [
-            6245,
-            6245
+            4975,
+            4975
           ],
           "sample_count": 2,
-          "median": 6245,
-          "min": 6245,
-          "max": 6245,
+          "median": 4975,
+          "min": 4975,
+          "max": 4975,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "copied_bytes": {
           "samples": [
-            422744,
-            422744
+            230872,
+            230872
           ],
           "sample_count": 2,
-          "median": 422744,
-          "min": 422744,
-          "max": 422744,
+          "median": 230872,
+          "min": 230872,
+          "max": 230872,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
@@ -2574,13 +2589,13 @@
         },
         "copied_bytes": {
           "samples": [
-            2851312,
-            2851312
+            2327008,
+            2327008
           ],
           "sample_count": 2,
-          "median": 2851312,
-          "min": 2851312,
-          "max": 2851312,
+          "median": 2327008,
+          "min": 2327008,
+          "max": 2327008,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
@@ -2600,26 +2615,26 @@
         },
         "promoted_bytes": {
           "samples": [
-            25395472,
-            25395472
+            21201208,
+            21201208
           ],
           "sample_count": 2,
-          "median": 25395472,
-          "min": 25395472,
-          "max": 25395472,
+          "median": 21201208,
+          "min": 21201208,
+          "max": 21201208,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "freed_bytes": {
           "samples": [
-            76315456,
-            76315456
+            63732784,
+            63732784
           ],
           "sample_count": 2,
-          "median": 76315456,
-          "min": 76315456,
-          "max": 76315456,
+          "median": 63732784,
+          "min": 63732784,
+          "max": 63732784,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
@@ -2755,65 +2770,65 @@
         },
         "copied_objects": {
           "samples": [
-            0,
-            0
+            377569,
+            377569
           ],
           "sample_count": 2,
-          "median": 0,
-          "min": 0,
-          "max": 0,
+          "median": 377569,
+          "min": 377569,
+          "max": 377569,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "copied_bytes": {
           "samples": [
-            0,
-            0
+            21429712,
+            21429712
           ],
           "sample_count": 2,
-          "median": 0,
-          "min": 0,
-          "max": 0,
+          "median": 21429712,
+          "min": 21429712,
+          "max": 21429712,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "promoted_objects": {
           "samples": [
-            541614,
-            541614
+            386271,
+            386271
           ],
           "sample_count": 2,
-          "median": 541614,
-          "min": 541614,
-          "max": 541614,
+          "median": 386271,
+          "min": 386271,
+          "max": 386271,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "promoted_bytes": {
           "samples": [
-            30316904,
-            30316904
+            21777792,
+            21777792
           ],
           "sample_count": 2,
-          "median": 30316904,
-          "min": 30316904,
-          "max": 30316904,
+          "median": 21777792,
+          "min": 21777792,
+          "max": 21777792,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
         },
         "freed_bytes": {
           "samples": [
-            97086288,
-            97086288
+            108243696,
+            108243696
           ],
           "sample_count": 2,
-          "median": 97086288,
-          "min": 97086288,
-          "max": 97086288,
+          "median": 108243696,
+          "min": 108243696,
+          "max": 108243696,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
@@ -2950,13 +2965,13 @@
         },
         "copied_objects": {
           "samples": [
-            307,
-            307
+            330,
+            330
           ],
           "sample_count": 2,
-          "median": 307,
-          "min": 307,
-          "max": 307,
+          "median": 330,
+          "min": 330,
+          "max": 330,
           "stdev": 0,
           "spread": 0,
           "spread_pct": 0
@@ -5389,5 +5404,552 @@
         "memory_ratio": 0.288906
       }
     }
+  },
+  "accepted_deterministic_deltas": {
+    "commit": "3e3e652e007ac853bf934daa86fa36c870b0e3e2",
+    "code_tree": "ea7b395f07b51662a4c94ae5a16e61a5f7b5aeaa",
+    "generated_at": "2026-09-06T04:12:57+00:00",
+    "measurement": {
+      "platform": "linux-x86_64",
+      "repeats": 7,
+      "traced_runs": 2,
+      "binaries": {
+        "perry": {
+          "size": 117268864,
+          "sha256": "6fde7dcbb9be714705cc0ebe84e5ab8a0549a1b0e12796fc294c7e872fe32cf0"
+        },
+        "libperry_runtime.a": {
+          "size": 108253612,
+          "sha256": "9abf7b9fa1e94f84e6bd1ff4f40c662633491d9267482ebd848e7aa32d14c802"
+        },
+        "libperry_stdlib.a": {
+          "size": 244536102,
+          "sha256": "b4e9a0f948da340032c83fa958f959071a2f7fc5428cf899acca9019a0dee2ab"
+        }
+      }
+    },
+    "notes": "Recovery of #9829 after scheduled main failures went unwatched from 2026-08-18 to 2026-09-06. Main d36a1af0c205ebdc7cf7f75b351ea34b5bc0fc0b / Actions run 33989581881 had 43 breached cells and an inert probe 10. The set moved 43 -> 48 -> 43 with intervening harness failures; this is one sample of a moving set, not cumulative debt. Accept only the 38 other breached deterministic cells plus 8 cells changed by the included #9833 probe repair. The repaired heap_used cell is already within its original band and is not re-pinned. All 126 original deterministic medians match macOS CI on the remote Linux host; all 46 accepted distributions are stable across the pinning repeats. Evidence grades are explicit: pairwise measurements and window-bracketed changes are not interchangeable. No bands, other deterministic values, RSS, peak RSS, or timing values change. Only 13.heap_total_bytes is excluded after 21 identical-binary runs show 2 MiB reserved-capacity variation with constant live bytes and all GC counters. See evidence/9829-recovery.json and evidence/9829-recovery.md; pinned_host timing for the resized workload requires a separate capture on its original quiet host.",
+    "causes": {
+      "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140": {
+        "pull_request": 8313,
+        "category": "measured: smaller common objects",
+        "evidence": "First-accrual A/B recorded in #9829: 19/19 CI regression cells reproduced byte-exact at dc4bcf287 -> e2e6f4a1c. ObjectHeader and two-field objects shrink, reducing byte traffic and changing nursery occupancy. https://github.com/PerryTS/perry/issues/9829#issuecomment-5555657705"
+      },
+      "06e1ab349c8c6e40587bb3ce2ee9f1c58b20522b": {
+        "pull_request": 8657,
+        "category": "measured: array growth targets keep their generation",
+        "evidence": "Fresh remote builds of parent c2da03439 and 06e1ab349 confirm the 04/05 copy/promotion jumps, 07 heap capacity increase, and 14 copied_objects 340 -> 330. Old array growth targets are born tenured and young growth avoids an intervening collection. Full deterministic samples are in evidence/9829-recovery.json."
+      },
+      "b3e88f1fb3378fe30b065ed328b73ea0527ab18a": {
+        "pull_request": 8806,
+        "category": "measured: cache exact shape transitions",
+        "evidence": "Fresh parent 066f9d595 / b3e88f1fb builds reproduce all four Aug-26 added CI cells exactly: 01 copied_objects=6684; 06 copied_objects=11714; 09 promoted_objects=6560; 11 copied_objects=6562. This cache changes the metadata root population; later changes also move these same cells."
+      },
+      "fc8c9e9a15902f889df2b1aeb280ca6223f6948a": {
+        "pull_request": 8887,
+        "category": "bracketed: Aug-27/28 allocation and rooting specializations",
+        "evidence": "Candidate within 41e8479a5..6d10e8a1d, not isolated to this commit. The window includes #8878/#8887/#8888 array and call specialization, #8891 metadata edges, and #8900 weak transition targets. By measured d02892491, all five 06_string_retention cells already equal present main exactly (298 copied, 72288 copied bytes, 14 promoted, 1072 promoted bytes, 68136816 freed). Preserve the window-level evidence grade; do not read this as a single-commit bisect."
+      },
+      "e18b24c420c7c2f389607537618699ffc6aa9d1d": {
+        "pull_request": 8900,
+        "category": "measured: weak shape-transition target edges",
+        "evidence": "Fresh parent d02892491 / e18b24c42 builds show 10 copied_objects 8487 -> 7457 and copied_bytes 529144 -> 327328, with lower 13/14 retention. The target keys array is rewritten but no longer retained solely by a transition-cache entry; dead entries are pruned. This explains part, not all, of the Aug-28 window."
+      },
+      "d923b8dcf08f2afed71777c33423362411039cf0": {
+        "pull_request": 9373,
+        "category": "measured: short-concat memo changes large-Eden occupancy",
+        "evidence": "Fresh parent 3fc54c441 / d923b8dcf builds show 13 copied_objects 0 -> 356717, copied_bytes 0 -> 20594360, promoted_objects 531314 -> 365297, heap_total_bytes 58720256 -> 61865984. Reused row tags change nursery occupancy and the collection cohort under the existing policy. #9359 was a false lead: its changes are behind PERRY_GC_VERIFY_MARK. Subsequent values differ; this A/B establishes the crossing, not a claim that every final byte was introduced here."
+      },
+      "aa8d2ade03970ac7eb2065f3eb0e18bb4d2df1c7": {
+        "pull_request": 9628,
+        "category": "bracketed: Sep-3 liveness and retention repair",
+        "evidence": "Within ed7019ea8..218da7e44, the CI row set changes at the same count (42): 09 gains copied_objects/copied_bytes while 05 and 12 heap_used breaches and 14 copied_bytes clear. #9628/#9629 removes false retention from two GC passes. Window attribution, not an isolated A/B. Final classify runs show zero conservative-scan excess for all probes."
+      },
+      "5196d830fd0689937db94598d94662d531d4ee92": {
+        "pull_request": 9706,
+        "category": "bracketed: Sep-4 shape storage and array packing",
+        "evidence": "Within 28c292517..ef79a0211, shape descriptors move to an id-indexed slab (#9706), uncarried descriptors are pruned (#9726), and arena right-sizing/forwarding-stub fixes land (#9717). 07 heap_used rises to 1072456 while copied_objects falls to 4991; 07 packing/promotion-order sensitivity is documented by #9790. The accepted +87616-byte release tail is real, not a conservative-stack artifact. This is a reviewed window-level tradeoff, not proof of one unique causal commit. https://github.com/PerryTS/perry/issues/9829#issuecomment-5555805084"
+      },
+      "22c07ac5b44c5ff6a988257067110c7451da0223": {
+        "pull_request": 9833,
+        "category": "measured: included receiver-store workload repair",
+        "evidence": "Probe change from open PR #9833 is included here (2400000 iterations). Seven-repeat main A/B gives minor_cycles 0 -> 9, copied_objects 0 -> 18660, freed_bytes 0 -> 88858544, and heap_used 464072 -> 244648. The protected fixed probe passes; a non-allocating RHS restores the all-zero collection signature. This dependency is included in this PR, not claimed already merged."
+      }
+    },
+    "cells": [
+      {
+        "probe": "01_nursery_churn",
+        "metric": "copied_objects",
+        "previous_median": 6354.0,
+        "accepted_median": 4977.0,
+        "causes": [
+          "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140",
+          "b3e88f1fb3378fe30b065ed328b73ea0527ab18a",
+          "fc8c9e9a15902f889df2b1aeb280ca6223f6948a"
+        ]
+      },
+      {
+        "probe": "01_nursery_churn",
+        "metric": "copied_bytes",
+        "previous_median": 430008.0,
+        "accepted_median": 234536.0,
+        "causes": [
+          "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140",
+          "b3e88f1fb3378fe30b065ed328b73ea0527ab18a",
+          "fc8c9e9a15902f889df2b1aeb280ca6223f6948a"
+        ]
+      },
+      {
+        "probe": "01_nursery_churn",
+        "metric": "freed_bytes",
+        "previous_median": 13201144.0,
+        "accepted_median": 11299648.0,
+        "causes": [
+          "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140",
+          "b3e88f1fb3378fe30b065ed328b73ea0527ab18a",
+          "fc8c9e9a15902f889df2b1aeb280ca6223f6948a"
+        ]
+      },
+      {
+        "probe": "02_survivor_promotion",
+        "metric": "copied_bytes",
+        "previous_median": 1780080.0,
+        "accepted_median": 1450992.0,
+        "causes": [
+          "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140"
+        ]
+      },
+      {
+        "probe": "03_cross_gen_writes",
+        "metric": "freed_bytes",
+        "previous_median": 11304368.0,
+        "accepted_median": 9240008.0,
+        "causes": [
+          "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140"
+        ]
+      },
+      {
+        "probe": "04_dead_after_deep_stack",
+        "metric": "copied_objects",
+        "previous_median": 450.0,
+        "accepted_median": 3622.0,
+        "causes": [
+          "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140",
+          "06e1ab349c8c6e40587bb3ce2ee9f1c58b20522b"
+        ]
+      },
+      {
+        "probe": "04_dead_after_deep_stack",
+        "metric": "copied_bytes",
+        "previous_median": 25832.0,
+        "accepted_median": 149400.0,
+        "causes": [
+          "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140",
+          "06e1ab349c8c6e40587bb3ce2ee9f1c58b20522b"
+        ]
+      },
+      {
+        "probe": "04_dead_after_deep_stack",
+        "metric": "promoted_objects",
+        "previous_median": 10.0,
+        "accepted_median": 682.0,
+        "causes": [
+          "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140",
+          "06e1ab349c8c6e40587bb3ce2ee9f1c58b20522b"
+        ]
+      },
+      {
+        "probe": "04_dead_after_deep_stack",
+        "metric": "freed_bytes",
+        "previous_median": 83880432.0,
+        "accepted_median": 73346416.0,
+        "causes": [
+          "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140",
+          "06e1ab349c8c6e40587bb3ce2ee9f1c58b20522b"
+        ]
+      },
+      {
+        "probe": "05_closure_capture",
+        "metric": "copied_objects",
+        "previous_median": 5272.0,
+        "accepted_median": 20079.0,
+        "causes": [
+          "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140",
+          "06e1ab349c8c6e40587bb3ce2ee9f1c58b20522b",
+          "aa8d2ade03970ac7eb2065f3eb0e18bb4d2df1c7"
+        ]
+      },
+      {
+        "probe": "05_closure_capture",
+        "metric": "copied_bytes",
+        "previous_median": 233384.0,
+        "accepted_median": 743384.0,
+        "causes": [
+          "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140",
+          "06e1ab349c8c6e40587bb3ce2ee9f1c58b20522b",
+          "aa8d2ade03970ac7eb2065f3eb0e18bb4d2df1c7"
+        ]
+      },
+      {
+        "probe": "05_closure_capture",
+        "metric": "promoted_objects",
+        "previous_median": 0.0,
+        "accepted_median": 3390.0,
+        "causes": [
+          "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140",
+          "06e1ab349c8c6e40587bb3ce2ee9f1c58b20522b",
+          "aa8d2ade03970ac7eb2065f3eb0e18bb4d2df1c7"
+        ]
+      },
+      {
+        "probe": "05_closure_capture",
+        "metric": "promoted_bytes",
+        "previous_median": 0.0,
+        "accepted_median": 122120.0,
+        "causes": [
+          "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140",
+          "06e1ab349c8c6e40587bb3ce2ee9f1c58b20522b",
+          "aa8d2ade03970ac7eb2065f3eb0e18bb4d2df1c7"
+        ]
+      },
+      {
+        "probe": "05_closure_capture",
+        "metric": "freed_bytes",
+        "previous_median": 32422176.0,
+        "accepted_median": 26862320.0,
+        "causes": [
+          "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140",
+          "06e1ab349c8c6e40587bb3ce2ee9f1c58b20522b",
+          "aa8d2ade03970ac7eb2065f3eb0e18bb4d2df1c7"
+        ]
+      },
+      {
+        "probe": "06_string_retention",
+        "metric": "copied_objects",
+        "previous_median": 11138.0,
+        "accepted_median": 298.0,
+        "causes": [
+          "b3e88f1fb3378fe30b065ed328b73ea0527ab18a",
+          "fc8c9e9a15902f889df2b1aeb280ca6223f6948a"
+        ]
+      },
+      {
+        "probe": "06_string_retention",
+        "metric": "copied_bytes",
+        "previous_median": 682240.0,
+        "accepted_median": 72288.0,
+        "causes": [
+          "b3e88f1fb3378fe30b065ed328b73ea0527ab18a",
+          "fc8c9e9a15902f889df2b1aeb280ca6223f6948a"
+        ]
+      },
+      {
+        "probe": "06_string_retention",
+        "metric": "promoted_objects",
+        "previous_median": 4960.0,
+        "accepted_median": 14.0,
+        "causes": [
+          "b3e88f1fb3378fe30b065ed328b73ea0527ab18a",
+          "fc8c9e9a15902f889df2b1aeb280ca6223f6948a"
+        ]
+      },
+      {
+        "probe": "06_string_retention",
+        "metric": "promoted_bytes",
+        "previous_median": 248512.0,
+        "accepted_median": 1072.0,
+        "causes": [
+          "b3e88f1fb3378fe30b065ed328b73ea0527ab18a",
+          "fc8c9e9a15902f889df2b1aeb280ca6223f6948a"
+        ]
+      },
+      {
+        "probe": "06_string_retention",
+        "metric": "freed_bytes",
+        "previous_median": 75244808.0,
+        "accepted_median": 68136816.0,
+        "causes": [
+          "b3e88f1fb3378fe30b065ed328b73ea0527ab18a",
+          "fc8c9e9a15902f889df2b1aeb280ca6223f6948a"
+        ]
+      },
+      {
+        "probe": "07_array_grow_evacuate",
+        "metric": "heap_used_bytes",
+        "previous_median": 984840.0,
+        "accepted_median": 1072456.0,
+        "causes": [
+          "06e1ab349c8c6e40587bb3ce2ee9f1c58b20522b",
+          "fc8c9e9a15902f889df2b1aeb280ca6223f6948a",
+          "5196d830fd0689937db94598d94662d531d4ee92"
+        ]
+      },
+      {
+        "probe": "07_array_grow_evacuate",
+        "metric": "heap_total_bytes",
+        "previous_median": 23068672.0,
+        "accepted_median": 25165824.0,
+        "causes": [
+          "06e1ab349c8c6e40587bb3ce2ee9f1c58b20522b",
+          "fc8c9e9a15902f889df2b1aeb280ca6223f6948a",
+          "5196d830fd0689937db94598d94662d531d4ee92"
+        ]
+      },
+      {
+        "probe": "07_array_grow_evacuate",
+        "metric": "copied_objects",
+        "previous_median": 6387.0,
+        "accepted_median": 4991.0,
+        "causes": [
+          "06e1ab349c8c6e40587bb3ce2ee9f1c58b20522b",
+          "fc8c9e9a15902f889df2b1aeb280ca6223f6948a",
+          "5196d830fd0689937db94598d94662d531d4ee92"
+        ]
+      },
+      {
+        "probe": "08_map_set_sidetables",
+        "metric": "copied_objects",
+        "previous_median": 3017.0,
+        "accepted_median": 2489.0,
+        "causes": [
+          "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140"
+        ]
+      },
+      {
+        "probe": "09_try_catch_roots",
+        "metric": "copied_objects",
+        "previous_median": 0.0,
+        "accepted_median": 4962.0,
+        "causes": [
+          "b3e88f1fb3378fe30b065ed328b73ea0527ab18a",
+          "fc8c9e9a15902f889df2b1aeb280ca6223f6948a",
+          "d923b8dcf08f2afed71777c33423362411039cf0",
+          "aa8d2ade03970ac7eb2065f3eb0e18bb4d2df1c7"
+        ]
+      },
+      {
+        "probe": "09_try_catch_roots",
+        "metric": "copied_bytes",
+        "previous_median": 0.0,
+        "accepted_median": 230352.0,
+        "causes": [
+          "b3e88f1fb3378fe30b065ed328b73ea0527ab18a",
+          "fc8c9e9a15902f889df2b1aeb280ca6223f6948a",
+          "d923b8dcf08f2afed71777c33423362411039cf0",
+          "aa8d2ade03970ac7eb2065f3eb0e18bb4d2df1c7"
+        ]
+      },
+      {
+        "probe": "09_try_catch_roots",
+        "metric": "promoted_objects",
+        "previous_median": 6240.0,
+        "accepted_median": 0.0,
+        "causes": [
+          "b3e88f1fb3378fe30b065ed328b73ea0527ab18a",
+          "fc8c9e9a15902f889df2b1aeb280ca6223f6948a",
+          "d923b8dcf08f2afed71777c33423362411039cf0",
+          "aa8d2ade03970ac7eb2065f3eb0e18bb4d2df1c7"
+        ]
+      },
+      {
+        "probe": "09_try_catch_roots",
+        "metric": "promoted_bytes",
+        "previous_median": 421800.0,
+        "accepted_median": 0.0,
+        "causes": [
+          "b3e88f1fb3378fe30b065ed328b73ea0527ab18a",
+          "fc8c9e9a15902f889df2b1aeb280ca6223f6948a",
+          "d923b8dcf08f2afed71777c33423362411039cf0",
+          "aa8d2ade03970ac7eb2065f3eb0e18bb4d2df1c7"
+        ]
+      },
+      {
+        "probe": "10_store_receiver_across_alloc",
+        "metric": "heap_total_bytes",
+        "previous_median": 12582912.0,
+        "accepted_median": 16777216.0,
+        "causes": [
+          "22c07ac5b44c5ff6a988257067110c7451da0223"
+        ]
+      },
+      {
+        "probe": "10_store_receiver_across_alloc",
+        "metric": "minor_cycles",
+        "previous_median": 1.0,
+        "accepted_median": 9.0,
+        "causes": [
+          "22c07ac5b44c5ff6a988257067110c7451da0223"
+        ]
+      },
+      {
+        "probe": "10_store_receiver_across_alloc",
+        "metric": "step_cycles",
+        "previous_median": 1.0,
+        "accepted_median": 9.0,
+        "causes": [
+          "22c07ac5b44c5ff6a988257067110c7451da0223"
+        ]
+      },
+      {
+        "probe": "10_store_receiver_across_alloc",
+        "metric": "copied_objects",
+        "previous_median": 8160.0,
+        "accepted_median": 18660.0,
+        "causes": [
+          "22c07ac5b44c5ff6a988257067110c7451da0223"
+        ]
+      },
+      {
+        "probe": "10_store_receiver_across_alloc",
+        "metric": "copied_bytes",
+        "previous_median": 506200.0,
+        "accepted_median": 825520.0,
+        "causes": [
+          "22c07ac5b44c5ff6a988257067110c7451da0223"
+        ]
+      },
+      {
+        "probe": "10_store_receiver_across_alloc",
+        "metric": "promoted_objects",
+        "previous_median": 0.0,
+        "accepted_median": 4722.0,
+        "causes": [
+          "22c07ac5b44c5ff6a988257067110c7451da0223"
+        ]
+      },
+      {
+        "probe": "10_store_receiver_across_alloc",
+        "metric": "promoted_bytes",
+        "previous_median": 0.0,
+        "accepted_median": 228440.0,
+        "causes": [
+          "22c07ac5b44c5ff6a988257067110c7451da0223"
+        ]
+      },
+      {
+        "probe": "10_store_receiver_across_alloc",
+        "metric": "freed_bytes",
+        "previous_median": 8930928.0,
+        "accepted_median": 88858544.0,
+        "causes": [
+          "22c07ac5b44c5ff6a988257067110c7451da0223"
+        ]
+      },
+      {
+        "probe": "11_collect_at_depth",
+        "metric": "copied_objects",
+        "previous_median": 6245.0,
+        "accepted_median": 4975.0,
+        "causes": [
+          "b3e88f1fb3378fe30b065ed328b73ea0527ab18a",
+          "fc8c9e9a15902f889df2b1aeb280ca6223f6948a",
+          "d923b8dcf08f2afed71777c33423362411039cf0"
+        ]
+      },
+      {
+        "probe": "11_collect_at_depth",
+        "metric": "copied_bytes",
+        "previous_median": 422744.0,
+        "accepted_median": 230872.0,
+        "causes": [
+          "b3e88f1fb3378fe30b065ed328b73ea0527ab18a",
+          "fc8c9e9a15902f889df2b1aeb280ca6223f6948a",
+          "d923b8dcf08f2afed71777c33423362411039cf0"
+        ]
+      },
+      {
+        "probe": "12_large_live_set",
+        "metric": "copied_bytes",
+        "previous_median": 2851312.0,
+        "accepted_median": 2327008.0,
+        "causes": [
+          "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140"
+        ]
+      },
+      {
+        "probe": "12_large_live_set",
+        "metric": "promoted_bytes",
+        "previous_median": 25395472.0,
+        "accepted_median": 21201208.0,
+        "causes": [
+          "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140"
+        ]
+      },
+      {
+        "probe": "12_large_live_set",
+        "metric": "freed_bytes",
+        "previous_median": 76315456.0,
+        "accepted_median": 63732784.0,
+        "causes": [
+          "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140"
+        ]
+      },
+      {
+        "probe": "13_large_eden_survivors",
+        "metric": "copied_objects",
+        "previous_median": 0.0,
+        "accepted_median": 377569.0,
+        "causes": [
+          "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140",
+          "e18b24c420c7c2f389607537618699ffc6aa9d1d",
+          "d923b8dcf08f2afed71777c33423362411039cf0"
+        ]
+      },
+      {
+        "probe": "13_large_eden_survivors",
+        "metric": "copied_bytes",
+        "previous_median": 0.0,
+        "accepted_median": 21429712.0,
+        "causes": [
+          "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140",
+          "e18b24c420c7c2f389607537618699ffc6aa9d1d",
+          "d923b8dcf08f2afed71777c33423362411039cf0"
+        ]
+      },
+      {
+        "probe": "13_large_eden_survivors",
+        "metric": "promoted_objects",
+        "previous_median": 541614.0,
+        "accepted_median": 386271.0,
+        "causes": [
+          "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140",
+          "e18b24c420c7c2f389607537618699ffc6aa9d1d",
+          "d923b8dcf08f2afed71777c33423362411039cf0"
+        ]
+      },
+      {
+        "probe": "13_large_eden_survivors",
+        "metric": "promoted_bytes",
+        "previous_median": 30316904.0,
+        "accepted_median": 21777792.0,
+        "causes": [
+          "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140",
+          "e18b24c420c7c2f389607537618699ffc6aa9d1d",
+          "d923b8dcf08f2afed71777c33423362411039cf0"
+        ]
+      },
+      {
+        "probe": "13_large_eden_survivors",
+        "metric": "freed_bytes",
+        "previous_median": 97086288.0,
+        "accepted_median": 108243696.0,
+        "causes": [
+          "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140",
+          "e18b24c420c7c2f389607537618699ffc6aa9d1d",
+          "d923b8dcf08f2afed71777c33423362411039cf0"
+        ]
+      },
+      {
+        "probe": "14_grow_then_churn",
+        "metric": "copied_objects",
+        "previous_median": 307.0,
+        "accepted_median": 330.0,
+        "causes": [
+          "e2e6f4a1cfded098ca05afe7e1b4e5ce783a5140",
+          "06e1ab349c8c6e40587bb3ce2ee9f1c58b20522b",
+          "e18b24c420c7c2f389607537618699ffc6aa9d1d"
+        ]
+      }
+    ]
   }
 }
