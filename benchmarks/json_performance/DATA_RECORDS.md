@@ -1,4 +1,37 @@
-The latest measured source formats exact integer-valued f64 fields directly
+The latest measured source transfers large completed native tapes into their
+lazy result's exact-size side storage. Small tapes retain reusable scratch.
+A lazy-array assignment fix roots receiver/key/value through materialization
+and preserves writes and the original alias's length. GC production policy,
+thresholds and finalization remain unchanged.
+
+**All-row parity and no-regression acceptance remain open: 12/38 CPU,
+58/74 peak RSS and 28/36 retained RSS targets meet the better Node/Bun median.**
+Measured source cc1c4f582c29c5bc12e54bf15f6f81a1226ad857 passes 161 JSON runtime
+and five dynamic-index tests, 36 compiled Node comparisons and 30 moving-GC
+runs. All 54 source hashes match. The full 152-verification / 456-timing /
+432-memory matrix passes with 32 clean observations. A 574-trial paired repeat
+passes with 35 clean observations; the first run failed its ending load gate
+and is preserved as unqualified.
+
+Paired 8 MB array-parse peak RSS falls 3.28 MiB against integer-piece, from
+102.64 to 99.36 MiB, but remains 11.20 MiB above the older parse-entry anchor.
+Its CPU falls 1.81%; long-ASCII/Unicode parse improves 5.12%/2.76%, 1 KB object
+parse 2.93%, and numeric stringify 2.50%, with separated ranges.
+
+Confirmed CPU regressions against integer-piece include inline-string parse
++5.71%, 1 MB record-array parse +2.38%, numeric parse +0.86%, and heterogeneous
+stringify +0.69%. Heterogeneous/numeric parse peak RSS rises 1.22/0.33 MiB.
+All prior unresolved regressions remain requirements. The 12th CPU median win,
+escaped stringify by 0.3%, is effectively a tie rather than a proven lead.
+
+[Latest 38 CPU rows](results/tape-owned/cpu-38.md),
+[CPU and RAM](results/tape-owned/tables.md),
+[every target](results/tape-owned/parity.md),
+[paired CPU/RSS ranges](results/tape-owned/recheck-tape-owned/summary.json), and
+[implementation and validation](results/tape-owned/README.md).
+Array-root parsing may defer materialization; stringify starts fully materialized.
+
+The preceding integer-piece source formats exact integer-valued f64 fields directly
 in output plans, preserving signed-zero and shortest-roundtrip semantics.
 It builds on direct final output for bounded records and the corrected parse
 input lifetime and array-getter handling. GC production policy is unchanged.

@@ -1,0 +1,11 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.41s
+     Running unittests src/lib.rs (/Users/amlug/projects/perry/codex-json-changed-target/debug/build/perry-runtime/77f7d5e322249c1d/out/perry_runtime-77f7d5e322249c1d)
+
+running 5 tests
+test buffer::exotic_view_tests::a_data_view_index_store_through_dyn_index_set_creates_an_own_property ... ok
+test value::dyn_index::collection_tag_tests::collection_receivers_still_use_their_authoritative_registries ... ok
+test value::dyn_index::collection_tag_tests::plain_array_dynamic_indexing_never_probes_collection_registries ... ok
+test value::dyn_index::collection_tag_tests::unmapped_legacy_raw_i64_is_rejected_before_the_gc_header_read ... ok
+test value::dyn_index::uint8array_tests::dynamic_uint8array_set_coerces_nanboxed_values_before_narrowing ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 3209 filtered out; finished in 0.30s

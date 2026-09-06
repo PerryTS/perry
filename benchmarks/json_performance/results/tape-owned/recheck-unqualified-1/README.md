@@ -1,0 +1,1 @@
+Unqualified paired run: terminal exit 0, all 574 trials present and all 35 external observations clean, but ending load 2.620 exceeded the existing 2.5 gate. No CPU or RSS subset is accepted. Preserved for audit; a separate complete retry follows.

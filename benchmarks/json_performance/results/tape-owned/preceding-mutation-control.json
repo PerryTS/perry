@@ -1,0 +1,14 @@
+{
+  "object_sha256": "7e4c1e0527f769c2ced6ad65f650ebf61f2103eedb2eee7c380cde41b3655f2e",
+  "node": {
+    "exit": 0,
+    "stdout": "invalid true 3\nretained 0 100000 1 7 0\ncomplete true 200002\nretained 1 100000 1 7 0\ncomplete true 200002\nretained 2 100000 1 7 0\ncomplete true 200002\nretained 3 100000 1 7 0\ncomplete true 200002\nretained 4 100000 1 7 0\ncomplete true 200002\nretained 5 100000 1 7 0\ncomplete true 200002\nretained 6 100000 1 7 0\ncomplete true 200002\nretained 7 100000 1 7 0\ncomplete true 200002\nhash 114711381\nchurn 0 100000 1 7\nchurn 8 100000 1 7\nchurn 16 100000 1 7\nnested 30000 true\nindependent true\neager 100000 true\n",
+    "stderr": ""
+  },
+  "preceding": {
+    "exit": 0,
+    "stdout": "invalid true 3\nretained 0 100000 1 7 0\ncomplete false 200001\nretained 1 100000 1 7 0\ncomplete false 200001\nretained 2 100000 1 7 0\ncomplete false 200001\nretained 3 100000 1 7 0\ncomplete false 200001\nretained 4 100000 1 7 0\ncomplete false 200001\nretained 5 100000 1 7 0\ncomplete false 200001\nretained 6 100000 1 7 0\ncomplete false 200001\nretained 7 100000 1 7 0\ncomplete false 200001\nhash 789493444\nchurn 0 100000 1 7\nchurn 8 100000 1 7\nchurn 16 100000 1 7\nnested 30000 true\nindependent true\neager 100000 true\n",
+    "stderr": ""
+  },
+  "matches": false
+}
