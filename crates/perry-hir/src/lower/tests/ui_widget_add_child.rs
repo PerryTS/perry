@@ -3,8 +3,6 @@
 //!
 //! Split out of `lower/tests.rs` to keep it under the 2000-line size gate.
 
-use super::*;
-
 /// #6642: native lowering must preserve the Widget compatibility methods on
 /// factory results and explicitly Widget-typed parameters.
 #[test]
