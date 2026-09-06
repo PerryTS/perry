@@ -36,8 +36,12 @@ pub(crate) extern "C" fn thunk_reporter_lcov(_closure: *const ClosureHeader, sou
 }
 
 fn reporter_transform(kind: i32) -> f64 {
-    let transform = make_closure(reporter_transform_chunk as *const u8, 3, 1);
+    let captures = if kind == REPORTER_SPEC { 2 } else { 1 };
+    let transform = make_closure(reporter_transform_chunk as *const u8, 3, captures);
     js_closure_set_capture_f64(transform, 0, kind as f64);
+    if kind == REPORTER_SPEC {
+        js_closure_set_capture_f64(transform, 1, undefined_value());
+    }
     let opts = js_object_alloc(0, 1);
     set_field(opts, "transform", boxed_ptr(transform));
     crate::node_stream::js_node_stream_transform_new(boxed_ptr(opts))
@@ -50,7 +54,26 @@ extern "C" fn reporter_transform_chunk(
     callback: f64,
 ) -> f64 {
     let kind = js_closure_get_capture_f64(closure, 0) as i32;
-    let output = format_reporter_event(kind, chunk);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let closure_handle = scope.root_raw_mut_ptr(closure as *mut ClosureHeader);
+    let chunk_handle = scope.root_nanbox_f64(chunk);
+    let stack_handle = (kind == REPORTER_SPEC)
+        .then(|| scope.root_nanbox_f64(js_closure_get_capture_f64(closure, 1)));
+    let mut starts = stack_handle
+        .as_ref()
+        .and_then(|handle| array_values(handle.get_nanbox_f64()))
+        .unwrap_or_default();
+    let output = format_reporter_event(kind, chunk_handle.get_nanbox_f64(), &mut starts);
+
+    if kind == REPORTER_SPEC {
+        let mut stack = crate::array::js_array_alloc(starts.len() as u32);
+        for start in starts {
+            stack = crate::array::js_array_push_f64(stack, start);
+        }
+        closure_handle.with_mut_ptr(|closure: *mut ClosureHeader| {
+            js_closure_set_capture_f64(closure, 1, boxed_ptr(stack));
+        });
+    }
     if !output.is_empty() {
         let this = crate::object::js_implicit_this_get();
         let handle = (this.to_bits() & POINTER_MASK) as i64;
@@ -88,6 +111,18 @@ fn event_data(event: f64) -> f64 {
     object_property(event, b"data").unwrap_or(undefined_value())
 }
 
+fn event_nesting(data: f64) -> usize {
+    object_property(data, b"nesting")
+        .map(|value| JSValue::from_bits(value.to_bits()).to_number())
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .map(|value| value as usize)
+        .unwrap_or(0)
+}
+
+fn event_indent(data: f64, width: usize) -> String {
+    " ".repeat(event_nesting(data).saturating_mul(width))
+}
+
 fn format_reporter_events(kind: i32, events: &[f64]) -> String {
     if kind == REPORTER_LCOV {
         return String::new();
@@ -98,8 +133,9 @@ fn format_reporter_events(kind: i32, events: &[f64]) -> String {
     } else if kind == REPORTER_JUNIT {
         out.push_str("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<testsuites>\n");
     }
+    let mut starts = Vec::new();
     for &event in events {
-        out.push_str(&format_reporter_event(kind, event));
+        out.push_str(&format_reporter_event(kind, event, &mut starts));
     }
     if kind == REPORTER_DOT && !out.is_empty() && !out.ends_with('\n') {
         out.push('\n');
@@ -110,34 +146,51 @@ fn format_reporter_events(kind: i32, events: &[f64]) -> String {
     out
 }
 
-fn format_reporter_event(kind: i32, event: f64) -> String {
+fn format_reporter_event(kind: i32, event: f64, starts: &mut Vec<f64>) -> String {
     let Some(typ) = event_type(event) else {
         return String::new();
     };
     let data = event_data(event);
     match kind {
         REPORTER_SPEC => match typ.as_str() {
-            "test:pass" => object_string(data, b"name")
-                .map(|name| format!("✔ {name}\n"))
-                .unwrap_or_default(),
+            "test:start" => {
+                starts.push(data);
+                String::new()
+            }
+            "test:pass" => {
+                starts.pop();
+                let mut output = String::new();
+                for parent in starts.drain(..) {
+                    if let Some(name) = object_string(parent, b"name") {
+                        output.push_str(&format!("{}▶ {name}\n", event_indent(parent, 2)));
+                    }
+                }
+                if let Some(name) = object_string(data, b"name") {
+                    output.push_str(&format!("{}✔ {name}\n", event_indent(data, 2)));
+                }
+                output
+            }
             "test:diagnostic" => object_string(data, b"message")
-                .map(|message| format!("ℹ {message}\n"))
+                .map(|message| format!("{}ℹ {message}\n", event_indent(data, 2)))
                 .unwrap_or_default(),
             _ => String::new(),
         },
         REPORTER_TAP => match typ.as_str() {
             "test:start" => object_string(data, b"name")
-                .map(|name| format!("# Subtest: {name}\n"))
+                .map(|name| format!("{}# Subtest: {name}\n", event_indent(data, 4)))
                 .unwrap_or_default(),
             "test:pass" => {
                 let name = object_string(data, b"name").unwrap_or_default();
+                let indent = event_indent(data, 4);
                 let detail_type = object_property(data, b"details")
                     .and_then(|details| object_string(details, b"type"))
                     .unwrap_or_else(|| "test".to_string());
-                format!("ok undefined - {name}\n  ---\n  type: '{detail_type}'\n  ...\n")
+                format!(
+                    "{indent}ok undefined - {name}\n{indent}  ---\n{indent}  type: '{detail_type}'\n{indent}  ...\n"
+                )
             }
             "test:diagnostic" => object_string(data, b"message")
-                .map(|message| format!("# {message}\n"))
+                .map(|message| format!("{}# {message}\n", event_indent(data, 4)))
                 .unwrap_or_default(),
             _ => String::new(),
         },
