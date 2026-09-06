@@ -215,6 +215,23 @@ static PREVIOUS_SURVIVOR_ESTIMATE: std::sync::atomic::AtomicUsize =
 /// reserve 100 MB of pointers.
 const SURVIVOR_ESTIMATE_CAP: usize = 1 << 21;
 
+/// Previous minor's dirty-scan covered-set size, for pre-sizing the next one.
+/// Capped for the same reason as the survivor estimate: a one-off huge cycle
+/// must not make every later cycle reserve unboundedly.
+static PREVIOUS_DIRTY_COVERED_ESTIMATE: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+pub(super) fn previous_dirty_covered_estimate() -> usize {
+    PREVIOUS_DIRTY_COVERED_ESTIMATE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+pub(super) fn note_dirty_covered_for_presizing(count: usize) {
+    PREVIOUS_DIRTY_COVERED_ESTIMATE.store(
+        count.min(SURVIVOR_ESTIMATE_CAP),
+        std::sync::atomic::Ordering::Relaxed,
+    );
+}
+
 pub(super) fn note_survivor_count_for_presizing(count: usize) {
     PREVIOUS_SURVIVOR_ESTIMATE.store(
         count.min(SURVIVOR_ESTIMATE_CAP),
@@ -1356,7 +1373,20 @@ pub(super) fn run_copied_minor_attempt(
     let snapshot = remembered_dirty_snapshot();
     // #9754: objects whose every slot the dirty scan visited in-body — the
     // post-cycle coverage restore skips them (see `scan_dirty_object_slots`).
-    let mut dirty_scan_covered = crate::fast_hash::new_ptr_hash_set();
+    // #9835: this set is rebuilt from EMPTY on every minor and reaches ~1,000
+    // entries (`[gc-restore-coverage] objects_skipped=1026..1116`), so it walked
+    // hashbrown's growth ladder and paid a `RawTable::reserve_rehash` at each
+    // power-of-two boundary — measured 217 leaf samples in `reserve_rehash` on a
+    // 3300-char claude-code reply (1.5 % of the turn), 111 of them under
+    // `PtrHashSet::insert` and the rest under this function and
+    // `restore_surviving_dirty_coverage`.
+    //
+    // Same treatment, and the same justification, as `PREVIOUS_SURVIVOR_ESTIMATE`
+    // above: the count is strongly autocorrelated between adjacent cycles (it is
+    // the same program in the same phase), over-estimating costs only untouched
+    // reserved bytes, and under-estimating falls back to ordinary growth.
+    let mut dirty_scan_covered =
+        crate::fast_hash::new_ptr_hash_set_with_capacity(previous_dirty_covered_estimate());
     if !untraced {
         let _phase = super::pin::CopyingWalkPhaseGuard::enter("remembered_set");
         let remembered_stats = scan_remembered_dirty_slots_copying(
@@ -1616,6 +1646,21 @@ pub(super) fn run_copied_minor_attempt(
     collector.sticky.restore();
     if !collector.skip_remembering {
         restore_surviving_dirty_coverage(&snapshot, &dirty_scan_covered, "copying_minor");
+    }
+    // The mechanism, counted rather than assumed: with the pre-size working,
+    // `capacity` is already >= `len` on entry and hashbrown never grows the
+    // table, so `reserve_rehash` disappears from this path. A capacity that
+    // keeps climbing across minors would say the estimate is not tracking.
+    if crate::gc::gc_diag_enabled() {
+        eprintln!(
+            "[gc-dirty-covered] len={} capacity={} presized_to={}",
+            dirty_scan_covered.len(),
+            dirty_scan_covered.capacity(),
+            previous_dirty_covered_estimate(),
+        );
+    }
+    note_dirty_covered_for_presizing(dirty_scan_covered.len());
+    {
     }
     let malloc_freed_bytes = if malloc_sweep_due {
         let phase_start = trace_phase_start(trace);
