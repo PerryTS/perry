@@ -203,6 +203,7 @@ mod array_retargeted_proto;
 mod buffer_own_prop;
 mod class_object_props;
 mod crypto_key;
+pub(crate) mod entries_shape;
 pub(crate) mod enumeration;
 mod field_ops;
 mod for_in_stable;
