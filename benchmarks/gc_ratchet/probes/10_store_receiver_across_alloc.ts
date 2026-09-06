@@ -33,7 +33,41 @@
 declare function gc(): void;
 
 const SLOTS = 1024;
-const ITERATIONS = 200000;
+
+// ITERATIONS EXISTS TO GIVE THIS PROBE MARGIN, NOT TO MAKE IT LONGER.
+//
+// This probe went **inert on main for part of 2026-08-18..09-06** and nobody
+// noticed: `minor_cycles` fell from 1 to 0, so no evacuating minor ran, so the
+// three conditions below could not bite and the probe measured nothing. It
+// still "passed" everything except a gc-ratchet gate that was already red for
+// unrelated reasons (#9829, #9832), which is why it went weeks undetected.
+//
+// The cause was margin, not a bug: at 200,000 iterations the probe allocated
+// just enough to cross the nursery threshold exactly once. #8313 shrank a
+// two-field object from 56 to 40 bytes — a change everyone wants — and that
+// alone dropped the total under the threshold. **A probe that fires exactly one
+// collection is one optimisation away from firing none**, and any future
+// allocation win re-creates this silently.
+//
+// Measured on `main` @ d36a1af0c, 40-byte objects, three repeats each:
+//
+//     ITERATIONS    minor_cycles   wall_ms
+//        200,000          0           26     <- inert, shipped for weeks
+//        600,000          2           47
+//      1,200,000          4           81
+//      2,400,000          9          147
+//
+// 2,400,000 is chosen so the probe still runs several evacuating minors after a
+// further 8x reduction in allocated bytes per object. The cost is ~120 ms on a
+// metric the gate does not band (`wall_ms`), which is the cheapest insurance in
+// the suite.
+//
+// INVARIANT, and please check it if you touch this file: this probe must report
+// `minor_cycles >= 2`. `gc_ratchet.py` refuses to PIN a baseline whose
+// `minor_cycles < 1`, so a fully inert probe cannot be blessed — but it will
+// happily pin `minor_cycles == 1`, which is the marginal state that produced
+// this outage. One is not margin.
+const ITERATIONS = 2400000;
 
 // (1) module-level, so the receiver is loaded from a global handle rather than
 // a shadow slot.
