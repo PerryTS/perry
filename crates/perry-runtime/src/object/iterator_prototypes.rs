@@ -631,10 +631,11 @@ mod override_probe_allocation_tests {
             let iter_obj = || js_nanbox_get_pointer(iter_h.get_nanbox_f64()) as *mut ObjectHeader;
 
             // Warm once: a first call may lazily build anything it builds.
-            assert!(
-                call_overridden_iterator_next(iter_obj(), crate::array::ARRAY_ITERATOR_CLASS_ID)
-                    .is_none()
-            );
+            assert!(call_overridden_iterator_next(
+                iter_obj(),
+                crate::array::ARRAY_ITERATOR_CLASS_ID
+            )
+            .is_none());
             const N: usize = 1000;
             let minors_before = crate::gc::instruments::copying_minor_cycles();
             let bytes_before = crate::arena::arena_in_use_bytes();
@@ -727,7 +728,8 @@ mod override_probe_allocation_tests {
             let getter = crate::closure::js_closure_alloc(accessor_getter_thunk as *const u8, 0);
             crate::closure::js_register_closure_arity(accessor_getter_thunk as *const u8, 0);
             let getter_h = scope.root_nanbox_f64(js_nanbox_pointer(getter as i64));
-            let key = scope.root_string_ptr(crate::string::js_string_from_bytes(b"next".as_ptr(), 4));
+            let key =
+                scope.root_string_ptr(crate::string::js_string_from_bytes(b"next".as_ptr(), 4));
             super::super::js_object_define_accessor(
                 js_nanbox_pointer(array_proto() as i64),
                 key.with_const_ptr::<crate::StringHeader, _>(|k| {
