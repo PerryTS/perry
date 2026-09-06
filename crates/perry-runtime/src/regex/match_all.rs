@@ -87,7 +87,7 @@ unsafe fn materialize_match_all_results(
 
     // Phase 1 (borrowing, no JS allocation): snapshot every match into owned
     // Rust data. The fancy-regex fallback (lookbehind/backreferences) is
-    // needed because the never-match placeholder in `regex_ptr` would yield
+    // needed because the never-match standard program would yield
     // an empty iterator otherwise.
     // The scan starts AT `search_start` inside the whole subject — never on a
     // `&str_data[search_start..]` slice, which would strip the context every

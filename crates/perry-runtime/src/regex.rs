@@ -1035,7 +1035,7 @@ fn js_regexp_new_impl(
     // A `site_key` of 0 (every dynamic construction, and every runtime caller)
     // misses by construction and takes the content-keyed path below unchanged.
     let site_entry = site_key::lookup(site_key, raw_flags_str);
-    let (programs, bits, shared_flags_root) = match site_entry {
+    let (programs, bits, shared_flags_root, owned_flags) = match site_entry {
         Some(hit) => {
             // The site's own flags literal, so this is the same sharing
             // decision the first construction at this site made (#9819).
@@ -1069,7 +1069,7 @@ fn js_regexp_new_impl(
                     picked
                 }
             };
-            (programs, hit.bits, shared_flags_root)
+            (programs, hit.bits, shared_flags_root, hit.flags)
         }
         None => {
             let pattern_str = if is_valid_ptr(pattern) {
@@ -1288,12 +1288,12 @@ fn js_regexp_new_impl(
                 site_key,
                 raw_flags_owned,
                 owned_pattern,
-                owned_flags,
+                owned_flags.clone(),
                 flags_are_canonical,
                 bits,
                 programs.clone(),
             );
-            (programs, bits, shared_flags_root)
+            (programs, bits, shared_flags_root, owned_flags)
         }
     };
     let site_key::FlagBits {

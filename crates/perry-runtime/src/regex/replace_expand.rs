@@ -485,7 +485,7 @@ pub extern "C" fn js_string_replace_regex_named(
 
         // Fancy-regex fallback (lookbehind/backreferences): expand `$<name>`
         // and friends against the fancy captures instead of the never-match
-        // placeholder stored in `regex_ptr`.
+        // placeholder stored as the standard program.
         if let Some(fre) = lookup_fancy_regex(re) {
             return replace_regex_str_fancy(str_data, &fre, (*re).global, repl_str);
         }
