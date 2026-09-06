@@ -34,6 +34,8 @@ mod tests_promoted_runs;
 pub(crate) use allocators::{
     inactive_survivor_index, with_survivor_arena, with_survivor_arena_mut,
 };
+#[cfg(test)]
+pub(crate) use block::old_gen_in_use_bytes_slot_index;
 pub(crate) use block::{
     arena_cell_alloc, arena_cell_try_alloc_current, drain_block_pool_if_requested,
     new_object_start_bitmap, old_gen_in_use_bytes_sub, release_arena_block,
@@ -46,8 +48,6 @@ pub(crate) use block::{
 /// consumed by `tls_hot::fill`; the `hot_*` half is the cached accessor the
 /// allocation path uses instead of a per-access `_tlv_get_addr`.
 pub(crate) use block::{arena_hot_addr, hot_arena, hot_inline_state, inline_state_hot_addr};
-#[cfg(test)]
-pub(crate) use block::old_gen_in_use_bytes_slot_index;
 #[cfg(test)]
 pub(crate) use block::{
     block_pool_bytes_for_test, block_pool_explicit_drained_bytes_for_test, block_pool_put,

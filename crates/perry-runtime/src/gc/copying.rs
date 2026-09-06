@@ -1704,8 +1704,7 @@ pub(super) fn run_copied_minor_attempt(
         );
     }
     note_dirty_covered_for_presizing(dirty_scan_covered.len());
-    {
-    }
+    {}
     let malloc_freed_bytes = if malloc_sweep_due {
         let phase_start = trace_phase_start(trace);
         let freed = sweep_malloc_objects();
