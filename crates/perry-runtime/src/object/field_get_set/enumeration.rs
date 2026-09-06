@@ -445,7 +445,7 @@ pub(crate) fn for_in_keys_with(value: f64, lazy_shadow: bool) -> *mut ArrayHeade
         if shadow_live {
             mark_own_names(current.get_nanbox_f64(), &mut seen, &mut scratch, diag);
         } else {
-            visited.push(current.get_nanbox_f64());
+            visited.push(&scope, current.get_nanbox_f64());
         }
         current.set_nanbox_f64(super::super::object_ops::js_object_get_prototype_of(
             current.get_nanbox_f64(),
@@ -462,37 +462,49 @@ pub(crate) fn for_in_keys_with(value: f64, lazy_shadow: bool) -> *mut ArrayHeade
 /// compiled claude-code TUI, so the heap arm is for prototype chains an order
 /// of magnitude deeper than anything the workload produces. It exists because
 /// the depth cap is 1000, not because it is expected.
-struct VisitedLevels {
-    inline: [f64; Self::INLINE],
+/// See `VisitedLevels`. A free const rather than an associated one: an
+/// associated `Self::INLINE` is not permitted in the array length of a
+/// generic struct.
+const VISITED_INLINE: usize = 8;
+
+struct VisitedLevels<'s> {
+    inline: [Option<crate::gc::RuntimeHandle<'s>>; VISITED_INLINE],
     len: usize,
-    spill: Vec<f64>,
+    spill: Vec<crate::gc::RuntimeHandle<'s>>,
 }
 
-impl Default for VisitedLevels {
+impl Default for VisitedLevels<'_> {
     fn default() -> Self {
         Self {
-            inline: [0.0; Self::INLINE],
+            inline: [None; VISITED_INLINE],
             len: 0,
             spill: Vec::new(),
         }
     }
 }
 
-impl VisitedLevels {
-    const INLINE: usize = 8;
+impl<'s> VisitedLevels<'s> {
 
-    fn push(&mut self, v: f64) {
-        if self.len < Self::INLINE {
-            self.inline[self.len] = v;
+    /// #9864 follow-up: a recorded level is a NaN-boxed heap pointer that is
+    /// dereferenced later, by `build_shadow_set`, after the walk has crossed
+    /// `js_object_keys_value` (which allocates) and `getPrototypeOf` (which
+    /// can run a Proxy trap). Stored as a plain `f64` it goes stale across
+    /// any collection in that window; stored as a handle the collector
+    /// rewrites it. `RuntimeHandle` is `Copy`, so the inline arm still costs
+    /// no allocation.
+    fn push(&mut self, scope: &'s crate::gc::RuntimeHandleScope, v: f64) {
+        let handle = scope.root_nanbox_f64(v);
+        if self.len < VISITED_INLINE {
+            self.inline[self.len] = Some(handle);
             self.len += 1;
         } else {
-            self.spill.push(v);
+            self.spill.push(handle);
         }
     }
 
     /// The recorded levels in walk order. Borrows rather than copies, and the
     /// spill arm concatenates only when it is non-empty.
-    fn as_slice(&self) -> VisitedSlice<'_> {
+    fn as_slice(&self) -> VisitedSlice<'_, 's> {
         VisitedSlice {
             head: &self.inline[..self.len],
             tail: &self.spill,
@@ -500,14 +512,20 @@ impl VisitedLevels {
     }
 }
 
-struct VisitedSlice<'a> {
-    head: &'a [f64],
-    tail: &'a [f64],
+struct VisitedSlice<'a, 's> {
+    head: &'a [Option<crate::gc::RuntimeHandle<'s>>],
+    tail: &'a [crate::gc::RuntimeHandle<'s>],
 }
 
-impl VisitedSlice<'_> {
-    fn iter(&self) -> impl Iterator<Item = &f64> {
-        self.head.iter().chain(self.tail.iter())
+impl VisitedSlice<'_, '_> {
+    /// Read each level FRESH from its handle — a level recorded before a
+    /// collection has been rewritten in place by then.
+    fn iter(&self) -> impl Iterator<Item = f64> + '_ {
+        self.head
+            .iter()
+            .filter_map(|h| h.as_ref())
+            .map(|h| h.get_nanbox_f64())
+            .chain(self.tail.iter().map(|h| h.get_nanbox_f64()))
     }
 }
 
@@ -572,13 +590,13 @@ fn mark_own_names(
 /// at most once per `for-in`, and only when a level >= 1 has an enumerable key
 /// that something closer might hide.
 fn build_shadow_set(
-    visited: VisitedSlice<'_>,
+    visited: VisitedSlice<'_, '_>,
     seen: &mut std::collections::HashSet<String>,
     scratch: &mut [u8; crate::value::SHORT_STRING_MAX_LEN],
     diag: bool,
 ) {
     for recv in visited.iter() {
-        mark_own_names(*recv, seen, scratch, diag);
+        mark_own_names(recv, seen, scratch, diag);
     }
 }
 
