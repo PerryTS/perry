@@ -51,6 +51,9 @@ mod repsel_benefit;
 mod safepoint_sites;
 mod scalar_method_dispatch;
 mod scalar_methods;
+pub mod segview;
+#[cfg(test)]
+mod segview_tests;
 mod shadow_slots;
 pub(crate) mod spec_abi_sites;
 mod this_as_value;

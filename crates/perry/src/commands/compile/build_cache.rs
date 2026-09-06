@@ -855,6 +855,14 @@ fn eligibility(args: &CompileArgs, project_root: &Path) -> Result<(), String> {
     // impossible.
     if std::env::var("PERRY_NATIVEINST_DIAG").is_ok() {
         return Err("nativeinst-diag".to_string());
+    // #9846: same reasoning as `opt-report` above, and the reason it is not
+    // optional. A cached build reuses the finished binary and never lowers
+    // HIR, so the segment-view counter would print nothing — and "nothing"
+    // reads exactly like "the tier never fired", which is the phantom-green
+    // this campaign keeps hitting. Excluded from the cache so a zero is a
+    // measured zero.
+    if std::env::var("PERRY_SEGVIEW_DIAG").is_ok() {
+        return Err("segview-diag".to_string());
     }
     if args.verify_native_regions || args.emit_attest || args.emit_sandbox {
         return Err("sidecar-or-verify".to_string());
