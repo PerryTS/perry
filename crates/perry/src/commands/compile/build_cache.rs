@@ -866,6 +866,19 @@ fn eligibility(args: &CompileArgs, project_root: &Path) -> Result<(), String> {
     if std::env::var("PERRY_SEGVIEW_DIAG").is_ok() {
         return Err("segview-diag".to_string());
     }
+    // #9843: `PERRY_SEGVIEW` is NOT a diagnostic — it changes the emitted
+    // code. It is not part of the build-cache fingerprint or any object-cache
+    // key, so without this a cached build can hand back a binary compiled with
+    // the OTHER setting: compile a file with the tier on, compile it again
+    // with the tier off, and the second can be served from the first. The
+    // A/B rig's whole shape is "one compiler binary, two compiles of one
+    // source differing only in this variable", which is exactly the collision.
+    // Excluded rather than keyed because the tier is experimental and default
+    // OFF; a cache key is the right fix when it ships on, and then a stale
+    // entry cannot silently become the measurement.
+    if std::env::var("PERRY_SEGVIEW").is_ok() {
+        return Err("segview-lowering".to_string());
+    }
     if args.verify_native_regions || args.emit_attest || args.emit_sandbox {
         return Err("sidecar-or-verify".to_string());
     }
