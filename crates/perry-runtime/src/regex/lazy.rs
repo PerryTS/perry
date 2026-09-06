@@ -283,7 +283,7 @@ fn build_and_install_programs(re: *const RegExpHeader) {
             FANCY_CACHE.with(|fc| {
                 let mut fc = fc.borrow_mut();
                 evict_regex_cache_if_full(&mut fc);
-                fc.insert((pattern.to_string(), flags.to_string()), arc.clone());
+                fc.insert((pattern.clone(), flags.clone()), arc.clone());
             });
             fancy_arc = Some(arc);
         }
@@ -298,7 +298,7 @@ fn build_and_install_programs(re: *const RegExpHeader) {
             REPEAT_MATCHER_CACHE.with(|cache| {
                 let mut cache = cache.borrow_mut();
                 evict_regex_cache_if_full(&mut cache);
-                cache.insert((pattern.to_string(), flags.to_string()), arc.clone());
+                cache.insert((pattern.clone(), flags.clone()), arc.clone());
             });
             repeat_arc = Some(arc);
         }
