@@ -262,6 +262,115 @@ pub(crate) unsafe fn regex_header_finalize_for_gc(re: *mut RegExpHeader) {
     regex_header_clear_dead_for_gc(re as usize);
 }
 
+/// Finalize the RegExp headers that died in from-space during a copied minor.
+///
+/// The copying minor's from-space flip runs no per-object finalize hooks, so
+/// a nursery header that was neither evacuated nor pinned would otherwise keep
+/// its `Arc` programs and its `REGEX_POINTERS` / `REGEX_SOURCE_TABLE` / expando
+/// entries forever. Same shape as `map::finalize_dead_copied_minor_from_space_maps`:
+/// walk the registry after the flip, collect the provably-dead addresses, then
+/// finalize each (the finalizer removes its own registry entries, which is why
+/// the walk and the removal are two passes).
+///
+/// Cost: O(registry) = O(live headers + headers allocated since the last
+/// minor) — the same order as the malloc sweep this replaces, and
+/// proportional to allocation, not to program history.
+pub(crate) fn finalize_dead_copied_minor_from_space_regexps() -> usize {
+    let dead: Vec<usize> = REGEX_POINTERS.with(|table| {
+        table
+            .borrow()
+            .iter()
+            .copied()
+            .filter(|&addr| crate::gc::owner_is_dead_copied_minor_from_space_of_type(addr, crate::gc::GC_TYPE_REGEXP))
+            .collect()
+    });
+    let count = dead.len();
+    for addr in dead {
+        unsafe { regex_header_finalize_for_gc(addr as *mut RegExpHeader) };
+    }
+    count
+}
+
+/// Sweep-entry twin of the above for the non-copying cycle kinds (fallback
+/// minor / full mark-sweep): a dead header in the ACTIVE nursery allocation
+/// block is never object-walked by any sweeper, so it is collected from the
+/// registry right after trace instead (#6010, mirroring Map/Set/Buffer).
+/// Deadness: unmarked ∧ not pinned ∧ not forwarded, and for a minor trace also
+/// not tenured and physically in the nursery.
+pub(crate) fn collect_dead_registered_regexps_post_trace(full_trace: bool) -> Vec<usize> {
+    REGEX_POINTERS.with(|table| {
+        table
+            .borrow()
+            .iter()
+            .copied()
+            .filter(|&addr| unsafe { registered_regexp_is_dead_post_trace(addr, full_trace) })
+            .collect()
+    })
+}
+
+/// Finalize one collected-dead RegExp (budget-chunked by the sweep state).
+pub(crate) fn finalize_collected_dead_regexp(addr: usize) {
+    unsafe { regex_header_finalize_for_gc(addr as *mut RegExpHeader) };
+}
+
+unsafe fn registered_regexp_is_dead_post_trace(addr: usize, full_trace: bool) -> bool {
+    let Some(header) = crate::value::addr_class::try_read_gc_header(addr) else {
+        return false;
+    };
+    if header.obj_type != crate::gc::GC_TYPE_REGEXP {
+        return false;
+    }
+    let flags = header.gc_flags;
+    if flags
+        & (crate::gc::GC_FLAG_MARKED | crate::gc::GC_FLAG_PINNED | crate::gc::GC_FLAG_FORWARDED)
+        != 0
+    {
+        return false;
+    }
+    if full_trace {
+        return true;
+    }
+    if flags & crate::gc::GC_FLAG_TENURED != 0 {
+        return false;
+    }
+    matches!(
+        crate::arena::classify_heap_generation(addr),
+        crate::arena::HeapGeneration::Nursery
+    )
+}
+
+/// Test support: construct a RegExp through the PRODUCTION path
+/// (`js_regexp_new`), run one `test()` so the compiled programs are installed
+/// on the header, and hand the header back unrooted.
+#[cfg(all(test, feature = "regex-engine"))]
+pub(crate) fn test_construct_regexp_and_exec_once(pattern: &str, flags: &str) -> *mut RegExpHeader {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let p = scope.root_string_ptr(js_string_from_str(pattern));
+    let f = scope.root_string_ptr(js_string_from_str(flags));
+    let re = p.with_mut_ptr::<StringHeader, _>(|p| {
+        f.with_mut_ptr::<StringHeader, _>(|f| js_regexp_new(p, f))
+    });
+    let subject = scope.root_string_ptr(js_string_from_str("abc"));
+    subject.with_const_ptr::<StringHeader, _>(|s| {
+        let _ = js_regexp_test(re, s);
+    });
+    re
+}
+
+/// Test support: strong count of the standard program a header holds (the
+/// observer clone taken here is released before returning).
+#[cfg(all(test, feature = "regex-engine"))]
+pub(crate) fn test_regexp_std_program_strong_count(re: *const RegExpHeader) -> usize {
+    unsafe {
+        let raw = (*re).regex_ptr as *const Regex;
+        assert!(!raw.is_null(), "program must be installed");
+        let arc = Arc::from_raw(raw);
+        let n = Arc::strong_count(&arc);
+        std::mem::forget(arc);
+        n
+    }
+}
+
 #[cfg(test)]
 pub(crate) fn test_regex_pointer_entry_exists(addr: usize) -> bool {
     REGEX_POINTERS.with(|table| table.borrow().contains(&addr))
@@ -846,7 +955,7 @@ pub extern "C" fn js_regexp_new(
 ) -> *mut RegExpHeader {
     // ★ `pattern` is a raw `StringHeader*` in a Rust local, and this function
     // allocates twice below (`js_string_from_str` for the canonical flags, then
-    // `gc_malloc` for the header). Either can drive an evacuating minor that
+    // `arena_alloc_gc` for the header). Either can drive an evacuating minor that
     // relocates the pattern string, after which this argument names retired
     // from-space — and it is then *stored into the header* as `pattern_ptr`,
     // so the damage is permanent rather than transient.
@@ -1055,10 +1164,35 @@ pub extern "C" fn js_regexp_new(
     #[allow(unused_variables)]
     let pattern_str: () = ();
 
-    // Allocate the header via gc_malloc so it's tracked by the GC and gets
-    // freed when no longer referenced. Previously this used raw alloc() and
-    // leaked every header, which was a 64-byte-per-call leak on top of the
-    // (now-fixed) regex object leak.
+    // ★ The header is NURSERY-allocated, like an ordinary object.
+    //
+    // It used to be `gc_malloc`'d: raw `alloc()` at first (a 64-byte leak per
+    // construction), then the tracked malloc arm so the sweep could free it.
+    // That arm costs, PER CONSTRUCTION, a mimalloc allocation, a push onto
+    // `MALLOC_STATE.objects`, an insert into the malloc-registry `PtrHashSet`
+    // (which rehashes as it grows), two old→young remembered-set entries for
+    // `pattern_ptr`/`flags_ptr`, and — at death — a malloc-sweep visit, the
+    // finalizer and a free. A JS regex literal constructs a fresh object every
+    // time it is evaluated, so on the claude-code TUI `PERRY_GC_TRACE` counted
+    // **199,873 RegExp headers malloc'd per 400-character reply — 100.0 % of
+    // all malloc allocations** — with the registry swinging 26,690 → 1,689
+    // across one minor: ~94 % of them die young and were paying
+    // old-generation prices to do it.
+    //
+    // `GC_TYPE_REGEXP` has been movable (`GcMoveHookKind::RegExpSideTables`
+    // rekeys `REGEX_POINTERS`, `REGEX_SOURCE_TABLE` and the expando owner
+    // after evacuation; `GcLayoutSlotKind::RegExpFields` traces the two string
+    // edges and `meta`) since the copying collector landed, and
+    // `test_movable_regexp_evacuation_migrates_all_address_owned_state` has
+    // exercised the arena arm all along. What kept production on malloc was
+    // finalization: the copying minor's from-space flip runs no per-object
+    // finalize hooks (`gc::copying`), so a nursery header that dies young
+    // would leak its three `Arc` programs and its registry entries. That is
+    // now handled the way Map/Set/Error handle theirs —
+    // `finalize_dead_copied_minor_from_space_regexps` after a copied minor and
+    // `collect_dead_registered_regexps_post_trace` at sweep entry for the
+    // non-copying cycle kinds — and a tenured header is finalized by the
+    // old-generation sweep's ordinary `gc_type_finalize_unmarked_payload`.
     let header_size = std::mem::size_of::<RegExpHeader>();
     // `flags_ptr` must hold the CANONICAL form, so that `flags_ptr`-keyed
     // lookups (FANCY_CACHE, lookup_fancy_regex) and the GC-survivable source
@@ -1075,12 +1209,12 @@ pub extern "C" fn js_regexp_new(
             scope.root_string_ptr(js_string_from_str(flags_str))
         }
     };
-    // ★ #7341: root the canonical flags string too. The `gc_malloc` below is an
-    // allocation and therefore a collection point, exactly as the comment above
-    // `pattern_root` says — but only the PATTERN was rooted and re-read. The
-    // flags string is created here and stored into the header AFTER that
-    // allocation, so an evacuating minor in `gc_malloc` moved it and the header
-    // kept the pre-collection address. `flags_ptr` is then permanently stale in
+    // ★ #7341: root the canonical flags string too. The header allocation below
+    // is an allocation and therefore a collection point, exactly as the comment
+    // above `pattern_root` says — but only the PATTERN was rooted and re-read.
+    // The flags string is created here and stored into the header AFTER that
+    // allocation, so an evacuating minor in the header allocation moved it and
+    // the header kept the pre-collection address. `flags_ptr` is then permanently stale in
     // a live header: `lookup_fancy_regex` reads it through `string_as_str` and
     // faults on retired from-space, which is 5 of the 31 catches in #7341
     // (four different callers, all reaching that one read).
@@ -1089,7 +1223,11 @@ pub extern "C" fn js_regexp_new(
     // missing is that the value written had to survive the allocation first.
 
     unsafe {
-        let raw = crate::gc::gc_malloc(header_size, crate::gc::GC_TYPE_REGEXP);
+        let raw = crate::arena::arena_alloc_gc(
+            header_size,
+            std::mem::align_of::<RegExpHeader>(),
+            crate::gc::GC_TYPE_REGEXP,
+        );
         if raw.is_null() {
             // #5067 — catchable RangeError instead of aborting on OOM.
             crate::error::throw_allocation_failed();
@@ -1114,19 +1252,24 @@ pub extern "C" fn js_regexp_new(
         (*ptr).pattern_ptr = pattern;
         (*ptr).flags_ptr = canonical_flags_ptr;
         // `pattern_ptr` / `flags_ptr` are GC-managed StringHeaders — the GC scans
-        // this 2-slot payload range via the magic-tagged RegExp layout, and
-        // `canonical_flags_ptr` (js_string_from_str above) is a freshly-allocated
-        // YOUNG string. They are stored into this malloc'd (old-generation) header
-        // by raw writes; without a write barrier the old→young edge is never
-        // remembered, so a copying minor GC sweeps the string while the retained
-        // RegExp still points at it. The evacuation verifier reports this as an
-        // uncovered object→string edge, and it crashes for real when the freed
-        // slot is later scanned/read (a heavy regex workload — e.g. ANSI/emoji
-        // parsing in a terminal UI — hits it within seconds). Remember both edges,
-        // mirroring every other native-header pointer store (closure captures,
-        // object prototype slots, array headers). `runtime_write_barrier_gc_slot`
-        // detects the malloc parent and only remembers genuinely-young children,
-        // so an already-old/interned `pattern` is a harmless no-op.
+        // this 2-slot payload range via the magic-tagged RegExp layout.
+        //
+        // The header is young now, so for a young child the barrier records
+        // nothing; it still has to run, because a header born while a budgeted
+        // cycle is marking is allocated black, and because a header that has
+        // been promoted and then reassigned (`RegExp.prototype.compile`) is a
+        // genuine old→young store. Historically the header was malloc'd, i.e.
+        // old, and this store was THE old→young edge a copying minor would
+        // otherwise miss: the evacuation verifier reported it as an uncovered
+        // object→string edge, and it crashed for real when the freed slot was
+        // later scanned/read (a heavy regex workload — e.g. ANSI/emoji parsing
+        // in a terminal UI — hit it within seconds).
+        //
+        // Remember both edges, mirroring every other native-header pointer
+        // store (closure captures, object prototype slots, array headers).
+        // `runtime_write_barrier_gc_slot` classifies the parent and only
+        // remembers genuinely-young children, so an already-old/interned
+        // `pattern` is a harmless no-op.
         let regexp_parent_addr = ptr as usize;
         if !pattern.is_null() {
             crate::gc::runtime_write_barrier_gc_slot(

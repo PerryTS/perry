@@ -1017,3 +1017,48 @@ fn test_copied_minor_promotable_census_filtered_walk_matches_unfiltered() {
          the equivalence assert above must not be vacuously 0 == 0"
     );
 }
+
+/// #9819 follow-up: `js_regexp_new` allocates the header in the NURSERY. A
+/// header that dies young must be finalized by the copied minor — its `Arc`
+/// program released and its registry entries removed — because the from-space
+/// flip runs no per-object finalize hooks. Without
+/// `finalize_dead_copied_minor_from_space_regexps` the dead address stays in
+/// `REGEX_POINTERS` and the program's strong count never comes back down.
+#[test]
+fn nursery_regexp_that_dies_young_is_finalized_by_the_copied_minor() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let dead = crate::regex::test_construct_regexp_and_exec_once("b(?:c)+d-die-young", "g");
+    let live = crate::regex::test_construct_regexp_and_exec_once("b(?:c)+d-die-young", "g");
+    let dead_addr = dead as usize;
+    let live_addr = live as usize;
+    // Premise: production construction is nursery-allocated now.
+    assert!(crate::arena::pointer_in_nursery(dead_addr), "the header must be nursery-allocated");
+    assert!(crate::regex::test_regex_pointer_entry_exists(dead_addr));
+    assert!(crate::regex::test_regex_source_entry_exists(dead_addr));
+    // Both headers share one program through the site cache.
+    let count_before = crate::regex::test_regexp_std_program_strong_count(live);
+    assert!(count_before >= 2);
+
+    // Only `live` is rooted; `dead` is garbage.
+    js_shadow_slot_set(0, ptr_bits(live_addr));
+    let _ = gc_collect_minor();
+
+    let live_new = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+    assert_ne!(live_new, 0, "the rooted RegExp must survive");
+    assert_ne!(live_new, live_addr, "the rooted RegExp must be evacuated");
+    assert!(crate::regex::regex_header_has_magic(live_new as *const _));
+    assert!(crate::regex::test_regex_pointer_entry_exists(live_new));
+    assert!(crate::regex::test_regex_source_entry_exists(live_new));
+
+    assert!(
+        !crate::regex::test_regex_pointer_entry_exists(dead_addr),
+        "a nursery RegExp that died must be removed from REGEX_POINTERS by the copied minor"
+    );
+    assert!(!crate::regex::test_regex_source_entry_exists(dead_addr));
+    assert_eq!(
+        crate::regex::test_regexp_std_program_strong_count(live_new as *const _),
+        count_before - 1,
+        "the dead header's Arc clone of the shared program must have been dropped"
+    );
+    js_shadow_slot_set(0, 0);
+}
