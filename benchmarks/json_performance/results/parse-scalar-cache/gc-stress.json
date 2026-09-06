@@ -1,0 +1,272 @@
+[
+  {
+    "fixture": "test_gap_json_scanning_boundaries",
+    "seed": 17,
+    "exit": 0,
+    "stdout": "scan 255 0 730561117\nwide 0 624430645\n",
+    "stderr": "[gc-schedule] seeded GC-schedule fuzzing ACTIVE: seed=17 rate=0.1\n[gc-schedule] reproduce with: PERRY_GC_SCHEDULE_SEED=17 PERRY_GC_SCHEDULE_RATE=0.1\n[gc-schedule] done: seed=17 safepoints=91 scheduled_collections=9 polls_paced=2331059 copying_minors=9 moved_objects=19278 loop_polls=2331144\n",
+    "counters": {
+      "scheduled_collections": 9,
+      "copying_minors": 9,
+      "moved_objects": 19278,
+      "loop_polls": 2331144
+    },
+    "matches_node": true,
+    "live_subject": true
+  },
+  {
+    "fixture": "test_gap_json_scanning_boundaries",
+    "seed": 9013,
+    "exit": 0,
+    "stdout": "scan 255 0 730561117\nwide 0 624430645\n",
+    "stderr": "[gc-schedule] seeded GC-schedule fuzzing ACTIVE: seed=9013 rate=0.1\n[gc-schedule] reproduce with: PERRY_GC_SCHEDULE_SEED=9013 PERRY_GC_SCHEDULE_RATE=0.1\n[gc-schedule] done: seed=9013 safepoints=91 scheduled_collections=11 polls_paced=2331059 copying_minors=11 moved_objects=19101 loop_polls=2331144\n",
+    "counters": {
+      "scheduled_collections": 11,
+      "copying_minors": 11,
+      "moved_objects": 19101,
+      "loop_polls": 2331144
+    },
+    "matches_node": true,
+    "live_subject": true
+  },
+  {
+    "fixture": "test_gap_json_wide_cache_lifetime",
+    "seed": 17,
+    "exit": 0,
+    "stdout": "wide cache lifetime 4 331992 0\n",
+    "stderr": "[gc-schedule] seeded GC-schedule fuzzing ACTIVE: seed=17 rate=0.1\n[gc-schedule] reproduce with: PERRY_GC_SCHEDULE_SEED=17 PERRY_GC_SCHEDULE_RATE=0.1\n[gc-schedule] done: seed=17 safepoints=144 scheduled_collections=13 polls_paced=4907 copying_minors=13 moved_objects=19880 loop_polls=5045\n",
+    "counters": {
+      "scheduled_collections": 13,
+      "copying_minors": 13,
+      "moved_objects": 19880,
+      "loop_polls": 5045
+    },
+    "matches_node": true,
+    "live_subject": true
+  },
+  {
+    "fixture": "test_gap_json_wide_cache_lifetime",
+    "seed": 9013,
+    "exit": 0,
+    "stdout": "wide cache lifetime 4 331992 0\n",
+    "stderr": "[gc-schedule] seeded GC-schedule fuzzing ACTIVE: seed=9013 rate=0.1\n[gc-schedule] reproduce with: PERRY_GC_SCHEDULE_SEED=9013 PERRY_GC_SCHEDULE_RATE=0.1\n[gc-schedule] done: seed=9013 safepoints=144 scheduled_collections=17 polls_paced=4907 copying_minors=17 moved_objects=26542 loop_polls=5045\n",
+    "counters": {
+      "scheduled_collections": 17,
+      "copying_minors": 17,
+      "moved_objects": 26542,
+      "loop_polls": 5045
+    },
+    "matches_node": true,
+    "live_subject": true
+  },
+  {
+    "fixture": "test_gap_json_unicode_lengths",
+    "seed": 17,
+    "exit": 0,
+    "stdout": "unicode lengths 120 0 179240214 35809\n",
+    "stderr": "[gc-schedule] seeded GC-schedule fuzzing ACTIVE: seed=17 rate=0.1\n[gc-schedule] reproduce with: PERRY_GC_SCHEDULE_SEED=17 PERRY_GC_SCHEDULE_RATE=0.1\n[gc-schedule] done: seed=17 safepoints=46 scheduled_collections=5 polls_paced=71936 copying_minors=5 moved_objects=19124 loop_polls=71976\n",
+    "counters": {
+      "scheduled_collections": 5,
+      "copying_minors": 5,
+      "moved_objects": 19124,
+      "loop_polls": 71976
+    },
+    "matches_node": true,
+    "live_subject": true
+  },
+  {
+    "fixture": "test_gap_json_unicode_lengths",
+    "seed": 9013,
+    "exit": 0,
+    "stdout": "unicode lengths 120 0 179240214 35809\n",
+    "stderr": "[gc-schedule] seeded GC-schedule fuzzing ACTIVE: seed=9013 rate=0.1\n[gc-schedule] reproduce with: PERRY_GC_SCHEDULE_SEED=9013 PERRY_GC_SCHEDULE_RATE=0.1\n[gc-schedule] done: seed=9013 safepoints=46 scheduled_collections=3 polls_paced=71936 copying_minors=3 moved_objects=12800 loop_polls=71976\n",
+    "counters": {
+      "scheduled_collections": 3,
+      "copying_minors": 3,
+      "moved_objects": 12800,
+      "loop_polls": 71976
+    },
+    "matches_node": true,
+    "live_subject": true
+  },
+  {
+    "fixture": "test_gap_json_small_results",
+    "seed": 17,
+    "exit": 0,
+    "stdout": "small results 2600 0 8810967 23001\n\"replacement\"\nnull\nspace observed\n{\"a\":\"\\\"a\\\"\",\"b\":\"null\",\"c\":true}\n{\n  \"a\": \"\\\"a\\\"\",\n  \"b\": \"null\",\n  \"c\": true\n}\nreplacer:,space,toJSON,toJSON\nnull \"a\" {}\n",
+    "stderr": "[gc-schedule] seeded GC-schedule fuzzing ACTIVE: seed=17 rate=0.1\n[gc-schedule] reproduce with: PERRY_GC_SCHEDULE_SEED=17 PERRY_GC_SCHEDULE_RATE=0.1\n[gc-schedule] done: seed=17 safepoints=91 scheduled_collections=9 polls_paced=28715 copying_minors=9 moved_objects=20171 loop_polls=28800\n",
+    "counters": {
+      "scheduled_collections": 9,
+      "copying_minors": 9,
+      "moved_objects": 20171,
+      "loop_polls": 28800
+    },
+    "matches_node": true,
+    "live_subject": true
+  },
+  {
+    "fixture": "test_gap_json_small_results",
+    "seed": 9013,
+    "exit": 0,
+    "stdout": "small results 2600 0 8810967 23001\n\"replacement\"\nnull\nspace observed\n{\"a\":\"\\\"a\\\"\",\"b\":\"null\",\"c\":true}\n{\n  \"a\": \"\\\"a\\\"\",\n  \"b\": \"null\",\n  \"c\": true\n}\nreplacer:,space,toJSON,toJSON\nnull \"a\" {}\n",
+    "stderr": "[gc-schedule] seeded GC-schedule fuzzing ACTIVE: seed=9013 rate=0.1\n[gc-schedule] reproduce with: PERRY_GC_SCHEDULE_SEED=9013 PERRY_GC_SCHEDULE_RATE=0.1\n[gc-schedule] done: seed=9013 safepoints=92 scheduled_collections=12 polls_paced=28714 copying_minors=12 moved_objects=20559 loop_polls=28800\n",
+    "counters": {
+      "scheduled_collections": 12,
+      "copying_minors": 12,
+      "moved_objects": 20559,
+      "loop_polls": 28800
+    },
+    "matches_node": true,
+    "live_subject": true
+  },
+  {
+    "fixture": "test_gap_json_primitive_arrays",
+    "seed": 17,
+    "exit": 0,
+    "stdout": "primitive arrays 640 0 682075754 279681\n[1,2,3]\n[1,\"two\",3]\n[1,null,3]\n[1,{\"x\":2},3]\n[1,2,{\"inner\":\"[\\\"\\\",\\\"a\\\",\\\"abc\\\",\\\"longer string\\\",\\\"\u00e9\\\",\\\"\u6771\u4eac\\\",\\\"\ud83d\ude42\\\",\\\"\\\\ud800\\\",\\\"\\\\udfff\\\",\\\"\\\\n\\\\\\\"\\\\\\\\\\\"]\",\"array\":[\"custom\",\"array\"]}]\n{\"value\":[\"custom\",\"value\"]}\nobject:2,array:array,array:value\nTypeError\n[\"after\",\"cycle\"]\n",
+    "stderr": "[gc-schedule] seeded GC-schedule fuzzing ACTIVE: seed=17 rate=0.1\n[gc-schedule] reproduce with: PERRY_GC_SCHEDULE_SEED=17 PERRY_GC_SCHEDULE_RATE=0.1\n[gc-schedule] done: seed=17 safepoints=91 scheduled_collections=9 polls_paced=553375 copying_minors=9 moved_objects=19903 loop_polls=553460\n",
+    "counters": {
+      "scheduled_collections": 9,
+      "copying_minors": 9,
+      "moved_objects": 19903,
+      "loop_polls": 553460
+    },
+    "matches_node": true,
+    "live_subject": true
+  },
+  {
+    "fixture": "test_gap_json_primitive_arrays",
+    "seed": 9013,
+    "exit": 0,
+    "stdout": "primitive arrays 640 0 682075754 279681\n[1,2,3]\n[1,\"two\",3]\n[1,null,3]\n[1,{\"x\":2},3]\n[1,2,{\"inner\":\"[\\\"\\\",\\\"a\\\",\\\"abc\\\",\\\"longer string\\\",\\\"\u00e9\\\",\\\"\u6771\u4eac\\\",\\\"\ud83d\ude42\\\",\\\"\\\\ud800\\\",\\\"\\\\udfff\\\",\\\"\\\\n\\\\\\\"\\\\\\\\\\\"]\",\"array\":[\"custom\",\"array\"]}]\n{\"value\":[\"custom\",\"value\"]}\nobject:2,array:array,array:value\nTypeError\n[\"after\",\"cycle\"]\n",
+    "stderr": "[gc-schedule] seeded GC-schedule fuzzing ACTIVE: seed=9013 rate=0.1\n[gc-schedule] reproduce with: PERRY_GC_SCHEDULE_SEED=9013 PERRY_GC_SCHEDULE_RATE=0.1\n[gc-schedule] done: seed=9013 safepoints=92 scheduled_collections=12 polls_paced=553374 copying_minors=12 moved_objects=13893 loop_polls=553460\n",
+    "counters": {
+      "scheduled_collections": 12,
+      "copying_minors": 12,
+      "moved_objects": 13893,
+      "loop_polls": 553460
+    },
+    "matches_node": true,
+    "live_subject": true
+  },
+  {
+    "fixture": "test_gap_json_direct_strings",
+    "seed": 17,
+    "exit": 0,
+    "stdout": "direct strings 1536 0 827775247\n\"replaced\"\ntrue\nspace observed\n313 replacer:,space,next,\n290 true\n",
+    "stderr": "[gc-schedule] seeded GC-schedule fuzzing ACTIVE: seed=17 rate=0.1\n[gc-schedule] reproduce with: PERRY_GC_SCHEDULE_SEED=17 PERRY_GC_SCHEDULE_RATE=0.1\n[gc-schedule] done: seed=17 safepoints=379 scheduled_collections=36 polls_paced=2927380 copying_minors=36 moved_objects=5304 loop_polls=2927753\n",
+    "counters": {
+      "scheduled_collections": 36,
+      "copying_minors": 36,
+      "moved_objects": 5304,
+      "loop_polls": 2927753
+    },
+    "matches_node": true,
+    "live_subject": true
+  },
+  {
+    "fixture": "test_gap_json_direct_strings",
+    "seed": 9013,
+    "exit": 0,
+    "stdout": "direct strings 1536 0 827775247\n\"replaced\"\ntrue\nspace observed\n313 replacer:,space,next,\n290 true\n",
+    "stderr": "[gc-schedule] seeded GC-schedule fuzzing ACTIVE: seed=9013 rate=0.1\n[gc-schedule] reproduce with: PERRY_GC_SCHEDULE_SEED=9013 PERRY_GC_SCHEDULE_RATE=0.1\n[gc-schedule] done: seed=9013 safepoints=380 scheduled_collections=44 polls_paced=2927379 copying_minors=44 moved_objects=5800 loop_polls=2927753\n",
+    "counters": {
+      "scheduled_collections": 44,
+      "copying_minors": 44,
+      "moved_objects": 5800,
+      "loop_polls": 2927753
+    },
+    "matches_node": true,
+    "live_subject": true
+  },
+  {
+    "fixture": "test_gap_json_direct_objects",
+    "seed": 17,
+    "exit": 0,
+    "stdout": "direct objects 672 0 162323450\n{\"id\":1,\"text\":\"observed\"} get,\n{\"visible\":1}\n\"own-result\"\n\"proto-result\"\n{\"id\":1,\"text\":\"plain\"}\n\"default-result\"\n{\"id\":1,\"text\":\"plain\"} get,own:,proto:,default:,\n{\"1\":1,\"2\":2,\"a\":0}\n{\"a\":1,\"b\":2,\"c\":3,\"d\":4,\"e\":5,\"f\":6}\n{\"a\":3,\"b\":{}}\n",
+    "stderr": "[gc-schedule] seeded GC-schedule fuzzing ACTIVE: seed=17 rate=0.1\n[gc-schedule] reproduce with: PERRY_GC_SCHEDULE_SEED=17 PERRY_GC_SCHEDULE_RATE=0.1\n[gc-schedule] done: seed=17 safepoints=193 scheduled_collections=17 polls_paced=1324334 copying_minors=17 moved_objects=22096 loop_polls=1324521\n",
+    "counters": {
+      "scheduled_collections": 17,
+      "copying_minors": 17,
+      "moved_objects": 22096,
+      "loop_polls": 1324521
+    },
+    "matches_node": true,
+    "live_subject": true
+  },
+  {
+    "fixture": "test_gap_json_direct_objects",
+    "seed": 9013,
+    "exit": 0,
+    "stdout": "direct objects 672 0 162323450\n{\"id\":1,\"text\":\"observed\"} get,\n{\"visible\":1}\n\"own-result\"\n\"proto-result\"\n{\"id\":1,\"text\":\"plain\"}\n\"default-result\"\n{\"id\":1,\"text\":\"plain\"} get,own:,proto:,default:,\n{\"1\":1,\"2\":2,\"a\":0}\n{\"a\":1,\"b\":2,\"c\":3,\"d\":4,\"e\":5,\"f\":6}\n{\"a\":3,\"b\":{}}\n",
+    "stderr": "[gc-schedule] seeded GC-schedule fuzzing ACTIVE: seed=9013 rate=0.1\n[gc-schedule] reproduce with: PERRY_GC_SCHEDULE_SEED=9013 PERRY_GC_SCHEDULE_RATE=0.1\n[gc-schedule] done: seed=9013 safepoints=193 scheduled_collections=27 polls_paced=1324334 copying_minors=27 moved_objects=15565 loop_polls=1324521\n",
+    "counters": {
+      "scheduled_collections": 27,
+      "copying_minors": 27,
+      "moved_objects": 15565,
+      "loop_polls": 1324521
+    },
+    "matches_node": true,
+    "live_subject": true
+  },
+  {
+    "fixture": "test_gap_json_tape_scanning",
+    "seed": 17,
+    "exit": 0,
+    "stdout": "tape scanning 1088 49 0 669014417\n",
+    "stderr": "[gc-schedule] seeded GC-schedule fuzzing ACTIVE: seed=17 rate=0.1\n[gc-schedule] reproduce with: PERRY_GC_SCHEDULE_SEED=17 PERRY_GC_SCHEDULE_RATE=0.1\n[gc-schedule] done: seed=17 safepoints=1144 scheduled_collections=111 polls_paced=52658 copying_minors=111 moved_objects=38074 loop_polls=53796\n",
+    "counters": {
+      "scheduled_collections": 111,
+      "copying_minors": 111,
+      "moved_objects": 38074,
+      "loop_polls": 53796
+    },
+    "matches_node": true,
+    "live_subject": true
+  },
+  {
+    "fixture": "test_gap_json_tape_scanning",
+    "seed": 9013,
+    "exit": 0,
+    "stdout": "tape scanning 1088 49 0 669014417\n",
+    "stderr": "[gc-schedule] seeded GC-schedule fuzzing ACTIVE: seed=9013 rate=0.1\n[gc-schedule] reproduce with: PERRY_GC_SCHEDULE_SEED=9013 PERRY_GC_SCHEDULE_RATE=0.1\n[gc-schedule] done: seed=9013 safepoints=1144 scheduled_collections=113 polls_paced=52658 copying_minors=113 moved_objects=31201 loop_polls=53796\n",
+    "counters": {
+      "scheduled_collections": 113,
+      "copying_minors": 113,
+      "moved_objects": 31201,
+      "loop_polls": 53796
+    },
+    "matches_node": true,
+    "live_subject": true
+  },
+  {
+    "fixture": "test_gap_json_parse_scalars",
+    "seed": 17,
+    "exit": 0,
+    "stdout": "scalar parse 992 0 40864826\nscalar invalid 30 0\n{\"wrapped\":null}\n{\"wrapped\":true}\n{\"wrapped\":false}\n{\"wrapped\":0}\n{\"wrapped\":0}\n{\"wrapped\":42}\n{\"wrapped\":-123}\n{\"wrapped\":9007199254740992}\n{\"wrapped\":18446744073709552000}\n{\"wrapped\":260.75197}\n{\"wrapped\":1.2345678901234568e+29}\n{\"wrapped\":null}\n{\"wrapped\":null}\n{\"wrapped\":0}\n{\"wrapped\":0}\n{\"wrapped\":5e-324}\n{\"wrapped\":5e-324}\n{\"wrapped\":1.7976931348623157e+308}\n{\"wrapped\":\"\"}\n{\"wrapped\":\"a\"}\n{\"wrapped\":\"abcde\"}\n{\"wrapped\":\"abcdef\"}\n{\"wrapped\":\"\u00e9\"}\n{\"wrapped\":\"\u6771\u4eac\"}\n{\"wrapped\":\"\ud83d\ude42\"}\n{\"wrapped\":\"\u00e9abc\"}\n{\"wrapped\":\"\\n\"}\n{\"wrapped\":\"a\"}\n{\"wrapped\":\"\\ud800\"}\n{\"wrapped\":\"\\udfff\"}\n{\"wrapped\":\"\ud83d\ude00\"}\n:object,:boolean,:boolean,:number,:number,:number,:number,:number,:number,:number,:number,:number,:number,:number,:number,:number,:number,:number,:string,:string,:string,:string,:string,:string,:string,:string,:string,:string,:string,:string,:string,\n123 null true 12\nTypeError\ntrue\n",
+    "stderr": "[gc-schedule] seeded GC-schedule fuzzing ACTIVE: seed=17 rate=0.1\n[gc-schedule] reproduce with: PERRY_GC_SCHEDULE_SEED=17 PERRY_GC_SCHEDULE_RATE=0.1\n[gc-schedule] done: seed=17 safepoints=116 scheduled_collections=11 polls_paced=33199 copying_minors=11 moved_objects=17342 loop_polls=33309\n",
+    "counters": {
+      "scheduled_collections": 11,
+      "copying_minors": 11,
+      "moved_objects": 17342,
+      "loop_polls": 33309
+    },
+    "matches_node": true,
+    "live_subject": true
+  },
+  {
+    "fixture": "test_gap_json_parse_scalars",
+    "seed": 9013,
+    "exit": 0,
+    "stdout": "scalar parse 992 0 40864826\nscalar invalid 30 0\n{\"wrapped\":null}\n{\"wrapped\":true}\n{\"wrapped\":false}\n{\"wrapped\":0}\n{\"wrapped\":0}\n{\"wrapped\":42}\n{\"wrapped\":-123}\n{\"wrapped\":9007199254740992}\n{\"wrapped\":18446744073709552000}\n{\"wrapped\":260.75197}\n{\"wrapped\":1.2345678901234568e+29}\n{\"wrapped\":null}\n{\"wrapped\":null}\n{\"wrapped\":0}\n{\"wrapped\":0}\n{\"wrapped\":5e-324}\n{\"wrapped\":5e-324}\n{\"wrapped\":1.7976931348623157e+308}\n{\"wrapped\":\"\"}\n{\"wrapped\":\"a\"}\n{\"wrapped\":\"abcde\"}\n{\"wrapped\":\"abcdef\"}\n{\"wrapped\":\"\u00e9\"}\n{\"wrapped\":\"\u6771\u4eac\"}\n{\"wrapped\":\"\ud83d\ude42\"}\n{\"wrapped\":\"\u00e9abc\"}\n{\"wrapped\":\"\\n\"}\n{\"wrapped\":\"a\"}\n{\"wrapped\":\"\\ud800\"}\n{\"wrapped\":\"\\udfff\"}\n{\"wrapped\":\"\ud83d\ude00\"}\n:object,:boolean,:boolean,:number,:number,:number,:number,:number,:number,:number,:number,:number,:number,:number,:number,:number,:number,:number,:string,:string,:string,:string,:string,:string,:string,:string,:string,:string,:string,:string,:string,\n123 null true 12\nTypeError\ntrue\n",
+    "stderr": "[gc-schedule] seeded GC-schedule fuzzing ACTIVE: seed=9013 rate=0.1\n[gc-schedule] reproduce with: PERRY_GC_SCHEDULE_SEED=9013 PERRY_GC_SCHEDULE_RATE=0.1\n[gc-schedule] done: seed=9013 safepoints=117 scheduled_collections=14 polls_paced=33198 copying_minors=14 moved_objects=17903 loop_polls=33309\n",
+    "counters": {
+      "scheduled_collections": 14,
+      "copying_minors": 14,
+      "moved_objects": 17903,
+      "loop_polls": 33309
+    },
+    "matches_node": true,
+    "live_subject": true
+  }
+]

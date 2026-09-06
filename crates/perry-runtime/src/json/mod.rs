@@ -23,6 +23,7 @@ use crate::{js_string_from_bytes, JSValue, StringHeader};
 use std::cell::RefCell;
 
 mod parse_api;
+mod parse_scalar;
 mod parser;
 // `pub(crate)` so `gc::mod` can register `scan_raw_json_key_root_mut` (#7211):
 // the interned `"rawJSON"` key is a GC root.
@@ -33,6 +34,7 @@ pub(crate) mod simd;
 mod stringify;
 mod stringify_api;
 mod stringify_buffer;
+mod stringify_data_record;
 mod stringify_flat;
 mod stringify_primitive_array;
 mod stringify_scalars;
@@ -678,6 +680,7 @@ pub(crate) fn test_seed_stringify_shape_cache(keys_arr: *mut crate::ArrayHeader)
             prefixes: vec![String::from("{\"id\":")],
             shape_fields: 1,
             primitive_only: true,
+            data_record_candidate: false,
         }));
     });
 }

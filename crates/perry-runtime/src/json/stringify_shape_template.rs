@@ -38,6 +38,9 @@ pub(crate) struct ShapeTemplate {
     /// True when element 0's fields are all primitives (no POINTER_TAG /
     /// UNDEFINED). Lets the emit path skip its per-element pre-scan.
     pub(crate) primitive_only: bool,
+    /// Initial fields are primitives plus ordinary arrays. A per-element
+    /// validation still proves that array contents cannot invoke callbacks.
+    pub(crate) data_record_candidate: bool,
 }
 
 /// Look up (or build & insert) the shape template for an object. Returns
@@ -237,6 +240,7 @@ pub(crate) unsafe fn build_shape_prefix_template(first_elem_bits: u64) -> Option
         prefixes,
         shape_fields,
         primitive_only,
+        data_record_candidate: super::stringify_data_record::template_candidate(obj, shape_fields),
     })
 }
 
@@ -319,9 +323,23 @@ pub(crate) unsafe fn try_emit_shape_element(
     if gc_obj_type(elem_ptr) != crate::gc::GC_TYPE_OBJECT {
         return false;
     }
+    // A later element can share the template's keys while carrying its own
+    // getter or non-enumerable descriptor. Raw field slots cannot implement
+    // either behavior. Decline before output so the generic object traversal
+    // performs the required property reads and enumerable filtering.
+    let header = elem_ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+    if (*header)._reserved & crate::gc::OBJ_FLAG_HAS_DESCRIPTORS != 0 {
+        return false;
+    }
     let obj = elem_ptr as *const crate::ObjectHeader;
     if crate::object::object_keys_array(obj) != template.keys_arr.get() {
         return false;
+    }
+
+    if template.data_record_candidate
+        && super::stringify_data_record::try_emit(obj, template, buf, depth)
+    {
+        return true;
     }
 
     // ★ #7268: ROOT THE ELEMENT. The emit loops below call
@@ -524,3 +542,7 @@ pub(crate) unsafe fn try_emit_shape_element(
     buf.push('}');
     true
 }
+
+#[cfg(test)]
+#[path = "stringify_shape_template_tests.rs"]
+mod tests;

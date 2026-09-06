@@ -1,0 +1,15 @@
+{
+  "runtime_json_tests": 133,
+  "initial_prototype_root_regression": {
+    "old_root_placement": "SIGSEGV (signal 11)",
+    "corrected_root_placement": "passes with input relocation asserted"
+  },
+  "record_leaf_isolation": "1000 emissions: no managed growth, extra handles, collection or stringify-stack changes",
+  "cold_record_probe": "declines without managed allocation or additional roots",
+  "descriptor_regression": "preceding tape-worker ignores later non-enumerable properties and getters; new runtime guard test passes; compiled witness pending rebuilt release",
+  "gc_policy_unchanged_from": "454daac4f8fc667ab4bc85b7b5b36c8bae56ae28",
+  "root_inventory": "passed, prior frontier unchanged",
+  "compiled_release_validation": "pending",
+  "qualified_performance": "pending",
+  "goal_complete": false
+}

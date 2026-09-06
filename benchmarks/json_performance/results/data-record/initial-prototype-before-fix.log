@@ -1,0 +1,9 @@
+   Compiling perry-runtime v0.5.1520 (/Users/amlug/projects/perry/codex-json-fastpaths/crates/perry-runtime)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 12.19s
+     Running unittests src/lib.rs (/Users/amlug/projects/perry/codex-json-changed-target/debug/build/perry-runtime/77f7d5e322249c1d/out/perry_runtime-77f7d5e322249c1d)
+
+running 1 test
+test gc::tests::runtime_roots::json_shape_template::flat_json_stringify_survives_the_initial_prototype_lookup ... error: test failed, to rerun pass `-p perry-runtime --lib`
+
+Caused by:
+  process didn't exit successfully: `/Users/amlug/projects/perry/codex-json-changed-target/debug/build/perry-runtime/77f7d5e322249c1d/out/perry_runtime-77f7d5e322249c1d flat_json_stringify_survives_the_initial_prototype_lookup --test-threads=1` (signal: 11, SIGSEGV: invalid memory reference)

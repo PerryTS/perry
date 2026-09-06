@@ -35,6 +35,7 @@ mod idle_reclaim;
 mod incremental_sweep_reclaim;
 mod inline_generation_gate_contract;
 mod inline_pointer_bearing_contract;
+mod json_parse_scalar;
 mod layout_pointer_free_hazard;
 mod layout_trace;
 mod lazy_intrinsic_towers;

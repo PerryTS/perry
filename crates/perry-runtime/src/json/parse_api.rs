@@ -177,6 +177,25 @@ pub unsafe fn js_json_parse_result(text_ptr: *const StringHeader) -> Result<JSVa
         return Err(syntax_error_value("Unexpected end of JSON input"));
     }
 
+    if let Some(value) = super::parse_scalar::try_parse_scalar(bytes) {
+        // Decoding has finished. Neither the result nor any remaining local
+        // use needs a heap pointer, so pending work can run without a parse
+        // root or suppression/rebaseline cycle. Keep the existing debt hook.
+        crate::gc::gc_collect_pending_suppressed_parse();
+        super::parse_scalar::clear_oversized_key_cache();
+        return Ok(value);
+    }
+
+    parse_result_slow(text_ptr, len)
+}
+
+// Keep the rooted/allocating parser's stack frame out of scalar calls.
+#[inline(never)]
+unsafe fn parse_result_slow(text_ptr: *const StringHeader, len: usize) -> Result<JSValue, f64> {
+    // Derive the borrow here, rather than passing a shared-reference argument
+    // whose function-wide protection would cross the collection points below.
+    let data_ptr = (text_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+    let bytes = std::slice::from_raw_parts(data_ptr, len);
     if requires_iterative_parse(bytes) {
         if exceeds_iterative_budget(bytes) {
             return Err(range_error_value(&iterative_budget_message()));
@@ -284,6 +303,20 @@ pub unsafe extern "C" fn js_json_parse(text_ptr: *const StringHeader) -> JSValue
     if len == 0 {
         throw_syntax_error("Unexpected end of JSON input");
     }
+    if let Some(value) = super::parse_scalar::try_parse_scalar(bytes) {
+        // No input access follows this collection point, and `value` is
+        // entirely inline. Allocating parses retain their existing flow.
+        crate::gc::gc_collect_pending_suppressed_parse();
+        super::parse_scalar::clear_oversized_key_cache();
+        return value;
+    }
+    parse_slow(text_ptr, len)
+}
+
+#[inline(never)]
+unsafe fn parse_slow(text_ptr: *const StringHeader, len: usize) -> JSValue {
+    let data_ptr = (text_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+    let bytes = std::slice::from_raw_parts(data_ptr, len);
     if requires_iterative_parse(bytes) {
         if exceeds_iterative_budget(bytes) {
             throw_range_error(&iterative_budget_message());

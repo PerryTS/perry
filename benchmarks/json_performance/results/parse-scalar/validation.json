@@ -1,0 +1,24 @@
+{
+  "runtime_json_tests": 127,
+  "compiled_fixtures": 30,
+  "compiled_fixtures_match_node": true,
+  "gc_stress_subjects": 9,
+  "gc_stress_runs": 18,
+  "gc_stress_seeds": [
+    17,
+    9013
+  ],
+  "gc_stress_all_outputs_and_live_movement": true,
+  "pending_parse_debt": "test preserves blocked debt and services it when safe for both parse entry points",
+  "managed_scratch_and_rebaseline": "test checks no managed growth, no temporary handles, no collection, and unchanged pre-suppression snapshot across 2000 successful scalar API calls",
+  "gc_policy_unchanged_from": "454daac4f8fc667ab4bc85b7b5b36c8bae56ae28",
+  "parse_boundary_change": "scalar decode finishes before the existing pending-collection hook; ordinary allocating bodies remain rooted/suppressed",
+  "root_holder_inventory": "passed; pre-existing unverified frontier unchanged",
+  "format": "passed",
+  "goal_complete": false,
+  "paired_repetitions": 7,
+  "paired_trials": 154,
+  "paired_external_observations": 10,
+  "paired_quiet_gate_passed": true,
+  "known_review_issue": "This initial measured candidate skips oversized parse-key cache cleanup on successful scalar parses. Follow-up source and measurements preserve cleanup; do not treat this initial candidate as accepted."
+}

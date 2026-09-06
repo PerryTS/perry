@@ -1,0 +1,17 @@
+   Compiling perry-runtime v0.5.1520 (/Users/amlug/projects/perry/codex-json-fastpaths/crates/perry-runtime)
+warning: unnecessary `unsafe` block
+  --> crates/perry-runtime/src/gc/tests/runtime_roots/json_shape_template.rs:48:15
+   |
+48 |     let obj = unsafe {
+   |               ^^^^^^ unnecessary `unsafe` block
+   |
+   = note: `#[warn(unused_unsafe)]` (part of `#[warn(unused)]`) on by default
+
+warning: `perry-runtime` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 41.93s
+     Running unittests src/lib.rs (/Users/amlug/projects/perry/codex-json-changed-target/debug/build/perry-runtime/77f7d5e322249c1d/out/perry_runtime-77f7d5e322249c1d)
+
+running 1 test
+test gc::tests::runtime_roots::json_shape_template::flat_json_stringify_survives_the_initial_prototype_lookup ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3185 filtered out; finished in 0.08s

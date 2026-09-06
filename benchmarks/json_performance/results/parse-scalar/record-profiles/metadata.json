@@ -1,0 +1,31 @@
+{
+  "purpose": "Sampling only, separate from timed standings; preceding tape-scan worker",
+  "rows": [
+    {
+      "fixture": "small_record",
+      "command": [
+        "/Users/perry/json-parse-scalar-20260906-codex/.work/tape-worker",
+        "/Users/perry/json-parse-scalar-20260906-codex/.work/fixtures/small_record.json",
+        "stringify",
+        "12000000",
+        "2"
+      ],
+      "worker_exit": 0,
+      "sample_exit": 0,
+      "sample_stderr": "Sampling process 10107 for 3 seconds with 1 millisecond of run time between samples\nCouldn't find _sigtramp symbol in expected dylibs\nFound _sigtramp symbol after 8 tries\nSampling completed, processing symbols...\nSample analysis of process 10107 written to file /Users/perry/json-parse-scalar-20260906-codex/results/record-profiles/small_record.sample.txt\n"
+    },
+    {
+      "fixture": "records_object_1m",
+      "command": [
+        "/Users/perry/json-parse-scalar-20260906-codex/.work/tape-worker",
+        "/Users/perry/json-parse-scalar-20260906-codex/.work/fixtures/records_object_1m.json",
+        "stringify",
+        "8000",
+        "2"
+      ],
+      "worker_exit": 0,
+      "sample_exit": 0,
+      "sample_stderr": "Sampling process 10109 for 3 seconds with 1 millisecond of run time between samples\nSampling completed, processing symbols...\nSample analysis of process 10109 written to file /Users/perry/json-parse-scalar-20260906-codex/results/record-profiles/records_object_1m.sample.txt\n"
+    }
+  ]
+}

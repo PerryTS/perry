@@ -1,0 +1,344 @@
+[
+  {
+    "fixture": "null",
+    "operation": "parse",
+    "speedup": 20.06327444240147,
+    "baseline_cpu_us": 0.2509715,
+    "patched_cpu_us": 0.012509,
+    "baseline_peak_rss_mib": 13.546875,
+    "patched_peak_rss_mib": 13.4375
+  },
+  {
+    "fixture": "null",
+    "operation": "stringify",
+    "speedup": 10.065828571428572,
+    "baseline_cpu_us": 0.066057,
+    "patched_cpu_us": 0.0065625,
+    "baseline_peak_rss_mib": 34.890625,
+    "patched_peak_rss_mib": 13.609375
+  },
+  {
+    "fixture": "string_a",
+    "operation": "parse",
+    "speedup": 16.955052810448805,
+    "baseline_cpu_us": 0.254436,
+    "patched_cpu_us": 0.0150065,
+    "baseline_peak_rss_mib": 13.5625,
+    "patched_peak_rss_mib": 13.4375
+  },
+  {
+    "fixture": "string_a",
+    "operation": "stringify",
+    "speedup": 7.702772471475037,
+    "baseline_cpu_us": 0.0745975,
+    "patched_cpu_us": 0.0096845,
+    "baseline_peak_rss_mib": 34.859375,
+    "patched_peak_rss_mib": 13.609375
+  },
+  {
+    "fixture": "empty_object",
+    "operation": "parse",
+    "speedup": 0.9908959122113425,
+    "baseline_cpu_us": 0.325706,
+    "patched_cpu_us": 0.3286985,
+    "baseline_peak_rss_mib": 34.625,
+    "patched_peak_rss_mib": 34.515625
+  },
+  {
+    "fixture": "empty_object",
+    "operation": "stringify",
+    "speedup": 2.6683829397909324,
+    "baseline_cpu_us": 0.1370775,
+    "patched_cpu_us": 0.051371,
+    "baseline_peak_rss_mib": 34.921875,
+    "patched_peak_rss_mib": 13.640625
+  },
+  {
+    "fixture": "tiny_object",
+    "operation": "parse",
+    "speedup": 0.9856894257067194,
+    "baseline_cpu_us": 0.3636435,
+    "patched_cpu_us": 0.368923,
+    "baseline_peak_rss_mib": 34.640625,
+    "patched_peak_rss_mib": 34.53125
+  },
+  {
+    "fixture": "tiny_object",
+    "operation": "stringify",
+    "speedup": 1.406381871578467,
+    "baseline_cpu_us": 0.1972985,
+    "patched_cpu_us": 0.140288,
+    "baseline_peak_rss_mib": 34.921875,
+    "patched_peak_rss_mib": 34.75
+  },
+  {
+    "fixture": "small_record",
+    "operation": "parse",
+    "speedup": 1.0041587574689321,
+    "baseline_cpu_us": 0.7527293054684242,
+    "patched_cpu_us": 0.7496118515818582,
+    "baseline_peak_rss_mib": 35.015625,
+    "patched_peak_rss_mib": 34.90625
+  },
+  {
+    "fixture": "small_record",
+    "operation": "stringify",
+    "speedup": 1.0065541651769754,
+    "baseline_cpu_us": 0.5501630948388867,
+    "patched_cpu_us": 0.546580714553156,
+    "baseline_peak_rss_mib": 35.984375,
+    "patched_peak_rss_mib": 35.859375
+  },
+  {
+    "fixture": "object_1k",
+    "operation": "parse",
+    "speedup": 0.9985454297340213,
+    "baseline_cpu_us": 0.5940671336103505,
+    "patched_cpu_us": 0.5949325047420124,
+    "baseline_peak_rss_mib": 35.03125,
+    "patched_peak_rss_mib": 34.953125
+  },
+  {
+    "fixture": "object_1k",
+    "operation": "stringify",
+    "speedup": 1.3264184340445497,
+    "baseline_cpu_us": 0.38614454558858907,
+    "patched_cpu_us": 0.29111819896165575,
+    "baseline_peak_rss_mib": 36.078125,
+    "patched_peak_rss_mib": 35.875
+  },
+  {
+    "fixture": "records_array_16k",
+    "operation": "parse",
+    "speedup": 0.9994370285113784,
+    "baseline_cpu_us": 23.857846797073318,
+    "patched_cpu_us": 23.871285650291174,
+    "baseline_peak_rss_mib": 65.015625,
+    "patched_peak_rss_mib": 64.84375
+  },
+  {
+    "fixture": "records_array_16k",
+    "operation": "stringify",
+    "speedup": 1.1303991363259431,
+    "baseline_cpu_us": 35.87249255213506,
+    "patched_cpu_us": 31.734359483614696,
+    "baseline_peak_rss_mib": 36.28125,
+    "patched_peak_rss_mib": 36.140625
+  },
+  {
+    "fixture": "records_array_1m",
+    "operation": "parse",
+    "speedup": 1.0170889889073962,
+    "baseline_cpu_us": 1542.967741935484,
+    "patched_cpu_us": 1517.0430107526881,
+    "baseline_peak_rss_mib": 62.3125,
+    "patched_peak_rss_mib": 62.125
+  },
+  {
+    "fixture": "records_array_1m",
+    "operation": "stringify",
+    "speedup": 1.1139422493980704,
+    "baseline_cpu_us": 2204.88,
+    "patched_cpu_us": 1979.3485714285714,
+    "baseline_peak_rss_mib": 60.5625,
+    "patched_peak_rss_mib": 60.40625
+  },
+  {
+    "fixture": "records_object_1m",
+    "operation": "parse",
+    "speedup": 1.0048131782973293,
+    "baseline_cpu_us": 4038.0714285714284,
+    "patched_cpu_us": 4018.7285714285713,
+    "baseline_peak_rss_mib": 80.140625,
+    "patched_peak_rss_mib": 80.015625
+  },
+  {
+    "fixture": "records_object_1m",
+    "operation": "stringify",
+    "speedup": 1.1090728315095415,
+    "baseline_cpu_us": 2217.9651162790697,
+    "patched_cpu_us": 1999.8372093023256,
+    "baseline_peak_rss_mib": 60.546875,
+    "patched_peak_rss_mib": 60.390625
+  },
+  {
+    "fixture": "records_array_8m",
+    "operation": "parse",
+    "speedup": 1.0134572088535423,
+    "baseline_cpu_us": 13864.5,
+    "patched_cpu_us": 13680.4,
+    "baseline_peak_rss_mib": 102.75,
+    "patched_peak_rss_mib": 102.578125
+  },
+  {
+    "fixture": "records_array_8m",
+    "operation": "stringify",
+    "speedup": 1.1135040555168376,
+    "baseline_cpu_us": 18773.4,
+    "patched_cpu_us": 16859.75,
+    "baseline_peak_rss_mib": 196.03125,
+    "patched_peak_rss_mib": 195.921875
+  },
+  {
+    "fixture": "records_object_8m",
+    "operation": "parse",
+    "speedup": 1.0018091949673635,
+    "baseline_cpu_us": 31770.375,
+    "patched_cpu_us": 31713.0,
+    "baseline_peak_rss_mib": 231.8125,
+    "patched_peak_rss_mib": 231.65625
+  },
+  {
+    "fixture": "records_object_8m",
+    "operation": "stringify",
+    "speedup": 1.1111427191399457,
+    "baseline_cpu_us": 18748.7,
+    "patched_cpu_us": 16873.35,
+    "baseline_peak_rss_mib": 196.046875,
+    "patched_peak_rss_mib": 195.921875
+  },
+  {
+    "fixture": "records_array_20m",
+    "operation": "parse",
+    "speedup": 0.997194175699452,
+    "baseline_cpu_us": 78780.66666666667,
+    "patched_cpu_us": 79002.33333333333,
+    "baseline_peak_rss_mib": 315.8125,
+    "patched_peak_rss_mib": 315.640625
+  },
+  {
+    "fixture": "records_array_20m",
+    "operation": "stringify",
+    "speedup": 1.0473301719123203,
+    "baseline_cpu_us": 97673.75,
+    "patched_cpu_us": 93259.75,
+    "baseline_peak_rss_mib": 171.375,
+    "patched_peak_rss_mib": 171.140625
+  },
+  {
+    "fixture": "records_object_20m",
+    "operation": "parse",
+    "speedup": 1.0089462288597928,
+    "baseline_cpu_us": 78907.66666666667,
+    "patched_cpu_us": 78208.0,
+    "baseline_peak_rss_mib": 315.828125,
+    "patched_peak_rss_mib": 315.640625
+  },
+  {
+    "fixture": "records_object_20m",
+    "operation": "stringify",
+    "speedup": 1.0499567729532933,
+    "baseline_cpu_us": 97764.625,
+    "patched_cpu_us": 93113.0,
+    "baseline_peak_rss_mib": 171.359375,
+    "patched_peak_rss_mib": 171.15625
+  },
+  {
+    "fixture": "numbers_1m",
+    "operation": "parse",
+    "speedup": 0.9240667770734586,
+    "baseline_cpu_us": 1565.9354838709678,
+    "patched_cpu_us": 1694.6129032258063,
+    "baseline_peak_rss_mib": 64.546875,
+    "patched_peak_rss_mib": 64.4375
+  },
+  {
+    "fixture": "numbers_1m",
+    "operation": "stringify",
+    "speedup": 4.103264499063732,
+    "baseline_cpu_us": 6596.926315789474,
+    "patched_cpu_us": 1607.7263157894736,
+    "baseline_peak_rss_mib": 61.4375,
+    "patched_peak_rss_mib": 61.25
+  },
+  {
+    "fixture": "long_string_1m",
+    "operation": "parse",
+    "speedup": 0.9886564878188867,
+    "baseline_cpu_us": 203.17377049180328,
+    "patched_cpu_us": 205.5049180327869,
+    "baseline_peak_rss_mib": 60.90625,
+    "patched_peak_rss_mib": 60.765625
+  },
+  {
+    "fixture": "long_string_1m",
+    "operation": "stringify",
+    "speedup": 1.1987189199638455,
+    "baseline_cpu_us": 206.3273381294964,
+    "patched_cpu_us": 172.12320143884892,
+    "baseline_peak_rss_mib": 64.015625,
+    "patched_peak_rss_mib": 61.953125
+  },
+  {
+    "fixture": "escaped_1m",
+    "operation": "parse",
+    "speedup": 0.997954473619866,
+    "baseline_cpu_us": 2040.7317073170732,
+    "patched_cpu_us": 2044.9146341463415,
+    "baseline_peak_rss_mib": 58.28125,
+    "patched_peak_rss_mib": 58.15625
+  },
+  {
+    "fixture": "escaped_1m",
+    "operation": "stringify",
+    "speedup": 0.9782419055084264,
+    "baseline_cpu_us": 1864.4819277108434,
+    "patched_cpu_us": 1905.9518072289156,
+    "baseline_peak_rss_mib": 57.078125,
+    "patched_peak_rss_mib": 56.984375
+  },
+  {
+    "fixture": "unicode_1m",
+    "operation": "parse",
+    "speedup": 1.0020801228316765,
+    "baseline_cpu_us": 257.09123823316435,
+    "patched_cpu_us": 256.55756698044894,
+    "baseline_peak_rss_mib": 55.640625,
+    "patched_peak_rss_mib": 55.453125
+  },
+  {
+    "fixture": "unicode_1m",
+    "operation": "stringify",
+    "speedup": 1.8343849235175693,
+    "baseline_cpu_us": 253.79038047379757,
+    "patched_cpu_us": 138.35175879396985,
+    "baseline_peak_rss_mib": 58.40625,
+    "patched_peak_rss_mib": 57.1875
+  },
+  {
+    "fixture": "wide_1m",
+    "operation": "parse",
+    "speedup": 1.0164390744359684,
+    "baseline_cpu_us": 21108.305555555555,
+    "patched_cpu_us": 20766.916666666668,
+    "baseline_peak_rss_mib": 176.765625,
+    "patched_peak_rss_mib": 176.65625
+  },
+  {
+    "fixture": "wide_1m",
+    "operation": "stringify",
+    "speedup": 1.0032509358754793,
+    "baseline_cpu_us": 2474.5981308411215,
+    "patched_cpu_us": 2466.5794392523367,
+    "baseline_peak_rss_mib": 71.0,
+    "patched_peak_rss_mib": 70.84375
+  },
+  {
+    "fixture": "heterogeneous_1m",
+    "operation": "parse",
+    "speedup": 0.978653430165931,
+    "baseline_cpu_us": 1874.3246753246754,
+    "patched_cpu_us": 1915.2077922077922,
+    "baseline_peak_rss_mib": 68.1875,
+    "patched_peak_rss_mib": 68.03125
+  },
+  {
+    "fixture": "heterogeneous_1m",
+    "operation": "stringify",
+    "speedup": 0.9907309122490227,
+    "baseline_cpu_us": 4487.9101796407185,
+    "patched_cpu_us": 4529.898203592815,
+    "baseline_peak_rss_mib": 59.265625,
+    "patched_peak_rss_mib": 59.109375
+  }
+]

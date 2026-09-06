@@ -189,6 +189,11 @@ unsafe fn emit_object(obj: *const crate::ObjectHeader, fields: usize) -> Option<
             .checked_add(vu)?
             .checked_add(punctuation)?;
     }
+    // The first prototype lookup initializes globalThis and allocates its
+    // lookup key. Root before that lookup as well as before output allocation;
+    // the stack plan contains lengths and inline bytes, never heap pointers.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let input = scope.root_raw_const_ptr(obj);
     // This early path can run outside a serializer frame. Refresh the
     // prototype verdict rather than inheriting a previous call's cache.
     super::invalidate_object_proto_tojson_state();
@@ -199,8 +204,6 @@ unsafe fn emit_object(obj: *const crate::ObjectHeader, fields: usize) -> Option<
         return Some(JSValue::short_string_unchecked(b"{}"));
     }
 
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let input = scope.root_raw_const_ptr(obj);
     let (result, output) = string_storage_alloc(bytes);
     let obj = input.get_raw_const_ptr::<crate::ObjectHeader>();
     let keys = crate::object::object_keys_array(obj);

@@ -1,3 +1,5 @@
+Current source progress is in [DATA_RECORDS.md](DATA_RECORDS.md): scalar parse isolation, guarded record emission, and fixes for descriptor fallback and a first-prototype GC hazard. The record release has no accepted performance measurements yet.
+
 This study measures `JSON.parse` and `JSON.stringify` in Perry, Node.js and Bun, and identifies an implementation path for improving Perry. Read [the analysis and roadmap](REPORT.md), [all CPU/wall/RSS tables](results/full-tables.md), or [the raw-data summary](results/summary.csv).
 
 Latest measured candidate: [bounded tape scanning](TAPE_SCANNING.md).

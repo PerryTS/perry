@@ -180,11 +180,16 @@ fn class_chain_may_have_to_json(class_id: u32) -> bool {
     false
 }
 
-/// #6009: prove — with nothing but direct reads — that resolving `toJSON` on
+/// #6009: prove that resolving `toJSON` on
 /// `ptr` (a validated `GC_TYPE_OBJECT`) through `js_object_get_field_by_name`
 /// would miss, so the probe can skip the generic dispatcher entirely. The
 /// generic walk can only produce a `toJSON` from four places, each covered
 /// here:
+///
+/// Own/class/prototype checks use direct reads, but the first default-prototype
+/// lookup can initialize globalThis and allocate its lookup key. Callers that
+/// need the receiver afterward must root it across this probe. The data-only
+/// emitter uses `to_json_definitely_absent_without_gc` to decline that lookup.
 ///
 /// 1. an OWN key (object-literal method, expando, or an
 ///    `Object.defineProperty` accessor — all of which register the key in
@@ -221,6 +226,20 @@ pub(crate) unsafe fn to_json_definitely_absent(ptr: *const u8) -> bool {
         return false;
     }
     true
+}
+
+/// The plain-data emitter cannot enter the allocating first-time lookup of
+/// Object.prototype. Let the rooted general path populate that cache first.
+/// Once its constructor property is cached, even a dirty verdict is recomputed
+/// with direct reads only; class/prototype overrides still decline normally.
+pub(super) unsafe fn to_json_definitely_absent_without_gc(ptr: *const u8) -> bool {
+    if (*(ptr as *const crate::ObjectHeader)).class_id != 0
+        || (OBJECT_PROTO_TOJSON_STATE.with(|c| c.get()) == PROTO_TOJSON_DIRTY
+            && CACHED_OBJECT_PROTO_BITS.with(|c| c.get()) == 0)
+    {
+        return false;
+    }
+    to_json_definitely_absent(ptr)
 }
 
 // ─── SerializeJSONProperty key (#5909) ───────────────────────────────────────

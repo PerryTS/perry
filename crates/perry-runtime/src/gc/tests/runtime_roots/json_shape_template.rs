@@ -36,6 +36,62 @@
 
 use super::*;
 
+#[test]
+fn flat_json_stringify_survives_the_initial_prototype_lookup() {
+    let _pacing = crate::gc::policy::force_alloc_point_minor_pacing();
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    register_runtime_handle_root_scanner_for_tests();
+    // Warm the realm itself so the deliberate allocation below is the first
+    // prototype-probe key, rather than unrelated globalThis bootstrap work.
+    crate::object::js_get_global_this_builtin_value(b"Object".as_ptr(), 6);
+    let obj = {
+        let obj = crate::object::js_object_alloc(0, 2);
+        let key = crate::string::js_string_from_bytes(b"answer".as_ptr(), 6);
+        crate::object::js_object_set_field_by_name(obj, key, 42.0);
+        let key = crate::string::js_string_from_bytes(b"text".as_ptr(), 4);
+        let text = crate::string::js_string_from_bytes(b"kept".as_ptr(), 4);
+        crate::object::js_object_set_field_by_name(
+            obj,
+            key,
+            f64::from_bits(crate::value::STRING_TAG | text as u64),
+        );
+        obj
+    };
+    let input_scope = RuntimeHandleScope::new();
+    let input = input_scope.root_raw_mut_ptr(obj);
+    let before_address = input.get_raw_mut_ptr::<crate::ObjectHeader>() as usize;
+    crate::json::CACHED_OBJECT_PROTO_BITS.with(|c| c.set(0));
+    crate::json::OBJECT_PROTO_TOJSON_STATE.with(|c| c.set(0));
+    force_next_general_arena_alloc_slow();
+    triggers.make_arena_trigger_due();
+    let before = gc_collection_count();
+    let output = unsafe {
+        crate::json::js_json_stringify_full(
+            f64::from_bits(ptr_bits(
+                input.get_raw_mut_ptr::<crate::ObjectHeader>() as usize
+            )),
+            f64::from_bits(crate::value::TAG_UNDEFINED),
+            f64::from_bits(crate::value::TAG_UNDEFINED),
+        )
+    };
+    let output_scope = RuntimeHandleScope::new();
+    let output = output_scope.root_nanbox_u64(output as u64);
+    drain_scheduled_minor_gc(before, "initial JSON prototype lookup");
+    assert_ne!(
+        input.get_raw_mut_ptr::<crate::ObjectHeader>() as usize,
+        before_address,
+        "the input must move to exercise the borrowed-pointer hazard"
+    );
+    let value = crate::JSValue::from_bits(output.get_nanbox_f64().to_bits());
+    assert_eq!(
+        string_contents(value.as_string_ptr()),
+        "{\"answer\":42,\"text\":\"kept\"}"
+    );
+    crate::json::CACHED_OBJECT_PROTO_BITS.with(|c| c.set(0));
+    crate::json::OBJECT_PROTO_TOJSON_STATE.with(|c| c.set(0));
+}
+
 /// `{ when: <date>, answer: 42, also: <date> }` — see the module header for why
 /// this exact shape.
 ///

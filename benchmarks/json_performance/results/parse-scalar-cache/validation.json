@@ -1,0 +1,24 @@
+{
+  "runtime_json_tests": 128,
+  "compiled_fixtures": 30,
+  "compiled_fixtures_match_node": true,
+  "gc_stress_subjects": 9,
+  "gc_stress_runs": 18,
+  "gc_stress_seeds": [
+    17,
+    9013
+  ],
+  "gc_stress_all_outputs_and_live_movement": true,
+  "oversized_key_cache_cleanup": "new test fails on initial candidate and passes on corrected code for both public parse entries",
+  "pending_parse_debt": "preserves blocked debt and services it when safe for both parse entries",
+  "managed_scratch_and_rebaseline": "no managed growth, temporary handles, collection or pre-suppression snapshot change across 2000 successful scalar API calls",
+  "gc_policy_unchanged_from": "454daac4f8fc667ab4bc85b7b5b36c8bae56ae28",
+  "parse_boundary_change": "scalar decode finishes before existing pending-collection hook; allocating bodies remain rooted/suppressed; oversized key cache and mirror ring cleanup preserved",
+  "root_holder_inventory": "passed; pre-existing unverified frontier unchanged",
+  "format": "passed",
+  "goal_complete": false,
+  "source_patch_reproduces_measured_hashes": true,
+  "qualified_performance_run": false,
+  "unqualified_full_runs": 2,
+  "unqualified_reason": "Foreign ccperf benchmarks overlap both full runs; final load gate also fails. Corrected performance has not been accepted."
+}

@@ -1,0 +1,247 @@
+[
+  {
+    "utc": "2026-09-06T13:16:01Z",
+    "monitor_exit": 0,
+    "external": [
+      "46676 46674 100.0 /Users/perry/ccperf/bin/cc_tenure_lockfix"
+    ]
+  },
+  {
+    "utc": "2026-09-06T13:16:07Z",
+    "monitor_exit": 0,
+    "external": [
+      "46676 46674  13.5 /Users/perry/ccperf/bin/cc_tenure_lockfix"
+    ]
+  },
+  {
+    "utc": "2026-09-06T13:16:12Z",
+    "monitor_exit": 0,
+    "external": [
+      "46676 46674   0.0 /Users/perry/ccperf/bin/cc_tenure_lockfix"
+    ]
+  },
+  {
+    "utc": "2026-09-06T13:16:18Z",
+    "monitor_exit": 0,
+    "external": [
+      "46676 46674   0.0 /Users/perry/ccperf/bin/cc_tenure_lockfix"
+    ]
+  },
+  {
+    "utc": "2026-09-06T13:16:23Z",
+    "monitor_exit": 0,
+    "external": [
+      "46676 46674   0.0 /Users/perry/ccperf/bin/cc_tenure_lockfix"
+    ]
+  },
+  {
+    "utc": "2026-09-06T13:16:28Z",
+    "monitor_exit": 0,
+    "external": [
+      "46676 46674   0.0 /Users/perry/ccperf/bin/cc_tenure_lockfix"
+    ]
+  },
+  {
+    "utc": "2026-09-06T13:16:34Z",
+    "monitor_exit": 0,
+    "external": [
+      "46676 46674   0.0 /Users/perry/ccperf/bin/cc_tenure_lockfix"
+    ]
+  },
+  {
+    "utc": "2026-09-06T13:16:39Z",
+    "monitor_exit": 0,
+    "external": [
+      "46676 46674   0.0 /Users/perry/ccperf/bin/cc_tenure_lockfix"
+    ]
+  },
+  {
+    "utc": "2026-09-06T13:16:45Z",
+    "monitor_exit": 0,
+    "external": [
+      "46676 46674   0.0 /Users/perry/ccperf/bin/cc_tenure_lockfix"
+    ]
+  },
+  {
+    "utc": "2026-09-06T13:16:50Z",
+    "monitor_exit": 0,
+    "external": [
+      "46676 46674   0.0 /Users/perry/ccperf/bin/cc_tenure_lockfix"
+    ]
+  },
+  {
+    "utc": "2026-09-06T13:16:55Z",
+    "monitor_exit": 0,
+    "external": [
+      "46676 46674   0.0 /Users/perry/ccperf/bin/cc_tenure_lockfix"
+    ]
+  },
+  {
+    "utc": "2026-09-06T13:17:00Z",
+    "monitor_exit": 0,
+    "external": [
+      "46676 46674   0.0 /Users/perry/ccperf/bin/cc_tenure_lockfix"
+    ]
+  },
+  {
+    "utc": "2026-09-06T13:17:06Z",
+    "monitor_exit": 0,
+    "external": [
+      "46676 46674   0.0 /Users/perry/ccperf/bin/cc_tenure_lockfix"
+    ]
+  },
+  {
+    "utc": "2026-09-06T13:17:11Z",
+    "monitor_exit": 0,
+    "external": [
+      "46676 46674   0.0 /Users/perry/ccperf/bin/cc_tenure_lockfix"
+    ]
+  },
+  {
+    "utc": "2026-09-06T13:17:16Z",
+    "monitor_exit": 0,
+    "external": [
+      "46676 46674   0.0 /Users/perry/ccperf/bin/cc_tenure_lockfix"
+    ]
+  },
+  {
+    "utc": "2026-09-06T13:17:22Z",
+    "monitor_exit": 0,
+    "external": [
+      "46676 46674   0.0 /Users/perry/ccperf/bin/cc_tenure_lockfix"
+    ]
+  },
+  {
+    "utc": "2026-09-06T13:17:27Z",
+    "monitor_exit": 0,
+    "external": [
+      "46676 46674   0.0 /Users/perry/ccperf/bin/cc_tenure_lockfix"
+    ]
+  },
+  {
+    "utc": "2026-09-06T13:17:33Z",
+    "monitor_exit": 0,
+    "external": [
+      "46676 46674   0.0 /Users/perry/ccperf/bin/cc_tenure_lockfix"
+    ]
+  },
+  {
+    "utc": "2026-09-06T13:17:39Z",
+    "monitor_exit": 0,
+    "external": [
+      "56863 56839  25.2 /Users/perry/ccperf/bin/cc_tenure_cand"
+    ]
+  },
+  {
+    "utc": "2026-09-06T13:17:44Z",
+    "monitor_exit": 0,
+    "external": [
+      "56863 56839 100.0 /Users/perry/ccperf/bin/cc_tenure_cand"
+    ]
+  },
+  {
+    "utc": "2026-09-06T13:17:50Z",
+    "monitor_exit": 0,
+    "external": [
+      "56863 56839 100.0 /Users/perry/ccperf/bin/cc_tenure_cand"
+    ]
+  },
+  {
+    "utc": "2026-09-06T13:17:55Z",
+    "monitor_exit": 0,
+    "external": [
+      "56863 56839  99.1 /Users/perry/ccperf/bin/cc_tenure_cand"
+    ]
+  },
+  {
+    "utc": "2026-09-06T13:18:00Z",
+    "monitor_exit": 0,
+    "external": [
+      "56863 56839 100.0 /Users/perry/ccperf/bin/cc_tenure_cand"
+    ]
+  },
+  {
+    "utc": "2026-09-06T13:18:06Z",
+    "monitor_exit": 0,
+    "external": [
+      "56863 56839 100.0 /Users/perry/ccperf/bin/cc_tenure_cand"
+    ]
+  },
+  {
+    "utc": "2026-09-06T13:18:11Z",
+    "monitor_exit": 0,
+    "external": [
+      "56863 56839 100.0 /Users/perry/ccperf/bin/cc_tenure_cand"
+    ]
+  },
+  {
+    "utc": "2026-09-06T13:18:16Z",
+    "monitor_exit": 0,
+    "external": [
+      "56863 56839  99.3 /Users/perry/ccperf/bin/cc_tenure_cand"
+    ]
+  },
+  {
+    "utc": "2026-09-06T13:18:21Z",
+    "monitor_exit": 0,
+    "external": [
+      "56863 56839 100.0 /Users/perry/ccperf/bin/cc_tenure_cand"
+    ]
+  },
+  {
+    "utc": "2026-09-06T13:18:27Z",
+    "monitor_exit": 0,
+    "external": [
+      "56863 56839 100.0 /Users/perry/ccperf/bin/cc_tenure_cand"
+    ]
+  },
+  {
+    "utc": "2026-09-06T13:18:32Z",
+    "monitor_exit": 0,
+    "external": [
+      "56863 56839 100.0 /Users/perry/ccperf/bin/cc_tenure_cand"
+    ]
+  },
+  {
+    "utc": "2026-09-06T13:18:38Z",
+    "monitor_exit": 0,
+    "external": [
+      "56863 56839  99.8 /Users/perry/ccperf/bin/cc_tenure_cand"
+    ]
+  },
+  {
+    "utc": "2026-09-06T13:18:44Z",
+    "monitor_exit": 0,
+    "external": [
+      "56863 56839 100.0 /Users/perry/ccperf/bin/cc_tenure_cand"
+    ]
+  },
+  {
+    "utc": "2026-09-06T13:18:49Z",
+    "monitor_exit": 0,
+    "external": [
+      "56863 56839 100.0 /Users/perry/ccperf/bin/cc_tenure_cand"
+    ]
+  },
+  {
+    "utc": "2026-09-06T13:18:54Z",
+    "monitor_exit": 0,
+    "external": [
+      "56863 56839  99.1 /Users/perry/ccperf/bin/cc_tenure_cand"
+    ]
+  },
+  {
+    "utc": "2026-09-06T13:19:00Z",
+    "monitor_exit": 0,
+    "external": [
+      "56863 56839  14.1 /Users/perry/ccperf/bin/cc_tenure_cand"
+    ]
+  },
+  {
+    "utc": "2026-09-06T13:19:05Z",
+    "monitor_exit": 0,
+    "external": [
+      "56863 56839  98.0 /Users/perry/ccperf/bin/cc_tenure_cand"
+    ]
+  }
+]

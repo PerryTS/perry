@@ -1,0 +1,12 @@
+{
+  "worker": "tape-data-records-test",
+  "runtime_reference": "efc789c72467e0304a19043af249a16318756d95",
+  "exit": 0,
+  "matches_node": false,
+  "mismatches": {
+    "9": "later non-enumerable id incorrectly emitted",
+    "10": "later id getter ignored; stale inline field emitted",
+    "11": "getter call count 0 instead of 1"
+  },
+  "next_action": "guard descriptors at the shape-emitter entry so the existing generic field getter/enumerability path is reached; retain the failing fixture"
+}
