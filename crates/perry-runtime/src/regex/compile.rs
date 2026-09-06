@@ -152,8 +152,7 @@ pub extern "C" fn js_regexp_compile_value(
     // the one the receiver was constructed with.
     // `RegExp.prototype.compile` re-initialises an existing receiver — once per
     // call from user code, not per object — so materialising the shared key
-    // here costs nothing measurable, and the same `Arc`s go into the source
-    // table below.
+    // here costs nothing measurable.
     let pattern_key: std::sync::Arc<str> = std::sync::Arc::from(pattern_str);
     let flags_key: std::sync::Arc<str> = std::sync::Arc::from(flags_str);
     let arc = get_or_compile_regex(&pattern_key, &flags_key);
@@ -203,6 +202,20 @@ pub extern "C" fn js_regexp_compile_value(
         }
         (*re).pattern_ptr = pattern_ptr;
         (*re).flags_ptr = canonical_flags_ptr;
+        // These are traced header edges. Unlike construction, `compile` can
+        // rewrite a tenured receiver with newly allocated nursery strings, so
+        // both stores need the ordinary runtime barrier.
+        let parent = re as usize;
+        crate::gc::runtime_write_barrier_gc_slot(
+            parent,
+            std::ptr::addr_of!((*re).pattern_ptr) as usize,
+            crate::value::js_nanbox_string(pattern_ptr as i64).to_bits(),
+        );
+        crate::gc::runtime_write_barrier_gc_slot(
+            parent,
+            std::ptr::addr_of!((*re).flags_ptr) as usize,
+            crate::value::js_nanbox_string(canonical_flags_ptr as i64).to_bits(),
+        );
         (*re).case_insensitive = flags_str.contains('i');
         (*re).global = flags_str.contains('g');
         (*re).multiline = flags_str.contains('m');
@@ -210,10 +223,6 @@ pub extern "C" fn js_regexp_compile_value(
         (*re).dot_all = flags_str.contains('s');
         (*re).unicode = flags_str.contains('u') || flags_str.contains('v');
         (*re).has_indices = flags_str.contains('d');
-        super::REGEX_SOURCE_TABLE.with(|t| {
-            t.borrow_mut()
-                .insert(re as usize, (Arc::from(pattern_str), Arc::from(flags_str)));
-        });
     }
     // Spec RegExpInitialize step 12: `Set(obj, "lastIndex", 0, true)` runs LAST,
     // with the *Throw* flag. A user-frozen `lastIndex`

@@ -143,13 +143,8 @@ pub extern "C" fn js_regexp_escape(input: f64) -> f64 {
 #[used]
 static KEEP_REGEXP_ESCAPE: extern "C" fn(f64) -> f64 = js_regexp_escape;
 
-/// ECMA-262 22.2.6.10 EscapeRegExpPattern: produce a string that, placed
-/// between two `/` characters, parses as the same pattern. An empty pattern
-/// becomes `"(?:)"`; an unescaped `/` outside a character class becomes `\/`;
-/// the four LineTerminators become their `\n`/`\r`/` `/` ` escapes
-/// (even inside a character class). A backslash escapes the following code
-/// point, which is copied verbatim.
-pub(super) fn escape_regexp_source(pattern: &str) -> String {
+/// ECMA-262 22.2.6.10 EscapeRegExpPattern for a valid UTF-8 pattern.
+fn escape_regexp_source_utf8(pattern: &str) -> String {
     if pattern.is_empty() {
         return "(?:)".to_string();
     }
@@ -179,6 +174,76 @@ pub(super) fn escape_regexp_source(pattern: &str) -> String {
             '\u{2028}' => out.push_str("\\u2028"),
             '\u{2029}' => out.push_str("\\u2029"),
             _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// ECMA-262 22.2.6.10 EscapeRegExpPattern: produce WTF-8 bytes that, placed
+/// between two `/` characters, parse as the same pattern. JavaScript strings
+/// may contain lone UTF-16 surrogates, represented by Perry as WTF-8; those
+/// bytes must round-trip rather than pass through Rust's `str::chars()`.
+pub(super) fn escape_regexp_source(pattern: &[u8]) -> Vec<u8> {
+    if let Ok(pattern) = std::str::from_utf8(pattern) {
+        return escape_regexp_source_utf8(pattern).into_bytes();
+    }
+    if pattern.is_empty() {
+        return b"(?:)".to_vec();
+    }
+
+    let mut out = Vec::with_capacity(pattern.len() + 2);
+    let mut in_class = false;
+    let mut i = 0;
+    while i < pattern.len() {
+        match pattern[i] {
+            b'\\' => {
+                out.push(b'\\');
+                i += 1;
+                if i < pattern.len() {
+                    let (advance, _, _) = crate::string::wtf8_step(pattern, i);
+                    let end = i.saturating_add(advance).min(pattern.len());
+                    out.extend_from_slice(&pattern[i..end]);
+                    i = end;
+                }
+            }
+            b'[' if !in_class => {
+                in_class = true;
+                out.push(b'[');
+                i += 1;
+            }
+            b']' if in_class => {
+                in_class = false;
+                out.push(b']');
+                i += 1;
+            }
+            b'/' if !in_class => {
+                out.extend_from_slice(b"\\/");
+                i += 1;
+            }
+            b'\n' => {
+                out.extend_from_slice(b"\\n");
+                i += 1;
+            }
+            b'\r' => {
+                out.extend_from_slice(b"\\r");
+                i += 1;
+            }
+            0xE2 if pattern.get(i..i + 3) == Some(&[0xE2, 0x80, 0xA8])
+                || pattern.get(i..i + 3) == Some(&[0xE2, 0x80, 0xA9]) =>
+            {
+                out.extend_from_slice(if pattern[i + 2] == 0xA8 {
+                    b"\\u2028"
+                } else {
+                    b"\\u2029"
+                });
+                i += 3;
+            }
+            _ => {
+                let (advance, _, _) = crate::string::wtf8_step(pattern, i);
+                let end = i.saturating_add(advance).min(pattern.len());
+                out.extend_from_slice(&pattern[i..end]);
+                i = end;
+            }
         }
     }
     out

@@ -8,8 +8,8 @@
 //! `/…/g` on every call, once per text segment per layout pass, and
 //! `ansi-regex` builds the same `new RegExp(parts.join("|"), "g")` per call.
 //! Each construction used to copy the pattern three times (the
-//! `VALIDATED_PATTERNS` probe key, `owned_pattern`, the `REGEX_SOURCE_TABLE`
-//! entry) and SipHash all of it once; the first operation on each header then
+//! `VALIDATED_PATTERNS` probe key and `owned_pattern`) and SipHash all of it
+//! once; the first operation on each header then
 //! did the same three more times — `build_and_install_programs` probes the
 //! three `(String, String)`-keyed program caches — and, for the common
 //! no-fallback pattern, `lookup_fancy_regex` / `lookup_repeat_matcher`
@@ -24,9 +24,8 @@
 //! full byte compare — identity never depends on an address, so nothing is
 //! rekeyed on a GC move and a dynamic `new RegExp(sameText)` hits too; a hit
 //! costs one `memcmp` instead of a hash plus three copies. An entry owns the
-//! pattern and canonical flags as `Arc<str>` (shared into
-//! `REGEX_SOURCE_TABLE`, so a header costs two refcount bumps instead of two
-//! `String`s) and, once the first header built from it has been executed, the
+//! pattern and canonical flags as `Arc<str>` and, once the first header built
+//! from it has been executed, the
 //! compiled programs: a later construction installs those eagerly, so the
 //! header is born built and never touches the `(pattern, flags)` caches.
 //!

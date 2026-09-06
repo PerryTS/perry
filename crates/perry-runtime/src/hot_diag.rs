@@ -169,11 +169,21 @@ pub struct RegexDiag {
     /// or missed: this is the `memcmp` volume alone, which is what a 12 KB
     /// emoji pattern makes expensive and a 60-byte one does not.
     pub new_site_verify_bytes: u64,
-    /// Address-keyed side-table inserts performed per construction
-    /// (`REGEX_POINTERS` and `REGEX_SOURCE_TABLE`) — two per header, each a
-    /// `PtrHasher` hash plus a hashbrown insert, mirrored by two removals at
-    /// death and two rekeys per evacuation.
+    /// Address-keyed side-table inserts performed per construction. This was
+    /// two (`REGEX_POINTERS` plus the source table) before the header's string
+    /// slots became traced edges; only `REGEX_POINTERS` remains.
     pub new_side_table_inserts: u64,
+    /// Split of the above by table. The source counters are retained as zeroed
+    /// before/after controls for the #9908 measurement; `REGEX_POINTERS` is
+    /// still the registry the copied-minor finaliser enumerates.
+    pub pointer_table_inserts: u64,
+    pub source_table_inserts: u64,
+    /// The death side. `source_table_removals` is the zeroed after-control;
+    /// `regex_header_clear_dead_for_gc` now removes only `REGEX_POINTERS`.
+    pub pointer_table_removals: u64,
+    pub source_table_removals: u64,
+    /// Evacuation rekeys of the remaining pointer registry.
+    pub side_table_rekeys: u64,
     /// Constructions answered from the LITERAL-SITE table — identity by the
     /// compiler-emitted site global's address, so neither the pattern's
     /// fingerprint nor its byte compare ran. `site_hit` counts the
@@ -326,7 +336,8 @@ impl RegexDiag {
              match={} replace={} replace_matches={} split={} flags_alloc={} \
              desc_regexp_probes={} desc_regexp_meta_negative={} \
              barrier_taken={} barrier_gated={} header_bytes={} site_verify_bytes={} \
-             side_table_inserts={} site_key_hit={}",
+             side_table_inserts={} site_key_hit={} ptr_ins={} src_ins={} \
+             ptr_rm={} src_rm={} rekeys={}",
             self.new_calls,
             self.new_validated_hit,
             self.new_site_hit,
@@ -356,6 +367,11 @@ impl RegexDiag {
             self.new_site_verify_bytes,
             self.new_side_table_inserts,
             self.new_site_key_hit,
+            self.pointer_table_inserts,
+            self.source_table_inserts,
+            self.pointer_table_removals,
+            self.source_table_removals,
+            self.side_table_rekeys,
         );
         // Merge by content (prefix, len, flags): distinct literal sites with
         // the same pattern are one row.

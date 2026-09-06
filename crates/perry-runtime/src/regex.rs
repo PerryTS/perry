@@ -145,21 +145,6 @@ crate::perry_thread_local! {
     /// relocate or die. Header magic remains the primary identity check.
     static REGEX_POINTERS: RefCell<crate::fast_hash::PtrHashSet<usize>> = RefCell::new(crate::fast_hash::new_ptr_hash_set());
 
-    /// Issue #637: Owned copies of pattern and flags strings keyed by
-    /// the RegExpHeader pointer. The header's `pattern_ptr` / `flags_ptr`
-    /// fields hold raw `*const StringHeader` pointers to the input
-    /// strings — when those inputs are temporaries (e.g. the result of
-    /// a template-literal expression `\`^${p}\``), the GC frees them
-    /// after the function call returns and subsequent `.source` /
-    /// `.flags` reads dereference dangling memory. We side-table an
-    /// owned `String` copy at construction time; readers prefer this
-    /// over `pattern_ptr` whenever an entry exists.
-    ///
-    /// The copies are `Arc<str>` shared with `regex::site_cache`: every
-    /// header built from the same literal text bumps two refcounts instead
-    /// of copying the pattern (12 KB for emoji-class patterns, once per
-    /// evaluation of the literal).
-    static REGEX_SOURCE_TABLE: RefCell<crate::fast_hash::PtrHashMap<usize, (Arc<str>, Arc<str>)>> = RefCell::new(crate::fast_hash::new_ptr_hash_map());
 }
 
 /// Check whether `ptr` is a RegExpHeader pointer that was allocated in
@@ -206,16 +191,13 @@ pub(crate) fn regex_header_moved_for_gc(old_addr: usize, new_addr: usize) {
     if old_addr == new_addr {
         return;
     }
+    if crate::hot_diag::regex_on() {
+        crate::hot_diag::regex_counters(|d| d.side_table_rekeys += 1);
+    }
     REGEX_POINTERS.with(|table| {
         let mut table = table.borrow_mut();
         if table.remove(&old_addr) {
             table.insert(new_addr);
-        }
-    });
-    REGEX_SOURCE_TABLE.with(|table| {
-        let mut table = table.borrow_mut();
-        if let Some(source) = table.remove(&old_addr) {
-            table.insert(new_addr, source);
         }
     });
     crate::object::exotic_expando::exotic_expando_owner_moved(old_addr, new_addr);
@@ -223,10 +205,17 @@ pub(crate) fn regex_header_moved_for_gc(old_addr: usize, new_addr: usize) {
 
 /// Remove address-owned RegExp metadata when the cell is proven dead.
 pub(crate) fn regex_header_clear_dead_for_gc(addr: usize) {
+    // Counted, not timed: this runs inside a collection, so a probe here must
+    // allocate nothing and must not dump. `regex_counters` does neither, and
+    // `regex_on`'s one-time env read cannot first happen here — a header can
+    // only die after `js_regexp_new` created it, and that path arms the
+    // instrument first.
+    if crate::hot_diag::regex_on() {
+        crate::hot_diag::regex_counters(|d| {
+            d.pointer_table_removals += 1;
+        });
+    }
     REGEX_POINTERS.with(|table| {
-        table.borrow_mut().remove(&addr);
-    });
-    REGEX_SOURCE_TABLE.with(|table| {
         table.borrow_mut().remove(&addr);
     });
     crate::object::exotic_expando::exotic_expando_owner_clear_dead(addr);
@@ -271,7 +260,7 @@ pub(crate) unsafe fn regex_header_finalize_for_gc(re: *mut RegExpHeader) {
 ///
 /// The copying minor's from-space flip runs no per-object finalize hooks, so
 /// a nursery header that was neither evacuated nor pinned would otherwise keep
-/// its `Arc` programs and its `REGEX_POINTERS` / `REGEX_SOURCE_TABLE` / expando
+/// its `Arc` programs and its `REGEX_POINTERS` / expando
 /// entries forever. Same shape as `map::finalize_dead_copied_minor_from_space_maps`:
 /// walk the registry after the flip, collect the provably-dead addresses, then
 /// finalize each (the finalizer removes its own registry entries, which is why
@@ -386,11 +375,6 @@ pub(crate) fn test_regex_pointer_entry_exists(addr: usize) -> bool {
     REGEX_POINTERS.with(|table| table.borrow().contains(&addr))
 }
 
-#[cfg(test)]
-pub(crate) fn test_regex_source_entry_exists(addr: usize) -> bool {
-    REGEX_SOURCE_TABLE.with(|table| table.borrow().contains_key(&addr))
-}
-
 /// Build a minimal nursery-resident RegExp payload for the copying collector's
 /// relocation contract test. Production construction currently chooses the
 /// malloc-backed arm of `ArenaOrMalloc`; this exercises the same registered GC
@@ -398,6 +382,9 @@ pub(crate) fn test_regex_source_entry_exists(addr: usize) -> bool {
 /// strand the address-owned tables.
 #[cfg(all(test, feature = "regex-engine"))]
 pub(crate) fn test_alloc_nursery_regexp_for_move(source: &str, flags: &str) -> *mut RegExpHeader {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let pattern = scope.root_string_ptr(js_string_from_str(source));
+    let flags_string = scope.root_string_ptr(js_string_from_str(flags));
     unsafe {
         let ptr = crate::arena::arena_alloc_gc(
             std::mem::size_of::<RegExpHeader>(),
@@ -408,8 +395,8 @@ pub(crate) fn test_alloc_nursery_regexp_for_move(source: &str, flags: &str) -> *
         // must be set explicitly or the GC follows a garbage pointer.
         (*ptr).meta = std::ptr::null_mut();
         (*ptr).regex_ptr = std::ptr::null_mut();
-        (*ptr).pattern_ptr = std::ptr::null();
-        (*ptr).flags_ptr = std::ptr::null();
+        (*ptr).pattern_ptr = pattern.get_raw_const_ptr::<StringHeader>();
+        (*ptr).flags_ptr = flags_string.get_raw_const_ptr::<StringHeader>();
         (*ptr).case_insensitive = flags.contains('i');
         (*ptr).global = flags.contains('g');
         (*ptr).multiline = flags.contains('m');
@@ -425,11 +412,6 @@ pub(crate) fn test_alloc_nursery_regexp_for_move(source: &str, flags: &str) -> *
         REGEX_EVER_REGISTERED.arm();
         REGEX_POINTERS.with(|table| {
             table.borrow_mut().insert(ptr as usize);
-        });
-        REGEX_SOURCE_TABLE.with(|table| {
-            table
-                .borrow_mut()
-                .insert(ptr as usize, (Arc::from(source), Arc::from(flags)));
         });
         ptr
     }
@@ -1058,7 +1040,7 @@ fn js_regexp_new_impl(
     // A `site_key` of 0 (every dynamic construction, and every runtime caller)
     // misses by construction and takes the content-keyed path below unchanged.
     let site_entry = site_key::lookup(site_key, raw_flags_str);
-    let (owned_pattern, owned_flags, programs, bits, shared_flags_root) = match site_entry {
+    let (programs, bits, shared_flags_root) = match site_entry {
         Some(hit) => {
             // The site's own flags literal, so this is the same sharing
             // decision the first construction at this site made (#9819).
@@ -1092,13 +1074,7 @@ fn js_regexp_new_impl(
                     picked
                 }
             };
-            (
-                hit.pattern,
-                hit.flags,
-                programs,
-                hit.bits,
-                shared_flags_root,
-            )
+            (programs, hit.bits, shared_flags_root)
         }
         None => {
             let pattern_str = if is_valid_ptr(pattern) {
@@ -1285,10 +1261,10 @@ fn js_regexp_new_impl(
 
             // ★ Last use of the borrowed pattern text before this function allocates.
             // `pattern_str` borrows the GC string; the two allocations below can move
-            // it, and everything after this point reads the pattern from `owned_pattern`
-            // (a shared `Arc<str>`, which relocation cannot invalidate) or from
-            // `pattern_root` (a runtime handle the collector rewrites). Nothing below
-            // may use `pattern_str` or the incoming `pattern` argument again.
+            // it. The site/content cache snapshots it into `owned_pattern`, and
+            // the header store below re-reads it from `pattern_root` (a runtime
+            // handle the collector rewrites). Nothing below may use `pattern_str`
+            // or the incoming `pattern` argument again.
             let (owned_pattern, owned_flags, programs) = match site_hit {
                 Some(hit) => (hit.pattern, hit.flags, hit.programs),
                 None => {
@@ -1316,19 +1292,13 @@ fn js_regexp_new_impl(
             site_key::record(
                 site_key,
                 raw_flags_owned,
-                owned_pattern.clone(),
-                owned_flags.clone(),
+                owned_pattern,
+                owned_flags,
                 flags_are_canonical,
                 bits,
                 programs.clone(),
             );
-            (
-                owned_pattern,
-                owned_flags,
-                programs,
-                bits,
-                shared_flags_root,
-            )
+            (programs, bits, shared_flags_root)
         }
     };
     let site_key::FlagBits {
@@ -1357,7 +1327,7 @@ fn js_regexp_new_impl(
     // old-generation prices to do it.
     //
     // `GC_TYPE_REGEXP` has been movable (`GcMoveHookKind::RegExpSideTables`
-    // rekeys `REGEX_POINTERS`, `REGEX_SOURCE_TABLE` and the expando owner
+    // rekeys `REGEX_POINTERS` and the expando owner
     // after evacuation; `GcLayoutSlotKind::RegExpFields` traces the two string
     // edges and `meta`) since the copying collector landed, and
     // `test_movable_regexp_evacuation_migrates_all_address_owned_state` has
@@ -1372,8 +1342,8 @@ fn js_regexp_new_impl(
     // old-generation sweep's ordinary `gc_type_finalize_unmarked_payload`.
     let header_size = std::mem::size_of::<RegExpHeader>();
     // `flags_ptr` must hold the CANONICAL form, so that `flags_ptr`-keyed
-    // lookups (FANCY_CACHE, lookup_fancy_regex) and the GC-survivable source
-    // table all agree. When the caller's string already is that text it is
+    // lookups (FANCY_CACHE, lookup_fancy_regex) agree. When the caller's
+    // string already is that text it is
     // shared (rooted above); only a non-canonical spelling (`/x/ig` → `"gi"`,
     // or a computed `new RegExp(p, f)`) still has to materialize one. The
     // counter makes the removal provable rather than asserted.
@@ -1539,20 +1509,15 @@ fn js_regexp_new_impl(
             s.borrow_mut().insert(ptr as usize);
         });
         if crate::hot_diag::regex_on() {
-            // Two address-keyed inserts per construction (this one and
-            // `REGEX_SOURCE_TABLE` below), each a `PtrHasher` hash plus a
-            // hashbrown insert, mirrored by two removals at death and two
-            // rekeys per evacuation. Counted so the pair is a number rather
-            // than a reading of the profile.
-            crate::hot_diag::regex_counters(|d| d.new_side_table_inserts += 2);
+            // One address-keyed insert per construction. `REGEX_POINTERS`
+            // remains because the copied-minor finaliser enumerates it; the
+            // former source table became redundant when #9845 made the
+            // header's two string slots traced GC edges.
+            crate::hot_diag::regex_counters(|d| {
+                d.new_side_table_inserts += 1;
+                d.pointer_table_inserts += 1;
+            });
         }
-
-        // Issue #637: side-table owned copies of pattern + flags so
-        // `.source` / `.flags` survive GC of the input StringHeaders.
-        REGEX_SOURCE_TABLE.with(|t| {
-            t.borrow_mut()
-                .insert(ptr as usize, (owned_pattern, owned_flags));
-        });
 
         ptr
     }
@@ -1582,10 +1547,18 @@ pub extern "C" fn js_regexp_construct(pattern: f64, flags: f64) -> *mut RegExpHe
 
     let (source_string, inherited_flags) = if pattern_is_regex {
         let re = pv.as_pointer::<RegExpHeader>();
-        let entry = REGEX_SOURCE_TABLE.with(|t| t.borrow().get(&(re as usize)).cloned());
-        match entry {
-            Some((pat, fl)) => (pat.to_string(), Some(fl.to_string())),
-            None => (String::new(), Some(String::new())),
+        unsafe {
+            let source = if is_valid_ptr((*re).pattern_ptr) {
+                string_as_str((*re).pattern_ptr).to_string()
+            } else {
+                String::new()
+            };
+            let inherited = if is_valid_ptr((*re).flags_ptr) {
+                string_as_str((*re).flags_ptr).to_string()
+            } else {
+                String::new()
+            };
+            (source, Some(inherited))
         }
     } else if pv.is_undefined() {
         (String::new(), None)
@@ -2057,18 +2030,10 @@ pub extern "C" fn js_regexp_get_source(re: *const RegExpHeader) -> *mut StringHe
     if !is_valid_regex_ptr(re) {
         return js_string_from_str("(?:)");
     }
-    // Issue #637: prefer the side-tabled owned copy so we survive GC
-    // of the input StringHeader (e.g. template-literal temporary).
-    if let Some(pat) =
-        REGEX_SOURCE_TABLE.with(|t| t.borrow().get(&(re as usize)).map(|(p, _)| p.clone()))
-    {
-        return js_string_from_str(&escape_regexp_source(&pat));
-    }
     unsafe {
         if is_valid_ptr((*re).pattern_ptr) {
-            // Return a copy of the pattern string
-            let pattern_str = string_as_str((*re).pattern_ptr);
-            js_string_from_str(&escape_regexp_source(pattern_str))
+            let escaped = escape_regexp_source(string_as_bytes((*re).pattern_ptr));
+            crate::string::js_string_from_wtf8_bytes(escaped.as_ptr(), escaped.len() as u32)
         } else {
             js_string_from_str("(?:)")
         }
@@ -2087,12 +2052,6 @@ pub extern "C" fn js_regexp_empty_source() -> *mut StringHeader {
 pub extern "C" fn js_regexp_get_flags(re: *const RegExpHeader) -> *mut StringHeader {
     if !is_valid_regex_ptr(re) {
         return js_string_from_str("");
-    }
-    // Issue #637: prefer the side-tabled owned copy.
-    if let Some(flags) =
-        REGEX_SOURCE_TABLE.with(|t| t.borrow().get(&(re as usize)).map(|(_, f)| f.clone()))
-    {
-        return js_string_from_str(&flags);
     }
     unsafe {
         if is_valid_ptr((*re).flags_ptr) {

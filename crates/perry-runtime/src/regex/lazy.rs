@@ -37,7 +37,7 @@
 //!   lookbehind/backreferences still decides, and still throws when both
 //!   engines refuse);
 //! * `.source` / `.flags` / `.global` / `.sticky` / `lastIndex` are header
-//!   and side-table reads that never touched the compiled program;
+//!   reads that never touched the compiled program;
 //! * identity is untouched — `js_regexp_new` still allocates a fresh header
 //!   per evaluation.
 //!
@@ -53,8 +53,7 @@ use regex::Regex;
 use super::grammar::{collapse_redos_guard_quantifiers, js_regex_to_rust_with_flags};
 use super::{
     evict_regex_cache_if_full, get_or_compile_regex, is_valid_ptr, is_valid_regex_ptr,
-    string_as_str, RegExpHeader, FANCY_CACHE, REGEX_SOURCE_TABLE, REPEAT_MATCHER_CACHE,
-    VALIDATED_PATTERNS,
+    string_as_str, RegExpHeader, FANCY_CACHE, REPEAT_MATCHER_CACHE, VALIDATED_PATTERNS,
 };
 
 /// The exact string `build_std_regex` is handed for `(pattern, flags)`: the
@@ -160,15 +159,10 @@ pub(super) fn mark_pattern_validated(pattern: &str, flags: &str) {
 
 /// The `(source, flags)` a header was built from.
 ///
-/// Prefers the GC-survivable side table (issue #637) and falls back to the
-/// header's own string payloads, which — unlike the thread-local table — are
-/// readable from a second statically-linked copy of the runtime (Wall 18).
+/// Since #9845 the header's string slots are traced GC edges, so the payloads
+/// are both collection-safe and readable from a second statically-linked copy
+/// of the runtime (Wall 18).
 pub(super) fn source_and_flags(re: *const RegExpHeader) -> (Arc<str>, Arc<str>) {
-    if let Some(source) =
-        REGEX_SOURCE_TABLE.with(|table| table.borrow().get(&(re as usize)).cloned())
-    {
-        return source;
-    }
     unsafe {
         let pattern: Arc<str> = if is_valid_ptr((*re).pattern_ptr) {
             Arc::from(string_as_str((*re).pattern_ptr))

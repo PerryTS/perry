@@ -32,7 +32,7 @@ fn regexp_has_dedicated_gc_kind_and_is_not_a_shaped_object() {
 }
 
 #[test]
-fn malloc_finalize_clears_regexp_address_owned_tables() {
+fn malloc_finalize_clears_regexp_address_owned_state() {
     let _lock = crate::gc::global_side_table_test_lock();
     let scope = crate::gc::RuntimeHandleScope::new();
     let pattern = scope.root_string_ptr(make_string("finalize"));
@@ -42,7 +42,6 @@ fn malloc_finalize_clears_regexp_address_owned_tables() {
     });
     let addr = re as usize;
     assert!(test_regex_pointer_entry_exists(addr));
-    assert!(test_regex_source_entry_exists(addr));
     crate::object::exotic_expando::test_seed_exotic_expando_entry(
         addr,
         "owned",
@@ -55,7 +54,6 @@ fn malloc_finalize_clears_regexp_address_owned_tables() {
     }
 
     assert!(!test_regex_pointer_entry_exists(addr));
-    assert!(!test_regex_source_entry_exists(addr));
     assert!(!crate::object::exotic_expando::test_exotic_expando_entry_exists(addr));
 }
 
@@ -1207,6 +1205,66 @@ fn construction_defers_the_program_build_until_first_use() {
     );
 }
 
+/// Removing the address-keyed source table must not turn the RegExp-pattern
+/// constructor arm into an empty-pattern fallback. This calls the exported
+/// constructor entry point, so deleting its direct header read fails both the
+/// source and inherited-flags assertions.
+#[test]
+fn regexp_construct_reads_source_and_flags_from_the_pattern_header() {
+    let original = js_regexp_new(make_string("left/right"), make_string("ig"));
+    let pattern = crate::value::js_nanbox_pointer(original as i64);
+    let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+
+    let copy = js_regexp_construct(pattern, undefined);
+    assert_ne!(
+        copy, original,
+        "construction must still allocate a fresh object"
+    );
+    assert_eq!(string_payload(js_regexp_get_source(copy)), b"left\\/right");
+    assert_eq!(string_payload(js_regexp_get_flags(copy)), b"gi");
+
+    let override_flags = crate::value::js_nanbox_string(make_string("m") as i64);
+    let overridden = js_regexp_construct(pattern, override_flags);
+    assert_eq!(
+        string_payload(js_regexp_get_source(overridden)),
+        b"left\\/right"
+    );
+    assert_eq!(string_payload(js_regexp_get_flags(overridden)), b"m");
+}
+
+/// `RegExp.prototype.compile` rewrites the header in place. The source table
+/// used to mask a stale header slot here; after its removal both observable
+/// strings must come from the newly stored, traced edges.
+#[test]
+fn regexp_compile_replaces_the_header_source_and_flags() {
+    let receiver = js_regexp_new(make_string("old"), make_string("m"));
+    js_regexp_set_last_index(receiver, 9.0);
+    let pattern = crate::value::js_nanbox_string(make_string("new/source") as i64);
+    let flags = crate::value::js_nanbox_string(make_string("ig") as i64);
+    let result = js_regexp_compile_value(receiver, pattern, flags);
+    let receiver = crate::value::JSValue::from_bits(result.to_bits()).as_pointer::<RegExpHeader>();
+
+    assert_eq!(
+        string_payload(js_regexp_get_source(receiver)),
+        b"new\\/source"
+    );
+    assert_eq!(string_payload(js_regexp_get_flags(receiver)), b"gi");
+    assert_eq!(js_regexp_get_last_index(receiver), 0.0);
+    assert_eq!(js_regexp_test(receiver, make_string("NEW/source")), 1);
+}
+
+/// Perry stores lone JavaScript surrogates as WTF-8. `.source` must copy those
+/// exact bytes from the traced pattern slot; routing them through Rust's UTF-8
+/// scalar iterator either replaces the surrogate or invokes undefined
+/// behaviour.
+#[test]
+fn regexp_source_round_trips_wtf8_lone_surrogates_from_the_header() {
+    let lone_high = [b'a', 0xED, 0xA0, 0x80, b'/', b'b'];
+    let re = js_regexp_new(make_wtf8(&lone_high), make_string(""));
+    let expected = [b'a', 0xED, 0xA0, 0x80, b'\\', b'/', b'b'];
+    assert_eq!(string_payload(js_regexp_get_source(re)), expected);
+}
+
 /// The deferred build installs the fancy-regex and RepeatMatcher programs too,
 /// not just the linear one — they live on the same publish point, so a header
 /// whose pattern needs one must still get it on first use.
@@ -1689,16 +1747,6 @@ fn site_cache_reconstruction_is_born_built() {
         std::ptr::eq(unsafe { (*re1).regex_ptr }, unsafe { (*re2).regex_ptr }),
         "both headers share one compiled program"
     );
-    // The owned source copies are shared too (two refcount bumps per header,
-    // not two `String`s).
-    let (p1, p2) = REGEX_SOURCE_TABLE.with(|t| {
-        let t = t.borrow();
-        (
-            t.get(&(re1 as usize)).map(|(p, _)| p.clone()).unwrap(),
-            t.get(&(re2 as usize)).map(|(p, _)| p.clone()).unwrap(),
-        )
-    });
-    assert!(Arc::ptr_eq(&p1, &p2), "source text is shared, not copied");
     assert_eq!(js_regexp_test(re2, make_string("born7built")), 1);
     assert_eq!(js_regexp_test(re2, make_string("nothing")), 0);
     // Different flags are a different entry.
