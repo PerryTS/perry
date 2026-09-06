@@ -114,22 +114,40 @@ pub(crate) const MAX_ITERATIVE_NESTING_DEPTH: usize = 500_000;
 /// syntax validation, so it must not assume the input is well-formed — an
 /// unbalanced `]` clamps at zero rather than underflowing.
 pub(crate) fn nesting_depth_exceeds(bytes: &[u8], limit: usize) -> bool {
-    let mut depth = 0usize;
-    let mut in_string = false;
-    let mut escaped = false;
-    for &byte in bytes {
-        if in_string {
-            if escaped {
-                escaped = false;
-            } else if byte == b'\\' {
-                escaped = true;
-            } else if byte == b'"' {
-                in_string = false;
-            }
-            continue;
+    // A flat scalar array cannot exceed depth one. Slice byte searches skip
+    // the byte-by-byte state machine for large numeric/boolean/null arrays.
+    // Test for an object first so record arrays reject this hint immediately.
+    // Quotes or another opening container always fall back to the full scan;
+    // this is only a depth proof, never a substitute for syntax validation.
+    if bytes.len() >= 256 && bytes[0] == b'[' && limit > 0 {
+        let body = &bytes[1..];
+        if !body.contains(&b'{') && !body.contains(&b'[') && !body.contains(&b'"') {
+            return false;
         }
-        match byte {
-            b'"' => in_string = true,
+    }
+    let mut depth = 0usize;
+    let mut pos = 0usize;
+    while pos < bytes.len() {
+        match bytes[pos] {
+            b'"' => {
+                pos += 1;
+                // A quoted span can be megabytes long. Skip ordinary bytes in
+                // bulk while retaining the preflight's handling of malformed
+                // input: only quotes/backslashes change string state here.
+                while pos < bytes.len() {
+                    let Some(offset) = super::simd::find_quote_or_backslash(&bytes[pos..]) else {
+                        return false;
+                    };
+                    pos += offset;
+                    if bytes[pos] == b'"' {
+                        break;
+                    }
+                    // Skip the backslash and its escaped byte, including an
+                    // escaped quote/backslash. A trailing escape ends the scan;
+                    // the real parser remains responsible for syntax errors.
+                    pos = (pos + 2).min(bytes.len());
+                }
+            }
             b'[' | b'{' => {
                 depth += 1;
                 if depth > limit {
@@ -139,6 +157,7 @@ pub(crate) fn nesting_depth_exceeds(bytes: &[u8], limit: usize) -> bool {
             b']' | b'}' => depth = depth.saturating_sub(1),
             _ => {}
         }
+        pos += 1;
     }
     false
 }
@@ -738,7 +757,17 @@ impl<'a> DirectParser<'a> {
         let mut inline_keys: [*const StringHeader; 8] = [std::ptr::null(); 8];
         let mut inline_values: [JSValue; 8] = [JSValue::undefined(); 8];
         let mut inline_len: usize = 0;
-        let mut heap_fields: Option<(Vec<*const StringHeader>, Vec<JSValue>)> = None;
+        // Keep small-object searches linear, including modest spills past
+        // the eight inline slots. Wide objects index interned key identities
+        // so new keys do not scan every prior key. The vectors retain order;
+        // a duplicate only replaces its value. GC is suppressed for the parse,
+        // exactly as for the raw key pointers already held in these vectors.
+        type HeapFields = (
+            Vec<*const StringHeader>,
+            Vec<JSValue>,
+            Option<std::collections::HashMap<*const StringHeader, usize>>,
+        );
+        let mut heap_fields: Option<HeapFields> = None;
 
         loop {
             self.skip_whitespace();
@@ -761,8 +790,30 @@ impl<'a> DirectParser<'a> {
 
             let key_bytes = key.as_bytes();
             let key_ptr = cached_parse_key_ptr(key_bytes);
-            if let Some((keys, values)) = heap_fields.as_mut() {
-                if let Some(existing) = keys.iter().position(|&ptr| ptr == key_ptr) {
+            if let Some((keys, values, indices)) = heap_fields.as_mut() {
+                // Linear lookup wins for modest objects. Build the index only
+                // when another field arrives after 128 unique keys, so an
+                // object ending at that size never pays to build an unused map.
+                if indices.is_none() && keys.len() == 128 {
+                    *indices = Some(
+                        keys.iter()
+                            .copied()
+                            .enumerate()
+                            .map(|(i, key)| (key, i))
+                            .collect(),
+                    );
+                }
+                let existing = match indices {
+                    Some(index) => match index.entry(key_ptr) {
+                        std::collections::hash_map::Entry::Occupied(entry) => Some(*entry.get()),
+                        std::collections::hash_map::Entry::Vacant(entry) => {
+                            entry.insert(keys.len());
+                            None
+                        }
+                    },
+                    None => keys.iter().position(|&ptr| ptr == key_ptr),
+                };
+                if let Some(existing) = existing {
                     values[existing] = value;
                 } else {
                     keys.push(key_ptr);
@@ -784,7 +835,7 @@ impl<'a> DirectParser<'a> {
                 values.extend_from_slice(&inline_values);
                 keys.push(key_ptr);
                 values.push(value);
-                heap_fields = Some((keys, values));
+                heap_fields = Some((keys, values, None));
             }
 
             self.skip_whitespace();
@@ -797,8 +848,8 @@ impl<'a> DirectParser<'a> {
         self.expect(b'}');
         let field_count = heap_fields
             .as_ref()
-            .map_or(inline_len, |(keys, _)| keys.len()) as u32;
-        let keys_arr = if let Some((keys, _)) = heap_fields.as_ref() {
+            .map_or(inline_len, |(keys, _, _)| keys.len()) as u32;
+        let keys_arr = if let Some((keys, _, _)) = heap_fields.as_ref() {
             self.parse_shape_keys_array_hot(keys)
         } else {
             self.parse_shape_keys_array_hot(&inline_keys[..inline_len])
@@ -824,7 +875,7 @@ impl<'a> DirectParser<'a> {
             }
         };
         let mut saw_pointer = false;
-        if let Some((_, values)) = heap_fields.as_ref() {
+        if let Some((_, values, _)) = heap_fields.as_ref() {
             for (i, value) in values.iter().copied().enumerate() {
                 saw_pointer |= write_field(i, value);
             }
@@ -1054,3 +1105,7 @@ impl<'a> DirectParser<'a> {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "parser_scan_tests.rs"]
+mod scan_tests;

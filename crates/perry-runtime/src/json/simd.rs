@@ -1,110 +1,141 @@
-//! SIMD-accelerated string-terminator scanning used by the direct JSON parser.
+//! Bounded byte scanners shared by JSON parsing, depth checks and escaping.
 
-/// Find the first `"`, `\`, or raw control byte in `bytes`. Returns `None`
-/// if none is found before end-of-input (which is a JSON error — the
-/// caller handles that by failing the parse).
-///
-/// Issue #179 tier 1 #3: SIMD-accelerated on aarch64 (NEON) and x86_64
-/// (SSE2); scalar on other targets. The hot path on
-/// `bench_json_roundtrip` — per-record string scanning — previously
-/// ran one byte at a time in the tight zero-copy fast-path loop. 16-byte
-/// SIMD chunks cut the per-iteration overhead substantially on long
-/// records, and the scalar tail handles the trailing <16 bytes.
+/// Find a string terminator or an illegal unescaped control byte.
 #[inline(always)]
 pub(crate) fn find_string_terminator(bytes: &[u8]) -> Option<usize> {
+    find_special::<true, false>(bytes)
+}
+
+/// Also stop at a potential WTF-8 surrogate so the escaper can inspect it.
+#[inline(always)]
+pub(crate) fn find_string_escape(bytes: &[u8]) -> Option<usize> {
+    find_special::<true, true>(bytes)
+}
+
+/// The depth preflight is not a validator: only quotes and escapes affect
+/// whether later brackets belong to a string. Raw controls must not end it.
+#[inline(always)]
+pub(crate) fn find_quote_or_backslash(bytes: &[u8]) -> Option<usize> {
+    find_special::<false, false>(bytes)
+}
+
+#[inline(always)]
+fn special<const CONTROL: bool, const SURROGATE: bool>(b: u8) -> bool {
+    b == b'"' || b == b'\\' || (CONTROL && b < 0x20) || (SURROGATE && b == 0xED)
+}
+
+#[inline(always)]
+fn find_special<const CONTROL: bool, const SURROGATE: bool>(bytes: &[u8]) -> Option<usize> {
     #[cfg(target_arch = "aarch64")]
     {
-        find_string_terminator_neon(bytes)
+        find_neon::<CONTROL, SURROGATE>(bytes)
     }
     #[cfg(all(target_arch = "x86_64", target_feature = "sse2"))]
     {
-        return find_string_terminator_sse2(bytes);
+        find_sse2::<CONTROL, SURROGATE>(bytes)
     }
     #[cfg(not(any(
         target_arch = "aarch64",
         all(target_arch = "x86_64", target_feature = "sse2")
     )))]
     {
-        find_string_terminator_scalar(bytes)
+        find_word::<CONTROL, SURROGATE>(bytes)
     }
 }
 
-/// Scalar fallback used on non-SIMD targets and as the tail handler
-/// for the SIMD variants. Always inlined so the caller's tight loop
-/// doesn't pay a call-site cost for the <16-byte tail.
+/// Word-sized scan for short strings/tails and platforms without SIMD.
+/// A hit is resolved bytewise: the zero-byte trick can borrow into a later
+/// lane, so its mask must not be used directly as a first-byte index.
 #[inline(always)]
-pub(crate) fn find_string_terminator_scalar(bytes: &[u8]) -> Option<usize> {
-    for (i, &b) in bytes.iter().enumerate() {
-        if b == b'"' || b == b'\\' || b < 0x20 {
-            return Some(i);
-        }
+fn find_word<const CONTROL: bool, const SURROGATE: bool>(bytes: &[u8]) -> Option<usize> {
+    const LOW: u64 = 0x0101_0101_0101_0101;
+    const HIGH: u64 = 0x8080_8080_8080_8080;
+    #[inline(always)]
+    fn has_zero(word: u64) -> bool {
+        word.wrapping_sub(LOW) & !word & HIGH != 0
     }
-    None
+    let mut i = 0;
+    while i + 8 <= bytes.len() {
+        // The slice check above covers the complete unaligned load.
+        let word = unsafe { bytes.as_ptr().add(i).cast::<u64>().read_unaligned() };
+        let hit = has_zero(word ^ 0x2222_2222_2222_2222)
+            || has_zero(word ^ 0x5C5C_5C5C_5C5C_5C5C)
+            || (CONTROL && word.wrapping_sub(0x2020_2020_2020_2020) & !word & HIGH != 0)
+            || (SURROGATE && has_zero(word ^ 0xEDED_EDED_EDED_EDED));
+        if hit {
+            return bytes[i..i + 8]
+                .iter()
+                .position(|&b| special::<CONTROL, SURROGATE>(b))
+                .map(|j| i + j);
+        }
+        i += 8;
+    }
+    bytes[i..]
+        .iter()
+        .position(|&b| special::<CONTROL, SURROGATE>(b))
+        .map(|j| i + j)
 }
 
 #[cfg(target_arch = "aarch64")]
 #[inline(always)]
-pub(crate) fn find_string_terminator_neon(bytes: &[u8]) -> Option<usize> {
+fn find_neon<const CONTROL: bool, const SURROGATE: bool>(bytes: &[u8]) -> Option<usize> {
     use std::arch::aarch64::*;
     unsafe {
         let quote = vdupq_n_u8(b'"');
         let bslash = vdupq_n_u8(b'\\');
-        let space = vdupq_n_u8(0x20);
-        let mut i: usize = 0;
+        let mut i = 0;
         while i + 16 <= bytes.len() {
             let chunk = vld1q_u8(bytes.as_ptr().add(i));
-            let eq_q = vceqq_u8(chunk, quote);
-            let eq_b = vceqq_u8(chunk, bslash);
-            let control = vcltq_u8(chunk, space);
-            let mask = vorrq_u8(vorrq_u8(eq_q, eq_b), control);
-            // Fast rejection: reduce the 16-byte mask to a single byte
-            // (max across all lanes). Zero => no match in this chunk.
-            if vmaxvq_u8(mask) == 0 {
-                i += 16;
-                continue;
+            let mut mask = vorrq_u8(vceqq_u8(chunk, quote), vceqq_u8(chunk, bslash));
+            if CONTROL {
+                mask = vorrq_u8(mask, vcltq_u8(chunk, vdupq_n_u8(0x20)));
             }
-            // Hit somewhere in this chunk — scan the 16 bytes to find
-            // the exact offset. Branchless via per-lane comparison.
-            // `mask` has 0xFF at matching lane positions and 0x00
-            // elsewhere; store-and-scan is portable and fast enough
-            // for a 16-byte region.
-            let mut lanes = [0u8; 16];
-            vst1q_u8(lanes.as_mut_ptr(), mask);
-            for (j, &lane) in lanes.iter().enumerate() {
-                if lane != 0 {
-                    return Some(i + j);
-                }
+            if SURROGATE {
+                mask = vorrq_u8(mask, vceqq_u8(chunk, vdupq_n_u8(0xED)));
             }
-            // Unreachable — vmaxvq_u8 said there's a match.
-            unreachable!();
+            if vmaxvq_u8(mask) != 0 {
+                let mut lanes = [0u8; 16];
+                vst1q_u8(lanes.as_mut_ptr(), mask);
+                return lanes.iter().position(|&b| b != 0).map(|j| i + j);
+            }
+            i += 16;
         }
-        // Tail: <16 bytes left, scalar scan.
-        find_string_terminator_scalar(&bytes[i..]).map(|off| i + off)
+        find_word::<CONTROL, SURROGATE>(&bytes[i..]).map(|j| i + j)
     }
 }
 
 #[cfg(all(target_arch = "x86_64", target_feature = "sse2"))]
 #[inline(always)]
-pub(crate) fn find_string_terminator_sse2(bytes: &[u8]) -> Option<usize> {
+fn find_sse2<const CONTROL: bool, const SURROGATE: bool>(bytes: &[u8]) -> Option<usize> {
     use std::arch::x86_64::*;
     unsafe {
         let quote = _mm_set1_epi8(b'"' as i8);
         let bslash = _mm_set1_epi8(b'\\' as i8);
-        let control_max = _mm_set1_epi8(0x1F);
-        let mut i: usize = 0;
+        let mut i = 0;
         while i + 16 <= bytes.len() {
-            let chunk = _mm_loadu_si128(bytes.as_ptr().add(i) as *const _);
-            let eq_q = _mm_cmpeq_epi8(chunk, quote);
-            let eq_b = _mm_cmpeq_epi8(chunk, bslash);
-            let control = _mm_cmpeq_epi8(_mm_min_epu8(chunk, control_max), chunk);
-            let mask = _mm_or_si128(_mm_or_si128(eq_q, eq_b), control);
-            let bitmask = _mm_movemask_epi8(mask) as u32;
-            if bitmask != 0 {
-                return Some(i + bitmask.trailing_zeros() as usize);
+            let chunk = _mm_loadu_si128(bytes.as_ptr().add(i).cast());
+            let mut mask =
+                _mm_or_si128(_mm_cmpeq_epi8(chunk, quote), _mm_cmpeq_epi8(chunk, bslash));
+            if CONTROL {
+                // Unsigned comparison: non-ASCII UTF-8 bytes are not controls.
+                mask = _mm_or_si128(
+                    mask,
+                    _mm_cmpeq_epi8(_mm_min_epu8(chunk, _mm_set1_epi8(0x1F)), chunk),
+                );
+            }
+            if SURROGATE {
+                mask = _mm_or_si128(mask, _mm_cmpeq_epi8(chunk, _mm_set1_epi8(0xEDu8 as i8)));
+            }
+            let bits = _mm_movemask_epi8(mask) as u32;
+            if bits != 0 {
+                return Some(i + bits.trailing_zeros() as usize);
             }
             i += 16;
         }
-        // Tail.
-        find_string_terminator_scalar(&bytes[i..]).map(|off| i + off)
+        find_word::<CONTROL, SURROGATE>(&bytes[i..]).map(|j| i + j)
     }
 }
+
+#[cfg(test)]
+#[path = "simd_tests.rs"]
+mod tests;

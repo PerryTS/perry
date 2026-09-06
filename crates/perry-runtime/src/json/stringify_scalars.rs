@@ -65,16 +65,14 @@ pub(crate) unsafe fn write_escaped_string(buf: &mut String, s: &str) {
     // (issue #1182): a lead byte of 0xED followed by 0xA0..=0xBF means
     // we have a 3-byte encoding of U+D800..=U+DFFF and need to emit a
     // `\uXXXX` escape rather than the raw (invalid-UTF-8) bytes.
-    let needs_escape = bytes
-        .iter()
-        .any(|&b| b < 0x20 || b == b'"' || b == b'\\' || b == 0xED);
-    if !needs_escape {
+    let first_escape = super::simd::find_string_escape(bytes);
+    let Some(first_escape) = first_escape else {
         buf.reserve(bytes.len() + 2);
         buf.push('"');
         buf.push_str(s);
         buf.push('"');
         return;
-    }
+    };
 
     buf.push('"');
     let mut start = 0;
@@ -94,7 +92,7 @@ pub(crate) unsafe fn write_escaped_string(buf: &mut String, s: &str) {
     // codebase treats stringify output as a byte stream — and an
     // ill-formed result is strictly preferable to a SIGABRT.
     let buf_vec = buf.as_mut_vec();
-    let mut i = 0;
+    let mut i = first_escape;
     while i < bytes.len() {
         let b = bytes[i];
         // WTF-8 surrogate handling (issue #1182). A 0xED 0xA0..=0xBF
@@ -147,7 +145,7 @@ pub(crate) unsafe fn write_escaped_string(buf: &mut String, s: &str) {
                     continue;
                 }
             }
-            buf_vec.extend_from_slice(format!("\\u{:04x}", high_cu).as_bytes());
+            append_code_unit_escape(buf_vec, high_cu as u16);
             i += 3;
             start = i;
             continue;
@@ -164,7 +162,7 @@ pub(crate) unsafe fn write_escaped_string(buf: &mut String, s: &str) {
                 if start < i {
                     buf_vec.extend_from_slice(&bytes[start..i]);
                 }
-                buf_vec.extend_from_slice(format!("\\u{:04x}", b).as_bytes());
+                append_code_unit_escape(buf_vec, b as u16);
                 start = i + 1;
                 i += 1;
                 continue;
@@ -184,6 +182,19 @@ pub(crate) unsafe fn write_escaped_string(buf: &mut String, s: &str) {
         buf_vec.extend_from_slice(&bytes[start..]);
     }
     buf_vec.push(b'"');
+}
+
+#[inline]
+fn append_code_unit_escape(buf: &mut Vec<u8>, unit: u16) {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    buf.extend_from_slice(&[
+        b'\\',
+        b'u',
+        HEX[(unit >> 12) as usize],
+        HEX[((unit >> 8) & 15) as usize],
+        HEX[((unit >> 4) & 15) as usize],
+        HEX[(unit & 15) as usize],
+    ]);
 }
 
 /// ECMA-262 SerializeJSONProperty step 2 for a BigInt: `GetV(value, "toJSON")`
@@ -265,3 +276,7 @@ pub(crate) fn throw_bigint_serialize() -> ! {
         POINTER_TAG | (err_ptr as u64 & POINTER_MASK),
     ))
 }
+
+#[cfg(test)]
+#[path = "stringify_scalars_tests.rs"]
+mod tests;
