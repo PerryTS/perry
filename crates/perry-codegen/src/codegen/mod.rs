@@ -1831,7 +1831,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
         match typed_abi::typed_i1_function_rejection_reason(f) {
             None => {
                 typed_i1_functions.insert(f.id);
-                if let Some(reps) = typed_abi::typed_param_reps_for_params(&f.params) {
+                if let Some(reps) = typed_abi::typed_i1_function_param_reps(f) {
                     typed_i1_function_param_reps.insert(f.id, reps);
                 }
             }

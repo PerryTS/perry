@@ -8730,6 +8730,60 @@ fn typed_i1_numeric_predicate_module() -> Module {
     }
 }
 
+fn typed_i1_erased_numeric_predicate_module() -> Module {
+    let mut module = typed_i1_numeric_predicate_module();
+    module.name = "typed_i1_erased_numeric_predicate.ts".to_string();
+
+    let range = |lo, hi| Expr::Logical {
+        op: LogicalOp::And,
+        left: Box::new(Expr::Compare {
+            op: CompareOp::Ge,
+            left: Box::new(local(1)),
+            right: Box::new(int(lo)),
+        }),
+        right: Box::new(Expr::Compare {
+            op: CompareOp::Le,
+            left: Box::new(local(1)),
+            right: Box::new(int(hi)),
+        }),
+    };
+    let equal = |value| Expr::Compare {
+        op: CompareOp::Eq,
+        left: Box::new(local(1)),
+        right: Box::new(int(value)),
+    };
+    let predicate = vec![
+        range(0x1100, 0x115f),
+        equal(0x2329),
+        range(0x2e80, 0x303e),
+        equal(0xa015),
+    ]
+    .into_iter()
+    .reduce(|left, right| Expr::Logical {
+        op: LogicalOp::Or,
+        left: Box::new(left),
+        right: Box::new(right),
+    })
+    .unwrap();
+
+    module.functions[0].name = "is_wide".to_string();
+    module.functions[0].params = vec![param(1, "q", Type::Any)];
+    module.functions[0].body = vec![Stmt::Return(Some(predicate))];
+
+    module.functions[1].name = "caller".to_string();
+    module.functions[1].params = vec![param(3, "s", Type::String)];
+    module.functions[1].body = vec![Stmt::Return(Some(Expr::Call {
+        callee: Box::new(Expr::FuncRef(1)),
+        args: vec![Expr::StringCodePointAt {
+            string: Box::new(local(3)),
+            index: Box::new(int(0)),
+        }],
+        type_args: Vec::new(),
+        byte_offset: 0,
+    }))];
+    module
+}
+
 fn typed_i1_i32_predicate_module() -> Module {
     Module {
         name: "typed_i1_i32_predicate.ts".to_string(),
@@ -11830,6 +11884,51 @@ fn typed_i1_numeric_predicate_function_uses_f64_params_and_public_wrapper() {
                 })
         }),
         "expected numeric-predicate direct call artifact to record f64 typed signature:\n{artifact:#}"
+    );
+}
+
+#[test]
+fn typed_i1_erased_numeric_predicate_guards_once_and_uses_f64_comparisons() {
+    let ir = String::from_utf8(
+        compile_module(&typed_i1_erased_numeric_predicate_module(), empty_opts()).unwrap(),
+    )
+    .unwrap();
+    let public = "perry_fn_typed_i1_erased_numeric_predicate_ts__is_wide";
+    let typed = "perry_fn_typed_i1_erased_numeric_predicate_ts__is_wide$typed_i1";
+    let generic_body = "perry_fn_typed_i1_erased_numeric_predicate_ts__is_wide$generic";
+    let caller = "perry_fn_typed_i1_erased_numeric_predicate_ts__caller";
+    let wrapper_ir = function_ir_section(&ir, public);
+    let typed_ir = defined_function_ir_section(&ir, typed);
+    let generic_ir = defined_function_ir_section(&ir, generic_body);
+    let caller_ir = body_ir_section(&ir, caller);
+
+    assert!(
+        ir.contains(&format!("define internal i1 @{typed}(double %arg1)")),
+        "erased numeric predicate should have an f64 typed clone:\n{ir}"
+    );
+    assert!(
+        typed_ir.contains("fcmp oge double")
+            && typed_ir.contains("fcmp ole double")
+            && typed_ir.contains("fcmp oeq double")
+            && !typed_ir.contains("@js_rel_"),
+        "typed predicate should contain only native f64 comparisons:\n{typed_ir}"
+    );
+    assert!(
+        generic_ir.contains("call double @js_rel_ge(")
+            && generic_ir.contains("call double @js_rel_le("),
+        "generic fallback should preserve JS relational semantics:\n{generic_ir}"
+    );
+    assert!(
+        wrapper_ir.contains(", 32761")
+            && wrapper_ir.contains(&format!("call i1 @{typed}(double "))
+            && wrapper_ir.contains(&format!("call double @{generic_body}(")),
+        "public wrapper should guard once and retain the generic fallback:\n{wrapper_ir}"
+    );
+    assert!(
+        caller_ir.contains("call double @js_string_code_point_at(")
+            && caller_ir.contains(&format!("call double @{public}("))
+            && !caller_ir.contains(&format!("call i1 @{typed}(")),
+        "codePointAt's undefined case should use the guarded public entry:\n{caller_ir}"
     );
 }
 
