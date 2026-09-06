@@ -2,6 +2,8 @@
 
 Base: Perry 0.5.1520, commit `454daac4f8fc667ab4bc85b7b5b36c8bae56ae28`.
 Branch: `codex/json-fastpaths-1520`.
+Draft PR: [#9849](https://github.com/PerryTS/perry/pull/9849).
+Runtime implementation commit: `2a05ac309`.
 
 ## Measured results
 
