@@ -173,10 +173,29 @@ fn old_closure_entries_survive_a_minor_full_walk() {
         !row.partial,
         "closure.dynamic_props takes the FULL walk since #9841: {row:?}"
     );
-    assert!(row.table_len >= 2, "{row:?}");
+    // `table_len >= 2` here was inherited from the YOUNG walk and is wrong for
+    // the full one: the two walks of this same table compute `table_len`
+    // differently. The young walk used `props.len() + prototypes.len() +
+    // deleted.len()` — this fixture's single owner appears in two of those
+    // maps, so it counted 2. The full walk builds a deduped OWNER vec, so the
+    // same state counts 1. One owner, one entry.
+    assert!(row.table_len >= 1, "{row:?}");
     assert_eq!(
         row.visited, row.table_len,
         "a full walk visits every owner, old ones included: {row:?}"
+    );
+    // The property worth pinning, and the one the `kept=0` in the failing row
+    // was actually reporting: an OLD owner whose only value is a number and
+    // whose only other state is a deleted key has nothing a minor can act on,
+    // so the full walk must NOT re-log it. `kept` counts what goes back into
+    // the log for the death prune; this owner must not be in it.
+    //
+    // (`logged` on a FULL row is not "still logged" — the full walk sets
+    // `logged: table_len` by construction, so `logged=1` here means "one owner
+    // considered", not "one entry left behind". Nothing stale is implied.)
+    assert!(
+        row.kept < row.table_len,
+        "an old owner with no minor-relevant value must not be re-logged: {row:?}"
     );
 }
 
