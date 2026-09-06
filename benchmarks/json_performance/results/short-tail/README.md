@@ -15,7 +15,9 @@ not accepted local CPU measurements.
 172 runtime tests, 38 compiled Node comparisons using the same pinned fixture
 objects, and 34 moving-GC runs pass. All 59 source hashes, immutable worker and
 runtime archives, and matched release settings are verified. GC production
-policy and parse-boundary behavior remain unchanged from v0.5.1520.
+policy and the implementations of the parse-boundary hooks remain unchanged
+from v0.5.1520. JSON-local rooting and leaf call-sequence changes are documented
+in the branch report.
 
 The full 152-verification / 456-timing / 432-memory matrix and the 700-trial
 paired matrix plus 24 retained-empty trials qualify, with 32/42 clean external
