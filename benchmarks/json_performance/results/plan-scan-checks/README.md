@@ -14,3 +14,8 @@ The next comparison uses escaped-count as the retained reference, plus four
 short-tail anchors (small-record stringify, long-ASCII/Unicode parse and 1 MB
 record-array parse), alongside all existing reference rows: 54 cases / 756 trials.
 All 38 CPU / 74 peak RSS / 36 retained RSS and no-regression requirements remain.
+
+The release and full comparisons subsequently completed. See
+[measured plan-scan results](../plan-scan/README.md) for authoritative validation
+and performance; the pending status above describes the earlier source-check
+checkpoint only.

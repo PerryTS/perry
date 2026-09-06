@@ -1,0 +1,20 @@
+{
+  "purpose": "Quiet M1 sampling diagnostic. Sample shares are not a measured GC CPU percentage or a replacement for the full CPU/RSS matrix.",
+  "command": [
+    "/Users/perry/json-plan-scan-20260906-codex/.work/worker",
+    "/Users/perry/json-plan-scan-20260906-codex/.work/fixtures/records_object_20m.json",
+    "stringify",
+    "128",
+    "2"
+  ],
+  "worker_sha256": "603487b666e334940ea399ab029ced7745673239ca93241dbab8dc8f5d4f4fb2",
+  "worker_exit": 0,
+  "sample_exit": 0,
+  "sample_stderr": "Sampling process 76092 for 3 seconds with 1 millisecond of run time between samples\nSampling completed, processing symbols...\nSample analysis of process 76092 written to file /Users/perry/json-plan-scan-20260906-codex/results/large-record-profile/records_object_20m.sample.txt\n",
+  "cpu": "Apple M1",
+  "load_after": [
+    1.533203125,
+    1.7568359375,
+    1.70361328125
+  ]
+}

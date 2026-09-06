@@ -1,39 +1,23 @@
-Accelerate JSON parse and stringify with bounded scanners, vectorized Unicode handling, duplicate-key indexing, bounded parse-shape retention, ECMAScript number formatting, inline scalar results, primitive-array/object emission and direct final output for qualifying strings and records. Exact integers below 2^53 use integer formatting in output plans. Large native tapes transfer into lazy-result storage. Empty ordinary objects validate their complete input before a single final allocation, with no managed scratch or parse suppression/rebaseline cycle.
+Accelerate JSON parse and stringify with bounded scanners, vectorized Unicode
+and escape counts, duplicate-key indexing, bounded shape retention, exact
+number formatting and direct final output for eligible strings and records.
+Large native tapes transfer into exact lazy-result storage. Empty ordinary
+objects validate their complete input before final allocation. Short-word
+scanning is confined to scalar output plans, whose initialized placeholders
+have smaller active payloads.
 
-Root general parse inputs before pending collection and rederive moved bytes. End native tape input borrows before collection. Honor later-record descriptors and array index getters. Root direct-output records before allocating prototype lookup or final output. Root lazy computed assignments through materialization and preserve the original alias length. GC production policy, thresholds and gc_bump_malloc_trigger remain unchanged from v0.5.1520; GC-directory changes are tests only. The empty leaf preserves pending debt, outer suppression, key-cache/ring cleanup and pressure scheduling.
+Root parse and direct-output inputs before collection and rederive moved
+pointers. Preserve array getter order, lazy assignment aliases, descriptors,
+callbacks, malformed-string behavior and retained-output identity. GC production
+policy, thresholds and gc_bump_malloc_trigger remain unchanged from v0.5.1520;
+GC-directory changes are tests only. No version bump.
 
-The latest measured source passes 165 JSON runtime tests, 37 compiled Node comparisons and 32 moving-GC runs. Its full M1 CPU/RSS matrix, 574-trial paired comparison and 24 extra retained-empty trials pass quiet gates and external monitoring. Against tape-owned, empty-object parse CPU falls 82.08%, from 0.32247 to 0.05778 microseconds (5.58x); inline-string parse improves 7.18%, and 1 MB object-root parse 0.78%.
-
-This remains a development checkpoint: 11/38 CPU, 58/74 peak RSS and 28/36 retained RSS medians meet the better Node/Bun median. Escaped stringify regresses 2.22%, wide stringify 2.14%, and numeric parse 1.52%. Empty-parse peak RSS rises 0.375 MiB; several other rows rise about 0.17-0.23 MiB. Retaining 200,000 empty objects uses 24.86 MiB versus Node 83.42 / Bun 50.19 MiB, but also 0.17 MiB more than preceding Perry. Older unresolved regressions remain documented; no-regression acceptance fails. Array-root parsing may defer materialization; stringify inputs are fully materialized. RSS is whole-process memory. Full results and rejected experiments are in benchmarks/json_performance/DATA_RECORDS.md. No version bump.
-
-The Piece-borrowing experiment was measured and reverted: paired large-array
-parse regressed about 5-5.5% and small-record stringify 1.27%. Complete raw,
-validation and paired evidence is retained under results/piece-ref.
-
-Validated escaped UTF-8 strings now plan exact output and emit into the final
-managed string. ARM counts expansion in bounded vector blocks; other targets
-use a scalar table. Invalid UTF-8/WTF-8 retains the general serializer. Paired
-escaped stringify CPU falls 49.97% versus empty-parse (about 2x Node / 2.2x Bun
-in the full matrix), with peak RSS down 0.84 MiB. 172 runtime tests, 38 compiled
-comparisons and 34 moving-GC runs pass. Complete full/paired matrices qualify.
-Acceptance remains open at 12/38 CPU, 58/74 peak and 28/36 retained RSS: small
-record stringify +1.60%, several small-object parse regressions and all older
-unresolved regressions are recorded in results/escaped-count. No GC production
-policy or version change.
-
-The compact-plan experiment was measured and reverted: smaller generated
-emitters still regressed small-record stringify 3.62%, escaped stringify 1.56%
-and record-array parse 1.26–1.55%. Full validation and paired evidence are
-preserved under results/compact-piece; escaped-count remains the reference.
-
-The short-tail experiment validates with 172 runtime tests, 38 compiled
-comparisons, 34 moving-GC runs and complete quiet CPU/RSS matrices. It lowers
-paired small-record stringify CPU 9.82% but regresses long-ASCII parse 3.69%,
-escaped stringify 1.36% and other rows. Scalar peak and retained-empty RSS also
-rise. It remains experimental; results/short-tail contains all raw results and
-ranges. The next comparison limits the short scan to scalar output planning.
-
-The follow-up restores the shared scanner and applies bounded short-word
-packing only in scalar output planning. Its 172 runtime tests and root-holder
-gate pass. Release CPU/RSS and new compiled/moving-GC comparisons are pending;
-the measured short-tail gains cannot yet be attributed to this follow-up.
+The latest source passes 172 runtime tests, 38 pinned compiled comparisons,
+34 moving-GC runs and 59 source hashes. Full CPU/RSS and 756-trial paired
+matrices qualify. Small-record stringify improves 10.47% versus escaped-count,
+with peak RSS down 0.078125 MiB; small-object parse regressions are recovered.
+Acceptance remains open at 12/38 CPU, 58/74 peak and 28/36 retained RSS. Escaped
+and wide stringify regress 1.55%/0.99%, and all other unresolved CPU/RSS
+regressions are recorded. A quiet 20 MB profile points to substantial loop GC
+work; it is diagnostic, not a measured GC CPU percentage. Full results and
+rejected experiments are in benchmarks/json_performance/DATA_RECORDS.md.

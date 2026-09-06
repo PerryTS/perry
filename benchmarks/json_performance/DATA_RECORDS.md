@@ -1,10 +1,38 @@
-The current follow-up, plan-scan (7117f9e67), restores the shared scanner and
-limits short-word packing to scalar output planning. Its 172 JSON runtime tests
-and root-holder gate pass; the release build and new complete comparisons are
-pending. [Pinned follow-up source checks](results/plan-scan-checks/README.md).
-No performance result below is attributed to this unmeasured follow-up.
+The latest measured source, plan-scan (7117f9e67), confines short-word scans to
+scalar output planning and restores the shared scanner. Paired small-record
+stringify CPU improves **10.47%**, from 0.320849 to 0.287247 microseconds, with
+peak RSS down 0.078125 MiB. Empty/tiny/small/1 KB object parse improve
+3.80%/2.20%/1.45%/1.48%; all four also improve versus empty-parse, recovering the
+earlier measured regressions. Perry still uses 2.61x Node's CPU on small-record
+stringify in the full run.
 
-The latest completed experiment, short-tail (090e120f3), reduces paired
+**All-row and no-regression acceptance remain open: 12/38 CPU, 58/74 peak RSS
+and 28/36 retained RSS targets.** Confirmed paired regressions versus
+escaped-count remain: escaped stringify +1.55%, wide stringify +0.99%, and
+20 MB object-root parse +0.48%. Numeric parse is +1.12% with overlapping ranges
+versus escaped-count, and +1.60% with separated ranges versus tape-owned.
+Inline-string stringify peak RSS rises 0.015625 MiB, retained-empty RSS rises
+0.09375 MiB, and the older 8 MB array-parse peak regression remains
++11.265625 MiB versus parse-entry. All other unresolved regressions remain.
+
+172 runtime tests, 38 pinned compiled comparisons, 34 moving-GC runs and all
+59 source hashes pass. Matched release settings and complete full 152/456/432
+and paired 756-trial matrices plus 24 retained-empty trials qualify with 32/44
+clean observations. A separate quiet M1 20 MB profile finds 1,489/2,210 main-thread
+samples under the loop GC safepoint, mostly full mark/sweep. This is sampling
+evidence, not a measured GC CPU percentage; GC production policy is unchanged.
+
+[Latest 38 CPU rows](results/plan-scan/cpu-38.md),
+[CPU and RAM](results/plan-scan/tables.md),
+[all target comparisons](results/plan-scan/parity.md),
+[paired ranges](results/plan-scan/recheck-plan-scan/summary.json),
+[validation and limitations](results/plan-scan/README.md),
+[20 MB profile](results/plan-scan/large-record-profile/README.md), and
+[next work](results/plan-scan/next-steps.md).
+
+The shared-tail experiment below is retained as evidence of its tradeoffs.
+
+The preceding experiment, short-tail (090e120f3), reduces paired
 small-record stringify CPU 9.82%, from 0.3212 to 0.2897 microseconds. It also
 introduces confirmed regressions, including long-ASCII parse +3.69%, 1 KB object
 parse +1.51%, escaped stringify +1.36%, wide stringify +0.87%, and numeric parse
