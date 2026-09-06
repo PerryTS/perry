@@ -1834,6 +1834,8 @@ fn a_single_program_cache_clear_cannot_disarm_a_lookbehind_literal() {
         subject.with_const_ptr::<StringHeader, _>(|s| js_regexp_test(cold, s)),
         1,
         "the literal must still match after an unrelated cache reached capacity"
+    );
+}
 
 /// The backtracking cliff: a capture group under a quantifier takes a pattern
 /// off the linear engine, and the ECMAScript backtracker has no step budget.

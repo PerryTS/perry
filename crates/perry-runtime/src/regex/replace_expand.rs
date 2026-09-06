@@ -3,9 +3,9 @@
 //! `expand_js_replacement` (ECMAScript `$`-pattern expansion) and
 //! `replace_regex_fn_fancy` (the fancy-regex callback-replace fallback).
 
+use super::replace_expand_fancy::replace_regex_str_fancy;
 use super::replace_fn::{copy_replace_source, finish_replace_bytes};
 use super::*;
-use super::replace_expand_fancy::replace_regex_str_fancy;
 
 /// of `String.prototype.replace` special patterns that the Rust `regex`
 /// crate's own `$`-expansion does NOT cover: `$&` (matched substring),
