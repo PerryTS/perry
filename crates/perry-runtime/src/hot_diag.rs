@@ -37,13 +37,25 @@ fn sink_from_env(name: &str) -> Option<Sink> {
     }
 }
 
+/// A failed file write used to be swallowed (`if ... .is_ok()`), so an
+/// unwritable path — a directory that does not exist, a read-only mount, a
+/// sandbox — produced *no file and no message*, which greps identically to
+/// "this instrument was never built". That is the campaign's own
+/// missing-exit-line trap in a second form, and it cost a lane a measurement
+/// run. Report the first failure on stderr, naming the path and the error,
+/// and keep writing there.
 fn write_sink(sink: &Sink, text: &str) {
     match sink {
         Sink::Stderr => eprint!("{text}"),
         Sink::File(path) => {
             let tmp = format!("{path}.tmp");
-            if std::fs::write(&tmp, text).is_ok() {
-                let _ = std::fs::rename(&tmp, path);
+            let wrote = std::fs::write(&tmp, text).and_then(|()| std::fs::rename(&tmp, path));
+            if let Err(err) = wrote {
+                static WARNED: AtomicBool = AtomicBool::new(false);
+                if !WARNED.swap(true, Ordering::Relaxed) {
+                    eprintln!("[hot-diag] cannot write {path}: {err} — falling back to stderr");
+                }
+                eprint!("{text}");
             }
         }
     }
@@ -140,6 +152,28 @@ pub struct RegexDiag {
     /// meta edge was wired for RegExp this was 0 by construction: the filter
     /// answered "maybe" for every one of them.
     pub desc_regexp_meta_negative: u64,
+    /// Constructions whose two header string stores took the full write
+    /// barrier pair (`GC_FLAG_TENURED` set on the freshly allocated header,
+    /// or an incremental cycle live anywhere).
+    pub new_barrier_taken: u64,
+    /// Constructions the newborn-parent gate proved owe the remembered set
+    /// nothing, so neither barrier call ran. `taken + gated == new_calls`
+    /// is the invariant: a run where `gated` is 0 did not exercise the gate.
+    pub new_barrier_gated: u64,
+    /// Bytes of `RegExpHeader` allocated by `js_regexp_new`. Load-independent
+    /// and directly comparable with a probe's allocation-per-grapheme reading.
+    pub new_header_bytes: u64,
+    /// Bytes the literal-site cache byte-compared to VERIFY a fingerprint
+    /// match (`site_cache::entry_matches`). Distinct from `pattern_bytes`,
+    /// which counts every construction's pattern length whether the probe hit
+    /// or missed: this is the `memcmp` volume alone, which is what a 12 KB
+    /// emoji pattern makes expensive and a 60-byte one does not.
+    pub new_site_verify_bytes: u64,
+    /// Address-keyed side-table inserts performed per construction
+    /// (`REGEX_POINTERS` and `REGEX_SOURCE_TABLE`) — two per header, each a
+    /// `PtrHasher` hash plus a hashbrown insert, mirrored by two removals at
+    /// death and two rekeys per evacuation.
+    pub new_side_table_inserts: u64,
     per_pattern: HashMap<usize, PatStat>,
 }
 
@@ -154,14 +188,17 @@ pub fn regex_with(f: impl FnOnce(&mut RegexDiag)) {
         let mut d = d.borrow_mut();
         if d.started.is_none() {
             d.started = Some(Instant::now());
-            d.last_dump = d.started;
+            // `last_dump` stays None so the FIRST tick dumps immediately: a
+            // run shorter than `DUMP_INTERVAL_MS` used to write nothing at
+            // all, which is indistinguishable from a dead instrument.
+            d.last_dump = None;
         }
         f(&mut d);
         d.events = d.events.wrapping_add(1);
         if d.events % TICK_EVERY == 0 {
             let due = d
                 .last_dump
-                .is_some_and(|t| t.elapsed().as_millis() >= DUMP_INTERVAL_MS);
+                .is_none_or(|t| t.elapsed().as_millis() >= DUMP_INTERVAL_MS);
             if due {
                 d.last_dump = Some(Instant::now());
                 if let Some(sink) = regex_sink() {
@@ -254,7 +291,9 @@ impl RegexDiag {
              compiles std={} fancy={} repeat={} cache_clears={} lazy_builds={} lazy_cache_hits={} \
              exec={} exec_matched={} capture_slots={} capture_bytes={} test={} test_global={} \
              match={} replace={} replace_matches={} split={} flags_alloc={} \
-             desc_regexp_probes={} desc_regexp_meta_negative={}",
+             desc_regexp_probes={} desc_regexp_meta_negative={} \
+             barrier_taken={} barrier_gated={} header_bytes={} site_verify_bytes={} \
+             side_table_inserts={}",
             self.new_calls,
             self.new_validated_hit,
             self.new_site_hit,
@@ -278,6 +317,11 @@ impl RegexDiag {
             self.new_flags_allocated,
             self.desc_regexp_probes,
             self.desc_regexp_meta_negative,
+            self.new_barrier_taken,
+            self.new_barrier_gated,
+            self.new_header_bytes,
+            self.new_site_verify_bytes,
+            self.new_side_table_inserts,
         );
         // Merge by content (prefix, len, flags): distinct literal sites with
         // the same pattern are one row.
