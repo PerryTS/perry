@@ -221,6 +221,13 @@ unsafe fn parse_result_slow(text_ptr: *const StringHeader, len: usize) -> Result
     if super::parse_empty::is_empty_object(bytes) {
         return Ok(super::parse_empty::allocate_empty_object());
     }
+    if len <= super::parse_inline_object::MAX_BYTES {
+        if let Some(plan) = super::parse_inline_object::decode(bytes) {
+            if let Some(value) = super::parse_inline_object::allocate(&plan) {
+                return Ok(value);
+            }
+        }
+    }
     if requires_iterative_parse(bytes) {
         if exceeds_iterative_budget(bytes) {
             return Err(range_error_value(&iterative_budget_message()));
@@ -352,6 +359,13 @@ unsafe fn parse_slow(text_ptr: *const StringHeader, len: usize) -> JSValue {
     let bytes = std::slice::from_raw_parts(data_ptr, len);
     if super::parse_empty::is_empty_object(bytes) {
         return super::parse_empty::allocate_empty_object();
+    }
+    if len <= super::parse_inline_object::MAX_BYTES {
+        if let Some(plan) = super::parse_inline_object::decode(bytes) {
+            if let Some(value) = super::parse_inline_object::allocate(&plan) {
+                return value;
+            }
+        }
     }
     if requires_iterative_parse(bytes) {
         if exceeds_iterative_budget(bytes) {
