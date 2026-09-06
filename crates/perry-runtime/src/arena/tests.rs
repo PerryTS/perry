@@ -1544,10 +1544,20 @@ fn deferred_registration_flush_sites() {
         ),
     ];
 
-    let src = std::fs::read_to_string(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/arena/page_meta.rs"),
-    )
-    .expect("page_meta.rs must be readable");
+    // `page_meta` is a directory since the #9853 page-class table pushed it past
+    // the file cap. Read EVERY part: scanning only `mod.rs` would silently drop
+    // the functions that moved into `page_class.rs` from this audit, leaving a
+    // green test that covers less than it did before the split.
+    let page_meta_dir =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/arena/page_meta");
+    let mut src = String::new();
+    for part in ["mod.rs", "page_class.rs", "tests.rs"] {
+        src.push_str(
+            &std::fs::read_to_string(page_meta_dir.join(part))
+                .unwrap_or_else(|e| panic!("page_meta/{part} must be readable: {e:?}")),
+        );
+        src.push('\n');
+    }
 
     // Split into function bodies by tracking `fn <name>` headers at any indent.
     let mut current: Option<String> = None;
@@ -1597,7 +1607,7 @@ fn deferred_registration_flush_sites() {
 
     assert!(
         offenders.is_empty(),
-        "these functions in arena/page_meta.rs read or mutate OLD_GEN_PAGE_OBJECTS / \
+        "these functions in arena/page_meta/ read or mutate OLD_GEN_PAGE_OBJECTS / \
          OLD_GEN_PAGE_META without first calling flush_deferred_old_page_registrations(), \
          and are not listed as exempt: {offenders:?}.\n\
          A deferred registration is invisible to a reader that does not flush, and a \

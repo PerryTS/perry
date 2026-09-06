@@ -4,7 +4,6 @@
   "files": {
     "crates/perry-runtime/src/agent.rs": 1,
     "crates/perry-runtime/src/arena/block.rs": 5,
-    "crates/perry-runtime/src/arena/page_meta.rs": 2,
     "crates/perry-runtime/src/async_context.rs": 3,
     "crates/perry-runtime/src/async_hooks.rs": 7,
     "crates/perry-runtime/src/builtins/console.rs": 4,
@@ -84,6 +83,7 @@
     "crates/perry-runtime/src/v8.rs": 2,
     "crates/perry-runtime/src/wasi.rs": 1,
     "crates/perry-runtime/src/weakref.rs": 2,
-    "crates/perry-runtime/src/web_storage.rs": 2
+    "crates/perry-runtime/src/web_storage.rs": 2,
+    "crates/perry-runtime/src/arena/page_meta/mod.rs": 2
   }
 }

@@ -132,7 +132,7 @@ pub(crate) struct HotTls {
     // arena/block.rs
     pub(crate) arena: *mut u8,
     pub(crate) inline_state: *mut u8,
-    // arena/page_meta.rs
+    // arena/page_meta/mod.rs
     pub(crate) page_generation_cache: *mut u8,
     pub(crate) page_generations: *mut u8,
     // gc/malloc.rs

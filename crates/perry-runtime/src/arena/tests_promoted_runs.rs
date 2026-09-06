@@ -261,10 +261,20 @@ fn every_page_object_reader_expands_promoted_runs() {
         ),
     ];
 
-    let src = std::fs::read_to_string(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/arena/page_meta.rs"),
-    )
-    .expect("page_meta.rs must be readable");
+    // `page_meta` is a directory since the #9853 page-class table pushed it past
+    // the file cap. Read EVERY part: scanning only `mod.rs` would silently drop
+    // the functions that moved into `page_class.rs` from this audit, leaving a
+    // green test that covers less than it did before the split.
+    let page_meta_dir =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/arena/page_meta");
+    let mut src = String::new();
+    for part in ["mod.rs", "page_class.rs", "tests.rs"] {
+        src.push_str(
+            &std::fs::read_to_string(page_meta_dir.join(part))
+                .unwrap_or_else(|e| panic!("page_meta/{part} must be readable: {e:?}")),
+        );
+        src.push('\n');
+    }
 
     let mut bodies: Vec<(String, String)> = Vec::new();
     for line in src.lines() {
@@ -307,7 +317,7 @@ fn every_page_object_reader_expands_promoted_runs() {
 
     assert!(
         offenders.is_empty(),
-        "these functions in arena/page_meta.rs read or mutate \
+        "these functions in arena/page_meta/ read or mutate \
          OLD_GEN_PAGE_OBJECTS without first expanding pending promoted page \
          runs: {offenders:?}.\n\
          A promoted page's object list is DESCRIBED until someone asks for it, \
