@@ -140,6 +140,16 @@ pub(super) fn lookup(pattern: &str, flags: &str) -> Option<Hit> {
         for s in [slot, slot ^ 1] {
             if let Some(entry) = &cache[s] {
                 if entry_matches(entry, fp, pattern, flags) {
+                    // The verify is a FULL byte compare, so its cost is
+                    // linear in the pattern and this counter — not
+                    // `pattern_bytes`, which counts every construction
+                    // whether it probed or not — is the `memcmp` volume.
+                    // Counted at the construction probe only; `insert` and
+                    // `install_programs` verify too and are not counted here.
+                    if crate::hot_diag::regex_on() {
+                        let n = pattern.len() as u64;
+                        crate::hot_diag::regex_with(|d| d.new_site_verify_bytes += n);
+                    }
                     return Some(Hit {
                         pattern: entry.pattern.clone(),
                         flags: entry.flags.clone(),
