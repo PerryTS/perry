@@ -409,12 +409,6 @@
     },
     {
       "file": "crates/perry-runtime/src/intl/segments_view.rs",
-      "name": "DECLINE_NOT_STRING",
-      "verdict": "not_a_gc_pointer",
-      "why": "#9870: `PERRY_SEGVIEW_DIAG` tally for the Intl.Segmenter view mode \u2014 how often the fast path opened, and which check declined it. A plain `AtomicU64` written only through `bump()`'s `fetch_add(1, Relaxed)` and read only by the diagnostic dump: it holds a COUNT, never an address or a NaN-boxed value, so there is no slot for the collector to mark or rewrite."
-    },
-    {
-      "file": "crates/perry-runtime/src/intl/segments_view.rs",
       "name": "DECLINE_NOT_UTF8",
       "verdict": "not_a_gc_pointer",
       "why": "#9870: `PERRY_SEGVIEW_DIAG` tally for the Intl.Segmenter view mode \u2014 how often the fast path opened, and which check declined it. A plain `AtomicU64` written only through `bump()`'s `fetch_add(1, Relaxed)` and read only by the diagnostic dump: it holds a COUNT, never an address or a NaN-boxed value, so there is no slot for the collector to mark or rewrite."
@@ -428,12 +422,6 @@
     {
       "file": "crates/perry-runtime/src/intl/segments_view.rs",
       "name": "MATERIALISE_SEGMENT",
-      "verdict": "not_a_gc_pointer",
-      "why": "#9870: `PERRY_SEGVIEW_DIAG` tally for the Intl.Segmenter view mode \u2014 how often the fast path opened, and which check declined it. A plain `AtomicU64` written only through `bump()`'s `fetch_add(1, Relaxed)` and read only by the diagnostic dump: it holds a COUNT, never an address or a NaN-boxed value, so there is no slot for the collector to mark or rewrite."
-    },
-    {
-      "file": "crates/perry-runtime/src/intl/segments_view.rs",
-      "name": "OPENS",
       "verdict": "not_a_gc_pointer",
       "why": "#9870: `PERRY_SEGVIEW_DIAG` tally for the Intl.Segmenter view mode \u2014 how often the fast path opened, and which check declined it. A plain `AtomicU64` written only through `bump()`'s `fetch_add(1, Relaxed)` and read only by the diagnostic dump: it holds a COUNT, never an address or a NaN-boxed value, so there is no slot for the collector to mark or rewrite."
     },
@@ -608,6 +596,32 @@
       "why": "Megamorphic property-read stub cache, the read twin of WRITE_STUB: 2-way ways of (shape_token, key_bits, slot) plain u64s. The token is a shape id and the slot an index; key_bits are content-derived by construction, because read_stub_key_bits returns short_ascii_sso_bits(key) \u2014 the key's characters packed inline \u2014 and yields None for any key that would otherwise be stored under a pointer. No way holds a heap address, so nothing here keeps an object alive, and a stale entry cannot hit: receiver_shape_token returns None for a receiver with no live shape, and the token identifies the exact key set and order, so a shape change yields a different token."
     },
     {
+      "file": "crates/perry-runtime/src/object/regex_proto_thunks.rs",
+      "name": "REGEXP_PROTOTYPE_PTR_SLOT",
+      "verdict": "covered_elsewhere",
+      "why": "#9893: the realm's `RegExp.prototype` address, recorded so the view mode's canonicality proof is three loads instead of a by-name walk. It IS a root and it IS scanned: `object::scan_object_cache_roots_mut` (registered via `reg_scanner!` in gc/mod.rs) visits it with `visit_atomic_i64_slot` beside the iterator-prototype towers, which marks it and rewrites it when the collector moves the prototype. The walk does not reach it because access goes through the `RealmAtomicI64` wrapper's `with_slot`, not a direct static read.",
+      "scanner": "object::scan_object_cache_roots_mut (crates/perry-runtime/src/object/mod.rs), registered by reg_scanner! in crates/perry-runtime/src/gc/mod.rs"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/regex_proto_thunks.rs",
+      "name": "REGEXP_PROTOTYPE_TEST_CLOSURE_SLOT",
+      "verdict": "covered_elsewhere",
+      "why": "#9893: the canonical `RegExp.prototype.test` closure, NaN-BOXED rather than a bare address, and visited as such \u2014 `scan_object_cache_roots_mut` uses `visit_atomic_nanbox_u64_slot` so the collector rewrites the pointer inside the word. Same wrapper indirection as `REGEXP_PROTOTYPE_PTR_SLOT` above.",
+      "scanner": "object::scan_object_cache_roots_mut (crates/perry-runtime/src/object/mod.rs), registered by reg_scanner! in crates/perry-runtime/src/gc/mod.rs"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/regex_proto_thunks.rs",
+      "name": "REGEXP_PROTOTYPE_TEST_INDEX_SLOT",
+      "verdict": "not_a_gc_pointer",
+      "why": "#9893: the field INDEX `test` occupies on the prototype \u2014 a `u32` ordinal, not an address, sentinel `u32::MAX`. Nothing for the collector to mark or rewrite."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/regex_proto_thunks.rs",
+      "name": "REGEXP_PROTOTYPE_TEST_WALKS",
+      "verdict": "not_a_gc_pointer",
+      "why": "#9893: how many by-name canonicality walks this process has done \u2014 a plain `u64` count whose whole purpose is to read 1 per realm and thereby prove the fast path is the path being taken. A NUMBER, never an address."
+    },
+    {
       "file": "crates/perry-runtime/src/object/shapes_store.rs",
       "name": "ID_LIST_OP_STATS",
       "verdict": "not_a_gc_pointer",
@@ -685,12 +699,6 @@
     },
     {
       "file": "crates/perry-runtime/src/regex.rs",
-      "name": "NEVER_MATCH",
-      "verdict": "not_a_gc_pointer",
-      "why": "#9796: the memoized never-match placeholder program installed for a pattern only `fancy-regex` accepts. `Arc<regex::Regex>` is a Rust-allocator compiled program \u2014 the collector neither traces nor moves it \u2014 and the `Arc` keeps it alive independently."
-    },
-    {
-      "file": "crates/perry-runtime/src/regex.rs",
       "name": "REGEX_POINTERS",
       "verdict": "covered_elsewhere",
       "scanner": "regex::regex_header_moved_for_gc / regex_header_clear_dead_for_gc (regex.rs), the RegExp move/death hooks the copying minor and sweep invoke",
@@ -710,6 +718,12 @@
       "classification": "not_a_gc_pointer",
       "verdict": "not_a_gc_pointer",
       "why": "Memoises which (pattern, flags) pairs have already passed the eager syntax check, so a repeated literal validates once (#9178). Keys are owned Rust `String`s copied out of the JS strings, and the value is `()` \u2014 nothing in the map is or points to a JS heap object, so there is no slot for the collector to mark or rewrite. The JS string a pattern came from is rooted by its own RegExp header, independently of this table."
+    },
+    {
+      "file": "crates/perry-runtime/src/regex/compile_cache.rs",
+      "name": "NEVER_MATCH",
+      "verdict": "not_a_gc_pointer",
+      "why": "#9796: the memoized never-match placeholder program installed for a pattern only `fancy-regex` accepts. `Arc<regex::Regex>` is a Rust-allocator compiled program \u2014 the collector neither traces nor moves it \u2014 and the `Arc` keeps it alive independently."
     },
     {
       "file": "crates/perry-runtime/src/set.rs",
