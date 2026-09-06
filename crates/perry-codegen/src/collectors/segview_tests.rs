@@ -552,3 +552,27 @@ fn the_cursor_is_cleared_at_loop_exit() {
         other => panic!("no cursor clear after the loop: {other:?}"),
     }
 }
+
+/// The default is ON, and `PERRY_SEGVIEW=0` is the opt-out.
+///
+/// Asserted rather than assumed because the switch is read through the
+/// environment: a typo in the predicate that made it always-false would leave
+/// every test above passing (they call the rewrite directly) while the tier
+/// silently never fired in a real compile — the #9824 shape.
+#[test]
+fn the_lowering_is_on_by_default_and_zero_opts_out() {
+    use super::segview::segview_lowering_enabled;
+    // These mutate process-wide state, so they live in one test rather than
+    // three; `cargo test` runs test fns concurrently and separate tests would
+    // race on the same variable.
+    std::env::remove_var("PERRY_SEGVIEW");
+    assert!(
+        segview_lowering_enabled(),
+        "unset must mean ON — that is what 'default on' means"
+    );
+    std::env::set_var("PERRY_SEGVIEW", "0");
+    assert!(!segview_lowering_enabled(), "`0` is the opt-out");
+    std::env::set_var("PERRY_SEGVIEW", "1");
+    assert!(segview_lowering_enabled(), "`1` stays on");
+    std::env::remove_var("PERRY_SEGVIEW");
+}

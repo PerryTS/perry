@@ -958,10 +958,17 @@ fn describe(v: &SegViewVerdict) -> String {
 // labels correct and avoids duplicating any closure the body contains — a
 // duplicated `Expr::Closure` would carry a duplicate `FuncId`.
 
-/// `PERRY_SEGVIEW=1`. **Default OFF**: the runtime's view entry points do not
-/// exist yet, so an on-by-default rewrite would emit calls that fail to link.
+/// **Default ON.** `PERRY_SEGVIEW=0` opts out.
+///
+/// It shipped default OFF because the runtime's view entry points did not
+/// exist; #9870 landed them on main, and on claude-code the tier with #9893's
+/// levers is -14 % CPU and -30…-42 MB peak RSS with identical output.
+///
+/// The opt-out stays: a program whose loops the tier declines pays nothing,
+/// but a switch that changes emitted code needs an off position that does not
+/// require a rebuild of the compiler.
 pub fn segview_lowering_enabled() -> bool {
-    matches!(std::env::var("PERRY_SEGVIEW"), Ok(v) if !v.is_empty() && v != "0")
+    !matches!(std::env::var("PERRY_SEGVIEW"), Ok(v) if v == "0")
 }
 
 fn extern_call(name: &str, args: Vec<Expr>) -> Expr {
