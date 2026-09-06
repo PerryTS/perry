@@ -12,7 +12,12 @@ fn scalar_entries_preserve_oversized_key_cache_cleanup() {
     crate::gc::gc_suppress();
     let _suppressed = Suppressed;
     crate::json::test_clear_parse_roots();
-    for fallible in [false, true] {
+    for (fallible, text) in [
+        (false, b"null".as_slice()),
+        (true, b"null".as_slice()),
+        (false, b"{}".as_slice()),
+        (true, b"{}".as_slice()),
+    ] {
         // Lazy materialization can populate this cache between top-level
         // parses. The next parse must preserve the existing cleanup policy,
         // even when its result is an inline scalar.
@@ -24,7 +29,7 @@ fn scalar_entries_preserve_oversized_key_cache_cleanup() {
             4097
         );
         assert!(!crate::json::PARSE_KEY_RING.with(|c| c.borrow().is_empty()));
-        let input = crate::js_string_from_bytes(b"null".as_ptr(), 4);
+        let input = crate::js_string_from_bytes(text.as_ptr(), text.len() as u32);
         let value = unsafe {
             if fallible {
                 crate::json::js_json_parse_result(input).unwrap()
@@ -32,7 +37,7 @@ fn scalar_entries_preserve_oversized_key_cache_cleanup() {
                 crate::json::js_json_parse(input)
             }
         };
-        assert!(value.is_null());
+        assert!(value.is_null() || value.is_pointer());
         assert!(crate::json::PARSE_KEY_CACHE.with(|c| c.borrow().is_empty()));
         assert!(crate::json::PARSE_KEY_RING.with(|c| c.borrow().is_empty()));
     }

@@ -218,6 +218,9 @@ unsafe fn parse_result_slow(text_ptr: *const StringHeader, len: usize) -> Result
     // whose function-wide protection would cross the collection points below.
     let data_ptr = (text_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
     let bytes = std::slice::from_raw_parts(data_ptr, len);
+    if super::parse_empty::is_empty_object(bytes) {
+        return Ok(super::parse_empty::allocate_empty_object());
+    }
     if requires_iterative_parse(bytes) {
         if exceeds_iterative_budget(bytes) {
             return Err(range_error_value(&iterative_budget_message()));
@@ -347,6 +350,9 @@ unsafe fn parse_noncontainer(text_ptr: *const StringHeader, len: usize) -> JSVal
 unsafe fn parse_slow(text_ptr: *const StringHeader, len: usize) -> JSValue {
     let data_ptr = (text_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
     let bytes = std::slice::from_raw_parts(data_ptr, len);
+    if super::parse_empty::is_empty_object(bytes) {
+        return super::parse_empty::allocate_empty_object();
+    }
     if requires_iterative_parse(bytes) {
         if exceeds_iterative_budget(bytes) {
             throw_range_error(&iterative_budget_message());

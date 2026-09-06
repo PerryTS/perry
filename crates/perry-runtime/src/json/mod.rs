@@ -23,6 +23,7 @@ use crate::{js_string_from_bytes, JSValue, StringHeader};
 use std::cell::RefCell;
 
 mod parse_api;
+mod parse_empty;
 mod parse_scalar;
 mod parser;
 // `pub(crate)` so `gc::mod` can register `scan_raw_json_key_root_mut` (#7211):

@@ -36,7 +36,12 @@ fn json_scalar_parse_preserves_blocked_debt_and_services_it_when_safe() {
     let _state = ParseStateGuard::new();
     register_runtime_handle_root_scanner_for_tests();
     let scope = RuntimeHandleScope::new();
-    for (text, fallible) in [(b"null".as_slice(), false), (b"\"a\"".as_slice(), true)] {
+    for (text, fallible) in [
+        (b"null".as_slice(), false),
+        (b"\"a\"".as_slice(), true),
+        (b"{}".as_slice(), false),
+        (b"{ \t}".as_slice(), true),
+    ] {
         let input = crate::js_string_from_bytes(text.as_ptr(), text.len() as u32);
         let root = scope.root_string_ptr(input);
         let parse = || unsafe {
@@ -50,7 +55,7 @@ fn json_scalar_parse_preserves_blocked_debt_and_services_it_when_safe() {
         let old_flags = GC_FLAGS.with(|c| c.replace(c.get() | GC_FLAG_SUPPRESSED));
         let before = gc_collection_count();
         let value = parse();
-        assert!(value.is_null() || value.is_short_string());
+        assert!(value.is_null() || value.is_short_string() || value.is_pointer());
         assert_eq!(gc_collection_count(), before);
         assert!(GC_SUPPRESSED_TINY_PARSE_COLLECTION_PENDING.with(|c| c.get()));
         GC_FLAGS.with(|c| c.set(old_flags));
@@ -61,7 +66,7 @@ fn json_scalar_parse_preserves_blocked_debt_and_services_it_when_safe() {
         GC_NEXT_TRIGGER_BYTES.with(|c| c.set(usize::MAX));
         GC_TRIGGER_ARMED.with(|c| c.set(false));
         let value = parse();
-        assert!(value.is_null() || value.is_short_string());
+        assert!(value.is_null() || value.is_short_string() || value.is_pointer());
         assert!(!GC_SUPPRESSED_TINY_PARSE_COLLECTION_PENDING.with(|c| c.get()));
         assert!(
             gc_collection_count() > before
@@ -69,6 +74,101 @@ fn json_scalar_parse_preserves_blocked_debt_and_services_it_when_safe() {
                 || GC_TRIGGER_ARMED.with(|c| c.get()),
             "pending work must reach the collector"
         );
+    }
+}
+
+#[test]
+fn json_empty_parse_allocates_only_fresh_output_without_suppression() {
+    let _isolation = GcTestIsolationGuard::new();
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _state = ParseStateGuard::new();
+    let input = crate::js_string_from_bytes(b"{}".as_ptr(), 2);
+    let before = crate::arena::arena_in_use_bytes();
+    let roots = RuntimeHandleScope::active_len_for_tests();
+    let collections = gc_collection_count();
+    let mut previous = 0;
+    let mut allocated = 0;
+    for i in 0..1000 {
+        let value = unsafe {
+            if i % 2 == 0 {
+                crate::json::js_json_parse(input)
+            } else {
+                crate::json::js_json_parse_result(input).unwrap()
+            }
+        };
+        let object =
+            value.as_pointer::<crate::object::ObjectHeader>() as *mut crate::object::ObjectHeader;
+        assert_ne!(object as usize, previous);
+        previous = object as usize;
+        unsafe {
+            let header = (object as *const u8).sub(GC_HEADER_SIZE) as *const GcHeader;
+            allocated += (*header).size as usize;
+            assert_eq!((*header).obj_type, GC_TYPE_OBJECT);
+            assert_ne!((*header)._reserved & OBJ_FLAG_PLAIN_ORDINARY, 0);
+            assert_eq!((*object).class_id, 0);
+            assert!((*object).meta.is_null());
+            assert!(crate::object::object_keys_array(object).is_null());
+            assert_eq!(crate::object::object_live_slot_count(object), 0);
+        }
+    }
+    assert_eq!(crate::arena::arena_in_use_bytes() - before, allocated);
+    assert_eq!(RuntimeHandleScope::active_len_for_tests(), roots);
+    assert_eq!(gc_collection_count(), collections);
+    assert_eq!(GC_PRE_SUPPRESS_BYTES.with(|c| c.get()), 123);
+}
+
+#[test]
+fn json_empty_parse_finishes_reading_before_pending_evacuation() {
+    assert_empty_parse_moves_input_and_output(false);
+}
+
+#[test]
+fn json_empty_result_parse_finishes_reading_before_pending_evacuation() {
+    assert_empty_parse_moves_input_and_output(true);
+}
+
+fn assert_empty_parse_moves_input_and_output(fallible: bool) {
+    let _pacing = crate::gc::policy::force_alloc_point_minor_pacing();
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _state = ParseStateGuard::new();
+    let _evacuation = ForcedEvacuationTestGuard::on();
+    let _protection =
+        crate::arena::ProtectionModeGuard::set(crate::arena::FromSpaceProtection::PoisonOnly);
+    register_runtime_handle_root_scanner_for_tests();
+    let scope = RuntimeHandleScope::new();
+    let text = b" \t{\n}\r ";
+    let input = scope.root_string_ptr(crate::js_string_from_bytes(
+        text.as_ptr(),
+        text.len() as u32,
+    ));
+    let address = input.get_raw_const_ptr::<crate::StringHeader>() as usize;
+    GC_SUPPRESSED_TINY_PARSE_COLLECTION_PENDING.with(|c| c.set(true));
+    let value = unsafe {
+        if fallible {
+            crate::json::js_json_parse_result(input.get_raw_const_ptr()).unwrap()
+        } else {
+            crate::json::js_json_parse(input.get_raw_const_ptr())
+        }
+    };
+    assert_ne!(
+        input.get_raw_const_ptr::<crate::StringHeader>() as usize,
+        address,
+        "input must actually move"
+    );
+    assert!(!GC_SUPPRESSED_TINY_PARSE_COLLECTION_PENDING.with(|c| c.get()));
+    let output = scope.root_nanbox_u64(value.bits());
+    let output_address = value.as_pointer::<crate::object::ObjectHeader>() as usize;
+    let _ = gc_collect_minor_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Direct));
+    let moved = crate::JSValue::from_bits(output.get_nanbox_f64().to_bits())
+        .as_pointer::<crate::object::ObjectHeader>()
+        as *mut crate::object::ObjectHeader;
+    assert_ne!(moved as usize, output_address, "output must actually move");
+    unsafe {
+        assert!(crate::object::object_keys_array(moved).is_null());
+        assert_eq!(crate::object::object_live_slot_count(moved), 0);
+        let header = (moved as *const u8).sub(GC_HEADER_SIZE) as *const GcHeader;
+        assert_ne!((*header)._reserved & OBJ_FLAG_PLAIN_ORDINARY, 0);
     }
 }
 
