@@ -1,0 +1,24 @@
+{
+  "default_branch": "main",
+  "tag_pattern": "^v[0-9]",
+  "workflows": [
+    { "path": "auto-opt-app-patterns.yml", "name": "Auto-Optimize App Patterns" },
+    { "path": "eh-transport.yml", "name": "eh-transport" },
+    { "path": "gate-freshness.yml", "name": "Gate Freshness" },
+    { "path": "gc-moving-witnesses.yml", "name": "GC Moving Witnesses" },
+    { "path": "gc-native-roots.yml", "name": "gc-native-roots" },
+    { "path": "gc-parse-churn-gate.yml", "name": "GC Parse-Churn Layout Gate" },
+    { "path": "gc-ptr-shape-off-witness.yml", "name": "GC Ptr<Shape> OFF-arm witness" },
+    { "path": "gc-ratchet.yml", "name": "GC Ratchet" },
+    { "path": "gc-root-dominance.yml", "name": "GC Root Dominance" },
+    { "path": "llvm-inprocess.yml", "name": "llvm-inprocess" },
+    { "path": "test.yml", "name": "CI" },
+    { "path": "tls-budget.yml", "name": "TLS Budget" }
+  ],
+  "excluded": [
+    {
+      "path": "npm-publish-freshness.yml",
+      "why": "This workflow already maintains its own sticky failure issue."
+    }
+  ]
+}

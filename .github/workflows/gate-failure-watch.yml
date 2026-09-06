@@ -1,0 +1,88 @@
+name: Scheduled Gate Failure Watch
+
+# A completed red gate on main is not an alert by itself: #9830 measured one
+# correctly failing scheduled workflow that stayed red for nineteen days. This
+# observer turns that result into one durable issue per workflow. Repeated reds
+# update the same issue with the current rows and their delta; the next green
+# closes it.
+
+on:
+  workflow_run:
+    workflows:
+      - Auto-Optimize App Patterns
+      - CI
+      - Gate Freshness
+      - GC Moving Witnesses
+      - gc-native-roots
+      - GC Parse-Churn Layout Gate
+      - GC Ptr<Shape> OFF-arm witness
+      - GC Ratchet
+      - GC Root Dominance
+      - TLS Budget
+      - eh-transport
+      - llvm-inprocess
+    types: [completed]
+  pull_request:
+    paths:
+      - .github/workflows/*.yml
+      - scripts/gate_failure_watch.json
+      - scripts/gate_failure_watch.py
+      - scripts/gate_freshness.json
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scheduled-gate-failure-watch-${{ github.event_name == 'workflow_run' && github.event.workflow_run.id || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Self-test the failure observer
+        run: python3 scripts/gate_failure_watch.py --self-test
+      - name: Check watched-workflow configuration
+        run: python3 scripts/gate_failure_watch.py --check-config
+
+  observe:
+    if: >-
+      github.event_name == 'workflow_run' &&
+      (
+        github.event.workflow_run.event == 'schedule' ||
+        (
+          (github.event.workflow_run.event == 'workflow_dispatch' ||
+           github.event.workflow_run.event == 'repository_dispatch') &&
+          github.event.workflow_run.head_branch == 'main'
+        ) ||
+        (
+          github.event.workflow_run.event == 'push' &&
+          (github.event.workflow_run.head_branch == 'main' ||
+           startsWith(github.event.workflow_run.head_branch, 'v'))
+        )
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+    steps:
+      # workflow_run carries a write-capable token. Execute only the trusted
+      # default-branch script, never the triggering workflow's checkout.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Open, update, or close the workflow's failure issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: python3 scripts/gate_failure_watch.py
