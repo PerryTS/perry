@@ -132,8 +132,6 @@ const DESCRIPTOR_YOUNG_LOG_NAME: &str = "object.descriptors";
 
 mod gc_scan;
 mod young;
-#[cfg(test)]
-pub(crate) use gc_scan::test_property_descriptor_entry_count;
 pub(crate) use gc_scan::{scan_descriptor_owner, scan_descriptor_roots_mut};
 use young::{relevant_descriptor_owners, scan_descriptor_roots_young};
 
