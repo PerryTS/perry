@@ -1,0 +1,107 @@
+{
+  "time_utc": "2026-09-06T14:26:49Z",
+  "load_before": [
+    1.494140625,
+    1.701171875,
+    1.759765625
+  ],
+  "cases": [
+    [
+      "unicode",
+      "numbers_1m",
+      "parse"
+    ],
+    [
+      "unicode",
+      "heterogeneous_1m",
+      "parse"
+    ],
+    [
+      "unicode",
+      "escaped_1m",
+      "stringify"
+    ],
+    [
+      "unicode",
+      "long_string_1m",
+      "parse"
+    ],
+    [
+      "unicode",
+      "heterogeneous_1m",
+      "stringify"
+    ],
+    [
+      "unicode",
+      "wide_1m",
+      "stringify"
+    ],
+    [
+      "tape",
+      "empty_object",
+      "parse"
+    ],
+    [
+      "tape",
+      "tiny_object",
+      "parse"
+    ],
+    [
+      "tape",
+      "small_record",
+      "parse"
+    ],
+    [
+      "tape",
+      "object_1k",
+      "parse"
+    ],
+    [
+      "tape",
+      "empty_object",
+      "stringify"
+    ],
+    [
+      "tape",
+      "tiny_object",
+      "stringify"
+    ],
+    [
+      "tape",
+      "small_record",
+      "stringify"
+    ],
+    [
+      "tape",
+      "records_array_16k",
+      "stringify"
+    ],
+    [
+      "tape",
+      "records_object_1m",
+      "stringify"
+    ],
+    [
+      "tape",
+      "records_object_8m",
+      "stringify"
+    ],
+    [
+      "tape",
+      "records_object_20m",
+      "stringify"
+    ],
+    [
+      "tape",
+      "numbers_1m",
+      "stringify"
+    ]
+  ],
+  "repetitions": 7,
+  "notes": "Same worker entry, default GC, fresh processes. Call counts are fixed from the full matrix. Randomized two-arm order per repetition. CPU includes user and system time.",
+  "worker_sha256": {
+    "unicode": "85189dd09e2f34151351546aa751100e0480ef8e110c8380dfbb10d53755d938",
+    "tape": "21a1e75beb47e2a12ae066d4991abf7878e48c297b3de55bd5514077f209e7e5",
+    "candidate": "233440ca71ca8411da86db387e8b0898dadda26316e60bf944d4023d81433508"
+  }
+}

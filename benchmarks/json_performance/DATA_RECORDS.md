@@ -1,7 +1,8 @@
 The current source adds allocation-free scalar parsing and a guarded record
 stringify path. **This is a development checkpoint. Full CPU/RSS parity and
-no-regression acceptance remain open; the record candidate has no accepted
-performance measurements yet.**
+no-regression acceptance remain open. The record release now has qualified
+full-matrix and paired measurements; it reaches 11/38 CPU, 58/74 peak RSS and
+28/36 retained RSS targets.**
 
 Successful inline scalar parses decode before the existing pending-collection
 hook. They skip the ordinary parser's suppression/rebaseline cycle while
@@ -43,7 +44,53 @@ probe decline before output. The root-holder inventory passes with its previous
 unverified frontier unchanged. The record release passes all 31 compiled Node comparisons and all 20 moving-GC
 stress runs (10 subjects, seeds 17/9013), with verified copying and object
 movement. The previously failing getter/enumerability witness now matches Node.
-Qualified CPU/RSS measurements remain pending. [Current validation evidence](results/data-record/validation.json).
+The measured source is df32314ace602869c8a75584981a0e7bd0d0f7f0; all 39 source
+hashes match that commit. The full run passes its load/competing-process gate
+and 35 external observations are clean: 152 output verifications, 456 timing
+trials and 432 memory trials. A separate 252-trial paired check has 20 clean
+observations and its own passing gate. [Current validation evidence](results/data-record/validation.json).
+
+The paired CPU results below compare this record release with the preceding
+tape-scanner release, except where explicitly labeled Unicode. CPU includes
+user and system time with default GC. Ranges are from seven fresh processes per
+arm; a separated range is evidence of a repeatable difference in this run, not
+a general confidence interval.
+
+| Workload | Reference µs | Record release µs | Change | Ranges |
+|---|---:|---:|---:|---|
+| Small record stringify | 0.549 | 0.531 | -3.40% | separated |
+| 16 KB record array stringify | 31.724 | 24.986 | -21.24% | separated |
+| 1 MB record object stringify | 1,985.307 | 1,614.744 | -18.67% | separated |
+| 8 MB record object stringify | 16,843.100 | 13,933.800 | -17.27% | separated |
+| 20 MB record object stringify | 94,352.000 | 87,257.500 | -7.52% | separated |
+| Empty object stringify | 0.05145 | 0.05565 | +8.15% | separated |
+| Tiny object stringify | 0.13977 | 0.14104 | +0.91% | separated |
+| Tiny object parse | 0.36009 | 0.36657 | +1.80% | separated |
+| 1 KB object parse | 0.58502 | 0.59148 | +1.10% | separated |
+| Small record parse | 0.74338 | 0.74850 | +0.69% | separated |
+| Numeric parse, versus Unicode | 1,573.615 | 1,700.000 | +8.03% | separated |
+| Heterogeneous parse, versus Unicode | 1,869.885 | 1,918.179 | +2.58% | separated |
+| Heterogeneous stringify, versus Unicode | 4,491.335 | 4,542.305 | +1.13% | separated |
+| Wide stringify, versus Unicode | 2,467.940 | 2,478.472 | +0.43% | separated |
+| Escaped stringify, versus Unicode | 1,862.217 | 1,862.349 | +0.01% | overlap |
+
+The prior escaped-stringify regression does not reproduce in this paired run.
+The empty-object stringify cost accompanies the required early rooting fix;
+the unsafe old root placement is not an acceptable performance baseline to
+restore. [All 38 CPU rows and memory tables](results/data-record/tables.md),
+[all target comparisons](results/data-record/parity.md), and
+[all 18 paired checks](results/data-record/recheck-data-record/summary.json)
+retain the other results rather than hiding them in an average.
+
+On a busy local development host, an independent instruction diagnostic shows
+about 19% fewer process instructions for 1 MB records but only 6% fewer for
+20 MB. A subsequent 20 MB stack sample has 1,452 of 2,167 main-thread samples
+entering GC from the benchmark loop's safepoint, versus 696 entering stringify.
+This supports GC as a major contributor to the 20 MB cost; it is not an exact
+GC CPU percentage or an accepted speed measurement. JSON's final output copy
+accounts for only 37 samples. The next JSON-specific experiment removes
+repeated primitive-array validation inside the already validated record walk.
+[Local diagnostics and limitations](results/data-record/README.md).
 
 GC production sources, trigger policy and gc_bump_malloc_trigger remain unchanged
 from v0.5.1520 (454daac4f). parse_api.rs deliberately changes: the scalar decode
@@ -51,8 +98,7 @@ runs before the existing pending-collection hook; ordinary allocating parses
 retain their previous suppression, trigger and parse-boundary scheduling flow.
 The GC-file diff contains tests only. No version bump is included yet.
 
-The last fully qualified committed tape-scanner results remain in
-[TAPE_SCANNING.md](TAPE_SCANNING.md). They include unresolved regressions against
-the Unicode checkpoint; neither that report nor these changes establish the
-requested all-row result. Array-root parse can defer materialization; stringify
+The preceding tape-scanner results remain in [TAPE_SCANNING.md](TAPE_SCANNING.md).
+Neither that report nor these changes establish the requested all-row result.
+Array-root parse can defer materialization; stringify
 starts fully materialized. CPU includes default GC; RSS is whole-process memory.

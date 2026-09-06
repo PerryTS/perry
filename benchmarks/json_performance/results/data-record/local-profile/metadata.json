@@ -1,0 +1,20 @@
+{
+  "purpose": "Local sampling diagnostic only; not quiet-window CPU/RSS evidence.",
+  "command": [
+    "/Users/amlug/projects/perry/codex-json-fastpaths-artifacts/data-record-worker",
+    "/Users/amlug/projects/perry/codex-json-fastpaths/benchmarks/json_performance/.work/fixtures/records_object_20m.json",
+    "stringify",
+    "512",
+    "2"
+  ],
+  "worker_sha256": "233440ca71ca8411da86db387e8b0898dadda26316e60bf944d4023d81433508",
+  "worker_exit": 0,
+  "sample_exit": 0,
+  "sample_stderr": "Sampling process 90123 for 3 seconds with 1 millisecond of run time between samples\nSampling completed, processing symbols...\nSample analysis of process 90123 written to file /Users/amlug/projects/perry/codex-json-fastpaths-artifacts/data-record-local-profile/records_object_20m.sample.txt\n",
+  "cpu": "Apple M1 Max",
+  "load_after": [
+    43.43359375,
+    43.4150390625,
+    43.5009765625
+  ]
+}

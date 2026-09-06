@@ -10,7 +10,37 @@
   "gc_policy_unchanged_from": "454daac4f8fc667ab4bc85b7b5b36c8bae56ae28",
   "root_inventory": "passed, prior frontier unchanged",
   "compiled_release_validation": "31 compiled Node comparisons and 20 moving-GC stress runs pass",
-  "qualified_performance": "pending",
+  "qualified_performance": {
+    "source_commit": "df32314ace602869c8a75584981a0e7bd0d0f7f0",
+    "full_matrix": {
+      "verified_outputs": 152,
+      "timing_trials": 456,
+      "memory_trials": 432,
+      "quiet_gate": true,
+      "clean_external_observations": 35
+    },
+    "paired_checks": {
+      "cases": 18,
+      "trials": 252,
+      "quiet_gate": true,
+      "clean_external_observations": 20
+    },
+    "at_or_below_better_node_bun_median": {
+      "cpu": [
+        11,
+        38
+      ],
+      "peak_rss": [
+        58,
+        74
+      ],
+      "retained_rss": [
+        28,
+        36
+      ]
+    },
+    "no_regression_acceptance": false
+  },
   "goal_complete": false,
   "compiled_fixtures": 31,
   "compiled_fixtures_match_node": true,
