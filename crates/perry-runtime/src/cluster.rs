@@ -241,11 +241,51 @@ thread_local! {
 /// `import cluster from "node:cluster"`. Cached (see
 /// `should_cache_native_module_namespace`), so EventEmitter methods can return
 /// it for `cluster.on(...) === cluster` chaining.
-fn cluster_default_value() -> f64 {
-    crate::object::js_create_native_module_namespace(
+pub(crate) fn cluster_default_value() -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let cluster = scope.root_nanbox_f64(crate::object::js_create_native_module_namespace(
         b"cluster.default".as_ptr(),
         "cluster.default".len(),
-    )
+    ));
+    let event_emitter = scope.root_nanbox_f64(crate::object::bound_native_callable_export_value(
+        "events",
+        "EventEmitter",
+    ));
+    if let Some(event_emitter_proto) =
+        crate::object::ordinary_function_prototype_value_for_read(event_emitter.get_nanbox_f64())
+    {
+        let event_emitter_proto = scope.root_nanbox_f64(event_emitter_proto);
+        let cluster_addr = (cluster.get_nanbox_u64() & crate::value::POINTER_MASK) as usize;
+        let proto_bits = event_emitter_proto.get_nanbox_u64();
+        if crate::object::prototype_chain::object_static_prototype(cluster_addr) != Some(proto_bits)
+        {
+            crate::object::prototype_chain::object_set_static_prototype(cluster_addr, proto_bits);
+        }
+    }
+    cluster.get_nanbox_f64()
+}
+
+#[cfg(test)]
+mod cluster_default_prototype_tests {
+    use super::*;
+
+    #[test]
+    fn default_export_inherits_from_event_emitter() {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let cluster = scope.root_nanbox_f64(cluster_default_value());
+        let event_emitter = scope.root_nanbox_f64(
+            crate::object::bound_native_callable_export_value("events", "EventEmitter"),
+        );
+        let expected = crate::object::ordinary_function_prototype_value_for_read(
+            event_emitter.get_nanbox_f64(),
+        )
+        .expect("EventEmitter must expose a prototype object");
+
+        assert_eq!(
+            crate::object::js_object_get_prototype_of(cluster.get_nanbox_f64()).to_bits(),
+            expected.to_bits(),
+        );
+    }
 }
 
 fn cluster_emitter_event_name(event: f64) -> Option<String> {
