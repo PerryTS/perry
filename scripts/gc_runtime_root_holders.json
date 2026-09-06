@@ -294,7 +294,7 @@
           "crates/perry-runtime/src/gc/census.rs": "388414f9629f196e84673e91bebd04bdcdcabdaa180252d2dfe4b82d1b49ca5a",
           "crates/perry-runtime/src/gc/cycle.rs": "2e2f5adca2229f74409e01a1cb571e2147cd8a33f58d0976711fce98d4777309",
           "crates/perry-runtime/src/gc/mod.rs": "7dd42b9506a97e6844fd3225dc53dfd59512631784750f58ff72208d68595481",
-          "crates/perry-runtime/src/gc/policy.rs": "2c49102ee846cae79bcb96a95a60b8804ac66a86617db8adb24859288e3cda30",
+          "crates/perry-runtime/src/gc/policy.rs": "71ac3a7651e61f553680eab523662a2c66cbb1bdbc3871a47d822c553a28ad80",
           "crates/perry-runtime/src/gc/progress.rs": "a5ad3971bbe4047229ca57325234780daa85921dbc778e1c08dff4ad07ccfb96"
         }
       }
@@ -352,6 +352,12 @@
       "name": "LAST_IDLE_PREDICTED_RELEASE",
       "verdict": "not_a_gc_pointer",
       "why": "#9772: releasable block BYTES the last idle selection promised \u2014 a size, not an address. A `Cell<usize>` compared against what the collection actually released."
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/policy.rs",
+      "name": "GC_TINY_PARSE_PRESSURE_BASE_BYTES",
+      "verdict": "not_a_gc_pointer",
+      "why": "#9831: `arena_in_use_bytes()` (a sum of block bump offsets) recorded as each collection ends, read back by the tiny-parse pressure guard to price growth since then. A byte COUNT, never an address or a NaN-boxed value: written only from `note_collection_finished_arena_occupancy` and the test seam, read only by `tiny_parse_pressure_due`/`diag_tiny_parse_forced_collection`. Same shape as its frontier siblings `GC_LAST_COLLECTION_POST_IN_USE_BYTES`/`GC_STEP_BYTES`, with the verdict those still owe."
     },
     {
       "file": "crates/perry-runtime/src/gc/survival_diag.rs",
