@@ -314,3 +314,104 @@ fn the_folded_code_point_at_node_is_classified_like_the_generic_call() {
         "a loop whose only use is the folded codePointAt is answerable by v1 alone"
     );
 }
+
+// ── the lowering ───────────────────────────────────────────────────────────
+
+use super::segview::segview_rewrite_module;
+
+fn module_with(stmts: Vec<Stmt>) -> perry_hir::Module {
+    let mut m = perry_hir::Module::new("t");
+    m.init = stmts;
+    m
+}
+
+fn render(m: &perry_hir::Module) -> String {
+    format!("{:?}", m.init)
+}
+
+/// The shape the lowering must emit, pinned on the parts that carry meaning.
+#[test]
+fn the_rewrite_elides_the_record_and_keeps_a_spec_path() {
+    let mut m = module_with(region(cc_body()));
+    assert_eq!(segview_rewrite_module(&mut m), 1);
+    let out = render(&m);
+
+    assert!(
+        out.contains("js_segments_view_open"),
+        "the two-argument open must be emitted: {out}"
+    );
+    assert!(
+        out.contains("js_segments_view_next"),
+        "the in-loop advance must be emitted"
+    );
+    assert!(
+        out.contains("js_segments_view_segment"),
+        "v1 materialises the segment once per step"
+    );
+    assert!(
+        out.contains("js_for_of_next"),
+        "the spec path must survive for the decline case"
+    );
+    assert!(
+        !out.contains("__destruct_"),
+        "the record binding is what this removes; it must be gone: {out}"
+    );
+}
+
+/// The receiver and the input appear on BOTH arms, so they must be evaluated
+/// once and read from locals — not re-evaluated in the decline arm. A receiver
+/// with a side effect would otherwise run twice.
+#[test]
+fn the_receiver_and_input_are_hoisted_exactly_once() {
+    let mut m = module_with(region(cc_body()));
+    assert_eq!(segview_rewrite_module(&mut m), 1);
+    let out = render(&m);
+    assert!(out.contains("__segview_recv"), "receiver hoisted");
+    assert!(out.contains("__segview_input"), "input hoisted");
+    // `LocalGet(0)` was the receiver and `LocalGet(3)` the input in `region`.
+    // After the rewrite each must appear exactly ONCE — in its hoist.
+    assert_eq!(
+        out.matches("LocalGet(0)").count(),
+        1,
+        "the receiver is evaluated once, not on both arms: {out}"
+    );
+    assert_eq!(
+        out.matches("LocalGet(3)").count(),
+        1,
+        "the input is evaluated once, not on both arms: {out}"
+    );
+}
+
+/// The `.segment` property get must stay inside the decline arm, so a receiver
+/// whose `segment` is an accessor runs it exactly once, in its original
+/// position, and never on the accepted path.
+#[test]
+fn the_segment_property_get_stays_on_the_decline_arm_only() {
+    let mut m = module_with(region(cc_body()));
+    segview_rewrite_module(&mut m);
+    let out = render(&m);
+    assert_eq!(
+        out.matches("property: \"segment\"").count(),
+        2,
+        "exactly two: the decline arm's `recv.segment(inp)` and the decline \
+         arm's `R.value.segment` — never on the accepted path: {out}"
+    );
+}
+
+/// A site that does not fire must be left byte-identical.
+#[test]
+fn a_declining_site_is_not_rewritten() {
+    let destructure = vec![
+        let_(
+            RECORD,
+            "__destruct_11",
+            pget(Expr::LocalGet(RESULT), "value"),
+        ),
+        let_(SEG, "O", pget(Expr::LocalGet(RECORD), "segment")),
+        let_(8, "I", pget(Expr::LocalGet(RECORD), "index")),
+    ];
+    let mut m = module_with(vec![iter_let(), for_stmt(destructure, cc_body())]);
+    let before = render(&m);
+    assert_eq!(segview_rewrite_module(&mut m), 0);
+    assert_eq!(before, render(&m), "a declining site must be untouched");
+}

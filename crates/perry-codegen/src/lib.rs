@@ -84,7 +84,9 @@ pub use collectors::CjsPreambleCensus;
 // driver can run it at the HIR-trace point — after every transform, on
 // exactly the statements codegen consumes — instead of only inside a
 // codegen run, which a 10 MB bundle does not reach in a usable time.
-pub use collectors::segview::{segview_diag_enabled, SegViewDiag};
+pub use collectors::segview::{
+    segview_diag_enabled, segview_lowering_enabled, segview_rewrite_module, SegViewDiag,
+};
 
 /// Return the guarded proven-`this` method-clone capabilities a native module
 /// may safely publish to importing codegen units. The first map contains all

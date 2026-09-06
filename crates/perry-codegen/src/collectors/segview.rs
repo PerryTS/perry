@@ -910,3 +910,460 @@ fn describe(v: &SegViewVerdict) -> String {
         other => other.reason().to_string(),
     }
 }
+
+// ── the lowering ───────────────────────────────────────────────────────────
+//
+// v1 per `INTERFACE_segments_view.md` §9b: `open` + `_next` in the loop, and
+// `_segment` once per step for the body. The body is NOT rewritten — every use
+// of the segment binding still sees an ordinary string — so this removes the
+// 48-byte record per grapheme (census site 1, 172,032 per 400-character reply)
+// and the whole eager `build_segments` array plus its two per-call closures,
+// and leaves the substring. Per-use `_code_point_at` / `_regexp_test` is the
+// next increment and needs the body rewritten site by site.
+//
+// Shape emitted for a firing site (`cur`, `recv`, `inp` are fresh locals):
+//
+// ```text
+//   Let recv = <receiver>                     // hoisted: evaluated ONCE
+//   Let inp  = <input>                        // hoisted: evaluated ONCE
+//   Let cur  = js_segments_view_open(recv, inp)          // 0.0 on decline
+//   Let A    = cur != 0 ? undefined : GetIterator(recv.segment(inp))
+//   For { init:   Let R = cur != 0 ? _next(cur) : js_for_of_next(A),
+//         cond:   cur != 0 ? R == 1 : !R.done,
+//         update: R = cur != 0 ? _next(cur) : js_for_of_next(A),
+//         body:  [Let O = cur != 0 ? _segment(cur) : R.value.segment,
+//                 <original body, untouched>] }
+// ```
+//
+// Three things this shape is chosen to get right.
+//
+// **The receiver and the input are hoisted.** Both appear on the accept path
+// (as `open`'s arguments) and on the decline path (as `recv.segment(inp)`), so
+// leaving them in place would evaluate them twice. `getSegmenter().segment(next())`
+// would call each twice, which is a miscompile — and cc's own `rR_.segment(q)`
+// would not have shown it, because both operands there are side-effect-free.
+//
+// **The `.segment` PROPERTY GET stays on the decline path only.** Hoisting the
+// receiver does not hoist the member access, so a receiver whose `segment` is
+// an accessor still runs it exactly once, in its original position, on the
+// path that needs it. That is the ordering obligation §9f puts on `open`'s
+// decline path, honoured from this side.
+//
+// **The ternaries are real branches.** `lower_conditional` emits a four-block
+// CFG with a phi, so the decline arm's `GetIterator(recv.segment(inp))` does
+// not execute when `open` accepted. A `select`-style eager lowering would
+// build the `Segments` on every loop and lose the entire per-call saving.
+//
+// The body is left byte-identical, which is what keeps `break` / `continue` /
+// labels correct and avoids duplicating any closure the body contains — a
+// duplicated `Expr::Closure` would carry a duplicate `FuncId`.
+
+/// `PERRY_SEGVIEW=1`. **Default OFF**: the runtime's view entry points do not
+/// exist yet, so an on-by-default rewrite would emit calls that fail to link.
+pub fn segview_lowering_enabled() -> bool {
+    matches!(std::env::var("PERRY_SEGVIEW"), Ok(v) if !v.is_empty() && v != "0")
+}
+
+fn extern_call(name: &str, args: Vec<Expr>) -> Expr {
+    let param_types = vec![perry_hir::types::Type::Any; args.len()];
+    Expr::Call {
+        callee: Box::new(Expr::ExternFuncRef {
+            name: name.to_string(),
+            param_types,
+            return_type: perry_hir::types::Type::Any,
+        }),
+        args,
+        type_args: vec![],
+        byte_offset: 0,
+    }
+}
+
+fn let_any(id: u32, name: &str, init: Expr) -> Stmt {
+    Stmt::Let {
+        id,
+        name: name.to_string(),
+        ty: perry_hir::types::Type::Any,
+        mutable: true,
+        init: Some(init),
+    }
+}
+
+/// `cur != 0` — the accept test. `open` returns `0.0` when it declines.
+fn cursor_live(cur: u32) -> Expr {
+    Expr::Compare {
+        op: perry_hir::CompareOp::Ne,
+        left: Box::new(Expr::LocalGet(cur)),
+        right: Box::new(Expr::Number(0.0)),
+    }
+}
+
+fn pick(cur: u32, accept: Expr, decline: Expr) -> Expr {
+    Expr::Conditional {
+        condition: Box::new(cursor_live(cur)),
+        then_expr: Box::new(accept),
+        else_expr: Box::new(decline),
+    }
+}
+
+/// Rewrite one firing site in place. `list[i]` is the `Let A = GetIterator(…)`
+/// and `list[i + 1]` (possibly inside a `Labeled`) is the `For`.
+///
+/// Returns the number of statements inserted, so the caller can advance its
+/// index correctly.
+fn rewrite_site(list: &mut Vec<Stmt>, i: usize, site: &SegmentForOfSite, fresh: &mut u32) -> usize {
+    // Pull the receiver and the input out of the `GetIterator(X.segment(q))`.
+    let (recv_expr, input_expr) = match &list[i] {
+        Stmt::Let {
+            init: Some(Expr::GetIterator(subject)),
+            ..
+        } => match subject.as_ref() {
+            Expr::Call { callee, args, .. } => match callee.as_ref() {
+                Expr::PropertyGet { object, .. } if args.len() == 1 => {
+                    (object.as_ref().clone(), args[0].clone())
+                }
+                _ => return 0,
+            },
+            _ => return 0,
+        },
+        _ => return 0,
+    };
+
+    let recv = *fresh;
+    let inp = *fresh + 1;
+    let cur = *fresh + 2;
+    *fresh += 3;
+
+    // The decline path rebuilds exactly what the site had, from the hoisted
+    // operands: `GetIterator(recv.segment(inp))`. The `.segment` property get
+    // is INSIDE this arm, so an accessor receiver runs it once, here, only.
+    let decline_iter = Expr::GetIterator(Box::new(Expr::Call {
+        callee: Box::new(Expr::PropertyGet {
+            object: Box::new(Expr::LocalGet(recv)),
+            property: "segment".to_string(),
+            byte_offset: 0,
+        }),
+        args: vec![Expr::LocalGet(inp)],
+        type_args: vec![],
+        byte_offset: 0,
+    }));
+
+    // Head rewrite.
+    let iter_id = site.iter_id;
+    let result_id = site.result_id;
+    if let Stmt::For {
+        init,
+        condition,
+        update,
+        body,
+    } = unwrap_for_mut(&mut list[i + 1])
+    {
+        if let Some(init_stmt) = init {
+            if let Stmt::Let { init: Some(e), .. } = init_stmt.as_mut() {
+                *e = pick(
+                    cur,
+                    extern_call("js_segments_view_next", vec![Expr::LocalGet(cur)]),
+                    extern_call("js_for_of_next", vec![Expr::LocalGet(iter_id)]),
+                );
+            }
+        }
+        // `cur != 0 ? (R == 1) : !R.done`
+        *condition = Some(pick(
+            cur,
+            Expr::Compare {
+                op: perry_hir::CompareOp::Eq,
+                left: Box::new(Expr::LocalGet(result_id)),
+                right: Box::new(Expr::Number(1.0)),
+            },
+            Expr::Unary {
+                op: UnaryOp::Not,
+                operand: Box::new(Expr::PropertyGet {
+                    object: Box::new(Expr::LocalGet(result_id)),
+                    property: "done".to_string(),
+                    byte_offset: 0,
+                }),
+            },
+        ));
+        *update = Some(Expr::LocalSet(
+            result_id,
+            Box::new(pick(
+                cur,
+                extern_call("js_segments_view_next", vec![Expr::LocalGet(cur)]),
+                extern_call("js_for_of_next", vec![Expr::LocalGet(iter_id)]),
+            )),
+        ));
+
+        // Body head: drop the record `Let` entirely (this IS the elision) and
+        // bind the segment from the view, or from `R.value.segment` on the
+        // decline path.
+        if let Some(seg_id) = site.segment_id {
+            let seg_name = match &body[1] {
+                Stmt::Let { name, .. } => name.clone(),
+                _ => "O".to_string(),
+            };
+            let bind = Stmt::Let {
+                id: seg_id,
+                name: seg_name,
+                ty: perry_hir::types::Type::Any,
+                mutable: false,
+                init: Some(pick(
+                    cur,
+                    extern_call("js_segments_view_segment", vec![Expr::LocalGet(cur)]),
+                    Expr::PropertyGet {
+                        object: Box::new(Expr::PropertyGet {
+                            object: Box::new(Expr::LocalGet(result_id)),
+                            property: "value".to_string(),
+                            byte_offset: 0,
+                        }),
+                        property: "segment".to_string(),
+                        byte_offset: 0,
+                    },
+                )),
+            };
+            body.remove(0); // the `Let __destruct_N = R.value`
+            body[0] = bind; // was `Let O = __destruct_N.segment`
+        }
+    }
+
+    // Statement rewrite: hoist, open, and the conditional iterator.
+    list[i] = let_any(recv, "__segview_recv", recv_expr);
+    list.insert(i + 1, let_any(inp, "__segview_input", input_expr));
+    list.insert(
+        i + 2,
+        let_any(
+            cur,
+            "__segview_cursor",
+            extern_call(
+                "js_segments_view_open",
+                vec![Expr::LocalGet(recv), Expr::LocalGet(inp)],
+            ),
+        ),
+    );
+    list.insert(
+        i + 3,
+        let_any(
+            iter_id,
+            "__segview_iter",
+            pick(cur, Expr::Undefined, decline_iter),
+        ),
+    );
+    3
+}
+
+fn unwrap_for_mut(s: &mut Stmt) -> &mut Stmt {
+    let mut cur = s;
+    loop {
+        match cur {
+            Stmt::Labeled { body, .. } => cur = body.as_mut(),
+            other => return other,
+        }
+    }
+}
+
+/// Rewrite every firing site in one statement list and its nested lists.
+fn rewrite_stmts(list: &mut Vec<Stmt>, fresh: &mut u32, count: &mut usize) {
+    // Nested lists first: rewriting an outer window never moves an inner one,
+    // but doing children first keeps the indices below trivially valid.
+    for s in list.iter_mut() {
+        rewrite_in_stmt(s, fresh, count);
+    }
+
+    let mut i = 0usize;
+    while i + 1 < list.len() {
+        let sites = collect_segment_for_of_sites(std::slice::from_ref(&list[i]));
+        // `collect_segment_for_of_sites` needs the window, not one statement.
+        let window: Vec<Stmt> = list[i..=i + 1].to_vec();
+        let sites = if sites.is_empty() {
+            collect_segment_for_of_sites(&window)
+        } else {
+            sites
+        };
+        if let Some(site) = sites.iter().find(|s| s.fires()) {
+            let inserted = rewrite_site(list, i, site, fresh);
+            if inserted > 0 {
+                *count += 1;
+                i += inserted + 2;
+                continue;
+            }
+        }
+        i += 1;
+    }
+}
+
+fn rewrite_in_stmt(s: &mut Stmt, fresh: &mut u32, count: &mut usize) {
+    match s {
+        Stmt::If {
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            rewrite_stmts(then_branch, fresh, count);
+            if let Some(e) = else_branch {
+                rewrite_stmts(e, fresh, count);
+            }
+        }
+        Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => rewrite_stmts(body, fresh, count),
+        Stmt::For { init, body, .. } => {
+            if let Some(i) = init {
+                rewrite_in_stmt(i, fresh, count);
+            }
+            rewrite_stmts(body, fresh, count);
+        }
+        Stmt::Labeled { body, .. } => rewrite_in_stmt(body, fresh, count),
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            rewrite_stmts(body, fresh, count);
+            if let Some(c) = catch {
+                rewrite_stmts(&mut c.body, fresh, count);
+            }
+            if let Some(f) = finally {
+                rewrite_stmts(f, fresh, count);
+            }
+        }
+        Stmt::Switch { cases, .. } => {
+            for c in cases.iter_mut() {
+                rewrite_stmts(&mut c.body, fresh, count);
+            }
+        }
+        _ => {}
+    }
+    // Closure bodies hang off expressions.
+    for_each_expr_in_stmt_shallow_mut(s, &mut |e| rewrite_closure_bodies(e, fresh, count));
+}
+
+fn rewrite_closure_bodies(e: &mut Expr, fresh: &mut u32, count: &mut usize) {
+    if let Expr::Closure { body, .. } = e {
+        rewrite_stmts(body, fresh, count);
+    }
+    perry_hir::walker::walk_expr_children_mut(e, &mut |child| {
+        rewrite_closure_bodies(child, fresh, count)
+    });
+}
+
+fn for_each_expr_in_stmt_shallow_mut(stmt: &mut Stmt, f: &mut impl FnMut(&mut Expr)) {
+    match stmt {
+        Stmt::Let { init, .. } => {
+            if let Some(e) = init {
+                f(e);
+            }
+        }
+        Stmt::Expr(e) | Stmt::Throw(e) => f(e),
+        Stmt::Return(e) => {
+            if let Some(e) = e {
+                f(e);
+            }
+        }
+        Stmt::If { condition, .. } => f(condition),
+        Stmt::While { condition, .. } | Stmt::DoWhile { condition, .. } => f(condition),
+        Stmt::For {
+            init,
+            condition,
+            update,
+            ..
+        } => {
+            if let Some(i) = init {
+                for_each_expr_in_stmt_shallow_mut(i, f);
+            }
+            if let Some(c) = condition {
+                f(c);
+            }
+            if let Some(u) = update {
+                f(u);
+            }
+        }
+        Stmt::Switch { discriminant, .. } => f(discriminant),
+        Stmt::Labeled { body, .. } => for_each_expr_in_stmt_shallow_mut(body, f),
+        _ => {}
+    }
+}
+
+/// The largest LocalId the module mentions anywhere — declarations included,
+/// not only references. A local that is declared and never read still owns its
+/// id, so seeding fresh ids from the reference maximum alone would collide
+/// with it.
+fn max_local_id_in_module(m: &perry_hir::Module) -> u32 {
+    let mut max = 0u32;
+    let mut note_stmts = |stmts: &[Stmt], max: &mut u32| {
+        for_each_stmt_list(stmts, &mut |list| {
+            for s in list {
+                match s {
+                    Stmt::Let { id, .. } => *max = (*max).max(*id),
+                    Stmt::PreallocateBoxes(ids)
+                    | Stmt::PreallocateTdzBoxes(ids)
+                    | Stmt::ReleaseBoxes(ids) => {
+                        for id in ids {
+                            *max = (*max).max(*id);
+                        }
+                    }
+                    Stmt::Try { catch: Some(c), .. } => {
+                        if let Some((id, _)) = &c.param {
+                            *max = (*max).max(*id);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        });
+        let mut refs = Vec::new();
+        let mut visited = std::collections::HashSet::new();
+        for s in stmts {
+            perry_hir::collect_local_refs_stmt(s, &mut refs, &mut visited);
+        }
+        for id in refs {
+            *max = (*max).max(id);
+        }
+    };
+    note_stmts(&m.init, &mut max);
+    for f in &m.functions {
+        for p in &f.params {
+            max = max.max(p.id);
+        }
+        note_stmts(&f.body, &mut max);
+    }
+    for c in &m.classes {
+        let mut fns: Vec<&perry_hir::Function> = Vec::new();
+        if let Some(ctor) = &c.constructor {
+            fns.push(ctor);
+        }
+        fns.extend(c.methods.iter());
+        fns.extend(c.static_methods.iter());
+        fns.extend(c.getters.iter().map(|(_, f)| f));
+        fns.extend(c.setters.iter().map(|(_, f)| f));
+        for f in fns {
+            for p in &f.params {
+                max = max.max(p.id);
+            }
+            note_stmts(&f.body, &mut max);
+        }
+    }
+    max
+}
+
+/// Rewrite every firing segment for-of in a module. Three new locals are
+/// minted per site, seeded above every id the module already uses. Returns how
+/// many sites were rewritten.
+pub fn segview_rewrite_module(m: &mut perry_hir::Module) -> usize {
+    let mut fresh = max_local_id_in_module(m).saturating_add(1);
+    let mut count = 0usize;
+    rewrite_stmts(&mut m.init, &mut fresh, &mut count);
+    for f in m.functions.iter_mut() {
+        rewrite_stmts(&mut f.body, &mut fresh, &mut count);
+    }
+    for c in m.classes.iter_mut() {
+        if let Some(ctor) = c.constructor.as_mut() {
+            rewrite_stmts(&mut ctor.body, &mut fresh, &mut count);
+        }
+        for meth in c.methods.iter_mut().chain(c.static_methods.iter_mut()) {
+            rewrite_stmts(&mut meth.body, &mut fresh, &mut count);
+        }
+        for (_, f) in c.getters.iter_mut().chain(c.setters.iter_mut()) {
+            rewrite_stmts(&mut f.body, &mut fresh, &mut count);
+        }
+    }
+    if segview_diag_enabled() {
+        eprintln!("[segview] REWROTE {count} site(s) in module {}", m.name);
+    }
+    count
+}
