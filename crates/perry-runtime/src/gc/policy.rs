@@ -2015,6 +2015,29 @@ pub(super) fn pacing_arena_in_use_bytes() -> usize {
 /// Called once at the end of every cycle, minor and full alike. The copying
 /// fast path publishes directly; non-copying cycles publish from
 /// `GcCycle::publish_reclaim_outcome` after their sweep census.
+///
+/// **Three post-collection quantities, three units — do not conflate them.**
+/// This funnel is the one place a reader can see all three at once, which is
+/// why the list lives here:
+///
+/// | cell | unit | read by |
+/// |---|---|---|
+/// | `GC_LAST_COLLECTION_POST_IN_USE_BYTES` | `pacing_arena_in_use_bytes()` — the LIVE census (`arena_live_allocated_bytes`), test-injectable | `arena_growth_full_escalation_due` |
+/// | `GC_TINY_PARSE_PRESSURE_BASE_BYTES` (#9831) | `arena_in_use_bytes()` — BUMP OFFSETS, the same reading the guard takes at each parse boundary | `tiny_parse_pressure_due_with` |
+/// | `GC_NEXT_TRIGGER_BYTES` (#9840) | `arena_total_bytes()` — COMMITTED bytes, which is what `next_arena_trigger_base()` is compared against | `gc_budgeted_due_trigger`'s `ArenaBytes` arm |
+///
+/// The third is *not* written here, and that is deliberate rather than an
+/// omission: re-arming the arena trigger needs the collection's productivity
+/// score (`outcome.freed_bytes` and `pre_in_use`, which price `GC_STEP_BYTES`)
+/// and the once-consumed `take_promoted_young_capacity_credit()`, neither of
+/// which exists at this point in a cycle — and it must skip fulls, which this
+/// funnel deliberately does not. It is written by
+/// [`gc_rebaseline_arena_trigger_after_collection`], which both nursery-
+/// collection finishers call; #9840 is the change that made that "both"
+/// true, and it is the same symmetry #9831 applied to the cell above.
+/// Mixing the units — re-baselining a committed-bytes trigger from a bump-
+/// offset or live-census base — would arm it below the arena's own total and
+/// make the arm due the instant it re-armed.
 pub(super) fn note_collection_finished_arena_occupancy(full: bool) {
     let bytes = pacing_arena_in_use_bytes();
     GC_LAST_COLLECTION_POST_IN_USE_BYTES.with(|cell| cell.set(bytes));
@@ -2198,9 +2221,71 @@ fn gc_rebaseline_malloc_trigger_to_survivors(mstep: usize) {
     GC_NEXT_MALLOC_TRIGGER.with(|c| c.set(survivors + mstep));
 }
 
-fn gc_finish_arena_trigger_collection(pre_in_use: usize, outcome: GcCollectOutcome) -> u64 {
+/// Which nursery-collection finisher is re-baselining the whole-arena trigger.
+/// Diagnostic attribution only — the arithmetic is identical for both.
+#[derive(Clone, Copy)]
+enum ArenaRebaselineArm {
+    ArenaBytes,
+    MallocCount,
+}
+
+impl ArenaRebaselineArm {
+    fn label(self) -> &'static str {
+        match self {
+            Self::ArenaBytes => "arena",
+            Self::MallocCount => "malloc",
+        }
+    }
+}
+
+/// Re-baseline `GC_NEXT_TRIGGER_BYTES` (and adapt `GC_STEP_BYTES`) from the
+/// state a nursery collection leaves behind.
+///
+/// Shared by BOTH nursery-collection finishers. `GC_NEXT_TRIGGER_BYTES`'s doc
+/// says it is bumped "after each `gc_collect_inner`", and until #9840 that was
+/// false: only the `ArenaBytes` finisher moved it, so the whole-arena trigger
+/// was measured from the last *arena-kind* collection rather than the last
+/// collection. A `MallocCount` minor is the same nursery collection with the
+/// malloc sweep added — the arena was swept — so it re-baselines the arena
+/// trigger with exactly the arithmetic the arena arm would have used on the
+/// same nursery.
+///
+/// The asymmetry the split kept, in the OTHER direction, is still correct and
+/// still here (see `gc_finish_arena_trigger_collection`): an arena minor that
+/// skipped the malloc sweep must not move the malloc trigger.
+///
+/// **Unit.** The base is `arena_total_bytes()` — COMMITTED bytes, all
+/// generations — because that is the quantity `next_arena_trigger_base()` is
+/// compared against in `gc_budgeted_due_trigger`. It is deliberately neither
+/// of the two post-collection occupancy readings published at
+/// [`note_collection_finished_arena_occupancy`] (a live census, and #9831's
+/// bump-offset guard base); that funnel's doc comment tabulates all three.
+/// Re-baselining this cell from either of those would arm the trigger below
+/// the arena's own total and make the arm due the instant it re-armed.
+///
+/// **What is in scope.** The two *nursery-trigger* finishers, whichever
+/// collection their arm ended up running — an `ArenaBytes` or `MallocCount`
+/// trigger that `arena_growth_full_escalation_due()` escalated to a full still
+/// finishes here, exactly as the arena arm's escalated fulls already did before
+/// #9840. Out of scope is `BudgetedGcRebaseline::OldReclaim` (and the idle
+/// reclaim): those are paced by the old-generation band, and after a full that
+/// released blocks the un-moved trigger sits *further* above the new total,
+/// which is the conservative direction.
+///
+/// Measured on the compiled claude-code TUI before this (`PERRY_GC_DIAG=1`,
+/// per firing, four 3300-character captures on two binaries): the streaming
+/// turn ran a strict 6:1 pattern — six `MallocCount` minors promoting ~3.2 MB
+/// each grew the old generation past the arena trigger *inside the sixth
+/// minor*, and at the very next safepoint the arm fired on a nursery of
+/// **856 bytes** (`promoted_bytes=216 freed_bytes=640`), paying the whole
+/// per-collection fixed cost to free 640 bytes. One in seven of the turn's
+/// collections. See `secret-tests/cc-perf-campaign/DESIGN_arena_contract.md`.
+fn gc_rebaseline_arena_trigger_after_collection(
+    pre_in_use: usize,
+    outcome: &GcCollectOutcome,
+    arm: ArenaRebaselineArm,
+) {
     let sweep_freed_bytes = outcome.freed_bytes;
-    let malloc_swept = outcome.malloc_swept;
     let post_in_use = crate::arena::arena_in_use_bytes();
 
     // Adaptive step:
@@ -2265,8 +2350,13 @@ fn gc_finish_arena_trigger_collection(pre_in_use: usize, outcome: GcCollectOutco
     let freed = std::cmp::max(block_reclaim, sweep_freed_bytes as usize);
     let mut step = GC_STEP_BYTES.with(|c| c.get());
     let old_step = step;
+    // #9840: reported on `[gc-arena-rebaseline]` for BOTH arms, because the
+    // step is now scored by both and #9831's tiny-parse guard prices its
+    // headroom from it — see the note above the `GC_STEP_BYTES` write below.
+    let mut scored_pct_freed = 0usize;
     if pre_in_use > 0 {
         let pct_freed = (freed * 100) / pre_in_use;
+        scored_pct_freed = pct_freed;
         // 2026-05-02: widen the "double" band from `>90% || <10%` to
         // `>=85% || <10%`. ECS perf-comprehensive's two
         // alloc-heavy benches (10k two-comp, 5k × 3 cmds) sweep
@@ -2293,8 +2383,44 @@ fn gc_finish_arena_trigger_collection(pre_in_use: usize, outcome: GcCollectOutco
             step = (step / 2).max(16 * 1024 * 1024);
         }
         // 10-25% freed → keep step unchanged (marginal churn).
+        //
+        // #9840, and the one behavioural coupling this change has beyond the
+        // trigger itself: `GC_STEP_BYTES` had exactly one production writer —
+        // this line, reached only by the `ArenaBytes` finisher — and #9831 made
+        // it an INPUT to the tiny-parse pressure guard
+        // (`tiny_parse_pressure_headroom_bytes`). Scoring a `MallocCount`
+        // minor's productivity here therefore moves that guard's headroom too.
+        // That is the intended reading of both cells and not a side effect:
+        // the step is documented as "collection effectiveness", the guard's
+        // own base cell was made kind-agnostic by #9831 at
+        // `note_collection_finished_arena_occupancy`, and a step scored by
+        // only one of the two nursery arms is the same defect this change
+        // fixes, one cell over. The direction on a given workload is a
+        // question for measurement, not for reasoning. Estimated over the four
+        // 3300-character captures (209 `MallocCount` firings: `freed_bytes`
+        // from each firing's own `[gc-copy-minor]` line over the nearest
+        // `[gc-step]`'s post-collection in-use — an ADJACENT-diagnostic
+        // estimate, because before this change a `MallocCount` minor emitted no
+        // line carrying its own `pre_in_use`, which is exactly why the new one
+        // does):
+        //
+        //     pct_freed  median 4-5 %   <10 %: 194/209   10-24 %: 10/209
+        //                               25-84 %:   5/209   >84 %:  0/209
+        //
+        // 93 % of them land in the "<10 % → double" band and none in ">84 %".
+        // A `MallocCount` minor frees 5-44 MB against an 83-277 MB `pre_in_use`
+        // — most of which is old generation it cannot touch — so on cc this
+        // coupling pushes the step UP and makes #9831's guard MORE conservative,
+        // reinforcing that fix rather than eroding it. `[gc-arena-rebaseline]`
+        // carries `pct=`/`step=` for both arms so the claim is read off a
+        // capture instead of estimated from a neighbour.
         GC_STEP_BYTES.with(|c| c.set(step));
-        if crate::gc::gc_diag_enabled() {
+        // `[gc-step]` stays an ArenaBytes-only line: `scripts/gc_repsel_matrix.sh`
+        // sums every `sweep_freed=` it can grep, so printing it for the malloc
+        // arm too would double-count that arm's reclaim (already reported on its
+        // `[gc-copy-minor]` line) in the ratchet. The malloc arm is attributed
+        // on `[gc-arena-rebaseline]` below instead.
+        if matches!(arm, ArenaRebaselineArm::ArenaBytes) && crate::gc::gc_diag_enabled() {
             eprintln!(
                 "[gc-step] pre_in_use={} post_in_use={} sweep_freed={} block_reclaim={} pct={}% step={}→{}",
                 pre_in_use, post_in_use, sweep_freed_bytes, block_reclaim, pct_freed, old_step, step
@@ -2333,19 +2459,107 @@ fn gc_finish_arena_trigger_collection(pre_in_use: usize, outcome: GcCollectOutco
         std::cmp::max(capped, floor).saturating_add(super::take_promoted_young_capacity_credit());
     GC_NEXT_TRIGGER_BYTES.with(|c| c.set(next_trigger));
     GC_TRIGGER_ARMED.with(|a| a.set(true));
+    if crate::gc::gc_diag_enabled() {
+        // Field names deliberately disjoint from the `[gc-step]` line above and
+        // from the `[gc-copy-minor]` line: `scripts/gc_repsel_matrix.sh` sums
+        // every `sweep_freed=`/`freed_bytes=` it can grep, so a second line
+        // carrying those keys would double-count reclaim in the ratchet.
+        eprintln!(
+            "[gc-arena-rebaseline] arm={} next_trigger={} total={} headroom={} pct={}% step={}→{}",
+            arm.label(),
+            next_trigger,
+            new_total,
+            next_trigger.saturating_sub(new_total),
+            scored_pct_freed,
+            old_step,
+            step
+        );
+    }
+}
+
+fn gc_finish_arena_trigger_collection(pre_in_use: usize, outcome: GcCollectOutcome) -> u64 {
+    gc_rebaseline_arena_trigger_after_collection(
+        pre_in_use,
+        &outcome,
+        ArenaRebaselineArm::ArenaBytes,
+    );
     // Rebaseline the malloc-count trigger only if this collection
     // actually swept malloc objects. Copied-minor arena collections
     // may skip the malloc sweep while count pressure is still below
     // its trigger; moving the trigger in that case would postpone
     // reclamation of already-tracked dead malloc churn.
-    if malloc_swept {
+    if outcome.malloc_swept {
         let mstep = GC_MALLOC_COUNT_STEP.with(|c| c.get());
         gc_rebaseline_malloc_trigger_to_survivors(mstep);
     }
     outcome.emit_after_current()
 }
 
-fn gc_finish_malloc_trigger_collection(pre_count: usize, outcome: GcCollectOutcome) -> u64 {
+/// `PERRY_GC_ARENA_REBASELINE_ALL=0|off|false` restores the pre-#9840
+/// asymmetry: only the `ArenaBytes` finisher moves the whole-arena trigger.
+///
+/// The kill switch, and the positive control — both arms of the measurement
+/// live in ONE binary, so no build difference can be confounded with the
+/// change. Default ON; only the three explicit off-spellings turn it off, so a
+/// typo cannot silently change which behaviour a bisect is measuring
+/// (`env_default_on_from_value`'s contract).
+///
+/// CLAUDE.md's GC knob kill-policy is binding: this knob's OFF state is
+/// asserted, not merely available. `direct_malloc_minor_arena_rebaseline_kill_
+/// switch_restores_the_stale_threshold` in `gc/tests/debt_pacer.rs` runs the
+/// same fixture as the ON-state test through the seam below and asserts the
+/// defect returns — trigger left at the pre-collection value, and a second
+/// minor firing on the nursery the first one emptied. That test is
+/// simultaneously the sabotage proof for the ON-state pair: the OFF state IS
+/// the deletion of the call, kept live by CI instead of performed by hand.
+///
+/// The env read is cached, so a test cannot flip it by poking the process
+/// environment (and must not try — the tests run in one process). The
+/// `#[cfg(test)]` seam is the supported way in, matching
+/// `pacing_arena_in_use_bytes`.
+fn arena_rebaseline_all_enabled() -> bool {
+    #[cfg(test)]
+    if let Some(enabled) = TEST_ARENA_REBASELINE_ALL.with(|cell| cell.get()) {
+        return enabled;
+    }
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| crate::gc::env_default_on_enabled("PERRY_GC_ARENA_REBASELINE_ALL"))
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Test-only override for [`arena_rebaseline_all_enabled`]. Thread-local,
+    /// so concurrently-running tests cannot see each other's value.
+    static TEST_ARENA_REBASELINE_ALL: std::cell::Cell<Option<bool>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Force [`arena_rebaseline_all_enabled`] for the duration of a test, restoring
+/// the previous override on drop. `Drop` rather than a bare setter because the
+/// tests that use it assert a *defect* is present, and a leaked `false` would
+/// silently disarm every later test in the same thread.
+#[cfg(test)]
+pub(super) struct ArenaRebaselineAllTestGuard(Option<bool>);
+
+#[cfg(test)]
+impl ArenaRebaselineAllTestGuard {
+    pub(super) fn force(enabled: bool) -> Self {
+        Self(TEST_ARENA_REBASELINE_ALL.with(|cell| cell.replace(Some(enabled))))
+    }
+}
+
+#[cfg(test)]
+impl Drop for ArenaRebaselineAllTestGuard {
+    fn drop(&mut self) {
+        TEST_ARENA_REBASELINE_ALL.with(|cell| cell.set(self.0));
+    }
+}
+
+fn gc_finish_malloc_trigger_collection(
+    pre_count: usize,
+    pre_in_use: usize,
+    outcome: GcCollectOutcome,
+) -> u64 {
     debug_assert!(
         outcome.malloc_swept,
         "malloc-count trigger must sweep malloc objects"
@@ -2381,6 +2595,15 @@ fn gc_finish_malloc_trigger_collection(pre_count: usize, outcome: GcCollectOutco
     }
     if outcome.malloc_swept {
         GC_NEXT_MALLOC_TRIGGER.with(|c| c.set(survivors + mstep));
+    }
+    // #9840: this collection swept the nursery too, so the whole-arena trigger
+    // is measured from after it — see `gc_rebaseline_arena_trigger_after_collection`.
+    if arena_rebaseline_all_enabled() {
+        gc_rebaseline_arena_trigger_after_collection(
+            pre_in_use,
+            &outcome,
+            ArenaRebaselineArm::MallocCount,
+        );
     }
     outcome.emit_after_current()
 }
@@ -2679,7 +2902,7 @@ pub fn gc_check_trigger() {
             // exactly as the budgeted and full-GC paths do on completion.
             match kind {
                 GcTriggerKind::MallocCount => {
-                    gc_finish_malloc_trigger_collection(pre_malloc_count, outcome);
+                    gc_finish_malloc_trigger_collection(pre_malloc_count, pre_in_use, outcome);
                 }
                 _ => {
                     gc_finish_arena_trigger_collection(pre_in_use, outcome);
@@ -2757,7 +2980,7 @@ pub struct JsGcStepResult {
 #[derive(Clone, Copy)]
 enum BudgetedGcRebaseline {
     ArenaBytes { pre_in_use: usize },
-    MallocCount { pre_count: usize },
+    MallocCount { pre_count: usize, pre_in_use: usize },
     OldReclaim,
 }
 
@@ -3026,7 +3249,7 @@ pub(crate) fn gc_safepoint_moving_minor() -> bool {
     let outcome = super::gc_collect_minor_with_trigger(GcTriggerSnapshot::capture(kind));
     match kind {
         GcTriggerKind::MallocCount => {
-            gc_finish_malloc_trigger_collection(pre_malloc_count, outcome);
+            gc_finish_malloc_trigger_collection(pre_malloc_count, pre_in_use, outcome);
         }
         _ => {
             gc_finish_arena_trigger_collection(pre_in_use, outcome);
@@ -3460,6 +3683,7 @@ fn gc_start_budgeted_cycle_for_pressure(progress_kind: GcProgressKind) -> Option
         BudgetedGcTrigger::MallocCount => {
             let rebaseline = BudgetedGcRebaseline::MallocCount {
                 pre_count: malloc_object_count(),
+                pre_in_use: crate::arena::arena_in_use_bytes(),
             };
             // Major-GC pacing (malloc-count trigger twin of the ArenaBytes branch).
             if gen_gc_enabled() && !arena_growth_full_escalation_due() {
@@ -3554,8 +3778,11 @@ fn gc_finish_budgeted_cycle(mut cycle: BudgetedGcCycle) -> JsGcStepResult {
         BudgetedGcRebaseline::ArenaBytes { pre_in_use } => {
             gc_finish_arena_trigger_collection(pre_in_use, outcome);
         }
-        BudgetedGcRebaseline::MallocCount { pre_count } => {
-            gc_finish_malloc_trigger_collection(pre_count, outcome);
+        BudgetedGcRebaseline::MallocCount {
+            pre_count,
+            pre_in_use,
+        } => {
+            gc_finish_malloc_trigger_collection(pre_count, pre_in_use, outcome);
         }
         BudgetedGcRebaseline::OldReclaim => {
             let freed = outcome.emit_after_current();
