@@ -709,3 +709,21 @@ fn force_materialize_declines_reparse_when_the_tape_root_is_not_the_blob_root() 
         JSValue::number(8.0).bits()
     );
 }
+#[test]
+fn raw_tape_callback_can_release_source_after_scanning() {
+    let bytes = br#"[1,{"a":"value"},true]"#.to_vec();
+    let data = bytes.as_ptr();
+    let len = bytes.len();
+    let count = unsafe {
+        with_built_tape_raw(data, len, |entries| {
+            drop(bytes);
+            assert_eq!(entries[0].kind, KIND_ARR_START);
+            entries.len()
+        })
+    };
+    assert!(count.unwrap() > 3);
+    assert!(
+        unsafe { with_built_tape_raw::<()>(b"[".as_ptr(), 1, |_| panic!("invalid tape")) }
+            .is_none()
+    );
+}

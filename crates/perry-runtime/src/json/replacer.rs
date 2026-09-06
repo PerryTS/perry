@@ -1600,6 +1600,9 @@ pub unsafe extern "C" fn js_json_stringify_full(
         if let Some(result) = super::stringify_flat::try_object(value_bits) {
             return result.bits() as i64;
         }
+        if let Some(result) = super::stringify_record_output::try_object(value_bits) {
+            return result.bits() as i64;
+        }
     }
 
     // JSON.stringify(undefined) returns undefined per spec

@@ -8,13 +8,13 @@ use crate::string::{init_string_header, string_storage_alloc};
 const MAX_FIELDS: usize = 4;
 
 #[derive(Clone, Copy)]
-enum Piece {
+pub(super) enum Piece {
     String { bytes: u32, units: u32 },
     Inline { bytes: [u8; 32], len: u32 },
 }
 
 impl Piece {
-    fn inline(text: &[u8]) -> Self {
+    pub(super) fn inline(text: &[u8]) -> Self {
         let mut bytes = [0; 32];
         bytes[..text.len()].copy_from_slice(text);
         Self::Inline {
@@ -23,7 +23,7 @@ impl Piece {
         }
     }
 
-    fn lengths(self) -> (u32, u32) {
+    pub(super) fn lengths(self) -> (u32, u32) {
         match self {
             Self::String { bytes, units } => (bytes + 2, units + 2),
             Self::Inline { len, .. } => (len, len),
@@ -32,11 +32,11 @@ impl Piece {
 }
 
 #[inline]
-unsafe fn slot(base: *const u8, header_size: usize, i: usize) -> u64 {
+pub(super) unsafe fn slot(base: *const u8, header_size: usize, i: usize) -> u64 {
     base.add(header_size).cast::<u64>().add(i).read()
 }
 
-unsafe fn string_piece(bits: u64) -> Option<Piece> {
+pub(super) unsafe fn string_piece(bits: u64) -> Option<Piece> {
     let mut scratch = [0; crate::value::SHORT_STRING_MAX_LEN];
     let (ptr, len) = crate::string::str_bytes_from_jsvalue(f64::from_bits(bits), &mut scratch)?;
     if ptr.is_null() || len > u32::MAX - 2 {
@@ -62,7 +62,7 @@ unsafe fn string_piece(bits: u64) -> Option<Piece> {
     Some(Piece::String { bytes: len, units })
 }
 
-unsafe fn scalar_piece(bits: u64) -> Option<Piece> {
+pub(super) unsafe fn scalar_piece(bits: u64) -> Option<Piece> {
     match bits {
         TAG_NULL => return Some(Piece::inline(b"null")),
         TAG_TRUE => return Some(Piece::inline(b"true")),
@@ -92,7 +92,7 @@ unsafe fn scalar_piece(bits: u64) -> Option<Piece> {
     Some(Piece::inline(digits.format_finite(number).as_bytes()))
 }
 
-unsafe fn emit_piece(piece: Piece, bits: u64, output: *mut u8) -> usize {
+pub(super) unsafe fn emit_piece(piece: Piece, bits: u64, output: *mut u8) -> usize {
     match piece {
         Piece::Inline { bytes, len } => {
             std::ptr::copy_nonoverlapping(bytes.as_ptr(), output, len as usize);

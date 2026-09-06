@@ -500,10 +500,31 @@ fn build_tape_into(bytes: &[u8], entries: &mut Vec<TapeEntry>, stack: &mut Vec<u
 /// only while it remains modest; large blobs are allowed to return
 /// their backing allocation to the system allocator instead of pinning
 /// a high-water tape buffer for the rest of the thread.
+#[cfg(test)]
 pub(crate) fn with_built_tape<R>(bytes: &[u8], f: impl FnOnce(&[TapeEntry]) -> R) -> Option<R> {
+    unsafe { with_built_tape_raw(bytes.as_ptr(), bytes.len(), f) }
+}
+
+/// Build a tape before a callback that may relocate or release the source.
+/// The input borrow ends with `build_tape_into`, before invoking `f`.
+///
+/// # Safety
+/// `data` must describe `len` live readable bytes until `f` starts. The callback
+/// must obtain a fresh source pointer after any collection; the tape itself
+/// contains offsets, never source pointers. Nothing reads `data` after `f`.
+pub(crate) unsafe fn with_built_tape_raw<R>(
+    data: *const u8,
+    len: usize,
+    f: impl FnOnce(&[TapeEntry]) -> R,
+) -> Option<R> {
     TAPE_SCRATCH.with(|cell| {
         let mut scratch = cell.take().unwrap_or_else(TapeScratch::new);
-        let result = if build_tape_into(bytes, &mut scratch.entries, &mut scratch.stack) {
+        let built = build_tape_into(
+            std::slice::from_raw_parts(data, len),
+            &mut scratch.entries,
+            &mut scratch.stack,
+        );
+        let result = if built {
             Some(f(&scratch.entries))
         } else {
             None

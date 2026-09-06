@@ -1489,6 +1489,18 @@ pub(crate) unsafe fn stringify_array_depth(ptr: *const u8, buf: &mut String, dep
     }
     STRINGIFY_STACK.with(|s| s.borrow_mut().push(arr as usize));
     let len = (*arr).length;
+    // A descriptor/prototype-aware Get can invoke a getter, mutate later
+    // indices or move the array. Raw slot reads (including template probing)
+    // cannot preserve those effects. Keep this walk outside the dense path.
+    let array_flags = crate::value::addr_class::try_read_tracked_gc_header(arr as usize)
+        .map_or(0, |header| header.as_ref()._reserved);
+    if crate::array::array_iteration_is_exotic_resolved(arr, array_flags)
+        || crate::object::prototype_chain::object_static_prototype(arr as usize).is_some()
+    {
+        stringify_exotic_array(arr, len, buf, depth);
+        STRINGIFY_STACK.with(|s| s.borrow_mut().pop());
+        return;
+    }
     // Root the array and re-derive the element base per access: a nested
     // `toJSON` / getter / any allocation inside the recursive serialization
     // below can trigger a GC that sweeps or moves this array while a hoisted
@@ -1721,6 +1733,37 @@ pub(crate) unsafe fn stringify_array_depth(ptr: *const u8, buf: &mut String, dep
     }
     buf.push(']');
     STRINGIFY_STACK.with(|s| s.borrow_mut().pop());
+}
+
+unsafe fn stringify_exotic_array(
+    arr: *const crate::ArrayHeader,
+    len: u32,
+    buf: &mut String,
+    depth: u32,
+) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let input = scope.root_raw_const_ptr(arr);
+    buf.push('[');
+    for i in 0..len {
+        if i != 0 {
+            buf.push(',');
+        }
+        let element = crate::array::array_spec_get(input.get_raw_const_ptr(), i);
+        let bits = element.to_bits();
+        if bits == TAG_UNDEFINED
+            || bits == crate::value::TAG_HOLE
+            || is_closure_value(bits)
+            || is_symbol_value(bits)
+        {
+            buf.push_str("null");
+        } else {
+            let element_scope = crate::gc::RuntimeHandleScope::new();
+            let element = element_scope.root_nanbox_f64(element);
+            set_to_json_key_index(i as usize);
+            stringify_value_depth(element.get_nanbox_f64(), TYPE_UNKNOWN, buf, depth + 1);
+        }
+    }
+    buf.push(']');
 }
 
 #[inline]

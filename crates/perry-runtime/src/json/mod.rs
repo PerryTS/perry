@@ -38,6 +38,7 @@ mod stringify_data_record;
 mod stringify_flat;
 mod stringify_primitive_array;
 mod stringify_primitive_object;
+mod stringify_record_output;
 mod stringify_scalars;
 pub(crate) mod stringify_shape_template;
 mod stringify_small;
@@ -73,6 +74,10 @@ pub use stringify_api::{
 // below so the re-export must precede the `thread_local!` block.
 #[cfg(test)]
 pub(crate) use parse_api::test_json_parse_direct;
+#[cfg(test)]
+pub(crate) unsafe fn test_json_stringify_record_output(bits: u64) -> Option<JSValue> {
+    stringify_record_output::try_object(bits)
+}
 pub(crate) use parser::{DirectParser, ObjectShapeHint};
 pub(crate) use raw_json::{ptr_is_raw_json_wrapper, raw_json_text_bytes};
 #[cfg(test)]
