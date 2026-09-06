@@ -791,9 +791,8 @@ mod view_mode_tests {
         );
 
         // Replace `RegExp.prototype.test` the way a program would.
-        let proto_ptr = crate::object::regex_proto_thunks::REGEXP_PROTOTYPE_TEST_SITE
-            .load(Ordering::Acquire)
-            & ((1i64 << 48) - 1);
+        let proto_ptr =
+            crate::object::regex_proto_thunks::REGEXP_PROTOTYPE_PTR.load(Ordering::Acquire);
         assert!(proto_ptr != 0, "the site must have been recorded");
         let proto = proto_ptr as *mut ObjectHeader;
         let key = crate::string::js_string_from_bytes(b"test".as_ptr(), 4);
