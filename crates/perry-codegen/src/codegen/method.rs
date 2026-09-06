@@ -33,6 +33,48 @@ pub(super) use typed::{
     compile_typed_i32_method, compile_typed_string_method,
 };
 
+struct LoweredFnArtifacts {
+    ic_globals: Vec<String>,
+    typed_parse_rodata: Vec<String>,
+    ic_end: u32,
+    pending_declares: Vec<(String, LlvmType, Vec<LlvmType>)>,
+    buffer_alias_used: u32,
+    native_rep_records: Vec<crate::native_value::NativeRepRecord>,
+}
+
+/// Detach everything a function body accumulated before releasing its borrow
+/// of the module-owned LLVM function.
+fn take_lowered_fn_artifacts(ctx: &mut FnCtx<'_>) -> LoweredFnArtifacts {
+    LoweredFnArtifacts {
+        ic_globals: std::mem::take(&mut ctx.ic_globals),
+        typed_parse_rodata: std::mem::take(&mut ctx.typed_parse_rodata),
+        ic_end: ctx.ic_site_counter,
+        pending_declares: std::mem::take(&mut ctx.pending_declares),
+        buffer_alias_used: ctx.buffer_data_slots.len() as u32,
+        native_rep_records: std::mem::take(&mut ctx.native_rep_records),
+    }
+}
+
+/// Publish the module-level artifacts emitted while lowering one function.
+/// Every exit after body lowering must go through this path: the function IR
+/// already references these names even when constructor setup bails out early.
+fn publish_lowered_fn_artifacts(llmod: &mut LlModule, artifacts: LoweredFnArtifacts) {
+    llmod.ic_counter = artifacts.ic_end;
+    llmod.buffer_alias_counter += artifacts.buffer_alias_used;
+    llmod
+        .native_rep_records
+        .extend(artifacts.native_rep_records);
+    for (name, ret, params) in artifacts.pending_declares {
+        llmod.declare_function(&name, ret, &params);
+    }
+    for ic_name in artifacts.ic_globals {
+        llmod.add_raw_global(crate::expr::inline_cache_global_definition(&ic_name));
+    }
+    for raw in artifacts.typed_parse_rodata {
+        llmod.add_raw_global(raw);
+    }
+}
+
 /// Compile a class instance method as a top-level LLVM function with the
 /// signature `perry_method_<class>_<name>(this_box: double, args: double…)
 /// -> double`. The first parameter (`this`) is stored in a slot whose
@@ -924,9 +966,9 @@ pub(super) fn compile_method(
                                 ));
                                 ctx.block().ret(DOUBLE, &undef);
                             }
-                            let _ = std::mem::take(&mut ctx.ic_globals);
-                            let _ = std::mem::take(&mut ctx.typed_parse_rodata);
-                            let _ = std::mem::take(&mut ctx.pending_declares);
+                            let artifacts = take_lowered_fn_artifacts(&mut ctx);
+                            drop(ctx);
+                            publish_lowered_fn_artifacts(llmod, artifacts);
                             return Ok(());
                         }
                     } else if let Some(ctor) = ctx.imported_class_ctors.get(&pname_owned).cloned() {
@@ -1303,12 +1345,7 @@ pub(super) fn compile_method(
             ctx.block().ret(DOUBLE, &return_value);
         }
     }
-    let ic_globals = std::mem::take(&mut ctx.ic_globals);
-    let typed_parse_rodata = std::mem::take(&mut ctx.typed_parse_rodata);
-    let ic_end = ctx.ic_site_counter;
-    let pending = std::mem::take(&mut ctx.pending_declares);
-    let buffer_alias_used = ctx.buffer_data_slots.len() as u32;
-    let native_rep_records = std::mem::take(&mut ctx.native_rep_records);
+    let artifacts = take_lowered_fn_artifacts(&mut ctx);
     drop(ctx);
 
     // Under native roots, ordinary `force_inline` is intentionally only an
@@ -1329,18 +1366,7 @@ pub(super) fn compile_method(
             lowered.pre_statepoint_inline = true;
         }
     }
-    llmod.ic_counter = ic_end;
-    llmod.buffer_alias_counter += buffer_alias_used;
-    llmod.native_rep_records.extend(native_rep_records);
-    for (name, ret, params) in pending {
-        llmod.declare_function(&name, ret, &params);
-    }
-    for ic_name in &ic_globals {
-        llmod.add_raw_global(crate::expr::inline_cache_global_definition(ic_name));
-    }
-    for raw in &typed_parse_rodata {
-        llmod.add_raw_global(raw.clone());
-    }
+    publish_lowered_fn_artifacts(llmod, artifacts);
     // The Phase 5a and nonnegative-index clones are purely additive: the
     // public symbol (and its trampoline/forwarder, if any) belongs to the
     // primary invocation. Emitting it again here would define that symbol
@@ -1852,24 +1878,44 @@ pub(super) fn compile_static_method(
             ctx.block().ret(DOUBLE, &undef);
         }
     }
-    let ic_globals = std::mem::take(&mut ctx.ic_globals);
-    let typed_parse_rodata = std::mem::take(&mut ctx.typed_parse_rodata);
-    let ic_end = ctx.ic_site_counter;
-    let pending = std::mem::take(&mut ctx.pending_declares);
-    let buffer_alias_used = ctx.buffer_data_slots.len() as u32;
-    let native_rep_records = std::mem::take(&mut ctx.native_rep_records);
+    let artifacts = take_lowered_fn_artifacts(&mut ctx);
     drop(ctx);
-    llmod.ic_counter = ic_end;
-    llmod.buffer_alias_counter += buffer_alias_used;
-    llmod.native_rep_records.extend(native_rep_records);
-    for (name, ret, params) in pending {
-        llmod.declare_function(&name, ret, &params);
-    }
-    for ic_name in &ic_globals {
-        llmod.add_raw_global(crate::expr::inline_cache_global_definition(ic_name));
-    }
-    for raw in &typed_parse_rodata {
-        llmod.add_raw_global(raw.clone());
-    }
+    publish_lowered_fn_artifacts(llmod, artifacts);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lowered_function_artifacts_are_published_as_one_unit() {
+        let mut llmod = LlModule::new(crate::codegen::default_target_triple());
+        llmod.ic_counter = 3;
+        llmod.buffer_alias_counter = 7;
+
+        publish_lowered_fn_artifacts(
+            &mut llmod,
+            LoweredFnArtifacts {
+                ic_globals: vec!["perry_ic_9890".to_string()],
+                typed_parse_rodata: vec![
+                    "@issue_9890_rodata = private constant i64 9890".to_string()
+                ],
+                ic_end: 11,
+                pending_declares: vec![("js_issue_9890".to_string(), DOUBLE, vec![I64])],
+                buffer_alias_used: 2,
+                native_rep_records: Vec::new(),
+            },
+        );
+
+        assert_eq!(llmod.ic_counter, 11);
+        assert_eq!(llmod.buffer_alias_counter, 9);
+        let ir = llmod.to_ir();
+        assert!(ir.contains("@perry_ic_9890 ="), "{ir}");
+        assert!(
+            ir.contains("@issue_9890_rodata = private constant i64 9890"),
+            "{ir}"
+        );
+        assert!(ir.contains("declare double @js_issue_9890(i64)"), "{ir}");
+    }
 }
