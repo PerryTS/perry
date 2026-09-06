@@ -84,7 +84,7 @@ mod lazy_shadow_tests {
         );
     }
 
-    /// A prototype chain deeper than `VisitedLevels::INLINE` where the ONLY
+    /// A prototype chain deeper than `VISITED_INLINE` where the ONLY
     /// level that shadows the name lives PAST the inline array.
     ///
     /// This arm never runs on the measured workload (the shadow set was built 0
@@ -115,7 +115,7 @@ mod lazy_shadow_tests {
     /// route is measuring the second route.
     #[test]
     fn only_a_spilled_level_shadows_the_root_and_the_rebuild_must_see_it() {
-        let shadow_level = VisitedLevels::INLINE + 2;
+        let shadow_level = VISITED_INLINE + 2;
         let depth = shadow_level + 2;
 
         // Root (deepest): the enumerable `marker` that must stay hidden.
@@ -149,7 +149,7 @@ mod lazy_shadow_tests {
         );
         assert!(
             !lazy.contains(&"marker".to_string()),
-            "the only level owning `marker` sits past VisitedLevels::INLINE, so \
+            "the only level owning `marker` sits past VISITED_INLINE, so \
              a rebuild that cannot see the spilled levels would leak the root's \
              enumerable `marker` — got {lazy:?}"
         );

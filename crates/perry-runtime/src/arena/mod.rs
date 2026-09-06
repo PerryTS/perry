@@ -49,7 +49,6 @@ pub(crate) use block::{
 /// allocation path uses instead of a per-access `_tlv_get_addr`.
 pub(crate) use block::{arena_hot_addr, hot_arena, hot_inline_state, inline_state_hot_addr};
 #[cfg(test)]
-pub(crate) use block::old_gen_in_use_bytes_slot_index;
 #[cfg(test)]
 pub(crate) use block::{
     block_pool_bytes_for_test, block_pool_explicit_drained_bytes_for_test, block_pool_put,
