@@ -1,0 +1,7 @@
+SSH_PID 8306
+FINISHED 1
+Traceback (most recent call last):
+  File "/Users/amlug/projects/perry/codex-json-fastpaths-artifacts/run_marker_probe_recheck.py", line 14, in <module>
+    assert p.returncode==0
+           ^^^^^^^^^^^^^^^
+AssertionError

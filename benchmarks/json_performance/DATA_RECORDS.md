@@ -1,3 +1,23 @@
+The latest measured source, marker-probe (7be2932fa), reduces paired stringify CPU
+3.10% for tiny objects, 4.36% for 16 KB record arrays, and 2.36-2.78% for
+1-8 MB records versus plan-scan. It also introduces confirmed parse regressions:
+tiny/small/1 KB objects +3.21%/+2.42%/+2.31%, and 1/8 MB object-root records
++0.72%/+0.34%. Most whole-process peak RSS rows rise; the older 8 MB array-parse
+peak penalty is 11.46875 MiB versus parse-entry. No-regression acceptance fails.
+
+All-row acceptance remains **12/38 CPU, 58/74 peak RSS and 28/36 retained RSS**.
+176 runtime tests, 38 compiled comparisons, 34 moving-GC runs and 60 hashes pass.
+Complete full and 784-trial paired matrices plus 24 retained-empty trials qualify
+with 32/46 clean observations; the first failed admission is preserved separately.
+GC production policy and hook implementations are unchanged.
+
+[Latest 38 CPU rows](results/marker-probe/cpu-38.md),
+[CPU and RAM](results/marker-probe/tables.md),
+[complete tradeoffs and validation](results/marker-probe/README.md), and
+[next work](results/marker-probe/next-steps.md).
+
+Earlier checkpoints follow.
+
 The latest measured source, plan-scan (7117f9e67), confines short-word scans to
 scalar output planning and restores the shared scanner. Paired small-record
 stringify CPU improves **10.47%**, from 0.320849 to 0.287247 microseconds, with

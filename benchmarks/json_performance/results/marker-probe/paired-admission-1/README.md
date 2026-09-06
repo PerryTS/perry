@@ -1,0 +1,1 @@
+The first paired attempt stopped at admission before any trials started. The one-minute host load was 2.890625, above the 2.5 gate. The controller exited 1. Read-only inspection confirmed no paired results directory and no benchmark lock; a system XProtect remediation process was active. These logs are preserved as failed admission evidence and are not performance results.

@@ -1,0 +1,12 @@
+{
+  "worker_sha256": "603487b666e334940ea399ab029ced7745673239ca93241dbab8dc8f5d4f4fb2",
+  "instructions_by_symbol": {
+    "__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json14stringify_flat10emit_piece": 193,
+    "__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json14stringify_flat12string_piece": 393,
+    "__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json14stringify_flat11emit_object": 713,
+    "__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json23stringify_record_output11emit_record": 809,
+    "__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json22stringify_tojson_probe28keys_array_may_carry_to_json": 136,
+    "__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json22stringify_tojson_probe25to_json_definitely_absent": 120,
+    "22stringify_tojson_probe30marker_bytes_may_carry_to_json": null
+  }
+}

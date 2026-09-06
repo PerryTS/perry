@@ -1,0 +1,6 @@
+ACQUIRED json-perf-78932-1788731024 load (2.890625, 2.173828125, 1.79541015625)
+RELEASED
+Traceback (most recent call last):
+  File "/Users/perry/json-marker-probe-20260906-codex/with_lock.py", line 22, in <module>
+    if os.getloadavg()[0]>2.5: raise RuntimeError('Host too busy for timing')
+RuntimeError: Host too busy for timing

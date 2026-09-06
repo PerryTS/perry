@@ -1,3 +1,5 @@
+Latest marker-probe checkpoint reduces paired tiny/16 KB array/1-8 MB record stringify CPU by 3.10%/4.36%/2.36-2.78% versus plan-scan, but introduces small-object parse and whole-process RSS regressions. All-row and no-regression acceptance remain open (12/38 CPU, 58/74 peak, 28/36 retained). 176 runtime tests, 38 compiled comparisons, 34 moving-GC runs and complete qualified full/784-trial paired matrices pass. See benchmarks/json_performance/results/marker-probe/README.md for exact tradeoffs and earlier requirements.
+
 Accelerate JSON parse and stringify with bounded scanners, vectorized Unicode
 and escape counts, duplicate-key indexing, bounded shape retention, exact
 number formatting and direct final output for eligible strings and records.
