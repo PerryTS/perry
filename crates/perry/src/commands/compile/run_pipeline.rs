@@ -1031,6 +1031,17 @@ pub fn run_with_parse_cache(
     // `collect_type_facts` on a rayon worker) is what makes "does the tier
     // fire on the real bundle?" answerable in HIR-lowering time instead of a
     // full LLVM build. Gated on `PERRY_SEGVIEW_DIAG`; costs nothing otherwise.
+    // #9843: the segment-view lowering. Default OFF (`PERRY_SEGVIEW=1`) because
+    // the runtime's view entry points do not exist yet, so an on-by-default
+    // rewrite would emit calls that fail to link. Runs here, at the same point
+    // as the counter and the HIR trace, so what it rewrites is exactly what
+    // codegen consumes.
+    if perry_codegen::segview_lowering_enabled() {
+        for hir_module in ctx.native_modules.values_mut() {
+            perry_codegen::segview_rewrite_module(hir_module);
+        }
+    }
+
     if perry_codegen::segview_diag_enabled() {
         let mut diag = perry_codegen::SegViewDiag::default();
         for (path, hir_module) in &ctx.native_modules {
