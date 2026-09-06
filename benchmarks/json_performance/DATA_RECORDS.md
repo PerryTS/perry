@@ -1,3 +1,42 @@
+The latest source writes validated escaped UTF-8 strings directly into final
+output, using bounded vector blocks to count expansion on ARM and a scalar
+lookup table elsewhere. Native plans contain only counts; input pointers are
+rederived after final allocation. Malformed UTF-8/WTF-8 retains the general
+writer. GC production policy, thresholds and parse-boundary hooks are unchanged.
+
+**All-row and no-regression acceptance remain open: 12/38 CPU, 58/74 peak RSS
+and 28/36 retained RSS medians meet the better Node/Bun median.** Measured
+source 4b9d577d4e81518f83a8b4a1e4f319d328597f74 passes 172 JSON runtime tests,
+38 compiled Node comparisons and 34 moving-GC runs; all 59 source hashes and
+matched build settings are verified. The full 152-verification / 456-timing /
+432-memory matrix and 644-trial paired matrix plus 24 retained-empty trials
+pass their quiet gates with 32/38 clean observations.
+
+Paired escaped stringify CPU falls 49.97% versus empty-parse, from 1.8997 to
+0.9504 ms, with peak RSS down 0.84375 MiB. In the full run Perry is about 2x
+faster than Node and 2.2x faster than Bun on this row. Vector sizing improves
+38.93% versus the first direct-output worker, while peak RSS rises 0.09375 MiB
+at the same call count. Wide/16 KB record-array/heterogeneous stringify improve
+1.99%/1.74%/1.01% versus empty-parse, with separated paired ranges.
+
+Confirmed regressions versus empty-parse: small-record stringify +1.60%,
+empty/tiny/small/1 KB object parse +2.44%/+0.95%/+0.56%/+0.58%, and tiny-object
+stringify +0.89%. Eight-MB array stringify peak RSS rises 0.046875 MiB, and the
+older eight-MB array-parse peak regression remains +11.359375 MiB versus
+parse-entry. Other earlier unresolved regressions remain requirements.
+Retaining 200k empty objects uses 24.64 MiB versus reference 24.86, Node 83.44
+and Bun 50.20 MiB. Extra retained-empty trials do not change target counts.
+
+[Latest 38 CPU rows](results/escaped-count/cpu-38.md),
+[CPU and RAM](results/escaped-count/tables.md),
+[every target](results/escaped-count/parity.md),
+[paired ranges](results/escaped-count/recheck-escaped-count/summary.json),
+[implementation and validation](results/escaped-count/README.md), and
+[next regression recovery](results/escaped-count/next-steps.md).
+The first direct-output experiment and its complete paired evidence are
+preserved in [escaped-output](results/escaped-output/README.md).
+Array-root parsing may defer materialization; stringify starts fully materialized.
+
 The Piece-borrowing experiment (96cda0524) is rejected and reverted in
 7eb11ae1d. Its qualified full and 616-trial paired matrices show 4.99-5.53%
 slower record-array parsing and 1.27% slower small-record stringify, with

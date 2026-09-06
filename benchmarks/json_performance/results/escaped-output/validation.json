@@ -1,0 +1,36 @@
+{
+  "source_commit": "bf779ee97f189a0c16f9fa8010188faa13097b0b",
+  "verified_source_hashes": 59,
+  "runtime_tests": 171,
+  "compiled_node_comparisons": 38,
+  "moving_gc_runs": 34,
+  "full_verifications": 152,
+  "full_timing_trials": 456,
+  "full_memory_trials": 432,
+  "full_clean_observations": 32,
+  "full_quiet_gate": true,
+  "paired_trials": 616,
+  "paired_cases": 44,
+  "additional_retained_empty_trials": 24,
+  "paired_clean_observations": 35,
+  "paired_quiet_gate": true,
+  "target_inventory": {
+    "cpu": [
+      12,
+      38
+    ],
+    "peak_rss": [
+      58,
+      74
+    ],
+    "retained_rss": [
+      28,
+      36
+    ]
+  },
+  "all_row_acceptance": false,
+  "no_regression_acceptance": false,
+  "gc_production_policy_unchanged_from": "454daac4f8fc667ab4bc85b7b5b36c8bae56ae28",
+  "decision": "superseded by vector expansion count candidate; all-row acceptance remains open",
+  "validation_fixture_commit": "9a0a32b5f"
+}

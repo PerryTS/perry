@@ -1,0 +1,335 @@
+Analysis of sampling escaped-count-worker (pid 20583) every 1 millisecond
+Process:         escaped-count-worker [20583]
+Path:            /Users/USER/*/escaped-count-worker
+Load Address:    0x10273c000
+Identifier:      escaped-count-worker
+Version:         0
+Code Type:       ARM64
+Platform:        macOS
+Parent Process:  Python [20573]
+Target Type:     live task
+
+Date/Time:       2026-09-06 22:07:27.637 +0200
+Launch Time:     2026-09-06 22:07:27.069 +0200
+OS Version:      macOS 26.5 (25F71)
+Report Version:  7
+Analysis Tool:   /usr/bin/sample
+
+Physical footprint:         27.9M
+Physical footprint (peak):  29.0M
+Idle exit:                  untracked
+----
+
+Call graph:
+    2439 Thread_89821093   DispatchQueue_1: com.apple.main-thread  (serial)
+      2439 start  (in dyld) + 6992  [0x189b13e00]
+        2439 main  (in escaped-count-worker) + 2764  [0x102743484]
+          2355 perry_fn_baseline_worker_ts__run$spec_b  (in escaped-count-worker) + 9428  [0x10273ed94]
+          + 2096 js_json_stringify_full  (in escaped-count-worker) + 6080  [0x102bf42c0]
+          + ! 408 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json23stringify_record_output11emit_record  (in escaped-count-worker) + 1588,2696,...  [0x102ba6e34,0x102ba7288,...]
+          + ! 310 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json23stringify_record_output11emit_record  (in escaped-count-worker) + 1852  [0x102ba6f3c]
+          + ! : 153 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json22stringify_tojson_probe25to_json_definitely_absent  (in escaped-count-worker) + 468  [0x102a42fd4]
+          + ! : | 107 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json22stringify_tojson_probe33compute_object_proto_tojson_state  (in escaped-count-worker) + 284  [0x1033eb29c]
+          + ! : | + 107 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json22stringify_tojson_probe28keys_array_may_carry_to_json  (in escaped-count-worker) + 252,276,...  [0x102a430dc,0x102a430f4,...]
+          + ! : | 35 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json22stringify_tojson_probe33compute_object_proto_tojson_state  (in escaped-count-worker) + 156,24,...  [0x1033eb21c,0x1033eb198,...]
+          + ! : | 9 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json22stringify_tojson_probe33compute_object_proto_tojson_state  (in escaped-count-worker) + 32  [0x1033eb1a0]
+          + ! : | + 9 _tlv_get_addr  (in libdyld.dylib) + 4,20  [0x189adc38c,0x189adc39c]
+          + ! : | 2 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json22stringify_tojson_probe33compute_object_proto_tojson_state  (in escaped-count-worker) + 92  [0x1033eb1dc]
+          + ! : |   2 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime6object15prototype_chain23object_static_prototype  (in escaped-count-worker) + 48  [0x10311e0d8]
+          + ! : 113 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json22stringify_tojson_probe25to_json_definitely_absent  (in escaped-count-worker) + 196  [0x102a42ec4]
+          + ! : | 113 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json22stringify_tojson_probe28keys_array_may_carry_to_json  (in escaped-count-worker) + 312,276,...  [0x102a43118,0x102a430f4,...]
+          + ! : 21 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json22stringify_tojson_probe25to_json_definitely_absent  (in escaped-count-worker) + 76,200,...  [0x102a42e4c,0x102a42ec8,...]
+          + ! : 11 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json22stringify_tojson_probe25to_json_definitely_absent  (in escaped-count-worker) + 340  [0x102a42f54]
+          + ! : | 11 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime6object15prototype_chain23object_static_prototype  (in escaped-count-worker) + 48,24,...  [0x10311e0d8,0x10311e0c0,...]
+          + ! : 10 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json22stringify_tojson_probe25to_json_definitely_absent  (in escaped-count-worker) + 372  [0x102a42f74]
+          + ! : | 10 _tlv_get_addr  (in libdyld.dylib) + 4  [0x189adc38c]
+          + ! : 1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json22stringify_tojson_probe33compute_object_proto_tojson_state  (in escaped-count-worker) + 468  [0x1033eb354]
+          + ! : 1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime6object15prototype_chain23object_static_prototype  (in escaped-count-worker) + 612  [0x10311e30c]
+          + ! 291 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json23stringify_record_output11emit_record  (in escaped-count-worker) + 820  [0x102ba6b34]
+          + ! : 291 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json14stringify_flat12string_piece  (in escaped-count-worker) + 340,332,...  [0x102ba13c8,0x102ba13c0,...]
+          + ! 278 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json23stringify_record_output11emit_record  (in escaped-count-worker) + 936  [0x102ba6ba8]
+          + ! : 125 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json14stringify_flat12string_piece  (in escaped-count-worker) + 332,320,...  [0x102ba13c0,0x102ba13b4,...]
+          + ! : 88 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json14stringify_flat12scalar_piece  (in escaped-count-worker) + 280,12,...  [0x102ba10c8,0x102ba0fbc,...]
+          + ! : 34 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json14stringify_flat12scalar_piece  (in escaped-count-worker) + 576  [0x102ba11f0]
+          + ! : | 28 _RNvMNtNtCs5gMwpk3Cs4e_13perry_runtime4json14stringify_flatNtB2_5Piece6inline  (in escaped-count-worker) + 52  [0x102b71508]
+          + ! : | + 19 _platform_memmove  (in libsystem_platform.dylib) + 0,452,...  [0x189edb360,0x189edb524,...]
+          + ! : | + 9 DYLD-STUB$$memcpy  (in escaped-count-worker) + 4,8  [0x103415570,0x103415574]
+          + ! : | 6 _RNvMNtNtCs5gMwpk3Cs4e_13perry_runtime4json14stringify_flatNtB2_5Piece6inline  (in escaped-count-worker) + 36,0  [0x102b714f8,0x102b714d4]
+          + ! : 21 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json14stringify_flat12scalar_piece  (in escaped-count-worker) + 552  [0x102ba11d8]
+          + ! : | 12 _RNvXsi_Cs8xF4iOrs9m2_4itoaxNtNtB5_7private6Sealed5write  (in escaped-count-worker) + 32  [0x102bde4b4]
+          + ! : | + 12 _RNvXsu_Cs8xF4iOrs9m2_4itoayNtB5_8Unsigned3fmt  (in escaped-count-worker) + 556,560,...  [0x1027d5518,0x1027d551c,...]
+          + ! : | 9 _RNvXsi_Cs8xF4iOrs9m2_4itoaxNtNtB5_7private6Sealed5write  (in escaped-count-worker) + 4,32  [0x102bde498,0x102bde4b4]
+          + ! : 8 _RNvMNtNtCs5gMwpk3Cs4e_13perry_runtime4json14stringify_flatNtB2_5Piece6inline  (in escaped-count-worker) + 76  [0x102b71520]
+          + ! : 2 _RNvXsi_Cs8xF4iOrs9m2_4itoaxNtNtB5_7private6Sealed5write  (in escaped-count-worker) + 72  [0x102bde4dc]
+          + ! 166 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json23stringify_record_output11emit_record  (in escaped-count-worker) + 1268  [0x102ba6cf4]
+          + ! : 147 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json14stringify_flat12string_piece  (in escaped-count-worker) + 320,352,...  [0x102ba13b4,0x102ba13d4,...]
+          + ! : 19 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json14stringify_flat12scalar_piece  (in escaped-count-worker) + 12,104,...  [0x102ba0fbc,0x102ba1018,...]
+          + ! 157 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json23stringify_record_output11emit_record  (in escaped-count-worker) + 2672  [0x102ba7270]
+          + ! : 109 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json14stringify_flat10emit_piece  (in escaped-count-worker) + 672  [0x102ba03fc]
+          + ! : | 87 _platform_memmove  (in libsystem_platform.dylib) + 452,460,...  [0x189edb524,0x189edb52c,...]
+          + ! : | 22 DYLD-STUB$$memcpy  (in escaped-count-worker) + 4  [0x103415570]
+          + ! : 48 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json14stringify_flat10emit_piece  (in escaped-count-worker) + 660,192,...  [0x102ba03f0,0x102ba021c,...]
+          + ! 126 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json23stringify_record_output11emit_record  (in escaped-count-worker) + 2716  [0x102ba729c]
+          + ! : 49 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json14stringify_flat10emit_piece  (in escaped-count-worker) + 672  [0x102ba03fc]
+          + ! : | 47 _platform_memmove  (in libsystem_platform.dylib) + 452,428,...  [0x189edb524,0x189edb50c,...]
+          + ! : | 2 DYLD-STUB$$memcpy  (in escaped-count-worker) + 4  [0x103415570]
+          + ! : 47 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json14stringify_flat10emit_piece  (in escaped-count-worker) + 348  [0x102ba02b8]
+          + ! : | 37 _platform_memmove  (in libsystem_platform.dylib) + 452,0,...  [0x189edb524,0x189edb360,...]
+          + ! : | 10 DYLD-STUB$$memcpy  (in escaped-count-worker) + 4  [0x103415570]
+          + ! : 30 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json14stringify_flat10emit_piece  (in escaped-count-worker) + 20,328,...  [0x102ba0170,0x102ba02a4,...]
+          + ! 65 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json14stringify_flat10emit_piece  (in escaped-count-worker) + 692,688  [0x102ba0410,0x102ba040c]
+          + ! 56 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json14stringify_flat12string_piece  (in escaped-count-worker) + 1224  [0x102ba173c]
+          + ! 54 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json23stringify_record_output11emit_record  (in escaped-count-worker) + 1864  [0x102ba6f48]
+          + ! : 36 _RNvNtCs5gMwpk3Cs4e_13perry_runtime6string20string_storage_alloc  (in escaped-count-worker) + 280,120,...  [0x102b8f8c4,0x102b8f824,...]
+          + ! : 18 _RNvNtCs5gMwpk3Cs4e_13perry_runtime6string20string_storage_alloc  (in escaped-count-worker) + 260  [0x102b8f8b0]
+          + ! :   18 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime5arena10allocators11arena_alloc  (in escaped-count-worker) + 12,44,...  [0x102bc10a0,0x102bc10c0,...]
+          + ! 41 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json23stringify_record_output11emit_record  (in escaped-count-worker) + 2816  [0x102ba7300]
+          + ! : 29 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json14stringify_flat10emit_piece  (in escaped-count-worker) + 672  [0x102ba03fc]
+          + ! : | 26 _platform_memmove  (in libsystem_platform.dylib) + 452,12,...  [0x189edb524,0x189edb36c,...]
+          + ! : | 3 DYLD-STUB$$memcpy  (in escaped-count-worker) + 4  [0x103415570]
+          + ! : 12 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json14stringify_flat10emit_piece  (in escaped-count-worker) + 20,192,...  [0x102ba0170,0x102ba021c,...]
+          + ! 35 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json23stringify_record_output11emit_record  (in escaped-count-worker) + 1152  [0x102ba6c80]
+          + ! : 35 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime5array6header35array_has_named_properties_resolved  (in escaped-count-worker) + 64,24,...  [0x102bc1c30,0x102bc1c08,...]
+          + ! 32 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json23stringify_record_output11emit_record  (in escaped-count-worker) + 2908  [0x102ba735c]
+          + ! : 21 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json14stringify_flat10emit_piece  (in escaped-count-worker) + 672  [0x102ba03fc]
+          + ! : | 15 _platform_memmove  (in libsystem_platform.dylib) + 452,428,...  [0x189edb524,0x189edb50c,...]
+          + ! : | 6 DYLD-STUB$$memcpy  (in escaped-count-worker) + 4  [0x103415570]
+          + ! : 11 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json14stringify_flat10emit_piece  (in escaped-count-worker) + 212,20,...  [0x102ba0230,0x102ba0170,...]
+          + ! 30 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json23stringify_record_output11emit_record  (in escaped-count-worker) + 1060  [0x102ba6c24]
+          + ! : 30 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime5value10addr_class26try_read_tracked_gc_header  (in escaped-count-worker) + 56,0,...  [0x102bc49e0,0x102bc49a8,...]
+          + ! 24 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json23stringify_record_output11emit_record  (in escaped-count-worker) + 1816  [0x102ba6f18]
+          + ! : 24 _RNvMs_NtNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope4push  (in escaped-count-worker) + 112,224,...  [0x102b7bc58,0x102b7bcc8,...]
+          + ! 9 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json14stringify_flat12scalar_piece  (in escaped-count-worker) + 360,364  [0x102ba1118,0x102ba111c]
+          + ! 5 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json23stringify_record_output11emit_record  (in escaped-count-worker) + 1840  [0x102ba6f30]
+          + ! : 5 _tlv_get_addr  (in libdyld.dylib) + 4  [0x189adc38c]
+          + ! 4 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json23stringify_record_output11emit_record  (in escaped-count-worker) + 1164  [0x102ba6c8c]
+          + ! : 4 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime6object15prototype_chain23object_static_prototype  (in escaped-count-worker) + 260,12,...  [0x10311e1ac,0x10311e0b4,...]
+          + ! 3 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime5value10addr_class26try_read_tracked_gc_header  (in escaped-count-worker) + 408  [0x102bc4b40]
+          + ! 2 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json22stringify_tojson_probe25to_json_definitely_absent  (in escaped-count-worker) + 396  [0x102a42f8c]
+          + 77 js_json_stringify_full  (in escaped-count-worker) + 6064  [0x102bf42b0]
+          + ! 77 _RNvNtNtNtCs5gMwpk3Cs4e_13perry_runtime6object13field_get_set11enumeration24keys_contain_array_index  (in escaped-count-worker) + 684,860,...  [0x10306c184,0x10306c234,...]
+          + 40 js_json_stringify_full  (in escaped-count-worker) + 5848,192,...  [0x102bf41d8,0x102bf2bc0,...]
+          + 30 js_json_stringify_full  (in escaped-count-worker) + 5860  [0x102bf41e4]
+          + ! 30 _RNvNtCs5gMwpk3Cs4e_13perry_runtime6object17object_keys_array  (in escaped-count-worker) + 56,24,...  [0x102b8f5f0,0x102b8f5d0,...]
+          + 26 js_json_stringify_full  (in escaped-count-worker) + 1476  [0x102bf30c4]
+          + ! 26 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime5value10addr_class26try_read_tracked_gc_header  (in escaped-count-worker) + 44,56,...  [0x102bc49d4,0x102bc49e0,...]
+          + 20 js_json_stringify_full  (in escaped-count-worker) + 1528  [0x102bf30f8]
+          + ! 20 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime5value10addr_class26try_read_tracked_gc_header  (in escaped-count-worker) + 56,372,...  [0x102bc49e0,0x102bc4b1c,...]
+          + 19 js_json_stringify_full  (in escaped-count-worker) + 5952  [0x102bf4240]
+          + ! 19 _RNvNtCs5gMwpk3Cs4e_13perry_runtime6object17object_keys_array  (in escaped-count-worker) + 56,44,...  [0x102b8f5f0,0x102b8f5e4,...]
+          + 19 js_json_stringify_full  (in escaped-count-worker) + 6028  [0x102bf428c]
+          + ! 19 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime6object6shapes34shape_live_inline_slot_count_by_id  (in escaped-count-worker) + 52,40,...  [0x103131bec,0x103131be0,...]
+          + 16 perry_fn_baseline_worker_ts__run$spec_b  (in escaped-count-worker) + 10076,9488,...  [0x10273f01c,0x10273edd0,...]
+          + 7 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime5value10addr_class26try_read_tracked_gc_header  (in escaped-count-worker) + 408  [0x102bc4b40]
+          + 5 _RNvNtNtNtCs5gMwpk3Cs4e_13perry_runtime6object13field_get_set11enumeration24keys_contain_array_index  (in escaped-count-worker) + 1156,1152  [0x10306c35c,0x10306c358]
+          56 perry_fn_baseline_worker_ts__run$spec_b  (in escaped-count-worker) + 10708  [0x10273f294]
+          + 56 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc6policy25gc_safepoint_moving_minor  (in escaped-count-worker) + 992  [0x1031080dc]
+          +   56 _RNvNtCs5gMwpk3Cs4e_13perry_runtime2gc35gc_collect_minor_with_trigger_inner  (in escaped-count-worker) + 1776  [0x103101670]
+          +     21 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc7copying24run_copied_minor_attempt  (in escaped-count-worker) + 5120  [0x102a3fe00]
+          +     ! 21 <deduplicated_symbol>  (in escaped-count-worker) + 348  [0x102d0c544]
+          +     !   4 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime7closure13dynamic_props36scan_closure_dynamic_props_roots_mut  (in escaped-count-worker) + 496,760  [0x102f36598,0x102f366a0]
+          +     !   3 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime7closure13dynamic_props36scan_closure_dynamic_props_roots_mut  (in escaped-count-worker) + 1940  [0x102f36b3c]
+          +     !   : 2 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime7closure13dynamic_props22merge_closure_prop_map  (in escaped-count-worker) + 0,1856  [0x102f31944,0x102f32084]
+          +     !   : 1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime7closure13dynamic_props36scan_closure_dynamic_props_roots_mut  (in escaped-count-worker) + 1940  [0x102f36b3c]
+          +     !   :   1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime7closure13dynamic_props22merge_closure_prop_map  (in escaped-count-worker) + 1660  [0x102f31fc0]
+          +     !   2 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime6object9arguments31scan_arguments_object_roots_mut  (in escaped-count-worker) + 524  [0x102a643f8]
+          +     !   2 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime6string6intern27scan_intern_table_roots_mut  (in escaped-count-worker) + 316  [0x102954ef4]
+          +     !   : 2 _RNvMs1_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc5rootsNtB5_18RuntimeRootVisitor21visit_tagged_raw_addr  (in escaped-count-worker) + 12  [0x102a249e0]
+          +     !   1 _RINvMs2_NtNtCs8BpVhDwHqJW_3std6thread5localINtB6_8LocalKeyINtNtCsjgY6bXVaRmE_4core4cell7RefCellINtNtNtNtBa_11collections4hash3set7HashSetjNtNtCs5gMwpk3Cs4e_13perry_runtime9fast_hash9PtrHasherEEE4withNCNvNtNtNtB2g_6object13native_module16callable_exports39scan_builtin_closure_metadata_roots_muts_0uEB2g_  (in escaped-count-worker) + 160  [0x10289cd28]
+          +     !   1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime6buffer9own_props31scan_buffer_own_props_roots_mut  (in escaped-count-worker) + 0  [0x102953d98]
+          +     !   1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime6object13native_module37scan_native_callable_export_roots_mut  (in escaped-count-worker) + 3264  [0x102a5993c]
+          +     !   1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime6object6shapes26scan_shape_table_rekey_mut  (in escaped-count-worker) + 736  [0x10312f514]
+          +     !   : 1 _RNvMs1_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc5rootsNtB5_18RuntimeRootVisitor21visit_tagged_raw_addr  (in escaped-count-worker) + 224  [0x102a24ab4]
+          +     !   :   1 _RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc7copyingNtB4_23CopyingNurseryCollector9mark_addr  (in escaped-count-worker) + 68  [0x102a26644]
+          +     !   :     1 _RNvMNtNtCs5gMwpk3Cs4e_13perry_runtime2gc19copying_pointer_setNtB2_17CopyingPointerSet14classify_arena  (in escaped-count-worker) + 44  [0x102a218a8]
+          +     !   1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime7closure13dynamic_props36scan_closure_dynamic_props_roots_mut  (in escaped-count-worker) + 496  [0x102f36598]
+          +     !   : 1 <deduplicated_symbol>  (in escaped-count-worker) + 260  [0x102920ca4]
+          +     !   1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime7closure13dynamic_props36scan_closure_dynamic_props_roots_mut  (in escaped-count-worker) + 580  [0x102f365ec]
+          +     !   : 1 pthread_mutex_unlock  (in libsystem_pthread.dylib) + 12  [0x189ecc950]
+          +     !   1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime7closure13dynamic_props36scan_closure_dynamic_props_roots_mut  (in escaped-count-worker) + 656  [0x102f36638]
+          +     !   : 1 _RNvYNCNKNvNtCs5gMwpk3Cs4e_13perry_runtime5proxy23PROXY_FULL_TRACE_ACTIVE0s_0INtNtNtCsjgY6bXVaRmE_4core3ops8function6FnOnceTINtNtB1j_6option6OptionQIB1Y_INtNtB1j_4cell4CellbEEEEE9call_onceBa_  (in escaped-count-worker) + 24  [0x102a89288]
+          +     !   :   1 _tlv_get_addr  (in libdyld.dylib) + 4  [0x189adc38c]
+          +     !   1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime7closure13dynamic_props36scan_closure_dynamic_props_roots_mut  (in escaped-count-worker) + 1020  [0x102f367a4]
+          +     !   : 1 _RNvMs1_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc5rootsNtB5_18RuntimeRootVisitor17visit_nanbox_bits  (in escaped-count-worker) + 368  [0x102a2465c]
+          +     !   :   1 _RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc7copyingNtB4_23CopyingNurseryCollector16visit_value_bits  (in escaped-count-worker) + 80  [0x102a26014]
+          +     !   :     1 _RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc7copyingNtB4_23CopyingNurseryCollector9mark_addr  (in escaped-count-worker) + 68  [0x102a26644]
+          +     !   :       1 _RNvMNtNtCs5gMwpk3Cs4e_13perry_runtime2gc19copying_pointer_setNtB2_17CopyingPointerSet14classify_arena  (in escaped-count-worker) + 44  [0x102a218a8]
+          +     !   1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime7closure13dynamic_props36scan_closure_dynamic_props_roots_mut  (in escaped-count-worker) + 1296  [0x102f368b8]
+          +     !   : 1 pthread_mutex_lock  (in libsystem_pthread.dylib) + 28  [0x189ecc418]
+          +     !   1 _RNvNtNtNtCs5gMwpk3Cs4e_13perry_runtime6object13native_module16callable_exports39scan_builtin_closure_metadata_roots_mut  (in escaped-count-worker) + 32  [0x102b301c4]
+          +     !     1 _RINvMs2_NtNtCs8BpVhDwHqJW_3std6thread5localINtB6_8LocalKeyINtNtCsjgY6bXVaRmE_4core4cell7RefCellINtNtNtNtBa_11collections4hash3map7HashMapjmNtNtCs5gMwpk3Cs4e_13perry_runtime9fast_hash9PtrHasherEEE4withNCNvNtNtNtB2h_6object13native_module16callable_exports39scan_builtin_closure_metadata_roots_mut0uEB2h_  (in escaped-count-worker) + 224  [0x102892b50]
+          +     !       1 _RNvMs1_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc5rootsNtB5_18RuntimeRootVisitor25visit_metadata_usize_slot  (in escaped-count-worker) + 12  [0x102a24e88]
+          +     21 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc7copying24run_copied_minor_attempt  (in escaped-count-worker) + 13068  [0x102a41d0c]
+          +     ! 9 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc10dead_owner7fan_out  (in escaped-count-worker) + 160  [0x1033e872c]
+          +     ! : 8 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime6object16descriptor_state35prune_dead_descriptor_owner_entries  (in escaped-count-worker) + 208  [0x10304f8b8]
+          +     ! : | 4 _RINvMs0_NtCshsF3QZNC8Sh_9hashbrown3mapINtB6_7HashMapTjNtNtCsctvjasLqLe9_5alloc6string6StringENtNtNtCs5gMwpk3Cs4e_13perry_runtime6object16descriptor_state13PropertyAttrsNtNtB1z_9fast_hash13FastKeyHasherE6retainNCNvB1v_35prune_dead_descriptor_owner_entriess_0EB1z_  (in escaped-count-worker) + 700  [0x10296d940]
+          +     ! : | + 1 <deduplicated_symbol>  (in escaped-count-worker) + 112  [0x1033c7294]
+          +     ! : | + ! 1 _RINvMsa_NtCshsF3QZNC8Sh_9hashbrown3rawNtB6_13RawTableInner22fallible_with_capacityNtNtCsctvjasLqLe9_5alloc5alloc6GlobalECsbfrV4gKhFso_11fancy_regex  (in escaped-count-worker) + 220  [0x102775910]
+          +     ! : | + !   1 mi_theap_malloc_zero_aligned_at_overalloc  (in escaped-count-worker) + 244  [0x1033c14dc]
+          +     ! : | + !     1 _mi_malloc_generic  (in escaped-count-worker) + 468  [0x103413abc]
+          +     ! : | + !       1 mi_page_queue_find_free_ex  (in escaped-count-worker) + 108  [0x1033c4064]
+          +     ! : | + !         1 mi_page_fresh_alloc  (in escaped-count-worker) + 40  [0x1033c3dcc]
+          +     ! : | + !           1 mi_arenas_page_regular_alloc  (in escaped-count-worker) + 348  [0x1033b3e0c]
+          +     ! : | + !             1 mi_arenas_page_alloc_fresh  (in escaped-count-worker) + 240  [0x1033c2084]
+          +     ! : | + !               1 mi_arenas_try_alloc  (in escaped-count-worker) + 92  [0x1033b3888]
+          +     ! : | + !                 1 mi_arenas_try_find_free  (in escaped-count-worker) + 344  [0x1033c16e4]
+          +     ! : | + !                   1 mi_arena_try_alloc_at  (in escaped-count-worker) + 340  [0x1033c1d48]
+          +     ! : | + !                     1 mi_bitmap_popcountN  (in escaped-count-worker) + 0  [0x1033b7468]
+          +     ! : | + 1 <deduplicated_symbol>  (in escaped-count-worker) + 236  [0x1033c7310]
+          +     ! : | + ! 1 _RINvYNtNtNtCs8BpVhDwHqJW_3std4hash6random11RandomStateNtNtCsjgY6bXVaRmE_4core4hash11BuildHasher8hash_oneRjECsbfrV4gKhFso_11fancy_regex  (in escaped-count-worker) + 60  [0x1027779dc]
+          +     ! : | + 1 <deduplicated_symbol>  (in escaped-count-worker) + 176  [0x1033c72d4]
+          +     ! : | + 1 _RINvYNtNtNtCs8BpVhDwHqJW_3std4hash6random11RandomStateNtNtCsjgY6bXVaRmE_4core4hash11BuildHasher8hash_oneRjECsbfrV4gKhFso_11fancy_regex  (in escaped-count-worker) + 268  [0x102777aac]
+          +     ! : | 2 _RINvMs0_NtCshsF3QZNC8Sh_9hashbrown3mapINtB6_7HashMapTjNtNtCsctvjasLqLe9_5alloc6string6StringENtNtNtCs5gMwpk3Cs4e_13perry_runtime6object16descriptor_state13PropertyAttrsNtNtB1z_9fast_hash13FastKeyHasherE6retainNCNvB1v_35prune_dead_descriptor_owner_entriess_0EB1z_  (in escaped-count-worker) + 108,224  [0x10296d6f0,0x10296d764]
+          +     ! : | 1 _RINvMs0_NtCshsF3QZNC8Sh_9hashbrown3mapINtB6_7HashMapTjNtNtCsctvjasLqLe9_5alloc6string6StringENtNtNtCs5gMwpk3Cs4e_13perry_runtime6object16descriptor_state13PropertyAttrsNtNtB1z_9fast_hash13FastKeyHasherE6retainNCNvB1v_35prune_dead_descriptor_owner_entriess_0EB1z_  (in escaped-count-worker) + 184  [0x10296d73c]
+          +     ! : | + 1 <deduplicated_symbol>  (in escaped-count-worker) + 88  [0x1031730a4]
+          +     ! : | +   1 _RNvXs3_NtNtCsjgY6bXVaRmE_4core4hash3sipINtB5_6HasherNtB5_11Sip13RoundsENtB7_6Hasher5writeCs5gMwpk3Cs4e_13perry_runtime  (in escaped-count-worker) + 388  [0x1031e5570]
+          +     ! : | 1 _RINvMs0_NtCshsF3QZNC8Sh_9hashbrown3mapINtB6_7HashMapTjNtNtCsctvjasLqLe9_5alloc6string6StringENtNtNtCs5gMwpk3Cs4e_13perry_runtime6object16descriptor_state13PropertyAttrsNtNtB1z_9fast_hash13FastKeyHasherE6retainNCNvB1v_35prune_dead_descriptor_owner_entriess_0EB1z_  (in escaped-count-worker) + 356  [0x10296d7e8]
+          +     ! : |   1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc10dead_owner37owner_is_dead_copied_minor_from_space  (in escaped-count-worker) + 96  [0x10294a2ec]
+          +     ! : 1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime6object16descriptor_state35prune_dead_descriptor_owner_entries  (in escaped-count-worker) + 312  [0x10304f920]
+          +     ! :   1 _RINvMs0_NtCshsF3QZNC8Sh_9hashbrown3mapINtB6_7HashMapjINtNtCsctvjasLqLe9_5alloc3vec3VecNtNtBU_6string6StringENtNtCs5gMwpk3Cs4e_13perry_runtime9fast_hash13FastKeyHasherE6retainNCNvNtNtB1M_6object16descriptor_state35prune_dead_descriptor_owner_entriess1_0EB1M_  (in escaped-count-worker) + 184  [0x10296e058]
+          +     ! :     1 <deduplicated_symbol>  (in escaped-count-worker) + 80  [0x10317309c]
+          +     ! 5 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc10dead_owner7fan_out  (in escaped-count-worker) + 244  [0x1033e8780]
+          +     ! : 5 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime7closure13dynamic_props36prune_dead_closure_side_table_owners  (in escaped-count-worker) + 192  [0x102f360a4]
+          +     ! :   3 _RINvMs0_NtCshsF3QZNC8Sh_9hashbrown3mapINtB6_7HashMapjNtNtNtCs5gMwpk3Cs4e_13perry_runtime7closure13dynamic_props12ClosurePropsNtNtBV_9fast_hash9PtrHasherE6retainNCNvBR_36prune_dead_closure_side_table_ownerss_0EBV_  (in escaped-count-worker) + 268,440  [0x10296ef04,0x10296efb0]
+          +     ! :   1 _RINvMs0_NtCshsF3QZNC8Sh_9hashbrown3mapINtB6_7HashMapjNtNtNtCs5gMwpk3Cs4e_13perry_runtime7closure13dynamic_props12ClosurePropsNtNtBV_9fast_hash9PtrHasherE6retainNCNvBR_36prune_dead_closure_side_table_ownerss_0EBV_  (in escaped-count-worker) + 332  [0x10296ef44]
+          +     ! :   | 1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc10dead_owner37owner_is_dead_copied_minor_from_space  (in escaped-count-worker) + 52  [0x10294a2c0]
+          +     ! :   1 _RINvMs0_NtCshsF3QZNC8Sh_9hashbrown3mapINtB6_7HashMapjNtNtNtCs5gMwpk3Cs4e_13perry_runtime7closure13dynamic_props12ClosurePropsNtNtBV_9fast_hash9PtrHasherE6retainNCNvBR_36prune_dead_closure_side_table_ownerss_0EBV_  (in escaped-count-worker) + 524  [0x10296f004]
+          +     ! :     1 <deduplicated_symbol>  (in escaped-count-worker) + 236  [0x1033c7310]
+          +     ! :       1 _RINvYNtNtNtCs8BpVhDwHqJW_3std4hash6random11RandomStateNtNtCsjgY6bXVaRmE_4core4hash11BuildHasher8hash_oneRjECsbfrV4gKhFso_11fancy_regex  (in escaped-count-worker) + 48  [0x1027779d0]
+          +     ! 4 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc10dead_owner7fan_out  (in escaped-count-worker) + 256  [0x1033e878c]
+          +     ! : 2 _RNvNtNtNtCs5gMwpk3Cs4e_13perry_runtime6object13native_module16callable_exports42prune_dead_builtin_closure_metadata_owners  (in escaped-count-worker) + 256  [0x102b30574]
+          +     ! : | 2 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc10dead_owner37owner_is_dead_copied_minor_from_space  (in escaped-count-worker) + 52,148  [0x10294a2c0,0x10294a320]
+          +     ! : 2 _RNvNtNtNtCs5gMwpk3Cs4e_13perry_runtime6object13native_module16callable_exports42prune_dead_builtin_closure_metadata_owners  (in escaped-count-worker) + 200,532  [0x102b3053c,0x102b30688]
+          +     ! 3 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc10dead_owner7fan_out  (in escaped-count-worker) + 196  [0x1033e8750]
+          +     !   2 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime6object6shapes21prune_dead_shape_keys  (in escaped-count-worker) + 188  [0x10312dbf8]
+          +     !   | 1 _RINvMs_NtNtNtCs5gMwpk3Cs4e_13perry_runtime6object6shapes12shapes_storeNtB5_9ShapeSlab8for_eachNCNvB7_21prune_dead_shape_keyss_0EBb_  (in escaped-count-worker) + 248  [0x102fee828]
+          +     !   | + 1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc10dead_owner37owner_is_dead_copied_minor_from_space  (in escaped-count-worker) + 52  [0x10294a2c0]
+          +     !   | 1 _RINvMs_NtNtNtCs5gMwpk3Cs4e_13perry_runtime6object6shapes12shapes_storeNtB5_9ShapeSlab8for_eachNCNvB7_21prune_dead_shape_keyss_0EBb_  (in escaped-count-worker) + 288  [0x102fee850]
+          +     !   |   1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime5value10addr_class26try_read_tracked_gc_header  (in escaped-count-worker) + 56  [0x103043f00]
+          +     !   1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime6object6shapes21prune_dead_shape_keys  (in escaped-count-worker) + 156  [0x10312dbd8]
+          +     !     1 _RINvMs0_NtCshsF3QZNC8Sh_9hashbrown3mapINtB6_7HashMapjNtNtNtCs5gMwpk3Cs4e_13perry_runtime6object6shapes10ShapeIndexNtNtBV_9fast_hash9PtrHasherE6retainNCNvBR_21prune_dead_shape_keys0EBV_  (in escaped-count-worker) + 0  [0x10296eb94]
+          +     13 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc7copying24run_copied_minor_attempt  (in escaped-count-worker) + 7024  [0x102a40570]
+          +     ! 13 <deduplicated_symbol>  (in escaped-count-worker) + 348  [0x102d0c544]
+          +     !   2 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime7closure13dynamic_props36scan_closure_dynamic_props_roots_mut  (in escaped-count-worker) + 444,552  [0x102f36564,0x102f365d0]
+          +     !   1 _RINvMs2_NtNtCs8BpVhDwHqJW_3std6thread5localINtB6_8LocalKeyINtNtCsjgY6bXVaRmE_4core4cell7RefCellINtNtNtNtBa_11collections4hash3set7HashSetjNtNtCs5gMwpk3Cs4e_13perry_runtime9fast_hash9PtrHasherEEE4withNCNvNtNtNtB2g_6object13native_module16callable_exports39scan_builtin_closure_metadata_roots_muts_0uEB2g_  (in escaped-count-worker) + 220  [0x10289cd64]
+          +     !   : 1 _RNvMs1_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc5rootsNtB5_18RuntimeRootVisitor25visit_metadata_usize_slot  (in escaped-count-worker) + 28  [0x102a24e98]
+          +     !   1 _RNvMs1_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc5rootsNtB5_18RuntimeRootVisitor21visit_tagged_raw_addr  (in escaped-count-worker) + 296  [0x102a24afc]
+          +     !   1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime6object16descriptor_state25scan_descriptor_roots_mut  (in escaped-count-worker) + 276  [0x10304cc64]
+          +     !   : 1 _RNvMs1_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc5rootsNtB5_18RuntimeRootVisitor25visit_metadata_usize_slot  (in escaped-count-worker) + 68  [0x102a24ec0]
+          +     !   :   1 _RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc7copyingNtB4_23CopyingNurseryCollector16rewrite_raw_addr  (in escaped-count-worker) + 44  [0x102a25f1c]
+          +     !   :     1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc10forwarding22forwarding_walk_header  (in escaped-count-worker) + 44  [0x102adb664]
+          +     !   1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime6object16descriptor_state25scan_descriptor_roots_mut  (in escaped-count-worker) + 2000  [0x10304d320]
+          +     !   : 1 _RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc7copyingNtB4_23CopyingNurseryCollector16rewrite_raw_addr  (in escaped-count-worker) + 44  [0x102a25f1c]
+          +     !   :   1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc10forwarding22forwarding_walk_header  (in escaped-count-worker) + 88  [0x102adb690]
+          +     !   1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime6object21array_tail_transition14scan_roots_mut  (in escaped-count-worker) + 800  [0x1030559f8]
+          +     !   1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime6object6shapes26scan_shape_table_rekey_mut  (in escaped-count-worker) + 736  [0x10312f514]
+          +     !   : 1 _RNvMs1_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc5rootsNtB5_18RuntimeRootVisitor21visit_tagged_raw_addr  (in escaped-count-worker) + 56  [0x102a24a0c]
+          +     !   :   1 _RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc7copyingNtB4_23CopyingNurseryCollector16rewrite_raw_addr  (in escaped-count-worker) + 44  [0x102a25f1c]
+          +     !   :     1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc10forwarding22forwarding_walk_header  (in escaped-count-worker) + 48  [0x102adb668]
+          +     !   1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime6object6shapes26scan_shape_table_rekey_mut  (in escaped-count-worker) + 792  [0x10312f54c]
+          +     !   : 1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime5value10addr_class26try_read_tracked_gc_header  (in escaped-count-worker) + 56  [0x10311c130]
+          +     !   1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime6object6shapes26scan_shape_table_rekey_mut  (in escaped-count-worker) + 444  [0x10312f3f0]
+          +     !   1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime6symbol8gc_roots32scan_symbol_side_table_roots_mut  (in escaped-count-worker) + 440  [0x102c508a0]
+          +     !   : 1 _RNvMs1_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc5rootsNtB5_18RuntimeRootVisitor21visit_tagged_raw_addr  (in escaped-count-worker) + 56  [0x102a24a0c]
+          +     !   :   1 _RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc7copyingNtB4_23CopyingNurseryCollector16rewrite_raw_addr  (in escaped-count-worker) + 44  [0x102a25f1c]
+          +     !   :     1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime5arena9page_meta37classify_heap_space_in_range_uncached  (in escaped-count-worker) + 408  [0x102af2514]
+          +     !   1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime7closure13dynamic_props36scan_closure_dynamic_props_roots_mut  (in escaped-count-worker) + 616  [0x102f36610]
+          +     !   : 1 _RNvMs1_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc5rootsNtB5_18RuntimeRootVisitor25visit_metadata_usize_slot  (in escaped-count-worker) + 68  [0x102a24ec0]
+          +     !   :   1 _RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc7copyingNtB4_23CopyingNurseryCollector16rewrite_raw_addr  (in escaped-count-worker) + 8  [0x102a25ef8]
+          +     !   1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime7closure13dynamic_props36scan_closure_dynamic_props_roots_mut  (in escaped-count-worker) + 1296  [0x102f368b8]
+          +     !     1 pthread_mutex_lock  (in libsystem_pthread.dylib) + 52  [0x189ecc430]
+          +     1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc7copying24run_copied_minor_attempt  (in escaped-count-worker) + 608  [0x102a3ec60]
+          +       1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime5arena5stats27arena_live_from_space_bytes  (in escaped-count-worker) + 24  [0x102aef2a8]
+          +         1 _RNvYNCNKNvNtNtCs5gMwpk3Cs4e_13perry_runtime5arena5block12INLINE_STATE0s_0INtNtNtCsjgY6bXVaRmE_4core3ops8function6FnOnceTINtNtB1g_6option6OptionQIB1V_INtNtB1g_4cell10UnsafeCellNtNtBa_6inline16InlineArenaStateEEEEE9call_onceBc_  (in escaped-count-worker) + 24  [0x102d8e89c]
+          +           1 _tlv_get_addr  (in libdyld.dylib) + 4  [0x189adc38c]
+          20 perry_fn_baseline_worker_ts__run$spec_b  (in escaped-count-worker) + 10180  [0x10273f084]
+          + 17 perry_fn_baseline_worker_ts__run$spec_b  (in escaped-count-worker) + 10188,10528,...  [0x10273f08c,0x10273f1e0,...]
+          + 3 <deduplicated_symbol>  (in escaped-count-worker) + 16,4  [0x103160bf0,0x103160be4]
+          6 perry_fn_baseline_worker_ts__run$spec_b  (in escaped-count-worker) + 10160  [0x10273f070]
+          + 3 js_string_addref_if_heap_string  (in escaped-count-worker) + 0,28  [0x102c092d8,0x102c092f4]
+          + 3 perry_fn_baseline_worker_ts__run$spec_b  (in escaped-count-worker) + 10168  [0x10273f078]
+          2 js_json_stringify_full  (in escaped-count-worker) + 5596  [0x102bf40dc]
+
+Total number in stack (recursive counted multiple, when >=5):
+        6       DYLD-STUB$$memcpy  (in escaped-count-worker) + 0  [0x10341556c]
+        6       _platform_memmove  (in libsystem_platform.dylib) + 0  [0x189edb360]
+        5       _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json14stringify_flat10emit_piece  (in escaped-count-worker) + 0  [0x102ba015c]
+        5       _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime5value10addr_class26try_read_tracked_gc_header  (in escaped-count-worker) + 0  [0x102bc49a8]
+        5       _tlv_get_addr  (in libdyld.dylib) + 0  [0x189adc388]
+
+Sort by top of stack, same collapsed (when >= 5):
+        _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json14stringify_flat12string_piece  (in escaped-count-worker)        619
+        _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json23stringify_record_output11emit_record  (in escaped-count-worker)        408
+        _platform_memmove  (in libsystem_platform.dylib)        231
+        _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json22stringify_tojson_probe28keys_array_may_carry_to_json  (in escaped-count-worker)        220
+        _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json14stringify_flat10emit_piece  (in escaped-count-worker)        166
+        _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json14stringify_flat12scalar_piece  (in escaped-count-worker)        116
+        _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime5value10addr_class26try_read_tracked_gc_header  (in escaped-count-worker)        88
+        _RNvNtNtNtCs5gMwpk3Cs4e_13perry_runtime6object13field_get_set11enumeration24keys_contain_array_index  (in escaped-count-worker)        82
+        DYLD-STUB$$memcpy  (in escaped-count-worker)        52
+        _RNvNtCs5gMwpk3Cs4e_13perry_runtime6object17object_keys_array  (in escaped-count-worker)        49
+        js_json_stringify_full  (in escaped-count-worker)        42
+        _RNvNtCs5gMwpk3Cs4e_13perry_runtime6string20string_storage_alloc  (in escaped-count-worker)        36
+        _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json22stringify_tojson_probe33compute_object_proto_tojson_state  (in escaped-count-worker)        36
+        perry_fn_baseline_worker_ts__run$spec_b  (in escaped-count-worker)        36
+        _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime5array6header35array_has_named_properties_resolved  (in escaped-count-worker)        35
+        _tlv_get_addr  (in libdyld.dylib)        26
+        _RNvMs_NtNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope4push  (in escaped-count-worker)        24
+        _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json22stringify_tojson_probe25to_json_definitely_absent  (in escaped-count-worker)        23
+        _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime6object6shapes34shape_live_inline_slot_count_by_id  (in escaped-count-worker)        19
+        _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime5arena10allocators11arena_alloc  (in escaped-count-worker)        18
+        _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime6object15prototype_chain23object_static_prototype  (in escaped-count-worker)        18
+        _RNvMNtNtCs5gMwpk3Cs4e_13perry_runtime4json14stringify_flatNtB2_5Piece6inline  (in escaped-count-worker)        14
+        _RNvXsu_Cs8xF4iOrs9m2_4itoayNtB5_8Unsigned3fmt  (in escaped-count-worker)        12
+        _RNvXsi_Cs8xF4iOrs9m2_4itoaxNtNtB5_7private6Sealed5write  (in escaped-count-worker)        11
+        <deduplicated_symbol>  (in escaped-count-worker)        6
+        _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime7closure13dynamic_props36scan_closure_dynamic_props_roots_mut  (in escaped-count-worker)        6
+        _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc10dead_owner37owner_is_dead_copied_minor_from_space  (in escaped-count-worker)        5
+
+Binary Images:
+       0x10273c000 -        0x103770a13 +escaped-count-worker (0) <60C9F097-0662-326D-8D1F-2BB84F84EE8F> /Users/*/escaped-count-worker
+       0x189a6c000 -        0x189abeb4b  libobjc.A.dylib (951.7) <FF1D8AE4-ABEF-35F1-A30A-1183B9CB414F> /usr/lib/libobjc.A.dylib
+       0x189abf000 -        0x189af3d07  libdyld.dylib (1378) <B147D877-D0C2-388F-B38D-D3132E39905F> /usr/lib/system/libdyld.dylib
+       0x189af4000 -        0x189b9a217  dyld (1.0.0 - 1378) <A237EF81-B68B-37BA-A165-92C965529534> /usr/lib/dyld
+       0x189b9b000 -        0x189b9e228  libsystem_blocks.dylib (96) <CC947089-488D-316B-A9C7-46DEC0F73145> /usr/lib/system/libsystem_blocks.dylib
+       0x189b9f000 -        0x189bf355f  libxpc.dylib (3102.120.13) <C40FCAE8-7A17-3D82-87CB-3DA4802ADEF1> /usr/lib/system/libxpc.dylib
+       0x189bf4000 -        0x189c149ff  libsystem_trace.dylib (1861.120.4) <D0FABAB3-5AE7-3F10-8C62-60CBF5D70850> /usr/lib/system/libsystem_trace.dylib
+       0x189c15000 -        0x189cc35f7  libcorecrypto.dylib (1922.121.1) <A01A158D-6FE7-3B1C-A2C4-6BCB90D7314A> /usr/lib/system/libcorecrypto.dylib
+       0x189cc4000 -        0x189d141d7  libsystem_malloc.dylib (812.100.31) <5FAE4807-4D2B-3A95-A63A-DD96D3DA11B4> /usr/lib/system/libsystem_malloc.dylib
+       0x189d15000 -        0x189d5c23f  libdispatch.dylib (1542.100.32) <F071EFE4-299F-3089-ACC4-0025B8FFB52A> /usr/lib/system/libdispatch.dylib
+       0x189d5d000 -        0x189d5fffb  libsystem_featureflags.dylib (103) <71FCFFBD-85F8-3365-AFE0-BECEA4369122> /usr/lib/system/libsystem_featureflags.dylib
+       0x189d60000 -        0x189de0d9f  libsystem_c.dylib (1752.120.2) <694B7881-1BF3-3D0F-8F19-B50AE4E8EF8A> /usr/lib/system/libsystem_c.dylib
+       0x189de1000 -        0x189e71ae7  libc++.1.dylib (2100.43) <5013C0F8-84A9-3B56-9FEB-C353816A750F> /usr/lib/libc++.1.dylib
+       0x189e72000 -        0x189e8c75f  libc++abi.dylib (2100.43) <E482D257-E5A0-3816-BD97-7B39342958DA> /usr/lib/libc++abi.dylib
+       0x189e8d000 -        0x189eca2af  libsystem_kernel.dylib (12377.121.6) <CC1CF985-BC65-3725-809F-4C1E36B8F4BA> /usr/lib/system/libsystem_kernel.dylib
+       0x189ecb000 -        0x189ed7b3b  libsystem_pthread.dylib (539.100.4) <4F33683C-18C8-39A1-800B-2E3BD43BCC13> /usr/lib/system/libsystem_pthread.dylib
+       0x189ed8000 -        0x189ee0963  libsystem_platform.dylib (375.120.2) <160FD864-8D15-36FC-9E97-9725388CFAFE> /usr/lib/system/libsystem_platform.dylib
+       0x189ee1000 -        0x189f106eb  libsystem_info.dylib (600) <3D62F2D9-F516-31BF-83C7-E203D872300B> /usr/lib/system/libsystem_info.dylib
+       0x18dea8000 -        0x18deb1e5f  libsystem_darwin.dylib (1752.120.2) <8858F025-745A-388E-9544-080781CC9A69> /usr/lib/system/libsystem_darwin.dylib
+       0x18e313000 -        0x18e3251b6  libsystem_notify.dylib (348.120.4) <64D76451-1E0C-369B-A631-54DA3140E083> /usr/lib/system/libsystem_notify.dylib
+       0x1905e0000 -        0x1905faf7b  libsystem_networkextension.dylib (2226.120.19) <3A1DAD41-F14F-3595-B9BB-058A84308BE7> /usr/lib/system/libsystem_networkextension.dylib
+       0x19067d000 -        0x190694fdf  libsystem_asl.dylib (406) <F40838DF-2F15-3F62-970F-DEE25706BF1B> /usr/lib/system/libsystem_asl.dylib
+       0x19223b000 -        0x192243387  libsystem_symptoms.dylib (2169.120.7) <F5029F5C-1BF3-31C7-892E-BC8606AC829E> /usr/lib/system/libsystem_symptoms.dylib
+       0x1964df000 -        0x196517257  libsystem_containermanager.dylib (725.120.2) <518BE44D-AA31-31E6-B44B-A37AD5E47040> /usr/lib/system/libsystem_containermanager.dylib
+       0x1978f0000 -        0x1978f45d7  libsystem_configuration.dylib (1405.120.5) <0F7BBC1C-3D50-3E59-A31F-E4672A80BCEB> /usr/lib/system/libsystem_configuration.dylib
+       0x1978f5000 -        0x1978fb8cf  libsystem_sandbox.dylib (2680.120.12) <EC3A75EA-44C0-3A0B-9BF7-71C117B0A9C6> /usr/lib/system/libsystem_sandbox.dylib
+       0x198f4f000 -        0x198f521fb  libquarantine.dylib (196.120.2) <5849009B-ACA3-3796-94C4-BBDF8D300EBA> /usr/lib/system/libquarantine.dylib
+       0x1996ee000 -        0x1996f4d03  libsystem_coreservices.dylib (191.4.5) <9576143B-C303-35A3-BA63-1FD06EDA2BB1> /usr/lib/system/libsystem_coreservices.dylib
+       0x199c79000 -        0x199cb6a77  libsystem_m.dylib (3312.100.1) <A7E0863C-101A-31A0-922B-ED9B02626151> /usr/lib/system/libsystem_m.dylib
+       0x199cb8000 -        0x199cbb527  libmacho.dylib (1378) <755441B4-C034-3E3A-8E3C-F424FBB28261> /usr/lib/system/libmacho.dylib
+       0x199cd5000 -        0x199ce23a7  libcommonCrypto.dylib (600035) <CE357BB1-2D49-37CC-9FFE-D093936B1475> /usr/lib/system/libcommonCrypto.dylib
+       0x199ce3000 -        0x199cecca3  libunwind.dylib (2100.2) <FC8F0C4E-6FB0-3E27-ABEF-B0FA720CD5E4> /usr/lib/system/libunwind.dylib
+       0x199cf5000 -        0x199cff7ff  libcopyfile.dylib (240) <8ACFAC7A-88E9-3EF4-853F-A9140FF110E5> /usr/lib/system/libcopyfile.dylib
+       0x199d00000 -        0x199d03987  libcompiler_rt.dylib (103.3) <AA79151F-C19D-3C7C-92F8-B10F04D82C1C> /usr/lib/system/libcompiler_rt.dylib
+       0x199d04000 -        0x199d0878b  libsystem_collections.dylib (1752.120.2) <72DB5BE7-EF78-37D0-8AAD-53E37CFE4287> /usr/lib/system/libsystem_collections.dylib
+       0x199d09000 -        0x199d0c4cf  libsystem_secinit.dylib (168.100.7) <E525C566-CDA4-3D99-B12B-1615FD54A1F3> /usr/lib/system/libsystem_secinit.dylib
+       0x199d0d000 -        0x199d0fbf7  libremovefile.dylib (85.100.6) <635E661D-80A7-340D-A165-3F7D318FDFC9> /usr/lib/system/libremovefile.dylib
+       0x199d10000 -        0x199d10f27  libkeymgr.dylib (31) <8C08891A-DF1C-3DCC-AB64-4742FD6BE9BA> /usr/lib/system/libkeymgr.dylib
+       0x199d11000 -        0x199d19e37  libsystem_dnssd.dylib (2881.120.11) <6F45DF3F-233B-3BC3-BA8C-B43E7DA884BF> /usr/lib/system/libsystem_dnssd.dylib
+       0x199d1a000 -        0x199d1f09b  libcache.dylib (95) <189B576E-6176-3F82-8FA4-5914B0BEAEE7> /usr/lib/system/libcache.dylib
+       0x199d20000 -        0x199d21ce3  libSystem.B.dylib (1356) <D65E4112-C151-3FF8-BEB7-4841436012D6> /usr/lib/libSystem.B.dylib
+       0x28cf57000 -        0x28cf5e349  libRosetta.dylib (367.9) <8651ED4F-6506-3788-B56B-32EE414A85CA> /usr/lib/libRosetta.dylib
+       0x28eb74000 -        0x28eb77a4b  libsystem_darwindirectory.dylib (122) <CF277A2C-C818-3F16-8B3F-3C7B39FCD164> /usr/lib/system/libsystem_darwindirectory.dylib
+       0x28eb78000 -        0x28eb815d3  libsystem_eligibility.dylib (319.121.1) <DDAC0531-0262-3DDC-8EC8-80EB9438847A> /usr/lib/system/libsystem_eligibility.dylib
+       0x28eb82000 -        0x28eb8988b  libsystem_sanitizers.dylib (26.1) <44C4234F-8B2D-38D3-A774-B4B3C75AF3A7> /usr/lib/system/libsystem_sanitizers.dylib
+       0x28eb8a000 -        0x28eb8abb7  libsystem_trial.dylib (474.2.18.2) <68C583BA-AFF5-3916-86AE-6E38BFEF98D6> /usr/lib/system/libsystem_trial.dylib

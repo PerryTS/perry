@@ -9,3 +9,14 @@ This remains a development checkpoint: 11/38 CPU, 58/74 peak RSS and 28/36 retai
 The Piece-borrowing experiment was measured and reverted: paired large-array
 parse regressed about 5-5.5% and small-record stringify 1.27%. Complete raw,
 validation and paired evidence is retained under results/piece-ref.
+
+Validated escaped UTF-8 strings now plan exact output and emit into the final
+managed string. ARM counts expansion in bounded vector blocks; other targets
+use a scalar table. Invalid UTF-8/WTF-8 retains the general serializer. Paired
+escaped stringify CPU falls 49.97% versus empty-parse (about 2x Node / 2.2x Bun
+in the full matrix), with peak RSS down 0.84 MiB. 172 runtime tests, 38 compiled
+comparisons and 34 moving-GC runs pass. Complete full/paired matrices qualify.
+Acceptance remains open at 12/38 CPU, 58/74 peak and 28/36 retained RSS: small
+record stringify +1.60%, several small-object parse regressions and all older
+unresolved regressions are recorded in results/escaped-count. No GC production
+policy or version change.
