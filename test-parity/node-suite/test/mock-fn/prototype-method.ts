@@ -1,7 +1,10 @@
 import { mock } from "node:test";
 
 class Counter {
-  constructor(public value: number) {}
+  value: number;
+  constructor(value: number) {
+    this.value = value;
+  }
   read() {
     return this.value;
   }

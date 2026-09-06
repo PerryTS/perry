@@ -367,6 +367,22 @@ fn set_property_value(target: f64, property: &str, value: f64) {
     }
 }
 
+fn set_method_property_value(target: f64, property: &str, value: f64) {
+    let raw = raw_ptr_from_value(target);
+    if let Some(class_id) = crate::object::class_id_for_decl_prototype_object(raw) {
+        unsafe {
+            crate::object::js_register_prototype_method(
+                class_id,
+                property.as_ptr(),
+                property.len(),
+                value,
+            );
+        }
+    } else {
+        set_property_value(target, property, value);
+    }
+}
+
 fn get_property_value(target: f64, property: &str) -> f64 {
     let raw = raw_ptr_from_value(target);
     if raw >= 0x10000 && crate::closure::is_closure_ptr(raw) {
@@ -691,7 +707,7 @@ fn restore_mock_state(id: i64) {
             target,
             property,
             original,
-        }) => set_property_value(target, &property, original),
+        }) => set_method_property_value(target, &property, original),
         Some(MockRestoreTarget::ObjectAccessor {
             target,
             property,
@@ -1036,7 +1052,7 @@ extern "C" fn mock_method_thunk(
             original,
         },
     );
-    set_property_value(target.get_nanbox_f64(), &property_name, function);
+    set_method_property_value(target.get_nanbox_f64(), &property_name, function);
     function
 }
 
