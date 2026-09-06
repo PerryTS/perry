@@ -389,7 +389,7 @@ struct PageClassStats {
 /// the positive control: both arms live in ONE binary so no build difference
 /// can be confounded with the change.
 #[inline(always)]
-fn page_class_table_enabled() -> bool {
+pub(super) fn page_class_table_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ENABLED.get_or_init(|| crate::gc::env_default_on_enabled("PERRY_GC_PAGE_CLASS_TABLE"))
 }

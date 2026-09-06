@@ -18,6 +18,54 @@ thread_local! {
     static RUNTIME_HANDLE_STACK_HOT_GUARD: RuntimeHandleStackHotGuard = const { RuntimeHandleStackHotGuard };
 }
 
+#[derive(Clone, Copy, Default)]
+struct RuntimeHandleDiag {
+    scopes: u64,
+    pushes: u64,
+    max_slots: usize,
+}
+
+crate::perry_thread_local! {
+    static RUNTIME_HANDLE_DIAG: std::cell::Cell<RuntimeHandleDiag> =
+        const { std::cell::Cell::new(RuntimeHandleDiag {
+            scopes: 0,
+            pushes: 0,
+            max_slots: 0,
+        }) };
+}
+
+#[inline(always)]
+fn runtime_handle_diag_note(update: impl FnOnce(&mut RuntimeHandleDiag)) {
+    if !crate::gc::gc_diag_enabled() {
+        return;
+    }
+    RUNTIME_HANDLE_DIAG.with(|cell| {
+        let mut diag = cell.get();
+        update(&mut diag);
+        cell.set(diag);
+    });
+}
+
+pub(crate) fn emit_runtime_handle_diag() {
+    if !crate::gc::gc_diag_enabled() {
+        return;
+    }
+    RUNTIME_HANDLE_DIAG.with(|cell| {
+        let d = cell.get();
+        eprintln!(
+            "[gc-runtime-handles] scopes={} pushes={} pushes_per_scope={:.3} max_slots={}",
+            d.scopes,
+            d.pushes,
+            if d.scopes == 0 {
+                0.0
+            } else {
+                d.pushes as f64 / d.scopes as f64
+            },
+            d.max_slots,
+        );
+    });
+}
+
 /// Resolve this thread's runtime-handle stack without entering `HotTls`.
 /// Called once by `tls_hot::fill`, and by handle operations only until the
 /// Darwin direct-TSD cache has been published.
@@ -62,6 +110,10 @@ impl RuntimeHandleScope {
     #[inline]
     pub fn new() -> Self {
         let base = with_runtime_handle_stack(|stack| stack.borrow().len());
+        runtime_handle_diag_note(|d| {
+            d.scopes = d.scopes.saturating_add(1);
+            d.max_slots = d.max_slots.max(base);
+        });
         Self { base }
     }
 
@@ -73,6 +125,10 @@ impl RuntimeHandleScope {
             let index = stack.len();
             stack.push(slot);
             index
+        });
+        runtime_handle_diag_note(|d| {
+            d.pushes = d.pushes.saturating_add(1);
+            d.max_slots = d.max_slots.max(index.saturating_add(1));
         });
         RuntimeHandle {
             index,

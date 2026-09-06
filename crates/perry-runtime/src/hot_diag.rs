@@ -1065,6 +1065,7 @@ pub fn buffer_on() -> bool {
 // instruments use: this probe runs millions of times per turn, and a borrow
 // per probe would dominate the thing being measured.
 static BUF_PROBES: AtomicU64 = AtomicU64::new(0);
+static BUF_HEADER_REJECTS: AtomicU64 = AtomicU64::new(0);
 static BUF_ADMITS: AtomicU64 = AtomicU64::new(0);
 static BUF_TRUE_POS: AtomicU64 = AtomicU64::new(0);
 static BUF_ADDR_MIN: AtomicUsize = AtomicUsize::new(usize::MAX);
@@ -1074,6 +1075,16 @@ static BUF_WIN_HI: AtomicUsize = AtomicUsize::new(0);
 static BUF_REGS: AtomicU64 = AtomicU64::new(0);
 static BUF_UNREGS: AtomicU64 = AtomicU64::new(0);
 static BUF_LIVE_MAX: AtomicUsize = AtomicUsize::new(0);
+
+/// A tracked GC header proved that the candidate cannot be a Buffer before
+/// either address filter or an exact registry was consulted.
+#[inline]
+pub fn buffer_note_header_reject() {
+    let n = BUF_HEADER_REJECTS.fetch_add(1, Ordering::Relaxed);
+    if n & 0xF_FFFF == 0 {
+        buffer_dump();
+    }
+}
 
 /// One `is_registered_buffer` probe that got past the "ever registered" latch.
 /// `admitted` is what the inline min/max window answered — the whole question,
@@ -1121,6 +1132,7 @@ pub fn buffer_note_unregistration() {
 #[cold]
 fn buffer_dump() {
     let probes = BUF_PROBES.load(Ordering::Relaxed);
+    let header_rejects = BUF_HEADER_REJECTS.load(Ordering::Relaxed);
     let admits = BUF_ADMITS.load(Ordering::Relaxed);
     let tp = BUF_TRUE_POS.load(Ordering::Relaxed);
     let amin = BUF_ADDR_MIN.load(Ordering::Relaxed);
@@ -1141,7 +1153,7 @@ fn buffer_dump() {
     use std::fmt::Write as _;
     let _ = writeln!(
         out,
-        "[buffer-diag] probes={probes} admits={admits} ({:.2} %) rejected={} ({:.2} %) \
+        "[buffer-diag] header_rejects={header_rejects} filter_probes={probes} admits={admits} ({:.2} %) rejected={} ({:.2} %) \
          true_positives={tp} ({:.6} % of admits)",
         pct(admits, probes),
         probes - admits,

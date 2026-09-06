@@ -18,7 +18,7 @@ pub(super) use stack_maps::verify_native_slots_post_walk as stack_maps_native_sl
 
 pub use rooted_values::RootedValues;
 pub(super) use runtime_handles::{
-    new_runtime_handle_root_scan_state, scan_runtime_handle_roots_mut,
+    emit_runtime_handle_diag, new_runtime_handle_root_scan_state, scan_runtime_handle_roots_mut,
     scan_runtime_handle_roots_mut_step,
 };
 pub(crate) use runtime_handles::{
