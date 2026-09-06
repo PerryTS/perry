@@ -841,6 +841,14 @@ fn eligibility(args: &CompileArgs, project_root: &Path) -> Result<(), String> {
     if std::env::var("PERRY_OUTLINE_ENTRY_REPORT").is_ok() {
         return Err("outline-entry-report".to_string());
     }
+    // #9847: same reasoning as `opt-report` above. A cached build reuses the
+    // finished binary and never lowers HIR, so the native-instance report
+    // would print nothing — and nothing is indistinguishable from "no tag was
+    // ever registered", which is the reading this diagnostic exists to make
+    // impossible.
+    if std::env::var("PERRY_NATIVEINST_DIAG").is_ok() {
+        return Err("nativeinst-diag".to_string());
+    }
     if args.verify_native_regions || args.emit_attest || args.emit_sandbox {
         return Err("sidecar-or-verify".to_string());
     }
