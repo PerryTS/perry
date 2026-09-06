@@ -276,6 +276,8 @@ pub(crate) use descriptor_state::{
     set_builtin_property_attrs, set_property_attrs, transfer_descriptor_owner, AccessorDescriptor,
     DescriptorTables, PropertyAttrs,
 };
+#[cfg(test)]
+pub(crate) use descriptor_state::test_may_have_descriptor_entry;
 pub(crate) use field_get_set::FieldLookupCaches;
 pub(crate) use field_get_set::{
     private_evaluation_brand_value, private_lexical_brand_pop, private_lexical_brand_push,
