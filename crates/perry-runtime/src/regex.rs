@@ -943,6 +943,24 @@ pub(super) fn throw_regexp_syntax_error(message: &str) -> ! {
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 
+/// Kill switch for the newborn-parent barrier gate below
+/// (`PERRY_REGEX_NEWBORN_BARRIER_GATE=0` ⇒ the two header stores take the
+/// unconditional barrier pair, i.e. the pre-gate code path exactly). One
+/// relaxed load of a `OnceLock` per construction, resolved once per process,
+/// mirroring `regex::site_cache::enabled`.
+#[cfg(feature = "regex-engine")]
+#[inline]
+fn newborn_barrier_gate_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        crate::gc::env_default_on_from_value(
+            std::env::var("PERRY_REGEX_NEWBORN_BARRIER_GATE")
+                .ok()
+                .as_deref(),
+        )
+    })
+}
+
 /// Create a new RegExp from pattern and flags strings
 /// Returns a pointer to RegExpHeader
 ///
@@ -1275,20 +1293,52 @@ pub extern "C" fn js_regexp_new(
         // `runtime_write_barrier_gc_slot` classifies the parent and only
         // remembers genuinely-young children, so an already-old/interned
         // `pattern` is a harmless no-op.
+        //
+        // ★ Gated by the same live header test the COMPILER emits in front of
+        // every one of its own stores (`emit_parent_may_need_remembering_check`,
+        // #7511): a parent whose `GC_FLAG_TENURED` is clear owes the
+        // remembered set nothing, and a globally idle incremental barrier
+        // makes the SATB shading skippable too. Both clauses are read live —
+        // a header a collection promoted between `arena_alloc_gc` above and
+        // this store reads TENURED here and takes the full path, as does
+        // `RegExp.prototype.compile` reassigning a tenured header.
+        //
+        // Since #9845 the header is a NURSERY allocation, so on the common
+        // path both clauses are false and the pair of barrier calls — four
+        // page-map classifications, two dirty-page-cache probes and two child
+        // classifications, all ending at `ParentNotOldSkips` — collapses to
+        // one relaxed load of a static and one byte read of the header this
+        // function just wrote. `PERRY_REGEX_NEWBORN_BARRIER_GATE=0` restores
+        // the unconditional pair; nothing else changes with the gate off, so
+        // the OFF arm is the pre-change code path exactly.
         let regexp_parent_addr = ptr as usize;
-        if !pattern.is_null() {
-            crate::gc::runtime_write_barrier_gc_slot(
-                regexp_parent_addr,
-                std::ptr::addr_of!((*ptr).pattern_ptr) as usize,
-                js_nanbox_string(pattern as i64).to_bits(),
-            );
+        let needs_barrier = !newborn_barrier_gate_enabled()
+            || crate::gc::newborn_parent_needs_barrier(regexp_parent_addr);
+        if crate::hot_diag::regex_on() {
+            crate::hot_diag::regex_with(|d| {
+                if needs_barrier {
+                    d.new_barrier_taken += 1;
+                } else {
+                    d.new_barrier_gated += 1;
+                }
+                d.new_header_bytes += header_size as u64;
+            });
         }
-        if !canonical_flags_ptr.is_null() {
-            crate::gc::runtime_write_barrier_gc_slot(
-                regexp_parent_addr,
-                std::ptr::addr_of!((*ptr).flags_ptr) as usize,
-                js_nanbox_string(canonical_flags_ptr as i64).to_bits(),
-            );
+        if needs_barrier {
+            if !pattern.is_null() {
+                crate::gc::runtime_write_barrier_gc_slot(
+                    regexp_parent_addr,
+                    std::ptr::addr_of!((*ptr).pattern_ptr) as usize,
+                    js_nanbox_string(pattern as i64).to_bits(),
+                );
+            }
+            if !canonical_flags_ptr.is_null() {
+                crate::gc::runtime_write_barrier_gc_slot(
+                    regexp_parent_addr,
+                    std::ptr::addr_of!((*ptr).flags_ptr) as usize,
+                    js_nanbox_string(canonical_flags_ptr as i64).to_bits(),
+                );
+            }
         }
         (*ptr).case_insensitive = case_insensitive;
         (*ptr).global = global;
@@ -1330,6 +1380,14 @@ pub extern "C" fn js_regexp_new(
         REGEX_POINTERS.with(|s| {
             s.borrow_mut().insert(ptr as usize);
         });
+        if crate::hot_diag::regex_on() {
+            // Two address-keyed inserts per construction (this one and
+            // `REGEX_SOURCE_TABLE` below), each a `PtrHasher` hash plus a
+            // hashbrown insert, mirrored by two removals at death and two
+            // rekeys per evacuation. Counted so the pair is a number rather
+            // than a reading of the profile.
+            crate::hot_diag::regex_with(|d| d.new_side_table_inserts += 2);
+        }
 
         // Issue #637: side-table owned copies of pattern + flags so
         // `.source` / `.flags` survive GC of the input StringHeaders.
