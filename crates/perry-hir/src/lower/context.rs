@@ -1461,6 +1461,7 @@ impl LoweringContext {
         module_name: String,
         class_name: String,
     ) -> bool {
+        nativeinst_registry_diag("register", &local_name, &module_name, &class_name);
         // #5137: if the user opted this package into `perry.compilePackages`,
         // its real npm source is being compiled and the binding resolves to
         // the compiled-from-source class. Registering a native instance here
@@ -1679,6 +1680,7 @@ impl LoweringContext {
     /// scans these in reverse (last-match-wins), so the index stores the LAST
     /// pushed entry per name (overwrite).
     pub(crate) fn push_module_native_instance(&mut self, entry: (String, String, String)) {
+        nativeinst_registry_diag("push_module", &entry.0, &entry.1, &entry.2);
         let idx = self.module_native_instances.len();
         self.module_native_instances_index
             .insert(entry.0.clone(), idx);
@@ -1908,4 +1910,37 @@ pub(crate) fn perry_ui_factory_returns_handle(name: &str) -> bool {
     matches!(name, "VStack" | "HStack" | "Button" | "ForEach" | "WebView")
         || perry_dispatch::perry_ui_lookup(name)
             .is_some_and(|row| row.ret == perry_dispatch::ReturnKind::Widget)
+}
+
+/// #9847: report every native-instance tag as it is created.
+///
+/// `register_native_instance` and `push_module_native_instance` are the only
+/// two entry points through which a native-instance tag can come into
+/// existence, so a diagnostic on *them* cannot miss a tag the way one on
+/// guessed construction sites can — which is the whole reason this exists.
+///
+/// What it prints, one line per registration:
+///
+/// ```text
+/// [nativeinst] REGISTER push_module name="O" -> child_process::Instance
+/// ```
+///
+/// The tag table is keyed by identifier TEXT with module-wide scope, so on a
+/// minified single-module bundle the same short name is routinely claimed by
+/// several unrelated native classes and every method call on any local with
+/// that name is lowered as a native-instance call of whichever won. This
+/// report is what makes that visible: on `cli_2.1.112.js` it prints 795 lines
+/// whose most-registered identifiers are `Y`(71), `z`(65), `K`(65), `_`(65),
+/// `A`(54), `O`(52), `w`(37), `q`(35) — every one a single letter.
+///
+/// Enable with `PERRY_NATIVEINST_DIAG=1`. Off, this is one relaxed atomic load
+/// per registration and nothing else.
+pub(crate) fn nativeinst_registry_diag(kind: &str, name: &str, module: &str, class: &str) {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    let on = *ON.get_or_init(
+        || matches!(std::env::var("PERRY_NATIVEINST_DIAG"), Ok(v) if !v.is_empty() && v != "0"),
+    );
+    if on {
+        eprintln!("[nativeinst] REGISTER {kind} name={name:?} -> {module}::{class}");
+    }
 }
