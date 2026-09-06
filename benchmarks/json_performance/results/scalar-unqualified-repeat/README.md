@@ -1,0 +1,1 @@
+This repeated scalar run failed the benchmark host quiet gate (final 1-minute load 2.894 > 2.5). The recorded external benchmark observations show a new ccperf process consuming about 120 CPU seconds during this run. Its timings are not accepted performance evidence. Raw output checks, timing, memory observations and the monitor record are preserved for audit.

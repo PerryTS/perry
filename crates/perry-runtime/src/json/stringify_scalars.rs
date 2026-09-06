@@ -42,6 +42,8 @@ pub(crate) unsafe fn write_number(buf: &mut String, value: f64) {
         // (`2**58`), so those use shortest-round-trip formatting below (#6127).
         let mut itoa_buf = itoa::Buffer::new();
         buf.push_str(itoa_buf.format(value as i64));
+    } else if write_compact_decimal(buf, value) {
+        // The guarded decimal spelling already round-trips to this number.
     } else {
         // ECMAScript shortest-round-trip digits and notation, directly into
         // stack storage. The general Rust formatter allocated a temporary
@@ -51,6 +53,47 @@ pub(crate) unsafe fn write_number(buf: &mut String, value: f64) {
         let mut number = ryu_js::Buffer::new();
         buf.push_str(number.format_finite(value));
     }
+}
+
+/// Fast fixed-point spelling when at most three fractional digits suffice.
+/// Fail without changing the output if any guard does not hold.
+#[inline]
+pub(crate) fn write_compact_decimal(buf: &mut String, value: f64) -> bool {
+    let abs = value.abs();
+    if !(0.001..1e12).contains(&abs) {
+        return false;
+    }
+    let scaled = abs * 1000.0;
+    let digits = scaled as u64;
+    let fraction = digits % 1000;
+    if fraction == 0 || digits as f64 != scaled || digits as f64 / 1000.0 != abs {
+        return false;
+    }
+    // digits < 10^15 is exact as f64. Below 10^12 the distance between
+    // adjacent thousandths exceeds eight ULPs, so another three-or-fewer
+    // fractional-digit spelling cannot round to this float. Removing trailing
+    // zeros gives the shortest spelling; ECMAScript uses fixed notation here.
+    if value < 0.0 {
+        buf.push('-');
+    }
+    let mut integer = itoa::Buffer::new();
+    buf.push_str(integer.format(digits / 1000));
+    buf.push('.');
+    let bytes = [
+        b'0' + (fraction / 100) as u8,
+        b'0' + ((fraction / 10) % 10) as u8,
+        b'0' + (fraction % 10) as u8,
+    ];
+    let len = if fraction % 10 != 0 {
+        3
+    } else if fraction % 100 != 0 {
+        2
+    } else {
+        1
+    };
+    // All three bytes were constructed as ASCII digits.
+    buf.push_str(unsafe { std::str::from_utf8_unchecked(&bytes[..len]) });
+    true
 }
 
 #[inline]

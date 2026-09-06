@@ -18,7 +18,7 @@ REPO = ROOT.parent.parent
 
 
 def function(source, name):
-    start = source.index('pub(crate) unsafe fn ' + name + '(')
+    start = re.search(r'pub\(crate\) (?:unsafe )?fn ' + re.escape(name) + r'\(', source).start()
     end = source.index('\n#[inline]', start)
     return source[start:end]
 
@@ -44,7 +44,7 @@ def main():
         }
     assert records['node']['sha256'] == records['bun']['sha256'], 'Oracle disagreement'
     source = (REPO / 'crates/perry-runtime/src/json/stringify_scalars.rs').read_text()
-    emitter = function(source, 'write_number')
+    emitter = function(source, 'write_number') + '\n' + function(source, 'write_compact_decimal')
     tags = (REPO / 'crates/perry-runtime/src/value/tags.rs').read_text()
     constants = '\n'.join(re.search(r'pub\(crate\) const ' + name + r': u64 = [^;]+;', tags)[0]
                           for name in ['BIGINT_TAG', 'INT32_TAG', 'INT32_MASK'])

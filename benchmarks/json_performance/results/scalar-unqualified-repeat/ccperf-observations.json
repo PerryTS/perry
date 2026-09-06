@@ -1,0 +1,230 @@
+[
+  {
+    "utc": "2026-09-06T09:39:24Z",
+    "ccperf": [
+      "56796   0.0   0:14.89 /Users/perry/ccperf/bin/cc_tenure_cand"
+    ]
+  },
+  {
+    "utc": "2026-09-06T09:39:29Z",
+    "ccperf": [
+      "56796   0.0   0:14.89 /Users/perry/ccperf/bin/cc_tenure_cand"
+    ]
+  },
+  {
+    "utc": "2026-09-06T09:39:34Z",
+    "ccperf": [
+      "56796   0.0   0:14.89 /Users/perry/ccperf/bin/cc_tenure_cand"
+    ]
+  },
+  {
+    "utc": "2026-09-06T09:39:40Z",
+    "ccperf": [
+      "56796   0.0   0:14.89 /Users/perry/ccperf/bin/cc_tenure_cand"
+    ]
+  },
+  {
+    "utc": "2026-09-06T09:39:45Z",
+    "ccperf": [
+      "56796   0.0   0:14.89 /Users/perry/ccperf/bin/cc_tenure_cand"
+    ]
+  },
+  {
+    "utc": "2026-09-06T09:39:50Z",
+    "ccperf": [
+      "56796   0.0   0:14.89 /Users/perry/ccperf/bin/cc_tenure_cand"
+    ]
+  },
+  {
+    "utc": "2026-09-06T09:39:55Z",
+    "ccperf": [
+      "56796   0.0   0:14.90 /Users/perry/ccperf/bin/cc_tenure_cand"
+    ]
+  },
+  {
+    "utc": "2026-09-06T09:40:00Z",
+    "ccperf": [
+      "56796   0.0   0:14.90 /Users/perry/ccperf/bin/cc_tenure_cand"
+    ]
+  },
+  {
+    "utc": "2026-09-06T09:40:05Z",
+    "ccperf": [
+      "56796   0.0   0:14.90 /Users/perry/ccperf/bin/cc_tenure_cand"
+    ]
+  },
+  {
+    "utc": "2026-09-06T09:40:10Z",
+    "ccperf": [
+      "56796   0.0   0:14.90 /Users/perry/ccperf/bin/cc_tenure_cand"
+    ]
+  },
+  {
+    "utc": "2026-09-06T09:40:15Z",
+    "ccperf": [
+      "59137  97.8   0:01.04 /Users/perry/ccperf/bin/cc_tenure_cand"
+    ]
+  },
+  {
+    "utc": "2026-09-06T09:40:20Z",
+    "ccperf": [
+      "59137 100.0   0:04.47 /Users/perry/ccperf/bin/cc_tenure_cand"
+    ]
+  },
+  {
+    "utc": "2026-09-06T09:40:25Z",
+    "ccperf": [
+      "59137  99.8   0:09.50 /Users/perry/ccperf/bin/cc_tenure_cand"
+    ]
+  },
+  {
+    "utc": "2026-09-06T09:40:30Z",
+    "ccperf": [
+      "59137 100.0   0:14.53 /Users/perry/ccperf/bin/cc_tenure_cand"
+    ]
+  },
+  {
+    "utc": "2026-09-06T09:40:35Z",
+    "ccperf": [
+      "59137  98.7   0:19.55 /Users/perry/ccperf/bin/cc_tenure_cand"
+    ]
+  },
+  {
+    "utc": "2026-09-06T09:40:40Z",
+    "ccperf": [
+      "59137  99.4   0:24.58 /Users/perry/ccperf/bin/cc_tenure_cand"
+    ]
+  },
+  {
+    "utc": "2026-09-06T09:40:45Z",
+    "ccperf": [
+      "59137 100.0   0:29.62 /Users/perry/ccperf/bin/cc_tenure_cand"
+    ]
+  },
+  {
+    "utc": "2026-09-06T09:40:50Z",
+    "ccperf": [
+      "59137  99.4   0:34.65 /Users/perry/ccperf/bin/cc_tenure_cand"
+    ]
+  },
+  {
+    "utc": "2026-09-06T09:40:55Z",
+    "ccperf": [
+      "59137 100.0   0:39.66 /Users/perry/ccperf/bin/cc_tenure_cand"
+    ]
+  },
+  {
+    "utc": "2026-09-06T09:41:00Z",
+    "ccperf": [
+      "59137  99.3   0:44.69 /Users/perry/ccperf/bin/cc_tenure_cand"
+    ]
+  },
+  {
+    "utc": "2026-09-06T09:41:05Z",
+    "ccperf": [
+      "59137  99.5   0:49.72 /Users/perry/ccperf/bin/cc_tenure_cand"
+    ]
+  },
+  {
+    "utc": "2026-09-06T09:41:10Z",
+    "ccperf": [
+      "59137 100.0   0:54.76 /Users/perry/ccperf/bin/cc_tenure_cand"
+    ]
+  },
+  {
+    "utc": "2026-09-06T09:41:15Z",
+    "ccperf": [
+      "59137 100.0   0:59.79 /Users/perry/ccperf/bin/cc_tenure_cand"
+    ]
+  },
+  {
+    "utc": "2026-09-06T09:41:20Z",
+    "ccperf": [
+      "59137   0.1   1:02.99 /Users/perry/ccperf/bin/cc_tenure_cand"
+    ]
+  },
+  {
+    "utc": "2026-09-06T09:41:25Z",
+    "ccperf": [
+      "59137 100.0   1:06.40 /Users/perry/ccperf/bin/cc_tenure_cand"
+    ]
+  },
+  {
+    "utc": "2026-09-06T09:41:30Z",
+    "ccperf": [
+      "59137  98.2   1:11.43 /Users/perry/ccperf/bin/cc_tenure_cand"
+    ]
+  },
+  {
+    "utc": "2026-09-06T09:41:35Z",
+    "ccperf": [
+      "59137 100.0   1:16.47 /Users/perry/ccperf/bin/cc_tenure_cand"
+    ]
+  },
+  {
+    "utc": "2026-09-06T09:41:40Z",
+    "ccperf": [
+      "59137 100.0   1:21.50 /Users/perry/ccperf/bin/cc_tenure_cand"
+    ]
+  },
+  {
+    "utc": "2026-09-06T09:41:45Z",
+    "ccperf": [
+      "59137  13.3   1:25.99 /Users/perry/ccperf/bin/cc_tenure_cand"
+    ]
+  },
+  {
+    "utc": "2026-09-06T09:41:50Z",
+    "ccperf": [
+      "59137  98.4   1:28.08 /Users/perry/ccperf/bin/cc_tenure_cand"
+    ]
+  },
+  {
+    "utc": "2026-09-06T09:41:55Z",
+    "ccperf": [
+      "59137 100.0   1:33.11 /Users/perry/ccperf/bin/cc_tenure_cand"
+    ]
+  },
+  {
+    "utc": "2026-09-06T09:42:00Z",
+    "ccperf": [
+      "59137 100.0   1:38.14 /Users/perry/ccperf/bin/cc_tenure_cand"
+    ]
+  },
+  {
+    "utc": "2026-09-06T09:42:05Z",
+    "ccperf": [
+      "59137 100.0   1:43.17 /Users/perry/ccperf/bin/cc_tenure_cand"
+    ]
+  },
+  {
+    "utc": "2026-09-06T09:42:10Z",
+    "ccperf": [
+      "59137  99.6   1:48.20 /Users/perry/ccperf/bin/cc_tenure_cand"
+    ]
+  },
+  {
+    "utc": "2026-09-06T09:42:15Z",
+    "ccperf": [
+      "59137 100.0   1:53.23 /Users/perry/ccperf/bin/cc_tenure_cand"
+    ]
+  },
+  {
+    "utc": "2026-09-06T09:42:21Z",
+    "ccperf": [
+      "59137 100.0   1:58.26 /Users/perry/ccperf/bin/cc_tenure_cand"
+    ]
+  },
+  {
+    "utc": "2026-09-06T09:42:26Z",
+    "ccperf": [
+      "59137  85.3   2:00.28 /Users/perry/ccperf/bin/cc_tenure_cand"
+    ]
+  },
+  {
+    "utc": "2026-09-06T09:42:31Z",
+    "ccperf": [
+      "59137   0.0   2:00.35 /Users/perry/ccperf/bin/cc_tenure_cand"
+    ]
+  }
+]

@@ -1,0 +1,1 @@
+This exploratory scalar run failed the benchmark host quiet gate (final 1-minute load 2.727 > 2.5). Its timings are not accepted performance evidence. Raw output checks, timing, and memory observations are preserved for audit.

@@ -52,4 +52,20 @@ function randomU32() {
 }
 const count = Number(process.argv[2] ?? 1000000);
 for (let i = 0; i < count; i++) emitBits(randomU32(), randomU32());
+// Compact decimal candidates, their immediate binary neighbors, and the
+// upper magnitude guard. Use an independent seed to preserve the corpus above.
+for (let n = 0; n <= 10000; n++) neighbors(n / 1000);
+let decimalState = 0x10203040;
+function decimalRandomU32() {
+    decimalState ^= decimalState << 13;
+    decimalState ^= decimalState >>> 17;
+    decimalState ^= decimalState << 5;
+    return decimalState >>> 0;
+}
+for (let i = 0; i < 10000; i++) {
+    neighbors((decimalRandomU32() * 100000 + decimalRandomU32() % 100000) / 1000);
+}
+for (const n of [999999999999990, 999999999999999, 1000000000000000, 1000000000000001]) {
+    neighbors(n / 1000);
+}
 if (pending) writeSync(1, pending);

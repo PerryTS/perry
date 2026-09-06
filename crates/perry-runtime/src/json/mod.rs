@@ -35,6 +35,7 @@ mod stringify_api;
 mod stringify_buffer;
 mod stringify_scalars;
 pub(crate) mod stringify_shape_template;
+mod stringify_small;
 mod stringify_tojson_probe;
 
 // Public FFI re-exports — preserve the `crate::json::js_json_*` path used by

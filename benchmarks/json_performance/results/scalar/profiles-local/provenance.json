@@ -1,0 +1,5 @@
+{
+  "worker_sha256": "d651f1b28b1cc98227393640dee4453bd9ef035e6bf66129c18196540dfbcb19",
+  "host": "Darwin MacBookPro.fritz.box 25.5.0 Darwin Kernel Version 25.5.0: Mon Apr 27 20:38:56 PDT 2026; root:xnu-12377.121.6~2/RELEASE_ARM64_T6000 arm64",
+  "kind": "local sampling diagnostics only; host busy; not performance standings; process terminated after capture"
+}

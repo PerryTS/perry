@@ -1574,7 +1574,7 @@ fn truncate_to_10_utf16_units(s: &str) -> String {
 /// - `replacer_f64`: NaN-boxed — a closure (function replacer), array (key whitelist), or null
 /// - `spacer_f64`: NaN-boxed — a number (indent count), string (indent string), or null
 ///
-/// Returns i64 JSValue bits: a NaN-boxed string pointer, or TAG_UNDEFINED when
+/// Returns i64 JSValue bits: a heap or inline string, or TAG_UNDEFINED when
 /// `JSON.stringify(undefined)` should return `undefined`.
 #[no_mangle]
 pub unsafe extern "C" fn js_json_stringify_full(
@@ -1583,6 +1583,18 @@ pub unsafe extern "C" fn js_json_stringify_full(
     spacer_f64: f64,
 ) -> i64 {
     let value_bits = value.to_bits();
+    let replacer_bits = replacer_f64.to_bits();
+    let spacer_bits = spacer_f64.to_bits();
+    let no_replacer = replacer_bits == TAG_NULL || replacer_bits == TAG_UNDEFINED;
+    let no_spacer =
+        spacer_bits == TAG_NULL || spacer_bits == TAG_UNDEFINED || spacer_bits == TAG_FALSE;
+    if no_replacer && no_spacer {
+        // These primitives cannot invoke toJSON. Restrict the other arguments
+        // to inert values so replacers and spacer coercions remain observable.
+        if let Some(result) = super::stringify_small::try_primitive(value_bits) {
+            return result.bits() as i64;
+        }
+    }
 
     // JSON.stringify(undefined) returns undefined per spec
     if value_bits == TAG_UNDEFINED {
@@ -1605,11 +1617,6 @@ pub unsafe extern "C" fn js_json_stringify_full(
     // output `JSON.stringify(value)` produces; replacer/indent
     // require a real tree walk). The bench's 2-arg form (and most
     // real usage) hits this path.
-    let replacer_bits = replacer_f64.to_bits();
-    let spacer_bits = spacer_f64.to_bits();
-    let no_replacer = replacer_bits == TAG_NULL || replacer_bits == TAG_UNDEFINED;
-    let no_spacer =
-        spacer_bits == TAG_NULL || spacer_bits == TAG_UNDEFINED || spacer_bits == TAG_FALSE;
     if no_replacer && no_spacer {
         if let Some(ptr) = try_stringify_lazy_array(value) {
             return JSValue::string_ptr(ptr).bits() as i64;
@@ -1852,15 +1859,15 @@ pub unsafe extern "C" fn js_json_stringify_full(
         }
     });
 
-    let result_ptr = json_string_from_output_bytes(buf.as_bytes());
+    let result = super::stringify_small::inline_ascii_output(buf.as_bytes())
+        .unwrap_or_else(|| JSValue::string_ptr(json_string_from_output_bytes(buf.as_bytes())));
     restore_stringify_buf(buf);
     match saved_cache {
         Some(s) => restore_shape_cache(s),
         None => clear_shape_cache(),
     }
     STRINGIFY_DEPTH.with(|d| d.set(d.get() - 1));
-    // Return as NaN-boxed string
-    (STRING_TAG | (result_ptr as u64 & POINTER_MASK)) as i64
+    result.bits() as i64
 }
 
 #[cfg(test)]

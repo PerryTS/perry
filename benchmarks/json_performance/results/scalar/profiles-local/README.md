@@ -1,0 +1,3 @@
+Sampling diagnostics on the busy local development Mac, separate from performance standings. Uses the same scalar worker archived in provenance.json. Three-second samples after 0.5 seconds of execution, with the benchmark loop kept alive; each owned process was terminated after capture. These samples locate runtime work but establish no Node/Bun CPU or RSS ratio.
+
+The 20 MB record stringify sample has 1,564 of 2,249 main-call-tree samples in the loop moving-GC safepoint, predominantly full collection and live-graph tracing. The 1 MB case instead centers on the shape-template emitter, string copies/escaping and array traversal. Tiny-object stringify pays repeated pointer/type and property-resolution checks. GC sources remain unchanged.

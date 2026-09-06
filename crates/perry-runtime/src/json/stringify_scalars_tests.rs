@@ -1,4 +1,44 @@
-use super::{write_escaped_string, write_number};
+use super::{write_compact_decimal, write_escaped_string, write_number};
+
+#[test]
+fn compact_decimals_preserve_roundtrips_and_leave_rejections_untouched() {
+    for value in [0.001, 0.01, 0.1, 0.125, 1.5, 12.375, 999999999999.999] {
+        for value in [value, -value] {
+            let mut output = String::from("prefix:");
+            assert!(write_compact_decimal(&mut output, value));
+            let mut reference = ryu_js::Buffer::new();
+            assert_eq!(&output[7..], reference.format_finite(value));
+            assert_eq!(
+                output[7..].parse::<f64>().unwrap().to_bits(),
+                value.to_bits()
+            );
+        }
+    }
+    for value in [
+        0.0,
+        -0.0,
+        1.0,
+        0.0001,
+        1e12,
+        1e21,
+        1.0 / 3.0,
+        f64::NAN,
+        f64::INFINITY,
+    ] {
+        let mut output = String::from("prefix:");
+        assert!(!write_compact_decimal(&mut output, value));
+        assert_eq!(output, "prefix:");
+    }
+    for value in [0.001f64, 0.1, 0.125, 1.5, 999999999999.999, 1e12] {
+        for offset in -8i64..=8 {
+            let neighbor = f64::from_bits(value.to_bits().wrapping_add_signed(offset));
+            let mut output = String::new();
+            unsafe { write_number(&mut output, neighbor) };
+            let mut reference = ryu_js::Buffer::new();
+            assert_eq!(output, reference.format_finite(neighbor));
+        }
+    }
+}
 
 #[test]
 fn json_number_spelling_matches_ecmascript_boundaries() {

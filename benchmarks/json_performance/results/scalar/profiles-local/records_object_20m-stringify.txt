@@ -1,0 +1,595 @@
+Analysis of sampling scalar-worker (pid 90980) every 1 millisecond
+Process:         scalar-worker [90980]
+Path:            /Users/USER/*/scalar-worker
+Load Address:    0x104718000
+Identifier:      scalar-worker
+Version:         0
+Code Type:       ARM64
+Platform:        macOS
+Parent Process:  Python [90656]
+Target Type:     live task
+
+Date/Time:       2026-09-06 11:45:17.676 +0200
+Launch Time:     2026-09-06 11:45:17.110 +0200
+OS Version:      macOS 26.5 (25F71)
+Report Version:  7
+Analysis Tool:   /usr/bin/sample
+
+Physical footprint:         138.9M
+Physical footprint (peak):  157.3M
+Idle exit:                  untracked
+----
+
+Call graph:
+    2258 Thread_82280215   DispatchQueue_1: com.apple.main-thread  (serial)
+      2249 start  (in dyld) + 6992  [0x189b13e00]
+      + 2249 main  (in scalar-worker) + 2764  [0x10471f484]
+      +   1564 perry_fn_baseline_worker_ts__run$spec_b  (in scalar-worker) + 10708  [0x10471b294]
+      +   ! 1564 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc6policy25gc_safepoint_moving_minor  (in scalar-worker) + 1144  [0x104983bb4]
+      +   !   1562 _RNvNtCs5gMwpk3Cs4e_13perry_runtime2gc39gc_collect_full_mark_sweep_with_trigger  (in scalar-worker) + 308  [0x10497c374]
+      +   !   : 1122 _RNvMs7_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc5cycleNtB5_12GcCycleState4step  (in scalar-worker) + 8100  [0x104965fe4]
+      +   !   : | 1122 _RNvMs0_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc5cycleNtB5_23TraceWorklistCycleState4step  (in scalar-worker) + 180  [0x10496129c]
+      +   !   : |   1067 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5trace25drain_trace_worklist_step  (in scalar-worker) + 96  [0x104ac1744]
+      +   !   : |   + 670 _RINvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc17layout_slot_visit33visit_gc_rewrite_slot_descriptorsNCNvNtB4_5trace24trace_heap_rewrite_slots0EB6_  (in scalar-worker) + 732  [0x1051581c0]
+      +   !   : |   + ! 467 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc17layout_slot_visit32visit_gc_layout_slot_descriptors  (in scalar-worker) + 1456  [0x105196bb8]
+      +   !   : |   + ! : 461 _RNCNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5trace24trace_heap_rewrite_slots0B7_  (in scalar-worker) + 140  [0x10515be44]
+      +   !   : |   + ! : | 377 _RNvMs2_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc6layoutNtB5_23GcMutableSlotDescriptor11visit_slots  (in scalar-worker) + 128  [0x104aaffc8]
+      +   !   : |   + ! : | + 294 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5trace24mark_field_into_worklist  (in scalar-worker) + 160  [0x104ac1660]
+      +   !   : |   + ! : | + ! 257 _RNvMNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5traceNtB2_15ValidPointerSet8contains  (in scalar-worker) + 88  [0x104aac844]
+      +   !   : |   + ! : | + ! : 234 _RNvMNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5traceNtB2_15ValidPointerSet16find_arena_floor  (in scalar-worker) + 200,92,...  [0x104aac7c0,0x104aac754,...]
+      +   !   : |   + ! : | + ! : 17 _RNvMNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5traceNtB2_15ValidPointerSet8contains  (in scalar-worker) + 260  [0x104aac8f0]
+      +   !   : |   + ! : | + ! : | 17 _tlv_get_addr  (in libdyld.dylib) + 4,0,...  [0x189adc38c,0x189adc388,...]
+      +   !   : |   + ! : | + ! : 6 _RNvMNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5traceNtB2_15ValidPointerSet8contains  (in scalar-worker) + 88  [0x104aac844]
+      +   !   : |   + ! : | + ! :   6 _RNvMNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5traceNtB2_15ValidPointerSet16find_arena_floor  (in scalar-worker) + 0  [0x104aac6f8]
+      +   !   : |   + ! : | + ! 37 _RNvMNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5traceNtB2_15ValidPointerSet8contains  (in scalar-worker) + 0,288,...  [0x104aac7ec,0x104aac90c,...]
+      +   !   : |   + ! : | + 26 _RNCNCNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5trace24trace_heap_rewrite_slots00B9_  (in scalar-worker) + 208  [0x10515af50]
+      +   !   : |   + ! : | + ! 26 _tlv_get_addr  (in libdyld.dylib) + 4,20  [0x189adc38c,0x189adc39c]
+      +   !   : |   + ! : | + 25 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5trace24mark_field_into_worklist  (in scalar-worker) + 72,144,...  [0x104ac1608,0x104ac1650,...]
+      +   !   : |   + ! : | + 12 _RNCNCNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5trace24trace_heap_rewrite_slots00B9_  (in scalar-worker) + 52,168,...  [0x10515aeb4,0x10515af28,...]
+      +   !   : |   + ! : | + 11 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5trace24mark_field_into_worklist  (in scalar-worker) + 48  [0x104ac15f0]
+      +   !   : |   + ! : | + ! 11 _tlv_get_addr  (in libdyld.dylib) + 4,20  [0x189adc38c,0x189adc39c]
+      +   !   : |   + ! : | + 6 _RNvMNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5traceNtB2_15ValidPointerSet8contains  (in scalar-worker) + 324  [0x104aac930]
+      +   !   : |   + ! : | + 3 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5trace24mark_field_into_worklist  (in scalar-worker) + 240  [0x104ac16b0]
+      +   !   : |   + ! : | +   3 <deduplicated_symbol>  (in scalar-worker) + 60  [0x1053aa25c]
+      +   !   : |   + ! : | +     3 _RNvMs5_NtCsctvjasLqLe9_5alloc7raw_vecNtB5_11RawVecInner11finish_growCs5gMwpk3Cs4e_13perry_runtime  (in scalar-worker) + 88  [0x1053aad40]
+      +   !   : |   + ! : | +       3 _mi_theap_realloc_zero  (in scalar-worker) + 388  [0x1053e9f74]
+      +   !   : |   + ! : | +         3 _mi_malloc_generic  (in scalar-worker) + 692  [0x1053eb21c]
+      +   !   : |   + ! : | +           3 mi_huge_page_alloc  (in scalar-worker) + 152  [0x1053eb9fc]
+      +   !   : |   + ! : | +             3 mi_page_fresh_alloc  (in scalar-worker) + 40  [0x10539f14c]
+      +   !   : |   + ! : | +               2 _mi_arenas_page_alloc  (in scalar-worker) + 116  [0x10538eec8]
+      +   !   : |   + ! : | +               : 2 mi_arenas_page_alloc_fresh  (in scalar-worker) + 240  [0x10539d404]
+      +   !   : |   + ! : | +               :   2 mi_arenas_try_alloc  (in scalar-worker) + 92  [0x10538ec08]
+      +   !   : |   + ! : | +               :     2 mi_arenas_try_find_free  (in scalar-worker) + 344  [0x10539ca64]
+      +   !   : |   + ! : | +               :       2 mi_arena_try_alloc_at  (in scalar-worker) + 772  [0x10539d278]
+      +   !   : |   + ! : | +               :         2 madvise  (in libsystem_kernel.dylib) + 8  [0x189e909b0]
+      +   !   : |   + ! : | +               1 _mi_arenas_page_alloc  (in scalar-worker) + 0  [0x10538ee54]
+      +   !   : |   + ! : | 62 _RNvMs2_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc6layoutNtB5_23GcMutableSlotDescriptor11visit_slots  (in scalar-worker) + 156,324,...  [0x104aaffe4,0x104ab008c,...]
+      +   !   : |   + ! : | 16 _RNCNCNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5trace24trace_heap_rewrite_slots00B9_  (in scalar-worker) + 316,320  [0x10515afbc,0x10515afc0]
+      +   !   : |   + ! : | 6 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5trace24mark_field_into_worklist  (in scalar-worker) + 192  [0x104ac1680]
+      +   !   : |   + ! : 3 _RNCNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5trace24trace_heap_rewrite_slots0B7_  (in scalar-worker) + 8,116  [0x10515bdc0,0x10515be2c]
+      +   !   : |   + ! : 3 _RNvMs2_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc6layoutNtB5_23GcMutableSlotDescriptor11visit_slots  (in scalar-worker) + 444  [0x104ab0104]
+      +   !   : |   + ! 112 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc17layout_slot_visit32visit_gc_layout_slot_descriptors  (in scalar-worker) + 588  [0x105196854]
+      +   !   : |   + ! : 109 _RNCNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5trace24trace_heap_rewrite_slots0B7_  (in scalar-worker) + 140  [0x10515be44]
+      +   !   : |   + ! : | 93 _RNvMs2_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc6layoutNtB5_23GcMutableSlotDescriptor11visit_slots  (in scalar-worker) + 428  [0x104ab00f4]
+      +   !   : |   + ! : | + 72 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5trace24mark_field_into_worklist  (in scalar-worker) + 160  [0x104ac1660]
+      +   !   : |   + ! : | + ! 68 _RNvMNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5traceNtB2_15ValidPointerSet8contains  (in scalar-worker) + 88  [0x104aac844]
+      +   !   : |   + ! : | + ! : 63 _RNvMNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5traceNtB2_15ValidPointerSet16find_arena_floor  (in scalar-worker) + 92,200,...  [0x104aac754,0x104aac7c0,...]
+      +   !   : |   + ! : | + ! : 4 _RNvMNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5traceNtB2_15ValidPointerSet8contains  (in scalar-worker) + 260  [0x104aac8f0]
+      +   !   : |   + ! : | + ! : | 4 _tlv_get_addr  (in libdyld.dylib) + 4  [0x189adc38c]
+      +   !   : |   + ! : | + ! : 1 _RNvMNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5traceNtB2_15ValidPointerSet8contains  (in scalar-worker) + 88  [0x104aac844]
+      +   !   : |   + ! : | + ! :   1 _RNvMNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5traceNtB2_15ValidPointerSet16find_arena_floor  (in scalar-worker) + 0  [0x104aac6f8]
+      +   !   : |   + ! : | + ! 4 _RNvMNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5traceNtB2_15ValidPointerSet8contains  (in scalar-worker) + 88,104,...  [0x104aac844,0x104aac854,...]
+      +   !   : |   + ! : | + 7 _RNCNCNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5trace24trace_heap_rewrite_slots00B9_  (in scalar-worker) + 28,180,...  [0x10515ae9c,0x10515af34,...]
+      +   !   : |   + ! : | + 7 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5trace24mark_field_into_worklist  (in scalar-worker) + 40,72,...  [0x104ac15e8,0x104ac1608,...]
+      +   !   : |   + ! : | + 4 _RNCNCNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5trace24trace_heap_rewrite_slots00B9_  (in scalar-worker) + 208  [0x10515af50]
+      +   !   : |   + ! : | + ! 4 _tlv_get_addr  (in libdyld.dylib) + 4  [0x189adc38c]
+      +   !   : |   + ! : | + 3 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5trace24mark_field_into_worklist  (in scalar-worker) + 48  [0x104ac15f0]
+      +   !   : |   + ! : | +   3 _tlv_get_addr  (in libdyld.dylib) + 4  [0x189adc38c]
+      +   !   : |   + ! : | 14 _RNvMs2_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc6layoutNtB5_23GcMutableSlotDescriptor11visit_slots  (in scalar-worker) + 20,32,...  [0x104aaff5c,0x104aaff68,...]
+      +   !   : |   + ! : | 2 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5trace24mark_field_into_worklist  (in scalar-worker) + 192  [0x104ac1680]
+      +   !   : |   + ! : 3 _RNCNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5trace24trace_heap_rewrite_slots0B7_  (in scalar-worker) + 12,24,...  [0x10515bdc4,0x10515bdd0,...]
+      +   !   : |   + ! 30 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc17layout_slot_visit32visit_gc_layout_slot_descriptors  (in scalar-worker) + 544  [0x105196828]
+      +   !   : |   + ! : 21 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc17layout_slot_visit10fixed_slot  (in scalar-worker) + 232  [0x105196594]
+      +   !   : |   + ! : | 21 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime5arena9page_meta33classify_heap_generation_uncached  (in scalar-worker) + 192,76,...  [0x104a21d54,0x104a21ce0,...]
+      +   !   : |   + ! : 9 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc17layout_slot_visit10fixed_slot  (in scalar-worker) + 44  [0x1051964d8]
+      +   !   : |   + ! 29 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc17layout_slot_visit32visit_gc_layout_slot_descriptors  (in scalar-worker) + 44  [0x105196634]
+      +   !   : |   + ! : 16 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc6layout14gc_child_slots  (in scalar-worker) + 548,1148,...  [0x104ac2764,0x104ac29bc,...]
+      +   !   : |   + ! : 13 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc6layout14gc_child_slots  (in scalar-worker) + 756  [0x104ac2834]
+      +   !   : |   + ! :   13 _tlv_get_addr  (in libdyld.dylib) + 4  [0x189adc38c]
+      +   !   : |   + ! 23 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc17layout_slot_visit32visit_gc_layout_slot_descriptors  (in scalar-worker) + 300,208,...  [0x105196734,0x1051966d8,...]
+      +   !   : |   + ! 5 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc6layout14gc_child_slots  (in scalar-worker) + 120,104  [0x104ac25b8,0x104ac25a8]
+      +   !   : |   + ! 2 _RNCNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5trace24trace_heap_rewrite_slots0B7_  (in scalar-worker) + 148  [0x10515be4c]
+      +   !   : |   + ! 1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc17layout_slot_visit10fixed_slot  (in scalar-worker) + 276  [0x1051965c0]
+      +   !   : |   + ! 1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc17layout_slot_visit32visit_gc_layout_slot_descriptors  (in scalar-worker) + 648  [0x105196890]
+      +   !   : |   + !   1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime5arena9page_meta37classify_heap_space_in_range_uncached  (in scalar-worker) + 100  [0x104a224a0]
+      +   !   : |   + 306 _RINvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc17layout_slot_visit33visit_gc_rewrite_slot_descriptorsNCNvNtB4_5trace24trace_heap_rewrite_slots0EB6_  (in scalar-worker) + 160  [0x105157f84]
+      +   !   : |   + ! 249 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc17layout_slot_visit32visit_gc_layout_slot_descriptors  (in scalar-worker) + 1456  [0x105196bb8]
+      +   !   : |   + ! : 243 _RNCNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5trace24trace_heap_rewrite_slots0B7_  (in scalar-worker) + 140  [0x10515be44]
+      +   !   : |   + ! : | 241 _RNvMs2_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc6layoutNtB5_23GcMutableSlotDescriptor11visit_slots  (in scalar-worker) + 128  [0x104aaffc8]
+      +   !   : |   + ! : | + 160 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5trace24mark_field_into_worklist  (in scalar-worker) + 160  [0x104ac1660]
+      +   !   : |   + ! : | + ! 151 _RNvMNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5traceNtB2_15ValidPointerSet8contains  (in scalar-worker) + 88  [0x104aac844]
+      +   !   : |   + ! : | + ! : 151 _RNvMNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5traceNtB2_15ValidPointerSet16find_arena_floor  (in scalar-worker) + 44,52,...  [0x104aac724,0x104aac72c,...]
+      +   !   : |   + ! : | + ! 9 _RNvMNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5traceNtB2_15ValidPointerSet8contains  (in scalar-worker) + 252,288,...  [0x104aac8e8,0x104aac90c,...]
+      +   !   : |   + ! : | + 54 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5trace24mark_field_into_worklist  (in scalar-worker) + 204,40,...  [0x104ac168c,0x104ac15e8,...]
+      +   !   : |   + ! : | + 14 _RNCNCNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5trace24trace_heap_rewrite_slots00B9_  (in scalar-worker) + 208  [0x10515af50]
+      +   !   : |   + ! : | + ! 14 _tlv_get_addr  (in libdyld.dylib) + 4  [0x189adc38c]
+      +   !   : |   + ! : | + 5 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5trace24mark_field_into_worklist  (in scalar-worker) + 48  [0x104ac15f0]
+      +   !   : |   + ! : | + ! 5 _tlv_get_addr  (in libdyld.dylib) + 4  [0x189adc38c]
+      +   !   : |   + ! : | + 4 _RNCNCNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5trace24trace_heap_rewrite_slots00B9_  (in scalar-worker) + 32,200  [0x10515aea0,0x10515af48]
+      +   !   : |   + ! : | + 4 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5trace24mark_field_into_worklist  (in scalar-worker) + 240  [0x104ac16b0]
+      +   !   : |   + ! : | +   4 <deduplicated_symbol>  (in scalar-worker) + 60  [0x1053aa25c]
+      +   !   : |   + ! : | +     4 _RNvMs5_NtCsctvjasLqLe9_5alloc7raw_vecNtB5_11RawVecInner11finish_growCs5gMwpk3Cs4e_13perry_runtime  (in scalar-worker) + 88  [0x1053aad40]
+      +   !   : |   + ! : | +       3 _mi_theap_realloc_zero  (in scalar-worker) + 388  [0x1053e9f74]
+      +   !   : |   + ! : | +       : 2 _mi_malloc_generic  (in scalar-worker) + 468  [0x1053eb13c]
+      +   !   : |   + ! : | +       : | 2 mi_page_queue_find_free_ex  (in scalar-worker) + 108  [0x10539f3e4]
+      +   !   : |   + ! : | +       : |   2 mi_page_fresh_alloc  (in scalar-worker) + 40  [0x10539f14c]
+      +   !   : |   + ! : | +       : |     2 mi_arenas_page_regular_alloc  (in scalar-worker) + 348  [0x10538f18c]
+      +   !   : |   + ! : | +       : |       2 mi_arenas_page_alloc_fresh  (in scalar-worker) + 240  [0x10539d404]
+      +   !   : |   + ! : | +       : |         2 mi_arenas_try_alloc  (in scalar-worker) + 92  [0x10538ec08]
+      +   !   : |   + ! : | +       : |           2 mi_arenas_try_find_free  (in scalar-worker) + 344  [0x10539ca64]
+      +   !   : |   + ! : | +       : |             2 mi_arena_try_alloc_at  (in scalar-worker) + 772  [0x10539d278]
+      +   !   : |   + ! : | +       : |               2 madvise  (in libsystem_kernel.dylib) + 8  [0x189e909b0]
+      +   !   : |   + ! : | +       : 1 _mi_malloc_generic  (in scalar-worker) + 692  [0x1053eb21c]
+      +   !   : |   + ! : | +       :   1 mi_huge_page_alloc  (in scalar-worker) + 152  [0x1053eb9fc]
+      +   !   : |   + ! : | +       :     1 mi_page_fresh_alloc  (in scalar-worker) + 40  [0x10539f14c]
+      +   !   : |   + ! : | +       :       1 _mi_arenas_page_alloc  (in scalar-worker) + 116  [0x10538eec8]
+      +   !   : |   + ! : | +       :         1 mi_arenas_page_alloc_fresh  (in scalar-worker) + 240  [0x10539d404]
+      +   !   : |   + ! : | +       :           1 mi_arenas_try_alloc  (in scalar-worker) + 92  [0x10538ec08]
+      +   !   : |   + ! : | +       :             1 mi_arenas_try_find_free  (in scalar-worker) + 344  [0x10539ca64]
+      +   !   : |   + ! : | +       :               1 mi_arena_try_alloc_at  (in scalar-worker) + 772  [0x10539d278]
+      +   !   : |   + ! : | +       :                 1 madvise  (in libsystem_kernel.dylib) + 8  [0x189e909b0]
+      +   !   : |   + ! : | +       1 _mi_theap_realloc_zero  (in scalar-worker) + 352  [0x1053e9f50]
+      +   !   : |   + ! : | +         1 _platform_memmove  (in libsystem_platform.dylib) + 88  [0x189edb3b8]
+      +   !   : |   + ! : | 2 _RNvMs2_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc6layoutNtB5_23GcMutableSlotDescriptor11visit_slots  (in scalar-worker) + 164,188  [0x104aaffec,0x104ab0004]
+      +   !   : |   + ! : 4 _RNCNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5trace24trace_heap_rewrite_slots0B7_  (in scalar-worker) + 140  [0x10515be44]
+      +   !   : |   + ! : 2 _RNCNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5trace24trace_heap_rewrite_slots0B7_  (in scalar-worker) + 60  [0x10515bdf4]
+      +   !   : |   + ! :   2 _tlv_get_addr  (in libdyld.dylib) + 4  [0x189adc38c]
+      +   !   : |   + ! 24 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc17layout_slot_visit32visit_gc_layout_slot_descriptors  (in scalar-worker) + 44  [0x105196634]
+      +   !   : |   + ! : 20 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc6layout14gc_child_slots  (in scalar-worker) + 96,372,...  [0x104ac25a0,0x104ac26b4,...]
+      +   !   : |   + ! : 3 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc6layout14gc_child_slots  (in scalar-worker) + 336  [0x104ac2690]
+      +   !   : |   + ! : | 3 _RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc6layoutNtB4_21HeapChildSlotIterator3new  (in scalar-worker) + 228,464  [0x104ab1158,0x104ab1244]
+      +   !   : |   + ! : 1 _RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc6layoutNtB4_21HeapChildSlotIterator3new  (in scalar-worker) + 484  [0x104ab1258]
+      +   !   : |   + ! 21 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc17layout_slot_visit32visit_gc_layout_slot_descriptors  (in scalar-worker) + 968,788,...  [0x1051969d0,0x10519691c,...]
+      +   !   : |   + ! 11 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc17layout_slot_visit32visit_gc_layout_slot_descriptors  (in scalar-worker) + 1016  [0x105196a00]
+      +   !   : |   + ! : 11 _tlv_get_addr  (in libdyld.dylib) + 4  [0x189adc38c]
+      +   !   : |   + ! 1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc6layout14gc_child_slots  (in scalar-worker) + 120  [0x104ac25b8]
+      +   !   : |   + 61 _RINvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc17layout_slot_visit33visit_gc_rewrite_slot_descriptorsNCNvNtB4_5trace24trace_heap_rewrite_slots0EB6_  (in scalar-worker) + 716,24,...  [0x1051581b0,0x105157efc,...]
+      +   !   : |   + 12 _RINvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc17layout_slot_visit33visit_gc_rewrite_slot_descriptorsNCNvNtB4_5trace24trace_heap_rewrite_slots0EB6_  (in scalar-worker) + 3832  [0x105158ddc]
+      +   !   : |   + ! 12 _RNvMs2_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc6layoutNtB5_23GcMutableSlotDescriptor11visit_slots  (in scalar-worker) + 428  [0x104ab00f4]
+      +   !   : |   + !   12 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5trace24mark_field_into_worklist  (in scalar-worker) + 160  [0x104ac1660]
+      +   !   : |   + !     12 _RNvMNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5traceNtB2_15ValidPointerSet8contains  (in scalar-worker) + 88  [0x104aac844]
+      +   !   : |   + !       12 _RNvMNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5traceNtB2_15ValidPointerSet16find_arena_floor  (in scalar-worker) + 180,148,...  [0x104aac7ac,0x104aac78c,...]
+      +   !   : |   + 11 <deduplicated_symbol>  (in scalar-worker) + 16,32,...  [0x104939684,0x104939694,...]
+      +   !   : |   + 7 _RINvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc17layout_slot_visit33visit_gc_rewrite_slot_descriptorsNCNvNtB4_5trace24trace_heap_rewrite_slots0EB6_  (in scalar-worker) + 744  [0x1051581cc]
+      +   !   : |   +   7 _RINvNtCs5gMwpk3Cs4e_13perry_runtime6object30visit_overflow_field_slots_mutNCINvNtNtB4_2gc17layout_slot_visit33visit_gc_rewrite_slot_descriptorsNCNvNtB1h_5trace24trace_heap_rewrite_slots0Es_0EB4_  (in scalar-worker) + 76,92,...  [0x104a99b20,0x104a99b30,...]
+      +   !   : |   42 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5trace25drain_trace_worklist_step  (in scalar-worker) + 80,132,...  [0x104ac1734,0x104ac1768,...]
+      +   !   : |   12 _RINvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc17layout_slot_visit33visit_gc_rewrite_slot_descriptorsNCNvNtB4_5trace24trace_heap_rewrite_slots0EB6_  (in scalar-worker) + 188,92,...  [0x105157fa0,0x105157f40,...]
+      +   !   : |   1 <deduplicated_symbol>  (in scalar-worker) + 540  [0x104939890]
+      +   !   : 184 _RNvMs7_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc5cycleNtB5_12GcCycleState4step  (in scalar-worker) + 2428  [0x1049649bc]
+      +   !   : | 127 _RNvMNtNtCs5gMwpk3Cs4e_13perry_runtime2gc6verifyNtB2_32OldToYoungRememberedRebuildState4step  (in scalar-worker) + 132  [0x104960ca0]
+      +   !   : | + 72 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc6verify36remember_retained_old_to_young_slots  (in scalar-worker) + 352  [0x104987060]
+      +   !   : | + ! 72 _RINvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc17layout_slot_visit33visit_gc_rewrite_slot_descriptorsNCINvB2_22visit_gc_rewrite_slotsNCNvNtB4_6verify36remember_retained_old_to_young_slots0E0EB6_  (in scalar-worker) + 128  [0x105154ac4]
+      +   !   : | + !   72 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc17layout_slot_visit32visit_gc_layout_slot_descriptors  (in scalar-worker) + 1456  [0x105196bb8]
+      +   !   : | + !     52 _RNvMs2_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc6layoutNtB5_23GcMutableSlotDescriptor11visit_slots  (in scalar-worker) + 128  [0x104aaffc8]
+      +   !   : | + !     : 26 _RNvMs1_NtCshsF3QZNC8Sh_9hashbrown3mapINtB5_7HashMapjuNtNtCs5gMwpk3Cs4e_13perry_runtime9fast_hash9PtrHasherE6insertBT_  (in scalar-worker) + 96,236,...  [0x10516dddc,0x10516de68,...]
+      +   !   : | + !     : 15 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc6verify36remember_evacuated_old_to_young_slot  (in scalar-worker) + 104,120,...  [0x105197e78,0x105197e88,...]
+      +   !   : | + !     : 4 _RNCNCNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc6verify32restore_surviving_dirty_coverage00B9_  (in scalar-worker) + 32,208  [0x10515b020,0x10515b0d0]
+      +   !   : | + !     : 4 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc6verify36remember_evacuated_old_to_young_slot  (in scalar-worker) + 80  [0x105197e60]
+      +   !   : | + !     : | 4 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc7barrier31remembered_child_needs_tracking  (in scalar-worker) + 40,56  [0x105198060,0x105198070]
+      +   !   : | + !     : 3 _RNCNCNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc6verify32restore_surviving_dirty_coverage00B9_  (in scalar-worker) + 216  [0x10515b0d8]
+      +   !   : | + !     :   3 _tlv_get_addr  (in libdyld.dylib) + 4  [0x189adc38c]
+      +   !   : | + !     13 _RNvMs2_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc6layoutNtB5_23GcMutableSlotDescriptor11visit_slots  (in scalar-worker) + 156,96  [0x104aaffe4,0x104aaffa8]
+      +   !   : | + !     6 _RNCNCNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc6verify32restore_surviving_dirty_coverage00B9_  (in scalar-worker) + 328  [0x10515b148]
+      +   !   : | + !     1 _RNvMs1_NtCshsF3QZNC8Sh_9hashbrown3mapINtB5_7HashMapjuNtNtCs5gMwpk3Cs4e_13perry_runtime9fast_hash9PtrHasherE6insertBT_  (in scalar-worker) + 316  [0x10516deb8]
+      +   !   : | + 54 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc6verify36remember_retained_old_to_young_slots  (in scalar-worker) + 80,112,...  [0x104986f50,0x104986f70,...]
+      +   !   : | + 1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc6verify36remember_retained_old_to_young_slots  (in scalar-worker) + 308  [0x104987034]
+      +   !   : | +   1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime5arena9page_meta33classify_heap_generation_uncached  (in scalar-worker) + 76  [0x104a21ce0]
+      +   !   : | 46 _RNvMNtNtCs5gMwpk3Cs4e_13perry_runtime2gc6verifyNtB2_32OldToYoungRememberedRebuildState4step  (in scalar-worker) + 96  [0x104960c7c]
+      +   !   : | + 46 _RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime5arena4walkNtB4_17ArenaObjectCursor13next_budgeted  (in scalar-worker) + 308,344,...  [0x1049f5794,0x1049f57b8,...]
+      +   !   : | 7 _RNvMNtNtCs5gMwpk3Cs4e_13perry_runtime2gc6verifyNtB2_32OldToYoungRememberedRebuildState4step  (in scalar-worker) + 144,132  [0x104960cac,0x104960ca0]
+      +   !   : | 2 _RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime5arena4walkNtB4_17ArenaObjectCursor13next_budgeted  (in scalar-worker) + 380  [0x1049f57dc]
+      +   !   : | 2 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc6verify36remember_retained_old_to_young_slots  (in scalar-worker) + 424  [0x1049870a8]
+      +   !   : 114 _RNvMs7_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc5cycleNtB5_12GcCycleState4step  (in scalar-worker) + 9504  [0x104966560]
+      +   !   : | 59 _RNvMs1_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc6oldgenNtB5_21IncrementalSweepState4step  (in scalar-worker) + 664  [0x104d5764c]
+      +   !   : | + 59 _RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime5arena4walkNtB4_17ArenaObjectCursor13next_budgeted  (in scalar-worker) + 344,308,...  [0x1049f57b8,0x1049f5794,...]
+      +   !   : | 37 _RNvMs1_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc6oldgenNtB5_21IncrementalSweepState4step  (in scalar-worker) + 692,1620,...  [0x104d57668,0x104d57a08,...]
+      +   !   : | 10 _RNvMs1_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc6oldgenNtB5_21IncrementalSweepState4step  (in scalar-worker) + 100  [0x104d57418]
+      +   !   : | + 10 _RNvMNtNtNtCs5gMwpk3Cs4e_13perry_runtime2gc6oldgen13sweep_cleanupNtB2_22ArenaSweepCleanupState4step  (in scalar-worker) + 120  [0x1051610f8]
+      +   !   : | +   10 _RNvMs1_NtNtCs5gMwpk3Cs4e_13perry_runtime5arena5resetNtB5_30OldArenaReclaimDeadBlocksState4step  (in scalar-worker) + 588  [0x1049f3ba8]
+      +   !   : | +     8 _RINvMs2_NtNtCs8BpVhDwHqJW_3std6thread5localINtB6_8LocalKeyINtNtCsjgY6bXVaRmE_4core4cell10UnsafeCellNtNtNtCs5gMwpk3Cs4e_13perry_runtime5arena5block5ArenaEE4withNCNvMs1_NtB1D_5resetNtB2F_30OldArenaReclaimDeadBlocksState13process_blocks_0uEB1F_  (in scalar-worker) + 424  [0x104843430]
+      +   !   : | +     ! 8 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime5arena5block19release_arena_block  (in scalar-worker) + 216  [0x104a1db80]
+      +   !   : | +     !   8 madvise  (in libsystem_kernel.dylib) + 8  [0x189e909b0]
+      +   !   : | +     1 _RINvMs2_NtNtCs8BpVhDwHqJW_3std6thread5localINtB6_8LocalKeyINtNtCsjgY6bXVaRmE_4core4cell10UnsafeCellNtNtNtCs5gMwpk3Cs4e_13perry_runtime5arena5block5ArenaEE4withNCNvMs1_NtB1D_5resetNtB2F_30OldArenaReclaimDeadBlocksState13process_blocks_0uEB1F_  (in scalar-worker) + 296  [0x1048433b0]
+      +   !   : | +     ! 1 __bzero  (in libsystem_platform.dylib) + 64  [0x189edb070]
+      +   !   : | +     1 _RINvMs2_NtNtCs8BpVhDwHqJW_3std6thread5localINtB6_8LocalKeyINtNtCsjgY6bXVaRmE_4core4cell10UnsafeCellNtNtNtCs5gMwpk3Cs4e_13perry_runtime5arena5block5ArenaEE4withNCNvMs1_NtB1D_5resetNtB2F_30OldArenaReclaimDeadBlocksState13process_blocks_0uEB1F_  (in scalar-worker) + 416  [0x104843428]
+      +   !   : | +       1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime5arena9page_meta27unregister_block_generation  (in scalar-worker) + 364  [0x104a215b4]
+      +   !   : | +         1 _RINvMs2_NtNtCs8BpVhDwHqJW_3std6thread5localINtB6_8LocalKeyINtNtCsjgY6bXVaRmE_4core4cell7RefCellINtNtNtNtBa_11collections4hash3map7HashMapjINtNtCsctvjasLqLe9_5alloc3vec3VecjENtNtCs5gMwpk3Cs4e_13perry_runtime9fast_hash9PtrHasherEEE4withNCNvNtNtB2P_5arena9page_meta26unregister_old_block_pagess_0uEB2P_  (in scalar-worker) + 136  [0x1048569bc]
+      +   !   : | +           1 <deduplicated_symbol>  (in scalar-worker) + 220  [0x104ca349c]
+      +   !   : | 4 _RNvMs1_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc6oldgenNtB5_21IncrementalSweepState4step  (in scalar-worker) + 1132  [0x104d57820]
+      +   !   : | + 4 _RINvMs2_NtNtCs8BpVhDwHqJW_3std6thread5localINtB6_8LocalKeyINtNtCsjgY6bXVaRmE_4core4cell7RefCellINtNtNtNtBa_11collections4hash3map7HashMapjNtNtNtCs5gMwpk3Cs4e_13perry_runtime5arena9page_meta11OldPageMetaNtNtB2i_9fast_hash9PtrHasherEEE4withNCNvB2e_29old_page_account_swept_object0uEB2i_  (in scalar-worker) + 436,180  [0x104866db8,0x104866cb8]
+      +   !   : | 3 _RNvMs1_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc6oldgenNtB5_21IncrementalSweepState4step  (in scalar-worker) + 816  [0x104d576e4]
+      +   !   : | + 2 _RNvMs3_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc6oldgenNtB5_22ArenaSweepObjectsState19reclaim_dead_object  (in scalar-worker) + 128  [0x104d58f90]
+      +   !   : | + ! 2 _RINvMs2_NtNtCs8BpVhDwHqJW_3std6thread5localINtB6_8LocalKeyINtNtCsjgY6bXVaRmE_4core4cell7RefCellINtNtNtNtBa_11collections4hash3map7HashMapjNtNtNtCs5gMwpk3Cs4e_13perry_runtime5arena9page_meta11OldPageMetaNtNtB2i_9fast_hash9PtrHasherEEE4withNCNvB2e_29old_page_account_swept_object0uEB2i_  (in scalar-worker) + 436  [0x104866db8]
+      +   !   : | + 1 _RNvMs3_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc6oldgenNtB5_22ArenaSweepObjectsState19reclaim_dead_object  (in scalar-worker) + 300  [0x104d5903c]
+      +   !   : | +   1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime5arena9page_meta27unregister_old_object_pages  (in scalar-worker) + 468  [0x104a21980]
+      +   !   : | +     1 mi_free  (in scalar-worker) + 68  [0x1053e9d84]
+      +   !   : | 1 _RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime5arena4walkNtB4_17ArenaObjectCursor13next_budgeted  (in scalar-worker) + 380  [0x1049f57dc]
+      +   !   : 76 _RNvMs7_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc5cycleNtB5_12GcCycleState4step  (in scalar-worker) + 8720  [0x104966250]
+      +   !   : | 36 _RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc5traceNtB4_22ValidPointerSetBuilder4step  (in scalar-worker) + 588  [0x104ab0b88]
+      +   !   : | + 36 _RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime5arena4walkNtB4_17ArenaObjectCursor13next_budgeted  (in scalar-worker) + 308,260,...  [0x1049f5794,0x1049f5764,...]
+      +   !   : | 34 _RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc5traceNtB4_22ValidPointerSetBuilder4step  (in scalar-worker) + 572,1068,...  [0x104ab0b78,0x104ab0d68,...]
+      +   !   : | 4 _RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime5arena4walkNtB4_17ArenaObjectCursor13next_budgeted  (in scalar-worker) + 380  [0x1049f57dc]
+      +   !   : | 2 _RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc5traceNtB4_22ValidPointerSetBuilder4step  (in scalar-worker) + 664  [0x104ab0bd4]
+      +   !   : |   2 <deduplicated_symbol>  (in scalar-worker) + 60  [0x1053e3cbc]
+      +   !   : |     2 _RNvMs5_NtCsctvjasLqLe9_5alloc7raw_vecNtB5_11RawVecInner11finish_growCs3HfcutmYuk_10swc_common  (in scalar-worker) + 88  [0x1053e3e04]
+      +   !   : |       1 _mi_theap_realloc_zero  (in scalar-worker) + 388  [0x1053e9f74]
+      +   !   : |       ! 1 _mi_malloc_generic  (in scalar-worker) + 468  [0x1053eb13c]
+      +   !   : |       !   1 mi_page_queue_find_free_ex  (in scalar-worker) + 108  [0x10539f3e4]
+      +   !   : |       !     1 mi_page_fresh_alloc  (in scalar-worker) + 40  [0x10539f14c]
+      +   !   : |       !       1 mi_arenas_page_regular_alloc  (in scalar-worker) + 348  [0x10538f18c]
+      +   !   : |       !         1 mi_arenas_page_alloc_fresh  (in scalar-worker) + 240  [0x10539d404]
+      +   !   : |       !           1 mi_arenas_try_alloc  (in scalar-worker) + 92  [0x10538ec08]
+      +   !   : |       !             1 mi_arenas_try_find_free  (in scalar-worker) + 344  [0x10539ca64]
+      +   !   : |       !               1 mi_arena_try_alloc_at  (in scalar-worker) + 772  [0x10539d278]
+      +   !   : |       !                 1 madvise  (in libsystem_kernel.dylib) + 8  [0x189e909b0]
+      +   !   : |       1 mi_realloc_aligned  (in scalar-worker) + 12  [0x10538eb7c]
+      +   !   : 34 _RNvMs7_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc5cycleNtB5_12GcCycleState4step  (in scalar-worker) + 11392  [0x104966cc0]
+      +   !   : | 34 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc6verify32restore_surviving_dirty_coverage  (in scalar-worker) + 100  [0x1049863b8]
+      +   !   : |   33 _RINvNtNtCs5gMwpk3Cs4e_13perry_runtime5arena9page_meta31old_arena_walk_objects_on_pagesNCNvNtNtB6_2gc6verify32restore_surviving_dirty_coverages_0EB6_  (in scalar-worker) + 572  [0x1049ea4dc]
+      +   !   : |   + 33 _RINvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc17layout_slot_visit33visit_gc_rewrite_slot_descriptorsNCINvB2_22visit_gc_rewrite_slotsNCNCNvNtB4_6verify32restore_surviving_dirty_coverage00E0EB6_  (in scalar-worker) + 128  [0x105150064]
+      +   !   : |   +   33 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc17layout_slot_visit32visit_gc_layout_slot_descriptors  (in scalar-worker) + 1456  [0x105196bb8]
+      +   !   : |   +     29 _RNvMs2_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc6layoutNtB5_23GcMutableSlotDescriptor11visit_slots  (in scalar-worker) + 128  [0x104aaffc8]
+      +   !   : |   +     ! 8 _RNCNCNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc6verify32restore_surviving_dirty_coverage00B9_  (in scalar-worker) + 28,208  [0x10515b01c,0x10515b0d0]
+      +   !   : |   +     ! 8 _RNvMs1_NtCshsF3QZNC8Sh_9hashbrown3mapINtB5_7HashMapjuNtNtCs5gMwpk3Cs4e_13perry_runtime9fast_hash9PtrHasherE6insertBT_  (in scalar-worker) + 48,96,...  [0x10516ddac,0x10516dddc,...]
+      +   !   : |   +     ! 7 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc6verify36remember_evacuated_old_to_young_slot  (in scalar-worker) + 336,104,...  [0x105197f60,0x105197e78,...]
+      +   !   : |   +     ! 5 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc6verify36remember_evacuated_old_to_young_slot  (in scalar-worker) + 80  [0x105197e60]
+      +   !   : |   +     ! : 5 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc7barrier31remembered_child_needs_tracking  (in scalar-worker) + 40,72,...  [0x105198060,0x105198080,...]
+      +   !   : |   +     ! 1 _RNCNCNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc6verify32restore_surviving_dirty_coverage00B9_  (in scalar-worker) + 216  [0x10515b0d8]
+      +   !   : |   +     !   1 _tlv_get_addr  (in libdyld.dylib) + 4  [0x189adc38c]
+      +   !   : |   +     2 _RNvMs2_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc6layoutNtB5_23GcMutableSlotDescriptor11visit_slots  (in scalar-worker) + 156,236  [0x104aaffe4,0x104ab0034]
+      +   !   : |   +     1 _RNCNCNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc6verify32restore_surviving_dirty_coverage00B9_  (in scalar-worker) + 328  [0x10515b148]
+      +   !   : |   +     1 _RNvMs1_NtCshsF3QZNC8Sh_9hashbrown3mapINtB5_7HashMapjuNtNtCs5gMwpk3Cs4e_13perry_runtime9fast_hash9PtrHasherE6insertBT_  (in scalar-worker) + 316  [0x10516deb8]
+      +   !   : |   1 _RINvNtNtCs5gMwpk3Cs4e_13perry_runtime5arena9page_meta31old_arena_walk_objects_on_pagesNCNvNtNtB6_2gc6verify32restore_surviving_dirty_coverages_0EB6_  (in scalar-worker) + 496  [0x1049ea490]
+      +   !   : |     1 <deduplicated_symbol>  (in scalar-worker) + 284  [0x1048551d4]
+      +   !   : |       1 _RNvMs1_NtCshsF3QZNC8Sh_9hashbrown3mapINtB5_7HashMapjuNtNtCs5gMwpk3Cs4e_13perry_runtime9fast_hash9PtrHasherE6insertBT_  (in scalar-worker) + 96  [0x10516dddc]
+      +   !   : 11 _RNvMs7_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc5cycleNtB5_12GcCycleState4step  (in scalar-worker) + 9408  [0x104966500]
+      +   !   : | 11 _RNvMs1_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc6oldgenNtB5_21IncrementalSweepState3new  (in scalar-worker) + 400  [0x104d57024]
+      +   !   : |   11 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime5arena9page_meta32old_pages_reset_sweep_accounting  (in scalar-worker) + 168,200,...  [0x104a21bd4,0x104a21bf4,...]
+      +   !   : 8 _RNvMs7_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc5cycleNtB5_12GcCycleState4step  (in scalar-worker) + 9436  [0x10496651c]
+      +   !   : | 8 _RNvMs1_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc6oldgenNtB5_21IncrementalSweepState29with_dead_collection_finalize  (in scalar-worker) + 48  [0x104d56d4c]
+      +   !   : |   8 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc10dead_owner39prune_dead_owner_side_tables_post_trace  (in scalar-worker) + 608  [0x10498160c]
+      +   !   : |     3 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc10dead_owner7fan_out  (in scalar-worker) + 976  [0x1053a90bc]
+      +   !   : |     + 2 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime7closure13dynamic_props36prune_dead_closure_side_table_owners  (in scalar-worker) + 480  [0x1051b1b3c]
+      +   !   : |     + ! 2 _RNvMNtNtCs5gMwpk3Cs4e_13perry_runtime2gc10dead_ownerNtB2_14PostTraceProbe13owner_is_dead  (in scalar-worker) + 80,660  [0x104960438,0x10496067c]
+      +   !   : |     + 1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime7closure13dynamic_props36prune_dead_closure_side_table_owners  (in scalar-worker) + 320  [0x1051b1a9c]
+      +   !   : |     +   1 <deduplicated_symbol>  (in scalar-worker) + 268  [0x104cab868]
+      +   !   : |     3 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc10dead_owner7fan_out  (in scalar-worker) + 1352  [0x1053a9234]
+      +   !   : |     + 3 _RINvMs2_NtNtCs8BpVhDwHqJW_3std6thread5localINtB6_8LocalKeyINtNtCsjgY6bXVaRmE_4core4cell7RefCellINtNtNtNtBa_11collections4hash3map7HashMapjlEEE4withNCNvNtCs5gMwpk3Cs4e_13perry_runtime2fs32prune_dead_filehandle_fd_entries0uEB2r_  (in scalar-worker) + 52  [0x10486e47c]
+      +   !   : |     +   3 _RNvYNCNKNvNtCs5gMwpk3Cs4e_13perry_runtime2fs21FILEHANDLE_OBJECT_FDS00INtNtNtCsjgY6bXVaRmE_4core3ops8function6FnOnceTINtNtB1c_6option6OptionQIB1R_INtNtB1c_4cell7RefCellINtNtNtNtCs8BpVhDwHqJW_3std11collections4hash3map7HashMapjlEEEEEE9call_onceBa_  (in scalar-worker) + 0  [0x10504e9d8]
+      +   !   : |     1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc10dead_owner7fan_out  (in scalar-worker) + 160  [0x1053a8d8c]
+      +   !   : |     + 1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime6object16descriptor_state35prune_dead_descriptor_owner_entries  (in scalar-worker) + 204  [0x104e54418]
+      +   !   : |     +   1 _RINvMs0_NtCshsF3QZNC8Sh_9hashbrown3mapINtB6_7HashMapTjNtNtCsctvjasLqLe9_5alloc6string6StringENtNtNtCs5gMwpk3Cs4e_13perry_runtime6object16descriptor_state13PropertyAttrsNtNtB1z_9fast_hash13FastKeyHasherE6retainNCNvB1v_35prune_dead_descriptor_owner_entriess_0EB1z_  (in scalar-worker) + 268  [0x105145750]
+      +   !   : |     1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc10dead_owner7fan_out  (in scalar-worker) + 996  [0x1053a90d0]
+      +   !   : |       1 _RINvMs2_NtNtCs8BpVhDwHqJW_3std6thread5localINtB6_8LocalKeyINtNtCsjgY6bXVaRmE_4core4cell7RefCellINtNtNtNtBa_11collections4hash3map7HashMapjmNtNtCs5gMwpk3Cs4e_13perry_runtime9fast_hash9PtrHasherEEE4withNCNvNtNtNtB2h_6object13native_module16callable_exports42prune_dead_builtin_closure_metadata_owners0uEB2h_  (in scalar-worker) + 212  [0x10486eb60]
+      +   !   : 6 _RNvMs7_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc5cycleNtB5_12GcCycleState4step  (in scalar-worker) + 7216  [0x104965c70]
+      +   !   : | 5 _RNvMs4_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc5cycleNtB5_18RootScanCycleState21step_current_subphase  (in scalar-worker) + 2432  [0x104963c9c]
+      +   !   : | + 5 _RNvMs2_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc5cycleNtB5_30MutableRegisteredRootScanState4step  (in scalar-worker) + 1544  [0x104962cc0]
+      +   !   : | +   2 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime7closure13dynamic_props36scan_closure_dynamic_props_roots_mut  (in scalar-worker) + 1360  [0x1051b2a2c]
+      +   !   : | +   ! 1 _RNvMs1_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc5rootsNtB5_18RuntimeRootVisitor17visit_nanbox_bits  (in scalar-worker) + 312  [0x104cad308]
+      +   !   : | +   ! : 1 _RNvMNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5traceNtB2_15ValidPointerSet8contains  (in scalar-worker) + 88  [0x104cac854]
+      +   !   : | +   ! :   1 _RNvMNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5traceNtB2_15ValidPointerSet16find_arena_floor  (in scalar-worker) + 128  [0x104aac778]
+      +   !   : | +   ! 1 _RNvMs1_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc5rootsNtB5_18RuntimeRootVisitor17visit_nanbox_bits  (in scalar-worker) + 348  [0x104cad32c]
+      +   !   : | +   !   1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5trace14push_mark_seed  (in scalar-worker) + 72  [0x104ac1484]
+      +   !   : | +   !     1 <deduplicated_symbol>  (in scalar-worker) + 60  [0x1053aa25c]
+      +   !   : | +   !       1 _RNvMs5_NtCsctvjasLqLe9_5alloc7raw_vecNtB5_11RawVecInner11finish_growCs5gMwpk3Cs4e_13perry_runtime  (in scalar-worker) + 88  [0x1053aad40]
+      +   !   : | +   !         1 _mi_theap_realloc_zero  (in scalar-worker) + 388  [0x1053e9f74]
+      +   !   : | +   !           1 _mi_malloc_generic  (in scalar-worker) + 468  [0x1053eb13c]
+      +   !   : | +   !             1 mi_page_queue_find_free_ex  (in scalar-worker) + 108  [0x10539f3e4]
+      +   !   : | +   !               1 mi_page_fresh_alloc  (in scalar-worker) + 40  [0x10539f14c]
+      +   !   : | +   !                 1 mi_arenas_page_regular_alloc  (in scalar-worker) + 348  [0x10538f18c]
+      +   !   : | +   !                   1 mi_arenas_page_alloc_fresh  (in scalar-worker) + 240  [0x10539d404]
+      +   !   : | +   !                     1 mi_arenas_try_alloc  (in scalar-worker) + 92  [0x10538ec08]
+      +   !   : | +   !                       1 mi_arenas_try_find_free  (in scalar-worker) + 344  [0x10539ca64]
+      +   !   : | +   !                         1 mi_arena_try_alloc_at  (in scalar-worker) + 772  [0x10539d278]
+      +   !   : | +   !                           1 madvise  (in libsystem_kernel.dylib) + 8  [0x189e909b0]
+      +   !   : | +   1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime6string6intern27scan_intern_table_roots_mut  (in scalar-worker) + 320  [0x104b92f00]
+      +   !   : | +   ! 1 _RNvMs1_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc5rootsNtB5_18RuntimeRootVisitor21visit_tagged_raw_addr  (in scalar-worker) + 176  [0x104cad75c]
+      +   !   : | +   !   1 _RNvMNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5traceNtB2_15ValidPointerSet8contains  (in scalar-worker) + 88  [0x104cac854]
+      +   !   : | +   !     1 _RNvMNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5traceNtB2_15ValidPointerSet16find_arena_floor  (in scalar-worker) + 68  [0x104aac73c]
+      +   !   : | +   1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime7closure13dynamic_props36scan_closure_dynamic_props_roots_mut  (in scalar-worker) + 2336  [0x1051b2dfc]
+      +   !   : | +   ! 1 <deduplicated_symbol>  (in scalar-worker) + 256  [0x104d2bcc0]
+      +   !   : | +   1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime7closure13dynamic_props36scan_closure_dynamic_props_roots_mut  (in scalar-worker) + 672  [0x1051b277c]
+      +   !   : | 1 _RNvMs4_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc5cycleNtB5_18RootScanCycleState21step_current_subphase  (in scalar-worker) + 640  [0x10496359c]
+      +   !   : |   1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5roots28mark_mutable_root_slots_step  (in scalar-worker) + 136  [0x104cc35c8]
+      +   !   : |     1 _RINvMs2_NtNtCs8BpVhDwHqJW_3std6thread5localINtB6_8LocalKeyINtNtCsjgY6bXVaRmE_4core4cell10UnsafeCellNtNtNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5roots12shadow_stack16ShadowStackStateEE4withNCINvB1D_29visit_shadow_stack_root_slotsNCNvB1D_28mark_mutable_root_slots_step0E0uEB1H_  (in scalar-worker) + 0  [0x1048442f4]
+      +   !   : 6 _RNvMs7_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc5cycleNtB5_12GcCycleState4step  (in scalar-worker) + 12608  [0x104967180]
+      +   !   : | 6 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc17cycle_malloc_trim15run_malloc_trim  (in scalar-worker) + 48  [0x1048b066c]
+      +   !   : |   6 mi_theap_collect_ex  (in scalar-worker) + 420  [0x10539b614]
+      +   !   : |     6 _mi_arenas_collect  (in scalar-worker) + 584  [0x10538ffc4]
+      +   !   : |       3 _mi_bitmap_forall_setc_ranges  (in scalar-worker) + 652  [0x1053932d4]
+      +   !   : |       + 3 mi_arena_try_purge_visitor  (in scalar-worker) + 48  [0x10539df88]
+      +   !   : |       +   3 mi_arena_try_purge_range  (in scalar-worker) + 112  [0x10539e068]
+      +   !   : |       +     3 _mi_os_purge_ex  (in scalar-worker) + 332  [0x1053987b8]
+      +   !   : |       +       3 mi_os_decommit_ex  (in scalar-worker) + 152  [0x105398478]
+      +   !   : |       +         3 madvise  (in libsystem_kernel.dylib) + 8  [0x189e909b0]
+      +   !   : |       1 _mi_bitmap_forall_setc_ranges  (in scalar-worker) + 184  [0x105393100]
+      +   !   : |       + 1 mi_arena_try_purge_visitor  (in scalar-worker) + 48  [0x10539df88]
+      +   !   : |       +   1 mi_arena_try_purge_range  (in scalar-worker) + 112  [0x10539e068]
+      +   !   : |       +     1 _mi_os_purge_ex  (in scalar-worker) + 332  [0x1053987b8]
+      +   !   : |       +       1 mi_os_decommit_ex  (in scalar-worker) + 152  [0x105398478]
+      +   !   : |       +         1 madvise  (in libsystem_kernel.dylib) + 8  [0x189e909b0]
+      +   !   : |       1 _mi_bitmap_forall_setc_ranges  (in scalar-worker) + 280  [0x105393160]
+      +   !   : |       + 1 mi_arena_try_purge_visitor  (in scalar-worker) + 48  [0x10539df88]
+      +   !   : |       +   1 mi_arena_try_purge_range  (in scalar-worker) + 112  [0x10539e068]
+      +   !   : |       +     1 _mi_os_purge_ex  (in scalar-worker) + 332  [0x1053987b8]
+      +   !   : |       +       1 mi_os_decommit_ex  (in scalar-worker) + 152  [0x105398478]
+      +   !   : |       +         1 madvise  (in libsystem_kernel.dylib) + 8  [0x189e909b0]
+      +   !   : |       1 _mi_bitmap_forall_setc_ranges  (in scalar-worker) + 556  [0x105393274]
+      +   !   : |         1 mi_arena_try_purge_visitor  (in scalar-worker) + 48  [0x10539df88]
+      +   !   : |           1 mi_arena_try_purge_range  (in scalar-worker) + 112  [0x10539e068]
+      +   !   : |             1 _mi_os_purge_ex  (in scalar-worker) + 332  [0x1053987b8]
+      +   !   : |               1 mi_os_decommit_ex  (in scalar-worker) + 152  [0x105398478]
+      +   !   : |                 1 madvise  (in libsystem_kernel.dylib) + 8  [0x189e909b0]
+      +   !   : 1 _RNvMs7_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc5cycleNtB5_12GcCycleState4step  (in scalar-worker) + 2276  [0x104964924]
+      +   !   :   1 _RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime5arena4walkNtB4_17ArenaObjectCursor3new  (in scalar-worker) + 96  [0x1049f5874]
+      +   !   :     1 _RNvMNtNtCs5gMwpk3Cs4e_13perry_runtime5arena4walkNtB2_24ArenaObjectCursorBuilder4step  (in scalar-worker) + 628  [0x1049f1b48]
+      +   !   2 _RNvNtCs5gMwpk3Cs4e_13perry_runtime2gc39gc_collect_full_mark_sweep_with_trigger  (in scalar-worker) + 280  [0x10497c358]
+      +   !     2 _RNvMs7_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc5cycleNtB5_12GcCycleState8new_full  (in scalar-worker) + 88  [0x104967e98]
+      +   !       2 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime5arena9page_meta24old_pages_begin_gc_cycle  (in scalar-worker) + 164  [0x104a21038]
+      +   !         2 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime5arena9page_meta43flush_deferred_old_page_registrations_batch  (in scalar-worker) + 116  [0x1053aaf4c]
+      +   !           2 _RINvMs2_NtNtCs8BpVhDwHqJW_3std6thread5localINtB6_8LocalKeyINtNtCsjgY6bXVaRmE_4core4cell7RefCellINtNtNtNtBa_11collections4hash3map7HashMapjINtNtCsctvjasLqLe9_5alloc3vec3VecjENtNtCs5gMwpk3Cs4e_13perry_runtime9fast_hash9PtrHasherEEE4withNCNvNtNtB2P_5arena9page_meta43flush_deferred_old_page_registrations_batchs_0uEB2P_  (in scalar-worker) + 772,1124  [0x104857440,0x1048575a0]
+      +   685 perry_fn_baseline_worker_ts__run$spec_b  (in scalar-worker) + 9428  [0x10471ad94]
+      +     660 js_json_stringify_full  (in scalar-worker) + 5620  [0x104bd25ac]
+      +     : 660 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify22stringify_object_inner  (in scalar-worker) + 5504  [0x1048bb500]
+      +     :   626 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify21stringify_array_depth  (in scalar-worker) + 5328  [0x1048b8edc]
+      +     :   | 187 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template22try_emit_shape_element  (in scalar-worker) + 3084  [0x1048b4e8c]
+      +     :   | + 53 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify21stringify_array_depth  (in scalar-worker) + 1572,2684,...  [0x1048b8030,0x1048b8488,...]
+      +     :   | + 50 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify21stringify_array_depth  (in scalar-worker) + 2840  [0x1048b8524]
+      +     :   | + ! 45 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json17stringify_scalars20write_escaped_string  (in scalar-worker) + 456,480,...  [0x1048b33e4,0x1048b33fc,...]
+      +     :   | + ! 5 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json17stringify_scalars20write_escaped_string  (in scalar-worker) + 576  [0x1048b345c]
+      +     :   | + !   5 _platform_memmove  (in libsystem_platform.dylib) + 428,436,...  [0x189edb50c,0x189edb514,...]
+      +     :   | + 23 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify21stringify_value_depth  (in scalar-worker) + 104,124,...  [0x1048b92ec,0x1048b9300,...]
+      +     :   | + 21 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify21stringify_array_depth  (in scalar-worker) + 1044  [0x1048b7e20]
+      +     :   | + ! 14 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify17array_get_to_json  (in scalar-worker) + 88  [0x1048b689c]
+      +     :   | + ! : 14 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime5array6header32array_named_property_get_by_name  (in scalar-worker) + 116,132,...  [0x10502a070,0x10502a080,...]
+      +     :   | + ! 5 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify17array_get_to_json  (in scalar-worker) + 56  [0x1048b687c]
+      +     :   | + ! : 5 _tlv_get_addr  (in libdyld.dylib) + 4  [0x189adc38c]
+      +     :   | + ! 2 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify17array_get_to_json  (in scalar-worker) + 68  [0x1048b6888]
+      +     :   | + 12 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify21stringify_array_depth  (in scalar-worker) + 2696  [0x1048b8494]
+      +     :   | + ! 12 _RNvNtNtCsjgY6bXVaRmE_4core3str8converts9from_utf8  (in scalar-worker) + 120,52,...  [0x104745c10,0x104745bcc,...]
+      +     :   | + 10 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify21stringify_array_depth  (in scalar-worker) + 1232  [0x1048b7edc]
+      +     :   | + ! 10 _tlv_get_addr  (in libdyld.dylib) + 4,0  [0x189adc38c,0x189adc388]
+      +     :   | + 6 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify21stringify_array_depth  (in scalar-worker) + 1464  [0x1048b7fc4]
+      +     :   | + ! 6 _RNvMs_NtNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope4push  (in scalar-worker) + 112,0,...  [0x1048a2e10,0x1048a2da0,...]
+      +     :   | + 5 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify21stringify_array_depth  (in scalar-worker) + 1212  [0x1048b7ec8]
+      +     :   | + ! 4 _RINvMs2_NtNtCs8BpVhDwHqJW_3std6thread5localINtB6_8LocalKeyINtNtCsjgY6bXVaRmE_4core4cell7RefCellINtNtCsctvjasLqLe9_5alloc3vec3VecjEEE4withNCNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify21stringify_array_depths_0bEB2j_  (in scalar-worker) + 188,148,...  [0x10484ff24,0x10484fefc,...]
+      +     :   | + ! 1 _RINvMs2_NtNtCs8BpVhDwHqJW_3std6thread5localINtB6_8LocalKeyINtNtCsjgY6bXVaRmE_4core4cell7RefCellINtNtCsctvjasLqLe9_5alloc3vec3VecjEEE4withNCNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify21stringify_array_depths_0bEB2j_  (in scalar-worker) + 28  [0x10484fe84]
+      +     :   | + !   1 _RNvYNCNKNvNtCs5gMwpk3Cs4e_13perry_runtime4json15STRINGIFY_STACK00INtNtNtCsjgY6bXVaRmE_4core3ops8function6FnOnceTINtNtB18_6option6OptionQIB1N_INtNtB18_4cell7RefCellINtNtCsctvjasLqLe9_5alloc3vec3VecjEEEEEE9call_onceBa_  (in scalar-worker) + 28  [0x1049039d0]
+      +     :   | + !     1 _tlv_get_addr  (in libdyld.dylib) + 4  [0x189adc38c]
+      +     :   | + 3 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify17array_get_to_json  (in scalar-worker) + 216,220,...  [0x1048b691c,0x1048b6920,...]
+      +     :   | + 2 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify21stringify_array_depth  (in scalar-worker) + 2172  [0x1048b8288]
+      +     :   | + ! 2 _tlv_get_addr  (in libdyld.dylib) + 4  [0x189adc38c]
+      +     :   | + 1 _RNvMs_NtNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope4push  (in scalar-worker) + 280  [0x1048a2eb8]
+      +     :   | + 1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify21stringify_array_depth  (in scalar-worker) + 2192  [0x1048b829c]
+      +     :   | +   1 _tlv_get_addr  (in libdyld.dylib) + 4  [0x189adc38c]
+      +     :   | 84 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template22try_emit_shape_element  (in scalar-worker) + 688  [0x1048b4530]
+      +     :   | + 84 _RNCNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template22try_emit_shape_elements0_0B7_  (in scalar-worker) + 48,136,...  [0x1048979f4,0x104897a4c,...]
+      +     :   | 69 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template22try_emit_shape_element  (in scalar-worker) + 2448,2588,...  [0x1048b4c10,0x1048b4c9c,...]
+      +     :   | 63 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template22try_emit_shape_element  (in scalar-worker) + 2840  [0x1048b4d98]
+      +     :   | + 50 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json17stringify_scalars20write_escaped_string  (in scalar-worker) + 456,236,...  [0x1048b33e4,0x1048b3308,...]
+      +     :   | + 13 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json17stringify_scalars20write_escaped_string  (in scalar-worker) + 576  [0x1048b345c]
+      +     :   | +   12 _platform_memmove  (in libsystem_platform.dylib) + 452,0,...  [0x189edb524,0x189edb360,...]
+      +     :   | +   1 DYLD-STUB$$memcpy  (in scalar-worker) + 4  [0x1053ecbf0]
+      +     :   | 56 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template22try_emit_shape_element  (in scalar-worker) + 3032  [0x1048b4e58]
+      +     :   | + 31 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json17stringify_scalars12write_number  (in scalar-worker) + 236,356,...  [0x1048b2dfc,0x1048b2e74,...]
+      +     :   | + 15 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify18object_get_to_json  (in scalar-worker) + 164  [0x1048b7398]
+      +     :   | + ! 15 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json22stringify_tojson_probe25to_json_definitely_absent  (in scalar-worker) + 324  [0x1048b3fe4]
+      +     :   | + !   11 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json17stringify_scalars12write_number  (in scalar-worker) + 740  [0x1048b2ff4]
+      +     :   | + !   : 11 _platform_memmove  (in libsystem_platform.dylib) + 452,20,...  [0x189edb524,0x189edb374,...]
+      +     :   | + !   3 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json17stringify_scalars12write_number  (in scalar-worker) + 432  [0x1048b2ec0]
+      +     :   | + !   : 3 _RNvXsu_Cs8xF4iOrs9m2_4itoayNtB5_8Unsigned3fmt  (in scalar-worker) + 0,544,...  [0x1047b13ac,0x1047b15cc,...]
+      +     :   | + !   1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json17stringify_scalars12write_number  (in scalar-worker) + 652  [0x1048b2f9c]
+      +     :   | + !     1 _platform_memmove  (in libsystem_platform.dylib) + 452  [0x189edb524]
+      +     :   | + 9 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json17stringify_scalars12write_number  (in scalar-worker) + 788  [0x1048b3024]
+      +     :   | + ! 9 _RNvXsu_Cs8xF4iOrs9m2_4itoayNtB5_8Unsigned3fmt  (in scalar-worker) + 464,552,...  [0x1047b157c,0x1047b15d4,...]
+      +     :   | + 1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json17stringify_scalars12write_number  (in scalar-worker) + 1132  [0x1048b317c]
+      +     :   | +   1 _platform_memmove  (in libsystem_platform.dylib) + 452  [0x189edb524]
+      +     :   | 46 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template22try_emit_shape_element  (in scalar-worker) + 2528  [0x1048b4c60]
+      +     :   | + 46 _RNCNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template22try_emit_shape_elements0_0B7_  (in scalar-worker) + 48,136,...  [0x1048979f4,0x104897a4c,...]
+      +     :   | 41 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template22try_emit_shape_element  (in scalar-worker) + 1092  [0x1048b46c4]
+      +     :   | + 38 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify18object_get_to_json  (in scalar-worker) + 164  [0x1048b7398]
+      +     :   | + ! 27 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json22stringify_tojson_probe25to_json_definitely_absent  (in scalar-worker) + 180  [0x1048b3f54]
+      +     :   | + ! : 27 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json22stringify_tojson_probe28keys_array_may_carry_to_json  (in scalar-worker) + 304,276,...  [0x1048b41a0,0x1048b4184,...]
+      +     :   | + ! 8 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json22stringify_tojson_probe25to_json_definitely_absent  (in scalar-worker) + 140,152,...  [0x1048b3f2c,0x1048b3f38,...]
+      +     :   | + ! 2 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json22stringify_tojson_probe25to_json_definitely_absent  (in scalar-worker) + 356  [0x1048b4004]
+      +     :   | + ! : 2 _tlv_get_addr  (in libdyld.dylib) + 4,20  [0x189adc38c,0x189adc39c]
+      +     :   | + ! 1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json22stringify_tojson_probe25to_json_definitely_absent  (in scalar-worker) + 324  [0x1048b3fe4]
+      +     :   | + !   1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime6object15prototype_chain23object_static_prototype  (in scalar-worker) + 84  [0x1049961b8]
+      +     :   | + 3 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify18object_get_to_json  (in scalar-worker) + 164,4  [0x1048b7398,0x1048b72f8]
+      +     :   | 20 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template22try_emit_shape_element  (in scalar-worker) + 2504  [0x1048b4c48]
+      +     :   | + 19 _platform_memmove  (in libsystem_platform.dylib) + 428,0,...  [0x189edb50c,0x189edb360,...]
+      +     :   | + 1 DYLD-STUB$$memcpy  (in scalar-worker) + 4  [0x1053ecbf0]
+      +     :   | 18 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template22try_emit_shape_element  (in scalar-worker) + 3064  [0x1048b4e78]
+      +     :   | + 6 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template34set_to_json_key_for_template_field  (in scalar-worker) + 336  [0x1048b5964]
+      +     :   | + ! 6 _tlv_get_addr  (in libdyld.dylib) + 4,0,...  [0x189adc38c,0x189adc388,...]
+      +     :   | + 5 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template34set_to_json_key_for_template_field  (in scalar-worker) + 56,328,...  [0x1048b584c,0x1048b595c,...]
+      +     :   | + 4 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template34set_to_json_key_for_template_field  (in scalar-worker) + 412  [0x1048b59b0]
+      +     :   | + ! 4 _platform_memmove  (in libsystem_platform.dylib) + 0,452  [0x189edb360,0x189edb524]
+      +     :   | + 3 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template34set_to_json_key_for_template_field  (in scalar-worker) + 300  [0x1048b5940]
+      +     :   | +   3 _RNvNtNtCsjgY6bXVaRmE_4core3str8converts9from_utf8  (in scalar-worker) + 52,60  [0x104745bcc,0x104745bd4]
+      +     :   | 12 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template22try_emit_shape_element  (in scalar-worker) + 1088  [0x1048b46c0]
+      +     :   | + 12 _RNCNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template22try_emit_shape_element0B7_  (in scalar-worker) + 40,28,...  [0x1048977e0,0x1048977d4,...]
+      +     :   | 7 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json17stringify_scalars20write_escaped_string  (in scalar-worker) + 2772,2780  [0x1048b3cf0,0x1048b3cf8]
+      +     :   | 6 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template22try_emit_shape_element  (in scalar-worker) + 516  [0x1048b4484]
+      +     :   | + 6 _RNvMs_NtNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope4push  (in scalar-worker) + 112,224,...  [0x1048a2e10,0x1048a2e80,...]
+      +     :   | 5 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template22try_emit_shape_element  (in scalar-worker) + 556  [0x1048b44ac]
+      +     :   | + 5 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime6object6shapes34shape_live_inline_slot_count_by_id  (in scalar-worker) + 52,132  [0x1049a70ac,0x1049a70fc]
+      +     :   | 3 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template22try_emit_shape_element  (in scalar-worker) + 488  [0x1048b4468]
+      +     :   | + 3 _RNvMs_NtNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope4push  (in scalar-worker) + 0,96,...  [0x1048a2da0,0x1048a2e00,...]
+      +     :   | 3 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template22try_emit_shape_element  (in scalar-worker) + 3252  [0x1048b4f34]
+      +     :   | + 3 _RINvNtCsjgY6bXVaRmE_4core3ptr9drop_glueNtNtNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5roots15runtime_handles18RuntimeHandleScopeEBJ_  (in scalar-worker) + 36,68  [0x10488aa04,0x10488aa24]
+      +     :   | 2 _RNCNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template22try_emit_shape_elements0_0B7_  (in scalar-worker) + 304  [0x104897af4]
+      +     :   | 2 _RNvMs_NtNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope4push  (in scalar-worker) + 280  [0x1048a2eb8]
+      +     :   | 2 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify21stringify_array_depth  (in scalar-worker) + 964  [0x1048b7dd0]
+      +     :   30 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify21stringify_array_depth  (in scalar-worker) + 5100  [0x1048b8df8]
+      +     :   | 27 _RNvNtCsjgY6bXVaRmE_4core3fmt5write  (in scalar-worker) + 96  [0x104744f70]
+      +     :   | + 19 <deduplicated_symbol>  (in scalar-worker) + 280  [0x10474d098]
+      +     :   | + ! 8 _RNvMsa_NtCsjgY6bXVaRmE_4core3fmtNtB5_9Formatter12pad_integral  (in scalar-worker) + 0,176,...  [0x1047429c0,0x104742a70,...]
+      +     :   | + ! 6 _RNvNvMsa_NtCsjgY6bXVaRmE_4core3fmtNtB7_9Formatter12pad_integral12write_prefix  (in scalar-worker) + 116  [0x104749c8c]
+      +     :   | + ! 2 _RNvMsa_NtCsjgY6bXVaRmE_4core3fmtNtB5_9Formatter12pad_integral  (in scalar-worker) + 176  [0x104742a70]
+      +     :   | + ! : 2 _RNvNvMsa_NtCsjgY6bXVaRmE_4core3fmtNtB7_9Formatter12pad_integral12write_prefix  (in scalar-worker) + 32,36  [0x104749c38,0x104749c3c]
+      +     :   | + ! 2 _RNvXsZ_NtCsctvjasLqLe9_5alloc6stringNtB5_6StringNtNtCsjgY6bXVaRmE_4core3fmt5Write9write_str  (in scalar-worker) + 4,44  [0x104885b74,0x104885b9c]
+      +     :   | + ! 1 _RNvXsZ_NtCsctvjasLqLe9_5alloc6stringNtB5_6StringNtNtCsjgY6bXVaRmE_4core3fmt5Write9write_str  (in scalar-worker) + 64  [0x104885bb0]
+      +     :   | + !   1 _platform_memmove  (in libsystem_platform.dylib) + 444  [0x189edb51c]
+      +     :   | + 6 <deduplicated_symbol>  (in scalar-worker) + 280,32,...  [0x10474d098,0x10474cfa0,...]
+      +     :   | + 2 _RNvXsZ_NtCsctvjasLqLe9_5alloc6stringNtB5_6StringNtNtCsjgY6bXVaRmE_4core3fmt5Write9write_str  (in scalar-worker) + 84  [0x104885bc4]
+      +     :   | 3 _RNvNtCsjgY6bXVaRmE_4core3fmt5write  (in scalar-worker) + 96,104,...  [0x104744f70,0x104744f78,...]
+      +     :   4 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify21stringify_array_depth  (in scalar-worker) + 4972,5016,...  [0x1048b8d78,0x1048b8da4,...]
+      +     16 js_json_stringify_full  (in scalar-worker) + 4260  [0x104bd205c]
+      +     : 16 _platform_memmove  (in libsystem_platform.dylib) + 88  [0x189edb3b8]
+      +     9 js_json_stringify_full  (in scalar-worker) + 4104,4124,...  [0x104bd1fc0,0x104bd1fd4,...]
+      2 ???  (in <unknown binary>)  [0x33d330f05a0]
+      + 1 ???  (in <unknown binary>)  [0x30316e67b0]
+      + ! 1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify21stringify_value_depth  (in scalar-worker) + 2044  [0x1048b9a80]
+      + !   1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify15is_symbol_value  (in scalar-worker) + 88  [0x1048b5c10]
+      + 1 ???  (in <unknown binary>)  [0x3533373136]
+      +   1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify21stringify_value_depth  (in scalar-worker) + 2148  [0x1048b9ae8]
+      +     1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime5array17subclass_elements6backed  (in scalar-worker) + 32  [0x104994674]
+      1 ???  (in <unknown binary>)  [0x3130393632]
+      + 1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify21stringify_value_depth  (in scalar-worker) + 2044  [0x1048b9a80]
+      +   1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify15is_symbol_value  (in scalar-worker) + 88  [0x1048b5c10]
+      1 ???  (in <unknown binary>)  [0x3139363533]
+      + 1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify21stringify_value_depth  (in scalar-worker) + 2148  [0x1048b9ae8]
+      +   1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime5array17subclass_elements6backed  (in scalar-worker) + 84  [0x1049946a8]
+      1 ???  (in <unknown binary>)  [0x3336343037]
+      + 1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify21stringify_value_depth  (in scalar-worker) + 2044  [0x1048b9a80]
+      +   1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify15is_symbol_value  (in scalar-worker) + 36  [0x1048b5bdc]
+      1 ???  (in <unknown binary>)  [0x3431343437]
+      + 1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify21stringify_value_depth  (in scalar-worker) + 2044  [0x1048b9a80]
+      +   1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify15is_symbol_value  (in scalar-worker) + 208  [0x1048b5c88]
+      1 ???  (in <unknown binary>)  [0x3438393032]
+      + 1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify21stringify_value_depth  (in scalar-worker) + 2148  [0x1048b9ae8]
+      +   1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime5array17subclass_elements6backed  (in scalar-worker) + 32  [0x104994674]
+      1 ???  (in <unknown binary>)  [0x3631353131]
+      + 1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify21stringify_value_depth  (in scalar-worker) + 2044  [0x1048b9a80]
+      +   1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify15is_symbol_value  (in scalar-worker) + 208  [0x1048b5c88]
+      1 ???  (in <unknown binary>)  [0x3931373537]
+        1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify21stringify_value_depth  (in scalar-worker) + 2044  [0x1048b9a80]
+          1 _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify15is_symbol_value  (in scalar-worker) + 208  [0x1048b5c88]
+
+Total number in stack (recursive counted multiple, when >=5):
+        20       _tlv_get_addr  (in libdyld.dylib) + 0  [0x189adc388]
+        10       _platform_memmove  (in libsystem_platform.dylib) + 0  [0x189edb360]
+        10       madvise  (in libsystem_kernel.dylib) + 0  [0x189e909a8]
+        8       _RNvMNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5traceNtB2_15ValidPointerSet16find_arena_floor  (in scalar-worker) + 0  [0x104aac6f8]
+        6       _RNvMNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5traceNtB2_15ValidPointerSet8contains  (in scalar-worker) + 88  [0x104aac844]
+        6       _RNvMs2_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc6layoutNtB5_23GcMutableSlotDescriptor11visit_slots  (in scalar-worker) + 0  [0x104aaff48]
+        6       _RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime5arena4walkNtB4_17ArenaObjectCursor13next_budgeted  (in scalar-worker) + 0  [0x1049f5660]
+        6       _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify15is_symbol_value  (in scalar-worker) + 0  [0x1048b5bb8]
+        6       _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify21stringify_value_depth  (in scalar-worker) + 2044  [0x1048b9a80]
+        5       _RNvMs1_NtCshsF3QZNC8Sh_9hashbrown3mapINtB5_7HashMapjuNtNtCs5gMwpk3Cs4e_13perry_runtime9fast_hash9PtrHasherE6insertBT_  (in scalar-worker) + 0  [0x10516dd7c]
+        5       _RNvMs_NtNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope4push  (in scalar-worker) + 0  [0x1048a2da0]
+        5       _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5trace24mark_field_into_worklist  (in scalar-worker) + 0  [0x104ac15c0]
+        5       mi_arena_try_alloc_at  (in scalar-worker) + 772  [0x10539d278]
+        5       mi_arenas_page_alloc_fresh  (in scalar-worker) + 240  [0x10539d404]
+        5       mi_arenas_try_alloc  (in scalar-worker) + 92  [0x10538ec08]
+        5       mi_arenas_try_find_free  (in scalar-worker) + 344  [0x10539ca64]
+        5       mi_page_fresh_alloc  (in scalar-worker) + 40  [0x10539f14c]
+
+Sort by top of stack, same collapsed (when >= 5):
+        _RNvMNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5traceNtB2_15ValidPointerSet16find_arena_floor  (in scalar-worker)        469
+        _RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime5arena4walkNtB4_17ArenaObjectCursor13next_budgeted  (in scalar-worker)        148
+        _tlv_get_addr  (in libdyld.dylib)        141
+        _RNCNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template22try_emit_shape_elements0_0B7_  (in scalar-worker)        132
+        _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json17stringify_scalars20write_escaped_string  (in scalar-worker)        102
+        _RNvMs2_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc6layoutNtB5_23GcMutableSlotDescriptor11visit_slots  (in scalar-worker)        96
+        _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5trace24mark_field_into_worklist  (in scalar-worker)        94
+        _RINvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc17layout_slot_visit33visit_gc_rewrite_slot_descriptorsNCNvNtB4_5trace24trace_heap_rewrite_slots0EB6_  (in scalar-worker)        73
+        _platform_memmove  (in libsystem_platform.dylib)        71
+        _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template22try_emit_shape_element  (in scalar-worker)        69
+        _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify21stringify_array_depth  (in scalar-worker)        59
+        _RNvMNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5traceNtB2_15ValidPointerSet8contains  (in scalar-worker)        56
+        _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc6verify36remember_retained_old_to_young_slots  (in scalar-worker)        56
+        _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc17layout_slot_visit32visit_gc_layout_slot_descriptors  (in scalar-worker)        44
+        _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5trace25drain_trace_worklist_step  (in scalar-worker)        42
+        _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc6layout14gc_child_slots  (in scalar-worker)        42
+        _RNCNCNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5trace24trace_heap_rewrite_slots00B9_  (in scalar-worker)        39
+        _RNvMs1_NtCshsF3QZNC8Sh_9hashbrown3mapINtB5_7HashMapjuNtNtCs5gMwpk3Cs4e_13perry_runtime9fast_hash9PtrHasherE6insertBT_  (in scalar-worker)        37
+        _RNvMs1_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc6oldgenNtB5_21IncrementalSweepState4step  (in scalar-worker)        37
+        _RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc5traceNtB4_22ValidPointerSetBuilder4step  (in scalar-worker)        34
+        _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json17stringify_scalars12write_number  (in scalar-worker)        31
+        _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json22stringify_tojson_probe28keys_array_may_carry_to_json  (in scalar-worker)        27
+        _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify21stringify_value_depth  (in scalar-worker)        23
+        _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc6verify36remember_evacuated_old_to_young_slot  (in scalar-worker)        22
+        _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime5arena9page_meta33classify_heap_generation_uncached  (in scalar-worker)        22
+        <deduplicated_symbol>  (in scalar-worker)        21
+        madvise  (in libsystem_kernel.dylib)        21
+        _RNCNCNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc6verify32restore_surviving_dirty_coverage00B9_  (in scalar-worker)        19
+        _RNvMs_NtNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope4push  (in scalar-worker)        18
+        _RNvNtNtCsjgY6bXVaRmE_4core3str8converts9from_utf8  (in scalar-worker)        15
+        _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime5array6header32array_named_property_get_by_name  (in scalar-worker)        14
+        _RNCNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5trace24trace_heap_rewrite_slots0B7_  (in scalar-worker)        12
+        _RNCNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template22try_emit_shape_element0B7_  (in scalar-worker)        12
+        _RNvXsu_Cs8xF4iOrs9m2_4itoayNtB5_8Unsigned3fmt  (in scalar-worker)        12
+        _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime5arena9page_meta32old_pages_reset_sweep_accounting  (in scalar-worker)        11
+        _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc17layout_slot_visit10fixed_slot  (in scalar-worker)        10
+        _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc7barrier31remembered_child_needs_tracking  (in scalar-worker)        9
+        js_json_stringify_full  (in scalar-worker)        9
+        _RNvMsa_NtCsjgY6bXVaRmE_4core3fmtNtB5_9Formatter12pad_integral  (in scalar-worker)        8
+        _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json22stringify_tojson_probe25to_json_definitely_absent  (in scalar-worker)        8
+        _RNvNvMsa_NtCsjgY6bXVaRmE_4core3fmtNtB7_9Formatter12pad_integral12write_prefix  (in scalar-worker)        8
+        _RINvNtCs5gMwpk3Cs4e_13perry_runtime6object30visit_overflow_field_slots_mutNCINvNtNtB4_2gc17layout_slot_visit33visit_gc_rewrite_slot_descriptorsNCNvNtB1h_5trace24trace_heap_rewrite_slots0Es_0EB4_  (in scalar-worker)        7
+        _RNvMNtNtCs5gMwpk3Cs4e_13perry_runtime2gc6verifyNtB2_32OldToYoungRememberedRebuildState4step  (in scalar-worker)        7
+        _RINvMs2_NtNtCs8BpVhDwHqJW_3std6thread5localINtB6_8LocalKeyINtNtCsjgY6bXVaRmE_4core4cell7RefCellINtNtNtNtBa_11collections4hash3map7HashMapjNtNtNtCs5gMwpk3Cs4e_13perry_runtime5arena9page_meta11OldPageMetaNtNtB2i_9fast_hash9PtrHasherEEE4withNCNvB2e_29old_page_account_swept_object0uEB2i_  (in scalar-worker)        6
+        _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify15is_symbol_value  (in scalar-worker)        6
+        _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template34set_to_json_key_for_template_field  (in scalar-worker)        5
+        _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify17array_get_to_json  (in scalar-worker)        5
+        _RNvNtNtCs5gMwpk3Cs4e_13perry_runtime6object6shapes34shape_live_inline_slot_count_by_id  (in scalar-worker)        5
+
+Binary Images:
+       0x104718000 -        0x1057463af +scalar-worker (0) <66F6D089-4A47-332D-801F-C2A12DAEA804> /Users/*/scalar-worker
+       0x189a6c000 -        0x189abeb4b  libobjc.A.dylib (951.7) <FF1D8AE4-ABEF-35F1-A30A-1183B9CB414F> /usr/lib/libobjc.A.dylib
+       0x189abf000 -        0x189af3d07  libdyld.dylib (1378) <B147D877-D0C2-388F-B38D-D3132E39905F> /usr/lib/system/libdyld.dylib
+       0x189af4000 -        0x189b9a217  dyld (1.0.0 - 1378) <A237EF81-B68B-37BA-A165-92C965529534> /usr/lib/dyld
+       0x189b9b000 -        0x189b9e228  libsystem_blocks.dylib (96) <CC947089-488D-316B-A9C7-46DEC0F73145> /usr/lib/system/libsystem_blocks.dylib
+       0x189b9f000 -        0x189bf355f  libxpc.dylib (3102.120.13) <C40FCAE8-7A17-3D82-87CB-3DA4802ADEF1> /usr/lib/system/libxpc.dylib
+       0x189bf4000 -        0x189c149ff  libsystem_trace.dylib (1861.120.4) <D0FABAB3-5AE7-3F10-8C62-60CBF5D70850> /usr/lib/system/libsystem_trace.dylib
+       0x189c15000 -        0x189cc35f7  libcorecrypto.dylib (1922.121.1) <A01A158D-6FE7-3B1C-A2C4-6BCB90D7314A> /usr/lib/system/libcorecrypto.dylib
+       0x189cc4000 -        0x189d141d7  libsystem_malloc.dylib (812.100.31) <5FAE4807-4D2B-3A95-A63A-DD96D3DA11B4> /usr/lib/system/libsystem_malloc.dylib
+       0x189d15000 -        0x189d5c23f  libdispatch.dylib (1542.100.32) <F071EFE4-299F-3089-ACC4-0025B8FFB52A> /usr/lib/system/libdispatch.dylib
+       0x189d5d000 -        0x189d5fffb  libsystem_featureflags.dylib (103) <71FCFFBD-85F8-3365-AFE0-BECEA4369122> /usr/lib/system/libsystem_featureflags.dylib
+       0x189d60000 -        0x189de0d9f  libsystem_c.dylib (1752.120.2) <694B7881-1BF3-3D0F-8F19-B50AE4E8EF8A> /usr/lib/system/libsystem_c.dylib
+       0x189de1000 -        0x189e71ae7  libc++.1.dylib (2100.43) <5013C0F8-84A9-3B56-9FEB-C353816A750F> /usr/lib/libc++.1.dylib
+       0x189e72000 -        0x189e8c75f  libc++abi.dylib (2100.43) <E482D257-E5A0-3816-BD97-7B39342958DA> /usr/lib/libc++abi.dylib
+       0x189e8d000 -        0x189eca2af  libsystem_kernel.dylib (12377.121.6) <CC1CF985-BC65-3725-809F-4C1E36B8F4BA> /usr/lib/system/libsystem_kernel.dylib
+       0x189ecb000 -        0x189ed7b3b  libsystem_pthread.dylib (539.100.4) <4F33683C-18C8-39A1-800B-2E3BD43BCC13> /usr/lib/system/libsystem_pthread.dylib
+       0x189ed8000 -        0x189ee0963  libsystem_platform.dylib (375.120.2) <160FD864-8D15-36FC-9E97-9725388CFAFE> /usr/lib/system/libsystem_platform.dylib
+       0x189ee1000 -        0x189f106eb  libsystem_info.dylib (600) <3D62F2D9-F516-31BF-83C7-E203D872300B> /usr/lib/system/libsystem_info.dylib
+       0x18dea8000 -        0x18deb1e5f  libsystem_darwin.dylib (1752.120.2) <8858F025-745A-388E-9544-080781CC9A69> /usr/lib/system/libsystem_darwin.dylib
+       0x18e313000 -        0x18e3251b6  libsystem_notify.dylib (348.120.4) <64D76451-1E0C-369B-A631-54DA3140E083> /usr/lib/system/libsystem_notify.dylib
+       0x1905e0000 -        0x1905faf7b  libsystem_networkextension.dylib (2226.120.19) <3A1DAD41-F14F-3595-B9BB-058A84308BE7> /usr/lib/system/libsystem_networkextension.dylib
+       0x19067d000 -        0x190694fdf  libsystem_asl.dylib (406) <F40838DF-2F15-3F62-970F-DEE25706BF1B> /usr/lib/system/libsystem_asl.dylib
+       0x19223b000 -        0x192243387  libsystem_symptoms.dylib (2169.120.7) <F5029F5C-1BF3-31C7-892E-BC8606AC829E> /usr/lib/system/libsystem_symptoms.dylib
+       0x1964df000 -        0x196517257  libsystem_containermanager.dylib (725.120.2) <518BE44D-AA31-31E6-B44B-A37AD5E47040> /usr/lib/system/libsystem_containermanager.dylib
+       0x1978f0000 -        0x1978f45d7  libsystem_configuration.dylib (1405.120.5) <0F7BBC1C-3D50-3E59-A31F-E4672A80BCEB> /usr/lib/system/libsystem_configuration.dylib
+       0x1978f5000 -        0x1978fb8cf  libsystem_sandbox.dylib (2680.120.12) <EC3A75EA-44C0-3A0B-9BF7-71C117B0A9C6> /usr/lib/system/libsystem_sandbox.dylib
+       0x198f4f000 -        0x198f521fb  libquarantine.dylib (196.120.2) <5849009B-ACA3-3796-94C4-BBDF8D300EBA> /usr/lib/system/libquarantine.dylib
+       0x1996ee000 -        0x1996f4d03  libsystem_coreservices.dylib (191.4.5) <9576143B-C303-35A3-BA63-1FD06EDA2BB1> /usr/lib/system/libsystem_coreservices.dylib
+       0x199c79000 -        0x199cb6a77  libsystem_m.dylib (3312.100.1) <A7E0863C-101A-31A0-922B-ED9B02626151> /usr/lib/system/libsystem_m.dylib
+       0x199cb8000 -        0x199cbb527  libmacho.dylib (1378) <755441B4-C034-3E3A-8E3C-F424FBB28261> /usr/lib/system/libmacho.dylib
+       0x199cd5000 -        0x199ce23a7  libcommonCrypto.dylib (600035) <CE357BB1-2D49-37CC-9FFE-D093936B1475> /usr/lib/system/libcommonCrypto.dylib
+       0x199ce3000 -        0x199cecca3  libunwind.dylib (2100.2) <FC8F0C4E-6FB0-3E27-ABEF-B0FA720CD5E4> /usr/lib/system/libunwind.dylib
+       0x199cf5000 -        0x199cff7ff  libcopyfile.dylib (240) <8ACFAC7A-88E9-3EF4-853F-A9140FF110E5> /usr/lib/system/libcopyfile.dylib
+       0x199d00000 -        0x199d03987  libcompiler_rt.dylib (103.3) <AA79151F-C19D-3C7C-92F8-B10F04D82C1C> /usr/lib/system/libcompiler_rt.dylib
+       0x199d04000 -        0x199d0878b  libsystem_collections.dylib (1752.120.2) <72DB5BE7-EF78-37D0-8AAD-53E37CFE4287> /usr/lib/system/libsystem_collections.dylib
+       0x199d09000 -        0x199d0c4cf  libsystem_secinit.dylib (168.100.7) <E525C566-CDA4-3D99-B12B-1615FD54A1F3> /usr/lib/system/libsystem_secinit.dylib
+       0x199d0d000 -        0x199d0fbf7  libremovefile.dylib (85.100.6) <635E661D-80A7-340D-A165-3F7D318FDFC9> /usr/lib/system/libremovefile.dylib
+       0x199d10000 -        0x199d10f27  libkeymgr.dylib (31) <8C08891A-DF1C-3DCC-AB64-4742FD6BE9BA> /usr/lib/system/libkeymgr.dylib
+       0x199d11000 -        0x199d19e37  libsystem_dnssd.dylib (2881.120.11) <6F45DF3F-233B-3BC3-BA8C-B43E7DA884BF> /usr/lib/system/libsystem_dnssd.dylib
+       0x199d1a000 -        0x199d1f09b  libcache.dylib (95) <189B576E-6176-3F82-8FA4-5914B0BEAEE7> /usr/lib/system/libcache.dylib
+       0x199d20000 -        0x199d21ce3  libSystem.B.dylib (1356) <D65E4112-C151-3FF8-BEB7-4841436012D6> /usr/lib/libSystem.B.dylib
+       0x28cf57000 -        0x28cf5e349  libRosetta.dylib (367.9) <8651ED4F-6506-3788-B56B-32EE414A85CA> /usr/lib/libRosetta.dylib
+       0x28eb74000 -        0x28eb77a4b  libsystem_darwindirectory.dylib (122) <CF277A2C-C818-3F16-8B3F-3C7B39FCD164> /usr/lib/system/libsystem_darwindirectory.dylib
+       0x28eb78000 -        0x28eb815d3  libsystem_eligibility.dylib (319.121.1) <DDAC0531-0262-3DDC-8EC8-80EB9438847A> /usr/lib/system/libsystem_eligibility.dylib
+       0x28eb82000 -        0x28eb8988b  libsystem_sanitizers.dylib (26.1) <44C4234F-8B2D-38D3-A774-B4B3C75AF3A7> /usr/lib/system/libsystem_sanitizers.dylib
+       0x28eb8a000 -        0x28eb8abb7  libsystem_trial.dylib (474.2.18.2) <68C583BA-AFF5-3916-86AE-6E38BFEF98D6> /usr/lib/system/libsystem_trial.dylib
