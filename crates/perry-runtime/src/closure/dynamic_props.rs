@@ -341,6 +341,14 @@ pub(crate) fn prune_dead_closure_side_table_owners(is_dead_closure: &dyn Fn(usiz
 /// young), so the log is the complete candidate set (#9754).
 pub(crate) fn prune_dead_closure_side_table_owners_young(is_dead_closure: &dyn Fn(usize) -> bool) {
     super::prune_dead_closure_box_capture_owners(is_dead_closure);
+    // Rule 2 lives here now. It used to run at the top of the minor-scoped
+    // SCANNER; that walk was dropped as measured-worse-than-full (#9841), and
+    // this prune is the log's remaining consumer, so the machine check that
+    // catches an un-armed writer has to move with it. Deleting the scanner
+    // without moving this would have removed the only guard on a log a prune
+    // still trusts.
+    #[cfg(debug_assertions)]
+    debug_assert_closure_young_log_complete();
     let candidates = CLOSURE_YOUNG_OWNERS.with(|log| log.borrow_mut().take_sorted());
     let mut kept = Vec::with_capacity(candidates.len());
     for owner in candidates {
@@ -450,15 +458,33 @@ pub(crate) fn visit_closure_static_prototype_slot_mut(
 /// ajv's `validate.errors = [{ msg }]`) had its element objects freed
 /// behind the still-live array.
 ///
-/// #9754: a minor-scoped pass (`visitor.young_scope()`) visits only the
-/// owners in `CLOSURE_YOUNG_OWNERS`; a full pass walks every owner and
-/// rebuilds the log. Both go through [`scan_closure_owner`], so the per-entry
-/// work is identical and only the candidate set differs.
+/// #9754 gave this scanner a minor-scoped variant that visited only the owners
+/// in `CLOSURE_YOUNG_OWNERS`. **#9841 withdrew it**: measured, that walk was
+/// worse than the full walk it replaced on the great majority of minor cycles
+/// (see the comment in the body). Every pass is a full pass again, and it
+/// rebuilds the log for the death prune, which is now the log's only consumer
+/// and does earn it.
 pub fn scan_closure_dynamic_props_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    if visitor.young_scope() {
-        scan_closure_side_tables_young(visitor);
-        return;
-    }
+    // #9841: this table's young walk is MEASURED WORSE THAN THE FULL WALK and
+    // is therefore not taken. On the compiled claude-code TUI (3-turn,
+    // 3300-char, perrymaster, both arms of the FC2 pair) the young-scoped
+    // walk skipped only 2.2-2.7 % of the entries a full walk visits and came
+    // out worse than full on 223 of 273 minor cycles in one arm and 217 of
+    // 272 in the other. The three tables that keep their young walk in the
+    // same capture skip 80-99 %.
+    //
+    // The reason is one predicate: a SCANNER keeps `addr_is_minor_relevant`,
+    // which returns true for `Longlived` BY DESIGN (a longlived object can
+    // point at a young one), so the "relevant" set is close to the whole
+    // table and the log cannot drain — `kept/logged` has median 1.000 here.
+    // Multi-round re-logging then makes the young walk visit MORE than the
+    // full walk it replaces. Same conclusion, same evidence, as the
+    // shape-cache log dropped for skipping 0 % and costing 35 % more.
+    //
+    // The LOG ITSELF STAYS: `prune_dead_closure_side_table_owners_young` uses
+    // it, and a prune's predicate excludes `Longlived` and `Old` both, which
+    // is exactly the asymmetry #9841 is about. This full walk rebuilds the log
+    // from what it finds, so the prune's candidate set stays complete.
     let mut owners: Vec<usize> = Vec::new();
     if let Ok(props) = get_closure_props().lock() {
         owners.extend(props.keys().copied());
@@ -492,56 +518,6 @@ pub fn scan_closure_dynamic_props_roots_mut(visitor: &mut crate::gc::RuntimeRoot
             partial: false,
             logged: table_len,
             visited: table_len,
-            kept: kept_len,
-            table_len,
-        },
-    );
-}
-
-/// The minor-scoped walk: only logged owners. Rounds repeat while visits
-/// trigger owner-move hooks that log new keys (`note_young_closure_owner_rekeyed`),
-/// which is also what closes the pre-#9754 gap where an entry re-keyed
-/// mid-walk was skipped by the mark pass and only rewritten later.
-fn scan_closure_side_tables_young(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    let table_len = {
-        let props = get_closure_props().lock().map(|m| m.len()).unwrap_or(0);
-        let prototypes = get_closure_prototypes()
-            .lock()
-            .map(|m| m.len())
-            .unwrap_or(0);
-        let deleted = get_closure_deleted_keys()
-            .lock()
-            .map(|m| m.len())
-            .unwrap_or(0);
-        (props + prototypes + deleted) as u64
-    };
-    #[cfg(debug_assertions)]
-    debug_assert_closure_young_log_complete();
-    let mut logged = 0u64;
-    let mut visited = 0u64;
-    let mut kept = CLOSURE_YOUNG_OWNERS.with(|log| log.borrow_mut().take_spare());
-    loop {
-        let batch = CLOSURE_YOUNG_OWNERS.with(|log| log.borrow_mut().take_sorted());
-        if batch.is_empty() {
-            break;
-        }
-        logged += batch.len() as u64;
-        for owner in batch {
-            visited += 1;
-            let (new_owner, relevant) = scan_closure_owner(visitor, owner);
-            if relevant {
-                kept.push(new_owner);
-            }
-        }
-    }
-    let kept_len = kept.len() as u64;
-    CLOSURE_YOUNG_OWNERS.with(|log| log.borrow_mut().extend(kept));
-    crate::gc::young_log::note_walk(
-        CLOSURE_YOUNG_LOG_NAME,
-        crate::gc::young_log::YoungLogWalk {
-            partial: true,
-            logged,
-            visited,
             kept: kept_len,
             table_len,
         },
