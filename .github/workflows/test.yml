@@ -502,6 +502,17 @@ jobs:
           python3 scripts/check_llvm_corpus_currency.py --self-test
           python3 scripts/check_llvm_corpus_currency.py
 
+      # #9925. Both native root-dominance corpus generators scraped the
+      # production statepoint pass constant from inprocess.rs, so splitting
+      # that module left the scheduled gate unable to emit either corpus. The
+      # shared reader follows the unique declaration across codegen modules;
+      # keep its parser and the live repository lookup in required lint.
+      - name: Statepoint pass source reader
+        if: ${{ !cancelled() }}
+        run: |
+          python3 scripts/read_statepoint_rewrite_passes.py --self-test
+          python3 scripts/read_statepoint_rewrite_passes.py --check
+
       # #7877, second round. The knob audit above covers env-var names; it says
       # nothing about the paths and numbers the same pages state. Both drifted:
       # the memory-model source map pointed at a `gc.rs` deleted in the module
