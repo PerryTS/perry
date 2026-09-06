@@ -857,7 +857,7 @@ fn eligibility(args: &CompileArgs, project_root: &Path) -> Result<(), String> {
         return Err("nativeinst-diag".to_string());
     }
 
-    // #9846: same reasoning as `opt-report` above, and the reason it is not
+    // #9843: same reasoning as `opt-report` above, and the reason it is not
     // optional. A cached build reuses the finished binary and never lowers
     // HIR, so the segment-view counter would print nothing — and "nothing"
     // reads exactly like "the tier never fired", which is the phantom-green
