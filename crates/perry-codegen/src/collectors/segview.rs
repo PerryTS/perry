@@ -1570,6 +1570,49 @@ fn rewrite_uses_in_expr(e: &mut Expr, seg: u32, cur: u32, fresh: &mut u32, out: 
             }
         }
     }
+    // `Expr::RegExpTest { regex, string: O }` — the node perry folds a test to
+    // when the regex is statically known. The classifier counts it as
+    // `regexp_test_static`, so the rewriter has to answer it too, or the
+    // emission/classification agreement check refuses v2 and the site falls
+    // back to v1. That is exactly what happened on the first version of this
+    // pass: the check caught it, which is why it fell back instead of emitting
+    // a loop that read an unbound segment.
+    if replaced.is_none() {
+        if let Expr::RegExpTest { regex, string } = e {
+            if matches!(string.as_ref(), Expr::LocalGet(id) if *id == seg) {
+                let t_res = *fresh;
+                *fresh += 1;
+                out.decls
+                    .push(let_any(t_res, "__segview_test_res", Expr::Undefined));
+                // The regex here is an ordinary expression with no side effect
+                // worth hoisting (a literal or a binding), so unlike the
+                // generic `recv.test(O)` form it can be repeated in the
+                // decline arm.
+                let view_form = Expr::Sequence(vec![
+                    Expr::LocalSet(
+                        t_res,
+                        Box::new(extern_call(
+                            "js_segments_view_regexp_test",
+                            vec![Expr::LocalGet(cur), regex.as_ref().clone()],
+                        )),
+                    ),
+                    Expr::Conditional {
+                        condition: Box::new(is_undefined_cmp(t_res)),
+                        then_expr: Box::new(Expr::RegExpTest {
+                            regex: regex.clone(),
+                            string: Box::new(extern_call(
+                                "js_segments_view_segment",
+                                vec![Expr::LocalGet(cur)],
+                            )),
+                        }),
+                        else_expr: Box::new(Expr::LocalGet(t_res)),
+                    },
+                ]);
+                replaced = Some(pick(cur, view_form, e_original.clone()));
+                out.regexp_test += 1;
+            }
+        }
+    }
     if let Some(new_e) = replaced {
         *e = new_e;
         return;

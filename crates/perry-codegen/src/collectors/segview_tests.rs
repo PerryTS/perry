@@ -433,9 +433,16 @@ fn v2_answers_every_use_from_the_view_and_materialises_nothing() {
         out.contains("js_segments_view_regexp_test"),
         "the regex test must be answered from the cursor"
     );
+    // NOT `__segview_test_recv` here: `cc_body()` uses `Expr::RegExpTest`, the
+    // folded node for a statically-known regex, which has no opaque receiver to
+    // hoist. The receiver-hoisting property belongs to the generic
+    // `recv.test(O)` form and is pinned by
+    // `v2_evaluates_an_opaque_test_receiver_exactly_once`. Asserting it here
+    // was asserting a property this body does not have.
     assert!(
-        out.contains("__segview_test_recv"),
-        "the opaque receiver must be hoisted so it is evaluated exactly once"
+        out.contains("__segview_test_res"),
+        "the tri-state result must be held in a temporary so the decline arm \
+         can be selected without calling the runtime twice: {out}"
     );
 
     // The decisive property, checked on the tree rather than on its Debug
