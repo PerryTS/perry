@@ -113,7 +113,8 @@ handle-floor | crates/perry-runtime/src/object/delete_rest.rs | 1
 handle-floor | crates/perry-runtime/src/object/descriptor_state.rs | 1
 handle-floor | crates/perry-runtime/src/object/descriptors.rs | 1
 handle-floor | crates/perry-runtime/src/object/field_get_set/accessors.rs | 2
-handle-floor | crates/perry-runtime/src/object/field_get_set/enumeration.rs | 4
+handle-floor | crates/perry-runtime/src/object/field_get_set/enumeration.rs | 3
+handle-floor | crates/perry-runtime/src/object/field_get_set/entries_shape.rs | 1
 handle-floor | crates/perry-runtime/src/object/field_get_set/field_ops.rs | 3
 handle-floor | crates/perry-runtime/src/object/field_get_set/get_field_by_name_tail.rs | 3
 handle-floor | crates/perry-runtime/src/object/field_get_set/has_property.rs | 2
@@ -231,7 +232,8 @@ lone-valid-obj-ptr | crates/perry-runtime/src/object/class_registry/construct.rs
 lone-valid-obj-ptr | crates/perry-runtime/src/object/class_registry/prototype_objects.rs | 1
 lone-valid-obj-ptr | crates/perry-runtime/src/object/descriptors.rs | 1
 lone-valid-obj-ptr | crates/perry-runtime/src/object/field_get_set/accessors.rs | 2
-lone-valid-obj-ptr | crates/perry-runtime/src/object/field_get_set/enumeration.rs | 3
+lone-valid-obj-ptr | crates/perry-runtime/src/object/field_get_set/enumeration.rs | 2
+lone-valid-obj-ptr | crates/perry-runtime/src/object/field_get_set/entries_shape.rs | 1
 lone-valid-obj-ptr | crates/perry-runtime/src/object/field_get_set/field_ops.rs | 1
 lone-valid-obj-ptr | crates/perry-runtime/src/object/field_get_set/get_field_by_name_tail.rs | 1
 lone-valid-obj-ptr | crates/perry-runtime/src/object/field_get_set/ic_miss.rs | 1
