@@ -1,0 +1,23 @@
+/Users/amlug/projects/perry/codex-json-fastpaths-artifacts/integer-piece-worker:        file format mach-o arm64
+
+Disassembly of section __TEXT,__text:
+
+000000010038d3fc <_js_json_parse>:
+10038d3fc:      stp     x29, x30, [sp, #-0x10]!
+10038d400:      mov     x29, sp
+10038d404:      cbz     x0, 0x10038d430 <_js_json_parse+0x34>
+10038d408:      ldr     w1, [x0, #0x4]
+10038d40c:      cbz     w1, 0x10038d430 <_js_json_parse+0x34>
+10038d410:      ldrb    w8, [x0, #0x14]
+10038d414:      orr     w8, w8, #0x20
+10038d418:      cmp     w8, #0x7b
+10038d41c:      b.ne    0x10038d428 <_js_json_parse+0x2c>
+10038d420:      ldp     x29, x30, [sp], #0x10
+10038d424:      b       0x100350108 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow>
+10038d428:      ldp     x29, x30, [sp], #0x10
+10038d42c:      b       0x100350f94 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api18parse_noncontainer>
+10038d430:      adrp    x0, 0x100dd6000 <_anon.c5288d858bd99a3cbbc8257f144f4cf6.679+0x2e>
+10038d434:      add     x0, x0, #0x960
+10038d438:      mov     w1, #0x1c               ; =28
+10038d43c:      bl      0x100351588 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api18throw_syntax_error>
+                ...

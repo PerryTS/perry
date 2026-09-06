@@ -1,0 +1,33 @@
+{
+  "source_commit": "64b5df4b008f746b88b0c99c99ee784fe241df09",
+  "verified_source_hashes": 49,
+  "runtime_tests": 152,
+  "compiled_node_comparisons": 35,
+  "moving_gc_runs": 28,
+  "full_verifications": 152,
+  "full_timing_trials": 456,
+  "full_memory_trials": 432,
+  "full_clean_observations": 32,
+  "full_quiet_gate": true,
+  "paired_trials": 532,
+  "paired_cases": 38,
+  "paired_clean_observations": 34,
+  "paired_quiet_gate": true,
+  "target_inventory": {
+    "cpu": [
+      11,
+      38
+    ],
+    "peak_rss": [
+      58,
+      74
+    ],
+    "retained_rss": [
+      28,
+      36
+    ]
+  },
+  "all_row_acceptance": false,
+  "no_regression_acceptance": false,
+  "gc_production_policy_unchanged_from": "454daac4f8fc667ab4bc85b7b5b36c8bae56ae28"
+}

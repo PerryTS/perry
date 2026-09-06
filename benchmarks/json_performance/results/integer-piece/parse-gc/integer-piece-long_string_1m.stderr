@@ -1,0 +1,24 @@
+[gc-globalthis-bootstrap] elapsed_us=3419 per_object_slot_masks=0 per_object_typed_layouts=0
+[gc-scan-fallback] site=old_reclaim_alloc_point automatic=true count=1
+[gc-proxy-registry] live=0 tombstones=0 slots=0 reclaimed=0 reclaimed_total=0
+[gc] blocks: general=1 (1 live), non_general=35 (3 live, survivors+longlived+old), freed_bytes=31554800 retained_forwarded_stub_bytes=1984 retained_forwarded_stub_objects=8
+[gc-old-free] reusable_bytes=0
+[gc-scan-fallback] site=old_reclaim_alloc_point automatic=true count=2
+[gc-proxy-registry] live=0 tombstones=0 slots=0 reclaimed=0 reclaimed_total=0
+[gc] blocks: general=1 (1 live), non_general=37 (4 live, survivors+longlived+old), freed_bytes=32624368 retained_forwarded_stub_bytes=1984 retained_forwarded_stub_objects=8
+[gc-old-free] reusable_bytes=0
+[gc-scan-fallback] site=old_reclaim_alloc_point automatic=true count=3
+[gc-proxy-registry] live=0 tombstones=0 slots=0 reclaimed=0 reclaimed_total=0
+[gc] blocks: general=1 (1 live), non_general=38 (3 live, survivors+longlived+old), freed_bytes=34903960 retained_forwarded_stub_bytes=1984 retained_forwarded_stub_objects=8
+[gc-old-free] reusable_bytes=0
+[gc-scan-fallback] site=old_reclaim_alloc_point automatic=true count=4
+[gc-proxy-registry] live=0 tombstones=0 slots=0 reclaimed=0 reclaimed_total=0
+[gc] blocks: general=1 (1 live), non_general=38 (4 live, survivors+longlived+old), freed_bytes=32808600 retained_forwarded_stub_bytes=1984 retained_forwarded_stub_objects=8
+[gc-old-free] reusable_bytes=0
+[box-stats] allocs=0 pool_reuses=0 releases=0 resident_cells=0 registry_len=0 i32_registry_len=0 bool_registry_len=0 flushes=6 published=0
+[gc-incremental] cycle_starts=0 steps=0 completions=0 active_at_exit=false mark_barrier_arms=4 mark_barrier_armed_us=4875 skips(reentrant=0 no_trigger=7 start_blocked=0 resume_blocked=0 nursery_cap_deferred=0) safepoints_blocked_by_budgeted=0 safepoints_blocked(in_alloc=0 unsafe_zone=0 root_lock=0) copying_minors=0 loop_polls=1 poll_arm_events=0 poll_armed_at_exit=0 forwarded_stub_recoveries=0
+[gc-idle-reclaim] enabled=true attempts=0 completions=0 productive=0 freed_bytes=0 old_reclaimed_bytes=0 slices=0 yields=0 start_blocked=0 work_capped=0 post_purges=0 backoff_shift=0
+[gc-idle-compact] enabled=true attempts=0 productive=0 released_bytes=0 pause_us_total=0 pause_us_max=0 wake_declined=0 backoff_shift=0
+[gc-arena-right-size] episodes=0 starts=0 released_capacity_bytes=0 low_collections=0 fulls_remaining=0 disarmed=false arena_live=3402160 arena_capacity=8388608
+[gc-step-bounds] step_max_us=0 final_remark_max_us=0 final_remarks=0 weak_records=0 weak_max_records_per_step=0 weak_steps_sliced=0 weak_registry_restarts=0 weak_registry_atomic_finishes=0
+[gc-time] wall_us=43912 step_us=0 remark_us=0 minor_us=0 full_sync_us=0 share_permille=0

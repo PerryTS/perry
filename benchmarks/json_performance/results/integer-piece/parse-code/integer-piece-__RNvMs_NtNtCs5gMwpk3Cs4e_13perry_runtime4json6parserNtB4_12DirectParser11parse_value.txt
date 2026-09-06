@@ -1,0 +1,122 @@
+/Users/amlug/projects/perry/codex-json-fastpaths-artifacts/integer-piece-worker:        file format mach-o arm64
+
+Disassembly of section __TEXT,__text:
+
+000000010030082c <__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser11parse_value>:
+10030082c:      stp     x29, x30, [sp, #-0x10]!
+100300830:      mov     x29, sp
+100300834:      ldp     x2, x8, [x0, #0x30]
+100300838:      cmp     x8, x2
+10030083c:      b.hs    0x100300874 <__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser11parse_value+0x48>
+100300840:      ldr     x9, [x0, #0x28]
+100300844:      mov     x10, #0x2600            ; =9728
+100300848:      movk    x10, #0x1, lsl #32
+10030084c:      ldrb    w11, [x9, x8]
+100300850:      cmp     w11, #0x20
+100300854:      b.hi    0x100300874 <__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser11parse_value+0x48>
+100300858:      lsr     x11, x10, x11
+10030085c:      tbz     w11, #0x0, 0x100300874 <__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser11parse_value+0x48>
+100300860:      add     x8, x8, #0x1
+100300864:      str     x8, [x0, #0x38]
+100300868:      cmp     x2, x8
+10030086c:      b.ne    0x10030084c <__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser11parse_value+0x20>
+100300870:      b       0x1003009b8 <__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser11parse_value+0x18c>
+100300874:      cmp     x8, x2
+100300878:      b.hs    0x1003009b8 <__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser11parse_value+0x18c>
+10030087c:      ldr     x9, [x0, #0x28]
+100300880:      ldrb    w10, [x9, x8]
+100300884:      cmp     w10, #0x65
+100300888:      b.le    0x1003008dc <__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser11parse_value+0xb0>
+10030088c:      cmp     w10, #0x73
+100300890:      b.gt    0x1003008fc <__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser11parse_value+0xd0>
+100300894:      cmp     w10, #0x66
+100300898:      b.eq    0x100300930 <__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser11parse_value+0x104>
+10030089c:      cmp     w10, #0x6e
+1003008a0:      b.ne    0x10030091c <__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser11parse_value+0xf0>
+1003008a4:      add     x1, x8, #0x4
+1003008a8:      cmp     x1, x2
+1003008ac:      b.hi    0x1003009b8 <__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser11parse_value+0x18c>
+1003008b0:      cmn     x8, #0x5
+1003008b4:      b.hi    0x1003009f0 <__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser11parse_value+0x1c4>
+1003008b8:      ldr     w8, [x9, x8]
+1003008bc:      mov     w9, #0x756e             ; =30062
+1003008c0:      movk    w9, #0x6c6c, lsl #16
+1003008c4:      cmp     w8, w9
+1003008c8:      b.ne    0x1003009b8 <__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser11parse_value+0x18c>
+1003008cc:      mov     x8, #0x2                ; =2
+1003008d0:      movk    x8, #0x7ffc, lsl #48
+1003008d4:      str     x1, [x0, #0x38]
+1003008d8:      b       0x1003009c4 <__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser11parse_value+0x198>
+1003008dc:      cmp     w10, #0x22
+1003008e0:      b.eq    0x100300914 <__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser11parse_value+0xe8>
+1003008e4:      cmp     w10, #0x2d
+1003008e8:      b.eq    0x100300928 <__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser11parse_value+0xfc>
+1003008ec:      cmp     w10, #0x5b
+1003008f0:      b.ne    0x10030091c <__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser11parse_value+0xf0>
+1003008f4:      ldp     x29, x30, [sp], #0x10
+1003008f8:      b       0x100300120 <__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser11parse_array>
+1003008fc:      cmp     w10, #0x74
+100300900:      b.eq    0x10030097c <__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser11parse_value+0x150>
+100300904:      cmp     w10, #0x7b
+100300908:      b.ne    0x10030091c <__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser11parse_value+0xf0>
+10030090c:      ldp     x29, x30, [sp], #0x10
+100300910:      b       0x100301e14 <__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser20parse_object_untyped>
+100300914:      ldp     x29, x30, [sp], #0x10
+100300918:      b       0x100301a80 <__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser18parse_string_value>
+10030091c:      sub     w8, w10, #0x30
+100300920:      cmp     w8, #0x9
+100300924:      b.hi    0x1003009b8 <__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser11parse_value+0x18c>
+100300928:      ldp     x29, x30, [sp], #0x10
+10030092c:      b       0x100300a00 <__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser12parse_number>
+100300930:      add     x1, x8, #0x5
+100300934:      cmp     x1, x2
+100300938:      b.hi    0x1003009b8 <__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser11parse_value+0x18c>
+10030093c:      cmn     x8, #0x6
+100300940:      b.hi    0x1003009d0 <__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser11parse_value+0x1a4>
+100300944:      add     x8, x9, x8
+100300948:      ldrb    w9, [x8, #0x4]
+10030094c:      ldr     w8, [x8]
+100300950:      orr     x8, x8, x9, lsl #32
+100300954:      mov     x9, #0x6166             ; =24934
+100300958:      movk    x9, #0x736c, lsl #16
+10030095c:      movk    x9, #0x65, lsl #32
+100300960:      cmp     x8, x9
+100300964:      b.ne    0x1003009b8 <__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser11parse_value+0x18c>
+100300968:      str     x1, [x0, #0x38]
+10030096c:      mov     x8, #0x2                ; =2
+100300970:      movk    x8, #0x7ffc, lsl #48
+100300974:      orr     x8, x8, #0x1
+100300978:      b       0x1003009c4 <__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser11parse_value+0x198>
+10030097c:      add     x1, x8, #0x4
+100300980:      cmp     x1, x2
+100300984:      b.hi    0x1003009b8 <__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser11parse_value+0x18c>
+100300988:      cmn     x8, #0x5
+10030098c:      b.hi    0x1003009e0 <__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser11parse_value+0x1b4>
+100300990:      ldr     w8, [x9, x8]
+100300994:      mov     w9, #0x7274             ; =29300
+100300998:      movk    w9, #0x6575, lsl #16
+10030099c:      cmp     w8, w9
+1003009a0:      b.ne    0x1003009b8 <__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser11parse_value+0x18c>
+1003009a4:      str     x1, [x0, #0x38]
+1003009a8:      mov     x8, #0x2                ; =2
+1003009ac:      movk    x8, #0x7ffc, lsl #48
+1003009b0:      add     x8, x8, #0x2
+1003009b4:      b       0x1003009c4 <__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser11parse_value+0x198>
+1003009b8:      mov     x8, #0x2                ; =2
+1003009bc:      movk    x8, #0x7ffc, lsl #48
+1003009c0:      strb    wzr, [x0, #0x90]
+1003009c4:      mov     x0, x8
+1003009c8:      ldp     x29, x30, [sp], #0x10
+1003009cc:      ret
+1003009d0:      adrp    x3, 0x10109b000 <_anon.c5288d858bd99a3cbbc8257f144f4cf6.100+0x20>
+1003009d4:      add     x3, x3, #0x3a0
+1003009d8:      mov     x0, x8
+1003009dc:      bl      0x100c8738c <__RNvNtNtCsjgY6bXVaRmE_4core5slice5index16slice_index_fail>
+1003009e0:      adrp    x3, 0x10109b000 <_anon.c5288d858bd99a3cbbc8257f144f4cf6.100+0x20>
+1003009e4:      add     x3, x3, #0x388
+1003009e8:      mov     x0, x8
+1003009ec:      bl      0x100c8738c <__RNvNtNtCsjgY6bXVaRmE_4core5slice5index16slice_index_fail>
+1003009f0:      adrp    x3, 0x10109b000 <_anon.c5288d858bd99a3cbbc8257f144f4cf6.100+0x20>
+1003009f4:      add     x3, x3, #0x370
+1003009f8:      mov     x0, x8
+1003009fc:      bl      0x100c8738c <__RNvNtNtCsjgY6bXVaRmE_4core5slice5index16slice_index_fail>

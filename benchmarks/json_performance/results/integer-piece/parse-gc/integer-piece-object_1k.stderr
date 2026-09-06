@@ -1,0 +1,626 @@
+[gc-globalthis-bootstrap] elapsed_us=3155 per_object_slot_masks=0 per_object_typed_layouts=0
+[gc-tenuring] nursery cap object denomination: allocation census seeded mean_object_bytes 72 -> 358 (23423 objects / 8389016 B in from-space; scale 1000 permille, band 16777216 B)
+[gc-copy-minor] eligible=true fallback=none preflight_skipped=true (skips=1 walks=0)
+[gc-copy-minor] eligible=true fallback=none preflight_skipped=true (skips=2 walks=0)
+[gc-tenuring] nursery cap object denomination: mean_surviving_object_bytes 358 -> 70 (scale 972 permille, band 16307453 B)
+[gc-tenuring] survivals 4 -> 3 (occupancy, eden_live_bytes=459720 desired=1019215)
+[gc-copy-minor] ran in_place=false untraced=false untraced_cycles=0 untraced_objects=0 in_place_blocks=0 in_place_dead_bytes=0 sparse_blocks=0 survival_permille=27 copied_objects=6508 copied_bytes=459720 promoted_objects=0 promoted_bytes=0 freed_bytes=16318768 tenuring_survivals=4 eden_live_bytes=459720 trigger=ArenaBytes declared_safepoint=true
+[gc-scanner-profile] copying_minor scanners=91 total_us=2216 total_slots=0
+[gc-scanner-profile]   crate::object::descriptor_state::scan_descriptor_roots_mut us=604 calls=4 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::closure::scan_closure_dynamic_props_roots_mut us=542 calls=4 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::shapes::scan_shape_table_rekey_mut us=424 calls=4 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   transition_cache_mutable_root_scanner us=156 calls=4 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_builtin_closure_metadata_roots_mut us=154 calls=4 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   intern_table_mutable_root_scanner us=91 calls=4 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   exception_mutable_root_scanner us=40 calls=4 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::r#box::scan_box_roots_mut us=35 calls=4 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::symbol::scan_symbol_side_table_roots_mut us=21 calls=4 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::array::scan_template_raw_roots_mut us=12 calls=4 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_class_side_table_roots_mut us=7 calls=4 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_native_callable_export_roots_mut us=7 calls=4 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_object_cache_roots_mut us=5 calls=4 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   concat_memo_mutable_root_scanner us=4 calls=4 slots=0 ptr_roots=0 rewrites=0
+[gc-step] pre_in_use=16778904 post_in_use=460136 sweep_freed=16318768 block_reclaim=16318768 pct=97% step=134217728→268435456
+[gc-safepoint-drain] kind=nursery_minor count=1
+[gc-copy-minor] eligible=true fallback=none preflight_skipped=true (skips=3 walks=0)
+[gc-tenuring] nursery cap object denomination: mean_surviving_object_bytes 70 -> 72 (scale 1000 permille, band 16777216 B)
+[gc-tenuring] survivals 3 -> 1 (lock, eden_live_bytes=1072 desired=1048576)
+[gc-copy-minor] ran in_place=false untraced=false untraced_cycles=0 untraced_objects=0 in_place_blocks=0 in_place_dead_bytes=0 sparse_blocks=0 survival_permille=27 copied_objects=6182 copied_bytes=445976 promoted_objects=0 promoted_bytes=0 freed_bytes=15863264 tenuring_survivals=3 eden_live_bytes=1072 trigger=ArenaBytes declared_safepoint=true
+[gc-scanner-profile] copying_minor scanners=91 total_us=1230 total_slots=0
+[gc-scanner-profile]   crate::object::descriptor_state::scan_descriptor_roots_mut us=468 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::shapes::scan_shape_table_rekey_mut us=283 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::closure::scan_closure_dynamic_props_roots_mut us=245 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_builtin_closure_metadata_roots_mut us=92 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   intern_table_mutable_root_scanner us=49 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   transition_cache_mutable_root_scanner us=41 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::symbol::scan_symbol_side_table_roots_mut us=13 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::array::scan_template_raw_roots_mut us=7 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_native_callable_export_roots_mut us=3 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_object_cache_roots_mut us=2 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   concat_memo_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   shape_cache_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   small_int_cache_mutable_root_scanner us=0 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_class_side_table_roots_mut us=0 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-step] pre_in_use=16309656 post_in_use=446392 sweep_freed=15863264 block_reclaim=15863264 pct=97% step=268435456→536870912
+[gc-safepoint-drain] kind=nursery_minor count=2
+[gc-copy-minor] eligible=true fallback=none preflight_skipped=true (skips=4 walks=0)
+[gc-copy-minor] ran in_place=false untraced=false untraced_cycles=0 untraced_objects=0 in_place_blocks=0 in_place_dead_bytes=0 sparse_blocks=0 survival_permille=26 copied_objects=0 copied_bytes=0 promoted_objects=6182 promoted_bytes=445976 freed_bytes=16332992 tenuring_survivals=1 eden_live_bytes=1072 trigger=ArenaBytes declared_safepoint=true
+[gc-scanner-profile] copying_minor scanners=91 total_us=1459 total_slots=0
+[gc-scanner-profile]   crate::object::descriptor_state::scan_descriptor_roots_mut us=532 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::shapes::scan_shape_table_rekey_mut us=330 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::closure::scan_closure_dynamic_props_roots_mut us=301 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_builtin_closure_metadata_roots_mut us=103 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   intern_table_mutable_root_scanner us=69 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   transition_cache_mutable_root_scanner us=53 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::symbol::scan_symbol_side_table_roots_mut us=16 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::array::scan_template_raw_roots_mut us=11 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_native_callable_export_roots_mut us=4 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_object_cache_roots_mut us=3 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_class_side_table_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   concat_memo_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   promise_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   async_context_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-step] pre_in_use=16779384 post_in_use=446392 sweep_freed=16332992 block_reclaim=16332992 pct=97% step=536870912→1073741824
+[gc-safepoint-drain] kind=nursery_minor count=3
+[gc-copy-minor] eligible=true fallback=none preflight_skipped=true (skips=5 walks=0)
+[gc-tenuring] nursery cap object denomination: mean_surviving_object_bytes 72 -> 536 (scale 1000 permille, band 16777216 B)
+[gc-tenuring] survivals 1 -> 2 (unlock, eden_live_bytes=1072 desired=1048576)
+[gc-copy-minor] ran in_place=false untraced=false untraced_cycles=0 untraced_objects=0 in_place_blocks=0 in_place_dead_bytes=0 sparse_blocks=0 survival_permille=0 copied_objects=0 copied_bytes=0 promoted_objects=2 promoted_bytes=1072 freed_bytes=16777872 tenuring_survivals=1 eden_live_bytes=1072 trigger=ArenaBytes declared_safepoint=true
+[gc-scanner-profile] copying_minor scanners=91 total_us=525 total_slots=0
+[gc-scanner-profile]   crate::closure::scan_closure_dynamic_props_roots_mut us=241 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::shapes::scan_shape_table_rekey_mut us=77 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::descriptor_state::scan_descriptor_roots_mut us=53 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_builtin_closure_metadata_roots_mut us=43 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   transition_cache_mutable_root_scanner us=38 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   intern_table_mutable_root_scanner us=35 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::symbol::scan_symbol_side_table_roots_mut us=7 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_native_callable_export_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   concat_memo_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_object_cache_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   json_parse_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::array::scan_template_raw_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   shape_cache_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   small_int_cache_mutable_root_scanner us=0 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-step] pre_in_use=17225336 post_in_use=447464 sweep_freed=16777872 block_reclaim=16777872 pct=97% step=1073741824→1073741824
+[gc-safepoint-drain] kind=nursery_minor count=4
+[gc-copy-minor] eligible=true fallback=none preflight_skipped=true (skips=6 walks=0)
+[gc-copy-minor] ran in_place=false untraced=false untraced_cycles=0 untraced_objects=0 in_place_blocks=0 in_place_dead_bytes=0 sparse_blocks=0 survival_permille=0 copied_objects=2 copied_bytes=1072 promoted_objects=0 promoted_bytes=0 freed_bytes=16777872 tenuring_survivals=2 eden_live_bytes=1072 trigger=ArenaBytes declared_safepoint=true
+[gc-scanner-profile] copying_minor scanners=91 total_us=415 total_slots=0
+[gc-scanner-profile]   crate::closure::scan_closure_dynamic_props_roots_mut us=175 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::shapes::scan_shape_table_rekey_mut us=56 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::descriptor_state::scan_descriptor_roots_mut us=47 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_builtin_closure_metadata_roots_mut us=42 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   intern_table_mutable_root_scanner us=35 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   transition_cache_mutable_root_scanner us=35 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::symbol::scan_symbol_side_table_roots_mut us=6 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_native_callable_export_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   concat_memo_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::array::scan_template_raw_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   shape_cache_mutable_root_scanner us=0 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_object_cache_roots_mut us=0 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   small_int_cache_mutable_root_scanner us=0 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   json_parse_mutable_root_scanner us=0 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-step] pre_in_use=17226408 post_in_use=448536 sweep_freed=16777872 block_reclaim=16777872 pct=97% step=1073741824→1073741824
+[gc-safepoint-drain] kind=nursery_minor count=5
+[gc-copy-minor] eligible=true fallback=none preflight_skipped=true (skips=7 walks=0)
+[gc-tenuring] survivals 2 -> 3 (occupancy, eden_live_bytes=1072 desired=1048576)
+[gc-copy-minor] ran in_place=false untraced=false untraced_cycles=0 untraced_objects=0 in_place_blocks=0 in_place_dead_bytes=0 sparse_blocks=0 survival_permille=0 copied_objects=2 copied_bytes=1072 promoted_objects=0 promoted_bytes=0 freed_bytes=16777872 tenuring_survivals=2 eden_live_bytes=1072 trigger=ArenaBytes declared_safepoint=true
+[gc-scanner-profile] copying_minor scanners=91 total_us=539 total_slots=0
+[gc-scanner-profile]   crate::closure::scan_closure_dynamic_props_roots_mut us=221 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::shapes::scan_shape_table_rekey_mut us=83 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::descriptor_state::scan_descriptor_roots_mut us=54 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_builtin_closure_metadata_roots_mut us=45 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   transition_cache_mutable_root_scanner us=40 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   intern_table_mutable_root_scanner us=36 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::symbol::scan_symbol_side_table_roots_mut us=9 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::handle_expando::scan_handle_expando_roots_mut us=4 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_native_callable_export_roots_mut us=2 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_object_cache_roots_mut us=2 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::weakref::scan_weak_holders_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::array::scan_template_raw_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_class_side_table_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   promise_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-step] pre_in_use=17226408 post_in_use=448536 sweep_freed=16777872 block_reclaim=16777872 pct=97% step=1073741824→1073741824
+[gc-safepoint-drain] kind=nursery_minor count=6
+[gc-copy-minor] eligible=true fallback=none preflight_skipped=true (skips=8 walks=0)
+[gc-copy-minor] ran in_place=false untraced=false untraced_cycles=0 untraced_objects=0 in_place_blocks=0 in_place_dead_bytes=0 sparse_blocks=0 survival_permille=0 copied_objects=2 copied_bytes=1072 promoted_objects=0 promoted_bytes=0 freed_bytes=16777872 tenuring_survivals=3 eden_live_bytes=1072 trigger=ArenaBytes declared_safepoint=true
+[gc-scanner-profile] copying_minor scanners=91 total_us=487 total_slots=0
+[gc-scanner-profile]   crate::closure::scan_closure_dynamic_props_roots_mut us=198 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::shapes::scan_shape_table_rekey_mut us=77 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::descriptor_state::scan_descriptor_roots_mut us=48 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_builtin_closure_metadata_roots_mut us=42 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   transition_cache_mutable_root_scanner us=41 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   intern_table_mutable_root_scanner us=36 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::symbol::scan_symbol_side_table_roots_mut us=7 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   small_int_cache_mutable_root_scanner us=3 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_native_callable_export_roots_mut us=2 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::array::scan_template_raw_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_object_cache_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   concat_memo_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   shape_cache_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   json_parse_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-step] pre_in_use=17226408 post_in_use=448536 sweep_freed=16777872 block_reclaim=16777872 pct=97% step=1073741824→1073741824
+[gc-safepoint-drain] kind=nursery_minor count=7
+[gc-copy-minor] eligible=true fallback=none preflight_skipped=true (skips=9 walks=0)
+[gc-tenuring] survivals 3 -> 4 (occupancy, eden_live_bytes=1072 desired=1048576)
+[gc-copy-minor] ran in_place=false untraced=false untraced_cycles=0 untraced_objects=0 in_place_blocks=0 in_place_dead_bytes=0 sparse_blocks=0 survival_permille=0 copied_objects=2 copied_bytes=1072 promoted_objects=0 promoted_bytes=0 freed_bytes=16777872 tenuring_survivals=3 eden_live_bytes=1072 trigger=ArenaBytes declared_safepoint=true
+[gc-scanner-profile] copying_minor scanners=91 total_us=475 total_slots=0
+[gc-scanner-profile]   crate::closure::scan_closure_dynamic_props_roots_mut us=199 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::shapes::scan_shape_table_rekey_mut us=72 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::descriptor_state::scan_descriptor_roots_mut us=47 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_builtin_closure_metadata_roots_mut us=41 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   transition_cache_mutable_root_scanner us=38 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   intern_table_mutable_root_scanner us=35 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::symbol::scan_symbol_side_table_roots_mut us=6 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::bun_ffi::scan_bun_ffi_roots_mut us=3 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_native_callable_export_roots_mut us=2 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_object_cache_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   concat_memo_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::array::scan_template_raw_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   shape_cache_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_class_side_table_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-step] pre_in_use=17226408 post_in_use=448536 sweep_freed=16777872 block_reclaim=16777872 pct=97% step=1073741824→1073741824
+[gc-safepoint-drain] kind=nursery_minor count=8
+[gc-copy-minor] eligible=true fallback=none preflight_skipped=true (skips=10 walks=0)
+[gc-copy-minor] ran in_place=false untraced=false untraced_cycles=0 untraced_objects=0 in_place_blocks=0 in_place_dead_bytes=0 sparse_blocks=0 survival_permille=0 copied_objects=2 copied_bytes=1072 promoted_objects=0 promoted_bytes=0 freed_bytes=16777872 tenuring_survivals=4 eden_live_bytes=1072 trigger=ArenaBytes declared_safepoint=true
+[gc-scanner-profile] copying_minor scanners=91 total_us=554 total_slots=0
+[gc-scanner-profile]   crate::closure::scan_closure_dynamic_props_roots_mut us=240 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::shapes::scan_shape_table_rekey_mut us=88 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::descriptor_state::scan_descriptor_roots_mut us=50 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_builtin_closure_metadata_roots_mut us=45 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   transition_cache_mutable_root_scanner us=44 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   intern_table_mutable_root_scanner us=37 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::symbol::scan_symbol_side_table_roots_mut us=8 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_native_callable_export_roots_mut us=2 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::array::scan_template_raw_roots_mut us=2 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_object_cache_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   concat_memo_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_class_side_table_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   promise_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   json_parse_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-step] pre_in_use=17226408 post_in_use=448536 sweep_freed=16777872 block_reclaim=16777872 pct=97% step=1073741824→1073741824
+[gc-safepoint-drain] kind=nursery_minor count=9
+[gc-copy-minor] eligible=true fallback=none preflight_skipped=true (skips=11 walks=0)
+[gc-copy-minor] ran in_place=false untraced=false untraced_cycles=0 untraced_objects=0 in_place_blocks=0 in_place_dead_bytes=0 sparse_blocks=0 survival_permille=0 copied_objects=2 copied_bytes=1072 promoted_objects=0 promoted_bytes=0 freed_bytes=16777872 tenuring_survivals=4 eden_live_bytes=1072 trigger=ArenaBytes declared_safepoint=true
+[gc-scanner-profile] copying_minor scanners=91 total_us=475 total_slots=0
+[gc-scanner-profile]   crate::closure::scan_closure_dynamic_props_roots_mut us=198 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::shapes::scan_shape_table_rekey_mut us=76 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::descriptor_state::scan_descriptor_roots_mut us=47 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_builtin_closure_metadata_roots_mut us=41 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   transition_cache_mutable_root_scanner us=40 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   intern_table_mutable_root_scanner us=35 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::symbol::scan_symbol_side_table_roots_mut us=6 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_native_callable_export_roots_mut us=2 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::array::scan_template_raw_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   concat_memo_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_object_cache_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_class_side_table_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   shape_cache_mutable_root_scanner us=0 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   json_parse_mutable_root_scanner us=0 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-step] pre_in_use=17226408 post_in_use=448536 sweep_freed=16777872 block_reclaim=16777872 pct=97% step=1073741824→1073741824
+[gc-safepoint-drain] kind=nursery_minor count=10
+[gc-copy-minor] eligible=true fallback=none preflight_skipped=true (skips=12 walks=0)
+[gc-copy-minor] ran in_place=false untraced=false untraced_cycles=0 untraced_objects=0 in_place_blocks=0 in_place_dead_bytes=0 sparse_blocks=0 survival_permille=0 copied_objects=2 copied_bytes=1072 promoted_objects=0 promoted_bytes=0 freed_bytes=16777872 tenuring_survivals=4 eden_live_bytes=1072 trigger=ArenaBytes declared_safepoint=true
+[gc-scanner-profile] copying_minor scanners=91 total_us=494 total_slots=0
+[gc-scanner-profile]   crate::closure::scan_closure_dynamic_props_roots_mut us=211 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::shapes::scan_shape_table_rekey_mut us=73 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::descriptor_state::scan_descriptor_roots_mut us=49 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_builtin_closure_metadata_roots_mut us=42 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   transition_cache_mutable_root_scanner us=37 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   intern_table_mutable_root_scanner us=35 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::symbol::scan_symbol_side_table_roots_mut us=8 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_native_callable_export_roots_mut us=2 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_object_cache_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::array::scan_template_raw_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   concat_memo_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_class_side_table_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   promise_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   shape_cache_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-step] pre_in_use=17226408 post_in_use=448536 sweep_freed=16777872 block_reclaim=16777872 pct=97% step=1073741824→1073741824
+[gc-safepoint-drain] kind=nursery_minor count=11
+[gc-copy-minor] eligible=true fallback=none preflight_skipped=true (skips=13 walks=0)
+[gc-copy-minor] ran in_place=false untraced=false untraced_cycles=0 untraced_objects=0 in_place_blocks=0 in_place_dead_bytes=0 sparse_blocks=0 survival_permille=0 copied_objects=2 copied_bytes=1072 promoted_objects=0 promoted_bytes=0 freed_bytes=16777872 tenuring_survivals=4 eden_live_bytes=1072 trigger=ArenaBytes declared_safepoint=true
+[gc-scanner-profile] copying_minor scanners=91 total_us=445 total_slots=0
+[gc-scanner-profile]   crate::closure::scan_closure_dynamic_props_roots_mut us=186 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::shapes::scan_shape_table_rekey_mut us=63 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::descriptor_state::scan_descriptor_roots_mut us=48 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_builtin_closure_metadata_roots_mut us=43 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   transition_cache_mutable_root_scanner us=35 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   intern_table_mutable_root_scanner us=35 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::symbol::scan_symbol_side_table_roots_mut us=6 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   concat_memo_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_native_callable_export_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::array::scan_template_raw_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_object_cache_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   shape_cache_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   json_parse_mutable_root_scanner us=0 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   small_int_cache_mutable_root_scanner us=0 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-step] pre_in_use=17226408 post_in_use=448536 sweep_freed=16777872 block_reclaim=16777872 pct=97% step=1073741824→1073741824
+[gc-safepoint-drain] kind=nursery_minor count=12
+[gc-copy-minor] eligible=true fallback=none preflight_skipped=true (skips=14 walks=0)
+[gc-copy-minor] ran in_place=false untraced=false untraced_cycles=0 untraced_objects=0 in_place_blocks=0 in_place_dead_bytes=0 sparse_blocks=0 survival_permille=0 copied_objects=2 copied_bytes=1072 promoted_objects=0 promoted_bytes=0 freed_bytes=16777872 tenuring_survivals=4 eden_live_bytes=1072 trigger=ArenaBytes declared_safepoint=true
+[gc-scanner-profile] copying_minor scanners=91 total_us=445 total_slots=0
+[gc-scanner-profile]   crate::closure::scan_closure_dynamic_props_roots_mut us=187 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::shapes::scan_shape_table_rekey_mut us=66 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::descriptor_state::scan_descriptor_roots_mut us=46 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_builtin_closure_metadata_roots_mut us=40 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   transition_cache_mutable_root_scanner us=36 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   intern_table_mutable_root_scanner us=35 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::symbol::scan_symbol_side_table_roots_mut us=6 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_native_callable_export_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::array::scan_template_raw_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   concat_memo_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_object_cache_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   shape_cache_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   json_parse_mutable_root_scanner us=0 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   small_int_cache_mutable_root_scanner us=0 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-step] pre_in_use=17226408 post_in_use=448536 sweep_freed=16777872 block_reclaim=16777872 pct=97% step=1073741824→1073741824
+[gc-safepoint-drain] kind=nursery_minor count=13
+[gc-copy-minor] eligible=true fallback=none preflight_skipped=true (skips=15 walks=0)
+[gc-copy-minor] ran in_place=false untraced=false untraced_cycles=0 untraced_objects=0 in_place_blocks=0 in_place_dead_bytes=0 sparse_blocks=0 survival_permille=0 copied_objects=2 copied_bytes=1072 promoted_objects=0 promoted_bytes=0 freed_bytes=16777872 tenuring_survivals=4 eden_live_bytes=1072 trigger=ArenaBytes declared_safepoint=true
+[gc-scanner-profile] copying_minor scanners=91 total_us=581 total_slots=0
+[gc-scanner-profile]   crate::closure::scan_closure_dynamic_props_roots_mut us=253 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::shapes::scan_shape_table_rekey_mut us=89 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   transition_cache_mutable_root_scanner us=51 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::descriptor_state::scan_descriptor_roots_mut us=51 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_builtin_closure_metadata_roots_mut us=46 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   intern_table_mutable_root_scanner us=37 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::symbol::scan_symbol_side_table_roots_mut us=9 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_native_callable_export_roots_mut us=2 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::array::scan_template_raw_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_object_cache_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_class_side_table_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   concat_memo_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   promise_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   json_parse_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-step] pre_in_use=17226408 post_in_use=448536 sweep_freed=16777872 block_reclaim=16777872 pct=97% step=1073741824→1073741824
+[gc-safepoint-drain] kind=nursery_minor count=14
+[gc-copy-minor] eligible=true fallback=none preflight_skipped=true (skips=16 walks=0)
+[gc-copy-minor] ran in_place=false untraced=false untraced_cycles=0 untraced_objects=0 in_place_blocks=0 in_place_dead_bytes=0 sparse_blocks=0 survival_permille=0 copied_objects=2 copied_bytes=1072 promoted_objects=0 promoted_bytes=0 freed_bytes=16777872 tenuring_survivals=4 eden_live_bytes=1072 trigger=ArenaBytes declared_safepoint=true
+[gc-scanner-profile] copying_minor scanners=91 total_us=507 total_slots=0
+[gc-scanner-profile]   crate::closure::scan_closure_dynamic_props_roots_mut us=218 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::shapes::scan_shape_table_rekey_mut us=77 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::descriptor_state::scan_descriptor_roots_mut us=46 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_builtin_closure_metadata_roots_mut us=41 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   transition_cache_mutable_root_scanner us=40 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   intern_table_mutable_root_scanner us=35 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::symbol::scan_symbol_side_table_roots_mut us=7 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_native_callable_export_roots_mut us=2 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_object_cache_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::array::scan_template_raw_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   concat_memo_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_class_side_table_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   promise_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   async_context_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-step] pre_in_use=17226408 post_in_use=448536 sweep_freed=16777872 block_reclaim=16777872 pct=97% step=1073741824→1073741824
+[gc-safepoint-drain] kind=nursery_minor count=15
+[gc-copy-minor] eligible=true fallback=none preflight_skipped=true (skips=17 walks=0)
+[gc-copy-minor] ran in_place=false untraced=false untraced_cycles=0 untraced_objects=0 in_place_blocks=0 in_place_dead_bytes=0 sparse_blocks=0 survival_permille=0 copied_objects=2 copied_bytes=1072 promoted_objects=0 promoted_bytes=0 freed_bytes=16777872 tenuring_survivals=4 eden_live_bytes=1072 trigger=ArenaBytes declared_safepoint=true
+[gc-scanner-profile] copying_minor scanners=91 total_us=395 total_slots=0
+[gc-scanner-profile]   crate::closure::scan_closure_dynamic_props_roots_mut us=166 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::shapes::scan_shape_table_rekey_mut us=53 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::descriptor_state::scan_descriptor_roots_mut us=45 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_builtin_closure_metadata_roots_mut us=40 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   intern_table_mutable_root_scanner us=34 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   transition_cache_mutable_root_scanner us=33 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::symbol::scan_symbol_side_table_roots_mut us=5 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_native_callable_export_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   concat_memo_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::array::scan_template_raw_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   shape_cache_mutable_root_scanner us=0 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   small_int_cache_mutable_root_scanner us=0 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_object_cache_roots_mut us=0 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   json_parse_mutable_root_scanner us=0 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-step] pre_in_use=17226408 post_in_use=448536 sweep_freed=16777872 block_reclaim=16777872 pct=97% step=1073741824→1073741824
+[gc-safepoint-drain] kind=nursery_minor count=16
+[gc-copy-minor] eligible=true fallback=none preflight_skipped=true (skips=18 walks=0)
+[gc-copy-minor] ran in_place=false untraced=false untraced_cycles=0 untraced_objects=0 in_place_blocks=0 in_place_dead_bytes=0 sparse_blocks=0 survival_permille=0 copied_objects=2 copied_bytes=1072 promoted_objects=0 promoted_bytes=0 freed_bytes=16777872 tenuring_survivals=4 eden_live_bytes=1072 trigger=ArenaBytes declared_safepoint=true
+[gc-scanner-profile] copying_minor scanners=91 total_us=413 total_slots=0
+[gc-scanner-profile]   crate::closure::scan_closure_dynamic_props_roots_mut us=174 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::shapes::scan_shape_table_rekey_mut us=58 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::descriptor_state::scan_descriptor_roots_mut us=46 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_builtin_closure_metadata_roots_mut us=40 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   intern_table_mutable_root_scanner us=35 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   transition_cache_mutable_root_scanner us=34 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::symbol::scan_symbol_side_table_roots_mut us=5 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_native_callable_export_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   concat_memo_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::array::scan_template_raw_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_object_cache_roots_mut us=0 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   shape_cache_mutable_root_scanner us=0 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   small_int_cache_mutable_root_scanner us=0 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   json_parse_mutable_root_scanner us=0 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-step] pre_in_use=17226408 post_in_use=448536 sweep_freed=16777872 block_reclaim=16777872 pct=97% step=1073741824→1073741824
+[gc-safepoint-drain] kind=nursery_minor count=17
+[gc-copy-minor] eligible=true fallback=none preflight_skipped=true (skips=19 walks=0)
+[gc-copy-minor] ran in_place=false untraced=false untraced_cycles=0 untraced_objects=0 in_place_blocks=0 in_place_dead_bytes=0 sparse_blocks=0 survival_permille=0 copied_objects=2 copied_bytes=1072 promoted_objects=0 promoted_bytes=0 freed_bytes=16777872 tenuring_survivals=4 eden_live_bytes=1072 trigger=ArenaBytes declared_safepoint=true
+[gc-scanner-profile] copying_minor scanners=91 total_us=386 total_slots=0
+[gc-scanner-profile]   crate::closure::scan_closure_dynamic_props_roots_mut us=161 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::shapes::scan_shape_table_rekey_mut us=49 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::descriptor_state::scan_descriptor_roots_mut us=46 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_builtin_closure_metadata_roots_mut us=40 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   intern_table_mutable_root_scanner us=34 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   transition_cache_mutable_root_scanner us=33 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::symbol::scan_symbol_side_table_roots_mut us=6 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_native_callable_export_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   concat_memo_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::array::scan_template_raw_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_object_cache_roots_mut us=0 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   shape_cache_mutable_root_scanner us=0 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   small_int_cache_mutable_root_scanner us=0 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   json_parse_mutable_root_scanner us=0 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-step] pre_in_use=17226408 post_in_use=448536 sweep_freed=16777872 block_reclaim=16777872 pct=97% step=1073741824→1073741824
+[gc-safepoint-drain] kind=nursery_minor count=18
+[gc-copy-minor] eligible=true fallback=none preflight_skipped=true (skips=20 walks=0)
+[gc-copy-minor] ran in_place=false untraced=false untraced_cycles=0 untraced_objects=0 in_place_blocks=0 in_place_dead_bytes=0 sparse_blocks=0 survival_permille=0 copied_objects=2 copied_bytes=1072 promoted_objects=0 promoted_bytes=0 freed_bytes=16777872 tenuring_survivals=4 eden_live_bytes=1072 trigger=ArenaBytes declared_safepoint=true
+[gc-scanner-profile] copying_minor scanners=91 total_us=508 total_slots=0
+[gc-scanner-profile]   crate::closure::scan_closure_dynamic_props_roots_mut us=212 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::shapes::scan_shape_table_rekey_mut us=75 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::descriptor_state::scan_descriptor_roots_mut us=52 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_builtin_closure_metadata_roots_mut us=43 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   transition_cache_mutable_root_scanner us=38 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   intern_table_mutable_root_scanner us=37 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::symbol::scan_symbol_side_table_roots_mut us=7 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_class_side_table_roots_mut us=4 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::handle_expando::scan_handle_expando_roots_mut us=4 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::node_submodules::scan_node_submodule_singleton_roots_mut us=3 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_native_callable_export_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   concat_memo_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::array::scan_template_raw_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_object_cache_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-step] pre_in_use=17226408 post_in_use=448536 sweep_freed=16777872 block_reclaim=16777872 pct=97% step=1073741824→1073741824
+[gc-safepoint-drain] kind=nursery_minor count=19
+[gc-copy-minor] eligible=true fallback=none preflight_skipped=true (skips=21 walks=0)
+[gc-copy-minor] ran in_place=false untraced=false untraced_cycles=0 untraced_objects=0 in_place_blocks=0 in_place_dead_bytes=0 sparse_blocks=0 survival_permille=0 copied_objects=2 copied_bytes=1072 promoted_objects=0 promoted_bytes=0 freed_bytes=16777872 tenuring_survivals=4 eden_live_bytes=1072 trigger=ArenaBytes declared_safepoint=true
+[gc-scanner-profile] copying_minor scanners=91 total_us=481 total_slots=0
+[gc-scanner-profile]   crate::closure::scan_closure_dynamic_props_roots_mut us=197 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::shapes::scan_shape_table_rekey_mut us=71 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::descriptor_state::scan_descriptor_roots_mut us=47 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_builtin_closure_metadata_roots_mut us=41 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   transition_cache_mutable_root_scanner us=41 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   intern_table_mutable_root_scanner us=35 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::symbol::scan_symbol_side_table_roots_mut us=6 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_class_side_table_roots_mut us=4 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::node_submodules::scan_node_submodule_singleton_roots_mut us=3 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::proxy::scan_proxy_roots_mut us=3 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_native_callable_export_roots_mut us=2 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::array::scan_template_raw_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   concat_memo_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_object_cache_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-step] pre_in_use=17226408 post_in_use=448536 sweep_freed=16777872 block_reclaim=16777872 pct=97% step=1073741824→1073741824
+[gc-safepoint-drain] kind=nursery_minor count=20
+[gc-copy-minor] eligible=true fallback=none preflight_skipped=true (skips=22 walks=0)
+[gc-copy-minor] ran in_place=false untraced=false untraced_cycles=0 untraced_objects=0 in_place_blocks=0 in_place_dead_bytes=0 sparse_blocks=0 survival_permille=0 copied_objects=2 copied_bytes=1072 promoted_objects=0 promoted_bytes=0 freed_bytes=16777872 tenuring_survivals=4 eden_live_bytes=1072 trigger=ArenaBytes declared_safepoint=true
+[gc-scanner-profile] copying_minor scanners=91 total_us=553 total_slots=0
+[gc-scanner-profile]   crate::closure::scan_closure_dynamic_props_roots_mut us=232 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::shapes::scan_shape_table_rekey_mut us=86 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::descriptor_state::scan_descriptor_roots_mut us=55 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_builtin_closure_metadata_roots_mut us=45 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   transition_cache_mutable_root_scanner us=42 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   intern_table_mutable_root_scanner us=37 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::symbol::scan_symbol_side_table_roots_mut us=9 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   async_context_mutable_root_scanner us=2 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_native_callable_export_roots_mut us=2 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::array::scan_template_raw_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_class_side_table_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   promise_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   concat_memo_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::fs::scan_fs_handle_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-step] pre_in_use=17226408 post_in_use=448536 sweep_freed=16777872 block_reclaim=16777872 pct=97% step=1073741824→1073741824
+[gc-safepoint-drain] kind=nursery_minor count=21
+[gc-copy-minor] eligible=true fallback=none preflight_skipped=true (skips=23 walks=0)
+[gc-copy-minor] ran in_place=false untraced=false untraced_cycles=0 untraced_objects=0 in_place_blocks=0 in_place_dead_bytes=0 sparse_blocks=0 survival_permille=0 copied_objects=2 copied_bytes=1072 promoted_objects=0 promoted_bytes=0 freed_bytes=16777872 tenuring_survivals=4 eden_live_bytes=1072 trigger=ArenaBytes declared_safepoint=true
+[gc-scanner-profile] copying_minor scanners=91 total_us=535 total_slots=0
+[gc-scanner-profile]   crate::closure::scan_closure_dynamic_props_roots_mut us=226 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::shapes::scan_shape_table_rekey_mut us=80 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::descriptor_state::scan_descriptor_roots_mut us=56 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_builtin_closure_metadata_roots_mut us=44 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   transition_cache_mutable_root_scanner us=39 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   intern_table_mutable_root_scanner us=35 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::symbol::scan_symbol_side_table_roots_mut us=8 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   timer_mutable_root_scanner us=2 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   async_context_mutable_root_scanner us=2 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_native_callable_export_roots_mut us=2 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::array::scan_template_raw_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_object_cache_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   concat_memo_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   shape_cache_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-step] pre_in_use=17226408 post_in_use=448536 sweep_freed=16777872 block_reclaim=16777872 pct=97% step=1073741824→1073741824
+[gc-safepoint-drain] kind=nursery_minor count=22
+[gc-copy-minor] eligible=true fallback=none preflight_skipped=true (skips=24 walks=0)
+[gc-copy-minor] ran in_place=false untraced=false untraced_cycles=0 untraced_objects=0 in_place_blocks=0 in_place_dead_bytes=0 sparse_blocks=0 survival_permille=0 copied_objects=2 copied_bytes=1072 promoted_objects=0 promoted_bytes=0 freed_bytes=16777872 tenuring_survivals=4 eden_live_bytes=1072 trigger=ArenaBytes declared_safepoint=true
+[gc-scanner-profile] copying_minor scanners=91 total_us=540 total_slots=0
+[gc-scanner-profile]   crate::closure::scan_closure_dynamic_props_roots_mut us=218 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::shapes::scan_shape_table_rekey_mut us=106 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::descriptor_state::scan_descriptor_roots_mut us=49 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_builtin_closure_metadata_roots_mut us=43 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   transition_cache_mutable_root_scanner us=39 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   intern_table_mutable_root_scanner us=35 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::symbol::scan_symbol_side_table_roots_mut us=8 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_native_callable_export_roots_mut us=2 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_object_cache_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::array::scan_template_raw_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   concat_memo_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   promise_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_class_side_table_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::fs::scan_fs_watcher_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-step] pre_in_use=17226408 post_in_use=448536 sweep_freed=16777872 block_reclaim=16777872 pct=97% step=1073741824→1073741824
+[gc-safepoint-drain] kind=nursery_minor count=23
+[gc-copy-minor] eligible=true fallback=none preflight_skipped=true (skips=25 walks=0)
+[gc-copy-minor] ran in_place=false untraced=false untraced_cycles=0 untraced_objects=0 in_place_blocks=0 in_place_dead_bytes=0 sparse_blocks=0 survival_permille=0 copied_objects=2 copied_bytes=1072 promoted_objects=0 promoted_bytes=0 freed_bytes=16777872 tenuring_survivals=4 eden_live_bytes=1072 trigger=ArenaBytes declared_safepoint=true
+[gc-scanner-profile] copying_minor scanners=91 total_us=471 total_slots=0
+[gc-scanner-profile]   crate::closure::scan_closure_dynamic_props_roots_mut us=199 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::shapes::scan_shape_table_rekey_mut us=69 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::descriptor_state::scan_descriptor_roots_mut us=48 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_builtin_closure_metadata_roots_mut us=42 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   transition_cache_mutable_root_scanner us=40 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   intern_table_mutable_root_scanner us=35 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::symbol::scan_symbol_side_table_roots_mut us=6 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   promise_mutable_root_scanner us=5 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_native_callable_export_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   concat_memo_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::array::scan_template_raw_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_object_cache_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   shape_cache_mutable_root_scanner us=0 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   json_parse_mutable_root_scanner us=0 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-step] pre_in_use=17226408 post_in_use=448536 sweep_freed=16777872 block_reclaim=16777872 pct=97% step=1073741824→1073741824
+[gc-safepoint-drain] kind=nursery_minor count=24
+[gc-copy-minor] eligible=true fallback=none preflight_skipped=true (skips=26 walks=0)
+[gc-copy-minor] ran in_place=false untraced=false untraced_cycles=0 untraced_objects=0 in_place_blocks=0 in_place_dead_bytes=0 sparse_blocks=0 survival_permille=0 copied_objects=2 copied_bytes=1072 promoted_objects=0 promoted_bytes=0 freed_bytes=16777872 tenuring_survivals=4 eden_live_bytes=1072 trigger=ArenaBytes declared_safepoint=true
+[gc-scanner-profile] copying_minor scanners=91 total_us=482 total_slots=0
+[gc-scanner-profile]   crate::closure::scan_closure_dynamic_props_roots_mut us=199 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::shapes::scan_shape_table_rekey_mut us=74 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::descriptor_state::scan_descriptor_roots_mut us=49 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_builtin_closure_metadata_roots_mut us=43 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   transition_cache_mutable_root_scanner us=40 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   intern_table_mutable_root_scanner us=35 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::symbol::scan_symbol_side_table_roots_mut us=7 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_native_callable_export_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::array::scan_template_raw_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_object_cache_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   concat_memo_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   promise_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   json_parse_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   small_int_cache_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-step] pre_in_use=17226408 post_in_use=448536 sweep_freed=16777872 block_reclaim=16777872 pct=97% step=1073741824→1073741824
+[gc-safepoint-drain] kind=nursery_minor count=25
+[gc-copy-minor] eligible=true fallback=none preflight_skipped=true (skips=27 walks=0)
+[gc-copy-minor] ran in_place=false untraced=false untraced_cycles=0 untraced_objects=0 in_place_blocks=0 in_place_dead_bytes=0 sparse_blocks=0 survival_permille=0 copied_objects=2 copied_bytes=1072 promoted_objects=0 promoted_bytes=0 freed_bytes=16777872 tenuring_survivals=4 eden_live_bytes=1072 trigger=ArenaBytes declared_safepoint=true
+[gc-scanner-profile] copying_minor scanners=91 total_us=458 total_slots=0
+[gc-scanner-profile]   crate::closure::scan_closure_dynamic_props_roots_mut us=191 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::shapes::scan_shape_table_rekey_mut us=70 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::descriptor_state::scan_descriptor_roots_mut us=47 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_builtin_closure_metadata_roots_mut us=42 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   transition_cache_mutable_root_scanner us=37 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   intern_table_mutable_root_scanner us=35 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::symbol::scan_symbol_side_table_roots_mut us=6 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_native_callable_export_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   concat_memo_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::array::scan_template_raw_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_object_cache_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_class_side_table_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   small_int_cache_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   shape_cache_mutable_root_scanner us=0 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-step] pre_in_use=17226408 post_in_use=448536 sweep_freed=16777872 block_reclaim=16777872 pct=97% step=1073741824→1073741824
+[gc-safepoint-drain] kind=nursery_minor count=26
+[gc-copy-minor] eligible=true fallback=none preflight_skipped=true (skips=28 walks=0)
+[gc-copy-minor] ran in_place=false untraced=false untraced_cycles=0 untraced_objects=0 in_place_blocks=0 in_place_dead_bytes=0 sparse_blocks=0 survival_permille=0 copied_objects=2 copied_bytes=1072 promoted_objects=0 promoted_bytes=0 freed_bytes=16777872 tenuring_survivals=4 eden_live_bytes=1072 trigger=ArenaBytes declared_safepoint=true
+[gc-scanner-profile] copying_minor scanners=91 total_us=389 total_slots=0
+[gc-scanner-profile]   crate::closure::scan_closure_dynamic_props_roots_mut us=165 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::shapes::scan_shape_table_rekey_mut us=50 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::descriptor_state::scan_descriptor_roots_mut us=45 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_builtin_closure_metadata_roots_mut us=40 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   intern_table_mutable_root_scanner us=35 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   transition_cache_mutable_root_scanner us=33 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::symbol::scan_symbol_side_table_roots_mut us=5 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   concat_memo_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_native_callable_export_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::array::scan_template_raw_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   shape_cache_mutable_root_scanner us=0 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_object_cache_roots_mut us=0 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   small_int_cache_mutable_root_scanner us=0 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   json_parse_mutable_root_scanner us=0 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-step] pre_in_use=17226408 post_in_use=448536 sweep_freed=16777872 block_reclaim=16777872 pct=97% step=1073741824→1073741824
+[gc-safepoint-drain] kind=nursery_minor count=27
+[gc-copy-minor] eligible=true fallback=none preflight_skipped=true (skips=29 walks=0)
+[gc-copy-minor] ran in_place=false untraced=false untraced_cycles=0 untraced_objects=0 in_place_blocks=0 in_place_dead_bytes=0 sparse_blocks=0 survival_permille=0 copied_objects=2 copied_bytes=1072 promoted_objects=0 promoted_bytes=0 freed_bytes=16777872 tenuring_survivals=4 eden_live_bytes=1072 trigger=ArenaBytes declared_safepoint=true
+[gc-scanner-profile] copying_minor scanners=91 total_us=571 total_slots=0
+[gc-scanner-profile]   crate::closure::scan_closure_dynamic_props_roots_mut us=247 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::shapes::scan_shape_table_rekey_mut us=90 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::descriptor_state::scan_descriptor_roots_mut us=52 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   transition_cache_mutable_root_scanner us=51 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_builtin_closure_metadata_roots_mut us=43 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   intern_table_mutable_root_scanner us=35 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::symbol::scan_symbol_side_table_roots_mut us=8 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_native_callable_export_roots_mut us=2 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_object_cache_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::array::scan_template_raw_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   concat_memo_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_class_side_table_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   json_parse_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::fs::scan_fs_handle_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-step] pre_in_use=17226408 post_in_use=448536 sweep_freed=16777872 block_reclaim=16777872 pct=97% step=1073741824→1073741824
+[gc-safepoint-drain] kind=nursery_minor count=28
+[gc-copy-minor] eligible=true fallback=none preflight_skipped=true (skips=30 walks=0)
+[gc-copy-minor] ran in_place=false untraced=false untraced_cycles=0 untraced_objects=0 in_place_blocks=0 in_place_dead_bytes=0 sparse_blocks=0 survival_permille=0 copied_objects=2 copied_bytes=1072 promoted_objects=0 promoted_bytes=0 freed_bytes=16777872 tenuring_survivals=4 eden_live_bytes=1072 trigger=ArenaBytes declared_safepoint=true
+[gc-scanner-profile] copying_minor scanners=91 total_us=435 total_slots=0
+[gc-scanner-profile]   crate::closure::scan_closure_dynamic_props_roots_mut us=183 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::shapes::scan_shape_table_rekey_mut us=61 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::descriptor_state::scan_descriptor_roots_mut us=48 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_builtin_closure_metadata_roots_mut us=42 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   intern_table_mutable_root_scanner us=35 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   transition_cache_mutable_root_scanner us=35 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::symbol::scan_symbol_side_table_roots_mut us=6 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_native_callable_export_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   concat_memo_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::array::scan_template_raw_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   shape_cache_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_object_cache_roots_mut us=0 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   small_int_cache_mutable_root_scanner us=0 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   json_parse_mutable_root_scanner us=0 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-step] pre_in_use=17226408 post_in_use=448536 sweep_freed=16777872 block_reclaim=16777872 pct=97% step=1073741824→1073741824
+[gc-safepoint-drain] kind=nursery_minor count=29
+[gc-copy-minor] eligible=true fallback=none preflight_skipped=true (skips=31 walks=0)
+[gc-copy-minor] ran in_place=false untraced=false untraced_cycles=0 untraced_objects=0 in_place_blocks=0 in_place_dead_bytes=0 sparse_blocks=0 survival_permille=0 copied_objects=2 copied_bytes=1072 promoted_objects=0 promoted_bytes=0 freed_bytes=16777872 tenuring_survivals=4 eden_live_bytes=1072 trigger=ArenaBytes declared_safepoint=true
+[gc-scanner-profile] copying_minor scanners=91 total_us=451 total_slots=0
+[gc-scanner-profile]   crate::closure::scan_closure_dynamic_props_roots_mut us=189 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::shapes::scan_shape_table_rekey_mut us=67 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::descriptor_state::scan_descriptor_roots_mut us=46 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_builtin_closure_metadata_roots_mut us=40 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   transition_cache_mutable_root_scanner us=37 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   intern_table_mutable_root_scanner us=35 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::symbol::scan_symbol_side_table_roots_mut us=6 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   concat_memo_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::array::scan_template_raw_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_native_callable_export_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_object_cache_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   shape_cache_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_class_side_table_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   promise_mutable_root_scanner us=0 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-step] pre_in_use=17226408 post_in_use=448536 sweep_freed=16777872 block_reclaim=16777872 pct=97% step=1073741824→1073741824
+[gc-safepoint-drain] kind=nursery_minor count=30
+[gc-copy-minor] eligible=true fallback=none preflight_skipped=true (skips=32 walks=0)
+[gc-copy-minor] ran in_place=false untraced=false untraced_cycles=0 untraced_objects=0 in_place_blocks=0 in_place_dead_bytes=0 sparse_blocks=0 survival_permille=0 copied_objects=2 copied_bytes=1072 promoted_objects=0 promoted_bytes=0 freed_bytes=16777872 tenuring_survivals=4 eden_live_bytes=1072 trigger=ArenaBytes declared_safepoint=true
+[gc-scanner-profile] copying_minor scanners=91 total_us=450 total_slots=0
+[gc-scanner-profile]   crate::closure::scan_closure_dynamic_props_roots_mut us=188 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::shapes::scan_shape_table_rekey_mut us=72 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::descriptor_state::scan_descriptor_roots_mut us=45 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_builtin_closure_metadata_roots_mut us=40 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   transition_cache_mutable_root_scanner us=37 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   intern_table_mutable_root_scanner us=35 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::symbol::scan_symbol_side_table_roots_mut us=6 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::array::scan_template_raw_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   concat_memo_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_native_callable_export_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_object_cache_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   small_int_cache_mutable_root_scanner us=0 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   shape_cache_mutable_root_scanner us=0 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_class_side_table_roots_mut us=0 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-step] pre_in_use=17226408 post_in_use=448536 sweep_freed=16777872 block_reclaim=16777872 pct=97% step=1073741824→1073741824
+[gc-safepoint-drain] kind=nursery_minor count=31
+[gc-copy-minor] eligible=true fallback=none preflight_skipped=true (skips=33 walks=0)
+[gc-copy-minor] ran in_place=false untraced=false untraced_cycles=0 untraced_objects=0 in_place_blocks=0 in_place_dead_bytes=0 sparse_blocks=0 survival_permille=0 copied_objects=2 copied_bytes=1072 promoted_objects=0 promoted_bytes=0 freed_bytes=16777872 tenuring_survivals=4 eden_live_bytes=1072 trigger=ArenaBytes declared_safepoint=true
+[gc-scanner-profile] copying_minor scanners=91 total_us=475 total_slots=0
+[gc-scanner-profile]   crate::closure::scan_closure_dynamic_props_roots_mut us=204 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::shapes::scan_shape_table_rekey_mut us=68 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::descriptor_state::scan_descriptor_roots_mut us=53 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_builtin_closure_metadata_roots_mut us=48 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   intern_table_mutable_root_scanner us=40 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   transition_cache_mutable_root_scanner us=33 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::symbol::scan_symbol_side_table_roots_mut us=9 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::array::scan_template_raw_roots_mut us=2 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   shape_cache_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   concat_memo_mutable_root_scanner us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::object::scan_native_callable_export_roots_mut us=1 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::r#box::scan_box_roots_mut us=0 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   small_int_cache_mutable_root_scanner us=0 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-scanner-profile]   crate::proxy::scan_proxy_roots_mut us=0 calls=2 slots=0 ptr_roots=0 rewrites=0
+[gc-step] pre_in_use=17226408 post_in_use=448536 sweep_freed=16777872 block_reclaim=16777872 pct=97% step=1073741824→1073741824
+[gc-safepoint-drain] kind=nursery_minor count=32
+[box-stats] allocs=0 pool_reuses=0 releases=0 resident_cells=0 registry_len=0 i32_registry_len=0 bool_registry_len=0 flushes=6 published=0
+[gc-incremental] cycle_starts=0 steps=0 completions=0 active_at_exit=false mark_barrier_arms=0 mark_barrier_armed_us=0 skips(reentrant=0 no_trigger=7 start_blocked=0 resume_blocked=0 nursery_cap_deferred=0) safepoints_blocked_by_budgeted=0 safepoints_blocked(in_alloc=0 unsafe_zone=0 root_lock=0) copying_minors=32 loop_polls=33 poll_arm_events=32 poll_armed_at_exit=0 forwarded_stub_recoveries=0
+[gc-idle-reclaim] enabled=true attempts=0 completions=0 productive=0 freed_bytes=0 old_reclaimed_bytes=0 slices=0 yields=0 start_blocked=0 work_capped=0 post_purges=0 backoff_shift=0
+[gc-idle-compact] enabled=true attempts=0 productive=0 released_bytes=0 pause_us_total=0 pause_us_max=0 wake_declined=0 backoff_shift=0
+[gc-arena-right-size] episodes=0 starts=0 released_capacity_bytes=0 low_collections=0 fulls_remaining=0 disarmed=false arena_live=448536 arena_capacity=22020096
+[gc-step-bounds] step_max_us=0 final_remark_max_us=0 final_remarks=0 weak_records=0 weak_max_records_per_step=0 weak_steps_sliced=0 weak_registry_restarts=0 weak_registry_atomic_finishes=0
+[gc-time] wall_us=329317 step_us=0 remark_us=0 minor_us=35505 full_sync_us=0 share_permille=107

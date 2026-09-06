@@ -1,0 +1,3 @@
+Sampling process 16058 for 3 seconds with 1 millisecond of run time between samples
+Sampling completed, processing symbols...
+Sample analysis of process 16058 written to file /Users/amlug/projects/perry/codex-json-fastpaths-artifacts/integer-piece-small-profile/sample.txt

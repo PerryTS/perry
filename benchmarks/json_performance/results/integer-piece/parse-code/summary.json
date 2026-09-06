@@ -1,0 +1,47 @@
+[
+  {
+    "symbol": "_js_json_parse",
+    "instruction_counts": {
+      "record-output": 17,
+      "integer-piece": 17
+    },
+    "mnemonic_stream_equal": true,
+    "note": "Counts/mnemonics only; not operands, memory access costs, cache behavior or GC work."
+  },
+  {
+    "symbol": "__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow",
+    "instruction_counts": {
+      "record-output": 489,
+      "integer-piece": 489
+    },
+    "mnemonic_stream_equal": true,
+    "note": "Counts/mnemonics only; not operands, memory access costs, cache behavior or GC work."
+  },
+  {
+    "symbol": "__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api18parse_noncontainer",
+    "instruction_counts": {
+      "record-output": 365,
+      "integer-piece": 365
+    },
+    "mnemonic_stream_equal": true,
+    "note": "Counts/mnemonics only; not operands, memory access costs, cache behavior or GC work."
+  },
+  {
+    "symbol": "__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser11parse_value",
+    "instruction_counts": {
+      "record-output": 117,
+      "integer-piece": 117
+    },
+    "mnemonic_stream_equal": true,
+    "note": "Counts/mnemonics only; not operands, memory access costs, cache behavior or GC work."
+  },
+  {
+    "symbol": "__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser20parse_object_untyped",
+    "instruction_counts": {
+      "record-output": 1228,
+      "integer-piece": 1228
+    },
+    "mnemonic_stream_equal": true,
+    "note": "Counts/mnemonics only; not operands, memory access costs, cache behavior or GC work."
+  }
+]

@@ -1,0 +1,122 @@
+/Users/amlug/projects/perry/codex-json-fastpaths-artifacts/record-output-worker:        file format mach-o arm64
+
+Disassembly of section __TEXT,__text:
+
+00000001002201ec <__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser11parse_value>:
+1002201ec:      stp     x29, x30, [sp, #-0x10]!
+1002201f0:      mov     x29, sp
+1002201f4:      ldp     x2, x8, [x0, #0x30]
+1002201f8:      cmp     x8, x2
+1002201fc:      b.hs    0x100220234 <__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser11parse_value+0x48>
+100220200:      ldr     x9, [x0, #0x28]
+100220204:      mov     x10, #0x2600            ; =9728
+100220208:      movk    x10, #0x1, lsl #32
+10022020c:      ldrb    w11, [x9, x8]
+100220210:      cmp     w11, #0x20
+100220214:      b.hi    0x100220234 <__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser11parse_value+0x48>
+100220218:      lsr     x11, x10, x11
+10022021c:      tbz     w11, #0x0, 0x100220234 <__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser11parse_value+0x48>
+100220220:      add     x8, x8, #0x1
+100220224:      str     x8, [x0, #0x38]
+100220228:      cmp     x2, x8
+10022022c:      b.ne    0x10022020c <__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser11parse_value+0x20>
+100220230:      b       0x100220378 <__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser11parse_value+0x18c>
+100220234:      cmp     x8, x2
+100220238:      b.hs    0x100220378 <__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser11parse_value+0x18c>
+10022023c:      ldr     x9, [x0, #0x28]
+100220240:      ldrb    w10, [x9, x8]
+100220244:      cmp     w10, #0x65
+100220248:      b.le    0x10022029c <__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser11parse_value+0xb0>
+10022024c:      cmp     w10, #0x73
+100220250:      b.gt    0x1002202bc <__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser11parse_value+0xd0>
+100220254:      cmp     w10, #0x66
+100220258:      b.eq    0x1002202f0 <__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser11parse_value+0x104>
+10022025c:      cmp     w10, #0x6e
+100220260:      b.ne    0x1002202dc <__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser11parse_value+0xf0>
+100220264:      add     x1, x8, #0x4
+100220268:      cmp     x1, x2
+10022026c:      b.hi    0x100220378 <__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser11parse_value+0x18c>
+100220270:      cmn     x8, #0x5
+100220274:      b.hi    0x1002203b0 <__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser11parse_value+0x1c4>
+100220278:      ldr     w8, [x9, x8]
+10022027c:      mov     w9, #0x756e             ; =30062
+100220280:      movk    w9, #0x6c6c, lsl #16
+100220284:      cmp     w8, w9
+100220288:      b.ne    0x100220378 <__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser11parse_value+0x18c>
+10022028c:      mov     x8, #0x2                ; =2
+100220290:      movk    x8, #0x7ffc, lsl #48
+100220294:      str     x1, [x0, #0x38]
+100220298:      b       0x100220384 <__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser11parse_value+0x198>
+10022029c:      cmp     w10, #0x22
+1002202a0:      b.eq    0x1002202d4 <__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser11parse_value+0xe8>
+1002202a4:      cmp     w10, #0x2d
+1002202a8:      b.eq    0x1002202e8 <__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser11parse_value+0xfc>
+1002202ac:      cmp     w10, #0x5b
+1002202b0:      b.ne    0x1002202dc <__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser11parse_value+0xf0>
+1002202b4:      ldp     x29, x30, [sp], #0x10
+1002202b8:      b       0x10021fae0 <__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser11parse_array>
+1002202bc:      cmp     w10, #0x74
+1002202c0:      b.eq    0x10022033c <__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser11parse_value+0x150>
+1002202c4:      cmp     w10, #0x7b
+1002202c8:      b.ne    0x1002202dc <__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser11parse_value+0xf0>
+1002202cc:      ldp     x29, x30, [sp], #0x10
+1002202d0:      b       0x1002217d4 <__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser20parse_object_untyped>
+1002202d4:      ldp     x29, x30, [sp], #0x10
+1002202d8:      b       0x100221440 <__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser18parse_string_value>
+1002202dc:      sub     w8, w10, #0x30
+1002202e0:      cmp     w8, #0x9
+1002202e4:      b.hi    0x100220378 <__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser11parse_value+0x18c>
+1002202e8:      ldp     x29, x30, [sp], #0x10
+1002202ec:      b       0x1002203c0 <__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser12parse_number>
+1002202f0:      add     x1, x8, #0x5
+1002202f4:      cmp     x1, x2
+1002202f8:      b.hi    0x100220378 <__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser11parse_value+0x18c>
+1002202fc:      cmn     x8, #0x6
+100220300:      b.hi    0x100220390 <__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser11parse_value+0x1a4>
+100220304:      add     x8, x9, x8
+100220308:      ldrb    w9, [x8, #0x4]
+10022030c:      ldr     w8, [x8]
+100220310:      orr     x8, x8, x9, lsl #32
+100220314:      mov     x9, #0x6166             ; =24934
+100220318:      movk    x9, #0x736c, lsl #16
+10022031c:      movk    x9, #0x65, lsl #32
+100220320:      cmp     x8, x9
+100220324:      b.ne    0x100220378 <__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser11parse_value+0x18c>
+100220328:      str     x1, [x0, #0x38]
+10022032c:      mov     x8, #0x2                ; =2
+100220330:      movk    x8, #0x7ffc, lsl #48
+100220334:      orr     x8, x8, #0x1
+100220338:      b       0x100220384 <__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser11parse_value+0x198>
+10022033c:      add     x1, x8, #0x4
+100220340:      cmp     x1, x2
+100220344:      b.hi    0x100220378 <__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser11parse_value+0x18c>
+100220348:      cmn     x8, #0x5
+10022034c:      b.hi    0x1002203a0 <__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser11parse_value+0x1b4>
+100220350:      ldr     w8, [x9, x8]
+100220354:      mov     w9, #0x7274             ; =29300
+100220358:      movk    w9, #0x6575, lsl #16
+10022035c:      cmp     w8, w9
+100220360:      b.ne    0x100220378 <__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser11parse_value+0x18c>
+100220364:      str     x1, [x0, #0x38]
+100220368:      mov     x8, #0x2                ; =2
+10022036c:      movk    x8, #0x7ffc, lsl #48
+100220370:      add     x8, x8, #0x2
+100220374:      b       0x100220384 <__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser11parse_value+0x198>
+100220378:      mov     x8, #0x2                ; =2
+10022037c:      movk    x8, #0x7ffc, lsl #48
+100220380:      strb    wzr, [x0, #0x90]
+100220384:      mov     x0, x8
+100220388:      ldp     x29, x30, [sp], #0x10
+10022038c:      ret
+100220390:      adrp    x3, 0x101099000 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime6object11class_image13CURRENT_IMAGE+0x138>
+100220394:      add     x3, x3, #0xaf0
+100220398:      mov     x0, x8
+10022039c:      bl      0x100c854cc <__RNvNtNtCsjgY6bXVaRmE_4core5slice5index16slice_index_fail>
+1002203a0:      adrp    x3, 0x101099000 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime6object11class_image13CURRENT_IMAGE+0x138>
+1002203a4:      add     x3, x3, #0xad8
+1002203a8:      mov     x0, x8
+1002203ac:      bl      0x100c854cc <__RNvNtNtCsjgY6bXVaRmE_4core5slice5index16slice_index_fail>
+1002203b0:      adrp    x3, 0x101099000 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime6object11class_image13CURRENT_IMAGE+0x138>
+1002203b4:      add     x3, x3, #0xac0
+1002203b8:      mov     x0, x8
+1002203bc:      bl      0x100c854cc <__RNvNtNtCsjgY6bXVaRmE_4core5slice5index16slice_index_fail>

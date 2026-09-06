@@ -1,0 +1,21 @@
+{
+  "purpose": "Local sampling diagnostic only, not accepted CPU/RSS",
+  "command": [
+    "/Users/amlug/projects/perry/codex-json-fastpaths-artifacts/integer-piece-worker",
+    "/Users/amlug/projects/perry/codex-json-fastpaths/benchmarks/json_performance/.work/fixtures/small_record.json",
+    "stringify",
+    "20000000",
+    "5000"
+  ],
+  "sample_command": [
+    "sample",
+    "16058",
+    "3",
+    "1",
+    "-file",
+    "/Users/amlug/projects/perry/codex-json-fastpaths-artifacts/integer-piece-small-profile/sample.txt"
+  ],
+  "worker_sha256": "a216728f799a152bdbcabeec883decd346c545da68a66b1258e2e1262c80da0b",
+  "worker_exit": 0,
+  "sample_exit": 0
+}

@@ -1,0 +1,146 @@
+[
+  {
+    "arm": "record-output",
+    "fixture": "tiny_object",
+    "calls": 2000000,
+    "command": [
+      "/Users/amlug/projects/perry/codex-json-fastpaths-artifacts/record-output-worker",
+      "/Users/amlug/projects/perry/codex-json-fastpaths/benchmarks/json_performance/.work/fixtures/tiny_object.json",
+      "parse",
+      "2000000",
+      "5000"
+    ],
+    "worker_sha256": "182e1d5b43f8ba7e1b0ee791f8d5d88baa9777fc4c37d4365c314483628f1410",
+    "exit": 0,
+    "old_scan_count": 0,
+    "copying_minors": 6,
+    "arena_live": 444008,
+    "arena_capacity": 20971520
+  },
+  {
+    "arm": "integer-piece",
+    "fixture": "tiny_object",
+    "calls": 2000000,
+    "command": [
+      "/Users/amlug/projects/perry/codex-json-fastpaths-artifacts/integer-piece-worker",
+      "/Users/amlug/projects/perry/codex-json-fastpaths/benchmarks/json_performance/.work/fixtures/tiny_object.json",
+      "parse",
+      "2000000",
+      "5000"
+    ],
+    "worker_sha256": "a216728f799a152bdbcabeec883decd346c545da68a66b1258e2e1262c80da0b",
+    "exit": 0,
+    "old_scan_count": 0,
+    "copying_minors": 6,
+    "arena_live": 444008,
+    "arena_capacity": 20971520
+  },
+  {
+    "arm": "record-output",
+    "fixture": "small_record",
+    "calls": 500000,
+    "command": [
+      "/Users/amlug/projects/perry/codex-json-fastpaths-artifacts/record-output-worker",
+      "/Users/amlug/projects/perry/codex-json-fastpaths/benchmarks/json_performance/.work/fixtures/small_record.json",
+      "parse",
+      "500000",
+      "5000"
+    ],
+    "worker_sha256": "182e1d5b43f8ba7e1b0ee791f8d5d88baa9777fc4c37d4365c314483628f1410",
+    "exit": 0,
+    "old_scan_count": 0,
+    "copying_minors": 9,
+    "arena_live": 445128,
+    "arena_capacity": 22020096
+  },
+  {
+    "arm": "integer-piece",
+    "fixture": "small_record",
+    "calls": 500000,
+    "command": [
+      "/Users/amlug/projects/perry/codex-json-fastpaths-artifacts/integer-piece-worker",
+      "/Users/amlug/projects/perry/codex-json-fastpaths/benchmarks/json_performance/.work/fixtures/small_record.json",
+      "parse",
+      "500000",
+      "5000"
+    ],
+    "worker_sha256": "a216728f799a152bdbcabeec883decd346c545da68a66b1258e2e1262c80da0b",
+    "exit": 0,
+    "old_scan_count": 0,
+    "copying_minors": 9,
+    "arena_live": 445128,
+    "arena_capacity": 22020096
+  },
+  {
+    "arm": "record-output",
+    "fixture": "object_1k",
+    "calls": 500000,
+    "command": [
+      "/Users/amlug/projects/perry/codex-json-fastpaths-artifacts/record-output-worker",
+      "/Users/amlug/projects/perry/codex-json-fastpaths/benchmarks/json_performance/.work/fixtures/object_1k.json",
+      "parse",
+      "500000",
+      "5000"
+    ],
+    "worker_sha256": "182e1d5b43f8ba7e1b0ee791f8d5d88baa9777fc4c37d4365c314483628f1410",
+    "exit": 0,
+    "old_scan_count": 0,
+    "copying_minors": 32,
+    "arena_live": 448536,
+    "arena_capacity": 22020096
+  },
+  {
+    "arm": "integer-piece",
+    "fixture": "object_1k",
+    "calls": 500000,
+    "command": [
+      "/Users/amlug/projects/perry/codex-json-fastpaths-artifacts/integer-piece-worker",
+      "/Users/amlug/projects/perry/codex-json-fastpaths/benchmarks/json_performance/.work/fixtures/object_1k.json",
+      "parse",
+      "500000",
+      "5000"
+    ],
+    "worker_sha256": "a216728f799a152bdbcabeec883decd346c545da68a66b1258e2e1262c80da0b",
+    "exit": 0,
+    "old_scan_count": 0,
+    "copying_minors": 32,
+    "arena_live": 448536,
+    "arena_capacity": 22020096
+  },
+  {
+    "arm": "record-output",
+    "fixture": "long_string_1m",
+    "calls": 128,
+    "command": [
+      "/Users/amlug/projects/perry/codex-json-fastpaths-artifacts/record-output-worker",
+      "/Users/amlug/projects/perry/codex-json-fastpaths/benchmarks/json_performance/.work/fixtures/long_string_1m.json",
+      "parse",
+      "128",
+      "2"
+    ],
+    "worker_sha256": "182e1d5b43f8ba7e1b0ee791f8d5d88baa9777fc4c37d4365c314483628f1410",
+    "exit": 0,
+    "old_scan_count": 4,
+    "copying_minors": 0,
+    "arena_live": 3402160,
+    "arena_capacity": 8388608
+  },
+  {
+    "arm": "integer-piece",
+    "fixture": "long_string_1m",
+    "calls": 128,
+    "command": [
+      "/Users/amlug/projects/perry/codex-json-fastpaths-artifacts/integer-piece-worker",
+      "/Users/amlug/projects/perry/codex-json-fastpaths/benchmarks/json_performance/.work/fixtures/long_string_1m.json",
+      "parse",
+      "128",
+      "2"
+    ],
+    "worker_sha256": "a216728f799a152bdbcabeec883decd346c545da68a66b1258e2e1262c80da0b",
+    "exit": 0,
+    "old_scan_count": 4,
+    "copying_minors": 0,
+    "arena_live": 3402160,
+    "arena_capacity": 8388608
+  }
+]

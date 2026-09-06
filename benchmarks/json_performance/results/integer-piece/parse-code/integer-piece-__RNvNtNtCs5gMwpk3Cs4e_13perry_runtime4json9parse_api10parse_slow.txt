@@ -1,0 +1,494 @@
+/Users/amlug/projects/perry/codex-json-fastpaths-artifacts/integer-piece-worker:        file format mach-o arm64
+
+Disassembly of section __TEXT,__text:
+
+0000000100350108 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow>:
+100350108:      sub     sp, sp, #0x120
+10035010c:      stp     x28, x27, [sp, #0xc0]
+100350110:      stp     x26, x25, [sp, #0xd0]
+100350114:      stp     x24, x23, [sp, #0xe0]
+100350118:      stp     x22, x21, [sp, #0xf0]
+10035011c:      stp     x20, x19, [sp, #0x100]
+100350120:      stp     x29, x30, [sp, #0x110]
+100350124:      add     x29, sp, #0x110
+100350128:      mov     x20, x1
+10035012c:      mov     x21, x0
+100350130:      cmp     x1, #0x3e9
+100350134:      b.lo    0x10035024c <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x144>
+100350138:      add     x22, x21, #0x14
+10035013c:      add     x0, x21, #0x14
+100350140:      mov     x1, x20
+100350144:      mov     w2, #0x3e8              ; =1000
+100350148:      bl      0x100341d54 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json6parser21nesting_depth_exceeds>
+10035014c:      tbz     w0, #0x0, 0x10035024c <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x144>
+100350150:      add     x0, x21, #0x14
+100350154:      mov     x1, x20
+100350158:      mov     w2, #0xa120             ; =41248
+10035015c:      movk    w2, #0x7, lsl #16
+100350160:      bl      0x100341d54 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json6parser21nesting_depth_exceeds>
+100350164:      tbnz    w0, #0x0, 0x10035089c <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x794>
+100350168:      stur    x20, [x29, #-0x70]
+10035016c:      adrp    x0, 0x101126000 <__RNvNCNKNvNvNtNtCs5gMwpk3Cs4e_13perry_runtime6object9prop_plan16STORE_PLAN_CACHE7STORAGE0023___RUST_STD_INTERNAL_VAL+0x10>
+100350170:      add     x0, x0, #0x38
+100350174:      ldr     x8, [x0]
+100350178:      blr     x8
+10035017c:      mov     x19, x0
+100350180:      ldrb    w8, [x0, #0x20]
+100350184:      cbnz    w8, 0x1003507f8 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x6f0>
+100350188:      ldr     x8, [x19]
+10035018c:      cbnz    x8, 0x10035081c <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x714>
+100350190:      mov     x23, #0x7fff000000000000 ; =9223090561878065152
+100350194:      bfxil   x23, x21, #0, #48
+100350198:      mov     x8, #-0x1               ; =-1
+10035019c:      str     x8, [x19]
+1003501a0:      mov     x0, x19
+1003501a4:      ldr     x8, [x0, #0x8]!
+1003501a8:      ldr     x21, [x19, #0x18]
+1003501ac:      cmp     x21, x8
+1003501b0:      b.ne    0x1003501b8 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0xb0>
+1003501b4:      bl      0x100cbf2a0 <__RNvMs4_NtCsctvjasLqLe9_5alloc7raw_vecINtB5_6RawVecxE8grow_oneCs5gMwpk3Cs4e_13perry_runtime>
+1003501b8:      ldr     x8, [x19, #0x10]
+1003501bc:      str     x23, [x8, x21, lsl #3]
+1003501c0:      add     x8, x21, #0x1
+1003501c4:      str     x8, [x19, #0x18]
+1003501c8:      ldr     x8, [x19]
+1003501cc:      add     x8, x8, #0x1
+1003501d0:      str     x8, [x19]
+1003501d4:      stp     x21, x22, [x29, #-0x68]
+1003501d8:      stur    x20, [x29, #-0x58]
+1003501dc:      sub     x8, x29, #0x60
+1003501e0:      sub     x9, x29, #0x58
+1003501e4:      stp     x8, x9, [sp, #0x8]
+1003501e8:      sub     x8, x29, #0x68
+1003501ec:      sub     x9, x29, #0x70
+1003501f0:      stp     x8, x9, [sp, #0x18]
+1003501f4:      adrp    x0, 0x10109a000 <_anon.61bd2a13192053fee32470fa3b560c2b.654+0x470>
+1003501f8:      add     x0, x0, #0xcc0
+1003501fc:      add     x1, sp, #0x8
+100350200:      bl      0x10012c4f0 <__RINvMs2_NtNtCs8BpVhDwHqJW_3std6thread5localINtB6_8LocalKeyINtNtCsjgY6bXVaRmE_4core4cell4CellINtNtBZ_6option6OptionNtNtCs5gMwpk3Cs4e_13perry_runtime9json_tape11TapeScratchEEE4withNCINvB1Q_19with_built_tape_rawIB1t_NtNtNtB1S_5value7jsvalue7JSValueENCNvNtNtB1S_4json9parse_api24try_parse_deep_iterative0E0IB1t_B3k_EEB1S_>
+100350204:      mov     x20, x0
+100350208:      mov     x23, x1
+10035020c:      ldrb    w8, [x19, #0x20]
+100350210:      cbnz    w8, 0x100350828 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x720>
+100350214:      ldr     x8, [x19]
+100350218:      cbnz    x8, 0x100350880 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x778>
+10035021c:      ldr     x8, [x19, #0x18]
+100350220:      cmp     x21, x8
+100350224:      b.hi    0x10035022c <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x124>
+100350228:      str     x21, [x19, #0x18]
+10035022c:      adrp    x0, 0x10109b000 <_anon.c5288d858bd99a3cbbc8257f144f4cf6.100+0x20>
+100350230:      add     x0, x0, #0x618
+100350234:      bl      0x100139804 <__RINvMs2_NtNtCs8BpVhDwHqJW_3std6thread5localINtB6_8LocalKeyINtNtCsjgY6bXVaRmE_4core4cell7RefCellINtNtNtNtBa_11collections4hash3map7HashMapINtNtCsctvjasLqLe9_5alloc3vec3VechEPNtNtCs5gMwpk3Cs4e_13perry_runtime6string12StringHeaderEEE4withNCNvNtNtB2P_4json9parse_api24try_parse_deep_iteratives_0uEB2P_>
+100350238:      tbnz    w20, #0x0, 0x100350694 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x58c>
+10035023c:      adrp    x0, 0x100dd0000 <_anon.61bd2a13192053fee32470fa3b560c2b.1373+0x831>
+100350240:      add     x0, x0, #0x4b2
+100350244:      mov     w1, #0x29               ; =41
+100350248:      bl      0x100351588 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api18throw_syntax_error>
+10035024c:      adrp    x0, 0x101126000 <__RNvNCNKNvNvNtNtCs5gMwpk3Cs4e_13perry_runtime6object9prop_plan16STORE_PLAN_CACHE7STORAGE0023___RUST_STD_INTERNAL_VAL+0x10>
+100350250:      add     x0, x0, #0x38
+100350254:      ldr     x8, [x0]
+100350258:      blr     x8
+10035025c:      mov     x19, x0
+100350260:      ldrb    w8, [x0, #0x20]
+100350264:      cbnz    w8, 0x1003506f0 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x5e8>
+100350268:      ldr     x8, [x19]
+10035026c:      cbnz    x8, 0x10035081c <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x714>
+100350270:      mov     x23, #0x7fff000000000000 ; =9223090561878065152
+100350274:      bfxil   x23, x21, #0, #48
+100350278:      mov     x8, #-0x1               ; =-1
+10035027c:      str     x8, [x19]
+100350280:      mov     x22, x19
+100350284:      ldr     x8, [x22, #0x8]!
+100350288:      ldr     x24, [x19, #0x18]
+10035028c:      cmp     x24, x8
+100350290:      b.ne    0x10035029c <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x194>
+100350294:      mov     x0, x22
+100350298:      bl      0x100cbf2a0 <__RNvMs4_NtCsctvjasLqLe9_5alloc7raw_vecINtB5_6RawVecxE8grow_oneCs5gMwpk3Cs4e_13perry_runtime>
+10035029c:      ldr     x8, [x19, #0x10]
+1003502a0:      str     x23, [x8, x24, lsl #3]
+1003502a4:      add     x8, x24, #0x1
+1003502a8:      str     x8, [x19, #0x18]
+1003502ac:      ldr     x8, [x19]
+1003502b0:      add     x8, x8, #0x1
+1003502b4:      str     x8, [x19]
+1003502b8:      mov     x0, #0x0                ; =0
+1003502bc:      bl      0x10053c82c <__RNvYNCNKNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc6policy43GC_SUPPRESSED_TINY_PARSE_COLLECTION_PENDING0s_0INtNtNtCsjgY6bXVaRmE_4core3ops8function6FnOnceTINtNtB1J_6option6OptionQIB2o_INtNtB1J_4cell4CellbEEEEE9call_onceBc_>
+1003502c0:      mov     x21, x0
+1003502c4:      ldrb    w8, [x0]
+1003502c8:      strb    wzr, [x0]
+1003502cc:      cbz     w8, 0x100350300 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x1f8>
+1003502d0:      mov     x0, #0x0                ; =0
+1003502d4:      bl      0x10053c84c <__RNvYNCNKNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc6policy8GC_FLAGS0s_0INtNtNtCsjgY6bXVaRmE_4core3ops8function6FnOnceTINtNtB19_6option6OptionQIB1O_INtNtB19_4cell4CellhEEEEE9call_onceBc_>
+1003502d8:      ldrb    w8, [x0]
+1003502dc:      tst     w8, #0x3
+1003502e0:      b.ne    0x1003502f8 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x1f0>
+1003502e4:      adrp    x8, 0x1011fc000 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime5array8subclass20DENSE_SUBCLASS_CACHE+0x7f9a0>
+1003502e8:      add     x8, x8, #0xb7c
+1003502ec:      ldapr   w8, [x8]
+1003502f0:      cmp     w8, #0x0
+1003502f4:      b.le    0x100350454 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x34c>
+1003502f8:      mov     w8, #0x1                ; =1
+1003502fc:      strb    w8, [x21]
+100350300:      ldrb    w8, [x19, #0x20]
+100350304:      cbnz    w8, 0x10035049c <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x394>
+100350308:      ldr     x8, [x19]
+10035030c:      mov     x9, #0x7fffffffffffffff ; =9223372036854775807
+100350310:      cmp     x8, x9
+100350314:      b.hs    0x1003507ec <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x6e4>
+100350318:      add     x9, x8, #0x1
+10035031c:      str     x9, [x19]
+100350320:      ldr     x9, [x19, #0x18]
+100350324:      cmp     x24, x9
+100350328:      b.hs    0x10035033c <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x234>
+10035032c:      ldr     x9, [x19, #0x10]
+100350330:      ldr     x9, [x9, x24, lsl #3]
+100350334:      and     x23, x9, #0xffffffffffff
+100350338:      b       0x100350340 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x238>
+10035033c:      mov     w23, #0x1               ; =1
+100350340:      str     x8, [x19]
+100350344:      adrp    x8, 0x101120000 <_perry_global_baseline_worker_ts__1>
+100350348:      add     x8, x8, #0x3f8
+10035034c:      ldapr   x8, [x8]
+100350350:      cbnz    x8, 0x1003506b8 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x5b0>
+100350354:      adrp    x8, 0x101120000 <_perry_global_baseline_worker_ts__1>
+100350358:      ldrb    w8, [x8, #0x400]
+10035035c:      cmp     w8, #0x2
+100350360:      b.eq    0x1003504d4 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x3cc>
+100350364:      cmp     w8, #0x1
+100350368:      b.ne    0x1003503ac <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x2a4>
+10035036c:      stp     x24, x20, [x29, #-0x70]
+100350370:      ldrb    w8, [x19, #0x20]
+100350374:      cbnz    w8, 0x1003507c0 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x6b8>
+100350378:      ldr     x8, [x19]
+10035037c:      mov     x9, #0x7fffffffffffffff ; =9223372036854775807
+100350380:      cmp     x8, x9
+100350384:      b.hs    0x1003507ec <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x6e4>
+100350388:      add     x9, x8, #0x1
+10035038c:      str     x9, [x19]
+100350390:      ldr     x9, [x19, #0x18]
+100350394:      cmp     x24, x9
+100350398:      b.hs    0x1003503ec <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x2e4>
+10035039c:      ldr     x9, [x19, #0x10]
+1003503a0:      ldr     x9, [x9, x24, lsl #3]
+1003503a4:      and     x9, x9, #0xffffffffffff
+1003503a8:      b       0x1003503f0 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x2e8>
+1003503ac:      add     x8, x23, #0x14
+1003503b0:      sub     x9, x20, #0x400
+1003503b4:      mov     w10, #0xfffc00          ; =16776192
+1003503b8:      cmp     x9, x10
+1003503bc:      b.hi    0x1003504d4 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x3cc>
+1003503c0:      mov     x9, #0x2600             ; =9728
+1003503c4:      movk    x9, #0x1, lsl #32
+1003503c8:      mov     x10, x20
+1003503cc:      ldrb    w11, [x8], #0x1
+1003503d0:      cmp     w11, #0x20
+1003503d4:      b.hi    0x1003504cc <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x3c4>
+1003503d8:      lsr     x12, x9, x11
+1003503dc:      tbz     w12, #0x0, 0x1003504cc <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x3c4>
+1003503e0:      subs    x10, x10, #0x1
+1003503e4:      b.ne    0x1003503cc <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x2c4>
+1003503e8:      b       0x1003504d4 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x3cc>
+1003503ec:      mov     w9, #0x1                ; =1
+1003503f0:      str     x8, [x19]
+1003503f4:      add     x8, x9, #0x14
+1003503f8:      stp     x8, x20, [x29, #-0x60]
+1003503fc:      sub     x8, x29, #0x60
+100350400:      sub     x9, x29, #0x58
+100350404:      stp     x8, x9, [sp, #0x8]
+100350408:      sub     x8, x29, #0x70
+10035040c:      sub     x9, x29, #0x68
+100350410:      stp     x8, x9, [sp, #0x18]
+100350414:      adrp    x0, 0x10109a000 <_anon.61bd2a13192053fee32470fa3b560c2b.654+0x470>
+100350418:      add     x0, x0, #0xcc0
+10035041c:      add     x1, sp, #0x8
+100350420:      bl      0x10012c944 <__RINvMs2_NtNtCs8BpVhDwHqJW_3std6thread5localINtB6_8LocalKeyINtNtCsjgY6bXVaRmE_4core4cell4CellINtNtBZ_6option6OptionNtNtCs5gMwpk3Cs4e_13perry_runtime9json_tape11TapeScratchEEE4withNCINvB1Q_19with_built_tape_rawNtNtNtB1S_5value7jsvalue7JSValueNCNvNtNtB1S_4json9parse_api18try_parse_via_tape0E0IB1t_B3k_EEB1S_>
+100350424:      cmp     x0, #0x1
+100350428:      b.ne    0x1003504d4 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x3cc>
+10035042c:      mov     x23, x1
+100350430:      ldrb    w8, [x19, #0x20]
+100350434:      cbnz    w8, 0x100350850 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x748>
+100350438:      ldr     x8, [x19]
+10035043c:      cbnz    x8, 0x100350880 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x778>
+100350440:      ldr     x8, [x19, #0x18]
+100350444:      cmp     x24, x8
+100350448:      b.hi    0x100350694 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x58c>
+10035044c:      str     x24, [x19, #0x18]
+100350450:      b       0x100350694 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x58c>
+100350454:      mov     x0, #0x0                ; =0
+100350458:      bl      0x10053ca44 <__RNvYNCNKNvNtNtCs5gMwpk3Cs4e_13perry_runtime5arena5block17ARENA_TOTAL_BYTES0s_0INtNtNtCsjgY6bXVaRmE_4core3ops8function6FnOnceTINtNtB1l_6option6OptionQIB20_INtNtB1l_4cell4CelljEEEEE9call_onceBc_>
+10035045c:      ldr     x23, [x0]
+100350460:      mov     x0, #0x0                ; =0
+100350464:      bl      0x10053c68c <__RNvYNCNKNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc6policy21GC_NEXT_TRIGGER_BYTES0s_0INtNtNtCsjgY6bXVaRmE_4core3ops8function6FnOnceTINtNtB1n_6option6OptionQIB22_INtNtB1n_4cell4CelljEEEEE9call_onceBc_>
+100350468:      ldr     x8, [x0]
+10035046c:      cmp     x8, x23
+100350470:      b.ls    0x100350490 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x388>
+100350474:      str     x23, [x0]
+100350478:      adrp    x0, 0x101127000 <__RNvNCNKNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc6policy26GC_OLD_RECLAIM_IN_PROGRESS0s_023___RUST_STD_INTERNAL_VAL+0x8>
+10035047c:      add     x0, x0, #0x268
+100350480:      ldr     x8, [x0]
+100350484:      blr     x8
+100350488:      mov     w8, #0x1                ; =1
+10035048c:      strb    w8, [x0]
+100350490:      bl      0x1004e9e40 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc6policy16gc_check_trigger>
+100350494:      ldrb    w8, [x19, #0x20]
+100350498:      cbz     w8, 0x100350308 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x200>
+10035049c:      cmp     w8, #0x2
+1003504a0:      b.eq    0x100350858 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x750>
+1003504a4:      adrp    x1, 0x10082e000 <__RINvNtNtNtNtCs8BpVhDwHqJW_3std3sys12thread_local6native5eager7destroyINtNtCsjgY6bXVaRmE_4core4cell7RefCellINtNtB1a_6option6OptionNtNtNtCs5gMwpk3Cs4e_13perry_runtime2gc6policy15BudgetedGcCycleEEEB29_+0x2dc>
+1003504a8:      add     x1, x1, #0x9b0
+1003504ac:      mov     x0, x19
+1003504b0:      bl      0x100b9519c <__RNvNtNtNtNtCs8BpVhDwHqJW_3std3sys12thread_local11destructors4list8register>
+1003504b4:      strb    wzr, [x19, #0x20]
+1003504b8:      ldr     x8, [x19]
+1003504bc:      mov     x9, #0x7fffffffffffffff ; =9223372036854775807
+1003504c0:      cmp     x8, x9
+1003504c4:      b.lo    0x100350318 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x210>
+1003504c8:      b       0x1003507ec <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x6e4>
+1003504cc:      cmp     w11, #0x5b
+1003504d0:      b.eq    0x10035036c <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x264>
+1003504d4:      bl      0x1004e9e40 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc6policy16gc_check_trigger>
+1003504d8:      bl      0x1004e9d4c <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc6policy11gc_suppress>
+1003504dc:      ldrb    w8, [x19, #0x20]
+1003504e0:      cbnz    w8, 0x100350718 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x610>
+1003504e4:      ldr     x8, [x19]
+1003504e8:      mov     x9, #0x7fffffffffffffff ; =9223372036854775807
+1003504ec:      cmp     x8, x9
+1003504f0:      b.hs    0x1003507ec <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x6e4>
+1003504f4:      add     x9, x8, #0x1
+1003504f8:      str     x9, [x19]
+1003504fc:      ldr     x10, [x19, #0x18]
+100350500:      mov     w9, #0x1                ; =1
+100350504:      cmp     x24, x10
+100350508:      b.hs    0x10035051c <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x414>
+10035050c:      ldr     x10, [x19, #0x10]
+100350510:      ldr     x10, [x10, x24, lsl #3]
+100350514:      and     x10, x10, #0xffffffffffff
+100350518:      b       0x100350520 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x418>
+10035051c:      mov     w10, #0x1               ; =1
+100350520:      str     x8, [x19]
+100350524:      add     x8, x10, #0x14
+100350528:      movi.2d v0, #0000000000000000
+10035052c:      stp     q0, q0, [sp, #0x70]
+100350530:      stp     q0, q0, [sp, #0x50]
+100350534:      strb    w9, [sp, #0x98]
+100350538:      mov     x9, #-0x1               ; =-1
+10035053c:      stp     x8, x20, [sp, #0x30]
+100350540:      str     x9, [sp, #0x8]
+100350544:      stp     xzr, xzr, [sp, #0x40]
+100350548:      str     xzr, [sp, #0x90]
+10035054c:      add     x0, sp, #0x8
+100350550:      bl      0x10030082c <__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser11parse_value>
+100350554:      mov     x23, x0
+100350558:      ldp     x8, x9, [sp, #0x38]
+10035055c:      cmp     x9, x8
+100350560:      b.hs    0x100350594 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x48c>
+100350564:      ldr     x10, [sp, #0x30]
+100350568:      mov     x11, #0x2600            ; =9728
+10035056c:      movk    x11, #0x1, lsl #32
+100350570:      ldrb    w12, [x10, x9]
+100350574:      cmp     w12, #0x20
+100350578:      b.hi    0x100350594 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x48c>
+10035057c:      lsr     x12, x11, x12
+100350580:      tbz     w12, #0x0, 0x100350594 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x48c>
+100350584:      add     x9, x9, #0x1
+100350588:      cmp     x8, x9
+10035058c:      b.ne    0x100350570 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x468>
+100350590:      mov     x9, x8
+100350594:      ldrb    w20, [sp, #0x98]
+100350598:      cmp     x9, x8
+10035059c:      cset    w25, eq
+1003505a0:      ldrb    w8, [x19, #0x20]
+1003505a4:      cbnz    w8, 0x100350748 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x640>
+1003505a8:      ldr     x8, [x19]
+1003505ac:      cbnz    x8, 0x10035081c <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x714>
+1003505b0:      mov     x8, #-0x1               ; =-1
+1003505b4:      str     x8, [x19]
+1003505b8:      ldr     x26, [x19, #0x18]
+1003505bc:      ldr     x8, [x19, #0x8]
+1003505c0:      cmp     x26, x8
+1003505c4:      b.ne    0x1003505d0 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x4c8>
+1003505c8:      mov     x0, x22
+1003505cc:      bl      0x100cbf2a0 <__RNvMs4_NtCsctvjasLqLe9_5alloc7raw_vecINtB5_6RawVecxE8grow_oneCs5gMwpk3Cs4e_13perry_runtime>
+1003505d0:      ldr     x8, [x19, #0x10]
+1003505d4:      str     x23, [x8, x26, lsl #3]
+1003505d8:      add     x8, x26, #0x1
+1003505dc:      str     x8, [x19, #0x18]
+1003505e0:      ldr     x8, [x19]
+1003505e4:      add     x8, x8, #0x1
+1003505e8:      str     x8, [x19]
+1003505ec:      mov     x0, #0x0                ; =0
+1003505f0:      bl      0x10053c84c <__RNvYNCNKNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc6policy8GC_FLAGS0s_0INtNtNtCsjgY6bXVaRmE_4core3ops8function6FnOnceTINtNtB19_6option6OptionQIB1O_INtNtB19_4cell4CellhEEEEE9call_onceBc_>
+1003505f4:      ldrb    w8, [x0]
+1003505f8:      and     w8, w8, #0xfffffffd
+1003505fc:      strb    w8, [x0]
+100350600:      bl      0x1004ea934 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc6policy22gc_bump_malloc_trigger>
+100350604:      adrp    x22, 0x101120000 <_perry_global_baseline_worker_ts__1>
+100350608:      add     x22, x22, #0xd90
+10035060c:      ldapr   x8, [x22]
+100350610:      cbnz    x8, 0x1003506d8 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x5d0>
+100350614:      ldrb    w8, [x22, #0x8]
+100350618:      cbz     w8, 0x100350648 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x540>
+10035061c:      bl      0x100899cf8 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime5arena4walk18arena_in_use_bytes>
+100350620:      adrp    x8, 0x101120000 <_perry_global_baseline_worker_ts__1>
+100350624:      add     x8, x8, #0x600
+100350628:      ldapr   x8, [x8]
+10035062c:      cbnz    x8, 0x100350798 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x690>
+100350630:      adrp    x8, 0x101120000 <_perry_global_baseline_worker_ts__1>
+100350634:      ldr     x8, [x8, #0x608]
+100350638:      cmp     x0, x8
+10035063c:      b.lo    0x100350648 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x540>
+100350640:      mov     w8, #0x1                ; =1
+100350644:      strb    w8, [x21]
+100350648:      ldrb    w8, [x19, #0x20]
+10035064c:      cbnz    w8, 0x100350770 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x668>
+100350650:      ldr     x8, [x19]
+100350654:      cbnz    x8, 0x100350880 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x778>
+100350658:      and     w20, w25, w20
+10035065c:      ldr     x8, [x19, #0x18]
+100350660:      cmp     x24, x8
+100350664:      b.hi    0x10035066c <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x564>
+100350668:      str     x24, [x19, #0x18]
+10035066c:      adrp    x0, 0x10109b000 <_anon.c5288d858bd99a3cbbc8257f144f4cf6.100+0x20>
+100350670:      add     x0, x0, #0x618
+100350674:      bl      0x100139534 <__RINvMs2_NtNtCs8BpVhDwHqJW_3std6thread5localINtB6_8LocalKeyINtNtCsjgY6bXVaRmE_4core4cell7RefCellINtNtNtNtBa_11collections4hash3map7HashMapINtNtCsctvjasLqLe9_5alloc3vec3VechEPNtNtCs5gMwpk3Cs4e_13perry_runtime6string12StringHeaderEEE4withNCNvNtNtB2P_4json9parse_api10parse_slow0uEB2P_>
+100350678:      tbz     w20, #0x0, 0x10035088c <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x784>
+10035067c:      ldr     x8, [sp, #0x8]
+100350680:      cmn     x8, #0x1
+100350684:      b.eq    0x100350694 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x58c>
+100350688:      cbz     x8, 0x100350694 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x58c>
+10035068c:      ldr     x0, [sp, #0x10]
+100350690:      bl      0x100cd41c0 <_mi_free>
+100350694:      mov     x0, x23
+100350698:      ldp     x29, x30, [sp, #0x110]
+10035069c:      ldp     x20, x19, [sp, #0x100]
+1003506a0:      ldp     x22, x21, [sp, #0xf0]
+1003506a4:      ldp     x24, x23, [sp, #0xe0]
+1003506a8:      ldp     x26, x25, [sp, #0xd0]
+1003506ac:      ldp     x28, x27, [sp, #0xc0]
+1003506b0:      add     sp, sp, #0x120
+1003506b4:      ret
+1003506b8:      adrp    x0, 0x101120000 <_perry_global_baseline_worker_ts__1>
+1003506bc:      add     x0, x0, #0x3f8
+1003506c0:      bl      0x100cc13c0 <__RINvMNtNtCs8BpVhDwHqJW_3std4sync9once_lockINtB3_8OnceLockNtNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api8TapeModeE10initializeNCINvB2_11get_or_initNCNvBV_18tape_mode_from_env0E0zEBZ_>
+1003506c4:      adrp    x8, 0x101120000 <_perry_global_baseline_worker_ts__1>
+1003506c8:      ldrb    w8, [x8, #0x400]
+1003506cc:      cmp     w8, #0x2
+1003506d0:      b.ne    0x100350364 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x25c>
+1003506d4:      b       0x1003504d4 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x3cc>
+1003506d8:      adrp    x0, 0x101120000 <_perry_global_baseline_worker_ts__1>
+1003506dc:      add     x0, x0, #0xd90
+1003506e0:      bl      0x100cc1550 <__RINvMNtNtCs8BpVhDwHqJW_3std4sync9once_lockINtB3_8OnceLockbE10initializeNCINvB2_11get_or_initNCNvNtCs5gMwpk3Cs4e_13perry_runtime2gc14gen_gc_enabled0E0zEB1y_>
+1003506e4:      ldrb    w8, [x22, #0x8]
+1003506e8:      cbnz    w8, 0x10035061c <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x514>
+1003506ec:      b       0x100350648 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x540>
+1003506f0:      cmp     w8, #0x1
+1003506f4:      b.ne    0x100350858 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x750>
+1003506f8:      adrp    x1, 0x10082e000 <__RINvNtNtNtNtCs8BpVhDwHqJW_3std3sys12thread_local6native5eager7destroyINtNtCsjgY6bXVaRmE_4core4cell7RefCellINtNtB1a_6option6OptionNtNtNtCs5gMwpk3Cs4e_13perry_runtime2gc6policy15BudgetedGcCycleEEEB29_+0x2dc>
+1003506fc:      add     x1, x1, #0x9b0
+100350700:      mov     x0, x19
+100350704:      bl      0x100b9519c <__RNvNtNtNtNtCs8BpVhDwHqJW_3std3sys12thread_local11destructors4list8register>
+100350708:      strb    wzr, [x19, #0x20]
+10035070c:      ldr     x8, [x19]
+100350710:      cbz     x8, 0x100350270 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x168>
+100350714:      b       0x10035081c <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x714>
+100350718:      cmp     w8, #0x2
+10035071c:      b.eq    0x100350858 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x750>
+100350720:      adrp    x1, 0x10082e000 <__RINvNtNtNtNtCs8BpVhDwHqJW_3std3sys12thread_local6native5eager7destroyINtNtCsjgY6bXVaRmE_4core4cell7RefCellINtNtB1a_6option6OptionNtNtNtCs5gMwpk3Cs4e_13perry_runtime2gc6policy15BudgetedGcCycleEEEB29_+0x2dc>
+100350724:      add     x1, x1, #0x9b0
+100350728:      mov     x0, x19
+10035072c:      bl      0x100b9519c <__RNvNtNtNtNtCs8BpVhDwHqJW_3std3sys12thread_local11destructors4list8register>
+100350730:      strb    wzr, [x19, #0x20]
+100350734:      ldr     x8, [x19]
+100350738:      mov     x9, #0x7fffffffffffffff ; =9223372036854775807
+10035073c:      cmp     x8, x9
+100350740:      b.lo    0x1003504f4 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x3ec>
+100350744:      b       0x1003507ec <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x6e4>
+100350748:      cmp     w8, #0x2
+10035074c:      b.eq    0x100350858 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x750>
+100350750:      adrp    x1, 0x10082e000 <__RINvNtNtNtNtCs8BpVhDwHqJW_3std3sys12thread_local6native5eager7destroyINtNtCsjgY6bXVaRmE_4core4cell7RefCellINtNtB1a_6option6OptionNtNtNtCs5gMwpk3Cs4e_13perry_runtime2gc6policy15BudgetedGcCycleEEEB29_+0x2dc>
+100350754:      add     x1, x1, #0x9b0
+100350758:      mov     x0, x19
+10035075c:      bl      0x100b9519c <__RNvNtNtNtNtCs8BpVhDwHqJW_3std3sys12thread_local11destructors4list8register>
+100350760:      strb    wzr, [x19, #0x20]
+100350764:      ldr     x8, [x19]
+100350768:      cbz     x8, 0x1003505b0 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x4a8>
+10035076c:      b       0x10035081c <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x714>
+100350770:      cmp     w8, #0x2
+100350774:      b.eq    0x100350858 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x750>
+100350778:      adrp    x1, 0x10082e000 <__RINvNtNtNtNtCs8BpVhDwHqJW_3std3sys12thread_local6native5eager7destroyINtNtCsjgY6bXVaRmE_4core4cell7RefCellINtNtB1a_6option6OptionNtNtNtCs5gMwpk3Cs4e_13perry_runtime2gc6policy15BudgetedGcCycleEEEB29_+0x2dc>
+10035077c:      add     x1, x1, #0x9b0
+100350780:      mov     x0, x19
+100350784:      bl      0x100b9519c <__RNvNtNtNtNtCs8BpVhDwHqJW_3std3sys12thread_local11destructors4list8register>
+100350788:      strb    wzr, [x19, #0x20]
+10035078c:      ldr     x8, [x19]
+100350790:      cbz     x8, 0x100350658 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x550>
+100350794:      b       0x100350880 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x778>
+100350798:      adrp    x8, 0x101120000 <_perry_global_baseline_worker_ts__1>
+10035079c:      add     x8, x8, #0x600
+1003507a0:      mov     x22, x0
+1003507a4:      mov     x0, x8
+1003507a8:      bl      0x100cc1e80 <__RINvMNtNtCs8BpVhDwHqJW_3std4sync9once_lockINtB3_8OnceLockjE10initializeNCINvB2_11get_or_initNCNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc11heap_budget38gc_tiny_parse_in_use_trigger_dyn_bytes0E0zEB1A_>
+1003507ac:      adrp    x8, 0x101120000 <_perry_global_baseline_worker_ts__1>
+1003507b0:      ldr     x8, [x8, #0x608]
+1003507b4:      cmp     x22, x8
+1003507b8:      b.hs    0x100350640 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x538>
+1003507bc:      b       0x100350648 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x540>
+1003507c0:      cmp     w8, #0x2
+1003507c4:      b.eq    0x100350858 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x750>
+1003507c8:      adrp    x1, 0x10082e000 <__RINvNtNtNtNtCs8BpVhDwHqJW_3std3sys12thread_local6native5eager7destroyINtNtCsjgY6bXVaRmE_4core4cell7RefCellINtNtB1a_6option6OptionNtNtNtCs5gMwpk3Cs4e_13perry_runtime2gc6policy15BudgetedGcCycleEEEB29_+0x2dc>
+1003507cc:      add     x1, x1, #0x9b0
+1003507d0:      mov     x0, x19
+1003507d4:      bl      0x100b9519c <__RNvNtNtNtNtCs8BpVhDwHqJW_3std3sys12thread_local11destructors4list8register>
+1003507d8:      strb    wzr, [x19, #0x20]
+1003507dc:      ldr     x8, [x19]
+1003507e0:      mov     x9, #0x7fffffffffffffff ; =9223372036854775807
+1003507e4:      cmp     x8, x9
+1003507e8:      b.lo    0x100350388 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x280>
+1003507ec:      adrp    x0, 0x101090000 <_anon.d2908d1e6ae8332df027ce3b4a5233dd.21>
+1003507f0:      add     x0, x0, #0xd98
+1003507f4:      bl      0x100c8709c <__RNvNtCsjgY6bXVaRmE_4core4cell30panic_already_mutably_borrowed>
+1003507f8:      cmp     w8, #0x2
+1003507fc:      b.eq    0x100350858 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x750>
+100350800:      adrp    x1, 0x10082e000 <__RINvNtNtNtNtCs8BpVhDwHqJW_3std3sys12thread_local6native5eager7destroyINtNtCsjgY6bXVaRmE_4core4cell7RefCellINtNtB1a_6option6OptionNtNtNtCs5gMwpk3Cs4e_13perry_runtime2gc6policy15BudgetedGcCycleEEEB29_+0x2dc>
+100350804:      add     x1, x1, #0x9b0
+100350808:      mov     x0, x19
+10035080c:      bl      0x100b9519c <__RNvNtNtNtNtCs8BpVhDwHqJW_3std3sys12thread_local11destructors4list8register>
+100350810:      strb    wzr, [x19, #0x20]
+100350814:      ldr     x8, [x19]
+100350818:      cbz     x8, 0x100350190 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x88>
+10035081c:      adrp    x0, 0x101090000 <_anon.d2908d1e6ae8332df027ce3b4a5233dd.21>
+100350820:      add     x0, x0, #0xdc8
+100350824:      bl      0x100c8706c <__RNvNtCsjgY6bXVaRmE_4core4cell22panic_already_borrowed>
+100350828:      cmp     w8, #0x2
+10035082c:      b.eq    0x100350858 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x750>
+100350830:      adrp    x1, 0x10082e000 <__RINvNtNtNtNtCs8BpVhDwHqJW_3std3sys12thread_local6native5eager7destroyINtNtCsjgY6bXVaRmE_4core4cell7RefCellINtNtB1a_6option6OptionNtNtNtCs5gMwpk3Cs4e_13perry_runtime2gc6policy15BudgetedGcCycleEEEB29_+0x2dc>
+100350834:      add     x1, x1, #0x9b0
+100350838:      mov     x0, x19
+10035083c:      bl      0x100b9519c <__RNvNtNtNtNtCs8BpVhDwHqJW_3std3sys12thread_local11destructors4list8register>
+100350840:      strb    wzr, [x19, #0x20]
+100350844:      ldr     x8, [x19]
+100350848:      cbz     x8, 0x10035021c <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x114>
+10035084c:      b       0x100350880 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x778>
+100350850:      cmp     w8, #0x2
+100350854:      b.ne    0x100350864 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x75c>
+100350858:      adrp    x0, 0x10108f000 <_anon.80eb82dabe382127be861d2f5954db24.4+0x1348>
+10035085c:      add     x0, x0, #0xed8
+100350860:      bl      0x100ccd81c <__RNvNtNtCs8BpVhDwHqJW_3std6thread5local18panic_access_error>
+100350864:      adrp    x1, 0x10082e000 <__RINvNtNtNtNtCs8BpVhDwHqJW_3std3sys12thread_local6native5eager7destroyINtNtCsjgY6bXVaRmE_4core4cell7RefCellINtNtB1a_6option6OptionNtNtNtCs5gMwpk3Cs4e_13perry_runtime2gc6policy15BudgetedGcCycleEEEB29_+0x2dc>
+100350868:      add     x1, x1, #0x9b0
+10035086c:      mov     x0, x19
+100350870:      bl      0x100b9519c <__RNvNtNtNtNtCs8BpVhDwHqJW_3std3sys12thread_local11destructors4list8register>
+100350874:      strb    wzr, [x19, #0x20]
+100350878:      ldr     x8, [x19]
+10035087c:      cbz     x8, 0x100350440 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow+0x338>
+100350880:      adrp    x0, 0x101090000 <_anon.d2908d1e6ae8332df027ce3b4a5233dd.21>
+100350884:      add     x0, x0, #0xe28
+100350888:      bl      0x100c8706c <__RNvNtCsjgY6bXVaRmE_4core4cell22panic_already_borrowed>
+10035088c:      adrp    x0, 0x100dd6000 <_anon.c5288d858bd99a3cbbc8257f144f4cf6.679+0x2e>
+100350890:      add     x0, x0, #0x93f
+100350894:      mov     w1, #0x21               ; =33
+100350898:      bl      0x100351588 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api18throw_syntax_error>
+10035089c:      add     x0, sp, #0x8
+1003508a0:      bl      0x100351630 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api24iterative_budget_message>
+1003508a4:      ldp     x0, x1, [sp, #0x10]
+1003508a8:      bl      0x100350f84 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api17throw_range_error>

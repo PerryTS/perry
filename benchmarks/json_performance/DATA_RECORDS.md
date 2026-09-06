@@ -1,4 +1,40 @@
-The latest measured record-output source writes bounded ordinary records
+The latest measured source formats exact integer-valued f64 fields directly
+in output plans, preserving signed-zero and shortest-roundtrip semantics.
+It builds on direct final output for bounded records and the corrected parse
+input lifetime and array-getter handling. GC production policy is unchanged.
+
+**All-row parity and no-regression acceptance remain open: 11/38 CPU,
+58/74 peak RSS and 28/36 retained RSS targets are met.** Measured source
+64b5df4b008f746b88b0c99c99ee784fe241df09 passes 152 JSON runtime tests,
+35 compiled Node comparisons and 28 moving-GC runs; all 49 source hashes match.
+Its full 152-verification / 456-timing / 432-memory matrix passes with 32 clean
+observations. A 532-trial paired run covers every CPU row with 34 clean
+observations. Both quiet gates pass.
+
+Against record-output, paired tiny-object stringify falls 30.20%
+(0.13656 to 0.09533 microseconds), small-record stringify 21.59%
+(0.40287 to 0.31587), and 1 KB object stringify 14.40% (0.28632 to 0.24509).
+Inline-string stringify improves 3.12%, 16 KB record-array stringify 1.76%,
+and heterogeneous parse 2.26%, with separated observed ranges.
+
+The paired run also confirms regressions: empty/tiny/small/1 KB object parse
++3.39%/+2.87%/+1.79%/+4.53%; null/inline-string parse +2.33%/+1.93%; long-ASCII/
+Unicode parse +5.41%/+3.35%; and smaller large-record parse and heterogeneous
+stringify increases. Peak RSS rises by roughly 0.03–0.14 MiB in several rows,
+and the preceding 8 MB lazy-parse memory regression remains. The parse source
+is unchanged in this candidate. Equal parser instruction counts/mnemonics and
+matching local GC counts/final arena sizes do not establish equal execution
+cost or explain away the qualified regressions.
+
+[Latest 38 CPU rows and RAM](results/integer-piece/tables.md),
+[every target](results/integer-piece/parity.md),
+[paired CPU/RSS ranges](results/integer-piece/recheck-integer-piece/summary.json),
+[implementation and validation](results/integer-piece/README.md), and
+[next tape-ownership experiment](results/integer-piece/next-steps.md).
+Array-root parsing may defer materialization; stringify starts fully materialized.
+The preceding checkpoints below retain their complete gains and regressions.
+
+The preceding record-output source writes bounded ordinary records
 with primitive-array fields directly into the final string. Its stack plan
 holds lengths, indices and inline scalar bytes; the parent root traces its
 children, which are rederived after allocation. An array-getter correctness
