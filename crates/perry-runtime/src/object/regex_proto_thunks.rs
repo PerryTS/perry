@@ -316,6 +316,41 @@ fn regex_instance_or_throw(method: &str) -> *const crate::regex::RegExpHeader {
     ))
 }
 
+/// Is `RegExp.prototype.test` still the builtin, for the regex `value`?
+///
+/// The `Intl.Segmenter` view mode answers `regex.test(segment)` without
+/// materialising the segment, so it must not silently bypass a user
+/// replacement. Same allocation-free proof as
+/// `iterator_prototypes::prototype_next_is_canonical`: the prototype's OWN
+/// `test` slot still holds a closure whose native entry is this module's
+/// thunk, AND no accessor descriptor is recorded for `"test"` (a
+/// `defineProperty(proto, "test", {get})` leaves the old closure in the data
+/// slot). Any other state returns `false` and the caller declines.
+#[cfg(feature = "regex-engine")]
+pub(crate) fn regexp_prototype_test_is_canonical(value: f64) -> bool {
+    let proto = super::js_object_get_prototype_of(value);
+    let jv = crate::value::JSValue::from_bits(proto.to_bits());
+    if !jv.is_pointer() {
+        return false;
+    }
+    let proto_obj = jv.as_pointer::<ObjectHeader>() as *mut ObjectHeader;
+    if proto_obj.is_null() {
+        return false;
+    }
+    let own = super::js_object_get_own_field_or_undef(proto, b"test".as_ptr(), 4);
+    let own_jv = crate::value::JSValue::from_bits(own.to_bits());
+    if !own_jv.is_pointer() {
+        return false;
+    }
+    let closure = own_jv.as_pointer::<crate::closure::ClosureHeader>();
+    if closure.is_null()
+        || crate::closure::get_valid_func_ptr(closure) != regex_proto_test_thunk as *const u8
+    {
+        return false;
+    }
+    !super::descriptor_state::may_have_descriptor_entry(proto_obj as usize, "test", true)
+}
+
 /// Install the real (brand-checking) `exec`/`test`/`toString`/`compile`
 /// prototype methods. `compile` is only installed here when the `regex-engine`
 /// feature is on; the fallback no-op (for builds without an engine) is installed

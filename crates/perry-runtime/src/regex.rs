@@ -1249,6 +1249,45 @@ fn regexp_pattern_is_regexp_like(pattern: f64) -> bool {
 /// regex.test(string) -> boolean
 #[cfg(feature = "regex-engine")]
 #[no_mangle]
+/// `regex.test(haystack)` where `haystack` is a **bounded slice whose bounds
+/// ARE the string's ends** — the primitive the `Intl.Segmenter` view mode needs
+/// so a segment can be tested without being materialised.
+///
+/// Passing a sub-slice rather than a start offset is the whole point: `^`
+/// anchors at the slice start, `$` at its end, and a lookbehind cannot see the
+/// preceding grapheme, which is exactly what `test` on the materialised
+/// substring means. A start-offset match would be silently wrong for an
+/// anchored pattern, which is what claude-code's `oR_` is.
+///
+/// Returns `None` — "I decline, materialise and call the normal path" — for a
+/// **global or sticky** regex, because `test` is then stateful: it must consult
+/// and advance `lastIndex`, and that bookkeeping (`regexp_find_advancing`) is
+/// written against a `StringHeader`, not a slice. Answering it from a slice
+/// would either lose the update or invent one.
+pub(crate) fn regexp_test_str_bounded(re: *const RegExpHeader, hay: &str) -> Option<bool> {
+    if !is_valid_regex_ptr(re) {
+        return None;
+    }
+    unsafe {
+        if (*re).global || (*re).sticky {
+            return None;
+        }
+        if crate::hot_diag::regex_on() {
+            diag_note_op(re, crate::hot_diag::RegexOp::Test);
+        }
+        if let Some(repeat_matcher) = lookup_repeat_matcher(re) {
+            return Some(repeat_matcher.regex.find(hay).is_some());
+        }
+        if let Some(fre) = lookup_fancy_regex(re) {
+            return match fre.is_match(hay) {
+                Ok(v) => Some(v),
+                Err(_) => None,
+            };
+        }
+        Some(lazy::header_std_regex(re).is_match(hay))
+    }
+}
+
 pub extern "C" fn js_regexp_test(re: *const RegExpHeader, s: *const StringHeader) -> i32 {
     if !is_valid_regex_ptr(re) || !is_valid_ptr(s) {
         return 0;
