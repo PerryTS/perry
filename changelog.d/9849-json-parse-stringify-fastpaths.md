@@ -20,3 +20,8 @@ Acceptance remains open at 12/38 CPU, 58/74 peak and 28/36 retained RSS: small
 record stringify +1.60%, several small-object parse regressions and all older
 unresolved regressions are recorded in results/escaped-count. No GC production
 policy or version change.
+
+The compact-plan experiment was measured and reverted: smaller generated
+emitters still regressed small-record stringify 3.62%, escaped stringify 1.56%
+and record-array parse 1.26–1.55%. Full validation and paired evidence are
+preserved under results/compact-piece; escaped-count remains the reference.

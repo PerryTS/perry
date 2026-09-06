@@ -1,0 +1,8 @@
+{
+  "worker_sha256": "19d60e437407c37a2c0fe02ba49202029b4376e120fdfffb11735d1b4f435234",
+  "instructions_by_symbol": {
+    "emit_piece": 86,
+    "string_piece": 362,
+    "emit_record": 818
+  }
+}

@@ -1,0 +1,102 @@
+[
+  {
+    "fixture": "small_record",
+    "operation": "stringify",
+    "calls": 500000,
+    "median_process_instructions": {
+      "escaped-count": 2967485841,
+      "compact-piece": 2987659169
+    },
+    "candidate_vs_reference": 1.0067981210630483
+  },
+  {
+    "fixture": "tiny_object",
+    "operation": "stringify",
+    "calls": 2000000,
+    "median_process_instructions": {
+      "escaped-count": 3562471539,
+      "compact-piece": 3572402227
+    },
+    "candidate_vs_reference": 1.0027875838140135
+  },
+  {
+    "fixture": "object_1k",
+    "operation": "stringify",
+    "calls": 500000,
+    "median_process_instructions": {
+      "escaped-count": 2063445560,
+      "compact-piece": 2072733987
+    },
+    "candidate_vs_reference": 1.0045014160683745
+  },
+  {
+    "fixture": "long_string_1m",
+    "operation": "stringify",
+    "calls": 1100,
+    "median_process_instructions": {
+      "escaped-count": 2447125499,
+      "compact-piece": 2447727275
+    },
+    "candidate_vs_reference": 1.0002459113765296
+  },
+  {
+    "fixture": "unicode_1m",
+    "operation": "stringify",
+    "calls": 1400,
+    "median_process_instructions": {
+      "escaped-count": 2518051528,
+      "compact-piece": 2513868349
+    },
+    "candidate_vs_reference": 0.9983387238293243
+  },
+  {
+    "fixture": "escaped_1m",
+    "operation": "stringify",
+    "calls": 84,
+    "median_process_instructions": {
+      "escaped-count": 1262883496,
+      "compact-piece": 1262788164
+    },
+    "candidate_vs_reference": 0.9999245124349935
+  },
+  {
+    "fixture": "wide_1m",
+    "operation": "stringify",
+    "calls": 216,
+    "median_process_instructions": {
+      "escaped-count": 6556438722,
+      "compact-piece": 6555494176
+    },
+    "candidate_vs_reference": 0.9998559361201943
+  },
+  {
+    "fixture": "numbers_1m",
+    "operation": "parse",
+    "calls": 92,
+    "median_process_instructions": {
+      "escaped-count": 2265816978,
+      "compact-piece": 2265639389
+    },
+    "candidate_vs_reference": 0.9999216225309792
+  },
+  {
+    "fixture": "empty_object",
+    "operation": "parse",
+    "calls": 2000000,
+    "median_process_instructions": {
+      "escaped-count": 2208123254,
+      "compact-piece": 2205763029
+    },
+    "candidate_vs_reference": 0.99893111718482
+  },
+  {
+    "fixture": "small_record",
+    "operation": "parse",
+    "calls": 500000,
+    "median_process_instructions": {
+      "escaped-count": 5246189542,
+      "compact-piece": 5245348853
+    },
+    "candidate_vs_reference": 0.9998397524539917
+  }
+]

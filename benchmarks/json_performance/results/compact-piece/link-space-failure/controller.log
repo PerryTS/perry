@@ -1,0 +1,44 @@
+compact-piece test_gap_json_scanning_boundaries True
+compact-piece test_issue_9184_json_parse_strict True
+compact-piece test_json True
+compact-piece test_json_sso_strings True
+compact-piece test_gap_json_advanced True
+compact-piece test_gap_json_stringify_replacer_tojson True
+compact-piece test_gap_json_prototype_tojson True
+compact-piece test_gap_json_replacer_sparse_hole True
+compact-piece test_gap_json_array_element_overflow_fields True
+compact-piece test_issue_9398_json_pretty_tombstoned_key True
+compact-piece test_json_typed_basic True
+compact-piece test_json_typed_array True
+compact-piece test_json_typed_nested True
+compact-piece test_json_typed_mismatch True
+compact-piece test_json_lazy_edge_cases True
+compact-piece test_json_lazy_predicates True
+compact-piece test_json_lazy_iteration True
+compact-piece test_json_lazy_indexed True
+compact-piece test_json_lazy_reviver True
+compact-piece test_json_lazy_per_element True
+compact-piece test_gap_json_flat_scalar_depth True
+compact-piece test_gap_json_number_formatting True
+compact-piece test_gap_json_wide_cache_lifetime False
+compact-piece test_gap_json_unicode_lengths False
+compact-piece test_gap_json_small_results False
+compact-piece test_gap_json_primitive_arrays False
+compact-piece test_gap_json_direct_strings False
+compact-piece test_gap_json_direct_objects False
+compact-piece test_gap_json_tape_scanning False
+compact-piece test_gap_json_parse_scalars False
+compact-piece test_gap_json_data_records False
+compact-piece test_gap_json_empty_object False
+compact-piece test_gap_json_primitive_object False
+compact-piece test_gap_json_parse_entry False
+compact-piece test_gap_json_record_output False
+compact-piece test_gap_json_owned_tape False
+compact-piece test_gap_json_parse_empty False
+compact-piece test_gap_json_escaped_output False
+FINISHED compact-piece 38 matched 22
+Traceback (most recent call last):
+  File "/Users/amlug/projects/perry/codex-json-fastpaths-artifacts/compact_piece_acceptance.py", line 42, in <module>
+    assert all(r.get('matches_node',False) for r in results), 'Acceptance failure'
+           ~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: Acceptance failure

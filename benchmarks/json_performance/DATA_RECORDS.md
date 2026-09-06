@@ -37,6 +37,15 @@ The first direct-output experiment and its complete paired evidence are
 preserved in [escaped-output](results/escaped-output/README.md).
 Array-root parsing may defer materialization; stringify starts fully materialized.
 
+The compact-plan experiment (8d587c863) is rejected and reverted in
+692a8c94f. Although generated emitters shrink, its qualified full and 700-trial
+paired matrices show small-record stringify +3.62%, escaped stringify +1.56%,
+and record-array parse +1.26–1.55% versus escaped-count, with separated ranges.
+All 59 source hashes were restored before the next experiment. Initial disk
+exhaustion affected 16 fixture links; unchanged retries complete all 38 compiled
+comparisons, alongside 172 runtime tests and 34 moving-GC runs.
+[Complete rejected experiment](results/compact-piece/README.md).
+
 The Piece-borrowing experiment (96cda0524) is rejected and reverted in
 7eb11ae1d. Its qualified full and 616-trial paired matrices show 4.99-5.53%
 slower record-array parsing and 1.27% slower small-record stringify, with
