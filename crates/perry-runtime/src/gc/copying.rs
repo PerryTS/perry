@@ -1908,6 +1908,7 @@ fn finalize_dead_copied_minor_from_space_side_allocations() {
     crate::map::finalize_dead_copied_minor_from_space_maps();
     crate::set::finalize_dead_copied_minor_from_space_sets();
     crate::node_submodules::diagnostics_gc::finalize_dead_copied_minor_from_space_errors();
+    crate::regex::finalize_dead_copied_minor_from_space_regexps();
     // 2026-07-09 GC audit wave 2: the from-space flip runs no per-object
     // finalize hooks, so entries keyed by dead from-space owners in the
     // object-address-keyed side tables are pruned here (headers still intact).

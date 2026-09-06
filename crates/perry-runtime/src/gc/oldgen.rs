@@ -1154,6 +1154,7 @@ pub(super) struct IncrementalSweepState {
     subphase: SweepCycleSubphase,
     dead_maps: Vec<usize>,
     dead_sets: Vec<usize>,
+    dead_regexps: Vec<usize>,
     dead_buffers: Vec<usize>,
     dead_typed_arrays: Vec<usize>,
     dead_lazy_arrays: Vec<usize>,
@@ -1177,6 +1178,7 @@ impl IncrementalSweepState {
             subphase: SweepCycleSubphase::Malloc,
             dead_maps: Vec::new(),
             dead_sets: Vec::new(),
+            dead_regexps: Vec::new(),
             dead_buffers: Vec::new(),
             dead_typed_arrays: Vec::new(),
             dead_lazy_arrays: Vec::new(),
@@ -1215,6 +1217,7 @@ impl IncrementalSweepState {
         );
         self.dead_maps = crate::map::collect_dead_registered_maps_post_trace(full_trace);
         self.dead_sets = crate::set::collect_dead_registered_sets_post_trace(full_trace);
+        self.dead_regexps = crate::regex::collect_dead_registered_regexps_post_trace(full_trace);
         self.dead_buffers = crate::buffer::collect_dead_registered_buffers_post_trace(full_trace);
         self.dead_typed_arrays =
             crate::typedarray::collect_dead_registered_typed_arrays_post_trace(full_trace);
@@ -1227,6 +1230,7 @@ impl IncrementalSweepState {
         });
         if !self.dead_maps.is_empty()
             || !self.dead_sets.is_empty()
+            || !self.dead_regexps.is_empty()
             || !self.dead_buffers.is_empty()
             || !self.dead_typed_arrays.is_empty()
             || !self.dead_lazy_arrays.is_empty()
@@ -1245,6 +1249,8 @@ impl IncrementalSweepState {
                         crate::map::finalize_collected_dead_map(addr);
                     } else if let Some(addr) = self.dead_sets.pop() {
                         crate::set::finalize_collected_dead_set(addr);
+                    } else if let Some(addr) = self.dead_regexps.pop() {
+                        crate::regex::finalize_collected_dead_regexp(addr);
                     } else if let Some(addr) = self.dead_buffers.pop() {
                         crate::buffer::finalize_collected_dead_buffer(addr);
                     } else if let Some(addr) = self.dead_typed_arrays.pop() {
@@ -1259,6 +1265,7 @@ impl IncrementalSweepState {
                 }
                 if self.dead_maps.is_empty()
                     && self.dead_sets.is_empty()
+                    && self.dead_regexps.is_empty()
                     && self.dead_buffers.is_empty()
                     && self.dead_typed_arrays.is_empty()
                     && self.dead_lazy_arrays.is_empty()

@@ -38,8 +38,8 @@
 //!   engines refuse);
 //! * `.source` / `.flags` / `.global` / `.sticky` / `lastIndex` are header
 //!   and side-table reads that never touched the compiled program;
-//! * identity is untouched — `js_regexp_new` still `gc_malloc`s a fresh
-//!   header per evaluation.
+//! * identity is untouched — `js_regexp_new` still allocates a fresh header
+//!   per evaluation.
 //!
 //! The build itself happens on the first operation that needs a matcher,
 //! through [`ensure_regex_compiled`], and installs exactly the pointers
