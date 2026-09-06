@@ -123,7 +123,8 @@ fn set_num_field(obj: *mut ObjectHeader, index: u32, value: usize) {
 fn with_input<R>(cursor: *mut ObjectHeader, f: impl FnOnce(&str) -> R) -> Option<R> {
     let value = crate::object::js_object_get_field(cursor, F_INPUT);
     let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
-    let bytes = unsafe { crate::string::js_string_key_bytes(JSValue::from_bits(value.bits()), &mut sso) }?;
+    let bytes =
+        unsafe { crate::string::js_string_key_bytes(JSValue::from_bits(value.bits()), &mut sso) }?;
     let text = std::str::from_utf8(bytes).ok()?;
     Some(f(text))
 }
@@ -508,7 +509,10 @@ mod view_mode_tests {
     fn view_walk_matches_the_spec_segmentation() {
         let input = "a\u{301}b\u{1f469}\u{200d}\u{1f4bb}\u{1f1fa}\u{1f1f8}c";
         let cursor = js_segments_view_open(grapheme_segmenter(), js_string(input));
-        assert!(cursor != 0.0, "open must accept a pristine grapheme segmenter");
+        assert!(
+            cursor != 0.0,
+            "open must accept a pristine grapheme segmenter"
+        );
         let got = walk(cursor);
 
         #[cfg(feature = "intl-segmenter")]
@@ -559,7 +563,10 @@ mod view_mode_tests {
             steps += 1;
         }
         let bytes_after = crate::arena::arena_in_use_bytes();
-        assert!(steps > 5, "the walk must actually have stepped (got {steps})");
+        assert!(
+            steps > 5,
+            "the walk must actually have stepped (got {steps})"
+        );
         assert_eq!(
             crate::gc::instruments::copying_minor_cycles(),
             minors_before,
@@ -599,10 +606,7 @@ mod view_mode_tests {
                 let seg = js_segments_view_segment(cursor);
                 let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
                 let bytes = unsafe {
-                    crate::string::js_string_key_bytes(
-                        JSValue::from_bits(seg.to_bits()),
-                        &mut sso,
-                    )
+                    crate::string::js_string_key_bytes(JSValue::from_bits(seg.to_bits()), &mut sso)
                 }
                 .expect("segment string");
                 seen.push_str(&String::from_utf8_lossy(bytes));
@@ -622,7 +626,10 @@ mod view_mode_tests {
         let cursor = js_segments_view_open(grapheme_segmenter(), js_string("ab"));
         assert!(cursor != 0.0);
         assert_eq!(js_segments_view_next(cursor), 1.0);
-        assert_eq!(js_segments_view_code_point_at(cursor, 0.0), 'a' as u32 as f64);
+        assert_eq!(
+            js_segments_view_code_point_at(cursor, 0.0),
+            'a' as u32 as f64
+        );
         assert!(
             is_undefined(js_segments_view_code_point_at(cursor, 1.0)),
             "k past the segment end must be undefined, not the next grapheme"
