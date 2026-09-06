@@ -374,6 +374,228 @@ fn direct_malloc_minor_rebaselines_trigger_above_survivors() {
     assert!(next_malloc_trigger > survivors_after);
 }
 
+/// #9840, the whole-arena half of the same direct `MallocCount` minor: a
+/// `MallocCount` minor is an `ArenaBytes` minor with the malloc sweep added —
+/// the arena *was* swept — so it must re-baseline `GC_NEXT_TRIGGER_BYTES` too.
+///
+/// `GC_NEXT_TRIGGER_BYTES`'s own doc says it is bumped "after each
+/// `gc_collect_inner` based on collection effectiveness". Until this test it
+/// was not: only `gc_finish_arena_trigger_collection` moved it, so the arm's
+/// threshold was measured from the last *arena-kind* collection rather than
+/// from the last collection, and a run of `MallocCount` minors walked the
+/// arena total across a threshold that nothing had refreshed. (The asymmetry
+/// in the OTHER direction is correct and is pinned by
+/// `test_gc_check_trigger_copied_minor_without_malloc_sweep_preserves_malloc_trigger`:
+/// an arena minor that skipped the malloc sweep must not move the malloc
+/// trigger.)
+///
+/// Measured on the perry-compiled claude-code TUI before the fix
+/// (`PERRY_GC_DIAG=1`, per firing, four 3300-character captures across two
+/// binaries): the streaming turn ran a strict 6:1 pattern — six `MallocCount`
+/// minors promoting ~3.2 MB each grew the old generation past the stale arena
+/// threshold *inside the sixth minor*, and at the very next safepoint the arm
+/// fired on a nursery of **856 bytes** (`promoted_bytes=216 freed_bytes=640`),
+/// paying the entire per-collection fixed cost — root scan, side-table prunes,
+/// dirty-page restore — to free 640 bytes. One collection in seven.
+///
+/// Sabotage (delete the `gc_rebaseline_arena_trigger_after_collection` call
+/// from `gc_finish_malloc_trigger_collection`): the first assertion sees the
+/// trigger still at the value that was armed BEFORE the collection, and the
+/// second sees a second minor fire on the quiet nursery after 2 MB of
+/// old-generation growth — shape (b), in miniature.
+#[test]
+fn direct_malloc_minor_also_rebaselines_the_whole_arena_trigger() {
+    let _legacy_pacing = crate::gc::policy::force_legacy_gc_pacing();
+    let _nursery = CopyingNurseryTestGuard::new(1);
+    let _scanners = ScopedRootScannerRegistryGuard::new();
+    gc_register_root_scanner(noop_copy_only_root_scanner);
+    let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    reset_old_reclaim_pressure();
+
+    let live_malloc = gc_malloc(
+        std::mem::size_of::<crate::closure::ClosureHeader>(),
+        GC_TYPE_CLOSURE,
+    );
+    unsafe {
+        init_test_closure(live_malloc);
+    }
+    js_shadow_slot_set(0, ptr_bits(live_malloc as usize));
+    let churn_headers = allocate_dead_malloc_churn_headers(128);
+    assert_eq!(
+        tracked_malloc_headers_matching(&churn_headers),
+        churn_headers.len(),
+        "malloc churn should be tracked before the collection"
+    );
+
+    // The arena arm is ARMED BUT NOT DUE — 1 MB of headroom left. This is the
+    // state the cc captures show at the start of a `MallocCount` run: the arena
+    // arm re-baselined a while ago and the total has not yet reached it.
+    let arena_total_before = crate::arena::arena_total_bytes();
+    GC_NEXT_TRIGGER_BYTES.with(|trigger| trigger.set(arena_total_before + 1024 * 1024));
+    // ...and malloc pressure IS due, so the direct minor takes the MallocCount arm.
+    trigger_guard.make_malloc_sweep_due();
+
+    let before = gc_collection_count();
+    gc_check_trigger();
+    assert!(
+        gc_collection_count() > before,
+        "a registered synchronous-only scanner should drive the MallocCount \
+         trigger through the direct synchronous minor"
+    );
+    assert_eq!(
+        tracked_malloc_headers_matching(&churn_headers),
+        0,
+        "the MallocCount minor must have swept the dead malloc churn — without \
+         it this test would assert the arena re-baseline of a collection that \
+         never took the arm under test"
+    );
+
+    // (1) The whole-arena trigger is measured from what THIS collection left
+    //     behind, with the same headroom floor the arena finisher applies.
+    let arena_total_after = crate::arena::arena_total_bytes();
+    let next_trigger = GC_NEXT_TRIGGER_BYTES.with(|trigger| trigger.get());
+    assert!(
+        next_trigger >= arena_total_after + gc_trigger_headroom_floor_bytes(),
+        "a MallocCount minor must re-baseline the whole-arena trigger above the \
+         set it left behind (next_trigger={next_trigger}, \
+         arena_total_after={arena_total_after}, floor={}); leaving it at the \
+         pre-collection value ({}) is the stale threshold shape (b) rides",
+        gc_trigger_headroom_floor_bytes(),
+        arena_total_before + 1024 * 1024
+    );
+
+    // (2) Shape (b) itself, in miniature: a little old-generation growth after
+    //     the collection must NOT re-arm a whole-arena minor on a nursery that
+    //     the collection just emptied. `reset_old_reclaim_pressure` first, so
+    //     the arm under test is the only one that could fire.
+    reset_old_reclaim_pressure();
+    let collections_before_growth = gc_collection_count();
+    let mut filler = Vec::new();
+    for _ in 0..32 {
+        filler.push(crate::arena::arena_alloc_gc_old(
+            64 * 1024,
+            8,
+            GC_TYPE_STRING,
+        ));
+    }
+    assert!(
+        crate::arena::arena_total_bytes() > arena_total_before + 1024 * 1024,
+        "the filler must grow the arena total past the PRE-collection trigger \
+         value, or the second assertion cannot distinguish the two behaviours \
+         (total={}, pre-collection trigger={})",
+        crate::arena::arena_total_bytes(),
+        arena_total_before + 1024 * 1024
+    );
+    reset_old_reclaim_pressure();
+    gc_check_trigger();
+    assert_eq!(
+        gc_collection_count(),
+        collections_before_growth,
+        "2 MB of old-generation growth after a nursery collection must not run \
+         another whole-arena minor on the quiet nursery: the arena trigger was \
+         re-baselined by the collection that just ran, so 2 MB cannot reach it \
+         (floor is {} MB of headroom)",
+        gc_trigger_headroom_floor_bytes() / (1024 * 1024)
+    );
+    drop(filler);
+}
+
+/// The OFF state of `PERRY_GC_ARENA_REBASELINE_ALL`, which CLAUDE.md's GC knob
+/// kill-policy requires ("every GC env knob either has a required CI arm
+/// exercising its OFF state, or it is deleted"), and which is at the same time
+/// the **sabotage proof** for the two ON-state tests: the knob's OFF branch is
+/// exactly the deletion of the
+/// `gc_rebaseline_arena_trigger_after_collection` call from
+/// `gc_finish_malloc_trigger_collection`, so asserting the defect returns under
+/// the knob keeps that proof running in CI instead of being performed by hand
+/// and then lost.
+///
+/// Same fixture as `direct_malloc_minor_also_rebaselines_the_whole_arena_trigger`,
+/// opposite expectations at both ends — the trigger is left exactly where it
+/// was armed before the collection, and 2 MB of old-generation growth is then
+/// enough to fire a whole-arena minor on the nursery that collection just
+/// emptied. That second half is shape (b) in miniature and is the reason the
+/// first half matters: a stale threshold is only a defect because something
+/// crosses it.
+#[test]
+fn direct_malloc_minor_arena_rebaseline_kill_switch_restores_the_stale_threshold() {
+    let _legacy_pacing = crate::gc::policy::force_legacy_gc_pacing();
+    let _rebaseline_all = crate::gc::policy::ArenaRebaselineAllTestGuard::force(false);
+    let _nursery = CopyingNurseryTestGuard::new(1);
+    let _scanners = ScopedRootScannerRegistryGuard::new();
+    gc_register_root_scanner(noop_copy_only_root_scanner);
+    let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    reset_old_reclaim_pressure();
+
+    let live_malloc = gc_malloc(
+        std::mem::size_of::<crate::closure::ClosureHeader>(),
+        GC_TYPE_CLOSURE,
+    );
+    unsafe {
+        init_test_closure(live_malloc);
+    }
+    js_shadow_slot_set(0, ptr_bits(live_malloc as usize));
+    let churn_headers = allocate_dead_malloc_churn_headers(128);
+
+    let arena_total_before = crate::arena::arena_total_bytes();
+    let stale_trigger = arena_total_before + 1024 * 1024;
+    GC_NEXT_TRIGGER_BYTES.with(|trigger| trigger.set(stale_trigger));
+    trigger_guard.make_malloc_sweep_due();
+
+    let before = gc_collection_count();
+    gc_check_trigger();
+    assert!(
+        gc_collection_count() > before,
+        "the MallocCount minor must still run under the kill switch — the knob \
+         gates the re-baseline, not the collection"
+    );
+    assert_eq!(
+        tracked_malloc_headers_matching(&churn_headers),
+        0,
+        "the collection must have swept malloc, or it did not take the arm \
+         whose finisher is under test"
+    );
+
+    // (1) The defect: the whole-arena trigger is exactly where it was armed
+    //     BEFORE the collection. Not merely "below the floor" — unmoved.
+    assert_eq!(
+        GC_NEXT_TRIGGER_BYTES.with(|trigger| trigger.get()),
+        stale_trigger,
+        "with the re-baseline disabled the MallocCount finisher must leave the \
+         whole-arena trigger untouched — that is the pre-#9840 behaviour this \
+         knob restores"
+    );
+
+    // (2) ...and it is a threshold something crosses: 2 MB of old-generation
+    //     growth now fires a whole-arena minor on the emptied nursery.
+    reset_old_reclaim_pressure();
+    let collections_before_growth = gc_collection_count();
+    let mut filler = Vec::new();
+    for _ in 0..32 {
+        filler.push(crate::arena::arena_alloc_gc_old(
+            64 * 1024,
+            8,
+            GC_TYPE_STRING,
+        ));
+    }
+    assert!(
+        crate::arena::arena_total_bytes() > stale_trigger,
+        "the filler must cross the stale threshold (total={}, stale_trigger={})",
+        crate::arena::arena_total_bytes(),
+        stale_trigger
+    );
+    reset_old_reclaim_pressure();
+    gc_check_trigger();
+    assert!(
+        gc_collection_count() > collections_before_growth,
+        "shape (b): with the threshold left stale, old-generation growth fires \
+         a WHOLE-ARENA minor on a nursery the previous collection emptied — \
+         this is the collection #9840 removes, and the assertion that fails \
+         when the fix is present"
+    );
+    drop(filler);
+}
+
 /// Debt-proportional assist pacing: the per-assist work budget must grow
 /// linearly with measured debt (and be exactly the base when no debt).
 #[test]
