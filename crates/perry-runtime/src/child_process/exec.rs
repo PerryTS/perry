@@ -62,8 +62,7 @@ pub extern "C" fn js_child_process_exec_sync(
     };
     cp_apply_options(&mut command, opts_val);
 
-    let mut run_options = cp_read_sync_stdio_run_options(opts_val);
-    run_options.mark_shell_command();
+    let run_options = cp_read_sync_stdio_run_options(opts_val);
     let run = cp_run_to_completion(command, &run_options);
     let stdout_box = cp_box_run_output(&run.stdout, run.stdout_piped, &mode);
     if run.success() {
@@ -298,8 +297,7 @@ pub extern "C" fn js_child_process_exec(cmd_ptr: *const StringHeader, arg1: f64,
         c
     };
     cp_apply_options(&mut command, arg1);
-    let mut run_options = cp_read_async_run_options(arg1);
-    run_options.mark_shell_command();
+    let run_options = cp_read_async_run_options(arg1);
 
     if cb.is_null() {
         // Legacy no-callback shape — run synchronously and return stdout
@@ -312,7 +310,7 @@ pub extern "C" fn js_child_process_exec(cmd_ptr: *const StringHeader, arg1: f64,
 
     // With a callback, run asynchronously: off the main thread, with the
     // callback fired on a later event-loop tick (#4912).
-    reactor::cp_exec_async(command, cmd_str, cb_val, run_options, mode)
+    reactor::cp_exec_async(command, cmd_str, None, cb_val, run_options, mode)
 }
 
 /// `child_process.execFile(file[, args][, options][, callback])` — like `exec`
@@ -383,6 +381,7 @@ pub extern "C" fn js_child_process_exec_file(
     reactor::cp_exec_async(
         command,
         cp_file_cmd_display(&file_str, &arg_strs),
+        Some(file_str),
         cb_nanbox,
         run_options,
         mode,
@@ -471,7 +470,12 @@ extern "C" fn cp_promise_settle_cb(
 /// `command` through the async exec reactor (#4912). Returns the NaN-boxed
 /// pending promise. The settle closure (and through it the promise) is kept
 /// alive by the reactor's exec-callback GC root.
-fn cp_promisified_run(command: Command, cmd_str: String, opts: f64) -> f64 {
+fn cp_promisified_run(
+    command: Command,
+    cmd_str: String,
+    public_spawnfile: Option<String>,
+    opts: f64,
+) -> f64 {
     let run_options = cp_read_async_run_options(opts);
     // promisify(exec)/promisify(execFile) yield string stdout/stderr (utf8).
     let mode = cp_read_output_mode(opts, true);
@@ -480,7 +484,14 @@ fn cp_promisified_run(command: Command, cmd_str: String, opts: f64) -> f64 {
     let cb = js_closure_alloc(cp_promise_settle_cb as *const u8, 1);
     js_closure_set_capture_ptr(cb, 0, cp_box_ptr(promise as *const u8).to_bits() as i64);
     let cb_val = crate::value::js_nanbox_pointer(cb as i64);
-    let child = reactor::cp_exec_async(command, cmd_str, cb_val, run_options, mode);
+    let child = reactor::cp_exec_async(
+        command,
+        cmd_str,
+        public_spawnfile,
+        cb_val,
+        run_options,
+        mode,
+    );
     crate::object::exotic_expando::value_store(
         crate::object::exotic_expando::ExoticKind::Promise,
         promise as usize,
@@ -509,7 +520,7 @@ extern "C" fn cp_promisified_exec(_closure: *const ClosureHeader, cmd_val: f64, 
         c
     };
     cp_apply_options(&mut command, opts);
-    cp_promisified_run(command, cmd, opts)
+    cp_promisified_run(command, cmd, None, opts)
 }
 
 extern "C" fn cp_promisified_exec_file(
@@ -529,6 +540,7 @@ extern "C" fn cp_promisified_exec_file(
     cp_promisified_run(
         command,
         cp_file_cmd_display(&file, &arg_strs),
+        Some(file),
         f64::from_bits(TAG_UNDEFINED_BITS),
     )
 }

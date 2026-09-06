@@ -1,5 +1,7 @@
-use std::io::Write;
-use std::process::{Command, Stdio};
+use std::io::{Read, Write};
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::mpsc::{self, Sender};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use crate::value::JSValue;
@@ -16,7 +18,6 @@ pub(crate) struct CpRunOptions {
     input: Option<Vec<u8>>,
     timeout: Option<Duration>,
     kill_signal: i32,
-    shell_command: bool,
     pub(super) max_buffer: usize,
     stdio: [CpStdio; 3],
 }
@@ -33,10 +34,6 @@ impl CpRunOptions {
     pub(super) fn timeout(&self) -> Option<Duration> {
         self.timeout
     }
-
-    pub(super) fn mark_shell_command(&mut self) {
-        self.shell_command = true;
-    }
 }
 
 impl Default for CpRunOptions {
@@ -45,7 +42,6 @@ impl Default for CpRunOptions {
             input: None,
             timeout: None,
             kill_signal: CP_SIGTERM,
-            shell_command: false,
             max_buffer: CP_DEFAULT_MAX_BUFFER,
             stdio: [CpStdio::Pipe; 3],
         }
@@ -129,7 +125,6 @@ pub(super) fn cp_read_spawn_sync_run_options(opts_val: f64) -> CpRunOptions {
         stdio.get(1).copied().unwrap_or(CpStdio::Pipe),
         stdio.get(2).copied().unwrap_or(CpStdio::Pipe),
     ];
-    options.shell_command = crate::value::js_is_truthy(cp_get_field(opts_val, b"shell")) != 0;
     options
 }
 
@@ -218,10 +213,6 @@ impl CpRun {
 /// Piped stdin without input is closed so children that read stdin see EOF
 /// instead of blocking. Used by synchronous + buffered-callback entry points.
 pub(super) fn cp_run_to_completion(mut command: Command, options: &CpRunOptions) -> CpRun {
-    // A shell that has already completed its short command reports its real
-    // exit status with ENOBUFS; a direct child is still terminable at the
-    // buffer threshold and reports the configured signal.
-    let shell_command = options.shell_command;
     let stdin_piped = matches!(options.stdio[0], CpStdio::Pipe) && options.input.is_some();
     let stdout_piped = matches!(options.stdio[1], CpStdio::Pipe);
     let stderr_piped = matches!(options.stdio[2], CpStdio::Pipe);
@@ -246,33 +237,37 @@ pub(super) fn cp_run_to_completion(mut command: Command, options: &CpRunOptions)
     match command.spawn() {
         Ok(mut child) => {
             let pid = child.id();
+            let (limit_tx, limit_rx) = mpsc::channel();
+            let stdout_reader =
+                cp_read_piped_output(child.stdout.take(), options, pid, limit_tx.clone());
+            let stderr_reader = cp_read_piped_output(child.stderr.take(), options, pid, limit_tx);
             if stdin_piped {
                 if let (Some(input), Some(mut stdin)) = (&options.input, child.stdin.take()) {
                     let _ = stdin.write_all(input);
                 }
             }
-            let mut run_error =
-                cp_wait_for_timeout(&mut child, options.timeout, options.kill_signal);
-            match child.wait_with_output() {
-                Ok(o) => {
-                    let CpExit { code, signal } = cp_decode_status(&o.status);
+            drop(child.stdin.take());
+
+            let mut run_error = None;
+            match cp_wait_for_buffered_child(&mut child, options, &limit_rx, &mut run_error) {
+                Ok(status) => {
+                    let stdout = cp_join_piped_output(stdout_reader);
+                    let stderr = cp_join_piped_output(stderr_reader);
+                    let CpExit { code, signal } = cp_decode_status(&status);
                     if run_error.is_none()
                         && options.max_buffer > 0
-                        && ((stdout_piped && o.stdout.len() > options.max_buffer)
-                            || (stderr_piped && o.stderr.len() > options.max_buffer))
+                        && ((stdout_piped && stdout.len() > options.max_buffer)
+                            || (stderr_piped && stderr.len() > options.max_buffer))
                     {
                         run_error = Some(CpRunError::MaxBuffer);
                     }
                     let (code, signal) = match run_error {
                         Some(CpRunError::Timeout) => (None, Some(options.kill_signal)),
-                        Some(CpRunError::MaxBuffer) if !shell_command => {
-                            (None, Some(options.kill_signal))
-                        }
                         _ => (code, signal),
                     };
                     CpRun {
-                        stdout: o.stdout,
-                        stderr: o.stderr,
+                        stdout,
+                        stderr,
                         stdout_piped,
                         stderr_piped,
                         code,
@@ -309,25 +304,81 @@ pub(super) fn cp_run_to_completion(mut command: Command, options: &CpRunOptions)
     }
 }
 
-fn cp_wait_for_timeout(
-    child: &mut std::process::Child,
-    timeout: Option<Duration>,
-    kill_signal: i32,
-) -> Option<CpRunError> {
-    let timeout = timeout?;
-    let deadline = Instant::now() + timeout;
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => return None,
-            Ok(None) => {
-                if Instant::now() >= deadline {
-                    cp_terminate_child(child, kill_signal);
-                    return Some(CpRunError::Timeout);
+fn cp_read_piped_output<R: Read + Send + 'static>(
+    reader: Option<R>,
+    options: &CpRunOptions,
+    _pid: u32,
+    limit_tx: Sender<()>,
+) -> Option<JoinHandle<Vec<u8>>> {
+    let max_buffer = options.max_buffer;
+    #[cfg(unix)]
+    let kill_signal = options.kill_signal;
+    reader.map(|mut reader| {
+        std::thread::spawn(move || {
+            let mut output = Vec::new();
+            let mut chunk = [0_u8; 8192];
+            let mut reported_limit = false;
+            loop {
+                match reader.read(&mut chunk) {
+                    Ok(0) | Err(_) => break,
+                    Ok(read) => {
+                        output.extend_from_slice(&chunk[..read]);
+                        if !reported_limit && max_buffer > 0 && output.len() > max_buffer {
+                            // Signal at the read that crosses the limit. Going
+                            // through the parent's polling loop here leaves a
+                            // fast child enough time to exit before the signal.
+                            #[cfg(unix)]
+                            unsafe {
+                                let _ = libc::kill(_pid as i32, kill_signal);
+                            }
+                            let _ = limit_tx.send(());
+                            reported_limit = true;
+                        }
+                    }
                 }
-                let remaining = deadline.saturating_duration_since(Instant::now());
-                std::thread::sleep(remaining.min(Duration::from_millis(5)));
             }
-            Err(_) => return None,
+            output
+        })
+    })
+}
+
+fn cp_join_piped_output(reader: Option<JoinHandle<Vec<u8>>>) -> Vec<u8> {
+    reader
+        .and_then(|reader| reader.join().ok())
+        .unwrap_or_default()
+}
+
+fn cp_wait_for_buffered_child(
+    child: &mut Child,
+    options: &CpRunOptions,
+    limit_rx: &mpsc::Receiver<()>,
+    run_error: &mut Option<CpRunError>,
+) -> std::io::Result<ExitStatus> {
+    let deadline = options.timeout.map(|timeout| Instant::now() + timeout);
+    loop {
+        if run_error.is_none() && limit_rx.try_recv().is_ok() {
+            *run_error = Some(CpRunError::MaxBuffer);
+            // A short child can exit between filling the pipe and this
+            // notification. Preserve that real exit status, as Node does,
+            // and terminate only a child that is still running.
+            if let Some(status) = child.try_wait()? {
+                return Ok(status);
+            }
+            cp_terminate_child(child, options.kill_signal);
+        }
+
+        match child.try_wait() {
+            Ok(Some(status)) => return Ok(status),
+            Ok(None) => {
+                if run_error.is_none()
+                    && deadline.is_some_and(|deadline| Instant::now() >= deadline)
+                {
+                    *run_error = Some(CpRunError::Timeout);
+                    cp_terminate_child(child, options.kill_signal);
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            Err(error) => return Err(error),
         }
     }
 }
