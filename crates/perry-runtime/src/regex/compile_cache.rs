@@ -131,7 +131,7 @@ pub(crate) fn evict_regex_cache_if_full<K, V>(cache: &mut HashMap<K, V>) {
 /// One shared never-match program per thread.
 ///
 /// Only used by the `PERRY_REGEX_ENGINE=regress` measurement path, where every
-/// pattern needs a value in `regex_ptr` (the built/not-built flag) but no NFA:
+/// pattern needs a value in `programs_ptr` (the built/not-built flag) but no NFA:
 /// building a fresh one per pattern would be exactly the compile cost the
 /// experiment exists to remove from the measurement.
 #[cfg(feature = "regex-engine")]
@@ -173,7 +173,7 @@ pub(crate) fn compile_and_cache_regex_checked(pattern: &Arc<str>, flags: &Arc<st
     // `repeat_matcher::regress_first`): the ECMAScript backtracker is the
     // primary engine, so stop here. Every exec-family entry point consults the
     // repeat matcher first, and the shared never-match placeholder gives the
-    // header's `regex_ptr` built-flag a value WITHOUT building an NFA — which
+    // header's `programs_ptr` built-flag a value WITHOUT building an NFA — which
     // is the whole point of the experiment (the linear engine's program is
     // ~12.5 KB median against regress's 512 B, measured over 4,463 literals
     // from seven real bundles).

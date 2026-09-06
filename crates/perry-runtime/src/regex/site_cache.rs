@@ -47,28 +47,18 @@ pub(super) struct Programs {
     pub(super) repeat: Option<Arc<super::repeat_matcher::RepeatMatcherRegex>>,
 }
 
-impl Clone for Programs {
-    fn clone(&self) -> Self {
-        Self {
-            std: self.std.clone(),
-            fancy: self.fancy.clone(),
-            repeat: self.repeat.clone(),
-        }
-    }
-}
-
 /// What a construction gets back on a hit.
 pub(super) struct Hit {
     pub(super) pattern: Arc<str>,
     pub(super) flags: Arc<str>,
-    pub(super) programs: Option<Programs>,
+    pub(super) programs: Option<Arc<Programs>>,
 }
 
 struct Entry {
     fp: u64,
     pattern: Arc<str>,
     flags: Arc<str>,
-    programs: Option<Programs>,
+    programs: Option<Arc<Programs>>,
 }
 
 /// Direct-mapped slots (2-way: a fingerprint may live in `slot` or
@@ -204,7 +194,7 @@ pub(super) fn insert(pattern: &str, flags: &str) -> (Arc<str>, Arc<str>) {
 /// Attach the programs the first execution built to the entry for
 /// `(pattern, canonical flags)`, so every later construction of the same
 /// text is born built. Inserts the entry if it was evicted meanwhile.
-pub(super) fn install_programs(pattern: &str, flags: &str, programs: Programs) {
+pub(super) fn install_programs(pattern: &str, flags: &str, programs: Arc<Programs>) {
     if !enabled() {
         return;
     }

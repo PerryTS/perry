@@ -65,37 +65,20 @@ use super::site_cache::Programs;
 /// site entry whose programs have been dropped simply reports "not built
 /// yet", and the next construction re-picks them up from the content cache —
 /// the same path the site's very first construction takes.
-struct WeakPrograms {
-    std: Weak<::regex::Regex>,
-    fancy: Option<Weak<::fancy_regex::Regex>>,
-    repeat: Option<Weak<super::repeat_matcher::RepeatMatcherRegex>>,
-}
+struct WeakPrograms(Weak<Programs>);
 
 impl WeakPrograms {
-    fn downgrade(programs: &Programs) -> Self {
-        Self {
-            std: Arc::downgrade(&programs.std),
-            fancy: programs.fancy.as_ref().map(Arc::downgrade),
-            repeat: programs.repeat.as_ref().map(Arc::downgrade),
-        }
+    fn downgrade(programs: &Arc<Programs>) -> Self {
+        Self(Arc::downgrade(programs))
     }
 
     /// ALL-OR-NOTHING. A header must carry **every** program its pattern needs
     /// — that is #9801's coherence rule, and a partial upgrade is exactly the
     /// incoherent triple it fixed: a standard program installed beside a
     /// missing fancy fallback silently never-matches instead of falling back.
-    /// So a single dead reference makes the whole entry report unbuilt.
-    fn upgrade(&self) -> Option<Programs> {
-        let std = self.std.upgrade()?;
-        let fancy = match &self.fancy {
-            None => None,
-            Some(weak) => Some(weak.upgrade()?),
-        };
-        let repeat = match &self.repeat {
-            None => None,
-            Some(weak) => Some(weak.upgrade()?),
-        };
-        Some(Programs { std, fancy, repeat })
+    /// One weak pointer to the bundle makes partial upgrade unrepresentable.
+    fn upgrade(&self) -> Option<Arc<Programs>> {
+        self.0.upgrade()
     }
 }
 
@@ -137,7 +120,7 @@ pub(super) struct SiteHit {
     pub(super) flags: Arc<str>,
     pub(super) flags_are_canonical: bool,
     pub(super) bits: FlagBits,
-    pub(super) programs: Option<Programs>,
+    pub(super) programs: Option<Arc<Programs>>,
 }
 
 /// Direct-mapped, 2-way (a key may live in `slot` or `slot ^ 1`). A bundle's
@@ -204,7 +187,7 @@ pub(super) fn record(
     flags: Arc<str>,
     flags_are_canonical: bool,
     bits: FlagBits,
-    programs: Option<Programs>,
+    programs: Option<Arc<Programs>>,
 ) {
     if !enabled() || key == 0 {
         return;
@@ -260,7 +243,7 @@ pub(super) fn record(
 
 /// Attach the programs the first execution built, so later constructions at
 /// this site are born built. A no-op when the site was evicted meanwhile.
-pub(super) fn install_programs(key: usize, programs: Programs) {
+pub(super) fn install_programs(key: usize, programs: Arc<Programs>) {
     if !enabled() || key == 0 {
         return;
     }
@@ -323,42 +306,38 @@ mod tests {
     /// #9801 fixed an incoherent triple — a standard program memoized beside a
     /// missing fancy fallback — which does not error: it silently never
     /// matches. Holding the site entry's programs weakly reintroduces exactly
-    /// that shape unless a dead reference invalidates the WHOLE entry, because
-    /// the three `Arc`s have independent lifetimes and the fancy fallback is
-    /// the one a pattern the linear engine refused depends on.
-    ///
-    /// A sabotage that upgrades each field independently — the natural way to
-    /// write it — returns `Some(Programs { std, fancy: None, .. })` here and
-    /// fails on the second assertion.
+    /// that shape if it weakens each matcher separately. A single weak pointer
+    /// to the program bundle makes an incoherent partial upgrade impossible.
     #[test]
-    fn one_dead_reference_invalidates_the_whole_entry() {
+    fn the_program_set_weak_reference_expires_atomically() {
         let std_program = Arc::new(::regex::Regex::new("a(b)c").expect("linear program"));
         let fancy_program = Arc::new(::fancy_regex::Regex::new("a(?=b)c").expect("fancy program"));
-        let programs = Programs {
+        let programs = Arc::new(Programs {
             std: std_program.clone(),
             fancy: Some(fancy_program.clone()),
             repeat: None,
-        };
+        });
         let weak = WeakPrograms::downgrade(&programs);
-        drop(programs);
 
         let upgraded = weak
             .upgrade()
-            .expect("both strong references are still held here");
+            .expect("the shared program set is still held here");
         assert!(
             upgraded.fancy.is_some(),
             "the fancy fallback must survive the round trip while its Arc is alive"
         );
         drop(upgraded);
 
-        // Only the FANCY program dies. The standard one is still strongly held.
-        drop(fancy_program);
+        // Individual matcher Arcs do not keep the SET alive. Once the bundle
+        // is gone the weak entry expires all three lanes together, which is
+        // the coherence property a triple of independent Weak pointers had
+        // to implement manually.
+        drop(programs);
         assert!(
             weak.upgrade().is_none(),
-            "one dead reference must invalidate the whole entry — handing back a header with a \
-             standard program and no fancy fallback is #9801's incoherent triple, which never \
-             matches instead of failing"
+            "the site entry must never upgrade only part of a program set"
         );
+        drop(fancy_program);
         drop(std_program);
         assert!(weak.upgrade().is_none());
     }
@@ -371,11 +350,11 @@ mod tests {
         test_reset();
         let key = 0x5171_E000_usize;
         let std_program = Arc::new(::regex::Regex::new("keepalive").expect("linear program"));
-        let programs = Programs {
+        let programs = Arc::new(Programs {
             std: std_program.clone(),
             fancy: None,
             repeat: None,
-        };
+        });
         record(
             key,
             Arc::from("g"),
@@ -391,7 +370,7 @@ mod tests {
                 unicode: false,
                 has_indices: false,
             },
-            Some(programs),
+            Some(programs.clone()),
         );
         assert!(
             lookup(key, "g")
@@ -401,6 +380,7 @@ mod tests {
             "precondition: the entry answers with its programs while they are alive"
         );
 
+        drop(programs);
         drop(std_program);
         let hit = lookup(key, "g").expect("the entry itself survives");
         assert!(
