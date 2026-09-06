@@ -47,6 +47,15 @@ export function createNativeRenderer(driver: NativeDriver) {
   }
 
   function createElement(name: string): NativeNode {
+    // JSX intrinsic names are lowercase; the native driver uses Perry names.
+    switch (name) {
+      case "vstack": name = "VStack"; break;
+      case "hstack": name = "HStack"; break;
+      case "text": name = "Text"; break;
+      case "button": name = "Button"; break;
+      case "spacer": name = "Spacer"; break;
+      case "divider": name = "Divider"; break;
+    }
     if (!["VStack", "HStack", "Text", "Button", "Spacer", "Divider"].includes(name)) {
       throw new Error(`Unsupported Perry Solid element: ${name}`);
     }
