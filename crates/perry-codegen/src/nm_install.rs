@@ -151,6 +151,16 @@ pub(crate) fn nm_submod_install_symbol(key: &str) -> Option<&'static str> {
     }
 }
 
+/// Native-module spellings whose value is implemented by the node-submodule
+/// registry rather than a generic native-module namespace object.
+pub(crate) fn native_namespace_submodule_key(name: &str) -> Option<&'static str> {
+    match name.strip_prefix("node:").unwrap_or(name) {
+        "fs/promises" => Some("fs_promises"),
+        "stream/promises" => Some("stream_promises"),
+        _ => None,
+    }
+}
+
 #[allow(dead_code)] // consumed only by codegen configurations that emit dispatch declarations
 pub(crate) const NM_SUBMOD_INSTALL_SYMBOLS: &[&str] = &[
     "js_node_submod_install_vm",

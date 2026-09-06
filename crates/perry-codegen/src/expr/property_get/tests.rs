@@ -315,6 +315,27 @@ fn fs_parent_promises_property_installs_before_resolution() {
     );
 }
 
+#[test]
+fn fs_promises_native_module_value_uses_submodule_singleton() {
+    let mut module = Module::new("fs_promises_native_module_value.ts");
+    module.init = vec![Stmt::Return(Some(Expr::NativeModuleRef(
+        "fs/promises".to_string(),
+    )))];
+
+    let ir = String::from_utf8(compile_module(&module, ir_opts(false, None)).unwrap())
+        .expect("LLVM IR should be UTF-8");
+    let install = ir
+        .find("call void @js_node_submod_install_fs_promises()")
+        .unwrap_or_else(|| panic!("fs/promises must emit its submodule installer:\n{ir}"));
+    let namespace = ir
+        .find("call double @js_node_submodule_namespace")
+        .unwrap_or_else(|| panic!("fs/promises must use its submodule singleton:\n{ir}"));
+    assert!(
+        install < namespace,
+        "fs/promises installation must precede namespace creation:\n{ir}"
+    );
+}
+
 /// #7753, paired with `pic_cache_words_match_codegen` in
 /// `perry-runtime/src/object/field_get_set/ic_miss.rs`.
 ///

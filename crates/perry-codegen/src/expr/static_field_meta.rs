@@ -910,6 +910,22 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // require("node:fs"); fs.constants` (call-result shape, fallback
         // path here) both produce a real namespace object.
         Expr::NativeModuleRef(name) => {
+            if let Some(submod_key) = crate::nm_install::native_namespace_submodule_key(name) {
+                let submod_idx = ctx.strings.intern(submod_key);
+                let submod_bytes_global =
+                    format!("@{}", ctx.strings.entry(submod_idx).bytes_global);
+                let submod_len = submod_key.len().to_string();
+                let install_sym = crate::nm_install::nm_submod_install_symbol(submod_key);
+                let blk = ctx.block();
+                if let Some(symbol) = install_sym {
+                    blk.call_void(symbol, &[]);
+                }
+                return Ok(blk.call(
+                    DOUBLE,
+                    "js_node_submodule_namespace",
+                    &[(PTR, &submod_bytes_global), (I32, &submod_len)],
+                ));
+            }
             let mod_idx = ctx.strings.intern(name);
             let mod_bytes_global = format!("@{}", ctx.strings.entry(mod_idx).bytes_global);
             let mod_len_str = name.len().to_string();
