@@ -1,6 +1,40 @@
 use super::*;
 
 #[test]
+fn json_escaped_expansion_count_matches_scalar_oracle_at_every_lane_and_tail() {
+    let oracle = |bytes: &[u8]| -> u64 {
+        bytes
+            .iter()
+            .map(|b| match b {
+                b'"' | b'\\' | b'\n' | b'\r' | b'\t' | 8 | 12 => 1,
+                0..=31 => 5,
+                _ => 0,
+            })
+            .sum()
+    };
+    for len in 0..=80 {
+        for value in 0..=255u8 {
+            let bytes = vec![value; len];
+            assert_eq!(count_expansion(&bytes), oracle(&bytes));
+        }
+    }
+    let mut state = 0x27f1_065d_99a8_c31bu64;
+    for offset in 0..32 {
+        let mut bytes = vec![0; 4096 + offset];
+        for b in &mut bytes {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            *b = state as u8;
+        }
+        for tail in 0..32 {
+            let slice = &bytes[offset..bytes.len() - tail];
+            assert_eq!(count_expansion(slice), oracle(slice));
+        }
+    }
+}
+
+#[test]
 fn json_escaped_output_matches_complete_oracle_with_bounded_writes() {
     let ascii: String = (0..=127).map(char::from).collect();
     for text in [

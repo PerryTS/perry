@@ -17,11 +17,7 @@ impl Plan {
         // Raw internal strings and synthetic SSO values need not be valid UTF-8.
         // Never infer validity from the string flags, which can propagate by OR.
         std::str::from_utf8(source).ok()?;
-        let extra = source.iter().fold(0u64, |extra, &b| {
-            let control = b < 0x20;
-            let short = matches!(b, b'\n' | b'\r' | b'\t' | 8 | 12);
-            extra + u64::from(control || b == b'"' || b == b'\\') + 4 * u64::from(control && !short)
-        });
+        let extra = count_expansion(source);
         Self::with_expansion(len, units, extra)
     }
 
@@ -74,6 +70,52 @@ impl Plan {
         debug_assert_eq!(at + 1, self.bytes as usize);
         at + 1
     }
+}
+
+// Only ASCII controls, quotes and backslashes expand valid UTF-8. Controls
+// use six output bytes except the five two-byte short escapes.
+const EXPANSION: [u8; 256] = {
+    let mut table = [0; 256];
+    let mut i = 0;
+    while i < 32 {
+        table[i] = 5;
+        i += 1;
+    }
+    table[8] = 1;
+    table[9] = 1;
+    table[10] = 1;
+    table[12] = 1;
+    table[13] = 1;
+    table[b'"' as usize] = 1;
+    table[b'\\' as usize] = 1;
+    table
+};
+
+fn count_expansion(bytes: &[u8]) -> u64 {
+    let mut at = 0;
+    let mut extra = 0u64;
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        use std::arch::aarch64::*;
+        let controls = uint8x16x2_t(vld1q_u8(EXPANSION.as_ptr()), vdupq_n_u8(5));
+        while bytes.len() - at >= 16 {
+            let chunk = vld1q_u8(bytes.as_ptr().add(at));
+            // A table lookup yields zero for byte values outside 0..32.
+            let control_extra = vqtbl2q_u8(controls, chunk);
+            let punctuation = vorrq_u8(
+                vceqq_u8(chunk, vdupq_n_u8(b'"')),
+                vceqq_u8(chunk, vdupq_n_u8(b'\\')),
+            );
+            let expansion = vorrq_u8(control_extra, vandq_u8(punctuation, vdupq_n_u8(1)));
+            // At most 16 * 5 = 80, so the byte reduction cannot overflow.
+            extra += vaddvq_u8(expansion) as u64;
+            at += 16;
+        }
+    }
+    for &b in &bytes[at..] {
+        extra += EXPANSION[b as usize] as u64;
+    }
+    extra
 }
 
 #[inline(never)]
