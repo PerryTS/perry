@@ -275,6 +275,18 @@ pub(super) struct CopyingNurseryTraceStats {
     /// Live bytes re-copied/promoted out of the from-survivor space this
     /// cycle — the re-copy tax the adaptive loop exists to bound.
     pub(super) survivor_live_bytes: usize,
+    /// #9851 follow-up: the FRESH half of `copied_bytes` — bytes copied out of
+    /// Eden into the to-survivor space this cycle, excluding survivor-space
+    /// residents being re-copied. This is the intake of exactly one cohort,
+    /// and it is the denominator the survival-rate lock must use.
+    pub(super) eden_copied_bytes: usize,
+    /// The matching numerator: live bytes moved out of the from-survivor space
+    /// this cycle whose stored survival age was 1 — i.e. objects that entered
+    /// the survivor space from Eden on the PREVIOUS cycle, and nothing older.
+    /// `survivor_live_bytes` rates the whole space, whose composition changes
+    /// with the threshold; this rates one aging round of one fresh cohort,
+    /// which is what the lock's conclusion is about.
+    pub(super) survivor_first_round_live_bytes: usize,
     pub(super) large_excluded_objects: usize,
     pub(super) large_excluded_bytes: usize,
     pub(super) reset_blocks: usize,
@@ -1151,6 +1163,8 @@ impl GcCycleTrace {
             "tenuring_survivals": self.copying_nursery.tenuring_survivals,
             "eden_live_bytes": self.copying_nursery.eden_live_bytes,
             "survivor_live_bytes": self.copying_nursery.survivor_live_bytes,
+            "eden_copied_bytes": self.copying_nursery.eden_copied_bytes,
+            "survivor_first_round_live_bytes": self.copying_nursery.survivor_first_round_live_bytes,
             "large_excluded_objects": self.copying_nursery.large_excluded_objects,
             "large_excluded_bytes": self.copying_nursery.large_excluded_bytes,
             "reset_blocks": self.copying_nursery.reset_blocks,
