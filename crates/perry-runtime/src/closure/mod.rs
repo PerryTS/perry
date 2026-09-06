@@ -75,6 +75,8 @@ pub(crate) use box_captures::{
 };
 #[cfg(test)]
 pub(crate) use dynamic_props::test_clear_closure_side_tables;
+#[cfg(test)]
+pub(crate) use dynamic_props::test_drop_closure_young_log;
 pub(crate) use dynamic_props::{
     clear_closure_side_tables_for_dead_ptr, clone_closure_rebind_this,
     closure_dynamic_props_owner_moved, closure_dynamic_side_tables_nonempty,

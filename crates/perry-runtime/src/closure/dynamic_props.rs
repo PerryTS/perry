@@ -1050,6 +1050,17 @@ pub fn closure_delete_own_dynamic_prop(ptr: usize, prop: &str) -> bool {
     false
 }
 
+/// Sabotage hook for the rule-2 guard in
+/// [`prune_dead_closure_side_table_owners_young`]: drop every logged owner
+/// while LEAVING the three tables populated, so the prune's re-derivation
+/// finds a minor-relevant owner the log does not name. Clearing the tables
+/// too (as `test_clear_closure_side_tables` does) would make the relevant set
+/// empty and the check would return early — i.e. it would test nothing.
+#[cfg(test)]
+pub(crate) fn test_drop_closure_young_log() {
+    CLOSURE_YOUNG_OWNERS.with(|log| log.borrow_mut().clear());
+}
+
 #[cfg(test)]
 pub(crate) fn test_clear_closure_side_tables() {
     CLOSURE_YOUNG_OWNERS.with(|log| log.borrow_mut().clear());
