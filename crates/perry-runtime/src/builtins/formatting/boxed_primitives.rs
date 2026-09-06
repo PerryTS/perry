@@ -204,7 +204,6 @@ pub(crate) fn boxed_string_wrapper_utf16_len(addr: usize) -> Option<u32> {
         Some(crate::string::js_string_length(str_ptr))
     }
 }
-}
 
 pub fn scan_boxed_primitive_payload_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     let mut moved = Vec::new();
