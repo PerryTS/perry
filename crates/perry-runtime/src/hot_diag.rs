@@ -174,6 +174,12 @@ pub struct RegexDiag {
     /// `PtrHasher` hash plus a hashbrown insert, mirrored by two removals at
     /// death and two rekeys per evacuation.
     pub new_side_table_inserts: u64,
+    /// Constructions answered from the LITERAL-SITE table — identity by the
+    /// compiler-emitted site global's address, so neither the pattern's
+    /// fingerprint nor its byte compare ran. `site_hit` counts the
+    /// CONTENT-keyed cache; a site hit never reaches it, so the two are
+    /// disjoint and `site_key_hit + site_hit <= new`.
+    pub new_site_key_hit: u64,
     per_pattern: HashMap<usize, PatStat>,
 }
 
@@ -293,7 +299,7 @@ impl RegexDiag {
              match={} replace={} replace_matches={} split={} flags_alloc={} \
              desc_regexp_probes={} desc_regexp_meta_negative={} \
              barrier_taken={} barrier_gated={} header_bytes={} site_verify_bytes={} \
-             side_table_inserts={}",
+             side_table_inserts={} site_key_hit={}",
             self.new_calls,
             self.new_validated_hit,
             self.new_site_hit,
@@ -322,6 +328,7 @@ impl RegexDiag {
             self.new_header_bytes,
             self.new_site_verify_bytes,
             self.new_side_table_inserts,
+            self.new_site_key_hit,
         );
         // Merge by content (prefix, len, flags): distinct literal sites with
         // the same pattern are one row.
