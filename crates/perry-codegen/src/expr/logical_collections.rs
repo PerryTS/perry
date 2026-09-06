@@ -1314,21 +1314,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // same reason `inline_cache_global_name` does — codegen-unit
             // splitting can promote a private global for cross-unit use.
             //
-            // FAILURE MODE, stated so it is diagnosable rather than surprising:
-            // `typed_parse_rodata` is drained into the module by all five
-            // lowering entry points, but `codegen/method.rs`'s
-            // "parent class has no callable constructor symbol" bail-out
-            // DISCARDS it (along with `ic_globals` and `pending_declares`)
-            // after having lowered the body. A regex literal inside such a
-            // constructor would therefore reference a global that is never
-            // defined. That is a LOUD compile-time failure — the in-process
-            // LLVM parse rejects it with `use of undefined value`, exactly as
-            // it rejected #9859's undeclared externs — and never a wrong
-            // answer at runtime. The same bail-out already discards IC globals
-            // and pending declares, so the path is either unreachable for
-            // non-trivial constructors or already broken for them; this note
-            // is here so the next person to see that message knows where to
-            // look.
+            // The slot must reach the module, so every lowering exit has to
+            // PUBLISH `typed_parse_rodata` rather than drop it. That was not
+            // true when this landed: `codegen/method.rs`'s "parent class has
+            // no callable constructor symbol" bail-out lowered the body and
+            // then discarded the three artifact collections, so a regex
+            // literal inside such a constructor would have referenced a
+            // global that is never defined (#9890, fixed by #9896 — every
+            // return now goes through `publish_lowered_fn_artifacts`, which
+            // also restores `llmod.ic_counter` and so closes the duplicate
+            // site-id half). Kept as a note because the obligation is real
+            // and unenforced: a future early return that drops the artifacts
+            // breaks this site, loudly, at the in-process LLVM parse (`use of
+            // undefined value`) rather than at runtime.
             let site_id = ctx.ic_site_counter;
             ctx.ic_site_counter += 1;
             let slot_name = {
