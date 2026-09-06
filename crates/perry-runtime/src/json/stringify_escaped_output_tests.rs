@@ -40,6 +40,9 @@ fn json_escaped_output_matches_complete_oracle_with_bounded_writes() {
     for text in [
         ascii,
         "\"\\\n\r\t\u{8}\u{c}東京🙂\u{2028}\u{2029}".repeat(4096),
+        // A valid 0xED lead trips the shared surrogate preflight but needs
+        // no escaping. Exercise the validated plan's zero-expansion copy.
+        "힣".repeat(128),
     ] {
         let expected = serde_json::to_string(&text).unwrap();
         let plan = Plan::new(text.as_bytes(), text.encode_utf16().count() as u32).unwrap();
