@@ -6,6 +6,35 @@
   "all_stress_runs_show_live_movement": true,
   "root_inventory": "pass, prior frontier unchanged",
   "empty_cold_fallback": "unit test asserts input relocation; 1000 warm leaf calls without managed growth or collection",
-  "qualified_performance": "pending; candidate staged, no measurements started",
+  "qualified_performance": {
+    "full_matrix": {
+      "verification": 152,
+      "timing": 456,
+      "memory": 432,
+      "quiet_gate": true,
+      "clean_external_observations": 32
+    },
+    "paired": {
+      "cases": 15,
+      "trials": 210,
+      "quiet_gate": true,
+      "clean_external_observations": 13
+    },
+    "at_or_below_better_engine_median": {
+      "cpu": [
+        11,
+        38
+      ],
+      "peak_rss": [
+        58,
+        74
+      ],
+      "retained_rss": [
+        28,
+        36
+      ]
+    },
+    "no_regression_acceptance": false
+  },
   "goal_complete": false
 }

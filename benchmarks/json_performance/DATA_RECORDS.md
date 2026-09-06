@@ -1,25 +1,45 @@
 The current source adds allocation-free scalar parsing and a guarded record
 stringify path. **This is a development checkpoint. Full CPU/RSS parity and
-no-regression acceptance remain open. The record release now has qualified
-full-matrix and paired measurements; it reaches 11/38 CPU, 58/74 peak RSS and
+no-regression acceptance remain open. The current empty-object release has
+qualified full-matrix and paired measurements; it reaches 11/38 CPU, 58/74 peak RSS and
 28/36 retained RSS targets.**
 
 A subsequent change reuses the record preflight when emitting primitive-array
 children. It passes 133 runtime tests, 31 compiled Node comparisons and 20
 moving-GC stress runs, and removes about 5.5% of local process instructions on
 16 KB/1 MB records. Its first benchmark admission was rejected before taking
-measurements because a foreign worker had started. **CPU/RSS results below
-describe the preceding record release, not this unmeasured follow-up.**
+measurements because a foreign worker had started. Its second full run was
+unqualified because foreign workers started midway. Its implementation is
+included in the current qualified empty-object release below.
 [Validation-reuse implementation and evidence](results/record-array-proof/README.md).
 
 The current empty-object follow-up returns its inline output before field
 planning and temporary rooting, using only the probe that cannot allocate.
 Cold prototype lookup declines to the rooted general serializer. It passes
 135 runtime tests, 32 compiled Node comparisons and 22 moving-GC stress runs;
-the cold-empty test explicitly asserts input relocation. Its release binary
-is staged but has no CPU/RSS measurements yet. The validation-reuse build's
-second full run also proved unqualified when foreign workers started midway.
+the cold-empty test explicitly asserts input relocation. The full matrix has
+152 verifications, 456 timing trials and 432 memory trials with 32 clean
+external observations. A separate 210-trial paired check has 13 clean
+observations; both windows pass their load and competing-process gates.
 [Empty-object release evidence](results/empty-object-leaf/README.md).
+
+Against the record release, the paired current build reduces empty-object
+stringify CPU by 11.08%, 16 KB record-array stringify by 4.79%, and 1/8/20 MB
+record-object stringify by 4.00%/3.53%/1.27%. Escaped parsing is 0.65% slower
+and 1 MB object-root parsing is 0.31% slower, with separated paired ranges.
+Numeric parsing's apparent 1.43% full-matrix regression does not reproduce in
+the paired check; the older regression versus Unicode remains unresolved.
+[Current 38 CPU rows and RAM](results/empty-object-leaf/tables.md),
+[every target](results/empty-object-leaf/parity.md), and
+[paired ranges](results/empty-object-leaf/recheck-empty-object-leaf/summary.json).
+Current measured source is f7bc8848770d5b03422478de6e44384feeae6015;
+all 40 recorded source hashes match it.
+
+A subsequent ARM mask-search experiment passed correctness but regressed
+escaped parsing by 50.63% and record-array parsing by 5.89–9.51% in a qualified
+full matrix. It was reverted. LLVM already removed the original source-level
+mask store; replacing the early lane exits with bit counting reduced code size
+without improving execution. [Rejected experiment](results/neon-mask/README.md).
 
 Successful inline scalar parses decode before the existing pending-collection
 hook. They skip the ordinary parser's suppression/rebaseline cycle while
@@ -65,7 +85,7 @@ The measured source is df32314ace602869c8a75584981a0e7bd0d0f7f0; all 39 source
 hashes match that commit. The full run passes its load/competing-process gate
 and 35 external observations are clean: 152 output verifications, 456 timing
 trials and 432 memory trials. A separate 252-trial paired check has 20 clean
-observations and its own passing gate. [Current validation evidence](results/data-record/validation.json).
+observations and its own passing gate. [Preceding record validation](results/data-record/validation.json).
 
 The paired CPU results below compare this record release with the preceding
 tape-scanner release, except where explicitly labeled Unicode. CPU includes

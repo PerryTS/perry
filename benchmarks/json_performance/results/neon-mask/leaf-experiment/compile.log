@@ -1,0 +1,29 @@
+warning: due to multiple output types requested, the explicitly specified output file name will be adapted for each output type
+
+warning: function `count_ascii_digits` is never used
+ --> /Users/amlug/projects/perry/codex-json-fastpaths-artifacts/neon-mask-leaf-experiment/old.rs:8:15
+  |
+8 | pub(crate) fn count_ascii_digits(bytes: &[u8]) -> usize {
+  |               ^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `find_string_escape` is never used
+  --> /Users/amlug/projects/perry/codex-json-fastpaths-artifacts/neon-mask-leaf-experiment/old.rs:36:15
+   |
+36 | pub(crate) fn find_string_escape(bytes: &[u8]) -> Option<usize> {
+   |               ^^^^^^^^^^^^^^^^^^
+
+warning: function `find_quote_or_backslash` is never used
+  --> /Users/amlug/projects/perry/codex-json-fastpaths-artifacts/neon-mask-leaf-experiment/old.rs:43:15
+   |
+43 | pub(crate) fn find_quote_or_backslash(bytes: &[u8]) -> Option<usize> {
+   |               ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `count_ascii_digits` is never used
+ --> /Users/amlug/projects/perry/codex-json-fastpaths-artifacts/neon-mask-leaf-experiment/new.rs:8:15
+  |
+8 | pub(crate) fn count_ascii_digits(bytes: &[u8]) -> usize {
+  |               ^^^^^^^^^^^^^^^^^^
+
+warning: 5 warnings emitted

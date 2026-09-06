@@ -1,0 +1,50 @@
+{
+  "purpose": "Local stack diagnostics only, not qualified CPU/RSS",
+  "worker_sha256": "58401d3da75b7cd1f63e58c4d808af72b0fbfbe3a91b8d6a91c2194df8fc3a15",
+  "profiles": [
+    {
+      "name": "wide_1m-parse",
+      "command": [
+        "/Users/amlug/projects/perry/codex-json-fastpaths-artifacts/empty-object-leaf-worker",
+        "/Users/amlug/projects/perry/codex-json-fastpaths/benchmarks/json_performance/.work/fixtures/wide_1m.json",
+        "parse",
+        "512",
+        "2"
+      ],
+      "worker_exit": 0,
+      "sample_exit": 0,
+      "sample_stderr": "Sampling process 7119 for 3 seconds with 1 millisecond of run time between samples\nSampling completed, processing symbols...\nSample analysis of process 7119 written to file /Users/amlug/projects/perry/codex-json-fastpaths-artifacts/empty-object-leaf-object-profiles/wide_1m-parse.sample.txt\n"
+    },
+    {
+      "name": "wide_1m-stringify",
+      "command": [
+        "/Users/amlug/projects/perry/codex-json-fastpaths-artifacts/empty-object-leaf-worker",
+        "/Users/amlug/projects/perry/codex-json-fastpaths/benchmarks/json_performance/.work/fixtures/wide_1m.json",
+        "stringify",
+        "4096",
+        "2"
+      ],
+      "worker_exit": 0,
+      "sample_exit": 0,
+      "sample_stderr": "Sampling process 7640 for 3 seconds with 1 millisecond of run time between samples\nSampling completed, processing symbols...\nSample analysis of process 7640 written to file /Users/amlug/projects/perry/codex-json-fastpaths-artifacts/empty-object-leaf-object-profiles/wide_1m-stringify.sample.txt\n"
+    },
+    {
+      "name": "heterogeneous_1m-stringify",
+      "command": [
+        "/Users/amlug/projects/perry/codex-json-fastpaths-artifacts/empty-object-leaf-worker",
+        "/Users/amlug/projects/perry/codex-json-fastpaths/benchmarks/json_performance/.work/fixtures/heterogeneous_1m.json",
+        "stringify",
+        "2048",
+        "2"
+      ],
+      "worker_exit": 0,
+      "sample_exit": 0,
+      "sample_stderr": "Sampling process 7965 for 3 seconds with 1 millisecond of run time between samples\nSampling completed, processing symbols...\nSample analysis of process 7965 written to file /Users/amlug/projects/perry/codex-json-fastpaths-artifacts/empty-object-leaf-object-profiles/heterogeneous_1m-stringify.sample.txt\n"
+    }
+  ],
+  "load_after": [
+    34.6826171875,
+    55.6708984375,
+    57.32470703125
+  ]
+}

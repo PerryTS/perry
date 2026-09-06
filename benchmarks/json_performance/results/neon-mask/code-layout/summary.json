@@ -1,0 +1,23 @@
+[
+  {
+    "arm": "unicode",
+    "worker_sha256": "85189dd09e2f34151351546aa751100e0480ef8e110c8380dfbb10d53755d938",
+    "symbol": "__RNvNtCs5gMwpk3Cs4e_13perry_runtime9json_tape15build_tape_into",
+    "instruction_addresses": 1348,
+    "disassembled_span_bytes": 5392
+  },
+  {
+    "arm": "empty-object-leaf",
+    "worker_sha256": "58401d3da75b7cd1f63e58c4d808af72b0fbfbe3a91b8d6a91c2194df8fc3a15",
+    "symbol": "__RNvNtCs5gMwpk3Cs4e_13perry_runtime9json_tape15build_tape_into",
+    "instruction_addresses": 2554,
+    "disassembled_span_bytes": 10216
+  },
+  {
+    "arm": "neon-mask",
+    "worker_sha256": "7d2ff94fc95399c7e8dc540259e9d70db7b7d9bf6265345efade723d9c853675",
+    "symbol": "__RNvNtCs5gMwpk3Cs4e_13perry_runtime9json_tape15build_tape_into",
+    "instruction_addresses": 2089,
+    "disassembled_span_bytes": 8356
+  }
+]

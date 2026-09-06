@@ -8,7 +8,9 @@ Depth preflight contributes 227 and 182 respectively. This narrows the next
 investigation toward tape construction and scanner code generation, without
 establishing a precise CPU split or cause of the measured regression.
 
-The ARM scanner currently stores its comparison mask and searches the 16 bytes.
-An independent leaf experiment replaces that hit handling with two register
-word extracts and trailing-zero counts. It reduces emitted scanner code while
-keeping the no-hit loop unchanged; whole-runtime performance remains to test.
+The ARM scanner expresses a mask store and byte search in Rust, but later
+disassembly showed LLVM already eliminated the store. An independent experiment
+replaced the lane search with register-word extracts and trailing-zero counts.
+It reduced emitted code but regressed escaped parsing by 50.63% in a qualified
+full matrix and was reverted. See ../../neon-mask/README.md. This result keeps
+the numeric regression open and rules out that proposed replacement.
