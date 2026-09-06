@@ -226,7 +226,7 @@ pub(crate) fn arena_alloc_old_excluding_pages(
 /// linear dedup scan that grows as the page fills. Allocation policy is
 /// deliberately UNCHANGED: the `old_free_take_exact` hole probe below stays,
 /// so this is a bookkeeping change only. See the flush discipline in
-/// `arena/page_meta.rs`.
+/// `arena/page_meta/`.
 pub fn arena_alloc_gc_old(size: usize, align: usize, obj_type: u8) -> *mut u8 {
     use crate::gc::{GcHeader, GC_FLAG_ARENA, GC_HEADER_SIZE};
 
