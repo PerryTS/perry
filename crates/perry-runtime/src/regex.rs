@@ -32,6 +32,8 @@ type CompiledPrograms = site_cache::Programs;
 type CompiledPrograms = ();
 
 #[cfg(feature = "regex-engine")]
+pub(crate) mod census_rows;
+#[cfg(feature = "regex-engine")]
 mod class_range_validate;
 #[cfg(feature = "regex-engine")]
 mod compile;
@@ -44,6 +46,8 @@ mod flags;
 mod program_key;
 #[cfg(feature = "regex-engine")]
 mod replace_expand_fancy;
+#[cfg(feature = "regex-engine")]
+pub(crate) use census_rows::{census_snapshot, RegexCensusRow};
 #[cfg(feature = "regex-engine")]
 pub(crate) use program_key::{ProgramKey, NEVER_MATCH_PATTERN};
 #[cfg(feature = "regex-engine")]

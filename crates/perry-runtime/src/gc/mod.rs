@@ -258,6 +258,7 @@ pub(crate) mod census;
 #[cfg(feature = "diagnostics")]
 mod heap_snapshot;
 mod heap_stats;
+mod regex_census;
 pub use census::{census_poll_signal, gc_census_enabled};
 #[cfg(feature = "diagnostics")]
 pub use heap_snapshot::gc_build_v8_heap_snapshot_json;

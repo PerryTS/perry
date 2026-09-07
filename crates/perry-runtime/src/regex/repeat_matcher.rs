@@ -15,6 +15,18 @@ pub(super) struct RepeatMatcherRegex {
 }
 
 impl RepeatMatcherRegex {
+    /// Census-only visible buffers. `regress::Regex` does not expose its
+    /// compiled heap graph, so callers label this as an opaque lower bound.
+    pub(super) fn census_buffer_bytes(&self) -> usize {
+        self.capture_names.capacity() * std::mem::size_of::<Option<String>>()
+            + self
+                .capture_names
+                .iter()
+                .flatten()
+                .map(String::capacity)
+                .sum::<usize>()
+    }
+
     fn named_group_range(
         &self,
         matched: &regress::Match,
