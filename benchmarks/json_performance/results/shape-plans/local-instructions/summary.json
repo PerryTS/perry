@@ -1,0 +1,132 @@
+[
+  {
+    "fixture": "heterogeneous_1m",
+    "operation": "stringify",
+    "calls": 167,
+    "median_process_instructions": {
+      "nested-records": 5717817682,
+      "shape-plans": 4086643337
+    },
+    "candidate_vs_reference": 0.7147208190749025
+  },
+  {
+    "fixture": "object_1k",
+    "operation": "parse",
+    "calls": 500000,
+    "median_process_instructions": {
+      "nested-records": 4496927949,
+      "shape-plans": 4537415911
+    },
+    "candidate_vs_reference": 1.0090034713607106
+  },
+  {
+    "fixture": "records_array_20m",
+    "operation": "stringify",
+    "calls": 8,
+    "median_process_instructions": {
+      "nested-records": 14270413924,
+      "shape-plans": 14262372204
+    },
+    "candidate_vs_reference": 0.9994364760515828
+  },
+  {
+    "fixture": "small_record",
+    "operation": "stringify",
+    "calls": 500000,
+    "median_process_instructions": {
+      "nested-records": 2686419224,
+      "shape-plans": 2687053691
+    },
+    "candidate_vs_reference": 1.000236175722066
+  },
+  {
+    "fixture": "tiny_object",
+    "operation": "parse",
+    "calls": 2000000,
+    "median_process_instructions": {
+      "nested-records": 4656025513,
+      "shape-plans": 4643204329
+    },
+    "candidate_vs_reference": 0.9972463243673811
+  },
+  {
+    "fixture": "object_1k",
+    "operation": "stringify",
+    "calls": 500000,
+    "median_process_instructions": {
+      "nested-records": 1972422357,
+      "shape-plans": 1970692767
+    },
+    "candidate_vs_reference": 0.9991231137723309
+  },
+  {
+    "fixture": "long_string_1m",
+    "operation": "stringify",
+    "calls": 1100,
+    "median_process_instructions": {
+      "nested-records": 2436831563,
+      "shape-plans": 2436767278
+    },
+    "candidate_vs_reference": 0.9999736194323087
+  },
+  {
+    "fixture": "unicode_1m",
+    "operation": "stringify",
+    "calls": 1400,
+    "median_process_instructions": {
+      "nested-records": 2504801059,
+      "shape-plans": 2503755647
+    },
+    "candidate_vs_reference": 0.9995826367143036
+  },
+  {
+    "fixture": "escaped_1m",
+    "operation": "stringify",
+    "calls": 84,
+    "median_process_instructions": {
+      "nested-records": 1261488664,
+      "shape-plans": 1261936166
+    },
+    "candidate_vs_reference": 1.000354741198055
+  },
+  {
+    "fixture": "wide_1m",
+    "operation": "stringify",
+    "calls": 216,
+    "median_process_instructions": {
+      "nested-records": 6551249998,
+      "shape-plans": 6552142007
+    },
+    "candidate_vs_reference": 1.0001361585957294
+  },
+  {
+    "fixture": "numbers_1m",
+    "operation": "parse",
+    "calls": 92,
+    "median_process_instructions": {
+      "nested-records": 2262934402,
+      "shape-plans": 2263439317
+    },
+    "candidate_vs_reference": 1.0002231240108215
+  },
+  {
+    "fixture": "empty_object",
+    "operation": "parse",
+    "calls": 2000000,
+    "median_process_instructions": {
+      "nested-records": 2197963211,
+      "shape-plans": 2199970930
+    },
+    "candidate_vs_reference": 1.0009134452250847
+  },
+  {
+    "fixture": "small_record",
+    "operation": "parse",
+    "calls": 500000,
+    "median_process_instructions": {
+      "nested-records": 5129738497,
+      "shape-plans": 5177797325
+    },
+    "candidate_vs_reference": 1.009368670162837
+  }
+]

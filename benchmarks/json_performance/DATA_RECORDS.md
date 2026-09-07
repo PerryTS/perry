@@ -1,3 +1,13 @@
+The latest measured source, shape-plans (`936c60675`), reduces paired heterogeneous stringify CPU **32.74%** versus nested-records and **69.17%** versus growth-alias. It uses a bounded native ShapeId table and one key-prefix pool while retaining per-instance safety checks. Peak RSS recovers the prior **0.453125 MiB** increase. Full-run heterogeneous stringify remains **1.47x Node**.
+
+All-row inventory remains **12/38 CPU, 65/74 peak RSS and 33/36 retained RSS**. Full and 1,526-trial paired matrices qualify with 30/82 clean observations; 48 additional retained-empty trials and two profiles complete. No-regression acceptance remains false: numeric stringify, 1 KB object parse, small-record parse/stringify and older CPU anchors regress. Retained-empty RSS rises 0.109375 MiB versus the explicitly remeasured escaped-count anchor.
+
+204 JSON runtime tests and 42 full compiled Node comparisons pass. One extended fixture retains the reference's inherited Object.prototype.toJSON mismatch; 44 moving-GC runs yield 42 full Node and two extended reference matches, with no new discrepancy. Earlier forced-lazy Object.* gaps remain open. All 77 source hashes are verified. GC policy/hooks and the inherited diagnostic boundary remain unchanged.
+
+[Latest 38 CPU rows](results/shape-plans/cpu-38.md), [CPU and RAM](results/shape-plans/tables.md), [complete tradeoffs](results/shape-plans/README.md), [GC boundary](results/shape-plans/gc-coordination.md), [next work](results/shape-plans/next-steps.md).
+
+Earlier checkpoints follow.
+
 The latest measured source, nested-records (`27eeccf79e`), reduces paired heterogeneous stringify CPU **54.25%**, from **4.35 to 1.99 ms**, using bounded native per-call key prefixes and a callback-free traversal of ordinary nested records. It still takes **2.20x Node** in the full run, and peak RSS rises **0.453125 MiB** versus growth-alias.
 
 All-row inventory remains **12/38 CPU, 65/74 peak RSS and 33/36 retained RSS**. Full and 994-trial paired matrices plus 24 retained-empty trials qualify with 31/54 clean observations. CPU and RSS regressions remain, including older anchors. All-row/no-regression acceptance is false.

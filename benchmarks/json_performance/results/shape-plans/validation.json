@@ -1,0 +1,74 @@
+{
+  "source": "936c60675bcf8c4cc65d76f48c96937338a4e620",
+  "runtime_json_tests": 204,
+  "new_runtime_tests": 2,
+  "nested_record_runtime_tests_total": 9,
+  "compiled_full_node_comparisons_passed": 42,
+  "extended_compiled_reference_comparisons_passed": 1,
+  "extended_fixture_full_node_match": false,
+  "extended_node_mismatch": "Object.prototype.toJSON ignored for root array, also in reference; all other lines match Node",
+  "moving_gc_runs_total": 44,
+  "moving_gc_full_node_matches": 42,
+  "moving_gc_extended_reference_matches": 2,
+  "moving_gc_candidate_reference_regressions": 0,
+  "moving_gc_checks_enabled": [
+    "scheduled collection",
+    "actual copying and movement",
+    "from-space protection",
+    "evacuation verification"
+  ],
+  "verified_source_hashes": 77,
+  "full_verifications": 152,
+  "full_timing_trials": 456,
+  "full_memory_trials": 432,
+  "full_clean_observations": 30,
+  "full_qualified": true,
+  "paired_cases_expected": 109,
+  "paired_trials_expected": 1526,
+  "additional_retained_empty_trials_expected": 24,
+  "older_retained_empty_trials_expected": 24,
+  "targets_met": {
+    "cpu": [
+      12,
+      38
+    ],
+    "peak_rss": [
+      65,
+      74
+    ],
+    "retained_rss": [
+      33,
+      36
+    ]
+  },
+  "all_row_acceptance": false,
+  "no_regression_acceptance": false,
+  "complete_semantic_acceptance": false,
+  "other_unresolved_semantics": "Forced-lazy Object.keys/delete/defineProperty broad-fixture gaps preserved in predecessor evidence",
+  "gc_boundary": "Exact policy/threshold/hooks match 0.5.1520; retained-growth diagnostic change inherited unchanged",
+  "local_instruction_diagnostic": {
+    "cases": 13,
+    "trials": 78,
+    "heterogeneous_stringify_change_percent": -28.528,
+    "quiet_cpu_acceptance": false
+  },
+  "paired_cases": 109,
+  "paired_trials": 1526,
+  "paired_clean_observations": 82,
+  "paired_qualified": true,
+  "additional_retained_empty_trials": 24,
+  "older_retained_empty_trials": 24,
+  "older_retained_empty_reference": "escaped-count 4b9d577d4e81518f83a8b4a1e4f319d328597f74",
+  "older_retained_empty_rss_regression_mib": 0.109375,
+  "older_retained_empty_peak_regression_mib": 0.09375,
+  "all_quiet_gates_passed": true,
+  "profiles": {
+    "qualified": true,
+    "clean_observations": 6,
+    "heterogeneous_main_samples": 2262,
+    "heterogeneous_array_traversal_samples": 1752,
+    "heterogeneous_final_output_allocation_samples": 283,
+    "wide_parse_main_samples": 2225,
+    "wide_parse_loop_gc_samples": 1787
+  }
+}

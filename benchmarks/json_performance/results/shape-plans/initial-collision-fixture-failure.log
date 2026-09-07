@@ -1,0 +1,30 @@
+   Compiling perry-runtime v0.5.1520 (/Users/amlug/projects/perry/codex-json-fastpaths/crates/perry-runtime)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 18.76s
+     Running unittests src/lib.rs (/Users/amlug/projects/perry/codex-json-changed-target/debug/build/perry-runtime/77f7d5e322249c1d/out/perry_runtime-77f7d5e322249c1d)
+
+running 9 tests
+test gc::tests::runtime_roots::json_record_output::json_nested_records_fallback_runs_getter_once_and_survives_actual_movement ... ok
+test json::stringify_nested_records::tests::json_nested_records_cached_shape_still_checks_each_instance ... ok
+test json::stringify_nested_records::tests::json_nested_records_caps_native_shape_and_prefix_storage ... ok
+test json::stringify_nested_records::tests::json_nested_records_declines_cold_prototype_lookup_without_collection ... ok
+test json::stringify_nested_records::tests::json_nested_records_declines_unsupported_late_values_and_restores_prefix ... ok
+test json::stringify_nested_records::tests::json_nested_records_observes_mutation_between_attempts ... ok
+test json::stringify_nested_records::tests::json_nested_records_preserves_empty_leaves_and_depth_fallback ... ok
+test json::stringify_nested_records::tests::json_nested_records_reuses_multiple_shapes_without_managed_intermediates ... ok
+test json::stringify_nested_records::tests::json_nested_records_shape_table_probes_collisions_and_reuses_full_capacity ... FAILED
+
+failures:
+
+---- json::stringify_nested_records::tests::json_nested_records_shape_table_probes_collisions_and_reuses_full_capacity stdout ----
+
+thread 'json::stringify_nested_records::tests::json_nested_records_shape_table_probes_collisions_and_reuses_full_capacity' (91621034) panicked at crates/perry-runtime/src/json/stringify_nested_records_tests.rs:190:13:
+must exercise a collision
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    json::stringify_nested_records::tests::json_nested_records_shape_table_probes_collisions_and_reuses_full_capacity
+
+test result: FAILED. 8 passed; 1 failed; 0 ignored; 0 measured; 3255 filtered out; finished in 0.52s
+
+error: test failed, to rerun pass `-p perry-runtime --lib`
