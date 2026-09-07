@@ -322,19 +322,24 @@ crate::perry_thread_local! {
     /// towers, which both marks it and rewrites it when the collector moves the
     /// object. A recorded address that is not scanned is a stale pointer the
     /// first time the prototype moves — the #9539/#9445 shape.
+    #[cfg(any(test, feature = "regex-engine"))]
     static REGEXP_PROTOTYPE_PTR_SLOT: std::sync::atomic::AtomicI64 =
         const { std::sync::atomic::AtomicI64::new(0) };
     /// The canonical `test` closure, NaN-boxed. Also a root, visited as a
     /// nanbox word so the collector rewrites the pointer inside it.
+    #[cfg(any(test, feature = "regex-engine"))]
     static REGEXP_PROTOTYPE_TEST_CLOSURE_SLOT: std::sync::atomic::AtomicU64 =
         const { std::sync::atomic::AtomicU64::new(0) };
     /// The field index its own `test` occupies. Not an address, so not a root.
+    #[cfg(any(test, feature = "regex-engine"))]
     static REGEXP_PROTOTYPE_TEST_INDEX_SLOT: std::sync::atomic::AtomicU32 =
         const { std::sync::atomic::AtomicU32::new(u32::MAX) };
 }
 
+#[cfg(any(test, feature = "regex-engine"))]
 pub(crate) static REGEXP_PROTOTYPE_PTR: super::RealmAtomicI64 =
     super::RealmAtomicI64::new(&REGEXP_PROTOTYPE_PTR_SLOT);
+#[cfg(any(test, feature = "regex-engine"))]
 pub(crate) static REGEXP_PROTOTYPE_TEST_CLOSURE: super::RealmAtomicU64 =
     super::RealmAtomicU64::new(&REGEXP_PROTOTYPE_TEST_CLOSURE_SLOT);
 
@@ -342,6 +347,7 @@ pub(crate) static REGEXP_PROTOTYPE_TEST_CLOSURE: super::RealmAtomicU64 =
 /// The fast path does none: the only walk is the one-time recording below, so
 /// this must read **1 per realm**, not one per call. It is the counter that
 /// says the fast path is actually the path being taken.
+#[cfg(any(test, feature = "regex-engine"))]
 pub(crate) static REGEXP_PROTOTYPE_TEST_WALKS: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
 
