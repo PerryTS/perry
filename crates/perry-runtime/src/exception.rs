@@ -137,6 +137,11 @@ struct ExceptionState {
     /// evaluating the right-hand side of a guarded private write skips the
     /// normal consumer, so catch entry must discard the orphaned hint.
     private_member_access_hint_depths: Box<[usize]>,
+    /// Active allocation-free regex-factory sites at handler entry. A
+    /// non-literal replacement callee can throw before the wrapper's normal
+    /// pop, so catch entry discards the orphaned identity frame.
+    #[cfg(feature = "regex-engine")]
+    regex_factory_site_depths: Box<[usize]>,
     /// #6559: dyn-eval interpreter state (rooted-stack length + interpreter
     /// call depth, packed) captured when each `try` was pushed. A throw
     /// `longjmp`s past interpreter Rust frames without running their
@@ -168,6 +173,8 @@ impl ExceptionState {
             private_lexical_brand_depths: vec![0usize; MAX_TRY_DEPTH].into_boxed_slice(),
             derived_super_binding_depths: vec![0usize; MAX_TRY_DEPTH].into_boxed_slice(),
             private_member_access_hint_depths: vec![0usize; MAX_TRY_DEPTH].into_boxed_slice(),
+            #[cfg(feature = "regex-engine")]
+            regex_factory_site_depths: vec![0usize; MAX_TRY_DEPTH].into_boxed_slice(),
             #[cfg(feature = "dyn-eval")]
             dyn_eval_savepoints: vec![0u64; MAX_TRY_DEPTH].into_boxed_slice(),
             try_depth: 0,
@@ -244,6 +251,11 @@ fn try_push_with_kind(kind: HandlerKind) -> *mut i32 {
             crate::object::derived_super_binding_stack_savepoint();
         (*s).private_member_access_hint_depths[depth] =
             crate::object::private_member_access_hints_savepoint();
+        #[cfg(feature = "regex-engine")]
+        {
+            (*s).regex_factory_site_depths[depth] =
+                crate::regex::site_test::active_factory_stack_savepoint();
+        }
         // #6559: capture the dyn-eval interpreter's rooted-stack length +
         // call depth, so a caught throw restores interpreter state exactly
         // like the shadow stack.
@@ -478,6 +490,10 @@ pub extern "C-unwind" fn js_throw(value: f64) -> ! {
         );
         crate::object::private_member_access_hints_restore(
             (*s).private_member_access_hint_depths[depth],
+        );
+        #[cfg(feature = "regex-engine")]
+        crate::regex::site_test::active_factory_stack_restore(
+            (*s).regex_factory_site_depths[depth],
         );
         // #6559: restore the dyn-eval interpreter's rooted stack + call depth
         // (interpreter Rust frames unwound by this longjmp never run their
@@ -844,6 +860,10 @@ pub(crate) fn test_unwind_innermost_shadow_restore() {
         );
         crate::object::private_member_access_hints_restore(
             (*s).private_member_access_hint_depths[depth],
+        );
+        #[cfg(feature = "regex-engine")]
+        crate::regex::site_test::active_factory_stack_restore(
+            (*s).regex_factory_site_depths[depth],
         );
     });
 }

@@ -264,5 +264,42 @@ mod tests {
             plain.starts_with("declare i64 @js_regexp_new(i64, i64)"),
             "got: {plain}"
         );
+
+        for (name, signature) in [
+            (
+                "js_regexp_site_test_new",
+                "declare i64 @js_regexp_site_test_new(i64, i64, i64)",
+            ),
+            (
+                "js_regexp_new_factory_site",
+                "declare i64 @js_regexp_new_factory_site(i64, i64, i64, i64)",
+            ),
+            (
+                "js_regexp_site_factory_call_value",
+                "declare double @js_regexp_site_factory_call_value(i64, double)",
+            ),
+            (
+                "js_regexp_site_factory_call_method",
+                "declare double @js_regexp_site_factory_call_method(i64, double, double)",
+            ),
+            (
+                "js_regexp_site_test_get_method",
+                "declare double @js_regexp_site_test_get_method(i64, double)",
+            ),
+            (
+                "js_regexp_site_test_dispatch",
+                "declare double @js_regexp_site_test_dispatch(i64, double, double, double)",
+            ),
+        ] {
+            let line = module
+                .declaration_lines()
+                .find(|(candidate, _)| *candidate == name)
+                .map(|(_, line)| line)
+                .unwrap_or_else(|| panic!("missing declaration for {name}"));
+            assert!(
+                line.starts_with(signature),
+                "wrong declaration for {name}: {line}"
+            );
+        }
     }
 }

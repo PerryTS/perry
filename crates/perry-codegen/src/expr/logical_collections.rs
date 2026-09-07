@@ -58,6 +58,58 @@ use super::{
     record_collection_string_key_selected, unbox_str_handle, unbox_to_i64, FnCtx,
 };
 
+/// Emit one immortal identity slot for a regex optimization site.
+///
+/// The value stored in the slot is irrelevant; only its linker-stable address
+/// is used.  Keeping this in one helper prevents the allocation-free `.test`
+/// paths from inventing a second site-key scheme or hand-writing an ABI
+/// constant that can drift from ordinary literal lowering.
+pub(crate) fn emit_regexp_site_key(ctx: &mut FnCtx<'_>) -> String {
+    let site_id = ctx.ic_site_counter;
+    ctx.ic_site_counter += 1;
+    let prefix = ctx.strings.module_prefix();
+    let slot_name = if prefix.is_empty() {
+        format!("perry_regexp_site_{site_id}")
+    } else {
+        format!("perry_regexp_site_{prefix}__{site_id}")
+    };
+    ctx.typed_parse_rodata
+        .push(format!("@{slot_name} = private global i64 0"));
+    format!("@{slot_name}")
+}
+
+/// Construct the receiver for the exact non-escaping `/literal/.test(arg)`
+/// shape.  The returned site key is also consumed by the post-argument
+/// dispatch, which revalidates the builtin before it exposes the cached
+/// receiver as `this`.
+pub(crate) fn lower_regexp_site_test_receiver(
+    ctx: &mut FnCtx<'_>,
+    pattern: &str,
+    flags: &str,
+) -> (String, String) {
+    let pattern_idx = ctx.strings.intern(pattern);
+    let flags_idx = ctx.strings.intern(flags);
+    let pattern_global = format!("@{}", ctx.strings.entry(pattern_idx).handle_global);
+    let flags_global = format!("@{}", ctx.strings.entry(flags_idx).handle_global);
+    let slot_ref = emit_regexp_site_key(ctx);
+    let blk = ctx.block();
+    let pattern_box = blk.load(DOUBLE, &pattern_global);
+    let flags_box = blk.load(DOUBLE, &flags_global);
+    let pattern_handle = unbox_to_i64(blk, &pattern_box);
+    let flags_handle = unbox_to_i64(blk, &flags_box);
+    let site_key = blk.ptrtoint(&slot_ref, I64);
+    let result = blk.call(
+        I64,
+        "js_regexp_site_test_new",
+        &[
+            (I64, &pattern_handle),
+            (I64, &flags_handle),
+            (I64, &site_key),
+        ],
+    );
+    (nanbox_pointer_inline(blk, &result), site_key)
+}
+
 fn is_static_string_key_map(ctx: &FnCtx<'_>, map: &Expr) -> bool {
     matches!(
         map_static_type_args(ctx, map),
@@ -1327,34 +1379,37 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // and unenforced: a future early return that drops the artifacts
             // breaks this site, loudly, at the in-process LLVM parse (`use of
             // undefined value`) rather than at runtime.
-            let site_id = ctx.ic_site_counter;
-            ctx.ic_site_counter += 1;
-            let slot_name = {
-                let prefix = ctx.strings.module_prefix();
-                if prefix.is_empty() {
-                    format!("perry_regexp_site_{site_id}")
-                } else {
-                    format!("perry_regexp_site_{prefix}__{site_id}")
-                }
-            };
-            ctx.typed_parse_rodata
-                .push(format!("@{slot_name} = private global i64 0"));
-            let slot_ref = format!("@{slot_name}");
+            let slot_ref = emit_regexp_site_key(ctx);
+            let factory_identity = ctx.regex_factory_identity.clone();
             let blk = ctx.block();
             let pattern_box = blk.load(DOUBLE, &pattern_global);
             let flags_box = blk.load(DOUBLE, &flags_global);
             let pattern_handle = unbox_to_i64(blk, &pattern_box);
             let flags_handle = unbox_to_i64(blk, &flags_box);
             let site_key = blk.ptrtoint(&slot_ref, I64);
-            let result = blk.call(
-                I64,
-                "js_regexp_new_site",
-                &[
-                    (I64, &pattern_handle),
-                    (I64, &flags_handle),
-                    (I64, &site_key),
-                ],
-            );
+            let result = if let Some(identity) = factory_identity {
+                let identity = blk.ptrtoint(&format!("@{identity}"), I64);
+                blk.call(
+                    I64,
+                    "js_regexp_new_factory_site",
+                    &[
+                        (I64, &pattern_handle),
+                        (I64, &flags_handle),
+                        (I64, &site_key),
+                        (I64, &identity),
+                    ],
+                )
+            } else {
+                blk.call(
+                    I64,
+                    "js_regexp_new_site",
+                    &[
+                        (I64, &pattern_handle),
+                        (I64, &flags_handle),
+                        (I64, &site_key),
+                    ],
+                )
+            };
             Ok(nanbox_pointer_inline(blk, &result))
         }
 

@@ -469,6 +469,7 @@ pub(super) fn compile_method(
             "{}.{}",
             class.name, method.name
         )),
+        regex_factory_identity: None,
         active_region_id: None,
         native_facts: &native_facts,
         locals,
@@ -1609,6 +1610,7 @@ pub(super) fn compile_static_method(
             "{}.{}",
             class.name, f.name
         )),
+        regex_factory_identity: None,
         active_region_id: None,
         native_facts: &native_facts,
         locals,

@@ -13,7 +13,8 @@ use perry_hir::Expr;
 
 use crate::lower_call::{lower_call, lower_native_method_call};
 use crate::nanbox::double_literal;
-use crate::types::DOUBLE;
+use crate::rooting;
+use crate::types::{DOUBLE, I64};
 
 use super::{
     emit_string_literal_global, lower_expr, nanbox_pointer_inline, nanbox_string_inline,
@@ -72,6 +73,32 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             object.as_deref(),
             args,
         ),
+
+        // `<callee>().test(arg)`, including the bundled namespace form
+        // `ns.default().test(arg)`.  The inner call still executes normally;
+        // a structurally proven zero-argument regex factory consumes the
+        // active site and may return its rooted header.  Any reassignment or
+        // non-literal body therefore reaches the unchanged generic method
+        // path, rather than trusting a source-level binding assumption.
+        Expr::Call { callee, args, .. }
+            if args.len() == 1
+                && matches!(
+                    callee.as_ref(),
+                    Expr::PropertyGet { object, property, .. }
+                        if property == "test"
+                            && matches!(
+                                object.as_ref(),
+                                Expr::Call { callee, args, .. }
+                                    if args.is_empty()
+                                        // A computed/`with` reference carries
+                                        // receiver-binding semantics that the
+                                        // site wrapper does not model.
+                                        && !matches!(callee.as_ref(), Expr::IndexGet { .. } | Expr::WithGet { .. })
+                            )
+                ) =>
+        {
+            arm_regexp_factory_site_test(ctx, callee.as_ref(), &args[0])
+        }
 
         // #1645: `ReadableStream.from(iterable)` (Node 20+). The HIR lowers
         // `(ReadableStream as any).from(x)` to a Call whose callee is
@@ -847,4 +874,77 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // -------- Proxy / Reflect (metaprogramming) --------
         _ => unreachable!("expr/mod.rs dispatched a variant not handled by this submodule"),
     }
+}
+
+fn arm_regexp_factory_site_test(
+    ctx: &mut FnCtx<'_>,
+    outer_callee: &Expr,
+    argument: &Expr,
+) -> Result<String> {
+    let Expr::PropertyGet { object, .. } = outer_callee else {
+        unreachable!("guarded by the caller")
+    };
+    let Expr::Call {
+        callee: inner_callee,
+        args: inner_args,
+        ..
+    } = object.as_ref()
+    else {
+        unreachable!("guarded by the caller")
+    };
+    debug_assert!(inner_args.is_empty());
+
+    let slot_ref = super::logical_collections::emit_regexp_site_key(ctx);
+    let site_key = ctx.block().ptrtoint(&slot_ref, I64);
+    let receiver = match inner_callee.as_ref() {
+        Expr::PropertyGet {
+            object, property, ..
+        } => {
+            let object = lower_expr(ctx, object)?;
+            let key_idx = ctx.strings.intern(property);
+            let entry = ctx.strings.entry(key_idx);
+            let key_global = format!("@{}", entry.handle_global);
+            let key = ctx.block().load(DOUBLE, &key_global);
+            ctx.block().call(
+                DOUBLE,
+                "js_regexp_site_factory_call_method",
+                &[(I64, &site_key), (DOUBLE, &object), (DOUBLE, &key)],
+            )
+        }
+        callee => {
+            let callee = lower_expr(ctx, callee)?;
+            ctx.block().call(
+                DOUBLE,
+                "js_regexp_site_factory_call_value",
+                &[(I64, &site_key), (DOUBLE, &callee)],
+            )
+        }
+    };
+
+    // Property Get for `.test` precedes argument evaluation in ECMAScript.
+    // A cached/canonical receiver records the builtin as an internal marker;
+    // a decline resolves the actual property now, so a getter or a patch has
+    // exactly the generic ordering.
+    let method = ctx.block().call(
+        DOUBLE,
+        "js_regexp_site_test_get_method",
+        &[(I64, &site_key), (DOUBLE, &receiver)],
+    );
+    rooting::with_rooted_group(ctx, 2, |ctx, roots| {
+        let receiver = roots.adopt_emitted(ctx, rooting::Repr::Boxed, &receiver, true);
+        let method = roots.adopt_emitted(ctx, rooting::Repr::Boxed, &method, true);
+        let argument = lower_expr(ctx, argument)?;
+        let receiver = roots.reread_emitted(ctx, receiver);
+        let method = roots.reread_emitted(ctx, method);
+        Ok(ctx.block().call(
+            DOUBLE,
+            "js_regexp_site_test_dispatch",
+            &[
+                (I64, &site_key),
+                (DOUBLE, &receiver),
+                (DOUBLE, &method),
+                (DOUBLE, &argument),
+            ],
+        ))
+    })
 }

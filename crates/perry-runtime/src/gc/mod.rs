@@ -1003,6 +1003,8 @@ pub fn gc_init() {
     reg_scanner!(async_hooks_mutable_root_scanner);
     reg_scanner!(shape_cache_mutable_root_scanner);
     reg_scanner!(crate::regex::scan_last_exec_groups_root_mut);
+    #[cfg(feature = "regex-engine")]
+    reg_scanner!(crate::regex::site_test::scan_roots_mut);
     // #7211: the eight interned `typeof` result strings, and JSON.rawJSON's
     // interned `"rawJSON"` key. Both are thread-local caches of a RAW
     // `StringHeader*` allocated in the nursery and referenced by nothing else,

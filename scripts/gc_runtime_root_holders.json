@@ -267,18 +267,6 @@
       "why": "Boolean census request latch, set by census_arm and consumed at full-sweep entry; contains no address or JS value."
     },
     {
-      "file": "crates/perry-runtime/src/gc/copying.rs",
-      "name": "LAST_COHORT_SPLIT",
-      "verdict": "test_only",
-      "why": "Declared under #[cfg(test)] at crates/perry-runtime/src/gc/copying.rs:1951; this Cell<(usize, usize, usize, usize)> holds only the byte counts of the last survivor-space/fresh-cohort split for the tenuring lock tests. It is absent from shipped binaries."
-    },
-    {
-      "file": "crates/perry-runtime/src/gc/tenuring.rs",
-      "name": "SURVIVOR_ROUND_MEASURED",
-      "verdict": "not_a_gc_pointer",
-      "why": "Declared at crates/perry-runtime/src/gc/tenuring.rs:212; this Cell<bool> records whether any survivor round has been rated on this thread, gating the occupancy rule off its floor. A boolean, never a heap pointer."
-    },
-    {
       "file": "crates/perry-runtime/src/gc/census.rs",
       "name": "LABEL",
       "verdict": "not_a_gc_pointer",
@@ -303,9 +291,9 @@
           "function": "run_to_completion"
         },
         "sources": {
-          "crates/perry-runtime/src/gc/census.rs": "388414f9629f196e84673e91bebd04bdcdcabdaa180252d2dfe4b82d1b49ca5a",
+          "crates/perry-runtime/src/gc/census.rs": "1ddeeec3ca81b792a222dbe165c32b7b995c084f66c760cb6cd3f26baf2cb07a",
           "crates/perry-runtime/src/gc/cycle.rs": "77eadaf7c4157308c3b14be5e1ff11d7198b84b503a50ff2d244851248d3e800",
-          "crates/perry-runtime/src/gc/mod.rs": "cf763b4d1743cd4ab5a571aef9b1eddba973ef8a205d343dea8f34775ff2fa8a",
+          "crates/perry-runtime/src/gc/mod.rs": "cd5b27d4cbc5a0f100eefe8de71e1db6554c5a3e180b9996a658b581d2dd8348",
           "crates/perry-runtime/src/gc/policy.rs": "dc9242ed40c0aa9c411d1ec0235c0219c6716dd82d56eb4d46578f7e889825d2",
           "crates/perry-runtime/src/gc/progress.rs": "a5ad3971bbe4047229ca57325234780daa85921dbc778e1c08dff4ad07ccfb96"
         }
@@ -322,6 +310,12 @@
       "name": "TEST_PATH_OVERRIDE",
       "verdict": "test_only",
       "why": "Declared under cfg(test); holds an explicitly leaked Rust path string used by the isolated census unit tests."
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/copying.rs",
+      "name": "LAST_COHORT_SPLIT",
+      "verdict": "test_only",
+      "why": "Declared under #[cfg(test)] at crates/perry-runtime/src/gc/copying.rs:1951; this Cell<(usize, usize, usize, usize)> holds only the byte counts of the last survivor-space/fresh-cohort split for the tenuring lock tests. It is absent from shipped binaries."
     },
     {
       "file": "crates/perry-runtime/src/gc/diag_sites.rs",
@@ -376,6 +370,12 @@
       "name": "MINOR_SEQ",
       "verdict": "not_a_gc_pointer",
       "why": "#9794: monotonic per-minor sequence number used to label survival-origin records. A `Cell<u64>`."
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/tenuring.rs",
+      "name": "SURVIVOR_ROUND_MEASURED",
+      "verdict": "not_a_gc_pointer",
+      "why": "Declared at crates/perry-runtime/src/gc/tenuring.rs:212; this Cell<bool> records whether any survivor round has been rated on this thread, gating the occupancy rule off its floor. A boolean, never a heap pointer."
     },
     {
       "file": "crates/perry-runtime/src/gc/trace.rs",
@@ -747,6 +747,54 @@
       "name": "NEVER_MATCH",
       "verdict": "not_a_gc_pointer",
       "why": "#9796: the memoized never-match placeholder program installed for a pattern only `fancy-regex` accepts. `Arc<regex::Regex>` is a Rust-allocator compiled program \u2014 the collector neither traces nor moves it \u2014 and the `Arc` keeps it alive independently."
+    },
+    {
+      "file": "crates/perry-runtime/src/regex/site_test.rs",
+      "name": "DIRECT_G",
+      "verdict": "test_only",
+      "why": "A cfg(test) static whose immortal address supplies a synthetic direct global-regex site key."
+    },
+    {
+      "file": "crates/perry-runtime/src/regex/site_test.rs",
+      "name": "MEMBER_CALL",
+      "verdict": "test_only",
+      "why": "A cfg(test) static whose immortal address supplies a synthetic namespace-member call site key."
+    },
+    {
+      "file": "crates/perry-runtime/src/regex/site_test.rs",
+      "name": "TEST_ALLOCATIONS",
+      "verdict": "test_only",
+      "why": "A cfg(test) counter for site-entry header allocations; it contains only a u64 tally."
+    },
+    {
+      "file": "crates/perry-runtime/src/regex/site_test.rs",
+      "name": "TEST_DECLINED",
+      "verdict": "test_only",
+      "why": "A cfg(test) counter for site-validation declines; it contains only a u64 tally."
+    },
+    {
+      "file": "crates/perry-runtime/src/regex/site_test.rs",
+      "name": "TEST_DECLINED_CALLEE",
+      "verdict": "test_only",
+      "why": "A cfg(test) counter for callee-identity declines; it contains only a u64 tally."
+    },
+    {
+      "file": "crates/perry-runtime/src/regex/site_test.rs",
+      "name": "TEST_DECLINED_NON_LITERAL",
+      "verdict": "test_only",
+      "why": "A cfg(test) counter for non-literal factory declines; it contains only a u64 tally."
+    },
+    {
+      "file": "crates/perry-runtime/src/regex/site_test.rs",
+      "name": "TEST_DECLINED_PATCHED",
+      "verdict": "test_only",
+      "why": "A cfg(test) counter for patched-prototype declines; it contains only a u64 tally."
+    },
+    {
+      "file": "crates/perry-runtime/src/regex/site_test.rs",
+      "name": "TEST_NO_ALLOC",
+      "verdict": "test_only",
+      "why": "A cfg(test) counter for allocation-free site services; it contains only a u64 tally."
     },
     {
       "file": "crates/perry-runtime/src/set.rs",
@@ -3431,10 +3479,6 @@
     {
       "file": "crates/perry-runtime/src/native_arena.rs",
       "name": "VIEW_REGISTRY"
-    },
-    {
-      "file": "crates/perry-runtime/src/node_http2_constants.rs",
-      "name": "SENSITIVE_HEADERS_SYMBOL"
     },
     {
       "file": "crates/perry-runtime/src/node_repl.rs",

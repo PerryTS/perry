@@ -575,6 +575,8 @@ fn side_tables() -> Vec<SideTableRow> {
     rows.extend(crate::module_require::path_registry_census());
     rows.extend(crate::timer::timer_tables_census());
     rows.push(crate::symbol::symbol_registry_census());
+    #[cfg(feature = "regex-engine")]
+    rows.extend(crate::regex::site_test::side_table_census());
     let (masks, typed) = super::layout_tables::per_object_layout_table_sizes();
     rows.push(("gc.layout_slot_masks", masks, masks * 24));
     rows.push(("gc.typed_layouts", typed, typed * 24));
@@ -584,6 +586,23 @@ fn side_tables() -> Vec<SideTableRow> {
         super::policy::external_side_live_bytes(),
     ));
     rows
+}
+
+#[cfg(test)]
+mod regex_census_tests {
+    #[test]
+    fn regex_side_tables_are_registered_with_the_census_prefix() {
+        let names: Vec<_> = super::side_tables()
+            .into_iter()
+            .filter_map(|(name, _, _)| name.starts_with("regex.").then_some(name))
+            .collect();
+        assert!(names.contains(&"regex.content_cache"), "rows: {names:?}");
+        assert!(names.contains(&"regex.literal_sites"), "rows: {names:?}");
+        assert!(
+            names.contains(&"regex.site_test_headers"),
+            "rows: {names:?}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

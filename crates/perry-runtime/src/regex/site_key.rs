@@ -147,6 +147,18 @@ fn slot_of(key: usize) -> usize {
     (key >> 3) & (SLOTS - 1)
 }
 
+pub(super) fn census() -> crate::gc::census::SideTableRow {
+    SITE_KEY_TABLE.with(|table| {
+        let table = table.borrow();
+        let entries = table.iter().filter(|entry| entry.is_some()).count();
+        (
+            "regex.literal_sites",
+            entries,
+            table.capacity() * std::mem::size_of::<Option<Entry>>(),
+        )
+    })
+}
+
 /// The entry recorded for `key`, or `None`.
 pub(super) fn lookup(key: usize, raw_flags: &str) -> Option<SiteHit> {
     if !enabled() || key == 0 {
