@@ -64,9 +64,12 @@ pub extern "C" fn js_gc_memory_pressure(level: u32) -> u32 {
     // Pull the arena trigger down to "collect at the next check" and arm
     // it so the un-armed budget ceiling substitution doesn't override the
     // clamp (see `effective_next_arena_trigger`).
-    let total = crate::arena::arena_total_bytes();
+    // ArenaBytes is paced in old-space units.  Keep this explicit-pressure
+    // clamp in those same units so a reserved copying nursery cannot affect
+    // the trigger that the next allocation-side check evaluates.
+    let trigger_total = arena_trigger_total_bytes();
     GC_NEXT_TRIGGER_BYTES.with(|c| {
-        let clamp = total.saturating_add(1024 * 1024);
+        let clamp = trigger_total.saturating_add(1024 * 1024);
         if c.get() > clamp {
             c.set(clamp);
             GC_TRIGGER_ARMED.with(|a| a.set(true));
@@ -98,7 +101,10 @@ pub extern "C" fn js_gc_memory_pressure(level: u32) -> u32 {
     // reads, so the safepoint drain runs a full mark-sweep rather than a minor.
     if roots::shadow_stack_has_active_frame() {
         if !GC_SAFEPOINT_PENDING.with(std::cell::Cell::get) {
-            GC_SAFEPOINT_DEFER_ARENA_BASE.with(|base| base.set(total));
+            // The deferral slack valve is an RSS safety bound, not an
+            // ArenaBytes trigger. It intentionally watches whole-arena growth
+            // while this request waits for a precise safepoint.
+            GC_SAFEPOINT_DEFER_ARENA_BASE.with(|base| base.set(crate::arena::arena_total_bytes()));
             // Through the helper, never the `Cell`: it also arms the global
             // shadow that codegen's inline poll check reads. See
             // `policy::set_safepoint_pending`.

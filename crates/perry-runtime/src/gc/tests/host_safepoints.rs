@@ -131,7 +131,7 @@ fn repeated_runtime_safepoints_complete_cycle_rebaseline_debt_and_preserve_roots
     assert_eq!(completed.completed, 1);
     assert_eq!(completed.arena_debt_bytes, 0);
     assert!(
-        GC_NEXT_TRIGGER_BYTES.with(|trigger| trigger.get()) > crate::arena::arena_total_bytes(),
+        GC_NEXT_TRIGGER_BYTES.with(|trigger| trigger.get()) > arena_trigger_total_bytes(),
         "completed safepoint cycle should rebaseline the arena trigger"
     );
 
@@ -333,7 +333,7 @@ fn an_active_budgeted_cycle_locks_out_the_moving_minor_and_keeps_the_barrier_arm
     // assertion below is equally satisfied by a fixture with nothing due —
     // CLAUDE.md, the fourth way a gate cannot fail.
     assert!(
-        crate::arena::arena_total_bytes() >= GC_NEXT_TRIGGER_BYTES.with(|t| t.get()),
+        arena_trigger_total_bytes() >= GC_NEXT_TRIGGER_BYTES.with(|t| t.get()),
         "fixture must present a due arena trigger"
     );
 
@@ -450,8 +450,8 @@ fn a_nursery_cap_only_trigger_is_deferred_to_the_collector_that_can_discharge_it
     );
     // ...and it is the ONLY thing due, so the refusal below can only be about it.
     assert!(
-        crate::arena::arena_total_bytes() < super::super::policy::next_arena_trigger_base(),
-        "the whole-arena trigger must NOT be due in phase 1"
+        arena_trigger_total_bytes() < super::super::policy::next_arena_trigger_base(),
+        "the old-space trigger must NOT be due in phase 1"
     );
     assert!(
         malloc_object_count() < GC_NEXT_MALLOC_TRIGGER.with(|trigger| trigger.get()),
@@ -509,8 +509,8 @@ fn a_nursery_cap_only_trigger_is_deferred_to_the_collector_that_can_discharge_it
     // cycle must start here, or phase 1 proves nothing.
     trigger_guard.make_arena_trigger_due();
     assert!(
-        crate::arena::arena_total_bytes() >= super::super::policy::next_arena_trigger_base(),
-        "control phase must present a due whole-arena trigger"
+        arena_trigger_total_bytes() >= super::super::policy::next_arena_trigger_base(),
+        "control phase must present a due old-space trigger"
     );
 
     let started = gc_runtime_safepoint();

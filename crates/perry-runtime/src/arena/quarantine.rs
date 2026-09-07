@@ -483,7 +483,7 @@ fn push_set_and_evict(blocks: Vec<QuarantinedBlock>) -> Vec<QuarantinedBlock> {
         }
     } else {
         // Poisoned registry. These blocks are already detached from the arena,
-        // unregistered, and subtracted from `ARENA_TOTAL_BYTES`, and
+        // unregistered, and subtracted from arena/nursery reservation totals, and
         // `QuarantinedBlock` has no `Drop` — dropping them here would leak the
         // whole from-space. Recycle immediately instead.
         for block in blocks {
@@ -611,7 +611,7 @@ unsafe fn detach_used_blocks(arena: &mut Arena) -> Vec<(*mut u8, usize, usize)> 
         let size = block.size;
         let used = block.offset;
         unregister_block_generation(base, size);
-        ARENA_TOTAL_BYTES.with(|total| total.set(total.get().saturating_sub(size)));
+        arena_reserved_bytes_sub(arena.generation, size);
         detached.push((block.data, size, used));
         block.data = std::ptr::null_mut();
         block.size = 0;

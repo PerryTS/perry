@@ -11,7 +11,8 @@
 //! by hand. These lines print the inputs at the decision:
 //!
 //! * `[gc-trigger] site=… kind=…` — every predicate input the trigger policy
-//!   reads (`arena_total` vs the armed base trigger, from-space occupancy vs
+//!   reads (old-space capacity vs the armed base trigger, excluded nursery
+//!   capacity, from-space occupancy vs
 //!   the nursery cap, old-gen reclaimable pressure vs its baseline and band,
 //!   the malloc-count pair, the pending/retaining flags), emitted at each
 //!   site that decides to collect.
@@ -39,6 +40,8 @@ pub(super) fn trigger_decision(site: &'static str, kind: &'static str) {
         return;
     }
     let arena_total = crate::arena::arena_total_bytes();
+    let nursery_excluded = policy::arena_trigger_nursery_excluded_bytes();
+    let old_total = policy::arena_trigger_total_bytes();
     let next_base = policy::next_arena_trigger_base();
     let armed = policy::GC_TRIGGER_ARMED.with(Cell::get);
     let from_space = crate::arena::copying_from_space_in_use_bytes();
@@ -55,7 +58,7 @@ pub(super) fn trigger_decision(site: &'static str, kind: &'static str) {
     let old_in_use = crate::arena::old_gen_in_use_bytes();
     let old_free = old_free_bytes();
     eprintln!(
-        "[gc-trigger] site={site} kind={kind} arena_total={arena_total} next_base={next_base} armed={armed} \
+        "[gc-trigger] site={site} kind={kind} arena_total={arena_total} old_total={old_total} nursery_excluded={nursery_excluded} next_base={next_base} armed={armed} \
          from_space={from_space} nursery_cap={nursery_cap} old_in_use={old_in_use} old_free={old_free} \
          old_reclaimable={old_reclaimable} external_side={external} old_baseline={old_baseline} \
          old_band={old_band} old_threshold={old_threshold} old_pending={old_pending} retaining={retaining} \
@@ -170,12 +173,25 @@ pub(super) fn budgeted_started(
         GcCollectionKind::Full => "full",
         GcCollectionKind::Minor => "minor",
     };
+    let arming_reason = match trigger {
+        GcTriggerKind::ArenaBytes => "old_space_capacity",
+        GcTriggerKind::MallocCount => "malloc_count",
+        GcTriggerKind::OldGenBytes => "old_reclaim",
+        GcTriggerKind::SurvivorPromotionBytes => "survivor_promotion",
+        GcTriggerKind::Emergency => "emergency",
+        GcTriggerKind::Manual => "manual",
+        GcTriggerKind::Direct => "direct",
+        GcTriggerKind::IdleReclaim => "idle_reclaim",
+        GcTriggerKind::IdleCompact => "idle_compact",
+    };
     eprintln!(
-        "[gc-budgeted] start trigger={trigger:?} kind={collection} progress={} old_reclaimable={} old_baseline={} arena_total={}",
+        "[gc-budgeted] start trigger={trigger:?} arming_reason={arming_reason} kind={collection} progress={} old_reclaimable={} old_baseline={} arena_total={} old_total={} nursery_excluded={}",
         progress.as_str(),
         policy::old_gen_reclaimable_pressure_bytes(),
         policy::GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(Cell::get),
-        crate::arena::arena_total_bytes()
+        crate::arena::arena_total_bytes(),
+        policy::arena_trigger_total_bytes(),
+        policy::arena_trigger_nursery_excluded_bytes()
     );
     BUDGETED.with(|b| {
         *b.borrow_mut() = Some(BudgetedCycleDiag {

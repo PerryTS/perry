@@ -413,7 +413,7 @@ pub fn arena_reset_empty_blocks(block_has_live: &[bool]) -> ArenaResetStats {
                 removed_ranges.push((base, size));
                 let release = release_arena_block(block.data, block.size);
                 release_stats.record_block_release(size, release);
-                ARENA_TOTAL_BYTES.with(|t| t.set(t.get().saturating_sub(block.size)));
+                arena_reserved_bytes_sub(arena.generation, block.size);
                 block.data = std::ptr::null_mut();
                 block.size = 0;
                 block.object_starts = Box::new([]);
@@ -735,7 +735,7 @@ impl ArenaResetEmptyBlocksState {
             let size = block.size;
             unregister_block_generation(base, size);
             let release = release_arena_block(block.data, block.size);
-            ARENA_TOTAL_BYTES.with(|total| total.set(total.get().saturating_sub(size)));
+            arena_reserved_bytes_sub(arena.generation, size);
             block.data = std::ptr::null_mut();
             block.size = 0;
             block.object_starts = Box::new([]);
@@ -940,7 +940,7 @@ impl SurvivorArenaReclaimState {
             let size = block.size;
             unregister_block_generation(base, size);
             let release = release_arena_block(block.data, block.size);
-            ARENA_TOTAL_BYTES.with(|total| total.set(total.get().saturating_sub(size)));
+            arena_reserved_bytes_sub(arena.generation, size);
             block.data = std::ptr::null_mut();
             block.size = 0;
             block.object_starts = Box::new([]);
@@ -1255,7 +1255,7 @@ impl OldArenaReclaimDeadBlocksState {
 
             unregister_block_generation(base, size);
             let release = release_arena_block(block.data, block.size);
-            ARENA_TOTAL_BYTES.with(|total| total.set(total.get().saturating_sub(size)));
+            arena_reserved_bytes_sub(arena.generation, size);
             block.data = std::ptr::null_mut();
             block.size = 0;
             block.object_starts = Box::new([]);
@@ -1345,7 +1345,7 @@ pub(crate) fn old_arena_reclaim_dead_blocks(block_has_live: &[bool]) -> ArenaRes
 
             unregister_block_generation(base, size);
             let release = release_arena_block(block.data, block.size);
-            ARENA_TOTAL_BYTES.with(|total| total.set(total.get().saturating_sub(size)));
+            arena_reserved_bytes_sub(arena.generation, size);
             block.data = std::ptr::null_mut();
             block.size = 0;
             block.object_starts = Box::new([]);
@@ -1444,7 +1444,7 @@ pub(crate) fn old_arena_reclaim_selected_dead_blocks(
 
             unregister_block_generation(base, size);
             let release = release_arena_block(block.data, block.size);
-            ARENA_TOTAL_BYTES.with(|total| total.set(total.get().saturating_sub(size)));
+            arena_reserved_bytes_sub(arena.generation, size);
             block.data = std::ptr::null_mut();
             block.size = 0;
             block.object_starts = Box::new([]);
@@ -1540,7 +1540,7 @@ fn reclaim_dead_survivor_arena_blocks(
             let size = block.size;
             unregister_block_generation(base, size);
             let release = release_arena_block(block.data, block.size);
-            ARENA_TOTAL_BYTES.with(|total| total.set(total.get().saturating_sub(size)));
+            arena_reserved_bytes_sub(arena.generation, size);
             block.data = std::ptr::null_mut();
             block.size = 0;
             block.object_starts = Box::new([]);

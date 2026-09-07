@@ -154,8 +154,12 @@ fn idle_reclaim_runs_a_full_at_the_park_when_owed() {
 /// the right-sizer must grant observation two without demanding new mutator
 /// activity. The episode then disarms, so the bypass cannot become a periodic
 /// full-GC loop.
+///
+/// Sabotage: delete the `arena_right_size::owed()` start arm in `park_hook`.
+/// The second idle-window start never reaches `note_started`, so the dedicated
+/// `arena_right_size_starts` counter assertion below fails.
 #[test]
-fn sustained_arena_slack_gets_one_bounded_followup_without_mutator_activity() {
+fn idle_reclaimer_still_runs_one_bounded_right_size_reclaim_in_idle_window() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let _reducer = IdleReclaimTestGuard::new(0);
