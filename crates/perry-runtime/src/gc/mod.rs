@@ -37,6 +37,7 @@ mod types;
 pub use types::*;
 mod policy;
 mod json_defer;
+pub(crate) use json_defer::JsonParseAllocation;
 pub(crate) use policy::gc_runtime_safepoint;
 /// The one writer of `GC_SAFEPOINT_PENDING` — it also keeps the poll's global
 /// arming shadow in step. See `gc/poll_arm.rs`.

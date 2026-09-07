@@ -138,6 +138,7 @@ unsafe fn try_parse_deep_iterative(text_ptr: *const StringHeader, len: usize) ->
         |tape_entries| {
             crate::gc::gc_collect_pending_suppressed_parse();
             crate::gc::gc_check_trigger();
+            let gc_allocation = crate::gc::JsonParseAllocation::begin(len);
             crate::gc::gc_suppress();
 
             let bytes = {
@@ -154,6 +155,7 @@ unsafe fn try_parse_deep_iterative(text_ptr: *const StringHeader, len: usize) ->
             crate::gc::gc_unsuppress();
             crate::gc::gc_bump_json_malloc_trigger_deferred();
             crate::gc::gc_schedule_parse_boundary_collection_if_pressure();
+            gc_allocation.finish();
             result
         },
     )
@@ -246,6 +248,7 @@ unsafe fn parse_result_slow(text_ptr: *const StringHeader, len: usize) -> Result
 
     crate::gc::gc_collect_pending_suppressed_parse();
     crate::gc::gc_check_trigger();
+    let gc_allocation = crate::gc::JsonParseAllocation::begin(len);
     crate::gc::gc_suppress();
 
     //
@@ -266,6 +269,7 @@ unsafe fn parse_result_slow(text_ptr: *const StringHeader, len: usize) -> Result
     crate::gc::gc_unsuppress();
     crate::gc::gc_bump_json_malloc_trigger_deferred();
     crate::gc::gc_schedule_parse_boundary_collection_if_pressure();
+    gc_allocation.finish();
     parse_root_restore(text_root);
 
     PARSE_KEY_CACHE.with(|c| {
@@ -479,6 +483,7 @@ unsafe fn parse_slow(text_ptr: *const StringHeader, len: usize) -> JSValue {
     // roots all intermediates in PARSE_ROOTS, so no collection is needed
     // until we're done. This eliminates O(n*m) overhead from mid-parse GC
     // cycles walking an ever-growing live set (issue #59).
+    let gc_allocation = crate::gc::JsonParseAllocation::begin(len);
     crate::gc::gc_suppress();
 
     let bytes = {
@@ -499,6 +504,7 @@ unsafe fn parse_slow(text_ptr: *const StringHeader, len: usize) -> JSValue {
     crate::gc::gc_unsuppress();
     crate::gc::gc_bump_json_malloc_trigger_deferred();
     crate::gc::gc_schedule_parse_boundary_collection_if_pressure();
+    gc_allocation.finish();
     parse_root_restore(text_root);
 
     // Keep key intern cache across parses — scan_parse_roots marks cached
@@ -578,6 +584,7 @@ unsafe fn try_parse_via_tape(text_root: usize, len: usize) -> Option<JSValue> {
         |tape_entries| {
             crate::gc::gc_collect_pending_suppressed_parse();
             crate::gc::gc_check_trigger();
+            let gc_allocation = crate::gc::JsonParseAllocation::begin(len);
             crate::gc::gc_suppress();
             let text_ptr = parse_root_get(text_root).as_string_ptr();
             let bytes = std::slice::from_raw_parts(crate::string::string_data(text_ptr), len);
@@ -592,7 +599,8 @@ unsafe fn try_parse_via_tape(text_root: usize, len: usize) -> Option<JSValue> {
                 && tape_entries[0].kind == crate::json_tape::KIND_ARR_START
             {
                 let len = crate::json_tape::count_array_length(tape_entries, 0);
-                let hdr = crate::json_tape::alloc_lazy_array_from_scratch(tape_entries, 0, len, text_ptr);
+                let hdr =
+                    crate::json_tape::alloc_lazy_array_from_scratch(tape_entries, 0, len, text_ptr);
                 JSValue::object_ptr(hdr as *mut u8)
             } else {
                 crate::json_tape::materialize_from_idx(tape_entries, bytes, 0)
@@ -600,7 +608,7 @@ unsafe fn try_parse_via_tape(text_root: usize, len: usize) -> Option<JSValue> {
             let result_root = parse_root_push(result);
             crate::gc::gc_unsuppress();
             crate::gc::gc_bump_json_malloc_trigger_deferred();
-            crate::gc::gc_schedule_parse_boundary_collection_if_pressure();
+            gc_allocation.finish();
 
             PARSE_KEY_CACHE.with(|c| {
                 let cache = c.borrow();
@@ -692,6 +700,7 @@ pub unsafe extern "C" fn js_json_parse_typed_array(
     let text_root = parse_root_push(JSValue::string_ptr(text_ptr as *mut StringHeader));
     crate::gc::gc_collect_pending_suppressed_parse();
     crate::gc::gc_check_trigger();
+    let gc_allocation = crate::gc::JsonParseAllocation::begin(len);
     crate::gc::gc_suppress();
 
     let bytes = {
@@ -708,6 +717,7 @@ pub unsafe extern "C" fn js_json_parse_typed_array(
 
     crate::gc::gc_unsuppress();
     crate::gc::gc_bump_json_malloc_trigger_deferred();
+    gc_allocation.finish();
     parse_root_restore(text_root);
 
     PARSE_KEY_CACHE.with(|c| {

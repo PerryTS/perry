@@ -1435,9 +1435,13 @@ pub fn gc_schedule_parse_boundary_collection_if_pressure() {
     if in_use >= gc_tiny_parse_in_use_trigger_dyn_bytes() {
         GC_SUPPRESSED_TINY_PARSE_COLLECTION_PENDING.with(|pending| pending.set(true));
     }
-    if gc_moving_loop_polls_enabled()
-        && !gc_budgeted_cycle_active()
-        && in_use >= scavenge_nursery_cap_dueness_bytes()
+}
+
+/// The allocating parser has proved this construction fits the allowance.
+/// Separate from the tiny-object completion hook so leaf parses pay no extra
+/// nursery-policy reads on their hot path.
+pub(super) fn gc_schedule_json_construction_grace(in_use: usize) {
+    if in_use >= scavenge_nursery_cap_dueness_bytes()
         // Numerical pressure only: young_scavenge_cap_due can run the initial
         // object census. Keep that heap walk at the later scheduler check.
         && (crate::arena::arena_total_bytes() >= next_arena_trigger_base()

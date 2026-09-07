@@ -53,7 +53,10 @@ unsafe fn parse_records() -> crate::JSValue {
     let text = format!(
         "{{\"records\":[{}]}}",
         (0..1_000)
-            .map(|i| format!(r#"{{"id":{i},"text":"child value {i}"}}"#))
+            .map(|i| format!(
+                r#"{{"id":{i},"text":"child value {i} {}"}}"#,
+                "x".repeat(300)
+            ))
             .collect::<Vec<_>>()
             .join(",")
     );
@@ -76,6 +79,36 @@ fn json_deferral_small_heap_allowance_scales_without_an_absolute_floor() {
         assert!(allowance <= 8 * 1024 * 1024);
     }
     assert_eq!(extra_bytes_for_budget(Some(0)), 0);
+}
+
+#[test]
+fn json_deferral_declines_tiny_inputs_and_documents_larger_than_the_allowance() {
+    let _isolation = CopyingNurseryTestGuard::new(0);
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _state = StateGuard::new();
+    let _pacing = policy::force_moving_gc_pacing();
+    let _schedule = schedule::ScheduleGuard::off();
+    let _moving = knob_overrides::ForcedEvacuationTestGuard::on();
+    let _cap = policy::ScavengeNurseryCapTestGuard::due_at_bytes(1);
+    let scope = RuntimeHandleScope::new();
+    for source in [
+        String::from("{}"),
+        format!("{{\"text\":\"{}\"}}", "x".repeat(MAX_EXTRA_BYTES + 1)),
+    ] {
+        unsafe {
+            let text = crate::js_string_from_bytes(source.as_ptr(), source.len() as u32);
+            let value = crate::json::js_json_parse(text);
+            let root = scope.root_nanbox_u64(value.bits());
+            assert_eq!(JSON_DEFERRAL.with(Cell::get), Deferral::Available);
+            let before = gc_total_collection_count();
+            // Both routes must remain eligible for the ordinary first-poll
+            // collection, and the returned object must survive actual motion.
+            set_safepoint_pending(true);
+            js_gc_loop_safepoint();
+            assert!(gc_total_collection_count() > before);
+            assert_ne!(root.get_nanbox_u64(), value.bits());
+        }
+    }
 }
 
 #[test]
@@ -118,7 +151,10 @@ fn json_deferral_returns_then_discards_siblings_before_actual_moving_collection(
         assert_eq!(safepoint_drain_count(SafepointDrainKind::NurseryMinor), 1);
         let trace = take_test_last_gc_trace_json().expect("the deferred collection must emit");
         let copied = trace["copying_nursery"]["copied_objects"].as_u64().unwrap();
-        assert!(copied > 0 && copied < 100, "must copy the child, not 999 siblings: {copied}");
+        assert!(
+            copied > 0 && copied < 100,
+            "must copy the child, not 999 siblings: {copied}"
+        );
         assert_ne!(
             child.get_nanbox_u64(),
             original,
