@@ -86,11 +86,26 @@ fn counters() -> [u64; 4] {
 
 #[inline(always)]
 fn cursor_ptr(value: f64) -> Option<*mut ObjectHeader> {
-    let obj = unsafe { crate::object::object_ptr_from_value_for_view(value) }? as *mut ObjectHeader;
-    if unsafe { (*obj).class_id } != SEGMENTS_CURSOR_CLASS_ID {
+    let jv = JSValue::from_bits(value.to_bits());
+    if !jv.is_pointer() {
         return None;
     }
-    Some(obj)
+    let obj = jv.as_pointer::<ObjectHeader>();
+    let addr = obj as usize;
+    if !crate::value::addr_class::is_above_handle_band(addr)
+        || crate::arena::classify_heap_generation(addr) == crate::arena::HeapGeneration::Unknown
+    {
+        return None;
+    }
+    let header =
+        unsafe { (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader };
+    if unsafe {
+        (*header).obj_type != crate::gc::GC_TYPE_OBJECT
+            || (*obj).class_id != SEGMENTS_CURSOR_CLASS_ID
+    } {
+        return None;
+    }
+    Some(obj as *mut ObjectHeader)
 }
 
 #[inline(always)]
@@ -774,6 +789,62 @@ mod view_mode_tests {
         // once in a process, so the per-process total counts REALMS, not calls.
         // The property that matters — and the one that fails if the fast path
         // stops being taken — is the delta above.
+    }
+
+    /// Sabotage case three: the fixed cursor class id is the entire per-call
+    /// brand check. With both byte-storage registries armed, a valid cursor
+    /// advances without entering either. Changing only its class id must make
+    /// the next call decline, proving the compare is load-bearing.
+    #[test]
+    fn view_cursor_brand_is_a_class_load_with_zero_registry_probes() {
+        let _buffer = crate::buffer::js_buffer_alloc(1, 0);
+        let _typed =
+            crate::typedarray::js_typed_array_new_empty(crate::typedarray::KIND_INT16 as i32, 1);
+        let cursor = js_segments_view_open(grapheme_segmenter(), js_string("ab"));
+        let c = cursor_ptr(cursor).expect("test premise: open returned a cursor");
+        let buffer_before = crate::buffer::test_buffer_registry_probe_count();
+        let typed_before = crate::typedarray::test_typed_array_registry_probe_count();
+
+        assert_eq!(js_segments_view_next(cursor), 1.0);
+        assert_eq!(
+            crate::buffer::test_buffer_registry_probe_count(),
+            buffer_before,
+            "view cursor validation must not enter the Buffer registry"
+        );
+        assert_eq!(
+            crate::typedarray::test_typed_array_registry_probe_count(),
+            typed_before,
+            "view cursor validation must not enter the typed-array registry"
+        );
+
+        let saved = unsafe { (*c).class_id };
+        unsafe { (*c).class_id = saved ^ 1 };
+        assert_eq!(
+            js_segments_view_next(cursor),
+            0.0,
+            "sabotage: a wrong class id must be rejected by the next entry"
+        );
+        unsafe { (*c).class_id = saved };
+        assert_eq!(js_segments_view_next(cursor), 1.0);
+    }
+
+    /// The view entry validates its RegExp argument once. Restoring the inner
+    /// helper's duplicate validation makes this delta two; deleting the entry
+    /// validation makes it zero.
+    #[cfg(feature = "regex-engine")]
+    #[test]
+    fn view_regexp_pointer_is_validated_exactly_once_per_call() {
+        let cursor = js_segments_view_open(grapheme_segmenter(), js_string("a"));
+        assert_eq!(js_segments_view_next(cursor), 1.0);
+        let re = crate::regex::js_regexp_construct(js_string("a"), js_string(""));
+        let regex = f64::from_bits(JSValue::pointer(re as *const u8).bits());
+        let before = crate::regex::test_regex_ptr_validation_calls();
+        assert!(!is_undefined(js_segments_view_regexp_test(cursor, regex)));
+        assert_eq!(
+            crate::regex::test_regex_ptr_validation_calls() - before,
+            1,
+            "one exported call must perform exactly one RegExp brand validation"
+        );
     }
 
     /// SABOTAGE-SHAPED, kept as a test: patching `RegExp.prototype.test` AFTER

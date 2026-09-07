@@ -138,17 +138,15 @@ fn get_object_prototypes() -> &'static Mutex<HashMap<usize, u64>> {
 /// The classification is a pure function of the allocation, so an owner is
 /// always on exactly one of the two storages.
 pub(crate) unsafe fn meta_capable_object(obj_ptr: usize) -> Option<*mut crate::ObjectHeader> {
-    if !crate::value::addr_class::is_above_handle_band(obj_ptr)
-        // ArrayBuffer / SharedArrayBuffer / DataView use BufferHeader storage.
-        // Some of those headers pass the legacy ObjectHeader validity probe,
-        // but they do not have an ObjectMeta slot at the ObjectHeader offset.
-        || crate::buffer::is_registered_buffer(obj_ptr)
-        || !crate::object::is_valid_obj_ptr(obj_ptr as *const u8)
-    {
+    if !crate::value::addr_class::is_above_handle_band(obj_ptr) {
         return None;
     }
-    let header = crate::value::addr_class::try_read_gc_header(obj_ptr)?;
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT {
+    // Allocator membership is the proof that `obj_ptr - GC_HEADER_SIZE` is
+    // readable. Managed Buffer / TypedArray cells carry distinct GC types;
+    // external buffers and SAB backings have no tracked header and therefore
+    // fall through to the residual prototype registry without a Buffer probe.
+    let header = crate::value::addr_class::try_read_tracked_gc_header(obj_ptr)?;
+    if (*header.as_ptr()).obj_type != crate::gc::GC_TYPE_OBJECT {
         return None;
     }
     Some(obj_ptr as *mut crate::ObjectHeader)
@@ -307,9 +305,6 @@ pub fn object_static_prototype(obj_ptr: usize) -> Option<u64> {
     // registry entry (the write path classifies identically), so a meta
     // miss for a shaped object is authoritative.
     unsafe {
-        crate::hot_diag::native_note_buffer_probe(
-            crate::hot_diag::NativeProbeCaller::ObjectStaticPrototype,
-        );
         if let Some(obj) = meta_capable_object(obj_ptr) {
             let meta = (*obj).meta;
             if !meta.is_null() {
@@ -321,6 +316,35 @@ pub fn object_static_prototype(obj_ptr: usize) -> Option<u64> {
             return None;
         }
     }
+    if !OBJECT_PROTOTYPES_NONEMPTY.load(Ordering::Acquire) {
+        return None;
+    }
+    get_object_prototypes()
+        .lock()
+        .ok()
+        .and_then(|map| map.get(&obj_ptr).copied())
+}
+
+/// Read the object-owned prototype slot when the caller has already proved a
+/// genuine `GC_TYPE_OBJECT`. The write path stores every such receiver in its
+/// `ObjectMeta`, so a null slot is authoritative and no residual registry or
+/// Buffer classification is needed.
+#[inline]
+pub(crate) unsafe fn object_static_prototype_known_object(
+    obj: *const crate::ObjectHeader,
+) -> Option<u64> {
+    let meta = (*obj).meta;
+    if meta.is_null() {
+        return None;
+    }
+    let bits = (*meta).prototype;
+    (bits != 0).then_some(bits)
+}
+
+/// Residual-prototype lookup for a caller that has already proved its receiver
+/// is not a shaped `GC_TYPE_OBJECT` (notably a validated RegExp cell).
+#[inline]
+pub(crate) fn object_static_prototype_known_non_object(obj_ptr: usize) -> Option<u64> {
     if !OBJECT_PROTOTYPES_NONEMPTY.load(Ordering::Acquire) {
         return None;
     }

@@ -643,10 +643,9 @@ pub extern "C" fn js_object_get_field_by_name(
                 {
                     return JSValue::from_bits(value.to_bits());
                 }
-                crate::hot_diag::native_note_typed_array_probe(
-                    crate::hot_diag::NativeProbeCaller::ObjectFieldByName,
-                );
-                if let Some(kind) = crate::typedarray::lookup_typed_array_kind(addr) {
+                if let Some(kind) =
+                    crate::typedarray_props::managed_or_registered_typed_array_kind(addr)
+                {
                     let elem_size = crate::typedarray::elem_size_for_kind(kind);
                     match key_bytes {
                         b"length" => {
@@ -1569,16 +1568,12 @@ pub extern "C" fn js_object_get_field_by_name(
         if crate::value::addr_class::is_plausible_heap_addr(raw) && !key.is_null() {
             {
                 unsafe {
-                    let gc_header = (raw - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-                    // Buffers / typed arrays are `std::alloc`-backed and carry
-                    // NO GcHeader, so the byte at `raw - 8` is unrelated memory
-                    // that can read as `GC_TYPE_PROMISE` (5) by coincidence on
-                    // an IC-miss read. Exclude them before acting — otherwise a
-                    // genuine buffer metadata read would early-return undefined.
-                    if (*gc_header).obj_type == crate::gc::GC_TYPE_PROMISE
-                        && !crate::buffer::is_registered_buffer(raw)
-                        && crate::typedarray::lookup_typed_array_kind(raw).is_none()
-                    {
+                    // Allocator membership proves the header before the type
+                    // load. Headerless Buffer/typed cells return `None`, while
+                    // a managed Promise is authoritative from its GC type.
+                    if crate::value::addr_class::try_read_tracked_gc_header(raw).is_some_and(
+                        |header| (*header.as_ptr()).obj_type == crate::gc::GC_TYPE_PROMISE,
+                    ) {
                         let name_ptr =
                             (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
                         let name_len = (*key).byte_len as usize;

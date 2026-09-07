@@ -267,16 +267,21 @@ pub(crate) fn get_field_by_name_object_tail(
         if let Some(val) = closure_dynamic_prop_by_key(obj as usize, key) {
             return JSValue::from_bits(val.to_bits());
         }
-        // Buffers: BufferHeader is allocated via raw `alloc()` (no GcHeader)
-        // and tracked in BUFFER_REGISTRY. Detect first so the GC header check
-        // below doesn't read garbage one word before the BufferHeader.
+        let tracked_header = crate::value::addr_class::try_read_tracked_gc_header(obj as usize);
+        let tracked_type = tracked_header.map(|header| (*header.as_ptr()).obj_type);
+        // Managed Buffer cells are authoritative from GC_TYPE_BUFFER. Only an
+        // external/SAB headerless cell reaches the address registry.
         // Route `.length` to `js_buffer_length` (matches the codegen path that
         // routes through PropertyGet for chained `Buffer.from(...).length`
         // expressions where the static type isn't recognized as Buffer).
-        crate::hot_diag::native_note_buffer_probe(
-            crate::hot_diag::NativeProbeCaller::ObjectFieldTail,
-        );
-        if crate::buffer::is_registered_buffer(obj as usize) {
+        let is_buffer = tracked_type == Some(crate::gc::GC_TYPE_BUFFER)
+            || (tracked_type.is_none() && {
+                crate::hot_diag::native_note_buffer_probe(
+                    crate::hot_diag::NativeProbeCaller::ObjectFieldTail,
+                );
+                crate::buffer::is_registered_buffer(obj as usize)
+            });
+        if is_buffer {
             if !key.is_null() {
                 let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
                 let key_len = (*key).byte_len as usize;
@@ -432,19 +437,24 @@ pub(crate) fn get_field_by_name_object_tail(
             }
             return JSValue::undefined();
         }
-        // Typed arrays (Int32Array/Float64Array/...): the `TypedArrayHeader` is
-        // `std::alloc`'d (small) or GC-old-allocated (large), but in both cases
-        // tracked in TYPED_ARRAY_REGISTRY, so detect via the side table before
-        // the GC-header read below (which would read garbage for the small
-        // `std::alloc` case). `.length`, `.byteLength`, `.byteOffset`, and
+        // Managed typed arrays carry GC_TYPE_TYPED_ARRAY and the element kind
+        // in their payload. Only a headerless native view needs the side table.
+        // `.length`, `.byteLength`, `.byteOffset`, and
         // `.BYTES_PER_ELEMENT` lower as generic PropertyGet for multi-byte
         // numeric-length views whose static type the codegen doesn't recognize;
         // pre-fix, only Uint8Array worked (it's a registered buffer) so
         // multi-byte `.byteLength` returned undefined.
-        crate::hot_diag::native_note_typed_array_probe(
-            crate::hot_diag::NativeProbeCaller::ObjectFieldTail,
-        );
-        if let Some(kind) = crate::typedarray::lookup_typed_array_kind(obj as usize) {
+        let typed_kind = if tracked_type == Some(crate::gc::GC_TYPE_TYPED_ARRAY) {
+            Some((*(obj as *const crate::typedarray::TypedArrayHeader)).kind)
+        } else if tracked_type.is_none() {
+            crate::hot_diag::native_note_typed_array_probe(
+                crate::hot_diag::NativeProbeCaller::ObjectFieldTail,
+            );
+            crate::typedarray::lookup_typed_array_kind(obj as usize)
+        } else {
+            None
+        };
+        if let Some(kind) = typed_kind {
             if !key.is_null() {
                 let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
                 let key_len = (*key).byte_len as usize;
@@ -509,18 +519,13 @@ pub(crate) fn get_field_by_name_object_tail(
             }
         }
 
-        // Buffer and TypedArray were the two headerless allocations that had
-        // to be classified first. A possible headerless Symbol returned above;
-        // every remaining supported receiver can now be classified once by
-        // the GcHeader the rest of this function already switches on.
-        if (obj as usize) < crate::gc::GC_HEADER_SIZE + 0x1000
-            || !is_valid_obj_ptr(obj as *const u8)
-        {
+        // A possible headerless Symbol returned above. Every remaining
+        // supported receiver must have the allocator-proven header already
+        // resolved once above.
+        let Some(gc_header) = tracked_header else {
             return JSValue::undefined();
-        }
-        let gc_header =
-            (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        let gc_type = (*gc_header).obj_type;
+        };
+        let gc_type = (*gc_header.as_ptr()).obj_type;
 
         // Sets are arena_alloc_gc(_, _, GC_TYPE_SET) allocations. Let the
         // header rule every other receiver out before entering SET_REGISTRY;
@@ -1532,7 +1537,7 @@ pub(crate) fn get_field_by_name_object_tail(
         // Gate-neutral builtin accessors mark only their owning object. Consult
         // the descriptor table before an accessor's empty backing slot is read;
         // unrelated objects pay only this already-loaded header-bit test.
-        if (*gc_header)._reserved & crate::gc::OBJ_FLAG_HAS_DESCRIPTORS != 0 {
+        if (*gc_header.as_ptr())._reserved & crate::gc::OBJ_FLAG_HAS_DESCRIPTORS != 0 {
             if let Some(v) = builtin_reflection_accessor_read(obj, key_bytes) {
                 return v;
             }
