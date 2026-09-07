@@ -15,7 +15,7 @@ import {
     textSetFontFamily,
     textSetColor,
     widgetSetBackgroundColor,
-    widgetSetEdgeInsets,
+    setPadding,
     setCornerRadius,
 } from "perry/ui"
 
@@ -43,10 +43,10 @@ setCornerRadius(incBtn, 20)
 widgetSetBackgroundColor(incBtn, 0.204, 0.78, 0.349, 1.0)
 
 const controls = HStack(8, [decBtn, Spacer(), incBtn])
-widgetSetEdgeInsets(controls, 20, 20, 20, 20)
+setPadding(controls, 20)
 
 const container = VStack(16, [title, display, controls])
-widgetSetEdgeInsets(container, 40, 40, 40, 40)
+setPadding(container, 40)
 setCornerRadius(container, 16)
 widgetSetBackgroundColor(container, 1.0, 1.0, 1.0, 1.0)
 

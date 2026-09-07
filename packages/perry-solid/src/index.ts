@@ -48,7 +48,7 @@ const driver: NativeDriver = {
       case "cornerRadius": setCornerRadius(widget, numeric(value, 0)); return;
       case "padding": {
         const amount = numeric(value, 0);
-        setPadding(widget, amount, amount, amount, amount);
+        setPadding(widget, amount);
         return;
       }
       case "fontSize":

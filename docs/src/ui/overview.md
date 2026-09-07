@@ -14,7 +14,7 @@ perry app.ts -o app && ./app
 
 ## Mental Model
 
-Perry's UI follows the same model as SwiftUI and Flutter: you compose native widgets using stack-based layout containers (`VStack`, `HStack`, `ZStack`), control alignment and distribution, and style widgets via free functions that take the widget handle as their first argument (`textSetColor(label, r, g, b, a)`, `widgetSetEdgeInsets(stack, ...)`, etc.). If you're coming from web development, the key shift is:
+Perry's UI follows the same model as SwiftUI and Flutter: you compose native widgets using stack-based layout containers (`VStack`, `HStack`, `ZStack`), control alignment and distribution, and style widgets via free functions that take the widget handle as their first argument (`textSetColor(label, r, g, b, a)`, `setPadding(stack, ...)`, etc.). If you're coming from web development, the key shift is:
 
 - **Layout** is controlled by stack alignment, distribution, and spacers — not CSS properties. See [Layout](layout.md).
 - **Styling** is applied directly to widgets — not through stylesheets. See [Styling](styling.md).

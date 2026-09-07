@@ -107,7 +107,7 @@ fn issue_408_scrollview_set_child_replaces_body() {
 #[test]
 fn issue_408_set_padding_emits_modifier_chain() {
     // const card = VStack([]);
-    // setPadding(card, 8, 12, 8, 12);
+    // setPadding(card, 8, 12, 16, 20);
     // setCornerRadius(card, 16);
     // widgetSetBackgroundColor(card, 0.2, 0.5, 0.95, 1);
     // App({body: card});
@@ -124,8 +124,8 @@ fn issue_408_set_padding_emits_modifier_chain() {
             Expr::LocalGet(card_id),
             Expr::Number(8.0),
             Expr::Number(12.0),
-            Expr::Number(8.0),
-            Expr::Number(12.0),
+            Expr::Number(16.0),
+            Expr::Number(20.0),
         ],
     ));
     m.init.push(mutator_stmt(
@@ -146,7 +146,7 @@ fn issue_408_set_padding_emits_modifier_chain() {
     let r = emit_index_ets(&mut m).unwrap().unwrap();
     assert!(
         r.ets_source
-            .contains(".padding({ top: 8, right: 12, bottom: 8, left: 12 })"),
+            .contains(".padding({ top: 8, right: 20, bottom: 16, left: 12 })"),
         "expected padding modifier:\n{}",
         r.ets_source
     );
@@ -160,6 +160,30 @@ fn issue_408_set_padding_emits_modifier_chain() {
         r.ets_source
             .contains(".backgroundColor('rgba(51, 128, 242, 1)')"),
         "expected rgba background:\n{}",
+        r.ets_source
+    );
+}
+
+#[test]
+fn issue_9955_uniform_padding_expands_to_every_side() {
+    let mut m = empty_module();
+    let card_id: LocalId = 31;
+    m.init.push(let_widget(
+        card_id,
+        "card",
+        nmc("VStack", vec![Expr::Array(vec![])]),
+    ));
+    m.init.push(mutator_stmt(
+        "setPadding",
+        vec![Expr::LocalGet(card_id), Expr::Number(14.0)],
+    ));
+    m.init.push(app_with_body(Expr::LocalGet(card_id)));
+
+    let r = emit_index_ets(&mut m).unwrap().unwrap();
+    assert!(
+        r.ets_source
+            .contains(".padding({ top: 14, right: 14, bottom: 14, left: 14 })"),
+        "expected uniform padding modifier:\n{}",
         r.ets_source
     );
 }
