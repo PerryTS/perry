@@ -818,7 +818,17 @@ impl<'a> DirectParser<'a> {
             // the temporary values vector below.
 
             let key_bytes = key.as_bytes();
-            let key_ptr = cached_parse_key_ptr(key_bytes);
+            // At the same width that needs a duplicate-key index, bypass
+            // the small-record key mirror. Interning identity still comes
+            // from the same owning table, including duplicate/escaped keys.
+            let key_ptr = if heap_fields
+                .as_ref()
+                .is_some_and(|(keys, _, _)| keys.len() >= 128)
+            {
+                cached_parse_wide_key_ptr(key_bytes)
+            } else {
+                cached_parse_key_ptr(key_bytes)
+            };
             if let Some((keys, values, indices)) = heap_fields.as_mut() {
                 // Linear lookup wins for modest objects. Build the index only
                 // when another field arrives after 128 unique keys, so an

@@ -403,6 +403,24 @@ fn remember_parse_key_ring(ptr: *const StringHeader) {
     });
 }
 
+/// Wide objects use the owning hash table directly. Probing and rotating a
+/// 16-entry mirror for each of thousands of distinct keys adds linear work
+/// without useful hits. Keep the mirror available for surrounding records.
+/// The owning table and its GC scanner are identical to the ordinary path.
+#[inline(never)]
+pub(crate) fn cached_parse_wide_key_ptr(key_bytes: &[u8]) -> *const StringHeader {
+    let cached = PARSE_KEY_CACHE.with(|cache| cache.borrow().get(key_bytes).copied());
+    if let Some(ptr) = cached {
+        return ptr;
+    }
+    let ptr =
+        crate::string::js_string_from_bytes_longlived(key_bytes.as_ptr(), key_bytes.len() as u32);
+    PARSE_KEY_CACHE.with(|cache| {
+        cache.borrow_mut().insert(key_bytes.to_vec(), ptr);
+    });
+    ptr
+}
+
 pub(crate) fn clear_parse_key_ring() {
     PARSE_KEY_RING.with(|ring| ring.borrow_mut().clear());
 }
