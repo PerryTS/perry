@@ -27,6 +27,44 @@ fn defined_function_ir_section<'a>(ir: &'a str, symbol: &str) -> &'a str {
     &rest[..end]
 }
 
+/// The IR of `symbol` together with every specialisation clone the lowering
+/// may have split it into (`symbol$spec_*`, `symbol$generic`, ...). A caller
+/// whose parameter is typed `string` is lowered as a guarded pair of clones
+/// behind `js_typed_string_arg_guard`, so the call it makes lives in the
+/// clones, not in the public entry.
+fn defined_function_ir_sections_with_clones(ir: &str, symbol: &str) -> String {
+    let mut out = String::new();
+    let mut search_start = 0;
+    while let Some(relative) = ir[search_start..].find("define ") {
+        let line_start = search_start + relative;
+        let line_end = ir[line_start..]
+            .find('\n')
+            .map_or(ir.len(), |newline| line_start + newline);
+        let line = &ir[line_start..line_end];
+        let defines_symbol_or_clone = line
+            .find(&format!("@{symbol}"))
+            .map(|at| {
+                let after = &line[at + symbol.len() + 1..];
+                after.starts_with('(') || after.starts_with('$')
+            })
+            .unwrap_or(false);
+        if defines_symbol_or_clone {
+            let rest = &ir[line_start..];
+            let end = rest.find("\n}\n").map_or(rest.len(), |close| close + 3);
+            out.push_str(&rest[..end]);
+            out.push('\n');
+            search_start = line_start + end;
+        } else {
+            search_start = line_end.max(line_start + 1);
+        }
+    }
+    assert!(
+        !out.is_empty(),
+        "function `{symbol}` (or a clone of it) not found in IR:\n{ir}"
+    );
+    out
+}
+
 #[test]
 fn real_yf6_erased_predicate_gets_typed_i1_clone() {
     // Keep YF6 byte-for-byte identical to the cc bundle. The typed caller is
@@ -73,7 +111,9 @@ fn real_yf6_erased_predicate_gets_typed_i1_clone() {
     let typed_ir = defined_function_ir_section(&ir, typed);
     let generic_ir = defined_function_ir_section(&ir, generic);
     let wrapper_ir = defined_function_ir_section(&ir, public);
-    let caller_ir = defined_function_ir_section(&ir, caller);
+    // The caller takes a `string`, so the lowering may split it into guarded
+    // specialisation clones; the YF6 call is in whichever clone carries the body.
+    let caller_ir = defined_function_ir_sections_with_clones(&ir, caller);
 
     assert!(
         typed_ir.starts_with(&format!("define internal i1 @{typed}(double ")),
@@ -114,6 +154,6 @@ fn real_yf6_erased_predicate_gets_typed_i1_clone() {
         caller_ir.contains("call double @js_string_code_point_at(")
             && caller_ir.contains(&format!("call double @{public}(double "))
             && !caller_ir.contains(&format!("call i1 @{typed}(double ")),
-        "codePointAt's undefined case must enter through YF6's guarded wrapper:\n{caller_ir}"
+        "codePointAt's undefined case must enter through YF6's guarded wrapper (in the caller or any of its specialisation clones):\n{caller_ir}"
     );
 }
