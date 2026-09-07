@@ -1,0 +1,73 @@
+{
+  "worker_sha256": "dae7b63e865b7e1f0fdf02198397022d99320fcebb66f77354197eb98ec48d43",
+  "symbols": [
+    {
+      "symbol": "__RNvNtNtCs7wa3bwJW6LN_13perry_runtime4json14stringify_flat11emit_object",
+      "part": "14stringify_flat11emit_object",
+      "instructions": 524,
+      "prologue": [
+        "1004bcbc0:      stp x28, x27, [sp, #-0x60]!",
+        "1004bcbc4:      stp x26, x25, [sp, #0x10]",
+        "1004bcbc8:      stp x24, x23, [sp, #0x20]",
+        "1004bcbcc:      stp x22, x21, [sp, #0x30]",
+        "1004bcbd0:      stp x20, x19, [sp, #0x40]",
+        "1004bcbd4:      stp x29, x30, [sp, #0x50]",
+        "1004bcbd8:      add x29, sp, #0x50",
+        "1004bcbdc:      sub sp, sp, #0x1a0",
+        "1004bcbe0:      mov x19, x1",
+        "1004bcbe4:      mov x20, x0"
+      ]
+    },
+    {
+      "symbol": "__RNvNtNtCs7wa3bwJW6LN_13perry_runtime4json23stringify_record_output11emit_record",
+      "part": "23stringify_record_output11emit_record",
+      "instructions": 594,
+      "prologue": [
+        "1004c3640:      stp x28, x27, [sp, #-0x60]!",
+        "1004c3644:      stp x26, x25, [sp, #0x10]",
+        "1004c3648:      stp x24, x23, [sp, #0x20]",
+        "1004c364c:      stp x22, x21, [sp, #0x30]",
+        "1004c3650:      stp x20, x19, [sp, #0x40]",
+        "1004c3654:      stp x29, x30, [sp, #0x50]",
+        "1004c3658:      add x29, sp, #0x50",
+        "1004c365c:      sub sp, sp, #0x5d0",
+        "1004c3660:      ldr xzr, [sp]",
+        "1004c3664:      str x1, [sp, #0x38]"
+      ]
+    },
+    {
+      "symbol": "__RNvNtNtCs7wa3bwJW6LN_13perry_runtime4json14stringify_flat9key_piece",
+      "part": "14stringify_flat9key_piece",
+      "instructions": 437,
+      "prologue": [
+        "1004bdd30:      sub sp, sp, #0x70",
+        "1004bdd34:      stp x26, x25, [sp, #0x20]",
+        "1004bdd38:      stp x24, x23, [sp, #0x30]",
+        "1004bdd3c:      stp x22, x21, [sp, #0x40]",
+        "1004bdd40:      stp x20, x19, [sp, #0x50]",
+        "1004bdd44:      stp x29, x30, [sp, #0x60]",
+        "1004bdd48:      add x29, sp, #0x60",
+        "1004bdd4c:      strb    wzr, [sp, #0x4]",
+        "1004bdd50:      str wzr, [sp]",
+        "1004bdd54:      and x22, x1, #0xffff000000000000"
+      ]
+    },
+    {
+      "symbol": "__RNvNtNtCs7wa3bwJW6LN_13perry_runtime4json22stringify_tojson_probe40to_json_definitely_absent_after_own_keys",
+      "part": "to_json_definitely_absent_after_own_keys",
+      "instructions": 73,
+      "prologue": [
+        "1004c351c:      stp x22, x21, [sp, #-0x30]!",
+        "1004c3520:      stp x20, x19, [sp, #0x10]",
+        "1004c3524:      stp x29, x30, [sp, #0x20]",
+        "1004c3528:      add x29, sp, #0x20",
+        "1004c352c:      mov x19, x0",
+        "1004c3530:      ldr w20, [x0]",
+        "1004c3534:      cbz w20, 0x1004c35b4 <__RNvNtNtCs7wa3bwJW6LN_13perry_runtime4json22stringify_tojson_probe40to_json_definitely_absent_after_own_keys+0x98>",
+        "1004c3538:      adrp    x1, 0x100bd9000 <_PERRY_EMPTY_STRING+0xbb0>",
+        "1004c353c:      add x1, x1, #0xd0f",
+        "1004c3540:      mov x0, x20"
+      ]
+    }
+  ]
+}

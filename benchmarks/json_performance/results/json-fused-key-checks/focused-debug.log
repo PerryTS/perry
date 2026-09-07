@@ -1,0 +1,10 @@
+   Compiling perry-runtime v0.5.1520 (/Users/amlug/projects/perry/codex-json-gc-deferral/crates/perry-runtime)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 36.44s
+     Running unittests src/lib.rs (/Users/amlug/projects/perry/codex-json-batch-target/debug/build/perry-runtime/77f7d5e322249c1d/out/perry_runtime-77f7d5e322249c1d)
+
+running 2 tests
+test json::stringify_record_output::tests::fused_key_checks_accept_nonindices_and_marker_neighbours ... ok
+test json::stringify_record_output::tests::fused_key_checks_preserve_numeric_order_and_native_forwarding_fallbacks ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 3292 filtered out; finished in 0.07s
+

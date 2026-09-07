@@ -1,0 +1,78 @@
+[
+  {
+    "arm": "scalar31",
+    "fixture": "small_record",
+    "operation": "stringify",
+    "iterations": 30000000,
+    "worker_sha256": "31366657092618b000e3d9506e3167b71aec7d79c5f0f2639614ce52019ad421",
+    "argv": [
+      "/Users/perry/json-launch-control-v25-20260907-codex/launch",
+      "/Users/perry/json-scalar-runtime-v31-20260907-codex/.work/worker",
+      "/Users/perry/json-escape-runtime-v18-20260907-codex/active",
+      "/Users/perry/json-escape-runtime-v18-20260907-codex/.work/fixtures/small_record.json",
+      "stringify",
+      "30000000",
+      "0"
+    ],
+    "sample_exit": 0,
+    "process_exit": 0,
+    "diagnostic_only": true
+  },
+  {
+    "arm": "scalar31",
+    "fixture": "wide_1m",
+    "operation": "parse",
+    "iterations": 600,
+    "worker_sha256": "31366657092618b000e3d9506e3167b71aec7d79c5f0f2639614ce52019ad421",
+    "argv": [
+      "/Users/perry/json-launch-control-v25-20260907-codex/launch",
+      "/Users/perry/json-scalar-runtime-v31-20260907-codex/.work/worker",
+      "/Users/perry/json-escape-runtime-v18-20260907-codex/active",
+      "/Users/perry/json-escape-runtime-v18-20260907-codex/.work/fixtures/wide_1m.json",
+      "parse",
+      "600",
+      "0"
+    ],
+    "sample_exit": 0,
+    "process_exit": 0,
+    "diagnostic_only": true
+  },
+  {
+    "arm": "fused35",
+    "fixture": "small_record",
+    "operation": "stringify",
+    "iterations": 30000000,
+    "worker_sha256": "dae7b63e865b7e1f0fdf02198397022d99320fcebb66f77354197eb98ec48d43",
+    "argv": [
+      "/Users/perry/json-launch-control-v25-20260907-codex/launch",
+      "/Users/perry/json-fused-key-runtime-v35-20260907-codex/.work/worker",
+      "/Users/perry/json-escape-runtime-v18-20260907-codex/active",
+      "/Users/perry/json-escape-runtime-v18-20260907-codex/.work/fixtures/small_record.json",
+      "stringify",
+      "30000000",
+      "0"
+    ],
+    "sample_exit": 0,
+    "process_exit": 0,
+    "diagnostic_only": true
+  },
+  {
+    "arm": "fused35",
+    "fixture": "wide_1m",
+    "operation": "parse",
+    "iterations": 600,
+    "worker_sha256": "dae7b63e865b7e1f0fdf02198397022d99320fcebb66f77354197eb98ec48d43",
+    "argv": [
+      "/Users/perry/json-launch-control-v25-20260907-codex/launch",
+      "/Users/perry/json-fused-key-runtime-v35-20260907-codex/.work/worker",
+      "/Users/perry/json-escape-runtime-v18-20260907-codex/active",
+      "/Users/perry/json-escape-runtime-v18-20260907-codex/.work/fixtures/wide_1m.json",
+      "parse",
+      "600",
+      "0"
+    ],
+    "sample_exit": 0,
+    "process_exit": 0,
+    "diagnostic_only": true
+  }
+]

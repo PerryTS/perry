@@ -1,0 +1,113 @@
+[
+  {
+    "fixture": "empty_object",
+    "operation": "parse",
+    "cpu_us": {
+      "previous": {
+        "median": 0.05225575,
+        "range": [
+          0.052163,
+          0.05240974999999999
+        ]
+      },
+      "scalar": {
+        "median": 0.052242449999999996,
+        "range": [
+          0.05217735,
+          0.0523108
+        ]
+      },
+      "candidate": {
+        "median": 0.0526368,
+        "range": [
+          0.05254805,
+          0.0527
+        ]
+      }
+    },
+    "comparisons": {
+      "previous": {
+        "cpu_pct": 0.7292020495352158,
+        "slower_ranges_separated": true
+      },
+      "scalar": {
+        "cpu_pct": 0.754845915534208,
+        "slower_ranges_separated": true
+      }
+    }
+  },
+  {
+    "fixture": "tiny_object",
+    "operation": "parse",
+    "cpu_us": {
+      "previous": {
+        "median": 0.1212287,
+        "range": [
+          0.1209115,
+          0.121409
+        ]
+      },
+      "scalar": {
+        "median": 0.1190235,
+        "range": [
+          0.1186834,
+          0.1193875
+        ]
+      },
+      "candidate": {
+        "median": 0.1204609,
+        "range": [
+          0.1202153,
+          0.1206236
+        ]
+      }
+    },
+    "comparisons": {
+      "previous": {
+        "cpu_pct": -0.6333483737761769,
+        "slower_ranges_separated": false
+      },
+      "scalar": {
+        "cpu_pct": 1.2076606720521577,
+        "slower_ranges_separated": true
+      }
+    }
+  },
+  {
+    "fixture": "small_record",
+    "operation": "parse",
+    "cpu_us": {
+      "previous": {
+        "median": 0.5179450000000001,
+        "range": [
+          0.517334,
+          0.519357
+        ]
+      },
+      "scalar": {
+        "median": 0.519747,
+        "range": [
+          0.5187735,
+          0.521039
+        ]
+      },
+      "candidate": {
+        "median": 0.5216765000000001,
+        "range": [
+          0.520442,
+          0.5237759999999999
+        ]
+      }
+    },
+    "comparisons": {
+      "previous": {
+        "cpu_pct": 0.7204432903107572,
+        "slower_ranges_separated": true
+      },
+      "scalar": {
+        "cpu_pct": 0.37123831402587903,
+        "slower_ranges_separated": false
+      }
+    }
+  }
+]

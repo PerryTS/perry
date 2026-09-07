@@ -1,0 +1,14 @@
+{
+  "json-depth-runtime-v22-20260907-codex/.work/worker": "c095d903b2907fb9ead12c7c2321a3be3c751dd4985f5606ed92b3e767bd0be2",
+  "json-depth-runtime-v22-20260907-codex/.work/worker-lifetime-candidate": "37ec092b46be4c773fc4f142c2c6a8e6fd2f1aa4af3b566fadff9cc1fb641c80",
+  "json-launch-control-v25-20260907-codex/launch": "099ff6af8d7540e1b702c83d3cbb3907149cfd6f9050d5f976b7cf1f5db7feb1",
+  "json-scalar-runtime-v31-20260907-codex/.work/worker": "31366657092618b000e3d9506e3167b71aec7d79c5f0f2639614ce52019ad421",
+  "json-scalar-runtime-v31-20260907-codex/.work/worker-lifetime-candidate": "89257b84b43772f50c3c5213eb7d71dccacb66b4dd19aa4ecefca3cee393dbe7",
+  "json-fused-key-runtime-v35-20260907-codex/.work/worker": "dae7b63e865b7e1f0fdf02198397022d99320fcebb66f77354197eb98ec48d43",
+  "json-fused-key-runtime-v35-20260907-codex/.work/worker-lifetime-candidate": "1e1c512d8155aac2822c6adb21d2384160ba7eb66b112c3af0b76f29a996d78a",
+  "json-key-regressions-v38-20260907-codex/run.py": "0e82424fd29f124bbbbbbc0a12e3e224631950bba2f48313f82a12b9f2378cc6",
+  "json-key-regressions-v38-20260907-codex/monitor.py": "cda2daf17f24050911e8c5584f230aaee57dd0aae061a19e4998b298dc8b7292",
+  "json-key-regressions-v38-20260907-codex/with_lock.py": "727f42b309b9db2afc838695f3045ee20f3033f2be1f5c680fc4d9df25ca8add",
+  "json-key-regressions-v38-20260907-codex/all.py": "4cbc7f89364274a207db05877a31b8034144005cc4818cf6134a6e67f58d3926",
+  "json-key-regressions-v38-20260907-codex/results/fixtures.json": "27a8bd4fb4000f445ce537de4663fbfc30dcbd26925b78b751abd673e89a353d"
+}

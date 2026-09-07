@@ -1,0 +1,22 @@
+{
+  "owner": "json-perf-5763-1788790107",
+  "load_before": [
+    1.615234375,
+    1.7626953125,
+    1.73486328125
+  ],
+  "started_utc": "2026-09-07T14:08:27Z",
+  "quiet_gate_passed": true,
+  "command": [
+    "python3",
+    "/Users/perry/json-key-regressions-v38-20260907-codex/all.py"
+  ],
+  "competing_workloads_before": [],
+  "load_after": [
+    2.21533203125,
+    1.9716796875,
+    1.8193359375
+  ],
+  "competing_workloads_after": [],
+  "finished_utc": "2026-09-07T14:09:38Z"
+}

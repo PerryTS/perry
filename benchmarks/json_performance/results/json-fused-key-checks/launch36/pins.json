@@ -1,0 +1,20 @@
+{
+  "json-fused-utf16-v11-20260907-codex/.work/checkpoint": "6a376de244705cbe8485063d254973e3e99582b95e8b290ddb370deac3ebd835",
+  "json-fused-utf16-v11-20260907-codex/.work/checkpoint-lifetime": "244d045b247c4de720d33c7526f512654ae842f4b2dd9f1e7c1e34f241a068a1",
+  "json-depth-runtime-v22-20260907-codex/.work/worker": "c095d903b2907fb9ead12c7c2321a3be3c751dd4985f5606ed92b3e767bd0be2",
+  "json-depth-runtime-v22-20260907-codex/.work/worker-lifetime-candidate": "37ec092b46be4c773fc4f142c2c6a8e6fd2f1aa4af3b566fadff9cc1fb641c80",
+  "json-launch-control-v25-20260907-codex/launch": "099ff6af8d7540e1b702c83d3cbb3907149cfd6f9050d5f976b7cf1f5db7feb1",
+  "json-scalar-runtime-v31-20260907-codex/.work/worker": "31366657092618b000e3d9506e3167b71aec7d79c5f0f2639614ce52019ad421",
+  "json-scalar-runtime-v31-20260907-codex/.work/worker-lifetime-candidate": "89257b84b43772f50c3c5213eb7d71dccacb66b4dd19aa4ecefca3cee393dbe7",
+  "json-fused-key-immutable-v36-20260907-codex/run.py": "0e82424fd29f124bbbbbbc0a12e3e224631950bba2f48313f82a12b9f2378cc6",
+  "json-fused-key-immutable-v36-20260907-codex/recheck.py": "c8644a395651bbf8d4fe9c5bbc4d5020c37835f39bce75e539738b3366e41a68",
+  "json-fused-key-immutable-v36-20260907-codex/lifetimes_recheck.py": "ec9c50dc3e14b8100d8b7e9868fb6c37a14a54fbeec17c9e793b645f26832acf",
+  "json-fused-key-immutable-v36-20260907-codex/monitor.py": "8d652c39b2da544cd08a28951bb149ed46a3fadf4e84604993334add677cdd94",
+  "json-fused-key-immutable-v36-20260907-codex/with_lock.py": "727f42b309b9db2afc838695f3045ee20f3033f2be1f5c680fc4d9df25ca8add",
+  "json-fused-key-immutable-v36-20260907-codex/all.py": "e2484328e162113b192e93e84e973b24523af6b4bab04b3ec7b8d66dbb46b53d",
+  "json-fused-key-immutable-v36-20260907-codex/analyze.py": "c3f074004a333e4516a5b9254c7ed58042df238500fe4cee21725d17dfe65328",
+  "json-fused-key-immutable-v36-20260907-codex/worker.js": "55c11d12296f896212d6abd76bcf8d551d0590b0ad24b262018b7a707369a2f4",
+  "json-fused-key-immutable-v36-20260907-codex/results/fixtures.json": "27a8bd4fb4000f445ce537de4663fbfc30dcbd26925b78b751abd673e89a353d",
+  "json-fused-key-runtime-v35-20260907-codex/.work/worker": "dae7b63e865b7e1f0fdf02198397022d99320fcebb66f77354197eb98ec48d43",
+  "json-fused-key-runtime-v35-20260907-codex/.work/worker-lifetime-candidate": "1e1c512d8155aac2822c6adb21d2384160ba7eb66b112c3af0b76f29a996d78a"
+}

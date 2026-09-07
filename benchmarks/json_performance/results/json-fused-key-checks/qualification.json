@@ -1,0 +1,10 @@
+{
+  "window": "launch36",
+  "observations": 77,
+  "all_row_no_regression_goal_complete": false,
+  "promoted_over_depth22": false,
+  "decision": "experimental; stringify gain demonstrated, parse and memory regressions unresolved",
+  "gc_policy_changed": false,
+  "cpu_us_rows_at_or_below_both": 17,
+  "peak_rss_mib_rows_at_or_below_both": 32
+}
