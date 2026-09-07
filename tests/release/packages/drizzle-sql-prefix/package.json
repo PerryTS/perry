@@ -1,0 +1,12 @@
+{
+  "name": "perry-release-fixture-drizzle-sql-prefix",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Database-free SQL and parameter prefix stress probe for issue #9935.",
+  "dependencies": { "drizzle-orm": "0.44.7" },
+  "perry": {
+    "compilePackages": ["drizzle-orm"],
+    "allow": { "compilePackages": ["drizzle-orm"] }
+  }
+}

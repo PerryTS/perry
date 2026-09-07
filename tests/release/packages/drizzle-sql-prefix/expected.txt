@@ -1,0 +1,1 @@
+sql-prefix-stress: iterations=1000 checked=3999 explicit_gc=126
