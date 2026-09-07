@@ -99,6 +99,14 @@ unsafe fn key_may_carry_to_json(stored: JSValue) -> bool {
     marker_bytes_may_carry_to_json(std::slice::from_raw_parts(data, len))
 }
 
+/// Reuse the marker proof when a serializer already has the key bytes.
+#[inline]
+pub(super) fn key_bytes_may_carry_to_json(bytes: &[u8]) -> bool {
+    bytes.len() >= b"toJSON".len()
+        && matches!(bytes[0], b't' | b'_')
+        && marker_bytes_may_carry_to_json(bytes)
+}
+
 /// Ordinary keys do not need the long marker constants in their hot loop.
 /// No verdict is retained: changed keys are read again on the next probe.
 #[cold]
@@ -253,6 +261,15 @@ pub(crate) unsafe fn to_json_definitely_absent(ptr: *const u8) -> bool {
     if !keys.is_null() && keys_array_may_carry_to_json(keys) {
         return false;
     }
+    to_json_definitely_absent_after_own_keys(ptr)
+}
+
+/// Finish the negative probe after the caller validated and scanned every
+/// own key with `key_bytes_may_carry_to_json`. That proof must still apply:
+/// no callback or key mutation may intervene. The receiver must be rooted
+/// because the default-prototype lookup can allocate on its first use.
+pub(super) unsafe fn to_json_definitely_absent_after_own_keys(ptr: *const u8) -> bool {
+    let obj = ptr as *const crate::ObjectHeader;
     let class_id = (*obj).class_id;
     if class_id != 0 && class_chain_may_have_to_json(class_id) {
         return false;

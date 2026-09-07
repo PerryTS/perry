@@ -89,3 +89,63 @@ fn record_final_output_declines_array_expandos_and_undefined() {
         assert!(try_object(value.bits()).is_none());
     }
 }
+
+#[test]
+fn fused_key_checks_preserve_numeric_order_and_native_forwarding_fallbacks() {
+    unsafe {
+        let mut keys = vec!["0", "1", "4294967294", "toJSON", "__module__"];
+        keys.push(std::str::from_utf8(crate::object::FETCH_SUBCLASS_HANDLE_FIELD).unwrap());
+        #[cfg(feature = "temporal")]
+        keys.push(std::str::from_utf8(crate::object::TEMPORAL_SUBCLASS_CELL_FIELD).unwrap());
+        for key in keys {
+            let text = format!("{{\"z\":2,{}:1}}", serde_json::to_string(key).unwrap());
+            let value = parse(&text);
+            let before = crate::arena::arena_total_bytes();
+            assert!(try_object(value.bits()).is_none(), "{key}");
+            assert!(
+                super::super::stringify_flat::try_object(value.bits()).is_none(),
+                "{key}"
+            );
+            assert_eq!(crate::arena::arena_total_bytes(), before, "{key}");
+        }
+        // Eligibility uses decoded property names, including escaped markers.
+        let value = parse(r#"{"to\u004aSON":1}"#);
+        assert!(try_object(value.bits()).is_none());
+        assert!(super::super::stringify_flat::try_object(value.bits()).is_none());
+    }
+}
+
+#[test]
+fn fused_key_checks_accept_nonindices_and_marker_neighbours() {
+    unsafe {
+        for key in [
+            "",
+            "00",
+            "01",
+            "-0",
+            "1e0",
+            "4294967295",
+            "4294967296",
+            "18446744073709551616",
+            "toJson",
+            "toJSONx",
+            "__module___",
+            "東京",
+            "a\n\"b",
+        ] {
+            let text = format!("{{\"z\":2,{}:1}}", serde_json::to_string(key).unwrap());
+            check(&text);
+            let value = parse(&text);
+            let output = super::super::stringify_flat::try_object(value.bits()).expect(key);
+            let header = output.as_string_ptr();
+            assert_eq!(
+                std::slice::from_raw_parts(
+                    crate::string::string_data(header),
+                    (*header).byte_len as usize
+                ),
+                text.as_bytes(),
+                "{key}"
+            );
+        }
+    }
+}

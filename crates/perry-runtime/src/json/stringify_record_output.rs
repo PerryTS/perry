@@ -2,7 +2,9 @@
 //! The plan contains only byte counts, array indices and inline scalar text.
 //! Only the parent object is rooted; child pointers are rederived after allocation.
 
-use super::stringify_flat::{emit_piece, scalar_piece, slot, string_piece, Piece};
+use super::stringify_flat::{
+    bounded_keys_are_dense, emit_piece, key_piece, scalar_piece, slot, Piece,
+};
 use super::*;
 use crate::string::{init_string_header, string_storage_alloc};
 
@@ -45,7 +47,7 @@ pub(super) unsafe fn try_object(bits: u64) -> Option<JSValue> {
         || fields
             > crate::object::object_live_slot_count(obj)
                 .max(crate::object::INLINE_SLOT_FLOOR as u32) as usize
-        || crate::object::keys_contain_array_index(keys)
+        || !bounded_keys_are_dense(keys, fields)
     {
         return None;
     }
@@ -89,7 +91,7 @@ unsafe fn emit_record(obj: *const crate::ObjectHeader, fields: usize) -> Option<
     let keys = crate::object::object_keys_array(obj);
     let (mut bytes, mut units) = (2u32, 2u32);
     for i in 0..fields {
-        let key = string_piece(slot(keys.cast(), ARRAY_BYTES, i))?;
+        let key = key_piece(slot(keys.cast(), ARRAY_BYTES, i))?;
         key_plan[i] = key;
         let (kb, ku) = key.lengths();
         let bits = slot(obj.cast(), OBJECT_BYTES, i);
@@ -129,7 +131,7 @@ unsafe fn emit_record(obj: *const crate::ObjectHeader, fields: usize) -> Option<
     let scope = crate::gc::RuntimeHandleScope::new();
     let input = scope.root_raw_const_ptr(obj);
     super::invalidate_object_proto_tojson_state();
-    if !super::stringify_tojson_probe::to_json_definitely_absent(obj.cast()) {
+    if !super::stringify_tojson_probe::to_json_definitely_absent_after_own_keys(obj.cast()) {
         return None;
     }
     let (result, output) = string_storage_alloc(bytes);

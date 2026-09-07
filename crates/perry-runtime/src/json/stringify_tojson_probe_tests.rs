@@ -17,6 +17,7 @@ unsafe fn check(bytes: &[u8]) {
     let value = JSValue::string_ptr(header);
     assert_eq!(key_may_carry_to_json(value), expected, "{bytes:?}");
     assert_eq!(marker_bytes_may_carry_to_json(bytes), expected, "{bytes:?}");
+    assert_eq!(key_bytes_may_carry_to_json(bytes), expected, "{bytes:?}");
     // Preserve the previous probe's contract for runtime-valid stored values.
     let previous = markers()
         .iter()

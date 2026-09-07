@@ -39,12 +39,36 @@ pub(super) unsafe fn slot(base: *const u8, header_size: usize, i: usize) -> u64 
 }
 
 pub(super) unsafe fn string_piece(bits: u64) -> Option<Piece> {
+    string_piece_for::<false>(bits)
+}
+
+/// Plan a key and prove that insertion order and the own-key toJSON miss
+/// are safe in the same pass. No callback or allocation may separate this
+/// proof from the remaining prototype probe.
+pub(super) unsafe fn key_piece(bits: u64) -> Option<Piece> {
+    string_piece_for::<true>(bits)
+}
+
+unsafe fn string_piece_for<const KEY: bool>(bits: u64) -> Option<Piece> {
     let mut scratch = [0; crate::value::SHORT_STRING_MAX_LEN];
     let (ptr, len) = crate::string::str_bytes_from_jsvalue(f64::from_bits(bits), &mut scratch)?;
     if ptr.is_null() || len > u32::MAX - 2 {
         return None;
     }
     let bytes = std::slice::from_raw_parts(ptr, len as usize);
+    if KEY {
+        if bytes.first().is_some_and(u8::is_ascii_digit)
+            && std::str::from_utf8(bytes)
+                .ok()
+                .and_then(crate::object::canonical_array_index)
+                .is_some()
+        {
+            return None;
+        }
+        if super::stringify_tojson_probe::key_bytes_may_carry_to_json(bytes) {
+            return None;
+        }
+    }
     let escaped = super::simd::short_string_needs_escape(bytes);
     let units = if bits & crate::value::TAG_MASK == STRING_TAG {
         (*((bits & POINTER_MASK) as *const StringHeader)).utf16_len
@@ -172,7 +196,7 @@ pub(super) unsafe fn try_object(bits: u64) -> Option<JSValue> {
     {
         return None;
     }
-    if !keys.is_null() && crate::object::keys_contain_array_index(keys) {
+    if fields != 0 && !bounded_keys_are_dense(keys, fields) {
         return None;
     }
     if fields == 0 {
@@ -186,6 +210,24 @@ pub(super) unsafe fn try_object(bits: u64) -> Option<JSValue> {
     emit_object(obj, fields)
 }
 
+/// The fused key loop replaces the own-key probe's array validation as well
+/// as its scan. Its callers have already bounded the number of live slots.
+pub(super) unsafe fn bounded_keys_are_dense(
+    keys: *const crate::ArrayHeader,
+    fields: usize,
+) -> bool {
+    if keys as usize & 7 != 0 {
+        return false;
+    }
+    let Some(header) = crate::value::addr_class::try_read_gc_header(keys as usize) else {
+        return false;
+    };
+    header.obj_type == crate::gc::GC_TYPE_ARRAY
+        && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+        && header.size as usize
+            >= crate::gc::GC_HEADER_SIZE + std::mem::size_of::<crate::ArrayHeader>() + fields * 8
+}
+
 #[inline(never)]
 unsafe fn emit_object(obj: *const crate::ObjectHeader, fields: usize) -> Option<JSValue> {
     // Every live entry is overwritten before emission. This initialized
@@ -197,7 +239,7 @@ unsafe fn emit_object(obj: *const crate::ObjectHeader, fields: usize) -> Option<
     let mut bytes = 2u32;
     let mut units = 2u32;
     for i in 0..fields {
-        key_plan[i] = string_piece(slot(
+        key_plan[i] = key_piece(slot(
             keys.cast(),
             std::mem::size_of::<crate::ArrayHeader>(),
             i,
@@ -227,7 +269,7 @@ unsafe fn emit_object(obj: *const crate::ObjectHeader, fields: usize) -> Option<
     // This early path can run outside a serializer frame. Refresh the
     // prototype verdict rather than inheriting a previous call's cache.
     super::invalidate_object_proto_tojson_state();
-    if !super::stringify_tojson_probe::to_json_definitely_absent(obj.cast()) {
+    if !super::stringify_tojson_probe::to_json_definitely_absent_after_own_keys(obj.cast()) {
         return None;
     }
     let (result, output) = string_storage_alloc(bytes);
