@@ -242,6 +242,8 @@ fn test_full_weak_processing_work_is_independent_of_unrelated_heap_size() {
 #[test]
 fn test_registry_tracks_holder_across_three_moving_minors() {
     let _guard = CopyingNurseryTestGuard::new(3);
+    let _tenuring =
+        crate::gc::tenuring::set_survivals_for_test(crate::gc::tenuring::GC_TENURING_SURVIVALS_MAX);
 
     let map = crate::weakref::js_weakmap_new();
     let live_key = crate::object::js_object_alloc(0, 0);

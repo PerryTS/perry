@@ -1328,6 +1328,8 @@ fn test_minor_skips_whole_heap_old_to_young_rebuild() {
 #[test]
 fn test_minor_preserves_old_to_young_edge_across_minors() {
     let _isolation = copying_nursery_isolation_lock();
+    let _tenuring =
+        crate::gc::tenuring::set_survivals_for_test(crate::gc::tenuring::GC_TENURING_SURVIVALS_MAX);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let _barrier_guard = GeneratedWriteBarrierTestGuard::active();
     reset_remembered_set();
