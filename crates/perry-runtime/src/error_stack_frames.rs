@@ -410,7 +410,7 @@ fn stack_symbols_enabled() -> bool {
 fn executable_image_base() -> Option<usize> {
     static IMAGE_BASE: OnceLock<usize> = OnceLock::new();
     let base = *IMAGE_BASE.get_or_init(|| {
-        dladdr_info(load_static_symbol_index as usize)
+        dladdr_info(load_static_symbol_index as *const () as usize)
             .map(|info| info.dli_fbase as usize)
             .unwrap_or(0)
     });
@@ -507,7 +507,7 @@ fn load_static_symbol_index() -> Option<StaticSymbolIndex> {
     // `nm` addresses by whichever places a text symbol nearest this function.
     let image_base = executable_image_base()?;
     let preferred_base = preferred_base.unwrap_or_else(|| {
-        let anchor = load_static_symbol_index as usize;
+        let anchor = load_static_symbol_index as *const () as usize;
         let absolute_distance = raw_entries
             .iter()
             .map(|(address, _)| address.abs_diff(anchor))
@@ -934,7 +934,7 @@ mod tests {
             STATIC_SYMBOL_SPAWN_ATTEMPTS.load(std::sync::atomic::Ordering::Relaxed),
             0
         );
-        let ip = kept_runtime_symbol_probe as usize;
+        let ip = kept_runtime_symbol_probe as *const () as usize;
         assert_ne!(std::hint::black_box(kept_runtime_symbol_probe(3)), 0);
         let info = dladdr_info(ip).expect("the probe must belong to the main executable image");
         assert!(
@@ -974,7 +974,7 @@ mod tests {
         }
 
         assert!(stack_symbols_enabled(), "the opt-in child must be ON");
-        let ip = kept_runtime_symbol_probe as usize;
+        let ip = kept_runtime_symbol_probe as *const () as usize;
         assert_ne!(std::hint::black_box(kept_runtime_symbol_probe(3)), 0);
         let info = dladdr_info(ip).expect("the probe must belong to the main executable image");
         assert!(
