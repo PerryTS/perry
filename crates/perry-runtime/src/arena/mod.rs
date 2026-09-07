@@ -10,6 +10,8 @@ pub(crate) use std::collections::hash_map::Entry;
 
 mod allocators;
 mod block;
+mod construction;
+pub(crate) use construction::ConstructionBatch;
 mod inline;
 mod page_meta;
 /// #7742: whole-block in-place promotion of a (near-)fully-live young

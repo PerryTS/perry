@@ -101,6 +101,8 @@ impl AsRef<[u8]> for OwnedStringBytes {
 // below so external callers see the same names as before.
 
 mod alloc;
+mod json_construction;
+pub(crate) use json_construction::string_from_json_bytes;
 mod append;
 mod base64_codec;
 mod char_ops;

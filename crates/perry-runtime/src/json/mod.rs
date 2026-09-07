@@ -23,6 +23,7 @@ use crate::{js_string_from_bytes, JSValue, StringHeader};
 use std::cell::RefCell;
 
 mod parse_api;
+mod construction_array;
 mod parse_empty;
 mod parse_inline_object;
 mod parse_scalar;

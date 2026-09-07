@@ -7,7 +7,7 @@
 use super::*;
 use crate::{
     array::{note_array_slot_layout_only, ArrayHeader},
-    js_array_alloc, js_array_push, js_string_from_bytes, JSValue, StringHeader,
+    js_array_alloc, js_array_push, JSValue, StringHeader,
 };
 
 // ─── Direct JSON parser ────────────────────────────────────────────────────────
@@ -179,6 +179,7 @@ pub(crate) struct DirectParser<'a> {
     hot_shape_len: usize,
     hot_shape_keys: [*const StringHeader; 8],
     hot_shape_array: *mut ArrayHeader,
+    batch: Option<crate::arena::ConstructionBatch>,
 }
 
 impl<'a> DirectParser<'a> {
@@ -191,7 +192,15 @@ impl<'a> DirectParser<'a> {
             hot_shape_len: 0,
             hot_shape_keys: [std::ptr::null(); 8],
             hot_shape_array: std::ptr::null_mut(),
+            batch: None,
         }
+    }
+
+    /// Enter only after the parse API roots its input and suppresses collection.
+    pub(crate) unsafe fn new_batched(input: &'a [u8]) -> Self {
+        let mut parser = Self::new(input);
+        parser.batch = crate::arena::ConstructionBatch::new();
+        parser
     }
 
     pub(crate) fn with_shape(input: &'a [u8], shape: ObjectShapeHint) -> Self {
@@ -203,6 +212,7 @@ impl<'a> DirectParser<'a> {
             hot_shape_len: 0,
             hot_shape_keys: [std::ptr::null(); 8],
             hot_shape_array: std::ptr::null_mut(),
+            batch: None,
         }
     }
 
@@ -349,10 +359,9 @@ impl<'a> DirectParser<'a> {
             // saves the equivalent walk inside `compute_utf16_len`
             // plus the conditional widening for non-ASCII counters.
             let ptr = match s {
-                ParsedStr::Borrowed(b) if b.is_ascii() => {
-                    crate::string::js_string_from_ascii_bytes(b.as_ptr(), b.len() as u32)
+                ParsedStr::Borrowed(b) => {
+                    crate::string::string_from_json_bytes(&mut self.batch, b)
                 }
-                ParsedStr::Borrowed(b) => js_string_from_bytes(b.as_ptr(), b.len() as u32),
                 // Escaped strings live in a Rust Vec, so the builder can derive
                 // the WTF-8 lone-surrogate flag while allocating the result.
                 ParsedStr::Owned(ref b) => crate::string::js_string_from_builder_bytes(b),
@@ -739,17 +748,7 @@ impl<'a> DirectParser<'a> {
             self.advance();
             let keys: [*const StringHeader; 0] = [];
             let keys_arr = self.parse_shape_keys_array_hot(&keys);
-            let js_obj = crate::object::js_object_alloc_class_inline_keys(0, 0, 0, keys_arr);
-            // #8098: see `parse_object_shaped`.
-            crate::object::mark_object_plain_ordinary(js_obj);
-            // NOTE: no hand-rolled slot fill here. The allocator has written
-            // `undefined` into every slot it allocated since #4717. The fill
-            // this replaces was a leftover from when that was the caller's job,
-            // and it wrote EIGHT slots — `js_object_alloc_class_inline_keys(0,
-            // 0, 0, …)` allocates `max(0, INLINE_SLOT_FLOOR)` = 2 of them (the
-            // floor dropped 4 -> 2 in #7928), so `JSON.parse("{}")` overwrote 48
-            // bytes past the object: the exact "heap buffer overflow into
-            // adjacent arena objects" `js_object_alloc_with_parent` warns about.
+            let js_obj = crate::object::object_from_json_fields(&mut self.batch, keys_arr, &[]);
             parse_root_restore(saved_roots);
             return JSValue::object_ptr(js_obj as *mut u8);
         }
@@ -846,45 +845,13 @@ impl<'a> DirectParser<'a> {
             }
         }
         self.expect(b'}');
-        let field_count = heap_fields
-            .as_ref()
-            .map_or(inline_len, |(keys, _, _)| keys.len()) as u32;
         let keys_arr = if let Some((keys, _, _)) = heap_fields.as_ref() {
             self.parse_shape_keys_array_hot(keys)
         } else {
             self.parse_shape_keys_array_hot(&inline_keys[..inline_len])
         };
-        let js_obj = crate::object::js_object_alloc_class_inline_keys(0, 0, field_count, keys_arr);
-        // #8098: see `parse_object_shaped`.
-        crate::object::mark_object_plain_ordinary(js_obj);
-        let alloc_field_count =
-            std::cmp::max(field_count as usize, crate::object::INLINE_SLOT_FLOOR);
-        let fields_ptr =
-            (js_obj as *mut u8).add(std::mem::size_of::<crate::ObjectHeader>()) as *mut JSValue;
-        for i in 0..alloc_field_count {
-            std::ptr::write(fields_ptr.add(i), JSValue::undefined());
-        }
-        let write_field = |i: usize, value: JSValue| -> bool {
-            let value_bits = value.bits();
-            unsafe {
-                // GC_STORE_AUDIT(BARRIERED): JSON object field write uses the
-                // layout-deferred slot-store helper (#7630); the layout state is
-                // settled once below. No allocation happens between the writes
-                // and the finalize, so `js_obj` cannot move in between.
-                crate::object::store_object_field_slot_layout_deferred(js_obj, i, value_bits)
-            }
-        };
-        let mut saw_pointer = false;
-        if let Some((_, values, _)) = heap_fields.as_ref() {
-            for (i, value) in values.iter().copied().enumerate() {
-                saw_pointer |= write_field(i, value);
-            }
-        } else {
-            for (i, value) in inline_values[..inline_len].iter().copied().enumerate() {
-                saw_pointer |= write_field(i, value);
-            }
-        }
-        crate::gc::layout_finish_deferred_boxed_object(js_obj as usize, saw_pointer);
+        let values = heap_fields.as_ref().map_or(&inline_values[..inline_len], |(_, values, _)| values.as_slice());
+        let js_obj = crate::object::object_from_json_fields(&mut self.batch, keys_arr, values);
         parse_root_restore(saved_roots);
         JSValue::object_ptr(js_obj as *mut u8)
     }
@@ -899,8 +866,9 @@ impl<'a> DirectParser<'a> {
         }
         // Same `[{...}]` pre-size heuristic as the typed path.
         // Preserve the object-leading estimate on large record arrays.
-        let js_arr = js_array_alloc(((self.input.len() - self.pos) / 96).clamp(16, 16_384) as u32);
-        self.parse_array_tail(js_arr, saved_roots)
+        let array = super::construction_array::ConstructionArray::new(
+            &mut self.batch, ((self.input.len() - self.pos) / 96).clamp(16, 16_384) as u32);
+        self.parse_array_tail(array, saved_roots)
     }
 
     /// The direct parser's existing suppression window protects these native
@@ -919,9 +887,9 @@ impl<'a> DirectParser<'a> {
             if used == values.len() {
                 // The comma after element eight was consumed. Continue at
                 // the ninth value without reparsing any prefix or child.
-                let array = js_array_alloc(16);
+                let mut array = super::construction_array::ConstructionArray::new(&mut self.batch, 16);
                 for &value in &values {
-                    self.array_push_parse_fast(array, value);
+                    array.push(&mut self.batch, value);
                 }
                 return self.parse_array_tail(array, saved_roots);
             }
@@ -942,41 +910,28 @@ impl<'a> DirectParser<'a> {
         }
     }
 
-    unsafe fn finish_short_array(&self, values: &[JSValue], saved_roots: usize) -> JSValue {
-        let array = crate::array::js_array_alloc_with_length_exact(values.len() as u32);
-        // Match the ordinary array parser's numeric classification: start
-        // raw-f64 and let each slot note revoke it for nonnumeric values.
-        crate::array::set_array_numeric_layout(array, crate::array::NumericArrayLayout::RawF64);
-        let slots = (array as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut JSValue;
-        for (index, &value) in values.iter().enumerate() {
-            // GC_STORE_AUDIT(INIT): fresh array, initialized holes, and the
-            // surrounding direct parse suppresses collection. All children
-            // are final output values; slot notes preserve the tracing map.
-            slots.add(index).write(value);
-            note_array_slot_layout_only(array, index, value.bits());
+    unsafe fn finish_short_array(&mut self, values: &[JSValue], saved_roots: usize) -> JSValue {
+        let mut array = super::construction_array::ConstructionArray::new(&mut self.batch, values.len() as u32);
+        for &value in values {
+            array.push(&mut self.batch, value);
         }
+        let result = array.finish(&self.batch);
         parse_root_restore(saved_roots);
-        JSValue::object_ptr(array.cast())
+        JSValue::object_ptr(result.cast())
     }
 
-    /// Append the unparsed tail to either the object-leading allocation or
-    /// the already-copied bounded prefix. Parsing and growth keep their
-    /// existing rooting, error handling and forwarding behavior.
-    unsafe fn parse_array_tail(&mut self, mut js_arr: *mut ArrayHeader, saved_roots: usize) -> JSValue {
-        let arr_slot = parse_root_push(JSValue::object_ptr(js_arr as *mut u8));
+    /// Containers stay private until complete. Collection remains suppressed
+    /// for the whole parse; the native builder carries only final output slots
+    /// and bounded aggregate layout facts, not a second representation.
+    unsafe fn parse_array_tail(
+        &mut self,
+        mut array: super::construction_array::ConstructionArray,
+        saved_roots: usize,
+    ) -> JSValue {
         loop {
             let value = self.parse_value();
-            if !self.valid {
-                break;
-            }
-            js_arr = parse_root_array_ptr(arr_slot);
-            // GC is suppressed for the whole direct parse, so array growth
-            // cannot collect before `value` is stored.
-            js_arr = self.array_push_parse_fast(js_arr, value);
-            // js_array_push may have returned a new ArrayHeader* after grow;
-            // update the root slot so GC sees the new pointer, not the stale one.
-            parse_root_set(arr_slot, JSValue::object_ptr(js_arr as *mut u8));
-
+            if !self.valid { break; }
+            array.push(&mut self.batch, value);
             self.skip_whitespace();
             if self.peek() == Some(b',') {
                 self.advance();
@@ -985,9 +940,9 @@ impl<'a> DirectParser<'a> {
             }
         }
         self.expect(b']');
-        js_arr = parse_root_array_ptr(arr_slot);
+        let result = array.finish(&self.batch);
         parse_root_restore(saved_roots);
-        JSValue::object_ptr(js_arr as *mut u8)
+        JSValue::object_ptr(result.cast())
     }
 
     pub(crate) unsafe fn parse_number(&mut self) -> JSValue {

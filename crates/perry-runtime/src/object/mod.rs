@@ -56,6 +56,8 @@ mod test_root_helpers;
 pub(crate) use test_root_helpers::*;
 
 mod alloc;
+mod json_construction;
+pub(crate) use json_construction::object_from_json_fields;
 mod arguments;
 #[cfg(test)]
 mod arguments_latch_tests;

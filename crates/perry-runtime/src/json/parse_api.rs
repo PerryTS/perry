@@ -55,7 +55,7 @@ pub(crate) unsafe fn test_json_parse_direct(text_ptr: *const StringHeader) -> JS
 
     crate::gc::gc_suppress();
     let text_root = parse_root_push(JSValue::string_ptr(text_ptr as *mut StringHeader));
-    let mut parser = DirectParser::new(bytes);
+    let mut parser = DirectParser::new_batched(bytes);
     let result = parser.parse_value();
     parse_root_push(result);
     crate::gc::gc_unsuppress();
@@ -259,7 +259,7 @@ unsafe fn parse_result_slow(text_ptr: *const StringHeader, len: usize) -> Result
         // Canonical payload accessor, not an open-coded header offset.
         std::slice::from_raw_parts(crate::string::string_data(hdr), len)
     };
-    let mut parser = DirectParser::new(bytes);
+    let mut parser = DirectParser::new_batched(bytes);
     let result = parser.parse_value();
     let parse_ok = parser.finish();
     parse_root_push(result);
@@ -488,7 +488,7 @@ unsafe fn parse_slow(text_ptr: *const StringHeader, len: usize) -> JSValue {
         std::slice::from_raw_parts(crate::string::string_data(hdr), len)
     };
 
-    let mut parser = DirectParser::new(bytes);
+    let mut parser = DirectParser::new_batched(bytes);
     let result = parser.parse_value();
     let parse_ok = parser.finish();
     parse_root_push(result);
