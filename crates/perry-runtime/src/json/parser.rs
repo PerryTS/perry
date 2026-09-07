@@ -379,7 +379,7 @@ impl<'a> DirectParser<'a> {
     /// fallback otherwise. On `bench_json_roundtrip` the per-record
     /// strings are 5-16 bytes so most iterations hit the SIMD path
     /// exactly once before the scalar tail handles the boundary.
-    #[inline(always)]
+    #[inline(never)]
     pub(crate) fn parse_string_bytes(&mut self) -> Option<ParsedStr<'a>> {
         if self.peek() != Some(b'"') {
             self.valid = false;
