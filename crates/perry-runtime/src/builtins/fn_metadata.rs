@@ -273,6 +273,35 @@ pub fn function_name_registry_entries() -> Option<Vec<(usize, std::sync::Arc<[u8
     Some(out)
 }
 
+/// Number of generated-bundle function names in the codegen-only image map.
+///
+/// Unlike [`function_name_registry_len`], this deliberately excludes the
+/// owned override map. Runtime builtin/getter thunks register there, and their
+/// addresses must never participate in the address-containment index used to
+/// name captured JS stack frames: that index has starts but no function
+/// extents, so a runtime function following a thunk would inherit its name.
+pub fn bundle_function_name_registry_len() -> Option<usize> {
+    Some(function_name_registry().lock().ok()?.len())
+}
+
+/// Snapshot only the generated-bundle names registered through
+/// [`js_register_function_name_static`].
+///
+/// That entry point is codegen-only by contract, which makes this an exact
+/// provenance filter. The general metadata readers continue to merge this map
+/// with runtime-owned overrides for `fn.name` and reflection.
+pub fn bundle_function_name_registry_entries(
+) -> Option<Vec<(usize, std::sync::Arc<[u8]>)>> {
+    Some(
+        function_name_registry()
+            .lock()
+            .ok()?
+            .iter()
+            .map(|(address, name)| (*address, std::sync::Arc::from(*name)))
+            .collect(),
+    )
+}
+
 /// Look up the codegen-registered JS name for a function pointer.
 ///
 /// Returns the name registered by `js_register_function_name{,_static}` (keyed
