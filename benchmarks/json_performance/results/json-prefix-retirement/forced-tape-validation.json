@@ -1,0 +1,51 @@
+[
+  {
+    "fixture": "test_gap_json_lazy_growth_alias",
+    "seed": null,
+    "tape": "forced",
+    "object_sha256": "35d5f8837c7df8a505f6a672b333ce80457ab4ff8b79abf064381e59c78a20c3",
+    "exit": 0,
+    "stdout": "growth 0 108 [0,1,null,null,\"filled\",null]\nretained 0 12000 72258000 [\"heap child survives\",11999,0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19]\n",
+    "stderr": "",
+    "node_stdout": "growth 0 108 [0,1,null,null,\"filled\",null]\nretained 0 12000 72258000 [\"heap child survives\",11999,0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19]\n",
+    "matches_node": true,
+    "counters": {},
+    "live_subject": true
+  },
+  {
+    "fixture": "test_gap_json_lazy_growth_alias",
+    "seed": 17,
+    "tape": "forced",
+    "object_sha256": "35d5f8837c7df8a505f6a672b333ce80457ab4ff8b79abf064381e59c78a20c3",
+    "exit": 0,
+    "stdout": "growth 0 108 [0,1,null,null,\"filled\",null]\nretained 0 12000 72258000 [\"heap child survives\",11999,0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19]\n",
+    "stderr": "[gc-schedule] seeded GC-schedule fuzzing ACTIVE: seed=17 rate=0.1\n[gc-schedule] reproduce with: PERRY_GC_SCHEDULE_SEED=17 PERRY_GC_SCHEDULE_RATE=0.1\n[gc-schedule] done: seed=17 safepoints=3103 scheduled_collections=129 polls_paced=274176 copying_minors=1853 moved_objects=159574 loop_polls=277279\n",
+    "node_stdout": "growth 0 108 [0,1,null,null,\"filled\",null]\nretained 0 12000 72258000 [\"heap child survives\",11999,0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19]\n",
+    "matches_node": true,
+    "counters": {
+      "scheduled_collections": 129,
+      "copying_minors": 1853,
+      "moved_objects": 159574,
+      "loop_polls": 277279
+    },
+    "live_subject": true
+  },
+  {
+    "fixture": "test_gap_json_lazy_growth_alias",
+    "seed": 9013,
+    "tape": "forced",
+    "object_sha256": "35d5f8837c7df8a505f6a672b333ce80457ab4ff8b79abf064381e59c78a20c3",
+    "exit": 0,
+    "stdout": "growth 0 108 [0,1,null,null,\"filled\",null]\nretained 0 12000 72258000 [\"heap child survives\",11999,0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19]\n",
+    "stderr": "[gc-schedule] seeded GC-schedule fuzzing ACTIVE: seed=9013 rate=0.1\n[gc-schedule] reproduce with: PERRY_GC_SCHEDULE_SEED=9013 PERRY_GC_SCHEDULE_RATE=0.1\n[gc-schedule] done: seed=9013 safepoints=3369 scheduled_collections=128 polls_paced=273916 copying_minors=2233 moved_objects=160512 loop_polls=277279\n",
+    "node_stdout": "growth 0 108 [0,1,null,null,\"filled\",null]\nretained 0 12000 72258000 [\"heap child survives\",11999,0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19]\n",
+    "matches_node": true,
+    "counters": {
+      "scheduled_collections": 128,
+      "copying_minors": 2233,
+      "moved_objects": 160512,
+      "loop_polls": 277279
+    },
+    "live_subject": true
+  }
+]

@@ -1,0 +1,13 @@
+ACQUIRED json-perf-44768-1788764880 load (1.412109375, 1.74951171875, 1.69287109375)
+RELEASED
+Traceback (most recent call last):
+  File "/Users/perry/json-prefix-retirement-v8-20260907-codex/followup/with_lock.py", line 30, in <module>
+    subprocess.run(cmd,stdout=log,stderr=subprocess.STDOUT,check=True)
+  File "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/subprocess.py", line 528, in run
+    raise CalledProcessError(retcode, process.args,
+subprocess.CalledProcessError: Command '['python3', '/Users/perry/json-prefix-retirement-v8-20260907-codex/followup/all.py']' returned non-zero exit status 1.
+MONITOR_FINISHED 1 observations 18
+Traceback (most recent call last):
+  File "/Users/perry/json-prefix-retirement-v8-20260907-codex/followup/monitor.py", line 14, in <module>
+    assert p.returncode==0
+AssertionError

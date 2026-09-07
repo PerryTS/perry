@@ -1,0 +1,52 @@
+diff --git a/crates/perry-runtime/src/gc/tests/runtime_roots/json_construction.rs b/crates/perry-runtime/src/gc/tests/runtime_roots/json_construction.rs
+index 0f03f9964..b8d9d1272 100644
+--- a/crates/perry-runtime/src/gc/tests/runtime_roots/json_construction.rs
++++ b/crates/perry-runtime/src/gc/tests/runtime_roots/json_construction.rs
+@@ -138,7 +138,12 @@ fn json_construction_fifty_thousand_records_keep_old_to_young_edges() {
+         assert!(crate::arena::pointer_in_old_gen(
+             value.as_pointer::<u8>() as usize
+         ));
+-        gc_collect_minor();
++        let trace = collect_minor_trace(GcTriggerKind::Direct);
++        assert!(
++            (50_000..51_000).contains(&trace.remembered_set.dirty_slots_scanned),
++            "scan the final array's edges, not duplicate abandoned prefixes: {}",
++            trace.remembered_set.dirty_slots_scanned
++        );
+         assert!(gc_collection_count() > before);
+         let live = crate::JSValue::from_bits(root.get_nanbox_u64());
+         let child_after = crate::array::js_array_get(live.as_pointer(), 23_456).bits();
+diff --git a/crates/perry-runtime/src/json/construction_array.rs b/crates/perry-runtime/src/json/construction_array.rs
+index b3bd1bec3..2a21d49c6 100644
+--- a/crates/perry-runtime/src/json/construction_array.rs
++++ b/crates/perry-runtime/src/json/construction_array.rs
+@@ -93,7 +93,6 @@ impl ConstructionArray {
+         if !self.batched {
+             return; // The ordinary push owns its existing growth protocol.
+         }
+-        self.finish_layout(batch);
+         let capacity = (*self.ptr).capacity.saturating_mul(2).max(16);
+         let mut next = Self::new(batch, capacity);
+         let length = (*self.ptr).length as usize;
+@@ -115,9 +114,18 @@ impl ConstructionArray {
+         next.any_pointer = self.any_pointer;
+         next.all_pointers = self.all_pointers;
+         next.all_numbers = self.all_numbers;
+-        // No external alias exists during construction. The discarded prefix
+-        // is an ordinary, fully initialized unreachable array, collectible on
+-        // its own; it is not a root or an owner of the new allocation.
++        // Construction is suppressed and has no aliases or callbacks. Only
++        // the final array needs a layout and old-to-young edge publication.
++        // Large abandoned prefixes are born old: publishing their duplicate
++        // edges would make a minor retain and scan the same children again.
++        // Empty the old payload as well as its visible length so diagnostic
++        // whole-payload scans cannot find stale nursery addresses in slack.
++        (*self.ptr).length = 0;
++        if self.any_pointer {
++            // GC_STORE_AUDIT(POINTER_FREE): zero is an inline numeric value;
++            // the copied destination now owns every initialized element.
++            std::ptr::write_bytes(old_slots, 0, length);
++        }
+         *self = next;
+     }
+ 

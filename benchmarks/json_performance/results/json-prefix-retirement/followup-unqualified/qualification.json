@@ -1,0 +1,4 @@
+{
+  "qualified": false,
+  "reason": "Supplemental harness requested roundtrip retention, but the pinned lifetime worker always discards roundtrip output. Verification correctly failed; the combined run has no end gate. Rerun supported parse/stringify retention modes in followup2."
+}

@@ -1,0 +1,44 @@
+{
+  "workers": {
+    "checkpoint": "a3b94d96acb00bdc336b867999272b2eaac61b1e00df564aec6f8c896c06ee18",
+    "candidate": "421cd2db526488fc71b43a2882d47695532796c98e13dc214066103dbc923ef1"
+  },
+  "cases": [
+    [
+      "numbers_1m",
+      "parse"
+    ],
+    [
+      "long_string_1m",
+      "parse"
+    ],
+    [
+      "long_string_1m",
+      "stringify"
+    ],
+    [
+      "unicode_1m",
+      "parse"
+    ],
+    [
+      "unicode_1m",
+      "stringify"
+    ],
+    [
+      "wide_1m",
+      "parse"
+    ],
+    [
+      "records_object_20m",
+      "parse"
+    ],
+    [
+      "small_record",
+      "parse"
+    ]
+  ],
+  "repeats": 7,
+  "seed": 81237,
+  "order": "randomized ABBA quadruples",
+  "traced": false
+}

@@ -1,0 +1,18 @@
+[
+  {
+    "check": "node-version",
+    "exit_code": 0
+  },
+  {
+    "check": "root-holders",
+    "exit_code": 0
+  },
+  {
+    "check": "addr-class",
+    "exit_code": 1
+  },
+  {
+    "check": "file-sizes",
+    "exit_code": 1
+  }
+]

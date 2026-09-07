@@ -1,0 +1,12 @@
+{
+  "runtime_changes_retained": false,
+  "retained_runtime_source": "0327b9460a749592deb354d72ebad29bf4ae4bba",
+  "all_row_parity": false,
+  "no_regression_acceptance": false,
+  "full_qualified": true,
+  "followup_qualified": true,
+  "initial_followup_qualified": false,
+  "reason": "Focused numeric-array parse regression: median +1.55%, all seven randomized ABBA groups +1.49% to +1.72%.",
+  "profile": "Matched comparison profile: runtime and stdlib codegen-units=16; shipping profile not validated.",
+  "next": "Validate default shipping codegen settings and code-placement sensitivity before accepting further micro-optimizations."
+}

@@ -77,3 +77,8 @@ first retention difference in unchanged binaries: the checkpoint conservatively
 retains the previous call's large array, which delays later collections.
 Debugger-only interventions distinguish stale stack roots from remembered-set
 retention through dead old containers; they do not qualify a new GC policy.
+
+The [array-prefix experiment](results/json-prefix-retirement/README.md) reduces
+duplicate remembered-set scanning and improves large round-trip CPU by about
+1–2%, but was reverted after a seven-pair numeric-parse regression. Runtime
+source remains the same checkpoint; shipping-profile validation is next.

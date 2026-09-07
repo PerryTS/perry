@@ -1,0 +1,16 @@
+{
+  "owner": "json-perf-44768-1788764880",
+  "load_before": [
+    1.412109375,
+    1.74951171875,
+    1.69287109375
+  ],
+  "started_utc": "2026-09-07T07:08:00Z",
+  "quiet_gate_passed": false,
+  "command": [
+    "python3",
+    "/Users/perry/json-prefix-retirement-v8-20260907-codex/followup/all.py"
+  ],
+  "competing_workloads_before": [],
+  "finished_utc": "2026-09-07T07:09:27Z"
+}
