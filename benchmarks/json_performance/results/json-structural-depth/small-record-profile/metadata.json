@@ -1,0 +1,19 @@
+{
+  "purpose": "Local sample diagnostic; not qualified timing",
+  "command": [
+    "/Users/amlug/projects/perry/codex-json-fastpaths-artifacts/depth24-worker",
+    "/Users/amlug/projects/perry/codex-json-fastpaths/benchmarks/json_performance/.work/fixtures/small_record.json",
+    "stringify",
+    "30000000",
+    "5000"
+  ],
+  "worker_sha256": "c539dbb94d14f91741c75d1d7dfe050c27e2944f9b1dd550f61aee50793d3a4d",
+  "worker_exit": 0,
+  "sample_exit": 0,
+  "sample_stderr": "Sampling process 2586 for 3 seconds with 1 millisecond of run time between samples\nCouldn't find _sigtramp symbol in expected dylibs\nFound _sigtramp symbol after 6 tries\nSampling completed, processing symbols...\nSample analysis of process 2586 written to file /Users/amlug/projects/perry/codex-json-fastpaths-artifacts/depth24-small-profile/small_record.sample.txt\n",
+  "load_after": [
+    5.35693359375,
+    10.28515625,
+    20.013671875
+  ]
+}

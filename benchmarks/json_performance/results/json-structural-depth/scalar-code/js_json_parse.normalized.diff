@@ -1,0 +1,12 @@
+--- depth22
++++ depth24
+@@ -11,7 +11,7 @@
+ b   TARGET <__RNvNtNtCs7wa3bwJW6LN_13perry_runtime4json9parse_api10parse_slow>
+ ldp x29, x30, [sp], #0x10
+ b   TARGET <__RNvNtNtCs7wa3bwJW6LN_13perry_runtime4json9parse_api18parse_noncontainer>
+-adrp    x0, TARGET <__RNvNtNtCs7wa3bwJW6LN_13perry_runtime10bun_compat12width_tables8EAW_WIDE+0x63e0>
+-add x0, x0, #0xa82
++adrp    x0, TARGET <__RNvNtNtCs7wa3bwJW6LN_13perry_runtime10bun_compat12width_tables8EAW_WIDE+0x6d20>
++add x0, x0, #0x142
+ mov w1, #0x1c
+ bl  TARGET <__RNvNtNtCs7wa3bwJW6LN_13perry_runtime4json9parse_api18throw_syntax_error>

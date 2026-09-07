@@ -1,0 +1,70 @@
+[
+  {
+    "engine": "previous",
+    "rep": 0,
+    "roots": 13,
+    "before_live_allocated_bytes": 34442896,
+    "after_live_allocated_bytes": 2212752,
+    "after_block_count": 4,
+    "native_stack_fallback": {
+      "compiled_frame_pinned_bytes": 0,
+      "compiled_frame_pinned_roots": 0,
+      "decision": "scan",
+      "pinned_bytes": 0,
+      "pinned_roots": 0,
+      "roots_found": 13,
+      "scanned": true
+    }
+  },
+  {
+    "engine": "previous",
+    "rep": 1,
+    "roots": 13,
+    "before_live_allocated_bytes": 34442896,
+    "after_live_allocated_bytes": 2212752,
+    "after_block_count": 4,
+    "native_stack_fallback": {
+      "compiled_frame_pinned_bytes": 0,
+      "compiled_frame_pinned_roots": 0,
+      "decision": "scan",
+      "pinned_bytes": 0,
+      "pinned_roots": 0,
+      "roots_found": 13,
+      "scanned": true
+    }
+  },
+  {
+    "engine": "candidate",
+    "rep": 0,
+    "roots": 14,
+    "before_live_allocated_bytes": 34442896,
+    "after_live_allocated_bytes": 2977784,
+    "after_block_count": 5,
+    "native_stack_fallback": {
+      "compiled_frame_pinned_bytes": 0,
+      "compiled_frame_pinned_roots": 0,
+      "decision": "scan",
+      "pinned_bytes": 0,
+      "pinned_roots": 0,
+      "roots_found": 14,
+      "scanned": true
+    }
+  },
+  {
+    "engine": "candidate",
+    "rep": 1,
+    "roots": 13,
+    "before_live_allocated_bytes": 34442896,
+    "after_live_allocated_bytes": 2212752,
+    "after_block_count": 4,
+    "native_stack_fallback": {
+      "compiled_frame_pinned_bytes": 0,
+      "compiled_frame_pinned_roots": 0,
+      "decision": "scan",
+      "pinned_bytes": 0,
+      "pinned_roots": 0,
+      "roots_found": 13,
+      "scanned": true
+    }
+  }
+]

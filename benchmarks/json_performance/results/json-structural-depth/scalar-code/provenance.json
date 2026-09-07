@@ -1,0 +1,40 @@
+{
+  "depth22": {
+    "worker_sha256": "c095d903b2907fb9ead12c7c2321a3be3c751dd4985f5606ed92b3e767bd0be2",
+    "symbols": {
+      "js_json_parse": {
+        "symbol": "_js_json_parse",
+        "address": "00000001007eda84",
+        "mod64": 4,
+        "instructions": 17
+      },
+      "parse_noncontainer": {
+        "symbol": "__RNvNtNtCs7wa3bwJW6LN_13perry_runtime4json9parse_api18parse_noncontainer",
+        "address": "00000001004d2874",
+        "mod64": 52,
+        "instructions": 425
+      },
+      "try_parse_scalar": null,
+      "clear_oversized_key_cache": null
+    }
+  },
+  "depth24": {
+    "worker_sha256": "c539dbb94d14f91741c75d1d7dfe050c27e2944f9b1dd550f61aee50793d3a4d",
+    "symbols": {
+      "js_json_parse": {
+        "symbol": "_js_json_parse",
+        "address": "00000001007ee144",
+        "mod64": 4,
+        "instructions": 17
+      },
+      "parse_noncontainer": {
+        "symbol": "__RNvNtNtCs7wa3bwJW6LN_13perry_runtime4json9parse_api18parse_noncontainer",
+        "address": "00000001004d1f34",
+        "mod64": 52,
+        "instructions": 425
+      },
+      "try_parse_scalar": null,
+      "clear_oversized_key_cache": null
+    }
+  }
+}

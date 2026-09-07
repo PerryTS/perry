@@ -1,0 +1,138 @@
+[
+  {
+    "fixture": "escaped_1m",
+    "values": {
+      "previous": {
+        "cpu_us_median": 1149.8048780487804,
+        "cpu_us_range": [
+          1145.8658536585365,
+          1153.2317073170732
+        ],
+        "peak_kib_median": 58416.0,
+        "peak_kib_range": [
+          58416.0,
+          58416.0
+        ],
+        "instructions_median": 1541535245
+      },
+      "candidate": {
+        "cpu_us_median": 1138.2073170731708,
+        "cpu_us_range": [
+          1135.4512195121952,
+          1140.6707317073171
+        ],
+        "peak_kib_median": 59248.0,
+        "peak_kib_range": [
+          59232.0,
+          59248.0
+        ],
+        "instructions_median": 1593488799
+      }
+    },
+    "cpu_change_pct": -1.0086547028127724,
+    "peak_change_kib": 832.0,
+    "cpu_ranges_separated": true
+  },
+  {
+    "fixture": "null",
+    "values": {
+      "previous": {
+        "cpu_us_median": 0.011888,
+        "cpu_us_range": [
+          0.01188165,
+          0.0119946
+        ],
+        "peak_kib_median": 12960.0,
+        "peak_kib_range": [
+          12960.0,
+          12976.0
+        ],
+        "instructions_median": 4728627364
+      },
+      "candidate": {
+        "cpu_us_median": 0.012197,
+        "cpu_us_range": [
+          0.0121917,
+          0.0121991
+        ],
+        "peak_kib_median": 12944.0,
+        "peak_kib_range": [
+          12944.0,
+          12960.0
+        ],
+        "instructions_median": 4728656508
+      }
+    },
+    "cpu_change_pct": 2.599259757738892,
+    "peak_change_kib": -16.0,
+    "cpu_ranges_separated": true
+  },
+  {
+    "fixture": "small_record",
+    "values": {
+      "previous": {
+        "cpu_us_median": 0.5191889999999999,
+        "cpu_us_range": [
+          0.5165365000000001,
+          0.5194275
+        ],
+        "peak_kib_median": 34144.0,
+        "peak_kib_range": [
+          34128.0,
+          34144.0
+        ],
+        "instructions_median": 15020498161
+      },
+      "candidate": {
+        "cpu_us_median": 0.5203105,
+        "cpu_us_range": [
+          0.5187815,
+          0.521396
+        ],
+        "peak_kib_median": 34208.0,
+        "peak_kib_range": [
+          34192.0,
+          34208.0
+        ],
+        "instructions_median": 15020616769
+      }
+    },
+    "cpu_change_pct": 0.21600996939459272,
+    "peak_change_kib": 64.0,
+    "cpu_ranges_separated": false
+  },
+  {
+    "fixture": "string_a",
+    "values": {
+      "previous": {
+        "cpu_us_median": 0.0143931,
+        "cpu_us_range": [
+          0.0143845,
+          0.01441075
+        ],
+        "peak_kib_median": 12960.0,
+        "peak_kib_range": [
+          12960.0,
+          12976.0
+        ],
+        "instructions_median": 5909006672
+      },
+      "candidate": {
+        "cpu_us_median": 0.01469645,
+        "cpu_us_range": [
+          0.014695,
+          0.01473625
+        ],
+        "peak_kib_median": 12944.0,
+        "peak_kib_range": [
+          12944.0,
+          12960.0
+        ],
+        "instructions_median": 5908960168
+      }
+    },
+    "cpu_change_pct": 2.1076071172992483,
+    "peak_change_kib": -16.0,
+    "cpu_ranges_separated": true
+  }
+]

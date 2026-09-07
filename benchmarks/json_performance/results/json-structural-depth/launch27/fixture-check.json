@@ -1,0 +1,97 @@
+[
+  {
+    "path": "/Users/perry/json-escape-runtime-v18-20260907-codex/.work/fixtures/null.json",
+    "sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "bytes": 4
+  },
+  {
+    "path": "/Users/perry/json-escape-runtime-v18-20260907-codex/.work/fixtures/string_a.json",
+    "sha256": "ac8d8342bbb2362d13f0a559a3621bb407011368895164b628a54f7fc33fc43c",
+    "bytes": 3
+  },
+  {
+    "path": "/Users/perry/json-escape-runtime-v18-20260907-codex/.work/fixtures/empty_object.json",
+    "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+    "bytes": 2
+  },
+  {
+    "path": "/Users/perry/json-escape-runtime-v18-20260907-codex/.work/fixtures/tiny_object.json",
+    "sha256": "015abd7f5cc57a2dd94b7590f04ad8084273905ee33ec5cebeae62276a97f862",
+    "bytes": 7
+  },
+  {
+    "path": "/Users/perry/json-escape-runtime-v18-20260907-codex/.work/fixtures/small_record.json",
+    "sha256": "e8d7bd409aeaba5d0aa3ce4046609ff7abdd3b88fc422903982ed7e58bc8f340",
+    "bytes": 109
+  },
+  {
+    "path": "/Users/perry/json-escape-runtime-v18-20260907-codex/.work/fixtures/object_1k.json",
+    "sha256": "75f531e0014758b782c6940849abdb74f1bd5c9aa365124ab3c2fd70964b9fc5",
+    "bytes": 1021
+  },
+  {
+    "path": "/Users/perry/json-escape-runtime-v18-20260907-codex/.work/fixtures/records_array_16k.json",
+    "sha256": "1545f910dad456bca2fcd7c43c2e4de63caf851f59424f8b56b0c2da08c29b63",
+    "bytes": 13197
+  },
+  {
+    "path": "/Users/perry/json-escape-runtime-v18-20260907-codex/.work/fixtures/records_array_1m.json",
+    "sha256": "b827b3f0f5ee2a0eed75ace761a1bdd6424d6a0b524654516503a3265a5685de",
+    "bytes": 888597
+  },
+  {
+    "path": "/Users/perry/json-escape-runtime-v18-20260907-codex/.work/fixtures/records_object_1m.json",
+    "sha256": "f025e38ef9df42216a5fadc3232f300ab1dae1d291c5aee1c288a72d83f83471",
+    "bytes": 888609
+  },
+  {
+    "path": "/Users/perry/json-escape-runtime-v18-20260907-codex/.work/fixtures/records_array_8m.json",
+    "sha256": "e8b5fef7f0e95e158e556ed0ed2714f81d808da8fa89f0d73a56ff0a6f22ef45",
+    "bytes": 7117930
+  },
+  {
+    "path": "/Users/perry/json-escape-runtime-v18-20260907-codex/.work/fixtures/records_object_8m.json",
+    "sha256": "4ca542eae78e77fa05f1232785712f37b92c45a30ebfb6931816ff8b8e056c9c",
+    "bytes": 7117942
+  },
+  {
+    "path": "/Users/perry/json-escape-runtime-v18-20260907-codex/.work/fixtures/records_array_20m.json",
+    "sha256": "554f4c3a4ff68567a10c21b07da3b4cb221abc8aa09a04595fc927aa07974265",
+    "bytes": 17765930
+  },
+  {
+    "path": "/Users/perry/json-escape-runtime-v18-20260907-codex/.work/fixtures/records_object_20m.json",
+    "sha256": "356c7f6f75c99f8664bb5e45a2fe7c37f06cbd74494da6943754676804304e80",
+    "bytes": 17765942
+  },
+  {
+    "path": "/Users/perry/json-escape-runtime-v18-20260907-codex/.work/fixtures/numbers_1m.json",
+    "sha256": "16a8954573cfc1090e79c3c2b27d0fc8c89dabc501aee6cbfeb44c1c1bc4c0fc",
+    "bytes": 1067371
+  },
+  {
+    "path": "/Users/perry/json-escape-runtime-v18-20260907-codex/.work/fixtures/long_string_1m.json",
+    "sha256": "ea77e5d1ebb84c30a920d4de6aee5c5c92c2aba6cf060c30f1933e1e000e9081",
+    "bytes": 1048594
+  },
+  {
+    "path": "/Users/perry/json-escape-runtime-v18-20260907-codex/.work/fixtures/escaped_1m.json",
+    "sha256": "52f2e30ddc036b9c0600a1ab088c7d00f6e40558540efa1f9315a0579bec8f56",
+    "bytes": 990018
+  },
+  {
+    "path": "/Users/perry/json-escape-runtime-v18-20260907-codex/.work/fixtures/unicode_1m.json",
+    "sha256": "b58eea42a50190b7675886030ef6875b25bb0a6d50632d9cbc5a918ea4ad9bd9",
+    "bytes": 884018
+  },
+  {
+    "path": "/Users/perry/json-escape-runtime-v18-20260907-codex/.work/fixtures/wide_1m.json",
+    "sha256": "97f24b77b98ccfd85db41fb44f0316e27c87fdff4cec53e9d763a696f3611747",
+    "bytes": 977781
+  },
+  {
+    "path": "/Users/perry/json-escape-runtime-v18-20260907-codex/.work/fixtures/heterogeneous_1m.json",
+    "sha256": "3cad453a41f7a501e6c34c79df2a76356aa2eb2c53b88b5d5b72c45aad67fd3a",
+    "bytes": 914291
+  }
+]

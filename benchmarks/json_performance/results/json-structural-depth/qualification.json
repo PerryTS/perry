@@ -1,0 +1,19 @@
+{
+  "experimental": true,
+  "no_regression_acceptance": false,
+  "all_38_complete": true,
+  "older_full_inventory_complete": false,
+  "gc_policy_changed": false,
+  "runtime_candidate": "depth24",
+  "previous_candidate": "depth22",
+  "qualified_window": "launch29",
+  "rejected_window": "launch27",
+  "quiet_observations": 63,
+  "cpu_rows_at_or_below_both": 17,
+  "rss_rows_at_or_below_both": 32,
+  "promoted_over_previous": false,
+  "promotion_blockers": [
+    "null/string_a parse CPU regressions in qualified full matrix",
+    "peak RSS increases in several rows"
+  ]
+}

@@ -1,0 +1,33 @@
+{
+  "purpose": "Targeted longer-loop scalar recheck and separate GC/RSS diagnostics; never pooled into full matrix",
+  "hashes": {
+    "previous": "c095d903b2907fb9ead12c7c2321a3be3c751dd4985f5606ed92b3e767bd0be2",
+    "candidate": "c539dbb94d14f91741c75d1d7dfe050c27e2944f9b1dd550f61aee50793d3a4d"
+  },
+  "launcher_sha256": "099ff6af8d7540e1b702c83d3cbb3907149cfd6f9050d5f976b7cf1f5db7feb1",
+  "argv0": "/Users/perry/json-escape-runtime-v18-20260907-codex/active",
+  "cases": [
+    [
+      "null",
+      "parse",
+      20000000
+    ],
+    [
+      "string_a",
+      "parse",
+      20000000
+    ],
+    [
+      "small_record",
+      "parse",
+      2000000
+    ],
+    [
+      "escaped_1m",
+      "parse",
+      82
+    ]
+  ],
+  "repeats": 7,
+  "seed": 831742
+}

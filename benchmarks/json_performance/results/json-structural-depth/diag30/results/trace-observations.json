@@ -1,0 +1,107 @@
+[
+  {
+    "load": [
+      1.64599609375,
+      1.68505859375,
+      1.69677734375
+    ],
+    "top_cpu": [
+      "92790     1  11.3 sshd-session: perry [priv]",
+      "  167     1   9.7 /System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer",
+      "16212     1   8.6 /System/Library/ExtensionKit/Extensions/WallpaperAerialsExtension.appex/Contents/MacOS/WallpaperAerialsExtension",
+      "  135     1   4.6 /usr/libexec/opendirectoryd",
+      "16213     1   3.7 /System/Library/Frameworks/VideoToolbox.framework/Versions/A/XPCServices/VTDecoderXPCService.xpc/Contents/MacOS/VTDecoderXPCService",
+      "    1     0   1.9 /sbin/launchd",
+      "  161     1   1.3 /usr/sbin/notifyd",
+      "   94     1   0.9 /usr/libexec/logd"
+    ],
+    "utc": "2026-09-07T12:57:34Z",
+    "monitor_exit": 0,
+    "external": [],
+    "xprotect_busy": []
+  },
+  {
+    "load": [
+      1.59423828125,
+      1.67333984375,
+      1.6923828125
+    ],
+    "top_cpu": [
+      "92838 92837  33.3 /Users/perry/json-escape-runtime-v18-20260907-codex/active",
+      "16212     1   9.4 /System/Library/ExtensionKit/Extensions/WallpaperAerialsExtension.appex/Contents/MacOS/WallpaperAerialsExtension",
+      "  167     1   8.0 /System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer",
+      "16213     1   2.9 /System/Library/Frameworks/VideoToolbox.framework/Versions/A/XPCServices/VTDecoderXPCService.xpc/Contents/MacOS/VTDecoderXPCService",
+      "92800 92797   0.6 /Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python",
+      "92837 92800   0.4 /usr/bin/time",
+      "  446     1   0.1 /usr/libexec/sharingd",
+      "    1     0   0.0 /sbin/launchd"
+    ],
+    "utc": "2026-09-07T12:57:39Z",
+    "monitor_exit": 0,
+    "external": [],
+    "xprotect_busy": []
+  },
+  {
+    "load": [
+      1.62646484375,
+      1.6787109375,
+      1.69384765625
+    ],
+    "top_cpu": [
+      "  167     1   7.9 /System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer",
+      "16212     1   7.2 /System/Library/ExtensionKit/Extensions/WallpaperAerialsExtension.appex/Contents/MacOS/WallpaperAerialsExtension",
+      "16213     1   2.6 /System/Library/Frameworks/VideoToolbox.framework/Versions/A/XPCServices/VTDecoderXPCService.xpc/Contents/MacOS/VTDecoderXPCService",
+      "  160     1   0.5 /usr/sbin/bluetoothd",
+      "  446     1   0.3 /usr/libexec/sharingd",
+      "  518     1   0.1 /usr/libexec/nearbyd",
+      "    1     0   0.0 /sbin/launchd",
+      "   94     1   0.0 /usr/libexec/logd"
+    ],
+    "utc": "2026-09-07T12:57:44Z",
+    "monitor_exit": 0,
+    "external": [],
+    "xprotect_busy": []
+  },
+  {
+    "load": [
+      1.65625,
+      1.68359375,
+      1.6953125
+    ],
+    "top_cpu": [
+      "92873 92872  94.0 /Users/perry/json-escape-runtime-v18-20260907-codex/active",
+      "16212     1   8.9 /System/Library/ExtensionKit/Extensions/WallpaperAerialsExtension.appex/Contents/MacOS/WallpaperAerialsExtension",
+      "  167     1   8.2 /System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer",
+      "    1     0   4.2 /sbin/launchd",
+      "16213     1   2.9 /System/Library/Frameworks/VideoToolbox.framework/Versions/A/XPCServices/VTDecoderXPCService.xpc/Contents/MacOS/VTDecoderXPCService",
+      "  446     1   0.2 /usr/libexec/sharingd",
+      "  160     1   0.1 /usr/sbin/bluetoothd",
+      "   94     1   0.0 /usr/libexec/logd"
+    ],
+    "utc": "2026-09-07T12:57:49Z",
+    "monitor_exit": 0,
+    "external": [],
+    "xprotect_busy": []
+  },
+  {
+    "load": [
+      1.68359375,
+      1.6884765625,
+      1.69677734375
+    ],
+    "top_cpu": [
+      "92884 92883  86.1 /Users/perry/json-escape-runtime-v18-20260907-codex/active",
+      "16212     1   8.1 /System/Library/ExtensionKit/Extensions/WallpaperAerialsExtension.appex/Contents/MacOS/WallpaperAerialsExtension",
+      "  167     1   7.8 /System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer",
+      "16213     1   2.9 /System/Library/Frameworks/VideoToolbox.framework/Versions/A/XPCServices/VTDecoderXPCService.xpc/Contents/MacOS/VTDecoderXPCService",
+      "  160     1   0.4 /usr/sbin/bluetoothd",
+      "  446     1   0.4 /usr/libexec/sharingd",
+      "  518     1   0.1 /usr/libexec/nearbyd",
+      "    1     0   0.0 /sbin/launchd"
+    ],
+    "utc": "2026-09-07T12:57:54Z",
+    "monitor_exit": 0,
+    "external": [],
+    "xprotect_busy": []
+  }
+]

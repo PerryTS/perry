@@ -1,0 +1,6 @@
+# Preserve diagnostic output exactly for content hashes. Runtime source is outside this directory.
+*.log -whitespace
+*.txt -whitespace
+*.s -whitespace
+*.ll -whitespace
+*.diff -whitespace

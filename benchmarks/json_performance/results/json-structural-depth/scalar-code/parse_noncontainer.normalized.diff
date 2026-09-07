@@ -1,0 +1,69 @@
+--- depth22
++++ depth24
+@@ -255,8 +255,8 @@
+ mov x12, #0x0
+ mov x8, #0x0
+ b   TARGET <__RNvNtNtCs7wa3bwJW6LN_13perry_runtime4json9parse_api18parse_noncontainer+0x64c>
+-adrp    x10, TARGET <__RNvNvNtNtCs7wa3bwJW6LN_13perry_runtime6string6format13fmt_fixed_int5POW10+0x41a8>
+-adrp    x9, TARGET <__RNvCs8xF4iOrs9m2_4itoa13DECIMAL_PAIRS+0x33d5a>
++adrp    x10, TARGET <__RNvNvNtNtCs7wa3bwJW6LN_13perry_runtime6string6format13fmt_fixed_int5POW10+0x3ae8>
++adrp    x9, TARGET <__RNvCs8xF4iOrs9m2_4itoa13DECIMAL_PAIRS+0x3369a>
+ cmp x19, #0x10
+ b.hs    TARGET <__RNvNtNtCs7wa3bwJW6LN_13perry_runtime4json9parse_api18parse_noncontainer+0x420>
+ mov x8, #0x0
+@@ -264,29 +264,29 @@
+ b   TARGET <__RNvNtNtCs7wa3bwJW6LN_13perry_runtime4json9parse_api18parse_noncontainer+0x5a4>
+ mov x12, #0x0
+ and x11, x19, #0xc
+-adrp    x8, TARGET <__RNvNvNtNtCs7wa3bwJW6LN_13perry_runtime6string6format13fmt_fixed_int5POW10+0x51a8>
+-ldr q0, [x8, #0xc0]
+-adrp    x8, TARGET <__RNvNvNtNtCs7wa3bwJW6LN_13perry_runtime6string6format13fmt_fixed_int5POW10+0x51a8>
+-ldr q1, [x8, #0xd0]
++adrp    x8, TARGET <__RNvNvNtNtCs7wa3bwJW6LN_13perry_runtime6string6format13fmt_fixed_int5POW10+0x4ae8>
++ldr q0, [x8, #0x780]
++adrp    x8, TARGET <__RNvNvNtNtCs7wa3bwJW6LN_13perry_runtime6string6format13fmt_fixed_int5POW10+0x4ae8>
++ldr q1, [x8, #0x790]
+ and x8, x19, #0xfffffffffffffff0
+-adrp    x13, TARGET <__RNvNvNtNtCs7wa3bwJW6LN_13perry_runtime6string6format13fmt_fixed_int5POW10+0x51a8>
+-ldr q2, [x13, #0xe0]
+-adrp    x13, TARGET <__RNvNvNtNtCs7wa3bwJW6LN_13perry_runtime6string6format13fmt_fixed_int5POW10+0x51a8>
+-ldr q3, [x13, #0xf0]
+-adrp    x13, TARGET <__RNvNvNtNtCs7wa3bwJW6LN_13perry_runtime6string6format13fmt_fixed_int5POW10+0x51a8>
+-ldr q4, [x13, #0x100]
+-adrp    x13, TARGET <__RNvNvNtNtCs7wa3bwJW6LN_13perry_runtime6string6format13fmt_fixed_int5POW10+0x51a8>
+-ldr q5, [x13, #0x110]
++adrp    x13, TARGET <__RNvNvNtNtCs7wa3bwJW6LN_13perry_runtime6string6format13fmt_fixed_int5POW10+0x4ae8>
++ldr q2, [x13, #0x7a0]
++adrp    x13, TARGET <__RNvNvNtNtCs7wa3bwJW6LN_13perry_runtime6string6format13fmt_fixed_int5POW10+0x4ae8>
++ldr q3, [x13, #0x7b0]
++adrp    x13, TARGET <__RNvNvNtNtCs7wa3bwJW6LN_13perry_runtime6string6format13fmt_fixed_int5POW10+0x4ae8>
++ldr q4, [x13, #0x7c0]
++adrp    x13, TARGET <__RNvNvNtNtCs7wa3bwJW6LN_13perry_runtime6string6format13fmt_fixed_int5POW10+0x4ae8>
++ldr q5, [x13, #0x7d0]
+ mov w13, #0x10
+ dup.2d  v7, x13
+ and x13, x25, #0xfffffffffffffff0
+ add x13, x0, x13
+ sub x20, x13, x24
+ movi.2d v6, #0000000000000000
+-ldr q16, [x10, #0x340]
++ldr q16, [x10, #0xa00]
+ movi.2d v17, #0000000000000000
+ movi.2d v19, #0000000000000000
+-ldr q22, [x9, #0x220]
++ldr q22, [x9, #0x8e0]
+ movi.2d v18, #0000000000000000
+ movi.2d v23, #0000000000000000
+ movi.2d v20, #0000000000000000
+@@ -367,9 +367,9 @@
+ fmov    d0, x12
+ movi.2d v1, #0000000000000000
+ dup.2d  v3, x11
+-ldr q2, [x10, #0x340]
++ldr q2, [x10, #0xa00]
+ orr.16b v2, v3, v2
+-ldr q4, [x9, #0x220]
++ldr q4, [x9, #0x8e0]
+ orr.16b v3, v3, v4
+ sub x9, x11, x8
+ add x10, x0, x11

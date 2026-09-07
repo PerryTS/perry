@@ -1,0 +1,9 @@
+ACQUIRED json-perf-86168-1788784667 load (1.33544921875, 1.4658203125, 1.533203125)
+FINISHED custom load (1.9296875, 1.8984375, 1.7138671875)
+QUIET_GATE True
+RELEASED
+MONITOR_FINISHED 0 observations 63
+Traceback (most recent call last):
+  File "/Users/perry/json-structural-immutable-v27-20260907-codex/monitor.py", line 16, in <module>
+    assert all(r['monitor_exit']==0 and not r['external'] and not r['xprotect_busy'] for r in observations)
+AssertionError

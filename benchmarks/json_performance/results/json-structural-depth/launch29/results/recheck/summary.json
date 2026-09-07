@@ -1,0 +1,4714 @@
+[
+  {
+    "fixture": "empty_object",
+    "operation": "parse",
+    "cpu_us": {
+      "checkpoint": {
+        "median": 0.055845,
+        "range": [
+          0.0558335,
+          0.0559555
+        ]
+      },
+      "previous": {
+        "median": 0.055874,
+        "range": [
+          0.055789,
+          0.056007
+        ]
+      },
+      "candidate": {
+        "median": 0.0558725,
+        "range": [
+          0.0558205,
+          0.056001
+        ]
+      },
+      "node": {
+        "median": 0.0451615,
+        "range": [
+          0.0451255,
+          0.0451975
+        ]
+      },
+      "bun": {
+        "median": 0.0242275,
+        "range": [
+          0.024118,
+          0.02426
+        ]
+      },
+      "delta": -1.5000000000015001e-06,
+      "delta_percent": -0.002684611805137127,
+      "ranges_separated": false
+    },
+    "peak_rss_mib": {
+      "checkpoint": {
+        "median": 33.59375,
+        "range": [
+          33.578125,
+          33.640625
+        ]
+      },
+      "previous": {
+        "median": 33.609375,
+        "range": [
+          33.609375,
+          33.65625
+        ]
+      },
+      "candidate": {
+        "median": 33.65625,
+        "range": [
+          33.640625,
+          33.65625
+        ]
+      },
+      "node": {
+        "median": 59.46875,
+        "range": [
+          59.359375,
+          59.515625
+        ]
+      },
+      "bun": {
+        "median": 69.015625,
+        "range": [
+          69.0,
+          69.046875
+        ]
+      },
+      "delta": 0.046875,
+      "delta_percent": 0.1394700139470073,
+      "ranges_separated": false
+    },
+    "instructions": {
+      "checkpoint": {
+        "median": 2155021594,
+        "range": [
+          2154981170,
+          2155289838
+        ]
+      },
+      "previous": {
+        "median": 2155347066,
+        "range": [
+          2155220077,
+          2155658217
+        ]
+      },
+      "candidate": {
+        "median": 2154543010,
+        "range": [
+          2154431868,
+          2154740310
+        ]
+      },
+      "node": {
+        "median": 2078892332,
+        "range": [
+          2074893022,
+          2079511130
+        ]
+      },
+      "bun": {
+        "median": 1033574497,
+        "range": [
+          1032040307,
+          1036757570
+        ]
+      },
+      "delta": -804056,
+      "delta_percent": -0.037305175239932264,
+      "ranges_separated": true
+    }
+  },
+  {
+    "fixture": "empty_object",
+    "operation": "stringify",
+    "cpu_us": {
+      "checkpoint": {
+        "median": 0.048381,
+        "range": [
+          0.0482935,
+          0.048557
+        ]
+      },
+      "previous": {
+        "median": 0.0483245,
+        "range": [
+          0.048296,
+          0.048345
+        ]
+      },
+      "candidate": {
+        "median": 0.048322,
+        "range": [
+          0.048271,
+          0.0483575
+        ]
+      },
+      "node": {
+        "median": 0.0319735,
+        "range": [
+          0.0319575,
+          0.032019
+        ]
+      },
+      "bun": {
+        "median": 0.029955,
+        "range": [
+          0.029736,
+          0.030114
+        ]
+      },
+      "delta": -2.5000000000025002e-06,
+      "delta_percent": -0.005173359269117217,
+      "ranges_separated": false
+    },
+    "peak_rss_mib": {
+      "checkpoint": {
+        "median": 12.828125,
+        "range": [
+          12.828125,
+          12.828125
+        ]
+      },
+      "previous": {
+        "median": 12.859375,
+        "range": [
+          12.859375,
+          12.875
+        ]
+      },
+      "candidate": {
+        "median": 12.875,
+        "range": [
+          12.859375,
+          12.875
+        ]
+      },
+      "node": {
+        "median": 59.5,
+        "range": [
+          59.40625,
+          59.546875
+        ]
+      },
+      "bun": {
+        "median": 129.765625,
+        "range": [
+          129.71875,
+          129.78125
+        ]
+      },
+      "delta": 0.015625,
+      "delta_percent": 0.12150668286756705,
+      "ranges_separated": false
+    },
+    "instructions": {
+      "checkpoint": {
+        "median": 1708294478,
+        "range": [
+          1708230104,
+          1708389019
+        ]
+      },
+      "previous": {
+        "median": 1707645778,
+        "range": [
+          1707625844,
+          1707918560
+        ]
+      },
+      "candidate": {
+        "median": 1707696365,
+        "range": [
+          1707663588,
+          1707766460
+        ]
+      },
+      "node": {
+        "median": 1670255251,
+        "range": [
+          1669694371,
+          1673198593
+        ]
+      },
+      "bun": {
+        "median": 1321732807,
+        "range": [
+          1321365262,
+          1325855716
+        ]
+      },
+      "delta": 50587,
+      "delta_percent": 0.002962382518179041,
+      "ranges_separated": false
+    }
+  },
+  {
+    "fixture": "escaped_1m",
+    "operation": "parse",
+    "cpu_us": {
+      "checkpoint": {
+        "median": 2454.378048780488,
+        "range": [
+          2448.451219512195,
+          2468.512195121951
+        ]
+      },
+      "previous": {
+        "median": 1151.0365853658536,
+        "range": [
+          1150.5121951219512,
+          1155.6707317073171
+        ]
+      },
+      "candidate": {
+        "median": 1136.6097560975609,
+        "range": [
+          1135.8048780487804,
+          1138.1829268292684
+        ]
+      },
+      "node": {
+        "median": 1732.8536585365853,
+        "range": [
+          1731.9024390243903,
+          1736.9878048780488
+        ]
+      },
+      "bun": {
+        "median": 2084.243902439024,
+        "range": [
+          2083.6341463414633,
+          2087.4146341463415
+        ]
+      },
+      "delta": -14.42682926829275,
+      "delta_percent": -1.253377125602595,
+      "ranges_separated": true
+    },
+    "peak_rss_mib": {
+      "checkpoint": {
+        "median": 57.734375,
+        "range": [
+          57.734375,
+          57.734375
+        ]
+      },
+      "previous": {
+        "median": 57.046875,
+        "range": [
+          57.046875,
+          57.046875
+        ]
+      },
+      "candidate": {
+        "median": 57.859375,
+        "range": [
+          57.859375,
+          57.859375
+        ]
+      },
+      "node": {
+        "median": 74.0625,
+        "range": [
+          74.03125,
+          74.09375
+        ]
+      },
+      "bun": {
+        "median": 64.203125,
+        "range": [
+          64.1875,
+          64.203125
+        ]
+      },
+      "delta": 0.8125,
+      "delta_percent": 1.4242673240208115,
+      "ranges_separated": true
+    },
+    "instructions": {
+      "checkpoint": {
+        "median": 2606769381,
+        "range": [
+          2606386246,
+          2608222332
+        ]
+      },
+      "previous": {
+        "median": 1542502718,
+        "range": [
+          1542284282,
+          1542730372
+        ]
+      },
+      "candidate": {
+        "median": 1593565007,
+        "range": [
+          1592850365,
+          1594233207
+        ]
+      },
+      "node": {
+        "median": 2279980173,
+        "range": [
+          2278667209,
+          2281059575
+        ]
+      },
+      "bun": {
+        "median": 2824036613,
+        "range": [
+          2823875456,
+          2824084491
+        ]
+      },
+      "delta": 51062289,
+      "delta_percent": 3.3103532592932527,
+      "ranges_separated": true
+    }
+  },
+  {
+    "fixture": "escaped_1m",
+    "operation": "stringify",
+    "cpu_us": {
+      "checkpoint": {
+        "median": 963.6666666666666,
+        "range": [
+          962.4940476190476,
+          964.547619047619
+        ]
+      },
+      "previous": {
+        "median": 963.0654761904761,
+        "range": [
+          961.1666666666666,
+          964.625
+        ]
+      },
+      "candidate": {
+        "median": 963.2678571428571,
+        "range": [
+          962.4702380952381,
+          975.7440476190476
+        ]
+      },
+      "node": {
+        "median": 1892.875,
+        "range": [
+          1889.654761904762,
+          1911.0892857142858
+        ]
+      },
+      "bun": {
+        "median": 2084.2440476190477,
+        "range": [
+          2077.5833333333335,
+          2092.6369047619046
+        ]
+      },
+      "delta": 0.2023809523809632,
+      "delta_percent": 0.02101424642293459,
+      "ranges_separated": false
+    },
+    "peak_rss_mib": {
+      "checkpoint": {
+        "median": 56.0,
+        "range": [
+          56.0,
+          56.0
+        ]
+      },
+      "previous": {
+        "median": 56.015625,
+        "range": [
+          56.0,
+          56.015625
+        ]
+      },
+      "candidate": {
+        "median": 56.125,
+        "range": [
+          56.109375,
+          56.140625
+        ]
+      },
+      "node": {
+        "median": 124.671875,
+        "range": [
+          124.5625,
+          124.765625
+        ]
+      },
+      "bun": {
+        "median": 74.765625,
+        "range": [
+          74.71875,
+          74.796875
+        ]
+      },
+      "delta": 0.109375,
+      "delta_percent": 0.19525801952580135,
+      "ranges_separated": true
+    },
+    "instructions": {
+      "checkpoint": {
+        "median": 2369027756,
+        "range": [
+          2368871096,
+          2369150010
+        ]
+      },
+      "previous": {
+        "median": 2355672836,
+        "range": [
+          2355600610,
+          2356098422
+        ]
+      },
+      "candidate": {
+        "median": 2356471137,
+        "range": [
+          2356141667,
+          2356531651
+        ]
+      },
+      "node": {
+        "median": 4841808068,
+        "range": [
+          4840977484,
+          4849531397
+        ]
+      },
+      "bun": {
+        "median": 2692835519,
+        "range": [
+          2692493444,
+          2693940853
+        ]
+      },
+      "delta": 798301,
+      "delta_percent": 0.03388844952492143,
+      "ranges_separated": true
+    }
+  },
+  {
+    "fixture": "heterogeneous_1m",
+    "operation": "parse",
+    "cpu_us": {
+      "checkpoint": {
+        "median": 1856.4,
+        "range": [
+          1854.4,
+          1867.475
+        ]
+      },
+      "previous": {
+        "median": 1847.575,
+        "range": [
+          1843.75,
+          1847.8
+        ]
+      },
+      "candidate": {
+        "median": 1416.2,
+        "range": [
+          1412.5,
+          1420.05
+        ]
+      },
+      "node": {
+        "median": 3904.9875,
+        "range": [
+          3804.875,
+          3977.05
+        ]
+      },
+      "bun": {
+        "median": 2949.4625,
+        "range": [
+          2930.225,
+          2959.025
+        ]
+      },
+      "delta": -431.375,
+      "delta_percent": -23.348172604630392,
+      "ranges_separated": true
+    },
+    "peak_rss_mib": {
+      "checkpoint": {
+        "median": 68.21875,
+        "range": [
+          68.21875,
+          68.21875
+        ]
+      },
+      "previous": {
+        "median": 68.25,
+        "range": [
+          68.25,
+          68.25
+        ]
+      },
+      "candidate": {
+        "median": 68.328125,
+        "range": [
+          68.328125,
+          68.328125
+        ]
+      },
+      "node": {
+        "median": 92.296875,
+        "range": [
+          92.0625,
+          93.171875
+        ]
+      },
+      "bun": {
+        "median": 80.828125,
+        "range": [
+          80.5625,
+          80.984375
+        ]
+      },
+      "delta": 0.078125,
+      "delta_percent": 0.11446886446886406,
+      "ranges_separated": true
+    },
+    "instructions": {
+      "checkpoint": {
+        "median": 2140537497,
+        "range": [
+          2140419102,
+          2140737312
+        ]
+      },
+      "previous": {
+        "median": 2091678675,
+        "range": [
+          2091454390,
+          2091862594
+        ]
+      },
+      "candidate": {
+        "median": 1837505678,
+        "range": [
+          1837360717,
+          1837840002
+        ]
+      },
+      "node": {
+        "median": 6010144409,
+        "range": [
+          5969488417,
+          6048889942
+        ]
+      },
+      "bun": {
+        "median": 4572980738,
+        "range": [
+          4570069968,
+          4573332659
+        ]
+      },
+      "delta": -254172997,
+      "delta_percent": -12.151627304801016,
+      "ranges_separated": true
+    }
+  },
+  {
+    "fixture": "heterogeneous_1m",
+    "operation": "stringify",
+    "cpu_us": {
+      "checkpoint": {
+        "median": 796.4834123222748,
+        "range": [
+          795.0663507109005,
+          797.5023696682465
+        ]
+      },
+      "previous": {
+        "median": 798.0663507109005,
+        "range": [
+          795.260663507109,
+          808.5213270142181
+        ]
+      },
+      "candidate": {
+        "median": 794.8151658767772,
+        "range": [
+          794.1848341232228,
+          796.2417061611375
+        ]
+      },
+      "node": {
+        "median": 905.0805687203791,
+        "range": [
+          900.3791469194313,
+          925.3222748815166
+        ]
+      },
+      "bun": {
+        "median": 1055.909952606635,
+        "range": [
+          1054.132701421801,
+          1059.1990521327014
+        ]
+      },
+      "delta": -3.2511848341232508,
+      "delta_percent": -0.4073827735284419,
+      "ranges_separated": false
+    },
+    "peak_rss_mib": {
+      "checkpoint": {
+        "median": 57.921875,
+        "range": [
+          57.921875,
+          57.921875
+        ]
+      },
+      "previous": {
+        "median": 57.953125,
+        "range": [
+          57.953125,
+          57.953125
+        ]
+      },
+      "candidate": {
+        "median": 58.046875,
+        "range": [
+          58.046875,
+          58.046875
+        ]
+      },
+      "node": {
+        "median": 128.734375,
+        "range": [
+          128.5,
+          128.984375
+        ]
+      },
+      "bun": {
+        "median": 103.140625,
+        "range": [
+          102.21875,
+          103.171875
+        ]
+      },
+      "delta": 0.09375,
+      "delta_percent": 0.16176867080075485,
+      "ranges_separated": true
+    },
+    "instructions": {
+      "checkpoint": {
+        "median": 3749871208,
+        "range": [
+          3749354885,
+          3752630023
+        ]
+      },
+      "previous": {
+        "median": 3747696891,
+        "range": [
+          3747424131,
+          3753763109
+        ]
+      },
+      "candidate": {
+        "median": 3744911368,
+        "range": [
+          3744023821,
+          3747356729
+        ]
+      },
+      "node": {
+        "median": 3846798086,
+        "range": [
+          3843884577,
+          3854763384
+        ]
+      },
+      "bun": {
+        "median": 4519823951,
+        "range": [
+          4519386157,
+          4521398567
+        ]
+      },
+      "delta": -2785523,
+      "delta_percent": -0.07432626172861889,
+      "ranges_separated": true
+    }
+  },
+  {
+    "fixture": "long_string_1m",
+    "operation": "parse",
+    "cpu_us": {
+      "checkpoint": {
+        "median": 201.13532110091742,
+        "range": [
+          200.20871559633028,
+          204.99617737003058
+        ]
+      },
+      "previous": {
+        "median": 191.73241590214067,
+        "range": [
+          190.67660550458714,
+          192.74235474006116
+        ]
+      },
+      "candidate": {
+        "median": 192.67354740061162,
+        "range": [
+          190.2790519877676,
+          193.68272171253824
+        ]
+      },
+      "node": {
+        "median": 368.89449541284404,
+        "range": [
+          368.6949541284404,
+          369.35091743119267
+        ]
+      },
+      "bun": {
+        "median": 68.19113149847095,
+        "range": [
+          65.93272171253822,
+          68.41284403669725
+        ]
+      },
+      "delta": 0.941131498470952,
+      "delta_percent": 0.4908567463893565,
+      "ranges_separated": false
+    },
+    "peak_rss_mib": {
+      "checkpoint": {
+        "median": 59.609375,
+        "range": [
+          59.609375,
+          59.609375
+        ]
+      },
+      "previous": {
+        "median": 59.65625,
+        "range": [
+          59.65625,
+          59.671875
+        ]
+      },
+      "candidate": {
+        "median": 59.75,
+        "range": [
+          59.734375,
+          59.75
+        ]
+      },
+      "node": {
+        "median": 159.921875,
+        "range": [
+          159.890625,
+          160.0625
+        ]
+      },
+      "bun": {
+        "median": 162.375,
+        "range": [
+          124.375,
+          171.390625
+        ]
+      },
+      "delta": 0.09375,
+      "delta_percent": 0.15715034049239573,
+      "ranges_separated": true
+    },
+    "instructions": {
+      "checkpoint": {
+        "median": 3818461833,
+        "range": [
+          3816828325,
+          3819046132
+        ]
+      },
+      "previous": {
+        "median": 3323472603,
+        "range": [
+          3322764038,
+          3325642065
+        ]
+      },
+      "candidate": {
+        "median": 3324178078,
+        "range": [
+          3321487335,
+          3326522642
+        ]
+      },
+      "node": {
+        "median": 9086530785,
+        "range": [
+          9080451010,
+          9088834460
+        ]
+      },
+      "bun": {
+        "median": 1639832985,
+        "range": [
+          1625268497,
+          1643805754
+        ]
+      },
+      "delta": 705475,
+      "delta_percent": 0.021227044247740245,
+      "ranges_separated": false
+    }
+  },
+  {
+    "fixture": "long_string_1m",
+    "operation": "stringify",
+    "cpu_us": {
+      "checkpoint": {
+        "median": 170.68318584070798,
+        "range": [
+          170.60530973451327,
+          171.53362831858408
+        ]
+      },
+      "previous": {
+        "median": 171.05221238938054,
+        "range": [
+          170.63451327433629,
+          172.8053097345133
+        ]
+      },
+      "candidate": {
+        "median": 170.74424778761062,
+        "range": [
+          170.62389380530973,
+          171.71858407079645
+        ]
+      },
+      "node": {
+        "median": 106.1283185840708,
+        "range": [
+          105.76194690265487,
+          108.78672566371681
+        ]
+      },
+      "bun": {
+        "median": 96.40530973451328,
+        "range": [
+          96.04070796460176,
+          98.33893805309735
+        ]
+      },
+      "delta": -0.3079646017699247,
+      "delta_percent": -0.18004128532922437,
+      "ranges_separated": false
+    },
+    "peak_rss_mib": {
+      "checkpoint": {
+        "median": 60.765625,
+        "range": [
+          60.765625,
+          60.765625
+        ]
+      },
+      "previous": {
+        "median": 60.8125,
+        "range": [
+          60.8125,
+          60.8125
+        ]
+      },
+      "candidate": {
+        "median": 60.890625,
+        "range": [
+          60.890625,
+          60.90625
+        ]
+      },
+      "node": {
+        "median": 156.921875,
+        "range": [
+          156.890625,
+          156.953125
+        ]
+      },
+      "bun": {
+        "median": 123.546875,
+        "range": [
+          123.53125,
+          161.578125
+        ]
+      },
+      "delta": 0.078125,
+      "delta_percent": 0.1284686536485058,
+      "ranges_separated": true
+    },
+    "instructions": {
+      "checkpoint": {
+        "median": 2299635193,
+        "range": [
+          2299360458,
+          2300244363
+        ]
+      },
+      "previous": {
+        "median": 2297526267,
+        "range": [
+          2294940392,
+          2299834870
+        ]
+      },
+      "candidate": {
+        "median": 2298158201,
+        "range": [
+          2296446739,
+          2298486593
+        ]
+      },
+      "node": {
+        "median": 2201737933,
+        "range": [
+          2190521289,
+          2203124945
+        ]
+      },
+      "bun": {
+        "median": 1136398790,
+        "range": [
+          1134838394,
+          1150376366
+        ]
+      },
+      "delta": 631934,
+      "delta_percent": 0.027504973896341767,
+      "ranges_separated": false
+    }
+  },
+  {
+    "fixture": "null",
+    "operation": "parse",
+    "cpu_us": {
+      "checkpoint": {
+        "median": 0.012189,
+        "range": [
+          0.012185,
+          0.012206
+        ]
+      },
+      "previous": {
+        "median": 0.011876,
+        "range": [
+          0.0118695,
+          0.011882
+        ]
+      },
+      "candidate": {
+        "median": 0.012189,
+        "range": [
+          0.012187,
+          0.0121995
+        ]
+      },
+      "node": {
+        "median": 0.0273815,
+        "range": [
+          0.0273675,
+          0.027461
+        ]
+      },
+      "bun": {
+        "median": 0.0192875,
+        "range": [
+          0.019048,
+          0.0194005
+        ]
+      },
+      "delta": 0.0003130000000000008,
+      "delta_percent": 2.6355675311552806,
+      "ranges_separated": true
+    },
+    "peak_rss_mib": {
+      "checkpoint": {
+        "median": 12.625,
+        "range": [
+          12.625,
+          12.640625
+        ]
+      },
+      "previous": {
+        "median": 12.671875,
+        "range": [
+          12.65625,
+          12.671875
+        ]
+      },
+      "candidate": {
+        "median": 12.640625,
+        "range": [
+          12.640625,
+          12.65625
+        ]
+      },
+      "node": {
+        "median": 57.5625,
+        "range": [
+          57.421875,
+          57.625
+        ]
+      },
+      "bun": {
+        "median": 35.6875,
+        "range": [
+          35.671875,
+          35.78125
+        ]
+      },
+      "delta": -0.03125,
+      "delta_percent": -0.2466091245376112,
+      "ranges_separated": false
+    },
+    "instructions": {
+      "checkpoint": {
+        "median": 535078569,
+        "range": [
+          534988012,
+          535111303
+        ]
+      },
+      "previous": {
+        "median": 534454721,
+        "range": [
+          534375455,
+          534513063
+        ]
+      },
+      "candidate": {
+        "median": 534425922,
+        "range": [
+          534404593,
+          534463301
+        ]
+      },
+      "node": {
+        "median": 1350490911,
+        "range": [
+          1349051600,
+          1353021962
+        ]
+      },
+      "bun": {
+        "median": 859486074,
+        "range": [
+          855414059,
+          860198736
+        ]
+      },
+      "delta": -28799,
+      "delta_percent": -0.005388482666246475,
+      "ranges_separated": false
+    }
+  },
+  {
+    "fixture": "null",
+    "operation": "stringify",
+    "cpu_us": {
+      "checkpoint": {
+        "median": 0.006569,
+        "range": [
+          0.006562,
+          0.006578
+        ]
+      },
+      "previous": {
+        "median": 0.0065675,
+        "range": [
+          0.0065625,
+          0.006573
+        ]
+      },
+      "candidate": {
+        "median": 0.006569,
+        "range": [
+          0.0065645,
+          0.0065765
+        ]
+      },
+      "node": {
+        "median": 0.0272765,
+        "range": [
+          0.0272165,
+          0.027306
+        ]
+      },
+      "bun": {
+        "median": 0.028661,
+        "range": [
+          0.028614,
+          0.028901
+        ]
+      },
+      "delta": 1.4999999999997654e-06,
+      "delta_percent": 0.022839741149605075,
+      "ranges_separated": false
+    },
+    "peak_rss_mib": {
+      "checkpoint": {
+        "median": 12.734375,
+        "range": [
+          12.734375,
+          12.75
+        ]
+      },
+      "previous": {
+        "median": 12.765625,
+        "range": [
+          12.75,
+          12.765625
+        ]
+      },
+      "candidate": {
+        "median": 12.765625,
+        "range": [
+          12.75,
+          12.765625
+        ]
+      },
+      "node": {
+        "median": 59.5,
+        "range": [
+          59.46875,
+          59.546875
+        ]
+      },
+      "bun": {
+        "median": 129.765625,
+        "range": [
+          129.75,
+          129.8125
+        ]
+      },
+      "delta": 0.0,
+      "delta_percent": 0.0,
+      "ranges_separated": false
+    },
+    "instructions": {
+      "checkpoint": {
+        "median": 320776069,
+        "range": [
+          320730985,
+          320864895
+        ]
+      },
+      "previous": {
+        "median": 320199038,
+        "range": [
+          320144730,
+          320280466
+        ]
+      },
+      "candidate": {
+        "median": 320185664,
+        "range": [
+          320166263,
+          320268704
+        ]
+      },
+      "node": {
+        "median": 1455747174,
+        "range": [
+          1453021849,
+          1462900460
+        ]
+      },
+      "bun": {
+        "median": 1116518625,
+        "range": [
+          1113120189,
+          1116896282
+        ]
+      },
+      "delta": -13374,
+      "delta_percent": -0.004176777070763471,
+      "ranges_separated": false
+    }
+  },
+  {
+    "fixture": "numbers_1m",
+    "operation": "parse",
+    "cpu_us": {
+      "checkpoint": {
+        "median": 1704.4673913043478,
+        "range": [
+          1702.1847826086957,
+          1705.0869565217392
+        ]
+      },
+      "previous": {
+        "median": 1703.7282608695652,
+        "range": [
+          1700.6304347826087,
+          1707.3478260869565
+        ]
+      },
+      "candidate": {
+        "median": 1701.858695652174,
+        "range": [
+          1700.7282608695652,
+          1706.195652173913
+        ]
+      },
+      "node": {
+        "median": 3126.641304347826,
+        "range": [
+          3124.913043478261,
+          3139.141304347826
+        ]
+      },
+      "bun": {
+        "median": 3203.3695652173915,
+        "range": [
+          3183.5978260869565,
+          3214.271739130435
+        ]
+      },
+      "delta": -1.869565217391255,
+      "delta_percent": -0.10973376801515222,
+      "ranges_separated": false
+    },
+    "peak_rss_mib": {
+      "checkpoint": {
+        "median": 63.0,
+        "range": [
+          63.0,
+          63.015625
+        ]
+      },
+      "previous": {
+        "median": 63.03125,
+        "range": [
+          63.03125,
+          63.03125
+        ]
+      },
+      "candidate": {
+        "median": 63.109375,
+        "range": [
+          63.109375,
+          63.109375
+        ]
+      },
+      "node": {
+        "median": 87.375,
+        "range": [
+          87.21875,
+          94.09375
+        ]
+      },
+      "bun": {
+        "median": 68.1875,
+        "range": [
+          68.15625,
+          68.1875
+        ]
+      },
+      "delta": 0.078125,
+      "delta_percent": 0.12394645513138514,
+      "ranges_separated": true
+    },
+    "instructions": {
+      "checkpoint": {
+        "median": 2243606323,
+        "range": [
+          2243284130,
+          2243815759
+        ]
+      },
+      "previous": {
+        "median": 2242899766,
+        "range": [
+          2242609871,
+          2243170064
+        ]
+      },
+      "candidate": {
+        "median": 2242876759,
+        "range": [
+          2242807379,
+          2242964360
+        ]
+      },
+      "node": {
+        "median": 5455912243,
+        "range": [
+          5452922174,
+          5457214836
+        ]
+      },
+      "bun": {
+        "median": 6294386761,
+        "range": [
+          6294274649,
+          6294566249
+        ]
+      },
+      "delta": -23007,
+      "delta_percent": -0.0010257703152327657,
+      "ranges_separated": false
+    }
+  },
+  {
+    "fixture": "numbers_1m",
+    "operation": "stringify",
+    "cpu_us": {
+      "checkpoint": {
+        "median": 1544.0625,
+        "range": [
+          1541.2916666666667,
+          1547.71875
+        ]
+      },
+      "previous": {
+        "median": 1577.71875,
+        "range": [
+          1569.6145833333333,
+          1581.96875
+        ]
+      },
+      "candidate": {
+        "median": 1575.9791666666667,
+        "range": [
+          1568.65625,
+          1587.28125
+        ]
+      },
+      "node": {
+        "median": 1979.40625,
+        "range": [
+          1977.75,
+          1982.9479166666667
+        ]
+      },
+      "bun": {
+        "median": 2949.3020833333335,
+        "range": [
+          2948.5,
+          2952.9895833333335
+        ]
+      },
+      "delta": -1.7395833333332575,
+      "delta_percent": -0.11025940671195444,
+      "ranges_separated": false
+    },
+    "peak_rss_mib": {
+      "checkpoint": {
+        "median": 62.4375,
+        "range": [
+          62.421875,
+          62.4375
+        ]
+      },
+      "previous": {
+        "median": 62.28125,
+        "range": [
+          62.265625,
+          62.28125
+        ]
+      },
+      "candidate": {
+        "median": 62.578125,
+        "range": [
+          62.515625,
+          62.578125
+        ]
+      },
+      "node": {
+        "median": 92.390625,
+        "range": [
+          92.078125,
+          92.40625
+        ]
+      },
+      "bun": {
+        "median": 72.21875,
+        "range": [
+          72.203125,
+          72.25
+        ]
+      },
+      "delta": 0.296875,
+      "delta_percent": 0.47666833918715845,
+      "ranges_separated": true
+    },
+    "instructions": {
+      "checkpoint": {
+        "median": 3016098466,
+        "range": [
+          3015893403,
+          3016348813
+        ]
+      },
+      "previous": {
+        "median": 3015410401,
+        "range": [
+          3015384309,
+          3015494197
+        ]
+      },
+      "candidate": {
+        "median": 3010166492,
+        "range": [
+          3009923356,
+          3010386440
+        ]
+      },
+      "node": {
+        "median": 4079159799,
+        "range": [
+          4077872035,
+          4092271083
+        ]
+      },
+      "bun": {
+        "median": 5656670848,
+        "range": [
+          5656224818,
+          5656743033
+        ]
+      },
+      "delta": -5243909,
+      "delta_percent": -0.17390365829675902,
+      "ranges_separated": true
+    }
+  },
+  {
+    "fixture": "object_1k",
+    "operation": "parse",
+    "cpu_us": {
+      "checkpoint": {
+        "median": 0.5166061830227361,
+        "range": [
+          0.5152886412250116,
+          0.5192323763226537
+        ]
+      },
+      "previous": {
+        "median": 0.5121094715430531,
+        "range": [
+          0.5116774031802365,
+          0.5132029778933911
+        ]
+      },
+      "candidate": {
+        "median": 0.5075594182901828,
+        "range": [
+          0.5063734528663202,
+          0.5101109331076383
+        ]
+      },
+      "node": {
+        "median": 0.5424591624274774,
+        "range": [
+          0.5421480020838852,
+          0.5456970080599419
+        ]
+      },
+      "bun": {
+        "median": 0.2368143581828947,
+        "range": [
+          0.236520978430365,
+          0.24046293546890085
+        ]
+      },
+      "delta": -0.004550053252870279,
+      "delta_percent": -0.888492305983013,
+      "ranges_separated": true
+    },
+    "peak_rss_mib": {
+      "checkpoint": {
+        "median": 33.78125,
+        "range": [
+          33.78125,
+          33.84375
+        ]
+      },
+      "previous": {
+        "median": 33.84375,
+        "range": [
+          33.796875,
+          33.890625
+        ]
+      },
+      "candidate": {
+        "median": 33.84375,
+        "range": [
+          33.84375,
+          33.890625
+        ]
+      },
+      "node": {
+        "median": 61.671875,
+        "range": [
+          61.546875,
+          61.765625
+        ]
+      },
+      "bun": {
+        "median": 71.125,
+        "range": [
+          71.078125,
+          71.140625
+        ]
+      },
+      "delta": 0.0,
+      "delta_percent": 0.0,
+      "ranges_separated": false
+    },
+    "instructions": {
+      "checkpoint": {
+        "median": 4467133375,
+        "range": [
+          4466431889,
+          4467317406
+        ]
+      },
+      "previous": {
+        "median": 4263378886,
+        "range": [
+          4263239161,
+          4263615232
+        ]
+      },
+      "candidate": {
+        "median": 4301955947,
+        "range": [
+          4301872990,
+          4302140016
+        ]
+      },
+      "node": {
+        "median": 5630484903,
+        "range": [
+          5625312577,
+          5637217593
+        ]
+      },
+      "bun": {
+        "median": 2208790815,
+        "range": [
+          2207899117,
+          2209609882
+        ]
+      },
+      "delta": 38577061,
+      "delta_percent": 0.9048471184833762,
+      "ranges_separated": true
+    }
+  },
+  {
+    "fixture": "object_1k",
+    "operation": "stringify",
+    "cpu_us": {
+      "checkpoint": {
+        "median": 0.23820613142640779,
+        "range": [
+          0.23812455556547463,
+          0.23882025913418767
+        ]
+      },
+      "previous": {
+        "median": 0.2374550178389477,
+        "range": [
+          0.2372949444514562,
+          0.2376812754154982
+        ]
+      },
+      "candidate": {
+        "median": 0.23797679551548248,
+        "range": [
+          0.23766280540924917,
+          0.23851550403107885
+        ]
+      },
+      "node": {
+        "median": 0.19858950718944993,
+        "range": [
+          0.1982632037457173,
+          0.19879267725818914
+        ]
+      },
+      "bun": {
+        "median": 0.21534949869324707,
+        "range": [
+          0.21444600755423254,
+          0.2157850830072864
+        ]
+      },
+      "delta": 0.0005217776765347737,
+      "delta_percent": 0.2197374817695552,
+      "ranges_separated": false
+    },
+    "peak_rss_mib": {
+      "checkpoint": {
+        "median": 34.703125,
+        "range": [
+          34.703125,
+          34.71875
+        ]
+      },
+      "previous": {
+        "median": 34.71875,
+        "range": [
+          34.703125,
+          34.71875
+        ]
+      },
+      "candidate": {
+        "median": 34.796875,
+        "range": [
+          34.78125,
+          34.796875
+        ]
+      },
+      "node": {
+        "median": 61.671875,
+        "range": [
+          61.578125,
+          61.703125
+        ]
+      },
+      "bun": {
+        "median": 70.828125,
+        "range": [
+          70.796875,
+          70.84375
+        ]
+      },
+      "delta": 0.078125,
+      "delta_percent": 0.22502250225022724,
+      "ranges_separated": true
+    },
+    "instructions": {
+      "checkpoint": {
+        "median": 2520097276,
+        "range": [
+          2520045299,
+          2520178414
+        ]
+      },
+      "previous": {
+        "median": 2519429837,
+        "range": [
+          2519394851,
+          2519447684
+        ]
+      },
+      "candidate": {
+        "median": 2519404549,
+        "range": [
+          2519348336,
+          2519594562
+        ]
+      },
+      "node": {
+        "median": 2865616201,
+        "range": [
+          2863192640,
+          2871351933
+        ]
+      },
+      "bun": {
+        "median": 2054998725,
+        "range": [
+          2053811841,
+          2055664930
+        ]
+      },
+      "delta": -25288,
+      "delta_percent": -0.001003719160130867,
+      "ranges_separated": false
+    }
+  },
+  {
+    "fixture": "records_array_16k",
+    "operation": "parse",
+    "cpu_us": {
+      "checkpoint": {
+        "median": 22.531624700239806,
+        "range": [
+          22.481864508393286,
+          22.544814148681056
+        ]
+      },
+      "previous": {
+        "median": 22.538519184652277,
+        "range": [
+          22.52308153477218,
+          22.553057553956833
+        ]
+      },
+      "candidate": {
+        "median": 18.26783573141487,
+        "range": [
+          18.242505995203835,
+          18.296762589928058
+        ]
+      },
+      "node": {
+        "median": 40.12634892086331,
+        "range": [
+          37.8080035971223,
+          41.89463429256595
+        ]
+      },
+      "bun": {
+        "median": 33.995353717026376,
+        "range": [
+          33.94274580335731,
+          34.2281175059952
+        ]
+      },
+      "delta": -4.270683453237407,
+      "delta_percent": -18.948376413946267,
+      "ranges_separated": true
+    },
+    "peak_rss_mib": {
+      "checkpoint": {
+        "median": 63.703125,
+        "range": [
+          63.703125,
+          63.703125
+        ]
+      },
+      "previous": {
+        "median": 63.734375,
+        "range": [
+          63.734375,
+          63.734375
+        ]
+      },
+      "candidate": {
+        "median": 63.8125,
+        "range": [
+          63.8125,
+          63.8125
+        ]
+      },
+      "node": {
+        "median": 65.703125,
+        "range": [
+          65.6875,
+          65.8125
+        ]
+      },
+      "bun": {
+        "median": 70.421875,
+        "range": [
+          70.390625,
+          70.453125
+        ]
+      },
+      "delta": 0.078125,
+      "delta_percent": 0.12257906349595338,
+      "ranges_separated": true
+    },
+    "instructions": {
+      "checkpoint": {
+        "median": 2183854926,
+        "range": [
+          2183794972,
+          2184074593
+        ]
+      },
+      "previous": {
+        "median": 2134317786,
+        "range": [
+          2134225629,
+          2134461665
+        ]
+      },
+      "candidate": {
+        "median": 1954309526,
+        "range": [
+          1954191919,
+          1954430323
+        ]
+      },
+      "node": {
+        "median": 4487974431,
+        "range": [
+          4479353906,
+          4504665139
+        ]
+      },
+      "bun": {
+        "median": 4403124482,
+        "range": [
+          4402595400,
+          4410415410
+        ]
+      },
+      "delta": -180008260,
+      "delta_percent": -8.433995217617518,
+      "ranges_separated": true
+    }
+  },
+  {
+    "fixture": "records_array_16k",
+    "operation": "stringify",
+    "cpu_us": {
+      "checkpoint": {
+        "median": 22.76372509150061,
+        "range": [
+          22.73617324115494,
+          22.820048800325335
+        ]
+      },
+      "previous": {
+        "median": 22.75386335908906,
+        "range": [
+          22.746339975599838,
+          22.934932899552663
+        ]
+      },
+      "candidate": {
+        "median": 22.75488003253355,
+        "range": [
+          22.736783245221634,
+          22.857869052460348
+        ]
+      },
+      "node": {
+        "median": 13.211569743798293,
+        "range": [
+          13.169682797885319,
+          13.364274095160635
+        ]
+      },
+      "bun": {
+        "median": 23.223769825132166,
+        "range": [
+          23.180256201708012,
+          23.26779178527857
+        ]
+      },
+      "delta": 0.0010166734444894132,
+      "delta_percent": 0.0044681354917308624,
+      "ranges_separated": false
+    },
+    "peak_rss_mib": {
+      "checkpoint": {
+        "median": 34.953125,
+        "range": [
+          34.9375,
+          34.96875
+        ]
+      },
+      "previous": {
+        "median": 34.921875,
+        "range": [
+          34.90625,
+          34.9375
+        ]
+      },
+      "candidate": {
+        "median": 35.0,
+        "range": [
+          34.984375,
+          35.0
+        ]
+      },
+      "node": {
+        "median": 61.75,
+        "range": [
+          61.6875,
+          61.796875
+        ]
+      },
+      "bun": {
+        "median": 71.0,
+        "range": [
+          70.96875,
+          71.046875
+        ]
+      },
+      "delta": 0.078125,
+      "delta_percent": 0.22371364653244186,
+      "ranges_separated": true
+    },
+    "instructions": {
+      "checkpoint": {
+        "median": 3707792096,
+        "range": [
+          3707607295,
+          3707952811
+        ]
+      },
+      "previous": {
+        "median": 3707011601,
+        "range": [
+          3706915957,
+          3707262255
+        ]
+      },
+      "candidate": {
+        "median": 3707103446,
+        "range": [
+          3706926225,
+          3707153917
+        ]
+      },
+      "node": {
+        "median": 2494499584,
+        "range": [
+          2493273668,
+          2496169767
+        ]
+      },
+      "bun": {
+        "median": 4352079381,
+        "range": [
+          4351810957,
+          4352302863
+        ]
+      },
+      "delta": 91845,
+      "delta_percent": 0.0024776021735561926,
+      "ranges_separated": false
+    }
+  },
+  {
+    "fixture": "records_array_1m",
+    "operation": "parse",
+    "cpu_us": {
+      "checkpoint": {
+        "median": 1473.6526315789474,
+        "range": [
+          1470.5684210526315,
+          1479.3157894736842
+        ]
+      },
+      "previous": {
+        "median": 1477.5473684210526,
+        "range": [
+          1475.4526315789474,
+          1479.5473684210526
+        ]
+      },
+      "candidate": {
+        "median": 1200.4315789473685,
+        "range": [
+          1196.2842105263157,
+          1209.4736842105262
+        ]
+      },
+      "node": {
+        "median": 2724.3894736842103,
+        "range": [
+          2637.242105263158,
+          2949.442105263158
+        ]
+      },
+      "bun": {
+        "median": 2136.4105263157894,
+        "range": [
+          2132.3894736842103,
+          2140.4105263157894
+        ]
+      },
+      "delta": -277.1157894736841,
+      "delta_percent": -18.75512050553192,
+      "ranges_separated": true
+    },
+    "peak_rss_mib": {
+      "checkpoint": {
+        "median": 60.9375,
+        "range": [
+          60.9375,
+          60.9375
+        ]
+      },
+      "previous": {
+        "median": 60.953125,
+        "range": [
+          60.953125,
+          60.96875
+        ]
+      },
+      "candidate": {
+        "median": 61.046875,
+        "range": [
+          61.046875,
+          61.0625
+        ]
+      },
+      "node": {
+        "median": 92.890625,
+        "range": [
+          92.875,
+          93.03125
+        ]
+      },
+      "bun": {
+        "median": 79.125,
+        "range": [
+          79.09375,
+          79.140625
+        ]
+      },
+      "delta": 0.09375,
+      "delta_percent": 0.15380671622660103,
+      "ranges_separated": true
+    },
+    "instructions": {
+      "checkpoint": {
+        "median": 1991440420,
+        "range": [
+          1991093867,
+          1992060973
+        ]
+      },
+      "previous": {
+        "median": 1943307600,
+        "range": [
+          1942966181,
+          1943424782
+        ]
+      },
+      "candidate": {
+        "median": 1753970636,
+        "range": [
+          1753724273,
+          1754105147
+        ]
+      },
+      "node": {
+        "median": 4447633830,
+        "range": [
+          4429202317,
+          4463022570
+        ]
+      },
+      "bun": {
+        "median": 4198271978,
+        "range": [
+          4198078399,
+          4204470576
+        ]
+      },
+      "delta": -189336964,
+      "delta_percent": -9.743025962539331,
+      "ranges_separated": true
+    }
+  },
+  {
+    "fixture": "records_array_1m",
+    "operation": "stringify",
+    "cpu_us": {
+      "checkpoint": {
+        "median": 1459.265536723164,
+        "range": [
+          1457.542372881356,
+          1487.8983050847457
+        ]
+      },
+      "previous": {
+        "median": 1459.2429378531074,
+        "range": [
+          1455.361581920904,
+          1466.4745762711864
+        ]
+      },
+      "candidate": {
+        "median": 1458.5480225988701,
+        "range": [
+          1456.3672316384182,
+          1463.6723163841807
+        ]
+      },
+      "node": {
+        "median": 849.8983050847457,
+        "range": [
+          845.9717514124294,
+          850.9435028248588
+        ]
+      },
+      "bun": {
+        "median": 968.6892655367232,
+        "range": [
+          967.8361581920904,
+          972.4124293785311
+        ]
+      },
+      "delta": -0.6949152542372303,
+      "delta_percent": -0.04762162873713782,
+      "ranges_separated": false
+    },
+    "peak_rss_mib": {
+      "checkpoint": {
+        "median": 58.140625,
+        "range": [
+          58.140625,
+          58.140625
+        ]
+      },
+      "previous": {
+        "median": 58.125,
+        "range": [
+          58.125,
+          58.890625
+        ]
+      },
+      "candidate": {
+        "median": 58.25,
+        "range": [
+          58.25,
+          58.25
+        ]
+      },
+      "node": {
+        "median": 109.328125,
+        "range": [
+          109.15625,
+          109.34375
+        ]
+      },
+      "bun": {
+        "median": 100.3125,
+        "range": [
+          100.25,
+          102.859375
+        ]
+      },
+      "delta": 0.125,
+      "delta_percent": 0.21505376344086446,
+      "ranges_separated": false
+    },
+    "instructions": {
+      "checkpoint": {
+        "median": 4359636622,
+        "range": [
+          4359248664,
+          4359979721
+        ]
+      },
+      "previous": {
+        "median": 4357852220,
+        "range": [
+          4357308475,
+          4358084358
+        ]
+      },
+      "candidate": {
+        "median": 4355836754,
+        "range": [
+          4355330909,
+          4356326415
+        ]
+      },
+      "node": {
+        "median": 3035749439,
+        "range": [
+          3035307906,
+          3043352122
+        ]
+      },
+      "bun": {
+        "median": 3349564315,
+        "range": [
+          3349324477,
+          3350682438
+        ]
+      },
+      "delta": -2015466,
+      "delta_percent": -0.04624906716088617,
+      "ranges_separated": true
+    }
+  },
+  {
+    "fixture": "records_array_20m",
+    "operation": "parse",
+    "cpu_us": {
+      "checkpoint": {
+        "median": 55074.333333333336,
+        "range": [
+          54962.0,
+          55341.0
+        ]
+      },
+      "previous": {
+        "median": 55302.333333333336,
+        "range": [
+          55224.333333333336,
+          55419.333333333336
+        ]
+      },
+      "candidate": {
+        "median": 50167.333333333336,
+        "range": [
+          50096.0,
+          50391.0
+        ]
+      },
+      "node": {
+        "median": 95240.33333333333,
+        "range": [
+          94288.66666666667,
+          96324.66666666667
+        ]
+      },
+      "bun": {
+        "median": 56804.333333333336,
+        "range": [
+          56513.333333333336,
+          56889.0
+        ]
+      },
+      "delta": -5135.0,
+      "delta_percent": -9.285322499954795,
+      "ranges_separated": true
+    },
+    "peak_rss_mib": {
+      "checkpoint": {
+        "median": 223.09375,
+        "range": [
+          223.09375,
+          223.109375
+        ]
+      },
+      "previous": {
+        "median": 223.078125,
+        "range": [
+          223.078125,
+          223.09375
+        ]
+      },
+      "candidate": {
+        "median": 223.15625,
+        "range": [
+          223.15625,
+          223.171875
+        ]
+      },
+      "node": {
+        "median": 326.25,
+        "range": [
+          326.1875,
+          326.3125
+        ]
+      },
+      "bun": {
+        "median": 187.921875,
+        "range": [
+          187.8125,
+          188.171875
+        ]
+      },
+      "delta": 0.078125,
+      "delta_percent": 0.03502136303143999,
+      "ranges_separated": true
+    },
+    "instructions": {
+      "checkpoint": {
+        "median": 5690002994,
+        "range": [
+          5685771208,
+          5693583665
+        ]
+      },
+      "previous": {
+        "median": 5570220494,
+        "range": [
+          5569037154,
+          5571074606
+        ]
+      },
+      "candidate": {
+        "median": 5392291180,
+        "range": [
+          5390383489,
+          5394695503
+        ]
+      },
+      "node": {
+        "median": 6608678039,
+        "range": [
+          6604987459,
+          6614667044
+        ]
+      },
+      "bun": {
+        "median": 4844045317,
+        "range": [
+          4834980212,
+          4850267323
+        ]
+      },
+      "delta": -177929314,
+      "delta_percent": -3.194295705020256,
+      "ranges_separated": true
+    }
+  },
+  {
+    "fixture": "records_array_20m",
+    "operation": "stringify",
+    "cpu_us": {
+      "checkpoint": {
+        "median": 78026.25,
+        "range": [
+          77979.5,
+          78206.0
+        ]
+      },
+      "previous": {
+        "median": 78030.5,
+        "range": [
+          77973.125,
+          78068.375
+        ]
+      },
+      "candidate": {
+        "median": 78057.75,
+        "range": [
+          78042.25,
+          78100.25
+        ]
+      },
+      "node": {
+        "median": 17428.625,
+        "range": [
+          17386.375,
+          17481.75
+        ]
+      },
+      "bun": {
+        "median": 20804.625,
+        "range": [
+          20723.25,
+          21073.125
+        ]
+      },
+      "delta": 27.25,
+      "delta_percent": 0.034922241943857735,
+      "ranges_separated": false
+    },
+    "peak_rss_mib": {
+      "checkpoint": {
+        "median": 157.53125,
+        "range": [
+          157.53125,
+          157.546875
+        ]
+      },
+      "previous": {
+        "median": 157.5,
+        "range": [
+          157.484375,
+          157.5
+        ]
+      },
+      "candidate": {
+        "median": 157.640625,
+        "range": [
+          156.828125,
+          157.640625
+        ]
+      },
+      "node": {
+        "median": 392.140625,
+        "range": [
+          392.09375,
+          392.21875
+        ]
+      },
+      "bun": {
+        "median": 304.890625,
+        "range": [
+          304.859375,
+          304.96875
+        ]
+      },
+      "delta": 0.140625,
+      "delta_percent": 0.08928571428572507,
+      "ranges_separated": false
+    },
+    "instructions": {
+      "checkpoint": {
+        "median": 13264684517,
+        "range": [
+          13263093251,
+          13266342805
+        ]
+      },
+      "previous": {
+        "median": 13239190393,
+        "range": [
+          13237767673,
+          13240021616
+        ]
+      },
+      "candidate": {
+        "median": 13203730675,
+        "range": [
+          13203667757,
+          13206228031
+        ]
+      },
+      "node": {
+        "median": 4508996796,
+        "range": [
+          4506656271,
+          4512396270
+        ]
+      },
+      "bun": {
+        "median": 4622719178,
+        "range": [
+          4618139464,
+          4625414914
+        ]
+      },
+      "delta": -35459718,
+      "delta_percent": -0.26783902147633487,
+      "ranges_separated": true
+    }
+  },
+  {
+    "fixture": "records_array_8m",
+    "operation": "parse",
+    "cpu_us": {
+      "checkpoint": {
+        "median": 12779.9,
+        "range": [
+          12760.0,
+          12813.7
+        ]
+      },
+      "previous": {
+        "median": 12772.5,
+        "range": [
+          12754.6,
+          12862.100000000002
+        ]
+      },
+      "candidate": {
+        "median": 10612.7,
+        "range": [
+          10594.8,
+          10621.0
+        ]
+      },
+      "node": {
+        "median": 34300.0,
+        "range": [
+          33587.6,
+          35281.1
+        ]
+      },
+      "bun": {
+        "median": 20879.6,
+        "range": [
+          20558.5,
+          22979.9
+        ]
+      },
+      "delta": -2159.7999999999993,
+      "delta_percent": -16.909767077706007,
+      "ranges_separated": true
+    },
+    "peak_rss_mib": {
+      "checkpoint": {
+        "median": 98.84375,
+        "range": [
+          98.84375,
+          98.875
+        ]
+      },
+      "previous": {
+        "median": 98.890625,
+        "range": [
+          98.875,
+          98.90625
+        ]
+      },
+      "candidate": {
+        "median": 98.953125,
+        "range": [
+          98.953125,
+          98.984375
+        ]
+      },
+      "node": {
+        "median": 244.078125,
+        "range": [
+          243.890625,
+          244.3125
+        ]
+      },
+      "bun": {
+        "median": 131.25,
+        "range": [
+          131.1875,
+          131.84375
+        ]
+      },
+      "delta": 0.0625,
+      "delta_percent": 0.0632011376204833,
+      "ranges_separated": true
+    },
+    "instructions": {
+      "checkpoint": {
+        "median": 1974630120,
+        "range": [
+          1974171993,
+          1975211079
+        ]
+      },
+      "previous": {
+        "median": 1926761103,
+        "range": [
+          1926124739,
+          1927075617
+        ]
+      },
+      "candidate": {
+        "median": 1757053406,
+        "range": [
+          1756760006,
+          1757838306
+        ]
+      },
+      "node": {
+        "median": 6004427425,
+        "range": [
+          5990825777,
+          6007684241
+        ]
+      },
+      "bun": {
+        "median": 4522372445,
+        "range": [
+          4502253469,
+          4532593177
+        ]
+      },
+      "delta": -169707697,
+      "delta_percent": -8.807926251768428,
+      "ranges_separated": true
+    }
+  },
+  {
+    "fixture": "records_array_8m",
+    "operation": "stringify",
+    "cpu_us": {
+      "checkpoint": {
+        "median": 12642.0,
+        "range": [
+          12610.0,
+          12672.7
+        ]
+      },
+      "previous": {
+        "median": 12660.35,
+        "range": [
+          12635.65,
+          12703.0
+        ]
+      },
+      "candidate": {
+        "median": 12671.1,
+        "range": [
+          12656.95,
+          12680.4
+        ]
+      },
+      "node": {
+        "median": 6811.85,
+        "range": [
+          6798.4,
+          6916.35
+        ]
+      },
+      "bun": {
+        "median": 8490.95,
+        "range": [
+          8377.8,
+          8502.3
+        ]
+      },
+      "delta": 10.75,
+      "delta_percent": 0.08491076471028869,
+      "ranges_separated": false
+    },
+    "peak_rss_mib": {
+      "checkpoint": {
+        "median": 192.46875,
+        "range": [
+          192.46875,
+          192.46875
+        ]
+      },
+      "previous": {
+        "median": 192.515625,
+        "range": [
+          192.515625,
+          192.578125
+        ]
+      },
+      "candidate": {
+        "median": 192.5625,
+        "range": [
+          192.5625,
+          192.5625
+        ]
+      },
+      "node": {
+        "median": 186.125,
+        "range": [
+          185.921875,
+          186.328125
+        ]
+      },
+      "bun": {
+        "median": 169.875,
+        "range": [
+          169.671875,
+          190.109375
+        ]
+      },
+      "delta": 0.046875,
+      "delta_percent": 0.024348672997320797,
+      "ranges_separated": false
+    },
+    "instructions": {
+      "checkpoint": {
+        "median": 5141838954,
+        "range": [
+          5140607500,
+          5142478241
+        ]
+      },
+      "previous": {
+        "median": 5131446038,
+        "range": [
+          5130937361,
+          5131726244
+        ]
+      },
+      "candidate": {
+        "median": 5117673171,
+        "range": [
+          5116363941,
+          5119529247
+        ]
+      },
+      "node": {
+        "median": 3508143038,
+        "range": [
+          3506530500,
+          3512769797
+        ]
+      },
+      "bun": {
+        "median": 3753431469,
+        "range": [
+          3751875849,
+          3759247176
+        ]
+      },
+      "delta": -13772867,
+      "delta_percent": -0.26840128295235743,
+      "ranges_separated": true
+    }
+  },
+  {
+    "fixture": "records_object_1m",
+    "operation": "parse",
+    "cpu_us": {
+      "checkpoint": {
+        "median": 2886.8028169014083,
+        "range": [
+          2886.0281690140846,
+          2891.0
+        ]
+      },
+      "previous": {
+        "median": 2909.0845070422533,
+        "range": [
+          2906.676056338028,
+          2913.5352112676055
+        ]
+      },
+      "candidate": {
+        "median": 2636.43661971831,
+        "range": [
+          2629.5774647887324,
+          2637.830985915493
+        ]
+      },
+      "node": {
+        "median": 2738.492957746479,
+        "range": [
+          2667.957746478873,
+          2796.112676056338
+        ]
+      },
+      "bun": {
+        "median": 2132.5774647887324,
+        "range": [
+          2128.8591549295775,
+          2150.8591549295775
+        ]
+      },
+      "delta": -272.64788732394345,
+      "delta_percent": -9.372291752402617,
+      "ranges_separated": true
+    },
+    "peak_rss_mib": {
+      "checkpoint": {
+        "median": 57.515625,
+        "range": [
+          57.5,
+          57.515625
+        ]
+      },
+      "previous": {
+        "median": 57.484375,
+        "range": [
+          57.46875,
+          57.484375
+        ]
+      },
+      "candidate": {
+        "median": 57.578125,
+        "range": [
+          57.5625,
+          57.578125
+        ]
+      },
+      "node": {
+        "median": 92.875,
+        "range": [
+          92.703125,
+          92.953125
+        ]
+      },
+      "bun": {
+        "median": 75.875,
+        "range": [
+          75.859375,
+          75.9375
+        ]
+      },
+      "delta": 0.09375,
+      "delta_percent": 0.16308779559663922,
+      "ranges_separated": true
+    },
+    "instructions": {
+      "checkpoint": {
+        "median": 3471466327,
+        "range": [
+          3470989462,
+          3474126446
+        ]
+      },
+      "previous": {
+        "median": 3379816299,
+        "range": [
+          3378806096,
+          3381337690
+        ]
+      },
+      "candidate": {
+        "median": 3236283140,
+        "range": [
+          3236109449,
+          3237350066
+        ]
+      },
+      "node": {
+        "median": 3461590631,
+        "range": [
+          3452570024,
+          3472232564
+        ]
+      },
+      "bun": {
+        "median": 3187377548,
+        "range": [
+          3187071008,
+          3189543832
+        ]
+      },
+      "delta": -143533159,
+      "delta_percent": -4.246773975333151,
+      "ranges_separated": true
+    }
+  },
+  {
+    "fixture": "records_object_1m",
+    "operation": "stringify",
+    "cpu_us": {
+      "checkpoint": {
+        "median": 1455.2298850574712,
+        "range": [
+          1450.9540229885058,
+          1459.6091954022988
+        ]
+      },
+      "previous": {
+        "median": 1460.2758620689656,
+        "range": [
+          1455.0,
+          1462.2241379310344
+        ]
+      },
+      "candidate": {
+        "median": 1458.0862068965516,
+        "range": [
+          1457.5977011494253,
+          1459.3620689655172
+        ]
+      },
+      "node": {
+        "median": 847.6494252873563,
+        "range": [
+          843.9770114942529,
+          853.3218390804598
+        ]
+      },
+      "bun": {
+        "median": 972.0632183908046,
+        "range": [
+          970.580459770115,
+          974.1091954022988
+        ]
+      },
+      "delta": -2.18965517241395,
+      "delta_percent": -0.14994804949467477,
+      "ranges_separated": false
+    },
+    "peak_rss_mib": {
+      "checkpoint": {
+        "median": 58.140625,
+        "range": [
+          58.140625,
+          58.140625
+        ]
+      },
+      "previous": {
+        "median": 58.140625,
+        "range": [
+          58.140625,
+          58.953125
+        ]
+      },
+      "candidate": {
+        "median": 58.265625,
+        "range": [
+          58.265625,
+          58.265625
+        ]
+      },
+      "node": {
+        "median": 106.71875,
+        "range": [
+          106.609375,
+          106.859375
+        ]
+      },
+      "bun": {
+        "median": 100.296875,
+        "range": [
+          100.28125,
+          100.765625
+        ]
+      },
+      "delta": 0.125,
+      "delta_percent": 0.21499596882559313,
+      "ranges_separated": false
+    },
+    "instructions": {
+      "checkpoint": {
+        "median": 4287317490,
+        "range": [
+          4287119872,
+          4287537510
+        ]
+      },
+      "previous": {
+        "median": 4285349800,
+        "range": [
+          4285232447,
+          4285658751
+        ]
+      },
+      "candidate": {
+        "median": 4283024753,
+        "range": [
+          4282782898,
+          4283217129
+        ]
+      },
+      "node": {
+        "median": 2990580388,
+        "range": [
+          2988581151,
+          2991647631
+        ]
+      },
+      "bun": {
+        "median": 3297704577,
+        "range": [
+          3297574076,
+          3298076808
+        ]
+      },
+      "delta": -2325047,
+      "delta_percent": -0.054255710934025814,
+      "ranges_separated": true
+    }
+  },
+  {
+    "fixture": "records_object_20m",
+    "operation": "parse",
+    "cpu_us": {
+      "checkpoint": {
+        "median": 54923.666666666664,
+        "range": [
+          54906.333333333336,
+          54985.333333333336
+        ]
+      },
+      "previous": {
+        "median": 55197.333333333336,
+        "range": [
+          55160.333333333336,
+          55239.666666666664
+        ]
+      },
+      "candidate": {
+        "median": 50077.333333333336,
+        "range": [
+          49996.0,
+          50232.666666666664
+        ]
+      },
+      "node": {
+        "median": 97702.0,
+        "range": [
+          94690.66666666667,
+          99847.0
+        ]
+      },
+      "bun": {
+        "median": 56808.0,
+        "range": [
+          50665.666666666664,
+          57780.0
+        ]
+      },
+      "delta": -5120.0,
+      "delta_percent": -9.275810425624432,
+      "ranges_separated": true
+    },
+    "peak_rss_mib": {
+      "checkpoint": {
+        "median": 223.09375,
+        "range": [
+          223.09375,
+          223.109375
+        ]
+      },
+      "previous": {
+        "median": 223.078125,
+        "range": [
+          223.078125,
+          223.09375
+        ]
+      },
+      "candidate": {
+        "median": 223.15625,
+        "range": [
+          223.15625,
+          223.171875
+        ]
+      },
+      "node": {
+        "median": 326.0,
+        "range": [
+          324.59375,
+          326.21875
+        ]
+      },
+      "bun": {
+        "median": 187.828125,
+        "range": [
+          187.734375,
+          219.3125
+        ]
+      },
+      "delta": 0.078125,
+      "delta_percent": 0.03502136303143999,
+      "ranges_separated": true
+    },
+    "instructions": {
+      "checkpoint": {
+        "median": 5690377027,
+        "range": [
+          5688741157,
+          5693469053
+        ]
+      },
+      "previous": {
+        "median": 5567729088,
+        "range": [
+          5565863181,
+          5568901183
+        ]
+      },
+      "candidate": {
+        "median": 5391237728,
+        "range": [
+          5388338220,
+          5391647935
+        ]
+      },
+      "node": {
+        "median": 6620574120,
+        "range": [
+          6600845291,
+          6625302923
+        ]
+      },
+      "bun": {
+        "median": 4844982294,
+        "range": [
+          4622607484,
+          4850698098
+        ]
+      },
+      "delta": -176491360,
+      "delta_percent": -3.1698984848308798,
+      "ranges_separated": true
+    }
+  },
+  {
+    "fixture": "records_object_20m",
+    "operation": "stringify",
+    "cpu_us": {
+      "checkpoint": {
+        "median": 78130.125,
+        "range": [
+          78077.75,
+          78203.0
+        ]
+      },
+      "previous": {
+        "median": 78124.375,
+        "range": [
+          78042.5,
+          78255.0
+        ]
+      },
+      "candidate": {
+        "median": 78106.75,
+        "range": [
+          78073.0,
+          78235.25
+        ]
+      },
+      "node": {
+        "median": 17458.375,
+        "range": [
+          17387.875,
+          17506.625
+        ]
+      },
+      "bun": {
+        "median": 20897.25,
+        "range": [
+          20835.75,
+          21130.75
+        ]
+      },
+      "delta": -17.625,
+      "delta_percent": -0.022560180481445702,
+      "ranges_separated": false
+    },
+    "peak_rss_mib": {
+      "checkpoint": {
+        "median": 157.546875,
+        "range": [
+          157.546875,
+          157.5625
+        ]
+      },
+      "previous": {
+        "median": 157.53125,
+        "range": [
+          157.515625,
+          157.53125
+        ]
+      },
+      "candidate": {
+        "median": 157.65625,
+        "range": [
+          157.65625,
+          157.671875
+        ]
+      },
+      "node": {
+        "median": 392.109375,
+        "range": [
+          392.078125,
+          392.171875
+        ]
+      },
+      "bun": {
+        "median": 304.875,
+        "range": [
+          303.71875,
+          304.9375
+        ]
+      },
+      "delta": 0.125,
+      "delta_percent": 0.079349335449308,
+      "ranges_separated": true
+    },
+    "instructions": {
+      "checkpoint": {
+        "median": 13278892186,
+        "range": [
+          13277020531,
+          13279480428
+        ]
+      },
+      "previous": {
+        "median": 13254129501,
+        "range": [
+          13253148772,
+          13255403206
+        ]
+      },
+      "candidate": {
+        "median": 13219138582,
+        "range": [
+          13217661006,
+          13220326971
+        ]
+      },
+      "node": {
+        "median": 4506426814,
+        "range": [
+          4503576183,
+          4508348376
+        ]
+      },
+      "bun": {
+        "median": 4622311329,
+        "range": [
+          4617702019,
+          4627077971
+        ]
+      },
+      "delta": -34990919,
+      "delta_percent": -0.26400012914736815,
+      "ranges_separated": true
+    }
+  },
+  {
+    "fixture": "records_object_8m",
+    "operation": "parse",
+    "cpu_us": {
+      "checkpoint": {
+        "median": 22162.5,
+        "range": [
+          22148.125,
+          22248.25
+        ]
+      },
+      "previous": {
+        "median": 22265.25,
+        "range": [
+          22240.125,
+          22303.75
+        ]
+      },
+      "candidate": {
+        "median": 20121.0,
+        "range": [
+          20088.25,
+          20334.625
+        ]
+      },
+      "node": {
+        "median": 30077.625,
+        "range": [
+          29303.625,
+          30507.875
+        ]
+      },
+      "bun": {
+        "median": 21739.5,
+        "range": [
+          21429.625,
+          23969.125
+        ]
+      },
+      "delta": -2144.25,
+      "delta_percent": -9.630477986997676,
+      "ranges_separated": true
+    },
+    "peak_rss_mib": {
+      "checkpoint": {
+        "median": 165.625,
+        "range": [
+          165.625,
+          165.671875
+        ]
+      },
+      "previous": {
+        "median": 165.609375,
+        "range": [
+          165.59375,
+          165.671875
+        ]
+      },
+      "candidate": {
+        "median": 165.6875,
+        "range": [
+          165.671875,
+          165.6875
+        ]
+      },
+      "node": {
+        "median": 225.5,
+        "range": [
+          225.375,
+          225.765625
+        ]
+      },
+      "bun": {
+        "median": 111.4375,
+        "range": [
+          110.859375,
+          111.96875
+        ]
+      },
+      "delta": 0.078125,
+      "delta_percent": 0.04717426172280437,
+      "ranges_separated": false
+    },
+    "instructions": {
+      "checkpoint": {
+        "median": 4028134035,
+        "range": [
+          4027359094,
+          4029902323
+        ]
+      },
+      "previous": {
+        "median": 3930037581,
+        "range": [
+          3928755450,
+          3931446714
+        ]
+      },
+      "candidate": {
+        "median": 3788010847,
+        "range": [
+          3787356235,
+          3788779534
+        ]
+      },
+      "node": {
+        "median": 4866265605,
+        "range": [
+          4857886086,
+          4890708394
+        ]
+      },
+      "bun": {
+        "median": 3874179138,
+        "range": [
+          3861047787,
+          3879466952
+        ]
+      },
+      "delta": -142026734,
+      "delta_percent": -3.6138772485697523,
+      "ranges_separated": true
+    }
+  },
+  {
+    "fixture": "records_object_8m",
+    "operation": "stringify",
+    "cpu_us": {
+      "checkpoint": {
+        "median": 12566.285714285714,
+        "range": [
+          12564.57142857143,
+          12603.0
+        ]
+      },
+      "previous": {
+        "median": 12579.52380952381,
+        "range": [
+          12556.142857142857,
+          12607.714285714286
+        ]
+      },
+      "candidate": {
+        "median": 12601.47619047619,
+        "range": [
+          12572.333333333334,
+          12604.47619047619
+        ]
+      },
+      "node": {
+        "median": 6788.714285714285,
+        "range": [
+          6760.523809523809,
+          6830.0
+        ]
+      },
+      "bun": {
+        "median": 8405.190476190477,
+        "range": [
+          8366.047619047618,
+          8641.57142857143
+        ]
+      },
+      "delta": 21.952380952381645,
+      "delta_percent": 0.174508839005183,
+      "ranges_separated": false
+    },
+    "peak_rss_mib": {
+      "checkpoint": {
+        "median": 192.515625,
+        "range": [
+          192.515625,
+          192.53125
+        ]
+      },
+      "previous": {
+        "median": 192.546875,
+        "range": [
+          192.546875,
+          192.546875
+        ]
+      },
+      "candidate": {
+        "median": 192.625,
+        "range": [
+          192.625,
+          192.640625
+        ]
+      },
+      "node": {
+        "median": 186.046875,
+        "range": [
+          186.015625,
+          186.0625
+        ]
+      },
+      "bun": {
+        "median": 176.40625,
+        "range": [
+          176.359375,
+          203.296875
+        ]
+      },
+      "delta": 0.078125,
+      "delta_percent": 0.04057453542156697,
+      "ranges_separated": true
+    },
+    "instructions": {
+      "checkpoint": {
+        "median": 5323877485,
+        "range": [
+          5322649737,
+          5324208287
+        ]
+      },
+      "previous": {
+        "median": 5312021208,
+        "range": [
+          5311927411,
+          5312341901
+        ]
+      },
+      "candidate": {
+        "median": 5297796305,
+        "range": [
+          5297768458,
+          5298679901
+        ]
+      },
+      "node": {
+        "median": 3625146818,
+        "range": [
+          3622824949,
+          3631657986
+        ]
+      },
+      "bun": {
+        "median": 3890810272,
+        "range": [
+          3890118608,
+          3901484947
+        ]
+      },
+      "delta": -14224903,
+      "delta_percent": -0.2677870144527472,
+      "ranges_separated": true
+    }
+  },
+  {
+    "fixture": "small_record",
+    "operation": "parse",
+    "cpu_us": {
+      "checkpoint": {
+        "median": 0.5229416369487693,
+        "range": [
+          0.5218039488562234,
+          0.5237296686092024
+        ]
+      },
+      "previous": {
+        "median": 0.5268000347916848,
+        "range": [
+          0.5254657736800905,
+          0.5293815778029051
+        ]
+      },
+      "candidate": {
+        "median": 0.5295972862485866,
+        "range": [
+          0.5283743585283117,
+          0.5310846307732452
+        ]
+      },
+      "node": {
+        "median": 0.354332434548143,
+        "range": [
+          0.326326867878577,
+          0.3763277376706967
+        ]
+      },
+      "bun": {
+        "median": 0.2529216317300165,
+        "range": [
+          0.25164651648256064,
+          0.29257893363486126
+        ]
+      },
+      "delta": 0.0027972514569017948,
+      "delta_percent": 0.530989231617629,
+      "ranges_separated": false
+    },
+    "peak_rss_mib": {
+      "checkpoint": {
+        "median": 33.328125,
+        "range": [
+          33.328125,
+          33.34375
+        ]
+      },
+      "previous": {
+        "median": 33.34375,
+        "range": [
+          33.328125,
+          33.34375
+        ]
+      },
+      "candidate": {
+        "median": 33.40625,
+        "range": [
+          33.390625,
+          33.40625
+        ]
+      },
+      "node": {
+        "median": 59.5625,
+        "range": [
+          59.375,
+          59.65625
+        ]
+      },
+      "bun": {
+        "median": 79.859375,
+        "range": [
+          79.84375,
+          79.875
+        ]
+      },
+      "delta": 0.0625,
+      "delta_percent": 0.18744142455482393,
+      "ranges_separated": true
+    },
+    "instructions": {
+      "checkpoint": {
+        "median": 4530147081,
+        "range": [
+          4529688425,
+          4530347651
+        ]
+      },
+      "previous": {
+        "median": 4469259574,
+        "range": [
+          4468809481,
+          4469422884
+        ]
+      },
+      "candidate": {
+        "median": 4469389323,
+        "range": [
+          4469010379,
+          4469471006
+        ]
+      },
+      "node": {
+        "median": 4175974338,
+        "range": [
+          4089148926,
+          4218481178
+        ]
+      },
+      "bun": {
+        "median": 3114058950,
+        "range": [
+          3113507277,
+          3115261227
+        ]
+      },
+      "delta": 129749,
+      "delta_percent": 0.0029031430788917234,
+      "ranges_separated": false
+    }
+  },
+  {
+    "fixture": "small_record",
+    "operation": "stringify",
+    "cpu_us": {
+      "checkpoint": {
+        "median": 0.28434706643359775,
+        "range": [
+          0.2836330418343512,
+          0.2845945732502123
+        ]
+      },
+      "previous": {
+        "median": 0.28260963371433645,
+        "range": [
+          0.2823873660796793,
+          0.2832927199615062
+        ]
+      },
+      "candidate": {
+        "median": 0.2832389849289517,
+        "range": [
+          0.2829141322321451,
+          0.2857555756202529
+        ]
+      },
+      "node": {
+        "median": 0.10855453576595625,
+        "range": [
+          0.10843241069196881,
+          0.11545053161044706
+        ]
+      },
+      "bun": {
+        "median": 0.12068644061586861,
+        "range": [
+          0.12051872218092585,
+          0.12076378649606065
+        ]
+      },
+      "delta": 0.0006293512146152702,
+      "delta_percent": 0.22269276752659994,
+      "ranges_separated": false
+    },
+    "peak_rss_mib": {
+      "checkpoint": {
+        "median": 34.6875,
+        "range": [
+          34.6875,
+          34.703125
+        ]
+      },
+      "previous": {
+        "median": 34.703125,
+        "range": [
+          34.6875,
+          34.703125
+        ]
+      },
+      "candidate": {
+        "median": 34.765625,
+        "range": [
+          34.765625,
+          34.78125
+        ]
+      },
+      "node": {
+        "median": 59.65625,
+        "range": [
+          59.515625,
+          59.703125
+        ]
+      },
+      "bun": {
+        "median": 246.84375,
+        "range": [
+          246.828125,
+          246.84375
+        ]
+      },
+      "delta": 0.0625,
+      "delta_percent": 0.1800990544799541,
+      "ranges_separated": true
+    },
+    "instructions": {
+      "checkpoint": {
+        "median": 6274067751,
+        "range": [
+          6273959436,
+          6274297185
+        ]
+      },
+      "previous": {
+        "median": 6273495675,
+        "range": [
+          6273325769,
+          6273670556
+        ]
+      },
+      "candidate": {
+        "median": 6273478973,
+        "range": [
+          6273302822,
+          6273800216
+        ]
+      },
+      "node": {
+        "median": 3047639363,
+        "range": [
+          3044900776,
+          3050247894
+        ]
+      },
+      "bun": {
+        "median": 3143719388,
+        "range": [
+          3143157810,
+          3144067794
+        ]
+      },
+      "delta": -16702,
+      "delta_percent": -0.0002662311550882812,
+      "ranges_separated": false
+    }
+  },
+  {
+    "fixture": "string_a",
+    "operation": "parse",
+    "cpu_us": {
+      "checkpoint": {
+        "median": 0.0146985,
+        "range": [
+          0.0146785,
+          0.0147015
+        ]
+      },
+      "previous": {
+        "median": 0.0143865,
+        "range": [
+          0.0143805,
+          0.014448
+        ]
+      },
+      "candidate": {
+        "median": 0.0146965,
+        "range": [
+          0.014691,
+          0.0147075
+        ]
+      },
+      "node": {
+        "median": 0.031736,
+        "range": [
+          0.031725,
+          0.031748
+        ]
+      },
+      "bun": {
+        "median": 0.022611,
+        "range": [
+          0.0225385,
+          0.0226285
+        ]
+      },
+      "delta": 0.0003099999999999995,
+      "delta_percent": 2.1547979008097906,
+      "ranges_separated": true
+    },
+    "peak_rss_mib": {
+      "checkpoint": {
+        "median": 12.625,
+        "range": [
+          12.625,
+          12.640625
+        ]
+      },
+      "previous": {
+        "median": 12.65625,
+        "range": [
+          12.65625,
+          12.671875
+        ]
+      },
+      "candidate": {
+        "median": 12.640625,
+        "range": [
+          12.640625,
+          12.640625
+        ]
+      },
+      "node": {
+        "median": 57.609375,
+        "range": [
+          57.5625,
+          57.65625
+        ]
+      },
+      "bun": {
+        "median": 36.0625,
+        "range": [
+          36.046875,
+          36.078125
+        ]
+      },
+      "delta": -0.015625,
+      "delta_percent": -0.12345679012345512,
+      "ranges_separated": true
+    },
+    "instructions": {
+      "checkpoint": {
+        "median": 653359296,
+        "range": [
+          653316214,
+          653446067
+        ]
+      },
+      "previous": {
+        "median": 652809148,
+        "range": [
+          652709950,
+          652849281
+        ]
+      },
+      "candidate": {
+        "median": 652770909,
+        "range": [
+          652744295,
+          652824627
+        ]
+      },
+      "node": {
+        "median": 1534440930,
+        "range": [
+          1532362416,
+          1538862686
+        ]
+      },
+      "bun": {
+        "median": 1015868208,
+        "range": [
+          1015636092,
+          1019433396
+        ]
+      },
+      "delta": -38239,
+      "delta_percent": -0.005857607865511483,
+      "ranges_separated": false
+    }
+  },
+  {
+    "fixture": "string_a",
+    "operation": "stringify",
+    "cpu_us": {
+      "checkpoint": {
+        "median": 0.0096925,
+        "range": [
+          0.0096845,
+          0.0097505
+        ]
+      },
+      "previous": {
+        "median": 0.0096935,
+        "range": [
+          0.0096885,
+          0.009709
+        ]
+      },
+      "candidate": {
+        "median": 0.0096935,
+        "range": [
+          0.0096845,
+          0.009694
+        ]
+      },
+      "node": {
+        "median": 0.030074,
+        "range": [
+          0.030035,
+          0.030226
+        ]
+      },
+      "bun": {
+        "median": 0.0287215,
+        "range": [
+          0.0284075,
+          0.0294825
+        ]
+      },
+      "delta": 0.0,
+      "delta_percent": 0.0,
+      "ranges_separated": false
+    },
+    "peak_rss_mib": {
+      "checkpoint": {
+        "median": 12.734375,
+        "range": [
+          12.734375,
+          12.75
+        ]
+      },
+      "previous": {
+        "median": 12.75,
+        "range": [
+          12.75,
+          12.765625
+        ]
+      },
+      "candidate": {
+        "median": 12.75,
+        "range": [
+          12.75,
+          12.765625
+        ]
+      },
+      "node": {
+        "median": 59.484375,
+        "range": [
+          59.4375,
+          59.578125
+        ]
+      },
+      "bun": {
+        "median": 129.765625,
+        "range": [
+          129.734375,
+          129.828125
+        ]
+      },
+      "delta": 0.0,
+      "delta_percent": 0.0,
+      "ranges_separated": false
+    },
+    "instructions": {
+      "checkpoint": {
+        "median": 465128552,
+        "range": [
+          465120985,
+          465244411
+        ]
+      },
+      "previous": {
+        "median": 464605239,
+        "range": [
+          464556882,
+          464664333
+        ]
+      },
+      "candidate": {
+        "median": 464509492,
+        "range": [
+          464457973,
+          464636473
+        ]
+      },
+      "node": {
+        "median": 1570200171,
+        "range": [
+          1567663432,
+          1573543023
+        ]
+      },
+      "bun": {
+        "median": 1252419302,
+        "range": [
+          1249303050,
+          1253875700
+        ]
+      },
+      "delta": -95747,
+      "delta_percent": -0.020608248027098597,
+      "ranges_separated": false
+    }
+  },
+  {
+    "fixture": "tiny_object",
+    "operation": "parse",
+    "cpu_us": {
+      "checkpoint": {
+        "median": 0.123377,
+        "range": [
+          0.123222,
+          0.123918
+        ]
+      },
+      "previous": {
+        "median": 0.1232315,
+        "range": [
+          0.1231065,
+          0.1233145
+        ]
+      },
+      "candidate": {
+        "median": 0.123169,
+        "range": [
+          0.123085,
+          0.123533
+        ]
+      },
+      "node": {
+        "median": 0.080822,
+        "range": [
+          0.0801335,
+          0.0819775
+        ]
+      },
+      "bun": {
+        "median": 0.045559,
+        "range": [
+          0.045279,
+          0.046359
+        ]
+      },
+      "delta": -6.249999999999312e-05,
+      "delta_percent": -0.050717551924628346,
+      "ranges_separated": false
+    },
+    "peak_rss_mib": {
+      "checkpoint": {
+        "median": 33.640625,
+        "range": [
+          33.640625,
+          33.65625
+        ]
+      },
+      "previous": {
+        "median": 33.640625,
+        "range": [
+          33.625,
+          33.640625
+        ]
+      },
+      "candidate": {
+        "median": 33.71875,
+        "range": [
+          33.703125,
+          33.71875
+        ]
+      },
+      "node": {
+        "median": 59.453125,
+        "range": [
+          59.390625,
+          59.515625
+        ]
+      },
+      "bun": {
+        "median": 69.046875,
+        "range": [
+          69.0,
+          69.0625
+        ]
+      },
+      "delta": 0.078125,
+      "delta_percent": 0.23223409196471145,
+      "ranges_separated": true
+    },
+    "instructions": {
+      "checkpoint": {
+        "median": 4737672387,
+        "range": [
+          4737568224,
+          4737716115
+        ]
+      },
+      "previous": {
+        "median": 4737289801,
+        "range": [
+          4737210147,
+          4737419064
+        ]
+      },
+      "candidate": {
+        "median": 4737090399,
+        "range": [
+          4737074036,
+          4737173339
+        ]
+      },
+      "node": {
+        "median": 3691005195,
+        "range": [
+          3659560412,
+          3728201572
+        ]
+      },
+      "bun": {
+        "median": 1980487721,
+        "range": [
+          1967047563,
+          1981349260
+        ]
+      },
+      "delta": -199402,
+      "delta_percent": -0.004209199951366038,
+      "ranges_separated": true
+    }
+  },
+  {
+    "fixture": "tiny_object",
+    "operation": "stringify",
+    "cpu_us": {
+      "checkpoint": {
+        "median": 0.0940955,
+        "range": [
+          0.0940335,
+          0.0944145
+        ]
+      },
+      "previous": {
+        "median": 0.093861,
+        "range": [
+          0.093777,
+          0.094379
+        ]
+      },
+      "candidate": {
+        "median": 0.0939025,
+        "range": [
+          0.0938155,
+          0.0940845
+        ]
+      },
+      "node": {
+        "median": 0.037147,
+        "range": [
+          0.03714,
+          0.037213
+        ]
+      },
+      "bun": {
+        "median": 0.0394155,
+        "range": [
+          0.0393625,
+          0.039886
+        ]
+      },
+      "delta": 4.149999999999987e-05,
+      "delta_percent": 0.044214316915436314,
+      "ranges_separated": false
+    },
+    "peak_rss_mib": {
+      "checkpoint": {
+        "median": 33.609375,
+        "range": [
+          33.59375,
+          33.609375
+        ]
+      },
+      "previous": {
+        "median": 33.59375,
+        "range": [
+          33.578125,
+          33.59375
+        ]
+      },
+      "candidate": {
+        "median": 33.6875,
+        "range": [
+          33.671875,
+          33.734375
+        ]
+      },
+      "node": {
+        "median": 59.546875,
+        "range": [
+          59.5,
+          59.65625
+        ]
+      },
+      "bun": {
+        "median": 129.78125,
+        "range": [
+          129.765625,
+          129.78125
+        ]
+      },
+      "delta": 0.09375,
+      "delta_percent": 0.27906976744185297,
+      "ranges_separated": true
+    },
+    "instructions": {
+      "checkpoint": {
+        "median": 3442518929,
+        "range": [
+          3442416538,
+          3442598022
+        ]
+      },
+      "previous": {
+        "median": 3441999799,
+        "range": [
+          3441863837,
+          3442085782
+        ]
+      },
+      "candidate": {
+        "median": 3442055007,
+        "range": [
+          3441906291,
+          3442211281
+        ]
+      },
+      "node": {
+        "median": 1904817548,
+        "range": [
+          1901678787,
+          1911519665
+        ]
+      },
+      "bun": {
+        "median": 1710548551,
+        "range": [
+          1707059042,
+          1710796804
+        ]
+      },
+      "delta": 55208,
+      "delta_percent": 0.0016039512848342596,
+      "ranges_separated": false
+    }
+  },
+  {
+    "fixture": "unicode_1m",
+    "operation": "parse",
+    "cpu_us": {
+      "checkpoint": {
+        "median": 254.99276315789473,
+        "range": [
+          253.25263157894736,
+          257.2651315789474
+        ]
+      },
+      "previous": {
+        "median": 213.12763157894736,
+        "range": [
+          212.3842105263158,
+          214.42302631578949
+        ]
+      },
+      "candidate": {
+        "median": 213.12697368421053,
+        "range": [
+          212.49473684210525,
+          214.61052631578949
+        ]
+      },
+      "node": {
+        "median": 437.79605263157896,
+        "range": [
+          437.67763157894734,
+          438.0625
+        ]
+      },
+      "bun": {
+        "median": 60.09342105263158,
+        "range": [
+          58.73026315789474,
+          61.959210526315786
+        ]
+      },
+      "delta": -0.0006578947368325316,
+      "delta_percent": -0.0003086858010648008,
+      "ranges_separated": false
+    },
+    "peak_rss_mib": {
+      "checkpoint": {
+        "median": 55.34375,
+        "range": [
+          55.34375,
+          57.921875
+        ]
+      },
+      "previous": {
+        "median": 55.359375,
+        "range": [
+          55.359375,
+          55.359375
+        ]
+      },
+      "candidate": {
+        "median": 55.4375,
+        "range": [
+          55.4375,
+          55.453125
+        ]
+      },
+      "node": {
+        "median": 166.796875,
+        "range": [
+          166.53125,
+          166.890625
+        ]
+      },
+      "bun": {
+        "median": 151.6875,
+        "range": [
+          123.15625,
+          161.5
+        ]
+      },
+      "delta": 0.078125,
+      "delta_percent": 0.14112334180074182,
+      "ranges_separated": true
+    },
+    "instructions": {
+      "checkpoint": {
+        "median": 5782759529,
+        "range": [
+          5781197686,
+          5785930782
+        ]
+      },
+      "previous": {
+        "median": 4498458758,
+        "range": [
+          4496566017,
+          4499704031
+        ]
+      },
+      "candidate": {
+        "median": 4499696623,
+        "range": [
+          4495838446,
+          4500190601
+        ]
+      },
+      "node": {
+        "median": 6997927504,
+        "range": [
+          6997520010,
+          7001783134
+        ]
+      },
+      "bun": {
+        "median": 1700983577,
+        "range": [
+          1690013005,
+          1705106369
+        ]
+      },
+      "delta": 1237865,
+      "delta_percent": 0.027517535818200045,
+      "ranges_separated": false
+    }
+  },
+  {
+    "fixture": "unicode_1m",
+    "operation": "stringify",
+    "cpu_us": {
+      "checkpoint": {
+        "median": 135.32102272727272,
+        "range": [
+          134.93821022727272,
+          136.8927556818182
+        ]
+      },
+      "previous": {
+        "median": 135.2940340909091,
+        "range": [
+          134.7052556818182,
+          136.02414772727272
+        ]
+      },
+      "candidate": {
+        "median": 135.43607954545453,
+        "range": [
+          134.7471590909091,
+          136.48366477272728
+        ]
+      },
+      "node": {
+        "median": 414.27485795454544,
+        "range": [
+          394.7947443181818,
+          418.109375
+        ]
+      },
+      "bun": {
+        "median": 450.1328125,
+        "range": [
+          448.72514204545456,
+          451.6115056818182
+        ]
+      },
+      "delta": 0.14204545454543904,
+      "delta_percent": 0.10499018341783017,
+      "ranges_separated": false
+    },
+    "peak_rss_mib": {
+      "checkpoint": {
+        "median": 55.96875,
+        "range": [
+          55.96875,
+          59.4375
+        ]
+      },
+      "previous": {
+        "median": 56.0,
+        "range": [
+          56.0,
+          57.78125
+        ]
+      },
+      "candidate": {
+        "median": 56.0625,
+        "range": [
+          56.0625,
+          56.0625
+        ]
+      },
+      "node": {
+        "median": 157.640625,
+        "range": [
+          157.609375,
+          157.765625
+        ]
+      },
+      "bun": {
+        "median": 126.265625,
+        "range": [
+          125.828125,
+          158.828125
+        ]
+      },
+      "delta": 0.0625,
+      "delta_percent": 0.11160714285713969,
+      "ranges_separated": false
+    },
+    "instructions": {
+      "checkpoint": {
+        "median": 2349883376,
+        "range": [
+          2348949930,
+          2352715939
+        ]
+      },
+      "previous": {
+        "median": 2346228985,
+        "range": [
+          2345033846,
+          2349357666
+        ]
+      },
+      "candidate": {
+        "median": 2346937725,
+        "range": [
+          2345799786,
+          2349701058
+        ]
+      },
+      "node": {
+        "median": 12567477123,
+        "range": [
+          12565547664,
+          12569349655
+        ]
+      },
+      "bun": {
+        "median": 10135362524,
+        "range": [
+          10128822994,
+          10148551681
+        ]
+      },
+      "delta": 708740,
+      "delta_percent": 0.03020762272272215,
+      "ranges_separated": false
+    }
+  },
+  {
+    "fixture": "wide_1m",
+    "operation": "parse",
+    "cpu_us": {
+      "checkpoint": {
+        "median": 15151.055555555555,
+        "range": [
+          15119.777777777777,
+          15244.527777777777
+        ]
+      },
+      "previous": {
+        "median": 15158.611111111111,
+        "range": [
+          15111.777777777777,
+          15237.916666666666
+        ]
+      },
+      "candidate": {
+        "median": 14909.777777777777,
+        "range": [
+          14903.638888888889,
+          14960.027777777777
+        ]
+      },
+      "node": {
+        "median": 4958.666666666667,
+        "range": [
+          4901.638888888889,
+          4999.277777777777
+        ]
+      },
+      "bun": {
+        "median": 4161.277777777777,
+        "range": [
+          4152.777777777777,
+          4169.25
+        ]
+      },
+      "delta": -248.83333333333394,
+      "delta_percent": -1.641531216213743,
+      "ranges_separated": true
+    },
+    "peak_rss_mib": {
+      "checkpoint": {
+        "median": 166.75,
+        "range": [
+          166.734375,
+          168.46875
+        ]
+      },
+      "previous": {
+        "median": 168.484375,
+        "range": [
+          166.78125,
+          169.515625
+        ]
+      },
+      "candidate": {
+        "median": 168.5625,
+        "range": [
+          166.84375,
+          168.578125
+        ]
+      },
+      "node": {
+        "median": 110.609375,
+        "range": [
+          110.578125,
+          110.640625
+        ]
+      },
+      "bun": {
+        "median": 86.09375,
+        "range": [
+          86.09375,
+          86.171875
+        ]
+      },
+      "delta": 0.078125,
+      "delta_percent": 0.04636928498562565,
+      "ranges_separated": false
+    },
+    "instructions": {
+      "checkpoint": {
+        "median": 8301611426,
+        "range": [
+          8296855762,
+          8305474937
+        ]
+      },
+      "previous": {
+        "median": 8271528187,
+        "range": [
+          8268459227,
+          8272117643
+        ]
+      },
+      "candidate": {
+        "median": 8213001764,
+        "range": [
+          8209483705,
+          8217787089
+        ]
+      },
+      "node": {
+        "median": 2939413928,
+        "range": [
+          2939189767,
+          2943402686
+        ]
+      },
+      "bun": {
+        "median": 2706505859,
+        "range": [
+          2705568863,
+          2707534945
+        ]
+      },
+      "delta": -58526423,
+      "delta_percent": -0.7075648136215418,
+      "ranges_separated": true
+    }
+  },
+  {
+    "fixture": "wide_1m",
+    "operation": "stringify",
+    "cpu_us": {
+      "checkpoint": {
+        "median": 1672.7348837209302,
+        "range": [
+          1670.8093023255815,
+          1678.8232558139534
+        ]
+      },
+      "previous": {
+        "median": 1671.874418604651,
+        "range": [
+          1669.4744186046512,
+          1673.786046511628
+        ]
+      },
+      "candidate": {
+        "median": 1669.8511627906976,
+        "range": [
+          1669.4,
+          1677.8046511627906
+        ]
+      },
+      "node": {
+        "median": 6339.432558139535,
+        "range": [
+          6315.40465116279,
+          6356.288372093023
+        ]
+      },
+      "bun": {
+        "median": 666.1023255813953,
+        "range": [
+          665.1348837209302,
+          690.9674418604651
+        ]
+      },
+      "delta": -2.023255813953483,
+      "delta_percent": -0.12101721226418505,
+      "ranges_separated": false
+    },
+    "peak_rss_mib": {
+      "checkpoint": {
+        "median": 69.671875,
+        "range": [
+          69.671875,
+          69.71875
+        ]
+      },
+      "previous": {
+        "median": 69.734375,
+        "range": [
+          69.734375,
+          69.734375
+        ]
+      },
+      "candidate": {
+        "median": 69.828125,
+        "range": [
+          69.828125,
+          69.875
+        ]
+      },
+      "node": {
+        "median": 116.421875,
+        "range": [
+          116.375,
+          116.578125
+        ]
+      },
+      "bun": {
+        "median": 84.609375,
+        "range": [
+          83.234375,
+          84.703125
+        ]
+      },
+      "delta": 0.09375,
+      "delta_percent": 0.13443871835088217,
+      "ranges_separated": true
+    },
+    "instructions": {
+      "checkpoint": {
+        "median": 6457723693,
+        "range": [
+          6457249166,
+          6458035283
+        ]
+      },
+      "previous": {
+        "median": 6456246967,
+        "range": [
+          6456148459,
+          6456841672
+        ]
+      },
+      "candidate": {
+        "median": 6454593771,
+        "range": [
+          6454504315,
+          6454957931
+        ]
+      },
+      "node": {
+        "median": 12634526844,
+        "range": [
+          12624133963,
+          12668286962
+        ]
+      },
+      "bun": {
+        "median": 3314786839,
+        "range": [
+          3314046871,
+          3316336742
+        ]
+      },
+      "delta": -1653196,
+      "delta_percent": -0.025606145620671317,
+      "ranges_separated": true
+    }
+  }
+]

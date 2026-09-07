@@ -1,0 +1,22 @@
+{
+  "owner": "json-perf-92797-1788785854",
+  "load_before": [
+    1.64599609375,
+    1.68505859375,
+    1.69677734375
+  ],
+  "started_utc": "2026-09-07T12:57:34Z",
+  "quiet_gate_passed": true,
+  "command": [
+    "python3",
+    "/Users/perry/json-structural-diagnostic-v30-20260907-codex/all.py"
+  ],
+  "competing_workloads_before": [],
+  "load_after": [
+    1.68359375,
+    1.6884765625,
+    1.69677734375
+  ],
+  "competing_workloads_after": [],
+  "finished_utc": "2026-09-07T12:57:59Z"
+}

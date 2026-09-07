@@ -1,0 +1,38 @@
+[
+  {
+    "engine": "previous",
+    "rep": 0,
+    "cycles": 1,
+    "full": 1,
+    "pointer_slots": 20777,
+    "peak_rss": 60080128,
+    "trace_file": "previous-0.trace.jsonl"
+  },
+  {
+    "engine": "candidate",
+    "rep": 0,
+    "cycles": 1,
+    "full": 1,
+    "pointer_slots": 20777,
+    "peak_rss": 60899328,
+    "trace_file": "candidate-0.trace.jsonl"
+  },
+  {
+    "engine": "previous",
+    "rep": 1,
+    "cycles": 1,
+    "full": 1,
+    "pointer_slots": 20777,
+    "peak_rss": 60080128,
+    "trace_file": "previous-1.trace.jsonl"
+  },
+  {
+    "engine": "candidate",
+    "rep": 1,
+    "cycles": 1,
+    "full": 1,
+    "pointer_slots": 20777,
+    "peak_rss": 60899328,
+    "trace_file": "candidate-1.trace.jsonl"
+  }
+]

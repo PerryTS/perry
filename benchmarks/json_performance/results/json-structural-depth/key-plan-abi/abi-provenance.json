@@ -1,0 +1,23 @@
+{
+  "status": "ABI-only experiment, not runtime performance evidence",
+  "source_commit": "15d2aeafde90f28984134515233de4439731576a",
+  "compiler": "rustc 1.100.0-nightly (f7d782a3b 2026-08-19)\nbinary: rustc\ncommit-hash: f7d782a3be46d6bb4b9792fe69a61db389ba1769\ncommit-date: 2026-08-19\nhost: aarch64-apple-darwin\nrelease: 1.100.0-nightly\nLLVM version: 23.1.0\n",
+  "command": [
+    "rustc",
+    "--edition=2021",
+    "--crate-type",
+    "lib",
+    "-C",
+    "opt-level=3",
+    "--emit=llvm-ir,asm",
+    "/Users/amlug/projects/perry/codex-json-fastpaths-artifacts/key28/abi.rs",
+    "--out-dir",
+    "/Users/amlug/projects/perry/codex-json-fastpaths-artifacts/key28"
+  ],
+  "files": {
+    "abi.s": "277eabaedc045a8664f30bcac1e1cef7f27767f4741e664f15a6a7ebedd7e481",
+    "abi.rs": "5fc4db0b9a2c88a766671d0556c771327546c7a9bbd1cca38023c5a06702d347",
+    "abi.ll": "b16b96782892d560b57a764bc8badf4268c85bdeee9defa67b9f3f6f538d7630"
+  },
+  "finding": "Option<12-byte triple> returns via sret; Option<16-byte scalar pair> returns {i64,i32} on this ARM64 toolchain."
+}
