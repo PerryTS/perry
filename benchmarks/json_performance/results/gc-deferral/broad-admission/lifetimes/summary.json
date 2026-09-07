@@ -1,0 +1,8318 @@
+[
+  {
+    "fixture": "object_1k",
+    "operation": "parse",
+    "mode": "discard",
+    "iterations": 60000,
+    "parseMs": {
+      "parent": 30.20308299999882,
+      "candidate": 30.482621999999733,
+      "delta_percent": 0.9255313439390456,
+      "ranges": {
+        "parent": [
+          30.18647599999884,
+          30.21510299999917
+        ],
+        "candidate": [
+          30.467604000000033,
+          30.600267999999154
+        ]
+      },
+      "ranges_separated": true
+    },
+    "stringifyMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "parseMaxMs": {
+      "parent": 0.15329200000000132,
+      "candidate": 0.14037500000000058,
+      "delta_percent": -8.426401899642922,
+      "ranges": {
+        "parent": [
+          0.15304200000000012,
+          0.15370799999999996
+        ],
+        "candidate": [
+          0.1375409999999997,
+          0.15191600000000083
+        ]
+      },
+      "ranges_separated": true
+    },
+    "stringifyMaxMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "loopCpuUs": {
+      "parent": 42023,
+      "candidate": 42385,
+      "delta_percent": 0.8614330247721513,
+      "ranges": {
+        "parent": [
+          42008,
+          42068
+        ],
+        "candidate": [
+          42286,
+          42518
+        ]
+      },
+      "ranges_separated": true
+    },
+    "drainCpuUs": {
+      "parent": 4049,
+      "candidate": 4011,
+      "delta_percent": -0.9385033341565818,
+      "ranges": {
+        "parent": [
+          4043,
+          4091
+        ],
+        "candidate": [
+          4010,
+          4042
+        ]
+      },
+      "ranges_separated": true
+    },
+    "totalCpuUs": {
+      "parent": 46072,
+      "candidate": 46396,
+      "delta_percent": 0.7032470915089517,
+      "ranges": {
+        "parent": [
+          46051,
+          46159
+        ],
+        "candidate": [
+          46296,
+          46560
+        ]
+      },
+      "ranges_separated": true
+    },
+    "loopMs": {
+      "parent": 42.015583,
+      "candidate": 42.381167,
+      "delta_percent": 0.8701152617589525,
+      "ranges": {
+        "parent": [
+          42.002375,
+          42.065749999999994
+        ],
+        "candidate": [
+          42.281041,
+          42.50962499999999
+        ]
+      },
+      "ranges_separated": true
+    },
+    "drainMs": {
+      "parent": 4.044499999999999,
+      "candidate": 4.0085829999999945,
+      "delta_percent": -0.8880454938806959,
+      "ranges": {
+        "parent": [
+          4.0418340000000015,
+          4.089665999999994
+        ],
+        "candidate": [
+          4.006166999999998,
+          4.040917000000007
+        ]
+      },
+      "ranges_separated": true
+    },
+    "peak_rss": {
+      "parent": 37306368,
+      "candidate": 37388288,
+      "delta_percent": 0.2195871761089263,
+      "ranges": {
+        "parent": [
+          37306368,
+          37306368
+        ],
+        "candidate": [
+          37371904,
+          37388288
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssLoop": {
+      "parent": 36044800,
+      "candidate": 36208640,
+      "delta_percent": 0.454545454545463,
+      "ranges": {
+        "parent": [
+          36044800,
+          36044800
+        ],
+        "candidate": [
+          36192256,
+          36208640
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssDrained": {
+      "parent": 36421632,
+      "candidate": 36585472,
+      "delta_percent": 0.44984255510571725,
+      "ranges": {
+        "parent": [
+          36421632,
+          36421632
+        ],
+        "candidate": [
+          36569088,
+          36585472
+        ]
+      },
+      "ranges_separated": true
+    }
+  },
+  {
+    "fixture": "object_1k",
+    "operation": "parse",
+    "mode": "latest",
+    "iterations": 60000,
+    "parseMs": {
+      "parent": 30.252649000000208,
+      "candidate": 30.826779999999932,
+      "delta_percent": 1.8977875292828683,
+      "ranges": {
+        "parent": [
+          30.104031999999677,
+          30.50416699999969
+        ],
+        "candidate": [
+          30.794697000000276,
+          31.171884999999016
+        ]
+      },
+      "ranges_separated": true
+    },
+    "stringifyMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "parseMaxMs": {
+      "parent": 0.15474999999999994,
+      "candidate": 0.15104099999999931,
+      "delta_percent": -2.3967689822298133,
+      "ranges": {
+        "parent": [
+          0.1352909999999996,
+          0.16174999999999962
+        ],
+        "candidate": [
+          0.1338329999999992,
+          0.15508299999999942
+        ]
+      },
+      "ranges_separated": false
+    },
+    "stringifyMaxMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "loopCpuUs": {
+      "parent": 42255,
+      "candidate": 43004,
+      "delta_percent": 1.7725712933380766,
+      "ranges": {
+        "parent": [
+          42122,
+          42576
+        ],
+        "candidate": [
+          42894,
+          43366
+        ]
+      },
+      "ranges_separated": true
+    },
+    "drainCpuUs": {
+      "parent": 3935,
+      "candidate": 5438,
+      "delta_percent": 38.19567979669631,
+      "ranges": {
+        "parent": [
+          3878,
+          4988
+        ],
+        "candidate": [
+          4328,
+          5795
+        ]
+      },
+      "ranges_separated": false
+    },
+    "totalCpuUs": {
+      "parent": 46133,
+      "candidate": 48799,
+      "delta_percent": 5.778943489476074,
+      "ranges": {
+        "parent": [
+          46057,
+          47564
+        ],
+        "candidate": [
+          47222,
+          48804
+        ]
+      },
+      "ranges_separated": false
+    },
+    "loopMs": {
+      "parent": 42.252375,
+      "candidate": 42.99725,
+      "delta_percent": 1.762918652501777,
+      "ranges": {
+        "parent": [
+          42.116166,
+          42.571625
+        ],
+        "candidate": [
+          42.887875,
+          43.366042
+        ]
+      },
+      "ranges_separated": true
+    },
+    "drainMs": {
+      "parent": 3.9347079999999934,
+      "candidate": 5.435749999999992,
+      "delta_percent": 38.148752080205206,
+      "ranges": {
+        "parent": [
+          3.876375000000003,
+          4.986457999999999
+        ],
+        "candidate": [
+          4.326374999999999,
+          5.792625000000008
+        ]
+      },
+      "ranges_separated": false
+    },
+    "peak_rss": {
+      "parent": 37339136,
+      "candidate": 37404672,
+      "delta_percent": 0.1755155770074568,
+      "ranges": {
+        "parent": [
+          37322752,
+          37355520
+        ],
+        "candidate": [
+          37388288,
+          37404672
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssLoop": {
+      "parent": 36077568,
+      "candidate": 36225024,
+      "delta_percent": 0.4087193460490468,
+      "ranges": {
+        "parent": [
+          36061184,
+          36093952
+        ],
+        "candidate": [
+          36208640,
+          36225024
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssDrained": {
+      "parent": 36454400,
+      "candidate": 36601856,
+      "delta_percent": 0.40449438202248,
+      "ranges": {
+        "parent": [
+          36438016,
+          36470784
+        ],
+        "candidate": [
+          36585472,
+          36601856
+        ]
+      },
+      "ranges_separated": true
+    }
+  },
+  {
+    "fixture": "object_1k",
+    "operation": "parse",
+    "mode": "retain",
+    "iterations": 20000,
+    "parseMs": {
+      "parent": 11.217170999999993,
+      "candidate": 11.474856999999922,
+      "delta_percent": 2.2972458920339944,
+      "ranges": {
+        "parent": [
+          11.122380000000083,
+          11.312206999999871
+        ],
+        "candidate": [
+          11.415789999999951,
+          11.578660000000188
+        ]
+      },
+      "ranges_separated": true
+    },
+    "stringifyMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "parseMaxMs": {
+      "parent": 0.14737499999999937,
+      "candidate": 0.1459159999999997,
+      "delta_percent": -0.9899915182355667,
+      "ranges": {
+        "parent": [
+          0.14708300000000119,
+          0.1504999999999992
+        ],
+        "candidate": [
+          0.1401249999999994,
+          0.1487090000000002
+        ]
+      },
+      "ranges_separated": false
+    },
+    "stringifyMaxMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "loopCpuUs": {
+      "parent": 16017,
+      "candidate": 16283,
+      "delta_percent": 1.6607354685646447,
+      "ranges": {
+        "parent": [
+          15850,
+          16045
+        ],
+        "candidate": [
+          16198,
+          16358
+        ]
+      },
+      "ranges_separated": true
+    },
+    "drainCpuUs": {
+      "parent": 8640,
+      "candidate": 8792,
+      "delta_percent": 1.7592592592592604,
+      "ranges": {
+        "parent": [
+          8585,
+          8833
+        ],
+        "candidate": [
+          8648,
+          8833
+        ]
+      },
+      "ranges_separated": false
+    },
+    "totalCpuUs": {
+      "parent": 24685,
+      "candidate": 25116,
+      "delta_percent": 1.7459995948956752,
+      "ranges": {
+        "parent": [
+          24435,
+          24850
+        ],
+        "candidate": [
+          24846,
+          25150
+        ]
+      },
+      "ranges_separated": false
+    },
+    "loopMs": {
+      "parent": 16.012083000000004,
+      "candidate": 16.27975,
+      "delta_percent": 1.6716563360307024,
+      "ranges": {
+        "parent": [
+          15.844125,
+          16.040584
+        ],
+        "candidate": [
+          16.192332999999998,
+          16.355999999999998
+        ]
+      },
+      "ranges_separated": true
+    },
+    "drainMs": {
+      "parent": 8.639500000000002,
+      "candidate": 8.791583,
+      "delta_percent": 1.7603217778806357,
+      "ranges": {
+        "parent": [
+          8.584416999999998,
+          8.8325
+        ],
+        "candidate": [
+          8.647292,
+          8.832791
+        ]
+      },
+      "ranges_separated": false
+    },
+    "peak_rss": {
+      "parent": 43892736,
+      "candidate": 43991040,
+      "delta_percent": 0.22396416573349232,
+      "ranges": {
+        "parent": [
+          43892736,
+          43909120
+        ],
+        "candidate": [
+          43974656,
+          43991040
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssLoop": {
+      "parent": 41697280,
+      "candidate": 41828352,
+      "delta_percent": 0.3143418467583592,
+      "ranges": {
+        "parent": [
+          41697280,
+          41713664
+        ],
+        "candidate": [
+          41811968,
+          41828352
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssDrained": {
+      "parent": 43008000,
+      "candidate": 43155456,
+      "delta_percent": 0.34285714285713365,
+      "ranges": {
+        "parent": [
+          43008000,
+          43024384
+        ],
+        "candidate": [
+          43139072,
+          43155456
+        ]
+      },
+      "ranges_separated": true
+    }
+  },
+  {
+    "fixture": "object_1k",
+    "operation": "roundtrip",
+    "mode": "discard",
+    "iterations": 60000,
+    "parseMs": {
+      "parent": 29.83392400000021,
+      "candidate": 30.26037200000061,
+      "delta_percent": 1.4294063362244813,
+      "ranges": {
+        "parent": [
+          29.812660000000097,
+          29.94472799999985
+        ],
+        "candidate": [
+          30.172587999999916,
+          30.29052800000057
+        ]
+      },
+      "ranges_separated": true
+    },
+    "stringifyMs": {
+      "parent": 11.79869699999962,
+      "candidate": 11.77804299999876,
+      "delta_percent": -0.17505322834259207,
+      "ranges": {
+        "parent": [
+          11.744014000000838,
+          11.802823999999683
+        ],
+        "candidate": [
+          11.750521999999497,
+          11.865639000000423
+        ]
+      },
+      "ranges_separated": false
+    },
+    "parseMaxMs": {
+      "parent": 0.12637499999999946,
+      "candidate": 0.12645799999999952,
+      "delta_percent": 0.0656775469832338,
+      "ranges": {
+        "parent": [
+          0.1252500000000012,
+          0.12887500000000074
+        ],
+        "candidate": [
+          0.12049999999999805,
+          0.12720799999999954
+        ]
+      },
+      "ranges_separated": false
+    },
+    "stringifyMaxMs": {
+      "parent": 0.012916999999999845,
+      "candidate": 0.010374999999999801,
+      "delta_percent": -19.679492142138844,
+      "ranges": {
+        "parent": [
+          0.011708000000005825,
+          0.01662499999999767
+        ],
+        "candidate": [
+          0.008207999999999771,
+          0.015125000000004718
+        ]
+      },
+      "ranges_separated": false
+    },
+    "loopCpuUs": {
+      "parent": 58443,
+      "candidate": 58607,
+      "delta_percent": 0.28061530037815086,
+      "ranges": {
+        "parent": [
+          58231,
+          58503
+        ],
+        "candidate": [
+          58515,
+          58692
+        ]
+      },
+      "ranges_separated": true
+    },
+    "drainCpuUs": {
+      "parent": 2952,
+      "candidate": 2845,
+      "delta_percent": -3.6246612466124706,
+      "ranges": {
+        "parent": [
+          2858,
+          2975
+        ],
+        "candidate": [
+          2831,
+          2850
+        ]
+      },
+      "ranges_separated": true
+    },
+    "totalCpuUs": {
+      "parent": 61395,
+      "candidate": 61457,
+      "delta_percent": 0.10098542226566476,
+      "ranges": {
+        "parent": [
+          61089,
+          61478
+        ],
+        "candidate": [
+          61360,
+          61523
+        ]
+      },
+      "ranges_separated": false
+    },
+    "loopMs": {
+      "parent": 58.43650000000001,
+      "candidate": 58.600333000000006,
+      "delta_percent": 0.2803607334457059,
+      "ranges": {
+        "parent": [
+          58.220957999999996,
+          58.494
+        ],
+        "candidate": [
+          58.505958,
+          58.686333000000005
+        ]
+      },
+      "ranges_separated": true
+    },
+    "drainMs": {
+      "parent": 2.949832999999998,
+      "candidate": 2.841000000000008,
+      "delta_percent": -3.6894630984191323,
+      "ranges": {
+        "parent": [
+          2.8576249999999987,
+          2.9742080000000115
+        ],
+        "candidate": [
+          2.8260839999999945,
+          2.8446249999999935
+        ]
+      },
+      "ranges_separated": true
+    },
+    "peak_rss": {
+      "parent": 36651008,
+      "candidate": 36847616,
+      "delta_percent": 0.5364327223960741,
+      "ranges": {
+        "parent": [
+          36634624,
+          36667392
+        ],
+        "candidate": [
+          36847616,
+          36847616
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssLoop": {
+      "parent": 35717120,
+      "candidate": 35962880,
+      "delta_percent": 0.6880733944954143,
+      "ranges": {
+        "parent": [
+          35700736,
+          35733504
+        ],
+        "candidate": [
+          35962880,
+          35962880
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssDrained": {
+      "parent": 35848192,
+      "candidate": 36093952,
+      "delta_percent": 0.6855575868373043,
+      "ranges": {
+        "parent": [
+          35831808,
+          35864576
+        ],
+        "candidate": [
+          36093952,
+          36093952
+        ]
+      },
+      "ranges_separated": true
+    }
+  },
+  {
+    "fixture": "object_1k",
+    "operation": "stringify",
+    "mode": "discard",
+    "iterations": 60000,
+    "parseMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "stringifyMs": {
+      "parent": 12.249278000000537,
+      "candidate": 12.238307000000171,
+      "delta_percent": -0.08956446249619443,
+      "ranges": {
+        "parent": [
+          12.223201000000131,
+          12.249985000000269
+        ],
+        "candidate": [
+          12.21567399999985,
+          12.24880499999999
+        ]
+      },
+      "ranges_separated": false
+    },
+    "parseMaxMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "stringifyMaxMs": {
+      "parent": 0.12608400000000053,
+      "candidate": 0.11862499999999976,
+      "delta_percent": -5.9158973382830045,
+      "ranges": {
+        "parent": [
+          0.12337500000000023,
+          0.13258299999999945
+        ],
+        "candidate": [
+          0.11837499999999945,
+          0.12708299999999983
+        ]
+      },
+      "ranges_separated": false
+    },
+    "loopCpuUs": {
+      "parent": 23464,
+      "candidate": 23420,
+      "delta_percent": -0.18752130923969101,
+      "ranges": {
+        "parent": [
+          23410,
+          23486
+        ],
+        "candidate": [
+          23366,
+          23426
+        ]
+      },
+      "ranges_separated": false
+    },
+    "drainCpuUs": {
+      "parent": 2662,
+      "candidate": 2680,
+      "delta_percent": 0.6761833208114298,
+      "ranges": {
+        "parent": [
+          2658,
+          2729
+        ],
+        "candidate": [
+          2636,
+          2715
+        ]
+      },
+      "ranges_separated": false
+    },
+    "totalCpuUs": {
+      "parent": 26122,
+      "candidate": 26100,
+      "delta_percent": -0.08422019753464571,
+      "ranges": {
+        "parent": [
+          26072,
+          26215
+        ],
+        "candidate": [
+          26002,
+          26141
+        ]
+      },
+      "ranges_separated": false
+    },
+    "loopMs": {
+      "parent": 23.458,
+      "candidate": 23.418083000000003,
+      "delta_percent": -0.17016369681982502,
+      "ranges": {
+        "parent": [
+          23.405167,
+          23.480957999999998
+        ],
+        "candidate": [
+          23.359958,
+          23.42
+        ]
+      },
+      "ranges_separated": false
+    },
+    "drainMs": {
+      "parent": 2.660541000000002,
+      "candidate": 2.677792,
+      "delta_percent": 0.6484019603530955,
+      "ranges": {
+        "parent": [
+          2.657333999999995,
+          2.7276249999999997
+        ],
+        "candidate": [
+          2.6350830000000016,
+          2.7110829999999986
+        ]
+      },
+      "ranges_separated": false
+    },
+    "peak_rss": {
+      "parent": 37470208,
+      "candidate": 37634048,
+      "delta_percent": 0.4372540445999107,
+      "ranges": {
+        "parent": [
+          37453824,
+          37552128
+        ],
+        "candidate": [
+          37552128,
+          37634048
+        ]
+      },
+      "ranges_separated": false
+    },
+    "rssLoop": {
+      "parent": 36519936,
+      "candidate": 36732928,
+      "delta_percent": 0.583221175414983,
+      "ranges": {
+        "parent": [
+          36503552,
+          36601856
+        ],
+        "candidate": [
+          36651008,
+          36732928
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssDrained": {
+      "parent": 36667392,
+      "candidate": 36880384,
+      "delta_percent": 0.5808757819481647,
+      "ranges": {
+        "parent": [
+          36651008,
+          36749312
+        ],
+        "candidate": [
+          36798464,
+          36880384
+        ]
+      },
+      "ranges_separated": true
+    }
+  },
+  {
+    "fixture": "object_1k",
+    "operation": "stringify",
+    "mode": "latest",
+    "iterations": 60000,
+    "parseMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "stringifyMs": {
+      "parent": 12.231994000000206,
+      "candidate": 12.202970999999526,
+      "delta_percent": -0.23727120860818074,
+      "ranges": {
+        "parent": [
+          12.209557999999525,
+          12.242459000000077
+        ],
+        "candidate": [
+          12.156197999999952,
+          12.218457999999881
+        ]
+      },
+      "ranges_separated": false
+    },
+    "parseMaxMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "stringifyMaxMs": {
+      "parent": 0.12704200000000032,
+      "candidate": 0.11766600000000071,
+      "delta_percent": -7.3802364572342904,
+      "ranges": {
+        "parent": [
+          0.12587499999999974,
+          0.13225000000000087
+        ],
+        "candidate": [
+          0.11020800000000008,
+          0.13375000000000092
+        ]
+      },
+      "ranges_separated": false
+    },
+    "loopCpuUs": {
+      "parent": 23680,
+      "candidate": 23501,
+      "delta_percent": -0.7559121621621645,
+      "ranges": {
+        "parent": [
+          23550,
+          23688
+        ],
+        "candidate": [
+          23466,
+          23623
+        ]
+      },
+      "ranges_separated": false
+    },
+    "drainCpuUs": {
+      "parent": 2630,
+      "candidate": 2690,
+      "delta_percent": 2.281368821292773,
+      "ranges": {
+        "parent": [
+          2629,
+          2691
+        ],
+        "candidate": [
+          2645,
+          2696
+        ]
+      },
+      "ranges_separated": false
+    },
+    "totalCpuUs": {
+      "parent": 26310,
+      "candidate": 26191,
+      "delta_percent": -0.45229950589129597,
+      "ranges": {
+        "parent": [
+          26179,
+          26379
+        ],
+        "candidate": [
+          26162,
+          26268
+        ]
+      },
+      "ranges_separated": false
+    },
+    "loopMs": {
+      "parent": 23.672083,
+      "candidate": 23.496375,
+      "delta_percent": -0.7422582964076274,
+      "ranges": {
+        "parent": [
+          23.54025,
+          23.681749999999997
+        ],
+        "candidate": [
+          23.458792,
+          23.617458
+        ]
+      },
+      "ranges_separated": false
+    },
+    "drainMs": {
+      "parent": 2.6290830000000014,
+      "candidate": 2.6891669999999976,
+      "delta_percent": 2.2853595721396447,
+      "ranges": {
+        "parent": [
+          2.625707999999996,
+          2.689792000000004
+        ],
+        "candidate": [
+          2.6411250000000024,
+          2.6917500000000025
+        ]
+      },
+      "ranges_separated": false
+    },
+    "peak_rss": {
+      "parent": 37552128,
+      "candidate": 37535744,
+      "delta_percent": -0.043630017452012115,
+      "ranges": {
+        "parent": [
+          37486592,
+          37568512
+        ],
+        "candidate": [
+          37535744,
+          37634048
+        ]
+      },
+      "ranges_separated": false
+    },
+    "rssLoop": {
+      "parent": 36585472,
+      "candidate": 36634624,
+      "delta_percent": 0.13434841021047195,
+      "ranges": {
+        "parent": [
+          36519936,
+          36601856
+        ],
+        "candidate": [
+          36634624,
+          36732928
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssDrained": {
+      "parent": 36732928,
+      "candidate": 36782080,
+      "delta_percent": 0.1338090990187224,
+      "ranges": {
+        "parent": [
+          36667392,
+          36749312
+        ],
+        "candidate": [
+          36782080,
+          36880384
+        ]
+      },
+      "ranges_separated": true
+    }
+  },
+  {
+    "fixture": "object_1k",
+    "operation": "stringify",
+    "mode": "retain",
+    "iterations": 20000,
+    "parseMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "stringifyMs": {
+      "parent": 4.934666999999933,
+      "candidate": 4.888145999999946,
+      "delta_percent": -0.9427383853862437,
+      "ranges": {
+        "parent": [
+          4.821042000000018,
+          4.9395249999999
+        ],
+        "candidate": [
+          4.81997399999989,
+          4.891232000000026
+        ]
+      },
+      "ranges_separated": false
+    },
+    "parseMaxMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "stringifyMaxMs": {
+      "parent": 0.010166999999999149,
+      "candidate": 0.01066699999999976,
+      "delta_percent": 4.917871545201669,
+      "ranges": {
+        "parent": [
+          0.008582999999998009,
+          0.011041000000000523
+        ],
+        "candidate": [
+          0.008750000000000924,
+          0.011499999999999844
+        ]
+      },
+      "ranges_separated": false
+    },
+    "loopCpuUs": {
+      "parent": 8398,
+      "candidate": 8393,
+      "delta_percent": -0.0595379852345812,
+      "ranges": {
+        "parent": [
+          8261,
+          8408
+        ],
+        "candidate": [
+          8371,
+          8395
+        ]
+      },
+      "ranges_separated": false
+    },
+    "drainCpuUs": {
+      "parent": 4249,
+      "candidate": 4254,
+      "delta_percent": 0.1176747469992856,
+      "ranges": {
+        "parent": [
+          4234,
+          4563
+        ],
+        "candidate": [
+          4253,
+          4281
+        ]
+      },
+      "ranges_separated": false
+    },
+    "totalCpuUs": {
+      "parent": 12657,
+      "candidate": 12647,
+      "delta_percent": -0.07900766374338009,
+      "ranges": {
+        "parent": [
+          12632,
+          12824
+        ],
+        "candidate": [
+          12624,
+          12676
+        ]
+      },
+      "ranges_separated": false
+    },
+    "loopMs": {
+      "parent": 8.392667,
+      "candidate": 8.385334,
+      "delta_percent": -0.0873738943770741,
+      "ranges": {
+        "parent": [
+          8.258042,
+          8.402042000000002
+        ],
+        "candidate": [
+          8.367916,
+          8.394
+        ]
+      },
+      "ranges_separated": false
+    },
+    "drainMs": {
+      "parent": 4.248167000000002,
+      "candidate": 4.253416999999999,
+      "delta_percent": 0.12358271226147188,
+      "ranges": {
+        "parent": [
+          4.232625000000002,
+          4.5621659999999995
+        ],
+        "candidate": [
+          4.252000000000001,
+          4.279375000000002
+        ]
+      },
+      "ranges_separated": false
+    },
+    "peak_rss": {
+      "parent": 42106880,
+      "candidate": 42123264,
+      "delta_percent": 0.03891050583657574,
+      "ranges": {
+        "parent": [
+          42090496,
+          42106880
+        ],
+        "candidate": [
+          42106880,
+          42188800
+        ]
+      },
+      "ranges_separated": false
+    },
+    "rssLoop": {
+      "parent": 41009152,
+      "candidate": 41041920,
+      "delta_percent": 0.07990411506193507,
+      "ranges": {
+        "parent": [
+          40992768,
+          41009152
+        ],
+        "candidate": [
+          41025536,
+          41107456
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssDrained": {
+      "parent": 41287680,
+      "candidate": 41336832,
+      "delta_percent": 0.11904761904761862,
+      "ranges": {
+        "parent": [
+          41271296,
+          41287680
+        ],
+        "candidate": [
+          41320448,
+          41402368
+        ]
+      },
+      "ranges_separated": true
+    }
+  },
+  {
+    "fixture": "records_object_1m",
+    "operation": "parse",
+    "mode": "discard",
+    "iterations": 120,
+    "parseMs": {
+      "parent": 299.17596599999985,
+      "candidate": 293.5170049999997,
+      "delta_percent": -1.8915159114085256,
+      "ranges": {
+        "parent": [
+          298.994912,
+          299.2516200000003
+        ],
+        "candidate": [
+          293.3999500000001,
+          293.52850199999983
+        ]
+      },
+      "ranges_separated": true
+    },
+    "stringifyMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "parseMaxMs": {
+      "parent": 3.0939580000000007,
+      "candidate": 3.0571250000000028,
+      "delta_percent": -1.1904815773193356,
+      "ranges": {
+        "parent": [
+          3.0863750000000003,
+          3.111332999999995
+        ],
+        "candidate": [
+          3.0412500000000016,
+          3.064833
+        ]
+      },
+      "ranges_separated": true
+    },
+    "stringifyMaxMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "loopCpuUs": {
+      "parent": 314890,
+      "candidate": 308296,
+      "delta_percent": -2.094064593985201,
+      "ranges": {
+        "parent": [
+          314544,
+          314938
+        ],
+        "candidate": [
+          308188,
+          308324
+        ]
+      },
+      "ranges_separated": true
+    },
+    "drainCpuUs": {
+      "parent": 7575,
+      "candidate": 9952,
+      "delta_percent": 31.379537953795378,
+      "ranges": {
+        "parent": [
+          7574,
+          7639
+        ],
+        "candidate": [
+          9887,
+          9991
+        ]
+      },
+      "ranges_separated": true
+    },
+    "totalCpuUs": {
+      "parent": 322465,
+      "candidate": 318276,
+      "delta_percent": -1.2990557114725632,
+      "ranges": {
+        "parent": [
+          322118,
+          322577
+        ],
+        "candidate": [
+          318075,
+          318287
+        ]
+      },
+      "ranges_separated": true
+    },
+    "loopMs": {
+      "parent": 314.883292,
+      "candidate": 308.29012500000005,
+      "delta_percent": -2.093844661659572,
+      "ranges": {
+        "parent": [
+          314.539167,
+          314.931667
+        ],
+        "candidate": [
+          308.18187500000005,
+          308.318708
+        ]
+      },
+      "ranges_separated": true
+    },
+    "drainMs": {
+      "parent": 7.573000000000036,
+      "candidate": 9.94983400000001,
+      "delta_percent": 31.38563317047356,
+      "ranges": {
+        "parent": [
+          7.570666000000017,
+          7.6380419999999845
+        ],
+        "candidate": [
+          9.884416000000044,
+          9.989417000000003
+        ]
+      },
+      "ranges_separated": true
+    },
+    "peak_rss": {
+      "parent": 42270720,
+      "candidate": 44662784,
+      "delta_percent": 5.658914728682163,
+      "ranges": {
+        "parent": [
+          42270720,
+          42270720
+        ],
+        "candidate": [
+          44580864,
+          44679168
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssLoop": {
+      "parent": 39895040,
+      "candidate": 41648128,
+      "delta_percent": 4.394250513347031,
+      "ranges": {
+        "parent": [
+          39895040,
+          39895040
+        ],
+        "candidate": [
+          41566208,
+          41664512
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssDrained": {
+      "parent": 41385984,
+      "candidate": 43859968,
+      "delta_percent": 5.9778305621535965,
+      "ranges": {
+        "parent": [
+          41385984,
+          41385984
+        ],
+        "candidate": [
+          43778048,
+          43876352
+        ]
+      },
+      "ranges_separated": true
+    }
+  },
+  {
+    "fixture": "records_object_1m",
+    "operation": "parse",
+    "mode": "latest",
+    "iterations": 120,
+    "parseMs": {
+      "parent": 300.8988279999999,
+      "candidate": 296.020374,
+      "delta_percent": -1.6212937858302023,
+      "ranges": {
+        "parent": [
+          300.66050500000017,
+          301.07158999999984
+        ],
+        "candidate": [
+          295.52980100000025,
+          297.1340009999999
+        ]
+      },
+      "ranges_separated": true
+    },
+    "stringifyMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "parseMaxMs": {
+      "parent": 3.099209000000002,
+      "candidate": 3.0824999999999996,
+      "delta_percent": -0.53913756703734,
+      "ranges": {
+        "parent": [
+          3.0855840000000043,
+          3.1962500000000027
+        ],
+        "candidate": [
+          3.0560839999999985,
+          3.085083000000001
+        ]
+      },
+      "ranges_separated": true
+    },
+    "stringifyMaxMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "loopCpuUs": {
+      "parent": 332681,
+      "candidate": 327975,
+      "delta_percent": -1.4145683101830286,
+      "ranges": {
+        "parent": [
+          332442,
+          332962
+        ],
+        "candidate": [
+          327558,
+          329343
+        ]
+      },
+      "ranges_separated": true
+    },
+    "drainCpuUs": {
+      "parent": 27271,
+      "candidate": 21370,
+      "delta_percent": -21.63837043012724,
+      "ranges": {
+        "parent": [
+          27249,
+          27378
+        ],
+        "candidate": [
+          21340,
+          22183
+        ]
+      },
+      "ranges_separated": true
+    },
+    "totalCpuUs": {
+      "parent": 359930,
+      "candidate": 349345,
+      "delta_percent": -2.9408496096463232,
+      "ranges": {
+        "parent": [
+          359713,
+          360340
+        ],
+        "candidate": [
+          348898,
+          351526
+        ]
+      },
+      "ranges_separated": true
+    },
+    "loopMs": {
+      "parent": 332.676292,
+      "candidate": 327.97254100000004,
+      "delta_percent": -1.4139122964614392,
+      "ranges": {
+        "parent": [
+          332.435833,
+          332.955958
+        ],
+        "candidate": [
+          327.554958,
+          329.340041
+        ]
+      },
+      "ranges_separated": true
+    },
+    "drainMs": {
+      "parent": 27.26945799999993,
+      "candidate": 21.36870799999997,
+      "delta_percent": -21.638677233702165,
+      "ranges": {
+        "parent": [
+          27.247875000000022,
+          27.376000000000033
+        ],
+        "candidate": [
+          21.337500000000034,
+          22.179874999999925
+        ]
+      },
+      "ranges_separated": true
+    },
+    "peak_rss": {
+      "parent": 89391104,
+      "candidate": 92192768,
+      "delta_percent": 3.134164222873892,
+      "ranges": {
+        "parent": [
+          89391104,
+          89407488
+        ],
+        "candidate": [
+          92192768,
+          92209152
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssLoop": {
+      "parent": 81526784,
+      "candidate": 84967424,
+      "delta_percent": 4.220257234726699,
+      "ranges": {
+        "parent": [
+          81526784,
+          81526784
+        ],
+        "candidate": [
+          84967424,
+          84967424
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssDrained": {
+      "parent": 87343104,
+      "candidate": 88801280,
+      "delta_percent": 1.6694803976739836,
+      "ranges": {
+        "parent": [
+          87343104,
+          87359488
+        ],
+        "candidate": [
+          88801280,
+          88817664
+        ]
+      },
+      "ranges_separated": true
+    }
+  },
+  {
+    "fixture": "records_object_1m",
+    "operation": "parse",
+    "mode": "retain",
+    "iterations": 16,
+    "parseMs": {
+      "parent": 41.65495999999999,
+      "candidate": 41.00637400000001,
+      "delta_percent": -1.5570438670448383,
+      "ranges": {
+        "parent": [
+          41.65445700000002,
+          41.81116600000002
+        ],
+        "candidate": [
+          40.94987599999996,
+          41.19050200000001
+        ]
+      },
+      "ranges_separated": true
+    },
+    "stringifyMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "parseMaxMs": {
+      "parent": 3.099499999999999,
+      "candidate": 3.0550420000000003,
+      "delta_percent": -1.434360380706523,
+      "ranges": {
+        "parent": [
+          3.088083000000001,
+          3.1374579999999987
+        ],
+        "candidate": [
+          3.041249999999998,
+          3.0610420000000005
+        ]
+      },
+      "ranges_separated": true
+    },
+    "stringifyMaxMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "loopCpuUs": {
+      "parent": 88294,
+      "candidate": 53274,
+      "delta_percent": -39.662944254422726,
+      "ranges": {
+        "parent": [
+          88237,
+          88437
+        ],
+        "candidate": [
+          53028,
+          53329
+        ]
+      },
+      "ranges_separated": true
+    },
+    "drainCpuUs": {
+      "parent": 67921,
+      "candidate": 58419,
+      "delta_percent": -13.989782247022276,
+      "ranges": {
+        "parent": [
+          67777,
+          67960
+        ],
+        "candidate": [
+          58345,
+          58446
+        ]
+      },
+      "ranges_separated": true
+    },
+    "totalCpuUs": {
+      "parent": 156254,
+      "candidate": 111693,
+      "delta_percent": -28.51830993126576,
+      "ranges": {
+        "parent": [
+          156014,
+          156358
+        ],
+        "candidate": [
+          111373,
+          111775
+        ]
+      },
+      "ranges_separated": true
+    },
+    "loopMs": {
+      "parent": 88.290166,
+      "candidate": 53.26716699999999,
+      "delta_percent": -39.66806337185956,
+      "ranges": {
+        "parent": [
+          88.23191600000001,
+          88.43175000000001
+        ],
+        "candidate": [
+          53.025416,
+          53.322917
+        ]
+      },
+      "ranges_separated": true
+    },
+    "drainMs": {
+      "parent": 67.921041,
+      "candidate": 58.414083000000005,
+      "delta_percent": -13.99707345474872,
+      "ranges": {
+        "parent": [
+          67.77125000000002,
+          67.95941699999999
+        ],
+        "candidate": [
+          58.343541,
+          58.446
+        ]
+      },
+      "ranges_separated": true
+    },
+    "peak_rss": {
+      "parent": 90996736,
+      "candidate": 84148224,
+      "delta_percent": -7.5261073100468145,
+      "ranges": {
+        "parent": [
+          90996736,
+          90996736
+        ],
+        "candidate": [
+          80855040,
+          84148224
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssLoop": {
+      "parent": 80003072,
+      "candidate": 59031552,
+      "delta_percent": -26.213393405693218,
+      "ranges": {
+        "parent": [
+          80003072,
+          80003072
+        ],
+        "candidate": [
+          59031552,
+          59113472
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssDrained": {
+      "parent": 89899008,
+      "candidate": 71434240,
+      "delta_percent": -20.539456898122832,
+      "ranges": {
+        "parent": [
+          89899008,
+          89899008
+        ],
+        "candidate": [
+          70582272,
+          71434240
+        ]
+      },
+      "ranges_separated": true
+    }
+  },
+  {
+    "fixture": "records_object_1m",
+    "operation": "roundtrip",
+    "mode": "discard",
+    "iterations": 120,
+    "parseMs": {
+      "parent": 310.308918,
+      "candidate": 321.49974600000024,
+      "delta_percent": 3.6063507527038796,
+      "ranges": {
+        "parent": [
+          310.07270999999974,
+          312.04529100000013
+        ],
+        "candidate": [
+          321.3457039999998,
+          321.5300830000004
+        ]
+      },
+      "ranges_separated": true
+    },
+    "stringifyMs": {
+      "parent": 168.4204970000004,
+      "candidate": 168.90345999999994,
+      "delta_percent": 0.2867602272896397,
+      "ranges": {
+        "parent": [
+          168.38699400000036,
+          168.99374700000013
+        ],
+        "candidate": [
+          168.6144480000002,
+          169.71462800000006
+        ]
+      },
+      "ranges_separated": false
+    },
+    "parseMaxMs": {
+      "parent": 13.877625000000023,
+      "candidate": 13.634125000000012,
+      "delta_percent": -1.7546229992524753,
+      "ranges": {
+        "parent": [
+          13.863916000000017,
+          13.888582999999983
+        ],
+        "candidate": [
+          13.564333000000005,
+          13.688208999999972
+        ]
+      },
+      "ranges_separated": true
+    },
+    "stringifyMaxMs": {
+      "parent": 1.9144589999999972,
+      "candidate": 1.9202499999999993,
+      "delta_percent": 0.30248754347845797,
+      "ranges": {
+        "parent": [
+          1.9128749999999997,
+          1.934458000000003
+        ],
+        "candidate": [
+          1.910375000000002,
+          1.9240829999999995
+        ]
+      },
+      "ranges_separated": false
+    },
+    "loopCpuUs": {
+      "parent": 502552,
+      "candidate": 504737,
+      "delta_percent": 0.4347808783966567,
+      "ranges": {
+        "parent": [
+          501832,
+          503869
+        ],
+        "candidate": [
+          504601,
+          505893
+        ]
+      },
+      "ranges_separated": true
+    },
+    "drainCpuUs": {
+      "parent": 4564,
+      "candidate": 6833,
+      "delta_percent": 49.71516213847502,
+      "ranges": {
+        "parent": [
+          4541,
+          4571
+        ],
+        "candidate": [
+          6789,
+          6882
+        ]
+      },
+      "ranges_separated": true
+    },
+    "totalCpuUs": {
+      "parent": 507123,
+      "candidate": 511619,
+      "delta_percent": 0.8865699248505887,
+      "ranges": {
+        "parent": [
+          506396,
+          508410
+        ],
+        "candidate": [
+          511390,
+          512726
+        ]
+      },
+      "ranges_separated": true
+    },
+    "loopMs": {
+      "parent": 502.559792,
+      "candidate": 504.73141699999996,
+      "delta_percent": 0.4321127624153265,
+      "ranges": {
+        "parent": [
+          501.8383750000001,
+          503.871083
+        ],
+        "candidate": [
+          504.59745899999996,
+          505.896375
+        ]
+      },
+      "ranges_separated": true
+    },
+    "drainMs": {
+      "parent": 4.560541999999941,
+      "candidate": 6.828708000000006,
+      "delta_percent": 49.7345710224814,
+      "ranges": {
+        "parent": [
+          4.539875000000052,
+          4.567041999999901
+        ],
+        "candidate": [
+          6.786959000000024,
+          6.879916000000094
+        ]
+      },
+      "ranges_separated": true
+    },
+    "peak_rss": {
+      "parent": 83738624,
+      "candidate": 87588864,
+      "delta_percent": 4.5979260418704815,
+      "ranges": {
+        "parent": [
+          83738624,
+          83755008
+        ],
+        "candidate": [
+          87588864,
+          87588864
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssLoop": {
+      "parent": 83099648,
+      "candidate": 86949888,
+      "delta_percent": 4.633280757097791,
+      "ranges": {
+        "parent": [
+          83099648,
+          83116032
+        ],
+        "candidate": [
+          86949888,
+          86949888
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssDrained": {
+      "parent": 83099648,
+      "candidate": 86966272,
+      "delta_percent": 4.652996845425861,
+      "ranges": {
+        "parent": [
+          83099648,
+          83116032
+        ],
+        "candidate": [
+          86966272,
+          86966272
+        ]
+      },
+      "ranges_separated": true
+    }
+  },
+  {
+    "fixture": "records_object_1m",
+    "operation": "stringify",
+    "mode": "discard",
+    "iterations": 120,
+    "parseMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "stringifyMs": {
+      "parent": 180.006168,
+      "candidate": 180.36984200000012,
+      "delta_percent": 0.2020341880730081,
+      "ranges": {
+        "parent": [
+          179.75753800000015,
+          180.09771200000017
+        ],
+        "candidate": [
+          180.1781320000001,
+          180.50687900000005
+        ]
+      },
+      "ranges_separated": true
+    },
+    "parseMaxMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "stringifyMaxMs": {
+      "parent": 6.549374999999998,
+      "candidate": 6.533917000000002,
+      "delta_percent": -0.23602252123287037,
+      "ranges": {
+        "parent": [
+          6.485875000000007,
+          6.604208
+        ],
+        "candidate": [
+          6.519959000000014,
+          6.590375000000009
+        ]
+      },
+      "ranges_separated": false
+    },
+    "loopCpuUs": {
+      "parent": 180020,
+      "candidate": 180384,
+      "delta_percent": 0.20219975558271042,
+      "ranges": {
+        "parent": [
+          179769,
+          180107
+        ],
+        "candidate": [
+          180188,
+          180515
+        ]
+      },
+      "ranges_separated": true
+    },
+    "drainCpuUs": {
+      "parent": 3552,
+      "candidate": 3552,
+      "delta_percent": 0.0,
+      "ranges": {
+        "parent": [
+          3543,
+          3593
+        ],
+        "candidate": [
+          3533,
+          3606
+        ]
+      },
+      "ranges_separated": false
+    },
+    "totalCpuUs": {
+      "parent": 183572,
+      "candidate": 183990,
+      "delta_percent": 0.22770357135075692,
+      "ranges": {
+        "parent": [
+          183312,
+          183700
+        ],
+        "candidate": [
+          183721,
+          184067
+        ]
+      },
+      "ranges_separated": true
+    },
+    "loopMs": {
+      "parent": 180.01304199999998,
+      "candidate": 180.376209,
+      "delta_percent": 0.20174482691093232,
+      "ranges": {
+        "parent": [
+          179.76483399999998,
+          180.104917
+        ],
+        "candidate": [
+          180.184708,
+          180.516583
+        ]
+      },
+      "ranges_separated": true
+    },
+    "drainMs": {
+      "parent": 3.550459000000018,
+      "candidate": 3.5507080000000144,
+      "delta_percent": 0.007013177732706488,
+      "ranges": {
+        "parent": [
+          3.5392499999999814,
+          3.591000000000008
+        ],
+        "candidate": [
+          3.527832999999987,
+          3.6044580000000224
+        ]
+      },
+      "ranges_separated": false
+    },
+    "peak_rss": {
+      "parent": 64339968,
+      "candidate": 64471040,
+      "delta_percent": 0.2037178507766635,
+      "ranges": {
+        "parent": [
+          64339968,
+          64339968
+        ],
+        "candidate": [
+          64471040,
+          64471040
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssLoop": {
+      "parent": 63619072,
+      "candidate": 63782912,
+      "delta_percent": 0.2575328354365247,
+      "ranges": {
+        "parent": [
+          63619072,
+          63619072
+        ],
+        "candidate": [
+          63782912,
+          63782912
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssDrained": {
+      "parent": 63635456,
+      "candidate": 63799296,
+      "delta_percent": 0.2574665293511913,
+      "ranges": {
+        "parent": [
+          63635456,
+          63635456
+        ],
+        "candidate": [
+          63799296,
+          63799296
+        ]
+      },
+      "ranges_separated": true
+    }
+  },
+  {
+    "fixture": "records_object_1m",
+    "operation": "stringify",
+    "mode": "latest",
+    "iterations": 120,
+    "parseMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "stringifyMs": {
+      "parent": 180.07657800000015,
+      "candidate": 180.72095600000003,
+      "delta_percent": 0.357835542610041,
+      "ranges": {
+        "parent": [
+          180.01057799999998,
+          180.410086
+        ],
+        "candidate": [
+          179.515579,
+          181.04987400000007
+        ]
+      },
+      "ranges_separated": false
+    },
+    "parseMaxMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "stringifyMaxMs": {
+      "parent": 6.506875000000008,
+      "candidate": 6.517667000000003,
+      "delta_percent": 0.1658553453077749,
+      "ranges": {
+        "parent": [
+          6.503250000000008,
+          6.519083000000009
+        ],
+        "candidate": [
+          6.473416999999998,
+          6.66449999999999
+        ]
+      },
+      "ranges_separated": false
+    },
+    "loopCpuUs": {
+      "parent": 180079,
+      "candidate": 180735,
+      "delta_percent": 0.36428456399690834,
+      "ranges": {
+        "parent": [
+          180025,
+          180427
+        ],
+        "candidate": [
+          179527,
+          181059
+        ]
+      },
+      "ranges_separated": false
+    },
+    "drainCpuUs": {
+      "parent": 3550,
+      "candidate": 3597,
+      "delta_percent": 1.323943661971838,
+      "ranges": {
+        "parent": [
+          3550,
+          3603
+        ],
+        "candidate": [
+          3574,
+          3618
+        ]
+      },
+      "ranges_separated": false
+    },
+    "totalCpuUs": {
+      "parent": 183682,
+      "candidate": 184309,
+      "delta_percent": 0.3413508128178089,
+      "ranges": {
+        "parent": [
+          183575,
+          183977
+        ],
+        "candidate": [
+          183124,
+          184677
+        ]
+      },
+      "ranges_separated": false
+    },
+    "loopMs": {
+      "parent": 180.085375,
+      "candidate": 180.728916,
+      "delta_percent": 0.3573532831302906,
+      "ranges": {
+        "parent": [
+          180.022375,
+          180.420208
+        ],
+        "candidate": [
+          179.523917,
+          181.05683399999998
+        ]
+      },
+      "ranges_separated": false
+    },
+    "drainMs": {
+      "parent": 3.549124999999975,
+      "candidate": 3.595291000000003,
+      "delta_percent": 1.3007713168746715,
+      "ranges": {
+        "parent": [
+          3.5477500000000077,
+          3.6000410000000045
+        ],
+        "candidate": [
+          3.5727919999999926,
+          3.6167910000000063
+        ]
+      },
+      "ranges_separated": false
+    },
+    "peak_rss": {
+      "parent": 66191360,
+      "candidate": 66306048,
+      "delta_percent": 0.17326732673266232,
+      "ranges": {
+        "parent": [
+          66191360,
+          66191360
+        ],
+        "candidate": [
+          66306048,
+          66306048
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssLoop": {
+      "parent": 63619072,
+      "candidate": 63782912,
+      "delta_percent": 0.2575328354365247,
+      "ranges": {
+        "parent": [
+          63619072,
+          63619072
+        ],
+        "candidate": [
+          63782912,
+          63782912
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssDrained": {
+      "parent": 63635456,
+      "candidate": 63799296,
+      "delta_percent": 0.2574665293511913,
+      "ranges": {
+        "parent": [
+          63635456,
+          63635456
+        ],
+        "candidate": [
+          63799296,
+          63799296
+        ]
+      },
+      "ranges_separated": true
+    }
+  },
+  {
+    "fixture": "records_object_1m",
+    "operation": "stringify",
+    "mode": "retain",
+    "iterations": 16,
+    "parseMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "stringifyMs": {
+      "parent": 22.304667000000002,
+      "candidate": 22.39550300000002,
+      "delta_percent": 0.4072510923387451,
+      "ranges": {
+        "parent": [
+          22.287209999999998,
+          22.379080000000002
+        ],
+        "candidate": [
+          22.368124000000023,
+          22.412127999999996
+        ]
+      },
+      "ranges_separated": false
+    },
+    "parseMaxMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "stringifyMaxMs": {
+      "parent": 1.464375000000004,
+      "candidate": 1.4784590000000009,
+      "delta_percent": 0.9617755014935891,
+      "ranges": {
+        "parent": [
+          1.459417000000009,
+          1.4832079999999976
+        ],
+        "candidate": [
+          1.4562080000000037,
+          1.4804170000000099
+        ]
+      },
+      "ranges_separated": false
+    },
+    "loopCpuUs": {
+      "parent": 22309,
+      "candidate": 22405,
+      "delta_percent": 0.43031960195436536,
+      "ranges": {
+        "parent": [
+          22291,
+          22354
+        ],
+        "candidate": [
+          22377,
+          22417
+        ]
+      },
+      "ranges_separated": true
+    },
+    "drainCpuUs": {
+      "parent": 4151,
+      "candidate": 4141,
+      "delta_percent": -0.24090580582991628,
+      "ranges": {
+        "parent": [
+          4129,
+          4208
+        ],
+        "candidate": [
+          4124,
+          4153
+        ]
+      },
+      "ranges_separated": false
+    },
+    "totalCpuUs": {
+      "parent": 26460,
+      "candidate": 26529,
+      "delta_percent": 0.2607709750566789,
+      "ranges": {
+        "parent": [
+          26420,
+          26562
+        ],
+        "candidate": [
+          26518,
+          26570
+        ]
+      },
+      "ranges_separated": false
+    },
+    "loopMs": {
+      "parent": 22.30625,
+      "candidate": 22.397458000000004,
+      "delta_percent": 0.40888988512191027,
+      "ranges": {
+        "parent": [
+          22.288999999999998,
+          22.381084
+        ],
+        "candidate": [
+          22.370000000000005,
+          22.413959000000006
+        ]
+      },
+      "ranges_separated": false
+    },
+    "drainMs": {
+      "parent": 4.149541999999997,
+      "candidate": 4.140541999999996,
+      "delta_percent": -0.21689140632871196,
+      "ranges": {
+        "parent": [
+          4.128374999999998,
+          4.206083999999997
+        ],
+        "candidate": [
+          4.123124999999995,
+          4.153292
+        ]
+      },
+      "ranges_separated": false
+    },
+    "peak_rss": {
+      "parent": 42893312,
+      "candidate": 43024384,
+      "delta_percent": 0.30557677616500634,
+      "ranges": {
+        "parent": [
+          42893312,
+          42893312
+        ],
+        "candidate": [
+          43008000,
+          43024384
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssLoop": {
+      "parent": 37502976,
+      "candidate": 37666816,
+      "delta_percent": 0.4368719965050172,
+      "ranges": {
+        "parent": [
+          37502976,
+          37502976
+        ],
+        "candidate": [
+          37650432,
+          37666816
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssDrained": {
+      "parent": 38502400,
+      "candidate": 38666240,
+      "delta_percent": 0.42553191489360653,
+      "ranges": {
+        "parent": [
+          38502400,
+          38502400
+        ],
+        "candidate": [
+          38649856,
+          38666240
+        ]
+      },
+      "ranges_separated": true
+    }
+  },
+  {
+    "fixture": "records_object_20m",
+    "operation": "parse",
+    "mode": "discard",
+    "iterations": 8,
+    "parseMs": {
+      "parent": 591.1001249999999,
+      "candidate": 387.52279199999987,
+      "delta_percent": -34.44041447292878,
+      "ranges": {
+        "parent": [
+          590.827917,
+          591.1217499999999
+        ],
+        "candidate": [
+          387.425417,
+          388.3682079999999
+        ]
+      },
+      "ranges_separated": true
+    },
+    "stringifyMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "parseMaxMs": {
+      "parent": 161.52179099999995,
+      "candidate": 50.77108399999997,
+      "delta_percent": -68.56703749650721,
+      "ranges": {
+        "parent": [
+          161.42129100000005,
+          161.57825000000003
+        ],
+        "candidate": [
+          50.706999999999994,
+          50.875749999999925
+        ]
+      },
+      "ranges_separated": true
+    },
+    "stringifyMaxMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "loopCpuUs": {
+      "parent": 809302,
+      "candidate": 640633,
+      "delta_percent": -20.841292867186787,
+      "ranges": {
+        "parent": [
+          808721,
+          809754
+        ],
+        "candidate": [
+          639240,
+          640723
+        ]
+      },
+      "ranges_separated": true
+    },
+    "drainCpuUs": {
+      "parent": 401253,
+      "candidate": 460368,
+      "delta_percent": 14.732600130092477,
+      "ranges": {
+        "parent": [
+          401083,
+          401395
+        ],
+        "candidate": [
+          459487,
+          460683
+        ]
+      },
+      "ranges_separated": true
+    },
+    "totalCpuUs": {
+      "parent": 1210385,
+      "candidate": 1100120,
+      "delta_percent": -9.109911309211526,
+      "ranges": {
+        "parent": [
+          1209974,
+          1211149
+        ],
+        "candidate": [
+          1099608,
+          1101406
+        ]
+      },
+      "ranges_separated": true
+    },
+    "loopMs": {
+      "parent": 809.307459,
+      "candidate": 640.640708,
+      "delta_percent": -20.840874395054843,
+      "ranges": {
+        "parent": [
+          808.719083,
+          809.758917
+        ],
+        "candidate": [
+          639.237167,
+          640.728792
+        ]
+      },
+      "ranges_separated": true
+    },
+    "drainMs": {
+      "parent": 401.251166,
+      "candidate": 460.3731250000001,
+      "delta_percent": 14.734401793613738,
+      "ranges": {
+        "parent": [
+          401.08133399999997,
+          401.3932910000001
+        ],
+        "candidate": [
+          459.48675000000003,
+          460.68045800000004
+        ]
+      },
+      "ranges_separated": true
+    },
+    "peak_rss": {
+      "parent": 385302528,
+      "candidate": 433504256,
+      "delta_percent": 12.51009907726326,
+      "ranges": {
+        "parent": [
+          385302528,
+          385318912
+        ],
+        "candidate": [
+          433504256,
+          433504256
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssLoop": {
+      "parent": 323256320,
+      "candidate": 371326976,
+      "delta_percent": 14.870755195134322,
+      "ranges": {
+        "parent": [
+          323256320,
+          323256320
+        ],
+        "candidate": [
+          371310592,
+          371326976
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssDrained": {
+      "parent": 384434176,
+      "candidate": 432685056,
+      "delta_percent": 12.551142175247175,
+      "ranges": {
+        "parent": [
+          384434176,
+          384450560
+        ],
+        "candidate": [
+          432685056,
+          432685056
+        ]
+      },
+      "ranges_separated": true
+    }
+  },
+  {
+    "fixture": "records_object_20m",
+    "operation": "parse",
+    "mode": "latest",
+    "iterations": 8,
+    "parseMs": {
+      "parent": 591.2496649999997,
+      "candidate": 388.3379999999996,
+      "delta_percent": -34.3191171194998,
+      "ranges": {
+        "parent": [
+          590.9529589999997,
+          592.3609590000003
+        ],
+        "candidate": [
+          388.11483299999986,
+          389.85029299999985
+        ]
+      },
+      "ranges_separated": true
+    },
+    "stringifyMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "parseMaxMs": {
+      "parent": 161.67820799999998,
+      "candidate": 51.04049999999995,
+      "delta_percent": -68.4308104157117,
+      "ranges": {
+        "parent": [
+          161.39499999999992,
+          162.53574999999995
+        ],
+        "candidate": [
+          50.819875000000025,
+          51.124958999999876
+        ]
+      },
+      "ranges_separated": true
+    },
+    "stringifyMaxMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "loopCpuUs": {
+      "parent": 810046,
+      "candidate": 640262,
+      "delta_percent": -20.959797344842144,
+      "ranges": {
+        "parent": [
+          809108,
+          811043
+        ],
+        "candidate": [
+          639809,
+          641802
+        ]
+      },
+      "ranges_separated": true
+    },
+    "drainCpuUs": {
+      "parent": 423224,
+      "candidate": 487008,
+      "delta_percent": 15.070978961495562,
+      "ranges": {
+        "parent": [
+          422880,
+          423374
+        ],
+        "candidate": [
+          486309,
+          487537
+        ]
+      },
+      "ranges_separated": true
+    },
+    "totalCpuUs": {
+      "parent": 1232926,
+      "candidate": 1127799,
+      "delta_percent": -8.526626902182288,
+      "ranges": {
+        "parent": [
+          1232332,
+          1234417
+        ],
+        "candidate": [
+          1126118,
+          1128810
+        ]
+      },
+      "ranges_separated": true
+    },
+    "loopMs": {
+      "parent": 810.0497920000001,
+      "candidate": 640.260834,
+      "delta_percent": -20.960311289111477,
+      "ranges": {
+        "parent": [
+          809.1196249999998,
+          811.0516250000001
+        ],
+        "candidate": [
+          639.8057090000001,
+          641.798625
+        ]
+      },
+      "ranges_separated": true
+    },
+    "drainMs": {
+      "parent": 423.230959,
+      "candidate": 487.0068749999998,
+      "delta_percent": 15.068821087825901,
+      "ranges": {
+        "parent": [
+          422.8756250000001,
+          423.37295800000015
+        ],
+        "candidate": [
+          486.30829100000017,
+          487.536709
+        ]
+      },
+      "ranges_separated": true
+    },
+    "peak_rss": {
+      "parent": 438829056,
+      "candidate": 477593600,
+      "delta_percent": 8.833632019115889,
+      "ranges": {
+        "parent": [
+          438829056,
+          438829056
+        ],
+        "candidate": [
+          477593600,
+          477593600
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssLoop": {
+      "parent": 323256320,
+      "candidate": 371310592,
+      "delta_percent": 14.865686771414088,
+      "ranges": {
+        "parent": [
+          323256320,
+          323256320
+        ],
+        "candidate": [
+          371310592,
+          371326976
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssDrained": {
+      "parent": 395755520,
+      "candidate": 445480960,
+      "delta_percent": 12.564686400331194,
+      "ranges": {
+        "parent": [
+          395739136,
+          395755520
+        ],
+        "candidate": [
+          445480960,
+          445497344
+        ]
+      },
+      "ranges_separated": true
+    }
+  },
+  {
+    "fixture": "records_object_20m",
+    "operation": "parse",
+    "mode": "retain",
+    "iterations": 2,
+    "parseMs": {
+      "parent": 181.49037599999997,
+      "candidate": 95.65425099999996,
+      "delta_percent": -47.2951386689507,
+      "ranges": {
+        "parent": [
+          181.45845799999995,
+          182.74758300000008
+        ],
+        "candidate": [
+          95.62729200000004,
+          95.69333300000002
+        ]
+      },
+      "ranges_separated": true
+    },
+    "stringifyMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "parseMaxMs": {
+      "parent": 132.97070899999994,
+      "candidate": 47.91191700000002,
+      "delta_percent": -63.968066831921575,
+      "ranges": {
+        "parent": [
+          132.93170799999996,
+          133.74895800000007
+        ],
+        "candidate": [
+          47.91104199999995,
+          47.962875000000054
+        ]
+      },
+      "ranges_separated": true
+    },
+    "stringifyMaxMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "loopCpuUs": {
+      "parent": 219423,
+      "candidate": 166575,
+      "delta_percent": -24.084986532861187,
+      "ranges": {
+        "parent": [
+          219317,
+          221093
+        ],
+        "candidate": [
+          165815,
+          166642
+        ]
+      },
+      "ranges_separated": true
+    },
+    "drainCpuUs": {
+      "parent": 132752,
+      "candidate": 158608,
+      "delta_percent": 19.47691936844642,
+      "ranges": {
+        "parent": [
+          132307,
+          133258
+        ],
+        "candidate": [
+          158486,
+          158843
+        ]
+      },
+      "ranges_separated": true
+    },
+    "totalCpuUs": {
+      "parent": 352069,
+      "candidate": 325128,
+      "delta_percent": -7.6521931780417995,
+      "ranges": {
+        "parent": [
+          351730,
+          354351
+        ],
+        "candidate": [
+          324658,
+          325183
+        ]
+      },
+      "ranges_separated": true
+    },
+    "loopMs": {
+      "parent": 219.419875,
+      "candidate": 166.56904199999997,
+      "delta_percent": -24.086620685569173,
+      "ranges": {
+        "parent": [
+          219.309584,
+          221.11154100000002
+        ],
+        "candidate": [
+          165.80775,
+          166.638375
+        ]
+      },
+      "ranges_separated": true
+    },
+    "drainMs": {
+      "parent": 132.747,
+      "candidate": 158.60654199999993,
+      "delta_percent": 19.480321212532047,
+      "ranges": {
+        "parent": [
+          132.30499999999995,
+          133.255041
+        ],
+        "candidate": [
+          158.48508399999992,
+          158.84275000000002
+        ]
+      },
+      "ranges_separated": true
+    },
+    "peak_rss": {
+      "parent": 283918336,
+      "candidate": 286244864,
+      "delta_percent": 0.819435628137799,
+      "ranges": {
+        "parent": [
+          283918336,
+          283918336
+        ],
+        "candidate": [
+          286244864,
+          286244864
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssLoop": {
+      "parent": 192217088,
+      "candidate": 197558272,
+      "delta_percent": 2.778724855097181,
+      "ranges": {
+        "parent": [
+          192200704,
+          192217088
+        ],
+        "candidate": [
+          197558272,
+          197558272
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssDrained": {
+      "parent": 207503360,
+      "candidate": 213123072,
+      "delta_percent": 2.7082510856691666,
+      "ranges": {
+        "parent": [
+          207486976,
+          207503360
+        ],
+        "candidate": [
+          213123072,
+          213123072
+        ]
+      },
+      "ranges_separated": true
+    }
+  },
+  {
+    "fixture": "records_object_20m",
+    "operation": "roundtrip",
+    "mode": "discard",
+    "iterations": 8,
+    "parseMs": {
+      "parent": 610.1427100000001,
+      "candidate": 604.4828750000003,
+      "delta_percent": -0.9276247846999319,
+      "ranges": {
+        "parent": [
+          608.8218750000004,
+          610.7315820000001
+        ],
+        "candidate": [
+          603.80296,
+          604.5150409999995
+        ]
+      },
+      "ranges_separated": true
+    },
+    "stringifyMs": {
+      "parent": 221.73599999999982,
+      "candidate": 222.69045800000015,
+      "delta_percent": 0.43044792004922616,
+      "ranges": {
+        "parent": [
+          221.6875420000003,
+          221.7877910000003
+        ],
+        "candidate": [
+          221.56816800000001,
+          222.85529199999996
+        ]
+      },
+      "ranges_separated": false
+    },
+    "parseMaxMs": {
+      "parent": 134.89579100000003,
+      "candidate": 133.99637500000006,
+      "delta_percent": -0.6667487497812097,
+      "ranges": {
+        "parent": [
+          134.01308300000005,
+          134.96916699999997
+        ],
+        "candidate": [
+          133.52391699999998,
+          134.07891699999993
+        ]
+      },
+      "ranges_separated": false
+    },
+    "stringifyMaxMs": {
+      "parent": 28.536625000000186,
+      "candidate": 28.572541,
+      "delta_percent": 0.12585931237423242,
+      "ranges": {
+        "parent": [
+          28.4045000000001,
+          28.612666999999874
+        ],
+        "candidate": [
+          28.265249999999924,
+          28.692833000000064
+        ]
+      },
+      "ranges_separated": false
+    },
+    "loopCpuUs": {
+      "parent": 1239825,
+      "candidate": 1234812,
+      "delta_percent": -0.40433125642731493,
+      "ranges": {
+        "parent": [
+          1238246,
+          1240348
+        ],
+        "candidate": [
+          1234180,
+          1236030
+        ]
+      },
+      "ranges_separated": true
+    },
+    "drainCpuUs": {
+      "parent": 3829,
+      "candidate": 3836,
+      "delta_percent": 0.1828153564899404,
+      "ranges": {
+        "parent": [
+          3825,
+          3844
+        ],
+        "candidate": [
+          3809,
+          3876
+        ]
+      },
+      "ranges_separated": false
+    },
+    "totalCpuUs": {
+      "parent": 1243669,
+      "candidate": 1238688,
+      "delta_percent": -0.4005084954276428,
+      "ranges": {
+        "parent": [
+          1242075,
+          1244173
+        ],
+        "candidate": [
+          1237989,
+          1239866
+        ]
+      },
+      "ranges_separated": true
+    },
+    "loopMs": {
+      "parent": 1239.8248749999998,
+      "candidate": 1234.809209,
+      "delta_percent": -0.40454632756096176,
+      "ranges": {
+        "parent": [
+          1238.2430829999998,
+          1240.3595
+        ],
+        "candidate": [
+          1234.1855,
+          1236.0315
+        ]
+      },
+      "ranges_separated": true
+    },
+    "drainMs": {
+      "parent": 3.824292000000014,
+      "candidate": 3.831208000000288,
+      "delta_percent": 0.18084393138060317,
+      "ranges": {
+        "parent": [
+          3.8235830000000988,
+          3.8419169999999667
+        ],
+        "candidate": [
+          3.806332999999995,
+          3.87433400000009
+        ]
+      },
+      "ranges_separated": false
+    },
+    "peak_rss": {
+      "parent": 300171264,
+      "candidate": 300285952,
+      "delta_percent": 0.038207521423494484,
+      "ranges": {
+        "parent": [
+          300171264,
+          300187648
+        ],
+        "candidate": [
+          300253184,
+          300285952
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssLoop": {
+      "parent": 299532288,
+      "candidate": 299646976,
+      "delta_percent": 0.03828902745870444,
+      "ranges": {
+        "parent": [
+          299532288,
+          299548672
+        ],
+        "candidate": [
+          299614208,
+          299646976
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssDrained": {
+      "parent": 299532288,
+      "candidate": 299646976,
+      "delta_percent": 0.03828902745870444,
+      "ranges": {
+        "parent": [
+          299532288,
+          299548672
+        ],
+        "candidate": [
+          299614208,
+          299646976
+        ]
+      },
+      "ranges_separated": true
+    }
+  },
+  {
+    "fixture": "records_object_20m",
+    "operation": "stringify",
+    "mode": "discard",
+    "iterations": 8,
+    "parseMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "stringifyMs": {
+      "parent": 220.6698330000001,
+      "candidate": 220.58574999999996,
+      "delta_percent": -0.03810353180452308,
+      "ranges": {
+        "parent": [
+          220.64383199999986,
+          220.7702089999998
+        ],
+        "candidate": [
+          220.38178999999997,
+          222.2800430000002
+        ]
+      },
+      "ranges_separated": false
+    },
+    "parseMaxMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "stringifyMaxMs": {
+      "parent": 28.052291000000025,
+      "candidate": 27.996416000000067,
+      "delta_percent": -0.199181592690445,
+      "ranges": {
+        "parent": [
+          27.916583000000003,
+          28.147415999999964
+        ],
+        "candidate": [
+          27.990291000000013,
+          28.729667000000006
+        ]
+      },
+      "ranges_separated": false
+    },
+    "loopCpuUs": {
+      "parent": 332663,
+      "candidate": 332268,
+      "delta_percent": -0.1187387836940057,
+      "ranges": {
+        "parent": [
+          332081,
+          332739
+        ],
+        "candidate": [
+          332174,
+          334385
+        ]
+      },
+      "ranges_separated": false
+    },
+    "drainCpuUs": {
+      "parent": 74796,
+      "candidate": 74983,
+      "delta_percent": 0.2500133696989204,
+      "ranges": {
+        "parent": [
+          74386,
+          74799
+        ],
+        "candidate": [
+          74580,
+          75728
+        ]
+      },
+      "ranges_separated": false
+    },
+    "totalCpuUs": {
+      "parent": 407125,
+      "candidate": 407251,
+      "delta_percent": 0.03094872582130037,
+      "ranges": {
+        "parent": [
+          406877,
+          407462
+        ],
+        "candidate": [
+          406754,
+          410113
+        ]
+      },
+      "ranges_separated": false
+    },
+    "loopMs": {
+      "parent": 332.65766699999995,
+      "candidate": 332.2655,
+      "delta_percent": -0.11788906100876906,
+      "ranges": {
+        "parent": [
+          332.07695800000005,
+          332.735334
+        ],
+        "candidate": [
+          332.169583,
+          334.380792
+        ]
+      },
+      "ranges_separated": false
+    },
+    "drainMs": {
+      "parent": 74.79445899999996,
+      "candidate": 74.98137500000007,
+      "delta_percent": 0.24990621297242832,
+      "ranges": {
+        "parent": [
+          74.38495899999998,
+          74.803042
+        ],
+        "candidate": [
+          74.57862499999999,
+          75.72562499999992
+        ]
+      },
+      "ranges_separated": false
+    },
+    "peak_rss": {
+      "parent": 304119808,
+      "candidate": 304250880,
+      "delta_percent": 0.04309880400819033,
+      "ranges": {
+        "parent": [
+          304119808,
+          304136192
+        ],
+        "candidate": [
+          304234496,
+          304250880
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssLoop": {
+      "parent": 298942464,
+      "candidate": 299073536,
+      "delta_percent": 0.04384522635099142,
+      "ranges": {
+        "parent": [
+          298942464,
+          298958848
+        ],
+        "candidate": [
+          299057152,
+          299073536
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssDrained": {
+      "parent": 303464448,
+      "candidate": 303595520,
+      "delta_percent": 0.043191879926562926,
+      "ranges": {
+        "parent": [
+          303464448,
+          303480832
+        ],
+        "candidate": [
+          303579136,
+          303595520
+        ]
+      },
+      "ranges_separated": true
+    }
+  },
+  {
+    "fixture": "records_object_20m",
+    "operation": "stringify",
+    "mode": "latest",
+    "iterations": 8,
+    "parseMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "stringifyMs": {
+      "parent": 221.13225,
+      "candidate": 221.2286239999999,
+      "delta_percent": 0.04358206457897307,
+      "ranges": {
+        "parent": [
+          221.0337490000001,
+          221.63108299999988
+        ],
+        "candidate": [
+          221.20791700000007,
+          221.282042
+        ]
+      },
+      "ranges_separated": false
+    },
+    "parseMaxMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "stringifyMaxMs": {
+      "parent": 28.215333999999984,
+      "candidate": 28.18674999999996,
+      "delta_percent": -0.10130661575731281,
+      "ranges": {
+        "parent": [
+          28.155708000000004,
+          28.301459000000023
+        ],
+        "candidate": [
+          28.09129200000001,
+          28.341459000000043
+        ]
+      },
+      "ranges_separated": false
+    },
+    "loopCpuUs": {
+      "parent": 332296,
+      "candidate": 332682,
+      "delta_percent": 0.1161614945710987,
+      "ranges": {
+        "parent": [
+          332287,
+          333234
+        ],
+        "candidate": [
+          332572,
+          333593
+        ]
+      },
+      "ranges_separated": false
+    },
+    "drainCpuUs": {
+      "parent": 74811,
+      "candidate": 74832,
+      "delta_percent": 0.02807073826041062,
+      "ranges": {
+        "parent": [
+          74749,
+          75086
+        ],
+        "candidate": [
+          74550,
+          75196
+        ]
+      },
+      "ranges_separated": false
+    },
+    "totalCpuUs": {
+      "parent": 407107,
+      "candidate": 407878,
+      "delta_percent": 0.18938510023163158,
+      "ranges": {
+        "parent": [
+          407036,
+          408320
+        ],
+        "candidate": [
+          407404,
+          408143
+        ]
+      },
+      "ranges_separated": false
+    },
+    "loopMs": {
+      "parent": 332.2916669999999,
+      "candidate": 332.6780829999999,
+      "delta_percent": 0.11628820051030608,
+      "ranges": {
+        "parent": [
+          332.28391700000003,
+          333.23012499999993
+        ],
+        "candidate": [
+          332.568125,
+          333.590375
+        ]
+      },
+      "ranges_separated": false
+    },
+    "drainMs": {
+      "parent": 74.80958299999998,
+      "candidate": 74.83112500000004,
+      "delta_percent": 0.028795776070644763,
+      "ranges": {
+        "parent": [
+          74.7467499999999,
+          75.082583
+        ],
+        "candidate": [
+          74.54604099999995,
+          75.19433299999992
+        ]
+      },
+      "ranges_separated": false
+    },
+    "peak_rss": {
+      "parent": 318275584,
+      "candidate": 318373888,
+      "delta_percent": 0.030886440852473385,
+      "ranges": {
+        "parent": [
+          318259200,
+          318275584
+        ],
+        "candidate": [
+          318357504,
+          318373888
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssLoop": {
+      "parent": 298958848,
+      "candidate": 299073536,
+      "delta_percent": 0.03836247054309627,
+      "ranges": {
+        "parent": [
+          298942464,
+          298958848
+        ],
+        "candidate": [
+          299057152,
+          299073536
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssDrained": {
+      "parent": 303480832,
+      "candidate": 303595520,
+      "delta_percent": 0.03779085461317333,
+      "ranges": {
+        "parent": [
+          303464448,
+          303480832
+        ],
+        "candidate": [
+          303579136,
+          303595520
+        ]
+      },
+      "ranges_separated": true
+    }
+  },
+  {
+    "fixture": "records_object_20m",
+    "operation": "stringify",
+    "mode": "retain",
+    "iterations": 2,
+    "parseMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "stringifyMs": {
+      "parent": 54.092584000000045,
+      "candidate": 54.155415999999946,
+      "delta_percent": 0.11615640325095544,
+      "ranges": {
+        "parent": [
+          53.97341599999993,
+          54.19629199999997
+        ],
+        "candidate": [
+          54.10879200000005,
+          54.30129099999999
+        ]
+      },
+      "ranges_separated": false
+    },
+    "parseMaxMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "stringifyMaxMs": {
+      "parent": 27.49987500000003,
+      "candidate": 27.521415999999988,
+      "delta_percent": 0.07833126514196209,
+      "ranges": {
+        "parent": [
+          27.432374999999922,
+          27.54608300000001
+        ],
+        "candidate": [
+          27.42333400000001,
+          27.586540999999954
+        ]
+      },
+      "ranges_separated": false
+    },
+    "loopCpuUs": {
+      "parent": 83982,
+      "candidate": 84433,
+      "delta_percent": 0.5370198375842516,
+      "ranges": {
+        "parent": [
+          83977,
+          84008
+        ],
+        "candidate": [
+          84094,
+          84563
+        ]
+      },
+      "ranges_separated": true
+    },
+    "drainCpuUs": {
+      "parent": 75170,
+      "candidate": 75466,
+      "delta_percent": 0.3937741120127791,
+      "ranges": {
+        "parent": [
+          74799,
+          75268
+        ],
+        "candidate": [
+          75356,
+          75672
+        ]
+      },
+      "ranges_separated": true
+    },
+    "totalCpuUs": {
+      "parent": 159152,
+      "candidate": 159899,
+      "delta_percent": 0.46936262189605227,
+      "ranges": {
+        "parent": [
+          158807,
+          159245
+        ],
+        "candidate": [
+          159766,
+          159919
+        ]
+      },
+      "ranges_separated": true
+    },
+    "loopMs": {
+      "parent": 83.97425000000004,
+      "candidate": 84.43287500000002,
+      "delta_percent": 0.5461495637055114,
+      "ranges": {
+        "parent": [
+          83.97283400000003,
+          84.00400000000002
+        ],
+        "candidate": [
+          84.08979199999999,
+          84.55908400000004
+        ]
+      },
+      "ranges_separated": true
+    },
+    "drainMs": {
+      "parent": 75.16741700000006,
+      "candidate": 75.46408300000002,
+      "delta_percent": 0.3946736655856542,
+      "ranges": {
+        "parent": [
+          74.79791599999993,
+          75.26770800000003
+        ],
+        "candidate": [
+          75.355208,
+          75.67083300000002
+        ]
+      },
+      "ranges_separated": true
+    },
+    "peak_rss": {
+      "parent": 297615360,
+      "candidate": 297730048,
+      "delta_percent": 0.03853564547207089,
+      "ranges": {
+        "parent": [
+          297615360,
+          297615360
+        ],
+        "candidate": [
+          297730048,
+          297730048
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssLoop": {
+      "parent": 204439552,
+      "candidate": 204554240,
+      "delta_percent": 0.056098733771436926,
+      "ranges": {
+        "parent": [
+          204439552,
+          204439552
+        ],
+        "candidate": [
+          204554240,
+          204554240
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssDrained": {
+      "parent": 218873856,
+      "candidate": 218972160,
+      "delta_percent": 0.04491354143274506,
+      "ranges": {
+        "parent": [
+          218857472,
+          218873856
+        ],
+        "candidate": [
+          218972160,
+          218988544
+        ]
+      },
+      "ranges_separated": true
+    }
+  },
+  {
+    "fixture": "records_object_8m",
+    "operation": "parse",
+    "mode": "discard",
+    "iterations": 20,
+    "parseMs": {
+      "parent": 400.672375,
+      "candidate": 394.16791899999976,
+      "delta_percent": -1.6233851909556396,
+      "ranges": {
+        "parent": [
+          400.6622520000001,
+          402.3667060000002
+        ],
+        "candidate": [
+          393.9884569999997,
+          396.3341660000001
+        ]
+      },
+      "ranges_separated": true
+    },
+    "stringifyMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "parseMaxMs": {
+      "parent": 20.455124999999953,
+      "candidate": 20.13595799999996,
+      "delta_percent": -1.5603277907125679,
+      "ranges": {
+        "parent": [
+          20.34808399999997,
+          20.913208000000054
+        ],
+        "candidate": [
+          20.038250000000062,
+          20.38779199999999
+        ]
+      },
+      "ranges_separated": false
+    },
+    "stringifyMaxMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "loopCpuUs": {
+      "parent": 551102,
+      "candidate": 563860,
+      "delta_percent": 2.314997949562869,
+      "ranges": {
+        "parent": [
+          550613,
+          552758
+        ],
+        "candidate": [
+          563288,
+          564690
+        ]
+      },
+      "ranges_separated": true
+    },
+    "drainCpuUs": {
+      "parent": 479938,
+      "candidate": 454913,
+      "delta_percent": -5.214215169459391,
+      "ranges": {
+        "parent": [
+          477261,
+          481454
+        ],
+        "candidate": [
+          454452,
+          457620
+        ]
+      },
+      "ranges_separated": true
+    },
+    "totalCpuUs": {
+      "parent": 1032556,
+      "candidate": 1019142,
+      "delta_percent": -1.2991062954454735,
+      "ranges": {
+        "parent": [
+          1027874,
+          1032696
+        ],
+        "candidate": [
+          1018201,
+          1021480
+        ]
+      },
+      "ranges_separated": true
+    },
+    "loopMs": {
+      "parent": 551.102958,
+      "candidate": 563.873375,
+      "delta_percent": 2.3172470433374226,
+      "ranges": {
+        "parent": [
+          550.6150839999999,
+          552.7580829999999
+        ],
+        "candidate": [
+          563.284459,
+          564.6861250000001
+        ]
+      },
+      "ranges_separated": true
+    },
+    "drainMs": {
+      "parent": 479.94049999999993,
+      "candidate": 454.911292,
+      "delta_percent": -5.215064784072176,
+      "ranges": {
+        "parent": [
+          477.3198749999999,
+          481.46837500000015
+        ],
+        "candidate": [
+          454.45674999999983,
+          457.6442079999998
+        ]
+      },
+      "ranges_separated": true
+    },
+    "peak_rss": {
+      "parent": 407764992,
+      "candidate": 407617536,
+      "delta_percent": -0.036162005785922435,
+      "ranges": {
+        "parent": [
+          407748608,
+          407764992
+        ],
+        "candidate": [
+          407617536,
+          407633920
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssLoop": {
+      "parent": 329252864,
+      "candidate": 337756160,
+      "delta_percent": 2.5826035031847105,
+      "ranges": {
+        "parent": [
+          329252864,
+          329252864
+        ],
+        "candidate": [
+          337756160,
+          337756160
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssDrained": {
+      "parent": 406896640,
+      "candidate": 406798336,
+      "delta_percent": -0.024159452385741353,
+      "ranges": {
+        "parent": [
+          406880256,
+          406896640
+        ],
+        "candidate": [
+          406798336,
+          406814720
+        ]
+      },
+      "ranges_separated": true
+    }
+  },
+  {
+    "fixture": "records_object_8m",
+    "operation": "parse",
+    "mode": "latest",
+    "iterations": 20,
+    "parseMs": {
+      "parent": 400.6561669999999,
+      "candidate": 394.4673359999997,
+      "delta_percent": -1.5446738400011206,
+      "ranges": {
+        "parent": [
+          400.6503340000004,
+          401.6713739999997
+        ],
+        "candidate": [
+          394.42120799999987,
+          394.8969150000001
+        ]
+      },
+      "ranges_separated": true
+    },
+    "stringifyMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "parseMaxMs": {
+      "parent": 20.400375000000054,
+      "candidate": 20.162167000000068,
+      "delta_percent": -1.16766481008308,
+      "ranges": {
+        "parent": [
+          20.34712499999989,
+          20.402541999999926
+        ],
+        "candidate": [
+          20.138957999999946,
+          20.510958000000016
+        ]
+      },
+      "ranges_separated": false
+    },
+    "stringifyMaxMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "loopCpuUs": {
+      "parent": 550423,
+      "candidate": 563904,
+      "delta_percent": 2.4492072460634784,
+      "ranges": {
+        "parent": [
+          550151,
+          551638
+        ],
+        "candidate": [
+          563574,
+          564244
+        ]
+      },
+      "ranges_separated": true
+    },
+    "drainCpuUs": {
+      "parent": 488516,
+      "candidate": 473088,
+      "delta_percent": -3.15813606923826,
+      "ranges": {
+        "parent": [
+          488515,
+          488722
+        ],
+        "candidate": [
+          473033,
+          474800
+        ]
+      },
+      "ranges_separated": true
+    },
+    "totalCpuUs": {
+      "parent": 1039145,
+      "candidate": 1037277,
+      "delta_percent": -0.17976317068358894,
+      "ranges": {
+        "parent": [
+          1038666,
+          1040154
+        ],
+        "candidate": [
+          1036992,
+          1038374
+        ]
+      },
+      "ranges_separated": true
+    },
+    "loopMs": {
+      "parent": 550.419292,
+      "candidate": 563.9081249999999,
+      "delta_percent": 2.450646842516546,
+      "ranges": {
+        "parent": [
+          550.147917,
+          551.631584
+        ],
+        "candidate": [
+          563.572791,
+          564.242958
+        ]
+      },
+      "ranges_separated": true
+    },
+    "drainMs": {
+      "parent": 488.51708399999984,
+      "candidate": 473.08795899999996,
+      "delta_percent": -3.1583593502330642,
+      "ranges": {
+        "parent": [
+          488.5145829999999,
+          488.7248330000001
+        ],
+        "candidate": [
+          473.03195800000015,
+          474.7991249999999
+        ]
+      },
+      "ranges_separated": true
+    },
+    "peak_rss": {
+      "parent": 415531008,
+      "candidate": 413368320,
+      "delta_percent": -0.5204636858291978,
+      "ranges": {
+        "parent": [
+          415531008,
+          415596544
+        ],
+        "candidate": [
+          413351936,
+          413368320
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssLoop": {
+      "parent": 329252864,
+      "candidate": 337756160,
+      "delta_percent": 2.5826035031847105,
+      "ranges": {
+        "parent": [
+          329252864,
+          329252864
+        ],
+        "candidate": [
+          337756160,
+          337756160
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssDrained": {
+      "parent": 410730496,
+      "candidate": 410664960,
+      "delta_percent": -0.015955961546132436,
+      "ranges": {
+        "parent": [
+          410730496,
+          410730496
+        ],
+        "candidate": [
+          410648576,
+          410664960
+        ]
+      },
+      "ranges_separated": true
+    }
+  },
+  {
+    "fixture": "records_object_8m",
+    "operation": "parse",
+    "mode": "retain",
+    "iterations": 2,
+    "parseMs": {
+      "parent": 39.16599999999998,
+      "candidate": 38.40683299999999,
+      "delta_percent": -1.9383317162845137,
+      "ranges": {
+        "parent": [
+          39.02412500000001,
+          39.25562600000002
+        ],
+        "candidate": [
+          38.405542000000025,
+          38.425376
+        ]
+      },
+      "ranges_separated": true
+    },
+    "stringifyMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "parseMaxMs": {
+      "parent": 19.693249999999992,
+      "candidate": 19.229167000000018,
+      "delta_percent": -2.356558719358026,
+      "ranges": {
+        "parent": [
+          19.56887500000002,
+          19.696584000000016
+        ],
+        "candidate": [
+          19.217874999999992,
+          19.25420899999999
+        ]
+      },
+      "ranges_separated": true
+    },
+    "stringifyMaxMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "loopCpuUs": {
+      "parent": 53029,
+      "candidate": 64793,
+      "delta_percent": 22.184087951875387,
+      "ranges": {
+        "parent": [
+          52983,
+          53146
+        ],
+        "candidate": [
+          64772,
+          65072
+        ]
+      },
+      "ranges_separated": true
+    },
+    "drainCpuUs": {
+      "parent": 61747,
+      "candidate": 69209,
+      "delta_percent": 12.084797641990708,
+      "ranges": {
+        "parent": [
+          61711,
+          61828
+        ],
+        "candidate": [
+          69061,
+          69258
+        ]
+      },
+      "ranges_separated": true
+    },
+    "totalCpuUs": {
+      "parent": 114776,
+      "candidate": 134051,
+      "delta_percent": 16.79358053948561,
+      "ranges": {
+        "parent": [
+          114694,
+          114974
+        ],
+        "candidate": [
+          133981,
+          134133
+        ]
+      },
+      "ranges_separated": true
+    },
+    "loopMs": {
+      "parent": 53.027708000000004,
+      "candidate": 64.787709,
+      "delta_percent": 22.17708711830426,
+      "ranges": {
+        "parent": [
+          52.980125000000015,
+          53.140624999999986
+        ],
+        "candidate": [
+          64.76387499999997,
+          65.06658399999999
+        ]
+      },
+      "ranges_separated": true
+    },
+    "drainMs": {
+      "parent": 61.74574999999999,
+      "candidate": 69.20770800000003,
+      "delta_percent": 12.084974269484206,
+      "ranges": {
+        "parent": [
+          61.70929100000001,
+          61.82695800000002
+        ],
+        "candidate": [
+          69.06,
+          69.25750000000002
+        ]
+      },
+      "ranges_separated": true
+    },
+    "peak_rss": {
+      "parent": 123928576,
+      "candidate": 126582784,
+      "delta_percent": 2.1417239555790557,
+      "ranges": {
+        "parent": [
+          123928576,
+          123928576
+        ],
+        "candidate": [
+          126582784,
+          126599168
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssLoop": {
+      "parent": 76152832,
+      "candidate": 83771392,
+      "delta_percent": 10.004302925989684,
+      "ranges": {
+        "parent": [
+          76152832,
+          76152832
+        ],
+        "candidate": [
+          83771392,
+          83771392
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssDrained": {
+      "parent": 86949888,
+      "candidate": 89718784,
+      "delta_percent": 3.184473337101945,
+      "ranges": {
+        "parent": [
+          86949888,
+          86949888
+        ],
+        "candidate": [
+          89718784,
+          89718784
+        ]
+      },
+      "ranges_separated": true
+    }
+  },
+  {
+    "fixture": "records_object_8m",
+    "operation": "roundtrip",
+    "mode": "discard",
+    "iterations": 20,
+    "parseMs": {
+      "parent": 398.5229160000004,
+      "candidate": 530.5692470000002,
+      "delta_percent": 33.13393676964858,
+      "ranges": {
+        "parent": [
+          398.4536279999999,
+          398.5274999999998
+        ],
+        "candidate": [
+          530.3958339999998,
+          531.3057489999994
+        ]
+      },
+      "ranges_separated": true
+    },
+    "stringifyMs": {
+      "parent": 225.07229099999972,
+      "candidate": 300.9359610000008,
+      "delta_percent": 33.70635703885965,
+      "ranges": {
+        "parent": [
+          224.56362499999994,
+          225.83708
+        ],
+        "candidate": [
+          300.8117090000002,
+          301.89383399999974
+        ]
+      },
+      "ranges_separated": true
+    },
+    "parseMaxMs": {
+      "parent": 20.45062500000006,
+      "candidate": 93.3715830000001,
+      "delta_percent": 356.57080407077945,
+      "ranges": {
+        "parent": [
+          20.355041000000142,
+          20.798875000000066
+        ],
+        "candidate": [
+          93.22783400000003,
+          94.21033299999999
+        ]
+      },
+      "ranges_separated": true
+    },
+    "stringifyMaxMs": {
+      "parent": 12.57224999999994,
+      "candidate": 90.41895900000003,
+      "delta_percent": 619.1947264809438,
+      "ranges": {
+        "parent": [
+          12.519542000000001,
+          12.585290999999984
+        ],
+        "candidate": [
+          90.40670899999998,
+          90.645625
+        ]
+      },
+      "ranges_separated": true
+    },
+    "loopCpuUs": {
+      "parent": 821628,
+      "candidate": 1126065,
+      "delta_percent": 37.05289985248798,
+      "ranges": {
+        "parent": [
+          820158,
+          821990
+        ],
+        "candidate": [
+          1125842,
+          1126920
+        ]
+      },
+      "ranges_separated": true
+    },
+    "drainCpuUs": {
+      "parent": 385977,
+      "candidate": 286192,
+      "delta_percent": -25.852576707938557,
+      "ranges": {
+        "parent": [
+          384225,
+          386626
+        ],
+        "candidate": [
+          285930,
+          287562
+        ]
+      },
+      "ranges_separated": true
+    },
+    "totalCpuUs": {
+      "parent": 1207967,
+      "candidate": 1412850,
+      "delta_percent": 16.96097658296958,
+      "ranges": {
+        "parent": [
+          1204383,
+          1208254
+        ],
+        "candidate": [
+          1412034,
+          1413627
+        ]
+      },
+      "ranges_separated": true
+    },
+    "loopMs": {
+      "parent": 821.631,
+      "candidate": 1126.061417,
+      "delta_percent": 37.051963350944625,
+      "ranges": {
+        "parent": [
+          820.160792,
+          821.999917
+        ],
+        "candidate": [
+          1125.85025,
+          1126.920875
+        ]
+      },
+      "ranges_separated": true
+    },
+    "drainMs": {
+      "parent": 385.9837080000001,
+      "candidate": 286.19062499999995,
+      "delta_percent": -25.854221546573697,
+      "ranges": {
+        "parent": [
+          384.22116700000004,
+          386.631042
+        ],
+        "candidate": [
+          285.9381659999999,
+          287.55745899999965
+        ]
+      },
+      "ranges_separated": true
+    },
+    "peak_rss": {
+      "parent": 459767808,
+      "candidate": 365101056,
+      "delta_percent": -20.590121872995514,
+      "ranges": {
+        "parent": [
+          459767808,
+          459784192
+        ],
+        "candidate": [
+          365084672,
+          365379584
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssLoop": {
+      "parent": 397049856,
+      "candidate": 319045632,
+      "delta_percent": -19.645951968308985,
+      "ranges": {
+        "parent": [
+          397049856,
+          397049856
+        ],
+        "candidate": [
+          319045632,
+          319537152
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssDrained": {
+      "parent": 459128832,
+      "candidate": 364462080,
+      "delta_percent": -20.618777432823045,
+      "ranges": {
+        "parent": [
+          459128832,
+          459145216
+        ],
+        "candidate": [
+          364445696,
+          364740608
+        ]
+      },
+      "ranges_separated": true
+    }
+  },
+  {
+    "fixture": "records_object_8m",
+    "operation": "stringify",
+    "mode": "discard",
+    "iterations": 20,
+    "parseMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "stringifyMs": {
+      "parent": 257.8945860000001,
+      "candidate": 257.74479199999996,
+      "delta_percent": -0.05808342172803904,
+      "ranges": {
+        "parent": [
+          257.54649800000004,
+          257.894751
+        ],
+        "candidate": [
+          257.56837700000017,
+          257.84437599999995
+        ]
+      },
+      "ranges_separated": false
+    },
+    "parseMaxMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "stringifyMaxMs": {
+      "parent": 46.11874999999998,
+      "candidate": 46.27333299999998,
+      "delta_percent": 0.33518471337579125,
+      "ranges": {
+        "parent": [
+          46.05333300000001,
+          46.184582999999975
+        ],
+        "candidate": [
+          46.11604200000005,
+          46.31787499999996
+        ]
+      },
+      "ranges_separated": false
+    },
+    "loopCpuUs": {
+      "parent": 272437,
+      "candidate": 272453,
+      "delta_percent": 0.005872917408433764,
+      "ranges": {
+        "parent": [
+          272145,
+          272502
+        ],
+        "candidate": [
+          272311,
+          272508
+        ]
+      },
+      "ranges_separated": false
+    },
+    "drainCpuUs": {
+      "parent": 31202,
+      "candidate": 31095,
+      "delta_percent": -0.3429267354656762,
+      "ranges": {
+        "parent": [
+          31063,
+          31259
+        ],
+        "candidate": [
+          31046,
+          31278
+        ]
+      },
+      "ranges_separated": false
+    },
+    "totalCpuUs": {
+      "parent": 303696,
+      "candidate": 303548,
+      "delta_percent": -0.04873294346978696,
+      "ranges": {
+        "parent": [
+          303208,
+          303704
+        ],
+        "candidate": [
+          303357,
+          303786
+        ]
+      },
+      "ranges_separated": false
+    },
+    "loopMs": {
+      "parent": 272.429,
+      "candidate": 272.448291,
+      "delta_percent": 0.007081111041773447,
+      "ranges": {
+        "parent": [
+          272.14074999999997,
+          272.498334
+        ],
+        "candidate": [
+          272.305292,
+          272.501333
+        ]
+      },
+      "ranges_separated": false
+    },
+    "drainMs": {
+      "parent": 31.201584000000025,
+      "candidate": 31.09258299999999,
+      "delta_percent": -0.3493444435386239,
+      "ranges": {
+        "parent": [
+          31.05841700000002,
+          31.269207999999992
+        ],
+        "candidate": [
+          31.044167000000016,
+          31.27583400000003
+        ]
+      },
+      "ranges_separated": false
+    },
+    "peak_rss": {
+      "parent": 206438400,
+      "candidate": 206553088,
+      "delta_percent": 0.05555555555556424,
+      "ranges": {
+        "parent": [
+          206438400,
+          206438400
+        ],
+        "candidate": [
+          206553088,
+          206553088
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssLoop": {
+      "parent": 205701120,
+      "candidate": 205815808,
+      "delta_percent": 0.0557546794105912,
+      "ranges": {
+        "parent": [
+          205701120,
+          205701120
+        ],
+        "candidate": [
+          205815808,
+          205815808
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssDrained": {
+      "parent": 205799424,
+      "candidate": 205914112,
+      "delta_percent": 0.05572804713001034,
+      "ranges": {
+        "parent": [
+          205799424,
+          205799424
+        ],
+        "candidate": [
+          205914112,
+          205914112
+        ]
+      },
+      "ranges_separated": true
+    }
+  },
+  {
+    "fixture": "records_object_8m",
+    "operation": "stringify",
+    "mode": "latest",
+    "iterations": 20,
+    "parseMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "stringifyMs": {
+      "parent": 258.00812499999995,
+      "candidate": 257.76191599999987,
+      "delta_percent": -0.09542683975556354,
+      "ranges": {
+        "parent": [
+          257.4095419999999,
+          258.41108299999996
+        ],
+        "candidate": [
+          257.63108300000016,
+          258.27658199999985
+        ]
+      },
+      "ranges_separated": false
+    },
+    "parseMaxMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "stringifyMaxMs": {
+      "parent": 46.15662500000002,
+      "candidate": 46.118999999999915,
+      "delta_percent": -0.08151592539554775,
+      "ranges": {
+        "parent": [
+          46.08633400000002,
+          46.166292
+        ],
+        "candidate": [
+          46.09483399999999,
+          46.59249999999997
+        ]
+      },
+      "ranges_separated": false
+    },
+    "loopCpuUs": {
+      "parent": 272638,
+      "candidate": 272461,
+      "delta_percent": -0.06492125088946032,
+      "ranges": {
+        "parent": [
+          271947,
+          272999
+        ],
+        "candidate": [
+          272355,
+          272896
+        ]
+      },
+      "ranges_separated": false
+    },
+    "drainCpuUs": {
+      "parent": 30977,
+      "candidate": 30863,
+      "delta_percent": -0.36801497885528,
+      "ranges": {
+        "parent": [
+          30803,
+          30985
+        ],
+        "candidate": [
+          30847,
+          30941
+        ]
+      },
+      "ranges_separated": false
+    },
+    "totalCpuUs": {
+      "parent": 303623,
+      "candidate": 303308,
+      "delta_percent": -0.10374708108410458,
+      "ranges": {
+        "parent": [
+          302924,
+          303802
+        ],
+        "candidate": [
+          303218,
+          303837
+        ]
+      },
+      "ranges_separated": false
+    },
+    "loopMs": {
+      "parent": 272.634875,
+      "candidate": 272.45495900000003,
+      "delta_percent": -0.06599155738971074,
+      "ranges": {
+        "parent": [
+          271.941083,
+          272.99479199999996
+        ],
+        "candidate": [
+          272.349917,
+          272.925333
+        ]
+      },
+      "ranges_separated": false
+    },
+    "drainMs": {
+      "parent": 30.97479199999998,
+      "candidate": 30.861167000000023,
+      "delta_percent": -0.3668305504681224,
+      "ranges": {
+        "parent": [
+          30.79916700000001,
+          30.982290999999975
+        ],
+        "candidate": [
+          30.84158400000001,
+          30.938874999999996
+        ]
+      },
+      "ranges_separated": false
+    },
+    "peak_rss": {
+      "parent": 208453632,
+      "candidate": 208551936,
+      "delta_percent": 0.04715868898843567,
+      "ranges": {
+        "parent": [
+          208453632,
+          208453632
+        ],
+        "candidate": [
+          208551936,
+          208551936
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssLoop": {
+      "parent": 205701120,
+      "candidate": 205815808,
+      "delta_percent": 0.0557546794105912,
+      "ranges": {
+        "parent": [
+          205701120,
+          205701120
+        ],
+        "candidate": [
+          205815808,
+          205815808
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssDrained": {
+      "parent": 205799424,
+      "candidate": 205914112,
+      "delta_percent": 0.05572804713001034,
+      "ranges": {
+        "parent": [
+          205799424,
+          205799424
+        ],
+        "candidate": [
+          205914112,
+          205914112
+        ]
+      },
+      "ranges_separated": true
+    }
+  },
+  {
+    "fixture": "records_object_8m",
+    "operation": "stringify",
+    "mode": "retain",
+    "iterations": 2,
+    "parseMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "stringifyMs": {
+      "parent": 21.826583000000014,
+      "candidate": 21.765041999999994,
+      "delta_percent": -0.2819543489698706,
+      "ranges": {
+        "parent": [
+          21.73733400000002,
+          21.836375000000004
+        ],
+        "candidate": [
+          21.697834000000014,
+          21.770083999999997
+        ]
+      },
+      "ranges_separated": false
+    },
+    "parseMaxMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "stringifyMaxMs": {
+      "parent": 11.138499999999993,
+      "candidate": 11.064250000000001,
+      "delta_percent": -0.6666068142029191,
+      "ranges": {
+        "parent": [
+          11.057167000000007,
+          11.158083000000005
+        ],
+        "candidate": [
+          11.040167000000011,
+          11.078791999999993
+        ]
+      },
+      "ranges_separated": false
+    },
+    "loopCpuUs": {
+      "parent": 34625,
+      "candidate": 34572,
+      "delta_percent": -0.15306859205775902,
+      "ranges": {
+        "parent": [
+          34538,
+          34652
+        ],
+        "candidate": [
+          34462,
+          34575
+        ]
+      },
+      "ranges_separated": false
+    },
+    "drainCpuUs": {
+      "parent": 30940,
+      "candidate": 30935,
+      "delta_percent": -0.01616031027795728,
+      "ranges": {
+        "parent": [
+          30834,
+          31004
+        ],
+        "candidate": [
+          30878,
+          31048
+        ]
+      },
+      "ranges_separated": false
+    },
+    "totalCpuUs": {
+      "parent": 65478,
+      "candidate": 65510,
+      "delta_percent": 0.048871376645598374,
+      "ranges": {
+        "parent": [
+          65459,
+          65656
+        ],
+        "candidate": [
+          65340,
+          65620
+        ]
+      },
+      "ranges_separated": false
+    },
+    "loopMs": {
+      "parent": 34.62154199999999,
+      "candidate": 34.56745799999999,
+      "delta_percent": -0.15621487916397392,
+      "ranges": {
+        "parent": [
+          34.533666,
+          34.64541700000001
+        ],
+        "candidate": [
+          34.455042000000006,
+          34.56758400000001
+        ]
+      },
+      "ranges_separated": false
+    },
+    "drainMs": {
+      "parent": 30.938583000000023,
+      "candidate": 30.929917000000017,
+      "delta_percent": -0.028010332599925913,
+      "ranges": {
+        "parent": [
+          30.833250000000007,
+          31.00241700000001
+        ],
+        "candidate": [
+          30.877416999999994,
+          31.04649999999998
+        ]
+      },
+      "ranges_separated": false
+    },
+    "peak_rss": {
+      "parent": 127909888,
+      "candidate": 128024576,
+      "delta_percent": 0.08966312283846811,
+      "ranges": {
+        "parent": [
+          127893504,
+          127909888
+        ],
+        "candidate": [
+          128008192,
+          128024576
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssLoop": {
+      "parent": 92913664,
+      "candidate": 93028352,
+      "delta_percent": 0.12343502027860609,
+      "ranges": {
+        "parent": [
+          92913664,
+          92913664
+        ],
+        "candidate": [
+          93028352,
+          93044736
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssDrained": {
+      "parent": 94027776,
+      "candidate": 94142464,
+      "delta_percent": 0.12197246907126313,
+      "ranges": {
+        "parent": [
+          94027776,
+          94027776
+        ],
+        "candidate": [
+          94142464,
+          94158848
+        ]
+      },
+      "ranges_separated": true
+    }
+  },
+  {
+    "fixture": "small_record",
+    "operation": "parse",
+    "mode": "discard",
+    "iterations": 100000,
+    "parseMs": {
+      "parent": 51.61662900000082,
+      "candidate": 52.49072699999995,
+      "delta_percent": 1.6934426306667971,
+      "ranges": {
+        "parent": [
+          51.50444699999936,
+          81.46334000000003
+        ],
+        "candidate": [
+          51.47940199999949,
+          83.18600699999882
+        ]
+      },
+      "ranges_separated": false
+    },
+    "stringifyMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "parseMaxMs": {
+      "parent": 0.5408749999999998,
+      "candidate": 0.5465839999999993,
+      "delta_percent": 1.055511902010542,
+      "ranges": {
+        "parent": [
+          0.5408749999999998,
+          0.8040419999999955
+        ],
+        "candidate": [
+          0.5408340000000003,
+          0.7972089999999952
+        ]
+      },
+      "ranges_separated": false
+    },
+    "stringifyMaxMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "loopCpuUs": {
+      "parent": 59637,
+      "candidate": 60489,
+      "delta_percent": 1.4286432919160985,
+      "ranges": {
+        "parent": [
+          59460,
+          92547
+        ],
+        "candidate": [
+          59458,
+          94097
+        ]
+      },
+      "ranges_separated": false
+    },
+    "drainCpuUs": {
+      "parent": 6177,
+      "candidate": 6228,
+      "delta_percent": 0.825643516270036,
+      "ranges": {
+        "parent": [
+          6136,
+          6278
+        ],
+        "candidate": [
+          6213,
+          6281
+        ]
+      },
+      "ranges_separated": false
+    },
+    "totalCpuUs": {
+      "parent": 65814,
+      "candidate": 66717,
+      "delta_percent": 1.3720485003190896,
+      "ranges": {
+        "parent": [
+          65596,
+          98825
+        ],
+        "candidate": [
+          65671,
+          100378
+        ]
+      },
+      "ranges_separated": false
+    },
+    "loopMs": {
+      "parent": 59.62866699999999,
+      "candidate": 60.48429200000001,
+      "delta_percent": 1.4349222329588907,
+      "ranges": {
+        "parent": [
+          59.45616700000001,
+          92.59649999999999
+        ],
+        "candidate": [
+          59.455,
+          94.36837500000001
+        ]
+      },
+      "ranges_separated": false
+    },
+    "drainMs": {
+      "parent": 6.175874999999998,
+      "candidate": 6.2223749999999995,
+      "delta_percent": 0.7529297467970375,
+      "ranges": {
+        "parent": [
+          6.134625000000007,
+          6.276707999999999
+        ],
+        "candidate": [
+          6.21125,
+          6.27829100000001
+        ]
+      },
+      "ranges_separated": false
+    },
+    "peak_rss": {
+      "parent": 30703616,
+      "candidate": 30785536,
+      "delta_percent": 0.26680896478121774,
+      "ranges": {
+        "parent": [
+          30687232,
+          30703616
+        ],
+        "candidate": [
+          30785536,
+          30801920
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssLoop": {
+      "parent": 28393472,
+      "candidate": 28557312,
+      "delta_percent": 0.577034045008662,
+      "ranges": {
+        "parent": [
+          28377088,
+          28393472
+        ],
+        "candidate": [
+          28557312,
+          28573696
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssDrained": {
+      "parent": 29818880,
+      "candidate": 29982720,
+      "delta_percent": 0.5494505494505475,
+      "ranges": {
+        "parent": [
+          29802496,
+          29818880
+        ],
+        "candidate": [
+          29982720,
+          29999104
+        ]
+      },
+      "ranges_separated": true
+    }
+  },
+  {
+    "fixture": "small_record",
+    "operation": "parse",
+    "mode": "latest",
+    "iterations": 100000,
+    "parseMs": {
+      "parent": 51.80542499999839,
+      "candidate": 52.27995799999984,
+      "delta_percent": 0.9159909411060152,
+      "ranges": {
+        "parent": [
+          51.63328099999959,
+          51.87730299999924
+        ],
+        "candidate": [
+          51.78034699999995,
+          52.467391999998014
+        ]
+      },
+      "ranges_separated": false
+    },
+    "stringifyMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "parseMaxMs": {
+      "parent": 0.5436670000000028,
+      "candidate": 0.5469589999999975,
+      "delta_percent": 0.6055177158066805,
+      "ranges": {
+        "parent": [
+          0.5407499999999992,
+          0.5447500000000005
+        ],
+        "candidate": [
+          0.5399579999999986,
+          0.5477920000000012
+        ]
+      },
+      "ranges_separated": false
+    },
+    "stringifyMaxMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "loopCpuUs": {
+      "parent": 59890,
+      "candidate": 60491,
+      "delta_percent": 1.0035064284521722,
+      "ranges": {
+        "parent": [
+          59734,
+          60004
+        ],
+        "candidate": [
+          59929,
+          60589
+        ]
+      },
+      "ranges_separated": false
+    },
+    "drainCpuUs": {
+      "parent": 6188,
+      "candidate": 6209,
+      "delta_percent": 0.33936651583710287,
+      "ranges": {
+        "parent": [
+          6149,
+          6240
+        ],
+        "candidate": [
+          6190,
+          6218
+        ]
+      },
+      "ranges_separated": false
+    },
+    "totalCpuUs": {
+      "parent": 66130,
+      "candidate": 66709,
+      "delta_percent": 0.875548162709805,
+      "ranges": {
+        "parent": [
+          65883,
+          66192
+        ],
+        "candidate": [
+          66119,
+          66798
+        ]
+      },
+      "ranges_separated": false
+    },
+    "loopMs": {
+      "parent": 59.888333,
+      "candidate": 60.48616700000001,
+      "delta_percent": 0.9982478557217567,
+      "ranges": {
+        "parent": [
+          59.726,
+          59.997875
+        ],
+        "candidate": [
+          59.92125,
+          60.58291700000001
+        ]
+      },
+      "ranges_separated": false
+    },
+    "drainMs": {
+      "parent": 6.186208999999998,
+      "candidate": 6.204708000000011,
+      "delta_percent": 0.29903613020532127,
+      "ranges": {
+        "parent": [
+          6.146708999999994,
+          6.237833999999999
+        ],
+        "candidate": [
+          6.18887500000001,
+          6.216667000000001
+        ]
+      },
+      "ranges_separated": false
+    },
+    "peak_rss": {
+      "parent": 30703616,
+      "candidate": 30801920,
+      "delta_percent": 0.32017075773747017,
+      "ranges": {
+        "parent": [
+          30687232,
+          30703616
+        ],
+        "candidate": [
+          30785536,
+          30801920
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssLoop": {
+      "parent": 28393472,
+      "candidate": 28573696,
+      "delta_percent": 0.6347374495095259,
+      "ranges": {
+        "parent": [
+          28377088,
+          28393472
+        ],
+        "candidate": [
+          28557312,
+          28573696
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssDrained": {
+      "parent": 29818880,
+      "candidate": 29999104,
+      "delta_percent": 0.6043956043956022,
+      "ranges": {
+        "parent": [
+          29802496,
+          29818880
+        ],
+        "candidate": [
+          29982720,
+          29999104
+        ]
+      },
+      "ranges_separated": true
+    }
+  },
+  {
+    "fixture": "small_record",
+    "operation": "parse",
+    "mode": "retain",
+    "iterations": 100000,
+    "parseMs": {
+      "parent": 52.42246900000093,
+      "candidate": 54.031323000000604,
+      "delta_percent": 3.069016074003783,
+      "ranges": {
+        "parent": [
+          52.3337939999995,
+          52.45567200000104
+        ],
+        "candidate": [
+          53.93787299999721,
+          54.29605500000074
+        ]
+      },
+      "ranges_separated": true
+    },
+    "stringifyMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "parseMaxMs": {
+      "parent": 0.5389160000000004,
+      "candidate": 0.5409159999999993,
+      "delta_percent": 0.37111535007290364,
+      "ranges": {
+        "parent": [
+          0.5352089999999983,
+          0.5542079999999991
+        ],
+        "candidate": [
+          0.5373750000000008,
+          0.5580420000000004
+        ]
+      },
+      "ranges_separated": false
+    },
+    "stringifyMaxMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "loopCpuUs": {
+      "parent": 69022,
+      "candidate": 70749,
+      "delta_percent": 2.5021007794616246,
+      "ranges": {
+        "parent": [
+          68989,
+          69052
+        ],
+        "candidate": [
+          70657,
+          70950
+        ]
+      },
+      "ranges_separated": true
+    },
+    "drainCpuUs": {
+      "parent": 45814,
+      "candidate": 46052,
+      "delta_percent": 0.5194918583838914,
+      "ranges": {
+        "parent": [
+          45789,
+          46151
+        ],
+        "candidate": [
+          45988,
+          46092
+        ]
+      },
+      "ranges_separated": false
+    },
+    "totalCpuUs": {
+      "parent": 114866,
+      "candidate": 116801,
+      "delta_percent": 1.6845715877631395,
+      "ranges": {
+        "parent": [
+          114811,
+          115140
+        ],
+        "candidate": [
+          116645,
+          117042
+        ]
+      },
+      "ranges_separated": true
+    },
+    "loopMs": {
+      "parent": 69.019708,
+      "candidate": 70.742708,
+      "delta_percent": 2.496388422854534,
+      "ranges": {
+        "parent": [
+          68.982916,
+          69.04754199999999
+        ],
+        "candidate": [
+          70.65191600000001,
+          70.94433300000001
+        ]
+      },
+      "ranges_separated": true
+    },
+    "drainMs": {
+      "parent": 45.812792,
+      "candidate": 46.04404199999999,
+      "delta_percent": 0.5047716803638247,
+      "ranges": {
+        "parent": [
+          45.787375,
+          46.14950000000002
+        ],
+        "candidate": [
+          45.987958000000006,
+          46.090542
+        ]
+      },
+      "ranges_separated": false
+    },
+    "peak_rss": {
+      "parent": 54902784,
+      "candidate": 55017472,
+      "delta_percent": 0.20889286780065852,
+      "ranges": {
+        "parent": [
+          54902784,
+          54902784
+        ],
+        "candidate": [
+          55017472,
+          55033856
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssLoop": {
+      "parent": 43089920,
+      "candidate": 43220992,
+      "delta_percent": 0.3041825095057016,
+      "ranges": {
+        "parent": [
+          43089920,
+          43089920
+        ],
+        "candidate": [
+          43220992,
+          43237376
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssDrained": {
+      "parent": 54034432,
+      "candidate": 54181888,
+      "delta_percent": 0.272892662219526,
+      "ranges": {
+        "parent": [
+          54034432,
+          54034432
+        ],
+        "candidate": [
+          54181888,
+          54198272
+        ]
+      },
+      "ranges_separated": true
+    }
+  },
+  {
+    "fixture": "small_record",
+    "operation": "roundtrip",
+    "mode": "discard",
+    "iterations": 100000,
+    "parseMs": {
+      "parent": 52.46677600000085,
+      "candidate": 52.55602900000073,
+      "delta_percent": 0.17011336850558667,
+      "ranges": {
+        "parent": [
+          52.375414999999784,
+          52.46913899999798
+        ],
+        "candidate": [
+          52.52738499999934,
+          53.20287300000016
+        ]
+      },
+      "ranges_separated": true
+    },
+    "stringifyMs": {
+      "parent": 29.125541000000187,
+      "candidate": 29.213543000001383,
+      "delta_percent": 0.30214717728744844,
+      "ranges": {
+        "parent": [
+          29.114049999999487,
+          29.12983599999696
+        ],
+        "candidate": [
+          29.087083000000867,
+          29.216648999999176
+        ]
+      },
+      "ranges_separated": false
+    },
+    "parseMaxMs": {
+      "parent": 0.4131670000000014,
+      "candidate": 0.4112089999999995,
+      "delta_percent": -0.47390038410664026,
+      "ranges": {
+        "parent": [
+          0.4039999999999999,
+          0.4159170000000003
+        ],
+        "candidate": [
+          0.4083749999999995,
+          0.42470900000000356
+        ]
+      },
+      "ranges_separated": false
+    },
+    "stringifyMaxMs": {
+      "parent": 0.01491699999999696,
+      "candidate": 0.010041999999998552,
+      "delta_percent": -32.680833947840725,
+      "ranges": {
+        "parent": [
+          0.012457999999995195,
+          0.01720800000001077
+        ],
+        "candidate": [
+          0.009957999999999245,
+          0.028749999999988063
+        ]
+      },
+      "ranges_separated": false
+    },
+    "loopCpuUs": {
+      "parent": 95548,
+      "candidate": 95734,
+      "delta_percent": 0.19466655502993202,
+      "ranges": {
+        "parent": [
+          95544,
+          95681
+        ],
+        "candidate": [
+          95727,
+          96170
+        ]
+      },
+      "ranges_separated": true
+    },
+    "drainCpuUs": {
+      "parent": 2395,
+      "candidate": 2353,
+      "delta_percent": -1.7536534446764063,
+      "ranges": {
+        "parent": [
+          2361,
+          2439
+        ],
+        "candidate": [
+          2331,
+          2363
+        ]
+      },
+      "ranges_separated": false
+    },
+    "totalCpuUs": {
+      "parent": 97939,
+      "candidate": 98097,
+      "delta_percent": 0.1613249063192379,
+      "ranges": {
+        "parent": [
+          97909,
+          98120
+        ],
+        "candidate": [
+          98058,
+          98523
+        ]
+      },
+      "ranges_separated": false
+    },
+    "loopMs": {
+      "parent": 95.54654199999999,
+      "candidate": 95.731459,
+      "delta_percent": 0.19353604654788192,
+      "ranges": {
+        "parent": [
+          95.534875,
+          95.68749999999999
+        ],
+        "candidate": [
+          95.72387499999999,
+          96.165291
+        ]
+      },
+      "ranges_separated": true
+    },
+    "drainMs": {
+      "parent": 2.393917000000016,
+      "candidate": 2.3515409999999974,
+      "delta_percent": -1.7701532676370313,
+      "ranges": {
+        "parent": [
+          2.359540999999993,
+          2.438167000000007
+        ],
+        "candidate": [
+          2.329665999999989,
+          2.3627499999999912
+        ]
+      },
+      "ranges_separated": false
+    },
+    "peak_rss": {
+      "parent": 35602432,
+      "candidate": 35602432,
+      "delta_percent": 0.0,
+      "ranges": {
+        "parent": [
+          35602432,
+          35602432
+        ],
+        "candidate": [
+          35602432,
+          35700736
+        ]
+      },
+      "ranges_separated": false
+    },
+    "rssLoop": {
+      "parent": 34586624,
+      "candidate": 34635776,
+      "delta_percent": 0.142112742775935,
+      "ranges": {
+        "parent": [
+          34586624,
+          34586624
+        ],
+        "candidate": [
+          34635776,
+          34734080
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssDrained": {
+      "parent": 34832384,
+      "candidate": 34881536,
+      "delta_percent": 0.14111006585135755,
+      "ranges": {
+        "parent": [
+          34832384,
+          34832384
+        ],
+        "candidate": [
+          34881536,
+          34979840
+        ]
+      },
+      "ranges_separated": true
+    }
+  },
+  {
+    "fixture": "small_record",
+    "operation": "stringify",
+    "mode": "discard",
+    "iterations": 100000,
+    "parseMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "stringifyMs": {
+      "parent": 28.79223500000108,
+      "candidate": 28.671766000000222,
+      "delta_percent": -0.41840794922956004,
+      "ranges": {
+        "parent": [
+          28.790655999999554,
+          29.001131000000107
+        ],
+        "candidate": [
+          28.655591999999142,
+          29.372303999999584
+        ]
+      },
+      "ranges_separated": false
+    },
+    "parseMaxMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "stringifyMaxMs": {
+      "parent": 0.45374999999999943,
+      "candidate": 0.45491700000000534,
+      "delta_percent": 0.2571900826459306,
+      "ranges": {
+        "parent": [
+          0.45000000000000284,
+          0.45462500000000006
+        ],
+        "candidate": [
+          0.4513750000000023,
+          0.4592919999999978
+        ]
+      },
+      "ranges_separated": false
+    },
+    "loopCpuUs": {
+      "parent": 33069,
+      "candidate": 32959,
+      "delta_percent": -0.33263781789591995,
+      "ranges": {
+        "parent": [
+          33046,
+          33263
+        ],
+        "candidate": [
+          32907,
+          33615
+        ]
+      },
+      "ranges_separated": false
+    },
+    "drainCpuUs": {
+      "parent": 4964,
+      "candidate": 5039,
+      "delta_percent": 1.5108783239323076,
+      "ranges": {
+        "parent": [
+          4947,
+          4966
+        ],
+        "candidate": [
+          4905,
+          5045
+        ]
+      },
+      "ranges_separated": false
+    },
+    "totalCpuUs": {
+      "parent": 38033,
+      "candidate": 37952,
+      "delta_percent": -0.21297294454815097,
+      "ranges": {
+        "parent": [
+          38012,
+          38210
+        ],
+        "candidate": [
+          37864,
+          38654
+        ]
+      },
+      "ranges_separated": false
+    },
+    "loopMs": {
+      "parent": 33.06679200000001,
+      "candidate": 32.94862500000001,
+      "delta_percent": -0.35735852452817296,
+      "ranges": {
+        "parent": [
+          33.043792,
+          33.260166999999996
+        ],
+        "candidate": [
+          32.903084,
+          33.608791000000004
+        ]
+      },
+      "ranges_separated": false
+    },
+    "drainMs": {
+      "parent": 4.962957999999993,
+      "candidate": 5.037708000000002,
+      "delta_percent": 1.5061582225763148,
+      "ranges": {
+        "parent": [
+          4.945166999999998,
+          4.964957999999996
+        ],
+        "candidate": [
+          4.903957999999996,
+          5.043750000000003
+        ]
+      },
+      "ranges_separated": false
+    },
+    "peak_rss": {
+      "parent": 31064064,
+      "candidate": 31195136,
+      "delta_percent": 0.42194092827003704,
+      "ranges": {
+        "parent": [
+          31064064,
+          31064064
+        ],
+        "candidate": [
+          31178752,
+          31260672
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssLoop": {
+      "parent": 29343744,
+      "candidate": 29523968,
+      "delta_percent": 0.6141820212171911,
+      "ranges": {
+        "parent": [
+          29343744,
+          29343744
+        ],
+        "candidate": [
+          29507584,
+          29622272
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssDrained": {
+      "parent": 30244864,
+      "candidate": 30425088,
+      "delta_percent": 0.5958829902491969,
+      "ranges": {
+        "parent": [
+          30244864,
+          30244864
+        ],
+        "candidate": [
+          30408704,
+          30490624
+        ]
+      },
+      "ranges_separated": true
+    }
+  },
+  {
+    "fixture": "small_record",
+    "operation": "stringify",
+    "mode": "latest",
+    "iterations": 100000,
+    "parseMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "stringifyMs": {
+      "parent": 28.77961799999978,
+      "candidate": 28.70440299999967,
+      "delta_percent": -0.26134815271040557,
+      "ranges": {
+        "parent": [
+          28.776095999999985,
+          28.87430999999899
+        ],
+        "candidate": [
+          28.567149000000676,
+          28.7782069999997
+        ]
+      },
+      "ranges_separated": false
+    },
+    "parseMaxMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "stringifyMaxMs": {
+      "parent": 0.4558329999999984,
+      "candidate": 0.455209,
+      "delta_percent": -0.13689223904334025,
+      "ranges": {
+        "parent": [
+          0.4504170000000016,
+          0.4572909999999979
+        ],
+        "candidate": [
+          0.4525830000000006,
+          0.45908400000000427
+        ]
+      },
+      "ranges_separated": false
+    },
+    "loopCpuUs": {
+      "parent": 33204,
+      "candidate": 33122,
+      "delta_percent": -0.24695819780748973,
+      "ranges": {
+        "parent": [
+          33198,
+          33311
+        ],
+        "candidate": [
+          32982,
+          33216
+        ]
+      },
+      "ranges_separated": false
+    },
+    "drainCpuUs": {
+      "parent": 4954,
+      "candidate": 4969,
+      "delta_percent": 0.30278562777552587,
+      "ranges": {
+        "parent": [
+          4932,
+          4980
+        ],
+        "candidate": [
+          4942,
+          5036
+        ]
+      },
+      "ranges_separated": false
+    },
+    "totalCpuUs": {
+      "parent": 38184,
+      "candidate": 38064,
+      "delta_percent": -0.314267756128217,
+      "ranges": {
+        "parent": [
+          38130,
+          38265
+        ],
+        "candidate": [
+          37951,
+          38252
+        ]
+      },
+      "ranges_separated": false
+    },
+    "loopMs": {
+      "parent": 33.201042,
+      "candidate": 33.119,
+      "delta_percent": -0.24710670225350784,
+      "ranges": {
+        "parent": [
+          33.195958,
+          33.308417000000006
+        ],
+        "candidate": [
+          32.979208,
+          33.213209
+        ]
+      },
+      "ranges_separated": false
+    },
+    "drainMs": {
+      "parent": 4.950916999999997,
+      "candidate": 4.968083,
+      "delta_percent": 0.3467236473567059,
+      "ranges": {
+        "parent": [
+          4.930290999999997,
+          4.978541999999997
+        ],
+        "candidate": [
+          4.9410000000000025,
+          5.035375000000002
+        ]
+      },
+      "ranges_separated": false
+    },
+    "peak_rss": {
+      "parent": 31080448,
+      "candidate": 31195136,
+      "delta_percent": 0.36900369003689537,
+      "ranges": {
+        "parent": [
+          31080448,
+          31145984
+        ],
+        "candidate": [
+          31178752,
+          31260672
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssLoop": {
+      "parent": 29343744,
+      "candidate": 29523968,
+      "delta_percent": 0.6141820212171911,
+      "ranges": {
+        "parent": [
+          29343744,
+          29442048
+        ],
+        "candidate": [
+          29507584,
+          29622272
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssDrained": {
+      "parent": 30244864,
+      "candidate": 30425088,
+      "delta_percent": 0.5958829902491969,
+      "ranges": {
+        "parent": [
+          30244864,
+          30310400
+        ],
+        "candidate": [
+          30408704,
+          30490624
+        ]
+      },
+      "ranges_separated": true
+    }
+  },
+  {
+    "fixture": "small_record",
+    "operation": "stringify",
+    "mode": "retain",
+    "iterations": 100000,
+    "parseMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "stringifyMs": {
+      "parent": 28.921087999999262,
+      "candidate": 28.82741000000064,
+      "delta_percent": -0.323908976033771,
+      "ranges": {
+        "parent": [
+          28.890148000001616,
+          28.96317599999928
+        ],
+        "candidate": [
+          28.81491300000026,
+          28.857458000001575
+        ]
+      },
+      "ranges_separated": true
+    },
+    "parseMaxMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "stringifyMaxMs": {
+      "parent": 0.445292000000002,
+      "candidate": 0.45233400000000046,
+      "delta_percent": 1.5814342049707664,
+      "ranges": {
+        "parent": [
+          0.4450420000000008,
+          0.4867920000000012
+        ],
+        "candidate": [
+          0.4450409999999998,
+          0.4547499999999971
+        ]
+      },
+      "ranges_separated": false
+    },
+    "loopCpuUs": {
+      "parent": 34103,
+      "candidate": 34006,
+      "delta_percent": -0.2844324546227628,
+      "ranges": {
+        "parent": [
+          34052,
+          34200
+        ],
+        "candidate": [
+          33996,
+          34046
+        ]
+      },
+      "ranges_separated": true
+    },
+    "drainCpuUs": {
+      "parent": 10556,
+      "candidate": 10552,
+      "delta_percent": -0.0378931413414163,
+      "ranges": {
+        "parent": [
+          10449,
+          10726
+        ],
+        "candidate": [
+          10550,
+          10584
+        ]
+      },
+      "ranges_separated": false
+    },
+    "totalCpuUs": {
+      "parent": 44756,
+      "candidate": 44590,
+      "delta_percent": -0.3708999910626454,
+      "ranges": {
+        "parent": [
+          44552,
+          44778
+        ],
+        "candidate": [
+          44548,
+          44596
+        ]
+      },
+      "ranges_separated": false
+    },
+    "loopMs": {
+      "parent": 34.100125,
+      "candidate": 34.003666,
+      "delta_percent": -0.2828699308286886,
+      "ranges": {
+        "parent": [
+          34.046625,
+          34.193875
+        ],
+        "candidate": [
+          33.98875,
+          34.037040999999995
+        ]
+      },
+      "ranges_separated": true
+    },
+    "drainMs": {
+      "parent": 10.555166999999997,
+      "candidate": 10.551292000000004,
+      "delta_percent": -0.0367118776992692,
+      "ranges": {
+        "parent": [
+          10.447958999999997,
+          10.725292000000003
+        ],
+        "candidate": [
+          10.548875000000002,
+          10.582250000000002
+        ]
+      },
+      "ranges_separated": false
+    },
+    "peak_rss": {
+      "parent": 35389440,
+      "candidate": 35520512,
+      "delta_percent": 0.37037037037037646,
+      "ranges": {
+        "parent": [
+          35373056,
+          35389440
+        ],
+        "candidate": [
+          35504128,
+          35520512
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssLoop": {
+      "parent": 31899648,
+      "candidate": 32079872,
+      "delta_percent": 0.5649717514124353,
+      "ranges": {
+        "parent": [
+          31817728,
+          31916032
+        ],
+        "candidate": [
+          31981568,
+          32079872
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssDrained": {
+      "parent": 34570240,
+      "candidate": 34734080,
+      "delta_percent": 0.4739336492890933,
+      "ranges": {
+        "parent": [
+          34553856,
+          34570240
+        ],
+        "candidate": [
+          34717696,
+          34734080
+        ]
+      },
+      "ranges_separated": true
+    }
+  },
+  {
+    "fixture": "wide_1m",
+    "operation": "parse",
+    "mode": "discard",
+    "iterations": 60,
+    "parseMs": {
+      "parent": 629.4524559999991,
+      "candidate": 624.407166,
+      "delta_percent": -0.8015363117431562,
+      "ranges": {
+        "parent": [
+          627.476079,
+          639.8576240000002
+        ],
+        "candidate": [
+          623.7563810000006,
+          627.5270850000009
+        ]
+      },
+      "ranges_separated": false
+    },
+    "stringifyMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "parseMaxMs": {
+      "parent": 11.61570800000004,
+      "candidate": 10.655332999999928,
+      "delta_percent": -8.26789895200628,
+      "ranges": {
+        "parent": [
+          10.98112500000002,
+          11.92924999999991
+        ],
+        "candidate": [
+          10.654332999999994,
+          10.655624999999986
+        ]
+      },
+      "ranges_separated": true
+    },
+    "stringifyMaxMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "loopCpuUs": {
+      "parent": 1993392,
+      "candidate": 1069116,
+      "delta_percent": -46.366996556623086,
+      "ranges": {
+        "parent": [
+          1989753,
+          1999974
+        ],
+        "candidate": [
+          1067641,
+          1073263
+        ]
+      },
+      "ranges_separated": true
+    },
+    "drainCpuUs": {
+      "parent": 165834,
+      "candidate": 156082,
+      "delta_percent": -5.880579374555284,
+      "ranges": {
+        "parent": [
+          165574,
+          165868
+        ],
+        "candidate": [
+          155672,
+          156303
+        ]
+      },
+      "ranges_separated": true
+    },
+    "totalCpuUs": {
+      "parent": 2158966,
+      "candidate": 1225198,
+      "delta_percent": -43.25070427232296,
+      "ranges": {
+        "parent": [
+          2155621,
+          2165808
+        ],
+        "candidate": [
+          1223313,
+          1229566
+        ]
+      },
+      "ranges_separated": true
+    },
+    "loopMs": {
+      "parent": 1993.4257499999999,
+      "candidate": 1069.111291,
+      "delta_percent": -46.36814082490908,
+      "ranges": {
+        "parent": [
+          1989.770917,
+          2000.0047079999997
+        ],
+        "candidate": [
+          1067.6414579999998,
+          1073.271875
+        ]
+      },
+      "ranges_separated": true
+    },
+    "drainMs": {
+      "parent": 165.8311249999997,
+      "candidate": 156.08050000000003,
+      "delta_percent": -5.8798521688854795,
+      "ranges": {
+        "parent": [
+          165.57145800000012,
+          165.86649999999986
+        ],
+        "candidate": [
+          155.6695420000001,
+          156.30095899999992
+        ]
+      },
+      "ranges_separated": true
+    },
+    "peak_rss": {
+      "parent": 363528192,
+      "candidate": 296763392,
+      "delta_percent": -18.365783306291693,
+      "ranges": {
+        "parent": [
+          363528192,
+          363528192
+        ],
+        "candidate": [
+          296763392,
+          296779776
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssLoop": {
+      "parent": 346259456,
+      "candidate": 279330816,
+      "delta_percent": -19.329043247847068,
+      "ranges": {
+        "parent": [
+          346259456,
+          346259456
+        ],
+        "candidate": [
+          279330816,
+          279330816
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssDrained": {
+      "parent": 362659840,
+      "candidate": 295944192,
+      "delta_percent": -18.396205105037268,
+      "ranges": {
+        "parent": [
+          362659840,
+          362659840
+        ],
+        "candidate": [
+          295944192,
+          295960576
+        ]
+      },
+      "ranges_separated": true
+    }
+  },
+  {
+    "fixture": "wide_1m",
+    "operation": "parse",
+    "mode": "latest",
+    "iterations": 60,
+    "parseMs": {
+      "parent": 637.2923740000003,
+      "candidate": 626.450967000001,
+      "delta_percent": -1.7011669121274164,
+      "ranges": {
+        "parent": [
+          627.2602529999997,
+          641.9886670000006
+        ],
+        "candidate": [
+          625.3336639999993,
+          627.8430000000006
+        ]
+      },
+      "ranges_separated": false
+    },
+    "stringifyMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "parseMaxMs": {
+      "parent": 10.949582999999961,
+      "candidate": 10.884708000000018,
+      "delta_percent": -0.5924883166778527,
+      "ranges": {
+        "parent": [
+          10.650292,
+          10.951083000000011
+        ],
+        "candidate": [
+          10.755541000000008,
+          10.998707999999965
+        ]
+      },
+      "ranges_separated": false
+    },
+    "stringifyMaxMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "loopCpuUs": {
+      "parent": 2055136,
+      "candidate": 1088004,
+      "delta_percent": -47.05927004344238,
+      "ranges": {
+        "parent": [
+          2045063,
+          2058608
+        ],
+        "candidate": [
+          1085943,
+          1088030
+        ]
+      },
+      "ranges_separated": true
+    },
+    "drainCpuUs": {
+      "parent": 167835,
+      "candidate": 158181,
+      "delta_percent": -5.752077933684873,
+      "ranges": {
+        "parent": [
+          167718,
+          168209
+        ],
+        "candidate": [
+          158135,
+          158485
+        ]
+      },
+      "ranges_separated": true
+    },
+    "totalCpuUs": {
+      "parent": 2223345,
+      "candidate": 1246211,
+      "delta_percent": -43.94882485624139,
+      "ranges": {
+        "parent": [
+          2212781,
+          2226443
+        ],
+        "candidate": [
+          1244078,
+          1246489
+        ]
+      },
+      "ranges_separated": true
+    },
+    "loopMs": {
+      "parent": 2055.1693330000003,
+      "candidate": 1088.006375,
+      "delta_percent": -47.06001313226097,
+      "ranges": {
+        "parent": [
+          2045.0784999999996,
+          2058.6053340000003
+        ],
+        "candidate": [
+          1085.942041,
+          1088.0334999999998
+        ]
+      },
+      "ranges_separated": true
+    },
+    "drainMs": {
+      "parent": 167.83333399999992,
+      "candidate": 158.17666699999995,
+      "delta_percent": -5.753724108227498,
+      "ranges": {
+        "parent": [
+          167.7233329999999,
+          168.20658400000002
+        ],
+        "candidate": [
+          158.13799999999992,
+          158.482708
+        ]
+      },
+      "ranges_separated": true
+    },
+    "peak_rss": {
+      "parent": 364003328,
+      "candidate": 314163200,
+      "delta_percent": -13.692217671152719,
+      "ranges": {
+        "parent": [
+          364003328,
+          364003328
+        ],
+        "candidate": [
+          314163200,
+          314163200
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssLoop": {
+      "parent": 347095040,
+      "candidate": 296370176,
+      "delta_percent": -14.614113759735659,
+      "ranges": {
+        "parent": [
+          347095040,
+          347095040
+        ],
+        "candidate": [
+          296370176,
+          296370176
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssDrained": {
+      "parent": 363102208,
+      "candidate": 313327616,
+      "delta_percent": -13.708149084017684,
+      "ranges": {
+        "parent": [
+          363102208,
+          363102208
+        ],
+        "candidate": [
+          313327616,
+          313327616
+        ]
+      },
+      "ranges_separated": true
+    }
+  },
+  {
+    "fixture": "wide_1m",
+    "operation": "parse",
+    "mode": "retain",
+    "iterations": 8,
+    "parseMs": {
+      "parent": 83.66912500000002,
+      "candidate": 83.916753,
+      "delta_percent": 0.29596102504954036,
+      "ranges": {
+        "parent": [
+          83.55150100000003,
+          83.88045699999999
+        ],
+        "candidate": [
+          83.83220999999998,
+          84.20404000000002
+        ]
+      },
+      "ranges_separated": false
+    },
+    "stringifyMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "parseMaxMs": {
+      "parent": 10.671374999999998,
+      "candidate": 10.653834000000003,
+      "delta_percent": -0.1643743191481306,
+      "ranges": {
+        "parent": [
+          10.554042000000003,
+          10.684875000000005
+        ],
+        "candidate": [
+          10.610042,
+          10.697000000000003
+        ]
+      },
+      "ranges_separated": false
+    },
+    "stringifyMaxMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "loopCpuUs": {
+      "parent": 83676,
+      "candidate": 83923,
+      "delta_percent": 0.29518619436874616,
+      "ranges": {
+        "parent": [
+          83561,
+          83887
+        ],
+        "candidate": [
+          83839,
+          84215
+        ]
+      },
+      "ranges_separated": false
+    },
+    "drainCpuUs": {
+      "parent": 37132,
+      "candidate": 37221,
+      "delta_percent": 0.23968544651513657,
+      "ranges": {
+        "parent": [
+          37101,
+          37187
+        ],
+        "candidate": [
+          37150,
+          37391
+        ]
+      },
+      "ranges_separated": false
+    },
+    "totalCpuUs": {
+      "parent": 120863,
+      "candidate": 121314,
+      "delta_percent": 0.373149764609515,
+      "ranges": {
+        "parent": [
+          120693,
+          120988
+        ],
+        "candidate": [
+          120989,
+          121436
+        ]
+      },
+      "ranges_separated": true
+    },
+    "loopMs": {
+      "parent": 83.672708,
+      "candidate": 83.919791,
+      "delta_percent": 0.295297004131867,
+      "ranges": {
+        "parent": [
+          83.55504199999999,
+          83.883167
+        ],
+        "candidate": [
+          83.835667,
+          84.20970799999999
+        ]
+      },
+      "ranges_separated": false
+    },
+    "drainMs": {
+      "parent": 37.130416999999994,
+      "candidate": 37.220541999999995,
+      "delta_percent": 0.24272552608284315,
+      "ranges": {
+        "parent": [
+          37.09925000000001,
+          37.18645900000001
+        ],
+        "candidate": [
+          37.14891700000001,
+          37.39020800000003
+        ]
+      },
+      "ranges_separated": false
+    },
+    "peak_rss": {
+      "parent": 84705280,
+      "candidate": 84869120,
+      "delta_percent": 0.19342359767891004,
+      "ranges": {
+        "parent": [
+          84705280,
+          84705280
+        ],
+        "candidate": [
+          84869120,
+          84869120
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssLoop": {
+      "parent": 64012288,
+      "candidate": 64258048,
+      "delta_percent": 0.383926286153069,
+      "ranges": {
+        "parent": [
+          64012288,
+          64012288
+        ],
+        "candidate": [
+          64258048,
+          64258048
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssDrained": {
+      "parent": 78364672,
+      "candidate": 78610432,
+      "delta_percent": 0.3136107045787151,
+      "ranges": {
+        "parent": [
+          78364672,
+          78364672
+        ],
+        "candidate": [
+          78610432,
+          78610432
+        ]
+      },
+      "ranges_separated": true
+    }
+  },
+  {
+    "fixture": "wide_1m",
+    "operation": "roundtrip",
+    "mode": "discard",
+    "iterations": 60,
+    "parseMs": {
+      "parent": 632.6042889999999,
+      "candidate": 632.3619590000004,
+      "delta_percent": -0.03830672731962581,
+      "ranges": {
+        "parent": [
+          632.5345390000002,
+          634.1164180000003
+        ],
+        "candidate": [
+          632.0700869999997,
+          633.0394609999995
+        ]
+      },
+      "ranges_separated": false
+    },
+    "stringifyMs": {
+      "parent": 158.9818680000006,
+      "candidate": 159.75537799999984,
+      "delta_percent": 0.4865397606217847,
+      "ranges": {
+        "parent": [
+          158.4578770000018,
+          159.2713319999998
+        ],
+        "candidate": [
+          159.67866600000036,
+          159.84879100000012
+        ]
+      },
+      "ranges_separated": true
+    },
+    "parseMaxMs": {
+      "parent": 10.775624999999991,
+      "candidate": 10.70274999999998,
+      "delta_percent": -0.6762948784874268,
+      "ranges": {
+        "parent": [
+          10.73170899999991,
+          11.111167000000023
+        ],
+        "candidate": [
+          10.69987500000002,
+          10.72700000000009
+        ]
+      },
+      "ranges_separated": true
+    },
+    "stringifyMaxMs": {
+      "parent": 2.752042000000017,
+      "candidate": 2.759999999999991,
+      "delta_percent": 0.28916709846629196,
+      "ranges": {
+        "parent": [
+          2.7467080000000124,
+          2.8510829999999885
+        ],
+        "candidate": [
+          2.7517919999999947,
+          2.7625830000000633
+        ]
+      },
+      "ranges_separated": false
+    },
+    "loopCpuUs": {
+      "parent": 1514787,
+      "candidate": 1218883,
+      "delta_percent": -19.534363577189396,
+      "ranges": {
+        "parent": [
+          1513454,
+          1515891
+        ],
+        "candidate": [
+          1218420,
+          1220562
+        ]
+      },
+      "ranges_separated": true
+    },
+    "drainCpuUs": {
+      "parent": 78623,
+      "candidate": 90300,
+      "delta_percent": 14.851888124340196,
+      "ranges": {
+        "parent": [
+          78359,
+          78853
+        ],
+        "candidate": [
+          90132,
+          90890
+        ]
+      },
+      "ranges_separated": true
+    },
+    "totalCpuUs": {
+      "parent": 1593410,
+      "candidate": 1309310,
+      "delta_percent": -17.829686019291955,
+      "ranges": {
+        "parent": [
+          1591813,
+          1594744
+        ],
+        "candidate": [
+          1309015,
+          1310862
+        ]
+      },
+      "ranges_separated": true
+    },
+    "loopMs": {
+      "parent": 1514.812542,
+      "candidate": 1218.886583,
+      "delta_percent": -19.535483816980438,
+      "ranges": {
+        "parent": [
+          1513.450166,
+          1515.930916
+        ],
+        "candidate": [
+          1218.429875,
+          1220.5629999999999
+        ]
+      },
+      "ranges_separated": true
+    },
+    "drainMs": {
+      "parent": 78.62191699999994,
+      "candidate": 90.29891699999985,
+      "delta_percent": 14.852092705905307,
+      "ranges": {
+        "parent": [
+          78.35741699999994,
+          78.85037499999999
+        ],
+        "candidate": [
+          90.12999999999988,
+          90.88504100000023
+        ]
+      },
+      "ranges_separated": true
+    },
+    "peak_rss": {
+      "parent": 322633728,
+      "candidate": 344621056,
+      "delta_percent": 6.814950233597394,
+      "ranges": {
+        "parent": [
+          322158592,
+          322682880
+        ],
+        "candidate": [
+          344621056,
+          344621056
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssLoop": {
+      "parent": 321208320,
+      "candidate": 341000192,
+      "delta_percent": 6.161693445549599,
+      "ranges": {
+        "parent": [
+          321191936,
+          321683456
+        ],
+        "candidate": [
+          341000192,
+          341000192
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssDrained": {
+      "parent": 321978368,
+      "candidate": 343982080,
+      "delta_percent": 6.833910034602075,
+      "ranges": {
+        "parent": [
+          321503232,
+          322011136
+        ],
+        "candidate": [
+          343982080,
+          343982080
+        ]
+      },
+      "ranges_separated": true
+    }
+  },
+  {
+    "fixture": "wide_1m",
+    "operation": "stringify",
+    "mode": "discard",
+    "iterations": 60,
+    "parseMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "stringifyMs": {
+      "parent": 99.03433100000001,
+      "candidate": 99.86550700000005,
+      "delta_percent": 0.8392806732849367,
+      "ranges": {
+        "parent": [
+          98.78133599999997,
+          99.36433400000014
+        ],
+        "candidate": [
+          99.71063000000004,
+          99.94379199999997
+        ]
+      },
+      "ranges_separated": true
+    },
+    "parseMaxMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "stringifyMaxMs": {
+      "parent": 7.246749999999992,
+      "candidate": 7.29025,
+      "delta_percent": 0.6002690861421911,
+      "ranges": {
+        "parent": [
+          7.230541999999986,
+          7.419583000000003
+        ],
+        "candidate": [
+          7.214457999999993,
+          7.456874999999997
+        ]
+      },
+      "ranges_separated": false
+    },
+    "loopCpuUs": {
+      "parent": 99036,
+      "candidate": 99873,
+      "delta_percent": 0.8451472191930209,
+      "ranges": {
+        "parent": [
+          98788,
+          99374
+        ],
+        "candidate": [
+          99721,
+          99950
+        ]
+      },
+      "ranges_separated": true
+    },
+    "drainCpuUs": {
+      "parent": 4770,
+      "candidate": 4800,
+      "delta_percent": 0.6289308176100628,
+      "ranges": {
+        "parent": [
+          4752,
+          4973
+        ],
+        "candidate": [
+          4771,
+          4880
+        ]
+      },
+      "ranges_separated": false
+    },
+    "totalCpuUs": {
+      "parent": 104009,
+      "candidate": 104750,
+      "delta_percent": 0.712438346681532,
+      "ranges": {
+        "parent": [
+          103558,
+          104126
+        ],
+        "candidate": [
+          104492,
+          104753
+        ]
+      },
+      "ranges_separated": true
+    },
+    "loopMs": {
+      "parent": 99.03825,
+      "candidate": 99.870125,
+      "delta_percent": 0.8399532503855722,
+      "ranges": {
+        "parent": [
+          98.785375,
+          99.37395799999999
+        ],
+        "candidate": [
+          99.717084,
+          99.94749999999999
+        ]
+      },
+      "ranges_separated": true
+    },
+    "drainMs": {
+      "parent": 4.764541000000023,
+      "candidate": 4.798083000000005,
+      "delta_percent": 0.7039922628430118,
+      "ranges": {
+        "parent": [
+          4.750000000000014,
+          4.970874999999978
+        ],
+        "candidate": [
+          4.769459000000012,
+          4.880125000000021
+        ]
+      },
+      "ranges_separated": false
+    },
+    "peak_rss": {
+      "parent": 70352896,
+      "candidate": 70483968,
+      "delta_percent": 0.18630647414996648,
+      "ranges": {
+        "parent": [
+          70352896,
+          70352896
+        ],
+        "candidate": [
+          70483968,
+          70483968
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssLoop": {
+      "parent": 69615616,
+      "candidate": 69795840,
+      "delta_percent": 0.25888444339845496,
+      "ranges": {
+        "parent": [
+          69615616,
+          69615616
+        ],
+        "candidate": [
+          69795840,
+          69795840
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssDrained": {
+      "parent": 69632000,
+      "candidate": 69812224,
+      "delta_percent": 0.2588235294117558,
+      "ranges": {
+        "parent": [
+          69632000,
+          69632000
+        ],
+        "candidate": [
+          69812224,
+          69812224
+        ]
+      },
+      "ranges_separated": true
+    }
+  },
+  {
+    "fixture": "wide_1m",
+    "operation": "stringify",
+    "mode": "latest",
+    "iterations": 60,
+    "parseMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "stringifyMs": {
+      "parent": 98.832916,
+      "candidate": 101.33175100000001,
+      "delta_percent": 2.5283428852792555,
+      "ranges": {
+        "parent": [
+          98.750087,
+          99.18983699999994
+        ],
+        "candidate": [
+          99.80170000000003,
+          101.60037399999997
+        ]
+      },
+      "ranges_separated": true
+    },
+    "parseMaxMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "stringifyMaxMs": {
+      "parent": 7.274749999999997,
+      "candidate": 7.451458999999986,
+      "delta_percent": 2.4290731640260965,
+      "ranges": {
+        "parent": [
+          7.223667000000006,
+          7.312249999999992
+        ],
+        "candidate": [
+          7.2422909999999945,
+          7.8492920000000055
+        ]
+      },
+      "ranges_separated": false
+    },
+    "loopCpuUs": {
+      "parent": 98840,
+      "candidate": 101341,
+      "delta_percent": 2.530352084176446,
+      "ranges": {
+        "parent": [
+          98761,
+          99202
+        ],
+        "candidate": [
+          99809,
+          101611
+        ]
+      },
+      "ranges_separated": true
+    },
+    "drainCpuUs": {
+      "parent": 4777,
+      "candidate": 5004,
+      "delta_percent": 4.7519363617333,
+      "ranges": {
+        "parent": [
+          4733,
+          4790
+        ],
+        "candidate": [
+          4772,
+          5117
+        ]
+      },
+      "ranges_separated": false
+    },
+    "totalCpuUs": {
+      "parent": 103630,
+      "candidate": 106345,
+      "delta_percent": 2.6198977130174717,
+      "ranges": {
+        "parent": [
+          103494,
+          103979
+        ],
+        "candidate": [
+          104581,
+          106728
+        ]
+      },
+      "ranges_separated": true
+    },
+    "loopMs": {
+      "parent": 98.83729199999999,
+      "candidate": 101.33808299999998,
+      "delta_percent": 2.5302099535466693,
+      "ranges": {
+        "parent": [
+          98.75762499999999,
+          99.19675000000001
+        ],
+        "candidate": [
+          99.80595799999999,
+          101.606791
+        ]
+      },
+      "ranges_separated": true
+    },
+    "drainMs": {
+      "parent": 4.773916999999983,
+      "candidate": 5.002959000000004,
+      "delta_percent": 4.797779265957525,
+      "ranges": {
+        "parent": [
+          4.73275000000001,
+          4.788375000000002
+        ],
+        "candidate": [
+          4.769958000000003,
+          5.115583000000015
+        ]
+      },
+      "ranges_separated": false
+    },
+    "peak_rss": {
+      "parent": 75333632,
+      "candidate": 75464704,
+      "delta_percent": 0.17398869073510514,
+      "ranges": {
+        "parent": [
+          75333632,
+          75333632
+        ],
+        "candidate": [
+          75464704,
+          75464704
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssLoop": {
+      "parent": 69615616,
+      "candidate": 69795840,
+      "delta_percent": 0.25888444339845496,
+      "ranges": {
+        "parent": [
+          69615616,
+          69615616
+        ],
+        "candidate": [
+          69795840,
+          69795840
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssDrained": {
+      "parent": 69632000,
+      "candidate": 69812224,
+      "delta_percent": 0.2588235294117558,
+      "ranges": {
+        "parent": [
+          69632000,
+          69632000
+        ],
+        "candidate": [
+          69812224,
+          69812224
+        ]
+      },
+      "ranges_separated": true
+    }
+  },
+  {
+    "fixture": "wide_1m",
+    "operation": "stringify",
+    "mode": "retain",
+    "iterations": 8,
+    "parseMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "stringifyMs": {
+      "parent": 12.373666999999998,
+      "candidate": 12.496292000000004,
+      "delta_percent": 0.9910158403325875,
+      "ranges": {
+        "parent": [
+          12.368874999999996,
+          12.398251000000016
+        ],
+        "candidate": [
+          12.481833999999989,
+          12.502876000000011
+        ]
+      },
+      "ranges_separated": true
+    },
+    "parseMaxMs": {
+      "parent": 0,
+      "candidate": 0,
+      "delta_percent": null,
+      "ranges": {
+        "parent": [
+          0,
+          0
+        ],
+        "candidate": [
+          0,
+          0
+        ]
+      },
+      "ranges_separated": false
+    },
+    "stringifyMaxMs": {
+      "parent": 1.594458000000003,
+      "candidate": 1.6060840000000027,
+      "delta_percent": 0.7291505953747057,
+      "ranges": {
+        "parent": [
+          1.5932919999999982,
+          1.607083000000003
+        ],
+        "candidate": [
+          1.6014590000000055,
+          1.6090830000000054
+        ]
+      },
+      "ranges_separated": false
+    },
+    "loopCpuUs": {
+      "parent": 12377,
+      "candidate": 12501,
+      "delta_percent": 1.001858285529611,
+      "ranges": {
+        "parent": [
+          12373,
+          12405
+        ],
+        "candidate": [
+          12486,
+          12507
+        ]
+      },
+      "ranges_separated": true
+    },
+    "drainCpuUs": {
+      "parent": 4589,
+      "candidate": 4610,
+      "delta_percent": 0.4576160383525929,
+      "ranges": {
+        "parent": [
+          4580,
+          4601
+        ],
+        "candidate": [
+          4605,
+          4638
+        ]
+      },
+      "ranges_separated": true
+    },
+    "totalCpuUs": {
+      "parent": 16966,
+      "candidate": 17112,
+      "delta_percent": 0.8605446186490617,
+      "ranges": {
+        "parent": [
+          16953,
+          17006
+        ],
+        "candidate": [
+          17096,
+          17139
+        ]
+      },
+      "ranges_separated": true
+    },
+    "loopMs": {
+      "parent": 12.375125000000004,
+      "candidate": 12.497874999999997,
+      "delta_percent": 0.9919091726345641,
+      "ranges": {
+        "parent": [
+          12.370375000000003,
+          12.399707999999997
+        ],
+        "candidate": [
+          12.483249999999998,
+          12.504583
+        ]
+      },
+      "ranges_separated": true
+    },
+    "drainMs": {
+      "parent": 4.5880829999999975,
+      "candidate": 4.609333000000007,
+      "delta_percent": 0.4631563988709342,
+      "ranges": {
+        "parent": [
+          4.579999999999998,
+          4.600625000000001
+        ],
+        "candidate": [
+          4.603583999999998,
+          4.637500000000003
+        ]
+      },
+      "ranges_separated": true
+    },
+    "peak_rss": {
+      "parent": 43859968,
+      "candidate": 44023808,
+      "delta_percent": 0.37355248412402897,
+      "ranges": {
+        "parent": [
+          43843584,
+          43859968
+        ],
+        "candidate": [
+          44023808,
+          44023808
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssLoop": {
+      "parent": 39354368,
+      "candidate": 39550976,
+      "delta_percent": 0.4995836802664355,
+      "ranges": {
+        "parent": [
+          39337984,
+          39354368
+        ],
+        "candidate": [
+          39550976,
+          39550976
+        ]
+      },
+      "ranges_separated": true
+    },
+    "rssDrained": {
+      "parent": 40452096,
+      "candidate": 40648704,
+      "delta_percent": 0.4860267314702238,
+      "ranges": {
+        "parent": [
+          40435712,
+          40452096
+        ],
+        "candidate": [
+          40648704,
+          40648704
+        ]
+      },
+      "ranges_separated": true
+    }
+  }
+]

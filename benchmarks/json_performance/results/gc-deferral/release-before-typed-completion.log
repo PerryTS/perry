@@ -1,0 +1,20 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+   Compiling perry-runtime v0.5.1520 (/Users/amlug/projects/perry/codex-json-gc-deferral/crates/perry-runtime)
+warning: unused variable: `gc_allocation`
+   --> crates/perry-runtime/src/json/parse_api.rs:703:9
+    |
+703 |     let gc_allocation = crate::gc::JsonParseAllocation::begin(len);
+    |         ^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_gc_allocation`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: `perry-runtime` (lib) generated 1 warning (run `cargo fix --lib -p perry-runtime` to apply 1 suggestion)
+   Compiling perry-updater v0.5.1520 (/Users/amlug/projects/perry/codex-json-gc-deferral/crates/perry-updater)
+   Compiling perry-runtime-static v0.5.1520 (/Users/amlug/projects/perry/codex-json-gc-deferral/crates/perry-runtime-static)
+   Compiling perry-stdlib v0.5.1520 (/Users/amlug/projects/perry/codex-json-gc-deferral/crates/perry-stdlib)
+   Compiling perry-stdlib-static v0.5.1520 (/Users/amlug/projects/perry/codex-json-gc-deferral/crates/perry-stdlib-static)
+    Finished `release` profile [optimized] target(s) in 2m 29s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1, redis v1.6.0
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`

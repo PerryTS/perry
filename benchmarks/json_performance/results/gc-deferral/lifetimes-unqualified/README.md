@@ -1,0 +1,1 @@
+Final source, first supplemental lifetime window. Complete 252 paired trials and 12 trace diagnostics, but ending load 2.6630859375 exceeded the fixed 2.5 gate. Diagnostic only; excluded from qualified timing conclusions.

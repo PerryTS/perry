@@ -1,0 +1,39 @@
+{
+  "workers": {
+    "parent": "77be50b4d6eb1ec632115193d417b48bd2008adc394c0401bf15bf3bc3ac4a58",
+    "candidate": "25949bf2b3f4cc5042f842be248fea8b48244405780d8db050b6e7d620a71120"
+  },
+  "counts": {
+    "small_record": [
+      100000,
+      100000
+    ],
+    "object_1k": [
+      60000,
+      20000
+    ],
+    "records_object_1m": [
+      120,
+      16
+    ],
+    "wide_1m": [
+      60,
+      8
+    ],
+    "records_object_8m": [
+      20,
+      2
+    ],
+    "records_object_20m": [
+      8,
+      2
+    ]
+  },
+  "repeats": 3,
+  "load_before": [
+    1.9248046875,
+    1.794921875,
+    1.69091796875
+  ],
+  "note": "API clocks are included in loop CPU. Explicit cleanup CPU is charged separately and in totalCpuUs. Default GC; no trace instrumentation in timed pairs."
+}
