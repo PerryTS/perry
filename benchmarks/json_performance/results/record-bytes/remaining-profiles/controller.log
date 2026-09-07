@@ -1,0 +1,7 @@
+PROFILED wide_1m-parse
+PROFILED heterogeneous_1m-stringify
+PROFILED small_record-stringify
+PROFILED object_1k-parse
+PROFILED long_string_1m-parse
+PROFILED unicode_1m-parse
+Retained empty-object checks complete 24

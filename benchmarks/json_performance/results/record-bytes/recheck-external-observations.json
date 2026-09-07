@@ -1,0 +1,562 @@
+[
+  {
+    "utc": "2026-09-07T01:26:50Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:26:55Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:27:00Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:27:06Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:27:11Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:27:16Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:27:22Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:27:27Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:27:33Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:27:38Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:27:44Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:27:49Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:27:54Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:27:59Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:28:05Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:28:10Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:28:16Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:28:21Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:28:26Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:28:32Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:28:37Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:28:42Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:28:48Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:28:53Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:28:58Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:29:04Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:29:09Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:29:14Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:29:20Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:29:25Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:29:30Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:29:36Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:29:41Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:29:46Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:29:52Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:29:57Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:30:03Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:30:08Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:30:13Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:30:19Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:30:24Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:30:30Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:30:35Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:30:40Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:30:46Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:30:51Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:30:57Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:31:02Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:31:07Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:31:13Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:31:18Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:31:24Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:31:29Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:31:34Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:31:40Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:31:45Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:31:50Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:31:56Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:32:01Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:32:07Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:32:12Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:32:18Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:32:23Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:32:28Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:32:34Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:32:39Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:32:44Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:32:50Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:32:55Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:33:01Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:33:06Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:33:11Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:33:17Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:33:22Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:33:27Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:33:32Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:33:38Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:33:43Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:33:49Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:33:55Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:34:00Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:34:06Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:34:11Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:34:16Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:34:22Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:34:27Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:34:33Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:34:38Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:34:44Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:34:49Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:34:55Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:35:00Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:35:06Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:35:11Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:35:16Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:35:22Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:35:27Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:35:33Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:35:39Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:35:45Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:35:50Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:35:55Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:36:01Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:36:06Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:36:11Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:36:17Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:36:22Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:36:27Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:36:33Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:36:38Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:36:43Z",
+    "monitor_exit": 0,
+    "external": []
+  },
+  {
+    "utc": "2026-09-07T01:36:49Z",
+    "monitor_exit": 0,
+    "external": []
+  }
+]

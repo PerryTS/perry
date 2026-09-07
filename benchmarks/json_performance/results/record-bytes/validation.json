@@ -1,0 +1,87 @@
+{
+  "source": "2103f41905c95e8174f148df96812303a8b0a520",
+  "runtime_json_tests": 208,
+  "new_runtime_tests": 4,
+  "nested_record_runtime_tests_total": 13,
+  "compiled_full_node_comparisons_passed": 42,
+  "extended_compiled_reference_comparisons_passed": 1,
+  "extended_fixture_full_node_match": false,
+  "extended_node_mismatch": "Object.prototype.toJSON ignored for root array, also in reference; all other lines match Node",
+  "moving_gc_runs_total": 44,
+  "moving_gc_full_node_matches": 42,
+  "moving_gc_extended_reference_matches": 2,
+  "moving_gc_candidate_reference_regressions": 0,
+  "moving_gc_checks_enabled": [
+    "scheduled collection",
+    "actual copying and movement",
+    "from-space protection",
+    "evacuation verification"
+  ],
+  "verified_source_hashes": 77,
+  "full_verifications": 152,
+  "full_timing_trials": 456,
+  "full_memory_trials": 432,
+  "full_clean_observations": 31,
+  "full_qualified": true,
+  "paired_cases_expected": 147,
+  "paired_trials_expected": 2058,
+  "additional_retained_empty_trials_expected": 24,
+  "older_retained_empty_trials_expected": 24,
+  "targets_met": {
+    "cpu": [
+      13,
+      38
+    ],
+    "peak_rss": [
+      65,
+      74
+    ],
+    "retained_rss": [
+      33,
+      36
+    ]
+  },
+  "all_row_acceptance": false,
+  "no_regression_acceptance": false,
+  "complete_semantic_acceptance": false,
+  "other_unresolved_semantics": "Forced-lazy Object.keys/delete/defineProperty broad-fixture gaps preserved in predecessor evidence",
+  "gc_boundary": "Exact policy/threshold/hooks match 0.5.1520; retained-growth diagnostic change inherited unchanged",
+  "local_instruction_diagnostic": {
+    "cases": 13,
+    "trials": 78,
+    "heterogeneous_stringify_change_percent": -22.964,
+    "quiet_cpu_acceptance": false
+  },
+  "paired_cases": 147,
+  "paired_trials": 2058,
+  "paired_clean_observations": 112,
+  "paired_qualified": true,
+  "additional_retained_empty_trials": 24,
+  "older_retained_empty_trials": 24,
+  "older_retained_empty_reference": "escaped-count 4b9d577d4e81518f83a8b4a1e4f319d328597f74",
+  "older_retained_empty_rss_regression_mib": 0.34375,
+  "older_retained_empty_peak_regression_mib": 0.234375,
+  "all_quiet_gates_passed": true,
+  "profiles": {
+    "qualified": true,
+    "count": 6,
+    "clean_observations": 11,
+    "heterogeneous_main_samples": 2266,
+    "heterogeneous_array_traversal_samples": 1659,
+    "heterogeneous_final_output_allocation_samples": 432,
+    "wide_parse_main_samples": 2213,
+    "wide_parse_loop_gc_samples": 1763,
+    "small_record_main_samples": 2276,
+    "small_record_record_output_branch_samples": 1954,
+    "object_1k_main_samples": 2273,
+    "long_string_main_samples": 2258,
+    "unicode_main_samples": 2263
+  },
+  "array_tojson_diagnostic": {
+    "lines": 11,
+    "node_different_lines": 8,
+    "matches_reference": true,
+    "matches_node": false,
+    "moving_gc_validated": false
+  }
+}

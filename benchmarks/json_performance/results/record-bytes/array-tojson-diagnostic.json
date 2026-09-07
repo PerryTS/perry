@@ -1,0 +1,43 @@
+{
+  "exit": 0,
+  "stdout": "object-prototype [1,2]\nown-undefined-shadows [1,2]\nnull-prototype [1,2]\narray-prototype [1,2]\narray-property-key {\"longPropertyKey\":[1,2]}\ncustom-prototype [1,2]\nown-getter [1,2]\nown-getter-count 0\ninherited-getter [1,2]\ninherited-getter-count 0\nafter-reset [1,2]\n",
+  "stderr": "",
+  "object_sha256": "0fc67272eb25a33b82911ff2376354384269c853ca79f7a1cc616ad48a726920",
+  "source_sha256": "0da34d0c27d32dcf635334b8c276a037b2e2bb4993e75761d1b9737b32e8ea27",
+  "matches_reference": true,
+  "matches_node": false,
+  "node_differences": [
+    {
+      "candidate": "object-prototype [1,2]",
+      "node": "object-prototype \"object::2\""
+    },
+    {
+      "candidate": "array-prototype [1,2]",
+      "node": "array-prototype \"array::2\""
+    },
+    {
+      "candidate": "array-property-key {\"longPropertyKey\":[1,2]}",
+      "node": "array-property-key {\"longPropertyKey\":\"array:longPropertyKey:2\"}"
+    },
+    {
+      "candidate": "custom-prototype [1,2]",
+      "node": "custom-prototype \"custom::2\""
+    },
+    {
+      "candidate": "own-getter [1,2]",
+      "node": "own-getter \"getter::2\""
+    },
+    {
+      "candidate": "own-getter-count 0",
+      "node": "own-getter-count 1"
+    },
+    {
+      "candidate": "inherited-getter [1,2]",
+      "node": "inherited-getter \"inherited-getter::2\""
+    },
+    {
+      "candidate": "inherited-getter-count 0",
+      "node": "inherited-getter-count 2"
+    }
+  ]
+}

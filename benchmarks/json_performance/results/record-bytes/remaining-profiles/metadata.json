@@ -1,0 +1,122 @@
+[
+  {
+    "purpose": "Quiet M1 sampling diagnostic. Sample shares are not exact CPU percentages and do not replace the complete CPU/RSS matrix.",
+    "command": [
+      "/Users/perry/json-record-bytes-20260907-codex/.work/worker",
+      "/Users/perry/json-record-bytes-20260907-codex/.work/fixtures/wide_1m.json",
+      "parse",
+      "512",
+      "2"
+    ],
+    "worker_sha256": "a2c71af51d8f02796a5afdc433a3ed486c8ab00249842d3b9504c06f2aeb4224",
+    "worker_exit": 0,
+    "sample_exit": 0,
+    "sample_stderr": "Sampling process 15363 for 3 seconds with 1 millisecond of run time between samples\nSampling completed, processing symbols...\nSample analysis of process 15363 written to file /Users/perry/json-record-bytes-20260907-codex/results/remaining-profiles/wide_1m-parse.sample.txt\n",
+    "cpu": "Apple M1",
+    "load_after": [
+      1.55029296875,
+      1.8330078125,
+      1.7568359375
+    ]
+  },
+  {
+    "purpose": "Quiet M1 sampling diagnostic. Sample shares are not exact CPU percentages and do not replace the complete CPU/RSS matrix.",
+    "command": [
+      "/Users/perry/json-record-bytes-20260907-codex/.work/worker",
+      "/Users/perry/json-record-bytes-20260907-codex/.work/fixtures/heterogeneous_1m.json",
+      "stringify",
+      "6144",
+      "2"
+    ],
+    "worker_sha256": "a2c71af51d8f02796a5afdc433a3ed486c8ab00249842d3b9504c06f2aeb4224",
+    "worker_exit": 0,
+    "sample_exit": 0,
+    "sample_stderr": "Sampling process 15393 for 3 seconds with 1 millisecond of run time between samples\nSampling completed, processing symbols...\nSample analysis of process 15393 written to file /Users/perry/json-record-bytes-20260907-codex/results/remaining-profiles/heterogeneous_1m-stringify.sample.txt\n",
+    "cpu": "Apple M1",
+    "load_after": [
+      1.74609375,
+      1.86865234375,
+      1.76953125
+    ]
+  },
+  {
+    "purpose": "Quiet M1 sampling diagnostic. Sample shares are not exact CPU percentages and do not replace the complete CPU/RSS matrix.",
+    "command": [
+      "/Users/perry/json-record-bytes-20260907-codex/.work/worker",
+      "/Users/perry/json-record-bytes-20260907-codex/.work/fixtures/small_record.json",
+      "stringify",
+      "24000000",
+      "2"
+    ],
+    "worker_sha256": "a2c71af51d8f02796a5afdc433a3ed486c8ab00249842d3b9504c06f2aeb4224",
+    "worker_exit": 0,
+    "sample_exit": 0,
+    "sample_stderr": "Sampling process 15401 for 3 seconds with 1 millisecond of run time between samples\nSampling completed, processing symbols...\nSample analysis of process 15401 written to file /Users/perry/json-record-bytes-20260907-codex/results/remaining-profiles/small_record-stringify.sample.txt\n",
+    "cpu": "Apple M1",
+    "load_after": [
+      1.68603515625,
+      1.85400390625,
+      1.7646484375
+    ]
+  },
+  {
+    "purpose": "Quiet M1 sampling diagnostic. Sample shares are not exact CPU percentages and do not replace the complete CPU/RSS matrix.",
+    "command": [
+      "/Users/perry/json-record-bytes-20260907-codex/.work/worker",
+      "/Users/perry/json-record-bytes-20260907-codex/.work/fixtures/object_1k.json",
+      "parse",
+      "12000000",
+      "2"
+    ],
+    "worker_sha256": "a2c71af51d8f02796a5afdc433a3ed486c8ab00249842d3b9504c06f2aeb4224",
+    "worker_exit": 0,
+    "sample_exit": 0,
+    "sample_stderr": "Sampling process 15409 for 3 seconds with 1 millisecond of run time between samples\nSampling completed, processing symbols...\nSample analysis of process 15409 written to file /Users/perry/json-record-bytes-20260907-codex/results/remaining-profiles/object_1k-parse.sample.txt\n",
+    "cpu": "Apple M1",
+    "load_after": [
+      1.7109375,
+      1.85595703125,
+      1.765625
+    ]
+  },
+  {
+    "purpose": "Quiet M1 sampling diagnostic. Sample shares are not exact CPU percentages and do not replace the complete CPU/RSS matrix.",
+    "command": [
+      "/Users/perry/json-record-bytes-20260907-codex/.work/worker",
+      "/Users/perry/json-record-bytes-20260907-codex/.work/fixtures/long_string_1m.json",
+      "parse",
+      "24000",
+      "2"
+    ],
+    "worker_sha256": "a2c71af51d8f02796a5afdc433a3ed486c8ab00249842d3b9504c06f2aeb4224",
+    "worker_exit": 0,
+    "sample_exit": 0,
+    "sample_stderr": "Sampling process 15422 for 3 seconds with 1 millisecond of run time between samples\nSampling completed, processing symbols...\nSample analysis of process 15422 written to file /Users/perry/json-record-bytes-20260907-codex/results/remaining-profiles/long_string_1m-parse.sample.txt\n",
+    "cpu": "Apple M1",
+    "load_after": [
+      1.65380859375,
+      1.84130859375,
+      1.7607421875
+    ]
+  },
+  {
+    "purpose": "Quiet M1 sampling diagnostic. Sample shares are not exact CPU percentages and do not replace the complete CPU/RSS matrix.",
+    "command": [
+      "/Users/perry/json-record-bytes-20260907-codex/.work/worker",
+      "/Users/perry/json-record-bytes-20260907-codex/.work/fixtures/unicode_1m.json",
+      "parse",
+      "20000",
+      "2"
+    ],
+    "worker_sha256": "a2c71af51d8f02796a5afdc433a3ed486c8ab00249842d3b9504c06f2aeb4224",
+    "worker_exit": 0,
+    "sample_exit": 0,
+    "sample_stderr": "Sampling process 15430 for 3 seconds with 1 millisecond of run time between samples\nSampling completed, processing symbols...\nSample analysis of process 15430 written to file /Users/perry/json-record-bytes-20260907-codex/results/remaining-profiles/unicode_1m-parse.sample.txt\n",
+    "cpu": "Apple M1",
+    "load_after": [
+      1.94677734375,
+      1.89599609375,
+      1.7802734375
+    ]
+  }
+]

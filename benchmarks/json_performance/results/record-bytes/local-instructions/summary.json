@@ -1,0 +1,132 @@
+[
+  {
+    "fixture": "heterogeneous_1m",
+    "operation": "stringify",
+    "calls": 167,
+    "median_process_instructions": {
+      "shape-plans": 4092204347,
+      "record-bytes": 3152450816
+    },
+    "candidate_vs_reference": 0.7703551799193669
+  },
+  {
+    "fixture": "object_1k",
+    "operation": "parse",
+    "calls": 500000,
+    "median_process_instructions": {
+      "shape-plans": 4542886683,
+      "record-bytes": 4538366340
+    },
+    "candidate_vs_reference": 0.9990049624136751
+  },
+  {
+    "fixture": "records_array_20m",
+    "operation": "stringify",
+    "calls": 8,
+    "median_process_instructions": {
+      "shape-plans": 14292509735,
+      "record-bytes": 14278463581
+    },
+    "candidate_vs_reference": 0.9990172367022705
+  },
+  {
+    "fixture": "small_record",
+    "operation": "stringify",
+    "calls": 500000,
+    "median_process_instructions": {
+      "shape-plans": 2690665124,
+      "record-bytes": 2681296420
+    },
+    "candidate_vs_reference": 0.9965180713436118
+  },
+  {
+    "fixture": "tiny_object",
+    "operation": "parse",
+    "calls": 2000000,
+    "median_process_instructions": {
+      "shape-plans": 4645621122,
+      "record-bytes": 4649526809
+    },
+    "candidate_vs_reference": 1.0008407243934518
+  },
+  {
+    "fixture": "object_1k",
+    "operation": "stringify",
+    "calls": 500000,
+    "median_process_instructions": {
+      "shape-plans": 1973694278,
+      "record-bytes": 1964129080
+    },
+    "candidate_vs_reference": 0.9951536577338145
+  },
+  {
+    "fixture": "long_string_1m",
+    "operation": "stringify",
+    "calls": 1100,
+    "median_process_instructions": {
+      "shape-plans": 2440284733,
+      "record-bytes": 2444400627
+    },
+    "candidate_vs_reference": 1.001686644982178
+  },
+  {
+    "fixture": "unicode_1m",
+    "operation": "stringify",
+    "calls": 1400,
+    "median_process_instructions": {
+      "shape-plans": 2507869616,
+      "record-bytes": 2510335385
+    },
+    "candidate_vs_reference": 1.0009832125977638
+  },
+  {
+    "fixture": "escaped_1m",
+    "operation": "stringify",
+    "calls": 84,
+    "median_process_instructions": {
+      "shape-plans": 1262414299,
+      "record-bytes": 1262270575
+    },
+    "candidate_vs_reference": 0.9998861514796578
+  },
+  {
+    "fixture": "wide_1m",
+    "operation": "stringify",
+    "calls": 216,
+    "median_process_instructions": {
+      "shape-plans": 6554289313,
+      "record-bytes": 6551009216
+    },
+    "candidate_vs_reference": 0.999499549555511
+  },
+  {
+    "fixture": "numbers_1m",
+    "operation": "parse",
+    "calls": 92,
+    "median_process_instructions": {
+      "shape-plans": 2265994896,
+      "record-bytes": 2268310497
+    },
+    "candidate_vs_reference": 1.0010218915338633
+  },
+  {
+    "fixture": "empty_object",
+    "operation": "parse",
+    "calls": 2000000,
+    "median_process_instructions": {
+      "shape-plans": 2198427498,
+      "record-bytes": 2204184124
+    },
+    "candidate_vs_reference": 1.0026185198307596
+  },
+  {
+    "fixture": "small_record",
+    "operation": "parse",
+    "calls": 500000,
+    "median_process_instructions": {
+      "shape-plans": 5177526272,
+      "record-bytes": 5168747863
+    },
+    "candidate_vs_reference": 0.998304516763638
+  }
+]

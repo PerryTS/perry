@@ -1,0 +1,50 @@
+[
+  {
+    "engine": "perry",
+    "retained": 1,
+    "rss_after_mib": 12.328125,
+    "peak_rss_mib": 13.75
+  },
+  {
+    "engine": "node",
+    "retained": 1,
+    "rss_after_mib": 52.59375,
+    "peak_rss_mib": 53.484375
+  },
+  {
+    "engine": "bun",
+    "retained": 1,
+    "rss_after_mib": 28.296875,
+    "peak_rss_mib": 28.71875
+  },
+  {
+    "engine": "baseline",
+    "retained": 1,
+    "rss_after_mib": 12.109375,
+    "peak_rss_mib": 13.640625
+  },
+  {
+    "engine": "perry",
+    "retained": 200000,
+    "rss_after_mib": 24.96875,
+    "peak_rss_mib": 26.28125
+  },
+  {
+    "engine": "node",
+    "retained": 200000,
+    "rss_after_mib": 83.421875,
+    "peak_rss_mib": 84.296875
+  },
+  {
+    "engine": "bun",
+    "retained": 200000,
+    "rss_after_mib": 50.203125,
+    "peak_rss_mib": 50.625
+  },
+  {
+    "engine": "baseline",
+    "retained": 200000,
+    "rss_after_mib": 24.75,
+    "peak_rss_mib": 26.171875
+  }
+]

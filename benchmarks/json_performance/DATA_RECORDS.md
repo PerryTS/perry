@@ -1,3 +1,13 @@
+The latest measured source, record-bytes (`2103f4190`), reduces paired heterogeneous stringify CPU **37.51%** versus shape-plans and **80.63%** versus growth-alias. In the full run Perry takes **0.843 ms**, versus Node **0.909 ms** and Bun **1.054 ms**, increasing the CPU inventory to **13/38**. Peak/retained inventory remains **65/74 and 33/36**.
+
+All-row/no-regression acceptance remains false. Numeric parse, 8/20 MB object-root parse and other rows regress; all 38 immediate peak-RSS medians rise, and retained-empty RSS rises **0.34375 MiB** against the older escaped-count anchor. All 147 paired cases and both retained references remain requirements.
+
+208 runtime JSON tests and 42 full compiled Node comparisons pass. The 44 moving-GC runs yield 42 Node and two extended reference matches. An independent array-toJSON diagnostic exposes eight Node-different lines also present in the reference; these and earlier forced-lazy Object.* gaps remain open. All 77 source hashes, full/2,058-trial paired matrices, 48 retained-empty trials and six profiles are qualified. GC policy/hooks and the inherited diagnostic boundary remain unchanged.
+
+[Latest 38 CPU rows](results/record-bytes/cpu-38.md), [CPU and RAM](results/record-bytes/tables.md), [complete tradeoffs](results/record-bytes/README.md), [GC boundary](results/record-bytes/gc-coordination.md), [next work](results/record-bytes/next-steps.md).
+
+Earlier checkpoints follow.
+
 The latest measured source, shape-plans (`936c60675`), reduces paired heterogeneous stringify CPU **32.74%** versus nested-records and **69.17%** versus growth-alias. It uses a bounded native ShapeId table and one key-prefix pool while retaining per-instance safety checks. Peak RSS recovers the prior **0.453125 MiB** increase. Full-run heterogeneous stringify remains **1.47x Node**.
 
 All-row inventory remains **12/38 CPU, 65/74 peak RSS and 33/36 retained RSS**. Full and 1,526-trial paired matrices qualify with 30/82 clean observations; 48 additional retained-empty trials and two profiles complete. No-regression acceptance remains false: numeric stringify, 1 KB object parse, small-record parse/stringify and older CPU anchors regress. Retained-empty RSS rises 0.109375 MiB versus the explicitly remeasured escaped-count anchor.
