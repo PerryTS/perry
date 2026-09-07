@@ -39,7 +39,20 @@ pub(super) fn try_parse_scalar(mut bytes: &[u8]) -> Option<JSValue> {
                 {
                     return None;
                 }
-                Some(JSValue::short_string_unchecked(text))
+                // Keep each constructor's length visible to the optimizer.
+                // A dynamic packing loop grew a vector loop and a large
+                // register-save frame even though the payload fits five bytes.
+                // These fixed slices use the canonical SSO encoding and never
+                // read beyond the validated payload.
+                Some(match text {
+                    [] => JSValue::short_string_unchecked(b""),
+                    [a] => JSValue::short_string_unchecked(&[*a]),
+                    [a, b] => JSValue::short_string_unchecked(&[*a, *b]),
+                    [a, b, c] => JSValue::short_string_unchecked(&[*a, *b, *c]),
+                    [a, b, c, d] => JSValue::short_string_unchecked(&[*a, *b, *c, *d]),
+                    [a, b, c, d, e] => JSValue::short_string_unchecked(&[*a, *b, *c, *d, *e]),
+                    _ => return None,
+                })
             }
             b'-' | b'0'..=b'9' => parse_number(bytes),
             _ => None,
