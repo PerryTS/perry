@@ -128,14 +128,14 @@ pub(super) fn note_scanner(
 
 /// Print the per-scanner breakdown accumulated since the last report, then
 /// clear it. Called once per copied minor from the `[gc-copy-minor]` diag site.
-pub(super) fn report_and_reset(cycle_label: &str) {
+pub(super) fn report_and_reset(cycle_label: &str) -> u64 {
     if !scanner_profile_enabled() {
-        return;
+        return 0;
     }
     super::young_log::report_and_reset(cycle_label);
     let mut rows = SCANNER_PROFILE.with(|rows| std::mem::take(&mut *rows.borrow_mut()));
     if rows.is_empty() {
-        return;
+        return 0;
     }
     rows.sort_by(|a, b| b.1.nanos.cmp(&a.1.nanos));
     let total_ns: u64 = rows.iter().map(|(_, row)| row.nanos).sum();
@@ -159,4 +159,5 @@ pub(super) fn report_and_reset(cycle_label: &str) {
             row.rewrites
         );
     }
+    total_ns / 1000
 }

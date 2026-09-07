@@ -44,6 +44,25 @@ pub(crate) struct TestRecycledKeysCheckSuppression {
     previous: bool,
 }
 
+/// Suppress both shape-table young-log writer funnels. A test using this guard
+/// must be rejected by the scanner's authoritative re-derivation.
+#[cfg(test)]
+pub(crate) struct TestShapeYoungLogSuppression(bool);
+
+#[cfg(test)]
+impl TestShapeYoungLogSuppression {
+    pub(crate) fn new() -> Self {
+        Self(SHAPE_YOUNG_LOG_SUPPRESSED.with(|cell| cell.replace(true)))
+    }
+}
+
+#[cfg(test)]
+impl Drop for TestShapeYoungLogSuppression {
+    fn drop(&mut self) {
+        SHAPE_YOUNG_LOG_SUPPRESSED.with(|cell| cell.set(self.0));
+    }
+}
+
 #[cfg(test)]
 impl TestRecycledKeysCheckSuppression {
     pub(crate) fn new() -> Self {
@@ -84,6 +103,7 @@ pub(crate) fn test_clear_shape_table() {
     inner.by_facts.clear();
     inner.families.clear();
     inner.young_keys.clear();
+    SHAPE_CARRIER_YOUNG_KEYS.with(|log| log.borrow_mut().clear());
     // SAFETY: test-only reset with no slab reference held.
     unsafe { table.slab_mut().clear() };
     drop(inner);

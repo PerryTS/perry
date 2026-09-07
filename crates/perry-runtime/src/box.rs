@@ -117,6 +117,28 @@ crate::perry_thread_local! {
             16 * 1024,
             crate::fast_hash::PtrHasher,
         ));
+    /// Box addresses whose JSValue payload may matter to a minor collection.
+    /// The registry itself is the authoritative full/major root set; this is
+    /// only its minor remembered set.
+    static BOX_YOUNG_ROOTS: std::cell::RefCell<crate::gc::young_log::YoungLog<usize>> =
+        const { std::cell::RefCell::new(crate::gc::young_log::YoungLog::new()) };
+    #[cfg(test)]
+    static BOX_YOUNG_LOG_SUPPRESSED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+const BOX_YOUNG_LOG_NAME: &str = "box.roots";
+
+/// Arm the box minor-root log before publishing a young payload.
+#[inline]
+fn note_box_young_root(addr: usize, bits: u64) {
+    if !crate::gc::young_log::bits_are_minor_relevant(bits) {
+        return;
+    }
+    #[cfg(test)]
+    if BOX_YOUNG_LOG_SUPPRESSED.with(std::cell::Cell::get) {
+        return;
+    }
+    BOX_YOUNG_ROOTS.with(|log| log.borrow_mut().note(addr));
 }
 
 /// Number of slots in each registry's direct-mapped positive cache. Eight
@@ -680,6 +702,7 @@ pub extern "C" fn js_box_alloc_bits(initial_bits: i64) -> *mut Box {
         unsafe {
             (*ptr).value = initial_bits as u64;
         }
+        note_box_young_root(addr, initial_bits as u64);
         BOX_REGISTRY.with(|r| {
             r.borrow_mut().insert(addr);
         });
@@ -699,6 +722,7 @@ pub extern "C" fn js_box_alloc_bits(initial_bits: i64) -> *mut Box {
             return std::ptr::null_mut();
         }
         (*ptr).value = initial_bits as u64;
+        note_box_young_root(ptr as usize, initial_bits as u64);
         BOX_REGISTRY.with(|r| {
             r.borrow_mut().insert(ptr as usize);
         });
@@ -928,7 +952,14 @@ pub fn scan_box_roots(mark: &mut dyn FnMut(f64)) {
 }
 
 pub fn scan_box_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    if visitor.young_scope() {
+        scan_box_young_roots_mut(visitor);
+        return;
+    }
     let full_trace = crate::gc::full_trace_active();
+    let mut visited = 0u64;
+    let table_len = BOX_REGISTRY.with(|registry| registry.borrow().len()) as u64;
+    let mut kept = Vec::new();
     ASYNC_PENDING_RELEASES.with(|pending| {
         let pending = pending.borrow();
         BOX_REGISTRY.with(|r| {
@@ -957,11 +988,103 @@ pub fn scan_box_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
                 if addr >= 0x1000 && (addr as u64) < 0x0001_0000_0000_0000 && addr % 8 == 0 {
                     unsafe {
                         visitor.visit_nanbox_u64_raw_slot(&raw mut (*ptr).value);
+                        if crate::gc::young_log::bits_are_minor_relevant((*ptr).value) {
+                            kept.push(addr);
+                        }
                     }
+                    visited += 1;
                 }
             }
         });
     });
+    let kept_len = kept.len() as u64;
+    BOX_YOUNG_ROOTS.with(|log| {
+        let mut log = log.borrow_mut();
+        let _ = log.take_sorted();
+        log.extend(kept);
+    });
+    crate::gc::young_log::note_walk(
+        BOX_YOUNG_LOG_NAME,
+        crate::gc::young_log::YoungLogWalk {
+            partial: false,
+            logged: visited,
+            visited,
+            kept: kept_len,
+            table_len,
+        },
+    );
+}
+
+/// Every live box whose current payload a minor can move, mark through, or
+/// sweep. This is the authoritative debug re-derivation of the remembered set.
+fn relevant_box_roots() -> Vec<usize> {
+    let mut relevant = BOX_REGISTRY.with(|registry| {
+        registry
+            .borrow()
+            .iter()
+            .copied()
+            .filter(|&addr| {
+                let ptr = addr as *mut Box;
+                is_plausible_box_ptr(ptr)
+                    && unsafe { crate::gc::young_log::bits_are_minor_relevant((*ptr).value) }
+            })
+            .collect::<Vec<_>>()
+    });
+    relevant.sort_unstable();
+    relevant
+}
+
+/// Minor root scan: price only the logged boxes, and compact the log from the
+/// post-visit payloads. The visit counter lives here because this is the work
+/// whose fixed cost the counter measures.
+fn scan_box_young_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    let table_len = BOX_REGISTRY.with(|registry| registry.borrow().len()) as u64;
+    #[cfg(any(debug_assertions, test))]
+    BOX_YOUNG_ROOTS.with(|log| {
+        let relevant = relevant_box_roots();
+        log.borrow()
+            .debug_assert_logged(BOX_YOUNG_LOG_NAME, &relevant);
+    });
+
+    let mut logged = 0u64;
+    let mut visited = 0u64;
+    let mut kept = BOX_YOUNG_ROOTS.with(|log| log.borrow_mut().take_spare());
+    loop {
+        let batch = BOX_YOUNG_ROOTS.with(|log| log.borrow_mut().take_sorted());
+        if batch.is_empty() {
+            break;
+        }
+        logged += batch.len() as u64;
+        for addr in batch {
+            let registered = BOX_REGISTRY.with(|registry| registry.borrow().contains(&addr));
+            if !registered {
+                continue;
+            }
+            let ptr = addr as *mut Box;
+            if !is_plausible_box_ptr(ptr) {
+                continue;
+            }
+            visited += 1;
+            unsafe {
+                visitor.visit_nanbox_u64_raw_slot(&raw mut (*ptr).value);
+                if crate::gc::young_log::bits_are_minor_relevant((*ptr).value) {
+                    kept.push(addr);
+                }
+            }
+        }
+    }
+    let kept_len = kept.len() as u64;
+    BOX_YOUNG_ROOTS.with(|log| log.borrow_mut().extend(kept));
+    crate::gc::young_log::note_walk(
+        BOX_YOUNG_LOG_NAME,
+        crate::gc::young_log::YoungLogWalk {
+            partial: true,
+            logged,
+            visited,
+            kept: kept_len,
+            table_len,
+        },
+    );
 }
 
 /// Get the raw JSValue bit pattern from a box.
@@ -1213,6 +1336,7 @@ pub extern "C" fn js_box_set_bits(ptr: *mut Box, value_bits: i64) {
             return;
         }
         let bits = value_bits as u64;
+        note_box_young_root(ptr as usize, bits);
         (*ptr).value = bits;
         crate::gc::runtime_write_barrier_root_nanbox(bits);
     }
@@ -1232,6 +1356,7 @@ pub extern "C" fn js_box_set_bits(ptr: *mut Box, value_bits: i64) {
 #[no_mangle]
 pub unsafe extern "C" fn js_box_set_bits_trusted_no_barrier(ptr: *mut Box, value_bits: i64) {
     unsafe {
+        note_box_young_root(ptr as usize, value_bits as u64);
         (*ptr).value = value_bits as u64;
     }
 }
@@ -1479,6 +1604,7 @@ pub(crate) fn test_clear_box_registry() {
     BOX_REGISTRY.with(|r| r.borrow_mut().clear());
     I32_BOX_REGISTRY.with(|r| r.borrow_mut().clear());
     BOOL_BOX_REGISTRY.with(|r| r.borrow_mut().clear());
+    BOX_YOUNG_ROOTS.with(|log| log.borrow_mut().clear());
     BOX_FREE_HEAD.with(|h| h.set(0));
     I32_BOX_FREE_HEAD.with(|h| h.set(0));
     BOOL_BOX_FREE_HEAD.with(|h| h.set(0));
@@ -1498,6 +1624,25 @@ pub(crate) fn test_clear_box_registry() {
         for slot in cache {
             slot.set(0);
         }
+    }
+}
+
+/// Test-only sabotage of the box write-side arming hook. The production
+/// scanner's re-derivation must reject the missing log entry.
+#[cfg(test)]
+pub(crate) struct TestBoxYoungLogSuppression(bool);
+
+#[cfg(test)]
+impl TestBoxYoungLogSuppression {
+    pub(crate) fn new() -> Self {
+        Self(BOX_YOUNG_LOG_SUPPRESSED.with(|cell| cell.replace(true)))
+    }
+}
+
+#[cfg(test)]
+impl Drop for TestBoxYoungLogSuppression {
+    fn drop(&mut self) {
+        BOX_YOUNG_LOG_SUPPRESSED.with(|cell| cell.set(self.0));
     }
 }
 
