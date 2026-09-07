@@ -9,6 +9,10 @@ pub(super) fn side_table_document_from(mut ordinary: Vec<SideTableRow>) -> serde
     // Replace the legacy RegExp tuples with the rich, reconciled rows.
     ordinary.retain(|(table, _, _)| !table.starts_with("regex."));
     let non_regex_total = ordinary.iter().map(|(_, _, bytes)| *bytes).sum::<usize>();
+    // `rows` is extended only under `regex-engine`; without that feature the
+    // binding is never mutated, so scope the allow to that configuration rather
+    // than dropping `mut` (which breaks the feature-on build).
+    #[cfg_attr(not(feature = "regex-engine"), allow(unused_mut))]
     let mut rows = ordinary
         .drain(..)
         .map(|(table, entries, bytes)| {

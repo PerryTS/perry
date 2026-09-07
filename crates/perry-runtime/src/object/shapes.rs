@@ -313,6 +313,10 @@ impl ShapeTableInner {
     }
 
     #[inline]
+    // #9976 removed the production rekey caller deliberately (see the
+    // scanner-internal rekey note below); `shapes_test_support` is the only
+    // remaining consumer, and it is `#[cfg(test)]`.
+    #[cfg(test)]
     fn family_push_back(&mut self, keys: u64, id: u32) {
         self.note_young_keys(keys);
         self.families.entry(keys).or_default().push_back(id);
