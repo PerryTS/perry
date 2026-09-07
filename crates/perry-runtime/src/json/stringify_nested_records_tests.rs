@@ -1,5 +1,154 @@
 use super::*;
 
+#[cfg(unix)]
+#[test]
+fn json_nested_record_short_copies_respect_guarded_source_and_destination() {
+    unsafe {
+        let page = libc::sysconf(libc::_SC_PAGESIZE) as usize;
+        let raw = libc::mmap(
+            std::ptr::null_mut(),
+            page * 6,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_ANON | libc::MAP_PRIVATE,
+            -1,
+            0,
+        );
+        assert_ne!(raw, libc::MAP_FAILED);
+        let base = raw.cast::<u8>();
+        for guard in [0, 2, 3, 5] {
+            assert_eq!(
+                libc::mprotect(base.add(page * guard).cast(), page, libc::PROT_NONE),
+                0
+            );
+        }
+        let source = base.add(page);
+        let destination = base.add(page * 4);
+        for i in 0..page {
+            source.add(i).write(b'A' + (i % 23) as u8);
+        }
+        assert_eq!(libc::mprotect(source.cast(), page, libc::PROT_READ), 0);
+        for len in 0..=32 {
+            for source_offset in [0, page - len] {
+                for destination_offset in [0, page - len] {
+                    std::ptr::write_bytes(destination, 0xcc, page);
+                    copy_short(
+                        source.add(source_offset),
+                        destination.add(destination_offset),
+                        len,
+                    );
+                    assert_eq!(
+                        std::slice::from_raw_parts(destination.add(destination_offset), len),
+                        std::slice::from_raw_parts(source.add(source_offset), len)
+                    );
+                    let written = destination_offset..destination_offset + len;
+                    for i in 0..page {
+                        if !written.contains(&i) {
+                            assert_eq!(destination.add(i).read(), 0xcc, "len={len}, offset={i}");
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(libc::munmap(raw, page * 6), 0);
+    }
+}
+
+#[test]
+fn json_nested_record_text_append_handles_growth_and_utf8_copy_boundaries() {
+    for width in 0..=65 {
+        for unit in ["a", "é", "東", "🙂", "\\\"", "\n"] {
+            let text = unit.repeat(width);
+            for prefix in ["", "x", "already emitted: 東京"] {
+                for spare in [0, text.len()] {
+                    let mut output = String::with_capacity(prefix.len() + spare);
+                    output.push_str(prefix);
+                    append_text(&mut output, &text);
+                    assert_eq!(output, format!("{prefix}{text}"));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn json_nested_record_ascii_short_strings_preserve_escaping_and_unicode() {
+    unsafe {
+        let check = |bytes: &[u8]| {
+            let bits = JSValue::try_short_string(bytes).unwrap().bits();
+            let mut actual = String::from("prefix:");
+            emit_primitive(bits, &mut actual);
+            let mut expected = String::from("prefix:");
+            if let Ok(text) = std::str::from_utf8(bytes) {
+                write_escaped_string(&mut expected, text);
+            } else {
+                expected.push_str("null");
+            }
+            assert_eq!(actual, expected, "{bytes:?}");
+        };
+        check(b"");
+        for len in 1..=crate::value::SHORT_STRING_MAX_LEN {
+            for at in 0..len {
+                for byte in 0..=127 {
+                    let mut bytes = [b'a'; crate::value::SHORT_STRING_MAX_LEN];
+                    bytes[at] = byte;
+                    check(&bytes[..len]);
+                }
+            }
+        }
+        for text in ["é", "🙂", "東a", "aé\n", "\"é\\", "\u{7f}"] {
+            check(text.as_bytes());
+        }
+        for bytes in [&[0xff][..], &[0xc0, 0x80][..], &[0xe9][..]] {
+            check(bytes);
+        }
+    }
+}
+
+#[test]
+fn json_nested_record_integer_shortcut_preserves_number_spelling() {
+    unsafe {
+        let check = |number: f64| {
+            let mut expected = String::from("prefix:");
+            write_number(&mut expected, number);
+            let mut actual = String::from("prefix:");
+            emit_number(number, &mut actual);
+            assert_eq!(actual, expected, "bits={:016x}", number.to_bits());
+        };
+        for i in -4096..=4096 {
+            check(i as f64);
+            check(i as f64 + 0.5);
+        }
+        for number in [
+            0.0,
+            -0.0,
+            i32::MIN as f64,
+            i32::MAX as f64,
+            i32::MIN as f64 - 1.0,
+            i32::MAX as f64 + 1.0,
+            -2_147_483_647.5,
+            2_147_483_646.5,
+            9_007_199_254_740_991.0,
+            9_007_199_254_740_992.0,
+            2.0f64.powi(58),
+            1e-7,
+            1e-6,
+            1e20,
+            1e21,
+            f64::MIN_POSITIVE,
+            f64::from_bits(1),
+            f64::MAX,
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+        ] {
+            check(number);
+        }
+        for n in [i32::MIN, -1, 0, 1, i32::MAX] {
+            check(f64::from_bits(INT32_TAG | n as u32 as u64));
+        }
+    }
+}
+
 unsafe fn with_array(text: &str, f: impl FnOnce(*const crate::ArrayHeader)) {
     let source = js_string_from_bytes(text.as_ptr(), text.len() as u32);
     let value = crate::json::test_json_parse_direct(source);

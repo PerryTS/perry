@@ -207,7 +207,13 @@ impl Emitter {
                 return None;
             }
             let plan = self.get(index);
-            buf.push_str(&self.prefixes[plan.offsets[i] as usize..plan.offsets[i + 1] as usize]);
+            // add_plan records these offsets only after appending complete
+            // escaped UTF-8 keys. Plans and the private pool cannot change
+            // during this copy; neither offset needs validating again.
+            let prefix = self
+                .prefixes
+                .get_unchecked(plan.offsets[i] as usize..plan.offsets[i + 1] as usize);
+            append_text(buf, prefix);
             if super::stringify_primitive_object::field_is_primitive(value) {
                 emit_primitive(value, buf);
             } else if allow_child {
@@ -218,6 +224,74 @@ impl Emitter {
         }
         buf.push('}');
         Some(())
+    }
+}
+
+/// Copy at most 32 bytes using exact in-bounds loads and stores. The first
+/// and last words may overlap within their own ranges; no padding is read or
+/// written. The caller provides disjoint source/destination ranges of `len`
+/// bytes, and reserves output before deriving the destination pointer.
+#[inline(always)]
+unsafe fn copy_short(src: *const u8, dst: *mut u8, len: usize) {
+    debug_assert!(len <= 32);
+    if len >= 16 {
+        dst.cast::<u128>()
+            .write_unaligned(src.cast::<u128>().read_unaligned());
+        dst.add(len - 16)
+            .cast::<u128>()
+            .write_unaligned(src.add(len - 16).cast::<u128>().read_unaligned());
+    } else if len >= 8 {
+        dst.cast::<u64>()
+            .write_unaligned(src.cast::<u64>().read_unaligned());
+        dst.add(len - 8)
+            .cast::<u64>()
+            .write_unaligned(src.add(len - 8).cast::<u64>().read_unaligned());
+    } else if len >= 4 {
+        dst.cast::<u32>()
+            .write_unaligned(src.cast::<u32>().read_unaligned());
+        dst.add(len - 4)
+            .cast::<u32>()
+            .write_unaligned(src.add(len - 4).cast::<u32>().read_unaligned());
+    } else if len >= 2 {
+        dst.cast::<u16>()
+            .write_unaligned(src.cast::<u16>().read_unaligned());
+        dst.add(len - 2)
+            .cast::<u16>()
+            .write_unaligned(src.add(len - 2).cast::<u16>().read_unaligned());
+    } else if len == 1 {
+        dst.write(src.read());
+    }
+}
+
+#[inline(always)]
+fn append_text(buf: &mut String, text: &str) {
+    let len = text.len();
+    if len > 32 {
+        buf.push_str(text);
+        return;
+    }
+    // text is valid UTF-8 and cannot alias the mutably borrowed String.
+    // reserve checks capacity/overflow before pointers or length are changed.
+    unsafe {
+        let bytes = buf.as_mut_vec();
+        bytes.reserve(len);
+        let start = bytes.len();
+        copy_short(text.as_ptr(), bytes.as_mut_ptr().add(start), len);
+        bytes.set_len(start + len);
+    }
+}
+
+#[inline]
+unsafe fn emit_number(value: f64, buf: &mut String) {
+    let integer = value as i32;
+    // Equality after the saturating conversion proves an exact i32. This
+    // includes -0 -> "0"; fractions, larger numbers, NaNs and tagged int32s
+    // retain the existing ECMAScript-compatible general formatter.
+    if value == integer as f64 {
+        let mut digits = itoa::Buffer::new();
+        append_text(buf, digits.format(integer));
+    } else {
+        write_number(buf, value);
     }
 }
 
@@ -238,13 +312,23 @@ unsafe fn emit_primitive(bits: u64, buf: &mut String) {
             crate::value::SHORT_STRING_TAG => {
                 let mut scratch = [0; crate::value::SHORT_STRING_MAX_LEN];
                 let len = JSValue::from_bits(bits).short_string_to_buf(&mut scratch);
-                if let Ok(text) = std::str::from_utf8(&scratch[..len]) {
+                if scratch[..len]
+                    .iter()
+                    .all(|&b| (0x20..=0x7f).contains(&b) && b != b'"' && b != b'\\')
+                {
+                    // The byte check proves both valid ASCII and no escaping.
+                    // Assemble quotes in bounded native storage, then append
+                    // once without a second UTF-8/escape scan.
+                    let mut quoted = [b'"'; crate::value::SHORT_STRING_MAX_LEN + 2];
+                    copy_short(scratch.as_ptr(), quoted.as_mut_ptr().add(1), len);
+                    append_text(buf, std::str::from_utf8_unchecked(&quoted[..len + 2]));
+                } else if let Ok(text) = std::str::from_utf8(&scratch[..len]) {
                     write_escaped_string(buf, text);
                 } else {
                     buf.push_str("null");
                 }
             }
-            _ => write_number(buf, f64::from_bits(bits)),
+            _ => emit_number(f64::from_bits(bits), buf),
         },
     }
 }
