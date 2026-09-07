@@ -1,6 +1,6 @@
 {
   "_comment": "Files still declaring raw `thread_local!`. The count is the number of DECLARATIONS that survive into a shipping build \u2014 each one pays `_tlv_get_addr` per read on Darwin \u2014 and it is a ratchet, so adding a `static` to an already-listed file fails whether or not it opens a new block. New code should use `crate::perry_thread_local!` \u2014 see crates/perry-runtime/src/tls_hot.rs. Regenerate with scripts/check_thread_locals.py --update.",
-  "_hot_declarations": 405,
+  "_hot_declarations": 411,
   "files": {
     "crates/perry-runtime/src/agent.rs": 1,
     "crates/perry-runtime/src/arena/block.rs": 5,
@@ -64,7 +64,8 @@
     "crates/perry-runtime/src/node_submodules/test_once_unit_tests.rs": 2,
     "crates/perry-runtime/src/node_submodules/test_property.rs": 1,
     "crates/perry-runtime/src/node_submodules/trace_events.rs": 8,
-    "crates/perry-runtime/src/object/native_module/callable_exports.rs": 3,
+    "crates/perry-runtime/src/object/native_module/callable_exports.rs": 1,
+    "crates/perry-runtime/src/object/native_module/callable_exports/builtin_closure_metadata.rs": 2,
     "crates/perry-runtime/src/object/spill.rs": 1,
     "crates/perry-runtime/src/os/os_process_emitter.rs": 1,
     "crates/perry-runtime/src/os_process_streams.rs": 3,

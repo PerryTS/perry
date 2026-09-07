@@ -1,11 +1,11 @@
 # Copying-minor phases and remaining scanner young logs
 
-Phase-instrument commit: `b444f0251221d8c40dd645c741367dcf5276dff9`
+Phase-instrument commit: `09846784c`
 
-Scanner-log implementation commit: `364ed3f07c54e365e65bbb5e23bd703a9fc54a0e`
+Scanner-log implementation commit: `dae519296`
 
 Branch: `perf/minor-phases-and-logs`, based on
-`e2eee113d486b5208c56ae1e3f0f4d0dffcbf2b2`.
+`8b7dc3342`.
 
 ## Copying-minor phase instrument
 
@@ -77,38 +77,70 @@ and rebuilds the log.
 
 ### `scan_template_raw_roots_mut`
 
-This scanner actually owns three tables: call-site to cooked/raw template
-arrays, cooked to raw template arrays, and array named properties. Template
-array keys/values are strong roots, so they deliberately keep
-`addr_is_minor_relevant`: a Longlived template can contain transitive GC
-edges. Array named-property owners are metadata-only and collectible-only;
-their NaN-box values remain broad strong roots. No partial log existed.
-`array/header/young_roots.rs:29`, `:35`, and `:45` define the three logs;
-every publication and array-growth transfer arms before publish at
-`array/header.rs:191`, `:262`, `:346`, `:410`, `:446`, and test seeding at
-`:604`. The minor scanner is `array/header/young_roots.rs:181`; the full walk
-still visits every entry and rebuilds all three logs.
+This scanner owns three small tables: call-site to cooked/raw template arrays,
+cooked to raw template arrays, and array named properties. The attempted young
+logs were reverted after MP measurement showed 2.76 ms for the keyed path
+against 1.83 ms for the original full walk. The scanner again walks the three
+authoritative tables directly, with no insert-side log upkeep.
 
 ### `scan_symbol_side_table_roots_mut`
 
 This walks six slot shapes: `SYMBOL_PROPERTIES` owner metadata and strong
 symbol/value pairs, `SYMBOL_PROPERTY_ATTRS` owner metadata and strong symbol
 keys, symbol accessors plus get/set roots, class-static symbol/value pairs,
-and metadata-only `SYMBOL_POINTERS`. There was no partial log. A typed slot log
-at `symbol/gc_roots.rs:146-209` records exactly the slot shape that can matter
-to a minor. Production funnels arm before publication in `symbol.rs:582`,
-`:1030`, `:1065`, `symbol/properties.rs:93`, and
-`symbol/accessors.rs:94-95`; direct test seeders follow the same contract. The
-direct minor path at `symbol/gc_roots.rs:443` and the budgeted step path at
-`:229` take only logged slots. Property-owner slots sort before their entries,
-so owner rekeying precedes entry lookup; entry scans heal a snapshot owner
-through forwarding. Full direct and step walks still take authoritative
-whole-table snapshots and rebuild the log.
+and metadata-only `SYMBOL_POINTERS`. The attempted typed-slot young log was
+reverted after MP measurement showed 2.47 ms for the keyed path against
+1.74 ms for the original full walk. Direct scans again iterate the
+authoritative tables, and budgeted scans again use the pre-existing full slot
+snapshot; none of the symbol writers pays young-log upkeep.
 
-All five scanners emit their existing `[gc-young-log]` accounting with
-logged/visited/kept/table size. Release minors do not enumerate a whole table
-to obtain the symbol table size: that exact diagnostic count is itself gated
-on `PERRY_GC_DIAG`.
+The retained descriptor, closure-dynamic-property, built-in-closure-metadata,
+and shape-cache young logs continue to emit `[gc-young-log]` accounting with
+logged/visited/kept/table size.
+
+## MP measurement and the two reverted/fixed logs
+
+Perrymaster measured MP-stage medians over 16 steady 3300-character minor
+collections, comparing app-m6mp (the five scanner changes) with app-m6ms
+(without them):
+
+| scanner | m6ms full walk | m6mp young log | delta |
+|---|---:|---:|---:|
+| descriptor_roots | 4.12 ms | 4.02 ms | -0.1 ms |
+| closure_dynamic_props | 3.75 ms | 3.06 ms | **-0.7 ms** |
+| builtin_closure_metadata | 1.42 ms | 0.93 ms | **-0.5 ms** |
+| shape_cache | 0.68 ms | 0.27 ms | **-0.4 ms** |
+| **template_raw_roots** | 1.83 ms | **2.76 ms** | **+0.9 ms** |
+| **symbol_side_table** | 1.74 ms | **2.47 ms** | **+0.7 ms** |
+| transition_cache / intern / class_side / singleton_closure / box | flat | flat | flat |
+| **total** | **15.5 ms** | **15.3 ms** | **-0.2 ms** |
+
+Both regressions are case (b): the logged path made each visited entry more
+expensive than the dense full walk. They are not duplicate-log failures:
+`YoungLog::take_sorted` sorts and globally deduplicates every batch, and each
+writer tests the young/relevant predicate before noting a key.
+
+- `template_raw_roots`: the full scanner streams each map directly and only
+  removes/reinserts keys that actually move. The young path sorted its keys,
+  performed a hash lookup for every cache entry, and unconditionally removed
+  and reinserted every logged raw-map and named-property owner even when the
+  owner did not move. A pointer or index cannot safely retain the full walk's
+  per-entry cost because insertion and rekeying can relocate these `HashMap`
+  entries. The three logs, their publication hooks, and their two rederivation
+  tests were therefore removed.
+- `symbol_side_table`: the full scanner streams the maps and their property
+  vectors. The typed-slot path sorted its keys, then recovered every property
+  entry through an owner hash lookup plus a linear search of that owner's
+  vector; the other slot shapes also paid keyed table lookups. Hash-map
+  rekeying and vector growth make raw entry pointers or indices unstable, so a
+  safe O(young) path with the full walk's per-entry cost would require a
+  structural table redesign. The typed log, all writer hooks, and its
+  rederivation test were therefore removed.
+
+Re-measurement falsifier: on perrymaster, `template_raw_roots` must be at most
+**1.83 ms** and `symbol_side_table` at most **1.74 ms** at the median, the
+three improved scanners must remain unchanged, and total scanner time must be
+at most **14 ms**.
 
 ## Sabotage tests
 
@@ -119,13 +151,11 @@ on `PERRY_GC_DIAG`.
   owner.
 - `builtin_closure_log_rederivation_rejects_a_suppressed_writer`: suppresses
   the arity setter; re-derivation must report the missing closure.
-- `template_raw_log_rederivation_rejects_a_suppressed_writer`: suppresses the
-  cooked/raw publication funnel; re-derivation must report the missing pair.
-  `array_named_log_rederivation_rejects_a_suppressed_setter` independently
-  covers the third table owned by that scanner.
-- `symbol_log_rederivation_rejects_a_suppressed_property_writer`: suppresses
-  the production symbol-property store; re-derivation must report its missing
-  typed slots.
+- `template_raw_log_rederivation_rejects_a_suppressed_writer`,
+  `array_named_log_rederivation_rejects_a_suppressed_setter`, and
+  `symbol_log_rederivation_rejects_a_suppressed_property_writer` were removed
+  with the two reverted logs; their enforced-writer invariant no longer
+  exists.
 
 Each completeness check is compiled under `debug_assertions` and `test`. In
 the release lib run below, every named sabotage test passed.
@@ -157,33 +187,28 @@ there is no sound additional predicate tightening in this change.
 
 - `git diff --check`: PASS.
 - `scripts/check_file_size.sh`: PASS (all Rust files at most 2,000 lines).
-- `scripts/gc_runtime_root_holders.py`: PASS.
-- `scripts/gc_rekeyed_key_tables.py`: PASS.
+- `cargo fmt --all -- --check`: PASS.
+- `scripts/check_thread_locals.py --self-test`: PASS in all seven directions.
+- `scripts/check_thread_locals.py`: PASS, 411 hot declarations and 273 cold
+  declarations in 84 recorded files, below the 768-slot hot capacity.
+- `scripts/gc_rekeyed_key_tables.py`: PASS, 42 sites and 25 registered prunes
+  classified with zero gaps. The split child now owns the `visit_owner`
+  inventory entry.
 - `cargo test -p perry-runtime --release --lib -j4 -- --test-threads=1` via
-  `measure_lock.sh --build`: NOT GREEN solely because it was run detached with
-  a PTY. Compilation completed and 3,273 tests passed (including every new
-  sabotage), 4 were ignored, and the sole failure was
-  `tty::tests::columns_undefined_when_not_tty`, whose assertion correctly saw
-  the allocated PTY. Two earlier attempts stopped at compile diagnostics in
-  the newly extracted module; those visibility/TLS/null-pointer/type issues
-  were fixed before this complete run.
-- The required non-PTY rerun was NOT RUN: immediately afterward `df -g /`
-  reported 7 GB free, below the binding 12 GB floor. Per the task rule, no
-  further Cargo command was started and no disk wait was attempted.
-- `cargo build --release -p perry-runtime --features wasm-host -j4`: NOT RUN,
-  same 7 GB disk stop.
-- `cargo build --release -p perry -j4`: NOT RUN, same 7 GB disk stop.
+  `measure_lock.sh --build`: PASS, 3,271 passed, 0 failed, 4 ignored. The three
+  rederivation tests tied to the reverted logs were explicitly removed; the
+  retained sabotage tests passed.
+- `cargo build --release -p perry-runtime --features wasm-host -j4` via
+  `measure_lock.sh --build`: PASS.
 
 ## Predictions and exact perrymaster request
 
-Predictions: on a zero-live steady minor, each of
-`scan_descriptor_roots_mut`, `scan_closure_dynamic_props_roots_mut`,
-`scan_builtin_closure_metadata_roots_mut`, `scan_template_raw_roots_mut`, and
-`scan_symbol_side_table_roots_mut` is at most **0.3 ms**. Steady scanner total
-is at most **5 ms**. This removes roughly 10 ms from a representative steady
-minor when the five logs are empty; the phase table, not that estimate, must
-name the next non-scanner lever. RSS changes should be small retained log
-buffers and remain inside Ralph's allowed +1-10% band.
+Prediction after the MP follow-up: the two reverted scanners return to their
+measured full-walk medians or better, the retained closure, built-in closure,
+and shape-cache improvements remain, and steady scanner total is at most
+**14 ms**. The phase table, not an estimate, must name the next non-scanner
+lever. RSS should fall slightly because the two reverted logs and their
+retained buffers are gone.
 
 Exact perrymaster request: fetch pushed branch `perf/minor-phases-and-logs` and
 relink this runtime-only change on main's cache. Run the three required gates
@@ -199,8 +224,9 @@ Then run one
 graceful four-turn 3300-character cc workload and one 400-character workload
 with `PERRY_GC_DIAG=1`, printing and preserving **every complete**
 `[gc-copy-minor] ran` line. The phase table for a steady minor is the
-deliverable that names the next lever. Confirm all five named scanners are at
-most 0.3 ms on zero-live steady minors and steady scanner total is at most 5
-ms. Finally run paired **5x3300 + 3x400** against both main and #9950's runtime,
+deliverable that names the next lever. Confirm `template_raw_roots` is at most
+1.83 ms, `symbol_side_table` is at most 1.74 ms, the three improved scanner
+medians are unchanged, and total scanner time is at most 14 ms. Finally run
+paired **5x3300 + 3x400** against both main and #9950's runtime,
 reporting cc turn CPU and peak RSS; target node/bun CPU parity, allowing only
 +1-10% RSS.

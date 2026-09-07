@@ -90,7 +90,6 @@ pub(crate) fn set_symbol_property_attrs(
         return;
     }
     super::note_symbol_key_installed(sym_key);
-    super::gc_roots::note_symbol_property_attrs(owner, sym_key);
     let mut guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTY_ATTRS);
     if guard.is_none() {
         *guard = Some(crate::fast_hash::new_fast_key_hash_map());

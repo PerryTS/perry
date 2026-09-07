@@ -5,9 +5,15 @@ thread_local! {
         std::cell::RefCell::new(crate::fast_hash::new_ptr_hash_map());
     static BUILTIN_CLOSURE_NON_CONSTRUCTABLE: std::cell::RefCell<crate::fast_hash::PtrHashSet<usize>> =
         std::cell::RefCell::new(crate::fast_hash::new_ptr_hash_set());
+}
+
+crate::perry_thread_local! {
     static BUILTIN_CLOSURE_YOUNG: std::cell::RefCell<crate::gc::young_log::YoungLog<usize>> =
         const { std::cell::RefCell::new(crate::gc::young_log::YoungLog::new()) };
-    #[cfg(test)]
+}
+
+#[cfg(test)]
+thread_local! {
     static TEST_SUPPRESS_BUILTIN_CLOSURE_YOUNG_NOTE: std::cell::Cell<bool> =
         const { std::cell::Cell::new(false) };
 }
