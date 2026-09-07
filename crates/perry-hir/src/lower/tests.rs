@@ -1182,6 +1182,33 @@ fn named_class_expr_static_private_update_in_arrow_keeps_lexical_brand_owner() {
     );
 }
 
+/// A named class expression whose outer binding has a different name uses a
+/// synthetic registry key. `typeof` must still resolve the source-level inner
+/// name through the class body's lexical binding rather than an optional
+/// global lookup.
+#[test]
+fn typeof_named_class_expr_inner_binding_uses_the_current_class() {
+    let source = r#"
+        var B = class l {
+            static selfType(): string { return typeof l; }
+        };
+    "#;
+    let module = perry_parser::parse_typescript(source, "t.ts").expect("source parses");
+    let hir = super::lower_module(&module, "t", "t.ts").expect("source lowers");
+    let method = hir
+        .classes
+        .iter()
+        .flat_map(|class| &class.static_methods)
+        .find(|method| method.name == "selfType")
+        .expect("static selfType method is lowered");
+    let body = format!("{:#?}", method.body);
+
+    assert!(
+        body.contains("ClassRef") && !body.contains("js_global_get_optional"),
+        "the class's inner name must resolve to its synthetic ClassRef: {body}"
+    );
+}
+
 /// A sibling class declaration is already a known lexical binding while an
 /// earlier class method is lowered, even though its registry entry is emitted
 /// later. The unresolved-constructor guard must preserve that forward binding.
