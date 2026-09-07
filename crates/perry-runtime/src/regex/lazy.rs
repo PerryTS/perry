@@ -217,6 +217,8 @@ fn build_and_install_programs(re: *const RegExpHeader) {
     if !is_valid_regex_ptr(re) {
         return;
     }
+    #[cfg(test)]
+    crate::hot_diag::test_note_regex_program_build();
     let (pattern, flags) = source_and_flags(re);
     if crate::hot_diag::regex_on() {
         let cache_hit = super::REGEX_CACHE.with(|cache| {
@@ -248,7 +250,7 @@ fn build_and_install_programs(re: *const RegExpHeader) {
     // here becomes the answer for every later construction of the same
     // literal. It therefore has to be complete, and the probes above cannot
     // guarantee that on their own: the three caches are capped independently
-    // and each `clear()`s wholesale, while
+    // and each can evict a different entry, while
     // `compile_and_cache_regex_checked` returns early whenever `REGEX_CACHE`
     // already holds the pattern — so it never re-runs the fancy or
     // repeat-matcher build for a pattern whose `REGEX_CACHE` entry survived a
@@ -304,6 +306,16 @@ fn build_and_install_programs(re: *const RegExpHeader) {
         (*re).matcher_kind = programs.matcher_kind();
         (*re).programs_ptr = Arc::into_raw(programs);
     }
+}
+
+#[cfg(test)]
+pub(super) fn test_reset_program_builds() {
+    crate::hot_diag::test_reset_regex_builds_and_evictions();
+}
+
+#[cfg(test)]
+pub(super) fn test_program_builds() -> u64 {
+    crate::hot_diag::test_regex_builds_and_evictions().0
 }
 
 /// The header's standard-engine program, building it on first use.
