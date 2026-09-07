@@ -170,8 +170,13 @@ stores and differing capture counts before this becomes a rule.
 - No local cc run, as requested.
 
 Every Cargo attempt checked `df -g /` immediately beforehand. The final gate
-rerun is currently blocked because the latest check reports 10 GB available,
+rerun is currently blocked because the latest check reports 11 GB available,
 below the binding 12 GB floor; no below-floor Cargo command was started.
+Per the campaign's parked-lane rule, this worktree's disposable `target/` was
+then removed. The focused run did compile and execute its release test binary,
+but that cleanup means there is no retained artifact mtime to present as final
+build proof; the focused result is evidence for the named tests, not a
+substitute for the blocked final gates.
 
 ## Stage LP: exact perrymaster request and falsifiers
 
