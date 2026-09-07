@@ -74,7 +74,11 @@ pub fn is_non_indexed_buffer_view(addr: usize) -> bool {
 /// because none of them carries the Uint8Array-constructor marker.
 #[inline]
 pub fn is_node_buffer(addr: usize) -> bool {
-    super::is_registered_buffer(addr)
+    let registered = match unsafe { crate::value::addr_class::try_read_tracked_gc_header(addr) } {
+        Some(header) => unsafe { (*header.as_ptr()).obj_type == crate::gc::GC_TYPE_BUFFER },
+        None => super::is_registered_buffer(addr),
+    };
+    registered
         && !super::is_any_array_buffer(addr)
         && !super::is_data_view(addr)
         && !super::is_uint8array_buffer(addr)

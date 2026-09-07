@@ -54,10 +54,30 @@ pub(super) use typed_array::dispatch_typed_array_method;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum NativeReceiverClass {
     Primitive,
+    GcObject(u32),
     Gc(u8),
     HeaderlessBuffer,
     HeaderlessTypedArray,
     OtherPointer,
+}
+
+impl NativeReceiverClass {
+    #[inline]
+    fn may_dispatch_map_set(self) -> bool {
+        match self {
+            Self::GcObject(class_id) => {
+                super::map_set_subclass::is_map_set_subclass_class_id(class_id)
+            }
+            Self::Gc(gc_type) => {
+                matches!(gc_type, crate::gc::GC_TYPE_MAP | crate::gc::GC_TYPE_SET)
+            }
+            // Legacy/embedder-owned MapHeader and SetHeader allocations can be
+            // headerless; the collection registries remain authoritative for
+            // that residual storage class.
+            Self::OtherPointer => true,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -107,7 +127,11 @@ fn receiver_kind_cache_lookup(
         }
         #[cfg(test)]
         RECEIVER_KIND_CACHE_HITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        Some(NativeReceiverClass::Gc(gc_type))
+        Some(if gc_type == crate::gc::GC_TYPE_OBJECT {
+            NativeReceiverClass::GcObject(class_id)
+        } else {
+            NativeReceiverClass::Gc(gc_type)
+        })
     })
 }
 
@@ -117,6 +141,7 @@ fn receiver_kind_cache_store(site_id: u64, class_id: u32, answer: NativeReceiver
         return;
     }
     let gc_type = match answer {
+        NativeReceiverClass::GcObject(_) => crate::gc::GC_TYPE_OBJECT,
         NativeReceiverClass::Gc(gc_type) => gc_type,
         _ => return,
     };
@@ -158,14 +183,18 @@ unsafe fn classify_native_receiver(
         if let Some(answer) = receiver_kind_cache_lookup(site_id, gc_type, class_id) {
             return answer;
         }
-        let answer = NativeReceiverClass::Gc(gc_type);
+        let answer = if gc_type == crate::gc::GC_TYPE_OBJECT {
+            NativeReceiverClass::GcObject(class_id)
+        } else {
+            NativeReceiverClass::Gc(gc_type)
+        };
         receiver_kind_cache_store(site_id, class_id, answer);
         return answer;
     }
 
     // A tracked-header miss is the only storage class whose identity is not
     // already in the allocation. External buffers and the process-global SAB
-        // backing are headerless; native-arena typed views can be headerless too.
+    // backing are headerless; native-arena typed views can be headerless too.
     crate::hot_diag::native_note_buffer_probe(probe_caller);
     if crate::buffer::is_registered_buffer(addr) {
         return NativeReceiverClass::HeaderlessBuffer;
@@ -266,7 +295,7 @@ unsafe fn class_vtable_fast_guard_classified(
     // `classify_native_receiver` proved allocator membership before reading
     // the header. A bare `obj - GC_HEADER_SIZE` read is unsound for external
     // Buffer/SAB cells and native handles, whose preceding bytes are foreign.
-    if receiver_class != NativeReceiverClass::Gc(crate::gc::GC_TYPE_OBJECT) {
+    if !matches!(receiver_class, NativeReceiverClass::GcObject(_)) {
         return None;
     }
     // Every allocator-proven GC_TYPE_OBJECT begins with ObjectHeader. Its meta
@@ -2134,18 +2163,21 @@ pub(crate) unsafe fn js_native_call_method_at_site(
         return r;
     }
 
-    if let Some(r) = collection_methods::dispatch_map_set(
-        &root_scope,
-        &object_handle,
-        &arg_handles,
-        object(),
-        method_name,
-        method_name_ptr,
-        method_name_len,
-        args_ptr,
-        args_len,
-    ) {
-        return r;
+    if receiver_class.may_dispatch_map_set() {
+        if let Some(r) = collection_methods::dispatch_map_set(
+            &root_scope,
+            &object_handle,
+            &arg_handles,
+            object(),
+            method_name,
+            method_name_ptr,
+            method_name_len,
+            args_ptr,
+            args_len,
+            receiver_class,
+        ) {
+            return r;
+        }
     }
 
     if let Some(r) = collection_methods::dispatch_raw_pointer(
