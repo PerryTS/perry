@@ -132,10 +132,17 @@ fn promotion_past_old_space_headroom_arms_one_budgeted_cycle_with_empty_nursery(
 
     fill_dead_nursery_to(gc_trigger_headroom_floor_bytes() + crate::arena::BLOCK_SIZE);
     let total_before_promotion = crate::arena::arena_total_bytes();
+    let nursery_before_promotion = crate::arena::copying_nursery_reserved_bytes();
     let promotion = crate::arena::retag_young_for_in_place_promotion(false);
+    let promoted_reserved_bytes = promotion.reserved_bytes();
     assert!(
-        promotion.reserved_bytes() > gc_trigger_headroom_floor_bytes(),
+        promoted_reserved_bytes > gc_trigger_headroom_floor_bytes(),
         "fixture must promote more than the unchanged headroom"
+    );
+    assert_eq!(
+        promoted_reserved_bytes, nursery_before_promotion,
+        "fixture must promote every reserved nursery block so the mandatory \
+         replacement Eden head is the only new reservation"
     );
     crate::arena::finish_in_place_promotion(
         promotion,
@@ -144,8 +151,20 @@ fn promotion_past_old_space_headroom_arms_one_budgeted_cycle_with_empty_nursery(
 
     assert_eq!(
         crate::arena::arena_total_bytes(),
-        total_before_promotion,
-        "promotion transfers capacity without reserving more"
+        total_before_promotion.saturating_add(crate::arena::BLOCK_SIZE),
+        "promotion transfers its existing capacity; only the mandatory empty \
+         Eden allocator head reserves one new block"
+    );
+    assert_eq!(
+        crate::arena::copying_nursery_reserved_bytes(),
+        crate::arena::BLOCK_SIZE,
+        "the replacement Eden head must remain accounted as nursery capacity"
+    );
+    assert_eq!(
+        arena_trigger_total_bytes(),
+        old_total_before.saturating_add(promoted_reserved_bytes),
+        "promotion must transfer exactly its reserved capacity into old-space \
+         pacing; the replacement Eden head stays excluded"
     );
     assert_eq!(
         crate::arena::copying_from_space_in_use_bytes(),
