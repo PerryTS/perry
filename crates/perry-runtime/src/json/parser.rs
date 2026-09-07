@@ -818,18 +818,14 @@ impl<'a> DirectParser<'a> {
             // the temporary values vector below.
 
             let key_bytes = key.as_bytes();
-            // At the same width that needs a duplicate-key index, bypass
-            // the small-record key mirror. Interning identity still comes
-            // from the same owning table, including duplicate/escaped keys.
-            let key_ptr = if heap_fields
-                .as_ref()
-                .is_some_and(|(keys, _, _)| keys.len() >= 128)
-            {
-                cached_parse_wide_key_ptr(key_bytes)
-            } else {
-                cached_parse_key_ptr(key_bytes)
-            };
             if let Some((keys, values, indices)) = heap_fields.as_mut() {
+                // Only spilled objects need the width decision. Interning
+                // identity comes from the same table on either path.
+                let key_ptr = if keys.len() >= 128 {
+                    cached_parse_wide_key_ptr(key_bytes)
+                } else {
+                    cached_parse_key_ptr(key_bytes)
+                };
                 // Linear lookup wins for modest objects. Build the index only
                 // when another field arrives after 128 unique keys, so an
                 // object ending at that size never pays to build an unused map.
@@ -858,23 +854,26 @@ impl<'a> DirectParser<'a> {
                     keys.push(key_ptr);
                     values.push(value);
                 }
-            } else if let Some(existing) = inline_keys[..inline_len]
-                .iter()
-                .position(|&ptr| ptr == key_ptr)
-            {
-                inline_values[existing] = value;
-            } else if inline_len < inline_keys.len() {
-                inline_keys[inline_len] = key_ptr;
-                inline_values[inline_len] = value;
-                inline_len += 1;
             } else {
-                let mut keys = Vec::with_capacity(16);
-                let mut values = Vec::with_capacity(16);
-                keys.extend_from_slice(&inline_keys);
-                values.extend_from_slice(&inline_values);
-                keys.push(key_ptr);
-                values.push(value);
-                heap_fields = Some((keys, values, None));
+                let key_ptr = cached_parse_key_ptr(key_bytes);
+                if let Some(existing) = inline_keys[..inline_len]
+                    .iter()
+                    .position(|&ptr| ptr == key_ptr)
+                {
+                    inline_values[existing] = value;
+                } else if inline_len < inline_keys.len() {
+                    inline_keys[inline_len] = key_ptr;
+                    inline_values[inline_len] = value;
+                    inline_len += 1;
+                } else {
+                    let mut keys = Vec::with_capacity(16);
+                    let mut values = Vec::with_capacity(16);
+                    keys.extend_from_slice(&inline_keys);
+                    values.extend_from_slice(&inline_values);
+                    keys.push(key_ptr);
+                    values.push(value);
+                    heap_fields = Some((keys, values, None));
+                }
             }
 
             self.skip_whitespace();
