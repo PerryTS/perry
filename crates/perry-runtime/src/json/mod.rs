@@ -158,7 +158,8 @@ thread_local! {
     /// Key string intern cache for JSON.parse (issue #51 follow-up).
     /// Maps key bytes → already-allocated StringHeader pointer.
     /// Avoids re-allocating "id", "name", etc. for every record in a
-    /// homogeneous JSON array. Cleared at the end of each top-level parse.
+    /// homogeneous JSON array. Cleared after a top-level parse exceeds the
+    /// key budget; the returned graph then owns the evicted key strings.
     /// `pub(crate)` so `json_tape`'s materializer can share the cache —
     /// without this, each tape-path force-materialize re-allocates every
     /// key and burns 3× the time + RSS vs the direct parser.
@@ -378,11 +379,7 @@ pub(crate) fn cached_parse_key_ptr(key_bytes: &[u8]) -> *const StringHeader {
         return ptr;
     }
 
-    // Issue #179: allocate cached key strings in the longlived arena. They
-    // are rooted by `scan_parse_roots_mut` and reused across repeated parses
-    // of homogeneous JSON records.
-    let ptr =
-        crate::string::js_string_from_bytes_longlived(key_bytes.as_ptr(), key_bytes.len() as u32);
+    let ptr = allocate_parse_key(key_bytes);
     PARSE_KEY_CACHE.with(|c| {
         c.borrow_mut().insert(key_bytes.to_vec(), ptr);
     });
@@ -414,12 +411,22 @@ pub(crate) fn cached_parse_wide_key_ptr(key_bytes: &[u8]) -> *const StringHeader
     if let Some(ptr) = cached {
         return ptr;
     }
-    let ptr =
-        crate::string::js_string_from_bytes_longlived(key_bytes.as_ptr(), key_bytes.len() as u32);
+    let ptr = allocate_parse_key(key_bytes);
     PARSE_KEY_CACHE.with(|cache| {
         cache.borrow_mut().insert(key_bytes.to_vec(), ptr);
     });
     ptr
+}
+
+/// The cache roots and rewrites its keys; eviction releases that ownership.
+/// Permanent storage would leak every distinct key whenever a wide parse
+/// clears the cache. Ordinary strings instead follow their actual owners.
+/// Keep misses collection-free, as the old allocator was: reviver source
+/// annotation also calls this helper while holding raw object pointers.
+#[inline]
+fn allocate_parse_key(key_bytes: &[u8]) -> *const StringHeader {
+    let _suppressed = crate::gc::GcSuppressScope::new();
+    js_string_from_bytes(key_bytes.as_ptr(), key_bytes.len() as u32)
 }
 
 pub(crate) fn clear_parse_key_ring() {
@@ -466,14 +473,16 @@ pub(crate) unsafe fn parse_shape_keys_array(
 
 #[inline]
 unsafe fn allocate_parse_shape_keys_array(keys: &[*const StringHeader]) -> *mut crate::ArrayHeader {
-    let arr = crate::array::js_array_alloc_with_length_longlived(keys.len() as u32);
-    let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *mut f64;
-    for (i, &key_ptr) in keys.iter().enumerate() {
-        let bits = crate::value::STRING_TAG | (key_ptr as u64 & crate::value::POINTER_MASK);
-        // GC_STORE_AUDIT(INIT): parse shape keys array is filled before publication.
-        *elements_ptr.add(i) = f64::from_bits(bits);
-        crate::array::note_array_slot_layout_only(arr, i, bits);
+    // Shape-cache entries and live receivers own this ordinary array. The
+    // construction helper publishes its pointer layout and, for large arrays
+    // born in old generation, remembers young key strings before return.
+    let _suppressed = crate::gc::GcSuppressScope::new();
+    let mut batch = crate::arena::ConstructionBatch::new();
+    let mut array = construction_array::ConstructionArray::new(&mut batch, keys.len() as u32);
+    for &key_ptr in keys {
+        array.push(&mut batch, JSValue::string_ptr(key_ptr as *mut StringHeader));
     }
+    let arr = array.finish(&batch);
     let header = (arr as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
     (*header).gc_flags |= crate::gc::GC_FLAG_SHAPE_SHARED;
     arr

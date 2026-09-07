@@ -11,6 +11,7 @@ mod interned_string_caches;
 mod iter_result_keys;
 mod json_record_output;
 mod json_construction;
+mod json_key_lifetime;
 mod json_shape_template;
 mod json_tape_owned;
 mod native_module_name;
