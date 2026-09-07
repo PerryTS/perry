@@ -57,6 +57,7 @@ pub(crate) unsafe fn test_json_parse_direct(text_ptr: *const StringHeader) -> JS
     let text_root = parse_root_push(JSValue::string_ptr(text_ptr as *mut StringHeader));
     let mut parser = DirectParser::new_batched(bytes);
     let result = parser.parse_value();
+    let _ = parser.finish();
     parse_root_push(result);
     crate::gc::gc_unsuppress();
     parse_root_restore(text_root);

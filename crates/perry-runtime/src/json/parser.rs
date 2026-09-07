@@ -196,6 +196,10 @@ pub(crate) struct DirectParser<'a> {
     hot_shape_len: usize,
     hot_shape_keys: [*const StringHeader; 8],
     hot_shape_array: *mut ArrayHeader,
+    /// At least one object crossed into the object-local content index.
+    /// Keep the shared key cache stable through recursive parsing, then drop
+    /// it at the outer parse boundary so wide schemas cannot pin arena blocks.
+    saw_wide_object: bool,
     batch: Option<crate::arena::ConstructionBatch>,
 }
 
@@ -209,6 +213,7 @@ impl<'a> DirectParser<'a> {
             hot_shape_len: 0,
             hot_shape_keys: [std::ptr::null(); 8],
             hot_shape_array: std::ptr::null_mut(),
+            saw_wide_object: false,
             batch: None,
         }
     }
@@ -229,6 +234,7 @@ impl<'a> DirectParser<'a> {
             hot_shape_len: 0,
             hot_shape_keys: [std::ptr::null(); 8],
             hot_shape_array: std::ptr::null_mut(),
+            saw_wide_object: false,
             batch: None,
         }
     }
@@ -307,6 +313,10 @@ impl<'a> DirectParser<'a> {
     /// and a second non-whitespace root token.
     pub(crate) fn finish(&mut self) -> bool {
         self.skip_whitespace();
+        if self.saw_wide_object {
+            PARSE_KEY_CACHE.with(|cache| cache.borrow_mut().clear());
+            clear_parse_key_ring();
+        }
         self.valid && self.pos == self.input.len()
     }
 
@@ -824,11 +834,10 @@ impl<'a> DirectParser<'a> {
                 // object ending at that size never pays to build an unused map.
                 if indices.is_none() && keys.len() == 128 {
                     // From here this object's content index owns duplicate
-                    // detection. Drop the global cache while collection is
-                    // suppressed so its ordinary key strings cannot anchor a
-                    // whole general-arena block after a discarded wide parse.
-                    PARSE_KEY_CACHE.with(|cache| cache.borrow_mut().clear());
-                    clear_parse_key_ring();
+                    // detection. Defer clearing the shared cache until finish:
+                    // a nested wide object must not change key identity while
+                    // its enclosing object is still recognizing duplicates.
+                    self.saw_wide_object = true;
                     *indices = Some(
                         keys.iter()
                             .copied()

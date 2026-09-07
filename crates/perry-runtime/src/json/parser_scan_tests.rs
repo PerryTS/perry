@@ -127,6 +127,24 @@ fn wide_object_duplicates_keep_first_position_and_last_value() {
 }
 
 #[test]
+fn nested_wide_object_does_not_break_outer_duplicate_identity() {
+    use crate::json::{js_json_parse, js_json_stringify, str_from_header, TYPE_UNKNOWN};
+
+    let nested_fields: Vec<String> = (0..129).map(|i| format!("\"k{i}\":{i}")).collect();
+    let input = format!(
+        "{{\"dup\":1,\"nested\":{{{}}},\"dup\":2}}",
+        nested_fields.join(",")
+    );
+    let expected = format!("{{\"dup\":2,\"nested\":{{{}}}}}", nested_fields.join(","));
+    let text = crate::js_string_from_bytes(input.as_ptr(), input.len() as u32);
+    unsafe {
+        let value = js_json_parse(text);
+        let output = js_json_stringify(f64::from_bits(value.bits()), TYPE_UNKNOWN);
+        assert_eq!(str_from_header(output).unwrap(), expected);
+    }
+}
+
+#[test]
 fn parse_shape_cache_bounds_retained_keys_and_keeps_small_shape_hits() {
     use crate::json::{parse_shape_keys_array, PARSE_SHAPE_CACHE, PARSE_SHAPE_CACHE_KEY_BUDGET};
     unsafe {
