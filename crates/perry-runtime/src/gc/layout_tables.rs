@@ -31,7 +31,9 @@
 
 use super::hot_tls::{hot_layout_slot_masks, hot_per_object_layout_hint, hot_typed_layouts};
 use super::layout::{LayoutSlotMask, TypedLayoutDescriptor};
-use super::types::{GcHeader, GC_FLAG_ARENA, GC_HEADER_SIZE, GC_TYPE_ARRAY, GC_TYPE_OBJECT};
+use super::types::{
+    GcHeader, GC_FLAG_ARENA, GC_HEADER_SIZE, GC_TYPE_ARRAY, GC_TYPE_CLOSURE, GC_TYPE_OBJECT,
+};
 use std::cell::{Cell, RefCell};
 
 thread_local! {
@@ -252,6 +254,9 @@ pub(in crate::gc) fn prune_dead_per_object_layout_owners(is_dead_owner: &dyn Fn(
         drop_stale_young_layout_log();
         return;
     }
+    // Exactly one arm test per non-empty prune. Everything below it — the
+    // timer and the residue-wide histogram — is absent when the sink is off.
+    let layout_diag = crate::hot_diag::layout_on();
     // ONE pass over each table, not three. The old shape visited every live
     // key three times per collection — `retain`, then
     // `layout_addr_filter_rebuild` (which first collected them all into a
@@ -301,6 +306,7 @@ pub(in crate::gc) fn prune_dead_per_object_layout_owners(is_dead_owner: &dyn Fn(
         }
         true
     };
+    let prune_walk_started = layout_diag.then(std::time::Instant::now);
     let masks_emptied = {
         let mut masks = hot_layout_slot_masks().borrow_mut();
         let had = !masks.is_empty();
@@ -313,6 +319,9 @@ pub(in crate::gc) fn prune_dead_per_object_layout_owners(is_dead_owner: &dyn Fn(
         typed.retain(|key, _| keep(*key));
         had && typed.is_empty()
     };
+    let prune_walk_us = prune_walk_started.map_or(0, |started| {
+        started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64
+    });
     // A full walk is authoritative: rebuild the young log from the tables
     // (same shape as the shape/descriptor full scanners).
     {
@@ -335,8 +344,8 @@ pub(in crate::gc) fn prune_dead_per_object_layout_owners(is_dead_owner: &dyn Fn(
     // the young count published above and clears the filter, which is the
     // correct end state whichever branch the pass took.
     refresh_per_object_layouts_flag(masks_emptied || typed_emptied);
-    if crate::hot_diag::layout_on() {
-        layout_diag_note_prune(rebuild_filter);
+    if layout_diag {
+        layout_diag_note_prune(rebuild_filter, prune_walk_us);
     }
 }
 
@@ -378,6 +387,8 @@ pub(in crate::gc) fn prune_dead_per_object_layout_owners_young(
         drop_stale_young_layout_log();
         return;
     }
+    // Exactly one arm test per non-empty prune; see the full-prune twin.
+    let layout_diag = crate::hot_diag::layout_on();
     let hint = hot_per_object_layout_hint();
     let table_len =
         (hot_layout_slot_masks().borrow().len() + hot_typed_layouts().borrow().len()) as u64;
@@ -407,6 +418,7 @@ pub(in crate::gc) fn prune_dead_per_object_layout_owners_young(
     // present in both maps is two records and one log entry.
     let mut young: u32 = 0;
     let mut kept = hint.young_keys.borrow_mut().take_spare();
+    let prune_walk_started = layout_diag.then(std::time::Instant::now);
     let (masks_emptied, typed_emptied) = {
         let mut masks = hot_layout_slot_masks().borrow_mut();
         let mut typed = hot_typed_layouts().borrow_mut();
@@ -446,6 +458,9 @@ pub(in crate::gc) fn prune_dead_per_object_layout_owners_young(
         }
         (had_masks && masks.is_empty(), had_typed && typed.is_empty())
     };
+    let prune_walk_us = prune_walk_started.map_or(0, |started| {
+        started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64
+    });
     let kept_len = kept.len() as u64;
     hint.young_keys.borrow_mut().extend(kept);
     crate::gc::young_log::note_walk(
@@ -462,20 +477,21 @@ pub(in crate::gc) fn prune_dead_per_object_layout_owners_young(
     // Runs last, as in the full prune: with both maps empty it disarms the
     // flag, zeroes the count published above and clears the filter.
     refresh_per_object_layouts_flag(masks_emptied || typed_emptied);
-    if crate::hot_diag::layout_on() {
+    if layout_diag {
         // `rebuilt_filter = false`: a young prune never rebuilds it.
-        layout_diag_note_prune(false);
+        layout_diag_note_prune(false, prune_walk_us);
     }
 }
 
 /// `PERRY_LAYOUT_DIAG`'s per-prune sample. Out of line and behind
 /// [`crate::hot_diag::layout_on`] so an unarmed build pays one relaxed load.
 #[cold]
-fn layout_diag_note_prune(rebuilt_filter: bool) {
+fn layout_diag_note_prune(rebuilt_filter: bool, prune_walk_us: u64) {
     let (typed_len, masks_len) = (
         hot_typed_layouts().borrow().len(),
         hot_layout_slot_masks().borrow().len(),
     );
+    let residue = layout_residue_histogram(prune_walk_us);
     let hint = hot_per_object_layout_hint();
     // SAFETY: as in the pass above — this thread's own filter, no other
     // reference live.
@@ -492,7 +508,115 @@ fn layout_diag_note_prune(rebuilt_filter: bool) {
         LAYOUT_ADDR_FILTER_BITS,
         rebuilt_filter,
         layout_addr_filter_saturating_occupancy(),
+        residue,
     );
+}
+
+/// Walk the surviving mask table once for `PERRY_LAYOUT_DIAG` only.
+///
+/// The logical slot bound comes from the same owner metadata the tracer uses:
+/// array length, shape-derived object live slots, or real closure captures.
+/// A mask cannot legitimately belong to any other GC kind, but `other` keeps
+/// the diagnostic total honest if a stale/corrupt entry is ever observed.
+#[cold]
+fn layout_residue_histogram(prune_walk_us: u64) -> crate::hot_diag::LayoutResidueHistogram {
+    let mut out = crate::hot_diag::LayoutResidueHistogram {
+        prune_walk_us,
+        ..Default::default()
+    };
+    let masks = hot_layout_slot_masks().borrow();
+    out.keys = masks.len() as u64;
+    for (&owner, mask) in masks.iter() {
+        #[cfg(test)]
+        LAYOUT_RESIDUE_HISTOGRAM_ENTRIES.with(|n| n.set(n.get().saturating_add(1)));
+
+        let Some(header) = (unsafe { crate::value::addr_class::try_read_tracked_gc_header(owner) })
+        else {
+            out.other += 1;
+            out.slots[0] += 1;
+            out.pointer_share[0] += 1;
+            out.space[2] += 1;
+            continue;
+        };
+        // SAFETY: `try_read_tracked_gc_header` proved this exact owner belongs
+        // to either an arena allocation or the tracked malloc registry.
+        let header = unsafe { header.as_ref() };
+        let slot_count = unsafe {
+            match header.obj_type {
+                GC_TYPE_CLOSURE => {
+                    out.closure += 1;
+                    let closure = owner as *const crate::closure::ClosureHeader;
+                    crate::closure::real_capture_count((*closure).capture_count) as usize
+                }
+                GC_TYPE_OBJECT => {
+                    out.object += 1;
+                    crate::object::object_live_slot_count(
+                        owner as *const crate::object::ObjectHeader,
+                    ) as usize
+                }
+                GC_TYPE_ARRAY => {
+                    out.array += 1;
+                    let array = owner as *const crate::array::ArrayHeader;
+                    ((*array).length as usize).min((*array).capacity as usize)
+                }
+                _ => {
+                    out.other += 1;
+                    (header.size as usize).saturating_sub(GC_HEADER_SIZE) / 8
+                }
+            }
+        };
+
+        let slot_bucket = match slot_count {
+            0..=7 => 0,
+            8..=15 => 1,
+            16..=31 => 2,
+            32..=63 => 3,
+            64..=255 => 4,
+            _ => 5,
+        };
+        out.slots[slot_bucket] += 1;
+
+        let pointer_slots = mask.count_slots(slot_count);
+        let share_bucket = if pointer_slots.saturating_mul(4) <= slot_count {
+            0
+        } else if pointer_slots.saturating_mul(2) <= slot_count {
+            1
+        } else if pointer_slots.saturating_mul(4) <= slot_count.saturating_mul(3) {
+            2
+        } else {
+            3
+        };
+        out.pointer_share[share_bucket] += 1;
+        out.est_tag_checks_saved_per_trace = out
+            .est_tag_checks_saved_per_trace
+            .saturating_add(slot_count.saturating_sub(pointer_slots) as u64);
+
+        if header.gc_flags & GC_FLAG_ARENA == 0 {
+            out.space[2] += 1;
+        } else if crate::arena::classify_heap_space(owner).is_nursery() {
+            out.space[0] += 1;
+        } else {
+            // Old, Longlived and the transient PromotedYoung classification
+            // are all old-page residents for this three-way price split.
+            out.space[1] += 1;
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+crate::perry_thread_local! {
+    static LAYOUT_RESIDUE_HISTOGRAM_ENTRIES: Cell<usize> = const { Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(in crate::gc) fn test_reset_layout_residue_histogram_entries() {
+    LAYOUT_RESIDUE_HISTOGRAM_ENTRIES.with(|n| n.set(0));
+}
+
+#[cfg(test)]
+pub(in crate::gc) fn test_layout_residue_histogram_entries() -> usize {
+    LAYOUT_RESIDUE_HISTOGRAM_ENTRIES.with(Cell::get)
 }
 
 #[cfg(test)]
@@ -1054,7 +1178,7 @@ pub(in crate::gc) fn typed_layouts_insert(user_ptr: usize, descriptor: TypedLayo
 
 /// The one way to add a per-object pointer mask.
 #[inline]
-pub(in crate::gc) fn slot_masks_insert(user_ptr: usize, mask: LayoutSlotMask) {
+pub(in crate::gc) fn slot_masks_insert(user_ptr: usize, mask: LayoutSlotMask) -> bool {
     mark_per_object_layouts_nonempty();
     layout_addr_filter_add(user_ptr);
     // Armed BEFORE the insert makes the entry findable (young-log rule 1).
@@ -1065,6 +1189,31 @@ pub(in crate::gc) fn slot_masks_insert(user_ptr: usize, mask: LayoutSlotMask) {
         .is_none();
     if fresh && young {
         count_new_young_layout_record();
+    }
+    fresh
+}
+
+/// Insert-site wrappers for the diagnostic counter. Keeping them here avoids
+/// carrying provenance in `LayoutSlotMask`, whose size and hot-path shape must
+/// not change for an optional instrument.
+#[inline]
+pub(in crate::gc) fn slot_masks_insert_birth(user_ptr: usize, mask: LayoutSlotMask) {
+    if slot_masks_insert(user_ptr, mask) && crate::hot_diag::layout_on() {
+        crate::hot_diag::layout_note_mask_insert(crate::hot_diag::LayoutMaskInsertSite::Birth);
+    }
+}
+
+#[inline]
+pub(in crate::gc) fn slot_masks_insert_rebuild(user_ptr: usize, mask: LayoutSlotMask) {
+    if slot_masks_insert(user_ptr, mask) && crate::hot_diag::layout_on() {
+        crate::hot_diag::layout_note_mask_insert(crate::hot_diag::LayoutMaskInsertSite::Rebuild);
+    }
+}
+
+#[inline]
+pub(in crate::gc) fn layout_note_store_mask_insert() {
+    if crate::hot_diag::layout_on() {
+        crate::hot_diag::layout_note_mask_insert(crate::hot_diag::LayoutMaskInsertSite::Store);
     }
 }
 

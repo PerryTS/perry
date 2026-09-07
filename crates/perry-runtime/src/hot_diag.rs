@@ -503,6 +503,14 @@ fn ic_sink() -> &'static Option<Sink> {
 static LAYOUT_SINK: OnceLock<Option<Sink>> = OnceLock::new();
 static LAYOUT_ON: AtomicBool = AtomicBool::new(false);
 
+#[cfg(test)]
+thread_local! {
+    /// Per-test override/capture: mutating the process environment cannot
+    /// safely arm one libtest thread without affecting its neighbours.
+    static LAYOUT_TEST_ARMED: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+    static LAYOUT_TEST_OUTPUT: RefCell<String> = const { RefCell::new(String::new()) };
+}
+
 fn layout_sink() -> &'static Option<Sink> {
     LAYOUT_SINK.get_or_init(|| {
         let sink = sink_from_env("PERRY_LAYOUT_DIAG");
@@ -514,10 +522,41 @@ fn layout_sink() -> &'static Option<Sink> {
 /// Is the per-object-layout occupancy instrument armed?
 #[inline]
 pub fn layout_on() -> bool {
+    #[cfg(test)]
+    if let Some(armed) = LAYOUT_TEST_ARMED.with(std::cell::Cell::get) {
+        return armed;
+    }
     if LAYOUT_SINK.get().is_none() {
         layout_sink();
     }
     LAYOUT_ON.load(Ordering::Relaxed)
+}
+
+/// Which of the three dynamically learned mask paths inserted a new key.
+///
+/// Kept as a diagnostic counter rather than a field on `LayoutSlotMask`: the
+/// latter is on the trace/store path even when diagnostics are off, and
+/// changing its representation would violate this instrument's no-op contract.
+#[derive(Clone, Copy)]
+pub(crate) enum LayoutMaskInsertSite {
+    Birth = 0,
+    Rebuild = 1,
+    Store = 2,
+}
+
+/// Marginal histograms of the surviving `LAYOUT_SLOT_MASKS` residue.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct LayoutResidueHistogram {
+    pub(crate) keys: u64,
+    pub(crate) closure: u64,
+    pub(crate) object: u64,
+    pub(crate) array: u64,
+    pub(crate) other: u64,
+    pub(crate) slots: [u64; 6],
+    pub(crate) pointer_share: [u64; 4],
+    pub(crate) space: [u64; 3],
+    pub(crate) est_tag_checks_saved_per_trace: u64,
+    pub(crate) prune_walk_us: u64,
 }
 
 /// One collection's view of the per-object layout tables and the 4096-bit
@@ -553,22 +592,36 @@ pub struct LayoutDiag {
     outgrown: u64,
     /// Keys visited by prunes that DID rebuild — the walk that is still paid.
     rebuilt_keys: u64,
+    residue: LayoutResidueHistogram,
+    inserts_since: [u64; 3],
 }
 
 crate::perry_thread_local! {
     static LAYOUT_DIAG: RefCell<LayoutDiag> = RefCell::new(LayoutDiag::default());
 }
 
+/// Record one newly inserted per-object pointer mask. The caller has already
+/// tested [`layout_on`], so an unarmed run never resolves this counter's TLS.
+#[inline]
+pub(crate) fn layout_note_mask_insert(site: LayoutMaskInsertSite) {
+    LAYOUT_DIAG.with(|d| {
+        let mut d = d.borrow_mut();
+        let counter = &mut d.inserts_since[site as usize];
+        *counter = counter.saturating_add(1);
+    });
+}
+
 /// Record one death-prune's occupancy. `rebuilt_filter` says whether this
 /// prune rebuilt the address filter from its survivors, or found the tables
 /// too full for a 4,096-bit sketch to discriminate and saturated it instead.
-pub fn layout_note_prune(
+pub(crate) fn layout_note_prune(
     typed_len: usize,
     masks_len: usize,
     filter_bits_set: usize,
     filter_bits_total: usize,
     rebuilt_filter: bool,
     useful_keys: usize,
+    residue: LayoutResidueHistogram,
 ) {
     LAYOUT_DIAG.with(|d| {
         let mut d = d.borrow_mut();
@@ -581,6 +634,7 @@ pub fn layout_note_prune(
         d.filter_bits_total = filter_bits_total;
         d.filter_bits_set_max = d.filter_bits_set_max.max(filter_bits_set);
         d.useful_keys = useful_keys;
+        d.residue = residue;
         if rebuilt_filter {
             d.rebuilt += 1;
             d.rebuilt_keys += (typed_len + masks_len) as u64;
@@ -588,6 +642,12 @@ pub fn layout_note_prune(
             d.outgrown += 1;
         }
         let text = d.render();
+        d.inserts_since = [0; 3];
+        #[cfg(test)]
+        if LAYOUT_TEST_ARMED.with(std::cell::Cell::get) == Some(true) {
+            LAYOUT_TEST_OUTPUT.with(|out| out.borrow_mut().push_str(&text));
+            return;
+        }
         if let Some(sink) = layout_sink() {
             write_sink(sink, &text);
         }
@@ -640,7 +700,81 @@ impl LayoutDiag {
             "  filter rebuilds={} over {} keys walked; outgrown-and-skipped={}",
             self.rebuilt, self.rebuilt_keys, self.outgrown
         );
+        let r = self.residue;
+        let _ = writeln!(
+            out,
+            "[layout-diag] residue keys={} closure={} object={} array={} other={} \
+             slots{{4-7={} 8-15={} 16-31={} 32-63={} 64-255={} 256+={}}} \
+             ptr_share{{q1={} q2={} q3={} q4={}}} \
+             space{{nursery={} old={} malloc={}}} \
+             inserts_since{{birth={} rebuild={} store={}}} prune_walk_us={}",
+            r.keys,
+            r.closure,
+            r.object,
+            r.array,
+            r.other,
+            r.slots[0],
+            r.slots[1],
+            r.slots[2],
+            r.slots[3],
+            r.slots[4],
+            r.slots[5],
+            r.pointer_share[0],
+            r.pointer_share[1],
+            r.pointer_share[2],
+            r.pointer_share[3],
+            r.space[0],
+            r.space[1],
+            r.space[2],
+            self.inserts_since[0],
+            self.inserts_since[1],
+            self.inserts_since[2],
+            r.prune_walk_us,
+        );
+        let per_key_prune_ns = if r.keys == 0 {
+            0
+        } else {
+            r.prune_walk_us.saturating_mul(1_000) / r.keys
+        };
+        let _ = writeln!(
+            out,
+            "[layout-diag] price per_key_prune_ns={} est_tag_checks_saved_per_trace={}",
+            per_key_prune_ns, r.est_tag_checks_saved_per_trace
+        );
         out
+    }
+}
+
+/// Test-only per-thread sink override, matching `GcDiagTestGuard`'s shape.
+#[cfg(test)]
+pub(crate) struct LayoutDiagTestGuard {
+    previous: Option<bool>,
+}
+
+#[cfg(test)]
+impl LayoutDiagTestGuard {
+    pub(crate) fn force(armed: bool) -> Self {
+        let previous = LAYOUT_TEST_ARMED.with(|value| value.replace(Some(armed)));
+        LAYOUT_TEST_OUTPUT.with(|out| out.borrow_mut().clear());
+        LAYOUT_DIAG.with(|diag| *diag.borrow_mut() = LayoutDiag::default());
+        Self { previous }
+    }
+
+    pub(crate) fn output() -> String {
+        LAYOUT_TEST_OUTPUT.with(|out| out.borrow().clone())
+    }
+
+    pub(crate) fn residue() -> LayoutResidueHistogram {
+        LAYOUT_DIAG.with(|diag| diag.borrow().residue)
+    }
+}
+
+#[cfg(test)]
+impl Drop for LayoutDiagTestGuard {
+    fn drop(&mut self) {
+        LAYOUT_TEST_ARMED.with(|value| value.set(self.previous));
+        LAYOUT_TEST_OUTPUT.with(|out| out.borrow_mut().clear());
+        LAYOUT_DIAG.with(|diag| *diag.borrow_mut() = LayoutDiag::default());
     }
 }
 
