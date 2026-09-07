@@ -258,28 +258,11 @@ fi
 
 # ---- arm 5: PERRY_GC_SCHEDULE_RATE=1 + PERRY_GC_VERIFY_EVACUATION, #7254's pairing ----
 #
-# Both knobs are individually exercised above (the rate-1 schedule by arms 2/3,
-# PERRY_GC_VERIFY_EVACUATION nowhere in this script) and in
-# gc_repsel_matrix.sh (VERIFY_EVACUATION by `verify_evac`/`force_verify`,
-# the schedule nowhere in that script either) -- but no CI arm anywhere sets them
-# TOGETHER, which is exactly the CLAUDE.md knob-kill-policy hole #7254 found:
-# the pair panics 10/10 on `test_gap_repsel_p4a3_ptr_numarray`
-# (`gc evacuation verification failed: stale forwarded pointer in ...`) and
-# nothing in CI would have said a word.
-#
-# Deliberately NOT routed through gc_repsel_matrix.sh: a `rate1_verify` arm
-# registered there joins EVERY corpus file via `--arms all`, and #7254's own
-# sizing sweep (59 files) found a striking concentration of multi-minute-plus
-# runs under this exact pairing on the test_gap_gc_* reproducer corpus --
-# RATE=1 forces a full evacuating minor at EVERY back-edge poll, which no other
-# matrix arm does, so a corpus built for arms that collect only when a real
-# trigger fires is not this pairing's natural home. That population is not
-# yet triaged (host contention during the investigation made timeout vs.
-# genuine-cost vs. host-noise undecidable) and is out of scope for this fix;
-# see #7254 for the follow-up. This arm stays small and bounded instead: the
-# same tiny fixture arms 1-3 already use (proves the pairing is non-vacuous
-# and produces no false positive on known-good code), plus ONE pinned
-# regression witness against the exact file and exact panic #7254 reports.
+# The pairing stays bounded here because RATE=1 forces a full evacuating minor
+# at every back-edge poll, while registering it in gc_repsel_matrix.sh would run
+# that expensive combination over the entire representation corpus. Arm 5a
+# proves the paired instruments are live on the small fixture; arm 5b adds a
+# correctness oracle for the retained-growth workload that motivated the arm.
 echo
 echo "== arm 5: PERRY_GC_SCHEDULE_RATE=1 + PERRY_GC_VERIFY_EVACUATION (#7254's pairing) =="
 
@@ -311,43 +294,55 @@ if [[ "$fixture_copied" -eq 0 ]]; then
 fi
 echo "  correct output, exit 0, $fixture_copied objects copied under the verifier (live, no false positive)"
 
-echo "-- 5b: the pairing must still catch #7254's known reproducer --"
+echo "-- 5b: #7254's retained-growth workload must be correct under the pairing, and LIVE --"
 REPRO="$(dirname "$0")/../test-files/test_gap_repsel_p4a3_ptr_numarray.ts"
 if [[ ! -f "$REPRO" ]]; then
   echo "FAIL: #7254's reproducer is missing at $REPRO -- arm 5b has no subject." >&2
   exit 1
 fi
 PERRY_GC_MOVING_LOOP_POLLS=1 "$PERRY_BIN" compile "$REPRO" -o "$WORK/repro7254" >/dev/null
+# #7254 pinned this retained Ptr<NumArray> growth workload as an expected
+# evacuation-verifier abort. #4644 admitted retained growth-array aliases in
+# copying-minor verification, so this arm now requires Node-correct output and
+# live relocation under the pairing.
 set +e
-repro_out="$(env "${rate1_verify_env[@]}" "$WORK/repro7254" 2>&1)"
+node --experimental-strip-types "$REPRO" > "$WORK/repro7254.node.out" 2> "$WORK/repro7254.node.err"
+node_rc=$?
+env "${rate1_verify_env[@]}" "$WORK/repro7254" > "$WORK/repro7254.perry.out" 2> "$WORK/repro7254.perry.err"
 repro_rc=$?
 set -e
-# PINNED REGRESSION, not a correctness assertion: #7254 is a real, open,
-# pre-existing defect (confirmed 3/3 in this investigation, and previously
-# 10/10). Asserting it panics -- rather than skipping it -- is what makes
-# this arm a GATE instead of documentation: if this ever stops panicking, it
-# means either the bug got fixed (delete this block and add the file to a
-# normal correctness arm) or the failure mode silently changed shape (which
-# needs a look before anyone trusts that as a fix). Either way the gate
-# should say something, not stay quiet.
-if [[ $repro_rc -eq 0 ]]; then
-  echo "FAIL: #7254's reproducer no longer panics under the pairing (exit 0)." >&2
-  echo "      If this is because the underlying stale-forwarded-pointer bug" >&2
-  echo "      was fixed: great -- delete this pinned-regression block (arm" >&2
-  echo "      5b) and let the file run under the matrix's ordinary arms" >&2
-  echo "      instead. If nothing GC-related changed, this is itself a" >&2
-  echo "      regression report: something now hides the defect without" >&2
-  echo "      fixing it (e.g. the verifier stopped seeing the stale slot)." >&2
+if [[ $node_rc -ne 0 ]]; then
+  echo "FAIL [arm5b]: Node's oracle could not run #7254's workload, exited $node_rc:" >&2
+  tail -20 "$WORK/repro7254.node.err" >&2
   exit 1
 fi
-if ! grep -q 'stale forwarded pointer' <<<"$repro_out"; then
-  echo "FAIL: #7254's reproducer failed a NEW way under the pairing (exit $repro_rc):" >&2
-  echo "$repro_out" | tail -20 >&2
-  echo "      Expected the pinned 'stale forwarded pointer' verifier panic." >&2
-  echo "      A different failure mode needs its own triage, not silence." >&2
+if [[ $repro_rc -ne 0 ]]; then
+  echo "FAIL [arm5b]: #7254's workload failed under the pairing, exited $repro_rc:" >&2
+  tail -20 "$WORK/repro7254.perry.err" >&2
   exit 1
 fi
-echo "  reproduced as pinned (exit $repro_rc, stale forwarded pointer) -- #7254 still open, tracked not silent"
+if ! cmp -s "$WORK/repro7254.node.out" "$WORK/repro7254.perry.out"; then
+  echo "FAIL [arm5b]: #7254's workload differs from Node under the pairing:" >&2
+  diff -u "$WORK/repro7254.node.out" "$WORK/repro7254.perry.out" >&2 || true
+  exit 1
+fi
+repro_copied="$(awk '
+  {
+    for (i = 1; i <= NF; i++) {
+      if ($i ~ /^copied_objects=[0-9]+$/) {
+        split($i, kv, "=")
+        copied += kv[2]
+      }
+    }
+  }
+  END { print copied + 0 }
+' "$WORK/repro7254.perry.err")"
+if [[ "$repro_copied" -eq 0 ]]; then
+  echo "FAIL [arm5b]: #7254's workload copied ZERO objects under the pairing." >&2
+  echo "      Correct output without relocation proves nothing about the verifier." >&2
+  exit 1
+fi
+echo "  correct output vs node, exit 0, $repro_copied objects copied under the verifier (live retained-growth coverage)"
 
 # ---- arm 6: the schedule must TERMINATE at the shipped default (#7728) ------
 #
@@ -482,7 +477,7 @@ echo "PASS: instruments inert when off (0 retirements), live when on"
 echo "      (pressure-only=$pressure_retired, rate-1=$rate1_retired retirements), program correct in all arms."
 echo "      Quarantine clean over $probe_count real probes (allocation-point route)."
 echo "      RATE=1+VERIFY_EVACUATION pairing live and correct on known-good code,"
-echo "      and still pins #7254's open reproducer rather than staying silent about it."
+echo "      and validates #7254's retained-growth workload against Node with relocation live."
 echo "      The schedule terminates at the shipped default on a realistic poll count"
 echo "      (${scale_elapsed}s of a ${SCHED_BUDGET_S}s budget) while still forcing"
 echo "      $scale_forced collections that moved $scale_moved objects."
