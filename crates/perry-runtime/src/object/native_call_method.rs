@@ -129,7 +129,8 @@ unsafe fn class_vtable_fast_guard(object: f64, method_bytes: &[u8]) -> Option<(u
     // first — and it is the same screen the tower's own object-pointer
     // resolution uses, so the fast path cannot classify a receiver differently
     // from the code it is short-circuiting.
-    let (ptr, gc_type) = gc_pointer_and_type_from_value(object)?;
+    let (ptr, gc_type) =
+        gc_pointer_and_type_from_value(object, crate::hot_diag::NativeProbeCaller::NativeReceiver)?;
     if gc_type != crate::gc::GC_TYPE_OBJECT || ptr as usize != obj_addr {
         return None;
     }
@@ -137,6 +138,7 @@ unsafe fn class_vtable_fast_guard(object: f64, method_bytes: &[u8]) -> Option<(u
     // classifier `may_have_descriptor_entry` and `object_static_prototype` use,
     // so a `Some` here means both of those answer authoritatively from the meta
     // slot rather than falling back to a conservative `true`.
+    crate::hot_diag::native_note_buffer_probe(crate::hot_diag::NativeProbeCaller::NativeReceiver);
     let obj = super::prototype_chain::meta_capable_object(obj_addr)?;
     if !crate::object::object_is_regular(obj) {
         return None;
@@ -1021,7 +1023,10 @@ fn throw_object_to_string_not_function() -> ! {
 }
 
 #[inline]
-unsafe fn gc_pointer_and_type_from_value(value: f64) -> Option<(*const u8, u8)> {
+unsafe fn gc_pointer_and_type_from_value(
+    value: f64,
+    probe_caller: crate::hot_diag::NativeProbeCaller,
+) -> Option<(*const u8, u8)> {
     let jsval = JSValue::from_bits(value.to_bits());
     let ptr = if jsval.is_pointer() {
         jsval.as_pointer::<u8>()
@@ -1037,12 +1042,15 @@ unsafe fn gc_pointer_and_type_from_value(value: f64) -> Option<(*const u8, u8)> 
         return None;
     }
     let addr = ptr as usize;
+    crate::hot_diag::native_note_buffer_probe(probe_caller);
     if crate::buffer::is_any_array_buffer(addr) {
         return Some((ptr, crate::gc::GC_TYPE_BUFFER));
     }
+    crate::hot_diag::native_note_buffer_probe(probe_caller);
     if crate::buffer::is_uint8array_buffer(addr) {
         return Some((ptr, crate::gc::GC_TYPE_BUFFER));
     }
+    crate::hot_diag::native_note_typed_array_probe(probe_caller);
     if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
         return Some((ptr, crate::gc::GC_TYPE_TYPED_ARRAY));
     }
@@ -1098,12 +1106,25 @@ unsafe fn gc_pointer_and_type_from_value(value: f64) -> Option<(*const u8, u8)> 
 /// receiver is still classified the same way it was before the re-ordering.
 #[cfg(test)]
 pub(crate) unsafe fn test_gc_pointer_and_type_from_value(value: f64) -> Option<(*const u8, u8)> {
-    gc_pointer_and_type_from_value(value)
+    gc_pointer_and_type_from_value(value, crate::hot_diag::NativeProbeCaller::Other)
 }
 
 #[inline]
 pub(crate) unsafe fn object_ptr_from_value(value: f64) -> Option<*mut ObjectHeader> {
-    let (ptr, gc_type) = gc_pointer_and_type_from_value(value)?;
+    object_ptr_from_value_with_probe_caller(value, crate::hot_diag::NativeProbeCaller::Other)
+}
+
+#[inline]
+pub(crate) unsafe fn object_ptr_from_value_for_view(value: f64) -> Option<*mut ObjectHeader> {
+    object_ptr_from_value_with_probe_caller(value, crate::hot_diag::NativeProbeCaller::ViewCursor)
+}
+
+#[inline]
+unsafe fn object_ptr_from_value_with_probe_caller(
+    value: f64,
+    probe_caller: crate::hot_diag::NativeProbeCaller,
+) -> Option<*mut ObjectHeader> {
+    let (ptr, gc_type) = gc_pointer_and_type_from_value(value, probe_caller)?;
     if gc_type == crate::gc::GC_TYPE_OBJECT {
         Some(ptr as *mut ObjectHeader)
     } else {

@@ -307,6 +307,9 @@ pub fn object_static_prototype(obj_ptr: usize) -> Option<u64> {
     // registry entry (the write path classifies identically), so a meta
     // miss for a shaped object is authoritative.
     unsafe {
+        crate::hot_diag::native_note_buffer_probe(
+            crate::hot_diag::NativeProbeCaller::ObjectStaticPrototype,
+        );
         if let Some(obj) = meta_capable_object(obj_ptr) {
             let meta = (*obj).meta;
             if !meta.is_null() {

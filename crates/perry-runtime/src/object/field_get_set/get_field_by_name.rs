@@ -643,6 +643,9 @@ pub extern "C" fn js_object_get_field_by_name(
                 {
                     return JSValue::from_bits(value.to_bits());
                 }
+                crate::hot_diag::native_note_typed_array_probe(
+                    crate::hot_diag::NativeProbeCaller::ObjectFieldByName,
+                );
                 if let Some(kind) = crate::typedarray::lookup_typed_array_kind(addr) {
                     let elem_size = crate::typedarray::elem_size_for_kind(kind);
                     match key_bytes {

@@ -908,6 +908,9 @@ pub(super) unsafe fn dispatch_primitive(
         let top16 = raw_bits >> 48;
         if top16 == 0 && raw_bits >= 0x10000 {
             let addr = raw_bits as usize;
+            crate::hot_diag::native_note_typed_array_probe(
+                crate::hot_diag::NativeProbeCaller::DispatchPrimitive,
+            );
             if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
                 let ta = addr as *mut crate::typedarray::TypedArrayHeader;
                 if let Some(r) = dispatch_typed_array_method(ta, method_name, args_ptr, args_len) {

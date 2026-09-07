@@ -273,6 +273,9 @@ pub(crate) fn get_field_by_name_object_tail(
         // Route `.length` to `js_buffer_length` (matches the codegen path that
         // routes through PropertyGet for chained `Buffer.from(...).length`
         // expressions where the static type isn't recognized as Buffer).
+        crate::hot_diag::native_note_buffer_probe(
+            crate::hot_diag::NativeProbeCaller::ObjectFieldTail,
+        );
         if crate::buffer::is_registered_buffer(obj as usize) {
             if !key.is_null() {
                 let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
@@ -438,6 +441,9 @@ pub(crate) fn get_field_by_name_object_tail(
         // numeric-length views whose static type the codegen doesn't recognize;
         // pre-fix, only Uint8Array worked (it's a registered buffer) so
         // multi-byte `.byteLength` returned undefined.
+        crate::hot_diag::native_note_typed_array_probe(
+            crate::hot_diag::NativeProbeCaller::ObjectFieldTail,
+        );
         if let Some(kind) = crate::typedarray::lookup_typed_array_kind(obj as usize) {
             if !key.is_null() {
                 let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());

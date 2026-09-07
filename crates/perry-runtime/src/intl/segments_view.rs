@@ -86,7 +86,7 @@ fn counters() -> [u64; 4] {
 
 #[inline(always)]
 fn cursor_ptr(value: f64) -> Option<*mut ObjectHeader> {
-    let obj = unsafe { crate::object::object_ptr_from_value(value) }? as *mut ObjectHeader;
+    let obj = unsafe { crate::object::object_ptr_from_value_for_view(value) }? as *mut ObjectHeader;
     if unsafe { (*obj).class_id } != SEGMENTS_CURSOR_CLASS_ID {
         return None;
     }
