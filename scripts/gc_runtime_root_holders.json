@@ -267,6 +267,18 @@
       "why": "Boolean census request latch, set by census_arm and consumed at full-sweep entry; contains no address or JS value."
     },
     {
+      "file": "crates/perry-runtime/src/gc/copying.rs",
+      "name": "LAST_COHORT_SPLIT",
+      "verdict": "test_only",
+      "why": "Declared under #[cfg(test)] at crates/perry-runtime/src/gc/copying.rs:1951; this Cell<(usize, usize, usize, usize)> holds only the byte counts of the last survivor-space/fresh-cohort split for the tenuring lock tests. It is absent from shipped binaries."
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/tenuring.rs",
+      "name": "SURVIVOR_ROUND_MEASURED",
+      "verdict": "not_a_gc_pointer",
+      "why": "Declared at crates/perry-runtime/src/gc/tenuring.rs:212; this Cell<bool> records whether any survivor round has been rated on this thread, gating the occupancy rule off its floor. A boolean, never a heap pointer."
+    },
+    {
       "file": "crates/perry-runtime/src/gc/census.rs",
       "name": "LABEL",
       "verdict": "not_a_gc_pointer",
