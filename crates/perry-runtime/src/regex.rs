@@ -481,9 +481,9 @@ crate::perry_thread_local! {
     /// validation. Validity is a pure function of the pair, so the answer is
     /// worth remembering; `js_regexp_new` used to get this from a
     /// `REGEX_CACHE` hit, which stopped being a proxy once the compiled
-    /// program became lazy (see `regex::lazy`). Same cap and
-    /// clear-on-overflow policy as the program caches — the cost of a clear
-    /// is a repeated parse, never a wrong verdict. The unit value keeps
+    /// program became lazy (see `regex::lazy`). Same cap and one-entry
+    /// eviction policy as the program caches — eviction can repeat one parse,
+    /// never change a verdict. The unit value keeps
     /// `evict_regex_cache_if_full` shared with the three program caches.
     static VALIDATED_PATTERNS: RefCell<HashMap<(String, String), ()>> = RefCell::new(HashMap::new());
 }
@@ -1750,5 +1750,7 @@ pub(crate) fn test_last_exec_groups() -> usize {
 mod tests;
 #[cfg(all(test, feature = "regex-engine"))]
 mod tests_part2;
+#[cfg(all(test, feature = "regex-engine"))]
+mod tests_cache;
 #[cfg(all(test, feature = "regex-engine"))]
 mod tests_header;
