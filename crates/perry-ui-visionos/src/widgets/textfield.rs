@@ -79,8 +79,12 @@ pub fn create(placeholder_ptr: *const u8, on_change: f64) -> i64 {
     let placeholder = unsafe { str_from_header(placeholder_ptr) };
 
     unsafe {
+        // A PerryInsetTextField (UITextField subclass) so set_edge_insets can
+        // pad the text; it behaves as a plain field until an inset is set.
+        let mtm = objc2_foundation::MainThreadMarker::new()
+            .expect("perry/ui must run on the main thread");
         let text_field: Retained<UITextField> =
-            msg_send![objc2::runtime::AnyClass::get(c"UITextField").unwrap(), new];
+            super::inset_field::PerryInsetTextField::new(mtm).into_super();
         let ns_placeholder = NSString::from_str(&placeholder);
         let _: () = msg_send![&*text_field, setPlaceholder: &*ns_placeholder];
         let _: () = msg_send![&*text_field, setAccessibilityLabel: &*ns_placeholder];

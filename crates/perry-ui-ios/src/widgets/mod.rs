@@ -14,6 +14,7 @@ pub mod form;
 pub mod hstack;
 pub mod image;
 pub mod image_gallery;
+pub mod inset_field;
 pub mod map_view;
 pub mod navstack;
 pub mod pdf_view;

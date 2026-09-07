@@ -8,6 +8,7 @@ pub mod divider;
 pub mod form;
 pub mod hstack;
 pub mod image;
+pub mod inset_field;
 pub mod map_view;
 pub mod navstack;
 pub mod picker;
