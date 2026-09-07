@@ -414,9 +414,10 @@ pub(crate) struct CopyingNurseryTestGuard {
 }
 
 pub(super) fn reset_copying_nursery_runtime_test_state() {
-    // Age-sensitive tests assume the power-on tenuring threshold (promote at
-    // the 4th survival); pin it so a heavy-influx test earlier on the same
-    // thread cannot leak a lowered adaptive threshold in.
+    // Restore the adaptive policy to its power-on floor. Tests of mechanisms
+    // that require a particular promotion age pin it explicitly with
+    // `tenuring::set_survivals_for_test`, so a power-on policy change cannot
+    // silently change the mechanism they exercise.
     crate::gc::tenuring::reset_for_test();
     // #7645: the young-pin latch is process-wide and monotone, so one
     // earlier pinning test would otherwise leave every later copying test

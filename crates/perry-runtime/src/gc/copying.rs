@@ -617,8 +617,29 @@ impl CopyingNurseryCollector {
         // moved somewhere at any threshold), which is what makes the loop's
         // fixed point stable.
         match ptr.kind {
-            CopyingPointerKind::Eden => self.stats.eden_live_bytes += total,
-            _ => self.stats.survivor_live_bytes += total,
+            CopyingPointerKind::Eden => {
+                self.stats.eden_live_bytes += total;
+                // #9851 follow-up: the fresh half of `copied_bytes`. The
+                // survival-rate lock's denominator must be the intake of ONE
+                // cohort; `copied_bytes` also carries survivor residents being
+                // re-copied, which at a threshold above 2 is most of it.
+                if !promote {
+                    self.stats.eden_copied_bytes += total;
+                }
+            }
+            _ => {
+                self.stats.survivor_live_bytes += total;
+                // ...and the matching numerator. A from-survivor object whose
+                // stored age is 1 entered from Eden on the previous cycle, so
+                // it is a member of exactly the cohort `eden_copied_bytes`
+                // counted then. Ages above 1 have already survived a round and
+                // are a population selected for longevity; including them is
+                // what made the ratio drift above the lock's bar as the
+                // threshold rose.
+                if prior_age == 1 {
+                    self.stats.survivor_first_round_live_bytes += total;
+                }
+            }
         }
         new_user as usize
     }
@@ -1867,14 +1888,24 @@ pub(super) fn run_copied_minor_attempt(
             .copied_objects
             .saturating_add(collector.stats.promoted_objects),
     );
+    // #9851 follow-up: the survival-rate lock is fed the FRESH cohort's intake
+    // and that same cohort's survival, not the whole survivor space's. See
+    // `retune_after_scavenge`.
+    #[cfg(test)]
+    test_record_cohort_split(
+        collector.stats.copied_bytes,
+        collector.stats.eden_copied_bytes,
+        collector.stats.survivor_live_bytes,
+        collector.stats.survivor_first_round_live_bytes,
+    );
     retune_after_scavenge(
         collector.stats.eden_live_bytes,
-        collector.stats.copied_bytes,
-        collector.stats.survivor_live_bytes,
+        collector.stats.eden_copied_bytes,
+        collector.stats.survivor_first_round_live_bytes,
     );
     if crate::gc::gc_diag_enabled() {
         eprintln!(
-            "[gc-copy-minor] ran in_place={} untraced={} untraced_cycles={} untraced_objects={} in_place_blocks={} in_place_dead_bytes={} sparse_blocks={} survival_permille={} copied_objects={} copied_bytes={} promoted_objects={} promoted_bytes={} freed_bytes={} tenuring_survivals={} eden_live_bytes={} trigger={:?} declared_safepoint={}",
+            "[gc-copy-minor] ran in_place={} untraced={} untraced_cycles={} untraced_objects={} in_place_blocks={} in_place_dead_bytes={} sparse_blocks={} survival_permille={} copied_objects={} copied_bytes={} promoted_objects={} promoted_bytes={} freed_bytes={} tenuring_survivals={} eden_live_bytes={} eden_copied_bytes={} survivor_live_bytes={} survivor_first_round_live_bytes={} trigger={:?} declared_safepoint={}",
             collector.stats.in_place_promotion,
             untraced,
             super::untraced_promotion_cycles(),
@@ -1890,6 +1921,9 @@ pub(super) fn run_copied_minor_attempt(
             freed_bytes,
             collector.stats.tenuring_survivals,
             collector.stats.eden_live_bytes,
+            collector.stats.eden_copied_bytes,
+            collector.stats.survivor_live_bytes,
+            collector.stats.survivor_first_round_live_bytes,
             _trigger_kind,
             super::policy::GC_AT_DECLARED_SAFEPOINT.with(std::cell::Cell::get)
         );
@@ -1906,6 +1940,41 @@ pub(super) fn run_copied_minor_attempt(
         freed_bytes,
         malloc_swept: malloc_sweep_due,
     }))
+}
+
+/// Test-only witness for the #9851 follow-up: the whole-space pair against the
+/// fresh-cohort pair, as the copier computed them for one cycle. Without this
+/// the change is unfalsifiable from a test — the two quantities are equal on
+/// every heap whose survivor space holds a single generation, which is every
+/// heap at a threshold of 2 or below.
+#[cfg(test)]
+thread_local! {
+    static LAST_COHORT_SPLIT: std::cell::Cell<(usize, usize, usize, usize)> =
+        const { std::cell::Cell::new((0, 0, 0, 0)) };
+}
+
+#[cfg(test)]
+fn test_record_cohort_split(
+    copied_bytes: usize,
+    eden_copied_bytes: usize,
+    survivor_live_bytes: usize,
+    first_round_live_bytes: usize,
+) {
+    LAST_COHORT_SPLIT.with(|c| {
+        c.set((
+            copied_bytes,
+            eden_copied_bytes,
+            survivor_live_bytes,
+            first_round_live_bytes,
+        ))
+    });
+}
+
+/// `(copied_bytes, eden_copied_bytes, survivor_live_bytes, first_round_live_bytes)`
+/// from the most recent copying minor on this thread.
+#[cfg(test)]
+pub(super) fn test_last_cohort_split() -> (usize, usize, usize, usize) {
+    LAST_COHORT_SPLIT.with(std::cell::Cell::get)
 }
 
 fn finalize_dead_copied_minor_from_space_side_allocations() {

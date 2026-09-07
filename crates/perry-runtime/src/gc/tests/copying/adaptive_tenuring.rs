@@ -27,22 +27,24 @@ fn heavy_influx_lowers_threshold_and_promotes_next_cycle() {
     let _guard = CopyingNurseryTestGuard::new(SLOTS);
     assert_eq!(
         crate::gc::tenuring::tenuring_survivals(),
-        GC_COPY_PROMOTION_SURVIVALS,
-        "guard must start every test at the power-on threshold"
+        crate::gc::tenuring::OCCUPANCY_MIN_SURVIVALS,
+        "guard must start every test at the power-on floor, not the ceiling"
     );
 
     fill_slots_with_heavy_influx();
     let before = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
     assert!(crate::arena::pointer_in_nursery(before));
 
-    // Cycle 1 runs at the power-on threshold: the cohort is copied into a
-    // survivor space (ages to 1), and its influx re-tunes the threshold down
-    // to promote-on-first-copy.
+    // Cycle 1 runs at the power-on floor: the cohort is copied into a survivor
+    // space (ages to 1), and heavy influx must not take occupancy below that
+    // floor by claiming promote-on-first-copy without lifetime evidence.
     let _ = gc_collect_minor();
     assert_eq!(
         crate::gc::tenuring::tenuring_survivals(),
-        1,
-        "a >desired Eden survivor influx must drop the threshold to 1"
+        crate::gc::tenuring::OCCUPANCY_MIN_SURVIVALS,
+        "a >desired Eden survivor influx must drop the threshold to the \
+         occupancy floor (#9851: the occupancy rule measures space and may not \
+         claim promote-on-first-copy, which is a claim about lifetime)"
     );
     let after_first = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
     assert!(
@@ -51,7 +53,11 @@ fn heavy_influx_lowers_threshold_and_promotes_next_cycle() {
     );
 
     // Cycle 2 promotes the whole cohort instead of re-copying it: this is
-    // the ping-pong the adaptive threshold exists to break.
+    // the ping-pong the adaptive threshold exists to break. #9851 did NOT
+    // weaken this half — the cohort was copied once in cycle 1, so its
+    // `next_age` here is 2, which still satisfies `next_age >= 2`. The test's
+    // named invariant ("lowers threshold AND promotes next cycle") is intact;
+    // only the literal threshold moved.
     let _ = gc_collect_minor();
     for slot in 0..SLOTS {
         let addr = (js_shadow_slot_get(slot) & POINTER_MASK) as usize;
@@ -215,7 +221,13 @@ fn quiet_cycles_restore_power_on_threshold_debounced() {
 
     fill_slots_with_heavy_influx();
     let _ = gc_collect_minor();
-    assert_eq!(crate::gc::tenuring::tenuring_survivals(), 1);
+    // #9851: the occupancy floor, not 1. What this test protects — a DEBOUNCED
+    // restore, at most one step per cycle, ending at the power-on threshold —
+    // is asserted structurally below and is unchanged.
+    assert_eq!(
+        crate::gc::tenuring::tenuring_survivals(),
+        crate::gc::tenuring::OCCUPANCY_MIN_SURVIVALS
+    );
     // Promote the cohort out of the nursery so later cycles are quiet.
     let _ = gc_collect_minor();
 

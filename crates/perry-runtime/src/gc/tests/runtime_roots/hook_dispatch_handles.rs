@@ -131,6 +131,8 @@ fn test_timer_tick_roots_callback_args_and_previous_context_across_hooks() {
 
     let _async_hook_guard = AsyncHookRuntimeTestGuard::new();
     let _guard = CopyingNurseryTestGuard::new(0);
+    let _tenuring =
+        crate::gc::tenuring::set_survivals_for_test(crate::gc::tenuring::GC_TENURING_SURVIVALS_MAX);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     register_runtime_handle_root_scanner_for_tests();
     gc_register_mutable_root_scanner(crate::async_hooks::scan_async_hooks_roots_mut);
@@ -289,6 +291,8 @@ fn test_array_map_runtime_handles_survive_callback_copied_minor_gc() {
 #[test]
 fn test_map_materializers_runtime_handles_survive_copied_minor_gc() {
     let _guard = CopyingNurseryTestGuard::new(0);
+    let _tenuring =
+        crate::gc::tenuring::set_survivals_for_test(crate::gc::tenuring::GC_TENURING_SURVIVALS_MAX);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     register_runtime_handle_root_scanner_for_tests();
 
