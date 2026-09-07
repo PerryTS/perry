@@ -654,10 +654,10 @@ pub extern "C" fn js_fs_exists_sync(path_value: f64) -> i32 {
             None => return 0,
         };
 
-        // #5731 — a registered embedded asset exists for the life of the
-        // process; an unresolved `$perryfs/...` path does not (and must not
-        // fall through to a disk check of the literal virtual path).
-        if crate::embedded::lookup(&path_str).is_some() {
+        // #5731/#9941 — a registered embedded file or inferred directory
+        // exists for the life of the process; an unresolved `$perryfs/...`
+        // path must not fall through to a disk check of the virtual spelling.
+        if crate::embedded::metadata(&path_str).is_some() {
             return 1;
         }
         if crate::embedded::is_virtual_path(&path_str) {

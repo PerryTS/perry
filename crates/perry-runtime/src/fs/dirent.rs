@@ -39,6 +39,18 @@ impl DirentKind {
         }
     }
 
+    fn embedded(is_directory: bool) -> Self {
+        Self {
+            is_file: !is_directory,
+            is_dir: is_directory,
+            is_symlink: false,
+            is_block_device: false,
+            is_character_device: false,
+            is_fifo: false,
+            is_socket: false,
+        }
+    }
+
     #[cfg(feature = "regex-engine")]
     pub(crate) fn is_file(self) -> bool {
         self.is_file
@@ -403,6 +415,23 @@ pub extern "C" fn js_fs_readdir_sync(path_value: f64, options_value: f64) -> f64
         let with_file_types = options_with_file_types(options_value);
         let recursive = options_bool_field(options_value, b"recursive");
         let encoding_buffer = readdir_encoding_buffer(options_value);
+
+        if let Some(entries) = crate::embedded::read_dir(&path_str, recursive) {
+            let mut arr = js_array_alloc(entries.len() as u32);
+            for entry in &entries {
+                let value = if with_file_types {
+                    build_dirent_object(
+                        &entry.name,
+                        &entry.parent_path,
+                        DirentKind::embedded(entry.is_directory),
+                    )
+                } else {
+                    bytes_to_readdir_value(entry.relative_path.as_bytes(), encoding_buffer)
+                };
+                arr = js_array_push_f64(arr, value);
+            }
+            return f64::from_bits(i64::cast_unsigned(arr as i64));
+        }
 
         match fs::read_dir(&path_str) {
             Ok(entries) => {
