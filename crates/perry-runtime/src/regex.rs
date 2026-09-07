@@ -13,6 +13,7 @@ use std::cell::RefCell;
 #[cfg(feature = "regex-engine")]
 use std::collections::HashMap;
 use std::ptr;
+#[cfg(feature = "regex-engine")]
 use std::sync::Arc;
 
 #[cfg(feature = "regex-engine")]
@@ -387,8 +388,12 @@ pub(crate) fn test_alloc_nursery_regexp_for_move(source: &str, flags: &str) -> *
         // must be set explicitly or the GC follows a garbage pointer.
         (*ptr).meta = std::ptr::null_mut();
         (*ptr).programs_ptr = std::ptr::null();
-        (*ptr).pattern_ptr = pattern.get_raw_const_ptr::<StringHeader>();
-        (*ptr).flags_ptr = flags_string.get_raw_const_ptr::<StringHeader>();
+        pattern.with_const_ptr::<StringHeader, _>(|pattern| {
+            (*ptr).pattern_ptr = pattern;
+        });
+        flags_string.with_const_ptr::<StringHeader, _>(|flags| {
+            (*ptr).flags_ptr = flags;
+        });
         (*ptr).case_insensitive = flags.contains('i');
         (*ptr).global = flags.contains('g');
         (*ptr).multiline = flags.contains('m');
@@ -495,6 +500,13 @@ pub(crate) use compile_cache::*;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
+#[cfg_attr(
+    not(feature = "regex-engine"),
+    allow(
+        dead_code,
+        reason = "the feature-off runtime preserves RegExpHeader layout but constructs no matchers"
+    )
+)]
 pub(super) enum MatcherKind {
     Unbuilt,
     Standard,
@@ -1749,8 +1761,8 @@ pub(crate) fn test_last_exec_groups() -> usize {
 #[cfg(all(test, feature = "regex-engine"))]
 mod tests;
 #[cfg(all(test, feature = "regex-engine"))]
-mod tests_part2;
-#[cfg(all(test, feature = "regex-engine"))]
 mod tests_cache;
 #[cfg(all(test, feature = "regex-engine"))]
 mod tests_header;
+#[cfg(all(test, feature = "regex-engine"))]
+mod tests_part2;
