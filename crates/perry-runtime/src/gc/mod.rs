@@ -157,6 +157,7 @@ mod prefetch;
 
 mod copying;
 mod copying_first_cycle;
+mod copying_phase;
 mod copying_pointer_set;
 mod diag_sites;
 pub(crate) use diag_sites::primitive_dispatch as diag_primitive_dispatch;

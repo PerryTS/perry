@@ -1,3 +1,7 @@
+use super::copying_phase::{
+    finalize_dead_copied_minor_from_space_side_allocations, CopyingMinorPhase as Phase,
+    CopyingMinorPhaseDiag as PhaseDiag,
+};
 use super::*;
 
 /// Largest object `move_young` will relocate. See its use site for the
@@ -1234,6 +1238,7 @@ pub(super) fn run_copied_minor_attempt(
     let ptrs = eligibility
         .ptrs
         .expect("eligible copied-minor decision must carry pointer classifier");
+    let mut phase_diag = PhaseDiag::enabled();
 
     let phase_start = trace_phase_start(trace);
     let from_space_bytes = crate::arena::copying_from_space_in_use_bytes();
@@ -1257,11 +1262,15 @@ pub(super) fn run_copied_minor_attempt(
         && ptrs.malloc_registry_empty_at_start
         && untraced_promotion_instrument_veto().is_none()
         && super::should_attempt_first_cycle_promotion();
+    let promotion_phase_start = PhaseDiag::start(&phase_diag);
     let promotion = if super::should_promote_young_in_place() || speculate_first_cycle {
         crate::arena::retag_young_for_in_place_promotion(speculate_first_cycle)
     } else {
         crate::arena::InPlacePromotion::default()
     };
+    if let Some(diag) = phase_diag.as_mut() {
+        diag.record(Phase::Promotion, promotion_phase_start);
+    }
     // An empty plan (nothing in use to promote) falls back to the ordinary
     // path, so the from-space reset still runs.
     let promoting_in_place = !promotion.is_empty();
@@ -1340,8 +1349,13 @@ pub(super) fn run_copied_minor_attempt(
             "policy (should_promote_young_untraced)"
         })
     });
+    let reset_phase_start = PhaseDiag::start(&phase_diag);
     collector.stats.reset_blocks += crate::arena::copying_prepare_to_space();
+    if let Some(diag) = phase_diag.as_mut() {
+        diag.record(Phase::BlockResetFlip, reset_phase_start);
+    }
 
+    let root_scan_phase_start = PhaseDiag::start(&phase_diag);
     let native_stack_walk = if untraced {
         Default::default()
     } else {
@@ -1420,6 +1434,9 @@ pub(super) fn run_copied_minor_attempt(
         }
         visit_ffi_mutable_registered_roots_with_sources(&mut visitor, root_sources);
     }
+    if let Some(diag) = phase_diag.as_mut() {
+        diag.record(Phase::RootScan, root_scan_phase_start);
+    }
 
     // On an untraced promotion the dirty SCAN is where the whole per-object
     // mark pass lived: `retain`'s array store has a young child in every page
@@ -1432,6 +1449,7 @@ pub(super) fn run_copied_minor_attempt(
     // read path for the remembered set, which is where #7187's lazy barrier
     // arming happens. Skipping it would leave the barrier unarmed for the next
     // cycle — a missing-edge bug one collection later.
+    let remembered_phase_start = PhaseDiag::start(&phase_diag);
     let snapshot = remembered_dirty_snapshot();
     // #9754: objects whose every slot the dirty scan visited in-body — the
     // post-cycle coverage restore skips them (see `scan_dirty_object_slots`).
@@ -1449,6 +1467,8 @@ pub(super) fn run_copied_minor_attempt(
     // reserved bytes, and under-estimating falls back to ordinary growth.
     let mut dirty_scan_covered =
         crate::fast_hash::new_ptr_hash_set_with_capacity(previous_dirty_covered_estimate());
+    let mut remembered_entries = 0usize;
+    let mut remembered_slots = 0usize;
     if !untraced {
         let _phase = super::pin::CopyingWalkPhaseGuard::enter("remembered_set");
         let remembered_stats = scan_remembered_dirty_slots_copying(
@@ -1468,11 +1488,21 @@ pub(super) fn run_copied_minor_attempt(
         if let Some(trace) = trace.as_mut() {
             trace.remembered_set = remembered_stats;
         }
+        remembered_entries = remembered_stats.entries_scanned;
+        remembered_slots = remembered_stats.dirty_slots_scanned;
     }
+    if let Some(diag) = phase_diag.as_mut() {
+        diag.record(Phase::RememberedSetYoungLogs, remembered_phase_start);
+    }
+    let copy_phase_start = PhaseDiag::start(&phase_diag);
     unsafe {
         let _phase = super::pin::CopyingWalkPhaseGuard::enter("worklist_drain");
         collector.drain();
     }
+    if let Some(diag) = phase_diag.as_mut() {
+        diag.record(Phase::CopyEvacuation, copy_phase_start);
+    }
+    let rewrite_root_scan_phase_start = PhaseDiag::start(&phase_diag);
     {
         let scanners: Vec<MutableRootScannerEntry> = if untraced {
             Vec::new()
@@ -1504,6 +1534,9 @@ pub(super) fn run_copied_minor_attempt(
         }
         visit_ffi_mutable_registered_roots_with_sources(&mut visitor, root_sources);
     }
+    if let Some(diag) = phase_diag.as_mut() {
+        diag.record(Phase::RootScan, rewrite_root_scan_phase_start);
+    }
     // #7803 THE FIX: rebuild the promoted-object remembered set AFTER the last
     // phase that can move an object, not before the drain.
     //
@@ -1528,6 +1561,7 @@ pub(super) fn run_copied_minor_attempt(
     // the rebuild performs is exact rather than a from-space
     // over-approximation. Headers still carry GC_FLAG_MARKED (clear_marks
     // runs later), which the per-object gate requires.
+    let forwarding_phase_start = PhaseDiag::start(&phase_diag);
     if !collector.skip_remembering {
         let promoted_sticky =
             rebuild_evacuated_old_to_young_remembered_set(&collector.moved_headers);
@@ -1553,6 +1587,9 @@ pub(super) fn run_copied_minor_attempt(
     super::roots::stack_maps_native_slot_verify(untraced, &|addr| {
         format!("{:?}", collector.ptrs.classify(addr).map(|ptr| ptr.kind))
     });
+    if let Some(diag) = phase_diag.as_mut() {
+        diag.record(Phase::ForwardingFixups, forwarding_phase_start);
+    }
     trace_phase_record(trace, "copying_nursery", phase_start);
 
     // #7937: the attempt's own trace has finished, so the ratio it was missing
@@ -1659,8 +1696,16 @@ pub(super) fn run_copied_minor_attempt(
     // run here, same window as fromspace_scan (after rewrite, before reset).
     super::native_stack_scan::run_native_stack_scan();
 
-    crate::promise::cleanup_copied_minor_promise_contexts_for_gc();
-    finalize_dead_copied_minor_from_space_side_allocations();
+    let finalization = finalize_dead_copied_minor_from_space_side_allocations();
+    if let Some(diag) = phase_diag.as_mut() {
+        diag.add_nanos(Phase::DeadOwnerSideTablePruning, finalization.dead_owner_ns);
+        diag.add_nanos(
+            Phase::FromSpaceFinalization,
+            finalization
+                .total_ns
+                .saturating_sub(finalization.dead_owner_ns),
+        );
+    }
     // #7742: on a promoting cycle the young blocks are handed to old-gen
     // instead of being reset. This MUST stay before `clear_marks` — the finish
     // walk reads `GC_FLAG_MARKED` to decide which objects to index — and it
@@ -1668,6 +1713,7 @@ pub(super) fn run_copied_minor_attempt(
     // blocks the reset would recycle are the blocks this keeps.
     let (reset, promotion_stats) = if promoting_in_place {
         let phase_start = trace_phase_start(trace);
+        let promotion_phase_start = PhaseDiag::start(&phase_diag);
         super::note_promoted_young_capacity(promotion.reserved_bytes());
         let promotion_stats = crate::arena::finish_in_place_promotion(
             promotion,
@@ -1677,6 +1723,9 @@ pub(super) fn run_copied_minor_attempt(
                 crate::arena::PromotionLiveness::Marked
             },
         );
+        if let Some(diag) = phase_diag.as_mut() {
+            diag.record(Phase::Promotion, promotion_phase_start);
+        }
         trace_phase_record(trace, "in_place_promotion", phase_start);
         (
             crate::arena::ArenaResetStats {
@@ -1687,10 +1736,12 @@ pub(super) fn run_copied_minor_attempt(
             promotion_stats,
         )
     } else {
-        (
-            crate::arena::copying_reset_from_spaces_and_flip(),
-            crate::arena::InPlacePromotionStats::default(),
-        )
+        let reset_phase_start = PhaseDiag::start(&phase_diag);
+        let reset = crate::arena::copying_reset_from_spaces_and_flip();
+        if let Some(diag) = phase_diag.as_mut() {
+            diag.record(Phase::BlockResetFlip, reset_phase_start);
+        }
+        (reset, crate::arena::InPlacePromotionStats::default())
     };
     collector.stats.reset_blocks += reset.reset_blocks;
     if untraced {
@@ -1715,6 +1766,7 @@ pub(super) fn run_copied_minor_attempt(
     if let Some(trace) = trace.as_mut() {
         trace.old_pages = crate::arena::old_page_summary();
     }
+    let remembered_restore_phase_start = PhaseDiag::start(&phase_diag);
     remembered_set_clear();
     collector.sticky.restore();
     if !collector.skip_remembering {
@@ -1722,6 +1774,12 @@ pub(super) fn run_copied_minor_attempt(
         // Per minor, not at exit: the rig SIGKILLs cc. Cumulative counters, so
         // the last line before the kill is the answer.
         crate::arena::page_class_table_report();
+    }
+    if let Some(diag) = phase_diag.as_mut() {
+        diag.record(
+            Phase::RememberedSetYoungLogs,
+            remembered_restore_phase_start,
+        );
     }
     // The mechanism, counted rather than assumed: with the pre-size working,
     // `capacity` is already >= `len` on entry and hashbrown never grows the
@@ -1923,11 +1981,27 @@ pub(super) fn run_copied_minor_attempt(
         // This is intentionally the last diagnostic action before returning to
         // the mutator: `pause_us` prices the whole copied-minor path, including
         // finalization, pruning, policy feedback and the diagnostic work above.
-        let pause_us = start.elapsed().as_micros() as u64;
+        let pause_ns = start.elapsed().as_nanos() as u64;
+        let pause_us = pause_ns / 1000;
+        let phases = phase_diag
+            .as_ref()
+            .expect("PERRY_GC_DIAG phase accounting must be enabled")
+            .render(
+                pause_ns,
+                scan_us,
+                collector.stats.copied_objects,
+                collector.stats.copied_bytes,
+                collector.stats.promoted_objects,
+                collector.stats.promoted_bytes,
+                remembered_entries,
+                remembered_slots,
+                &finalization,
+            );
         eprintln!(
-            "[gc-copy-minor] ran pause_us={} scan_us={} in_place={} untraced={} untraced_cycles={} untraced_objects={} in_place_blocks={} in_place_dead_bytes={} sparse_blocks={} survival_permille={} copied_objects={} copied_bytes={} promoted_objects={} promoted_bytes={} freed_bytes={} tenuring_survivals={} eden_live_bytes={} eden_copied_bytes={} survivor_live_bytes={} survivor_first_round_live_bytes={} trigger={:?} declared_safepoint={}",
+            "[gc-copy-minor] ran pause_us={} scan_us={} phases: {} in_place={} untraced={} untraced_cycles={} untraced_objects={} in_place_blocks={} in_place_dead_bytes={} sparse_blocks={} survival_permille={} copied_objects={} copied_bytes={} promoted_objects={} promoted_bytes={} freed_bytes={} tenuring_survivals={} eden_live_bytes={} eden_copied_bytes={} survivor_live_bytes={} survivor_first_round_live_bytes={} trigger={:?} declared_safepoint={}",
             pause_us,
             scan_us,
+            phases,
             collector.stats.in_place_promotion,
             untraced,
             super::untraced_promotion_cycles(),
@@ -1989,15 +2063,4 @@ fn test_record_cohort_split(
 #[cfg(test)]
 pub(super) fn test_last_cohort_split() -> (usize, usize, usize, usize) {
     LAST_COHORT_SPLIT.with(std::cell::Cell::get)
-}
-
-fn finalize_dead_copied_minor_from_space_side_allocations() {
-    crate::map::finalize_dead_copied_minor_from_space_maps();
-    crate::set::finalize_dead_copied_minor_from_space_sets();
-    crate::node_submodules::diagnostics_gc::finalize_dead_copied_minor_from_space_errors();
-    crate::regex::finalize_dead_copied_minor_from_space_regexps();
-    // 2026-07-09 GC audit wave 2: the from-space flip runs no per-object
-    // finalize hooks, so entries keyed by dead from-space owners in the
-    // object-address-keyed side tables are pruned here (headers still intact).
-    super::dead_owner::prune_dead_owner_side_tables_copied_minor();
 }
