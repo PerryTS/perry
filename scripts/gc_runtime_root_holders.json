@@ -390,26 +390,6 @@
       "why": "RegExp construction/exec diagnostics (`PERRY_REGEX_DIAG`), off unless armed. Every field is a counter or an `Instant` except `per_pattern: HashMap<usize, PatStat>`, whose VALUE is Rust-owned (an owned prefix `String`, a flags `String`, counters). The KEY is a pattern `StringHeader` address, so it is a heap address \u2014 but it is used ONLY as an opaque grouping id and is never dereferenced: `PatStat::prefix` and `byte_len` are filled from the `&[u8]` argument at first insert, never by reading the key. Nothing here is traced, rooted or rewritten. The one consequence of the address being reused after a pattern dies is that two patterns' diagnostic counters merge into one row \u2014 an inaccuracy in an off-by-default diagnostic, with no collector implication. Distinct from `PASS1_MARKED`, whose addresses ARE walked and which therefore carries `non_moving_snapshot` with a pinned window."
     },
     {
-      "file": "crates/perry-runtime/src/object/regex_proto_thunks.rs",
-      "name": "REGEXP_PROTOTYPE_PTR_SLOT",
-      "verdict": "covered_elsewhere",
-      "scanner": "object::scan_object_cache_roots_mut visits REGEXP_PROTOTYPE_PTR as a raw mutable root; registered by gc_init",
-      "why": "Backing Perry-TLS atomic for the realm RegExp prototype. Its RealmAtomicI64 wrapper stores through the root barrier and the registered object-cache scanner marks and rewrites it."
-    },
-    {
-      "file": "crates/perry-runtime/src/object/regex_proto_thunks.rs",
-      "name": "REGEXP_PROTOTYPE_TEST_CLOSURE_SLOT",
-      "verdict": "covered_elsewhere",
-      "scanner": "object::scan_object_cache_roots_mut visits REGEXP_PROTOTYPE_TEST_CLOSURE as a NaN-boxed mutable root; registered by gc_init",
-      "why": "Backing Perry-TLS atomic for the canonical RegExp.prototype.test closure. The registered object-cache scanner marks and rewrites its NaN-boxed pointer."
-    },
-    {
-      "file": "crates/perry-runtime/src/object/regex_proto_thunks.rs",
-      "name": "REGEXP_PROTOTYPE_TEST_INDEX_SLOT",
-      "verdict": "not_a_gc_pointer",
-      "why": "The u32 field index of RegExp.prototype.test, or u32::MAX before installation. It is an array offset and never stores a heap address or NaN-boxed value."
-    },
-    {
       "file": "crates/perry-runtime/src/regex/site_test.rs",
       "name": "TEST_NO_ALLOC",
       "verdict": "test_only",
