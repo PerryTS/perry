@@ -1,28 +1,23 @@
-//! Per-object pointer-slot layout: the `GcHeader._reserved` layout states,
-//! store-time descriptor maintenance (`layout_note_slot`), rebuild/transfer
-//! across copying GC, and the child-slot enumeration the collector walks.
-//! The slot-mask representation lives in `layout/slot_mask.rs`; the
-//! typed-shape descriptor *installation* protocol (`js_gc_init_typed_shape_layout`
-//! / `js_gc_declare_typed_shape_layout`) lives in `layout/typed_shape.rs`.
+//! Per-object pointer-slot states, store maintenance, copying-GC transfer and
+//! child-slot enumeration. Mask storage is in `layout/slot_mask.rs`; typed
+//! descriptor installation is in `layout/typed_shape.rs`.
 
 use super::hot_tls::{hot_layout_slot_masks, hot_shape_layouts};
 use super::layout_tables::{
-    layout_forget_object, mark_per_object_layouts_nonempty, per_object_slot_mask,
-    refresh_per_object_layouts_flag, slot_masks_insert, slot_masks_remove,
+    layout_forget_object, layout_note_store_mask_insert, mark_per_object_layouts_nonempty,
+    per_object_slot_mask, refresh_per_object_layouts_flag, slot_masks_insert,
+    slot_masks_insert_birth, slot_masks_insert_rebuild, slot_masks_remove,
     transfer_per_object_descriptor, transfer_per_object_slot_mask, typed_layouts_insert,
     typed_layouts_remove, with_per_object_descriptor,
 };
 use super::*;
-
-// Copied-nursery survival age stored in otherwise-unused low
-// GcHeader._reserved bits. Bits 0..2 remain object freeze/seal flags
-// and bits 14..15 remain layout state.
+// Copied-nursery survival age in otherwise-unused low `_reserved` bits;
+// bits 0..2 remain object flags and bits 14..15 remain layout state.
 pub(super) const GC_COPY_SURVIVAL_AGE_SHIFT: usize = 3;
 pub(super) const GC_COPY_SURVIVAL_AGE_MASK: u16 = 0x0038;
 pub(super) const GC_COPY_PROMOTION_SURVIVALS: u8 = 4;
 
-// Pointer-slot layout state stored in the high bits of GcHeader._reserved.
-// Low bits remain object freeze/seal/preventExtensions flags.
+// Pointer-slot layout state in high `_reserved` bits; low bits remain object flags.
 pub const GC_LAYOUT_STATE_MASK: u16 = 0xC000;
 pub(super) const GC_LAYOUT_UNKNOWN: u16 = 0x0000;
 /// No payload slot holds a pointer, so `heap_payload_slot_selection` skips the
@@ -42,18 +37,11 @@ pub(super) const GC_LAYOUT_UNKNOWN: u16 = 0x0000;
 /// probe read its records only after the last GC. Under `PERRY_JSON_TAPE=0` the
 /// same sabotage SIGSEGVs. So:
 ///
-/// - "clean at rate 1 + from-space protect" is evidence only once you have
-///   shown the misdeclared object EXISTED during a collection;
-/// - `PERRY_GC_FROMSPACE_SCAN=1` is the instrument to prefer — its
-///   whole-payload word scan consults no layout state, and it reported the
-///   stranded children at exactly `dangling=8000 owners=4000`;
-/// - `PERRY_GC_VERIFY_EVACUATION` is blind here by construction: it walks the
-///   same enumeration the rewrite pass walks, which is to say it asks this
-///   state which slots exist.
-///
-/// The workload-free detectors are the child-slot enumerator and relocation
-/// across a copying minor; worked example, sabotage-verified in both
-/// directions: `gc/tests/copying/deferred_finalize_7635.rs`.
+/// Therefore first prove the object existed during collection; prefer
+/// `PERRY_GC_FROMSPACE_SCAN=1`, whose whole-payload scan ignores layout state.
+/// `PERRY_GC_VERIFY_EVACUATION` is blind because it trusts this enumeration.
+/// Workload-free coverage lives in the child-slot and copying-relocation tests
+/// in `gc/tests/copying/deferred_finalize_7635.rs`.
 pub const GC_LAYOUT_POINTER_FREE: u16 = 0x4000;
 pub(crate) const GC_LAYOUT_SIDE_MASK: u16 = 0x8000;
 // A side-layout payload whose entire live prefix contains pointers. Bit 13 is
@@ -966,6 +954,7 @@ pub(crate) fn layout_note_slot(parent_user: usize, slot_index: usize, value_bits
                         // do the most damage.
                         let young = super::layout_tables::arm_young_layout_key(parent_user);
                         masks.insert(parent_user, mask);
+                        layout_note_store_mask_insert();
                         mark_per_object_layouts_nonempty();
                         super::layout_tables::layout_addr_filter_note(parent_user);
                         if young {
@@ -1173,7 +1162,7 @@ pub(super) unsafe fn layout_rebuild_from_slots_with_policy(
         slot_masks_remove(user_ptr as usize);
     } else {
         set_layout_state(header, GC_LAYOUT_SIDE_MASK);
-        slot_masks_insert(user_ptr as usize, mask);
+        slot_masks_insert_rebuild(user_ptr as usize, mask);
     }
 }
 
@@ -1228,7 +1217,7 @@ pub(crate) unsafe fn layout_init_from_slots(
             set_layout_state(header, GC_LAYOUT_UNKNOWN);
         } else {
             set_layout_state(header, GC_LAYOUT_SIDE_MASK);
-            slot_masks_insert(user_ptr as usize, LayoutSlotMask::Inline(bits));
+            slot_masks_insert_birth(user_ptr as usize, LayoutSlotMask::Inline(bits));
         }
         return any_pointer;
     }
@@ -1247,7 +1236,7 @@ pub(crate) unsafe fn layout_init_from_slots(
         set_layout_state(header, GC_LAYOUT_UNKNOWN);
     } else {
         set_layout_state(header, GC_LAYOUT_SIDE_MASK);
-        slot_masks_insert(user_ptr as usize, mask);
+        slot_masks_insert_birth(user_ptr as usize, mask);
     }
     any_pointer
 }

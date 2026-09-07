@@ -37,6 +37,7 @@ mod incremental_sweep_reclaim;
 mod inline_generation_gate_contract;
 mod inline_pointer_bearing_contract;
 mod layout_pointer_free_hazard;
+mod layout_residue_histogram;
 mod layout_trace;
 mod lazy_intrinsic_towers;
 mod lazy_tape_side_alloc;
