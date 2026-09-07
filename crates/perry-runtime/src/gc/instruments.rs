@@ -347,11 +347,28 @@ static REMARK_TOTAL_US: AtomicU64 = AtomicU64::new(0);
 static MINOR_TOTAL_US: AtomicU64 = AtomicU64::new(0);
 /// Total microseconds spent inside synchronous `js_gc_collect` calls.
 static FULL_TOTAL_US: AtomicU64 = AtomicU64::new(0);
+/// Bytes copied into a survivor space, for the tenuring copy-price diagnostic.
+static TENURING_COPIED_BYTES: AtomicU64 = AtomicU64::new(0);
+/// Bytes promoted to old-gen, for the tenuring promotion-price diagnostic.
+static TENURING_PROMOTED_BYTES: AtomicU64 = AtomicU64::new(0);
 
 /// Record one copying minor's pause duration.
 #[inline]
 pub(crate) fn note_copying_minor_pause_us(us: u64) {
     MINOR_TOTAL_US.fetch_add(us, Ordering::Relaxed);
+}
+
+/// Record the byte denominators for the tenuring price experiment.
+///
+/// These are diagnostic-only: when `PERRY_GC_DIAG` is off the two atomics are
+/// untouched, so measuring the future decision rule adds no release-path cost.
+#[inline]
+pub(crate) fn note_tenuring_price_bytes(copied_bytes: usize, promoted_bytes: usize) {
+    if !crate::gc::gc_diag_enabled() {
+        return;
+    }
+    TENURING_COPIED_BYTES.fetch_add(copied_bytes as u64, Ordering::Relaxed);
+    TENURING_PROMOTED_BYTES.fetch_add(promoted_bytes as u64, Ordering::Relaxed);
 }
 
 /// Record one synchronous full collection's wall duration.
@@ -368,6 +385,20 @@ pub fn gc_time_totals_us() -> (u64, u64, u64, u64) {
         REMARK_TOTAL_US.load(Ordering::Relaxed),
         MINOR_TOTAL_US.load(Ordering::Relaxed),
         FULL_TOTAL_US.load(Ordering::Relaxed),
+    )
+}
+
+/// `(copy pause us, copied bytes, step+remark us, promoted bytes)` cumulative
+/// counters for pricing aging against promotion. Byte counters remain zero
+/// unless diagnostics are enabled.
+pub(crate) fn tenuring_price_counters() -> (u64, u64, u64, u64) {
+    (
+        MINOR_TOTAL_US.load(Ordering::Relaxed),
+        TENURING_COPIED_BYTES.load(Ordering::Relaxed),
+        STEP_TOTAL_US
+            .load(Ordering::Relaxed)
+            .saturating_add(REMARK_TOTAL_US.load(Ordering::Relaxed)),
+        TENURING_PROMOTED_BYTES.load(Ordering::Relaxed),
     )
 }
 
