@@ -1,0 +1,218 @@
+[
+  {
+    "fixture": "object_1k",
+    "operation": "parse",
+    "iterations": 20000,
+    "totalCpuUs": {
+      "parent": 24656,
+      "candidate": 24770.5,
+      "delta_percent": 0.4643900064893014
+    },
+    "loopCpuUs": {
+      "parent": 15980.5,
+      "candidate": 15965.5,
+      "delta_percent": -0.09386439723413353
+    },
+    "drainCpuUs": {
+      "parent": 8675.5,
+      "candidate": 8805,
+      "delta_percent": 1.4927093539277347
+    },
+    "trace_cycles": {
+      "candidate": 3,
+      "parent": 3
+    }
+  },
+  {
+    "fixture": "records_object_20m",
+    "operation": "roundtrip",
+    "iterations": 7,
+    "totalCpuUs": {
+      "parent": 1130897,
+      "candidate": 1124733,
+      "delta_percent": -0.545054058857708
+    },
+    "loopCpuUs": {
+      "parent": 1075619,
+      "candidate": 1069633,
+      "delta_percent": -0.5565167591870313
+    },
+    "drainCpuUs": {
+      "parent": 55278,
+      "candidate": 55100,
+      "delta_percent": -0.3220087557436968
+    },
+    "trace_cycles": {
+      "parent": 11,
+      "candidate": 11
+    }
+  },
+  {
+    "fixture": "records_object_20m",
+    "operation": "roundtrip",
+    "iterations": 8,
+    "totalCpuUs": {
+      "parent": 1236621.5,
+      "candidate": 1290340,
+      "delta_percent": 4.343972670699969
+    },
+    "loopCpuUs": {
+      "parent": 1233074.5,
+      "candidate": 1219804,
+      "delta_percent": -1.0762123456449668
+    },
+    "drainCpuUs": {
+      "parent": 3547,
+      "candidate": 70536,
+      "delta_percent": 1888.6100930363689
+    },
+    "trace_cycles": {
+      "candidate": 12,
+      "parent": 13
+    }
+  },
+  {
+    "fixture": "records_object_20m",
+    "operation": "roundtrip",
+    "iterations": 9,
+    "totalCpuUs": {
+      "parent": 1449090.5,
+      "candidate": 1387443.5,
+      "delta_percent": -4.254185642649643
+    },
+    "loopCpuUs": {
+      "parent": 1393694,
+      "candidate": 1381509.5,
+      "delta_percent": -0.8742593424381551
+    },
+    "drainCpuUs": {
+      "parent": 55396.5,
+      "candidate": 5934,
+      "delta_percent": -89.2881319216918
+    },
+    "trace_cycles": {
+      "candidate": 13,
+      "parent": 14
+    }
+  },
+  {
+    "fixture": "records_object_20m",
+    "operation": "roundtrip",
+    "iterations": 16,
+    "totalCpuUs": {
+      "parent": 2504175,
+      "candidate": 2430559.5,
+      "delta_percent": -2.9397106831591246
+    },
+    "loopCpuUs": {
+      "parent": 2027301,
+      "candidate": 2360307.5,
+      "delta_percent": 16.42610051492106
+    },
+    "drainCpuUs": {
+      "parent": 476874,
+      "candidate": 70252,
+      "delta_percent": -85.26822598841622
+    },
+    "trace_cycles": {
+      "parent": 21,
+      "candidate": 19
+    }
+  },
+  {
+    "fixture": "records_object_20m",
+    "operation": "roundtrip",
+    "iterations": 24,
+    "totalCpuUs": {
+      "parent": 3670531.5,
+      "candidate": 3385243,
+      "delta_percent": -7.772402988504523
+    },
+    "loopCpuUs": {
+      "parent": 2688571,
+      "candidate": 3378823.5,
+      "delta_percent": 25.67358273223954
+    },
+    "drainCpuUs": {
+      "parent": 981960.5,
+      "candidate": 6419.5,
+      "delta_percent": -99.34625679953521
+    },
+    "trace_cycles": {
+      "parent": 29,
+      "candidate": 25
+    }
+  },
+  {
+    "fixture": "small_record",
+    "operation": "stringify",
+    "iterations": 100000,
+    "totalCpuUs": {
+      "parent": 38163,
+      "candidate": 39604,
+      "delta_percent": 3.7759086025731747
+    },
+    "loopCpuUs": {
+      "parent": 33211,
+      "candidate": 34344.5,
+      "delta_percent": 3.4130258047032624
+    },
+    "drainCpuUs": {
+      "parent": 4952,
+      "candidate": 5259.5,
+      "delta_percent": 6.209612277867538
+    },
+    "trace_cycles": {
+      "parent": 2,
+      "candidate": 2
+    }
+  },
+  {
+    "fixture": "small_record",
+    "operation": "stringify",
+    "iterations": 1000000,
+    "totalCpuUs": {
+      "parent": 343112,
+      "candidate": 349390,
+      "delta_percent": 1.8297232390589668
+    },
+    "loopCpuUs": {
+      "parent": 340803,
+      "candidate": 347113,
+      "delta_percent": 1.851509523096917
+    },
+    "drainCpuUs": {
+      "parent": 2309,
+      "candidate": 2277,
+      "delta_percent": -1.3858813339107878
+    },
+    "trace_cycles": {
+      "candidate": 10,
+      "parent": 10
+    }
+  },
+  {
+    "fixture": "wide_1m",
+    "operation": "parse",
+    "iterations": 60,
+    "totalCpuUs": {
+      "parent": 2153422,
+      "candidate": 1226191,
+      "delta_percent": -43.05849016124104
+    },
+    "loopCpuUs": {
+      "parent": 1987445.5,
+      "candidate": 1069914.5,
+      "delta_percent": -46.16634770613835
+    },
+    "drainCpuUs": {
+      "parent": 165976.5,
+      "candidate": 156276.5,
+      "delta_percent": -5.844200835660473
+    },
+    "trace_cycles": {
+      "parent": 46,
+      "candidate": 16
+    }
+  }
+]

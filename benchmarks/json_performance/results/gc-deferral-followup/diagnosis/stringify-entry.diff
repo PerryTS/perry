@@ -1,0 +1,106 @@
+--- batch
+
++++ defer2
+
+@@ -52,7 +52,7 @@
+
+ bl	<__RNvNtNtCRATE_13perry_runtime4json13stringify_api24try_stringify_lazy_array>
+ tbnz	w0, #0x0, <internal>
+ adrp	x0, <reloc>
+-add	x0, x0, #0xf0
++add	x0, x0, #0x318
+ ldr	x8, [x0]
+ blr	x8
+ mov	x19, x0
+@@ -61,7 +61,7 @@
+
+ str	w8, [x0]
+ cbz	w24, <internal>
+ adrp	x0, <reloc>
+-add	x0, x0, #0x78
++add	x0, x0, #0x2a0
+ ldr	x8, [x0]
+ blr	x8
+ mov	x20, x0
+@@ -91,17 +91,17 @@
+
+ str	x8, [x20]
+ b	<internal>
+ adrp	x0, <reloc>
+-add	x0, x0, #0x120
++add	x0, x0, #0x348
+ ldr	x8, [x0]
+ blr	x8
+ strb	wzr, [x0]
+ adrp	x0, <reloc>
+-add	x0, x0, #0x138
++add	x0, x0, #0x378
+ ldr	x8, [x0]
+ blr	x8
+ strb	wzr, [x0]
+ adrp	x0, <reloc>
+-add	x0, x0, #0x108
++add	x0, x0, #0x330
+ ldr	x8, [x0]
+ blr	x8
+ ldrb	w8, [x0, #0x20]
+@@ -110,7 +110,7 @@
+
+ cbnz	x8, <internal>
+ str	xzr, [x0, #0x18]
+ adrp	x0, <reloc>
+-add	x0, x0, #0xa8
++add	x0, x0, #0x2d0
+ ldr	x8, [x0]
+ blr	x8
+ mov	x20, x0
+@@ -133,7 +133,7 @@
+
+ stp	x9, xzr, [sp, #0x10]
+ str	x8, [sp, #0x8]
+ adrp	x0, <reloc>
+-add	x0, x0, #0x90
++add	x0, x0, #0x2b8
+ ldr	x8, [x0]
+ blr	x8
+ ldrb	w8, [x0, #0x20]
+@@ -235,7 +235,7 @@
+
+ mov	w2, w22
+ mov	x0, x1
+ mov	x1, x21
+-bl	<_writev+0x100cdd5ac>
++bl	<_writev+0x100ce1d2c>
+ ldur	q0, [sp, #0x8]
+ str	q0, [sp, #0x20]
+ str	xzr, [sp, #0x30]
+@@ -252,7 +252,7 @@
+
+ b.hi	<internal>
+ bl	<_mi_free>
+ adrp	x0, <reloc>
+-add	x0, x0, #0xd48
++add	x0, x0, #0xe50
+ cbz	w24, <internal>
+ bl	<__RINvMs2_NtNtCRATE_3std6thread5localINtB6_8LocalKeyINtNtCRATE_4core4cell7RefCellINtNtCRATE_5alloc3vec3VecIB1w_INtNtB1A_5boxed3BoxNtNtNtCRATE_13perry_runtime4json24stringify_shape_template13ShapeTemplateEEEEE4withNCNvB2u_19restore_shape_cache0uEB2w_>
+ b	<internal>
+@@ -286,7 +286,7 @@
+
+ cmp	w8, #0x2
+ b.eq	<internal>
+ adrp	x1, <reloc>
+-add	x1, x1, #0x40c
++add	x1, x1, #0xec8
+ mov	x22, x0
+ bl	<__RNvNtNtNtNtCRATE_3std3sys12thread_local11destructors4list8register>
+ mov	x0, x22
+@@ -308,7 +308,7 @@
+
+ cmp	w8, #0x1
+ b.ne	<internal>
+ adrp	x1, <reloc>
+-add	x1, x1, #0x40c
++add	x1, x1, #0xec8
+ mov	x20, x0
+ bl	<__RNvNtNtNtNtCRATE_3std3sys12thread_local11destructors4list8register>
+ mov	x0, x20

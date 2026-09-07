@@ -1,0 +1,43 @@
+{
+  "retained_runtime_source": "0327b9460a749592deb354d72ebad29bf4ae4bba",
+  "runtime_changes_retained": false,
+  "new_compiled_fixture": "test-files/test_gap_json_root_record.ts",
+  "retained_runtime_new_fixture_node_matches": 9,
+  "retained_runtime_new_fixture_moving_configurations": 4,
+  "diagnosis_trials": 54,
+  "diagnosis_trace_runs": 18,
+  "diagnosis_uninstrumented_trials": 36,
+  "diagnosis_qualified_host": true,
+  "root_emitter_experiment": {
+    "retained": false,
+    "qualified": false,
+    "runtime_tests_passed": 3280,
+    "core_compiled_node_matches": 40,
+    "reason": "Does not optimize the main full-entry small-record path; continuous monitoring interrupted by local disk-full error"
+  },
+  "stack_plan_experiment": {
+    "retained": false,
+    "qualified": true,
+    "runtime_tests_passed": 3278,
+    "runtime_tests_ignored": 4,
+    "core_compiled_node_matches": 40,
+    "existing_moving_gc_runs": 44,
+    "gc_lifetime_fixture_configs": 9,
+    "root_record_fixture_configs": 9,
+    "moving_gc_runs_total": 52,
+    "verify_rows": 190,
+    "timing_trials": 570,
+    "memory_trials": 324,
+    "clean_observations": 33,
+    "lifetime_cases": 12,
+    "lifetime_trials": 108,
+    "lifetime_clean_observations": 27,
+    "reason": "Small gains outweighed by new parse/stringify/RSS regressions"
+  },
+  "all_row_parity": false,
+  "no_regression_acceptance": false,
+  "published": false,
+  "existing_semantic_gaps_resolved": false,
+  "older_147_case_matrix_requalified": false,
+  "prior_required_lint_failures_unchanged": true
+}

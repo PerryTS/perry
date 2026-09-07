@@ -1,0 +1,22 @@
+{
+  "defer2": {
+    "flat": {
+      "symbol": "__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json14stringify_flat11emit_object",
+      "instructions": 713
+    },
+    "record": {
+      "symbol": "__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json23stringify_record_output11emit_record",
+      "instructions": 809
+    }
+  },
+  "defer4": {
+    "flat": {
+      "symbol": "__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json14stringify_flat11emit_object",
+      "instructions": 746
+    },
+    "record": {
+      "symbol": "__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json23stringify_record_output11emit_record",
+      "instructions": 740
+    }
+  }
+}

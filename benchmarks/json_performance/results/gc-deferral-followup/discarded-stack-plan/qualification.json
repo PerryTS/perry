@@ -1,0 +1,5 @@
+{
+  "qualified": true,
+  "reason": "190 verified outputs, 570 timing trials, 324 retained-memory trials; fixed quiet gate passed with 33 clean external observations. Source rejected for CPU/RSS regressions.",
+  "runtime_change_retained": false
+}

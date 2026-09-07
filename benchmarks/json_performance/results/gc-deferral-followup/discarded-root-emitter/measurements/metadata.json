@@ -1,0 +1,10 @@
+{
+  "workers": {
+    "parent": "5208ef79dc05c3e377f1993e2db0d1ab4ca07022ad81adae37132750087a9804",
+    "checkpoint": "a3b94d96acb00bdc336b867999272b2eaac61b1e00df564aec6f8c896c06ee18",
+    "candidate": "aa1d04a73c9c312a06a9df42f599598f3fea297f54cda85af67d1a36c5c4d662"
+  },
+  "repeats": 5,
+  "seed": 96345,
+  "note": "Pinned 38-row call counts; default GC; fresh processes; CPU includes user and system; retain outputs measured separately."
+}

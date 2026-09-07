@@ -1,0 +1,72 @@
+--- a/crates/perry-runtime/src/json/stringify_flat.rs
++++ b/crates/perry-runtime/src/json/stringify_flat.rs
+@@ -6,0 +7 @@
++use std::mem::MaybeUninit;
+@@ -191,5 +192,5 @@
+-    // Every live entry is overwritten before emission. This initialized
+-    // placeholder has a smaller active payload than an inline-text piece.
+-    let empty = Piece::String { bytes: 0, units: 0 };
+-    let mut key_plan = [empty; MAX_FIELDS];
+-    let mut value_plan = [empty; MAX_FIELDS];
++    // Initialize only the live prefix. Planning can decline at any point;
++    // no slot is read until every field (and its array elements) has a plan.
++    // Plans contain native bytes and indices only, never managed pointers.
++    let mut key_plan = [MaybeUninit::<Piece>::uninit(); MAX_FIELDS];
++    let mut value_plan = [MaybeUninit::<Piece>::uninit(); MAX_FIELDS];
+@@ -200 +201 @@
+-        key_plan[i] = string_piece(slot(
++        let key = string_piece(slot(
+@@ -205 +206 @@
+-        value_plan[i] = scalar_piece(slot(
++        let value = scalar_piece(slot(
+@@ -210,2 +211,4 @@
+-        let (kb, ku) = key_plan[i].lengths();
+-        let (vb, vu) = value_plan[i].lengths();
++        key_plan[i].write(key);
++        value_plan[i].write(value);
++        let (kb, ku) = key.lengths();
++        let (vb, vu) = value.lengths();
+@@ -245 +248 @@
+-            key_plan[i],
++            key_plan[i].assume_init(),
+@@ -252 +255 @@
+-            value_plan[i],
++            value_plan[i].assume_init(),
+--- a/crates/perry-runtime/src/json/stringify_record_output.rs
++++ b/crates/perry-runtime/src/json/stringify_record_output.rs
+@@ -7,0 +8 @@
++use std::mem::MaybeUninit;
+@@ -82,6 +83,6 @@
+-    // Every live entry is overwritten before emission. This initialized
+-    // placeholder has a smaller active payload than an inline-text piece.
+-    let empty = Piece::String { bytes: 0, units: 0 };
+-    let mut key_plan = [empty; MAX_FIELDS];
+-    let mut value_plan = [Field::Scalar(empty); MAX_FIELDS];
+-    let mut elements = [empty; MAX_ELEMENTS];
++    // Initialize only the live prefix. Planning can decline at any point;
++    // no slot is read until every field (and its array elements) has a plan.
++    // Plans contain native bytes and indices only, never managed pointers.
++    let mut key_plan = [MaybeUninit::<Piece>::uninit(); MAX_FIELDS];
++    let mut value_plan = [MaybeUninit::<Field>::uninit(); MAX_FIELDS];
++    let mut elements = [MaybeUninit::<Piece>::uninit(); MAX_ELEMENTS];
+@@ -93 +94 @@
+-        key_plan[i] = key;
++        key_plan[i].write(key);
+@@ -97 +98 @@
+-            value_plan[i] = Field::Scalar(value);
++            value_plan[i].write(Field::Scalar(value));
+@@ -104 +105 @@
+-            value_plan[i] = Field::Array { start: used, len };
++            value_plan[i].write(Field::Array { start: used, len });
+@@ -108 +109 @@
+-                elements[used + j] = value;
++                elements[used + j].write(value);
+@@ -147 +148 @@
+-            key_plan[i],
++            key_plan[i].assume_init(),
+@@ -154 +155 @@
+-        match value_plan[i] {
++        match value_plan[i].assume_init() {
+@@ -166 +167 @@
+-                        elements[start + j],
++                        elements[start + j].assume_init(),

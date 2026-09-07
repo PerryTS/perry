@@ -1,0 +1,64 @@
+{
+  "workers": {
+    "parent": "77be50b4d6eb1ec632115193d417b48bd2008adc394c0401bf15bf3bc3ac4a58",
+    "candidate": "25949bf2b3f4cc5042f842be248fea8b48244405780d8db050b6e7d620a71120"
+  },
+  "cases": [
+    [
+      "small_record",
+      "stringify",
+      "discard",
+      100000
+    ],
+    [
+      "small_record",
+      "stringify",
+      "discard",
+      1000000
+    ],
+    [
+      "object_1k",
+      "parse",
+      "retain",
+      20000
+    ],
+    [
+      "wide_1m",
+      "parse",
+      "discard",
+      60
+    ],
+    [
+      "records_object_20m",
+      "roundtrip",
+      "discard",
+      7
+    ],
+    [
+      "records_object_20m",
+      "roundtrip",
+      "discard",
+      8
+    ],
+    [
+      "records_object_20m",
+      "roundtrip",
+      "discard",
+      9
+    ],
+    [
+      "records_object_20m",
+      "roundtrip",
+      "discard",
+      16
+    ],
+    [
+      "records_object_20m",
+      "roundtrip",
+      "discard",
+      24
+    ]
+  ],
+  "repeats": 3,
+  "seed": 81124
+}

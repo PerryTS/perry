@@ -1,0 +1,196 @@
+--- a/crates/perry-runtime/src/json/stringify.rs
++++ b/crates/perry-runtime/src/json/stringify.rs
+@@ -1094,0 +1095,5 @@
++        if depth == 0 && num_fields <= 32
++            && super::stringify_data_record::try_emit_root(obj, num_fields, buf)
++        {
++            return;
++        }
+--- a/crates/perry-runtime/src/json/stringify_data_record.rs
++++ b/crates/perry-runtime/src/json/stringify_data_record.rs
+@@ -158,26 +158 @@
+-        let bits = values[i];
+-        match bits {
+-            TAG_NULL => buf.push_str("null"),
+-            TAG_TRUE => buf.push_str("true"),
+-            TAG_FALSE => buf.push_str("false"),
+-            _ => match bits & crate::value::TAG_MASK {
+-                STRING_TAG => {
+-                    let ptr = (bits & POINTER_MASK) as *const StringHeader;
+-                    if let Some(text) = str_from_header(ptr) {
+-                        write_escaped_string(buf, text);
+-                    } else {
+-                        buf.push_str("null");
+-                    }
+-                }
+-                crate::value::SHORT_STRING_TAG => {
+-                    let mut scratch = [0; crate::value::SHORT_STRING_MAX_LEN];
+-                    let len = JSValue::from_bits(bits).short_string_to_buf(&mut scratch);
+-                    if let Ok(text) = std::str::from_utf8(&scratch[..len]) {
+-                        write_escaped_string(buf, text);
+-                    } else {
+-                        buf.push_str("null");
+-                    }
+-                }
+-                _ => write_number(buf, f64::from_bits(bits)),
+-            },
+-        }
++        emit_primitive(values[i], buf);
+@@ -186,0 +162,113 @@
++}
++
++/// A root record is visited once per stringify call, so building a temporary
++/// shape template cannot amortize its prefix allocations. Borrow its keys and
++/// use stack snapshots instead. Nested records keep the cached template path.
++/// The caller uses the same plain-object eligibility as the template path.
++pub(super) unsafe fn try_emit_root(
++    obj: *const crate::ObjectHeader,
++    count: u32,
++    buf: &mut String,
++) -> bool {
++    if SUPPRESS_NEXT_TO_JSON.with(|c| c.get()) {
++        return false;
++    }
++    let Some(fields) = inline_fields(obj, count) else {
++        return false;
++    };
++    let keys = crate::object::object_keys_array(obj);
++    let Some(keys) = array_pointer(make_pointer_bits(keys.cast())) else {
++        return false;
++    };
++    let Some(header) = crate::value::addr_class::try_read_tracked_gc_header(keys as usize) else {
++        return false;
++    };
++    if (*keys).length != count
++        || (*keys).capacity < count
++        || (header.as_ref().size as usize)
++            < crate::gc::GC_HEADER_SIZE
++                + std::mem::size_of::<crate::ArrayHeader>()
++                + count as usize * 8
++        || crate::object::keys_contain_array_index(keys)
++        || !super::stringify_tojson_probe::to_json_definitely_absent_without_gc(obj.cast())
++    {
++        return false;
++    }
++    let key_slots = std::slice::from_raw_parts(
++        (keys as *const u8)
++            .add(std::mem::size_of::<crate::ArrayHeader>())
++            .cast::<u64>(),
++        count as usize,
++    );
++    let mut values = [0u64; MAX_FIELDS];
++    let mut arrays = [std::ptr::null(); MAX_FIELDS];
++    let mut has_array = false;
++    for (i, &bits) in fields.iter().enumerate() {
++        let mut scratch = [0; crate::value::SHORT_STRING_MAX_LEN];
++        if bits == TAG_UNDEFINED
++            || super::stringify::object_key_str(key_slots[i], &mut scratch).is_none()
++        {
++            return false;
++        }
++        values[i] = bits;
++        if !primitive(bits) {
++            let Some(arr) = array_pointer(bits) else {
++                return false;
++            };
++            if !primitive_array(arr) {
++                return false;
++            }
++            arrays[i] = arr;
++            has_array = true;
++        }
++    }
++    if !has_array {
++        return false;
++    }
++    // From here to return there is no callback, managed allocation or safepoint.
++    buf.push('{');
++    for i in 0..fields.len() {
++        if i != 0 {
++            buf.push(',');
++        }
++        let mut scratch = [0; crate::value::SHORT_STRING_MAX_LEN];
++        let key = super::stringify::object_key_str(key_slots[i], &mut scratch).unwrap();
++        write_escaped_string(buf, key);
++        buf.push(':');
++        if arrays[i].is_null() {
++            emit_primitive(values[i], buf);
++        } else {
++            super::stringify_primitive_array::emit_validated(arrays[i], buf);
++        }
++    }
++    buf.push('}');
++    true
++}
++
++#[inline]
++unsafe fn emit_primitive(bits: u64, buf: &mut String) {
++    match bits {
++        TAG_NULL => buf.push_str("null"),
++        TAG_TRUE => buf.push_str("true"),
++        TAG_FALSE => buf.push_str("false"),
++        _ => match bits & crate::value::TAG_MASK {
++            STRING_TAG => {
++                let ptr = (bits & POINTER_MASK) as *const StringHeader;
++                if let Some(text) = str_from_header(ptr) {
++                    write_escaped_string(buf, text);
++                } else {
++                    buf.push_str("null");
++                }
++            }
++            crate::value::SHORT_STRING_TAG => {
++                let mut scratch = [0; crate::value::SHORT_STRING_MAX_LEN];
++                let len = JSValue::from_bits(bits).short_string_to_buf(&mut scratch);
++                if let Ok(text) = std::str::from_utf8(&scratch[..len]) {
++                    write_escaped_string(buf, text);
++                } else {
++                    buf.push_str("null");
++                }
++            }
++            _ => write_number(buf, f64::from_bits(bits)),
++        },
++    }
+--- a/crates/perry-runtime/src/json/stringify_data_record_tests.rs
++++ b/crates/perry-runtime/src/json/stringify_data_record_tests.rs
+@@ -93,0 +94,41 @@
++
++#[test]
++fn root_record_emits_borrowed_keys_without_managed_scratch() {
++    unsafe {
++        for text in [
++            "{\"id\":42,\"name\":\"東京🙂\",\"active\":true,\"score\":1.5,\"tags\":[\"line\\n\",null,false,3.25]}",
++            "{\"a\\\"b\":1,\"c\\nd\":false,\"\":null,\"long_key\":\"value\",\"tags\":[]}",
++        ] {
++            with_record(text, |obj, template| {
++                let bytes = crate::arena::arena_live_allocated_bytes();
++                let roots = crate::gc::RuntimeHandleScope::active_len_for_tests();
++                let collections = collection_count();
++                let mut output = String::with_capacity(256);
++                for _ in 0..1000 {
++                    output.clear();
++                    assert!(try_emit_root(obj, template.shape_fields, &mut output));
++                    assert_eq!(output, text);
++                }
++                assert_eq!(crate::arena::arena_live_allocated_bytes(), bytes);
++                assert_eq!(crate::gc::RuntimeHandleScope::active_len_for_tests(), roots);
++                assert_eq!(collection_count(), collections);
++            });
++        }
++    }
++}
++
++#[test]
++fn root_record_declines_late_complex_child_before_writing_a_prefix() {
++    unsafe {
++        with_record(
++            "{\"id\":1,\"a\":true,\"b\":null,\"first\":[1,2,3],\"last\":[4,{\"x\":5}]}",
++            |obj, template| {
++                let mut output = String::from("unchanged");
++                let capacity = output.capacity();
++                assert!(!try_emit_root(obj, template.shape_fields, &mut output));
++                assert_eq!(output, "unchanged");
++                assert_eq!(output.capacity(), capacity);
++            },
++        );
++    }
++}

@@ -1,0 +1,5 @@
+{
+  "qualified": false,
+  "reason": "Controller failed while saving observations due to transient local disk-full error. Remote workload completed and entry/end host gate passed, but continuous observation is incomplete. Source rejected: targeted full-entry workload already takes an earlier path.",
+  "runtime_change_retained": false
+}
