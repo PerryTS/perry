@@ -130,6 +130,11 @@ impl DescriptorTables {
 
 const DESCRIPTOR_YOUNG_LOG_NAME: &str = "object.descriptors";
 
+#[cfg(test)]
+thread_local! {
+    static TEST_SUPPRESS_DESCRIPTOR_YOUNG_NOTE: Cell<bool> = const { Cell::new(false) };
+}
+
 mod gc_scan;
 mod young;
 pub(crate) use gc_scan::{scan_descriptor_owner, scan_descriptor_roots_mut};
@@ -145,12 +150,51 @@ fn note_young_descriptor_owner(
     owner: usize,
     acc: Option<&AccessorDescriptor>,
 ) {
-    use crate::gc::young_log::{addr_is_minor_relevant, bits_are_minor_relevant};
-    if addr_is_minor_relevant(owner)
+    use crate::gc::young_log::{addr_is_minor_collectible, bits_are_minor_relevant};
+    if addr_is_minor_collectible(owner)
         || acc
             .is_some_and(|acc| bits_are_minor_relevant(acc.get) || bits_are_minor_relevant(acc.set))
     {
+        #[cfg(test)]
+        if TEST_SUPPRESS_DESCRIPTOR_YOUNG_NOTE.with(Cell::get) {
+            return;
+        }
         st.descriptors.young_owners.borrow_mut().note(owner);
+    }
+}
+
+#[cfg(test)]
+mod young_log_sabotage_tests {
+    use super::*;
+
+    #[test]
+    fn descriptor_log_rederivation_rejects_a_suppressed_setter() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let owner = crate::object::js_object_alloc(0, 0) as usize;
+        state().descriptors.young_owners.borrow_mut().clear();
+        TEST_SUPPRESS_DESCRIPTOR_YOUNG_NOTE.with(|flag| flag.set(true));
+        set_property_attrs(
+            owner,
+            "sabotage".to_string(),
+            PropertyAttrs::new(true, true, true),
+        );
+        TEST_SUPPRESS_DESCRIPTOR_YOUNG_NOTE.with(|flag| flag.set(false));
+        let missed = std::panic::catch_unwind(|| {
+            state()
+                .descriptors
+                .young_owners
+                .borrow()
+                .debug_assert_logged(
+                    DESCRIPTOR_YOUNG_LOG_NAME,
+                    &relevant_descriptor_owners(state()),
+                );
+        });
+        clear_property_attrs(owner, "sabotage");
+        state().descriptors.young_owners.borrow_mut().clear();
+        assert!(
+            missed.is_err(),
+            "sabotage: suppressing set_property_attrs' note must trip completeness"
+        );
     }
 }
 

@@ -137,7 +137,7 @@ pub(crate) fn scan_descriptor_owner(
     st: &crate::state::RuntimeState,
     owner: usize,
 ) -> (usize, bool) {
-    use crate::gc::young_log::{addr_is_minor_relevant, bits_are_minor_relevant};
+    use crate::gc::young_log::{addr_is_minor_collectible, bits_are_minor_relevant};
     let new_owner = rewrite_descriptor_owner(visitor, owner);
     let mut relevant = false;
     let accessor_keys = st
@@ -187,7 +187,7 @@ pub(crate) fn scan_descriptor_owner(
         owner_index_transfer(&st.descriptors.attr_keys_by_owner, owner, new_owner);
         owner_index_transfer(&st.descriptors.accessor_keys_by_owner, owner, new_owner);
     }
-    relevant |= addr_is_minor_relevant(new_owner);
+    relevant |= addr_is_minor_collectible(new_owner);
     (new_owner, relevant)
 }
 

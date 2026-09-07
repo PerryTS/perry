@@ -4,6 +4,10 @@
 
 pub(crate) use super::header_gc_slots::*;
 
+mod young_roots;
+pub use young_roots::scan_template_raw_roots_mut;
+use young_roots::{note_array_named, note_template_cache, note_template_raw};
+
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -184,6 +188,7 @@ unsafe fn register_template_raw_pair(cooked: *mut ArrayHeader, raw: *mut ArrayHe
     if cooked.is_null() || raw.is_null() {
         return;
     }
+    note_template_raw(cooked as usize, raw);
     TEMPLATE_RAW_MAP.with(|m| {
         m.borrow_mut().insert(cooked as usize, raw);
     });
@@ -254,6 +259,7 @@ pub extern "C" fn js_tagged_template_get_or_init(
         mark_template_array_frozen(raw);
         mark_template_array_frozen(cooked);
         register_template_raw_pair(cooked, raw);
+        note_template_cache(site_id, cooked, raw);
         TEMPLATE_OBJECT_CACHE.with(|m| {
             m.borrow_mut().insert(site_id, (cooked, raw));
         });
@@ -292,33 +298,6 @@ pub extern "C" fn js_template_raw(cooked: *const ArrayHeader) -> i64 {
 pub fn scan_template_raw_roots(mark: &mut dyn FnMut(f64)) {
     let mut visitor = crate::gc::RuntimeRootVisitor::for_copy(mark);
     scan_template_raw_roots_mut(&mut visitor);
-}
-
-pub fn scan_template_raw_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    TEMPLATE_OBJECT_CACHE.with(|m| {
-        let mut map = m.borrow_mut();
-        for (_, (cooked_ptr, raw_ptr)) in map.iter_mut() {
-            visitor.visit_raw_mut_ptr_slot(cooked_ptr);
-            visitor.visit_raw_mut_ptr_slot(raw_ptr);
-        }
-    });
-    TEMPLATE_RAW_MAP.with(|m| {
-        let mut map = m.borrow_mut();
-        let mut moved = Vec::new();
-        for (&cooked_addr, raw_ptr) in map.iter_mut() {
-            let mut new_cooked_addr = cooked_addr;
-            if visitor.visit_usize_slot(&mut new_cooked_addr) {
-                moved.push((cooked_addr, new_cooked_addr));
-            }
-            visitor.visit_raw_mut_ptr_slot(raw_ptr);
-        }
-        for (old_addr, new_addr) in moved {
-            if let Some(raw_ptr) = map.remove(&old_addr) {
-                map.insert(new_addr, raw_ptr);
-            }
-        }
-    });
-    scan_array_named_property_roots_mut(visitor);
 }
 
 fn barrier_array_named_props(owner: usize, props: &mut [ArrayNamedProperty]) {
@@ -363,28 +342,10 @@ pub(crate) fn transfer_array_named_property_owner(old_owner: usize, new_owner: u
     ARRAY_NAMED_PROPS.with(|m| {
         let mut props = m.borrow_mut();
         if let Some(old_props) = props.remove(&old_owner) {
+            for prop in &old_props {
+                note_array_named(new_owner, prop.value.to_bits());
+            }
             merge_array_named_props(&mut props, new_owner, old_props);
-        }
-    });
-}
-
-pub(crate) fn scan_array_named_property_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    ARRAY_NAMED_PROPS.with(|m| {
-        let mut props = m.borrow_mut();
-        let mut moved = Vec::new();
-        for (&owner, owner_props) in props.iter_mut() {
-            let mut new_owner = owner;
-            if visitor.visit_metadata_usize_slot(&mut new_owner) {
-                moved.push((owner, new_owner));
-            }
-            for prop in owner_props.iter_mut() {
-                visitor.visit_nanbox_f64_slot(&mut prop.value);
-            }
-        }
-        for (old_owner, new_owner) in moved {
-            if let Some(old_props) = props.remove(&old_owner) {
-                merge_array_named_props(&mut props, new_owner, old_props);
-            }
         }
     });
 }
@@ -405,6 +366,7 @@ pub(crate) fn test_array_named_property_owner_exists(owner: usize) -> bool {
 #[cfg(test)]
 pub(crate) fn test_clear_array_named_property_roots() {
     ARRAY_NAMED_PROPS.with(|m| m.borrow_mut().clear());
+    young_roots::clear_named_log();
 }
 
 unsafe fn string_header_as_str<'a>(key: *const crate::StringHeader) -> Option<&'a str> {
@@ -445,6 +407,7 @@ pub(crate) unsafe fn array_named_property_set(
     };
     let owner = arr as usize;
     note_array_named_props_ever();
+    note_array_named(owner, value.to_bits());
     ARRAY_NAMED_PROPS.with(|m| {
         let mut map = m.borrow_mut();
         let props = map.entry(owner).or_default();
@@ -478,6 +441,10 @@ pub(crate) unsafe fn array_named_props_install_fresh(
         return;
     }
     let owner = arr as usize;
+    note_array_named_props_ever();
+    for (_, value) in entries {
+        note_array_named(owner, value.to_bits());
+    }
     ARRAY_NAMED_PROPS.with(|m| {
         let mut map = m.borrow_mut();
         let props = map.entry(owner).or_default();
@@ -634,6 +601,7 @@ pub(crate) unsafe fn array_named_property_delete_by_name(
 
 #[cfg(test)]
 pub(crate) fn test_seed_template_raw_roots(cooked: *mut ArrayHeader, raw: *mut ArrayHeader) {
+    note_template_raw(cooked as usize, raw);
     TEMPLATE_RAW_MAP.with(|m| {
         let mut m = m.borrow_mut();
         m.clear();

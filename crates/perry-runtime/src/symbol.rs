@@ -584,6 +584,7 @@ pub(crate) fn register_symbol_pointer(ptr: usize) {
     SYMBOL_EVER_REGISTERED.arm();
     // Admit before the insert, for the same reason.
     admit_symbol_pointer(ptr);
+    gc_roots::note_symbol_pointer(ptr);
     let mut guard = crate::gc::lock_gc_root_registry(&SYMBOL_POINTERS);
     if guard.is_none() {
         *guard = Some(new_ptr_hash_set());
@@ -1036,6 +1037,7 @@ pub(crate) fn store_object_symbol_property_root(
     value_bits: u64,
 ) -> bool {
     note_symbol_key_installed(sym_key);
+    gc_roots::note_symbol_property_root(obj_key, sym_key, value_bits);
     {
         let mut guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES);
         if guard.is_none() {
@@ -1070,6 +1072,7 @@ pub(crate) static CLASS_STATIC_SYMBOLS_LATCH: crate::registry_latch::RegistryLat
 
 pub(crate) fn store_class_static_symbol_root(class_id: u32, sym_key: usize, value_bits: u64) {
     note_symbol_key_installed(sym_key);
+    gc_roots::note_class_static_symbol(class_id, sym_key, value_bits);
     CLASS_STATIC_SYMBOLS_LATCH.arm();
     let symbol_id = unsafe { (*(sym_key as *const SymbolHeader)).id };
     let created;
