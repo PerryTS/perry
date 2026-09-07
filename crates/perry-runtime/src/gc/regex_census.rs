@@ -48,6 +48,7 @@ fn test_side_table_document() -> serde_json::Value {
 
 #[cfg(all(test, feature = "regex-engine"))]
 mod tests {
+    use crate::regex::site_test::js_regexp_site_test_new;
     use crate::regex::{js_regexp_new, js_regexp_test};
 
     fn string(value: &str) -> *mut crate::StringHeader {
@@ -80,6 +81,20 @@ mod tests {
             assert_ne!(js_regexp_test(header, string(&source)), 0);
         }
 
+        // Evaluate one direct literal site twice: the second call must reuse
+        // the first rooted header and its installed program bundle.
+        let prototype = crate::object::builtin_prototype_value("RegExp");
+        assert!(crate::value::JSValue::from_bits(prototype.to_bits()).is_pointer());
+        static SITE: u64 = 0;
+        let site = std::ptr::addr_of!(SITE) as i64;
+        let first = js_regexp_site_test_new(string("site-census"), string("g"), site);
+        assert_ne!(js_regexp_test(first, string("site-census")), 0);
+        let second = js_regexp_site_test_new(string("site-census"), string("g"), site);
+        assert_eq!(
+            first, second,
+            "the literal site must reuse its rooted header"
+        );
+
         assert_eq!(
             crate::regex::census_rows::test_walks(),
             0,
@@ -99,6 +114,10 @@ mod tests {
             "regex.fancy_cache",
             "regex.repeat_cache",
             "regex.validated_patterns",
+            "regex.content_cache",
+            "regex.literal_sites",
+            "regex.site_table",
+            "regex.active_factory_sites",
             "regex.expando_owners",
             "regex.matcher_kinds",
         ] {
@@ -110,6 +129,18 @@ mod tests {
             .find(|row| row["table"] == "regex.pointers")
             .expect("regex.pointers row");
         assert!(pointer["entries"].as_u64().unwrap() >= N as u64);
+        let site = rows
+            .iter()
+            .find(|row| row["table"] == "regex.site_table")
+            .expect("regex.site_table row");
+        assert!(site["sites"].as_u64().unwrap() >= 1);
+        assert!(site["rooted_headers"].as_u64().unwrap() >= 1);
+        assert!(site["pinned_programs"].as_u64().unwrap() >= 1);
+        assert!(
+            site["pinned_program_bytes"].as_u64().unwrap()
+                >= site["attributed_program_bytes"].as_u64().unwrap()
+        );
+        assert_eq!(site["pinned_program_bytes_inside_side_table_bytes"], false);
         let row_bytes = rows
             .iter()
             .map(|row| row["bytes"].as_u64().expect("numeric row bytes"))
