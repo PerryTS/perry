@@ -1023,6 +1023,39 @@ fn apple_class_lib_name(name: &str, class: &str, is_sim: bool) -> String {
     }
 }
 
+/// Whether an explicit Linux target is the platform of this compiler binary.
+/// This distinguishes `--target linux` on a Linux x64 install from a genuine
+/// x64-to-arm64 or glibc-to-musl cross-compile, whose archive search must remain
+/// triple-only.
+#[cfg(target_os = "linux")]
+fn is_native_linux_target(target: Option<&str>) -> bool {
+    if cfg!(all(target_arch = "x86_64", target_env = "gnu")) {
+        matches!(target, Some("linux") | Some("linux-x86_64"))
+    } else if cfg!(all(target_arch = "aarch64", target_env = "gnu")) {
+        matches!(target, Some("linux-arm64") | Some("linux-aarch64"))
+    } else if cfg!(all(target_arch = "x86_64", target_env = "musl")) {
+        matches!(target, Some("linux-musl") | Some("linux-x86_64-musl"))
+    } else if cfg!(all(target_arch = "aarch64", target_env = "musl")) {
+        matches!(target, Some("linux-aarch64-musl"))
+    } else {
+        false
+    }
+}
+
+fn push_executable_relative_host_candidates(
+    candidates: &mut Vec<PathBuf>,
+    executable: &Path,
+    name: &str,
+) {
+    let Some(bin_dir) = executable.parent() else {
+        return;
+    };
+    candidates.push(bin_dir.join(name));
+    if let Some(prefix) = bin_dir.parent() {
+        candidates.push(prefix.join("lib").join(name));
+    }
+}
+
 pub(super) fn collect_library_candidates(name: &str, target: Option<&str>) -> Vec<PathBuf> {
     let mut candidates = Vec::new();
 
@@ -1052,7 +1085,7 @@ pub(super) fn collect_library_candidates(name: &str, target: Option<&str>) -> Ve
             candidates.extend(winget_lib_candidates(name));
         }
         #[cfg(target_os = "linux")]
-        if matches!(target, Some("linux")) {
+        if is_native_linux_target(target) {
             candidates.push(PathBuf::from(format!("target/release/{}", name)));
             candidates.push(PathBuf::from(format!("target/debug/{}", name)));
         }
@@ -1100,6 +1133,15 @@ pub(super) fn collect_library_candidates(name: &str, target: Option<&str>) -> Ve
                     .join("release")
                     .join(name);
                 candidates.push(source_target);
+
+                // npm installs place `perry` in `bin/` and the compressed
+                // archives in the sibling `lib/`. The target=None host path
+                // probes that layout, but the explicit `--target linux` path
+                // used to omit it and lose every bundled archive (#9953).
+                #[cfg(target_os = "linux")]
+                if is_native_linux_target(target) {
+                    push_executable_relative_host_candidates(&mut candidates, &exe, name);
+                }
 
                 // For Apple / HarmonyOS cross-compile targets, check the exe
                 // directory for libs with the platform-suffix naming convention:
@@ -1149,13 +1191,7 @@ pub(super) fn collect_library_candidates(name: &str, target: Option<&str>) -> Ve
         candidates.push(PathBuf::from(format!("target/release/{}", name)));
         candidates.push(PathBuf::from(format!("target/debug/{}", name)));
         if let Ok(exe) = std::env::current_exe() {
-            if let Some(dir) = exe.parent() {
-                candidates.push(dir.join(name));
-                // Homebrew: libs installed in ../lib relative to bin
-                if let Some(prefix) = dir.parent() {
-                    candidates.push(prefix.join("lib").join(name));
-                }
-            }
+            push_executable_relative_host_candidates(&mut candidates, &exe, name);
         }
         // When cargo install'd, check the original source tree's target dir
         let source_target = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -1842,6 +1878,9 @@ mod llvm_tool_discovery_tests;
 // conservative triple-only search.
 #[cfg(all(test, target_os = "macos"))]
 mod macos_host_candidate_tests;
+
+#[cfg(all(test, target_os = "linux"))]
+mod linux_host_candidate_tests;
 
 #[cfg(all(test, target_os = "windows"))]
 mod windows_toolchain_tests;
