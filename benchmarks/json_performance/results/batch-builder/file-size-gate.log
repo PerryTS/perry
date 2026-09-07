@@ -1,0 +1,15 @@
+::error::File size limit exceeded (2000 lines).
+
+The following files are too large:
+   2416  crates/perry-codegen/src/inprocess.rs
+   2009  crates/perry-hir/src/lower/tests.rs
+
+
+Split the offending files into topical sub-modules. See
+v0.5.1019/v0.5.1020 commits on chore/split-large-files for
+the recipe: extract function groups into sibling files,
+re-export from mod.rs with explicit named use statements
+(globs don't propagate through transitive re-exports). To
+deliberately exclude a file (e.g. a refactor in progress
+tracked elsewhere) add it to the ALLOWLIST block at the top
+of this script with a one-line rationale.

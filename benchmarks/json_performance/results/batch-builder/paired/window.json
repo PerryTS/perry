@@ -1,0 +1,22 @@
+{
+  "owner": "json-perf-19693-1788749475",
+  "load_before": [
+    1.64990234375,
+    1.9345703125,
+    1.7451171875
+  ],
+  "started_utc": "2026-09-07T02:51:15Z",
+  "quiet_gate_passed": true,
+  "command": [
+    "python3",
+    "recheck_batch_retry.py"
+  ],
+  "competing_workloads_before": [],
+  "load_after": [
+    2.10986328125,
+    2.041015625,
+    1.818359375
+  ],
+  "competing_workloads_after": [],
+  "finished_utc": "2026-09-07T02:53:44Z"
+}
