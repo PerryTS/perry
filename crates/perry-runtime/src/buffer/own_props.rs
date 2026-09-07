@@ -30,7 +30,13 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
-type BufferProps = HashMap<usize, HashMap<String, u64>>;
+#[derive(Default)]
+struct BufferOwnProps {
+    values: HashMap<String, u64>,
+    order: Vec<String>,
+}
+
+type BufferProps = HashMap<usize, BufferOwnProps>;
 
 fn buffer_props() -> &'static Mutex<BufferProps> {
     static PROPS: OnceLock<Mutex<BufferProps>> = OnceLock::new();
@@ -93,10 +99,11 @@ pub fn buffer_define_own_data_prop(addr: usize, prop: &str, value: f64) {
     }
     BUFFER_OWN_PROPS_EVER.store(true, Ordering::Release);
     if let Ok(mut props) = buffer_props().lock() {
-        props
-            .entry(addr)
-            .or_default()
-            .insert(prop.to_string(), value.to_bits());
+        let own = props.entry(addr).or_default();
+        if !own.values.contains_key(prop) {
+            own.order.push(prop.to_string());
+        }
+        own.values.insert(prop.to_string(), value.to_bits());
     }
 }
 
@@ -108,7 +115,12 @@ pub fn buffer_get_own_prop(addr: usize, prop: &str) -> Option<f64> {
     buffer_props()
         .lock()
         .ok()
-        .and_then(|props| props.get(&addr).and_then(|m| m.get(prop)).copied())
+        .and_then(|props| {
+            props
+                .get(&addr)
+                .and_then(|own| own.values.get(prop))
+                .copied()
+        })
         .map(f64::from_bits)
 }
 
@@ -140,8 +152,7 @@ pub fn buffer_read_own_prop(addr: usize, prop: &str) -> Option<f64> {
     buffer_get_own_prop(addr, prop)
 }
 
-/// Every own dynamic prop key recorded for `addr`, in insertion-independent
-/// (sorted) order.
+/// Every own dynamic prop key recorded for `addr`, in property-creation order.
 ///
 /// #8149: `Object.keys` / `getOwnPropertyNames` / `for…in` need these. Before,
 /// the enumeration paths had no registered-buffer arm at all and walked a
@@ -156,13 +167,11 @@ pub fn buffer_own_prop_names(addr: usize) -> Vec<String> {
     if addr == 0 || !buffer_own_props_possible() {
         return Vec::new();
     }
-    let mut names: Vec<String> = buffer_props()
+    buffer_props()
         .lock()
         .ok()
-        .and_then(|props| props.get(&addr).map(|m| m.keys().cloned().collect()))
-        .unwrap_or_default();
-    names.sort();
-    names
+        .and_then(|props| props.get(&addr).map(|own| own.order.clone()))
+        .unwrap_or_default()
 }
 
 /// Whether the buffer carries any own dynamic prop under `prop`.
@@ -183,10 +192,13 @@ pub fn buffer_delete_own_prop(addr: usize, prop: &str) -> bool {
     let Some(entries) = props.get_mut(&addr) else {
         return false;
     };
-    let removed = entries.remove(prop).is_some();
+    let removed = entries.values.remove(prop).is_some();
+    if removed {
+        entries.order.retain(|key| key != prop);
+    }
     crate::object::clear_accessor_descriptor(addr, prop);
     crate::object::clear_property_attrs(addr, prop);
-    if entries.is_empty() {
+    if entries.values.is_empty() {
         props.remove(&addr);
     }
     removed
@@ -210,7 +222,7 @@ pub fn scan_buffer_own_props_roots_mut(visitor: &mut crate::gc::RuntimeRootVisit
         };
         let mut new_owner = owner;
         visitor.visit_metadata_usize_slot(&mut new_owner);
-        for bits in entries.values_mut() {
+        for bits in entries.values.values_mut() {
             let mut v = f64::from_bits(*bits);
             visitor.visit_nanbox_f64_slot(&mut v);
             *bits = v.to_bits();
@@ -251,5 +263,35 @@ pub fn clear_buffer_own_props(addr: usize) {
     }
     if let Ok(mut props) = buffer_props().lock() {
         props.remove(&addr);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn own_property_names_preserve_creation_order() {
+        let owner_marker = Box::new(0_u8);
+        let owner = (&*owner_marker as *const u8) as usize;
+
+        clear_buffer_own_props(owner);
+        buffer_define_own_data_prop(owner, "second", 2.0);
+        buffer_define_own_data_prop(owner, "first", 1.0);
+        buffer_define_own_data_prop(owner, "second", 22.0);
+        assert_eq!(
+            buffer_own_prop_names(owner),
+            ["second", "first"],
+            "updating a property must keep its original position"
+        );
+
+        assert!(buffer_delete_own_prop(owner, "second"));
+        buffer_define_own_data_prop(owner, "second", 222.0);
+        assert_eq!(
+            buffer_own_prop_names(owner),
+            ["first", "second"],
+            "deleting and recreating a property must append it"
+        );
+        clear_buffer_own_props(owner);
     }
 }

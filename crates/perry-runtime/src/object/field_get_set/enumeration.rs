@@ -1154,10 +1154,9 @@ pub(super) fn strip_nanbox_addr(obj: *const ObjectHeader) -> usize {
 /// `Object.keys(new DataView(new ArrayBuffer(8)))` in any program that had also
 /// allocated a `Buffer`.
 ///
-/// Expando ordering among the non-index keys is alphabetical, not insertion
-/// order: `buffer::own_props` is a `HashMap`, so insertion order was never
-/// recorded. Node uses insertion order. Deterministic-but-different beats the
-/// previous nondeterministic-and-crashing.
+/// Expando ordering among the non-index keys follows property creation order,
+/// recorded by `buffer::own_props`. Canonical indices are still separated and
+/// sorted below, as required by `OrdinaryOwnPropertyKeys`.
 pub(crate) fn registered_buffer_own_keys(addr: usize) -> Option<Vec<String>> {
     if addr == 0 || !crate::buffer::is_registered_buffer(addr) {
         return None;
