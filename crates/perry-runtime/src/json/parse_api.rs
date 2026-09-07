@@ -152,7 +152,7 @@ unsafe fn try_parse_deep_iterative(text_ptr: *const StringHeader, len: usize) ->
             }
 
             crate::gc::gc_unsuppress();
-            crate::gc::gc_bump_malloc_trigger();
+            crate::gc::gc_bump_json_malloc_trigger_deferred();
             crate::gc::gc_schedule_parse_boundary_collection_if_pressure();
             result
         },
@@ -264,7 +264,7 @@ unsafe fn parse_result_slow(text_ptr: *const StringHeader, len: usize) -> Result
     let parse_ok = parser.finish();
     parse_root_push(result);
     crate::gc::gc_unsuppress();
-    crate::gc::gc_bump_malloc_trigger();
+    crate::gc::gc_bump_json_malloc_trigger_deferred();
     crate::gc::gc_schedule_parse_boundary_collection_if_pressure();
     parse_root_restore(text_root);
 
@@ -493,11 +493,11 @@ unsafe fn parse_slow(text_ptr: *const StringHeader, len: usize) -> JSValue {
     let parse_ok = parser.finish();
     parse_root_push(result);
 
-    // Re-enable GC and rebaseline triggers while the result is still
-    // rooted. Tiny parse-churn pressure may collect here; keeping the
-    // parse roots until after the bump protects the value being returned.
+    // Complete construction and record debt without collecting the result
+    // before returning. The scheduler owns the bounded lifetime grace period;
+    // all object layouts and old-to-young edges are already complete.
     crate::gc::gc_unsuppress();
-    crate::gc::gc_bump_malloc_trigger();
+    crate::gc::gc_bump_json_malloc_trigger_deferred();
     crate::gc::gc_schedule_parse_boundary_collection_if_pressure();
     parse_root_restore(text_root);
 
@@ -599,7 +599,8 @@ unsafe fn try_parse_via_tape(text_root: usize, len: usize) -> Option<JSValue> {
             };
             let result_root = parse_root_push(result);
             crate::gc::gc_unsuppress();
-            crate::gc::gc_bump_malloc_trigger();
+            crate::gc::gc_bump_json_malloc_trigger_deferred();
+            crate::gc::gc_schedule_parse_boundary_collection_if_pressure();
 
             PARSE_KEY_CACHE.with(|c| {
                 let cache = c.borrow();
@@ -706,7 +707,7 @@ pub unsafe extern "C" fn js_json_parse_typed_array(
     parse_root_push(result);
 
     crate::gc::gc_unsuppress();
-    crate::gc::gc_bump_malloc_trigger();
+    crate::gc::gc_bump_json_malloc_trigger_deferred();
     parse_root_restore(text_root);
 
     PARSE_KEY_CACHE.with(|c| {

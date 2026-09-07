@@ -1341,6 +1341,16 @@ impl Drop for GcSuppressScope {
 /// that means iterate+rebuild completes inside one GC cycle instead
 /// of four.
 pub fn gc_bump_malloc_trigger() {
+    gc_bump_malloc_trigger_inner(true);
+}
+
+/// JSON construction has finished: account for pressure without collecting
+/// the newly built result before it can return to its caller.
+pub(crate) fn gc_bump_json_malloc_trigger_deferred() {
+    gc_bump_malloc_trigger_inner(false);
+}
+
+fn gc_bump_malloc_trigger_inner(collect_now: bool) {
     let current = MALLOC_STATE.with(|s| s.borrow().objects.len());
     use crate::arena::arena_total_bytes;
     let bytes_now = arena_total_bytes();
@@ -1367,7 +1377,9 @@ pub fn gc_bump_malloc_trigger() {
                     GC_TRIGGER_ARMED.with(|a| a.set(true));
                 }
             });
-            gc_check_trigger();
+            if collect_now {
+                gc_check_trigger();
+            }
         } else {
             crate::arena::arena_start_fresh_general_block();
             GC_SUPPRESSED_TINY_PARSE_COLLECTION_PENDING.with(|pending| pending.set(true));
@@ -1419,10 +1431,22 @@ pub fn gc_schedule_parse_boundary_collection_if_pressure() {
     if !gen_gc_enabled() {
         return;
     }
-    if crate::arena::arena_in_use_bytes() < gc_tiny_parse_in_use_trigger_dyn_bytes() {
-        return;
+    let in_use = crate::arena::arena_in_use_bytes();
+    if in_use >= gc_tiny_parse_in_use_trigger_dyn_bytes() {
+        GC_SUPPRESSED_TINY_PARSE_COLLECTION_PENDING.with(|pending| pending.set(true));
     }
-    GC_SUPPRESSED_TINY_PARSE_COLLECTION_PENDING.with(|pending| pending.set(true));
+    if gc_moving_loop_polls_enabled()
+        && !gc_budgeted_cycle_active()
+        && in_use >= scavenge_nursery_cap_dueness_bytes()
+        // Numerical pressure only: young_scavenge_cap_due can run the initial
+        // object census. Keep that heap walk at the later scheduler check.
+        && (crate::arena::arena_total_bytes() >= next_arena_trigger_base()
+            || crate::arena::copying_from_space_in_use_bytes()
+                >= scavenge_nursery_cap_dueness_bytes())
+        && super::json_defer::note_completed_parse(in_use)
+    {
+        defer_nursery_cap_to_precise_safepoint();
+    }
 }
 
 /// Old-gen pressure the reclaim arms act on: block-offset in-use minus the
@@ -2436,6 +2460,10 @@ pub fn gc_check_trigger() {
             _ => None,
         };
         if let Some(kind) = direct_kind {
+            if matches!(kind, GcTriggerKind::ArenaBytes) && super::json_defer::should_defer(false) {
+                defer_nursery_cap_to_precise_safepoint();
+                return;
+            }
             // Phase 2/3: with moving mode on, DEFER this alloc-point collection
             // to the next precise-root safepoint (event-loop boundary or a
             // codegen loop back-edge poll) so the copying minor MOVES survivors
@@ -2770,12 +2798,24 @@ pub(crate) fn gc_safepoint_moving_minor() -> bool {
     // whichever arm reached us (loop back-edge poll or microtask-pump boundary).
     // Inert (one cached-`Option` load) unless `PERRY_GC_SCHEDULE_SEED` is set.
     let scheduled = super::schedule::schedule_tick();
+    let due = gc_budgeted_due_trigger();
+    if !scheduled
+        && matches!(
+            due,
+            Some(BudgetedGcTrigger::ArenaBytes | BudgetedGcTrigger::YoungScavengeCap)
+        )
+        && super::json_defer::should_defer(true)
+    {
+        // Keep the poll armed: an allocation-free loop must still expire the
+        // allowance. Seed-selected collections never take this branch.
+        return true;
+    }
     // `set_safepoint_pending`, not a raw `.set(false)`: since #7735 the pending
     // flag is mirrored into the poll arming word, and clearing it behind the
     // mirror would leave the back-edge poll armed forever.
     set_safepoint_pending(false);
     let _declared = DeclaredSafepointGuard::enter();
-    let kind = match gc_budgeted_due_trigger() {
+    let kind = match due {
         // #7909: the nursery cap and the whole-arena trigger are the same
         // collection here — this IS the evacuating collector the cap is for.
         Some(BudgetedGcTrigger::ArenaBytes | BudgetedGcTrigger::YoungScavengeCap) => {

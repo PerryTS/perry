@@ -61,6 +61,7 @@ pub extern "C" fn js_gc_memory_pressure(level: u32) -> u32 {
     if level == 0 {
         return 0;
     }
+    super::json_defer::cancel_until_collection();
     // Pull the arena trigger down to "collect at the next check" and arm
     // it so the un-armed budget ceiling substitution doesn't override the
     // clamp (see `effective_next_arena_trigger`).
