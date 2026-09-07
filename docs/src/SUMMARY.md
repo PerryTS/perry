@@ -157,6 +157,7 @@
 - [CI Tiers (PR gate / sweep / full)](testing/ci-tiers.md)
 - [Claude Code Bundle Parity](testing/cc-parity.md)
 - [CI Gate Scheduling](testing/ci-gate-scheduling.md)
+- [Linux Incident Capture](testing/linux-incident-capture.md)
 
 # CLI Reference
 

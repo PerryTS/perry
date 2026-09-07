@@ -272,6 +272,10 @@ jobs:
           python3 scripts/workspace_architecture.py --self-test
           python3 scripts/workspace_architecture.py --check --print-summary
 
+      - name: Linux incident collector fixtures
+        if: ${{ !cancelled() }}
+        run: python3 scripts/test_capture_linux_incident.py
+
       - name: Public benchmark evidence freshness
         if: ${{ !cancelled() }}
         run: |
