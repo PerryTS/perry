@@ -651,32 +651,6 @@
       "why": "Megamorphic property-read stub cache, the read twin of WRITE_STUB: 2-way ways of (shape_token, key_bits, slot) plain u64s. The token is a shape id and the slot an index; key_bits are content-derived by construction, because read_stub_key_bits returns short_ascii_sso_bits(key) \u2014 the key's characters packed inline \u2014 and yields None for any key that would otherwise be stored under a pointer. No way holds a heap address, so nothing here keeps an object alive, and a stale entry cannot hit: receiver_shape_token returns None for a receiver with no live shape, and the token identifies the exact key set and order, so a shape change yields a different token."
     },
     {
-      "file": "crates/perry-runtime/src/object/regex_proto_thunks.rs",
-      "name": "REGEXP_PROTOTYPE_PTR_SLOT",
-      "verdict": "covered_elsewhere",
-      "why": "#9893: the realm's `RegExp.prototype` address, recorded so the view mode's canonicality proof is three loads instead of a by-name walk. It IS a root and it IS scanned: `object::scan_object_cache_roots_mut` (registered via `reg_scanner!` in gc/mod.rs) visits it with `visit_atomic_i64_slot` beside the iterator-prototype towers, which marks it and rewrites it when the collector moves the prototype. The walk does not reach it because access goes through the `RealmAtomicI64` wrapper's `with_slot`, not a direct static read.",
-      "scanner": "object::scan_object_cache_roots_mut (crates/perry-runtime/src/object/mod.rs), registered by reg_scanner! in crates/perry-runtime/src/gc/mod.rs"
-    },
-    {
-      "file": "crates/perry-runtime/src/object/regex_proto_thunks.rs",
-      "name": "REGEXP_PROTOTYPE_TEST_CLOSURE_SLOT",
-      "verdict": "covered_elsewhere",
-      "why": "#9893: the canonical `RegExp.prototype.test` closure, NaN-BOXED rather than a bare address, and visited as such \u2014 `scan_object_cache_roots_mut` uses `visit_atomic_nanbox_u64_slot` so the collector rewrites the pointer inside the word. Same wrapper indirection as `REGEXP_PROTOTYPE_PTR_SLOT` above.",
-      "scanner": "object::scan_object_cache_roots_mut (crates/perry-runtime/src/object/mod.rs), registered by reg_scanner! in crates/perry-runtime/src/gc/mod.rs"
-    },
-    {
-      "file": "crates/perry-runtime/src/object/regex_proto_thunks.rs",
-      "name": "REGEXP_PROTOTYPE_TEST_INDEX_SLOT",
-      "verdict": "not_a_gc_pointer",
-      "why": "#9893: the field INDEX `test` occupies on the prototype \u2014 a `u32` ordinal, not an address, sentinel `u32::MAX`. Nothing for the collector to mark or rewrite."
-    },
-    {
-      "file": "crates/perry-runtime/src/object/regex_proto_thunks.rs",
-      "name": "REGEXP_PROTOTYPE_TEST_WALKS",
-      "verdict": "not_a_gc_pointer",
-      "why": "#9893: how many by-name canonicality walks this process has done \u2014 a plain `u64` count whose whole purpose is to read 1 per realm and thereby prove the fast path is the path being taken. A NUMBER, never an address."
-    },
-    {
       "file": "crates/perry-runtime/src/object/shapes.rs",
       "name": "SHAPE_YOUNG_LOG_SUPPRESSED",
       "verdict": "not_a_gc_pointer",

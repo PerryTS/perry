@@ -139,7 +139,7 @@ impl CursorFields {
     #[inline(always)]
     unsafe fn set_number(self, index: u32, value: usize) {
         debug_assert!((F_BYTE_START..=F_UTF16_LEN).contains(&index));
-        // GC_STORE_AUDIT(NUMBER): `JSValue::number` cannot carry a heap edge;
+        // GC_STORE_AUDIT(POINTER_FREE): `JSValue::number` cannot carry a heap edge;
         // `cursor_position_fields_are_never_pointer_typed` pins the invariant
         // across every product writer.
         self.0
