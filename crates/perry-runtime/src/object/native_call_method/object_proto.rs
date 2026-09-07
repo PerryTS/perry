@@ -308,7 +308,8 @@ pub(crate) unsafe fn js_object_is_prototype_of_value(receiver: f64, target: f64)
     // `object_ptr_from_value` (which only accepts GC_TYPE_OBJECT) returned
     // `None` and the walk bailed. #4549: use the raw GC pointer instead.
     let heap_addr = |v: f64| -> Option<usize> {
-        gc_pointer_and_type_from_value(v).map(|(ptr, _)| ptr as usize)
+        gc_pointer_and_type_from_value(v, crate::hot_diag::NativeProbeCaller::Other)
+            .map(|(ptr, _)| ptr as usize)
     };
     let receiver_addr = match heap_addr(receiver) {
         Some(addr) => addr,
@@ -348,7 +349,10 @@ pub(crate) unsafe fn js_object_is_prototype_of_value(receiver: f64, target: f64)
     }
 
     let target_jsval = JSValue::from_bits(target.to_bits());
-    if !target_jsval.is_pointer() && gc_pointer_and_type_from_value(target).is_none() {
+    if !target_jsval.is_pointer()
+        && gc_pointer_and_type_from_value(target, crate::hot_diag::NativeProbeCaller::Other)
+            .is_none()
+    {
         return false;
     }
 
@@ -399,10 +403,12 @@ pub(crate) unsafe fn js_object_is_prototype_of_value(receiver: f64, target: f64)
             }
         }
     } else {
-        let (_, target_gc_type) = match gc_pointer_and_type_from_value(target) {
-            Some(info) => info,
-            None => return false,
-        };
+        let (_, target_gc_type) =
+            match gc_pointer_and_type_from_value(target, crate::hot_diag::NativeProbeCaller::Other)
+            {
+                Some(info) => info,
+                None => return false,
+            };
         // #4549: arrays and typed arrays are objects whose `[[Prototype]]`
         // chain is modeled (`Array.prototype` → `Object.prototype`,
         // `Uint8Array.prototype` → `%TypedArray%.prototype` →

@@ -299,19 +299,10 @@ pub(super) unsafe fn dispatch_map_set(
                     _ => f64::from_bits(crate::value::TAG_UNDEFINED),
                 });
             }
-            // Buffer / Uint8Array dispatch — allocated raw, not behind a
-            // GcHeader, so it can't be discovered through the ObjectHeader
-            // path below. Tracked in BUFFER_REGISTRY. Routes Node-style
-            // numeric read/write/search/swap method family through
-            // `crate::buffer` helpers.
-            if crate::buffer::is_registered_buffer(check_ptr) {
-                return Some(dispatch_buffer_method(
-                    check_ptr,
-                    method_name,
-                    args_ptr,
-                    args_len,
-                ));
-            }
+            // Buffer and typed-array receivers were classified and dispatched
+            // by `dispatch_handle` before this residual raw Map/Set registry
+            // path. Re-probing the Buffer registry here made every ordinary
+            // object method call pay a second negative Buffer lookup.
         }
     }
 

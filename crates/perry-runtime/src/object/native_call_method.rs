@@ -25,6 +25,8 @@ mod dispatch_arg_coercion_tests;
 #[cfg(test)]
 mod probe_dispatch_tests;
 #[cfg(test)]
+mod receiver_class_tests;
+#[cfg(test)]
 /// #8139: `toLocaleString` on an array / typed-array / buffer receiver.
 mod to_locale_string_tests;
 mod typed_array;
@@ -44,6 +46,136 @@ pub(crate) use proto_dispatch::{
     try_dispatch_instance_method_value, try_dispatch_value_called_proto_method,
 };
 pub(super) use typed_array::dispatch_typed_array_method;
+
+/// Receiver storage class established once at the dynamic-call boundary.
+/// Managed values are answered by their allocator-proven `GcHeader`; only a
+/// pointer with no tracked header is allowed to consult the Buffer / typed
+/// array registries.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum NativeReceiverClass {
+    Primitive,
+    Gc(u8),
+    HeaderlessBuffer,
+    HeaderlessTypedArray,
+    OtherPointer,
+}
+
+#[derive(Clone, Copy)]
+struct ReceiverKindCacheEntry {
+    site_id: u64,
+    class_id: u32,
+    gc_type: u8,
+}
+
+const EMPTY_RECEIVER_KIND_CACHE_ENTRY: ReceiverKindCacheEntry = ReceiverKindCacheEntry {
+    site_id: 0,
+    class_id: 0,
+    gc_type: 0,
+};
+const RECEIVER_KIND_CACHE_SLOTS: usize = 64;
+
+crate::perry_thread_local! {
+    static RECEIVER_KIND_CACHE: std::cell::RefCell<[ReceiverKindCacheEntry; RECEIVER_KIND_CACHE_SLOTS]> =
+        const { std::cell::RefCell::new([EMPTY_RECEIVER_KIND_CACHE_ENTRY; RECEIVER_KIND_CACHE_SLOTS]) };
+}
+
+#[cfg(test)]
+static RECEIVER_KIND_CACHE_HITS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+#[inline]
+fn receiver_kind_cache_slot(site_id: u64) -> usize {
+    (site_id as usize ^ (site_id >> 32) as usize) & (RECEIVER_KIND_CACHE_SLOTS - 1)
+}
+
+#[inline]
+fn receiver_kind_cache_lookup(
+    site_id: u64,
+    gc_type: u8,
+    class_id: u32,
+) -> Option<NativeReceiverClass> {
+    if site_id == 0 {
+        return None;
+    }
+    RECEIVER_KIND_CACHE.with(|cache| {
+        let entry = cache.borrow()[receiver_kind_cache_slot(site_id)];
+        if entry.site_id != site_id {
+            return None;
+        }
+        if entry.gc_type != gc_type || entry.class_id != class_id {
+            return None;
+        }
+        #[cfg(test)]
+        RECEIVER_KIND_CACHE_HITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Some(NativeReceiverClass::Gc(gc_type))
+    })
+}
+
+#[inline]
+fn receiver_kind_cache_store(site_id: u64, class_id: u32, answer: NativeReceiverClass) {
+    if site_id == 0 {
+        return;
+    }
+    let gc_type = match answer {
+        NativeReceiverClass::Gc(gc_type) => gc_type,
+        _ => return,
+    };
+    RECEIVER_KIND_CACHE.with(|cache| {
+        cache.borrow_mut()[receiver_kind_cache_slot(site_id)] = ReceiverKindCacheEntry {
+            site_id,
+            class_id,
+            gc_type,
+        };
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn test_native_receiver_site_cache_hits() -> u64 {
+    RECEIVER_KIND_CACHE_HITS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+#[inline]
+unsafe fn classify_native_receiver(
+    value: f64,
+    site_id: u64,
+    probe_caller: crate::hot_diag::NativeProbeCaller,
+) -> NativeReceiverClass {
+    let jsval = JSValue::from_bits(value.to_bits());
+    if !jsval.is_pointer() {
+        return NativeReceiverClass::Primitive;
+    }
+    let addr = jsval.as_pointer::<u8>() as usize;
+    if !crate::value::addr_class::is_above_handle_band(addr) {
+        return NativeReceiverClass::OtherPointer;
+    }
+    if let Some(header) = crate::value::addr_class::try_read_tracked_gc_header(addr) {
+        let gc_type = (*header.as_ptr()).obj_type;
+        let class_id = if gc_type == crate::gc::GC_TYPE_OBJECT {
+            (*(addr as *const ObjectHeader)).class_id
+        } else {
+            0
+        };
+        if let Some(answer) = receiver_kind_cache_lookup(site_id, gc_type, class_id) {
+            return answer;
+        }
+        let answer = NativeReceiverClass::Gc(gc_type);
+        receiver_kind_cache_store(site_id, class_id, answer);
+        return answer;
+    }
+
+    // A tracked-header miss is the only storage class whose identity is not
+    // already in the allocation. External buffers and the process-global SAB
+        // backing are headerless; native-arena typed views can be headerless too.
+    crate::hot_diag::native_note_buffer_probe(probe_caller);
+    if crate::buffer::is_registered_buffer(addr) {
+        return NativeReceiverClass::HeaderlessBuffer;
+    }
+    crate::hot_diag::native_note_typed_array_probe(probe_caller);
+    if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
+        return NativeReceiverClass::HeaderlessTypedArray;
+    }
+    NativeReceiverClass::OtherPointer
+}
 
 /// #7769: skip the dispatch tower for an ordinary user-class instance whose
 /// `(class_id, method_name)` the tower has already resolved to a vtable method.
@@ -98,10 +230,8 @@ pub(super) use typed_array::dispatch_typed_array_method;
 /// * `GC_TYPE_OBJECT` without the class-object marker — excludes arrays,
 ///   strings, errors, maps, sets, regexes, closures, and class values, each of
 ///   which the tower routes to its own dispatcher;
-/// * not a registered `Buffer` and not a typed array — the two address-keyed
-///   probes the tower runs ahead of the class walk that a `GC_TYPE_OBJECT`
-///   receiver could in principle also answer. Both are latched (#7755), so in
-///   a program using neither this is two atomic loads;
+/// * allocator-proven `GC_TYPE_OBJECT` — this rules out Buffer and typed-array
+///   storage without consulting either address registry;
 /// * `meta` null — no `Object.setPrototypeOf` override, no per-key descriptor
 ///   state, no exotic-kind tag. STRICTER than the tower, which resolves
 ///   through a meta record;
@@ -111,6 +241,20 @@ pub(super) use typed_array::dispatch_typed_array_method;
 ///   `resolve_inherited_field` probe had nothing to shadow with.
 #[inline]
 unsafe fn class_vtable_fast_guard(object: f64, method_bytes: &[u8]) -> Option<(usize, u32)> {
+    let receiver_class = classify_native_receiver(
+        object,
+        0,
+        crate::hot_diag::NativeProbeCaller::NativeReceiver,
+    );
+    class_vtable_fast_guard_classified(object, method_bytes, receiver_class)
+}
+
+#[inline]
+unsafe fn class_vtable_fast_guard_classified(
+    object: f64,
+    method_bytes: &[u8],
+    receiver_class: NativeReceiverClass,
+) -> Option<(usize, u32)> {
     let bits = object.to_bits();
     if (bits >> 48) != (crate::value::POINTER_TAG >> 48) {
         return None;
@@ -119,25 +263,15 @@ unsafe fn class_vtable_fast_guard(object: f64, method_bytes: &[u8]) -> Option<(u
     if !crate::value::addr_class::is_above_handle_band(obj_addr) {
         return None;
     }
-    // `gc_pointer_and_type_from_value` — NOT a bare `obj - GC_HEADER_SIZE`
-    // read. Buffers, ArrayBuffers, typed arrays, Sets, Maps, RegExps, Symbols
-    // and AsyncResource handles are raw allocations with no `GcHeader` at that
-    // offset, so reading one directly loads foreign allocator bytes that can
-    // and do coincidentally equal a real GC type (see `handle_methods.rs`'s
-    // buffer comment, and #5625 where a typed array's stale bytes matched
-    // `GC_TYPE_TEMPORAL`). This helper screens every one of those registries
-    // first — and it is the same screen the tower's own object-pointer
-    // resolution uses, so the fast path cannot classify a receiver differently
-    // from the code it is short-circuiting.
-    let (ptr, gc_type) = gc_pointer_and_type_from_value(object)?;
-    if gc_type != crate::gc::GC_TYPE_OBJECT || ptr as usize != obj_addr {
+    // `classify_native_receiver` proved allocator membership before reading
+    // the header. A bare `obj - GC_HEADER_SIZE` read is unsound for external
+    // Buffer/SAB cells and native handles, whose preceding bytes are foreign.
+    if receiver_class != NativeReceiverClass::Gc(crate::gc::GC_TYPE_OBJECT) {
         return None;
     }
-    // `meta_capable_object` rather than a bare header read: it is the
-    // classifier `may_have_descriptor_entry` and `object_static_prototype` use,
-    // so a `Some` here means both of those answer authoritatively from the meta
-    // slot rather than falling back to a conservative `true`.
-    let obj = super::prototype_chain::meta_capable_object(obj_addr)?;
+    // Every allocator-proven GC_TYPE_OBJECT begins with ObjectHeader. Its meta
+    // slot is authoritative for descriptor/prototype state.
+    let obj = obj_addr as *mut ObjectHeader;
     if !crate::object::object_is_regular(obj) {
         return None;
     }
@@ -184,7 +318,7 @@ unsafe fn class_vtable_fast_guard(object: f64, method_bytes: &[u8]) -> Option<(u
 
     // A recorded prototype could carry a shadowing field; the tower consults it
     // before the class walk, so a fast path may not.
-    if super::prototype_chain::object_static_prototype(obj_addr).is_some() {
+    if super::prototype_chain::object_static_prototype_known_object(obj).is_some() {
         return None;
     }
 
@@ -210,18 +344,20 @@ pub(crate) fn method_name_is_fast_dispatch_ineligible(name: &str) -> bool {
 }
 
 #[inline]
-unsafe fn try_class_vtable_fast_dispatch(
+unsafe fn try_class_vtable_fast_dispatch_classified(
     object: f64,
     method_name_ptr: *const i8,
     method_name_len: usize,
     args_ptr: *const f64,
     args_len: usize,
+    receiver_class: NativeReceiverClass,
 ) -> Option<f64> {
     if method_name_ptr.is_null() || method_name_len == 0 {
         return None;
     }
     let method_bytes = std::slice::from_raw_parts(method_name_ptr as *const u8, method_name_len);
-    let (obj_addr, class_id) = class_vtable_fast_guard(object, method_bytes)?;
+    let (obj_addr, class_id) =
+        class_vtable_fast_guard_classified(object, method_bytes, receiver_class)?;
     let (func_ptr, param_count, has_synthetic_arguments, has_rest) =
         crate::object::class_registry::obj_dispatch_ic_lookup(class_id, method_bytes)?;
     // A synthesized `arguments` object or a user rest param makes
@@ -1021,7 +1157,10 @@ fn throw_object_to_string_not_function() -> ! {
 }
 
 #[inline]
-unsafe fn gc_pointer_and_type_from_value(value: f64) -> Option<(*const u8, u8)> {
+unsafe fn gc_pointer_and_type_from_value(
+    value: f64,
+    probe_caller: crate::hot_diag::NativeProbeCaller,
+) -> Option<(*const u8, u8)> {
     let jsval = JSValue::from_bits(value.to_bits());
     let ptr = if jsval.is_pointer() {
         jsval.as_pointer::<u8>()
@@ -1037,18 +1176,7 @@ unsafe fn gc_pointer_and_type_from_value(value: f64) -> Option<(*const u8, u8)> 
         return None;
     }
     let addr = ptr as usize;
-    if crate::buffer::is_any_array_buffer(addr) {
-        return Some((ptr, crate::gc::GC_TYPE_BUFFER));
-    }
-    if crate::buffer::is_uint8array_buffer(addr) {
-        return Some((ptr, crate::gc::GC_TYPE_BUFFER));
-    }
-    if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
-        return Some((ptr, crate::gc::GC_TYPE_TYPED_ARRAY));
-    }
-    if !is_valid_obj_ptr(ptr as *const u8) {
-        return None;
-    }
+    let tracked_header = crate::value::addr_class::try_read_tracked_gc_header(addr);
     // #7850. This used to run FOUR side-registry probes unconditionally before
     // reading the `GcHeader` — and the header already records the kind that
     // three of them are looking for. `is_registered_symbol` in particular takes
@@ -1078,8 +1206,22 @@ unsafe fn gc_pointer_and_type_from_value(value: f64) -> Option<(*const u8, u8)> 
     {
         return None;
     }
-    let gc_header = (ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    let obj_type = (*gc_header).obj_type;
+    let Some(gc_header) = tracked_header else {
+        // Headerless external buffers, process-global SAB backings and native
+        // typed views are the residual cases. Managed Buffer / TypedArray
+        // allocations reach the tail below with their authoritative GC type and do
+        // not touch any side registry.
+        crate::hot_diag::native_note_buffer_probe(probe_caller);
+        if crate::buffer::is_registered_buffer(addr) {
+            return Some((ptr, crate::gc::GC_TYPE_BUFFER));
+        }
+        crate::hot_diag::native_note_typed_array_probe(probe_caller);
+        if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
+            return Some((ptr, crate::gc::GC_TYPE_TYPED_ARRAY));
+        }
+        return None;
+    };
+    let obj_type = (*gc_header.as_ptr()).obj_type;
     let excluded = match obj_type {
         crate::gc::GC_TYPE_SET => crate::set::is_registered_set(addr),
         crate::gc::GC_TYPE_MAP => crate::map::is_registered_map(addr),
@@ -1098,12 +1240,20 @@ unsafe fn gc_pointer_and_type_from_value(value: f64) -> Option<(*const u8, u8)> 
 /// receiver is still classified the same way it was before the re-ordering.
 #[cfg(test)]
 pub(crate) unsafe fn test_gc_pointer_and_type_from_value(value: f64) -> Option<(*const u8, u8)> {
-    gc_pointer_and_type_from_value(value)
+    gc_pointer_and_type_from_value(value, crate::hot_diag::NativeProbeCaller::Other)
 }
 
 #[inline]
 pub(crate) unsafe fn object_ptr_from_value(value: f64) -> Option<*mut ObjectHeader> {
-    let (ptr, gc_type) = gc_pointer_and_type_from_value(value)?;
+    object_ptr_from_value_with_probe_caller(value, crate::hot_diag::NativeProbeCaller::Other)
+}
+
+#[inline]
+unsafe fn object_ptr_from_value_with_probe_caller(
+    value: f64,
+    probe_caller: crate::hot_diag::NativeProbeCaller,
+) -> Option<*mut ObjectHeader> {
+    let (ptr, gc_type) = gc_pointer_and_type_from_value(value, probe_caller)?;
     if gc_type == crate::gc::GC_TYPE_OBJECT {
         Some(ptr as *mut ObjectHeader)
     } else {
@@ -1218,6 +1368,24 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
     args_ptr: *const f64,
     args_len: usize,
 ) -> f64 {
+    js_native_call_method_at_site(
+        0,
+        object,
+        method_name_ptr,
+        method_name_len,
+        args_ptr,
+        args_len,
+    )
+}
+
+pub(crate) unsafe fn js_native_call_method_at_site(
+    site_id: u64,
+    object: f64,
+    method_name_ptr: *const i8,
+    method_name_len: usize,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> f64 {
     // #9675: a LEGACY BARE managed receiver — a real GC pointer that was never
     // NaN-boxed — must be reboxed under its true tag HERE, before the root
     // below and before the first probe. See `bare_receiver` for why the tail
@@ -1239,6 +1407,11 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
             args_len,
         );
     }
+    let receiver_class = classify_native_receiver(
+        object,
+        site_id,
+        crate::hot_diag::NativeProbeCaller::NativeReceiver,
+    );
     if !method_name_ptr.is_null() && method_name_len > 0 {
         let method_name_bytes =
             std::slice::from_raw_parts(method_name_ptr as *const u8, method_name_len);
@@ -1283,9 +1456,14 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
     // #7769: the tower's own previously-computed answer for this
     // (class_id, method_name) pair, when the receiver still satisfies every
     // per-object precondition. See `try_class_vtable_fast_dispatch`.
-    if let Some(result) =
-        try_class_vtable_fast_dispatch(object, method_name_ptr, method_name_len, args_ptr, args_len)
-    {
+    if let Some(result) = try_class_vtable_fast_dispatch_classified(
+        object,
+        method_name_ptr,
+        method_name_len,
+        args_ptr,
+        args_len,
+        receiver_class,
+    ) {
         return result;
     }
 
@@ -1951,6 +2129,7 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
         method_name_len,
         args_ptr,
         args_len,
+        receiver_class,
     ) {
         return r;
     }

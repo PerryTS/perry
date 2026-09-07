@@ -890,7 +890,8 @@ pub unsafe extern "C-unwind" fn js_typed_feedback_native_call_method(
     if !pass {
         record_fallback_call(site_id);
     }
-    crate::object::js_native_call_method(
+    crate::object::js_native_call_method_at_site(
+        site_id,
         object,
         method_name_ptr,
         method_name_len,

@@ -394,7 +394,7 @@ pub(crate) fn regexp_prototype_test_is_canonical(value: f64) -> bool {
     // the object recorded below. `object_static_prototype` answers from the
     // object's own meta record, or from an atomic "nothing was ever recorded"
     // latch — no mutex, no chain walk.
-    if super::prototype_chain::object_static_prototype(recv_addr).is_some() {
+    if super::prototype_chain::object_static_prototype_known_non_object(recv_addr).is_some() {
         return false;
     }
     let proto_ptr = REGEXP_PROTOTYPE_PTR.load(std::sync::atomic::Ordering::Acquire);

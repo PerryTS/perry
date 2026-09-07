@@ -1075,6 +1075,37 @@ static BUF_REGS: AtomicU64 = AtomicU64::new(0);
 static BUF_UNREGS: AtomicU64 = AtomicU64::new(0);
 static BUF_LIVE_MAX: AtomicUsize = AtomicUsize::new(0);
 
+#[derive(Clone, Copy)]
+pub(crate) enum NativeProbeCaller {
+    NativeReceiver,
+    ViewCursor,
+    ObjectStaticPrototype,
+    ObjectFieldByName,
+    ObjectFieldTail,
+    DispatchPrimitive,
+    Other,
+}
+
+const NATIVE_PROBE_CALLERS: usize = 7;
+static NATIVE_BUFFER_PROBES: [AtomicU64; NATIVE_PROBE_CALLERS] =
+    [const { AtomicU64::new(0) }; NATIVE_PROBE_CALLERS];
+static NATIVE_TYPED_ARRAY_PROBES: [AtomicU64; NATIVE_PROBE_CALLERS] =
+    [const { AtomicU64::new(0) }; NATIVE_PROBE_CALLERS];
+
+#[inline]
+pub(crate) fn native_note_buffer_probe(caller: NativeProbeCaller) {
+    if buffer_on() {
+        NATIVE_BUFFER_PROBES[caller as usize].fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+#[inline]
+pub(crate) fn native_note_typed_array_probe(caller: NativeProbeCaller) {
+    if buffer_on() {
+        NATIVE_TYPED_ARRAY_PROBES[caller as usize].fetch_add(1, Ordering::Relaxed);
+    }
+}
+
 /// One `is_registered_buffer` probe that got past the "ever registered" latch.
 /// `admitted` is what the inline min/max window answered — the whole question,
 /// because only an admitted address pays the out-of-line call.
@@ -1147,6 +1178,22 @@ fn buffer_dump() {
         probes - admits,
         pct(probes - admits, probes),
         pct(tp, admits)
+    );
+    let b =
+        |caller: NativeProbeCaller| NATIVE_BUFFER_PROBES[caller as usize].load(Ordering::Relaxed);
+    let t = |caller: NativeProbeCaller| {
+        NATIVE_TYPED_ARRAY_PROBES[caller as usize].load(Ordering::Relaxed)
+    };
+    let _ = writeln!(
+        out,
+        "[native-call-diag] buffer native_receiver={} view_cursor={} object_static_prototype={} field_by_name={} field_tail={} dispatch_primitive={} other={} typed_array native_receiver={} view_cursor={} object_static_prototype={} field_by_name={} field_tail={} dispatch_primitive={} other={}",
+        b(NativeProbeCaller::NativeReceiver), b(NativeProbeCaller::ViewCursor),
+        b(NativeProbeCaller::ObjectStaticPrototype), b(NativeProbeCaller::ObjectFieldByName),
+        b(NativeProbeCaller::ObjectFieldTail), b(NativeProbeCaller::DispatchPrimitive),
+        b(NativeProbeCaller::Other), t(NativeProbeCaller::NativeReceiver),
+        t(NativeProbeCaller::ViewCursor), t(NativeProbeCaller::ObjectStaticPrototype),
+        t(NativeProbeCaller::ObjectFieldByName), t(NativeProbeCaller::ObjectFieldTail),
+        t(NativeProbeCaller::DispatchPrimitive), t(NativeProbeCaller::Other),
     );
     let _ = writeln!(
         out,

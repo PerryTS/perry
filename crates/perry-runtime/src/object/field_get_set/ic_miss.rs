@@ -683,17 +683,24 @@ pub extern "C" fn js_object_get_field_ic_miss(
                 }
                 return val;
             }
-            // Buffers have no GcHeader. The generic IC-miss object path below may
-            // inspect GC/object metadata, so mirror js_object_get_field_by_name's
-            // buffer-first dispatch here.
-            if crate::buffer::is_registered_buffer(obj as usize) {
+            // Managed Buffer/TypedArray cells are authoritative from their
+            // allocator-proven header. Only headerless external/SAB/native
+            // view storage reaches the address registries.
+            let tracked_type = crate::value::addr_class::try_read_tracked_gc_header(obj as usize)
+                .map(|header| (*header.as_ptr()).obj_type);
+            let is_buffer = tracked_type == Some(crate::gc::GC_TYPE_BUFFER)
+                || (tracked_type.is_none() && crate::buffer::is_registered_buffer(obj as usize));
+            if is_buffer {
                 if diag {
                     ic_diag_note(cache_slot, key, R::Buffer);
                 }
                 let value = js_object_get_field_by_name(obj, key);
                 return f64::from_bits(value.bits());
             }
-            if crate::typedarray::lookup_typed_array_kind(obj as usize).is_some() {
+            let is_typed_array = tracked_type == Some(crate::gc::GC_TYPE_TYPED_ARRAY)
+                || (tracked_type.is_none()
+                    && crate::typedarray::lookup_typed_array_kind(obj as usize).is_some());
+            if is_typed_array {
                 if diag {
                     ic_diag_note(cache_slot, key, R::TypedArray);
                 }

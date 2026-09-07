@@ -57,10 +57,10 @@ pub use header::{
     asymmetric_key_meta, buffer_ab_alias, buffer_alloc, buffer_backing_array_buffer,
     buffer_byte_offset, buffer_data, buffer_data_mut, crypto_key_meta, ensure_buffer_ab_alias,
     is_any_array_buffer, is_array_buffer, is_data_view, is_registered_buffer, is_secret_key,
-    is_shared_array_buffer, is_uint8array_buffer, js_set_crypto_key_death_hook,
-    mark_as_array_buffer, mark_as_asymmetric_key, mark_as_crypto_key, mark_as_data_view,
-    mark_as_secret_key, mark_as_shared_array_buffer, mark_as_uint8array, register_buffer,
-    resolve_buffer_ab_alias, set_buffer_ab_alias, CryptoKeyDeathHookFn,
+    is_shared_array_buffer, is_uint8array_buffer, js_buffer_register_external,
+    js_set_crypto_key_death_hook, mark_as_array_buffer, mark_as_asymmetric_key, mark_as_crypto_key,
+    mark_as_data_view, mark_as_secret_key, mark_as_shared_array_buffer, mark_as_uint8array,
+    register_buffer, resolve_buffer_ab_alias, set_buffer_ab_alias, CryptoKeyDeathHookFn,
 };
 pub(crate) use header::{
     buffer_alloc_foreign, collect_dead_registered_buffers_post_trace,
