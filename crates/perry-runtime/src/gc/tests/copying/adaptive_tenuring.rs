@@ -68,8 +68,8 @@ fn heavy_influx_lowers_threshold_and_promotes_next_cycle() {
     }
 }
 
-/// #7929: a real copying minor must feed its move census into the nursery
-/// band's object denomination.
+/// #7929: a real copying minor must feed its move census into diagnostics and
+/// end the first-minor object denomination.
 ///
 /// The pure-function coverage lives in `gc::tenuring::tests`; that coverage
 /// passes with the `copying.rs` call site deleted, which is exactly the "the
@@ -125,11 +125,9 @@ fn copying_minor_feeds_the_object_denomination_census() {
         "fixture must exercise the SCALING arm, not the one-sided clamp (mean {recorded} B)"
     );
 
-    // And the band moved with it, proportionally.
-    assert_eq!(
-        crate::gc::tenuring::influx_driven_nursery_cap_bytes(),
-        base * crate::gc::tenuring::nursery_cap_object_scale_permille(recorded) / 1000
-    );
+    // The completed copying minor ends the tracing regime: its measured mean
+    // stays observable, while the steady-state band returns to bytes.
+    assert_eq!(crate::gc::tenuring::influx_driven_nursery_cap_bytes(), base);
 }
 
 /// #8122: BEFORE any copying minor has run, once the young generation is

@@ -235,10 +235,9 @@ crate::perry_thread_local! {
     /// the denominator of this cycle's survival rate.
     static PREV_COPIED_BYTES: Cell<usize> = const { Cell::new(0) };
     /// Influx-driven multiplier (1, 2, or 4) applied to the scavenge nursery
-    /// cap. Power of two; grows/shrinks one step at a time, debounced.
+    /// cap. Power of two; grows one step at a time, debounced.
     static NURSERY_CAP_SCALE: Cell<u8> = const { Cell::new(1) };
     static CAP_GROW_STREAK: Cell<u8> = const { Cell::new(0) };
-    static CAP_SHRINK_STREAK: Cell<u8> = const { Cell::new(0) };
     /// #7929: mean size of the objects the last copying minor moved. Seeded at
     /// the calibration reference so a process with no completed copying minor
     /// paces exactly as it did before the object denomination existed — until
@@ -250,6 +249,11 @@ crate::perry_thread_local! {
     /// allocation census — replaced the seed? Once true the allocation probe
     /// never runs again (its walk is paid at most once per process).
     static OBJECT_CENSUS_SEEDED: Cell<bool> = const { Cell::new(false) };
+    /// Has this thread completed a copying minor? Unlike
+    /// `OBJECT_CENSUS_SEEDED`, this cannot be set by #8122's allocation walk;
+    /// unlike `SURVIVOR_ROUND_MEASURED`, it flips on the first completed minor
+    /// rather than waiting for a cohort to return on the second.
+    static COPYING_MINOR_COMPLETED: Cell<bool> = const { Cell::new(false) };
 }
 
 #[cfg(test)]
@@ -369,12 +373,20 @@ pub(super) fn scavenge_nursery_cap_effective_bytes() -> usize {
 }
 
 /// The influx-driven half of the cap on its own: the configured base times
-/// the debounced `NURSERY_CAP_SCALE`, **re-denominated in objects** by
-/// [`nursery_cap_object_scale_permille`]. Named so the composition below reads
-/// as the two-term policy it is.
+/// the debounced `NURSERY_CAP_SCALE`.
+///
+/// Before the first copying minor completes, #8122's allocation census
+/// re-denominates this band in objects so the first tracing cycle sees the
+/// object budget #7929 measured. Once a copying minor has completed, the
+/// survivor census remains diagnostic evidence but no longer changes the byte
+/// band: copying-minor cost is fixed plus O(bytes moved), and survivor size
+/// does not price the fixed work or RSS.
 pub(super) fn influx_driven_nursery_cap_bytes() -> usize {
     let constant_band =
         gc_scavenge_nursery_cap_bytes().saturating_mul(NURSERY_CAP_SCALE.with(Cell::get) as usize);
+    if COPYING_MINOR_COMPLETED.with(Cell::get) {
+        return constant_band;
+    }
     // The multiply is done in u64 deliberately. `usize::saturating_mul` on an
     // ILP32 target (watchOS/visionOS are 32-bit) would saturate a 64 MB band
     // against a 1000-per-mille factor at `u32::MAX` and the following divide
@@ -410,8 +422,9 @@ pub(super) const NURSERY_CAP_REFERENCE_OBJECT_BYTES: usize = 72;
 /// atypically small.
 const NURSERY_CAP_OBJECT_SCALE_MIN_PERMILLE: usize = 500;
 
-/// #7929: how much of the byte-denominated constant band this representation
-/// should get, in per mille, so the band buys a **constant number of objects**.
+/// #7929: how much of the byte-denominated first tracing band this
+/// representation should get, in per mille, so that band buys a **constant
+/// number of objects**.
 ///
 /// The collector's trigger is denominated in bytes and its per-cycle cost is
 /// per object, so a fixed byte band silently buys more collector work as
@@ -435,6 +448,11 @@ const NURSERY_CAP_OBJECT_SCALE_MIN_PERMILLE: usize = 500;
 ///   crosses `GC_OLD_GEN_RECLAIM_THRESHOLD_BYTES` or lands in a #7909 budgeted
 ///   stall. Every program at or above the reference — `retain_wide`,
 ///   `retain_wide1`, `push_num`, `shapes` — is left bit-identical.
+///
+/// [`influx_driven_nursery_cap_bytes`] consults this factor only before the
+/// first copying minor completes. That preserves the traced-object cost this
+/// comment measured without using survivor object size to multiply the fixed
+/// cost of later copying minors.
 pub(super) fn nursery_cap_object_scale_permille(mean_surviving_object_bytes: usize) -> usize {
     if mean_surviving_object_bytes == 0 {
         return 1000;
@@ -443,15 +461,20 @@ pub(super) fn nursery_cap_object_scale_permille(mean_surviving_object_bytes: usi
         .clamp(NURSERY_CAP_OBJECT_SCALE_MIN_PERMILLE, 1000)
 }
 
-/// Feed one finished copying minor's move census into the object denomination.
+/// Record one finished copying minor's move census and end the first-minor
+/// object-denomination regime.
 ///
-/// Called from the copying minor immediately before [`retune_after_scavenge`],
-/// so everything that end-of-cycle computes is policy for the *next* cycle and
-/// sees one consistent factor. A cycle that moved nothing carries the previous
-/// estimate forward rather than resetting it — `tree`/`cycles` move single
-/// digits of objects per minor and a zero denominator there is a missing
-/// measurement, not a measurement of zero.
+/// Called from the copying minor immediately before [`retune_after_scavenge`].
+/// The mean remains observable in diagnostics, but the next cycle's byte band
+/// no longer reads it. A cycle that moved nothing carries the previous estimate
+/// forward rather than resetting it — `tree`/`cycles` move single digits of
+/// objects per minor and a zero denominator there is a missing measurement,
+/// not a measurement of zero.
 pub(super) fn note_surviving_object_census(moved_bytes: usize, moved_objects: usize) {
+    // This call is the completion witness, including for a minor that moved no
+    // objects. Set it before the missing-census returns so such a cycle still
+    // ends the first-minor tracing regime exactly once.
+    COPYING_MINOR_COMPLETED.with(|completed| completed.set(true));
     if moved_objects == 0 {
         return;
     }
@@ -464,7 +487,7 @@ pub(super) fn note_surviving_object_census(moved_bytes: usize, moved_objects: us
     if previous != mean && crate::gc::gc_diag_enabled() {
         eprintln!(
             "[gc-tenuring] nursery cap object denomination: mean_surviving_object_bytes {} -> {} \
-             (scale {} permille, band {} B)",
+             (scale {} permille, band {} B, applied=false)",
             previous,
             mean,
             nursery_cap_object_scale_permille(mean),
@@ -496,12 +519,13 @@ pub(super) fn note_surviving_object_census(moved_bytes: usize, moved_objects: us
 /// point every program that will ever reach the cap passes exactly once — hop
 /// the young generation's headers (`arena::young_allocation_census`, ~1M
 /// instructions for 8 MB of small objects, paid ONCE per process) and install
-/// `bytes / objects` as the mean. The first minor is then object-denominated
-/// like every later one, and a smaller representation no longer buys the
-/// collector a bigger first trace. The one-sided clamp still applies: a mean
+/// `bytes / objects` as the mean. The first minor is then object-denominated,
+/// and a smaller representation no longer buys the collector a bigger first
+/// trace. The one-sided clamp still applies in this tracing regime: a mean
 /// above the reference leaves the 16 MB band untouched, so an array-dominated
 /// allocation stream cannot raise the cap. The collector's survivor census
-/// overwrites this seed at the first minor, so steady state is unchanged.
+/// overwrites this seed at the first minor for diagnostics, and that completed
+/// minor ends object denomination for all later byte bands.
 ///
 /// Returns without walking when the base cap is not yet half full, when a
 /// census (either kind) already exists, or when the nursery is empty.
@@ -527,7 +551,7 @@ pub(super) fn maybe_seed_object_census_from_allocation(from_space_in_use_bytes: 
     if crate::gc::gc_diag_enabled() {
         eprintln!(
             "[gc-tenuring] nursery cap object denomination: allocation census seeded \
-             mean_object_bytes {} -> {} ({} objects / {} B in from-space; scale {} permille, band {} B)",
+             mean_object_bytes {} -> {} ({} objects / {} B in from-space; scale {} permille, band {} B, applied=true)",
             previous,
             mean,
             objects,
@@ -573,6 +597,38 @@ pub(super) fn compute_target_survivals(eden_live_bytes: usize, desired_bytes: us
     target.min(GC_TENURING_SURVIVALS_MAX as usize) as u8
 }
 
+/// The two operands and verdict of the nursery-cap comparison captured before
+/// a copying attempt can rewrite from-space. The trigger kind is not evidence:
+/// the precise safepoint folds the cap into `ArenaBytes`, while direct and
+/// scheduled minors can reach the same copying path without the cap being due.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct NurseryCapRating {
+    pub(super) from_space_bytes: usize,
+    pub(super) cap_bytes: usize,
+    pub(super) cap_due: bool,
+}
+
+impl NurseryCapRating {
+    pub(super) fn capture() -> Self {
+        let from_space_bytes = crate::arena::copying_from_space_in_use_bytes();
+        let cap_bytes = scavenge_nursery_cap_effective_bytes();
+        Self {
+            from_space_bytes,
+            cap_bytes,
+            cap_due: super::policy::young_scavenge_cap_due(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) const fn from_values(from_space_bytes: usize, cap_bytes: usize) -> Self {
+        Self {
+            from_space_bytes,
+            cap_bytes,
+            cap_due: from_space_bytes >= cap_bytes,
+        }
+    }
+}
+
 /// Feed one finished copying-minor cycle into the feedback loop.
 /// `eden_live_bytes` is the cycle's Eden survivor influx (bytes moved out
 /// of Eden, whether copied to a survivor space or promoted).
@@ -601,8 +657,9 @@ pub(super) fn retune_after_scavenge(
     eden_live_bytes: usize,
     eden_copied_bytes: usize,
     first_round_live_bytes: usize,
+    nursery_cap_rating: NurseryCapRating,
 ) {
-    retune_nursery_cap_scale(eden_live_bytes);
+    retune_nursery_cap_scale(eden_live_bytes, nursery_cap_rating);
     let desired = desired_survivor_bytes();
     let substantial = desired / 4;
     let prev_cohort_copied = PREV_COPIED_BYTES.with(|c| c.replace(eden_copied_bytes));
@@ -743,42 +800,35 @@ pub(super) fn retune_after_scavenge(
 }
 
 /// Grow the nursery cap one ×2 step (to at most ×4) when survivor influx
-/// exceeds 4% of the current effective cap for two consecutive cycles —
-/// objects are surviving because they aren't getting time to die, so a
-/// bigger Eden both cuts the collection count and lets them die young.
-/// Shrink one step when influx falls below 1% for two consecutive cycles.
-/// The 4%/1% band is wide enough that the scale cannot oscillate on a
-/// steady workload (growing halves the observed ratio, 4%/2 = 2% > 1%).
-fn retune_nursery_cap_scale(eden_live_bytes: usize) {
+/// exceeds 4% of the current effective cap for two consecutive cap-due
+/// copying minors. Objects are surviving because they are not getting time to
+/// die, so a bigger Eden both cuts the collection count and lets them die
+/// young. Mortality is not evidence for shrinking the byte/RSS bound.
+fn retune_nursery_cap_scale(eden_live_bytes: usize, nursery_cap_rating: NurseryCapRating) {
+    if !nursery_cap_rating.cap_due {
+        if crate::gc::gc_diag_enabled() {
+            eprintln!(
+                "[gc-tenuring] nursery cap scale: not rated (from_space={} cap={})",
+                nursery_cap_rating.from_space_bytes, nursery_cap_rating.cap_bytes
+            );
+        }
+        return;
+    }
     let cap = scavenge_nursery_cap_effective_bytes();
     let scale = NURSERY_CAP_SCALE.with(Cell::get);
     if eden_live_bytes > cap / 25 {
-        CAP_SHRINK_STREAK.with(|s| s.set(0));
         if scale < NURSERY_CAP_SCALE_MAX {
             let streak = CAP_GROW_STREAK.with(|s| s.get()).saturating_add(1);
             if streak >= RAISE_DEBOUNCE_CYCLES {
                 CAP_GROW_STREAK.with(|s| s.set(0));
                 NURSERY_CAP_SCALE.with(|s| s.set(scale * 2));
-                diag_cap_scale(scale, scale * 2, eden_live_bytes);
+                diag_cap_scale(scale, scale * 2, eden_live_bytes, nursery_cap_rating);
             } else {
                 CAP_GROW_STREAK.with(|s| s.set(streak));
             }
         }
-    } else if eden_live_bytes < cap / 100 {
-        CAP_GROW_STREAK.with(|s| s.set(0));
-        if scale > 1 {
-            let streak = CAP_SHRINK_STREAK.with(|s| s.get()).saturating_add(1);
-            if streak >= RAISE_DEBOUNCE_CYCLES {
-                CAP_SHRINK_STREAK.with(|s| s.set(0));
-                NURSERY_CAP_SCALE.with(|s| s.set(scale / 2));
-                diag_cap_scale(scale, scale / 2, eden_live_bytes);
-            } else {
-                CAP_SHRINK_STREAK.with(|s| s.set(streak));
-            }
-        }
     } else {
         CAP_GROW_STREAK.with(|s| s.set(0));
-        CAP_SHRINK_STREAK.with(|s| s.set(0));
     }
 }
 
@@ -890,10 +940,13 @@ pub(super) fn seed_promote_lock_from_sweep(eden_live_bytes: usize, eden_dead_byt
     );
 }
 
-fn diag_cap_scale(from: u8, to: u8, eden_live_bytes: usize) {
+fn diag_cap_scale(from: u8, to: u8, eden_live_bytes: usize, nursery_cap_rating: NurseryCapRating) {
     if crate::gc::gc_diag_enabled() {
         eprintln!(
-            "[gc-tenuring] nursery cap scale {from}x -> {to}x (eden_live_bytes={eden_live_bytes})"
+            "[gc-tenuring] nursery cap scale {from}x -> {to}x (why=influx cap_due={} from_space={} cap={} eden_live_bytes={eden_live_bytes})",
+            nursery_cap_rating.cap_due,
+            nursery_cap_rating.from_space_bytes,
+            nursery_cap_rating.cap_bytes,
         );
     }
 }
@@ -952,9 +1005,9 @@ pub(super) fn reset_for_test() {
     PREV_COPIED_BYTES.with(|c| c.set(0));
     NURSERY_CAP_SCALE.with(|s| s.set(1));
     CAP_GROW_STREAK.with(|s| s.set(0));
-    CAP_SHRINK_STREAK.with(|s| s.set(0));
     MEAN_SURVIVING_OBJECT_BYTES.with(|s| s.set(NURSERY_CAP_REFERENCE_OBJECT_BYTES));
     OBJECT_CENSUS_SEEDED.with(|s| s.set(false));
+    COPYING_MINOR_COMPLETED.with(|s| s.set(false));
 }
 
 /// Test-only view of the seed flag (#8122): has any census replaced the
@@ -965,10 +1018,32 @@ pub(super) fn object_census_seeded_for_test() -> bool {
 }
 
 #[cfg(test)]
+#[path = "tenuring_nursery_cap_evidence_tests.rs"]
+mod nursery_cap_evidence_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
     const MB: usize = 1024 * 1024;
+
+    /// Existing tenuring tests predate cap-due rating and intentionally test
+    /// the tenuring loop with a rated minor. Keep that premise explicit while
+    /// the fixture module beside this one exercises both rated and skipped
+    /// minors.
+    fn retune_after_scavenge(
+        eden_live_bytes: usize,
+        eden_copied_bytes: usize,
+        first_round_live_bytes: usize,
+    ) {
+        let cap = scavenge_nursery_cap_effective_bytes();
+        super::retune_after_scavenge(
+            eden_live_bytes,
+            eden_copied_bytes,
+            first_round_live_bytes,
+            NurseryCapRating::from_values(usize::MAX, cap),
+        );
+    }
 
     /// Advance past the startup boundary with cohorts that visibly die, so
     /// tests below can exercise post-startup policy without contributing to
@@ -984,7 +1059,7 @@ mod tests {
         assert!(!PROMOTE_LOCK.with(Cell::get));
     }
 
-    /// #7929: the constant band must buy a CONSTANT NUMBER OF OBJECTS.
+    /// #7929: the first tracing band must buy a CONSTANT NUMBER OF OBJECTS.
     ///
     /// The discriminating quantity is deliberately `band / mean` (the object
     /// budget), not "the band changed". A test that only asserted the band
@@ -1063,15 +1138,17 @@ mod tests {
         );
 
         note_surviving_object_census(56 * 1000, 1000);
-        let after_measurement = influx_driven_nursery_cap_bytes();
-        assert_eq!(after_measurement, base * 777 / 1000);
+        assert_eq!(mean_surviving_object_bytes(), 56);
+        assert_eq!(influx_driven_nursery_cap_bytes(), base);
 
         note_surviving_object_census(0, 0);
         note_surviving_object_census(4096, 0);
+        assert_eq!(mean_surviving_object_bytes(), 56);
         assert_eq!(
             influx_driven_nursery_cap_bytes(),
-            after_measurement,
-            "a cycle with no moved objects is a missing measurement, not a zero one"
+            base,
+            "a cycle with no moved objects carries the diagnostic mean forward without \
+             re-denominating the steady-state byte band"
         );
         reset_for_test();
         assert_eq!(influx_driven_nursery_cap_bytes(), base);
@@ -1120,13 +1197,18 @@ mod tests {
 
     /// The tenured-proportional term is representation-invariant by
     /// cancellation (`tenured_bytes / 2` is `tenured_objects / 2` objects), so
-    /// the object denomination must apply to the constant band ONLY. If it
-    /// leaked into `scavenge_nursery_cap_from` the proportional arm would be
-    /// scaled twice.
+    /// even the first-minor object denomination must apply to the constant band
+    /// only. If it leaked into `scavenge_nursery_cap_from` the proportional arm
+    /// would be scaled twice.
     #[test]
     fn only_the_constant_band_is_re_denominated() {
         reset_for_test();
-        note_surviving_object_census(56 * 1000, 1000);
+        MEAN_SURVIVING_OBJECT_BYTES.with(|mean| mean.set(56));
+        OBJECT_CENSUS_SEEDED.with(|seeded| seeded.set(true));
+        assert_eq!(
+            influx_driven_nursery_cap_bytes(),
+            gc_scavenge_nursery_cap_bytes() * 777 / 1000
+        );
         let tenured = 512 * MB;
         assert_eq!(
             scavenge_nursery_cap_from(influx_driven_nursery_cap_bytes(), tenured),
@@ -1509,7 +1591,7 @@ mod tests {
     }
 
     #[test]
-    fn cap_scale_grows_on_heavy_influx_and_shrinks_when_quiet() {
+    fn cap_scale_grows_on_heavy_influx_and_stays_earned() {
         reset_for_test();
         let base = gc_scavenge_nursery_cap_bytes();
         assert_eq!(scavenge_nursery_cap_effective_bytes(), base);
@@ -1527,15 +1609,13 @@ mod tests {
             retune_after_scavenge(base, 0, 0);
         }
         assert_eq!(scavenge_nursery_cap_effective_bytes(), base * 4);
-        // Quiet influx walks back one step at a time.
-        for _ in 0..2 {
+        // Mortality does not shrink the RSS-bounded scale. In the absence of
+        // a readable pressure-clamp predicate, the earned ceiling remains.
+        for _ in 0..4 {
             retune_after_scavenge(0, 0, 0);
         }
-        assert_eq!(scavenge_nursery_cap_effective_bytes(), base * 2);
-        for _ in 0..2 {
-            retune_after_scavenge(0, 0, 0);
-        }
-        assert_eq!(scavenge_nursery_cap_effective_bytes(), base);
+        assert_eq!(scavenge_nursery_cap_effective_bytes(), base * 4);
+        assert_eq!(CAP_GROW_STREAK.with(Cell::get), 0);
         reset_for_test();
     }
 
@@ -1569,7 +1649,7 @@ mod tests {
     //
     // #7596 added `max(influx_driven, old_gen_reclaimable / 2)` to
     // `scavenge_nursery_cap_effective_bytes` with no test of its own. The
-    // sibling `cap_scale_grows_on_heavy_influx_and_shrinks_when_quiet` looks
+    // sibling `cap_scale_grows_on_heavy_influx_and_stays_earned` looks
     // like coverage but is not: it asserts against the effective cap in a
     // unit-test thread whose old-gen is ~empty, so the proportional term
     // contributes 0 and the test stays green with that term deleted. These

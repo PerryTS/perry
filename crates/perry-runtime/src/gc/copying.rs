@@ -1196,6 +1196,11 @@ pub(super) fn run_copied_minor_attempt(
     _trigger_kind: GcTriggerKind,
     may_speculate: bool,
 ) -> CopiedMinorAttempt {
+    // Capture before eligibility or evacuation can rewrite from-space. The
+    // safepoint folds nursery-cap and whole-arena triggers into the same
+    // `ArenaBytes` label, so the operands themselves are the only evidence
+    // that this collection was cap-due and may rate the scale.
+    let nursery_cap_rating = super::tenuring::NurseryCapRating::capture();
     if let Some(trace) = trace.as_mut() {
         trace.copying_nursery = eligibility.trace_stats();
         trace.legacy_copy_only_scanner_pinned = eligibility.legacy_root_stats;
@@ -1877,11 +1882,10 @@ pub(super) fn run_copied_minor_attempt(
     // re-baseline sees post-collection live allocation rather than high-water.
     note_copying_minor_young_survival(collector.stats.young_survival_permille);
     maybe_schedule_old_reclaim_after_copied_minor();
-    // #7929: the object denomination of the nursery constant band, fed BEFORE
-    // the tenuring loop so every number `retune_after_scavenge` derives from
-    // the effective cap (desired survivor occupancy, the cap-scale band) reads
-    // one consistent factor. Both tenuring ratios are representation-invariant
-    // by cancellation, so this only re-denominates the constant band itself.
+    // #7929/#8122: publish the survivor object-size census before the tenuring
+    // loop. This exact call is also the first-copying-minor completion witness:
+    // it ends object denomination after the tracing regime while keeping the
+    // measured mean observable in diagnostics.
     super::tenuring::note_surviving_object_census(
         collector
             .stats
@@ -1906,6 +1910,7 @@ pub(super) fn run_copied_minor_attempt(
         collector.stats.eden_live_bytes,
         collector.stats.eden_copied_bytes,
         collector.stats.survivor_first_round_live_bytes,
+        nursery_cap_rating,
     );
     if crate::gc::gc_diag_enabled() {
         eprintln!(
