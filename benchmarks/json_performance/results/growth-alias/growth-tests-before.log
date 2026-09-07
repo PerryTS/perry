@@ -1,0 +1,29 @@
+   Compiling perry-runtime v0.5.1520 (/Users/amlug/projects/perry/codex-json-fastpaths/crates/perry-runtime)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 21.07s
+     Running unittests src/lib.rs (/Users/amlug/projects/perry/codex-json-changed-target/debug/build/perry-runtime/77f7d5e322249c1d/out/perry_runtime-77f7d5e322249c1d)
+
+running 2 tests
+test gc::tests::array_growth_verifier::array_growth_verifier_accepts_permanent_old_aliases ... FAILED
+test gc::tests::array_growth_verifier::array_growth_verifier_keeps_old_owner_valid_while_unrelated_young_value_moves ... FAILED
+
+failures:
+
+---- gc::tests::array_growth_verifier::array_growth_verifier_accepts_permanent_old_aliases stdout ----
+
+thread 'gc::tests::array_growth_verifier::array_growth_verifier_accepts_permanent_old_aliases' (91042987) panicked at crates/perry-runtime/src/gc/verify.rs:74:5:
+gc evacuation verification failed: stale forwarded pointer in permanent array growth alias: slot=0x16fe12610 old=0x20001a90008 forwarded_to=0x20001a90458
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- gc::tests::array_growth_verifier::array_growth_verifier_keeps_old_owner_valid_while_unrelated_young_value_moves stdout ----
+
+thread 'gc::tests::array_growth_verifier::array_growth_verifier_keeps_old_owner_valid_while_unrelated_young_value_moves' (91042988) panicked at crates/perry-runtime/src/gc/verify.rs:74:5:
+gc evacuation verification failed: stale forwarded pointer in heap fields: slot=0x20001180038 old=0x7ffd020001180008 forwarded_to=0x7ffd020001180478
+
+
+failures:
+    gc::tests::array_growth_verifier::array_growth_verifier_accepts_permanent_old_aliases
+    gc::tests::array_growth_verifier::array_growth_verifier_keeps_old_owner_valid_while_unrelated_young_value_moves
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 3248 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p perry-runtime --lib`

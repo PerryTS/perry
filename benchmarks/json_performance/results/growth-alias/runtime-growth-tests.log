@@ -1,0 +1,46 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.21s
+     Running unittests src/lib.rs (/Users/amlug/projects/perry/codex-json-changed-target/debug/build/perry-runtime/77f7d5e322249c1d/out/perry_runtime-77f7d5e322249c1d)
+
+running 40 tests
+test array::element_shape::tests::growth_forwarding_carries_the_invariant_to_the_new_backing ... ok
+test array::forwarding_tests::growth_of_old_array_keeps_forwarding_target_out_of_copying_nursery ... ok
+test array::forwarding_tests::growth_transfers_array_descriptor_side_tables ... ok
+test array::forwarding_tests::install_array_growth_forwarding_with_installs_stub_for_injected_header ... ok
+test array::large_presized_tests::existing_sparse_indices_prevent_dense_growth_from_hiding_them ... ok
+test array::large_presized_tests::growth_rekeys_named_property_owner ... ok
+test array::tests::large_length_growth_stays_logically_sparse ... ok
+test array::tests::refresh_local_head_follows_growth_forwarding ... ok
+test array::tests::stale_array_reference_survives_three_growths_and_forced_minor_gc ... ok
+test array::tests::test_array_sequential_growth_past_dense_threshold_stays_dense ... ok
+test array::tests::test_numeric_array_layout_transfers_across_growth_forwarding ... ok
+test array::tests::test_numeric_array_raw_f64_payload_rebuilds_after_growth_forwarding ... ok
+test gc::tests::arena_right_size::material_capacity_regrowth_rearms_without_requiring_a_large_live_set ... ok
+test gc::tests::array_growth_verifier::array_growth_verifier_accepts_permanent_old_aliases ... ok
+test gc::tests::array_growth_verifier::array_growth_verifier_agrees_across_registered_copy_only_and_shadow_roots ... ok
+test gc::tests::array_growth_verifier::array_growth_verifier_keeps_old_owner_valid_while_unrelated_young_value_moves ... ok
+test gc::tests::array_growth_verifier::array_growth_verifier_still_rejects_evacuation_inside_growth_chain ... ok
+test gc::tests::array_growth_verifier::array_growth_verifier_still_rejects_old_array_evacuation_stubs ... ok
+test gc::tests::array_growth_verifier::array_growth_verifier_still_rejects_unrewritten_young_growth_aliases ... ok
+test gc::tests::array_growth_verifier::array_growth_verifier_still_requires_canonical_metadata_keys ... ok
+test gc::tests::copying::all_pointer_elements_7469::a_pointer_append_through_the_runtime_preserves_the_declaration_across_growth ... ok
+test gc::tests::copying::test_copying_minor_marks_array_growth_forwarding_target ... ok
+test gc::tests::copying::test_copying_minor_preserves_dynamic_object_values_after_numeric_first_growth ... ok
+test gc::tests::debt_pacer::minor_sweep_retains_window_expired_growth_stub ... ok
+test gc::tests::forwarded_stub_membership::a_budgeted_full_cycle_keeps_an_array_a_live_field_reaches_through_a_growth_stub ... ok
+test gc::tests::heap_accounting::allocations_after_a_census_count_bump_growth_and_old_hole_reuse ... ok
+test gc::tests::lazy_tape_side_alloc::test_old_generation_growth_does_not_scale_with_tape_size ... ok
+test gc::tests::runtime_roots::json_tape_owned::json_lazy_growth_owner_alone_retains_forwarded_array_and_children_across_minor ... ok
+test gc::tests::runtime_roots::json_tape_owned::json_lazy_growth_preserves_holes_and_repeated_mutation_through_owner ... ok
+test gc::tests::runtime_roots::json_tape_owned::json_lazy_growth_resolves_each_cached_array_consumer ... ok
+test gc::tests::shadow_stack_ops::frame_chain_survives_buffer_growth ... ok
+test gc::tests::teardown::map_set_owner_records_follow_growth ... ok
+test gc::tests::triggers::test_old_reclaim_pressure_uses_threshold_and_growth ... ok
+test json::parser::short_array_tests::json_short_array_growth_preserves_the_original_alias ... ok
+test map::tests::numeric_index_is_direct_and_stable_across_entries_growth ... ok
+test object::object_ops::keys_array::tests::define_property_key_growth_does_not_mutate_a_shared_shape_sibling ... ok
+test object::shapes::shapes_tests::descriptor_tests_8067::a_boxed_record_keeps_its_keys_slot_across_table_growth ... ok
+test object::shapes::shapes_tests::descriptor_tests_8067::live_slot_growth_versions_descriptor_before_value_publication ... ok
+test object::tests::by_name_growth_past_the_floor_reads_back ... ok
+test object::tombstone_tests::tombstone_off_compaction_does_not_reuse_growth_prefix_shape ... ok
+
+test result: ok. 40 passed; 0 failed; 0 ignored; 0 measured; 3215 filtered out; finished in 1.47s

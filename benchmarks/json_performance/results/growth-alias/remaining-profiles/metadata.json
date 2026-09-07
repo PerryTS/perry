@@ -1,0 +1,42 @@
+[
+  {
+    "purpose": "Quiet M1 sampling diagnostic. Sample shares are not exact CPU percentages and do not replace the complete CPU/RSS matrix.",
+    "command": [
+      "/Users/perry/json-growth-alias-20260907-codex/.work/worker",
+      "/Users/perry/json-growth-alias-20260907-codex/.work/fixtures/wide_1m.json",
+      "parse",
+      "512",
+      "2"
+    ],
+    "worker_sha256": "c3f1ec3f9946b482b0373e032226fb17084460298e2ac1d030ff853c5869dc26",
+    "worker_exit": 0,
+    "sample_exit": 0,
+    "sample_stderr": "Sampling process 95729 for 3 seconds with 1 millisecond of run time between samples\nSampling completed, processing symbols...\nSample analysis of process 95729 written to file /Users/perry/json-growth-alias-20260907-codex/results/remaining-profiles/wide_1m-parse.sample.txt\n",
+    "cpu": "Apple M1",
+    "load_after": [
+      1.58447265625,
+      1.75439453125,
+      1.630859375
+    ]
+  },
+  {
+    "purpose": "Quiet M1 sampling diagnostic. Sample shares are not exact CPU percentages and do not replace the complete CPU/RSS matrix.",
+    "command": [
+      "/Users/perry/json-growth-alias-20260907-codex/.work/worker",
+      "/Users/perry/json-growth-alias-20260907-codex/.work/fixtures/heterogeneous_1m.json",
+      "stringify",
+      "3072",
+      "2"
+    ],
+    "worker_sha256": "c3f1ec3f9946b482b0373e032226fb17084460298e2ac1d030ff853c5869dc26",
+    "worker_exit": 0,
+    "sample_exit": 0,
+    "sample_stderr": "Sampling process 95755 for 3 seconds with 1 millisecond of run time between samples\nSampling completed, processing symbols...\nSample analysis of process 95755 written to file /Users/perry/json-growth-alias-20260907-codex/results/remaining-profiles/heterogeneous_1m-stringify.sample.txt\n",
+    "cpu": "Apple M1",
+    "load_after": [
+      1.52197265625,
+      1.73291015625,
+      1.625
+    ]
+  }
+]

@@ -1,0 +1,32 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.37s
+     Running unittests src/lib.rs (/Users/amlug/projects/perry/codex-json-changed-target/debug/build/perry-runtime/77f7d5e322249c1d/out/perry_runtime-77f7d5e322249c1d)
+
+running 26 tests
+test array::element_shape::tests::growth_forwarding_carries_the_invariant_to_the_new_backing ... ok
+test array::forwarding_tests::clean_arr_ptr_compresses_multi_hop_forwarding_chain ... ok
+test array::forwarding_tests::clean_arr_ptr_rejects_forwarding_cycle ... ok
+test array::forwarding_tests::clean_arr_ptr_rejects_untracked_forwarding_target_without_deref ... ok
+test array::forwarding_tests::growth_of_old_array_keeps_forwarding_target_out_of_copying_nursery ... ok
+test array::forwarding_tests::growth_transfers_array_descriptor_side_tables ... ok
+test array::forwarding_tests::install_array_growth_forwarding_with_installs_stub_for_injected_header ... ok
+test array::spread_dense_tests::a_grown_arrays_forwarding_header_is_followed_not_copied ... ok
+test array::tests::refresh_local_head_follows_growth_forwarding ... ok
+test array::tests::test_array_push_f64_grow_path_preserves_value_and_forwarding ... ok
+test array::tests::test_numeric_array_layout_transfers_across_growth_forwarding ... ok
+test array::tests::test_numeric_array_raw_f64_payload_rebuilds_after_growth_forwarding ... ok
+test gc::tests::copying::test_copying_minor_marks_array_growth_forwarding_target ... ok
+test gc::tests::evacuation::test_release_evacuated_original_forwarding_stub_before_sweep ... ok
+test gc::tests::forwarding_target_validation::a_forwarding_target_must_be_an_object_start ... ok
+test gc::tests::forwarding_target_validation::a_nan_boxed_forwarding_target_is_refused ... ok
+test gc::tests::forwarding_target_validation::a_real_forwarding_pointer_is_still_followed ... ok
+test gc::tests::forwarding_target_validation::recycled_bytes_are_not_read_as_a_forwarding_stub ... ok
+test gc::tests::forwarding_target_validation::the_dead_key_prune_registry_keeps_its_shape ... ok
+test gc::tests::runtime_roots::prototype_addr_cache::prototype_addr_reads_through_a_forwarding_stub ... ok
+test gc::tests::runtime_roots::prototype_addr_cache::prototype_addr_reads_through_a_multi_hop_forwarding_chain ... ok
+test gc::tests::runtime_roots::test_forwarding_does_not_disturb_other_flags ... ok
+test gc::tests::runtime_roots::test_forwarding_pointer_roundtrip ... ok
+test gc::tests::runtime_roots::test_forwarding_pointer_value_is_8_bytes_at_user_offset_zero ... ok
+test gc::tests::runtime_roots::test_rewrite_mutable_root_slots_follows_forwarding_chain ... ok
+test object::native_call_method::bare_receiver::tests::bare_receiver_canonicalization_follows_forwarding ... ok
+
+test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 3229 filtered out; finished in 0.07s

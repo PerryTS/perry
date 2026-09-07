@@ -1,0 +1,102 @@
+[
+  {
+    "fixture": "small_record",
+    "operation": "stringify",
+    "calls": 500000,
+    "median_process_instructions": {
+      "short-array": 2682860869,
+      "growth-alias": 2680663643
+    },
+    "candidate_vs_reference": 0.9991810138105227
+  },
+  {
+    "fixture": "tiny_object",
+    "operation": "parse",
+    "calls": 2000000,
+    "median_process_instructions": {
+      "short-array": 4626649625,
+      "growth-alias": 4625932965
+    },
+    "candidate_vs_reference": 0.9998451017349298
+  },
+  {
+    "fixture": "object_1k",
+    "operation": "stringify",
+    "calls": 500000,
+    "median_process_instructions": {
+      "short-array": 1963976406,
+      "growth-alias": 1960767402
+    },
+    "candidate_vs_reference": 0.9983660679475597
+  },
+  {
+    "fixture": "long_string_1m",
+    "operation": "stringify",
+    "calls": 1100,
+    "median_process_instructions": {
+      "short-array": 2433924413,
+      "growth-alias": 2430986033
+    },
+    "candidate_vs_reference": 0.9987927398302487
+  },
+  {
+    "fixture": "unicode_1m",
+    "operation": "stringify",
+    "calls": 1400,
+    "median_process_instructions": {
+      "short-array": 2498286537,
+      "growth-alias": 2495675634
+    },
+    "candidate_vs_reference": 0.9989549225193619
+  },
+  {
+    "fixture": "escaped_1m",
+    "operation": "stringify",
+    "calls": 84,
+    "median_process_instructions": {
+      "short-array": 1258327605,
+      "growth-alias": 1258225617
+    },
+    "candidate_vs_reference": 0.9999189495648075
+  },
+  {
+    "fixture": "wide_1m",
+    "operation": "stringify",
+    "calls": 216,
+    "median_process_instructions": {
+      "short-array": 6513949237,
+      "growth-alias": 6513490415
+    },
+    "candidate_vs_reference": 0.9999295631600268
+  },
+  {
+    "fixture": "numbers_1m",
+    "operation": "parse",
+    "calls": 92,
+    "median_process_instructions": {
+      "short-array": 2257916268,
+      "growth-alias": 2259059034
+    },
+    "candidate_vs_reference": 1.0005061153135728
+  },
+  {
+    "fixture": "empty_object",
+    "operation": "parse",
+    "calls": 2000000,
+    "median_process_instructions": {
+      "short-array": 2184490147,
+      "growth-alias": 2185699113
+    },
+    "candidate_vs_reference": 1.0005534316561968
+  },
+  {
+    "fixture": "small_record",
+    "operation": "parse",
+    "calls": 500000,
+    "median_process_instructions": {
+      "short-array": 5159950344,
+      "growth-alias": 5167999212
+    },
+    "candidate_vs_reference": 1.0015598731505932
+  }
+]

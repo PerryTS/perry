@@ -1,0 +1,14 @@
+   Compiling perry-runtime v0.5.1520 (/Users/amlug/projects/perry/codex-json-fastpaths/crates/perry-runtime)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 22.73s
+     Running unittests src/lib.rs (/Users/amlug/projects/perry/codex-json-changed-target/debug/build/perry-runtime/77f7d5e322249c1d/out/perry_runtime-77f7d5e322249c1d)
+
+running 7 tests
+test gc::tests::array_growth_verifier::array_growth_verifier_accepts_permanent_old_aliases ... ok
+test gc::tests::array_growth_verifier::array_growth_verifier_agrees_across_registered_copy_only_and_shadow_roots ... ok
+test gc::tests::array_growth_verifier::array_growth_verifier_keeps_old_owner_valid_while_unrelated_young_value_moves ... ok
+test gc::tests::array_growth_verifier::array_growth_verifier_still_rejects_evacuation_inside_growth_chain ... ok
+test gc::tests::array_growth_verifier::array_growth_verifier_still_rejects_old_array_evacuation_stubs ... ok
+test gc::tests::array_growth_verifier::array_growth_verifier_still_rejects_unrewritten_young_growth_aliases ... ok
+test gc::tests::array_growth_verifier::array_growth_verifier_still_requires_canonical_metadata_keys ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 3248 filtered out; finished in 0.02s

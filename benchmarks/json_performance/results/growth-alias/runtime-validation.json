@@ -1,0 +1,18 @@
+[
+  {
+    "filter": "json",
+    "exit": 0
+  },
+  {
+    "filter": "forwarding",
+    "exit": 0
+  },
+  {
+    "filter": "forwarded",
+    "exit": 0
+  },
+  {
+    "filter": "growth",
+    "exit": 0
+  }
+]

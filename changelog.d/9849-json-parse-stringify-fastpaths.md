@@ -1,29 +1,5 @@
-Allocate short parsed arrays at their completed width and resolve lazy growth aliases and ordinary-array descriptor flags against the live header. Paired 20 MB stringify CPU falls 5.58%/5.37%, with peak RSS down about 12.4 MiB; large object-root parse saves 19.7-91.8 MiB peak. Full/896-trial paired matrices qualify. New small-row regressions and a pre-existing ordinary-array growth/GC verifier failure remain open: 195 runtime tests and 41 compiled comparisons pass, while 38 moving-GC runs pass and two fail. No-regression/all-row acceptance remains false. See benchmarks/json_performance/results/short-array/README.md.
+Accelerate JSON parse and stringify with bounded scanners, vectorized Unicode and escape counts, exact number formatting, bounded shape metadata, native tape ownership transfer, and direct final output for eligible strings and records. Short parsed arrays allocate at their completed width; grown lazy aliases and descriptor definitions resolve the live array header. Inputs remain rooted and are rederived after collection. No version bump or input/output memoization.
 
-Bounded inline-object parsing decodes before collection and allocates only a fresh final object. Paired tiny-object parse CPU drops 67.04% to 0.1196715 microseconds; escaped stringify and array parse regressions remain. Full/854-trial paired matrices qualify, alongside 182 runtime tests, 39 compiled comparisons, 36 moving-GC runs and 63 hashes. All-row/no-regression acceptance remains open. See benchmarks/json_performance/results/inline-object/README.md.
+Recognize explicitly retained old array-growth aliases in evacuation diagnostics while continuing to reject temporary evacuation pointers and stale metadata keys. Collection policy, thresholds, allocation hooks and parse-boundary hooks remain unchanged from 0.5.1520. The earlier claim that all GC-directory edits are tests only is superseded: verify.rs and Verify-mode roots.rs calls now contain the documented diagnostic change.
 
-Latest marker-probe checkpoint reduces paired tiny/16 KB array/1-8 MB record stringify CPU by 3.10%/4.36%/2.36-2.78% versus plan-scan, but introduces small-object parse and whole-process RSS regressions. All-row and no-regression acceptance remain open (12/38 CPU, 58/74 peak, 28/36 retained). 176 runtime tests, 38 compiled comparisons, 34 moving-GC runs and complete qualified full/784-trial paired matrices pass. See benchmarks/json_performance/results/marker-probe/README.md for exact tradeoffs and earlier requirements.
-
-Accelerate JSON parse and stringify with bounded scanners, vectorized Unicode
-and escape counts, duplicate-key indexing, bounded shape retention, exact
-number formatting and direct final output for eligible strings and records.
-Large native tapes transfer into exact lazy-result storage. Empty ordinary
-objects validate their complete input before final allocation. Short-word
-scanning is confined to scalar output plans, whose initialized placeholders
-have smaller active payloads.
-
-Root parse and direct-output inputs before collection and rederive moved
-pointers. Preserve array getter order, lazy assignment aliases, descriptors,
-callbacks, malformed-string behavior and retained-output identity. GC production
-policy, thresholds and gc_bump_malloc_trigger remain unchanged from v0.5.1520;
-GC-directory changes are tests only. No version bump.
-
-The latest source passes 172 runtime tests, 38 pinned compiled comparisons,
-34 moving-GC runs and 59 source hashes. Full CPU/RSS and 756-trial paired
-matrices qualify. Small-record stringify improves 10.47% versus escaped-count,
-with peak RSS down 0.078125 MiB; small-object parse regressions are recovered.
-Acceptance remains open at 12/38 CPU, 58/74 peak and 28/36 retained RSS. Escaped
-and wide stringify regress 1.55%/0.99%, and all other unresolved CPU/RSS
-regressions are recorded. A quiet 20 MB profile points to substantial loop GC
-work; it is diagnostic, not a measured GC CPU percentage. Full results and
-rejected experiments are in benchmarks/json_performance/DATA_RECORDS.md.
+Measured source 452c329aa passes 267 unique runtime tests, 42 compiled comparisons, 42 moving-GC runs, 74 source hashes, and qualified full/966-trial paired matrices. All-row and no-regression acceptance remain false at 12/38 CPU, 65/74 peak-RSS and 33/36 retained-RSS targets. Small-record stringify improves 1.51% versus short-array; 1 KB object parse and wide stringify regress 1.39%/0.88%. Older regressions and forced-lazy Object.* gaps remain open. See benchmarks/json_performance/results/growth-alias/README.md and DATA_RECORDS.md for full measurements and prior checkpoints.

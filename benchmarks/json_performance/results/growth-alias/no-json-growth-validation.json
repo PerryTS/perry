@@ -1,0 +1,51 @@
+[
+  {
+    "fixture": "gc_growth_without_json",
+    "seed": null,
+    "control": "no JSON calls",
+    "object_sha256": "6b0b2c81bd718a3c1efe308360495d20522aa24f3bedaa1136362f845ceed0f7",
+    "exit": 0,
+    "stdout": "result 0 12000 72858000\n",
+    "stderr": "",
+    "node_stdout": "result 0 12000 72858000\n",
+    "matches_node": true,
+    "counters": {},
+    "live_subject": true
+  },
+  {
+    "fixture": "gc_growth_without_json",
+    "seed": 17,
+    "control": "no JSON calls",
+    "object_sha256": "6b0b2c81bd718a3c1efe308360495d20522aa24f3bedaa1136362f845ceed0f7",
+    "exit": 0,
+    "stdout": "result 0 12000 72858000\n",
+    "stderr": "[gc-schedule] seeded GC-schedule fuzzing ACTIVE: seed=17 rate=0.1\n[gc-schedule] reproduce with: PERRY_GC_SCHEDULE_SEED=17 PERRY_GC_SCHEDULE_RATE=0.1\n[gc-schedule] done: seed=17 safepoints=336 scheduled_collections=36 polls_paced=875671 copying_minors=36 moved_objects=64340 loop_polls=876001\n",
+    "node_stdout": "result 0 12000 72858000\n",
+    "matches_node": true,
+    "counters": {
+      "scheduled_collections": 36,
+      "copying_minors": 36,
+      "moved_objects": 64340,
+      "loop_polls": 876001
+    },
+    "live_subject": true
+  },
+  {
+    "fixture": "gc_growth_without_json",
+    "seed": 9013,
+    "control": "no JSON calls",
+    "object_sha256": "6b0b2c81bd718a3c1efe308360495d20522aa24f3bedaa1136362f845ceed0f7",
+    "exit": 0,
+    "stdout": "result 0 12000 72858000\n",
+    "stderr": "[gc-schedule] seeded GC-schedule fuzzing ACTIVE: seed=9013 rate=0.1\n[gc-schedule] reproduce with: PERRY_GC_SCHEDULE_SEED=9013 PERRY_GC_SCHEDULE_RATE=0.1\n[gc-schedule] done: seed=9013 safepoints=336 scheduled_collections=41 polls_paced=875671 copying_minors=41 moved_objects=73332 loop_polls=876001\n",
+    "node_stdout": "result 0 12000 72858000\n",
+    "matches_node": true,
+    "counters": {
+      "scheduled_collections": 41,
+      "copying_minors": 41,
+      "moved_objects": 73332,
+      "loop_polls": 876001
+    },
+    "live_subject": true
+  }
+]

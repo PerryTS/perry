@@ -1,0 +1,1 @@
+GC production differences are exclusively the diagnostic retained-growth check and its call sites; collector policy, allocation hooks, thresholds and parse-boundary hooks match base.

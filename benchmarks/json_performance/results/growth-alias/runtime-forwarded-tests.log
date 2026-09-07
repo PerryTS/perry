@@ -1,0 +1,27 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.21s
+     Running unittests src/lib.rs (/Users/amlug/projects/perry/codex-json-changed-target/debug/build/perry-runtime/77f7d5e322249c1d/out/perry_runtime-77f7d5e322249c1d)
+
+running 21 tests
+test array::iter_methods::rooted_iter_array_tests::forwarded_array_observes_shrunk_length_during_callback_iteration ... ok
+test gc::tests::dead_owner_side_tables::test_forwarded_keys_capacity_cannot_disturb_the_descriptor_rewrite ... ok
+test gc::tests::debt_pacer::forwarded_array_stub_propagates_liveness_to_grown_array ... ok
+test gc::tests::evacuation::test_evacuate_tenured_marks_forwarded_and_copies_payload ... ok
+test gc::tests::evacuation::test_evacuation_policy_snapshot_excludes_retained_forwarded_stub_blocks ... ok
+test gc::tests::evacuation::test_sweep_reclaims_unreached_old_forwarded_stub ... ok
+test gc::tests::evacuation::test_sweep_reports_and_retains_non_evacuation_forwarded_stub ... ok
+test gc::tests::forwarded_stub_membership::a_budgeted_full_cycle_keeps_an_array_a_live_field_reaches_through_a_growth_stub ... ok
+test gc::tests::forwarded_stub_membership::a_synchronous_full_cycle_keeps_the_same_array_without_needing_recovery ... ok
+test gc::tests::fromspace_scan::fromspace_scan_skips_but_counts_forwarded_owners_7154 ... ok
+test gc::tests::runtime_roots::callback_scanners::test_evacuation_verify_copy_only_pinned_root_allows_non_forwarded_target ... ok
+test gc::tests::runtime_roots::callback_scanners::test_evacuation_verify_copy_only_root_rejects_forwarded_target ... ok
+test gc::tests::runtime_roots::callback_scanners::test_evacuation_verify_detects_stale_forwarded_dirty_range_slot ... ok
+test gc::tests::runtime_roots::callback_scanners::test_evacuation_verify_detects_stale_forwarded_heap_field ... ok
+test gc::tests::runtime_roots::callback_scanners::test_evacuation_verify_detects_stale_forwarded_root_slot ... ok
+test gc::tests::runtime_roots::callback_scanners::test_evacuation_verify_detects_stale_forwarded_runtime_scanner_slot ... ok
+test gc::tests::runtime_roots::json_tape_owned::json_lazy_growth_owner_alone_retains_forwarded_array_and_children_across_minor ... ok
+test gc::tests::runtime_roots::side_table_scanners::test_builtin_closure_metadata_follows_forwarded_owner ... ok
+test gc::tests::shape_keys_descriptor_edge::dead_owner_prune_rejects_a_non_forwarded_non_array_tenant ... ok
+test json::replacer::forwarded_array_pretty_print_tests::pretty_stringify_resolves_array_grown_past_inline_capacity ... ok
+test map::tests::map_get_heals_a_forwarded_array_value ... ok
+
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 3234 filtered out; finished in 0.07s

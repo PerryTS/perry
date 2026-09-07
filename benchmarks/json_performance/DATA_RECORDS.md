@@ -1,3 +1,11 @@
+The latest measured source, growth-alias (`452c329aa`), fixes the verifier's rejection of explicitly retained old array-growth aliases while preserving strict evacuation and metadata checks. All 267 unique runtime tests, 42 compiled comparisons and 42 moving-GC runs pass, including the previously failing broad fixture and no-JSON control. Collection policy, thresholds and hooks are unchanged; GC production edits are diagnostic-only and explicitly documented.
+
+All-row inventory remains **12/38 CPU, 65/74 peak RSS and 33/36 retained RSS**. Full and 966-trial paired matrices plus 24 retained-empty trials qualify with 31/53 clean observations. Against short-array, paired small-record stringify improves 1.51% and all peak-RSS medians fall 0.11-0.27 MiB; 1 KB object parse regresses 1.39% and wide stringify 0.88%. Older regressions and forced-lazy Object.* gaps remain open. All-row/no-regression acceptance is false.
+
+[Latest 38 CPU rows](results/growth-alias/cpu-38.md), [CPU and RAM](results/growth-alias/tables.md), [complete tradeoffs](results/growth-alias/README.md), [GC boundary](results/growth-alias/gc-coordination.md), [next work](results/growth-alias/next-steps.md).
+
+Earlier checkpoints follow.
+
 The latest measured source, short-array (2e79d122), reduces paired 20 MB array/object-root stringify CPU **5.58%/5.37%** and peak RSS about **12.4 MiB**. Object-root parse peak falls **19.7/64.8/91.8 MiB** at 1/8/20 MB. Short parsed arrays now allocate only their completed width; lazy growth aliases and descriptor flags resolve the live array header.
 
 All-row inventory is **12/38 CPU, 65/74 peak RSS and 33/36 retained RSS**. No-regression acceptance fails: null/string/empty/tiny parse and small-record stringify regress, most other peak rows rise slightly, and older numeric/heterogeneous/small-object regressions remain. Both new broad-fixture GC seeds fail; a no-JSON ordinary-array control fails identically on the reference and candidate. This correctness requirement remains open.
