@@ -954,11 +954,23 @@ pub(crate) fn layout_note_slot(parent_user: usize, slot_index: usize, value_bits
                     } else {
                         let mut mask = LayoutSlotMask::Inline(0);
                         mask.set_slot(slot_index);
+                        // The one insert site that holds its own `borrow_mut`,
+                        // so it maintains the address filter, the young log
+                        // and the young-record count inline too. The log lives
+                        // in the hint, not in this map, so arming it here
+                        // takes no second borrow — and it goes BEFORE the
+                        // insert (`gc/young_log.rs` rule 1). Before #9841 this
+                        // site published a young record without counting it;
+                        // on cc it is the DOMINANT insert path (`TYPED_LAYOUTS`
+                        // is empty there), so it is where a missing arm would
+                        // do the most damage.
+                        let young = super::layout_tables::arm_young_layout_key(parent_user);
                         masks.insert(parent_user, mask);
                         mark_per_object_layouts_nonempty();
-                        // The one insert site that holds its own `borrow_mut`,
-                        // so it maintains the address filter inline too.
                         super::layout_tables::layout_addr_filter_note(parent_user);
+                        if young {
+                            super::layout_tables::count_new_young_layout_record();
+                        }
                         set_layout_state(header, GC_LAYOUT_SIDE_MASK);
                     }
                 } else {
