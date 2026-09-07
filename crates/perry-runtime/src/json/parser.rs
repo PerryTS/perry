@@ -131,11 +131,17 @@ pub(crate) fn nesting_depth_exceeds(bytes: &[u8], limit: usize) -> bool {
         match bytes[pos] {
             b'"' => {
                 pos += 1;
+                #[cfg(target_arch = "aarch64")]
+                let start = pos;
                 // A quoted span can be megabytes long. Skip ordinary bytes in
                 // bulk while retaining the preflight's handling of malformed
                 // input: only quotes/backslashes change string state here.
                 while pos < bytes.len() {
-                    let Some(offset) = super::simd::find_quote_or_backslash(&bytes[pos..]) else {
+                    #[cfg(target_arch = "aarch64")]
+                    let offset = depth_string::find_quote_or_backslash(&bytes[pos..]);
+                    #[cfg(not(target_arch = "aarch64"))]
+                    let offset = super::simd::find_quote_or_backslash(&bytes[pos..]);
+                    let Some(offset) = offset else {
                         return false;
                     };
                     pos += offset;
@@ -146,6 +152,16 @@ pub(crate) fn nesting_depth_exceeds(bytes: &[u8], limit: usize) -> bool {
                     // escaped quote/backslash. A trailing escape ends the scan;
                     // the real parser remains responsible for syntax errors.
                     pos = (pos + 2).min(bytes.len());
+                    // Amortize block classification over longer escaped spans.
+                    // Short strings keep the existing quote/escape loop.
+                    #[cfg(target_arch = "aarch64")]
+                    if pos - start >= 128 {
+                        let Some(end) = depth_string::quoted_end(&bytes[pos..]) else {
+                            return false;
+                        };
+                        pos += end;
+                        break;
+                    }
                 }
             }
             b'[' | b'{' => {
@@ -1150,3 +1166,11 @@ mod escape_chunk;
 #[cfg(test)]
 #[path = "parser_escape_chunk_tests.rs"]
 mod escape_chunk_tests;
+
+#[cfg(target_arch = "aarch64")]
+#[path = "parser_depth_string.rs"]
+mod depth_string;
+
+#[cfg(all(test, target_arch = "aarch64"))]
+#[path = "parser_depth_string_tests.rs"]
+mod depth_string_tests;

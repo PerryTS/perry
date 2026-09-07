@@ -2,7 +2,7 @@ use super::nesting_depth_exceeds;
 
 // An intentionally scalar state machine serves as an independent oracle for
 // malformed as well as valid input. The preflight does not validate JSON.
-fn reference(bytes: &[u8], limit: usize) -> bool {
+pub(super) fn reference(bytes: &[u8], limit: usize) -> bool {
     let mut depth = 0usize;
     let mut quoted = false;
     let mut escape = false;
