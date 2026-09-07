@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "description": "Database-free SQL and parameter prefix stress probe for issue #9935.",
-  "dependencies": { "drizzle-orm": "0.44.7" },
+  "dependencies": { "drizzle-orm": "0.45.2" },
   "perry": {
     "compilePackages": ["drizzle-orm"],
     "allow": { "compilePackages": ["drizzle-orm"] }
