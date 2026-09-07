@@ -64,3 +64,53 @@ This commit touches CODEGEN. Build the compiler from `2f799c7b0318b683bd0f320705
 Run one identical 3,300-character reply and provide the entire `[regex-diag]` line plus the per-pattern table. Confirm the 12,807-byte emoji `/.../g` row is constructed once, built once, and tested approximately 1,068,858 times; report `new`, `site_test_no_alloc`, the three decline buckets, `header_bytes`, `ptr_ins`, `ptr_rm`, `test`, `test_global`, and compile/cache counters. Expected: `new <= 10,000`, `site_test_no_alloc ~= 1,068,858`, `header_bytes ~= 0.3 MB`, `ptr_ins/ptr_rm ~= 0`, and unchanged `test`.
 
 Then run paired 5x3,300-character and 3x400-character comparisons against the base bundle with identical warmup, environment, inputs, and node-parity stop conditions. Report every turn's CPU and peak RSS. Expected 3,300-character turn CPU improvement is 4% to 6% and peak RSS is lower. Finally capture a perf draw and verify `js_regexp_new`, `regex_header_clear_dead_for_gc`, and the dead-owner regex path have disappeared from the top 25.
+
+## CI fixes 2026-09-07
+
+### Fixed heads
+
+- #9918 `perf/regex-drop-source-table`: `dd1c5242d2ce87139d33436f347adb7245fe754d` (old head `ce9e12801e8d83fae471e06cc85429257ac10854`).
+- #9958 fixed code head, before this final report-only commit: `54c9373c882fe7a2bb63cde806f563ce5799605d` (old head `abb0d907ff8dade12dfcf6b092cbd8f71bfc4233`). The final remote branch head is this report commit, whose hash is necessarily determined after the report contents are committed.
+
+### Triage items
+
+1. Formatting: direct `rustfmt` put the test modules in formatter order at `crates/perry-runtime/src/regex.rs:1760-1767`, moving `mod tests_part2;` after `tests_cache` and `tests_header`. Direct `rustfmt --check` passes. `cargo fmt --all --check` was not run: disk (8 GB available, below the binding 12 GB floor).
+2. #9918 raw-handle debt: the two new bare reads in the nursery relocation fixture are now scoped `RuntimeHandle::with_const_ptr` stores at `crates/perry-runtime/src/regex.rs:390-395`; the two pre-existing production reads and the ceiling remain unchanged. `python3 scripts/raw_handle_debt.py` passes at 955 sites (baseline 963), and `--self-test` passes.
+3. #9918 product warnings: the `Arc` import is feature-gated at `crates/perry-runtime/src/regex.rs:14-15`; `MatcherKind` carries a feature-off `dead_code` allow with the layout-only reason at `regex.rs:500-514`. The workflow's exact product command (`RUSTFLAGS='-D warnings' cargo check -p perry --bins`) was not run: disk.
+4. #9918 all-target warnings: the unused `regex_has_repeat_program` import is gone at `crates/perry-runtime/src/regex/tests_part2.rs:5-7`, and the unnecessary `unsafe` block around the safe lazy-build/assertion calls is gone at `tests_part2.rs:600-607`. The workflow's host-compatible `cargo check --workspace --all-targets ...` command was not run: disk.
+5. Main's benchmark-freshness, build-cache, and GC-ratchet reds were not touched.
+6. #9958 root-holder custody/windows self-test: removed the three duplicate `REGEXP_PROTOTYPE_*_SLOT` entries that the stack re-added; the authoritative #9893 entries remain once each at `scripts/gc_runtime_root_holders.json:647-664`. `python3 scripts/gc_runtime_root_holders.py` passes (1,372 declarations, 596 scanner-reached, 357 inventory-classified, 414 frontier-pinned, 152 scanners), and `--self-test` passes (90 planted declarations, 357 inventory entries).
+7. #9958 raw-handle debt: `canonical_rooted_header` now pairs the canonicality call with its post-call reload through `RuntimeHandle::across_mut` at `crates/perry-runtime/src/regex/site_test.rs:164-170`. No per-module ceiling was added; the same debt command and self-test in item 2 pass.
+8. `async_hooks_constructors_expose_real_prototype_methods` is in `crates/perry/tests/issue_6764_async_hooks_prototype_metadata.rs`. Not run: disk (8 GB available). The hypothesis that duplicate inventory registration caused the runtime failure remains unverified locally; no codegen bisection or blind patch was performed.
+9. Main's unrelated shard and GC reds were not touched.
+
+Other requested cargo gates were not run: disk: `cargo test -p perry-runtime --release --lib -j4 -- --test-threads=1 regex`, the full runtime lib gate, and the single compiled async-hooks test. `git diff --check`, JSON parsing, both Python audits, and both audit self-tests pass.
+
+### Range-diffs
+
+#9918, `git range-diff 616a2cb84..ce9e12801 616a2cb84..dd1c5242d`:
+
+```text
+1:  d8daa4fd4 = 1:  d8daa4fd4 perf(regex): remove the traced-source side table
+2:  e2b0a9054 = 2:  e2b0a9054 perf(regex): share one program-set handle per header
+3:  7a44e5948 = 3:  7a44e5948 perf(regex): tag the selected matcher on each header
+4:  6ea7ad9eb = 4:  6ea7ad9eb test(regex): isolate WTF-8 source from matcher parsing
+5:  c217a231c = 5:  c217a231c refactor(regex): split header properties and tests
+6:  883d334a6 = 6:  883d334a6 fix(regex): retain canonical flags through allocation
+7:  ce9e12801 = 7:  ce9e12801 perf(regex): preserve live literal programs on eviction
+-:  --------- > 8:  dd1c5242d fix(regex): clear branch-owned CI failures
+```
+
+All seven measured commits are byte-identical; only the new CI-fix commit is added.
+
+#9958, `git range-diff ce9e12801..abb0d907f dd1c5242d..54c9373c8`:
+
+```text
+1:  f5a2bdb7c = 1:  90e21317a perf(regex): reuse literal headers at test-only sites
+2:  abb0d907f ! 2:  47370d886 docs(perf): record regex literal-site handoff
+    The report commit no longer carries the inherited tests_part2 warning cleanup;
+    that exact hunk is now in #9918's dd1c5242d fix beneath the stack.
+-:  --------- > 3:  54c9373c8 fix(regex): deduplicate CI custody records
+```
+
+The measured #9958 implementation commit is patch-identical. The only movement in the report commit is the listed inherited warning cleanup moving to the fixed base; the only new code hunk is the item 6/7 CI-fix commit.
