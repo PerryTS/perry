@@ -1,0 +1,30 @@
+[
+  {
+    "method": "direct",
+    "rep": 0,
+    "cycles": 37,
+    "full": 28,
+    "pointer_slots": 36210217
+  },
+  {
+    "method": "launcher",
+    "rep": 0,
+    "cycles": 37,
+    "full": 28,
+    "pointer_slots": 36210217
+  },
+  {
+    "method": "direct",
+    "rep": 1,
+    "cycles": 37,
+    "full": 28,
+    "pointer_slots": 36210217
+  },
+  {
+    "method": "launcher",
+    "rep": 1,
+    "cycles": 37,
+    "full": 28,
+    "pointer_slots": 36210217
+  }
+]

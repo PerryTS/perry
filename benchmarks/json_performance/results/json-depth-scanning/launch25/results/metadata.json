@@ -1,0 +1,27 @@
+{
+  "worker_sha256": "43209c6da72bd718af7cc96932b759fb386d6e20b831c302f87e3080d030ef8c",
+  "launcher_sha256": "099ff6af8d7540e1b702c83d3cbb3907149cfd6f9050d5f976b7cf1f5db7feb1",
+  "cases": [
+    [
+      "small_record",
+      "retain",
+      100000,
+      "stringify"
+    ],
+    [
+      "escaped_1m",
+      "latest",
+      100,
+      "parse"
+    ],
+    [
+      "records_object_20m",
+      "discard",
+      24,
+      "roundtrip"
+    ]
+  ],
+  "repeats": 7,
+  "seed": 924712,
+  "note": "Same runtime binary and exact argv in both arms; hardlink installed once, never changed during trials; immutable execv launcher in second arm"
+}

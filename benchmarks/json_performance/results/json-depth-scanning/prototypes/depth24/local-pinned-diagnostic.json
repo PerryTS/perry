@@ -1,0 +1,370 @@
+{
+  "note": "Unqualified local smoke, depth preflight only; final expanded-test source; no full runtime build",
+  "worker_sha256": {
+    "depth23": "b40fdf00d1ad5aa1f0d612fa4d327462706ac815e0264105a1408db41df1ed0b",
+    "depth24": "ea640b431e3d39982f4fd08e89b1c1039ebc85f170eaf762d8921f636e4aa97e"
+  },
+  "seed": 462741,
+  "rows": [
+    {
+      "fixture": "escaped_1m",
+      "arm": "depth24",
+      "rep": 0,
+      "ns_per_call": 295883.75
+    },
+    {
+      "fixture": "escaped_1m",
+      "arm": "depth23",
+      "rep": 0,
+      "ns_per_call": 289192.92
+    },
+    {
+      "fixture": "escaped_1m",
+      "arm": "depth24",
+      "rep": 1,
+      "ns_per_call": 192892.5
+    },
+    {
+      "fixture": "escaped_1m",
+      "arm": "depth23",
+      "rep": 1,
+      "ns_per_call": 190386.25
+    },
+    {
+      "fixture": "escaped_1m",
+      "arm": "depth24",
+      "rep": 2,
+      "ns_per_call": 175725.42
+    },
+    {
+      "fixture": "escaped_1m",
+      "arm": "depth23",
+      "rep": 2,
+      "ns_per_call": 189468.75
+    },
+    {
+      "fixture": "escaped_1m",
+      "arm": "depth24",
+      "rep": 3,
+      "ns_per_call": 174077.09
+    },
+    {
+      "fixture": "escaped_1m",
+      "arm": "depth23",
+      "rep": 3,
+      "ns_per_call": 191525.42
+    },
+    {
+      "fixture": "escaped_1m",
+      "arm": "depth23",
+      "rep": 4,
+      "ns_per_call": 191028.75
+    },
+    {
+      "fixture": "escaped_1m",
+      "arm": "depth24",
+      "rep": 4,
+      "ns_per_call": 176334.58
+    },
+    {
+      "fixture": "long_string_1m",
+      "arm": "depth23",
+      "rep": 0,
+      "ns_per_call": 23784.16
+    },
+    {
+      "fixture": "long_string_1m",
+      "arm": "depth24",
+      "rep": 0,
+      "ns_per_call": 22498.33
+    },
+    {
+      "fixture": "long_string_1m",
+      "arm": "depth24",
+      "rep": 1,
+      "ns_per_call": 23010.42
+    },
+    {
+      "fixture": "long_string_1m",
+      "arm": "depth23",
+      "rep": 1,
+      "ns_per_call": 23494.17
+    },
+    {
+      "fixture": "long_string_1m",
+      "arm": "depth24",
+      "rep": 2,
+      "ns_per_call": 23649.58
+    },
+    {
+      "fixture": "long_string_1m",
+      "arm": "depth23",
+      "rep": 2,
+      "ns_per_call": 28773.34
+    },
+    {
+      "fixture": "long_string_1m",
+      "arm": "depth24",
+      "rep": 3,
+      "ns_per_call": 23421.67
+    },
+    {
+      "fixture": "long_string_1m",
+      "arm": "depth23",
+      "rep": 3,
+      "ns_per_call": 24297.92
+    },
+    {
+      "fixture": "long_string_1m",
+      "arm": "depth24",
+      "rep": 4,
+      "ns_per_call": 24859.59
+    },
+    {
+      "fixture": "long_string_1m",
+      "arm": "depth23",
+      "rep": 4,
+      "ns_per_call": 24559.16
+    },
+    {
+      "fixture": "records_object_1m",
+      "arm": "depth24",
+      "rep": 0,
+      "ns_per_call": 255831.25
+    },
+    {
+      "fixture": "records_object_1m",
+      "arm": "depth23",
+      "rep": 0,
+      "ns_per_call": 545538.75
+    },
+    {
+      "fixture": "records_object_1m",
+      "arm": "depth24",
+      "rep": 1,
+      "ns_per_call": 252383.75
+    },
+    {
+      "fixture": "records_object_1m",
+      "arm": "depth23",
+      "rep": 1,
+      "ns_per_call": 546417.91
+    },
+    {
+      "fixture": "records_object_1m",
+      "arm": "depth24",
+      "rep": 2,
+      "ns_per_call": 251656.25
+    },
+    {
+      "fixture": "records_object_1m",
+      "arm": "depth23",
+      "rep": 2,
+      "ns_per_call": 583169.58
+    },
+    {
+      "fixture": "records_object_1m",
+      "arm": "depth23",
+      "rep": 3,
+      "ns_per_call": 567970.42
+    },
+    {
+      "fixture": "records_object_1m",
+      "arm": "depth24",
+      "rep": 3,
+      "ns_per_call": 256509.17
+    },
+    {
+      "fixture": "records_object_1m",
+      "arm": "depth23",
+      "rep": 4,
+      "ns_per_call": 552109.58
+    },
+    {
+      "fixture": "records_object_1m",
+      "arm": "depth24",
+      "rep": 4,
+      "ns_per_call": 253425.42
+    },
+    {
+      "fixture": "wide_1m",
+      "arm": "depth24",
+      "rep": 0,
+      "ns_per_call": 302728.34
+    },
+    {
+      "fixture": "wide_1m",
+      "arm": "depth23",
+      "rep": 0,
+      "ns_per_call": 523677.91
+    },
+    {
+      "fixture": "wide_1m",
+      "arm": "depth23",
+      "rep": 1,
+      "ns_per_call": 556675.84
+    },
+    {
+      "fixture": "wide_1m",
+      "arm": "depth24",
+      "rep": 1,
+      "ns_per_call": 303636.25
+    },
+    {
+      "fixture": "wide_1m",
+      "arm": "depth23",
+      "rep": 2,
+      "ns_per_call": 517542.08
+    },
+    {
+      "fixture": "wide_1m",
+      "arm": "depth24",
+      "rep": 2,
+      "ns_per_call": 302008.75
+    },
+    {
+      "fixture": "wide_1m",
+      "arm": "depth24",
+      "rep": 3,
+      "ns_per_call": 302213.75
+    },
+    {
+      "fixture": "wide_1m",
+      "arm": "depth23",
+      "rep": 3,
+      "ns_per_call": 522397.92
+    },
+    {
+      "fixture": "wide_1m",
+      "arm": "depth24",
+      "rep": 4,
+      "ns_per_call": 306051.25
+    },
+    {
+      "fixture": "wide_1m",
+      "arm": "depth23",
+      "rep": 4,
+      "ns_per_call": 563353.33
+    },
+    {
+      "fixture": "records_array_1m",
+      "arm": "depth24",
+      "rep": 0,
+      "ns_per_call": 254819.58
+    },
+    {
+      "fixture": "records_array_1m",
+      "arm": "depth23",
+      "rep": 0,
+      "ns_per_call": 545847.08
+    },
+    {
+      "fixture": "records_array_1m",
+      "arm": "depth24",
+      "rep": 1,
+      "ns_per_call": 250309.17
+    },
+    {
+      "fixture": "records_array_1m",
+      "arm": "depth23",
+      "rep": 1,
+      "ns_per_call": 547120.0
+    },
+    {
+      "fixture": "records_array_1m",
+      "arm": "depth23",
+      "rep": 2,
+      "ns_per_call": 548290.42
+    },
+    {
+      "fixture": "records_array_1m",
+      "arm": "depth24",
+      "rep": 2,
+      "ns_per_call": 250512.92
+    },
+    {
+      "fixture": "records_array_1m",
+      "arm": "depth23",
+      "rep": 3,
+      "ns_per_call": 581202.5
+    },
+    {
+      "fixture": "records_array_1m",
+      "arm": "depth24",
+      "rep": 3,
+      "ns_per_call": 265499.17
+    },
+    {
+      "fixture": "records_array_1m",
+      "arm": "depth24",
+      "rep": 4,
+      "ns_per_call": 249654.58
+    },
+    {
+      "fixture": "records_array_1m",
+      "arm": "depth23",
+      "rep": 4,
+      "ns_per_call": 545632.92
+    },
+    {
+      "fixture": "numbers_1m",
+      "arm": "depth23",
+      "rep": 0,
+      "ns_per_call": 151558.75
+    },
+    {
+      "fixture": "numbers_1m",
+      "arm": "depth24",
+      "rep": 0,
+      "ns_per_call": 152476.25
+    },
+    {
+      "fixture": "numbers_1m",
+      "arm": "depth23",
+      "rep": 1,
+      "ns_per_call": 152363.33
+    },
+    {
+      "fixture": "numbers_1m",
+      "arm": "depth24",
+      "rep": 1,
+      "ns_per_call": 151632.09
+    },
+    {
+      "fixture": "numbers_1m",
+      "arm": "depth24",
+      "rep": 2,
+      "ns_per_call": 150712.08
+    },
+    {
+      "fixture": "numbers_1m",
+      "arm": "depth23",
+      "rep": 2,
+      "ns_per_call": 150396.25
+    },
+    {
+      "fixture": "numbers_1m",
+      "arm": "depth23",
+      "rep": 3,
+      "ns_per_call": 151850.84
+    },
+    {
+      "fixture": "numbers_1m",
+      "arm": "depth24",
+      "rep": 3,
+      "ns_per_call": 152217.5
+    },
+    {
+      "fixture": "numbers_1m",
+      "arm": "depth23",
+      "rep": 4,
+      "ns_per_call": 152442.5
+    },
+    {
+      "fixture": "numbers_1m",
+      "arm": "depth24",
+      "rep": 4,
+      "ns_per_call": 151442.5
+    }
+  ]
+}

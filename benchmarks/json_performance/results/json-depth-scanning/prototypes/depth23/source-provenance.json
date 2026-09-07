@@ -1,0 +1,16 @@
+{
+  "source_sha256": {
+    "Cargo.toml": "98ec4122693ec94cb330b5abbfeacc866f10fca077304a84d979572f581db9c6",
+    "after.rs": "7bc905eca8375d4c083f1035db353bfd160244ffbf6b4a234f1d7254b9c7832c",
+    "simd.rs": "a817938c4a8a8f39484c021555a7892deda344eddf8739833b1eeb9856892818",
+    "monitor.py": "f63899c67f757309dffb9da6e99ff944c0ec832c2494b3c05500e44f060ac304",
+    "with_lock.py": "007ce6db7a4b7d43b41d44439c49aeeb7dcf91cf702a2a03721dc1f93160ff2e",
+    "Cargo.lock": "8e371d407aa39e37b2089086cab7da5b04fbb76530ed9a5086c4343b365c17a1",
+    "before.rs": "85f482c3a1f85e0c31b6864049a14d0137732f1538468df44d26b43f4754383a",
+    "qscan.rs": "7ada47c0da0bde70cbe23f6ed0700145f58741ecbeccc7ac1678cd0dc4c53340",
+    "probe.py": "218689f102b3cb583b6e63e6c26263e25a8b27db19e3ac38282713b4d4cce7a1",
+    "main.rs": "d2372b06faf9cd44205d92dfa2748e9d47166c5f9d8aab4402b6e706cc7fdc8c",
+    "scan.rs": "1fa94846f294d928a12a9d3380fe6f212e396d57f04067b8f1552e4ed3b8d67c"
+  },
+  "status": "standalone local diagnostic only; no runtime integration or qualified remote measurement"
+}

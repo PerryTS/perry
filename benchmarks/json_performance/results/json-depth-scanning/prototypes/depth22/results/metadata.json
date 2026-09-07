@@ -1,0 +1,20 @@
+{
+  "worker_sha256": "9c2dca6e43c84e8e3a4756bfcaff481b4bc783d06aea00b2d6c921f1fe5e034d",
+  "fixtures": {
+    "escaped_1m": "52f2e30ddc036b9c0600a1ab088c7d00f6e40558540efa1f9315a0579bec8f56",
+    "unicode_1m": "b58eea42a50190b7675886030ef6875b25bb0a6d50632d9cbc5a918ea4ad9bd9",
+    "long_string_1m": "ea77e5d1ebb84c30a920d4de6aee5c5c92c2aba6cf060c30f1933e1e000e9081",
+    "records_object_1m": "f025e38ef9df42216a5fadc3232f300ab1dae1d291c5aee1c288a72d83f83471",
+    "wide_1m": "97f24b77b98ccfd85db41fb44f0316e27c87fdff4cec53e9d763a696f3611747",
+    "numbers_1m": "16a8954573cfc1090e79c3c2b27d0fc8c89dabc501aee6cbfeb44c1c1bc4c0fc",
+    "small_record": "e8d7bd409aeaba5d0aa3ce4046609ff7abdd3b88fc422903982ed7e58bc8f340",
+    "tiny_object": "015abd7f5cc57a2dd94b7590f04ad8084273905ee33ec5cebeae62276a97f862",
+    "object_1k": "75f531e0014758b782c6940849abdb74f1bd5c9aa365124ab3c2fd70964b9fc5",
+    "small-escaped-array": "685999ca6989c5afccf8b92af43985d43df18d45813881f1314c3eda072dd6c7",
+    "sparse-escapes": "88d3606ebe7b1bdd29d2f260ef26ad0f1163d500bfe77d8e03c858c845f02cc7"
+  },
+  "iterations": "100 large; 1000000 under 4096 bytes",
+  "repeats": 7,
+  "seed": 14398,
+  "note": "Standalone nesting-depth preflight, no allocation or GC; not full JSON parsing. Same binary contains both arms."
+}

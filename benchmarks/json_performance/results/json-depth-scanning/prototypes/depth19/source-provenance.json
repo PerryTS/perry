@@ -1,0 +1,18 @@
+{
+  "source_sha256": {
+    "Cargo.toml": "98ec4122693ec94cb330b5abbfeacc866f10fca077304a84d979572f581db9c6",
+    "after.rs": "74ee23dbf271ec79fb5b8f9e8b3b2ee58dba41686a5e20f0d3b79c5f2f104aa8",
+    "simd.rs": "a817938c4a8a8f39484c021555a7892deda344eddf8739833b1eeb9856892818",
+    "monitor.py": "d890b862470fb2f556b1d0a3d3fe7daa013e00bb3690e7ba2dbf828e3288f5c4",
+    "with_lock.py": "007ce6db7a4b7d43b41d44439c49aeeb7dcf91cf702a2a03721dc1f93160ff2e",
+    "Cargo.lock": "8e371d407aa39e37b2089086cab7da5b04fbb76530ed9a5086c4343b365c17a1",
+    "before.rs": "85f482c3a1f85e0c31b6864049a14d0137732f1538468df44d26b43f4754383a",
+    "probe.py": "218689f102b3cb583b6e63e6c26263e25a8b27db19e3ac38282713b4d4cce7a1",
+    "main.rs": "72eb430b1b70c4b5f8387e59af5e7fd48ea279ff76fef1e2d15ff0894805a834",
+    "scan.rs": "b48186990798f13937f436fd75a51160ba985c738cab4c2285d2009b11a36151"
+  },
+  "binary_sha256": "c82900c3051555978d7ac7447befce9f70f135de76711102b99f6092cb076d3f",
+  "toolchain": "nightly-2026-08-20",
+  "profile": "release, opt 3, CGU 1, thin LTO, panic abort",
+  "invariants": "16-byte bounded load, every 16-bit backslash mask exhaustively tested with both carry states, quoted endpoint compared to independent scalar oracle, no allocation or GC"
+}

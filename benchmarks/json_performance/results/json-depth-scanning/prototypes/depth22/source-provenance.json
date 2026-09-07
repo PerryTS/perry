@@ -1,0 +1,18 @@
+{
+  "files": {
+    "Cargo.toml": "98ec4122693ec94cb330b5abbfeacc866f10fca077304a84d979572f581db9c6",
+    "after.rs": "7bc905eca8375d4c083f1035db353bfd160244ffbf6b4a234f1d7254b9c7832c",
+    "simd.rs": "a817938c4a8a8f39484c021555a7892deda344eddf8739833b1eeb9856892818",
+    "monitor.py": "7c0b11af4756d0ec9fd5a815176b942a65cbf34bfdc46cb6d80269bb4d471895",
+    "with_lock.py": "007ce6db7a4b7d43b41d44439c49aeeb7dcf91cf702a2a03721dc1f93160ff2e",
+    "Cargo.lock": "8e371d407aa39e37b2089086cab7da5b04fbb76530ed9a5086c4343b365c17a1",
+    "before.rs": "85f482c3a1f85e0c31b6864049a14d0137732f1538468df44d26b43f4754383a",
+    "qscan.rs": "78a0454783b2bc1ba58bec5d70829d614f48dc68db36f86f724d2a68ac4d9d30",
+    "probe.py": "218689f102b3cb583b6e63e6c26263e25a8b27db19e3ac38282713b4d4cce7a1",
+    "main.rs": "d2372b06faf9cd44205d92dfa2748e9d47166c5f9d8aab4402b6e706cc7fdc8c",
+    "scan.rs": "1fa94846f294d928a12a9d3380fe6f212e396d57f04067b8f1552e4ed3b8d67c"
+  },
+  "binary": "9c2dca6e43c84e8e3a4756bfcaff481b4bc783d06aea00b2d6c921f1fe5e034d",
+  "profile": "release opt3 CGU1 thin LTO panic abort",
+  "runtime_difference": "module consolidated and ARM-only cfg at parent; guard test also exercises ordinary spans"
+}

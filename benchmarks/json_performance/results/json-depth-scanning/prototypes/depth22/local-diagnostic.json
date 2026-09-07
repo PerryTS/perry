@@ -1,0 +1,185 @@
+{
+  "note": "Local smoke timing, not qualified benchmark window",
+  "rows": [
+    {
+      "fixture": "escaped_1m",
+      "arm": "before",
+      "rep": 0,
+      "ns_per_call": 652822.91
+    },
+    {
+      "fixture": "escaped_1m",
+      "arm": "after",
+      "rep": 0,
+      "ns_per_call": 190690.42
+    },
+    {
+      "fixture": "escaped_1m",
+      "arm": "before",
+      "rep": 1,
+      "ns_per_call": 645144.58
+    },
+    {
+      "fixture": "escaped_1m",
+      "arm": "after",
+      "rep": 1,
+      "ns_per_call": 188246.25
+    },
+    {
+      "fixture": "escaped_1m",
+      "arm": "before",
+      "rep": 2,
+      "ns_per_call": 643371.66
+    },
+    {
+      "fixture": "escaped_1m",
+      "arm": "after",
+      "rep": 2,
+      "ns_per_call": 204873.34
+    },
+    {
+      "fixture": "long_string_1m",
+      "arm": "before",
+      "rep": 0,
+      "ns_per_call": 35339.58
+    },
+    {
+      "fixture": "long_string_1m",
+      "arm": "after",
+      "rep": 0,
+      "ns_per_call": 23563.33
+    },
+    {
+      "fixture": "long_string_1m",
+      "arm": "before",
+      "rep": 1,
+      "ns_per_call": 31829.58
+    },
+    {
+      "fixture": "long_string_1m",
+      "arm": "after",
+      "rep": 1,
+      "ns_per_call": 23011.25
+    },
+    {
+      "fixture": "long_string_1m",
+      "arm": "before",
+      "rep": 2,
+      "ns_per_call": 32413.75
+    },
+    {
+      "fixture": "long_string_1m",
+      "arm": "after",
+      "rep": 2,
+      "ns_per_call": 22981.25
+    },
+    {
+      "fixture": "records_object_1m",
+      "arm": "before",
+      "rep": 0,
+      "ns_per_call": 673425.83
+    },
+    {
+      "fixture": "records_object_1m",
+      "arm": "after",
+      "rep": 0,
+      "ns_per_call": 573782.08
+    },
+    {
+      "fixture": "records_object_1m",
+      "arm": "before",
+      "rep": 1,
+      "ns_per_call": 681035.83
+    },
+    {
+      "fixture": "records_object_1m",
+      "arm": "after",
+      "rep": 1,
+      "ns_per_call": 579326.25
+    },
+    {
+      "fixture": "records_object_1m",
+      "arm": "before",
+      "rep": 2,
+      "ns_per_call": 665716.25
+    },
+    {
+      "fixture": "records_object_1m",
+      "arm": "after",
+      "rep": 2,
+      "ns_per_call": 596841.25
+    },
+    {
+      "fixture": "small_record",
+      "arm": "before",
+      "rep": 0,
+      "ns_per_call": 86.20475
+    },
+    {
+      "fixture": "small_record",
+      "arm": "after",
+      "rep": 0,
+      "ns_per_call": 74.342417
+    },
+    {
+      "fixture": "small_record",
+      "arm": "before",
+      "rep": 1,
+      "ns_per_call": 88.766666
+    },
+    {
+      "fixture": "small_record",
+      "arm": "after",
+      "rep": 1,
+      "ns_per_call": 73.808916
+    },
+    {
+      "fixture": "small_record",
+      "arm": "before",
+      "rep": 2,
+      "ns_per_call": 85.841792
+    },
+    {
+      "fixture": "small_record",
+      "arm": "after",
+      "rep": 2,
+      "ns_per_call": 75.67975
+    },
+    {
+      "fixture": "object_1k",
+      "arm": "before",
+      "rep": 0,
+      "ns_per_call": 52.023208
+    },
+    {
+      "fixture": "object_1k",
+      "arm": "after",
+      "rep": 0,
+      "ns_per_call": 41.637833
+    },
+    {
+      "fixture": "object_1k",
+      "arm": "before",
+      "rep": 1,
+      "ns_per_call": 51.642042
+    },
+    {
+      "fixture": "object_1k",
+      "arm": "after",
+      "rep": 1,
+      "ns_per_call": 41.755208
+    },
+    {
+      "fixture": "object_1k",
+      "arm": "before",
+      "rep": 2,
+      "ns_per_call": 51.630708
+    },
+    {
+      "fixture": "object_1k",
+      "arm": "after",
+      "rep": 2,
+      "ns_per_call": 41.32625
+    }
+  ]
+}

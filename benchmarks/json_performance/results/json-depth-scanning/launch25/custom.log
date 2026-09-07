@@ -1,0 +1,4 @@
+TIMING small_record stringify
+TIMING escaped_1m parse
+TIMING records_object_20m roundtrip
+COMPLETE 84 timings 4 separate traces

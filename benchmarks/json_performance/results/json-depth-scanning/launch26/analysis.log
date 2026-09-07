@@ -1,0 +1,46 @@
+Verified 228 outputs, 1140 timings, 480 memory trials, 84 lifetimes and the common argv[0].
+empty_object parse 0.004 False 0.0
+empty_object stringify 0.02 False 0.04688
+escaped_1m parse -27.666 True -0.70312
+escaped_1m stringify 0.038 False 0.0
+heterogeneous_1m parse 0.044 False 0.03125
+heterogeneous_1m stringify -0.038 False 0.03125
+long_string_1m parse -3.652 True 0.04688
+long_string_1m stringify -0.14 False 0.01562
+null parse -0.025 False 0.07812
+null stringify -0.091 False 0.04688
+numbers_1m parse 0.101 False 0.03125
+numbers_1m stringify 0.323 False -0.1875
+object_1k parse -0.762 False 0.01562
+object_1k stringify -0.482 False 0.0
+records_array_16k parse 0.431 False 0.03125
+records_array_16k stringify -0.283 False 0.01562
+records_array_1m parse 0.59 False 0.01562
+records_array_1m stringify -0.318 False 0.0
+records_array_20m parse -0.242 False -0.01562
+records_array_20m stringify -0.007 False -0.04688
+records_array_8m parse -0.128 False 0.03125
+records_array_8m stringify -0.27 False 0.04688
+records_object_1m parse 0.055 False -0.03125
+records_object_1m stringify -0.418 True 0.0
+records_object_20m parse -0.158 False -0.01562
+records_object_20m stringify -0.019 False -0.03125
+records_object_8m parse -0.233 False -0.01562
+records_object_8m stringify -0.131 False 0.01562
+small_record parse 0.012 False 0.01562
+small_record stringify -0.248 False 0.0
+string_a parse 0.073 False 0.0625
+string_a stringify 0.052 False 0.04688
+tiny_object parse -0.268 False -0.01562
+tiny_object stringify -0.252 False -0.01562
+unicode_1m parse -3.585 True 0.03125
+unicode_1m stringify -0.329 False 0.04688
+wide_1m parse 0.168 False 0.01562
+wide_1m stringify 0.012 False 0.03125
+LIFETIME escaped_1m parse discard 100 -27.163 0.109375
+LIFETIME escaped_1m parse latest 100 -27.241 0.109375
+LIFETIME escaped_1m parse retain 32 -27.159 0.125
+LIFETIME records_object_20m roundtrip discard 24 0.029 0.125
+LIFETIME small_record stringify discard 100000 -0.506 0.09375
+LIFETIME small_record stringify latest 100000 0.433 0.203125
+LIFETIME small_record stringify retain 100000 0.82 0.109375

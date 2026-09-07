@@ -1,0 +1,157 @@
+[
+  {
+    "config": {},
+    "exit": 0,
+    "stdout": "document true\ntotals 46770 12 13890 611 1834 1\nretained {\"id\":0,\"text\":\"payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload \",\"nested\":{\"n\":1},\"extra\":7} {\"id\":572,\"text\":\"payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload \",\"nested\":{\"n\":1728},\"extra\":579}\n",
+    "stderr": "",
+    "node_stdout": "document true\ntotals 46770 12 13890 611 1834 1\nretained {\"id\":0,\"text\":\"payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload \",\"nested\":{\"n\":1},\"extra\":7} {\"id\":572,\"text\":\"payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload \",\"nested\":{\"n\":1728},\"extra\":579}\n",
+    "matches_node": true,
+    "counters": {},
+    "source_sha256": "941459940882cab791bd63fad81a74c91b5b387baf57ab08e43d815c4174e91d",
+    "object_sha256": "4654e15acc87aea8ae828395b9b9c3ba8295766334ad9d6ff9b48f5d8a3b2105"
+  },
+  {
+    "config": {
+      "PERRY_GC_HEAP_LIMIT": "32"
+    },
+    "exit": 0,
+    "stdout": "document true\ntotals 46770 12 13890 611 1834 1\nretained {\"id\":0,\"text\":\"payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload \",\"nested\":{\"n\":1},\"extra\":7} {\"id\":572,\"text\":\"payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload \",\"nested\":{\"n\":1728},\"extra\":579}\n",
+    "stderr": "",
+    "node_stdout": "document true\ntotals 46770 12 13890 611 1834 1\nretained {\"id\":0,\"text\":\"payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload \",\"nested\":{\"n\":1},\"extra\":7} {\"id\":572,\"text\":\"payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload \",\"nested\":{\"n\":1728},\"extra\":579}\n",
+    "matches_node": true,
+    "counters": {},
+    "source_sha256": "941459940882cab791bd63fad81a74c91b5b387baf57ab08e43d815c4174e91d",
+    "object_sha256": "4654e15acc87aea8ae828395b9b9c3ba8295766334ad9d6ff9b48f5d8a3b2105"
+  },
+  {
+    "config": {
+      "PERRY_JSON_TAPE": "0"
+    },
+    "exit": 0,
+    "stdout": "document true\ntotals 46770 12 13890 611 1834 1\nretained {\"id\":0,\"text\":\"payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload \",\"nested\":{\"n\":1},\"extra\":7} {\"id\":572,\"text\":\"payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload \",\"nested\":{\"n\":1728},\"extra\":579}\n",
+    "stderr": "",
+    "node_stdout": "document true\ntotals 46770 12 13890 611 1834 1\nretained {\"id\":0,\"text\":\"payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload \",\"nested\":{\"n\":1},\"extra\":7} {\"id\":572,\"text\":\"payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload \",\"nested\":{\"n\":1728},\"extra\":579}\n",
+    "matches_node": true,
+    "counters": {},
+    "source_sha256": "941459940882cab791bd63fad81a74c91b5b387baf57ab08e43d815c4174e91d",
+    "object_sha256": "4654e15acc87aea8ae828395b9b9c3ba8295766334ad9d6ff9b48f5d8a3b2105"
+  },
+  {
+    "config": {
+      "PERRY_GEN_GC": "0"
+    },
+    "exit": 0,
+    "stdout": "document true\ntotals 46770 12 13890 611 1834 1\nretained {\"id\":0,\"text\":\"payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload \",\"nested\":{\"n\":1},\"extra\":7} {\"id\":572,\"text\":\"payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload \",\"nested\":{\"n\":1728},\"extra\":579}\n",
+    "stderr": "",
+    "node_stdout": "document true\ntotals 46770 12 13890 611 1834 1\nretained {\"id\":0,\"text\":\"payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload \",\"nested\":{\"n\":1},\"extra\":7} {\"id\":572,\"text\":\"payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload \",\"nested\":{\"n\":1728},\"extra\":579}\n",
+    "matches_node": true,
+    "counters": {},
+    "source_sha256": "941459940882cab791bd63fad81a74c91b5b387baf57ab08e43d815c4174e91d",
+    "object_sha256": "4654e15acc87aea8ae828395b9b9c3ba8295766334ad9d6ff9b48f5d8a3b2105"
+  },
+  {
+    "config": {
+      "PERRY_GC_MOVING_LOOP_POLLS": "0"
+    },
+    "exit": 0,
+    "stdout": "document true\ntotals 46770 12 13890 611 1834 1\nretained {\"id\":0,\"text\":\"payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload \",\"nested\":{\"n\":1},\"extra\":7} {\"id\":572,\"text\":\"payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload \",\"nested\":{\"n\":1728},\"extra\":579}\n",
+    "stderr": "",
+    "node_stdout": "document true\ntotals 46770 12 13890 611 1834 1\nretained {\"id\":0,\"text\":\"payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload \",\"nested\":{\"n\":1},\"extra\":7} {\"id\":572,\"text\":\"payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload \",\"nested\":{\"n\":1728},\"extra\":579}\n",
+    "matches_node": true,
+    "counters": {},
+    "source_sha256": "941459940882cab791bd63fad81a74c91b5b387baf57ab08e43d815c4174e91d",
+    "object_sha256": "4654e15acc87aea8ae828395b9b9c3ba8295766334ad9d6ff9b48f5d8a3b2105"
+  },
+  {
+    "config": {
+      "PERRY_GC_SCHEDULE_SEED": "17",
+      "PERRY_GC_SCHEDULE_RATE": "0.1",
+      "PERRY_GC_PROTECT_FROMSPACE": "1",
+      "PERRY_GC_VERIFY_EVACUATION": "1"
+    },
+    "exit": 0,
+    "stdout": "document true\ntotals 46770 12 13890 611 1834 1\nretained {\"id\":0,\"text\":\"payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload \",\"nested\":{\"n\":1},\"extra\":7} {\"id\":572,\"text\":\"payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload \",\"nested\":{\"n\":1728},\"extra\":579}\n",
+    "stderr": "[gc-schedule] seeded GC-schedule fuzzing ACTIVE: seed=17 rate=0.1\n[gc-schedule] reproduce with: PERRY_GC_SCHEDULE_SEED=17 PERRY_GC_SCHEDULE_RATE=0.1\n[gc-schedule] done: seed=17 safepoints=199 scheduled_collections=17 polls_paced=1880 copying_minors=17 moved_objects=34894 loop_polls=2073\n",
+    "node_stdout": "document true\ntotals 46770 12 13890 611 1834 1\nretained {\"id\":0,\"text\":\"payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload \",\"nested\":{\"n\":1},\"extra\":7} {\"id\":572,\"text\":\"payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload \",\"nested\":{\"n\":1728},\"extra\":579}\n",
+    "matches_node": true,
+    "counters": {
+      "scheduled_collections": 17,
+      "copying_minors": 17,
+      "moved_objects": 34894,
+      "loop_polls": 2073
+    },
+    "source_sha256": "941459940882cab791bd63fad81a74c91b5b387baf57ab08e43d815c4174e91d",
+    "object_sha256": "4654e15acc87aea8ae828395b9b9c3ba8295766334ad9d6ff9b48f5d8a3b2105",
+    "live_subject": true
+  },
+  {
+    "config": {
+      "PERRY_GC_HEAP_LIMIT": "32",
+      "PERRY_JSON_TAPE": "0",
+      "PERRY_GC_SCHEDULE_SEED": "17",
+      "PERRY_GC_SCHEDULE_RATE": "0.1",
+      "PERRY_GC_PROTECT_FROMSPACE": "1",
+      "PERRY_GC_VERIFY_EVACUATION": "1"
+    },
+    "exit": 0,
+    "stdout": "document true\ntotals 46770 12 13890 611 1834 1\nretained {\"id\":0,\"text\":\"payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload \",\"nested\":{\"n\":1},\"extra\":7} {\"id\":572,\"text\":\"payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload \",\"nested\":{\"n\":1728},\"extra\":579}\n",
+    "stderr": "[gc-schedule] seeded GC-schedule fuzzing ACTIVE: seed=17 rate=0.1\n[gc-schedule] reproduce with: PERRY_GC_SCHEDULE_SEED=17 PERRY_GC_SCHEDULE_RATE=0.1\n[gc-schedule] done: seed=17 safepoints=191 scheduled_collections=13 polls_paced=1882 copying_minors=45 moved_objects=34725 loop_polls=2073\n",
+    "node_stdout": "document true\ntotals 46770 12 13890 611 1834 1\nretained {\"id\":0,\"text\":\"payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload \",\"nested\":{\"n\":1},\"extra\":7} {\"id\":572,\"text\":\"payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload \",\"nested\":{\"n\":1728},\"extra\":579}\n",
+    "matches_node": true,
+    "counters": {
+      "scheduled_collections": 13,
+      "copying_minors": 45,
+      "moved_objects": 34725,
+      "loop_polls": 2073
+    },
+    "source_sha256": "941459940882cab791bd63fad81a74c91b5b387baf57ab08e43d815c4174e91d",
+    "object_sha256": "4654e15acc87aea8ae828395b9b9c3ba8295766334ad9d6ff9b48f5d8a3b2105",
+    "live_subject": true
+  },
+  {
+    "config": {
+      "PERRY_GC_SCHEDULE_SEED": "9013",
+      "PERRY_GC_SCHEDULE_RATE": "0.1",
+      "PERRY_GC_PROTECT_FROMSPACE": "1",
+      "PERRY_GC_VERIFY_EVACUATION": "1"
+    },
+    "exit": 0,
+    "stdout": "document true\ntotals 46770 12 13890 611 1834 1\nretained {\"id\":0,\"text\":\"payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload \",\"nested\":{\"n\":1},\"extra\":7} {\"id\":572,\"text\":\"payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload \",\"nested\":{\"n\":1728},\"extra\":579}\n",
+    "stderr": "[gc-schedule] seeded GC-schedule fuzzing ACTIVE: seed=9013 rate=0.1\n[gc-schedule] reproduce with: PERRY_GC_SCHEDULE_SEED=9013 PERRY_GC_SCHEDULE_RATE=0.1\n[gc-schedule] done: seed=9013 safepoints=200 scheduled_collections=27 polls_paced=1879 copying_minors=27 moved_objects=43107 loop_polls=2073\n",
+    "node_stdout": "document true\ntotals 46770 12 13890 611 1834 1\nretained {\"id\":0,\"text\":\"payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload \",\"nested\":{\"n\":1},\"extra\":7} {\"id\":572,\"text\":\"payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload \",\"nested\":{\"n\":1728},\"extra\":579}\n",
+    "matches_node": true,
+    "counters": {
+      "scheduled_collections": 27,
+      "copying_minors": 27,
+      "moved_objects": 43107,
+      "loop_polls": 2073
+    },
+    "source_sha256": "941459940882cab791bd63fad81a74c91b5b387baf57ab08e43d815c4174e91d",
+    "object_sha256": "4654e15acc87aea8ae828395b9b9c3ba8295766334ad9d6ff9b48f5d8a3b2105",
+    "live_subject": true
+  },
+  {
+    "config": {
+      "PERRY_GC_HEAP_LIMIT": "32",
+      "PERRY_JSON_TAPE": "0",
+      "PERRY_GC_SCHEDULE_SEED": "9013",
+      "PERRY_GC_SCHEDULE_RATE": "0.1",
+      "PERRY_GC_PROTECT_FROMSPACE": "1",
+      "PERRY_GC_VERIFY_EVACUATION": "1"
+    },
+    "exit": 0,
+    "stdout": "document true\ntotals 46770 12 13890 611 1834 1\nretained {\"id\":0,\"text\":\"payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload \",\"nested\":{\"n\":1},\"extra\":7} {\"id\":572,\"text\":\"payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload \",\"nested\":{\"n\":1728},\"extra\":579}\n",
+    "stderr": "[gc-schedule] seeded GC-schedule fuzzing ACTIVE: seed=9013 rate=0.1\n[gc-schedule] reproduce with: PERRY_GC_SCHEDULE_SEED=9013 PERRY_GC_SCHEDULE_RATE=0.1\n[gc-schedule] done: seed=9013 safepoints=193 scheduled_collections=21 polls_paced=1880 copying_minors=51 moved_objects=42797 loop_polls=2073\n",
+    "node_stdout": "document true\ntotals 46770 12 13890 611 1834 1\nretained {\"id\":0,\"text\":\"payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload \",\"nested\":{\"n\":1},\"extra\":7} {\"id\":572,\"text\":\"payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload payload \",\"nested\":{\"n\":1728},\"extra\":579}\n",
+    "matches_node": true,
+    "counters": {
+      "scheduled_collections": 21,
+      "copying_minors": 51,
+      "moved_objects": 42797,
+      "loop_polls": 2073
+    },
+    "source_sha256": "941459940882cab791bd63fad81a74c91b5b387baf57ab08e43d815c4174e91d",
+    "object_sha256": "4654e15acc87aea8ae828395b9b9c3ba8295766334ad9d6ff9b48f5d8a3b2105",
+    "live_subject": true
+  }
+]

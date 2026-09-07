@@ -1,0 +1,19 @@
+{
+  "files": {
+    "Cargo.toml": "98ec4122693ec94cb330b5abbfeacc866f10fca077304a84d979572f581db9c6",
+    "after.rs": "ccc460ffcccb3b858df600b676e2e6bb85a9ac75c2f80f82a53ca27e97bb04f2",
+    "simd.rs": "a817938c4a8a8f39484c021555a7892deda344eddf8739833b1eeb9856892818",
+    "monitor.py": "f01648bbfdd414c2647e3d6ece3fd06bd6ca5b61388126d772daa0fdc7b3adda",
+    "with_lock.py": "007ce6db7a4b7d43b41d44439c49aeeb7dcf91cf702a2a03721dc1f93160ff2e",
+    "Cargo.lock": "8e371d407aa39e37b2089086cab7da5b04fbb76530ed9a5086c4343b365c17a1",
+    "before.rs": "85f482c3a1f85e0c31b6864049a14d0137732f1538468df44d26b43f4754383a",
+    "qscan.rs": "7ada47c0da0bde70cbe23f6ed0700145f58741ecbeccc7ac1678cd0dc4c53340",
+    "probe.py": "218689f102b3cb583b6e63e6c26263e25a8b27db19e3ac38282713b4d4cce7a1",
+    "main.rs": "533952d870b7c1010a6d286bd7e23b8a9735e1e97efb2bf0d1c070859d772dfc",
+    "scan.rs": "1fa94846f294d928a12a9d3380fe6f212e396d57f04067b8f1552e4ed3b8d67c"
+  },
+  "binary_sha256": "ea640b431e3d39982f4fd08e89b1c1039ebc85f170eaf762d8921f636e4aa97e",
+  "profile": "release opt3 CGU1 thin LTO panic abort",
+  "qualification": "local smoke only, no runtime integration or quiet remote measurement",
+  "diagnostic_binary_note": "local-diagnostic.json preceded addition of cfg(test)-only expanded tests; non-test Rust source unchanged, release rebuilt after expanded tests"
+}

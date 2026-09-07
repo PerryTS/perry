@@ -1,0 +1,46 @@
+UNQUALIFIED WINDOW; verified 190 outputs, 950 timings, 360 memory trials, 63 lifetimes and the common invocation path.
+empty_object parse -1.663 False 0.0
+empty_object stringify 0.069 False 0.04688
+escaped_1m parse -22.794 True 0.03125
+escaped_1m stringify 0.536 False 0.03125
+heterogeneous_1m parse 0.021 False 0.03125
+heterogeneous_1m stringify -0.077 False 0.03125
+long_string_1m parse -3.441 False 0.01562
+long_string_1m stringify -0.471 False 0.03125
+null parse -1.045 False 0.0625
+null stringify -0.474 False 0.04688
+numbers_1m parse 0.107 False 0.03125
+numbers_1m stringify -0.463 False 0.03125
+object_1k parse -1.635 True -0.04688
+object_1k stringify -0.301 False -0.01562
+records_array_16k parse 0.979 False 0.03125
+records_array_16k stringify -0.129 False 0.0
+records_array_1m parse 0.218 False 0.03125
+records_array_1m stringify -0.267 False 0.03125
+records_array_20m parse -0.289 False 0.01562
+records_array_20m stringify 0.004 False 0.0
+records_array_8m parse 0.121 False 0.03125
+records_array_8m stringify -0.049 False 0.0
+records_object_1m parse 0.736 True 0.0
+records_object_1m stringify -0.633 False 0.03125
+records_object_20m parse -0.278 True 0.0
+records_object_20m stringify -0.121 False 0.01562
+records_object_8m parse -0.148 False 0.0
+records_object_8m stringify -0.168 False 0.0
+small_record parse 0.081 False 0.01562
+small_record stringify -0.276 False -0.01562
+string_a parse -0.08 False 0.0625
+string_a stringify -2.78 False 0.04688
+tiny_object parse -0.32 False 0.0
+tiny_object stringify 0.335 False -0.01562
+unicode_1m parse -3.032 True 0.03125
+unicode_1m stringify 0.716 False 0.03125
+wide_1m parse 0.205 False -1.70312
+wide_1m stringify 0.05 False 0.03125
+LIFETIME escaped_1m parse discard 100 -22.462 0.125
+LIFETIME escaped_1m parse latest 100 -23.88 0.125
+LIFETIME escaped_1m parse retain 32 -15.498 0.125
+LIFETIME records_object_20m roundtrip discard 24 0.043 0.125
+LIFETIME small_record stringify discard 100000 -0.995 0.09375
+LIFETIME small_record stringify latest 100000 -0.025 0.109375
+LIFETIME small_record stringify retain 100000 -1.926 0.109375

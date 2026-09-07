@@ -1,0 +1,2 @@
+gc_runtime_root_holders: OK — 934 holder declarations scanned (742 identity-ratcheted), 465 reached by a registered scanner, 318 classified in the inventory, 147 pinned on the frontier ratchet (151 registered scanners).
+  UNVERIFIED by this gate: RuntimeState struct fields (growth-floor only); core-crate integer tables in files that never call an allocator (rule B's limit); and the 147 pinned frontier holders, which are ENUMERATED and RATCHETED but scanned by nothing — a value parked there may still be invisible to the collector.

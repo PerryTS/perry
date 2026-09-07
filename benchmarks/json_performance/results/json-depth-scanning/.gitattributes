@@ -1,0 +1,5 @@
+# Preserve the exact bytes of hash-pinned source snapshots and raw evidence.
+depth*/candidate.patch -whitespace
+depth*/tests.log -whitespace
+prototypes/**/*.rs -whitespace
+prototypes/**/test*.log -whitespace

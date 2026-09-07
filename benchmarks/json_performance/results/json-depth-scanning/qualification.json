@@ -1,0 +1,25 @@
+{
+  "experimental": true,
+  "no_regression_acceptance": false,
+  "all_38_complete": true,
+  "older_full_inventory_complete": false,
+  "gc_policy_changed": false,
+  "runtime_candidate": "depth22",
+  "measurement": "launch26",
+  "rejected_alternative": "depth23: empty-object parse +1.071% vs previous, separated ranges; generally higher main and retained-memory RSS. Retained as experimental source, not selected.",
+  "first_two_full_windows": "unqualified: depth22 exit load3.844; depth23 XProtect46.2%exit and163/185observationsabove5%",
+  "launch_method": "immutable execv with fixed argv0, fixture paths and working directory; launch25 same-binary control qualified",
+  "observations": 79,
+  "xprotect_above_five_percent_observations": 0,
+  "counts": {
+    "verify": 228,
+    "timing": 1140,
+    "memory": 480,
+    "lifetimes": 84
+  },
+  "standing_selected": {
+    "cpu_at_or_below_both": 16,
+    "peak_rss_at_or_below_both": 32,
+    "rows": 38
+  }
+}

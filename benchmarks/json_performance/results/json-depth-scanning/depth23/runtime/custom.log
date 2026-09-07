@@ -1,0 +1,56 @@
+TIMING null parse 2000000
+TIMING null stringify 2000000
+TIMING string_a parse 2000000
+TIMING string_a stringify 2000000
+TIMING empty_object parse 2000000
+TIMING empty_object stringify 2000000
+TIMING tiny_object parse 2000000
+TIMING tiny_object stringify 2000000
+TIMING small_record parse 574850
+TIMING small_record stringify 1228249
+TIMING object_1k parse 562411
+TIMING object_1k stringify 649702
+TIMING records_array_16k parse 6672
+TIMING records_array_16k stringify 9836
+TIMING records_array_1m parse 95
+TIMING records_array_1m stringify 177
+TIMING records_object_1m parse 71
+TIMING records_object_1m stringify 174
+TIMING records_array_8m parse 10
+TIMING records_array_8m stringify 20
+TIMING records_object_8m parse 8
+TIMING records_object_8m stringify 21
+TIMING records_array_20m parse 3
+TIMING records_array_20m stringify 8
+TIMING records_object_20m parse 3
+TIMING records_object_20m stringify 8
+TIMING numbers_1m parse 92
+TIMING numbers_1m stringify 96
+TIMING long_string_1m parse 1308
+TIMING long_string_1m stringify 1130
+TIMING escaped_1m parse 82
+TIMING escaped_1m stringify 168
+TIMING unicode_1m parse 1520
+TIMING unicode_1m stringify 1408
+TIMING wide_1m parse 36
+TIMING wide_1m stringify 215
+TIMING heterogeneous_1m parse 80
+TIMING heterogeneous_1m stringify 211
+MEMORY tiny_object
+MEMORY small_record
+MEMORY records_array_1m
+MEMORY records_object_1m
+MEMORY records_array_8m
+MEMORY records_object_8m
+MEMORY long_string_1m
+MEMORY unicode_1m
+MEMORY wide_1m
+MEMORY escaped_1m
+COMPLETE
+small_record stringify 100000
+small_record stringify 100000
+small_record stringify 100000
+records_object_20m roundtrip 24
+escaped_1m parse 100
+escaped_1m parse 100
+escaped_1m parse 32

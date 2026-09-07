@@ -1,0 +1,7 @@
+Collecting modules...
+Found 1 module(s): 1 native, 0 JavaScript
+Generating code...
+perry: in-process LLVM backend active (LLVM 22.1.4)
+[perry] codegen: modules finished 1/1 (100%; 0.0 min elapsed; ETA ~0.0 min)
+Wrote object file: /Users/amlug/projects/perry/codex-json-fastpaths-artifacts/launch25/argv.o
+Asset manifest: /Users/amlug/projects/perry/codex-json-fastpaths-artifacts/launch25/node_modules/.cache/perry/assets.json

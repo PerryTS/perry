@@ -1,0 +1,22 @@
+{
+  "owner": "json-perf-81706-1788782107",
+  "load_before": [
+    1.28173828125,
+    1.501953125,
+    1.66259765625
+  ],
+  "started_utc": "2026-09-07T11:55:07Z",
+  "quiet_gate_passed": true,
+  "command": [
+    "python3",
+    "/Users/perry/json-launch-control-v25-20260907-codex/control.py"
+  ],
+  "competing_workloads_before": [],
+  "load_after": [
+    2.28369140625,
+    1.74365234375,
+    1.72607421875
+  ],
+  "competing_workloads_after": [],
+  "finished_utc": "2026-09-07T11:57:14Z"
+}

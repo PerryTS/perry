@@ -1,0 +1,12 @@
+   Compiling libc v0.2.189
+   Compiling json-escape-probe v0.0.0 (/Users/amlug/projects/perry/codex-json-fastpaths-artifacts/depth22)
+    Finished `release` profile [optimized] target(s) in 3.96s
+     Running unittests main.rs (/Users/amlug/projects/perry/codex-json-fastpaths-artifacts/depth22/target/release/deps/probe-f99b5f2e29304b94)
+
+running 3 tests
+test tests::all_backslash_masks_and_both_carries_match_scalar_state ... ok
+test tests::guard_page_and_long_backslash_runs ... ok
+test tests::quote_boundaries_truncations_and_arbitrary_bytes_match_old_depth_check ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.35s
+

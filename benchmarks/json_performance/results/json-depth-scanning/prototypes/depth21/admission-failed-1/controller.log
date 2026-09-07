@@ -1,0 +1,6 @@
+BUSY side-short-escape-69553-1788778805
+MONITOR_FINISHED 2 observations 1
+Traceback (most recent call last):
+  File "/Users/perry/json-depth-mask-v21-20260907-codex/monitor.py", line 14, in <module>
+    assert p.returncode==0
+AssertionError

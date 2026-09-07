@@ -1,0 +1,173 @@
+[
+  {
+    "fixture": "small_record",
+    "totalCpuUs": {
+      "direct": {
+        "median": 44268.0,
+        "range": [
+          44223,
+          44387
+        ]
+      },
+      "launcher": {
+        "median": 44477.0,
+        "range": [
+          44236,
+          70242
+        ]
+      },
+      "delta_percent": 0.47212433360441786,
+      "delta": 209.0
+    },
+    "peak_rss": {
+      "direct": {
+        "median": 33931264.0,
+        "range": [
+          33914880,
+          33947648
+        ]
+      },
+      "launcher": {
+        "median": 33914880.0,
+        "range": [
+          33898496,
+          33947648
+        ]
+      },
+      "delta_percent": -0.04828585224528892,
+      "delta": -16384.0
+    },
+    "rssDrained": {
+      "direct": {
+        "median": 33341440.0,
+        "range": [
+          33325056,
+          33357824
+        ]
+      },
+      "launcher": {
+        "median": 33325056.0,
+        "range": [
+          33308672,
+          33357824
+        ]
+      },
+      "delta_percent": -0.04914004914005066,
+      "delta": -16384.0
+    }
+  },
+  {
+    "fixture": "escaped_1m",
+    "totalCpuUs": {
+      "direct": {
+        "median": 117815.0,
+        "range": [
+          117465,
+          118584
+        ]
+      },
+      "launcher": {
+        "median": 117738.0,
+        "range": [
+          117540,
+          119853
+        ]
+      },
+      "delta_percent": -0.06535670330602983,
+      "delta": -77.0
+    },
+    "peak_rss": {
+      "direct": {
+        "median": 63455232.0,
+        "range": [
+          63422464,
+          63455232
+        ]
+      },
+      "launcher": {
+        "median": 63455232.0,
+        "range": [
+          63078400,
+          63455232
+        ]
+      },
+      "delta_percent": 0.0,
+      "delta": 0.0
+    },
+    "rssDrained": {
+      "direct": {
+        "median": 61227008.0,
+        "range": [
+          61194240,
+          61227008
+        ]
+      },
+      "launcher": {
+        "median": 61227008.0,
+        "range": [
+          61210624,
+          61669376
+        ]
+      },
+      "delta_percent": 0.0,
+      "delta": 0.0
+    }
+  },
+  {
+    "fixture": "records_object_20m",
+    "totalCpuUs": {
+      "direct": {
+        "median": 3310160.0,
+        "range": [
+          3249184,
+          3313288
+        ]
+      },
+      "launcher": {
+        "median": 3307879.0,
+        "range": [
+          3241206,
+          3314128
+        ]
+      },
+      "delta_percent": -0.06890905575561712,
+      "delta": -2281.0
+    },
+    "peak_rss": {
+      "direct": {
+        "median": 300711936.0,
+        "range": [
+          300711936,
+          318537728
+        ]
+      },
+      "launcher": {
+        "median": 300711936.0,
+        "range": [
+          286605312,
+          311197696
+        ]
+      },
+      "delta_percent": 0.0,
+      "delta": 0.0
+    },
+    "rssDrained": {
+      "direct": {
+        "median": 300204032.0,
+        "range": [
+          300204032,
+          318029824
+        ]
+      },
+      "launcher": {
+        "median": 300204032.0,
+        "range": [
+          286097408,
+          310689792
+        ]
+      },
+      "delta_percent": 0.0,
+      "delta": 0.0
+    }
+  }
+]

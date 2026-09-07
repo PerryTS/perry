@@ -1,0 +1,22 @@
+{
+  "owner": "json-perf-68168-1788777991",
+  "load_before": [
+    1.0322265625,
+    1.0166015625,
+    1.19287109375
+  ],
+  "started_utc": "2026-09-07T10:46:31Z",
+  "quiet_gate_passed": true,
+  "command": [
+    "python3",
+    "/Users/perry/json-depth-mask-v19-20260907-codex/probe.py"
+  ],
+  "competing_workloads_before": [],
+  "load_after": [
+    1.02685546875,
+    1.015625,
+    1.18994140625
+  ],
+  "competing_workloads_after": [],
+  "finished_utc": "2026-09-07T10:46:42Z"
+}

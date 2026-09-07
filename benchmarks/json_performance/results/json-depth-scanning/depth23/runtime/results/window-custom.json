@@ -1,0 +1,24 @@
+{
+  "owner": "json-perf-77515-1788780777",
+  "load_before": [
+    1.48095703125,
+    1.7958984375,
+    1.83740234375
+  ],
+  "started_utc": "2026-09-07T11:32:57Z",
+  "quiet_gate_passed": false,
+  "command": [
+    "python3",
+    "/Users/perry/json-depth-runtime-v23-20260907-codex/all.py"
+  ],
+  "competing_workloads_before": [],
+  "load_after": [
+    2.00732421875,
+    1.88818359375,
+    1.853515625
+  ],
+  "competing_workloads_after": [
+    "1169  46.2 /System/Library/PrivateFrameworks/XprotectFramework.framework/Versions/A/XPCServices/XprotectService.xpc/Contents/MacOS/XprotectService"
+  ],
+  "finished_utc": "2026-09-07T11:48:27Z"
+}

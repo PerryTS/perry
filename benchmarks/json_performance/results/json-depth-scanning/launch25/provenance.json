@@ -1,0 +1,16 @@
+{
+  "files": {
+    "monitor.py": "e91cd1f27ebd739d7cb8671ef4a4183212b8e536c983a67ca6e45f519ce332f8",
+    "argv": "b2e947a65dcf04c7c982015337aaba71adeb5dc69f1dc2662274d821229acfb4",
+    "launch": "099ff6af8d7540e1b702c83d3cbb3907149cfd6f9050d5f976b7cf1f5db7feb1",
+    "with_lock.py": "727f42b309b9db2afc838695f3045ee20f3033f2be1f5c680fc4d9df25ca8add",
+    "argv.o": "54c54dda58bcfc33644e98cca26d81b81749795d51c231883935e6892135175e",
+    "control.py": "7cbbef7bd1e22ce6eebb32c0c3764c9aa8f632eb304bcb17aac8d03b9c3a4e3d",
+    "launch.c": "9e090e39c46eeca6b25b5a2954762605a94cdc0545054a2c6daa5007dfe967cb",
+    "argv.ts": "cafdaaba5f590acedbda3eae928fc7b4fca282055f428ac1c4193448fe9e8489",
+    "compile.log": "601bab5f176853b5d9a6f42e998e20f5cf730f44fd9b8475977a5523ab02dc50",
+    "link.log": "9bd9dac3a5ee400a5fba546f97133696732e17deb28c0b25be974c1e09b2f925"
+  },
+  "runtime_provenance": "depth23-provenance.json",
+  "hypothesis": "Immutable execv files with fixed argv0 may avoid repeated OS security scans associated with replacing canonical path; causality unproven. Control holds managed argv fixed and measures same binary with and without native execv launcher."
+}
