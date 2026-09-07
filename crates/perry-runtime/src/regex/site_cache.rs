@@ -121,6 +121,22 @@ fn entry_count(cache: &ContentMap) -> usize {
     cache.values().map(Vec::len).sum()
 }
 
+pub(super) fn census() -> crate::gc::census::SideTableRow {
+    SITE_CACHE.with(|cache| {
+        let cache = cache.borrow();
+        let entries = entry_count(&cache);
+        // The content payload dominates; include its owned pattern/flags bytes
+        // as well as one entry record.  Bucket/control-byte overhead is small
+        // and deliberately left as an estimate, matching the census contract.
+        let bytes = cache
+            .values()
+            .flatten()
+            .map(|entry| std::mem::size_of::<Entry>() + entry.pattern.len() + entry.flags.len())
+            .sum();
+        ("regex.content_cache", entries, bytes)
+    })
+}
+
 /// Remove one entry that has no recorded literal site. The scan happens only
 /// on a distinct-content miss at capacity; literal-site hits never reach it.
 fn evict_one_dynamic(cache: &mut ContentMap) -> bool {

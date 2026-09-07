@@ -5,7 +5,7 @@
 use std::collections::{HashMap, HashSet};
 
 use anyhow::{anyhow, Context, Result};
-use perry_hir::Function;
+use perry_hir::{Expr, Function, Stmt};
 
 use crate::expr::FnCtx;
 use crate::module::LlModule;
@@ -524,6 +524,11 @@ pub(super) fn compile_function(
         .get(&f.id)
         .cloned()
         .ok_or_else(|| anyhow!("function name not resolved for {}", f.name))?;
+    let regex_factory_identity = (!f.is_async
+        && !f.is_generator
+        && f.params.is_empty()
+        && matches!(f.body.as_slice(), [Stmt::Return(Some(Expr::RegExp { .. }))]))
+    .then(|| public_llvm_name.clone());
     let guarded_public_plan = if typed_public_trampoline.is_none() && spec_entry.is_none() {
         cross_module
             .spec_abi_functions
@@ -1023,6 +1028,7 @@ pub(super) fn compile_function(
         module_slug: crate::expr::native_region_slug(strings.module_prefix()),
         source_function: f.name.clone(),
         source_function_slug: crate::expr::native_region_slug(&f.name),
+        regex_factory_identity,
         active_region_id: None,
         native_facts: &native_facts,
         locals,

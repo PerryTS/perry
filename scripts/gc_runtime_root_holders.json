@@ -291,9 +291,9 @@
           "function": "run_to_completion"
         },
         "sources": {
-          "crates/perry-runtime/src/gc/census.rs": "388414f9629f196e84673e91bebd04bdcdcabdaa180252d2dfe4b82d1b49ca5a",
+          "crates/perry-runtime/src/gc/census.rs": "1ddeeec3ca81b792a222dbe165c32b7b995c084f66c760cb6cd3f26baf2cb07a",
           "crates/perry-runtime/src/gc/cycle.rs": "2e2f5adca2229f74409e01a1cb571e2147cd8a33f58d0976711fce98d4777309",
-          "crates/perry-runtime/src/gc/mod.rs": "43523b66595c61516ef6fcd4139d3ec5b4768a13c46ae1470c1d45481eacfdd9",
+          "crates/perry-runtime/src/gc/mod.rs": "fefc97a4a62eb0712a7708563843c751f45d05575533ae9c06ee692ec9c38f80",
           "crates/perry-runtime/src/gc/policy.rs": "dc9242ed40c0aa9c411d1ec0235c0219c6716dd82d56eb4d46578f7e889825d2",
           "crates/perry-runtime/src/gc/progress.rs": "a5ad3971bbe4047229ca57325234780daa85921dbc778e1c08dff4ad07ccfb96"
         }
@@ -388,6 +388,74 @@
       "name": "REGEX_DIAG",
       "verdict": "not_a_gc_pointer",
       "why": "RegExp construction/exec diagnostics (`PERRY_REGEX_DIAG`), off unless armed. Every field is a counter or an `Instant` except `per_pattern: HashMap<usize, PatStat>`, whose VALUE is Rust-owned (an owned prefix `String`, a flags `String`, counters). The KEY is a pattern `StringHeader` address, so it is a heap address \u2014 but it is used ONLY as an opaque grouping id and is never dereferenced: `PatStat::prefix` and `byte_len` are filled from the `&[u8]` argument at first insert, never by reading the key. Nothing here is traced, rooted or rewritten. The one consequence of the address being reused after a pattern dies is that two patterns' diagnostic counters merge into one row \u2014 an inaccuracy in an off-by-default diagnostic, with no collector implication. Distinct from `PASS1_MARKED`, whose addresses ARE walked and which therefore carries `non_moving_snapshot` with a pinned window."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/regex_proto_thunks.rs",
+      "name": "REGEXP_PROTOTYPE_PTR_SLOT",
+      "verdict": "covered_elsewhere",
+      "scanner": "object::scan_object_cache_roots_mut visits REGEXP_PROTOTYPE_PTR as a raw mutable root; registered by gc_init",
+      "why": "Backing Perry-TLS atomic for the realm RegExp prototype. Its RealmAtomicI64 wrapper stores through the root barrier and the registered object-cache scanner marks and rewrites it."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/regex_proto_thunks.rs",
+      "name": "REGEXP_PROTOTYPE_TEST_CLOSURE_SLOT",
+      "verdict": "covered_elsewhere",
+      "scanner": "object::scan_object_cache_roots_mut visits REGEXP_PROTOTYPE_TEST_CLOSURE as a NaN-boxed mutable root; registered by gc_init",
+      "why": "Backing Perry-TLS atomic for the canonical RegExp.prototype.test closure. The registered object-cache scanner marks and rewrites its NaN-boxed pointer."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/regex_proto_thunks.rs",
+      "name": "REGEXP_PROTOTYPE_TEST_INDEX_SLOT",
+      "verdict": "not_a_gc_pointer",
+      "why": "The u32 field index of RegExp.prototype.test, or u32::MAX before installation. It is an array offset and never stores a heap address or NaN-boxed value."
+    },
+    {
+      "file": "crates/perry-runtime/src/regex/site_test.rs",
+      "name": "TEST_NO_ALLOC",
+      "verdict": "test_only",
+      "why": "A cfg(test) counter for allocation-free site services; it contains only a u64 tally."
+    },
+    {
+      "file": "crates/perry-runtime/src/regex/site_test.rs",
+      "name": "TEST_DECLINED",
+      "verdict": "test_only",
+      "why": "A cfg(test) counter for site-validation declines; it contains only a u64 tally."
+    },
+    {
+      "file": "crates/perry-runtime/src/regex/site_test.rs",
+      "name": "TEST_DECLINED_PATCHED",
+      "verdict": "test_only",
+      "why": "A cfg(test) counter for patched-prototype declines; it contains only a u64 tally."
+    },
+    {
+      "file": "crates/perry-runtime/src/regex/site_test.rs",
+      "name": "TEST_DECLINED_CALLEE",
+      "verdict": "test_only",
+      "why": "A cfg(test) counter for callee-identity declines; it contains only a u64 tally."
+    },
+    {
+      "file": "crates/perry-runtime/src/regex/site_test.rs",
+      "name": "TEST_DECLINED_NON_LITERAL",
+      "verdict": "test_only",
+      "why": "A cfg(test) counter for non-literal factory declines; it contains only a u64 tally."
+    },
+    {
+      "file": "crates/perry-runtime/src/regex/site_test.rs",
+      "name": "TEST_ALLOCATIONS",
+      "verdict": "test_only",
+      "why": "A cfg(test) counter for site-entry header allocations; it contains only a u64 tally."
+    },
+    {
+      "file": "crates/perry-runtime/src/regex/site_test.rs",
+      "name": "DIRECT_G",
+      "verdict": "test_only",
+      "why": "A cfg(test) static whose immortal address supplies a synthetic direct global-regex site key."
+    },
+    {
+      "file": "crates/perry-runtime/src/regex/site_test.rs",
+      "name": "MEMBER_CALL",
+      "verdict": "test_only",
+      "why": "A cfg(test) static whose immortal address supplies a synthetic namespace-member call site key."
     },
     {
       "file": "crates/perry-runtime/src/intl/segments_view.rs",
@@ -3401,10 +3469,6 @@
     {
       "file": "crates/perry-runtime/src/native_arena.rs",
       "name": "VIEW_REGISTRY"
-    },
-    {
-      "file": "crates/perry-runtime/src/node_http2_constants.rs",
-      "name": "SENSITIVE_HEADERS_SYMBOL"
     },
     {
       "file": "crates/perry-runtime/src/node_repl.rs",

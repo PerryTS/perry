@@ -179,6 +179,8 @@ mod call_spread_short_tests;
 mod issue7628_rooting_tests;
 #[cfg(test)]
 mod readonly_collection_tests;
+#[cfg(test)]
+mod regex_site_test_tests;
 pub(crate) mod shadow_slot;
 #[cfg(test)]
 mod slice7_rooting_tests;
@@ -265,6 +267,13 @@ pub(crate) struct FnCtx<'a> {
     /// module code uses `module_init`.
     pub source_function: String,
     pub source_function_slug: String,
+    /// Public callable symbol when this body is proven to be exactly
+    /// `function () { return /literal/flags; }`.  The proof is structural at
+    /// the HIR function boundary (zero parameters, one return statement, no
+    /// async/generator machinery).  Regex literal lowering passes this
+    /// identity to the runtime only for that shape; ordinary literals retain
+    /// fresh-object semantics.
+    pub regex_factory_identity: Option<String>,
     /// Stable id for the labeled loop currently being lowered.
     pub active_region_id: Option<String>,
     /// Full native-region fact graph collected for this lowered HIR region.

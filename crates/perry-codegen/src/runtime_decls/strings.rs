@@ -1319,6 +1319,20 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // unit tests. `runtime_decls::tests` asserts the name AND the arity: a
     // wrong arity parses and miscompiles.
     module.declare_function("js_regexp_new_site", I64, &[I64, I64, I64]);
+    module.declare_function("js_regexp_new_factory_site", I64, &[I64, I64, I64, I64]);
+    module.declare_function("js_regexp_site_test_new", I64, &[I64, I64, I64]);
+    module.declare_function("js_regexp_site_factory_call_value", DOUBLE, &[I64, DOUBLE]);
+    module.declare_function(
+        "js_regexp_site_factory_call_method",
+        DOUBLE,
+        &[I64, DOUBLE, DOUBLE],
+    );
+    module.declare_function("js_regexp_site_test_get_method", DOUBLE, &[I64, DOUBLE]);
+    module.declare_function(
+        "js_regexp_site_test_dispatch",
+        DOUBLE,
+        &[I64, DOUBLE, DOUBLE, DOUBLE],
+    );
     // Full ECMAScript RegExp constructor: NaN-boxed pattern + flags in, handles
     // RegExp/undefined/object patterns and ToString-coerced flags.
     module.declare_function("js_regexp_construct", I64, &[DOUBLE, DOUBLE]);

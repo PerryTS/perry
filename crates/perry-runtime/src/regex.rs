@@ -6,10 +6,8 @@
 #[cfg(feature = "regex-engine")]
 use regex::Regex;
 use std::cell::RefCell;
-// Every use of `HashMap` in this file is inside a `#[cfg(feature = "regex-engine")]`
-// block, so an unconditional import is an unused-import error under the
-// `warnings` job's `-D warnings` when `perry`'s own binaries pull the runtime
-// in without that feature.
+// Every `HashMap` use is behind `regex-engine`; gate the import too so the
+// feature-off `-D warnings` build does not see it as unused.
 #[cfg(feature = "regex-engine")]
 use std::collections::HashMap;
 use std::ptr;
@@ -77,6 +75,8 @@ mod site_cache;
 #[cfg(feature = "regex-engine")]
 mod site_key;
 #[cfg(feature = "regex-engine")]
+pub(crate) mod site_test;
+#[cfg(feature = "regex-engine")]
 mod unicode17;
 #[cfg(feature = "regex-engine")]
 mod unicode17_data;
@@ -111,10 +111,9 @@ pub use properties::{
     js_regexp_set_last_index, js_regexp_to_string,
 };
 
-/// Class id for `RegExp String Iterator` exotic objects. Referenced by the
-/// always-linked iterator-prototype dispatch, so it stays ungated even when
-/// the regex engine (which produces these iterators) is compiled out.
+/// Class id shared with the always-linked RegExp string-iterator dispatch.
 pub const REGEXP_STRING_ITERATOR_CLASS_ID: u32 = 0xFFFF_000A;
+
 #[cfg(feature = "regex-engine")]
 use replace_expand::expand_js_replacement;
 #[cfg(feature = "regex-engine")]
