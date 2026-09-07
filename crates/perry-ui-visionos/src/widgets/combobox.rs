@@ -19,7 +19,7 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, Sel};
 use objc2::{define_class, AnyThread, DefinedClass};
 use objc2_foundation::{MainThreadMarker, NSObject, NSString};
-use objc2_ui_kit::{UITextField, UIView};
+use objc2_ui_kit::UIView;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 
@@ -168,8 +168,7 @@ impl PerryComboboxDelegate {
 pub fn create(initial_ptr: *const u8, on_change: f64) -> i64 {
     let _mtm = MainThreadMarker::new().expect("perry/ui must run on the main thread");
     unsafe {
-        let text_field: Retained<UITextField> =
-            msg_send![AnyClass::get(c"UITextField").unwrap(), new];
+        let text_field = super::padding::new_text_field();
         // Match macOS combobox default chrome: rounded rect, 220×25 hint.
         let _: () = msg_send![&*text_field, setBorderStyle: 3i64]; // RoundedRect
         let _: () = msg_send![&*text_field, setTranslatesAutoresizingMaskIntoConstraints: false];
