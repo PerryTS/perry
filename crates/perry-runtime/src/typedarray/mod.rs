@@ -523,8 +523,8 @@ fn lookup_registered_typed_array_kind(addr: usize) -> Option<u8> {
     kind
 }
 
-/// True for off-GC-heap, header-less allocations — small typed arrays and
-/// `Buffer`s, both raw-`alloc`'d with NO 8-byte `GcHeader` prefix and tracked
+/// True for off-GC-heap, header-less allocations — legacy small typed arrays,
+/// external buffers, and SAB backings with no tracked `GcHeader`, represented
 /// only in side tables. The runtime has many type probes of the form
 /// `*(ptr - GC_HEADER_SIZE)` (Promise/Date/Array obj_type checks); each MUST
 /// skip these allocations before that back-read, because reading the
@@ -533,6 +533,14 @@ fn lookup_registered_typed_array_kind(addr: usize) -> Option<u8> {
 /// tables only — never dereferences `addr`.
 #[inline]
 pub fn is_offheap_sidetable_alloc(addr: usize) -> bool {
+    // Managed Buffer / TypedArray cells (and every other GC allocation) are
+    // already classified by allocator-owned metadata. Only a tracked-header
+    // miss can be one of the legacy raw allocations represented solely by a
+    // side table; probing both registries for every managed pointer defeated
+    // the native-call receiver classification at each defensive header check.
+    if unsafe { crate::value::addr_class::try_read_tracked_gc_header(addr) }.is_some() {
+        return false;
+    }
     lookup_typed_array_kind(addr).is_some() || crate::buffer::is_registered_buffer(addr)
 }
 

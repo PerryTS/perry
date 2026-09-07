@@ -52,9 +52,8 @@ use regex::Regex;
 
 use super::grammar::{collapse_redos_guard_quantifiers, js_regex_to_rust_with_flags};
 use super::{
-    evict_regex_cache_if_full, get_or_compile_regex, is_valid_ptr, is_valid_regex_ptr,
-    string_as_str, RegExpHeader, FANCY_CACHE, REGEX_SOURCE_TABLE, REPEAT_MATCHER_CACHE,
-    VALIDATED_PATTERNS,
+    evict_regex_cache_if_full, get_or_compile_regex, is_valid_ptr, string_as_str, RegExpHeader,
+    FANCY_CACHE, REGEX_SOURCE_TABLE, REPEAT_MATCHER_CACHE, VALIDATED_PATTERNS,
 };
 
 /// The exact string `build_std_regex` is handed for `(pattern, flags)`: the
@@ -223,11 +222,10 @@ pub(crate) fn ensure_regex_compiled(re: *const RegExpHeader) {
 
 #[cold]
 fn build_and_install_programs(re: *const RegExpHeader) {
-    // The one place the precondition is re-checked, so a caller that has not
-    // validated cannot corrupt an unrelated allocation.
-    if !is_valid_regex_ptr(re) {
-        return;
-    }
+    // `ensure_regex_compiled` is reached only after the exported operation
+    // validated the receiver. Repeating `is_valid_regex_ptr` here made a cold
+    // first match perform the same brand check twice; the builder's safety
+    // contract is the same validated-live-header precondition as the hot path.
     let (pattern, flags) = source_and_flags(re);
     if crate::hot_diag::regex_on() {
         let cache_hit = super::REGEX_CACHE.with(|cache| {
