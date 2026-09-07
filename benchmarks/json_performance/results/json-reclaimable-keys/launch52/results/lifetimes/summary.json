@@ -1,0 +1,1482 @@
+[
+  {
+    "fixture": "escaped_1m",
+    "operation": "parse",
+    "mode": "discard",
+    "iterations": 100,
+    "values": {
+      "fused": {
+        "totalCpuUs": {
+          "median": 116710,
+          "range": [
+            116361,
+            116744
+          ]
+        },
+        "peak_rss": {
+          "median": 61898752,
+          "range": [
+            61882368,
+            61898752
+          ]
+        },
+        "rssDrained": {
+          "median": 61210624,
+          "range": [
+            61194240,
+            61210624
+          ]
+        }
+      },
+      "previous": {
+        "totalCpuUs": {
+          "median": 117931,
+          "range": [
+            117676,
+            118188
+          ]
+        },
+        "peak_rss": {
+          "median": 61997056,
+          "range": [
+            61980672,
+            61997056
+          ]
+        },
+        "rssDrained": {
+          "median": 61292544,
+          "range": [
+            61276160,
+            61292544
+          ]
+        }
+      },
+      "copy": {
+        "totalCpuUs": {
+          "median": 116972,
+          "range": [
+            116547,
+            117074
+          ]
+        },
+        "peak_rss": {
+          "median": 61947904,
+          "range": [
+            61947904,
+            62390272
+          ]
+        },
+        "rssDrained": {
+          "median": 61259776,
+          "range": [
+            61259776,
+            61702144
+          ]
+        }
+      },
+      "branch": {
+        "totalCpuUs": {
+          "median": 116762,
+          "range": [
+            116439,
+            116783
+          ]
+        },
+        "peak_rss": {
+          "median": 61964288,
+          "range": [
+            61964288,
+            61964288
+          ]
+        },
+        "rssDrained": {
+          "median": 61292544,
+          "range": [
+            61292544,
+            61292544
+          ]
+        }
+      },
+      "keys": {
+        "totalCpuUs": {
+          "median": 116950,
+          "range": [
+            116392,
+            117009
+          ]
+        },
+        "peak_rss": {
+          "median": 61915136,
+          "range": [
+            61915136,
+            61915136
+          ]
+        },
+        "rssDrained": {
+          "median": 61292544,
+          "range": [
+            61292544,
+            61292544
+          ]
+        }
+      },
+      "candidate": {
+        "totalCpuUs": {
+          "median": 116820,
+          "range": [
+            116687,
+            116979
+          ]
+        },
+        "peak_rss": {
+          "median": 61898752,
+          "range": [
+            61882368,
+            61898752
+          ]
+        },
+        "rssDrained": {
+          "median": 61276160,
+          "range": [
+            61259776,
+            61276160
+          ]
+        }
+      }
+    },
+    "cpu_delta_percent": -0.9420762988527231,
+    "peak_delta_mib": -0.09375
+  },
+  {
+    "fixture": "escaped_1m",
+    "operation": "parse",
+    "mode": "latest",
+    "iterations": 100,
+    "values": {
+      "fused": {
+        "totalCpuUs": {
+          "median": 116637,
+          "range": [
+            116539,
+            116834
+          ]
+        },
+        "peak_rss": {
+          "median": 63438848,
+          "range": [
+            63062016,
+            63455232
+          ]
+        },
+        "rssDrained": {
+          "median": 61210624,
+          "range": [
+            61194240,
+            61636608
+          ]
+        }
+      },
+      "previous": {
+        "totalCpuUs": {
+          "median": 117803,
+          "range": [
+            117659,
+            117897
+          ]
+        },
+        "peak_rss": {
+          "median": 63553536,
+          "range": [
+            63176704,
+            63553536
+          ]
+        },
+        "rssDrained": {
+          "median": 61292544,
+          "range": [
+            61292544,
+            61734912
+          ]
+        }
+      },
+      "copy": {
+        "totalCpuUs": {
+          "median": 116611,
+          "range": [
+            116551,
+            118707
+          ]
+        },
+        "peak_rss": {
+          "median": 63504384,
+          "range": [
+            63504384,
+            64225280
+          ]
+        },
+        "rssDrained": {
+          "median": 61259776,
+          "range": [
+            61259776,
+            61980672
+          ]
+        }
+      },
+      "branch": {
+        "totalCpuUs": {
+          "median": 116661,
+          "range": [
+            116598,
+            116689
+          ]
+        },
+        "peak_rss": {
+          "median": 63520768,
+          "range": [
+            63520768,
+            63520768
+          ]
+        },
+        "rssDrained": {
+          "median": 61292544,
+          "range": [
+            61292544,
+            61292544
+          ]
+        }
+      },
+      "keys": {
+        "totalCpuUs": {
+          "median": 116576,
+          "range": [
+            116518,
+            116925
+          ]
+        },
+        "peak_rss": {
+          "median": 63471616,
+          "range": [
+            63471616,
+            64192512
+          ]
+        },
+        "rssDrained": {
+          "median": 61292544,
+          "range": [
+            61292544,
+            62013440
+          ]
+        }
+      },
+      "candidate": {
+        "totalCpuUs": {
+          "median": 116636,
+          "range": [
+            116570,
+            116655
+          ]
+        },
+        "peak_rss": {
+          "median": 63455232,
+          "range": [
+            63455232,
+            63455232
+          ]
+        },
+        "rssDrained": {
+          "median": 61276160,
+          "range": [
+            61276160,
+            61276160
+          ]
+        }
+      }
+    },
+    "cpu_delta_percent": -0.990636910774767,
+    "peak_delta_mib": -0.09375
+  },
+  {
+    "fixture": "escaped_1m",
+    "operation": "parse",
+    "mode": "retain",
+    "iterations": 32,
+    "values": {
+      "fused": {
+        "totalCpuUs": {
+          "median": 37493,
+          "range": [
+            37468,
+            39430
+          ]
+        },
+        "peak_rss": {
+          "median": 52854784,
+          "range": [
+            52838400,
+            52854784
+          ]
+        },
+        "rssDrained": {
+          "median": 48971776,
+          "range": [
+            48955392,
+            48971776
+          ]
+        }
+      },
+      "previous": {
+        "totalCpuUs": {
+          "median": 37809,
+          "range": [
+            37806,
+            38053
+          ]
+        },
+        "peak_rss": {
+          "median": 52953088,
+          "range": [
+            52953088,
+            52953088
+          ]
+        },
+        "rssDrained": {
+          "median": 49053696,
+          "range": [
+            49053696,
+            49053696
+          ]
+        }
+      },
+      "copy": {
+        "totalCpuUs": {
+          "median": 37429,
+          "range": [
+            37414,
+            37570
+          ]
+        },
+        "peak_rss": {
+          "median": 52920320,
+          "range": [
+            52920320,
+            52920320
+          ]
+        },
+        "rssDrained": {
+          "median": 49037312,
+          "range": [
+            49037312,
+            49037312
+          ]
+        }
+      },
+      "branch": {
+        "totalCpuUs": {
+          "median": 37479,
+          "range": [
+            37359,
+            37511
+          ]
+        },
+        "peak_rss": {
+          "median": 52936704,
+          "range": [
+            52936704,
+            52936704
+          ]
+        },
+        "rssDrained": {
+          "median": 49070080,
+          "range": [
+            49070080,
+            49070080
+          ]
+        }
+      },
+      "keys": {
+        "totalCpuUs": {
+          "median": 37460,
+          "range": [
+            37393,
+            37493
+          ]
+        },
+        "peak_rss": {
+          "median": 52887552,
+          "range": [
+            52887552,
+            52887552
+          ]
+        },
+        "rssDrained": {
+          "median": 49070080,
+          "range": [
+            49070080,
+            49070080
+          ]
+        }
+      },
+      "candidate": {
+        "totalCpuUs": {
+          "median": 37396,
+          "range": [
+            37394,
+            37601
+          ]
+        },
+        "peak_rss": {
+          "median": 52871168,
+          "range": [
+            52871168,
+            52871168
+          ]
+        },
+        "rssDrained": {
+          "median": 49053696,
+          "range": [
+            49053696,
+            49053696
+          ]
+        }
+      }
+    },
+    "cpu_delta_percent": -1.0923325134227335,
+    "peak_delta_mib": -0.078125
+  },
+  {
+    "fixture": "records_object_20m",
+    "operation": "roundtrip",
+    "mode": "discard",
+    "iterations": 24,
+    "values": {
+      "fused": {
+        "totalCpuUs": {
+          "median": 3189471,
+          "range": [
+            3186343,
+            3189869
+          ]
+        },
+        "peak_rss": {
+          "median": 300728320,
+          "range": [
+            300728320,
+            300728320
+          ]
+        },
+        "rssDrained": {
+          "median": 300220416,
+          "range": [
+            300220416,
+            300220416
+          ]
+        }
+      },
+      "previous": {
+        "totalCpuUs": {
+          "median": 3312757,
+          "range": [
+            3311326,
+            3318185
+          ]
+        },
+        "peak_rss": {
+          "median": 300826624,
+          "range": [
+            300826624,
+            300843008
+          ]
+        },
+        "rssDrained": {
+          "median": 300302336,
+          "range": [
+            300302336,
+            300318720
+          ]
+        }
+      },
+      "copy": {
+        "totalCpuUs": {
+          "median": 3200186,
+          "range": [
+            3198408,
+            3202752
+          ]
+        },
+        "peak_rss": {
+          "median": 300793856,
+          "range": [
+            300728320,
+            300793856
+          ]
+        },
+        "rssDrained": {
+          "median": 300285952,
+          "range": [
+            300220416,
+            300285952
+          ]
+        }
+      },
+      "branch": {
+        "totalCpuUs": {
+          "median": 3201078,
+          "range": [
+            3200612,
+            3204278
+          ]
+        },
+        "peak_rss": {
+          "median": 300793856,
+          "range": [
+            300793856,
+            300793856
+          ]
+        },
+        "rssDrained": {
+          "median": 300302336,
+          "range": [
+            300302336,
+            300302336
+          ]
+        }
+      },
+      "keys": {
+        "totalCpuUs": {
+          "median": 3226694,
+          "range": [
+            3224683,
+            3234622
+          ]
+        },
+        "peak_rss": {
+          "median": 281460736,
+          "range": [
+            281460736,
+            281477120
+          ]
+        },
+        "rssDrained": {
+          "median": 281001984,
+          "range": [
+            281001984,
+            281018368
+          ]
+        }
+      },
+      "candidate": {
+        "totalCpuUs": {
+          "median": 3231172,
+          "range": [
+            3226852,
+            3233607
+          ]
+        },
+        "peak_rss": {
+          "median": 281444352,
+          "range": [
+            281444352,
+            281444352
+          ]
+        },
+        "rssDrained": {
+          "median": 280985600,
+          "range": [
+            280985600,
+            280985600
+          ]
+        }
+      }
+    },
+    "cpu_delta_percent": -2.4627523238197058,
+    "peak_delta_mib": -18.484375
+  },
+  {
+    "fixture": "small_record",
+    "operation": "stringify",
+    "mode": "discard",
+    "iterations": 100000,
+    "values": {
+      "fused": {
+        "totalCpuUs": {
+          "median": 36051,
+          "range": [
+            36006,
+            36122
+          ]
+        },
+        "peak_rss": {
+          "median": 29655040,
+          "range": [
+            29655040,
+            29736960
+          ]
+        },
+        "rssDrained": {
+          "median": 29048832,
+          "range": [
+            29048832,
+            29130752
+          ]
+        }
+      },
+      "previous": {
+        "totalCpuUs": {
+          "median": 37697,
+          "range": [
+            37620,
+            37785
+          ]
+        },
+        "peak_rss": {
+          "median": 29769728,
+          "range": [
+            29769728,
+            29769728
+          ]
+        },
+        "rssDrained": {
+          "median": 29147136,
+          "range": [
+            29147136,
+            29147136
+          ]
+        }
+      },
+      "copy": {
+        "totalCpuUs": {
+          "median": 33011,
+          "range": [
+            32937,
+            33025
+          ]
+        },
+        "peak_rss": {
+          "median": 29720576,
+          "range": [
+            29704192,
+            29802496
+          ]
+        },
+        "rssDrained": {
+          "median": 29114368,
+          "range": [
+            29097984,
+            29196288
+          ]
+        }
+      },
+      "branch": {
+        "totalCpuUs": {
+          "median": 33019,
+          "range": [
+            32868,
+            33030
+          ]
+        },
+        "peak_rss": {
+          "median": 29736960,
+          "range": [
+            29720576,
+            29802496
+          ]
+        },
+        "rssDrained": {
+          "median": 29147136,
+          "range": [
+            29130752,
+            29212672
+          ]
+        }
+      },
+      "keys": {
+        "totalCpuUs": {
+          "median": 33203,
+          "range": [
+            33142,
+            33204
+          ]
+        },
+        "peak_rss": {
+          "median": 29687808,
+          "range": [
+            29687808,
+            29687808
+          ]
+        },
+        "rssDrained": {
+          "median": 29130752,
+          "range": [
+            29130752,
+            29130752
+          ]
+        }
+      },
+      "candidate": {
+        "totalCpuUs": {
+          "median": 33104,
+          "range": [
+            33085,
+            33390
+          ]
+        },
+        "peak_rss": {
+          "median": 29671424,
+          "range": [
+            29671424,
+            29753344
+          ]
+        },
+        "rssDrained": {
+          "median": 29114368,
+          "range": [
+            29114368,
+            29196288
+          ]
+        }
+      }
+    },
+    "cpu_delta_percent": -12.183993421227157,
+    "peak_delta_mib": -0.09375
+  },
+  {
+    "fixture": "small_record",
+    "operation": "stringify",
+    "mode": "latest",
+    "iterations": 100000,
+    "values": {
+      "fused": {
+        "totalCpuUs": {
+          "median": 36290,
+          "range": [
+            36259,
+            36317
+          ]
+        },
+        "peak_rss": {
+          "median": 29671424,
+          "range": [
+            29655040,
+            29671424
+          ]
+        },
+        "rssDrained": {
+          "median": 29065216,
+          "range": [
+            29048832,
+            29065216
+          ]
+        }
+      },
+      "previous": {
+        "totalCpuUs": {
+          "median": 37734,
+          "range": [
+            37686,
+            37840
+          ]
+        },
+        "peak_rss": {
+          "median": 29769728,
+          "range": [
+            29753344,
+            29851648
+          ]
+        },
+        "rssDrained": {
+          "median": 29147136,
+          "range": [
+            29130752,
+            29229056
+          ]
+        }
+      },
+      "copy": {
+        "totalCpuUs": {
+          "median": 33170,
+          "range": [
+            33061,
+            33254
+          ]
+        },
+        "peak_rss": {
+          "median": 29720576,
+          "range": [
+            29704192,
+            29720576
+          ]
+        },
+        "rssDrained": {
+          "median": 29114368,
+          "range": [
+            29097984,
+            29114368
+          ]
+        }
+      },
+      "branch": {
+        "totalCpuUs": {
+          "median": 33003,
+          "range": [
+            32955,
+            33086
+          ]
+        },
+        "peak_rss": {
+          "median": 29736960,
+          "range": [
+            29736960,
+            29736960
+          ]
+        },
+        "rssDrained": {
+          "median": 29147136,
+          "range": [
+            29147136,
+            29147136
+          ]
+        }
+      },
+      "keys": {
+        "totalCpuUs": {
+          "median": 33205,
+          "range": [
+            33150,
+            33291
+          ]
+        },
+        "peak_rss": {
+          "median": 29687808,
+          "range": [
+            29687808,
+            29769728
+          ]
+        },
+        "rssDrained": {
+          "median": 29130752,
+          "range": [
+            29130752,
+            29212672
+          ]
+        }
+      },
+      "candidate": {
+        "totalCpuUs": {
+          "median": 33201,
+          "range": [
+            33197,
+            33417
+          ]
+        },
+        "peak_rss": {
+          "median": 29671424,
+          "range": [
+            29671424,
+            29753344
+          ]
+        },
+        "rssDrained": {
+          "median": 29114368,
+          "range": [
+            29114368,
+            29196288
+          ]
+        }
+      }
+    },
+    "cpu_delta_percent": -12.013038638893303,
+    "peak_delta_mib": -0.09375
+  },
+  {
+    "fixture": "small_record",
+    "operation": "stringify",
+    "mode": "retain",
+    "iterations": 100000,
+    "values": {
+      "fused": {
+        "totalCpuUs": {
+          "median": 42647,
+          "range": [
+            42606,
+            42757
+          ]
+        },
+        "peak_rss": {
+          "median": 33931264,
+          "range": [
+            33914880,
+            33931264
+          ]
+        },
+        "rssDrained": {
+          "median": 33325056,
+          "range": [
+            33308672,
+            33325056
+          ]
+        }
+      },
+      "previous": {
+        "totalCpuUs": {
+          "median": 44224,
+          "range": [
+            44220,
+            44412
+          ]
+        },
+        "peak_rss": {
+          "median": 34029568,
+          "range": [
+            34013184,
+            34045952
+          ]
+        },
+        "rssDrained": {
+          "median": 33423360,
+          "range": [
+            33406976,
+            33439744
+          ]
+        }
+      },
+      "copy": {
+        "totalCpuUs": {
+          "median": 39596,
+          "range": [
+            39462,
+            40070
+          ]
+        },
+        "peak_rss": {
+          "median": 34013184,
+          "range": [
+            33996800,
+            34029568
+          ]
+        },
+        "rssDrained": {
+          "median": 33406976,
+          "range": [
+            33390592,
+            33423360
+          ]
+        }
+      },
+      "branch": {
+        "totalCpuUs": {
+          "median": 39468,
+          "range": [
+            39343,
+            39526
+          ]
+        },
+        "peak_rss": {
+          "median": 34013184,
+          "range": [
+            33996800,
+            34013184
+          ]
+        },
+        "rssDrained": {
+          "median": 33423360,
+          "range": [
+            33406976,
+            33423360
+          ]
+        }
+      },
+      "keys": {
+        "totalCpuUs": {
+          "median": 39645,
+          "range": [
+            39643,
+            39824
+          ]
+        },
+        "peak_rss": {
+          "median": 33964032,
+          "range": [
+            33947648,
+            33996800
+          ]
+        },
+        "rssDrained": {
+          "median": 33423360,
+          "range": [
+            33406976,
+            33456128
+          ]
+        }
+      },
+      "candidate": {
+        "totalCpuUs": {
+          "median": 39571,
+          "range": [
+            39474,
+            39656
+          ]
+        },
+        "peak_rss": {
+          "median": 33947648,
+          "range": [
+            33931264,
+            33964032
+          ]
+        },
+        "rssDrained": {
+          "median": 33406976,
+          "range": [
+            33390592,
+            33423360
+          ]
+        }
+      }
+    },
+    "cpu_delta_percent": -10.521436324167876,
+    "peak_delta_mib": -0.078125
+  },
+  {
+    "fixture": "wide_1m",
+    "operation": "parse",
+    "mode": "discard",
+    "iterations": 100,
+    "values": {
+      "fused": {
+        "totalCpuUs": {
+          "median": 2453595,
+          "range": [
+            2451207,
+            2457739
+          ]
+        },
+        "peak_rss": {
+          "median": 509968384,
+          "range": [
+            509313024,
+            509968384
+          ]
+        },
+        "rssDrained": {
+          "median": 509280256,
+          "range": [
+            508624896,
+            509280256
+          ]
+        }
+      },
+      "previous": {
+        "totalCpuUs": {
+          "median": 2473197,
+          "range": [
+            2470516,
+            2475467
+          ]
+        },
+        "peak_rss": {
+          "median": 510050304,
+          "range": [
+            510050304,
+            510050304
+          ]
+        },
+        "rssDrained": {
+          "median": 509345792,
+          "range": [
+            509345792,
+            509345792
+          ]
+        }
+      },
+      "copy": {
+        "totalCpuUs": {
+          "median": 2108155,
+          "range": [
+            2107750,
+            2112687
+          ]
+        },
+        "peak_rss": {
+          "median": 509378560,
+          "range": [
+            509378560,
+            510033920
+          ]
+        },
+        "rssDrained": {
+          "median": 508690432,
+          "range": [
+            508690432,
+            509345792
+          ]
+        }
+      },
+      "branch": {
+        "totalCpuUs": {
+          "median": 2106918,
+          "range": [
+            2098681,
+            2113756
+          ]
+        },
+        "peak_rss": {
+          "median": 510033920,
+          "range": [
+            510033920,
+            510033920
+          ]
+        },
+        "rssDrained": {
+          "median": 509362176,
+          "range": [
+            509362176,
+            509362176
+          ]
+        }
+      },
+      "keys": {
+        "totalCpuUs": {
+          "median": 1153489,
+          "range": [
+            1152260,
+            1154794
+          ]
+        },
+        "peak_rss": {
+          "median": 571162624,
+          "range": [
+            571146240,
+            571162624
+          ]
+        },
+        "rssDrained": {
+          "median": 570523648,
+          "range": [
+            570507264,
+            570523648
+          ]
+        }
+      },
+      "candidate": {
+        "totalCpuUs": {
+          "median": 1151888,
+          "range": [
+            1143626,
+            1152263
+          ]
+        },
+        "peak_rss": {
+          "median": 571129856,
+          "range": [
+            571129856,
+            571146240
+          ]
+        },
+        "rssDrained": {
+          "median": 570490880,
+          "range": [
+            570490880,
+            570507264
+          ]
+        }
+      }
+    },
+    "cpu_delta_percent": -53.42514162842669,
+    "peak_delta_mib": 58.25
+  },
+  {
+    "fixture": "wide_1m",
+    "operation": "parse",
+    "mode": "latest",
+    "iterations": 100,
+    "values": {
+      "fused": {
+        "totalCpuUs": {
+          "median": 2489202,
+          "range": [
+            2486257,
+            2559231
+          ]
+        },
+        "peak_rss": {
+          "median": 511770624,
+          "range": [
+            511754240,
+            512868352
+          ]
+        },
+        "rssDrained": {
+          "median": 510902272,
+          "range": [
+            510885888,
+            512000000
+          ]
+        }
+      },
+      "previous": {
+        "totalCpuUs": {
+          "median": 2515606,
+          "range": [
+            2511781,
+            2516623
+          ]
+        },
+        "peak_rss": {
+          "median": 512966656,
+          "range": [
+            511852544,
+            512966656
+          ]
+        },
+        "rssDrained": {
+          "median": 512081920,
+          "range": [
+            510967808,
+            512081920
+          ]
+        }
+      },
+      "copy": {
+        "totalCpuUs": {
+          "median": 2135576,
+          "range": [
+            2133810,
+            2135592
+          ]
+        },
+        "peak_rss": {
+          "median": 511836160,
+          "range": [
+            511819776,
+            512933888
+          ]
+        },
+        "rssDrained": {
+          "median": 510967808,
+          "range": [
+            510951424,
+            512065536
+          ]
+        }
+      },
+      "branch": {
+        "totalCpuUs": {
+          "median": 2140469,
+          "range": [
+            2140342,
+            2142723
+          ]
+        },
+        "peak_rss": {
+          "median": 512950272,
+          "range": [
+            512933888,
+            512950272
+          ]
+        },
+        "rssDrained": {
+          "median": 512098304,
+          "range": [
+            512081920,
+            512098304
+          ]
+        }
+      },
+      "keys": {
+        "totalCpuUs": {
+          "median": 1152885,
+          "range": [
+            1149427,
+            1153332
+          ]
+        },
+        "peak_rss": {
+          "median": 571195392,
+          "range": [
+            571162624,
+            571195392
+          ]
+        },
+        "rssDrained": {
+          "median": 570507264,
+          "range": [
+            570474496,
+            570507264
+          ]
+        }
+      },
+      "candidate": {
+        "totalCpuUs": {
+          "median": 1144388,
+          "range": [
+            1142853,
+            1154762
+          ]
+        },
+        "peak_rss": {
+          "median": 571179008,
+          "range": [
+            571179008,
+            571195392
+          ]
+        },
+        "rssDrained": {
+          "median": 570490880,
+          "range": [
+            570490880,
+            570507264
+          ]
+        }
+      }
+    },
+    "cpu_delta_percent": -54.50845641169564,
+    "peak_delta_mib": 55.515625
+  },
+  {
+    "fixture": "wide_1m",
+    "operation": "parse",
+    "mode": "retain",
+    "iterations": 16,
+    "values": {
+      "fused": {
+        "totalCpuUs": {
+          "median": 228425,
+          "range": [
+            228237,
+            228775
+          ]
+        },
+        "peak_rss": {
+          "median": 116293632,
+          "range": [
+            116293632,
+            116293632
+          ]
+        },
+        "rssDrained": {
+          "median": 108920832,
+          "range": [
+            108920832,
+            108920832
+          ]
+        }
+      },
+      "previous": {
+        "totalCpuUs": {
+          "median": 232125,
+          "range": [
+            231874,
+            233957
+          ]
+        },
+        "peak_rss": {
+          "median": 116375552,
+          "range": [
+            116375552,
+            116391936
+          ]
+        },
+        "rssDrained": {
+          "median": 108986368,
+          "range": [
+            108986368,
+            109002752
+          ]
+        }
+      },
+      "copy": {
+        "totalCpuUs": {
+          "median": 171879,
+          "range": [
+            171823,
+            172047
+          ]
+        },
+        "peak_rss": {
+          "median": 116359168,
+          "range": [
+            116359168,
+            116359168
+          ]
+        },
+        "rssDrained": {
+          "median": 108986368,
+          "range": [
+            108986368,
+            108986368
+          ]
+        }
+      },
+      "branch": {
+        "totalCpuUs": {
+          "median": 172066,
+          "range": [
+            171929,
+            172207
+          ]
+        },
+        "peak_rss": {
+          "median": 116359168,
+          "range": [
+            116359168,
+            116375552
+          ]
+        },
+        "rssDrained": {
+          "median": 109002752,
+          "range": [
+            109002752,
+            109019136
+          ]
+        }
+      },
+      "keys": {
+        "totalCpuUs": {
+          "median": 197084,
+          "range": [
+            195772,
+            197523
+          ]
+        },
+        "peak_rss": {
+          "median": 126500864,
+          "range": [
+            126500864,
+            126500864
+          ]
+        },
+        "rssDrained": {
+          "median": 123977728,
+          "range": [
+            123977728,
+            123977728
+          ]
+        }
+      },
+      "candidate": {
+        "totalCpuUs": {
+          "median": 196745,
+          "range": [
+            195113,
+            197746
+          ]
+        },
+        "peak_rss": {
+          "median": 126484480,
+          "range": [
+            126451712,
+            126500864
+          ]
+        },
+        "rssDrained": {
+          "median": 123961344,
+          "range": [
+            123928576,
+            123977728
+          ]
+        }
+      }
+    },
+    "cpu_delta_percent": -15.241787829833065,
+    "peak_delta_mib": 9.640625
+  }
+]

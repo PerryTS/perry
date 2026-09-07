@@ -1,0 +1,20 @@
+gap-suite oracle    .node-version: 26.5.1
+compat-matrix pin   external-tools.json tools.node.version: 26.5.1
+
+restatements checked against a pin:
+  CLAUDE.md  [gap]  The oracle is Node `(\d+\.\d+\.\d+)`
+  CLAUDE.md  [matrix]  `tools\.node\.version`\s*[—-]\s*currently \*\*(\d+\.\d+\.\d+)\*\*
+  llms.txt  [matrix]  pinned Node oracle \((\d+\.\d+\.\d+)\)
+  test-parity/node-compat-matrix.baseline.json  [matrix]  "nodeVersion":\s*"(\d+\.\d+\.\d+)"
+
+registered exemptions (each must still match the tree):
+  .github/workflows/node-core-subset.yml = ${{ steps.node_core_version.outputs.version }}  (off-oracle)
+      Runs Node's OWN test corpus, which must be executed by the Node line it was taken from. Derived from test-compat/node-core/pinned-version.txt so the coupling is explicit instead of looking like drift (#6367).
+  test-compat/node-core/pinned-version.txt = v22.x  (off-oracle)
+      The ref of the vendored node-core test corpus. Bumping it means re-vendoring that corpus, not chasing the gap-suite oracle.
+  .github/workflows/release-packages.yml = 26  (major tracks oracle)
+      npm *publishing* toolchain (OIDC registry auth), never a test oracle. Pinned to a major literal rather than node-version-file so a gap-suite oracle bump cannot move the runtime that publishes releases.
+  .github/workflows/release-hono-server.yml = 26  (major tracks oracle)
+      npm *publishing* toolchain for @perryts/hono-server, never a test oracle. Major literal for the same reason as release-packages.yml.
+  benchmarks/public-baseline-config.json = v22.23.1  (off-oracle)
+      PUBLISHED PERFORMANCE BASELINE -- KNOWN STALE, AND NOT EDITABLE ALONE. This file is in public_baseline.HARNESS_PATHS, so its bytes feed the artifact's harness_fingerprint; and validate_public() separately compares this value against benchmarks/results/public-node-bun-v1.json's recorded runtime version. Changing it without regenerating turns the REQUIRED lint job red (measured: ci_public_baseline_check.py exits 2). The pin and the measurement are therefore atomic by design (#7282/#7958). To clear this exemption: on the quiet M1 mini (perry@perry-macos.local, the host recorded in the artifact), set toolchains.node to the oracle and run ./benchmarks/run_public_baseline.sh -- ~2h, and it enforces <=25% CPU active for 60 consecutive seconds before each of five components. Then delete this entry; leaving it stale fails this check.

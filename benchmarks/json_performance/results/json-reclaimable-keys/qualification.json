@@ -1,0 +1,17 @@
+{
+  "window": "launch52",
+  "observations": 118,
+  "all_row_no_regression_goal_complete": false,
+  "promoted_over_depth22": false,
+  "gc_scheduler_changed": false,
+  "allocation_ownership_changed": true,
+  "previous_correctness_regression": "keys45 typed key hint crossed entry GC; fixed by typed48",
+  "branch": {
+    "cpu_us_rows_at_or_below_both": 17,
+    "peak_rss_mib_rows_at_or_below_both": 32
+  },
+  "candidate": {
+    "cpu_us_rows_at_or_below_both": 17,
+    "peak_rss_mib_rows_at_or_below_both": 32
+  }
+}

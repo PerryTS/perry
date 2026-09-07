@@ -1,0 +1,203 @@
+[
+  {
+    "candidate": "branch",
+    "reference": "copy",
+    "slower_separated": [
+      {
+        "fixture": "empty_object",
+        "operation": "stringify",
+        "cpu_pct": 0.32595438797207166
+      },
+      {
+        "fixture": "escaped_1m",
+        "operation": "stringify",
+        "cpu_pct": 30.609988821709354
+      },
+      {
+        "fixture": "object_1k",
+        "operation": "parse",
+        "cpu_pct": 0.1570464058107124
+      },
+      {
+        "fixture": "small_record",
+        "operation": "parse",
+        "cpu_pct": 1.3232298541513865
+      }
+    ]
+  },
+  {
+    "candidate": "keys",
+    "reference": "branch",
+    "slower_separated": [
+      {
+        "fixture": "numbers_1m",
+        "operation": "stringify",
+        "cpu_pct": 2.181042743578998
+      },
+      {
+        "fixture": "object_1k",
+        "operation": "parse",
+        "cpu_pct": 1.0426510426510438
+      },
+      {
+        "fixture": "records_array_20m",
+        "operation": "parse",
+        "cpu_pct": 0.9687979335852193
+      },
+      {
+        "fixture": "records_object_1m",
+        "operation": "parse",
+        "cpu_pct": 1.3171009919566767
+      },
+      {
+        "fixture": "records_object_20m",
+        "operation": "parse",
+        "cpu_pct": 0.6212911704966295
+      },
+      {
+        "fixture": "records_object_8m",
+        "operation": "parse",
+        "cpu_pct": 0.9440527142285271
+      },
+      {
+        "fixture": "wide_1m",
+        "operation": "stringify",
+        "cpu_pct": 1.270172509738443
+      }
+    ]
+  },
+  {
+    "candidate": "candidate",
+    "reference": "keys",
+    "slower_separated": []
+  },
+  {
+    "candidate": "candidate",
+    "reference": "branch",
+    "slower_separated": [
+      {
+        "fixture": "numbers_1m",
+        "operation": "stringify",
+        "cpu_pct": 2.1904903297207623
+      },
+      {
+        "fixture": "object_1k",
+        "operation": "parse",
+        "cpu_pct": 1.089201089201075
+      },
+      {
+        "fixture": "records_array_20m",
+        "operation": "parse",
+        "cpu_pct": 0.9256369564206945
+      },
+      {
+        "fixture": "records_object_1m",
+        "operation": "parse",
+        "cpu_pct": 1.249407011390713
+      },
+      {
+        "fixture": "records_object_20m",
+        "operation": "parse",
+        "cpu_pct": 0.8290519999468948
+      },
+      {
+        "fixture": "records_object_8m",
+        "operation": "parse",
+        "cpu_pct": 0.6823290328540121
+      },
+      {
+        "fixture": "wide_1m",
+        "operation": "stringify",
+        "cpu_pct": 1.2785197551474559
+      }
+    ]
+  },
+  {
+    "candidate": "candidate",
+    "reference": "copy",
+    "slower_separated": [
+      {
+        "fixture": "empty_object",
+        "operation": "stringify",
+        "cpu_pct": 0.7922202674552903
+      },
+      {
+        "fixture": "numbers_1m",
+        "operation": "stringify",
+        "cpu_pct": 2.0720149907655916
+      },
+      {
+        "fixture": "object_1k",
+        "operation": "parse",
+        "cpu_pct": 1.2479580461744577
+      },
+      {
+        "fixture": "wide_1m",
+        "operation": "stringify",
+        "cpu_pct": 1.467394788852916
+      }
+    ]
+  },
+  {
+    "candidate": "candidate",
+    "reference": "fused",
+    "slower_separated": [
+      {
+        "fixture": "empty_object",
+        "operation": "stringify",
+        "cpu_pct": 0.7976599097640369
+      },
+      {
+        "fixture": "numbers_1m",
+        "operation": "stringify",
+        "cpu_pct": 2.420647535051712
+      },
+      {
+        "fixture": "records_array_20m",
+        "operation": "parse",
+        "cpu_pct": 1.1950891489900028
+      },
+      {
+        "fixture": "records_object_1m",
+        "operation": "parse",
+        "cpu_pct": 1.8214467583286487
+      },
+      {
+        "fixture": "records_object_20m",
+        "operation": "parse",
+        "cpu_pct": 1.0188134680224392
+      },
+      {
+        "fixture": "records_object_8m",
+        "operation": "parse",
+        "cpu_pct": 0.8388175140162657
+      },
+      {
+        "fixture": "small_record",
+        "operation": "parse",
+        "cpu_pct": 0.9917312120577559
+      },
+      {
+        "fixture": "wide_1m",
+        "operation": "stringify",
+        "cpu_pct": 1.356920489415847
+      }
+    ]
+  },
+  {
+    "candidate": "candidate",
+    "reference": "previous",
+    "slower_separated": [
+      {
+        "fixture": "small_record",
+        "operation": "parse",
+        "cpu_pct": 1.8089252623040508
+      },
+      {
+        "fixture": "wide_1m",
+        "operation": "stringify",
+        "cpu_pct": 0.6144754154550292
+      }
+    ]
+  }
+]

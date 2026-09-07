@@ -1,0 +1,26 @@
+{
+  "qualified": false,
+  "reason": "continuous monitor detected background activity",
+  "bad_observations": [
+    {
+      "load": [
+        2.00927734375,
+        1.91455078125,
+        1.6962890625
+      ],
+      "utc": "2026-09-07T16:40:47Z",
+      "monitor_exit": 0,
+      "external": [],
+      "xprotect_busy": [
+        "1169     1  35.2 /System/Library/PrivateFrameworks/XprotectFramework.framework/Versions/A/XPCServices/XprotectService.xpc/Contents/MacOS/XprotectService"
+      ]
+    }
+  ],
+  "observations": 119,
+  "counts": {
+    "recheck/verify.jsonl": 304,
+    "recheck/timing.jsonl": 1520,
+    "recheck/memory.jsonl": 720,
+    "lifetimes/raw.jsonl": 180
+  }
+}

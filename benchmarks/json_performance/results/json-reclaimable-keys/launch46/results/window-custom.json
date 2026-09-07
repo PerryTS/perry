@@ -1,0 +1,22 @@
+{
+  "owner": "json-perf-15085-1788794284",
+  "load_before": [
+    1.69287109375,
+    1.60595703125,
+    1.64892578125
+  ],
+  "started_utc": "2026-09-07T15:18:04Z",
+  "quiet_gate_passed": true,
+  "command": [
+    "python3",
+    "/Users/perry/json-key-lifetime-immutable-v46-20260907-codex/all.py"
+  ],
+  "competing_workloads_before": [],
+  "load_after": [
+    2.32861328125,
+    2.138671875,
+    1.90576171875
+  ],
+  "competing_workloads_after": [],
+  "finished_utc": "2026-09-07T15:26:43Z"
+}

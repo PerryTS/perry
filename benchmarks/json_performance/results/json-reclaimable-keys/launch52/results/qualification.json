@@ -1,0 +1,12 @@
+{
+  "qualified": true,
+  "reason": "entry and exit quiet gates passed; continuous monitor found no external workload or XProtect activity above 5%",
+  "bad_observations": [],
+  "observations": 118,
+  "counts": {
+    "recheck/verify.jsonl": 304,
+    "recheck/timing.jsonl": 1520,
+    "recheck/memory.jsonl": 720,
+    "lifetimes/raw.jsonl": 180
+  }
+}

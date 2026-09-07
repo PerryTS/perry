@@ -1,0 +1,22 @@
+{
+  "owner": "json-perf-26105-1788799814",
+  "load_before": [
+    1.38671875,
+    1.552734375,
+    1.58349609375
+  ],
+  "started_utc": "2026-09-07T16:50:14Z",
+  "quiet_gate_passed": true,
+  "command": [
+    "python3",
+    "/Users/perry/json-typed-key-recheck-v52-20260907-codex/all.py"
+  ],
+  "competing_workloads_before": [],
+  "load_after": [
+    1.97412109375,
+    1.8876953125,
+    1.75537109375
+  ],
+  "competing_workloads_after": [],
+  "finished_utc": "2026-09-07T17:00:08Z"
+}

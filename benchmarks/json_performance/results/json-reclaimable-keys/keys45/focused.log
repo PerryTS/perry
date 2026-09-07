@@ -1,0 +1,11 @@
+   Compiling perry-runtime v0.5.1520 (/Users/amlug/projects/perry/codex-json-gc-deferral/crates/perry-runtime)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 17.29s
+     Running unittests src/lib.rs (/Users/amlug/projects/perry/codex-json-batch-target/debug/build/perry-runtime/77f7d5e322249c1d/out/perry_runtime-77f7d5e322249c1d)
+
+running 3 tests
+test gc::tests::runtime_roots::json_key_lifetime::json_cached_keys_ring_and_shape_follow_actual_movement ... ok
+test gc::tests::runtime_roots::json_key_lifetime::json_discarded_wide_keys_release_storage_after_cache_eviction ... ok
+test gc::tests::runtime_roots::json_key_lifetime::json_retained_wide_object_keeps_evicted_keys_through_minor_and_full_gc ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 3296 filtered out; finished in 0.69s
+

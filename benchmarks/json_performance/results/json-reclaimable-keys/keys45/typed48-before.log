@@ -1,0 +1,32 @@
+   Compiling perry-runtime v0.5.1520 (/Users/amlug/projects/perry/codex-json-gc-deferral/crates/perry-runtime)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 20.36s
+     Running unittests src/lib.rs (/Users/amlug/projects/perry/codex-json-batch-target/debug/build/perry-runtime/77f7d5e322249c1d/out/perry_runtime-77f7d5e322249c1d)
+
+running 1 test
+test gc::tests::runtime_roots::json_key_lifetime::json_typed_hint_reads_cached_keys_after_the_entry_collection ... 
+[gc-fromspace-protect] FAULT: signal 10 at 0x200007b0044
+  This address is RETIRED FROM-SPACE. The evacuating minor moved or
+  freed the object here and the holder kept the pre-collection address.
+  block=0x200007b0000 +68 retired_bytes=104 retired_by_minor=#0
+  last-known object: user_ptr=0x200007b0040 obj_type=3 size=48
+  The faulting instruction IS the stale use. Backtrace:
+0   perry_runtime-77f7d5e322249c1d      0x00000001044cab28 _RNvNtNtCsaYa3sqDHSsR_13perry_runtime5arena10quarantine21emit_native_backtrace + 104
+1   perry_runtime-77f7d5e322249c1d      0x00000001044cb264 _RNvNtNtCsaYa3sqDHSsR_13perry_runtime5arena10quarantine23fromspace_fault_handler + 1224
+2   libsystem_platform.dylib            0x0000000189edb744 _sigtramp + 56
+3   perry_runtime-77f7d5e322249c1d      0x000000010579a100 _RNvMs_NtNtCsaYa3sqDHSsR_13perry_runtime4json6parserNtB4_12DirectParser19parse_object_shapedB8_ + 804
+4   perry_runtime-77f7d5e322249c1d      0x0000000105798d1c _RNvMs_NtNtCsaYa3sqDHSsR_13perry_runtime4json6parserNtB4_12DirectParser17parse_array_typedB8_ + 612
+5   perry_runtime-77f7d5e322249c1d      0x00000001044ebd7c js_json_parse_typed_array + 840
+6   perry_runtime-77f7d5e322249c1d      0x0000000105414708 _RNvNtNtNtNtCsaYa3sqDHSsR_13perry_runtime2gc5tests13runtime_roots17json_key_lifetimes_60json_typed_hint_reads_cached_keys_after_the_entry_collection + 628
+7   perry_runtime-77f7d5e322249c1d      0x000000010544f0ac _RNCNvNtNtNtNtCsaYa3sqDHSsR_13perry_runtime2gc5tests13runtime_roots17json_key_lifetime60json_typed_hint_reads_cached_keys_after_the_entry_collection0Bb_ + 24
+8   perry_runtime-77f7d5e322249c1d      0x0000000105b1cd68 _RNvYNCNvNtNtNtNtCsaYa3sqDHSsR_13perry_runtime2gc5tests13runtime_roots17json_key_lifetime60json_typed_hint_reads_cached_keys_after_the_entry_collection0INtNtNtCsjgY6bXVaRmE_4core3ops8function6FnOnceuE9call_onceBe_ + 20
+9   perry_runtime-77f7d5e322249c1d      0x0000000105e1f4d8 _RINvCsaVHax2VjNUs_4test28___rust_begin_short_backtraceINtNtCsjgY6bXVaRmE_4core6result6ResultuNtNtCsctvjasLqLe9_5alloc6string6StringEFEBQ_EB2_ + 24
+10  perry_runtime-77f7d5e322249c1d      0x0000000105e2aa4c _RNCNvCsaVHax2VjNUs_4test8run_test0B3_ + 940
+11  perry_runtime-77f7d5e322249c1d      0x0000000105e253ec _RINvNtNtCs8BpVhDwHqJW_3std3sys9backtrace28___rust_begin_short_backtraceNCNvCsaVHax2VjNUs_4test8run_tests_0uEB1b_ + 132
+12  perry_runtime-77f7d5e322249c1d      0x0000000105e2cf10 _RNSNvYNCINvNtNtCs8BpVhDwHqJW_3std6thread9lifecycle15spawn_uncheckedNCNvCsaVHax2VjNUs_4test8run_tests_0uEs_0INtNtNtCsjgY6bXVaRmE_4core3ops8function6FnOnceuE9call_once6vtableB17_ + 64
+13  perry_runtime-77f7d5e322249c1d      0x0000000106566cc8 _RNvNvMs0_NtNtNtCs8BpVhDwHqJW_3std3sys6thread4unixNtB7_6Thread3new12thread_start + 392
+14  libsystem_pthread.dylib             0x0000000189ed1c58 _pthread_start + 136
+15  libsystem_pthread.dylib             0x0000000189eccc1c thread_start + 8
+error: test failed, to rerun pass `-p perry-runtime --lib`
+
+Caused by:
+  process didn't exit successfully: `/Users/amlug/projects/perry/codex-json-batch-target/debug/build/perry-runtime/77f7d5e322249c1d/out/perry_runtime-77f7d5e322249c1d json_typed_hint_reads_cached_keys_after_the_entry_collection --test-threads=1` (signal: 10, SIGBUS: access to undefined memory)

@@ -1,0 +1,73 @@
+{
+  "workers": {
+    "fused": "1e1c512d8155aac2822c6adb21d2384160ba7eb66b112c3af0b76f29a996d78a",
+    "previous": "37ec092b46be4c773fc4f142c2c6a8e6fd2f1aa4af3b566fadff9cc1fb641c80",
+    "copy": "56f5e6849969b95ee4b21edab74c18d5d0b9599a1fd23e9319113a631a99479d",
+    "branch": "6e59f654f6988d6b5c45246273f6fa650413ed56cd226c5d43312ce8827c409a",
+    "candidate": "99276c5246ee95ebbc9d4fe721454d744f393ee255c96b16945780a36e2be8d7"
+  },
+  "cases": [
+    [
+      "small_record",
+      "stringify",
+      "discard",
+      100000
+    ],
+    [
+      "small_record",
+      "stringify",
+      "latest",
+      100000
+    ],
+    [
+      "small_record",
+      "stringify",
+      "retain",
+      100000
+    ],
+    [
+      "records_object_20m",
+      "roundtrip",
+      "discard",
+      24
+    ],
+    [
+      "escaped_1m",
+      "parse",
+      "discard",
+      100
+    ],
+    [
+      "escaped_1m",
+      "parse",
+      "latest",
+      100
+    ],
+    [
+      "escaped_1m",
+      "parse",
+      "retain",
+      32
+    ],
+    [
+      "wide_1m",
+      "parse",
+      "discard",
+      100
+    ],
+    [
+      "wide_1m",
+      "parse",
+      "latest",
+      100
+    ],
+    [
+      "wide_1m",
+      "parse",
+      "retain",
+      16
+    ]
+  ],
+  "repeats": 3,
+  "seed": 81134
+}

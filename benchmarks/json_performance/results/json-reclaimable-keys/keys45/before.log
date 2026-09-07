@@ -1,0 +1,24 @@
+   Compiling perry-runtime v0.5.1520 (/Users/amlug/projects/perry/codex-json-gc-deferral/crates/perry-runtime)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 21.40s
+     Running unittests src/lib.rs (/Users/amlug/projects/perry/codex-json-batch-target/debug/build/perry-runtime/77f7d5e322249c1d/out/perry_runtime-77f7d5e322249c1d)
+
+running 1 test
+test gc::tests::runtime_roots::json_key_lifetime::json_discarded_wide_keys_release_storage_after_cache_eviction ... FAILED
+
+failures:
+
+---- gc::tests::runtime_roots::json_key_lifetime::json_discarded_wide_keys_release_storage_after_cache_eviction stdout ----
+
+thread 'gc::tests::runtime_roots::json_key_lifetime::json_discarded_wide_keys_release_storage_after_cache_eviction' (95406917) panicked at crates/perry-runtime/src/gc/tests/runtime_roots/json_key_lifetime.rs:48:9:
+assertion `left == right` failed: discardable keys and their ordered array must not enter permanent storage
+  left: 2400016
+ right: 0
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    gc::tests::runtime_roots::json_key_lifetime::json_discarded_wide_keys_release_storage_after_cache_eviction
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3298 filtered out; finished in 0.15s
+
+error: test failed, to rerun pass `-p perry-runtime --lib`

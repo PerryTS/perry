@@ -1,0 +1,68 @@
+[
+  {
+    "arm": "copy41",
+    "worker_sha256": "843f5e63e43f25705d3ec0245e7c4b2a77c02389db37e19db6ae298dcec8ed12",
+    "diagnostic_only": true,
+    "process_exit": 0,
+    "command": [
+      "/Users/perry/json-launch-control-v25-20260907-codex/launch",
+      "/Users/perry/json-short-copy-runtime-v41-20260907-codex/.work/worker",
+      "/Users/perry/json-escape-runtime-v18-20260907-codex/active",
+      "/Users/perry/json-escape-runtime-v18-20260907-codex/.work/fixtures/wide_1m.json",
+      "parse",
+      "36",
+      "2"
+    ],
+    "cwd": "/Users/perry/json-escape-runtime-v18-20260907-codex",
+    "iterations": 36,
+    "warmup": 2,
+    "cycles": 6,
+    "full": 1,
+    "pointer_slots": 4212357,
+    "last_longlived_bytes": 88800904
+  },
+  {
+    "arm": "typed48",
+    "worker_sha256": "4b8d8163a6c7dbf8df43eb71380b939d3ee2d1d3ba2c9050a1971d0c84a59159",
+    "diagnostic_only": true,
+    "process_exit": 0,
+    "command": [
+      "/Users/perry/json-launch-control-v25-20260907-codex/launch",
+      "/Users/perry/json-typed-key-runtime-v48-20260907-codex/.work/worker",
+      "/Users/perry/json-escape-runtime-v18-20260907-codex/active",
+      "/Users/perry/json-escape-runtime-v18-20260907-codex/.work/fixtures/wide_1m.json",
+      "parse",
+      "36",
+      "2"
+    ],
+    "cwd": "/Users/perry/json-escape-runtime-v18-20260907-codex",
+    "iterations": 36,
+    "warmup": 2,
+    "cycles": 8,
+    "full": 0,
+    "pointer_slots": 720779,
+    "last_longlived_bytes": 312
+  },
+  {
+    "arm": "keys45",
+    "worker_sha256": "361d6058b28d1e946be72619b4021f20dc797cab914d4762b5eeeb20e32667a2",
+    "diagnostic_only": true,
+    "process_exit": 0,
+    "command": [
+      "/Users/perry/json-launch-control-v25-20260907-codex/launch",
+      "/Users/perry/json-key-lifetime-runtime-v45-20260907-codex/.work/worker",
+      "/Users/perry/json-escape-runtime-v18-20260907-codex/active",
+      "/Users/perry/json-escape-runtime-v18-20260907-codex/.work/fixtures/wide_1m.json",
+      "parse",
+      "36",
+      "2"
+    ],
+    "cwd": "/Users/perry/json-escape-runtime-v18-20260907-codex",
+    "iterations": 36,
+    "warmup": 2,
+    "cycles": 8,
+    "full": 0,
+    "pointer_slots": 720779,
+    "last_longlived_bytes": 312
+  }
+]

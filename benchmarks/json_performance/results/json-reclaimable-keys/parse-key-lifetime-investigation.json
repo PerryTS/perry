@@ -1,0 +1,126 @@
+{
+  "source": "profile43: diagnostic traces only; 36 timed parses plus 2 warmup; wide_1m has 50000 keys",
+  "finding": "Both generic parse-key strings and ordered-key arrays allocate in longlived unswept storage; owning cache eviction does not release backing storage. Per-parse longlived growth includes both strings and arrays.",
+  "events": [
+    {
+      "arm": "wide39",
+      "cycle": 0,
+      "kind": "minor",
+      "conservative_roots": 0,
+      "longlived_before": 50400648,
+      "longlived_after": 50400648,
+      "old_before": 9378320,
+      "old_after": 9932664
+    },
+    {
+      "arm": "wide39",
+      "cycle": 1,
+      "kind": "full",
+      "conservative_roots": 0,
+      "longlived_before": 57600696,
+      "longlived_after": 57600696,
+      "old_before": 11132736,
+      "old_after": 2332208
+    },
+    {
+      "arm": "wide39",
+      "cycle": 2,
+      "kind": "minor",
+      "conservative_roots": 0,
+      "longlived_before": 67200760,
+      "longlived_after": 67200760,
+      "old_before": 3532280,
+      "old_after": 3532280
+    },
+    {
+      "arm": "wide39",
+      "cycle": 3,
+      "kind": "minor",
+      "conservative_roots": 0,
+      "longlived_before": 74400808,
+      "longlived_after": 74400808,
+      "old_before": 4732352,
+      "old_after": 4732352
+    },
+    {
+      "arm": "wide39",
+      "cycle": 4,
+      "kind": "minor",
+      "conservative_roots": 0,
+      "longlived_before": 81600856,
+      "longlived_after": 81600856,
+      "old_before": 5932424,
+      "old_after": 5932424
+    },
+    {
+      "arm": "wide39",
+      "cycle": 5,
+      "kind": "minor",
+      "conservative_roots": 0,
+      "longlived_before": 88800904,
+      "longlived_after": 88800904,
+      "old_before": 7132496,
+      "old_after": 7132496
+    },
+    {
+      "arm": "copy41",
+      "cycle": 0,
+      "kind": "minor",
+      "conservative_roots": 0,
+      "longlived_before": 50400648,
+      "longlived_after": 50400648,
+      "old_before": 9378320,
+      "old_after": 9932664
+    },
+    {
+      "arm": "copy41",
+      "cycle": 1,
+      "kind": "full",
+      "conservative_roots": 0,
+      "longlived_before": 57600696,
+      "longlived_after": 57600696,
+      "old_before": 11132736,
+      "old_after": 2332208
+    },
+    {
+      "arm": "copy41",
+      "cycle": 2,
+      "kind": "minor",
+      "conservative_roots": 0,
+      "longlived_before": 67200760,
+      "longlived_after": 67200760,
+      "old_before": 3532280,
+      "old_after": 3532280
+    },
+    {
+      "arm": "copy41",
+      "cycle": 3,
+      "kind": "minor",
+      "conservative_roots": 0,
+      "longlived_before": 74400808,
+      "longlived_after": 74400808,
+      "old_before": 4732352,
+      "old_after": 4732352
+    },
+    {
+      "arm": "copy41",
+      "cycle": 4,
+      "kind": "minor",
+      "conservative_roots": 0,
+      "longlived_before": 81600856,
+      "longlived_after": 81600856,
+      "old_before": 5932424,
+      "old_after": 5932424
+    },
+    {
+      "arm": "copy41",
+      "cycle": 5,
+      "kind": "minor",
+      "conservative_roots": 0,
+      "longlived_before": 88800904,
+      "longlived_after": 88800904,
+      "old_before": 7132496,
+      "old_after": 7132496
+    }
+  ]
+}

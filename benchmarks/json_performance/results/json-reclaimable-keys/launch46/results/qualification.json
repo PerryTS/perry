@@ -1,0 +1,36 @@
+{
+  "qualified": false,
+  "reason": "continuous monitor detected background activity",
+  "bad_observations": [
+    {
+      "load": [
+        2.13525390625,
+        2.0439453125,
+        1.845703125
+      ],
+      "top_cpu": [
+        "19617 15088  19.8 /Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python",
+        "16212     1  11.8 /System/Library/ExtensionKit/Extensions/WallpaperAerialsExtension.appex/Contents/MacOS/WallpaperAerialsExtension",
+        "  167     1   8.4 /System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer",
+        " 1169     1   5.6 /System/Library/PrivateFrameworks/XprotectFramework.framework/Versions/A/XPCServices/XprotectService.xpc/Contents/MacOS/XprotectService",
+        "16213     1   2.5 /System/Library/Frameworks/VideoToolbox.framework/Versions/A/XPCServices/VTDecoderXPCService.xpc/Contents/MacOS/VTDecoderXPCService",
+        "  235     1   0.7 /usr/libexec/syspolicyd",
+        "  190     1   0.4 /usr/libexec/airportd",
+        "  311     1   0.3 /System/Library/DriverExtensions/com.apple.DriverKit-AppleBCMWLAN.dext/com.apple.DriverKit-AppleBCMWLAN"
+      ],
+      "utc": "2026-09-07T15:24:32Z",
+      "monitor_exit": 0,
+      "external": [],
+      "xprotect_busy": [
+        "1169     1   5.6 /System/Library/PrivateFrameworks/XprotectFramework.framework/Versions/A/XPCServices/XprotectService.xpc/Contents/MacOS/XprotectService"
+      ]
+    }
+  ],
+  "observations": 104,
+  "counts": {
+    "recheck/verify.jsonl": 266,
+    "recheck/timing.jsonl": 1330,
+    "recheck/memory.jsonl": 600,
+    "lifetimes/raw.jsonl": 150
+  }
+}
