@@ -13,15 +13,15 @@ use super::*;
 /// authoritative tables: a non-old owner, or an accessor whose getter or
 /// setter is non-old.
 pub(super) fn relevant_descriptor_owners(st: &crate::state::RuntimeState) -> Vec<usize> {
-    use crate::gc::young_log::{addr_is_minor_relevant, bits_are_minor_relevant};
+    use crate::gc::young_log::{addr_is_minor_collectible, bits_are_minor_relevant};
     let mut relevant = Vec::new();
     for &owner in st.descriptors.attr_keys_by_owner.borrow().keys() {
-        if addr_is_minor_relevant(owner) {
+        if addr_is_minor_collectible(owner) {
             relevant.push(owner);
         }
     }
     for &owner in st.descriptors.accessor_keys_by_owner.borrow().keys() {
-        if addr_is_minor_relevant(owner) {
+        if addr_is_minor_collectible(owner) {
             relevant.push(owner);
         }
     }
@@ -45,7 +45,7 @@ pub(super) fn scan_descriptor_roots_young(
 ) {
     let table_len = st.descriptors.attr_keys_by_owner.borrow().len() as u64
         + st.descriptors.accessor_keys_by_owner.borrow().len() as u64;
-    #[cfg(debug_assertions)]
+    #[cfg(any(debug_assertions, test))]
     {
         let relevant = relevant_descriptor_owners(st);
         st.descriptors

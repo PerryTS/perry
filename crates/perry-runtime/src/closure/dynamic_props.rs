@@ -104,6 +104,9 @@ crate::perry_thread_local! {
     /// thread's minors can move or free them. See `gc/young_log.rs`.
     static CLOSURE_YOUNG_OWNERS: std::cell::RefCell<crate::gc::young_log::YoungLog<usize>> =
         const { std::cell::RefCell::new(crate::gc::young_log::YoungLog::new()) };
+    #[cfg(test)]
+    static TEST_SUPPRESS_CLOSURE_YOUNG_NOTE: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
 }
 
 const CLOSURE_YOUNG_LOG_NAME: &str = "closure.dynamic_props";
@@ -112,10 +115,35 @@ const CLOSURE_YOUNG_LOG_NAME: &str = "closure.dynamic_props";
 /// when the owner or the value being stored can matter to a minor.
 #[inline]
 fn note_young_closure_owner(owner: usize, value_bits: u64) {
-    if crate::gc::young_log::addr_is_minor_relevant(owner)
+    if crate::gc::young_log::addr_is_minor_collectible(owner)
         || crate::gc::young_log::bits_are_minor_relevant(value_bits)
     {
+        #[cfg(test)]
+        if TEST_SUPPRESS_CLOSURE_YOUNG_NOTE.with(std::cell::Cell::get) {
+            return;
+        }
         CLOSURE_YOUNG_OWNERS.with(|log| log.borrow_mut().note(owner));
+    }
+}
+
+#[cfg(test)]
+mod young_log_sabotage_tests {
+    use super::*;
+
+    #[test]
+    fn closure_log_rederivation_rejects_a_suppressed_setter() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        test_clear_closure_side_tables();
+        let owner = crate::closure::js_closure_alloc(std::ptr::null(), 0) as usize;
+        TEST_SUPPRESS_CLOSURE_YOUNG_NOTE.with(|flag| flag.set(true));
+        closure_set_dynamic_prop(owner, "sabotage", 7.0);
+        TEST_SUPPRESS_CLOSURE_YOUNG_NOTE.with(|flag| flag.set(false));
+        let missed = std::panic::catch_unwind(debug_assert_closure_young_log_complete);
+        test_clear_closure_side_tables();
+        assert!(
+            missed.is_err(),
+            "sabotage: suppressing closure_set_dynamic_prop's note must trip completeness"
+        );
     }
 }
 
@@ -515,7 +543,7 @@ fn scan_closure_side_tables_young(visitor: &mut crate::gc::RuntimeRootVisitor<'_
             .unwrap_or(0);
         (props + prototypes + deleted) as u64
     };
-    #[cfg(debug_assertions)]
+    #[cfg(any(debug_assertions, test))]
     debug_assert_closure_young_log_complete();
     let mut logged = 0u64;
     let mut visited = 0u64;
@@ -550,13 +578,13 @@ fn scan_closure_side_tables_young(visitor: &mut crate::gc::RuntimeRootVisitor<'_
 
 /// Rule 2 of `gc/young_log.rs`: re-derive the relevant owners from the three
 /// tables and require the log to name each one.
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, test))]
 fn debug_assert_closure_young_log_complete() {
-    use crate::gc::young_log::{addr_is_minor_relevant, bits_are_minor_relevant};
+    use crate::gc::young_log::{addr_is_minor_collectible, bits_are_minor_relevant};
     let mut relevant = Vec::new();
     if let Ok(props) = get_closure_props().lock() {
         for (&owner, entry) in props.iter() {
-            if addr_is_minor_relevant(owner)
+            if addr_is_minor_collectible(owner)
                 || entry
                     .values
                     .values()
@@ -568,14 +596,14 @@ fn debug_assert_closure_young_log_complete() {
     }
     if let Ok(prototypes) = get_closure_prototypes().lock() {
         for (&owner, &proto_bits) in prototypes.iter() {
-            if addr_is_minor_relevant(owner) || bits_are_minor_relevant(proto_bits) {
+            if addr_is_minor_collectible(owner) || bits_are_minor_relevant(proto_bits) {
                 relevant.push(owner);
             }
         }
     }
     if let Ok(deleted) = get_closure_deleted_keys().lock() {
         for &owner in deleted.keys() {
-            if addr_is_minor_relevant(owner) {
+            if addr_is_minor_collectible(owner) {
                 relevant.push(owner);
             }
         }
@@ -593,7 +621,7 @@ fn scan_closure_owner(
     visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
     owner: usize,
 ) -> (usize, bool) {
-    use crate::gc::young_log::{addr_is_minor_relevant, bits_are_minor_relevant};
+    use crate::gc::young_log::{addr_is_minor_collectible, bits_are_minor_relevant};
     let mut relevant = false;
     let mut current_owner = owner;
 
@@ -657,7 +685,7 @@ fn scan_closure_owner(
         }
     }
 
-    relevant |= addr_is_minor_relevant(current_owner);
+    relevant |= addr_is_minor_collectible(current_owner);
     (current_owner, relevant)
 }
 

@@ -1,6 +1,8 @@
 use super::callable_export_arity_table::native_callable_export_arity;
 use super::*;
+mod builtin_closure_metadata;
 mod module_cjs;
+pub(crate) use builtin_closure_metadata::*;
 use module_cjs::attach_module_cjs_constructor_statics;
 pub(crate) use module_cjs::{
     module_builtin_modules_value, module_cjs_cache_value, module_cjs_extensions_value,
@@ -1481,107 +1483,6 @@ pub(crate) fn set_bound_native_closure_name(
         "name".to_string(),
         crate::object::PropertyAttrs::new(false, false, true),
     );
-}
-
-thread_local! {
-    /// Per-closure spec `.length` for built-in *prototype methods*. Those
-    /// methods all share one no-op closure thunk
-    /// (`global_this_builtin_noop_thunk`), so the func-ptr-keyed
-    /// the closure body registry can't give `Array.prototype.map.length === 1`
-    /// while `Array.prototype.slice.length === 2` — the last install would
-    /// win for every method. Recording the length per *closure instance* here
-    /// (keyed by the closure pointer, like the user-facing dynamic-prop table
-    /// but isolated from it so a user `fn.length = x` write can't perturb it)
-    /// lets the `.length` value-read and `getOwnPropertyDescriptor` agree with
-    /// the spec count. #3143.
-    static BUILTIN_CLOSURE_LENGTH: std::cell::RefCell<crate::fast_hash::PtrHashMap<usize, u32>> =
-        std::cell::RefCell::new(crate::fast_hash::new_ptr_hash_map());
-
-    /// Built-in method closures are callable but lack ECMAScript
-    /// `[[Construct]]`. Track the installed closure values so the dynamic
-    /// `new` / `Reflect.construct` paths can reject them without changing
-    /// ordinary user closures or global constructor closures.
-    static BUILTIN_CLOSURE_NON_CONSTRUCTABLE: std::cell::RefCell<crate::fast_hash::PtrHashSet<usize>> =
-        std::cell::RefCell::new(crate::fast_hash::new_ptr_hash_set());
-}
-
-/// Record the spec `.length` for a built-in prototype-method closure. See
-/// [`BUILTIN_CLOSURE_LENGTH`].
-pub(crate) fn set_builtin_closure_length(closure: usize, length: u32) {
-    BUILTIN_CLOSURE_LENGTH.with(|m| {
-        m.borrow_mut().insert(closure, length);
-    });
-}
-
-/// Look up the recorded spec `.length` for a built-in prototype-method
-/// closure, or `None` if this closure isn't one. See [`BUILTIN_CLOSURE_LENGTH`].
-pub(crate) fn builtin_closure_length(closure: usize) -> Option<u32> {
-    BUILTIN_CLOSURE_LENGTH.with(|m| m.borrow().get(&closure).copied())
-}
-
-pub(crate) fn set_builtin_closure_non_constructable(closure: usize) {
-    BUILTIN_CLOSURE_NON_CONSTRUCTABLE.with(|m| {
-        m.borrow_mut().insert(closure);
-    });
-}
-
-pub(crate) fn builtin_closure_is_non_constructable(closure: usize) -> bool {
-    BUILTIN_CLOSURE_NON_CONSTRUCTABLE.with(|m| m.borrow().contains(&closure))
-}
-
-/// Rekey per-instance built-in closure metadata after a moving collection.
-///
-/// The keys are identities, not roots: prototype/global objects keep live
-/// built-in closures reachable, while dead closures must remain collectable.
-/// `visit_metadata_usize_slot` therefore only follows forwarding records.
-pub(crate) fn scan_builtin_closure_metadata_roots_mut(
-    visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
-) {
-    BUILTIN_CLOSURE_LENGTH.with(|lengths| {
-        let mut lengths = lengths.borrow_mut();
-        let mut moved = Vec::new();
-        for old_owner in lengths.keys().copied() {
-            let mut new_owner = old_owner;
-            if visitor.visit_metadata_usize_slot(&mut new_owner) && new_owner != old_owner {
-                moved.push((old_owner, new_owner));
-            }
-        }
-        for (old_owner, new_owner) in moved {
-            if let Some(length) = lengths.remove(&old_owner) {
-                lengths.insert(new_owner, length);
-            }
-        }
-    });
-
-    BUILTIN_CLOSURE_NON_CONSTRUCTABLE.with(|non_constructable| {
-        let mut non_constructable = non_constructable.borrow_mut();
-        let mut moved = Vec::new();
-        for old_owner in non_constructable.iter().copied() {
-            let mut new_owner = old_owner;
-            if visitor.visit_metadata_usize_slot(&mut new_owner) && new_owner != old_owner {
-                moved.push((old_owner, new_owner));
-            }
-        }
-        for (old_owner, new_owner) in moved {
-            non_constructable.remove(&old_owner);
-            non_constructable.insert(new_owner);
-        }
-    });
-}
-
-/// Drop metadata for closures proved dead by the collector before their arena
-/// addresses can be recycled for unrelated objects.
-pub(crate) fn prune_dead_builtin_closure_metadata_owners(is_dead_owner: &dyn Fn(usize) -> bool) {
-    BUILTIN_CLOSURE_LENGTH.with(|lengths| {
-        lengths
-            .borrow_mut()
-            .retain(|owner, _| !is_dead_owner(*owner));
-    });
-    BUILTIN_CLOSURE_NON_CONSTRUCTABLE.with(|non_constructable| {
-        non_constructable
-            .borrow_mut()
-            .retain(|owner| !is_dead_owner(*owner));
-    });
 }
 
 pub(crate) fn builtin_closure_is_non_constructable_value(value: f64) -> bool {
