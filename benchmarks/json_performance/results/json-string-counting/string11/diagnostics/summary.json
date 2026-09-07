@@ -1,0 +1,26 @@
+[
+  {
+    "arm": "ship-checkpoint",
+    "cycles": 37,
+    "full": 28,
+    "pointer_slots": 36223424,
+    "worker_sha256": "244d045b247c4de720d33c7526f512654ae842f4b2dd9f1e7c1e34f241a068a1",
+    "fixture_sha256": "356c7f6f75c99f8664bb5e45a2fe7c37f06cbd74494da6943754676804304e80"
+  },
+  {
+    "arm": "string10",
+    "cycles": 37,
+    "full": 28,
+    "pointer_slots": 36216125,
+    "worker_sha256": "8554889d0fa5119f3fad54f28163c8819b5b0ad0d6a5126c3a14ddce83455cc0",
+    "fixture_sha256": "356c7f6f75c99f8664bb5e45a2fe7c37f06cbd74494da6943754676804304e80"
+  },
+  {
+    "arm": "string11",
+    "cycles": 37,
+    "full": 28,
+    "pointer_slots": 36216125,
+    "worker_sha256": "615b8022f3dce5581623a4b7343dabdcff10f3a799e2fcb68ee2ab7315994647",
+    "fixture_sha256": "356c7f6f75c99f8664bb5e45a2fe7c37f06cbd74494da6943754676804304e80"
+  }
+]

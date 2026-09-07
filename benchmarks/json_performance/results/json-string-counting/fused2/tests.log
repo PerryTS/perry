@@ -1,0 +1,9 @@
+   Compiling json-utf16-probe v0.0.0 (/Users/amlug/projects/perry/codex-json-fastpaths-artifacts/string10/fused)
+    Finished `release` profile [optimized] target(s) in 2.29s
+     Running unittests main.rs (/Users/amlug/projects/perry/codex-json-fastpaths-artifacts/string10/fused/target/release/build/json-utf16-probe/5424bae45132308c/out/probe-5424bae45132308c)
+
+running 1 test
+test unicode_and_arbitrary_bytes ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.00s
+

@@ -1,0 +1,9 @@
+{
+  "acceptance": 40,
+  "all-gc-stress": 38,
+  "extended-validation": 3,
+  "forced-tape-validation": 3,
+  "no-json-growth-validation": 3,
+  "lifetime-fixture-validation": 9,
+  "root-record-validation": 9
+}

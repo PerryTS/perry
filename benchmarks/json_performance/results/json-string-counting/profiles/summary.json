@@ -1,0 +1,54 @@
+[
+  {
+    "arm": "iteration16",
+    "fixture": "unicode_1m",
+    "worker_sha256": "a3b94d96acb00bdc336b867999272b2eaac61b1e00df564aec6f8c896c06ee18",
+    "fixture_sha256": "b58eea42a50190b7675886030ef6875b25bb0a6d50632d9cbc5a918ea4ad9bd9",
+    "trace_cycles": 40,
+    "trace_full": 40,
+    "trace_pointer_slots": 237384,
+    "sample_exit": 0,
+    "sample_stdout": "",
+    "sample_stderr": "Sampling process 50076 for 3 seconds with 1 millisecond of run time between samples\nSampling completed, processing symbols...\nSample analysis of process 50076 written to file /Users/perry/json-string-profile-v10-20260907-codex/results/iteration16-unicode_1m.sample.txt\n",
+    "worker_terminated_after_sample": -15
+  },
+  {
+    "arm": "iteration16",
+    "fixture": "escaped_1m",
+    "worker_sha256": "a3b94d96acb00bdc336b867999272b2eaac61b1e00df564aec6f8c896c06ee18",
+    "fixture_sha256": "52f2e30ddc036b9c0600a1ab088c7d00f6e40558540efa1f9315a0579bec8f56",
+    "trace_cycles": 1,
+    "trace_full": 1,
+    "trace_pointer_slots": 20777,
+    "sample_exit": 0,
+    "sample_stdout": "",
+    "sample_stderr": "Sampling process 50079 for 3 seconds with 1 millisecond of run time between samples\nSampling completed, processing symbols...\nSample analysis of process 50079 written to file /Users/perry/json-string-profile-v10-20260907-codex/results/iteration16-escaped_1m.sample.txt\n",
+    "worker_terminated_after_sample": -15
+  },
+  {
+    "arm": "release1",
+    "fixture": "unicode_1m",
+    "worker_sha256": "6a376de244705cbe8485063d254973e3e99582b95e8b290ddb370deac3ebd835",
+    "fixture_sha256": "b58eea42a50190b7675886030ef6875b25bb0a6d50632d9cbc5a918ea4ad9bd9",
+    "trace_cycles": 40,
+    "trace_full": 40,
+    "trace_pointer_slots": 271783,
+    "sample_exit": 0,
+    "sample_stdout": "",
+    "sample_stderr": "Sampling process 50082 for 3 seconds with 1 millisecond of run time between samples\nSampling completed, processing symbols...\nSample analysis of process 50082 written to file /Users/perry/json-string-profile-v10-20260907-codex/results/release1-unicode_1m.sample.txt\n",
+    "worker_terminated_after_sample": -15
+  },
+  {
+    "arm": "release1",
+    "fixture": "escaped_1m",
+    "worker_sha256": "6a376de244705cbe8485063d254973e3e99582b95e8b290ddb370deac3ebd835",
+    "fixture_sha256": "52f2e30ddc036b9c0600a1ab088c7d00f6e40558540efa1f9315a0579bec8f56",
+    "trace_cycles": 1,
+    "trace_full": 1,
+    "trace_pointer_slots": 20777,
+    "sample_exit": 0,
+    "sample_stdout": "",
+    "sample_stderr": "Sampling process 50085 for 3 seconds with 1 millisecond of run time between samples\nSampling completed, processing symbols...\nSample analysis of process 50085 written to file /Users/perry/json-string-profile-v10-20260907-codex/results/release1-escaped_1m.sample.txt\n",
+    "worker_terminated_after_sample": -15
+  }
+]

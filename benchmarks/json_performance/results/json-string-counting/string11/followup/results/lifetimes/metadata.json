@@ -1,0 +1,34 @@
+{
+  "workers": {
+    "checkpoint": "244d045b247c4de720d33c7526f512654ae842f4b2dd9f1e7c1e34f241a068a1",
+    "candidate": "615b8022f3dce5581623a4b7343dabdcff10f3a799e2fcb68ee2ab7315994647"
+  },
+  "cases": [
+    [
+      "records_object_20m",
+      "roundtrip",
+      "discard",
+      24
+    ],
+    [
+      "records_object_20m",
+      "parse",
+      "retain",
+      4
+    ],
+    [
+      "records_object_20m",
+      "parse",
+      "latest",
+      24
+    ],
+    [
+      "records_object_20m",
+      "stringify",
+      "retain",
+      8
+    ]
+  ],
+  "repeats": 5,
+  "seed": 81124
+}

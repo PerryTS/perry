@@ -1,0 +1,482 @@
+[
+  {
+    "fixture": "escaped_1m",
+    "rep": 0,
+    "arm": "before",
+    "wall_ns": 391858875,
+    "checksum": 44551890022800,
+    "stderr": "        0.94 real         0.39 user         0.00 sys\n             2588672  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                 323  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                   7  involuntary context switches\n          4406770477  instructions retired\n          1123460242  cycles elapsed\n             1966848  peak memory footprint\n"
+  },
+  {
+    "fixture": "escaped_1m",
+    "rep": 0,
+    "arm": "after",
+    "wall_ns": 1079584750,
+    "checksum": 44551890022800,
+    "stderr": "        1.08 real         1.07 user         0.00 sys\n             2588672  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                 323  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                   9  involuntary context switches\n          3884669389  instructions retired\n          3463377999  cycles elapsed\n             1966848  peak memory footprint\n"
+  },
+  {
+    "fixture": "escaped_1m",
+    "rep": 0,
+    "arm": "after",
+    "wall_ns": 1067816000,
+    "checksum": 44551890022800,
+    "stderr": "        1.06 real         1.06 user         0.00 sys\n             2588672  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                 323  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                   4  involuntary context switches\n          3884599727  instructions retired\n          3425355759  cycles elapsed\n             1966848  peak memory footprint\n"
+  },
+  {
+    "fixture": "escaped_1m",
+    "rep": 0,
+    "arm": "before",
+    "wall_ns": 345593625,
+    "checksum": 44551890022800,
+    "stderr": "        0.34 real         0.34 user         0.00 sys\n             2588672  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                 323  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                   3  involuntary context switches\n          4405872251  instructions retired\n          1112342729  cycles elapsed\n             1966848  peak memory footprint\n"
+  },
+  {
+    "fixture": "escaped_1m",
+    "rep": 1,
+    "arm": "before",
+    "wall_ns": 345374000,
+    "checksum": 44551890022800,
+    "stderr": "        0.34 real         0.34 user         0.00 sys\n             2588672  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                 323  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                   2  involuntary context switches\n          4405830888  instructions retired\n          1111912776  cycles elapsed\n             1966848  peak memory footprint\n"
+  },
+  {
+    "fixture": "escaped_1m",
+    "rep": 1,
+    "arm": "after",
+    "wall_ns": 1068114917,
+    "checksum": 44551890022800,
+    "stderr": "        1.07 real         1.06 user         0.00 sys\n             2588672  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                 323  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                   3  involuntary context switches\n          3884644744  instructions retired\n          3426626099  cycles elapsed\n             1966848  peak memory footprint\n"
+  },
+  {
+    "fixture": "escaped_1m",
+    "rep": 1,
+    "arm": "after",
+    "wall_ns": 1068679667,
+    "checksum": 44551890022800,
+    "stderr": "        1.07 real         1.06 user         0.00 sys\n             2588672  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                 323  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                   3  involuntary context switches\n          3884614937  instructions retired\n          3428673693  cycles elapsed\n             1966848  peak memory footprint\n"
+  },
+  {
+    "fixture": "escaped_1m",
+    "rep": 1,
+    "arm": "before",
+    "wall_ns": 345432417,
+    "checksum": 44551890022800,
+    "stderr": "        0.34 real         0.34 user         0.00 sys\n             2588672  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                 323  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                   3  involuntary context switches\n          4405806132  instructions retired\n          1111808457  cycles elapsed\n             1966848  peak memory footprint\n"
+  },
+  {
+    "fixture": "escaped_1m",
+    "rep": 2,
+    "arm": "before",
+    "wall_ns": 345492917,
+    "checksum": 44551890022800,
+    "stderr": "        0.34 real         0.34 user         0.00 sys\n             2588672  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                 323  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                   4  involuntary context switches\n          4405844860  instructions retired\n          1111807212  cycles elapsed\n             1966848  peak memory footprint\n"
+  },
+  {
+    "fixture": "escaped_1m",
+    "rep": 2,
+    "arm": "after",
+    "wall_ns": 1067930292,
+    "checksum": 44551890022800,
+    "stderr": "        1.07 real         1.06 user         0.00 sys\n             2588672  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                 323  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                   2  involuntary context switches\n          3884540157  instructions retired\n          3426218680  cycles elapsed\n             1966848  peak memory footprint\n"
+  },
+  {
+    "fixture": "escaped_1m",
+    "rep": 2,
+    "arm": "after",
+    "wall_ns": 1073819209,
+    "checksum": 44551890022800,
+    "stderr": "        1.07 real         1.07 user         0.00 sys\n             2588672  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                 323  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                   3  involuntary context switches\n          3884555728  instructions retired\n          3445153955  cycles elapsed\n             1966848  peak memory footprint\n"
+  },
+  {
+    "fixture": "escaped_1m",
+    "rep": 2,
+    "arm": "before",
+    "wall_ns": 345596584,
+    "checksum": 44551890022800,
+    "stderr": "        0.34 real         0.34 user         0.00 sys\n             2588672  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                 323  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                   2  involuntary context switches\n          4405876435  instructions retired\n          1112569693  cycles elapsed\n             1966848  peak memory footprint\n"
+  },
+  {
+    "fixture": "escaped_1m",
+    "rep": 3,
+    "arm": "before",
+    "wall_ns": 345455542,
+    "checksum": 44551890022800,
+    "stderr": "        0.34 real         0.34 user         0.00 sys\n             2588672  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                 323  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                   3  involuntary context switches\n          4405804280  instructions retired\n          1111572201  cycles elapsed\n             1966848  peak memory footprint\n"
+  },
+  {
+    "fixture": "escaped_1m",
+    "rep": 3,
+    "arm": "after",
+    "wall_ns": 1067107416,
+    "checksum": 44551890022800,
+    "stderr": "        1.06 real         1.06 user         0.00 sys\n             2588672  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                 323  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                   4  involuntary context switches\n          3884513108  instructions retired\n          3423269932  cycles elapsed\n             1966848  peak memory footprint\n"
+  },
+  {
+    "fixture": "escaped_1m",
+    "rep": 3,
+    "arm": "after",
+    "wall_ns": 1067807375,
+    "checksum": 44551890022800,
+    "stderr": "        1.06 real         1.06 user         0.00 sys\n             2588672  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                 323  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                   2  involuntary context switches\n          3884514480  instructions retired\n          3425818095  cycles elapsed\n             1966848  peak memory footprint\n"
+  },
+  {
+    "fixture": "escaped_1m",
+    "rep": 3,
+    "arm": "before",
+    "wall_ns": 345757208,
+    "checksum": 44551890022800,
+    "stderr": "        0.34 real         0.34 user         0.00 sys\n             2588672  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                 323  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                   2  involuntary context switches\n          4405934614  instructions retired\n          1112523974  cycles elapsed\n             1966848  peak memory footprint\n"
+  },
+  {
+    "fixture": "escaped_1m",
+    "rep": 4,
+    "arm": "before",
+    "wall_ns": 345496792,
+    "checksum": 44551890022800,
+    "stderr": "        0.34 real         0.34 user         0.00 sys\n             2588672  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                 323  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                   2  involuntary context switches\n          4405877894  instructions retired\n          1112152990  cycles elapsed\n             1966848  peak memory footprint\n"
+  },
+  {
+    "fixture": "escaped_1m",
+    "rep": 4,
+    "arm": "after",
+    "wall_ns": 1067621750,
+    "checksum": 44551890022800,
+    "stderr": "        1.06 real         1.06 user         0.00 sys\n             2588672  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                 323  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                   2  involuntary context switches\n          3884585080  instructions retired\n          3424835254  cycles elapsed\n             1966848  peak memory footprint\n"
+  },
+  {
+    "fixture": "escaped_1m",
+    "rep": 4,
+    "arm": "after",
+    "wall_ns": 1067931750,
+    "checksum": 44551890022800,
+    "stderr": "        1.07 real         1.06 user         0.00 sys\n             2588672  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                 323  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                   2  involuntary context switches\n          3884689207  instructions retired\n          3426201639  cycles elapsed\n             1966848  peak memory footprint\n"
+  },
+  {
+    "fixture": "escaped_1m",
+    "rep": 4,
+    "arm": "before",
+    "wall_ns": 345513709,
+    "checksum": 44551890022800,
+    "stderr": "        0.34 real         0.34 user         0.00 sys\n             2588672  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                 323  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                   2  involuntary context switches\n          4405863012  instructions retired\n          1111432600  cycles elapsed\n             1966848  peak memory footprint\n"
+  },
+  {
+    "fixture": "unicode_1m",
+    "rep": 0,
+    "arm": "before",
+    "wall_ns": 9510167,
+    "checksum": 353622800,
+    "stderr": "        0.01 real         0.01 user         0.00 sys\n             2473984  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                 316  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                   2  involuntary context switches\n           256626735  instructions retired\n            35843498  cycles elapsed\n             1852160  peak memory footprint\n"
+  },
+  {
+    "fixture": "unicode_1m",
+    "rep": 0,
+    "arm": "after",
+    "wall_ns": 9520416,
+    "checksum": 353622800,
+    "stderr": "        0.01 real         0.01 user         0.00 sys\n             2473984  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                 316  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                   2  involuntary context switches\n           256543140  instructions retired\n            35304100  cycles elapsed\n             1852160  peak memory footprint\n"
+  },
+  {
+    "fixture": "unicode_1m",
+    "rep": 0,
+    "arm": "after",
+    "wall_ns": 9520583,
+    "checksum": 353622800,
+    "stderr": "        0.01 real         0.01 user         0.00 sys\n             2473984  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                 316  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                   2  involuntary context switches\n           256512721  instructions retired\n            35326808  cycles elapsed\n             1852160  peak memory footprint\n"
+  },
+  {
+    "fixture": "unicode_1m",
+    "rep": 0,
+    "arm": "before",
+    "wall_ns": 9516625,
+    "checksum": 353622800,
+    "stderr": "        0.01 real         0.01 user         0.00 sys\n             2473984  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                 316  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                   2  involuntary context switches\n           256520874  instructions retired\n            35177084  cycles elapsed\n             1852160  peak memory footprint\n"
+  },
+  {
+    "fixture": "unicode_1m",
+    "rep": 1,
+    "arm": "before",
+    "wall_ns": 9595291,
+    "checksum": 353622800,
+    "stderr": "        0.01 real         0.01 user         0.00 sys\n             2473984  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                 316  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                   2  involuntary context switches\n           256554756  instructions retired\n            35445713  cycles elapsed\n             1852160  peak memory footprint\n"
+  },
+  {
+    "fixture": "unicode_1m",
+    "rep": 1,
+    "arm": "after",
+    "wall_ns": 9549250,
+    "checksum": 353622800,
+    "stderr": "        0.01 real         0.01 user         0.00 sys\n             2473984  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                 316  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                   2  involuntary context switches\n           256528996  instructions retired\n            35225055  cycles elapsed\n             1852160  peak memory footprint\n"
+  },
+  {
+    "fixture": "unicode_1m",
+    "rep": 1,
+    "arm": "after",
+    "wall_ns": 9524292,
+    "checksum": 353622800,
+    "stderr": "        0.01 real         0.01 user         0.00 sys\n             2473984  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                 316  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                   2  involuntary context switches\n           256511444  instructions retired\n            35211826  cycles elapsed\n             1852160  peak memory footprint\n"
+  },
+  {
+    "fixture": "unicode_1m",
+    "rep": 1,
+    "arm": "before",
+    "wall_ns": 9505750,
+    "checksum": 353622800,
+    "stderr": "        0.01 real         0.01 user         0.00 sys\n             2473984  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                 316  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                   2  involuntary context switches\n           256521212  instructions retired\n            35297860  cycles elapsed\n             1852160  peak memory footprint\n"
+  },
+  {
+    "fixture": "unicode_1m",
+    "rep": 2,
+    "arm": "before",
+    "wall_ns": 9522208,
+    "checksum": 353622800,
+    "stderr": "        0.01 real         0.01 user         0.00 sys\n             2473984  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                 316  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                   2  involuntary context switches\n           256530073  instructions retired\n            35236274  cycles elapsed\n             1852160  peak memory footprint\n"
+  },
+  {
+    "fixture": "unicode_1m",
+    "rep": 2,
+    "arm": "after",
+    "wall_ns": 9582208,
+    "checksum": 353622800,
+    "stderr": "        0.01 real         0.01 user         0.00 sys\n             2473984  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                 316  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                   2  involuntary context switches\n           256540463  instructions retired\n            35358613  cycles elapsed\n             1852160  peak memory footprint\n"
+  },
+  {
+    "fixture": "unicode_1m",
+    "rep": 2,
+    "arm": "after",
+    "wall_ns": 9521250,
+    "checksum": 353622800,
+    "stderr": "        0.01 real         0.01 user         0.00 sys\n             2473984  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                 316  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                   2  involuntary context switches\n           256509174  instructions retired\n            35207472  cycles elapsed\n             1852160  peak memory footprint\n"
+  },
+  {
+    "fixture": "unicode_1m",
+    "rep": 2,
+    "arm": "before",
+    "wall_ns": 9505917,
+    "checksum": 353622800,
+    "stderr": "        0.01 real         0.01 user         0.00 sys\n             2473984  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                 316  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                   2  involuntary context switches\n           256521130  instructions retired\n            35134360  cycles elapsed\n             1852160  peak memory footprint\n"
+  },
+  {
+    "fixture": "unicode_1m",
+    "rep": 3,
+    "arm": "before",
+    "wall_ns": 9536583,
+    "checksum": 353622800,
+    "stderr": "        0.01 real         0.01 user         0.00 sys\n             2473984  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                 316  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                   2  involuntary context switches\n           256535376  instructions retired\n            35372565  cycles elapsed\n             1852160  peak memory footprint\n"
+  },
+  {
+    "fixture": "unicode_1m",
+    "rep": 3,
+    "arm": "after",
+    "wall_ns": 9523541,
+    "checksum": 353622800,
+    "stderr": "        0.01 real         0.01 user         0.00 sys\n             2473984  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                 316  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                   2  involuntary context switches\n           256518358  instructions retired\n            35167633  cycles elapsed\n             1852160  peak memory footprint\n"
+  },
+  {
+    "fixture": "unicode_1m",
+    "rep": 3,
+    "arm": "after",
+    "wall_ns": 9565417,
+    "checksum": 353622800,
+    "stderr": "        0.01 real         0.01 user         0.00 sys\n             2473984  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                 316  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                   2  involuntary context switches\n           256525476  instructions retired\n            35321829  cycles elapsed\n             1852160  peak memory footprint\n"
+  },
+  {
+    "fixture": "unicode_1m",
+    "rep": 3,
+    "arm": "before",
+    "wall_ns": 9518500,
+    "checksum": 353622800,
+    "stderr": "        0.01 real         0.01 user         0.00 sys\n             2473984  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                 316  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                   2  involuntary context switches\n           256523449  instructions retired\n            35137883  cycles elapsed\n             1852160  peak memory footprint\n"
+  },
+  {
+    "fixture": "unicode_1m",
+    "rep": 4,
+    "arm": "before",
+    "wall_ns": 9505667,
+    "checksum": 353622800,
+    "stderr": "        0.01 real         0.01 user         0.00 sys\n             2473984  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                 316  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                   2  involuntary context switches\n           256525497  instructions retired\n            35165573  cycles elapsed\n             1852160  peak memory footprint\n"
+  },
+  {
+    "fixture": "unicode_1m",
+    "rep": 4,
+    "arm": "after",
+    "wall_ns": 9531208,
+    "checksum": 353622800,
+    "stderr": "        0.01 real         0.01 user         0.00 sys\n             2473984  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                 316  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                   2  involuntary context switches\n           256526661  instructions retired\n            35303331  cycles elapsed\n             1852160  peak memory footprint\n"
+  },
+  {
+    "fixture": "unicode_1m",
+    "rep": 4,
+    "arm": "after",
+    "wall_ns": 9543167,
+    "checksum": 353622800,
+    "stderr": "        0.01 real         0.01 user         0.00 sys\n             2473984  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                 316  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                   2  involuntary context switches\n           256523149  instructions retired\n            35339029  cycles elapsed\n             1852160  peak memory footprint\n"
+  },
+  {
+    "fixture": "unicode_1m",
+    "rep": 4,
+    "arm": "before",
+    "wall_ns": 9520459,
+    "checksum": 353622800,
+    "stderr": "        0.01 real         0.01 user         0.00 sys\n             2473984  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                 316  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                   2  involuntary context switches\n           256524434  instructions retired\n            35107909  cycles elapsed\n             1852160  peak memory footprint\n"
+  },
+  {
+    "fixture": "records_object_1m",
+    "rep": 0,
+    "arm": "before",
+    "wall_ns": 258668250,
+    "checksum": 26879233597600,
+    "stderr": "        0.26 real         0.25 user         0.00 sys\n             2490368  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                 317  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                   3  involuntary context switches\n          3214370570  instructions retired\n           833259783  cycles elapsed\n             1868544  peak memory footprint\n"
+  },
+  {
+    "fixture": "records_object_1m",
+    "rep": 0,
+    "arm": "after",
+    "wall_ns": 721977042,
+    "checksum": 26879233597600,
+    "stderr": "        0.72 real         0.72 user         0.00 sys\n             2490368  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                 317  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                   3  involuntary context switches\n          2661901546  instructions retired\n          2317711037  cycles elapsed\n             1868544  peak memory footprint\n"
+  },
+  {
+    "fixture": "records_object_1m",
+    "rep": 0,
+    "arm": "after",
+    "wall_ns": 720871166,
+    "checksum": 26879233597600,
+    "stderr": "        0.72 real         0.72 user         0.00 sys\n             2490368  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                 317  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                   3  involuntary context switches\n          2661970628  instructions retired\n          2313789731  cycles elapsed\n             1868544  peak memory footprint\n"
+  },
+  {
+    "fixture": "records_object_1m",
+    "rep": 0,
+    "arm": "before",
+    "wall_ns": 258750000,
+    "checksum": 26879233597600,
+    "stderr": "        0.26 real         0.25 user         0.00 sys\n             2490368  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                 317  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                   2  involuntary context switches\n          3214341461  instructions retired\n           834028159  cycles elapsed\n             1868544  peak memory footprint\n"
+  },
+  {
+    "fixture": "records_object_1m",
+    "rep": 1,
+    "arm": "before",
+    "wall_ns": 258820459,
+    "checksum": 26879233597600,
+    "stderr": "        0.26 real         0.25 user         0.00 sys\n             2490368  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                 317  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                   4  involuntary context switches\n          3214287221  instructions retired\n           833779543  cycles elapsed\n             1868544  peak memory footprint\n"
+  },
+  {
+    "fixture": "records_object_1m",
+    "rep": 1,
+    "arm": "after",
+    "wall_ns": 725006334,
+    "checksum": 26879233597600,
+    "stderr": "        0.72 real         0.72 user         0.00 sys\n             2490368  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                 317  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                   2  involuntary context switches\n          2661938582  instructions retired\n          2327544312  cycles elapsed\n             1868544  peak memory footprint\n"
+  },
+  {
+    "fixture": "records_object_1m",
+    "rep": 1,
+    "arm": "after",
+    "wall_ns": 723806417,
+    "checksum": 26879233597600,
+    "stderr": "        0.72 real         0.72 user         0.00 sys\n             2490368  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                 317  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                   4  involuntary context switches\n          2661911416  instructions retired\n          2323875930  cycles elapsed\n             1868544  peak memory footprint\n"
+  },
+  {
+    "fixture": "records_object_1m",
+    "rep": 1,
+    "arm": "before",
+    "wall_ns": 258866500,
+    "checksum": 26879233597600,
+    "stderr": "        0.26 real         0.25 user         0.00 sys\n             2490368  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                 317  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                   2  involuntary context switches\n          3214359699  instructions retired\n           834421096  cycles elapsed\n             1868544  peak memory footprint\n"
+  },
+  {
+    "fixture": "records_object_1m",
+    "rep": 2,
+    "arm": "before",
+    "wall_ns": 258630250,
+    "checksum": 26879233597600,
+    "stderr": "        0.26 real         0.25 user         0.00 sys\n             2490368  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                 317  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                   2  involuntary context switches\n          3214258869  instructions retired\n           833964240  cycles elapsed\n             1868544  peak memory footprint\n"
+  },
+  {
+    "fixture": "records_object_1m",
+    "rep": 2,
+    "arm": "after",
+    "wall_ns": 721244541,
+    "checksum": 26879233597600,
+    "stderr": "        0.72 real         0.72 user         0.00 sys\n             2490368  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                 317  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                   4  involuntary context switches\n          2662048507  instructions retired\n          2315266214  cycles elapsed\n             1868544  peak memory footprint\n"
+  },
+  {
+    "fixture": "records_object_1m",
+    "rep": 2,
+    "arm": "after",
+    "wall_ns": 720596500,
+    "checksum": 26879233597600,
+    "stderr": "        0.72 real         0.72 user         0.00 sys\n             2490368  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                 317  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                   2  involuntary context switches\n          2661930716  instructions retired\n          2313738535  cycles elapsed\n             1868544  peak memory footprint\n"
+  },
+  {
+    "fixture": "records_object_1m",
+    "rep": 2,
+    "arm": "before",
+    "wall_ns": 259097292,
+    "checksum": 26879233597600,
+    "stderr": "        0.26 real         0.25 user         0.00 sys\n             2490368  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                 317  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                   2  involuntary context switches\n          3214390819  instructions retired\n           834865253  cycles elapsed\n             1868544  peak memory footprint\n"
+  },
+  {
+    "fixture": "records_object_1m",
+    "rep": 3,
+    "arm": "before",
+    "wall_ns": 258442834,
+    "checksum": 26879233597600,
+    "stderr": "        0.26 real         0.25 user         0.00 sys\n             2490368  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                 317  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                   3  involuntary context switches\n          3214306001  instructions retired\n           833073142  cycles elapsed\n             1868544  peak memory footprint\n"
+  },
+  {
+    "fixture": "records_object_1m",
+    "rep": 3,
+    "arm": "after",
+    "wall_ns": 723537834,
+    "checksum": 26879233597600,
+    "stderr": "        0.72 real         0.72 user         0.00 sys\n             2490368  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                 317  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                   2  involuntary context switches\n          2662038150  instructions retired\n          2322779640  cycles elapsed\n             1868544  peak memory footprint\n"
+  },
+  {
+    "fixture": "records_object_1m",
+    "rep": 3,
+    "arm": "after",
+    "wall_ns": 727549542,
+    "checksum": 26879233597600,
+    "stderr": "        0.72 real         0.72 user         0.00 sys\n             2490368  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                 317  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                   2  involuntary context switches\n          2661957078  instructions retired\n          2335074987  cycles elapsed\n             1868544  peak memory footprint\n"
+  },
+  {
+    "fixture": "records_object_1m",
+    "rep": 3,
+    "arm": "before",
+    "wall_ns": 258450166,
+    "checksum": 26879233597600,
+    "stderr": "        0.26 real         0.25 user         0.00 sys\n             2490368  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                 317  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                   2  involuntary context switches\n          3214297647  instructions retired\n           833088416  cycles elapsed\n             1868544  peak memory footprint\n"
+  },
+  {
+    "fixture": "records_object_1m",
+    "rep": 4,
+    "arm": "before",
+    "wall_ns": 258765875,
+    "checksum": 26879233597600,
+    "stderr": "        0.26 real         0.25 user         0.00 sys\n             2490368  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                 322  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                   3  involuntary context switches\n          3214342737  instructions retired\n           833824097  cycles elapsed\n             1868544  peak memory footprint\n"
+  },
+  {
+    "fixture": "records_object_1m",
+    "rep": 4,
+    "arm": "after",
+    "wall_ns": 721710542,
+    "checksum": 26879233597600,
+    "stderr": "        0.72 real         0.72 user         0.00 sys\n             2490368  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                 317  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                   2  involuntary context switches\n          2661956061  instructions retired\n          2317110943  cycles elapsed\n             1868544  peak memory footprint\n"
+  },
+  {
+    "fixture": "records_object_1m",
+    "rep": 4,
+    "arm": "after",
+    "wall_ns": 720599416,
+    "checksum": 26879233597600,
+    "stderr": "        0.72 real         0.72 user         0.00 sys\n             2490368  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                 317  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                   3  involuntary context switches\n          2661929633  instructions retired\n          2313559460  cycles elapsed\n             1868544  peak memory footprint\n"
+  },
+  {
+    "fixture": "records_object_1m",
+    "rep": 4,
+    "arm": "before",
+    "wall_ns": 258937625,
+    "checksum": 26879233597600,
+    "stderr": "        0.26 real         0.25 user         0.00 sys\n             2490368  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                 317  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                   2  involuntary context switches\n          3214298932  instructions retired\n           834187845  cycles elapsed\n             1868544  peak memory footprint\n"
+  }
+]

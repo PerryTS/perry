@@ -1,0 +1,58 @@
+[
+  {
+    "phase": "canonical",
+    "engine": "checkpoint",
+    "n": 10,
+    "medians": {
+      "totalCpuUs": 3628766.0,
+      "peak_rss": 276807680.0,
+      "instructions": 66354788068.0
+    },
+    "cpu_range": [
+      3625575,
+      3722344
+    ]
+  },
+  {
+    "phase": "canonical",
+    "engine": "candidate",
+    "n": 10,
+    "medians": {
+      "totalCpuUs": 3634750.5,
+      "peak_rss": 276807680.0,
+      "instructions": 66365520602.5
+    },
+    "cpu_range": [
+      3632865,
+      3770690
+    ]
+  },
+  {
+    "phase": "same-binary-path-control",
+    "engine": "direct",
+    "n": 6,
+    "medians": {
+      "totalCpuUs": 3322329.0,
+      "peak_rss": 281313280.0,
+      "instructions": 61798609847.0
+    },
+    "cpu_range": [
+      3320702,
+      3636391
+    ]
+  },
+  {
+    "phase": "same-binary-path-control",
+    "engine": "nested",
+    "n": 6,
+    "medians": {
+      "totalCpuUs": 3614516.0,
+      "peak_rss": 281337856.0,
+      "instructions": 66173791977.0
+    },
+    "cpu_range": [
+      3611908,
+      3678241
+    ]
+  }
+]

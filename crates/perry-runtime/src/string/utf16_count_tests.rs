@@ -88,6 +88,43 @@ fn byte_mutations_match_standard_validation_and_legacy_counting() {
     }
 }
 
+#[test]
+fn arbitrary_byte_shapes_and_ascii_transitions_keep_legacy_units() {
+    // Independent scalar oracle, including bytes that valid UTF-8 never uses.
+    let check_raw = |bytes: &[u8]| {
+        assert_eq!(
+            super::count_bytes(bytes),
+            compute_utf16_len_wtf8(bytes),
+            "bytes={bytes:?}"
+        );
+    };
+    let mut state = 0x8D14_0A35_BC72_690Fu64;
+    for n in 0..20000 {
+        let mut bytes = vec![0; n % 4097];
+        for byte in &mut bytes {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            *byte = state as u8;
+        }
+        check_raw(&bytes);
+    }
+    // Put every possible lead next to an ASCII block or a scalar tail. This
+    // includes interrupted, truncated and stray continuation sequences.
+    for prefix in 0..130 {
+        for lead in 0x80..=0xff {
+            for continuations in 0..=4 {
+                let mut bytes = vec![b'a'; prefix];
+                bytes.push(lead);
+                bytes.extend(std::iter::repeat_n(0x80, continuations));
+                check_raw(&bytes);
+                bytes.extend(std::iter::repeat_n(b'a', 130));
+                check_raw(&bytes);
+            }
+        }
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn vector_loads_stay_inside_guarded_input() {

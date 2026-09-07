@@ -1,0 +1,65 @@
+[
+  {
+    "fixture": "escaped_1m",
+    "median_ns": {
+      "compat": 33196771.0,
+      "basic": 33209125.0,
+      "fused": 21172041.5
+    },
+    "fused_percent": -36.22258773300572
+  },
+  {
+    "fixture": "invalid-first",
+    "median_ns": {
+      "compat": 802464312.5,
+      "basic": 882032021.5,
+      "fused": 805129625.0
+    },
+    "fused_percent": 0.33214093866635874
+  },
+  {
+    "fixture": "invalid-middle",
+    "median_ns": {
+      "compat": 851183708.0,
+      "basic": 882028937.5,
+      "fused": 844545562.0
+    },
+    "fused_percent": -0.7798723046047784
+  },
+  {
+    "fixture": "lone-surrogate",
+    "median_ns": {
+      "compat": 802624896.0,
+      "basic": 891867708.5,
+      "fused": 66984437.5
+    },
+    "fused_percent": -91.6543284622958
+  },
+  {
+    "fixture": "mostly-ascii",
+    "median_ns": {
+      "compat": 26841354.0,
+      "basic": 26925542.0,
+      "fused": 17127146.5
+    },
+    "fused_percent": -36.19119773167926
+  },
+  {
+    "fixture": "records_object_1m",
+    "median_ns": {
+      "compat": 29821895.5,
+      "basic": 29789625.0,
+      "fused": 19009896.0
+    },
+    "fused_percent": -36.255239040724284
+  },
+  {
+    "fixture": "unicode_1m",
+    "median_ns": {
+      "compat": 101533167.0,
+      "basic": 99357000.0,
+      "fused": 66990354.0
+    },
+    "fused_percent": -34.021211019646415
+  }
+]

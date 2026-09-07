@@ -1,0 +1,13 @@
+{
+  "diagnostic_only": true,
+  "whole_json_performance": false,
+  "probe_sha256": "8cefbfc98b586962e9990af63a6e48706c1efb5bb4195129e40b7d4ccc7f6791",
+  "compiler": "rustc 1.100.0-nightly (f7d782a3b 2026-08-19)",
+  "source_sha256": {
+    "compat.rs": "308c36231768bcb790ede131a0baef75c954ddcac10859a18224e8d111bf286d",
+    "count.rs": "caa1e91b86995c32869d63bfe9fe18395339c052f38f9651024d19b008b36026",
+    "main.rs": "915fd94bc38dc1b78f97ec5f92ea60dda033ac9f4c345355d67dedefd6109300",
+    "basic.rs": "8a2361ed8e95e942385c77d76030ca22e162e85b45ceafde3578b5737c3d61fa"
+  },
+  "profile": "standalone native counter; nightly 2026-08-20, opt-level 3, codegen-units 1, thin LTO; fresh-process wall-clock diagnostic"
+}

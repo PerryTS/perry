@@ -1,0 +1,12 @@
+*.log -whitespace
+*.sample.txt -whitespace
+*.stdout -whitespace
+*.stderr -whitespace
+*.asm -whitespace
+*.diff -whitespace
+candidate.patch -whitespace
+# Preserve the exact source bytes compiled by the standalone probes.
+scanner/*.rs -whitespace
+scanner2/*.rs -whitespace
+fused/*.rs -whitespace
+fused2/*.rs -whitespace

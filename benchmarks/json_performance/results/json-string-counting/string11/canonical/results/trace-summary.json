@@ -1,0 +1,34 @@
+[
+  {
+    "label": "checkpoint-canonical",
+    "worker_sha256": "244d045b247c4de720d33c7526f512654ae842f4b2dd9f1e7c1e34f241a068a1",
+    "executable_path": "/Users/perry/json-fused-utf16-v11-20260907-codex/canonical/active",
+    "cycles": 37,
+    "full": 28,
+    "pointer_slots": 36210217
+  },
+  {
+    "label": "candidate-canonical",
+    "worker_sha256": "615b8022f3dce5581623a4b7343dabdcff10f3a799e2fcb68ee2ab7315994647",
+    "executable_path": "/Users/perry/json-fused-utf16-v11-20260907-codex/canonical/active",
+    "cycles": 37,
+    "full": 28,
+    "pointer_slots": 36210217
+  },
+  {
+    "label": "checkpoint-direct",
+    "worker_sha256": "244d045b247c4de720d33c7526f512654ae842f4b2dd9f1e7c1e34f241a068a1",
+    "executable_path": "/Users/perry/json-fused-utf16-v11-20260907-codex/.work/checkpoint-lifetime",
+    "cycles": 37,
+    "full": 28,
+    "pointer_slots": 36295839
+  },
+  {
+    "label": "checkpoint-nested",
+    "worker_sha256": "244d045b247c4de720d33c7526f512654ae842f4b2dd9f1e7c1e34f241a068a1",
+    "executable_path": "/Users/perry/json-fused-utf16-v11-20260907-codex/followup/.work/checkpoint-lifetime",
+    "cycles": 37,
+    "full": 28,
+    "pointer_slots": 36246112
+  }
+]

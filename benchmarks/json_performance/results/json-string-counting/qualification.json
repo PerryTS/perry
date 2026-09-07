@@ -1,0 +1,19 @@
+{
+  "experimental": true,
+  "runtime_changes_retained": true,
+  "no_regression_acceptance": false,
+  "all_row_parity": false,
+  "branch": "codex/json-utf16-count-1520",
+  "reference_runtime_source": "0327b9460a749592deb354d72ebad29bf4ae4bba",
+  "string10": {
+    "retained": false,
+    "observations": 64
+  },
+  "string11": {
+    "observations": 63,
+    "followup_observations": 32,
+    "canonical_observations": 31,
+    "fixed_observations": 58
+  },
+  "next": "Replace per-trial executable copying with an immutable-file link at the same invocation path; quantify remaining row variance and no-regression requirements, then optimize escaped-string decoding. Older 147-case matrix and semantic gaps remain open."
+}

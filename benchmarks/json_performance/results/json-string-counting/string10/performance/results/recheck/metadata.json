@@ -1,0 +1,15 @@
+{
+  "workers": {
+    "checkpoint": "6a376de244705cbe8485063d254973e3e99582b95e8b290ddb370deac3ebd835",
+    "candidate": "8809916e40db0202fce4e39b78adfd8c0e0c12a408570a2beb32da27b361ce0e",
+    "node": "87e9b1fed820a2683ea90f5871596edf605b7162519156856dacbfbad36d1d29",
+    "bun": "e0c90ec15d33363e6b70713d56bc3b2c7585c17f40a0fe0f8fd9305901d4e233"
+  },
+  "versions": {
+    "node": "v26.5.1",
+    "bun": "1.3.14"
+  },
+  "repeats": 5,
+  "seed": 96345,
+  "note": "Checkpoint and candidate use matched default release settings; candidate changes only UTF-8 validation API in the UTF-16 counter. Pinned 38-row call counts; default GC; fresh processes; CPU includes user and system; retain outputs measured separately."
+}

@@ -1,0 +1,362 @@
+[
+  {
+    "fixture": "escaped_1m",
+    "operation": "parse",
+    "mode": "discard",
+    "iterations": 100,
+    "medians": {
+      "checkpoint": {
+        "totalCpuUs": 248455,
+        "peak_rss": 61833216,
+        "rssDrained": 61210624
+      },
+      "candidate": {
+        "totalCpuUs": 248530,
+        "peak_rss": 61816832,
+        "rssDrained": 61194240
+      }
+    },
+    "cpu_delta_percent": 0.03018655289690475,
+    "peak_rss_delta_mib": -0.015625
+  },
+  {
+    "fixture": "escaped_1m",
+    "operation": "parse",
+    "mode": "latest",
+    "iterations": 100,
+    "medians": {
+      "checkpoint": {
+        "totalCpuUs": 248054,
+        "peak_rss": 63389696,
+        "rssDrained": 61210624
+      },
+      "candidate": {
+        "totalCpuUs": 248591,
+        "peak_rss": 63373312,
+        "rssDrained": 61194240
+      }
+    },
+    "cpu_delta_percent": 0.21648512017544697,
+    "peak_rss_delta_mib": -0.015625
+  },
+  {
+    "fixture": "escaped_1m",
+    "operation": "parse",
+    "mode": "retain",
+    "iterations": 32,
+    "medians": {
+      "checkpoint": {
+        "totalCpuUs": 79578,
+        "peak_rss": 52789248,
+        "rssDrained": 48971776
+      },
+      "candidate": {
+        "totalCpuUs": 79519,
+        "peak_rss": 52772864,
+        "rssDrained": 48955392
+      }
+    },
+    "cpu_delta_percent": -0.07414109427228421,
+    "peak_rss_delta_mib": -0.015625
+  },
+  {
+    "fixture": "records_object_1m",
+    "operation": "stringify",
+    "mode": "discard",
+    "iterations": 120,
+    "medians": {
+      "checkpoint": {
+        "totalCpuUs": 178857,
+        "peak_rss": 62881792,
+        "rssDrained": 62406656
+      },
+      "candidate": {
+        "totalCpuUs": 178940,
+        "peak_rss": 62881792,
+        "rssDrained": 62406656
+      }
+    },
+    "cpu_delta_percent": 0.04640578786405669,
+    "peak_rss_delta_mib": 0.0
+  },
+  {
+    "fixture": "records_object_20m",
+    "operation": "roundtrip",
+    "mode": "discard",
+    "iterations": 7,
+    "medians": {
+      "checkpoint": {
+        "totalCpuUs": 1062437,
+        "peak_rss": 281018368,
+        "rssDrained": 280543232
+      },
+      "candidate": {
+        "totalCpuUs": 1061010,
+        "peak_rss": 272547840,
+        "rssDrained": 272072704
+      }
+    },
+    "cpu_delta_percent": -0.13431384637394572,
+    "peak_rss_delta_mib": -8.078125
+  },
+  {
+    "fixture": "records_object_20m",
+    "operation": "roundtrip",
+    "mode": "discard",
+    "iterations": 8,
+    "medians": {
+      "checkpoint": {
+        "totalCpuUs": 1270913,
+        "peak_rss": 281018368,
+        "rssDrained": 280543232
+      },
+      "candidate": {
+        "totalCpuUs": 1268821,
+        "peak_rss": 282001408,
+        "rssDrained": 281526272
+      }
+    },
+    "cpu_delta_percent": -0.164606074530671,
+    "peak_rss_delta_mib": 0.9375
+  },
+  {
+    "fixture": "records_object_20m",
+    "operation": "roundtrip",
+    "mode": "discard",
+    "iterations": 9,
+    "medians": {
+      "checkpoint": {
+        "totalCpuUs": 1364907,
+        "peak_rss": 281018368,
+        "rssDrained": 280543232
+      },
+      "candidate": {
+        "totalCpuUs": 1379066,
+        "peak_rss": 282001408,
+        "rssDrained": 281526272
+      }
+    },
+    "cpu_delta_percent": 1.0373600545678263,
+    "peak_rss_delta_mib": 0.9375
+  },
+  {
+    "fixture": "records_object_20m",
+    "operation": "roundtrip",
+    "mode": "discard",
+    "iterations": 16,
+    "medians": {
+      "checkpoint": {
+        "totalCpuUs": 2418207,
+        "peak_rss": 281313280,
+        "rssDrained": 280838144
+      },
+      "candidate": {
+        "totalCpuUs": 2290003,
+        "peak_rss": 282394624,
+        "rssDrained": 281919488
+      }
+    },
+    "cpu_delta_percent": -5.301613964395935,
+    "peak_rss_delta_mib": 1.03125
+  },
+  {
+    "fixture": "records_object_20m",
+    "operation": "roundtrip",
+    "mode": "discard",
+    "iterations": 24,
+    "medians": {
+      "checkpoint": {
+        "totalCpuUs": 3619264,
+        "peak_rss": 281346048,
+        "rssDrained": 280870912
+      },
+      "candidate": {
+        "totalCpuUs": 3316748,
+        "peak_rss": 296222720,
+        "rssDrained": 295747584
+      }
+    },
+    "cpu_delta_percent": -8.358494986826049,
+    "peak_rss_delta_mib": 14.1875
+  },
+  {
+    "fixture": "small_record",
+    "operation": "stringify",
+    "mode": "discard",
+    "iterations": 100000,
+    "medians": {
+      "checkpoint": {
+        "totalCpuUs": 37654,
+        "peak_rss": 29622272,
+        "rssDrained": 29048832
+      },
+      "candidate": {
+        "totalCpuUs": 37674,
+        "peak_rss": 29687808,
+        "rssDrained": 29114368
+      }
+    },
+    "cpu_delta_percent": 0.053115206883735944,
+    "peak_rss_delta_mib": 0.0625
+  },
+  {
+    "fixture": "small_record",
+    "operation": "stringify",
+    "mode": "latest",
+    "iterations": 100000,
+    "medians": {
+      "checkpoint": {
+        "totalCpuUs": 37695,
+        "peak_rss": 29622272,
+        "rssDrained": 29048832
+      },
+      "candidate": {
+        "totalCpuUs": 37683,
+        "peak_rss": 29622272,
+        "rssDrained": 29048832
+      }
+    },
+    "cpu_delta_percent": -0.03183446080382568,
+    "peak_rss_delta_mib": 0.0
+  },
+  {
+    "fixture": "small_record",
+    "operation": "stringify",
+    "mode": "retain",
+    "iterations": 100000,
+    "medians": {
+      "checkpoint": {
+        "totalCpuUs": 44401,
+        "peak_rss": 33882112,
+        "rssDrained": 33325056
+      },
+      "candidate": {
+        "totalCpuUs": 44376,
+        "peak_rss": 33898496,
+        "rssDrained": 33341440
+      }
+    },
+    "cpu_delta_percent": -0.0563050381748198,
+    "peak_rss_delta_mib": 0.015625
+  },
+  {
+    "fixture": "unicode_1m",
+    "operation": "parse",
+    "mode": "discard",
+    "iterations": 100,
+    "medians": {
+      "checkpoint": {
+        "totalCpuUs": 28631,
+        "peak_rss": 57704448,
+        "rssDrained": 57098240
+      },
+      "candidate": {
+        "totalCpuUs": 28201,
+        "peak_rss": 57671680,
+        "rssDrained": 57065472
+      }
+    },
+    "cpu_delta_percent": -1.5018686039607432,
+    "peak_rss_delta_mib": -0.03125
+  },
+  {
+    "fixture": "unicode_1m",
+    "operation": "parse",
+    "mode": "latest",
+    "iterations": 100,
+    "medians": {
+      "checkpoint": {
+        "totalCpuUs": 28503,
+        "peak_rss": 58572800,
+        "rssDrained": 57114624
+      },
+      "candidate": {
+        "totalCpuUs": 28404,
+        "peak_rss": 58523648,
+        "rssDrained": 57065472
+      }
+    },
+    "cpu_delta_percent": -0.3473318598042341,
+    "peak_rss_delta_mib": -0.046875
+  },
+  {
+    "fixture": "unicode_1m",
+    "operation": "parse",
+    "mode": "retain",
+    "iterations": 32,
+    "medians": {
+      "checkpoint": {
+        "totalCpuUs": 9600,
+        "peak_rss": 53182464,
+        "rssDrained": 49496064
+      },
+      "candidate": {
+        "totalCpuUs": 9541,
+        "peak_rss": 53149696,
+        "rssDrained": 49463296
+      }
+    },
+    "cpu_delta_percent": -0.6145833333333295,
+    "peak_rss_delta_mib": -0.03125
+  },
+  {
+    "fixture": "wide_1m",
+    "operation": "parse",
+    "mode": "discard",
+    "iterations": 60,
+    "medians": {
+      "checkpoint": {
+        "totalCpuUs": 1198248,
+        "peak_rss": 298057728,
+        "rssDrained": 297435136
+      },
+      "candidate": {
+        "totalCpuUs": 1198816,
+        "peak_rss": 295370752,
+        "rssDrained": 294748160
+      }
+    },
+    "cpu_delta_percent": 0.047402541043251034,
+    "peak_rss_delta_mib": -2.5625
+  },
+  {
+    "fixture": "wide_1m",
+    "operation": "parse",
+    "mode": "latest",
+    "iterations": 60,
+    "medians": {
+      "checkpoint": {
+        "totalCpuUs": 1214943,
+        "peak_rss": 314753024,
+        "rssDrained": 314130432
+      },
+      "candidate": {
+        "totalCpuUs": 1215709,
+        "peak_rss": 312328192,
+        "rssDrained": 311705600
+      }
+    },
+    "cpu_delta_percent": 0.0630482253076936,
+    "peak_rss_delta_mib": -2.3125
+  },
+  {
+    "fixture": "wide_1m",
+    "operation": "parse",
+    "mode": "retain",
+    "iterations": 8,
+    "medians": {
+      "checkpoint": {
+        "totalCpuUs": 121974,
+        "peak_rss": 83345408,
+        "rssDrained": 77348864
+      },
+      "candidate": {
+        "totalCpuUs": 121890,
+        "peak_rss": 83345408,
+        "rssDrained": 77348864
+      }
+    },
+    "cpu_delta_percent": -0.06886713561906621,
+    "peak_rss_delta_mib": 0.0
+  }
+]

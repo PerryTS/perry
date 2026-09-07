@@ -1,0 +1,534 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/perry",
+    "crates/perry-parser",
+    "crates/perry-api-manifest",
+    "crates/perry-hir",
+    "crates/perry-transform",
+    "crates/perry-codegen",
+    "crates/perry-dispatch",
+    "crates/perry-runtime",
+    "crates/perry-ffi",
+    "crates/perry-ext-dotenv",
+    "crates/perry-ext-nanoid",
+    "crates/perry-ext-uuid",
+    "crates/perry-ext-bcrypt",
+    "crates/perry-ext-argon2",
+    "crates/perry-ext-jsonwebtoken",
+    "crates/perry-ext-validator",
+    "crates/perry-ext-lru-cache",
+    "crates/perry-ext-better-sqlite3",
+    "crates/perry-ext-zlib",
+    "crates/perry-ext-exponential-backoff",
+    "crates/perry-ext-axios",
+    "crates/perry-ext-events",
+    "crates/perry-ext-decimal",
+    "crates/perry-ext-dayjs",
+    "crates/perry-ext-qs",
+    "crates/perry-ext-moment",
+    "crates/perry-ext-cheerio",
+    "crates/perry-ext-sharp",
+    "crates/perry-ext-ratelimit",
+    "crates/perry-ext-commander",
+    "crates/perry-ext-ethers",
+    "crates/perry-ext-nodemailer",
+    "crates/perry-ext-cron",
+    "crates/perry-ext-ioredis",
+    "crates/perry-ext-pg",
+    "crates/perry-ext-mysql2",
+    "crates/perry-ext-fetch",
+    "crates/perry-ext-undici",
+    "crates/perry-ext-mongodb",
+    "crates/perry-ext-ws",
+    "crates/perry-ext-net",
+    "crates/perry-ext-http",
+    "crates/perry-ext-streams",
+    "crates/perry-ext-fastify",
+    "crates/perry-ext-pdf",
+    "crates/perry-ext-ads",
+    "crates/perry-ext-node-forge",
+    "crates/perry-ext-parcel-watcher",
+    "crates/perry-ext-typescript",
+    "crates/perry-wasm-host",
+    "crates/perry-container-compose",
+    "crates/perry-container-e2e",
+    "crates/perry-stdlib",
+    "crates/perry-diagnostics",
+    "crates/perry-ui",
+    "crates/perry-ui-model",
+    "crates/perry-ui-macos",
+    "crates/perry-ui-ios",
+    "crates/perry-ui-visionos",
+    "crates/perry-ui-android",
+    "crates/perry-audio-miniaudio",
+    "crates/perry-ui-gtk4",
+    "crates/perry-ui-windows",
+    "crates/perry-ui-windows-winui",
+    "crates/perry-ui-watchos",
+    "crates/perry-ui-tvos",
+    "crates/perry-ui-geisterhand",
+    "crates/perry-codegen-js",
+    "crates/perry-codegen-swiftui",
+    "crates/perry-codegen-arkts",
+    "crates/perry-codegen-glance",
+    "crates/perry-codegen-wear-tiles",
+    "crates/perry-codegen-wasm",
+    "crates/perry-ui-test",
+    "crates/perry-ui-testkit",
+    "crates/perry-doc-tests",
+    "crates/perry-updater",
+    "crates/perry-runtime-static",
+    "crates/perry-stdlib-static",
+    "docs/examples/_fixtures/native-libraries/my-bindings",
+]
+# Vendored upstream windows-rs / Windows Reactor sources used by the opt-in
+# WinUI 3 backend (`third_party/windows-winui/`, see its VENDORED.md). They are
+# PATH DEPENDENCIES of `perry-ui-windows-winui`, not Perry crates: excluding
+# them keeps them out of the workspace member set, so `cargo test --workspace`
+# never compiles them and Perry's `[workspace.lints]` policy is never applied
+# to third-party code. `perry-ui-windows-winui` still resolves them normally
+# through its `path = "../../third_party/..."` dependency edge.
+#
+# They live OUTSIDE `crates/` on purpose. Cargo's `exclude` loses to an
+# explicit `members` entry that is a path PREFIX of the excluded directory
+# (`is_excluded` returns `!explicit_member && excluded`), so while these sat in
+# `crates/perry-ui-windows-winui/vendor/` they were implicit members and NO
+# `exclude` entry could remove them. Keeping them out of `crates/` also keeps
+# them out of the `crates/perry-ui*` globs used by the GC/lint census gates.
+exclude = [
+    "third_party/windows-winui",
+]
+
+# Build only the host-independent product set by default.
+# Platform UI manifests keep their source and dependencies behind target cfgs.
+# Build each platform package explicitly for its applicable target.
+default-members = [
+    "crates/perry",
+    "crates/perry-container-compose",
+]
+
+# Aggressive release optimizations for small, fast binaries
+[profile.release]
+lto = "thin"          # Thin LTO for faster builds and fewer duplicate symbols
+codegen-units = 1     # Better optimization, slower compile
+# panic=abort (#7302): the invoke/landingpad exception transport requires the
+# unwinder to step THROUGH runtime Rust frames with longjmp-equivalent
+# semantics — no cleanups, and no RFC-2945 abort-on-unwind guards (which
+# panic=unwind plants in every extern "C" helper and which a JS throw
+# crossing a helper frame would trip). Must be paired with
+# `-C force-unwind-tables=yes` (.cargo/config.toml) or the unwinder cannot
+# step the frames at all — js_eh_try_push self-checks this at runtime and
+# fails loudly. Cost: catch_unwind-based panic recovery (spawn workers,
+# worker_threads, UI callbacks) no longer catches — a runtime panic aborts
+# the process. On the main JS→helper path panics already aborted (the
+# RFC-2945 guards); cargo test is unaffected (test builds force unwind).
+panic = "abort"
+strip = true          # Strip symbols automatically
+opt-level = 3         # Maximum optimization
+
+# For the runtime/stdlib static libraries
+[profile.release.package.perry-runtime]
+opt-level = 3
+strip = false
+
+# UI crates must NOT strip — they export #[no_mangle] extern "C" symbols
+[profile.release.package.perry-ui-macos]
+strip = false
+codegen-units = 16
+
+[profile.release.package.perry-ui-gtk4]
+strip = false
+codegen-units = 16
+
+[profile.release.package.perry-ui-windows]
+strip = false
+codegen-units = 16
+
+# WinUI scaffold (#4680): re-exports perry-ui-windows; the staticlib bundles
+# its #[no_mangle] extern "C" symbols, so it must not be stripped either.
+[profile.release.package.perry-ui-windows-winui]
+strip = false
+codegen-units = 16
+
+[profile.release.package.perry-ui-geisterhand]
+strip = false
+codegen-units = 16
+
+[profile.release.package.perry-ui-ios]
+strip = false
+codegen-units = 16
+
+[profile.release.package.perry-ui-visionos]
+strip = false
+codegen-units = 16
+
+[profile.release.package.perry-ui-tvos]
+strip = false
+codegen-units = 16
+
+[profile.release.package.perry-ui-android]
+strip = false
+codegen-units = 16
+
+[profile.release.package.perry-ui-watchos]
+strip = false
+codegen-units = 16
+
+[profile.release.package.perry-stdlib]
+opt-level = "s"       # Optimize for size in stdlib
+
+# perry-ext-events exports #[no_mangle] EventEmitter FFI symbols
+# (js_event_emitter_*) that generated native code calls directly when a program
+# constructs a native EventEmitter by name (e.g. eventemitter3's default
+# export). It is a non-tokio wrapper, so the auto-optimize linker uses its
+# prebuilt standalone staticlib rather than rebuilding it alongside a crate that
+# references those symbols. Thin-LTO then internalizes and drops the whole C API
+# from that staticlib, so the program fails to link with undefined
+# _js_event_emitter_* symbols (#5140). Mirror the UI crates' settings (which
+# export #[no_mangle] extern "C" symbols for the same reason): more codegen
+# units + no strip keeps the exported C API in the staticlib.
+[profile.release.package.perry-ext-events]
+strip = false
+codegen-units = 16
+
+# Staticlib wrapper crates (#5422). perry-runtime / perry-stdlib are now
+# rlib-only; these wrappers re-export their #[no_mangle] C API into
+# libperry_runtime.a / libperry_stdlib.a. Thin-LTO would otherwise internalize
+# and drop the whole exported C surface (same failure as perry-ext-events,
+# #5140), so mirror its settings: more codegen units + no strip keep the C API
+# in the archive.
+[profile.release.package.perry-runtime-static]
+strip = false
+codegen-units = 16
+[profile.release.package.perry-stdlib-static]
+strip = false
+codegen-units = 16
+
+# Issue #5928: well-known "shared tokio" wrapper crates (#507) are built in
+# the SAME cargo invocation as perry-stdlib-static so cargo unifies their
+# shared dependency graph (tokio, hyper_util, rustls, and even core/std
+# monomorphizations) into identical compilation units. That unification only
+# holds if EVERY crate in that invocation uses the SAME `codegen-units`
+# setting — rustc partitions a crate's monomorphized code into N codegen
+# units based on this value, so two crates compiling the "same" shared
+# dependency with different `codegen-units` end up with differently-sized,
+# differently-partitioned .rcgu.o objects despite sharing an identical
+# crate/feature graph (confirmed empirically: perry-stdlib-static's `core`
+# codegen unit was 551 KB vs an ext crate's 2.4 MB for the identically
+# hash-named unit, before this fix). Without this, macOS's linker (which
+# has no `-multiply_defined suppress` / `-ld_classic` tolerance mode
+# anymore) hits thousands of `ld: duplicate symbol` errors once a program
+# needs 2+ of these wrapper crates simultaneously, because perry's
+# strip-dedup mechanism assumes same-named codegen units are byte-identical
+# and safe to drop duplicates from — an assumption this mismatch violated.
+[profile.release.package.perry-ext-fastify]
+codegen-units = 16
+[profile.release.package.perry-ext-http]
+codegen-units = 16
+[profile.release.package.perry-ext-ioredis]
+codegen-units = 16
+[profile.release.package.perry-ext-net]
+codegen-units = 16
+[profile.release.package.perry-ext-undici]
+codegen-units = 16
+[profile.release.package.perry-ext-ws]
+codegen-units = 16
+
+# Fast developer profile (#5422). Optimized enough for realistic local runs but
+# without the distribution-grade settings that dominate compile time, so the
+# edit/build loop stays short. Intended local loop:
+#   cargo check -p perry                       # fastest correctness feedback
+#   cargo build --profile perry-dev -p perry   # optimized local development
+[profile.perry-dev]
+inherits = "release"
+lto = false
+codegen-units = 16
+incremental = true
+strip = false
+opt-level = 1
+
+# Official distribution profile (#5422). The explicit, named home for the
+# release-grade optimization Perry ships. Mirrors [profile.release] exactly —
+# including every per-package override below — so official artifacts stay
+# equivalent while being selected via `--profile dist`. Keep these blocks in
+# sync with their [profile.release.*] counterparts above.
+[profile.dist]
+inherits = "release"
+lto = "thin"
+codegen-units = 1
+# MUST match [profile.release] (#7302). `dist` is what release-packages.yml
+# builds the SHIPPED libperry_{runtime,stdlib}.a with, and the exception
+# transport requires the unwinder to step runtime Rust frames with
+# longjmp-equivalent semantics. Under panic="unwind" rustc plants RFC-2945
+# abort-on-unwind guards in every `extern "C"` helper that contains an
+# interior Rust call, so a JS throw crossing such a helper — a throwing
+# getter, a JSON.parse error, a throwing map callback — aborts the process
+# instead of being caught. This line said "unwind" and so overrode the
+# inherited value: it made the shipped runtime, and only the shipped
+# runtime, fail that way. Paired with -C force-unwind-tables=yes from
+# .cargo/config.toml; the runtime self-checks for the tables on the first
+# `try` and aborts loudly if they are missing.
+panic = "abort"
+strip = true
+opt-level = 3
+
+[profile.dist.package.perry-runtime]
+opt-level = 3
+strip = false
+[profile.dist.package.perry-ui-macos]
+strip = false
+codegen-units = 16
+[profile.dist.package.perry-ui-gtk4]
+strip = false
+codegen-units = 16
+[profile.dist.package.perry-ui-windows]
+strip = false
+codegen-units = 16
+[profile.dist.package.perry-ui-windows-winui]
+strip = false
+codegen-units = 16
+[profile.dist.package.perry-ui-geisterhand]
+strip = false
+codegen-units = 16
+[profile.dist.package.perry-ui-ios]
+strip = false
+codegen-units = 16
+[profile.dist.package.perry-ui-visionos]
+strip = false
+codegen-units = 16
+[profile.dist.package.perry-ui-tvos]
+strip = false
+codegen-units = 16
+[profile.dist.package.perry-ui-android]
+strip = false
+codegen-units = 16
+[profile.dist.package.perry-ui-watchos]
+strip = false
+codegen-units = 16
+[profile.dist.package.perry-stdlib]
+opt-level = "s"
+[profile.dist.package.perry-ext-events]
+strip = false
+codegen-units = 16
+[profile.dist.package.perry-runtime-static]
+strip = false
+codegen-units = 16
+[profile.dist.package.perry-stdlib-static]
+strip = false
+codegen-units = 16
+
+# Issue #5928: mirrors the [profile.release.package.perry-ext-*] block above
+# — see its comment for why matching `codegen-units` across every crate in
+# the "shared tokio" (#507) cargo invocation is required.
+[profile.dist.package.perry-ext-fastify]
+codegen-units = 16
+[profile.dist.package.perry-ext-http]
+codegen-units = 16
+[profile.dist.package.perry-ext-ioredis]
+codegen-units = 16
+[profile.dist.package.perry-ext-net]
+codegen-units = 16
+[profile.dist.package.perry-ext-undici]
+codegen-units = 16
+[profile.dist.package.perry-ext-ws]
+codegen-units = 16
+
+[workspace.package]
+version = "0.5.1520"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/PerryTS/perry"
+
+# Workspace-wide lint policy (members opt in via `[lints] workspace = true`).
+# Deny-level lints are enforced by the `clippy` CI job: `cargo clippy` exits
+# nonzero only on denies, so warn-level noise never blocks a PR. Ratchet new
+# lints in here once the codebase is clean for them.
+[workspace.lints.rust]
+non_ascii_idents = "deny"
+
+[workspace.lints.clippy]
+dbg_macro = "deny"
+todo = "deny"
+unimplemented = "deny"
+# Deny-by-default in clippy, allowed here on purpose: Perry's runtime/stdlib/
+# ext crates expose one big FFI surface called from Perry-generated native
+# code — pub fns taking raw pointers with caller contracts ARE the calling
+# convention (500+ sites), and `unsafe fn` is meaningless to those callers.
+# Rust-facing helpers should still document SAFETY at the site.
+not_unsafe_ptr_arg_deref = "allow"
+
+[workspace.dependencies]
+# SWC for TypeScript parsing
+swc_ecma_parser = "32.0"
+swc_ecma_ast = "19.0"
+swc_ecma_visit = "19.0"
+swc_common = "18.0"
+swc_ecma_codegen = "21.0"
+swc_bundler = "37.0"
+swc_ecma_loader = "18.0"
+swc_ecma_transforms_base = "32.0"
+swc_ecma_transforms_react = "35.0"
+swc_ecma_transforms_typescript = "35.0"
+
+# Runtime dependencies
+# bdwgc for garbage collection (Boehm GC)
+# We'll use libgc-sys or similar
+
+# Utilities
+thiserror = "1.0"
+anyhow = "1.0"
+log = "0.4"
+env_logger = "0.10"
+clap = { version = "4.5", features = ["derive"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Shared low-level deps — single source of truth for versions.
+# Members inherit with `<dep>.workspace = true` (features stay additive
+# per member). rand is deliberately absent: 0.8 vs 0.9 users coexist
+# until the 0.9 API migration happens (follow-up).
+libc = "0.2"
+lazy_static = "1.5"
+chrono = "0.4"
+regex = "1.12"
+regress = "0.11.1"
+hex = "0.4"
+tempfile = "3"
+itoa = "1.0"
+ryu = "1.0"
+once_cell = "1.19"
+dashmap = "6.2"
+bytes = "1.5"
+semver = "1.0"
+toml = "1.1"
+stacker = "0.1.24"
+
+# JWT — jsonwebtoken 10.x requires explicitly selecting a crypto backend
+# (`rust_crypto` or `aws_lc_rs`) and opting into PEM parsing for
+# `from_ec_pem` / `from_rsa_pem`. `rust_crypto` keeps the deps tree small
+# relative to `aws_lc_rs`; users who need FIPS validation can fork.
+jsonwebtoken = { version = "11.0", default-features = false, features = ["rust_crypto", "use_pem"] }
+
+# Terminal UI
+indicatif = "0.18"
+console = "0.16"
+dialoguer = "0.12"
+
+# File system
+walkdir = "2.4"
+notify = "6.1"
+
+# Diff generation
+similar = "2.4"
+
+# HTTP / WebSocket (for publish command)
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "multipart", "blocking"] }
+tokio = { version = "1", features = ["full"] }
+tokio-tungstenite = { version = "0.29", features = ["rustls-tls-webpki-roots"] }
+hyper = "1.4"
+hyper-util = "0.1"
+http-body-util = "0.1"
+tokio-rustls = "0.26"
+rustls = "0.23"
+rustls-pemfile = "2"
+socket2 = "0.6"
+futures-util = "0.3"
+url = "2"
+dirs = "6"
+
+# .env file loading (for publish command)
+dotenvy = "0.15"
+
+# Archive creation (for publish command)
+flate2 = "1"
+tar = "0.4"
+base64 = "0.22"
+zip = "8"
+# zstd for transparent decompression of the npm-shipped `*.a.zst` archives.
+# Statically vendored (no system libzstd dependency on the user's machine).
+zstd = "0.13"
+
+# Internal crates
+perry-parser = { path = "crates/perry-parser" }
+perry-api-manifest = { path = "crates/perry-api-manifest" }
+perry-hir = { path = "crates/perry-hir" }
+perry-transform = { path = "crates/perry-transform" }
+perry-codegen = { path = "crates/perry-codegen" }
+perry-dispatch = { path = "crates/perry-dispatch" }
+# #1112: `perry-ffi` is published to crates.io so npm-packaged native
+# wrappers (per `perry.nativeLibrary` in package.json) can resolve it
+# without a sibling Perry checkout. perry-ffi's only direct reference
+# to perry-runtime is a `#[cfg(test)]` layout-assertion test which
+# moves perry-runtime to a path-only `[dev-dependencies]` entry —
+# `cargo publish -p perry-ffi` therefore strips it from the published
+# Cargo.toml, and external users never need perry-runtime in their
+# Cargo graph (Perry's compiler driver links `libperry_runtime.a`
+# into the final binary directly).
+# `default-features = false` so dependency EDGES (perry-stdlib, ext crates, the
+# perry binary) don't force perry-runtime's heavy default features (`full`,
+# `regex-engine`, `temporal`, `url-engine`, `string-normalize`, `intl-segmenter`)
+# back on. The auto-optimize build selects perry-runtime with
+# `--no-default-features` and re-adds only what a given program needs (see
+# optimized_libs.rs), so an edge requesting defaults would defeat that (cargo
+# unifies features additively). A plain `cargo build`/`cargo test --workspace`
+# still builds perry-runtime as a *selected* package, so its own `default`
+# applies — tests and the shipped prebuilt keep every engine. This mirrors why
+# `wasm-host` must stay out of `default`, generalized to all heavy features.
+perry-runtime = { path = "crates/perry-runtime", version = "0.5.1011", default-features = false }
+perry-ffi = { path = "crates/perry-ffi", version = "0.5.1011" }
+perry-ext-dotenv = { path = "crates/perry-ext-dotenv" }
+perry-ext-nanoid = { path = "crates/perry-ext-nanoid" }
+perry-ext-uuid = { path = "crates/perry-ext-uuid" }
+perry-ext-bcrypt = { path = "crates/perry-ext-bcrypt" }
+perry-ext-argon2 = { path = "crates/perry-ext-argon2" }
+perry-ext-jsonwebtoken = { path = "crates/perry-ext-jsonwebtoken" }
+perry-ext-validator = { path = "crates/perry-ext-validator" }
+perry-ext-lru-cache = { path = "crates/perry-ext-lru-cache" }
+perry-ext-better-sqlite3 = { path = "crates/perry-ext-better-sqlite3" }
+perry-ext-zlib = { path = "crates/perry-ext-zlib" }
+perry-ext-exponential-backoff = { path = "crates/perry-ext-exponential-backoff" }
+perry-ext-axios = { path = "crates/perry-ext-axios" }
+perry-ext-events = { path = "crates/perry-ext-events" }
+perry-ext-decimal = { path = "crates/perry-ext-decimal" }
+perry-ext-dayjs = { path = "crates/perry-ext-dayjs" }
+perry-ext-qs = { path = "crates/perry-ext-qs" }
+perry-ext-moment = { path = "crates/perry-ext-moment" }
+perry-ext-cheerio = { path = "crates/perry-ext-cheerio" }
+perry-ext-sharp = { path = "crates/perry-ext-sharp" }
+perry-ext-ratelimit = { path = "crates/perry-ext-ratelimit" }
+perry-ext-commander = { path = "crates/perry-ext-commander" }
+perry-ext-ethers = { path = "crates/perry-ext-ethers" }
+perry-ext-nodemailer = { path = "crates/perry-ext-nodemailer" }
+perry-ext-cron = { path = "crates/perry-ext-cron" }
+perry-ext-ioredis = { path = "crates/perry-ext-ioredis" }
+perry-ext-pg = { path = "crates/perry-ext-pg" }
+perry-ext-mysql2 = { path = "crates/perry-ext-mysql2" }
+perry-ext-fetch = { path = "crates/perry-ext-fetch" }
+perry-ext-undici = { path = "crates/perry-ext-undici" }
+perry-ext-mongodb = { path = "crates/perry-ext-mongodb" }
+perry-ext-ws = { path = "crates/perry-ext-ws" }
+perry-ext-net = { path = "crates/perry-ext-net" }
+perry-ext-http = { path = "crates/perry-ext-http" }
+perry-ext-streams = { path = "crates/perry-ext-streams" }
+perry-ext-fastify = { path = "crates/perry-ext-fastify" }
+perry-ext-pdf = { path = "crates/perry-ext-pdf" }
+perry-ext-ads = { path = "crates/perry-ext-ads" }
+perry-ext-node-forge = { path = "crates/perry-ext-node-forge" }
+perry-ext-parcel-watcher = { path = "crates/perry-ext-parcel-watcher" }
+perry-ext-typescript = { path = "crates/perry-ext-typescript" }
+perry-stdlib = { path = "crates/perry-stdlib" }
+perry-diagnostics = { path = "crates/perry-diagnostics" }
+perry-ui-model = { path = "crates/perry-ui-model" }
+perry-wasm-host = { path = "crates/perry-wasm-host" }
+perry-codegen-js = { path = "crates/perry-codegen-js" }
+perry-codegen-swiftui = { path = "crates/perry-codegen-swiftui" }
+perry-codegen-arkts = { path = "crates/perry-codegen-arkts" }
+perry-codegen-glance = { path = "crates/perry-codegen-glance" }
+perry-codegen-wear-tiles = { path = "crates/perry-codegen-wear-tiles" }
+perry-codegen-wasm = { path = "crates/perry-codegen-wasm" }
+perry-ui-testkit = { path = "crates/perry-ui-testkit" }
+perry-audio-miniaudio = { path = "crates/perry-audio-miniaudio" }
+perry-updater = { path = "crates/perry-updater" }

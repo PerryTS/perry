@@ -1,0 +1,19 @@
+diff --git a/crates/perry-runtime/src/string/utf16_count.rs b/crates/perry-runtime/src/string/utf16_count.rs
+index 08ea004e7..0d6373b69 100644
+--- a/crates/perry-runtime/src/string/utf16_count.rs
++++ b/crates/perry-runtime/src/string/utf16_count.rs
+@@ -6,11 +6,11 @@
+ //! The caller must still validate raw/WTF-8 bytes before constructing `&str`.
+ 
+ // Keep large-string validation and vector counting out of the inlined small
+-// allocation path. The compat validator fails early on malformed input, then
+-// the existing bounded WTF-8 counter preserves its original interpretation.
++// allocation path. Counting needs only a validity result, not the first error
++// offset. On invalid input the bounded WTF-8 counter keeps its interpretation.
+ #[inline(never)]
+ pub(super) fn count_bytes(bytes: &[u8]) -> u32 {
+-    match simdutf8::compat::from_utf8(bytes) {
++    match simdutf8::basic::from_utf8(bytes) {
+         Ok(s) => count(s) as u32,
+         Err(_) => super::compute_utf16_len_wtf8(bytes),
+     }

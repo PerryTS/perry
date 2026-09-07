@@ -1,0 +1,437 @@
+Analysis of sampling checkpoint (pid 50082) every 1 millisecond
+Process:         checkpoint [50082]
+Path:            /Users/USER/*/checkpoint
+Load Address:    0x104590000
+Identifier:      checkpoint
+Version:         0
+Code Type:       ARM64
+Platform:        macOS
+Parent Process:  Python [50074]
+Target Type:     live task
+
+Date/Time:       2026-09-07 00:53:04.425 -0700
+Launch Time:     2026-09-07 00:53:03.884 -0700
+OS Version:      macOS 26.5.1 (25F80)
+Report Version:  7
+Analysis Tool:   /usr/bin/sample
+
+Physical footprint:         50.1M
+Physical footprint (peak):  51.2M
+Idle exit:                  untracked
+----
+
+Call graph:
+    2269 Thread_9397071   DispatchQueue_1: com.apple.main-thread  (serial)
+      2269 start  (in dyld) + 6992  [0x181357e00]
+        2269 main  (in checkpoint) + 2764  [0x104597484]
+          2269 perry_fn_baseline_worker_ts__run$spec_b  (in checkpoint) + 704  [0x104590b80]
+            1550 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime4json9parse_api10parse_slow  (in checkpoint) + 3960  [0x104a60930]
+            + 1550 _RNvMs_NtNtCs7wa3bwJW6LN_13perry_runtime4json6parserNtB4_12DirectParser20parse_object_untyped  (in checkpoint) + 616  [0x1047f6ca8]
+            +   883 _RNvMs_NtNtCs7wa3bwJW6LN_13perry_runtime4json6parserNtB4_12DirectParser18parse_string_value  (in checkpoint) + 1028  [0x1047f6598]
+            +   ! 717 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime6string11utf16_count11count_bytes  (in checkpoint) + 40  [0x104b30dbc]
+            +   ! : 717 _RNvNtNtCsvoDT44C053_8simdutf814implementation7aarch6425validate_utf8_compat_neon  (in checkpoint) + 492,540,...  [0x104f23208,0x104f23238,...]
+            +   ! 166 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime6string11utf16_count11count_bytes  (in checkpoint) + 152,144,...  [0x104b30e2c,0x104b30e24,...]
+            +   368 _RNvMs_NtNtCs7wa3bwJW6LN_13perry_runtime4json6parserNtB4_12DirectParser18parse_string_value  (in checkpoint) + 1320  [0x1047f66bc]
+            +   ! 368 _platform_memmove  (in libsystem_platform.dylib) + 88  [0x18171f3b8]
+            +   253 _RNvMs_NtNtCs7wa3bwJW6LN_13perry_runtime4json6parserNtB4_12DirectParser18parse_string_value  (in checkpoint) + 40  [0x1047f61bc]
+            +   ! 253 _RNvMs_NtNtCs7wa3bwJW6LN_13perry_runtime4json6parserNtB4_12DirectParser18parse_string_bytes  (in checkpoint) + 132,92,...  [0x1047f5550,0x1047f5528,...]
+            +   45 _RNvMs_NtNtCs7wa3bwJW6LN_13perry_runtime4json6parserNtB4_12DirectParser18parse_string_value  (in checkpoint) + 1288  [0x1047f669c]
+            +   ! 39 _RNvNtCs7wa3bwJW6LN_13perry_runtime6string20string_storage_alloc  (in checkpoint) + 60  [0x1048b5288]
+            +   ! : 37 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime5arena10allocators18arena_alloc_gc_old  (in checkpoint) + 520  [0x104a6a7e0]
+            +   ! : | 33 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime5arena5block16arena_cell_alloc  (in checkpoint) + 252  [0x104a71f48]
+            +   ! : | + 32 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime5arena9page_meta39register_block_space_with_object_starts  (in checkpoint) + 156  [0x104a7698c]
+            +   ! : | + ! 32 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime5arena9page_meta24register_old_block_pages  (in checkpoint) + 220,232,...  [0x104a74694,0x104a746a0,...]
+            +   ! : | + 1 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime5arena9page_meta39register_block_space_with_object_starts  (in checkpoint) + 424  [0x104a76a98]
+            +   ! : | 4 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime5arena5block16arena_cell_alloc  (in checkpoint) + 176  [0x104a71efc]
+            +   ! : |   4 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime5arena5block15try_alloc_block  (in checkpoint) + 360  [0x104a71d54]
+            +   ! : |     4 mi_theap_malloc_zero_aligned_at_overalloc  (in checkpoint) + 244  [0x10503b41c]
+            +   ! : |       4 _mi_malloc_generic  (in checkpoint) + 736  [0x1050863c8]
+            +   ! : |         4 _platform_memset  (in libsystem_platform.dylib) + 140  [0x18171f11c]
+            +   ! : 2 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime5arena10allocators18arena_alloc_gc_old  (in checkpoint) + 524  [0x104a6a7e4]
+            +   ! 6 _RNvNtCs7wa3bwJW6LN_13perry_runtime6string20string_storage_alloc  (in checkpoint) + 500  [0x1048b5440]
+            +   1 _RNvMs_NtNtCs7wa3bwJW6LN_13perry_runtime4json6parserNtB4_12DirectParser18parse_string_value  (in checkpoint) + 504  [0x1047f638c]
+            503 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime4json9parse_api10parse_slow  (in checkpoint) + 1472  [0x104a5ff78]
+            + 501 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc6policy16gc_check_trigger  (in checkpoint) + 1596  [0x1049c463c]
+            + ! 476 _RNvNtCs7wa3bwJW6LN_13perry_runtime2gc39gc_collect_full_mark_sweep_with_trigger  (in checkpoint) + 308  [0x10486a56c]
+            + ! : 233 _RNvMs7_NtNtCs7wa3bwJW6LN_13perry_runtime2gc5cycleNtB5_12GcCycleState4step  (in checkpoint) + 14244  [0x1047ea924]
+            + ! : | 59 _RNvMs1_NtNtCs7wa3bwJW6LN_13perry_runtime2gc6oldgenNtB5_21IncrementalSweepState4step  (in checkpoint) + 13956  [0x1047ce654]
+            + ! : | + 59 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime5arena9page_meta26unregister_old_block_pages  (in checkpoint) + 584,360,...  [0x104a74eb0,0x104a74dd0,...]
+            + ! : | 57 _RNvMs1_NtNtCs7wa3bwJW6LN_13perry_runtime2gc6oldgenNtB5_21IncrementalSweepState4step  (in checkpoint) + 6256  [0x1047cc840]
+            + ! : | + 15 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc6oldgen32invalidate_dead_old_arena_header  (in checkpoint) + 1164,1172,...  [0x1049c33d0,0x1049c33d8,...]
+            + ! : | + 11 _RNvMs3_NtNtCs7wa3bwJW6LN_13perry_runtime2gc6oldgenNtB5_22ArenaSweepObjectsState19reclaim_dead_object  (in checkpoint) + 212  [0x1047dd6f4]
+            + ! : | + ! 6 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime5array13element_shape20forget_element_shape  (in checkpoint) + 52,40,...  [0x104a7d968,0x104a7d95c,...]
+            + ! : | + ! 5 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime5array13element_shape20forget_element_shape  (in checkpoint) + 20  [0x104a7d948]
+            + ! : | + !   5 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime5array13element_shape19clear_element_shape  (in checkpoint) + 4,28  [0x104a7d15c,0x104a7d174]
+            + ! : | + 8 _RNvMs3_NtNtCs7wa3bwJW6LN_13perry_runtime2gc6oldgenNtB5_22ArenaSweepObjectsState19reclaim_dead_object  (in checkpoint) + 248  [0x1047dd718]
+            + ! : | + ! 4 _RNvNtCs7wa3bwJW6LN_13perry_runtime6object22clear_overflow_for_ptr  (in checkpoint) + 124,32,...  [0x1048b2494,0x1048b2438,...]
+            + ! : | + ! 3 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc5types38gc_type_clear_dead_payload_side_tables  (in checkpoint) + 132,376  [0x1049b3740,0x1049b3834]
+            + ! : | + ! 1 pthread_mutex_unlock  (in libsystem_pthread.dylib) + 32  [0x181710964]
+            + ! : | + 6 mi_free  (in checkpoint) + 32,56  [0x105084ee0,0x105084ef8]
+            + ! : | + 5 _RNvMs3_NtNtCs7wa3bwJW6LN_13perry_runtime2gc6oldgenNtB5_22ArenaSweepObjectsState19reclaim_dead_object  (in checkpoint) + 124,36,...  [0x1047dd69c,0x1047dd644,...]
+            + ! : | + 4 _RNvMs3_NtNtCs7wa3bwJW6LN_13perry_runtime2gc6oldgenNtB5_22ArenaSweepObjectsState19reclaim_dead_object  (in checkpoint) + 68  [0x1047dd664]
+            + ! : | + ! 2 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime5arena9page_meta29old_page_account_swept_object  (in checkpoint) + 64  [0x104a75a2c]
+            + ! : | + ! : 2 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime5arena9page_meta24old_object_page_overlaps  (in checkpoint) + 184,260  [0x104a74524,0x104a74570]
+            + ! : | + ! 2 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime5arena9page_meta29old_page_account_swept_object  (in checkpoint) + 480,572  [0x104a75bcc,0x104a75c28]
+            + ! : | + 3 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc6oldgen32invalidate_dead_old_arena_header  (in checkpoint) + 1232  [0x1049c3414]
+            + ! : | + ! 2 mi_free  (in checkpoint) + 0,4  [0x105084ec0,0x105084ec4]
+            + ! : | + ! 1 mi_free_try_collect_mt  (in checkpoint) + 172  [0x10503ad04]
+            + ! : | + !   1 mi_abandoned_page_try_reclaim  (in checkpoint) + 16  [0x10503ae10]
+            + ! : | + 3 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc6oldgen32invalidate_dead_old_arena_header  (in checkpoint) + 1288  [0x1049c344c]
+            + ! : | + ! 3 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime5arena9page_meta31update_old_page_meta_for_object  (in checkpoint) + 120,168,...  [0x104a75dd4,0x104a75e04,...]
+            + ! : | + 1 _RNvMs3_NtNtCs7wa3bwJW6LN_13perry_runtime2gc6oldgenNtB5_22ArenaSweepObjectsState19reclaim_dead_object  (in checkpoint) + 260  [0x1047dd724]
+            + ! : | + ! 1 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc5types33gc_type_finalize_unmarked_payload  (in checkpoint) + 16  [0x1049b2b54]
+            + ! : | + 1 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc5types33gc_type_finalize_unmarked_payload  (in checkpoint) + 68  [0x1049b2b88]
+            + ! : | 51 _RNvMs1_NtNtCs7wa3bwJW6LN_13perry_runtime2gc6oldgenNtB5_21IncrementalSweepState4step  (in checkpoint) + 14700  [0x1047ce93c]
+            + ! : | + 51 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime5arena5block19release_arena_block  (in checkpoint) + 216  [0x104a72218]
+            + ! : | +   51 madvise  (in libsystem_kernel.dylib) + 8  [0x1816d49b0]
+            + ! : | 37 _RNvMs1_NtNtCs7wa3bwJW6LN_13perry_runtime2gc6oldgenNtB5_21IncrementalSweepState4step  (in checkpoint) + 14688  [0x1047ce930]
+            + ! : | + 37 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime5arena9page_meta27unregister_block_generation  (in checkpoint) + 1604  [0x104a75844]
+            + ! : | +   37 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime5arena9page_meta26unregister_old_block_pages  (in checkpoint) + 260,396,...  [0x104a74d6c,0x104a74df4,...]
+            + ! : | 14 _RNvMs1_NtNtCs7wa3bwJW6LN_13perry_runtime2gc6oldgenNtB5_21IncrementalSweepState4step  (in checkpoint) + 6132,6156,...  [0x1047cc7c4,0x1047cc7dc,...]
+            + ! : | 7 _RNvMs1_NtNtCs7wa3bwJW6LN_13perry_runtime2gc6oldgenNtB5_21IncrementalSweepState4step  (in checkpoint) + 6100  [0x1047cc7a4]
+            + ! : | + 7 _RNvMs_NtNtCs7wa3bwJW6LN_13perry_runtime5arena4walkNtB4_17ArenaObjectCursor13next_budgeted  (in checkpoint) + 260,316,...  [0x1047f7f64,0x1047f7f9c,...]
+            + ! : | 2 _RNvMs1_NtNtCs7wa3bwJW6LN_13perry_runtime2gc6oldgenNtB5_21IncrementalSweepState4step  (in checkpoint) + 6724  [0x1047cca14]
+            + ! : | + 2 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime5arena9page_meta29old_page_account_swept_object  (in checkpoint) + 284,328  [0x104a75b08,0x104a75b34]
+            + ! : | 2 _RNvMs1_NtNtCs7wa3bwJW6LN_13perry_runtime2gc6oldgenNtB5_21IncrementalSweepState4step  (in checkpoint) + 14572  [0x1047ce8bc]
+            + ! : | + 2 _platform_memset  (in libsystem_platform.dylib) + 140  [0x18171f11c]
+            + ! : | 2 _RNvMs3_NtNtCs7wa3bwJW6LN_13perry_runtime2gc6oldgenNtB5_22ArenaSweepObjectsState19reclaim_dead_object  (in checkpoint) + 316  [0x1047dd75c]
+            + ! : | 2 _RNvMs_NtNtCs7wa3bwJW6LN_13perry_runtime5arena4walkNtB4_17ArenaObjectCursor13next_budgeted  (in checkpoint) + 368,380  [0x1047f7fd0,0x1047f7fdc]
+            + ! : 99 _RNvMs7_NtNtCs7wa3bwJW6LN_13perry_runtime2gc5cycleNtB5_12GcCycleState4step  (in checkpoint) + 2516  [0x1047e7b54]
+            + ! : | 26 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc5trace25drain_trace_worklist_step  (in checkpoint) + 624  [0x1049ad670]
+            + ! : | + 26 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc17layout_slot_visit32visit_gc_layout_slot_descriptors  (in checkpoint) + 3432  [0x1049a85a8]
+            + ! : | +   26 _RNCNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc5trace24trace_heap_rewrite_slots0B7_  (in checkpoint) + 140  [0x1047905fc]
+            + ! : | +     22 _RNvMs2_NtNtCs7wa3bwJW6LN_13perry_runtime2gc6layoutNtB5_23GcMutableSlotDescriptor11visit_slots  (in checkpoint) + 128  [0x1047d2ae4]
+            + ! : | +     ! 11 _RNCNCNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc5trace24trace_heap_rewrite_slots00B9_  (in checkpoint) + 436  [0x104786cb4]
+            + ! : | +     ! : 9 _RNvMNtNtCs7wa3bwJW6LN_13perry_runtime2gc5traceNtB2_15ValidPointerSet8contains  (in checkpoint) + 88  [0x1047a868c]
+            + ! : | +     ! : | 9 _RNvMNtNtCs7wa3bwJW6LN_13perry_runtime2gc5traceNtB2_15ValidPointerSet16find_arena_floor  (in checkpoint) + 160,52,...  [0x1047a85e0,0x1047a8574,...]
+            + ! : | +     ! : 2 _RNvMNtNtCs7wa3bwJW6LN_13perry_runtime2gc5traceNtB2_15ValidPointerSet8contains  (in checkpoint) + 88,256  [0x1047a868c,0x1047a8734]
+            + ! : | +     ! 6 _RNCNCNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc5trace24trace_heap_rewrite_slots00B9_  (in checkpoint) + 212  [0x104786bd4]
+            + ! : | +     ! : 6 _tlv_get_addr  (in libdyld.dylib) + 4  [0x18132038c]
+            + ! : | +     ! 4 _RNCNCNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc5trace24trace_heap_rewrite_slots00B9_  (in checkpoint) + 204,436,...  [0x104786bcc,0x104786cb4,...]
+            + ! : | +     ! 1 _RNvMNtNtCs7wa3bwJW6LN_13perry_runtime2gc5traceNtB2_15ValidPointerSet8contains  (in checkpoint) + 300  [0x1047a8760]
+            + ! : | +     4 _RNvMs2_NtNtCs7wa3bwJW6LN_13perry_runtime2gc6layoutNtB5_23GcMutableSlotDescriptor11visit_slots  (in checkpoint) + 156,252,...  [0x1047d2b00,0x1047d2b60,...]
+            + ! : | 18 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc5trace25drain_trace_worklist_step  (in checkpoint) + 7268,596,...  [0x1049af064,0x1049ad654,...]
+            + ! : | 12 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc5trace25drain_trace_worklist_step  (in checkpoint) + 7508  [0x1049af154]
+            + ! : | + 10 _RNvMs2_NtNtCs7wa3bwJW6LN_13perry_runtime2gc6layoutNtB5_23GcMutableSlotDescriptor11visit_slots  (in checkpoint) + 424  [0x1047d2c0c]
+            + ! : | + ! 4 _RNCNCNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc5trace24trace_heap_rewrite_slots00B9_  (in checkpoint) + 436  [0x104786cb4]
+            + ! : | + ! : 4 _RNvMNtNtCs7wa3bwJW6LN_13perry_runtime2gc5traceNtB2_15ValidPointerSet8contains  (in checkpoint) + 88  [0x1047a868c]
+            + ! : | + ! :   4 _RNvMNtNtCs7wa3bwJW6LN_13perry_runtime2gc5traceNtB2_15ValidPointerSet16find_arena_floor  (in checkpoint) + 220,52,...  [0x1047a861c,0x1047a8574,...]
+            + ! : | + ! 3 _RNvMNtNtCs7wa3bwJW6LN_13perry_runtime2gc5traceNtB2_15ValidPointerSet8contains  (in checkpoint) + 300  [0x1047a8760]
+            + ! : | + ! 2 _RNCNCNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc5trace24trace_heap_rewrite_slots00B9_  (in checkpoint) + 4,436  [0x104786b04,0x104786cb4]
+            + ! : | + ! 1 _RNCNCNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc5trace24trace_heap_rewrite_slots00B9_  (in checkpoint) + 332  [0x104786c4c]
+            + ! : | + !   1 _tlv_get_addr  (in libdyld.dylib) + 4  [0x18132038c]
+            + ! : | + 2 _RNCNCNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc5trace24trace_heap_rewrite_slots00B9_  (in checkpoint) + 548  [0x104786d24]
+            + ! : | 10 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc5trace25drain_trace_worklist_step  (in checkpoint) + 7588  [0x1049af1a4]
+            + ! : | + 6 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc17layout_slot_visit10fixed_slot  (in checkpoint) + 228  [0x1049a77c4]
+            + ! : | + ! 6 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime5arena9page_meta33classify_heap_generation_uncached  (in checkpoint) + 36,24,...  [0x104a76080,0x104a76074,...]
+            + ! : | + 4 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc17layout_slot_visit10fixed_slot  (in checkpoint) + 40,268  [0x1049a7708,0x1049a77ec]
+            + ! : | 10 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc5trace25drain_trace_worklist_step  (in checkpoint) + 7784  [0x1049af268]
+            + ! : | + 10 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime7closure13dynamic_props22merge_closure_prop_map  (in checkpoint) + 1108,120,...  [0x104b45c84,0x104b458a8,...]
+            + ! : | 8 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc5trace25drain_trace_worklist_step  (in checkpoint) + 1032  [0x1049ad808]
+            + ! : | + 8 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc17layout_slot_visit32visit_gc_layout_slot_descriptors  (in checkpoint) + 240,228,...  [0x1049a7930,0x1049a7924,...]
+            + ! : | 7 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc5trace25drain_trace_worklist_step  (in checkpoint) + 1720  [0x1049adab8]
+            + ! : | + 2 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc17layout_slot_visit32visit_gc_layout_slot_descriptors  (in checkpoint) + 2536  [0x1049a8228]
+            + ! : | + ! 2 _RNCNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc5trace24trace_heap_rewrite_slots0B7_  (in checkpoint) + 140  [0x1047905fc]
+            + ! : | + !   2 _RNvMs2_NtNtCs7wa3bwJW6LN_13perry_runtime2gc6layoutNtB5_23GcMutableSlotDescriptor11visit_slots  (in checkpoint) + 424  [0x1047d2c0c]
+            + ! : | + !     2 _RNCNCNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc5trace24trace_heap_rewrite_slots00B9_  (in checkpoint) + 436  [0x104786cb4]
+            + ! : | + !       2 _RNvMNtNtCs7wa3bwJW6LN_13perry_runtime2gc5traceNtB2_15ValidPointerSet8contains  (in checkpoint) + 88  [0x1047a868c]
+            + ! : | + !         2 _RNvMNtNtCs7wa3bwJW6LN_13perry_runtime2gc5traceNtB2_15ValidPointerSet16find_arena_floor  (in checkpoint) + 160  [0x1047a85e0]
+            + ! : | + 2 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc17layout_slot_visit32visit_gc_layout_slot_descriptors  (in checkpoint) + 3432  [0x1049a85a8]
+            + ! : | + ! 2 _RNCNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc5trace24trace_heap_rewrite_slots0B7_  (in checkpoint) + 140  [0x1047905fc]
+            + ! : | + !   1 _RNvMs2_NtNtCs7wa3bwJW6LN_13perry_runtime2gc6layoutNtB5_23GcMutableSlotDescriptor11visit_slots  (in checkpoint) + 128  [0x1047d2ae4]
+            + ! : | + !   : 1 _RNCNCNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc5trace24trace_heap_rewrite_slots00B9_  (in checkpoint) + 212  [0x104786bd4]
+            + ! : | + !   1 _RNvMs2_NtNtCs7wa3bwJW6LN_13perry_runtime2gc6layoutNtB5_23GcMutableSlotDescriptor11visit_slots  (in checkpoint) + 156  [0x1047d2b00]
+            + ! : | + 2 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc17layout_slot_visit32visit_gc_layout_slot_descriptors  (in checkpoint) + 2168,2352  [0x1049a80b8,0x1049a8170]
+            + ! : | + 1 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc17layout_slot_visit32visit_gc_layout_slot_descriptors  (in checkpoint) + 2804  [0x1049a8334]
+            + ! : | +   1 _RNCNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc5trace24trace_heap_rewrite_slots0B7_  (in checkpoint) + 140  [0x1047905fc]
+            + ! : | +     1 _RNvMs2_NtNtCs7wa3bwJW6LN_13perry_runtime2gc6layoutNtB5_23GcMutableSlotDescriptor11visit_slots  (in checkpoint) + 424  [0x1047d2c0c]
+            + ! : | +       1 _RNCNCNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc5trace24trace_heap_rewrite_slots00B9_  (in checkpoint) + 212  [0x104786bd4]
+            + ! : | +         1 _tlv_get_addr  (in libdyld.dylib) + 4  [0x18132038c]
+            + ! : | 4 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc5trace25drain_trace_worklist_step  (in checkpoint) + 7696  [0x1049af210]
+            + ! : | + 3 pthread_mutex_lock  (in libsystem_pthread.dylib) + 12,52,...  [0x181710408,0x181710430,...]
+            + ! : | + 1 DYLD-STUB$$pthread_mutex_lock  (in checkpoint) + 4  [0x105087f80]
+            + ! : | 2 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc5trace25drain_trace_worklist_step  (in checkpoint) + 1128  [0x1049ad868]
+            + ! : | + 2 pthread_mutex_unlock  (in libsystem_pthread.dylib) + 72,120  [0x18171098c,0x1817109bc]
+            + ! : | 1 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc5trace25drain_trace_worklist_step  (in checkpoint) + 3576  [0x1049ae1f8]
+            + ! : | + 1 _RNCNCNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc5trace24trace_heap_rewrite_slots00B9_  (in checkpoint) + 540  [0x104786d1c]
+            + ! : | 1 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc5trace25drain_trace_worklist_step  (in checkpoint) + 8124  [0x1049af3bc]
+            + ! : |   1 DYLD-STUB$$pthread_mutex_unlock  (in checkpoint) + 4  [0x105087f98]
+            + ! : 50 _RNvMs7_NtNtCs7wa3bwJW6LN_13perry_runtime2gc5cycleNtB5_12GcCycleState4step  (in checkpoint) + 1772  [0x1047e786c]
+            + ! : | 44 _RNvMs4_NtNtCs7wa3bwJW6LN_13perry_runtime2gc5cycleNtB5_18RootScanCycleState21step_current_subphase  (in checkpoint) + 11828  [0x1047e05b4]
+            + ! : | + 42 _RNvMs2_NtNtCs7wa3bwJW6LN_13perry_runtime2gc5cycleNtB5_30MutableRegisteredRootScanState4step  (in checkpoint) + 1544  [0x1047d28dc]
+            + ! : | + ! 14 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime7closure13dynamic_props36scan_closure_dynamic_props_roots_mut  (in checkpoint) + 1492  [0x104b4a130]
+            + ! : | + ! : 13 _RNvMs1_NtNtCs7wa3bwJW6LN_13perry_runtime2gc5rootsNtB5_18RuntimeRootVisitor17visit_nanbox_bits  (in checkpoint) + 268  [0x1047c9dbc]
+            + ! : | + ! : | 5 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc5trace14try_mark_value  (in checkpoint) + 168  [0x1049ad258]
+            + ! : | + ! : | + 3 _RNvMNtNtCs7wa3bwJW6LN_13perry_runtime2gc5traceNtB2_15ValidPointerSet8contains  (in checkpoint) + 88  [0x1047a868c]
+            + ! : | + ! : | + ! 3 _RNvMNtNtCs7wa3bwJW6LN_13perry_runtime2gc5traceNtB2_15ValidPointerSet16find_arena_floor  (in checkpoint) + 52,128,...  [0x1047a8574,0x1047a85c0,...]
+            + ! : | + ! : | + 2 _RNvMNtNtCs7wa3bwJW6LN_13perry_runtime2gc5traceNtB2_15ValidPointerSet8contains  (in checkpoint) + 52,88  [0x1047a8668,0x1047a868c]
+            + ! : | + ! : | 3 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc5trace14try_mark_value  (in checkpoint) + 236  [0x1049ad29c]
+            + ! : | + ! : | + 3 _tlv_get_addr  (in libdyld.dylib) + 4  [0x18132038c]
+            + ! : | + ! : | 3 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc5trace14try_mark_value  (in checkpoint) + 32,120,...  [0x1049ad1d0,0x1049ad228,...]
+            + ! : | + ! : | 1 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc5trace14try_mark_value  (in checkpoint) + 96  [0x1049ad210]
+            + ! : | + ! : | + 1 _tlv_get_addr  (in libdyld.dylib) + 4  [0x18132038c]
+            + ! : | + ! : | 1 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc5trace14try_mark_value  (in checkpoint) + 348  [0x1049ad30c]
+            + ! : | + ! : |   1 <deduplicated_symbol>  (in checkpoint) + 60  [0x105066f60]
+            + ! : | + ! : |     1 _RNvMs5_NtCsctvjasLqLe9_5alloc7raw_vecNtB5_11RawVecInner11finish_growCs7wa3bwJW6LN_13perry_runtime  (in checkpoint) + 88  [0x105067f58]
+            + ! : | + ! : |       1 _mi_theap_realloc_zero  (in checkpoint) + 388  [0x1050850f4]
+            + ! : | + ! : |         1 _mi_malloc_generic  (in checkpoint) + 468  [0x1050862bc]
+            + ! : | + ! : |           1 mi_page_queue_find_free_ex  (in checkpoint) + 108  [0x10503dfa4]
+            + ! : | + ! : |             1 mi_page_fresh_alloc  (in checkpoint) + 40  [0x10503dd0c]
+            + ! : | + ! : |               1 mi_arenas_page_regular_alloc  (in checkpoint) + 348  [0x10502dd4c]
+            + ! : | + ! : |                 1 mi_arenas_page_alloc_fresh  (in checkpoint) + 240  [0x10503bfc4]
+            + ! : | + ! : |                   1 mi_arenas_try_alloc  (in checkpoint) + 92  [0x10502d7c8]
+            + ! : | + ! : |                     1 mi_arenas_try_find_free  (in checkpoint) + 344  [0x10503b624]
+            + ! : | + ! : |                       1 mi_arena_try_alloc_at  (in checkpoint) + 772  [0x10503be38]
+            + ! : | + ! : |                         1 madvise  (in libsystem_kernel.dylib) + 8  [0x1816d49b0]
+            + ! : | + ! : 1 _RNvMs1_NtNtCs7wa3bwJW6LN_13perry_runtime2gc5rootsNtB5_18RuntimeRootVisitor17visit_nanbox_bits  (in checkpoint) + 16  [0x1047c9cc0]
+            + ! : | + ! 4 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime6string6intern27scan_intern_table_roots_mut  (in checkpoint) + 316  [0x104b341a0]
+            + ! : | + ! : 3 _RNvMs1_NtNtCs7wa3bwJW6LN_13perry_runtime2gc5rootsNtB5_18RuntimeRootVisitor21visit_tagged_raw_addr  (in checkpoint) + 176  [0x1047ca338]
+            + ! : | + ! : | 3 _RNvMNtNtCs7wa3bwJW6LN_13perry_runtime2gc5traceNtB2_15ValidPointerSet8contains  (in checkpoint) + 88  [0x1047a868c]
+            + ! : | + ! : |   3 _RNvMNtNtCs7wa3bwJW6LN_13perry_runtime2gc5traceNtB2_15ValidPointerSet16find_arena_floor  (in checkpoint) + 160,136  [0x1047a85e0,0x1047a85c8]
+            + ! : | + ! : 1 _RNvMs1_NtNtCs7wa3bwJW6LN_13perry_runtime2gc5rootsNtB5_18RuntimeRootVisitor21visit_tagged_raw_addr  (in checkpoint) + 0  [0x1047ca288]
+            + ! : | + ! 4 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime7closure13dynamic_props36scan_closure_dynamic_props_roots_mut  (in checkpoint) + 1104,1380,...  [0x104b49fac,0x104b4a0c0,...]
+            + ! : | + ! 3 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime6object6shapes26scan_shape_table_rekey_mut  (in checkpoint) + 292,340,...  [0x104b29b20,0x104b29b50,...]
+            + ! : | + ! 2 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime6object16descriptor_state25scan_descriptor_roots_mut  (in checkpoint) + 1492  [0x104afdd6c]
+            + ! : | + ! : 2 <deduplicated_symbol>  (in checkpoint) + 168  [0x1047ca1b4]
+            + ! : | + ! :   2 _RNvMs1_NtNtCs7wa3bwJW6LN_13perry_runtime2gc5rootsNtB5_18RuntimeRootVisitor17visit_nanbox_bits  (in checkpoint) + 268  [0x1047c9dbc]
+            + ! : | + ! :     1 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc5trace14try_mark_value  (in checkpoint) + 168  [0x1049ad258]
+            + ! : | + ! :     | 1 _RNvMNtNtCs7wa3bwJW6LN_13perry_runtime2gc5traceNtB2_15ValidPointerSet8contains  (in checkpoint) + 88  [0x1047a868c]
+            + ! : | + ! :     |   1 _RNvMNtNtCs7wa3bwJW6LN_13perry_runtime2gc5traceNtB2_15ValidPointerSet16find_arena_floor  (in checkpoint) + 160  [0x1047a85e0]
+            + ! : | + ! :     1 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc5trace14try_mark_value  (in checkpoint) + 236  [0x1049ad29c]
+            + ! : | + ! :       1 _tlv_get_addr  (in libdyld.dylib) + 4  [0x18132038c]
+            + ! : | + ! 2 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime6string6intern27scan_intern_table_roots_mut  (in checkpoint) + 288,308  [0x104b34184,0x104b34198]
+            + ! : | + ! 2 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime7closure13dynamic_props36scan_closure_dynamic_props_roots_mut  (in checkpoint) + 288  [0x104b49c7c]
+            + ! : | + ! : 2 mi_theap_malloc_zero_aligned_at_overalloc  (in checkpoint) + 244  [0x10503b41c]
+            + ! : | + ! :   2 _mi_malloc_generic  (in checkpoint) + 468  [0x1050862bc]
+            + ! : | + ! :     2 mi_page_queue_find_free_ex  (in checkpoint) + 108  [0x10503dfa4]
+            + ! : | + ! :       2 mi_page_fresh_alloc  (in checkpoint) + 40  [0x10503dd0c]
+            + ! : | + ! :         2 mi_arenas_page_regular_alloc  (in checkpoint) + 348  [0x10502dd4c]
+            + ! : | + ! :           2 mi_arenas_page_alloc_fresh  (in checkpoint) + 240  [0x10503bfc4]
+            + ! : | + ! :             2 mi_arenas_try_alloc  (in checkpoint) + 92  [0x10502d7c8]
+            + ! : | + ! :               2 mi_arenas_try_find_free  (in checkpoint) + 344  [0x10503b624]
+            + ! : | + ! :                 2 mi_arena_try_alloc_at  (in checkpoint) + 772  [0x10503be38]
+            + ! : | + ! :                   2 madvise  (in libsystem_kernel.dylib) + 8  [0x1816d49b0]
+            + ! : | + ! 2 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime7closure13dynamic_props36scan_closure_dynamic_props_roots_mut  (in checkpoint) + 1764  [0x104b4a240]
+            + ! : | + ! : 2 pthread_mutex_lock  (in libsystem_pthread.dylib) + 52,132  [0x181710430,0x181710480]
+            + ! : | + ! 1 _RNvMs1_NtNtCs7wa3bwJW6LN_13perry_runtime2gc5rootsNtB5_18RuntimeRootVisitor21visit_tagged_raw_addr  (in checkpoint) + 352  [0x1047ca3e8]
+            + ! : | + ! 1 _RNvNtCs7wa3bwJW6LN_13perry_runtime4json20scan_parse_roots_mut  (in checkpoint) + 108  [0x104894de0]
+            + ! : | + ! : 1 <deduplicated_symbol>  (in checkpoint) + 168  [0x1047ca1b4]
+            + ! : | + ! :   1 _RNvMs1_NtNtCs7wa3bwJW6LN_13perry_runtime2gc5rootsNtB5_18RuntimeRootVisitor17visit_nanbox_bits  (in checkpoint) + 268  [0x1047c9dbc]
+            + ! : | + ! :     1 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc5trace14try_mark_value  (in checkpoint) + 168  [0x1049ad258]
+            + ! : | + ! :       1 _RNvMNtNtCs7wa3bwJW6LN_13perry_runtime2gc5traceNtB2_15ValidPointerSet8contains  (in checkpoint) + 264  [0x1047a873c]
+            + ! : | + ! 1 _RNvNtCs7wa3bwJW6LN_13perry_runtime6object27scan_object_cache_roots_mut  (in checkpoint) + 940  [0x1048b3664]
+            + ! : | + ! : 1 _RNvMs1_NtNtCs7wa3bwJW6LN_13perry_runtime2gc5rootsNtB5_18RuntimeRootVisitor21visit_tagged_raw_addr  (in checkpoint) + 176  [0x1047ca338]
+            + ! : | + ! :   1 _RNvMNtNtCs7wa3bwJW6LN_13perry_runtime2gc5traceNtB2_15ValidPointerSet8contains  (in checkpoint) + 88  [0x1047a868c]
+            + ! : | + ! :     1 _RNvMNtNtCs7wa3bwJW6LN_13perry_runtime2gc5traceNtB2_15ValidPointerSet16find_arena_floor  (in checkpoint) + 160  [0x1047a85e0]
+            + ! : | + ! 1 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime6object21array_tail_transition10scan_table  (in checkpoint) + 268  [0x104b13ec4]
+            + ! : | + ! 1 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime7closure13dynamic_props22merge_closure_prop_map  (in checkpoint) + 1300  [0x104b45d44]
+            + ! : | + ! 1 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime7closure13dynamic_props36scan_closure_dynamic_props_roots_mut  (in checkpoint) + 1840  [0x104b4a28c]
+            + ! : | + ! : 1 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime7closure13dynamic_props22merge_closure_prop_map  (in checkpoint) + 56  [0x104b45868]
+            + ! : | + ! 1 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime7closure13dynamic_props36scan_closure_dynamic_props_roots_mut  (in checkpoint) + 1860  [0x104b4a2a0]
+            + ! : | + ! : 1 DYLD-STUB$$pthread_mutex_unlock  (in checkpoint) + 4  [0x105087f98]
+            + ! : | + ! 1 _RNvNtNtNtCs7wa3bwJW6LN_13perry_runtime15node_submodules4test6runner31scan_node_test_runner_roots_mut  (in checkpoint) + 1372  [0x104bde9b8]
+            + ! : | + ! 1 _RNvNtNtNtCs7wa3bwJW6LN_13perry_runtime6object13native_module16callable_exports39scan_builtin_closure_metadata_roots_mut  (in checkpoint) + 740  [0x104c4c098]
+            + ! : | + 2 _RNvMs2_NtNtCs7wa3bwJW6LN_13perry_runtime2gc5cycleNtB5_30MutableRegisteredRootScanState4step  (in checkpoint) + 1464  [0x1047d288c]
+            + ! : | +   1 _RNvMs1_NtNtCs7wa3bwJW6LN_13perry_runtime2gc5rootsNtB5_18RuntimeRootVisitor21visit_tagged_raw_addr  (in checkpoint) + 352  [0x1047ca3e8]
+            + ! : | +   1 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime6symbol8gc_roots37scan_symbol_side_table_roots_mut_step  (in checkpoint) + 288  [0x104b3bfd0]
+            + ! : | +     1 _RNvMs1_NtNtCs7wa3bwJW6LN_13perry_runtime2gc5rootsNtB5_18RuntimeRootVisitor25visit_metadata_usize_slot  (in checkpoint) + 0  [0x1047ca91c]
+            + ! : | 3 _RNvMs4_NtNtCs7wa3bwJW6LN_13perry_runtime2gc5cycleNtB5_18RootScanCycleState21step_current_subphase  (in checkpoint) + 2480  [0x1047de130]
+            + ! : | + 2 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc5roots21try_mark_value_or_raw  (in checkpoint) + 44,272  [0x1049aaa38,0x1049aab1c]
+            + ! : | + 1 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc5roots21try_mark_value_or_raw  (in checkpoint) + 32  [0x1049aaa2c]
+            + ! : | +   1 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc5trace14try_mark_value  (in checkpoint) + 32  [0x1049ad1d0]
+            + ! : | 2 _RNvMs4_NtNtCs7wa3bwJW6LN_13perry_runtime2gc5cycleNtB5_18RootScanCycleState21step_current_subphase  (in checkpoint) + 480  [0x1047dd960]
+            + ! : | + 1 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc5roots28mark_mutable_root_slots_step  (in checkpoint) + 1824  [0x1049ab7d4]
+            + ! : | + ! 1 _RNvMs2_NtNtNtNtCs7wa3bwJW6LN_13perry_runtime2gc5roots10stack_maps4lazyNtB5_14MatchedRecords4next  (in checkpoint) + 252  [0x1047d3498]
+            + ! : | + !   1 _RNvMNtNtNtNtCs7wa3bwJW6LN_13perry_runtime2gc5roots10stack_maps4lazyNtB2_10RecordWalk4next  (in checkpoint) + 396  [0x1047b12b8]
+            + ! : | + 1 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc5roots28mark_mutable_root_slots_step  (in checkpoint) + 4452  [0x1049ac218]
+            + ! : | +   1 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc10root_words22mark_mutable_root_bits  (in checkpoint) + 156  [0x10499f12c]
+            + ! : | +     1 _RNvMNtNtCs7wa3bwJW6LN_13perry_runtime2gc5traceNtB2_15ValidPointerSet8contains  (in checkpoint) + 88  [0x1047a868c]
+            + ! : | +       1 _RNvMNtNtCs7wa3bwJW6LN_13perry_runtime2gc5traceNtB2_15ValidPointerSet16find_arena_floor  (in checkpoint) + 160  [0x1047a85e0]
+            + ! : | 1 _RNvMs4_NtNtCs7wa3bwJW6LN_13perry_runtime2gc5cycleNtB5_18RootScanCycleState21step_current_subphase  (in checkpoint) + 824  [0x1047ddab8]
+            + ! : |   1 _platform_memmove  (in libsystem_platform.dylib) + 180  [0x18171f414]
+            + ! : 42 _RNvMs7_NtNtCs7wa3bwJW6LN_13perry_runtime2gc5cycleNtB5_12GcCycleState4step  (in checkpoint) + 13624  [0x1047ea6b8]
+            + ! : | 35 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc10dead_owner39prune_dead_owner_side_tables_post_trace  (in checkpoint) + 3596  [0x10499e59c]
+            + ! : | + 26 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc10dead_owner7fan_out  (in checkpoint) + 160  [0x10506b3f4]
+            + ! : | + ! 21 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime6object16descriptor_state35prune_dead_descriptor_owner_entries  (in checkpoint) + 332  [0x104b00db8]
+            + ! : | + ! : 10 _RNCNvNtNtCs7wa3bwJW6LN_13perry_runtime6object16descriptor_state35prune_dead_descriptor_owner_entries0B7_  (in checkpoint) + 132,88,...  [0x104799b40,0x104799b14,...]
+            + ! : | + ! : 6 _RNCNvNtNtCs7wa3bwJW6LN_13perry_runtime6object16descriptor_state35prune_dead_descriptor_owner_entries0B7_  (in checkpoint) + 44  [0x104799ae8]
+            + ! : | + ! : | 3 _RINvYNtNtNtCs8BpVhDwHqJW_3std4hash6random11RandomStateNtNtCsjgY6bXVaRmE_4core4hash11BuildHasher8hash_oneRjECs7wa3bwJW6LN_13perry_runtime  (in checkpoint) + 80  [0x10477adb0]
+            + ! : | + ! : | + 3 _RNvXs3_NtNtCsjgY6bXVaRmE_4core4hash3sipINtB5_6HasherNtB5_11Sip13RoundsENtB7_6Hasher5writeCs7wa3bwJW6LN_13perry_runtime  (in checkpoint) + 348,376,...  [0x104cd2498,0x104cd24b4,...]
+            + ! : | + ! : | 3 _RINvYNtNtNtCs8BpVhDwHqJW_3std4hash6random11RandomStateNtNtCsjgY6bXVaRmE_4core4hash11BuildHasher8hash_oneRjECs7wa3bwJW6LN_13perry_runtime  (in checkpoint) + 264  [0x10477ae68]
+            + ! : | + ! : 3 _RNCNvNtNtCs7wa3bwJW6LN_13perry_runtime6object16descriptor_state35prune_dead_descriptor_owner_entries0B7_  (in checkpoint) + 392  [0x104799c44]
+            + ! : | + ! : | 2 <deduplicated_symbol>  (in checkpoint) + 236  [0x105041250]
+            + ! : | + ! : | + 1 _RINvYNtNtNtCs8BpVhDwHqJW_3std4hash6random11RandomStateNtNtCsjgY6bXVaRmE_4core4hash11BuildHasher8hash_oneRjECsbfrV4gKhFso_11fancy_regex  (in checkpoint) + 80  [0x1045cbc70]
+            + ! : | + ! : | + ! 1 _RNvXs3_NtNtCsjgY6bXVaRmE_4core4hash3sipINtB5_6HasherNtB5_11Sip13RoundsENtB7_6Hasher5writeCsbfrV4gKhFso_11fancy_regex  (in checkpoint) + 68  [0x1045e3758]
+            + ! : | + ! : | + 1 _RINvYNtNtNtCs8BpVhDwHqJW_3std4hash6random11RandomStateNtNtCsjgY6bXVaRmE_4core4hash11BuildHasher8hash_oneRjECsbfrV4gKhFso_11fancy_regex  (in checkpoint) + 264  [0x1045cbd28]
+            + ! : | + ! : | 1 <deduplicated_symbol>  (in checkpoint) + 248  [0x10504125c]
+            + ! : | + ! : 2 _RNCNvNtNtCs7wa3bwJW6LN_13perry_runtime6object16descriptor_state35prune_dead_descriptor_owner_entries0B7_  (in checkpoint) + 208  [0x104799b8c]
+            + ! : | + ! :   2 _RNvMNtNtCs7wa3bwJW6LN_13perry_runtime2gc10dead_ownerNtB2_14PostTraceProbe13owner_is_dead  (in checkpoint) + 16,76  [0x1047a737c,0x1047a73b8]
+            + ! : | + ! 3 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime6object16descriptor_state35prune_dead_descriptor_owner_entries  (in checkpoint) + 280,1076,...  [0x104b00d84,0x104b010a0,...]
+            + ! : | + ! 2 _RNCNvNtNtCs7wa3bwJW6LN_13perry_runtime6object16descriptor_state35prune_dead_descriptor_owner_entries0B7_  (in checkpoint) + 328  [0x104799c04]
+            + ! : | + 8 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc10dead_owner7fan_out  (in checkpoint) + 256  [0x10506b454]
+            + ! : | + ! 8 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime7closure13dynamic_props36prune_dead_closure_side_table_owners  (in checkpoint) + 1348  [0x104b494ec]
+            + ! : | + !   5 _RNCNvNtNtCs7wa3bwJW6LN_13perry_runtime6object16descriptor_state35prune_dead_descriptor_owner_entries0B7_  (in checkpoint) + 392  [0x104799c44]
+            + ! : | + !   : 4 <deduplicated_symbol>  (in checkpoint) + 236  [0x105041250]
+            + ! : | + !   : | 3 _RINvYNtNtNtCs8BpVhDwHqJW_3std4hash6random11RandomStateNtNtCsjgY6bXVaRmE_4core4hash11BuildHasher8hash_oneRjECsbfrV4gKhFso_11fancy_regex  (in checkpoint) + 80  [0x1045cbc70]
+            + ! : | + !   : | + 3 _RNvXs3_NtNtCsjgY6bXVaRmE_4core4hash3sipINtB5_6HasherNtB5_11Sip13RoundsENtB7_6Hasher5writeCsbfrV4gKhFso_11fancy_regex  (in checkpoint) + 12,364,...  [0x1045e3720,0x1045e3880,...]
+            + ! : | + !   : | 1 _RINvYNtNtNtCs8BpVhDwHqJW_3std4hash6random11RandomStateNtNtCsjgY6bXVaRmE_4core4hash11BuildHasher8hash_oneRjECsbfrV4gKhFso_11fancy_regex  (in checkpoint) + 264  [0x1045cbd28]
+            + ! : | + !   : 1 _RINvYNtNtNtCs8BpVhDwHqJW_3std4hash6random11RandomStateNtNtCsjgY6bXVaRmE_4core4hash11BuildHasher8hash_oneRjECsbfrV4gKhFso_11fancy_regex  (in checkpoint) + 268  [0x1045cbd2c]
+            + ! : | + !   2 _RNCNvNtNtCs7wa3bwJW6LN_13perry_runtime6object16descriptor_state35prune_dead_descriptor_owner_entries0B7_  (in checkpoint) + 144,180  [0x104799b4c,0x104799b70]
+            + ! : | + !   1 _RNCNvNtNtCs7wa3bwJW6LN_13perry_runtime6object16descriptor_state35prune_dead_descriptor_owner_entries0B7_  (in checkpoint) + 44  [0x104799ae8]
+            + ! : | + !     1 _RINvYNtNtNtCs8BpVhDwHqJW_3std4hash6random11RandomStateNtNtCsjgY6bXVaRmE_4core4hash11BuildHasher8hash_oneRjECs7wa3bwJW6LN_13perry_runtime  (in checkpoint) + 60  [0x10477ad9c]
+            + ! : | + 1 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc10dead_owner7fan_out  (in checkpoint) + 460  [0x10506b520]
+            + ! : | 5 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc10dead_owner39prune_dead_owner_side_tables_post_trace  (in checkpoint) + 496,1408,...  [0x10499d980,0x10499dd10,...]
+            + ! : | 2 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc10dead_owner39prune_dead_owner_side_tables_post_trace  (in checkpoint) + 1264  [0x10499dc80]
+            + ! : |   2 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime6object21array_tail_transition17note_live_entries  (in checkpoint) + 72,448  [0x104b1424c,0x104b143c4]
+            + ! : 21 _RNvMs7_NtNtCs7wa3bwJW6LN_13perry_runtime2gc5cycleNtB5_12GcCycleState4step  (in checkpoint) + 3472  [0x1047e7f10]
+            + ! : | 9 _RNvMs_NtNtCs7wa3bwJW6LN_13perry_runtime2gc5traceNtB4_22ValidPointerSetBuilder4step  (in checkpoint) + 2216  [0x1047f1a28]
+            + ! : | + 9 _RNvMs_NtNtCs7wa3bwJW6LN_13perry_runtime5arena4walkNtB4_17ArenaObjectCursor13next_budgeted  (in checkpoint) + 316,92,...  [0x1047f7f9c,0x1047f7ebc,...]
+            + ! : | 8 _RNvMs_NtNtCs7wa3bwJW6LN_13perry_runtime2gc5traceNtB4_22ValidPointerSetBuilder4step  (in checkpoint) + 2656,2180,...  [0x1047f1be0,0x1047f1a04,...]
+            + ! : | 4 _RNvMs_NtNtCs7wa3bwJW6LN_13perry_runtime5arena4walkNtB4_17ArenaObjectCursor13next_budgeted  (in checkpoint) + 380,368  [0x1047f7fdc,0x1047f7fd0]
+            + ! : 20 _RNvMs7_NtNtCs7wa3bwJW6LN_13perry_runtime2gc5cycleNtB5_12GcCycleState4step  (in checkpoint) + 2256  [0x1047e7a50]
+            + ! : | 20 _RNvMs7_NtNtCs7wa3bwJW6LN_13perry_runtime2gc5cycleNtB5_12GcCycleState37step_atomic_finalize_current_subphase  (in checkpoint) + 1964  [0x1047e40ec]
+            + ! : |   10 _RNvMNtNtCs7wa3bwJW6LN_13perry_runtime2gc6verifyNtB2_32OldToYoungRememberedRebuildState4step  (in checkpoint) + 152  [0x1047a8840]
+            + ! : |   + 10 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc6verify36remember_retained_old_to_young_slots  (in checkpoint) + 100,32,...  [0x1049d1068,0x1049d1024,...]
+            + ! : |   4 _RNvMNtNtCs7wa3bwJW6LN_13perry_runtime2gc6verifyNtB2_32OldToYoungRememberedRebuildState4step  (in checkpoint) + 116  [0x1047a881c]
+            + ! : |   + 4 _RNvMs_NtNtCs7wa3bwJW6LN_13perry_runtime5arena4walkNtB4_17ArenaObjectCursor13next_budgeted  (in checkpoint) + 92,152,...  [0x1047f7ebc,0x1047f7ef8,...]
+            + ! : |   4 _RNvMNtNtCs7wa3bwJW6LN_13perry_runtime2gc6verifyNtB2_32OldToYoungRememberedRebuildState4step  (in checkpoint) + 84,96,...  [0x1047a87fc,0x1047a8808,...]
+            + ! : |   2 _RNvMs_NtNtCs7wa3bwJW6LN_13perry_runtime5arena4walkNtB4_17ArenaObjectCursor13next_budgeted  (in checkpoint) + 380  [0x1047f7fdc]
+            + ! : 7 _RNvMs7_NtNtCs7wa3bwJW6LN_13perry_runtime2gc5cycleNtB5_12GcCycleState4step  (in checkpoint) + 4612,4628,...  [0x1047e8384,0x1047e8394,...]
+            + ! : 4 _RNvMs7_NtNtCs7wa3bwJW6LN_13perry_runtime2gc5cycleNtB5_12GcCycleState4step  (in checkpoint) + 19464  [0x1047ebd88]
+            + ! :   4 mi_theap_collect_ex  (in checkpoint) + 420  [0x10503a1d4]
+            + ! :     4 _mi_arenas_collect  (in checkpoint) + 584  [0x10502eb84]
+            + ! :       3 _mi_bitmap_forall_setc_ranges  (in checkpoint) + 652  [0x105031e94]
+            + ! :       + 3 mi_arena_try_purge_visitor  (in checkpoint) + 48  [0x10503cb48]
+            + ! :       +   3 mi_arena_try_purge_range  (in checkpoint) + 112  [0x10503cc28]
+            + ! :       +     3 _mi_os_purge_ex  (in checkpoint) + 332  [0x105037378]
+            + ! :       +       3 mi_os_decommit_ex  (in checkpoint) + 152  [0x105037038]
+            + ! :       +         3 madvise  (in libsystem_kernel.dylib) + 8  [0x1816d49b0]
+            + ! :       1 _mi_bitmap_forall_setc_ranges  (in checkpoint) + 556  [0x105031e34]
+            + ! :         1 _mi_bitmap_forall_setc_ranges  (in checkpoint) + 600  [0x105031e60]
+            + ! 25 _RNvNtCs7wa3bwJW6LN_13perry_runtime2gc39gc_collect_full_mark_sweep_with_trigger  (in checkpoint) + 280  [0x10486a550]
+            + !   25 _RNvMs7_NtNtCs7wa3bwJW6LN_13perry_runtime2gc5cycleNtB5_12GcCycleState8new_full  (in checkpoint) + 1232  [0x1047ed750]
+            + !     17 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime5arena9page_meta43flush_deferred_old_page_registrations_batch  (in checkpoint) + 492,652,...  [0x10506da18,0x10506dab8,...]
+            + !     8 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime5arena9page_meta43flush_deferred_old_page_registrations_batch  (in checkpoint) + 860  [0x10506db88]
+            + !       4 <deduplicated_symbol>  (in checkpoint) + 60  [0x10507ee3c]
+            + !       + 3 _RNvMs5_NtCsctvjasLqLe9_5alloc7raw_vecNtB5_11RawVecInner11finish_growCs3HfcutmYuk_10swc_common  (in checkpoint) + 116  [0x10507efa0]
+            + !       + ! 3 mi_theap_malloc_zero_aligned_at_generic  (in checkpoint) + 428  [0x10503b274]
+            + !       + !   3 _mi_malloc_generic  (in checkpoint) + 468  [0x1050862bc]
+            + !       + !     2 mi_page_queue_find_free_ex  (in checkpoint) + 976  [0x10503e308]
+            + !       + !     : 2 mi_page_free_list_extend  (in checkpoint) + 52  [0x10503dcc0]
+            + !       + !     1 mi_page_queue_find_free_ex  (in checkpoint) + 108  [0x10503dfa4]
+            + !       + !       1 mi_page_fresh_alloc  (in checkpoint) + 40  [0x10503dd0c]
+            + !       + !         1 mi_arenas_page_regular_alloc  (in checkpoint) + 348  [0x10502dd4c]
+            + !       + !           1 mi_arenas_page_alloc_fresh  (in checkpoint) + 240  [0x10503bfc4]
+            + !       + !             1 mi_arenas_try_alloc  (in checkpoint) + 92  [0x10502d7c8]
+            + !       + !               1 mi_arenas_try_find_free  (in checkpoint) + 344  [0x10503b624]
+            + !       + !                 1 mi_arena_try_alloc_at  (in checkpoint) + 772  [0x10503be38]
+            + !       + !                   1 madvise  (in libsystem_kernel.dylib) + 8  [0x1816d49b0]
+            + !       + 1 _RNvMs5_NtCsctvjasLqLe9_5alloc7raw_vecNtB5_11RawVecInner11finish_growCs3HfcutmYuk_10swc_common  (in checkpoint) + 112  [0x10507ef9c]
+            + !       2 <deduplicated_symbol>  (in checkpoint) + 44,60  [0x10507ee2c,0x10507ee3c]
+            + !       2 _RNvMs5_NtCsctvjasLqLe9_5alloc7raw_vecNtB5_11RawVecInner11finish_growCs3HfcutmYuk_10swc_common  (in checkpoint) + 160,164  [0x10507efcc,0x10507efd0]
+            + 1 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc6policy16gc_check_trigger  (in checkpoint) + 348  [0x1049c415c]
+            + ! 1 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc6policy23gc_budgeted_due_trigger  (in checkpoint) + 2116  [0x1049c5088]
+            + !   1 _tlv_get_addr  (in libdyld.dylib) + 4  [0x18132038c]
+            + 1 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc6policy16gc_check_trigger  (in checkpoint) + 576  [0x1049c4240]
+            +   1 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc6policy23gc_budgeted_due_trigger  (in checkpoint) + 344  [0x1049c499c]
+            +     1 _tlv_get_addr  (in libdyld.dylib) + 4  [0x18132038c]
+            214 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime4json9parse_api10parse_slow  (in checkpoint) + 332  [0x104a5fb04]
+            + 214 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime4json6parser21nesting_depth_exceeds  (in checkpoint) + 708,668  [0x104a56140,0x104a56118]
+            1 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime4json9parse_api10parse_slow  (in checkpoint) + 1572  [0x104a5ffdc]
+            + 1 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime4json9parse_api10parse_slow  (in checkpoint) + 3808  [0x104a60898]
+            +   1 _tlv_get_addr  (in libdyld.dylib) + 4  [0x18132038c]
+            1 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime4json9parse_api10parse_slow  (in checkpoint) + 4136  [0x104a609e0]
+              1 _RNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc6policy28gc_bump_malloc_trigger_inner  (in checkpoint) + 188  [0x1049c6598]
+                1 _tlv_get_addr  (in libdyld.dylib) + 4  [0x18132038c]
+
+Total number in stack (recursive counted multiple, when >=5):
+        10       _tlv_get_addr  (in libdyld.dylib) + 0  [0x181320388]
+        8       _RNvMNtNtCs7wa3bwJW6LN_13perry_runtime2gc5traceNtB2_15ValidPointerSet16find_arena_floor  (in checkpoint) + 0  [0x1047a8540]
+        8       _RNvMNtNtCs7wa3bwJW6LN_13perry_runtime2gc5traceNtB2_15ValidPointerSet8contains  (in checkpoint) + 88  [0x1047a868c]
+        6       _RNvMs_NtNtCs7wa3bwJW6LN_13perry_runtime5arena4walkNtB4_17ArenaObjectCursor13next_budgeted  (in checkpoint) + 0  [0x1047f7e60]
+        5       _RNCNCNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc5trace24trace_heap_rewrite_slots00B9_  (in checkpoint) + 0  [0x104786b00]
+        5       _RNvMNtNtCs7wa3bwJW6LN_13perry_runtime2gc5traceNtB2_15ValidPointerSet8contains  (in checkpoint) + 0  [0x1047a8634]
+        5       madvise  (in libsystem_kernel.dylib) + 0  [0x1816d49a8]
+
+Sort by top of stack, same collapsed (when >= 5):
+        _RNvNtNtCsvoDT44C053_8simdutf814implementation7aarch6425validate_utf8_compat_neon  (in checkpoint)        717
+        _platform_memmove  (in libsystem_platform.dylib)        369
+        _RNvMs_NtNtCs7wa3bwJW6LN_13perry_runtime4json6parserNtB4_12DirectParser18parse_string_bytes  (in checkpoint)        253
+        _RNvNtNtCs7wa3bwJW6LN_13perry_runtime4json6parser21nesting_depth_exceeds  (in checkpoint)        214
+        _RNvNtNtCs7wa3bwJW6LN_13perry_runtime6string11utf16_count11count_bytes  (in checkpoint)        166
+        _RNvNtNtCs7wa3bwJW6LN_13perry_runtime5arena9page_meta26unregister_old_block_pages  (in checkpoint)        96
+        madvise  (in libsystem_kernel.dylib)        58
+        _RNvNtNtCs7wa3bwJW6LN_13perry_runtime5arena9page_meta24register_old_block_pages  (in checkpoint)        32
+        _RNvMs_NtNtCs7wa3bwJW6LN_13perry_runtime5arena4walkNtB4_17ArenaObjectCursor13next_budgeted  (in checkpoint)        28
+        _RNvMNtNtCs7wa3bwJW6LN_13perry_runtime2gc5traceNtB2_15ValidPointerSet16find_arena_floor  (in checkpoint)        24
+        _RNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc5trace25drain_trace_worklist_step  (in checkpoint)        18
+        _RNvNtNtCs7wa3bwJW6LN_13perry_runtime5arena9page_meta43flush_deferred_old_page_registrations_batch  (in checkpoint)        17
+        _tlv_get_addr  (in libdyld.dylib)        17
+        _RNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc6oldgen32invalidate_dead_old_arena_header  (in checkpoint)        15
+        _RNCNvNtNtCs7wa3bwJW6LN_13perry_runtime6object16descriptor_state35prune_dead_descriptor_owner_entries0B7_  (in checkpoint)        14
+        _RNvMs1_NtNtCs7wa3bwJW6LN_13perry_runtime2gc6oldgenNtB5_21IncrementalSweepState4step  (in checkpoint)        14
+        _RNvNtNtCs7wa3bwJW6LN_13perry_runtime7closure13dynamic_props22merge_closure_prop_map  (in checkpoint)        12
+        _RNCNCNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc5trace24trace_heap_rewrite_slots00B9_  (in checkpoint)        10
+        _RNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc17layout_slot_visit32visit_gc_layout_slot_descriptors  (in checkpoint)        10
+        _RNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc6verify36remember_retained_old_to_young_slots  (in checkpoint)        10
+        _RNvMNtNtCs7wa3bwJW6LN_13perry_runtime2gc5traceNtB2_15ValidPointerSet8contains  (in checkpoint)        9
+        _RNvMs_NtNtCs7wa3bwJW6LN_13perry_runtime2gc5traceNtB4_22ValidPointerSetBuilder4step  (in checkpoint)        8
+        mi_free  (in checkpoint)        8
+        _RNvMs3_NtNtCs7wa3bwJW6LN_13perry_runtime2gc6oldgenNtB5_22ArenaSweepObjectsState19reclaim_dead_object  (in checkpoint)        7
+        _RNvMs7_NtNtCs7wa3bwJW6LN_13perry_runtime2gc5cycleNtB5_12GcCycleState4step  (in checkpoint)        7
+        _RNvNtCs7wa3bwJW6LN_13perry_runtime6string20string_storage_alloc  (in checkpoint)        6
+        _RNvNtNtCs7wa3bwJW6LN_13perry_runtime5arena9page_meta33classify_heap_generation_uncached  (in checkpoint)        6
+        _RNvNtNtCs7wa3bwJW6LN_13perry_runtime5array13element_shape20forget_element_shape  (in checkpoint)        6
+        _platform_memset  (in libsystem_platform.dylib)        6
+        _RNvMs2_NtNtCs7wa3bwJW6LN_13perry_runtime2gc6layoutNtB5_23GcMutableSlotDescriptor11visit_slots  (in checkpoint)        5
+        _RNvNtNtCs7wa3bwJW6LN_13perry_runtime2gc10dead_owner39prune_dead_owner_side_tables_post_trace  (in checkpoint)        5
+        _RNvNtNtCs7wa3bwJW6LN_13perry_runtime5array13element_shape19clear_element_shape  (in checkpoint)        5
+        pthread_mutex_lock  (in libsystem_pthread.dylib)        5
+
+Binary Images:
+       0x104590000 -        0x1053a66af +checkpoint (0) <1366B49E-1DB1-3F59-A404-77D34FF297E1> /Users/*/checkpoint
+       0x1812b0000 -        0x181302b4b  libobjc.A.dylib (951.7) <FF1D8AE4-ABEF-35F1-A30A-1183B9CB414F> /usr/lib/libobjc.A.dylib
+       0x181303000 -        0x181337d07  libdyld.dylib (1378) <B147D877-D0C2-388F-B38D-D3132E39905F> /usr/lib/system/libdyld.dylib
+       0x181338000 -        0x1813de217  dyld (1.0.0 - 1378) <A237EF81-B68B-37BA-A165-92C965529534> /usr/lib/dyld
+       0x1813df000 -        0x1813e2228  libsystem_blocks.dylib (96) <CC947089-488D-316B-A9C7-46DEC0F73145> /usr/lib/system/libsystem_blocks.dylib
+       0x1813e3000 -        0x18143755f  libxpc.dylib (3102.120.13) <C40FCAE8-7A17-3D82-87CB-3DA4802ADEF1> /usr/lib/system/libxpc.dylib
+       0x181438000 -        0x1814589ff  libsystem_trace.dylib (1861.120.4) <D0FABAB3-5AE7-3F10-8C62-60CBF5D70850> /usr/lib/system/libsystem_trace.dylib
+       0x181459000 -        0x1815075f7  libcorecrypto.dylib (1922.121.1) <A01A158D-6FE7-3B1C-A2C4-6BCB90D7314A> /usr/lib/system/libcorecrypto.dylib
+       0x181508000 -        0x1815581d7  libsystem_malloc.dylib (812.100.31) <5FAE4807-4D2B-3A95-A63A-DD96D3DA11B4> /usr/lib/system/libsystem_malloc.dylib
+       0x181559000 -        0x1815a023f  libdispatch.dylib (1542.100.32) <F071EFE4-299F-3089-ACC4-0025B8FFB52A> /usr/lib/system/libdispatch.dylib
+       0x1815a1000 -        0x1815a3ffb  libsystem_featureflags.dylib (103) <71FCFFBD-85F8-3365-AFE0-BECEA4369122> /usr/lib/system/libsystem_featureflags.dylib
+       0x1815a4000 -        0x181624d9f  libsystem_c.dylib (1752.120.2) <694B7881-1BF3-3D0F-8F19-B50AE4E8EF8A> /usr/lib/system/libsystem_c.dylib
+       0x181625000 -        0x1816b5ae7  libc++.1.dylib (2100.43) <5013C0F8-84A9-3B56-9FEB-C353816A750F> /usr/lib/libc++.1.dylib
+       0x1816b6000 -        0x1816d075f  libc++abi.dylib (2100.43) <E482D257-E5A0-3816-BD97-7B39342958DA> /usr/lib/libc++abi.dylib
+       0x1816d1000 -        0x18170e2af  libsystem_kernel.dylib (12377.121.6) <CC1CF985-BC65-3725-809F-4C1E36B8F4BA> /usr/lib/system/libsystem_kernel.dylib
+       0x18170f000 -        0x18171bb3b  libsystem_pthread.dylib (539.100.4) <4F33683C-18C8-39A1-800B-2E3BD43BCC13> /usr/lib/system/libsystem_pthread.dylib
+       0x18171c000 -        0x181724963  libsystem_platform.dylib (375.120.2) <160FD864-8D15-36FC-9E97-9725388CFAFE> /usr/lib/system/libsystem_platform.dylib
+       0x181725000 -        0x1817546eb  libsystem_info.dylib (600) <3D62F2D9-F516-31BF-83C7-E203D872300B> /usr/lib/system/libsystem_info.dylib
+       0x1856ec000 -        0x1856f5e5f  libsystem_darwin.dylib (1752.120.2) <8858F025-745A-388E-9544-080781CC9A69> /usr/lib/system/libsystem_darwin.dylib
+       0x185b57000 -        0x185b691b6  libsystem_notify.dylib (348.120.4) <64D76451-1E0C-369B-A631-54DA3140E083> /usr/lib/system/libsystem_notify.dylib
+       0x187e24000 -        0x187e3ef7b  libsystem_networkextension.dylib (2226.121.1) <0331EE20-A1FB-3C0D-990A-F65939CFF505> /usr/lib/system/libsystem_networkextension.dylib
+       0x187ec1000 -        0x187ed8fdf  libsystem_asl.dylib (406) <F40838DF-2F15-3F62-970F-DEE25706BF1B> /usr/lib/system/libsystem_asl.dylib
+       0x189a7f000 -        0x189a87387  libsystem_symptoms.dylib (2169.120.7) <F5029F5C-1BF3-31C7-892E-BC8606AC829E> /usr/lib/system/libsystem_symptoms.dylib
+       0x18dd23000 -        0x18dd5b257  libsystem_containermanager.dylib (725.120.2) <518BE44D-AA31-31E6-B44B-A37AD5E47040> /usr/lib/system/libsystem_containermanager.dylib
+       0x18f134000 -        0x18f1385d7  libsystem_configuration.dylib (1405.120.5) <0F7BBC1C-3D50-3E59-A31F-E4672A80BCEB> /usr/lib/system/libsystem_configuration.dylib
+       0x18f139000 -        0x18f13f8cf  libsystem_sandbox.dylib (2680.120.12) <EC3A75EA-44C0-3A0B-9BF7-71C117B0A9C6> /usr/lib/system/libsystem_sandbox.dylib
+       0x190793000 -        0x1907961fb  libquarantine.dylib (196.120.2) <5849009B-ACA3-3796-94C4-BBDF8D300EBA> /usr/lib/system/libquarantine.dylib
+       0x190f32000 -        0x190f38d03  libsystem_coreservices.dylib (191.4.5) <9576143B-C303-35A3-BA63-1FD06EDA2BB1> /usr/lib/system/libsystem_coreservices.dylib
+       0x1914bd000 -        0x1914faa77  libsystem_m.dylib (3312.100.1) <A7E0863C-101A-31A0-922B-ED9B02626151> /usr/lib/system/libsystem_m.dylib
+       0x1914fc000 -        0x1914ff527  libmacho.dylib (1378) <755441B4-C034-3E3A-8E3C-F424FBB28261> /usr/lib/system/libmacho.dylib
+       0x191519000 -        0x1915263a7  libcommonCrypto.dylib (600035) <CE357BB1-2D49-37CC-9FFE-D093936B1475> /usr/lib/system/libcommonCrypto.dylib
+       0x191527000 -        0x191530ca3  libunwind.dylib (2100.2) <FC8F0C4E-6FB0-3E27-ABEF-B0FA720CD5E4> /usr/lib/system/libunwind.dylib
+       0x191539000 -        0x1915437ff  libcopyfile.dylib (240) <8ACFAC7A-88E9-3EF4-853F-A9140FF110E5> /usr/lib/system/libcopyfile.dylib
+       0x191544000 -        0x191547987  libcompiler_rt.dylib (103.3) <AA79151F-C19D-3C7C-92F8-B10F04D82C1C> /usr/lib/system/libcompiler_rt.dylib
+       0x191548000 -        0x19154c78b  libsystem_collections.dylib (1752.120.2) <72DB5BE7-EF78-37D0-8AAD-53E37CFE4287> /usr/lib/system/libsystem_collections.dylib
+       0x19154d000 -        0x1915504cf  libsystem_secinit.dylib (168.100.7) <E525C566-CDA4-3D99-B12B-1615FD54A1F3> /usr/lib/system/libsystem_secinit.dylib
+       0x191551000 -        0x191553bf7  libremovefile.dylib (85.100.6) <635E661D-80A7-340D-A165-3F7D318FDFC9> /usr/lib/system/libremovefile.dylib
+       0x191554000 -        0x191554f27  libkeymgr.dylib (31) <8C08891A-DF1C-3DCC-AB64-4742FD6BE9BA> /usr/lib/system/libkeymgr.dylib
+       0x191555000 -        0x19155de37  libsystem_dnssd.dylib (2881.120.11) <6F45DF3F-233B-3BC3-BA8C-B43E7DA884BF> /usr/lib/system/libsystem_dnssd.dylib
+       0x19155e000 -        0x19156309b  libcache.dylib (95) <189B576E-6176-3F82-8FA4-5914B0BEAEE7> /usr/lib/system/libcache.dylib
+       0x191564000 -        0x191565ce3  libSystem.B.dylib (1356) <D65E4112-C151-3FF8-BEB7-4841436012D6> /usr/lib/libSystem.B.dylib
+       0x28479b000 -        0x2847a2349  libRosetta.dylib (367.9) <8651ED4F-6506-3788-B56B-32EE414A85CA> /usr/lib/libRosetta.dylib
+       0x2863b8000 -        0x2863bba4b  libsystem_darwindirectory.dylib (122) <CF277A2C-C818-3F16-8B3F-3C7B39FCD164> /usr/lib/system/libsystem_darwindirectory.dylib
+       0x2863bc000 -        0x2863c55d3  libsystem_eligibility.dylib (319.121.1) <DDAC0531-0262-3DDC-8EC8-80EB9438847A> /usr/lib/system/libsystem_eligibility.dylib
+       0x2863c6000 -        0x2863cd88b  libsystem_sanitizers.dylib (26.1) <44C4234F-8B2D-38D3-A774-B4B3C75AF3A7> /usr/lib/system/libsystem_sanitizers.dylib
+       0x2863ce000 -        0x2863cebb7  libsystem_trial.dylib (474.2.18.2) <68C583BA-AFF5-3916-86AE-6E38BFEF98D6> /usr/lib/system/libsystem_trial.dylib

@@ -5,29 +5,19 @@
 //! avoids decoding code points and permits vector boundaries inside a sequence.
 //! The caller must still validate raw/WTF-8 bytes before constructing `&str`.
 
-#[cfg(target_arch = "aarch64")]
-#[path = "utf16_shape.rs"]
-mod shape;
-
-// Keep large-string counting out of the inlined small allocation path. The
-// ARM counter proves only the byte-shape property needed to match the bounded
-// WTF-8 walker; it must never be used as a UTF-8 validity assertion.
+// Keep large-string validation and vector counting out of the inlined small
+// allocation path. Counting needs only a validity result, not the first error
+// offset. On invalid input the bounded WTF-8 counter keeps its interpretation.
 #[inline(never)]
-pub(super) fn count_bytes(bytes: &[u8]) -> u32 {
-    #[cfg(target_arch = "aarch64")]
-    {
-        shape::count(bytes).unwrap_or_else(|| super::compute_utf16_len_wtf8(bytes))
-    }
-    #[cfg(not(target_arch = "aarch64"))]
+pub fn count_bytes(bytes: &[u8]) -> u32 {
     match simdutf8::compat::from_utf8(bytes) {
         Ok(s) => count(s) as u32,
-        Err(_) => super::compute_utf16_len_wtf8(bytes),
+        Err(_) => super::legacy(bytes),
     }
 }
 
-#[cfg(any(test, not(target_arch = "aarch64")))]
 #[inline]
-pub(super) fn count(s: &str) -> usize {
+pub fn count(s: &str) -> usize {
     if s.len() < 64 {
         return s.encode_utf16().count();
     }
@@ -79,6 +69,3 @@ pub(super) fn count(s: &str) -> usize {
     units
 }
 
-#[cfg(test)]
-#[path = "utf16_count_tests.rs"]
-mod tests;

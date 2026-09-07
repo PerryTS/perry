@@ -89,3 +89,11 @@ for [all 38 rows](results/json-shipping-profile/measurements/recheck/all-38.md).
 The prefix candidate still fails acceptance: a +0.45% record-object parse
 regression repeats, and large retained parse peak RSS increases. The reference
 matches or beats both competitors' CPU medians in 15 of 38 rows in that run.
+
+The [string-counting investigation](results/json-string-counting/README.md)
+preserves an allocation-free ARM UTF-16 counter on the separate experimental
+branch `codex/json-utf16-count-1520`. It improves Unicode parse CPU, with all
+correctness and moving-GC checks passing, but has not met no-regression
+acceptance. A same-binary control exposes invocation-path sensitivity in the
+large lifetime benchmark; the report includes corrected comparisons through
+one fixed executable path. The original GC branch remains at `ae1f89611`.

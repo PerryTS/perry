@@ -1,0 +1,93 @@
+--- 
+
++++ 
+
+@@ -66,7 +66,7 @@
+
+ 260:  strb   w8, [x0]
+ 264:  b      0x100432594               ; <+468>
+ 268:  mov    x20, x0
+-272:  bl     0x100adb8b0               ; perry_runtime::tls_hot::hot_uncached
++272:  bl     0x100adb430               ; perry_runtime::tls_hot::hot_uncached
+ 276:  mov    x8, x0
+ 280:  mov    x0, x20
+ 284:  add    x8, x8, x19, lsl #3
+@@ -76,7 +76,7 @@
+
+ 300:  add    x8, x8, #0x9c0            ; perry_runtime::gc::roots::GC_ROOT_LOCK_DEPTH
+ 304:  mov    x19, x0
+ 308:  mov    x0, x8
+-312:  bl     0x100ad8d1c               ; <perry_runtime::tls_hot::HotKey<perry_runtime::module_require::path_registry::PathModuleRegistry>>::get_slow
++312:  bl     0x100ad889c               ; <perry_runtime::tls_hot::HotKey<perry_runtime::module_require::path_registry::PathModuleRegistry>>::get_slow
+ 316:  mov    x8, x0
+ 320:  mov    x0, x19
+ 324:  ldr    x8, [x8]
+@@ -337,25 +337,25 @@
+
+ 1344: ldadd  w8, w8, [x9]
+ 1348: b      0x100432594               ; <+468>
+ 1352: mov    x19, x0
+-1356: bl     0x100ab75c4               ; <std::sync::once_lock::OnceLock<bool>>::initialize::<<std::sync::once_lock::OnceLock<bool>>::get_or_init<perry_runtime::gc::gc_scavenge_enabled::{closure#0}>::{closure#0}, !>
++1356: bl     0x100ab7144               ; <std::sync::once_lock::OnceLock<bool>>::initialize::<<std::sync::once_lock::OnceLock<bool>>::get_or_init<perry_runtime::gc::gc_scavenge_enabled::{closure#0}>::{closure#0}, !>
+ 1360: mov    x0, x19
+ 1364: adrp   x8, 2766
+ 1368: ldrb   w8, [x8, #0xd00]
+ 1372: tbz    w8, #0x0, 0x1004325c8     ; <+520>
+ 1376: b      0x1004325f8               ; <+568>
+ 1380: mov    x19, x0
+-1384: bl     0x100ab79b4               ; <std::sync::once_lock::OnceLock<bool>>::initialize::<<std::sync::once_lock::OnceLock<bool>>::get_or_init<perry_runtime::gc::policy::gc_moving_loop_polls_enabled::{closure#0}>::{closure#0}, !>
++1384: bl     0x100ab7534               ; <std::sync::once_lock::OnceLock<bool>>::initialize::<<std::sync::once_lock::OnceLock<bool>>::get_or_init<perry_runtime::gc::policy::gc_moving_loop_polls_enabled::{closure#0}>::{closure#0}, !>
+ 1388: mov    x0, x19
+ 1392: adrp   x8, 2766
+ 1396: ldrb   w8, [x8, #0xec0]
+ 1400: cbz    w8, 0x1004325e4           ; <+548>
+ 1404: b      0x1004325f8               ; <+568>
+-1408: bl     0x100ab79b4               ; <std::sync::once_lock::OnceLock<bool>>::initialize::<<std::sync::once_lock::OnceLock<bool>>::get_or_init<perry_runtime::gc::policy::gc_moving_loop_polls_enabled::{closure#0}>::{closure#0}, !>
++1408: bl     0x100ab7534               ; <std::sync::once_lock::OnceLock<bool>>::initialize::<<std::sync::once_lock::OnceLock<bool>>::get_or_init<perry_runtime::gc::policy::gc_moving_loop_polls_enabled::{closure#0}>::{closure#0}, !>
+ 1412: adrp   x8, 2766
+ 1416: ldrb   w8, [x8, #0xec0]
+ 1420: tbnz   w8, #0x0, 0x100432774     ; <+948>
+ 1424: b      0x100432818               ; <+1112>
+-1428: bl     0x100ab790c               ; <std::sync::once_lock::OnceLock<bool>>::initialize::<<std::sync::once_lock::OnceLock<bool>>::get_or_init<perry_runtime::gc::policy::gc_trace_enabled::{closure#0}>::{closure#0}, !>
++1428: bl     0x100ab748c               ; <std::sync::once_lock::OnceLock<bool>>::initialize::<<std::sync::once_lock::OnceLock<bool>>::get_or_init<perry_runtime::gc::policy::gc_trace_enabled::{closure#0}>::{closure#0}, !>
+ 1432: adrp   x8, 2766
+ 1436: ldrb   w8, [x8, #0xe80]
+ 1440: cbnz   w8, 0x100432850           ; <+1168>
+@@ -364,7 +364,7 @@
+
+ 1452: stp    x8, x9, [x29, #-0x60]
+ 1456: stp    x10, x11, [x29, #-0x50]
+ 1460: sturb  w12, [x29, #-0x40]
+-1464: bl     0x10066db30               ; perry_runtime::gc::roots::stack_maps::ensure_built
++1464: bl     0x10066dcf0               ; perry_runtime::gc::roots::stack_maps::ensure_built
+ 1468: add    x0, sp, #0x8
+ 1472: sub    x1, x29, #0x60
+ 1476: mov    w2, #0x0                  ; =0 
+@@ -384,7 +384,7 @@
+
+ 1532: blr    x8
+ 1536: mov    w8, #0xff                 ; =255 
+ 1540: b      0x1004324c4               ; <+260>
+-1544: bl     0x100ab790c               ; <std::sync::once_lock::OnceLock<bool>>::initialize::<<std::sync::once_lock::OnceLock<bool>>::get_or_init<perry_runtime::gc::policy::gc_trace_enabled::{closure#0}>::{closure#0}, !>
++1544: bl     0x100ab748c               ; <std::sync::once_lock::OnceLock<bool>>::initialize::<<std::sync::once_lock::OnceLock<bool>>::get_or_init<perry_runtime::gc::policy::gc_trace_enabled::{closure#0}>::{closure#0}, !>
+ 1548: adrp   x8, 2766
+ 1552: ldrb   w9, [x8, #0xe80]
+ 1556: mov    w8, #0x2                  ; =2 
+@@ -408,7 +408,7 @@
+
+ 1628: strb   w8, [x0]
+ 1632: strb   wzr, [x19]
+ 1636: b      0x100432594               ; <+468>
+-1640: bl     0x100ab7f2c               ; <std::sync::once_lock::OnceLock<usize>>::initialize::<<std::sync::once_lock::OnceLock<usize>>::get_or_init<perry_runtime::gc::heap_budget::gc_moving_defer_slack_dyn_bytes::{closure#0}>::{closure#0}, !>
++1640: bl     0x100ab7aac               ; <std::sync::once_lock::OnceLock<usize>>::initialize::<<std::sync::once_lock::OnceLock<usize>>::get_or_init<perry_runtime::gc::heap_budget::gc_moving_defer_slack_dyn_bytes::{closure#0}>::{closure#0}, !>
+ 1644: adrp   x8, 2766
+ 1648: ldr    x8, [x8, #0xd90]
+ 1652: adds   x8, x21, x8
+@@ -416,5 +416,5 @@
+
+ 1660: cmp    x20, x8
+ 1664: b.lo   0x100432594               ; <+468>
+ 1668: b      0x1004327e0               ; <+1056>
+-1672: bl     0x100ab7f2c               ; <std::sync::once_lock::OnceLock<usize>>::initialize::<<std::sync::once_lock::OnceLock<usize>>::get_or_init<perry_runtime::gc::heap_budget::gc_moving_defer_slack_dyn_bytes::{closure#0}>::{closure#0}, !>
++1672: bl     0x100ab7aac               ; <std::sync::once_lock::OnceLock<usize>>::initialize::<<std::sync::once_lock::OnceLock<usize>>::get_or_init<perry_runtime::gc::heap_budget::gc_moving_defer_slack_dyn_bytes::{closure#0}>::{closure#0}, !>
+ 1676: b      0x1004328c8               ; <+1288>

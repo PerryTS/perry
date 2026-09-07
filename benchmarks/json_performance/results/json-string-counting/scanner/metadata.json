@@ -1,0 +1,12 @@
+{
+  "diagnostic_only": true,
+  "whole_json_performance": false,
+  "probe_sha256": "86ee3f0b0a038717254b40f8c8ddbec4f583a63f7a5b9bbe0e7e9f585f8b785f",
+  "compiler": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+  "profile": "standalone scanner probe using stable rustc 1.97.1, opt-level 3, codegen-units 1; not a matched runtime build",
+  "source_sha256": {
+    "after.rs": "9681b71a409a721e86ecd17c7beffa926ab3895525ba9d49cd8a09a06c6a951f",
+    "before.rs": "a817938c4a8a8f39484c021555a7892deda344eddf8739833b1eeb9856892818",
+    "main.rs": "0351d4a04a40893cd225a70feb6adbec8c08210fb4846044814766d1cedef428"
+  }
+}

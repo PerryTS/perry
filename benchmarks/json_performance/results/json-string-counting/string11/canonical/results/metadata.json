@@ -1,0 +1,10 @@
+{
+  "workers": {
+    "checkpoint": "244d045b247c4de720d33c7526f512654ae842f4b2dd9f1e7c1e34f241a068a1",
+    "candidate": "615b8022f3dce5581623a4b7343dabdcff10f3a799e2fcb68ee2ab7315994647"
+  },
+  "fixture_sha256": "356c7f6f75c99f8664bb5e45a2fe7c37f06cbd74494da6943754676804304e80",
+  "slot": "/Users/perry/json-fused-utf16-v11-20260907-codex/canonical/active",
+  "seed": 81428,
+  "traced": false
+}
