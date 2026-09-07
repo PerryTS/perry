@@ -71,3 +71,9 @@ The [subsequent layout and direct-output investigation](results/json-layout-and-
 retains the same runtime. It demonstrates linker-placement sensitivity and a
 25-versus-35 collection-count reproducer for the large round-trip regression;
 both attempted stringify changes were rejected.
+
+The [root investigation](results/json-root-retention/README.md) identifies the
+first retention difference in unchanged binaries: the checkpoint conservatively
+retains the previous call's large array, which delays later collections.
+Debugger-only interventions distinguish stale stack roots from remembered-set
+retention through dead old containers; they do not qualify a new GC policy.

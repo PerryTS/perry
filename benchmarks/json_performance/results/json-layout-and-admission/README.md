@@ -81,10 +81,11 @@ objects and also reflect the different number of collections. Instrumented
 CPU/pause times are excluded from performance acceptance. The raw traces and
 compact event sequences are under [trace-lifetime](trace-lifetime/summary.json).
 
-The next useful investigation is to identify the first allocation/retention
-state divergence in this 24-call reproducer and prove the roots required at that
-JSON allocation boundary. That is necessary before considering removal of a
-conservative scan; skipping it without a complete root proof would be unsafe.
+The [subsequent root investigation](../json-root-retention/README.md) identifies
+the first material retention difference: the checkpoint finds a stale pointer
+to the previous call's large array in its trigger frame. Its extra retention
+delays later collections. Debugger interventions establish this fixture's
+mechanism but do not provide the general root proof needed to remove a scan.
 Separately, further CPU micro-optimizations need layout controls and validation
 under the actual shipping build profile. This series deliberately preserves the
 existing matched 16-codegen-unit runtime/stdlib comparison profile; it does not

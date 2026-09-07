@@ -1,0 +1,568 @@
+{
+  "checkpoint": {
+    "sha256": "25949bf2b3f4cc5042f842be248fea8b48244405780d8db050b6e7d620a71120",
+    "symbol": "__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5roots21try_mark_value_or_raw",
+    "full_symbol": "__RNvNtCs5gMwpk3Cs4e_13perry_runtime2gc39gc_collect_full_mark_sweep_with_trigger",
+    "points": [
+      {
+        "offset": 280,
+        "register": "x19"
+      },
+      {
+        "offset": 432,
+        "register": "x21"
+      }
+    ],
+    "scan_symbol": "__RNvMs4_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc5cycleNtB5_18RootScanCycleState21step_current_subphase",
+    "scan_begin": 964,
+    "scan_end": 2424,
+    "calls": [
+      {
+        "offset": 964,
+        "buffer_offset": 64
+      },
+      {
+        "offset": 984,
+        "buffer_offset": 72
+      },
+      {
+        "offset": 1008,
+        "buffer_offset": 80
+      },
+      {
+        "offset": 1028,
+        "buffer_offset": 88
+      },
+      {
+        "offset": 1048,
+        "buffer_offset": 96
+      },
+      {
+        "offset": 1068,
+        "buffer_offset": 104
+      },
+      {
+        "offset": 1088,
+        "buffer_offset": 112
+      },
+      {
+        "offset": 1108,
+        "buffer_offset": 120
+      },
+      {
+        "offset": 1128,
+        "buffer_offset": 128
+      },
+      {
+        "offset": 1148,
+        "buffer_offset": 136
+      },
+      {
+        "offset": 1168,
+        "buffer_offset": 144
+      },
+      {
+        "offset": 1188,
+        "buffer_offset": 152
+      },
+      {
+        "offset": 1208,
+        "buffer_offset": 160
+      },
+      {
+        "offset": 1228,
+        "buffer_offset": 168
+      },
+      {
+        "offset": 1248,
+        "buffer_offset": 176
+      },
+      {
+        "offset": 1268,
+        "buffer_offset": 184
+      },
+      {
+        "offset": 1288,
+        "buffer_offset": 192
+      },
+      {
+        "offset": 1308,
+        "buffer_offset": 200
+      },
+      {
+        "offset": 1328,
+        "buffer_offset": 208
+      },
+      {
+        "offset": 1348,
+        "buffer_offset": 216
+      },
+      {
+        "offset": 1368,
+        "buffer_offset": 224
+      },
+      {
+        "offset": 1388,
+        "buffer_offset": 232
+      },
+      {
+        "offset": 1408,
+        "buffer_offset": 240
+      },
+      {
+        "offset": 1428,
+        "buffer_offset": 248
+      },
+      {
+        "offset": 1448,
+        "buffer_offset": 256
+      },
+      {
+        "offset": 1468,
+        "buffer_offset": 264
+      },
+      {
+        "offset": 1488,
+        "buffer_offset": 272
+      },
+      {
+        "offset": 1508,
+        "buffer_offset": 280
+      },
+      {
+        "offset": 1528,
+        "buffer_offset": 288
+      },
+      {
+        "offset": 1548,
+        "buffer_offset": 296
+      },
+      {
+        "offset": 1568,
+        "buffer_offset": 304
+      },
+      {
+        "offset": 1588,
+        "buffer_offset": 312
+      },
+      {
+        "offset": 1740,
+        "buffer_offset": 320
+      },
+      {
+        "offset": 1760,
+        "buffer_offset": 328
+      },
+      {
+        "offset": 1780,
+        "buffer_offset": 336
+      },
+      {
+        "offset": 1800,
+        "buffer_offset": 344
+      },
+      {
+        "offset": 1820,
+        "buffer_offset": 352
+      },
+      {
+        "offset": 1840,
+        "buffer_offset": 360
+      },
+      {
+        "offset": 1860,
+        "buffer_offset": 368
+      },
+      {
+        "offset": 1880,
+        "buffer_offset": 376
+      },
+      {
+        "offset": 1900,
+        "buffer_offset": 384
+      },
+      {
+        "offset": 1920,
+        "buffer_offset": 392
+      },
+      {
+        "offset": 1940,
+        "buffer_offset": 400
+      },
+      {
+        "offset": 1960,
+        "buffer_offset": 408
+      },
+      {
+        "offset": 1980,
+        "buffer_offset": 416
+      },
+      {
+        "offset": 2000,
+        "buffer_offset": 424
+      },
+      {
+        "offset": 2020,
+        "buffer_offset": 432
+      },
+      {
+        "offset": 2040,
+        "buffer_offset": 440
+      },
+      {
+        "offset": 2060,
+        "buffer_offset": 448
+      },
+      {
+        "offset": 2080,
+        "buffer_offset": 456
+      },
+      {
+        "offset": 2100,
+        "buffer_offset": 464
+      },
+      {
+        "offset": 2120,
+        "buffer_offset": 472
+      },
+      {
+        "offset": 2140,
+        "buffer_offset": 480
+      },
+      {
+        "offset": 2160,
+        "buffer_offset": 488
+      },
+      {
+        "offset": 2180,
+        "buffer_offset": 496
+      },
+      {
+        "offset": 2200,
+        "buffer_offset": 504
+      },
+      {
+        "offset": 2220,
+        "buffer_offset": 512
+      },
+      {
+        "offset": 2240,
+        "buffer_offset": 520
+      },
+      {
+        "offset": 2260,
+        "buffer_offset": 528
+      },
+      {
+        "offset": 2280,
+        "buffer_offset": 536
+      },
+      {
+        "offset": 2300,
+        "buffer_offset": 544
+      },
+      {
+        "offset": 2320,
+        "buffer_offset": 552
+      },
+      {
+        "offset": 2340,
+        "buffer_offset": 560
+      },
+      {
+        "offset": 2360,
+        "buffer_offset": 568
+      },
+      {
+        "offset": 2408,
+        "buffer_offset": null
+      }
+    ],
+    "worker": "/Users/amlug/projects/perry/codex-json-fastpaths-artifacts/lifetime-candidate2",
+    "expected_output_sha256": "502c690f381d8ba04873ead66b434444c21b4c4b0cf5aa5a24a4813976184983",
+    "skip_below": null
+  },
+  "admission": {
+    "sha256": "1590d029e17c448c3be3f01c009f7dc605ee885ad6731c01c9daedfe53c0a685",
+    "symbol": "__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5roots21try_mark_value_or_raw",
+    "full_symbol": "__RNvNtCs5gMwpk3Cs4e_13perry_runtime2gc39gc_collect_full_mark_sweep_with_trigger",
+    "points": [
+      {
+        "offset": 280,
+        "register": "x19"
+      },
+      {
+        "offset": 432,
+        "register": "x21"
+      }
+    ],
+    "scan_symbol": "__RNvMs4_NtNtCs5gMwpk3Cs4e_13perry_runtime2gc5cycleNtB5_18RootScanCycleState21step_current_subphase",
+    "scan_begin": 964,
+    "scan_end": 2424,
+    "calls": [
+      {
+        "offset": 964,
+        "buffer_offset": 64
+      },
+      {
+        "offset": 984,
+        "buffer_offset": 72
+      },
+      {
+        "offset": 1008,
+        "buffer_offset": 80
+      },
+      {
+        "offset": 1028,
+        "buffer_offset": 88
+      },
+      {
+        "offset": 1048,
+        "buffer_offset": 96
+      },
+      {
+        "offset": 1068,
+        "buffer_offset": 104
+      },
+      {
+        "offset": 1088,
+        "buffer_offset": 112
+      },
+      {
+        "offset": 1108,
+        "buffer_offset": 120
+      },
+      {
+        "offset": 1128,
+        "buffer_offset": 128
+      },
+      {
+        "offset": 1148,
+        "buffer_offset": 136
+      },
+      {
+        "offset": 1168,
+        "buffer_offset": 144
+      },
+      {
+        "offset": 1188,
+        "buffer_offset": 152
+      },
+      {
+        "offset": 1208,
+        "buffer_offset": 160
+      },
+      {
+        "offset": 1228,
+        "buffer_offset": 168
+      },
+      {
+        "offset": 1248,
+        "buffer_offset": 176
+      },
+      {
+        "offset": 1268,
+        "buffer_offset": 184
+      },
+      {
+        "offset": 1288,
+        "buffer_offset": 192
+      },
+      {
+        "offset": 1308,
+        "buffer_offset": 200
+      },
+      {
+        "offset": 1328,
+        "buffer_offset": 208
+      },
+      {
+        "offset": 1348,
+        "buffer_offset": 216
+      },
+      {
+        "offset": 1368,
+        "buffer_offset": 224
+      },
+      {
+        "offset": 1388,
+        "buffer_offset": 232
+      },
+      {
+        "offset": 1408,
+        "buffer_offset": 240
+      },
+      {
+        "offset": 1428,
+        "buffer_offset": 248
+      },
+      {
+        "offset": 1448,
+        "buffer_offset": 256
+      },
+      {
+        "offset": 1468,
+        "buffer_offset": 264
+      },
+      {
+        "offset": 1488,
+        "buffer_offset": 272
+      },
+      {
+        "offset": 1508,
+        "buffer_offset": 280
+      },
+      {
+        "offset": 1528,
+        "buffer_offset": 288
+      },
+      {
+        "offset": 1548,
+        "buffer_offset": 296
+      },
+      {
+        "offset": 1568,
+        "buffer_offset": 304
+      },
+      {
+        "offset": 1588,
+        "buffer_offset": 312
+      },
+      {
+        "offset": 1740,
+        "buffer_offset": 320
+      },
+      {
+        "offset": 1760,
+        "buffer_offset": 328
+      },
+      {
+        "offset": 1780,
+        "buffer_offset": 336
+      },
+      {
+        "offset": 1800,
+        "buffer_offset": 344
+      },
+      {
+        "offset": 1820,
+        "buffer_offset": 352
+      },
+      {
+        "offset": 1840,
+        "buffer_offset": 360
+      },
+      {
+        "offset": 1860,
+        "buffer_offset": 368
+      },
+      {
+        "offset": 1880,
+        "buffer_offset": 376
+      },
+      {
+        "offset": 1900,
+        "buffer_offset": 384
+      },
+      {
+        "offset": 1920,
+        "buffer_offset": 392
+      },
+      {
+        "offset": 1940,
+        "buffer_offset": 400
+      },
+      {
+        "offset": 1960,
+        "buffer_offset": 408
+      },
+      {
+        "offset": 1980,
+        "buffer_offset": 416
+      },
+      {
+        "offset": 2000,
+        "buffer_offset": 424
+      },
+      {
+        "offset": 2020,
+        "buffer_offset": 432
+      },
+      {
+        "offset": 2040,
+        "buffer_offset": 440
+      },
+      {
+        "offset": 2060,
+        "buffer_offset": 448
+      },
+      {
+        "offset": 2080,
+        "buffer_offset": 456
+      },
+      {
+        "offset": 2100,
+        "buffer_offset": 464
+      },
+      {
+        "offset": 2120,
+        "buffer_offset": 472
+      },
+      {
+        "offset": 2140,
+        "buffer_offset": 480
+      },
+      {
+        "offset": 2160,
+        "buffer_offset": 488
+      },
+      {
+        "offset": 2180,
+        "buffer_offset": 496
+      },
+      {
+        "offset": 2200,
+        "buffer_offset": 504
+      },
+      {
+        "offset": 2220,
+        "buffer_offset": 512
+      },
+      {
+        "offset": 2240,
+        "buffer_offset": 520
+      },
+      {
+        "offset": 2260,
+        "buffer_offset": 528
+      },
+      {
+        "offset": 2280,
+        "buffer_offset": 536
+      },
+      {
+        "offset": 2300,
+        "buffer_offset": 544
+      },
+      {
+        "offset": 2320,
+        "buffer_offset": 552
+      },
+      {
+        "offset": 2340,
+        "buffer_offset": 560
+      },
+      {
+        "offset": 2360,
+        "buffer_offset": 568
+      },
+      {
+        "offset": 2408,
+        "buffer_offset": null
+      }
+    ],
+    "worker": "/Users/amlug/projects/perry/codex-json-fastpaths-artifacts/lifetime-candidate5",
+    "expected_output_sha256": "502c690f381d8ba04873ead66b434444c21b4c4b0cf5aa5a24a4813976184983",
+    "skip_below": null
+  }
+}

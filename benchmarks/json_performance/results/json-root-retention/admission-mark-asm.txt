@@ -1,0 +1,135 @@
+
+/Users/amlug/projects/perry/codex-json-fastpaths-artifacts/lifetime-candidate5:	file format mach-o arm64
+
+Disassembly of section __TEXT,__text:
+
+000000010019ff90 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5roots21try_mark_value_or_raw>:
+10019ff90:     	sub	sp, sp, #0x40
+10019ff94:     	stp	x22, x21, [sp, #0x10]
+10019ff98:     	stp	x20, x19, [sp, #0x20]
+10019ff9c:     	stp	x29, x30, [sp, #0x30]
+10019ffa0:     	add	x29, sp, #0x30
+10019ffa4:     	mov	x20, x1
+10019ffa8:     	mov	x19, x0
+10019ffac:     	and	x8, x0, #0xffff000000000000
+10019ffb0:     	mov	x9, #0x7ffa000000000000 ; =9221683186994511872
+10019ffb4:     	cmp	x8, x9
+10019ffb8:     	b.eq	0x10019ffd4 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5roots21try_mark_value_or_raw+0x44>
+10019ffbc:     	mov	x9, #0x7fff000000000000 ; =9223090561878065152
+10019ffc0:     	cmp	x8, x9
+10019ffc4:     	b.eq	0x10019ffd4 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5roots21try_mark_value_or_raw+0x44>
+10019ffc8:     	mov	x9, #0x7ffd000000000000 ; =9222527611924643840
+10019ffcc:     	cmp	x8, x9
+10019ffd0:     	b.ne	0x1001a0048 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5roots21try_mark_value_or_raw+0xb8>
+10019ffd4:     	ands	x21, x19, #0xffffffffffff
+10019ffd8:     	str	x21, [sp, #0x8]
+10019ffdc:     	b.eq	0x1001a0048 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5roots21try_mark_value_or_raw+0xb8>
+10019ffe0:     	adrp	x0, 0x101138000 <__RNvNCNKNvNvNtNtCs5gMwpk3Cs4e_13perry_runtime7promise10microtasks29ASYNC_BOX_EXECUTION_REF_BASES7STORAGE0023___RUST_STD_INTERNAL_VAL>
+10019ffe4:     	add	x0, x0, #0xd08
+10019ffe8:     	ldr	x8, [x0]
+10019ffec:     	blr	x8
+10019fff0:     	ldrb	w8, [x0]
+10019fff4:     	tbz	w8, #0x0, 0x1001a0008 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5roots21try_mark_value_or_raw+0x78>
+10019fff8:     	mov	x0, x19
+10019fffc:     	mov	x1, x20
+1001a0000:     	bl	0x100a20e44 <__RNvNtCs5gMwpk3Cs4e_13perry_runtime5proxy23gc_observe_traced_value>
+1001a0004:     	tbnz	w0, #0x0, 0x1001a0048 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5roots21try_mark_value_or_raw+0xb8>
+1001a0008:     	ldrb	w8, [x20, #0x81]
+1001a000c:     	tbnz	w8, #0x0, 0x1001a0028 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5roots21try_mark_value_or_raw+0x98>
+1001a0010:     	ldr	x8, [x20, #0x68]
+1001a0014:     	cmp	x21, x8
+1001a0018:     	b.lo	0x1001a0048 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5roots21try_mark_value_or_raw+0xb8>
+1001a001c:     	ldr	x8, [x20, #0x70]
+1001a0020:     	cmp	x21, x8
+1001a0024:     	b.hi	0x1001a0048 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5roots21try_mark_value_or_raw+0xb8>
+1001a0028:     	add	x1, sp, #0x8
+1001a002c:     	mov	x0, x20
+1001a0030:     	bl	0x10017c528 <__RNvMNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5traceNtB2_15ValidPointerSet8contains>
+1001a0034:     	cbz	w0, 0x1001a0048 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5roots21try_mark_value_or_raw+0xb8>
+1001a0038:     	ldurb	w8, [x21, #-0x7]
+1001a003c:     	mov	w9, #0x5                ; =5
+1001a0040:     	tst	w8, w9
+1001a0044:     	b.eq	0x1001a013c <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5roots21try_mark_value_or_raw+0x1ac>
+1001a0048:     	sub	x8, x19, #0x1, lsl #12  ; =0x1000
+1001a004c:     	mov	x9, #-0x1001            ; =-4097
+1001a0050:     	movk	x9, #0x0, lsl #48
+1001a0054:     	cmp	x8, x9
+1001a0058:     	b.hi	0x1001a0124 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5roots21try_mark_value_or_raw+0x194>
+1001a005c:     	str	x19, [sp, #0x8]
+1001a0060:     	ldrb	w8, [x20, #0x81]
+1001a0064:     	tbnz	w8, #0x0, 0x1001a0084 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5roots21try_mark_value_or_raw+0xf4>
+1001a0068:     	ldp	x8, x9, [x20, #0x68]
+1001a006c:     	subs	x10, x19, #0x100, lsl #12 ; =0x100000
+1001a0070:     	csel	x10, xzr, x10, lo
+1001a0074:     	cmp	x19, x9
+1001a0078:     	ccmp	x19, x8, #0x0, ls
+1001a007c:     	ccmp	x10, x9, #0x0, lo
+1001a0080:     	b.hi	0x1001a0124 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5roots21try_mark_value_or_raw+0x194>
+1001a0084:     	add	x1, sp, #0x8
+1001a0088:     	mov	x0, x20
+1001a008c:     	bl	0x10017c528 <__RNvMNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5traceNtB2_15ValidPointerSet8contains>
+1001a0090:     	tbz	w0, #0x0, 0x1001a00ec <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5roots21try_mark_value_or_raw+0x15c>
+1001a0094:     	ldurb	w8, [x19, #-0x7]
+1001a0098:     	mov	w9, #0x5                ; =5
+1001a009c:     	tst	w8, w9
+1001a00a0:     	b.ne	0x1001a0124 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5roots21try_mark_value_or_raw+0x194>
+1001a00a4:     	orr	w8, w8, #0x1
+1001a00a8:     	sturb	w8, [x19, #-0x7]
+1001a00ac:     	mov	x0, #0x0                ; =0
+1001a00b0:     	bl	0x100530ee8 <__RNvYNCNKNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5trace10MARK_SEEDS00INtNtNtCsjgY6bXVaRmE_4core3ops8function6FnOnceTINtNtB19_6option6OptionQIB1O_INtNtB19_4cell10UnsafeCellINtNtCsctvjasLqLe9_5alloc3vec3VecONtNtBa_5types8GcHeaderEEEEEE9call_onceBc_>
+1001a00b4:     	cbz	x0, 0x1001a0188 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5roots21try_mark_value_or_raw+0x1f8>
+1001a00b8:     	mov	x20, x0
+1001a00bc:     	sub	x19, x19, #0x8
+1001a00c0:     	ldr	x21, [x0, #0x10]
+1001a00c4:     	ldr	x8, [x0]
+1001a00c8:     	cmp	x21, x8
+1001a00cc:     	b.ne	0x1001a00d8 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5roots21try_mark_value_or_raw+0x148>
+1001a00d0:     	mov	x0, x20
+1001a00d4:     	bl	0x100c9fecc <__RNvMs4_NtCsctvjasLqLe9_5alloc7raw_vecINtB5_6RawVecxE8grow_oneCs5gMwpk3Cs4e_13perry_runtime>
+1001a00d8:     	ldr	x8, [x20, #0x8]
+1001a00dc:     	str	x19, [x8, x21, lsl #3]
+1001a00e0:     	add	x8, x21, #0x1
+1001a00e4:     	str	x8, [x20, #0x10]
+1001a00e8:     	b	0x1001a0180 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5roots21try_mark_value_or_raw+0x1f0>
+1001a00ec:     	mov	x0, x20
+1001a00f0:     	mov	x1, x19
+1001a00f4:     	bl	0x1004bddf4 <__RNvMNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5traceNtB2_15ValidPointerSet16find_arena_floor>
+1001a00f8:     	cmp	x0, #0x1
+1001a00fc:     	b.ne	0x1001a0124 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5roots21try_mark_value_or_raw+0x194>
+1001a0100:     	ldur	w8, [x1, #-0x4]
+1001a0104:     	subs	x8, x8, #0x8
+1001a0108:     	csel	x8, xzr, x8, lo
+1001a010c:     	cmp	x19, x1
+1001a0110:     	b.lo	0x1001a0124 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5roots21try_mark_value_or_raw+0x194>
+1001a0114:     	add	x8, x8, x1
+1001a0118:     	cmp	x19, x8
+1001a011c:     	mov	x19, x1
+1001a0120:     	b.lo	0x1001a0094 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5roots21try_mark_value_or_raw+0x104>
+1001a0124:     	mov	w0, #0x0                ; =0
+1001a0128:     	ldp	x29, x30, [sp, #0x30]
+1001a012c:     	ldp	x20, x19, [sp, #0x20]
+1001a0130:     	ldp	x22, x21, [sp, #0x10]
+1001a0134:     	add	sp, sp, #0x40
+1001a0138:     	ret
+1001a013c:     	orr	w8, w8, #0x1
+1001a0140:     	sturb	w8, [x21, #-0x7]
+1001a0144:     	mov	x0, #0x0                ; =0
+1001a0148:     	bl	0x100530ee8 <__RNvYNCNKNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5trace10MARK_SEEDS00INtNtNtCsjgY6bXVaRmE_4core3ops8function6FnOnceTINtNtB19_6option6OptionQIB1O_INtNtB19_4cell10UnsafeCellINtNtCsctvjasLqLe9_5alloc3vec3VecONtNtBa_5types8GcHeaderEEEEEE9call_onceBc_>
+1001a014c:     	cbz	x0, 0x1001a0188 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5roots21try_mark_value_or_raw+0x1f8>
+1001a0150:     	mov	x19, x0
+1001a0154:     	sub	x20, x21, #0x8
+1001a0158:     	ldr	x21, [x0, #0x10]
+1001a015c:     	ldr	x8, [x0]
+1001a0160:     	cmp	x21, x8
+1001a0164:     	b.ne	0x1001a0170 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5roots21try_mark_value_or_raw+0x1e0>
+1001a0168:     	mov	x0, x19
+1001a016c:     	bl	0x100c9fecc <__RNvMs4_NtCsctvjasLqLe9_5alloc7raw_vecINtB5_6RawVecxE8grow_oneCs5gMwpk3Cs4e_13perry_runtime>
+1001a0170:     	ldr	x8, [x19, #0x8]
+1001a0174:     	str	x20, [x8, x21, lsl #3]
+1001a0178:     	add	x8, x21, #0x1
+1001a017c:     	str	x8, [x19, #0x10]
+1001a0180:     	mov	w0, #0x1                ; =1
+1001a0184:     	b	0x1001a0128 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5roots21try_mark_value_or_raw+0x198>
+1001a0188:     	adrp	x0, 0x10109f000 <_anon.80eb82dabe382127be861d2f5954db24.4+0x1348>
+1001a018c:     	add	x0, x0, #0xed8
+1001a0190:     	bl	0x100cdacdc <__RNvNtNtCs8BpVhDwHqJW_3std6thread5local18panic_access_error>

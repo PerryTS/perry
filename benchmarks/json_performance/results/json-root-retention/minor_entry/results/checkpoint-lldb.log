@@ -1,0 +1,3 @@
+(lldb) command script import /Users/amlug/projects/perry/codex-json-fastpaths-artifacts/root-retention7/minor_entry/rootsnap.py
+(lldb) script rootsnap.run(lldb.debugger, 'checkpoint')
+ROOT_SNAPSHOT {"arm": "checkpoint", "worker_sha256": "25949bf2b3f4cc5042f842be248fea8b48244405780d8db050b6e7d620a71120", "launch_error": "success", "state": 10, "exit": 0, "errors": [], "counts": {"full": 19, "parse": 27, "scan": 8}, "events": 202, "skipped": 0, "output_checked": true, "output_sha256": "502c690f381d8ba04873ead66b434444c21b4c4b0cf5aa5a24a4813976184983"}

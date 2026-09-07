@@ -1,0 +1,18 @@
+{
+  "arm": "admission",
+  "worker_sha256": "1590d029e17c448c3be3f01c009f7dc605ee885ad6731c01c9daedfe53c0a685",
+  "launch_error": "success",
+  "state": 10,
+  "exit": 0,
+  "errors": [],
+  "counts": {
+    "full": 28,
+    "parse": 27,
+    "scan": 2
+  },
+  "forced_major": 24,
+  "events": 154,
+  "skipped": 0,
+  "output_checked": true,
+  "output_sha256": "502c690f381d8ba04873ead66b434444c21b4c4b0cf5aa5a24a4813976184983"
+}
