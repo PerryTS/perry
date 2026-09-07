@@ -213,6 +213,8 @@ pub(crate) use cycle_malloc_trim::{
     reset_test_malloc_trim_executed_count, test_malloc_trim_executed_count,
 };
 mod verify;
+mod verify_diag;
+use verify_diag::*;
 
 /// #7035: whole-heap from-space scan — verification that does NOT depend on
 /// the rewrite pass own root enumeration. Debug-only

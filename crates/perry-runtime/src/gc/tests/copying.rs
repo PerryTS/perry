@@ -8,6 +8,7 @@ mod promise_side_tables;
 mod promoted_remembered_7803;
 mod survival_and_malloc;
 mod verify_malloc_borrow;
+mod verify_parent_context;
 mod weak_holder_registry;
 mod weak_semantics;
 use super::super::*;

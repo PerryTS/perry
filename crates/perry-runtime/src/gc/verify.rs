@@ -57,8 +57,10 @@ pub(super) fn try_rewrite_raw_addr(ptr_addr: usize, valid_ptrs: &ValidPointerSet
 /// Carry that distinction through every verifier surface, including FFI roots.
 #[derive(Clone, Copy)]
 pub(super) struct EvacuationVerifier<'a> {
-    valid_ptrs: &'a ValidPointerSet,
+    pub(super) valid_ptrs: &'a ValidPointerSet,
     copying_minor: bool,
+    pub(super) context: Option<EvacuationVerifyCycleContext<'a>>,
+    pub(super) parent_header: Option<*mut GcHeader>,
 }
 
 impl<'a> EvacuationVerifier<'a> {
@@ -66,6 +68,8 @@ impl<'a> EvacuationVerifier<'a> {
         Self {
             valid_ptrs,
             copying_minor: false,
+            context: None,
+            parent_header: None,
         }
     }
 
@@ -74,7 +78,19 @@ impl<'a> EvacuationVerifier<'a> {
         Self {
             valid_ptrs,
             copying_minor: true,
+            context: None,
+            parent_header: None,
         }
+    }
+
+    pub(super) fn with_context(mut self, context: EvacuationVerifyCycleContext<'a>) -> Self {
+        self.context = Some(context);
+        self
+    }
+
+    fn with_parent(mut self, parent_header: *mut GcHeader) -> Self {
+        self.parent_header = Some(parent_header);
+        self
     }
 
     pub(super) fn stale_raw_addr(self, addr: usize) -> Option<usize> {
@@ -155,14 +171,13 @@ fn follow_forwarding_raw_addr(
 
 #[cold]
 pub(super) fn panic_stale_forwarded_reference(
+    verifier: EvacuationVerifier<'_>,
     surface: &str,
     slot_addr: usize,
     old_bits: u64,
     new_bits: u64,
 ) -> ! {
-    panic!(
-        "gc evacuation verification failed: stale forwarded pointer in {surface}: slot=0x{slot_addr:x} old=0x{old_bits:x} forwarded_to=0x{new_bits:x}"
-    );
+    panic_stale_forwarded_reference_detailed(verifier, surface, slot_addr, old_bits, new_bits);
 }
 
 /// In-place rewrite helper: read `*slot`, run it through
@@ -183,7 +198,7 @@ pub(super) unsafe fn verify_slot(
 ) {
     let bits = *slot;
     if let Some(new_bits) = verifier.stale_value(bits) {
-        panic_stale_forwarded_reference(surface, slot as usize, bits, new_bits);
+        panic_stale_forwarded_reference(verifier, surface, slot as usize, bits, new_bits);
     }
 }
 
@@ -1205,15 +1220,25 @@ pub(super) unsafe fn verify_heap_object_fields(
     header: *mut GcHeader,
     verifier: EvacuationVerifier<'_>,
     surface: &'static str,
-) {
+) -> usize {
     let flags = (*header).gc_flags;
     if flags & GC_FLAG_FORWARDED != 0 {
-        return;
+        return 0;
     }
-    visit_gc_rewrite_slots(header, |slot| unsafe {
-        slot.record_layout_read();
-        verify_slot(slot.slot as *const u64, verifier, surface);
+    let verifier = verifier.with_parent(header);
+    let mut slots = 0usize;
+    visit_gc_rewrite_slot_descriptors(header, |descriptor| unsafe {
+        slots = slots.saturating_add(match descriptor {
+            GcMutableSlotDescriptor::Slot(_) => 1,
+            GcMutableSlotDescriptor::Range { range, .. } => range.slot_count(),
+            GcMutableSlotDescriptor::PointerFreeRange(_) => 0,
+        });
+        descriptor.visit_slots(&mut |slot| {
+            slot.record_layout_read();
+            verify_slot(slot.slot as *const u64, verifier, surface);
+        });
     });
+    slots
 }
 
 /// Walk every live (MARKED, non-FORWARDED) object on the heap and
@@ -1356,17 +1381,18 @@ pub(super) fn verify_mutable_root_slots(verifier: EvacuationVerifier<'_>) {
                 MutableRootSlotKind::NativeStack => "native stack-map roots",
                 MutableRootSlotKind::GlobalRoot => "global roots",
             };
-            panic_stale_forwarded_reference(surface, slot.ptr as usize, bits, new_bits);
+            panic_stale_forwarded_reference(verifier, surface, slot.ptr as usize, bits, new_bits);
         }
     });
 }
 
 pub(super) fn verify_mutable_registered_roots(verifier: EvacuationVerifier<'_>) {
     let scanners: Vec<MutableRootScannerEntry> = MUTABLE_ROOT_SCANNERS.with(|s| s.borrow().clone());
-    let mut visitor = RuntimeRootVisitor::for_verify(verifier, "runtime mutable root scanner");
     for entry in scanners {
+        let mut visitor = RuntimeRootVisitor::for_verify(verifier, entry.name);
         (entry.scanner)(&mut visitor);
     }
+    let mut visitor = RuntimeRootVisitor::for_verify(verifier, "ffi mutable root scanner");
     visit_ffi_mutable_registered_roots(&mut visitor);
 }
 
@@ -1376,7 +1402,7 @@ pub(super) fn verify_copy_only_scanner_bits(
     surface: &'static str,
 ) {
     if let Some(new_bits) = verifier.stale_nanboxed_value(bits) {
-        panic_stale_forwarded_reference(surface, 0, bits, new_bits);
+        panic_stale_forwarded_reference(verifier, surface, 0, bits, new_bits);
     }
 }
 
@@ -1407,15 +1433,35 @@ pub(super) fn verify_copy_only_registered_roots(verifier: EvacuationVerifier<'_>
 pub(super) fn verify_remembered_dirty_ranges(verifier: EvacuationVerifier<'_>) {
     let snapshot = remembered_dirty_snapshot();
     let mut stats = RememberedSetTraceStats::default();
-    let mut verify_dirty_slot = |slot: *mut u64, _stats: &mut RememberedSetTraceStats| unsafe {
-        verify_slot(slot as *const u64, verifier, "remembered dirty ranges");
+    let mut seen_headers = crate::fast_hash::new_ptr_hash_set();
+    let mut verify_header = |header: *mut GcHeader| unsafe {
+        if !seen_headers.insert(header as usize) {
+            return;
+        }
+        let parent_verifier = verifier.with_parent(header);
+        let mut verify_dirty_slot = |slot: *mut u64, _stats: &mut RememberedSetTraceStats| {
+            verify_slot(
+                slot as *const u64,
+                parent_verifier,
+                "remembered dirty ranges",
+            );
+        };
+        scan_dirty_header_once(
+            header,
+            &snapshot.dirty_pages,
+            verifier.valid_ptrs,
+            &mut stats,
+            &mut verify_dirty_slot,
+        );
     };
-    scan_remembered_dirty_slot_ranges(
-        &snapshot,
-        verifier.valid_ptrs,
-        &mut stats,
-        &mut verify_dirty_slot,
-    );
+    if !snapshot.dirty_old_pages.is_empty() {
+        crate::arena::old_arena_walk_objects_on_pages(&snapshot.dirty_old_pages, |header| {
+            verify_header(header as *mut GcHeader);
+        });
+    }
+    for &(_, header) in &snapshot.external_dirty_entries {
+        verify_header(header as *mut GcHeader);
+    }
 
     for header_addr in snapshot.fallback_headers {
         let user_ptr = header_addr + GC_HEADER_SIZE;
@@ -1432,8 +1478,9 @@ pub(super) fn verify_remembered_dirty_ranges(verifier: EvacuationVerifier<'_>) {
     }
 }
 
-pub(super) fn verify_heap_objects(verifier: EvacuationVerifier<'_>) {
-    let verify_one = |header: *mut GcHeader| unsafe {
+pub(super) fn verify_heap_objects(verifier: EvacuationVerifier<'_>) -> EvacuationVerifyStats {
+    let mut stats = EvacuationVerifyStats::default();
+    let mut verify_one = |header: *mut GcHeader| unsafe {
         let flags = (*header).gc_flags;
         if flags & GC_FLAG_FORWARDED != 0 {
             return;
@@ -1449,20 +1496,27 @@ pub(super) fn verify_heap_objects(verifier: EvacuationVerifier<'_>) {
                 return;
             }
         }
-        verify_heap_object_fields(header, verifier, "heap fields");
+        stats.parents = stats.parents.saturating_add(1);
+        stats.slots =
+            stats
+                .slots
+                .saturating_add(verify_heap_object_fields(header, verifier, "heap fields"));
     };
     crate::arena::arena_walk_objects(|hp| verify_one(hp as *mut GcHeader));
     for header in malloc_headers_for_verification() {
         verify_one(header);
     }
+    stats
 }
 
-pub(super) fn verify_evacuated_no_stale_forwarded_refs(verifier: EvacuationVerifier<'_>) {
+pub(super) fn verify_evacuated_no_stale_forwarded_refs(
+    verifier: EvacuationVerifier<'_>,
+) -> EvacuationVerifyStats {
     verify_mutable_root_slots(verifier);
     verify_mutable_registered_roots(verifier);
     verify_copy_only_registered_roots(verifier);
     verify_remembered_dirty_ranges(verifier);
-    verify_heap_objects(verifier);
+    verify_heap_objects(verifier)
 }
 
 /// Top-level Phase C4b-γ-2 entry: rewrite every reference site we

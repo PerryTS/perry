@@ -908,7 +908,7 @@ impl<'a> RuntimeRootVisitor<'a> {
             }
             RuntimeRootVisitMode::Verify { verifier, surface } => {
                 if let Some(new_bits) = verifier.stale_nanboxed_value(bits) {
-                    panic_stale_forwarded_reference(surface, 0, bits, new_bits);
+                    panic_stale_forwarded_reference(*verifier, surface, 0, bits, new_bits);
                 }
                 None
             }
@@ -937,7 +937,7 @@ impl<'a> RuntimeRootVisitor<'a> {
             RuntimeRootVisitMode::Rewrite { valid_ptrs } => try_rewrite_value(bits, valid_ptrs),
             RuntimeRootVisitMode::Verify { verifier, surface } => {
                 if let Some(new_bits) = verifier.stale_value(bits) {
-                    panic_stale_forwarded_reference(surface, 0, bits, new_bits);
+                    panic_stale_forwarded_reference(*verifier, surface, 0, bits, new_bits);
                 }
                 None
             }
@@ -975,6 +975,7 @@ impl<'a> RuntimeRootVisitor<'a> {
             RuntimeRootVisitMode::Verify { verifier, surface } => {
                 if let Some(new_addr) = verifier.stale_raw_addr(addr) {
                     panic_stale_forwarded_reference(
+                        *verifier,
                         surface,
                         0,
                         copy_tag | (addr as u64 & POINTER_MASK),
@@ -1002,7 +1003,13 @@ impl<'a> RuntimeRootVisitor<'a> {
             RuntimeRootVisitMode::CopyingRewrite { collector } => collector.rewrite_raw_addr(addr),
             RuntimeRootVisitMode::Verify { verifier, surface } => {
                 if let Some(new_addr) = verifier.stale_raw_addr(addr) {
-                    panic_stale_forwarded_reference(surface, 0, addr as u64, new_addr as u64);
+                    panic_stale_forwarded_reference(
+                        *verifier,
+                        surface,
+                        0,
+                        addr as u64,
+                        new_addr as u64,
+                    );
                 }
                 None
             }
