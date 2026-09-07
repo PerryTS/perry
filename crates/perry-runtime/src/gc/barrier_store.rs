@@ -370,6 +370,7 @@ pub(super) fn barrier_remembering_active() -> bool {
 /// validated) — the same contract `emit_parent_may_need_remembering_check`
 /// places on its caller.
 #[inline]
+#[cfg(any(test, feature = "regex-engine"))]
 pub(crate) unsafe fn newborn_parent_needs_barrier(parent_addr: usize) -> bool {
     if !super::barrier::incremental_mark_barrier_globally_idle() {
         return true;
