@@ -161,10 +161,13 @@ fn canonical_rooted_header(header: *mut RegExpHeader) -> Option<*mut RegExpHeade
     let scope = crate::gc::RuntimeHandleScope::new();
     let rooted = scope.root_raw_mut_ptr(header);
     let value = f64::from_bits(crate::value::JSValue::pointer(header.cast::<u8>()).bits());
-    if !crate::object::regex_proto_thunks::regexp_prototype_test_is_canonical(value) {
+    let (canonical, header) = rooted.across_mut::<RegExpHeader, _>(|| {
+        crate::object::regex_proto_thunks::regexp_prototype_test_is_canonical(value)
+    });
+    if !canonical {
         return None;
     }
-    Some(rooted.get_raw_mut_ptr())
+    Some(header)
 }
 
 /// Direct literal receiver for `/literal/flags.test(arg)`.
