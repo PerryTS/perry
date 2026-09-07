@@ -9,29 +9,24 @@
 //! `ansi-regex` builds the same `new RegExp(parts.join("|"), "g")` per call.
 //! Each construction used to copy the pattern three times (the
 //! `VALIDATED_PATTERNS` probe key and `owned_pattern`) and SipHash all of it
-//! once; the first operation on each header then
-//! did the same three more times — `build_and_install_programs` probes the
-//! three `(String, String)`-keyed program caches — and, for the common
-//! no-fallback pattern, `lookup_fancy_regex` / `lookup_repeat_matcher`
-//! re-probed two of them on EVERY exec. On the claude-code keystroke profile
-//! SipHash over pattern text was 31 % of the post-turn window (regex 38 %
-//! inclusive), all of it under these five functions.
+//! once; the first operation on each header then did the same three more times.
+//! On the claude-code keystroke profile SipHash over pattern text was 31 % of
+//! the post-turn window (regex 38 % inclusive).
 //!
 //! # What
 //!
-//! A direct-mapped, thread-local table keyed by a cheap CONTENT fingerprint
-//! (length, first / middle / last 8 bytes, canonical flags) and verified by a
-//! full byte compare — identity never depends on an address, so nothing is
-//! rekeyed on a GC move and a dynamic `new RegExp(sameText)` hits too; a hit
-//! costs one `memcmp` instead of a hash plus three copies. An entry owns the
-//! pattern and canonical flags as `Arc<str>` and, once the first header built
-//! from it has been executed, the
-//! compiled programs: a later construction installs those eagerly, so the
-//! header is born built and never touches the `(pattern, flags)` caches.
+//! A bounded, thread-local table keyed by a cheap CONTENT fingerprint (length,
+//! first / middle / last 8 bytes, canonical flags) and verified by a full byte
+//! compare. Identity never depends on an address, so nothing is rekeyed on a GC
+//! move and a dynamic `new RegExp(sameText)` hits too; a hit costs one short
+//! integer hash plus one `memcmp` instead of hashing all pattern bytes.
 //!
-//! Validity is a pure function of `(pattern, flags)`, so a hit legitimately
-//! skips validation: an entry is only ever written on the validated path, and
-//! the programs it hands out were built for exactly this text.
+//! An entry owns the pattern and canonical flags as `Arc<str>` and, once the
+//! first header built from it has executed, the compiled programs: a later
+//! construction is born built. At capacity, entries referenced by a recorded
+//! literal site are pinned and only dynamic or displaced-site entries are
+//! evictable. Thus a live literal cannot rebuild, while programs for dead sites
+//! can still leave the fixed-size table.
 //!
 //! Kill switch: `PERRY_REGEX_SITE_CACHE=0` (lookups miss, nothing is stored).
 
@@ -39,6 +34,8 @@ use std::cell::RefCell;
 use std::sync::Arc;
 
 use regex::Regex;
+
+type ContentMap = crate::fast_hash::PtrHashMap<u64, Vec<Entry>>;
 
 /// The compiled programs a header owns, in the form `lazy` installs them.
 pub(super) struct Programs {
@@ -73,13 +70,12 @@ struct Entry {
     programs: Option<Arc<Programs>>,
 }
 
-/// Direct-mapped slots (2-way: a fingerprint may live in `slot` or
-/// `slot ^ 1`). Sized for a bundle's live literal working set; the
-/// claude-code TUI cycles through a few dozen per render.
-const SLOTS: usize = 1024;
+/// Sized for the recorded literal-site table. The table never exceeds this
+/// bound: if all entries are pinned, a dynamic miss remains uncached.
+pub(super) const MAX_ENTRIES: usize = 1024;
 
 crate::perry_thread_local! {
-    static SITE_CACHE: RefCell<Vec<Option<Entry>>> = RefCell::new(Vec::new());
+    static SITE_CACHE: RefCell<ContentMap> = RefCell::new(crate::fast_hash::new_ptr_hash_map());
 }
 
 fn enabled() -> bool {
@@ -92,8 +88,8 @@ fn enabled() -> bool {
 }
 
 /// Cheap content fingerprint: length, three 8-byte windows of the pattern,
-/// the (≤ 8 byte) canonical flags. Collisions are harmless — every hit is
-/// verified by a full compare — they only cost the verify and a re-insert.
+/// the (≤ 8 byte) canonical flags. Collisions are harmless because every hit
+/// is verified by a full compare and colliding entries share one small bucket.
 fn fingerprint(pattern: &[u8], flags: &[u8]) -> u64 {
     #[inline]
     fn window(bytes: &[u8], at: usize) -> u64 {
@@ -117,13 +113,45 @@ fn fingerprint(pattern: &[u8], flags: &[u8]) -> u64 {
     h
 }
 
-#[inline]
-fn slot_of(fp: u64) -> usize {
-    (fp as usize) & (SLOTS - 1)
-}
-
 fn entry_matches(entry: &Entry, fp: u64, pattern: &str, flags: &str) -> bool {
     entry.fp == fp && &*entry.flags == flags && &*entry.pattern == pattern
+}
+
+fn entry_count(cache: &ContentMap) -> usize {
+    cache.values().map(Vec::len).sum()
+}
+
+/// Remove one entry that has no recorded literal site. The scan happens only
+/// on a distinct-content miss at capacity; literal-site hits never reach it.
+fn evict_one_dynamic(cache: &mut ContentMap) -> bool {
+    let victim = cache.iter().find_map(|(&fp, bucket)| {
+        bucket
+            .iter()
+            .position(|entry| !super::site_key::references_content(&entry.pattern, &entry.flags))
+            .map(|index| (fp, index))
+    });
+    let Some((fp, index)) = victim else {
+        return false;
+    };
+    let bucket = cache.get_mut(&fp).expect("the selected bucket exists");
+    bucket.swap_remove(index);
+    if bucket.is_empty() {
+        cache.remove(&fp);
+    }
+    true
+}
+
+fn make_room(cache: &mut ContentMap) -> bool {
+    if entry_count(cache) < MAX_ENTRIES {
+        return true;
+    }
+    if evict_one_dynamic(cache) {
+        if crate::hot_diag::regex_on() {
+            crate::hot_diag::regex_counters(|d| d.cache_evictions += 1);
+        }
+        return true;
+    }
+    false
 }
 
 /// Find the verified entry for `(pattern, canonical flags)`.
@@ -132,31 +160,22 @@ pub(super) fn lookup(pattern: &str, flags: &str) -> Option<Hit> {
         return None;
     }
     let fp = fingerprint(pattern.as_bytes(), flags.as_bytes());
-    let slot = slot_of(fp);
     SITE_CACHE.with(|cache| {
         let cache = cache.borrow();
-        if cache.is_empty() {
-            return None;
-        }
-        for s in [slot, slot ^ 1] {
-            if let Some(entry) = &cache[s] {
-                if entry_matches(entry, fp, pattern, flags) {
-                    // The verify is a FULL byte compare, so its cost is
-                    // linear in the pattern and this counter — not
-                    // `pattern_bytes`, which counts every construction
-                    // whether it probed or not — is the `memcmp` volume.
-                    // Counted at the construction probe only; `insert` and
-                    // `install_programs` verify too and are not counted here.
-                    if crate::hot_diag::regex_on() {
-                        let n = pattern.len() as u64;
-                        crate::hot_diag::regex_counters(|d| d.new_site_verify_bytes += n);
-                    }
-                    return Some(Hit {
-                        pattern: entry.pattern.clone(),
-                        flags: entry.flags.clone(),
-                        programs: entry.programs.clone(),
+        for entry in cache.get(&fp)? {
+            if entry_matches(entry, fp, pattern, flags) {
+                // Count only the construction probe's full byte compare, not
+                // the cold insert/install verification.
+                if crate::hot_diag::regex_on() {
+                    crate::hot_diag::regex_counters(|d| {
+                        d.new_site_verify_bytes += pattern.len() as u64
                     });
                 }
+                return Some(Hit {
+                    pattern: entry.pattern.clone(),
+                    flags: entry.flags.clone(),
+                    programs: entry.programs.clone(),
+                });
             }
         }
         None
@@ -164,83 +183,68 @@ pub(super) fn lookup(pattern: &str, flags: &str) -> Option<Hit> {
 }
 
 /// Record a validated `(pattern, canonical flags)`, returning the shared
-/// owned copies a header should keep. An existing verified entry is reused
-/// (its programs are kept); otherwise the fresh entry has none yet.
+/// owned copies a header should keep. An existing verified entry is reused.
 pub(super) fn insert(pattern: &str, flags: &str) -> (Arc<str>, Arc<str>) {
     if !enabled() {
         return (Arc::from(pattern), Arc::from(flags));
     }
     let fp = fingerprint(pattern.as_bytes(), flags.as_bytes());
-    let slot = slot_of(fp);
     SITE_CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
-        if cache.is_empty() {
-            cache.resize_with(SLOTS, || None);
-        }
-        for s in [slot, slot ^ 1] {
-            if let Some(entry) = &cache[s] {
+        if let Some(bucket) = cache.get(&fp) {
+            for entry in bucket {
                 if entry_matches(entry, fp, pattern, flags) {
                     return (entry.pattern.clone(), entry.flags.clone());
                 }
             }
         }
-        let victim = if cache[slot].is_none() {
-            slot
-        } else if cache[slot ^ 1].is_none() {
-            slot ^ 1
-        } else {
-            slot ^ ((fp >> 11) as usize & 1)
-        };
         let pattern: Arc<str> = Arc::from(pattern);
         let flags: Arc<str> = Arc::from(flags);
-        cache[victim] = Some(Entry {
-            fp,
-            pattern: pattern.clone(),
-            flags: flags.clone(),
-            programs: None,
-        });
+        if make_room(&mut cache) {
+            cache.entry(fp).or_default().push(Entry {
+                fp,
+                pattern: pattern.clone(),
+                flags: flags.clone(),
+                programs: None,
+            });
+        }
         (pattern, flags)
     })
 }
 
-/// Attach the programs the first execution built to the entry for
-/// `(pattern, canonical flags)`, so every later construction of the same
-/// text is born built. Inserts the entry if it was evicted meanwhile.
+/// Attach the programs the first execution built to the content entry and
+/// publish a weak view to every recorded literal site for this exact content.
 pub(super) fn install_programs(pattern: &str, flags: &str, programs: Arc<Programs>) {
     if !enabled() {
         return;
     }
     let fp = fingerprint(pattern.as_bytes(), flags.as_bytes());
-    let slot = slot_of(fp);
-    SITE_CACHE.with(|cache| {
+    let content_owned = SITE_CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
-        if cache.is_empty() {
-            cache.resize_with(SLOTS, || None);
-        }
-        for s in [slot, slot ^ 1] {
-            if let Some(entry) = &mut cache[s] {
+        if let Some(bucket) = cache.get_mut(&fp) {
+            for entry in bucket {
                 if entry_matches(entry, fp, pattern, flags) {
                     if entry.programs.is_none() {
-                        entry.programs = Some(programs);
+                        entry.programs = Some(programs.clone());
                     }
-                    return;
+                    return true;
                 }
             }
         }
-        let victim = if cache[slot].is_none() {
-            slot
-        } else if cache[slot ^ 1].is_none() {
-            slot ^ 1
-        } else {
-            slot ^ ((fp >> 11) as usize & 1)
-        };
-        cache[victim] = Some(Entry {
+        if !make_room(&mut cache) {
+            return false;
+        }
+        cache.entry(fp).or_default().push(Entry {
             fp,
             pattern: Arc::from(pattern),
             flags: Arc::from(flags),
-            programs: Some(programs),
+            programs: Some(programs.clone()),
         });
+        true
     });
+    if content_owned {
+        super::site_key::install_programs_for_content(pattern, flags, &programs);
+    }
 }
 
 #[cfg(test)]
@@ -251,19 +255,23 @@ pub(super) fn test_reset() {
 #[cfg(test)]
 pub(super) fn test_has_programs(pattern: &str, flags: &str) -> Option<bool> {
     let fp = fingerprint(pattern.as_bytes(), flags.as_bytes());
-    let slot = slot_of(fp);
     SITE_CACHE.with(|cache| {
         let cache = cache.borrow();
-        if cache.is_empty() {
-            return None;
-        }
-        for s in [slot, slot ^ 1] {
-            if let Some(entry) = &cache[s] {
-                if entry_matches(entry, fp, pattern, flags) {
-                    return Some(entry.programs.is_some());
-                }
+        for entry in cache.get(&fp)? {
+            if entry_matches(entry, fp, pattern, flags) {
+                return Some(entry.programs.is_some());
             }
         }
         None
     })
+}
+
+#[cfg(test)]
+pub(super) fn test_len() -> usize {
+    SITE_CACHE.with(|cache| entry_count(&cache.borrow()))
+}
+
+#[cfg(test)]
+pub(super) fn test_try_evict_one_dynamic() -> bool {
+    SITE_CACHE.with(|cache| evict_one_dynamic(&mut cache.borrow_mut()))
 }

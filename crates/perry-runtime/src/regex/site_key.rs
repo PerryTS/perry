@@ -50,8 +50,8 @@ use std::sync::{Arc, Weak};
 
 use super::site_cache::Programs;
 
-/// The site entry's view of a pattern's compiled programs: **weak**, so the
-/// table can hand them out but can never be the reason they stay alive.
+/// The site entry's view of a pattern's compiled programs: **weak**, because
+/// the pinned content-cache entry owns the bundle.
 ///
 /// Measured cost of holding them strongly (cc, one 3300-char reply): settled
 /// footprint 478/474 MB → 500/527 MB and idle CPU 2.37 → 2.68 s. The site
@@ -60,11 +60,9 @@ use super::site_cache::Programs;
 /// wants. The campaign's directive is both metrics together, and a CPU win
 /// bought with resident memory does not land.
 ///
-/// Strong references remain where they belong: the `(pattern, flags)` program
-/// caches, and every live header that installed them via `Arc::into_raw`. A
-/// site entry whose programs have been dropped simply reports "not built
-/// yet", and the next construction re-picks them up from the content cache —
-/// the same path the site's very first construction takes.
+/// Strong references remain where they belong: the content cache and every
+/// live header that installed them via `Arc::into_raw`. When this bounded site
+/// entry is displaced, the content entry becomes eligible for eviction.
 struct WeakPrograms(Weak<Programs>);
 
 impl WeakPrograms {
@@ -265,6 +263,31 @@ pub(super) fn install_programs(key: usize, programs: Arc<Programs>) {
                     entry.programs = Some(WeakPrograms::downgrade(&programs));
                     return;
                 }
+            }
+        }
+    });
+}
+
+/// Whether the bounded literal-site table still records this content. The
+/// content cache consults this only on a collision miss, never on a site hit.
+pub(super) fn references_content(pattern: &str, flags: &str) -> bool {
+    SITE_KEY_TABLE.with(|table| {
+        table
+            .borrow()
+            .iter()
+            .flatten()
+            .any(|entry| &*entry.pattern == pattern && &*entry.flags == flags)
+    })
+}
+
+/// Publish a freshly built bundle to every literal site for this content. The
+/// content cache owns it; sites observe the complete bundle through one weak
+/// reference, preserving the all-or-nothing matcher rule.
+pub(super) fn install_programs_for_content(pattern: &str, flags: &str, programs: &Arc<Programs>) {
+    SITE_KEY_TABLE.with(|table| {
+        for entry in table.borrow_mut().iter_mut().flatten() {
+            if &*entry.pattern == pattern && &*entry.flags == flags {
+                entry.programs = Some(WeakPrograms::downgrade(programs));
             }
         }
     });

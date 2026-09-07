@@ -904,7 +904,7 @@ fn unicode17_scripts_expand_to_codepoint_ranges() {
 /// 2026-07-09 GC audit (wave 2 batch A): the compiled-regex caches were
 /// unbounded — one entry per distinct `(pattern, flags)` ever compiled, up to
 /// 64 MiB each — so `new RegExp(userInput)` was an attacker-driven OOM. The
-/// caches are now capped (clear-on-overflow) and every `RegExpHeader` OWNS a
+/// caches are now capped (one-entry eviction) and every `RegExpHeader` OWNS a
 /// leaked Arc reference to its compiled program(s), so a header created
 /// before an eviction keeps matching afterwards.
 #[test]

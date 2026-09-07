@@ -126,6 +126,9 @@ pub struct RegexDiag {
     pub compiles_std: u64,
     pub compiles_fancy: u64,
     pub compiles_repeat: u64,
+    /// One-entry evictions after a regex cache reaches its bound. The former
+    /// wholesale-clear counter remains as a zeroed regression control.
+    pub cache_evictions: u64,
     pub cache_clears: u64,
     /// `lazy::build_and_install_programs` runs (one per header that is
     /// executed at least once).
@@ -190,6 +193,10 @@ pub struct RegexDiag {
     /// CONTENT-keyed cache; a site hit never reaches it, so the two are
     /// disjoint and `site_key_hit + site_hit <= new`.
     pub new_site_key_hit: u64,
+    #[cfg(test)]
+    test_program_builds: u64,
+    #[cfg(test)]
+    test_cache_evictions: u64,
     per_pattern: HashMap<usize, PatStat>,
 }
 
@@ -250,6 +257,33 @@ pub fn regex_with(f: impl FnOnce(&mut RegexDiag)) {
             }
         }
     });
+}
+
+#[cfg(test)]
+pub(crate) fn test_reset_regex_builds_and_evictions() {
+    REGEX_DIAG.with(|diag| {
+        let mut diag = diag.borrow_mut();
+        diag.test_program_builds = 0;
+        diag.test_cache_evictions = 0;
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn test_note_regex_program_build() {
+    REGEX_DIAG.with(|diag| diag.borrow_mut().test_program_builds += 1);
+}
+
+#[cfg(test)]
+pub(crate) fn test_note_regex_cache_eviction() {
+    REGEX_DIAG.with(|diag| diag.borrow_mut().test_cache_evictions += 1);
+}
+
+#[cfg(test)]
+pub(crate) fn test_regex_builds_and_evictions() -> (u64, u64) {
+    REGEX_DIAG.with(|diag| {
+        let diag = diag.borrow();
+        (diag.test_program_builds, diag.test_cache_evictions)
+    })
 }
 
 impl RegexDiag {
@@ -331,7 +365,7 @@ impl RegexDiag {
         let _ = writeln!(
             out,
             "[regex-diag] t={secs:.1}s new={} validated_hit={} site_hit={} pattern_bytes={} \
-             compiles std={} fancy={} repeat={} cache_clears={} lazy_builds={} lazy_cache_hits={} \
+             compiles std={} fancy={} repeat={} cache_clears={} evictions={} lazy_builds={} lazy_cache_hits={} \
              exec={} exec_matched={} capture_slots={} capture_bytes={} test={} test_global={} \
              match={} replace={} replace_matches={} split={} flags_alloc={} \
              desc_regexp_probes={} desc_regexp_meta_negative={} \
@@ -346,6 +380,7 @@ impl RegexDiag {
             self.compiles_fancy,
             self.compiles_repeat,
             self.cache_clears,
+            self.cache_evictions,
             self.lazy_builds,
             self.lazy_cache_hits,
             self.exec_calls,

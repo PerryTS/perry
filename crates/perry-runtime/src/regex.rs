@@ -481,9 +481,9 @@ crate::perry_thread_local! {
     /// validation. Validity is a pure function of the pair, so the answer is
     /// worth remembering; `js_regexp_new` used to get this from a
     /// `REGEX_CACHE` hit, which stopped being a proxy once the compiled
-    /// program became lazy (see `regex::lazy`). Same cap and
-    /// clear-on-overflow policy as the program caches — the cost of a clear
-    /// is a repeated parse, never a wrong verdict. The unit value keeps
+    /// program became lazy (see `regex::lazy`). Same cap and one-entry
+    /// eviction policy as the program caches — eviction can repeat one parse,
+    /// never change a verdict. The unit value keeps
     /// `evict_regex_cache_if_full` shared with the three program caches.
     static VALIDATED_PATTERNS: RefCell<HashMap<(String, String), ()>> = RefCell::new(HashMap::new());
 }
@@ -569,26 +569,25 @@ pub(crate) fn build_fancy_regex(pattern: &str) -> Result<fancy_regex::Regex, fan
         .build()
 }
 
-/// Entry cap for the compiled-regex caches (2026-07-09 GC audit: one entry
-/// per distinct `(pattern, flags)` ever compiled, no cap of any kind, entries
-/// up to [`REGEX_SIZE_LIMIT`] — `new RegExp(userInput)` was an attacker-driven
-/// OOM). When an insert would exceed the cap the whole map is cleared — the
-/// `PARSE_KEY_CACHE` precedent: cheap, no LRU bookkeeping, recompilation is
-/// the fallback. Live `RegExpHeader`s are unaffected: each header OWNS a raw
-/// `Arc` reference to its compiled program(s), released by its GC finalizer,
-/// so dropping the cache's references cannot free a program still in use.
+/// Entry cap for the content-keyed compiled-regex caches. An insertion at the
+/// cap evicts one entry rather than clearing the entire working set. Literal
+/// programs remain owned by `site_cache` while their literal site is recorded;
+/// only dynamic programs can lose their last cache reference.
 #[cfg(feature = "regex-engine")]
 const REGEX_CACHE_MAX_ENTRIES: usize = 512;
 
-/// Clear-on-overflow guard shared by the compiled-program caches and the
-/// validated-pattern set: make room for one more entry, wiping the map when it
-/// is at capacity.
+/// Make room for one entry without invalidating the other 511 cached answers.
 #[cfg(feature = "regex-engine")]
-fn evict_regex_cache_if_full<K, V>(cache: &mut HashMap<K, V>) {
+fn evict_regex_cache_if_full<K: Clone + Eq + std::hash::Hash, V>(cache: &mut HashMap<K, V>) {
     if cache.len() >= REGEX_CACHE_MAX_ENTRIES {
-        cache.clear();
+        let victim = cache.keys().next().cloned();
+        if let Some(victim) = victim {
+            cache.remove(&victim);
+        }
+        #[cfg(test)]
+        tests_cache::note_cache_eviction();
         if crate::hot_diag::regex_on() {
-            crate::hot_diag::regex_with(|d| d.cache_clears += 1);
+            crate::hot_diag::regex_counters(|d| d.cache_evictions += 1);
         }
     }
 }
@@ -1995,5 +1994,7 @@ pub(crate) fn test_last_exec_groups() -> usize {
 
 #[cfg(all(test, feature = "regex-engine"))]
 mod tests;
+#[cfg(all(test, feature = "regex-engine"))]
+mod tests_cache;
 #[cfg(all(test, feature = "regex-engine"))]
 mod tests_header;
