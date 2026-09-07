@@ -168,3 +168,44 @@ fn native_compile_skips_link_on_identical_second_build() {
     assert_codegen_cache(&missing_output, 2, 0, 2, 0, 0);
     assert!(output.exists());
 }
+
+#[test]
+fn segment_view_switch_misses_build_and_object_caches() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let project = dir.path();
+    let output = project.join("app");
+    let entry = project.join("main.ts");
+    fs::write(
+        project.join("package.json"),
+        "{\"name\":\"segview-cache-test\"}\n",
+    )
+    .unwrap();
+    fs::write(
+        &entry,
+        r#"const segmenter = new Intl.Segmenter("en");
+for (const { segment } of segmenter.segment("ab")) {
+  console.log(segment);
+}
+"#,
+    )
+    .unwrap();
+
+    let disabled = compile_json_with_env(project, &entry, &output, &[("PERRY_SEGVIEW", "0")]);
+    assert_linked(&disabled);
+    assert_build_cache_miss(&disabled, "manifest-missing");
+    assert_codegen_cache(&disabled, 0, 1, 0, 1, 0);
+    assert_eq!(run_binary(&output), "a\nb\n");
+
+    // This must reach codegen and produce a distinct object. Sabotage:
+    // removing PERRY_SEGVIEW from BUILD_CACHE_ENV_VARS makes it an erroneous
+    // whole-build cache hit, so the assertions below fail before codegen.
+    let enabled = compile_json_with_env(project, &entry, &output, &[("PERRY_SEGVIEW", "1")]);
+    assert_linked(&enabled);
+    assert_build_cache_miss(&enabled, "env");
+    assert_codegen_cache(&enabled, 0, 1, 0, 1, 0);
+    assert_eq!(run_binary(&output), "a\nb\n");
+
+    let enabled_warm = compile_json_with_env(project, &entry, &output, &[("PERRY_SEGVIEW", "1")]);
+    assert_skipped(&enabled_warm);
+    assert_build_cache_hit(&enabled_warm);
+}
