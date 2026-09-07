@@ -12,6 +12,17 @@ fn native_linux_alias_matches_only_the_host_architecture_and_libc() {
         assert!(is_native_linux_target(Some("linux-arm64")));
         assert!(!is_native_linux_target(Some("linux")));
         assert!(!is_native_linux_target(Some("linux-x86_64")));
+        assert!(!is_native_linux_target(Some("linux-aarch64-musl")));
+    } else if cfg!(all(target_arch = "x86_64", target_env = "musl")) {
+        assert!(is_native_linux_target(Some("linux-musl")));
+        assert!(is_native_linux_target(Some("linux-x86_64-musl")));
+        assert!(!is_native_linux_target(Some("linux")));
+        assert!(!is_native_linux_target(Some("linux-aarch64-musl")));
+    } else if cfg!(all(target_arch = "aarch64", target_env = "musl")) {
+        assert!(is_native_linux_target(Some("linux-aarch64-musl")));
+        assert!(!is_native_linux_target(Some("linux-arm64")));
+        assert!(!is_native_linux_target(Some("linux-x86_64-musl")));
+        assert!(!is_native_linux_target(Some("linux")));
     }
 }
 
