@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Perry is a native TypeScript compiler written in Rust that compiles TypeScript source code directly to native executables. It uses SWC for TypeScript parsing and LLVM for code generation.
 
-**Current Version:** 0.5.1520
+**Current Version:** 0.5.1521
 
 
 ## TypeScript Parity Status
@@ -64,6 +64,8 @@ A `--module` selector scopes `--check`/`--update-baseline` to just that slice (a
 1. **Bump version**: Increment patch in `[workspace.package].version` in `Cargo.toml` and the `**Current Version:**` line above. That is the ONLY metadata edit CLAUDE.md needs.
 2. **Add a changeset**: create `changelog.d/<PR>-<slug>.md` with the entry body (no version header — see `changelog.d/README.md`). Long-form root-cause writeups, file paths, validation notes all belong in the fragment, NOT in CLAUDE.md. **Never append to `CHANGELOG.md`** — it is frozen at v0.5.1264. Fragments are folded into the GitHub Release notes at tag time (`scripts/cut_release_notes.sh`) and deleted.
 3. **Commit changes**: Include code, `Cargo.toml`/`Cargo.lock`, `CLAUDE.md` (version bump only), and the `changelog.d/` fragment together.
+
+**No Jira project.** Perry tracks work via GitHub issues and PRs, not Jira. Commit messages take no `[SU-NNNN]` ticket prefix — they use conventional-commit subjects (`fix(scope): …`, `feat(scope): …`) and reference GitHub issues/PRs by `#NNNN`.
 
 **Do not write changelog entries into CLAUDE.md.** This file is for orientation (architecture, common pitfalls, build commands). Per-change history lives in `changelog.d/` → GitHub Releases so CLAUDE.md stays small and stable across context loads.
 

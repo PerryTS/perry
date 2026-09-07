@@ -175,6 +175,46 @@ impl PerryInsetSecureTextFieldCell {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::shrink;
+    use objc2_core_foundation::{CGPoint, CGRect, CGSize};
+
+    fn dims(r: CGRect) -> (f64, f64, f64, f64) {
+        (r.origin.x, r.origin.y, r.size.width, r.size.height)
+    }
+
+    #[test]
+    fn shrink_applies_and_clamps_insets() {
+        // (label, insets (top, left, bottom, right), in (x, y, w, h), expected (x, y, w, h))
+        // Cells draw unflipped, so left moves origin.x and bottom moves origin.y.
+        let cases = [
+            (
+                "all sides",
+                (10.0, 20.0, 30.0, 40.0),
+                (0.0, 0.0, 200.0, 100.0),
+                (20.0, 30.0, 140.0, 60.0),
+            ),
+            (
+                "zero insets are identity",
+                (0.0, 0.0, 0.0, 0.0),
+                (5.0, 6.0, 30.0, 40.0),
+                (5.0, 6.0, 30.0, 40.0),
+            ),
+            (
+                "insets larger than the rect clamp size to zero",
+                (100.0, 100.0, 100.0, 100.0),
+                (0.0, 0.0, 50.0, 50.0),
+                (100.0, 100.0, 0.0, 0.0),
+            ),
+        ];
+        for (label, insets, r, expected) in cases {
+            let out = shrink(insets, CGRect::new(CGPoint::new(r.0, r.1), CGSize::new(r.2, r.3)));
+            assert_eq!(dims(out), expected, "case: {label}");
+        }
+    }
+}
+
 /// Write the inset onto `cell` if it is one of the Perry inset cells. Returns
 /// whether it matched, so the caller can tell a Perry field from a foreign one.
 pub fn try_set_cell_insets(
