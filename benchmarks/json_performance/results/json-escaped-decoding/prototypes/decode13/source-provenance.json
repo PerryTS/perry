@@ -1,0 +1,20 @@
+{
+  "source_sha256": {
+    "prelude.rs.txt": "44521f068fb830b14cc4c930f1b41efd714a10491f332d14879ab727a1585a12",
+    "Cargo.toml": "98ec4122693ec94cb330b5abbfeacc866f10fca077304a84d979572f581db9c6",
+    "after.rs": "604b4a3a94fb03b21afde860cd4b25d0ac4cb73cae9fa7212fb05ac37e5febe1",
+    "simd.rs": "a817938c4a8a8f39484c021555a7892deda344eddf8739833b1eeb9856892818",
+    "monitor.py": "535cbf8a928dd1545c94ebbeeb7a25950b4ce3c2a45c1b0befc13597fd7e82ef",
+    "chunk.rs.txt": "10495167b432f0b72d7f80a47ea582fd0b9fb32a9f617e3ba8e0173c0bd16ded",
+    "with_lock.py": "007ce6db7a4b7d43b41d44439c49aeeb7dcf91cf702a2a03721dc1f93160ff2e",
+    "Cargo.lock": "8e371d407aa39e37b2089086cab7da5b04fbb76530ed9a5086c4343b365c17a1",
+    "methods.rs.txt": "b361652abe06c4b09ba7bb8cfb4ffc5e1129939732f3791da2ff1daa35cf7345",
+    "before.rs": "f30c856cf504b038172601ed8673978edc1e5d5d3b20f76649266cdac4e4b954",
+    "probe.py": "a8993c8af9014d260b4ea1fad8e3c313b65af8093cb7eb11f129aca7a7b39e0c",
+    "main.rs": "4d3d98f5d8985e0f16e73acec25b16ab9002709fccd68bd2edc4eea7bebeb42c"
+  },
+  "binary_sha256": "2df9ad217ba1da09e82017d870e581cedb4c10c15be34f61565c8bcacc2ebce3",
+  "rustc": "nightly-2026-08-20",
+  "profile": "release, opt-level=3, codegen-units=1, thin LTO, panic=abort",
+  "integration": false
+}

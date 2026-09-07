@@ -1,0 +1,39 @@
+{
+  "unit_passed": 3283,
+  "unit_ignored": 4,
+  "compiled_node_matches": 40,
+  "stress": [
+    {
+      "name": "all-gc-stress",
+      "runs": 38,
+      "seeded": 38
+    },
+    {
+      "name": "extended-validation",
+      "runs": 3,
+      "seeded": 2
+    },
+    {
+      "name": "forced-tape-validation",
+      "runs": 3,
+      "seeded": 2
+    },
+    {
+      "name": "no-json-growth-validation",
+      "runs": 3,
+      "seeded": 2
+    },
+    {
+      "name": "lifetime-fixture-validation",
+      "runs": 9,
+      "seeded": 4
+    },
+    {
+      "name": "root-record-validation",
+      "runs": 9,
+      "seeded": 4
+    }
+  ],
+  "seeded_total": 52,
+  "inherited_prototype_mismatch": true
+}

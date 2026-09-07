@@ -1,0 +1,19 @@
+{
+  "source_sha256": {
+    "parser_escape_chunk_tests.rs": "26bc692d783b56865ab9c92084da3c3e84bffff93970a80b1194d0fcee97c6d4",
+    "Cargo.toml": "98ec4122693ec94cb330b5abbfeacc866f10fca077304a84d979572f581db9c6",
+    "after.rs": "245aae05f59b03b5a88cf419750f4a44c653036892abe67b9df92607e23e353c",
+    "simd.rs": "a817938c4a8a8f39484c021555a7892deda344eddf8739833b1eeb9856892818",
+    "monitor.py": "55e21f91f2ea4a24474fea8ebc5bfdcd688cb2445e3a31f0073cfa46a020cf02",
+    "with_lock.py": "007ce6db7a4b7d43b41d44439c49aeeb7dcf91cf702a2a03721dc1f93160ff2e",
+    "Cargo.lock": "8e371d407aa39e37b2089086cab7da5b04fbb76530ed9a5086c4343b365c17a1",
+    "before.rs": "f30c856cf504b038172601ed8673978edc1e5d5d3b20f76649266cdac4e4b954",
+    "probe.py": "c7916d53e5f7abf4a6053576c95964d42ff6683be5a3fa272ced4dcfa11ce9ae",
+    "main.rs": "c3fc4fe6aaa88e079a2686b45b07848e3cab16bd8e4e2c3c29f65bd300bf2731",
+    "inlined.rs": "685899e62080dbc8cdc5c583b9c1cfb8071f9570c713362b6e3b1b643dee035e"
+  },
+  "binary_sha256": "1b0876b13e31d7bfa820a7dc2f7e4283624d8069fbc126a1a4a18639d0eb16d0",
+  "rustc": "nightly-2026-08-20",
+  "profile": "release, opt-level=3, codegen-units=1, thin LTO, panic=abort",
+  "integration": false
+}

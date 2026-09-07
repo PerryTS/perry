@@ -1,0 +1,17 @@
+Verified 54 outputs, 378 timings, 147 lifetimes and the common invocation path.
+empty_object parse -0.047 0.204 False -0.10938
+escaped_1m parse -0.207 -31.175 False -0.125
+escaped_1m stringify 0.79 0.915 False -0.125
+long_string_1m parse 0.255 -0.492 False -0.125
+records_array_16k stringify 0.221 0.136 False -0.14062
+records_object_1m parse 2.179 0.613 False -0.125
+small_record parse 1.759 0.408 True -0.14062
+small_record stringify -0.34 -0.329 False -0.14062
+unicode_1m parse -0.027 -0.393 False -0.125
+LIFETIME escaped_1m parse discard 100 0.178 -31.502 0.0
+LIFETIME escaped_1m parse latest 100 0.238 -31.447 0.0
+LIFETIME escaped_1m parse retain 32 -0.558 -26.708 -0.03125
+LIFETIME records_object_20m roundtrip discard 24 1.289 -0.364 0.0
+LIFETIME small_record stringify discard 100000 1.447 0.554 -0.03125
+LIFETIME small_record stringify latest 100000 -0.43 -0.153 0.015625
+LIFETIME small_record stringify retain 100000 1.065 2.12 -0.015625

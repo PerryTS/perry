@@ -1,0 +1,16 @@
+{
+  "owner": "json-perf-62107-1788774191",
+  "load_before": [
+    2.08203125,
+    1.7451171875,
+    1.5771484375
+  ],
+  "started_utc": "2026-09-07T09:43:11Z",
+  "quiet_gate_passed": false,
+  "command": [
+    "python3",
+    "/Users/perry/json-escape-runtime-v16-20260907-codex/focused.py"
+  ],
+  "competing_workloads_before": [],
+  "finished_utc": "2026-09-07T09:43:23Z"
+}

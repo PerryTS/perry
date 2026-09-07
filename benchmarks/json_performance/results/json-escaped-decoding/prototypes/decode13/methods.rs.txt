@@ -1,0 +1,109 @@
+    pub(crate) fn parse_string_bytes(&mut self) -> Option<ParsedStr<'a>> {
+        if self.peek() != Some(b'"') {
+            self.valid = false;
+            return None;
+        }
+        self.advance();
+        let start = self.pos;
+
+        // SIMD-accelerated scan for `"` or `\`. On match, fall through
+        // to the scalar loop which positions `self.pos` exactly.
+        if let Some(hit) = find_string_terminator(&self.input[self.pos..]) {
+            // `hit` is the offset within the remaining slice of the
+            // first `"` or `\`. If it's `"`, we're done; if `\`, slow
+            // path picks up from the current position.
+            self.pos += hit;
+            let ch = self.input[self.pos];
+            if ch == b'"' {
+                let slice = &self.input[start..self.pos];
+                self.pos += 1;
+                return Some(ParsedStr::Borrowed(slice));
+            }
+            if ch < 0x20 {
+                self.valid = false;
+                return None;
+            }
+            // ch == b'\\' — slow path from here.
+            return self.parse_string_bytes_slow(start);
+        }
+        self.valid = false;
+        None
+    }
+
+    pub(crate) fn parse_string_bytes_slow(&mut self, start: usize) -> Option<ParsedStr<'a>> {
+        let mut result = Vec::from(&self.input[start..self.pos]);
+        loop {
+            if self.pos >= self.input.len() {
+                self.valid = false;
+                return None;
+            }
+            let ch = self.input[self.pos];
+            self.pos += 1;
+            match ch {
+                b'"' => return Some(ParsedStr::Owned(result)),
+                b'\\' => {
+                    if self.pos >= self.input.len() {
+                        self.valid = false;
+                        return None;
+                    }
+                    let esc = self.input[self.pos];
+                    self.pos += 1;
+                    match esc {
+                        b'"' => result.push(b'"'),
+                        b'\\' => result.push(b'\\'),
+                        b'/' => result.push(b'/'),
+                        b'n' => result.push(b'\n'),
+                        b'r' => result.push(b'\r'),
+                        b't' => result.push(b'\t'),
+                        b'b' => result.push(0x08),
+                        b'f' => result.push(0x0C),
+                        b'u' => {
+                            if self.pos + 4 > self.input.len() {
+                                self.valid = false;
+                                return None;
+                            }
+                            let Some(code) = decode_hex_u16(&self.input[self.pos..self.pos + 4])
+                            else {
+                                self.valid = false;
+                                return None;
+                            };
+                            self.pos += 4;
+                            let paired_low = if (0xD800..=0xDBFF).contains(&code)
+                                && self.pos + 6 <= self.input.len()
+                                && self.input[self.pos] == b'\\'
+                                && self.input[self.pos + 1] == b'u'
+                            {
+                                decode_hex_u16(&self.input[self.pos + 2..self.pos + 6])
+                                    .filter(|low| (0xDC00..=0xDFFF).contains(low))
+                            } else {
+                                None
+                            };
+                            if let Some(low) = paired_low {
+                                self.pos += 6;
+                                let codepoint = 0x10000
+                                    + ((code as u32 - 0xD800) << 10)
+                                    + (low as u32 - 0xDC00);
+                                let c = char::from_u32(codepoint)
+                                    .expect("surrogate pair is a Unicode scalar");
+                                let mut buf = [0u8; 4];
+                                let s = c.encode_utf8(&mut buf);
+                                result.extend_from_slice(s.as_bytes());
+                            } else {
+                                push_code_unit_wtf8(&mut result, code);
+                            }
+                        }
+                        _ => {
+                            self.valid = false;
+                            return None;
+                        }
+                    }
+                }
+                c if c < 0x20 => {
+                    self.valid = false;
+                    return None;
+                }
+                _ => result.push(ch),
+            }
+        }
+    }
+

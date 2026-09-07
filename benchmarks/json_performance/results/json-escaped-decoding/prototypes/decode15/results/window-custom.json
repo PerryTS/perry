@@ -1,0 +1,22 @@
+{
+  "owner": "json-perf-61544-1788773715",
+  "load_before": [
+    1.5537109375,
+    1.40478515625,
+    1.42822265625
+  ],
+  "started_utc": "2026-09-07T09:35:15Z",
+  "quiet_gate_passed": true,
+  "command": [
+    "python3",
+    "/Users/perry/json-escape-decode-v15-20260907-codex/probe.py"
+  ],
+  "competing_workloads_before": [],
+  "load_after": [
+    1.6337890625,
+    1.4326171875,
+    1.43701171875
+  ],
+  "competing_workloads_after": [],
+  "finished_utc": "2026-09-07T09:35:33Z"
+}

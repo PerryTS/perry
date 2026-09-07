@@ -1,0 +1,15 @@
+[package]
+name = "json-escape-probe"
+version = "0.0.0"
+edition = "2021"
+[workspace]
+[[bin]]
+name = "probe"
+path = "main.rs"
+[dev-dependencies]
+libc = "0.2"
+[profile.release]
+opt-level = 3
+codegen-units = 1
+lto = "thin"
+panic = "abort"

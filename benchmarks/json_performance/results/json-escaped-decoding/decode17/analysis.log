@@ -1,0 +1,57 @@
+Verified 190 outputs, 950 timings, 360 memory trials, 162 lifetimes and the common invocation path.
+empty_object parse -1.066 False 0.15625
+empty_object stringify 0.335 False 0.17188
+escaped_1m parse -30.257 True 0.15625
+escaped_1m stringify 0.384 False 0.14062
+heterogeneous_1m parse -0.151 False 0.14062
+heterogeneous_1m stringify 0.161 False 0.15625
+long_string_1m parse 0.302 False 0.15625
+long_string_1m stringify 0.898 False 0.15625
+null parse -4.125 False 0.15625
+null stringify 5.939 False 0.15625
+numbers_1m parse 0.098 False 0.14062
+numbers_1m stringify 1.185 True 0.1875
+object_1k parse -0.299 False 0.1875
+object_1k stringify -0.768 False 0.14062
+records_array_16k parse 0.751 False 0.14062
+records_array_16k stringify 0.082 False 0.125
+records_array_1m parse 0.762 False 0.14062
+records_array_1m stringify 0.134 False 0.14062
+records_array_20m parse -2.787 True 0.10938
+records_array_20m stringify 0.198 False 0.09375
+records_array_8m parse 0.077 False 0.14062
+records_array_8m stringify 0.275 False 0.10938
+records_object_1m parse -2.408 True 0.14062
+records_object_1m stringify 0.491 True 0.14062
+records_object_20m parse -2.508 True 0.10938
+records_object_20m stringify 0.222 False 0.125
+records_object_8m parse -2.391 False 0.10938
+records_object_8m stringify 0.162 False 0.10938
+small_record parse -0.917 False 0.14062
+small_record stringify 0.451 False 0.15625
+string_a parse -4.635 False 0.17188
+string_a stringify 2.483 False 0.15625
+tiny_object parse 0.294 False 0.125
+tiny_object stringify 1.348 True 0.14062
+unicode_1m parse -0.04 False 0.15625
+unicode_1m stringify 0.239 False 0.15625
+wide_1m parse -0.321 True -1.57812
+wide_1m stringify -0.049 False 0.1875
+LIFETIME escaped_1m parse discard 100 -30.84 0.015625
+LIFETIME escaped_1m parse latest 100 -31.915 0.03125
+LIFETIME escaped_1m parse retain 32 -26.938 0.046875
+LIFETIME records_object_1m stringify discard 120 0.77 0.03125
+LIFETIME records_object_20m roundtrip discard 7 -1.457 0.015625
+LIFETIME records_object_20m roundtrip discard 8 -1.647 0.015625
+LIFETIME records_object_20m roundtrip discard 9 -1.59 0.015625
+LIFETIME records_object_20m roundtrip discard 16 -1.594 0.015625
+LIFETIME records_object_20m roundtrip discard 24 -1.58 0.015625
+LIFETIME small_record stringify discard 100000 -3.313 0.078125
+LIFETIME small_record stringify latest 100000 3.695 0.0625
+LIFETIME small_record stringify retain 100000 20.444 0.03125
+LIFETIME unicode_1m parse discard 100 -1.895 0.03125
+LIFETIME unicode_1m parse latest 100 -2.812 0.03125
+LIFETIME unicode_1m parse retain 32 -1.72 0.046875
+LIFETIME wide_1m parse discard 60 -0.516 -0.921875
+LIFETIME wide_1m parse latest 60 -0.366 0.0
+LIFETIME wide_1m parse retain 8 -0.489 0.046875

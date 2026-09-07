@@ -1,0 +1,6 @@
+Traceback (most recent call last):
+  File "/Users/perry/json-escape-runtime-v16-20260907-codex/focused.py", line 41, in <module>
+    row=one(engine,f,op,n,warm);row.update(rep=rep,bytes=f['bytes'])
+  File "/Users/perry/json-escape-runtime-v16-20260907-codex/focused.py", line 21, in one
+    assert not pending.exists()
+AssertionError

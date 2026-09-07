@@ -1,0 +1,53 @@
+{
+  "workers": {
+    "counter": "615b8022f3dce5581623a4b7343dabdcff10f3a799e2fcb68ee2ab7315994647",
+    "inline": "1ace3f2adfbdb3b4c3cdc5c877c8c8805760432ea3cf04dffbf3f4860531f670",
+    "candidate": "bf700f0184f2a3e584c61f49a79e76ae3e92d4567413c56ea823e1cc95342513"
+  },
+  "cases": [
+    [
+      "small_record",
+      "stringify",
+      "discard",
+      100000
+    ],
+    [
+      "small_record",
+      "stringify",
+      "latest",
+      100000
+    ],
+    [
+      "small_record",
+      "stringify",
+      "retain",
+      100000
+    ],
+    [
+      "records_object_20m",
+      "roundtrip",
+      "discard",
+      24
+    ],
+    [
+      "escaped_1m",
+      "parse",
+      "discard",
+      100
+    ],
+    [
+      "escaped_1m",
+      "parse",
+      "latest",
+      100
+    ],
+    [
+      "escaped_1m",
+      "parse",
+      "retain",
+      32
+    ]
+  ],
+  "repeats": 7,
+  "seed": 81124
+}

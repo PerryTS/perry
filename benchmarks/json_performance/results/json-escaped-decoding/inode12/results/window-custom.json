@@ -1,0 +1,22 @@
+{
+  "owner": "json-perf-59980-1788772027",
+  "load_before": [
+    1.53564453125,
+    1.30615234375,
+    1.43994140625
+  ],
+  "started_utc": "2026-09-07T09:07:07Z",
+  "quiet_gate_passed": false,
+  "command": [
+    "python3",
+    "/Users/perry/json-inode-control-v12-20260907-codex/probe.py"
+  ],
+  "competing_workloads_before": [],
+  "load_after": [
+    2.56689453125,
+    1.79443359375,
+    1.60693359375
+  ],
+  "competing_workloads_after": [],
+  "finished_utc": "2026-09-07T09:10:08Z"
+}

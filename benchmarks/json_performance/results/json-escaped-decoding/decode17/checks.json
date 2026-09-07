@@ -1,0 +1,44 @@
+[
+  {
+    "check": "root-holders",
+    "exit": 0,
+    "command": [
+      "python3",
+      "scripts/gc_runtime_root_holders.py"
+    ]
+  },
+  {
+    "check": "address-inventory",
+    "exit": 1,
+    "command": [
+      "python3",
+      "scripts/addr_class_inventory.py"
+    ]
+  },
+  {
+    "check": "node-consistency",
+    "exit": 0,
+    "command": [
+      "python3",
+      "scripts/check_node_version_consistency.py",
+      "--list"
+    ]
+  },
+  {
+    "check": "file-size",
+    "exit": 1,
+    "command": [
+      "bash",
+      "scripts/check_file_size.sh"
+    ]
+  },
+  {
+    "check": "diff",
+    "exit": 0,
+    "command": [
+      "git",
+      "diff",
+      "--check"
+    ]
+  }
+]

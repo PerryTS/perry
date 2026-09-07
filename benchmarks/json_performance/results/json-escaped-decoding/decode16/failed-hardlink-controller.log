@@ -1,0 +1,13 @@
+ACQUIRED json-perf-62107-1788774191 load (2.08203125, 1.7451171875, 1.5771484375)
+RELEASED
+Traceback (most recent call last):
+  File "/Users/perry/json-escape-runtime-v16-20260907-codex/with_lock.py", line 30, in <module>
+    subprocess.run(cmd,stdout=log,stderr=subprocess.STDOUT,check=True)
+  File "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/subprocess.py", line 528, in run
+    raise CalledProcessError(retcode, process.args,
+subprocess.CalledProcessError: Command '['python3', '/Users/perry/json-escape-runtime-v16-20260907-codex/focused.py']' returned non-zero exit status 1.
+MONITOR_FINISHED 1 observations 3
+Traceback (most recent call last):
+  File "/Users/perry/json-escape-runtime-v16-20260907-codex/monitor.py", line 14, in <module>
+    assert p.returncode==0
+AssertionError

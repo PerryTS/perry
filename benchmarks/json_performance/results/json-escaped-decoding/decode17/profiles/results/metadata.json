@@ -1,0 +1,7 @@
+{
+  "sha256": {
+    "counter": "8c475d542d97db7fbe41490e97cfbcfee7c3eeca1ca7ec83320dbdd8114e55d0",
+    "candidate": "d5b6c8691381c3f834c1da0809e079cc7e299b3324d0a4c6cec72a3292c3ec56"
+  },
+  "note": "Separate three-second native sampling; intentionally terminated workers. Diagnostic only, not timing qualification. Both arms at one invocation path."
+}

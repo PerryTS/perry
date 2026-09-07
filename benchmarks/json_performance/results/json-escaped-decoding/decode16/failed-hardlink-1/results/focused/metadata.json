@@ -1,0 +1,52 @@
+{
+  "hashes": {
+    "checkpoint": "6a376de244705cbe8485063d254973e3e99582b95e8b290ddb370deac3ebd835",
+    "counter": "8c475d542d97db7fbe41490e97cfbcfee7c3eeca1ca7ec83320dbdd8114e55d0",
+    "candidate": "7ee6d71a4cf1db6b2c416bf8585bfefbe053263709d87d42d2554fc3fb6eee55"
+  },
+  "cases": [
+    [
+      "escaped_1m",
+      "parse"
+    ],
+    [
+      "escaped_1m",
+      "stringify"
+    ],
+    [
+      "unicode_1m",
+      "parse"
+    ],
+    [
+      "long_string_1m",
+      "parse"
+    ],
+    [
+      "records_object_1m",
+      "parse"
+    ],
+    [
+      "small_record",
+      "parse"
+    ],
+    [
+      "small_record",
+      "stringify"
+    ],
+    [
+      "records_array_16k",
+      "stringify"
+    ],
+    [
+      "empty_object",
+      "parse"
+    ]
+  ],
+  "seed": 661382,
+  "repeats": 7,
+  "versions": {
+    "node": "v26.5.1",
+    "bun": "1.3.14"
+  },
+  "note": "Identical Perry invocation path, atomic hardlinks to immutable binaries. Fixed prior loop counts; default GC."
+}

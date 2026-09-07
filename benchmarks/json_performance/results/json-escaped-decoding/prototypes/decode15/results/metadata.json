@@ -1,0 +1,16 @@
+{
+  "worker_sha256": "1b0876b13e31d7bfa820a7dc2f7e4283624d8069fbc126a1a4a18639d0eb16d0",
+  "fixtures": {
+    "escaped_1m": "52f2e30ddc036b9c0600a1ab088c7d00f6e40558540efa1f9315a0579bec8f56",
+    "unicode_1m": "b58eea42a50190b7675886030ef6875b25bb0a6d50632d9cbc5a918ea4ad9bd9",
+    "long_string_1m": "ea77e5d1ebb84c30a920d4de6aee5c5c92c2aba6cf060c30f1933e1e000e9081",
+    "records_object_1m": "f025e38ef9df42216a5fadc3232f300ab1dae1d291c5aee1c288a72d83f83471",
+    "small-escaped-array": "685999ca6989c5afccf8b92af43985d43df18d45813881f1314c3eda072dd6c7",
+    "sparse-escapes": "88d3606ebe7b1bdd29d2f260ef26ad0f1163d500bfe77d8e03c858c845f02cc7"
+  },
+  "iterations": 100,
+  "repeats": 7,
+  "seed": 14398,
+  "boundary_arm": "inlined is the original decoder with explicit fast/slow inlining boundaries",
+  "note": "Standalone decoding, no GC; native CPU from time plus loop wall time; not a full JSON result."
+}

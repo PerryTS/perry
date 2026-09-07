@@ -1,0 +1,41 @@
+{
+  "workers": {
+    "checkpoint": "6a376de244705cbe8485063d254973e3e99582b95e8b290ddb370deac3ebd835",
+    "candidate": "8c475d542d97db7fbe41490e97cfbcfee7c3eeca1ca7ec83320dbdd8114e55d0"
+  },
+  "cases": [
+    [
+      "empty_object",
+      "parse"
+    ],
+    [
+      "small_record",
+      "stringify"
+    ],
+    [
+      "records_array_16k",
+      "stringify"
+    ],
+    [
+      "long_string_1m",
+      "parse"
+    ],
+    [
+      "unicode_1m",
+      "parse"
+    ]
+  ],
+  "executable_path": "/Users/perry/json-inode-control-v12-20260907-codex/active",
+  "seed": 91837,
+  "methods": [
+    "rewrite",
+    "copy",
+    "link"
+  ],
+  "method_repeats": 5,
+  "paired_repeats": 7,
+  "source_inodes": {
+    "checkpoint": 38694136,
+    "candidate": 38694213
+  }
+}

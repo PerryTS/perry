@@ -1,0 +1,50 @@
+[
+  {
+    "arm": "counter",
+    "fixture": "long_string_1m",
+    "operation": "parse",
+    "sample_exit": 0,
+    "worker_exit": -15,
+    "executable_path": "/Users/perry/json-escape-runtime-v17-20260907-codex/profiles/active"
+  },
+  {
+    "arm": "candidate",
+    "fixture": "long_string_1m",
+    "operation": "parse",
+    "sample_exit": 0,
+    "worker_exit": -15,
+    "executable_path": "/Users/perry/json-escape-runtime-v17-20260907-codex/profiles/active"
+  },
+  {
+    "arm": "counter",
+    "fixture": "escaped_1m",
+    "operation": "parse",
+    "sample_exit": 0,
+    "worker_exit": -15,
+    "executable_path": "/Users/perry/json-escape-runtime-v17-20260907-codex/profiles/active"
+  },
+  {
+    "arm": "candidate",
+    "fixture": "escaped_1m",
+    "operation": "parse",
+    "sample_exit": 0,
+    "worker_exit": -15,
+    "executable_path": "/Users/perry/json-escape-runtime-v17-20260907-codex/profiles/active"
+  },
+  {
+    "arm": "counter",
+    "fixture": "small_record",
+    "operation": "stringify",
+    "sample_exit": 0,
+    "worker_exit": -15,
+    "executable_path": "/Users/perry/json-escape-runtime-v17-20260907-codex/profiles/active"
+  },
+  {
+    "arm": "candidate",
+    "fixture": "small_record",
+    "operation": "stringify",
+    "sample_exit": 0,
+    "worker_exit": -15,
+    "executable_path": "/Users/perry/json-escape-runtime-v17-20260907-codex/profiles/active"
+  }
+]

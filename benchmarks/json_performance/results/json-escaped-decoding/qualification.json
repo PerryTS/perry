@@ -1,0 +1,16 @@
+{
+  "experimental": true,
+  "no_regression_acceptance": false,
+  "runtime_candidate": "decode18",
+  "full_matrix_candidate": "decode17",
+  "full_matrix_complete": true,
+  "decode18_full_matrix_complete": false,
+  "gc_policy_changed": false,
+  "source_commits": {
+    "decode17": "f441a6ca2a49390e8d6d5e2e695c3ef1682db098",
+    "decode18": "b3367bd932f78c7e8f64a283b82cdb756c758155"
+  },
+  "retained_branch": "codex/json-escaped-outlined-1520",
+  "prior_counter_commit": "32e843c55ef885d675e9f3cb0cae3728a3afece0",
+  "reference_runtime_commit": "0327b9460a749592deb354d72ebad29bf4ae4bba"
+}

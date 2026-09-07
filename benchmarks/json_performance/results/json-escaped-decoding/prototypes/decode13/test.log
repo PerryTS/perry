@@ -1,0 +1,12 @@
+     Locking 1 package to highest compatible version as of 7 days ago
+   Compiling libc v0.2.189
+   Compiling json-escape-probe v0.0.0 (/Users/amlug/projects/perry/codex-json-fastpaths-artifacts/decode13)
+    Finished `release` profile [optimized] target(s) in 4.40s
+     Running unittests main.rs (/Users/amlug/projects/perry/codex-json-fastpaths-artifacts/decode13/target/release/build/json-escape-probe/150aba3241e77317/out/probe-150aba3241e77317)
+
+running 2 tests
+test tests::guarded_source_and_all_window_tails ... ok
+test tests::escapes_truncations_and_arbitrary_bytes_match_original ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+
