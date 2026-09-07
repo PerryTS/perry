@@ -1409,10 +1409,12 @@ fn emit_incremental_liveness_diag() {
 /// disjoint by construction.
 fn emit_gc_time_share_diag() {
     let (step_us, remark_us, minor_us, full_us) = instruments::gc_time_totals_us();
+    let (copy_pause_us, tenuring_copied_bytes, promote_us, tenuring_promoted_bytes) =
+        instruments::tenuring_price_counters();
     let wall_us = instruments::wall_us_since_epoch().max(1);
     let pause_us = step_us + remark_us + minor_us;
     eprintln!(
-        "[gc-time] wall_us={wall_us} step_us={step_us} remark_us={remark_us} minor_us={minor_us} full_sync_us={full_us} share_permille={}",
+        "[gc-time] wall_us={wall_us} step_us={step_us} remark_us={remark_us} minor_us={minor_us} full_sync_us={full_us} share_permille={} copy_pause_us={copy_pause_us} tenuring_copied_bytes={tenuring_copied_bytes} promote_us={promote_us} tenuring_promoted_bytes={tenuring_promoted_bytes}",
         pause_us.saturating_mul(1000) / wall_us,
     );
 }

@@ -1817,6 +1817,10 @@ pub(super) fn run_copied_minor_attempt(
     // enable, so it releases the latch that suppressed a repeat handoff.
     note_copying_minor_completed();
     super::instruments::note_copying_minor_pause_us(start.elapsed().as_micros() as u64);
+    super::instruments::note_tenuring_price_bytes(
+        collector.stats.copied_bytes,
+        collector.stats.promoted_bytes,
+    );
     // #7604: the process-wide liveness counters. A copying minor ran, and this
     // is how much it actually relocated -- the only evidence that distinguishes
     // "the instrument was armed" from "the instrument fired".

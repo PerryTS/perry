@@ -47,14 +47,14 @@
 //! default — 40 bytes under) settles at S=2 and still copies every
 //! surviving byte exactly once for nothing, because 100% of each cohort
 //! survives its survivor round and gets promoted a cycle later anyway.
-//! The **survival-rate lock** closes that: when last cycle's survivor
-//! intake (`copied_bytes`) was substantial and ≥90% of it came back out
-//! alive this cycle (`survivor_live_bytes`), the aging round demonstrably
-//! filters nothing, so the threshold locks to 1 (promote on first copy)
-//! until the influx goes quiet. The lock's exit signal — influx below
-//! `desired/4` for two consecutive cycles — stays measurable while
-//! locked, unlike survivor occupancy, which is zero at S=1 and would
-//! leave the loop blind.
+//! The **survival-rate lock** closes that, but only from steady evidence. The
+//! first two rated cohorts belong to process startup and cannot decide the
+//! lock. After that, three consecutive substantial survivor rounds must each
+//! return ≥90% of the cohort copied in the preceding cycle before the threshold
+//! locks to 1 (promote on first copy). Any rated round below that bar resets the
+//! streak. The lock's exit signal — influx below `desired/4` for two consecutive
+//! cycles — stays measurable while locked, unlike survivor occupancy, which is
+//! zero at S=1 and would leave the loop blind.
 //!
 //! There is no env knob here (see CLAUDE.md's GC knob kill-policy): the
 //! loop is always on, and its neutral state — influx below `desired`,
@@ -63,9 +63,11 @@
 //!
 //! ## Seeding the lock from a non-copying collection (#7598)
 //!
-//! The survival-rate lock above is correct but **one cycle late by
-//! construction**: it keys on `prev_copied`, so a *previous copying minor*
-//! must already have filled the survivor space. On a workload with one
+//! The survival-rate measurement is **one cycle late by construction**: it
+//! keys on `prev_copied`, so a *previous copying minor* must already have filled
+//! the survivor space. After the startup evidence boundary, a sweep seed can
+//! still establish the lock before a later copying minor pays that round trip.
+//! On a workload with one
 //! long-lived burst (`json_pipeline`: `out.push({…})` 500k times) the first
 //! copying minor therefore always pays the wasted copy — measured 268 MB
 //! Eden→survivor on cycle 3 and the same 268 MB survivor→old on cycle 4,
@@ -180,16 +182,27 @@ pub(super) const GC_TENURING_SURVIVALS_MAX: u8 = GC_COPY_PROMOTION_SURVIVALS;
 ///
 /// Reaching 1 still belongs to the two paths that actually MEASURE mortality:
 /// the survival-rate lock (`prev_copied` substantial and >=90 % of it came back
-/// alive) and the sweep seed (the mark-sweep's own Eden live/dead split). Both
-/// are untouched. So the rule is self-limiting: on a workload whose cohort
-/// genuinely does not die, the lock fires after one cohort's copy and takes the
-/// loop back to 1 — measured 5 of 358 substantial cohorts under that threshold
-/// on cc, which is why the clamp sticks there rather than oscillating.
+/// alive) and the sweep seed (the mark-sweep's own Eden live/dead split). The
+/// evidence gate below delays, rather than removes, those paths. So the rule is
+/// self-limiting: on a workload whose steady cohorts genuinely do not die, the
+/// lock reaches 1 after its bounded window.
 pub(super) const OCCUPANCY_MIN_SURVIVALS: u8 = 2;
 
 /// Consecutive cycles the computed target must exceed the current threshold
 /// before it is raised (by one step).
 const RAISE_DEBOUNCE_CYCLES: u8 = 2;
+
+/// Rated survivor cohorts excluded as process startup. TN4 observed the lock
+/// rating exactly the cohort formed by the first two copying minors, before the
+/// first application turn. Counting rated cohorts (rather than wall time or an
+/// allocation threshold) uses the lock's own threshold-invariant evidence and
+/// cannot change collection pacing.
+const STARTUP_RATED_ROUNDS: u64 = 2;
+
+/// Consecutive qualifying post-startup cohorts required to lock. Three is the
+/// smallest window that both rejects a one-off/two-cycle phase boundary and
+/// reaches S=1 promptly on a genuinely non-dying workload.
+const PROMOTE_LOCK_RATED_ROUNDS: u8 = 3;
 
 /// Ceiling for the influx-driven nursery cap scale: 16 MB × 4 = 64 MB.
 /// Bounds the young-gen RSS contribution on live-set-bound workloads while
@@ -214,6 +227,10 @@ crate::perry_thread_local! {
     /// Survival-rate lock: promote-on-first-copy until influx goes quiet.
     static PROMOTE_LOCK: Cell<bool> = const { Cell::new(false) };
     static UNLOCK_STREAK: Cell<u8> = const { Cell::new(0) };
+    /// Number of survivor cohorts whose first round has been rated.
+    static RATED_ROUNDS: Cell<u64> = const { Cell::new(0) };
+    /// Consecutive substantial, ≥90%-surviving post-startup rated cohorts.
+    static PROMOTE_LOCK_STREAK: Cell<u8> = const { Cell::new(0) };
     /// Bytes the previous copying minor put into the to-survivor space —
     /// the denominator of this cycle's survival rate.
     static PREV_COPIED_BYTES: Cell<usize> = const { Cell::new(0) };
@@ -592,9 +609,34 @@ pub(super) fn retune_after_scavenge(
     // A cohort went into the survivor space last cycle, so THIS cycle is the
     // one that could follow it: from here on the loop has lifetime evidence and
     // the occupancy rule is allowed to move off the floor.
-    if prev_cohort_copied > 0 {
+    let rated = prev_cohort_copied > 0;
+    let rounds_rated = if rated {
         SURVIVOR_ROUND_MEASURED.with(|m| m.set(true));
-    }
+        RATED_ROUNDS.with(|rounds| {
+            let next = rounds.get().saturating_add(1);
+            rounds.set(next);
+            next
+        })
+    } else {
+        RATED_ROUNDS.with(Cell::get)
+    };
+    let startup = if rated {
+        rounds_rated <= STARTUP_RATED_ROUNDS
+    } else {
+        rounds_rated < STARTUP_RATED_ROUNDS
+    };
+    let survival_permille = if rated {
+        first_round_live_bytes.saturating_mul(1000) / prev_cohort_copied
+    } else {
+        0
+    };
+    let mut evidence = TransitionEvidence {
+        rounds_rated,
+        streak: PROMOTE_LOCK_STREAK.with(Cell::get),
+        survival_permille,
+        copied_bytes: prev_cohort_copied,
+        startup,
+    };
     let current = TENURING_SURVIVALS.with(Cell::get);
 
     if PROMOTE_LOCK.with(Cell::get) {
@@ -606,11 +648,13 @@ pub(super) fn retune_after_scavenge(
             if streak >= RAISE_DEBOUNCE_CYCLES {
                 PROMOTE_LOCK.with(|l| l.set(false));
                 UNLOCK_STREAK.with(|s| s.set(0));
+                PROMOTE_LOCK_STREAK.with(|s| s.set(0));
                 RAISE_STREAK.with(|s| s.set(0));
                 // Resume the ladder one step up rather than snapping to the
                 // ceiling; the normal debounced rise takes it the rest of
                 // the way if the workload stays quiet.
-                set_survivals(current, 2, eden_live_bytes, "unlock");
+                evidence.streak = 0;
+                set_survivals(current, 2, eden_live_bytes, "unlock", evidence);
             } else {
                 UNLOCK_STREAK.with(|s| s.set(streak));
             }
@@ -629,13 +673,24 @@ pub(super) fn retune_after_scavenge(
     // this rule sets, because a higher threshold is precisely what keeps
     // already-aged objects in the space; the rule then reads its own setting
     // back as evidence. See `retune_after_scavenge`'s header.
-    if prev_cohort_copied >= substantial
-        && first_round_live_bytes.saturating_mul(10) >= prev_cohort_copied * 9
-    {
+    if rated {
+        let qualifies = !startup
+            && prev_cohort_copied >= substantial
+            && first_round_live_bytes.saturating_mul(10)
+                >= prev_cohort_copied.saturating_mul(PROMOTE_LOCK_LIVE_TENTHS);
+        let streak = if qualifies {
+            PROMOTE_LOCK_STREAK.with(Cell::get).saturating_add(1)
+        } else {
+            0
+        };
+        PROMOTE_LOCK_STREAK.with(|s| s.set(streak));
+        evidence.streak = streak;
+    }
+    if evidence.streak >= PROMOTE_LOCK_RATED_ROUNDS {
         PROMOTE_LOCK.with(|l| l.set(true));
         UNLOCK_STREAK.with(|s| s.set(0));
         RAISE_STREAK.with(|s| s.set(0));
-        set_survivals(current, 1, eden_live_bytes, "lock");
+        set_survivals(current, 1, eden_live_bytes, "lock", evidence);
         return;
     }
 
@@ -684,7 +739,7 @@ pub(super) fn retune_after_scavenge(
         RAISE_STREAK.with(|s| s.set(0));
         current
     };
-    set_survivals(current, next, eden_live_bytes, "occupancy");
+    set_survivals(current, next, eden_live_bytes, "occupancy", evidence);
 }
 
 /// Grow the nursery cap one ×2 step (to at most ×4) when survivor influx
@@ -731,7 +786,7 @@ fn retune_nursery_cap_scale(eden_live_bytes: usize) {
 /// promote-on-first-copy lock: ≥90% of the Eden bytes the sweep classified
 /// must have been live. That is the "the aging round would filter nothing"
 /// proof, measured directly instead of inferred from a survivor round-trip.
-const FULL_SEED_LIVE_TENTHS: usize = 9;
+const PROMOTE_LOCK_LIVE_TENTHS: usize = 9;
 
 /// Would a completed mark-sweep's Eden census justify promote-on-first-copy?
 ///
@@ -755,7 +810,9 @@ const FULL_SEED_LIVE_TENTHS: usize = 9;
 /// program whose nursery is atypically mostly-live at one sweep promotes one
 /// Eden's worth of short-lived objects and pays an old-gen reclaim to get them
 /// back. Exposure is bounded by one nursery cap and by the existing unlock
-/// path; requiring BOTH conditions is what keeps it narrow.
+/// path; requiring BOTH conditions is what keeps it narrow. This pure census
+/// predicate intentionally does not know process phase; the stateful caller
+/// adds the same post-startup gate as the survivor-round path.
 pub(super) fn full_seed_promotes_on_first_copy(
     eden_live_bytes: usize,
     eden_dead_bytes: usize,
@@ -766,7 +823,7 @@ pub(super) fn full_seed_promotes_on_first_copy(
     }
     let classified = eden_live_bytes.saturating_add(eden_dead_bytes);
     classified > 0
-        && eden_live_bytes.saturating_mul(10) >= classified.saturating_mul(FULL_SEED_LIVE_TENTHS)
+        && eden_live_bytes.saturating_mul(10) >= classified.saturating_mul(PROMOTE_LOCK_LIVE_TENTHS)
 }
 
 /// Feed one finished mark-sweep's Eden census into the loop. `eden_live_bytes`
@@ -775,11 +832,17 @@ pub(super) fn full_seed_promotes_on_first_copy(
 ///
 /// Callers must exclude budgeted cycles and cycles that ran the conservative
 /// native-stack scan — see the module header for why those two inputs are not
-/// sound liveness measurements.
+/// sound liveness measurements. Even a qualifying census is refused until the
+/// lock's first two survivor cohorts have been rated, so a startup sweep cannot
+/// bypass the survivor path's startup exclusion.
 pub(super) fn seed_promote_lock_from_sweep(eden_live_bytes: usize, eden_dead_bytes: usize) {
     let already_locked = PROMOTE_LOCK.with(Cell::get);
     let desired = desired_survivor_bytes();
-    let seeds = full_seed_promotes_on_first_copy(eden_live_bytes, eden_dead_bytes, desired);
+    let rounds_rated = RATED_ROUNDS.with(Cell::get);
+    let startup = rounds_rated < STARTUP_RATED_ROUNDS;
+    let census_qualifies =
+        full_seed_promotes_on_first_copy(eden_live_bytes, eden_dead_bytes, desired);
+    let seeds = !startup && census_qualifies;
     // Diagnostic, not a knob: print the census AND the verdict on every
     // mark-sweep, including refusals. A policy that silently declines is
     // indistinguishable from one that never ran (#7024/#7025), and the
@@ -792,7 +855,7 @@ pub(super) fn seed_promote_lock_from_sweep(eden_live_bytes: usize, eden_dead_byt
             eden_live_bytes * 100 / classified
         };
         eprintln!(
-            "[gc-tenuring] sweep-seed eden_live_bytes={eden_live_bytes} eden_dead_bytes={eden_dead_bytes} live_pct={pct} desired={desired} seeds={seeds} already_locked={already_locked}"
+            "[gc-tenuring] sweep-seed eden_live_bytes={eden_live_bytes} eden_dead_bytes={eden_dead_bytes} live_pct={pct} desired={desired} census_qualifies={census_qualifies} startup={startup} seeds={seeds} already_locked={already_locked}"
         );
     }
     if already_locked || !seeds {
@@ -804,7 +867,27 @@ pub(super) fn seed_promote_lock_from_sweep(eden_live_bytes: usize, eden_dead_byt
     RAISE_STREAK.with(|s| s.set(0));
     // PREV_COPIED_BYTES is deliberately untouched: it is the survival-rate
     // lock's denominator, owned by the copying path.
-    set_survivals(current, 1, eden_live_bytes, "sweep-seed");
+    let classified = eden_live_bytes.saturating_add(eden_dead_bytes);
+    let survival_permille = if classified == 0 {
+        0
+    } else {
+        eden_live_bytes.saturating_mul(1000) / classified
+    };
+    set_survivals(
+        current,
+        1,
+        eden_live_bytes,
+        "sweep-seed",
+        TransitionEvidence {
+            rounds_rated,
+            streak: PROMOTE_LOCK_STREAK.with(Cell::get),
+            survival_permille,
+            // The live Eden cohort is the volume the next copying minor would
+            // otherwise copy; the sweep reads that denominator one cycle early.
+            copied_bytes: eden_live_bytes,
+            startup,
+        },
+    );
 }
 
 fn diag_cap_scale(from: u8, to: u8, eden_live_bytes: usize) {
@@ -815,18 +898,44 @@ fn diag_cap_scale(from: u8, to: u8, eden_live_bytes: usize) {
     }
 }
 
-fn set_survivals(current: u8, next: u8, eden_live_bytes: usize, why: &str) {
+#[derive(Clone, Copy)]
+struct TransitionEvidence {
+    rounds_rated: u64,
+    streak: u8,
+    survival_permille: usize,
+    copied_bytes: usize,
+    startup: bool,
+}
+
+fn set_survivals(
+    current: u8,
+    next: u8,
+    eden_live_bytes: usize,
+    why: &str,
+    evidence: TransitionEvidence,
+) {
     if next == current {
         return;
     }
     TENURING_SURVIVALS.with(|s| s.set(next));
     if crate::gc::gc_diag_enabled() {
+        let (copy_pause_us, tenuring_copied_bytes, promote_us, tenuring_promoted_bytes) =
+            super::instruments::tenuring_price_counters();
         eprintln!(
-            "[gc-tenuring] survivals {} -> {} ({why}, eden_live_bytes={} desired={})",
+            "[gc-tenuring] survivals {} -> {} ({why}, eden_live_bytes={} desired={} rounds_rated={} streak={} survival_permille={} copied_bytes={} startup={} copy_pause_us={} tenuring_copied_bytes={} promote_us={} tenuring_promoted_bytes={})",
             current,
             next,
             eden_live_bytes,
-            desired_survivor_bytes()
+            desired_survivor_bytes(),
+            evidence.rounds_rated,
+            evidence.streak,
+            evidence.survival_permille,
+            evidence.copied_bytes,
+            evidence.startup,
+            copy_pause_us,
+            tenuring_copied_bytes,
+            promote_us,
+            tenuring_promoted_bytes,
         );
     }
 }
@@ -838,6 +947,8 @@ pub(super) fn reset_for_test() {
     RAISE_STREAK.with(|s| s.set(0));
     PROMOTE_LOCK.with(|l| l.set(false));
     UNLOCK_STREAK.with(|s| s.set(0));
+    RATED_ROUNDS.with(|s| s.set(0));
+    PROMOTE_LOCK_STREAK.with(|s| s.set(0));
     PREV_COPIED_BYTES.with(|c| c.set(0));
     NURSERY_CAP_SCALE.with(|s| s.set(1));
     CAP_GROW_STREAK.with(|s| s.set(0));
@@ -858,6 +969,20 @@ mod tests {
     use super::*;
 
     const MB: usize = 1024 * 1024;
+
+    /// Advance past the startup boundary with cohorts that visibly die, so
+    /// tests below can exercise post-startup policy without contributing to
+    /// the promote-lock streak themselves.
+    fn finish_startup_with_mortality(desired: usize) {
+        let cohort = 3 * desired;
+        retune_after_scavenge(16 * desired, cohort, 0);
+        for _ in 0..STARTUP_RATED_ROUNDS {
+            retune_after_scavenge(16 * desired, cohort, 0);
+        }
+        assert_eq!(RATED_ROUNDS.with(Cell::get), STARTUP_RATED_ROUNDS);
+        assert_eq!(PROMOTE_LOCK_STREAK.with(Cell::get), 0);
+        assert!(!PROMOTE_LOCK.with(Cell::get));
+    }
 
     /// #7929: the constant band must buy a CONSTANT NUMBER OF OBJECTS.
     ///
@@ -1133,31 +1258,25 @@ mod tests {
             "and it must not have taken the lock's route to get there"
         );
 
-        // Phase 2: now a substantial cohort goes through the survivor space and
-        // comes back fully alive. THAT is lifetime evidence, and it must still
-        // reach 1.
-        //
-        // TWO cycles, deliberately: the lock rates the fresh cohort's survival
-        // against the PREVIOUS cycle's `eden_copied_bytes` (`PREV_COPIED_BYTES`),
-        // so the first call is what puts a cohort in the survivor space and the
-        // second is what reports that same cohort coming back alive. Both
-        // arguments here are cohort-scoped, which is what the follow-up to
-        // #9851 made them: the whole survivor space is a different population
-        // once the threshold rises above 2. Phase 1 above copied nothing, so
-        // there is nothing to rate until this pair runs — which is precisely the
-        // blindness the change is about, here as a test mechanic.
+        // Phase 2: now substantial cohorts go through the survivor space and
+        // come back fully alive. Startup evidence is excluded, then exactly K
+        // steady ratings must still reach 1.
         retune_after_scavenge(16 * d, 3 * d, 0);
-        assert_eq!(
-            tenuring_survivals(),
-            OCCUPANCY_MIN_SURVIVALS,
-            "one cohort into the survivor space is not yet evidence about it"
-        );
-        retune_after_scavenge(16 * d, 3 * d, 3 * d);
+        for _ in 0..STARTUP_RATED_ROUNDS {
+            retune_after_scavenge(16 * d, 3 * d, 3 * d);
+            assert_eq!(tenuring_survivals(), OCCUPANCY_MIN_SURVIVALS);
+        }
+        for round in 1..=PROMOTE_LOCK_RATED_ROUNDS {
+            retune_after_scavenge(16 * d, 3 * d, 3 * d);
+            if round < PROMOTE_LOCK_RATED_ROUNDS {
+                assert_eq!(tenuring_survivals(), OCCUPANCY_MIN_SURVIVALS);
+            }
+        }
         assert_eq!(
             tenuring_survivals(),
             1,
-            "a substantial intake that fully survives its round must still lock \
-             promote-on-first-copy — the measured path is untouched"
+            "K steady substantial cohorts that fully survive must still lock \
+             promote-on-first-copy"
         );
         assert!(PROMOTE_LOCK.with(Cell::get), "...through the lock");
         reset_for_test();
@@ -1266,6 +1385,89 @@ mod tests {
         reset_for_test();
     }
 
+    /// STARTUP EVIDENCE LOCK: two fully-surviving startup cohorts may not
+    /// contribute to the steady-state streak. The first post-startup survivor
+    /// therefore leaves the streak at one and S at the occupancy floor.
+    ///
+    /// Sabotage: remove `!startup` from the qualifying predicate. The two
+    /// startup ratings then count as the first two streak members and the final
+    /// call reaches K, latching S=1 and failing this test.
+    #[test]
+    fn startup_shaped_survivors_do_not_contribute_to_the_lock_streak() {
+        reset_for_test();
+        let d = desired_survivor_bytes();
+        let cohort = 3 * d;
+
+        // Establish the denominator, then rate two startup cohorts at 100%.
+        retune_after_scavenge(16 * d, cohort, 0);
+        for _ in 0..STARTUP_RATED_ROUNDS {
+            retune_after_scavenge(16 * d, cohort, cohort);
+            assert_eq!(tenuring_survivals(), OCCUPANCY_MIN_SURVIVALS);
+        }
+        assert_eq!(PROMOTE_LOCK_STREAK.with(Cell::get), 0);
+
+        // One genuinely post-startup rating is not a K-round window.
+        retune_after_scavenge(16 * d, cohort, cohort);
+        assert_eq!(PROMOTE_LOCK_STREAK.with(Cell::get), 1);
+        assert!(!PROMOTE_LOCK.with(Cell::get));
+        assert_eq!(tenuring_survivals(), OCCUPANCY_MIN_SURVIVALS);
+        reset_for_test();
+    }
+
+    /// Kill condition from the design: the lock remains reachable, in bounded
+    /// time, for a workload whose steady cohorts genuinely do not die.
+    ///
+    /// Sabotage: raise `PROMOTE_LOCK_RATED_ROUNDS` or fail to advance the
+    /// streak; the exact-K final assertion fails.
+    #[test]
+    fn k_steady_fully_surviving_rounds_latch_promote_on_first_copy() {
+        reset_for_test();
+        let d = desired_survivor_bytes();
+        let cohort = 3 * d;
+        finish_startup_with_mortality(d);
+
+        for round in 1..=PROMOTE_LOCK_RATED_ROUNDS {
+            retune_after_scavenge(16 * d, cohort, cohort);
+            if round < PROMOTE_LOCK_RATED_ROUNDS {
+                assert!(!PROMOTE_LOCK.with(Cell::get));
+                assert_eq!(tenuring_survivals(), OCCUPANCY_MIN_SURVIVALS);
+            }
+        }
+        assert!(PROMOTE_LOCK.with(Cell::get));
+        assert_eq!(tenuring_survivals(), 1);
+        reset_for_test();
+    }
+
+    /// A mortality observation breaks consecutiveness even when the process
+    /// has accumulated K qualifying observations in total.
+    ///
+    /// Sabotage: retain the streak on a rated below-bar round. The last survivor
+    /// becomes the Kth streak member and this test observes an S=1 latch.
+    #[test]
+    fn mortality_inside_the_steady_window_resets_the_lock_streak() {
+        reset_for_test();
+        let d = desired_survivor_bytes();
+        let cohort = 3 * d;
+        finish_startup_with_mortality(d);
+
+        for _ in 0..PROMOTE_LOCK_RATED_ROUNDS - 1 {
+            retune_after_scavenge(16 * d, cohort, cohort);
+        }
+        assert_eq!(
+            PROMOTE_LOCK_STREAK.with(Cell::get),
+            PROMOTE_LOCK_RATED_ROUNDS - 1
+        );
+
+        retune_after_scavenge(16 * d, cohort, cohort / 2);
+        assert_eq!(PROMOTE_LOCK_STREAK.with(Cell::get), 0);
+        retune_after_scavenge(16 * d, cohort, cohort);
+
+        assert_eq!(PROMOTE_LOCK_STREAK.with(Cell::get), 1);
+        assert!(!PROMOTE_LOCK.with(Cell::get));
+        assert_eq!(tenuring_survivals(), OCCUPANCY_MIN_SURVIVALS);
+        reset_for_test();
+    }
+
     #[test]
     fn survival_rate_lock_breaks_a_saturated_pipeline() {
         reset_for_test();
@@ -1280,11 +1482,13 @@ mod tests {
             2,
             "first cycle has no prior intake to rate, so occupancy decides"
         );
-        retune_after_scavenge(influx, 3 * d, 3 * d);
+        for _ in 0..STARTUP_RATED_ROUNDS + u64::from(PROMOTE_LOCK_RATED_ROUNDS) {
+            retune_after_scavenge(influx, 3 * d, 3 * d);
+        }
         assert_eq!(
             tenuring_survivals(),
             1,
-            "a substantial intake that fully survives its round must lock promote-on-first-copy"
+            "the bounded steady window must lock"
         );
         // The lock holds through occupancy readings that would say S=2.
         for _ in 0..5 {
@@ -1429,17 +1633,38 @@ mod tests {
 
     // ── #7598's mark-sweep seed ─────────────────────────────────────────
     //
-    // The lock above cannot engage before the SECOND copying minor. These
-    // exercise the seed that reads the same proof off a completed mark-sweep,
-    // one collection earlier.
+    // The survivor lock needs a previous copying minor. These exercise the seed
+    // that reads the same proof off a completed mark-sweep after startup, one
+    // collection earlier, plus the startup refusal itself.
+
+    /// A sweep census may satisfy both of the seed's existing conditions and
+    /// still be forbidden to decide S=1 while the process is in startup.
+    ///
+    /// Sabotage: remove the startup conjunct from `seeds`; this qualifying
+    /// census immediately latches S=1 and fails both final assertions.
+    #[test]
+    fn sweep_seed_cannot_latch_from_a_startup_census() {
+        reset_for_test();
+        let d = desired_survivor_bytes();
+        let eden_live = 4 * d;
+        assert!(
+            full_seed_promotes_on_first_copy(eden_live, 0, d),
+            "precondition: both original sweep-seed conditions must qualify"
+        );
+
+        seed_promote_lock_from_sweep(eden_live, 0);
+
+        assert!(!PROMOTE_LOCK.with(Cell::get));
+        assert_eq!(tenuring_survivals(), OCCUPANCY_MIN_SURVIVALS);
+        reset_for_test();
+    }
 
     #[test]
-    fn sweep_seed_decides_before_the_first_copying_minor_snapshots_the_threshold() {
+    fn sweep_seed_decides_before_a_post_startup_copying_minor_snapshots_the_threshold() {
         // `copying.rs` snapshots `tenuring_survivals()` in
-        // `CopyingNurseryCollector::new`, so the only value that can change
-        // what the first big minor does is the one standing BEFORE any
-        // `retune_after_scavenge` for that cycle has run. That is precisely
-        // what the survival-rate lock cannot reach and this seed can.
+        // `CopyingNurseryCollector::new`; after startup, a completed sweep may
+        // still decide what the next copying minor does one cycle earlier than
+        // a survivor round-trip.
         reset_for_test();
         let d = desired_survivor_bytes();
         let eden_live = d * 4;
@@ -1450,6 +1675,7 @@ mod tests {
              evidence the loop may not claim either extreme"
         );
 
+        finish_startup_with_mortality(d);
         seed_promote_lock_from_sweep(eden_live, eden_live / 50);
         assert_eq!(
             tenuring_survivals(),
@@ -1469,6 +1695,7 @@ mod tests {
         let d = desired_survivor_bytes();
         let eden_live = d * 4;
         let eden_dead = eden_live * 9;
+        finish_startup_with_mortality(d);
         assert_eq!(
             compute_target_survivals(eden_live, d),
             1,
@@ -1493,6 +1720,7 @@ mod tests {
         // reading, and seeding off it would lock every program at S=1.
         reset_for_test();
         let d = desired_survivor_bytes();
+        finish_startup_with_mortality(d);
         seed_promote_lock_from_sweep(d / 8, 0);
         // Unchanged from power-on, which is the floor now rather than the
         // ceiling (startup follow-up). The property under test is that the
@@ -1529,6 +1757,7 @@ mod tests {
         // differently at S=1 than at S=4 and would oscillate.
         reset_for_test();
         let d = desired_survivor_bytes();
+        finish_startup_with_mortality(d);
         seed_promote_lock_from_sweep(d * 4, 0);
         assert_eq!(tenuring_survivals(), 1);
 
