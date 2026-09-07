@@ -1950,13 +1950,13 @@ pub(super) fn run_copied_minor_attempt(
     }))
 }
 
-/// Test-only witness for the #9851 follow-up: the whole-space pair against the
-/// fresh-cohort pair, as the copier computed them for one cycle. Without this
-/// the change is unfalsifiable from a test — the two quantities are equal on
-/// every heap whose survivor space holds a single generation, which is every
-/// heap at a threshold of 2 or below.
 #[cfg(test)]
 thread_local! {
+    /// Test-only witness for the #9851 follow-up: the whole-space pair against the
+    /// fresh-cohort pair, as the copier computed them for one cycle. Without this
+    /// the change is unfalsifiable from a test — the two quantities are equal on
+    /// every heap whose survivor space holds a single generation, which is every
+    /// heap at a threshold of 2 or below.
     static LAST_COHORT_SPLIT: std::cell::Cell<(usize, usize, usize, usize)> =
         const { std::cell::Cell::new((0, 0, 0, 0)) };
 }
