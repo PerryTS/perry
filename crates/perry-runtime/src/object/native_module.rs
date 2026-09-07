@@ -1069,10 +1069,7 @@ fn native_module_string_arg(value: f64) -> Option<String> {
     Some(String::from_utf8_lossy(bytes).into_owned())
 }
 
-/// Snapshot-backed value used for named ESM imports from builtins. CommonJS
-/// namespace writes stay isolated until `syncBuiltinESMExports()` copies them.
-#[no_mangle]
-pub extern "C" fn js_native_module_esm_export_value(module: f64, property: f64) -> f64 {
+fn native_module_export_value(module: f64, property: f64, observe_namespace_writes: bool) -> f64 {
     let Some(module) = native_module_string_arg(module) else {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     };
@@ -1080,13 +1077,14 @@ pub extern "C" fn js_native_module_esm_export_value(module: f64, property: f64) 
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     };
     let module = normalize_native_module_alias(&module).to_string();
-    // A user write to the member wins over the built-in snapshot below —
-    // this entry also serves property reads off the DEFAULT export object
-    // (`import fs from "node:fs"; fs.rename` after graceful-fs patched it),
-    // which is Node's live mutable CJS exports object. See
-    // `native_namespace_user_value`.
-    if let Some(value) = native_namespace_user_value(&module, &property) {
-        return value;
+    if observe_namespace_writes {
+        // A user write to the member wins over the built-in snapshot below.
+        // Default and namespace imports expose Node's live mutable CommonJS
+        // exports object. Named imports pass false and retain their ESM cell
+        // until syncBuiltinESMExports() refreshes the shared cache.
+        if let Some(value) = native_namespace_user_value(&module, &property) {
+            return value;
+        }
     }
     let key = format!("{module}\0{property}");
     if let Some(bits) = NATIVE_ESM_EXPORT_VALUES.with(|values| values.borrow().get(&key).copied()) {
@@ -1109,6 +1107,20 @@ pub extern "C" fn js_native_module_esm_export_value(module: f64, property: f64) 
     });
     crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
     value
+}
+
+/// Mutable property read used by native-module default and namespace objects.
+/// User writes to the CommonJS namespace are observable immediately here.
+#[no_mangle]
+pub extern "C" fn js_native_module_esm_export_value(module: f64, property: f64) -> f64 {
+    native_module_export_value(module, property, true)
+}
+
+/// Snapshot-backed value used for named ESM imports from builtins. CommonJS
+/// namespace writes stay isolated until `syncBuiltinESMExports()` copies them.
+#[no_mangle]
+pub extern "C" fn js_native_module_named_esm_export_value(module: f64, property: f64) -> f64 {
+    native_module_export_value(module, property, false)
 }
 
 pub(crate) fn module_constructor_identity_value() -> f64 {

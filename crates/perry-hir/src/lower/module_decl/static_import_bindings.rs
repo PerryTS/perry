@@ -4,6 +4,36 @@
 use super::*;
 use swc_ecma_ast as ast;
 
+/// Initialize a Node named import's snapshot-backed ESM export cell before
+/// top-level user code can mutate the CommonJS namespace. This also preserves
+/// the original value when the binding's first read happens after a mutation.
+pub(super) fn init_named_cell(
+    module: &mut Module,
+    source: &str,
+    imported: &str,
+    method: Option<&String>,
+) {
+    if method.is_none() || !perry_api_manifest::is_node_core_module(source) {
+        return;
+    }
+    module.init.insert(
+        0,
+        Stmt::Expr(Expr::Call {
+            callee: Box::new(Expr::ExternFuncRef {
+                name: "js_native_module_named_esm_export_value".to_string(),
+                param_types: vec![Type::String, Type::String],
+                return_type: Type::Any,
+            }),
+            args: vec![
+                Expr::String(source.to_string()),
+                Expr::String(imported.to_string()),
+            ],
+            type_args: vec![],
+            byte_offset: 0,
+        }),
+    );
+}
+
 /// Register ordinary source-module import bindings before statement lowering.
 ///
 /// ESM imports are module-scoped and hoisted regardless of where their
