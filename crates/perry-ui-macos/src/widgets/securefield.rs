@@ -106,6 +106,15 @@ pub fn create(placeholder_ptr: *const u8, on_change: f64) -> i64 {
         ];
 
         let tf_ref: &NSTextField = &Retained::cast_unchecked::<NSTextField>(text_field.clone());
+
+        // Carry a secure text-inset cell so set_edge_insets can pad the text.
+        // Install it before the setters below so they configure this cell.
+        let inset_cell = super::inset_cell::PerryInsetSecureTextFieldCell::new("", mtm);
+        let _: () = msg_send![&*inset_cell, setUsesSingleLineMode: true];
+        let _: () = msg_send![&*inset_cell, setScrollable: true];
+        let _: () = msg_send![&*inset_cell, setWraps: false];
+        let _: () = msg_send![tf_ref, setCell: &*inset_cell];
+
         tf_ref.setPlaceholderString(Some(&ns_placeholder));
         tf_ref.setEditable(true);
         tf_ref.setBezeled(true);

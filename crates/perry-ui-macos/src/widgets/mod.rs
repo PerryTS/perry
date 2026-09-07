@@ -880,19 +880,14 @@ pub fn set_edge_insets(handle: i64, top: f64, left: f64, bottom: f64, right: f64
         return;
     }
 
-    // TextField / SecureField carry a PerryInsetTextFieldCell (installed at
-    // create time); write the inset onto it and redraw.
+    // TextField / SecureField carry a Perry inset cell (installed at create
+    // time). NSSecureTextField is an NSTextField subclass, so this one arm
+    // covers both; the helper distinguishes the plain and secure cells.
     if AnyClass::get(c"NSTextField").is_some_and(|cls| view.isKindOfClass(cls)) {
         unsafe {
             let cell: *mut AnyObject = msg_send![&*view, cell];
-            let cell_cls = <inset_cell::PerryInsetTextFieldCell as objc2::ClassType>::class();
-            if !cell.is_null() {
-                let is_ours: bool = msg_send![cell, isKindOfClass: cell_cls];
-                if is_ours {
-                    let inset = &*(cell as *const inset_cell::PerryInsetTextFieldCell);
-                    inset.set_insets(top, left, bottom, right);
-                    let _: () = msg_send![&*view, setNeedsDisplay: true];
-                }
+            if inset_cell::try_set_cell_insets(cell, top, left, bottom, right) {
+                let _: () = msg_send![&*view, setNeedsDisplay: true];
             }
         }
         return;
