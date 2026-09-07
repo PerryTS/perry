@@ -7,22 +7,9 @@
         let blk = ctx.block();
         let handle = unbox_to_i64(blk, &recv_val);
         if let Some(sig) = perry_ui_instance_method_lookup(method) {
-            let padding_args: Vec<Expr>;
-            let args: &[Expr] = if sig.method == "setPadding"
-                && args.len() == 1
-                && sig.args.len() == 4
-            {
-                padding_args = vec![
-                    args[0].clone(),
-                    args[0].clone(),
-                    args[0].clone(),
-                    args[0].clone(),
-                ];
-                &padding_args
-            } else {
-                args
-            };
-            if sig.method == "setPadding" && args.len() != sig.args.len() {
+            let uniform_padding =
+                sig.method == "setPadding" && args.len() == 1 && sig.args.len() == 4;
+            if sig.method == "setPadding" && !uniform_padding && args.len() != sig.args.len() {
                 bail!(
                     "perry/ui: '.{}(...)' takes {} argument(s), but it was called with {}.",
                     method,
@@ -32,41 +19,51 @@
             }
             // Build args: handle is the first arg, then the call args.
             let mut llvm_args: Vec<(crate::types::LlvmType, String)> =
-                Vec::with_capacity(1 + args.len());
+                Vec::with_capacity(1 + sig.args.len());
             let mut runtime_param_types: Vec<crate::types::LlvmType> =
-                Vec::with_capacity(1 + args.len());
+                Vec::with_capacity(1 + sig.args.len());
             llvm_args.push((I64, handle));
             runtime_param_types.push(I64);
-            for (kind, arg) in sig.args.iter().zip(args.iter()) {
-                match kind {
-                    UiArgKind::Widget => {
-                        let v = lower_expr(ctx, arg)?;
-                        let blk = ctx.block();
-                        let h = unbox_to_i64(blk, &v);
-                        llvm_args.push((I64, h));
-                        runtime_param_types.push(I64);
-                    }
-                    UiArgKind::Str => {
-                        let h = get_raw_string_ptr(ctx, arg)?;
-                        llvm_args.push((I64, h));
-                        runtime_param_types.push(I64);
-                    }
-                    UiArgKind::F64 => {
-                        let v = lower_expr(ctx, arg)?;
-                        llvm_args.push((DOUBLE, v));
-                        runtime_param_types.push(DOUBLE);
-                    }
-                    UiArgKind::Closure => {
-                        let v = lower_expr(ctx, arg)?;
-                        llvm_args.push((DOUBLE, v));
-                        runtime_param_types.push(DOUBLE);
-                    }
-                    UiArgKind::I64Raw => {
-                        let v = lower_expr(ctx, arg)?;
-                        let blk = ctx.block();
-                        let i = blk.fptosi(DOUBLE, &v, I64);
-                        llvm_args.push((I64, i));
-                        runtime_param_types.push(I64);
+            if uniform_padding {
+                // A source expression is evaluated once even when the native
+                // four-edge ABI consumes the resulting value four times.
+                let value = lower_expr(ctx, &args[0])?;
+                for _ in 0..4 {
+                    llvm_args.push((DOUBLE, value.clone()));
+                    runtime_param_types.push(DOUBLE);
+                }
+            } else {
+                for (kind, arg) in sig.args.iter().zip(args.iter()) {
+                    match kind {
+                        UiArgKind::Widget => {
+                            let v = lower_expr(ctx, arg)?;
+                            let blk = ctx.block();
+                            let h = unbox_to_i64(blk, &v);
+                            llvm_args.push((I64, h));
+                            runtime_param_types.push(I64);
+                        }
+                        UiArgKind::Str => {
+                            let h = get_raw_string_ptr(ctx, arg)?;
+                            llvm_args.push((I64, h));
+                            runtime_param_types.push(I64);
+                        }
+                        UiArgKind::F64 => {
+                            let v = lower_expr(ctx, arg)?;
+                            llvm_args.push((DOUBLE, v));
+                            runtime_param_types.push(DOUBLE);
+                        }
+                        UiArgKind::Closure => {
+                            let v = lower_expr(ctx, arg)?;
+                            llvm_args.push((DOUBLE, v));
+                            runtime_param_types.push(DOUBLE);
+                        }
+                        UiArgKind::I64Raw => {
+                            let v = lower_expr(ctx, arg)?;
+                            let blk = ctx.block();
+                            let i = blk.fptosi(DOUBLE, &v, I64);
+                            llvm_args.push((I64, i));
+                            runtime_param_types.push(I64);
+                        }
                     }
                 }
             }

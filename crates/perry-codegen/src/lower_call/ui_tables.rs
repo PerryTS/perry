@@ -389,21 +389,9 @@ pub fn lower_perry_ui_table_call(
     // user supplies only 2 args, prepend a synthetic 0 Widget so the
     // call still matches the 3-arg ABI without changing the runtime
     // signatures across 8 platform crates.
+    let uniform_padding = sig.method == "setPadding" && args.len() == 2 && sig.args.len() == 5;
     let synthesised_args: Vec<Expr>;
-    let args: &[Expr] = if sig.method == "setPadding" && args.len() == 2 && sig.args.len() == 5 {
-        // Canonical padding accepts both `(widget, value)` and
-        // `(widget, top, left, bottom, right)`. The native runtime keeps one
-        // fixed four-edge ABI, so expand the uniform form before the normal
-        // arity and coercion machinery runs.
-        synthesised_args = vec![
-            args[0].clone(),
-            args[1].clone(),
-            args[1].clone(),
-            args[1].clone(),
-            args[1].clone(),
-        ];
-        &synthesised_args[..]
-    } else if sig.method == "appSetTimer" && args.len() == 2 && sig.args.len() == 3 {
+    let args: &[Expr] = if sig.method == "appSetTimer" && args.len() == 2 && sig.args.len() == 3 {
         synthesised_args = std::iter::once(Expr::Integer(0))
             .chain(args.iter().cloned())
             .collect();
@@ -466,7 +454,8 @@ pub fn lower_perry_ui_table_call(
     // `Widget` handle or `Closure` can't be synthesized, so those fall
     // through to the hard error.
     let padded_args: Vec<Expr>;
-    let args: &[Expr] = if args.len() < sig.args.len()
+    let args: &[Expr] = if !uniform_padding
+        && args.len() < sig.args.len()
         && sig.args[args.len()..]
             .iter()
             .all(|k| matches!(k, UiArgKind::Str | UiArgKind::F64))
@@ -492,7 +481,7 @@ pub fn lower_perry_ui_table_call(
         };
     let declared_arg_count = sig.args.len();
 
-    if args.len() != declared_arg_count && inline_style_arg.is_none() {
+    if !uniform_padding && args.len() != declared_arg_count && inline_style_arg.is_none() {
         // Issue #6087: a `perry/*` builtin called with an arity the runtime
         // ABI cannot accept. Everything legitimate has been absorbed above
         // (arg adapters, inline style, optional trailing params), so this is
@@ -517,45 +506,62 @@ pub fn lower_perry_ui_table_call(
         Vec::with_capacity(declared_arg_count);
     let mut runtime_param_types: Vec<crate::types::LlvmType> =
         Vec::with_capacity(declared_arg_count);
-    for (kind, arg) in sig.args.iter().zip(args.iter().take(declared_arg_count)) {
-        match kind {
-            UiArgKind::Widget => {
-                // Widgets are NaN-boxed pointers. Lower as JSValue,
-                // strip the POINTER_TAG bits to get the raw 1-based
-                // handle as i64.
-                let v = lower_expr(ctx, arg)?;
-                let blk = ctx.block();
-                let h = unbox_to_i64(blk, &v);
-                llvm_args.push((I64, h));
-                runtime_param_types.push(I64);
-            }
-            UiArgKind::Str => {
-                let h = super::get_raw_string_ptr(ctx, arg)?;
-                llvm_args.push((I64, h));
-                runtime_param_types.push(I64);
-            }
-            UiArgKind::F64 => {
-                let v = lower_expr(ctx, arg)?;
-                llvm_args.push((DOUBLE, v));
-                runtime_param_types.push(DOUBLE);
-            }
-            UiArgKind::Closure => {
-                // Closures are NaN-boxed pointers passed as f64. The
-                // runtime side calls `js_closure_call0` (or callN) on
-                // them, so it expects the f64 representation.
-                let v = lower_expr(ctx, arg)?;
-                llvm_args.push((DOUBLE, v));
-                runtime_param_types.push(DOUBLE);
-            }
-            UiArgKind::I64Raw => {
-                // Numeric arg the runtime wants as i64 (e.g. enum tag,
-                // boolean flag). `fptosi` converts the f64 to a signed
-                // integer.
-                let v = lower_expr(ctx, arg)?;
-                let blk = ctx.block();
-                let i = blk.fptosi(DOUBLE, &v, I64);
-                llvm_args.push((I64, i));
-                runtime_param_types.push(I64);
+    if uniform_padding {
+        // Preserve JavaScript evaluation semantics: `setPadding(widget,
+        // next())` calls `next` once, then fans that one result out to the
+        // fixed four-edge native ABI.
+        let widget = lower_expr(ctx, &args[0])?;
+        let blk = ctx.block();
+        let handle = unbox_to_i64(blk, &widget);
+        llvm_args.push((I64, handle));
+        runtime_param_types.push(I64);
+
+        let value = lower_expr(ctx, &args[1])?;
+        for _ in 0..4 {
+            llvm_args.push((DOUBLE, value.clone()));
+            runtime_param_types.push(DOUBLE);
+        }
+    } else {
+        for (kind, arg) in sig.args.iter().zip(args.iter().take(declared_arg_count)) {
+            match kind {
+                UiArgKind::Widget => {
+                    // Widgets are NaN-boxed pointers. Lower as JSValue,
+                    // strip the POINTER_TAG bits to get the raw 1-based
+                    // handle as i64.
+                    let v = lower_expr(ctx, arg)?;
+                    let blk = ctx.block();
+                    let h = unbox_to_i64(blk, &v);
+                    llvm_args.push((I64, h));
+                    runtime_param_types.push(I64);
+                }
+                UiArgKind::Str => {
+                    let h = super::get_raw_string_ptr(ctx, arg)?;
+                    llvm_args.push((I64, h));
+                    runtime_param_types.push(I64);
+                }
+                UiArgKind::F64 => {
+                    let v = lower_expr(ctx, arg)?;
+                    llvm_args.push((DOUBLE, v));
+                    runtime_param_types.push(DOUBLE);
+                }
+                UiArgKind::Closure => {
+                    // Closures are NaN-boxed pointers passed as f64. The
+                    // runtime side calls `js_closure_call0` (or callN) on
+                    // them, so it expects the f64 representation.
+                    let v = lower_expr(ctx, arg)?;
+                    llvm_args.push((DOUBLE, v));
+                    runtime_param_types.push(DOUBLE);
+                }
+                UiArgKind::I64Raw => {
+                    // Numeric arg the runtime wants as i64 (e.g. enum tag,
+                    // boolean flag). `fptosi` converts the f64 to a signed
+                    // integer.
+                    let v = lower_expr(ctx, arg)?;
+                    let blk = ctx.block();
+                    let i = blk.fptosi(DOUBLE, &v, I64);
+                    llvm_args.push((I64, i));
+                    runtime_param_types.push(I64);
+                }
             }
         }
     }
