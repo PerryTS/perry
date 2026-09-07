@@ -3,8 +3,7 @@
 //! in `tests.rs`; the shared fixtures come from there.
 
 use super::tests::{
-    make_string, match_capture_text, regex_has_fancy_program, regex_has_repeat_program,
-    regex_is_built, string_payload,
+    make_string, match_capture_text, regex_has_fancy_program, regex_is_built, string_payload,
 };
 use super::*;
 
@@ -599,15 +598,13 @@ fn a_single_program_cache_clear_cannot_disarm_a_lookbehind_literal() {
     site_cache::test_reset();
 
     let cold = build();
-    unsafe {
-        lazy::ensure_regex_compiled(cold);
-        assert!(
-            regex_has_fancy_program(cold),
-            "a built header must carry every program its pattern needs — a null \
-             the fancy program here is memoized by site_cache::install_programs and makes \
-             the breakage permanent for this literal"
-        );
-    }
+    lazy::ensure_regex_compiled(cold);
+    assert!(
+        regex_has_fancy_program(cold),
+        "a built header must carry every program its pattern needs — a null \
+         the fancy program here is memoized by site_cache::install_programs and makes \
+         the breakage permanent for this literal"
+    );
     assert_eq!(
         subject.with_const_ptr::<StringHeader, _>(|s| js_regexp_test(cold, s)),
         1,
