@@ -55,9 +55,11 @@ define_class!(
 
         #[unsafe(method(cellSizeForBounds:))]
         fn cell_size_for_bounds(&self, bounds: CGRect) -> objc2_core_foundation::CGSize {
+            let insets = self.ivars().get();
+            let bounds = inset_rect(bounds, insets);
             let size: objc2_core_foundation::CGSize =
                 unsafe { msg_send![super(self), cellSizeForBounds: bounds] };
-            padded_size(size, self.ivars().get())
+            padded_size(size, insets)
         }
 
         #[unsafe(method(editWithFrame:inView:editor:delegate:event:))]
@@ -109,9 +111,11 @@ define_class!(
 
         #[unsafe(method(cellSizeForBounds:))]
         fn cell_size_for_bounds(&self, bounds: CGRect) -> objc2_core_foundation::CGSize {
+            let insets = self.ivars().get();
+            let bounds = inset_rect(bounds, insets);
             let size: objc2_core_foundation::CGSize =
                 unsafe { msg_send![super(self), cellSizeForBounds: bounds] };
-            padded_size(size, self.ivars().get())
+            padded_size(size, insets)
         }
 
         #[unsafe(method(editWithFrame:inView:editor:delegate:event:))]

@@ -1,8 +1,8 @@
 use objc2::rc::Retained;
-use objc2::{define_class, msg_send, ClassType, DefinedClass, MainThreadOnly};
+use objc2::{define_class, msg_send, sel, ClassType, DefinedClass, MainThreadOnly};
 use objc2_core_foundation::{CGRect, CGSize};
 use objc2_foundation::{MainThreadMarker, NSObjectProtocol};
-use objc2_ui_kit::{UIEdgeInsets, UITextField, UIView};
+use objc2_ui_kit::{NSDirectionalEdgeInsets, UIButton, UIEdgeInsets, UITextField, UIView};
 use std::cell::Cell;
 
 pub struct PerryInsetTextFieldIvars {
@@ -147,6 +147,19 @@ pub(crate) fn set_edge_insets(view: &UIView, top: f64, left: f64, bottom: f64, r
 
         if let Some(cls) = objc2::runtime::AnyClass::get(c"UIButton") {
             if view.isKindOfClass(cls) {
+                let button = &*(view as *const UIView as *const UIButton);
+                if button.respondsToSelector(sel!(configuration)) {
+                    if let Some(configuration) = button.configuration() {
+                        configuration.setContentInsets(NSDirectionalEdgeInsets {
+                            top,
+                            leading: left,
+                            bottom,
+                            trailing: right,
+                        });
+                        button.setConfiguration(Some(&configuration));
+                        return;
+                    }
+                }
                 let _: () = msg_send![view, setContentEdgeInsets: insets];
                 return;
             }
