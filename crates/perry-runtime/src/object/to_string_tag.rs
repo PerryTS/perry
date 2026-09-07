@@ -77,12 +77,25 @@ pub(crate) fn typed_array_to_string_tag_name(value: f64) -> Option<&'static str>
     if raw_addr < 0x1000 {
         return None;
     }
-    if let Some(kind) = crate::typedarray::lookup_typed_array_kind(raw_addr) {
+    let tracked_type = unsafe {
+        crate::value::addr_class::try_read_tracked_gc_header(raw_addr)
+            .map(|header| (*header.as_ptr()).obj_type)
+    };
+    let typed_kind = if tracked_type == Some(crate::gc::GC_TYPE_TYPED_ARRAY) {
+        Some(unsafe { (*(raw_addr as *const crate::typedarray::TypedArrayHeader)).kind })
+    } else if tracked_type.is_none() {
+        crate::typedarray::lookup_typed_array_kind(raw_addr)
+    } else {
+        None
+    };
+    if let Some(kind) = typed_kind {
         return Some(crate::typedarray::name_for_kind(kind));
     }
     // Buffer-backed `Uint8Array` (and Node `Buffer`) — registered as a buffer
     // but still a TypedArray. Exclude the non-TypedArray buffer flavours.
-    if crate::buffer::is_registered_buffer(raw_addr)
+    let is_buffer = tracked_type == Some(crate::gc::GC_TYPE_BUFFER)
+        || (tracked_type.is_none() && crate::buffer::is_registered_buffer(raw_addr));
+    if is_buffer
         && crate::buffer::crypto_key_meta(raw_addr).is_none()
         && !crate::buffer::is_array_buffer(raw_addr)
         && !crate::buffer::is_shared_array_buffer(raw_addr)
@@ -142,6 +155,12 @@ pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
     } else {
         0
     };
+    let tracked_type = if raw_addr >= 0x1000 {
+        crate::value::addr_class::try_read_tracked_gc_header(raw_addr)
+            .map(|header| (*header.as_ptr()).obj_type)
+    } else {
+        None
+    };
     // Proxy receiver (§20.1.3.6). A revocable Proxy is a POINTER_TAG value
     // whose payload is a small id in the proxy band, NOT a heap pointer, so it
     // must be handled before the brand blocks below dereference `raw_addr`.
@@ -183,7 +202,11 @@ pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
         let str_ptr = crate::string::js_string_from_bytes(b"[object Date]".as_ptr(), 13);
         return f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK));
     }
-    if raw_addr >= 0x1000 && crate::buffer::is_registered_buffer(raw_addr) {
+    let is_buffer = tracked_type == Some(crate::gc::GC_TYPE_BUFFER)
+        || (tracked_type.is_none()
+            && raw_addr >= 0x1000
+            && crate::buffer::is_registered_buffer(raw_addr));
+    if is_buffer {
         let tag = if crate::buffer::crypto_key_meta(raw_addr).is_some() {
             "CryptoKey"
         } else if crate::buffer::is_array_buffer(raw_addr) {
@@ -216,7 +239,13 @@ pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
             Some("RegExp")
         } else if crate::symbol::is_registered_symbol(raw_addr) {
             Some("Symbol")
-        } else if let Some(kind) = crate::typedarray::lookup_typed_array_kind(raw_addr) {
+        } else if let Some(kind) = if tracked_type == Some(crate::gc::GC_TYPE_TYPED_ARRAY) {
+            Some((*(raw_addr as *const crate::typedarray::TypedArrayHeader)).kind)
+        } else if tracked_type.is_none() {
+            crate::typedarray::lookup_typed_array_kind(raw_addr)
+        } else {
+            None
+        } {
             // Typed arrays are raw-i64 pointers with no brand arm; without this
             // they fall through to the `is_number()` fallback below (a small
             // raw-pointer bit pattern reads as a finite f64) → `[object Number]`.

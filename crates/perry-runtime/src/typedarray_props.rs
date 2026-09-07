@@ -33,12 +33,34 @@ enum TypedArrayOwnerKind {
 
 #[inline]
 fn typed_array_owner_kind(owner: usize) -> Option<TypedArrayOwnerKind> {
-    if lookup_typed_array_kind(owner).is_some() {
-        Some(TypedArrayOwnerKind::TypedArray)
-    } else if crate::buffer::is_uint8array_buffer(owner) {
-        Some(TypedArrayOwnerKind::Uint8ArrayBuffer)
-    } else {
-        None
+    match unsafe { crate::value::addr_class::try_read_tracked_gc_header(owner) } {
+        Some(header) => match unsafe { (*header.as_ptr()).obj_type } {
+            crate::gc::GC_TYPE_TYPED_ARRAY => Some(TypedArrayOwnerKind::TypedArray),
+            crate::gc::GC_TYPE_BUFFER if crate::buffer::is_uint8array_buffer(owner) => {
+                Some(TypedArrayOwnerKind::Uint8ArrayBuffer)
+            }
+            _ => None,
+        },
+        None if lookup_typed_array_kind(owner).is_some() => Some(TypedArrayOwnerKind::TypedArray),
+        None if crate::buffer::is_uint8array_buffer(owner) => {
+            Some(TypedArrayOwnerKind::Uint8ArrayBuffer)
+        }
+        None => None,
+    }
+}
+
+/// Resolve a TypedArray element kind from the allocation header when one is
+/// present. Only a headerless native view needs the address registry.
+#[inline]
+pub(crate) fn managed_or_registered_typed_array_kind(owner: usize) -> Option<u8> {
+    match unsafe { crate::value::addr_class::try_read_tracked_gc_header(owner) } {
+        Some(header)
+            if unsafe { (*header.as_ptr()).obj_type == crate::gc::GC_TYPE_TYPED_ARRAY } =>
+        {
+            Some(unsafe { (*(owner as *const TypedArrayHeader)).kind })
+        }
+        Some(_) => None,
+        None => lookup_typed_array_kind(owner),
     }
 }
 
@@ -1051,7 +1073,7 @@ pub(crate) unsafe fn typed_array_prototype_chain_has(owner: usize, name: &str) -
 /// The element kind for a TypedArray owner address (`None` for the
 /// `BufferHeader`-backed `Uint8Array` representation).
 fn typed_array_owner_kind_id(owner: usize) -> Option<u8> {
-    lookup_typed_array_kind(owner)
+    managed_or_registered_typed_array_kind(owner)
 }
 
 /// Classify a string key against a typed array's CanonicalNumericIndexString

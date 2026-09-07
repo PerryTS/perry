@@ -60,12 +60,22 @@ unsafe fn instance_object_ptr(this: f64) -> Option<*mut ObjectHeader> {
     if raw < crate::gc::GC_HEADER_SIZE + 0x1000 {
         return None;
     }
-    // `this` can be a raw, header-less collection/buffer handle (a real Map/Set,
-    // a Buffer, or a typed array) when this runs before raw collection dispatch.
-    // Those allocations carry no `GcHeader`, so reading `raw - GC_HEADER_SIZE`
-    // would crash or misclassify allocator metadata. Magnitude-classify the
-    // address (rejecting the handle band + slab allocations) before any header
-    // read, and reject registered non-object collections outright.
+    // A tracked header is authoritative: only GC_TYPE_OBJECT has an
+    // ObjectHeader at `raw`. In particular, an ordinary object must not enter
+    // the Buffer / typed-array registries merely because this helper also sees
+    // headerless Map/Set receivers on other routes.
+    match crate::value::addr_class::try_read_tracked_gc_header(raw) {
+        Some(header) => {
+            if (*header.as_ptr()).obj_type != crate::gc::GC_TYPE_OBJECT {
+                return None;
+            }
+            return Some(raw as *mut ObjectHeader);
+        }
+        None => {}
+    }
+    // Preserve the legacy plausible-address fallback for allocations not yet
+    // represented in allocator metadata, but only after excluding every
+    // headerless/native storage class through its authoritative side table.
     if crate::map::is_registered_map(raw)
         || crate::set::is_registered_set(raw)
         || crate::buffer::is_registered_buffer(raw)
@@ -74,10 +84,28 @@ unsafe fn instance_object_ptr(this: f64) -> Option<*mut ObjectHeader> {
         return None;
     }
     let header = crate::value::addr_class::try_read_gc_header(raw)?;
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT {
-        return None;
+    (header.obj_type == crate::gc::GC_TYPE_OBJECT).then_some(raw as *mut ObjectHeader)
+}
+
+/// Whether a tracked `GC_TYPE_OBJECT` class can be a `Map`/`Set` subclass.
+/// Real Map/Set cells carry `GC_TYPE_MAP` / `GC_TYPE_SET` and never use this
+/// predicate.
+#[inline]
+pub(crate) fn is_map_set_subclass_class_id(class_id: u32) -> bool {
+    const CLASS_ID_MAP: u32 = 0xFFFF_0022;
+    const CLASS_ID_SET: u32 = 0xFFFF_0023;
+    if class_id == 0 {
+        return false;
     }
-    Some(raw as *mut ObjectHeader)
+    let mut current = class_id;
+    for _ in 0..64 {
+        match crate::object::get_parent_class_id(current) {
+            Some(parent) if matches!(parent, CLASS_ID_MAP | CLASS_ID_SET) => return true,
+            Some(parent) if parent != 0 && parent != current => current = parent,
+            _ => return false,
+        }
+    }
+    false
 }
 
 /// If `value` is a Map/Set *subclass instance* (a plain object carrying the

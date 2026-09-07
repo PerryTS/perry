@@ -54,6 +54,7 @@ pub(super) unsafe fn dispatch_map_set(
     method_name_len: usize,
     args_ptr: *const f64,
     args_len: usize,
+    receiver_class: NativeReceiverClass,
 ) -> Option<f64> {
     let jsval = JSValue::from_bits(object.to_bits());
     let raw_bits = object.to_bits();
@@ -69,7 +70,15 @@ pub(super) unsafe fn dispatch_map_set(
     //     (`m.set(a,1).set(b,2)`),
     //   * `forEach` callbacks receive the instance as their 3rd argument,
     // while `clear` → undefined and `has`/`get`/`size`/`delete` read through.
-    if let Some(backing) = super::super::map_set_subclass::subclass_backing_of(object) {
+    let subclass_backing = match receiver_class {
+        NativeReceiverClass::GcObject(_) => {
+            super::super::map_set_subclass::subclass_backing_of(object)
+        }
+        NativeReceiverClass::Gc(crate::gc::GC_TYPE_MAP | crate::gc::GC_TYPE_SET)
+        | NativeReceiverClass::OtherPointer => None,
+        _ => return None,
+    };
+    if let Some(backing) = subclass_backing {
         // Only redirect ACTUAL collection methods to the backing. A non-collection
         // method (`hasOwnProperty`, `propertyIsEnumerable`, `toString`, a
         // user-defined subclass method, …) must fall through to the normal
@@ -103,13 +112,15 @@ pub(super) unsafe fn dispatch_map_set(
             }
             return Some(undefined);
         }
-        let backing_value = match backing {
-            super::super::map_set_subclass::CollectionBacking::Map(m) => {
-                f64::from_bits(JSValue::pointer(m as *const u8).bits())
-            }
-            super::super::map_set_subclass::CollectionBacking::Set(s) => {
-                f64::from_bits(JSValue::pointer(s as *const u8).bits())
-            }
+        let (backing_value, backing_class) = match backing {
+            super::super::map_set_subclass::CollectionBacking::Map(m) => (
+                f64::from_bits(JSValue::pointer(m as *const u8).bits()),
+                NativeReceiverClass::Gc(crate::gc::GC_TYPE_MAP),
+            ),
+            super::super::map_set_subclass::CollectionBacking::Set(s) => (
+                f64::from_bits(JSValue::pointer(s as *const u8).bits()),
+                NativeReceiverClass::Gc(crate::gc::GC_TYPE_SET),
+            ),
         };
         let result = dispatch_map_set(
             root_scope,
@@ -121,6 +132,7 @@ pub(super) unsafe fn dispatch_map_set(
             method_name_len,
             args_ptr,
             args_len,
+            backing_class,
         );
         // `Map.prototype.set` / `Set.prototype.add` return the receiver — the
         // SUBCLASS INSTANCE, not the hidden backing — so chains preserve identity.
@@ -139,9 +151,15 @@ pub(super) unsafe fn dispatch_map_set(
         }
         return result;
     }
-    // Check Map/Set registries for raw or NaN-boxed pointers.
-    // Maps/Sets are allocated with plain alloc (no GcHeader), so they can't be
-    // dispatched through the ObjectHeader path below.
+    // A tracked object that reached this dispatcher has Map/Set ancestry, but
+    // without a backing it is not a raw collection. A MapHeader / SetHeader is
+    // a distinct GC layout and can never be read from this ObjectHeader cell.
+    if matches!(receiver_class, NativeReceiverClass::GcObject(_)) {
+        return None;
+    }
+    // Check Map/Set registries for raw or NaN-boxed pointers. MapHeader and
+    // SetHeader have their own GC layouts, so they cannot be dispatched through
+    // an ObjectHeader path.
     {
         let check_ptr = if jsval.is_pointer() {
             (raw_bits & 0x0000_FFFF_FFFF_FFFF) as usize
@@ -299,19 +317,10 @@ pub(super) unsafe fn dispatch_map_set(
                     _ => f64::from_bits(crate::value::TAG_UNDEFINED),
                 });
             }
-            // Buffer / Uint8Array dispatch — allocated raw, not behind a
-            // GcHeader, so it can't be discovered through the ObjectHeader
-            // path below. Tracked in BUFFER_REGISTRY. Routes Node-style
-            // numeric read/write/search/swap method family through
-            // `crate::buffer` helpers.
-            if crate::buffer::is_registered_buffer(check_ptr) {
-                return Some(dispatch_buffer_method(
-                    check_ptr,
-                    method_name,
-                    args_ptr,
-                    args_len,
-                ));
-            }
+            // Buffer and typed-array receivers were classified and dispatched
+            // by `dispatch_handle` before this residual raw Map/Set registry
+            // path. Re-probing the Buffer registry here made every ordinary
+            // object method call pay a second negative Buffer lookup.
         }
     }
 

@@ -575,15 +575,30 @@ pub extern "C" fn js_array_get_f64(arr: *const ArrayHeader, index: u32) -> f64 {
         return f64::NAN;
     }
     let arr = cleaned;
-    // Check if this is actually a TypedArray — dispatch through typed array helper
-    if crate::typedarray::lookup_typed_array_kind(arr as usize).is_some() {
+    // `clean_arr_ptr` has already resolved the live receiver. Classify that
+    // address from allocator-owned metadata before asking either byte-storage
+    // side table: an internal keys array remains GC_TYPE_ARRAY no matter what
+    // property names it stores (including an own key spelled `buffer`). Only a
+    // tracked-header miss can be one of the legacy/headerless layouts whose
+    // identity lives exclusively in a registry.
+    let tracked_type = unsafe {
+        crate::value::addr_class::try_read_tracked_gc_header(arr as usize)
+            .map(|header| (*header.as_ptr()).obj_type)
+    };
+    // Check if this is actually a TypedArray — dispatch through typed array helper.
+    let is_typed_array = tracked_type == Some(crate::gc::GC_TYPE_TYPED_ARRAY)
+        || (tracked_type.is_none()
+            && crate::typedarray::lookup_typed_array_kind(arr as usize).is_some());
+    if is_typed_array {
         return crate::typedarray::js_typed_array_get(
             arr as *const crate::typedarray::TypedArrayHeader,
             index as i32,
         );
     }
     // Check if this is actually a buffer (Uint8Array) — read individual bytes
-    if crate::buffer::is_registered_buffer(arr as usize) {
+    let is_buffer = tracked_type == Some(crate::gc::GC_TYPE_BUFFER)
+        || (tracked_type.is_none() && crate::buffer::is_registered_buffer(arr as usize));
+    if is_buffer {
         let byte_val =
             crate::buffer::js_buffer_get(arr as *const crate::buffer::BufferHeader, index as i32);
         return byte_val as f64;
