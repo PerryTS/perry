@@ -1,0 +1,42 @@
+{
+  "perry-runtime": {
+    "profile": 8357052689500403201,
+    "features": "[\"alloc-mimalloc\", \"bun-cli-utils\", \"default\", \"diagnostics\", \"dyn-eval\", \"full\", \"global-atomics\", \"global-json\", \"global-math\", \"global-reflect\", \"global-text\", \"global-url\", \"global-webcrypto\", \"global-webfetch\", \"global-websocket\", \"intl-datetime\", \"intl-locale\", \"intl-namespace\", \"intl-segmenter\", \"keepalive-anchors\", \"mod-dgram\", \"mod-http2-constants\", \"mod-node-test\", \"proc-ipc\", \"regex-engine\", \"stdlib\", \"string-normalize\", \"temporal\", \"url-engine\"]",
+    "rustflags": [
+      "-C",
+      "force-unwind-tables=yes"
+    ],
+    "config": 8362119626465528914,
+    "compile_kind": 0
+  },
+  "perry-stdlib": {
+    "profile": 15541231636102523690,
+    "features": "[\"async-runtime\", \"bundled-argon2\", \"bundled-bcrypt\", \"bundled-cheerio\", \"bundled-commander\", \"bundled-cron\", \"bundled-dayjs\", \"bundled-decimal\", \"bundled-dotenv\", \"bundled-ethers\", \"bundled-events\", \"bundled-exponential-backoff\", \"bundled-ioredis\", \"bundled-jsonwebtoken\", \"bundled-lru-cache\", \"bundled-moment\", \"bundled-mongodb\", \"bundled-mysql2\", \"bundled-nanoid\", \"bundled-net\", \"bundled-nodemailer\", \"bundled-pg\", \"bundled-ratelimit\", \"bundled-sharp\", \"bundled-streams\", \"bundled-uuid\", \"bundled-validator\", \"bundled-ws\", \"compression\", \"compression-brotli\", \"compression-gzip\", \"compression-zstd\", \"crypto\", \"database\", \"database-mongodb\", \"database-mysql\", \"database-postgres\", \"database-redis\", \"database-sqlite\", \"default\", \"email\", \"full\", \"html-parser\", \"http-client\", \"http-server\", \"ids\", \"image\", \"net\", \"rate-limit\", \"scheduler\", \"tls\", \"tls-runtime\", \"validation\", \"web-fetch\", \"websocket\"]",
+    "rustflags": [
+      "-C",
+      "force-unwind-tables=yes"
+    ],
+    "config": 8362119626465528914,
+    "compile_kind": 0
+  },
+  "perry-runtime-static": {
+    "profile": 13266261532121309043,
+    "features": "[\"default\"]",
+    "rustflags": [
+      "-C",
+      "force-unwind-tables=yes"
+    ],
+    "config": 8362119626465528914,
+    "compile_kind": 0
+  },
+  "perry-stdlib-static": {
+    "profile": 13266261532121309043,
+    "features": "[\"default\"]",
+    "rustflags": [
+      "-C",
+      "force-unwind-tables=yes"
+    ],
+    "config": 8362119626465528914,
+    "compile_kind": 0
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "owner": "json-perf-95911-1788740494",
+  "load_before": [
+    1.61474609375,
+    1.5146484375,
+    1.4560546875
+  ],
+  "started_utc": "2026-09-07T00:21:34Z",
+  "quiet_gate_passed": true,
+  "competing_workloads_before": [],
+  "load_after": [
+    1.9267578125,
+    1.73583984375,
+    1.55712890625
+  ],
+  "competing_workloads_after": [],
+  "finished_utc": "2026-09-07T00:24:16Z"
+}

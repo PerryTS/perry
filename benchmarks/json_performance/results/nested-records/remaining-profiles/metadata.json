@@ -1,0 +1,42 @@
+[
+  {
+    "purpose": "Quiet M1 sampling diagnostic. Sample shares are not exact CPU percentages and do not replace the complete CPU/RSS matrix.",
+    "command": [
+      "/Users/perry/json-nested-records-20260907-codex/.work/worker",
+      "/Users/perry/json-nested-records-20260907-codex/.work/fixtures/wide_1m.json",
+      "parse",
+      "512",
+      "2"
+    ],
+    "worker_sha256": "2e2774434eb5ab665c8b8243743d0188caea2241bdbff5f57ebf2654a1ad05fd",
+    "worker_exit": 0,
+    "sample_exit": 0,
+    "sample_stderr": "Sampling process 1295 for 3 seconds with 1 millisecond of run time between samples\nSampling completed, processing symbols...\nSample analysis of process 1295 written to file /Users/perry/json-nested-records-20260907-codex/results/remaining-profiles/wide_1m-parse.sample.txt\n",
+    "cpu": "Apple M1",
+    "load_after": [
+      2.076171875,
+      1.89501953125,
+      1.681640625
+    ]
+  },
+  {
+    "purpose": "Quiet M1 sampling diagnostic. Sample shares are not exact CPU percentages and do not replace the complete CPU/RSS matrix.",
+    "command": [
+      "/Users/perry/json-nested-records-20260907-codex/.work/worker",
+      "/Users/perry/json-nested-records-20260907-codex/.work/fixtures/heterogeneous_1m.json",
+      "stringify",
+      "3072",
+      "2"
+    ],
+    "worker_sha256": "2e2774434eb5ab665c8b8243743d0188caea2241bdbff5f57ebf2654a1ad05fd",
+    "worker_exit": 0,
+    "sample_exit": 0,
+    "sample_stderr": "Sampling process 1318 for 3 seconds with 1 millisecond of run time between samples\nSampling completed, processing symbols...\nSample analysis of process 1318 written to file /Users/perry/json-nested-records-20260907-codex/results/remaining-profiles/heterogeneous_1m-stringify.sample.txt\n",
+    "cpu": "Apple M1",
+    "load_after": [
+      1.98974609375,
+      1.8798828125,
+      1.67724609375
+    ]
+  }
+]

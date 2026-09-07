@@ -1,0 +1,17 @@
+{
+  "worker_sha256": "2e2774434eb5ab665c8b8243743d0188caea2241bdbff5f57ebf2654a1ad05fd",
+  "instructions_by_symbol": {
+    "__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify21stringify_array_depth": 2092,
+    "__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_nested_records8try_emit": 152,
+    "__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api10parse_slow": 483,
+    "__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9parse_api17parse_result_slow": 411,
+    "__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser11parse_array": 106,
+    "__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser18parse_array_prefix": 509,
+    "__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser16parse_array_tail": 343,
+    "__RNvMs_NtNtCs5gMwpk3Cs4e_13perry_runtime4json6parserNtB4_12DirectParser18finish_short_array": 172,
+    "__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime9json_tape8mutation26resolve_materialized_array": 321,
+    "__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime5array17growth_forwarding24is_retained_growth_alias": 141,
+    "__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime2gc6verify25check_forwarded_reference": 25,
+    "_js_array_grow": 903
+  }
+}

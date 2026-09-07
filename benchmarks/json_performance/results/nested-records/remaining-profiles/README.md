@@ -1,0 +1,7 @@
+Both profiles use candidate worker `2e2774434eb5ab665c8b8243743d0188caea2241bdbff5f57ebf2654a1ad05fd` on the quiet remote Apple M1. The admission gate passes, all six external observations are clean, and both worker and sample processes exit zero. See metadata.json, window.json and external-observations.json alongside the raw samples.
+
+Heterogeneous stringify records 2,268 main-thread samples, 1,956 under js_json_stringify_full and 1,940 in stringify_nested_records::try_emit. Parent emit_record calls include 403 samples at the record-validation call; recursive child emission includes 489 samples, 256 at its record-validation call. Those checks repeatedly inspect tracked object/key headers, live inline slots, keys and explicit prototypes before consulting the per-call key plan. Other samples remain in emission and lookup; inspect assembly before attributing a particular self offset to hashing.
+
+Wide parse records 2,221 main-thread samples, 1,773 under the loop moving-GC safepoint, 1,490 under copying and 1,353 under slot rewriting. These observations identify costs but are not exact CPU percentages and do not replace CPU/RSS measurement.
+
+Next, test reuse of validated descriptor/key bounds by ShapeId inside the same callback-free, collection-free attempt. Every instance must still pass its own layout, descriptors, prototype and actual allocation-bound checks. Consider a bounded native table and one prefix pool to reduce temporary allocation. Keep fallback rollback, mutation and movement checks, and measure all rows and older anchors.

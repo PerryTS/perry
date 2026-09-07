@@ -1,3 +1,13 @@
+The latest measured source, nested-records (`27eeccf79e`), reduces paired heterogeneous stringify CPU **54.25%**, from **4.35 to 1.99 ms**, using bounded native per-call key prefixes and a callback-free traversal of ordinary nested records. It still takes **2.20x Node** in the full run, and peak RSS rises **0.453125 MiB** versus growth-alias.
+
+All-row inventory remains **12/38 CPU, 65/74 peak RSS and 33/36 retained RSS**. Full and 994-trial paired matrices plus 24 retained-empty trials qualify with 31/54 clean observations. CPU and RSS regressions remain, including older anchors. All-row/no-regression acceptance is false.
+
+202 JSON runtime tests and 42 full compiled Node comparisons pass. One extended fixture matches the reference while retaining a pre-existing inherited Object.prototype.toJSON root-array mismatch. Of 44 moving-GC runs, 42 match Node and two extended runs match the reference with that known mismatch; no candidate/reference regression is found. Earlier forced-lazy Object.* gaps remain open. All 77 source hashes are verified; GC policy and hooks are unchanged, with the inherited diagnostic-only repair explicitly documented.
+
+[Latest 38 CPU rows](results/nested-records/cpu-38.md), [CPU and RAM](results/nested-records/tables.md), [complete tradeoffs](results/nested-records/README.md), [GC boundary](results/nested-records/gc-coordination.md), [next work](results/nested-records/next-steps.md).
+
+Earlier checkpoints follow.
+
 The latest measured source, growth-alias (`452c329aa`), fixes the verifier's rejection of explicitly retained old array-growth aliases while preserving strict evacuation and metadata checks. All 267 unique runtime tests, 42 compiled comparisons and 42 moving-GC runs pass, including the previously failing broad fixture and no-JSON control. Collection policy, thresholds and hooks are unchanged; GC production edits are diagnostic-only and explicitly documented.
 
 All-row inventory remains **12/38 CPU, 65/74 peak RSS and 33/36 retained RSS**. Full and 966-trial paired matrices plus 24 retained-empty trials qualify with 31/53 clean observations. Against short-array, paired small-record stringify improves 1.51% and all peak-RSS medians fall 0.11-0.27 MiB; 1 KB object parse regresses 1.39% and wide stringify 0.88%. Older regressions and forced-lazy Object.* gaps remain open. All-row/no-regression acceptance is false.

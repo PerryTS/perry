@@ -1,0 +1,14 @@
+   Compiling perry-runtime v0.5.1520 (/Users/amlug/projects/perry/codex-json-fastpaths/crates/perry-runtime)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 18.63s
+     Running unittests src/lib.rs (/Users/amlug/projects/perry/codex-json-changed-target/debug/build/perry-runtime/77f7d5e322249c1d/out/perry_runtime-77f7d5e322249c1d)
+
+running 7 tests
+test gc::tests::runtime_roots::json_record_output::json_nested_records_fallback_runs_getter_once_and_survives_actual_movement ... ok
+test json::stringify_nested_records::tests::json_nested_records_caps_native_shape_and_prefix_storage ... ok
+test json::stringify_nested_records::tests::json_nested_records_declines_cold_prototype_lookup_without_collection ... ok
+test json::stringify_nested_records::tests::json_nested_records_declines_unsupported_late_values_and_restores_prefix ... ok
+test json::stringify_nested_records::tests::json_nested_records_observes_mutation_between_attempts ... ok
+test json::stringify_nested_records::tests::json_nested_records_preserves_empty_leaves_and_depth_fallback ... ok
+test json::stringify_nested_records::tests::json_nested_records_reuses_multiple_shapes_without_managed_intermediates ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 3255 filtered out; finished in 0.44s
