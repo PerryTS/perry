@@ -16,6 +16,7 @@ pub mod image;
 pub mod image_gallery;
 pub mod map_view;
 pub mod navstack;
+pub(crate) mod padding;
 pub mod pdf_view;
 pub mod picker;
 pub mod progressview;

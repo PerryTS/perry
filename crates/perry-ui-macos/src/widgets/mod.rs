@@ -20,6 +20,7 @@ pub mod keyboard;
 pub mod lazyvstack;
 pub mod map_view;
 pub mod navstack;
+pub(crate) mod padding;
 pub mod pdf_view;
 pub mod picker;
 pub mod progressview;
@@ -849,24 +850,10 @@ pub fn set_shadow(
     }
 }
 
-/// Set edge insets (internal padding) on an NSStackView widget.
-/// No-op for non-stack widgets.
+/// Set edge insets (padding) on widgets with native content-inset support.
 pub fn set_edge_insets(handle: i64, top: f64, left: f64, bottom: f64, right: f64) {
     if let Some(view) = get_widget(handle) {
-        let is_stack = if let Some(cls) = AnyClass::get(c"NSStackView") {
-            view.isKindOfClass(cls)
-        } else {
-            false
-        };
-        if is_stack {
-            let stack: &NSStackView = unsafe { &*(Retained::as_ptr(&view) as *const NSStackView) };
-            stack.setEdgeInsets(objc2_foundation::NSEdgeInsets {
-                top,
-                left,
-                bottom,
-                right,
-            });
-        }
+        padding::set_edge_insets(&view, top, left, bottom, right);
     }
 }
 

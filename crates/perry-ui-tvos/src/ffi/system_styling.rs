@@ -193,7 +193,7 @@ pub extern "C" fn perry_ui_widget_set_border_width(handle: i64, width: f64) {
     }
 }
 
-/// Set edge insets (padding) on a UIStackView. No-op for other widget types.
+/// Set edge insets (padding) on widgets with native content-inset support.
 #[no_mangle]
 pub extern "C" fn perry_ui_widget_set_edge_insets(
     handle: i64,
@@ -203,24 +203,7 @@ pub extern "C" fn perry_ui_widget_set_edge_insets(
     right: f64,
 ) {
     if let Some(view) = widgets::get_widget(handle) {
-        unsafe {
-            let is_stack = if let Some(cls) = objc2::runtime::AnyClass::get(c"UIStackView") {
-                use objc2_foundation::NSObjectProtocol;
-                view.isKindOfClass(cls)
-            } else {
-                false
-            };
-            if is_stack {
-                let _: () = objc2::msg_send![&*view, setLayoutMarginsRelativeArrangement: true];
-                let insets = objc2_ui_kit::UIEdgeInsets {
-                    top,
-                    left,
-                    bottom,
-                    right,
-                };
-                let _: () = objc2::msg_send![&*view, setDirectionalLayoutMargins: insets];
-            }
-        }
+        widgets::padding::set_edge_insets(&view, top, left, bottom, right);
     }
 }
 

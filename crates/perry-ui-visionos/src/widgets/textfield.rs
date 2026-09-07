@@ -2,7 +2,7 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Sel};
 use objc2::{define_class, msg_send, AnyThread, DefinedClass};
 use objc2_foundation::{NSObject, NSString};
-use objc2_ui_kit::{UITextField, UIView};
+use objc2_ui_kit::UIView;
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -79,8 +79,7 @@ pub fn create(placeholder_ptr: *const u8, on_change: f64) -> i64 {
     let placeholder = unsafe { str_from_header(placeholder_ptr) };
 
     unsafe {
-        let text_field: Retained<UITextField> =
-            msg_send![objc2::runtime::AnyClass::get(c"UITextField").unwrap(), new];
+        let text_field = super::padding::new_text_field();
         let ns_placeholder = NSString::from_str(&placeholder);
         let _: () = msg_send![&*text_field, setPlaceholder: &*ns_placeholder];
         let _: () = msg_send![&*text_field, setAccessibilityLabel: &*ns_placeholder];
