@@ -241,6 +241,7 @@ pub(super) fn prune_dead_owner_side_tables_post_trace(
         &|addr| probe.owner_is_dead(addr, Some(GC_TYPE_CLOSURE)),
         &|addr| probe.owner_is_dead(addr, Some(GC_TYPE_STRING)),
         /* young_only = */ !full_trace,
+        None,
     );
     // #6182: drop dead weak-target HOLDERS (WeakRef / FinalizationRegistry /
     // WeakMap-WeakSet entry — all GC_TYPE_OBJECT) from the registry so the
@@ -257,13 +258,23 @@ pub(super) fn prune_dead_owner_side_tables_post_trace(
 /// Copied-minor fan-out: prune entries owned by dead from-space objects
 /// before the flip destroys their headers. Nursery-only by construction, so
 /// the tenured/malloc caveat cannot mis-fire here.
-pub(super) fn prune_dead_owner_side_tables_copied_minor() {
+pub(super) fn prune_dead_owner_side_tables_copied_minor() -> String {
+    let mut detail = String::new();
+    let diag = super::gc_diag_enabled();
+    if diag {
+        detail.push('[');
+    }
     fan_out(
         &|addr| owner_is_dead_copied_minor_from_space(addr, None),
         &|addr| owner_is_dead_copied_minor_from_space(addr, Some(GC_TYPE_CLOSURE)),
         &|addr| owner_is_dead_copied_minor_from_space(addr, Some(GC_TYPE_STRING)),
         /* young_only = */ true,
+        diag.then_some(&mut detail),
     );
+    if diag {
+        detail.push(']');
+    }
+    detail
 }
 
 /// Which of the pass's three deadness predicates a registered prune is handed.
@@ -502,6 +513,7 @@ fn fan_out(
     is_dead_closure: &dyn Fn(usize) -> bool,
     is_dead_symbol: &dyn Fn(usize) -> bool,
     young_only: bool,
+    mut diag: Option<&mut String>,
 ) {
     // Interned key pointers cached in the store-plan cache may die in this
     // collection — flush every cached verdict. Pointer identity only: the
@@ -515,9 +527,15 @@ fn fan_out(
             DeadKeyOwner::Closure => is_dead_closure,
             DeadKeyOwner::Symbol => is_dead_symbol,
         };
+        let start = diag.as_ref().map(|_| std::time::Instant::now());
         match entry.young_prune {
             Some(young_prune) if young_only => young_prune(is_dead),
             _ => (entry.prune)(is_dead),
+        }
+        if let (Some(detail), Some(start)) = (diag.as_deref_mut(), start) {
+            use std::fmt::Write;
+            write!(detail, " {:?}:{}", entry.table, start.elapsed().as_micros())
+                .expect("writing dead-owner diagnostics to a String cannot fail");
         }
     }
 }
