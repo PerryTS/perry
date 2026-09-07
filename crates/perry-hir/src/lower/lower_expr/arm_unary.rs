@@ -124,6 +124,15 @@ pub(crate) fn lower_unary_expr(ctx: &mut LoweringContext, unary: &ast::UnaryExpr
                 && ctx.lookup_native_module(n).is_none()
                 && ctx.lookup_imported_func(n).is_none()
                 && ctx.lookup_class(n).is_none()
+                // A named class expression can use a synthetic registry key
+                // while its source-level inner binding keeps the written
+                // name. Let ordinary identifier lowering resolve that binding
+                // to the current class instead of treating it as an optional
+                // global. For example, `var B = class l { static f() {
+                // return typeof l } }` registers the class under a generated
+                // `l__class_expr_*` key, but `l` is still lexically bound in
+                // the class body.
+                && ctx.current_class_inner_name.as_deref() != Some(n)
                 && !is_builtin_function(n)
                 && !is_known_global_identifier_name(n)
                 && !matches!(n, "undefined" | "null" | "NaN" | "Infinity")
