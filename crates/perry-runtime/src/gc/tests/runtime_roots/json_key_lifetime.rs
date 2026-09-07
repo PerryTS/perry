@@ -48,6 +48,11 @@ fn json_discarded_wide_keys_release_storage_after_cache_eviction() {
             );
         }
         assert_eq!(
+            crate::json::PARSE_KEY_CACHE.with(|cache| cache.borrow().len()),
+            0,
+            "wide-only keys belong to the object-local duplicate index"
+        );
+        assert_eq!(
             crate::arena::longlived_in_use_bytes(),
             permanent,
             "discardable keys and their ordered array must not enter permanent storage"
@@ -58,9 +63,10 @@ fn json_discarded_wide_keys_release_storage_after_cache_eviction() {
             "exercise a substantial graph"
         );
         collect_full();
+        let remaining = crate::arena::arena_live_allocated_bytes();
         assert!(
-            crate::arena::arena_live_allocated_bytes() <= baseline + 65_536,
-            "evicted keys must be collectible along with their discarded object"
+            remaining <= baseline + 65_536,
+            "wide-only keys must be collectible with their discarded object: baseline={baseline}, remaining={remaining}"
         );
     }
 }

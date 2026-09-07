@@ -794,7 +794,7 @@ impl<'a> DirectParser<'a> {
         type HeapFields = (
             Vec<*const StringHeader>,
             Vec<JSValue>,
-            Option<std::collections::HashMap<*const StringHeader, usize>>,
+            Option<std::collections::HashMap<Vec<u8>, usize>>,
         );
         let mut heap_fields: Option<HeapFields> = None;
 
@@ -819,40 +819,52 @@ impl<'a> DirectParser<'a> {
 
             let key_bytes = key.as_bytes();
             if let Some((keys, values, indices)) = heap_fields.as_mut() {
-                // Only spilled objects need the width decision. Interning
-                // identity comes from the same table on either path.
-                let key_ptr = if keys.len() >= 128 {
-                    cached_parse_wide_key_ptr(key_bytes)
-                } else {
-                    cached_parse_key_ptr(key_bytes)
-                };
                 // Linear lookup wins for modest objects. Build the index only
                 // when another field arrives after 128 unique keys, so an
                 // object ending at that size never pays to build an unused map.
                 if indices.is_none() && keys.len() == 128 {
+                    // From here this object's content index owns duplicate
+                    // detection. Drop the global cache while collection is
+                    // suppressed so its ordinary key strings cannot anchor a
+                    // whole general-arena block after a discarded wide parse.
+                    PARSE_KEY_CACHE.with(|cache| cache.borrow_mut().clear());
+                    clear_parse_key_ring();
                     *indices = Some(
                         keys.iter()
                             .copied()
                             .enumerate()
-                            .map(|(i, key)| (key, i))
+                            .map(|(i, key)| {
+                                let len = unsafe { (*key).byte_len as usize };
+                                let data = unsafe {
+                                    (key as *const u8).add(std::mem::size_of::<StringHeader>())
+                                };
+                                let bytes = unsafe { std::slice::from_raw_parts(data, len) };
+                                (bytes.to_vec(), i)
+                            })
                             .collect(),
                     );
                 }
-                let existing = match indices {
-                    Some(index) => match index.entry(key_ptr) {
-                        std::collections::hash_map::Entry::Occupied(entry) => Some(*entry.get()),
-                        std::collections::hash_map::Entry::Vacant(entry) => {
-                            entry.insert(keys.len());
-                            None
-                        }
-                    },
-                    None => keys.iter().position(|&ptr| ptr == key_ptr),
-                };
-                if let Some(existing) = existing {
-                    values[existing] = value;
+                if let Some(index) = indices {
+                    if let Some(&existing) = index.get(key_bytes) {
+                        values[existing] = value;
+                    } else {
+                        // The object-local content index already proves this
+                        // key is new. Avoid duplicating every wide key in the
+                        // global interning table only to clear it at return.
+                        let key_ptr =
+                            crate::string::string_from_json_bytes(&mut self.batch, key_bytes);
+                        index.insert(key_bytes.to_vec(), keys.len());
+                        keys.push(key_ptr);
+                        values.push(value);
+                    }
                 } else {
-                    keys.push(key_ptr);
-                    values.push(value);
+                    let key_ptr = cached_parse_key_ptr(key_bytes);
+                    if let Some(existing) = keys.iter().position(|&ptr| ptr == key_ptr) {
+                        values[existing] = value;
+                    } else {
+                        keys.push(key_ptr);
+                        values.push(value);
+                    }
                 }
             } else {
                 let key_ptr = cached_parse_key_ptr(key_bytes);

@@ -401,23 +401,6 @@ fn remember_parse_key_ring(ptr: *const StringHeader) {
     });
 }
 
-/// Wide objects use the owning hash table directly. Probing and rotating a
-/// 16-entry mirror for each of thousands of distinct keys adds linear work
-/// without useful hits. Keep the mirror available for surrounding records.
-/// The owning table and its GC scanner are identical to the ordinary path.
-#[inline(never)]
-pub(crate) fn cached_parse_wide_key_ptr(key_bytes: &[u8]) -> *const StringHeader {
-    let cached = PARSE_KEY_CACHE.with(|cache| cache.borrow().get(key_bytes).copied());
-    if let Some(ptr) = cached {
-        return ptr;
-    }
-    let ptr = allocate_parse_key(key_bytes);
-    PARSE_KEY_CACHE.with(|cache| {
-        cache.borrow_mut().insert(key_bytes.to_vec(), ptr);
-    });
-    ptr
-}
-
 /// The cache roots and rewrites its keys; eviction releases that ownership.
 /// Permanent storage would leak every distinct key whenever a wide parse
 /// clears the cache. Ordinary strings instead follow their actual owners.
@@ -480,7 +463,10 @@ unsafe fn allocate_parse_shape_keys_array(keys: &[*const StringHeader]) -> *mut 
     let mut batch = crate::arena::ConstructionBatch::new();
     let mut array = construction_array::ConstructionArray::new(&mut batch, keys.len() as u32);
     for &key_ptr in keys {
-        array.push(&mut batch, JSValue::string_ptr(key_ptr as *mut StringHeader));
+        array.push(
+            &mut batch,
+            JSValue::string_ptr(key_ptr as *mut StringHeader),
+        );
     }
     let arr = array.finish(&batch);
     let header = (arr as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
