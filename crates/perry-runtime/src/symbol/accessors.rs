@@ -68,7 +68,6 @@ pub(crate) fn test_symbol_accessor_property_count() -> usize {
 
 #[cfg(test)]
 pub(crate) fn test_seed_symbol_accessor_property(obj_key: usize, sym_key: usize, get_bits: u64) {
-    super::gc_roots::note_symbol_accessor(obj_key, sym_key, get_bits, TAG_UNDEFINED);
     let mut guard = crate::gc::lock_gc_root_registry(&SYMBOL_ACCESSOR_PROPERTIES);
     guard.get_or_insert_with(HashMap::new).insert(
         (obj_key, sym_key),
@@ -91,8 +90,6 @@ pub(crate) unsafe fn set_symbol_accessor_property(
         return;
     }
     crate::symbol::note_symbol_key_installed(sym_key);
-    super::gc_roots::note_symbol_property_root(obj_key, sym_key, crate::value::TAG_UNDEFINED);
-    super::gc_roots::note_symbol_accessor(obj_key, sym_key, get_bits, set_bits);
     {
         // `SYMBOL_PROPERTIES` is the only insertion-ordered record of symbol
         // property CREATION order, which `[[OwnPropertyKeys]]` must report
@@ -222,29 +219,6 @@ pub(super) fn accessor_property_keys() -> Vec<(usize, usize)> {
         .unwrap_or_default()
 }
 
-pub(super) fn accessor_property_count() -> usize {
-    let guard = crate::gc::lock_gc_root_registry(&SYMBOL_ACCESSOR_PROPERTIES);
-    guard.as_ref().map_or(0, HashMap::len)
-}
-
-pub(super) fn relevant_accessor_property_keys() -> Vec<(usize, usize)> {
-    let guard = crate::gc::lock_gc_root_registry(&SYMBOL_ACCESSOR_PROPERTIES);
-    guard
-        .as_ref()
-        .map(|map| {
-            map.iter()
-                .filter_map(|(&(owner, sym_key), acc)| {
-                    (crate::gc::young_log::addr_is_minor_collectible(owner)
-                        || crate::gc::young_log::addr_is_minor_relevant(sym_key)
-                        || crate::gc::young_log::bits_are_minor_relevant(acc.get)
-                        || crate::gc::young_log::bits_are_minor_relevant(acc.set))
-                    .then_some((owner, sym_key))
-                })
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
 /// Step twin of `scan_symbol_accessor_roots_mut` for one snapshot key:
 /// strong-visits the get/set closures and rekeys owner/sym on a move.
 /// Cycle-based collections run ONLY the step scanner, so before this
@@ -254,13 +228,13 @@ pub(super) fn scan_symbol_accessor_root_slot(
     visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
     owner: usize,
     sym_key: usize,
-) -> Option<(usize, usize)> {
+) {
     let mut guard = crate::gc::lock_gc_root_registry(&SYMBOL_ACCESSOR_PROPERTIES);
     let Some(map) = guard.as_mut() else {
-        return None;
+        return;
     };
     let Some(acc) = map.get_mut(&(owner, sym_key)) else {
-        return None;
+        return;
     };
     let mut new_owner = owner;
     let mut new_sym_key = sym_key;
@@ -277,21 +251,6 @@ pub(super) fn scan_symbol_accessor_root_slot(
             map.insert((new_owner, new_sym_key), acc);
         }
     }
-    symbol_accessor_root_relevant_in(map, new_owner, new_sym_key)
-        .then_some((new_owner, new_sym_key))
-}
-
-fn symbol_accessor_root_relevant_in(
-    map: &HashMap<(usize, usize), SymbolAccessorDescriptor>,
-    owner: usize,
-    sym_key: usize,
-) -> bool {
-    map.get(&(owner, sym_key)).is_some_and(|acc| {
-        crate::gc::young_log::addr_is_minor_collectible(owner)
-            || crate::gc::young_log::addr_is_minor_relevant(sym_key)
-            || crate::gc::young_log::bits_are_minor_relevant(acc.get)
-            || crate::gc::young_log::bits_are_minor_relevant(acc.set)
-    })
 }
 
 pub(super) fn has_own_symbol_accessor(obj_key: usize, sym_key: usize) -> bool {
