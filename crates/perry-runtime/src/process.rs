@@ -114,21 +114,24 @@ pub(crate) fn is_function_value(value: f64) -> bool {
 
 /// #6651: single source of truth for the RUNTIME dynamic builtin resolvers.
 /// `process.getBuiltinModule(id)` and the `require` returned by
-/// `module.createRequire(...)` accept exactly the module set of
-/// `module.builtinModules` (`MODULE_BUILTIN_MODULES`), so the three surfaces
-/// can never drift apart again — pi walls #3 (#6644, `diagnostics_channel`)
-/// and #5 (#6651, `v8`) were both a module implemented and statically
-/// importable but missing from one hand-copied allowlist. Two carve-outs:
+/// `module.createRequire(...)` derive their Node surface from
+/// `module.builtinModules` (`MODULE_BUILTIN_MODULES`). Pi walls #3 (#6644,
+/// `diagnostics_channel`) and #5 (#6651, `v8`) were both a module implemented
+/// and statically importable but missing from one hand-copied allowlist. Perry
+/// extensions are listed separately so resolving one cannot add it to Node's
+/// public inventory. Two carve-outs apply:
 ///
 /// - `_`-prefixed legacy internals (`_http_agent`, …): Node still serves
 ///   them, Perry has no implementation — they must keep failing with an
 ///   error that names the module, not resolve to a method-dead namespace.
-/// - Scheme-only builtins (`node:ffi`, `node:sea`, `node:sqlite`, `node:test`,
+/// - Scheme-only builtins (`node:sea`, `node:sqlite`, `node:test`, and
 ///   `node:test/reporters` — stored WITH the prefix, exactly as Node spells
-///   them in `module.builtinModules`): resolve only when the caller wrote
-///   the `node:` prefix. The bare spelling is an ordinary npm package name
-///   in Node (`require('sqlite')` is `MODULE_NOT_FOUND`,
-///   `getBuiltinModule('sqlite')` is `undefined`).
+///   them in `module.builtinModules`): resolve only when the caller wrote the
+///   `node:` prefix. The bare spelling is an ordinary npm package name in
+///   Node (`require('sqlite')` is `MODULE_NOT_FOUND`,
+///   `getBuiltinModule('sqlite')` is `undefined`). Perry's scheme-only
+///   extensions use the same resolver rule but live outside the public Node
+///   inventory.
 ///
 /// Takes the RAW specifier (either spelling); returns the prefixless name.
 pub(crate) fn supported_builtin_module_name(specifier: &str) -> Option<&str> {
@@ -148,7 +151,9 @@ pub(crate) fn supported_builtin_module_name(specifier: &str) -> Option<&str> {
         return None;
     }
     if MODULE_BUILTIN_MODULES.contains(&name)
-        || (had_node_prefix && MODULE_BUILTIN_MODULES.contains(&specifier))
+        || (had_node_prefix
+            && (MODULE_BUILTIN_MODULES.contains(&specifier)
+                || PERRY_BUILTIN_MODULE_EXTENSIONS.contains(&specifier)))
     {
         return Some(name);
     }
@@ -188,6 +193,11 @@ pub(crate) fn builtin_module_value(module_name: &str) -> f64 {
 }
 
 pub(crate) const MODULE_CJS_CLASS_ID: u32 = 0xC0_00_4D;
+
+/// Perry-provided scheme-only modules which resolve like builtins but are not
+/// part of Node 26's public `module.builtinModules` / `Module.isBuiltin()`
+/// inventory.
+pub(crate) const PERRY_BUILTIN_MODULE_EXTENSIONS: &[&str] = &["node:ffi"];
 
 pub(crate) const MODULE_BUILTIN_MODULES: &[&str] = &[
     "_http_agent",
@@ -252,7 +262,6 @@ pub(crate) const MODULE_BUILTIN_MODULES: &[&str] = &[
     "wasi",
     "worker_threads",
     "zlib",
-    "node:ffi",
     "node:sea",
     "node:sqlite",
     "node:test",
@@ -818,10 +827,10 @@ thread_local! {
 }
 
 /// #6651 family regression guard: the dynamic builtin resolvers
-/// (`createRequire(...)`'s `require` + `process.getBuiltinModule`) derive from
-/// `MODULE_BUILTIN_MODULES`, so every module Perry lists in
+/// (`createRequire(...)`'s `require` + `process.getBuiltinModule`) derive their
+/// Node surface from `MODULE_BUILTIN_MODULES`, so every module Perry lists in
 /// `module.builtinModules` must resolve through them — and only through the
-/// spellings Node itself accepts.
+/// spellings Node itself accepts. Perry extensions are checked separately.
 #[cfg(test)]
 mod builtin_module_list_tests {
     use super::*;
@@ -836,9 +845,9 @@ mod builtin_module_list_tests {
                 let prefixed = format!("node:{entry}");
                 assert_eq!(supported_builtin_module_name(&prefixed), None, "{prefixed}");
             } else if let Some(bare) = entry.strip_prefix("node:") {
-                // Scheme-only builtins (node:ffi, node:sea, node:sqlite,
-                // node:test, node:test/reporters): the prefixed spelling resolves, the
-                // bare spelling is an ordinary npm name (Node parity).
+                // Scheme-only builtins (node:sea, node:sqlite, node:test,
+                // node:test/reporters): the prefixed spelling resolves, the bare
+                // spelling is an ordinary npm name (Node parity).
                 assert_eq!(supported_builtin_module_name(entry), Some(bare), "{entry}");
                 assert_eq!(supported_builtin_module_name(bare), None, "{bare}");
             } else {
@@ -851,6 +860,16 @@ mod builtin_module_list_tests {
                     "{prefixed}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn perry_extensions_resolve_without_polluting_the_node_inventory() {
+        for &entry in PERRY_BUILTIN_MODULE_EXTENSIONS {
+            let bare = entry.strip_prefix("node:").expect("scheme-only extension");
+            assert!(!MODULE_BUILTIN_MODULES.contains(&entry), "{entry}");
+            assert_eq!(supported_builtin_module_name(entry), Some(bare), "{entry}");
+            assert_eq!(supported_builtin_module_name(bare), None, "{bare}");
         }
     }
 
