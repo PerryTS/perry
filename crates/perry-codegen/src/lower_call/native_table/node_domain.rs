@@ -8,7 +8,7 @@ pub(super) const NODE_DOMAIN_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_domain_create",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "domain",
@@ -17,7 +17,7 @@ pub(super) const NODE_DOMAIN_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_domain_create",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "domain",
@@ -26,7 +26,7 @@ pub(super) const NODE_DOMAIN_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_domain_create",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "domain",
@@ -35,7 +35,7 @@ pub(super) const NODE_DOMAIN_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_domain_on",
         args: &[NA_STR, NA_JSV],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "domain",
@@ -44,7 +44,7 @@ pub(super) const NODE_DOMAIN_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_domain_on",
         args: &[NA_STR, NA_JSV],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "domain",
@@ -89,7 +89,7 @@ pub(super) const NODE_DOMAIN_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_domain_add",
         args: &[NA_F64],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "domain",
@@ -98,7 +98,7 @@ pub(super) const NODE_DOMAIN_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_domain_remove",
         args: &[NA_F64],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "domain",

@@ -22,12 +22,12 @@ use std::time::Instant;
 
 /// How the diag output is delivered.
 #[derive(Clone)]
-enum Sink {
+pub(crate) enum Sink {
     Stderr,
     File(String),
 }
 
-fn sink_from_env(name: &str) -> Option<Sink> {
+pub(crate) fn sink_from_env(name: &str) -> Option<Sink> {
     let raw = std::env::var(name).ok()?;
     let raw = raw.trim();
     match raw {
@@ -44,7 +44,7 @@ fn sink_from_env(name: &str) -> Option<Sink> {
 /// missing-exit-line trap in a second form, and it cost a lane a measurement
 /// run. Report the first failure on stderr, naming the path and the error,
 /// and keep writing there.
-fn write_sink(sink: &Sink, text: &str) {
+pub(crate) fn write_sink(sink: &Sink, text: &str) {
     match sink {
         Sink::Stderr => eprint!("{text}"),
         Sink::File(path) => {
@@ -64,6 +64,16 @@ fn write_sink(sink: &Sink, text: &str) {
 /// Events between two "should we dump?" clock reads.
 const TICK_EVERY: u32 = 256;
 const DUMP_INTERVAL_MS: u128 = 1000;
+
+mod receiver_repr;
+pub use receiver_repr::{
+    receiver_repr_note_constructed, receiver_repr_note_decoded_pointer, receiver_repr_note_value,
+    receiver_repr_note_wrapped, receiver_repr_on, ReceiverReprFamily,
+};
+#[cfg(test)]
+pub(crate) use receiver_repr::{
+    receiver_repr_test_arm, receiver_repr_test_classification_entries, receiver_repr_test_reset,
+};
 
 // ---------------------------------------------------------------------------
 // RegExp

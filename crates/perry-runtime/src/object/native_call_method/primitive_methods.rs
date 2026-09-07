@@ -12,6 +12,9 @@ pub(super) unsafe fn dispatch_primitive(
     args_ptr: *const f64,
     args_len: usize,
 ) -> Option<f64> {
+    if crate::hot_diag::receiver_repr_on() {
+        crate::hot_diag::receiver_repr_note_value(object);
+    }
     let jsval = JSValue::from_bits(object.to_bits());
     let raw_bits = object.to_bits();
     let refreshed_args = || crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(arg_handles);

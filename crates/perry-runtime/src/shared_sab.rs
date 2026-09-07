@@ -84,6 +84,9 @@ pub fn alloc_shared_sab(size: u32) -> *mut BufferHeader {
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .insert(buf as usize);
+    if crate::hot_diag::receiver_repr_on() {
+        crate::hot_diag::receiver_repr_note_constructed(crate::hot_diag::ReceiverReprFamily::Sab);
+    }
     buf
 }
 

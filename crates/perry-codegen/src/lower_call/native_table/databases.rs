@@ -9,7 +9,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_mysql2_create_connection",
         args: &[NA_F64],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "mysql2",
@@ -18,7 +18,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_mysql2_create_pool",
         args: &[NA_F64],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "mysql2/promise",
@@ -27,7 +27,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_mysql2_create_connection",
         args: &[NA_F64],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "mysql2/promise",
@@ -36,7 +36,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_mysql2_create_pool",
         args: &[NA_F64],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     // mysql2 Pool-specific methods (class_filter: Some("Pool"))
     NativeModSig {
@@ -46,7 +46,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: Some("Pool"),
         runtime: "js_mysql2_pool_query",
         args: &[NA_F64, NA_F64],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "mysql2",
@@ -55,7 +55,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: Some("Pool"),
         runtime: "js_mysql2_pool_execute",
         args: &[NA_F64, NA_F64],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "mysql2",
@@ -64,7 +64,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: Some("Pool"),
         runtime: "js_mysql2_pool_end",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "mysql2/promise",
@@ -73,7 +73,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: Some("Pool"),
         runtime: "js_mysql2_pool_query",
         args: &[NA_F64, NA_F64],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "mysql2/promise",
@@ -82,7 +82,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: Some("Pool"),
         runtime: "js_mysql2_pool_execute",
         args: &[NA_F64, NA_F64],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "mysql2/promise",
@@ -91,7 +91,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: Some("Pool"),
         runtime: "js_mysql2_pool_end",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     // mysql2 PoolConnection-specific methods
     NativeModSig {
@@ -101,7 +101,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: Some("PoolConnection"),
         runtime: "js_mysql2_pool_connection_query",
         args: &[NA_F64, NA_F64],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "mysql2",
@@ -110,7 +110,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: Some("PoolConnection"),
         runtime: "js_mysql2_pool_connection_execute",
         args: &[NA_F64, NA_F64],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "mysql2/promise",
@@ -119,7 +119,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: Some("PoolConnection"),
         runtime: "js_mysql2_pool_connection_query",
         args: &[NA_F64, NA_F64],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "mysql2/promise",
@@ -128,7 +128,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: Some("PoolConnection"),
         runtime: "js_mysql2_pool_connection_execute",
         args: &[NA_F64, NA_F64],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     // mysql2 generic instance methods (Connection fallback, class_filter: None)
     NativeModSig {
@@ -138,7 +138,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_mysql2_connection_query",
         args: &[NA_F64, NA_F64],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "mysql2",
@@ -147,7 +147,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_mysql2_connection_execute",
         args: &[NA_F64, NA_F64],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "mysql2",
@@ -156,7 +156,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_mysql2_connection_end",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "mysql2",
@@ -165,7 +165,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_mysql2_pool_get_connection",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "mysql2",
@@ -183,7 +183,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_mysql2_connection_begin_transaction",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "mysql2",
@@ -192,7 +192,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_mysql2_connection_commit",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "mysql2",
@@ -201,7 +201,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_mysql2_connection_rollback",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "mysql2/promise",
@@ -210,7 +210,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_mysql2_connection_query",
         args: &[NA_F64, NA_F64],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "mysql2/promise",
@@ -219,7 +219,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_mysql2_connection_execute",
         args: &[NA_F64, NA_F64],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "mysql2/promise",
@@ -228,7 +228,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_mysql2_connection_end",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "mysql2/promise",
@@ -237,7 +237,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_mysql2_pool_get_connection",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "mysql2/promise",
@@ -255,7 +255,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_mysql2_connection_begin_transaction",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "mysql2/promise",
@@ -264,7 +264,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_mysql2_connection_commit",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "mysql2/promise",
@@ -273,7 +273,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_mysql2_connection_rollback",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     // ========== PostgreSQL (pg) ==========
     // `new Client(config)` and `new Pool(config)` are dispatched by
@@ -287,7 +287,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_pg_connect",
         args: &[NA_F64],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "pg",
@@ -296,7 +296,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_pg_create_pool",
         args: &[NA_F64],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     // `client.connect()` — async, opens the TCP connection on a handle that
     // `new Client(config)` previously created in the pre-connect state.
@@ -311,7 +311,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: Some("Client"),
         runtime: "js_pg_client_connect",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     // Pool-specific query/end — different runtime fns from the Client paths.
     // Pre-existing dispatch was unfiltered and routed both Pool and Client
@@ -327,7 +327,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: Some("Pool"),
         runtime: "js_pg_pool_query",
         args: &[NA_STR, NA_PTR],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "pg",
@@ -336,7 +336,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: Some("Pool"),
         runtime: "js_pg_pool_end",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "pg",
@@ -345,7 +345,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_pg_client_query",
         args: &[NA_STR, NA_PTR],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "pg",
@@ -354,7 +354,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_pg_client_end",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     // ========== ioredis ==========
     // NB: every row was previously emitting `js_redis_*` symbols which don't
@@ -374,7 +374,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         // js_ioredis_new ignores its arg and reads env vars — same behavior.
         runtime: "js_ioredis_new",
         args: &[NA_F64],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "ioredis",
@@ -383,7 +383,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_ioredis_set",
         args: &[NA_STR, NA_STR],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "ioredis",
@@ -392,7 +392,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_ioredis_get",
         args: &[NA_STR],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "ioredis",
@@ -401,7 +401,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_ioredis_del",
         args: &[NA_STR],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "ioredis",
@@ -410,7 +410,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_ioredis_exists",
         args: &[NA_STR],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "ioredis",
@@ -419,7 +419,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_ioredis_incr",
         args: &[NA_STR],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "ioredis",
@@ -428,7 +428,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_ioredis_decr",
         args: &[NA_STR],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "ioredis",
@@ -437,7 +437,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_ioredis_expire",
         args: &[NA_STR, NA_F64],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "ioredis",
@@ -446,7 +446,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_ioredis_quit",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     // Issue #605 — npm `redis`'s `client.connect()` is async. ioredis
     // auto-connects in `new Redis()` and exposes `connect()` as a no-op
@@ -471,7 +471,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_ioredis_quit",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     // ========== MongoDB ==========
     // `new MongoClient(uri)` is dispatched by `lower_builtin_new` (sync ctor
@@ -512,7 +512,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_mongodb_client_db",
         args: &[NA_STR],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "mongodb",
@@ -521,7 +521,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_mongodb_db_collection",
         args: &[NA_STR],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     // `_value` wrapper variants — every collection method that accepts an
     // object/filter arg goes through a wrapper that JSON-stringifies the
@@ -537,7 +537,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_mongodb_collection_insert_one_value",
         args: &[NA_F64],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "mongodb",
@@ -546,7 +546,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_mongodb_collection_insert_many_value",
         args: &[NA_F64],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "mongodb",
@@ -555,7 +555,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_mongodb_collection_find_value",
         args: &[NA_F64],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "mongodb",
@@ -564,7 +564,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_mongodb_collection_find_one_value",
         args: &[NA_F64],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "mongodb",
@@ -573,7 +573,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_mongodb_collection_update_one_value",
         args: &[NA_F64, NA_F64],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "mongodb",
@@ -582,7 +582,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_mongodb_collection_update_many_value",
         args: &[NA_F64, NA_F64],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "mongodb",
@@ -591,7 +591,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_mongodb_collection_delete_one_value",
         args: &[NA_F64],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "mongodb",
@@ -600,7 +600,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_mongodb_collection_delete_many_value",
         args: &[NA_F64],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "mongodb",
@@ -609,7 +609,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_mongodb_collection_count_value",
         args: &[NA_F64],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     // aggregate / createIndex / toArray runtime functions don't exist in
     // perry-stdlib yet — listed as commented-out so the dispatch table
@@ -627,7 +627,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_mongodb_client_close",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     // ========== better-sqlite3 ==========
     NativeModSig {
@@ -637,7 +637,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_sqlite_open",
         args: &[NA_STR],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "better-sqlite3",
@@ -646,7 +646,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_sqlite_prepare",
         args: &[NA_STR],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     // stmt.run/get/all/iterate take JS-side variadic params. The runtime
     // consumes them as a single `*const ArrayHeader`, so VarArgsAsArray
@@ -663,7 +663,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_sqlite_stmt_run",
         args: &[NA_VARARGS],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "better-sqlite3",
@@ -681,7 +681,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_sqlite_stmt_all",
         args: &[NA_VARARGS],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     // `stmt.raw([toggle])` — flips the statement into raw mode and
     // returns the same handle so `stmt.raw().all(...)` chains. drizzle's
@@ -697,7 +697,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_sqlite_stmt_raw",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "better-sqlite3",
@@ -725,7 +725,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_bun_sqlite_database_call",
         args: &[NA_F64, NA_F64],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "bun:sqlite",
@@ -734,7 +734,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: Some("Database"),
         runtime: "js_bun_sqlite_database_query",
         args: &[NA_F64],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "bun:sqlite",
@@ -743,7 +743,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: Some("Database"),
         runtime: "js_bun_sqlite_database_query",
         args: &[NA_F64],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "bun:sqlite",
@@ -752,7 +752,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: Some("Database"),
         runtime: "js_bun_sqlite_database_run",
         args: &[NA_F64, NA_VARARGS],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "bun:sqlite",
@@ -770,7 +770,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: Some("Database"),
         runtime: "js_node_sqlite_database_sync_serialize",
         args: &[NA_F64],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "bun:sqlite",
@@ -788,7 +788,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: Some("Database"),
         runtime: "js_bun_sqlite_database_transaction",
         args: &[NA_F64],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "bun:sqlite",
@@ -797,7 +797,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: Some("Statement"),
         runtime: "js_node_sqlite_statement_sync_run",
         args: &[NA_VARARGS],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "bun:sqlite",
@@ -815,7 +815,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: Some("Statement"),
         runtime: "js_node_sqlite_statement_sync_all",
         args: &[NA_VARARGS],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "bun:sqlite",
@@ -824,7 +824,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: Some("Statement"),
         runtime: "js_bun_sqlite_statement_values",
         args: &[NA_VARARGS],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "bun:sqlite",
@@ -852,7 +852,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_node_sqlite_database_sync_call",
         args: &[NA_F64, NA_F64],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "sqlite",
@@ -861,7 +861,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_node_sqlite_session_call",
         args: &[NA_F64, NA_F64],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "sqlite",
@@ -870,7 +870,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_node_sqlite_statement_sync_call",
         args: &[NA_F64, NA_F64],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "sqlite",
@@ -933,7 +933,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_node_sqlite_database_sync_prepare",
         args: &[NA_F64, NA_F64],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "sqlite",
@@ -942,7 +942,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_node_sqlite_database_sync_serialize",
         args: &[NA_F64],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "sqlite",
@@ -996,7 +996,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: Some("DatabaseSync"),
         runtime: "js_node_sqlite_database_sync_create_tag_store",
         args: &[NA_F64],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "sqlite",
@@ -1005,7 +1005,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: Some("DatabaseSync"),
         runtime: "js_node_sqlite_database_sync_create_session",
         args: &[NA_F64],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "sqlite",
@@ -1068,7 +1068,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_node_sqlite_database_sync_limits",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "sqlite",
@@ -1077,7 +1077,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: Some("Session"),
         runtime: "js_node_sqlite_session_changeset",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "sqlite",
@@ -1086,7 +1086,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: Some("Session"),
         runtime: "js_node_sqlite_session_patchset",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "sqlite",
@@ -1122,7 +1122,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: Some("SQLTagStore"),
         runtime: "js_node_sqlite_sql_tag_store_run",
         args: &[NA_VARARGS],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "sqlite",
@@ -1140,7 +1140,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: Some("SQLTagStore"),
         runtime: "js_node_sqlite_sql_tag_store_all",
         args: &[NA_VARARGS],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "sqlite",
@@ -1185,7 +1185,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: Some("SQLTagStore"),
         runtime: "js_node_sqlite_sql_tag_store_db",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "sqlite",
@@ -1194,7 +1194,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_node_sqlite_statement_sync_run",
         args: &[NA_VARARGS],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "sqlite",
@@ -1212,7 +1212,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_node_sqlite_statement_sync_all",
         args: &[NA_VARARGS],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "sqlite",
@@ -1230,7 +1230,7 @@ pub(super) const DATABASES_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_node_sqlite_statement_sync_columns",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "sqlite",

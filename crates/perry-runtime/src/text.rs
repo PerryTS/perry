@@ -104,6 +104,9 @@ pub(crate) fn text_encoder_string_ptr(value: f64) -> *const StringHeader {
 /// decoder sentinel purely for debuggability.
 #[no_mangle]
 pub extern "C" fn js_text_encoder_new() -> i64 {
+    if crate::hot_diag::receiver_repr_on() {
+        crate::hot_diag::receiver_repr_note_constructed(crate::hot_diag::ReceiverReprFamily::Text);
+    }
     TEXT_ENCODER_SENTINEL_ID
 }
 
@@ -172,6 +175,9 @@ fn register_decoder(
         id
     };
     DECODER_REGISTRY.lock().unwrap().insert(id, state);
+    if crate::hot_diag::receiver_repr_on() {
+        crate::hot_diag::receiver_repr_note_constructed(crate::hot_diag::ReceiverReprFamily::Text);
+    }
     id
 }
 

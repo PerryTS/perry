@@ -91,6 +91,21 @@ pub fn is_small_handle(addr: usize) -> bool {
     (1..HANDLE_BAND_MAX).contains(&addr)
 }
 
+#[inline(always)]
+pub fn is_common_handle_band(addr: usize) -> bool {
+    (1..COMMON_HANDLE_BAND_END).contains(&addr)
+}
+
+#[inline(always)]
+pub fn is_fetch_handle_band(addr: usize) -> bool {
+    (FETCH_HANDLE_BAND_START..FETCH_HANDLE_BAND_END).contains(&addr)
+}
+
+#[inline(always)]
+pub fn is_zlib_handle_band(addr: usize) -> bool {
+    (ZLIB_HANDLE_BAND_START..ZLIB_HANDLE_BAND_END).contains(&addr)
+}
+
 /// Complement of [`is_handle_band`]: the payload is above the handle band and
 /// may be treated as a candidate heap address (subject to
 /// [`is_valid_obj_ptr`] / registry checks as the call site requires). Note

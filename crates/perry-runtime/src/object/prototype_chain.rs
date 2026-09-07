@@ -302,6 +302,9 @@ fn object_set_static_prototype_impl(obj_ptr: usize, proto_bits: u64, link_kind: 
 /// when no explicit prototype has been recorded (the object still has its
 /// default prototype); `Some(TAG_NULL)` when it was explicitly set to `null`.
 pub fn object_static_prototype(obj_ptr: usize) -> Option<u64> {
+    if crate::hot_diag::receiver_repr_on() {
+        crate::hot_diag::receiver_repr_note_decoded_pointer(obj_ptr);
+    }
     // #6759 Phase B: a shaped object answers from its own meta record — two
     // dependent loads, no global latch, no mutex — and NEVER has a residual
     // registry entry (the write path classifies identically), so a meta

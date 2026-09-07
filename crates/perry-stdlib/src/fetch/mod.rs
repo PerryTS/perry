@@ -227,6 +227,11 @@ fn alloc_fetch_handle_id() -> usize {
         panic!("Web Fetch handle id range exhausted");
     }
     *id_guard += 1;
+    if perry_runtime::hot_diag::receiver_repr_on() {
+        perry_runtime::hot_diag::receiver_repr_note_constructed(
+            perry_runtime::hot_diag::ReceiverReprFamily::Fetch,
+        );
+    }
     id
 }
 

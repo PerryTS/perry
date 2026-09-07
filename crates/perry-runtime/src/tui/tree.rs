@@ -51,6 +51,9 @@ per_test_global! {
 pub fn register(node: Node) -> i64 {
     let h = NEXT_HANDLE.fetch_add(1, Ordering::AcqRel);
     REGISTRY.lock().unwrap().push((h, node));
+    if crate::hot_diag::receiver_repr_on() {
+        crate::hot_diag::receiver_repr_note_constructed(crate::hot_diag::ReceiverReprFamily::Tui);
+    }
     h
 }
 
@@ -60,6 +63,10 @@ pub fn lookup(handle: i64) -> Option<Node> {
     let reg = REGISTRY.lock().unwrap();
     reg.iter()
         .find_map(|(h, n)| if *h == handle { Some(n.clone()) } else { None })
+}
+
+pub(crate) fn contains_handle(handle: i64) -> bool {
+    REGISTRY.lock().unwrap().iter().any(|(h, _)| *h == handle)
 }
 
 /// Append a child handle to a Box node. No-op if the handle isn't a

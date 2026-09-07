@@ -243,7 +243,7 @@ pub(super) const NODE_MISC_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_querystring_unescape_buffer",
         args: &[NA_F64, NA_F64],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "querystring",
@@ -252,7 +252,7 @@ pub(super) const NODE_MISC_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_querystring_parse",
         args: &[NA_F64, NA_F64, NA_F64, NA_F64],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "querystring",
@@ -261,7 +261,7 @@ pub(super) const NODE_MISC_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_querystring_parse",
         args: &[NA_F64, NA_F64, NA_F64, NA_F64],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "querystring",
@@ -289,7 +289,7 @@ pub(super) const NODE_MISC_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_lru_cache_new",
         args: &[NA_F64],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "lru-cache",
@@ -307,7 +307,7 @@ pub(super) const NODE_MISC_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_lru_cache_set",
         args: &[NA_F64, NA_F64],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "lru-cache",
@@ -366,7 +366,7 @@ pub(super) const NODE_MISC_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_commander_name",
         args: &[NA_STR],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "commander",
@@ -375,7 +375,7 @@ pub(super) const NODE_MISC_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_commander_description",
         args: &[NA_STR],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "commander",
@@ -384,7 +384,7 @@ pub(super) const NODE_MISC_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_commander_version",
         args: &[NA_STR],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "commander",
@@ -393,7 +393,7 @@ pub(super) const NODE_MISC_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_commander_command",
         args: &[NA_STR],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "commander",
@@ -402,7 +402,7 @@ pub(super) const NODE_MISC_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_commander_option",
         args: &[NA_STR, NA_STR, NA_STR],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "commander",
@@ -411,7 +411,7 @@ pub(super) const NODE_MISC_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_commander_required_option",
         args: &[NA_STR, NA_STR, NA_STR],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     // .action(cb) — NA_PTR coerces the NaN-boxed closure to its raw i64
     // pointer so the runtime can call back through `js_closure_call1`.
@@ -422,7 +422,7 @@ pub(super) const NODE_MISC_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_commander_action",
         args: &[NA_PTR],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     // .parse(argv) — runtime reads std::env::args() directly; user-provided
     // argv expression evaluates for side effects but is not forwarded.
@@ -435,7 +435,7 @@ pub(super) const NODE_MISC_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_commander_parse",
         args: &[NA_F64],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "commander",
@@ -444,7 +444,7 @@ pub(super) const NODE_MISC_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_commander_opts",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     // `.argument("<file>")` declares a positional; returns the same handle so
     // the fluent chain continues (#5137).
@@ -455,7 +455,7 @@ pub(super) const NODE_MISC_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_commander_argument",
         args: &[NA_STR],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     // `program.args` — a bare member read lowers to this 0-arg getter, which
     // returns a JS array of the parsed positional arguments (#5137).
@@ -466,6 +466,6 @@ pub(super) const NODE_MISC_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_commander_args_array",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
 ];

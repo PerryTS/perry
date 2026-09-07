@@ -538,6 +538,9 @@ pub extern "C" fn js_object_get_field_ic_miss(
     cache_slot: *mut PicCacheSlot,
 ) -> f64 {
     use crate::hot_diag::IcMissReason as R;
+    if crate::hot_diag::receiver_repr_on() {
+        crate::hot_diag::receiver_repr_note_decoded_pointer(obj as usize);
+    }
     let diag = crate::hot_diag::ic_on();
     // SSO receiver — never cacheable. Route through the SSO-aware
     // `js_object_get_field_by_name` which handles `.length` inline

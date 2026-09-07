@@ -1022,6 +1022,9 @@ fn throw_object_to_string_not_function() -> ! {
 
 #[inline]
 unsafe fn gc_pointer_and_type_from_value(value: f64) -> Option<(*const u8, u8)> {
+    if crate::hot_diag::receiver_repr_on() {
+        crate::hot_diag::receiver_repr_note_value(value);
+    }
     let jsval = JSValue::from_bits(value.to_bits());
     let ptr = if jsval.is_pointer() {
         jsval.as_pointer::<u8>()
@@ -2758,6 +2761,65 @@ mod primitive_dataprop_recovery_tests {
         assert_eq!(
             result, 6.0,
             "string.length member-read recovery must return UTF-16 length"
+        );
+    }
+}
+
+#[cfg(test)]
+mod receiver_repr_guard_tests {
+    use super::*;
+
+    /// An unarmed ledger must stop at each funnel's single guard. The
+    /// diagnostic helper increments a test-only entry counter before doing any
+    /// classification, so removing any guard below makes this test fail.
+    #[test]
+    fn receiver_repr_unarmed_funnels_never_enter_classification() {
+        crate::hot_diag::receiver_repr_test_reset();
+        crate::hot_diag::receiver_repr_test_arm(false);
+
+        unsafe {
+            assert!(gc_pointer_and_type_from_value(1.25).is_none());
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let object = scope.root_nanbox_f64(1.25);
+            assert!(primitive_methods::dispatch_primitive(
+                &scope,
+                &object,
+                &[],
+                1.25,
+                "receiver_repr_miss",
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+            )
+            .is_none());
+        }
+        assert_eq!(
+            crate::object::prototype_chain::object_static_prototype(1),
+            None
+        );
+        assert_eq!(
+            crate::object::field_get_set::get_field_by_name_object_tail(
+                std::ptr::null(),
+                std::ptr::null(),
+            )
+            .bits(),
+            crate::value::TAG_UNDEFINED,
+        );
+        assert_eq!(
+            crate::object::field_get_set::js_object_get_field_ic_miss(
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null_mut(),
+            )
+            .to_bits(),
+            crate::value::TAG_UNDEFINED,
+        );
+
+        assert_eq!(
+            crate::hot_diag::receiver_repr_test_classification_entries(),
+            0,
+            "an unarmed funnel entered receiver-representation classification"
         );
     }
 }

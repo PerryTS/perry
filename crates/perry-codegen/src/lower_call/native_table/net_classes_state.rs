@@ -8,7 +8,7 @@ pub(super) const NET_CLASSES_STATE_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_net_block_list_new",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "net",
@@ -17,7 +17,7 @@ pub(super) const NET_CLASSES_STATE_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_net_socket_address_new",
         args: &[NA_F64],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "net",
@@ -53,7 +53,7 @@ pub(super) const NET_CLASSES_STATE_ROWS: &[NativeModSig] = &[
         class_filter: Some("Socket"),
         runtime: "js_net_socket_set_type_of_service",
         args: &[NA_F64],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "net",
@@ -116,7 +116,7 @@ pub(super) const NET_CLASSES_STATE_ROWS: &[NativeModSig] = &[
         class_filter: Some("BlockList"),
         runtime: "js_net_block_list_rules",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "net",

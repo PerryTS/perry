@@ -43,3 +43,9 @@ pub mod run;
 pub mod state;
 pub mod style;
 pub mod tree;
+
+pub(crate) fn is_known_handle(handle: i64) -> bool {
+    tree::contains_handle(handle)
+        || state::contains_handle(handle)
+        || hooks::contains_handle(handle)
+}

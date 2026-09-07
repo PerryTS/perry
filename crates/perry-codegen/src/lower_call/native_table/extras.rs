@@ -317,7 +317,7 @@ pub(super) const EXTRAS_ROWS: &[NativeModSig] = &[
         class_filter: Some("Wallet"),
         runtime: "js_ethers_wallet_create_random",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_JS_VALUE,
     },
     // ========== #2875 DisposableStack / AsyncDisposableStack ==========
     // `new DisposableStack()` / `new AsyncDisposableStack()` are dispatched
