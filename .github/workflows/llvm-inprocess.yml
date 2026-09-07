@@ -126,7 +126,7 @@ jobs:
           cargo build --profile perry-dev -p perry -p perry-runtime-static \
             -p perry-stdlib-static --features perry/llvm-inprocess
 
-      - name: Unit gates (528 incl. corpus construction + RS4GC pin)
+      - name: Unit gates (including corpus construction + RS4GC pin)
         run: |
           set -euo pipefail
           out=$(cargo test --profile perry-dev -p perry-codegen \
@@ -136,7 +136,9 @@ jobs:
           grep -q "dialect::tests::corpus_spike ... ok" <<<"$out"
           grep -q "dialect::tests::corpus_batch_kernel ... ok" <<<"$out"
           grep -q "dialect::tests::corpus_exception_handling ... ok" <<<"$out"
-          grep -q "inprocess::tests::rs4gc_schedules_in_process ... ok" <<<"$out"
+          # The implementation may move between inprocess submodules; the
+          # unique test name is the stable contract that proves this pin ran.
+          grep -Eq '^test .*::rs4gc_schedules_in_process \.\.\. ok$' <<<"$out"
 
 
       # The tracked `.ll` corpora above are a SNAPSHOT of what the compiler
