@@ -24,7 +24,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_ext_net_socket_connect",
         args: &[NA_F64, NA_F64, NA_F64],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     // Factory alias: `net.connect(...)` is the spec'd alias for
     // `net.createConnection(...)`. Pre-issue-#422 only the
@@ -39,7 +39,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_ext_net_socket_connect",
         args: &[NA_F64, NA_F64, NA_F64],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     // `net.createServer` and callable `net.Server` are normally rewritten to
     // `Expr::NetCreateServer` so the one-arg listener shorthand is preserved.
@@ -52,7 +52,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_ext_net_create_server",
         args: &[NA_PTR, NA_PTR],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "net",
@@ -61,7 +61,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_ext_net_create_server",
         args: &[NA_PTR, NA_PTR],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     // Constructor: `new net.Socket()` allocates an unconnected socket
     // handle whose TCP connection is deferred until `sock.connect(port,
@@ -78,7 +78,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_net_socket_alloc",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "net",
@@ -236,7 +236,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: Some("Socket"),
         runtime: "js_net_socket_noop_self",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "net",
@@ -245,7 +245,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: Some("Socket"),
         runtime: "js_net_socket_noop_self",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "net",
@@ -256,7 +256,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         // callback is passed through but ignored. Returns the socket handle.
         runtime: "js_net_socket_set_timeout",
         args: &[NA_F64, NA_PTR],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "net",
@@ -266,7 +266,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         // #4973: real setEncoding — switches 'data' delivery to strings.
         runtime: "js_net_socket_set_encoding",
         args: &[NA_STR],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "net",
@@ -275,7 +275,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: Some("Socket"),
         runtime: "js_net_socket_noop_self",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "net",
@@ -284,7 +284,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: Some("Socket"),
         runtime: "js_net_socket_noop_self",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "net",
@@ -293,7 +293,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: Some("Socket"),
         runtime: "js_net_socket_ref",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "net",
@@ -302,7 +302,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: Some("Socket"),
         runtime: "js_net_socket_unref",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "net",
@@ -311,7 +311,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: Some("Socket"),
         runtime: "js_net_socket_noop_self",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "net",
@@ -320,7 +320,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: Some("Socket"),
         runtime: "js_net_socket_noop_self",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "net",
@@ -329,7 +329,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: Some("Socket"),
         runtime: "js_net_socket_noop_self",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     // Issue #2131 — `socket.address()` returns the local bind address
     // (`{ address, family, port }`). Captured at connect/accept time and
@@ -504,7 +504,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         // listeners on sockets owned by perry-ext-net.
         runtime: "js_ext_net_socket_once",
         args: &[NA_STR, NA_PTR],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "net",
@@ -522,7 +522,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: Some("Socket"),
         runtime: "js_net_socket_remove_listener",
         args: &[NA_STR, NA_PTR],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "net",
@@ -531,7 +531,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: Some("Socket"),
         runtime: "js_net_socket_remove_listener",
         args: &[NA_STR, NA_PTR],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "net",
@@ -540,7 +540,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: Some("Socket"),
         runtime: "js_net_socket_remove_all_listeners",
         args: &[NA_STR],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "net",
@@ -575,7 +575,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: Some("Socket"),
         runtime: "js_net_socket_listeners",
         args: &[NA_STR],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "net",
@@ -584,7 +584,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: Some("Socket"),
         runtime: "js_net_socket_raw_listeners",
         args: &[NA_STR],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     // Issue #2131 — `socket.resetAndDestroy()` is the "send RST then
     // destroy" variant; we alias to `destroy()` (FIN-then-close) for
@@ -597,7 +597,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: Some("Socket"),
         runtime: "js_net_socket_reset_and_destroy",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     // upgradeToTLS returns a Promise (handle pointer) — await it to wait
     // for the TLS handshake before sending anything over the upgraded stream.
@@ -629,7 +629,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_ext_tls_connect",
         args: &[NA_F64, NA_F64, NA_F64, NA_F64],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     // ========== net.Server (issue #1123 followup) ==========
     // Server-side TCP via `net.createServer(...).listen(port, cb)`. The
@@ -701,7 +701,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: Some("Server"),
         runtime: "js_net_server_noop_self",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "net",
@@ -710,7 +710,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: Some("Server"),
         runtime: "js_net_server_noop_self",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "net",
@@ -719,7 +719,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: Some("Server"),
         runtime: "js_net_server_noop_self",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     // Issue #2131 — `net.Server` EventEmitter surface beyond
     // `on`/`addListener`. Same shape as the Socket entries above; the
@@ -732,7 +732,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: Some("Server"),
         runtime: "js_net_server_once",
         args: &[NA_STR, NA_PTR],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "net",
@@ -741,7 +741,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: Some("Server"),
         runtime: "js_net_server_remove_listener",
         args: &[NA_STR, NA_PTR],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "net",
@@ -750,7 +750,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: Some("Server"),
         runtime: "js_net_server_remove_listener",
         args: &[NA_STR, NA_PTR],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "net",
@@ -759,7 +759,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: Some("Server"),
         runtime: "js_net_server_remove_all_listeners",
         args: &[NA_STR],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "net",
@@ -789,7 +789,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: Some("Server"),
         runtime: "js_net_server_listeners",
         args: &[NA_STR],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "net",
@@ -798,7 +798,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: Some("Server"),
         runtime: "js_net_server_raw_listeners",
         args: &[NA_STR],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     // ========== node:stream — Readable.from / Duplex.from (#631/#1532) ==========
     // The other stream constructors (`new Readable(opts)` etc.) are wired
@@ -1514,7 +1514,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_node_stream_method_event_names",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "stream",
@@ -1532,7 +1532,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_node_stream_method_listeners",
         args: &[NA_F64],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "stream",
@@ -1541,7 +1541,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_node_stream_method_raw_listeners",
         args: &[NA_F64],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     // ========== Events ==========
     NativeModSig {
@@ -1551,7 +1551,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_event_emitter_new",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "events",
@@ -1572,7 +1572,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         // The listener also stays NA_JSV so runtime validation can throw
         // ERR_INVALID_ARG_TYPE for non-functions (#3072).
         args: &[NA_JSV, NA_JSV],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "events",
@@ -1591,7 +1591,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         runtime: "js_event_emitter_remove_listener",
         // NA_JSV (#3072): validate the listener is callable before removal.
         args: &[NA_JSV, NA_JSV],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "events",
@@ -1600,7 +1600,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_event_emitter_remove_all_listeners",
         args: &[NA_VARARGS],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     // EventEmitter additions (#850) — `once` / `addListener` (alias for
     // `on`) / `prependListener` / `prependOnceListener` / `listenerCount`
@@ -1615,7 +1615,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         runtime: "js_event_emitter_once",
         // NA_JSV (#3072): validate the listener is callable.
         args: &[NA_JSV, NA_JSV],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "events",
@@ -1625,7 +1625,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         runtime: "js_event_emitter_on",
         // NA_JSV (#3072): validate the listener is callable.
         args: &[NA_JSV, NA_JSV],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "events",
@@ -1635,7 +1635,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         runtime: "js_event_emitter_prepend_listener",
         // NA_JSV (#3072): validate the listener is callable.
         args: &[NA_JSV, NA_JSV],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "events",
@@ -1645,7 +1645,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         runtime: "js_event_emitter_prepend_once_listener",
         // NA_JSV (#3072): validate the listener is callable.
         args: &[NA_JSV, NA_JSV],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "events",
@@ -1655,7 +1655,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         runtime: "js_event_emitter_remove_listener",
         // NA_JSV (#3072): validate the listener is callable.
         args: &[NA_JSV, NA_JSV],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "events",
@@ -1673,7 +1673,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_event_emitter_listeners",
         args: &[NA_JSV],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "events",
@@ -1682,7 +1682,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_event_emitter_raw_listeners",
         args: &[NA_JSV],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "events",
@@ -1691,7 +1691,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_event_emitter_event_names",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "events",
@@ -1700,7 +1700,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_event_emitter_set_max_listeners",
         args: &[NA_F64],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "events",
@@ -1767,7 +1767,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_events_once",
         args: &[NA_F64, NA_STR, NA_F64],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "events",
@@ -1776,7 +1776,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_events_on",
         args: &[NA_F64, NA_STR, NA_F64],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "events",
@@ -1785,7 +1785,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_events_add_abort_listener",
         args: &[NA_F64, NA_F64],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "events",
@@ -1794,7 +1794,7 @@ pub(super) const NET_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_events_get_event_listeners",
         args: &[NA_F64, NA_STR],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "events",

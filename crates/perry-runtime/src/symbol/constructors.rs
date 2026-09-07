@@ -107,6 +107,11 @@ pub unsafe extern "C" fn js_symbol_for(key_f64: f64) -> f64 {
         id: next_id(),
     });
     let sym_ptr = Box::into_raw(boxed);
+    if crate::hot_diag::receiver_repr_on() {
+        crate::hot_diag::receiver_repr_note_constructed(
+            crate::hot_diag::ReceiverReprFamily::SymbolGlobal,
+        );
+    }
     // Fully initialize the side tables BEFORE publishing the pointer in
     // the registry. Otherwise a concurrent `Symbol.for("same_key")` on
     // another thread can see the pointer via the registry but get None

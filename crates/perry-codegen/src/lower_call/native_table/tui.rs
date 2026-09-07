@@ -13,7 +13,7 @@ pub(super) const TUI_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_perry_tui_text",
         args: &[NA_STR],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "perry/tui",
@@ -22,7 +22,7 @@ pub(super) const TUI_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_perry_tui_box",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "perry/tui",
@@ -50,7 +50,7 @@ pub(super) const TUI_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_perry_tui_state_alloc",
         args: &[NA_F64],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     // state.get() — receiver call, dispatches against class "State"
     // registered by destructuring.rs.
@@ -241,7 +241,7 @@ pub(super) const TUI_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_perry_tui_text_styled",
         args: &[NA_STR, NA_STR, NA_STR, NA_F64],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     // perry/tui Phase 4 — Spacer + ProgressBar widgets.
     NativeModSig {
@@ -251,7 +251,7 @@ pub(super) const TUI_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_perry_tui_spacer",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "perry/tui",
@@ -260,7 +260,7 @@ pub(super) const TUI_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_perry_tui_progress_bar",
         args: &[NA_F64, NA_F64, NA_F64],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     // perry/tui Phase 4.5 — Spinner / Input / List / Select / TextArea.
     NativeModSig {
@@ -270,7 +270,7 @@ pub(super) const TUI_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_perry_tui_spinner",
         args: &[NA_F64],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "perry/tui",
@@ -279,7 +279,7 @@ pub(super) const TUI_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_perry_tui_input",
         args: &[NA_STR],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "perry/tui",
@@ -288,7 +288,7 @@ pub(super) const TUI_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_perry_tui_list",
         args: &[NA_PTR, NA_F64],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "perry/tui",
@@ -297,7 +297,7 @@ pub(super) const TUI_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_perry_tui_select",
         args: &[NA_PTR, NA_F64],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "perry/tui",
@@ -306,7 +306,7 @@ pub(super) const TUI_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_perry_tui_text_area",
         args: &[NA_STR],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     // perry/tui Phase 4.6 — Table + Tabs widgets. Direct-FFI shapes
     // (positional args); object-literal `Table({headers, rows, selected})`
@@ -319,7 +319,7 @@ pub(super) const TUI_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_perry_tui_table",
         args: &[NA_PTR, NA_PTR, NA_F64],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "perry/tui",
@@ -328,7 +328,7 @@ pub(super) const TUI_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_perry_tui_tabs",
         args: &[NA_PTR, NA_F64, NA_PTR],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     // perry/tui Phase 4.7 — Input(value, cursor). Direct-call shape;
     // codegen also dispatches to this from the 2-arg form so the
@@ -340,7 +340,7 @@ pub(super) const TUI_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_perry_tui_input_at",
         args: &[NA_STR, NA_F64],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     // perry/tui Phase 4.7 — AnimatedSpinner. Bare `AnimatedSpinner()`
     // hits this row with both args defaulted; object-literal opts
@@ -352,7 +352,7 @@ pub(super) const TUI_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_perry_tui_animated_spinner",
         args: &[NA_F64, NA_PTR],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     // ========== perry/tui Phase 1 — ink-API ergonomics hooks (#679) ==========
     // useState(initial) — call-site-indexed state cell. Returns the
@@ -391,7 +391,7 @@ pub(super) const TUI_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_perry_tui_use_state_tuple",
         args: &[NA_F64],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     // useEffect(fn, deps?). Runs fn() on first call or when deps change.
     // fn is an unboxed closure pointer (NA_PTR); deps is an unboxed
@@ -428,7 +428,7 @@ pub(super) const TUI_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_perry_tui_use_ref",
         args: &[NA_F64],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "perry/tui",
@@ -456,7 +456,7 @@ pub(super) const TUI_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_perry_tui_use_app",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     // app.exit() / app.waitUntilExit() — class_filter routes only when
     // the receiver was registered as a "TuiApp" instance (see
@@ -487,7 +487,7 @@ pub(super) const TUI_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_perry_tui_use_stdout",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     // stdout.write(s) / stdout.columns() / stdout.rows().
     NativeModSig {
@@ -575,7 +575,7 @@ pub(super) const TUI_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_perry_tui_use_focus_manager",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "perry/tui",
@@ -615,7 +615,7 @@ pub(super) const TUI_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_readline_create_interface",
         args: &[NA_F64],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "readline",
@@ -699,7 +699,7 @@ pub(super) const TUI_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_readline_iterator",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "readline",
@@ -708,7 +708,7 @@ pub(super) const TUI_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_readline_pause",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "readline",
@@ -717,7 +717,7 @@ pub(super) const TUI_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_readline_resume",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "readline",
@@ -762,7 +762,7 @@ pub(super) const TUI_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_readline_get_cursor_pos",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "readline",

@@ -726,6 +726,11 @@ fn next_zlib_id() -> i64 {
         panic!("zlib stream handle id range exhausted");
     }
     *g += 1;
+    if perry_runtime::hot_diag::receiver_repr_on() {
+        perry_runtime::hot_diag::receiver_repr_note_constructed(
+            perry_runtime::hot_diag::ReceiverReprFamily::Zlib,
+        );
+    }
     id
 }
 

@@ -16,7 +16,7 @@ pub(super) const WS_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_ws_server_new",
         args: &[NA_F64],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "ws",
@@ -25,7 +25,7 @@ pub(super) const WS_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_ws_connect",
         args: &[NA_STR],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "ws",
@@ -137,7 +137,7 @@ pub(super) const WS_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: Some("Client"),
         runtime: "js_ws_on_client_i64",
         args: &[NA_STR, NA_PTR],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "ws",
@@ -146,7 +146,7 @@ pub(super) const WS_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: Some("Client"),
         runtime: "js_ws_on_client_i64",
         args: &[NA_STR, NA_PTR],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     // Server-side helpers — the user receives a client handle as a plain
     // f64 number from `wss.on('connection', (handle) => …)`, then passes

@@ -479,6 +479,11 @@ pub extern "C" fn js_proxy_new(target: f64, handler: f64) -> f64 {
             PROXY_FULL_TRACE_ACTIVE.with(|active| active.set(true));
         }
         let encoded = encode_proxy_id(id) as u64;
+        if crate::hot_diag::receiver_repr_on() {
+            crate::hot_diag::receiver_repr_note_constructed(
+                crate::hot_diag::ReceiverReprFamily::Proxy,
+            );
+        }
         f64::from_bits(POINTER_TAG | (encoded & POINTER_MASK))
     })
 }

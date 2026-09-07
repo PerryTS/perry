@@ -616,7 +616,7 @@ pub(crate) const NODE_CORE_UTIL_BUFFER_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_buffer_copy_bytes_from",
         args: &[NA_F64, NA_F64, NA_F64],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     // #2901: TC39 `Uint8Array.fromBase64(str, opts)` / `fromHex(str)`.
     // Routed via the buffer module (Uint8Array ≡ Buffer in Perry); the
@@ -628,7 +628,7 @@ pub(crate) const NODE_CORE_UTIL_BUFFER_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_u8_from_base64",
         args: &[NA_STR, NA_F64],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "buffer",
@@ -637,7 +637,7 @@ pub(crate) const NODE_CORE_UTIL_BUFFER_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_u8_from_hex",
         args: &[NA_STR],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "buffer",
@@ -689,7 +689,7 @@ pub(crate) const NODE_CORE_UTIL_BUFFER_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_buffer_transcode",
         args: &[NA_F64, NA_F64, NA_F64],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     // Issue #1211: `import { resolveObjectURL } from "node:buffer"`.
     NativeModSig {

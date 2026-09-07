@@ -15,7 +15,7 @@ pub(super) const TLS_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_tls_create_server",
         args: &[NA_JSV, NA_JSV],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "tls",
@@ -24,7 +24,7 @@ pub(super) const TLS_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_tls_create_server",
         args: &[NA_JSV, NA_JSV],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "tls",
@@ -33,7 +33,7 @@ pub(super) const TLS_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_tls_tlssocket_constructor",
         args: &[NA_JSV, NA_JSV],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "tls",
@@ -42,7 +42,7 @@ pub(super) const TLS_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: Some("Server"),
         runtime: "js_tls_server_listen",
         args: &[NA_F64, NA_JSV, NA_JSV],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "tls",
@@ -51,7 +51,7 @@ pub(super) const TLS_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: Some("Server"),
         runtime: "js_tls_server_close",
         args: &[NA_JSV],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "tls",
@@ -69,7 +69,7 @@ pub(super) const TLS_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: Some("Server"),
         runtime: "js_tls_server_on",
         args: &[NA_STR, NA_JSV],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "tls",
@@ -78,7 +78,7 @@ pub(super) const TLS_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: Some("Server"),
         runtime: "js_tls_server_on",
         args: &[NA_STR, NA_JSV],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "tls",
@@ -87,7 +87,7 @@ pub(super) const TLS_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: Some("Server"),
         runtime: "js_tls_server_once",
         args: &[NA_STR, NA_JSV],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "tls",
@@ -96,7 +96,7 @@ pub(super) const TLS_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: Some("Server"),
         runtime: "js_tls_server_remove_listener",
         args: &[NA_STR, NA_JSV],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "tls",
@@ -105,7 +105,7 @@ pub(super) const TLS_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: Some("Server"),
         runtime: "js_tls_server_remove_listener",
         args: &[NA_STR, NA_JSV],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "tls",
@@ -114,7 +114,7 @@ pub(super) const TLS_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: Some("Server"),
         runtime: "js_tls_server_remove_all_listeners",
         args: &[NA_STR],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "tls",

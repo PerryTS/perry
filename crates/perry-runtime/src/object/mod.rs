@@ -108,8 +108,8 @@ pub(crate) use live_slots::set_object_live_slot_count;
 pub use live_slots::{
     js_object_live_slot_count, object_live_slot_count, perry_object_header_abi_revision,
 };
+pub(crate) use null_stub::{is_null_stub_address, NullObjectBytes, NULL_OBJECT_BYTES};
 pub use null_stub::{js_unresolved_default_call, js_unresolved_namespace_stub};
-pub(crate) use null_stub::{NullObjectBytes, NULL_OBJECT_BYTES};
 #[cfg(test)]
 pub(crate) use side_table_roots::test_transition_cache_insert;
 pub(crate) use side_table_roots::{

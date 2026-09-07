@@ -49,6 +49,16 @@ fn external_buffers() -> &'static Mutex<HashSet<usize>> {
     EXTERNAL_BUFFER_REGISTRY.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
+/// Diagnostic-only exact membership check for the legacy external-buffer ABI.
+#[inline]
+pub fn is_external_buffer(addr: usize) -> bool {
+    EXTERNAL_BUFFERS_NONEMPTY.load(std::sync::atomic::Ordering::Acquire)
+        && external_buffers()
+            .lock()
+            .map(|r| r.contains(&addr))
+            .unwrap_or(false)
+}
+
 fn external_uint8arrays() -> &'static Mutex<HashSet<usize>> {
     EXTERNAL_UINT8ARRAY_REGISTRY.get_or_init(|| Mutex::new(HashSet::new()))
 }
@@ -602,6 +612,11 @@ pub extern "C" fn js_buffer_register_external(addr: usize) {
     EXTERNAL_BUFFERS_NONEMPTY.store(true, std::sync::atomic::Ordering::Release);
     if let Ok(mut r) = external_buffers().lock() {
         r.insert(addr);
+    }
+    if crate::hot_diag::receiver_repr_on() {
+        crate::hot_diag::receiver_repr_note_constructed(
+            crate::hot_diag::ReceiverReprFamily::ExternalBuffer,
+        );
     }
 }
 

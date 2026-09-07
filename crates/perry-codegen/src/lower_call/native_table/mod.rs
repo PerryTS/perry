@@ -80,8 +80,17 @@ pub(super) enum NativeArgKind {
 /// What the runtime function returns.
 #[derive(Copy, Clone, Debug)]
 pub(super) enum NativeRetKind {
-    /// Returns i64 handle → NaN-box as POINTER.
-    Ptr,
+    /// Returns a non-null Perry allocation with a readable `GcHeader`.
+    GcPtr,
+    /// Returns a Perry allocation, with zero carrying the provider's existing
+    /// null/failure policy.
+    NullableGcPtr,
+    /// Returns an integer registry id or provider sentinel.
+    HandleId,
+    /// Returns a headerless native address (for example an async-hook box).
+    ForeignPtr,
+    /// Returns raw NaN-boxed JS value bits in an integer ABI slot.
+    JsValue,
     /// Returns i64 promise handle → NaN-box as POINTER, but record the async
     /// boundary separately from generic native handles.
     Promise,
@@ -136,7 +145,11 @@ pub(super) const NA_STR: NativeArgKind = NativeArgKind::StrPtr;
 pub(super) const NA_PTR: NativeArgKind = NativeArgKind::PtrI64;
 pub(super) const NA_JSV: NativeArgKind = NativeArgKind::JsvalI64;
 pub(super) const NA_VARARGS: NativeArgKind = NativeArgKind::VarArgsAsArray;
-pub(super) const NR_PTR: NativeRetKind = NativeRetKind::Ptr;
+pub(super) const NR_GCPTR: NativeRetKind = NativeRetKind::GcPtr;
+pub(super) const NR_NULLABLE_GCPTR: NativeRetKind = NativeRetKind::NullableGcPtr;
+pub(super) const NR_HANDLE_ID: NativeRetKind = NativeRetKind::HandleId;
+pub(super) const NR_FOREIGN_PTR: NativeRetKind = NativeRetKind::ForeignPtr;
+pub(super) const NR_JS_VALUE: NativeRetKind = NativeRetKind::JsValue;
 pub(super) const NR_PROMISE: NativeRetKind = NativeRetKind::Promise;
 pub(super) const NR_STR: NativeRetKind = NativeRetKind::Str;
 pub(super) const NR_OBJ_FROM_JSON_STR: NativeRetKind = NativeRetKind::ObjFromJsonStr;
@@ -255,7 +268,11 @@ fn arg_kind_tag(a: &NativeArgKind) -> &'static str {
 
 fn ret_kind_tag(r: &NativeRetKind) -> &'static str {
     match r {
-        NativeRetKind::Ptr => "NR_PTR",
+        NativeRetKind::GcPtr => "NR_GCPTR",
+        NativeRetKind::NullableGcPtr => "NR_NULLABLE_GCPTR",
+        NativeRetKind::HandleId => "NR_HANDLE_ID",
+        NativeRetKind::ForeignPtr => "NR_FOREIGN_PTR",
+        NativeRetKind::JsValue => "NR_JS_VALUE",
         NativeRetKind::Promise => "NR_PROMISE",
         NativeRetKind::Str => "NR_STR",
         NativeRetKind::ObjFromJsonStr => "NR_OBJ_FROM_JSON_STR",

@@ -43,7 +43,7 @@ pub(crate) const BUN_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_bun_transpiler_new",
         args: &[NA_F64],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "bun",
@@ -52,7 +52,7 @@ pub(crate) const BUN_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_bun_tcp_listen",
         args: &[NA_F64],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "bun",
@@ -63,7 +63,7 @@ pub(crate) const BUN_ROWS: &[NativeModSig] = &[
         // handle, reusing the same event-loop pump as node:http.
         runtime: "js_bun_serve",
         args: &[NA_F64],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "bun",
@@ -72,7 +72,7 @@ pub(crate) const BUN_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_bun_build",
         args: &[NA_F64],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "bun",

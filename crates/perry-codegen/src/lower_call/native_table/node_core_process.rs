@@ -382,7 +382,7 @@ pub(super) const NODE_CORE_PROCESS_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_process_listeners",
         args: &[NA_JSV],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "process",
@@ -391,7 +391,7 @@ pub(super) const NODE_CORE_PROCESS_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_process_raw_listeners",
         args: &[NA_JSV],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "process",
@@ -400,7 +400,7 @@ pub(super) const NODE_CORE_PROCESS_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_process_event_names",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "process",

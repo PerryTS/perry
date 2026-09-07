@@ -1,0 +1,34 @@
+name: Native Result Ledger
+
+on:
+  pull_request:
+    paths:
+      - "crates/perry-codegen/src/lower_call/native_table/**"
+      - "scripts/native_result_ledger.py"
+      - "scripts/native_result_ledger.tsv"
+      - ".github/workflows/native-result-ledger.yml"
+  push:
+    branches: [main]
+    paths:
+      - "crates/perry-codegen/src/lower_call/native_table/**"
+      - "scripts/native_result_ledger.py"
+      - "scripts/native_result_ledger.tsv"
+      - ".github/workflows/native-result-ledger.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-result-ledger-${{ github.event_name }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prove and run the typed-result inventory
+        run: |
+          python3 scripts/native_result_ledger.py --self-test
+          python3 scripts/native_result_ledger.py

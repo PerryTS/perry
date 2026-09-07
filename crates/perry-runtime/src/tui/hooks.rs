@@ -71,6 +71,10 @@ enum HookSlot {
 }
 
 static SLOTS: Mutex<Vec<HookSlot>> = Mutex::new(Vec::new());
+
+pub(crate) fn contains_handle(handle: i64) -> bool {
+    handle > 0 && (handle as usize) <= crate::gc::lock_gc_root_registry(&SLOTS).len()
+}
 /// Per-frame hook index, reset by the run loop before each component call.
 static NEXT_HOOK_IDX: AtomicUsize = AtomicUsize::new(0);
 
@@ -547,6 +551,9 @@ pub extern "C" fn js_perry_tui_use_ref(initial: f64) -> i64 {
             value_bits: initial.to_bits(),
         };
     }
+    if crate::hot_diag::receiver_repr_on() {
+        crate::hot_diag::receiver_repr_note_constructed(crate::hot_diag::ReceiverReprFamily::Tui);
+    }
     (idx as i64) + 1
 }
 
@@ -593,6 +600,9 @@ const APP_HANDLE: i64 = 1;
 /// class_filter: Some("App") rows.
 #[no_mangle]
 pub extern "C" fn js_perry_tui_use_app() -> i64 {
+    if crate::hot_diag::receiver_repr_on() {
+        crate::hot_diag::receiver_repr_note_constructed(crate::hot_diag::ReceiverReprFamily::Tui);
+    }
     APP_HANDLE
 }
 
@@ -630,6 +640,9 @@ const STDOUT_HANDLE: i64 = 2;
 /// Some("Stdout") rows.
 #[no_mangle]
 pub extern "C" fn js_perry_tui_use_stdout() -> i64 {
+    if crate::hot_diag::receiver_repr_on() {
+        crate::hot_diag::receiver_repr_note_constructed(crate::hot_diag::ReceiverReprFamily::Tui);
+    }
     STDOUT_HANDLE
 }
 
@@ -813,6 +826,9 @@ const FOCUS_MANAGER_HANDLE: i64 = 3;
 
 #[no_mangle]
 pub extern "C" fn js_perry_tui_use_focus_manager() -> i64 {
+    if crate::hot_diag::receiver_repr_on() {
+        crate::hot_diag::receiver_repr_note_constructed(crate::hot_diag::ReceiverReprFamily::Tui);
+    }
     FOCUS_MANAGER_HANDLE
 }
 

@@ -25,7 +25,7 @@ pub(super) const UNDICI_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_undici_proxy_agent_new",
         args: &[NA_STR],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "undici",
@@ -34,7 +34,7 @@ pub(super) const UNDICI_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_undici_agent_new",
         args: &[NA_STR],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     // ── module-level functions ─────────────────────────────────────
     NativeModSig {
@@ -53,7 +53,7 @@ pub(super) const UNDICI_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_undici_get_global_dispatcher",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     // `request(url, options?)` — rejects with a "not implemented, use
     // fetch" error; the row exists so users get that clear message at

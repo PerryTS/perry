@@ -101,7 +101,14 @@ pub extern "C" fn js_perry_tui_state_alloc(initial: f64) -> i64 {
     let mut s = crate::gc::lock_gc_root_registry(&SLOTS);
     let h = s.len() as i64;
     s.push(initial.to_bits());
+    if crate::hot_diag::receiver_repr_on() {
+        crate::hot_diag::receiver_repr_note_constructed(crate::hot_diag::ReceiverReprFamily::Tui);
+    }
     h
+}
+
+pub(crate) fn contains_handle(handle: i64) -> bool {
+    handle >= 0 && (handle as usize) < crate::gc::lock_gc_root_registry(&SLOTS).len()
 }
 
 /// Read a state slot. Returns the stored NaN-boxed value. Out-of-range
