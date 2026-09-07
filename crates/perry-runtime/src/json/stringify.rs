@@ -1501,6 +1501,10 @@ pub(crate) unsafe fn stringify_array_depth(ptr: *const u8, buf: &mut String, dep
         STRINGIFY_STACK.with(|s| s.borrow_mut().pop());
         return;
     }
+    if super::stringify_nested_records::try_emit(arr, buf, depth) {
+        STRINGIFY_STACK.with(|s| s.borrow_mut().pop());
+        return;
+    }
     // Root the array and re-derive the element base per access: a nested
     // `toJSON` / getter / any allocation inside the recursive serialization
     // below can trigger a GC that sweeps or moves this array while a hoisted

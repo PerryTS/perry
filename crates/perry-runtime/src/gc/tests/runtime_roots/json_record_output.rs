@@ -2,6 +2,56 @@ use super::*;
 
 thread_local! { static GETTER_CALLS: Cell<u32> = const { Cell::new(0) }; }
 
+#[test]
+fn json_nested_records_fallback_runs_getter_once_and_survives_actual_movement() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _evacuation = ForcedEvacuationTestGuard::on();
+    let _protection =
+        crate::arena::ProtectionModeGuard::set(crate::arena::FromSpaceProtection::PoisonOnly);
+    register_runtime_handle_root_scanner_for_tests();
+    gc_register_mutable_root_scanner(json_parse_mutable_root_scanner);
+    for index in [0, 1, 2] {
+        let source = r#"[{"id":0,"nested":{"value":"heap value zero"}},{"id":1,"nested":{"value":"heap value one"}},{"id":2,"nested":{"value":"heap value two"}}]"#;
+        let text = crate::js_string_from_bytes(source.as_ptr(), source.len() as u32);
+        let value = unsafe { crate::json::test_json_parse_direct(text) };
+        let scope = RuntimeHandleScope::new();
+        let array = scope.root_nanbox_u64(value.bits());
+        let parent = crate::array::js_array_get(value.as_pointer(), index);
+        let child = crate::object::js_object_get_field(parent.as_pointer(), 1);
+        let child = scope.root_nanbox_u64(child.bits());
+        let getter = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
+            array_getter_collects as *const u8,
+            0,
+        ));
+        let descriptor = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
+        let get_key = crate::js_string_from_bytes(b"get".as_ptr(), 3);
+        crate::object::js_object_set_field_by_name(
+            descriptor.get_raw_mut_ptr(),
+            get_key,
+            f64::from_bits(ptr_bits(getter.get_raw_mut_ptr::<u8>() as usize)),
+        );
+        let key = crate::js_string_from_bytes(b"value".as_ptr(), 5);
+        crate::object::js_object_define_property(
+            child.get_nanbox_f64(),
+            f64::from_bits(string_bits(key as usize)),
+            f64::from_bits(ptr_bits(descriptor.get_raw_mut_ptr::<u8>() as usize)),
+        );
+        GETTER_CALLS.with(|c| c.set(0));
+        let before_ptr = array.get_nanbox_u64();
+        let before = gc_collection_count();
+        let output = unsafe { crate::json::js_json_stringify(array.get_nanbox_f64(), 2) };
+        assert_eq!(GETTER_CALLS.with(|c| c.get()), 1);
+        assert!(gc_collection_count() > before);
+        assert_ne!(array.get_nanbox_u64(), before_ptr, "the getter must move its containing array");
+        let replaced = ["\"heap value zero\"", "\"heap value one\"", "\"heap value two\""][index as usize];
+        let expected = source.replace(replaced, "17");
+        assert_eq!(unsafe {
+            std::slice::from_raw_parts(crate::string::string_data(output), (*output).byte_len as usize)
+        }, expected.as_bytes());
+    }
+}
+
 extern "C" fn array_getter_collects(_closure: *const crate::ClosureHeader) -> f64 {
     GETTER_CALLS.with(|c| c.set(c.get() + 1));
     crate::gc::gc_collect_minor();
