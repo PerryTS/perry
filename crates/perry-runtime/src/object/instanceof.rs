@@ -1755,6 +1755,20 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
 
         // For user-defined classes that extend Error: `myErr instanceof Error` should be true.
         if class_id == crate::error::CLASS_ID_ERROR {
+            // #9940: a function-local class declaration gets a fresh class
+            // object on every evaluation, but all evaluations share its
+            // compile-time class id. A constructor factory can therefore
+            // evaluate `class Definition extends Error {}`, then later
+            // evaluate the same declaration with an Object parent. The class
+            // registry is keyed by the shared id and is necessarily
+            // last-wins; the instance's recorded evaluation prototype is the
+            // authoritative chain. Zod's `$constructor` has exactly this
+            // shape, and its later schema classes made an earlier ZodError
+            // fail `instanceof Error` even though getPrototypeOf still showed
+            // `ZodError -> Error -> Object`.
+            if let Some(matches) = recorded_prototype_instanceof_builtin(value, "Error") {
+                return if matches { true_val } else { false_val };
+            }
             let obj_class_id = (*obj_ptr).class_id;
             if extends_builtin_error(obj_class_id) {
                 return true_val;
