@@ -139,7 +139,7 @@ pub(super) unsafe fn emit_piece(piece: Piece, bits: u64, output: *mut u8) -> usi
             plan.write(source, output)
         }
         Piece::Inline { bytes, len } => {
-            std::ptr::copy_nonoverlapping(bytes.as_ptr(), output, len as usize);
+            super::stringify_copy::copy_short(bytes.as_ptr(), output, len as usize);
             len as usize
         }
         Piece::String { bytes, .. } => {
@@ -148,7 +148,7 @@ pub(super) unsafe fn emit_piece(piece: Piece, bits: u64, output: *mut u8) -> usi
                 crate::string::str_bytes_from_jsvalue(f64::from_bits(bits), &mut scratch)
                     .expect("prevalidated string slot");
             output.write(b'"');
-            std::ptr::copy_nonoverlapping(source, output.add(1), bytes as usize);
+            super::stringify_copy::copy_bytes(source, output.add(1), bytes as usize);
             output.add(bytes as usize + 1).write(b'"');
             bytes as usize + 2
         }
