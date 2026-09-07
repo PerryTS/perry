@@ -557,7 +557,7 @@ pub(crate) fn vec_bytes<T>(v: &Vec<T>) -> usize {
     v.capacity() * std::mem::size_of::<T>()
 }
 
-fn side_tables() -> Vec<SideTableRow> {
+pub(super) fn side_tables() -> Vec<SideTableRow> {
     let mut rows: Vec<SideTableRow> = Vec::new();
     rows.extend(crate::builtins::function_registries_census());
     rows.extend(crate::closure::closure_registry_census());
@@ -811,14 +811,15 @@ fn take_census(label: &str, pass1: Option<Vec<usize>>) {
     side_rows.extend(crate::object::shapes::shape_table_liveness_census(
         &c.live_shape_ids,
     ));
-    let side: Vec<serde_json::Value> = side_rows
-        .into_iter()
-        .map(|(n, e, b)| serde_json::json!({"table": n, "entries": e, "bytes": b}))
-        .collect();
-    let side_total: usize = side
-        .iter()
-        .map(|r| r["bytes"].as_u64().unwrap_or(0) as usize)
-        .sum();
+    let side_snapshot = super::regex_census::side_table_document_from(side_rows);
+    let side = side_snapshot["rows"].clone();
+    let side_total = side_snapshot["side_table_bytes"].as_u64().unwrap_or(0) as usize;
+    let regex_side_total = side_snapshot["regex_side_table_bytes"]
+        .as_u64()
+        .unwrap_or(0) as usize;
+    let non_regex_side_total = side_snapshot["non_regex_side_table_bytes"]
+        .as_u64()
+        .unwrap_or(0) as usize;
 
     let live_total: u64 = c.space_live.iter().map(|a| a.bytes).sum();
     let dead_total: u64 = c.space_dead.iter().map(|a| a.bytes).sum();
@@ -857,6 +858,8 @@ fn take_census(label: &str, pass1: Option<Vec<usize>>) {
             "live_bytes": live_total,
             "dead_bytes": dead_total,
             "side_table_bytes": side_total,
+            "regex_side_table_bytes": regex_side_total,
+            "non_regex_side_table_bytes": non_regex_side_total,
             "live_objects": c.space_live.iter().map(|a| a.count).sum::<u64>(),
             "dead_objects": c.space_dead.iter().map(|a| a.count).sum::<u64>(),
             "late_marked_bytes": late_total,
