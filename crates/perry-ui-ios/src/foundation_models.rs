@@ -102,10 +102,9 @@ pub extern "C" fn perry_ios_foundation_model_respond(session: f64, prompt_ptr: i
     };
 
     // The Swift task can outlive every JS reference to the returned promise.
-    // Force malloc-space allocation and pin it until its owner-agent queue
-    // drains the result; this is the same protocol used by spawn/waitAsync.
+    // The cross-thread constructor allocates in non-moving malloc space and
+    // pins the promise until resolve/reject drains on its owner agent.
     let promise = perry_runtime::promise::js_promise_new_cross_thread();
-    unsafe { perry_runtime::thread::pin_promise(promise) };
     perry_runtime::thread::thread_job_begin();
     let context = promise as i64;
     lock_pending().insert(context, perry_runtime::agent::current_agent());
