@@ -1534,14 +1534,18 @@ pub(super) fn run_copied_minor_attempt(
         promoted_sticky.restore();
         collector.sticky.extend(promoted_sticky);
     }
-    if gc_verify_evacuation_enabled() {
+    let old_young_edges = if gc_verify_evacuation_enabled() {
         let phase_start = trace_phase_start(trace);
         let old_young_edge_verifier = verify_old_to_young_edges_covered();
+        let checked_edges = old_young_edge_verifier.checked_old_to_young_edges;
         trace_phase_record(trace, "old_young_edge_verify", phase_start);
         if let Some(trace) = trace.as_mut() {
             trace.old_young_edge_verifier = old_young_edge_verifier;
         }
-    }
+        checked_edges
+    } else {
+        0
+    };
     // #7803: PERRY_GC_NATIVE_SLOT_VERIFY=1 — abort on the cycle that leaves a
     // native slot naming from-space, instead of many cycles later at the
     // pin-latch. Placed after every rewrite pass, before the from-space flip.
@@ -1617,7 +1621,11 @@ pub(super) fn run_copied_minor_attempt(
     if gc_verify_evacuation_enabled() {
         let phase_start = trace_phase_start(trace);
         let valid_ptrs = build_valid_pointer_set();
-        verify_evacuated_no_stale_forwarded_refs(EvacuationVerifier::copying_minor(&valid_ptrs));
+        let context = begin_evacuation_verify_cycle(_trigger_kind, Some(&snapshot));
+        let stats = verify_evacuated_no_stale_forwarded_refs(
+            EvacuationVerifier::copying_minor(&valid_ptrs).with_context(context),
+        );
+        report_evacuation_success(context, stats, old_young_edges);
         trace_phase_record(trace, "evacuation_verify", phase_start);
     }
 
