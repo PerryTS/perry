@@ -155,7 +155,7 @@ impl<K: Copy + Ord> YoungLog<K> {
     /// Rule 2: the log must name every key in `relevant`. `relevant` is the
     /// set the caller re-derived from the authoritative table under
     /// `debug_assertions`; a miss is a writer that publishes without noting.
-    #[cfg(debug_assertions)]
+    #[cfg(any(debug_assertions, test))]
     pub(crate) fn debug_assert_logged(&self, table: &'static str, relevant: &[K])
     where
         K: std::fmt::Debug,
@@ -207,6 +207,44 @@ pub(crate) fn addr_is_minor_relevant(addr: usize) -> bool {
                     (addr - GC_HEADER_SIZE) as *const super::GcHeader,
                 )
         }
+    }
+}
+
+/// Can a minor move or reclaim the object at `addr`?
+///
+/// This is narrower than [`addr_is_minor_relevant`]: `Longlived` objects must
+/// sometimes be traced *through*, but they are never themselves moved or
+/// swept.  Side tables whose entries name known GC leaves (shape property
+/// keys are strings/symbol headers) use this predicate so an immortal leaf
+/// does not pin its entry in a young log forever.
+#[inline]
+pub(crate) fn addr_is_minor_collectible(addr: usize) -> bool {
+    if addr == 0 {
+        return false;
+    }
+    match crate::arena::classify_heap_space(addr) {
+        HeapSpace::NurseryEden
+        | HeapSpace::Survivor0
+        | HeapSpace::Survivor1
+        | HeapSpace::PromotedYoung => true,
+        HeapSpace::Old | HeapSpace::Longlived => false,
+        HeapSpace::Unknown => {
+            addr > GC_HEADER_SIZE
+                && super::malloc::gc_malloc_header_is_tracked(
+                    (addr - GC_HEADER_SIZE) as *const super::GcHeader,
+                )
+        }
+    }
+}
+
+/// [`addr_is_minor_collectible`] for a NaN-boxed value.
+#[inline]
+pub(crate) fn bits_are_minor_collectible(bits: u64) -> bool {
+    let tag = bits & TAG_MASK;
+    if tag == POINTER_TAG || tag == STRING_TAG || tag == BIGINT_TAG {
+        addr_is_minor_collectible((bits & POINTER_MASK) as usize)
+    } else {
+        false
     }
 }
 

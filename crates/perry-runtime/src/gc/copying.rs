@@ -1911,9 +1911,23 @@ pub(super) fn run_copied_minor_attempt(
         collector.stats.eden_copied_bytes,
         collector.stats.survivor_first_round_live_bytes,
     );
+    if let Some(d) = collector.survival.as_ref() {
+        d.report(super::survival_diag::next_minor_seq());
+    }
+    crate::arena::alloc_sample::report("minor");
+    super::diag_sites::report_primitive_dispatch("minor");
+    crate::object::shapes::id_list_report();
+    report_forwarding_refusals("copying_minor");
+    let scan_us = super::scanner_profile::report_and_reset("copying_minor");
     if crate::gc::gc_diag_enabled() {
+        // This is intentionally the last diagnostic action before returning to
+        // the mutator: `pause_us` prices the whole copied-minor path, including
+        // finalization, pruning, policy feedback and the diagnostic work above.
+        let pause_us = start.elapsed().as_micros() as u64;
         eprintln!(
-            "[gc-copy-minor] ran in_place={} untraced={} untraced_cycles={} untraced_objects={} in_place_blocks={} in_place_dead_bytes={} sparse_blocks={} survival_permille={} copied_objects={} copied_bytes={} promoted_objects={} promoted_bytes={} freed_bytes={} tenuring_survivals={} eden_live_bytes={} eden_copied_bytes={} survivor_live_bytes={} survivor_first_round_live_bytes={} trigger={:?} declared_safepoint={}",
+            "[gc-copy-minor] ran pause_us={} scan_us={} in_place={} untraced={} untraced_cycles={} untraced_objects={} in_place_blocks={} in_place_dead_bytes={} sparse_blocks={} survival_permille={} copied_objects={} copied_bytes={} promoted_objects={} promoted_bytes={} freed_bytes={} tenuring_survivals={} eden_live_bytes={} eden_copied_bytes={} survivor_live_bytes={} survivor_first_round_live_bytes={} trigger={:?} declared_safepoint={}",
+            pause_us,
+            scan_us,
             collector.stats.in_place_promotion,
             untraced,
             super::untraced_promotion_cycles(),
@@ -1936,14 +1950,6 @@ pub(super) fn run_copied_minor_attempt(
             super::policy::GC_AT_DECLARED_SAFEPOINT.with(std::cell::Cell::get)
         );
     }
-    if let Some(d) = collector.survival.as_ref() {
-        d.report(super::survival_diag::next_minor_seq());
-    }
-    crate::arena::alloc_sample::report("minor");
-    super::diag_sites::report_primitive_dispatch("minor");
-    crate::object::shapes::id_list_report();
-    report_forwarding_refusals("copying_minor");
-    super::scanner_profile::report_and_reset("copying_minor");
     CopiedMinorAttempt::Done(Some(CopiedMinorFastPathOutcome {
         freed_bytes,
         malloc_swept: malloc_sweep_due,

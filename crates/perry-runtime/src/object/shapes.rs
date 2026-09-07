@@ -264,6 +264,28 @@ struct ShapeTableInner {
 
 const SHAPE_YOUNG_LOG_NAME: &str = "shapes.families+indices";
 
+crate::perry_thread_local! {
+    /// Carrier notes can be produced while a GC walk already borrows the shape
+    /// table. Keep that write-side stream separate and merge it at the next
+    /// scanner entry rather than re-borrowing `ShapeTableInner` recursively.
+    static SHAPE_CARRIER_YOUNG_KEYS: RefCell<crate::gc::young_log::YoungLog<u64>> =
+        const { RefCell::new(crate::gc::young_log::YoungLog::new()) };
+    #[cfg(test)]
+    static SHAPE_YOUNG_LOG_SUPPRESSED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[inline]
+fn note_shape_carrier_candidate(keys: u64) {
+    if !crate::gc::young_log::addr_is_minor_relevant(keys as usize) {
+        return;
+    }
+    #[cfg(test)]
+    if SHAPE_YOUNG_LOG_SUPPRESSED.with(std::cell::Cell::get) {
+        return;
+    }
+    SHAPE_CARRIER_YOUNG_KEYS.with(|log| log.borrow_mut().note(keys));
+}
+
 /// Re-export of the id-list operation counters' report, so the collector does
 /// not have to name a private sibling module. One `[gc-idlist]` line per
 /// copying minor under `PERRY_GC_DIAG=1`; `elems_moved` is the falsifier for
@@ -281,7 +303,11 @@ impl ShapeTableInner {
     /// call this themselves.
     #[inline]
     fn note_young_keys(&mut self, keys: u64) {
-        if crate::gc::young_log::addr_is_minor_relevant(keys as usize) {
+        #[cfg(test)]
+        if SHAPE_YOUNG_LOG_SUPPRESSED.with(std::cell::Cell::get) {
+            return;
+        }
+        if crate::gc::young_log::addr_is_minor_collectible(keys as usize) {
             self.young_keys.note(keys);
         }
     }
@@ -692,8 +718,12 @@ pub(crate) unsafe fn note_old_generation_carrier(descriptor: Option<ShapeDescrip
         return;
     }
     let record = descriptor.record as *mut ShapeRecord;
+    let first_note_this_epoch = !(*record).has(RECORD_FLAG_OLD_CARRIER_SEEN);
     // GC_STORE_AUDIT(POINTER_FREE): liveness bookkeeping bits, never a heap reference.
     (*record).set(RECORD_FLAG_OLD_CARRIER | RECORD_FLAG_OLD_CARRIER_SEEN, true);
+    if first_note_this_epoch {
+        note_shape_carrier_candidate(descriptor.keys);
+    }
 }
 
 /// Note that a complete full trace visited a receiver carrying this shape.
@@ -734,8 +764,12 @@ pub(crate) unsafe fn note_cache_carrier(descriptor: Option<ShapeDescriptor>) {
         return;
     }
     let record = descriptor.record as *mut ShapeRecord;
+    let newly_armed = !(*record).has(RECORD_FLAG_CACHE_CARRIER);
     // GC_STORE_AUDIT(POINTER_FREE): liveness bookkeeping bit, never a heap reference.
     (*record).set(RECORD_FLAG_CACHE_CARRIER, true);
+    if newly_armed {
+        note_shape_carrier_candidate(descriptor.keys);
+    }
 }
 
 /// The post-birth publication point for a ShapeId into a receiver's header
@@ -770,7 +804,15 @@ pub(crate) unsafe fn stamp_object_shape_id_with_carrier_note(
 ) {
     (*obj).parent_class_id = id;
     if !crate::arena::pointer_in_nursery(obj as usize) {
-        note_old_generation_carrier(shape_descriptor_by_id(id));
+        let descriptor = shape_descriptor_by_id(id);
+        note_old_generation_carrier(descriptor);
+        // This stamp is the structural-mutation publication funnel. Re-arm
+        // even when the descriptor was already an old carrier: an owned
+        // Longlived keys array may have just gained a nursery key at the same
+        // address, and its carrier flag alone cannot express that transition.
+        if let Some(descriptor) = descriptor {
+            note_shape_carrier_candidate(descriptor.keys);
+        }
     }
 }
 
@@ -1930,6 +1972,8 @@ pub(crate) fn prune_dead_shape_keys_young(is_dead_owner: &dyn Fn(usize) -> bool)
 pub(crate) fn scan_shape_table_rekey_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     let table = &crate::state::state().shapes;
     let mut inner = table.inner.borrow_mut();
+    let carrier_notes = SHAPE_CARRIER_YOUNG_KEYS.with(|log| log.borrow_mut().take_sorted());
+    inner.young_keys.extend(carrier_notes);
     let rewrite_phase = visitor.is_metadata_rewrite_phase();
     // #9754: a minor-scoped pass visits only the young-logged keys addresses;
     // the full walk below rebuilds the log from what it finds.
@@ -2045,7 +2089,7 @@ pub(crate) fn scan_shape_table_rekey_mut(visitor: &mut crate::gc::RuntimeRootVis
     }
 
     // A full walk is authoritative: rebuild the young log from the tables.
-    let kept = relevant_shape_keys(&inner);
+    let kept = relevant_shape_keys(table, &inner);
     let kept_len = kept.len() as u64;
     let _ = inner.young_keys.take_sorted();
     inner.young_keys.extend(kept);
@@ -2080,31 +2124,80 @@ fn move_shape_family(table: &ShapeTable, inner: &mut ShapeTableInner, old: u64, 
             inner.facts_remove(record.facts_key_with_keys(old), id);
             inner.facts_push_back(record.facts_key_with_keys(new), id);
         }
-        inner.family_push_back(new, id);
+        // Scanner-internal rekey: the caller keeps `new` from its post-visit
+        // relevance result (or the full walk rebuilds the log). Re-entering
+        // the writer funnel here would enqueue the same family mid-walk and
+        // price it twice in one minor.
+        inner.families.entry(new).or_default().push_back(id);
     }
 }
 
 /// Every keys address a minor can act on, re-derived from the authoritative
 /// tables (families and slot indices whose keys array is not old).
-fn relevant_shape_keys(inner: &ShapeTableInner) -> Vec<u64> {
-    use crate::gc::young_log::addr_is_minor_relevant;
-    let mut relevant: Vec<u64> = inner
-        .families
-        .keys()
-        .copied()
-        .filter(|&keys| keys != 0 && addr_is_minor_relevant(keys as usize))
-        .collect();
-    relevant.extend(
-        inner
-            .indices
-            .keys()
-            .copied()
-            .filter(|&keys| addr_is_minor_relevant(keys))
-            .map(|keys| keys as u64),
-    );
+fn relevant_shape_keys(table: &ShapeTable, inner: &ShapeTableInner) -> Vec<u64> {
+    let mut relevant: Vec<u64> = inner.families.keys().copied().collect();
+    relevant.extend(inner.indices.keys().copied().map(|keys| keys as u64));
     relevant.sort_unstable();
     relevant.dedup();
+    relevant.retain(|&keys| shape_keys_entry_is_minor_relevant(table, inner, keys));
     relevant
+}
+
+/// Exact minor-work predicate for one shape-table key.
+///
+/// Nursery addresses must be rekeyed even for weak metadata entries. Malloc
+/// arrays must be rooted when a carrier owns the family. A Longlived keys
+/// array never moves or dies, so it matters only while a rooted family exposes
+/// a collectible property-key leaf from its payload. Property keys are
+/// strings/symbol headers and both are GC leaves; tracing through an immortal
+/// key cannot discover a younger grandchild.
+fn shape_keys_entry_is_minor_relevant(
+    table: &ShapeTable,
+    inner: &ShapeTableInner,
+    keys: u64,
+) -> bool {
+    if keys == 0 {
+        return false;
+    }
+    let addr = keys as usize;
+    match crate::arena::classify_heap_space(addr) {
+        crate::arena::HeapSpace::NurseryEden
+        | crate::arena::HeapSpace::Survivor0
+        | crate::arena::HeapSpace::Survivor1
+        | crate::arena::HeapSpace::PromotedYoung => return true,
+        crate::arena::HeapSpace::Old => return false,
+        crate::arena::HeapSpace::Unknown => {
+            return family_has_root_carrier(table, inner, keys)
+                && crate::gc::young_log::addr_is_minor_collectible(addr);
+        }
+        crate::arena::HeapSpace::Longlived => {}
+    }
+    if !family_has_root_carrier(table, inner, keys) {
+        return false;
+    }
+    unsafe {
+        let Some(header) = crate::value::addr_class::try_read_tracked_gc_header(addr) else {
+            return false;
+        };
+        if (*header.as_ptr()).obj_type != crate::gc::GC_TYPE_ARRAY {
+            return false;
+        }
+        let (slots, len) = super::keys_array_dense_slots(addr as *const ArrayHeader);
+        (0..len).any(|index| {
+            crate::gc::young_log::bits_are_minor_collectible((*slots.add(index)).to_bits())
+        })
+    }
+}
+
+fn family_has_root_carrier(table: &ShapeTable, inner: &ShapeTableInner, keys: u64) -> bool {
+    inner.families.get(&keys).is_some_and(|ids| {
+        ids.as_slice().iter().any(|&id| {
+            table
+                .slab()
+                .get(id)
+                .is_some_and(|record| record.has(RECORD_FLAG_OLD_CARRIER) || record.cache_carrier())
+        })
+    })
 }
 
 /// The minor-scoped walk (#9754): only the young-logged keys addresses, each
@@ -2118,9 +2211,9 @@ fn scan_shape_table_young(
     rewrite_phase: bool,
 ) {
     let table_len = (inner.families.len() + inner.indices.len()) as u64;
-    #[cfg(debug_assertions)]
+    #[cfg(any(debug_assertions, test))]
     {
-        let relevant = relevant_shape_keys(inner);
+        let relevant = relevant_shape_keys(table, inner);
         inner
             .young_keys
             .debug_assert_logged(SHAPE_YOUNG_LOG_NAME, &relevant);
@@ -2242,10 +2335,7 @@ fn scan_shape_keys_address(
             inner.indices.remove(&addr);
         }
     }
-    (
-        post,
-        crate::gc::young_log::addr_is_minor_relevant(post as usize),
-    )
+    (post, shape_keys_entry_is_minor_relevant(table, inner, post))
 }
 
 // #8112 sabotage switch. Suppressing the descriptor edge proves the fixture's

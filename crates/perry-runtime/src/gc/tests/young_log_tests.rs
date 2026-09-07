@@ -38,6 +38,10 @@ fn old_closure() -> usize {
     ptr as usize
 }
 
+fn old_leaf() -> usize {
+    crate::arena::arena_alloc_gc_old(32, 8, GC_TYPE_STRING) as usize
+}
+
 unsafe fn young_keys_array() -> *mut crate::array::ArrayHeader {
     let arr = crate::arena::arena_alloc_gc(
         std::mem::size_of::<crate::array::ArrayHeader>(),
@@ -601,4 +605,242 @@ fn installing_an_external_shape_id_arms_the_family_log() {
         !crate::object::shapes::test_shape_ids_for_keys(moved).is_empty(),
         "the family must have followed the keys array"
     );
+}
+
+// ------------------------------------------------------ fixed-cost scanners
+
+/// N old shape families plus k young ones must price exactly k entries in the
+/// minor-scoped scanner. Sabotage: make `note_young_keys` a no-op; the
+/// re-derivation fails before this count can be observed.
+#[test]
+fn shape_table_minor_walk_visits_exactly_k_young_entries() {
+    const N: usize = 96;
+    const K: usize = 3;
+    let _guard = CopyingNurseryTestGuard::new(K as u32);
+    gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
+    crate::object::shapes::test_clear_shape_table();
+
+    for _ in 0..N {
+        let keys = crate::arena::arena_alloc_gc_old(
+            std::mem::size_of::<crate::array::ArrayHeader>(),
+            std::mem::align_of::<crate::array::ArrayHeader>(),
+            GC_TYPE_ARRAY,
+        ) as *mut crate::array::ArrayHeader;
+        unsafe {
+            (*keys).length = 0;
+            (*keys).capacity = 0;
+        }
+        crate::object::shapes::shape_descriptor_ensure(keys, 0, 0).expect("old shape");
+    }
+    for slot in 0..K {
+        let keys = unsafe { young_keys_array() };
+        js_shadow_slot_set(slot as u32, ptr_bits(keys as usize));
+        crate::object::shapes::shape_descriptor_ensure(keys, 0, 0).expect("young shape");
+    }
+
+    let _ = gc_collect_minor();
+    let row = walk("shapes.families+indices");
+    assert!(row.partial, "{row:?}");
+    assert_eq!(
+        row.visited, K as u64,
+        "minor work must be young-sized: {row:?}"
+    );
+    assert!(
+        row.table_len >= (N + K) as u64,
+        "fixture did not build N+k: {row:?}"
+    );
+}
+
+/// The debug/test authoritative walk is the proof that every shape writer
+/// arms the log. This deliberately suppresses the production family funnel;
+/// deleting the assertion makes the sabotage go green.
+#[test]
+fn shape_table_rederivation_rejects_a_suppressed_logging_site() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    crate::object::shapes::test_clear_shape_table();
+    let keys = unsafe { young_keys_array() };
+    {
+        let _sabotage = crate::object::shapes::TestShapeYoungLogSuppression::new();
+        crate::object::shapes::shape_descriptor_ensure(keys, 0, 0).expect("shape");
+    }
+    let valid = build_valid_pointer_set();
+    let mut visitor = RuntimeRootVisitor::for_mark_scoped(&valid, true);
+    let rejected = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        crate::object::shapes::scan_shape_table_rekey_mut(&mut visitor);
+    }));
+    assert!(
+        rejected.is_err(),
+        "a missing shape log note must be detected"
+    );
+}
+
+/// Promotion removes a shape address from the minor log, without removing the
+/// descriptor from the authoritative table used by the next full/major walk.
+/// Sabotage: change the post-visit keep predicate back to
+/// `addr_is_minor_relevant(from_space)`; `kept` never reaches zero.
+#[test]
+fn promoted_shape_entry_leaves_young_log_and_remains_in_major_walk() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
+    crate::object::shapes::test_clear_shape_table();
+    let keys = unsafe { young_keys_array() };
+    js_shadow_slot_set(0, ptr_bits(keys as usize));
+    let id = crate::object::shapes::shape_descriptor_ensure(keys, 0, 0).expect("shape");
+
+    for _ in 0..4 {
+        let _ = gc_collect_minor();
+    }
+    let promoted = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+    assert!(
+        !crate::arena::pointer_in_nursery(promoted),
+        "fixture must promote"
+    );
+    assert_eq!(walk("shapes.families+indices").kept, 0);
+
+    let valid = build_valid_pointer_set();
+    let mut visitor = RuntimeRootVisitor::for_rewrite(&valid);
+    crate::object::shapes::scan_shape_table_rekey_mut(&mut visitor);
+    let row = walk("shapes.families+indices");
+    assert!(
+        !row.partial,
+        "major/full walk must remain authoritative: {row:?}"
+    );
+    assert!(
+        row.visited >= 1,
+        "major/full walk must still see the descriptor"
+    );
+    assert_eq!(
+        crate::object::shapes::shape_descriptor_by_id(id).map(|d| d.keys),
+        Some(promoted as u64)
+    );
+}
+
+/// An already-Longlived keys array can gain a new nursery key at the same
+/// address. Re-stamping the old receiver is the structural publication
+/// chokepoint that must re-arm it.
+#[test]
+fn shape_mutation_to_new_young_key_rearms_minor_log() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
+    crate::object::shapes::test_clear_shape_table();
+    unsafe {
+        let bytes = std::mem::size_of::<crate::array::ArrayHeader>() + 8;
+        let keys = crate::arena::arena_alloc_gc_longlived(bytes, 8, GC_TYPE_ARRAY)
+            as *mut crate::array::ArrayHeader;
+        (*keys).length = 1;
+        (*keys).capacity = 1;
+        let slot =
+            (keys as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *mut f64;
+        *slot = f64::from_bits(string_bits(old_leaf()));
+        let id = crate::object::shapes::shape_descriptor_ensure(keys, 1, 0).expect("shape");
+        let (owner, _) = alloc_old_test_object(0);
+        crate::object::shapes::stamp_object_shape_id_with_carrier_note(owner, id);
+        let _ = gc_collect_minor();
+        assert_eq!(walk("shapes.families+indices").kept, 0);
+
+        let young = young_leaf();
+        *slot = f64::from_bits(string_bits(young));
+        crate::object::shapes::stamp_object_shape_id_with_carrier_note(owner, id);
+        let _ = gc_collect_minor();
+        let moved = ((*slot).to_bits() & POINTER_MASK) as usize;
+        assert_ne!(
+            moved, young,
+            "the mutation hook must make the new key visible"
+        );
+        assert!(walk("shapes.families+indices").visited >= 1);
+    }
+}
+
+/// N old box payloads plus k young payloads must price exactly k registry
+/// entries. The counter is recorded inside `scan_box_young_roots_mut`.
+#[test]
+fn box_roots_minor_walk_visits_exactly_k_young_entries() {
+    const N: usize = 128;
+    const K: usize = 4;
+    let _guard = CopyingNurseryTestGuard::new(0);
+    gc_register_mutable_root_scanner(crate::r#box::scan_box_roots_mut);
+    for _ in 0..N {
+        crate::r#box::js_box_alloc_bits(string_bits(old_leaf()) as i64);
+    }
+    for _ in 0..K {
+        crate::r#box::js_box_alloc_bits(string_bits(young_leaf()) as i64);
+    }
+
+    let _ = gc_collect_minor();
+    let row = walk("box.roots");
+    assert!(row.partial, "{row:?}");
+    assert_eq!(
+        row.visited, K as u64,
+        "minor work must be young-sized: {row:?}"
+    );
+    assert_eq!(
+        row.table_len,
+        (N + K) as u64,
+        "fixture registry mismatch: {row:?}"
+    );
+}
+
+/// Suppress the real `js_box_set_bits` arming site and prove the full-registry
+/// re-derivation catches the omission.
+#[test]
+fn box_root_rederivation_rejects_a_suppressed_mutation_hook() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let cell = crate::r#box::js_box_alloc_bits(string_bits(old_leaf()) as i64);
+    let young = young_leaf();
+    {
+        let _sabotage = crate::r#box::TestBoxYoungLogSuppression::new();
+        crate::r#box::js_box_set_bits(cell, string_bits(young) as i64);
+    }
+    let valid = build_valid_pointer_set();
+    let mut visitor = RuntimeRootVisitor::for_mark_scoped(&valid, true);
+    let rejected = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        crate::r#box::scan_box_roots_mut(&mut visitor);
+    }));
+    assert!(
+        rejected.is_err(),
+        "a missing box mutation note must be detected"
+    );
+}
+
+#[test]
+fn box_mutation_to_new_young_object_is_visited() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    gc_register_mutable_root_scanner(crate::r#box::scan_box_roots_mut);
+    let cell = crate::r#box::js_box_alloc_bits(string_bits(old_leaf()) as i64);
+    let young = young_leaf();
+    crate::r#box::js_box_set_bits(cell, string_bits(young) as i64);
+
+    let _ = gc_collect_minor();
+    let moved = (crate::r#box::js_box_get_bits(cell) as u64 & POINTER_MASK) as usize;
+    assert_ne!(moved, young, "setter must re-arm a previously old box");
+    assert_eq!(walk("box.roots").visited, 1);
+}
+
+#[test]
+fn promoted_box_root_leaves_log_and_is_found_by_full_walk() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    gc_register_mutable_root_scanner(crate::r#box::scan_box_roots_mut);
+    let cell = crate::r#box::js_box_alloc_bits(string_bits(young_leaf()) as i64);
+    for _ in 0..4 {
+        let _ = gc_collect_minor();
+    }
+    let promoted_bits = crate::r#box::js_box_get_bits(cell) as u64;
+    let promoted = (promoted_bits & POINTER_MASK) as usize;
+    assert!(
+        !crate::arena::pointer_in_nursery(promoted),
+        "fixture must promote"
+    );
+    assert_eq!(walk("box.roots").kept, 0);
+
+    let mut seen = false;
+    crate::r#box::scan_box_roots(&mut |value| {
+        if value.to_bits() == promoted_bits {
+            seen = true;
+        }
+    });
+    assert!(
+        seen,
+        "the unchanged full walk must still enumerate promoted roots"
+    );
+    assert!(!walk("box.roots").partial);
 }
