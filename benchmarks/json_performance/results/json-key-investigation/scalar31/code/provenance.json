@@ -1,0 +1,41 @@
+{
+  "worker_sha256": "31366657092618b000e3d9506e3167b71aec7d79c5f0f2639614ce52019ad421",
+  "symbols": {
+    "js_json_parse": {
+      "address": "00000001007eda44",
+      "instructions": 17,
+      "prologue": [
+        "1007eda44:      stp x29, x30, [sp, #-0x10]!",
+        "1007eda48:      mov x29, sp",
+        "1007eda4c:      cbz x0, 0x1007eda78 <_js_json_parse+0x34>",
+        "1007eda50:      ldr w1, [x0, #0x4]",
+        "1007eda54:      cbz w1, 0x1007eda78 <_js_json_parse+0x34>",
+        "1007eda58:      ldrb    w8, [x0, #0x14]",
+        "1007eda5c:      orr w8, w8, #0x20",
+        "1007eda60:      cmp w8, #0x7b",
+        "1007eda64:      b.ne    0x1007eda70 <_js_json_parse+0x2c>",
+        "1007eda68:      ldp x29, x30, [sp], #0x10",
+        "1007eda6c:      b   0x1004cf778 <__RNvNtNtCs7wa3bwJW6LN_13perry_runtime4json9parse_api10parse_slow>",
+        "1007eda70:      ldp x29, x30, [sp], #0x10"
+      ]
+    },
+    "parse_noncontainer": {
+      "address": "00000001004d1cb4",
+      "instructions": 276,
+      "prologue": [
+        "1004d1cb4:      sub sp, sp, #0x60",
+        "1004d1cb8:      stp x24, x23, [sp, #0x20]",
+        "1004d1cbc:      stp x22, x21, [sp, #0x30]",
+        "1004d1cc0:      stp x20, x19, [sp, #0x40]",
+        "1004d1cc4:      stp x29, x30, [sp, #0x50]",
+        "1004d1cc8:      add x29, sp, #0x50",
+        "1004d1ccc:      ldrb    w9, [x0, #0x14]",
+        "1004d1cd0:      orr w8, w9, #0x20",
+        "1004d1cd4:      cmp w8, #0x7b",
+        "1004d1cd8:      b.ne    0x1004d1cf4 <__RNvNtNtCs7wa3bwJW6LN_13perry_runtime4json9parse_api18parse_noncontainer+0x40>",
+        "1004d1cdc:      ldp x29, x30, [sp, #0x50]",
+        "1004d1ce0:      ldp x20, x19, [sp, #0x40]"
+      ]
+    }
+  }
+}

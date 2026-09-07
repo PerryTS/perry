@@ -1,0 +1,54 @@
+{
+  "workers": {
+    "checkpoint": "244d045b247c4de720d33c7526f512654ae842f4b2dd9f1e7c1e34f241a068a1",
+    "previous": "37ec092b46be4c773fc4f142c2c6a8e6fd2f1aa4af3b566fadff9cc1fb641c80",
+    "scalar": "89257b84b43772f50c3c5213eb7d71dccacb66b4dd19aa4ecefca3cee393dbe7",
+    "candidate": "7b04344396be65b12d5b2d522e42401da007ee5e3341bd113c10145e184d43b4"
+  },
+  "cases": [
+    [
+      "small_record",
+      "stringify",
+      "discard",
+      100000
+    ],
+    [
+      "small_record",
+      "stringify",
+      "latest",
+      100000
+    ],
+    [
+      "small_record",
+      "stringify",
+      "retain",
+      100000
+    ],
+    [
+      "records_object_20m",
+      "roundtrip",
+      "discard",
+      24
+    ],
+    [
+      "escaped_1m",
+      "parse",
+      "discard",
+      100
+    ],
+    [
+      "escaped_1m",
+      "parse",
+      "latest",
+      100
+    ],
+    [
+      "escaped_1m",
+      "parse",
+      "retain",
+      32
+    ]
+  ],
+  "repeats": 3,
+  "seed": 81134
+}

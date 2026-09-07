@@ -1,0 +1,10 @@
+   Compiling perry-runtime v0.5.1520 (/Users/amlug/projects/perry/codex-json-gc-deferral/crates/perry-runtime)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 33.47s
+     Running unittests src/lib.rs (/Users/amlug/projects/perry/codex-json-batch-target/debug/build/perry-runtime/77f7d5e322249c1d/out/perry_runtime-77f7d5e322249c1d)
+
+running 2 tests
+test json::stringify_key_plan::tests::key_plans_preserve_internal_string_fallbacks_and_overflow_checks ... ok
+test json::stringify_key_plan::tests::key_plans_quote_controls_unicode_and_short_strings_into_exact_bounds ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 3292 filtered out; finished in 0.00s
+

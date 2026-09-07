@@ -1,0 +1,177 @@
+{
+  "hashes": {
+    "checkpoint": "6a376de244705cbe8485063d254973e3e99582b95e8b290ddb370deac3ebd835",
+    "previous": "c095d903b2907fb9ead12c7c2321a3be3c751dd4985f5606ed92b3e767bd0be2",
+    "scalar": "31366657092618b000e3d9506e3167b71aec7d79c5f0f2639614ce52019ad421",
+    "candidate": "4d03c3a6409bcdcaaec891b752f470bd5db3b592f6c1ea7b6d4373ca9111c2c4"
+  },
+  "cases": [
+    [
+      "null",
+      "parse"
+    ],
+    [
+      "null",
+      "stringify"
+    ],
+    [
+      "string_a",
+      "parse"
+    ],
+    [
+      "string_a",
+      "stringify"
+    ],
+    [
+      "empty_object",
+      "parse"
+    ],
+    [
+      "empty_object",
+      "stringify"
+    ],
+    [
+      "tiny_object",
+      "parse"
+    ],
+    [
+      "tiny_object",
+      "stringify"
+    ],
+    [
+      "small_record",
+      "parse"
+    ],
+    [
+      "small_record",
+      "stringify"
+    ],
+    [
+      "object_1k",
+      "parse"
+    ],
+    [
+      "object_1k",
+      "stringify"
+    ],
+    [
+      "records_array_16k",
+      "parse"
+    ],
+    [
+      "records_array_16k",
+      "stringify"
+    ],
+    [
+      "records_array_1m",
+      "parse"
+    ],
+    [
+      "records_array_1m",
+      "stringify"
+    ],
+    [
+      "records_object_1m",
+      "parse"
+    ],
+    [
+      "records_object_1m",
+      "stringify"
+    ],
+    [
+      "records_array_8m",
+      "parse"
+    ],
+    [
+      "records_array_8m",
+      "stringify"
+    ],
+    [
+      "records_object_8m",
+      "parse"
+    ],
+    [
+      "records_object_8m",
+      "stringify"
+    ],
+    [
+      "records_array_20m",
+      "parse"
+    ],
+    [
+      "records_array_20m",
+      "stringify"
+    ],
+    [
+      "records_object_20m",
+      "parse"
+    ],
+    [
+      "records_object_20m",
+      "stringify"
+    ],
+    [
+      "numbers_1m",
+      "parse"
+    ],
+    [
+      "numbers_1m",
+      "stringify"
+    ],
+    [
+      "long_string_1m",
+      "parse"
+    ],
+    [
+      "long_string_1m",
+      "stringify"
+    ],
+    [
+      "escaped_1m",
+      "parse"
+    ],
+    [
+      "escaped_1m",
+      "stringify"
+    ],
+    [
+      "unicode_1m",
+      "parse"
+    ],
+    [
+      "unicode_1m",
+      "stringify"
+    ],
+    [
+      "wide_1m",
+      "parse"
+    ],
+    [
+      "wide_1m",
+      "stringify"
+    ],
+    [
+      "heterogeneous_1m",
+      "parse"
+    ],
+    [
+      "heterogeneous_1m",
+      "stringify"
+    ]
+  ],
+  "seed": 723434,
+  "repeats": 5,
+  "versions": {
+    "node": "v26.5.1",
+    "bun": "1.3.14"
+  },
+  "note": "Native execv launcher executes immutable binaries with exact decode18 argv0 and fixture paths. No executable replacement during trials. Method qualified in launch25 same-binary control. Fixed prior counts and default GC.",
+  "launcher_sha256": "099ff6af8d7540e1b702c83d3cbb3907149cfd6f9050d5f976b7cf1f5db7feb1",
+  "argv0": "/Users/perry/json-escape-runtime-v18-20260907-codex/active",
+  "physical_executables": {
+    "checkpoint": "/Users/perry/json-fused-utf16-v11-20260907-codex/.work/checkpoint",
+    "previous": "/Users/perry/json-depth-runtime-v22-20260907-codex/.work/worker",
+    "scalar": "/Users/perry/json-scalar-runtime-v31-20260907-codex/.work/worker",
+    "candidate": "/Users/perry/json-key-runtime-v33-20260907-codex/.work/worker"
+  }
+}

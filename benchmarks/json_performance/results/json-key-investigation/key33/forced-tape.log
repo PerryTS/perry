@@ -1,0 +1,3 @@
+None True True {}
+17 True True {'scheduled_collections': 129, 'copying_minors': 1853, 'moved_objects': 159574, 'loop_polls': 277279}
+9013 True True {'scheduled_collections': 128, 'copying_minors': 2233, 'moved_objects': 160512, 'loop_polls': 277279}

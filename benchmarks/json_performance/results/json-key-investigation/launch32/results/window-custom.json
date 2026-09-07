@@ -1,0 +1,22 @@
+{
+  "owner": "json-perf-93066-1788786984",
+  "load_before": [
+    1.45751953125,
+    1.6044921875,
+    1.63330078125
+  ],
+  "started_utc": "2026-09-07T13:16:24Z",
+  "quiet_gate_passed": true,
+  "command": [
+    "python3",
+    "/Users/perry/json-scalar-immutable-v32-20260907-codex/all.py"
+  ],
+  "competing_workloads_before": [],
+  "load_after": [
+    1.9775390625,
+    1.84228515625,
+    1.7275390625
+  ],
+  "competing_workloads_after": [],
+  "finished_utc": "2026-09-07T13:22:50Z"
+}

@@ -1,0 +1,58 @@
+{
+  "worker_sha256": "31366657092618b000e3d9506e3167b71aec7d79c5f0f2639614ce52019ad421",
+  "symbols": {
+    "emit_record": {
+      "symbol": "__RNvNtNtCs7wa3bwJW6LN_13perry_runtime4json23stringify_record_output11emit_record",
+      "address": "00000001004c2f00",
+      "instructions": 594,
+      "prologue": [
+        "1004c2f00:      stp x28, x27, [sp, #-0x60]!",
+        "1004c2f04:      stp x26, x25, [sp, #0x10]",
+        "1004c2f08:      stp x24, x23, [sp, #0x20]",
+        "1004c2f0c:      stp x22, x21, [sp, #0x30]",
+        "1004c2f10:      stp x20, x19, [sp, #0x40]",
+        "1004c2f14:      stp x29, x30, [sp, #0x50]",
+        "1004c2f18:      add x29, sp, #0x50",
+        "1004c2f1c:      sub sp, sp, #0x5d0",
+        "1004c2f20:      ldr xzr, [sp]",
+        "1004c2f24:      str x1, [sp, #0x38]"
+      ]
+    },
+    "emit_object": {
+      "symbol": "__RNvNtNtCs7wa3bwJW6LN_13perry_runtime4json14stringify_flat11emit_object",
+      "address": "00000001004bcbc0",
+      "instructions": 524,
+      "prologue": [
+        "1004bcbc0:      stp x28, x27, [sp, #-0x60]!",
+        "1004bcbc4:      stp x26, x25, [sp, #0x10]",
+        "1004bcbc8:      stp x24, x23, [sp, #0x20]",
+        "1004bcbcc:      stp x22, x21, [sp, #0x30]",
+        "1004bcbd0:      stp x20, x19, [sp, #0x40]",
+        "1004bcbd4:      stp x29, x30, [sp, #0x50]",
+        "1004bcbd8:      add x29, sp, #0x50",
+        "1004bcbdc:      sub sp, sp, #0x1a0",
+        "1004bcbe0:      mov x19, x1",
+        "1004bcbe4:      mov x20, x0"
+      ]
+    },
+    "key_new": null,
+    "key_write": null,
+    "string_piece": {
+      "symbol": "__RNvNtNtCs7wa3bwJW6LN_13perry_runtime4json14stringify_flat12string_piece",
+      "address": "00000001004bd710",
+      "instructions": 393,
+      "prologue": [
+        "1004bd710:      sub sp, sp, #0x40",
+        "1004bd714:      stp x20, x19, [sp, #0x20]",
+        "1004bd718:      stp x29, x30, [sp, #0x30]",
+        "1004bd71c:      add x29, sp, #0x30",
+        "1004bd720:      strb    wzr, [sp, #0xc]",
+        "1004bd724:      str wzr, [sp, #0x8]",
+        "1004bd728:      and x9, x1, #0xffff000000000000",
+        "1004bd72c:      mov x8, #0x7fff000000000000 ; =9223090561878065152",
+        "1004bd730:      cmp x9, x8",
+        "1004bd734:      b.eq    0x1004bd914 <__RNvNtNtCs7wa3bwJW6LN_13perry_runtime4json14stringify_flat12string_piece+0x204>"
+      ]
+    }
+  }
+}

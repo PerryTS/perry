@@ -1,0 +1,20 @@
+{
+  "json-fused-utf16-v11-20260907-codex/.work/checkpoint": "6a376de244705cbe8485063d254973e3e99582b95e8b290ddb370deac3ebd835",
+  "json-fused-utf16-v11-20260907-codex/.work/checkpoint-lifetime": "244d045b247c4de720d33c7526f512654ae842f4b2dd9f1e7c1e34f241a068a1",
+  "json-depth-runtime-v22-20260907-codex/.work/worker": "c095d903b2907fb9ead12c7c2321a3be3c751dd4985f5606ed92b3e767bd0be2",
+  "json-depth-runtime-v22-20260907-codex/.work/worker-lifetime-candidate": "37ec092b46be4c773fc4f142c2c6a8e6fd2f1aa4af3b566fadff9cc1fb641c80",
+  "json-launch-control-v25-20260907-codex/launch": "099ff6af8d7540e1b702c83d3cbb3907149cfd6f9050d5f976b7cf1f5db7feb1",
+  "json-scalar-runtime-v31-20260907-codex/.work/worker": "31366657092618b000e3d9506e3167b71aec7d79c5f0f2639614ce52019ad421",
+  "json-scalar-runtime-v31-20260907-codex/.work/worker-lifetime-candidate": "89257b84b43772f50c3c5213eb7d71dccacb66b4dd19aa4ecefca3cee393dbe7",
+  "json-key-runtime-v33-20260907-codex/.work/worker": "4d03c3a6409bcdcaaec891b752f470bd5db3b592f6c1ea7b6d4373ca9111c2c4",
+  "json-key-runtime-v33-20260907-codex/.work/worker-lifetime-candidate": "7b04344396be65b12d5b2d522e42401da007ee5e3341bd113c10145e184d43b4",
+  "json-key-immutable-v34-20260907-codex/run.py": "0e82424fd29f124bbbbbbc0a12e3e224631950bba2f48313f82a12b9f2378cc6",
+  "json-key-immutable-v34-20260907-codex/monitor.py": "531a4430cd573b63289bcde7d2dbdebc0492a94624a199ac6f91c42ff6e396d4",
+  "json-key-immutable-v34-20260907-codex/worker.js": "55c11d12296f896212d6abd76bcf8d551d0590b0ad24b262018b7a707369a2f4",
+  "json-key-immutable-v34-20260907-codex/with_lock.py": "727f42b309b9db2afc838695f3045ee20f3033f2be1f5c680fc4d9df25ca8add",
+  "json-key-immutable-v34-20260907-codex/all.py": "e2484328e162113b192e93e84e973b24523af6b4bab04b3ec7b8d66dbb46b53d",
+  "json-key-immutable-v34-20260907-codex/lifetimes_recheck.py": "8dd9c68ab566fad4621acf67821ae41a5ba1ac1d000249dae9254e9b9c0232b4",
+  "json-key-immutable-v34-20260907-codex/recheck.py": "edf1accfdc6bd0292cecc3b63698de884d1cd96c4b8b0b00ea20ea5b9eb5f94d",
+  "json-key-immutable-v34-20260907-codex/analyze.py": "fabe2f7091122361fbbc7d2b59b99a8fd27ca7cc072ba1a918d24b83baad5cb1",
+  "json-key-immutable-v34-20260907-codex/results/fixtures.json": "27a8bd4fb4000f445ce537de4663fbfc30dcbd26925b78b751abd673e89a353d"
+}
