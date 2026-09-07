@@ -24,6 +24,7 @@ use native_default_import::{
     node_submodule_default_export_key,
 };
 use object_literal::is_direct_object_literal;
+use static_import_bindings::init_named_cell;
 pub(super) use static_import_bindings::{
     import_is_runtime_erased, pre_register_static_import_bindings,
 };
@@ -247,6 +248,7 @@ pub(crate) fn lower_module_decl(
                                 } else {
                                     (source.clone(), Some(imported.clone()))
                                 };
+                            init_named_cell(module, &source, &imported, native_method.as_ref());
                             ctx.register_native_module(local.clone(), native_module, native_method);
                             // #1991: `perry/ui` exposes these as numeric
                             // `const enum`s in `types/perry/ui/index.d.ts`.

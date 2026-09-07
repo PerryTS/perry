@@ -516,6 +516,20 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
             let node_builtin_spread_call =
                 has_spread && native_module::is_node_builtin_module_call(ctx, expr);
             if !node_builtin_spread_call {
+                if native_module::named_import_call_needs_esm_binding(ctx, expr) {
+                    let ast::Expr::Ident(ident) = native_module::unwrap_ts_wrappers(expr) else {
+                        unreachable!("named-import ESM binding guard requires an identifier")
+                    };
+                    return Ok(Expr::Call {
+                        callee: Box::new(super::lower_expr::native_module_binding_value(
+                            ctx,
+                            ident.sym.as_ref(),
+                        )),
+                        args,
+                        type_args: Vec::new(),
+                        byte_offset: call.span.lo.0,
+                    });
+                }
                 // node-forge deeply-nested namespace calls
                 // (`forge.pki.rsa.generateKeyPair()`, `forge.pki.createCertificate()`,
                 // `forge.md.sha256.create()`). Must run before the generic
