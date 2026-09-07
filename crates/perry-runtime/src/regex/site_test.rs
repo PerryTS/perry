@@ -514,6 +514,45 @@ pub(super) fn census() -> crate::gc::census::SideTableRow {
     })
 }
 
+pub(super) fn census_parts() -> (usize, usize, Vec<usize>, Vec<usize>) {
+    SITE_TEST_HEADERS.with(|table| {
+        let table = table.borrow();
+        let headers = table
+            .values()
+            .map(|entry| entry.header as usize)
+            .collect::<Vec<_>>();
+        let programs = table
+            .values()
+            .filter_map(|entry| {
+                let header = entry.header;
+                if header.is_null() || !is_valid_regex_ptr(header) {
+                    return None;
+                }
+                let programs = unsafe { (*header).programs_ptr };
+                (!programs.is_null()).then_some(programs as usize)
+            })
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect();
+        (
+            table.len(),
+            crate::gc::census::map_bytes(&*table),
+            headers,
+            programs,
+        )
+    })
+}
+
+pub(super) fn active_factory_census_parts() -> (usize, usize) {
+    ACTIVE_FACTORY_SITES.with(|stack| {
+        let stack = stack.borrow();
+        (
+            stack.len(),
+            stack.capacity() * std::mem::size_of::<ActiveFactorySite>(),
+        )
+    })
+}
+
 pub(crate) fn side_table_census() -> Vec<crate::gc::census::SideTableRow> {
     vec![
         super::site_cache::census(),

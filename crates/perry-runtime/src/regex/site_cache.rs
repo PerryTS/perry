@@ -122,19 +122,39 @@ fn entry_count(cache: &ContentMap) -> usize {
 }
 
 pub(super) fn census() -> crate::gc::census::SideTableRow {
+    let (entries, bytes, _) = census_parts();
+    ("regex.content_cache", entries, bytes)
+}
+
+pub(super) fn census_parts() -> (usize, usize, Vec<usize>) {
     SITE_CACHE.with(|cache| {
         let cache = cache.borrow();
         let entries = entry_count(&cache);
-        // The content payload dominates; include its owned pattern/flags bytes
-        // as well as one entry record.  Bucket/control-byte overhead is small
-        // and deliberately left as an estimate, matching the census contract.
-        let bytes = cache
+        let inner = cache
+            .values()
+            .map(crate::gc::census::vec_bytes)
+            .sum::<usize>();
+        let text = cache
             .values()
             .flatten()
-            .map(|entry| std::mem::size_of::<Entry>() + entry.pattern.len() + entry.flags.len())
-            .sum();
-        ("regex.content_cache", entries, bytes)
+            .map(|entry| entry.pattern.len() + entry.flags.len())
+            .sum::<usize>();
+        let programs = cache
+            .values()
+            .flatten()
+            .filter_map(|entry| entry.programs.as_ref())
+            .map(|programs| Arc::as_ptr(programs) as usize)
+            .collect();
+        (
+            entries,
+            crate::gc::census::map_bytes(&*cache) + inner + text,
+            programs,
+        )
     })
+}
+
+pub(super) fn census_program_ptrs() -> std::collections::HashSet<usize> {
+    census_parts().2.into_iter().collect()
 }
 
 /// Remove one entry that has no recorded literal site. The scan happens only

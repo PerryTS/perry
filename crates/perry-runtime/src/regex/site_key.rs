@@ -148,11 +148,15 @@ fn slot_of(key: usize) -> usize {
 }
 
 pub(super) fn census() -> crate::gc::census::SideTableRow {
+    let (entries, bytes) = census_parts();
+    ("regex.literal_sites", entries, bytes)
+}
+
+pub(super) fn census_parts() -> (usize, usize) {
     SITE_KEY_TABLE.with(|table| {
         let table = table.borrow();
         let entries = table.iter().filter(|entry| entry.is_some()).count();
         (
-            "regex.literal_sites",
             entries,
             table.capacity() * std::mem::size_of::<Option<Entry>>(),
         )

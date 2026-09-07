@@ -8,6 +8,7 @@
 //! and source/capture buffers that can be observed without unsafe layout
 //! assumptions.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use super::*;
@@ -96,6 +97,36 @@ fn fancy_program_bytes(program: &fancy_regex::Regex) -> usize {
 
 fn repeat_program_bytes(program: &repeat_matcher::RepeatMatcherRegex) -> usize {
     arc_allocation_bytes::<repeat_matcher::RepeatMatcherRegex>() + program.census_buffer_bytes()
+}
+
+fn program_bundle_bytes(
+    bundle_ptrs: impl IntoIterator<Item = usize>,
+    standard_skip: &HashSet<usize>,
+    fancy_skip: &HashSet<usize>,
+    repeat_skip: &HashSet<usize>,
+) -> usize {
+    let mut standard_seen = standard_skip.clone();
+    let mut fancy_seen = fancy_skip.clone();
+    let mut repeat_seen = repeat_skip.clone();
+    let mut bytes = 0usize;
+    for ptr in bundle_ptrs {
+        let programs = unsafe { &*(ptr as *const site_cache::Programs) };
+        bytes += arc_allocation_bytes::<site_cache::Programs>();
+        if standard_seen.insert(Arc::as_ptr(&programs.std) as usize) {
+            bytes += standard_program_bytes(&programs.std);
+        }
+        if let Some(program) = &programs.fancy {
+            if fancy_seen.insert(Arc::as_ptr(program) as usize) {
+                bytes += fancy_program_bytes(program);
+            }
+        }
+        if let Some(program) = &programs.repeat {
+            if repeat_seen.insert(Arc::as_ptr(program) as usize) {
+                bytes += repeat_program_bytes(program);
+            }
+        }
+    }
+    bytes
 }
 
 fn pointer_row() -> RegexCensusRow {
@@ -244,6 +275,81 @@ fn matcher_kind_row() -> RegexCensusRow {
         .text("storage", "RegExpHeader.matcher_kind")
 }
 
+fn content_row(
+    standard_cached: &HashSet<usize>,
+    fancy_cached: &HashSet<usize>,
+    repeat_cached: &HashSet<usize>,
+) -> RegexCensusRow {
+    let (entries, table_bytes, bundle_ptrs) = site_cache::census_parts();
+    let opaque = program_bundle_bytes(
+        bundle_ptrs.iter().copied(),
+        standard_cached,
+        fancy_cached,
+        repeat_cached,
+    );
+    RegexCensusRow::new("regex.content_cache", entries, table_bytes + opaque)
+        .usize("pinned_programs", bundle_ptrs.len())
+        .usize("opaque_program_bytes", opaque)
+        .text("program_bytes_estimate", "opaque_inline_lower_bound")
+        .bool("program_bytes_inside_side_table_bytes", true)
+}
+
+fn site_table_row(
+    content_bundles: &HashSet<usize>,
+    standard_cached: &HashSet<usize>,
+    fancy_cached: &HashSet<usize>,
+    repeat_cached: &HashSet<usize>,
+) -> RegexCensusRow {
+    let (sites, table_bytes, header_ptrs, bundle_ptrs) = site_test::census_parts();
+    let rooted_headers = header_ptrs.len();
+    let exclusive = bundle_ptrs
+        .iter()
+        .copied()
+        .filter(|ptr| !content_bundles.contains(ptr))
+        .collect::<Vec<_>>();
+    let attributed_program_bytes = program_bundle_bytes(
+        exclusive.iter().copied(),
+        standard_cached,
+        fancy_cached,
+        repeat_cached,
+    );
+    let pinned_program_bytes = program_bundle_bytes(
+        bundle_ptrs.iter().copied(),
+        &HashSet::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+    );
+    RegexCensusRow::new(
+        "regex.site_table",
+        sites,
+        table_bytes + attributed_program_bytes,
+    )
+    .usize("sites", sites)
+    .usize("rooted_headers", rooted_headers)
+    .usize(
+        "rooted_header_bytes",
+        rooted_headers * std::mem::size_of::<RegExpHeader>(),
+    )
+    .bool("rooted_header_bytes_inside_side_table_bytes", false)
+    .usize("pinned_programs", bundle_ptrs.len())
+    .usize("exclusively_attributed_programs", exclusive.len())
+    .usize("pinned_program_bytes", pinned_program_bytes)
+    .usize("attributed_program_bytes", attributed_program_bytes)
+    .text("program_bytes_estimate", "opaque_inline_lower_bound")
+    .bool("pinned_program_bytes_inside_side_table_bytes", false)
+    .bool("attributed_program_bytes_inside_side_table_bytes", true)
+}
+
+fn literal_site_row() -> RegexCensusRow {
+    let (sites, bytes) = site_key::census_parts();
+    RegexCensusRow::new("regex.literal_sites", sites, bytes).usize("sites", sites)
+}
+
+fn active_factory_row() -> RegexCensusRow {
+    let (entries, bytes) = site_test::active_factory_census_parts();
+    RegexCensusRow::new("regex.active_factory_sites", entries, bytes)
+}
+
 fn expando_row() -> RegexCensusRow {
     let (owners, properties, bytes) = crate::object::exotic_expando::regex_expando_census();
     RegexCensusRow::new("regex.expando_owners", owners, bytes)
@@ -256,12 +362,44 @@ pub(crate) fn census_snapshot() -> RegexCensusSnapshot {
     #[cfg(test)]
     TEST_CENSUS_WALKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
+    let standard_cached = REGEX_CACHE.with(|cache| {
+        cache
+            .borrow()
+            .values()
+            .map(|program| Arc::as_ptr(program) as usize)
+            .collect::<HashSet<_>>()
+    });
+    let fancy_cached = FANCY_CACHE.with(|cache| {
+        cache
+            .borrow()
+            .values()
+            .map(|program| Arc::as_ptr(program) as usize)
+            .collect::<HashSet<_>>()
+    });
+    let repeat_cached = REPEAT_MATCHER_CACHE.with(|cache| {
+        cache
+            .borrow()
+            .values()
+            .map(|program| Arc::as_ptr(program) as usize)
+            .collect::<HashSet<_>>()
+    });
+    let content_bundles = site_cache::census_program_ptrs();
+
     let rows = vec![
         pointer_row(),
         standard_cache_row(),
         fancy_cache_row(),
         repeat_cache_row(),
         validation_cache_row(),
+        content_row(&standard_cached, &fancy_cached, &repeat_cached),
+        literal_site_row(),
+        site_table_row(
+            &content_bundles,
+            &standard_cached,
+            &fancy_cached,
+            &repeat_cached,
+        ),
+        active_factory_row(),
         expando_row(),
         matcher_kind_row(),
     ];
@@ -273,6 +411,16 @@ pub(crate) fn census_snapshot() -> RegexCensusSnapshot {
         + fancy_cache_row().bytes
         + repeat_cache_row().bytes
         + validation_cache_row().bytes
+        + content_row(&standard_cached, &fancy_cached, &repeat_cached).bytes
+        + literal_site_row().bytes
+        + site_table_row(
+            &content_bundles,
+            &standard_cached,
+            &fancy_cached,
+            &repeat_cached,
+        )
+        .bytes
+        + active_factory_row().bytes
         + expando_row().bytes
         + matcher_kind_row().bytes;
 
@@ -289,5 +437,8 @@ pub(crate) fn test_reset_tables() {
     FANCY_CACHE.with(|cache| cache.borrow_mut().clear());
     REPEAT_MATCHER_CACHE.with(|cache| cache.borrow_mut().clear());
     VALIDATED_PATTERNS.with(|cache| cache.borrow_mut().clear());
+    site_cache::test_reset();
+    site_key::test_reset();
+    site_test::test_reset();
     test_reset_walks();
 }
