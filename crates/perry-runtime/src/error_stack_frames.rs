@@ -46,6 +46,10 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::OnceLock;
 
+#[cfg(all(test, unix))]
+static STATIC_SYMBOL_SPAWN_ATTEMPTS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
 /// Native return addresses captured per construction. 16 words = 128 bytes of
 /// encoded blob, enough to cover node's default `Error.stackTraceLimit` of 10
 /// JS frames plus the runtime frames between `new Error` and the throwing
@@ -331,9 +335,10 @@ pub(crate) fn capture_ips(out: &mut [usize; MAX_CAPTURED_FRAMES]) -> usize {
 
 /// Best-effort one-line description of a code address for diagnostics: the
 /// registered JS display name when `ip` is inside a compiled user function,
-/// else the nearest dynamic linker symbol (`dladdr`), else a retained static
-/// symbol, else the bare address. Never called on a hot path — the JS-name
-/// index takes a lock and the static table is loaded lazily on the first miss.
+/// else the nearest dynamic linker symbol (`dladdr`), else an executable-image
+/// offset. `PERRY_STACK_SYMBOLS=1` opts into replacing that offset with a
+/// retained static symbol. Never called on a hot path — the JS-name index takes
+/// a lock, while the expensive static table is never loaded by default.
 pub(crate) fn describe_ip(ip: usize) -> String {
     let js = with_index(|index| {
         let lookup_ip = ip.saturating_sub(1);
@@ -351,12 +356,17 @@ pub(crate) fn describe_ip(ip: usize) -> String {
     {
         if let Some(info) = dladdr_info(ip) {
             if info.dli_sname.is_null() {
-                if let Some((name, off)) = static_symbol_for_ip(ip, info.dli_fbase as usize) {
-                    return format!("rt:{name}+{off:#x}");
+                if stack_symbols_enabled() {
+                    if let Some((name, off)) = static_symbol_for_ip(ip, info.dli_fbase as usize) {
+                        return format!("rt:{name}+{off:#x}");
+                    }
+                } else if executable_image_base() == Some(info.dli_fbase as usize) {
+                    if let Some(off) = ip.checked_sub(info.dli_fbase as usize) {
+                        return format!("rt+{off:#x}");
+                    }
                 }
             } else {
-                let name =
-                    unsafe { std::ffi::CStr::from_ptr(info.dli_sname) }.to_string_lossy();
+                let name = unsafe { std::ffi::CStr::from_ptr(info.dli_sname) }.to_string_lossy();
                 let off = ip.saturating_sub(info.dli_saddr as usize);
                 let mut n = name.into_owned();
                 if n.len() > 72 {
@@ -382,6 +392,29 @@ fn dladdr_info(ip: usize) -> Option<libc::Dl_info> {
     let mut info: libc::Dl_info = unsafe { std::mem::zeroed() };
     // SAFETY: `dladdr` only reads the address and fills `info`.
     (unsafe { libc::dladdr(ip as *const libc::c_void, &mut info) } != 0).then_some(info)
+}
+
+/// Static executable symbolization is deliberately opt-in: `nm` is a process
+/// spawn and can consume seconds on a large retained-symbol binary. Read the
+/// switch once so every default-path miss pays only a cached boolean load.
+#[cfg(unix)]
+fn stack_symbols_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| crate::gc::env_flag_enabled("PERRY_STACK_SYMBOLS"))
+}
+
+/// Loaded base of this executable, derived without opening the executable or
+/// spawning a tool. Zero is the cached failure sentinel; supported Unix image
+/// bases are non-null.
+#[cfg(unix)]
+fn executable_image_base() -> Option<usize> {
+    static IMAGE_BASE: OnceLock<usize> = OnceLock::new();
+    let base = *IMAGE_BASE.get_or_init(|| {
+        dladdr_info(load_static_symbol_index as usize)
+            .map(|info| info.dli_fbase as usize)
+            .unwrap_or(0)
+    });
+    (base != 0).then_some(base)
 }
 
 #[cfg(unix)]
@@ -430,6 +463,8 @@ fn demangle_nm_symbol(name: &str) -> String {
 #[cfg(unix)]
 fn load_static_symbol_index() -> Option<StaticSymbolIndex> {
     let executable = std::env::current_exe().ok()?;
+    #[cfg(test)]
+    STATIC_SYMBOL_SPAWN_ATTEMPTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let output = std::process::Command::new("nm")
         .arg("-nC")
         .arg(executable)
@@ -470,7 +505,7 @@ fn load_static_symbol_index() -> Option<StaticSymbolIndex> {
     // publish their preferred base as one of the marker symbols above. For an
     // ELF variant without that marker, select PIE-relative versus absolute
     // `nm` addresses by whichever places a text symbol nearest this function.
-    let image_base = dladdr_info(load_static_symbol_index as usize)?.dli_fbase as usize;
+    let image_base = executable_image_base()?;
     let preferred_base = preferred_base.unwrap_or_else(|| {
         let anchor = load_static_symbol_index as usize;
         let absolute_distance = raw_entries
@@ -873,11 +908,32 @@ mod tests {
         );
     }
 
-    /// A kept local Rust symbol is absent from the dynamic symbol table on the
-    /// supported Unix builds but present in the executable's static `t` table.
+    /// The shipping default identifies executable-image misses by their PIE
+    /// offset and must never enter the `nm` spawn path. The child process gives
+    /// the cached flag a deterministic unset environment; removing the gate is
+    /// sabotage-proved by the spawn counter becoming non-zero.
     #[cfg(unix)]
     #[test]
-    fn describe_ip_names_a_kept_runtime_symbol_on_dladdr_miss() {
+    fn describe_ip_defaults_to_an_executable_offset_without_spawning_nm() {
+        const CHILD_ENV: &str = "PERRY_TEST_STACK_SYMBOLS_DEFAULT_CHILD";
+        if std::env::var_os(CHILD_ENV).is_none() {
+            let status =
+                std::process::Command::new(std::env::current_exe().expect("current test binary"))
+                    .arg("describe_ip_defaults_to_an_executable_offset_without_spawning_nm")
+                    .arg("--nocapture")
+                    .env_remove("PERRY_STACK_SYMBOLS")
+                    .env(CHILD_ENV, "1")
+                    .status()
+                    .expect("launch isolated default stack-symbol witness");
+            assert!(status.success(), "default stack-symbol witness failed");
+            return;
+        }
+
+        assert!(!stack_symbols_enabled(), "the default child must be OFF");
+        assert_eq!(
+            STATIC_SYMBOL_SPAWN_ATTEMPTS.load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
         let ip = kept_runtime_symbol_probe as usize;
         assert_ne!(std::hint::black_box(kept_runtime_symbol_probe(3)), 0);
         let info = dladdr_info(ip).expect("the probe must belong to the main executable image");
@@ -885,14 +941,57 @@ mod tests {
             info.dli_sname.is_null(),
             "the probe unexpectedly has a dynamic symbol; this test must exercise the dladdr miss"
         );
-        if static_symbol_index().is_none() {
-            eprintln!(
-                "ignored: this test binary's static symbol table is not readable through `nm -nC`"
-            );
+        let image_base = executable_image_base().expect("the executable base must resolve");
+        assert_eq!(info.dli_fbase as usize, image_base);
+
+        let description = describe_ip(ip);
+        assert_eq!(description, format!("rt+{:#x}", ip - image_base));
+        assert_eq!(
+            STATIC_SYMBOL_SPAWN_ATTEMPTS.load(std::sync::atomic::Ordering::Relaxed),
+            0,
+            "the default address fallback must not attempt to spawn `nm`"
+        );
+    }
+
+    /// A kept local Rust symbol is absent from the dynamic symbol table but is
+    /// present in the executable's static `t` table. This isolated child opts
+    /// into `PERRY_STACK_SYMBOLS`; no in-process test mutates the cached flag.
+    #[cfg(unix)]
+    #[test]
+    fn describe_ip_names_a_kept_runtime_symbol_when_nm_is_opted_in() {
+        const CHILD_ENV: &str = "PERRY_TEST_STACK_SYMBOLS_NM_CHILD";
+        if std::env::var_os(CHILD_ENV).is_none() {
+            let status =
+                std::process::Command::new(std::env::current_exe().expect("current test binary"))
+                    .arg("describe_ip_names_a_kept_runtime_symbol_when_nm_is_opted_in")
+                    .arg("--nocapture")
+                    .env("PERRY_STACK_SYMBOLS", "1")
+                    .env(CHILD_ENV, "1")
+                    .status()
+                    .expect("launch isolated opt-in stack-symbol witness");
+            assert!(status.success(), "opt-in stack-symbol witness failed");
             return;
         }
 
+        assert!(stack_symbols_enabled(), "the opt-in child must be ON");
+        let ip = kept_runtime_symbol_probe as usize;
+        assert_ne!(std::hint::black_box(kept_runtime_symbol_probe(3)), 0);
+        let info = dladdr_info(ip).expect("the probe must belong to the main executable image");
+        assert!(
+            info.dli_sname.is_null(),
+            "the probe unexpectedly has a dynamic symbol; this test must exercise the dladdr miss"
+        );
+
         let description = describe_ip(ip);
+        assert_eq!(
+            STATIC_SYMBOL_SPAWN_ATTEMPTS.load(std::sync::atomic::Ordering::Relaxed),
+            1,
+            "the opted-in path must attempt exactly one `nm` spawn"
+        );
+        if static_symbol_index().is_none() {
+            eprintln!("skipped symbol assertion: `nm -nC` could not read this test binary");
+            return;
+        }
         assert!(
             description.starts_with("rt:"),
             "static fallback did not identify a runtime symbol: {description}"
@@ -906,11 +1005,6 @@ mod tests {
             "the exact function start should have offset zero: {description}"
         );
     }
-
-    #[cfg(not(unix))]
-    #[test]
-    #[ignore = "the static executable symbol-table fallback is Unix-only"]
-    fn describe_ip_names_a_kept_runtime_symbol_on_dladdr_miss() {}
 
     /// A capture in which no address resolves must not produce an empty frame
     /// list — the caller has to be able to fall back.
