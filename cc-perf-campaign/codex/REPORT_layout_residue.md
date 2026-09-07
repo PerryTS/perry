@@ -25,6 +25,11 @@ differs. The replayed tests are present:
 - `surviving_young_masked_owner_is_rekeyed_and_stays_logged`
 - `old_layout_records_are_skipped_by_a_minor`
 
+The focused `layout` filter ran the first and third green. The middle name
+does not contain `layout`; its required full-suite execution is one of the
+gates the 12 GB disk floor prevented, so it is present but not claimed green
+on this machine.
+
 The superseded `41a8af7da`, `bdd1fc003`, and `0a427a39f` were not replayed.
 Consequently their full-walk test names/guard are intentionally absent:
 `young_closure_prop_value_is_traced_and_moved_by_a_minor`,
