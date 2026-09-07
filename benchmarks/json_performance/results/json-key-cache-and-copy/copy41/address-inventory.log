@@ -1,0 +1,20 @@
+addr-class RATCHET FAILED — a file gained a site in a rule that is
+frozen at its current count. Use the predicates in
+crates/perry-runtime/src/value/addr_class.rs (is_handle_band /
+is_above_handle_band / try_read_gc_header) instead of a hand-rolled
+address floor or a bare is_valid_obj_ptr guard: neither rejects the
+fetch/zlib/proxy handle bands on Linux, and dereferencing a handle
+segfaults there while macOS silently hides it (#1843, #4004, #4665,
+#4800, #6271).
+
+  [handle-floor] crates/perry-runtime/src/json/stringify_string.rs: 1 site(s), baseline allows 0
+      line 15: if (source as usize) < 0x1000 {
+
+Address-classification audit failed; use the predicates/constants in
+crates/perry-runtime/src/value/addr_class.rs (is_handle_band /
+is_small_handle / is_proxy_id_band / try_read_gc_header / ...) instead
+of re-typing band literals or casting to GcHeader, or add a justified
+entry to scripts/addr_class_allowlist.txt:
+  crates/perry-runtime/src/json/parser_short_array_tests.rs:74: [gcheader-cast] &*((array as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader)
+  crates/perry-runtime/src/json/stringify_primitive_array.rs:56: [gcheader-cast] let header = (arr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+  crates/perry-runtime/src/json/stringify_shape_template.rs:330: [gcheader-cast] let header = elem_ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;

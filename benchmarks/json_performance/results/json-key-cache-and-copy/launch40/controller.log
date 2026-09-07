@@ -1,0 +1,9 @@
+ACQUIRED json-perf-6008-1788790954 load (1.8828125, 1.67822265625, 1.6767578125)
+FINISHED custom load (2.0458984375, 1.93408203125, 1.79541015625)
+QUIET_GATE True
+RELEASED
+MONITOR_FINISHED 0 observations 76
+Traceback (most recent call last):
+  File "/Users/perry/json-wide-key-immutable-v40-20260907-codex/monitor.py", line 16, in <module>
+    assert all(r['monitor_exit']==0 and not r['external'] and not r['xprotect_busy'] for r in observations)
+AssertionError

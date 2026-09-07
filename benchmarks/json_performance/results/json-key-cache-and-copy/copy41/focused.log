@@ -1,0 +1,10 @@
+   Compiling perry-runtime v0.5.1520 (/Users/amlug/projects/perry/codex-json-gc-deferral/crates/perry-runtime)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 21.62s
+     Running unittests src/lib.rs (/Users/amlug/projects/perry/codex-json-batch-target/debug/build/perry-runtime/77f7d5e322249c1d/out/perry_runtime-77f7d5e322249c1d)
+
+running 2 tests
+test json::stringify_copy::tests::json_piece_copy_neither_reads_nor_writes_past_guard_pages ... ok
+test json::stringify_copy::tests::json_piece_copy_preserves_bytes_and_sentinels_at_every_short_alignment ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 3294 filtered out; finished in 0.01s
+

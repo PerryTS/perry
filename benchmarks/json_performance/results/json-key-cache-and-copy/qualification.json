@@ -1,0 +1,16 @@
+{
+  "window": "launch42",
+  "observations": 90,
+  "all_row_no_regression_goal_complete": false,
+  "promoted_over_depth22": false,
+  "gc_policy_changed": false,
+  "decision": "Both improvements measured; retain experimental while regressions remain",
+  "wide": {
+    "cpu_us_rows_at_or_below_both": 17,
+    "peak_rss_mib_rows_at_or_below_both": 32
+  },
+  "candidate": {
+    "cpu_us_rows_at_or_below_both": 17,
+    "peak_rss_mib_rows_at_or_below_both": 32
+  }
+}

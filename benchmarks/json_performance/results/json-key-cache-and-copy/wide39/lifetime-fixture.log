@@ -1,0 +1,9 @@
+{} True {}
+{'PERRY_GC_HEAP_LIMIT': '32'} True {}
+{'PERRY_JSON_TAPE': '0'} True {}
+{'PERRY_GEN_GC': '0'} True {}
+{'PERRY_GC_MOVING_LOOP_POLLS': '0'} True {}
+{'PERRY_GC_SCHEDULE_SEED': '17', 'PERRY_GC_SCHEDULE_RATE': '0.1', 'PERRY_GC_PROTECT_FROMSPACE': '1', 'PERRY_GC_VERIFY_EVACUATION': '1'} True {'scheduled_collections': 17, 'copying_minors': 17, 'moved_objects': 34894, 'loop_polls': 2073}
+{'PERRY_GC_HEAP_LIMIT': '32', 'PERRY_JSON_TAPE': '0', 'PERRY_GC_SCHEDULE_SEED': '17', 'PERRY_GC_SCHEDULE_RATE': '0.1', 'PERRY_GC_PROTECT_FROMSPACE': '1', 'PERRY_GC_VERIFY_EVACUATION': '1'} True {'scheduled_collections': 13, 'copying_minors': 45, 'moved_objects': 34725, 'loop_polls': 2073}
+{'PERRY_GC_SCHEDULE_SEED': '9013', 'PERRY_GC_SCHEDULE_RATE': '0.1', 'PERRY_GC_PROTECT_FROMSPACE': '1', 'PERRY_GC_VERIFY_EVACUATION': '1'} True {'scheduled_collections': 27, 'copying_minors': 27, 'moved_objects': 43107, 'loop_polls': 2073}
+{'PERRY_GC_HEAP_LIMIT': '32', 'PERRY_JSON_TAPE': '0', 'PERRY_GC_SCHEDULE_SEED': '9013', 'PERRY_GC_SCHEDULE_RATE': '0.1', 'PERRY_GC_PROTECT_FROMSPACE': '1', 'PERRY_GC_VERIFY_EVACUATION': '1'} True {'scheduled_collections': 21, 'copying_minors': 51, 'moved_objects': 42797, 'loop_polls': 2073}

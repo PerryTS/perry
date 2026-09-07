@@ -1,0 +1,65 @@
+{
+  "worker_sha256": "843f5e63e43f25705d3ec0245e7c4b2a77c02389db37e19db6ae298dcec8ed12",
+  "symbols": [
+    {
+      "symbol": "__RNvNtNtCs7wa3bwJW6LN_13perry_runtime4json14stringify_flat10emit_piece",
+      "instructions": 278,
+      "calls": [
+        "1004bcbf8:      bl  0x100af92ac <_writev+0x100af92ac>",
+        "1004bcec4:      bl  0x100ab16c0 <__RNvNtCsjgY6bXVaRmE_4core6option13expect_failed>",
+        "1004bcedc:      bl  0x100ab16c0 <__RNvNtCsjgY6bXVaRmE_4core6option13expect_failed>",
+        "1004bcef0:      bl  0x100ab178c <__RNvNtCsjgY6bXVaRmE_4core9panicking18panic_bounds_check>"
+      ]
+    },
+    {
+      "symbol": "__RNvNtNtCs7wa3bwJW6LN_13perry_runtime4json23stringify_record_output11emit_record",
+      "instructions": 594,
+      "calls": [
+        "1004c3b54:      bl  0x100adc030 <__RNvNtCs7wa3bwJW6LN_13perry_runtime7tls_hot12hot_uncached>",
+        "1004c3b6c:      bl  0x100ad949c <__RNvMs5_NtCs7wa3bwJW6LN_13perry_runtime7tls_hotINtB5_6HotKeyNtNtNtB7_7closure8registry14DispatchRecentE8get_slowB7_>",
+        "1004c3b78:      bl  0x100adb16c <__RNvNtCs7wa3bwJW6LN_13perry_runtime5state10init_state>",
+        "1004c3bc8:      bl  0x1004be070 <__RNvNtNtCs7wa3bwJW6LN_13perry_runtime4json14stringify_flat9key_piece>",
+        "1004c3c34:      bl  0x1004bd730 <__RNvNtNtCs7wa3bwJW6LN_13perry_runtime4json14stringify_flat12scalar_piece>",
+        "1004c3cb0:      bl  0x100535f44 <__RNvNtNtCs7wa3bwJW6LN_13perry_runtime5value10addr_class26try_read_tracked_gc_header>",
+        "1004c3d14:      bl  0x1004fb7ec <__RNvNtNtCs7wa3bwJW6LN_13perry_runtime5array6header35array_has_named_properties_resolved>",
+        "1004c3d20:      bl  0x100567648 <__RNvNtNtCs7wa3bwJW6LN_13perry_runtime6object15prototype_chain23object_static_prototype>",
+        "1004c3d7c:      bl  0x1004bd730 <__RNvNtNtCs7wa3bwJW6LN_13perry_runtime4json14stringify_flat12scalar_piece>",
+        "1004c3ee0:      bl  0x10026a3d0 <__RNvMs_NtNtNtCs7wa3bwJW6LN_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope3new>",
+        "1004c3efc:      bl  0x10026a4d8 <__RNvMs_NtNtNtCs7wa3bwJW6LN_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope4push>",
+        "1004c3f1c:      bl  0x1004c385c <__RNvNtNtCs7wa3bwJW6LN_13perry_runtime4json22stringify_tojson_probe40to_json_definitely_absent_after_own_keys>",
+        "1004c3f28:      bl  0x10032590c <__RNvNtCs7wa3bwJW6LN_13perry_runtime6string20string_storage_alloc>",
+        "1004c3fb4:      bl  0x100160f4c <__RINvNtCsjgY6bXVaRmE_4core3ptr9drop_glueNtNtNtNtCs7wa3bwJW6LN_13perry_runtime2gc5roots15runtime_handles18RuntimeHandleScopeEBJ_>",
+        "1004c3fe0:      bl  0x10013ba14 <__RINvMs2_NtNtCs8BpVhDwHqJW_3std6thread5localINtB6_8LocalKeyINtNtCsjgY6bXVaRmE_4core4cell7RefCellINtNtCsctvjasLqLe9_5alloc3vec3VecNtNtNtCs7wa3bwJW6LN_13perry_runtime2gc5roots17RuntimeHandleSlotEEE4withNCINvMs2_NtB24_15runtime_handlesNtB3k_13RuntimeHandle9with_slotONtNtB28_3map9MapHeaderNCINvB3g_15get_raw_mut_ptrB4d_E0E0B4c_EB28_>",
+        "1004c4088:      bl  0x100adc030 <__RNvNtCs7wa3bwJW6LN_13perry_runtime7tls_hot12hot_uncached>",
+        "1004c40b0:      bl  0x100ad949c <__RNvMs5_NtCs7wa3bwJW6LN_13perry_runtime7tls_hotINtB5_6HotKeyNtNtNtB7_7closure8registry14DispatchRecentE8get_slowB7_>",
+        "1004c40c8:      bl  0x100adb16c <__RNvNtCs7wa3bwJW6LN_13perry_runtime5state10init_state>",
+        "1004c415c:      bl  0x1004bcaa8 <__RNvNtNtCs7wa3bwJW6LN_13perry_runtime4json14stringify_flat10emit_piece>",
+        "1004c4188:      bl  0x1004bcaa8 <__RNvNtNtCs7wa3bwJW6LN_13perry_runtime4json14stringify_flat10emit_piece>",
+        "1004c41ec:      bl  0x1004bcaa8 <__RNvNtNtCs7wa3bwJW6LN_13perry_runtime4json14stringify_flat10emit_piece>",
+        "1004c4248:      bl  0x1004bcaa8 <__RNvNtNtCs7wa3bwJW6LN_13perry_runtime4json14stringify_flat10emit_piece>",
+        "1004c4280:      bl  0x100160f4c <__RINvNtCsjgY6bXVaRmE_4core3ptr9drop_glueNtNtNtNtCs7wa3bwJW6LN_13perry_runtime2gc5roots15runtime_handles18RuntimeHandleScopeEBJ_>",
+        "1004c4298:      bl  0x100ab165c <__RNvNtCsjgY6bXVaRmE_4core4cell30panic_already_mutably_borrowed>",
+        "1004c429c:      bl  0x100ae2f08 <__RNvNtNtNtCs7wa3bwJW6LN_13perry_runtime2gc5roots15runtime_handles23handle_used_after_scope>",
+        "1004c42ac:      bl  0x100ae2ed0 <__RNvNtNtNtCs7wa3bwJW6LN_13perry_runtime2gc5roots15runtime_handles20handle_kind_mismatch>",
+        "1004c42c4:      bl  0x100ab178c <__RNvNtCsjgY6bXVaRmE_4core9panicking18panic_bounds_check>"
+      ]
+    },
+    {
+      "symbol": "__RNvNtCs7wa3bwJW6LN_13perry_runtime4json25cached_parse_wide_key_ptr",
+      "instructions": 92,
+      "calls": [
+        "100305db8:      bl  0x10013996c <__RINvMs1_NtCshsF3QZNC8Sh_9hashbrown3mapINtB6_7HashMapINtNtCsctvjasLqLe9_5alloc3vec3VechEPNtNtCs7wa3bwJW6LN_13perry_runtime6string12StringHeaderNtNtNtCs8BpVhDwHqJW_3std4hash6random11RandomStateE3getShEB1s_>",
+        "100305dd8:      bl  0x1008852d4 <_js_string_from_bytes_longlived>",
+        "100305e08:      bl  0x100af6688 <_mi_malloc_aligned>",
+        "100305e1c:      bl  0x100af92ac <_writev+0x100af92ac>",
+        "100305e40:      bl  0x1002310ec <__RNvMs1_NtCshsF3QZNC8Sh_9hashbrown3mapINtB5_7HashMapINtNtCsctvjasLqLe9_5alloc3vec3VechEPNtNtCs7wa3bwJW6LN_13perry_runtime6string12StringHeaderNtNtNtCs8BpVhDwHqJW_3std4hash6random11RandomStateE6insertB1r_>",
+        "100305e70:      bl  0x100abcf30 <__RINvMs0_NtNtNtNtCs8BpVhDwHqJW_3std3sys12thread_local6native4lazyINtB6_7StorageINtNtCsjgY6bXVaRmE_4core4cell7RefCellINtNtNtNtBe_11collections4hash3map7HashMapINtNtCsctvjasLqLe9_5alloc3vec3VechEPNtNtCs7wa3bwJW6LN_13perry_runtime6string12StringHeaderEEuE16get_or_init_slowNvNvNtB39_4json15PARSE_KEY_CACHE27___rust_std_internal_init_fnEB39_>",
+        "100305e88:      bl  0x100ab165c <__RNvNtCsjgY6bXVaRmE_4core4cell30panic_already_mutably_borrowed>",
+        "100305e90:      bl  0x100abcf30 <__RINvMs0_NtNtNtNtCs8BpVhDwHqJW_3std3sys12thread_local6native4lazyINtB6_7StorageINtNtCsjgY6bXVaRmE_4core4cell7RefCellINtNtNtNtBe_11collections4hash3map7HashMapINtNtCsctvjasLqLe9_5alloc3vec3VechEPNtNtCs7wa3bwJW6LN_13perry_runtime6string12StringHeaderEEuE16get_or_init_slowNvNvNtB39_4json15PARSE_KEY_CACHE27___rust_std_internal_init_fnEB39_>",
+        "100305ea4:      bl  0x100aefa5c <__RNvNtNtCs8BpVhDwHqJW_3std6thread5local18panic_access_error>",
+        "100305eb0:      bl  0x100ab162c <__RNvNtCsjgY6bXVaRmE_4core4cell22panic_already_borrowed>",
+        "100305ebc:      bl  0x100ab12a4 <__RNvNtCsctvjasLqLe9_5alloc7raw_vec12handle_error>"
+      ]
+    }
+  ]
+}

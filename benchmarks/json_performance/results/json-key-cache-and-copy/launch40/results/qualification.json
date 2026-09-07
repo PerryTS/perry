@@ -1,0 +1,12 @@
+{
+  "qualified": false,
+  "reason": "XProtect 7.8% exceeds 5% in one observation",
+  "observations": 76,
+  "busy_observations": 1,
+  "counts": {
+    "recheck/verify.jsonl": 228,
+    "recheck/timing.jsonl": 1140,
+    "recheck/memory.jsonl": 480,
+    "lifetimes/raw.jsonl": 84
+  }
+}

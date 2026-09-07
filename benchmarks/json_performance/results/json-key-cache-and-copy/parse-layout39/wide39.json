@@ -1,0 +1,110 @@
+{
+  "worker_sha256": "33f426d3d1da56742f36fae55a87df3fef6d2d8f94a0063796f67c9a5b117bb1",
+  "functions": [
+    {
+      "symbol": "__RNvNtNtCs7wa3bwJW6LN_13perry_runtime4json11parse_empty21allocate_empty_object",
+      "instructions": 125,
+      "address_mod64": 20,
+      "prologue": [
+        "1004bc154:      stp x22, x21, [sp, #-0x30]!",
+        "1004bc158:      stp x20, x19, [sp, #0x10]",
+        "1004bc15c:      stp x29, x30, [sp, #0x20]",
+        "1004bc160:      add x29, sp, #0x20",
+        "1004bc164:      adrp    x0, 0x100f02000 <__RNvNCNKNvNtNtCs7wa3bwJW6LN_13perry_runtime13child_process7reactor10CP_PUMPING0s_023___RUST_STD_INTERNAL_VAL+0x8>",
+        "1004bc168:      add x0, x0, #0x9d0",
+        "1004bc16c:      ldr x8, [x0]",
+        "1004bc170:      blr x8"
+      ]
+    },
+    {
+      "symbol": "__RNvNtNtCs7wa3bwJW6LN_13perry_runtime4json19parse_inline_object6decode",
+      "instructions": 499,
+      "address_mod64": 48,
+      "prologue": [
+        "1004c1df0:      sub sp, sp, #0x1c0",
+        "1004c1df4:      stp x28, x27, [sp, #0x160]",
+        "1004c1df8:      stp x26, x25, [sp, #0x170]",
+        "1004c1dfc:      stp x24, x23, [sp, #0x180]",
+        "1004c1e00:      stp x22, x21, [sp, #0x190]",
+        "1004c1e04:      stp x20, x19, [sp, #0x1a0]",
+        "1004c1e08:      stp x29, x30, [sp, #0x1b0]",
+        "1004c1e0c:      add x29, sp, #0x1b0"
+      ]
+    },
+    {
+      "symbol": "__RNvNtNtCs7wa3bwJW6LN_13perry_runtime4json19parse_inline_object8allocate",
+      "instructions": 737,
+      "address_mod64": 60,
+      "prologue": [
+        "1004c25bc:      sub sp, sp, #0xf0",
+        "1004c25c0:      stp x28, x27, [sp, #0x90]",
+        "1004c25c4:      stp x26, x25, [sp, #0xa0]",
+        "1004c25c8:      stp x24, x23, [sp, #0xb0]",
+        "1004c25cc:      stp x22, x21, [sp, #0xc0]",
+        "1004c25d0:      stp x20, x19, [sp, #0xd0]",
+        "1004c25d4:      stp x29, x30, [sp, #0xe0]",
+        "1004c25d8:      add x29, sp, #0xe0"
+      ]
+    },
+    {
+      "symbol": "_js_object_alloc_class_dynamic_parent",
+      "instructions": 739,
+      "address_mod64": 0,
+      "prologue": [
+        "10081c100:      sub sp, sp, #0xa0",
+        "10081c104:      stp x28, x27, [sp, #0x40]",
+        "10081c108:      stp x26, x25, [sp, #0x50]",
+        "10081c10c:      stp x24, x23, [sp, #0x60]",
+        "10081c110:      stp x22, x21, [sp, #0x70]",
+        "10081c114:      stp x20, x19, [sp, #0x80]",
+        "10081c118:      stp x29, x30, [sp, #0x90]",
+        "10081c11c:      add x29, sp, #0x90"
+      ]
+    },
+    {
+      "symbol": "_js_object_alloc_class_with_keys",
+      "instructions": 704,
+      "address_mod64": 0,
+      "prologue": [
+        "10081ccc0:      sub sp, sp, #0x80",
+        "10081ccc4:      stp x28, x27, [sp, #0x20]",
+        "10081ccc8:      stp x26, x25, [sp, #0x30]",
+        "10081cccc:      stp x24, x23, [sp, #0x40]",
+        "10081ccd0:      stp x22, x21, [sp, #0x50]",
+        "10081ccd4:      stp x20, x19, [sp, #0x60]",
+        "10081ccd8:      stp x29, x30, [sp, #0x70]",
+        "10081ccdc:      add x29, sp, #0x70"
+      ]
+    },
+    {
+      "symbol": "_js_object_alloc_with_parent",
+      "instructions": 320,
+      "address_mod64": 0,
+      "prologue": [
+        "10081d7c0:      sub sp, sp, #0x90",
+        "10081d7c4:      stp x28, x27, [sp, #0x30]",
+        "10081d7c8:      stp x26, x25, [sp, #0x40]",
+        "10081d7cc:      stp x24, x23, [sp, #0x50]",
+        "10081d7d0:      stp x22, x21, [sp, #0x60]",
+        "10081d7d4:      stp x20, x19, [sp, #0x70]",
+        "10081d7d8:      stp x29, x30, [sp, #0x80]",
+        "10081d7dc:      add x29, sp, #0x80"
+      ]
+    },
+    {
+      "symbol": "_js_object_alloc_with_shape",
+      "instructions": 976,
+      "address_mod64": 0,
+      "prologue": [
+        "10081dcc0:      sub sp, sp, #0xb0",
+        "10081dcc4:      stp x28, x27, [sp, #0x50]",
+        "10081dcc8:      stp x26, x25, [sp, #0x60]",
+        "10081dccc:      stp x24, x23, [sp, #0x70]",
+        "10081dcd0:      stp x22, x21, [sp, #0x80]",
+        "10081dcd4:      stp x20, x19, [sp, #0x90]",
+        "10081dcd8:      stp x29, x30, [sp, #0xa0]",
+        "10081dcdc:      add x29, sp, #0xa0"
+      ]
+    }
+  ]
+}

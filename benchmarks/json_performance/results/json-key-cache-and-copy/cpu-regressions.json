@@ -1,0 +1,135 @@
+[
+  {
+    "candidate": "wide",
+    "reference": "fused",
+    "slower_separated": [
+      {
+        "fixture": "empty_object",
+        "operation": "parse",
+        "cpu_pct": 1.4225017146623609
+      },
+      {
+        "fixture": "heterogeneous_1m",
+        "operation": "parse",
+        "cpu_pct": 0.947088497998938
+      },
+      {
+        "fixture": "records_array_16k",
+        "operation": "parse",
+        "cpu_pct": 1.1457003502569618
+      },
+      {
+        "fixture": "records_array_1m",
+        "operation": "parse",
+        "cpu_pct": 1.1722288176581719
+      },
+      {
+        "fixture": "records_array_1m",
+        "operation": "stringify",
+        "cpu_pct": 0.9990079943980712
+      },
+      {
+        "fixture": "records_array_8m",
+        "operation": "stringify",
+        "cpu_pct": 1.1570523111317232
+      },
+      {
+        "fixture": "records_object_1m",
+        "operation": "stringify",
+        "cpu_pct": 1.019332577979748
+      },
+      {
+        "fixture": "records_object_20m",
+        "operation": "stringify",
+        "cpu_pct": 0.5748397790409587
+      },
+      {
+        "fixture": "records_object_8m",
+        "operation": "stringify",
+        "cpu_pct": 0.9059671217946708
+      },
+      {
+        "fixture": "small_record",
+        "operation": "stringify",
+        "cpu_pct": 2.3603331367924696
+      },
+      {
+        "fixture": "tiny_object",
+        "operation": "stringify",
+        "cpu_pct": 0.2280312380657179
+      }
+    ]
+  },
+  {
+    "candidate": "candidate",
+    "reference": "wide",
+    "slower_separated": [
+      {
+        "fixture": "records_array_20m",
+        "operation": "parse",
+        "cpu_pct": 0.9585535281018354
+      },
+      {
+        "fixture": "records_object_1m",
+        "operation": "parse",
+        "cpu_pct": 0.6359630449591203
+      },
+      {
+        "fixture": "records_object_20m",
+        "operation": "parse",
+        "cpu_pct": 1.010471064691476
+      },
+      {
+        "fixture": "records_object_8m",
+        "operation": "parse",
+        "cpu_pct": 0.7098272876833844
+      },
+      {
+        "fixture": "small_record",
+        "operation": "parse",
+        "cpu_pct": 0.425354407262879
+      },
+      {
+        "fixture": "tiny_object",
+        "operation": "parse",
+        "cpu_pct": 0.3719789442805599
+      }
+    ]
+  },
+  {
+    "candidate": "candidate",
+    "reference": "fused",
+    "slower_separated": [
+      {
+        "fixture": "empty_object",
+        "operation": "parse",
+        "cpu_pct": 2.152903346486501
+      },
+      {
+        "fixture": "heterogeneous_1m",
+        "operation": "parse",
+        "cpu_pct": 1.030135437189128
+      },
+      {
+        "fixture": "records_array_16k",
+        "operation": "parse",
+        "cpu_pct": 0.9345641428524676
+      },
+      {
+        "fixture": "records_array_1m",
+        "operation": "parse",
+        "cpu_pct": 0.9435870377698663
+      },
+      {
+        "fixture": "records_array_20m",
+        "operation": "parse",
+        "cpu_pct": 1.1569202078060448
+      },
+      {
+        "fixture": "records_object_1m",
+        "operation": "parse",
+        "cpu_pct": 1.0554498621235142
+      }
+    ]
+  }
+]

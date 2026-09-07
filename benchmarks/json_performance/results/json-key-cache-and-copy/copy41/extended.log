@@ -1,0 +1,3 @@
+EXTENDED None 0 True False {}
+EXTENDED 17 0 True False {'scheduled_collections': 107, 'copying_minors': 107, 'moved_objects': 27524, 'loop_polls': 123048}
+EXTENDED 9013 0 True False {'scheduled_collections': 110, 'copying_minors': 110, 'moved_objects': 27260, 'loop_polls': 123048}

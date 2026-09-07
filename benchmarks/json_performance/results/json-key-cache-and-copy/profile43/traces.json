@@ -1,0 +1,18 @@
+[
+  {
+    "arm": "wide39",
+    "worker_sha256": "33f426d3d1da56742f36fae55a87df3fef6d2d8f94a0063796f67c9a5b117bb1",
+    "cycles": 6,
+    "full": 1,
+    "pointer_slots": 4212357,
+    "diagnostic_only": true
+  },
+  {
+    "arm": "copy41",
+    "worker_sha256": "843f5e63e43f25705d3ec0245e7c4b2a77c02389db37e19db6ae298dcec8ed12",
+    "cycles": 6,
+    "full": 1,
+    "pointer_slots": 4212357,
+    "diagnostic_only": true
+  }
+]
