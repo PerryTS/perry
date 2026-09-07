@@ -42,6 +42,10 @@ enum ArenaObjectCursorBlocks {
 
 pub(crate) struct ArenaObjectCursorBuilder {
     order: ArenaWalkOrder,
+    /// Clear each block's exact-start bitmap while taking the census snapshot.
+    /// Only the exact ValidPointerSet census requests this; other arena walks
+    /// retain the allocation-authored Map boundaries used by copying GC.
+    reset_object_starts: bool,
     blocks: Vec<ArenaWalkBlock>,
     address_blocks: std::collections::BTreeMap<usize, ArenaWalkBlock>,
     initialized: bool,
@@ -61,8 +65,16 @@ const ARENA_CURSOR_OLD: usize = 4;
 
 impl ArenaObjectCursorBuilder {
     pub(crate) fn new(order: ArenaWalkOrder) -> Self {
+        Self::new_with_object_start_reset(order, false)
+    }
+
+    pub(crate) fn new_with_object_start_reset(
+        order: ArenaWalkOrder,
+        reset_object_starts: bool,
+    ) -> Self {
         Self {
             order,
+            reset_object_starts,
             blocks: Vec::new(),
             address_blocks: std::collections::BTreeMap::new(),
             initialized: false,
@@ -91,7 +103,9 @@ impl ArenaObjectCursorBuilder {
             self.inspected_blocks = self.inspected_blocks.saturating_add(1);
             *remaining -= 1;
 
-            if let Some(block) = snapshot_cursor_block(region, block_pos, block_idx) {
+            if let Some(block) =
+                snapshot_cursor_block(region, block_pos, block_idx, self.reset_object_starts)
+            {
                 self.push_block(block);
             }
 
@@ -170,26 +184,52 @@ fn snapshot_cursor_block(
     region: usize,
     block_pos: usize,
     block_idx: usize,
+    reset_object_starts: bool,
 ) -> Option<ArenaWalkBlock> {
     let block = match region {
         ARENA_CURSOR_GENERAL => ARENA.with(|arena| unsafe {
-            let blocks = &(*arena.get()).blocks;
+            let blocks = &mut (*arena.get()).blocks;
+            if reset_object_starts {
+                if let Some(block) = blocks.get_mut(block_pos) {
+                    block.clear_object_starts();
+                }
+            }
             blocks.get(block_pos).map(snapshot_block_fields)
         }),
         ARENA_CURSOR_SURVIVOR0 => SURVIVOR_ARENA_0.with(|arena| unsafe {
-            let blocks = &(*arena.get()).blocks;
+            let blocks = &mut (*arena.get()).blocks;
+            if reset_object_starts {
+                if let Some(block) = blocks.get_mut(block_pos) {
+                    block.clear_object_starts();
+                }
+            }
             blocks.get(block_pos).map(snapshot_block_fields)
         }),
         ARENA_CURSOR_SURVIVOR1 => SURVIVOR_ARENA_1.with(|arena| unsafe {
-            let blocks = &(*arena.get()).blocks;
+            let blocks = &mut (*arena.get()).blocks;
+            if reset_object_starts {
+                if let Some(block) = blocks.get_mut(block_pos) {
+                    block.clear_object_starts();
+                }
+            }
             blocks.get(block_pos).map(snapshot_block_fields)
         }),
         ARENA_CURSOR_LONGLIVED => LONGLIVED_ARENA.with(|arena| unsafe {
-            let blocks = &(*arena.get()).blocks;
+            let blocks = &mut (*arena.get()).blocks;
+            if reset_object_starts {
+                if let Some(block) = blocks.get_mut(block_pos) {
+                    block.clear_object_starts();
+                }
+            }
             blocks.get(block_pos).map(snapshot_block_fields)
         }),
         ARENA_CURSOR_OLD => OLD_ARENA.with(|arena| unsafe {
-            let blocks = &(*arena.get()).blocks;
+            let blocks = &mut (*arena.get()).blocks;
+            if reset_object_starts {
+                if let Some(block) = blocks.get_mut(block_pos) {
+                    block.clear_object_starts();
+                }
+            }
             blocks.get(block_pos).map(snapshot_block_fields)
         }),
         _ => None,

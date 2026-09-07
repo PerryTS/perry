@@ -986,6 +986,62 @@ pub(crate) fn record_arena_object_start(header_addr: usize, obj_type: u8) {
     }
 }
 
+/// Stamp an object start discovered by the exact ValidPointerSet census.
+///
+/// The census first clears every block bitmap, then calls this for every
+/// walkable header—including objects created by codegen's inline allocator,
+/// which deliberately bypasses [`record_arena_object_start`]. Keeping the
+/// work here, rather than on allocation, exchanges one bitmap RMW per census
+/// object for constant-time membership on every subsequent pointer probe.
+#[inline(always)]
+pub(crate) fn record_censused_arena_object_start(header_addr: usize) {
+    if !page_class::page_class_table_enabled() {
+        return;
+    }
+    let Some((_space, range_base, bitmap)) = classify_heap_space_in_range(header_addr) else {
+        debug_assert!(false, "censused arena header was not in a registered block");
+        return;
+    };
+    if bitmap.is_null() || header_addr < range_base {
+        return;
+    }
+    let slot = (header_addr - range_base) >> super::OBJECT_START_SHIFT;
+    let word = slot / u64::BITS as usize;
+    let bit = slot % u64::BITS as usize;
+    unsafe {
+        *bitmap.add(word) |= 1u64 << bit;
+    }
+}
+
+/// Exact object-start membership for the direct page-table arm.
+///
+/// `Some` means page metadata answered authoritatively for an arena range;
+/// `None` leaves the caller on its census-run fallback (the 4-way control,
+/// synthetic ranges without a bitmap, and non-arena addresses). The exact
+/// ValidPointerSet builder clears each bitmap and repopulates it from the same
+/// census that fills its sorted runs, so this index has identical membership.
+#[inline(always)]
+pub(crate) fn page_class_exact_object_start(addr: usize) -> Option<bool> {
+    if !page_class::page_class_table_enabled() {
+        return None;
+    }
+    let (_space, range_base, bitmap) = classify_heap_space_in_range(addr)?;
+    if bitmap.is_null() {
+        return None;
+    }
+    let Some(header_addr) = addr.checked_sub(crate::gc::GC_HEADER_SIZE) else {
+        return Some(false);
+    };
+    if header_addr < range_base || !arena_header_is_object_start(header_addr, range_base, bitmap) {
+        return Some(false);
+    }
+    Some(true)
+}
+
+pub(crate) fn page_class_exact_start_enabled() -> bool {
+    page_class::page_class_table_enabled()
+}
+
 /// True only when `header_addr` is a recorded allocation boundary in the
 /// registered block beginning at `range_base`.
 #[inline(always)]

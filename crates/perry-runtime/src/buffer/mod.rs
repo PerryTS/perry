@@ -72,8 +72,8 @@ pub(crate) use header::rebind_foreign_buffer;
 #[cfg(test)]
 pub(crate) use header::{
     test_buffer_addr_window_bounds, test_buffer_registry_probe_count, test_data_view_registry_len,
-    test_shared_array_buffer_registry_len, test_uint8array_addr_window_bounds,
-    test_uint8array_registry_probe_count,
+    test_disable_buffer_header_class, test_shared_array_buffer_registry_len,
+    test_uint8array_addr_window_bounds, test_uint8array_registry_probe_count,
 };
 
 // ---- Re-exports: ArrayBuffer detach / transfer (ES2024) ----
@@ -192,6 +192,37 @@ pub use iter::{
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A tracked non-Buffer in a previously admitted Buffer address must be
+    /// rejected by its GC class before the exact registry. With that arm
+    /// sabotaged the registry counter must move; without the contrast this test
+    /// would stay green if the optimization were deleted.
+    #[test]
+    fn managed_non_buffer_header_rejects_before_registry() {
+        let buf = buffer_alloc(32);
+        assert!(!buf.is_null());
+        let addr = buf as usize;
+        finalize_collected_dead_buffer(addr);
+
+        let gc_header =
+            unsafe { (buf as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader };
+        let original_type = unsafe { (*gc_header).obj_type };
+        unsafe { (*gc_header).obj_type = crate::gc::GC_TYPE_OBJECT };
+
+        let buffer_before = test_buffer_registry_probe_count();
+        assert!(!is_registered_buffer(addr));
+        assert_eq!(test_buffer_registry_probe_count(), buffer_before);
+
+        let restore = test_disable_buffer_header_class(true);
+        assert!(!is_registered_buffer(addr));
+        test_disable_buffer_header_class(restore);
+        unsafe { (*gc_header).obj_type = original_type };
+        assert_eq!(
+            test_buffer_registry_probe_count(),
+            buffer_before + 1,
+            "sabotage must force the Buffer registry lookup"
+        );
+    }
 
     /// The GC buffer sweep must drop the CryptoKey/secret-key side tables
     /// along with the buffer identity ones. They are plain `addr -> metadata`

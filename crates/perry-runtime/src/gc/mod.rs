@@ -1394,6 +1394,8 @@ fn emit_incremental_liveness_diag() {
         poll_arm::poll_armed_count(),
         trace::forwarded_stub_membership_recoveries(),
     );
+    trace::emit_valid_pointer_diag();
+    roots::emit_runtime_handle_diag();
     idle_reclaim::emit_diag();
     idle_compact::emit_diag();
     arena_right_size::emit_diag();
