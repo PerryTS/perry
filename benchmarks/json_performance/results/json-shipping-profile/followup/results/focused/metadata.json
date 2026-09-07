@@ -1,0 +1,28 @@
+{
+  "workers": {
+    "checkpoint": "6a376de244705cbe8485063d254973e3e99582b95e8b290ddb370deac3ebd835",
+    "candidate": "d9dd8745378bfe4895d2b53c47b9284ba0cf5bb6dd668d1091b263bf90c58f34"
+  },
+  "cases": [
+    [
+      "records_object_1m",
+      "parse"
+    ],
+    [
+      "empty_object",
+      "stringify"
+    ],
+    [
+      "numbers_1m",
+      "parse"
+    ],
+    [
+      "unicode_1m",
+      "stringify"
+    ]
+  ],
+  "repeats": 7,
+  "seed": 81237,
+  "order": "randomized ABBA quadruples",
+  "traced": false
+}

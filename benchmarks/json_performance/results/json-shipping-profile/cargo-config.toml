@@ -1,0 +1,50 @@
+# Supply-chain soak for cargo's own dependency resolution — the same
+# soak-window rule the npm side applies via minimumReleaseAge /
+# min-release-age: crate versions younger than the window are skipped by
+# the resolver unless already in Cargo.lock. min-publish-age is nightly-
+# only, which is why every workflow pins `dtolnay/rust-toolchain`'s
+# `toolchain:` input to a dated nightly (external-tools.json's `rust`
+# entry) instead of stable — this block is LIVE only on that pin.
+#
+# TEMPORARY: move to a stable pin once min-publish-age stabilizes —
+# targets Rust 1.100.0 (late September 2026), per
+# https://github.com/rust-lang/cargo/pull/17335 (open) and
+# https://github.com/rust-lang/cargo/issues/17009. Same condition
+# socket-wheelhouse's canonical rust-toolchain.toml is waiting on.
+# Managed by scripts/soak/soak.mts (`npm run soak` / `npm run soak:fix`).
+[unstable]
+min-publish-age = true
+
+[registry]
+global-min-publish-age = "7 days"
+
+# Invoke-EH (#7302): the exception transport steps runtime Rust frames via
+# the system unwinder, and panic=abort (profile.release) omits unwind tables
+# by default — without this flag every throw crossing a helper frame is
+# stranded. NOTE: a user-set RUSTFLAGS environment variable OVERRIDES this
+# file entirely (cargo uses exactly one rustflags source) — carry the flag
+# in your RUSTFLAGS too. The runtime self-checks on the first `try` and
+# aborts loudly if the tables are missing (perry-runtime/src/eh.rs).
+[build]
+rustflags = ["-C", "force-unwind-tables=yes"]
+
+# #9486: x86_64 needs frame pointers, and cannot inherit them from `[build]`.
+#
+# `Error.stack` captures its frames by walking the `rbp` / `x29` chain, which
+# is only a chain if every frame between `new Error` and the throwing JS
+# function maintains one. Generated code always does — codegen tags it
+# `"frame-pointer"="non-leaf"` — but the runtime is Rust, and on
+# x86_64-unknown-linux-gnu rustc leaves `rbp` as a general-purpose
+# callee-saved register. Measured: `rbp` inside `alloc_error` held `0x1`, so
+# the walk had no root at all and every stack fell back to `at <anonymous>`.
+# The AArch64 platform ABI reserves x29, which is why this is a x86_64-only
+# knob and why the collector's own `fp_chain` walker was AArch64-only.
+#
+# `force-unwind-tables` is REPEATED here on purpose: cargo does not merge
+# `target.*.rustflags` with `build.rustflags` — the target flags take
+# precedence and the `[build]` list is dropped entirely for this target. Omit
+# the repeat and every throw crossing a runtime frame is stranded (the runtime
+# self-checks on the first `try` and aborts loudly, so the mistake is loud
+# rather than silent — but it is still a mistake).
+[target.'cfg(target_arch = "x86_64")']
+rustflags = ["-C", "force-unwind-tables=yes", "-C", "force-frame-pointers=yes"]

@@ -1,0 +1,9 @@
+{
+  "verified": true,
+  "base": "0327b9460a749592deb354d72ebad29bf4ae4bba",
+  "files": {
+    "crates/perry-runtime/src/json/construction_array.rs": "178a8b2462286e631eeed2a5dac13fb6533e90fdda590b93a67e280be297268e",
+    "crates/perry-runtime/src/gc/tests/runtime_roots/json_construction.rs": "b350e82c42250f612d83f7afacbb3bbdad25d0979164b23fa20746b38d31c6c6"
+  },
+  "patch_sha256": "6a7576195caa3ade5d1393e2e9fc0575f6870df3367fb7648e55e53d89ee08cf"
+}

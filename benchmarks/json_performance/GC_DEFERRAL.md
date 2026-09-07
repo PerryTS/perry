@@ -82,3 +82,10 @@ The [array-prefix experiment](results/json-prefix-retirement/README.md) reduces
 duplicate remembered-set scanning and improves large round-trip CPU by about
 1–2%, but was reverted after a seven-pair numeric-parse regression. Runtime
 source remains the same checkpoint; shipping-profile validation is next.
+
+The [default-release comparison](results/json-shipping-profile/README.md) now
+validates both arms with settings matching `dist`, with fresh Node/Bun results
+for [all 38 rows](results/json-shipping-profile/measurements/recheck/all-38.md).
+The prefix candidate still fails acceptance: a +0.45% record-object parse
+regression repeats, and large retained parse peak RSS increases. The reference
+matches or beats both competitors' CPU medians in 15 of 38 rows in that run.

@@ -1,0 +1,1574 @@
+[
+  {
+    "fixture": "records_object_1m",
+    "operation": "stringify",
+    "mode": "discard",
+    "iterations": 120,
+    "loopCpuUs": {
+      "parent": {
+        "median": 180806,
+        "range": [
+          180087,
+          181141
+        ]
+      },
+      "checkpoint": {
+        "median": 175947,
+        "range": [
+          175466,
+          177374
+        ]
+      },
+      "candidate": {
+        "median": 175140,
+        "range": [
+          175090,
+          177458
+        ]
+      },
+      "vs_checkpoint_percent": -0.4586608467322506,
+      "vs_parent_percent": -3.1337455615411014
+    },
+    "drainCpuUs": {
+      "parent": {
+        "median": 3598,
+        "range": [
+          3563,
+          3690
+        ]
+      },
+      "checkpoint": {
+        "median": 3357,
+        "range": [
+          3344,
+          3382
+        ]
+      },
+      "candidate": {
+        "median": 3319,
+        "range": [
+          3310,
+          3322
+        ]
+      },
+      "vs_checkpoint_percent": -1.131963062257968,
+      "vs_parent_percent": -7.754307948860473
+    },
+    "totalCpuUs": {
+      "parent": {
+        "median": 184496,
+        "range": [
+          183650,
+          184739
+        ]
+      },
+      "checkpoint": {
+        "median": 179291,
+        "range": [
+          178848,
+          180731
+        ]
+      },
+      "candidate": {
+        "median": 178459,
+        "range": [
+          178400,
+          180780
+        ]
+      },
+      "vs_checkpoint_percent": -0.46405006386266434,
+      "vs_parent_percent": -3.2721576619547332
+    },
+    "peak_rss": {
+      "parent": {
+        "median": 64389120,
+        "range": [
+          64389120,
+          64389120
+        ]
+      },
+      "checkpoint": {
+        "median": 62865408,
+        "range": [
+          62849024,
+          62865408
+        ]
+      },
+      "candidate": {
+        "median": 62881792,
+        "range": [
+          62881792,
+          62881792
+        ]
+      },
+      "vs_checkpoint_percent": 0.026062027625739503,
+      "vs_parent_percent": -2.3409669211195916
+    },
+    "rssDrained": {
+      "parent": {
+        "median": 63651840,
+        "range": [
+          63651840,
+          63651840
+        ]
+      },
+      "checkpoint": {
+        "median": 62390272,
+        "range": [
+          62373888,
+          62390272
+        ]
+      },
+      "candidate": {
+        "median": 62406656,
+        "range": [
+          62406656,
+          62406656
+        ]
+      },
+      "vs_checkpoint_percent": 0.02626050420169168,
+      "vs_parent_percent": -1.9562419562419553
+    }
+  },
+  {
+    "fixture": "records_object_20m",
+    "operation": "roundtrip",
+    "mode": "discard",
+    "iterations": 7,
+    "loopCpuUs": {
+      "parent": {
+        "median": 1070152,
+        "range": [
+          1069709,
+          1070952
+        ]
+      },
+      "checkpoint": {
+        "median": 1057416,
+        "range": [
+          1056298,
+          1058113
+        ]
+      },
+      "candidate": {
+        "median": 1029752,
+        "range": [
+          1028514,
+          1029888
+        ]
+      },
+      "vs_checkpoint_percent": -2.6161888982198067,
+      "vs_parent_percent": -3.775164649507734
+    },
+    "drainCpuUs": {
+      "parent": {
+        "median": 55181,
+        "range": [
+          55170,
+          55391
+        ]
+      },
+      "checkpoint": {
+        "median": 5270,
+        "range": [
+          5251,
+          5287
+        ]
+      },
+      "candidate": {
+        "median": 5268,
+        "range": [
+          5267,
+          5310
+        ]
+      },
+      "vs_checkpoint_percent": -0.03795066413662118,
+      "vs_parent_percent": -90.45323571519182
+    },
+    "totalCpuUs": {
+      "parent": {
+        "median": 1125333,
+        "range": [
+          1124879,
+          1126343
+        ]
+      },
+      "checkpoint": {
+        "median": 1062703,
+        "range": [
+          1061568,
+          1063364
+        ]
+      },
+      "candidate": {
+        "median": 1035062,
+        "range": [
+          1033781,
+          1035156
+        ]
+      },
+      "vs_checkpoint_percent": -2.6010089366455214,
+      "vs_parent_percent": -8.021714461408314
+    },
+    "peak_rss": {
+      "parent": {
+        "median": 283787264,
+        "range": [
+          283787264,
+          283787264
+        ]
+      },
+      "checkpoint": {
+        "median": 281018368,
+        "range": [
+          281018368,
+          281018368
+        ]
+      },
+      "candidate": {
+        "median": 280772608,
+        "range": [
+          280772608,
+          280772608
+        ]
+      },
+      "vs_checkpoint_percent": -0.08745335820895539,
+      "vs_parent_percent": -1.062294324808033
+    },
+    "rssDrained": {
+      "parent": {
+        "median": 283082752,
+        "range": [
+          283082752,
+          283082752
+        ]
+      },
+      "checkpoint": {
+        "median": 280543232,
+        "range": [
+          280543232,
+          280543232
+        ]
+      },
+      "candidate": {
+        "median": 280297472,
+        "range": [
+          280297472,
+          280297472
+        ]
+      },
+      "vs_checkpoint_percent": -0.08760147170472354,
+      "vs_parent_percent": -0.9839101747887491
+    }
+  },
+  {
+    "fixture": "records_object_20m",
+    "operation": "roundtrip",
+    "mode": "discard",
+    "iterations": 8,
+    "loopCpuUs": {
+      "parent": {
+        "median": 1219124,
+        "range": [
+          1217627,
+          1219420
+        ]
+      },
+      "checkpoint": {
+        "median": 1213985,
+        "range": [
+          1213540,
+          1214134
+        ]
+      },
+      "candidate": {
+        "median": 1177890,
+        "range": [
+          1177285,
+          1177920
+        ]
+      },
+      "vs_checkpoint_percent": -2.9732657322784073,
+      "vs_parent_percent": -3.382264642480992
+    },
+    "drainCpuUs": {
+      "parent": {
+        "median": 70365,
+        "range": [
+          70242,
+          71378
+        ]
+      },
+      "checkpoint": {
+        "median": 55219,
+        "range": [
+          54920,
+          55811
+        ]
+      },
+      "candidate": {
+        "median": 54831,
+        "range": [
+          54694,
+          54911
+        ]
+      },
+      "vs_checkpoint_percent": -0.7026566942537893,
+      "vs_parent_percent": -22.076316350458324
+    },
+    "totalCpuUs": {
+      "parent": {
+        "median": 1289489,
+        "range": [
+          1287869,
+          1290798
+        ]
+      },
+      "checkpoint": {
+        "median": 1269351,
+        "range": [
+          1268905,
+          1269353
+        ]
+      },
+      "candidate": {
+        "median": 1232584,
+        "range": [
+          1232196,
+          1232751
+        ]
+      },
+      "vs_checkpoint_percent": -2.896519559995625,
+      "vs_parent_percent": -4.412988400831653
+    },
+    "peak_rss": {
+      "parent": {
+        "median": 283787264,
+        "range": [
+          283754496,
+          283803648
+        ]
+      },
+      "checkpoint": {
+        "median": 281018368,
+        "range": [
+          281018368,
+          281034752
+        ]
+      },
+      "candidate": {
+        "median": 280788992,
+        "range": [
+          280772608,
+          280788992
+        ]
+      },
+      "vs_checkpoint_percent": -0.08162313432835688,
+      "vs_parent_percent": -1.0565209860862512
+    },
+    "rssDrained": {
+      "parent": {
+        "median": 283082752,
+        "range": [
+          283049984,
+          283099136
+        ]
+      },
+      "checkpoint": {
+        "median": 280543232,
+        "range": [
+          280543232,
+          280559616
+        ]
+      },
+      "candidate": {
+        "median": 280313856,
+        "range": [
+          280297472,
+          280313856
+        ]
+      },
+      "vs_checkpoint_percent": -0.0817613735910716,
+      "vs_parent_percent": -0.9781224678782285
+    }
+  },
+  {
+    "fixture": "records_object_20m",
+    "operation": "roundtrip",
+    "mode": "discard",
+    "iterations": 9,
+    "loopCpuUs": {
+      "parent": {
+        "median": 1381626,
+        "range": [
+          1380683,
+          1382808
+        ]
+      },
+      "checkpoint": {
+        "median": 1345868,
+        "range": [
+          1344651,
+          1346711
+        ]
+      },
+      "candidate": {
+        "median": 1308590,
+        "range": [
+          1308379,
+          1308632
+        ]
+      },
+      "vs_checkpoint_percent": -2.7698110067257753,
+      "vs_parent_percent": -5.286235204027722
+    },
+    "drainCpuUs": {
+      "parent": {
+        "median": 5942,
+        "range": [
+          5924,
+          5986
+        ]
+      },
+      "checkpoint": {
+        "median": 19364,
+        "range": [
+          19322,
+          19419
+        ]
+      },
+      "candidate": {
+        "median": 19425,
+        "range": [
+          19396,
+          19426
+        ]
+      },
+      "vs_checkpoint_percent": 0.31501755835570133,
+      "vs_parent_percent": 226.91013126893301
+    },
+    "totalCpuUs": {
+      "parent": {
+        "median": 1387550,
+        "range": [
+          1386625,
+          1388794
+        ]
+      },
+      "checkpoint": {
+        "median": 1365287,
+        "range": [
+          1364015,
+          1366033
+        ]
+      },
+      "candidate": {
+        "median": 1328015,
+        "range": [
+          1327805,
+          1328028
+        ]
+      },
+      "vs_checkpoint_percent": -2.729975455710043,
+      "vs_parent_percent": -4.290656192569642
+    },
+    "peak_rss": {
+      "parent": {
+        "median": 284360704,
+        "range": [
+          284327936,
+          284377088
+        ]
+      },
+      "checkpoint": {
+        "median": 281018368,
+        "range": [
+          281018368,
+          281018368
+        ]
+      },
+      "candidate": {
+        "median": 280772608,
+        "range": [
+          280772608,
+          280772608
+        ]
+      },
+      "vs_checkpoint_percent": -0.08745335820895539,
+      "vs_parent_percent": -1.261811477298913
+    },
+    "rssDrained": {
+      "parent": {
+        "median": 283656192,
+        "range": [
+          283623424,
+          283672576
+        ]
+      },
+      "checkpoint": {
+        "median": 280543232,
+        "range": [
+          280543232,
+          280543232
+        ]
+      },
+      "candidate": {
+        "median": 280297472,
+        "range": [
+          280297472,
+          280297472
+        ]
+      },
+      "vs_checkpoint_percent": -0.08760147170472354,
+      "vs_parent_percent": -1.1840813261710825
+    }
+  },
+  {
+    "fixture": "records_object_20m",
+    "operation": "roundtrip",
+    "mode": "discard",
+    "iterations": 16,
+    "loopCpuUs": {
+      "parent": {
+        "median": 2360655,
+        "range": [
+          2359374,
+          2361136
+        ]
+      },
+      "checkpoint": {
+        "median": 2411207,
+        "range": [
+          2408116,
+          2411836
+        ]
+      },
+      "candidate": {
+        "median": 2357683,
+        "range": [
+          2356480,
+          2359185
+        ]
+      },
+      "vs_checkpoint_percent": -2.219801120351761,
+      "vs_parent_percent": -0.12589726156511105
+    },
+    "drainCpuUs": {
+      "parent": {
+        "median": 70783,
+        "range": [
+          70489,
+          70797
+        ]
+      },
+      "checkpoint": {
+        "median": 5893,
+        "range": [
+          5889,
+          5948
+        ]
+      },
+      "candidate": {
+        "median": 5932,
+        "range": [
+          5924,
+          5954
+        ]
+      },
+      "vs_checkpoint_percent": 0.6618021381299855,
+      "vs_parent_percent": -91.61945664919543
+    },
+    "totalCpuUs": {
+      "parent": {
+        "median": 2431452,
+        "range": [
+          2429863,
+          2431919
+        ]
+      },
+      "checkpoint": {
+        "median": 2417096,
+        "range": [
+          2414009,
+          2417784
+        ]
+      },
+      "candidate": {
+        "median": 2363607,
+        "range": [
+          2362412,
+          2365139
+        ]
+      },
+      "vs_checkpoint_percent": -2.2129447899462806,
+      "vs_parent_percent": -2.7903080134833003
+    },
+    "peak_rss": {
+      "parent": {
+        "median": 284442624,
+        "range": [
+          284442624,
+          284442624
+        ]
+      },
+      "checkpoint": {
+        "median": 281313280,
+        "range": [
+          281313280,
+          281346048
+        ]
+      },
+      "candidate": {
+        "median": 281313280,
+        "range": [
+          281313280,
+          281329664
+        ]
+      },
+      "vs_checkpoint_percent": 0.0,
+      "vs_parent_percent": -1.1001670410690667
+    },
+    "rssDrained": {
+      "parent": {
+        "median": 283738112,
+        "range": [
+          283738112,
+          283738112
+        ]
+      },
+      "checkpoint": {
+        "median": 280838144,
+        "range": [
+          280838144,
+          280870912
+        ]
+      },
+      "candidate": {
+        "median": 280838144,
+        "range": [
+          280838144,
+          280854528
+        ]
+      },
+      "vs_checkpoint_percent": 0.0,
+      "vs_parent_percent": -1.022057974361934
+    }
+  },
+  {
+    "fixture": "records_object_20m",
+    "operation": "roundtrip",
+    "mode": "discard",
+    "iterations": 24,
+    "loopCpuUs": {
+      "parent": {
+        "median": 3375842,
+        "range": [
+          3374337,
+          3377772
+        ]
+      },
+      "checkpoint": {
+        "median": 3597438,
+        "range": [
+          3390335,
+          3601212
+        ]
+      },
+      "candidate": {
+        "median": 3519685,
+        "range": [
+          3518652,
+          3525911
+        ]
+      },
+      "vs_checkpoint_percent": -2.161343711830477,
+      "vs_parent_percent": 4.260951786250655
+    },
+    "drainCpuUs": {
+      "parent": {
+        "median": 6393,
+        "range": [
+          6373,
+          6595
+        ]
+      },
+      "checkpoint": {
+        "median": 20035,
+        "range": [
+          19716,
+          413475
+        ]
+      },
+      "candidate": {
+        "median": 19705,
+        "range": [
+          19673,
+          19806
+        ]
+      },
+      "vs_checkpoint_percent": -1.6471175442974828,
+      "vs_parent_percent": 208.22774910057876
+    },
+    "totalCpuUs": {
+      "parent": {
+        "median": 3382215,
+        "range": [
+          3380730,
+          3384367
+        ]
+      },
+      "checkpoint": {
+        "median": 3621247,
+        "range": [
+          3617154,
+          3803810
+        ]
+      },
+      "candidate": {
+        "median": 3539390,
+        "range": [
+          3538458,
+          3545584
+        ]
+      },
+      "vs_checkpoint_percent": -2.2604644201293045,
+      "vs_parent_percent": 4.647102564443717
+    },
+    "peak_rss": {
+      "parent": {
+        "median": 284442624,
+        "range": [
+          284442624,
+          284442624
+        ]
+      },
+      "checkpoint": {
+        "median": 281346048,
+        "range": [
+          281346048,
+          549879808
+        ]
+      },
+      "candidate": {
+        "median": 281313280,
+        "range": [
+          281313280,
+          281329664
+        ]
+      },
+      "vs_checkpoint_percent": -0.011646866992776062,
+      "vs_parent_percent": -1.1001670410690667
+    },
+    "rssDrained": {
+      "parent": {
+        "median": 283738112,
+        "range": [
+          283738112,
+          283738112
+        ]
+      },
+      "checkpoint": {
+        "median": 280870912,
+        "range": [
+          280870912,
+          549404672
+        ]
+      },
+      "candidate": {
+        "median": 280838144,
+        "range": [
+          280838144,
+          280854528
+        ]
+      },
+      "vs_checkpoint_percent": -0.01166656944525668,
+      "vs_parent_percent": -1.022057974361934
+    }
+  },
+  {
+    "fixture": "small_record",
+    "operation": "stringify",
+    "mode": "discard",
+    "iterations": 100000,
+    "loopCpuUs": {
+      "parent": {
+        "median": 34167,
+        "range": [
+          34079,
+          34257
+        ]
+      },
+      "checkpoint": {
+        "median": 32815,
+        "range": [
+          32640,
+          58231
+        ]
+      },
+      "candidate": {
+        "median": 32618,
+        "range": [
+          32600,
+          58814
+        ]
+      },
+      "vs_checkpoint_percent": -0.6003352125552364,
+      "vs_parent_percent": -4.533614306201894
+    },
+    "drainCpuUs": {
+      "parent": {
+        "median": 4969,
+        "range": [
+          4889,
+          5154
+        ]
+      },
+      "checkpoint": {
+        "median": 4992,
+        "range": [
+          4889,
+          5533
+        ]
+      },
+      "candidate": {
+        "median": 5006,
+        "range": [
+          4873,
+          5572
+        ]
+      },
+      "vs_checkpoint_percent": 0.2804487179487225,
+      "vs_parent_percent": 0.7446166230629991
+    },
+    "totalCpuUs": {
+      "parent": {
+        "median": 39226,
+        "range": [
+          38968,
+          39321
+        ]
+      },
+      "checkpoint": {
+        "median": 37807,
+        "range": [
+          37529,
+          63764
+        ]
+      },
+      "candidate": {
+        "median": 37624,
+        "range": [
+          37473,
+          64386
+        ]
+      },
+      "vs_checkpoint_percent": -0.48403734758113437,
+      "vs_parent_percent": -4.084025901187982
+    },
+    "peak_rss": {
+      "parent": {
+        "median": 31145984,
+        "range": [
+          31096832,
+          31145984
+        ]
+      },
+      "checkpoint": {
+        "median": 29687808,
+        "range": [
+          29638656,
+          29704192
+        ]
+      },
+      "candidate": {
+        "median": 29622272,
+        "range": [
+          29605888,
+          29704192
+        ]
+      },
+      "vs_checkpoint_percent": -0.22075055187638082,
+      "vs_parent_percent": -4.892162019989477
+    },
+    "rssDrained": {
+      "parent": {
+        "median": 30326784,
+        "range": [
+          30277632,
+          30326784
+        ]
+      },
+      "checkpoint": {
+        "median": 29114368,
+        "range": [
+          29065216,
+          29130752
+        ]
+      },
+      "candidate": {
+        "median": 29048832,
+        "range": [
+          29032448,
+          29130752
+        ]
+      },
+      "vs_checkpoint_percent": -0.22509848058525073,
+      "vs_parent_percent": -4.213938411669371
+    }
+  },
+  {
+    "fixture": "small_record",
+    "operation": "stringify",
+    "mode": "latest",
+    "iterations": 100000,
+    "loopCpuUs": {
+      "parent": {
+        "median": 34385,
+        "range": [
+          34230,
+          34472
+        ]
+      },
+      "checkpoint": {
+        "median": 32808,
+        "range": [
+          32764,
+          32811
+        ]
+      },
+      "candidate": {
+        "median": 32781,
+        "range": [
+          32754,
+          32949
+        ]
+      },
+      "vs_checkpoint_percent": -0.0822970007315238,
+      "vs_parent_percent": -4.664824778246324
+    },
+    "drainCpuUs": {
+      "parent": {
+        "median": 5084,
+        "range": [
+          4905,
+          5186
+        ]
+      },
+      "checkpoint": {
+        "median": 4896,
+        "range": [
+          4889,
+          4907
+        ]
+      },
+      "candidate": {
+        "median": 4949,
+        "range": [
+          4888,
+          5117
+        ]
+      },
+      "vs_checkpoint_percent": 1.0825163398692883,
+      "vs_parent_percent": -2.655389457120383
+    },
+    "totalCpuUs": {
+      "parent": {
+        "median": 39556,
+        "range": [
+          39135,
+          39571
+        ]
+      },
+      "checkpoint": {
+        "median": 37697,
+        "range": [
+          37660,
+          37718
+        ]
+      },
+      "candidate": {
+        "median": 37730,
+        "range": [
+          37642,
+          38066
+        ]
+      },
+      "vs_checkpoint_percent": 0.08754012255616228,
+      "vs_parent_percent": -4.61624026696329
+    },
+    "peak_rss": {
+      "parent": {
+        "median": 31096832,
+        "range": [
+          31080448,
+          31096832
+        ]
+      },
+      "checkpoint": {
+        "median": 29622272,
+        "range": [
+          29622272,
+          29638656
+        ]
+      },
+      "candidate": {
+        "median": 29622272,
+        "range": [
+          29605888,
+          29704192
+        ]
+      },
+      "vs_checkpoint_percent": 0.0,
+      "vs_parent_percent": -4.741833508956795
+    },
+    "rssDrained": {
+      "parent": {
+        "median": 30277632,
+        "range": [
+          30261248,
+          30277632
+        ]
+      },
+      "checkpoint": {
+        "median": 29048832,
+        "range": [
+          29048832,
+          29065216
+        ]
+      },
+      "candidate": {
+        "median": 29048832,
+        "range": [
+          29032448,
+          29130752
+        ]
+      },
+      "vs_checkpoint_percent": 0.0,
+      "vs_parent_percent": -4.058441558441562
+    }
+  },
+  {
+    "fixture": "small_record",
+    "operation": "stringify",
+    "mode": "retain",
+    "iterations": 100000,
+    "loopCpuUs": {
+      "parent": {
+        "median": 34828,
+        "range": [
+          34794,
+          34892
+        ]
+      },
+      "checkpoint": {
+        "median": 34090,
+        "range": [
+          33914,
+          34372
+        ]
+      },
+      "candidate": {
+        "median": 33938,
+        "range": [
+          33892,
+          33948
+        ]
+      },
+      "vs_checkpoint_percent": -0.4458785567615142,
+      "vs_parent_percent": -2.5554151831859384
+    },
+    "drainCpuUs": {
+      "parent": {
+        "median": 10614,
+        "range": [
+          10539,
+          10624
+        ]
+      },
+      "checkpoint": {
+        "median": 10416,
+        "range": [
+          10393,
+          12750
+        ]
+      },
+      "candidate": {
+        "median": 10326,
+        "range": [
+          10271,
+          10569
+        ]
+      },
+      "vs_checkpoint_percent": -0.8640552995391682,
+      "vs_parent_percent": -2.713397399660822
+    },
+    "totalCpuUs": {
+      "parent": {
+        "median": 45431,
+        "range": [
+          45418,
+          45442
+        ]
+      },
+      "checkpoint": {
+        "median": 44483,
+        "range": [
+          44330,
+          47122
+        ]
+      },
+      "candidate": {
+        "median": 44218,
+        "range": [
+          44209,
+          44517
+        ]
+      },
+      "vs_checkpoint_percent": -0.5957332014477457,
+      "vs_parent_percent": -2.669983051220537
+    },
+    "peak_rss": {
+      "parent": {
+        "median": 35422208,
+        "range": [
+          35405824,
+          35422208
+        ]
+      },
+      "checkpoint": {
+        "median": 33914880,
+        "range": [
+          33898496,
+          33914880
+        ]
+      },
+      "candidate": {
+        "median": 33882112,
+        "range": [
+          33882112,
+          33898496
+        ]
+      },
+      "vs_checkpoint_percent": -0.09661835748792091,
+      "vs_parent_percent": -4.347826086956519
+    },
+    "rssDrained": {
+      "parent": {
+        "median": 34570240,
+        "range": [
+          34553856,
+          34570240
+        ]
+      },
+      "checkpoint": {
+        "median": 33357824,
+        "range": [
+          33341440,
+          33357824
+        ]
+      },
+      "candidate": {
+        "median": 33325056,
+        "range": [
+          33325056,
+          33341440
+        ]
+      },
+      "vs_checkpoint_percent": -0.09823182711198308,
+      "vs_parent_percent": -3.6018957345971603
+    }
+  },
+  {
+    "fixture": "wide_1m",
+    "operation": "parse",
+    "mode": "discard",
+    "iterations": 60,
+    "loopCpuUs": {
+      "parent": {
+        "median": 1070419,
+        "range": [
+          1070297,
+          1070907
+        ]
+      },
+      "checkpoint": {
+        "median": 1041466,
+        "range": [
+          1040855,
+          1043860
+        ]
+      },
+      "candidate": {
+        "median": 1041479,
+        "range": [
+          1039808,
+          1041571
+        ]
+      },
+      "vs_checkpoint_percent": 0.0012482404610381082,
+      "vs_parent_percent": -2.7036141921994994
+    },
+    "drainCpuUs": {
+      "parent": {
+        "median": 156042,
+        "range": [
+          155491,
+          156534
+        ]
+      },
+      "checkpoint": {
+        "median": 156265,
+        "range": [
+          155881,
+          156320
+        ]
+      },
+      "candidate": {
+        "median": 156822,
+        "range": [
+          156606,
+          156868
+        ]
+      },
+      "vs_checkpoint_percent": 0.3564457812049948,
+      "vs_parent_percent": 0.4998654208482334
+    },
+    "totalCpuUs": {
+      "parent": {
+        "median": 1226949,
+        "range": [
+          1225788,
+          1226953
+        ]
+      },
+      "checkpoint": {
+        "median": 1197731,
+        "range": [
+          1197175,
+          1199741
+        ]
+      },
+      "candidate": {
+        "median": 1198085,
+        "range": [
+          1196630,
+          1198439
+        ]
+      },
+      "vs_checkpoint_percent": 0.02955588525304087,
+      "vs_parent_percent": -2.3525020192363355
+    },
+    "peak_rss": {
+      "parent": {
+        "median": 299368448,
+        "range": [
+          298762240,
+          299384832
+        ]
+      },
+      "checkpoint": {
+        "median": 297992192,
+        "range": [
+          297385984,
+          298008576
+        ]
+      },
+      "candidate": {
+        "median": 298057728,
+        "range": [
+          297467904,
+          298074112
+        ]
+      },
+      "vs_checkpoint_percent": 0.021992522542335635,
+      "vs_parent_percent": -0.4378283712784592
+    },
+    "rssDrained": {
+      "parent": {
+        "median": 298467328,
+        "range": [
+          297861120,
+          298483712
+        ]
+      },
+      "checkpoint": {
+        "median": 297369600,
+        "range": [
+          296763392,
+          297385984
+        ]
+      },
+      "candidate": {
+        "median": 297435136,
+        "range": [
+          296845312,
+          297451520
+        ]
+      },
+      "vs_checkpoint_percent": 0.022038567493121164,
+      "vs_parent_percent": -0.3458308173683866
+    }
+  },
+  {
+    "fixture": "wide_1m",
+    "operation": "parse",
+    "mode": "latest",
+    "iterations": 60,
+    "loopCpuUs": {
+      "parent": {
+        "median": 1085999,
+        "range": [
+          1085862,
+          1088066
+        ]
+      },
+      "checkpoint": {
+        "median": 1057489,
+        "range": [
+          1056434,
+          1057916
+        ]
+      },
+      "candidate": {
+        "median": 1056363,
+        "range": [
+          1055832,
+          1057948
+        ]
+      },
+      "vs_checkpoint_percent": -0.10647864895048098,
+      "vs_parent_percent": -2.7289159566445287
+    },
+    "drainCpuUs": {
+      "parent": {
+        "median": 158189,
+        "range": [
+          158106,
+          158581
+        ]
+      },
+      "checkpoint": {
+        "median": 158062,
+        "range": [
+          157924,
+          158186
+        ]
+      },
+      "candidate": {
+        "median": 158941,
+        "range": [
+          158812,
+          159066
+        ]
+      },
+      "vs_checkpoint_percent": 0.5561108931938064,
+      "vs_parent_percent": 0.47538071547326144
+    },
+    "totalCpuUs": {
+      "parent": {
+        "median": 1244443,
+        "range": [
+          1244105,
+          1246255
+        ]
+      },
+      "checkpoint": {
+        "median": 1215675,
+        "range": [
+          1214496,
+          1215840
+        ]
+      },
+      "candidate": {
+        "median": 1215175,
+        "range": [
+          1214773,
+          1217014
+        ]
+      },
+      "vs_checkpoint_percent": -0.04112941370020273,
+      "vs_parent_percent": -2.3518955870216685
+    },
+    "peak_rss": {
+      "parent": {
+        "median": 316096512,
+        "range": [
+          316096512,
+          316096512
+        ]
+      },
+      "checkpoint": {
+        "median": 314687488,
+        "range": [
+          314687488,
+          314687488
+        ]
+      },
+      "candidate": {
+        "median": 314769408,
+        "range": [
+          314753024,
+          314769408
+        ]
+      },
+      "vs_checkpoint_percent": 0.02603217576924166,
+      "vs_parent_percent": -0.4198413932514411
+    },
+    "rssDrained": {
+      "parent": {
+        "median": 315179008,
+        "range": [
+          315179008,
+          315179008
+        ]
+      },
+      "checkpoint": {
+        "median": 314064896,
+        "range": [
+          314064896,
+          314064896
+        ]
+      },
+      "candidate": {
+        "median": 314146816,
+        "range": [
+          314130432,
+          314146816
+        ]
+      },
+      "vs_checkpoint_percent": 0.02608378110491305,
+      "vs_parent_percent": -0.3274938919790027
+    }
+  },
+  {
+    "fixture": "wide_1m",
+    "operation": "parse",
+    "mode": "retain",
+    "iterations": 8,
+    "loopCpuUs": {
+      "parent": {
+        "median": 83996,
+        "range": [
+          83934,
+          84075
+        ]
+      },
+      "checkpoint": {
+        "median": 85203,
+        "range": [
+          85106,
+          85494
+        ]
+      },
+      "candidate": {
+        "median": 85148,
+        "range": [
+          85006,
+          85452
+        ]
+      },
+      "vs_checkpoint_percent": -0.06455171766251988,
+      "vs_parent_percent": 1.3714938806609789
+    },
+    "drainCpuUs": {
+      "parent": {
+        "median": 37305,
+        "range": [
+          37245,
+          37412
+        ]
+      },
+      "checkpoint": {
+        "median": 36416,
+        "range": [
+          36378,
+          36478
+        ]
+      },
+      "candidate": {
+        "median": 36604,
+        "range": [
+          36480,
+          36655
+        ]
+      },
+      "vs_checkpoint_percent": 0.5162565905096672,
+      "vs_parent_percent": -1.8791046776571507
+    },
+    "totalCpuUs": {
+      "parent": {
+        "median": 121320,
+        "range": [
+          121239,
+          121408
+        ]
+      },
+      "checkpoint": {
+        "median": 121681,
+        "range": [
+          121484,
+          121910
+        ]
+      },
+      "candidate": {
+        "median": 121803,
+        "range": [
+          121610,
+          121932
+        ]
+      },
+      "vs_checkpoint_percent": 0.10026216089611406,
+      "vs_parent_percent": 0.3981206726013875
+    },
+    "peak_rss": {
+      "parent": {
+        "median": 84803584,
+        "range": [
+          84803584,
+          84803584
+        ]
+      },
+      "checkpoint": {
+        "median": 83279872,
+        "range": [
+          83279872,
+          83279872
+        ]
+      },
+      "candidate": {
+        "median": 83345408,
+        "range": [
+          83329024,
+          83345408
+        ]
+      },
+      "vs_checkpoint_percent": 0.07869368483179873,
+      "vs_parent_percent": -1.7194744976816057
+    },
+    "rssDrained": {
+      "parent": {
+        "median": 78430208,
+        "range": [
+          78430208,
+          78430208
+        ]
+      },
+      "checkpoint": {
+        "median": 77283328,
+        "range": [
+          77283328,
+          77283328
+        ]
+      },
+      "candidate": {
+        "median": 77348864,
+        "range": [
+          77332480,
+          77348864
+        ]
+      },
+      "vs_checkpoint_percent": 0.08479966080134904,
+      "vs_parent_percent": -1.3787340714434881
+    }
+  }
+]

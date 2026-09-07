@@ -1,0 +1,2 @@
+*.log -whitespace
+candidate.patch -whitespace

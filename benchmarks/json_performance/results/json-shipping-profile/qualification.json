@@ -1,0 +1,13 @@
+{
+  "runtime_changes_retained": false,
+  "retained_runtime_source": "0327b9460a749592deb354d72ebad29bf4ae4bba",
+  "full_qualified": true,
+  "followup_qualified": true,
+  "no_regression_acceptance": false,
+  "all_row_parity": false,
+  "default_release_matches_dist": true,
+  "cpu_rows_at_or_below_both_competitors": 15,
+  "total_cpu_rows": 38,
+  "reason": "Seven paired groups confirm +0.22% to +0.73% CPU for 1 MiB record-object parse, median +0.45%; retaining four large parsed graphs raises peak RSS 2.265625 MiB.",
+  "next": "Profile temporary array allocation and growth; eliminate buffers/copies without changing GC policy. Keep default-release profile and full workload coverage. Older 147-case matrix remains open."
+}

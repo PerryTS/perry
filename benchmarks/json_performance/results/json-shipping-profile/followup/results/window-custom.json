@@ -1,0 +1,22 @@
+{
+  "owner": "json-perf-49718-1788766766",
+  "load_before": [
+    1.48388671875,
+    1.66357421875,
+    1.6650390625
+  ],
+  "started_utc": "2026-09-07T07:39:26Z",
+  "quiet_gate_passed": true,
+  "command": [
+    "python3",
+    "/Users/perry/json-shipping-profile-v9-20260907-codex/followup/all.py"
+  ],
+  "competing_workloads_before": [],
+  "load_after": [
+    1.9404296875,
+    1.77685546875,
+    1.70556640625
+  ],
+  "competing_workloads_after": [],
+  "finished_utc": "2026-09-07T07:40:38Z"
+}
