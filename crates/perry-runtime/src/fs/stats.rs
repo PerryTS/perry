@@ -446,6 +446,31 @@ fn metadata_special_file_predicates(meta: Option<&fs::Metadata>) -> (bool, bool,
     (false, false, false, false)
 }
 
+unsafe fn embedded_stats(path: &str, bigint: bool) -> Option<f64> {
+    let meta = crate::embedded::metadata(path)?;
+    let mode = if meta.is_directory {
+        0o040555
+    } else {
+        0o100444
+    };
+    Some(build_stats_object(
+        meta.is_file,
+        meta.is_directory,
+        false,
+        meta.size as u64,
+        mode,
+        -1.0,
+        -1.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        bigint,
+        None,
+    ))
+}
+
 /// `fs.statSync(path)` — returns a Stats-like object with Node-compatible
 /// predicate methods and scalar fields, or throws a Node-shaped fs Error when
 /// metadata lookup fails.
@@ -467,6 +492,9 @@ pub extern "C" fn js_fs_stat_sync_options(path_value: f64, options_value: f64) -
                 )
             }
         };
+        if let Some(stats) = embedded_stats(&path_str, bigint) {
+            return stats;
+        }
         match fs::metadata(&path_str) {
             Ok(meta) => {
                 let is_file = meta.is_file();
@@ -529,6 +557,9 @@ pub extern "C" fn js_fs_lstat_sync_options(path_value: f64, options_value: f64) 
                 )
             }
         };
+        if let Some(stats) = embedded_stats(&path_str, bigint) {
+            return stats;
+        }
         match fs::symlink_metadata(&path_str) {
             Ok(meta) => {
                 let ft = meta.file_type();
