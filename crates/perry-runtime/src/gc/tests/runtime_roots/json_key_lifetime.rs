@@ -133,3 +133,40 @@ fn json_retained_wide_object_keeps_evicted_keys_through_minor_and_full_gc() {
         assert_output(crate::JSValue::from_bits(root.get_nanbox_u64()), &source);
     }
 }
+
+#[test]
+fn json_typed_hint_reads_cached_keys_after_the_entry_collection() {
+    for field_count in [1, 0, 2] {
+        let _pacing = crate::gc::policy::force_alloc_point_minor_pacing();
+        let _guard = CopyingNurseryTestGuard::new(0);
+        let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        let _evacuation = ForcedEvacuationTestGuard::on();
+        let _protection =
+            crate::arena::ProtectionModeGuard::set(crate::arena::FromSpaceProtection::ProtectPages);
+        register_runtime_handle_root_scanner_for_tests();
+        gc_register_mutable_root_scanner(json_parse_mutable_root_scanner);
+        let scope = RuntimeHandleScope::new();
+        let source = "[{\"moving_property\":17}]";
+        let input = scope.root_string_ptr(crate::js_string_from_bytes(
+            source.as_ptr(),
+            source.len() as u32,
+        ));
+        let key_before = crate::json::cached_parse_key_ptr(b"moving_property");
+        crate::gc::policy::GC_SUPPRESSED_TINY_PARSE_COLLECTION_PENDING.with(|c| c.set(true));
+        let before = gc_collection_count();
+        unsafe {
+            let value = crate::json::js_json_parse_typed_array(
+                input.get_raw_const_ptr(),
+                b"moving_property\0".as_ptr(),
+                16,
+                field_count,
+            );
+            assert!(gc_collection_count() > before);
+            assert_ne!(
+                key_before,
+                crate::json::cached_parse_key_ptr(b"moving_property")
+            );
+            assert_output(value, source);
+        }
+    }
+}

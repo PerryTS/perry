@@ -687,14 +687,6 @@ pub unsafe extern "C" fn js_json_parse_typed_array(
         return js_json_parse(text_ptr);
     }
 
-    // Build the shape hint once. The keys_array + pre-interned key
-    // pointers are owned by longlived arena + shape-cache structures,
-    // so they outlive the parse and survive any intervening GC.
-    let shape = match build_shape_hint(packed_keys, packed_keys_len, field_count) {
-        Some(s) => s,
-        None => return js_json_parse(text_ptr),
-    };
-
     // Same pre-parse cleanup + GC suppression as `js_json_parse` —
     // root before the collection point and re-derive the source bytes after it.
     let text_root = parse_root_push(JSValue::string_ptr(text_ptr as *mut StringHeader));
@@ -702,6 +694,20 @@ pub unsafe extern "C" fn js_json_parse_typed_array(
     crate::gc::gc_check_trigger();
     let gc_allocation = crate::gc::JsonParseAllocation::begin(len);
     crate::gc::gc_suppress();
+
+    // Cached parse keys are movable. Capture the hint only AFTER the entry
+    // collection, inside the construction window: the cache scanner repairs
+    // its owning slots, but cannot repair copies in a Rust-local hint.
+    let shape = match build_shape_hint(packed_keys, packed_keys_len, field_count) {
+        Some(s) => s,
+        None => {
+            let text = parse_root_get(text_root).as_string_ptr();
+            crate::gc::gc_unsuppress();
+            gc_allocation.finish();
+            parse_root_restore(text_root);
+            return js_json_parse(text);
+        }
+    };
 
     let bytes = {
         let moved = crate::json::parse_root_get(text_root);
@@ -737,7 +743,7 @@ pub unsafe extern "C" fn js_json_parse_typed_array(
 }
 
 /// Build the one-per-call shape hint: intern key strings into
-/// `PARSE_KEY_CACHE` (longlived arena) and build a shared
+/// `PARSE_KEY_CACHE` and build a shared
 /// `keys_array` via the existing `js_build_class_keys_array` path so
 /// `scan_shape_cache_roots` keeps it marked. Returns `None` if
 /// `packed_keys` is malformed (no separators, unexpected count).
