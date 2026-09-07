@@ -62,6 +62,8 @@ fn young_padded_closure_capturing(bits: u64) -> usize {
 #[test]
 fn drain_promoted_parent_keeps_its_young_child_edge_remembered() {
     let _guard = CopyingNurseryTestGuard::new(1);
+    let _tenuring =
+        crate::gc::tenuring::set_survivals_for_test(crate::gc::tenuring::GC_TENURING_SURVIVALS_MAX);
 
     // parent captures a young leaf; intermediate captures parent. Only the
     // INTERMEDIATE is rooted, so the parent is reached — and, on the
@@ -95,9 +97,8 @@ fn drain_promoted_parent_keeps_its_young_child_edge_remembered() {
         deref(capture_bits_of(spacer))
     };
 
-    // Age everyone to the brink of promotion (power-on threshold: promote on
-    // the fourth survival — pinned by
-    // `test_copying_minor_promotes_survivor_on_fourth_survival`).
+    // Age everyone to the explicitly pinned promotion boundary: the fourth
+    // survival. This test exercises drain promotion at S=4, not power-on.
     for _ in 0..3 {
         let _ = gc_collect_minor();
     }

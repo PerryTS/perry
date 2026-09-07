@@ -3,6 +3,8 @@ use super::*;
 #[test]
 fn test_copying_minor_promotes_survivor_on_fourth_survival() {
     let _guard = CopyingNurseryTestGuard::new(1);
+    let _tenuring =
+        crate::gc::tenuring::set_survivals_for_test(crate::gc::tenuring::GC_TENURING_SURVIVALS_MAX);
     let child = young_leaf();
     js_shadow_slot_set(0, ptr_bits(child));
 
@@ -53,6 +55,8 @@ fn test_copying_minor_preserves_old_page_accounting_for_defrag_policy() {
         pinned_header: std::ptr::null_mut(),
     };
     let _guard = CopyingNurseryTestGuard::new(1);
+    let _tenuring =
+        crate::gc::tenuring::set_survivals_for_test(crate::gc::tenuring::GC_TENURING_SURVIVALS_MAX);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     clear_marks();
     clear_mark_seeds();
@@ -176,6 +180,8 @@ fn test_copying_minor_preserves_old_page_accounting_for_defrag_policy() {
 #[test]
 fn test_copying_minor_sticky_old_to_survivor_edge_promotes_on_fourth_cycle() {
     let _guard = CopyingNurseryTestGuard::new(0);
+    let _tenuring =
+        crate::gc::tenuring::set_survivals_for_test(crate::gc::tenuring::GC_TENURING_SURVIVALS_MAX);
     let child = young_leaf();
     let (old_arr, elements) = unsafe { alloc_old_test_array(1) };
     unsafe {
@@ -964,6 +970,8 @@ fn test_movable_regexp_evacuation_migrates_all_address_owned_state() {
 #[test]
 fn test_copied_minor_promotable_census_filtered_walk_matches_unfiltered() {
     let _guard = CopyingNurseryTestGuard::new(1);
+    let _tenuring =
+        crate::gc::tenuring::set_survivals_for_test(crate::gc::tenuring::GC_TENURING_SURVIVALS_MAX);
     let child = young_leaf();
     js_shadow_slot_set(0, ptr_bits(child));
 
@@ -1084,9 +1092,10 @@ fn nursery_regexp_that_dies_young_is_finalized_by_the_copied_minor() {
 /// in the second. On cc that difference is the whole finding — the aggregate
 /// clears the lock's 90 % bar while a fresh cohort survives at 74 %.
 ///
-/// Shape: at the power-on threshold (promote on the 4th survival) two rooted
-/// objects are introduced one cycle apart, so by the third minor the
-/// from-survivor space holds one age-2 object and one age-1 object.
+/// Shape: at an explicitly pinned threshold above 2 (promote on the 4th
+/// survival) two rooted objects are introduced one cycle apart, so by the
+/// third minor the from-survivor space holds one age-2 object and one age-1
+/// object.
 #[test]
 fn the_survivor_space_and_the_fresh_cohort_are_different_numbers_above_threshold_two() {
     // TWO shadow slots: the test needs two independently rooted objects
@@ -1094,6 +1103,8 @@ fn the_survivor_space_and_the_fresh_cohort_are_different_numbers_above_threshold
     // classes at once. With one slot B is unrooted, dies immediately, and the
     // fresh-cohort number is trivially zero.
     let _guard = CopyingNurseryTestGuard::new(2);
+    let _tenuring =
+        crate::gc::tenuring::set_survivals_for_test(crate::gc::tenuring::GC_TENURING_SURVIVALS_MAX);
 
     // Cycle 1: A enters the survivor space from Eden. The from-survivor space
     // was empty, so both numbers are zero and the cohort is all of nothing.
@@ -1115,7 +1126,10 @@ fn the_survivor_space_and_the_fresh_cohort_are_different_numbers_above_threshold
     js_shadow_slot_set(1, ptr_bits(b));
     let _ = gc_collect_minor();
     let (_, _, survivor_live_2, first_round_2) = crate::gc::copying::test_last_cohort_split();
-    assert!(survivor_live_2 > 0, "A must have come back out of the survivor space");
+    assert!(
+        survivor_live_2 > 0,
+        "A must have come back out of the survivor space"
+    );
     assert_eq!(
         survivor_live_2, first_round_2,
         "with a single generation resident the whole-space number IS the \

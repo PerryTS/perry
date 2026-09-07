@@ -138,7 +138,7 @@
 
 use super::*;
 
-/// Ceiling and power-on value: the previous fixed threshold.
+/// Ceiling and previous fixed threshold.
 pub(super) const GC_TENURING_SURVIVALS_MAX: u8 = GC_COPY_PROMOTION_SURVIVALS;
 
 /// The lowest threshold the **occupancy rule** may select.
@@ -235,15 +235,48 @@ crate::perry_thread_local! {
     static OBJECT_CENSUS_SEEDED: Cell<bool> = const { Cell::new(false) };
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Scoped threshold pin for tests of mechanisms that require a particular
+    /// promotion age. This is thread-local for the same reason as the adaptive
+    /// state: runtime tests share one process and may run on different threads.
+    static TENURING_SURVIVALS_TEST_OVERRIDE: Cell<Option<u8>> = const { Cell::new(None) };
+}
+
 /// The survivals threshold the next copying minor should promote at:
 /// `next_age >= tenuring_survivals()` tenures. In `1..=4`; 4 is the
 /// original fixed policy, 1 promotes every live nursery object on first
 /// copy.
 pub(super) fn tenuring_survivals() -> u8 {
+    #[cfg(test)]
+    if let Some(forced) = TENURING_SURVIVALS_TEST_OVERRIDE.with(Cell::get) {
+        return forced;
+    }
     if let Some(forced) = tenuring_survivals_override() {
         return forced;
     }
     TENURING_SURVIVALS.with(Cell::get)
+}
+
+/// Pin the promotion age for a threshold-sensitive test on this thread.
+/// Restores the previous pin on drop; the adaptive policy continues to run
+/// underneath it, but every copying minor snapshots the explicitly pinned age.
+#[cfg(test)]
+pub(super) fn set_survivals_for_test(survivals: u8) -> TenuringSurvivalsTestGuard {
+    assert!((1..=GC_TENURING_SURVIVALS_MAX).contains(&survivals));
+    TenuringSurvivalsTestGuard(
+        TENURING_SURVIVALS_TEST_OVERRIDE.with(|cell| cell.replace(Some(survivals))),
+    )
+}
+
+#[cfg(test)]
+pub(super) struct TenuringSurvivalsTestGuard(Option<u8>);
+
+#[cfg(test)]
+impl Drop for TenuringSurvivalsTestGuard {
+    fn drop(&mut self) {
+        TENURING_SURVIVALS_TEST_OVERRIDE.with(|cell| cell.set(self.0));
+    }
 }
 
 /// `PERRY_GC_TENURING_SURVIVALS=<u8>` pins the promotion age, overriding the
@@ -1158,7 +1191,10 @@ mod tests {
         // influx. This change gates what the loop may do with that, exactly as
         // #9851 did at the other end of the range.
         assert_eq!(compute_target_survivals(0, d), GC_TENURING_SURVIVALS_MAX);
-        assert_eq!(compute_target_survivals(d / 64, d), GC_TENURING_SURVIVALS_MAX);
+        assert_eq!(
+            compute_target_survivals(d / 64, d),
+            GC_TENURING_SURVIVALS_MAX
+        );
 
         // Phase 1: power-on, then many startup-shaped minors — tiny influx,
         // nothing copied, so nothing rateable. The loop must sit at the floor
@@ -1305,15 +1341,23 @@ mod tests {
         let d = desired_survivor_bytes();
         // Medium-lived objects: a substantial intake of which only half
         // survives its survivor round. Aging is filtering — the lock must
-        // stay out and the occupancy ladder must decide.
+        // stay out and the occupancy ladder must age from the power-on floor.
+        let mut seen = Vec::new();
         for _ in 0..6 {
             retune_after_scavenge(d / 2, d / 2, d / 4);
             assert!(
-                tenuring_survivals() >= 3,
-                "a cohort that dies in the survivor space must keep aging (got {})",
-                tenuring_survivals()
+                !PROMOTE_LOCK.with(Cell::get),
+                "50% survival is below the lock's 90% bar"
             );
+            seen.push(tenuring_survivals());
         }
+        assert_eq!(
+            seen,
+            [2, 2, 3, 3, 3, 3],
+            "power-on is the floor now, not the ceiling: after a survivor round \
+             is measured, the debounced occupancy ladder must keep the dying \
+             cohort aging rather than claim promote-on-first-copy"
+        );
         reset_for_test();
     }
 
@@ -1401,8 +1445,9 @@ mod tests {
         let eden_live = d * 4;
         assert_eq!(
             tenuring_survivals(),
-            4,
-            "with no input the loop is at the ceiling: the wasted copy state"
+            OCCUPANCY_MIN_SURVIVALS,
+            "power-on is the floor now, not the ceiling: with no lifetime \
+             evidence the loop may not claim either extreme"
         );
 
         seed_promote_lock_from_sweep(eden_live, eden_live / 50);
@@ -1433,8 +1478,9 @@ mod tests {
         seed_promote_lock_from_sweep(eden_live, eden_dead);
         assert_eq!(
             tenuring_survivals(),
-            4,
-            "10% Eden survival must not seed promote-on-first-copy"
+            OCCUPANCY_MIN_SURVIVALS,
+            "10% Eden survival must leave the loop at the power-on floor, not \
+             seed promote-on-first-copy by claiming a threshold below 2"
         );
         reset_for_test();
     }
