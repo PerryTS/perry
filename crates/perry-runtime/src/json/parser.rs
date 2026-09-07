@@ -28,6 +28,47 @@ impl<'a> ParsedStr<'a> {
     }
 }
 
+/// Content-key wrapper for one parsed object's temporary duplicate index.
+///
+/// Its pointer is valid and immovable while the index exists: every production
+/// object parse runs under the parse API's GC suppression, and the index drops
+/// before `parse_value` returns. Hashing the managed payload directly avoids a
+/// second owned byte buffer for every field while retaining `HashMap`'s
+/// randomized hasher for untrusted JSON names.
+#[derive(Copy, Clone)]
+struct ParsedObjectKey(*const StringHeader);
+
+impl ParsedObjectKey {
+    fn bytes(&self) -> &[u8] {
+        unsafe {
+            std::slice::from_raw_parts(
+                crate::string::string_data(self.0),
+                (*self.0).byte_len as usize,
+            )
+        }
+    }
+}
+
+impl std::borrow::Borrow<[u8]> for ParsedObjectKey {
+    fn borrow(&self) -> &[u8] {
+        self.bytes()
+    }
+}
+
+impl PartialEq for ParsedObjectKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.bytes() == other.bytes()
+    }
+}
+
+impl Eq for ParsedObjectKey {}
+
+impl std::hash::Hash for ParsedObjectKey {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        std::hash::Hash::hash(self.bytes(), state);
+    }
+}
+
 #[inline]
 fn decode_hex_u16(bytes: &[u8]) -> Option<u16> {
     if bytes.len() != 4 {
@@ -804,7 +845,7 @@ impl<'a> DirectParser<'a> {
         type HeapFields = (
             Vec<*const StringHeader>,
             Vec<JSValue>,
-            Option<std::collections::HashMap<Vec<u8>, usize>>,
+            Option<std::collections::HashMap<ParsedObjectKey, usize>>,
         );
         let mut heap_fields: Option<HeapFields> = None;
 
@@ -842,14 +883,7 @@ impl<'a> DirectParser<'a> {
                         keys.iter()
                             .copied()
                             .enumerate()
-                            .map(|(i, key)| {
-                                let len = unsafe { (*key).byte_len as usize };
-                                let data = unsafe {
-                                    (key as *const u8).add(std::mem::size_of::<StringHeader>())
-                                };
-                                let bytes = unsafe { std::slice::from_raw_parts(data, len) };
-                                (bytes.to_vec(), i)
-                            })
+                            .map(|(i, key)| (ParsedObjectKey(key), i))
                             .collect(),
                     );
                 }
@@ -862,7 +896,7 @@ impl<'a> DirectParser<'a> {
                         // global interning table only to clear it at return.
                         let key_ptr =
                             crate::string::string_from_json_bytes(&mut self.batch, key_bytes);
-                        index.insert(key_bytes.to_vec(), keys.len());
+                        index.insert(ParsedObjectKey(key_ptr), keys.len());
                         keys.push(key_ptr);
                         values.push(value);
                     }
