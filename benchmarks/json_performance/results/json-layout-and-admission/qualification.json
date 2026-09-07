@@ -1,0 +1,52 @@
+{
+  "retained_runtime": "0327b9460a749592deb354d72ebad29bf4ae4bba",
+  "runtime_changes_retained": false,
+  "all_row_parity": false,
+  "no_regression_acceptance": false,
+  "layout": {
+    "qualified": true,
+    "output_checks": 40,
+    "timing_trials": 224,
+    "observations": 11
+  },
+  "admission": {
+    "qualified_matrix": true,
+    "qualified_lifetimes": true,
+    "matrix_output_checks": 190,
+    "matrix_timing_trials": 570,
+    "matrix_memory_trials": 324,
+    "lifetime_trials": 108,
+    "matrix_observations": 32,
+    "lifetime_observations": 27,
+    "disposition": "rejected: escaped/tiny stringify and 24-call roundtrip regressions"
+  },
+  "direct_entry": {
+    "qualified_matrix": true,
+    "qualified_lifetimes": false,
+    "matrix_output_checks": 190,
+    "matrix_timing_trials": 570,
+    "matrix_memory_trials": 324,
+    "lifetime_trials": 108,
+    "matrix_observations": 33,
+    "disposition": "rejected: tiny/empty stringify, small parse and escaped stringify regressions",
+    "lifetime_failure": "ENOSPC in local observer; incomplete observations and no passing end gate"
+  },
+  "trace_lifetime": {
+    "qualified": true,
+    "runs": 6,
+    "observations": 5,
+    "instrumented_timings_excluded": true,
+    "observer_location": "separate process on benchmark host"
+  },
+  "build": {
+    "comparison": "identical package set and recorded profile/features/rustflags across arms",
+    "runtime_and_stdlib_codegen_units": 16,
+    "shipping_profile_requalification": false
+  },
+  "private_release_target": {
+    "arm": "defer6",
+    "status": "REJECTED",
+    "matches_retained_source": false,
+    "retained_runtime_archives": "/Users/amlug/projects/perry/codex-json-fastpaths-artifacts/defer2-runtime"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "workers": {
+    "checkpoint": "25949bf2b3f4cc5042f842be248fea8b48244405780d8db050b6e7d620a71120",
+    "admission": "1590d029e17c448c3be3f01c009f7dc605ee885ad6731c01c9daedfe53c0a685",
+    "direct_entry": "3570ada69123fed9ab7d809b49492b48f94e62ad64c086435c932e0bb7c7df42"
+  },
+  "trace": true,
+  "purpose": "Collection counts and allocation/retention mechanism only; instrumented CPU excluded from performance acceptance."
+}

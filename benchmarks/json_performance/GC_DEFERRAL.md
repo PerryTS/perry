@@ -66,3 +66,8 @@ Final measured source: `0327b9460a749592deb354d72ebad29bf4ae4bba`.
 See [the results and validation](results/gc-deferral/README.md), including
 [all 38 CPU rows](results/gc-deferral/cpu-38.md) and
 [seven paired repeats](results/gc-deferral/paired/table.md).
+
+The [subsequent layout and direct-output investigation](results/json-layout-and-admission/README.md)
+retains the same runtime. It demonstrates linker-placement sensitivity and a
+25-versus-35 collection-count reproducer for the large round-trip regression;
+both attempted stringify changes were rejected.

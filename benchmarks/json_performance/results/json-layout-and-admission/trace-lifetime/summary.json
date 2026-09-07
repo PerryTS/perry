@@ -1,0 +1,1636 @@
+[
+  {
+    "engine": "admission",
+    "rep": 0,
+    "cycles": 35,
+    "kinds": {
+      "full": 26,
+      "minor": 9
+    },
+    "triggers": {
+      "old_gen_bytes": 24,
+      "manual": 2,
+      "arena_bytes": 9
+    },
+    "conservative_root_observations": 230,
+    "pause_us": 2110690,
+    "final_live_allocated_mib": 17.171531677246094,
+    "sequence": [
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 9,
+        "before_live": 68997496,
+        "after_live": 66934016,
+        "arena_debt_end": 51512532
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 10,
+        "before_live": 117610376,
+        "after_live": 66911904,
+        "arena_debt_end": 79824084
+      },
+      {
+        "kind": "full",
+        "trigger": "manual",
+        "conservative_roots": 0,
+        "before_live": 117588408,
+        "after_live": 18021304,
+        "arena_debt_end": 58611205
+      },
+      {
+        "kind": "minor",
+        "trigger": "arena_bytes",
+        "conservative_roots": 0,
+        "before_live": 68699040,
+        "after_live": 68697496,
+        "arena_debt_end": 55181924
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 18,
+        "before_live": 68697496,
+        "after_live": 66731392,
+        "arena_debt_end": 58909736
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 0,
+        "before_live": 168084112,
+        "after_live": 18019784,
+        "arena_debt_end": 89254790
+      },
+      {
+        "kind": "minor",
+        "trigger": "arena_bytes",
+        "conservative_roots": 0,
+        "before_live": 68696144,
+        "after_live": 68696072,
+        "arena_debt_end": 94627556
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 11,
+        "before_live": 68696072,
+        "after_live": 35639056,
+        "arena_debt_end": 96720651
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 0,
+        "before_live": 86315416,
+        "after_live": 18016432,
+        "arena_debt_end": 25417483
+      },
+      {
+        "kind": "minor",
+        "trigger": "arena_bytes",
+        "conservative_roots": 0,
+        "before_live": 68692792,
+        "after_live": 68692720,
+        "arena_debt_end": 70511984
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 11,
+        "before_live": 68692720,
+        "after_live": 35636360,
+        "arena_debt_end": 54777611
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 0,
+        "before_live": 86312720,
+        "after_live": 18014400,
+        "arena_debt_end": 25417483
+      },
+      {
+        "kind": "minor",
+        "trigger": "arena_bytes",
+        "conservative_roots": 0,
+        "before_live": 68690760,
+        "after_live": 68690688,
+        "arena_debt_end": 59223573
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 11,
+        "before_live": 68690688,
+        "after_live": 35634584,
+        "arena_debt_end": 31960597
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 21,
+        "before_live": 86310944,
+        "after_live": 66723208,
+        "arena_debt_end": 28814869
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 0,
+        "before_live": 117399568,
+        "after_live": 18012456,
+        "arena_debt_end": 55029269
+      },
+      {
+        "kind": "minor",
+        "trigger": "arena_bytes",
+        "conservative_roots": 0,
+        "before_live": 68688816,
+        "after_live": 68688744,
+        "arena_debt_end": 83340821
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 11,
+        "before_live": 68688744,
+        "after_live": 35632880,
+        "arena_debt_end": 56077845
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 21,
+        "before_live": 86309240,
+        "after_live": 66721456,
+        "arena_debt_end": 28814869
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 0,
+        "before_live": 117397816,
+        "after_live": 18010656,
+        "arena_debt_end": 55029269
+      },
+      {
+        "kind": "minor",
+        "trigger": "arena_bytes",
+        "conservative_roots": 0,
+        "before_live": 68687016,
+        "after_live": 68686944,
+        "arena_debt_end": 83340821
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 11,
+        "before_live": 68686944,
+        "after_live": 35631032,
+        "arena_debt_end": 56077845
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 21,
+        "before_live": 86307392,
+        "after_live": 66719560,
+        "arena_debt_end": 28814869
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 0,
+        "before_live": 117395920,
+        "after_live": 18008712,
+        "arena_debt_end": 55029269
+      },
+      {
+        "kind": "minor",
+        "trigger": "arena_bytes",
+        "conservative_roots": 0,
+        "before_live": 68685072,
+        "after_live": 68685000,
+        "arena_debt_end": 83340821
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 11,
+        "before_live": 68685000,
+        "after_live": 35629048,
+        "arena_debt_end": 57126421
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 21,
+        "before_live": 86305408,
+        "after_live": 66717520,
+        "arena_debt_end": 28814869
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 0,
+        "before_live": 117393880,
+        "after_live": 18006624,
+        "arena_debt_end": 55029269
+      },
+      {
+        "kind": "minor",
+        "trigger": "arena_bytes",
+        "conservative_roots": 0,
+        "before_live": 68682984,
+        "after_live": 68682912,
+        "arena_debt_end": 83340821
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 11,
+        "before_live": 68682912,
+        "after_live": 35627192,
+        "arena_debt_end": 57126421
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 21,
+        "before_live": 86303552,
+        "after_live": 66715904,
+        "arena_debt_end": 28814869
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 0,
+        "before_live": 117392264,
+        "after_live": 18005256,
+        "arena_debt_end": 55029269
+      },
+      {
+        "kind": "minor",
+        "trigger": "arena_bytes",
+        "conservative_roots": 0,
+        "before_live": 68681616,
+        "after_live": 68681544,
+        "arena_debt_end": 83340821
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 11,
+        "before_live": 68681544,
+        "after_live": 35625792,
+        "arena_debt_end": 56077845
+      },
+      {
+        "kind": "full",
+        "trigger": "manual",
+        "conservative_roots": 0,
+        "before_live": 86303640,
+        "after_live": 18005656,
+        "arena_debt_end": 2600469
+      }
+    ]
+  },
+  {
+    "engine": "checkpoint",
+    "rep": 0,
+    "cycles": 25,
+    "kinds": {
+      "full": 19,
+      "minor": 6
+    },
+    "triggers": {
+      "old_gen_bytes": 17,
+      "manual": 2,
+      "arena_bytes": 6
+    },
+    "conservative_root_observations": 101,
+    "pause_us": 1797109,
+    "final_live_allocated_mib": 17.175086975097656,
+    "sequence": [
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 8,
+        "before_live": 68997496,
+        "after_live": 66934016,
+        "arena_debt_end": 51512532
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 9,
+        "before_live": 117610376,
+        "after_live": 66911904,
+        "arena_debt_end": 79824084
+      },
+      {
+        "kind": "full",
+        "trigger": "manual",
+        "conservative_roots": 0,
+        "before_live": 117588408,
+        "after_live": 18021304,
+        "arena_debt_end": 58611205
+      },
+      {
+        "kind": "minor",
+        "trigger": "arena_bytes",
+        "conservative_roots": 0,
+        "before_live": 68699040,
+        "after_live": 68697496,
+        "arena_debt_end": 55181924
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 20,
+        "before_live": 68697496,
+        "after_live": 66731392,
+        "arena_debt_end": 58909736
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 0,
+        "before_live": 168084112,
+        "after_live": 18019784,
+        "arena_debt_end": 89254790
+      },
+      {
+        "kind": "minor",
+        "trigger": "arena_bytes",
+        "conservative_roots": 0,
+        "before_live": 68696144,
+        "after_live": 68696072,
+        "arena_debt_end": 94627556
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 13,
+        "before_live": 68696072,
+        "after_live": 66728192,
+        "arena_debt_end": 95611496
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 0,
+        "before_live": 168080912,
+        "after_live": 18016432,
+        "arena_debt_end": 25417483
+      },
+      {
+        "kind": "minor",
+        "trigger": "arena_bytes",
+        "conservative_roots": 0,
+        "before_live": 68692792,
+        "after_live": 68692720,
+        "arena_debt_end": 69463408
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 12,
+        "before_live": 68692720,
+        "after_live": 66725496,
+        "arena_debt_end": 70447020
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 0,
+        "before_live": 168078216,
+        "after_live": 18014400,
+        "arena_debt_end": 45340427
+      },
+      {
+        "kind": "minor",
+        "trigger": "arena_bytes",
+        "conservative_roots": 0,
+        "before_live": 68690760,
+        "after_live": 68690688,
+        "arena_debt_end": 58174997
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 13,
+        "before_live": 68690688,
+        "after_live": 66723720,
+        "arena_debt_end": 58174997
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 0,
+        "before_live": 168076440,
+        "after_live": 18013024,
+        "arena_debt_end": 22523413
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 0,
+        "before_live": 119365744,
+        "after_live": 18012456,
+        "arena_debt_end": 38252053
+      },
+      {
+        "kind": "minor",
+        "trigger": "arena_bytes",
+        "conservative_roots": 0,
+        "before_live": 68688816,
+        "after_live": 68688744,
+        "arena_debt_end": 66563605
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 13,
+        "before_live": 68688744,
+        "after_live": 66722016,
+        "arena_debt_end": 66563605
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 0,
+        "before_live": 168074736,
+        "after_live": 18011272,
+        "arena_debt_end": 13086229
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 0,
+        "before_live": 119363992,
+        "after_live": 18010656,
+        "arena_debt_end": 47689237
+      },
+      {
+        "kind": "minor",
+        "trigger": "arena_bytes",
+        "conservative_roots": 0,
+        "before_live": 68687016,
+        "after_live": 68686944,
+        "arena_debt_end": 76000789
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 13,
+        "before_live": 68686944,
+        "after_live": 66720168,
+        "arena_debt_end": 76000789
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 0,
+        "before_live": 168072888,
+        "after_live": 18009376,
+        "arena_debt_end": 3649045
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 0,
+        "before_live": 119362096,
+        "after_live": 18008712,
+        "arena_debt_end": 57126421
+      },
+      {
+        "kind": "full",
+        "trigger": "manual",
+        "conservative_roots": 0,
+        "before_live": 18010200,
+        "after_live": 18009384,
+        "arena_debt_end": 2600469
+      }
+    ]
+  },
+  {
+    "engine": "direct_entry",
+    "rep": 0,
+    "cycles": 35,
+    "kinds": {
+      "full": 26,
+      "minor": 9
+    },
+    "triggers": {
+      "old_gen_bytes": 24,
+      "manual": 2,
+      "arena_bytes": 9
+    },
+    "conservative_root_observations": 216,
+    "pause_us": 2051146,
+    "final_live_allocated_mib": 17.171531677246094,
+    "sequence": [
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 6,
+        "before_live": 68997496,
+        "after_live": 35844808,
+        "arena_debt_end": 49415388
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 10,
+        "before_live": 86521168,
+        "after_live": 66911904,
+        "arena_debt_end": 55706836
+      },
+      {
+        "kind": "full",
+        "trigger": "manual",
+        "conservative_roots": 0,
+        "before_live": 117588408,
+        "after_live": 18021304,
+        "arena_debt_end": 82728453
+      },
+      {
+        "kind": "minor",
+        "trigger": "arena_bytes",
+        "conservative_roots": 0,
+        "before_live": 68699040,
+        "after_live": 68697496,
+        "arena_debt_end": 74056288
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 18,
+        "before_live": 68697496,
+        "after_live": 66731392,
+        "arena_debt_end": 74638376
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 0,
+        "before_live": 168084112,
+        "after_live": 18019784,
+        "arena_debt_end": 72477574
+      },
+      {
+        "kind": "minor",
+        "trigger": "arena_bytes",
+        "conservative_roots": 0,
+        "before_live": 68696144,
+        "after_live": 68696072,
+        "arena_debt_end": 77850340
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 11,
+        "before_live": 68696072,
+        "after_live": 35639064,
+        "arena_debt_end": 79943435
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 0,
+        "before_live": 86315424,
+        "after_live": 18016432,
+        "arena_debt_end": 25417483
+      },
+      {
+        "kind": "minor",
+        "trigger": "arena_bytes",
+        "conservative_roots": 0,
+        "before_live": 68692792,
+        "after_live": 68692720,
+        "arena_debt_end": 70511984
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 8,
+        "before_live": 68692720,
+        "after_live": 35636368,
+        "arena_debt_end": 55826187
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 0,
+        "before_live": 86312728,
+        "after_live": 18014400,
+        "arena_debt_end": 25417483
+      },
+      {
+        "kind": "minor",
+        "trigger": "arena_bytes",
+        "conservative_roots": 0,
+        "before_live": 68690760,
+        "after_live": 68690688,
+        "arena_debt_end": 59223573
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 8,
+        "before_live": 68690688,
+        "after_live": 35634592,
+        "arena_debt_end": 33009173
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 20,
+        "before_live": 86310952,
+        "after_live": 66723248,
+        "arena_debt_end": 29863445
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 0,
+        "before_live": 117399608,
+        "after_live": 18012456,
+        "arena_debt_end": 55029269
+      },
+      {
+        "kind": "minor",
+        "trigger": "arena_bytes",
+        "conservative_roots": 0,
+        "before_live": 68688816,
+        "after_live": 68688744,
+        "arena_debt_end": 83340821
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 11,
+        "before_live": 68688744,
+        "after_live": 35632888,
+        "arena_debt_end": 57126421
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 20,
+        "before_live": 86309248,
+        "after_live": 66721496,
+        "arena_debt_end": 29863445
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 0,
+        "before_live": 117397856,
+        "after_live": 18010656,
+        "arena_debt_end": 55029269
+      },
+      {
+        "kind": "minor",
+        "trigger": "arena_bytes",
+        "conservative_roots": 0,
+        "before_live": 68687016,
+        "after_live": 68686944,
+        "arena_debt_end": 83340821
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 11,
+        "before_live": 68686944,
+        "after_live": 35631040,
+        "arena_debt_end": 57126421
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 20,
+        "before_live": 86307400,
+        "after_live": 66719600,
+        "arena_debt_end": 29863445
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 0,
+        "before_live": 117395960,
+        "after_live": 18008712,
+        "arena_debt_end": 55029269
+      },
+      {
+        "kind": "minor",
+        "trigger": "arena_bytes",
+        "conservative_roots": 0,
+        "before_live": 68685072,
+        "after_live": 68685000,
+        "arena_debt_end": 83340821
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 11,
+        "before_live": 68685000,
+        "after_live": 35629048,
+        "arena_debt_end": 57126421
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 20,
+        "before_live": 86305408,
+        "after_live": 66717560,
+        "arena_debt_end": 29863445
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 0,
+        "before_live": 117393920,
+        "after_live": 18006624,
+        "arena_debt_end": 55029269
+      },
+      {
+        "kind": "minor",
+        "trigger": "arena_bytes",
+        "conservative_roots": 0,
+        "before_live": 68682984,
+        "after_live": 68682912,
+        "arena_debt_end": 83340821
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 11,
+        "before_live": 68682912,
+        "after_live": 35627192,
+        "arena_debt_end": 57126421
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 20,
+        "before_live": 86303552,
+        "after_live": 66715944,
+        "arena_debt_end": 29863445
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 0,
+        "before_live": 117392304,
+        "after_live": 18005256,
+        "arena_debt_end": 55029269
+      },
+      {
+        "kind": "minor",
+        "trigger": "arena_bytes",
+        "conservative_roots": 0,
+        "before_live": 68681616,
+        "after_live": 68681544,
+        "arena_debt_end": 83340821
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 11,
+        "before_live": 68681544,
+        "after_live": 35625800,
+        "arena_debt_end": 57126421
+      },
+      {
+        "kind": "full",
+        "trigger": "manual",
+        "conservative_roots": 0,
+        "before_live": 86303648,
+        "after_live": 18005656,
+        "arena_debt_end": 2600469
+      }
+    ]
+  },
+  {
+    "engine": "checkpoint",
+    "rep": 1,
+    "cycles": 25,
+    "kinds": {
+      "full": 19,
+      "minor": 6
+    },
+    "triggers": {
+      "old_gen_bytes": 17,
+      "manual": 2,
+      "arena_bytes": 6
+    },
+    "conservative_root_observations": 101,
+    "pause_us": 1798038,
+    "final_live_allocated_mib": 17.175086975097656,
+    "sequence": [
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 8,
+        "before_live": 68997496,
+        "after_live": 66934016,
+        "arena_debt_end": 51512532
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 9,
+        "before_live": 117610376,
+        "after_live": 66911904,
+        "arena_debt_end": 79824084
+      },
+      {
+        "kind": "full",
+        "trigger": "manual",
+        "conservative_roots": 0,
+        "before_live": 117588408,
+        "after_live": 18021304,
+        "arena_debt_end": 58611205
+      },
+      {
+        "kind": "minor",
+        "trigger": "arena_bytes",
+        "conservative_roots": 0,
+        "before_live": 68699040,
+        "after_live": 68697496,
+        "arena_debt_end": 55181924
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 20,
+        "before_live": 68697496,
+        "after_live": 66731392,
+        "arena_debt_end": 58909736
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 0,
+        "before_live": 168084112,
+        "after_live": 18019784,
+        "arena_debt_end": 89254790
+      },
+      {
+        "kind": "minor",
+        "trigger": "arena_bytes",
+        "conservative_roots": 0,
+        "before_live": 68696144,
+        "after_live": 68696072,
+        "arena_debt_end": 94627556
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 13,
+        "before_live": 68696072,
+        "after_live": 66728192,
+        "arena_debt_end": 95611496
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 0,
+        "before_live": 168080912,
+        "after_live": 18016432,
+        "arena_debt_end": 25417483
+      },
+      {
+        "kind": "minor",
+        "trigger": "arena_bytes",
+        "conservative_roots": 0,
+        "before_live": 68692792,
+        "after_live": 68692720,
+        "arena_debt_end": 69463408
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 12,
+        "before_live": 68692720,
+        "after_live": 66725496,
+        "arena_debt_end": 70447020
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 0,
+        "before_live": 168078216,
+        "after_live": 18014400,
+        "arena_debt_end": 45340427
+      },
+      {
+        "kind": "minor",
+        "trigger": "arena_bytes",
+        "conservative_roots": 0,
+        "before_live": 68690760,
+        "after_live": 68690688,
+        "arena_debt_end": 58174997
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 13,
+        "before_live": 68690688,
+        "after_live": 66723720,
+        "arena_debt_end": 58174997
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 0,
+        "before_live": 168076440,
+        "after_live": 18013024,
+        "arena_debt_end": 22523413
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 0,
+        "before_live": 119365744,
+        "after_live": 18012456,
+        "arena_debt_end": 38252053
+      },
+      {
+        "kind": "minor",
+        "trigger": "arena_bytes",
+        "conservative_roots": 0,
+        "before_live": 68688816,
+        "after_live": 68688744,
+        "arena_debt_end": 66563605
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 13,
+        "before_live": 68688744,
+        "after_live": 66722016,
+        "arena_debt_end": 66563605
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 0,
+        "before_live": 168074736,
+        "after_live": 18011272,
+        "arena_debt_end": 13086229
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 0,
+        "before_live": 119363992,
+        "after_live": 18010656,
+        "arena_debt_end": 47689237
+      },
+      {
+        "kind": "minor",
+        "trigger": "arena_bytes",
+        "conservative_roots": 0,
+        "before_live": 68687016,
+        "after_live": 68686944,
+        "arena_debt_end": 76000789
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 13,
+        "before_live": 68686944,
+        "after_live": 66720168,
+        "arena_debt_end": 76000789
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 0,
+        "before_live": 168072888,
+        "after_live": 18009376,
+        "arena_debt_end": 3649045
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 0,
+        "before_live": 119362096,
+        "after_live": 18008712,
+        "arena_debt_end": 57126421
+      },
+      {
+        "kind": "full",
+        "trigger": "manual",
+        "conservative_roots": 0,
+        "before_live": 18010200,
+        "after_live": 18009384,
+        "arena_debt_end": 2600469
+      }
+    ]
+  },
+  {
+    "engine": "admission",
+    "rep": 1,
+    "cycles": 35,
+    "kinds": {
+      "full": 26,
+      "minor": 9
+    },
+    "triggers": {
+      "old_gen_bytes": 24,
+      "manual": 2,
+      "arena_bytes": 9
+    },
+    "conservative_root_observations": 230,
+    "pause_us": 2112005,
+    "final_live_allocated_mib": 17.171531677246094,
+    "sequence": [
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 9,
+        "before_live": 68997496,
+        "after_live": 66934016,
+        "arena_debt_end": 51512532
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 10,
+        "before_live": 117610376,
+        "after_live": 66911904,
+        "arena_debt_end": 79824084
+      },
+      {
+        "kind": "full",
+        "trigger": "manual",
+        "conservative_roots": 0,
+        "before_live": 117588408,
+        "after_live": 18021304,
+        "arena_debt_end": 58611205
+      },
+      {
+        "kind": "minor",
+        "trigger": "arena_bytes",
+        "conservative_roots": 0,
+        "before_live": 68699040,
+        "after_live": 68697496,
+        "arena_debt_end": 55181924
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 18,
+        "before_live": 68697496,
+        "after_live": 66731392,
+        "arena_debt_end": 58909736
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 0,
+        "before_live": 168084112,
+        "after_live": 18019784,
+        "arena_debt_end": 89254790
+      },
+      {
+        "kind": "minor",
+        "trigger": "arena_bytes",
+        "conservative_roots": 0,
+        "before_live": 68696144,
+        "after_live": 68696072,
+        "arena_debt_end": 94627556
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 11,
+        "before_live": 68696072,
+        "after_live": 35639056,
+        "arena_debt_end": 96720651
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 0,
+        "before_live": 86315416,
+        "after_live": 18016432,
+        "arena_debt_end": 25417483
+      },
+      {
+        "kind": "minor",
+        "trigger": "arena_bytes",
+        "conservative_roots": 0,
+        "before_live": 68692792,
+        "after_live": 68692720,
+        "arena_debt_end": 70511984
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 11,
+        "before_live": 68692720,
+        "after_live": 35636360,
+        "arena_debt_end": 54777611
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 0,
+        "before_live": 86312720,
+        "after_live": 18014400,
+        "arena_debt_end": 25417483
+      },
+      {
+        "kind": "minor",
+        "trigger": "arena_bytes",
+        "conservative_roots": 0,
+        "before_live": 68690760,
+        "after_live": 68690688,
+        "arena_debt_end": 59223573
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 11,
+        "before_live": 68690688,
+        "after_live": 35634584,
+        "arena_debt_end": 31960597
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 21,
+        "before_live": 86310944,
+        "after_live": 66723208,
+        "arena_debt_end": 28814869
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 0,
+        "before_live": 117399568,
+        "after_live": 18012456,
+        "arena_debt_end": 55029269
+      },
+      {
+        "kind": "minor",
+        "trigger": "arena_bytes",
+        "conservative_roots": 0,
+        "before_live": 68688816,
+        "after_live": 68688744,
+        "arena_debt_end": 83340821
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 11,
+        "before_live": 68688744,
+        "after_live": 35632880,
+        "arena_debt_end": 56077845
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 21,
+        "before_live": 86309240,
+        "after_live": 66721456,
+        "arena_debt_end": 28814869
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 0,
+        "before_live": 117397816,
+        "after_live": 18010656,
+        "arena_debt_end": 55029269
+      },
+      {
+        "kind": "minor",
+        "trigger": "arena_bytes",
+        "conservative_roots": 0,
+        "before_live": 68687016,
+        "after_live": 68686944,
+        "arena_debt_end": 83340821
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 11,
+        "before_live": 68686944,
+        "after_live": 35631032,
+        "arena_debt_end": 56077845
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 21,
+        "before_live": 86307392,
+        "after_live": 66719560,
+        "arena_debt_end": 28814869
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 0,
+        "before_live": 117395920,
+        "after_live": 18008712,
+        "arena_debt_end": 55029269
+      },
+      {
+        "kind": "minor",
+        "trigger": "arena_bytes",
+        "conservative_roots": 0,
+        "before_live": 68685072,
+        "after_live": 68685000,
+        "arena_debt_end": 83340821
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 11,
+        "before_live": 68685000,
+        "after_live": 35629048,
+        "arena_debt_end": 57126421
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 21,
+        "before_live": 86305408,
+        "after_live": 66717520,
+        "arena_debt_end": 28814869
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 0,
+        "before_live": 117393880,
+        "after_live": 18006624,
+        "arena_debt_end": 55029269
+      },
+      {
+        "kind": "minor",
+        "trigger": "arena_bytes",
+        "conservative_roots": 0,
+        "before_live": 68682984,
+        "after_live": 68682912,
+        "arena_debt_end": 83340821
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 11,
+        "before_live": 68682912,
+        "after_live": 35627192,
+        "arena_debt_end": 57126421
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 21,
+        "before_live": 86303552,
+        "after_live": 66715904,
+        "arena_debt_end": 28814869
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 0,
+        "before_live": 117392264,
+        "after_live": 18005256,
+        "arena_debt_end": 55029269
+      },
+      {
+        "kind": "minor",
+        "trigger": "arena_bytes",
+        "conservative_roots": 0,
+        "before_live": 68681616,
+        "after_live": 68681544,
+        "arena_debt_end": 83340821
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 11,
+        "before_live": 68681544,
+        "after_live": 35625792,
+        "arena_debt_end": 56077845
+      },
+      {
+        "kind": "full",
+        "trigger": "manual",
+        "conservative_roots": 0,
+        "before_live": 86303640,
+        "after_live": 18005656,
+        "arena_debt_end": 2600469
+      }
+    ]
+  },
+  {
+    "engine": "direct_entry",
+    "rep": 1,
+    "cycles": 35,
+    "kinds": {
+      "full": 26,
+      "minor": 9
+    },
+    "triggers": {
+      "old_gen_bytes": 24,
+      "manual": 2,
+      "arena_bytes": 9
+    },
+    "conservative_root_observations": 216,
+    "pause_us": 2049574,
+    "final_live_allocated_mib": 17.171531677246094,
+    "sequence": [
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 6,
+        "before_live": 68997496,
+        "after_live": 35844808,
+        "arena_debt_end": 49415388
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 10,
+        "before_live": 86521168,
+        "after_live": 66911904,
+        "arena_debt_end": 55706836
+      },
+      {
+        "kind": "full",
+        "trigger": "manual",
+        "conservative_roots": 0,
+        "before_live": 117588408,
+        "after_live": 18021304,
+        "arena_debt_end": 82728453
+      },
+      {
+        "kind": "minor",
+        "trigger": "arena_bytes",
+        "conservative_roots": 0,
+        "before_live": 68699040,
+        "after_live": 68697496,
+        "arena_debt_end": 74056288
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 18,
+        "before_live": 68697496,
+        "after_live": 66731392,
+        "arena_debt_end": 74638376
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 0,
+        "before_live": 168084112,
+        "after_live": 18019784,
+        "arena_debt_end": 72477574
+      },
+      {
+        "kind": "minor",
+        "trigger": "arena_bytes",
+        "conservative_roots": 0,
+        "before_live": 68696144,
+        "after_live": 68696072,
+        "arena_debt_end": 77850340
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 11,
+        "before_live": 68696072,
+        "after_live": 35639064,
+        "arena_debt_end": 79943435
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 0,
+        "before_live": 86315424,
+        "after_live": 18016432,
+        "arena_debt_end": 25417483
+      },
+      {
+        "kind": "minor",
+        "trigger": "arena_bytes",
+        "conservative_roots": 0,
+        "before_live": 68692792,
+        "after_live": 68692720,
+        "arena_debt_end": 70511984
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 8,
+        "before_live": 68692720,
+        "after_live": 35636368,
+        "arena_debt_end": 55826187
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 0,
+        "before_live": 86312728,
+        "after_live": 18014400,
+        "arena_debt_end": 25417483
+      },
+      {
+        "kind": "minor",
+        "trigger": "arena_bytes",
+        "conservative_roots": 0,
+        "before_live": 68690760,
+        "after_live": 68690688,
+        "arena_debt_end": 59223573
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 8,
+        "before_live": 68690688,
+        "after_live": 35634592,
+        "arena_debt_end": 33009173
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 20,
+        "before_live": 86310952,
+        "after_live": 66723248,
+        "arena_debt_end": 29863445
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 0,
+        "before_live": 117399608,
+        "after_live": 18012456,
+        "arena_debt_end": 55029269
+      },
+      {
+        "kind": "minor",
+        "trigger": "arena_bytes",
+        "conservative_roots": 0,
+        "before_live": 68688816,
+        "after_live": 68688744,
+        "arena_debt_end": 83340821
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 11,
+        "before_live": 68688744,
+        "after_live": 35632888,
+        "arena_debt_end": 57126421
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 20,
+        "before_live": 86309248,
+        "after_live": 66721496,
+        "arena_debt_end": 29863445
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 0,
+        "before_live": 117397856,
+        "after_live": 18010656,
+        "arena_debt_end": 55029269
+      },
+      {
+        "kind": "minor",
+        "trigger": "arena_bytes",
+        "conservative_roots": 0,
+        "before_live": 68687016,
+        "after_live": 68686944,
+        "arena_debt_end": 83340821
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 11,
+        "before_live": 68686944,
+        "after_live": 35631040,
+        "arena_debt_end": 57126421
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 20,
+        "before_live": 86307400,
+        "after_live": 66719600,
+        "arena_debt_end": 29863445
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 0,
+        "before_live": 117395960,
+        "after_live": 18008712,
+        "arena_debt_end": 55029269
+      },
+      {
+        "kind": "minor",
+        "trigger": "arena_bytes",
+        "conservative_roots": 0,
+        "before_live": 68685072,
+        "after_live": 68685000,
+        "arena_debt_end": 83340821
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 11,
+        "before_live": 68685000,
+        "after_live": 35629048,
+        "arena_debt_end": 57126421
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 20,
+        "before_live": 86305408,
+        "after_live": 66717560,
+        "arena_debt_end": 29863445
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 0,
+        "before_live": 117393920,
+        "after_live": 18006624,
+        "arena_debt_end": 55029269
+      },
+      {
+        "kind": "minor",
+        "trigger": "arena_bytes",
+        "conservative_roots": 0,
+        "before_live": 68682984,
+        "after_live": 68682912,
+        "arena_debt_end": 83340821
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 11,
+        "before_live": 68682912,
+        "after_live": 35627192,
+        "arena_debt_end": 57126421
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 20,
+        "before_live": 86303552,
+        "after_live": 66715944,
+        "arena_debt_end": 29863445
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 0,
+        "before_live": 117392304,
+        "after_live": 18005256,
+        "arena_debt_end": 55029269
+      },
+      {
+        "kind": "minor",
+        "trigger": "arena_bytes",
+        "conservative_roots": 0,
+        "before_live": 68681616,
+        "after_live": 68681544,
+        "arena_debt_end": 83340821
+      },
+      {
+        "kind": "full",
+        "trigger": "old_gen_bytes",
+        "conservative_roots": 11,
+        "before_live": 68681544,
+        "after_live": 35625800,
+        "arena_debt_end": 57126421
+      },
+      {
+        "kind": "full",
+        "trigger": "manual",
+        "conservative_roots": 0,
+        "before_live": 86303648,
+        "after_live": 18005656,
+        "arena_debt_end": 2600469
+      }
+    ]
+  }
+]

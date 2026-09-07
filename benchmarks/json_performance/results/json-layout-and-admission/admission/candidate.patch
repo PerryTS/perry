@@ -1,0 +1,221 @@
+diff --git a/crates/perry-runtime/src/json/mod.rs b/crates/perry-runtime/src/json/mod.rs
+index 5352f532d..889c8917c 100644
+--- a/crates/perry-runtime/src/json/mod.rs
++++ b/crates/perry-runtime/src/json/mod.rs
+@@ -81,7 +81,7 @@ pub use stringify_api::{
+ pub(crate) use parse_api::test_json_parse_direct;
+ #[cfg(test)]
+ pub(crate) unsafe fn test_json_stringify_record_output(bits: u64) -> Option<JSValue> {
+-    stringify_record_output::try_object(bits)
++    stringify_flat::try_object(bits)
+ }
+ pub(crate) use parser::{DirectParser, ObjectShapeHint};
+ pub(crate) use raw_json::{ptr_is_raw_json_wrapper, raw_json_text_bytes};
+diff --git a/crates/perry-runtime/src/json/replacer.rs b/crates/perry-runtime/src/json/replacer.rs
+index ee24adbea..35bf27e2a 100644
+--- a/crates/perry-runtime/src/json/replacer.rs
++++ b/crates/perry-runtime/src/json/replacer.rs
+@@ -1600,9 +1600,6 @@ pub unsafe extern "C" fn js_json_stringify_full(
+         if let Some(result) = super::stringify_flat::try_object(value_bits) {
+             return result.bits() as i64;
+         }
+-        if let Some(result) = super::stringify_record_output::try_object(value_bits) {
+-            return result.bits() as i64;
+-        }
+     }
+ 
+     // JSON.stringify(undefined) returns undefined per spec
+diff --git a/crates/perry-runtime/src/json/stringify_escaped_output_tests.rs b/crates/perry-runtime/src/json/stringify_escaped_output_tests.rs
+index d9d492fb7..326e4cf9b 100644
+--- a/crates/perry-runtime/src/json/stringify_escaped_output_tests.rs
++++ b/crates/perry-runtime/src/json/stringify_escaped_output_tests.rs
+@@ -105,12 +105,8 @@ fn json_escaped_output_handles_every_ascii_byte_in_keys_values_and_arrays() {
+                 let source =
+                     crate::string::js_string_from_bytes(expected.as_ptr(), expected.len() as u32);
+                 let input = crate::json::test_json_parse_direct(source);
+-                let result = if array {
+-                    super::super::stringify_record_output::try_object(input.bits())
+-                } else {
+-                    super::super::stringify_flat::try_object(input.bits())
+-                }
+-                .expect("direct output must accept escaped keys and fields");
++                let result = super::super::stringify_flat::try_object(input.bits())
++                    .expect("direct output must accept escaped keys and fields");
+                 let header = result.as_string_ptr();
+                 assert_eq!(
+                     std::slice::from_raw_parts(string_data(header), (*header).byte_len as usize),
+diff --git a/crates/perry-runtime/src/json/stringify_flat.rs b/crates/perry-runtime/src/json/stringify_flat.rs
+index fa77523aa..dfa045005 100644
+--- a/crates/perry-runtime/src/json/stringify_flat.rs
++++ b/crates/perry-runtime/src/json/stringify_flat.rs
+@@ -1,4 +1,4 @@
+-//! Exact-size output for small plain objects with primitive fields.
++//! Shared admission and exact-size output for small plain objects.
+ //! The plan holds only lengths and inline bytes; the object is the sole GC
+ //! root. Keys and values are re-read after allocating the final output.
+ 
+@@ -6,6 +6,7 @@ use super::*;
+ use crate::string::{init_string_header, string_storage_alloc};
+ 
+ const MAX_FIELDS: usize = 4;
++const MAX_RECORD_FIELDS: usize = super::stringify_record_output::MAX_FIELDS;
+ 
+ #[derive(Clone, Copy)]
+ pub(super) enum Piece {
+@@ -142,6 +143,7 @@ pub(super) unsafe fn try_object(bits: u64) -> Option<JSValue> {
+     let header = crate::value::addr_class::try_read_tracked_gc_header(obj as usize)?;
+     let header = header.as_ref();
+     if header.obj_type != crate::gc::GC_TYPE_OBJECT
++        || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+         || header._reserved & crate::gc::OBJ_FLAG_HAS_DESCRIPTORS != 0
+         || (header.size as usize)
+             < crate::gc::GC_HEADER_SIZE + std::mem::size_of::<crate::ObjectHeader>()
+@@ -155,7 +157,7 @@ pub(super) unsafe fn try_object(bits: u64) -> Option<JSValue> {
+     } else {
+         (*keys).length as usize
+     };
+-    if fields > MAX_FIELDS {
++    if fields > MAX_RECORD_FIELDS {
+         return None;
+     }
+     if !keys.is_null() && fields > (*keys).capacity as usize {
+@@ -183,7 +185,11 @@ pub(super) unsafe fn try_object(bits: u64) -> Option<JSValue> {
+         return super::stringify_tojson_probe::to_json_definitely_absent_without_gc(obj.cast())
+             .then(|| JSValue::short_string_unchecked(b"{}"));
+     }
+-    emit_object(obj, fields)
++    if fields <= MAX_FIELDS {
++        emit_object(obj, fields)
++    } else {
++        super::stringify_record_output::emit_record(obj, fields)
++    }
+ }
+ 
+ #[inline(never)]
+@@ -202,11 +208,16 @@ unsafe fn emit_object(obj: *const crate::ObjectHeader, fields: usize) -> Option<
+             std::mem::size_of::<crate::ArrayHeader>(),
+             i,
+         ))?;
+-        value_plan[i] = scalar_piece(slot(
++        let Some(value) = scalar_piece(slot(
+             obj.cast(),
+             std::mem::size_of::<crate::ObjectHeader>(),
+             i,
+-        ))?;
++        )) else {
++            // Planning has not allocated or invoked user code. Reuse the
++            // admitted receiver for the record path's primitive-array fields.
++            return super::stringify_record_output::emit_record(obj, fields);
++        };
++        value_plan[i] = value;
+         let (kb, ku) = key_plan[i].lengths();
+         let (vb, vu) = value_plan[i].lengths();
+         let punctuation = 1 + u32::from(i != 0);
+diff --git a/crates/perry-runtime/src/json/stringify_flat_tests.rs b/crates/perry-runtime/src/json/stringify_flat_tests.rs
+index 9e1445e1e..f097ef0b8 100644
+--- a/crates/perry-runtime/src/json/stringify_flat_tests.rs
++++ b/crates/perry-runtime/src/json/stringify_flat_tests.rs
+@@ -28,6 +28,9 @@ fn flat_direct_output_preserves_complete_object_and_string_lengths() {
+             "{}",
+             "{\"a\":1}",
+             "{\"a\":true,\"b\":null}",
++            "{\"a\":1,\"b\":2,\"c\":3,\"d\":4,\"e\":5}",
++            "{\"a\":[]}",
++            "{\"a\":1,\"b\":2,\"c\":3,\"d\":[true,null]}",
+             "{\"x\":\"東京🙂\",\"y\":\"abc\"}",
+         ] {
+             let value = parse(text);
+@@ -97,9 +100,7 @@ fn flat_direct_output_declines_complex_fields_and_reordered_keys() {
+     unsafe {
+         for text in [
+             "[]",
+-            "{\"a\":[]}",
+             "{\"a\":{}}",
+-            "{\"a\":1,\"b\":2,\"c\":3,\"d\":4,\"e\":5}",
+             "{\"2\":1,\"1\":2}",
+             "{\"a\":\"\\ud800\"}",
+         ] {
+diff --git a/crates/perry-runtime/src/json/stringify_record_output.rs b/crates/perry-runtime/src/json/stringify_record_output.rs
+index dbbbd5102..abd29bf4f 100644
+--- a/crates/perry-runtime/src/json/stringify_record_output.rs
++++ b/crates/perry-runtime/src/json/stringify_record_output.rs
+@@ -6,7 +6,7 @@ use super::stringify_flat::{emit_piece, scalar_piece, slot, string_piece, Piece}
+ use super::*;
+ use crate::string::{init_string_header, string_storage_alloc};
+ 
+-const MAX_FIELDS: usize = 8;
++pub(super) const MAX_FIELDS: usize = 8;
+ const MAX_ELEMENTS: usize = 16;
+ const OBJECT_BYTES: usize = std::mem::size_of::<crate::ObjectHeader>();
+ const ARRAY_BYTES: usize = std::mem::size_of::<crate::ArrayHeader>();
+@@ -17,41 +17,6 @@ enum Field {
+     Array { start: usize, len: usize },
+ }
+ 
+-/// Decline before entering the planning frame on large/exotic receivers.
+-#[inline]
+-pub(super) unsafe fn try_object(bits: u64) -> Option<JSValue> {
+-    if bits & crate::value::TAG_MASK != POINTER_TAG {
+-        return None;
+-    }
+-    let obj = (bits & POINTER_MASK) as *const crate::ObjectHeader;
+-    let header = crate::value::addr_class::try_read_tracked_gc_header(obj as usize)?.as_ref();
+-    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+-        || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+-        || header._reserved & crate::gc::OBJ_FLAG_HAS_DESCRIPTORS != 0
+-        || (header.size as usize) < crate::gc::GC_HEADER_SIZE + OBJECT_BYTES
+-        || (*obj).class_id != 0
+-    {
+-        return None;
+-    }
+-    let keys = crate::object::object_keys_array(obj);
+-    if keys.is_null() {
+-        return None;
+-    }
+-    let fields = (*keys).length as usize;
+-    if fields == 0
+-        || fields > MAX_FIELDS
+-        || fields > (*keys).capacity as usize
+-        || (header.size as usize) < crate::gc::GC_HEADER_SIZE + OBJECT_BYTES + fields * 8
+-        || fields
+-            > crate::object::object_live_slot_count(obj)
+-                .max(crate::object::INLINE_SLOT_FLOOR as u32) as usize
+-        || crate::object::keys_contain_array_index(keys)
+-    {
+-        return None;
+-    }
+-    emit_record(obj, fields)
+-}
+-
+ unsafe fn dense_array(bits: u64) -> Option<(*const crate::ArrayHeader, usize)> {
+     if bits & crate::value::TAG_MASK != POINTER_TAG {
+         return None;
+@@ -78,7 +43,10 @@ unsafe fn dense_array(bits: u64) -> Option<(*const crate::ArrayHeader, usize)> {
+ }
+ 
+ #[inline(never)]
+-unsafe fn emit_record(obj: *const crate::ObjectHeader, fields: usize) -> Option<JSValue> {
++pub(super) unsafe fn emit_record(
++    obj: *const crate::ObjectHeader,
++    fields: usize,
++) -> Option<JSValue> {
+     // Every live entry is overwritten before emission. This initialized
+     // placeholder has a smaller active payload than an inline-text piece.
+     let empty = Piece::String { bytes: 0, units: 0 };
+diff --git a/crates/perry-runtime/src/json/stringify_record_output_tests.rs b/crates/perry-runtime/src/json/stringify_record_output_tests.rs
+index 67c5873e6..d8886525b 100644
+--- a/crates/perry-runtime/src/json/stringify_record_output_tests.rs
++++ b/crates/perry-runtime/src/json/stringify_record_output_tests.rs
+@@ -1,3 +1,4 @@
++use super::super::stringify_flat::try_object;
+ use super::*;
+ 
+ unsafe fn parse(text: &str) -> JSValue {
+@@ -45,7 +46,6 @@ fn record_final_output_declines_before_allocating_on_ineligible_fields() {
+     unsafe {
+         for text in [
+             "[]",
+-            "{}",
+             "{\"x\":{}}",
+             "{\"x\":[{}]}",
+             "{\"x\":[[1]]}",

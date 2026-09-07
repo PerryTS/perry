@@ -1,0 +1,370 @@
+[
+  {
+    "fixture": "tiny_object",
+    "operation": "stringify",
+    "arms": {
+      "checkpoint": {
+        "cpu_us": 0.093268,
+        "cpu_range": [
+          0.0931485,
+          0.093649
+        ],
+        "instructions": 3376800746,
+        "cycles": 619375719
+      },
+      "stack": {
+        "cpu_us": 0.092594,
+        "cpu_range": [
+          0.0924885,
+          0.09301
+        ],
+        "instructions": 3350757091,
+        "cycles": 614903974
+      },
+      "ordered_checkpoint": {
+        "cpu_us": 0.0932865,
+        "cpu_range": [
+          0.093206,
+          0.0938015
+        ],
+        "instructions": 3376647980,
+        "cycles": 619710670
+      },
+      "ordered_stack": {
+        "cpu_us": 0.092589,
+        "cpu_range": [
+          0.092478,
+          0.092945
+        ],
+        "instructions": 3350717569,
+        "cycles": 615512630
+      }
+    },
+    "original_delta": -0.7226487112407365,
+    "ordered_delta": -0.747696612049964,
+    "checkpoint_order_delta": 0.019835313290728074,
+    "stack_order_delta": -0.005399917921233843
+  },
+  {
+    "fixture": "small_record",
+    "operation": "stringify",
+    "arms": {
+      "checkpoint": {
+        "cpu_us": 0.2845856174114532,
+        "cpu_range": [
+          0.2840954887811836,
+          0.3157389096184894
+        ],
+        "instructions": 6295277837,
+        "cycles": 1144527013
+      },
+      "stack": {
+        "cpu_us": 0.28413701130633934,
+        "cpu_range": [
+          0.28373155606070105,
+          0.2857580181217326
+        ],
+        "instructions": 6223829627,
+        "cycles": 1142913191
+      },
+      "ordered_checkpoint": {
+        "cpu_us": 0.28550318380067885,
+        "cpu_range": [
+          0.28533790786721586,
+          0.2864297060286636
+        ],
+        "instructions": 6295237290,
+        "cycles": 1148854565
+      },
+      "ordered_stack": {
+        "cpu_us": 0.28491209844257964,
+        "cpu_range": [
+          0.2848241683893087,
+          0.285725451435336
+        ],
+        "instructions": 6223816197,
+        "cycles": 1146324524
+      }
+    },
+    "original_delta": -0.15763484788666737,
+    "ordered_delta": -0.20703284293736024,
+    "checkpoint_order_delta": 0.3224219121021221,
+    "stack_order_delta": 0.27278640423391565
+  },
+  {
+    "fixture": "records_array_16k",
+    "operation": "parse",
+    "arms": {
+      "checkpoint": {
+        "cpu_us": 23.793315347721823,
+        "cpu_range": [
+          23.7435551558753,
+          23.853567146282973
+        ],
+        "instructions": 2232744303,
+        "cycles": 527788417
+      },
+      "stack": {
+        "cpu_us": 24.46462829736211,
+        "cpu_range": [
+          24.448741007194243,
+          24.712529976019184
+        ],
+        "instructions": 2232589289,
+        "cycles": 542230878
+      },
+      "ordered_checkpoint": {
+        "cpu_us": 23.799760191846524,
+        "cpu_range": [
+          23.7564448441247,
+          23.86031175059952
+        ],
+        "instructions": 2233034027,
+        "cycles": 528061005
+      },
+      "ordered_stack": {
+        "cpu_us": 23.947991606714627,
+        "cpu_range": [
+          23.889988009592326,
+          24.027727817745802
+        ],
+        "instructions": 2232588117,
+        "cycles": 531411794
+      }
+    },
+    "original_delta": 2.8214350956541567,
+    "ordered_delta": 0.6228273464658152,
+    "checkpoint_order_delta": 0.02708678479865778,
+    "stack_order_delta": -2.1117700394540195
+  },
+  {
+    "fixture": "records_array_1m",
+    "operation": "parse",
+    "arms": {
+      "checkpoint": {
+        "cpu_us": 1554.2315789473685,
+        "cpu_range": [
+          1550.0947368421052,
+          1567.2315789473685
+        ],
+        "instructions": 2029690122,
+        "cycles": 504338216
+      },
+      "stack": {
+        "cpu_us": 1595.3684210526317,
+        "cpu_range": [
+          1590.6,
+          1601.0315789473684
+        ],
+        "instructions": 2029913559,
+        "cycles": 517098166
+      },
+      "ordered_checkpoint": {
+        "cpu_us": 1553.9157894736843,
+        "cpu_range": [
+          1550.0210526315789,
+          1557.7578947368422
+        ],
+        "instructions": 2029850323,
+        "cycles": 504073695
+      },
+      "ordered_stack": {
+        "cpu_us": 1562.5578947368422,
+        "cpu_range": [
+          1558.378947368421,
+          1566.5157894736842
+        ],
+        "instructions": 2029999564,
+        "cycles": 506900240
+      }
+    },
+    "original_delta": 2.646764012678471,
+    "ordered_delta": 0.5561501673192248,
+    "checkpoint_order_delta": -0.02031804513314972,
+    "stack_order_delta": -2.0566112430720485
+  },
+  {
+    "fixture": "records_array_8m",
+    "operation": "parse",
+    "arms": {
+      "checkpoint": {
+        "cpu_us": 13406.8,
+        "cpu_range": [
+          13384.9,
+          13517.2
+        ],
+        "instructions": 2010929073,
+        "cycles": 542236859
+      },
+      "stack": {
+        "cpu_us": 13727.0,
+        "cpu_range": [
+          13676.3,
+          13772.8
+        ],
+        "instructions": 2010567231,
+        "cycles": 554743675
+      },
+      "ordered_checkpoint": {
+        "cpu_us": 13393.9,
+        "cpu_range": [
+          13389.9,
+          13422.8
+        ],
+        "instructions": 2010819255,
+        "cycles": 542527761
+      },
+      "ordered_stack": {
+        "cpu_us": 13484.6,
+        "cpu_range": [
+          13441.3,
+          13507.4
+        ],
+        "instructions": 2010686775,
+        "cycles": 545413117
+      }
+    },
+    "original_delta": 2.388340245248677,
+    "ordered_delta": 0.6771739373894192,
+    "checkpoint_order_delta": -0.09621982874361557,
+    "stack_order_delta": -1.765862897938364
+  },
+  {
+    "fixture": "numbers_1m",
+    "operation": "stringify",
+    "arms": {
+      "checkpoint": {
+        "cpu_us": 1606.8229166666667,
+        "cpu_range": [
+          1604.09375,
+          1625.21875
+        ],
+        "instructions": 2999889069,
+        "cycles": 534867640
+      },
+      "stack": {
+        "cpu_us": 1643.90625,
+        "cpu_range": [
+          1640.3020833333333,
+          1645.78125
+        ],
+        "instructions": 3000084422,
+        "cycles": 546164793
+      },
+      "ordered_checkpoint": {
+        "cpu_us": 1607.1041666666667,
+        "cpu_range": [
+          1603.2083333333333,
+          1613.7083333333333
+        ],
+        "instructions": 2999948862,
+        "cycles": 534985302
+      },
+      "ordered_stack": {
+        "cpu_us": 1604.4791666666667,
+        "cpu_range": [
+          1603.5104166666667,
+          1608.4479166666667
+        ],
+        "instructions": 2999965291,
+        "cycles": 534087480
+      }
+    },
+    "original_delta": 2.3078668438624383,
+    "ordered_delta": -0.16333726552676398,
+    "checkpoint_order_delta": 0.01750348448996686,
+    "stack_order_delta": -2.398377847479638
+  },
+  {
+    "fixture": "wide_1m",
+    "operation": "parse",
+    "arms": {
+      "checkpoint": {
+        "cpu_us": 15202.138888888889,
+        "cpu_range": [
+          15160.305555555555,
+          15268.0
+        ],
+        "instructions": 8460357657,
+        "cycles": 1852675059
+      },
+      "stack": {
+        "cpu_us": 15343.694444444445,
+        "cpu_range": [
+          15309.694444444445,
+          15356.416666666666
+        ],
+        "instructions": 8460665783,
+        "cycles": 1869378662
+      },
+      "ordered_checkpoint": {
+        "cpu_us": 15242.555555555555,
+        "cpu_range": [
+          15208.416666666666,
+          15272.944444444445
+        ],
+        "instructions": 8462273647,
+        "cycles": 1858197590
+      },
+      "ordered_stack": {
+        "cpu_us": 15225.111111111111,
+        "cpu_range": [
+          15191.611111111111,
+          15297.305555555555
+        ],
+        "instructions": 8462162831,
+        "cycles": 1855247872
+      }
+    },
+    "original_delta": 0.9311555208788347,
+    "ordered_delta": -0.11444566746607876,
+    "checkpoint_order_delta": 0.2658617117108797,
+    "stack_order_delta": -0.772847333233162
+  },
+  {
+    "fixture": "heterogeneous_1m",
+    "operation": "parse",
+    "arms": {
+      "checkpoint": {
+        "cpu_us": 1934.475,
+        "cpu_range": [
+          1930.5,
+          1954.675
+        ],
+        "instructions": 2154028947,
+        "cycles": 529610384
+      },
+      "stack": {
+        "cpu_us": 1987.425,
+        "cpu_range": [
+          1982.6,
+          1995.775
+        ],
+        "instructions": 2154158538,
+        "cycles": 543344395
+      },
+      "ordered_checkpoint": {
+        "cpu_us": 1934.1375,
+        "cpu_range": [
+          1932.2125,
+          1938.85
+        ],
+        "instructions": 2154531465,
+        "cycles": 529856446
+      },
+      "ordered_stack": {
+        "cpu_us": 1940.15,
+        "cpu_range": [
+          1937.225,
+          1946.075
+        ],
+        "instructions": 2154546383,
+        "cycles": 530913953
+      }
+    },
+    "original_delta": 2.7371767533826974,
+    "ordered_delta": 0.3108620767654946,
+    "checkpoint_order_delta": -0.017446594037129337,
+    "stack_order_delta": -2.3787061146961497
+  }
+]

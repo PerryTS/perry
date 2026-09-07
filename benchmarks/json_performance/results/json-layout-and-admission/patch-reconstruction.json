@@ -1,0 +1,14 @@
+{
+  "method": "Apply each patch to temporary copies of the 90 retained source files, then compare every SHA-256 to the experimental source stamp.",
+  "verified": true,
+  "arms": {
+    "admission": {
+      "source_files": 90,
+      "patch_sha256": "5d20f349e6c004951bec618c9e98eaba07800db76c17e2a6159ee4ad7861892f"
+    },
+    "direct-entry": {
+      "source_files": 90,
+      "patch_sha256": "78bf5f793a30cc7b74952293bafc9e3766eff4587da5876c730828183e29937c"
+    }
+  }
+}

@@ -1,0 +1,57 @@
+{
+  "defer2": {
+    "command": [
+      "cc",
+      "/Users/amlug/projects/perry/codex-json-fastpaths-artifacts/worker.o",
+      "/Users/amlug/projects/perry/codex-json-fastpaths-artifacts/defer2-runtime/libperry_runtime.a",
+      "-lc",
+      "-Wl,-dead_strip",
+      "-Wl,-no_exported_symbols",
+      "-Wl,-order_file,/Users/amlug/projects/perry/codex-json-fastpaths-artifacts/layout5/checkpoint.order",
+      "-Wl,-order_file_statistics",
+      "-o",
+      "/Users/amlug/projects/perry/codex-json-fastpaths-artifacts/layout5/defer2-ordered-worker"
+    ],
+    "worker_sha256": "fc846cea8a945f95f6871a7448a2bd6245beb0133d4be84147e43ea58b2dda9d",
+    "runtime_sha256": "18b086bae093d55cad37752b4d64499daa897a3d18d1a02c52c0bbbe84637064",
+    "original": {
+      "text_symbols": 20315,
+      "common": 19561,
+      "order_matches_checkpoint": true
+    },
+    "ordered": {
+      "text_symbols": 20315,
+      "common": 19561,
+      "order_matches_checkpoint": false
+    }
+  },
+  "defer4": {
+    "command": [
+      "cc",
+      "/Users/amlug/projects/perry/codex-json-fastpaths-artifacts/worker.o",
+      "/Users/amlug/projects/perry/codex-json-fastpaths-artifacts/defer4-runtime/libperry_runtime.a",
+      "-lc",
+      "-Wl,-dead_strip",
+      "-Wl,-no_exported_symbols",
+      "-Wl,-order_file,/Users/amlug/projects/perry/codex-json-fastpaths-artifacts/layout5/checkpoint.order",
+      "-Wl,-order_file_statistics",
+      "-o",
+      "/Users/amlug/projects/perry/codex-json-fastpaths-artifacts/layout5/defer4-ordered-worker"
+    ],
+    "worker_sha256": "c86639810a36fbdedd4e250fa878d5331f14b0b4de326c86b5e96a0bd7ef762d",
+    "runtime_sha256": "8eced82b8c69322ac457a560915f9ee1e93de2851d6ba97396376396cc7ece42",
+    "original": {
+      "text_symbols": 20301,
+      "common": 19362,
+      "order_matches_checkpoint": false
+    },
+    "ordered": {
+      "text_symbols": 20301,
+      "common": 19362,
+      "order_matches_checkpoint": false
+    }
+  },
+  "order_sha256": "1d965416c4396275c3c05f54c4fb22823da21f5b28a53edf7075e374e9dff76c",
+  "object_sha256": "28a4483ebffc124debdb5e223f4972cf9cdb27bdae59476981539cd7a27b5618",
+  "symbols": 20315
+}

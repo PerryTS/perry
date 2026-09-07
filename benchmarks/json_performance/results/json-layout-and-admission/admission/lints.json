@@ -1,0 +1,35 @@
+[
+  {
+    "check": "node-version",
+    "command": [
+      "python3",
+      "scripts/check_node_version_consistency.py",
+      "--list"
+    ],
+    "exit_code": 0
+  },
+  {
+    "check": "root-holders",
+    "command": [
+      "python3",
+      "scripts/gc_runtime_root_holders.py"
+    ],
+    "exit_code": 0
+  },
+  {
+    "check": "addr-class",
+    "command": [
+      "python3",
+      "scripts/addr_class_inventory.py"
+    ],
+    "exit_code": 1
+  },
+  {
+    "check": "file-sizes",
+    "command": [
+      "bash",
+      "scripts/check_file_size.sh"
+    ],
+    "exit_code": 1
+  }
+]

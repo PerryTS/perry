@@ -1,0 +1,22 @@
+{
+  "owner": "json-perf-41775-1788760508",
+  "load_before": [
+    1.51318359375,
+    1.90576171875,
+    1.8369140625
+  ],
+  "started_utc": "2026-09-07T05:55:08Z",
+  "quiet_gate_passed": true,
+  "command": [
+    "python3",
+    "/Users/perry/json-direct-entry-v6-20260907-codex/trace_lifetime.py"
+  ],
+  "competing_workloads_before": [],
+  "load_after": [
+    1.71142578125,
+    1.91357421875,
+    1.8408203125
+  ],
+  "competing_workloads_after": [],
+  "finished_utc": "2026-09-07T05:55:32Z"
+}

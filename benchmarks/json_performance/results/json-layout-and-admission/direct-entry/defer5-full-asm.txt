@@ -1,0 +1,1815 @@
+
+/Users/amlug/projects/perry/codex-json-fastpaths-artifacts/defer5-worker:	file format mach-o arm64
+
+Disassembly of section __TEXT,__text:
+
+00000001005ffec0 <_js_json_stringify_full>:
+1005ffec0:     	sub	sp, sp, #0x110
+1005ffec4:     	stp	d9, d8, [sp, #0xa0]
+1005ffec8:     	stp	x28, x27, [sp, #0xb0]
+1005ffecc:     	stp	x26, x25, [sp, #0xc0]
+1005ffed0:     	stp	x24, x23, [sp, #0xd0]
+1005ffed4:     	stp	x22, x21, [sp, #0xe0]
+1005ffed8:     	stp	x20, x19, [sp, #0xf0]
+1005ffedc:     	stp	x29, x30, [sp, #0x100]
+1005ffee0:     	add	x29, sp, #0x100
+1005ffee4:     	mov.16b	v9, v2
+1005ffee8:     	mov.16b	v8, v0
+1005ffeec:     	mov	x26, #0x1               ; =1
+1005ffef0:     	movk	x26, #0x7ffc, lsl #48
+1005ffef4:     	fmov	x19, d8
+1005ffef8:     	fmov	x20, d1
+1005ffefc:     	fmov	x23, d9
+1005fff00:     	mov	x8, #-0x7ffc000000000001 ; =-9222246136947933185
+1005fff04:     	add	x9, x23, x8
+1005fff08:     	add	x27, x20, x8
+1005fff0c:     	cmp	x9, #0x2
+1005fff10:     	b.hs	0x1005fff34 <_js_json_stringify_full+0x74>
+1005fff14:     	cmp	x27, #0x2
+1005fff18:     	b.lo	0x1005fff44 <_js_json_stringify_full+0x84>
+1005fff1c:     	mov	w21, #0x0               ; =0
+1005fff20:     	cmp	x19, x26
+1005fff24:     	b.ne	0x100600494 <_js_json_stringify_full+0x5d4>
+1005fff28:     	mov	x22, #0x1               ; =1
+1005fff2c:     	movk	x22, #0x7ffc, lsl #48
+1005fff30:     	b	0x100601474 <_js_json_stringify_full+0x15b4>
+1005fff34:     	add	x8, x26, #0x2
+1005fff38:     	cmp	x23, x8
+1005fff3c:     	ccmp	x27, #0x2, #0x2, eq
+1005fff40:     	b.hs	0x1005fff1c <_js_json_stringify_full+0x5c>
+1005fff44:     	mov	x8, #-0x2               ; =-2
+1005fff48:     	movk	x8, #0x8003, lsl #48
+1005fff4c:     	add	x8, x19, x8
+1005fff50:     	cmp	x8, #0x3
+1005fff54:     	b.hs	0x1005fff68 <_js_json_stringify_full+0xa8>
+1005fff58:     	adrp	x9, 0x100dfc000 <_anon.1aa095982679c2c5b7affe6dc382ab89.2170+0x3>
+1005fff5c:     	add	x9, x9, #0xe98
+1005fff60:     	ldr	x22, [x9, x8, lsl #3]
+1005fff64:     	b	0x100601474 <_js_json_stringify_full+0x15b4>
+1005fff68:     	strb	wzr, [sp, #0x34]
+1005fff6c:     	str	wzr, [sp, #0x30]
+1005fff70:     	and	x8, x19, #0xffff000000000000
+1005fff74:     	mov	x9, #0x7fff000000000000 ; =9223090561878065152
+1005fff78:     	cmp	x8, x9
+1005fff7c:     	b.eq	0x1005ffff0 <_js_json_stringify_full+0x130>
+1005fff80:     	mov	x9, #0x7ff9000000000000 ; =9221401712017801216
+1005fff84:     	cmp	x8, x9
+1005fff88:     	b.ne	0x1006003ec <_js_json_stringify_full+0x52c>
+1005fff8c:     	ubfx	x10, x19, #40, #8
+1005fff90:     	cbz	x10, 0x1005fffe0 <_js_json_stringify_full+0x120>
+1005fff94:     	strb	w19, [sp, #0x30]
+1005fff98:     	cmp	x10, #0x1
+1005fff9c:     	b.eq	0x1005fffe0 <_js_json_stringify_full+0x120>
+1005fffa0:     	lsr	x9, x19, #8
+1005fffa4:     	strb	w9, [sp, #0x31]
+1005fffa8:     	cmp	x10, #0x2
+1005fffac:     	b.eq	0x1005fffe0 <_js_json_stringify_full+0x120>
+1005fffb0:     	lsr	x9, x19, #16
+1005fffb4:     	strb	w9, [sp, #0x32]
+1005fffb8:     	cmp	x10, #0x3
+1005fffbc:     	b.eq	0x1005fffe0 <_js_json_stringify_full+0x120>
+1005fffc0:     	lsr	x9, x19, #24
+1005fffc4:     	strb	w9, [sp, #0x33]
+1005fffc8:     	cmp	x10, #0x4
+1005fffcc:     	b.eq	0x1005fffe0 <_js_json_stringify_full+0x120>
+1005fffd0:     	lsr	x9, x19, #32
+1005fffd4:     	strb	w9, [sp, #0x34]
+1005fffd8:     	cmp	x10, #0x5
+1005fffdc:     	b.ne	0x100601af0 <_js_json_stringify_full+0x1c30>
+1005fffe0:     	add	x11, sp, #0x30
+1005fffe4:     	cmp	w10, #0x3
+1005fffe8:     	b.ls	0x100600008 <_js_json_stringify_full+0x148>
+1005fffec:     	b	0x1006003ec <_js_json_stringify_full+0x52c>
+1005ffff0:     	ands	x9, x19, #0xffffffffffff
+1005ffff4:     	b.eq	0x10060042c <_js_json_stringify_full+0x56c>
+1005ffff8:     	add	x11, x9, #0x14
+1005ffffc:     	ldr	w10, [x9, #0x4]
+100600000:     	cmp	w10, #0x3
+100600004:     	b.hi	0x1006003ec <_js_json_stringify_full+0x52c>
+100600008:     	stur	wzr, [sp, #0x71]
+10060000c:     	mov	w9, #0x22               ; =34
+100600010:     	strb	w9, [sp, #0x70]
+100600014:     	cbz	w10, 0x10060004c <_js_json_stringify_full+0x18c>
+100600018:     	add	x12, sp, #0x70
+10060001c:     	ldrb	w13, [x11]
+100600020:     	sxtb	w15, w13
+100600024:     	cmp	w13, #0xb
+100600028:     	b.le	0x100600054 <_js_json_stringify_full+0x194>
+10060002c:     	cmp	w13, #0x21
+100600030:     	b.gt	0x100600074 <_js_json_stringify_full+0x1b4>
+100600034:     	cmp	w13, #0xc
+100600038:     	b.eq	0x1006000a8 <_js_json_stringify_full+0x1e8>
+10060003c:     	cmp	w13, #0xd
+100600040:     	b.ne	0x100600084 <_js_json_stringify_full+0x1c4>
+100600044:     	mov	w15, #0x72              ; =114
+100600048:     	b	0x1006000b4 <_js_json_stringify_full+0x1f4>
+10060004c:     	mov	w12, #0x1               ; =1
+100600050:     	b	0x1006000dc <_js_json_stringify_full+0x21c>
+100600054:     	cmp	w13, #0x8
+100600058:     	b.eq	0x1006000a0 <_js_json_stringify_full+0x1e0>
+10060005c:     	cmp	w13, #0x9
+100600060:     	b.eq	0x1006000b0 <_js_json_stringify_full+0x1f0>
+100600064:     	cmp	w13, #0xa
+100600068:     	b.ne	0x100600084 <_js_json_stringify_full+0x1c4>
+10060006c:     	mov	w15, #0x6e              ; =110
+100600070:     	b	0x1006000b4 <_js_json_stringify_full+0x1f4>
+100600074:     	cmp	w13, #0x22
+100600078:     	b.eq	0x1006000b4 <_js_json_stringify_full+0x1f4>
+10060007c:     	cmp	w13, #0x5c
+100600080:     	b.eq	0x1006000b4 <_js_json_stringify_full+0x1f4>
+100600084:     	cmp	w15, #0x20
+100600088:     	b.lt	0x1006003ec <_js_json_stringify_full+0x52c>
+10060008c:     	mov	w14, #0x0               ; =0
+100600090:     	add	x13, x12, #0x2
+100600094:     	mov	w12, #0x2               ; =2
+100600098:     	mov	w16, #0x1               ; =1
+10060009c:     	b	0x1006000cc <_js_json_stringify_full+0x20c>
+1006000a0:     	mov	w15, #0x62              ; =98
+1006000a4:     	b	0x1006000b4 <_js_json_stringify_full+0x1f4>
+1006000a8:     	mov	w15, #0x66              ; =102
+1006000ac:     	b	0x1006000b4 <_js_json_stringify_full+0x1f4>
+1006000b0:     	mov	w15, #0x74              ; =116
+1006000b4:     	add	x13, x12, #0x3
+1006000b8:     	mov	w12, #0x5c              ; =92
+1006000bc:     	strb	w12, [sp, #0x71]
+1006000c0:     	mov	w14, #0x1               ; =1
+1006000c4:     	mov	w12, #0x3               ; =3
+1006000c8:     	mov	w16, #0x2               ; =2
+1006000cc:     	add	x17, sp, #0x70
+1006000d0:     	strb	w15, [x17, x16]
+1006000d4:     	cmp	w10, #0x1
+1006000d8:     	b.ne	0x100600114 <_js_json_stringify_full+0x254>
+1006000dc:     	add	x10, sp, #0x70
+1006000e0:     	strb	w9, [x10, x12]
+1006000e4:     	add	x8, x12, #0x1
+1006000e8:     	cmp	x12, #0x3
+1006000ec:     	b.hs	0x100600100 <_js_json_stringify_full+0x240>
+1006000f0:     	mov	x13, #0x0               ; =0
+1006000f4:     	mov	x11, #0x0               ; =0
+1006000f8:     	add	x9, sp, #0x70
+1006000fc:     	b	0x10060035c <_js_json_stringify_full+0x49c>
+100600100:     	cmp	x12, #0xf
+100600104:     	b.hs	0x100600144 <_js_json_stringify_full+0x284>
+100600108:     	mov	x11, #0x0               ; =0
+10060010c:     	mov	x13, #0x0               ; =0
+100600110:     	b	0x1006002b8 <_js_json_stringify_full+0x3f8>
+100600114:     	ldrb	w16, [x11, #0x1]
+100600118:     	sxtb	w15, w16
+10060011c:     	cmp	w16, #0xb
+100600120:     	b.le	0x10060038c <_js_json_stringify_full+0x4cc>
+100600124:     	cmp	w16, #0x21
+100600128:     	b.gt	0x1006003ac <_js_json_stringify_full+0x4ec>
+10060012c:     	cmp	w16, #0xc
+100600130:     	b.eq	0x1006003dc <_js_json_stringify_full+0x51c>
+100600134:     	cmp	w16, #0xd
+100600138:     	b.ne	0x1006003bc <_js_json_stringify_full+0x4fc>
+10060013c:     	mov	w15, #0x72              ; =114
+100600140:     	b	0x1006003e8 <_js_json_stringify_full+0x528>
+100600144:     	and	x12, x8, #0xc
+100600148:     	and	x11, x8, #0x10
+10060014c:     	add	x13, sp, #0x70
+100600150:     	add	x9, x13, x11
+100600154:     	adrp	x14, 0x100de2000 <_anon.24e161fcee4a9c1d55b6f82b98ded73b.1413+0x3cc>
+100600158:     	ldr	q0, [x14, #0x860]
+10060015c:     	adrp	x14, 0x100de2000 <_anon.24e161fcee4a9c1d55b6f82b98ded73b.1413+0x3cc>
+100600160:     	ldr	q1, [x14, #0x870]
+100600164:     	adrp	x14, 0x100de2000 <_anon.24e161fcee4a9c1d55b6f82b98ded73b.1413+0x3cc>
+100600168:     	ldr	q2, [x14, #0x880]
+10060016c:     	adrp	x14, 0x100de2000 <_anon.24e161fcee4a9c1d55b6f82b98ded73b.1413+0x3cc>
+100600170:     	ldr	q3, [x14, #0x890]
+100600174:     	adrp	x14, 0x100de2000 <_anon.24e161fcee4a9c1d55b6f82b98ded73b.1413+0x3cc>
+100600178:     	ldr	q4, [x14, #0x8a0]
+10060017c:     	movi.2d	v5, #0000000000000000
+100600180:     	adrp	x14, 0x100de2000 <_anon.24e161fcee4a9c1d55b6f82b98ded73b.1413+0x3cc>
+100600184:     	ldr	q6, [x14, #0x8b0]
+100600188:     	adrp	x14, 0x100de2000 <_anon.24e161fcee4a9c1d55b6f82b98ded73b.1413+0x3cc>
+10060018c:     	ldr	q7, [x14, #0x8c0]
+100600190:     	mov	w14, #0x10              ; =16
+100600194:     	movi.2d	v16, #0000000000000000
+100600198:     	dup.2d	v17, x14
+10060019c:     	adrp	x14, 0x100db9000 <__RNvCs8xF4iOrs9m2_4itoa13DECIMAL_PAIRS+0x3319a>
+1006001a0:     	ldr	q19, [x14, #0xde0]
+1006001a4:     	and	x14, x8, #0x10
+1006001a8:     	movi.2d	v20, #0000000000000000
+1006001ac:     	movi.2d	v18, #0000000000000000
+1006001b0:     	movi.2d	v23, #0000000000000000
+1006001b4:     	movi.2d	v21, #0000000000000000
+1006001b8:     	movi.2d	v24, #0000000000000000
+1006001bc:     	movi.2d	v22, #0000000000000000
+1006001c0:     	ldr	q25, [x13], #0x10
+1006001c4:     	ushll.8h	v26, v25, #0x0
+1006001c8:     	ushll2.4s	v27, v26, #0x0
+1006001cc:     	ushll2.2d	v28, v27, #0x0
+1006001d0:     	ushll2.8h	v25, v25, #0x0
+1006001d4:     	ushll.4s	v29, v25, #0x0
+1006001d8:     	ushll2.2d	v30, v29, #0x0
+1006001dc:     	ushll.2d	v29, v29, #0x0
+1006001e0:     	ushll.2d	v27, v27, #0x0
+1006001e4:     	ushll.4s	v26, v26, #0x0
+1006001e8:     	ushll2.2d	v31, v26, #0x0
+1006001ec:     	ushll2.4s	v25, v25, #0x0
+1006001f0:     	ushll.2d	v8, v25, #0x0
+1006001f4:     	ushll.2d	v26, v26, #0x0
+1006001f8:     	ushll2.2d	v25, v25, #0x0
+1006001fc:     	shl.2d	v9, v0, #0x3
+100600200:     	ushl.2d	v25, v25, v9
+100600204:     	shl.2d	v9, v19, #0x3
+100600208:     	ushl.2d	v26, v26, v9
+10060020c:     	shl.2d	v9, v1, #0x3
+100600210:     	ushl.2d	v8, v8, v9
+100600214:     	shl.2d	v9, v7, #0x3
+100600218:     	ushl.2d	v31, v31, v9
+10060021c:     	shl.2d	v9, v6, #0x3
+100600220:     	ushl.2d	v27, v27, v9
+100600224:     	shl.2d	v9, v3, #0x3
+100600228:     	ushl.2d	v29, v29, v9
+10060022c:     	shl.2d	v9, v2, #0x3
+100600230:     	ushl.2d	v30, v30, v9
+100600234:     	shl.2d	v9, v4, #0x3
+100600238:     	ushl.2d	v28, v28, v9
+10060023c:     	orr.16b	v18, v28, v18
+100600240:     	orr.16b	v21, v30, v21
+100600244:     	orr.16b	v23, v29, v23
+100600248:     	orr.16b	v20, v27, v20
+10060024c:     	orr.16b	v5, v31, v5
+100600250:     	orr.16b	v24, v8, v24
+100600254:     	orr.16b	v16, v26, v16
+100600258:     	orr.16b	v22, v25, v22
+10060025c:     	add.2d	v6, v6, v17
+100600260:     	add.2d	v7, v7, v17
+100600264:     	add.2d	v19, v19, v17
+100600268:     	add.2d	v4, v4, v17
+10060026c:     	add.2d	v3, v3, v17
+100600270:     	add.2d	v2, v2, v17
+100600274:     	add.2d	v1, v1, v17
+100600278:     	add.2d	v0, v0, v17
+10060027c:     	subs	x14, x14, #0x10
+100600280:     	b.ne	0x1006001c0 <_js_json_stringify_full+0x300>
+100600284:     	orr.16b	v0, v16, v23
+100600288:     	orr.16b	v1, v20, v24
+10060028c:     	orr.16b	v0, v0, v1
+100600290:     	orr.16b	v1, v5, v21
+100600294:     	orr.16b	v2, v18, v22
+100600298:     	orr.16b	v1, v1, v2
+10060029c:     	orr.16b	v0, v0, v1
+1006002a0:     	mov	d1, v0[1]
+1006002a4:     	orr.8b	v0, v0, v1
+1006002a8:     	fmov	x13, d0
+1006002ac:     	cmp	x8, x11
+1006002b0:     	b.eq	0x10060037c <_js_json_stringify_full+0x4bc>
+1006002b4:     	cbz	x12, 0x10060035c <_js_json_stringify_full+0x49c>
+1006002b8:     	mov	x14, x11
+1006002bc:     	and	x11, x8, #0x1c
+1006002c0:     	add	x15, sp, #0x70
+1006002c4:     	add	x9, x15, x11
+1006002c8:     	fmov	d0, x13
+1006002cc:     	movi.2d	v1, #0000000000000000
+1006002d0:     	dup.2d	v3, x14
+1006002d4:     	adrp	x12, 0x100de2000 <_anon.24e161fcee4a9c1d55b6f82b98ded73b.1413+0x3cc>
+1006002d8:     	ldr	q2, [x12, #0x8c0]
+1006002dc:     	orr.16b	v2, v3, v2
+1006002e0:     	adrp	x12, 0x100db9000 <__RNvCs8xF4iOrs9m2_4itoa13DECIMAL_PAIRS+0x3319a>
+1006002e4:     	ldr	q4, [x12, #0xde0]
+1006002e8:     	orr.16b	v3, v3, v4
+1006002ec:     	sub	x12, x14, x11
+1006002f0:     	add	x13, x15, x14
+1006002f4:     	movi.2d	v4, #0x000000000000ff
+1006002f8:     	mov	w14, #0x4               ; =4
+1006002fc:     	dup.2d	v5, x14
+100600300:     	ldr	s6, [x13], #0x4
+100600304:     	ushll.8h	v6, v6, #0x0
+100600308:     	ushll.4s	v6, v6, #0x0
+10060030c:     	ushll2.2d	v7, v6, #0x0
+100600310:     	and.16b	v7, v7, v4
+100600314:     	ushll.2d	v6, v6, #0x0
+100600318:     	and.16b	v6, v6, v4
+10060031c:     	shl.2d	v16, v2, #0x3
+100600320:     	shl.2d	v17, v3, #0x3
+100600324:     	ushl.2d	v6, v6, v17
+100600328:     	ushl.2d	v7, v7, v16
+10060032c:     	orr.16b	v1, v7, v1
+100600330:     	orr.16b	v0, v6, v0
+100600334:     	add.2d	v2, v2, v5
+100600338:     	add.2d	v3, v3, v5
+10060033c:     	adds	x12, x12, #0x4
+100600340:     	b.ne	0x100600300 <_js_json_stringify_full+0x440>
+100600344:     	orr.16b	v0, v0, v1
+100600348:     	mov	d1, v0[1]
+10060034c:     	orr.8b	v0, v0, v1
+100600350:     	fmov	x13, d0
+100600354:     	cmp	x8, x11
+100600358:     	b.eq	0x10060037c <_js_json_stringify_full+0x4bc>
+10060035c:     	add	x10, x10, x8
+100600360:     	lsl	x11, x11, #3
+100600364:     	ldrb	w12, [x9], #0x1
+100600368:     	lsl	x12, x12, x11
+10060036c:     	orr	x13, x12, x13
+100600370:     	add	x11, x11, #0x8
+100600374:     	cmp	x9, x10
+100600378:     	b.ne	0x100600364 <_js_json_stringify_full+0x4a4>
+10060037c:     	orr	x8, x13, x8, lsl #40
+100600380:     	mov	x9, #0x7ff9000000000000 ; =9221401712017801216
+100600384:     	orr	x22, x8, x9
+100600388:     	b	0x100601474 <_js_json_stringify_full+0x15b4>
+10060038c:     	cmp	w16, #0x8
+100600390:     	b.eq	0x1006003d4 <_js_json_stringify_full+0x514>
+100600394:     	cmp	w16, #0x9
+100600398:     	b.eq	0x1006003e4 <_js_json_stringify_full+0x524>
+10060039c:     	cmp	w16, #0xa
+1006003a0:     	b.ne	0x1006003bc <_js_json_stringify_full+0x4fc>
+1006003a4:     	mov	w15, #0x6e              ; =110
+1006003a8:     	b	0x1006003e8 <_js_json_stringify_full+0x528>
+1006003ac:     	cmp	w16, #0x22
+1006003b0:     	b.eq	0x1006003e8 <_js_json_stringify_full+0x528>
+1006003b4:     	cmp	w16, #0x5c
+1006003b8:     	b.eq	0x1006003e8 <_js_json_stringify_full+0x528>
+1006003bc:     	cmp	w15, #0x20
+1006003c0:     	b.lt	0x1006003ec <_js_json_stringify_full+0x52c>
+1006003c4:     	add	x13, sp, #0x70
+1006003c8:     	strb	w15, [x13, x12]
+1006003cc:     	add	x12, x12, #0x1
+1006003d0:     	b	0x100600ae0 <_js_json_stringify_full+0xc20>
+1006003d4:     	mov	w15, #0x62              ; =98
+1006003d8:     	b	0x1006003e8 <_js_json_stringify_full+0x528>
+1006003dc:     	mov	w15, #0x66              ; =102
+1006003e0:     	b	0x1006003e8 <_js_json_stringify_full+0x528>
+1006003e4:     	mov	w15, #0x74              ; =116
+1006003e8:     	tbz	w14, #0x0, 0x100600acc <_js_json_stringify_full+0xc0c>
+1006003ec:     	mov	x9, #0x7ffd000000000000 ; =9222527611924643840
+1006003f0:     	cmp	x8, x9
+1006003f4:     	b.eq	0x100600434 <_js_json_stringify_full+0x574>
+1006003f8:     	mov	x9, #0x7fff000000000000 ; =9223090561878065152
+1006003fc:     	cmp	x8, x9
+100600400:     	b.ne	0x100600488 <_js_json_stringify_full+0x5c8>
+100600404:     	and	x8, x19, #0xffffffffffff
+100600408:     	cmp	x8, #0x1, lsl #12       ; =0x1000
+10060040c:     	b.lo	0x10060042c <_js_json_stringify_full+0x56c>
+100600410:     	ldr	w8, [x8, #0x4]
+100600414:     	cmp	w8, #0x40
+100600418:     	b.lo	0x10060042c <_js_json_stringify_full+0x56c>
+10060041c:     	and	x0, x19, #0xffffffffffff
+100600420:     	bl	0x1005b6208 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json16stringify_string17quote_heap_string>
+100600424:     	cmp	x0, #0x1
+100600428:     	b.eq	0x1006005dc <_js_json_stringify_full+0x71c>
+10060042c:     	mov	w21, #0x1               ; =1
+100600430:     	b	0x1006004d4 <_js_json_stringify_full+0x614>
+100600434:     	and	x24, x19, #0xffffffffffff
+100600438:     	and	x0, x19, #0xffffffffffff
+10060043c:     	bl	0x1005d3c20 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime5value10addr_class26try_read_tracked_gc_header>
+100600440:     	cbz	x0, 0x100600474 <_js_json_stringify_full+0x5b4>
+100600444:     	ldrb	w8, [x0]
+100600448:     	cmp	w8, #0x2
+10060044c:     	b.ne	0x100600474 <_js_json_stringify_full+0x5b4>
+100600450:     	ldrsb	w8, [x0, #0x1]
+100600454:     	tbnz	w8, #0x1f, 0x100600474 <_js_json_stringify_full+0x5b4>
+100600458:     	ldrh	w8, [x0, #0x2]
+10060045c:     	tbnz	w8, #0xb, 0x100600474 <_js_json_stringify_full+0x5b4>
+100600460:     	ldr	w8, [x0, #0x4]
+100600464:     	cmp	w8, #0x18
+100600468:     	b.lo	0x100600474 <_js_json_stringify_full+0x5b4>
+10060046c:     	ldr	w8, [x24]
+100600470:     	cbz	w8, 0x1006015c0 <_js_json_stringify_full+0x1700>
+100600474:     	mov	w21, #0x1               ; =1
+100600478:     	mov	w8, #0x1                ; =1
+10060047c:     	cmp	x24, #0x100, lsl #12    ; =0x100000
+100600480:     	b.hs	0x1006004b0 <_js_json_stringify_full+0x5f0>
+100600484:     	b	0x1006004c4 <_js_json_stringify_full+0x604>
+100600488:     	mov	w21, #0x1               ; =1
+10060048c:     	cmp	x19, x26
+100600490:     	b.eq	0x1005fff28 <_js_json_stringify_full+0x68>
+100600494:     	mov	w8, #0x7ffd             ; =32765
+100600498:     	cmp	x8, x19, lsr #48
+10060049c:     	b.ne	0x1006004d4 <_js_json_stringify_full+0x614>
+1006004a0:     	and	x24, x19, #0xffffffffffff
+1006004a4:     	mov	w8, #0x1                ; =1
+1006004a8:     	cmp	x24, #0x100, lsl #12    ; =0x100000
+1006004ac:     	b.lo	0x1006004c4 <_js_json_stringify_full+0x604>
+1006004b0:     	ldr	w9, [x24, #0xc]
+1006004b4:     	mov	w10, #0x4f53            ; =20307
+1006004b8:     	movk	w10, #0x434c, lsl #16
+1006004bc:     	cmp	w9, w10
+1006004c0:     	b.eq	0x1005fff28 <_js_json_stringify_full+0x68>
+1006004c4:     	cbz	w8, 0x100600508 <_js_json_stringify_full+0x648>
+1006004c8:     	and	x0, x19, #0xffffffffffff
+1006004cc:     	mov	w22, #0x1               ; =1
+1006004d0:     	b	0x100600538 <_js_json_stringify_full+0x678>
+1006004d4:     	lsr	x8, x19, #52
+1006004d8:     	cbnz	x8, 0x1006005c4 <_js_json_stringify_full+0x704>
+1006004dc:     	and	x8, x19, #0x7
+1006004e0:     	cbz	x19, 0x100600514 <_js_json_stringify_full+0x654>
+1006004e4:     	cbnz	x8, 0x100600514 <_js_json_stringify_full+0x654>
+1006004e8:     	mov	x0, x19
+1006004ec:     	bl	0x1005d1760 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify26ptr_is_tracked_heap_object>
+1006004f0:     	tbz	w0, #0x0, 0x1006006c8 <_js_json_stringify_full+0x808>
+1006004f4:     	mov	w8, #0x0                ; =0
+1006004f8:     	mov	x24, x19
+1006004fc:     	cmp	x19, #0x100, lsl #12    ; =0x100000
+100600500:     	b.hs	0x1006004b0 <_js_json_stringify_full+0x5f0>
+100600504:     	b	0x1006004c4 <_js_json_stringify_full+0x604>
+100600508:     	lsr	x8, x19, #52
+10060050c:     	cbnz	x8, 0x1006005c4 <_js_json_stringify_full+0x704>
+100600510:     	and	x8, x19, #0x7
+100600514:     	mov	w22, #0x0               ; =0
+100600518:     	cbz	x19, 0x1006005c8 <_js_json_stringify_full+0x708>
+10060051c:     	cbnz	x8, 0x1006005c8 <_js_json_stringify_full+0x708>
+100600520:     	mov	x0, x19
+100600524:     	bl	0x1005d1760 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify26ptr_is_tracked_heap_object>
+100600528:     	mov	x8, x0
+10060052c:     	mov	w22, #0x0               ; =0
+100600530:     	mov	x0, x19
+100600534:     	tbz	w8, #0x0, 0x1006005c8 <_js_json_stringify_full+0x708>
+100600538:     	cmp	x0, #0x100, lsl #12     ; =0x100000
+10060053c:     	b.lo	0x1006005c8 <_js_json_stringify_full+0x708>
+100600540:     	adrp	x8, 0x101209000 <__RNvNtCs5gMwpk3Cs4e_13perry_runtime5timer28PROFILE_INTERVAL_TIMER_TICKS>
+100600544:     	add	x8, x8, #0x4c8
+100600548:     	ldaprb	w8, [x8]
+10060054c:     	cbz	w8, 0x1006005c8 <_js_json_stringify_full+0x708>
+100600550:     	lsr	x8, x0, #3
+100600554:     	mov	x9, #0x7c15             ; =31765
+100600558:     	movk	x9, #0x7f4a, lsl #16
+10060055c:     	movk	x9, #0x79b9, lsl #32
+100600560:     	movk	x9, #0x9e37, lsl #48
+100600564:     	mul	x8, x8, x9
+100600568:     	lsr	x10, x8, #54
+10060056c:     	lsr	x11, x8, #60
+100600570:     	adrp	x9, 0x101209000 <__RNvNtCs5gMwpk3Cs4e_13perry_runtime5timer28PROFILE_INTERVAL_TIMER_TICKS>
+100600574:     	add	x9, x9, #0x4d0
+100600578:     	add	x11, x9, x11, lsl #3
+10060057c:     	ldapr	x11, [x11]
+100600580:     	lsr	x10, x11, x10
+100600584:     	tbz	w10, #0x0, 0x1006005c8 <_js_json_stringify_full+0x708>
+100600588:     	lsr	x10, x8, #44
+10060058c:     	ubfx	x11, x8, #50, #4
+100600590:     	add	x11, x9, x11, lsl #3
+100600594:     	ldapr	x11, [x11]
+100600598:     	lsr	x10, x11, x10
+10060059c:     	tbz	w10, #0x0, 0x1006005c8 <_js_json_stringify_full+0x708>
+1006005a0:     	lsr	x10, x8, #34
+1006005a4:     	ubfx	x8, x8, #40, #4
+1006005a8:     	add	x8, x9, x8, lsl #3
+1006005ac:     	ldapr	x8, [x8]
+1006005b0:     	lsr	x8, x8, x10
+1006005b4:     	tbz	w8, #0x0, 0x1006005c8 <_js_json_stringify_full+0x708>
+1006005b8:     	bl	0x10090caf0 <__RNvNtCs5gMwpk3Cs4e_13perry_runtime6symbol25is_registered_symbol_slow>
+1006005bc:     	tbz	w0, #0x0, 0x1006005c8 <_js_json_stringify_full+0x708>
+1006005c0:     	b	0x1005fff28 <_js_json_stringify_full+0x68>
+1006005c4:     	mov	w22, #0x0               ; =0
+1006005c8:     	tbz	w21, #0x0, 0x1006005e8 <_js_json_stringify_full+0x728>
+1006005cc:     	mov.16b	v0, v8
+1006005d0:     	bl	0x1005b1f30 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json13stringify_api24try_stringify_lazy_array>
+1006005d4:     	cmp	x0, #0x1
+1006005d8:     	b.ne	0x1006005e8 <_js_json_stringify_full+0x728>
+1006005dc:     	mov	x22, #0x7fff000000000000 ; =9223090561878065152
+1006005e0:     	bfxil	x22, x1, #0, #48
+1006005e4:     	b	0x100601474 <_js_json_stringify_full+0x15b4>
+1006005e8:     	cbz	w22, 0x100600638 <_js_json_stringify_full+0x778>
+1006005ec:     	ands	x21, x19, #0xffffffffffff
+1006005f0:     	b.eq	0x100600638 <_js_json_stringify_full+0x778>
+1006005f4:     	mov	x0, x21
+1006005f8:     	bl	0x1005d1760 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify26ptr_is_tracked_heap_object>
+1006005fc:     	cbz	w0, 0x100600638 <_js_json_stringify_full+0x778>
+100600600:     	ldurb	w8, [x21, #-0x8]
+100600604:     	cmp	w8, #0x9
+100600608:     	b.ne	0x100600638 <_js_json_stringify_full+0x778>
+10060060c:     	ldr	w8, [x21, #0x4]
+100600610:     	mov	w9, #0x5841             ; =22593
+100600614:     	movk	w9, #0x4c5a, lsl #16
+100600618:     	cmp	w8, w9
+10060061c:     	b.ne	0x100600638 <_js_json_stringify_full+0x778>
+100600620:     	mov	x0, x21
+100600624:     	bl	0x10072cc90 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime9json_tape8mutation26resolve_materialized_array>
+100600628:     	cbz	x0, 0x100600638 <_js_json_stringify_full+0x778>
+10060062c:     	mov	x19, #0x7ffd000000000000 ; =9222527611924643840
+100600630:     	bfxil	x19, x0, #0, #48
+100600634:     	fmov	d8, x19
+100600638:     	mov	w8, #0x7ffd             ; =32765
+10060063c:     	cmp	x8, x23, lsr #48
+100600640:     	b.ne	0x100600654 <_js_json_stringify_full+0x794>
+100600644:     	and	x8, x23, #0xffffffffffff
+100600648:     	cmp	x8, #0x100, lsl #12     ; =0x100000
+10060064c:     	b.hs	0x100600668 <_js_json_stringify_full+0x7a8>
+100600650:     	b	0x1006006e4 <_js_json_stringify_full+0x824>
+100600654:     	sub	x9, x23, #0x100, lsl #12 ; =0x100000
+100600658:     	mov	x10, #0xfffffff00000    ; =281474975662080
+10060065c:     	mov	x8, x23
+100600660:     	cmp	x9, x10
+100600664:     	b.hs	0x1006006e4 <_js_json_stringify_full+0x824>
+100600668:     	lsr	x9, x8, #47
+10060066c:     	cbnz	x9, 0x1006006e4 <_js_json_stringify_full+0x824>
+100600670:     	str	x8, [sp, #0x30]
+100600674:     	ldr	w21, [x8]
+100600678:     	mov	w9, #0xff30             ; =65328
+10060067c:     	add	w9, w21, w9
+100600680:     	cmp	w9, #0x5
+100600684:     	b.hs	0x1006006e4 <_js_json_stringify_full+0x824>
+100600688:     	str	x8, [sp, #0x70]
+10060068c:     	adrp	x0, 0x1010bd000 <_anon.8e6022e3b71166c56c420b05fa707284.290+0xc8>
+100600690:     	add	x0, x0, #0x720
+100600694:     	add	x1, sp, #0x70
+100600698:     	add	x2, sp, #0x30
+10060069c:     	bl	0x100156fbc <__RINvMs2_NtNtCs8BpVhDwHqJW_3std6thread5localINtB6_8LocalKeyINtNtCsjgY6bXVaRmE_4core4cell7RefCellINtNtNtNtBa_11collections4hash3map7HashMapjyNtNtCs5gMwpk3Cs4e_13perry_runtime9fast_hash9PtrHasherEEE4withNCNvNtNtNtB2h_8builtins10formatting16boxed_primitives34boxed_primitive_payload_for_object0dEB2h_>
+1006006a0:     	and	w8, w21, #0xff
+1006006a4:     	cmp	w8, #0xd0
+1006006a8:     	b.eq	0x1006006d8 <_js_json_stringify_full+0x818>
+1006006ac:     	cmp	w8, #0xd1
+1006006b0:     	b.ne	0x1006006e4 <_js_json_stringify_full+0x824>
+1006006b4:     	mov.16b	v0, v9
+1006006b8:     	bl	0x1009c6418 <_js_jsvalue_to_string>
+1006006bc:     	mov	x23, #0x7fff000000000000 ; =9223090561878065152
+1006006c0:     	bfxil	x23, x0, #0, #48
+1006006c4:     	b	0x1006006e4 <_js_json_stringify_full+0x824>
+1006006c8:     	mov	x8, #0x0                ; =0
+1006006cc:     	mov	w22, #0x0               ; =0
+1006006d0:     	cbnz	x19, 0x10060051c <_js_json_stringify_full+0x65c>
+1006006d4:     	b	0x1006005c8 <_js_json_stringify_full+0x708>
+1006006d8:     	mov.16b	v0, v9
+1006006dc:     	bl	0x1004921a8 <_js_number_coerce>
+1006006e0:     	fmov	x23, d0
+1006006e4:     	mov	x8, #-0x7ffc000000000001 ; =-9222246136947933185
+1006006e8:     	add	x8, x23, x8
+1006006ec:     	cmp	x8, #0x3
+1006006f0:     	b.hs	0x100600834 <_js_json_stringify_full+0x974>
+1006006f4:     	mov	x22, #0x0               ; =0
+1006006f8:     	mov	w8, #0x1                ; =1
+1006006fc:     	stp	xzr, x8, [sp]
+100600700:     	str	xzr, [sp, #0x10]
+100600704:     	cmp	x27, #0x2
+100600708:     	b.lo	0x100600b30 <_js_json_stringify_full+0xc70>
+10060070c:     	and	x24, x20, #0xffff000000000000
+100600710:     	mov	x8, #0x7ffd000000000000 ; =9222527611924643840
+100600714:     	cmp	x24, x8
+100600718:     	b.ne	0x100600864 <_js_json_stringify_full+0x9a4>
+10060071c:     	and	x21, x20, #0xffffffffffff
+100600720:     	cmp	x21, #0x100, lsl #12    ; =0x100000
+100600724:     	b.lo	0x100600b30 <_js_json_stringify_full+0xc70>
+100600728:     	mov	x0, x21
+10060072c:     	bl	0x1005cc100 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify17is_object_pointer>
+100600730:     	tbnz	w0, #0x0, 0x100600b30 <_js_json_stringify_full+0xc70>
+100600734:     	lsr	x8, x21, #51
+100600738:     	cmp	x8, #0xfff
+10060073c:     	b.lo	0x100600754 <_js_json_stringify_full+0x894>
+100600740:     	mov	w8, #0x7ffc             ; =32764
+100600744:     	cmp	x8, x21, lsr #48
+100600748:     	b.eq	0x100600b30 <_js_json_stringify_full+0xc70>
+10060074c:     	ands	x21, x21, #0xffffffffffff
+100600750:     	b.eq	0x100600b30 <_js_json_stringify_full+0xc70>
+100600754:     	and	x8, x21, #0xfffffffffff00000
+100600758:     	lsr	x9, x21, #47
+10060075c:     	cmp	x9, #0x0
+100600760:     	ccmp	x8, #0x0, #0x4, eq
+100600764:     	b.eq	0x100600b30 <_js_json_stringify_full+0xc70>
+100600768:     	tst	x21, #0x3
+10060076c:     	ccmp	x21, #0x7, #0x0, eq
+100600770:     	b.ls	0x1006016e0 <_js_json_stringify_full+0x1820>
+100600774:     	adrp	x8, 0x10112c000 <_perry_global_baseline_worker_ts__1>
+100600778:     	add	x8, x8, #0x4f0
+10060077c:     	ldr	x8, [x8]
+100600780:     	cmn	x8, #0x1
+100600784:     	b.eq	0x1006018b0 <_js_json_stringify_full+0x19f0>
+100600788:     	mrs	x9, TPIDRRO_EL0
+10060078c:     	and	x9, x9, #0xfffffffffffffff8
+100600790:     	ldr	x0, [x9, x8, lsl #3]
+100600794:     	cbz	x0, 0x1006018b0 <_js_json_stringify_full+0x19f0>
+100600798:     	lsr	x1, x21, #20
+10060079c:     	ldr	x8, [x0, #0x10]
+1006007a0:     	ldrb	w9, [x8, #0x28]
+1006007a4:     	tbz	w9, #0x0, 0x1006007c4 <_js_json_stringify_full+0x904>
+1006007a8:     	ldr	x9, [x8, #0x20]
+1006007ac:     	cmp	x9, x1
+1006007b0:     	b.ne	0x1006007c4 <_js_json_stringify_full+0x904>
+1006007b4:     	ldp	x9, x10, [x8]
+1006007b8:     	cmp	x9, x21
+1006007bc:     	ccmp	x10, x21, #0x0, ls
+1006007c0:     	b.hi	0x1006016a8 <_js_json_stringify_full+0x17e8>
+1006007c4:     	ldrb	w9, [x8, #0x58]
+1006007c8:     	cbz	w9, 0x1006007e8 <_js_json_stringify_full+0x928>
+1006007cc:     	ldr	x9, [x8, #0x50]
+1006007d0:     	cmp	x9, x1
+1006007d4:     	b.ne	0x1006007e8 <_js_json_stringify_full+0x928>
+1006007d8:     	ldp	x9, x10, [x8, #0x30]
+1006007dc:     	cmp	x9, x21
+1006007e0:     	ccmp	x10, x21, #0x0, ls
+1006007e4:     	b.hi	0x10060169c <_js_json_stringify_full+0x17dc>
+1006007e8:     	ldrb	w9, [x8, #0x88]
+1006007ec:     	cbz	w9, 0x10060080c <_js_json_stringify_full+0x94c>
+1006007f0:     	ldr	x9, [x8, #0x80]
+1006007f4:     	cmp	x9, x1
+1006007f8:     	b.ne	0x10060080c <_js_json_stringify_full+0x94c>
+1006007fc:     	ldp	x9, x10, [x8, #0x60]
+100600800:     	cmp	x9, x21
+100600804:     	ccmp	x10, x21, #0x0, ls
+100600808:     	b.hi	0x1006016a4 <_js_json_stringify_full+0x17e4>
+10060080c:     	ldrb	w9, [x8, #0xb8]
+100600810:     	cbz	w9, 0x1006016b4 <_js_json_stringify_full+0x17f4>
+100600814:     	ldr	x9, [x8, #0xb0]
+100600818:     	cmp	x9, x1
+10060081c:     	b.ne	0x1006016b4 <_js_json_stringify_full+0x17f4>
+100600820:     	ldp	x9, x10, [x8, #0x90]!
+100600824:     	cmp	x9, x21
+100600828:     	ccmp	x10, x21, #0x0, ls
+10060082c:     	b.hi	0x1006016a8 <_js_json_stringify_full+0x17e8>
+100600830:     	b	0x1006016b4 <_js_json_stringify_full+0x17f4>
+100600834:     	and	x8, x23, #0xffff000000000000
+100600838:     	mov	x9, #0x7ff9000000000000 ; =9221401712017801216
+10060083c:     	cmp	x8, x9
+100600840:     	b.eq	0x10060088c <_js_json_stringify_full+0x9cc>
+100600844:     	mov	x9, #0x7fff000000000000 ; =9223090561878065152
+100600848:     	cmp	x8, x9
+10060084c:     	b.ne	0x100600918 <_js_json_stringify_full+0xa58>
+100600850:     	and	x8, x23, #0xffffffffffff
+100600854:     	cmp	x8, #0x1, lsl #12       ; =0x1000
+100600858:     	b.hs	0x10060095c <_js_json_stringify_full+0xa9c>
+10060085c:     	mov	x9, #0x0                ; =0
+100600860:     	b	0x100600964 <_js_json_stringify_full+0xaa4>
+100600864:     	lsr	x8, x20, #52
+100600868:     	cbnz	x8, 0x100600b30 <_js_json_stringify_full+0xc70>
+10060086c:     	cbz	x20, 0x100600b30 <_js_json_stringify_full+0xc70>
+100600870:     	and	x8, x20, #0x7
+100600874:     	cbnz	x8, 0x100600b30 <_js_json_stringify_full+0xc70>
+100600878:     	mov	x0, x20
+10060087c:     	bl	0x1005d1760 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify26ptr_is_tracked_heap_object>
+100600880:     	mov	x21, x20
+100600884:     	cbnz	w0, 0x100600720 <_js_json_stringify_full+0x860>
+100600888:     	b	0x100600b30 <_js_json_stringify_full+0xc70>
+10060088c:     	strb	wzr, [sp, #0x34]
+100600890:     	str	wzr, [sp, #0x30]
+100600894:     	ubfx	x1, x23, #40, #8
+100600898:     	cbz	x1, 0x1006008e8 <_js_json_stringify_full+0xa28>
+10060089c:     	strb	w23, [sp, #0x30]
+1006008a0:     	cmp	x1, #0x1
+1006008a4:     	b.eq	0x1006008e8 <_js_json_stringify_full+0xa28>
+1006008a8:     	lsr	x8, x23, #8
+1006008ac:     	strb	w8, [sp, #0x31]
+1006008b0:     	cmp	x1, #0x2
+1006008b4:     	b.eq	0x1006008e8 <_js_json_stringify_full+0xa28>
+1006008b8:     	lsr	x8, x23, #16
+1006008bc:     	strb	w8, [sp, #0x32]
+1006008c0:     	cmp	x1, #0x3
+1006008c4:     	b.eq	0x1006008e8 <_js_json_stringify_full+0xa28>
+1006008c8:     	lsr	x8, x23, #24
+1006008cc:     	strb	w8, [sp, #0x33]
+1006008d0:     	cmp	x1, #0x4
+1006008d4:     	b.eq	0x1006008e8 <_js_json_stringify_full+0xa28>
+1006008d8:     	lsr	x8, x23, #32
+1006008dc:     	strb	w8, [sp, #0x34]
+1006008e0:     	cmp	x1, #0x5
+1006008e4:     	b.ne	0x100601af0 <_js_json_stringify_full+0x1c30>
+1006008e8:     	add	x8, sp, #0x70
+1006008ec:     	add	x0, sp, #0x30
+1006008f0:     	bl	0x10002db98 <__RNvNtNtCsjgY6bXVaRmE_4core3str8converts9from_utf8>
+1006008f4:     	ldr	w8, [sp, #0x70]
+1006008f8:     	ldp	x9, x22, [sp, #0x78]
+1006008fc:     	cmp	w8, #0x0
+100600900:     	csinc	x21, x9, xzr, eq
+100600904:     	csel	x24, xzr, x22, ne
+100600908:     	tbz	x24, #0x3f, 0x100600a54 <_js_json_stringify_full+0xb94>
+10060090c:     	mov	x0, #0x0                ; =0
+100600910:     	mov	x1, x22
+100600914:     	bl	0x100c914a4 <__RNvNtCsctvjasLqLe9_5alloc7raw_vec12handle_error>
+100600918:     	add	x8, x26, #0x3
+10060091c:     	cmp	x23, x8
+100600920:     	b.eq	0x1006006f4 <_js_json_stringify_full+0x834>
+100600924:     	fmov	d0, x23
+100600928:     	fcvtzu	x8, d0
+10060092c:     	mov	w9, #0xa                ; =10
+100600930:     	cmp	x8, #0xa
+100600934:     	csel	x2, x8, x9, lo
+100600938:     	adrp	x0, 0x100df8000 <_anon.1aa095982679c2c5b7affe6dc382ab89.601+0x24>
+10060093c:     	add	x0, x0, #0xa7b
+100600940:     	mov	x8, sp
+100600944:     	mov	w1, #0x1                ; =1
+100600948:     	bl	0x1006e2d20 <__RNvMNtCsctvjasLqLe9_5alloc5sliceSh6repeatCs5gMwpk3Cs4e_13perry_runtime>
+10060094c:     	ldr	x22, [sp, #0x10]
+100600950:     	cmp	x27, #0x2
+100600954:     	b.hs	0x10060070c <_js_json_stringify_full+0x84c>
+100600958:     	b	0x100600b30 <_js_json_stringify_full+0xc70>
+10060095c:     	ldr	w22, [x8, #0x4]
+100600960:     	add	x9, x8, #0x14
+100600964:     	mov	x14, #0x0               ; =0
+100600968:     	mov	x8, #0x0                ; =0
+10060096c:     	cmp	x9, #0x0
+100600970:     	csel	x23, xzr, x22, eq
+100600974:     	csinc	x21, x9, xzr, ne
+100600978:     	add	x9, x21, x23
+10060097c:     	mov	w10, #0x1               ; =1
+100600980:     	mov	x11, x21
+100600984:     	b	0x1006009b4 <_js_json_stringify_full+0xaf4>
+100600988:     	add	x12, x11, #0x2
+10060098c:     	bfi	w15, w13, #6, #5
+100600990:     	mov	x13, x15
+100600994:     	sub	x11, x24, x11
+100600998:     	add	x14, x11, x12
+10060099c:     	cmp	w13, #0x10, lsl #12     ; =0x10000
+1006009a0:     	cinc	x11, x10, hs
+1006009a4:     	add	x8, x11, x8
+1006009a8:     	mov	x11, x12
+1006009ac:     	cmp	x8, #0xa
+1006009b0:     	b.hi	0x100600a7c <_js_json_stringify_full+0xbbc>
+1006009b4:     	cmp	x11, x9
+1006009b8:     	b.eq	0x100600a1c <_js_json_stringify_full+0xb5c>
+1006009bc:     	mov	x24, x14
+1006009c0:     	mov	x12, x11
+1006009c4:     	ldrsb	w14, [x12], #0x1
+1006009c8:     	and	w13, w14, #0xff
+1006009cc:     	tbz	w14, #0x1f, 0x100600994 <_js_json_stringify_full+0xad4>
+1006009d0:     	ldrb	w12, [x11, #0x1]
+1006009d4:     	and	w15, w12, #0x3f
+1006009d8:     	cmp	w13, #0xe0
+1006009dc:     	b.lo	0x100600988 <_js_json_stringify_full+0xac8>
+1006009e0:     	and	w14, w13, #0x1f
+1006009e4:     	ldrb	w12, [x11, #0x2]
+1006009e8:     	and	w12, w12, #0x3f
+1006009ec:     	orr	w15, w12, w15, lsl #6
+1006009f0:     	cmp	w13, #0xf0
+1006009f4:     	b.lo	0x100600a10 <_js_json_stringify_full+0xb50>
+1006009f8:     	add	x12, x11, #0x4
+1006009fc:     	ldrb	w13, [x11, #0x3]
+100600a00:     	and	w13, w13, #0x3f
+100600a04:     	orr	w13, w13, w15, lsl #6
+100600a08:     	bfi	w13, w14, #18, #3
+100600a0c:     	b	0x100600994 <_js_json_stringify_full+0xad4>
+100600a10:     	add	x12, x11, #0x3
+100600a14:     	orr	w13, w15, w14, lsl #12
+100600a18:     	b	0x100600994 <_js_json_stringify_full+0xad4>
+100600a1c:     	cbz	x23, 0x100600ab0 <_js_json_stringify_full+0xbf0>
+100600a20:     	mov	x0, x23
+100600a24:     	mov	w1, #0x1                ; =1
+100600a28:     	bl	0x100cdf808 <_mi_malloc_aligned>
+100600a2c:     	cbz	x0, 0x100601ad8 <_js_json_stringify_full+0x1c18>
+100600a30:     	mov	x25, x0
+100600a34:     	mov	x1, x21
+100600a38:     	mov	x2, x23
+100600a3c:     	bl	0x100ce242c <_writev+0x100ce242c>
+100600a40:     	stp	x22, x25, [sp]
+100600a44:     	str	x22, [sp, #0x10]
+100600a48:     	cmp	x27, #0x2
+100600a4c:     	b.hs	0x10060070c <_js_json_stringify_full+0x84c>
+100600a50:     	b	0x100600b30 <_js_json_stringify_full+0xc70>
+100600a54:     	cbz	x24, 0x100600b18 <_js_json_stringify_full+0xc58>
+100600a58:     	mov	x0, x24
+100600a5c:     	mov	w1, #0x1                ; =1
+100600a60:     	bl	0x100cdf808 <_mi_malloc_aligned>
+100600a64:     	cbz	x0, 0x100601ae4 <_js_json_stringify_full+0x1c24>
+100600a68:     	mov	x23, x0
+100600a6c:     	mov	x1, x21
+100600a70:     	mov	x2, x24
+100600a74:     	bl	0x100ce242c <_writev+0x100ce242c>
+100600a78:     	b	0x100600b20 <_js_json_stringify_full+0xc60>
+100600a7c:     	cbz	x24, 0x100600ab0 <_js_json_stringify_full+0xbf0>
+100600a80:     	cmp	x24, x23
+100600a84:     	b.hs	0x1006014c8 <_js_json_stringify_full+0x1608>
+100600a88:     	ldrsb	w8, [x21, x24]
+100600a8c:     	cmn	w8, #0x40
+100600a90:     	b.ge	0x1006014cc <_js_json_stringify_full+0x160c>
+100600a94:     	adrp	x4, 0x1010be000 <_anon.1aa095982679c2c5b7affe6dc382ab89.136+0x70>
+100600a98:     	add	x4, x4, #0x438
+100600a9c:     	mov	x0, x21
+100600aa0:     	mov	x1, x23
+100600aa4:     	mov	x2, #0x0                ; =0
+100600aa8:     	mov	x3, x24
+100600aac:     	bl	0x100c917f8 <__RNvNtCsjgY6bXVaRmE_4core3str16slice_error_fail>
+100600ab0:     	mov	x22, #0x0               ; =0
+100600ab4:     	mov	w25, #0x1               ; =1
+100600ab8:     	stp	x22, x25, [sp]
+100600abc:     	str	x22, [sp, #0x10]
+100600ac0:     	cmp	x27, #0x2
+100600ac4:     	b.hs	0x10060070c <_js_json_stringify_full+0x84c>
+100600ac8:     	b	0x100600b30 <_js_json_stringify_full+0xc70>
+100600acc:     	add	x14, sp, #0x70
+100600ad0:     	mov	w16, #0x5c              ; =92
+100600ad4:     	strb	w16, [x14, x12]
+100600ad8:     	add	x12, x12, #0x2
+100600adc:     	strb	w15, [x13, #0x1]
+100600ae0:     	cmp	w10, #0x2
+100600ae4:     	b.eq	0x1006000dc <_js_json_stringify_full+0x21c>
+100600ae8:     	ldrb	w11, [x11, #0x2]
+100600aec:     	sxtb	w10, w11
+100600af0:     	cmp	w11, #0xb
+100600af4:     	b.le	0x100601548 <_js_json_stringify_full+0x1688>
+100600af8:     	cmp	w11, #0x21
+100600afc:     	b.gt	0x100601590 <_js_json_stringify_full+0x16d0>
+100600b00:     	cmp	w11, #0xc
+100600b04:     	b.eq	0x1006015f4 <_js_json_stringify_full+0x1734>
+100600b08:     	cmp	w11, #0xd
+100600b0c:     	b.ne	0x1006015a0 <_js_json_stringify_full+0x16e0>
+100600b10:     	mov	w10, #0x72              ; =114
+100600b14:     	b	0x100601600 <_js_json_stringify_full+0x1740>
+100600b18:     	mov	x22, #0x0               ; =0
+100600b1c:     	mov	w23, #0x1               ; =1
+100600b20:     	stp	x22, x23, [sp]
+100600b24:     	str	x22, [sp, #0x10]
+100600b28:     	cmp	x27, #0x2
+100600b2c:     	b.hs	0x10060070c <_js_json_stringify_full+0x84c>
+100600b30:     	mov	x24, #-0x1              ; =-1
+100600b34:     	str	x24, [sp, #0x18]
+100600b38:     	mov	w8, #0x1                ; =1
+100600b3c:     	cmp	x27, #0x1
+100600b40:     	cset	w9, hi
+100600b44:     	tst	w9, w8
+100600b48:     	b.eq	0x100600bbc <_js_json_stringify_full+0xcfc>
+100600b4c:     	and	x21, x20, #0xffff000000000000
+100600b50:     	mov	x8, #0x7ffd000000000000 ; =9222527611924643840
+100600b54:     	cmp	x21, x8
+100600b58:     	b.ne	0x100600b94 <_js_json_stringify_full+0xcd4>
+100600b5c:     	and	x8, x20, #0xffffffffffff
+100600b60:     	cmp	x8, #0x100, lsl #12     ; =0x100000
+100600b64:     	b.lo	0x100600bbc <_js_json_stringify_full+0xcfc>
+100600b68:     	ldr	w8, [x8, #0xc]
+100600b6c:     	mov	w9, #0x4f53             ; =20307
+100600b70:     	movk	w9, #0x434c, lsl #16
+100600b74:     	cmp	w8, w9
+100600b78:     	b.ne	0x100600bbc <_js_json_stringify_full+0xcfc>
+100600b7c:     	and	x8, x20, #0xffffffffffff
+100600b80:     	mov	x9, #0x7ffd000000000000 ; =9222527611924643840
+100600b84:     	cmp	x21, x9
+100600b88:     	csel	x27, x8, x20, eq
+100600b8c:     	mov	w23, #0x1               ; =1
+100600b90:     	b	0x100600bc0 <_js_json_stringify_full+0xd00>
+100600b94:     	lsr	x8, x20, #52
+100600b98:     	cbnz	x8, 0x100600bbc <_js_json_stringify_full+0xcfc>
+100600b9c:     	mov	w23, #0x0               ; =0
+100600ba0:     	cbz	x20, 0x100600bc0 <_js_json_stringify_full+0xd00>
+100600ba4:     	and	x8, x20, #0x7
+100600ba8:     	cbnz	x8, 0x100600bc0 <_js_json_stringify_full+0xd00>
+100600bac:     	mov	x0, x20
+100600bb0:     	bl	0x1005d1760 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify26ptr_is_tracked_heap_object>
+100600bb4:     	mov	x8, x20
+100600bb8:     	tbnz	w0, #0x0, 0x100600b60 <_js_json_stringify_full+0xca0>
+100600bbc:     	mov	w23, #0x0               ; =0
+100600bc0:     	adrp	x0, 0x101133000 <__RNvNCNKNvNtCs5gMwpk3Cs4e_13perry_runtime10perf_hooks12CURRENT_LIST0023___RUST_STD_INTERNAL_VAL+0x8>
+100600bc4:     	add	x0, x0, #0x160
+100600bc8:     	ldr	x8, [x0]
+100600bcc:     	blr	x8
+100600bd0:     	mov	x20, x0
+100600bd4:     	ldr	w25, [x0]
+100600bd8:     	add	w8, w25, #0x1
+100600bdc:     	str	w8, [x0]
+100600be0:     	cbz	w25, 0x100600c5c <_js_json_stringify_full+0xd9c>
+100600be4:     	adrp	x0, 0x101133000 <__RNvNCNKNvNtCs5gMwpk3Cs4e_13perry_runtime10perf_hooks12CURRENT_LIST0023___RUST_STD_INTERNAL_VAL+0x8>
+100600be8:     	add	x0, x0, #0x118
+100600bec:     	ldr	x8, [x0]
+100600bf0:     	blr	x8
+100600bf4:     	mov	x21, x0
+100600bf8:     	ldrb	w8, [x0, #0x20]
+100600bfc:     	cmp	w8, #0x1
+100600c00:     	b.ne	0x100601904 <_js_json_stringify_full+0x1a44>
+100600c04:     	ldr	x8, [x21]
+100600c08:     	cbnz	x8, 0x10060191c <_js_json_stringify_full+0x1a5c>
+100600c0c:     	mov	x8, #-0x1               ; =-1
+100600c10:     	str	x8, [x21]
+100600c14:     	mov	x0, x21
+100600c18:     	ldr	x8, [x0, #0x8]!
+100600c1c:     	ldr	x28, [x21, #0x18]
+100600c20:     	cmp	x28, x8
+100600c24:     	b.ne	0x100600c2c <_js_json_stringify_full+0xd6c>
+100600c28:     	bl	0x100c9e3b0 <__RNvMs4_NtCsctvjasLqLe9_5alloc7raw_vecINtB5_6RawVecTyyNtNtCseUPtmYZaE8V_5gimli6common13EhFrameOffsetEE8grow_oneCs5gMwpk3Cs4e_13perry_runtime>
+100600c2c:     	ldr	x8, [x21, #0x10]
+100600c30:     	mov	w9, #0x18               ; =24
+100600c34:     	madd	x8, x28, x9, x8
+100600c38:     	mov	w9, #0x8                ; =8
+100600c3c:     	stp	xzr, x9, [x8]
+100600c40:     	str	xzr, [x8, #0x10]
+100600c44:     	add	x8, x28, #0x1
+100600c48:     	str	x8, [x21, #0x18]
+100600c4c:     	ldr	x8, [x21]
+100600c50:     	add	x8, x8, #0x1
+100600c54:     	str	x8, [x21]
+100600c58:     	b	0x100600c84 <_js_json_stringify_full+0xdc4>
+100600c5c:     	adrp	x0, 0x101133000 <__RNvNCNKNvNtCs5gMwpk3Cs4e_13perry_runtime10perf_hooks12CURRENT_LIST0023___RUST_STD_INTERNAL_VAL+0x8>
+100600c60:     	add	x0, x0, #0x190
+100600c64:     	ldr	x8, [x0]
+100600c68:     	blr	x8
+100600c6c:     	strb	wzr, [x0]
+100600c70:     	adrp	x0, 0x101133000 <__RNvNCNKNvNtCs5gMwpk3Cs4e_13perry_runtime10perf_hooks12CURRENT_LIST0023___RUST_STD_INTERNAL_VAL+0x8>
+100600c74:     	add	x0, x0, #0x2c8
+100600c78:     	ldr	x8, [x0]
+100600c7c:     	blr	x8
+100600c80:     	strb	wzr, [x0]
+100600c84:     	adrp	x0, 0x101133000 <__RNvNCNKNvNtCs5gMwpk3Cs4e_13perry_runtime10perf_hooks12CURRENT_LIST0023___RUST_STD_INTERNAL_VAL+0x8>
+100600c88:     	add	x0, x0, #0x148
+100600c8c:     	ldr	x8, [x0]
+100600c90:     	blr	x8
+100600c94:     	mov	x21, x0
+100600c98:     	ldrb	w8, [x0, #0x18]
+100600c9c:     	cmp	w8, #0x1
+100600ca0:     	b.ne	0x1006018c8 <_js_json_stringify_full+0x1a08>
+100600ca4:     	ldr	x8, [x0]
+100600ca8:     	mov	x9, #-0x1               ; =-1
+100600cac:     	str	x9, [x0]
+100600cb0:     	cmn	x8, #0x2
+100600cb4:     	b.eq	0x100601a60 <_js_json_stringify_full+0x1ba0>
+100600cb8:     	cmn	x8, #0x1
+100600cbc:     	b.eq	0x100600e58 <_js_json_stringify_full+0xf98>
+100600cc0:     	add	x9, sp, #0x30
+100600cc4:     	ldur	q0, [x0, #0x8]
+100600cc8:     	stur	q0, [x9, #0x8]
+100600ccc:     	str	x8, [sp, #0x30]
+100600cd0:     	cmn	x24, #0x1
+100600cd4:     	b.eq	0x100600e70 <_js_json_stringify_full+0xfb0>
+100600cd8:     	cmp	x22, #0x0
+100600cdc:     	cset	w6, ne
+100600ce0:     	ldp	x0, x1, [sp, #0x20]
+100600ce4:     	ldp	x3, x4, [sp, #0x8]
+100600ce8:     	add	x2, sp, #0x30
+100600cec:     	mov.16b	v0, v8
+100600cf0:     	mov	x5, #0x0                ; =0
+100600cf4:     	bl	0x1005c7400 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json8replacer35stringify_value_with_array_replacer>
+100600cf8:     	adrp	x0, 0x101133000 <__RNvNCNKNvNtCs5gMwpk3Cs4e_13perry_runtime10perf_hooks12CURRENT_LIST0023___RUST_STD_INTERNAL_VAL+0x8>
+100600cfc:     	add	x0, x0, #0x178
+100600d00:     	ldr	x8, [x0]
+100600d04:     	blr	x8
+100600d08:     	ldrb	w8, [x0, #0x20]
+100600d0c:     	cbnz	w8, 0x100601928 <_js_json_stringify_full+0x1a68>
+100600d10:     	ldr	x8, [x0]
+100600d14:     	mov	x9, #0x7fffffffffffffff ; =9223372036854775807
+100600d18:     	cmp	x8, x9
+100600d1c:     	b.hs	0x100601958 <_js_json_stringify_full+0x1a98>
+100600d20:     	ldr	x9, [x0, #0x18]
+100600d24:     	cbz	x9, 0x100600d30 <_js_json_stringify_full+0xe70>
+100600d28:     	cbnz	x8, 0x100601964 <_js_json_stringify_full+0x1aa4>
+100600d2c:     	str	xzr, [x0, #0x18]
+100600d30:     	ldp	x22, x19, [sp, #0x38]
+100600d34:     	cmp	x19, #0x5
+100600d38:     	b.hi	0x100600da0 <_js_json_stringify_full+0xee0>
+100600d3c:     	cbz	x19, 0x10060127c <_js_json_stringify_full+0x13bc>
+100600d40:     	ldrsb	w8, [x22]
+100600d44:     	tbnz	w8, #0x1f, 0x100600da0 <_js_json_stringify_full+0xee0>
+100600d48:     	cmp	x19, #0x1
+100600d4c:     	b.eq	0x100600d88 <_js_json_stringify_full+0xec8>
+100600d50:     	ldrsb	w8, [x22, #0x1]
+100600d54:     	tbnz	w8, #0x1f, 0x100600da0 <_js_json_stringify_full+0xee0>
+100600d58:     	cmp	x19, #0x2
+100600d5c:     	b.eq	0x100600d88 <_js_json_stringify_full+0xec8>
+100600d60:     	ldrsb	w8, [x22, #0x2]
+100600d64:     	tbnz	w8, #0x1f, 0x100600da0 <_js_json_stringify_full+0xee0>
+100600d68:     	cmp	x19, #0x3
+100600d6c:     	b.eq	0x100600d88 <_js_json_stringify_full+0xec8>
+100600d70:     	ldrsb	w8, [x22, #0x3]
+100600d74:     	tbnz	w8, #0x1f, 0x100600da0 <_js_json_stringify_full+0xee0>
+100600d78:     	cmp	x19, #0x4
+100600d7c:     	b.eq	0x100600d88 <_js_json_stringify_full+0xec8>
+100600d80:     	ldrsb	w8, [x22, #0x4]
+100600d84:     	tbnz	w8, #0x1f, 0x100600da0 <_js_json_stringify_full+0xee0>
+100600d88:     	cmp	x19, #0x4
+100600d8c:     	b.hs	0x1006012f0 <_js_json_stringify_full+0x1430>
+100600d90:     	mov	x10, #0x0               ; =0
+100600d94:     	mov	x9, #0x0                ; =0
+100600d98:     	mov	x8, x22
+100600d9c:     	b	0x100601380 <_js_json_stringify_full+0x14c0>
+100600da0:     	cmp	x19, #0x40
+100600da4:     	b.hs	0x100600f50 <_js_json_stringify_full+0x1090>
+100600da8:     	ands	x9, x19, #0x38
+100600dac:     	b.eq	0x100600dd0 <_js_json_stringify_full+0xf10>
+100600db0:     	and	x8, x19, #0x38
+100600db4:     	neg	x8, x8
+100600db8:     	mov	x10, x22
+100600dbc:     	ldr	x11, [x10], #0x8
+100600dc0:     	tst	x11, #0x8080808080808080
+100600dc4:     	b.ne	0x100600e44 <_js_json_stringify_full+0xf84>
+100600dc8:     	adds	x8, x8, #0x8
+100600dcc:     	b.ne	0x100600dbc <_js_json_stringify_full+0xefc>
+100600dd0:     	and	x8, x19, #0x7
+100600dd4:     	cbz	x8, 0x100600fd0 <_js_json_stringify_full+0x1110>
+100600dd8:     	add	x9, x22, x9
+100600ddc:     	ldrsb	w10, [x9]
+100600de0:     	tbnz	w10, #0x1f, 0x100600e44 <_js_json_stringify_full+0xf84>
+100600de4:     	cmp	x8, #0x1
+100600de8:     	b.eq	0x100600fd0 <_js_json_stringify_full+0x1110>
+100600dec:     	ldrsb	w10, [x9, #0x1]
+100600df0:     	tbnz	w10, #0x1f, 0x100600e44 <_js_json_stringify_full+0xf84>
+100600df4:     	cmp	x8, #0x2
+100600df8:     	b.eq	0x100600fd0 <_js_json_stringify_full+0x1110>
+100600dfc:     	ldrsb	w10, [x9, #0x2]
+100600e00:     	tbnz	w10, #0x1f, 0x100600e44 <_js_json_stringify_full+0xf84>
+100600e04:     	cmp	x8, #0x3
+100600e08:     	b.eq	0x100600fd0 <_js_json_stringify_full+0x1110>
+100600e0c:     	ldrsb	w10, [x9, #0x3]
+100600e10:     	tbnz	w10, #0x1f, 0x100600e44 <_js_json_stringify_full+0xf84>
+100600e14:     	cmp	x8, #0x4
+100600e18:     	b.eq	0x100600fd0 <_js_json_stringify_full+0x1110>
+100600e1c:     	ldrsb	w10, [x9, #0x4]
+100600e20:     	tbnz	w10, #0x1f, 0x100600e44 <_js_json_stringify_full+0xf84>
+100600e24:     	cmp	x8, #0x5
+100600e28:     	b.eq	0x100600fd0 <_js_json_stringify_full+0x1110>
+100600e2c:     	ldrsb	w10, [x9, #0x5]
+100600e30:     	tbnz	w10, #0x1f, 0x100600e44 <_js_json_stringify_full+0xf84>
+100600e34:     	cmp	x8, #0x6
+100600e38:     	b.eq	0x100600fd0 <_js_json_stringify_full+0x1110>
+100600e3c:     	ldrsb	w8, [x9, #0x6]
+100600e40:     	tbz	w8, #0x1f, 0x100600fd0 <_js_json_stringify_full+0x1110>
+100600e44:     	mov	x0, x22
+100600e48:     	mov	x1, x19
+100600e4c:     	mov	x2, x19
+100600e50:     	bl	0x100856800 <_js_string_from_bytes_with_capacity>
+100600e54:     	b	0x100601000 <_js_json_stringify_full+0x1140>
+100600e58:     	mov	x8, #0x0                ; =0
+100600e5c:     	mov	w9, #0x1                ; =1
+100600e60:     	stp	x9, xzr, [sp, #0x38]
+100600e64:     	str	x8, [sp, #0x30]
+100600e68:     	cmn	x24, #0x1
+100600e6c:     	b.ne	0x100600cd8 <_js_json_stringify_full+0xe18>
+100600e70:     	tbz	w23, #0x0, 0x100601024 <_js_json_stringify_full+0x1164>
+100600e74:     	bl	0x100586080 <__RNvMs_NtNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope3new>
+100600e78:     	str	x0, [sp, #0x48]
+100600e7c:     	mov	x8, #0x7ffd000000000000 ; =9222527611924643840
+100600e80:     	stp	x27, x8, [sp, #0x78]
+100600e84:     	mov	w8, #0x1                ; =1
+100600e88:     	str	x8, [sp, #0x70]
+100600e8c:     	add	x0, sp, #0x70
+100600e90:     	bl	0x10058618c <__RNvMs_NtNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope4push>
+100600e94:     	mov	x22, x0
+100600e98:     	str	x0, [sp, #0x50]
+100600e9c:     	mov	w0, #0x1                ; =1
+100600ea0:     	mov	w1, #0x0                ; =0
+100600ea4:     	mov	w2, #0x0                ; =0
+100600ea8:     	bl	0x100856800 <_js_string_from_bytes_with_capacity>
+100600eac:     	mov	x8, #0x7fff000000000000 ; =9223090561878065152
+100600eb0:     	bfxil	x8, x0, #0, #48
+100600eb4:     	fmov	d0, x8
+100600eb8:     	bl	0x100585f38 <__RNvMs_NtNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5roots15runtime_handlesNtB4_18RuntimeHandleScope15root_nanbox_f64>
+100600ebc:     	mov	x19, x0
+100600ec0:     	str	x0, [sp, #0x58]
+100600ec4:     	add	x0, sp, #0x58
+100600ec8:     	bl	0x10057cdcc <__RNvMs2_NtNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5roots15runtime_handlesNtB5_13RuntimeHandle14get_nanbox_f64>
+100600ecc:     	mov.16b	v1, v0
+100600ed0:     	mov.16b	v0, v8
+100600ed4:     	bl	0x1005c3dfc <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json8replacer19apply_to_json_keyed>
+100600ed8:     	mov.16b	v8, v0
+100600edc:     	adrp	x27, 0x10112c000 <_perry_global_baseline_worker_ts__1>
+100600ee0:     	add	x27, x27, #0x4f0
+100600ee4:     	ldr	x8, [x27]
+100600ee8:     	cmn	x8, #0x1
+100600eec:     	b.eq	0x1006010f8 <_js_json_stringify_full+0x1238>
+100600ef0:     	mrs	x9, TPIDRRO_EL0
+100600ef4:     	and	x9, x9, #0xfffffffffffffff8
+100600ef8:     	ldr	x8, [x9, x8, lsl #3]
+100600efc:     	cbz	x8, 0x1006010f8 <_js_json_stringify_full+0x1238>
+100600f00:     	ldr	x8, [x8, #0x19e8]
+100600f04:     	cbz	x8, 0x1006010f8 <_js_json_stringify_full+0x1238>
+100600f08:     	ldr	x9, [x8]
+100600f0c:     	mov	x10, #0x7fffffffffffffff ; =9223372036854775807
+100600f10:     	cmp	x9, x10
+100600f14:     	b.hs	0x100601a6c <_js_json_stringify_full+0x1bac>
+100600f18:     	add	x10, x9, #0x1
+100600f1c:     	str	x10, [x8]
+100600f20:     	ldr	x10, [x8, #0x18]
+100600f24:     	cmp	x22, x10
+100600f28:     	b.hs	0x100601970 <_js_json_stringify_full+0x1ab0>
+100600f2c:     	ldr	x10, [x8, #0x10]
+100600f30:     	mov	w11, #0x18              ; =24
+100600f34:     	madd	x10, x22, x11, x10
+100600f38:     	ldr	x11, [x10]
+100600f3c:     	cmp	x11, #0x1
+100600f40:     	b.ne	0x100601ab8 <_js_json_stringify_full+0x1bf8>
+100600f44:     	ldr	x22, [x10, #0x8]
+100600f48:     	str	x9, [x8]
+100600f4c:     	b	0x100601154 <_js_json_stringify_full+0x1294>
+100600f50:     	and	x8, x19, #0x7fffffffffffffc0
+100600f54:     	add	x8, x22, x8
+100600f58:     	mov	x9, x22
+100600f5c:     	ldp	q0, q1, [x9]
+100600f60:     	ldp	q2, q3, [x9, #0x20]
+100600f64:     	orr.16b	v0, v1, v0
+100600f68:     	orr.16b	v1, v2, v3
+100600f6c:     	orr.16b	v0, v0, v1
+100600f70:     	umaxv.16b	b0, v0
+100600f74:     	fmov	w10, s0
+100600f78:     	tbnz	w10, #0x7, 0x100600e44 <_js_json_stringify_full+0xf84>
+100600f7c:     	add	x9, x9, #0x40
+100600f80:     	cmp	x9, x8
+100600f84:     	b.ne	0x100600f5c <_js_json_stringify_full+0x109c>
+100600f88:     	ands	x9, x19, #0x30
+100600f8c:     	b.eq	0x100600fb0 <_js_json_stringify_full+0x10f0>
+100600f90:     	mov	x10, x9
+100600f94:     	mov	x11, x8
+100600f98:     	ldr	q0, [x11], #0x10
+100600f9c:     	umaxv.16b	b0, v0
+100600fa0:     	fmov	w12, s0
+100600fa4:     	tbnz	w12, #0x7, 0x100600e44 <_js_json_stringify_full+0xf84>
+100600fa8:     	subs	x10, x10, #0x10
+100600fac:     	b.ne	0x100600f98 <_js_json_stringify_full+0x10d8>
+100600fb0:     	and	x10, x19, #0xf
+100600fb4:     	cbz	x10, 0x100600fd0 <_js_json_stringify_full+0x1110>
+100600fb8:     	add	x8, x8, x9
+100600fbc:     	ldrsb	w9, [x8]
+100600fc0:     	tbnz	w9, #0x1f, 0x100600e44 <_js_json_stringify_full+0xf84>
+100600fc4:     	add	x8, x8, #0x1
+100600fc8:     	subs	x10, x10, #0x1
+100600fcc:     	b.ne	0x100600fbc <_js_json_stringify_full+0x10fc>
+100600fd0:     	mov	x0, x19
+100600fd4:     	bl	0x100593a68 <__RNvNtCs5gMwpk3Cs4e_13perry_runtime6string20string_storage_alloc>
+100600fd8:     	stp	w19, w19, [x0]
+100600fdc:     	stp	wzr, wzr, [x0, #0xc]
+100600fe0:     	str	w19, [x0, #0x8]
+100600fe4:     	cbz	w19, 0x100601000 <_js_json_stringify_full+0x1140>
+100600fe8:     	mov	w2, w19
+100600fec:     	mov	x19, x0
+100600ff0:     	mov	x0, x1
+100600ff4:     	mov	x1, x22
+100600ff8:     	bl	0x100ce242c <_writev+0x100ce242c>
+100600ffc:     	mov	x0, x19
+100601000:     	mov	x22, #0x7fff000000000000 ; =9223090561878065152
+100601004:     	bfxil	x22, x0, #0, #48
+100601008:     	ldr	q0, [sp, #0x30]
+10060100c:     	str	q0, [sp, #0x70]
+100601010:     	str	xzr, [sp, #0x80]
+100601014:     	ldrb	w8, [x21, #0x18]
+100601018:     	cmp	w8, #0x1
+10060101c:     	b.eq	0x1006013c4 <_js_json_stringify_full+0x1504>
+100601020:     	b	0x1006018dc <_js_json_stringify_full+0x1a1c>
+100601024:     	mov	w0, #0x1                ; =1
+100601028:     	mov	w1, #0x0                ; =0
+10060102c:     	mov	w2, #0x0                ; =0
+100601030:     	bl	0x100856800 <_js_string_from_bytes_with_capacity>
+100601034:     	mov	x8, #0x7fff000000000000 ; =9223090561878065152
+100601038:     	bfxil	x8, x0, #0, #48
+10060103c:     	fmov	d1, x8
+100601040:     	mov.16b	v0, v8
+100601044:     	bl	0x1005c3dfc <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json8replacer19apply_to_json_keyed>
+100601048:     	mov.16b	v8, v0
+10060104c:     	fmov	x23, d8
+100601050:     	cmp	x23, x26
+100601054:     	b.eq	0x100601070 <_js_json_stringify_full+0x11b0>
+100601058:     	mov	x0, x23
+10060105c:     	bl	0x1005cb7d4 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify16is_closure_value>
+100601060:     	tbnz	w0, #0x0, 0x100601070 <_js_json_stringify_full+0x11b0>
+100601064:     	mov	x0, x23
+100601068:     	bl	0x1005caab8 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify15is_symbol_value>
+10060106c:     	tbz	w0, #0x0, 0x1006014dc <_js_json_stringify_full+0x161c>
+100601070:     	adrp	x0, 0x101133000 <__RNvNCNKNvNtCs5gMwpk3Cs4e_13perry_runtime10perf_hooks12CURRENT_LIST0023___RUST_STD_INTERNAL_VAL+0x8>
+100601074:     	add	x0, x0, #0x178
+100601078:     	ldr	x8, [x0]
+10060107c:     	blr	x8
+100601080:     	ldrb	w8, [x0, #0x20]
+100601084:     	cbnz	w8, 0x1006019f0 <_js_json_stringify_full+0x1b30>
+100601088:     	ldr	x8, [x0]
+10060108c:     	cbnz	x8, 0x100601a18 <_js_json_stringify_full+0x1b58>
+100601090:     	str	xzr, [x0, #0x18]
+100601094:     	ldr	q0, [sp, #0x30]
+100601098:     	str	q0, [sp, #0x70]
+10060109c:     	str	xzr, [sp, #0x80]
+1006010a0:     	ldrb	w8, [x21, #0x18]
+1006010a4:     	cmp	w8, #0x1
+1006010a8:     	b.ne	0x1006019b8 <_js_json_stringify_full+0x1af8>
+1006010ac:     	ldp	x8, x0, [x21]
+1006010b0:     	ldr	x9, [sp, #0x80]
+1006010b4:     	str	x9, [x21, #0x10]
+1006010b8:     	ldr	q0, [sp, #0x70]
+1006010bc:     	str	q0, [x21]
+1006010c0:     	sub	x8, x8, #0x1
+1006010c4:     	cmn	x8, #0x3
+1006010c8:     	b.hi	0x1006010d0 <_js_json_stringify_full+0x1210>
+1006010cc:     	bl	0x100cdf580 <_mi_free>
+1006010d0:     	adrp	x0, 0x1010bd000 <_anon.8e6022e3b71166c56c420b05fa707284.290+0xc8>
+1006010d4:     	add	x0, x0, #0xb60
+1006010d8:     	cbz	w25, 0x1006012d4 <_js_json_stringify_full+0x1414>
+1006010dc:     	bl	0x1001308b8 <__RINvMs2_NtNtCs8BpVhDwHqJW_3std6thread5localINtB6_8LocalKeyINtNtCsjgY6bXVaRmE_4core4cell7RefCellINtNtCsctvjasLqLe9_5alloc3vec3VecIB1w_INtNtB1A_5boxed3BoxNtNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template13ShapeTemplateEEEEE4withNCNvB2u_19restore_shape_cache0uEB2w_>
+1006010e0:     	ldr	w8, [x20]
+1006010e4:     	sub	w8, w8, #0x1
+1006010e8:     	str	w8, [x20]
+1006010ec:     	ldr	x8, [sp]
+1006010f0:     	cbnz	x8, 0x1006014bc <_js_json_stringify_full+0x15fc>
+1006010f4:     	b	0x1005fff28 <_js_json_stringify_full+0x68>
+1006010f8:     	adrp	x0, 0x101134000 <__RNvNCNKNvNvNtNtCs5gMwpk3Cs4e_13perry_runtime7promise10microtasks29ASYNC_BOX_EXECUTION_REF_BASES7STORAGE0023___RUST_STD_INTERNAL_VAL>
+1006010fc:     	add	x0, x0, #0x240
+100601100:     	ldr	x8, [x0]
+100601104:     	blr	x8
+100601108:     	ldrb	w8, [x0, #0x20]
+10060110c:     	cbnz	w8, 0x100601a24 <_js_json_stringify_full+0x1b64>
+100601110:     	ldr	x8, [x0]
+100601114:     	mov	x9, #0x7fffffffffffffff ; =9223372036854775807
+100601118:     	cmp	x8, x9
+10060111c:     	b.hs	0x100601aa0 <_js_json_stringify_full+0x1be0>
+100601120:     	add	x9, x8, #0x1
+100601124:     	str	x9, [x0]
+100601128:     	ldr	x9, [x0, #0x18]
+10060112c:     	cmp	x22, x9
+100601130:     	b.hs	0x100601970 <_js_json_stringify_full+0x1ab0>
+100601134:     	ldr	x9, [x0, #0x10]
+100601138:     	mov	w10, #0x18              ; =24
+10060113c:     	madd	x9, x22, x10, x9
+100601140:     	ldr	x10, [x9]
+100601144:     	cmp	x10, #0x1
+100601148:     	b.ne	0x1006019d0 <_js_json_stringify_full+0x1b10>
+10060114c:     	ldr	x22, [x9, #0x8]
+100601150:     	str	x8, [x0]
+100601154:     	ldr	x8, [x27]
+100601158:     	cmn	x8, #0x1
+10060115c:     	b.eq	0x1006011bc <_js_json_stringify_full+0x12fc>
+100601160:     	mrs	x9, TPIDRRO_EL0
+100601164:     	and	x9, x9, #0xfffffffffffffff8
+100601168:     	ldr	x8, [x9, x8, lsl #3]
+10060116c:     	cbz	x8, 0x1006011bc <_js_json_stringify_full+0x12fc>
+100601170:     	ldr	x8, [x8, #0x19e8]
+100601174:     	cbz	x8, 0x1006011bc <_js_json_stringify_full+0x12fc>
+100601178:     	ldr	x9, [x8]
+10060117c:     	mov	x10, #0x7fffffffffffffff ; =9223372036854775807
+100601180:     	cmp	x9, x10
+100601184:     	b.hs	0x100601a6c <_js_json_stringify_full+0x1bac>
+100601188:     	add	x10, x9, #0x1
+10060118c:     	str	x10, [x8]
+100601190:     	ldr	x10, [x8, #0x18]
+100601194:     	cmp	x19, x10
+100601198:     	b.hs	0x100601970 <_js_json_stringify_full+0x1ab0>
+10060119c:     	ldr	x10, [x8, #0x10]
+1006011a0:     	mov	w11, #0x18              ; =24
+1006011a4:     	madd	x10, x19, x11, x10
+1006011a8:     	ldr	x11, [x10]
+1006011ac:     	cbnz	x11, 0x100601ac8 <_js_json_stringify_full+0x1c08>
+1006011b0:     	ldr	d9, [x10, #0x8]
+1006011b4:     	str	x9, [x8]
+1006011b8:     	b	0x100601214 <_js_json_stringify_full+0x1354>
+1006011bc:     	adrp	x0, 0x101134000 <__RNvNCNKNvNvNtNtCs5gMwpk3Cs4e_13perry_runtime7promise10microtasks29ASYNC_BOX_EXECUTION_REF_BASES7STORAGE0023___RUST_STD_INTERNAL_VAL>
+1006011c0:     	add	x0, x0, #0x240
+1006011c4:     	ldr	x8, [x0]
+1006011c8:     	blr	x8
+1006011cc:     	ldrb	w8, [x0, #0x20]
+1006011d0:     	cbnz	w8, 0x100601a58 <_js_json_stringify_full+0x1b98>
+1006011d4:     	ldr	x8, [x0]
+1006011d8:     	mov	x9, #0x7fffffffffffffff ; =9223372036854775807
+1006011dc:     	cmp	x8, x9
+1006011e0:     	b.hs	0x100601aa0 <_js_json_stringify_full+0x1be0>
+1006011e4:     	add	x9, x8, #0x1
+1006011e8:     	str	x9, [x0]
+1006011ec:     	ldr	x9, [x0, #0x18]
+1006011f0:     	cmp	x19, x9
+1006011f4:     	b.hs	0x100601970 <_js_json_stringify_full+0x1ab0>
+1006011f8:     	ldr	x9, [x0, #0x10]
+1006011fc:     	mov	w10, #0x18              ; =24
+100601200:     	madd	x9, x19, x10, x9
+100601204:     	ldr	x10, [x9]
+100601208:     	cbnz	x10, 0x1006019e0 <_js_json_stringify_full+0x1b20>
+10060120c:     	ldr	d9, [x9, #0x8]
+100601210:     	str	x8, [x0]
+100601214:     	mov.16b	v0, v8
+100601218:     	bl	0x1005c3174 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json8replacer11root_holder>
+10060121c:     	mov.16b	v2, v0
+100601220:     	mov	x0, x22
+100601224:     	mov.16b	v0, v9
+100601228:     	mov.16b	v1, v8
+10060122c:     	bl	0x1005c3954 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json8replacer13call_replacer>
+100601230:     	str	d0, [sp, #0x60]
+100601234:     	fmov	x19, d0
+100601238:     	cmp	x19, x26
+10060123c:     	b.ne	0x100601284 <_js_json_stringify_full+0x13c4>
+100601240:     	adrp	x0, 0x1010be000 <_anon.1aa095982679c2c5b7affe6dc382ab89.136+0x70>
+100601244:     	add	x0, x0, #0x430
+100601248:     	bl	0x10013783c <__RINvMs2_NtNtCs8BpVhDwHqJW_3std6thread5localINtB6_8LocalKeyINtNtCsjgY6bXVaRmE_4core4cell7RefCellINtNtCsctvjasLqLe9_5alloc3vec3VecjEEE4withNCNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json8replacer22js_json_stringify_fulls1_0uEB2j_>
+10060124c:     	ldr	q0, [sp, #0x30]
+100601250:     	str	q0, [sp, #0x70]
+100601254:     	str	xzr, [sp, #0x80]
+100601258:     	adrp	x0, 0x1010be000 <_anon.1aa095982679c2c5b7affe6dc382ab89.136+0x70>
+10060125c:     	add	x0, x0, #0xf0
+100601260:     	add	x1, sp, #0x70
+100601264:     	bl	0x10012d1d4 <__RINvMs2_NtNtCs8BpVhDwHqJW_3std6thread5localINtB6_8LocalKeyINtNtCsjgY6bXVaRmE_4core4cell4CellINtNtBZ_6option6OptionNtNtCsctvjasLqLe9_5alloc6string6StringEEE4withNCNvNtCs5gMwpk3Cs4e_13perry_runtime4json21restore_stringify_buf0uEB2E_>
+100601268:     	adrp	x0, 0x1010bd000 <_anon.8e6022e3b71166c56c420b05fa707284.290+0xc8>
+10060126c:     	add	x0, x0, #0xb60
+100601270:     	cbz	w25, 0x10060149c <_js_json_stringify_full+0x15dc>
+100601274:     	bl	0x1001308b8 <__RINvMs2_NtNtCs8BpVhDwHqJW_3std6thread5localINtB6_8LocalKeyINtNtCsjgY6bXVaRmE_4core4cell7RefCellINtNtCsctvjasLqLe9_5alloc3vec3VecIB1w_INtNtB1A_5boxed3BoxNtNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template13ShapeTemplateEEEEE4withNCNvB2u_19restore_shape_cache0uEB2w_>
+100601278:     	b	0x1006014a0 <_js_json_stringify_full+0x15e0>
+10060127c:     	mov	x10, #0x0               ; =0
+100601280:     	b	0x1006013a0 <_js_json_stringify_full+0x14e0>
+100601284:     	add	x0, sp, #0x30
+100601288:     	bl	0x1005c48c8 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json8replacer21write_replaced_scalar>
+10060128c:     	tbnz	w0, #0x0, 0x1006012c8 <_js_json_stringify_full+0x1408>
+100601290:     	mov	x0, x19
+100601294:     	bl	0x100591904 <__RNvNtCs5gMwpk3Cs4e_13perry_runtime4json15extract_pointer>
+100601298:     	cmp	x0, #0x1
+10060129c:     	b.ne	0x100601aac <_js_json_stringify_full+0x1bec>
+1006012a0:     	add	x8, sp, #0x68
+1006012a4:     	add	x9, sp, #0x60
+1006012a8:     	stp	x1, x8, [sp, #0x68]
+1006012ac:     	str	x9, [sp, #0x78]
+1006012b0:     	add	x8, sp, #0x30
+1006012b4:     	mov	x9, sp
+1006012b8:     	stp	x8, x9, [sp, #0x80]
+1006012bc:     	add	x0, sp, #0x50
+1006012c0:     	add	x1, sp, #0x70
+1006012c4:     	bl	0x100564f2c <__RINvMs2_NtNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5roots15runtime_handlesNtB6_13RuntimeHandle14with_const_ptrNtNtNtBc_7closure5alloc13ClosureHeaderuNCNvNtNtBc_4json8replacer22js_json_stringify_fulls3_0EBc_>
+1006012c8:     	add	x0, sp, #0x48
+1006012cc:     	bl	0x100566d70 <__RINvNtCsjgY6bXVaRmE_4core3ptr9drop_glueNtNtNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5roots15runtime_handles18RuntimeHandleScopeEBJ_>
+1006012d0:     	b	0x100600cf8 <_js_json_stringify_full+0xe38>
+1006012d4:     	bl	0x1001307a0 <__RINvMs2_NtNtCs8BpVhDwHqJW_3std6thread5localINtB6_8LocalKeyINtNtCsjgY6bXVaRmE_4core4cell7RefCellINtNtCsctvjasLqLe9_5alloc3vec3VecIB1w_INtNtB1A_5boxed3BoxNtNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template13ShapeTemplateEEEEE4withNCNvB2u_17clear_shape_cache0uEB2w_>
+1006012d8:     	ldr	w8, [x20]
+1006012dc:     	sub	w8, w8, #0x1
+1006012e0:     	str	w8, [x20]
+1006012e4:     	ldr	x8, [sp]
+1006012e8:     	cbnz	x8, 0x1006014bc <_js_json_stringify_full+0x15fc>
+1006012ec:     	b	0x1005fff28 <_js_json_stringify_full+0x68>
+1006012f0:     	and	x9, x19, #0x4
+1006012f4:     	add	x8, x22, x9
+1006012f8:     	adrp	x10, 0x100de2000 <_anon.24e161fcee4a9c1d55b6f82b98ded73b.1413+0x3cc>
+1006012fc:     	ldr	q0, [x10, #0x8c0]
+100601300:     	adrp	x10, 0x100db9000 <__RNvCs8xF4iOrs9m2_4itoa13DECIMAL_PAIRS+0x3319a>
+100601304:     	ldr	q2, [x10, #0xde0]
+100601308:     	movi.2d	v1, #0000000000000000
+10060130c:     	movi.2d	v3, #0x000000000000ff
+100601310:     	mov	w10, #0x4               ; =4
+100601314:     	dup.2d	v4, x10
+100601318:     	mov	x10, x22
+10060131c:     	and	x11, x19, #0x4
+100601320:     	movi.2d	v5, #0000000000000000
+100601324:     	ldr	s6, [x10], #0x4
+100601328:     	ushll.8h	v6, v6, #0x0
+10060132c:     	ushll.4s	v6, v6, #0x0
+100601330:     	ushll2.2d	v7, v6, #0x0
+100601334:     	and.16b	v7, v7, v3
+100601338:     	ushll.2d	v6, v6, #0x0
+10060133c:     	and.16b	v6, v6, v3
+100601340:     	shl.2d	v16, v0, #0x3
+100601344:     	shl.2d	v17, v2, #0x3
+100601348:     	ushl.2d	v6, v6, v17
+10060134c:     	ushl.2d	v7, v7, v16
+100601350:     	orr.16b	v1, v7, v1
+100601354:     	orr.16b	v5, v6, v5
+100601358:     	add.2d	v0, v0, v4
+10060135c:     	add.2d	v2, v2, v4
+100601360:     	subs	x11, x11, #0x4
+100601364:     	b.ne	0x100601324 <_js_json_stringify_full+0x1464>
+100601368:     	orr.16b	v0, v5, v1
+10060136c:     	mov	d1, v0[1]
+100601370:     	orr.8b	v0, v0, v1
+100601374:     	fmov	x10, d0
+100601378:     	cmp	x19, x9
+10060137c:     	b.eq	0x1006013a0 <_js_json_stringify_full+0x14e0>
+100601380:     	add	x11, x22, x19
+100601384:     	lsl	x9, x9, #3
+100601388:     	ldrb	w12, [x8], #0x1
+10060138c:     	lsl	x12, x12, x9
+100601390:     	orr	x10, x12, x10
+100601394:     	add	x9, x9, #0x8
+100601398:     	cmp	x8, x11
+10060139c:     	b.ne	0x100601388 <_js_json_stringify_full+0x14c8>
+1006013a0:     	orr	x8, x10, x19, lsl #40
+1006013a4:     	mov	x9, #0x7ff9000000000000 ; =9221401712017801216
+1006013a8:     	orr	x22, x8, x9
+1006013ac:     	ldr	q0, [sp, #0x30]
+1006013b0:     	str	q0, [sp, #0x70]
+1006013b4:     	str	xzr, [sp, #0x80]
+1006013b8:     	ldrb	w8, [x21, #0x18]
+1006013bc:     	cmp	w8, #0x1
+1006013c0:     	b.ne	0x1006018dc <_js_json_stringify_full+0x1a1c>
+1006013c4:     	ldp	x8, x0, [x21]
+1006013c8:     	ldr	x9, [sp, #0x80]
+1006013cc:     	str	x9, [x21, #0x10]
+1006013d0:     	ldr	q0, [sp, #0x70]
+1006013d4:     	str	q0, [x21]
+1006013d8:     	sub	x8, x8, #0x1
+1006013dc:     	cmn	x8, #0x3
+1006013e0:     	b.hi	0x1006013e8 <_js_json_stringify_full+0x1528>
+1006013e4:     	bl	0x100cdf580 <_mi_free>
+1006013e8:     	adrp	x0, 0x1010bd000 <_anon.8e6022e3b71166c56c420b05fa707284.290+0xc8>
+1006013ec:     	add	x0, x0, #0xb60
+1006013f0:     	cbz	w25, 0x100601410 <_js_json_stringify_full+0x1550>
+1006013f4:     	bl	0x1001308b8 <__RINvMs2_NtNtCs8BpVhDwHqJW_3std6thread5localINtB6_8LocalKeyINtNtCsjgY6bXVaRmE_4core4cell7RefCellINtNtCsctvjasLqLe9_5alloc3vec3VecIB1w_INtNtB1A_5boxed3BoxNtNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template13ShapeTemplateEEEEE4withNCNvB2u_19restore_shape_cache0uEB2w_>
+1006013f8:     	ldr	w8, [x20]
+1006013fc:     	sub	w8, w8, #0x1
+100601400:     	str	w8, [x20]
+100601404:     	cmn	x24, #0x1
+100601408:     	b.ne	0x100601428 <_js_json_stringify_full+0x1568>
+10060140c:     	b	0x100601464 <_js_json_stringify_full+0x15a4>
+100601410:     	bl	0x1001307a0 <__RINvMs2_NtNtCs8BpVhDwHqJW_3std6thread5localINtB6_8LocalKeyINtNtCsjgY6bXVaRmE_4core4cell7RefCellINtNtCsctvjasLqLe9_5alloc3vec3VecIB1w_INtNtB1A_5boxed3BoxNtNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template13ShapeTemplateEEEEE4withNCNvB2u_17clear_shape_cache0uEB2w_>
+100601414:     	ldr	w8, [x20]
+100601418:     	sub	w8, w8, #0x1
+10060141c:     	str	w8, [x20]
+100601420:     	cmn	x24, #0x1
+100601424:     	b.eq	0x100601464 <_js_json_stringify_full+0x15a4>
+100601428:     	ldp	x19, x20, [sp, #0x20]
+10060142c:     	cbz	x20, 0x100601458 <_js_json_stringify_full+0x1598>
+100601430:     	add	x21, x19, #0x8
+100601434:     	b	0x100601444 <_js_json_stringify_full+0x1584>
+100601438:     	add	x21, x21, #0x18
+10060143c:     	subs	x20, x20, #0x1
+100601440:     	b.eq	0x100601458 <_js_json_stringify_full+0x1598>
+100601444:     	ldur	x8, [x21, #-0x8]
+100601448:     	cbz	x8, 0x100601438 <_js_json_stringify_full+0x1578>
+10060144c:     	ldr	x0, [x21]
+100601450:     	bl	0x100cdf580 <_mi_free>
+100601454:     	b	0x100601438 <_js_json_stringify_full+0x1578>
+100601458:     	cbz	x24, 0x100601464 <_js_json_stringify_full+0x15a4>
+10060145c:     	mov	x0, x19
+100601460:     	bl	0x100cdf580 <_mi_free>
+100601464:     	ldr	x8, [sp]
+100601468:     	cbz	x8, 0x100601474 <_js_json_stringify_full+0x15b4>
+10060146c:     	ldr	x0, [sp, #0x8]
+100601470:     	bl	0x100cdf580 <_mi_free>
+100601474:     	mov	x0, x22
+100601478:     	ldp	x29, x30, [sp, #0x100]
+10060147c:     	ldp	x20, x19, [sp, #0xf0]
+100601480:     	ldp	x22, x21, [sp, #0xe0]
+100601484:     	ldp	x24, x23, [sp, #0xd0]
+100601488:     	ldp	x26, x25, [sp, #0xc0]
+10060148c:     	ldp	x28, x27, [sp, #0xb0]
+100601490:     	ldp	d9, d8, [sp, #0xa0]
+100601494:     	add	sp, sp, #0x110
+100601498:     	ret
+10060149c:     	bl	0x1001307a0 <__RINvMs2_NtNtCs8BpVhDwHqJW_3std6thread5localINtB6_8LocalKeyINtNtCsjgY6bXVaRmE_4core4cell7RefCellINtNtCsctvjasLqLe9_5alloc3vec3VecIB1w_INtNtB1A_5boxed3BoxNtNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template13ShapeTemplateEEEEE4withNCNvB2u_17clear_shape_cache0uEB2w_>
+1006014a0:     	ldr	w8, [x20]
+1006014a4:     	sub	w8, w8, #0x1
+1006014a8:     	str	w8, [x20]
+1006014ac:     	add	x0, sp, #0x48
+1006014b0:     	bl	0x100566d70 <__RINvNtCsjgY6bXVaRmE_4core3ptr9drop_glueNtNtNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5roots15runtime_handles18RuntimeHandleScopeEBJ_>
+1006014b4:     	ldr	x8, [sp]
+1006014b8:     	cbz	x8, 0x1005fff28 <_js_json_stringify_full+0x68>
+1006014bc:     	ldr	x0, [sp, #0x8]
+1006014c0:     	bl	0x100cdf580 <_mi_free>
+1006014c4:     	b	0x1005fff28 <_js_json_stringify_full+0x68>
+1006014c8:     	b.ne	0x100600a94 <_js_json_stringify_full+0xbd4>
+1006014cc:     	tbz	x24, #0x3f, 0x100601508 <_js_json_stringify_full+0x1648>
+1006014d0:     	mov	x0, #0x0                ; =0
+1006014d4:     	mov	x1, x24
+1006014d8:     	bl	0x100c914a4 <__RNvNtCsctvjasLqLe9_5alloc7raw_vec12handle_error>
+1006014dc:     	cmp	x19, x23
+1006014e0:     	b.eq	0x1006014ec <_js_json_stringify_full+0x162c>
+1006014e4:     	mov.16b	v0, v8
+1006014e8:     	bl	0x1005d11c4 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify24arm_to_json_result_guard>
+1006014ec:     	cbz	x22, 0x100601568 <_js_json_stringify_full+0x16a8>
+1006014f0:     	ldp	x1, x2, [sp, #0x8]
+1006014f4:     	add	x0, sp, #0x30
+1006014f8:     	mov.16b	v0, v8
+1006014fc:     	mov	x3, #0x0                ; =0
+100601500:     	bl	0x1005c532c <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json8replacer22stringify_value_pretty>
+100601504:     	b	0x100601578 <_js_json_stringify_full+0x16b8>
+100601508:     	mov	x0, x24
+10060150c:     	mov	w1, #0x1                ; =1
+100601510:     	bl	0x100cdf808 <_mi_malloc_aligned>
+100601514:     	mov	x25, x0
+100601518:     	mov	w0, #0x1                ; =1
+10060151c:     	cbz	x25, 0x1006014d4 <_js_json_stringify_full+0x1614>
+100601520:     	mov	x0, x25
+100601524:     	mov	x1, x21
+100601528:     	mov	x2, x24
+10060152c:     	bl	0x100ce242c <_writev+0x100ce242c>
+100601530:     	mov	x22, x24
+100601534:     	stp	x24, x25, [sp]
+100601538:     	str	x24, [sp, #0x10]
+10060153c:     	cmp	x27, #0x2
+100601540:     	b.hs	0x10060070c <_js_json_stringify_full+0x84c>
+100601544:     	b	0x100600b30 <_js_json_stringify_full+0xc70>
+100601548:     	cmp	w11, #0x8
+10060154c:     	b.eq	0x1006015ec <_js_json_stringify_full+0x172c>
+100601550:     	cmp	w11, #0x9
+100601554:     	b.eq	0x1006015fc <_js_json_stringify_full+0x173c>
+100601558:     	cmp	w11, #0xa
+10060155c:     	b.ne	0x1006015a0 <_js_json_stringify_full+0x16e0>
+100601560:     	mov	w10, #0x6e              ; =110
+100601564:     	b	0x100601600 <_js_json_stringify_full+0x1740>
+100601568:     	add	x1, sp, #0x30
+10060156c:     	mov.16b	v0, v8
+100601570:     	mov	w0, #0x0                ; =0
+100601574:     	bl	0x1005cab90 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json9stringify15stringify_value>
+100601578:     	adrp	x0, 0x101133000 <__RNvNCNKNvNtCs5gMwpk3Cs4e_13perry_runtime10perf_hooks12CURRENT_LIST0023___RUST_STD_INTERNAL_VAL+0x8>
+10060157c:     	add	x0, x0, #0x190
+100601580:     	ldr	x8, [x0]
+100601584:     	blr	x8
+100601588:     	strb	wzr, [x0]
+10060158c:     	b	0x100600cf8 <_js_json_stringify_full+0xe38>
+100601590:     	cmp	w11, #0x22
+100601594:     	b.eq	0x100601600 <_js_json_stringify_full+0x1740>
+100601598:     	cmp	w11, #0x5c
+10060159c:     	b.eq	0x100601600 <_js_json_stringify_full+0x1740>
+1006015a0:     	cmp	x12, #0x3
+1006015a4:     	mov	w11, #0x20              ; =32
+1006015a8:     	ccmp	w10, w11, #0x8, ls
+1006015ac:     	b.lt	0x1006003ec <_js_json_stringify_full+0x52c>
+1006015b0:     	add	x8, sp, #0x70
+1006015b4:     	strb	w10, [x8, x12]
+1006015b8:     	add	x12, x12, #0x1
+1006015bc:     	b	0x1006000dc <_js_json_stringify_full+0x21c>
+1006015c0:     	mov	x22, x0
+1006015c4:     	and	x0, x19, #0xffffffffffff
+1006015c8:     	bl	0x1005935c0 <__RNvNtCs5gMwpk3Cs4e_13perry_runtime6object17object_keys_array>
+1006015cc:     	cbz	x0, 0x100601624 <_js_json_stringify_full+0x1764>
+1006015d0:     	ldr	w21, [x0]
+1006015d4:     	cmp	w21, #0x8
+1006015d8:     	b.hi	0x100600474 <_js_json_stringify_full+0x5b4>
+1006015dc:     	ldr	w8, [x0, #0x4]
+1006015e0:     	cmp	w21, w8
+1006015e4:     	b.hi	0x100600474 <_js_json_stringify_full+0x5b4>
+1006015e8:     	b	0x100601628 <_js_json_stringify_full+0x1768>
+1006015ec:     	mov	w10, #0x62              ; =98
+1006015f0:     	b	0x100601600 <_js_json_stringify_full+0x1740>
+1006015f4:     	mov	w10, #0x66              ; =102
+1006015f8:     	b	0x100601600 <_js_json_stringify_full+0x1740>
+1006015fc:     	mov	w10, #0x74              ; =116
+100601600:     	cmp	x12, #0x2
+100601604:     	b.hi	0x1006003ec <_js_json_stringify_full+0x52c>
+100601608:     	add	x8, sp, #0x70
+10060160c:     	add	x8, x8, x12
+100601610:     	add	x12, x12, #0x2
+100601614:     	mov	w11, #0x5c              ; =92
+100601618:     	strb	w11, [x8]
+10060161c:     	strb	w10, [x8, #0x1]
+100601620:     	b	0x1006000dc <_js_json_stringify_full+0x21c>
+100601624:     	mov	x21, #0x0               ; =0
+100601628:     	ldr	w8, [x22, #0x4]
+10060162c:     	lsl	x9, x21, #3
+100601630:     	add	x9, x9, #0x18
+100601634:     	cmp	x9, x8
+100601638:     	b.hi	0x100600474 <_js_json_stringify_full+0x5b4>
+10060163c:     	mov	x22, x0
+100601640:     	ldr	w8, [x24, #0x4]
+100601644:     	mov	w9, #-0x40000000        ; =-1073741824
+100601648:     	cmp	w8, w9
+10060164c:     	csel	w0, w8, wzr, lt
+100601650:     	bl	0x1008a9fb8 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime6object6shapes34shape_live_inline_slot_count_by_id>
+100601654:     	mov	w8, #0x2                ; =2
+100601658:     	cmp	w1, #0x2
+10060165c:     	csel	w9, w1, w8, hi
+100601660:     	tst	w0, #0x1
+100601664:     	csel	x8, x9, x8, ne
+100601668:     	cmp	x21, x8
+10060166c:     	b.hi	0x100600474 <_js_json_stringify_full+0x5b4>
+100601670:     	cbz	x22, 0x100601680 <_js_json_stringify_full+0x17c0>
+100601674:     	mov	x0, x22
+100601678:     	bl	0x10051c18c <__RNvNtNtNtCs5gMwpk3Cs4e_13perry_runtime6object13field_get_set11enumeration24keys_contain_array_index>
+10060167c:     	tbnz	w0, #0x0, 0x100600474 <_js_json_stringify_full+0x5b4>
+100601680:     	cbz	x21, 0x100601974 <_js_json_stringify_full+0x1ab4>
+100601684:     	and	x0, x19, #0xffffffffffff
+100601688:     	mov	x1, x21
+10060168c:     	cmp	x21, #0x5
+100601690:     	b.hs	0x1006019a8 <_js_json_stringify_full+0x1ae8>
+100601694:     	bl	0x1005b28b4 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json14stringify_flat11emit_object>
+100601698:     	b	0x1006019ac <_js_json_stringify_full+0x1aec>
+10060169c:     	add	x8, x8, #0x30
+1006016a0:     	b	0x1006016a8 <_js_json_stringify_full+0x17e8>
+1006016a4:     	add	x8, x8, #0x60
+1006016a8:     	ldrb	w8, [x8, #0x19]
+1006016ac:     	cmp	w8, #0xff
+1006016b0:     	b.ne	0x1006016c0 <_js_json_stringify_full+0x1800>
+1006016b4:     	mov	x0, x21
+1006016b8:     	bl	0x1001b56e8 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime5arena9page_meta33classify_heap_generation_uncached>
+1006016bc:     	and	w8, w0, #0xff
+1006016c0:     	cbz	w8, 0x1006016e0 <_js_json_stringify_full+0x1820>
+1006016c4:     	ldurb	w8, [x21, #-0x8]
+1006016c8:     	ldurb	w9, [x21, #-0x7]
+1006016cc:     	mov	w10, #0x82              ; =130
+1006016d0:     	and	w9, w9, w10
+1006016d4:     	cmp	w9, #0x2
+1006016d8:     	ccmp	w8, #0x1, #0x0, eq
+1006016dc:     	b.eq	0x100601774 <_js_json_stringify_full+0x18b4>
+1006016e0:     	mov	x0, x21
+1006016e4:     	bl	0x1005d3c20 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime5value10addr_class26try_read_tracked_gc_header>
+1006016e8:     	mov	x23, x0
+1006016ec:     	cbz	x0, 0x100601718 <_js_json_stringify_full+0x1858>
+1006016f0:     	ldrb	w8, [x23]
+1006016f4:     	cmp	w8, #0x1
+1006016f8:     	b.ne	0x100601738 <_js_json_stringify_full+0x1878>
+1006016fc:     	ldrsb	w8, [x23, #0x1]
+100601700:     	tbnz	w8, #0x1f, 0x10060179c <_js_json_stringify_full+0x18dc>
+100601704:     	mov	x0, x23
+100601708:     	ldp	w9, w8, [x21]
+10060170c:     	cmp	w9, w8
+100601710:     	b.hi	0x100601820 <_js_json_stringify_full+0x1960>
+100601714:     	b	0x100601838 <_js_json_stringify_full+0x1978>
+100601718:     	mov	x0, x21
+10060171c:     	bl	0x1005d6530 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime6buffer6header20is_registered_buffer>
+100601720:     	tbnz	w0, #0x0, 0x100601730 <_js_json_stringify_full+0x1870>
+100601724:     	mov	x0, x21
+100601728:     	bl	0x10058ab98 <__RNvNtCs5gMwpk3Cs4e_13perry_runtime10typedarray23lookup_typed_array_kind>
+10060172c:     	tbz	w0, #0x0, 0x100600b30 <_js_json_stringify_full+0xc70>
+100601730:     	mov	x0, #0x0                ; =0
+100601734:     	b	0x100601810 <_js_json_stringify_full+0x1950>
+100601738:     	mov	x0, x23
+10060173c:     	cmp	w8, #0x1
+100601740:     	b.eq	0x100601810 <_js_json_stringify_full+0x1950>
+100601744:     	cmp	w8, #0x9
+100601748:     	b.ne	0x100600b30 <_js_json_stringify_full+0xc70>
+10060174c:     	ldr	w8, [x21, #0x4]
+100601750:     	mov	w9, #0x5841             ; =22593
+100601754:     	movk	w9, #0x4c5a, lsl #16
+100601758:     	cmp	w8, w9
+10060175c:     	b.ne	0x100600b30 <_js_json_stringify_full+0xc70>
+100601760:     	mov	x0, x21
+100601764:     	bl	0x100657c0c <__RNvNtCs5gMwpk3Cs4e_13perry_runtime9json_tape22force_materialize_lazy>
+100601768:     	mov	x21, x0
+10060176c:     	cbnz	x0, 0x100601860 <_js_json_stringify_full+0x19a0>
+100601770:     	b	0x100600b30 <_js_json_stringify_full+0xc70>
+100601774:     	ldr	w8, [x21]
+100601778:     	mov	w9, #0xe100             ; =57600
+10060177c:     	movk	w9, #0x5f5, lsl #16
+100601780:     	orr	w9, w9, #0x1
+100601784:     	cmp	w8, w9
+100601788:     	b.hs	0x1006016e0 <_js_json_stringify_full+0x1820>
+10060178c:     	ldr	w9, [x21, #0x4]
+100601790:     	cmp	w8, w9
+100601794:     	b.ls	0x100601860 <_js_json_stringify_full+0x19a0>
+100601798:     	b	0x1006016e0 <_js_json_stringify_full+0x1820>
+10060179c:     	ldr	x21, [x23, #0x8]
+1006017a0:     	mov	x0, x21
+1006017a4:     	bl	0x1005d3c20 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime5value10addr_class26try_read_tracked_gc_header>
+1006017a8:     	cbz	x0, 0x100600b30 <_js_json_stringify_full+0xc70>
+1006017ac:     	ldrb	w8, [x0]
+1006017b0:     	cmp	w8, #0x1
+1006017b4:     	b.ne	0x100600b30 <_js_json_stringify_full+0xc70>
+1006017b8:     	ldrsb	w8, [x0, #0x1]
+1006017bc:     	tbz	w8, #0x1f, 0x100601708 <_js_json_stringify_full+0x1848>
+1006017c0:     	mov	w25, #0x1               ; =1
+1006017c4:     	ldr	x21, [x0, #0x8]
+1006017c8:     	mov	x0, x21
+1006017cc:     	bl	0x1005d3c20 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime5value10addr_class26try_read_tracked_gc_header>
+1006017d0:     	cbz	x0, 0x100600b30 <_js_json_stringify_full+0xc70>
+1006017d4:     	ldrb	w8, [x0]
+1006017d8:     	cmp	w8, #0x1
+1006017dc:     	b.ne	0x100600b30 <_js_json_stringify_full+0xc70>
+1006017e0:     	cmp	w25, #0x3f
+1006017e4:     	b.hi	0x100600b30 <_js_json_stringify_full+0xc70>
+1006017e8:     	add	w25, w25, #0x1
+1006017ec:     	ldrsb	w8, [x0, #0x1]
+1006017f0:     	tbnz	w8, #0x1f, 0x1006017c4 <_js_json_stringify_full+0x1904>
+1006017f4:     	str	x21, [x23, #0x8]
+1006017f8:     	ldrb	w8, [x23, #0x1]
+1006017fc:     	orr	w8, w8, #0x80
+100601800:     	strb	w8, [x23, #0x1]
+100601804:     	ldrb	w8, [x0]
+100601808:     	cmp	w8, #0x1
+10060180c:     	b.ne	0x100601744 <_js_json_stringify_full+0x1884>
+100601810:     	ldp	w9, w8, [x21]
+100601814:     	cmp	w9, w8
+100601818:     	b.ls	0x100601838 <_js_json_stringify_full+0x1978>
+10060181c:     	cbz	x23, 0x100601848 <_js_json_stringify_full+0x1988>
+100601820:     	ldr	w9, [x0, #0x4]
+100601824:     	ubfiz	x8, x8, #3, #32
+100601828:     	add	x8, x8, #0x10
+10060182c:     	cmp	x8, x9
+100601830:     	b.eq	0x100601860 <_js_json_stringify_full+0x19a0>
+100601834:     	b	0x100601848 <_js_json_stringify_full+0x1988>
+100601838:     	mov	w8, #0xe100             ; =57600
+10060183c:     	movk	w8, #0x5f5, lsl #16
+100601840:     	cmp	w9, w8
+100601844:     	b.ls	0x100601860 <_js_json_stringify_full+0x19a0>
+100601848:     	mov	x0, x21
+10060184c:     	bl	0x1005d6530 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime6buffer6header20is_registered_buffer>
+100601850:     	tbnz	w0, #0x0, 0x100601860 <_js_json_stringify_full+0x19a0>
+100601854:     	mov	x0, x21
+100601858:     	bl	0x10058ab98 <__RNvNtCs5gMwpk3Cs4e_13perry_runtime10typedarray23lookup_typed_array_kind>
+10060185c:     	tbz	w0, #0x0, 0x100600b30 <_js_json_stringify_full+0xc70>
+100601860:     	ldp	w8, w9, [x21]
+100601864:     	sub	w10, w9, #0x1
+100601868:     	mov	w11, #0x270f            ; =9999
+10060186c:     	cmp	w10, w11
+100601870:     	ccmp	w8, w9, #0x2, lo
+100601874:     	b.hi	0x100600b30 <_js_json_stringify_full+0xc70>
+100601878:     	and	x8, x20, #0xffffffffffff
+10060187c:     	mov	x9, #0x7ffd000000000000 ; =9222527611924643840
+100601880:     	cmp	x24, x9
+100601884:     	csel	x1, x8, x20, eq
+100601888:     	add	x0, sp, #0x18
+10060188c:     	bl	0x1005c4108 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json8replacer20extract_string_array>
+100601890:     	ldr	x24, [sp, #0x18]
+100601894:     	cmn	x24, #0x1
+100601898:     	cset	w8, eq
+10060189c:     	cmp	x27, #0x1
+1006018a0:     	cset	w9, hi
+1006018a4:     	tst	w9, w8
+1006018a8:     	b.ne	0x100600b4c <_js_json_stringify_full+0xc8c>
+1006018ac:     	b	0x100600bbc <_js_json_stringify_full+0xcfc>
+1006018b0:     	bl	0x100c978b4 <__RNvNtCs5gMwpk3Cs4e_13perry_runtime7tls_hot12hot_uncached>
+1006018b4:     	lsr	x1, x21, #20
+1006018b8:     	ldr	x8, [x0, #0x10]
+1006018bc:     	ldrb	w9, [x8, #0x28]
+1006018c0:     	tbnz	w9, #0x0, 0x1006007a8 <_js_json_stringify_full+0x8e8>
+1006018c4:     	b	0x1006007c4 <_js_json_stringify_full+0x904>
+1006018c8:     	mov	x0, x21
+1006018cc:     	mov	x1, #0x0                ; =0
+1006018d0:     	bl	0x100cc8e8c <__RINvMs0_NtNtNtNtCs8BpVhDwHqJW_3std3sys12thread_local6native4lazyINtB6_7StorageINtNtCsjgY6bXVaRmE_4core4cell4CellINtNtB1j_6option6OptionNtNtCsctvjasLqLe9_5alloc6string6StringEEuE16get_or_init_slowNvNvNtCs5gMwpk3Cs4e_13perry_runtime4json13STRINGIFY_BUF27___rust_std_internal_init_fnEB3d_>
+1006018d4:     	cbnz	x0, 0x100600ca4 <_js_json_stringify_full+0xde4>
+1006018d8:     	b	0x100601a60 <_js_json_stringify_full+0x1ba0>
+1006018dc:     	mov	x0, x21
+1006018e0:     	mov	x1, #0x0                ; =0
+1006018e4:     	bl	0x100cc8e8c <__RINvMs0_NtNtNtNtCs8BpVhDwHqJW_3std3sys12thread_local6native4lazyINtB6_7StorageINtNtCsjgY6bXVaRmE_4core4cell4CellINtNtB1j_6option6OptionNtNtCsctvjasLqLe9_5alloc6string6StringEEuE16get_or_init_slowNvNvNtCs5gMwpk3Cs4e_13perry_runtime4json13STRINGIFY_BUF27___rust_std_internal_init_fnEB3d_>
+1006018e8:     	mov	x21, x0
+1006018ec:     	cbnz	x0, 0x1006013c4 <_js_json_stringify_full+0x1504>
+1006018f0:     	add	x0, sp, #0x70
+1006018f4:     	bl	0x1003a9a64 <__RNvXs1_NtCsctvjasLqLe9_5alloc7raw_vecINtB5_6RawVecyENtNtNtCsjgY6bXVaRmE_4core3ops4drop4Drop4dropCs5gMwpk3Cs4e_13perry_runtime>
+1006018f8:     	adrp	x0, 0x10109b000 <_anon.80eb82dabe382127be861d2f5954db24.4+0x1348>
+1006018fc:     	add	x0, x0, #0xed8
+100601900:     	bl	0x100cd8bdc <__RNvNtNtCs8BpVhDwHqJW_3std6thread5local18panic_access_error>
+100601904:     	mov	x0, x21
+100601908:     	mov	x1, #0x0                ; =0
+10060190c:     	bl	0x100cc912c <__RINvMs0_NtNtNtNtCs8BpVhDwHqJW_3std3sys12thread_local6native4lazyINtB6_7StorageINtNtCsjgY6bXVaRmE_4core4cell7RefCellINtNtCsctvjasLqLe9_5alloc3vec3VecIB1Q_INtNtB1U_5boxed3BoxNtNtNtCs5gMwpk3Cs4e_13perry_runtime4json24stringify_shape_template13ShapeTemplateEEEEuE16get_or_init_slowNvNvB2O_11SHAPE_CACHE27___rust_std_internal_init_fnEB2Q_>
+100601910:     	mov	x21, x0
+100601914:     	cbnz	x0, 0x100600c04 <_js_json_stringify_full+0xd44>
+100601918:     	b	0x100601a60 <_js_json_stringify_full+0x1ba0>
+10060191c:     	adrp	x0, 0x10109c000 <_anon.b83f4817ad1405b178477d874283788a.21>
+100601920:     	add	x0, x0, #0xdf8
+100601924:     	bl	0x100c9182c <__RNvNtCsjgY6bXVaRmE_4core4cell22panic_already_borrowed>
+100601928:     	cmp	w8, #0x1
+10060192c:     	b.ne	0x100601a60 <_js_json_stringify_full+0x1ba0>
+100601930:     	adrp	x1, 0x1009e8000 <__RINvNtNtNtNtCs8BpVhDwHqJW_3std3sys12thread_local6native5eager7destroyINtNtCsjgY6bXVaRmE_4core4cell7RefCellINtNtB1a_6option6OptionNtNtNtCs5gMwpk3Cs4e_13perry_runtime2gc6policy15BudgetedGcCycleEEEB29_+0x13c>
+100601934:     	add	x1, x1, #0xc2c
+100601938:     	mov	x19, x0
+10060193c:     	bl	0x100b9fb1c <__RNvNtNtNtNtCs8BpVhDwHqJW_3std3sys12thread_local11destructors4list8register>
+100601940:     	mov	x0, x19
+100601944:     	strb	wzr, [x19, #0x20]
+100601948:     	ldr	x8, [x19]
+10060194c:     	mov	x9, #0x7fffffffffffffff ; =9223372036854775807
+100601950:     	cmp	x8, x9
+100601954:     	b.lo	0x100600d20 <_js_json_stringify_full+0xe60>
+100601958:     	adrp	x0, 0x10109f000 <_anon.b83f4817ad1405b178477d874283788a.684>
+10060195c:     	add	x0, x0, #0x620
+100601960:     	bl	0x100c9185c <__RNvNtCsjgY6bXVaRmE_4core4cell30panic_already_mutably_borrowed>
+100601964:     	adrp	x0, 0x10109f000 <_anon.b83f4817ad1405b178477d874283788a.684>
+100601968:     	add	x0, x0, #0x638
+10060196c:     	bl	0x100c9182c <__RNvNtCsjgY6bXVaRmE_4core4cell22panic_already_borrowed>
+100601970:     	bl	0x100ca5bd8 <__RNvNtNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5roots15runtime_handles23handle_used_after_scope>
+100601974:     	adrp	x0, 0x101133000 <__RNvNCNKNvNtCs5gMwpk3Cs4e_13perry_runtime10perf_hooks12CURRENT_LIST0023___RUST_STD_INTERNAL_VAL+0x8>
+100601978:     	add	x0, x0, #0x2c8
+10060197c:     	ldr	x8, [x0]
+100601980:     	blr	x8
+100601984:     	strb	wzr, [x0]
+100601988:     	and	x0, x19, #0xffffffffffff
+10060198c:     	bl	0x10023859c <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json22stringify_tojson_probe36to_json_definitely_absent_without_gc>
+100601990:     	mov	w0, w0
+100601994:     	mov	x22, #0x7d7b            ; =32123
+100601998:     	movk	x22, #0x200, lsl #32
+10060199c:     	movk	x22, #0x7ff9, lsl #48
+1006019a0:     	tbz	w0, #0x0, 0x100600474 <_js_json_stringify_full+0x5b4>
+1006019a4:     	b	0x100601474 <_js_json_stringify_full+0x15b4>
+1006019a8:     	bl	0x1005b8cc0 <__RNvNtNtCs5gMwpk3Cs4e_13perry_runtime4json23stringify_record_output11emit_record>
+1006019ac:     	mov	x22, x1
+1006019b0:     	tbz	w0, #0x0, 0x100600474 <_js_json_stringify_full+0x5b4>
+1006019b4:     	b	0x100601474 <_js_json_stringify_full+0x15b4>
+1006019b8:     	mov	x0, x21
+1006019bc:     	mov	x1, #0x0                ; =0
+1006019c0:     	bl	0x100cc8e8c <__RINvMs0_NtNtNtNtCs8BpVhDwHqJW_3std3sys12thread_local6native4lazyINtB6_7StorageINtNtCsjgY6bXVaRmE_4core4cell4CellINtNtB1j_6option6OptionNtNtCsctvjasLqLe9_5alloc6string6StringEEuE16get_or_init_slowNvNvNtCs5gMwpk3Cs4e_13perry_runtime4json13STRINGIFY_BUF27___rust_std_internal_init_fnEB3d_>
+1006019c4:     	mov	x21, x0
+1006019c8:     	cbnz	x0, 0x1006010ac <_js_json_stringify_full+0x11ec>
+1006019cc:     	b	0x1006018f0 <_js_json_stringify_full+0x1a30>
+1006019d0:     	adrp	x0, 0x100dbf000 <_anon.80eb82dabe382127be861d2f5954db24.3+0x2aa0>
+1006019d4:     	add	x0, x0, #0x3e0
+1006019d8:     	mov	w1, #0xb                ; =11
+1006019dc:     	bl	0x100ca5ba0 <__RNvNtNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5roots15runtime_handles20handle_kind_mismatch>
+1006019e0:     	adrp	x0, 0x100dbf000 <_anon.80eb82dabe382127be861d2f5954db24.3+0x2aa0>
+1006019e4:     	add	x0, x0, #0x469
+1006019e8:     	mov	w1, #0xf                ; =15
+1006019ec:     	bl	0x100ca5ba0 <__RNvNtNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5roots15runtime_handles20handle_kind_mismatch>
+1006019f0:     	cmp	w8, #0x2
+1006019f4:     	b.eq	0x100601a60 <_js_json_stringify_full+0x1ba0>
+1006019f8:     	adrp	x1, 0x1009e8000 <__RINvNtNtNtNtCs8BpVhDwHqJW_3std3sys12thread_local6native5eager7destroyINtNtCsjgY6bXVaRmE_4core4cell7RefCellINtNtB1a_6option6OptionNtNtNtCs5gMwpk3Cs4e_13perry_runtime2gc6policy15BudgetedGcCycleEEEB29_+0x13c>
+1006019fc:     	add	x1, x1, #0xc2c
+100601a00:     	mov	x19, x0
+100601a04:     	bl	0x100b9fb1c <__RNvNtNtNtNtCs8BpVhDwHqJW_3std3sys12thread_local11destructors4list8register>
+100601a08:     	mov	x0, x19
+100601a0c:     	strb	wzr, [x19, #0x20]
+100601a10:     	ldr	x8, [x19]
+100601a14:     	cbz	x8, 0x100601090 <_js_json_stringify_full+0x11d0>
+100601a18:     	adrp	x0, 0x10109f000 <_anon.b83f4817ad1405b178477d874283788a.684>
+100601a1c:     	add	x0, x0, #0x608
+100601a20:     	bl	0x100c9182c <__RNvNtCsjgY6bXVaRmE_4core4cell22panic_already_borrowed>
+100601a24:     	cmp	w8, #0x2
+100601a28:     	b.eq	0x100601a60 <_js_json_stringify_full+0x1ba0>
+100601a2c:     	adrp	x1, 0x1009e8000 <__RINvNtNtNtNtCs8BpVhDwHqJW_3std3sys12thread_local6native5eager7destroyINtNtCsjgY6bXVaRmE_4core4cell7RefCellINtNtB1a_6option6OptionNtNtNtCs5gMwpk3Cs4e_13perry_runtime2gc6policy15BudgetedGcCycleEEEB29_+0x13c>
+100601a30:     	add	x1, x1, #0xc2c
+100601a34:     	mov	x23, x0
+100601a38:     	bl	0x100b9fb1c <__RNvNtNtNtNtCs8BpVhDwHqJW_3std3sys12thread_local11destructors4list8register>
+100601a3c:     	mov	x0, x23
+100601a40:     	strb	wzr, [x23, #0x20]
+100601a44:     	ldr	x8, [x23]
+100601a48:     	mov	x9, #0x7fffffffffffffff ; =9223372036854775807
+100601a4c:     	cmp	x8, x9
+100601a50:     	b.lo	0x100601120 <_js_json_stringify_full+0x1260>
+100601a54:     	b	0x100601aa0 <_js_json_stringify_full+0x1be0>
+100601a58:     	cmp	w8, #0x2
+100601a5c:     	b.ne	0x100601a78 <_js_json_stringify_full+0x1bb8>
+100601a60:     	adrp	x0, 0x10109b000 <_anon.80eb82dabe382127be861d2f5954db24.4+0x1348>
+100601a64:     	add	x0, x0, #0xed8
+100601a68:     	bl	0x100cd8bdc <__RNvNtNtCs8BpVhDwHqJW_3std6thread5local18panic_access_error>
+100601a6c:     	adrp	x0, 0x1010bd000 <_anon.8e6022e3b71166c56c420b05fa707284.290+0xc8>
+100601a70:     	add	x0, x0, #0xcc8
+100601a74:     	bl	0x100c9185c <__RNvNtCsjgY6bXVaRmE_4core4cell30panic_already_mutably_borrowed>
+100601a78:     	adrp	x1, 0x1009e8000 <__RINvNtNtNtNtCs8BpVhDwHqJW_3std3sys12thread_local6native5eager7destroyINtNtCsjgY6bXVaRmE_4core4cell7RefCellINtNtB1a_6option6OptionNtNtNtCs5gMwpk3Cs4e_13perry_runtime2gc6policy15BudgetedGcCycleEEEB29_+0x13c>
+100601a7c:     	add	x1, x1, #0xc2c
+100601a80:     	mov	x23, x0
+100601a84:     	bl	0x100b9fb1c <__RNvNtNtNtNtCs8BpVhDwHqJW_3std3sys12thread_local11destructors4list8register>
+100601a88:     	mov	x0, x23
+100601a8c:     	strb	wzr, [x23, #0x20]
+100601a90:     	ldr	x8, [x23]
+100601a94:     	mov	x9, #0x7fffffffffffffff ; =9223372036854775807
+100601a98:     	cmp	x8, x9
+100601a9c:     	b.lo	0x1006011e4 <_js_json_stringify_full+0x1324>
+100601aa0:     	adrp	x0, 0x10109b000 <_anon.80eb82dabe382127be861d2f5954db24.4+0x1348>
+100601aa4:     	add	x0, x0, #0xf70
+100601aa8:     	bl	0x100c9185c <__RNvNtCsjgY6bXVaRmE_4core4cell30panic_already_mutably_borrowed>
+100601aac:     	adrp	x0, 0x1010c3000 <_anon.1aa095982679c2c5b7affe6dc382ab89.2271+0x448>
+100601ab0:     	add	x0, x0, #0x530
+100601ab4:     	bl	0x100c918f0 <__RNvNtCsjgY6bXVaRmE_4core6option13unwrap_failed>
+100601ab8:     	adrp	x0, 0x100df2000 <_anon.8e6022e3b71166c56c420b05fa707284.939+0x456>
+100601abc:     	add	x0, x0, #0x59a
+100601ac0:     	mov	w1, #0xb                ; =11
+100601ac4:     	bl	0x100ca5ba0 <__RNvNtNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5roots15runtime_handles20handle_kind_mismatch>
+100601ac8:     	adrp	x0, 0x100df2000 <_anon.8e6022e3b71166c56c420b05fa707284.939+0x456>
+100601acc:     	add	x0, x0, #0x5a5
+100601ad0:     	mov	w1, #0xf                ; =15
+100601ad4:     	bl	0x100ca5ba0 <__RNvNtNtNtCs5gMwpk3Cs4e_13perry_runtime2gc5roots15runtime_handles20handle_kind_mismatch>
+100601ad8:     	mov	w0, #0x1                ; =1
+100601adc:     	mov	x1, x23
+100601ae0:     	bl	0x100c914a4 <__RNvNtCsctvjasLqLe9_5alloc7raw_vec12handle_error>
+100601ae4:     	mov	w0, #0x1                ; =1
+100601ae8:     	mov	x1, x22
+100601aec:     	bl	0x100c914a4 <__RNvNtCsctvjasLqLe9_5alloc7raw_vec12handle_error>
+100601af0:     	adrp	x2, 0x1010bd000 <_anon.8e6022e3b71166c56c420b05fa707284.290+0xc8>
+100601af4:     	add	x2, x2, #0xf90
+100601af8:     	mov	w0, #0x5                ; =5
+100601afc:     	mov	w1, #0x5                ; =5
+100601b00:     	bl	0x100c9198c <__RNvNtCsjgY6bXVaRmE_4core9panicking18panic_bounds_check>

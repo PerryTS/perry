@@ -1,0 +1,4 @@
+{
+  "qualified": false,
+  "reason": "Local observer raised OSError errno 28 while saving observations; observation file is incomplete. Remote window has quiet_gate_passed=false and lacks an end gate. Both runtime candidates had already failed the qualified CPU regression criteria, so this discarded candidate is not retried."
+}

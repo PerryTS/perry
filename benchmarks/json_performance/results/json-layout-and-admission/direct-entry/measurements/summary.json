@@ -1,0 +1,6462 @@
+[
+  {
+    "fixture": "empty_object",
+    "operation": "parse",
+    "iterations": 2000000,
+    "cpu_us": {
+      "parent": {
+        "median": 0.057302,
+        "range": [
+          0.057215,
+          0.057413
+        ]
+      },
+      "checkpoint": {
+        "median": 0.057114,
+        "range": [
+          0.057094,
+          0.0572695
+        ]
+      },
+      "candidate": {
+        "median": 0.0588595,
+        "range": [
+          0.0588425,
+          0.058919
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.001745500000000004,
+        "delta_percent": 3.0561683650243365,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 0.0015575000000000033,
+        "delta_percent": 2.7180552162228144,
+        "ranges_separated": true
+      }
+    },
+    "peak_rss_mib": {
+      "parent": {
+        "median": 34.78125,
+        "range": [
+          34.765625,
+          34.78125
+        ]
+      },
+      "checkpoint": {
+        "median": 34.75,
+        "range": [
+          34.734375,
+          34.75
+        ]
+      },
+      "candidate": {
+        "median": 34.765625,
+        "range": [
+          34.75,
+          34.765625
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.015625,
+        "delta_percent": 0.04496402877698369,
+        "ranges_separated": false
+      },
+      "vs_parent": {
+        "delta": -0.015625,
+        "delta_percent": -0.04492362982928544,
+        "ranges_separated": false
+      }
+    },
+    "rss_after_mib": {
+      "parent": {
+        "median": 34.140625,
+        "range": [
+          34.125,
+          34.140625
+        ]
+      },
+      "checkpoint": {
+        "median": 34.09375,
+        "range": [
+          34.078125,
+          34.09375
+        ]
+      },
+      "candidate": {
+        "median": 34.125,
+        "range": [
+          34.109375,
+          34.125
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.03125,
+        "delta_percent": 0.09165902841430373,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": -0.015625,
+        "delta_percent": -0.04576659038901809,
+        "ranges_separated": false
+      }
+    },
+    "instructions": {
+      "parent": {
+        "median": 2185321152,
+        "range": [
+          2185268471,
+          2185493137
+        ]
+      },
+      "checkpoint": {
+        "median": 2178027343,
+        "range": [
+          2177710884,
+          2178337042
+        ]
+      },
+      "candidate": {
+        "median": 2186223701,
+        "range": [
+          2186099310,
+          2186699701
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 8196358,
+        "delta_percent": 0.3763202526516629,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 902549,
+        "delta_percent": 0.04130052002535578,
+        "ranges_separated": true
+      }
+    },
+    "cycles": {
+      "parent": {
+        "median": 387857342,
+        "range": [
+          387823557,
+          389063519
+        ]
+      },
+      "checkpoint": {
+        "median": 387225082,
+        "range": [
+          386924407,
+          388133088
+        ]
+      },
+      "candidate": {
+        "median": 398208798,
+        "range": [
+          398009505,
+          398492185
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 10983716,
+        "delta_percent": 2.8365197686238686,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 10351456,
+        "delta_percent": 2.6688823129200845,
+        "ranges_separated": true
+      }
+    }
+  },
+  {
+    "fixture": "empty_object",
+    "operation": "stringify",
+    "iterations": 2000000,
+    "cpu_us": {
+      "parent": {
+        "median": 0.0468295,
+        "range": [
+          0.046805,
+          0.0478045
+        ]
+      },
+      "checkpoint": {
+        "median": 0.047207,
+        "range": [
+          0.047195,
+          0.0473775
+        ]
+      },
+      "candidate": {
+        "median": 0.0476675,
+        "range": [
+          0.04765,
+          0.047747
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.0004605000000000026,
+        "delta_percent": 0.9754909229563458,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 0.0008379999999999985,
+        "delta_percent": 1.7894703125166833,
+        "ranges_separated": false
+      }
+    },
+    "peak_rss_mib": {
+      "parent": {
+        "median": 13.796875,
+        "range": [
+          13.796875,
+          13.8125
+        ]
+      },
+      "checkpoint": {
+        "median": 13.734375,
+        "range": [
+          13.734375,
+          13.75
+        ]
+      },
+      "candidate": {
+        "median": 13.734375,
+        "range": [
+          13.734375,
+          13.75
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.0,
+        "delta_percent": 0.0,
+        "ranges_separated": false
+      },
+      "vs_parent": {
+        "delta": -0.0625,
+        "delta_percent": -0.45300113250282825,
+        "ranges_separated": true
+      }
+    },
+    "rss_after_mib": {
+      "parent": {
+        "median": 12.375,
+        "range": [
+          12.375,
+          12.390625
+        ]
+      },
+      "checkpoint": {
+        "median": 12.34375,
+        "range": [
+          12.34375,
+          12.359375
+        ]
+      },
+      "candidate": {
+        "median": 12.234375,
+        "range": [
+          12.234375,
+          12.25
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": -0.109375,
+        "delta_percent": -0.8860759493670933,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": -0.140625,
+        "delta_percent": -1.1363636363636354,
+        "ranges_separated": true
+      }
+    },
+    "instructions": {
+      "parent": {
+        "median": 1663538694,
+        "range": [
+          1663448936,
+          1663566499
+        ]
+      },
+      "checkpoint": {
+        "median": 1661476226,
+        "range": [
+          1661365423,
+          1661581101
+        ]
+      },
+      "candidate": {
+        "median": 1689476398,
+        "range": [
+          1689443727,
+          1689597144
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 28000172,
+        "delta_percent": 1.685258661052913,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 25937704,
+        "delta_percent": 1.5591884994049954,
+        "ranges_separated": true
+      }
+    },
+    "cycles": {
+      "parent": {
+        "median": 319856462,
+        "range": [
+          319514469,
+          325904216
+        ]
+      },
+      "checkpoint": {
+        "median": 322303137,
+        "range": [
+          322053775,
+          323529911
+        ]
+      },
+      "candidate": {
+        "median": 325063410,
+        "range": [
+          324902442,
+          325105822
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 2760273,
+        "delta_percent": 0.8564213881666394,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 5206948,
+        "delta_percent": 1.6279014553721938,
+        "ranges_separated": false
+      }
+    }
+  },
+  {
+    "fixture": "escaped_1m",
+    "operation": "parse",
+    "iterations": 82,
+    "cpu_us": {
+      "parent": {
+        "median": 2040.6707317073171,
+        "range": [
+          2039.2073170731708,
+          2047.7926829268292
+        ]
+      },
+      "checkpoint": {
+        "median": 2041.0243902439024,
+        "range": [
+          2037.4024390243903,
+          2044.0853658536585
+        ]
+      },
+      "candidate": {
+        "median": 2041.5243902439024,
+        "range": [
+          2037.621951219512,
+          2043.0731707317073
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.5,
+        "delta_percent": 0.024497502449749575,
+        "ranges_separated": false
+      },
+      "vs_parent": {
+        "delta": 0.8536585365852716,
+        "delta_percent": 0.0418322526668069,
+        "ranges_separated": false
+      }
+    },
+    "peak_rss_mib": {
+      "parent": {
+        "median": 58.125,
+        "range": [
+          58.125,
+          58.125
+        ]
+      },
+      "checkpoint": {
+        "median": 58.140625,
+        "range": [
+          58.140625,
+          58.140625
+        ]
+      },
+      "candidate": {
+        "median": 58.1875,
+        "range": [
+          58.171875,
+          58.1875
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.046875,
+        "delta_percent": 0.08062348830959465,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 0.0625,
+        "delta_percent": 0.10752688172042113,
+        "ranges_separated": true
+      }
+    },
+    "rss_after_mib": {
+      "parent": {
+        "median": 57.484375,
+        "range": [
+          57.484375,
+          57.484375
+        ]
+      },
+      "checkpoint": {
+        "median": 57.5,
+        "range": [
+          57.5,
+          57.5
+        ]
+      },
+      "candidate": {
+        "median": 57.5625,
+        "range": [
+          57.546875,
+          57.5625
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.0625,
+        "delta_percent": 0.10869565217390686,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 0.078125,
+        "delta_percent": 0.13590649633052898,
+        "ranges_separated": true
+      }
+    },
+    "instructions": {
+      "parent": {
+        "median": 2535137572,
+        "range": [
+          2534538218,
+          2536014565
+        ]
+      },
+      "checkpoint": {
+        "median": 2534445591,
+        "range": [
+          2533913577,
+          2536387070
+        ]
+      },
+      "candidate": {
+        "median": 2534551087,
+        "range": [
+          2534097038,
+          2535690996
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 105496,
+        "delta_percent": 0.004162488252834606,
+        "ranges_separated": false
+      },
+      "vs_parent": {
+        "delta": -586485,
+        "delta_percent": -0.023134247485323556,
+        "ranges_separated": false
+      }
+    },
+    "cycles": {
+      "parent": {
+        "median": 570746627,
+        "range": [
+          570348562,
+          572851502
+        ]
+      },
+      "checkpoint": {
+        "median": 570857132,
+        "range": [
+          569713369,
+          571883833
+        ]
+      },
+      "candidate": {
+        "median": 571050714,
+        "range": [
+          569766001,
+          571334489
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 193582,
+        "delta_percent": 0.03391076140570881,
+        "ranges_separated": false
+      },
+      "vs_parent": {
+        "delta": 304087,
+        "delta_percent": 0.05327880807608487,
+        "ranges_separated": false
+      }
+    }
+  },
+  {
+    "fixture": "escaped_1m",
+    "operation": "stringify",
+    "iterations": 168,
+    "cpu_us": {
+      "parent": {
+        "median": 951.9761904761905,
+        "range": [
+          950.7202380952381,
+          952.5416666666666
+        ]
+      },
+      "checkpoint": {
+        "median": 951.9345238095239,
+        "range": [
+          951.2083333333334,
+          954.4940476190476
+        ]
+      },
+      "candidate": {
+        "median": 966.3095238095239,
+        "range": [
+          964.1011904761905,
+          974.5238095238095
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 14.375,
+        "delta_percent": 1.5100828513365583,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 14.333333333333371,
+        "delta_percent": 1.5056398969562013,
+        "ranges_separated": true
+      }
+    },
+    "peak_rss_mib": {
+      "parent": {
+        "median": 57.15625,
+        "range": [
+          57.15625,
+          57.15625
+        ]
+      },
+      "checkpoint": {
+        "median": 57.171875,
+        "range": [
+          57.171875,
+          57.171875
+        ]
+      },
+      "candidate": {
+        "median": 57.234375,
+        "range": [
+          57.234375,
+          57.234375
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.0625,
+        "delta_percent": 0.10931948619841148,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 0.078125,
+        "delta_percent": 0.13668671405140387,
+        "ranges_separated": true
+      }
+    },
+    "rss_after_mib": {
+      "parent": {
+        "median": 56.515625,
+        "range": [
+          56.515625,
+          56.515625
+        ]
+      },
+      "checkpoint": {
+        "median": 56.53125,
+        "range": [
+          56.53125,
+          56.53125
+        ]
+      },
+      "candidate": {
+        "median": 56.625,
+        "range": [
+          56.625,
+          56.625
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.09375,
+        "delta_percent": 0.16583747927032544,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 0.109375,
+        "delta_percent": 0.1935305501796991,
+        "ranges_separated": true
+      }
+    },
+    "instructions": {
+      "parent": {
+        "median": 2364678465,
+        "range": [
+          2364543478,
+          2364827831
+        ]
+      },
+      "checkpoint": {
+        "median": 2364437194,
+        "range": [
+          2364224157,
+          2364975312
+        ]
+      },
+      "candidate": {
+        "median": 2364618473,
+        "range": [
+          2364386874,
+          2364747635
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 181279,
+        "delta_percent": 0.007666898510150233,
+        "ranges_separated": false
+      },
+      "vs_parent": {
+        "delta": -59992,
+        "delta_percent": -0.002537004539426846,
+        "ranges_separated": false
+      }
+    },
+    "cycles": {
+      "parent": {
+        "median": 546708592,
+        "range": [
+          545830326,
+          546860749
+        ]
+      },
+      "checkpoint": {
+        "median": 546560291,
+        "range": [
+          546265864,
+          547491442
+        ]
+      },
+      "candidate": {
+        "median": 554003182,
+        "range": [
+          553311314,
+          556342788
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 7442891,
+        "delta_percent": 1.3617694374361333,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 7294590,
+        "delta_percent": 1.3342738904677853,
+        "ranges_separated": true
+      }
+    }
+  },
+  {
+    "fixture": "heterogeneous_1m",
+    "operation": "parse",
+    "iterations": 80,
+    "cpu_us": {
+      "parent": {
+        "median": 1933.275,
+        "range": [
+          1932.9125,
+          1938.5875
+        ]
+      },
+      "checkpoint": {
+        "median": 1935.2125,
+        "range": [
+          1934.7625,
+          1936.7125
+        ]
+      },
+      "candidate": {
+        "median": 1932.0875,
+        "range": [
+          1929.85,
+          1949.325
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": -3.125,
+        "delta_percent": -0.1614809743116119,
+        "ranges_separated": false
+      },
+      "vs_parent": {
+        "delta": -1.1875,
+        "delta_percent": -0.0614242671115095,
+        "ranges_separated": false
+      }
+    },
+    "peak_rss_mib": {
+      "parent": {
+        "median": 69.328125,
+        "range": [
+          69.3125,
+          69.328125
+        ]
+      },
+      "checkpoint": {
+        "median": 69.390625,
+        "range": [
+          69.375,
+          69.390625
+        ]
+      },
+      "candidate": {
+        "median": 69.453125,
+        "range": [
+          69.453125,
+          69.453125
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.0625,
+        "delta_percent": 0.09006980409818066,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 0.125,
+        "delta_percent": 0.1803020058598115,
+        "ranges_separated": true
+      }
+    },
+    "rss_after_mib": {
+      "parent": {
+        "median": 68.703125,
+        "range": [
+          68.6875,
+          68.703125
+        ]
+      },
+      "checkpoint": {
+        "median": 68.765625,
+        "range": [
+          68.75,
+          68.765625
+        ]
+      },
+      "candidate": {
+        "median": 68.84375,
+        "range": [
+          68.84375,
+          68.84375
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.078125,
+        "delta_percent": 0.11361054305840668,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 0.140625,
+        "delta_percent": 0.2046850125085209,
+        "ranges_separated": true
+      }
+    },
+    "instructions": {
+      "parent": {
+        "median": 2154292210,
+        "range": [
+          2154244912,
+          2154408438
+        ]
+      },
+      "checkpoint": {
+        "median": 2154571999,
+        "range": [
+          2154508136,
+          2154774201
+        ]
+      },
+      "candidate": {
+        "median": 2154453614,
+        "range": [
+          2154198880,
+          2154660742
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": -118385,
+        "delta_percent": -0.0054945947526863215,
+        "ranges_separated": false
+      },
+      "vs_parent": {
+        "delta": 161404,
+        "delta_percent": 0.007492205525827522,
+        "ranges_separated": false
+      }
+    },
+    "cycles": {
+      "parent": {
+        "median": 529030171,
+        "range": [
+          528420466,
+          530444329
+        ]
+      },
+      "checkpoint": {
+        "median": 529779344,
+        "range": [
+          529419842,
+          530354007
+        ]
+      },
+      "candidate": {
+        "median": 528779710,
+        "range": [
+          527886892,
+          530371663
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": -999634,
+        "delta_percent": -0.1886887458564246,
+        "ranges_separated": false
+      },
+      "vs_parent": {
+        "delta": -250461,
+        "delta_percent": -0.04734342457757279,
+        "ranges_separated": false
+      }
+    }
+  },
+  {
+    "fixture": "heterogeneous_1m",
+    "operation": "stringify",
+    "iterations": 211,
+    "cpu_us": {
+      "parent": {
+        "median": 847.0758293838862,
+        "range": [
+          846.0379146919431,
+          866.1848341232228
+        ]
+      },
+      "checkpoint": {
+        "median": 847.0047393364929,
+        "range": [
+          846.4123222748815,
+          851.2227488151659
+        ]
+      },
+      "candidate": {
+        "median": 849.4360189573459,
+        "range": [
+          843.739336492891,
+          858.1895734597157
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 2.431279620853047,
+        "delta_percent": 0.2870443939614331,
+        "ranges_separated": false
+      },
+      "vs_parent": {
+        "delta": 2.3601895734597065,
+        "delta_percent": 0.27862789747836736,
+        "ranges_separated": false
+      }
+    },
+    "peak_rss_mib": {
+      "parent": {
+        "median": 59.21875,
+        "range": [
+          59.21875,
+          59.21875
+        ]
+      },
+      "checkpoint": {
+        "median": 59.1875,
+        "range": [
+          59.1875,
+          59.1875
+        ]
+      },
+      "candidate": {
+        "median": 59.296875,
+        "range": [
+          59.296875,
+          59.296875
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.109375,
+        "delta_percent": 0.18479408658922392,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 0.078125,
+        "delta_percent": 0.13192612137202797,
+        "ranges_separated": true
+      }
+    },
+    "rss_after_mib": {
+      "parent": {
+        "median": 58.609375,
+        "range": [
+          58.609375,
+          58.609375
+        ]
+      },
+      "checkpoint": {
+        "median": 58.5625,
+        "range": [
+          58.5625,
+          58.5625
+        ]
+      },
+      "candidate": {
+        "median": 58.703125,
+        "range": [
+          58.703125,
+          58.703125
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.140625,
+        "delta_percent": 0.24012806830309152,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 0.09375,
+        "delta_percent": 0.15995734470808376,
+        "ranges_separated": true
+      }
+    },
+    "instructions": {
+      "parent": {
+        "median": 3853516877,
+        "range": [
+          3851851841,
+          3856292192
+        ]
+      },
+      "checkpoint": {
+        "median": 3854152799,
+        "range": [
+          3852716230,
+          3855259791
+        ]
+      },
+      "candidate": {
+        "median": 3880265675,
+        "range": [
+          3879732899,
+          3881770547
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 26112876,
+        "delta_percent": 0.6775257069925988,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 26748798,
+        "delta_percent": 0.6941398949009914,
+        "ranges_separated": true
+      }
+    },
+    "cycles": {
+      "parent": {
+        "median": 628757139,
+        "range": [
+          628019458,
+          639079581
+        ]
+      },
+      "checkpoint": {
+        "median": 628852381,
+        "range": [
+          628504414,
+          631300883
+        ]
+      },
+      "candidate": {
+        "median": 629930031,
+        "range": [
+          626521387,
+          632538359
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 1077650,
+        "delta_percent": 0.17136772199006778,
+        "ranges_separated": false
+      },
+      "vs_parent": {
+        "delta": 1172892,
+        "delta_percent": 0.1865413412029726,
+        "ranges_separated": false
+      }
+    }
+  },
+  {
+    "fixture": "long_string_1m",
+    "operation": "parse",
+    "iterations": 1308,
+    "cpu_us": {
+      "parent": {
+        "median": 203.32721712538228,
+        "range": [
+          202.78669724770643,
+          205.12614678899084
+        ]
+      },
+      "checkpoint": {
+        "median": 203.68272171253824,
+        "range": [
+          202.82110091743118,
+          204.51146788990826
+        ]
+      },
+      "candidate": {
+        "median": 202.86391437308868,
+        "range": [
+          202.55045871559633,
+          205.3952599388379
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": -0.8188073394495632,
+        "delta_percent": -0.4020013737862205,
+        "ranges_separated": false
+      },
+      "vs_parent": {
+        "delta": -0.4633027522936004,
+        "delta_percent": -0.22786066658646575,
+        "ranges_separated": false
+      }
+    },
+    "peak_rss_mib": {
+      "parent": {
+        "median": 60.734375,
+        "range": [
+          60.734375,
+          60.75
+        ]
+      },
+      "checkpoint": {
+        "median": 60.75,
+        "range": [
+          60.75,
+          62.78125
+        ]
+      },
+      "candidate": {
+        "median": 60.796875,
+        "range": [
+          60.796875,
+          62.828125
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.046875,
+        "delta_percent": 0.07716049382715529,
+        "ranges_separated": false
+      },
+      "vs_parent": {
+        "delta": 0.0625,
+        "delta_percent": 0.10290712631850774,
+        "ranges_separated": true
+      }
+    },
+    "rss_after_mib": {
+      "parent": {
+        "median": 60.09375,
+        "range": [
+          60.09375,
+          60.109375
+        ]
+      },
+      "checkpoint": {
+        "median": 60.109375,
+        "range": [
+          60.109375,
+          62.140625
+        ]
+      },
+      "candidate": {
+        "median": 60.171875,
+        "range": [
+          60.171875,
+          62.203125
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.0625,
+        "delta_percent": 0.10397712503249501,
+        "ranges_separated": false
+      },
+      "vs_parent": {
+        "delta": 0.078125,
+        "delta_percent": 0.13000520020800543,
+        "ranges_separated": true
+      }
+    },
+    "instructions": {
+      "parent": {
+        "median": 3857791322,
+        "range": [
+          3857146825,
+          3860083863
+        ]
+      },
+      "checkpoint": {
+        "median": 3846715159,
+        "range": [
+          3845169819,
+          3848653171
+        ]
+      },
+      "candidate": {
+        "median": 3842056453,
+        "range": [
+          3841678990,
+          3844616096
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": -4658706,
+        "delta_percent": -0.1211086812367701,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": -15734869,
+        "delta_percent": -0.40787247641592694,
+        "ranges_separated": true
+      }
+    },
+    "cycles": {
+      "parent": {
+        "median": 875147470,
+        "range": [
+          872676170,
+          882766782
+        ]
+      },
+      "checkpoint": {
+        "median": 876130264,
+        "range": [
+          872890364,
+          879625534
+        ]
+      },
+      "candidate": {
+        "median": 872400536,
+        "range": [
+          871152673,
+          883870208
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": -3729728,
+        "delta_percent": -0.4257047328751984,
+        "ranges_separated": false
+      },
+      "vs_parent": {
+        "delta": -2746934,
+        "delta_percent": -0.31388241344055823,
+        "ranges_separated": false
+      }
+    }
+  },
+  {
+    "fixture": "long_string_1m",
+    "operation": "stringify",
+    "iterations": 1130,
+    "cpu_us": {
+      "parent": {
+        "median": 175.8283185840708,
+        "range": [
+          174.13362831858407,
+          177.1929203539823
+        ]
+      },
+      "checkpoint": {
+        "median": 174.49026548672566,
+        "range": [
+          171.06991150442477,
+          175.08053097345132
+        ]
+      },
+      "candidate": {
+        "median": 173.79734513274337,
+        "range": [
+          172.1849557522124,
+          177.32035398230087
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": -0.6929203539822879,
+        "delta_percent": -0.39711118098734177,
+        "ranges_separated": false
+      },
+      "vs_parent": {
+        "delta": -2.0309734513274122,
+        "delta_percent": -1.1550889342983317,
+        "ranges_separated": false
+      }
+    },
+    "peak_rss_mib": {
+      "parent": {
+        "median": 61.9375,
+        "range": [
+          61.9375,
+          64.03125
+        ]
+      },
+      "checkpoint": {
+        "median": 61.984375,
+        "range": [
+          61.96875,
+          64.15625
+        ]
+      },
+      "candidate": {
+        "median": 62.015625,
+        "range": [
+          62.015625,
+          64.609375
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.03125,
+        "delta_percent": 0.050415931434333316,
+        "ranges_separated": false
+      },
+      "vs_parent": {
+        "delta": 0.078125,
+        "delta_percent": 0.12613521695257202,
+        "ranges_separated": false
+      }
+    },
+    "rss_after_mib": {
+      "parent": {
+        "median": 61.296875,
+        "range": [
+          61.296875,
+          63.390625
+        ]
+      },
+      "checkpoint": {
+        "median": 61.34375,
+        "range": [
+          61.328125,
+          63.515625
+        ]
+      },
+      "candidate": {
+        "median": 61.40625,
+        "range": [
+          61.40625,
+          64.0
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.0625,
+        "delta_percent": 0.10188487009679115,
+        "ranges_separated": false
+      },
+      "vs_parent": {
+        "delta": 0.109375,
+        "delta_percent": 0.17843487127198188,
+        "ranges_separated": false
+      }
+    },
+    "instructions": {
+      "parent": {
+        "median": 2331764366,
+        "range": [
+          2330850697,
+          2334509805
+        ]
+      },
+      "checkpoint": {
+        "median": 2322825886,
+        "range": [
+          2321477529,
+          2323326516
+        ]
+      },
+      "candidate": {
+        "median": 2319875120,
+        "range": [
+          2317808801,
+          2320333636
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": -2950766,
+        "delta_percent": -0.12703345600653115,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": -11889246,
+        "delta_percent": -0.5098819663496013,
+        "ranges_separated": true
+      }
+    },
+    "cycles": {
+      "parent": {
+        "median": 660258459,
+        "range": [
+          654122515,
+          664567936
+        ]
+      },
+      "checkpoint": {
+        "median": 655865206,
+        "range": [
+          643093095,
+          657126814
+        ]
+      },
+      "candidate": {
+        "median": 653428278,
+        "range": [
+          647591937,
+          663649435
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": -2436928,
+        "delta_percent": -0.37155927433052405,
+        "ranges_separated": false
+      },
+      "vs_parent": {
+        "delta": -6830181,
+        "delta_percent": -1.0344708056212903,
+        "ranges_separated": false
+      }
+    }
+  },
+  {
+    "fixture": "null",
+    "operation": "parse",
+    "iterations": 2000000,
+    "cpu_us": {
+      "parent": {
+        "median": 0.013759,
+        "range": [
+          0.0137555,
+          0.0137625
+        ]
+      },
+      "checkpoint": {
+        "median": 0.01376,
+        "range": [
+          0.013744,
+          0.0137625
+        ]
+      },
+      "candidate": {
+        "median": 0.015008,
+        "range": [
+          0.014999,
+          0.01508
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.0012480000000000008,
+        "delta_percent": 9.069767441860478,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 0.0012490000000000001,
+        "delta_percent": 9.077694599898244,
+        "ranges_separated": true
+      }
+    },
+    "peak_rss_mib": {
+      "parent": {
+        "median": 13.46875,
+        "range": [
+          13.46875,
+          13.484375
+        ]
+      },
+      "checkpoint": {
+        "median": 13.53125,
+        "range": [
+          13.53125,
+          13.546875
+        ]
+      },
+      "candidate": {
+        "median": 13.5,
+        "range": [
+          13.5,
+          13.515625
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": -0.03125,
+        "delta_percent": -0.2309468822170868,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 0.03125,
+        "delta_percent": 0.23201856148491462,
+        "ranges_separated": true
+      }
+    },
+    "rss_after_mib": {
+      "parent": {
+        "median": 12.015625,
+        "range": [
+          12.015625,
+          12.03125
+        ]
+      },
+      "checkpoint": {
+        "median": 12.09375,
+        "range": [
+          12.09375,
+          12.109375
+        ]
+      },
+      "candidate": {
+        "median": 11.9375,
+        "range": [
+          11.9375,
+          11.953125
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": -0.15625,
+        "delta_percent": -1.2919896640826822,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": -0.078125,
+        "delta_percent": -0.6501950585175553,
+        "ranges_separated": true
+      }
+    },
+    "instructions": {
+      "parent": {
+        "median": 570502855,
+        "range": [
+          570405610,
+          570630043
+        ]
+      },
+      "checkpoint": {
+        "median": 570453568,
+        "range": [
+          570341038,
+          570552058
+        ]
+      },
+      "candidate": {
+        "median": 570502995,
+        "range": [
+          570425831,
+          570584608
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 49427,
+        "delta_percent": 0.00866450887024861,
+        "ranges_separated": false
+      },
+      "vs_parent": {
+        "delta": 140,
+        "delta_percent": 2.4539754495123134e-05,
+        "ranges_separated": false
+      }
+    },
+    "cycles": {
+      "parent": {
+        "median": 107306293,
+        "range": [
+          107050879,
+          107365228
+        ]
+      },
+      "checkpoint": {
+        "median": 107185312,
+        "range": [
+          107012203,
+          107415151
+        ]
+      },
+      "candidate": {
+        "median": 115404983,
+        "range": [
+          115322748,
+          115688509
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 8219671,
+        "delta_percent": 7.668654264867936,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 8098690,
+        "delta_percent": 7.547264725657787,
+        "ranges_separated": true
+      }
+    }
+  },
+  {
+    "fixture": "null",
+    "operation": "stringify",
+    "iterations": 2000000,
+    "cpu_us": {
+      "parent": {
+        "median": 0.0065685,
+        "range": [
+          0.0065645,
+          0.0065695
+        ]
+      },
+      "checkpoint": {
+        "median": 0.0065665,
+        "range": [
+          0.006563,
+          0.0065695
+        ]
+      },
+      "candidate": {
+        "median": 0.006255,
+        "range": [
+          0.006254,
+          0.0062565
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": -0.00031150000000000014,
+        "delta_percent": -4.743775222721391,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": -0.00031349999999999954,
+        "delta_percent": -4.772779173327235,
+        "ranges_separated": true
+      }
+    },
+    "peak_rss_mib": {
+      "parent": {
+        "median": 13.609375,
+        "range": [
+          13.609375,
+          13.609375
+        ]
+      },
+      "checkpoint": {
+        "median": 13.625,
+        "range": [
+          13.625,
+          13.625
+        ]
+      },
+      "candidate": {
+        "median": 13.59375,
+        "range": [
+          13.59375,
+          13.59375
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": -0.03125,
+        "delta_percent": -0.2293577981651418,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": -0.015625,
+        "delta_percent": -0.11481056257175437,
+        "ranges_separated": true
+      }
+    },
+    "rss_after_mib": {
+      "parent": {
+        "median": 12.203125,
+        "range": [
+          12.203125,
+          12.203125
+        ]
+      },
+      "checkpoint": {
+        "median": 12.234375,
+        "range": [
+          12.234375,
+          12.234375
+        ]
+      },
+      "candidate": {
+        "median": 12.078125,
+        "range": [
+          12.078125,
+          12.078125
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": -0.15625,
+        "delta_percent": -1.2771392081736943,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": -0.125,
+        "delta_percent": -1.0243277848911658,
+        "ranges_separated": true
+      }
+    },
+    "instructions": {
+      "parent": {
+        "median": 312109797,
+        "range": [
+          312050165,
+          312140942
+        ]
+      },
+      "checkpoint": {
+        "median": 312062600,
+        "range": [
+          312009717,
+          312110339
+        ]
+      },
+      "candidate": {
+        "median": 295991130,
+        "range": [
+          295932354,
+          296075172
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": -16071470,
+        "delta_percent": -5.150078862382101,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": -16118667,
+        "delta_percent": -5.164421993456358,
+        "ranges_separated": true
+      }
+    },
+    "cycles": {
+      "parent": {
+        "median": 61022260,
+        "range": [
+          60867641,
+          61040222
+        ]
+      },
+      "checkpoint": {
+        "median": 61103576,
+        "range": [
+          60975229,
+          61196176
+        ]
+      },
+      "candidate": {
+        "median": 59113464,
+        "range": [
+          59021902,
+          59275087
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": -1990112,
+        "delta_percent": -3.2569484967622797,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": -1908796,
+        "delta_percent": -3.1280322951001804,
+        "ranges_separated": true
+      }
+    }
+  },
+  {
+    "fixture": "numbers_1m",
+    "operation": "parse",
+    "iterations": 92,
+    "cpu_us": {
+      "parent": {
+        "median": 1737.6739130434783,
+        "range": [
+          1734.554347826087,
+          1743.4347826086957
+        ]
+      },
+      "checkpoint": {
+        "median": 1736.25,
+        "range": [
+          1734.4239130434783,
+          1739.858695652174
+        ]
+      },
+      "candidate": {
+        "median": 1739.0,
+        "range": [
+          1733.9021739130435,
+          1743.8695652173913
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 2.75,
+        "delta_percent": 0.15838732901367614,
+        "ranges_separated": false
+      },
+      "vs_parent": {
+        "delta": 1.326086956521749,
+        "delta_percent": 0.07631391290205958,
+        "ranges_separated": false
+      }
+    },
+    "peak_rss_mib": {
+      "parent": {
+        "median": 64.875,
+        "range": [
+          64.875,
+          64.875
+        ]
+      },
+      "checkpoint": {
+        "median": 64.9375,
+        "range": [
+          64.921875,
+          64.9375
+        ]
+      },
+      "candidate": {
+        "median": 65.0,
+        "range": [
+          64.984375,
+          65.0
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.0625,
+        "delta_percent": 0.09624639076035724,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 0.125,
+        "delta_percent": 0.19267822736031004,
+        "ranges_separated": true
+      }
+    },
+    "rss_after_mib": {
+      "parent": {
+        "median": 64.25,
+        "range": [
+          64.25,
+          64.25
+        ]
+      },
+      "checkpoint": {
+        "median": 64.3125,
+        "range": [
+          64.296875,
+          64.3125
+        ]
+      },
+      "candidate": {
+        "median": 64.390625,
+        "range": [
+          64.375,
+          64.390625
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.078125,
+        "delta_percent": 0.12147716229349292,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 0.140625,
+        "delta_percent": 0.21887159533073852,
+        "ranges_separated": true
+      }
+    },
+    "instructions": {
+      "parent": {
+        "median": 2228327016,
+        "range": [
+          2228207442,
+          2228418889
+        ]
+      },
+      "checkpoint": {
+        "median": 2227741240,
+        "range": [
+          2227685529,
+          2228284292
+        ]
+      },
+      "candidate": {
+        "median": 2228531714,
+        "range": [
+          2228379519,
+          2228752669
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 790474,
+        "delta_percent": 0.0354832054013654,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 204698,
+        "delta_percent": 0.009186174135589198,
+        "ranges_separated": false
+      }
+    },
+    "cycles": {
+      "parent": {
+        "median": 544899740,
+        "range": [
+          543388865,
+          546689801
+        ]
+      },
+      "checkpoint": {
+        "median": 544409444,
+        "range": [
+          543713844,
+          545819170
+        ]
+      },
+      "candidate": {
+        "median": 545351959,
+        "range": [
+          544228068,
+          546512055
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 942515,
+        "delta_percent": 0.17312612967823604,
+        "ranges_separated": false
+      },
+      "vs_parent": {
+        "delta": 452219,
+        "delta_percent": 0.08299123064363645,
+        "ranges_separated": false
+      }
+    }
+  },
+  {
+    "fixture": "numbers_1m",
+    "operation": "stringify",
+    "iterations": 96,
+    "cpu_us": {
+      "parent": {
+        "median": 1604.59375,
+        "range": [
+          1602.1666666666667,
+          1626.3020833333333
+        ]
+      },
+      "checkpoint": {
+        "median": 1605.6145833333333,
+        "range": [
+          1603.125,
+          1610.5104166666667
+        ]
+      },
+      "candidate": {
+        "median": 1607.7395833333333,
+        "range": [
+          1606.6770833333333,
+          1625.7708333333333
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 2.125,
+        "delta_percent": 0.13234807543840432,
+        "ranges_separated": false
+      },
+      "vs_parent": {
+        "delta": 3.1458333333332575,
+        "delta_percent": 0.1960517005212825,
+        "ranges_separated": false
+      }
+    },
+    "peak_rss_mib": {
+      "parent": {
+        "median": 63.484375,
+        "range": [
+          63.484375,
+          63.484375
+        ]
+      },
+      "checkpoint": {
+        "median": 63.4375,
+        "range": [
+          63.421875,
+          63.4375
+        ]
+      },
+      "candidate": {
+        "median": 63.5,
+        "range": [
+          63.484375,
+          63.5
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.0625,
+        "delta_percent": 0.09852216748769127,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 0.015625,
+        "delta_percent": 0.024612355402409136,
+        "ranges_separated": false
+      }
+    },
+    "rss_after_mib": {
+      "parent": {
+        "median": 62.84375,
+        "range": [
+          62.84375,
+          62.84375
+        ]
+      },
+      "checkpoint": {
+        "median": 62.796875,
+        "range": [
+          62.78125,
+          62.796875
+        ]
+      },
+      "candidate": {
+        "median": 62.890625,
+        "range": [
+          62.875,
+          62.890625
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.09375,
+        "delta_percent": 0.149290868375207,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 0.046875,
+        "delta_percent": 0.07458975634013765,
+        "ranges_separated": true
+      }
+    },
+    "instructions": {
+      "parent": {
+        "median": 2999969935,
+        "range": [
+          2999660574,
+          3000084911
+        ]
+      },
+      "checkpoint": {
+        "median": 2999959046,
+        "range": [
+          2999781769,
+          3000188668
+        ]
+      },
+      "candidate": {
+        "median": 3000075108,
+        "range": [
+          2999952616,
+          3000339660
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 116062,
+        "delta_percent": 0.0038687861474206997,
+        "ranges_separated": false
+      },
+      "vs_parent": {
+        "delta": 105173,
+        "delta_percent": 0.00350580180064064,
+        "ranges_separated": false
+      }
+    },
+    "cycles": {
+      "parent": {
+        "median": 534512613,
+        "range": [
+          533741606,
+          538488301
+        ]
+      },
+      "checkpoint": {
+        "median": 534732379,
+        "range": [
+          533659429,
+          535781635
+        ]
+      },
+      "candidate": {
+        "median": 535157797,
+        "range": [
+          534427444,
+          537996436
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 425418,
+        "delta_percent": 0.0795571797607586,
+        "ranges_separated": false
+      },
+      "vs_parent": {
+        "delta": 645184,
+        "delta_percent": 0.12070510298696213,
+        "ranges_separated": false
+      }
+    }
+  },
+  {
+    "fixture": "object_1k",
+    "operation": "parse",
+    "iterations": 562411,
+    "cpu_us": {
+      "parent": {
+        "median": 0.5421960096797538,
+        "range": [
+          0.5414652273870888,
+          0.5427845472439194
+        ]
+      },
+      "checkpoint": {
+        "median": 0.5406135370751994,
+        "range": [
+          0.5401690222986393,
+          0.5457574620695541
+        ]
+      },
+      "candidate": {
+        "median": 0.5399058695509156,
+        "range": [
+          0.5388230315552149,
+          0.5435135514774783
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": -0.0007076675242838615,
+        "delta_percent": -0.13090081467668213,
+        "ranges_separated": false
+      },
+      "vs_parent": {
+        "delta": -0.002290140128838214,
+        "delta_percent": -0.422382328153037,
+        "ranges_separated": false
+      }
+    },
+    "peak_rss_mib": {
+      "parent": {
+        "median": 35.0,
+        "range": [
+          34.953125,
+          35.0
+        ]
+      },
+      "checkpoint": {
+        "median": 34.96875,
+        "range": [
+          34.90625,
+          34.96875
+        ]
+      },
+      "candidate": {
+        "median": 34.96875,
+        "range": [
+          34.953125,
+          34.96875
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.0,
+        "delta_percent": 0.0,
+        "ranges_separated": false
+      },
+      "vs_parent": {
+        "delta": -0.03125,
+        "delta_percent": -0.08928571428571397,
+        "ranges_separated": false
+      }
+    },
+    "rss_after_mib": {
+      "parent": {
+        "median": 34.359375,
+        "range": [
+          34.3125,
+          34.359375
+        ]
+      },
+      "checkpoint": {
+        "median": 34.3125,
+        "range": [
+          34.25,
+          34.3125
+        ]
+      },
+      "candidate": {
+        "median": 34.328125,
+        "range": [
+          34.3125,
+          34.328125
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.015625,
+        "delta_percent": 0.045537340619317135,
+        "ranges_separated": false
+      },
+      "vs_parent": {
+        "delta": -0.03125,
+        "delta_percent": -0.09095043201454711,
+        "ranges_separated": false
+      }
+    },
+    "instructions": {
+      "parent": {
+        "median": 4599786285,
+        "range": [
+          4599481737,
+          4599994314
+        ]
+      },
+      "checkpoint": {
+        "median": 4590222008,
+        "range": [
+          4590167532,
+          4592777337
+        ]
+      },
+      "candidate": {
+        "median": 4581358577,
+        "range": [
+          4581171260,
+          4583753498
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": -8863431,
+        "delta_percent": -0.1930937323848969,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": -18427708,
+        "delta_percent": -0.4006209605888267,
+        "ranges_separated": true
+      }
+    },
+    "cycles": {
+      "parent": {
+        "median": 1006992428,
+        "range": [
+          1004813721,
+          1007272303
+        ]
+      },
+      "checkpoint": {
+        "median": 1003193443,
+        "range": [
+          1002347771,
+          1012442986
+        ]
+      },
+      "candidate": {
+        "median": 1001899353,
+        "range": [
+          999905724,
+          1004885291
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": -1294090,
+        "delta_percent": -0.12899705525687422,
+        "ranges_separated": false
+      },
+      "vs_parent": {
+        "delta": -5093075,
+        "delta_percent": -0.5057709331653504,
+        "ranges_separated": false
+      }
+    }
+  },
+  {
+    "fixture": "object_1k",
+    "operation": "stringify",
+    "iterations": 649702,
+    "cpu_us": {
+      "parent": {
+        "median": 0.2373211102936423,
+        "range": [
+          0.2370594518717812,
+          0.23876484911544063
+        ]
+      },
+      "checkpoint": {
+        "median": 0.2369901893483474,
+        "range": [
+          0.23687783014366587,
+          0.23986535365444464
+        ]
+      },
+      "candidate": {
+        "median": 0.23761201289206435,
+        "range": [
+          0.23739037281707615,
+          0.238155338909223
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.0006218235437169539,
+        "delta_percent": 0.2623836646684863,
+        "ranges_separated": false
+      },
+      "vs_parent": {
+        "delta": 0.0002909025984220437,
+        "delta_percent": 0.12257763250058673,
+        "ranges_separated": false
+      }
+    },
+    "peak_rss_mib": {
+      "parent": {
+        "median": 35.9375,
+        "range": [
+          35.921875,
+          35.9375
+        ]
+      },
+      "checkpoint": {
+        "median": 35.890625,
+        "range": [
+          35.890625,
+          35.890625
+        ]
+      },
+      "candidate": {
+        "median": 35.921875,
+        "range": [
+          35.90625,
+          35.921875
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.03125,
+        "delta_percent": 0.08707009142359112,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": -0.015625,
+        "delta_percent": -0.04347826086956719,
+        "ranges_separated": false
+      }
+    },
+    "rss_after_mib": {
+      "parent": {
+        "median": 35.296875,
+        "range": [
+          35.28125,
+          35.296875
+        ]
+      },
+      "checkpoint": {
+        "median": 35.234375,
+        "range": [
+          35.234375,
+          35.234375
+        ]
+      },
+      "candidate": {
+        "median": 35.296875,
+        "range": [
+          35.28125,
+          35.296875
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.0625,
+        "delta_percent": 0.17738359201773246,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 0.0,
+        "delta_percent": 0.0,
+        "ranges_separated": false
+      }
+    },
+    "instructions": {
+      "parent": {
+        "median": 2491662374,
+        "range": [
+          2491593228,
+          2491937546
+        ]
+      },
+      "checkpoint": {
+        "median": 2504496294,
+        "range": [
+          2504366457,
+          2504652097
+        ]
+      },
+      "candidate": {
+        "median": 2514927231,
+        "range": [
+          2514818086,
+          2515066585
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 10430937,
+        "delta_percent": 0.41648841824957206,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 23264857,
+        "delta_percent": 0.933708244052811,
+        "ranges_separated": true
+      }
+    },
+    "cycles": {
+      "parent": {
+        "median": 521081224,
+        "range": [
+          520673959,
+          523787618
+        ]
+      },
+      "checkpoint": {
+        "median": 520714065,
+        "range": [
+          520282019,
+          522853609
+        ]
+      },
+      "candidate": {
+        "median": 522189222,
+        "range": [
+          521399239,
+          523016017
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 1475157,
+        "delta_percent": 0.28329501719912553,
+        "ranges_separated": false
+      },
+      "vs_parent": {
+        "delta": 1107998,
+        "delta_percent": 0.21263441263430494,
+        "ranges_separated": false
+      }
+    }
+  },
+  {
+    "fixture": "records_array_16k",
+    "operation": "parse",
+    "iterations": 6672,
+    "cpu_us": {
+      "parent": {
+        "median": 23.83273381294964,
+        "range": [
+          23.81654676258993,
+          23.863309352517987
+        ]
+      },
+      "checkpoint": {
+        "median": 23.795713429256594,
+        "range": [
+          23.77997601918465,
+          23.798561151079138
+        ]
+      },
+      "candidate": {
+        "median": 23.810851318944845,
+        "range": [
+          23.794814148681056,
+          23.868854916067146
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.01513788968825125,
+        "delta_percent": 0.06361603628004531,
+        "ranges_separated": false
+      },
+      "vs_parent": {
+        "delta": -0.021882494004795916,
+        "delta_percent": -0.09181696978843856,
+        "ranges_separated": false
+      }
+    },
+    "peak_rss_mib": {
+      "parent": {
+        "median": 64.828125,
+        "range": [
+          64.828125,
+          64.828125
+        ]
+      },
+      "checkpoint": {
+        "median": 64.875,
+        "range": [
+          64.875,
+          64.875
+        ]
+      },
+      "candidate": {
+        "median": 64.9375,
+        "range": [
+          64.9375,
+          64.9375
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.0625,
+        "delta_percent": 0.09633911368014392,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 0.109375,
+        "delta_percent": 0.16871535309712637,
+        "ranges_separated": true
+      }
+    },
+    "rss_after_mib": {
+      "parent": {
+        "median": 64.203125,
+        "range": [
+          64.203125,
+          64.203125
+        ]
+      },
+      "checkpoint": {
+        "median": 64.25,
+        "range": [
+          64.25,
+          64.25
+        ]
+      },
+      "candidate": {
+        "median": 64.328125,
+        "range": [
+          64.328125,
+          64.328125
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.078125,
+        "delta_percent": 0.12159533073929918,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 0.125,
+        "delta_percent": 0.19469457288878722,
+        "ranges_separated": true
+      }
+    },
+    "instructions": {
+      "parent": {
+        "median": 2233234504,
+        "range": [
+          2233191786,
+          2233375929
+        ]
+      },
+      "checkpoint": {
+        "median": 2233084069,
+        "range": [
+          2232924954,
+          2233129039
+        ]
+      },
+      "candidate": {
+        "median": 2232917460,
+        "range": [
+          2232820994,
+          2233051451
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": -166609,
+        "delta_percent": -0.007460937199499362,
+        "ranges_separated": false
+      },
+      "vs_parent": {
+        "delta": -317044,
+        "delta_percent": -0.014196628228346775,
+        "ranges_separated": true
+      }
+    },
+    "cycles": {
+      "parent": {
+        "median": 528606612,
+        "range": [
+          528499676,
+          529508395
+        ]
+      },
+      "checkpoint": {
+        "median": 527983644,
+        "range": [
+          527479757,
+          528581375
+        ]
+      },
+      "candidate": {
+        "median": 528345969,
+        "range": [
+          527923013,
+          529669768
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 362325,
+        "delta_percent": 0.0686242848841001,
+        "ranges_separated": false
+      },
+      "vs_parent": {
+        "delta": -260643,
+        "delta_percent": -0.049307555767008626,
+        "ranges_separated": false
+      }
+    }
+  },
+  {
+    "fixture": "records_array_16k",
+    "operation": "stringify",
+    "iterations": 9836,
+    "cpu_us": {
+      "parent": {
+        "median": 23.528975193167955,
+        "range": [
+          23.491866612444085,
+          23.61376575843839
+        ]
+      },
+      "checkpoint": {
+        "median": 23.394062627084182,
+        "range": [
+          23.353497356649044,
+          23.563033753558358
+        ]
+      },
+      "candidate": {
+        "median": 23.296563643757626,
+        "range": [
+          23.227023180154536,
+          23.35014233428223
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": -0.09749898332655604,
+        "delta_percent": -0.4167680700900456,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": -0.2324115494103296,
+        "delta_percent": -0.9877674123172753,
+        "ranges_separated": true
+      }
+    },
+    "peak_rss_mib": {
+      "parent": {
+        "median": 36.25,
+        "range": [
+          36.25,
+          36.265625
+        ]
+      },
+      "checkpoint": {
+        "median": 36.140625,
+        "range": [
+          36.109375,
+          36.140625
+        ]
+      },
+      "candidate": {
+        "median": 36.25,
+        "range": [
+          36.234375,
+          36.265625
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.109375,
+        "delta_percent": 0.3026372676178113,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 0.0,
+        "delta_percent": 0.0,
+        "ranges_separated": false
+      }
+    },
+    "rss_after_mib": {
+      "parent": {
+        "median": 35.640625,
+        "range": [
+          35.640625,
+          35.65625
+        ]
+      },
+      "checkpoint": {
+        "median": 35.5,
+        "range": [
+          35.484375,
+          35.5
+        ]
+      },
+      "candidate": {
+        "median": 35.65625,
+        "range": [
+          35.640625,
+          35.65625
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.15625,
+        "delta_percent": 0.4401408450704247,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 0.015625,
+        "delta_percent": 0.043840420868046515,
+        "ranges_separated": false
+      }
+    },
+    "instructions": {
+      "parent": {
+        "median": 3770882227,
+        "range": [
+          3770738233,
+          3771035074
+        ]
+      },
+      "checkpoint": {
+        "median": 3770215838,
+        "range": [
+          3770091137,
+          3770279467
+        ]
+      },
+      "candidate": {
+        "median": 3771091863,
+        "range": [
+          3770962751,
+          3771158879
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 876025,
+        "delta_percent": 0.023235407139576836,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 209636,
+        "delta_percent": 0.005559335650917596,
+        "ranges_separated": false
+      }
+    },
+    "cycles": {
+      "parent": {
+        "median": 763223421,
+        "range": [
+          761248775,
+          765540326
+        ]
+      },
+      "checkpoint": {
+        "median": 758244003,
+        "range": [
+          756665263,
+          764075425
+        ]
+      },
+      "candidate": {
+        "median": 754820326,
+        "range": [
+          753472224,
+          756150610
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": -3423677,
+        "delta_percent": -0.4515270792059267,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": -8403095,
+        "delta_percent": -1.1010006727767863,
+        "ranges_separated": true
+      }
+    }
+  },
+  {
+    "fixture": "records_array_1m",
+    "operation": "parse",
+    "iterations": 95,
+    "cpu_us": {
+      "parent": {
+        "median": 1551.4315789473685,
+        "range": [
+          1550.5684210526315,
+          1557.3473684210526
+        ]
+      },
+      "checkpoint": {
+        "median": 1553.9157894736843,
+        "range": [
+          1553.4736842105262,
+          1556.5263157894738
+        ]
+      },
+      "candidate": {
+        "median": 1553.5684210526315,
+        "range": [
+          1551.5263157894738,
+          1558.6947368421052
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": -0.3473684210528063,
+        "delta_percent": -0.02235439162185937,
+        "ranges_separated": false
+      },
+      "vs_parent": {
+        "delta": 2.1368421052629856,
+        "delta_percent": 0.13773357035267164,
+        "ranges_separated": false
+      }
+    },
+    "peak_rss_mib": {
+      "parent": {
+        "median": 62.046875,
+        "range": [
+          62.03125,
+          62.046875
+        ]
+      },
+      "checkpoint": {
+        "median": 62.09375,
+        "range": [
+          62.09375,
+          62.109375
+        ]
+      },
+      "candidate": {
+        "median": 62.15625,
+        "range": [
+          62.15625,
+          62.15625
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.0625,
+        "delta_percent": 0.10065425264218497,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 0.109375,
+        "delta_percent": 0.176278015613196,
+        "ranges_separated": true
+      }
+    },
+    "rss_after_mib": {
+      "parent": {
+        "median": 61.421875,
+        "range": [
+          61.40625,
+          61.421875
+        ]
+      },
+      "checkpoint": {
+        "median": 61.46875,
+        "range": [
+          61.46875,
+          61.484375
+        ]
+      },
+      "candidate": {
+        "median": 61.546875,
+        "range": [
+          61.546875,
+          61.546875
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.078125,
+        "delta_percent": 0.12709710218608006,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 0.125,
+        "delta_percent": 0.20351055711014254,
+        "ranges_separated": true
+      }
+    },
+    "instructions": {
+      "parent": {
+        "median": 2029931285,
+        "range": [
+          2029500240,
+          2029993495
+        ]
+      },
+      "checkpoint": {
+        "median": 2030025942,
+        "range": [
+          2029493773,
+          2030058953
+        ]
+      },
+      "candidate": {
+        "median": 2029701138,
+        "range": [
+          2029639647,
+          2030096647
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": -324804,
+        "delta_percent": -0.015999992575466138,
+        "ranges_separated": false
+      },
+      "vs_parent": {
+        "delta": -230147,
+        "delta_percent": -0.011337674417877253,
+        "ranges_separated": false
+      }
+    },
+    "cycles": {
+      "parent": {
+        "median": 503723101,
+        "range": [
+          503324988,
+          506009753
+        ]
+      },
+      "checkpoint": {
+        "median": 504291339,
+        "range": [
+          503849447,
+          505040505
+        ]
+      },
+      "candidate": {
+        "median": 503965394,
+        "range": [
+          503053722,
+          505793080
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": -325945,
+        "delta_percent": -0.06463426491645219,
+        "ranges_separated": false
+      },
+      "vs_parent": {
+        "delta": 242293,
+        "delta_percent": 0.04810043444880563,
+        "ranges_separated": false
+      }
+    }
+  },
+  {
+    "fixture": "records_array_1m",
+    "operation": "stringify",
+    "iterations": 177,
+    "cpu_us": {
+      "parent": {
+        "median": 1493.276836158192,
+        "range": [
+          1491.677966101695,
+          1502.9887005649719
+        ]
+      },
+      "checkpoint": {
+        "median": 1510.1129943502824,
+        "range": [
+          1505.0677966101696,
+          1513.1920903954801
+        ]
+      },
+      "candidate": {
+        "median": 1490.7118644067796,
+        "range": [
+          1489.3050847457628,
+          1508.5310734463276
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": -19.401129943502838,
+        "delta_percent": -1.2847469041116444,
+        "ranges_separated": false
+      },
+      "vs_parent": {
+        "delta": -2.564971751412486,
+        "delta_percent": -0.17176799969732537,
+        "ranges_separated": false
+      }
+    },
+    "peak_rss_mib": {
+      "parent": {
+        "median": 59.40625,
+        "range": [
+          59.390625,
+          59.40625
+        ]
+      },
+      "checkpoint": {
+        "median": 59.328125,
+        "range": [
+          59.328125,
+          59.328125
+        ]
+      },
+      "candidate": {
+        "median": 59.46875,
+        "range": [
+          59.46875,
+          59.46875
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.140625,
+        "delta_percent": 0.23702923360546801,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 0.0625,
+        "delta_percent": 0.10520778537612685,
+        "ranges_separated": true
+      }
+    },
+    "rss_after_mib": {
+      "parent": {
+        "median": 58.8125,
+        "range": [
+          58.796875,
+          58.8125
+        ]
+      },
+      "checkpoint": {
+        "median": 58.71875,
+        "range": [
+          58.71875,
+          58.71875
+        ]
+      },
+      "candidate": {
+        "median": 58.890625,
+        "range": [
+          58.890625,
+          58.890625
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.171875,
+        "delta_percent": 0.2927088877062278,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 0.078125,
+        "delta_percent": 0.1328374070138194,
+        "ranges_separated": true
+      }
+    },
+    "instructions": {
+      "parent": {
+        "median": 4432480506,
+        "range": [
+          4432215568,
+          4433086272
+        ]
+      },
+      "checkpoint": {
+        "median": 4431775078,
+        "range": [
+          4431274348,
+          4431926595
+        ]
+      },
+      "candidate": {
+        "median": 4432986919,
+        "range": [
+          4432703230,
+          4433213853
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 1211841,
+        "delta_percent": 0.027344370566462217,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 506413,
+        "delta_percent": 0.011425047426927293,
+        "ranges_separated": false
+      }
+    },
+    "cycles": {
+      "parent": {
+        "median": 886364922,
+        "range": [
+          885438534,
+          889504134
+        ]
+      },
+      "checkpoint": {
+        "median": 895830115,
+        "range": [
+          893033496,
+          897045536
+        ]
+      },
+      "candidate": {
+        "median": 884676645,
+        "range": [
+          883892285,
+          890565178
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": -11153470,
+        "delta_percent": -1.2450429845172195,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": -1688277,
+        "delta_percent": -0.19047200065076542,
+        "ranges_separated": false
+      }
+    }
+  },
+  {
+    "fixture": "records_array_20m",
+    "operation": "parse",
+    "iterations": 3,
+    "cpu_us": {
+      "parent": {
+        "median": 53282.333333333336,
+        "range": [
+          53136.333333333336,
+          53646.666666666664
+        ]
+      },
+      "checkpoint": {
+        "median": 52905.333333333336,
+        "range": [
+          52811.333333333336,
+          52994.333333333336
+        ]
+      },
+      "candidate": {
+        "median": 53278.0,
+        "range": [
+          53194.333333333336,
+          53574.666666666664
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 372.66666666666424,
+        "delta_percent": 0.7044028327326757,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": -4.333333333335759,
+        "delta_percent": -0.008132776967983979,
+        "ranges_separated": false
+      }
+    },
+    "peak_rss_mib": {
+      "parent": {
+        "median": 224.296875,
+        "range": [
+          224.296875,
+          224.3125
+        ]
+      },
+      "checkpoint": {
+        "median": 224.21875,
+        "range": [
+          224.21875,
+          224.234375
+        ]
+      },
+      "candidate": {
+        "median": 224.21875,
+        "range": [
+          224.21875,
+          224.234375
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.0,
+        "delta_percent": 0.0,
+        "ranges_separated": false
+      },
+      "vs_parent": {
+        "delta": -0.078125,
+        "delta_percent": -0.03483106931382318,
+        "ranges_separated": true
+      }
+    },
+    "rss_after_mib": {
+      "parent": {
+        "median": 223.625,
+        "range": [
+          223.625,
+          223.640625
+        ]
+      },
+      "checkpoint": {
+        "median": 223.53125,
+        "range": [
+          223.53125,
+          223.546875
+        ]
+      },
+      "candidate": {
+        "median": 223.578125,
+        "range": [
+          223.578125,
+          223.59375
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.046875,
+        "delta_percent": 0.020970222284355522,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": -0.046875,
+        "delta_percent": -0.02096143096702585,
+        "ranges_separated": true
+      }
+    },
+    "instructions": {
+      "parent": {
+        "median": 5724858100,
+        "range": [
+          5723276388,
+          5726431327
+        ]
+      },
+      "checkpoint": {
+        "median": 5707718640,
+        "range": [
+          5705225462,
+          5708545220
+        ]
+      },
+      "candidate": {
+        "median": 5728144025,
+        "range": [
+          5725607394,
+          5730200915
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 20425385,
+        "delta_percent": 0.3578554986375382,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 3285925,
+        "delta_percent": 0.05739749252475779,
+        "ranges_separated": false
+      }
+    },
+    "cycles": {
+      "parent": {
+        "median": 1145271279,
+        "range": [
+          1142417801,
+          1152032039
+        ]
+      },
+      "checkpoint": {
+        "median": 1141150970,
+        "range": [
+          1136640819,
+          1142825518
+        ]
+      },
+      "candidate": {
+        "median": 1146434741,
+        "range": [
+          1145482905,
+          1146955851
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 5283771,
+        "delta_percent": 0.4630212074393736,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 1163462,
+        "delta_percent": 0.1015883329420264,
+        "ranges_separated": false
+      }
+    }
+  },
+  {
+    "fixture": "records_array_20m",
+    "operation": "stringify",
+    "iterations": 8,
+    "cpu_us": {
+      "parent": {
+        "median": 81769.5,
+        "range": [
+          81662.625,
+          81961.125
+        ]
+      },
+      "checkpoint": {
+        "median": 82054.5,
+        "range": [
+          81920.0,
+          82433.875
+        ]
+      },
+      "candidate": {
+        "median": 81886.875,
+        "range": [
+          81850.625,
+          82200.0
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": -167.625,
+        "delta_percent": -0.204284956949341,
+        "ranges_separated": false
+      },
+      "vs_parent": {
+        "delta": 117.375,
+        "delta_percent": 0.14354374185974184,
+        "ranges_separated": false
+      }
+    },
+    "peak_rss_mib": {
+      "parent": {
+        "median": 158.796875,
+        "range": [
+          158.78125,
+          158.796875
+        ]
+      },
+      "checkpoint": {
+        "median": 158.703125,
+        "range": [
+          158.6875,
+          158.703125
+        ]
+      },
+      "candidate": {
+        "median": 158.8125,
+        "range": [
+          158.8125,
+          158.8125
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.109375,
+        "delta_percent": 0.0689179875947632,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 0.015625,
+        "delta_percent": 0.009839614287110443,
+        "ranges_separated": true
+      }
+    },
+    "rss_after_mib": {
+      "parent": {
+        "median": 156.90625,
+        "range": [
+          156.890625,
+          156.90625
+        ]
+      },
+      "checkpoint": {
+        "median": 156.828125,
+        "range": [
+          156.8125,
+          156.828125
+        ]
+      },
+      "candidate": {
+        "median": 156.953125,
+        "range": [
+          156.953125,
+          156.953125
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.125,
+        "delta_percent": 0.0797050911627073,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 0.046875,
+        "delta_percent": 0.02987452698666182,
+        "ranges_separated": true
+      }
+    },
+    "instructions": {
+      "parent": {
+        "median": 13880732272,
+        "range": [
+          13879554546,
+          13881314886
+        ]
+      },
+      "checkpoint": {
+        "median": 13888483240,
+        "range": [
+          13888327717,
+          13888975368
+        ]
+      },
+      "candidate": {
+        "median": 13893189307,
+        "range": [
+          13891673682,
+          13894755736
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 4706067,
+        "delta_percent": 0.03388467206013601,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 12457035,
+        "delta_percent": 0.08974335615656859,
+        "ranges_separated": true
+      }
+    },
+    "cycles": {
+      "parent": {
+        "median": 2953300442,
+        "range": [
+          2951701374,
+          2954771006
+        ]
+      },
+      "checkpoint": {
+        "median": 2961932536,
+        "range": [
+          2959963951,
+          2965146669
+        ]
+      },
+      "candidate": {
+        "median": 2960047466,
+        "range": [
+          2956444813,
+          2962345985
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": -1885070,
+        "delta_percent": -0.06364324565426571,
+        "ranges_separated": false
+      },
+      "vs_parent": {
+        "delta": 6747024,
+        "delta_percent": 0.22845708157721578,
+        "ranges_separated": true
+      }
+    }
+  },
+  {
+    "fixture": "records_array_8m",
+    "operation": "parse",
+    "iterations": 10,
+    "cpu_us": {
+      "parent": {
+        "median": 13396.2,
+        "range": [
+          13372.9,
+          13904.6
+        ]
+      },
+      "checkpoint": {
+        "median": 13387.9,
+        "range": [
+          13361.5,
+          13446.5
+        ]
+      },
+      "candidate": {
+        "median": 13404.7,
+        "range": [
+          13376.9,
+          13494.0
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 16.80000000000109,
+        "delta_percent": 0.12548644671681597,
+        "ranges_separated": false
+      },
+      "vs_parent": {
+        "delta": 8.5,
+        "delta_percent": 0.06345082933967294,
+        "ranges_separated": false
+      }
+    },
+    "peak_rss_mib": {
+      "parent": {
+        "median": 99.453125,
+        "range": [
+          99.4375,
+          99.484375
+        ]
+      },
+      "checkpoint": {
+        "median": 100.015625,
+        "range": [
+          100.0,
+          100.046875
+        ]
+      },
+      "candidate": {
+        "median": 100.09375,
+        "range": [
+          100.078125,
+          100.125
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.078125,
+        "delta_percent": 0.07811279487579537,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 0.640625,
+        "delta_percent": 0.6441476826394288,
+        "ranges_separated": true
+      }
+    },
+    "rss_after_mib": {
+      "parent": {
+        "median": 98.828125,
+        "range": [
+          98.8125,
+          98.859375
+        ]
+      },
+      "checkpoint": {
+        "median": 99.390625,
+        "range": [
+          99.375,
+          99.421875
+        ]
+      },
+      "candidate": {
+        "median": 99.484375,
+        "range": [
+          99.46875,
+          99.515625
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.09375,
+        "delta_percent": 0.09432479169941832,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 0.65625,
+        "delta_percent": 0.6640316205533514,
+        "ranges_separated": true
+      }
+    },
+    "instructions": {
+      "parent": {
+        "median": 2010844251,
+        "range": [
+          2010376749,
+          2012353459
+        ]
+      },
+      "checkpoint": {
+        "median": 2010933349,
+        "range": [
+          2010534529,
+          2011208551
+        ]
+      },
+      "candidate": {
+        "median": 2010955701,
+        "range": [
+          2010378095,
+          2011180423
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 22352,
+        "delta_percent": 0.0011115236619341218,
+        "ranges_separated": false
+      },
+      "vs_parent": {
+        "delta": 111450,
+        "delta_percent": 0.005542448150541723,
+        "ranges_separated": false
+      }
+    },
+    "cycles": {
+      "parent": {
+        "median": 542489155,
+        "range": [
+          540778995,
+          558579863
+        ]
+      },
+      "checkpoint": {
+        "median": 542111540,
+        "range": [
+          541112770,
+          543600901
+        ]
+      },
+      "candidate": {
+        "median": 542481291,
+        "range": [
+          541584053,
+          542669220
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 369751,
+        "delta_percent": 0.0682057054162799,
+        "ranges_separated": false
+      },
+      "vs_parent": {
+        "delta": -7864,
+        "delta_percent": -0.001449614232384988,
+        "ranges_separated": false
+      }
+    }
+  },
+  {
+    "fixture": "records_array_8m",
+    "operation": "stringify",
+    "iterations": 20,
+    "cpu_us": {
+      "parent": {
+        "median": 12956.3,
+        "range": [
+          12929.8,
+          13054.599999999999
+        ]
+      },
+      "checkpoint": {
+        "median": 13050.399999999998,
+        "range": [
+          13017.349999999999,
+          13064.4
+        ]
+      },
+      "candidate": {
+        "median": 12975.75,
+        "range": [
+          12953.35,
+          12980.099999999999
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": -74.64999999999782,
+        "delta_percent": -0.5720131183718391,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 19.450000000000728,
+        "delta_percent": 0.15012001883254467,
+        "ranges_separated": false
+      }
+    },
+    "peak_rss_mib": {
+      "parent": {
+        "median": 193.71875,
+        "range": [
+          193.71875,
+          193.734375
+        ]
+      },
+      "checkpoint": {
+        "median": 193.703125,
+        "range": [
+          193.703125,
+          193.71875
+        ]
+      },
+      "candidate": {
+        "median": 193.828125,
+        "range": [
+          193.828125,
+          193.84375
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.125,
+        "delta_percent": 0.06453174155036656,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 0.109375,
+        "delta_percent": 0.05646071947087439,
+        "ranges_separated": true
+      }
+    },
+    "rss_after_mib": {
+      "parent": {
+        "median": 193.15625,
+        "range": [
+          193.15625,
+          193.171875
+        ]
+      },
+      "checkpoint": {
+        "median": 193.125,
+        "range": [
+          193.125,
+          193.140625
+        ]
+      },
+      "candidate": {
+        "median": 193.28125,
+        "range": [
+          193.28125,
+          193.296875
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.15625,
+        "delta_percent": 0.08090614886731018,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 0.125,
+        "delta_percent": 0.06471444750040245,
+        "ranges_separated": true
+      }
+    },
+    "instructions": {
+      "parent": {
+        "median": 5253319655,
+        "range": [
+          5253024545,
+          5255195206
+        ]
+      },
+      "checkpoint": {
+        "median": 5253209040,
+        "range": [
+          5251987516,
+          5254325522
+        ]
+      },
+      "candidate": {
+        "median": 5255448294,
+        "range": [
+          5254958759,
+          5256608526
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 2239254,
+        "delta_percent": 0.04262640193735123,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 2128639,
+        "delta_percent": 0.040519883422174274,
+        "ranges_separated": false
+      }
+    },
+    "cycles": {
+      "parent": {
+        "median": 1060574724,
+        "range": [
+          1058173617,
+          1062533524
+        ]
+      },
+      "checkpoint": {
+        "median": 1066778047,
+        "range": [
+          1065104388,
+          1067536988
+        ]
+      },
+      "candidate": {
+        "median": 1061410072,
+        "range": [
+          1060265898,
+          1061978856
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": -5367975,
+        "delta_percent": -0.5031951130880397,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 835348,
+        "delta_percent": 0.0787637100052141,
+        "ranges_separated": false
+      }
+    }
+  },
+  {
+    "fixture": "records_object_1m",
+    "operation": "parse",
+    "iterations": 71,
+    "cpu_us": {
+      "parent": {
+        "median": 2834.042253521127,
+        "range": [
+          2831.549295774648,
+          2843.8028169014083
+        ]
+      },
+      "checkpoint": {
+        "median": 2823.3380281690143,
+        "range": [
+          2816.8028169014083,
+          2838.0845070422533
+        ]
+      },
+      "candidate": {
+        "median": 2834.7464788732395,
+        "range": [
+          2831.211267605634,
+          2840.1267605633802
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 11.408450704225288,
+        "delta_percent": 0.4040766847752897,
+        "ranges_separated": false
+      },
+      "vs_parent": {
+        "delta": 0.704225352112644,
+        "delta_percent": 0.02484879508193316,
+        "ranges_separated": false
+      }
+    },
+    "peak_rss_mib": {
+      "parent": {
+        "median": 60.234375,
+        "range": [
+          60.21875,
+          60.234375
+        ]
+      },
+      "checkpoint": {
+        "median": 58.625,
+        "range": [
+          58.625,
+          58.859375
+        ]
+      },
+      "candidate": {
+        "median": 58.640625,
+        "range": [
+          58.640625,
+          58.640625
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.015625,
+        "delta_percent": 0.02665245202557731,
+        "ranges_separated": false
+      },
+      "vs_parent": {
+        "delta": -1.59375,
+        "delta_percent": -2.6459143968871612,
+        "ranges_separated": true
+      }
+    },
+    "rss_after_mib": {
+      "parent": {
+        "median": 59.59375,
+        "range": [
+          59.578125,
+          59.59375
+        ]
+      },
+      "checkpoint": {
+        "median": 57.96875,
+        "range": [
+          57.96875,
+          58.203125
+        ]
+      },
+      "candidate": {
+        "median": 58.015625,
+        "range": [
+          58.015625,
+          58.015625
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.046875,
+        "delta_percent": 0.08086253369272711,
+        "ranges_separated": false
+      },
+      "vs_parent": {
+        "delta": -1.578125,
+        "delta_percent": -2.648138437336134,
+        "ranges_separated": true
+      }
+    },
+    "instructions": {
+      "parent": {
+        "median": 3411526734,
+        "range": [
+          3411148314,
+          3412769777
+        ]
+      },
+      "checkpoint": {
+        "median": 3405680935,
+        "range": [
+          3405622056,
+          3406425820
+        ]
+      },
+      "candidate": {
+        "median": 3423585307,
+        "range": [
+          3422551876,
+          3424016752
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 17904372,
+        "delta_percent": 0.5257207689656873,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 12058573,
+        "delta_percent": 0.3534655871173964,
+        "ranges_separated": true
+      }
+    },
+    "cycles": {
+      "parent": {
+        "median": 683858043,
+        "range": [
+          682888764,
+          684818315
+        ]
+      },
+      "checkpoint": {
+        "median": 681301674,
+        "range": [
+          679628871,
+          682112239
+        ]
+      },
+      "candidate": {
+        "median": 684452335,
+        "range": [
+          683475643,
+          685147122
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 3150661,
+        "delta_percent": 0.4624472711922234,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 594292,
+        "delta_percent": 0.08690283108945263,
+        "ranges_separated": false
+      }
+    }
+  },
+  {
+    "fixture": "records_object_1m",
+    "operation": "stringify",
+    "iterations": 174,
+    "cpu_us": {
+      "parent": {
+        "median": 1499.6206896551726,
+        "range": [
+          1496.5287356321842,
+          1514.287356321839
+        ]
+      },
+      "checkpoint": {
+        "median": 1510.9942528735633,
+        "range": [
+          1507.896551724138,
+          1514.632183908046
+        ]
+      },
+      "candidate": {
+        "median": 1490.7471264367816,
+        "range": [
+          1487.2011494252874,
+          1492.5747126436784
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": -20.247126436781627,
+        "delta_percent": -1.3399869918946594,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": -8.873563218390927,
+        "delta_percent": -0.5917205117002888,
+        "ranges_separated": true
+      }
+    },
+    "peak_rss_mib": {
+      "parent": {
+        "median": 59.4375,
+        "range": [
+          59.4375,
+          59.4375
+        ]
+      },
+      "checkpoint": {
+        "median": 59.34375,
+        "range": [
+          59.34375,
+          59.34375
+        ]
+      },
+      "candidate": {
+        "median": 59.453125,
+        "range": [
+          59.453125,
+          59.453125
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.109375,
+        "delta_percent": 0.18430753027909308,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 0.015625,
+        "delta_percent": 0.02628811777076745,
+        "ranges_separated": true
+      }
+    },
+    "rss_after_mib": {
+      "parent": {
+        "median": 58.84375,
+        "range": [
+          58.84375,
+          58.84375
+        ]
+      },
+      "checkpoint": {
+        "median": 58.734375,
+        "range": [
+          58.734375,
+          58.734375
+        ]
+      },
+      "candidate": {
+        "median": 58.875,
+        "range": [
+          58.875,
+          58.875
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.140625,
+        "delta_percent": 0.23942537909018569,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 0.03125,
+        "delta_percent": 0.05310674455656361,
+        "ranges_separated": true
+      }
+    },
+    "instructions": {
+      "parent": {
+        "median": 4358576110,
+        "range": [
+          4358212529,
+          4359013394
+        ]
+      },
+      "checkpoint": {
+        "median": 4357986557,
+        "range": [
+          4357614924,
+          4358276262
+        ]
+      },
+      "candidate": {
+        "median": 4358738168,
+        "range": [
+          4358655108,
+          4359494313
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 751611,
+        "delta_percent": 0.017246748932553402,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 162058,
+        "delta_percent": 0.0037181408769848545,
+        "ranges_separated": false
+      }
+    },
+    "cycles": {
+      "parent": {
+        "median": 875365947,
+        "range": [
+          874113005,
+          880772934
+        ]
+      },
+      "checkpoint": {
+        "median": 881883768,
+        "range": [
+          880039050,
+          884184692
+        ]
+      },
+      "candidate": {
+        "median": 870551140,
+        "range": [
+          868718091,
+          871241091
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": -11332628,
+        "delta_percent": -1.2850478046217972,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": -4814807,
+        "delta_percent": -0.5500336192538646,
+        "ranges_separated": true
+      }
+    }
+  },
+  {
+    "fixture": "records_object_20m",
+    "operation": "parse",
+    "iterations": 3,
+    "cpu_us": {
+      "parent": {
+        "median": 53345.333333333336,
+        "range": [
+          53196.666666666664,
+          53620.0
+        ]
+      },
+      "checkpoint": {
+        "median": 52983.333333333336,
+        "range": [
+          52969.666666666664,
+          52999.666666666664
+        ]
+      },
+      "candidate": {
+        "median": 53355.0,
+        "range": [
+          53234.666666666664,
+          53521.666666666664
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 371.66666666666424,
+        "delta_percent": 0.7014784523434958,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 9.666666666664241,
+        "delta_percent": 0.01812092279236399,
+        "ranges_separated": false
+      }
+    },
+    "peak_rss_mib": {
+      "parent": {
+        "median": 224.296875,
+        "range": [
+          224.296875,
+          224.296875
+        ]
+      },
+      "checkpoint": {
+        "median": 224.21875,
+        "range": [
+          224.21875,
+          224.21875
+        ]
+      },
+      "candidate": {
+        "median": 224.21875,
+        "range": [
+          224.21875,
+          224.234375
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.0,
+        "delta_percent": 0.0,
+        "ranges_separated": false
+      },
+      "vs_parent": {
+        "delta": -0.078125,
+        "delta_percent": -0.03483106931382318,
+        "ranges_separated": true
+      }
+    },
+    "rss_after_mib": {
+      "parent": {
+        "median": 223.625,
+        "range": [
+          223.625,
+          223.625
+        ]
+      },
+      "checkpoint": {
+        "median": 223.53125,
+        "range": [
+          223.53125,
+          223.53125
+        ]
+      },
+      "candidate": {
+        "median": 223.578125,
+        "range": [
+          223.578125,
+          223.59375
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.046875,
+        "delta_percent": 0.020970222284355522,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": -0.046875,
+        "delta_percent": -0.02096143096702585,
+        "ranges_separated": true
+      }
+    },
+    "instructions": {
+      "parent": {
+        "median": 5722956952,
+        "range": [
+          5721430249,
+          5724846866
+        ]
+      },
+      "checkpoint": {
+        "median": 5707524573,
+        "range": [
+          5707146435,
+          5708576870
+        ]
+      },
+      "candidate": {
+        "median": 5729092254,
+        "range": [
+          5727952587,
+          5730783364
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 21567681,
+        "delta_percent": 0.3778815268186131,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 6135302,
+        "delta_percent": 0.10720510483406276,
+        "ranges_separated": true
+      }
+    },
+    "cycles": {
+      "parent": {
+        "median": 1144831346,
+        "range": [
+          1143873840,
+          1149007261
+        ]
+      },
+      "checkpoint": {
+        "median": 1141600162,
+        "range": [
+          1140089840,
+          1142085128
+        ]
+      },
+      "candidate": {
+        "median": 1147281190,
+        "range": [
+          1146859669,
+          1147694258
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 5681028,
+        "delta_percent": 0.4976372804684326,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 2449844,
+        "delta_percent": 0.2139916948081133,
+        "ranges_separated": false
+      }
+    }
+  },
+  {
+    "fixture": "records_object_20m",
+    "operation": "stringify",
+    "iterations": 8,
+    "cpu_us": {
+      "parent": {
+        "median": 81943.0,
+        "range": [
+          81888.375,
+          82102.5
+        ]
+      },
+      "checkpoint": {
+        "median": 82289.25,
+        "range": [
+          82224.875,
+          82559.875
+        ]
+      },
+      "candidate": {
+        "median": 81931.5,
+        "range": [
+          81820.875,
+          81970.125
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": -357.75,
+        "delta_percent": -0.4347469444672347,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": -11.5,
+        "delta_percent": -0.014034145686636634,
+        "ranges_separated": false
+      }
+    },
+    "peak_rss_mib": {
+      "parent": {
+        "median": 158.84375,
+        "range": [
+          158.828125,
+          158.84375
+        ]
+      },
+      "checkpoint": {
+        "median": 158.734375,
+        "range": [
+          158.71875,
+          158.734375
+        ]
+      },
+      "candidate": {
+        "median": 158.828125,
+        "range": [
+          158.8125,
+          158.828125
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.09375,
+        "delta_percent": 0.05906093119401046,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": -0.015625,
+        "delta_percent": -0.009836710603972065,
+        "ranges_separated": false
+      }
+    },
+    "rss_after_mib": {
+      "parent": {
+        "median": 157.015625,
+        "range": [
+          157.0,
+          157.015625
+        ]
+      },
+      "checkpoint": {
+        "median": 156.921875,
+        "range": [
+          156.90625,
+          156.921875
+        ]
+      },
+      "candidate": {
+        "median": 157.03125,
+        "range": [
+          157.015625,
+          157.03125
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.109375,
+        "delta_percent": 0.06970028875834533,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 0.015625,
+        "delta_percent": 0.009951238929239992,
+        "ranges_separated": false
+      }
+    },
+    "instructions": {
+      "parent": {
+        "median": 13895825506,
+        "range": [
+          13895253639,
+          13898712168
+        ]
+      },
+      "checkpoint": {
+        "median": 13902296876,
+        "range": [
+          13901453636,
+          13903322175
+        ]
+      },
+      "candidate": {
+        "median": 13904346397,
+        "range": [
+          13903798235,
+          13905213398
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 2049521,
+        "delta_percent": 0.014742319332405884,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 8520891,
+        "delta_percent": 0.06131978986294584,
+        "ranges_separated": true
+      }
+    },
+    "cycles": {
+      "parent": {
+        "median": 2960461348,
+        "range": [
+          2957924444,
+          2962507505
+        ]
+      },
+      "checkpoint": {
+        "median": 2967069956,
+        "range": [
+          2966579843,
+          2970407000
+        ]
+      },
+      "candidate": {
+        "median": 2960209766,
+        "range": [
+          2957054141,
+          2960837550
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": -6860190,
+        "delta_percent": -0.23121092868495507,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": -251582,
+        "delta_percent": -0.008498067376216945,
+        "ranges_separated": false
+      }
+    }
+  },
+  {
+    "fixture": "records_object_8m",
+    "operation": "parse",
+    "iterations": 8,
+    "cpu_us": {
+      "parent": {
+        "median": 21626.625,
+        "range": [
+          21610.5,
+          21692.5
+        ]
+      },
+      "checkpoint": {
+        "median": 21486.25,
+        "range": [
+          21418.5,
+          21541.25
+        ]
+      },
+      "candidate": {
+        "median": 21576.5,
+        "range": [
+          21550.75,
+          21594.0
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 90.25,
+        "delta_percent": 0.4200360695793881,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": -50.125,
+        "delta_percent": -0.2317744909342112,
+        "ranges_separated": true
+      }
+    },
+    "peak_rss_mib": {
+      "parent": {
+        "median": 166.875,
+        "range": [
+          166.875,
+          166.9375
+        ]
+      },
+      "checkpoint": {
+        "median": 166.75,
+        "range": [
+          166.734375,
+          166.796875
+        ]
+      },
+      "candidate": {
+        "median": 166.75,
+        "range": [
+          166.734375,
+          166.8125
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.0,
+        "delta_percent": 0.0,
+        "ranges_separated": false
+      },
+      "vs_parent": {
+        "delta": -0.125,
+        "delta_percent": -0.07490636704119424,
+        "ranges_separated": true
+      }
+    },
+    "rss_after_mib": {
+      "parent": {
+        "median": 166.1875,
+        "range": [
+          166.1875,
+          166.25
+        ]
+      },
+      "checkpoint": {
+        "median": 166.046875,
+        "range": [
+          166.03125,
+          166.09375
+        ]
+      },
+      "candidate": {
+        "median": 166.09375,
+        "range": [
+          166.078125,
+          166.15625
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.046875,
+        "delta_percent": 0.02822998023901402,
+        "ranges_separated": false
+      },
+      "vs_parent": {
+        "delta": -0.09375,
+        "delta_percent": -0.0564121850319621,
+        "ranges_separated": true
+      }
+    },
+    "instructions": {
+      "parent": {
+        "median": 4002946731,
+        "range": [
+          4002712722,
+          4003719429
+        ]
+      },
+      "checkpoint": {
+        "median": 3983659461,
+        "range": [
+          3982779023,
+          3984055336
+        ]
+      },
+      "candidate": {
+        "median": 4001725297,
+        "range": [
+          4000292697,
+          4003341215
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 18065836,
+        "delta_percent": 0.4534985024916116,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": -1221434,
+        "delta_percent": -0.0305133713257022,
+        "ranges_separated": false
+      }
+    },
+    "cycles": {
+      "parent": {
+        "median": 818454795,
+        "range": [
+          817206025,
+          819941709
+        ]
+      },
+      "checkpoint": {
+        "median": 812907691,
+        "range": [
+          811336397,
+          815012834
+        ]
+      },
+      "candidate": {
+        "median": 816408795,
+        "range": [
+          815397963,
+          817287492
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 3501104,
+        "delta_percent": 0.43068899934912697,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": -2046000,
+        "delta_percent": -0.24998326266755244,
+        "ranges_separated": false
+      }
+    }
+  },
+  {
+    "fixture": "records_object_8m",
+    "operation": "stringify",
+    "iterations": 21,
+    "cpu_us": {
+      "parent": {
+        "median": 12887.190476190477,
+        "range": [
+          12845.42857142857,
+          12893.47619047619
+        ]
+      },
+      "checkpoint": {
+        "median": 12958.952380952382,
+        "range": [
+          12940.57142857143,
+          12988.285714285714
+        ]
+      },
+      "candidate": {
+        "median": 12867.095238095239,
+        "range": [
+          12843.904761904761,
+          12889.190476190477
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": -91.85714285714312,
+        "delta_percent": -0.7088315486995622,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": -20.09523809523853,
+        "delta_percent": -0.1559318777228036,
+        "ranges_separated": false
+      }
+    },
+    "peak_rss_mib": {
+      "parent": {
+        "median": 193.765625,
+        "range": [
+          193.765625,
+          193.828125
+        ]
+      },
+      "checkpoint": {
+        "median": 193.734375,
+        "range": [
+          193.734375,
+          193.734375
+        ]
+      },
+      "candidate": {
+        "median": 193.828125,
+        "range": [
+          193.828125,
+          193.84375
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.09375,
+        "delta_percent": 0.04839099927413937,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 0.0625,
+        "delta_percent": 0.03225546326908191,
+        "ranges_separated": false
+      }
+    },
+    "rss_after_mib": {
+      "parent": {
+        "median": 193.203125,
+        "range": [
+          193.203125,
+          193.265625
+        ]
+      },
+      "checkpoint": {
+        "median": 193.15625,
+        "range": [
+          193.15625,
+          193.15625
+        ]
+      },
+      "candidate": {
+        "median": 193.28125,
+        "range": [
+          193.28125,
+          193.296875
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.125,
+        "delta_percent": 0.06471444750040245,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 0.078125,
+        "delta_percent": 0.04043671653861658,
+        "ranges_separated": true
+      }
+    },
+    "instructions": {
+      "parent": {
+        "median": 5436620496,
+        "range": [
+          5435952389,
+          5436712706
+        ]
+      },
+      "checkpoint": {
+        "median": 5435621923,
+        "range": [
+          5435561740,
+          5436271946
+        ]
+      },
+      "candidate": {
+        "median": 5434503049,
+        "range": [
+          5433488503,
+          5434958380
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": -1118874,
+        "delta_percent": -0.020584102718135266,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": -2117447,
+        "delta_percent": -0.03894785375506693,
+        "ranges_separated": true
+      }
+    },
+    "cycles": {
+      "parent": {
+        "median": 1094397054,
+        "range": [
+          1093840168,
+          1097340729
+        ]
+      },
+      "checkpoint": {
+        "median": 1101595767,
+        "range": [
+          1100520222,
+          1104563148
+        ]
+      },
+      "candidate": {
+        "median": 1095135662,
+        "range": [
+          1092612890,
+          1095670217
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": -6460105,
+        "delta_percent": -0.586431538094323,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 738608,
+        "delta_percent": 0.06748994775711559,
+        "ranges_separated": false
+      }
+    }
+  },
+  {
+    "fixture": "small_record",
+    "operation": "parse",
+    "iterations": 574850,
+    "cpu_us": {
+      "parent": {
+        "median": 0.5427868139514656,
+        "range": [
+          0.5421205531877881,
+          0.5430599286770462
+        ]
+      },
+      "checkpoint": {
+        "median": 0.5404627294076716,
+        "range": [
+          0.5399982604157606,
+          0.5416734800382709
+        ]
+      },
+      "candidate": {
+        "median": 0.5439958249978255,
+        "range": [
+          0.5438201269896494,
+          0.5570914151517787
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.003533095590153912,
+        "delta_percent": 0.6537167870994676,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 0.0012090110463599535,
+        "delta_percent": 0.2227414180455911,
+        "ranges_separated": true
+      }
+    },
+    "peak_rss_mib": {
+      "parent": {
+        "median": 34.53125,
+        "range": [
+          34.53125,
+          34.546875
+        ]
+      },
+      "checkpoint": {
+        "median": 34.5,
+        "range": [
+          34.484375,
+          34.5
+        ]
+      },
+      "candidate": {
+        "median": 34.515625,
+        "range": [
+          34.5,
+          34.515625
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.015625,
+        "delta_percent": 0.045289855072461194,
+        "ranges_separated": false
+      },
+      "vs_parent": {
+        "delta": -0.015625,
+        "delta_percent": -0.04524886877828038,
+        "ranges_separated": true
+      }
+    },
+    "rss_after_mib": {
+      "parent": {
+        "median": 33.890625,
+        "range": [
+          33.890625,
+          33.90625
+        ]
+      },
+      "checkpoint": {
+        "median": 33.84375,
+        "range": [
+          33.828125,
+          33.84375
+        ]
+      },
+      "candidate": {
+        "median": 33.890625,
+        "range": [
+          33.875,
+          33.890625
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.046875,
+        "delta_percent": 0.13850415512466352,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 0.0,
+        "delta_percent": 0.0,
+        "ranges_separated": false
+      }
+    },
+    "instructions": {
+      "parent": {
+        "median": 4602818613,
+        "range": [
+          4602733831,
+          4603016343
+        ]
+      },
+      "checkpoint": {
+        "median": 4593033962,
+        "range": [
+          4592854928,
+          4593204551
+        ]
+      },
+      "candidate": {
+        "median": 4593320079,
+        "range": [
+          4593249315,
+          4593505096
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 286117,
+        "delta_percent": 0.006229368264354385,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": -9498534,
+        "delta_percent": -0.2063634220382471,
+        "ranges_separated": true
+      }
+    },
+    "cycles": {
+      "parent": {
+        "median": 1028369292,
+        "range": [
+          1027331549,
+          1029237104
+        ]
+      },
+      "checkpoint": {
+        "median": 1024442993,
+        "range": [
+          1023778954,
+          1026751312
+        ]
+      },
+      "candidate": {
+        "median": 1031283209,
+        "range": [
+          1030581485,
+          1055661386
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 6840216,
+        "delta_percent": 0.6677009893902408,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 2913917,
+        "delta_percent": 0.2833531711485593,
+        "ranges_separated": true
+      }
+    }
+  },
+  {
+    "fixture": "small_record",
+    "operation": "stringify",
+    "iterations": 1228249,
+    "cpu_us": {
+      "parent": {
+        "median": 0.2838789203166459,
+        "range": [
+          0.28330737497038466,
+          0.2845424665519777
+        ]
+      },
+      "checkpoint": {
+        "median": 0.2842900747324036,
+        "range": [
+          0.28418179050013476,
+          0.2852328803035867
+        ]
+      },
+      "candidate": {
+        "median": 0.2793594784119507,
+        "range": [
+          0.27921455665748557,
+          0.2804227807228013
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": -0.004930596320452896,
+        "delta_percent": -1.734354013271111,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": -0.0045194419046952206,
+        "delta_percent": -1.592031525149562,
+        "ranges_separated": true
+      }
+    },
+    "peak_rss_mib": {
+      "parent": {
+        "median": 35.96875,
+        "range": [
+          35.953125,
+          36.0
+        ]
+      },
+      "checkpoint": {
+        "median": 35.90625,
+        "range": [
+          35.90625,
+          35.90625
+        ]
+      },
+      "candidate": {
+        "median": 35.96875,
+        "range": [
+          35.953125,
+          35.96875
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.0625,
+        "delta_percent": 0.17406440382941035,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 0.0,
+        "delta_percent": 0.0,
+        "ranges_separated": false
+      }
+    },
+    "rss_after_mib": {
+      "parent": {
+        "median": 35.328125,
+        "range": [
+          35.3125,
+          35.359375
+        ]
+      },
+      "checkpoint": {
+        "median": 35.25,
+        "range": [
+          35.25,
+          35.25
+        ]
+      },
+      "candidate": {
+        "median": 35.34375,
+        "range": [
+          35.328125,
+          35.34375
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.09375,
+        "delta_percent": 0.26595744680850686,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 0.015625,
+        "delta_percent": 0.04422821760283746,
+        "ranges_separated": false
+      }
+    },
+    "instructions": {
+      "parent": {
+        "median": 6272500658,
+        "range": [
+          6272434649,
+          6272698483
+        ]
+      },
+      "checkpoint": {
+        "median": 6295264927,
+        "range": [
+          6295171535,
+          6295310552
+        ]
+      },
+      "candidate": {
+        "median": 6151198749,
+        "range": [
+          6151112989,
+          6152496827
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": -144066178,
+        "delta_percent": -2.288484752756137,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": -121301909,
+        "delta_percent": -1.933868414111528,
+        "ranges_separated": true
+      }
+    },
+    "cycles": {
+      "parent": {
+        "median": 1142198731,
+        "range": [
+          1140252434,
+          1144758655
+        ]
+      },
+      "checkpoint": {
+        "median": 1144078359,
+        "range": [
+          1143612545,
+          1145082652
+        ]
+      },
+      "candidate": {
+        "median": 1124922692,
+        "range": [
+          1123501177,
+          1125626574
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": -19155667,
+        "delta_percent": -1.6743317316781803,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": -17276039,
+        "delta_percent": -1.512524793726111,
+        "ranges_separated": true
+      }
+    }
+  },
+  {
+    "fixture": "string_a",
+    "operation": "parse",
+    "iterations": 2000000,
+    "cpu_us": {
+      "parent": {
+        "median": 0.01626,
+        "range": [
+          0.016257,
+          0.0166705
+        ]
+      },
+      "checkpoint": {
+        "median": 0.0162615,
+        "range": [
+          0.016251,
+          0.016263000000000003
+        ]
+      },
+      "candidate": {
+        "median": 0.0175165,
+        "range": [
+          0.0174955,
+          0.017547
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.0012549999999999992,
+        "delta_percent": 7.717615226147645,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 0.0012565000000000007,
+        "delta_percent": 7.727552275522753,
+        "ranges_separated": true
+      }
+    },
+    "peak_rss_mib": {
+      "parent": {
+        "median": 13.46875,
+        "range": [
+          13.46875,
+          13.46875
+        ]
+      },
+      "checkpoint": {
+        "median": 13.53125,
+        "range": [
+          13.53125,
+          13.546875
+        ]
+      },
+      "candidate": {
+        "median": 13.5,
+        "range": [
+          13.5,
+          13.515625
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": -0.03125,
+        "delta_percent": -0.2309468822170868,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 0.03125,
+        "delta_percent": 0.23201856148491462,
+        "ranges_separated": true
+      }
+    },
+    "rss_after_mib": {
+      "parent": {
+        "median": 12.015625,
+        "range": [
+          12.015625,
+          12.015625
+        ]
+      },
+      "checkpoint": {
+        "median": 12.09375,
+        "range": [
+          12.09375,
+          12.109375
+        ]
+      },
+      "candidate": {
+        "median": 11.9375,
+        "range": [
+          11.9375,
+          11.953125
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": -0.15625,
+        "delta_percent": -1.2919896640826822,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": -0.078125,
+        "delta_percent": -0.6501950585175553,
+        "ranges_separated": true
+      }
+    },
+    "instructions": {
+      "parent": {
+        "median": 688717098,
+        "range": [
+          688674816,
+          688751922
+        ]
+      },
+      "checkpoint": {
+        "median": 688786597,
+        "range": [
+          688719970,
+          688826949
+        ]
+      },
+      "candidate": {
+        "median": 688801757,
+        "range": [
+          688767601,
+          688834754
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 15160,
+        "delta_percent": 0.0022009719797155824,
+        "ranges_separated": false
+      },
+      "vs_parent": {
+        "delta": 84659,
+        "delta_percent": 0.012292275049641255,
+        "ranges_separated": true
+      }
+    },
+    "cycles": {
+      "parent": {
+        "median": 123246955,
+        "range": [
+          123162651,
+          123755341
+        ]
+      },
+      "checkpoint": {
+        "median": 123431108,
+        "range": [
+          123167765,
+          123664448
+        ]
+      },
+      "candidate": {
+        "median": 131286902,
+        "range": [
+          131045077,
+          131541039
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 7855794,
+        "delta_percent": 6.364517119946789,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 8039947,
+        "delta_percent": 6.523444737437933,
+        "ranges_separated": true
+      }
+    }
+  },
+  {
+    "fixture": "string_a",
+    "operation": "stringify",
+    "iterations": 2000000,
+    "cpu_us": {
+      "parent": {
+        "median": 0.009693,
+        "range": [
+          0.009689,
+          0.0099025
+        ]
+      },
+      "checkpoint": {
+        "median": 0.0096985,
+        "range": [
+          0.0096845,
+          0.0097125
+        ]
+      },
+      "candidate": {
+        "median": 0.0097,
+        "range": [
+          0.009686,
+          0.0097645
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 1.4999999999997654e-06,
+        "delta_percent": 0.015466309223066688,
+        "ranges_separated": false
+      },
+      "vs_parent": {
+        "delta": 7.000000000000062e-06,
+        "delta_percent": 0.07221706386051352,
+        "ranges_separated": false
+      }
+    },
+    "peak_rss_mib": {
+      "parent": {
+        "median": 13.609375,
+        "range": [
+          13.609375,
+          13.609375
+        ]
+      },
+      "checkpoint": {
+        "median": 13.625,
+        "range": [
+          13.625,
+          13.640625
+        ]
+      },
+      "candidate": {
+        "median": 13.609375,
+        "range": [
+          13.59375,
+          13.609375
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": -0.015625,
+        "delta_percent": -0.11467889908256534,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 0.0,
+        "delta_percent": 0.0,
+        "ranges_separated": false
+      }
+    },
+    "rss_after_mib": {
+      "parent": {
+        "median": 12.203125,
+        "range": [
+          12.203125,
+          12.203125
+        ]
+      },
+      "checkpoint": {
+        "median": 12.234375,
+        "range": [
+          12.234375,
+          12.25
+        ]
+      },
+      "candidate": {
+        "median": 12.09375,
+        "range": [
+          12.078125,
+          12.09375
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": -0.140625,
+        "delta_percent": -1.1494252873563204,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": -0.109375,
+        "delta_percent": -0.8962868117797673,
+        "ranges_separated": true
+      }
+    },
+    "instructions": {
+      "parent": {
+        "median": 456524762,
+        "range": [
+          456383835,
+          456530304
+        ]
+      },
+      "checkpoint": {
+        "median": 456508855,
+        "range": [
+          456333716,
+          456565402
+        ]
+      },
+      "candidate": {
+        "median": 442378911,
+        "range": [
+          442335738,
+          442578373
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": -14129944,
+        "delta_percent": -3.095217944896167,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": -14145851,
+        "delta_percent": -3.0985944635353646,
+        "ranges_separated": true
+      }
+    },
+    "cycles": {
+      "parent": {
+        "median": 81218304,
+        "range": [
+          81163553,
+          81760983
+        ]
+      },
+      "checkpoint": {
+        "median": 81271177,
+        "range": [
+          81137924,
+          81446243
+        ]
+      },
+      "candidate": {
+        "median": 81221302,
+        "range": [
+          81042445,
+          82125179
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": -49875,
+        "delta_percent": -0.061368620267432394,
+        "ranges_separated": false
+      },
+      "vs_parent": {
+        "delta": 2998,
+        "delta_percent": 0.003691286141616068,
+        "ranges_separated": false
+      }
+    }
+  },
+  {
+    "fixture": "tiny_object",
+    "operation": "parse",
+    "iterations": 2000000,
+    "cpu_us": {
+      "parent": {
+        "median": 0.1221135,
+        "range": [
+          0.121504,
+          0.122318
+        ]
+      },
+      "checkpoint": {
+        "median": 0.121712,
+        "range": [
+          0.1211245,
+          0.1218575
+        ]
+      },
+      "candidate": {
+        "median": 0.1220375,
+        "range": [
+          0.1219645,
+          0.122117
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.00032549999999999246,
+        "delta_percent": 0.26743459971079186,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": -7.600000000000662e-05,
+        "delta_percent": -0.062237180983271134,
+        "ranges_separated": false
+      }
+    },
+    "peak_rss_mib": {
+      "parent": {
+        "median": 34.796875,
+        "range": [
+          34.78125,
+          34.796875
+        ]
+      },
+      "checkpoint": {
+        "median": 34.75,
+        "range": [
+          34.734375,
+          34.75
+        ]
+      },
+      "candidate": {
+        "median": 34.765625,
+        "range": [
+          34.75,
+          34.765625
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.015625,
+        "delta_percent": 0.04496402877698369,
+        "ranges_separated": false
+      },
+      "vs_parent": {
+        "delta": -0.03125,
+        "delta_percent": -0.08980691513246208,
+        "ranges_separated": true
+      }
+    },
+    "rss_after_mib": {
+      "parent": {
+        "median": 34.15625,
+        "range": [
+          34.140625,
+          34.15625
+        ]
+      },
+      "checkpoint": {
+        "median": 34.09375,
+        "range": [
+          34.078125,
+          34.09375
+        ]
+      },
+      "candidate": {
+        "median": 34.125,
+        "range": [
+          34.109375,
+          34.125
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.03125,
+        "delta_percent": 0.09165902841430373,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": -0.03125,
+        "delta_percent": -0.09149130832570851,
+        "ranges_separated": true
+      }
+    },
+    "instructions": {
+      "parent": {
+        "median": 4690218855,
+        "range": [
+          4690180716,
+          4690448211
+        ]
+      },
+      "checkpoint": {
+        "median": 4684856840,
+        "range": [
+          4684772243,
+          4685137883
+        ]
+      },
+      "candidate": {
+        "median": 4695113050,
+        "range": [
+          4694931234,
+          4695173072
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 10256210,
+        "delta_percent": 0.2189225914531967,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 4894195,
+        "delta_percent": 0.10434896859412568,
+        "ranges_separated": true
+      }
+    },
+    "cycles": {
+      "parent": {
+        "median": 804737354,
+        "range": [
+          801072723,
+          806315373
+        ]
+      },
+      "checkpoint": {
+        "median": 800122608,
+        "range": [
+          798440077,
+          802738844
+        ]
+      },
+      "candidate": {
+        "median": 804391548,
+        "range": [
+          803929443,
+          804636647
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 4268940,
+        "delta_percent": 0.5335357303139832,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": -345806,
+        "delta_percent": -0.04297128725057053,
+        "ranges_separated": false
+      }
+    }
+  },
+  {
+    "fixture": "tiny_object",
+    "operation": "stringify",
+    "iterations": 2000000,
+    "cpu_us": {
+      "parent": {
+        "median": 0.0926505,
+        "range": [
+          0.092613,
+          0.0928305
+        ]
+      },
+      "checkpoint": {
+        "median": 0.0932655,
+        "range": [
+          0.0932185,
+          0.093652
+        ]
+      },
+      "candidate": {
+        "median": 0.09478,
+        "range": [
+          0.0946355,
+          0.095042
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.001514500000000002,
+        "delta_percent": 1.623858768783748,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 0.0021295000000000064,
+        "delta_percent": 2.298422566526903,
+        "ranges_separated": true
+      }
+    },
+    "peak_rss_mib": {
+      "parent": {
+        "median": 34.828125,
+        "range": [
+          34.8125,
+          34.875
+        ]
+      },
+      "checkpoint": {
+        "median": 34.765625,
+        "range": [
+          34.75,
+          34.765625
+        ]
+      },
+      "candidate": {
+        "median": 34.8125,
+        "range": [
+          34.796875,
+          34.8125
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.046875,
+        "delta_percent": 0.1348314606741674,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": -0.015625,
+        "delta_percent": -0.04486316733961493,
+        "ranges_separated": false
+      }
+    },
+    "rss_after_mib": {
+      "parent": {
+        "median": 34.1875,
+        "range": [
+          34.171875,
+          34.234375
+        ]
+      },
+      "checkpoint": {
+        "median": 34.109375,
+        "range": [
+          34.09375,
+          34.109375
+        ]
+      },
+      "candidate": {
+        "median": 34.1875,
+        "range": [
+          34.171875,
+          34.1875
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.078125,
+        "delta_percent": 0.22904260192395665,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 0.0,
+        "delta_percent": 0.0,
+        "ranges_separated": false
+      }
+    },
+    "instructions": {
+      "parent": {
+        "median": 3339934251,
+        "range": [
+          3339772592,
+          3340156166
+        ]
+      },
+      "checkpoint": {
+        "median": 3376603626,
+        "range": [
+          3376391293,
+          3376733910
+        ]
+      },
+      "candidate": {
+        "median": 3406997973,
+        "range": [
+          3406833153,
+          3407381112
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 30394347,
+        "delta_percent": 0.9001455416905335,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 67063722,
+        "delta_percent": 2.0079353951330203,
+        "ranges_separated": true
+      }
+    },
+    "cycles": {
+      "parent": {
+        "median": 615861788,
+        "range": [
+          615658195,
+          616754246
+        ]
+      },
+      "checkpoint": {
+        "median": 619592832,
+        "range": [
+          619342082,
+          622153358
+        ]
+      },
+      "candidate": {
+        "median": 629153856,
+        "range": [
+          628387634,
+          629422055
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 9561024,
+        "delta_percent": 1.5431140429978285,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 13292068,
+        "delta_percent": 2.1582875020003778,
+        "ranges_separated": true
+      }
+    }
+  },
+  {
+    "fixture": "unicode_1m",
+    "operation": "parse",
+    "iterations": 1520,
+    "cpu_us": {
+      "parent": {
+        "median": 257.9671052631579,
+        "range": [
+          256.125,
+          259.3539473684211
+        ]
+      },
+      "checkpoint": {
+        "median": 258.26973684210526,
+        "range": [
+          256.38684210526316,
+          260.7440789473684
+        ]
+      },
+      "candidate": {
+        "median": 257.0282894736842,
+        "range": [
+          256.94934210526316,
+          260.9638157894737
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": -1.2414473684210634,
+        "delta_percent": -0.4806786050895462,
+        "ranges_separated": false
+      },
+      "vs_parent": {
+        "delta": -0.9388157894737219,
+        "delta_percent": -0.3639284894545014,
+        "ranges_separated": false
+      }
+    },
+    "peak_rss_mib": {
+      "parent": {
+        "median": 55.4375,
+        "range": [
+          55.421875,
+          56.3125
+        ]
+      },
+      "checkpoint": {
+        "median": 55.484375,
+        "range": [
+          55.46875,
+          55.484375
+        ]
+      },
+      "candidate": {
+        "median": 55.515625,
+        "range": [
+          55.515625,
+          55.515625
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.03125,
+        "delta_percent": 0.05632216277104973,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 0.078125,
+        "delta_percent": 0.14092446448703555,
+        "ranges_separated": false
+      }
+    },
+    "rss_after_mib": {
+      "parent": {
+        "median": 54.8125,
+        "range": [
+          54.796875,
+          55.6875
+        ]
+      },
+      "checkpoint": {
+        "median": 54.84375,
+        "range": [
+          54.828125,
+          54.84375
+        ]
+      },
+      "candidate": {
+        "median": 54.90625,
+        "range": [
+          54.90625,
+          54.90625
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.0625,
+        "delta_percent": 0.11396011396012096,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 0.09375,
+        "delta_percent": 0.17103762827821445,
+        "ranges_separated": false
+      }
+    },
+    "instructions": {
+      "parent": {
+        "median": 5816521106,
+        "range": [
+          5815552204,
+          5819264492
+        ]
+      },
+      "checkpoint": {
+        "median": 5808674968,
+        "range": [
+          5805674612,
+          5809655831
+        ]
+      },
+      "candidate": {
+        "median": 5803920766,
+        "range": [
+          5802240438,
+          5804186091
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": -4754202,
+        "delta_percent": -0.08184658336352069,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": -12600340,
+        "delta_percent": -0.21663017756442526,
+        "ranges_separated": true
+      }
+    },
+    "cycles": {
+      "parent": {
+        "median": 1278017800,
+        "range": [
+          1269741359,
+          1285062944
+        ]
+      },
+      "checkpoint": {
+        "median": 1279812319,
+        "range": [
+          1270554751,
+          1289462919
+        ]
+      },
+      "candidate": {
+        "median": 1273698804,
+        "range": [
+          1273567265,
+          1289976597
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": -6113515,
+        "delta_percent": -0.47768840080996133,
+        "ranges_separated": false
+      },
+      "vs_parent": {
+        "delta": -4318996,
+        "delta_percent": -0.3379449018628744,
+        "ranges_separated": false
+      }
+    }
+  },
+  {
+    "fixture": "unicode_1m",
+    "operation": "stringify",
+    "iterations": 1408,
+    "cpu_us": {
+      "parent": {
+        "median": 140.51207386363637,
+        "range": [
+          138.42826704545453,
+          140.6512784090909
+        ]
+      },
+      "checkpoint": {
+        "median": 138.38423295454547,
+        "range": [
+          137.44105113636363,
+          139.29616477272728
+        ]
+      },
+      "candidate": {
+        "median": 138.25639204545453,
+        "range": [
+          135.6931818181818,
+          138.89772727272728
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": -0.12784090909093493,
+        "delta_percent": -0.09238112345713034,
+        "ranges_separated": false
+      },
+      "vs_parent": {
+        "delta": -2.2556818181818414,
+        "delta_percent": -1.605329532301203,
+        "ranges_separated": false
+      }
+    },
+    "peak_rss_mib": {
+      "parent": {
+        "median": 57.171875,
+        "range": [
+          57.171875,
+          58.015625
+        ]
+      },
+      "checkpoint": {
+        "median": 57.21875,
+        "range": [
+          57.21875,
+          57.21875
+        ]
+      },
+      "candidate": {
+        "median": 57.25,
+        "range": [
+          57.25,
+          57.25
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.03125,
+        "delta_percent": 0.05461496450027692,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 0.078125,
+        "delta_percent": 0.1366493577480199,
+        "ranges_separated": false
+      }
+    },
+    "rss_after_mib": {
+      "parent": {
+        "median": 56.546875,
+        "range": [
+          56.546875,
+          57.390625
+        ]
+      },
+      "checkpoint": {
+        "median": 56.578125,
+        "range": [
+          56.578125,
+          56.578125
+        ]
+      },
+      "candidate": {
+        "median": 56.65625,
+        "range": [
+          56.65625,
+          56.65625
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.078125,
+        "delta_percent": 0.13808340237504435,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 0.109375,
+        "delta_percent": 0.19342359767891004,
+        "ranges_separated": false
+      }
+    },
+    "instructions": {
+      "parent": {
+        "median": 2384865769,
+        "range": [
+          2381027689,
+          2385863431
+        ]
+      },
+      "checkpoint": {
+        "median": 2371147289,
+        "range": [
+          2370743395,
+          2372555816
+        ]
+      },
+      "candidate": {
+        "median": 2367324018,
+        "range": [
+          2366145276,
+          2368509668
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": -3823271,
+        "delta_percent": -0.16124139642175184,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": -17541751,
+        "delta_percent": -0.7355445840188879,
+        "ranges_separated": true
+      }
+    },
+    "cycles": {
+      "parent": {
+        "median": 656250180,
+        "range": [
+          647048148,
+          656826110
+        ]
+      },
+      "checkpoint": {
+        "median": 646996814,
+        "range": [
+          642831192,
+          651120429
+        ]
+      },
+      "candidate": {
+        "median": 646452742,
+        "range": [
+          634715023,
+          649361866
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": -544072,
+        "delta_percent": -0.08409191331814059,
+        "ranges_separated": false
+      },
+      "vs_parent": {
+        "delta": -9797438,
+        "delta_percent": -1.4929425238405236,
+        "ranges_separated": false
+      }
+    }
+  },
+  {
+    "fixture": "wide_1m",
+    "operation": "parse",
+    "iterations": 36,
+    "cpu_us": {
+      "parent": {
+        "median": 20361.416666666668,
+        "range": [
+          20343.305555555555,
+          20463.38888888889
+        ]
+      },
+      "checkpoint": {
+        "median": 15218.972222222223,
+        "range": [
+          15181.333333333334,
+          15238.833333333334
+        ]
+      },
+      "candidate": {
+        "median": 15234.166666666666,
+        "range": [
+          15208.916666666666,
+          15306.333333333334
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 15.194444444443434,
+        "delta_percent": 0.09983883420363604,
+        "ranges_separated": false
+      },
+      "vs_parent": {
+        "delta": -5127.250000000002,
+        "delta_percent": -25.181204647679234,
+        "ranges_separated": true
+      }
+    },
+    "peak_rss_mib": {
+      "parent": {
+        "median": 176.671875,
+        "range": [
+          176.671875,
+          176.671875
+        ]
+      },
+      "checkpoint": {
+        "median": 168.453125,
+        "range": [
+          167.4375,
+          168.453125
+        ]
+      },
+      "candidate": {
+        "median": 169.640625,
+        "range": [
+          167.921875,
+          169.640625
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 1.1875,
+        "delta_percent": 0.7049438827567034,
+        "ranges_separated": false
+      },
+      "vs_parent": {
+        "delta": -7.03125,
+        "delta_percent": -3.9798355001326557,
+        "ranges_separated": true
+      }
+    },
+    "rss_after_mib": {
+      "parent": {
+        "median": 176.0625,
+        "range": [
+          176.0625,
+          176.0625
+        ]
+      },
+      "checkpoint": {
+        "median": 167.84375,
+        "range": [
+          166.828125,
+          167.84375
+        ]
+      },
+      "candidate": {
+        "median": 169.046875,
+        "range": [
+          167.328125,
+          169.046875
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 1.203125,
+        "delta_percent": 0.7168125116365776,
+        "ranges_separated": false
+      },
+      "vs_parent": {
+        "delta": -7.015625,
+        "delta_percent": -3.9847355342563007,
+        "ranges_separated": true
+      }
+    },
+    "instructions": {
+      "parent": {
+        "median": 12182581183,
+        "range": [
+          12174741317,
+          12188290212
+        ]
+      },
+      "checkpoint": {
+        "median": 8462786076,
+        "range": [
+          8461375939,
+          8463780449
+        ]
+      },
+      "candidate": {
+        "median": 8475027011,
+        "range": [
+          8471920636,
+          8476638149
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 12240935,
+        "delta_percent": 0.14464426833042943,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": -3707554172,
+        "delta_percent": -30.433240019558838,
+        "ranges_separated": true
+      }
+    },
+    "cycles": {
+      "parent": {
+        "median": 2447820099,
+        "range": [
+          2446117951,
+          2453183129
+        ]
+      },
+      "checkpoint": {
+        "median": 1854410835,
+        "range": [
+          1849040452,
+          1857237329
+        ]
+      },
+      "candidate": {
+        "median": 1856787163,
+        "range": [
+          1853734370,
+          1865586400
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 2376328,
+        "delta_percent": 0.12814463522048403,
+        "ranges_separated": false
+      },
+      "vs_parent": {
+        "delta": -591032936,
+        "delta_percent": -24.145276699110884,
+        "ranges_separated": true
+      }
+    }
+  },
+  {
+    "fixture": "wide_1m",
+    "operation": "stringify",
+    "iterations": 215,
+    "cpu_us": {
+      "parent": {
+        "median": 1692.7813953488371,
+        "range": [
+          1689.660465116279,
+          1707.9395348837209
+        ]
+      },
+      "checkpoint": {
+        "median": 1709.5953488372093,
+        "range": [
+          1703.3813953488373,
+          1717.320930232558
+        ]
+      },
+      "candidate": {
+        "median": 1691.093023255814,
+        "range": [
+          1688.4744186046512,
+          1693.874418604651
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": -18.502325581395326,
+        "delta_percent": -1.0822634487149152,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": -1.6883720930231902,
+        "delta_percent": -0.09973952322859247,
+        "ranges_separated": false
+      }
+    },
+    "peak_rss_mib": {
+      "parent": {
+        "median": 70.984375,
+        "range": [
+          70.984375,
+          70.984375
+        ]
+      },
+      "checkpoint": {
+        "median": 70.9375,
+        "range": [
+          70.9375,
+          70.9375
+        ]
+      },
+      "candidate": {
+        "median": 70.984375,
+        "range": [
+          70.984375,
+          70.984375
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.046875,
+        "delta_percent": 0.06607929515418665,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 0.0,
+        "delta_percent": 0.0,
+        "ranges_separated": false
+      }
+    },
+    "rss_after_mib": {
+      "parent": {
+        "median": 70.34375,
+        "range": [
+          70.34375,
+          70.34375
+        ]
+      },
+      "checkpoint": {
+        "median": 70.296875,
+        "range": [
+          70.296875,
+          70.296875
+        ]
+      },
+      "candidate": {
+        "median": 70.359375,
+        "range": [
+          70.359375,
+          70.359375
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 0.0625,
+        "delta_percent": 0.08890864636585949,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": 0.015625,
+        "delta_percent": 0.02221235006663047,
+        "ranges_separated": true
+      }
+    },
+    "instructions": {
+      "parent": {
+        "median": 6480377332,
+        "range": [
+          6480075772,
+          6481175032
+        ]
+      },
+      "checkpoint": {
+        "median": 6480310922,
+        "range": [
+          6479847149,
+          6480794288
+        ]
+      },
+      "candidate": {
+        "median": 6481016782,
+        "range": [
+          6480756060,
+          6481526563
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": 705860,
+        "delta_percent": 0.010892378598748031,
+        "ranges_separated": false
+      },
+      "vs_parent": {
+        "delta": 639450,
+        "delta_percent": 0.009867480969694142,
+        "ranges_separated": false
+      }
+    },
+    "cycles": {
+      "parent": {
+        "median": 1241464362,
+        "range": [
+          1239110199,
+          1248720025
+        ]
+      },
+      "checkpoint": {
+        "median": 1252961761,
+        "range": [
+          1249861366,
+          1255690822
+        ]
+      },
+      "candidate": {
+        "median": 1240187289,
+        "range": [
+          1238634554,
+          1242554751
+        ]
+      },
+      "vs_checkpoint": {
+        "delta": -12774472,
+        "delta_percent": -1.0195420480992645,
+        "ranges_separated": true
+      },
+      "vs_parent": {
+        "delta": -1277073,
+        "delta_percent": -0.10286827710001001,
+        "ranges_separated": false
+      }
+    }
+  }
+]
