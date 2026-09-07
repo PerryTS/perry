@@ -7,6 +7,29 @@
         let blk = ctx.block();
         let handle = unbox_to_i64(blk, &recv_val);
         if let Some(sig) = perry_ui_instance_method_lookup(method) {
+            let padding_args: Vec<Expr>;
+            let args: &[Expr] = if sig.method == "setPadding"
+                && args.len() == 1
+                && sig.args.len() == 4
+            {
+                padding_args = vec![
+                    args[0].clone(),
+                    args[0].clone(),
+                    args[0].clone(),
+                    args[0].clone(),
+                ];
+                &padding_args
+            } else {
+                args
+            };
+            if sig.method == "setPadding" && args.len() != sig.args.len() {
+                bail!(
+                    "perry/ui: '.{}(...)' takes {} argument(s), but it was called with {}.",
+                    method,
+                    sig.args.len(),
+                    args.len()
+                );
+            }
             // Build args: handle is the first arg, then the call args.
             let mut llvm_args: Vec<(crate::types::LlvmType, String)> =
                 Vec::with_capacity(1 + args.len());

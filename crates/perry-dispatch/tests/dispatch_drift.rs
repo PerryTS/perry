@@ -66,6 +66,10 @@ fn widget_compat_methods_use_native_abi_symbols() {
         perry_ui_instance_lookup("removeAllChildren").map(|row| row.runtime),
         Some("perry_ui_widget_clear_children")
     );
+    let padding = perry_ui_instance_lookup("setPadding")
+        .expect("Widget.setPadding must use the native padding ABI");
+    assert_eq!(padding.runtime, "perry_ui_widget_set_edge_insets");
+    assert_eq!(padding.args.len(), 4);
 }
 
 #[test]

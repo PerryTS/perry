@@ -390,7 +390,20 @@ pub fn lower_perry_ui_table_call(
     // call still matches the 3-arg ABI without changing the runtime
     // signatures across 8 platform crates.
     let synthesised_args: Vec<Expr>;
-    let args: &[Expr] = if sig.method == "appSetTimer" && args.len() == 2 && sig.args.len() == 3 {
+    let args: &[Expr] = if sig.method == "setPadding" && args.len() == 2 && sig.args.len() == 5 {
+        // Canonical padding accepts both `(widget, value)` and
+        // `(widget, top, left, bottom, right)`. The native runtime keeps one
+        // fixed four-edge ABI, so expand the uniform form before the normal
+        // arity and coercion machinery runs.
+        synthesised_args = vec![
+            args[0].clone(),
+            args[1].clone(),
+            args[1].clone(),
+            args[1].clone(),
+            args[1].clone(),
+        ];
+        &synthesised_args[..]
+    } else if sig.method == "appSetTimer" && args.len() == 2 && sig.args.len() == 3 {
         synthesised_args = std::iter::once(Expr::Integer(0))
             .chain(args.iter().cloned())
             .collect();

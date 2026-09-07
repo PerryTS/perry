@@ -2982,7 +2982,11 @@ function perry_ui_set_foreground(h, r, g, b, a) {
 function perry_ui_set_font_size(h, size) { const el = uiGet(h); if (el) el.style.fontSize = size + "px"; }
 function perry_ui_set_font_weight(h, weight) { const el = uiGet(h); if (el) el.style.fontWeight = weight; }
 function perry_ui_set_font_family(h, family) { const el = uiGet(h); if (el) el.style.fontFamily = family; }
-function perry_ui_set_padding(h, value) { const el = uiGet(h); if (el) el.style.padding = value + "px"; }
+function perry_ui_set_padding(h, top, left, bottom, right) {
+  const el = uiGet(h); if (!el) return;
+  if (left === undefined) left = bottom = right = top;
+  el.style.padding = `${top}px ${right}px ${bottom}px ${left}px`;
+}
 function perry_ui_set_frame(h, width, height) {
   const el = uiGet(h); if (!el) return;
   if (width > 0) el.style.width = width + "px";
@@ -3100,8 +3104,8 @@ function perry_ui_widget_set_height(h, height) { const el = uiGet(h); if (el) el
 function perry_ui_widget_set_hugging(h) { const el = uiGet(h); if (el) el.style.flex = "0 0 auto"; }
 function perry_ui_widget_match_parent_width(h) { const el = uiGet(h); if (el) el.style.width = "100%"; }
 function perry_ui_widget_match_parent_height(h) { const el = uiGet(h); if (el) el.style.height = "100%"; }
-function perry_ui_widget_set_edge_insets(h, top, right, bottom, left) {
-  const el = uiGet(h); if (el) el.style.padding = `${top}px ${right}px ${bottom}px ${left}px`;
+function perry_ui_widget_set_edge_insets(h, top, left, bottom, right) {
+  perry_ui_set_padding(h, top, left, bottom, right);
 }
 function perry_ui_stack_set_detaches_hidden(h) { /* no-op in web */ }
 function perry_ui_stack_set_distribution(h) { /* no-op in web */ }

@@ -40,7 +40,7 @@ function wrapWidget(h) {
         setFontSize(size) { perry_ui_set_font_size(h, size); },
         setFontWeight(weight) { perry_ui_set_font_weight(h, weight); },
         setFontFamily(family) { perry_ui_set_font_family(h, family); },
-        setPadding(val) { perry_ui_set_padding(h, val); },
+        setPadding(top, left, bottom, right) { perry_ui_set_padding(h, top, left, bottom, right); },
         setFrame(w, ht) { perry_ui_set_frame(h, w, ht); },
         setCornerRadius(r) { perry_ui_set_corner_radius(h, r); },
         setBorder(w, r, g, b, a) { perry_ui_set_border(h, w, r, g, b, a); },
@@ -441,9 +441,11 @@ function perry_ui_set_font_family(h, family) {
     if (el) el.style.fontFamily = family;
 }
 
-function perry_ui_set_padding(h, value) {
+function perry_ui_set_padding(h, top, left, bottom, right) {
     const el = getHandle(h);
-    if (el) el.style.padding = value + "px";
+    if (!el) return;
+    if (left === undefined) left = bottom = right = top;
+    el.style.padding = top + "px " + right + "px " + bottom + "px " + left + "px";
 }
 
 function perry_ui_set_frame(h, width, height) {
@@ -2848,9 +2850,8 @@ function perry_ui_widget_set_overlay_frame(overlay_h, x, y, width, height) {
     el.style.height = height + "px";
 }
 
-function perry_ui_widget_set_edge_insets(h, top, right, bottom, left) {
-    var el = getHandle(h);
-    if (el) el.style.padding = top + "px " + right + "px " + bottom + "px " + left + "px";
+function perry_ui_widget_set_edge_insets(h, top, left, bottom, right) {
+    perry_ui_set_padding(h, top, left, bottom, right);
 }
 
 function perry_ui_stack_set_detaches_hidden(h, detaches) {
