@@ -113,6 +113,7 @@ pub(crate) const MAX_ITERATIVE_NESTING_DEPTH: usize = 500_000;
 /// `"[[[[[[…"` string is not mistaken for deep nesting. This runs before any
 /// syntax validation, so it must not assume the input is well-formed — an
 /// unbalanced `]` clamps at zero rather than underflowing.
+#[cfg(not(all(target_arch = "aarch64", target_endian = "little")))]
 pub(crate) fn nesting_depth_exceeds(bytes: &[u8], limit: usize) -> bool {
     // A flat scalar array cannot exceed depth one. Slice byte searches skip
     // the byte-by-byte state machine for large numeric/boolean/null arrays.
@@ -1174,3 +1175,14 @@ mod depth_string;
 #[cfg(all(test, target_arch = "aarch64"))]
 #[path = "parser_depth_string_tests.rs"]
 mod depth_string_tests;
+
+#[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+#[path = "parser_depth_blocks.rs"]
+mod depth_blocks;
+
+#[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+pub(crate) use depth_blocks::nesting_depth_exceeds;
+
+#[cfg(all(test, target_arch = "aarch64", target_endian = "little"))]
+#[path = "parser_depth_blocks_tests.rs"]
+mod depth_blocks_tests;
