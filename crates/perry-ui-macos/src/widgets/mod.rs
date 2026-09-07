@@ -16,6 +16,7 @@ pub mod form;
 pub mod hstack;
 pub mod image;
 pub mod image_gallery;
+pub mod inset_cell;
 pub mod keyboard;
 pub mod lazyvstack;
 pub mod map_view;
@@ -843,21 +844,58 @@ pub fn set_shadow(
 /// Set edge insets (internal padding) on an NSStackView widget.
 /// No-op for non-stack widgets.
 pub fn set_edge_insets(handle: i64, top: f64, left: f64, bottom: f64, right: f64) {
-    if let Some(view) = get_widget(handle) {
-        let is_stack = if let Some(cls) = AnyClass::get(c"NSStackView") {
-            view.isKindOfClass(cls)
-        } else {
-            false
-        };
-        if is_stack {
-            let stack: &NSStackView = unsafe { &*(Retained::as_ptr(&view) as *const NSStackView) };
-            stack.setEdgeInsets(objc2_foundation::NSEdgeInsets {
-                top,
-                left,
-                bottom,
-                right,
-            });
+    let Some(view) = get_widget(handle) else {
+        return;
+    };
+
+    // A stack insets its arranged children.
+    if AnyClass::get(c"NSStackView").is_some_and(|cls| view.isKindOfClass(cls)) {
+        let stack: &NSStackView = unsafe { &*(Retained::as_ptr(&view) as *const NSStackView) };
+        stack.setEdgeInsets(objc2_foundation::NSEdgeInsets {
+            top,
+            left,
+            bottom,
+            right,
+        });
+        return;
+    }
+
+    // TextArea registers its outer NSScrollView; the editable NSTextView is the
+    // document view, and its textContainerInset is the text inset. The property
+    // is a single symmetric NSSize, so left drives the horizontal inset and top
+    // the vertical one — right/bottom mirror them and cannot differ.
+    if AnyClass::get(c"NSScrollView").is_some_and(|cls| view.isKindOfClass(cls)) {
+        unsafe {
+            let doc: *mut AnyObject = msg_send![&*view, documentView];
+            if !doc.is_null()
+                && AnyClass::get(c"NSTextView").is_some_and(|cls| {
+                    let is_tv: bool = msg_send![doc, isKindOfClass: cls];
+                    is_tv
+                })
+            {
+                let size = objc2_core_foundation::CGSize::new(left, top);
+                let _: () = msg_send![doc, setTextContainerInset: size];
+            }
         }
+        return;
+    }
+
+    // TextField / SecureField carry a PerryInsetTextFieldCell (installed at
+    // create time); write the inset onto it and redraw.
+    if AnyClass::get(c"NSTextField").is_some_and(|cls| view.isKindOfClass(cls)) {
+        unsafe {
+            let cell: *mut AnyObject = msg_send![&*view, cell];
+            let cell_cls = <inset_cell::PerryInsetTextFieldCell as objc2::ClassType>::class();
+            if !cell.is_null() {
+                let is_ours: bool = msg_send![cell, isKindOfClass: cell_cls];
+                if is_ours {
+                    let inset = &*(cell as *const inset_cell::PerryInsetTextFieldCell);
+                    inset.set_insets(top, left, bottom, right);
+                    let _: () = msg_send![&*view, setNeedsDisplay: true];
+                }
+            }
+        }
+        return;
     }
 }
 

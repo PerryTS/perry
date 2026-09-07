@@ -190,6 +190,17 @@ pub fn create(placeholder_ptr: *const u8, on_change: f64) -> i64 {
 
     unsafe {
         let text_field = NSTextField::textFieldWithString(&NSString::from_str(""), mtm);
+
+        // Carry a text-inset cell so `set_edge_insets` can pad the text later.
+        // Install it before the placeholder/editable/bezel setters below so
+        // they configure this cell, and re-assert single-line editing that
+        // swapping the default cell would otherwise drop.
+        let inset_cell = super::inset_cell::PerryInsetTextFieldCell::new("", mtm);
+        let _: () = msg_send![&*inset_cell, setUsesSingleLineMode: true];
+        let _: () = msg_send![&*inset_cell, setScrollable: true];
+        let _: () = msg_send![&*inset_cell, setWraps: false];
+        let _: () = msg_send![&*text_field, setCell: &*inset_cell];
+
         text_field.setPlaceholderString(Some(&ns_placeholder));
 
         // Make it editable
