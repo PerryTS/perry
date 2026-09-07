@@ -1,3 +1,4 @@
+pub mod geometry;
 pub mod key_dispatch;
 pub mod keys;
 pub mod state;

@@ -19,16 +19,13 @@ pub struct InsetFieldIvars {
     insets: Cell<(f64, f64, f64, f64)>,
 }
 
-/// Shrink a rect by the insets, clamped so it never inverts. UIKit is
-/// origin-top-left, so the top inset moves the origin down.
+/// Adapt the field's CGRect to the shared inset math.
 fn shrink(insets: (f64, f64, f64, f64), r: CGRect) -> CGRect {
-    let (top, left, bottom, right) = insets;
-    let w = (r.size.width - left - right).max(0.0);
-    let h = (r.size.height - top - bottom).max(0.0);
-    CGRect::new(
-        CGPoint::new(r.origin.x + left, r.origin.y + top),
-        CGSize::new(w, h),
-    )
+    let (x, y, w, h) = perry_ui::geometry::shrink_rect_uikit(
+        insets,
+        (r.origin.x, r.origin.y, r.size.width, r.size.height),
+    );
+    CGRect::new(CGPoint::new(x, y), CGSize::new(w, h))
 }
 
 define_class!(
