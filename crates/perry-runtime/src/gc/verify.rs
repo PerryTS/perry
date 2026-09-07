@@ -1,5 +1,16 @@
 use super::*;
 
+/// Snapshot malloc-backed headers before invoking a verifier callback.
+///
+/// Slot validation can exact-check a candidate malloc pointer, which lazily
+/// builds `MallocState.set` under a mutable borrow. Keeping even a shared
+/// `MALLOC_STATE` borrow across that validation would make the diagnostic
+/// verifier re-enter the same `RefCell` and panic instead of checking the heap.
+#[inline]
+fn malloc_headers_for_verification() -> Vec<*mut GcHeader> {
+    MALLOC_STATE.with(|state| state.borrow().objects.clone())
+}
+
 /// Follow forwarding pointers for a word that may hold a heap reference,
 /// NaN-boxed or bare, preserving the form it was stored in.
 ///
@@ -795,14 +806,11 @@ pub(super) fn verify_old_to_young_edges_collect() -> OldYoungEdgeVerifyStats {
     crate::arena::old_arena_walk_objects(|hp| unsafe {
         verify_old_young_parent_slots_covered(&snapshot, &mut stats, hp as *mut GcHeader);
     });
-    MALLOC_STATE.with(|s| {
-        let s = s.borrow();
-        for &header in s.objects.iter() {
-            unsafe {
-                verify_old_young_parent_slots_covered(&snapshot, &mut stats, header);
-            }
+    for header in malloc_headers_for_verification() {
+        unsafe {
+            verify_old_young_parent_slots_covered(&snapshot, &mut stats, header);
         }
-    });
+    }
     stats
 }
 
@@ -1025,14 +1033,11 @@ pub(super) fn verify_array_pointer_slots_enumerated() -> ArraySlotEnumerationSta
         }
         verify_array_pointer_slots_enumerated_for(&mut stats, header);
     });
-    MALLOC_STATE.with(|s| {
-        let s = s.borrow();
-        for &header in s.objects.iter() {
-            unsafe {
-                verify_array_pointer_slots_enumerated_for(&mut stats, header);
-            }
+    for header in malloc_headers_for_verification() {
+        unsafe {
+            verify_array_pointer_slots_enumerated_for(&mut stats, header);
         }
-    });
+    }
     stats
 }
 
@@ -1068,14 +1073,11 @@ pub(super) fn verify_marked_heap_no_unmarked_children() -> MarkInvariantVerifySt
     crate::arena::arena_walk_objects(|hp| unsafe {
         verify_marked_object_child_marks(&mut stats, hp as *mut GcHeader);
     });
-    MALLOC_STATE.with(|s| {
-        let s = s.borrow();
-        for &header in s.objects.iter() {
-            unsafe {
-                verify_marked_object_child_marks(&mut stats, header);
-            }
+    for header in malloc_headers_for_verification() {
+        unsafe {
+            verify_marked_object_child_marks(&mut stats, header);
         }
-    });
+    }
     if stats.missing_edges != 0 {
         panic_mark_invariant_verifier_failed(stats);
     }
@@ -1091,14 +1093,11 @@ pub(super) fn verify_marked_heap_report_nonfatal(phase: &str) {
     crate::arena::arena_walk_objects(|hp| unsafe {
         verify_marked_object_child_marks(&mut stats, hp as *mut GcHeader);
     });
-    MALLOC_STATE.with(|s| {
-        let s = s.borrow();
-        for &header in s.objects.iter() {
-            unsafe {
-                verify_marked_object_child_marks(&mut stats, header);
-            }
+    for header in malloc_headers_for_verification() {
+        unsafe {
+            verify_marked_object_child_marks(&mut stats, header);
         }
-    });
+    }
     let tn = |t: u8| gc_type_info(t).map_or("?", |i| i.name);
     if let Some(m) = stats.first_missing {
         let (ptype, ctype) = unsafe {
@@ -1453,12 +1452,9 @@ pub(super) fn verify_heap_objects(verifier: EvacuationVerifier<'_>) {
         verify_heap_object_fields(header, verifier, "heap fields");
     };
     crate::arena::arena_walk_objects(|hp| verify_one(hp as *mut GcHeader));
-    MALLOC_STATE.with(|s| {
-        let s = s.borrow();
-        for &h in s.objects.iter() {
-            verify_one(h);
-        }
-    });
+    for header in malloc_headers_for_verification() {
+        verify_one(header);
+    }
 }
 
 pub(super) fn verify_evacuated_no_stale_forwarded_refs(verifier: EvacuationVerifier<'_>) {

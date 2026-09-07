@@ -7,6 +7,7 @@ mod pointer_publish_7154;
 mod promise_side_tables;
 mod promoted_remembered_7803;
 mod survival_and_malloc;
+mod verify_malloc_borrow;
 mod weak_holder_registry;
 mod weak_semantics;
 use super::super::*;
