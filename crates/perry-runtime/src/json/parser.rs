@@ -359,9 +359,7 @@ impl<'a> DirectParser<'a> {
             // saves the equivalent walk inside `compute_utf16_len`
             // plus the conditional widening for non-ASCII counters.
             let ptr = match s {
-                ParsedStr::Borrowed(b) => {
-                    crate::string::string_from_json_bytes(&mut self.batch, b)
-                }
+                ParsedStr::Borrowed(b) => crate::string::string_from_json_bytes(&mut self.batch, b),
                 // Escaped strings live in a Rust Vec, so the builder can derive
                 // the WTF-8 lone-surrogate flag while allocating the result.
                 ParsedStr::Owned(ref b) => crate::string::js_string_from_builder_bytes(b),
@@ -381,6 +379,7 @@ impl<'a> DirectParser<'a> {
     /// fallback otherwise. On `bench_json_roundtrip` the per-record
     /// strings are 5-16 bytes so most iterations hit the SIMD path
     /// exactly once before the scalar tail handles the boundary.
+    #[inline(always)]
     pub(crate) fn parse_string_bytes(&mut self) -> Option<ParsedStr<'a>> {
         if self.peek() != Some(b'"') {
             self.valid = false;
@@ -413,14 +412,28 @@ impl<'a> DirectParser<'a> {
         None
     }
 
+    #[inline(never)]
     pub(crate) fn parse_string_bytes_slow(&mut self, start: usize) -> Option<ParsedStr<'a>> {
         let mut result = Vec::from(&self.input[start..self.pos]);
+        // Keep short strings and allocation growth on the scalar path. Chunk
+        // decoding only consumes existing spare capacity; it never grows the
+        // scratch buffer early just to satisfy a worst-case output bound.
+        let mut scalar_end = self.input.len().min(self.pos.saturating_add(64));
         loop {
-            if self.pos >= self.input.len() {
-                self.valid = false;
-                return None;
+            if self.pos >= scalar_end {
+                while self.input.len() - self.pos >= 64 && result.capacity() - result.len() >= 64 {
+                    if self.decode_chunk(&mut result)? {
+                        return Some(ParsedStr::Owned(result));
+                    }
+                }
+                scalar_end = self.input.len().min(self.pos.saturating_add(64));
+                if self.pos >= self.input.len() {
+                    self.valid = false;
+                    return None;
+                }
             }
-            let ch = self.input[self.pos];
+            // scalar_end never exceeds input.len(), including after chunk decoding.
+            let ch = unsafe { *self.input.get_unchecked(self.pos) };
             self.pos += 1;
             match ch {
                 b'"' => return Some(ParsedStr::Owned(result)),
@@ -850,7 +863,11 @@ impl<'a> DirectParser<'a> {
         } else {
             self.parse_shape_keys_array_hot(&inline_keys[..inline_len])
         };
-        let values = heap_fields.as_ref().map_or(&inline_values[..inline_len], |(_, values, _)| values.as_slice());
+        let values = heap_fields
+            .as_ref()
+            .map_or(&inline_values[..inline_len], |(_, values, _)| {
+                values.as_slice()
+            });
         let js_obj = crate::object::object_from_json_fields(&mut self.batch, keys_arr, values);
         parse_root_restore(saved_roots);
         JSValue::object_ptr(js_obj as *mut u8)
@@ -867,7 +884,9 @@ impl<'a> DirectParser<'a> {
         // Same `[{...}]` pre-size heuristic as the typed path.
         // Preserve the object-leading estimate on large record arrays.
         let array = super::construction_array::ConstructionArray::new(
-            &mut self.batch, ((self.input.len() - self.pos) / 96).clamp(16, 16_384) as u32);
+            &mut self.batch,
+            ((self.input.len() - self.pos) / 96).clamp(16, 16_384) as u32,
+        );
         self.parse_array_tail(array, saved_roots)
     }
 
@@ -887,7 +906,8 @@ impl<'a> DirectParser<'a> {
             if used == values.len() {
                 // The comma after element eight was consumed. Continue at
                 // the ninth value without reparsing any prefix or child.
-                let mut array = super::construction_array::ConstructionArray::new(&mut self.batch, 16);
+                let mut array =
+                    super::construction_array::ConstructionArray::new(&mut self.batch, 16);
                 for &value in &values {
                     array.push(&mut self.batch, value);
                 }
@@ -911,7 +931,8 @@ impl<'a> DirectParser<'a> {
     }
 
     unsafe fn finish_short_array(&mut self, values: &[JSValue], saved_roots: usize) -> JSValue {
-        let mut array = super::construction_array::ConstructionArray::new(&mut self.batch, values.len() as u32);
+        let mut array =
+            super::construction_array::ConstructionArray::new(&mut self.batch, values.len() as u32);
         for &value in values {
             array.push(&mut self.batch, value);
         }
@@ -930,7 +951,9 @@ impl<'a> DirectParser<'a> {
     ) -> JSValue {
         loop {
             let value = self.parse_value();
-            if !self.valid { break; }
+            if !self.valid {
+                break;
+            }
             array.push(&mut self.batch, value);
             self.skip_whitespace();
             if self.peek() == Some(b',') {
@@ -1120,3 +1143,10 @@ mod scan_tests;
 #[cfg(test)]
 #[path = "parser_short_array_tests.rs"]
 mod short_array_tests;
+
+#[path = "parser_escape_chunk.rs"]
+mod escape_chunk;
+
+#[cfg(test)]
+#[path = "parser_escape_chunk_tests.rs"]
+mod escape_chunk_tests;
