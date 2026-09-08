@@ -241,6 +241,18 @@ fn record_final_output_declines_array_expandos_and_undefined() {
 }
 
 #[test]
+fn record_final_output_rechecks_arrays_after_any_prototype_override() {
+    unsafe {
+        let value = parse("{\"id\":1,\"tags\":[1,2]}");
+        let obj = value.as_pointer::<crate::ObjectHeader>();
+        let arr = crate::object::js_object_get_field(obj, 1).as_pointer::<crate::ArrayHeader>();
+        crate::object::prototype_chain::object_set_user_prototype(arr as usize, TAG_NULL);
+        assert!(crate::object::prototype_chain::array_static_proto_recorded());
+        assert!(try_object(value.bits()).is_none());
+    }
+}
+
+#[test]
 fn fused_key_checks_preserve_numeric_order_and_native_forwarding_fallbacks() {
     unsafe {
         let mut keys = vec!["0", "1", "4294967294", "toJSON", "__module__"];

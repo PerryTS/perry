@@ -163,7 +163,8 @@ unsafe fn dense_array(bits: u64) -> Option<(*const crate::ArrayHeader, usize)> {
     if len > MAX_ELEMENTS
         || len > (*arr).capacity as usize
         || (header.size as usize) < crate::gc::GC_HEADER_SIZE + ARRAY_BYTES + len * 8
-        || crate::object::prototype_chain::object_static_prototype(arr as usize).is_some()
+        || (crate::object::prototype_chain::array_static_proto_recorded()
+            && crate::object::prototype_chain::object_static_prototype(arr as usize).is_some())
     {
         return None;
     }
