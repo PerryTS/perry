@@ -116,3 +116,142 @@ fn array_slot_enumeration_walks_the_heap() {
     clear_marks();
     remembered_set_clear();
 }
+
+extern "C" fn species_destination(
+    closure: *const crate::closure::ClosureHeader,
+    _length: f64,
+) -> f64 {
+    crate::closure::js_closure_get_capture_f64(closure, 0)
+}
+
+extern "C" fn interrupt_species_copy(_closure: *const crate::closure::ClosureHeader) -> f64 {
+    crate::exception::js_throw(9983.0)
+}
+
+/// Inspect the exact custom destination after an indexed getter interrupts the
+/// public runtime entry point. No collector invocation or optional diagnostic
+/// wiring is needed: the scanner's enumeration is the assertion.
+fn interrupted_species_copy_describes_late_pointer(splice: bool) {
+    let _isolation = copying_nursery_isolation_lock();
+    let _trigger = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let destination = crate::array::js_array_alloc_with_length(12);
+    let old = young_leaf();
+    crate::array::js_array_set_f64(destination, 0, f64::from_bits(ptr_bits(old)));
+    for index in 1..12 {
+        crate::array::js_array_set_f64(destination, index, index as f64);
+    }
+    let source = crate::array::js_array_alloc_with_length(12);
+    for index in 0..10 {
+        crate::array::js_array_set_f64(source, index, index as f64);
+    }
+    let late = young_leaf();
+    crate::array::js_array_set_f64(source, 10, f64::from_bits(ptr_bits(late)));
+    let species = crate::closure::js_closure_alloc(species_destination as *const u8, 1);
+    crate::closure::js_closure_set_capture_f64(
+        species,
+        0,
+        f64::from_bits(ptr_bits(destination as usize)),
+    );
+    let species_value = f64::from_bits(ptr_bits(species as usize));
+    let symbol = crate::symbol::well_known_symbol("species");
+    unsafe {
+        crate::symbol::js_object_set_symbol_property(
+            species_value,
+            f64::from_bits(ptr_bits(symbol as usize)),
+            species_value,
+        );
+    }
+    let key = crate::string::js_string_from_bytes(b"constructor".as_ptr(), 11);
+    crate::array::js_array_set_string_key(source, key, species_value);
+    let getter = crate::closure::js_closure_alloc(interrupt_species_copy as *const u8, 0);
+    let descriptor = crate::object::js_object_alloc(0, 0);
+    let get_key = crate::string::js_string_from_bytes(b"get".as_ptr(), 3);
+    crate::object::js_object_set_field_by_name(
+        descriptor,
+        get_key,
+        f64::from_bits(ptr_bits(getter as usize)),
+    );
+    let index_key = crate::string::js_string_from_bytes(b"11".as_ptr(), 2);
+    let prototype = crate::array::js_array_alloc_with_length(12);
+    crate::object::js_object_define_property(
+        f64::from_bits(ptr_bits(prototype as usize)),
+        f64::from_bits(string_bits(index_key as usize)),
+        f64::from_bits(ptr_bits(descriptor as usize)),
+    );
+    crate::object::js_object_set_prototype_of(
+        f64::from_bits(ptr_bits(source as usize)),
+        f64::from_bits(ptr_bits(prototype as usize)),
+    );
+    // An ordinary data descriptor makes slice take its observable-read path
+    // without mutating the process-global canonical Array prototype. Splice
+    // reads the inherited accessor through the source's actual hole at 11.
+    let data_descriptor = crate::object::js_object_alloc(0, 0);
+    let value_key = crate::string::js_string_from_bytes(b"value".as_ptr(), 5);
+    crate::object::js_object_set_field_by_name(data_descriptor, value_key, 0.0);
+    crate::object::js_object_define_property(
+        f64::from_bits(ptr_bits(source as usize)),
+        0.0,
+        f64::from_bits(ptr_bits(data_descriptor as usize)),
+    );
+    assert!(crate::array::array_iteration_is_exotic(source));
+    assert!(crate::array::array_spec_has_index(source, 11));
+    let header = unsafe { header_from_user_ptr(destination as *const u8) };
+    assert_eq!(
+        unsafe { (*header)._reserved } & GC_LAYOUT_STATE_MASK,
+        GC_LAYOUT_SIDE_MASK,
+        "the original destination must have a per-object pointer mask"
+    );
+    let before = unsafe { stats_for(destination) };
+    assert_eq!(before.checked_arrays, 1);
+    assert_eq!(before.checked_pointer_slots, 1);
+    assert_eq!(before.unenumerated_slots, 0);
+
+    let interrupted = crate::exception::catch_js_throw(|| {
+        if splice {
+            let mut out = std::ptr::null_mut();
+            crate::array::js_array_splice(source, 0, 12, std::ptr::null(), 0, &mut out)
+        } else {
+            crate::array::js_array_slice(source, 0, 12)
+        }
+    });
+    crate::object::descriptor_state::clear_object_descriptors(source as usize);
+    crate::object::descriptor_state::clear_object_descriptors(prototype as usize);
+    crate::object::js_object_set_prototype_of(
+        f64::from_bits(ptr_bits(source as usize)),
+        f64::from_bits(crate::value::TAG_NULL),
+    );
+    unsafe {
+        crate::symbol::js_object_delete_symbol_property(
+            species_value,
+            f64::from_bits(ptr_bits(symbol as usize)),
+        );
+    }
+    assert_eq!(
+        interrupted.expect_err("the indexed getter must interrupt the copy"),
+        9983.0
+    );
+    assert_eq!(
+        crate::array::js_array_get_f64(destination, 10).to_bits(),
+        ptr_bits(late),
+        "the exact late child must reach index 10 before interruption"
+    );
+    let after = unsafe { stats_for(destination) };
+    assert_eq!(after.checked_arrays, 1);
+    assert_eq!(after.checked_pointer_slots, 1);
+    assert_eq!(
+        after.unenumerated_slots, 0,
+        "partial species result lost its late reference: {after:?}"
+    );
+    clear_marks();
+    remembered_set_clear();
+}
+
+#[test]
+fn interrupted_slice_species_result_keeps_its_late_pointer_enumerated() {
+    interrupted_species_copy_describes_late_pointer(false);
+}
+
+#[test]
+fn interrupted_splice_species_result_keeps_its_late_pointer_enumerated() {
+    interrupted_species_copy_describes_late_pointer(true);
+}

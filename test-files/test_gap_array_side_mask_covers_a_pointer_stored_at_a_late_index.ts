@@ -1,8 +1,9 @@
 // #9983: slice/splice must describe each result slot before a later inherited
 // getter can throw and leave a custom-species result reachable. Run the Perry
-// binary with PERRY_GC_VERIFY_MARK=1; the manual gc() after each caught throw
-// makes the existing mask-free array verifier inspect the partially written
-// result. The required pre-fix check is an UNENUMERATED report at index 10.
+// binary to check the observable result across a collection. The companion
+// runtime tests in gc/tests/array_pointer_slot_enumeration.rs assert the exact
+// destination's slot enumeration directly; quiet diagnostic output alone does
+// not prove an optional collector verifier ran.
 declare function gc(): void;
 
 function forceFullGc(): void {
@@ -55,7 +56,8 @@ function array_side_mask_covers_a_pointer_stored_at_a_late_index(
     }
 
     // The throw skips the deferred rebuild. Keep destination observably live
-    // across the collection, then verify the value after the diagnostic ran.
+    // across the collection, then check the value. Direct runtime regressions
+    // separately require the scanner to enumerate this exact late child.
     forceFullGc();
     console.log(operation + ":" + caught + ":" + destination[10].label);
   } finally {
