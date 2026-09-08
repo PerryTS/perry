@@ -22,13 +22,15 @@ try {
       const compile = spawnSync(compiler, ['compile', source, '-o', output,
         '--cache-dir', path.join(work, 'cache-' + fixture + '-' + opt),
         '--no-auto-optimize', '--no-color',
-        
         ...(process.env.PERRY_TEST_WASM === '1' ? ['--enable-wasm-runtime'] : [])], {
         cwd: work, env: { ...process.env, PERRY_LL_OPT_LEVEL: opt },
         encoding: 'utf8', timeout: 120_000, maxBuffer: 8 * 1024 * 1024,
       });
       fs.writeFileSync(output + '-compile.log', (compile.stdout ?? '') + (compile.stderr ?? ''));
-      if (compile.status !== 0) throw new Error('Compilation failed: ' + (compile.error ?? compile.status));
+      if (compile.error || compile.status !== 0) {
+        throw new Error('Compilation failed: ' + (compile.error ?? compile.status) + '\n' +
+          (compile.stdout ?? '') + (compile.stderr ?? ''));
+      }
       const run = spawnSync(output, [], { cwd: work, encoding: 'utf8', timeout: 15_000 });
       fs.writeFileSync(output + '-run.log', (run.stdout ?? '') + (run.stderr ?? ''));
       if (run.status !== 0 || run.stdout !== oracle.stdout) {

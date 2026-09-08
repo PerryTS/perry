@@ -9,6 +9,10 @@ export function prepareRequireRuntime(root) {
   // Direct script users may supply their own verified, coherent archives.
   // The CI-visible Rust entry points explicitly request the build below.
   if (process.env.PERRY_TEST_BUILD_RUNTIME !== '1') return;
+  const prepared = process.env.PERRY_TEST_RUNTIME_PREBUILT === '1';
+  if (prepared && !process.env.PERRY_RUNTIME_DIR) {
+    throw new Error('Prepared require runtime needs an explicit PERRY_RUNTIME_DIR');
+  }
   // perry-dev keeps panic=abort and avoids a second thin-LTO build inside
   // cargo test. Release/dist remain available for optimization-sensitive runs.
   const profile = process.env.PERRY_TEST_RUNTIME_PROFILE ?? 'perry-dev';
@@ -39,17 +43,22 @@ export function prepareRequireRuntime(root) {
     buildEnv.CARGO_ENCODED_RUSTFLAGS += '\x1f-C\x1fforce-unwind-tables=yes' +
       '\x1f-C\x1fforce-frame-pointers=yes';
   }
-  console.log('Building coherent require-test runtime archives...');
-  const build = spawnSync(process.env.CARGO ?? 'cargo', args, {
-    cwd: root, env: buildEnv, encoding: 'utf8',
-    timeout: 600_000, killSignal: 'SIGKILL', maxBuffer: 8 * 1024 * 1024,
-  });
-  if (build.error || build.status !== 0) {
-    throw new Error('Coherent runtime build failed: ' + (build.error ?? build.status) +
-      '\n' + (build.stdout ?? '') + (build.stderr ?? ''));
+  // CI builds the full graph before entering any bounded fixture. Explicit
+  // prepared mode still checks every archive below; compiler/linker source
+  // identity and Tokio coherence checks remain responsible for their contents.
+  if (!prepared) {
+    console.log('Building coherent require-test runtime archives...');
+    const build = spawnSync(process.env.CARGO ?? 'cargo', args, {
+      cwd: root, env: buildEnv, encoding: 'utf8',
+      timeout: 600_000, killSignal: 'SIGKILL', maxBuffer: 8 * 1024 * 1024,
+    });
+    if (build.error || build.status !== 0) {
+      throw new Error('Coherent runtime build failed: ' + (build.error ?? build.status) +
+        '\n' + (build.stdout ?? '') + (build.stderr ?? ''));
+    }
   }
   const target = path.resolve(root, process.env.CARGO_TARGET_DIR ?? 'target');
-  const runtime = path.join(target, profile);
+  const runtime = prepared ? path.resolve(process.env.PERRY_RUNTIME_DIR) : path.join(target, profile);
   // Refuse a misleading successful Cargo invocation (e.g. a cross-target
   // override) rather than falling back to an unrelated installed archive.
   for (const name of ['runtime', 'stdlib', 'ext_events', 'ext_http', 'ext_net',

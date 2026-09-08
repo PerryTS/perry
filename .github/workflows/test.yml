@@ -1456,7 +1456,7 @@ jobs:
         if: steps.scope.outputs.suites != ''
         env:
           # lld has repeatedly SIGBUS'd large test links on the shared runner.
-          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C linker-features=-lld"
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C linker-features=-lld -C force-unwind-tables=yes -C force-frame-pointers=yes"
           CARGO_PROFILE_TEST_DEBUG: "0"
           CARGO_PROFILE_DEV_DEBUG: "0"
           # Bound the heavy per-binary runtime link so the runner doesn't OOM.
@@ -1464,6 +1464,7 @@ jobs:
           SUITES: ${{ steps.scope.outputs.suites }}
           EXCLUSIONS: ${{ steps.scope.outputs.exclusions }}
         run: |
+          node --test scripts/test-require-runtime.test.mjs
           # `cargo test` never builds the `staticlib` crate-type, so
           # libperry_{runtime,stdlib}.a don't exist unless built explicitly —
           # and the suites that compile with PERRY_NO_AUTO_OPTIMIZE=1 link them
@@ -1474,8 +1475,20 @@ jobs:
           # RFC-2945 abort guards that a JS throw trips — the opposite of the
           # shipped semantics. See the longer note in `cargo-test`.
           if printf '%s\n' "$SUITES" | grep -qE '^(perry|perry-stdlib) '; then
-            cargo build --release -p perry-runtime -p perry-stdlib \
-              -p perry-runtime-static -p perry-stdlib-static
+            if printf '%s\n' "$SUITES" | grep -qE '^perry (bun_text_modules|import_meta_require_value) '; then
+              # Prepare all require providers in one graph, outside the fixture's
+              # timeout. A second perry-dev graph inside cargo test exceeded its
+              # ten-minute bound on fresh runners (#9989/#9990).
+              cargo build --release -p perry -p perry-runtime -p perry-stdlib \
+                -p perry-runtime-static -p perry-stdlib-static \
+                -p perry-ext-events -p perry-ext-http -p perry-ext-net \
+                -p perry-ext-typescript -p perry-ext-ws -p perry-ext-zlib \
+                --features perry-stdlib/external-net-pump
+              export PERRY_TEST_RUNTIME_PREBUILT=1
+            else
+              cargo build --release -p perry-runtime -p perry-stdlib \
+                -p perry-runtime-static -p perry-stdlib-static
+            fi
             export PERRY_RUNTIME_DIR="$PWD/target/release"
           fi
 
