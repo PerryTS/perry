@@ -2019,6 +2019,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ecb"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "26f2a8b3e564eba0877223dc343703ad0385794e882e6d13f3a4dd5c6b1f41ac"
+dependencies = [
+ "cipher 0.5.2",
+]
+
+[[package]]
 name = "ecdsa"
 version = "0.16.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4531,7 +4540,7 @@ dependencies = [
  "aes 0.8.4",
  "bitflags 2.12.1",
  "cbc 0.1.2",
- "ecb",
+ "ecb 0.1.2",
  "encoding_rs",
  "flate2",
  "getrandom 0.3.4",
@@ -6469,7 +6478,7 @@ dependencies = [
  "cron",
  "ctr",
  "dashmap 6.2.1",
- "ecb",
+ "ecb 0.2.1",
  "ed25519-dalek",
  "ed448-goldilocks",
  "flate2",
