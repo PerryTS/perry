@@ -136,33 +136,29 @@ pub(super) unsafe fn allocate(plan: &Plan) -> Option<JSValue> {
     let scope = crate::gc::RuntimeHandleScope::new();
     let keys = scope.root_raw_mut_ptr(keys);
     crate::gc::gc_collect_pending_suppressed_parse();
-    // Use the ordinary allocator so its trigger remains active. It publishes
-    // an initialized, keyless shape before returning, safe to root immediately.
-    let object = crate::object::js_object_alloc(0, plan.len as u32);
-    let object = scope.root_raw_mut_ptr(object);
-    let key_ptr = keys.get_raw_mut_ptr::<crate::ArrayHeader>();
-    // This is native descriptor metadata (Rust table/slab allocation), with
-    // no managed allocation or callback. Obtain it AFTER the object allocation:
-    // a previously obtained ShapeId can retire during that collection.
-    let id = crate::object::shapes::shape_id_for_keys_ensure(key_ptr, plan.len as u32);
-    let object = object.get_raw_mut_ptr::<crate::ObjectHeader>();
-    let key_ptr = keys.get_raw_mut_ptr::<crate::ArrayHeader>();
-    assert!(crate::object::shapes::try_birth_stamp_preinstalled_shape(
-        object,
-        id,
-        key_ptr,
-        plan.len as u32,
-    ));
-    crate::object::mark_object_plain_ordinary(object);
-    let fields =
-        (object as *mut u8).add(std::mem::size_of::<crate::ObjectHeader>()) as *mut JSValue;
-    for (index, (_, value)) in plan.fields[..plan.len].iter().enumerate() {
-        // GC_STORE_AUDIT(INIT): every decoded value is pointer-free, and all
-        // allocated slots were already initialized by js_object_alloc.
-        fields.add(index).write(*value);
-    }
+    let object = {
+        // The common path bumps the current nursery block without collection.
+        // This remains a fully-accounted arena birth, while the short no-move
+        // scope keeps the keys and shape stable until the final header exists.
+        let _no_move = crate::gc::GcSuppressScope::new();
+        let key_ptr = keys.get_raw_mut_ptr::<crate::ArrayHeader>();
+        let id = crate::object::shapes::shape_id_for_keys_ensure(key_ptr, plan.len as u32);
+        crate::object::try_object_from_inline_json_fields(key_ptr, id, &plan.fields[..plan.len])
+    };
+    let object = if let Some(object) = object {
+        object
+    } else {
+        // Preserve the ordinary allocator's block-rollover collection point.
+        // The failed try did not allocate or move anything. Run the trigger
+        // outside suppression, then re-read every movable fact from its handle.
+        crate::gc::gc_check_trigger();
+        let _no_move = crate::gc::GcSuppressScope::new();
+        let key_ptr = keys.get_raw_mut_ptr::<crate::ArrayHeader>();
+        let id = crate::object::shapes::shape_id_for_keys_ensure(key_ptr, plan.len as u32);
+        crate::object::object_from_inline_json_fields(key_ptr, id, &plan.fields[..plan.len])
+    };
     // The key edge lives in the shape descriptor; inline slots contain no
-    // managed pointers and retain the allocator's pointer-free layout.
+    // managed pointers and retain the newborn's pointer-free layout.
     super::parse_scalar::clear_oversized_key_cache();
     crate::gc::gc_schedule_parse_boundary_collection_if_pressure();
     Some(JSValue::object_ptr(object.cast()))
