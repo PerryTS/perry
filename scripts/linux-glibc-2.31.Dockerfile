@@ -4,12 +4,16 @@
 ARG OLD_GLIBC_IMAGE=debian:bullseye-slim@sha256:f313b4bd62667092a59b3a664d7d3ab8b5e65f41675f48e81455a15dc5abe792
 FROM ${OLD_GLIBC_IMAGE}
 
+# r32: live security indexes named packages already missing from the CDN.
+# Pin a dated Bullseye security snapshot alongside the archived base suite;
+# keep APT signature checks enabled. Updating this pin requires an image build
+# on both architectures.
 # The archived slim image has no CA bundle. Debian Release signatures are still
 # checked while bootstrapping ca-certificates; only TLS peer validation is
 # disabled for this first signed archive fetch.
 RUN printf '%s\n' \
       'deb [check-valid-until=no] https://archive.debian.org/debian bullseye main' \
-      'deb https://deb.debian.org/debian-security bullseye-security main' \
+      'deb [check-valid-until=no] https://snapshot.debian.org/archive/debian-security/20260901T000000Z/ bullseye-security main' \
       > /etc/apt/sources.list \
     && apt-get -o Acquire::https::Verify-Peer=false update \
     && DEBIAN_FRONTEND=noninteractive apt-get \

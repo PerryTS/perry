@@ -228,6 +228,9 @@ jobs:
         if: ${{ !cancelled() }}
         run: cargo fmt --all -- --check
 
+      - name: Release archive coherence gate tests
+        run: python3 -m unittest discover -s tests -p 'release_tokio_test.py' -v
+
       # The CI tier policy (scripts/ci_plan.py) is code; its self-test asserts
       # the invariants CLAUDE.md cares about (gc-stress main-line reachable,
       # docs-only PRs skip the compile tier, an empty file listing is treated
