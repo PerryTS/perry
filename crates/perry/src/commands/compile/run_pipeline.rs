@@ -5649,7 +5649,15 @@ pub fn run_with_parse_cache(
             let compiled = if let Some(session) = &typed_feedback {
                 super::typed_feedback_profile::compile(session, hir_module, opts, path, perry_version)
             } else {
-                perry_codegen::compile_module(hir_module, opts)
+                let unit_cache_dir = cache_key.map(|key| {
+                    ctx.cache_dir
+                        .join("codegen-units-v1")
+                        .join(cache_target_dir)
+                        .join(format!("{key:016x}"))
+                });
+                perry_codegen::unit_cache::with_module_cache(unit_cache_dir, || {
+                    perry_codegen::compile_module(hir_module, opts)
+                })
             };
             let object_code = compiled.map_err(|e| {
                 perry_codegen::ext_registry::take_module_capture();

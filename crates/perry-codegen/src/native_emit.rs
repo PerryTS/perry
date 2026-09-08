@@ -169,6 +169,40 @@ struct FrozenUnit {
     function_count: usize,
 }
 
+impl FrozenUnit {
+    /// Guard against unit-layout or lowering-order changes even when the
+    /// driver's full module cache identity matches. Hash the exact input, not
+    /// just the function names. Reuse one line buffer rather than materializing
+    /// a second whole-unit text representation.
+    fn fingerprint(&self, target: &str, args: &[String], native_roots: bool) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hash = std::collections::hash_map::DefaultHasher::new();
+        target.hash(&mut hash);
+        args.hash(&mut hash);
+        native_roots.hash(&mut hash);
+        self.skeleton.hash(&mut hash);
+        let mut line = String::new();
+        for function in &self.functions {
+            function.name.hash(&mut hash);
+            function.header.hash(&mut hash);
+            function.items.len().hash(&mut hash);
+            for item in &function.items {
+                std::mem::discriminant(item).hash(&mut hash);
+                match item {
+                    FrozenItem::Label(text) | FrozenItem::Text(text) => text.hash(&mut hash),
+                    FrozenItem::Blank => {}
+                    FrozenItem::Inst(inst) => {
+                        line.clear();
+                        inst.render_into(&mut line);
+                        line.hash(&mut hash);
+                    }
+                }
+            }
+        }
+        hash.finish()
+    }
+}
+
 /// Apply a typed pre- or post-RS4GC budget request to the lowering-owned functions
 /// that produced a module/unit. The request is expected to make progress for
 /// every named function; otherwise retrying would either preserve the refusal
@@ -471,10 +505,30 @@ pub fn compile_module_units_native(
     // `LlModule::skeleton_ir`; cross-unit declarations with their actual
     // signatures already live in each part's filtered `pre`.
     let llvm_started = std::time::Instant::now();
+    let unit_cache = crate::unit_cache::UnitCache::current();
     #[cfg(test)]
     let test_budget = crate::inprocess::test_rs4gc_budget_cap();
     let compile_one = |i: usize, unit: &FrozenUnit| -> Result<Vec<u8>> {
         let started = std::time::Instant::now();
+        let (effective_target, args) = crate::linker::native_plan_args(target, native_roots);
+        let checkpoint = unit_cache.as_ref().map(|cache| {
+            (
+                cache,
+                unit.fingerprint(&effective_target, &args, native_roots),
+            )
+        });
+        if let Some((cache, key)) = checkpoint {
+            if let Some(bytes) = cache.load(i, unit_total, key) {
+                if show_progress {
+                    eprintln!(
+                        "[perry] codegen: {module_prefix}: reused checkpoint for LLVM unit {}/{}",
+                        i + 1,
+                        unit_total
+                    );
+                }
+                return Ok(bytes);
+            }
+        }
         let context = Context::create();
         let module =
             crate::inprocess::parse_ir_text(&context, &unit.skeleton, "perry_native_module")
@@ -482,7 +536,6 @@ pub fn compile_module_units_native(
         let (t, r) = stream_frozen_functions(&context, &module, &unit.functions)
             .with_context(|| format!("unit {i}"))?;
         debug_dump(&module, &format!("{module_prefix}.unit{i}"));
-        let (effective_target, args) = crate::linker::native_plan_args(target, native_roots);
         let mut stats = crate::inprocess::UnitCodegenStats::default();
         let stats_out = unit_timings.then_some(&mut stats);
         let optimize = || {
@@ -525,6 +578,9 @@ pub fn compile_module_units_native(
         }
         let obj = crate::linker::finish_native_emission(unit_bytes, &effective_target, &args)
             .with_context(|| format!("unit {i}"))?;
+        if let Some((cache, key)) = checkpoint {
+            cache.store(i, unit_total, key, &obj);
+        }
         log::debug!(
             "perry-codegen: native unit {i}: {} fns, {t} typed + {r} raw insts, {:.3}s",
             unit.function_count,
