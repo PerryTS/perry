@@ -7,6 +7,11 @@ a 40-extra-predicate variant that repeatedly grows the chunk/parameter arrays.
 It retains previous query results and collects between constructing the head
 and appending the tail, and after materializing SQL.
 
+The entry point also mirrors 0.44.7's small `mergeQueries` loop and checks the
+accumulator after every SQL append, parameter append, lazy `typings` property
+creation, and typings append. Scheduled loop collections therefore isolate the
+shape transition that first adds `result.typings` after its head is populated.
+
 This is an investigation probe. Passing does **not** establish that the rare
 Linux production failure is fixed, or exclude a driver/transaction/async path.
 Failing gives a smaller boundary to investigate before involving MySQL.
