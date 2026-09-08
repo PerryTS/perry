@@ -869,7 +869,14 @@ mod tests {
     fn describe_ip_does_not_name_runtime_code_after_a_builtin_thunk() {
         const THUNK_START: usize = 0x0000_7e00_0000_0000;
         const THUNK_NAME: &[u8] = b"get years";
+        const BUNDLE_START: usize = THUNK_START - 2 * MAX_FUNCTION_SPAN;
+        const BUNDLE_NAME: &[u8] = b"bundleWitness9979";
         unsafe {
+            crate::builtins::js_register_function_name_static(
+                BUNDLE_START as *const u8,
+                BUNDLE_NAME.as_ptr(),
+                BUNDLE_NAME.len() as u32,
+            );
             crate::builtins::js_register_function_name(
                 THUNK_START as *const u8,
                 THUNK_NAME.as_ptr(),
@@ -881,6 +888,12 @@ mod tests {
         // the combined registry is a real, deterministic sabotage.
         *index_slot().lock().expect("code-symbol index lock") = None;
 
+        assert_eq!(
+            crate::builtins::function_name_for_ptr(THUNK_START).as_deref(),
+            Some("get years"),
+            "the excluded thunk must still have its reflection name"
+        );
+        assert_eq!(describe_ip(BUNDLE_START + 32), "js:bundleWitness9979");
         let ip = THUNK_START + 32;
         let last_bundle_start =
             with_index(|index| index.entries.last().map(|(start, _)| *start)).flatten();
@@ -892,6 +905,23 @@ mod tests {
         assert!(
             !description.starts_with("js:") && !description.contains("get years"),
             "runtime code after an owned builtin thunk was misnamed: {description}"
+        );
+
+        let mut blob = [0u8; MAX_CAPTURED_FRAMES * PC_CHARS];
+        let len = encode_pcs(&[BUNDLE_START + 32, ip], &mut blob);
+        assert_eq!(
+            render_frames(&blob[..len]).as_deref(),
+            Some("    at bundleWitness9979 (<anonymous>)"),
+            "rendering must retain the bundle frame and omit the runtime thunk"
+        );
+        let far_ip = BUNDLE_START + MAX_FUNCTION_SPAN / 2 + 2;
+        let len = encode_pcs(&[far_ip], &mut blob);
+        assert_eq!(
+            render_frames(&blob[..len]),
+            Some(format!(
+                "    at bundleWitness9979 [{far_ip:#x}] (<anonymous>)"
+            )),
+            "the rendered stack must preserve a suspicious frame's address"
         );
     }
 
