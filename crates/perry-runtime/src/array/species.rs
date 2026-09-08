@@ -69,9 +69,9 @@ unsafe fn read_constructor(original: &RuntimeHandle<'_>, scope: &RuntimeHandleSc
     }
     let key = crate::string::js_string_from_bytes(b"constructor".as_ptr(), 11);
     let key = scope.root_string_ptr(key);
-    let key_v = f64::from_bits(
-        JSValue::string_ptr(key.get_raw_const_ptr::<crate::StringHeader>() as *mut _).bits(),
-    );
+    let key_v = key.with_const_ptr(|key: *const crate::StringHeader| {
+        f64::from_bits(JSValue::string_ptr(key as *mut _).bits())
+    });
     crate::object::js_object_get_property_key(original.get_nanbox_f64(), key_v)
 }
 
@@ -277,9 +277,9 @@ pub(crate) fn species_result_create_data_property(result: f64, index: usize, val
     let key_text = index.to_string();
     let key = crate::string::js_string_from_bytes(key_text.as_ptr(), key_text.len() as u32);
     let key = scope.root_string_ptr(key);
-    let key_value = f64::from_bits(
-        JSValue::string_ptr(key.get_raw_const_ptr::<crate::StringHeader>() as *mut _).bits(),
-    );
+    let key_value = key.with_const_ptr(|key: *const crate::StringHeader| {
+        f64::from_bits(JSValue::string_ptr(key as *mut _).bits())
+    });
     if crate::proxy::js_proxy_is_proxy(result.get_nanbox_f64()) == 0 {
         let obj_addr = crate::value::js_nanbox_get_pointer(result.get_nanbox_f64()) as usize;
         if let Some(attrs) = crate::object::get_property_attrs(obj_addr, &key_text) {

@@ -376,14 +376,12 @@ fn string_to_char_array_with_pre_element_alloc_hook(s: i64, hook: &impl Fn()) ->
             // The element allocation above may have moved the result. Re-read
             // its current head, then perform the write and all GC bookkeeping
             // as one operation.
-            crate::array::note_array_slot(
-                arr.get_raw_mut_ptr::<crate::array::ArrayHeader>(),
-                i,
-                nanboxed.to_bits(),
-            );
+            arr.with_mut_ptr(|arr: *mut crate::array::ArrayHeader| {
+                crate::array::note_array_slot(arr, i, nanboxed.to_bits())
+            });
         }
     }
-    arr.get_raw_mut_ptr::<crate::array::ArrayHeader>() as i64
+    arr.with_mut_ptr(|arr: *mut crate::array::ArrayHeader| arr as i64)
 }
 
 #[cfg(test)]

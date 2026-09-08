@@ -12,9 +12,9 @@ fn repeated_class_field_defaults_do_not_mint_semantic_shapes() {
 
     let define = |object: *mut ObjectHeader, value: f64| {
         let receiver = crate::value::js_nanbox_pointer(object as i64);
-        let key_value = f64::from_bits(
-            JSValue::string_ptr(key.get_raw_const_ptr::<crate::StringHeader>() as *mut _).bits(),
-        );
+        let key_value = key.with_const_ptr(|key: *const crate::StringHeader| {
+            f64::from_bits(JSValue::string_ptr(key as *mut _).bits())
+        });
         crate::object::js_class_field_add(receiver, key_value, value);
     };
 

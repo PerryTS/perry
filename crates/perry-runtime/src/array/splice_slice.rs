@@ -33,8 +33,8 @@ pub extern "C" fn js_array_splice(
         // (and `clean_arr_ptr` may NULL it out, silently no-op'ing); run the
         // generic spec engine on the object instead. Probe the RAW pointer
         // BEFORE the array-plausibility clean.
-        if let Some(recv) =
-            crate::array::non_array_object_receiver(arr_handle.get_raw_mut_ptr::<ArrayHeader>())
+        if let Some(recv) = arr_handle
+            .with_const_ptr(|arr: *const ArrayHeader| crate::array::non_array_object_receiver(arr))
         {
             let mut args: Vec<f64> = vec![
                 start as f64,
@@ -50,11 +50,11 @@ pub extern "C" fn js_array_splice(
             let removed = crate::array::object_splice(recv, args.as_ptr(), args.len());
             let removed_ptr = crate::value::js_nanbox_get_pointer(removed) as *mut ArrayHeader;
             if !out_arr.is_null() {
-                *out_arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
+                arr_handle.with_mut_ptr(|arr: *mut ArrayHeader| *out_arr = arr);
             }
             return removed_ptr;
         }
-        let arr = clean_arr_ptr_mut(arr_handle.get_raw_mut_ptr::<ArrayHeader>());
+        let arr = arr_handle.with_mut_ptr(|arr: *mut ArrayHeader| clean_arr_ptr_mut(arr));
         if arr.is_null() {
             if !out_arr.is_null() {
                 *out_arr = js_array_alloc(0);
@@ -82,9 +82,9 @@ pub extern "C" fn js_array_splice(
         // §23.1.3.31 step 11): reads `O.constructor` / `@@species` and throws
         // on a poisoned getter or non-constructor species before the receiver
         // is mutated.
-        let recv_value = f64::from_bits(
-            crate::value::JSValue::pointer(arr_handle.get_raw_const_ptr::<u8>()).bits(),
-        );
+        let recv_value = arr_handle.with_const_ptr(|arr: *const u8| {
+            f64::from_bits(crate::value::JSValue::pointer(arr).bits())
+        });
         let (deleted_box, deleted_is_default) =
             crate::array::species::array_species_create_with_capacity(
                 recv_value,
@@ -102,46 +102,49 @@ pub extern "C" fn js_array_splice(
         // a genuinely absent index stays a hole.
         let spec_read = |i: usize| -> f64 {
             let idx = start_idx + i as u32;
-            if crate::array::array_spec_has_index(
-                arr_handle.get_raw_const_ptr::<ArrayHeader>(),
-                idx,
-            ) {
+            if arr_handle.with_const_ptr(|arr: *const ArrayHeader| {
+                crate::array::array_spec_has_index(arr, idx)
+            }) {
                 // HasProperty can invoke user code and collect. Re-read the
                 // receiver through its handle before the subsequent Get.
-                return crate::array::array_spec_get(
-                    arr_handle.get_raw_const_ptr::<ArrayHeader>(),
-                    idx,
-                );
+                return arr_handle.with_const_ptr(|arr: *const ArrayHeader| {
+                    crate::array::array_spec_get(arr, idx)
+                });
             }
             f64::from_bits(crate::value::TAG_HOLE)
         };
         if deleted_is_default {
-            let deleted = deleted_handle.get_raw_mut_ptr::<ArrayHeader>();
-            (*deleted).length = actual_delete;
-            if crate::array::array_iteration_is_exotic(arr_handle.get_raw_const_ptr()) {
+            deleted_handle.with_mut_ptr(|deleted: *mut ArrayHeader| {
+                (*deleted).length = actual_delete;
+            });
+            let source_is_exotic = arr_handle.with_const_ptr(|arr: *const ArrayHeader| {
+                crate::array::array_iteration_is_exotic(arr)
+            });
+            if source_is_exotic {
                 for i in 0..actual_delete as usize {
                     let value = spec_read(i);
-                    note_array_slot(
-                        deleted_handle.get_raw_mut_ptr::<ArrayHeader>(),
-                        i,
-                        value.to_bits(),
-                    );
+                    deleted_handle.with_mut_ptr(|deleted: *mut ArrayHeader| {
+                        note_array_slot(deleted, i, value.to_bits())
+                    });
                 }
             } else {
-                let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
-                let elements_ptr =
-                    (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
-                let deleted = deleted_handle.get_raw_mut_ptr::<ArrayHeader>();
-                let deleted_elements =
-                    (deleted as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
-                for i in 0..actual_delete as usize {
-                    // GC_STORE_AUDIT(BARRIERED): the dense copy cannot run user code and is followed by a layout rebuild.
-                    ptr::write(
-                        deleted_elements.add(i),
-                        ptr::read(elements_ptr.add(start_idx as usize + i)),
-                    );
-                }
-                rebuild_array_layout(deleted);
+                arr_handle.with_mut_ptr(|arr: *mut ArrayHeader| {
+                    deleted_handle.with_mut_ptr(|deleted: *mut ArrayHeader| {
+                        let elements_ptr =
+                            (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+                        let deleted_elements = (deleted as *mut u8)
+                            .add(std::mem::size_of::<ArrayHeader>())
+                            as *mut f64;
+                        for i in 0..actual_delete as usize {
+                            // GC_STORE_AUDIT(BARRIERED): the dense copy cannot run user code and is followed by a layout rebuild.
+                            ptr::write(
+                                deleted_elements.add(i),
+                                ptr::read(elements_ptr.add(start_idx as usize + i)),
+                            );
+                        }
+                        rebuild_array_layout(deleted);
+                    })
+                });
             }
         } else {
             for i in 0..actual_delete as usize {
@@ -165,29 +168,30 @@ pub extern "C" fn js_array_splice(
         let new_len = len as u32 - actual_delete + items_count;
 
         // Grow array if needed
-        let current = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
-        let arr = if new_len > (*current).capacity {
-            js_array_grow(current, new_len)
-        } else {
-            current
-        };
-        arr_handle.set_raw_mut_ptr(arr);
-        let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+        let needs_grow =
+            arr_handle.with_const_ptr(|arr: *const ArrayHeader| new_len > (*arr).capacity);
+        if needs_grow {
+            // `js_array_grow` establishes its own handle before allocating.
+            let grown =
+                arr_handle.with_mut_ptr(|arr: *mut ArrayHeader| js_array_grow(arr, new_len));
+            arr_handle.set_raw_mut_ptr(grown);
+        }
 
         // Shift elements after the splice point
         let tail_start = start_idx + actual_delete;
         let tail_len = len as u32 - tail_start;
 
-        if items_count != actual_delete && tail_len > 0 {
-            // Need to shift the tail
-            let src = elements_ptr.add(tail_start as usize);
-            let dst = elements_ptr.add((start_idx + items_count) as usize);
-            // GC_STORE_AUDIT(BARRIERED): splice tail memmove is followed by layout/barrier rebuild.
-            ptr::copy(src, dst, tail_len as usize);
-        }
+        arr_handle.with_mut_ptr(|arr: *mut ArrayHeader| {
+            let elements_ptr = (arr as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+            if items_count != actual_delete && tail_len > 0 {
+                // Need to shift the tail
+                let src = elements_ptr.add(tail_start as usize);
+                let dst = elements_ptr.add((start_idx + items_count) as usize);
+                // GC_STORE_AUDIT(BARRIERED): splice tail memmove is followed by layout/barrier rebuild.
+                ptr::copy(src, dst, tail_len as usize);
+            }
 
-        // Insert new items
-        if !item_handles.is_empty() {
+            // Insert new items
             for (i, item_handle) in item_handles.iter().enumerate() {
                 let item = item_handle.get_nanbox_f64();
                 // A uniquely-owned string spliced in now aliases the array slot —
@@ -198,18 +202,18 @@ pub extern "C" fn js_array_splice(
                 // GC_STORE_AUDIT(BARRIERED): splice inserted item writes are followed by layout/barrier rebuild.
                 ptr::write(elements_ptr.add(start_idx as usize + i), item);
             }
-        }
 
-        // ECMA-262 §23.1.3.31 step 24: Set(O, "length", …, true) — throws on a
-        // non-writable `length` (test262 splice/S15.4.4.12_A6.1_T2/T3).
-        super::push_pop::guard_writable_length(arr);
-        (*arr).length = new_len;
-        rebuild_array_layout(arr);
+            // ECMA-262 §23.1.3.31 step 24: Set(O, "length", …, true) — throws on a
+            // non-writable `length` (test262 splice/S15.4.4.12_A6.1_T2/T3).
+            super::push_pop::guard_writable_length(arr);
+            (*arr).length = new_len;
+            rebuild_array_layout(arr);
 
-        // Return modified array via out param
-        *out_arr = arr;
+            // Return modified array via out param
+            *out_arr = arr;
+        });
 
-        deleted_handle.get_raw_mut_ptr::<ArrayHeader>()
+        deleted_handle.with_mut_ptr(|deleted: *mut ArrayHeader| deleted)
     }
 }
 
@@ -268,14 +272,16 @@ pub extern "C" fn js_array_splice_values(
         _ => js_array_splice_delete_count(delete_count_value.get_nanbox_f64()),
     };
     let refreshed_items = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&item_handles);
-    js_array_splice(
-        arr.get_raw_mut_ptr::<ArrayHeader>(),
-        start,
-        delete_count,
-        refreshed_items.as_ptr(),
-        refreshed_items.len() as u32,
-        out_arr,
-    )
+    arr.with_mut_ptr(|arr: *mut ArrayHeader| {
+        js_array_splice(
+            arr,
+            start,
+            delete_count,
+            refreshed_items.as_ptr(),
+            refreshed_items.len() as u32,
+            out_arr,
+        )
+    })
 }
 
 fn array_slice_start_index(value: f64) -> i32 {
@@ -302,7 +308,7 @@ pub extern "C" fn js_array_slice_values(
     let end_value = scope.root_nanbox_f64(end_value);
     let start = array_slice_start_index(start_value.get_nanbox_f64());
     let end = array_slice_end_index(end_value.get_nanbox_f64());
-    js_array_slice(arr.get_raw_const_ptr::<ArrayHeader>(), start, end)
+    arr.with_const_ptr(|arr: *const ArrayHeader| js_array_slice(arr, start, end))
 }
 
 /// Slice an array, returning a new array with elements from start to end (exclusive).
