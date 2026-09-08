@@ -8,6 +8,7 @@ fn standalone_regression() {
         .arg(root.join("scripts/test-bun-text-modules.mjs"))
         .env("PERRY_BIN", env!("CARGO_BIN_EXE_perry"))
         .env("PERRY_WORKSPACE_ROOT", &root)
+        .env("PERRY_TEST_BUILD_RUNTIME", "1")
         .current_dir(&root)
         .output()
         .expect("run bounded Node regression driver");
