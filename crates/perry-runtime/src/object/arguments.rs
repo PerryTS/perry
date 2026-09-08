@@ -629,14 +629,26 @@ pub extern "C" fn js_array_like_to_array(value: f64) -> *mut ArrayHeader {
     }
     let raw = jsv.as_pointer::<u8>();
     unsafe {
-        if let Some(arr) = arguments_object_to_array(raw as *const ObjectHeader) {
-            return arr;
+        if is_arguments_object(raw as *const ObjectHeader) {
+            if crate::object::builtin_iterator_next_is_canonical(
+                crate::array::ARRAY_ITERATOR_CLASS_ID,
+            ) {
+                if let Some(arr) = arguments_object_to_array(raw as *const ObjectHeader) {
+                    return arr;
+                }
+            }
+            return crate::array::js_array_clone_for_spread(value);
         }
         let addr = raw as usize;
         if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
-            return crate::typedarray::typed_array_to_array(
-                raw as *const crate::typedarray::TypedArrayHeader,
-            );
+            if crate::object::builtin_iterator_next_is_canonical(
+                crate::array::ARRAY_ITERATOR_CLASS_ID,
+            ) {
+                return crate::typedarray::typed_array_to_array(
+                    raw as *const crate::typedarray::TypedArrayHeader,
+                );
+            }
+            return crate::array::js_array_clone_for_spread(value);
         }
         if crate::buffer::is_registered_buffer(addr) {
             return crate::buffer::buffer_to_array(raw as *const crate::buffer::BufferHeader);
@@ -650,7 +662,11 @@ pub extern "C" fn js_array_like_to_array(value: f64) -> *mut ArrayHeader {
         // sticky flag that is false until user code writes the prototype slot,
         // so the fast path is untouched in every ordinary program.
         if crate::array::js_array_is_array(value).to_bits() == crate::value::TAG_TRUE {
-            if crate::array::array_proto_iterator_modified() {
+            if crate::array::array_proto_iterator_modified()
+                || !crate::object::builtin_iterator_next_is_canonical(
+                    crate::array::ARRAY_ITERATOR_CLASS_ID,
+                )
+            {
                 return crate::array::js_array_clone_for_spread(value);
             }
             return crate::array::clean_arr_ptr(raw as *const ArrayHeader) as *mut ArrayHeader;

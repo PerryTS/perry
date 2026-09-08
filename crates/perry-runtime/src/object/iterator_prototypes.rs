@@ -566,6 +566,43 @@ unsafe fn prototype_next_is_canonical(proto: *const ObjectHeader, canonical: *co
     !super::descriptor_state::may_have_descriptor_entry(proto as usize, "next", true)
 }
 
+/// Whether an eager materializer may skip creating and draining a built-in
+/// iterator of `class_id` without bypassing a user replacement of its
+/// prototype `next` method.
+///
+/// A missing prototype tower proves no replacement can have been installed:
+/// user code can only obtain a family prototype from an iterator instance,
+/// and allocating that instance materializes the tower. Once materialized,
+/// use the same allocation-free own-slot proof as the iterator dispatch path.
+/// Unknown families and incomplete towers decline conservatively.
+#[inline]
+pub(crate) fn builtin_iterator_next_is_canonical(class_id: u32) -> bool {
+    if ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) == 0 {
+        return true;
+    }
+    let (slot, canonical): (&crate::object::RealmAtomicI64, *const u8) = match class_id {
+        crate::array::ARRAY_ITERATOR_CLASS_ID => (
+            &ARRAY_ITERATOR_PROTOTYPE_PTR,
+            array_iterator_next_thunk as *const u8,
+        ),
+        crate::collection_iter_object::MAP_ITERATOR_CLASS_ID => (
+            &MAP_ITERATOR_PROTOTYPE_PTR,
+            map_iterator_next_thunk as *const u8,
+        ),
+        crate::collection_iter_object::SET_ITERATOR_CLASS_ID => (
+            &SET_ITERATOR_PROTOTYPE_PTR,
+            set_iterator_next_thunk as *const u8,
+        ),
+        crate::string::STRING_ITERATOR_CLASS_ID => (
+            &STRING_ITERATOR_PROTOTYPE_PTR,
+            string_iterator_next_thunk as *const u8,
+        ),
+        _ => return false,
+    };
+    let proto = slot.load(Ordering::Acquire) as *const ObjectHeader;
+    !proto.is_null() && unsafe { prototype_next_is_canonical(proto, canonical) }
+}
+
 /// The prototype-override probe must be free on the path every real program
 /// takes: tower materialized (any iterator allocation does that), nothing
 /// patched. Before this module's `prototype_next_is_canonical`, that path

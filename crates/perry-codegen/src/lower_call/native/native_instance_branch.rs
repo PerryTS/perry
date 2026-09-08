@@ -249,68 +249,53 @@
                 args.len()
             );
         }
-        let src_box = lower_expr(ctx, &args[0])?;
-        let arr_box = lower_expr(ctx, recv)?;
-        let blk = ctx.block();
-        let arr_handle = unbox_to_i64(blk, &arr_box);
-        let orig_handle = arr_handle.clone();
-        let src_handle = unbox_to_i64(blk, &src_box);
-        let blk = ctx.block();
-        let new_handle = blk.call(
-            I64,
-            "js_array_push_spread_f64",
-            &[(I64, &arr_handle), (I64, &src_handle)],
-        );
-        let blk = ctx.block();
-        let new_box = nanbox_pointer_inline(blk, &new_handle);
-        // Same write-back-only-if-realloc'd pattern as push_single.
-        let needs_writeback = matches!(recv, Expr::LocalGet(_) | Expr::PropertyGet { .. });
-        if needs_writeback {
+        return crate::rooting::with_operands_rooted(ctx, &[recv, &args[0]], |ctx, vals| {
+            let arr_box = vals[0].clone();
+            let src_box = vals[1].clone();
             let blk = ctx.block();
-            let changed = blk.icmp_ne(I64, &new_handle, &orig_handle);
-            let wb_idx = ctx.new_block("arr.push_spread.wb");
-            let merge_idx = ctx.new_block("arr.push_spread.merge");
-            let wb_label = ctx.block_label(wb_idx);
-            let merge_label = ctx.block_label(merge_idx);
-            ctx.block().cond_br(&changed, &wb_label, &merge_label);
+            let arr_handle = unbox_to_i64(blk, &arr_box);
+            let orig_handle = arr_handle.clone();
+            let new_handle = ctx.block().call(
+                I64,
+                "js_array_spread_append",
+                &[(I64, &arr_handle), (DOUBLE, &src_box)],
+            );
+            let new_box = nanbox_pointer_inline(ctx.block(), &new_handle);
+            // Local bindings get the new head as a performance repair. A
+            // property receiver deliberately keeps the old head: array growth
+            // installs a forwarding stub there, so the alias remains valid,
+            // while re-evaluating a side-effecting property base here would be
+            // observably wrong and could collect before storing `new_box`.
+            let needs_writeback = matches!(recv, Expr::LocalGet(_));
+            if needs_writeback {
+                let changed = ctx.block().icmp_ne(I64, &new_handle, &orig_handle);
+                let wb_idx = ctx.new_block("arr.push_spread.wb");
+                let merge_idx = ctx.new_block("arr.push_spread.merge");
+                let wb_label = ctx.block_label(wb_idx);
+                let merge_label = ctx.block_label(merge_idx);
+                ctx.block().cond_br(&changed, &wb_label, &merge_label);
 
-            ctx.current_block = wb_idx;
-            match recv {
-                Expr::LocalGet(id) => {
-                    if let Some(slot) = ctx.locals.get(id).cloned() {
-                        ctx.block().store(DOUBLE, &new_box, &slot);
-                    } else if let Some(global_name) = ctx.module_globals.get(id).cloned() {
-                        let g_ref = format!("@{}", global_name);
-                        emit_root_nanbox_store_on_block(ctx.block(), &new_box, &g_ref);
+                ctx.current_block = wb_idx;
+                match recv {
+                    Expr::LocalGet(id) => {
+                        if let Some(slot) = ctx.locals.get(id).cloned() {
+                            ctx.block().store(DOUBLE, &new_box, &slot);
+                        } else if let Some(global_name) = ctx.module_globals.get(id).cloned() {
+                            let g_ref = format!("@{}", global_name);
+                            emit_root_nanbox_store_on_block(ctx.block(), &new_box, &g_ref);
+                        }
                     }
+                    _ => unreachable!(),
                 }
-                Expr::PropertyGet {
-                    object: obj_expr,
-                    property, .. } => {
-                    let obj_box = lower_expr(ctx, obj_expr)?;
-                    let key_idx = ctx.strings.intern(property);
-                    let key_handle_global =
-                        format!("@{}", ctx.strings.entry(key_idx).handle_global);
-                    let blk = ctx.block();
-                    let obj_bits = blk.bitcast_double_to_i64(&obj_box);
-                    let obj_handle = blk.and(I64, &obj_bits, POINTER_MASK_I64);
-                    let key_box = blk.load(DOUBLE, &key_handle_global);
-                    let key_bits = blk.bitcast_double_to_i64(&key_box);
-                    let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
-                    blk.call_void(
-                        "js_object_set_field_by_name",
-                        &[(I64, &obj_handle), (I64, &key_raw), (DOUBLE, &new_box)],
-                    );
-                }
-                _ => unreachable!(),
-            }
-            ctx.block().br(&merge_label);
+                ctx.block().br(&merge_label);
 
-            ctx.current_block = merge_idx;
-        }
-        let blk = ctx.block();
-        let len_i32 = blk.call(I32, "js_array_length", &[(I64, &new_handle)]);
-        return Ok(blk.uitofp(I32, &len_i32, DOUBLE));
+                ctx.current_block = merge_idx;
+            }
+            let len_i32 = ctx
+                .block()
+                .call(I32, "js_array_length", &[(I64, &new_handle)]);
+            Ok(ctx.block().uitofp(I32, &len_i32, DOUBLE))
+        });
     }
 
     if module == "array" && (method == "push_single" || method == "push") {

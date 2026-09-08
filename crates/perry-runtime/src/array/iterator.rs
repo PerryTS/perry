@@ -49,15 +49,23 @@ pub extern "C" fn js_for_of_to_array(val_f64: f64) -> f64 {
     // values, matching the builtins' default `[Symbol.iterator]`. Skipped when
     // the subclass overrides `[Symbol.iterator]` so the override drives `for…of`.
     match crate::object::map_set_subclass::subclass_backing_for_default_iteration(val_f64) {
-        Some(crate::object::map_set_subclass::CollectionBacking::Map(m)) => {
+        Some(crate::object::map_set_subclass::CollectionBacking::Map(m))
+            if crate::object::builtin_iterator_next_is_canonical(
+                crate::collection_iter_object::MAP_ITERATOR_CLASS_ID,
+            ) =>
+        {
             let arr = js_map_entries_for_for_of(m as i64);
             return js_nanbox_pointer(arr as i64);
         }
-        Some(crate::object::map_set_subclass::CollectionBacking::Set(s)) => {
+        Some(crate::object::map_set_subclass::CollectionBacking::Set(s))
+            if crate::object::builtin_iterator_next_is_canonical(
+                crate::collection_iter_object::SET_ITERATOR_CLASS_ID,
+            ) =>
+        {
             let arr = js_set_to_array_for_for_of(s as i64);
             return js_nanbox_pointer(arr as i64);
         }
-        None => {}
+        _ => {}
     }
 
     // Strings: iterate by code point. `is_any_string` covers both heap
@@ -68,10 +76,16 @@ pub extern "C" fn js_for_of_to_array(val_f64: f64) -> f64 {
     // reads it correctly. The resulting array yields single-char
     // substrings exactly like `for (const c of "abc")`.
     if jsv.is_any_string() {
-        let str_ptr = crate::value::js_get_string_pointer_unified(val_f64);
-        let str_bits = crate::value::STRING_TAG | (str_ptr as u64 & crate::value::POINTER_MASK);
-        let arr_i64 = crate::string::js_string_to_char_array(str_bits as i64);
-        return js_nanbox_pointer(arr_i64);
+        if crate::object::builtin_iterator_next_is_canonical(
+            crate::string::STRING_ITERATOR_CLASS_ID,
+        ) {
+            let str_ptr = crate::value::js_get_string_pointer_unified(val_f64);
+            let str_bits = crate::value::STRING_TAG | (str_ptr as u64 & crate::value::POINTER_MASK);
+            let arr_i64 = crate::string::js_string_to_char_array(str_bits as i64);
+            return js_nanbox_pointer(arr_i64);
+        }
+        let arr = js_iterator_to_array(crate::symbol::js_get_iterator(val_f64));
+        return js_nanbox_pointer(arr as i64);
     }
 
     // #6454: a class DECLARATION is an INT32-tagged ClassRef whose low bits are
@@ -113,14 +127,30 @@ pub extern "C" fn js_for_of_to_array(val_f64: f64) -> f64 {
         // Already an array: return unchanged — the index loop reads it in
         // place, no allocation. Lazy arrays are arrays from the iterator's
         // perspective and `js_array_length` / indexing materialize lazily.
-        t if t == GC_TYPE_ARRAY || t == GC_TYPE_LAZY_ARRAY => val_f64,
+        t if (t == GC_TYPE_ARRAY || t == GC_TYPE_LAZY_ARRAY)
+            && crate::object::builtin_iterator_next_is_canonical(ARRAY_ITERATOR_CLASS_ID) =>
+        {
+            val_f64
+        }
+        t if t == GC_TYPE_ARRAY || t == GC_TYPE_LAZY_ARRAY => {
+            let arr = js_iterator_to_array(crate::symbol::js_get_iterator(val_f64));
+            js_nanbox_pointer(arr as i64)
+        }
         // Map → `[k, v]` pair array (=== `map.entries()` spread).
-        GC_TYPE_MAP => {
+        GC_TYPE_MAP
+            if crate::object::builtin_iterator_next_is_canonical(
+                crate::collection_iter_object::MAP_ITERATOR_CLASS_ID,
+            ) =>
+        {
             let arr = js_map_entries_for_for_of(raw_ptr);
             js_nanbox_pointer(arr as i64)
         }
         // Set → values array.
-        GC_TYPE_SET => {
+        GC_TYPE_SET
+            if crate::object::builtin_iterator_next_is_canonical(
+                crate::collection_iter_object::SET_ITERATOR_CLASS_ID,
+            ) =>
+        {
             let arr = js_set_to_array_for_for_of(raw_ptr);
             js_nanbox_pointer(arr as i64)
         }
@@ -959,9 +989,14 @@ pub(crate) fn array_from_spread_value(value: f64) -> *mut ArrayHeader {
         throw_not_iterable(value());
     }
     if jsv.is_any_string() {
-        let str_ptr = crate::value::js_get_string_pointer_unified(value());
-        let str_bits = crate::value::STRING_TAG | (str_ptr as u64 & POINTER_MASK);
-        return crate::string::js_string_to_char_array(str_bits as i64) as *mut ArrayHeader;
+        if crate::object::builtin_iterator_next_is_canonical(
+            crate::string::STRING_ITERATOR_CLASS_ID,
+        ) {
+            let str_ptr = crate::value::js_get_string_pointer_unified(value());
+            let str_bits = crate::value::STRING_TAG | (str_ptr as u64 & POINTER_MASK);
+            return crate::string::js_string_to_char_array(str_bits as i64) as *mut ArrayHeader;
+        }
+        return js_iterator_to_array(crate::symbol::js_get_iterator(value()));
     }
 
     // #6454: `[...SomeClass]` / `fn(...SomeClass)` on a class DECLARATION — an
@@ -1045,10 +1080,20 @@ pub(crate) fn array_from_spread_value(value: f64) -> *mut ArrayHeader {
         return crate::buffer::buffer_to_array(raw_ptr() as *const crate::buffer::BufferHeader);
     }
     if crate::set::is_registered_set(raw_ptr()) {
-        return crate::set::js_set_to_array(raw_ptr() as *const crate::set::SetHeader);
+        if crate::object::builtin_iterator_next_is_canonical(
+            crate::collection_iter_object::SET_ITERATOR_CLASS_ID,
+        ) {
+            return crate::set::js_set_to_array(raw_ptr() as *const crate::set::SetHeader);
+        }
+        return js_iterator_to_array(crate::symbol::js_get_iterator(value()));
     }
     if crate::map::is_registered_map(raw_ptr()) {
-        return crate::map::js_map_entries(raw_ptr() as *const crate::map::MapHeader);
+        if crate::object::builtin_iterator_next_is_canonical(
+            crate::collection_iter_object::MAP_ITERATOR_CLASS_ID,
+        ) {
+            return crate::map::js_map_entries(raw_ptr() as *const crate::map::MapHeader);
+        }
+        return js_iterator_to_array(crate::symbol::js_get_iterator(value()));
     }
     // `class X extends Map | Set` instance — spread (`[...container]`,
     // `Array.from(container)`, `fn(...container)`) over the hidden backing
@@ -1059,12 +1104,22 @@ pub(crate) fn array_from_spread_value(value: f64) -> *mut ArrayHeader {
     // `[Symbol.iterator]` so the override drives the spread.
     match crate::object::map_set_subclass::subclass_backing_for_default_iteration(value()) {
         Some(crate::object::map_set_subclass::CollectionBacking::Map(m)) => {
-            return crate::map::js_map_entries(m as *const crate::map::MapHeader);
+            if crate::object::builtin_iterator_next_is_canonical(
+                crate::collection_iter_object::MAP_ITERATOR_CLASS_ID,
+            ) {
+                return crate::map::js_map_entries(m as *const crate::map::MapHeader);
+            }
+            return js_iterator_to_array(crate::symbol::js_get_iterator(value()));
         }
         Some(crate::object::map_set_subclass::CollectionBacking::Set(s)) => {
-            return crate::set::js_set_to_array(s as *const crate::set::SetHeader);
+            if crate::object::builtin_iterator_next_is_canonical(
+                crate::collection_iter_object::SET_ITERATOR_CLASS_ID,
+            ) {
+                return crate::set::js_set_to_array(s as *const crate::set::SetHeader);
+            }
+            return js_iterator_to_array(crate::symbol::js_get_iterator(value()));
         }
-        None => {}
+        _ => {}
     }
     // `class X extends Array` instance — object-backed; spread (`[...sub]`,
     // `fn(...sub)`) over a dense snapshot of its indexed elements. The generic
@@ -1076,13 +1131,21 @@ pub(crate) fn array_from_spread_value(value: f64) -> *mut ArrayHeader {
     if crate::array::is_array_subclass_instance(value())
         && !crate::array::array_subclass_has_iterator_override(value())
     {
-        let snap = crate::array::array_subclass_dense_snapshot(value());
-        return crate::value::js_nanbox_get_pointer(snap) as *mut ArrayHeader;
+        if crate::object::builtin_iterator_next_is_canonical(crate::array::ARRAY_ITERATOR_CLASS_ID)
+        {
+            let snap = crate::array::array_subclass_dense_snapshot(value());
+            return crate::value::js_nanbox_get_pointer(snap) as *mut ArrayHeader;
+        }
+        return js_iterator_to_array(crate::symbol::js_get_iterator(value()));
     }
     if crate::typedarray::lookup_typed_array_kind(raw_ptr()).is_some() {
-        return crate::typedarray::typed_array_to_array(
-            raw_ptr() as *const crate::typedarray::TypedArrayHeader
-        );
+        if crate::object::builtin_iterator_next_is_canonical(crate::array::ARRAY_ITERATOR_CLASS_ID)
+        {
+            return crate::typedarray::typed_array_to_array(
+                raw_ptr() as *const crate::typedarray::TypedArrayHeader
+            );
+        }
+        return js_iterator_to_array(crate::symbol::js_get_iterator(value()));
     }
     if raw_ptr() >= crate::gc::GC_HEADER_SIZE + 0x1000 {
         let obj_type = unsafe {
@@ -1120,11 +1183,17 @@ pub(crate) fn array_from_spread_value(value: f64) -> *mut ArrayHeader {
     // Arguments objects spread like arrays (spec:
     // `arguments[Symbol.iterator] === Array.prototype.values`).
     if crate::object::is_arguments_object(raw_ptr() as *const crate::object::ObjectHeader) {
-        if let Some(arr) = unsafe {
-            crate::object::arguments_object_to_array(raw_ptr() as *const crate::object::ObjectHeader)
-        } {
-            return arr;
+        if crate::object::builtin_iterator_next_is_canonical(crate::array::ARRAY_ITERATOR_CLASS_ID)
+        {
+            if let Some(arr) = unsafe {
+                crate::object::arguments_object_to_array(
+                    raw_ptr() as *const crate::object::ObjectHeader
+                )
+            } {
+                return arr;
+            }
         }
+        return js_iterator_to_array(crate::symbol::js_get_iterator(value()));
     }
 
     let iter_wk = crate::symbol::well_known_symbol("iterator");
@@ -1217,8 +1286,16 @@ pub(crate) fn array_from_spread_value(value: f64) -> *mut ArrayHeader {
 
 #[no_mangle]
 pub extern "C" fn js_array_spread_append(dest: *mut ArrayHeader, source: f64) -> *mut ArrayHeader {
-    let arr = array_from_spread_value(source);
-    js_array_concat(dest, arr)
+    // Materializing an iterable may run arbitrary user code and collect. Keep
+    // the destination live and re-read its possibly moved address afterward.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let dest_h = scope.root_raw_mut_ptr(dest);
+    let source_h = scope.root_nanbox_f64(source);
+    if let Some(arr) = crate::array::flat_clone::dense_spread_source(source_h.get_nanbox_f64()) {
+        return dest_h.with_mut_ptr(|dest| crate::array::js_array_push_spread_f64(dest, arr));
+    }
+    let arr = array_from_spread_value(source_h.get_nanbox_f64());
+    dest_h.with_mut_ptr(|dest| crate::array::js_array_push_spread_f64(dest, arr))
 }
 
 /// `true` when `raw_ptr` is a heap `GC_TYPE_OBJECT` whose class id is one of the

@@ -94,13 +94,23 @@ pub extern "C" fn js_array_from_value(boxed: f64) -> *mut ArrayHeader {
     // here rather than downstream. `array_from_spread_value` already routes the
     // patched case through `js_get_iterator`; reuse it so the two entry points
     // cannot answer differently for the same receiver.
-    if crate::array::array_proto_iterator_modified()
+    if (crate::array::array_proto_iterator_modified()
+        || !crate::object::builtin_iterator_next_is_canonical(
+            crate::array::ARRAY_ITERATOR_CLASS_ID,
+        ))
         && crate::array::js_array_is_array(boxed).to_bits() == crate::value::TAG_TRUE
     {
         return crate::array::js_array_clone_for_spread(boxed);
     }
 
     let jsval = crate::value::JSValue::from_bits(bits);
+    if jsval.is_any_string()
+        && !crate::object::builtin_iterator_next_is_canonical(
+            crate::string::STRING_ITERATOR_CLASS_ID,
+        )
+    {
+        return crate::array::js_array_clone_for_spread(boxed);
+    }
     if jsval.is_short_string() {
         let hdr = crate::string::js_string_materialize_to_heap(boxed);
         if !hdr.is_null() {
@@ -128,10 +138,17 @@ pub extern "C" fn js_array_from_value(boxed: f64) -> *mut ArrayHeader {
         bits as usize
     };
     unsafe {
-        if let Some(arr) =
-            crate::object::arguments_object_to_array(ptr_bits as *const crate::object::ObjectHeader)
-        {
-            return arr;
+        if crate::object::is_arguments_object(ptr_bits as *const crate::object::ObjectHeader) {
+            if crate::object::builtin_iterator_next_is_canonical(
+                crate::array::ARRAY_ITERATOR_CLASS_ID,
+            ) {
+                if let Some(arr) = crate::object::arguments_object_to_array(
+                    ptr_bits as *const crate::object::ObjectHeader,
+                ) {
+                    return arr;
+                }
+            }
+            return crate::array::js_array_clone_for_spread(boxed);
         }
     }
     // A raw ArrayBuffer / SharedArrayBuffer is NOT array-like: it has no
@@ -149,6 +166,21 @@ pub extern "C" fn js_array_from_value(boxed: f64) -> *mut ArrayHeader {
             || crate::buffer::is_shared_array_buffer(ptr_bits))
     {
         return js_array_alloc(0);
+    }
+    if (crate::typedarray::lookup_typed_array_kind(ptr_bits).is_some()
+        && !crate::object::builtin_iterator_next_is_canonical(
+            crate::array::ARRAY_ITERATOR_CLASS_ID,
+        ))
+        || (crate::set::is_registered_set(ptr_bits)
+            && !crate::object::builtin_iterator_next_is_canonical(
+                crate::collection_iter_object::SET_ITERATOR_CLASS_ID,
+            ))
+        || (crate::map::is_registered_map(ptr_bits)
+            && !crate::object::builtin_iterator_next_is_canonical(
+                crate::collection_iter_object::MAP_ITERATOR_CLASS_ID,
+            ))
+    {
+        return crate::array::js_array_clone_for_spread(boxed);
     }
     js_array_clone(ptr_bits as *const ArrayHeader)
 }
@@ -579,23 +611,64 @@ fn items_is_iterable(items: f64) -> bool {
 
 fn classify_iter_source(items: f64) -> IterSourceKind {
     if jsv_is_array(items) {
-        return IterSourceKind::LiveArray;
+        return if crate::object::builtin_iterator_next_is_canonical(
+            crate::array::ARRAY_ITERATOR_CLASS_ID,
+        ) {
+            IterSourceKind::LiveArray
+        } else {
+            IterSourceKind::Generic
+        };
     }
     let jv = JSValue::from_bits(items.to_bits());
     if jv.is_any_string() {
-        return IterSourceKind::Snapshot;
+        return if crate::object::builtin_iterator_next_is_canonical(
+            crate::string::STRING_ITERATOR_CLASS_ID,
+        ) {
+            IterSourceKind::Snapshot
+        } else {
+            IterSourceKind::Generic
+        };
     }
     let raw = crate::value::js_nanbox_get_pointer(items) as usize;
     if raw != 0 {
-        if crate::set::is_registered_set(raw)
-            || crate::map::is_registered_map(raw)
-            || crate::typedarray::lookup_typed_array_kind(raw).is_some()
-            || crate::buffer::is_registered_buffer(raw)
-        {
+        if crate::set::is_registered_set(raw) {
+            return if crate::object::builtin_iterator_next_is_canonical(
+                crate::collection_iter_object::SET_ITERATOR_CLASS_ID,
+            ) {
+                IterSourceKind::Snapshot
+            } else {
+                IterSourceKind::Generic
+            };
+        }
+        if crate::map::is_registered_map(raw) {
+            return if crate::object::builtin_iterator_next_is_canonical(
+                crate::collection_iter_object::MAP_ITERATOR_CLASS_ID,
+            ) {
+                IterSourceKind::Snapshot
+            } else {
+                IterSourceKind::Generic
+            };
+        }
+        if crate::typedarray::lookup_typed_array_kind(raw).is_some() {
+            return if crate::object::builtin_iterator_next_is_canonical(
+                crate::array::ARRAY_ITERATOR_CLASS_ID,
+            ) {
+                IterSourceKind::Snapshot
+            } else {
+                IterSourceKind::Generic
+            };
+        }
+        if crate::buffer::is_registered_buffer(raw) {
             return IterSourceKind::Snapshot;
         }
         if crate::object::is_arguments_object(raw as *const crate::object::ObjectHeader) {
-            return IterSourceKind::Snapshot;
+            return if crate::object::builtin_iterator_next_is_canonical(
+                crate::array::ARRAY_ITERATOR_CLASS_ID,
+            ) {
+                IterSourceKind::Snapshot
+            } else {
+                IterSourceKind::Generic
+            };
         }
     }
     IterSourceKind::Generic
