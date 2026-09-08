@@ -610,6 +610,38 @@ pub fn add_child_at(parent: i64, child: i64, index: i64) {
     });
 }
 
+pub fn reorder_child(parent: i64, from_index: i64, to_index: i64) {
+    if !is_fluent() {
+        perry_ui_windows::widgets::reorder_child(parent, from_index, to_index);
+        return;
+    }
+    reorder_fluent_child(parent, from_index, to_index);
+}
+
+fn reorder_fluent_child(parent: i64, from_index: i64, to_index: i64) {
+    let changed = NODES.with(|nodes| {
+        let mut nodes = nodes.borrow_mut();
+        let Some(node) = nodes.get_mut(parent.saturating_sub(1) as usize) else {
+            return false;
+        };
+        let Ok(from) = usize::try_from(from_index) else {
+            return false;
+        };
+        let Ok(to) = usize::try_from(to_index) else {
+            return false;
+        };
+        if from >= node.common.children.len() || to >= node.common.children.len() || from == to {
+            return false;
+        }
+        let child = node.common.children.remove(from);
+        node.common.children.insert(to, child);
+        true
+    });
+    if changed {
+        request_render();
+    }
+}
+
 pub fn remove_child(parent: i64, child: i64) {
     if !is_fluent() {
         perry_ui_windows::widgets::remove_child(parent, child);
@@ -1440,8 +1472,12 @@ mod tests {
             node.common.children.push(first);
             node.common.children.push(second);
         });
+        // Exercise the Fluent model directly: CI can run on a Windows host
+        // without the Windows App SDK runtime and legitimately select the
+        // Win32 fallback.
+        reorder_fluent_child(parent, 0, 1);
         let node = node(parent).unwrap();
-        assert_eq!(node.common.children, vec![first, second]);
+        assert_eq!(node.common.children, vec![second, first]);
         assert_eq!(render_handle(parent).kind_name(), "StackPanel");
     }
 
