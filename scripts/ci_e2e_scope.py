@@ -129,6 +129,7 @@ _CODEGEN_SUITES = [
     "manifest_consistency",
     "namespace_getter_binding_identity",
     "native_proof_buffer_views",
+    "padding_single_evaluation",
     "shadow_slot_hygiene",
     "typed_feedback",
     # #7506/#7245: held out until its one failing test was triaged. The
