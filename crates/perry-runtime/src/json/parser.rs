@@ -272,6 +272,12 @@ pub(crate) struct DirectParser<'a> {
     hot_shape_len: usize,
     hot_shape_keys: [*const StringHeader; 8],
     hot_shape_array: *mut ArrayHeader,
+    /// The newest small parse shape, copied once at the parse boundary. A
+    /// top-level record can consume it while reading keys in order, avoiding
+    /// one TLS + RefCell key-cache probe per field. GC is already suppressed
+    /// before `new_batched`, so these cache-owned pointers cannot move while
+    /// the hint is live.
+    warm_record_shape_pending: bool,
     /// At least one object crossed into the object-local content index.
     /// Keep the shared key cache stable through recursive parsing, then drop
     /// it at the outer parse boundary so wide schemas cannot pin arena blocks.
@@ -289,6 +295,7 @@ impl<'a> DirectParser<'a> {
             hot_shape_len: 0,
             hot_shape_keys: [std::ptr::null(); 8],
             hot_shape_array: std::ptr::null_mut(),
+            warm_record_shape_pending: false,
             saw_wide_object: false,
             batch: None,
         }
@@ -298,6 +305,17 @@ impl<'a> DirectParser<'a> {
     pub(crate) unsafe fn new_batched(input: &'a [u8]) -> Self {
         let mut parser = Self::new(input);
         parser.batch = crate::arena::ConstructionBatch::new();
+        if (65..=256).contains(&input.len()) && input.first() == Some(&b'{') {
+            PARSE_SHAPE_CACHE.with(|cache| {
+                let cache = cache.borrow();
+                if let Some(entry) = cache.last().filter(|entry| entry.keys.len() <= 8) {
+                    parser.hot_shape_len = entry.keys.len();
+                    parser.hot_shape_keys[..entry.keys.len()].copy_from_slice(&entry.keys);
+                    parser.hot_shape_array = entry.keys_array;
+                    parser.warm_record_shape_pending = true;
+                }
+            });
+        }
         parser
     }
 
@@ -310,6 +328,7 @@ impl<'a> DirectParser<'a> {
             hot_shape_len: 0,
             hot_shape_keys: [std::ptr::null(); 8],
             hot_shape_array: std::ptr::null_mut(),
+            warm_record_shape_pending: false,
             saw_wide_object: false,
             batch: None,
         }
@@ -858,6 +877,21 @@ impl<'a> DirectParser<'a> {
         self.advance();
         self.skip_whitespace();
 
+        // Only the root object may claim the parse-boundary hint. Nested
+        // objects keep using the parser-local homogeneous-shape cache.
+        let warm_shape = if self.warm_record_shape_pending {
+            self.warm_record_shape_pending = false;
+            Some((
+                self.hot_shape_len,
+                self.hot_shape_keys,
+                self.hot_shape_array,
+            ))
+        } else {
+            None
+        };
+        let mut warm_shape_slot = 0usize;
+        let mut warm_shape_matches = warm_shape.is_some();
+
         let saved_roots = parse_root_save_len();
 
         if self.peek() == Some(b'}') {
@@ -932,7 +966,13 @@ impl<'a> DirectParser<'a> {
                     }
                 } else {
                     let key_ptr = cached_parse_key_ptr(key_bytes);
-                    if let Some(existing) = keys.iter().position(|&ptr| ptr == key_ptr) {
+                    let warm_prefix_uses_old_key_identity =
+                        warm_shape_slot != 0 && !warm_shape_matches;
+                    if let Some(existing) = keys.iter().position(|&ptr| {
+                        ptr == key_ptr
+                            || (warm_prefix_uses_old_key_identity
+                                && json_key_bytes_equal(ptr, key_bytes))
+                    }) {
                         values[existing] = value;
                     } else {
                         keys.push(key_ptr);
@@ -940,11 +980,27 @@ impl<'a> DirectParser<'a> {
                     }
                 }
             } else {
-                let key_ptr = cached_parse_key_ptr(key_bytes);
-                if let Some(existing) = inline_keys[..inline_len]
-                    .iter()
-                    .position(|&ptr| ptr == key_ptr)
-                {
+                let key_ptr = if warm_shape_matches {
+                    let (expected_len, expected_keys, _) = warm_shape.as_ref().unwrap();
+                    if warm_shape_slot < *expected_len
+                        && json_key_bytes_equal(expected_keys[warm_shape_slot], key_bytes)
+                    {
+                        let ptr = expected_keys[warm_shape_slot];
+                        warm_shape_slot += 1;
+                        ptr
+                    } else {
+                        warm_shape_matches = false;
+                        cached_parse_key_ptr(key_bytes)
+                    }
+                } else {
+                    cached_parse_key_ptr(key_bytes)
+                };
+                let warm_prefix_uses_old_key_identity = warm_shape_slot != 0 && !warm_shape_matches;
+                if let Some(existing) = inline_keys[..inline_len].iter().position(|&ptr| {
+                    ptr == key_ptr
+                        || (warm_prefix_uses_old_key_identity
+                            && json_key_bytes_equal(ptr, key_bytes))
+                }) {
                     inline_values[existing] = value;
                 } else if inline_len < inline_keys.len() {
                     inline_keys[inline_len] = key_ptr;
@@ -971,6 +1027,12 @@ impl<'a> DirectParser<'a> {
         self.expect(b'}');
         let keys_arr = if let Some((keys, _, _)) = heap_fields.as_ref() {
             self.parse_shape_keys_array_hot(keys)
+        } else if warm_shape_matches
+            && warm_shape
+                .as_ref()
+                .is_some_and(|(len, _, _)| *len == inline_len && warm_shape_slot == *len)
+        {
+            warm_shape.unwrap().2
         } else {
             self.parse_shape_keys_array_hot(&inline_keys[..inline_len])
         };

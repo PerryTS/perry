@@ -211,6 +211,72 @@ fn parse_shape_cache_bounds_retained_keys_and_keeps_small_shape_hits() {
         crate::gc::gc_unsuppress();
     }
 }
+
+#[test]
+fn bounded_root_record_reuses_the_warm_shape_during_one_pass_parse() {
+    use crate::json::{cached_parse_key_ptr, parse_shape_keys_array, PARSE_SHAPE_CACHE};
+
+    let input = br#"{"id":42,"name":"user_42","email":"user_42@example.com","active":false,"score":63.0,"tags":["tag_2","tag_0"]}"#;
+    unsafe {
+        crate::gc::gc_suppress();
+        PARSE_SHAPE_CACHE.with(|cache| cache.borrow_mut().clear());
+        let keys: Vec<_> = ["id", "name", "email", "active", "score", "tags"]
+            .into_iter()
+            .map(|key| cached_parse_key_ptr(key.as_bytes()))
+            .collect();
+        let keys_array = parse_shape_keys_array(&keys);
+
+        let mut parser = super::DirectParser::new_batched(input);
+        assert!(parser.warm_record_shape_pending);
+        assert_eq!(parser.hot_shape_len, keys.len());
+        let value = parser.parse_value();
+        assert!(parser.finish());
+        assert_eq!(
+            crate::object::object_keys_array(value.as_pointer::<crate::ObjectHeader>()),
+            keys_array
+        );
+
+        PARSE_SHAPE_CACHE.with(|cache| cache.borrow_mut().clear());
+        crate::gc::gc_unsuppress();
+    }
+}
+
+#[test]
+fn warm_shape_fallback_keeps_duplicate_semantics_after_key_cache_eviction() {
+    use crate::json::{
+        cached_parse_key_ptr, clear_parse_key_ring, parse_shape_keys_array, PARSE_KEY_CACHE,
+        PARSE_SHAPE_CACHE,
+    };
+
+    let input = br#"{"id":1,"other":"padding keeps this record above sixty-four bytes","id":2,"name":"n","email":"e"}"#;
+    unsafe {
+        crate::gc::gc_suppress();
+        PARSE_SHAPE_CACHE.with(|cache| cache.borrow_mut().clear());
+        let shape_keys: Vec<_> = ["id", "name", "email"]
+            .into_iter()
+            .map(|key| cached_parse_key_ptr(key.as_bytes()))
+            .collect();
+        parse_shape_keys_array(&shape_keys);
+        PARSE_KEY_CACHE.with(|cache| cache.borrow_mut().clear());
+        clear_parse_key_ring();
+
+        let mut parser = super::DirectParser::new_batched(input);
+        let value = parser.parse_value();
+        assert!(parser.finish());
+        let object = value.as_pointer::<crate::ObjectHeader>();
+        let keys = crate::object::object_keys_array(object);
+        assert_eq!((*keys).length, 4, "the second id must replace the first");
+        let id = cached_parse_key_ptr(b"id");
+        assert_eq!(
+            crate::object::js_object_get_field_by_name(object, id).as_number(),
+            2.0
+        );
+
+        PARSE_SHAPE_CACHE.with(|cache| cache.borrow_mut().clear());
+        crate::gc::gc_unsuppress();
+    }
+}
+
 #[test]
 fn depth_preflight_byte_bound_keeps_the_first_excess_opening() {
     use super::nesting_depth_exceeds;
