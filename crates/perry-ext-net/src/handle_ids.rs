@@ -30,7 +30,17 @@
 /// the `0` sentinel through [`next_id_or_throw`]; background callers must guard
 /// it explicitly (never register an object under `0`).
 pub(crate) fn next_id() -> i64 {
-    perry_ffi::reserve_handle_id()
+    perry_ffi::reserve_handle_id_in_domain(net_registry_domain())
+}
+
+/// One authoritative domain for net's private payload maps, sharing only the
+/// numeric allocation pool with FFI's ordinary payload registry.
+pub(crate) fn net_registry_domain() -> perry_ffi::NativeRegistryDomain {
+    static DOMAIN: std::sync::LazyLock<perry_ffi::NativeRegistryDomain> =
+        std::sync::LazyLock::new(|| {
+            perry_ffi::NativeRegistryDomain::new().expect("net native registry domains exhausted")
+        });
+    *DOMAIN
 }
 
 /// [`next_id`] for the synchronous FFI entry points (`new net.Socket()`,
@@ -53,4 +63,25 @@ pub(crate) fn next_id_or_throw() -> i64 {
         );
     }
     id
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reserved_net_id_names_the_private_domain() {
+        let id = next_id();
+        assert_ne!(id, perry_ffi::INVALID_HANDLE);
+        let identity = perry_ffi::handle_registration(id).unwrap();
+        assert_eq!(identity.domain(), net_registry_domain());
+        assert_ne!(identity.domain(), perry_ffi::handle_registry_domain());
+        let lease =
+            perry_ffi::acquire_handle_registration(identity, perry_ffi::NativeLeaseKind::Operation)
+                .unwrap();
+        perry_ffi::free_handle_id(id);
+        perry_ffi::drain_quarantined_handles();
+        assert!(perry_ffi::handle_registration(id).is_none());
+        drop(lease);
+    }
 }

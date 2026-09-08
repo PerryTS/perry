@@ -62,15 +62,24 @@ pub use types::{
     Promise, StringHeader, BIGINT_LIMBS, OBJECT_HEADER_ABI_REVISION, STRING_HEADER_ABI_REVISION,
 };
 
+mod native_registration;
+pub use native_registration::{
+    NativeLeaseKind, NativeQuarantine, NativeRegistrationError, NativeRegistrationIdentity,
+    NativeRegistrationKind, NativeRegistrationLease, NativeRegistrationRegistry,
+    NativeRegistryDomain,
+};
+
 mod handle;
 #[allow(deprecated)]
 pub use handle::gc_register_root_scanner;
 pub use handle::{
-    drain_quarantined_handles, drop_handle, drop_handle_until, free_handle_id,
-    free_handle_id_until, gc_register_mutable_root_scanner, gc_register_mutable_root_scanner_named,
-    get_handle, get_handle_mut, handle_exists, iter_handle_ids_of, iter_handles_of,
-    iter_handles_of_mut, register_handle, reserve_handle_id, take_handle, with_handle,
-    with_handle_mut, GcMutableRootScanner, GcRootVisitor, Handle, INVALID_HANDLE,
+    acquire_handle_registration, drain_quarantined_handles, drop_handle, drop_handle_until,
+    free_handle_id, free_handle_id_until, gc_register_mutable_root_scanner,
+    gc_register_mutable_root_scanner_named, get_handle, get_handle_mut, handle_exists,
+    handle_registration, handle_registry_domain, iter_handle_ids_of, iter_handles_of,
+    iter_handles_of_mut, register_handle, reserve_handle_id, reserve_handle_id_in_domain,
+    take_handle, with_handle, with_handle_mut, GcMutableRootScanner, GcRootVisitor, Handle,
+    INVALID_HANDLE,
 };
 
 mod jsvalue;
