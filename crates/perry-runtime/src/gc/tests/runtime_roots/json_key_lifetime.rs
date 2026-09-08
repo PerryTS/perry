@@ -143,6 +143,7 @@ fn json_retained_wide_object_keeps_evicted_keys_through_minor_and_full_gc() {
 #[test]
 fn json_typed_hint_reads_cached_keys_after_the_entry_collection() {
     for field_count in [1, 0, 2] {
+        let _pressure = crate::gc::policy::force_tiny_parse_pressure_due_for_test();
         let _pacing = crate::gc::policy::force_alloc_point_minor_pacing();
         let _guard = CopyingNurseryTestGuard::new(0);
         let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();

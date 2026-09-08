@@ -59,6 +59,7 @@ fn json_inline_object_parse_allocates_only_fresh_output_without_suppression() {
 #[test]
 fn json_inline_object_parse_roots_keys_and_returns_movable_output() {
     for fallible in [false, true] {
+        let _pressure = crate::gc::policy::force_tiny_parse_pressure_due_for_test();
         let _pacing = crate::gc::policy::force_alloc_point_minor_pacing();
         let _guard = CopyingNurseryTestGuard::new(0);
         let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
@@ -158,6 +159,7 @@ fn json_inline_result_keys_move_at_final_allocation() {
 }
 
 fn assert_inline_keys_move(fallible: bool, pending: bool) {
+    let _pressure = pending.then(crate::gc::policy::force_tiny_parse_pressure_due_for_test);
     let _pacing = crate::gc::policy::force_alloc_point_minor_pacing();
     let _guard = CopyingNurseryTestGuard::new(0);
     let triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
@@ -283,6 +285,7 @@ fn json_scalar_parse_preserves_blocked_debt_and_services_it_when_safe() {
         // inconsistent with the state that schedules this debt.
         GC_NEXT_TRIGGER_BYTES.with(|c| c.set(usize::MAX));
         GC_TRIGGER_ARMED.with(|c| c.set(false));
+        let _pressure = crate::gc::policy::force_tiny_parse_pressure_due_for_test();
         let value = parse();
         assert!(value.is_null() || value.is_short_string() || value.is_pointer());
         assert!(!GC_SUPPRESSED_TINY_PARSE_COLLECTION_PENDING.with(|c| c.get()));
@@ -346,6 +349,7 @@ fn json_empty_result_parse_finishes_reading_before_pending_evacuation() {
 }
 
 fn assert_empty_parse_moves_input_and_output(fallible: bool) {
+    let _pressure = crate::gc::policy::force_tiny_parse_pressure_due_for_test();
     let _pacing = crate::gc::policy::force_alloc_point_minor_pacing();
     let _guard = CopyingNurseryTestGuard::new(0);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
@@ -432,6 +436,7 @@ fn json_lazy_parse_input_survives_the_tape_entry_trigger() {
 }
 
 fn assert_container_input_survives_collection(fallible: bool, array: bool, pending: bool) {
+    let _pressure = pending.then(crate::gc::policy::force_tiny_parse_pressure_due_for_test);
     let _pacing = crate::gc::policy::force_alloc_point_minor_pacing();
     let _guard = CopyingNurseryTestGuard::new(0);
     let triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();

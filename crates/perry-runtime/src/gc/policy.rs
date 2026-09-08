@@ -418,9 +418,22 @@ pub(super) fn tiny_parse_pressure_due_with(
 
 /// The live [`tiny_parse_pressure_due_with`]: current base and step.
 pub(super) fn tiny_parse_pressure_due(in_use: usize, in_use_trigger: usize) -> bool {
+    #[cfg(test)]
+    if GC_TINY_PARSE_PRESSURE_TEST_FORCE.with(|cell| cell.replace(false)) {
+        return true;
+    }
     let base = GC_TINY_PARSE_PRESSURE_BASE_BYTES.with(Cell::get);
     let step = GC_STEP_BYTES.with(Cell::get);
     tiny_parse_pressure_due_with(in_use, in_use_trigger, base, step)
+}
+
+/// Make the next explicitly armed parse-boundary collection deterministic in
+/// tests without allocating tens of megabytes merely to cross the production
+/// pressure threshold. The predicate consumes the flag so post-parse
+/// accounting still uses ordinary pricing.
+#[cfg(test)]
+pub(super) fn force_tiny_parse_pressure_due_for_test() {
+    GC_TINY_PARSE_PRESSURE_TEST_FORCE.with(|cell| cell.set(true));
 }
 
 /// The in-use reading the tiny-parse guard compares against in this collector
@@ -1083,6 +1096,8 @@ crate::perry_thread_local! {
     /// guard compares against `arena_in_use_bytes()` at every parse boundary,
     /// and mixing the two would count every swept hole as growth.
     pub(super) static GC_TINY_PARSE_PRESSURE_BASE_BYTES: Cell<usize> = const { Cell::new(0) };
+    #[cfg(test)]
+    static GC_TINY_PARSE_PRESSURE_TEST_FORCE: Cell<bool> = const { Cell::new(false) };
     /// Yield-adaptive backoff for major-GC pacing (#7726).
     ///
     /// `arena_growth_full_escalation_due` escalates a minor to a full once the
