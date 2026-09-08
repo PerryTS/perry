@@ -941,12 +941,10 @@ mod view_mode_tests {
                 (0..count)
                     .find(|&i| {
                         let key = crate::array::js_array_get_f64(keys, i);
-                        unsafe {
-                            crate::string::js_string_key_matches_bytes(
-                                JSValue::from_bits(key.to_bits()),
-                                b"test",
-                            )
-                        }
+                        crate::string::js_string_key_matches_bytes(
+                            JSValue::from_bits(key.to_bits()),
+                            b"test",
+                        )
                     })
                     .expect("test key") as u32
             })
