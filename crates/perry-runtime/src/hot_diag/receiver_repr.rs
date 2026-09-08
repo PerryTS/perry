@@ -463,7 +463,9 @@ mod tests {
         let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
         let workspace = manifest.parent().and_then(Path::parent).unwrap();
         let witnesses = [
-            ("crates/perry-stdlib/src/common/handle.rs", "Common", 2),
+            // Both Common registration entrypoints now funnel through one
+            // payload publisher and therefore share one diagnostic bump.
+            ("crates/perry-stdlib/src/common/handle.rs", "Common", 1),
             ("crates/perry-stdlib/src/fetch/mod.rs", "Fetch", 1),
             ("crates/perry-stdlib/src/zlib.rs", "Zlib", 1),
             ("crates/perry-runtime/src/proxy.rs", "Proxy", 1),
