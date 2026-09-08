@@ -31,6 +31,9 @@
 //! pushing so the main loop wakes promptly instead of waiting on the
 //! heartbeat cap.
 
+#[cfg(any(not(test), feature = "runtime-link"))]
+use std::sync::Once;
+
 extern "C" {
     /// Wake the main thread from `js_wait_for_event`.
     ///
@@ -39,17 +42,40 @@ extern "C" {
     /// one wake — the main-loop tick drains every queue each pass
     /// regardless.
     fn js_notify_main_thread();
+    #[cfg(any(not(test), feature = "runtime-link"))]
+    fn js_register_aux_tick_begin(f: extern "C" fn());
     fn js_register_aux_pump(f: extern "C" fn() -> i32);
     fn js_register_aux_has_active(f: extern "C" fn() -> i32);
+}
+
+#[cfg(any(not(test), feature = "runtime-link"))]
+static HANDLE_TICK_HOOK_REGISTRATION: Once = Once::new();
+
+/// Install handle recycling before the registry can allocate its first id.
+/// The runtime registration is itself idempotent, while `Once` keeps the hot
+/// allocation path to a single atomic check after initialization.
+pub(crate) fn ensure_handle_tick_hook_registered() {
+    // Standalone perry-ffi unit tests do not link the runtime symbol. Product
+    // binaries always resolve it when the compiler links libperry_runtime.
+    #[cfg(any(not(test), feature = "runtime-link"))]
+    HANDLE_TICK_HOOK_REGISTRATION.call_once(|| unsafe {
+        js_register_aux_tick_begin(drain_handle_quarantine_at_tick_begin);
+    });
 }
 
 /// Register an extension event pump and activity probe with the runtime.
 /// Registration is idempotent for each function pointer.
 pub fn register_aux_event_pump(pump: extern "C" fn() -> i32, has_active: extern "C" fn() -> i32) {
+    ensure_handle_tick_hook_registered();
     unsafe {
         js_register_aux_pump(pump);
         js_register_aux_has_active(has_active);
     }
+}
+
+#[cfg(any(not(test), feature = "runtime-link"))]
+extern "C" fn drain_handle_quarantine_at_tick_begin() {
+    crate::handle::drain_quarantined_handles();
 }
 
 /// Wake the main thread so it picks up a pending event the calling

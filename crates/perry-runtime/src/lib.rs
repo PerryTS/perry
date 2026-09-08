@@ -392,8 +392,9 @@ mod ext_pump {
 // Stdlib pump registration — allows perry-ui-macos pump timer to call
 // js_stdlib_process_pending without a hard link dependency on perry-stdlib.
 pub(crate) mod stdlib_pump {
+    use std::cell::Cell;
     use std::ptr::null_mut;
-    use std::sync::atomic::{AtomicPtr, Ordering};
+    use std::sync::atomic::{AtomicPtr, AtomicU32, Ordering};
     use std::sync::Mutex;
 
     static STDLIB_PUMP_FN: AtomicPtr<()> = AtomicPtr::new(null_mut());
@@ -402,6 +403,89 @@ pub(crate) mod stdlib_pump {
     /// Kept as a function pointer for the same reason as `STDLIB_PUMP_FN`: the
     /// runtime must not hard-link perry-stdlib into runtime-only binaries.
     static STDLIB_NEXT_WAKE_FN: AtomicPtr<()> = AtomicPtr::new(null_mut());
+
+    /// Number of OS threads currently executing an outer pump. JS normally
+    /// runs on one owning thread, but platform background-task callbacks can
+    /// enter the pump from a system queue. Treat overlapping entries as one
+    /// process-wide tick so lifecycle hooks never run while another pump is
+    /// dispatching callbacks.
+    static ACTIVE_OUTER_PUMPS: AtomicU32 = AtomicU32::new(0);
+    /// Serializes the zero-to-one transition with the tick-begin hooks. Once
+    /// the count is non-zero, other threads may join the same logical tick.
+    static OUTER_PUMP_ENTRY: Mutex<()> = Mutex::new(());
+
+    crate::perry_thread_local! {
+        /// `await` inside a pump callback can synchronously re-enter the host
+        /// pump. Lifecycle hooks belong to the outer tick only.
+        static PUMP_DEPTH: Cell<u32> = const { Cell::new(0) };
+    }
+
+    struct PumpDepthGuard {
+        depth_before: u32,
+        entered_outer_pump: bool,
+    }
+
+    impl PumpDepthGuard {
+        fn enter() -> (Self, bool) {
+            PUMP_DEPTH.with(|depth| {
+                let current = depth.get();
+                depth.set(current.saturating_add(1));
+                let entered_outer_pump = current == 0;
+                if entered_outer_pump {
+                    begin_outer_pump();
+                }
+                (
+                    Self {
+                        depth_before: current,
+                        entered_outer_pump,
+                    },
+                    entered_outer_pump,
+                )
+            })
+        }
+    }
+
+    impl Drop for PumpDepthGuard {
+        fn drop(&mut self) {
+            PUMP_DEPTH.with(|depth| {
+                let current = depth.get();
+                // `js_throw` eagerly restores this counter before choosing
+                // longjmp or system unwinding. The latter subsequently runs
+                // Rust cleanups, so a guard already covered by that restore
+                // must not decrement the enclosing pump's depth a second
+                // time. This mirrors CallMethodDepthGuard.
+                if current > self.depth_before {
+                    depth.set(current - 1);
+                    if self.entered_outer_pump {
+                        end_outer_pump();
+                    }
+                }
+            });
+        }
+    }
+
+    /// Capture the re-entrant stdlib-pump depth at `try` entry. A caught JS
+    /// throw can longjmp past `PumpDepthGuard::drop`; exception handling uses
+    /// this savepoint to keep the next top-level pump recognizable as a new
+    /// tick (and therefore run its lifecycle hooks).
+    pub(crate) fn pump_depth_savepoint() -> u32 {
+        PUMP_DEPTH.with(|depth| depth.get())
+    }
+
+    /// Restore a pump-depth savepoint for guards skipped by JS exception
+    /// transport. Guards remember their entry depths, making their later
+    /// system-unwinder cleanup idempotent after this eager restore.
+    pub(crate) fn pump_depth_restore(depth: u32) {
+        PUMP_DEPTH.with(|current| {
+            let before = current.replace(depth);
+            // Only a restore across this thread's outermost pump removes its
+            // process-wide active-pump contribution. A later Rust guard drop
+            // sees the restored TLS depth and therefore remains idempotent.
+            if depth == 0 && before > 0 {
+                end_outer_pump();
+            }
+        });
+    }
 
     // Runtime-internal reactor pumps (child_process, node-pty) register here
     // when their first live handle appears, mirroring `STDLIB_PUMP_FN`. The
@@ -480,6 +564,7 @@ pub(crate) mod stdlib_pump {
     // drains and queries them without either side naming the other's symbols,
     // which also lets out-of-tree extensions participate. Registration is
     // idempotent for each function pointer.
+    static AUX_TICK_BEGIN_HOOKS: Mutex<Vec<extern "C" fn()>> = Mutex::new(Vec::new());
     static AUX_PUMPS: Mutex<Vec<extern "C" fn() -> i32>> = Mutex::new(Vec::new());
     static AUX_HAS_ACTIVE: Mutex<Vec<extern "C" fn() -> i32>> = Mutex::new(Vec::new());
 
@@ -494,6 +579,48 @@ pub(crate) mod stdlib_pump {
                 pumps.push(f);
             }
         }
+    }
+
+    /// Register work that must run once at the beginning of an outer host
+    /// pump tick, before any runtime, stdlib, or extension callback can free
+    /// resources during that tick. Registration is idempotent per function
+    /// pointer.
+    #[no_mangle]
+    pub extern "C" fn js_register_aux_tick_begin(f: extern "C" fn()) {
+        if let Ok(mut hooks) = AUX_TICK_BEGIN_HOOKS.lock() {
+            if !hooks.contains(&f) {
+                hooks.push(f);
+            }
+        }
+    }
+
+    fn run_aux_tick_begin_hooks() {
+        let fns: Vec<extern "C" fn()> = match AUX_TICK_BEGIN_HOOKS.lock() {
+            Ok(g) => g.clone(),
+            Err(_) => return,
+        };
+        for f in fns {
+            f();
+        }
+    }
+
+    /// Join the process-wide pump tick. The entry mutex keeps another thread
+    /// from dispatching pump callbacks until the thread that transitions the
+    /// count from zero to one has completed every tick-begin hook.
+    fn begin_outer_pump() {
+        let _entry = OUTER_PUMP_ENTRY
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let previous = ACTIVE_OUTER_PUMPS.fetch_add(1, Ordering::AcqRel);
+        let begins_tick = previous == 0;
+        if begins_tick {
+            run_aux_tick_begin_hooks();
+        }
+    }
+
+    fn end_outer_pump() {
+        let previous = ACTIVE_OUTER_PUMPS.fetch_sub(1, Ordering::AcqRel);
+        debug_assert!(previous > 0, "outer pump activity counter underflow");
     }
 
     /// Register an auxiliary has-active callback (a `perry-ext-*` crate's
@@ -571,6 +698,16 @@ pub(crate) mod stdlib_pump {
     /// is not linked (no-op in that case).
     #[no_mangle]
     pub extern "C" fn js_run_stdlib_pump() {
+        let (_depth_guard, outermost) = PumpDepthGuard::enter();
+        // This is the process-wide outer pump boundary. Run lifecycle hooks
+        // before any callback in this tick can release resources. In
+        // particular, perry-ffi promotes handles quarantined during the
+        // previous tick here, rather than inside one extension pump where a
+        // later extension could reuse a handle in the same outer tick.
+        // `PumpDepthGuard::enter` already ran the hook while holding the
+        // process-wide entry gate. This branch documents the lifecycle point
+        // and keeps the result live for debug assertions/tests.
+        debug_assert!(!outermost || ACTIVE_OUTER_PUMPS.load(Ordering::Acquire) > 0);
         crate::promise::js_native_async_process_pending();
         #[cfg(feature = "node-api-host")]
         crate::node_api_host::process_pending();
@@ -698,9 +835,89 @@ pub(crate) mod stdlib_pump {
         use std::sync::atomic::{AtomicI32, Ordering as AtomicOrdering};
 
         static PUMP_CALLS: AtomicI32 = AtomicI32::new(0);
+        static TICK_BEGIN_CALLS: AtomicI32 = AtomicI32::new(0);
         extern "C" fn counting_pump() -> i32 {
             PUMP_CALLS.fetch_add(1, AtomicOrdering::SeqCst);
             0
+        }
+
+        extern "C" fn counting_tick_begin() {
+            TICK_BEGIN_CALLS.fetch_add(1, AtomicOrdering::SeqCst);
+        }
+
+        #[test]
+        fn pump_depth_identifies_only_the_outer_tick() {
+            let (outer_guard, outermost) = PumpDepthGuard::enter();
+            assert!(outermost);
+            let (inner_guard, outermost) = PumpDepthGuard::enter();
+            assert!(!outermost, "a re-entrant pump is still the same outer tick");
+            drop(inner_guard);
+            let (second_inner_guard, outermost) = PumpDepthGuard::enter();
+            assert!(!outermost);
+            drop(second_inner_guard);
+            drop(outer_guard);
+            let (_next_tick_guard, outermost) = PumpDepthGuard::enter();
+            assert!(outermost, "a later top-level pump starts a new tick");
+        }
+
+        #[test]
+        fn caught_throw_restores_pump_depth_and_guard_drops_are_idempotent() {
+            let base_depth = pump_depth_savepoint();
+            let base_try = crate::exception::test_try_depth();
+            let _jb = crate::exception::js_try_push();
+
+            let (outer_guard, outermost) = PumpDepthGuard::enter();
+            assert_eq!(outermost, base_depth == 0);
+            let (inner_guard, outermost) = PumpDepthGuard::enter();
+            assert!(!outermost);
+            assert_eq!(pump_depth_savepoint(), base_depth + 2);
+
+            // Replay js_throw's eager savepoint restores without performing
+            // the non-returning longjmp. System unwinding may then run both
+            // guards, so their Drops must leave the restored depth alone.
+            crate::exception::test_unwind_innermost_shadow_restore();
+            assert_eq!(pump_depth_savepoint(), base_depth);
+            drop(inner_guard);
+            drop(outer_guard);
+            assert_eq!(pump_depth_savepoint(), base_depth);
+
+            crate::exception::js_try_end();
+            assert_eq!(crate::exception::test_try_depth(), base_try);
+        }
+
+        #[test]
+        fn real_longjmp_does_not_leak_pump_depth() {
+            let base_depth = pump_depth_savepoint();
+            assert_eq!(base_depth, 0, "test thread began inside a pump");
+            let thrown = f64::from_bits(0x7FFD_0000_0000_99F1);
+
+            let outcome = crate::exception::catch_js_throw(|| -> () {
+                let (_skipped_guard, outermost) = PumpDepthGuard::enter();
+                assert!(outermost);
+                crate::exception::js_throw(thrown);
+            });
+            match outcome {
+                Err(value) => assert_eq!(value.to_bits(), thrown.to_bits()),
+                Ok(()) => panic!("throw unexpectedly returned normally"),
+            }
+            assert_eq!(pump_depth_savepoint(), base_depth);
+
+            let (_next_tick_guard, outermost) = PumpDepthGuard::enter();
+            assert!(
+                outermost,
+                "the next pump after a caught throw is a new tick"
+            );
+        }
+
+        #[test]
+        fn aux_tick_begin_registration_is_idempotent() {
+            js_register_aux_tick_begin(counting_tick_begin);
+            js_register_aux_tick_begin(counting_tick_begin);
+            js_register_aux_tick_begin(counting_tick_begin);
+            let before = TICK_BEGIN_CALLS.load(AtomicOrdering::SeqCst);
+            run_aux_tick_begin_hooks();
+            let after = TICK_BEGIN_CALLS.load(AtomicOrdering::SeqCst);
+            assert_eq!(after - before, 1);
         }
 
         /// #9416: the symbol the generated event loop calls must itself

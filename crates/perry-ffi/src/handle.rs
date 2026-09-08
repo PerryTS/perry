@@ -483,6 +483,7 @@ impl<'a> GcRootVisitor<'a> {
 /// across threads (tokio workers may resolve promises that touch
 /// handle data while the main thread is also touching it).
 pub fn register_handle<T: 'static + Send + Sync>(value: T) -> Handle {
+    crate::event_pump::ensure_handle_tick_hook_registered();
     ensure_handle_exists_probe_registered();
     // Reuse a reclaimed id when one is parked, else mint a fresh one. A
     // recycled id was removed from `HANDLES` before being parked, so inserting
@@ -521,6 +522,7 @@ pub fn register_handle<T: 'static + Send + Sync>(value: T) -> Handle {
 /// under it — `0` is the "no handle" value — so the guard turns exhaustion into
 /// a caught error at the boundary, never a phantom id-0 entry.
 pub fn reserve_handle_id() -> Handle {
+    crate::event_pump::ensure_handle_tick_hook_registered();
     pop_free_handle()
         .or_else(next_fresh_handle_id)
         .unwrap_or(INVALID_HANDLE)

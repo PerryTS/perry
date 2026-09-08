@@ -114,6 +114,11 @@ struct ExceptionState {
     /// `call_method_depth_*`). Indexed by try-depth, in lockstep with
     /// `jump_buffers`.
     call_method_depths: Box<[u32]>,
+    /// Re-entrant stdlib-pump depth at handler entry. A callback can throw
+    /// across `js_run_stdlib_pump`, skipping its `PumpDepthGuard`; restore the
+    /// counter so the next top-level pump still runs tick-begin lifecycle
+    /// hooks such as the native-handle quarantine drain.
+    pump_depths: Box<[u32]>,
     /// Active Set/Map `forEach` walks. Their normal epilogues re-enable
     /// backing-store compaction, but a caught throw skips those epilogues.
     set_foreach_depths: Box<[usize]>,
@@ -166,6 +171,7 @@ impl ExceptionState {
             shadow_savepoints: vec![ShadowSavepoint::EMPTY; MAX_TRY_DEPTH].into_boxed_slice(),
             runtime_handle_savepoints: vec![0usize; MAX_TRY_DEPTH].into_boxed_slice(),
             call_method_depths: vec![0u32; MAX_TRY_DEPTH].into_boxed_slice(),
+            pump_depths: vec![0u32; MAX_TRY_DEPTH].into_boxed_slice(),
             set_foreach_depths: vec![0usize; MAX_TRY_DEPTH].into_boxed_slice(),
             map_foreach_depths: vec![0usize; MAX_TRY_DEPTH].into_boxed_slice(),
             prototype_resolution_depths: vec![0usize; MAX_TRY_DEPTH].into_boxed_slice(),
@@ -239,6 +245,7 @@ fn try_push_with_kind(kind: HandlerKind) -> *mut i32 {
         // this `try` can restore it — `longjmp` skips the `CallMethodDepthGuard`
         // `Drop`s of the method frames it unwinds (#5591).
         (*s).call_method_depths[depth] = crate::object::call_method_depth_savepoint();
+        (*s).pump_depths[depth] = crate::stdlib_pump::pump_depth_savepoint();
         (*s).set_foreach_depths[depth] = crate::set::set_foreach_stack_savepoint();
         (*s).map_foreach_depths[depth] = crate::map::map_foreach_stack_savepoint();
         (*s).prototype_resolution_depths[depth] =
@@ -476,6 +483,7 @@ pub extern "C-unwind" fn js_throw(value: f64) -> ! {
         // otherwise caught throws wrap the counter below zero and wedge every
         // later method call into the depth-guard fallback (#5591).
         crate::object::call_method_depth_restore((*s).call_method_depths[depth]);
+        crate::stdlib_pump::pump_depth_restore((*s).pump_depths[depth]);
         crate::set::set_foreach_stack_restore((*s).set_foreach_depths[depth]);
         crate::map::map_foreach_stack_restore((*s).map_foreach_depths[depth]);
         crate::object::prototype_chain::resolution_stack_restore(
@@ -853,6 +861,8 @@ pub(crate) fn test_unwind_innermost_shadow_restore() {
         let depth = (*s).try_depth - 1;
         shadow_stack_restore((*s).shadow_savepoints[depth]);
         runtime_handle_stack_restore((*s).runtime_handle_savepoints[depth]);
+        crate::object::call_method_depth_restore((*s).call_method_depths[depth]);
+        crate::stdlib_pump::pump_depth_restore((*s).pump_depths[depth]);
         crate::set::set_foreach_stack_restore((*s).set_foreach_depths[depth]);
         crate::map::map_foreach_stack_restore((*s).map_foreach_depths[depth]);
         crate::object::prototype_chain::resolution_stack_restore(
