@@ -387,6 +387,7 @@ pub(super) fn lower_meta_prop(
                 ("main".to_string(), Expr::Bool(ctx.is_entry_module)),
                 ("dirname".to_string(), Expr::String(dirname)),
                 ("filename".to_string(), Expr::String(filename)),
+                ("require".to_string(), import_meta_require_value(ctx)),
             ]))
         }
         ast::MetaPropKind::NewTarget => {
@@ -416,11 +417,25 @@ pub(super) fn lower_meta_prop(
     }
 }
 
+/// Reuse one module-owned loader for first-class `import.meta.require` reads.
+/// Its initializer is prepended after lowering has discovered every use.
+pub(crate) fn import_meta_require_value(ctx: &mut LoweringContext) -> Expr {
+    let id = match ctx.import_meta_require_local {
+        Some(id) => id,
+        None => {
+            let id = ctx.next_local_id;
+            ctx.next_local_id += 1;
+            ctx.import_meta_require_local = Some(id);
+            id
+        }
+    };
+    Expr::LocalGet(id)
+}
+
 /// Issue #444: compute the `(url, dirname, filename)` triplet exposed via
 /// `import.meta`. Mirrors Node 20+ semantics — `url` is `file://<path>`,
 /// `filename` is the absolute file path, `dirname` is its parent directory.
-/// Used by both the bare-`import.meta` Object synthesis above and the
-/// member-access fast path in `expr_member::lower_member`.
+/// Used by both bare-object synthesis and the member-access fast path.
 pub(crate) fn import_meta_paths(ctx: &LoweringContext) -> (String, String, String) {
     let mut path = ctx.source_file_path.replace('\\', "/");
     // `dunce::canonicalize` keeps Windows' verbatim `\\?\` prefix for long

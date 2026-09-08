@@ -256,13 +256,22 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
     // omitted — adding them would silently break code moving Perry → Node.
     if let ast::Expr::MetaProp(mp) = member.obj.as_ref() {
         if matches!(mp.kind, ast::MetaPropKind::ImportMeta) {
-            if let ast::MemberProp::Ident(prop_ident) = &member.prop {
+            let property = match &member.prop {
+                ast::MemberProp::Ident(ident) => Some(ident.sym.as_ref()),
+                ast::MemberProp::Computed(computed) => match computed.expr.as_ref() {
+                    ast::Expr::Lit(ast::Lit::Str(value)) => value.value.as_str(),
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(property) = property {
                 let (url, dirname, filename) = super::expr_misc::import_meta_paths(ctx);
-                return Ok(match prop_ident.sym.as_ref() {
+                return Ok(match property {
                     "url" => Expr::String(url),
                     "main" => Expr::Bool(ctx.is_entry_module),
                     "dirname" => Expr::String(dirname),
                     "filename" => Expr::String(filename),
+                    "require" => super::expr_misc::import_meta_require_value(ctx),
                     // Unknown property — undefined matches the spec'd
                     // "missing property on a frozen object" behavior of
                     // import.meta in Node / Bun.

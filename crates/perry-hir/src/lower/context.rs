@@ -232,6 +232,7 @@ impl LoweringContext {
             is_external_module: false,
             optional_require_try_depth: 0,
             require_local_is_create_require: false,
+            import_meta_require_local: None,
             fn_ctor_env: super::fn_ctor_env::FnCtorEnv::default(),
             dynamic_function_subclasses: HashMap::new(),
             expr_lower_depth: 0,

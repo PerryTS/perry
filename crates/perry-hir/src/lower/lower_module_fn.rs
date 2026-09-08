@@ -1680,6 +1680,28 @@ pub fn lower_module_full_with_platform_globals(
         module.init = implicit_globals;
     }
 
+    if let Some(id) = ctx.import_meta_require_local {
+        let (url, _, _) = super::expr_misc::import_meta_paths(&ctx);
+        // Reuse createRequire's synchronous builtin/compiled-module resolver,
+        // rooted in module storage and initialized before source statements.
+        module.init.insert(
+            0,
+            Stmt::Let {
+                id,
+                name: format!("__perry_import_meta_require_{id}"),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::NativeMethodCall {
+                    module: "module".to_string(),
+                    class_name: None,
+                    object: None,
+                    method: "createRequire".to_string(),
+                    args: vec![Expr::String(url)],
+                }),
+            },
+        );
+    }
+
     // Populate exported_native_instances by matching native_instances with exports
     for (local_name, module_name, class_name) in &ctx.native_instances {
         // Check if this native instance is exported
