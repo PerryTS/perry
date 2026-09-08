@@ -1702,7 +1702,7 @@ pub fn lower_module_full_with_platform_globals(
         );
     }
 
-    module_decl::register_exported_local_variables(&mut module);
+    module_decl::register_exported_local_variables(&ctx, &mut module);
 
     // Populate exported_native_instances by matching native_instances with exports
     for (local_name, module_name, class_name) in &ctx.native_instances {
