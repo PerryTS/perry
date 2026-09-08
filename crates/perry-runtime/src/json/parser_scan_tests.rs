@@ -244,6 +244,40 @@ fn bounded_root_record_reuses_the_warm_shape_during_one_pass_parse() {
 }
 
 #[test]
+fn warm_key_scan_only_claims_an_exact_unescaped_spelling() {
+    use crate::json::cached_parse_key_ptr;
+
+    unsafe {
+        crate::gc::gc_suppress();
+        let expected = cached_parse_key_ptr(b"name");
+
+        let mut plain = super::DirectParser::new(br#""name":"#);
+        let (key, matched) = plain.parse_string_bytes_expected(expected).unwrap();
+        assert!(matched);
+        assert_eq!(key.as_bytes(), b"name");
+        assert_eq!(plain.pos, 6);
+
+        let mut escaped = super::DirectParser::new(br#""na\u006de":"#);
+        let (key, matched) = escaped.parse_string_bytes_expected(expected).unwrap();
+        assert!(!matched);
+        assert_eq!(key.as_bytes(), b"name");
+
+        let escaped_backslash = cached_parse_key_ptr(b"\\q");
+        let mut invalid_escape = super::DirectParser::new(br#""\q":"#);
+        assert!(invalid_escape
+            .parse_string_bytes_expected(escaped_backslash)
+            .is_none());
+        assert!(!invalid_escape.valid);
+
+        let control = cached_parse_key_ptr(b"\n");
+        let mut raw_control = super::DirectParser::new(b"\"\n\":");
+        assert!(raw_control.parse_string_bytes_expected(control).is_none());
+        assert!(!raw_control.valid);
+        crate::gc::gc_unsuppress();
+    }
+}
+
+#[test]
 fn warm_shape_fallback_keeps_duplicate_semantics_after_key_cache_eviction() {
     use crate::json::{
         cached_parse_key_ptr, clear_parse_key_ring, parse_shape_keys_array, PARSE_KEY_CACHE,

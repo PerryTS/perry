@@ -539,6 +539,45 @@ impl<'a> DirectParser<'a> {
         None
     }
 
+    /// Speculatively consume the next object key in its common, unescaped
+    /// spelling while comparing it with the warm shape key. The expected
+    /// length tells us exactly where the closing quote must be, so a matching
+    /// key needs one short byte walk instead of a terminator scan followed by
+    /// a second managed-string comparison. Any escape, control byte, or shape
+    /// mismatch restarts at the untouched opening quote through the full JSON
+    /// string decoder.
+    #[inline(always)]
+    unsafe fn parse_string_bytes_expected(
+        &mut self,
+        expected: *const StringHeader,
+    ) -> Option<(ParsedStr<'a>, bool)> {
+        if self.peek() == Some(b'"') && !expected.is_null() {
+            let start = self.pos + 1;
+            let expected_len = (*expected).byte_len as usize;
+            if let Some(end) = start.checked_add(expected_len) {
+                if end < self.input.len() && self.input[end] == b'"' {
+                    let input_bytes = &self.input[start..end];
+                    let expected_bytes = std::slice::from_raw_parts(
+                        crate::string::string_data(expected),
+                        expected_len,
+                    );
+                    let matches = input_bytes
+                        .iter()
+                        .zip(expected_bytes)
+                        .all(|(&actual, &want)| {
+                            actual == want && actual >= 0x20 && actual != b'"' && actual != b'\\'
+                        });
+                    if matches {
+                        self.pos = end + 1;
+                        return Some((ParsedStr::Borrowed(input_bytes), true));
+                    }
+                }
+            }
+        }
+
+        self.parse_string_bytes().map(|key| (key, false))
+    }
+
     #[inline(never)]
     pub(crate) fn parse_string_bytes_slow(&mut self, start: usize) -> Option<ParsedStr<'a>> {
         let mut result = Vec::from(&self.input[start..self.pos]);
@@ -931,9 +970,22 @@ impl<'a> DirectParser<'a> {
 
         loop {
             self.skip_whitespace();
-            let key = match self.parse_string_bytes() {
-                Some(k) => k,
-                None => break,
+            let expected_key = warm_shape.as_ref().and_then(|(len, keys, _, _)| {
+                if warm_shape_matches && warm_shape_slot < *len {
+                    Some(keys[warm_shape_slot])
+                } else {
+                    None
+                }
+            });
+            let (key, matched_expected_spelling) = match expected_key {
+                Some(expected) => match self.parse_string_bytes_expected(expected) {
+                    Some(key) => key,
+                    None => break,
+                },
+                None => match self.parse_string_bytes() {
+                    Some(key) => (key, false),
+                    None => break,
+                },
             };
 
             if !self.expect(b':') {
@@ -994,7 +1046,8 @@ impl<'a> DirectParser<'a> {
                 let key_ptr = if warm_shape_matches {
                     let (expected_len, expected_keys, _, _) = warm_shape.as_ref().unwrap();
                     if warm_shape_slot < *expected_len
-                        && json_key_bytes_equal(expected_keys[warm_shape_slot], key_bytes)
+                        && (matched_expected_spelling
+                            || json_key_bytes_equal(expected_keys[warm_shape_slot], key_bytes))
                     {
                         let ptr = expected_keys[warm_shape_slot];
                         warm_shape_slot += 1;
