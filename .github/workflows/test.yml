@@ -1207,7 +1207,13 @@ jobs:
     needs: plan
     if: fromJSON(needs.plan.outputs.plan).jobs.cargo_test_perry
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    # 120 was measured when this suite was smaller and is now marginal: shard
+    # 8/8 ran 111 min in run 33959469688 and then OVERRAN the cap in run
+    # 34230915868 (exactly 2h00m06s, killed mid-run), costing a rerun on an
+    # otherwise-green tier. It passed on that rerun, so this is a headroom
+    # problem, not a hang. 180 keeps a real hang bounded well under GitHub's
+    # 360-min hosted-runner ceiling.
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:

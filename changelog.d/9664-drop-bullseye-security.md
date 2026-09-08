@@ -25,3 +25,11 @@
   patches. That is acceptable for a **build toolchain** image whose only purpose
   is linking against glibc 2.31 — it ships no runtime surface itself — and it is
   the standard configuration for an EOL Debian base.
+
+- **`cargo-test-perry`: `timeout-minutes` 120 → 180.** Shard 8/8 ran **111 min**
+  in run 33959469688 and then overran the cap in run 34230915868 — killed at
+  exactly 2h00m06s — costing a rerun on an otherwise-green tier. It passed on
+  that rerun, so this is headroom, not a hang. 180 keeps a genuine hang well
+  under GitHub's 360-min hosted-runner ceiling. That is the fourth cap in this
+  campaign sized for a smaller suite (`doc-tests` 119/120, `simctl` 54/60,
+  macOS ext build 361/360), which is why a headroom check belongs in CI.
