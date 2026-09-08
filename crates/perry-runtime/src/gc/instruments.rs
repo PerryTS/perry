@@ -9,6 +9,7 @@
 //!
 //! Process-global rather than thread-local: the report is about the run.
 
+use std::cell::Cell;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static COPYING_MINORS: AtomicU64 = AtomicU64::new(0);
@@ -63,6 +64,10 @@ static INCREMENTAL_CYCLE_STARTS: AtomicU64 = AtomicU64::new(0);
 static INCREMENTAL_STEPS: AtomicU64 = AtomicU64::new(0);
 static INCREMENTAL_COMPLETIONS: AtomicU64 = AtomicU64::new(0);
 
+crate::perry_thread_local! {
+    static THREAD_INCREMENTAL_COMPLETIONS: Cell<u64> = const { Cell::new(0) };
+}
+
 /// A budgeted (incremental) cycle was STARTED.
 #[inline]
 pub(crate) fn note_incremental_cycle_start() {
@@ -82,6 +87,14 @@ pub(crate) fn note_incremental_step() {
 #[inline]
 pub(crate) fn note_incremental_completion() {
     INCREMENTAL_COMPLETIONS.fetch_add(1, Ordering::Relaxed);
+    THREAD_INCREMENTAL_COMPLETIONS.with(|count| count.set(count.get().saturating_add(1)));
+}
+
+/// Budgeted cycles completed on the collection thread.  Failure diagnostics
+/// compare this with the value at the preceding verified minor, rather than
+/// using the process-wide count (which would mix independent agent heaps).
+pub(crate) fn incremental_completions_on_current_thread() -> u64 {
+    THREAD_INCREMENTAL_COMPLETIONS.with(Cell::get)
 }
 
 /// Budgeted incremental cycles started in this process.

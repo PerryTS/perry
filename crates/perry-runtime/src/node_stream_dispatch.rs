@@ -604,6 +604,7 @@ pub(super) fn register_stub_arities() {
         1,
     );
     register(ns_finished_error_false_close as *const u8, 0);
+    register(ns_finished_default_completion as *const u8, 0);
     register(ns_finished_signal_abort as *const u8, 0);
     register(ns_iter_to_array as *const u8, 1);
     register(ns_iter_map as *const u8, 2);

@@ -637,7 +637,7 @@ where
                 f(a);
             }
         }
-        Expr::SetFunctionPrototype { func, proto } => {
+        Expr::SetFunctionPrototype { func, proto, .. } => {
             f(func);
             f(proto);
         }

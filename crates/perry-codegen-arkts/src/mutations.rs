@@ -309,15 +309,22 @@ pub(crate) fn collect_mutations_in_expr(
             );
         }
         "setPadding" | "widgetSetEdgeInsets" => {
-            // Args: (widget, top, right, bottom, left)
+            // Canonical forms: (widget, value) or
+            // (widget, top, left, bottom, right).
             // Resolve through bindings so Mango's `setPadding(box, isIOS
             // ? 52 : 12, mobile ? 16 : 24, ...)` ternary-and-binding
             // chain resolves to literal numbers; default to 0 only if
             // the leaf truly isn't a number (function call etc).
             let top = numeric_arg_resolved(&args[1..], 0, bindings).unwrap_or(0.0);
-            let right = numeric_arg_resolved(&args[1..], 1, bindings).unwrap_or(0.0);
-            let bottom = numeric_arg_resolved(&args[1..], 2, bindings).unwrap_or(0.0);
-            let left = numeric_arg_resolved(&args[1..], 3, bindings).unwrap_or(0.0);
+            let (left, bottom, right) = if args.len() == 2 {
+                (top, top, top)
+            } else {
+                (
+                    numeric_arg_resolved(&args[1..], 1, bindings).unwrap_or(0.0),
+                    numeric_arg_resolved(&args[1..], 2, bindings).unwrap_or(0.0),
+                    numeric_arg_resolved(&args[1..], 3, bindings).unwrap_or(0.0),
+                )
+            };
             push_mut(
                 Mutation::Modifier(format!(
                     ".padding({{ top: {}, right: {}, bottom: {}, left: {} }})",

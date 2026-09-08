@@ -205,3 +205,13 @@ fn no_root_alloca_survives_the_statepoint_rewrite() {
         );
     }
 }
+
+#[test]
+fn the_statepoint_parser_accepts_quoted_specialized_callees() {
+    let name = format!("perry_fn_probe${}", "spec_ta4x256");
+    let fixture = FIXTURE.replace("@js_array_alloc", &format!("@\"{name}\""));
+    let line = fixture.lines().find(|line| line.contains(&name)).unwrap();
+    let point = super::parse_statepoint(line);
+    assert_eq!(point.callee, name);
+    assert_eq!(point.live, vec!["%a", "%b"]);
+}

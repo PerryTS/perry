@@ -365,6 +365,22 @@ fn aggregate_record(
     let notes_text = notes.join(";");
     let access_mode = string_field(record, "access_mode").unwrap_or_default();
 
+    for (prefix, decision) in [
+        ("typed_feedback_replay_selected=", "selected"),
+        ("typed_feedback_replay_rejected=", "rejected"),
+    ] {
+        if let Some(reason) = notes.iter().find_map(|note| note.strip_prefix(prefix)) {
+            push_typed_path_evidence(
+                summary,
+                evidence,
+                module,
+                record,
+                decision,
+                format!("typed_feedback_replay:{reason}"),
+            );
+        }
+    }
+
     let is_dynamic_fallback =
         access_mode == "dynamic_fallback" || string_field(record, "fallback_reason").is_some();
     if is_dynamic_fallback {

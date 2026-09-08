@@ -54,7 +54,7 @@ fn is_process_active_array_helper(method: &str) -> bool {
 /// `satisfies`, angle-bracket assertions, parens) off an expression so a
 /// cast receiver like `(Readable as any).toWeb(...)` still matches the
 /// bare-identifier module/class shape the dispatch arms below expect.
-fn unwrap_ts_wrappers(e: &ast::Expr) -> &ast::Expr {
+pub(super) fn unwrap_ts_wrappers(e: &ast::Expr) -> &ast::Expr {
     let mut cur = e;
     loop {
         match cur {
@@ -400,6 +400,33 @@ pub(super) fn is_node_builtin_module_call(ctx: &LoweringContext, callee: &ast::E
             .is_some_and(|(module, export)| is_node_core(module) && export.is_some()),
         _ => false,
     }
+}
+
+/// A module that can call `syncBuiltinESMExports()` must invoke named Node
+/// imports through their ESM export cells. The ordinary native fast path calls
+/// the built-in implementation directly and would therefore ignore a CommonJS
+/// replacement copied into the cell by the sync operation.
+pub(super) fn named_import_call_needs_esm_binding(
+    ctx: &LoweringContext,
+    callee: &ast::Expr,
+) -> bool {
+    let ast::Expr::Ident(ident) = unwrap_ts_wrappers(callee) else {
+        return false;
+    };
+    let Some((module, Some(export))) = ctx.lookup_native_module(ident.sym.as_ref()) else {
+        return false;
+    };
+    if !is_node_core(module)
+        || export == "default"
+        || (module.strip_prefix("node:").unwrap_or(module) == "module"
+            && export == "syncBuiltinESMExports")
+    {
+        return false;
+    }
+    ctx.native_modules.iter().any(|(_, module, method)| {
+        module.strip_prefix("node:").unwrap_or(module) == "module"
+            && method.as_deref() == Some("syncBuiltinESMExports")
+    })
 }
 
 /// node-forge sub-namespace flattening. Unlike the single-level `ns.method()`

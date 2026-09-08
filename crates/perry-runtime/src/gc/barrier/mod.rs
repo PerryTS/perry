@@ -523,7 +523,7 @@ pub(super) unsafe fn scan_dirty_header_once(
     stats.old_objects_considered += 1;
     stats.valid_roots += 1;
     stats.dirty_objects_scanned += 1;
-    scan_dirty_object_slots(header, dirty_pages, stats, visit_slot);
+    let _ = scan_dirty_object_slots(header, dirty_pages, stats, visit_slot);
 }
 
 #[inline]
@@ -564,18 +564,40 @@ pub(super) unsafe fn scan_dirty_slot_with_layout(
     visit_slot(slot, stats);
 }
 
+/// Scan the slots of `header` that lie on `dirty_pages`.
+///
+/// Returns whether the scan was COMPLETE for the object (#9754): every pointer
+/// slot it owns lies on a dirty page AND inside its own allocation. For such
+/// an object the per-slot re-remembering the copying minor does in
+/// `visit_slot_with_parent` is exactly what the post-cycle
+/// `restore_surviving_dirty_coverage` re-derives — the same child predicate on
+/// the same post-visit value, and the same `external` verdict (an in-body slot
+/// of an old parent is not external under either the page rule used here or
+/// the containment rule used there) — so the restore may skip it. An object
+/// with a slot on a clean page (a multi-page array) or outside its body (a
+/// lazy array's sparse cache, #7538) is reported incomplete and the restore
+/// walks it as before.
 pub(super) unsafe fn scan_dirty_object_slots(
     header: *mut GcHeader,
     dirty_pages: &crate::fast_hash::PtrHashSet<usize>,
     stats: &mut RememberedSetTraceStats,
     visit_slot: &mut dyn FnMut(*mut u64, &mut RememberedSetTraceStats),
-) {
+) -> bool {
+    let body_start = header as usize;
+    let body_end = body_start.saturating_add((*header).size as usize);
+    let in_body = |slot: *mut u64| {
+        let addr = slot as usize;
+        addr >= body_start && addr < body_end
+    };
+    let mut complete = true;
     visit_gc_rewrite_slot_descriptors(header, |descriptor| unsafe {
         match descriptor {
             GcMutableSlotDescriptor::Slot(slot) => {
                 if crate::weakref::is_weak_target_trace_slot(header, slot.slot) {
                     return;
                 }
+                complete &= in_body(slot.slot)
+                    && dirty_pages_contains_addr(dirty_pages, slot.slot as usize);
                 if let Some(layout_kind) = slot.layout_kind {
                     scan_dirty_slot_with_layout(
                         slot.slot,
@@ -607,7 +629,13 @@ pub(super) unsafe fn scan_dirty_object_slots(
                 //   reads its target's (cold) GC header — prefetch ahead.
                 let parent_has_weak_slots =
                     crate::weakref::header_may_hold_weak_target_slots(header);
+                let count = range.slot_count();
+                if count != 0 {
+                    complete &= in_body(range.slot(0)) && in_body(range.slot(count - 1));
+                }
+                let mut visited_slots = 0usize;
                 for (start, end) in dirty_slot_ranges_for(range, dirty_pages, stats) {
+                    visited_slots += end - start;
                     stats.dirty_slot_ranges_scanned += 1;
                     let mut acct_page = usize::MAX;
                     let mut acct_slots = 0usize;
@@ -642,10 +670,12 @@ pub(super) unsafe fn scan_dirty_object_slots(
                         crate::arena::old_page_account_dirty_slots(acct_page, acct_slots);
                     }
                 }
+                complete &= visited_slots == count;
             }
             GcMutableSlotDescriptor::PointerFreeRange(_) => {}
         }
     });
+    complete
 }
 
 // ---------------------------------------------------------------------------
@@ -667,6 +697,10 @@ pub(super) unsafe fn scan_dirty_object_slots(
 // retained only as a test fallback for the previous object-level
 // HashSet behavior.
 
+// The three declarations below stay raw: they are NAMED `HotTls` fields
+// (`incremental_mark_valid_ptrs`, `birth_extra_flags`,
+// `incremental_mark_minor_only`), one dependent load cheaper than a claimed
+// slot. Everything after them was simply never migrated.
 thread_local! {
     /// Active incremental mark barrier state (Full AND budgeted Minor
     /// cycles — a Minor cycle sliced across mutator turns has exactly the
@@ -707,7 +741,9 @@ thread_local! {
     /// later. Old children need no shading in a minor anyway: minors never
     /// collect live old-gen objects.
     pub(super) static INCREMENTAL_MARK_BARRIER_MINOR_ONLY: Cell<bool> = const { Cell::new(false) };
+}
 
+crate::perry_thread_local! {
     /// Dirty old-generation pages that have received a YOUNG-gen
     /// pointer since the last collection. This is Perry's compact
     /// modbuf: barriers log bounded page regions, and minor GC scans
@@ -1731,7 +1767,7 @@ fn mark_dirty_old_page_uncached(page: usize) -> bool {
     inserted
 }
 
-thread_local! {
+crate::perry_thread_local! {
     /// PERRY_GC_VERIFY_EVACUATION diagnostic only: every old page EVER marked
     /// dirty over the process lifetime (never cleared). Lets the verifier's
     /// missing-edge report say whether the slot's page was recorded at some

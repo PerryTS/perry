@@ -515,6 +515,8 @@ const FFI_REGISTRY: &[(&str, OwnerKind)] = &[
     ("js_ws_close_client",                          OwnerKind::WellKnown("ws")),
     ("js_ws_server_new",                            OwnerKind::WellKnown("ws")),
     ("js_ws_server_clients",                        OwnerKind::WellKnown("ws")),
+    ("js_ws_server_address",                        OwnerKind::WellKnown("ws")),
+    ("js_ws_server_emit",                           OwnerKind::WellKnown("ws")),
     ("js_ws_server_close",                          OwnerKind::WellKnown("ws")),
 
     // ── #1724: global Blob/File + URL object-URL helpers ──────────────

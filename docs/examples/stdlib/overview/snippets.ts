@@ -2,6 +2,7 @@
 //   in docs/src/stdlib/overview.md
 // docs: docs/src/stdlib/overview.md
 // platforms: macos, linux, windows
+// requires: auto-optimize
 // run: false
 
 // The overview page exists to show "these imports compile". So we just

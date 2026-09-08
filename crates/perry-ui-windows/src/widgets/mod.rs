@@ -679,6 +679,30 @@ pub fn add_child_at(parent_handle: i64, child_handle: i64, index: i64) {
     crate::app::request_layout();
 }
 
+/// Move an existing child without changing its native window or layout metadata.
+pub fn reorder_child(parent_handle: i64, from_index: i64, to_index: i64) {
+    if parent_handle <= 0 {
+        return;
+    }
+    let changed = WIDGETS.with(|widgets| {
+        let mut widgets = widgets.borrow_mut();
+        let Some(parent) = widgets.get_mut((parent_handle - 1) as usize) else {
+            return false;
+        };
+        let from = from_index as usize;
+        let to = to_index as usize;
+        if from >= parent.children.len() || to >= parent.children.len() || from == to {
+            return false;
+        }
+        let child = parent.children.remove(from);
+        parent.children.insert(to, child);
+        true
+    });
+    if changed {
+        crate::app::request_layout();
+    }
+}
+
 /// Remove a specific child from a parent container.
 pub fn remove_child(parent_handle: i64, child_handle: i64) {
     // Remove from children list

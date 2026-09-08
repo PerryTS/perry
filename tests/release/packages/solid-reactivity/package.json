@@ -1,0 +1,18 @@
+{
+  "name": "perry-release-fixture-solid-reactivity",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Native Solid core, store, and universal-renderer audit for #4644",
+  "dependencies": {
+    "solid-js": "1.9.15"
+  },
+  "perry": {
+    "compilePackages": ["solid-js"],
+    "allow": { "compilePackages": ["solid-js"] },
+    "packageAliases": {
+      "solid-js": "solid-js/dist/solid.js",
+      "solid-js/store": "solid-js/store/dist/store.js"
+    }
+  }
+}

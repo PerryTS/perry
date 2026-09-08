@@ -31,7 +31,9 @@
 
 use super::hot_tls::{hot_layout_slot_masks, hot_per_object_layout_hint, hot_typed_layouts};
 use super::layout::{LayoutSlotMask, TypedLayoutDescriptor};
-use super::types::{GcHeader, GC_FLAG_ARENA, GC_HEADER_SIZE, GC_TYPE_ARRAY, GC_TYPE_OBJECT};
+use super::types::{
+    GcHeader, GC_FLAG_ARENA, GC_HEADER_SIZE, GC_TYPE_ARRAY, GC_TYPE_CLOSURE, GC_TYPE_OBJECT,
+};
 use std::cell::{Cell, RefCell};
 
 thread_local! {
@@ -76,6 +78,16 @@ pub(in crate::gc) struct PerObjectLayoutHint {
     /// on every new nursery-keyed insert; made exact again by
     /// [`recount_young_layout_records`] after each collection's death prune.
     pub(in crate::gc) young_records: Cell<u32>,
+    /// #9754-style young-entry log for BOTH per-object maps
+    /// (`gc/young_log.rs`): the keys whose owner may still sit on a page a
+    /// minor can act on. A minor's death prune walks this instead of the
+    /// maps — an owner that was old at the last prune is still old, so only
+    /// a logged key can be found dead by a minor.
+    ///
+    /// It lives here, in the same hot slot as the flag and the filter, so a
+    /// writer arms it with the thread-local resolution it has already paid
+    /// for, and so nothing new is declared for `tls_hot::fill` to resolve.
+    pub(in crate::gc) young_keys: RefCell<crate::gc::young_log::YoungLog<usize>>,
 }
 
 impl PerObjectLayoutHint {
@@ -85,9 +97,13 @@ impl PerObjectLayoutHint {
             sets: Cell::new(0),
             filter: std::cell::UnsafeCell::new([0u64; LAYOUT_ADDR_FILTER_WORDS]),
             young_records: Cell::new(0),
+            young_keys: RefCell::new(crate::gc::young_log::YoungLog::new()),
         }
     }
 }
+
+/// The `[gc-young-log]` / `young_log::last_walk` row name for the two maps.
+pub(in crate::gc) const LAYOUT_YOUNG_LOG_NAME: &str = "gc.layout_tables";
 
 impl Drop for PerObjectLayoutHint {
     fn drop(&mut self) {
@@ -155,12 +171,28 @@ fn layout_key_may_be_nursery(addr: usize) -> bool {
     )
 }
 
-/// A NEW per-object record was keyed by `user_ptr`.
+/// A per-object record is ABOUT to be keyed by `user_ptr`: if the owner sits
+/// where a minor could kill it, log the key. Rule 1 of `gc/young_log.rs` —
+/// note BEFORE the entry is findable. Returns that youngness so the caller can
+/// bump the young-record count once it knows the insert was fresh, without a
+/// second classification.
 #[inline]
-fn note_new_layout_record(user_ptr: usize) {
+pub(in crate::gc) fn arm_young_layout_key(user_ptr: usize) -> bool {
     if !layout_key_may_be_nursery(user_ptr) {
-        return;
+        return false;
     }
+    hot_per_object_layout_hint()
+        .young_keys
+        .borrow_mut()
+        .note(user_ptr);
+    true
+}
+
+/// A NEW nursery-keyed record was published: keep the inline allocator's gate
+/// ([`PERRY_YOUNG_LAYOUT_RECORDS`]) conservative until the next prune makes it
+/// exact.
+#[inline]
+pub(in crate::gc) fn count_new_young_layout_record() {
     let hint = hot_per_object_layout_hint();
     if let Some(next) = hint.young_records.get().checked_add(1) {
         hint.young_records.set(next);
@@ -168,21 +200,38 @@ fn note_new_layout_record(user_ptr: usize) {
     }
 }
 
-/// Re-derive this thread's young-record count from the live keys and publish
-/// the delta. Runs after every death prune (all cycle kinds) and whenever the
-/// tables empty, so promotion (a key moving to an old page) and death both
-/// bring the count back down.
-fn recount_young_layout_records() {
-    let live = {
-        let masks = hot_layout_slot_masks().borrow();
-        let typed = hot_typed_layouts().borrow();
-        masks
-            .keys()
-            .chain(typed.keys())
-            .filter(|key| layout_key_may_be_nursery(**key))
-            .count()
-    };
-    let live = u32::try_from(live).unwrap_or(u32::MAX);
+/// The flag proved BOTH maps empty, so every key the log still names is
+/// stale. Dropping them here is what keeps the log bounded: a prune that
+/// early-returns on the emptiness proof never drains it, so a workload that
+/// repeatedly fills and empties the maps between collections would otherwise
+/// accumulate one dead key per insert for ever.
+#[cold]
+fn drop_stale_young_layout_log() {
+    hot_per_object_layout_hint().young_keys.borrow_mut().clear();
+}
+
+/// A record is being re-keyed to `new_user` by the per-object move hook
+/// (`transfer_per_object_*`), which runs during evacuation — i.e. BEFORE the
+/// copied minor's prune, so the key this notes is one the prune will classify
+/// in this very collection.
+///
+/// Logged unconditionally: the destination is a to-space survivor (young), a
+/// promoted address (old), or mid-evacuation not yet classifiable. Noting it
+/// without asking is correct (the prune classifies once and an old key simply
+/// drops) and keeps a page-map probe out of the evacuation loop.
+#[inline]
+fn arm_moved_layout_key(new_user: usize) {
+    hot_per_object_layout_hint()
+        .young_keys
+        .borrow_mut()
+        .note(new_user);
+}
+
+/// Publish this thread's young-record count and the delta to the process
+/// total. The count itself is derived by the death prune's single pass over
+/// the live keys (all cycle kinds), so promotion (a key moving to an old page)
+/// and death both bring it back down without a walk of their own.
+fn publish_young_layout_records(live: u32) {
     let prev = hot_per_object_layout_hint().young_records.replace(live);
     use std::sync::atomic::Ordering::SeqCst;
     if live > prev {
@@ -202,28 +251,372 @@ fn recount_young_layout_records() {
 /// inline allocator's gate reads that instead of probing.
 pub(in crate::gc) fn prune_dead_per_object_layout_owners(is_dead_owner: &dyn Fn(usize) -> bool) {
     if !per_object_layouts_maybe_nonempty() {
+        drop_stale_young_layout_log();
         return;
     }
+    // Exactly one arm test per non-empty prune. Everything below it — the
+    // timer and the residue-wide histogram — is absent when the sink is off.
+    let layout_diag = crate::hot_diag::layout_on();
+    // ONE pass over each table, not three. The old shape visited every live
+    // key three times per collection — `retain`, then
+    // `layout_addr_filter_rebuild` (which first collected them all into a
+    // `Vec<usize>`), then `recount_young_layout_records` — and the survivor
+    // set the last two want is exactly what `retain` is already walking. On cc
+    // that was 162k keys x 47 prunes per 400-character reply, with the `Vec`
+    // alone allocating 50.6 MB of the turn's 304 MB (#9792).
+    let hint = hot_per_object_layout_hint();
+    // A filter this occupancy has outgrown is not worth rebuilding: see
+    // [`layout_addr_filter_saturating_occupancy`]. Decide from the pre-prune
+    // size, which bounds the survivor count from above, so the decision is one
+    // branch captured by the closure rather than a test per key.
+    let occupancy = hot_layout_slot_masks().borrow().len() + hot_typed_layouts().borrow().len();
+    let rebuild_filter = occupancy <= layout_addr_filter_saturating_occupancy();
+    if rebuild_filter {
+        // Cleared FIRST so the bits set below describe survivors only — a key
+        // that dies in this pass must leave no bit behind, which is the whole
+        // point of rebuilding.
+        layout_addr_filter_clear();
+    } else {
+        layout_addr_filter_saturate();
+    }
+    let mut young: u32 = 0;
+    // A full walk is authoritative, so it also REBUILDS the young log — from
+    // the survivors it is classifying anyway, at the cost of one `push` per
+    // young key and no extra pass (`young_log.rs`: "a full-scope scanner
+    // walks the whole table as before and REBUILDS the log from what it
+    // found").
+    let mut kept = hint.young_keys.borrow_mut().take_spare();
+    let mut keep = |key: usize| {
+        if is_dead_owner(key) {
+            return false;
+        }
+        if rebuild_filter {
+            let (word, bit) = layout_addr_filter_slot(key);
+            // SAFETY: the filter is a plain `UnsafeCell` in this thread's own
+            // hot slot and nothing else holds a reference to it here. This is
+            // the same single-threaded access every probe makes; the tables
+            // borrowed around it are different thread-locals.
+            unsafe {
+                (*hint.filter.get())[word] |= bit;
+            }
+        }
+        if layout_key_may_be_nursery(key) {
+            young = young.saturating_add(1);
+            kept.push(key);
+        }
+        true
+    };
+    let prune_walk_started = layout_diag.then(std::time::Instant::now);
     let masks_emptied = {
         let mut masks = hot_layout_slot_masks().borrow_mut();
         let had = !masks.is_empty();
-        masks.retain(|key, _| !is_dead_owner(*key));
+        masks.retain(|key, _| keep(*key));
         had && masks.is_empty()
     };
     let typed_emptied = {
         let mut typed = hot_typed_layouts().borrow_mut();
         let had = !typed.is_empty();
-        typed.retain(|key, _| !is_dead_owner(*key));
+        typed.retain(|key, _| keep(*key));
         had && typed.is_empty()
     };
-    refresh_per_object_layouts_flag(masks_emptied || typed_emptied);
-    if per_object_layouts_maybe_nonempty() {
-        // Stale filter bits are what the pruned keys leave behind; rebuilding
-        // from the survivors keeps the runtime probes as selective as the
-        // tables really are.
-        layout_addr_filter_rebuild();
-        recount_young_layout_records();
+    let prune_walk_us = prune_walk_started.map_or(0, |started| {
+        started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64
+    });
+    // A full walk is authoritative: rebuild the young log from the tables
+    // (same shape as the shape/descriptor full scanners).
+    {
+        let mut log = hint.young_keys.borrow_mut();
+        let _ = log.take_sorted();
+        log.extend(kept);
     }
+    crate::gc::young_log::note_walk(
+        LAYOUT_YOUNG_LOG_NAME,
+        crate::gc::young_log::YoungLogWalk {
+            partial: false,
+            logged: occupancy as u64,
+            visited: occupancy as u64,
+            kept: u64::from(young),
+            table_len: occupancy as u64,
+        },
+    );
+    publish_young_layout_records(young);
+    // Runs last: when it finds both tables empty it disarms the flag, zeroes
+    // the young count published above and clears the filter, which is the
+    // correct end state whichever branch the pass took.
+    refresh_per_object_layouts_flag(masks_emptied || typed_emptied);
+    if layout_diag {
+        layout_diag_note_prune(rebuild_filter, prune_walk_us);
+    }
+}
+
+/// [`prune_dead_per_object_layout_owners`] for a MINOR (`DEAD_KEY_PRUNES`
+/// `young_prune`).
+///
+/// # Why this is sound
+///
+/// A minor's two deadness predicates both require the owner to be in the
+/// nursery: `owner_is_dead_copied_minor_from_space` demands eden or the active
+/// survivor half, and `PostTraceProbe::owner_is_dead` on a minor demands an
+/// in-arena, untenured `HeapGeneration::Nursery` address. So the only keys a
+/// minor can remove are the ones [`layout_key_may_be_nursery`] admits — which
+/// is a strict SUPERSET of both (it also admits an unclassifiable address, and
+/// classifies from the same page map). Every writer notes such a key before
+/// the entry becomes findable, and every walk re-logs a survivor that is still
+/// young, so the log names every candidate and the walk loses nothing.
+///
+/// That predicate is the whole difference between this conversion and the
+/// scanner conversions of #9754: a scanner keeps `addr_is_minor_relevant`,
+/// which admits `Longlived` **by design** (a longlived object can point at a
+/// young one), whereas a prune asks who DIED and therefore excludes
+/// `Longlived` and `Old` both.
+///
+/// A logged key that is in neither map is stale (moved away, removed) and
+/// drops; a present key whose owner is dead is removed from both maps; a live
+/// key is re-logged iff its owner is still young, so a promoted owner leaves
+/// the log and no later minor visits it again.
+///
+/// The address filter is NOT rebuilt here — the whole-table walk that rebuilt
+/// it is exactly what this replaces. Its `false` is the only load-bearing
+/// answer and a stale set bit is a false positive, so leaving bits behind is
+/// safe; the amortised rebuild in [`layout_addr_filter_add`] and the full
+/// prune keep it selective.
+pub(in crate::gc) fn prune_dead_per_object_layout_owners_young(
+    is_dead_owner: &dyn Fn(usize) -> bool,
+) {
+    if !per_object_layouts_maybe_nonempty() {
+        drop_stale_young_layout_log();
+        return;
+    }
+    // Exactly one arm test per non-empty prune; see the full-prune twin.
+    let layout_diag = crate::hot_diag::layout_on();
+    let hint = hot_per_object_layout_hint();
+    let table_len =
+        (hot_layout_slot_masks().borrow().len() + hot_typed_layouts().borrow().len()) as u64;
+    // Rule 2 (`gc/young_log.rs`): re-derive the candidate set from the
+    // authoritative maps and refuse to run a partial walk that would miss one.
+    // A miss is a writer that published a young-keyed record without arming
+    // the log, which in release would silently keep a dead owner's record.
+    #[cfg(debug_assertions)]
+    {
+        let relevant: Vec<usize> = {
+            let masks = hot_layout_slot_masks().borrow();
+            let typed = hot_typed_layouts().borrow();
+            masks
+                .keys()
+                .chain(typed.keys())
+                .copied()
+                .filter(|key| layout_key_may_be_nursery(*key))
+                .collect()
+        };
+        hint.young_keys
+            .borrow()
+            .debug_assert_logged(LAYOUT_YOUNG_LOG_NAME, &relevant);
+    }
+    let mut logged = 0u64;
+    let mut visited = 0u64;
+    // The record count is per MAP ENTRY, as the full prune counts it: a key
+    // present in both maps is two records and one log entry.
+    let mut young: u32 = 0;
+    let mut kept = hint.young_keys.borrow_mut().take_spare();
+    let prune_walk_started = layout_diag.then(std::time::Instant::now);
+    let (masks_emptied, typed_emptied) = {
+        let mut masks = hot_layout_slot_masks().borrow_mut();
+        let mut typed = hot_typed_layouts().borrow_mut();
+        let had_masks = !masks.is_empty();
+        let had_typed = !typed.is_empty();
+        loop {
+            // Re-drained in a loop so a note made while this walk runs (the
+            // move hooks fire from inside a collection) is not lost.
+            let batch = hint.young_keys.borrow_mut().take_sorted();
+            if batch.is_empty() {
+                break;
+            }
+            logged += batch.len() as u64;
+            for key in batch {
+                let in_masks = masks.contains_key(&key);
+                let in_typed = typed.contains_key(&key);
+                if !in_masks && !in_typed {
+                    continue;
+                }
+                visited += 1;
+                if is_dead_owner(key) {
+                    if in_masks {
+                        masks.remove(&key);
+                    }
+                    if in_typed {
+                        typed.remove(&key);
+                    }
+                    continue;
+                }
+                if layout_key_may_be_nursery(key) {
+                    young = young
+                        .saturating_add(u32::from(in_masks))
+                        .saturating_add(u32::from(in_typed));
+                    kept.push(key);
+                }
+            }
+        }
+        (had_masks && masks.is_empty(), had_typed && typed.is_empty())
+    };
+    let prune_walk_us = prune_walk_started.map_or(0, |started| {
+        started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64
+    });
+    let kept_len = kept.len() as u64;
+    hint.young_keys.borrow_mut().extend(kept);
+    crate::gc::young_log::note_walk(
+        LAYOUT_YOUNG_LOG_NAME,
+        crate::gc::young_log::YoungLogWalk {
+            partial: true,
+            logged,
+            visited,
+            kept: kept_len,
+            table_len,
+        },
+    );
+    publish_young_layout_records(young);
+    // Runs last, as in the full prune: with both maps empty it disarms the
+    // flag, zeroes the count published above and clears the filter.
+    refresh_per_object_layouts_flag(masks_emptied || typed_emptied);
+    if layout_diag {
+        // `rebuilt_filter = false`: a young prune never rebuilds it.
+        layout_diag_note_prune(false, prune_walk_us);
+    }
+}
+
+/// `PERRY_LAYOUT_DIAG`'s per-prune sample. Out of line and behind
+/// [`crate::hot_diag::layout_on`] so an unarmed build pays one relaxed load.
+#[cold]
+fn layout_diag_note_prune(rebuilt_filter: bool, prune_walk_us: u64) {
+    let (typed_len, masks_len) = (
+        hot_typed_layouts().borrow().len(),
+        hot_layout_slot_masks().borrow().len(),
+    );
+    let residue = layout_residue_histogram(prune_walk_us);
+    let hint = hot_per_object_layout_hint();
+    // SAFETY: as in the pass above — this thread's own filter, no other
+    // reference live.
+    let set = unsafe {
+        (*hint.filter.get())
+            .iter()
+            .map(|w| w.count_ones() as usize)
+            .sum::<usize>()
+    };
+    crate::hot_diag::layout_note_prune(
+        typed_len,
+        masks_len,
+        set,
+        LAYOUT_ADDR_FILTER_BITS,
+        rebuilt_filter,
+        layout_addr_filter_saturating_occupancy(),
+        residue,
+    );
+}
+
+/// Walk the surviving mask table once for `PERRY_LAYOUT_DIAG` only.
+///
+/// The logical slot bound comes from the same owner metadata the tracer uses:
+/// array length, shape-derived object live slots, or real closure captures.
+/// A mask cannot legitimately belong to any other GC kind, but `other` keeps
+/// the diagnostic total honest if a stale/corrupt entry is ever observed.
+#[cold]
+fn layout_residue_histogram(prune_walk_us: u64) -> crate::hot_diag::LayoutResidueHistogram {
+    let mut out = crate::hot_diag::LayoutResidueHistogram {
+        prune_walk_us,
+        ..Default::default()
+    };
+    let masks = hot_layout_slot_masks().borrow();
+    out.keys = masks.len() as u64;
+    for (&owner, mask) in masks.iter() {
+        #[cfg(test)]
+        LAYOUT_RESIDUE_HISTOGRAM_ENTRIES.with(|n| n.set(n.get().saturating_add(1)));
+
+        let Some(header) = (unsafe { crate::value::addr_class::try_read_tracked_gc_header(owner) })
+        else {
+            out.other += 1;
+            out.slots[0] += 1;
+            out.pointer_share[0] += 1;
+            out.space[2] += 1;
+            continue;
+        };
+        // SAFETY: `try_read_tracked_gc_header` proved this exact owner belongs
+        // to either an arena allocation or the tracked malloc registry.
+        let header = unsafe { header.as_ref() };
+        let slot_count = unsafe {
+            match header.obj_type {
+                GC_TYPE_CLOSURE => {
+                    out.closure += 1;
+                    let closure = owner as *const crate::closure::ClosureHeader;
+                    crate::closure::real_capture_count((*closure).capture_count) as usize
+                }
+                GC_TYPE_OBJECT => {
+                    out.object += 1;
+                    crate::object::object_live_slot_count(
+                        owner as *const crate::object::ObjectHeader,
+                    ) as usize
+                }
+                GC_TYPE_ARRAY => {
+                    out.array += 1;
+                    let array = owner as *const crate::array::ArrayHeader;
+                    ((*array).length as usize).min((*array).capacity as usize)
+                }
+                _ => {
+                    out.other += 1;
+                    (header.size as usize).saturating_sub(GC_HEADER_SIZE) / 8
+                }
+            }
+        };
+
+        let slot_bucket = match slot_count {
+            0..=7 => 0,
+            8..=15 => 1,
+            16..=31 => 2,
+            32..=63 => 3,
+            64..=255 => 4,
+            _ => 5,
+        };
+        out.slots[slot_bucket] += 1;
+
+        let pointer_slots = mask.count_slots(slot_count);
+        let share_bucket = if pointer_slots.saturating_mul(4) <= slot_count {
+            0
+        } else if pointer_slots.saturating_mul(2) <= slot_count {
+            1
+        } else if pointer_slots.saturating_mul(4) <= slot_count.saturating_mul(3) {
+            2
+        } else {
+            3
+        };
+        out.pointer_share[share_bucket] += 1;
+        out.est_tag_checks_saved_per_trace = out
+            .est_tag_checks_saved_per_trace
+            .saturating_add(slot_count.saturating_sub(pointer_slots) as u64);
+
+        if header.gc_flags & GC_FLAG_ARENA == 0 {
+            out.space[2] += 1;
+        } else if crate::arena::classify_heap_space(owner).is_nursery() {
+            out.space[0] += 1;
+        } else {
+            // Old, Longlived and the transient PromotedYoung classification
+            // are all old-page residents for this three-way price split.
+            out.space[1] += 1;
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+crate::perry_thread_local! {
+    static LAYOUT_RESIDUE_HISTOGRAM_ENTRIES: Cell<usize> = const { Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(in crate::gc) fn test_reset_layout_residue_histogram_entries() {
+    LAYOUT_RESIDUE_HISTOGRAM_ENTRIES.with(|n| n.set(0));
+}
+
+#[cfg(test)]
+pub(in crate::gc) fn test_layout_residue_histogram_entries() -> usize {
+    LAYOUT_RESIDUE_HISTOGRAM_ENTRIES.with(Cell::get)
 }
 
 #[cfg(test)]
@@ -366,18 +759,74 @@ pub(in crate::gc) fn layout_addr_filter_note(user_ptr: usize) {
 /// their own (two keys may share one), so this is what keeps a workload that
 /// genuinely churns per-object records from saturating the filter forever.
 fn layout_addr_filter_rebuild() {
+    let occupancy = hot_layout_slot_masks().borrow().len() + hot_typed_layouts().borrow().len();
+    if occupancy > layout_addr_filter_saturating_occupancy() {
+        // Walking the keys would set almost every bit, so this is where the
+        // rebuild lands anyway — reached in O(1) instead of O(live keys).
+        layout_addr_filter_saturate();
+        return;
+    }
     layout_addr_filter_clear();
-    let keys: Vec<usize> = {
-        let masks = hot_layout_slot_masks().borrow();
-        let typed = hot_typed_layouts().borrow();
-        masks.keys().copied().chain(typed.keys().copied()).collect()
-    };
     let hint = hot_per_object_layout_hint();
-    for k in keys {
+    // Straight from the tables: the `Vec<usize>` of every live key that used
+    // to buffer this walk allocated 50.6 MB per 400-character cc reply, and
+    // bought nothing — no borrow held here conflicts with the filter, which
+    // lives in a different thread-local.
+    let set_bit = |k: usize| {
         let (word, bit) = layout_addr_filter_slot(k);
+        // SAFETY: this thread's own filter, no other reference live; the
+        // tables borrowed around it are different thread-locals.
         unsafe {
             (*hint.filter.get())[word] |= bit;
         }
+    };
+    for k in hot_layout_slot_masks().borrow().keys() {
+        set_bit(*k);
+    }
+    for k in hot_typed_layouts().borrow().keys() {
+        set_bit(*k);
+    }
+    hint.sets.set(0);
+}
+
+/// Live keys past which the 4,096-bit sketch stops being an accelerator.
+///
+/// The filter is a one-hash bitmap, so `n` live keys leave it answering
+/// "may hold" for about `1 - e^(-n/4096)` of all addresses: 12 % at 512 keys,
+/// 63 % at 4,096, and indistinguishable from "always yes" past ~16k. cc holds
+/// **162,258** (`PERRY_LAYOUT_DIAG`, one 400-character reply), i.e. every bit
+/// set, every probe positive, and every rebuild an O(live keys) walk that
+/// restores exactly the all-ones state it started from.
+///
+/// Sizing the filter up is not available here: the geometry and hash are
+/// mirrored in generated code (`perry-codegen`'s
+/// `emit_gated_forget_object_layout`), so widening it is a codegen change, and
+/// a sketch that discriminated at 162k keys would need ~1.5 Mbit — 190 KB of
+/// inline thread-local storage on every thread, to serve a workload that has
+/// already lost the fast path. What is available is to stop *paying* for a
+/// gate that cannot pay back: past this occupancy the filter is set to all
+/// ones, which is the conservative answer it would have reached anyway, and
+/// the walk is skipped. Nothing downstream changes behaviour — `may_hold` is
+/// a hint whose `true` every caller already handles.
+///
+/// Four times the bit count is deliberately far past the point where the
+/// filter merely *degrades*: at 16,384 keys its false-positive rate is 98.2 %,
+/// so a rebuilt filter still proves absence for under one address in fifty
+/// while costing a walk of every live key. Below that the filter is left
+/// exactly as it was — a workload holding a few thousand records keeps the
+/// selectivity it has today, and this branch never fires for it.
+#[inline]
+fn layout_addr_filter_saturating_occupancy() -> usize {
+    LAYOUT_ADDR_FILTER_BITS * 4
+}
+
+/// Set every bit: "may hold" for any address. Conservative by construction —
+/// the filter's `false` is the only load-bearing answer.
+fn layout_addr_filter_saturate() {
+    let hint = hot_per_object_layout_hint();
+    // SAFETY: this thread's own filter, no other reference live.
+    unsafe {
+        (*hint.filter.get()).fill(u64::MAX);
     }
     hint.sets.set(0);
 }
@@ -716,26 +1165,55 @@ pub(in crate::gc) fn refresh_per_object_layouts_flag(touched_map_emptied: bool) 
 pub(in crate::gc) fn typed_layouts_insert(user_ptr: usize, descriptor: TypedLayoutDescriptor) {
     mark_per_object_layouts_nonempty();
     layout_addr_filter_add(user_ptr);
+    // Armed BEFORE the insert makes the entry findable (young-log rule 1).
+    let young = arm_young_layout_key(user_ptr);
     let fresh = hot_typed_layouts()
         .borrow_mut()
         .insert(user_ptr, descriptor)
         .is_none();
-    if fresh {
-        note_new_layout_record(user_ptr);
+    if fresh && young {
+        count_new_young_layout_record();
     }
 }
 
 /// The one way to add a per-object pointer mask.
 #[inline]
-pub(in crate::gc) fn slot_masks_insert(user_ptr: usize, mask: LayoutSlotMask) {
+pub(in crate::gc) fn slot_masks_insert(user_ptr: usize, mask: LayoutSlotMask) -> bool {
     mark_per_object_layouts_nonempty();
     layout_addr_filter_add(user_ptr);
+    // Armed BEFORE the insert makes the entry findable (young-log rule 1).
+    let young = arm_young_layout_key(user_ptr);
     let fresh = hot_layout_slot_masks()
         .borrow_mut()
         .insert(user_ptr, mask)
         .is_none();
-    if fresh {
-        note_new_layout_record(user_ptr);
+    if fresh && young {
+        count_new_young_layout_record();
+    }
+    fresh
+}
+
+/// Insert-site wrappers for the diagnostic counter. Keeping them here avoids
+/// carrying provenance in `LayoutSlotMask`, whose size and hot-path shape must
+/// not change for an optional instrument.
+#[inline]
+pub(in crate::gc) fn slot_masks_insert_birth(user_ptr: usize, mask: LayoutSlotMask) {
+    if slot_masks_insert(user_ptr, mask) && crate::hot_diag::layout_on() {
+        crate::hot_diag::layout_note_mask_insert(crate::hot_diag::LayoutMaskInsertSite::Birth);
+    }
+}
+
+#[inline]
+pub(in crate::gc) fn slot_masks_insert_rebuild(user_ptr: usize, mask: LayoutSlotMask) {
+    if slot_masks_insert(user_ptr, mask) && crate::hot_diag::layout_on() {
+        crate::hot_diag::layout_note_mask_insert(crate::hot_diag::LayoutMaskInsertSite::Rebuild);
+    }
+}
+
+#[inline]
+pub(in crate::gc) fn layout_note_store_mask_insert() {
+    if crate::hot_diag::layout_on() {
+        crate::hot_diag::layout_note_mask_insert(crate::hot_diag::LayoutMaskInsertSite::Store);
     }
 }
 
@@ -809,9 +1287,19 @@ pub(in crate::gc) fn transfer_per_object_descriptor(old_user: usize, new_user: u
         return false;
     }
     let mut typed = hot_typed_layouts().borrow_mut();
+    // The flag and the filter above are shared with `LAYOUT_SLOT_MASKS`, so a
+    // full mask table drags every relocation in here even when this map is
+    // empty — which is cc's steady state (`PERRY_LAYOUT_DIAG`: typed=0,
+    // masks=162,258). An empty map has nothing to remove at either address, so
+    // the two hashes below are pure loss; the `len` test that proves it is one
+    // load. #9792.
+    if typed.is_empty() {
+        return false;
+    }
     typed.remove(&new_user);
     match typed.remove(&old_user) {
         Some(layout) => {
+            arm_moved_layout_key(new_user);
             typed.insert(new_user, layout);
             drop(typed);
             layout_addr_filter_add(new_user);
@@ -832,6 +1320,7 @@ pub(in crate::gc) fn transfer_per_object_slot_mask(old_user: usize, new_user: us
     let mut masks = hot_layout_slot_masks().borrow_mut();
     masks.remove(&new_user);
     if let Some(mask) = masks.remove(&old_user) {
+        arm_moved_layout_key(new_user);
         masks.insert(new_user, mask);
         drop(masks);
         layout_addr_filter_add(new_user);

@@ -515,6 +515,7 @@ pub(super) fn compile_closure(
         captures_new_target,
         enclosing_class,
         is_async,
+        is_generator,
         is_strict,
     ) = match closure_expr {
         perry_hir::Expr::Closure {
@@ -525,6 +526,7 @@ pub(super) fn compile_closure(
             captures_new_target,
             enclosing_class,
             is_async,
+            is_generator,
             is_strict,
             ..
         } => (
@@ -535,6 +537,7 @@ pub(super) fn compile_closure(
             *captures_new_target,
             enclosing_class.clone(),
             *is_async,
+            *is_generator,
             *is_strict,
         ),
         _ => return Err(anyhow!("compile_closure: expected Expr::Closure")),
@@ -556,6 +559,16 @@ pub(super) fn compile_closure(
     closure_relevant_ids.extend(captures.iter().copied());
 
     let public_llvm_name = format!("perry_closure_{}__{}", module_prefix, func_id);
+    let regex_factory_identity = (!is_async
+        && !is_generator
+        && params.is_empty()
+        && matches!(
+            body.as_slice(),
+            [perry_hir::Stmt::Return(Some(
+                perry_hir::Expr::RegExp { .. }
+            ))]
+        ))
+    .then(|| public_llvm_name.clone());
     let typed_public_trampoline = if cross_module.typed_f64_closures.contains(&func_id) {
         Some(TypedFunctionTrampolineKind::F64)
     } else if cross_module.typed_i32_closures.contains(&func_id) {
@@ -1053,6 +1066,7 @@ pub(super) fn compile_closure(
         module_slug: crate::expr::native_region_slug(strings.module_prefix()),
         source_function: format!("closure_{}", func_id),
         source_function_slug: crate::expr::native_region_slug(&format!("closure_{}", func_id)),
+        regex_factory_identity,
         active_region_id: None,
         native_facts: &native_facts,
         locals,

@@ -51,10 +51,7 @@ pub(super) fn transform_static_literal_requires_with_bunfs(
             // `// fallback: require("./generated")` outside a `try` would
             // flip a genuinely optional specifier back to mandatory and
             // reintroduce the #6873 hard error.
-            if masked_source[full.start()..full.end()]
-                .bytes()
-                .all(|b| b == b' ' || b == b'\t' || b == b'\r' || b == b'\n')
-            {
+            if !is_bare_call(&masked_source, full.start(), full.end()) {
                 continue;
             }
             let specifier = cap.name("spec").map(|m| m.as_str()).unwrap_or_default();
@@ -76,10 +73,7 @@ pub(super) fn transform_static_literal_requires_with_bunfs(
             let Some(full) = cap.name("call") else {
                 continue;
             };
-            if masked_source[full.start()..full.end()]
-                .bytes()
-                .all(|b| b.is_ascii_whitespace())
-            {
+            if !is_bare_call(&masked_source, full.start(), full.end()) {
                 continue;
             }
             let specifier = cap.name("spec").map(|m| m.as_str()).unwrap_or_default();
@@ -95,6 +89,12 @@ pub(super) fn transform_static_literal_requires_with_bunfs(
         }
         let call_re = literal_require_call_re(&alias);
         for cap in call_re.captures_iter(source) {
+            let Some(full) = cap.name("call") else {
+                continue;
+            };
+            if !is_bare_call(&masked_source, full.start(), full.end()) {
+                continue;
+            }
             let specifier = cap.name("spec").map(|m| m.as_str()).unwrap_or_default();
             let require_target = resolve_static_require(module_dir, specifier, bunfs_root);
             if should_leave_runtime_require(specifier, compile_packages) {
@@ -131,15 +131,6 @@ pub(super) fn transform_static_literal_requires_with_bunfs(
             // Resolvable optional requires keep being hoisted, so a module
             // that IS present still gets compiled in and loads.
             if optional_specs.get(specifier).copied().unwrap_or(false) && require_target.is_none() {
-                continue;
-            }
-            let Some(full) = cap.name("call") else {
-                continue;
-            };
-            if masked_source[full.start()..full.end()]
-                .bytes()
-                .all(|b| b == b' ' || b == b'\t' || b == b'\r' || b == b'\n')
-            {
                 continue;
             }
             // CJS, JSON, native addons, and custom extensions need the runtime
@@ -184,6 +175,16 @@ pub(super) fn transform_static_literal_requires_with_bunfs(
         transformed.replace_range(start..end, &replacement);
     }
     prepend_imports_preserving_shebang(&transformed, &imports)
+}
+
+fn is_bare_call(masked_source: &str, start: usize, end: usize) -> bool {
+    // The regex excludes an adjacent dot, but whitespace/comments can separate
+    // it from the method name. Keep `import.meta . require(...)` and ordinary
+    // object methods intact; only identifier calls belong to this transform.
+    !masked_source[..start].trim_end().ends_with('.')
+        && !masked_source[start..end]
+            .bytes()
+            .all(|b| b.is_ascii_whitespace())
 }
 
 pub(super) fn resolve_static_require(
@@ -606,6 +607,24 @@ fn is_identifier(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn member_calls_with_whitespace_are_not_bare_requires() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("dep.js"), "export const answer = 42;").unwrap();
+        for source in [
+            "const dep = import.meta . require('./dep.js');",
+            "const dep = import.meta. /* gap */ require('./dep.js');",
+            "const dep = object . require('./dep.js');",
+            "const dep = object . require.resolve('./dep.js');",
+            "// require('./dep.js')\nexport {};",
+        ] {
+            assert_eq!(
+                transform_static_literal_requires(source, &HashSet::new(), dir.path()),
+                source
+            );
+        }
+    }
 
     #[test]
     fn hoists_direct_relative_literal_require() {

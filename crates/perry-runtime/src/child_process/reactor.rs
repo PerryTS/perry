@@ -1223,6 +1223,7 @@ pub(super) fn cp_register_reactor_arities() {
 pub(super) fn cp_exec_async(
     mut command: Command,
     cmd_str: String,
+    public_spawnfile: Option<String>,
     cb_val: f64,
     run_options: CpRunOptions,
     mode: CpOutput,
@@ -1283,7 +1284,16 @@ pub(super) fn cp_exec_async(
     cp_set_field(cp, b"signalCode", TAG_NULL_F64);
     cp_set_field(cp, b"killed", TAG_FALSE_F64);
     cp_set_field(cp, b"connected", TAG_FALSE_F64);
-    cp_set_field(cp, b"spawnfile", cp_box_string(&file));
+    // `cp_command_for_program` may resolve a bare executable against PATH to
+    // keep macOS on `posix_spawn`, but Node exposes the caller's original
+    // `execFile` spelling through `ChildProcess.spawnfile`. Keep the resolved
+    // path above for launch-error metadata and publish the explicit spelling
+    // when that API supplied one. `exec` continues to expose its real shell.
+    cp_set_field(
+        cp,
+        b"spawnfile",
+        cp_box_string(public_spawnfile.as_deref().unwrap_or(&file)),
+    );
 
     match command.spawn() {
         Ok(mut child) => {

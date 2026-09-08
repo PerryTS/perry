@@ -95,6 +95,7 @@ where
     // #8082: the drained snapshot crosses each callback — root it.
     let scope = perry_ffi::TransientRootScope::enter();
     let rooted = scope.root_addrs(&cbs);
+    perry_ext_ws::attached_server_listening(server_handle);
     let mut call = DeferredCallbacksCall {
         callbacks: rooted.as_ptr(),
         len: rooted.len(),

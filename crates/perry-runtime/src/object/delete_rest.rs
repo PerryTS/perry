@@ -227,6 +227,9 @@ pub extern "C" fn js_object_delete_field(
             }
             return 1;
         }
+        if super::string_wrapper::has_index_key(obj as usize, key) {
+            return 0;
+        }
         // Once #9064's stable marker is installed, this receiver has already
         // been proved to be an ordinary non-prototype object with no
         // descriptors. Avoid decoding the same dynamic key and scanning the
@@ -1071,6 +1074,9 @@ pub extern "C" fn js_object_rest(
         return js_object_alloc(0, 0);
     }
     unsafe {
+        if super::string_wrapper::length(src as usize).is_some() {
+            return super::string_wrapper::rest(src, exclude_keys);
+        }
         let keys = crate::object::object_keys_array(src);
         if keys.is_null() {
             return js_object_alloc(0, 0);
@@ -1487,9 +1493,8 @@ mod sso_tests_1781 {
     }
 }
 
-/// Gate for O(1) tombstone deletes (`PERRY_OBJECT_TOMBSTONES=1`). Default OFF
-/// while the walker audit and differentials bake; the sibling Map tombstones
-/// (#9020) shipped default-on after the same sequence.
+/// Gate for O(1) tombstone deletes (`PERRY_OBJECT_TOMBSTONES`).
+/// The default and its rationale live beside the environment parsing below.
 fn object_tombstone_deletes_enabled() -> bool {
     // Test override first: the OnceLock latches at the FIRST delete anywhere
     // in the test process, which is long before a tombstone test's own

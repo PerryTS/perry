@@ -72,10 +72,7 @@ unsafe fn string_header_as_str<'a>(key: *const crate::StringHeader) -> Option<&'
     if key.is_null() {
         return None;
     }
-    let len = (*key).byte_len as usize;
-    let data = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-    let bytes = std::slice::from_raw_parts(data, len);
-    std::str::from_utf8(bytes).ok()
+    crate::string::header_str_checked(key)
 }
 
 pub(super) unsafe fn string_primitive_own_key_present(

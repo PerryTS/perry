@@ -16,7 +16,7 @@ pub(super) const WS_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_ws_server_new",
         args: &[NA_F64],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "ws",
@@ -25,7 +25,7 @@ pub(super) const WS_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_ws_connect",
         args: &[NA_STR],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "ws",
@@ -78,6 +78,33 @@ pub(super) const WS_EVENTS_ROWS: &[NativeModSig] = &[
         args: &[],
         ret: NR_F64,
     },
+    NativeModSig {
+        module: "ws",
+        has_receiver: true,
+        method: "handleUpgrade",
+        class_filter: None,
+        runtime: "js_ws_handle_upgrade",
+        args: &[NA_F64, NA_F64, NA_F64, NA_PTR],
+        ret: NR_VOID,
+    },
+    NativeModSig {
+        module: "ws",
+        has_receiver: true,
+        method: "address",
+        class_filter: None,
+        runtime: "js_ws_server_address",
+        args: &[],
+        ret: NR_F64,
+    },
+    NativeModSig {
+        module: "ws",
+        has_receiver: true,
+        method: "emit",
+        class_filter: None,
+        runtime: "js_ws_server_emit",
+        args: &[NA_STR, NA_F64, NA_F64],
+        ret: NR_BOOL,
+    },
     // Issue #577 Phase 4 — `("ws", "Client")` instance methods.
     // The wsId delivered to `Server.on('upgrade', (req, wsId, head) => …)`
     // is NaN-boxed POINTER_TAG so unbox_to_i64 (called by the dispatch
@@ -110,7 +137,7 @@ pub(super) const WS_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: Some("Client"),
         runtime: "js_ws_on_client_i64",
         args: &[NA_STR, NA_PTR],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "ws",
@@ -119,7 +146,7 @@ pub(super) const WS_EVENTS_ROWS: &[NativeModSig] = &[
         class_filter: Some("Client"),
         runtime: "js_ws_on_client_i64",
         args: &[NA_STR, NA_PTR],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     // Server-side helpers — the user receives a client handle as a plain
     // f64 number from `wss.on('connection', (handle) => …)`, then passes

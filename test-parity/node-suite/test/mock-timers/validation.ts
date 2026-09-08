@@ -12,7 +12,10 @@ function codeOf(fn: () => void): string {
 console.log("runAll disabled:", codeOf(() => mock.timers.runAll()));
 console.log("tick disabled:", codeOf(() => mock.timers.tick()));
 console.log("setTime disabled:", codeOf(() => mock.timers.setTime(1)));
-console.log("bad options:", codeOf(() => mock.timers.enable(null as any)));
+console.log("null options:", codeOf(() => mock.timers.enable(null as any)));
+mock.timers.reset();
+console.log("number options:", codeOf(() => mock.timers.enable(1 as any)));
+mock.timers.reset();
 console.log("bad api type:", codeOf(() => mock.timers.enable({ apis: [1 as any] })));
 console.log("bad now:", codeOf(() => mock.timers.enable({ now: -1 })));
 mock.timers.enable({ apis: ["Date"], now: 0 });

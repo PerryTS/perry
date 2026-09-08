@@ -205,6 +205,7 @@ mod hoisted_callback_method_tests;
 mod index_method_clone_tests;
 mod indexed_method_artifacts;
 mod ordinary_method_artifacts;
+mod tdz_names;
 // `pub(crate)` so `crate::linker` can read the inline-hot-small policy
 // (`inline_hot_small_enabled` / `inline_hot_small_hint_threshold`).
 pub(crate) mod helpers;
@@ -487,6 +488,7 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     // becomes part of every emitted global so multi-module programs
     // don't collide on `.str.0.handle`.
     let mut strings = StringPool::with_prefix(module_prefix.clone());
+    strings.tdz_binding_names = tdz_names::collect(hir);
     // #5247: install per-module source-location context for the dynamic
     // call-dispatch throw path, but only under `--debug-symbols` (which sets
     // `opts.debug_locations` + `opts.module_source`). Off by default — no
@@ -3673,6 +3675,8 @@ pub fn compile_module(hir: &HirModule, opts: CompileOptions) -> Result<Vec<u8>> 
     // See `crate::root_reload`.
     progress.phase(1, "lowering complete; finalizing generated IR");
     crate::root_reload::apply_to_module(&mut llmod);
+
+    crate::typed_feedback_profile::finish_module(&mut llmod.native_rep_records);
 
     let verify_native_regions = opts.verify_native_regions
         || std::env::var("PERRY_VERIFY_NATIVE_REGIONS").ok().as_deref() == Some("1");

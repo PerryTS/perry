@@ -1281,6 +1281,22 @@ const VM_MODULE_NAMESPACE_KEYS: &[&[u8]] = &[
 
 const VM_CONSTANTS_KEYS: &[&[u8]] = &[b"USE_MAIN_CONTEXT_DEFAULT_LOADER", b"DONT_CONTEXTIFY"];
 
+const PERF_HOOKS_DEFAULT_KEYS: &[&[u8]] = &[
+    b"Performance",
+    b"PerformanceEntry",
+    b"PerformanceMark",
+    b"PerformanceMeasure",
+    b"PerformanceObserver",
+    b"PerformanceObserverEntryList",
+    b"PerformanceResourceTiming",
+    b"monitorEventLoopDelay",
+    b"eventLoopUtilization",
+    b"timerify",
+    b"createHistogram",
+    b"performance",
+    b"constants",
+];
+
 // Linux-only open() flags: Node only enumerates these on platforms whose libc
 // defines them (e.g. `O_DIRECT`/`O_NOATIME` are absent on macOS), so gate the
 // enumerable-key tail by target so `Object.keys(constants)` matches Node here.
@@ -1628,6 +1644,7 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
         "sqlite.constants" => Some(SQLITE_CONSTANTS_KEYS),
         // #9599: the opt-in globalThis.Bun object and `import * as bun from
         // "bun"` share this one enumerable native-module surface.
+        "bun:jsc" => Some(&[b"heapStats"]),
         "bun" => Some(&[
             b"Glob",
             b"JSONL",
@@ -1861,6 +1878,7 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
             b"constants",
             b"default",
         ]),
+        "perf_hooks.default" => Some(PERF_HOOKS_DEFAULT_KEYS),
         "perf_hooks.constants" => Some(&[
             b"NODE_PERFORMANCE_GC_MAJOR",
             b"NODE_PERFORMANCE_GC_MINOR",

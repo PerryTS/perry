@@ -1,0 +1,20 @@
+initial 1 2 2
+update 2 4 2,4
+batch 4 8 2,4,8
+untrack 4
+signal cleanup
+disposed 2,4,8
+branches 1,2,11,12 3
+branch cleanup 4
+store Ada:1:one,two
+store updates Ada:1:one,two|Ada:2:one,two|Grace:2:one,two
+reconcile Ada:1:one,two|Ada:2:one,two|Grace:2:one,two|Grace:2:TWO,ONE
+store identity true
+unwrap Grace
+store disposed 4
+rows a,b,c
+moved c,a,b true 3
+replaced b,d 4 2
+empty  4
+rows disposed 4 4
+text update after true

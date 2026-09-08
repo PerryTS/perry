@@ -332,6 +332,11 @@ pub fn well_known_symbol(short_name: &str) -> *mut SymbolHeader {
         id: next_id(),
     });
     let sym_ptr = Box::into_raw(boxed);
+    if crate::hot_diag::receiver_repr_on() {
+        crate::hot_diag::receiver_repr_note_constructed(
+            crate::hot_diag::ReceiverReprFamily::SymbolGlobal,
+        );
+    }
     // Fully initialize the symbol's side tables BEFORE publishing it in
     // the cache. A concurrent reader that observes the pointer via the
     // cache must already see a complete view (description present,
@@ -650,6 +655,11 @@ pub fn intl_legacy_constructed_symbol() -> f64 {
         id: next_id(),
     });
     let sym_ptr = Box::into_raw(boxed) as usize;
+    if crate::hot_diag::receiver_repr_on() {
+        crate::hot_diag::receiver_repr_note_constructed(
+            crate::hot_diag::ReceiverReprFamily::SymbolGlobal,
+        );
+    }
     record_registered_symbol_description(sym_ptr, "IntlLegacyConstructedSymbol");
     register_symbol_pointer(sym_ptr);
     *guard = Some(sym_ptr);

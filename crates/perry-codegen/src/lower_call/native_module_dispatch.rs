@@ -190,7 +190,11 @@ pub fn lower_native_module_dispatch(
 
         // Determine return type for the declare
         let ret_type = match sig.ret {
-            NativeRetKind::Ptr
+            NativeRetKind::GcPtr
+            | NativeRetKind::NullableGcPtr
+            | NativeRetKind::HandleId
+            | NativeRetKind::ForeignPtr
+            | NativeRetKind::JsValue
             | NativeRetKind::Promise
             | NativeRetKind::Str
             | NativeRetKind::ObjFromJsonStr
@@ -207,7 +211,11 @@ pub fn lower_native_module_dispatch(
             llvm_args.iter().map(|(t, s)| (*t, s.as_str())).collect();
 
         match sig.ret {
-            NativeRetKind::Ptr => {
+            NativeRetKind::GcPtr
+            | NativeRetKind::NullableGcPtr
+            | NativeRetKind::HandleId
+            | NativeRetKind::ForeignPtr
+            | NativeRetKind::JsValue => {
                 let blk = ctx.block();
                 let raw = blk.call(I64, sig.runtime, &arg_slices);
                 let lowered = LoweredValue::native_handle(raw.clone());

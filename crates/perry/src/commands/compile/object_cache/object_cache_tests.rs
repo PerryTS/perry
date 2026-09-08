@@ -743,6 +743,7 @@ fn key_changes_with_codegen_env_vars() {
         // Codegen tuning/emission toggles (#6394).
         "PERRY_TYPED_FEEDBACK",
         "PERRY_TYPED_FEEDBACK_TRACE",
+        "PERRY_CONCAT_SITE_CACHE",
         "PERRY_FULL_OUTLINE_IC",
         "PERRY_FULL_OUTLINE_IC_MIN_FUNCS",
         "PERRY_OUTLINE_METHOD_DISPATCH",
@@ -1138,4 +1139,16 @@ fn toml_overrides_pkg_via_readers_and_resolver() {
     // Relative perry.toml value resolves against the project root.
     let resolved = resolve_cache_dir(root.path(), chosen.as_deref());
     assert_eq!(resolved, root.path().join("toml-cache"));
+}
+
+#[test]
+fn pinned_build_id_parses_hex_and_ignores_garbage() {
+    assert_eq!(
+        super::pinned_build_id(Some(" 5458fd55d49a4640\n".to_string())),
+        Some(0x5458_fd55_d49a_4640)
+    );
+    assert_eq!(super::pinned_build_id(Some("0".to_string())), Some(0));
+    assert_eq!(super::pinned_build_id(Some("not-hex".to_string())), None);
+    assert_eq!(super::pinned_build_id(Some(String::new())), None);
+    assert_eq!(super::pinned_build_id(None), None);
 }

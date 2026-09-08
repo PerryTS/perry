@@ -168,8 +168,34 @@ pub use concat::{
     scan_concat_memo_roots, scan_concat_memo_roots_mut,
 };
 pub use concat_site::{js_string_concat_site_value, CONCAT_SITE_SLOTS};
+pub(crate) use format::ascii_char_string;
 pub(crate) use format::fix_exponent_format;
 pub(crate) use format::js_format_f64;
+
+/// The canonical `StringHeader` for a runtime-internal constant property name.
+///
+/// Perry's runtime resolves fixed names — `"constructor"`, `"prototype"`,
+/// `"toString"`, the `globalThis` builtin a primitive method call dispatches
+/// through — by MINTING a fresh heap string for the literal on every lookup
+/// and throwing it away one call later. On the compiled claude-code TUI that
+/// is measured in hundreds of megabytes per reply
+/// (`js_get_global_this_builtin_value` alone: 133 MB of the 990 MB a
+/// 3300-character reply allocates), all of it identical bytes.
+///
+/// This routes those literals through the intern table that already exists for
+/// exactly this purpose (`js_string_materialize_to_heap` uses it for computed
+/// property names): content-keyed, per-thread, allocated once, address-stable,
+/// `refcount = 0` and `GC_FLAG_INTERNED` so nothing mutates it in place — and
+/// already covered by the intern-table root scanner, so it adds no new root
+/// surface. A key that is interned also makes the property-read and
+/// property-write fast paths eligible, which the freshly minted copy never was.
+///
+/// Use it only for names the runtime itself spells as a literal. A key built
+/// from user data belongs on the ordinary allocation path.
+#[inline]
+pub(crate) fn canonical_key(name: &[u8]) -> *mut StringHeader {
+    intern::intern_dispatch_bytes(0, name.as_ptr(), name.len(), 0, false) as *mut StringHeader
+}
 pub use format::{
     js_number_to_exponential, js_number_to_fixed, js_number_to_precision, js_number_to_string,
     scan_small_int_cache_roots, scan_small_int_cache_roots_mut,
@@ -1057,6 +1083,32 @@ pub(crate) fn string_as_str<'a>(s: *const StringHeader) -> &'a str {
 #[inline]
 pub(crate) fn is_ascii_string(s: *const StringHeader) -> bool {
     unsafe { (*s).utf16_len == (*s).byte_len }
+}
+
+/// Borrow a header's payload as `&str`, answering `None` for a WTF-8 payload
+/// (lone surrogates), like `std::str::from_utf8(..).ok()` — but without the
+/// scan when the header already proves the answer: `utf16_len == byte_len`
+/// holds iff every byte is a one-byte code unit, i.e. pure ASCII, which is
+/// what nearly every property key is. The generic property-read ladder
+/// decodes the key at several layers per read (`ic_miss`, closure expandos,
+/// accessor and reflection probes, async-resource dispatch), and
+/// `core::str::from_utf8` was 2 % of the claude-code keystroke profile on
+/// those decodes alone.
+///
+/// Same borrow rule as [`string_as_str`]: the slice must not outlive any
+/// call that can move the payload.
+///
+/// # Safety
+/// `s` must point at a live `StringHeader`.
+#[inline]
+pub(crate) unsafe fn header_str_checked<'a>(s: *const StringHeader) -> Option<&'a str> {
+    let len = (*s).byte_len as usize;
+    let bytes = slice::from_raw_parts(string_data(s), len);
+    if (*s).utf16_len as usize == len {
+        Some(str::from_utf8_unchecked(bytes))
+    } else {
+        str::from_utf8(bytes).ok()
+    }
 }
 
 /// `PERRY_GC_CENSUS`: the fixed-size intern table (slots, bytes). Entries

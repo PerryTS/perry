@@ -252,16 +252,22 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
             return js_instanceof(value, class_id);
         }
     }
-    // #1789: `x instanceof C` where C is a heap class object (the value a
-    // class EXPRESSION evaluates to, e.g. `const C = make(x); c instanceof
-    // C`). Read its class_id (the compile-time template) and walk the
-    // candidate's class chain against it.
+    // #9502: a heap class object's template id identifies its code, not its
+    // evaluation. Compare the actual prototype objects so sibling evaluations
+    // remain distinct and a chain through earlier evaluations still matches.
     if is_class_object_value(type_ref) {
-        let obj = crate::JSValue::from_bits(bits).as_pointer::<ObjectHeader>();
-        let class_id = js_object_get_class_id(obj);
-        if class_id != 0 {
-            return js_instanceof(value, class_id);
+        // Static/forward `new C()` sites can still construct by template id
+        // without attaching an evaluated prototype. Retain that representation's
+        // class-id check; recorded individual chains are authoritative.
+        if !super::prototype_chain::object_has_prototype_divergence(value_addr(value)) {
+            let obj = crate::JSValue::from_bits(bits).as_pointer::<ObjectHeader>();
+            return js_instanceof(value, js_object_get_class_id(obj));
         }
+        return f64::from_bits(if ordinary_has_instance_prototype_walk(value, type_ref) {
+            crate::value::TAG_TRUE
+        } else {
+            TAG_FALSE
+        });
     }
     // A builtin constructor held in a VARIABLE — `const RS = ReadableStream; body
     // instanceof RS` — arrives here as the ClosureHeader-backed function installed
@@ -1749,6 +1755,20 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
 
         // For user-defined classes that extend Error: `myErr instanceof Error` should be true.
         if class_id == crate::error::CLASS_ID_ERROR {
+            // #9940: a function-local class declaration gets a fresh class
+            // object on every evaluation, but all evaluations share its
+            // compile-time class id. A constructor factory can therefore
+            // evaluate `class Definition extends Error {}`, then later
+            // evaluate the same declaration with an Object parent. The class
+            // registry is keyed by the shared id and is necessarily
+            // last-wins; the instance's recorded evaluation prototype is the
+            // authoritative chain. Zod's `$constructor` has exactly this
+            // shape, and its later schema classes made an earlier ZodError
+            // fail `instanceof Error` even though getPrototypeOf still showed
+            // `ZodError -> Error -> Object`.
+            if let Some(matches) = recorded_prototype_instanceof_builtin(value, "Error") {
+                return if matches { true_val } else { false_val };
+            }
             let obj_class_id = (*obj_ptr).class_id;
             if extends_builtin_error(obj_class_id) {
                 return true_val;

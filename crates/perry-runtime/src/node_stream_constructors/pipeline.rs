@@ -182,7 +182,7 @@ pub(super) fn add_finished_signal_abort_listener(stream: f64, signal: f64, callb
 }
 
 pub(super) fn add_finished_cleanup_completion_listener(stream: f64, callback: f64) {
-    let listener = js_closure_alloc(ns_finished_error_false_close as *const u8, 3);
+    let listener = js_closure_alloc(ns_finished_default_completion as *const u8, 3);
     js_closure_set_capture_f64(listener, 0, stream);
     js_closure_set_capture_f64(listener, 1, callback);
     js_closure_set_capture_f64(listener, 2, f64::from_bits(TAG_FALSE));

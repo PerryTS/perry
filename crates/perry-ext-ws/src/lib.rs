@@ -25,6 +25,7 @@
 //! enough for typical WebSocket usage. Cooperative `spawn_async` is
 //! a v0.6.0 followup.
 
+mod dispatch;
 /// SIMD-widened WebSocket frame (un)masking (RFC 6455 §5.3). See
 /// [`mask::apply_mask`] / [`mask::apply_mask_from`]. The hot tungstenite
 /// read/write path masks internally with its own `u32`-blocked routine
@@ -32,6 +33,8 @@
 /// frame bytes perry handles itself — kept byte-identical to the scalar
 /// reference and validated by a property test.
 pub mod mask;
+mod server;
+pub use server::*;
 
 #[cfg(test)]
 mod test_async_shims;
@@ -42,8 +45,7 @@ use perry_ffi::{
     alloc_set, alloc_string, gc_register_mutable_root_scanner_named, get_handle_mut,
     iter_handles_of_mut, notify_main_thread, register_aux_event_pump, register_handle, set_add,
     set_delete, spawn_async, spawn_blocking_with_reactor as spawn_blocking, take_handle,
-    GcRootVisitor, Handle, JsClosure, JsString, JsValue, ObjectHeader, RawClosureHeader,
-    StringHeader,
+    GcRootVisitor, Handle, JsClosure, JsString, JsValue, RawClosureHeader, StringHeader,
 };
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicI32, Ordering};
@@ -75,6 +77,8 @@ unsafe fn read_str(ptr: *const StringHeader) -> Option<String> {
 
 // ── Global state ──────────────────────────────────────────────────
 
+struct WsClientHandle;
+
 struct WsConnection {
     sender: mpsc::UnboundedSender<WsCommand>,
     messages: Vec<String>,
@@ -101,6 +105,9 @@ pub struct WsServerHandle {
     /// Event name → list of closure pointers.
     pub listeners: HashMap<String, Vec<i64>>,
     pub port: u16,
+    pub host: String,
+    pub attached_server: Option<Handle>,
+    pub no_server: bool,
     pub is_listening: bool,
     pub client_ids: Vec<usize>,
     /// The persistent JavaScript `Set` exposed as `WebSocketServer.clients`.
@@ -127,7 +134,6 @@ enum PendingWsEvent {
 lazy_static! {
     static ref WS_CONNECTIONS: Mutex<HashMap<usize, WsConnection>> = Mutex::new(HashMap::new());
     static ref WS_CLIENT_PARENT_SERVER: Mutex<HashMap<usize, Handle>> = Mutex::new(HashMap::new());
-    static ref NEXT_WS_ID: Mutex<usize> = Mutex::new(1);
     static ref WS_CLIENT_LISTENERS: Mutex<HashMap<usize, WsClientListeners>> =
         Mutex::new(HashMap::new());
     static ref WS_PENDING_EVENTS: Mutex<Vec<PendingWsEvent>> = Mutex::new(Vec::new());
@@ -150,7 +156,8 @@ fn ensure_runtime_hooks_registered() {
         gc_register_mutable_root_scanner_named("perry-ext-ws", scan_ws_roots);
         register_aux_event_pump(js_ws_process_pending, js_ws_has_pending);
         unsafe {
-            js_register_handle_property_dispatch_extension(js_ext_ws_handle_property_dispatch)
+            js_register_handle_property_dispatch_extension(js_ext_ws_handle_property_dispatch);
+            dispatch::register_method_dispatch();
         };
     });
 }
@@ -168,9 +175,8 @@ fn ensure_runtime_hooks_registered() {
 /// heartbeat — uncatchable by application code, so the process exited every
 /// 30 seconds.
 ///
-/// Returns 0 (not handled) for every other property and for any handle that is
-/// not a live `WsServerHandle`, so the composite dispatcher falls through to
-/// the primary stdlib dispatcher unchanged.
+/// Also exposes native server/client method values. Unknown members and
+/// unrelated handle types fall through to the primary dispatcher.
 ///
 /// # Safety
 /// FFI entry; `property_name_ptr` must be valid for `property_name_len` bytes,
@@ -182,20 +188,7 @@ pub unsafe extern "C" fn js_ext_ws_handle_property_dispatch(
     property_name_len: usize,
     out: *mut f64,
 ) -> i32 {
-    if property_name_ptr.is_null() || property_name_len != b"clients".len() {
-        return 0;
-    }
-    if std::slice::from_raw_parts(property_name_ptr, property_name_len) != b"clients" {
-        return 0;
-    }
-    let clients = js_ws_server_clients(handle);
-    if clients.to_bits() == JsValue::UNDEFINED.bits() {
-        return 0;
-    }
-    if !out.is_null() {
-        *out = clients;
-    }
-    1
+    dispatch::property(handle, property_name_ptr, property_name_len, out)
 }
 
 fn scan_ws_roots(visitor: &mut GcRootVisitor<'_>) {
@@ -225,9 +218,7 @@ fn push_ws_event(ev: PendingWsEvent) {
 
 #[inline]
 fn client_js_value(ws_id: usize) -> JsValue {
-    // Server-side clients are represented throughout this wrapper as ordinary
-    // numeric handles (the same value delivered to `connection` listeners).
-    JsValue::from_number(ws_id as f64)
+    JsValue::from_bits(POINTER_TAG | ws_id as u64)
 }
 
 /// Add a connection to a server's persistent JS-visible clients Set.
@@ -325,10 +316,7 @@ pub extern "C" fn js_ws_connect_start(url_nanboxed: f64) -> f64 {
 
     // Allocate the id synchronously so the caller can register
     // listeners before the connect resolves.
-    let mut id_guard = NEXT_WS_ID.lock().unwrap();
-    let ws_id = *id_guard;
-    *id_guard += 1;
-    drop(id_guard);
+    let ws_id = register_handle(WsClientHandle) as usize;
     let (tx, rx) = mpsc::unbounded_channel::<WsCommand>();
     WS_CONNECTIONS.lock().unwrap().insert(
         ws_id,
@@ -381,10 +369,7 @@ fn setup_client_io(
         tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
     >,
 ) -> usize {
-    let mut id_guard = NEXT_WS_ID.lock().unwrap();
-    let ws_id = *id_guard;
-    *id_guard += 1;
-    drop(id_guard);
+    let ws_id = register_handle(WsClientHandle) as usize;
     let (tx, rx) = mpsc::unbounded_channel::<WsCommand>();
     WS_CONNECTIONS.lock().unwrap().insert(
         ws_id,
@@ -500,6 +485,10 @@ pub unsafe extern "C" fn js_ws_send(handle: i64, message_ptr: *const StringHeade
 
 #[no_mangle]
 pub extern "C" fn js_ws_close(handle: i64) {
+    if get_handle_mut::<WsServerHandle>(handle).is_some() {
+        js_ws_server_close(handle);
+        return;
+    }
     let id = handle as usize;
     if let Some(c) = WS_CONNECTIONS.lock().unwrap().get_mut(&id) {
         let _ = c.sender.send(WsCommand::Close);
@@ -598,7 +587,7 @@ pub unsafe extern "C" fn js_ws_on_client_i64(
 /// `message_ptr` must be null or a Perry-runtime `StringHeader`.
 #[no_mangle]
 pub unsafe extern "C" fn js_ws_send_to_client(handle_f64: f64, message_ptr: *const StringHeader) {
-    let id = handle_f64 as i64 as usize;
+    let id = decode_client_id(handle_f64);
     let Some(msg) = read_str(message_ptr) else {
         return;
     };
@@ -609,7 +598,7 @@ pub unsafe extern "C" fn js_ws_send_to_client(handle_f64: f64, message_ptr: *con
 
 #[no_mangle]
 pub extern "C" fn js_ws_close_client(handle_f64: f64) {
-    let id = handle_f64 as i64 as usize;
+    let id = decode_client_id(handle_f64);
     if let Some(c) = WS_CONNECTIONS.lock().unwrap().get_mut(&id) {
         let _ = c.sender.send(WsCommand::Close);
         c.is_open = false;
@@ -728,14 +717,7 @@ pub unsafe extern "C" fn js_ws_on(
     if callback_ptr == 0 {
         return handle;
     }
-    // Issue #606: client ws_ids (NEXT_WS_ID counter) and server handle
-    // ids (perry-ffi NEXT_HANDLE counter) live in disjoint registries
-    // but their numeric ranges collide — both start near 1. If we look
-    // up the server registry first, a client id that happens to also
-    // be a registered server handle id would route through the server
-    // arm and the user's `client.on("open", cb)` would land on the
-    // server's listeners. Check the client registry first so client
-    // dispatch is correct regardless of allocation order.
+    // Client and server ids share the handle allocator, so routing is unambiguous.
     let ws_id = handle as usize;
     let is_client = WS_CONNECTIONS.lock().unwrap().contains_key(&ws_id);
     if !is_client {
@@ -788,210 +770,6 @@ pub unsafe extern "C" fn js_ws_on(
 }
 
 // ── Server ────────────────────────────────────────────────────────
-
-/// `new WebSocketServer({ port })` — sync ctor; spawns the accept loop.
-///
-/// #1113: `new WebSocketServer({ noServer: true })` must NOT bind a
-/// TCP port or spawn the accept loop — it's a passive registry whose
-/// connections arrive exclusively via `wss.handleUpgrade(...)` driven
-/// by a host server's `'upgrade'` event (fastify's `app.server` or
-/// `node:http`). For that shape we register a listener-only handle and
-/// return early; `WS_ACTIVE_SERVERS` is left untouched so a noServer
-/// wss doesn't keep the event loop alive on its own (the host server's
-/// has-active gate — `js_fastify_has_active` — does that).
-#[no_mangle]
-pub extern "C" fn js_ws_server_new(opts_f64: f64) -> Handle {
-    ensure_runtime_hooks_registered();
-    let port = extract_port(opts_f64);
-    let no_server = extract_no_server(opts_f64);
-    let clients_bits = alloc_set(4).bits();
-
-    if no_server || port == 0 {
-        // Listener-only handle — no bind, no accept loop, no shutdown
-        // channel (nothing to shut down). Connections are injected via
-        // `js_ws_handle_upgrade`.
-        return register_handle(WsServerHandle {
-            listeners: HashMap::new(),
-            port: 0,
-            is_listening: false,
-            client_ids: Vec::new(),
-            clients_bits,
-            shutdown_tx: None,
-        });
-    }
-
-    let (shutdown_tx, mut shutdown_rx) = mpsc::unbounded_channel::<()>();
-    let server_handle = register_handle(WsServerHandle {
-        listeners: HashMap::new(),
-        port,
-        is_listening: false,
-        client_ids: Vec::new(),
-        clients_bits,
-        shutdown_tx: Some(shutdown_tx),
-    });
-    WS_ACTIVE_SERVERS.fetch_add(1, Ordering::Relaxed);
-    let handle_id = server_handle;
-    // Issue #606 — `spawn_blocking_with_reactor` already runs the closure
-    // inside a tokio worker task, so `Handle::current().block_on(fut)` panics
-    // with "Cannot start a runtime from within a runtime". Schedule the
-    // accept loop as a sibling task on the existing runtime instead.
-    // (Same root cause as the v0.5.691 sweep that fixed perry-ext-http's
-    // server.rs / https_server.rs / http2_server.rs and perry-ext-ws's
-    // `drive_server_client_io` — this site was missed in that sweep.)
-    spawn_blocking(move || {
-        tokio::spawn(async move {
-            let addr = format!("0.0.0.0:{}", port);
-            let listener = match tokio::net::TcpListener::bind(&addr).await {
-                Ok(l) => l,
-                Err(e) => {
-                    push_ws_event(PendingWsEvent::ServerError(
-                        handle_id,
-                        format!("WebSocketServer bind error: {}", e),
-                    ));
-                    return;
-                }
-            };
-            if let Some(s) = get_handle_mut::<WsServerHandle>(handle_id) {
-                s.is_listening = true;
-            }
-            push_ws_event(PendingWsEvent::Listening(handle_id));
-            loop {
-                tokio::select! {
-                    accept_result = listener.accept() => {
-                        match accept_result {
-                            Ok((tcp_stream, _addr)) => {
-                                match tokio_tungstenite::accept_async(tcp_stream).await {
-                                    Ok(ws_stream) => {
-                                        let mut id_guard = NEXT_WS_ID.lock().unwrap();
-                                        let ws_id = *id_guard;
-                                        *id_guard += 1;
-                                        drop(id_guard);
-                                        let (tx, rx) = mpsc::unbounded_channel::<WsCommand>();
-                                        WS_CONNECTIONS.lock().unwrap().insert(ws_id, WsConnection {
-                                            sender: tx,
-                                            messages: Vec::new(),
-                                            is_open: true,
-                                            is_closing: false,
-                                            is_closed: false,
-                                        });
-                                        WS_CLIENT_LISTENERS.lock().unwrap().insert(ws_id, WsClientListeners {
-                                            listeners: HashMap::new(),
-                                        });
-                                        if let Some(s) = get_handle_mut::<WsServerHandle>(handle_id) {
-                                            s.client_ids.push(ws_id);
-                                        }
-                                        WS_CLIENT_PARENT_SERVER.lock().unwrap().insert(ws_id, handle_id);
-                                        push_ws_event(PendingWsEvent::Connection(handle_id, ws_id));
-                                        drive_server_client_io(ws_id, ws_stream, rx);
-                                    }
-                                    Err(e) => {
-                                        push_ws_event(PendingWsEvent::ServerError(
-                                            handle_id,
-                                            format!("WebSocket handshake error: {}", e),
-                                        ));
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                push_ws_event(PendingWsEvent::ServerError(
-                                    handle_id,
-                                    format!("accept error: {}", e),
-                                ));
-                            }
-                        }
-                    }
-                    _ = shutdown_rx.recv() => {
-                        break;
-                    }
-                }
-            }
-            if let Some(s) = get_handle_mut::<WsServerHandle>(handle_id) {
-                s.is_listening = false;
-            }
-            WS_ACTIVE_SERVERS.fetch_sub(1, Ordering::Relaxed);
-        });
-    });
-    server_handle
-}
-
-/// Return the persistent `Set` exposed as `WebSocketServer.clients`.
-///
-/// The Set is allocated with the server, updated before connection/close
-/// callbacks run, and rooted through the server handle for its full lifetime.
-#[no_mangle]
-pub extern "C" fn js_ws_server_clients(handle: i64) -> f64 {
-    get_handle_mut::<WsServerHandle>(handle)
-        .map(|server| f64::from_bits(server.clients_bits))
-        .unwrap_or_else(|| f64::from_bits(JsValue::UNDEFINED.bits()))
-}
-
-fn extract_port(opts_f64: f64) -> u16 {
-    let bits = opts_f64.to_bits();
-    if (bits & TAG_MASK) == POINTER_TAG {
-        let ptr = (bits & POINTER_MASK) as *const ObjectHeader;
-        if !ptr.is_null() {
-            // Object literal: assume `port` is the first field
-            // (positional shape — same convention as nodemailer/pg/mysql2).
-            let val = unsafe { perry_ffi::js_object_get_field(ptr, 0) };
-            if val.is_number() {
-                let n = val.to_number();
-                if n.is_finite() && n > 0.0 {
-                    return n as u16;
-                }
-            }
-        }
-        return 0;
-    }
-    if opts_f64.is_finite() && opts_f64 > 0.0 {
-        opts_f64 as u16
-    } else {
-        0
-    }
-}
-
-/// #1113 — detect `new WebSocketServer({ noServer: true })`.
-///
-/// perry-ffi exposes only positional object-field reads
-/// (`js_object_get_field(ptr, idx)`), not name-based lookup, so we
-/// can't read the `noServer` key by name. Heuristic: an options
-/// object that carries a `true` boolean field AND no positive numeric
-/// port field is a `noServer` config. (A real `{ port: N }` config
-/// has a positive number in field 0 — `extract_port` handles that;
-/// a `{ noServer: true }` config has no port and a `true` boolean.)
-/// `js_ws_server_new` additionally treats "object with no positive
-/// port" as noServer, so this is a belt-and-suspenders signal that
-/// also catches `{ noServer: true, ...other }` shapes regardless of
-/// field order.
-fn extract_no_server(opts_f64: f64) -> bool {
-    let bits = opts_f64.to_bits();
-    if (bits & TAG_MASK) != POINTER_TAG {
-        return false;
-    }
-    let ptr = (bits & POINTER_MASK) as *const ObjectHeader;
-    if ptr.is_null() {
-        return false;
-    }
-    unsafe {
-        // #8113: the header's `field_count` word is gone; the live inline-slot
-        // bound comes from the runtime accessor.
-        let n = perry_ffi::js_object_live_slot_count(ptr);
-        let mut saw_true = false;
-        let mut saw_positive_port = false;
-        for i in 0..n {
-            let v = perry_ffi::js_object_get_field(ptr, i);
-            if v.is_bool() && v.to_bool() {
-                saw_true = true;
-            }
-            if v.is_number() {
-                let num = v.to_number();
-                if num.is_finite() && num > 0.0 {
-                    saw_positive_port = true;
-                }
-            }
-        }
-        saw_true && !saw_positive_port
-    }
-}
 
 fn drive_server_client_io<S>(
     ws_id: usize,
@@ -1137,10 +915,7 @@ where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
     ensure_runtime_hooks_registered();
-    let mut id_guard = NEXT_WS_ID.lock().unwrap();
-    let ws_id = *id_guard;
-    *id_guard += 1;
-    drop(id_guard);
+    let ws_id = register_handle(WsClientHandle) as usize;
     let (tx, rx) = mpsc::unbounded_channel::<WsCommand>();
     WS_CONNECTIONS.lock().unwrap().insert(
         ws_id,
@@ -1176,22 +951,10 @@ where
 /// re-dispatch shim — it does NOT register another stream or perform
 /// another handshake.
 ///
-/// Steps (mirror `WebSocketServer({port})`'s per-connection wiring):
-///   1. Decode `ws_id` from the POINTER_TAG-boxed `ws_id_f64`.
-///   2. Adopt the connection under this server (`WS_CLIENT_PARENT_SERVER`
-///      + `client_ids`) so server-level `wss.on('message'|'close', …)`
-///      handlers route, and the GC scanner pins the right listeners.
-///   3. Invoke the user's `cb(socket)` with `socket === ws_id_f64`
-///      (the same NaN-boxed id `wss.on('connection', (ws) => …)` gets,
-///      so `ws.send(...)` / `ws.on(...)` dispatch through the Client
-///      class arm).
-///   4. Also push `PendingWsEvent::Connection` so a separately
-///      registered `wss.on('connection', cb)` fires through the pump.
-///
-/// `req_f64` / `head_f64` are accepted for API shape parity (Node's
-/// `handleUpgrade(request, socket, head, callback)`); they're not
-/// consumed here — the request metadata was already surfaced to the
-/// `'upgrade'` handler.
+/// Adopt the client into the server's tracked Set before invoking
+/// `cb(socket, request)`. The callback decides whether to emit `connection`;
+/// `handleUpgrade` itself never emits that event and returns `undefined`.
+/// The HTTP transport has already consumed the head bytes.
 ///
 /// # Safety
 /// `cb`, when non-zero, must be a valid NaN-boxed / raw closure
@@ -1200,48 +963,32 @@ where
 #[no_mangle]
 pub unsafe extern "C" fn js_ws_handle_upgrade(
     server_handle: i64,
-    _req_f64: f64,
+    req_f64: f64,
     ws_id_f64: f64,
     _head_f64: f64,
     cb: i64,
-) -> i64 {
+) {
     ensure_runtime_hooks_registered();
-    // `ws_id_f64` is POINTER_TAG-boxed (the host upgrade path encodes
-    // it as `POINTER_TAG | (ws_id & POINTER_MASK)` so codegen's
-    // unbox_to_i64 round-trips it). Extract the low-48 bits.
-    let ws_id = (ws_id_f64.to_bits() & POINTER_MASK) as usize;
-    if ws_id == 0 {
-        return server_handle;
+    let scope = perry_ffi::TransientRootScope::enter();
+    let cb = scope.root_addr((cb as u64 & POINTER_MASK) as i64);
+    let req = scope.root_nanbox(req_f64);
+    let ws_id = decode_client_id(ws_id_f64);
+    if get_handle_mut::<WsServerHandle>(server_handle).is_none()
+        || !WS_CONNECTIONS.lock().unwrap().contains_key(&ws_id)
+    {
+        return;
     }
-
     WS_CLIENT_PARENT_SERVER
         .lock()
         .unwrap()
         .insert(ws_id, server_handle);
-    // `ws` adds the socket to `clients` before invoking handleUpgrade's
-    // callback. Keep that ordering so the callback observes itself in the Set.
     track_server_client(server_handle, ws_id);
-
-    if cb != 0 {
-        // Accept either a NaN-boxed POINTER_TAG closure or a raw
-        // pointer (same dual-shape the rest of the crate handles).
-        let raw = if (cb as u64 & TAG_MASK) == POINTER_TAG {
-            (cb as u64 & POINTER_MASK) as *const RawClosureHeader
-        } else {
-            cb as *const RawClosureHeader
-        };
-        let closure = JsClosure::from_raw(raw);
-        if !closure.is_null() {
-            let _ = closure.call1(ws_id_f64);
-        }
+    // ws delegates connection emission to the callback. Emitting again here
+    // duplicates the usual `wss.emit("connection", ws, req)` idiom.
+    if cb.get() != 0 {
+        let closure = JsClosure::from_raw(cb.get() as *const RawClosureHeader);
+        let _ = closure.call2(f64::from_bits(client_js_value(ws_id).bits()), req.get());
     }
-
-    // Also fire a Connection event so a `wss.on('connection', cb)`
-    // registered separately from `handleUpgrade`'s inline callback
-    // still runs through the normal pump.
-    push_ws_event(PendingWsEvent::Connection(server_handle, ws_id));
-    notify_main_thread();
-    server_handle
 }
 
 // ── Event-loop tick ───────────────────────────────────────────────
@@ -1268,9 +1015,11 @@ pub extern "C" fn js_ws_process_pending() -> i32 {
                 for cb in listeners {
                     if cb != 0 {
                         let closure = unsafe { JsClosure::from_raw(cb as *const RawClosureHeader) };
-                        // Pass client_id as f64 so user handler can
-                        // pass it back to js_ws_send_to_client etc.
-                        let _ = unsafe { closure.call1(client_id as f64) };
+                        // Use the same handle value as the clients Set and
+                        // manual-upgrade callback, including dynamic dispatch.
+                        let _ = unsafe {
+                            closure.call1(f64::from_bits(client_js_value(client_id).bits()))
+                        };
                         fired += 1;
                     }
                 }
@@ -1297,7 +1046,12 @@ pub extern "C" fn js_ws_process_pending() -> i32 {
                             if cb != 0 {
                                 let closure =
                                     unsafe { JsClosure::from_raw(cb as *const RawClosureHeader) };
-                                let _ = unsafe { closure.call2(ws_id as f64, msg_f64) };
+                                let _ = unsafe {
+                                    closure.call2(
+                                        f64::from_bits(client_js_value(ws_id).bits()),
+                                        msg_f64,
+                                    )
+                                };
                                 fired += 1;
                             }
                         }
@@ -1327,7 +1081,9 @@ pub extern "C" fn js_ws_process_pending() -> i32 {
                             if cb != 0 {
                                 let closure =
                                     unsafe { JsClosure::from_raw(cb as *const RawClosureHeader) };
-                                let _ = unsafe { closure.call1(ws_id as f64) };
+                                let _ = unsafe {
+                                    closure.call1(f64::from_bits(client_js_value(ws_id).bits()))
+                                };
                                 fired += 1;
                             }
                         }
@@ -1494,6 +1250,9 @@ mod tests {
         let server_handle = register_handle(WsServerHandle {
             listeners: HashMap::from([("connection".to_string(), vec![server_callback])]),
             port: 0,
+            host: "0.0.0.0".into(),
+            attached_server: None,
+            no_server: true,
             is_listening: false,
             client_ids: Vec::new(),
             clients_bits: clients_before,
@@ -1596,12 +1355,18 @@ mod tests {
         assert!(!clients.is_null());
         assert_eq!(perry_runtime::set::js_set_size(clients), 0);
 
-        let client_id = 9_325_001;
+        let client_id = register_handle(WsClientHandle) as usize;
         track_server_client(server_handle, client_id);
         let clients = JsValue::from_bits(js_ws_server_clients(server_handle).to_bits())
             .as_pointer::<perry_runtime::set::SetHeader>();
         assert_eq!(perry_runtime::set::js_set_size(clients), 1);
-        assert_eq!(perry_runtime::set::js_set_has(clients, client_id as f64), 1);
+        assert_eq!(
+            perry_runtime::set::js_set_has(
+                clients,
+                f64::from_bits(client_js_value(client_id).bits())
+            ),
+            1
+        );
 
         WS_CLIENT_PARENT_SERVER
             .lock()
@@ -1612,6 +1377,7 @@ mod tests {
             .as_pointer::<perry_runtime::set::SetHeader>();
         assert_eq!(perry_runtime::set::js_set_size(clients), 0);
 
+        drop_handle(client_id as i64);
         drop_handle(server_handle);
     }
 
@@ -1639,10 +1405,19 @@ mod tests {
     }
 
     #[test]
-    fn extract_port_from_number_arg() {
-        assert_eq!(extract_port(8080.0), 8080);
-        assert_eq!(extract_port(0.0), 0);
-        assert_eq!(extract_port(-5.0), 0);
+    fn client_handles_do_not_alias_registered_servers() {
+        let server = js_ws_server_new(f64::from_bits(JsValue::UNDEFINED.bits()));
+        let client = register_handle(WsClientHandle);
+        assert_ne!(server, client);
+        assert!(get_handle_mut::<WsServerHandle>(client).is_none());
+        assert!(get_handle_mut::<WsClientHandle>(server).is_none());
+        assert_eq!(
+            decode_client_id(f64::from_bits(client_js_value(client as usize).bits())),
+            client as usize
+        );
+        assert_eq!(decode_client_id(client as f64), client as usize);
+        perry_ffi::drop_handle(client);
+        perry_ffi::drop_handle(server);
     }
 
     /// #6117 — `readyState` walks the npm-ws lifecycle: CONNECTING (0)

@@ -480,12 +480,7 @@ pub(crate) fn lower_native_method_call(
         // TAG_UNDEFINED sentinel below and `promises.realpath(p)` resolved
         // `undefined` (the compiled CLI's file cache then normalized every path to
         // `undefined` and each later fs call threw).
-        let normalized_module = module.strip_prefix("node:").unwrap_or(module);
-        let promises_submod_key = match normalized_module {
-            "fs/promises" => Some("fs_promises"),
-            "stream/promises" => Some("stream_promises"),
-            _ => None,
-        };
+        let promises_submod_key = crate::nm_install::native_namespace_submodule_key(module);
         if let Some(submod_key) = promises_submod_key {
             let submod_label = crate::expr::emit_string_literal_global(ctx, submod_key);
             let install_sym = crate::nm_install::nm_submod_install_symbol(submod_key);

@@ -1079,8 +1079,10 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // both inc() and get() in a returned object literal).
     module.declare_function("js_box_alloc_bits", I64, &[I64]);
     module.declare_function("js_box_get_bits", I64, &[I64]);
+    module.declare_function("js_box_get_bits_named", I64, &[I64, DOUBLE]);
     module.declare_function("js_box_set_bits", VOID, &[I64, I64]);
     module.declare_function("js_box_get_bits_trusted", I64, &[I64]);
+    module.declare_function("js_box_get_bits_trusted_named", I64, &[I64, DOUBLE]);
     module.declare_function("js_box_set_bits_trusted_no_barrier", VOID, &[I64, I64]);
     module.declare_function("js_box_alloc", I64, &[DOUBLE]);
     module.declare_function("js_box_get", DOUBLE, &[I64]);
@@ -1310,6 +1312,27 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         &[DOUBLE, DOUBLE, DOUBLE, I32, DOUBLE],
     );
     module.declare_function("js_regexp_new", I64, &[I64, I64]);
+    // The literal-site form (`Expr::RegExp` lowering). A missing `declare`
+    // here is invisible to every HIR-level test and fails only at the
+    // in-process LLVM parse with `use of undefined value` — which is exactly
+    // how #9859's five segment-view externs were caught, after twelve passing
+    // unit tests. `runtime_decls::tests` asserts the name AND the arity: a
+    // wrong arity parses and miscompiles.
+    module.declare_function("js_regexp_new_site", I64, &[I64, I64, I64]);
+    module.declare_function("js_regexp_new_factory_site", I64, &[I64, I64, I64, I64]);
+    module.declare_function("js_regexp_site_test_new", I64, &[I64, I64, I64]);
+    module.declare_function("js_regexp_site_factory_call_value", DOUBLE, &[I64, DOUBLE]);
+    module.declare_function(
+        "js_regexp_site_factory_call_method",
+        DOUBLE,
+        &[I64, DOUBLE, DOUBLE],
+    );
+    module.declare_function("js_regexp_site_test_get_method", DOUBLE, &[I64, DOUBLE]);
+    module.declare_function(
+        "js_regexp_site_test_dispatch",
+        DOUBLE,
+        &[I64, DOUBLE, DOUBLE, DOUBLE],
+    );
     // Full ECMAScript RegExp constructor: NaN-boxed pattern + flags in, handles
     // RegExp/undefined/object patterns and ToString-coerced flags.
     module.declare_function("js_regexp_construct", I64, &[DOUBLE, DOUBLE]);
@@ -1479,13 +1502,10 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         &[I32, PTR, I64, DOUBLE, DOUBLE],
     );
     module.declare_function("js_array_push_spread_any", I64, &[I64, DOUBLE]);
-    // Issue #711 part 2: prototype-based class declaration via
-    // `<func>.prototype = <obj>`. Binds an object as the function's
-    // prototype source; subsequent `class X extends <func>` lookups
-    // dispatch into the object's methods. Returns the synthetic
-    // class id allocated for the function value (or 0 on validation
-    // failure). Codegen discards the return.
+    // Retain the legacy registration ABI. New assignments use ordinary
+    // PutValue and synchronize function metadata only from the stored value.
     module.declare_function("js_set_function_prototype", I32, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_set_prototype_property", DOUBLE, &[DOUBLE, DOUBLE, I32]);
     // Issue #838: JS-classic prototype-method assignment.
     // `Class.prototype.method = fn` (or the aliased
     // `let p = Class.prototype; p.method = fn` shape) registers the
@@ -1569,6 +1589,17 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // Iterator-protocol result validation (for-of lazy loop).
     module.declare_function("js_iterator_result_validate", DOUBLE, &[DOUBLE]);
     module.declare_function("js_for_of_next", DOUBLE, &[DOUBLE]);
+    // #9843: Intl.Segmenter view mode. The segment-view tier emits calls to
+    // these when it fires; without a `declare` the module references an
+    // undefined value and the in-process LLVM parse rejects the whole module
+    // ("use of undefined value '@js_segments_view_next'"). Signatures are
+    // taken from `perry-runtime/src/intl/segments_view.rs` (#9870) — note that
+    // `regexp_test` is (cursor, regex), cursor first.
+    module.declare_function("js_segments_view_open", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_segments_view_next", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_segments_view_code_point_at", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_segments_view_segment", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_segments_view_regexp_test", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_global_get_or_throw_unresolved", DOUBLE, &[DOUBLE]);
     // Ambient `require` for compiled external / compilePackages modules (#5373):
     // bind a bare `require` to a createRequire-backed closure instead of throwing

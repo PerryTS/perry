@@ -132,7 +132,7 @@ pub(crate) struct HotTls {
     // arena/block.rs
     pub(crate) arena: *mut u8,
     pub(crate) inline_state: *mut u8,
-    // arena/page_meta.rs
+    // arena/page_meta/mod.rs
     pub(crate) page_generation_cache: *mut u8,
     pub(crate) page_generations: *mut u8,
     // gc/malloc.rs
@@ -564,11 +564,16 @@ pub(crate) fn hot() -> &'static HotTls {
 /// Claimed once, on the first thread that resolves the declaration, and stable
 /// for the life of the process — so every thread finds the same declaration at
 /// the same index in its own cache.
-pub struct SlotId(std::sync::atomic::AtomicU32);
+pub struct SlotId(std::sync::atomic::AtomicU32, &'static str);
 
 impl SlotId {
     pub const fn new() -> Self {
-        Self(std::sync::atomic::AtomicU32::new(SLOT_UNASSIGNED))
+        Self::named("")
+    }
+
+    #[doc(hidden)]
+    pub const fn named(name: &'static str) -> Self {
+        Self(std::sync::atomic::AtomicU32::new(SLOT_UNASSIGNED), name)
     }
 
     /// The claimed index, or a sentinel `>= HOT_SLOT_CAPACITY`.
@@ -592,20 +597,12 @@ impl SlotId {
     fn claim(&self) -> u32 {
         use std::sync::atomic::Ordering;
         maybe_install_stats_hook();
-        let mut next = match CLAIM_LOCK.lock() {
-            Ok(next) => next,
-            Err(poisoned) => poisoned.into_inner(),
-        };
         let current = self.0.load(Ordering::Relaxed);
         if current != SLOT_UNASSIGNED {
             return current;
         }
-        let idx = if (*next as usize) < HOT_SLOT_CAPACITY {
-            let idx = *next;
-            *next += 1;
-            idx
-        } else {
-            SLOT_OVERFLOW
+        let idx = unsafe {
+            js_tls_hot_claim_slot(self.1.as_ptr(), self.1.len(), self as *const Self as usize)
         };
         self.0.store(idx, Ordering::Relaxed);
         idx
@@ -618,21 +615,53 @@ impl Default for SlotId {
     }
 }
 
-/// The next index [`SlotId::claim`] will hand out. Also the count of
-/// declarations claimed so far, which is what
-/// [`claimed_slots`] reports and what the capacity test asserts against.
-static CLAIM_LOCK: std::sync::Mutex<u32> = std::sync::Mutex::new(0);
+/// One slot per logical declaration across provider images. The C entry point
+/// below owns this registry even when the runtime's Rust crate hashes differ.
+/// Provider images must come from the same source/ABI, as for HotTls itself.
+static CLAIM_LOCK: std::sync::Mutex<std::collections::BTreeMap<Vec<u8>, u32>> =
+    std::sync::Mutex::new(std::collections::BTreeMap::new());
+
+/// The provider images share HotTls, so slot identities must be shared too.
+/// Use a C entry point for preemption even when separate runtime builds have
+/// different Rust crate hashes. Names identify declarations, never TLS values.
+///
+/// # Safety
+/// For a nonempty name, `name` must point to `len` readable bytes. A name must
+/// identify the same thread-local declaration (and value type) in every image.
+/// For an anonymous declaration, `anonymous` must be its unique static address.
+#[no_mangle]
+#[inline(never)] // Calls must remain interposable across provider images.
+pub unsafe extern "C" fn js_tls_hot_claim_slot(
+    name: *const u8,
+    len: usize,
+    anonymous: usize,
+) -> u32 {
+    let key = if len == 0 {
+        format!("anonymous:{anonymous}").into_bytes()
+    } else {
+        std::slice::from_raw_parts(name, len).to_vec()
+    };
+    let mut slots = CLAIM_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    if let Some(&idx) = slots.get(&key) {
+        return idx;
+    }
+    if slots.len() >= HOT_SLOT_CAPACITY {
+        return SLOT_OVERFLOW;
+    }
+    let idx = slots.len() as u32;
+    slots.insert(key, idx);
+    idx
+}
+
+#[no_mangle]
+#[inline(never)]
+pub extern "C" fn js_tls_hot_claimed_slots() -> u32 {
+    CLAIM_LOCK.lock().unwrap_or_else(|p| p.into_inner()).len() as u32
+}
 
 /// How many declarations have claimed a slot in this process.
-///
-/// Instrumentation for the capacity assertion: overflow is silent by design
-/// (the declaration keeps working, slowly), so something has to be able to see
-/// how close the process is to the ceiling.
 pub fn claimed_slots() -> u32 {
-    match CLAIM_LOCK.lock() {
-        Ok(next) => *next,
-        Err(poisoned) => *poisoned.into_inner(),
-    }
+    js_tls_hot_claimed_slots()
 }
 
 /// How many slots *this thread* has populated.
@@ -866,7 +895,8 @@ impl<T: 'static> HotKey<T> {
         self.slot.raw()
     }
 
-    /// `value` is the address of this thread's `T`, published by this key.
+    /// `value` is this thread's `T`, published by this declaration in one of
+    /// the compatible provider images sharing the cache.
     ///
     /// # Safety
     /// `value` must have come from this key's slot or from its own `resolve`.
@@ -881,19 +911,26 @@ impl<T: 'static> HotKey<T> {
         unsafe { &*(value as *const T) }
     }
 
-    /// Resolve through the real `thread_local!`, claim this declaration's slot
-    /// if it has none yet, and publish the address for this thread.
+    /// Claim the shared declaration slot, reuse any published storage, or
+    /// resolve through the real `thread_local!` and publish it for this thread.
     #[cold]
     #[inline(never)]
     fn resolve_and_cache(&'static self) -> Result<*mut u8, std::thread::AccessError> {
-        // Resolve first, and outside the claim lock: initialising the value can
-        // run arbitrary runtime code, including other `perry_thread_local!`
-        // first touches.
-        let value = (self.resolve)()?;
+        // Claim before resolving storage: another provider can already have
+        // published this declaration in the shared cache. Do not construct or
+        // overwrite a second copy. The claim lock is released before any TLS
+        // initializer runs, so nested first touches remain safe.
         let mut idx = self.slot.raw();
         if idx == SLOT_UNASSIGNED {
             idx = self.slot.claim();
         }
+        if (idx as usize) < HOT_SLOT_CAPACITY {
+            let cached = hot().slot(idx);
+            if !cached.is_null() {
+                return Ok(cached);
+            }
+        }
+        let value = (self.resolve)()?;
         if (idx as usize) < HOT_SLOT_CAPACITY {
             // Arm before publishing: after this store any thread-teardown of
             // the value un-publishes the slot it is about to invalidate.
@@ -965,7 +1002,12 @@ macro_rules! __perry_thread_local_one {
     ($(#[$attr:meta])* $vis:vis $name:ident, $t:ty, $($init:tt)+) => {
         $(#[$attr])*
         $vis static $name: $crate::tls_hot::HotKey<$t> = {
-            static SLOT: $crate::tls_hot::SlotId = $crate::tls_hot::SlotId::new();
+            // Module/name alone collide for function-local declarations.
+            // Avoid file!(): Cargo can use relative vs absolute source paths
+            // for the same crate in workspace and standalone provider builds.
+            static SLOT: $crate::tls_hot::SlotId = $crate::tls_hot::SlotId::named(concat!(
+                module_path!(), "::", stringify!($name), "@", line!(), ":", column!()
+            ));
             // `GUARD` is 1 exactly when `$t` has drop glue, so the guard —
             // and with it the thread-local's destructor — exists exactly when
             // a cached address could otherwise outlive the value.
@@ -996,6 +1038,9 @@ macro_rules! __perry_thread_local_storage {
         }
     };
 }
+
+#[cfg(test)]
+mod provider_tests;
 
 #[cfg(test)]
 mod tests {

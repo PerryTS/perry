@@ -4,10 +4,32 @@
 //! values or falling into quadratic string-keyed property insertion.
 
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Output, Stdio};
+use std::time::{Duration, Instant};
 
 fn perry_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_perry"))
+}
+
+fn run_with_timeout(mut command: Command) -> Output {
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = command.spawn().expect("run compiled fixture");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        if child.try_wait().expect("poll compiled fixture").is_some() {
+            return child.wait_with_output().expect("collect fixture output");
+        }
+        if Instant::now() >= deadline {
+            child.kill().expect("kill timed out fixture");
+            let output = child.wait_with_output().expect("collect timeout output");
+            panic!(
+                "large array fixture exceeded 30 seconds\nstdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
 }
 
 #[test]
@@ -17,7 +39,9 @@ fn large_presized_arrays_fill_densely_and_preserve_every_value() {
     let output = dir.path().join("main_bin");
     std::fs::write(
         &entry,
-        r#"
+        concat!(
+            include_str!("../../../test-files/test_gap_9784_module_presized_array.ts"),
+            r#"
 declare function gc(): void;
 
 function fillAndVerify(slots: number, addExpando: boolean): string {
@@ -51,6 +75,7 @@ huge[16] = 9;
 huge[100000000] = 11;
 console.log(huge.length, huge[0], huge[1] === undefined, huge[16], huge[100000000]);
 "#,
+        ),
     )
     .expect("write fixture");
 
@@ -70,7 +95,11 @@ console.log(huge.length, huge[0], huge[1] === undefined, huge[16], huge[10000000
         String::from_utf8_lossy(&compile.stderr)
     );
 
-    let expected = "900000:0:0.25:899999.25:undefined\n\
+    let expected = "1000000 0 999496507 0 999999\n\
+                    1000001 0 496500 0 1000000\n\
+                    1200000 0 999394967 0 1199999\n\
+                    literal 0 0 1000000\n\
+                    900000:0:0.25:899999.25:undefined\n\
                     1000001:0:0.25:1000000.25:undefined\n\
                     1200000:0:0.25:1199999.25:kept\n\
                     cells 1000001 32640 0 255\n\
@@ -82,7 +111,7 @@ console.log(huge.length, huge[0], huge[1] === undefined, huge[16], huge[10000000
                 .env("PERRY_GC_FORCE_EVACUATE", "1")
                 .env("PERRY_GC_VERIFY_EVACUATION", "1");
         }
-        let run = command.output().expect("run compiled fixture");
+        let run = run_with_timeout(command);
         assert!(
             run.status.success(),
             "compiled fixture failed with moving_gc={moving_gc}\nstatus: {:?}\nstdout:\n{}\nstderr:\n{}",

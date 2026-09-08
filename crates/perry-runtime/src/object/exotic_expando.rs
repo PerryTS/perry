@@ -639,6 +639,33 @@ pub fn scan_exotic_expando_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor
     }
 }
 
+/// `PERRY_GC_CENSUS`: attribute the RegExp-owned share of the mixed exotic
+/// expando table. Hash-table storage is divided evenly by owner; each RegExp
+/// owner's vector and key buffers are then charged exactly to its row.
+#[cfg(feature = "regex-engine")]
+pub(crate) fn regex_expando_census() -> (usize, usize, usize) {
+    let map = crate::state::state().exotic_expando.entries.borrow();
+    let regex = map
+        .iter()
+        .filter(|(owner, _)| exotic_expando_kind(**owner) == Some(ExoticKind::RegExp))
+        .collect::<Vec<_>>();
+    let owners = regex.len();
+    let properties = regex.iter().map(|(_, entries)| entries.len()).sum();
+    let shared = if map.is_empty() {
+        0
+    } else {
+        crate::gc::census::map_bytes(&*map) * owners / map.len()
+    };
+    let inner = regex
+        .iter()
+        .map(|(_, entries)| {
+            crate::gc::census::vec_bytes(entries)
+                + entries.iter().map(|(key, _)| key.capacity()).sum::<usize>()
+        })
+        .sum::<usize>();
+    (owners, properties, shared + inner)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

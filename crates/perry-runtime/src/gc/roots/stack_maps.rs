@@ -1781,37 +1781,11 @@ mod fp_chain {
     }
 
     /// Linux (#7173): stack bounds via pthread attrs — the returned address
-    /// is the LOW end, so the exclusive top is addr + size. Runtime gates
-    /// pending a Linux host; a failure here returns 0 and the caller falls
-    /// back to the platform unwinder (fail-closed like every other anomaly).
+    /// is the LOW end, so the exclusive top is addr + size. A failure returns
+    /// 0 and the caller falls back to the platform unwinder.
     #[cfg(target_os = "linux")]
     fn stack_top() -> usize {
-        unsafe extern "C" {
-            fn pthread_self() -> usize;
-            fn pthread_getattr_np(thread: usize, attr: *mut u8) -> i32;
-            fn pthread_attr_getstack(
-                attr: *const u8,
-                stackaddr: *mut *mut c_void,
-                stacksize: *mut usize,
-            ) -> i32;
-            fn pthread_attr_destroy(attr: *mut u8) -> i32;
-        }
-        // pthread_attr_t is at most 64 bytes on glibc/musl for the supported
-        // targets; over-allocate defensively.
-        let mut attr = [0u8; 128];
-        let mut addr: *mut c_void = std::ptr::null_mut();
-        let mut size: usize = 0;
-        unsafe {
-            if pthread_getattr_np(pthread_self(), attr.as_mut_ptr()) != 0 {
-                return 0;
-            }
-            let ok = pthread_attr_getstack(attr.as_ptr(), &mut addr, &mut size) == 0;
-            pthread_attr_destroy(attr.as_mut_ptr());
-            if !ok {
-                return 0;
-            }
-        }
-        (addr as usize).saturating_add(size)
+        crate::native_stack::stack_top()
     }
 
     pub(super) fn visit<F: FnMut(ResolvedRoot)>(

@@ -453,7 +453,7 @@ Every widget handle accepts these:
 | `widgetSetOnClick(w, cb)` | Click handler |
 | `widgetSetOnHover(w, cb)` | Hover enter/leave (desktop only) |
 | `widgetSetOnDoubleClick(w, cb)` | Double-click handler |
-| `widgetSetEdgeInsets(w, top, left, bottom, right)` | Padding around contents |
+| `setPadding(w, value)` / `setPadding(w, top, left, bottom, right)` | Padding around contents |
 | `widgetSetBorderColor(w, r, g, b, a)` / `widgetSetBorderWidth(w, n)` | Border |
 | `widgetAddChild(parent, child)` | Attach a child to a container |
 | `widgetSetContextMenu(w, menu)` | Right-click menu |

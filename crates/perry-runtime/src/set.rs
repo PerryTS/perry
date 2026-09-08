@@ -795,7 +795,9 @@ fn is_string_like(bits: u64) -> bool {
     // content-compared them by reinterpreting `ObjectHeader` as `StringHeader`
     // (class_id became byte_len, etc.) — colliding empty objects in `Set.add`.
     let ptr = extract_string_ptr_from_value(bits);
-    if ptr.is_null() || (ptr as usize) < 0x1000 {
+    // Native handles (including WebSocket clients) are identities, never
+    // string allocations, even when their ids have grown beyond one page.
+    if !crate::value::addr_class::is_above_handle_band(ptr as usize) {
         return false;
     }
     unsafe {
@@ -2618,6 +2620,39 @@ mod tests {
         assert_eq!(js_set_has(set, 3.0), 1);
         assert_eq!(js_set_has(set, 4.0), 0);
         assert_eq!(js_set_has(set, 0.0), 0);
+    }
+
+    #[test]
+    fn native_handles_are_set_identities_across_scan_and_hash_paths() {
+        use crate::value::{addr_class, POINTER_TAG};
+        let handles = [
+            1,
+            4095,
+            4096,
+            4097,
+            8192,
+            65535,
+            addr_class::COMMON_HANDLE_BAND_END - 1,
+            addr_class::FETCH_HANDLE_BAND_START,
+            addr_class::ZLIB_HANDLE_BAND_START,
+            addr_class::HANDLE_BAND_MAX - 1,
+        ];
+        let set = js_set_alloc(4);
+        for &handle in &handles {
+            let value = f64::from_bits(POINTER_TAG | handle as u64);
+            assert_eq!(js_set_has(set, value), 0);
+            js_set_add(set, value);
+            assert_eq!(js_set_has(set, value), 1);
+        }
+        assert_eq!(js_set_size(set), handles.len() as u32);
+        for &handle in &handles {
+            let value = f64::from_bits(POINTER_TAG | handle as u64);
+            assert_eq!(js_set_has(set, value), 1);
+            assert_eq!(js_set_has(set, handle as f64), 0);
+            assert_eq!(js_set_delete(set, value), 1);
+            assert_eq!(js_set_has(set, value), 0);
+        }
+        assert_eq!(js_set_size(set), 0);
     }
 
     // #2872: helper to pass a Set pointer as the NaN-boxed `other` argument.

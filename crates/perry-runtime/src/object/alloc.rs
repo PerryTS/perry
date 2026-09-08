@@ -915,6 +915,16 @@ pub unsafe extern "C" fn js_object_clone_with_extra(
     }
 
     let src_ptr = src_raw as *const ObjectHeader;
+    if super::string_wrapper::length(src_raw).is_some() {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let src_h = scope.root_nanbox_f64(src_f64);
+        let target = js_object_alloc(0, 0);
+        let copied = js_object_assign_one(
+            crate::value::js_nanbox_pointer(target as i64),
+            src_h.get_nanbox_f64(),
+        );
+        return crate::value::js_nanbox_get_pointer(copied) as *mut ObjectHeader;
+    }
     let src_field_count = crate::object::object_live_slot_count(src_ptr);
 
     // Physical slot capacity: src_field_count + extra_count, but at least max(fc, 8) to match
@@ -1037,6 +1047,10 @@ pub unsafe extern "C" fn js_object_copy_own_fields(dst_i64: i64, src_f64: f64) {
         _ => return,
     }
     let src = src_raw as *const ObjectHeader;
+    if super::string_wrapper::length(src_raw).is_some() {
+        js_object_assign_one(crate::value::js_nanbox_pointer(dst as i64), src_f64);
+        return;
+    }
 
     // #6667: a native-module namespace (`{ ...require("crypto") }`) stores no
     // real fields — only the internal `__module__` sentinel — so the raw
@@ -1811,7 +1825,14 @@ pub unsafe extern "C" fn js_object_assign_one(target_f64: f64, source_f64: f64) 
             );
         }
     } else if source_obj_type == crate::gc::GC_TYPE_OBJECT {
-        let src_keys = crate::object::object_keys_array(src);
+        let src_keys = if super::string_wrapper::length(src as usize).is_some() {
+            let names = src_h.with_const_ptr(|src: *const ObjectHeader| {
+                js_object_get_own_property_names(crate::value::js_nanbox_pointer(src as i64))
+            });
+            crate::value::js_nanbox_get_pointer(names) as *mut crate::ArrayHeader
+        } else {
+            crate::object::object_keys_array(src)
+        };
         let keys_h = scope.root_raw_mut_ptr(src_keys);
         if !src_keys.is_null() && (src_keys as usize) >= 0x10000 {
             // Cap the key count at the keys array's capacity: a malformed keys

@@ -7,13 +7,16 @@ use super::*;
 /// own enumerable properties — Node: `Object.keys(new Map([...])) === []`),
 /// but user EXPANDOS (`cache.custom = x`) live in the exotic side table
 /// (`ExoticKind::Map`/`Set`). Shared by the keys/values/entries guards.
-enum MapSetEnum {
+pub(super) enum MapSetEnum {
     Keys,
     Values,
     Entries,
 }
 
-fn map_set_exotic_enum(stripped: *const ObjectHeader, what: MapSetEnum) -> *mut ArrayHeader {
+pub(super) fn map_set_exotic_enum(
+    stripped: *const ObjectHeader,
+    what: MapSetEnum,
+) -> *mut ArrayHeader {
     let addr = stripped as usize;
     let kind = if crate::map::is_registered_map(addr) {
         super::super::exotic_expando::ExoticKind::Map
@@ -62,7 +65,7 @@ fn map_set_exotic_enum(stripped: *const ObjectHeader, what: MapSetEnum) -> *mut 
 /// module export tables.  The receiver, key list, output, and per-key values
 /// are rooted because resolving a callable export can allocate and trigger a
 /// moving collection.
-unsafe fn native_module_enum(
+pub(super) unsafe fn native_module_enum(
     obj: *const ObjectHeader,
     what: MapSetEnum,
 ) -> Option<*mut ArrayHeader> {
@@ -150,48 +153,6 @@ pub extern "C" fn js_object_keys_value(value: f64) -> *mut ArrayHeader {
             crate::array::js_array_push(arr, JSValue::string_ptr(k));
         }
         return arr;
-    }
-    if crate::builtins::boxed_primitive_to_string_tag(value) == Some("String") {
-        if let Some((_, payload)) = crate::builtins::boxed_primitive_payload(value) {
-            let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
-            let len = match crate::string::str_bytes_from_jsvalue(payload, &mut scratch) {
-                Some((ptr, blen)) if !ptr.is_null() => crate::string::compute_utf16_len(ptr, blen),
-                _ => 0,
-            };
-            let arr = crate::array::js_array_alloc(len.max(1));
-            for i in 0..len {
-                let s = i.to_string();
-                let k = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
-                crate::array::js_array_push(arr, JSValue::string_ptr(k));
-            }
-            if jv.is_pointer() {
-                let ptr = jv.as_pointer::<ObjectHeader>();
-                let own = js_object_keys(ptr);
-                let own_len = crate::array::js_array_length(own);
-                for i in 0..own_len {
-                    let key_val = crate::array::js_array_get(own, i);
-                    // The wrapper's character indices are installed as REAL
-                    // own fields at construction (install_string_wrapper_
-                    // indices), so they come back from `js_object_keys` too —
-                    // skip them here or `Object.keys(Object("abc"))` lists
-                    // every index twice. Only canonical indices below the
-                    // string length are virtual; expando keys pass through.
-                    let key_ptr =
-                        (key_val.bits() & crate::value::POINTER_MASK) as *const crate::StringHeader;
-                    if let Some(name) =
-                        unsafe { super::super::has_own_helpers::str_from_string_header(key_ptr) }
-                    {
-                        if let Ok(idx) = name.parse::<u32>() {
-                            if idx.to_string() == name && (idx as usize) < len as usize {
-                                continue;
-                            }
-                        }
-                    }
-                    crate::array::js_array_push_f64(arr, f64::from_bits(key_val.bits()));
-                }
-            }
-            return arr;
-        }
     }
     if let Some(addr) = crate::typedarray_props::typed_array_addr_from_value(value) {
         return unsafe {
@@ -318,65 +279,332 @@ pub extern "C" fn js_object_keys_value(value: f64) -> *mut ArrayHeader {
 /// non-enumerable) as "seen" after emitting that level's enumerable subset.
 #[no_mangle]
 pub extern "C" fn js_for_in_keys_value(value: f64) -> *mut ArrayHeader {
+    for_in_keys_with(value, lazy_shadow_enabled())
+}
+
+/// The walk itself, with the shadow-set strategy as a parameter so a test can
+/// run BOTH and assert they agree. `js_for_in_keys_value` reads the env once
+/// and delegates here.
+pub(crate) fn for_in_keys_with(value: f64, lazy_shadow: bool) -> *mut ArrayHeader {
     let jv = JSValue::from_bits(value.to_bits());
+    let diag = crate::hot_diag::enum_on();
+    if diag {
+        crate::hot_diag::enum_with(|d| d.for_in_calls += 1);
+    }
     if jv.is_null() || jv.is_undefined() {
         return crate::array::js_array_alloc(0);
     }
-    let mut out = crate::array::js_array_alloc(8);
+    // #9864: ownKeys, getOwnPropertyDescriptor and getPrototypeOf can invoke
+    // user callbacks. Keep every value needed after them in relocatable
+    // handles, including the output accumulated while walking earlier
+    // prototypes.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let current = scope.root_nanbox_f64(value);
+    let out = scope.root_raw_mut_ptr(crate::array::js_array_alloc(8));
     // Non-pointer primitives (number/boolean, boxed string) have only their own
     // enumerable keys; every prototype property they inherit is non-enumerable.
     if !jv.is_pointer() {
-        let own = js_object_keys_value(value);
-        let n = crate::array::js_array_length(own);
-        for i in 0..n {
-            let kv = crate::array::js_array_get(own, i);
-            out = crate::array::js_array_push_f64(out, f64::from_bits(kv.bits()));
+        if diag {
+            crate::hot_diag::enum_with(|d| d.for_in_primitive += 1);
         }
-        return out;
+        let own = scope.root_raw_const_ptr(js_object_keys_value(current.get_nanbox_f64()));
+        let n = own.with_const_ptr(|array| crate::array::js_array_length(array));
+        for i in 0..n {
+            let kv = own.with_const_ptr(|own| crate::array::js_array_get(own, i));
+            let updated = out.with_mut_ptr(|out| {
+                crate::array::js_array_push_f64(out, f64::from_bits(kv.bits()))
+            });
+            out.set_raw_mut_ptr(updated);
+        }
+        return out.with_mut_ptr(|out: *mut ArrayHeader| out);
     }
     let key_string = |kv: JSValue, scratch: &mut [u8; crate::value::SHORT_STRING_MAX_LEN]| {
-        unsafe { crate::string::js_string_key_bytes(kv, scratch) }
-            .and_then(|b| std::str::from_utf8(b).ok().map(|s| s.to_string()))
+        let made = unsafe { crate::string::js_string_key_bytes(kv, scratch) }
+            .and_then(|b| std::str::from_utf8(b).ok().map(|s| s.to_string()));
+        if diag {
+            if let Some(ref s) = made {
+                let n = s.len() as u64;
+                crate::hot_diag::enum_with(|d| {
+                    d.for_in_key_strings += 1;
+                    d.for_in_key_string_bytes += n;
+                });
+            }
+        }
+        made
     };
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
-    let mut current = value;
+
+    // #9792 follow-up: the shadow set is DEFERRED.
+    //
+    // `seen` exists for one purpose — a name owned at a closer level hides the
+    // same name further along the chain (§14.7.5 / 12.6.4-2). That filter can
+    // only ever apply to a level >= 1, so nothing at level 0 needs it, and a
+    // level that contributes no enumerable keys of its own never consults it.
+    //
+    // The old shape paid for it unconditionally: at EVERY level it materialised
+    // the all-own-names array (a second key array, including non-enumerable
+    // names) and turned every name at every level into a heap `String` so it
+    // could be hashed into the set. Measured on the compiled claude-code TUI,
+    // one 400-character reply: 17,272 `for-in` calls, 4.00 key arrays per call,
+    // and **159,752 `String` allocations and SipHash inserts to emit 11,276
+    // keys** — an emitted/String ratio of 0.071, for 1.90 MB of bytes. The
+    // bytes are why no allocation-share ranking could see this; the executions
+    // are the cost.
+    //
+    // So: remember the levels walked, and build the set only at the moment a
+    // level >= 1 actually has an enumerable key to filter. When it is built it
+    // is built from exactly the levels already visited, which is the same
+    // content the eager version would have had at that point, so the emitted
+    // key sequence is unchanged.
+    // The levels walked so far, for the rebuild that almost never happens.
+    // Inline: the measurement says 2.00 prototype levels per call, so a spill
+    // to the heap is the pathological case, not the common one — and a `Vec`
+    // here would just reintroduce one malloc per `for-in` in place of the
+    // 159,947 this change removes.
+    let mut visited = VisitedLevels::default();
+    let mut shadow_live = !lazy_shadow;
+    let mut level: u32 = 0;
     // Depth cap guards against pathological / cyclic prototype graphs.
     for _ in 0..1000 {
-        let cv = JSValue::from_bits(current.to_bits());
+        let cv = JSValue::from_bits(current.get_nanbox_u64());
         if cv.is_null() || cv.is_undefined() || !cv.is_pointer() {
             break;
         }
         // Emit this level's enumerable own keys (OrdinaryOwnPropertyKeys order),
         // skipping any name already shadowed by a closer level.
-        let enum_arr = js_object_keys_value(current);
-        let en = crate::array::js_array_length(enum_arr);
-        for i in 0..en {
-            let kv = crate::array::js_array_get(enum_arr, i);
-            let name = match key_string(kv, &mut scratch) {
-                Some(s) => s,
-                None => continue,
-            };
-            if seen.insert(name) {
-                out = crate::array::js_array_push_f64(out, f64::from_bits(kv.bits()));
+        // The runtime handle stack is strictly LIFO: dropping this per-level
+        // scope truncates everything pushed after it, including a push into an
+        // OUTER scope. `visited.push` roots into `scope`, so it must happen
+        // after this block closes, not inside it.
+        {
+            let level_scope = crate::gc::RuntimeHandleScope::new();
+            let enum_arr =
+                level_scope.root_raw_const_ptr(js_object_keys_value(current.get_nanbox_f64()));
+            let en = enum_arr.with_const_ptr(|array| crate::array::js_array_length(array));
+            if diag {
+                let en64 = en as u64;
+                crate::hot_diag::enum_with(|d| {
+                    d.for_in_levels += 1;
+                    d.for_in_key_arrays += 1;
+                    d.for_in_keys_seen += en64;
+                });
             }
-        }
-        // Mark ALL own names (incl non-enumerable) seen so they shadow the
-        // remainder of the chain.
-        let all_f64 = super::super::descriptors::js_object_get_own_property_names(current);
-        let all_arr = (all_f64.to_bits() & crate::value::POINTER_MASK) as *mut ArrayHeader;
-        if !all_arr.is_null() {
-            let an = crate::array::js_array_length(all_arr);
-            for i in 0..an {
-                let kv = crate::array::js_array_get(all_arr, i);
-                if let Some(name) = key_string(kv, &mut scratch) {
-                    seen.insert(name);
+            // Level 0 can be shadowed by nothing, so its own enumerable names go
+            // straight out — own property names are unique within one object, which
+            // is the only thing the set was doing for this level.
+            if lazy_shadow && level == 0 && !shadow_live {
+                for i in 0..en {
+                    let kv = enum_arr.with_const_ptr(|keys| crate::array::js_array_get(keys, i));
+                    let updated = out.with_mut_ptr(|out| {
+                        crate::array::js_array_push_f64(out, f64::from_bits(kv.bits()))
+                    });
+                    out.set_raw_mut_ptr(updated);
+                }
+                if diag {
+                    let en64 = en as u64;
+                    crate::hot_diag::enum_with(|d| d.for_in_keys_emitted += en64);
+                }
+            } else {
+                if en > 0 && !shadow_live {
+                    // First level >= 1 with something to filter: pay for the set
+                    // now, over exactly the levels already walked.
+                    build_shadow_set(visited.as_slice(), &mut seen, &mut scratch, diag);
+                    shadow_live = true;
+                    if diag {
+                        crate::hot_diag::enum_with(|d| d.for_in_shadow_built += 1);
+                    }
+                }
+                for i in 0..en {
+                    let kv = enum_arr.with_const_ptr(|keys| crate::array::js_array_get(keys, i));
+                    let name = match key_string(kv, &mut scratch) {
+                        Some(s) => s,
+                        None => continue,
+                    };
+                    let fresh = seen.insert(name);
+                    if diag {
+                        let deep = level > 0;
+                        crate::hot_diag::enum_with(|d| {
+                            d.for_in_seen_inserts += 1;
+                            if !fresh {
+                                d.for_in_seen_dupes += 1;
+                            } else {
+                                d.for_in_keys_emitted += 1;
+                                if deep {
+                                    d.for_in_keys_emitted_deep += 1;
+                                }
+                            }
+                        });
+                    }
+                    if fresh {
+                        let updated = out.with_mut_ptr(|out| {
+                            crate::array::js_array_push_f64(out, f64::from_bits(kv.bits()))
+                        });
+                        out.set_raw_mut_ptr(updated);
+                    }
                 }
             }
+            // Mark ALL own names (incl non-enumerable) so they shadow the remainder
+            // of the chain — but only once the set is live. Until then the level is
+            // recorded and the array is not materialised at all: this is the second
+            // of the four key arrays per call that the measurement found.
         }
-        current = super::super::object_ops::js_object_get_prototype_of(current);
+
+        if shadow_live {
+            mark_own_names(current.get_nanbox_f64(), &mut seen, &mut scratch, diag);
+        } else {
+            visited.push(&scope, current.get_nanbox_f64());
+        }
+        current.set_nanbox_f64(super::super::object_ops::js_object_get_prototype_of(
+            current.get_nanbox_f64(),
+        ));
+        level += 1;
     }
-    out
+    out.with_mut_ptr(|out: *mut ArrayHeader| out)
+}
+
+/// Prototype levels recorded for a possible shadow-set rebuild, inline for the
+/// depths that actually occur.
+///
+/// `INLINE` is 8 against a measured 2.00 levels per `for-in` call on the
+/// compiled claude-code TUI, so the heap arm is for prototype chains an order
+/// of magnitude deeper than anything the workload produces. It exists because
+/// the depth cap is 1000, not because it is expected.
+/// See `VisitedLevels`. A free const rather than an associated one: an
+/// associated `Self::INLINE` is not permitted in the array length of a
+/// generic struct.
+const VISITED_INLINE: usize = 8;
+
+struct VisitedLevels<'s> {
+    inline: [Option<crate::gc::RuntimeHandle<'s>>; VISITED_INLINE],
+    len: usize,
+    spill: Vec<crate::gc::RuntimeHandle<'s>>,
+}
+
+impl Default for VisitedLevels<'_> {
+    fn default() -> Self {
+        Self {
+            inline: [None; VISITED_INLINE],
+            len: 0,
+            spill: Vec::new(),
+        }
+    }
+}
+
+impl<'s> VisitedLevels<'s> {
+    /// #9864 follow-up: a recorded level is a NaN-boxed heap pointer that is
+    /// dereferenced later, by `build_shadow_set`, after the walk has crossed
+    /// `js_object_keys_value` (which allocates) and `getPrototypeOf` (which
+    /// can run a Proxy trap). Stored as a plain `f64` it goes stale across
+    /// any collection in that window; stored as a handle the collector
+    /// rewrites it. `RuntimeHandle` is `Copy`, so the inline arm still costs
+    /// no allocation.
+    fn push(&mut self, scope: &'s crate::gc::RuntimeHandleScope, v: f64) {
+        let handle = scope.root_nanbox_f64(v);
+        if self.len < VISITED_INLINE {
+            self.inline[self.len] = Some(handle);
+            self.len += 1;
+        } else {
+            self.spill.push(handle);
+        }
+    }
+
+    /// The recorded levels in walk order. Borrows rather than copies, and the
+    /// spill arm concatenates only when it is non-empty.
+    fn as_slice(&self) -> VisitedSlice<'_, 's> {
+        VisitedSlice {
+            head: &self.inline[..self.len],
+            tail: &self.spill,
+        }
+    }
+}
+
+struct VisitedSlice<'a, 's> {
+    head: &'a [Option<crate::gc::RuntimeHandle<'s>>],
+    tail: &'a [crate::gc::RuntimeHandle<'s>],
+}
+
+impl VisitedSlice<'_, '_> {
+    /// Read each level FRESH from its handle — a level recorded before a
+    /// collection has been rewritten in place by then.
+    fn iter(&self) -> impl Iterator<Item = f64> + '_ {
+        self.head
+            .iter()
+            .filter_map(|h| h.as_ref())
+            .map(|h| h.get_nanbox_f64())
+            .chain(self.tail.iter().map(|h| h.get_nanbox_f64()))
+    }
+}
+
+/// `PERRY_FORIN_LAZY_SHADOW=0` restores the eager shadow set, so one binary
+/// carries both paths and an A/B is one environment variable.
+fn lazy_shadow_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        !matches!(
+            std::env::var("PERRY_FORIN_LAZY_SHADOW").ok().as_deref(),
+            Some("0") | Some("off") | Some("false") | Some("no")
+        )
+    })
+}
+
+/// Add every own name of `recv` — enumerable or not — to the shadow set.
+fn mark_own_names(
+    recv: f64,
+    seen: &mut std::collections::HashSet<String>,
+    scratch: &mut [u8; crate::value::SHORT_STRING_MAX_LEN],
+    diag: bool,
+) {
+    let all_f64 = super::super::descriptors::js_object_get_own_property_names(recv);
+    let all_arr = (all_f64.to_bits() & crate::value::POINTER_MASK) as *mut ArrayHeader;
+    if all_arr.is_null() {
+        return;
+    }
+    let an = crate::array::js_array_length(all_arr);
+    if diag {
+        let an64 = an as u64;
+        crate::hot_diag::enum_with(|d| {
+            d.for_in_key_arrays += 1;
+            d.for_in_keys_seen += an64;
+        });
+    }
+    for i in 0..an {
+        let kv = crate::array::js_array_get(all_arr, i);
+        let name = unsafe { crate::string::js_string_key_bytes(kv, scratch) }
+            .and_then(|b| std::str::from_utf8(b).ok().map(|s| s.to_string()));
+        if let Some(name) = name {
+            if diag {
+                let n = name.len() as u64;
+                crate::hot_diag::enum_with(|d| {
+                    d.for_in_key_strings += 1;
+                    d.for_in_key_string_bytes += n;
+                });
+            }
+            let fresh = seen.insert(name);
+            if diag {
+                crate::hot_diag::enum_with(|d| {
+                    d.for_in_seen_inserts += 1;
+                    if !fresh {
+                        d.for_in_seen_dupes += 1;
+                    }
+                });
+            }
+        }
+    }
+}
+
+/// Materialise the shadow set for the levels already walked, in order. Called
+/// at most once per `for-in`, and only when a level >= 1 has an enumerable key
+/// that something closer might hide.
+fn build_shadow_set(
+    visited: VisitedSlice<'_, '_>,
+    seen: &mut std::collections::HashSet<String>,
+    scratch: &mut [u8; crate::value::SHORT_STRING_MAX_LEN],
+    diag: bool,
+) {
+    for recv in visited.iter() {
+        mark_own_names(recv, seen, scratch, diag);
+    }
 }
 
 fn closure_dynamic_enumerable_props(ptr: usize) -> Vec<(String, f64)> {
@@ -893,7 +1121,7 @@ pub(crate) unsafe fn keys_contain_array_index(keys: *const ArrayHeader) -> bool 
 /// The raw heap address behind a possibly still-NaN-boxed `ObjectHeader`
 /// pointer, as the enumeration entry points receive it.
 #[inline]
-fn strip_nanbox_addr(obj: *const ObjectHeader) -> usize {
+pub(super) fn strip_nanbox_addr(obj: *const ObjectHeader) -> usize {
     let bits = obj as u64;
     let top16 = bits >> 48;
     if top16 == 0x7FFD || top16 >= 0x7FF8 {
@@ -926,10 +1154,9 @@ fn strip_nanbox_addr(obj: *const ObjectHeader) -> usize {
 /// `Object.keys(new DataView(new ArrayBuffer(8)))` in any program that had also
 /// allocated a `Buffer`.
 ///
-/// Expando ordering among the non-index keys is alphabetical, not insertion
-/// order: `buffer::own_props` is a `HashMap`, so insertion order was never
-/// recorded. Node uses insertion order. Deterministic-but-different beats the
-/// previous nondeterministic-and-crashing.
+/// Expando ordering among the non-index keys follows property creation order,
+/// recorded by `buffer::own_props`. Canonical indices are still separated and
+/// sorted below, as required by `OrdinaryOwnPropertyKeys`.
 pub(crate) fn registered_buffer_own_keys(addr: usize) -> Option<Vec<String>> {
     if addr == 0 || !crate::buffer::is_registered_buffer(addr) {
         return None;
@@ -972,7 +1199,7 @@ pub(crate) fn registered_buffer_own_value(addr: usize, key: &str) -> f64 {
 
 /// Build the `Object.keys` / `.values` / `.entries` answer for a registered
 /// buffer from [`registered_buffer_own_keys`].
-fn registered_buffer_enum(addr: usize, what: MapSetEnum) -> Option<*mut ArrayHeader> {
+pub(super) fn registered_buffer_enum(addr: usize, what: MapSetEnum) -> Option<*mut ArrayHeader> {
     if addr == 0 || !crate::buffer::is_registered_buffer(addr) {
         return None;
     }
@@ -1249,6 +1476,12 @@ fn js_object_keys_shape(obj: *const ObjectHeader) -> *mut ArrayHeader {
         }
     }
     unsafe {
+        if let Some(result) = super::super::string_wrapper::enumerate(
+            obj,
+            super::super::string_wrapper::Enumeration::Keys,
+        ) {
+            return result;
+        }
         if (*obj).class_id == NATIVE_MODULE_CLASS_ID {
             // Relocated to native_module.rs::vt_own_keys_array so the
             // module key tables are reachable only through the vtable
@@ -1547,6 +1780,12 @@ fn js_object_values_shape(obj: *const ObjectHeader) -> *mut ArrayHeader {
         return crate::array::js_array_alloc(0);
     }
     unsafe {
+        if let Some(result) = super::super::string_wrapper::enumerate(
+            obj,
+            super::super::string_wrapper::Enumeration::Values,
+        ) {
+            return result;
+        }
         if (*obj).class_id == NATIVE_MODULE_CLASS_ID {
             if let Some(result) = native_module_enum(obj, MapSetEnum::Values) {
                 return result;
@@ -1648,214 +1887,8 @@ pub extern "C" fn js_object_entries(obj: *const ObjectHeader) -> *mut ArrayHeade
     js_object_entries_shape(obj)
 }
 
-/// [`js_object_entries`] over the shape alone.
-fn js_object_entries_shape(obj: *const ObjectHeader) -> *mut ArrayHeader {
-    // #8149: a registered BUFFER receiver — node `Buffer`, `Uint8Array`,
-    // `ArrayBuffer`, `SharedArrayBuffer` or `DataView`. Asked FIRST, above the
-    // `is_valid_obj_ptr` guard: a `BufferHeader` is not an `ObjectHeader`, and
-    // the generic walk below reads its payload bytes as `keys_array` — `[]`
-    // when they are zero, SIGBUS in `js_array_length` when they are not.
-    // See `registered_buffer_own_keys`.
-    if let Some(result) = registered_buffer_enum(strip_nanbox_addr(obj), MapSetEnum::Entries) {
-        return result;
-    }
-    let stripped = {
-        let bits = obj as u64;
-        let top16 = bits >> 48;
-        if top16 == 0x7FFD || top16 >= 0x7FF8 {
-            (bits & 0x0000_FFFF_FFFF_FFFF) as *const ObjectHeader
-        } else {
-            obj
-        }
-    };
-    // Map/Set receiver → no own enumerable properties; see the matching
-    // guard in `js_object_keys` for the rationale.
-    if crate::map::is_registered_map(stripped as usize)
-        || crate::set::is_registered_set(stripped as usize)
-    {
-        return map_set_exotic_enum(stripped, MapSetEnum::Entries);
-    }
-    if let Some(addr) =
-        crate::typedarray_props::typed_array_addr_from_value(f64::from_bits(obj as u64))
-    {
-        return unsafe {
-            crate::typedarray_props::typed_array_own_enumerable_entries(
-                addr as *const crate::typedarray::TypedArrayHeader,
-            )
-        };
-    }
-    if crate::typedarray::lookup_typed_array_kind(stripped as usize).is_some() {
-        return unsafe {
-            crate::typedarray_props::typed_array_own_enumerable_entries(
-                stripped as *const crate::typedarray::TypedArrayHeader,
-            )
-        };
-    }
-    // Arrays: emit [index, value] pairs for present elements, then named props.
-    // `js_object_entries` has no `ArrayHeader` layout, so the generic object
-    // path below would read an array's body as object fields and crash; handle
-    // arrays explicitly (mirrors the `js_object_keys` / `js_object_values`
-    // array branches).
-    if !stripped.is_null() && (stripped as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 {
-        unsafe {
-            let gc_header = (stripped as *const u8).sub(crate::gc::GC_HEADER_SIZE)
-                as *const crate::gc::GcHeader;
-            if (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY {
-                let arr = crate::array::clean_arr_ptr(stripped as *const crate::array::ArrayHeader);
-                let length = (*arr).length;
-                if length > 100_000 {
-                    return crate::array::js_array_alloc(0);
-                }
-                let elements = (arr as *const u8)
-                    .add(std::mem::size_of::<crate::array::ArrayHeader>())
-                    as *const u64;
-                let result = crate::array::js_array_alloc(length);
-                for i in 0..length {
-                    if std::ptr::read(elements.add(i as usize)) == crate::value::TAG_HOLE {
-                        continue;
-                    }
-                    let pair = crate::array::js_array_alloc(2);
-                    let s = i.to_string();
-                    let key_box = crate::string::js_string_new_sso(s.as_ptr(), s.len() as u32);
-                    crate::array::js_array_push_f64(pair, key_box);
-                    let v = crate::array::js_array_get(arr, i);
-                    crate::array::js_array_push_f64(pair, f64::from_bits(v.bits()));
-                    crate::array::js_array_push_f64(
-                        result,
-                        crate::value::js_nanbox_pointer(pair as i64),
-                    );
-                }
-                for name in crate::array::array_named_property_names(arr, true) {
-                    if let Some(v) = crate::array::array_named_property_get_by_name(arr, &name) {
-                        let pair = crate::array::js_array_alloc(2);
-                        let key =
-                            crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-                        crate::array::js_array_push(pair, JSValue::string_ptr(key));
-                        crate::array::js_array_push_f64(pair, v);
-                        crate::array::js_array_push_f64(
-                            result,
-                            crate::value::js_nanbox_pointer(pair as i64),
-                        );
-                    }
-                }
-                return result;
-            }
-        }
-    }
-    if obj.is_null() || !is_valid_obj_ptr(obj as *const u8) {
-        // Issue #893 lineage: chalk's `Object.entries(ansiStyles)` passed a
-        // value whose unboxed low-48 bits weren't a real heap pointer
-        // (cross-module import where the default-export wrapper hasn't
-        // finished initializing). Pre-fix the `crate::object::object_keys_array(obj)` deref
-        // SIGSEGV'd at 0x14; now we return an empty array so the user's
-        // `for (const [k, v] of Object.entries(undefined)) {}` no-ops the
-        // way the spec's "abstract conversion to object" path would for
-        // an unrecognized receiver. Real JS throws TypeError here; we
-        // prefer the empty-array fallback because Perry doesn't have a
-        // clean "throw at codegen-call boundaries" path for these
-        // pointer-typed entry points and a segfault is strictly worse
-        // for the caller.
-        return crate::array::js_array_alloc(0);
-    }
-    unsafe {
-        if (*obj).class_id == NATIVE_MODULE_CLASS_ID {
-            if let Some(result) = native_module_enum(obj, MapSetEnum::Entries) {
-                return result;
-            }
-        }
-        let keys = crate::object::object_keys_array(obj);
-        // Iterate up to keys_len (the logical property count), not
-        // field_count. Parser-built and dict-built objects with ≥9
-        // fields cap field_count at the inline alloc_limit (8) and
-        // store overflow values in OVERFLOW_FIELDS — for those,
-        // field_count under-counts the actual property count by N-8.
-        // Without this fix, `Object.entries(obj)` on a 50-key dict
-        // returned only the first 8 entries (silent data loss).
-        // Mirrors the same fix in `js_object_keys` and the
-        // `actual_fields = keys_len` line in `json.rs::stringify_object`.
-        let count = if !keys.is_null() {
-            crate::array::js_array_length(keys) as usize
-        } else {
-            crate::object::object_live_slot_count(obj) as usize
-        };
-        let result = crate::array::js_array_alloc(count as u32);
+use super::entries_shape::js_object_entries_shape;
 
-        // #2438: emit pairs in OrdinaryOwnPropertyKeys order (array-index keys
-        // first, ascending; then string keys in insertion order).
-        let order = ecma_own_key_order(keys);
-        let pos = |j: usize| -> u32 {
-            match &order {
-                Some(ord) => ord[j],
-                None => j as u32,
-            }
-        };
-        // Spec (EnumerableOwnProperties): the own key list is determined ONCE up
-        // front, then `[[Get]]` is invoked per key. A getter that adds, removes,
-        // or hides a future key during enumeration must not change the set of
-        // entries reported (test262 entries/getter-adding-key,
-        // getter-removing-future-key, getter-making-future-key-nonenumerable).
-        //
-        // Snapshot the own key *bytes* (not NaN-boxed pointers): a getter fired
-        // by `js_object_get_field_by_name` can delete a future key and
-        // allocate/GC before we visit it, and a key kept only inside this
-        // Rust-heap `Vec` is not a stack-visible GC root — it could dangle.
-        // Owning the bytes and rematerializing the string at read time sidesteps
-        // that. Enumerability is likewise re-evaluated per key in the read phase
-        // (an earlier getter can create a descriptor or flip a future key's
-        // enumerability), so we deliberately do NOT filter it during the snapshot.
-        let mut snapshot_keys: Vec<Vec<u8>> = Vec::with_capacity(count);
-        let mut key_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
-        for j in 0..count {
-            let i = pos(j);
-            if keys.is_null() || i >= crate::array::js_array_length(keys) {
-                continue;
-            }
-            let key_val = crate::array::js_array_get(keys, i);
-            if instance_private_key_hidden(obj, key_val) {
-                continue;
-            }
-            if let Some(bytes) = crate::string::js_string_key_bytes(key_val, &mut key_buf) {
-                snapshot_keys.push(bytes.to_vec());
-            }
-        }
-
-        for key_bytes in snapshot_keys {
-            let key_str =
-                crate::string::js_string_from_bytes(key_bytes.as_ptr(), key_bytes.len() as u32);
-            if key_str.is_null() {
-                continue;
-            }
-            // Spec EnumerableOwnProperties re-reads `[[GetOwnProperty]]` per key
-            // and skips it when the descriptor is now undefined or no longer
-            // enumerable — a getter earlier in the loop may have deleted or
-            // hidden a key that was in the initial snapshot (test262
-            // entries/getter-removing-future-key, getter-making-future-key-
-            // nonenumerable).
-            if !super::super::own_key_present(obj as *mut ObjectHeader, key_str) {
-                continue;
-            }
-            if descriptor_marks_non_enumerable(obj, JSValue::string_ptr(key_str)) {
-                continue;
-            }
-            // Create a pair array [key, value].
-            let pair = crate::array::js_array_alloc(2);
-            crate::array::js_array_push_f64(
-                pair,
-                f64::from_bits(JSValue::string_ptr(key_str).bits()),
-            );
-
-            // Read the value through the name-keyed `[[Get]]`, which fires an
-            // own accessor's getter (the raw index-based field read returned the
-            // empty data slot for accessor-defined properties — test262
-            // entries/getter-adding-key expected the getter's "B").
-            let value = js_object_get_field_by_name(obj as *const ObjectHeader, key_str);
-            crate::array::js_array_push_f64(pair, f64::from_bits(value.bits()));
-
-            // Push the pair to result (NaN-box the array pointer)
-            let pair_boxed = crate::value::js_nanbox_pointer(pair as i64);
-            crate::array::js_array_push_f64(result, pair_boxed);
-        }
-
-        result
-    }
-}
+#[cfg(test)]
+#[path = "enumeration_tests.rs"]
+mod enumeration_tests;

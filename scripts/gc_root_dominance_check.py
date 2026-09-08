@@ -122,16 +122,15 @@ DEFINE_SHAPED_RE = re.compile(r"^define\b")
 # function into one and producing exactly the line-order false positives the
 # docstring above says real dominance avoids.
 #
-# `-` is in the identifier class because LLVM's own identifiers allow it and
-# LLVM's own passes USE it. `rewrite-statepoints-for-gc` splits critical edges
-# into landing pads and names the halves `eh.lpad.8.split-lp`,
-# `…split-lp.split-lp`, and so on: 677 such labels in a 21-module native
-# corpus. Under the old class those lines matched LABEL_SHAPED_RE but not
-# LABEL_RE, so every native module raised MalformedIR and the mode could not
-# read its own corpus. (Loudly, at least — the parser's refusal-not-skip rule
-# working as designed.) Widening is safe for the shadow corpus: perry's writer
-# emits no hyphens, so no line changes classification there.
-LABEL_RE = re.compile(r"^([-\w.$][-\w.$]*):\s*(?:;.*)?$")
+# `-` is in the bare identifier class because LLVM's own identifiers allow it
+# and LLVM's own passes USE it. LLVM quotes labels that contain other bytes,
+# including the `$`-bearing names produced when a repsel-specialised function
+# is inlined. A declaration prints as `"name$part":` and its references as
+# `%"name$part"`; both must normalize to the same CFG key. Keep escape spelling
+# intact rather than decoding it: LLVM prints the same spelling at declaration
+# and use sites, and equality is the only operation this parser needs.
+LLVM_LABEL_TOKEN = r'(?:"(?:[^"\\]|\\.)*"|[-\w.$]+)'
+LABEL_RE = re.compile(rf"^({LLVM_LABEL_TOKEN}):\s*(?:;.*)?$")
 # Anything that ends in `:` and is not an instruction is label-SHAPED. If the
 # strict form above declines it, that is a parser gap and must be loud.
 LABEL_SHAPED_RE = re.compile(r"^[^\s=]+:\s*(?:;.*)?$")
@@ -157,17 +156,28 @@ CALL_RE = re.compile(r"\b(?:call|invoke)\s+[^@]*@([\w.$]+)\(")
 BIND_RE = re.compile(r"call void @js_shadow_slot_bind\(i32 (\d+), ptr %([\w.$]+)\)")
 CLEAR_RE = re.compile(r"call void @js_shadow_slot_set\(i32 (\d+), i64 0\)")
 STORE_RE = re.compile(r"^\s*store\s+([\w\[\]x* ]+?)\s+([^,]+),\s*ptr %([\w.$]+)")
-# `[-\w.$]` throughout, for the reason spelled out on LABEL_RE: LLVM's own
-# `split-lp` landing-pad labels carry hyphens, and a branch regex that cannot
-# name them drops the edge rather than failing.
-BR_UNCOND_RE = re.compile(r"^\s*br label %([-\w.$]+)")
-BR_COND_RE = re.compile(r"^\s*br i1 [^,]+, label %([-\w.$]+), label %([-\w.$]+)")
-SWITCH_LABEL_RE = re.compile(r"label %([-\w.$]+)")
+# All CFG-edge readers use the same token grammar as LABEL_RE. A narrower
+# branch regex drops the edge rather than failing, which makes reachable blocks
+# look dead and can turn a real dominance violation into a clean result.
+BR_UNCOND_RE = re.compile(rf"^\s*br label %({LLVM_LABEL_TOKEN})")
+BR_COND_RE = re.compile(
+    rf"^\s*br i1 [^,]+, label %({LLVM_LABEL_TOKEN}), "
+    rf"label %({LLVM_LABEL_TOKEN})"
+)
+SWITCH_LABEL_RE = re.compile(rf"label %({LLVM_LABEL_TOKEN})")
 # Invoke edges (#7302): normal destination + unwind destination. The invoke
 # terminates its block; the continuation label follows immediately in the
 # emitted text and both successors must appear in the CFG or the landing pad
 # (and everything reached through it) would be dropped as unreachable.
-INVOKE_EDGE_RE = re.compile(r"\binvoke\b.*\bto label %([-\w.$]+) unwind label %([-\w.$]+)")
+INVOKE_EDGE_RE = re.compile(
+    rf"\binvoke\b.*\bto label %({LLVM_LABEL_TOKEN}) unwind label "
+    rf"%({LLVM_LABEL_TOKEN})"
+)
+
+
+def llvm_label_name(token):
+    """Normalize a bare or quoted LLVM block token for CFG comparisons."""
+    return token[1:-1] if token.startswith('"') else token
 
 
 # ------------------------------------------------- statepoint IR vocabulary
@@ -373,7 +383,7 @@ def parse_file(path):
                 continue
             lm = LABEL_RE.match(line)
             if lm:
-                curblk = lm.group(1)
+                curblk = llvm_label_name(lm.group(1))
                 if curblk not in cur.insns:
                     cur.blocks.append(curblk)
                     cur.insns[curblk] = []
@@ -422,21 +432,21 @@ def build_cfg(f):
             t = ins.text
             m = BR_COND_RE.match(t)
             if m:
-                f.succs[b].add(m.group(1))
-                f.succs[b].add(m.group(2))
+                f.succs[b].add(llvm_label_name(m.group(1)))
+                f.succs[b].add(llvm_label_name(m.group(2)))
                 continue
             m = BR_UNCOND_RE.match(t)
             if m:
-                f.succs[b].add(m.group(1))
+                f.succs[b].add(llvm_label_name(m.group(1)))
                 continue
             if t.strip().startswith("switch"):
                 for lbl in SWITCH_LABEL_RE.findall(t):
-                    f.succs[b].add(lbl)
+                    f.succs[b].add(llvm_label_name(lbl))
                 continue
             m = INVOKE_EDGE_RE.search(t)
             if m:
-                f.succs[b].add(m.group(1))
-                f.succs[b].add(m.group(2))
+                f.succs[b].add(llvm_label_name(m.group(1)))
+                f.succs[b].add(llvm_label_name(m.group(2)))
     for b, ss in list(f.succs.items()):
         for s in ss:
             f.preds[s].add(b)
@@ -3517,7 +3527,9 @@ def _is_phi(ins):
     return body.strip().startswith("phi ")
 
 
-_PHI_EDGE_RE = re.compile(r"\[\s*([^,\[\]]+?)\s*,\s*%([-\w.$]+)\s*\]")
+_PHI_EDGE_RE = re.compile(
+    rf"\[\s*([^,\[\]]+?)\s*,\s*%({LLVM_LABEL_TOKEN})\s*\]"
+)
 
 
 def phi_incoming(ins):
@@ -3525,7 +3537,10 @@ def phi_incoming(ins):
     edges, in LLVM's printed order. `operand_text` is `%reg` for a register
     operand or the constant's own spelling (`0.000000e+00`, `null`, ...) —
     never itself tainted, which is why callers filter on the leading `%`."""
-    return _PHI_EDGE_RE.findall(ins.text)
+    return [
+        (value, llvm_label_name(predecessor))
+        for value, predecessor in _PHI_EDGE_RE.findall(ins.text)
+    ]
 
 
 def transparent_use_graph(f):
@@ -4251,16 +4266,28 @@ eh.lpad.2.split-lp:                               ; preds = %entry.0
 }
 """
 
-# A repsel specialisation, whose name LLVM must quote. Skipped silently for as
-# long as this checker has existed; 175 of 2452 defines in the native corpus.
+# A repsel specialisation whose function and inlined block names LLVM must
+# quote. The phi's tainted edge is the quoted block, so this fixture also goes
+# false-clean if declarations, branch targets, or phi predecessors disagree on
+# how `%"name$part"` is normalized.
 _SELFTEST_SP_QUOTED_NAME = """\
 define internal double @"perry_fn_selftest__probe$typed_f64"(double %a) gc "statepoint-example" {
 entry.0:
   %rs4gc.b1 = bitcast double %a to i64
   %rs4gc.s1 = inttoptr i64 %rs4gc.b1 to ptr addrspace(1)
   %raw = ptrtoint ptr addrspace(1) %rs4gc.s1 to i64
+  br i1 true, label %"inlined$pshape.exit", label %safe.1
+
+"inlined$pshape.exit":                            ; preds = %entry.0
 __SAFEPOINT__
-  %r = call double @js_object_get_field_by_name_f64(i64 %raw, i64 0)
+  br label %join.2
+
+safe.1:                                           ; preds = %entry.0
+  br label %join.2
+
+join.2:                                           ; preds = %"inlined$pshape.exit", %safe.1
+  %merged = phi i64 [ %raw, %"inlined$pshape.exit" ], [ 0, %safe.1 ]
+  %r = call double @js_object_get_field_by_name_f64(i64 %merged, i64 0)
   ret double %r
 }
 """.replace("__SAFEPOINT__", _sp())
@@ -4562,9 +4589,27 @@ def statepoint_self_test():
                   "names bare, LLVM's printer quotes them).",
                   file=sys.stderr)
             ok = False
+        elif funcs[0].blocks != [
+                "entry.0", "inlined$pshape.exit", "safe.1", "join.2"]:
+            print("self-test FAIL: a quoted basic-block declaration must "
+                  "normalize to the same name used by its CFG references, got "
+                  f"{funcs[0].blocks!r}", file=sys.stderr)
+            ok = False
+        elif funcs[0].succs["entry.0"] != {"inlined$pshape.exit", "safe.1"}:
+            print("self-test FAIL: a conditional branch to a quoted block "
+                  f"must retain both CFG edges, got {funcs[0].succs['entry.0']!r}",
+                  file=sys.stderr)
+            ok = False
+        elif phi_incoming(funcs[0].insns["join.2"][0]) != [
+                ("%raw", "inlined$pshape.exit"), ("0", "safe.1")]:
+            print("self-test FAIL: a quoted phi predecessor must normalize to "
+                  "the declared block name, got "
+                  f"{phi_incoming(funcs[0].insns['join.2'][0])!r}",
+                  file=sys.stderr)
+            ok = False
         if len(_scan_statepoints([paths["quoted"]], moving_only=True)) != 1:
-            print("self-test FAIL: the quoted-name fixture carries the same "
-                  "planted hazard as the unrooted one and must report it",
+            print("self-test FAIL: the quoted-name fixture carries a planted "
+                  "phi-edge hazard through the quoted block and must report it",
                   file=sys.stderr)
             ok = False
 

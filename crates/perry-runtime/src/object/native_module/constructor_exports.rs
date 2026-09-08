@@ -16,6 +16,13 @@ pub(crate) fn is_native_module_constructor_export(module: &str, property: &str) 
     let module = normalize_native_module_alias(module);
     let property = canonical_native_callable_property(module, property);
 
+    // Histogram constructors are only reachable through an instance's
+    // `constructor` property.  They are callable-shaped internal exports, and
+    // their construct path deliberately throws ERR_ILLEGAL_CONSTRUCTOR.
+    if module == "perf_histogram" && matches!(property, "RecordableHistogram" | "ELDHistogram") {
+        return true;
+    }
+
     if !is_native_module_callable_export(module, property) {
         return false;
     }
@@ -205,6 +212,18 @@ mod tests {
         assert!(is_native_module_constructor_export(
             "node:fs",
             "WriteStream"
+        ));
+    }
+
+    #[test]
+    fn histogram_class_values_are_constructor_shaped() {
+        assert!(is_native_module_constructor_export(
+            "perf_histogram",
+            "RecordableHistogram"
+        ));
+        assert!(is_native_module_constructor_export(
+            "perf_histogram",
+            "ELDHistogram"
         ));
     }
 }

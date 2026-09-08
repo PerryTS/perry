@@ -1,0 +1,105 @@
+# Opt-in bundle-scale parity (#9346). Non-required until maintainers promote it.
+name: cc-parity
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cc-parity-${{ github.event_name }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  changes:
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-cc-parity')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      relevant: ${{ steps.filter.outputs.relevant }}
+    steps:
+      - id: filter
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" != pull_request ]; then
+            echo 'relevant=true' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          cc_files=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files" --paginate --jq '.[].filename')
+          # An empty listing must not quietly turn a requested gate green.
+          if [ -z "$cc_files" ] || grep -E '^(crates/|Cargo\.(toml|lock)$|rust-toolchain|\.cargo/|\.github/workflows/cc-parity\.yml$|scripts/cc_parity_gate\.py$|tests/(test_cc_parity_gate\.py$|cc-parity/))' <<< "$cc_files" > /dev/null; then
+            echo 'relevant=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'relevant=false' >> "$GITHUB_OUTPUT"
+          fi
+
+  cc-parity:
+    needs: changes
+    if: needs.changes.outputs.relevant == 'true'
+    # The bundle's IR construction exceeds the ARM runner's 7 GB RAM.
+    runs-on: macos-15-intel
+    timeout-minutes: 90
+    env:
+      CARGO_BUILD_JOBS: '4'
+      CARGO_INCREMENTAL: '0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Test the gate's failure paths
+        run: python3 -m unittest discover -s tests -p test_cc_parity_gate.py -v
+
+      - name: Set scratch work directory
+        run: echo "CC_PARITY_WORK=$RUNNER_TEMP/cc-parity" >> "$GITHUB_ENV"
+
+      # This job uses the macOS SDK, not the preinstalled simulator images.
+      # simctl unmounts runtime images before deleting their backing storage.
+      - name: Free simulator runtime disk space
+        run: |
+          sudo xcrun simctl runtime delete all
+          df -h /
+
+      - name: Fetch and verify the pinned bundle
+        run: python3 scripts/cc_parity_gate.py prepare --work-dir "$CC_PARITY_WORK"
+
+      - name: Install LLVM 22
+        run: |
+          set -euo pipefail
+          brew install llvm@22 2>/dev/null || brew install llvm
+          cc_llvm_prefix="$(brew --prefix llvm@22 2>/dev/null || brew --prefix llvm)"
+          "$cc_llvm_prefix/bin/llvm-config" --version | grep -q '^22\.'
+          echo "LLVM_SYS_221_PREFIX=$cc_llvm_prefix" >> "$GITHUB_ENV"
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: cc-parity-wasm-host
+          save-if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' }}
+
+      - name: Build compiler, then all runtime archives together
+        run: python3 scripts/cc_parity_gate.py build --work-dir "$CC_PARITY_WORK"
+
+      - name: Compile the pinned bundle natively
+        run: python3 scripts/cc_parity_gate.py compile --timeout 4500 --work-dir "$CC_PARITY_WORK" --perry "$GITHUB_WORKSPACE/target/perry-dev/perry"
+
+      - name: Check help and version offline against golden bytes
+        run: python3 scripts/cc_parity_gate.py check --work-dir "$CC_PARITY_WORK"
+
+      - name: Upload compiler logs and parity results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: cc-parity-results
+          path: ${{ runner.temp }}/cc-parity/logs/
+          if-no-files-found: warn
+          retention-days: 7

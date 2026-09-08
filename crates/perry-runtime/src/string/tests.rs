@@ -1296,3 +1296,100 @@ mod split_empty_delimiter_code_units {
         assert_eq!(crate::array::js_array_length(arr), 3);
     }
 }
+
+/// The canonical one-ASCII-character string table (`string::format`).
+#[cfg(test)]
+mod canonical_char_cache {
+    use super::*;
+
+    /// A one-ASCII-character string has exactly 128 possible contents, so
+    /// `js_string_char_at` (and everything that funnels through it: `s[i]`,
+    /// `charAt`, `[...s]`, the String-wrapper index installer) hands back the
+    /// canonical per-thread header instead of minting one per read.
+    ///
+    /// The identity assertion is the whole point — it is what makes the
+    /// allocation disappear — and it fails the moment the canonical table is
+    /// bypassed. The `refcount == 0` assertion is the safety half: a shared
+    /// header must never be eligible for the in-place append optimisation.
+    #[test]
+    fn ascii_char_at_returns_one_canonical_shared_header_per_byte() {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let s = scope.root_string_ptr(js_string_from_bytes(b"abca".as_ptr(), 4));
+        let (a0, b1, a3) = s.with_const_ptr::<StringHeader, _>(|s| {
+            (
+                js_string_char_at(s, 0),
+                js_string_char_at(s, 1),
+                js_string_char_at(s, 3),
+            )
+        });
+        assert_eq!(a0, a3, "the same character must reuse the canonical header");
+        assert_ne!(a0, b1, "different characters are different headers");
+        unsafe {
+            assert_eq!((*a0).byte_len, 1);
+            assert_eq!((*a0).utf16_len, 1);
+            let data = (a0 as *const u8).add(std::mem::size_of::<StringHeader>());
+            assert_eq!(*data, b'a');
+            assert_eq!(
+                (*a0).refcount,
+                0,
+                "a shared header must be ineligible for the in-place append path"
+            );
+        }
+        // A second string with the same character resolves to the same header:
+        // the table is keyed by content, not by source string.
+        let other = scope.root_string_ptr(js_string_from_bytes(b"za".as_ptr(), 2));
+        let a_again = other.with_const_ptr::<StringHeader, _>(|o| js_string_char_at(o, 1));
+        assert_eq!(a0, a_again);
+    }
+
+    /// Non-ASCII keeps the minting path (the canonical table is ASCII-only),
+    /// and the value is still correct — the fast path must not answer for
+    /// characters it does not represent.
+    #[test]
+    fn non_ascii_char_at_is_unaffected_by_the_canonical_table() {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let s = scope.root_string_ptr(js_string_from_bytes("aé".as_ptr(), 3));
+        let (c0, c1) = s.with_const_ptr::<StringHeader, _>(|s| {
+            (js_string_char_at(s, 0), js_string_char_at(s, 1))
+        });
+        unsafe {
+            assert_eq!((*c0).byte_len, 1);
+            assert_eq!((*c1).byte_len, 2, "é is two UTF-8 bytes");
+        }
+    }
+}
+
+/// The canonical one-ASCII-character string table (`string::format`).
+#[cfg(test)]
+/// `header_str_checked` answers exactly like `from_utf8(..).ok()` — a pure
+/// ASCII key without the scan, a non-ASCII scalar key by validation, and a
+/// WTF-8 payload (lone surrogate) as `None`.
+#[test]
+fn header_str_checked_matches_from_utf8_on_every_payload_class() {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let ascii = scope.root_string_ptr(js_string_from_bytes(b"userName".as_ptr(), 8));
+    let cjk = "名前";
+    let scalar = scope.root_string_ptr(js_string_from_bytes(cjk.as_ptr(), cjk.len() as u32));
+    let lone = [0xEDu8, 0xA0, 0x80, b'x'];
+    let wtf8 = scope.root_string_ptr(js_string_from_wtf8_bytes(lone.as_ptr(), lone.len() as u32));
+    let empty = scope.root_string_ptr(js_string_from_bytes(b"".as_ptr(), 0));
+    for (root, expect) in [
+        (&ascii, Some("userName")),
+        (&scalar, Some(cjk)),
+        (&wtf8, None),
+        (&empty, Some("")),
+    ] {
+        let got = root.with_const_ptr::<StringHeader, _>(|s| unsafe { header_str_checked(s) });
+        assert_eq!(got, expect);
+        let via_std = root.with_const_ptr::<StringHeader, _>(|s| {
+            std::str::from_utf8(string_as_bytes_for_test(s))
+                .ok()
+                .map(|s| s.to_string())
+        });
+        assert_eq!(got.map(|s| s.to_string()), via_std);
+    }
+}
+
+fn string_as_bytes_for_test<'a>(s: *const StringHeader) -> &'a [u8] {
+    unsafe { slice::from_raw_parts(string_data(s), (*s).byte_len as usize) }
+}

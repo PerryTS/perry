@@ -98,6 +98,7 @@ use perry_hir::{Expr, Function, Module, ModuleInitKind, Param, Stmt};
 
 mod harness_self_tests;
 mod mechanics;
+mod specialized_calls;
 
 /// The two targets native roots ship on, one per object format and
 /// architecture. Pinned rather than host-derived — see the module docs.
@@ -508,8 +509,11 @@ fn callee_after_elementtype(line: &str) -> Option<String> {
     let group = group_after(line, "elementtype(")?;
     let after =
         line[line.find("elementtype(")? + "elementtype(".len() + group.len() + 1..].trim_start();
-    let name: String = after
-        .strip_prefix('@')?
+    // LLVM quotes names containing the specialized-entry separator `$`.
+    let after_at = after.strip_prefix('@')?;
+    let name: String = after_at
+        .strip_prefix('"')
+        .unwrap_or(after_at)
         .chars()
         .take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '$'))
         .collect();

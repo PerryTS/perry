@@ -51,9 +51,20 @@
 //! 1. **Activity or arena debt.** Normally at least `2^backoff` collections
 //!    the reducer did not start itself have completed since its last full. A
 //!    collection is the signal that the mutator allocated enough to matter.
-//!    The exception is a bounded [`super::arena_right_size`] episode: arena
-//!    blocks need two full observations before their mappings can be returned,
-//!    and an idle heap cannot create the second through mutator activity.
+//!    There are two exceptions, and they are the same argument twice: a
+//!    requirement denominated in *mutator collections* cannot be met by a heap
+//!    whose mutator is idle, which is exactly when the reducer is wanted.
+//!    First, a bounded [`super::arena_right_size`] episode: arena blocks need
+//!    two full observations before their mappings can be returned, and an idle
+//!    heap cannot create the second through mutator activity. Second, elapsed
+//!    idle — see [`IDLE_RECLAIM_REARM_MS`] — because a *declined* follow-up
+//!    would otherwise be terminal (#9831): measured on the claude-code TUI, the
+//!    compactor's residue gate declines at 23.7 %, so no compaction runs, so no
+//!    collection is registered, so `since_attempt` stays 0 and the reducer
+//!    never runs again. The compaction IS the event that re-arms the reducer,
+//!    so declining one removes the only thing that could revisit the decision,
+//!    and the heap parks 221 MB above where the same workload settles when the
+//!    first compaction happens to fire.
 //! 2. **Quiet.** At least [`IDLE_RECLAIM_QUIET_MS`] since the last such
 //!    collection was observed — a burst still in progress collects every few
 //!    hundred milliseconds and must not be interleaved with a whole-heap mark.
@@ -125,6 +136,23 @@ pub const IDLE_RECLAIM_PRODUCTIVE_PCT: usize = 5;
 /// exceeds `2^this` collections.
 pub const IDLE_RECLAIM_MAX_BACKOFF_SHIFT: u32 = 5;
 
+/// Elapsed idle that substitutes for the activity requirement, at
+/// `backoff_shift == 0`; the wait is `IDLE_RECLAIM_REARM_MS << backoff_shift`,
+/// so it is the SAME backoff that prices the activity arm.
+///
+/// This is the whole of the anti-spin argument and it needs no new rule: an
+/// unproductive full doubles the wait, so a heap with nothing to give is asked
+/// at 15 s, 30 s, 60 s, 120 s, 240 s and then — because the arm is disarmed at
+/// [`IDLE_RECLAIM_MAX_BACKOFF_SHIFT`] — **not again until real mutator activity
+/// resets the shift**. Five bounded attempts over ~8 minutes, then silence. A
+/// PRODUCTIVE full resets the shift to zero, so a heap that is still giving
+/// memory back keeps being asked every 15 s, which is the case this exists for.
+///
+/// Larger than [`IDLE_RECLAIM_MIN_INTERVAL_MS`] on purpose, so the rate floor
+/// is never the binding constraint on this arm and the two gates cannot be
+/// confused for one another when reading a diag.
+pub const IDLE_RECLAIM_REARM_MS: u64 = 15_000;
+
 /// Most collector work the park hook will do in any one wall-clock second
 /// while a budgeted cycle is open; past this the loop parks instead.
 pub const IDLE_RECLAIM_MAX_WORK_MS_PER_SECOND: u64 = 500;
@@ -147,6 +175,10 @@ enum StartReason {
     /// Sustained arena slack still needs full observations before empty blocks
     /// can be returned, even though the mutator has done nothing new.
     ArenaRightSize,
+    /// The activity requirement has not been met, but enough idle time has
+    /// passed that waiting for a mutator collection is waiting for something
+    /// that is not coming. See [`IDLE_RECLAIM_REARM_MS`].
+    IdleElapsed,
 }
 
 impl StartReason {
@@ -154,6 +186,7 @@ impl StartReason {
         match self {
             StartReason::Activity => "activity",
             StartReason::ArenaRightSize => "arena_right_size",
+            StartReason::IdleElapsed => "idle_elapsed",
         }
     }
 }
@@ -247,6 +280,10 @@ static YIELDS: AtomicU64 = AtomicU64::new(0);
 static START_BLOCKED: AtomicU64 = AtomicU64::new(0);
 static WORK_CAPPED: AtomicU64 = AtomicU64::new(0);
 static POST_PURGES: AtomicU64 = AtomicU64::new(0);
+/// Fulls started because idle time elapsed rather than because the mutator
+/// collected. Counted so a test can assert WHICH arm started a full — the
+/// attempt count alone cannot tell the two apart.
+static IDLE_ELAPSED_STARTS: AtomicU64 = AtomicU64::new(0);
 
 /// Reducer fulls started in this process.
 pub fn idle_reclaim_attempts() -> u64 {
@@ -300,6 +337,10 @@ pub fn idle_reclaim_post_purges() -> u64 {
 }
 
 /// Current unproductive-streak backoff shift on this thread.
+pub fn idle_reclaim_elapsed_starts() -> u64 {
+    IDLE_ELAPSED_STARTS.load(Ordering::Relaxed)
+}
+
 pub fn idle_reclaim_backoff_shift() -> u32 {
     STATE.with(|s| s.borrow().backoff_shift)
 }
@@ -366,10 +407,28 @@ fn start_reason(now: u64) -> Option<StartReason> {
             return Some(StartReason::ArenaRightSize);
         }
         let since_attempt = external.saturating_sub(st.external_at_last_attempt);
-        if since_attempt < (1u64 << st.backoff_shift) {
-            return None;
+        if since_attempt >= (1u64 << st.backoff_shift) {
+            return Some(StartReason::Activity);
         }
-        Some(StartReason::Activity)
+        // The activity requirement is denominated in collections the reducer
+        // did not start, and on a quiet heap the only such collections are the
+        // compactor's — which run only once the reducer has already moved the
+        // residue ratio past the compactor's own gate. When that gate declines,
+        // nothing else can move it, and the decline is permanent. Elapsed idle
+        // is the same requirement in the one unit a quiet heap still produces.
+        //
+        // Disarmed at the maximum shift rather than merely slowed: five
+        // unproductive attempts are enough to establish there is nothing to
+        // give, and after them this arm must stop entirely or an idle process
+        // pays a whole-heap mark forever. Real activity resets the shift (via a
+        // productive full) and re-enables it.
+        if st.attempts > 0
+            && st.backoff_shift < IDLE_RECLAIM_MAX_BACKOFF_SHIFT
+            && now.saturating_sub(st.last_attempt_ms) >= (IDLE_RECLAIM_REARM_MS << st.backoff_shift)
+        {
+            return Some(StartReason::IdleElapsed);
+        }
+        None
     })
 }
 
@@ -383,6 +442,9 @@ fn note_started(now: u64, reason: StartReason) {
         ATTEMPTS.fetch_add(1, Ordering::Relaxed);
         if reason == StartReason::ArenaRightSize {
             super::arena_right_size::note_started();
+        }
+        if reason == StartReason::IdleElapsed {
+            IDLE_ELAPSED_STARTS.fetch_add(1, Ordering::Relaxed);
         }
         if gc_diag_enabled() {
             let (_, right_size_fulls_remaining, _, usage) = super::arena_right_size::snapshot();

@@ -46,7 +46,7 @@ pub(crate) fn error_side_tables_clear_dead(user_ptr: usize) {
 /// key is a dead from-space error — unmarked, unforwarded, nursery-space,
 /// still typed `GC_TYPE_ERROR`. Mirrors
 /// `finalize_dead_copied_minor_from_space_maps`.
-pub(crate) fn finalize_dead_copied_minor_from_space_errors() {
+pub(crate) fn finalize_dead_copied_minor_from_space_errors() -> usize {
     fn is_dead_from_space_error(addr: usize) -> bool {
         let space = crate::arena::classify_heap_space(addr);
         if !matches!(space, crate::arena::HeapSpace::NurseryEden)
@@ -73,7 +73,9 @@ pub(crate) fn finalize_dead_copied_minor_from_space_errors() {
             .filter(|addr| is_dead_from_space_error(*addr))
             .collect()
     });
+    let count = dead.len();
     for addr in dead {
         error_side_tables_clear_dead(addr);
     }
+    count
 }

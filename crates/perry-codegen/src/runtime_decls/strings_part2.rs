@@ -911,7 +911,7 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     // module's `__perry_ns_<prefix>` global) and from `Expr::DynamicImport`
     // (returned wrapped in `js_promise_resolved`). See
     // `crates/perry-runtime/src/object.rs::js_create_namespace`.
-    module.declare_function("js_create_namespace", DOUBLE, &[I32, PTR, PTR, PTR]);
+    module.declare_function("js_create_namespace", DOUBLE, &[I32, PTR, PTR, PTR, PTR]);
     module.declare_function("js_finalize_namespace", DOUBLE, &[DOUBLE]);
     module.declare_function("js_promise_then", I64, &[I64, I64, I64]);
     module.declare_function("js_promise_resolved_then", I64, &[DOUBLE, I64, I64]);
@@ -1052,8 +1052,16 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     module.declare_function("js_response_bytes", I64, &[DOUBLE]);
     module.declare_function("js_response_form_data", I64, &[DOUBLE]);
     module.declare_function("js_form_data_new", DOUBLE, &[]);
-    module.declare_function("js_form_data_append", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
-    module.declare_function("js_form_data_set", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_form_data_append",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE, DOUBLE],
+    );
+    module.declare_function(
+        "js_form_data_set",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE, DOUBLE],
+    );
     module.declare_function("js_form_data_delete", DOUBLE, &[DOUBLE, I64]);
     module.declare_function("js_form_data_get", DOUBLE, &[DOUBLE, I64]);
     module.declare_function("js_form_data_get_all", DOUBLE, &[DOUBLE, I64]);

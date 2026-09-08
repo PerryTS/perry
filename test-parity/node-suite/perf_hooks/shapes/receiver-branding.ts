@@ -20,6 +20,14 @@ outcome(
   () => Reflect.apply(Object.getPrototypeOf(performance).mark, {}, ["x"]),
 );
 outcome(
+  "performance.now direct",
+  () => Reflect.apply(performance.now, {}, []),
+);
+outcome(
+  "performance.clearMarks direct",
+  () => Reflect.apply(performance.clearMarks, {}, []),
+);
+outcome(
   "entry.toJSON",
   () => Reflect.apply(PerformanceEntry.prototype.toJSON, {}, []),
 );

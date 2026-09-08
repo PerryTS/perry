@@ -76,6 +76,10 @@ function runRole(name: string, onFirst: (s: any) => void, doChurn: boolean): voi
       console.log(name + " phase1: true");
       onFirst(s);
       if (doChurn) console.log(name + " churn: " + (churn(300000) > 0));
+      // The parent sends TWO only after the toggle and all churn complete.
+      // A fixed delay cannot prove this ordering and four sequential 2.5s
+      // waits alone exceed the parity suite's 10s per-process budget (#9783).
+      console.log(name + " ready: true");
     } else if (phase === 1 && text.indexOf("TWO") >= 0) {
       clearInterval(ticker);
       finish(name + " phase2: true");
@@ -110,9 +114,24 @@ if (role === "unref-ref") {
     new Promise<void>((resolve) => {
       const child = spawn(process.execPath, childArgs, {
         env: { ...process.env, [ROLE_ENV]: name },
-        stdio: ["pipe", "inherit", "inherit"],
+        stdio: ["pipe", "pipe", "inherit"],
       });
       let settled = false;
+      let output = "";
+      let sentSecond = false;
+      child.stdout!.on("data", (chunk: any) => {
+        process.stdout.write(chunk);
+        output += String(chunk);
+        // stdout may split the readiness line across arbitrary chunks.
+        if (!sentSecond && output.includes(name + " ready: true\n")) {
+          sentSecond = true;
+          try {
+            child.stdin!.write("TWO\n");
+          } catch {
+            /* child already gone */
+          }
+        }
+      });
       const watchdog = setTimeout(() => {
         if (settled) return;
         settled = true;
@@ -120,7 +139,8 @@ if (role === "unref-ref") {
         child.kill("SIGKILL");
         resolve();
       }, WATCHDOG_MS);
-      child.on("exit", (code) => {
+      // Drain the piped stdout before printing the role's exit summary.
+      child.on("close", (code) => {
         if (settled) return;
         settled = true;
         clearTimeout(watchdog);
@@ -134,14 +154,6 @@ if (role === "unref-ref") {
           /* child already gone */
         }
       }, 120);
-      // Late enough that the churn role has finished collecting first.
-      setTimeout(() => {
-        try {
-          child.stdin!.write("TWO\n");
-        } catch {
-          /* child already gone */
-        }
-      }, 2500);
     });
 
   (async () => {

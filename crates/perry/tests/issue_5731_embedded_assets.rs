@@ -4,7 +4,8 @@
 //! At runtime they are reachable three ways, all exercised here:
 //!   * `import { embeddedFiles } from "perry"` — `{ name, size, type }` per asset
 //!   * `import { readEmbedded } from "perry"` — bytes as a `Buffer`
-//!   * `node:fs` (`readFileSync` / `existsSync`) via the `$perryfs/<path>` path
+//!   * `node:fs` reads, existence, metadata, and directory listing through the
+//!     `$perryfs/<path>` virtual filesystem
 //! plus `isStandaloneExecutable` (always `true` in a compiled binary).
 //!
 //! Asset embedding is host-targeted: Unix-like systems compile a `cc` object;
@@ -51,7 +52,15 @@ console.log("viaFs:", fs.readFileSync("$perryfs/dist/index.html", "utf8"));
 const html = files.find(f => f.name === "dist/index.html");
 console.log("type:", html.type, "size:", html.size);
 console.log("exists:", fs.existsSync("$perryfs/dist/assets/app.js"));
+console.log("existsDir:", fs.existsSync("$perryfs/dist/assets"));
 console.log("existsMissing:", fs.existsSync("$perryfs/nope.txt"));
+const embeddedStat = fs.statSync("$perryfs/dist/assets/app.js");
+console.log("stat:", embeddedStat.isFile(), embeddedStat.size);
+console.log("statDir:", fs.statSync("$perryfs/dist/assets").isDirectory());
+console.log("rootEntries:", fs.readdirSync("$perryfs").join(","));
+console.log("distEntries:", fs.readdirSync("$perryfs/dist").join(","));
+const assetEntry = fs.readdirSync("$perryfs/dist", { withFileTypes: true })[0];
+console.log("dirent:", assetEntry.name, assetEntry.isDirectory(), assetEntry.parentPath);
 try { readEmbedded("nope.txt"); console.log("throwMissing: no"); }
 catch (e) { console.log("throwMissing: yes"); }
 "#,
@@ -100,7 +109,13 @@ catch (e) { console.log("throwMissing: yes"); }
          viaFs: HELLO_EMBED\n\
          type: text/html; charset=utf-8 size: 11\n\
          exists: true\n\
+         existsDir: true\n\
          existsMissing: false\n\
+         stat: true 14\n\
+         statDir: true\n\
+         rootEntries: dist\n\
+         distEntries: assets,index.html\n\
+         dirent: assets true $perryfs/dist\n\
          throwMissing: yes\n",
         "unexpected runtime output"
     );

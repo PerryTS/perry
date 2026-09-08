@@ -190,6 +190,7 @@ pub fn create(placeholder_ptr: *const u8, on_change: f64) -> i64 {
 
     unsafe {
         let text_field = NSTextField::textFieldWithString(&NSString::from_str(""), mtm);
+        super::padding::install_text_field_cell(&text_field, mtm);
         text_field.setPlaceholderString(Some(&ns_placeholder));
 
         // Make it editable

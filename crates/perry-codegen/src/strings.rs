@@ -81,6 +81,9 @@ pub struct StringPool {
     /// Ordered list of unique entries; the index in this Vec is the
     /// interned index referenced by `interned`.
     entries: Vec<StringEntry>,
+    /// Module-wide names for TDZ-capable bindings, including outer bindings
+    /// read from closure bodies. Kept separately from per-function aliases.
+    pub(crate) tdz_binding_names: HashMap<u32, String>,
     /// #5247: source-location context for the dynamic call-dispatch throw
     /// path. Set once per module after construction (only when the CLI
     /// `--debug-symbols` flag is on). `None` in the default build so codegen
@@ -141,6 +144,7 @@ impl StringPool {
             module_prefix,
             interned: HashMap::new(),
             entries: Vec::new(),
+            tdz_binding_names: HashMap::new(),
             debug_location_ctx: None,
             debug_source_line_offset: 0,
             pending_call_offset: std::cell::Cell::new(0),

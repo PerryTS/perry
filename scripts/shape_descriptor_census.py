@@ -403,10 +403,25 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
     # the tombstone-delete work; `_with_generation` is a thin forwarding
     # wrapper. The authority ordering is checked where the writes are.
     ensure = function_body(shapes, "shape_descriptor_ensure_with_holes")
+    # The property is that the by-id descriptor is installed BEFORE the reverse
+    # accelerator points at it — never which append spells it. #9768 added
+    # `family_append_fresh`, which is `family_push_back` minus a membership scan
+    # that is dead work for an id `alloc_shape_id` just minted and never reuses.
+    # Both append to the same family list, so pinning only the older name made a
+    # strictly cheaper append look like a lost ordering guarantee.
+    ensure_append = next(
+        (m for m in ("family_append_fresh", "family_push_back") if m in ensure),
+        None,
+    )
+    if ensure_append is None:
+        raise CensusError(
+            "shape descriptor authority surface missing: family append in "
+            "shape_descriptor_ensure_with_holes"
+        )
     assert_before(
         ensure,
         "slab_mut().insert",
-        "family_push_back",
+        ensure_append,
         "by-id descriptor before reverse accelerator",
     )
     sync = function_body(shapes, "publish_object_shape_from")
@@ -554,10 +569,18 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
         require_code(body, r"obj_type\s*==\s*crate::gc::GC_TYPE_OBJECT", f"{name} GC kind")
         if re.search(r"regex_header_has_magic|object_type", body):
             raise CensusError(f"{name} reintroduced an old payload discriminator")
-    regexp_alloc = function_body(regex_runtime, "js_regexp_new")
+    # #9845 moved the header off the malloc arm into the nursery, so the birth
+    # site is now `arena_alloc_gc`. What this asserts is unchanged and is the
+    # point of the check: whichever allocator RegExp is born from, it is born
+    # with its OWN GcHeader kind, never as a generic object that something later
+    # has to re-identify by payload magic.
+    # #9892 split construction into a thin `js_regexp_new` / `js_regexp_new_site`
+    # pair over a shared `js_regexp_new_impl`, which is where the allocation now
+    # lives. Follow the birth site rather than the entry point's name.
+    regexp_alloc = function_body(regex_runtime, "js_regexp_new_impl")
     require_code(
         regexp_alloc,
-        r"gc_malloc\s*\([^;]*crate::gc::GC_TYPE_REGEXP",
+        r"(?:gc_malloc|arena_alloc_gc)\s*\([^;]*crate::gc::GC_TYPE_REGEXP",
         "RegExp dedicated GC birth kind",
     )
     expando_kind = function_body(exotic_expando, "exotic_expando_kind")

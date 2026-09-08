@@ -130,10 +130,10 @@ fn strict_dense_number_store_fast_lane_matches_the_general_path() {
 
         // #9220: an in-bounds hole is not an own property. The number lane
         // must decline it so the strict entry can consult an inherited index
-        // setter / non-writable data descriptor before creating an element —
-        // but ONLY once some array has been retargeted. With the process latch
-        // clear (the overwhelmingly common case, including every `new Array(n)`
-        // fill) the lane keeps filling holes exactly as it did before #9220.
+        // setter / non-writable data descriptor before creating an element.
+        // #9787: a default-prototype descriptor invalidates this lane even
+        // without a retargeted array. With the summary byte clear, ordinary
+        // `new Array(n)` fills retain their fast path.
         //
         // Indices 4 and 5 are the SAME shape — two in-bounds holes on one
         // array — so the latch is the only variable between the two arms.
@@ -142,15 +142,27 @@ fn strict_dense_number_store_fast_lane_matches_the_general_path() {
         assert!(!array_has_own_index(out, 5));
         let latch_was =
             crate::object::prototype_chain::test_swap_array_static_proto_recorded(false);
+        let summary_was = super::test_swap_array_index_fast_path_invalidated(0);
+        struct RestorePrototypeFlags(bool, u8);
+        impl Drop for RestorePrototypeFlags {
+            fn drop(&mut self) {
+                crate::object::prototype_chain::test_swap_array_static_proto_recorded(self.0);
+                super::test_swap_array_index_fast_path_invalidated(self.1);
+            }
+        }
+        let _restore = RestorePrototypeFlags(latch_was, summary_was);
         assert!(
             lane(out, 4, 8.0),
-            "no recorded array prototype: the hole fill stays on the fast lane"
+            "unmodified prototype chains: the hole fill stays on the fast lane"
         );
         assert!(array_has_own_index(out, 4));
-        crate::object::prototype_chain::test_swap_array_static_proto_recorded(true);
+        super::test_swap_array_index_fast_path_invalidated(1);
         assert!(!lane(out, 5, 8.0), "hole slot requires the [[Set]] walk");
         assert!(!array_has_own_index(out, 5));
-        crate::object::prototype_chain::test_swap_array_static_proto_recorded(latch_was);
+        assert!(
+            lane(out, 4, 9.0),
+            "an existing own element still bypasses inherited descriptors"
+        );
     }
 }
 

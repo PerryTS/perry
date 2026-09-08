@@ -207,8 +207,23 @@ pub struct AsyncResourceHandle {
     event_emitter: i64,
 }
 
+/// Is `handle` a live `AsyncResource` backing? One relaxed load answers "no"
+/// while none was ever created; only then the registry lock. The generic
+/// property-read ladder asks this BEFORE decoding or copying the key, so an
+/// ordinary receiver — the overwhelming case — pays neither.
+#[inline]
 pub(crate) fn is_async_resource_handle(handle: i64) -> bool {
-    handle != 0 && ASYNC_RESOURCE_HANDLES.lock().unwrap().contains(&handle)
+    ASYNC_RESOURCE_HANDLE_COUNT.load(Ordering::Relaxed) != 0
+        && handle != 0
+        && ASYNC_RESOURCE_HANDLES.lock().unwrap().contains(&handle)
+}
+
+/// Diagnostic-only exact membership check for the old raw-box hook handle.
+#[inline]
+pub(crate) fn is_async_hook_handle(handle: i64) -> bool {
+    ASYNC_HOOK_HANDLE_COUNT.load(Ordering::Relaxed) != 0
+        && handle != 0
+        && ASYNC_HOOK_HANDLES.lock().unwrap().contains(&handle)
 }
 
 /// Resolve either a native `AsyncResource` handle or the ordinary object used
@@ -553,6 +568,11 @@ pub extern "C" fn js_async_hooks_create_hook(options: f64) -> i64 {
     let handle = Box::into_raw(Box::new(AsyncHookHandle { index })) as i64;
     ASYNC_HOOK_HANDLES.lock().unwrap().insert(handle);
     ASYNC_HOOK_HANDLE_COUNT.fetch_add(1, Ordering::Relaxed);
+    if crate::hot_diag::receiver_repr_on() {
+        crate::hot_diag::receiver_repr_note_constructed(
+            crate::hot_diag::ReceiverReprFamily::AsyncHook,
+        );
+    }
     handle
 }
 
@@ -1227,6 +1247,11 @@ fn new_async_resource_with_public_value(
     })) as i64;
     ASYNC_RESOURCE_HANDLES.lock().unwrap().insert(handle);
     ASYNC_RESOURCE_HANDLE_COUNT.fetch_add(1, Ordering::Relaxed);
+    if crate::hot_diag::receiver_repr_on() {
+        crate::hot_diag::receiver_repr_note_constructed(
+            crate::hot_diag::ReceiverReprFamily::AsyncResource,
+        );
+    }
     let resource_value = public_resource.unwrap_or_else(|| crate::value::js_nanbox_pointer(handle));
     let ids = init_resource_with_trigger(&type_name, resource_value, true, trigger_async_id);
     unsafe { (*(handle as *mut AsyncResourceHandle)).ids = ids };
@@ -1371,9 +1396,7 @@ fn async_resource_bind_method_value(handle: i64) -> f64 {
 }
 
 pub fn try_async_resource_property_dispatch(handle: i64, property: &str) -> Option<f64> {
-    if ASYNC_RESOURCE_HANDLE_COUNT.load(Ordering::Relaxed) == 0
-        || !ASYNC_RESOURCE_HANDLES.lock().unwrap().contains(&handle)
-    {
+    if !is_async_resource_handle(handle) {
         return None;
     }
     // User-defined own properties shadow AsyncResource.prototype just as they

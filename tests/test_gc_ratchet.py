@@ -237,6 +237,118 @@ def _hard(failures):
     return [failure for failure in failures if not failure.startswith("NOTE")]
 
 
+class CurrentCounterDeterminismTests(unittest.TestCase):
+    def test_measure_keeps_disagreement_and_runs_the_remaining_probes(self):
+        stderr = (
+            "#gcmetric heap_used_bytes=1000000\n"
+            "#gcmetric heap_total_bytes=20971520\n"
+            "#gcmetric rss_bytes=30000000\n"
+        )
+
+        def run(copied_bytes=1500000):
+            return {
+                "returncode": 0, "stdout": "ok\n", "wall_ms": 200,
+                "peak_rss_bytes": 31000000,
+                "stderr": stderr + "[gc-copy-minor] ran copied_objects=20000 "
+                f"copied_bytes={copied_bytes} promoted_objects=4000 "
+                "promoted_bytes=500000 freed_bytes=100000000\n[gc-step]\n",
+            }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            probes_dir = Path(tmp)
+            for name in ("01_probe", "02_other"):
+                (probes_dir / f"{name}.ts").write_text("// stub\n", encoding="utf-8")
+            with mock.patch(
+                "benchmarks.gc_ratchet.gc_ratchet.compile_probe", return_value=Path("stub")
+            ), mock.patch(
+                "benchmarks.gc_ratchet.gc_ratchet.run_once",
+                side_effect=[run()] * 4 + [run(1500002)] + [run()] * 5,
+            ) as runner:
+                result = measure(
+                    perry=Path("stub"), probes_dir=probes_dir, repeats=3, node=None, warmup=0
+                )
+        self.assertEqual(runner.call_count, 10)
+        self.assertEqual(set(result["probes"]), {"01_probe", "02_other"})
+        metric = result["probes"]["01_probe"]["metrics"]["copied_bytes"]
+        self.assertEqual(metric["samples"], [1500000, 1500002])
+        self.assertEqual(metric["spread"], 2)
+
+    def test_every_gated_counter_rejects_disagreement_inside_its_band(self):
+        for profile in PROFILES:
+            for metric in GC_METRICS:
+                with self.subTest(profile=profile, metric=metric):
+                    current = _measurement(_pair())
+                    value = BASE_VALUES[metric]
+                    dist = distribution([value - 1, value + 1])
+                    # A stale cached spread must not hide the disagreeing samples.
+                    dist["spread"] = 0
+                    current["probes"]["01_probe"]["metrics"][metric] = dist
+                    rows, failures = evaluate(_baseline(_pair()), current, profile=profile)
+                    self.assertTrue(any(
+                        metric in failure and "not deterministic" in failure
+                        for failure in _hard(failures)
+                    ))
+                    self.assertEqual(len(rows), 2 * len(ALL_METRICS))
+                    row = next(r for r in rows if r.probe == "01_probe" and r.metric == metric)
+                    self.assertEqual(row.status, "UNFIT (traced samples disagree)")
+
+    def test_only_the_documented_cells_may_vary(self):
+        payload = _with_override(metric="copied_bytes")
+        payload["probe_overrides"]["01_probe"]["freed_bytes"] = _override_entry()
+        baseline = _baseline(_pair(), payload)
+        current = _measurement(_pair())
+        for metric in ("copied_bytes", "freed_bytes"):
+            value = BASE_VALUES[metric]
+            current["probes"]["01_probe"]["metrics"][metric] = distribution([value, value + 1])
+        for profile in PROFILES:
+            rows, failures = evaluate(baseline, current, profile=profile)
+            self.assertEqual(_hard(failures), [])
+            excluded = [r for r in rows if not r.gating and r.probe == "01_probe"]
+            self.assertTrue({"copied_bytes", "freed_bytes"} <= {r.metric for r in excluded})
+        for probe, metric in (("01_probe", "copied_objects"), ("02_other", "copied_bytes")):
+            with self.subTest(probe=probe, metric=metric):
+                perturbed = copy.deepcopy(current)
+                value = BASE_VALUES[metric]
+                perturbed["probes"][probe]["metrics"][metric] = distribution([value, value + 1])
+                _, failures = evaluate(baseline, perturbed, profile="shared_ci")
+                self.assertTrue(any(
+                    probe in failure and metric in failure and "not deterministic" in failure
+                    for failure in _hard(failures)
+                ))
+
+    def test_array_growth_exclusions_match_the_recorded_samples(self):
+        receipt = json.loads((REPO_ROOT / "benchmarks/gc_ratchet/evidence/9790-array-growth-pacing.json").read_text(encoding="utf-8"))
+        entries = _shipped_tolerances()["probe_overrides"]["07_array_grow_evacuate"]
+        self.assertEqual(set(entries), {"copied_bytes", "freed_bytes"})
+        for metric, entry in entries.items():
+            values = [sample[metric] for sample in receipt["samples"]]
+            self.assertEqual(entry["evidence"]["observed_runs"], len(values))
+            self.assertEqual(entry["evidence"]["observed_spread"], max(values) - min(values))
+
+
+class DistributionRoundTripTests(unittest.TestCase):
+    def test_summaries_survive_json_round_trip(self):
+        # Timings arrive at higher precision than the six decimals we persist.
+        # Validation must derive exactly the summary written by measurement.
+        samples = [
+            [27.105318423, 27.418923761, 28.075891629],
+            [0.0000004, 0.0000014, 0.0000024],
+            [1.0000001, 1.0000008],
+            [100, 200, 300],
+        ]
+        for values in samples:
+            with self.subTest(values=values), tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / "measurement.json"
+                path.write_text(json.dumps(distribution(values)), encoding="utf-8")
+                stored = json.loads(path.read_text(encoding="utf-8"))
+                self.assertEqual(stored, distribution(stored["samples"]))
+
+    def test_non_finite_samples_are_still_rejected(self):
+        for value in (float("nan"), float("inf"), -float("inf")):
+            with self.subTest(value=value), self.assertRaises(RatchetError):
+                distribution([1, value, 3])
+
+
 class ParsingTests(unittest.TestCase):
     def test_measurement_refuses_a_host_without_wait4_before_launching(self):
         with mock.patch.object(os, "wait4", None, create=True):
@@ -573,11 +685,9 @@ class ArtifactValidationTests(unittest.TestCase):
         so pin the permission as a test rather than a comment.
         """
         artifact = json.loads(DEFAULT_ARTIFACT.read_text(encoding="utf-8"))
-        self.assertNotIn(
-            "accepted_deterministic_deltas",
-            artifact,
-            "the pinned baseline is a full re-pin; update this test if that changes",
-        )
+        # Exercise the full-pin contract independently of whether today's
+        # checked-in artifact is full or selective (#9829).
+        artifact.pop("accepted_deterministic_deltas", None)
         validate_artifact(artifact)
 
     def test_a_receipt_on_the_pin_must_name_real_cells_and_real_causes(self):
@@ -739,6 +849,48 @@ class ProbeOverrideTests(unittest.TestCase):
     is obvious — an exclusion is a hole in a gate — so most of these tests are
     about the ways an exclusion is refused.
     """
+
+    def test_large_eden_capacity_exclusion_has_live_same_binary_evidence(self):
+        evidence_path = REPO_ROOT / "benchmarks/gc_ratchet/evidence/9829-recovery.json"
+        evidence = json.loads(evidence_path.read_text(encoding="utf-8"))["capacity_variance"]
+        runs = evidence["runs"]
+        self.assertGreaterEqual(len(runs), MIN_EXCLUSION_RUNS)
+        self.assertRegex(evidence["binary_sha256"], r"^[0-9a-f]{64}$")
+        self.assertGreater(len({run["heap_total_bytes"] for run in runs}), 1)
+        for metric in ("heap_used_bytes",) + GC_METRICS:
+            self.assertEqual(len({run[metric] for run in runs}), 1, metric)
+        self.assertGreater(runs[0]["minor_cycles"], 0)
+        self.assertGreater(runs[0]["copied_objects"], 0)
+        override = _shipped_tolerances()["probe_overrides"]["13_large_eden_survivors"]
+        self.assertEqual(set(override), {"heap_total_bytes"})
+        capacity = [run["heap_total_bytes"] for run in runs]
+        self.assertEqual(override["heap_total_bytes"]["evidence"]["observed_runs"], len(runs))
+        self.assertEqual(
+            override["heap_total_bytes"]["evidence"]["observed_spread"],
+            max(capacity) - min(capacity),
+        )
+
+    def test_large_eden_capacity_exclusion_preserves_live_byte_and_gc_gates(self):
+        baseline = json.loads(DEFAULT_ARTIFACT.read_text(encoding="utf-8"))
+        current = _measurement(copy.deepcopy(baseline["probes"]))
+        probe = "13_large_eden_survivors"
+        value = current["probes"][probe]["metrics"]["heap_total_bytes"]["median"]
+        current["probes"][probe]["metrics"]["heap_total_bytes"] = distribution([value * 2] * 7)
+        rows, failures = evaluate(baseline, current, profile="shared_ci")
+        self.assertEqual(_hard(failures), [])
+        capacity = next(r for r in rows if r.probe == probe and r.metric == "heap_total_bytes")
+        self.assertEqual(capacity.status, "drift (informational)")
+        for metric in ("heap_used_bytes", "copied_objects"):
+            with self.subTest(metric=metric):
+                changed = copy.deepcopy(current)
+                value = changed["probes"][probe]["metrics"][metric]["median"]
+                changed["probes"][probe]["metrics"][metric] = distribution([value + 1000000] * 7)
+                rows, failures = evaluate(baseline, changed, profile="shared_ci")
+                self.assertTrue(_hard(failures))
+                self.assertTrue(any(
+                    r.probe == probe and r.metric == metric and r.status == "REGRESSION"
+                    for r in rows
+                ))
 
     def test_an_overridden_cell_cannot_fail_the_job(self):
         baseline = _baseline(_pair(), _with_override())

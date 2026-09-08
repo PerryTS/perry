@@ -148,6 +148,7 @@ pub(crate) use console::{
 pub(crate) use console::{test_console_instance_count, test_seed_console_instance};
 
 pub use fn_metadata::{
+    bundle_function_name_registry_entries, bundle_function_name_registry_len,
     function_is_non_strict_ordinary_for_ptr, function_name_for_ptr, function_name_registry_entries,
     function_name_registry_len, function_source_for_func_ptr, function_source_for_ptr,
     js_register_function_name, js_register_function_name_static, js_register_function_source,
@@ -163,10 +164,11 @@ pub use formatting::{
 
 pub(crate) use formatting::{
     boxed_primitive_json_value, boxed_primitive_payload, boxed_primitive_to_string_tag,
-    format_finite_number_js, format_jsvalue, int32_or_class_repr, is_array_hole, is_negative_zero,
-    jsvalue_string_content, prune_dead_boxed_primitive_payload_owners, InspectCompactGuard,
-    InspectCustomInspectGuard, InspectDepthLimitGuard, InspectGettersGuard, InspectShowHiddenGuard,
-    InspectSortedGuard, INT_EXACT_FASTPATH_LIMIT,
+    boxed_string_wrapper_utf16_len, format_finite_number_js, format_jsvalue, int32_or_class_repr,
+    is_array_hole, is_negative_zero, jsvalue_string_content,
+    prune_dead_boxed_primitive_payload_owners, InspectCompactGuard, InspectCustomInspectGuard,
+    InspectDepthLimitGuard, InspectGettersGuard, InspectShowHiddenGuard, InspectSortedGuard,
+    INT_EXACT_FASTPATH_LIMIT,
 };
 #[cfg(test)]
 pub(crate) use formatting::{

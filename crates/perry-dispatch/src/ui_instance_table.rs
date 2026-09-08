@@ -16,6 +16,12 @@ pub const PERRY_UI_INSTANCE_TABLE: &[MethodRow] = &[
         args: &[],
         ret: ReturnKind::Void,
     },
+    MethodRow {
+        method: "setPadding",
+        runtime: "perry_ui_widget_set_edge_insets",
+        args: &[ArgKind::F64, ArgKind::F64, ArgKind::F64, ArgKind::F64],
+        ret: ReturnKind::Void,
+    },
     // ---- Window instance methods ----
     MethodRow {
         method: "show",

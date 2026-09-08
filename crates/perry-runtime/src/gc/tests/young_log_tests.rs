@@ -1,0 +1,977 @@
+//! #9754 — the side-table young-entry logs (`gc/young_log.rs`).
+//!
+//! Each table gets the same three-part proof:
+//!
+//! * a YOUNG entry reachable only through the table is moved by a copying
+//!   minor and the entry re-keyed — through the minor-scoped walk, which the
+//!   recorded walk row proves was PARTIAL (visited only the logged keys);
+//! * an OLD entry is not visited at all — the row proves the skip fired
+//!   (`visited == 0` while the table is non-empty), which is rule 3 of the
+//!   design note: a latch that never skips looks landed while doing nothing;
+//! * a DEAD young owner is pruned by the young-only prune.
+//!
+//! Sabotage contract (rule 2): delete any one `note` call in the tables'
+//! writers and the matching "moves" test here goes red — under
+//! `debug_assertions` on the log-completeness assertion the walk runs first,
+//! and in release on the stale address the un-visited entry keeps.
+
+use super::super::*;
+use super::support::*;
+
+fn young_closure() -> usize {
+    let ptr = crate::arena::arena_alloc_gc(
+        std::mem::size_of::<crate::closure::ClosureHeader>(),
+        std::mem::align_of::<crate::closure::ClosureHeader>(),
+        GC_TYPE_CLOSURE,
+    );
+    unsafe { init_test_closure(ptr) };
+    ptr as usize
+}
+
+fn old_closure() -> usize {
+    let ptr = crate::arena::arena_alloc_gc_old(
+        std::mem::size_of::<crate::closure::ClosureHeader>(),
+        std::mem::align_of::<crate::closure::ClosureHeader>(),
+        GC_TYPE_CLOSURE,
+    );
+    unsafe { init_test_closure(ptr) };
+    ptr as usize
+}
+
+fn old_leaf() -> usize {
+    crate::arena::arena_alloc_gc_old(32, 8, GC_TYPE_STRING) as usize
+}
+
+unsafe fn young_keys_array() -> *mut crate::array::ArrayHeader {
+    let arr = crate::arena::arena_alloc_gc(
+        std::mem::size_of::<crate::array::ArrayHeader>(),
+        std::mem::align_of::<crate::array::ArrayHeader>(),
+        GC_TYPE_ARRAY,
+    ) as *mut crate::array::ArrayHeader;
+    (*arr).length = 0;
+    (*arr).capacity = 0;
+    arr
+}
+
+fn walk(table: &'static str) -> young_log::YoungLogWalk {
+    young_log::last_walk(table).unwrap_or_else(|| panic!("no walk recorded for {table}"))
+}
+
+/// For a table that is deliberately NOT young-logged: no walk row at all.
+fn walk_opt(table: &'static str) -> Option<young_log::YoungLogWalk> {
+    young_log::last_walk(table)
+}
+
+// ---------------------------------------------------------------- closures
+
+#[test]
+fn young_closure_prop_value_is_moved_through_the_log() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    gc_register_mutable_root_scanner(crate::closure::scan_closure_dynamic_props_roots_mut);
+
+    let owner = young_closure();
+    js_shadow_slot_set(0, ptr_bits(owner));
+    // The value is reachable ONLY through the side table.
+    let value = young_leaf();
+    crate::closure::closure_set_dynamic_prop(owner, "memo", f64::from_bits(string_bits(value)));
+
+    let _ = gc_collect_minor();
+
+    let owner_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+    assert_ne!(
+        owner_after, owner,
+        "the rooted owner must have been evacuated"
+    );
+    let bits = crate::closure::closure_get_own_dynamic_prop(owner_after, "memo")
+        .expect("entry must follow its owner to the new address")
+        .to_bits();
+    let value_after = (bits & POINTER_MASK) as usize;
+    assert_eq!(bits & TAG_MASK, STRING_TAG);
+    assert_ne!(
+        value_after, value,
+        "the value must have been evacuated, not left in from-space"
+    );
+    assert!(crate::arena::pointer_in_nursery(value_after));
+    assert!(
+        crate::closure::closure_get_own_dynamic_prop(owner, "memo").is_none(),
+        "the stale owner key must be gone"
+    );
+    let row = walk("closure.dynamic_props");
+    assert!(
+        row.partial,
+        "a copying minor must take the young-scoped walk"
+    );
+    assert!(
+        row.visited >= 1,
+        "the logged owner must have been visited: {row:?}"
+    );
+    assert!(
+        row.kept >= 1,
+        "a survivor still young must stay logged: {row:?}"
+    );
+}
+
+#[test]
+fn young_value_under_an_old_closure_owner_is_logged_by_the_value() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    gc_register_mutable_root_scanner(crate::closure::scan_closure_dynamic_props_roots_mut);
+
+    let owner = old_closure();
+    let value = young_leaf();
+    crate::closure::closure_set_dynamic_prop(owner, "memo", f64::from_bits(string_bits(value)));
+    let proto = young_leaf();
+    crate::closure::closure_set_static_prototype(owner, string_bits(proto));
+
+    let _ = gc_collect_minor();
+
+    let bits = crate::closure::closure_get_own_dynamic_prop(owner, "memo")
+        .expect("old owner keeps its entry")
+        .to_bits();
+    let value_after = (bits & POINTER_MASK) as usize;
+    assert_ne!(value_after, value);
+    assert!(crate::arena::pointer_in_nursery(value_after));
+    let proto_after = (crate::closure::closure_static_prototype(owner).expect("prototype kept")
+        & POINTER_MASK) as usize;
+    assert_ne!(proto_after, proto);
+    assert!(crate::arena::pointer_in_nursery(proto_after));
+    assert!(walk("closure.dynamic_props").partial);
+}
+
+#[test]
+fn old_closure_entries_are_skipped_by_a_minor() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    gc_register_mutable_root_scanner(crate::closure::scan_closure_dynamic_props_roots_mut);
+
+    let owner = old_closure();
+    crate::closure::closure_set_dynamic_prop(owner, "count", 42.0);
+    crate::closure::closure_mark_key_deleted(owner, "name");
+
+    let _ = gc_collect_minor();
+
+    assert_eq!(
+        crate::closure::closure_get_own_dynamic_prop(owner, "count"),
+        Some(42.0)
+    );
+    assert!(crate::closure::closure_is_key_deleted(owner, "name"));
+    let row = walk("closure.dynamic_props");
+    assert!(row.partial);
+    assert!(row.table_len >= 2, "{row:?}");
+    assert_eq!(
+        row.visited, 0,
+        "an old owner with no heap values must not be visited by a minor: {row:?}"
+    );
+}
+
+#[test]
+fn dead_young_closure_owner_is_pruned_by_the_young_prune() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    gc_register_mutable_root_scanner(crate::closure::scan_closure_dynamic_props_roots_mut);
+    // One rooted young object so the minor has real work; the owner is not it.
+    js_shadow_slot_set(0, string_bits(young_leaf()));
+
+    let dead = young_closure();
+    crate::closure::closure_set_dynamic_prop(dead, "memo", 42.0);
+    crate::closure::closure_set_static_prototype(dead, crate::value::TAG_NULL);
+    assert!(crate::closure::closure_get_own_dynamic_prop(dead, "memo").is_some());
+
+    let _ = gc_collect_minor();
+
+    assert!(
+        crate::closure::closure_get_own_dynamic_prop(dead, "memo").is_none(),
+        "the dead young owner's CLOSURE_PROPS entry must be pruned from the log"
+    );
+    assert!(crate::closure::closure_static_prototype(dead).is_none());
+}
+
+// -------------------------------------------------------------- descriptors
+
+#[test]
+fn young_accessor_getter_is_moved_through_the_log() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    gc_register_mutable_root_scanner(crate::object::descriptor_state::scan_descriptor_roots_mut);
+
+    let (owner, _) = unsafe { alloc_nursery_test_object(0) };
+    let owner = owner as usize;
+    js_shadow_slot_set(0, ptr_bits(owner));
+    // The getter closure is reachable ONLY through the accessor table.
+    let getter = young_closure();
+    crate::object::set_accessor_descriptor(
+        owner,
+        "g".to_string(),
+        crate::object::AccessorDescriptor {
+            get: ptr_bits(getter),
+            set: 0,
+        },
+    );
+
+    let _ = gc_collect_minor();
+
+    let owner_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+    assert_ne!(owner_after, owner);
+    let acc = crate::object::get_accessor_descriptor(owner_after, "g")
+        .expect("accessor must follow its owner to the new address");
+    let getter_after = (acc.get & POINTER_MASK) as usize;
+    assert_ne!(getter_after, getter, "the getter must have been evacuated");
+    assert!(crate::arena::pointer_in_nursery(getter_after));
+    assert!(crate::object::get_accessor_descriptor(owner, "g").is_none());
+    let row = walk("object.descriptors");
+    assert!(row.partial);
+    assert!(row.visited >= 1, "{row:?}");
+}
+
+#[test]
+fn old_descriptor_owners_are_skipped_by_a_minor() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    gc_register_mutable_root_scanner(crate::object::descriptor_state::scan_descriptor_roots_mut);
+
+    // The descriptor tables are agent state that outlives every test on this
+    // thread, and the FIRST descriptor install on a thread bootstraps the
+    // lazy `globalThis` realm (#7975), which installs ~1.8k builtin
+    // descriptors on young objects. Warm that up, take a minor, then measure
+    // the delta: the old entry must add index rows but no visit.
+    let (warm, _) = unsafe { alloc_old_test_object(0) };
+    crate::object::set_property_attrs(
+        warm as usize,
+        "warm".to_string(),
+        crate::object::PropertyAttrs::new(false, true, true),
+    );
+    let _ = gc_collect_minor();
+    let before = walk("object.descriptors");
+
+    let (owner, _) = unsafe { alloc_old_test_object(0) };
+    let owner = owner as usize;
+    let getter = old_closure();
+    crate::object::set_accessor_descriptor(
+        owner,
+        "g".to_string(),
+        crate::object::AccessorDescriptor {
+            get: ptr_bits(getter),
+            set: 0,
+        },
+    );
+    crate::object::set_property_attrs(
+        owner,
+        "p".to_string(),
+        crate::object::PropertyAttrs::new(false, true, true),
+    );
+
+    let _ = gc_collect_minor();
+
+    assert_eq!(
+        crate::object::get_accessor_descriptor(owner, "g").map(|acc| acc.get),
+        Some(ptr_bits(getter))
+    );
+    let row = walk("object.descriptors");
+    assert!(row.partial);
+    // The first minor's prune can drop dead realm owners between the two
+    // walks, so the exact count is `kept` minus whatever died; the new old
+    // entry can only NOT add to it.
+    assert!(
+        row.visited <= before.kept,
+        "old owner, old getter: the new entry must not add a visit: {before:?} -> {row:?}"
+    );
+    assert!(
+        row.visited < row.table_len,
+        "the walk must stay partial: {row:?}"
+    );
+}
+
+#[test]
+fn dead_young_descriptor_owner_is_pruned_by_the_young_prune() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    gc_register_mutable_root_scanner(crate::object::descriptor_state::scan_descriptor_roots_mut);
+    js_shadow_slot_set(0, string_bits(young_leaf()));
+
+    let (dead, _) = unsafe { alloc_nursery_test_object(0) };
+    let dead = dead as usize;
+    crate::object::set_property_attrs(
+        dead,
+        "p".to_string(),
+        crate::object::PropertyAttrs::new(false, true, true),
+    );
+    assert!(crate::object::get_property_attrs(dead, "p").is_some());
+
+    let _ = gc_collect_minor();
+
+    assert!(
+        crate::object::get_property_attrs(dead, "p").is_none(),
+        "the dead young owner's descriptor must be pruned from the log"
+    );
+}
+
+// ------------------------------------------------------------------- shapes
+
+#[test]
+fn young_keys_array_family_is_rekeyed_through_the_log() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
+
+    let keys = unsafe { young_keys_array() };
+    js_shadow_slot_set(0, ptr_bits(keys as usize));
+    let id = crate::object::shapes::shape_descriptor_ensure(keys, 0, 0).expect("shape id");
+    assert_eq!(
+        crate::object::shapes::shape_descriptor_by_id(id).map(|d| d.keys),
+        Some(keys as u64)
+    );
+
+    let _ = gc_collect_minor();
+
+    let keys_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+    assert_ne!(
+        keys_after, keys as usize,
+        "the rooted keys array must have moved"
+    );
+    assert_eq!(
+        crate::object::shapes::shape_descriptor_by_id(id).map(|d| d.keys),
+        Some(keys_after as u64),
+        "the family's descriptor must be re-keyed to the evacuated keys array"
+    );
+    let row = walk("shapes.families+indices");
+    assert!(row.partial);
+    assert!(row.visited >= 1, "{row:?}");
+}
+
+#[test]
+fn old_shape_families_are_skipped_by_a_minor() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
+
+    let keys = crate::arena::arena_alloc_gc_old(
+        std::mem::size_of::<crate::array::ArrayHeader>(),
+        std::mem::align_of::<crate::array::ArrayHeader>(),
+        GC_TYPE_ARRAY,
+    ) as *mut crate::array::ArrayHeader;
+    unsafe {
+        (*keys).length = 0;
+        (*keys).capacity = 0;
+    }
+    let id = crate::object::shapes::shape_descriptor_ensure(keys, 0, 0).expect("shape id");
+
+    let _ = gc_collect_minor();
+
+    assert_eq!(
+        crate::object::shapes::shape_descriptor_by_id(id).map(|d| d.keys),
+        Some(keys as u64)
+    );
+    let row = walk("shapes.families+indices");
+    assert!(row.partial);
+    assert!(row.table_len >= 1, "{row:?}");
+    assert_eq!(
+        row.visited, 0,
+        "an old keys array's family must not be visited: {row:?}"
+    );
+}
+
+// ------------------------------------------------------------------- caches
+
+#[test]
+fn young_transition_cache_target_is_rewritten_through_the_log() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    gc_register_mutable_root_scanner(crate::object::scan_transition_cache_roots_mut);
+
+    let keys = unsafe { young_keys_array() } as usize;
+    js_shadow_slot_set(0, ptr_bits(keys));
+    // A predecessor that resolves, or the copied-minor prune retires the entry
+    // (`shape_descriptor_by_id(0)` is `None`) before the assertion reads it.
+    let prev =
+        crate::object::shapes::shape_descriptor_ensure(std::ptr::null(), 0, 1).expect("shape id");
+    crate::object::test_seed_transition_cache_root_for_shape(prev, keys);
+
+    let _ = gc_collect_minor();
+
+    let keys_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+    assert_ne!(keys_after, keys);
+    assert_eq!(
+        crate::object::test_transition_cache_root(),
+        keys_after,
+        "the cached target must be rewritten to the evacuated keys array"
+    );
+    let row = walk("object.transition_cache");
+    assert!(row.partial);
+    assert!(row.visited >= 1, "{row:?}");
+    assert!(
+        row.visited < row.table_len,
+        "a 16k-slot table must not be walked whole: {row:?}"
+    );
+}
+
+/// The PRODUCTION transition-cache writer arms on EITHER address, and the
+/// second clause — a young interned KEY under an old target — was covered by
+/// no test: all three `#[cfg(test)]` seeds either ignored the key or
+/// classified it unconditionally, so `transition_cache_insert`'s own
+/// `(len_marker == 0 && addr_is_minor_relevant(kid))` arm could be deleted
+/// while the suite stayed green. This drives the real writer.
+#[test]
+fn young_transition_key_under_an_old_target_arms_the_log_through_the_writer() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    gc_register_mutable_root_scanner(crate::object::scan_transition_cache_roots_mut);
+    crate::object::test_clear_transition_cache_root();
+
+    // Target OLD: the first clause of the predicate is false for it.
+    let old_target = unsafe {
+        let arr = crate::arena::arena_alloc_gc_old(
+            std::mem::size_of::<crate::array::ArrayHeader>(),
+            std::mem::align_of::<crate::array::ArrayHeader>(),
+            GC_TYPE_ARRAY,
+        ) as *mut crate::array::ArrayHeader;
+        (*arr).length = 0;
+        (*arr).capacity = 0;
+        arr as usize
+    };
+    assert!(!crate::arena::pointer_in_nursery(old_target));
+
+    // Key YOUNG, and long enough that `transition_key_id` keeps it a POINTER
+    // (`len_marker == 0`) rather than packing it as a length.
+    let key = crate::string::js_string_from_bytes(b"young-transition-key".as_ptr(), 20);
+    assert!(crate::arena::pointer_in_nursery(key as usize));
+
+    let before = young_log::last_walk("object.transition_cache");
+    crate::object::test_transition_cache_insert(0, key, old_target, 0, 0);
+
+    // The log must now name the slot the writer published into. Reading it
+    // through a minor is the same observation the scanner makes.
+    let _ = gc_collect_minor();
+    let row = walk("object.transition_cache");
+    assert!(row.partial, "{row:?}");
+    assert!(
+        row.visited >= 1,
+        "the young KEY must have armed the log: {row:?} (before: {before:?})"
+    );
+}
+
+/// The shape cache is deliberately NOT young-logged (see
+/// `scan_shape_cache_roots_mut`): its keys arrays are longlived, so a log
+/// there names every entry forever and skips nothing. This pins the walk that
+/// replaced it — a young entry reachable only through the cache still moves
+/// and is re-keyed in both the inline slot and the overflow map.
+#[test]
+fn shape_cache_entry_is_moved_by_the_plain_walk() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    gc_register_mutable_root_scanner(crate::object::scan_shape_cache_roots_mut);
+
+    // Reachable ONLY through the cache (which roots it), seeded through the
+    // PRODUCTION writer (`shape_cache_insert`), not a test seam.
+    let keys = unsafe { young_keys_array() };
+    let shape_id = 0x9754_0001;
+    crate::object::test_shape_cache_insert(shape_id, keys);
+
+    let _ = gc_collect_minor();
+
+    let (inline, overflow) = crate::object::test_shape_cache_root(shape_id);
+    assert_ne!(
+        overflow, keys as usize,
+        "the overflow entry must have been evacuated"
+    );
+    assert!(crate::arena::pointer_in_nursery(overflow));
+    assert_eq!(
+        inline, overflow,
+        "inline and overflow must agree on the new address"
+    );
+    assert!(
+        walk_opt("object.shape_cache").is_none(),
+        "the shape cache must not report a young-log walk: #9755's log for it \
+         skipped 0 % and cost 35 % more than this walk, and was removed"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// `shapes.indices` arming (#9756 restructures this table; nothing exercised
+// its four arm sites, so a missed `note` there was a collected live object
+// that this suite would not have caught).
+// ---------------------------------------------------------------------------
+
+/// Keys count above `KEYS_INDEX_THRESHOLD` (32), so the index is built at all.
+const INDEXED_KEYS: u32 = 40;
+
+/// A YOUNG keys array of `INDEXED_KEYS` young string keys, in the dense
+/// NaN-boxed layout `keys_array_dense_slots` reads.
+unsafe fn young_indexed_keys_array() -> (*mut crate::array::ArrayHeader, Vec<Vec<u8>>) {
+    let arr = crate::array::js_array_alloc_with_length(INDEXED_KEYS);
+    let slots = (arr as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *mut f64;
+    let mut names = Vec::new();
+    for i in 0..INDEXED_KEYS {
+        let name = format!("young_key_{i:04}");
+        let s = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        *slots.add(i as usize) = f64::from_bits(string_bits(s as usize));
+        names.push(name.into_bytes());
+    }
+    (*arr).length = INDEXED_KEYS;
+    (arr, names)
+}
+
+unsafe fn build_index_for(keys: *mut crate::array::ArrayHeader, names: &[Vec<u8>]) {
+    // `build = true` is the arm site: it inserts the `indices` entry.
+    crate::object::shapes::test_build_slot_index(keys, &names[0], INDEXED_KEYS);
+}
+
+/// S17 — `shape_slot_lookup_verdict`'s build arm publishes an `indices` entry
+/// keyed by a YOUNG keys address.
+#[test]
+fn building_a_slot_index_on_a_young_keys_array_arms_the_log() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
+    crate::object::shapes::test_clear_shape_table();
+
+    let (keys, names) = unsafe { young_indexed_keys_array() };
+    js_shadow_slot_set(0, ptr_bits(keys as usize));
+    assert!(crate::arena::pointer_in_nursery(keys as usize));
+    unsafe { build_index_for(keys, &names) };
+    assert!(crate::object::shapes::test_shape_index_len(keys as usize) > 0);
+
+    // Rule 2 re-derives the relevant set from `indices` during the walk and
+    // panics if the log does not name this address.
+    let _ = gc_collect_minor();
+
+    let moved = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+    assert_ne!(
+        moved, keys as usize,
+        "the keys array must have been evacuated"
+    );
+    assert!(
+        crate::object::shapes::test_shape_index_len(moved) > 0,
+        "the index must follow the keys array to its new address"
+    );
+}
+
+/// S18 — `shape_keys_grown` re-keys the index onto the grown array's address.
+#[test]
+fn growing_an_indexed_keys_array_arms_the_log_for_the_new_address() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
+    crate::object::shapes::test_clear_shape_table();
+
+    let (old_keys, names) = unsafe { young_indexed_keys_array() };
+    unsafe { build_index_for(old_keys, &names) };
+    let (new_keys, _) = unsafe { young_indexed_keys_array() };
+    js_shadow_slot_set(0, ptr_bits(new_keys as usize));
+
+    crate::object::shapes::shape_keys_grown(old_keys as usize, new_keys);
+    assert!(crate::object::shapes::test_shape_index_len(new_keys as usize) > 0);
+
+    let _ = gc_collect_minor();
+    let moved = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+    assert_ne!(moved, new_keys as usize);
+    assert!(crate::object::shapes::test_shape_index_len(moved) > 0);
+}
+
+/// S19 — `shape_index_migrate_after_delete` moves a complete index onto the
+/// compacted array's address.
+#[test]
+fn migrating_an_index_after_a_delete_arms_the_log_for_the_new_address() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
+    crate::object::shapes::test_clear_shape_table();
+
+    let (old_keys, names) = unsafe { young_indexed_keys_array() };
+    unsafe { build_index_for(old_keys, &names) };
+    let (new_keys, _) = unsafe { young_indexed_keys_array() };
+    js_shadow_slot_set(0, ptr_bits(new_keys as usize));
+
+    let migrated = crate::object::shapes::test_shape_index_migrate_after_delete(
+        old_keys as usize,
+        new_keys as usize,
+        /* removed_slot = */ 0,
+        INDEXED_KEYS,
+        /* old_keys_shared = */ false,
+    );
+    assert!(migrated, "a complete index must migrate");
+
+    let _ = gc_collect_minor();
+    let moved = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+    assert_ne!(moved, new_keys as usize);
+    assert!(crate::object::shapes::test_shape_index_len(moved) > 0);
+}
+
+/// S16 — `family_push_front`, the external-id install path, publishes a family
+/// under a YOUNG keys address.
+#[test]
+fn installing_an_external_shape_id_arms_the_family_log() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
+    crate::object::shapes::test_clear_shape_table();
+
+    let keys = unsafe { young_keys_array() };
+    js_shadow_slot_set(0, ptr_bits(keys as usize));
+    let id = crate::object::shapes::test_unused_external_shape_id();
+    assert!(
+        crate::object::shapes::test_install_external_shape_id(id, keys, 0, 0),
+        "the external id must install"
+    );
+
+    let _ = gc_collect_minor();
+    let moved = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+    assert_ne!(moved, keys as usize);
+    assert!(
+        !crate::object::shapes::test_shape_ids_for_keys(moved).is_empty(),
+        "the family must have followed the keys array"
+    );
+}
+
+// ------------------------------------------------------ fixed-cost scanners
+
+/// N old shape families plus k young ones must price exactly k entries in the
+/// minor-scoped scanner. Sabotage: make `note_young_keys` a no-op; the
+/// re-derivation fails before this count can be observed.
+#[test]
+fn shape_table_minor_walk_visits_exactly_k_young_entries() {
+    const N: usize = 96;
+    const K: usize = 3;
+    let _guard = CopyingNurseryTestGuard::new(K as u32);
+    gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
+    crate::object::shapes::test_clear_shape_table();
+
+    for _ in 0..N {
+        let keys = crate::arena::arena_alloc_gc_old(
+            std::mem::size_of::<crate::array::ArrayHeader>(),
+            std::mem::align_of::<crate::array::ArrayHeader>(),
+            GC_TYPE_ARRAY,
+        ) as *mut crate::array::ArrayHeader;
+        unsafe {
+            (*keys).length = 0;
+            (*keys).capacity = 0;
+        }
+        crate::object::shapes::shape_descriptor_ensure(keys, 0, 0).expect("old shape");
+    }
+    for slot in 0..K {
+        let keys = unsafe { young_keys_array() };
+        js_shadow_slot_set(slot as u32, ptr_bits(keys as usize));
+        crate::object::shapes::shape_descriptor_ensure(keys, 0, 0).expect("young shape");
+    }
+
+    let _ = gc_collect_minor();
+    let row = walk("shapes.families+indices");
+    assert!(row.partial, "{row:?}");
+    assert_eq!(
+        row.visited, K as u64,
+        "minor work must be young-sized: {row:?}"
+    );
+    assert!(
+        row.table_len >= (N + K) as u64,
+        "fixture did not build N+k: {row:?}"
+    );
+}
+
+/// The debug/test authoritative walk is the proof that every shape writer
+/// arms the log. This deliberately suppresses the production family funnel;
+/// deleting the assertion makes the sabotage go green.
+#[test]
+fn shape_table_rederivation_rejects_a_suppressed_logging_site() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    crate::object::shapes::test_clear_shape_table();
+    let keys = unsafe { young_keys_array() };
+    {
+        let _sabotage = crate::object::shapes::TestShapeYoungLogSuppression::new();
+        crate::object::shapes::shape_descriptor_ensure(keys, 0, 0).expect("shape");
+    }
+    let valid = build_valid_pointer_set();
+    let mut visitor = RuntimeRootVisitor::for_mark_scoped(&valid, true);
+    let rejected = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        crate::object::shapes::scan_shape_table_rekey_mut(&mut visitor);
+    }));
+    assert!(
+        rejected.is_err(),
+        "a missing shape log note must be detected"
+    );
+}
+
+/// Promotion removes a shape address from the minor log, without removing the
+/// descriptor from the authoritative table used by the next full/major walk.
+/// Sabotage: change the post-visit keep predicate back to
+/// `addr_is_minor_relevant(from_space)`; `kept` never reaches zero.
+#[test]
+fn promoted_shape_entry_leaves_young_log_and_remains_in_major_walk() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
+    crate::object::shapes::test_clear_shape_table();
+    let keys = unsafe { young_keys_array() };
+    js_shadow_slot_set(0, ptr_bits(keys as usize));
+    let id = crate::object::shapes::shape_descriptor_ensure(keys, 0, 0).expect("shape");
+
+    for _ in 0..4 {
+        let _ = gc_collect_minor();
+    }
+    let promoted = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+    assert!(
+        !crate::arena::pointer_in_nursery(promoted),
+        "fixture must promote"
+    );
+    assert_eq!(walk("shapes.families+indices").kept, 0);
+
+    let valid = build_valid_pointer_set();
+    let mut visitor = RuntimeRootVisitor::for_rewrite(&valid);
+    crate::object::shapes::scan_shape_table_rekey_mut(&mut visitor);
+    let row = walk("shapes.families+indices");
+    assert!(
+        !row.partial,
+        "major/full walk must remain authoritative: {row:?}"
+    );
+    assert!(
+        row.visited >= 1,
+        "major/full walk must still see the descriptor"
+    );
+    assert_eq!(
+        crate::object::shapes::shape_descriptor_by_id(id).map(|d| d.keys),
+        Some(promoted as u64)
+    );
+}
+
+/// An already-Longlived keys array can gain a new nursery key at the same
+/// address. Re-stamping the old receiver is the structural publication
+/// chokepoint that must re-arm it.
+#[test]
+fn shape_mutation_to_new_young_key_rearms_minor_log() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
+    crate::object::shapes::test_clear_shape_table();
+    unsafe {
+        let bytes = std::mem::size_of::<crate::array::ArrayHeader>() + 8;
+        let keys = crate::arena::arena_alloc_gc_longlived(bytes, 8, GC_TYPE_ARRAY)
+            as *mut crate::array::ArrayHeader;
+        (*keys).length = 1;
+        (*keys).capacity = 1;
+        let slot =
+            (keys as *mut u8).add(std::mem::size_of::<crate::array::ArrayHeader>()) as *mut f64;
+        *slot = f64::from_bits(string_bits(old_leaf()));
+        let id = crate::object::shapes::shape_descriptor_ensure(keys, 1, 0).expect("shape");
+        let (owner, _) = alloc_old_test_object(0);
+        crate::object::shapes::stamp_object_shape_id_with_carrier_note(owner, id);
+        let _ = gc_collect_minor();
+        assert_eq!(walk("shapes.families+indices").kept, 0);
+
+        let young = young_leaf();
+        *slot = f64::from_bits(string_bits(young));
+        crate::object::shapes::stamp_object_shape_id_with_carrier_note(owner, id);
+        let _ = gc_collect_minor();
+        let moved = ((*slot).to_bits() & POINTER_MASK) as usize;
+        assert_ne!(
+            moved, young,
+            "the mutation hook must make the new key visible"
+        );
+        assert!(walk("shapes.families+indices").visited >= 1);
+    }
+}
+
+/// N old box payloads plus k young payloads must price exactly k registry
+/// entries. The counter is recorded inside `scan_box_young_roots_mut`.
+#[test]
+fn box_roots_minor_walk_visits_exactly_k_young_entries() {
+    const N: usize = 128;
+    const K: usize = 4;
+    let _guard = CopyingNurseryTestGuard::new(0);
+    gc_register_mutable_root_scanner(crate::r#box::scan_box_roots_mut);
+    for _ in 0..N {
+        crate::r#box::js_box_alloc_bits(string_bits(old_leaf()) as i64);
+    }
+    for _ in 0..K {
+        crate::r#box::js_box_alloc_bits(string_bits(young_leaf()) as i64);
+    }
+
+    let _ = gc_collect_minor();
+    let row = walk("box.roots");
+    assert!(row.partial, "{row:?}");
+    assert_eq!(
+        row.visited, K as u64,
+        "minor work must be young-sized: {row:?}"
+    );
+    assert_eq!(
+        row.table_len,
+        (N + K) as u64,
+        "fixture registry mismatch: {row:?}"
+    );
+}
+
+/// Suppress the real `js_box_set_bits` arming site and prove the full-registry
+/// re-derivation catches the omission.
+#[test]
+fn box_root_rederivation_rejects_a_suppressed_mutation_hook() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let cell = crate::r#box::js_box_alloc_bits(string_bits(old_leaf()) as i64);
+    let young = young_leaf();
+    {
+        let _sabotage = crate::r#box::TestBoxYoungLogSuppression::new();
+        crate::r#box::js_box_set_bits(cell, string_bits(young) as i64);
+    }
+    let valid = build_valid_pointer_set();
+    let mut visitor = RuntimeRootVisitor::for_mark_scoped(&valid, true);
+    let rejected = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        crate::r#box::scan_box_roots_mut(&mut visitor);
+    }));
+    assert!(
+        rejected.is_err(),
+        "a missing box mutation note must be detected"
+    );
+}
+
+#[test]
+fn box_mutation_to_new_young_object_is_visited() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    gc_register_mutable_root_scanner(crate::r#box::scan_box_roots_mut);
+    let cell = crate::r#box::js_box_alloc_bits(string_bits(old_leaf()) as i64);
+    let young = young_leaf();
+    crate::r#box::js_box_set_bits(cell, string_bits(young) as i64);
+
+    let _ = gc_collect_minor();
+    let moved = (crate::r#box::js_box_get_bits(cell) as u64 & POINTER_MASK) as usize;
+    assert_ne!(moved, young, "setter must re-arm a previously old box");
+    assert_eq!(walk("box.roots").visited, 1);
+}
+
+#[test]
+fn promoted_box_root_leaves_log_and_is_found_by_full_walk() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    gc_register_mutable_root_scanner(crate::r#box::scan_box_roots_mut);
+    let cell = crate::r#box::js_box_alloc_bits(string_bits(young_leaf()) as i64);
+    for _ in 0..4 {
+        let _ = gc_collect_minor();
+    }
+    let promoted_bits = crate::r#box::js_box_get_bits(cell) as u64;
+    let promoted = (promoted_bits & POINTER_MASK) as usize;
+    assert!(
+        !crate::arena::pointer_in_nursery(promoted),
+        "fixture must promote"
+    );
+    assert_eq!(walk("box.roots").kept, 0);
+
+    let mut seen = false;
+    crate::r#box::scan_box_roots(&mut |value| {
+        if value.to_bits() == promoted_bits {
+            seen = true;
+        }
+    });
+    assert!(
+        seen,
+        "the unchanged full walk must still enumerate promoted roots"
+    );
+    assert!(!walk("box.roots").partial);
+}
+
+// -------------------------------------------------- per-object layout tables
+//
+// #9841: the DEATH PRUNE of `LAYOUT_SLOT_MASKS + TYPED_LAYOUTS`, not a root
+// scanner. Its predicate is `layout_key_may_be_nursery`, which excludes
+// `Longlived` AND `Old` — strictly stronger than the scanners'
+// `addr_is_minor_relevant` — so an old-keyed record is not merely cheap to
+// visit, it is provably impossible for a minor to remove.
+
+use crate::gc::layout_tables::{test_per_object_layout_present, LAYOUT_YOUNG_LOG_NAME};
+
+/// A nursery object whose header says POINTER_FREE and which then takes a
+/// pointer store — the mutator path that mints a mask from inside
+/// `layout_note_slot`'s own `borrow_mut` (WRITER 3). On cc that is the
+/// dominant insert path: `TYPED_LAYOUTS` is empty there and every one of the
+/// ~66k live keys is a `LAYOUT_SLOT_MASKS` entry.
+fn young_masked_object() -> usize {
+    let obj = crate::object::js_object_alloc(0, 8);
+    crate::object::js_object_set_field(obj, 0, crate::value::JSValue::number(1.0));
+    crate::object::js_object_set_field(obj, 1, crate::value::JSValue::number(2.0));
+    crate::gc::layout_clear_for_ptr(obj as usize);
+    unsafe { crate::gc::layout_init_pointer_free(obj as *mut u8) };
+    let child = crate::string::js_string_from_bytes(b"late-pointer".as_ptr(), 12);
+    crate::object::js_object_set_field(obj, 1, crate::value::JSValue::string_ptr(child));
+    assert!(
+        test_per_object_layout_present(obj as usize),
+        "premise: the in-place mask mint published a per-object record"
+    );
+    obj as usize
+}
+
+/// WRITER 3's arming site. Delete `arm_young_layout_key` from
+/// `gc/layout.rs`'s in-borrow mint and this goes red: under
+/// `debug_assertions` on the log-completeness re-derivation, and in release
+/// on the record the young prune can no longer see.
+#[test]
+fn dead_young_masked_owner_is_pruned_through_the_layout_log() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    // One rooted young object so the minor has real work; the owner is not it.
+    js_shadow_slot_set(0, string_bits(young_leaf()));
+
+    let dead = young_masked_object();
+
+    let _ = gc_collect_minor();
+
+    assert!(
+        !test_per_object_layout_present(dead),
+        "the dead young owner's per-object layout record must be pruned from the log"
+    );
+    let row = walk(LAYOUT_YOUNG_LOG_NAME);
+    assert!(
+        row.partial,
+        "a copying minor must take the young-scoped prune: {row:?}"
+    );
+    assert!(
+        row.visited >= 1,
+        "the logged key must have been visited: {row:?}"
+    );
+}
+
+/// WRITER 4's arming site (`transfer_per_object_slot_mask`, which runs during
+/// evacuation and therefore BEFORE this collection's prune). Delete its
+/// `arm_moved_layout_key` and the re-derivation panics here on the to-space
+/// key.
+#[test]
+fn surviving_young_masked_owner_is_rekeyed_and_stays_logged() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+
+    let obj = young_masked_object();
+    js_shadow_slot_set(0, ptr_bits(obj));
+
+    let _ = gc_collect_minor();
+
+    let after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+    assert_ne!(after, obj, "the rooted owner must have been evacuated");
+    assert!(
+        test_per_object_layout_present(after),
+        "the mask must follow its owner to the new address"
+    );
+    assert!(
+        !test_per_object_layout_present(obj),
+        "the stale from-space key must be gone"
+    );
+    let row = walk(LAYOUT_YOUNG_LOG_NAME);
+    assert!(row.partial, "{row:?}");
+    assert!(
+        row.visited >= 1,
+        "the move hook's key must have been logged and visited: {row:?}"
+    );
+    if crate::arena::pointer_in_nursery(after) {
+        assert!(
+            row.kept >= 1,
+            "a survivor still in the nursery must stay logged: {row:?}"
+        );
+    }
+}
+
+/// Rule 3: the skip has to be observable, or a latch that never fires looks
+/// landed. An OLD-keyed record cannot be found dead by any minor, so the
+/// young prune must not visit it at all.
+#[test]
+fn old_layout_records_are_skipped_by_a_minor() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+
+    // Drain whatever this thread's earlier tests left young, so `visited`
+    // below is about the record installed after it.
+    let _ = gc_collect_minor();
+
+    let (owner, _) = unsafe { alloc_old_test_object(2) };
+    crate::gc::layout_tables::slot_masks_insert(
+        owner as usize,
+        crate::gc::layout::LayoutSlotMask::from_words(&[1]),
+    );
+
+    let _ = gc_collect_minor();
+
+    assert!(
+        test_per_object_layout_present(owner as usize),
+        "an old owner's record must survive a minor"
+    );
+    let row = walk(LAYOUT_YOUNG_LOG_NAME);
+    assert!(row.partial, "{row:?}");
+    assert!(row.table_len >= 1, "{row:?}");
+    assert_eq!(
+        row.visited, 0,
+        "an old-keyed record is not a candidate for any minor and must not be \
+         visited: {row:?}"
+    );
+
+    crate::gc::layout_clear_for_ptr(owner as usize);
+}

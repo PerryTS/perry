@@ -54,3 +54,18 @@ pub(crate) fn instance_bound_perf_method(
         name.len(),
     ))
 }
+
+/// Return the receiver-aware method installed on `Performance.prototype` for
+/// reads from the canonical `performance` singleton. The singleton shares the
+/// `perf_hooks` dispatch tag with the module namespace, so identity distinguishes
+/// these methods from ordinary native-module exports.
+pub(crate) fn performance_namespace_method(
+    module_name: &str,
+    property_name: &str,
+    receiver: f64,
+) -> Option<f64> {
+    if module_name != "perf_hooks" || !crate::perf_hooks::is_performance_namespace_value(receiver) {
+        return None;
+    }
+    crate::perf_hooks::performance_prototype_method_value(property_name)
+}

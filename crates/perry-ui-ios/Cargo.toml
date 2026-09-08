@@ -46,6 +46,7 @@ objc2-ui-kit = { version = "0.3", features = [
     "UIViewController",
     "UILabel",
     "UIButton",
+    "UIButtonConfiguration",
     "UIStackView",
     "UISwitch",
     "UISlider",

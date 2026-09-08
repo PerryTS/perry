@@ -13,6 +13,7 @@ fn native_callable_export_arity_reference(module: &str, prop: &str) -> Option<u3
         ("bun", "wrapAnsi") => Some(3),
         ("bun.ant", "getPeerPid" | "getPeerUid") => Some(1),
         ("bun.ant", "memoryPressureLevel") => Some(0),
+        ("bun:jsc", "heapStats") => Some(0),
         // bun:ffi (#6562).
         ("bun:ffi", "dlopen") => Some(2),
         ("bun:ffi", "ptr" | "CString" | "CFunction" | "linkSymbols") => Some(1),
@@ -338,6 +339,7 @@ static CALLABLE_EXPORT_ARITY_TABLE: &[(&str, &[(&str, u32)])] = &[
             ("viewSource", 2),
         ],
     ),
+    ("bun:jsc", &[("heapStats", 0)]),
     ("child_process", &[("_forkChild", 2)]),
     (
         "cluster",

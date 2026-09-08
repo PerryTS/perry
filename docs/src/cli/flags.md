@@ -157,13 +157,20 @@ For source extracted from a Bun standalone executable, mount its extracted
 perry compile --bunfs-root ./fixture/root ./fixture/root/entry.js -o app
 ```
 
-Static imports, re-exports, literal dynamic imports, and literal `require()`
-calls below `/$bunfs/root/` resolve against that directory. Perry canonicalizes
+Static imports, re-exports, literal dynamic imports, literal `require()`, and
+`import.meta.require()` calls below `/$bunfs/root/` resolve against that directory.
+Perry canonicalizes
 their real targets, so importing the same module through `./chunk.js` and
 `/$bunfs/root/chunk.js` still initializes one module. Literal mapped file paths
 are embedded under their original names and work through both `node:fs` and
 `Bun.file()` after the extracted directory is removed. No host-level
 `/$bunfs` directory or compatibility symlink is needed.
+
+Bun bundles can load compiled chunks synchronously with
+`import.meta.require("./chunk.js")` or `import.meta["require"]("./chunk.js")`.
+Both return the module namespace immediately and initialize the target once,
+at its first load. Computed paths use the existing bounded synchronous
+`require(expr)` resolver; unknown targets throw `MODULE_NOT_FOUND` at the call.
 
 Some build pipelines inject a generated module rather than writing it into the
 source checkout. Reproduce that file-map step with `--asset-module`. Perry
@@ -458,3 +465,87 @@ perry app.ts -o app --target web --minify
 
 - [Commands](commands.md) — All CLI commands
 - [Platform Overview](../platforms/overview.md) — Platform targets
+
+## Typed-feedback profile replay
+
+`--typed-feedback-profile <path>` supplies an **advisory** profile to native LLVM
+lowering. Default builds do not read a profile. The first supported observation,
+`numeric_array_element`, can select the existing guarded numeric-array read at
+an otherwise generic checked `array[index]` site. Already specialized reads and
+other site/observation kinds are ignored and explained.
+
+Capture a workload, then replay it with the **same compiler executable, source,
+target and lowering options**:
+
+```bash
+PERRY_TYPED_FEEDBACK=1 perry compile app.ts -o app-capture \
+  --typed-feedback-sites typed-feedback-sites.json
+PERRY_TYPED_FEEDBACK_TRACE=typed-feedback-trace.json ./app-capture
+python3 scripts/typed-feedback-profile.py \
+  --sites typed-feedback-sites.json --trace typed-feedback-trace.json \
+  -o typed-feedback-profile.json
+perry compile app.ts -o app \
+  --typed-feedback-profile typed-feedback-profile.json --explain-lowering
+```
+
+The conversion utility is in the Perry source checkout. Pair the catalog with
+the trace from that exact capture build. It retains only observed numeric array
+reads and excludes runtime addresses, shape IDs and method identities. A trace
+without supported observations produces a diagnostic instead of an empty profile.
+The capture build must enable `PERRY_TYPED_FEEDBACK` at compile time; enabling it
+only when running a normal binary cannot restore omitted instrumentation.
+
+The JSON replay schema is version 1:
+
+```json
+{
+  "schema_version": 1,
+  "compiler": "sha256:<exact compiler executable hash>",
+  "modules": [{
+    "identity": {
+      "module": "app.ts",
+      "source_hash": "sha256:<source bytes hash>",
+      "hir_hash": "<stable post-transform HIR hash>",
+      "lowering_hash": "<compiler lowering-input fingerprint>",
+      "target": "x86_64-unknown-linux-gnu"
+    },
+    "sites": [{
+      "site_id": 123,
+      "function": "perry_fn_app_ts__read",
+      "kind": "array_element",
+      "operation": "array[index]",
+      "observation_kind": "numeric_array_element"
+    }]
+  }]
+}
+```
+
+Use generated identities, rather than copying this illustrative site ID. Site
+IDs identify deterministic lowering sites within an exact module/compiler/input
+combination; function, kind and operation must also match. The lowering hash
+includes target CPU/features, codegen settings and imported capabilities using
+the object cache's complete input fingerprint. Capture instrumentation and
+native-region reporting/verification are excluded so they can vary during replay.
+Even a comment-only source change invalidates the source hash, and rebuilding
+Perry invalidates the compiler hash without needing a version bump. No
+cross-version or best-effort stale replay is attempted.
+
+Malformed or unreadable explicit input is a compilation error naming the profile
+and how to create it. Well-formed schema/compiler/target/source/HIR/options
+mismatches, unknown modules/sites, duplicate identities and unsupported
+observations are ignored for specialization. Each rejected fact is reported on
+stderr with its reason. Accepted and rejected facts also appear in native-rep
+artifacts (`PERRY_NATIVE_REPS=1`) and `--explain-lowering`'s typed-path evidence and
+reason counts. Replay and catalog builds bypass build/object cache reuse to
+produce evidence from this compilation. Artifact filenames and report paths have
+run-specific nonces; decisions and lowering are deterministic for identical inputs.
+
+Profiles and TypeScript annotations never authorize an unchecked operation.
+Every replay-selected read rechecks the live receiver, array representation,
+descriptors/prototype state and bounds with the existing numeric-array runtime
+guard. Strings, holes, changed layouts, non-array receivers and other guard
+failures use the original boxed JavaScript fallback, with no added number
+coercion. Replay does not relax ownership, alias, lifetime or method-identity
+checks. Native-region verification requires a consumed fresh replay fact,
+a matching runtime guard and an explicit fallback/materialization record for
+every claimed profile selection.

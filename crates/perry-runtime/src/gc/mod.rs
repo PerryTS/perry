@@ -35,8 +35,8 @@ use std::time::{Duration, Instant};
 
 mod types;
 pub use types::*;
-mod policy;
 mod json_defer;
+mod policy;
 pub(crate) use json_defer::JsonParseAllocation;
 pub(crate) use policy::gc_runtime_safepoint;
 /// The one writer of `GC_SAFEPOINT_PENDING` — it also keeps the poll's global
@@ -62,12 +62,12 @@ pub use idle_compact::{
 };
 pub use idle_reclaim::{
     idle_reclaim_attempts, idle_reclaim_backoff_shift, idle_reclaim_completions,
-    idle_reclaim_enabled_from_value, idle_reclaim_freed_bytes, idle_reclaim_old_reclaimed_bytes,
-    idle_reclaim_post_purges, idle_reclaim_productive, idle_reclaim_slices,
-    idle_reclaim_start_blocked, idle_reclaim_work_capped, idle_reclaim_yields,
+    idle_reclaim_elapsed_starts, idle_reclaim_enabled_from_value, idle_reclaim_freed_bytes,
+    idle_reclaim_old_reclaimed_bytes, idle_reclaim_post_purges, idle_reclaim_productive,
+    idle_reclaim_slices, idle_reclaim_start_blocked, idle_reclaim_work_capped, idle_reclaim_yields,
     IDLE_RECLAIM_MAX_BACKOFF_SHIFT, IDLE_RECLAIM_MAX_WORK_MS_PER_SECOND,
     IDLE_RECLAIM_MIN_INTERVAL_MS, IDLE_RECLAIM_PRODUCTIVE_MIN_BYTES, IDLE_RECLAIM_PRODUCTIVE_PCT,
-    IDLE_RECLAIM_QUIET_MS, IDLE_RECLAIM_SLICE_US,
+    IDLE_RECLAIM_QUIET_MS, IDLE_RECLAIM_REARM_MS, IDLE_RECLAIM_SLICE_US,
 };
 pub(crate) use idle_reclaim::{park_hook as idle_reclaim_park_hook, ParkVerdict};
 mod telemetry;
@@ -159,12 +159,20 @@ mod prefetch;
 
 mod copying;
 mod copying_first_cycle;
+mod copying_phase;
 mod copying_pointer_set;
+mod diag_sites;
+pub(crate) use diag_sites::primitive_dispatch as diag_primitive_dispatch;
 /// #8174: shared validation for the TARGET of a forwarding pointer.
 mod forwarding;
 /// Per-scanner root attribution for the copied-minor root scan (#7915).
 mod scanner_profile;
 mod sticky_remembered;
+mod survival_diag;
+/// #9754: per-side-table young-entry logs (remembered sets for the runtime
+/// side tables), so a minor-scoped root scan visits only the entries that
+/// can hold a pointer a minor acts on.
+pub(crate) mod young_log;
 use copying::*;
 use copying_first_cycle::*;
 // Named rather than glob-imported: a glob does not propagate through the
@@ -180,6 +188,7 @@ pub(crate) use copying_pointer_set::CopyingPointerSet;
 #[cfg(test)]
 pub(crate) use copying::MAX_YOUNG_MOVE_BYTES;
 mod dead_owner;
+pub(crate) use dead_owner::owner_is_dead_copied_minor_from_space_of_type;
 mod old_free;
 use old_free::*;
 pub(crate) use old_free::{old_free_bytes, old_free_filter_range, old_free_take_exact};
@@ -207,6 +216,8 @@ pub(crate) use cycle_malloc_trim::{
     reset_test_malloc_trim_executed_count, test_malloc_trim_executed_count,
 };
 mod verify;
+mod verify_diag;
+use verify_diag::*;
 
 /// #7035: whole-heap from-space scan — verification that does NOT depend on
 /// the rewrite pass own root enumeration. Debug-only
@@ -249,9 +260,12 @@ pub use verify::*;
 pub(crate) mod census;
 #[cfg(feature = "diagnostics")]
 mod heap_snapshot;
+mod heap_stats;
+mod regex_census;
 pub use census::{census_poll_signal, gc_census_enabled};
 #[cfg(feature = "diagnostics")]
 pub use heap_snapshot::gc_build_v8_heap_snapshot_json;
+pub(crate) use heap_stats::heap_stats;
 
 pub fn gc_collect_minor() -> u64 {
     if defer_gc_request(DeferredGcRequest::DirectMinor) {
@@ -794,6 +808,7 @@ fn gc_collect_full_mark_sweep_with_trigger(trigger: GcTriggerSnapshot) -> GcColl
     let _contract_heal = policy::contract_scan_heal_guard();
     gc_drain_active_budgeted_cycle();
     GC_TRIGGER_BUMPED.with(|c| c.set(false));
+    diag_sites::full_started(diag_sites::take_full_site(), trigger.kind);
     GcCycleState::new_full(trigger).run_to_completion()
 }
 
@@ -941,6 +956,9 @@ pub fn gc_init() {
     // `PERRY_GC_CENSUS`: remember the main thread and install the SIGUSR2
     // trigger. No-op (one OnceLock read) when the env var is unset.
     census::census_on_gc_init();
+    #[cfg(feature = "alloc-census")]
+    crate::alloc_census::alloc_census_init();
+    crate::arena::alloc_sample::init_from_env();
     reg_budgeted_scanner!(
         scan_runtime_handle_roots_mut,
         scan_runtime_handle_roots_mut_step,
@@ -989,6 +1007,8 @@ pub fn gc_init() {
     reg_scanner!(async_hooks_mutable_root_scanner);
     reg_scanner!(shape_cache_mutable_root_scanner);
     reg_scanner!(crate::regex::scan_last_exec_groups_root_mut);
+    #[cfg(feature = "regex-engine")]
+    reg_scanner!(crate::regex::site_test::scan_roots_mut);
     // #7211: the eight interned `typeof` result strings, and JSON.rawJSON's
     // interned `"rawJSON"` key. Both are thread-local caches of a RAW
     // `StringHeader*` allocated in the nursery and referenced by nothing else,
@@ -1099,6 +1119,9 @@ pub fn gc_init() {
     // REWRITES: an evacuating collection moves them like any other array, and
     // the thread-local slot is the only place the new address can be recorded.
     reg_scanner!(crate::iter_result::scan_iter_result_keys_roots_mut);
+    // Same shape as the line above: the shared keys arrays behind
+    // `Intl.Segmenter`'s segment records are referenced only by this cache.
+    reg_scanner!(crate::intl::segmenter::scan_segment_record_keys_roots_mut);
     reg_scanner!(small_int_cache_mutable_root_scanner);
     reg_scanner!(concat_memo_mutable_root_scanner);
     reg_scanner!(crate::builtins::scan_console_log_singleton_roots_mut);
@@ -1326,6 +1349,9 @@ pub extern "C" fn js_gc_release_current_thread_collection_side_allocations() {
     // once-only when the mode is off.
     schedule::report_exit_summary();
     crate::r#box::report_box_stats_at_exit();
+    crate::arena::alloc_sample::report("exit");
+    diag_sites::report_charges("exit");
+    diag_sites::report_primitive_dispatch("exit");
     emit_incremental_liveness_diag();
     emit_schedule_liveness_verdict();
 }

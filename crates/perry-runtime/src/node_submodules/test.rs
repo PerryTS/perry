@@ -228,7 +228,7 @@ extern "C" fn mock_timers_tick(_closure: *const ClosureHeader, ms: f64) -> f64 {
     let delay = if is_undefined_value(ms) {
         1.0
     } else {
-        validate_mock_timer_number("time", ms)
+        validate_mock_timer_number("time", ms, false)
     };
     crate::timer::js_mock_timers_tick(delay);
     undefined_value()
@@ -240,7 +240,7 @@ extern "C" fn mock_timers_run_all(_closure: *const ClosureHeader) -> f64 {
 }
 
 extern "C" fn mock_timers_set_time(_closure: *const ClosureHeader, ms: f64) -> f64 {
-    let time = validate_mock_timer_number("time", ms);
+    let time = validate_mock_timer_number("time", ms, false);
     crate::timer::js_mock_timers_set_time(time);
     undefined_value()
 }
@@ -250,15 +250,15 @@ extern "C" fn mock_timers_reset(_closure: *const ClosureHeader) -> f64 {
     undefined_value()
 }
 
-fn validate_mock_timer_number(arg: &str, value: f64) -> f64 {
+fn validate_mock_timer_number(arg: &str, value: f64, reject_nan: bool) -> f64 {
     let js = JSValue::from_bits(value.to_bits());
     if !crate::fs::validate::is_numeric(js) {
         throw_invalid_arg_type(arg, "number", value);
     }
     let n = crate::builtins::js_number_coerce(value);
-    if !n.is_finite() || n < 0.0 {
+    if n < 0.0 || (reject_nan && n.is_nan()) {
         let message = format!(
-            "The \"{}\" argument must be a non-negative finite number. Received {}",
+            "The \"{}\" argument must be a non-negative number. Received {}",
             arg,
             crate::fs::validate::describe_received(value)
         );
@@ -271,16 +271,13 @@ fn parse_mock_timer_options(options: f64) -> (u32, f64) {
     let mut apis_value = options;
     let mut now = 0.0;
     let js = JSValue::from_bits(options.to_bits());
-    if js.is_undefined() {
+    if js.is_undefined() || js.is_null() || !js.is_pointer() {
         return (crate::timer::MOCK_TIMERS_ALL_APIS, now);
     }
     if !is_array_value(options) {
-        if js.is_null() || !js.is_pointer() {
-            throw_invalid_arg_type("options", "object", options);
-        }
         apis_value = object_property(options, b"apis").unwrap_or(undefined_value());
         if let Some(now_value) = object_property(options, b"now") {
-            now = validate_mock_timer_number("options.now", now_value);
+            now = validate_mock_timer_number("options.now", now_value, true);
         }
     }
     if JSValue::from_bits(apis_value.to_bits()).is_undefined() {
@@ -367,6 +364,22 @@ fn set_property_value(target: f64, property: &str, value: f64) {
         crate::closure::closure_set_dynamic_prop(raw, property, value);
     } else {
         set_field(raw as *mut crate::object::ObjectHeader, property, value);
+    }
+}
+
+fn set_method_property_value(target: f64, property: &str, value: f64) {
+    let raw = raw_ptr_from_value(target);
+    if let Some(class_id) = crate::object::class_id_for_decl_prototype_object(raw) {
+        unsafe {
+            crate::object::js_register_prototype_method(
+                class_id,
+                property.as_ptr(),
+                property.len(),
+                value,
+            );
+        }
+    } else {
+        set_property_value(target, property, value);
     }
 }
 
@@ -694,7 +707,7 @@ fn restore_mock_state(id: i64) {
             target,
             property,
             original,
-        }) => set_property_value(target, &property, original),
+        }) => set_method_property_value(target, &property, original),
         Some(MockRestoreTarget::ObjectAccessor {
             target,
             property,
@@ -1039,7 +1052,7 @@ extern "C" fn mock_method_thunk(
             original,
         },
     );
-    set_property_value(target.get_nanbox_f64(), &property_name, function);
+    set_method_property_value(target.get_nanbox_f64(), &property_name, function);
     function
 }
 

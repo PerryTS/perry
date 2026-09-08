@@ -1,0 +1,1 @@
+- Keep `for…in` receivers, accumulated keys, and Proxy descriptor state rooted across Proxy callbacks and moving garbage collection. Fixes stale pointers when Solid's universal renderer enumerates reactive spread properties.

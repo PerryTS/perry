@@ -1,0 +1,1 @@
+PASS Solid native renderer: signals, properties, events, keyed order, reparenting, disposal

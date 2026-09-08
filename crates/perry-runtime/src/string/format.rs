@@ -17,6 +17,52 @@ crate::perry_thread_local! {
         const { std::cell::UnsafeCell::new([std::ptr::null_mut(); SMALL_INT_CACHE_SIZE]) };
 }
 
+/// Cached single-ASCII-character string table (`"\0"`..`"\x7f"`), the exact
+/// analogue of [`SMALL_INT_CACHE`] one dimension over: every `s[i]`,
+/// `s.charAt(i)`, `[...s]` and every runtime consumer of
+/// [`js_string_char_at`](super::js_string_char_at) used to MINT a fresh
+/// 32-byte heap string per character read. On the compiled claude-code TUI —
+/// which measures, wraps and ANSI-scans every rendered line — that is one of
+/// the largest single contributors to allocation volume, and the bytes are
+/// pure garbage: a one-character ASCII string has exactly 128 possible
+/// contents.
+///
+/// Same residency contract as `SMALL_INT_CACHE`, and for the same reasons:
+/// per-thread (arena pointers are not shareable), longlived-arena (so the
+/// entry never anchors a nursery block), `refcount = 0` (shared — never
+/// mutated in place, which is what makes handing the SAME pointer to every
+/// caller sound), pinned out of the young generation, and scanned by
+/// [`scan_small_int_cache_roots_mut`] so the collector rewrites the slot if
+/// the longlived object is ever relocated.
+const ASCII_CHAR_CACHE_SIZE: usize = 128;
+crate::perry_thread_local! {
+    static ASCII_CHAR_CACHE: std::cell::UnsafeCell<[*mut StringHeader; ASCII_CHAR_CACHE_SIZE]> =
+        const { std::cell::UnsafeCell::new([std::ptr::null_mut(); ASCII_CHAR_CACHE_SIZE]) };
+}
+
+/// The canonical one-character string for an ASCII byte. Allocates at most
+/// once per byte value per thread; every later call is a load.
+pub(crate) fn ascii_char_string(byte: u8) -> *mut StringHeader {
+    debug_assert!(byte < 0x80);
+    let idx = (byte & 0x7f) as usize;
+    let cached = ASCII_CHAR_CACHE.with(|c| unsafe { (*c.get())[idx] });
+    if !cached.is_null() {
+        return cached;
+    }
+    let ptr = js_string_from_bytes_longlived(&byte as *const u8, 1);
+    unsafe {
+        (*ptr).refcount = 0;
+        let gc_header =
+            (ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+        crate::gc::pin_object_non_young(gc_header);
+    }
+    ASCII_CHAR_CACHE.with(|c| unsafe {
+        // GC_STORE_AUDIT(ROOT): ASCII_CHAR_CACHE is scanned by scan_small_int_cache_roots_mut.
+        crate::gc::runtime_store_root_raw_mut_ptr_slot(&raw mut (*c.get())[idx], ptr);
+    });
+    ptr
+}
+
 /// Normalize a `Number.prototype` format-method receiver to its underlying
 /// `f64`. Codegen lowers `x.toFixed(n)` / `.toExponential(n)` / `.toPrecision(n)`
 /// to a direct runtime call that passes the receiver's bits as the first `f64`
@@ -155,6 +201,19 @@ pub fn scan_small_int_cache_roots(mark: &mut dyn FnMut(f64)) {
 
 pub fn scan_small_int_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     SMALL_INT_CACHE.with(|c| unsafe {
+        for slot in (*c.get()).iter_mut() {
+            let mut addr = *slot as usize;
+            if visitor.visit_tagged_usize_slot(&mut addr, crate::value::STRING_TAG) {
+                *slot = addr as *mut StringHeader;
+            }
+        }
+    });
+    // The single-character table rides the same scanner rather than
+    // registering a 96th root scanner: both are per-thread arrays of
+    // canonical `StringHeader*` with identical residency rules, and the
+    // per-collection cost of every additional registered scanner is the
+    // thing the collector is trying to shed.
+    ASCII_CHAR_CACHE.with(|c| unsafe {
         for slot in (*c.get()).iter_mut() {
             let mut addr = *slot as usize;
             if visitor.visit_tagged_usize_slot(&mut addr, crate::value::STRING_TAG) {

@@ -1302,7 +1302,7 @@ pub extern "C" fn js_object_define_property(
                                 desc_ptr as *const ObjectHeader,
                                 value_key,
                             );
-                            crate::symbol::js_object_set_symbol_property(
+                            crate::symbol::define_symbol_data_property(
                                 obj_value,
                                 key_value,
                                 f64::from_bits(value_field.bits()),
@@ -1473,6 +1473,11 @@ pub extern "C" fn js_object_define_property(
                 descriptor_value,
                 desc_view.as_ref(),
             ));
+        }
+        // A compatible definition of an immutable virtual index is a no-op.
+        // The invariant check above has already rejected every actual change.
+        if super::super::string_wrapper::has_index_key(obj as usize, key_str) {
+            return obj_value;
         }
         super::super::mark_object_dynamic_shape_unknown(obj);
         // Extract descriptor object

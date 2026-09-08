@@ -107,6 +107,14 @@ pub fn new_ptr_hash_set<T: std::hash::Hash + Eq>() -> PtrHashSet<T> {
     HashSet::with_hasher(PtrHasher)
 }
 
+/// The same, pre-sized. A set that is rebuilt from empty on every collection
+/// pays a `RawTable::reserve_rehash` at each power-of-two boundary on the way
+/// up, and the whole table is re-hashed and re-copied each time.
+#[inline]
+pub fn new_ptr_hash_set_with_capacity<T: std::hash::Hash + Eq>(cap: usize) -> PtrHashSet<T> {
+    HashSet::with_capacity_and_hasher(cap, PtrHasher)
+}
+
 #[inline]
 pub fn new_ptr_hash_map<K: std::hash::Hash + Eq, V>() -> PtrHashMap<K, V> {
     HashMap::with_hasher(PtrHasher)

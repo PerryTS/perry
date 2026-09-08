@@ -1028,14 +1028,15 @@ pub(crate) unsafe fn try_strict_dense_number_store(
     // proves there are no holes and keeps its bit-for-bit old hot path; every
     // other admitted layout proves ownership with the slot Perry is about to
     // overwrite.
-    // The process latch leads: an array can only have an inherited index when
-    // SOME array has been retargeted, so a program that never calls
-    // `Object.setPrototypeOf` on an array keeps this lane bit-for-bit as it was
-    // (one relaxed load of a static bool, and the slot is never read here).
-    // `new Array(n)` fills are holey and would otherwise all fall off the lane.
+    // #9787: the shared invalidation byte covers indexed properties on both
+    // default prototypes as well as retargeted arrays. Checking only whether
+    // an array was retargeted misses Array.prototype / Object.prototype
+    // descriptors and lets this lane create an own element over a setter.
+    // Ordinary `new Array(n)` fills still pay one relaxed load and never read
+    // the old slot while all three prototype conditions remain clear.
     let may_have_holes = flags & crate::gc::GC_ARRAY_RAW_F64_LAYOUT == 0
         || flags & crate::gc::GC_ARRAY_RAW_F64_HOLES != 0;
-    if crate::object::prototype_chain::array_static_proto_recorded()
+    if PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED.load(Ordering::Relaxed) != 0
         && may_have_holes
         && ptr::read(slot) == crate::value::TAG_HOLE
     {
@@ -1221,8 +1222,7 @@ fn js_array_set_f64_extend_strict_impl(
     // the inherited [[Set]] walk. This includes both a retargeted receiver and
     // the default chain after an index is installed on `Array.prototype` or
     // `Object.prototype`. `array_custom_prototype` is the #9219 classification
-    // shared with reads/HasProperty and deliberately returns None for a Proxy
-    // prototype, whose dedicated dispatch must remain single-shot. Existing
+    // shared with reads/HasProperty, including a Proxy prototype. Existing
     // own elements have already had every applicable dense lane above; the
     // fallback still needs the ownership check for descriptor/restricted
     // shapes that correctly declined those lanes.
@@ -1676,9 +1676,11 @@ pub(crate) fn array_spec_set(
                 inherited_owner = array_object_proto_index_owner(bits, &key);
             }
             Some(ArrayCustomProto::Array(proto_arr)) => {
-                if array_has_own_index(proto_arr, index) {
-                    inherited_owner = proto_arr as usize;
-                }
+                default_chain = false;
+                inherited_owner = array_object_proto_index_owner(
+                    crate::value::js_nanbox_pointer(proto_arr as i64).to_bits(),
+                    &key,
+                );
             }
             None => {}
         }

@@ -1,0 +1,3 @@
+Prevent LLVM from merging the private ext-net event-pump callback into the legacy exported `js_net_process_pending` trampoline. In binaries that also contain bundled stdlib networking, that public symbol can resolve to a different event queue, leaving ext-net callbacks undelivered. Keep the adapter distinct with `#[inline(never)]` while preserving the public ABI and the existing `js_ext_net_drain_pending` call.
+
+Adds a bounded optimizer regression at Rust O0/O1/O2/O3/Os/Oz, with an O3 negative control that removes the protection and reproduces the wrong-symbol registration. A Rust integration-test entry point selects the probe in scoped PR CI. Also includes a small `node:net` delivery fixture with a 1.5-second failure deadline.

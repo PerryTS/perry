@@ -1,0 +1,13 @@
+{
+  "private": true,
+  "type": "module",
+  "perry": {
+    "jsx": "solid",
+    "compilePackages": ["solid-js"],
+    "allow": { "compilePackages": ["solid-js"] },
+    "packageAliases": {
+      "solid-js": "solid-js/dist/solid.js",
+      "perry-solid": "./host.ts"
+    }
+  }
+}

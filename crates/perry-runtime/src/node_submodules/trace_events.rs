@@ -503,17 +503,13 @@ fn trace_options_from_args(args: impl IntoIterator<Item = String>) -> TraceOutpu
             output.enabled = true;
             output.explicit_categories = true;
             if let Some(value) = args.get(index + 1) {
-                output
-                    .categories
-                    .extend(value.split(',').map(str::to_owned));
+                extend_cli_categories(&mut output.categories, value);
                 index += 1;
             }
         } else if let Some(value) = arg.strip_prefix("--trace-event-categories=") {
             output.enabled = true;
             output.explicit_categories = true;
-            output
-                .categories
-                .extend(value.split(',').map(str::to_owned));
+            extend_cli_categories(&mut output.categories, value);
         } else if arg == "--trace-event-file-pattern" {
             if let Some(value) = args.get(index + 1) {
                 output.file_pattern = Some(value.clone());
@@ -525,6 +521,22 @@ fn trace_options_from_args(args: impl IntoIterator<Item = String>) -> TraceOutpu
         index += 1;
     }
     output
+}
+
+fn extend_cli_categories(categories: &mut BTreeSet<String>, value: &str) {
+    // Node accepts a quoted empty category list (`""`) as an enabled trace
+    // containing metadata only. `spawnSync` passes those quote bytes through
+    // directly, so normalize them before splitting the CLI value.
+    let value = value
+        .strip_prefix('"')
+        .and_then(|value| value.strip_suffix('"'))
+        .unwrap_or(value);
+    categories.extend(
+        value
+            .split(',')
+            .filter(|name| !name.is_empty())
+            .map(str::to_owned),
+    );
 }
 
 fn seed_legacy_categories(output: &mut TraceOutput) {
@@ -581,12 +593,21 @@ pub(crate) fn flush_trace_events_output() {
             })
             .unwrap_or_else(|| format!("node_trace.{pid}.log"));
         let category = if output.categories.contains("node.console") {
-            "node.console"
+            Some("node.console")
+        } else if output.categories.contains("node")
+            || output.categories.contains("node.bootstrap")
+        {
+            Some("node,node.bootstrap")
         } else {
-            "node,node.bootstrap"
+            None
         };
-        let application =
-            format!(",{{\"cat\":\"{category}\",\"name\":\"included-marker\",\"ph\":\"X\"}}");
+        let application = category
+            .map(|category| {
+                format!(
+                    ",{{\"cat\":\"{category}\",\"name\":\"included-marker\",\"ph\":\"X\"}}"
+                )
+            })
+            .unwrap_or_default();
         let document = format!(
             "{{\"traceEvents\":[{{\"cat\":\"__metadata\",\"name\":\"process_name\",\"ph\":\"M\"}}{application}]}}"
         );
@@ -679,5 +700,15 @@ mod tests {
             explicit.categories.into_iter().collect::<Vec<_>>(),
             ["custom"]
         );
+    }
+
+    #[test]
+    fn quoted_empty_category_list_enables_metadata_only() {
+        let output = trace_options_from_args(
+            ["perry", "--trace-event-categories", "\"\""].map(str::to_owned),
+        );
+        assert!(output.enabled);
+        assert!(output.explicit_categories);
+        assert!(output.categories.is_empty());
     }
 }

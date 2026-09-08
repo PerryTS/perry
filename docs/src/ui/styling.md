@@ -32,7 +32,7 @@ for the full file.
 | `borderColor` | string \| PerryColor | `widgetSetBorderColor` |
 | `borderWidth` | number | `widgetSetBorderWidth` |
 | `borderRadius` | number | `setCornerRadius` |
-| `padding` | number \| `{ top, right, bottom, left }` | `widgetSetEdgeInsets` |
+| `padding` | number \| `{ top, right, bottom, left }` | `setPadding` |
 | `opacity` | number (0..=1) | `widgetSetOpacity` |
 | `shadow` | `{ color, blur, offsetX, offsetY }` | `widgetSetShadow` |
 | `textDecoration` | `"none" \| "underline" \| "strikethrough"` | `textSetDecoration` |
@@ -149,11 +149,16 @@ Use `"monospaced"` for the system monospaced font.
 {{#include ../../examples/ui/styling/snippets.ts:borders}}
 ```
 
-### Padding and Insets
+### Padding
 
 ```typescript
 {{#include ../../examples/ui/styling/snippets.ts:padding}}
 ```
+
+Use `setPadding(widget, value)` for uniform padding, or
+`setPadding(widget, top, left, bottom, right)` for individual sides.
+The old `widgetSetEdgeInsets` name is deprecated and remains an alias during
+the deprecation window.
 
 ### Sizing
 

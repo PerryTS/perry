@@ -62,7 +62,11 @@ pub unsafe extern "C" fn js_request_new(
     // in `js_response_body_init_ptr` (the Response twin), which falls through via
     // `or_else` rather than if/else.
     let pending_stream_id = take_pending_fetch_body_stream_id();
-    let non_stream_body: Option<Vec<u8>> =
+    let form_data_body = body_metadata::serialize_form_data(body_ptr as usize);
+    let form_data_content_type = form_data_body
+        .as_ref()
+        .map(|(_, content_type)| content_type.clone());
+    let non_stream_body: Option<Vec<u8>> = form_data_body.map(|(body, _)| body).or_else(|| {
         if perry_runtime::value::addr_class::is_handle_band(body_ptr as usize) {
             crate::fetch::blob_bytes_clone(body_ptr as usize)
                 .or_else(|| dispatch::incoming_message_raw_body_bytes(body_ptr as usize))
@@ -72,7 +76,8 @@ pub unsafe extern "C" fn js_request_new(
                 // misread the handle id as a string pointer.
                 .or_else(|| dispatch::incoming_message_raw_body_bytes(body_ptr as usize))
                 .or_else(|| dispatch::body_bytes_from_header(body_ptr))
-        };
+        }
+    });
     // GET/HEAD requests may not carry a body (WHATWG fetch). Refs #2643.
     if (pending_stream_id.is_some() || non_stream_body.is_some())
         && (method == "GET" || method == "HEAD")
@@ -83,7 +88,7 @@ pub unsafe extern "C" fn js_request_new(
         .map(crate::streams::drain_readable_into_bytes)
         .or(non_stream_body);
     let headers_id_in = handle_id(headers_handle);
-    let headers = if headers_id_in != 0 {
+    let mut headers = if headers_id_in != 0 {
         HEADERS_REGISTRY
             .lock()
             .unwrap()
@@ -93,6 +98,11 @@ pub unsafe extern "C" fn js_request_new(
     } else {
         HeadersStore::default()
     };
+    if let Some(content_type) = form_data_content_type {
+        if !headers.has("content-type") {
+            headers.set("content-type", &content_type);
+        }
+    }
     // `signal` is a heap value the registry keeps (and the GC scanner in
     // `super::gc` roots), and defaulting it ALLOCATES an `AbortController` —
     // so resolve it, and build the whole record, before taking the registry

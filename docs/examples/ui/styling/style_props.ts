@@ -58,7 +58,7 @@ if (cardStyle.borderRadius !== undefined) {
     setCornerRadius(card, cardStyle.borderRadius)
 }
 if (typeof cardStyle.padding === "number") {
-    setPadding(card, cardStyle.padding, cardStyle.padding, cardStyle.padding, cardStyle.padding)
+    setPadding(card, cardStyle.padding)
 }
 if (cardStyle.opacity !== undefined) {
     widgetSetOpacity(card, cardStyle.opacity)

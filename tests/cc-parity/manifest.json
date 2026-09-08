@@ -1,0 +1,29 @@
+{
+  "package": "@anthropic-ai/claude-code",
+  "version": "2.1.112",
+  "archive": {
+    "url": "https://registry.npmjs.org/@anthropic-ai/claude-code/-/claude-code-2.1.112.tgz",
+    "bytes": 18679326,
+    "sha256": "84379969ea53a0e5fd231a8f77debe4c7cb17dd971f4809d10d33f9aeca5de09"
+  },
+  "bundle": {
+    "bytes": 13711684,
+    "sha256": "bc3358282800e3e99daa8e71ac5b7b1566bd0d7ca7eb94f714a7859365d3163f"
+  },
+  "oracle": {
+    "node": "v26.5.1",
+    "platform": "darwin-arm64",
+    "captured": "2026-09-05",
+    "network": "denied by sandbox-exec"
+  },
+  "goldens": {
+    "help": {
+      "bytes": 9175,
+      "sha256": "6cdb361880002e66c20e00de48ef13170c0b90185a69f651748f21958ab47094"
+    },
+    "version": {
+      "bytes": 22,
+      "sha256": "4d9d156e4f0af416a02d325d3aab4dc084c09c2b78cf189ef63e1f13b8a1833e"
+    }
+  }
+}

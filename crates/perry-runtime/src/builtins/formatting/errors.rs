@@ -49,7 +49,13 @@ unsafe fn format_error_headline(error_ptr: *const crate::error::ErrorHeader) -> 
 }
 
 unsafe fn format_error_stack_frame(error_ptr: *const crate::error::ErrorHeader) -> Option<String> {
-    let stack = string_header_to_string((*error_ptr).stack, "");
+    // #9486 made Error stacks lazy: `ErrorHeader.stack` stays null until the
+    // first observable read materializes the captured frame payload. Inspect
+    // is one of those reads. Looking at the slot directly made Errors with a
+    // cause or AggregateError.errors print a standalone `{` where Node keeps
+    // it attached to the final stack line.
+    let stack_ptr = crate::error::materialize_error_stack(error_ptr.cast_mut());
+    let stack = string_header_to_string(stack_ptr, "");
     stack
         .lines()
         .skip(1)

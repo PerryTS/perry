@@ -18,9 +18,11 @@ stdlib_provider_exports=(
   js_headers_set
   js_readable_stream_get_reader_with_options
   js_readable_stream_new_from_source_object
+  js_readable_stream_new_with_strategy_and_source_type
   js_reader_read
   js_response_body
   js_response_body_init_ptr
+  js_response_body_init_reset
   js_response_get_headers
   js_response_new
   js_stdlib_init_dispatch

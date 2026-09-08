@@ -273,7 +273,10 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
     };
 
     if gc_type == crate::gc::GC_TYPE_STRING {
-        return crate::string::js_string_index_get(raw as *const crate::StringHeader, idx);
+        return crate::string::js_string_index_get_boxed(
+            crate::value::js_nanbox_string(raw as i64),
+            idx,
+        );
     }
 
     if let Some(index) = numeric_key_u32_index(idx) {

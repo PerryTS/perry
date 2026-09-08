@@ -596,18 +596,14 @@ pub enum Expr {
         captured_args: Vec<Expr>,
     },
 
-    // Issue #711 part 2: `<func_expr>.prototype = <obj_expr>` pattern,
-    // used by Effect's effectable.ts to declare prototype-based
-    // classes. Codegen emits a call to `js_set_function_prototype`
-    // which stores `func_value → synthetic_class_id` in a side-table
-    // and binds the object as the synthetic class's prototype source.
-    // When `class Derived extends <func>` evaluates later, the dynamic
-    // parent registration looks up that synthetic class_id and wires
-    // it into CLASS_REGISTRY so method dispatch on Derived instances
-    // walks through to the prototype object's methods.
+    // Static `.prototype` assignment. Evaluates the receiver once and performs
+    // ordinary PutValue, including strict-mode rejection. For function receivers
+    // the runtime also synchronizes the synthetic class prototype used by
+    // dynamic `class Derived extends Base` dispatch (#711).
     SetFunctionPrototype {
         func: Box<Expr>,
         proto: Box<Expr>,
+        strict: bool,
     },
 
     // Issue #838: `<ClassName>.prototype.<method> = <fn>` and the

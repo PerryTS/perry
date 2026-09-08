@@ -20,6 +20,7 @@
 //! The global never frees (matching Perry's "embedded data lives for the life of
 //! the process" model), mirroring the `crate::shared_sab` registry pattern.
 
+use std::collections::BTreeMap;
 use std::sync::{Mutex, OnceLock};
 
 use crate::object::{js_object_alloc, js_object_set_field_by_name, ObjectHeader};
@@ -43,6 +44,21 @@ struct EmbeddedAsset {
     bytes: &'static [u8],
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct EmbeddedMetadata {
+    pub(crate) is_file: bool,
+    pub(crate) is_directory: bool,
+    pub(crate) size: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct EmbeddedDirEntry {
+    pub(crate) relative_path: String,
+    pub(crate) name: String,
+    pub(crate) parent_path: String,
+    pub(crate) is_directory: bool,
+}
+
 static EMBEDDED_ASSETS: OnceLock<Mutex<Vec<EmbeddedAsset>>> = OnceLock::new();
 
 fn registry() -> &'static Mutex<Vec<EmbeddedAsset>> {
@@ -57,6 +73,15 @@ fn normalize_key(path: &str) -> String {
     let unified = path.replace('\\', "/");
     let p = unified.strip_prefix(VIRTUAL_PREFIX).unwrap_or(&unified);
     p.strip_prefix("./").unwrap_or(p).to_string()
+}
+
+fn perry_virtual_key(path: &str) -> Option<(String, String)> {
+    let unified = path.replace('\\', "/");
+    if unified == "$perryfs" || unified == VIRTUAL_PREFIX {
+        return Some((String::new(), "$perryfs".to_string()));
+    }
+    let key = unified.strip_prefix(VIRTUAL_PREFIX)?.trim_matches('/');
+    Some((key.to_string(), format!("$perryfs/{key}")))
 }
 
 /// Register an embedded asset. Called once per file from the generated
@@ -99,6 +124,93 @@ pub fn lookup(path: &str) -> Option<&'static [u8]> {
     reg.iter().find(|a| a.name == key).map(|a| a.bytes)
 }
 
+/// Metadata for an embedded file or an inferred `$perryfs` directory.
+/// Directories are implicit: every prefix before a registered asset exists.
+pub(crate) fn metadata(path: &str) -> Option<EmbeddedMetadata> {
+    let key = normalize_key(path);
+    let reg = registry().lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(asset) = reg.iter().find(|asset| asset.name == key) {
+        return Some(EmbeddedMetadata {
+            is_file: true,
+            is_directory: false,
+            size: asset.bytes.len(),
+        });
+    }
+    let (directory_key, _) = perry_virtual_key(path)?;
+    let prefix = if directory_key.is_empty() {
+        String::new()
+    } else {
+        format!("{directory_key}/")
+    };
+    reg.iter()
+        .any(|asset| asset.name.starts_with(&prefix))
+        .then_some(EmbeddedMetadata {
+            is_file: false,
+            is_directory: true,
+            size: 0,
+        })
+}
+
+/// Sorted children of an inferred `$perryfs` directory. Recursive entries use
+/// paths relative to the requested directory, matching Node's string result;
+/// `name` and `parent_path` retain the pieces needed to build `fs.Dirent`.
+pub(crate) fn read_dir(path: &str, recursive: bool) -> Option<Vec<EmbeddedDirEntry>> {
+    let (directory_key, display_path) = perry_virtual_key(path)?;
+    let prefix = if directory_key.is_empty() {
+        String::new()
+    } else {
+        format!("{directory_key}/")
+    };
+    let reg = registry().lock().unwrap_or_else(|e| e.into_inner());
+    let mut paths = BTreeMap::<String, bool>::new();
+    for asset in reg.iter() {
+        let Some(remainder) = asset.name.strip_prefix(&prefix) else {
+            continue;
+        };
+        if remainder.is_empty() {
+            continue;
+        }
+        let parts = remainder.split('/').collect::<Vec<_>>();
+        let end = if recursive { parts.len() } else { 1 };
+        for index in 1..=end {
+            let relative_path = parts[..index].join("/");
+            let is_directory = index < parts.len();
+            paths
+                .entry(relative_path)
+                .and_modify(|known_directory| *known_directory |= is_directory)
+                .or_insert(is_directory);
+            if !recursive {
+                break;
+            }
+        }
+    }
+    if paths.is_empty() {
+        return None;
+    }
+    Some(
+        paths
+            .into_iter()
+            .map(|(relative_path, is_directory)| {
+                let (parent_relative, name) = relative_path
+                    .rsplit_once('/')
+                    .unwrap_or(("", relative_path.as_str()));
+                let parent_path = if parent_relative.is_empty() {
+                    display_path.clone()
+                } else {
+                    format!("{display_path}/{parent_relative}")
+                };
+                let name = name.to_string();
+                EmbeddedDirEntry {
+                    relative_path,
+                    name,
+                    parent_path,
+                    is_directory,
+                }
+            })
+            .collect(),
+    )
+}
+
 /// True if `path` is an embedded-asset virtual path (carries the `$perryfs/`
 /// or `/$bunfs/root/` prefix), independent of whether it actually resolves.
 /// `fs` uses this to treat an unresolved virtual path as missing rather than
@@ -106,7 +218,9 @@ pub fn lookup(path: &str) -> Option<&'static [u8]> {
 /// [`lookup`].
 pub fn is_virtual_path(path: &str) -> bool {
     let unified = path.replace('\\', "/");
-    unified.starts_with(VIRTUAL_PREFIX) || unified.starts_with(BUNFS_ROOT_PREFIX)
+    unified == "$perryfs"
+        || unified.starts_with(VIRTUAL_PREFIX)
+        || unified.starts_with(BUNFS_ROOT_PREFIX)
 }
 
 /// Snapshot of `(name, size)` for every embedded asset, in registration order.
@@ -308,8 +422,15 @@ mod tests {
     fn register_and_lookup_by_both_paths() {
         const NAME: &[u8] = b"embed-test/asset.txt";
         const DATA: &[u8] = b"embedded-bytes";
+        const NESTED_NAME: &[u8] = b"embed-test/nested/two.bin";
         unsafe {
             js_register_embedded_asset(NAME.as_ptr(), NAME.len(), DATA.as_ptr(), DATA.len());
+            js_register_embedded_asset(
+                NESTED_NAME.as_ptr(),
+                NESTED_NAME.len(),
+                DATA.as_ptr(),
+                DATA.len(),
+            );
         }
         // Found by bare key, by `$perryfs/` virtual path, and via backslashes.
         assert_eq!(lookup("embed-test/asset.txt"), Some(DATA));
@@ -317,10 +438,52 @@ mod tests {
         assert_eq!(lookup("$perryfs\\embed-test\\asset.txt"), Some(DATA));
         // `is_virtual_path` is a pure prefix test; presence is `lookup`.
         assert!(is_virtual_path("$perryfs/anything"));
+        assert!(is_virtual_path("$perryfs"));
         assert!(is_virtual_path("/$bunfs/root/assets/help.zst"));
         assert!(!is_virtual_path("not/registered.txt"));
         assert!(lookup("not/registered.txt").is_none());
         assert!(lookup("$perryfs/not-registered").is_none());
+
+        assert_eq!(
+            metadata("$perryfs/embed-test/asset.txt"),
+            Some(EmbeddedMetadata {
+                is_file: true,
+                is_directory: false,
+                size: DATA.len(),
+            })
+        );
+        assert_eq!(
+            metadata("$perryfs/embed-test/nested"),
+            Some(EmbeddedMetadata {
+                is_file: false,
+                is_directory: true,
+                size: 0,
+            })
+        );
+        assert_eq!(
+            metadata("$perryfs"),
+            Some(EmbeddedMetadata {
+                is_file: false,
+                is_directory: true,
+                size: 0,
+            })
+        );
+        let entries = read_dir("$perryfs/embed-test", false).expect("virtual directory exists");
+        assert_eq!(
+            entries
+                .iter()
+                .map(|entry| (entry.name.as_str(), entry.is_directory))
+                .collect::<Vec<_>>(),
+            vec![("asset.txt", false), ("nested", true)]
+        );
+        let recursive = read_dir("$perryfs/embed-test", true).expect("virtual directory exists");
+        assert_eq!(
+            recursive
+                .iter()
+                .map(|entry| entry.relative_path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["asset.txt", "nested", "nested/two.bin"]
+        );
     }
 
     #[test]

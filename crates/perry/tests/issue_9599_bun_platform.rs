@@ -7,7 +7,7 @@ fn perry_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_perry"))
 }
 
-fn compile(dir: &Path, platform: Option<&str>) -> PathBuf {
+fn compile(dir: &Path, platform: Option<&str>) -> (PathBuf, String) {
     let entry = dir.join("main.ts");
     let output = dir.join("main_bin");
     let mut command = Command::new(perry_bin());
@@ -27,7 +27,10 @@ fn compile(dir: &Path, platform: Option<&str>) -> PathBuf {
         String::from_utf8_lossy(&compile.stdout),
         String::from_utf8_lossy(&compile.stderr)
     );
-    output
+    (
+        output,
+        String::from_utf8_lossy(&compile.stderr).into_owned(),
+    )
 }
 
 fn run(output: &Path, dir: &Path) -> String {
@@ -58,7 +61,11 @@ console.log(typeof globalThis["Bun"]);
     )
     .expect("write entry");
 
-    let output = compile(dir.path(), None);
+    let (output, diagnostics) = compile(dir.path(), None);
+    assert!(
+        !diagnostics.contains("unknown identifier 'Bun'"),
+        "{diagnostics}"
+    );
     assert_eq!(
         run(&output, dir.path()),
         "undefined\nundefined\nundefined\n"
@@ -111,7 +118,11 @@ console.log(scoped());
     )
     .expect("write entry");
 
-    let output = compile(dir.path(), Some("bun"));
+    let (output, diagnostics) = compile(dir.path(), Some("bun"));
+    assert!(
+        !diagnostics.contains("unknown identifier 'Bun'"),
+        "{diagnostics}"
+    );
     let expected = "\
 dependency object true
 object
@@ -131,4 +142,50 @@ true true true
 99
 ";
     assert_eq!(run(&output, dir.path()), expected);
+}
+
+/// #9745: platform-provided globals change diagnostics, while every read
+/// still follows globalThis and lexical bindings retain precedence.
+#[test]
+fn bun_platform_only_suppresses_warnings_for_its_unshadowed_global() {
+    for platform in [None, Some("bun")] {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("main.ts"),
+            r#"
+(globalThis as any).Bun = { marker: 17 };
+(globalThis as any).platformDiagnosticProbe = { marker: 23 };
+const key = "marker";
+const { marker } = Bun;
+console.log(Bun === globalThis.Bun, typeof Bun, Bun[key], marker);
+console.log(platformDiagnosticProbe[key]);
+try { new Bun(); } catch (error) { console.log(error instanceof TypeError); }
+function scoped(Bun: any) {
+  const { marker } = Bun;
+  console.log(typeof Bun, Bun[key], marker);
+}
+scoped({ marker: 99 });
+{
+  const Bun = { marker: 31 };
+  const { marker } = Bun;
+  console.log(typeof Bun, Bun[key], marker);
+}
+"#,
+        )
+        .expect("write entry");
+        let (output, diagnostics) = compile(dir.path(), platform);
+        assert_eq!(
+            diagnostics.contains("unknown identifier 'Bun'"),
+            platform.is_none(),
+            "only Bun-platform mode knows the supplied global: {diagnostics}"
+        );
+        assert!(
+            diagnostics.contains("unknown identifier 'platformDiagnosticProbe'"),
+            "other unknown names must still warn: {diagnostics}"
+        );
+        assert_eq!(
+            run(&output, dir.path()),
+            "true object 17 17\n23\ntrue\nobject 99 99\nobject 31 31\n"
+        );
+    }
 }

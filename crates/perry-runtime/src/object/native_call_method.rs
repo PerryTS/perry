@@ -19,6 +19,8 @@ mod proto_dispatch;
 mod string_methods;
 
 #[cfg(test)]
+mod code_point_at_dispatch_tests;
+#[cfg(test)]
 mod dispatch_arg_coercion_tests;
 #[cfg(test)]
 mod probe_dispatch_tests;
@@ -335,6 +337,20 @@ unsafe fn call_primitive_closure_value(
     Some(result)
 }
 
+/// UTF-16 length of a string receiver, 0 for every other primitive — the
+/// number of own index properties its `ToObject` wrapper would materialise.
+unsafe fn primitive_receiver_utf16_len(receiver: f64) -> u64 {
+    let jsval = JSValue::from_bits(receiver.to_bits());
+    if !jsval.is_any_string() {
+        return 0;
+    }
+    let ptr = crate::value::js_get_string_pointer_unified(receiver) as *const crate::StringHeader;
+    if ptr.is_null() {
+        return 0;
+    }
+    crate::string::js_string_length(ptr) as u64
+}
+
 unsafe fn call_primitive_builtin_prototype_method(
     receiver: f64,
     builtin_name: &[u8],
@@ -342,6 +358,12 @@ unsafe fn call_primitive_builtin_prototype_method(
     args_ptr: *const f64,
     args_len: usize,
 ) -> Option<f64> {
+    // #9761 attribution: this is the fork where an unrecognised primitive
+    // method name turns into a `globalThis` lookup plus, for a sloppy callee,
+    // a `ToObject` wrapper whose own index properties are O(receiver length).
+    crate::gc::diag_primitive_dispatch(builtin_name, method_name, unsafe {
+        primitive_receiver_utf16_len(receiver)
+    });
     let ctor =
         crate::object::js_get_global_this_builtin_value(builtin_name.as_ptr(), builtin_name.len());
     let ctor_value = JSValue::from_bits(ctor.to_bits());
@@ -374,7 +396,9 @@ unsafe fn call_primitive_builtin_prototype_method(
     if let Some(value) = builtin_proto_accessor_method(proto_ptr, method_name, receiver) {
         return call_primitive_closure_value(receiver, value, args_ptr, args_len);
     }
-    let key = crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);
+    // A method name is a literal at the call site; the canonical interned
+    // header is allocated once per thread instead of once per dispatch.
+    let key = crate::string::canonical_key(method_name.as_bytes());
     let value = js_object_get_field_by_name(proto_ptr, key);
     call_primitive_closure_value(receiver, value, args_ptr, args_len)
 }
@@ -652,7 +676,9 @@ pub unsafe extern "C-unwind" fn js_native_call_method_value(
     let key_jsval = JSValue::from_bits(key.to_bits());
     let is_symbol_key = crate::symbol::js_is_symbol(key) != 0;
 
-    if is_symbol_key {
+    // Well-known symbol calls must use the current property value below;
+    // direct registry dispatch bypasses own/prototype replacements (#9788).
+    if is_symbol_key && !crate::symbol::is_well_known_symbol(crate::symbol::sym_key_from_f64(key)) {
         let sym_key = crate::symbol::sym_key_from_f64(key);
         if sym_key != 0 {
             let bits = object.to_bits();
@@ -886,7 +912,7 @@ pub unsafe extern "C-unwind" fn js_native_call_method_value(
     // (whose slot is already the receiver), effect's Tag-class symbol *statics*
     // (plain data values), and any closure that doesn't read `this` are all left
     // untouched — keeping the #1758/#36/#321 closure-proto-chain paths intact.
-    let field = if is_symbol_key && crate::symbol::own_symbol_property(object, key).is_none() {
+    let field = if is_symbol_key && !crate::symbol::has_own_symbol_property(object, key) {
         f64::from_bits(crate::closure::clone_closure_rebind_this(
             field.to_bits(),
             object,
@@ -996,6 +1022,9 @@ fn throw_object_to_string_not_function() -> ! {
 
 #[inline]
 unsafe fn gc_pointer_and_type_from_value(value: f64) -> Option<(*const u8, u8)> {
+    if crate::hot_diag::receiver_repr_on() {
+        crate::hot_diag::receiver_repr_note_value(value);
+    }
     let jsval = JSValue::from_bits(value.to_bits());
     let ptr = if jsval.is_pointer() {
         jsval.as_pointer::<u8>()
@@ -1307,11 +1336,13 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
     // property lookup before any class/native dispatch: that lookup preserves
     // own-property precedence and, for a miss, the per-instance chain is
     // authoritative rather than falling back to the original class vtable.
+    // #9502: an evaluated class's chain has the same precedence because two
+    // instances with the same template id can inherit different parent methods.
     if jsval().is_pointer() {
         let candidate = jsval().as_pointer::<ObjectHeader>() as usize;
         if crate::value::addr_class::is_above_handle_band(candidate)
             && crate::object::is_valid_obj_ptr(candidate as *const u8)
-            && super::prototype_chain::object_has_user_prototype_override(candidate)
+            && super::prototype_chain::object_has_individual_class_prototype(candidate)
         {
             let method_key =
                 crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);
@@ -2730,6 +2761,65 @@ mod primitive_dataprop_recovery_tests {
         assert_eq!(
             result, 6.0,
             "string.length member-read recovery must return UTF-16 length"
+        );
+    }
+}
+
+#[cfg(test)]
+mod receiver_repr_guard_tests {
+    use super::*;
+
+    /// An unarmed ledger must stop at each funnel's single guard. The
+    /// diagnostic helper increments a test-only entry counter before doing any
+    /// classification, so removing any guard below makes this test fail.
+    #[test]
+    fn receiver_repr_unarmed_funnels_never_enter_classification() {
+        crate::hot_diag::receiver_repr_test_reset();
+        crate::hot_diag::receiver_repr_test_arm(false);
+
+        unsafe {
+            assert!(gc_pointer_and_type_from_value(1.25).is_none());
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let object = scope.root_nanbox_f64(1.25);
+            assert!(primitive_methods::dispatch_primitive(
+                &scope,
+                &object,
+                &[],
+                1.25,
+                "receiver_repr_miss",
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+            )
+            .is_none());
+        }
+        assert_eq!(
+            crate::object::prototype_chain::object_static_prototype(1),
+            None
+        );
+        assert_eq!(
+            crate::object::field_get_set::get_field_by_name_object_tail(
+                std::ptr::null(),
+                std::ptr::null(),
+            )
+            .bits(),
+            crate::value::TAG_UNDEFINED,
+        );
+        assert_eq!(
+            crate::object::field_get_set::js_object_get_field_ic_miss(
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null_mut(),
+            )
+            .to_bits(),
+            crate::value::TAG_UNDEFINED,
+        );
+
+        assert_eq!(
+            crate::hot_diag::receiver_repr_test_classification_entries(),
+            0,
+            "an unarmed funnel entered receiver-representation classification"
         );
     }
 }

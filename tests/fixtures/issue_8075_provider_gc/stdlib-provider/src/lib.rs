@@ -25,6 +25,7 @@ unsafe extern "C" fn pin_issue_8038_response_surface() {
     let _ = perry_stdlib::js_headers_set(0.0, std::ptr::null(), std::ptr::null());
     let _ = perry_stdlib::js_headers_append(0.0, std::ptr::null(), std::ptr::null());
     let _ = perry_stdlib::js_headers_get(0.0, std::ptr::null());
+    let _ = perry_stdlib::js_response_body_init_reset();
     let _ = perry_stdlib::js_response_body_init_ptr(0.0);
     let _ = perry_stdlib::js_response_new(std::ptr::null(), 0.0, std::ptr::null(), 0.0);
     let _ = perry_stdlib::js_response_get_headers(0.0);
@@ -32,6 +33,8 @@ unsafe extern "C" fn pin_issue_8038_response_surface() {
     let _ = perry_stdlib::js_fetch_response_status_text(0.0);
     let _ = perry_stdlib::js_response_body(0.0);
     let _ = perry_stdlib::js_readable_stream_new_from_source_object(0.0, 0.0);
+    let _ =
+        perry_stdlib::js_readable_stream_new_with_strategy_and_source_type(0.0, 0.0, 0.0, 0.0, 0.0);
     let _ = perry_stdlib::js_readable_stream_get_reader_with_options(0.0, 0.0);
     let _ = perry_stdlib::js_reader_read(0.0);
     perry_stdlib::js_stdlib_init_dispatch();

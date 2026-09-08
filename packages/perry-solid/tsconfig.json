@@ -1,0 +1,29 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "skipLibCheck": true,
+    "paths": {
+      "perry/ui": [
+        "../../types/perry/ui/index.d.ts"
+      ],
+      "perry-solid/jsx-runtime": [
+        "./src/jsx-runtime.ts"
+      ]
+    },
+    "jsx": "preserve",
+    "jsxImportSource": "perry-solid"
+  },
+  "include": [
+    "src/**/*",
+    "test/**/*",
+    "examples/**/*"
+  ],
+  "exclude": [
+    "test/jsx/generated.ts"
+  ]
+}

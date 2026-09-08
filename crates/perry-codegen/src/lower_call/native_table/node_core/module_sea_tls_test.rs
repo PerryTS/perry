@@ -21,7 +21,10 @@ pub(crate) const NODE_CORE_MODULE_SEA_TLS_TEST_ROWS: &[NativeModSig] = &[
         method: "Module",
         class_filter: None,
         runtime: "js_module_module_new",
-        args: &[NA_F64],
+        // The runtime accepts the optional parent as its second argument.
+        // Keep the slot in the native signature so an omitted parent is
+        // explicitly padded with undefined instead of reading a stale register.
+        args: &[NA_F64, NA_F64],
         ret: NR_F64,
     },
     NativeModSig {
@@ -567,6 +570,15 @@ pub(crate) const NODE_CORE_MODULE_SEA_TLS_TEST_ROWS: &[NativeModSig] = &[
 #[cfg(test)]
 mod tests {
     use super::NODE_CORE_MODULE_SEA_TLS_TEST_ROWS;
+
+    #[test]
+    fn module_constructor_keeps_the_optional_parent_argument() {
+        let sig = NODE_CORE_MODULE_SEA_TLS_TEST_ROWS
+            .iter()
+            .find(|sig| sig.module == "module" && sig.method == "Module")
+            .expect("missing module.Module signature");
+        assert_eq!(sig.args.len(), 2, "Module must forward its optional parent");
+    }
 
     #[test]
     fn node_test_mock_accessor_calls_keep_the_options_argument() {

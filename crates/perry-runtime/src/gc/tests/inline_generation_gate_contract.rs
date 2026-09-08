@@ -262,3 +262,141 @@ fn the_incremental_clause_forces_the_call_for_a_young_parent() {
          store skips its insertion barrier and a live object is swept"
     );
 }
+
+// ---------------------------------------------------------------------------
+// The RUNTIME twin of the same gate.
+//
+// Runtime-Rust construction paths (`js_regexp_new` and friends) call the
+// barrier unconditionally, so a native header born in the nursery pays the
+// full parent classification on every field it initialises while generated
+// code, storing into the very same kind of object, skips it. These tests pin
+// `gc::newborn_parent_needs_barrier` to the emitted predicate CLAUSE FOR
+// CLAUSE, so the two can only drift by failing here.
+// ---------------------------------------------------------------------------
+
+/// Clause 1 (`GC_FLAG_TENURED`): the runtime twin must answer exactly what the
+/// emitted gate answers for the same live header.
+///
+/// Sabotage that this catches: a twin that only consults the incremental
+/// count answers "skip" for the tenured parent and fails the second assert —
+/// which is the stranded-child bug of
+/// `sabotaged_parent_gate_strands_a_young_child_the_shipped_gate_keeps`,
+/// reached from the runtime side instead of the emitted side.
+#[test]
+fn the_runtime_twin_reads_the_tenured_clause_from_the_live_header() {
+    let _guard = GcTestIsolationGuard::new();
+    assert!(
+        crate::gc::incremental_mark_barrier_globally_idle(),
+        "this test isolates clause 1, so no cycle may be live"
+    );
+
+    let young = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_OBJECT) as usize;
+    assert_eq!(
+        header_flags(young) & GC_FLAG_TENURED,
+        0,
+        "a fresh nursery allocation must not be TENURED — otherwise this test exercises nothing"
+    );
+    assert!(
+        !unsafe { crate::gc::newborn_parent_needs_barrier(young) },
+        "a nursery parent with no cycle live is exactly the case the gate exists to skip"
+    );
+    assert_eq!(
+        unsafe { crate::gc::newborn_parent_needs_barrier(young) },
+        codegen_parent_may_need_remembering(header_flags(young), 0),
+        "the runtime twin and the emitted gate must agree on a nursery parent"
+    );
+
+    // The SAME address, now carrying the bit a promotion would have stamped.
+    // Read live, so this models a header a collection promoted between its
+    // allocation and the store that follows it.
+    unsafe { (*header_from_user_ptr(young as *const u8)).gc_flags |= GC_FLAG_TENURED };
+    assert!(
+        unsafe { crate::gc::newborn_parent_needs_barrier(young) },
+        "a TENURED parent owes the remembered set an entry and must take the full barrier"
+    );
+    assert_eq!(
+        unsafe { crate::gc::newborn_parent_needs_barrier(young) },
+        codegen_parent_may_need_remembering(header_flags(young), 0),
+        "the runtime twin and the emitted gate must agree on a tenured parent"
+    );
+    unsafe { (*header_from_user_ptr(young as *const u8)).gc_flags &= !GC_FLAG_TENURED };
+}
+
+/// Clause 2 (the incremental count): with a cycle live anywhere, a nursery
+/// parent must still take the call, because the skipped work includes the
+/// SATB/insertion shading and that is not a generational question.
+///
+/// Sabotage that this catches: a twin that only reads the header's flags
+/// answers "skip" while a cycle is marking, and a child linked in during that
+/// window is never shaded.
+#[test]
+fn the_runtime_twin_forces_the_barrier_while_an_incremental_cycle_is_live() {
+    let _guard = GcTestIsolationGuard::new();
+
+    let young = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_OBJECT) as usize;
+    assert!(
+        !unsafe { crate::gc::newborn_parent_needs_barrier(young) },
+        "precondition: with no cycle live this parent is skipped"
+    );
+
+    crate::gc::PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT.fetch_add(1, Ordering::Relaxed);
+    let forced = unsafe { crate::gc::newborn_parent_needs_barrier(young) };
+    let codegen_answer = codegen_parent_may_need_remembering(
+        header_flags(young),
+        crate::gc::PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT.load(Ordering::Relaxed),
+    );
+    crate::gc::PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT.fetch_sub(1, Ordering::Relaxed);
+
+    assert!(
+        forced,
+        "a live incremental cycle must force the call even for a nursery parent — dropping this \
+         clause skips the insertion shading and sweeps a live child"
+    );
+    assert_eq!(
+        forced, codegen_answer,
+        "the runtime twin and the emitted gate must agree while a cycle is live"
+    );
+    assert!(
+        !unsafe { crate::gc::newborn_parent_needs_barrier(young) },
+        "the count is back to zero, so the same parent is skippable again"
+    );
+}
+
+/// **Did this code run?** The gate is only worth anything if the real
+/// `js_regexp_new` header reaches its skip arm — a fast path that is available
+/// but never taken is the campaign's "measured flat" failure in advance.
+///
+/// Asserts on the header `js_regexp_new` actually produced, not on a synthetic
+/// fixture: since #9845 it is a nursery allocation, so with no cycle live the
+/// two `pattern_ptr` / `flags_ptr` stores skip the barrier entirely, and the
+/// SAME header answers "take the barrier" the moment it carries the bit a
+/// promotion would stamp.
+#[cfg(feature = "regex-engine")]
+#[test]
+fn a_freshly_constructed_regexp_header_reaches_the_skip_arm() {
+    let _guard = GcTestIsolationGuard::new();
+
+    let pattern = crate::string::js_string_from_bytes(b"a(b)c".as_ptr(), 5);
+    let flags = crate::string::js_string_from_bytes(b"g".as_ptr(), 1);
+    let re = crate::regex::js_regexp_new(pattern, flags) as usize;
+
+    assert_eq!(
+        crate::arena::classify_heap_generation(re),
+        crate::arena::HeapGeneration::Nursery,
+        "#9845 allocates the RegExp header in the NURSERY; if that changes, the construction path \
+         stops being the case this gate is written for"
+    );
+    assert!(
+        !unsafe { crate::gc::newborn_parent_needs_barrier(re) },
+        "the construction path must actually TAKE the skip arm — an available-but-unreached fast \
+         path is indistinguishable from no fast path in a measurement"
+    );
+
+    unsafe { (*header_from_user_ptr(re as *const u8)).gc_flags |= GC_FLAG_TENURED };
+    assert!(
+        unsafe { crate::gc::newborn_parent_needs_barrier(re) },
+        "the same header, promoted, must take the full barrier — this is the \
+         `RegExp.prototype.compile`-on-a-tenured-receiver case"
+    );
+    unsafe { (*header_from_user_ptr(re as *const u8)).gc_flags &= !GC_FLAG_TENURED };
+}

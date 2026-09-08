@@ -1121,6 +1121,8 @@ pub(crate) const API_MANIFEST_PART_4: &[ApiEntry] = &[
     method("bun", "zstdDecompress", false, None),
     method("bun", "zstdDecompressSync", false, None),
     method("bun", "gc", false, None),
+    // Perry heap/allocator statistics; numeric approximations are documented.
+    method("bun:jsc", "heapStats", false, None),
     method("bun", "generateHeapSnapshot", false, None),
     method("bun", "file", false, None),
     method("bun", "write", false, None),

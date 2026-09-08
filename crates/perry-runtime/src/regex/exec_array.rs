@@ -76,6 +76,17 @@ pub(super) struct OwnedExecMatch {
 }
 
 impl OwnedExecMatch {
+    /// `PERRY_REGEX_DIAG`: (result-array slots, bytes copied for captures).
+    pub(super) fn capture_stats(&self) -> (usize, usize) {
+        let bytes = self
+            .captures
+            .iter()
+            .flatten()
+            .map(|c| c.byte_len as usize)
+            .sum();
+        (self.captures.len(), bytes)
+    }
+
     pub(super) fn from_standard(
         str_data: &str,
         regex: &regex::Regex,

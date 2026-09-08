@@ -201,9 +201,11 @@ pub(super) fn apply_inline_style(
                     &[
                         (I64, handle),
                         (DOUBLE, &top),
-                        (DOUBLE, &right),
-                        (DOUBLE, &bottom),
+                        // The cross-platform FFI ABI follows the public
+                        // setPadding order: top, left, bottom, right.
                         (DOUBLE, &left),
+                        (DOUBLE, &bottom),
+                        (DOUBLE, &right),
                     ],
                 );
             }

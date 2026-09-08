@@ -36,7 +36,7 @@ pub(in crate::commands::compile) fn is_commonjs(source: &str) -> bool {
     let stripped = strip_comments_and_strings(source);
     // ESM-at-the-top wins: a top-level `import`/`export` makes this an
     // ES module regardless of CJS patterns appearing deeper in the file.
-    if has_top_level_esm(&stripped) {
+    if has_top_level_esm(&stripped) || has_import_meta(&stripped) {
         return false;
     }
     if stripped.contains("module.exports")
@@ -67,6 +67,28 @@ pub(in crate::commands::compile) fn is_commonjs(source: &str) -> bool {
         return true;
     }
     stripped.contains("require(") && !stripped.contains("import ")
+}
+
+/// `import.meta` also makes a file ESM, including Bun bundles whose only
+/// imports are synchronous `import.meta.require` calls. Do not wrap those as
+/// CommonJS and accidentally hoist their chunk dependencies.
+fn has_import_meta(source: &str) -> bool {
+    fn is_ident(c: char) -> bool {
+        c.is_alphanumeric() || c == '_' || c == '$'
+    }
+    source.match_indices("import").any(|(start, _)| {
+        let before = &source[..start];
+        if before.ends_with(is_ident) || before.trim_end().ends_with('.') {
+            return false;
+        }
+        let after = source[start + "import".len()..].trim_start();
+        after.strip_prefix('.').is_some_and(|after| {
+            after
+                .trim_start()
+                .strip_prefix("meta")
+                .is_some_and(|after| !after.starts_with(is_ident))
+        })
+    })
 }
 
 /// Issue #5275: detect a bracket / computed-string-literal CJS export
@@ -513,4 +535,27 @@ pub fn is_js_reserved_word(name: &str) -> bool {
             | "public"
             | "await"
     )
+}
+
+#[cfg(test)]
+mod import_meta_tests {
+    use super::is_commonjs;
+
+    #[test]
+    fn import_meta_require_is_esm_without_import_declarations() {
+        for source in [
+            "const chunk = import.meta.require('./chunk.js');",
+            "const chunk = import.meta['require']('./chunk.js');",
+            "function load() { return import /* gap */ . meta.require('./chunk.js'); }",
+        ] {
+            assert!(!is_commonjs(source), "{source}");
+        }
+        for source in [
+            "const text = 'import.meta'; module.exports = require('./chunk.js');",
+            "// import.meta\nmodule.exports = require('./chunk.js');",
+            "const text = object.import.meta; module.exports = require('./chunk.js');",
+        ] {
+            assert!(is_commonjs(source), "{source}");
+        }
+    }
 }

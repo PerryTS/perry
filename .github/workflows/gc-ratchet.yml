@@ -144,7 +144,7 @@ jobs:
       # that coupling one planted defect shape at a time.
       - name: Harness unit tests and artifact validation
         run: |
-          python3 -m unittest discover -s tests -p 'test_gc_ratchet.py' -v
+          python3 -m unittest discover -s tests -p 'test*gc_ratchet.py' -v
           python3 benchmarks/gc_ratchet/gc_ratchet.py validate --scope structural
 
       - name: Decide whether this change can affect the collector
@@ -270,3 +270,33 @@ jobs:
             .bench-results/gc-ratchet-current.json
             benchmarks/gc_ratchet/baseline/gc-ratchet-v1.json
           retention-days: 90
+
+  report-main-result:
+    needs: gc-ratchet
+    if: >-
+      always() && github.ref == 'refs/heads/main' &&
+      (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') &&
+      (needs.gc-ratchet.result == 'failure' || needs.gc-ratchet.result == 'success')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Serialize the short issue update, not the expensive measurement jobs.
+    concurrency:
+      group: gc-ratchet-main-alert
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Update the main GC ratchet incident
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          RESULT: ${{ needs.gc-ratchet.result }}
+        run: >-
+          python3 scripts/report_gc_ratchet.py
+          --repository "$REPOSITORY" --run-id "$RUN_ID" --result "$RESULT"

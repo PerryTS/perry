@@ -14,6 +14,7 @@ pub(crate) fn nm_install_symbol(name: &str) -> Option<&'static str> {
         "bigint" => Some("js_nm_install_bigint"),
         "buffer" | "buffer.Buffer" => Some("js_nm_install_buffer"),
         "bun" => Some("js_bun_tcp_nm_install"),
+        "bun:jsc" => Some("js_nm_install_bun"),
         // #6562: bun:ffi keeps its scheme prefix (only `node:` is stripped
         // above).
         "bun:ffi" | "ffi" | "ffi.default" => Some("js_nm_install_bun_ffi"),
@@ -86,6 +87,7 @@ pub(crate) const NM_INSTALL_SYMBOLS: &[&str] = &[
     "js_nm_install_bigint",
     "js_nm_install_buffer",
     "js_bun_tcp_nm_install",
+    "js_nm_install_bun",
     "js_nm_install_bun_ffi",
     "js_nm_install_child_process",
     "js_nm_install_cluster",
@@ -145,6 +147,16 @@ pub(crate) fn nm_submod_install_symbol(key: &str) -> Option<&'static str> {
         "trace_events" => Some("js_node_submod_install_trace_events"),
         "test" => Some("js_node_submod_install_test"),
         "test_reporters" => Some("js_node_submod_install_test_reporters"),
+        _ => None,
+    }
+}
+
+/// Native-module spellings whose value is implemented by the node-submodule
+/// registry rather than a generic native-module namespace object.
+pub(crate) fn native_namespace_submodule_key(name: &str) -> Option<&'static str> {
+    match name.strip_prefix("node:").unwrap_or(name) {
+        "fs/promises" => Some("fs_promises"),
+        "stream/promises" => Some("stream_promises"),
         _ => None,
     }
 }

@@ -18,7 +18,7 @@ mod collection_equality;
 mod errors;
 pub(crate) use boxed_primitives::{
     boxed_primitive_json_value, boxed_primitive_payload, boxed_primitive_to_string_tag,
-    prune_dead_boxed_primitive_payload_owners,
+    boxed_string_wrapper_utf16_len, prune_dead_boxed_primitive_payload_owners,
 };
 pub use boxed_primitives::{
     js_boxed_bigint_new, js_boxed_boolean_new, js_boxed_number_new, js_boxed_string_new,

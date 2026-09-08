@@ -1,0 +1,1 @@
+- Add opt-in `perry.jsx: "solid"` compilation for native Solid JSX, with reactive properties and children, components, keyed control flow, conditional widget identity, spreads, references, and fragments. Provide JSX types and examples in `perry-solid`, and compare native compilation with Solid's official universal JSX transform in the release fixture.

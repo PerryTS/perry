@@ -164,6 +164,28 @@ fn allocating() -> Expr {
     Expr::Object(Vec::new())
 }
 
+#[test]
+fn prototype_assignment_receiver_survives_an_allocating_rhs() {
+    let ir = ir_for(
+        "prototype_store_9365.cts",
+        vec![Stmt::Expr(Expr::SetFunctionPrototype {
+            func: Box::new(allocating()),
+            proto: Box::new(allocating()),
+            strict: false,
+        })],
+    );
+    let f = init_ir(&ir);
+    assert_eq!(
+        f.lines()
+            .filter(|line| line.contains("call i64 @js_object_alloc("))
+            .count(),
+        2,
+        "both operands must allocate exactly once:\n{f}",
+    );
+    let receiver = first_call_result(f, "js_object_alloc").expect("receiver allocation");
+    assert_rooted_across(f, &receiver, "js_set_prototype_property", "#9365 receiver");
+}
+
 // ---------------------------------------------------------------- #6970 ----
 
 /// `m.set(key, value)` where `value` allocates: `key` is finished but lives in

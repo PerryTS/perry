@@ -110,7 +110,7 @@ pub(super) const UTILS_CRYPTO_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_nodemailer_send_mail",
         args: &[NA_PTR],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "nodemailer",
@@ -119,7 +119,7 @@ pub(super) const UTILS_CRYPTO_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_nodemailer_verify",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     // ========== dotenv ==========
     NativeModSig {
@@ -211,7 +211,7 @@ pub(super) const UTILS_CRYPTO_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "backOff",
         args: &[NA_PTR, NA_F64],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     // ========== argon2 ==========
     // Runtime FFI signatures take `*const StringHeader`, NOT NaN-boxed f64.
@@ -225,7 +225,7 @@ pub(super) const UTILS_CRYPTO_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_argon2_hash",
         args: &[NA_STR],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "argon2",
@@ -234,7 +234,7 @@ pub(super) const UTILS_CRYPTO_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_argon2_verify",
         args: &[NA_STR, NA_STR],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     // ========== bcrypt ==========
     // Same ABI rule as argon2 above: password / hash args are
@@ -247,7 +247,7 @@ pub(super) const UTILS_CRYPTO_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_bcrypt_hash",
         args: &[NA_STR, NA_F64],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "bcrypt",
@@ -256,7 +256,7 @@ pub(super) const UTILS_CRYPTO_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_bcrypt_compare",
         args: &[NA_STR, NA_STR],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     // ========== node-forge (PKI subset — perry-ext-node-forge) ==========
     // Namespaced statics (`forge.pki.rsa.generateKeyPair`,
@@ -275,7 +275,7 @@ pub(super) const UTILS_CRYPTO_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_node_forge_generate_key_pair",
         args: &[NA_F64],
-        ret: NR_PTR,
+        ret: NR_JS_VALUE,
     },
     NativeModSig {
         module: "node-forge",
@@ -284,7 +284,7 @@ pub(super) const UTILS_CRYPTO_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_node_forge_create_certificate",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_JS_VALUE,
     },
     NativeModSig {
         module: "node-forge",
@@ -293,7 +293,7 @@ pub(super) const UTILS_CRYPTO_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_node_forge_certificate_from_pem",
         args: &[NA_STR],
-        ret: NR_PTR,
+        ret: NR_JS_VALUE,
     },
     NativeModSig {
         module: "node-forge",
@@ -311,7 +311,7 @@ pub(super) const UTILS_CRYPTO_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_node_forge_private_key_from_pem",
         args: &[NA_STR],
-        ret: NR_PTR,
+        ret: NR_JS_VALUE,
     },
     NativeModSig {
         module: "node-forge",
@@ -339,7 +339,7 @@ pub(super) const UTILS_CRYPTO_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_node_forge_md_sha256_create",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_JS_VALUE,
     },
     // Certificate builder instance methods. The receiver (the JS cert
     // object) is NaN-unboxed to an `i64` `*mut ObjectHeader` and passed

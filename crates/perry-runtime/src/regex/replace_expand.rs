@@ -3,6 +3,7 @@
 //! `expand_js_replacement` (ECMAScript `$`-pattern expansion) and
 //! `replace_regex_fn_fancy` (the fancy-regex callback-replace fallback).
 
+use super::replace_expand_fancy::replace_regex_str_fancy;
 use super::replace_fn::{copy_replace_source, finish_replace_bytes};
 use super::*;
 
@@ -373,7 +374,7 @@ pub extern "C" fn js_string_replace_regex_fn(
 
         // If the `regex` crate couldn't compile this pattern (lookahead,
         // backreferences, …), `get_or_compile_regex` stashed a never-match
-        // placeholder in `(*re).regex_ptr` and the real pattern in
+        // placeholder in the header's standard program and the real pattern in
         // `FANCY_CACHE`. Route the callback-replace through fancy-regex so the
         // callback actually fires — otherwise `captures_iter` below would
         // silently match nothing and return the input unchanged. (get-intrinsic's
@@ -477,14 +478,14 @@ pub extern "C" fn js_string_replace_regex_named(
     }
 
     unsafe {
-        if let Some(repeat_matcher) = lookup_repeat_matcher(re) {
+        if let Some(repeat_matcher) = lookup_repeat_matcher_for(re, str_data, 0) {
             let result = repeat_matcher.replace(str_data, repl_str, (*re).global);
             return finish_replace_bytes(result.as_bytes());
         }
 
         // Fancy-regex fallback (lookbehind/backreferences): expand `$<name>`
         // and friends against the fancy captures instead of the never-match
-        // placeholder stored in `regex_ptr`.
+        // placeholder stored as the standard program.
         if let Some(fre) = lookup_fancy_regex(re) {
             return replace_regex_str_fancy(str_data, &fre, (*re).global, repl_str);
         }

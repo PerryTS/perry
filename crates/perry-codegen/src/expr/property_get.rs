@@ -64,10 +64,10 @@ pub(crate) use helpers::{
 };
 
 use super::{
-    emit_string_literal_global, emit_typed_feedback_register_site, import_origin_suffix,
-    import_origin_suffix_ns, is_global_this_builtin_name, lower_expr, nanbox_pointer_inline,
-    nanbox_string_inline, raw_f64_layout_fact, try_lower_pod_field_get, unbox_to_i64, FnCtx,
-    TypedFeedbackContract, TypedFeedbackKind,
+    emit_string_literal_global, emit_typed_feedback_register_site, import_origin_suffix_ns,
+    is_global_this_builtin_name, lower_expr, nanbox_pointer_inline, nanbox_string_inline,
+    raw_f64_layout_fact, try_lower_pod_field_get, unbox_to_i64, FnCtx, TypedFeedbackContract,
+    TypedFeedbackKind,
 };
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
@@ -1225,50 +1225,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     }
                 }
             }
-            // Imported exported-variable access: `Key.DOWN`, `FILTER.X`.
-            // ExternFuncRef used as a PropertyGet object means an
-            // imported const — call the getter function to load the
-            // actual object value, then do the property access on it.
-            // Without this, the codegen uses the address of the
-            // ClosureHeader global (wrong memory) instead of the
-            // object stored in the module's export global.
-            //
-            // Gate strictly on `imported_vars`: only exported const/let
-            // bindings have a `perry_fn_<src>__<name>` *getter* whose call
-            // returns the value. For an imported *function*, that same symbol
-            // IS the function body — calling it here invoked the function with
-            // zero args (reading garbage params) and read the property off its
-            // return value. Stripe hit this on `StripeResource.method` /
-            // `.extend` (an `export { StripeResource }` function with static
-            // props); every static read invoked the constructor instead. The
-            // function/class case falls through to the generic path below,
-            // which materializes the closure value and reads its dynamic prop.
+            // #9366: an exported variable can hold a class reference, a heap
+            // object, or a primitive. Lower the binding through its live getter
+            // and preserve its value tag in the ordinary property dispatcher.
+            // Masking every getter result into an ObjectHeader pointer drops
+            // class-expression prototypes (and other class properties).
             if let Expr::ExternFuncRef { name, .. } = object.as_ref() {
-                if ctx.imported_vars.contains(name) {
-                    if let Some(source_prefix) = ctx.import_function_prefixes.get(name).cloned() {
-                        // Issue #678: re-export renames mean the suffix in the
-                        // origin module differs from the consumer-visible name.
-                        let origin_suffix =
-                            import_origin_suffix(ctx.import_function_origin_names, name);
-                        let getter = format!("perry_fn_{}__{}", source_prefix, origin_suffix);
-                        ctx.pending_declares.push((getter.clone(), DOUBLE, vec![]));
-                        let obj_val = ctx.block().call(DOUBLE, &getter, &[]);
-                        // Now do property access on the actual object.
-                        let key_idx = ctx.strings.intern(property);
-                        let key_handle_global =
-                            format!("@{}", ctx.strings.entry(key_idx).handle_global);
-                        let blk = ctx.block();
-                        let obj_bits = blk.bitcast_double_to_i64(&obj_val);
-                        let obj_handle = blk.and(I64, &obj_bits, POINTER_MASK_I64);
-                        let key_box = blk.load(DOUBLE, &key_handle_global);
-                        let key_bits = blk.bitcast_double_to_i64(&key_box);
-                        let key_handle = blk.and(I64, &key_bits, POINTER_MASK_I64);
-                        return Ok(blk.call(
-                            DOUBLE,
-                            "js_object_get_field_by_name_f64",
-                            &[(I64, &obj_handle), (I64, &key_handle)],
-                        ));
-                    }
+                if ctx.imported_vars.contains(name)
+                    && ctx.import_function_prefixes.contains_key(name)
+                {
+                    return lower_generic_property_get(ctx, object, property, *byte_offset);
                 }
             }
             // Getter dispatch: if the receiver is a known class and

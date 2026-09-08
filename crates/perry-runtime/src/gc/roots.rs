@@ -708,141 +708,8 @@ pub(crate) fn try_mark_value_or_raw(word: u64, valid_ptrs: &ValidPointerSet) -> 
     true
 }
 
-/// Specialized mark-and-enqueue for trace-phase field walks.
-///
-/// Descriptor-driven trace walks all share the same pattern: read a
-/// heap-field word that is either a NaN-boxed JSValue or a raw I64
-/// pointer at an object start, mark it if live, and push the marked
-/// header onto the local worklist. The generic
-/// `try_mark_value_or_raw` is general enough to also handle
-/// conservative stack scans (raw interior pointers via
-/// `enclosing_object`) and root scans (push to MARK_SEEDS so the
-/// trace-marked-objects entry point can pick them up), but BOTH of
-/// those features are pure overhead inside `drain_trace_worklist`:
-///
-/// 1. Field words never hold interior pointers — they're written via
-///    `arr[i] = x` / `obj.f = x` / closure capture stores, all of
-///    which use the object-start user pointer. Skipping
-///    `enclosing_object` saves a binary-search lookup per field.
-///
-/// 2. The MARK_SEEDS push happens once per newly-marked object during
-///    trace, but the same header is also pushed onto the local
-///    worklist by the caller (so the trace drain visits it). The
-///    extra MARK_SEEDS push goes onto a TLS vec, gets cleared at the
-///    start of the next cycle, and is pure waste while we're already
-///    in the trace phase. Skipping it saves a TLS slot deref +
-///    Vec::push per marked object.
-///
-/// 3. The caller-side re-decode of the NaN-tag (to figure out
-///    POINTER_MASK extraction vs raw-pointer extraction) is folded
-///    into this function, so the caller doesn't pay that switch a
-///    second time.
-///
-/// The valid-pointer hashset check is still load-bearing here — we
-/// only elide the secondary `enclosing_object` fallback.
-#[inline(always)]
-#[cfg(target_os = "macos")]
-pub(super) fn get_stack_bottom() -> usize {
-    extern "C" {
-        fn pthread_self() -> *mut std::ffi::c_void;
-        fn pthread_get_stackaddr_np(thread: *mut std::ffi::c_void) -> *mut std::ffi::c_void;
-    }
-    unsafe {
-        let thread = pthread_self();
-        pthread_get_stackaddr_np(thread) as usize
-    }
-}
-
-#[cfg(target_os = "linux")]
-pub(super) fn get_stack_bottom() -> usize {
-    extern "C" {
-        fn pthread_self() -> usize;
-        fn pthread_attr_init(attr: *mut [u64; 8]) -> i32;
-        fn pthread_getattr_np(thread: usize, attr: *mut [u64; 8]) -> i32;
-        fn pthread_attr_getstack(
-            attr: *const [u64; 8],
-            stackaddr: *mut *mut u8,
-            stacksize: *mut usize,
-        ) -> i32;
-        fn pthread_attr_destroy(attr: *mut [u64; 8]) -> i32;
-    }
-    unsafe {
-        let thread = pthread_self();
-        let mut attr = [0u64; 8];
-        pthread_attr_init(&mut attr);
-        if pthread_getattr_np(thread, &mut attr) != 0 {
-            return 0;
-        }
-        let mut stackaddr: *mut u8 = std::ptr::null_mut();
-        let mut stacksize: usize = 0;
-        pthread_attr_getstack(&attr, &mut stackaddr, &mut stacksize);
-        pthread_attr_destroy(&mut attr);
-        stackaddr as usize + stacksize
-    }
-}
-
-// Windows: read TEB.StackBase. Works on every supported Windows version
-// (Windows 7+) without needing GetCurrentThreadStackLimits (Win8+), so it
-// stays correct on the `--min-windows-version=7` build path. The TEB lives
-// at GS:[0] on x86_64 (FS:[0] on x86); StackBase sits at offset 0x08
-// (the highest address — i.e. where the stack starts and grows down from).
-// This is the same pointer kernel32!GetCurrentThreadStackLimits returns as
-// `HighLimit`, just read directly from the TEB to avoid the kernel32 dep.
-//
-// Without this, conservative stack scan early-returns with stack_bottom=0,
-// the GC sees no stack roots, and any heap pointer that lives only in a
-// stack slot during a callback gets swept (issues #385/#386/#387 — the
-// `Array.prototype.map` / `JSON.parse(...).property` / supported_features
-// segfaults all traced back to here).
-#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
-pub(super) fn get_stack_bottom() -> usize {
-    let stack_base: usize;
-    unsafe {
-        std::arch::asm!(
-            "mov {out}, gs:[0x08]",
-            out = out(reg) stack_base,
-            options(nostack, preserves_flags, readonly),
-        );
-    }
-    stack_base
-}
-
-#[cfg(all(target_os = "windows", target_arch = "x86"))]
-pub(super) fn get_stack_bottom() -> usize {
-    let stack_base: usize;
-    unsafe {
-        std::arch::asm!(
-            "mov {out}, fs:[0x04]",
-            out = out(reg) stack_base,
-            options(nostack, preserves_flags, readonly),
-        );
-    }
-    stack_base
-}
-
-#[cfg(all(target_os = "windows", target_arch = "aarch64"))]
-pub(super) fn get_stack_bottom() -> usize {
-    // ARM64 Windows: TEB pointer is in x18; StackBase at offset 0x08.
-    let stack_base: usize;
-    unsafe {
-        let teb: usize;
-        std::arch::asm!("mov {}, x18", out(reg) teb, options(nostack, preserves_flags, readonly));
-        stack_base = *((teb + 0x08) as *const usize);
-    }
-    stack_base
-}
-
-#[cfg(not(any(
-    target_os = "macos",
-    target_os = "linux",
-    all(
-        target_os = "windows",
-        any(target_arch = "x86_64", target_arch = "x86", target_arch = "aarch64")
-    ),
-)))]
-pub(super) fn get_stack_bottom() -> usize {
-    0 // Stack scanning not supported on this OS/arch
-}
+mod stack_bottom;
+pub(super) use stack_bottom::get_stack_bottom;
 
 pub(super) enum RuntimeRootVisitMode<'a> {
     Mark {
@@ -861,7 +728,7 @@ pub(super) enum RuntimeRootVisitMode<'a> {
         valid_ptrs: &'a ValidPointerSet,
     },
     Verify {
-        valid_ptrs: &'a ValidPointerSet,
+        verifier: EvacuationVerifier<'a>,
         surface: &'static str,
     },
     Copy {
@@ -879,6 +746,13 @@ pub(super) enum RuntimeRootVisitMode<'a> {
 pub struct RuntimeRootVisitor<'a> {
     pub(super) mode: RuntimeRootVisitMode<'a>,
     pub(super) root_source_stats: Option<*mut RootSourceSlotTraceStats>,
+    /// #9754: this visit belongs to a MINOR-scoped pass — the copying minor's
+    /// preflight/mark/rewrite, or a `GcCollectionKind::Minor` trace's root
+    /// scan — which neither moves nor sweeps an old-generation object. A
+    /// side table with a young-entry log (`gc/young_log.rs`) may then visit
+    /// only its logged entries. A full trace, an evacuation rewrite/verify
+    /// pass and the legacy copy mode walk everything.
+    pub(super) young_scope: bool,
 }
 
 impl<'a> RuntimeRootVisitor<'a> {
@@ -886,6 +760,18 @@ impl<'a> RuntimeRootVisitor<'a> {
         Self {
             mode: RuntimeRootVisitMode::Mark { valid_ptrs },
             root_source_stats: None,
+            young_scope: false,
+        }
+    }
+
+    /// `for_mark` for a cycle whose trace is minor-only: old objects are
+    /// black leaves and their marks are consumed by nothing, so the
+    /// young-logged side tables may skip their old entries (#9754).
+    pub(super) fn for_mark_scoped(valid_ptrs: &'a ValidPointerSet, minor_only: bool) -> Self {
+        Self {
+            mode: RuntimeRootVisitMode::Mark { valid_ptrs },
+            root_source_stats: None,
+            young_scope: minor_only,
         }
     }
 
@@ -893,6 +779,7 @@ impl<'a> RuntimeRootVisitor<'a> {
         Self {
             mode: RuntimeRootVisitMode::Rewrite { valid_ptrs },
             root_source_stats: None,
+            young_scope: false,
         }
     }
 
@@ -900,6 +787,7 @@ impl<'a> RuntimeRootVisitor<'a> {
         Self {
             mode: RuntimeRootVisitMode::CopyingCheck { checker },
             root_source_stats: None,
+            young_scope: true,
         }
     }
 
@@ -907,6 +795,7 @@ impl<'a> RuntimeRootVisitor<'a> {
         Self {
             mode: RuntimeRootVisitMode::CopyingMark { collector },
             root_source_stats: None,
+            young_scope: true,
         }
     }
 
@@ -914,16 +803,15 @@ impl<'a> RuntimeRootVisitor<'a> {
         Self {
             mode: RuntimeRootVisitMode::CopyingRewrite { collector },
             root_source_stats: None,
+            young_scope: true,
         }
     }
 
-    pub(super) fn for_verify(valid_ptrs: &'a ValidPointerSet, surface: &'static str) -> Self {
+    pub(super) fn for_verify(verifier: EvacuationVerifier<'a>, surface: &'static str) -> Self {
         Self {
-            mode: RuntimeRootVisitMode::Verify {
-                valid_ptrs,
-                surface,
-            },
+            mode: RuntimeRootVisitMode::Verify { verifier, surface },
             root_source_stats: None,
+            young_scope: false,
         }
     }
 
@@ -931,7 +819,16 @@ impl<'a> RuntimeRootVisitor<'a> {
         Self {
             mode: RuntimeRootVisitMode::Copy { mark },
             root_source_stats: None,
+            young_scope: false,
         }
+    }
+
+    /// #9754: true when this pass can only act on non-old objects, so a
+    /// young-logged side table may confine its walk to the logged entries.
+    /// See `gc/young_log.rs` for the argument.
+    #[inline]
+    pub(crate) fn young_scope(&self) -> bool {
+        self.young_scope
     }
 
     #[inline]
@@ -1009,12 +906,9 @@ impl<'a> RuntimeRootVisitor<'a> {
             RuntimeRootVisitMode::Rewrite { valid_ptrs } => {
                 try_rewrite_nanboxed_value(bits, valid_ptrs)
             }
-            RuntimeRootVisitMode::Verify {
-                valid_ptrs,
-                surface,
-            } => {
-                if let Some(new_bits) = try_rewrite_nanboxed_value(bits, valid_ptrs) {
-                    check_forwarded_reference(surface, 0, bits, new_bits);
+            RuntimeRootVisitMode::Verify { verifier, surface } => {
+                if let Some(new_bits) = verifier.stale_nanboxed_value(bits) {
+                    panic_stale_forwarded_reference(*verifier, surface, 0, bits, new_bits);
                 }
                 None
             }
@@ -1041,12 +935,9 @@ impl<'a> RuntimeRootVisitor<'a> {
                 collector.rewrite_value_bits(bits)
             }
             RuntimeRootVisitMode::Rewrite { valid_ptrs } => try_rewrite_value(bits, valid_ptrs),
-            RuntimeRootVisitMode::Verify {
-                valid_ptrs,
-                surface,
-            } => {
-                if let Some(new_bits) = try_rewrite_value(bits, valid_ptrs) {
-                    check_forwarded_reference(surface, 0, bits, new_bits);
+            RuntimeRootVisitMode::Verify { verifier, surface } => {
+                if let Some(new_bits) = verifier.stale_value(bits) {
+                    panic_stale_forwarded_reference(*verifier, surface, 0, bits, new_bits);
                 }
                 None
             }
@@ -1081,12 +972,10 @@ impl<'a> RuntimeRootVisitor<'a> {
             RuntimeRootVisitMode::CopyingMark { collector } => collector.visit_raw_addr(addr),
             RuntimeRootVisitMode::CopyingRewrite { collector } => collector.rewrite_raw_addr(addr),
             RuntimeRootVisitMode::Rewrite { valid_ptrs } => try_rewrite_raw_addr(addr, valid_ptrs),
-            RuntimeRootVisitMode::Verify {
-                valid_ptrs,
-                surface,
-            } => {
-                if let Some(new_addr) = try_rewrite_raw_addr(addr, valid_ptrs) {
-                    check_forwarded_reference(
+            RuntimeRootVisitMode::Verify { verifier, surface } => {
+                if let Some(new_addr) = verifier.stale_raw_addr(addr) {
+                    panic_stale_forwarded_reference(
+                        *verifier,
                         surface,
                         0,
                         copy_tag | (addr as u64 & POINTER_MASK),
@@ -1112,14 +1001,15 @@ impl<'a> RuntimeRootVisitor<'a> {
             RuntimeRootVisitMode::CopyingCheck { .. } => None,
             RuntimeRootVisitMode::CopyingMark { .. } => None,
             RuntimeRootVisitMode::CopyingRewrite { collector } => collector.rewrite_raw_addr(addr),
-            RuntimeRootVisitMode::Verify {
-                valid_ptrs,
-                surface,
-            } => {
-                if let Some(new_addr) = try_rewrite_raw_addr(addr, valid_ptrs) {
-                    // Metadata keys must name the canonical owner even when
-                    // an ordinary value may retain a permanent growth alias.
-                    panic_stale_forwarded_reference(surface, 0, addr as u64, new_addr as u64);
+            RuntimeRootVisitMode::Verify { verifier, surface } => {
+                if let Some(new_addr) = verifier.stale_raw_addr(addr) {
+                    panic_stale_forwarded_reference(
+                        *verifier,
+                        surface,
+                        0,
+                        addr as u64,
+                        new_addr as u64,
+                    );
                 }
                 None
             }

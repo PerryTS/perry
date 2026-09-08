@@ -68,6 +68,7 @@ pub(crate) mod type_analysis;
 pub(crate) mod type_analysis_class_fields;
 pub(crate) mod type_analysis_facts;
 pub(crate) mod type_analysis_net;
+pub mod typed_feedback_profile;
 pub(crate) mod typed_shape;
 pub mod types;
 
@@ -79,6 +80,13 @@ pub use codegen::{
     NamespaceEntry, NamespaceEntryKind, ObjectLiteralMethodCandidate, ShortSpreadMethodCandidate,
 };
 pub use collectors::CjsPreambleCensus;
+// #9843: the segment-view for-of matcher's counter. Exported so the
+// driver can run it at the HIR-trace point — after every transform, on
+// exactly the statements codegen consumes — instead of only inside a
+// codegen run, which a 10 MB bundle does not reach in a usable time.
+pub use collectors::segview::{
+    segview_diag_enabled, segview_lowering_enabled, segview_rewrite_module, SegViewDiag,
+};
 
 /// Return the guarded proven-`this` method-clone capabilities a native module
 /// may safely publish to importing codegen units. The first map contains all
@@ -135,7 +143,7 @@ pub mod expr_shadow_layout {
 /// check (#463) miss a real implementation.
 ///
 /// Arg / return *kinds* are reported as opaque strings (`"NA_STR"`,
-/// `"NR_PTR"`, ...) so the consistency test can compare against the
+/// `"NR_GCPTR"`, ...) so the consistency test can compare against the
 /// manifest's `params` / `returns` types without `perry-api-manifest`
 /// having to depend on `perry-codegen`'s internal enums (#512).
 pub struct NativeMethodRef {
@@ -154,8 +162,11 @@ pub struct NativeMethodRef {
     /// `"NA_VARARGS"`, `"NA_JSON"`. Used by `perry-api-manifest`'s
     /// param-count drift test (#512).
     pub arg_kinds: &'static [&'static str],
-    /// Return-kind tag. One of `"NR_PTR"`, `"NR_PROMISE"`, `"NR_STR"`,
-    /// `"NR_BIGINT"`, `"NR_F64"`, `"NR_I32"`, `"NR_VOID"`.
+    /// Return-kind tag. Pointer-boxed results explicitly distinguish
+    /// `"NR_GCPTR"`, `"NR_NULLABLE_GCPTR"`, `"NR_HANDLE_ID"`,
+    /// `"NR_FOREIGN_PTR"`, and `"NR_JS_VALUE"`; the existing
+    /// `"NR_PROMISE"`, `"NR_STR"`, `"NR_BIGINT"`, `"NR_F64"`,
+    /// `"NR_I32"`, and `"NR_VOID"` tags are unchanged.
     pub ret_kind: &'static str,
 }
 

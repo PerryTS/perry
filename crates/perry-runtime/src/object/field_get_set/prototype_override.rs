@@ -23,9 +23,9 @@ use crate::value::JSValue;
 ///
 /// This is the same polarity `canonical_shape_excludes_own_property` uses: a
 /// question we cannot answer here defers to the tail rather than fabricating a
-/// verdict. The dedicated user-origin signal excludes internal runtime wiring,
-/// even when that wiring uses the loud setter and its conservative cache
-/// invalidations.
+/// verdict. Evaluated class prototypes also take this path (#9502): their
+/// heritage can differ between evaluations of one template. Other internal
+/// runtime wiring retains its existing fallback behavior.
 ///
 /// `None` therefore means either no override, or an override that does not
 /// carry this key — in both cases the caller keeps its existing fallback.
@@ -36,7 +36,7 @@ pub(super) fn inherited_field_if_overridden(
     if key.is_null() {
         return None;
     }
-    if !crate::object::prototype_chain::object_has_user_prototype_override(obj as usize) {
+    if !crate::object::prototype_chain::object_has_individual_class_prototype(obj as usize) {
         return None;
     }
     crate::object::prototype_chain::resolve_inherited_field(obj as usize, key)

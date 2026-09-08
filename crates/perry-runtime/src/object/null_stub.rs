@@ -36,6 +36,11 @@ const _: () =
 #[no_mangle]
 pub extern "C" fn js_unresolved_namespace_stub() -> f64 {
     let null_obj_ptr = &NULL_OBJECT_BYTES as *const NullObjectBytes as *mut u8;
+    if crate::hot_diag::receiver_repr_on() {
+        crate::hot_diag::receiver_repr_note_constructed(
+            crate::hot_diag::ReceiverReprFamily::NullStub,
+        );
+    }
     f64::from_bits(crate::JSValue::pointer(null_obj_ptr).bits())
 }
 
@@ -69,3 +74,8 @@ pub(crate) static NULL_OBJECT_BYTES: NullObjectBytes = NullObjectBytes {
     parent_class_id: 0,
     meta_and_padding: 0,
 };
+
+#[inline]
+pub(crate) fn is_null_stub_address(addr: usize) -> bool {
+    addr == &NULL_OBJECT_BYTES as *const NullObjectBytes as usize
+}

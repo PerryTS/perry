@@ -43,7 +43,7 @@ pub extern "C" fn js_inline_arena_state() -> *mut InlineArenaState {
             let block = &arena.blocks[arena.current];
             state.data = block.data;
             state.offset = block.offset;
-            state.size = block.size;
+            state.size = super::alloc_sample::inline_limit(block.offset, block.size);
         }
         state as *mut InlineArenaState
     }
@@ -82,6 +82,7 @@ pub extern "C" fn js_inline_arena_slow_alloc(
         {
             let arena = &mut *arena_ptr;
             let current = arena.current;
+            super::alloc_sample::note_inline_sync(arena.blocks[current].offset, offset);
             arena.blocks[current].offset = offset;
         }
         // Allocate via existing path (may push a new block + run GC).
@@ -95,7 +96,7 @@ pub extern "C" fn js_inline_arena_slow_alloc(
         let state_ref = &mut *state;
         state_ref.data = data;
         state_ref.offset = block_offset;
-        state_ref.size = block_size;
+        state_ref.size = super::alloc_sample::inline_limit(block_offset, block_size);
         ptr
     })
 }
@@ -113,7 +114,9 @@ pub fn sync_inline_arena_state() {
         if !state.data.is_null() {
             ARENA.with(|a| {
                 let arena = &mut *(*a).get();
-                arena.blocks[arena.current].offset = state.offset;
+                let current = arena.current;
+                super::alloc_sample::note_inline_sync(arena.blocks[current].offset, state.offset);
+                arena.blocks[current].offset = state.offset;
             });
         }
     });
@@ -135,7 +138,9 @@ pub fn arena_start_fresh_general_block() {
         ARENA.with(|a| {
             let arena = &mut *(*a).get();
             if !inline.data.is_null() {
-                arena.blocks[arena.current].offset = inline.offset;
+                let current = arena.current;
+                super::alloc_sample::note_inline_sync(arena.blocks[current].offset, inline.offset);
+                arena.blocks[current].offset = inline.offset;
             }
             if arena.blocks[arena.current].offset < FRESH_GENERAL_BLOCK_MIN_USED_BYTES {
                 return;
@@ -145,7 +150,7 @@ pub fn arena_start_fresh_general_block() {
                 let block = &arena.blocks[arena.current];
                 inline.data = block.data;
                 inline.offset = block.offset;
-                inline.size = block.size;
+                inline.size = super::alloc_sample::inline_limit(block.offset, block.size);
             }
         });
     });

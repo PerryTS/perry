@@ -128,11 +128,13 @@ fi
 #
 # So the registry is the import graph and this is the check on it: the module
 # name perry derives from a path is the path with every non-alphanumeric
-# character replaced by `_`, so each source names exactly one expected `.ll`.
+# character replaced by `_`. Release worktrees can add their directory name as
+# a prefix, so require exactly one emitted module with the source-path suffix.
 dark=()
 for src in test-files/gc-dep-corpus/*.ts; do
   sanitized="$(printf '%s' "$src" | tr -c 'A-Za-z0-9' '_')"
-  if [ ! -f "$OUTDIR/dep__${sanitized}.ll" ]; then
+  matches=("$OUTDIR"/dep__*"${sanitized}.ll")
+  if [ "${#matches[@]}" -ne 1 ] || [ ! -f "${matches[0]}" ]; then
     dark+=("$src")
   fi
 done

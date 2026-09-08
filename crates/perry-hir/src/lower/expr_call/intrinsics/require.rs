@@ -5,53 +5,8 @@ use swc_ecma_ast as ast;
 
 use super::super::super::{lower_expr, LoweringContext};
 
-/// Bun's module-scoped synchronous loader, `import.meta.require(specifier)`.
-///
-/// Perry already represents a computed CommonJS `require(expr)` as a
-/// synchronous `DynamicImport`: the module collector resolves its finite path
-/// set and codegen returns the selected namespace directly instead of wrapping
-/// it in a Promise.  Reuse that path here.  Treating `require` as an ordinary
-/// unknown `import.meta` property would otherwise fold the callee to
-/// `undefined` in `expr_member` and compile an unconditional
-/// `TypeError: value is not a function`.
-pub(crate) fn try_import_meta_require(
-    ctx: &mut LoweringContext,
-    call: &ast::CallExpr,
-) -> Result<Option<Expr>> {
-    let ast::Callee::Expr(callee_expr) = &call.callee else {
-        return Ok(None);
-    };
-    let ast::Expr::Member(member) = callee_expr.as_ref() else {
-        return Ok(None);
-    };
-    let is_require = match &member.prop {
-        ast::MemberProp::Ident(property) => property.sym.as_ref() == "require",
-        ast::MemberProp::Computed(property) => matches!(
-            property.expr.as_ref(),
-            ast::Expr::Lit(ast::Lit::Str(value)) if value.value.as_str() == Some("require")
-        ),
-        ast::MemberProp::PrivateName(_) => false,
-    };
-    if !is_require
-        || !matches!(
-            member.obj.as_ref(),
-            ast::Expr::MetaProp(meta) if meta.kind == ast::MetaPropKind::ImportMeta
-        )
-        || call.args.len() != 1
-        || call.args[0].spread.is_some()
-    {
-        return Ok(None);
-    }
-
-    let arg = lower_expr(ctx, call.args[0].expr.as_ref())?;
-    Ok(Some(Expr::DynamicImport {
-        paths: Vec::new(),
-        arg: Box::new(arg),
-        byte_offset: call.span.lo.0,
-        deferred_error: None,
-        synchronous: true,
-    }))
-}
+#[cfg(test)]
+mod tests;
 
 /// Issue #668 / #5216: a string-literal `require("<module>")` from user source.
 ///
@@ -195,6 +150,70 @@ pub(crate) fn try_dynamic_require(
     Ok(Some(Expr::DynamicImport {
         paths: Vec::new(),
         arg: Box::new(arg),
+        byte_offset: call.span.lo.0,
+        deferred_error: None,
+        synchronous: true,
+    }))
+}
+
+fn strip_require_wrappers(mut expr: &ast::Expr) -> &ast::Expr {
+    loop {
+        expr = match expr {
+            ast::Expr::Paren(paren) => &paren.expr,
+            ast::Expr::TsAs(value) => &value.expr,
+            ast::Expr::TsNonNull(value) => &value.expr,
+            ast::Expr::TsTypeAssertion(value) => &value.expr,
+            _ => return expr,
+        };
+    }
+}
+
+/// Bun's direct `import.meta.require` calls use the same bounded synchronous
+/// module dispatcher as computed CommonJS requires. Match the actual meta
+/// property, so a local `require` binding or an ordinary object's method does
+/// not change which function this syntax denotes.
+pub(crate) fn try_import_meta_require(
+    ctx: &mut LoweringContext,
+    call: &ast::CallExpr,
+) -> Result<Option<Expr>> {
+    let ast::Callee::Expr(callee) = &call.callee else {
+        return Ok(None);
+    };
+    let ast::Expr::Member(member) = strip_require_wrappers(callee) else {
+        return Ok(None);
+    };
+    if !matches!(strip_require_wrappers(&member.obj), ast::Expr::MetaProp(meta)
+        if meta.kind == ast::MetaPropKind::ImportMeta)
+    {
+        return Ok(None);
+    }
+    let is_require = match &member.prop {
+        ast::MemberProp::Ident(name) => name.sym == "require",
+        ast::MemberProp::Computed(key) => matches!(strip_require_wrappers(&key.expr),
+            ast::Expr::Lit(ast::Lit::Str(name)) if name.value.as_str() == Some("require")),
+        _ => false,
+    };
+    if !is_require {
+        return Ok(None);
+    }
+    if call.args.len() != 1 || call.args[0].spread.is_some() {
+        crate::lower_bail!(call.span, "import.meta.require requires one non-spread path argument for ahead-of-time module resolution");
+    }
+    let arg = strip_require_wrappers(&call.args[0].expr);
+    if let ast::Expr::Lit(ast::Lit::Str(specifier)) = arg {
+        if let Some(module) = crate::destructuring::resolvable_native_module_for_spec(
+            specifier.value.as_str().unwrap_or(""),
+        ) {
+            return Ok(Some(Expr::NativeModuleRef(if module == "process" {
+                "process.namespace".into()
+            } else {
+                module
+            })));
+        }
+    }
+    Ok(Some(Expr::DynamicImport {
+        paths: Vec::new(),
+        arg: Box::new(lower_expr(ctx, arg)?),
         byte_offset: call.span.lo.0,
         deferred_error: None,
         synchronous: true,

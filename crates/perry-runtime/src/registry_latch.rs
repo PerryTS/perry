@@ -225,12 +225,20 @@ impl RegistryAddrWindow {
         self.hi.fetch_max(addr, Ordering::AcqRel);
     }
 
-    /// Test hook: the current `[lo, hi]` pair, or `None` while empty.
-    #[cfg(test)]
-    pub(crate) fn bounds_for_tests(&self) -> Option<(usize, usize)> {
+    /// The live `[lo, hi]` pair, or `None` while the window is still empty.
+    ///
+    /// Diagnostic use: `PERRY_BUFFER_DIAG` reports it, so a window that has
+    /// widened until it covers the heap is visible rather than inferred.
+    pub(crate) fn bounds(&self) -> Option<(usize, usize)> {
         let lo = self.lo.load(Ordering::Acquire);
         let hi = self.hi.load(Ordering::Acquire);
         (lo <= hi).then_some((lo, hi))
+    }
+
+    /// Test hook: the current `[lo, hi]` pair, or `None` while empty.
+    #[cfg(test)]
+    pub(crate) fn bounds_for_tests(&self) -> Option<(usize, usize)> {
+        self.bounds()
     }
 }
 

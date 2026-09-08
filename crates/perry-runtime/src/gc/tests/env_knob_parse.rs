@@ -50,6 +50,43 @@ const ON_SPELLINGS: &[&str] = &["1", "true", "on", "yes", "TRUE", "On", " 1 ", "
 /// default-OFF instrument OFF, not arm it.
 const UNRECOGNISED: &[&str] = &["banana", "2", "-1", "onn", "ye", "enabled", "0x1"];
 
+/// `PERRY_ALLOC_SITE_SAMPLE` (arena/alloc_sample.rs) is a MAGNITUDE knob with
+/// the shared boolean vocabulary layered on top: every OFF spelling and every
+/// typo reads as OFF, the ON spellings select the default interval, and an
+/// explicit integer is the interval in bytes, floored.
+#[test]
+fn alloc_site_sample_interval_is_off_by_value_and_a_floored_magnitude_when_on() {
+    use crate::arena::alloc_sample::{parse_interval, DEFAULT_INTERVAL_BYTES, MIN_INTERVAL_BYTES};
+    for raw in OFF_SPELLINGS {
+        assert_eq!(parse_interval(*raw), 0, "{raw:?} must read as OFF");
+    }
+    for raw in ON_SPELLINGS {
+        assert_eq!(
+            parse_interval(Some(raw)),
+            DEFAULT_INTERVAL_BYTES,
+            "{raw:?} is the boolean ON spelling and selects the default interval"
+        );
+    }
+    for raw in UNRECOGNISED {
+        if raw.trim().parse::<usize>().is_ok_and(|v| v >= 2) {
+            continue; // an integer is a magnitude for this knob, pinned below
+        }
+        assert_eq!(
+            parse_interval(Some(raw)),
+            0,
+            "{raw:?} is a typo and must leave the sampler OFF"
+        );
+    }
+    assert_eq!(parse_interval(Some("65536")), 65536);
+    assert_eq!(parse_interval(Some(" 4096 ")), 4096);
+    assert_eq!(
+        parse_interval(Some("2")),
+        MIN_INTERVAL_BYTES,
+        "a tiny explicit interval is floored, not honoured"
+    );
+    assert!(DEFAULT_INTERVAL_BYTES >= MIN_INTERVAL_BYTES);
+}
+
 #[test]
 fn default_off_knobs_are_parsed_by_value_not_presence() {
     for raw in OFF_SPELLINGS {

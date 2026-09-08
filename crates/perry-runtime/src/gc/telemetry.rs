@@ -15,8 +15,42 @@ pub const GC_RECENT_PAUSE_WINDOW: usize = 32;
 /// The value semantics are #5093's, shared with every other GC knob via
 /// [`super::env_flag_from_value`].
 pub fn gc_diag_enabled() -> bool {
+    #[cfg(test)]
+    if GC_DIAG_TEST_FORCED.with(std::cell::Cell::get) {
+        return true;
+    }
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ENABLED.get_or_init(|| env_flag_enabled("PERRY_GC_DIAG"))
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Test-only per-thread override of `PERRY_GC_DIAG`: the live reader is a
+    /// process-wide `OnceLock`, and `std::env::set_var` is shared by every
+    /// libtest thread (see `env_knob_parse.rs`), so a test that needs the
+    /// diagnostic paths live arms them here instead.
+    static GC_DIAG_TEST_FORCED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Test-only RAII: force `gc_diag_enabled()` ON for this thread.
+#[cfg(test)]
+pub(crate) struct GcDiagTestGuard {
+    previous: bool,
+}
+
+#[cfg(test)]
+impl GcDiagTestGuard {
+    pub(crate) fn force_on() -> Self {
+        let previous = GC_DIAG_TEST_FORCED.with(|c| c.replace(true));
+        Self { previous }
+    }
+}
+
+#[cfg(test)]
+impl Drop for GcDiagTestGuard {
+    fn drop(&mut self) {
+        GC_DIAG_TEST_FORCED.with(|c| c.set(self.previous));
+    }
 }
 
 /// Is `PERRY_GC_VERIFY_MARK` ON? Cached for the same reason as
@@ -242,6 +276,18 @@ pub(super) struct CopyingNurseryTraceStats {
     /// Live bytes re-copied/promoted out of the from-survivor space this
     /// cycle — the re-copy tax the adaptive loop exists to bound.
     pub(super) survivor_live_bytes: usize,
+    /// #9851 follow-up: the FRESH half of `copied_bytes` — bytes copied out of
+    /// Eden into the to-survivor space this cycle, excluding survivor-space
+    /// residents being re-copied. This is the intake of exactly one cohort,
+    /// and it is the denominator the survival-rate lock must use.
+    pub(super) eden_copied_bytes: usize,
+    /// The matching numerator: live bytes moved out of the from-survivor space
+    /// this cycle whose stored survival age was 1 — i.e. objects that entered
+    /// the survivor space from Eden on the PREVIOUS cycle, and nothing older.
+    /// `survivor_live_bytes` rates the whole space, whose composition changes
+    /// with the threshold; this rates one aging round of one fresh cohort,
+    /// which is what the lock's conclusion is about.
+    pub(super) survivor_first_round_live_bytes: usize,
     pub(super) large_excluded_objects: usize,
     pub(super) large_excluded_bytes: usize,
     pub(super) reset_blocks: usize,
@@ -1118,6 +1164,8 @@ impl GcCycleTrace {
             "tenuring_survivals": self.copying_nursery.tenuring_survivals,
             "eden_live_bytes": self.copying_nursery.eden_live_bytes,
             "survivor_live_bytes": self.copying_nursery.survivor_live_bytes,
+            "eden_copied_bytes": self.copying_nursery.eden_copied_bytes,
+            "survivor_first_round_live_bytes": self.copying_nursery.survivor_first_round_live_bytes,
             "large_excluded_objects": self.copying_nursery.large_excluded_objects,
             "large_excluded_bytes": self.copying_nursery.large_excluded_bytes,
             "reset_blocks": self.copying_nursery.reset_blocks,

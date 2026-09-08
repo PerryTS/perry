@@ -30,12 +30,14 @@ pub const DYNAMIC_IMPORT_PATH_CAP: usize = 64;
 mod binding_origin;
 mod top_level_await;
 mod visitors;
+mod worker_paths;
 use binding_origin::{resolve_binding_origin, BindingOrigin};
 pub use top_level_await::detect_top_level_await;
 pub use visitors::{
     for_each_dynamic_import, for_each_dynamic_import_mut, for_each_worker_new,
     for_each_worker_new_mut,
 };
+pub use worker_paths::resolve_worker_path;
 
 /// The result of const-folding a dynamic `import()` path argument.
 #[derive(Debug, Clone)]

@@ -1645,9 +1645,11 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 // compile log lists every name that will be resolved at
                 // runtime — #8882 could not be attributed from the log because
                 // the `new` path never said which identifier it gave up on.
-                eprintln!(
-                    "  Warning: unknown identifier '{source_class_name}' — assuming global; `new {source_class_name}()` resolves it by name on globalThis at runtime (ReferenceError on a miss)"
-                );
+                if !ctx.platform_globals.contains(source_class_name) {
+                    eprintln!(
+                        "  Warning: unknown identifier '{source_class_name}' — assuming global; `new {source_class_name}()` resolves it by name on globalThis at runtime (ReferenceError on a miss)"
+                    );
+                }
                 return Ok(Expr::NewDynamic {
                     callee: Box::new(super::unresolved_global_get_expr(
                         source_class_name.to_string(),

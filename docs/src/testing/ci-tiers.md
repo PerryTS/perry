@@ -141,6 +141,10 @@ window (`previous sweep SHA .. this sweep SHA`), exactly as for the six-hourly g
 
 ## Opting a PR into more
 
+- **`run-cc-parity` label** — runs the [Claude Code bundle parity gate](cc-parity.md)
+  on changes to crates, build inputs, or the gate. This independent, initially
+  non-required check compiles pinned Claude Code 2.1.112 and compares offline
+  native help/version output with checked-in Node goldens on one macOS runner.
 - **`run-extended-tests` label** — promotes the PR's `test.yml` run to the `full`
   tier AND enables the PR arm of every satellite gate. Use it for GC / codegen
   changes that should be measured before merge, and for anything touching a

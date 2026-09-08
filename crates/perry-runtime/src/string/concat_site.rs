@@ -76,6 +76,9 @@ pub extern "C" fn js_string_concat_site_value(
     prefix: *const StringHeader,
     value: f64,
 ) -> f64 {
+    if crate::hot_diag::enum_on() {
+        crate::hot_diag::enum_with(|d| d.concat_site_calls += 1);
+    }
     let slot = concat_site_slot(value);
     if let Some(k) = slot {
         let cached = unsafe { *table.add(k) };

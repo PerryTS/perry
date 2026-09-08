@@ -165,6 +165,26 @@ fn lower_logical_assignment(
     Ok(Expr::Logical { op, left, right })
 }
 
+fn register_assignment_native_instance(
+    ctx: &mut LoweringContext,
+    var_name: String,
+    module_name: String,
+    class_name: String,
+    register_scoped_fallback: bool,
+) {
+    if let Some(local_id) = ctx.lookup_local(&var_name) {
+        ctx.register_local_id_native_instance(local_id, module_name, class_name);
+        return;
+    }
+
+    // An unresolvable assignment target has no LocalId to key on. Preserve
+    // the former name-keyed registrations for that global fallback path.
+    if register_scoped_fallback {
+        ctx.register_native_instance(var_name.clone(), module_name.clone(), class_name.clone());
+    }
+    ctx.push_module_native_instance((var_name, module_name, class_name));
+}
+
 pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) -> Result<Expr> {
     // Detect assignments from native module calls and register for cross-function tracking.
     // e.g., `mongoClient = await MongoClient.connect(uri)` registers mongoClient as a mongodb instance.
@@ -195,11 +215,39 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
                                         _ => Some("Instance"),
                                     };
                                     if let Some(class_name) = class_name {
-                                        ctx.push_module_native_instance((
+                                        // #9847: tag the BINDING this assigns
+                                        // to, not its spelling. The catch-all
+                                        // arm above makes any method on any
+                                        // native module tag the target, and
+                                        // `push_module_native_instance` keyed
+                                        // that on the identifier text for the
+                                        // whole module — so one
+                                        // `O = cp.spawn(...)` in a bundled
+                                        // helper typed all 5,381 bindings named
+                                        // `O` in claude-code's single-module
+                                        // bundle as `child_process::Instance`,
+                                        // including a `for (let {segment: O} of
+                                        // …)` binding holding a grapheme
+                                        // string. When the target resolves to a
+                                        // local we key on its `LocalId`, which
+                                        // keeps the cross-function reach the
+                                        // module-wide table existed for (a
+                                        // module-level `let client;` assigned
+                                        // inside one function and read inside
+                                        // another resolves to the same id in
+                                        // both) without the homonym collision.
+                                        // An unresolvable target — a bare
+                                        // global with no binding — has no id to
+                                        // key on and keeps the old name-keyed
+                                        // registration; see the matching arm in
+                                        // `lookup_native_instance`.
+                                        register_assignment_native_instance(
+                                            ctx,
                                             var_name.clone(),
                                             module_name.to_string(),
                                             class_name.to_string(),
-                                        ));
+                                            false,
+                                        );
                                     }
                                 }
                             }
@@ -215,16 +263,13 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
                         .lookup_native_module(class_name_str)
                         .map(|(m, _)| m.to_string());
                     if let Some(module_name) = native_info {
-                        ctx.register_native_instance(
-                            var_name.clone(),
-                            module_name.clone(),
-                            class_name_str.to_string(),
-                        );
-                        ctx.push_module_native_instance((
+                        register_assignment_native_instance(
+                            ctx,
                             var_name.clone(),
                             module_name,
                             class_name_str.to_string(),
-                        ));
+                            true,
+                        );
                     }
                 }
             }
@@ -232,12 +277,11 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
             // e.g., `mongoClient = client` where client was tracked from MongoClient.connect().
             if let ast::Expr::Ident(rhs_ident) = inner_rhs {
                 let rhs_name = rhs_ident.sym.as_ref();
-                if let Some((module, class)) = ctx.lookup_native_instance(rhs_name) {
-                    ctx.push_module_native_instance((
-                        var_name,
-                        module.to_string(),
-                        class.to_string(),
-                    ));
+                let native_info = ctx
+                    .lookup_native_instance(rhs_name)
+                    .map(|(module, class)| (module.to_string(), class.to_string()));
+                if let Some((module, class)) = native_info {
+                    register_assignment_native_instance(ctx, var_name, module, class, false);
                 }
             }
         }
@@ -1108,23 +1152,15 @@ fn lower_assignment_target(
             match &member.prop {
                 ast::MemberProp::Ident(ident) => {
                     let property = ident.sym.to_string();
-                    // Issue #711 part 2: route `<expr>.prototype =
-                    // <value>` through SetFunctionPrototype so the
-                    // runtime binds the proto object as the function
-                    // value's class-prototype source. Effect's
-                    // effectable.ts uses this to declare classes via
-                    // prototype assignment on a plain function. The
-                    // runtime helper is a no-op when `object` doesn't
-                    // resolve to a function at runtime (preserves the
-                    // baseline for arbitrary `obj.prototype = X`
-                    // writes — those are rare and meaningless on
-                    // non-functions in practice).
+                    // Ordinary property assignment, with function prototype
+                    // metadata synchronized for dynamic class parents (#711).
                     if property == "prototype" {
                         return Ok(wrap_assign_object_prelude(
                             prelude.take(),
                             Expr::SetFunctionPrototype {
                                 func: object,
                                 proto: value,
+                                strict: ctx.current_strict,
                             },
                         ));
                     }

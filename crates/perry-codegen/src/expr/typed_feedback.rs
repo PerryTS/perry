@@ -322,6 +322,7 @@ pub(crate) fn emit_typed_feedback_register_site(
     let local_site_id = ctx.ic_site_counter;
     ctx.ic_site_counter += 1;
     let site_id = ctx.typed_feedback_site_id(local_site_id);
+    crate::typed_feedback_profile::register_site(site_id, &ctx.func.name, kind.label(), operation);
     // Default build: skip the no-op registration call (and its byte globals)
     // but keep the site-id stable for the guard call.
     if !typed_feedback_emission_enabled() {

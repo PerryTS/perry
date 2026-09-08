@@ -336,6 +336,15 @@ pub struct CompileArgs {
     #[arg(long)]
     pub explain_lowering: bool,
 
+    /// Replay advisory typed-feedback observations with exact freshness checks.
+    #[arg(long)]
+    pub typed_feedback_profile: Option<PathBuf>,
+
+    /// Write a versioned site catalog to join with a runtime typed-feedback
+    /// trace. Compile with PERRY_TYPED_FEEDBACK=1 to record runtime sites.
+    #[arg(long)]
+    pub typed_feedback_sites: Option<PathBuf>,
+
     /// #504 — emit `<binary>.attest.json` next to the compiled
     /// executable. The sidecar carries SHA-256 of the binary +
     /// provenance (perry version, git commit, build timestamp) so
@@ -681,6 +690,8 @@ pub struct CompilationContext {
     pub native_addon_paths: BTreeMap<PathBuf, String>,
     /// Package aliases: maps npm package name → replacement package name (from perry.packageAliases)
     pub package_aliases: HashMap<String, String>,
+    /// Opt-in Solid universal JSX expansion; ordinary JSX remains the default.
+    pub solid_jsx: bool,
     /// Packages to compile natively instead of routing to V8 (from perry.compilePackages)
     pub compile_packages: HashSet<String>,
     /// Node native-addon packages omitted from wildcard/automatic whole-package
@@ -1210,6 +1221,7 @@ impl CompilationContext {
             native_addons: BTreeMap::new(),
             native_addon_paths: BTreeMap::new(),
             package_aliases: HashMap::new(),
+            solid_jsx: false,
             compile_packages: HashSet::new(),
             auto_skipped_node_addon_packages: HashSet::new(),
             aot_discovered_modules: HashSet::new(),

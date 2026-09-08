@@ -530,6 +530,9 @@ fn next_timer_id() -> i64 {
     let mut next = NEXT_TIMER_ID.lock().unwrap();
     let current = *next;
     *next += 1;
+    if crate::hot_diag::receiver_repr_on() {
+        crate::hot_diag::receiver_repr_note_constructed(crate::hot_diag::ReceiverReprFamily::Timer);
+    }
     current
 }
 

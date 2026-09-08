@@ -1183,7 +1183,7 @@ pub(crate) unsafe fn replay_class_object_constructor(
     inst: *mut ObjectHeader,
     args_ptr: *const f64,
     args_len: usize,
-) {
+) -> f64 {
     // Callers scope their argument read with `with_mut_ptr`; establish this
     // function's own roots before any constructor-replay path can allocate.
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -1219,7 +1219,7 @@ pub(crate) unsafe fn replay_class_object_constructor(
         inst_handle.with_mut_ptr::<ObjectHeader, _>(|inst| {
             default_error_init_for_implicit_chain(class_cid, inst, args_ptr, args_len);
         });
-        return;
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
     };
 
     // Read the snapshotted captures (an own array, in capture-param order).
@@ -1348,7 +1348,7 @@ pub(crate) unsafe fn replay_class_object_constructor(
     let _active_evaluation =
         super::class_registry::push_active_class_evaluation(capture_owner_handle.get_nanbox_f64());
     inst_handle.with_mut_ptr::<ObjectHeader, _>(|inst| {
-        let _ = call_vtable_method(
+        call_vtable_method(
             ctor_ptr,
             inst as i64,
             final_args.as_ptr(),
@@ -1358,8 +1358,8 @@ pub(crate) unsafe fn replay_class_object_constructor(
             // Capture-forwarding constructor args are materialized positionally
             // above (including any caps), so no trailing rest re-packing here.
             false,
-        );
-    });
+        )
+    })
 }
 
 /// Replay a registered class declaration constructor for an INT32-tagged
@@ -1371,7 +1371,7 @@ pub(crate) unsafe fn replay_registered_class_constructor(
     inst: *mut ObjectHeader,
     args_ptr: *const f64,
     args_len: usize,
-) {
+) -> f64 {
     // Spec: a derived class with no own `constructor` gets the implicit
     // `constructor(...args) { super(...args) }` — the nearest ancestor's ctor
     // runs with the same argument list. `lookup_class_constructor` holds OWN
@@ -1400,7 +1400,7 @@ pub(crate) unsafe fn replay_registered_class_constructor(
         // #6469: all-implicit ctor chain to a native base — run the spec
         // default Error-init instead of silently constructing message-less.
         default_error_init_for_implicit_chain(class_cid, inst, args_ptr, args_len);
-        return;
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
     };
 
     // A function-nested class declaration may carry a decl-site capture
@@ -1456,7 +1456,7 @@ pub(crate) unsafe fn replay_registered_class_constructor(
     for slot in 0..sig_caps as usize {
         final_args.push(caps.get(slot).map(|b| f64::from_bits(*b)).unwrap_or(undef));
     }
-    let _ = call_vtable_method(
+    call_vtable_method(
         ctor_ptr,
         inst as i64,
         final_args.as_ptr(),
@@ -1464,5 +1464,5 @@ pub(crate) unsafe fn replay_registered_class_constructor(
         total_params,
         false,
         false,
-    );
+    )
 }

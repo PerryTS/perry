@@ -101,6 +101,11 @@ const BUILD_CACHE_ENV_VARS: &[&str] = &[
     // #9026: gates the once-per-closure-entry resolution of read-only boxed
     // capture cells — flipping it changes every closure body that qualifies.
     "PERRY_BOX_CAPTURE_ENTRY_CELLS",
+    // #9514: gates the per-site concat cache. `PERRY_CONCAT_SITE_CACHE=0`
+    // removes the lane at build time, so a qualifying `"literal" + value`
+    // site lowers to a different sequence with it on and off and a cached
+    // object from one setting must not serve the other.
+    "PERRY_CONCAT_SITE_CACHE",
     // The guarded-preinline IR-size ceiling: functions on either side of the
     // budget inline differently, so a run with a raised ceiling must not be
     // served objects a default run produced (same rule as the RS4GC budget
@@ -145,9 +150,12 @@ const BUILD_CACHE_ENV_VARS: &[&str] = &[
     "PERRY_GC_MOVING_LOOP_POLLS",
     "PERRY_CANONICAL_I32_LOCALS",
     "PERRY_CANONICAL_STR_LOCALS",
+    "PERRY_CONCAT_SITE_CACHE",
     "PERRY_CODEGEN_UNITS",
     "PERRY_CODEGEN_UNIT_BYTES",
     "PERRY_CODEGEN_UNIT_SIZE",
+    // Enables per-site concatenation tables and changes the emitted calls.
+    "PERRY_CONCAT_SITE_CACHE",
     "PERRY_ENTRY_SYMBOL",
     "PERRY_FULL_OUTLINE_IC",
     "PERRY_FULL_OUTLINE_IC_MIN_FUNCS",
@@ -169,6 +177,9 @@ const BUILD_CACHE_ENV_VARS: &[&str] = &[
     "PERRY_PTR_NUMARRAY_LOCALS",
     "PERRY_PTR_SHAPE_LOCALS",
     "PERRY_PTR_SHAPE_THIS",
+    // #9893: selects the segment-view lowering, which rewrites qualifying
+    // for-of loops to call the `js_segments_view_*` runtime entry points.
+    "PERRY_SEGVIEW",
     "PERRY_SPECIALIZED_ABI",
     "PERRY_SPECIALIZED_ABI_MAX",
     "PERRY_SPEC_PRESERVE_NONE",
@@ -224,6 +235,9 @@ const BUILD_CACHE_ENV_EXCLUSIONS: &[&str] = &[
     "PERRY_PACKED_LOOP_TRACE",
     // Entry outlining report output is observational only.
     "PERRY_OUTLINE_ENTRY_REPORT",
+    // Segment-view diagnostics only scan the final HIR and print counters;
+    // their checks inside the rewrite guard `eprintln!` calls only.
+    "PERRY_SEGVIEW_DIAG",
     // Only read on an already-fatal dialect-construction failure (a unit that
     // never parses); it writes a diagnostic IR dump to `<dir>/<name>.ll` for
     // triage and cannot affect the bytes of any build that actually succeeds.
@@ -417,9 +431,13 @@ mod tests {
         assert!(
             missing.is_empty(),
             "these codegen env vars key neither the build cache nor an \
-             exclusion (#6394's rule): {missing:?}. Add each to \
-             BUILD_CACHE_ENV_VARS, or to BUILD_CACHE_ENV_EXCLUSIONS with a \
-             reason it cannot change emitted code."
+             exclusion (#6394's rule): {missing:?}.\n\
+             Edit crates/perry/src/commands/compile/build_cache.rs:\n\
+             - Add switches that change emitted code at `const BUILD_CACHE_ENV_VARS`.\n\
+             - Otherwise add them at `const BUILD_CACHE_ENV_EXCLUSIONS`, with a \
+             reason they cannot change emitted code.\n\
+             Unregistered switches can reuse objects compiled with a different setting.\n\
+             Verify with: cargo test -p perry codegen_env_vars_are_build_cache_inputs"
         );
 
         // A stale exclusion is also a defect: it claims a var exists and is
@@ -822,6 +840,9 @@ fn eligibility(args: &CompileArgs, project_root: &Path) -> Result<(), String> {
     if args.print_hir || args.trace.is_some() || args.focus.is_some() {
         return Err("diagnostic-mode".to_string());
     }
+    if args.typed_feedback_profile.is_some() || args.typed_feedback_sites.is_some() {
+        return Err("typed-feedback-profile".to_string());
+    }
     if args.explain_lowering {
         return Err("explain-lowering".to_string());
     }
@@ -832,6 +853,24 @@ fn eligibility(args: &CompileArgs, project_root: &Path) -> Result<(), String> {
     }
     if std::env::var("PERRY_OUTLINE_ENTRY_REPORT").is_ok() {
         return Err("outline-entry-report".to_string());
+    }
+    // #9847: same reasoning as `opt-report` above. A cached build reuses the
+    // finished binary and never lowers HIR, so the native-instance report
+    // would print nothing — and nothing is indistinguishable from "no tag was
+    // ever registered", which is the reading this diagnostic exists to make
+    // impossible.
+    if std::env::var("PERRY_NATIVEINST_DIAG").is_ok() {
+        return Err("nativeinst-diag".to_string());
+    }
+
+    // #9843: same reasoning as `opt-report` above, and the reason it is not
+    // optional. A cached build reuses the finished binary and never lowers
+    // HIR, so the segment-view counter would print nothing — and "nothing"
+    // reads exactly like "the tier never fired", which is the phantom-green
+    // this campaign keeps hitting. Excluded from the cache so a zero is a
+    // measured zero.
+    if std::env::var("PERRY_SEGVIEW_DIAG").is_ok() {
+        return Err("segview-diag".to_string());
     }
     if args.verify_native_regions || args.emit_attest || args.emit_sandbox {
         return Err("sidecar-or-verify".to_string());

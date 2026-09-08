@@ -15,6 +15,10 @@ export interface WidgetMethods {
     addChild(child: Widget): void;
     /** Remove every child widget. Equivalent to `widgetClearChildren(this)`. */
     removeAllChildren(): void;
+    /** Set the same padding on all four sides. */
+    setPadding(value: number): void;
+    /** Set per-side padding in top, left, bottom, right order. */
+    setPadding(top: number, left: number, bottom: number, right: number): void;
     /**
      * Animate the widget's opacity to `target` over `durationSecs` seconds.
      * The animation starts from the widget's current opacity.
@@ -163,7 +167,7 @@ export interface StyleProps {
 
     /** Padding. A single number applies to all four sides; an object
      *  picks per-side (top / right / bottom / left). Maps to
-     *  `widgetSetEdgeInsets`. */
+     *  `setPadding`. */
     padding?: number | {
         top?: number;
         right?: number;
@@ -1080,6 +1084,10 @@ export function richTextToggleBold(widget: Widget): void;
 export function richTextToggleItalic(widget: Widget): void;
 export function richTextToggleUnderline(widget: Widget): void;
 export function widgetSetControlSize(widget: Widget, size: number): void;
+/**
+ * @deprecated Use `setPadding(widget, value)` or
+ * `setPadding(widget, top, left, bottom, right)` instead.
+ */
 export function widgetSetEdgeInsets(widget: Widget, top: number, left: number, bottom: number, right: number): void;
 export function widgetSetBorderColor(widget: Widget, r: number, g: number, b: number, a: number): void;
 export function widgetSetBorderWidth(widget: Widget, width: number): void;
@@ -1164,7 +1172,10 @@ export function widgetAnimateOpacity(widget: Widget, target: number, durationSec
 /** Animate position by `(dx, dy)` pixels over `durationSecs` seconds. */
 export function widgetAnimatePosition(widget: Widget, dx: number, dy: number, durationSecs: number): void;
 
-/** Set padding (edge insets) on a widget. */
+/** Set the same padding on all four sides of a widget. */
+export function setPadding(widget: Widget, value: number): void;
+
+/** Set per-side padding in top, left, bottom, right order. */
 export function setPadding(widget: Widget, top: number, left: number, bottom: number, right: number): void;
 
 /** Set corner radius on a widget. */

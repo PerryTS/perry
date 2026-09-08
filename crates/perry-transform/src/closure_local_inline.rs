@@ -109,6 +109,18 @@ fn process_stmts(stmts: &mut Vec<Stmt>, next_local_id: &mut LocalId) {
         // (`let exists' = exists`); follow such copies so the calls through
         // them count as calls of the closure.
         let set = collect_aliases(&stmts[i + 1..], id);
+        // Forward captures and reads can precede the declaration. Removing
+        // its initializer leaves those live boxes uninitialized even though
+        // every later use is an inlineable call (#9721). Earlier calls must
+        // also retain their original TDZ behavior.
+        let mut earlier_uses = Uses::default();
+        for s in &stmts[..i] {
+            collect_uses_in_stmt(s, &set, &mut earlier_uses);
+        }
+        if earlier_uses.other || earlier_uses.calls != 0 {
+            i += 1;
+            continue;
+        }
         let mut uses = Uses::default();
         for s in &stmts[i + 1..] {
             collect_uses_in_stmt(s, &set, &mut uses);
@@ -885,6 +897,54 @@ mod tests {
         let mut next = 100;
         process_stmts(&mut stmts, &mut next);
         assert_eq!(format!("{stmts:?}"), format!("{before:?}"));
+    }
+
+    #[test]
+    fn a_forward_capture_keeps_the_later_initializer() {
+        let mut earlier = arrow(2, Vec::new(), call_local(F, vec![Expr::Integer(1)]), false);
+        if let Expr::Closure {
+            captures,
+            mutable_captures,
+            ..
+        } = &mut earlier
+        {
+            captures.push(F);
+            mutable_captures.push(F);
+        }
+        let mut stmts = vec![
+            Stmt::PreallocateTdzBoxes(vec![F]),
+            Stmt::Expr(earlier),
+            Stmt::Let {
+                id: F,
+                name: "later".into(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(arrow(1, vec![param(P, "value")], Expr::LocalGet(P), false)),
+            },
+            Stmt::Expr(call_local(F, vec![Expr::Integer(2)])),
+        ];
+        let before = format!("{stmts:?}");
+        process_stmts(&mut stmts, &mut 100);
+        assert_eq!(format!("{stmts:?}"), before);
+    }
+
+    #[test]
+    fn a_call_before_initialization_keeps_its_tdz_and_later_initializer() {
+        let mut stmts = vec![
+            Stmt::PreallocateTdzBoxes(vec![F]),
+            Stmt::Expr(call_local(F, vec![Expr::Integer(1)])),
+            Stmt::Let {
+                id: F,
+                name: "later".into(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(arrow(1, vec![param(P, "value")], Expr::LocalGet(P), false)),
+            },
+            Stmt::Expr(call_local(F, vec![Expr::Integer(2)])),
+        ];
+        let before = format!("{stmts:?}");
+        process_stmts(&mut stmts, &mut 100);
+        assert_eq!(format!("{stmts:?}"), before);
     }
 
     #[test]

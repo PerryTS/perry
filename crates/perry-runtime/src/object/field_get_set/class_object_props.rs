@@ -106,7 +106,7 @@ unsafe fn class_evaluation_prototype_value(obj: *const ObjectHeader) -> f64 {
     if let Some(parent_proto) = parent_proto {
         let parent_proto = scope.root_heap_word_u64(parent_proto);
         proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
-            super::super::prototype_chain::object_set_static_prototype(
+            super::super::prototype_chain::object_link_class_evaluation_prototype(
                 proto as usize,
                 parent_proto.get_heap_word_u64(),
             )

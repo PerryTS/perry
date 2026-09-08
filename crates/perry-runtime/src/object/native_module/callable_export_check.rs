@@ -67,6 +67,9 @@ pub(crate) fn is_native_module_callable_export_reference(module: &str, prop: &st
     if module == "bun.ant" && matches!(prop, "getPeerPid" | "getPeerUid" | "memoryPressureLevel") {
         return true;
     }
+    if module == "bun:jsc" && prop == "heapStats" {
+        return true;
+    }
     // bun:ffi (#6562). `FFIType` and `suffix` are constants, not callables;
     // the not-yet-supported exports are callable so they throw their
     // stage-1 error instead of "undefined is not a function".

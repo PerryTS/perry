@@ -43,12 +43,22 @@ fn next_handle_id() -> Handle {
 pub fn register_handle<T: 'static + Send + Sync>(value: T) -> Handle {
     let handle = next_handle_id();
     HANDLES.insert(handle, Box::new(value));
+    if perry_runtime::hot_diag::receiver_repr_on() {
+        perry_runtime::hot_diag::receiver_repr_note_constructed(
+            perry_runtime::hot_diag::ReceiverReprFamily::Common,
+        );
+    }
     handle
 }
 
 /// Register an object with a specific ID
 pub fn register_handle_with_id<T: 'static + Send + Sync>(value: T, handle: Handle) -> Handle {
     HANDLES.insert(handle, Box::new(value));
+    if perry_runtime::hot_diag::receiver_repr_on() {
+        perry_runtime::hot_diag::receiver_repr_note_constructed(
+            perry_runtime::hot_diag::ReceiverReprFamily::Common,
+        );
+    }
     handle
 }
 

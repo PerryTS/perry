@@ -107,6 +107,11 @@ pub(crate) struct DescriptorTables {
     pub(crate) attr_keys_by_owner: RefCell<FastKeyHashMap<usize, Vec<String>>>,
     /// Accessor twin of [`Self::attr_keys_by_owner`].
     pub(crate) accessor_keys_by_owner: RefCell<FastKeyHashMap<usize, Vec<String>>>,
+    /// #9754: owners whose entries may hold a pointer a minor can act on —
+    /// a young owner, or an accessor whose getter/setter closure is young.
+    /// A minor-scoped `scan_descriptor_roots_mut` visits only these; see
+    /// `gc/young_log.rs`.
+    pub(crate) young_owners: RefCell<crate::gc::young_log::YoungLog<usize>>,
 }
 
 impl DescriptorTables {
@@ -118,7 +123,78 @@ impl DescriptorTables {
             property_attrs_in_use: Cell::new(false),
             attr_keys_by_owner: RefCell::new(new_fast_key_hash_map()),
             accessor_keys_by_owner: RefCell::new(new_fast_key_hash_map()),
+            young_owners: RefCell::new(crate::gc::young_log::YoungLog::new()),
         }
+    }
+}
+
+const DESCRIPTOR_YOUNG_LOG_NAME: &str = "object.descriptors";
+
+#[cfg(test)]
+thread_local! {
+    static TEST_SUPPRESS_DESCRIPTOR_YOUNG_NOTE: Cell<bool> = const { Cell::new(false) };
+}
+
+mod gc_scan;
+mod young;
+pub(crate) use gc_scan::{scan_descriptor_owner, scan_descriptor_roots_mut};
+use young::{relevant_descriptor_owners, scan_descriptor_roots_young};
+
+/// Rule 1 of `gc/young_log.rs`: log `owner` BEFORE its descriptor is
+/// published when the owner, or the accessor closure being stored, can
+/// matter to a minor. Data descriptors carry no pointer, so `acc` is `None`
+/// for them and only the owner decides.
+#[inline]
+fn note_young_descriptor_owner(
+    st: &crate::state::RuntimeState,
+    owner: usize,
+    acc: Option<&AccessorDescriptor>,
+) {
+    use crate::gc::young_log::{addr_is_minor_collectible, bits_are_minor_relevant};
+    if addr_is_minor_collectible(owner)
+        || acc
+            .is_some_and(|acc| bits_are_minor_relevant(acc.get) || bits_are_minor_relevant(acc.set))
+    {
+        #[cfg(test)]
+        if TEST_SUPPRESS_DESCRIPTOR_YOUNG_NOTE.with(Cell::get) {
+            return;
+        }
+        st.descriptors.young_owners.borrow_mut().note(owner);
+    }
+}
+
+#[cfg(test)]
+mod young_log_sabotage_tests {
+    use super::*;
+
+    #[test]
+    fn descriptor_log_rederivation_rejects_a_suppressed_setter() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let owner = crate::object::js_object_alloc(0, 0) as usize;
+        state().descriptors.young_owners.borrow_mut().clear();
+        TEST_SUPPRESS_DESCRIPTOR_YOUNG_NOTE.with(|flag| flag.set(true));
+        set_property_attrs(
+            owner,
+            "sabotage".to_string(),
+            PropertyAttrs::new(true, true, true),
+        );
+        TEST_SUPPRESS_DESCRIPTOR_YOUNG_NOTE.with(|flag| flag.set(false));
+        let missed = std::panic::catch_unwind(|| {
+            state()
+                .descriptors
+                .young_owners
+                .borrow()
+                .debug_assert_logged(
+                    DESCRIPTOR_YOUNG_LOG_NAME,
+                    &relevant_descriptor_owners(state()),
+                );
+        });
+        clear_property_attrs(owner, "sabotage");
+        state().descriptors.young_owners.borrow_mut().clear();
+        assert!(
+            missed.is_err(),
+            "sabotage: suppressing set_property_attrs' note must trip completeness"
+        );
     }
 }
 
@@ -528,18 +604,82 @@ pub(crate) fn note_descriptor_target(obj: usize) {
 /// Look up the property descriptor for (obj, key). Returns None if no entry exists,
 /// in which case the JS default `{ writable: true, enumerable: true, configurable: true }` applies.
 pub(crate) fn get_property_attrs(obj: usize, key: &str) -> Option<PropertyAttrs> {
+    // A STORED descriptor wins over the synthesized index default:
+    // `Object.defineProperty` / `Object.freeze` on a wrapper installs a real
+    // entry, and the §10.4.3 default must not shadow it. Synthesis therefore
+    // happens in the `string_wrapper_index_attrs` fallback BELOW the table
+    // probe, never as an early return above it.
+    //
     // #6759 Phase C2: the meta-record summary proves most misses without
     // the `String` build + table probe (and shields a fresh object at a
     // recycled address from a dead owner's not-yet-pruned entries).
-    if !may_have_descriptor_entry(obj, key, false) {
+    if may_have_descriptor_entry(obj, key, false) {
+        if let Some(attrs) = state()
+            .descriptors
+            .property_descriptors
+            .borrow()
+            .get(&(obj, key.to_string()))
+            .copied()
+        {
+            return Some(attrs);
+        }
+    }
+    string_wrapper_index_attrs(obj, key)
+}
+
+/// ECMA-262 §10.4.3: every in-range integer index of a `String` exotic object
+/// (`new String("abc")`, and the wrapper `ToObject` mints for a sloppy method
+/// call on a string primitive) has the descriptor
+/// `{ writable: false, enumerable: true, configurable: false }`. That is a
+/// property of the CLASS and of the boxed length — never of the individual
+/// object — so it is answered from the wrapper's own payload instead of being
+/// stored once per character in `PROPERTY_DESCRIPTORS`.
+///
+/// Storing it cost, per boxed character: a `String` key on the Rust heap, a
+/// hash-map entry that only a full collection's dead-owner prune can reclaim,
+/// an owner-index entry, a meta-descriptor key bit, and one program-wide
+/// `prop_plan_epoch_bump()`. On the compiled claude-code TUI, whose render
+/// path boxes a receiver per string method call, those entries were the
+/// unbounded half of the process's resident growth during a turn.
+///
+/// A REAL entry still wins (the probe above runs first): `Object.freeze` or
+/// an explicit `defineProperty` on a wrapper installs one and is observed.
+///
+/// The first byte is checked before anything else: an index key starts with an
+/// ASCII digit, so every ordinary property name leaves through one compare.
+#[inline]
+fn string_wrapper_index_attrs(obj: usize, key: &str) -> Option<PropertyAttrs> {
+    let bytes = key.as_bytes();
+    if !bytes.first().is_some_and(u8::is_ascii_digit) {
         return None;
     }
-    state()
-        .descriptors
-        .property_descriptors
-        .borrow()
-        .get(&(obj, key.to_string()))
-        .copied()
+    let index = canonical_index_key(bytes)?;
+    let len = crate::builtins::boxed_string_wrapper_utf16_len(obj)?;
+    (index < len).then(|| PropertyAttrs::new(false, true, false))
+}
+
+/// `CanonicalNumericIndexString` for the digits-only case: the key must be the
+/// exact `ToString` of the integer it names, so `"0"` is an index but `"01"`,
+/// `"1.0"` and `""` are not (mirrors `string::canonical_string_index`).
+#[inline]
+fn canonical_index_key(bytes: &[u8]) -> Option<u32> {
+    if bytes.is_empty() || bytes.len() > 10 {
+        return None;
+    }
+    if bytes[0] == b'0' {
+        return (bytes.len() == 1).then_some(0);
+    }
+    let mut value: u64 = 0;
+    for &b in bytes {
+        if !b.is_ascii_digit() {
+            return None;
+        }
+        value = value * 10 + (b - b'0') as u64;
+        if value > u32::MAX as u64 {
+            return None;
+        }
+    }
+    u32::try_from(value).ok()
 }
 
 /// Whether this specific object has ever had a property descriptor installed on
@@ -582,6 +722,40 @@ pub(crate) fn test_descriptor_key_bit(key: &str) -> u64 {
     descriptor_key_bit(key)
 }
 
+/// #6759 phase 1 follow-up: the owner's meta record for descriptor-summary
+/// purposes, for ANY cell type that owns one.
+///
+/// [`super::prototype_chain::meta_capable_object`] answers only for
+/// `GC_TYPE_OBJECT`, because its other callers need an `ObjectHeader` to work
+/// with. The descriptor summary does not — it needs the `ObjectMeta` edge and
+/// nothing else — and every exotic cell has carried that edge since #6759
+/// phase 1 unified it behind [`super::cell_meta_slot`]. Asking the narrower
+/// question is what lets a `RegExp` receiver answer a summary probe at all.
+///
+/// * `None` — the cell type has no meta edge, so the caller must stay
+///   conservative and probe the tables.
+/// * `Some(null)` — the cell HAS the edge and no record was ever installed,
+///   which proves the tables hold no entry for this owner.
+/// * `Some(meta)` — read the summary words.
+///
+/// The three-way answer is the whole contract: collapsing "no edge" and "edge,
+/// but null" into one `None` would turn a conservative *maybe* into a false
+/// *no* for the cell types that still lack an edge.
+#[inline]
+unsafe fn descriptor_summary_meta(owner: usize) -> Option<*mut ObjectMeta> {
+    Some(*super::cell_meta_slot(owner)?)
+}
+
+/// Installing twin of [`descriptor_summary_meta`]. Install and probe MUST use
+/// the same predicate: a probe that admits a cell type whose installs do not
+/// set the key bits would answer a proven-absent for an owner that really has
+/// a descriptor — e.g. `Object.defineProperty(re, "lastIndex", {writable:false})`
+/// would stop throwing (test262 prototype/{exec,test}/y-fail-lastindex-no-write).
+#[inline]
+unsafe fn descriptor_summary_meta_ensure(owner: usize) -> Option<*mut ObjectMeta> {
+    super::object_meta_ensure_for_cell(owner)
+}
+
 /// #6759 Phase C2: record `key` in the owner's per-object meta summary so
 /// hot-path probes for OTHER keys can skip the descriptor tables. No-op for
 /// owners that cannot carry a meta record (handle-band ids, typed arrays,
@@ -598,13 +772,11 @@ pub(crate) fn test_descriptor_key_bit(key: &str) -> u64 {
 /// owner left behind can no longer be misread as the new tenant's.
 fn note_meta_descriptor_key(owner: usize, key: &str, accessor: bool) {
     unsafe {
-        if let Some(obj) = super::prototype_chain::meta_capable_object(owner) {
-            // No-move window: `object_meta_ensure` allocates, and a
-            // triggered collection could MOVE `owner` — installers
-            // (freeze/seal loops, defineProperty) hold raw owner pointers
-            // across repeated installs.
-            let _no_gc = crate::gc::GcSuppressScope::new();
-            let meta = super::object_meta_ensure(obj);
+        // No-move window: the ensure below allocates, and a triggered
+        // collection could MOVE `owner` — installers (freeze/seal loops,
+        // defineProperty) hold raw owner pointers across repeated installs.
+        let _no_gc = crate::gc::GcSuppressScope::new();
+        if let Some(meta) = descriptor_summary_meta_ensure(owner) {
             let bit = descriptor_key_bit(key);
             if accessor {
                 (*meta).accessor_key_bits |= bit;
@@ -622,22 +794,60 @@ fn note_meta_descriptor_key(owner: usize, key: &str, accessor: bool) {
 #[inline]
 pub(crate) fn may_have_descriptor_entry(owner: usize, key: &str, accessor: bool) -> bool {
     unsafe {
-        match super::prototype_chain::meta_capable_object(owner) {
-            Some(obj) => {
-                let meta = (*obj).meta;
+        let answer = match descriptor_summary_meta(owner) {
+            Some(meta) => {
                 if meta.is_null() {
-                    return false;
-                }
-                let word = if accessor {
-                    (*meta).accessor_key_bits
+                    false
                 } else {
-                    (*meta).attr_key_bits
-                };
-                word & descriptor_key_bit(key) != 0
+                    let word = if accessor {
+                        (*meta).accessor_key_bits
+                    } else {
+                        (*meta).attr_key_bits
+                    };
+                    word & descriptor_key_bit(key) != 0
+                }
             }
             None => true,
+        };
+        // Diagnostic only, and only when the instrument is armed: one relaxed
+        // load otherwise. Counts the RegExp receivers this filter sees and how
+        // many it now proves absent — before the meta edge was wired for
+        // RegExp the second number was 0 by construction.
+        if crate::hot_diag::regex_on() {
+            note_regexp_descriptor_probe(owner, answer);
         }
+        answer
     }
+}
+
+/// Test-only view of [`may_have_descriptor_entry`], so a test can assert the
+/// FILTER's answer rather than only the value it filters to. Without this a
+/// test can see that `get_property_attrs` returns `None`, which is equally
+/// true when the fast negative never fired — it would pass against a change
+/// that did nothing.
+#[cfg(test)]
+pub(crate) fn test_may_have_descriptor_entry(owner: usize, key: &str, accessor: bool) -> bool {
+    may_have_descriptor_entry(owner, key, accessor)
+}
+
+/// Diagnostic counter for [`may_have_descriptor_entry`]: is this owner a
+/// RegExp cell, and did the summary prove the key absent? Split out and marked
+/// cold so the armed check costs the hot path a predictable branch and nothing
+/// else.
+#[cold]
+unsafe fn note_regexp_descriptor_probe(owner: usize, answer: bool) {
+    let Some(header) = crate::value::addr_class::try_read_gc_header(owner) else {
+        return;
+    };
+    if header.obj_type != crate::gc::GC_TYPE_REGEXP {
+        return;
+    }
+    crate::hot_diag::regex_with(|d| {
+        d.desc_regexp_probes += 1;
+        if !answer {
+            d.desc_regexp_meta_negative += 1;
+        }
+    });
 }
 
 /// #6759 Phase C2: can an OWN string-keyed descriptor (attr or accessor)
@@ -652,9 +862,8 @@ unsafe fn own_descriptor_may_cover_key(addr: usize, key: f64) -> bool {
     ) else {
         return true;
     };
-    match super::prototype_chain::meta_capable_object(addr) {
-        Some(obj) => {
-            let meta = (*obj).meta;
+    match descriptor_summary_meta(addr) {
+        Some(meta) => {
             if meta.is_null() {
                 return false;
             }
@@ -672,9 +881,8 @@ unsafe fn own_descriptor_may_cover_key(addr: usize, key: f64) -> bool {
 #[inline]
 pub(crate) fn owner_may_have_descriptor_entries(owner: usize, accessor: bool) -> bool {
     unsafe {
-        match super::prototype_chain::meta_capable_object(owner) {
-            Some(obj) => {
-                let meta = (*obj).meta;
+        match descriptor_summary_meta(owner) {
+            Some(meta) => {
                 if meta.is_null() {
                     return false;
                 }
@@ -774,6 +982,7 @@ pub(crate) fn set_property_attrs(obj: usize, key: String, attrs: PropertyAttrs) 
     GLOBAL_DESCRIPTORS_IN_USE.store(true, Ordering::Relaxed);
     disable_inline_guards_for_descriptor_target(obj, &key);
     note_meta_descriptor_key(obj, &key, false);
+    note_young_descriptor_owner(st, obj, None);
     owner_index_add(&st.descriptors.attr_keys_by_owner, obj, &key);
     st.descriptors
         .property_descriptors
@@ -996,6 +1205,7 @@ pub(crate) fn set_accessor_descriptor(obj: usize, key: String, acc: AccessorDesc
     disable_inline_guards_for_descriptor_target(obj, &key);
     note_accessor_descriptor_key(&key);
     note_meta_descriptor_key(obj, &key, true);
+    note_young_descriptor_owner(st, obj, Some(&acc));
     owner_index_add(&st.descriptors.accessor_keys_by_owner, obj, &key);
     st.descriptors
         .accessor_descriptors
@@ -1064,6 +1274,7 @@ pub(crate) fn install_fresh_accessor_property(
     GLOBAL_DESCRIPTORS_IN_USE.store(true, Ordering::Relaxed);
     disable_inline_guards_for_descriptor_target(obj, &key);
     note_accessor_descriptor_key(&key);
+    note_young_descriptor_owner(st, obj, Some(&acc));
     match note_meta_descriptor_key_both(obj, &key) {
         Some((accessor_bit_was_set, attr_bit_was_set)) => {
             if accessor_bit_was_set {
@@ -1115,11 +1326,10 @@ fn owner_index_push_proven_new(
 /// single-kind form's no-op arm).
 fn note_meta_descriptor_key_both(owner: usize, key: &str) -> Option<(bool, bool)> {
     unsafe {
-        let obj = super::prototype_chain::meta_capable_object(owner)?;
-        // No-move window: `object_meta_ensure` allocates (see
+        // No-move window: the ensure allocates (see
         // `note_meta_descriptor_key`).
         let _no_gc = crate::gc::GcSuppressScope::new();
-        let meta = super::object_meta_ensure(obj);
+        let meta = descriptor_summary_meta_ensure(owner)?;
         let bit = descriptor_key_bit(key);
         let accessor_bit_was_set = (*meta).accessor_key_bits & bit != 0;
         let attr_bit_was_set = (*meta).attr_key_bits & bit != 0;
@@ -1181,6 +1391,7 @@ pub(crate) fn set_builtin_accessor_descriptor(
     note_meta_descriptor_key(obj, &key, true);
     note_meta_descriptor_key(obj, &key, false);
     let st = state();
+    note_young_descriptor_owner(st, obj, Some(&acc));
     owner_index_add(&st.descriptors.accessor_keys_by_owner, obj, &key);
     owner_index_add(&st.descriptors.attr_keys_by_owner, obj, &key);
     st.descriptors
@@ -1214,6 +1425,7 @@ pub(crate) fn set_builtin_property_attrs(obj: usize, key: String, attrs: Propert
     // #6759 Phase C2: see `set_builtin_accessor_descriptor`.
     note_meta_descriptor_key(obj, &key, false);
     let st = state();
+    note_young_descriptor_owner(st, obj, None);
     owner_index_add(&st.descriptors.attr_keys_by_owner, obj, &key);
     st.descriptors
         .property_descriptors
@@ -1313,6 +1525,51 @@ pub(crate) fn prune_dead_descriptor_owner_entries(is_dead_owner: &dyn Fn(usize) 
     }
 }
 
+/// [`prune_dead_descriptor_owner_entries`] for a MINOR (#9754): only a young
+/// owner can be dead, and a young owner is always in the young log (noted at
+/// insert, re-logged by every minor-scoped walk while it stays young), so the
+/// log is the complete candidate set.
+pub(crate) fn prune_dead_descriptor_owner_entries_young(is_dead_owner: &dyn Fn(usize) -> bool) {
+    let st = state();
+    let candidates = st.descriptors.young_owners.borrow_mut().take_sorted();
+    let mut kept = Vec::with_capacity(candidates.len());
+    for owner in candidates {
+        if is_dead_owner(owner) {
+            remove_descriptor_owner_entries(st, owner);
+        } else {
+            kept.push(owner);
+        }
+    }
+    st.descriptors.young_owners.borrow_mut().extend(kept);
+}
+
+/// Drop every entry `owner` holds in both tables and both indexes, through
+/// the owner index (O(owner's keys), not O(table)).
+fn remove_descriptor_owner_entries(st: &crate::state::RuntimeState, owner: usize) {
+    if let Some(keys) = st
+        .descriptors
+        .attr_keys_by_owner
+        .borrow_mut()
+        .remove(&owner)
+    {
+        let mut attrs = st.descriptors.property_descriptors.borrow_mut();
+        for key in keys {
+            attrs.remove(&(owner, key));
+        }
+    }
+    if let Some(keys) = st
+        .descriptors
+        .accessor_keys_by_owner
+        .borrow_mut()
+        .remove(&owner)
+    {
+        let mut accessors = st.descriptors.accessor_descriptors.borrow_mut();
+        for key in keys {
+            accessors.remove(&(owner, key));
+        }
+    }
+}
+
 /// #6710: drop every property-attr + accessor descriptor owned by `obj`.
 ///
 /// The generic descriptor tables are keyed by owner address; for a native
@@ -1357,6 +1614,10 @@ pub(crate) fn transfer_descriptor_owner(old_owner: usize, new_owner: usize) {
         return;
     }
     let st = state();
+    // The moved entries keep their accessor values, so the new owner is
+    // logged unconditionally; the next minor-scoped walk drops it if nothing
+    // in it is relevant any more.
+    st.descriptors.young_owners.borrow_mut().note(new_owner);
     // The owner index names exactly this owner's keys, so neither table is
     // walked in full any more. Array growth calls this on every reallocation.
     {
@@ -1439,377 +1700,4 @@ fn rewrite_descriptor_owner(
     let mut addr = owner;
     visitor.visit_metadata_usize_slot(&mut addr);
     addr
-}
-
-/// GC scanner for the string-keyed descriptor side tables (2026-07-02 audit
-/// P0; ported from the stranded be73b4f8d): `ACCESSOR_DESCRIPTORS` holds the
-/// ONLY reference to `Object.defineProperty` getter/setter closures (the
-/// accessor install path stores no field-slot copy), so without visiting
-/// them a minor GC sweeps or moves the closure out from under the next
-/// property read. Owner keys are `(obj_addr, key)` — rekeyed when the owning
-/// object moves, exactly like the symbol-keyed twins, so frozen/non-writable
-/// attrs and accessors don't silently detach (or fire on a new tenant at a
-/// reused address).
-pub(crate) fn scan_descriptor_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    let st = state();
-    {
-        // Probe DISTINCT OWNERS via the index, not every `(owner, key)` pair.
-        // This runs on every GC cycle, and since the moving young-gen scavenge
-        // became the default (#7019) that is often — so an O(total descriptors)
-        // probe here was a per-collection tax proportional to the whole
-        // program's descriptor count rather than to what actually moved.
-        let needs_rebuild = st
-            .descriptors
-            .attr_keys_by_owner
-            .borrow()
-            .keys()
-            .any(|owner| rewrite_descriptor_owner(visitor, *owner) != *owner);
-        let mut descriptors = st.descriptors.property_descriptors.borrow_mut();
-        if needs_rebuild {
-            let old = std::mem::take(&mut *descriptors);
-            for ((owner, key), attrs) in old {
-                let owner = rewrite_descriptor_owner(visitor, owner);
-                descriptors.insert((owner, key), attrs);
-            }
-        }
-    }
-
-    {
-        let needs_rebuild = st
-            .descriptors
-            .accessor_keys_by_owner
-            .borrow()
-            .keys()
-            .any(|owner| rewrite_descriptor_owner(visitor, *owner) != *owner);
-        let mut descriptors = st.descriptors.accessor_descriptors.borrow_mut();
-        if needs_rebuild {
-            let old = std::mem::take(&mut *descriptors);
-            for ((owner, key), mut acc) in old {
-                if acc.get != 0 {
-                    visitor.visit_nanbox_u64_slot(&mut acc.get);
-                }
-                if acc.set != 0 {
-                    visitor.visit_nanbox_u64_slot(&mut acc.set);
-                }
-                let owner = rewrite_descriptor_owner(visitor, owner);
-                descriptors.insert((owner, key), acc);
-            }
-        } else {
-            for acc in descriptors.values_mut() {
-                if acc.get != 0 {
-                    visitor.visit_nanbox_u64_slot(&mut acc.get);
-                }
-                if acc.set != 0 {
-                    visitor.visit_nanbox_u64_slot(&mut acc.set);
-                }
-            }
-        }
-    }
-
-    // Rekey the owner index itself. Evacuation moved the owning objects, so
-    // the tables above were rebuilt under new addresses; an index still keyed
-    // by the OLD addresses would report no keys for the moved object (silently
-    // dropping its accessors from `Object.keys`) and would keep a dead address
-    // alive in every later scan. Merge on collision: an address freed by one
-    // object can be reused by another in the same cycle.
-    for index in [
-        &st.descriptors.attr_keys_by_owner,
-        &st.descriptors.accessor_keys_by_owner,
-    ] {
-        let mut idx = index.borrow_mut();
-        if idx.is_empty() {
-            continue;
-        }
-        let needs_rekey = idx
-            .keys()
-            .any(|owner| rewrite_descriptor_owner(visitor, *owner) != *owner);
-        if !needs_rekey {
-            continue;
-        }
-        let old = std::mem::take(&mut *idx);
-        for (owner, keys) in old {
-            let owner = rewrite_descriptor_owner(visitor, owner);
-            let dest = idx.entry(owner).or_default();
-            for k in keys {
-                if !dest.iter().any(|existing| *existing == k) {
-                    dest.push(k);
-                }
-            }
-        }
-    }
-}
-
-/// The owner index (`attr_keys_by_owner` / `accessor_keys_by_owner`) exists
-/// only to answer "which keys does this owner have?" without walking every
-/// descriptor in the process. It is a mirror, so the one way it can break is
-/// **drift** from the tables it mirrors — which would not crash, it would
-/// silently drop keys from `Object.keys` or resurrect deleted ones.
-///
-/// These tests therefore assert the mirror invariant directly (index ==
-/// what a full scan of the table would return) across install, redefine,
-/// delete, bulk-clear and owner-transfer.
-#[cfg(test)]
-mod owner_index_tests {
-    use super::*;
-    use std::collections::BTreeSet;
-
-    /// What the pre-index implementation would have computed: a full scan of
-    /// the table filtered by owner. The index must always agree with this.
-    fn scan_table_keys(accessor: bool, owner: usize) -> BTreeSet<String> {
-        let st = state();
-        if accessor {
-            st.descriptors
-                .accessor_descriptors
-                .borrow()
-                .keys()
-                .filter(|(o, _)| *o == owner)
-                .map(|(_, k)| k.clone())
-                .collect()
-        } else {
-            st.descriptors
-                .property_descriptors
-                .borrow()
-                .keys()
-                .filter(|(o, _)| *o == owner)
-                .map(|(_, k)| k.clone())
-                .collect()
-        }
-    }
-
-    fn index_keys(accessor: bool, owner: usize) -> BTreeSet<String> {
-        let st = state();
-        let idx = if accessor {
-            &st.descriptors.accessor_keys_by_owner
-        } else {
-            &st.descriptors.attr_keys_by_owner
-        };
-        idx.borrow()
-            .get(&owner)
-            .cloned()
-            .unwrap_or_default()
-            .into_iter()
-            .collect()
-    }
-
-    fn assert_mirrors(owner: usize, ctx: &str) {
-        for (accessor, label) in [(false, "property"), (true, "accessor")] {
-            assert_eq!(
-                index_keys(accessor, owner),
-                scan_table_keys(accessor, owner),
-                "{label} owner index drifted from the table it mirrors ({ctx}); \
-                 a drift here silently corrupts Object.keys / for-in output"
-            );
-        }
-    }
-
-    #[test]
-    fn index_mirrors_tables_across_install_redefine_and_delete() {
-        let _lock = crate::gc::global_side_table_test_lock();
-        let obj = crate::object::js_object_alloc(0, 0);
-        let addr = obj as usize;
-
-        set_property_attrs(addr, "a".to_string(), PropertyAttrs::new(true, true, true));
-        set_property_attrs(addr, "b".to_string(), PropertyAttrs::new(true, true, true));
-        set_accessor_descriptor(addr, "g".to_string(), AccessorDescriptor::default());
-        assert_mirrors(addr, "after installs");
-
-        // Redefining an existing key must not duplicate it — a duplicate would
-        // make `Object.keys` report the key twice.
-        set_property_attrs(addr, "a".to_string(), PropertyAttrs::new(true, true, true));
-        set_accessor_descriptor(addr, "g".to_string(), AccessorDescriptor::default());
-        assert_eq!(
-            state()
-                .descriptors
-                .attr_keys_by_owner
-                .borrow()
-                .get(&addr)
-                .map(|v| v.len()),
-            Some(2),
-            "redefining an existing descriptor must not push a duplicate key"
-        );
-        assert_mirrors(addr, "after redefine");
-
-        clear_property_attrs(addr, "a");
-        clear_accessor_descriptor(addr, "g");
-        assert_mirrors(addr, "after delete");
-
-        // Deleting the last key must drop the owner entry entirely, so a dead
-        // owner leaves nothing for later GC scans to walk.
-        clear_property_attrs(addr, "b");
-        assert!(
-            !state()
-                .descriptors
-                .attr_keys_by_owner
-                .borrow()
-                .contains_key(&addr),
-            "an owner with no remaining descriptors must be removed from the index"
-        );
-    }
-
-    #[test]
-    fn accessor_keys_for_obj_agrees_with_a_full_scan() {
-        let _lock = crate::gc::global_side_table_test_lock();
-        let obj = crate::object::js_object_alloc(0, 0);
-        let addr = obj as usize;
-        // A second owner with its own accessors: the whole point of the index
-        // is that this one's keys never leak into the first one's answer.
-        let other = crate::object::js_object_alloc(0, 0);
-        let other_addr = other as usize;
-
-        for k in ["z", "m", "a"] {
-            set_accessor_descriptor(addr, k.to_string(), AccessorDescriptor::default());
-        }
-        for k in ["zz", "mm"] {
-            set_accessor_descriptor(other_addr, k.to_string(), AccessorDescriptor::default());
-        }
-
-        let got = accessor_descriptor_keys_for_obj(addr);
-        assert_eq!(
-            got,
-            vec!["a".to_string(), "m".to_string(), "z".to_string()],
-            "keys must be sorted and scoped to the requested owner only"
-        );
-        assert_eq!(
-            got.into_iter().collect::<BTreeSet<_>>(),
-            scan_table_keys(true, addr),
-            "the index answer must equal what a full table scan would return"
-        );
-    }
-
-    #[test]
-    fn transfer_moves_both_tables_and_the_index() {
-        let _lock = crate::gc::global_side_table_test_lock();
-        let old = crate::object::js_object_alloc(0, 0) as usize;
-        let new = crate::object::js_object_alloc(0, 0) as usize;
-
-        set_property_attrs(old, "p".to_string(), PropertyAttrs::new(true, true, true));
-        set_accessor_descriptor(old, "acc".to_string(), AccessorDescriptor::default());
-
-        transfer_descriptor_owner(old, new);
-
-        assert_mirrors(old, "old owner after transfer");
-        assert_mirrors(new, "new owner after transfer");
-        assert!(
-            scan_table_keys(false, old).is_empty() && scan_table_keys(true, old).is_empty(),
-            "transfer must leave nothing behind under the old owner address"
-        );
-        assert_eq!(
-            accessor_descriptor_keys_for_obj(new),
-            vec!["acc".to_string()],
-            "accessors must be readable through the new owner address after growth"
-        );
-    }
-
-    #[test]
-    fn clear_object_descriptors_empties_the_index_too() {
-        let _lock = crate::gc::global_side_table_test_lock();
-        let obj = crate::object::js_object_alloc(0, 0) as usize;
-        // `clear_object_descriptors` early-returns unless a handle-band owner
-        // has ever taken a descriptor; set the latch so the body actually runs.
-        HANDLE_HAS_DESCRIPTORS.store(true, Ordering::Relaxed);
-
-        set_property_attrs(obj, "p".to_string(), PropertyAttrs::new(true, true, true));
-        set_accessor_descriptor(obj, "acc".to_string(), AccessorDescriptor::default());
-        assert_mirrors(obj, "before clear");
-
-        clear_object_descriptors(obj);
-        assert_mirrors(obj, "after clear");
-        assert!(
-            accessor_descriptor_keys_for_obj(obj).is_empty(),
-            "a cleared owner must report no accessor keys"
-        );
-    }
-}
-
-#[cfg(test)]
-mod c5a_tests {
-    use super::*;
-
-    /// #6759 C5a: a prototype-level descriptor whose key names no declared
-    /// instance field must NOT flip the process-wide inline-guard disable;
-    /// one whose key IS a declared field must.
-    #[test]
-    fn inline_guard_disable_is_per_declared_field_key() {
-        let _lock = crate::gc::global_side_table_test_lock();
-        test_reset_class_field_inline_guard();
-
-        let proto = crate::object::js_object_alloc(0, 0);
-        class_registry::class_prototype_object_root_store(0x0666_0001, proto);
-        let proto_addr = proto as usize;
-
-        // Method-style install (babel output): key declared by no class.
-        set_accessor_descriptor(
-            proto_addr,
-            "c5a_render_method".to_string(),
-            AccessorDescriptor::default(),
-        );
-        assert!(
-            class_field_inline_guard_enabled(),
-            "a prototype install keyed by a non-field name must not poison \
-             the inline class-field fast path"
-        );
-        assert!(
-            !class_registry::class_prototype_fast_guards_invalidated(),
-            "a keyed prototype descriptor must not retire every method guard"
-        );
-        let render_slot = class_registry::class_prototype_method_guard_slot("c5a_render_method");
-        assert!(
-            class_registry::class_prototype_fast_guard_invalidated_for_method(render_slot),
-            "a prototype descriptor must retire its matching method guard"
-        );
-        let other_slot = class_registry::class_prototype_method_guard_slot("c5a_other_method");
-        assert!(
-            !class_registry::class_prototype_fast_guard_invalidated_for_method(other_slot),
-            "an unrelated method guard must remain valid"
-        );
-
-        // Field-style install: key declared by a registered class.
-        note_declared_instance_field_name(b"c5a_field_x");
-        assert!(
-            class_field_inline_guard_enabled(),
-            "declaring the field alone (no matching install) must not disable"
-        );
-        set_property_attrs(
-            proto_addr,
-            "c5a_field_x".to_string(),
-            PropertyAttrs::new(false, true, true),
-        );
-        assert!(
-            !class_field_inline_guard_enabled(),
-            "a prototype install keyed by a DECLARED field must disable"
-        );
-
-        test_reset_class_field_inline_guard();
-    }
-
-    /// #6759 C5a ordering: an install that precedes the declaring class's
-    /// registration is retro-checked when the class arrives.
-    #[test]
-    fn inline_guard_retro_disable_on_late_class_registration() {
-        let _lock = crate::gc::global_side_table_test_lock();
-        test_reset_class_field_inline_guard();
-
-        let proto = crate::object::js_object_alloc(0, 0);
-        class_registry::class_prototype_object_root_store(0x0666_0002, proto);
-
-        set_accessor_descriptor(
-            proto as usize,
-            "c5a_late_field".to_string(),
-            AccessorDescriptor::default(),
-        );
-        assert!(
-            class_field_inline_guard_enabled(),
-            "no class declares the key yet — install must skip the disable"
-        );
-
-        // The declaring class registers AFTER the install.
-        note_declared_instance_field_name(b"c5a_late_field");
-        assert!(
-            !class_field_inline_guard_enabled(),
-            "late class registration must retro-trigger the disable for \
-             prototype keys installed earlier"
-        );
-
-        test_reset_class_field_inline_guard();
-    }
 }

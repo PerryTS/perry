@@ -46,6 +46,10 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::OnceLock;
 
+#[cfg(all(test, unix))]
+static STATIC_SYMBOL_SPAWN_ATTEMPTS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
 /// Native return addresses captured per construction. 16 words = 128 bytes of
 /// encoded blob, enough to cover node's default `Error.stackTraceLimit` of 10
 /// JS frames plus the runtime frames between `new Error` and the throwing
@@ -195,30 +199,7 @@ mod walk {
 
     #[cfg(all(target_os = "linux", not(target_vendor = "apple")))]
     fn stack_top_uncached() -> usize {
-        unsafe extern "C" {
-            fn pthread_self() -> usize;
-            fn pthread_getattr_np(thread: usize, attr: *mut u8) -> i32;
-            fn pthread_attr_getstack(
-                attr: *const u8,
-                stackaddr: *mut *mut core::ffi::c_void,
-                stacksize: *mut usize,
-            ) -> i32;
-            fn pthread_attr_destroy(attr: *mut u8) -> i32;
-        }
-        let mut attr = [0u8; 128];
-        let mut addr: *mut core::ffi::c_void = core::ptr::null_mut();
-        let mut size: usize = 0;
-        unsafe {
-            if pthread_getattr_np(pthread_self(), attr.as_mut_ptr()) != 0 {
-                return 0;
-            }
-            let ok = pthread_attr_getstack(attr.as_ptr(), &mut addr, &mut size) == 0;
-            pthread_attr_destroy(attr.as_mut_ptr());
-            if !ok {
-                return 0;
-            }
-        }
-        (addr as usize).saturating_add(size)
+        crate::native_stack::stack_top()
     }
 
     // The bound is a property of the thread, and `new Error` is frequent
@@ -344,15 +325,260 @@ pub(crate) fn capture_encoded() -> ([u8; MAX_CAPTURED_FRAMES * PC_CHARS], usize)
     (blob, len)
 }
 
+/// Raw return addresses of the current native stack, innermost first, for
+/// the GC's site-attribution diagnostics (`gc/diag_sites.rs`, the
+/// `PERRY_ALLOC_SITE_SAMPLE` sampler). Same walk as `capture_encoded`, no
+/// encoding.
+pub(crate) fn capture_ips(out: &mut [usize; MAX_CAPTURED_FRAMES]) -> usize {
+    walk::capture(out)
+}
+
+/// Best-effort one-line description of a code address for diagnostics: the
+/// registered JS display name when `ip` is inside a compiled user function,
+/// else the nearest dynamic linker symbol (`dladdr`), else an executable-image
+/// offset. `PERRY_STACK_SYMBOLS=1` opts into replacing that offset with a
+/// retained static symbol. Never called on a hot path — the JS-name index takes
+/// a lock, while the expensive static table is never loaded by default.
+pub(crate) fn describe_ip(ip: usize) -> String {
+    let js = with_index(|index| {
+        let lookup_ip = ip.saturating_sub(1);
+        symbol_for_ip(index, lookup_ip).and_then(|(start, name)| {
+            std::str::from_utf8(name)
+                .ok()
+                .map(|name| (start, name.to_string()))
+        })
+    })
+    .flatten();
+    if let Some((start, name)) = js.filter(|(_, name)| !name.is_empty()) {
+        return format_js_description(ip, start, &name);
+    }
+    #[cfg(unix)]
+    {
+        if let Some(info) = dladdr_info(ip) {
+            if info.dli_sname.is_null() {
+                return describe_unnamed_native_ip(ip, info.dli_fbase as usize);
+            } else {
+                let name = unsafe { std::ffi::CStr::from_ptr(info.dli_sname) }.to_string_lossy();
+                let off = ip.saturating_sub(info.dli_saddr as usize);
+                let mut n = name.into_owned();
+                if n.len() > 72 {
+                    n.truncate(72);
+                }
+                return format!("{n}+{off:#x}");
+            }
+        }
+    }
+    format!("{ip:#x}")
+}
+
+#[cfg(unix)]
+fn describe_unnamed_native_ip(ip: usize, image_base: usize) -> String {
+    if stack_symbols_enabled() {
+        if let Some((name, off)) = static_symbol_for_ip(ip, image_base) {
+            return format!("rt:{name}+{off:#x}");
+        }
+    } else if executable_image_base() == Some(image_base) {
+        if let Some(off) = ip.checked_sub(image_base) {
+            return format!("rt+{off:#x}");
+        }
+    }
+    format!("{ip:#x}")
+}
+
+fn format_js_description(ip: usize, start: usize, name: &str) -> String {
+    if ip.saturating_sub(1).saturating_sub(start) > MAX_FUNCTION_SPAN / 2 {
+        format!("js:{name}@{ip:#x}")
+    } else {
+        format!("js:{name}")
+    }
+}
+
+#[cfg(unix)]
+fn dladdr_info(ip: usize) -> Option<libc::Dl_info> {
+    let mut info: libc::Dl_info = unsafe { std::mem::zeroed() };
+    // SAFETY: `dladdr` only reads the address and fills `info`.
+    (unsafe { libc::dladdr(ip as *const libc::c_void, &mut info) } != 0).then_some(info)
+}
+
+/// Static executable symbolization is deliberately opt-in: `nm` is a process
+/// spawn and can consume seconds on a large retained-symbol binary. Read the
+/// switch once so every default-path miss pays only a cached boolean load.
+#[cfg(unix)]
+fn stack_symbols_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| crate::gc::env_flag_enabled("PERRY_STACK_SYMBOLS"))
+}
+
+/// Loaded base of this executable, derived without opening the executable or
+/// spawning a tool. Zero is the cached failure sentinel; supported Unix image
+/// bases are non-null.
+#[cfg(unix)]
+fn executable_image_base() -> Option<usize> {
+    static IMAGE_BASE: OnceLock<usize> = OnceLock::new();
+    let base = *IMAGE_BASE.get_or_init(|| {
+        dladdr_info(load_static_symbol_index as *const () as usize)
+            .map(|info| info.dli_fbase as usize)
+            .unwrap_or(0)
+    });
+    (base != 0).then_some(base)
+}
+
+#[cfg(unix)]
+struct StaticSymbolIndex {
+    image_base: usize,
+    /// Runtime-relocated `(text symbol start, demangled name)` entries.
+    entries: Vec<(usize, String)>,
+}
+
+#[cfg(unix)]
+fn static_symbol_index() -> &'static Option<StaticSymbolIndex> {
+    static INDEX: OnceLock<Option<StaticSymbolIndex>> = OnceLock::new();
+    INDEX.get_or_init(load_static_symbol_index)
+}
+
+#[cfg(unix)]
+fn relocated_address(address: usize, preferred_base: usize, image_base: usize) -> Option<usize> {
+    if image_base >= preferred_base {
+        address.checked_add(image_base - preferred_base)
+    } else {
+        address.checked_sub(preferred_base - image_base)
+    }
+}
+
+#[cfg(unix)]
+fn demangle_nm_symbol(name: &str) -> String {
+    // Mach-O's assembler-level symbol spelling adds one leading underscore
+    // before Rust's `_R...` / `_ZN...` mangling. `nm -C` implementations that
+    // know Rust already return a readable name; `try_demangle` rejects that
+    // and we preserve it unchanged.
+    let candidate = if cfg!(target_vendor = "apple") {
+        name.strip_prefix('_').unwrap_or(name)
+    } else {
+        name
+    };
+    rustc_demangle::try_demangle(candidate)
+        .map(|symbol| symbol.to_string())
+        .unwrap_or_else(|_| name.to_string())
+}
+
+/// Read the executable's retained `t`/`T` symbols exactly once. `nm -nC`
+/// gives us the same address order and demangling a developer would use by
+/// hand, without making an object-file parser part of every shipped runtime.
+/// A stripped image, a host without `nm`, or an unfamiliar `nm` format simply
+/// leaves the old bare-address fallback in place.
+#[cfg(unix)]
+fn load_static_symbol_index() -> Option<StaticSymbolIndex> {
+    let executable = std::env::current_exe().ok()?;
+    #[cfg(test)]
+    STATIC_SYMBOL_SPAWN_ATTEMPTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let output = std::process::Command::new("nm")
+        .arg("-nC")
+        .arg(executable)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = std::str::from_utf8(&output.stdout).ok()?;
+    let mut preferred_base = None;
+    let mut raw_entries = Vec::new();
+    for line in text.lines() {
+        let mut fields = line.split_whitespace();
+        let Some(address) = fields
+            .next()
+            .and_then(|word| usize::from_str_radix(word, 16).ok())
+        else {
+            continue;
+        };
+        let Some(kind) = fields.next() else {
+            continue;
+        };
+        let name = fields.collect::<Vec<_>>().join(" ");
+        if name.ends_with("__mh_execute_header") || name.ends_with("__executable_start") {
+            preferred_base = Some(address);
+        }
+        if !matches!(kind, "t" | "T") || name.is_empty() {
+            continue;
+        }
+        raw_entries.push((address, demangle_nm_symbol(&name)));
+    }
+    if raw_entries.is_empty() {
+        return None;
+    }
+    raw_entries.sort_unstable_by_key(|(address, _)| *address);
+
+    // `dladdr` reports the loaded base. Mach-O and GNU-linked ELF images also
+    // publish their preferred base as one of the marker symbols above. For an
+    // ELF variant without that marker, select PIE-relative versus absolute
+    // `nm` addresses by whichever places a text symbol nearest this function.
+    let image_base = executable_image_base()?;
+    let preferred_base = preferred_base.unwrap_or_else(|| {
+        let anchor = load_static_symbol_index as *const () as usize;
+        let absolute_distance = raw_entries
+            .iter()
+            .map(|(address, _)| address.abs_diff(anchor))
+            .min()
+            .unwrap_or(usize::MAX);
+        let relative_distance = raw_entries
+            .iter()
+            .filter_map(|(address, _)| address.checked_add(image_base))
+            .map(|address| address.abs_diff(anchor))
+            .min()
+            .unwrap_or(usize::MAX);
+        if relative_distance < absolute_distance {
+            0
+        } else {
+            image_base
+        }
+    });
+
+    let mut entries: Vec<_> = raw_entries
+        .into_iter()
+        .filter_map(|(address, name)| {
+            relocated_address(address, preferred_base, image_base).map(|address| (address, name))
+        })
+        .collect();
+    entries.sort_unstable_by_key(|(address, _)| *address);
+    entries.dedup_by(|right, left| right.0 == left.0);
+    (!entries.is_empty()).then_some(StaticSymbolIndex {
+        image_base,
+        entries,
+    })
+}
+
+#[cfg(unix)]
+fn static_symbol_for_ip(ip: usize, image_base: usize) -> Option<(&'static str, usize)> {
+    let index = static_symbol_index().as_ref()?;
+    // Never apply the executable's lower-bound table to a shared library.
+    if image_base != index.image_base {
+        return None;
+    }
+    let at = index.entries.partition_point(|(address, _)| *address <= ip);
+    let (start, name) = &index.entries[at.checked_sub(1)?];
+    Some((name.as_str(), ip - *start))
+}
+
+/// `describe_ip` for a chain, innermost first, skipping frames inside `skip`
+/// (a set of symbol-name substrings the caller considers plumbing). Returns
+/// up to `max` descriptions joined by ` < `.
+pub(crate) fn describe_chain(pcs: &[usize], max: usize) -> String {
+    let mut out = Vec::with_capacity(max);
+    for &pc in pcs {
+        if out.len() >= max {
+            break;
+        }
+        out.push(describe_ip(pc));
+    }
+    out.join(" < ")
+}
+
 // ---------------------------------------------------------------------------
 // Resolution: address -> JS display name.
 // ---------------------------------------------------------------------------
 
 struct CodeSymbolIndex {
-    /// Registry size the snapshot was taken at. `register_function_name_if_absent`
-    /// can add entries after module init (symbol-keyed object literals,
-    /// `util.promisify`), so a changed length rebuilds rather than serving a
-    /// stale table.
+    /// Generated-bundle registry size the snapshot was taken at. Runtime-owned
+    /// registrations are intentionally absent from this index.
     source_len: usize,
     /// `(function start address, display name)`, sorted by address.
     entries: Vec<(usize, Arc<[u8]>)>,
@@ -373,33 +599,37 @@ fn index_slot() -> &'static Mutex<Option<CodeSymbolIndex>> {
 /// frame, on a link layout that places the archives after the generated
 /// objects) from being reported under that function's name.
 ///
-/// The residual is honest and worth stating: an address inside an
-/// UNREGISTERED function that sits within the span of a registered one — a
-/// codegen thunk, or runtime code the linker interleaved — resolves to the
-/// preceding registered name. It is the same shape as the residual the
-/// collector's own function table carries (`stack_maps_index.rs`: "a function
-/// with no safepoints is absent … so an `ip` inside one resolves to the
-/// previous mapped function"), and closing it needs a per-function code
-/// extent, which Mach-O does not expose cheaply.
-fn name_for_ip(index: &CodeSymbolIndex, ip: usize) -> Option<&Arc<[u8]>> {
+/// The index contains only the codegen-only image registry, so runtime builtin
+/// thunks cannot become predecessors at all. The remaining residual is within
+/// the bundle: an address inside an UNREGISTERED generated function that sits
+/// within the span of a registered one resolves to the preceding registered
+/// name. That is the same shape as the collector's own function table
+/// (`stack_maps_index.rs`: "a function with no safepoints is absent … so an
+/// `ip` inside one resolves to the previous mapped function"). Closing it
+/// needs per-function extents, which this registry and Mach-O do not expose.
+fn symbol_for_ip(index: &CodeSymbolIndex, ip: usize) -> Option<(usize, &Arc<[u8]>)> {
     let at = index.entries.partition_point(|(addr, _)| *addr <= ip);
     let at = at.checked_sub(1)?;
     let (start, name) = &index.entries[at];
     if ip - *start > MAX_FUNCTION_SPAN {
         return None;
     }
-    Some(name)
+    Some((*start, name))
+}
+
+fn name_for_ip(index: &CodeSymbolIndex, ip: usize) -> Option<&Arc<[u8]>> {
+    symbol_for_ip(index, ip).map(|(_, name)| name)
 }
 
 fn with_index<R>(f: impl FnOnce(&CodeSymbolIndex) -> R) -> Option<R> {
     let mut slot = index_slot().lock().ok()?;
-    let current_len = crate::builtins::function_name_registry_len()?;
+    let current_len = crate::builtins::bundle_function_name_registry_len()?;
     let stale = match slot.as_ref() {
         Some(index) => index.source_len != current_len,
         None => true,
     };
     if stale {
-        let mut entries = crate::builtins::function_name_registry_entries()?;
+        let mut entries = crate::builtins::bundle_function_name_registry_entries()?;
         entries.sort_unstable_by_key(|(addr, _)| *addr);
         *slot = Some(CodeSymbolIndex {
             source_len: current_len,
@@ -446,7 +676,8 @@ pub(crate) fn render_frames(blob: &[u8]) -> Option<String> {
             // A return address points AFTER the call instruction; on a tail
             // position that byte can belong to the next function, so resolve
             // the call site itself.
-            let Some(name) = name_for_ip(index, pc.saturating_sub(1)) else {
+            let lookup_ip = pc.saturating_sub(1);
+            let Some((start, name)) = symbol_for_ip(index, lookup_ip) else {
                 continue;
             };
             let Ok(name) = std::str::from_utf8(name) else {
@@ -465,6 +696,15 @@ pub(crate) fn render_frames(blob: &[u8]) -> Option<String> {
             // `source-map-support`) read the name out of the frame at all.
             out.push_str("    at ");
             out.push_str(name);
+            if lookup_ip.saturating_sub(start) > MAX_FUNCTION_SPAN / 2 {
+                // The registry has starts, not exact extents. Preserve the JS
+                // name inside the accepted span, but expose the raw address in
+                // the suspicious outer half so a residual mis-name cannot
+                // send an audit after the named function without a clue.
+                out.push_str(" [");
+                out.push_str(&format!("{pc:#x}"));
+                out.push(']');
+            }
             out.push_str(" (<anonymous>)");
             rendered += 1;
         }
@@ -566,6 +806,14 @@ pub(crate) unsafe fn materialize_error_stack(error: *mut ErrorHeader) -> *mut St
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
+    #[inline(never)]
+    fn kept_runtime_symbol_probe(value: usize) -> usize {
+        std::hint::black_box(value)
+            .wrapping_mul(0x9486)
+            .wrapping_add(17)
+    }
+
     #[test]
     fn pcs_round_trip_through_the_ascii_blob() {
         let pcs = [0x1_0000_1234usize, 0x7fff_ffff_0000, 1, 0];
@@ -617,6 +865,175 @@ mod tests {
             name_for_ip(&index, 0x2000 + MAX_FUNCTION_SPAN + 1).is_none(),
             "past the last entry by more than a function's plausible span is \
              a runtime frame, not `second`"
+        );
+    }
+
+    /// Builtin/getter thunks use the owned name-registration entry point. The
+    /// stack index must use only codegen's image registry, or the lower-bound
+    /// lookup gives every nearby runtime function the thunk's JS name.
+    #[test]
+    fn describe_ip_does_not_name_runtime_code_after_a_builtin_thunk() {
+        const THUNK_START: usize = 0x0000_7e00_0000_0000;
+        const THUNK_NAME: &[u8] = b"get years";
+        const BUNDLE_START: usize = THUNK_START - 2 * MAX_FUNCTION_SPAN;
+        const BUNDLE_NAME: &[u8] = b"bundleWitness9979";
+        unsafe {
+            crate::builtins::js_register_function_name_static(
+                BUNDLE_START as *const u8,
+                BUNDLE_NAME.as_ptr(),
+                BUNDLE_NAME.len() as u32,
+            );
+            crate::builtins::js_register_function_name(
+                THUNK_START as *const u8,
+                THUNK_NAME.as_ptr(),
+                THUNK_NAME.len() as u32,
+            );
+        }
+        // Tests run with one thread for this process-global registry. Force a
+        // post-registration snapshot so changing the snapshot source back to
+        // the combined registry is a real, deterministic sabotage.
+        *index_slot().lock().expect("code-symbol index lock") = None;
+
+        assert_eq!(
+            crate::builtins::function_name_for_ptr(THUNK_START).as_deref(),
+            Some("get years"),
+            "the excluded thunk must still have its reflection name"
+        );
+        assert_eq!(describe_ip(BUNDLE_START + 32), "js:bundleWitness9979");
+        let ip = THUNK_START + 32;
+        let last_bundle_start =
+            with_index(|index| index.entries.last().map(|(start, _)| *start)).flatten();
+        assert!(
+            last_bundle_start.is_none_or(|start| ip.saturating_sub(start) > MAX_FUNCTION_SPAN),
+            "the fake runtime thunk must sit outside the generated bundle range"
+        );
+        let description = describe_ip(ip);
+        assert!(
+            !description.starts_with("js:") && !description.contains("get years"),
+            "runtime code after an owned builtin thunk was misnamed: {description}"
+        );
+
+        let mut blob = [0u8; MAX_CAPTURED_FRAMES * PC_CHARS];
+        let len = encode_pcs(&[BUNDLE_START + 32, ip], &mut blob);
+        assert_eq!(
+            render_frames(&blob[..len]).as_deref(),
+            Some("    at bundleWitness9979 (<anonymous>)"),
+            "rendering must retain the bundle frame and omit the runtime thunk"
+        );
+        let far_ip = BUNDLE_START + MAX_FUNCTION_SPAN / 2 + 2;
+        let len = encode_pcs(&[far_ip], &mut blob);
+        assert_eq!(
+            render_frames(&blob[..len]),
+            Some(format!(
+                "    at bundleWitness9979 [{far_ip:#x}] (<anonymous>)"
+            )),
+            "the rendered stack must preserve a suspicious frame's address"
+        );
+    }
+
+    /// The outer half of the heuristic containment span is deliberately still
+    /// accepted, but it must carry the original address so a residual false
+    /// association is visible to the reader.
+    #[test]
+    fn suspicious_js_name_keeps_the_raw_ip_visible() {
+        let start = 0x1000;
+        let ip = start + MAX_FUNCTION_SPAN / 2 + 2;
+        assert_eq!(
+            format_js_description(ip, start, "maybeFunction"),
+            format!("js:maybeFunction@{ip:#x}")
+        );
+    }
+
+    /// The shipping default identifies executable-image misses by their PIE
+    /// offset and must never enter the `nm` spawn path. The child process gives
+    /// the cached flag a deterministic unset environment; removing the gate is
+    /// sabotage-proved by the spawn counter becoming non-zero.
+    #[cfg(unix)]
+    #[test]
+    fn describe_ip_defaults_to_an_executable_offset_without_spawning_nm() {
+        const CHILD_ENV: &str = "PERRY_TEST_STACK_SYMBOLS_DEFAULT_CHILD";
+        if std::env::var_os(CHILD_ENV).is_none() {
+            let status =
+                std::process::Command::new(std::env::current_exe().expect("current test binary"))
+                    .arg("describe_ip_defaults_to_an_executable_offset_without_spawning_nm")
+                    .arg("--nocapture")
+                    .env_remove("PERRY_STACK_SYMBOLS")
+                    .env(CHILD_ENV, "1")
+                    .status()
+                    .expect("launch isolated default stack-symbol witness");
+            assert!(status.success(), "default stack-symbol witness failed");
+            return;
+        }
+
+        assert!(!stack_symbols_enabled(), "the default child must be OFF");
+        assert_eq!(
+            STATIC_SYMBOL_SPAWN_ATTEMPTS.load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
+        let ip = kept_runtime_symbol_probe as *const () as usize;
+        assert_ne!(std::hint::black_box(kept_runtime_symbol_probe(3)), 0);
+        let info = dladdr_info(ip).expect("the probe must belong to the main executable image");
+        let image_base = executable_image_base().expect("the executable base must resolve");
+        assert_eq!(info.dli_fbase as usize, image_base);
+
+        // Mach-O dladdr can expose local symbols. Supply the missing-name
+        // condition explicitly, retaining the real probe address and image.
+        let description = describe_unnamed_native_ip(ip, image_base);
+        assert_eq!(description, format!("rt+{:#x}", ip - image_base));
+        assert_eq!(
+            STATIC_SYMBOL_SPAWN_ATTEMPTS.load(std::sync::atomic::Ordering::Relaxed),
+            0,
+            "the default address fallback must not attempt to spawn `nm`"
+        );
+    }
+
+    /// A kept local Rust symbol is present in the executable's static `t`
+    /// table. Exercise a missing dynamic name explicitly because Mach-O can
+    /// expose local symbols through dladdr. This isolated child opts into
+    /// `PERRY_STACK_SYMBOLS`; no in-process test mutates the cached flag.
+    #[cfg(unix)]
+    #[test]
+    fn describe_ip_names_a_kept_runtime_symbol_when_nm_is_opted_in() {
+        const CHILD_ENV: &str = "PERRY_TEST_STACK_SYMBOLS_NM_CHILD";
+        if std::env::var_os(CHILD_ENV).is_none() {
+            let status =
+                std::process::Command::new(std::env::current_exe().expect("current test binary"))
+                    .arg("describe_ip_names_a_kept_runtime_symbol_when_nm_is_opted_in")
+                    .arg("--nocapture")
+                    .env("PERRY_STACK_SYMBOLS", "1")
+                    .env(CHILD_ENV, "1")
+                    .status()
+                    .expect("launch isolated opt-in stack-symbol witness");
+            assert!(status.success(), "opt-in stack-symbol witness failed");
+            return;
+        }
+
+        assert!(stack_symbols_enabled(), "the opt-in child must be ON");
+        let ip = kept_runtime_symbol_probe as *const () as usize;
+        assert_ne!(std::hint::black_box(kept_runtime_symbol_probe(3)), 0);
+        let info = dladdr_info(ip).expect("the probe must belong to the main executable image");
+
+        let description = describe_unnamed_native_ip(ip, info.dli_fbase as usize);
+        assert_eq!(
+            STATIC_SYMBOL_SPAWN_ATTEMPTS.load(std::sync::atomic::Ordering::Relaxed),
+            1,
+            "the opted-in path must attempt exactly one `nm` spawn"
+        );
+        if static_symbol_index().is_none() {
+            eprintln!("skipped symbol assertion: `nm -nC` could not read this test binary");
+            return;
+        }
+        assert!(
+            description.starts_with("rt:"),
+            "static fallback did not identify a runtime symbol: {description}"
+        );
+        assert!(
+            description.contains("kept_runtime_symbol_probe"),
+            "static fallback did not demangle the probe name: {description}"
+        );
+        assert!(
+            description.ends_with("+0x0"),
+            "the exact function start should have offset zero: {description}"
         );
     }
 

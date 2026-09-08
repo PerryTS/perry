@@ -224,9 +224,9 @@ pub(crate) enum GcMoveHookKind {
     /// live on the Error's traced `ObjectMeta` edge and need no side-table
     /// rekeying.
     ErrorSideTables,
-    /// Rekey RegExp identity/source registries plus its exotic expando owner
-    /// entry. `GC_TYPE_REGEXP` is movable, and all three tables use the
-    /// payload address as their key.
+    /// Rekey the RegExp identity registry plus its exotic expando owner entry.
+    /// `GC_TYPE_REGEXP` is movable, and both tables use the payload address as
+    /// their key.
     RegExpSideTables,
 }
 

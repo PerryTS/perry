@@ -175,6 +175,22 @@ Perry's Fastify implementation is API-compatible with the npm package. Routes, r
 {{#include ../../examples/stdlib/http/snippets.ts:websocket-client}}
 ```
 
+`new WebSocketServer({ server: httpServer })` shares an existing HTTP server's
+port: ordinary requests still reach the HTTP handler and WebSocket upgrades
+fire `wss.on("connection", (ws, req) => ...)`. `wss.address()` reports the
+host server's address. Closing the WebSocket server detaches it without
+closing the shared HTTP listener.
+
+For manual routing, create `new WebSocketServer({ noServer: true })` and call
+`wss.handleUpgrade(req, socket, head, (ws, req) => wss.emit("connection", ws, req))`
+from the HTTP server's `upgrade` listener. The callback runs once; it controls
+whether the connection event is emitted. The native HTTP transport performs
+the handshake before dispatching `upgrade`, as described above.
+
+A standalone `new WebSocketServer({ port: 0 })` binds an ephemeral port and
+emits `listening`. Read `wss.address().port` inside that listener to connect to
+it. Its address object contains `address`, `family`, and `port`.
+
 ## AWS S3 / S3-Compatible Object Storage
 
 [`@bradenmacdonald/s3-lite-client`](https://github.com/bradenmacdonald/s3-lite-client) is a zero-dependency, MIT-licensed S3 client (~1.9k LoC, derived from the official MinIO JS client without the lodash/async/xml2js baggage). It compiles natively under `perry.compilePackages` with no patches required — verified against a SigV4 presigned-URL byte-for-byte match with `bun` (issue #551).

@@ -3,6 +3,8 @@ use super::*;
 #[test]
 fn test_copying_minor_promotes_survivor_on_fourth_survival() {
     let _guard = CopyingNurseryTestGuard::new(1);
+    let _tenuring =
+        crate::gc::tenuring::set_survivals_for_test(crate::gc::tenuring::GC_TENURING_SURVIVALS_MAX);
     let child = young_leaf();
     js_shadow_slot_set(0, ptr_bits(child));
 
@@ -53,6 +55,8 @@ fn test_copying_minor_preserves_old_page_accounting_for_defrag_policy() {
         pinned_header: std::ptr::null_mut(),
     };
     let _guard = CopyingNurseryTestGuard::new(1);
+    let _tenuring =
+        crate::gc::tenuring::set_survivals_for_test(crate::gc::tenuring::GC_TENURING_SURVIVALS_MAX);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     clear_marks();
     clear_mark_seeds();
@@ -176,6 +180,8 @@ fn test_copying_minor_preserves_old_page_accounting_for_defrag_policy() {
 #[test]
 fn test_copying_minor_sticky_old_to_survivor_edge_promotes_on_fourth_cycle() {
     let _guard = CopyingNurseryTestGuard::new(0);
+    let _tenuring =
+        crate::gc::tenuring::set_survivals_for_test(crate::gc::tenuring::GC_TENURING_SURVIVALS_MAX);
     let child = young_leaf();
     let (old_arr, elements) = unsafe { alloc_old_test_array(1) };
     unsafe {
@@ -343,6 +349,132 @@ fn test_gc_check_trigger_copied_minor_malloc_sweep_rebaselines_trigger() {
         survivors_after + malloc_step_after,
         "gc_check_trigger should rebaseline the next malloc trigger to survivors + step"
     );
+}
+
+/// #9840 on the BUDGETED path — the one cc actually takes. Companion to
+/// `debt_pacer::direct_malloc_minor_also_rebaselines_the_whole_arena_trigger`
+/// (the direct synchronous arm); the moving safepoint
+/// (`gc_safepoint_moving_minor`) is the third caller and shares this same
+/// finisher.
+///
+/// A `MallocCount` minor sweeps the nursery exactly as an `ArenaBytes` minor
+/// does, so the whole-arena trigger must be measured from after it. Leaving it
+/// where the previous arena-kind collection put it is what let six
+/// `MallocCount` minors' promotion walk the arena total across a stale
+/// threshold and fire the arena arm on an 856-byte nursery — see the direct
+/// test's doc comment for the measurement.
+///
+/// Sabotage (delete the `gc_rebaseline_arena_trigger_after_collection` call
+/// from `gc_finish_malloc_trigger_collection`): the first assertion sees the
+/// pre-collection trigger, and the second sees a whole-arena cycle start on
+/// the quiet nursery.
+#[test]
+fn test_budgeted_malloc_minor_rebaselines_the_whole_arena_trigger() {
+    let _legacy_pacing = crate::gc::policy::force_legacy_gc_pacing();
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let old_in_use = crate::arena::old_gen_in_use_bytes();
+    GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|bytes| bytes.set(old_in_use));
+    GC_OLD_RECLAIM_PENDING.with(|pending| pending.set(false));
+
+    let live_malloc = gc_malloc(
+        std::mem::size_of::<crate::closure::ClosureHeader>(),
+        GC_TYPE_CLOSURE,
+    );
+    unsafe {
+        init_test_closure(live_malloc);
+    }
+    js_shadow_slot_set(0, ptr_bits(live_malloc as usize));
+    activate_malloc_registry_for_tests();
+
+    let churn_headers = allocate_dead_malloc_churn_headers(48);
+    assert_eq!(
+        tracked_malloc_headers_matching(&churn_headers),
+        churn_headers.len(),
+        "malloc churn should be tracked before gc_check_trigger"
+    );
+
+    // Arena arm armed but NOT due (1 MB of headroom); malloc pressure due.
+    let arena_total_before = crate::arena::arena_total_bytes();
+    let stale_trigger = arena_total_before + 1024 * 1024;
+    GC_NEXT_TRIGGER_BYTES.with(|trigger| trigger.set(stale_trigger));
+    trigger_guard.make_malloc_sweep_due();
+
+    let collections_before = gc_collection_count();
+    gc_check_trigger();
+
+    let mut step_status = JsGcStepResult::default();
+    assert_eq!(
+        js_gc_step_status(&mut step_status),
+        JS_GC_STEP_STATUS_ACTIVE,
+        "gc_check_trigger should schedule malloc pressure as bounded assist work"
+    );
+    assert_eq!(
+        step_status.trigger_kind,
+        GcTriggerKind::MallocCount.ffi_code(),
+        "the cycle under test must be the MallocCount one"
+    );
+
+    let completed = complete_budgeted_gc_cycle();
+    assert_eq!(completed.status, JS_GC_STEP_STATUS_COMPLETED);
+    assert!(
+        gc_collection_count() > collections_before,
+        "draining the budgeted malloc-pressure cycle should collect"
+    );
+    assert_eq!(
+        tracked_malloc_headers_matching(&churn_headers),
+        0,
+        "the cycle must have swept malloc, or it did not take the arm under test"
+    );
+
+    // (1) The budgeted finisher re-baselined the whole-arena trigger too.
+    let arena_total_after = crate::arena::arena_total_bytes();
+    let next_trigger = GC_NEXT_TRIGGER_BYTES.with(|trigger| trigger.get());
+    assert!(
+        next_trigger >= arena_total_after + gc_trigger_headroom_floor_bytes(),
+        "the budgeted MallocCount finisher must re-baseline the whole-arena \
+         trigger above the set it left behind (next_trigger={next_trigger}, \
+         arena_total_after={arena_total_after}); leaving it at the \
+         pre-collection value ({stale_trigger}) is shape (b)'s stale threshold"
+    );
+
+    // (2) ...so a little old-generation growth cannot re-arm a whole-arena
+    //     cycle on the nursery this collection just emptied.
+    let old_in_use = crate::arena::old_gen_in_use_bytes();
+    GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|bytes| bytes.set(old_in_use));
+    GC_OLD_RECLAIM_PENDING.with(|pending| pending.set(false));
+    let mut filler = Vec::new();
+    for _ in 0..32 {
+        filler.push(crate::arena::arena_alloc_gc_old(
+            64 * 1024,
+            8,
+            GC_TYPE_STRING,
+        ));
+    }
+    assert!(
+        crate::arena::arena_total_bytes() > stale_trigger,
+        "the filler must grow the arena total past the PRE-collection trigger, \
+         or the assertion below cannot distinguish the two behaviours"
+    );
+    let old_in_use = crate::arena::old_gen_in_use_bytes();
+    GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|bytes| bytes.set(old_in_use));
+    GC_OLD_RECLAIM_PENDING.with(|pending| pending.set(false));
+
+    let collections_before_growth = gc_collection_count();
+    gc_check_trigger();
+    let mut after_growth = JsGcStepResult::default();
+    assert_ne!(
+        js_gc_step_status(&mut after_growth),
+        JS_GC_STEP_STATUS_ACTIVE,
+        "2 MB of old-generation growth after a nursery collection must not open \
+         a whole-arena cycle on the quiet nursery"
+    );
+    assert_eq!(
+        gc_collection_count(),
+        collections_before_growth,
+        "...nor collect"
+    );
+    drop(filler);
 }
 
 #[test]
@@ -798,7 +930,6 @@ fn test_movable_regexp_evacuation_migrates_all_address_owned_state() {
     let old_addr = re as usize;
     assert!(crate::arena::pointer_in_nursery(old_addr));
     assert!(crate::regex::test_regex_pointer_entry_exists(old_addr));
-    assert!(crate::regex::test_regex_source_entry_exists(old_addr));
 
     crate::object::exotic_expando::test_seed_exotic_expando_entry(
         old_addr,
@@ -816,8 +947,6 @@ fn test_movable_regexp_evacuation_migrates_all_address_owned_state() {
 
     assert!(crate::regex::test_regex_pointer_entry_exists(new_addr));
     assert!(!crate::regex::test_regex_pointer_entry_exists(old_addr));
-    assert!(crate::regex::test_regex_source_entry_exists(new_addr));
-    assert!(!crate::regex::test_regex_source_entry_exists(old_addr));
     assert!(crate::object::exotic_expando::test_exotic_expando_entry_exists(new_addr));
     assert!(!crate::object::exotic_expando::test_exotic_expando_entry_exists(old_addr));
 
@@ -838,6 +967,8 @@ fn test_movable_regexp_evacuation_migrates_all_address_owned_state() {
 #[test]
 fn test_copied_minor_promotable_census_filtered_walk_matches_unfiltered() {
     let _guard = CopyingNurseryTestGuard::new(1);
+    let _tenuring =
+        crate::gc::tenuring::set_survivals_for_test(crate::gc::tenuring::GC_TENURING_SURVIVALS_MAX);
     let child = young_leaf();
     js_shadow_slot_set(0, ptr_bits(child));
 
@@ -890,4 +1021,131 @@ fn test_copied_minor_promotable_census_filtered_walk_matches_unfiltered() {
         "census must count the aged survivor ({survivor_total} bytes), got {actual} — \
          the equivalence assert above must not be vacuously 0 == 0"
     );
+}
+
+/// #9819 follow-up: `js_regexp_new` allocates the header in the NURSERY. A
+/// header that dies young must be finalized by the copied minor — its `Arc`
+/// program released and its registry entries removed — because the from-space
+/// flip runs no per-object finalize hooks. Without
+/// `finalize_dead_copied_minor_from_space_regexps` the dead address stays in
+/// `REGEX_POINTERS` and the program's strong count never comes back down.
+#[test]
+fn nursery_regexp_that_dies_young_is_finalized_by_the_copied_minor() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let dead = crate::regex::test_construct_regexp_and_exec_once("b(?:c)+d-die-young", "g");
+    let live = crate::regex::test_construct_regexp_and_exec_once("b(?:c)+d-die-young", "g");
+    let dead_addr = dead as usize;
+    let live_addr = live as usize;
+    // Premise: production construction is nursery-allocated now.
+    assert!(
+        crate::arena::pointer_in_nursery(dead_addr),
+        "the header must be nursery-allocated"
+    );
+    assert!(crate::regex::test_regex_pointer_entry_exists(dead_addr));
+    // Both headers share one program through the site cache.
+    let count_before = crate::regex::test_regexp_program_set_strong_count(live);
+    assert!(count_before >= 2);
+
+    // Only `live` is rooted; `dead` is garbage.
+    js_shadow_slot_set(0, ptr_bits(live_addr));
+    let _ = gc_collect_minor();
+
+    let live_new = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+    assert_ne!(live_new, 0, "the rooted RegExp must survive");
+    assert_ne!(live_new, live_addr, "the rooted RegExp must be evacuated");
+    assert!(crate::regex::regex_header_has_magic(live_new as *const _));
+    assert!(crate::regex::test_regex_pointer_entry_exists(live_new));
+
+    assert!(
+        !crate::regex::test_regex_pointer_entry_exists(dead_addr),
+        "a nursery RegExp that died must be removed from REGEX_POINTERS by the copied minor"
+    );
+    assert_eq!(
+        crate::regex::test_regexp_program_set_strong_count(live_new as *const _),
+        count_before - 1,
+        "the dead header's Arc clone of the shared program must have been dropped"
+    );
+    js_shadow_slot_set(0, 0);
+}
+
+/// #9851 follow-up — THE PREMISE OF THE LOCK REWIRE, on a real heap.
+///
+/// The survival-rate lock used to rate `survivor_live_bytes` (every live byte
+/// leaving the from-survivor space, of any age) against the previous cycle's
+/// whole `copied_bytes`. Those two scopes match — the survivor spaces are a
+/// strict semispace pair, so the from-space holds exactly what the last cycle
+/// copied — and the ratio is well-formed. What is wrong is *which population*
+/// it rates, and that is chosen by the threshold the lock itself sets: at a
+/// threshold of 2 the space holds one fresh cohort, at 3 or 4 it also holds
+/// objects that have already survived a round and are therefore selected for
+/// longevity.
+///
+/// This test pins the fact that makes the rewire meaningful rather than a
+/// rename: **at a threshold above 2 the whole-space number and the fresh-cohort
+/// number are different numbers**, with the aged resident in the first and not
+/// in the second. On cc that difference is the whole finding — the aggregate
+/// clears the lock's 90 % bar while a fresh cohort survives at 74 %.
+///
+/// Shape: at an explicitly pinned threshold above 2 (promote on the 4th
+/// survival) two rooted objects are introduced one cycle apart, so by the
+/// third minor the from-survivor space holds one age-2 object and one age-1
+/// object.
+#[test]
+fn the_survivor_space_and_the_fresh_cohort_are_different_numbers_above_threshold_two() {
+    // TWO shadow slots: the test needs two independently rooted objects
+    // introduced one cycle apart, so that the survivor space holds two age
+    // classes at once. With one slot B is unrooted, dies immediately, and the
+    // fresh-cohort number is trivially zero.
+    let _guard = CopyingNurseryTestGuard::new(2);
+    let _tenuring =
+        crate::gc::tenuring::set_survivals_for_test(crate::gc::tenuring::GC_TENURING_SURVIVALS_MAX);
+
+    // Cycle 1: A enters the survivor space from Eden. The from-survivor space
+    // was empty, so both numbers are zero and the cohort is all of nothing.
+    let a = young_leaf();
+    js_shadow_slot_set(0, ptr_bits(a));
+    let _ = gc_collect_minor();
+    let (_, _, survivor_live_1, first_round_1) = crate::gc::copying::test_last_cohort_split();
+    assert_eq!(
+        (survivor_live_1, first_round_1),
+        (0, 0),
+        "cycle 1 evacuates Eden only: nothing came out of the survivor space"
+    );
+
+    // Cycle 2: A is re-copied (age 1 -> 2) and B enters from Eden. The
+    // from-survivor space held ONLY A, which is a first-round object, so the
+    // two numbers must still agree — this is the regime the lock was designed
+    // in, and the assertion that the split is not simply always different.
+    let b = young_leaf();
+    js_shadow_slot_set(1, ptr_bits(b));
+    let _ = gc_collect_minor();
+    let (_, _, survivor_live_2, first_round_2) = crate::gc::copying::test_last_cohort_split();
+    assert!(
+        survivor_live_2 > 0,
+        "A must have come back out of the survivor space"
+    );
+    assert_eq!(
+        survivor_live_2, first_round_2,
+        "with a single generation resident the whole-space number IS the \
+         fresh-cohort number — at threshold <= 2 the old rule was correct"
+    );
+
+    // Cycle 3: the from-survivor space now holds A (age 2) and B (age 1).
+    // `survivor_live_bytes` counts both; the fresh cohort is B alone.
+    let _ = gc_collect_minor();
+    let (_, _, survivor_live_3, first_round_3) = crate::gc::copying::test_last_cohort_split();
+    assert!(
+        first_round_3 > 0,
+        "B is a first-round survivor and must be counted as one"
+    );
+    assert!(
+        survivor_live_3 > first_round_3,
+        "the aged resident A is in the whole-space number and must NOT be in \
+         the fresh-cohort number: whole-space {survivor_live_3}, cohort \
+         {first_round_3}. If these are equal the lock is still rating a \
+         population its own threshold selected."
+    );
+
+    js_shadow_slot_set(0, 0);
+    js_shadow_slot_set(1, 0);
 }

@@ -1,6 +1,7 @@
 // demonstrates: importing built-in stdlib npm packages (project-config.md)
 // docs: docs/src/getting-started/project-config.md
 // platforms: macos, linux, windows
+// requires: auto-optimize
 // run: false
 
 // These four imports are Perry's most-used built-in stdlib shims:

@@ -107,12 +107,27 @@ pub(crate) mod has_own_helpers;
 mod instanceof;
 mod live_slots;
 mod null_stub;
+mod side_table_roots;
+mod string_wrapper;
 pub(crate) use live_slots::set_object_live_slot_count;
 pub use live_slots::{
     js_object_live_slot_count, object_live_slot_count, perry_object_header_abi_revision,
 };
+pub(crate) use null_stub::{is_null_stub_address, NullObjectBytes, NULL_OBJECT_BYTES};
 pub use null_stub::{js_unresolved_default_call, js_unresolved_namespace_stub};
-pub(crate) use null_stub::{NullObjectBytes, NULL_OBJECT_BYTES};
+#[cfg(test)]
+pub(crate) use side_table_roots::test_transition_cache_insert;
+pub(crate) use side_table_roots::{
+    prune_dead_transition_cache_entries, prune_dead_transition_cache_entries_young,
+};
+pub use side_table_roots::{
+    scan_shape_cache_roots, scan_shape_cache_roots_mut, scan_transition_cache_roots,
+    scan_transition_cache_roots_mut,
+};
+#[cfg(test)]
+pub(crate) use side_table_roots::{
+    test_seed_transition_cache_entry, test_transition_cache_occupancy,
+};
 pub(crate) mod iterator_prototypes;
 pub(crate) mod map_set_subclass;
 mod namespace_create;
@@ -153,7 +168,7 @@ mod prototype_helpers;
 mod reflect_support;
 mod reserved_floor;
 pub(crate) use reserved_floor::{ensure_reserved_floor_keys, reserved_slot_floor_for_class_id};
-mod regex_proto_thunks;
+pub(crate) mod regex_proto_thunks;
 // #6812 object-owned overflow storage + the legacy thread-local side table.
 // Split out of this file to stay under the 2000-line CI cap; the sibling
 // `object::*` modules reach these through `use super::*`, so re-export the
@@ -252,6 +267,8 @@ pub use class_meta_registry::{
     js_register_class_extends_error, js_register_class_generic_origin,
     js_register_class_has_instance, js_register_class_to_string_tag,
 };
+#[cfg(test)]
+pub(crate) use descriptor_state::test_may_have_descriptor_entry;
 pub use descriptor_state::PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED;
 pub(crate) use descriptor_state::{
     accessor_descriptor_keys_for_obj, class_field_inline_guard_enabled,
@@ -261,9 +278,10 @@ pub(crate) use descriptor_state::{
     json_object_getter_value, mark_all_keys, object_has_descriptors,
     object_proto_may_intercept_key, owner_has_property_descriptors,
     owner_may_have_descriptor_entries, plain_data_write_may_intercept,
-    prune_dead_descriptor_owner_entries, reflect_getter_closure_bits, set_accessor_descriptor,
-    set_builtin_accessor_descriptor, set_builtin_property_attrs, set_property_attrs,
-    transfer_descriptor_owner, AccessorDescriptor, DescriptorTables, PropertyAttrs,
+    prune_dead_descriptor_owner_entries, prune_dead_descriptor_owner_entries_young,
+    reflect_getter_closure_bits, set_accessor_descriptor, set_builtin_accessor_descriptor,
+    set_builtin_property_attrs, set_property_attrs, transfer_descriptor_owner, AccessorDescriptor,
+    DescriptorTables, PropertyAttrs,
 };
 pub(crate) use field_get_set::FieldLookupCaches;
 pub(crate) use field_get_set::{
@@ -788,6 +806,24 @@ const TRANSITION_CACHE_SIZE: usize = 16384;
 /// against this value even when no Rust path consults it directly.
 #[allow(dead_code)]
 const TRANSITION_CACHE_MASK: usize = TRANSITION_CACHE_SIZE - 1;
+crate::perry_thread_local! {
+    /// #9754: transition-cache slots whose `key_ptr` / `next_keys` may still be
+    /// acted on by a minor (see `gc/young_log.rs`); a minor-scoped
+    /// `scan_transition_cache_roots_mut` visits only these.
+    static TRANSITION_CACHE_YOUNG: RefCell<crate::gc::young_log::YoungLog<u32>> =
+        const { RefCell::new(crate::gc::young_log::YoungLog::new()) };
+}
+
+const TRANSITION_CACHE_YOUNG_LOG_NAME: &str = "object.transition_cache";
+
+/// Is a transition-cache entry still something a minor can act on?
+#[inline]
+fn transition_entry_is_minor_relevant(entry: &TransitionEntry) -> bool {
+    use crate::gc::young_log::addr_is_minor_relevant;
+    entry.next_keys != 0
+        && (addr_is_minor_relevant(entry.next_keys)
+            || ((entry.slot_idx >> 24) == 0 && addr_is_minor_relevant(entry.key_ptr)))
+}
 
 // Per-thread transition cache (`ObjectHotTables::transition_cache`). Was a
 // process-wide `static mut`, but with `perry/thread` user code allocating
@@ -803,6 +839,7 @@ const TRANSITION_CACHE_MASK: usize = TRANSITION_CACHE_SIZE - 1;
 // thread-locals (confirmed on a real Series 7: shrinking OR boxing removes
 // the corruption). `vec!` builds directly on the heap (no 320KB stack
 // temporary).
+
 #[inline]
 fn with_transition_cache<R>(
     f: impl FnOnce(*mut [TransitionEntry; TRANSITION_CACHE_SIZE]) -> R,
@@ -1021,6 +1058,28 @@ unsafe fn transition_cache_stamp_shape_shared(next_keys: usize) -> bool {
     true
 }
 
+/// Rule 1 of `gc/young_log.rs` for the transition cache: log `slot` BEFORE the
+/// entry becomes findable.
+///
+/// `kid` is only an address when `len_marker == 0`; with a length marker set
+/// it is a packed length, not a pointer, so classifying it would be a category
+/// error. Both writers — `transition_cache_insert` and the `#[cfg(test)]` seed
+/// seam — arm through here, so that distinction cannot be dropped in one and
+/// kept in the other (it was: the seam classified `key_ptr` unconditionally).
+#[inline]
+pub(super) fn arm_transition_cache_young(
+    slot: usize,
+    next_keys: usize,
+    kid: usize,
+    len_marker: u32,
+) {
+    if crate::gc::young_log::addr_is_minor_relevant(next_keys)
+        || (len_marker == 0 && crate::gc::young_log::addr_is_minor_relevant(kid))
+    {
+        TRANSITION_CACHE_YOUNG.with(|log| log.borrow_mut().note(slot as u32));
+    }
+}
+
 fn transition_cache_insert(
     array_tail_owner: *const ObjectHeader,
     prev_shape_id: u32,
@@ -1049,6 +1108,9 @@ fn transition_cache_insert(
             }
         }
     }
+    // #9754 rule 1: log the slot BEFORE the entry is published when either
+    // address can matter to a minor.
+    arm_transition_cache_young(slot, next_keys, kid, len_marker);
     with_transition_cache(|t| unsafe {
         // GC_STORE_AUDIT(ROOT): TRANSITION_CACHE_GLOBAL entries are scanned by scan_transition_cache_roots_mut.
         let entry = &mut (*t)[slot];
@@ -1076,169 +1138,6 @@ fn transition_cache_insert(
     // the original builder can grow the cached target in place and
     // force future lookups to reject it. Large one-off dictionaries
     // stay lazy to avoid cloning every growing prefix.
-}
-
-/// GC root scanner for the transition cache. Same contract as
-/// `scan_shape_cache_roots` — without this the mark phase would free
-/// cached target arrays that no live object currently holds directly,
-/// and the next cache-hit store would dereference freed memory.
-///
-/// #855: walk the static via `&raw const` + raw pointer indexing to
-/// avoid the `static_mut_refs` lint (hard error in Rust 2024). The
-/// cache is thread-local-by-discipline (perry user code is single-
-/// threaded), so the unsafe deref is sound.
-pub fn scan_transition_cache_roots(mark: &mut dyn FnMut(f64)) {
-    let mut visitor = crate::gc::RuntimeRootVisitor::for_copy(mark);
-    scan_transition_cache_roots_mut(&mut visitor);
-}
-
-pub fn scan_transition_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    with_transition_cache(|table| unsafe {
-        for i in 0..TRANSITION_CACHE_SIZE {
-            let entry = &mut (*table)[i];
-            if entry.next_keys != 0 {
-                let mut invalidate = false;
-                // Content-namespace ids (len marker != 0) are string BYTES,
-                // not addresses — the visitor must not rewrite them.
-                if (entry.slot_idx >> 24) == 0 {
-                    invalidate |= visitor.visit_metadata_usize_slot(&mut entry.key_ptr);
-                }
-                // #6759 phase 3: `next_keys` is WEAK, not a strong root.
-                //
-                // `visit_usize_slot` MARKS. With 16384 slots this cache was
-                // therefore keeping up to 16384 keys arrays — and, through
-                // them, their shape descriptors — alive whether or not any live
-                // object still had that shape. That is a direct contributor to
-                // the shape table growing without bound between full
-                // collections (measured: 786k descriptors on a workload holding
-                // under 400 live objects).
-                //
-                // A transition entry is a pure cache: it answers "adding key k
-                // to shape S yields shape T". If nothing has shape T any more,
-                // the answer is worthless, so pinning T's keys array to keep it
-                // answerable is backwards. `key_ptr` was already weak for the
-                // same reason; this makes the pair consistent.
-                //
-                // Rewrite-only keeps a surviving target's address correct;
-                // `prune_dead_transition_cache_entries` drops the entry when the
-                // target did not survive.
-                visitor.visit_metadata_usize_slot(&mut entry.next_keys);
-                if invalidate {
-                    *entry = TransitionEntry {
-                        key_ptr: 0,
-                        next_keys: 0,
-                        prev_shape_id: 0,
-                        target_shape_id: 0,
-                        slot_idx: 0,
-                        target_len: 0,
-                    };
-                }
-            }
-        }
-    });
-    array_tail_transition::scan_roots_mut(visitor);
-}
-
-/// #8192: death pruning for the transition cache.
-///
-/// The interned `key_ptr` is metadata-only and therefore weak; `next_keys` is
-/// a strong root. The predecessor and target ShapeIds are stable non-pointer
-/// metadata, so moving collection neither rewrites nor invalidates them.
-///
-/// The entry is a pure cache, so the repair is to drop it. `next_keys == 0` is
-/// the empty-slot sentinel.
-///
-/// `gc::dead_owner::DEAD_KEY_PRUNES` runs `prune_dead_shape_keys` before this
-/// function. A predecessor whose keys edge died therefore has no descriptor
-/// by the time we visit the cache. Both ShapeIds must still resolve: the
-/// predecessor is weak, while the strongly rooted target keys normally keep
-/// their descriptor live. Checking both here makes that target invariant a
-/// release-mode post-GC proof without adding a hash-table lookup to every hot
-/// transition stamp.
-#[cold]
-pub(crate) fn prune_dead_transition_cache_entries(is_dead_owner: &dyn Fn(usize) -> bool) {
-    with_transition_cache(|table| unsafe {
-        for i in 0..TRANSITION_CACHE_SIZE {
-            let entry = &mut (*table)[i];
-            if entry.next_keys == 0 {
-                continue;
-            }
-            let dead = ((entry.slot_idx >> 24) == 0
-                && entry.key_ptr != 0
-                && is_dead_owner(entry.key_ptr))
-                // #6759 phase 3: `next_keys` stopped being a strong root, so a
-                // dead target is now possible and must be reaped here — this is
-                // the half that makes weakening it safe.
-                || is_dead_owner(entry.next_keys)
-                || shapes::shape_descriptor_by_id(entry.prev_shape_id).is_none()
-                || (entry.target_shape_id != 0
-                    && shapes::shape_descriptor_by_id(entry.target_shape_id).is_none());
-            if dead {
-                *entry = TransitionEntry {
-                    key_ptr: 0,
-                    next_keys: 0,
-                    prev_shape_id: 0,
-                    target_shape_id: 0,
-                    slot_idx: 0,
-                    target_len: 0,
-                };
-            }
-        }
-    });
-    array_tail_transition::prune_invalid_entries();
-}
-
-#[cfg(test)]
-pub(crate) fn test_transition_cache_occupancy() -> usize {
-    with_transition_cache(|table| unsafe {
-        (0..TRANSITION_CACHE_SIZE)
-            .filter(|&i| (*table)[i].next_keys != 0)
-            .count()
-    })
-}
-
-#[cfg(test)]
-pub(crate) fn test_seed_transition_cache_entry(
-    prev_shape_id: u32,
-    key_ptr: usize,
-    next_keys: usize,
-) {
-    let slot = transition_cache_slot(prev_shape_id, key_ptr);
-    with_transition_cache(|table| unsafe {
-        (*table)[slot] = TransitionEntry {
-            key_ptr,
-            next_keys,
-            prev_shape_id,
-            target_shape_id: 0,
-            slot_idx: 0,
-            target_len: 1,
-        };
-    });
-}
-
-/// GC root scanner: mark all cached shape keys arrays so they're not freed.
-/// The inline cache + overflow map both hold the raw `*mut ArrayHeader`
-/// pointers; without this scanner, GC would free those arrays, leaving
-/// every object with that shape holding a dangling `keys_array` pointer.
-pub fn scan_shape_cache_roots(mark: &mut dyn FnMut(f64)) {
-    let mut visitor = crate::gc::RuntimeRootVisitor::for_copy(mark);
-    scan_shape_cache_roots_mut(&mut visitor);
-}
-
-pub fn scan_shape_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    let st = crate::state::state();
-    {
-        let entries = unsafe { &mut *st.object_hot.shape_inline_cache.get() };
-        for entry in entries.iter_mut() {
-            visitor.visit_raw_mut_ptr_slot(&mut entry.keys_array);
-        }
-    }
-    {
-        let mut cache = st.object_hot.shape_cache_overflow.borrow_mut();
-        for (arr_ptr, _runtime_shape_id) in cache.values_mut() {
-            visitor.visit_raw_mut_ptr_slot(arr_ptr);
-        }
-    }
 }
 
 /// GC root scanner: mark all JSValues stored in OVERFLOW_FIELDS.
@@ -1406,6 +1305,16 @@ pub fn scan_object_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'
             visitor.visit_atomic_i64_slot(slot, Ordering::Acquire, Ordering::Release);
         });
     }
+    #[cfg(feature = "regex-engine")]
+    regex_proto_thunks::scan_canonical_test_site_roots_mut(visitor);
+}
+
+/// Drive the PRODUCTION shape-cache writer from a test. Deliberately nothing
+/// but a call: a seam with logic of its own can drift from the writer it
+/// stands in for, which is exactly what let a deleted arm site stay green.
+#[cfg(test)]
+pub(crate) fn test_shape_cache_insert(shape_id: u32, keys_array: *mut ArrayHeader) {
+    shape_cache_insert(shape_id, keys_array);
 }
 
 #[cfg(test)]
@@ -1660,6 +1569,7 @@ pub struct ObjectMeta {
 
 pub(crate) const OBJECT_META_FLAG_PROTO_DIVERGED: u64 = 1;
 pub(crate) const OBJECT_META_FLAG_USER_PROTO_OVERRIDE: u64 = 1 << 3;
+pub(crate) const OBJECT_META_FLAG_CLASS_EVALUATION_PROTO: u64 = 1 << 4;
 
 /// Authoritative ordinary-object discriminator. RegExp has its own GC kind,
 /// and heap class-expression values carry their kind in the immutable ShapeId

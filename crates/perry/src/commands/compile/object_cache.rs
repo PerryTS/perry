@@ -36,6 +36,16 @@ pub fn djb2_hash(bytes: &[u8]) -> u64 {
     hash
 }
 
+/// `PERRY_OBJECT_CACHE_BUILD_ID=<up to 16 hex digits>` pins the build id
+/// component of the object-cache key. A compiler built from a runtime-only
+/// branch can then reuse the objects a sibling build cached under the same
+/// HIR and options (relink workflows: ~3 min link instead of a 40 min
+/// codegen of a 13 MB bundle). Codegen changes still miss through the
+/// `hir`/option fields; an unparsable value is ignored.
+fn pinned_build_id(raw: Option<String>) -> Option<u64> {
+    raw.and_then(|v| u64::from_str_radix(v.trim(), 16).ok())
+}
+
 /// Hash of the running `perry` executable, computed once per process.
 ///
 /// `CARGO_PKG_VERSION` only invalidates the cache on a version bump; during
@@ -53,6 +63,9 @@ pub fn djb2_hash(bytes: &[u8]) -> u64 {
 fn perry_build_id() -> u64 {
     static BUILD_ID: OnceLock<u64> = OnceLock::new();
     *BUILD_ID.get_or_init(|| {
+        if let Some(pinned) = pinned_build_id(std::env::var("PERRY_OBJECT_CACHE_BUILD_ID").ok()) {
+            return pinned;
+        }
         std::env::current_exe()
             .ok()
             .and_then(|p| fs::read(&p).ok())
@@ -257,6 +270,28 @@ pub fn compute_object_cache_key(
 ) -> u64 {
     compute_object_cache_key_with_env(opts, hir_hash, perry_version, |name| {
         std::env::var(name).ok()
+    })
+}
+
+/// Replay freshness uses the normal complete lowering key, excluding only
+/// instrumentation/reporting switches that capture and replay intentionally vary.
+pub(super) fn typed_feedback_lowering_key(
+    opts: &perry_codegen::CompileOptions,
+    hir_hash: u64,
+    version: &str,
+) -> u64 {
+    let mut opts = opts.clone();
+    opts.emit_ir_only = false;
+    opts.verify_native_regions = false;
+    compute_object_cache_key_with_env(&opts, hir_hash, version, |name| {
+        if matches!(
+            name,
+            "PERRY_TYPED_FEEDBACK" | "PERRY_TYPED_FEEDBACK_TRACE" | "PERRY_VERIFY_NATIVE_REGIONS"
+        ) {
+            None
+        } else {
+            std::env::var(name).ok()
+        }
     })
 }
 
@@ -1104,6 +1139,12 @@ fn compute_object_cache_key_with_env(
         env_var("PERRY_TYPED_FEEDBACK_TRACE")
             .as_deref()
             .unwrap_or(""),
+    );
+    // Also consumed by the replay freshness fingerprint. A changed concat
+    // lane must not reuse a catalog produced with different lowering inputs.
+    h.field(
+        "env_concat_site_cache",
+        env_var("PERRY_CONCAT_SITE_CACHE").as_deref().unwrap_or(""),
     );
     h.field(
         "env_full_outline_ic",

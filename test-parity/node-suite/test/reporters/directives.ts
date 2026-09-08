@@ -21,9 +21,21 @@ const events = [
   },
 ];
 
-async function collect(name: string, reporter: any) {
+async function collect(name: string, reporter: any): Promise<void> {
   let output = "";
-  for await (const chunk of reporter(Readable.from(events))) output += String(chunk);
+  const result = reporter(Readable.from(events));
+  if (typeof result.write === "function") {
+    const transform = reporter();
+    transform.on("data", (chunk: unknown) => {
+      output += String(chunk);
+    });
+    await new Promise<void>((resolve) => {
+      transform.on("end", resolve);
+      Readable.from(events).pipe(transform);
+    });
+  } else {
+    for await (const chunk of result) output += String(chunk);
+  }
   console.log(`${name}:`, JSON.stringify(output));
 }
 

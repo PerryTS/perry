@@ -26,6 +26,7 @@ use raw_f64::{
 
 pub(crate) fn verify_native_rep_records(records: &[NativeRepRecord]) -> Result<()> {
     let mut errors = Vec::new();
+    crate::typed_feedback_profile::verify_records(records, &mut errors);
     for record in records {
         if let Some(expected_ty) = expected_llvm_type(&record.native_rep) {
             if record.llvm_ty != expected_ty {

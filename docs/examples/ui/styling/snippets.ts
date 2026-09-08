@@ -20,7 +20,6 @@ import {
     widgetAddChild,
     widgetSetBackgroundColor, widgetSetBackgroundGradient,
     widgetSetBorderColor, widgetSetBorderWidth,
-    widgetSetEdgeInsets,
     widgetSetWidth, widgetSetHeight, widgetMatchParentWidth,
     widgetSetOpacity,
     widgetSetControlSize,
@@ -55,9 +54,8 @@ widgetSetBorderWidth(bordered, 1)
 
 // ANCHOR: padding
 const padded = VStack(8, [Text("Padded content")])
-// Both names accept (widget, top, left, bottom, right):
-setPadding(padded, 16, 16, 16, 16)
-widgetSetEdgeInsets(padded, 10, 20, 10, 20)
+setPadding(padded, 16)                 // uniform padding
+setPadding(padded, 10, 20, 10, 20)    // top, left, bottom, right
 // ANCHOR_END: padding
 
 // ANCHOR: sizing

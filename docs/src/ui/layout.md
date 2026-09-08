@@ -6,8 +6,8 @@ platform's native layout system. Every snippet below is excerpted from
 CI compiles and runs it on every PR.
 
 Layout helpers are free functions: `widgetAddChild(parent, child)`,
-`stackSetAlignment(stack, value)`, `widgetSetEdgeInsets(w, top, left, bottom,
-right)`, etc. Stack constructors take a numeric spacing followed by a child
+`stackSetAlignment(stack, value)`, `setPadding(w, top, left, bottom, right)`,
+etc. Stack constructors take a numeric spacing followed by a child
 array; everything else (alignment, distribution, padding, sizing) is applied
 post-construction via the free functions on the widget handle.
 
@@ -198,7 +198,7 @@ The user can drag the divider to resize panes. On macOS this maps to
 ## Stacks with Built-in Padding
 
 Create a stack with padding in a single call. The order is **top, left,
-bottom, right** (CSS-shorthand-style), not top/right/bottom/left:
+bottom, right**, matching the per-side `setPadding` overload:
 
 ```typescript
 {{#include ../../examples/ui/layout/snippets.ts:insets-stack}}
@@ -206,7 +206,7 @@ bottom, right** (CSS-shorthand-style), not top/right/bottom/left:
 
 `HStackWithInsets(spacing, top, left, bottom, right)` is the horizontal
 counterpart. Equivalent to creating a stack and then calling
-`widgetSetEdgeInsets`, but more concise. Children are added via
+`setPadding`, but more concise. Children are added via
 `widgetAddChild` rather than the constructor array.
 
 ## Detaching Hidden Views

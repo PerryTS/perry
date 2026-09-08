@@ -298,6 +298,11 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         DOUBLE,
         &[DOUBLE, DOUBLE],
     );
+    module.declare_function(
+        "js_native_module_named_esm_export_value",
+        DOUBLE,
+        &[DOUBLE, DOUBLE],
+    );
     // Issue #894: materialize a NATIVE_MODULE_CLASS_ID-tagged namespace
     // object for `Expr::NativeModuleRef` when it reaches the value-form
     // fallback path (the require-call-result-then-member-access shape
@@ -313,6 +318,7 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     module.declare_function("js_nm_install_buffer", VOID, &[]);
     module.declare_function("js_bun_tcp_nm_install", VOID, &[]);
     // #6562: bun:ffi dispatch bucket.
+    module.declare_function("js_nm_install_bun", VOID, &[]);
     module.declare_function("js_nm_install_bun_ffi", VOID, &[]);
     module.declare_function("js_nm_install_child_process", VOID, &[]);
     module.declare_function("js_nm_install_cluster", VOID, &[]);

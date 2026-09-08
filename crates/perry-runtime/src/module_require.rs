@@ -126,9 +126,9 @@ fn validate_create_require_base(filename_or_url: f64) {
 /// from the static-import tables — `v8` (and `sea`, `fs/promises`,
 /// `stream/consumers`, `stream/web`, `trace_events`, `test/reporters`) were
 /// implemented and statically importable but rejected here as "package/file".
-/// Both resolvers now share one source of truth (`MODULE_BUILTIN_MODULES`,
-/// i.e. `module.builtinModules`), including the `node:` normalization and the
-/// scheme-only / `_`-internal carve-outs.
+/// Both resolvers now share the Node inventory plus Perry's explicit builtin
+/// extensions, including the `node:` normalization and the scheme-only /
+/// `_`-internal carve-outs.
 fn supported_require_builtin(specifier: &str) -> Option<&str> {
     crate::process::supported_builtin_module_name(specifier)
 }

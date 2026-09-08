@@ -25,6 +25,9 @@ pub use objects::declare_phase_b_objects;
 pub use stdlib_ffi::declare_stdlib_ffi;
 pub(crate) use stdlib_ffi_part2::declare_stdlib_ffi_part2;
 pub use strings::declare_phase_b_strings;
+
+#[cfg(test)]
+mod segview_decls_tests;
 pub(crate) use strings_part2::declare_phase_b_strings_part2;
 
 /// Declare the minimum set of runtime functions needed by Phase 1
@@ -209,4 +212,94 @@ pub fn declare_phase_a_strings(module: &mut LlModule) {
     // Phase B (core types) additions live here too — split into a separate
     // function once they grow.
     declare_phase_b_strings(module);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A lowering that introduces a new runtime call needs one test that
+    /// reaches the DECLARATION, not just the HIR.
+    ///
+    /// #9859 emitted five `js_segments_view_*` calls whose symbols were never
+    /// declared in the LLVM module: twelve HIR-level unit tests passed and the
+    /// first real compile died at the in-process LLVM parse with `use of
+    /// undefined value`. The arity half matters just as much and fails more
+    /// quietly — a wrong arity PARSES and miscompiles, handing the runtime a
+    /// garbage argument.
+    ///
+    /// `Expr::RegExp` lowers to `js_regexp_new_site(pattern, flags, site_key)`
+    /// (`expr/logical_collections.rs`), so the declaration must be exactly
+    /// three `i64` parameters returning `i64`.
+    #[test]
+    fn the_literal_site_regexp_entry_is_declared_with_its_exact_arity() {
+        let mut module = crate::module::LlModule::new("arm64-apple-macosx");
+        declare_phase_b_strings(&mut module);
+
+        let line = module
+            .declaration_lines()
+            .find(|(name, _)| *name == "js_regexp_new_site")
+            .map(|(_, line)| line.to_string())
+            .expect(
+                "`Expr::RegExp` emits a call to `js_regexp_new_site`; without a `declare` the \
+                 module fails the in-process LLVM parse with `use of undefined value`, which no \
+                 HIR-level test can see",
+            );
+        assert!(
+            line.starts_with("declare i64 @js_regexp_new_site(i64, i64, i64)"),
+            "the site-keyed entry takes (pattern handle, flags handle, site key) and returns a \
+             RegExpHeader handle — a wrong arity parses and miscompiles instead of failing. Got: \
+             {line}"
+        );
+
+        // The two-argument form stays, because every non-literal construction
+        // (`new RegExp(str)`, `js_regexp_construct`, the runtime's own
+        // callers) uses it and must never reach the site table.
+        let plain = module
+            .declaration_lines()
+            .find(|(name, _)| *name == "js_regexp_new")
+            .map(|(_, line)| line.to_string())
+            .expect("the dynamic form must remain declared");
+        assert!(
+            plain.starts_with("declare i64 @js_regexp_new(i64, i64)"),
+            "got: {plain}"
+        );
+
+        for (name, signature) in [
+            (
+                "js_regexp_site_test_new",
+                "declare i64 @js_regexp_site_test_new(i64, i64, i64)",
+            ),
+            (
+                "js_regexp_new_factory_site",
+                "declare i64 @js_regexp_new_factory_site(i64, i64, i64, i64)",
+            ),
+            (
+                "js_regexp_site_factory_call_value",
+                "declare double @js_regexp_site_factory_call_value(i64, double)",
+            ),
+            (
+                "js_regexp_site_factory_call_method",
+                "declare double @js_regexp_site_factory_call_method(i64, double, double)",
+            ),
+            (
+                "js_regexp_site_test_get_method",
+                "declare double @js_regexp_site_test_get_method(i64, double)",
+            ),
+            (
+                "js_regexp_site_test_dispatch",
+                "declare double @js_regexp_site_test_dispatch(i64, double, double, double)",
+            ),
+        ] {
+            let line = module
+                .declaration_lines()
+                .find(|(candidate, _)| *candidate == name)
+                .map(|(_, line)| line)
+                .unwrap_or_else(|| panic!("missing declaration for {name}"));
+            assert!(
+                line.starts_with(signature),
+                "wrong declaration for {name}: {line}"
+            );
+        }
+    }
 }

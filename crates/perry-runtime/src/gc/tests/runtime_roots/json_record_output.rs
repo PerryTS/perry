@@ -43,12 +43,26 @@ fn json_nested_records_fallback_runs_getter_once_and_survives_actual_movement() 
         let output = unsafe { crate::json::js_json_stringify(array.get_nanbox_f64(), 2) };
         assert_eq!(GETTER_CALLS.with(|c| c.get()), 1);
         assert!(gc_collection_count() > before);
-        assert_ne!(array.get_nanbox_u64(), before_ptr, "the getter must move its containing array");
-        let replaced = ["\"heap value zero\"", "\"heap value one\"", "\"heap value two\""][index as usize];
+        assert_ne!(
+            array.get_nanbox_u64(),
+            before_ptr,
+            "the getter must move its containing array"
+        );
+        let replaced = [
+            "\"heap value zero\"",
+            "\"heap value one\"",
+            "\"heap value two\"",
+        ][index as usize];
         let expected = source.replace(replaced, "17");
-        assert_eq!(unsafe {
-            std::slice::from_raw_parts(crate::string::string_data(output), (*output).byte_len as usize)
-        }, expected.as_bytes());
+        assert_eq!(
+            unsafe {
+                std::slice::from_raw_parts(
+                    crate::string::string_data(output),
+                    (*output).byte_len as usize,
+                )
+            },
+            expected.as_bytes()
+        );
     }
 }
 
@@ -125,12 +139,16 @@ fn json_grown_array_getter_flags_live_head_and_survives_movement() {
     let value = unsafe { crate::json::test_json_parse_direct(text) };
     let scope = RuntimeHandleScope::new();
     let array = scope.root_nanbox_u64(value.bits());
-    let original = value.as_pointer::<crate::array::ArrayHeader>() as *mut crate::array::ArrayHeader;
+    let original =
+        value.as_pointer::<crate::array::ArrayHeader>() as *mut crate::array::ArrayHeader;
     let mut grown = original;
     for index in 2..20 {
         grown = crate::array::js_array_push(grown, crate::JSValue::number(index as f64));
     }
-    assert_ne!(grown, original, "the descriptor must be defined through a forwarding alias");
+    assert_ne!(
+        grown, original,
+        "the descriptor must be defined through a forwarding alias"
+    );
     let getter = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
         array_getter_collects as *const u8,
         0,

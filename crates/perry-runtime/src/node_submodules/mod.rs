@@ -1430,7 +1430,7 @@ fn ensure_namespace_singleton(submod: &'static SubmoduleSpec) -> *mut ObjectHead
             crate::object::set_property_attrs(
                 obj as usize,
                 spec.name.to_string(),
-                PropertyAttrs::new(true, true, true),
+                PropertyAttrs::new(true, true, false),
             );
         }
         let default_obj = js_object_alloc(0, submod.exports.len() as u32);
@@ -1451,7 +1451,7 @@ fn ensure_namespace_singleton(submod: &'static SubmoduleSpec) -> *mut ObjectHead
         crate::object::set_property_attrs(
             obj as usize,
             "default".to_string(),
-            PropertyAttrs::new(true, true, true),
+            PropertyAttrs::new(true, true, false),
         );
     }
     if let Some(default_value) = submodule_default_object_value(submod) {

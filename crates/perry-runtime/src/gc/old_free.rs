@@ -47,7 +47,7 @@
 
 use super::*;
 
-thread_local! {
+crate::perry_thread_local! {
     /// total_size -> user_ptrs of swept holes of exactly that size.
     static OLD_FREE_MAP: RefCell<crate::fast_hash::PtrHashMap<usize, Vec<usize>>> =
         RefCell::new(crate::fast_hash::new_ptr_hash_map());
@@ -58,6 +58,14 @@ thread_local! {
 /// Total bytes currently sitting in reusable old-gen holes.
 pub(crate) fn old_free_bytes() -> usize {
     OLD_FREE_BYTES.with(Cell::get)
+}
+
+/// Hot-cache slot claimed by `OLD_FREE_BYTES`, which
+/// `gc_budgeted_due_trigger` reads on every `gc_malloc`. Liveness
+/// instrumentation for `gc::tests::trigger_path_tls`.
+#[cfg(test)]
+pub(crate) fn old_free_bytes_slot_index() -> u32 {
+    OLD_FREE_BYTES.slot_index()
 }
 
 fn old_free_push(user_ptr: usize, total_size: usize) {

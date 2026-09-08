@@ -396,6 +396,6 @@ pub(crate) const NODE_CORE_DGRAM_FS_OS_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_os_user_info_options",
         args: &[NA_JSV],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
 ];

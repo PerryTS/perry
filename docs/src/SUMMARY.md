@@ -155,7 +155,9 @@
 - [Geisterhand (UI Fuzzer)](testing/geisterhand.md)
 - [Node Compatibility Matrix](testing/node-compat-matrix.md)
 - [CI Tiers (PR gate / sweep / full)](testing/ci-tiers.md)
+- [Claude Code Bundle Parity](testing/cc-parity.md)
 - [CI Gate Scheduling](testing/ci-gate-scheduling.md)
+- [Linux Incident Capture](testing/linux-incident-capture.md)
 
 # CLI Reference
 
@@ -187,6 +189,7 @@
 - [Explicit Memory Control](internals/explicit-memory.md)
 - [The GC rooting invariant (codegen)](internals/gc-rooting-invariant.md)
 - [Local binding type evidence](internals/local-binding-type-evidence.md)
+- [Codegen mechanisms and workload evidence](internals/codegen-mechanisms.md)
 - [Incremental GC step bounds](internals/gc-step-bounds.md)
 - [RFC: rooting by construction](internals/rfc-rooting-by-construction.md)
 - [Node-API host design](internals/node-api-host.md)

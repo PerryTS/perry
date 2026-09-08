@@ -12,7 +12,7 @@ pub(super) const THREAD_LODASH_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_perry_read_embedded",
         args: &[NA_F64],
-        ret: NR_PTR,
+        ret: NR_NULLABLE_GCPTR,
     },
     // `embeddedFiles()` — zero-arg, returns a fresh `*mut ArrayHeader` of
     // `{ name, size, type }` objects (NaN-boxed POINTER by NR_PTR).
@@ -23,7 +23,7 @@ pub(super) const THREAD_LODASH_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_perry_embedded_files",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     // ========== perry/thread (parallelMap, parallelFilter, spawn) ==========
     // Runtime expects both args as NaN-boxed f64 values and returns the same
@@ -99,7 +99,7 @@ pub(super) const THREAD_LODASH_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_lodash_chunk",
         args: &[NA_PTR, NA_F64],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "lodash",
@@ -108,7 +108,7 @@ pub(super) const THREAD_LODASH_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_lodash_compact",
         args: &[NA_PTR],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "lodash",
@@ -117,7 +117,7 @@ pub(super) const THREAD_LODASH_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_lodash_drop",
         args: &[NA_PTR, NA_F64],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "lodash",
@@ -153,7 +153,7 @@ pub(super) const THREAD_LODASH_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_lodash_flatten",
         args: &[NA_PTR],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "lodash",
@@ -162,7 +162,7 @@ pub(super) const THREAD_LODASH_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_lodash_uniq",
         args: &[NA_PTR],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "lodash",
@@ -171,7 +171,7 @@ pub(super) const THREAD_LODASH_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_lodash_reverse",
         args: &[NA_PTR],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "lodash",
@@ -180,7 +180,7 @@ pub(super) const THREAD_LODASH_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_lodash_take",
         args: &[NA_PTR, NA_F64],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "lodash",
@@ -225,7 +225,7 @@ pub(super) const THREAD_LODASH_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_lodash_range",
         args: &[NA_F64, NA_F64, NA_F64],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "lodash",
@@ -234,7 +234,7 @@ pub(super) const THREAD_LODASH_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_lodash_times",
         args: &[NA_F64],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "lodash",
@@ -252,7 +252,7 @@ pub(super) const THREAD_LODASH_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_lodash_tail",
         args: &[NA_PTR],
-        ret: NR_PTR,
+        ret: NR_GCPTR,
     },
     NativeModSig {
         module: "lodash",

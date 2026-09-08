@@ -7,7 +7,7 @@ pub(crate) fn async_resource_property(
     obj: *const ObjectHeader,
     key: *const crate::StringHeader,
 ) -> Option<JSValue> {
-    if key.is_null() {
+    if key.is_null() || !crate::async_hooks::is_async_resource_handle(obj as i64) {
         return None;
     }
     let key = unsafe { crate::string::OwnedStringBytes::copy_from_header(key) };

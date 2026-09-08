@@ -572,6 +572,8 @@ pub fn run_with_parse_cache(
     use_color: bool,
     verbose: u8,
 ) -> Result<CompileResult> {
+    let typed_feedback = super::typed_feedback_profile::prepare(&args)?;
+
     // #4826: fold `--libc musl` into the effective target up-front (before any
     // downstream code reads `args.target`) so the rest of the pipeline only
     // ever sees the concrete `linux-musl` triple family.
@@ -1020,6 +1022,32 @@ pub fn run_with_parse_cache(
     // describe exactly what codegen consumes.
     for hir_module in ctx.native_modules.values_mut() {
         perry_transform::module_const_fold::run(hir_module);
+    }
+
+    // #9843: the segment-view for-of matcher's hit counter, taken here for
+    // the same reason the HIR trace is taken here — this is the last point
+    // before codegen, so the statements scanned are exactly the statements
+    // codegen consumes. Running it at this point (rather than only inside
+    // `collect_type_facts` on a rayon worker) is what makes "does the tier
+    // fire on the real bundle?" answerable in HIR-lowering time instead of a
+    // full LLVM build. Gated on `PERRY_SEGVIEW_DIAG`; costs nothing otherwise.
+    // #9843: the segment-view lowering. Default OFF (`PERRY_SEGVIEW=1`) because
+    // the runtime's view entry points do not exist yet, so an on-by-default
+    // rewrite would emit calls that fail to link. Runs here, at the same point
+    // as the counter and the HIR trace, so what it rewrites is exactly what
+    // codegen consumes.
+    if perry_codegen::segview_lowering_enabled() {
+        for hir_module in ctx.native_modules.values_mut() {
+            perry_codegen::segview_rewrite_module(hir_module);
+        }
+    }
+
+    if perry_codegen::segview_diag_enabled() {
+        let mut diag = perry_codegen::SegViewDiag::default();
+        for (path, hir_module) in &ctx.native_modules {
+            diag.scan_module(&path.display().to_string(), hir_module);
+        }
+        diag.report();
     }
 
     if trace_hir {
@@ -2547,8 +2575,11 @@ pub fn run_with_parse_cache(
             .ok()
             .as_deref()
             == Some("1");
-    let cache_enabled =
-        !args.no_cache && !cache_env_disabled && !bitcode_link && !verify_native_regions;
+    let cache_enabled = !args.no_cache
+        && !cache_env_disabled
+        && !bitcode_link
+        && !verify_native_regions
+        && typed_feedback.is_none();
     // Target dir name for the cache layout. Using the resolved LLVM triple
     // keeps cross-compile caches from colliding with native-host caches.
     let cache_target_dir = target.as_deref().unwrap_or("host");
@@ -5615,7 +5646,12 @@ pub fn run_with_parse_cache(
             // everything recorded on this worker thread between these two
             // calls belongs to this module and nothing else.
             perry_codegen::ext_registry::begin_module_capture();
-            let object_code = perry_codegen::compile_module(hir_module, opts).map_err(|e| {
+            let compiled = if let Some(session) = &typed_feedback {
+                super::typed_feedback_profile::compile(session, hir_module, opts, path, perry_version)
+            } else {
+                perry_codegen::compile_module(hir_module, opts)
+            };
+            let object_code = compiled.map_err(|e| {
                 perry_codegen::ext_registry::take_module_capture();
                 format!(
                     "Error compiling module '{}' ({}) with --backend llvm: {:#}",
@@ -5959,6 +5995,25 @@ pub fn run_with_parse_cache(
             eprintln!("binary still links, but any code in those modules will be inert at");
             eprintln!("runtime (and may crash if actually invoked).");
             eprintln!();
+        }
+    }
+
+    if let Some(session) = &typed_feedback {
+        for decision in session.finish(args.typed_feedback_sites.as_deref())? {
+            eprintln!(
+                "[typed-feedback-replay] {} {} site {}: {}",
+                if decision.accepted {
+                    "accepted"
+                } else {
+                    "rejected"
+                },
+                decision.module,
+                decision
+                    .site_id
+                    .map(|id| id.to_string())
+                    .unwrap_or_else(|| "profile".into()),
+                decision.reason
+            );
         }
     }
 

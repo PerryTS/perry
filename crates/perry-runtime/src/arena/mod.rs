@@ -8,6 +8,7 @@ pub(crate) use std::alloc::{alloc, Layout};
 pub(crate) use std::cell::{Cell, RefCell, UnsafeCell};
 pub(crate) use std::collections::hash_map::Entry;
 
+pub(crate) mod alloc_sample;
 mod allocators;
 mod block;
 mod construction;
@@ -35,6 +36,8 @@ mod tests_promoted_runs;
 pub(crate) use allocators::{
     inactive_survivor_index, with_survivor_arena, with_survivor_arena_mut,
 };
+#[cfg(test)]
+pub(crate) use block::old_gen_in_use_bytes_slot_index;
 pub(crate) use block::{
     arena_cell_alloc, arena_cell_try_alloc_current, drain_block_pool_if_requested,
     new_object_start_bitmap, old_gen_in_use_bytes_sub, release_arena_block,
@@ -48,13 +51,14 @@ pub(crate) use block::{
 /// allocation path uses instead of a per-access `_tlv_get_addr`.
 pub(crate) use block::{arena_hot_addr, hot_arena, hot_inline_state, inline_state_hot_addr};
 #[cfg(test)]
+#[cfg(test)]
 pub(crate) use block::{
     block_pool_bytes_for_test, block_pool_explicit_drained_bytes_for_test, block_pool_put,
     force_next_block_alloc_failure, gc_trigger_arena_borrow_depth, gc_trigger_arena_calls,
     reset_gc_trigger_arena_probe,
 };
 pub(crate) use page_meta::{
-    address_span_overlaps_pages, defer_old_object_page_registration,
+    address_span_overlaps_pages, defer_old_object_page_registration, page_class_table_report,
     register_block_space_with_object_starts, register_old_object_pages,
     unregister_block_generation, unregister_old_block_pages, OLD_GEN_RECLAIM_POOLED_BYTES,
     OLD_GEN_RECLAIM_RETURNED_BYTES, OLD_GEN_RECLAIM_REUSABLE_BYTES,
@@ -142,13 +146,14 @@ pub(crate) use stats::{old_gen_in_use_bytes_recomputed, old_gen_in_use_bytes_res
 pub(crate) use page_meta::{
     arena_header_is_object_start, classify_heap_generation, classify_heap_space,
     classify_heap_space_in_range, generation_page_for_addr, materialize_all_promoted_page_runs,
-    old_arena_page_index_remove_object, old_arena_source_blocks_for_pages,
-    old_arena_walk_objects_on_pages, old_object_page_overlaps, old_page_account_dirty_slot,
-    old_page_account_dirty_slots, old_page_account_promoted_object, old_page_account_swept_object,
-    old_page_clear_dirty, old_page_mark_dirty, old_page_meta_snapshot, old_page_summary,
-    old_pages_begin_gc_cycle, old_pages_reset_sweep_accounting, record_arena_object_start,
-    unregister_old_object_pages, HeapGeneration, HeapSpace, OldArenaPageObjectCursor,
-    OldArenaSourceBlockSelection, OldPageMeta, OldPageSummary,
+    old_arena_block_range_index, old_arena_block_ranges, old_arena_page_index_remove_object,
+    old_arena_source_blocks_for_pages, old_arena_walk_objects_on_pages, old_object_page_overlaps,
+    old_page_account_dirty_slot, old_page_account_dirty_slots, old_page_account_promoted_object,
+    old_page_account_swept_object, old_page_clear_dirty, old_page_mark_dirty,
+    old_page_meta_snapshot, old_page_summary, old_pages_begin_gc_cycle,
+    old_pages_reset_sweep_accounting, record_arena_object_start, unregister_old_object_pages,
+    HeapGeneration, HeapSpace, OldArenaPageObjectCursor, OldArenaSourceBlockSelection, OldPageMeta,
+    OldPageSummary,
 };
 
 #[cfg(test)]

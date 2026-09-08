@@ -39,160 +39,17 @@ fn is_genuine_node_stream_parent(ctx: &LoweringContext, name: &str) -> bool {
 }
 
 mod class_heritage;
+mod member_helpers;
 mod member_registration;
 use class_heritage::*;
+pub(crate) use member_helpers::capture_class_source;
+use member_helpers::{
+    generic_computed_member_key, lower_generic_computed_class_member,
+    noncomputed_member_registration_name, record_class_accessor, runtime_instance_accessor_names,
+};
 use member_registration::*;
 
 use super::*;
-
-fn generic_computed_member_key<'a>(
-    _ctx: &LoweringContext,
-    method: &'a ast::ClassMethod,
-) -> Option<&'a ast::ComputedPropName> {
-    let ast::PropName::Computed(computed) = &method.key else {
-        return None;
-    };
-    // Single source of truth — see `is_special_lowered_well_known`. #9226
-    // hand-copied a subset here and silently dropped four symbols.
-    if crate::lower_decl::helpers::is_special_lowered_well_known(method) {
-        return None;
-    }
-    Some(computed)
-}
-
-fn computed_member_name(kind: ast::MethodKind, computed: &ast::ComputedPropName) -> String {
-    let base = match kind {
-        ast::MethodKind::Method => "__computed_method",
-        ast::MethodKind::Getter => "__computed_getter",
-        ast::MethodKind::Setter => "__computed_setter",
-    };
-    format!("{}_{}_{}", base, computed.span.lo.0, computed.span.hi.0)
-}
-
-fn runtime_instance_accessor_names(members: &[ast::ClassMember]) -> crate::ClassAccessorNames {
-    let mut accessor_names = crate::ClassAccessorNames::default();
-
-    for member in members {
-        match member {
-            ast::ClassMember::Method(m)
-                if !m.is_static
-                    && m.function.body.is_some()
-                    && matches!(m.kind, ast::MethodKind::Getter | ast::MethodKind::Setter) =>
-            {
-                let key = match &m.key {
-                    ast::PropName::Ident(i) => i.sym.to_string(),
-                    ast::PropName::Str(s) => s.value.as_str().unwrap_or("").to_string(),
-                    ast::PropName::Num(n) => crate::lower::number_to_js_key(n.value),
-                    // #5592: a computed accessor key (`get [expr]()` /
-                    // `set [expr](v)`) isn't statically known. Mark the class so
-                    // `obj.prototype.<x> = v` writes route through the generic
-                    // setter-invoking path rather than a name-keyed prototype
-                    // monkey-patch.
-                    ast::PropName::Computed(_) => {
-                        accessor_names.has_computed = true;
-                        continue;
-                    }
-                    _ => continue,
-                };
-                match m.kind {
-                    ast::MethodKind::Getter => {
-                        accessor_names.insert_getter(key);
-                    }
-                    ast::MethodKind::Setter => {
-                        accessor_names.insert_setter(key);
-                    }
-                    _ => {}
-                }
-            }
-            ast::ClassMember::PrivateMethod(m)
-                if !m.is_static
-                    && m.function.body.is_some()
-                    && matches!(m.kind, ast::MethodKind::Getter | ast::MethodKind::Setter) =>
-            {
-                let key = format!("#{}", m.key.name);
-                match m.kind {
-                    ast::MethodKind::Getter => {
-                        accessor_names.insert_getter(key);
-                    }
-                    ast::MethodKind::Setter => {
-                        accessor_names.insert_setter(key);
-                    }
-                    _ => {}
-                }
-            }
-            _ => {}
-        }
-    }
-
-    accessor_names
-}
-
-fn lower_generic_computed_class_member(
-    ctx: &mut LoweringContext,
-    method: &ast::ClassMethod,
-    computed: &ast::ComputedPropName,
-    source_order: usize,
-) -> Result<ClassComputedMember> {
-    let key_expr = lower_expr(ctx, &computed.expr)?;
-    let function_name = computed_member_name(method.kind, computed);
-    let (kind, function) = match method.kind {
-        ast::MethodKind::Method => (
-            ClassComputedMemberKind::Method,
-            with_static_member_context(ctx, method.is_static, |ctx| {
-                lower_class_method_with_name(ctx, method, function_name)
-            })?,
-        ),
-        ast::MethodKind::Getter => (
-            ClassComputedMemberKind::Getter,
-            with_static_member_context(ctx, method.is_static, |ctx| {
-                lower_getter_method_with_name(ctx, method, function_name)
-            })?,
-        ),
-        ast::MethodKind::Setter => (
-            ClassComputedMemberKind::Setter,
-            with_static_member_context(ctx, method.is_static, |ctx| {
-                lower_setter_method_with_name(ctx, method, function_name)
-            })?,
-        ),
-    };
-    Ok(ClassComputedMember {
-        key_expr,
-        function,
-        is_static: method.is_static,
-        kind,
-        source_order,
-    })
-}
-
-fn noncomputed_member_registration_name(
-    kind: ast::MethodKind,
-    method: &ast::ClassMethod,
-) -> String {
-    let base = match kind {
-        ast::MethodKind::Method => "__computed_method_named",
-        ast::MethodKind::Getter => "__computed_getter_named",
-        ast::MethodKind::Setter => "__computed_setter_named",
-    };
-    format!("{}_{}_{}", base, method.span.lo.0, method.span.hi.0)
-}
-
-/// #9413: retain a class's original source text keyed by ClassId so
-/// `Function.prototype.toString` can reconstruct it, mirroring
-/// `capture_function_source` (#4101) for functions. SWC anchors
-/// `ast::Class::span` at the `class` keyword (decorators sit outside it) and
-/// closes it at the class body's `}`, so the slice is exactly the class source
-/// node's `[[SourceText]]`. A no-op when no module source is installed (unit
-/// tests / `check`), and idempotent — last write wins, matching the name
-/// registry.
-pub(crate) fn capture_class_source(
-    ctx: &mut LoweringContext,
-    class_id: crate::ClassId,
-    class: &ast::Class,
-) {
-    if let Some(src) = crate::ir::current_module_source_slice(class.span.lo.0, class.span.hi.0) {
-        ctx.class_source_text.insert(class_id, src);
-    }
-}
 
 pub fn lower_class_decl(
     ctx: &mut LoweringContext,
@@ -683,6 +540,10 @@ pub fn lower_class_decl(
     let mut static_methods = Vec::new();
     let mut getters = Vec::new();
     let mut setters = Vec::new();
+    // Parallel staticness, so `record_class_accessor` can tell a static
+    // accessor from an instance one with the same name.
+    let mut getter_statics: Vec<bool> = Vec::new();
+    let mut setter_statics: Vec<bool> = Vec::new();
     let mut static_accessor_names: Vec<String> = Vec::new();
     let mut static_accessor_fn_ids: Vec<FuncId> = Vec::new();
     let mut computed_members = Vec::new();
@@ -778,7 +639,13 @@ pub fn lower_class_decl(
                             static_accessor_names.push(prop_name.clone());
                             static_accessor_fn_ids.push(func.id);
                         }
-                        getters.push((prop_name, func));
+                        record_class_accessor(
+                            &mut getters,
+                            &mut getter_statics,
+                            prop_name,
+                            func,
+                            method.is_static,
+                        );
                     }
                     ast::MethodKind::Setter => {
                         // Setter: takes one parameter
@@ -797,7 +664,13 @@ pub fn lower_class_decl(
                             static_accessor_names.push(prop_name.clone());
                             static_accessor_fn_ids.push(func.id);
                         }
-                        setters.push((prop_name, func));
+                        record_class_accessor(
+                            &mut setters,
+                            &mut setter_statics,
+                            prop_name,
+                            func,
+                            method.is_static,
+                        );
                     }
                     ast::MethodKind::Method => {
                         let mut func = with_static_member_context(ctx, method.is_static, |ctx| {
@@ -822,17 +695,10 @@ pub fn lower_class_decl(
                             let ast::PropName::Computed(computed) = &method.key else {
                                 unreachable!("@@iterator generator key must be computed");
                             };
-                            // #9226 registers the wrapper as a prototype own
-                            // key so `Object.getOwnPropertyNames` /
-                            // `getOwnPropertySymbols` list it. That registration
-                            // does NOT install an instance vtable entry, and the
-                            // wrapper exists precisely to provide one (#5128) —
-                            // dropping it left `const C = class { *[Symbol.iterator]
-                            // () {…} }` throwing `TypeError: value is not
-                            // iterable`. Both registrations are required: the
-                            // vtable entry makes the instance iterable, the
-                            // computed member makes the key enumerable.
-                            methods.push(wrapper.clone());
+                            // The computed-symbol registration installs the
+                            // runtime dispatch alias too. Registering the wrapper
+                            // as a string method also exposed an own "@@iterator"
+                            // property that the source never declared (#9788).
                             computed_members.push(ClassComputedMember {
                                 key_expr: lower_expr(ctx, &computed.expr)?,
                                 function: wrapper,
@@ -922,7 +788,13 @@ pub fn lower_class_decl(
                             static_accessor_names.push(prop_name.clone());
                             static_accessor_fn_ids.push(func.id);
                         }
-                        getters.push((prop_name, func));
+                        record_class_accessor(
+                            &mut getters,
+                            &mut getter_statics,
+                            prop_name,
+                            func,
+                            method.is_static,
+                        );
                     }
                     ast::MethodKind::Setter => {
                         let prop_name = format!("#{}", method.key.name);
@@ -931,7 +803,13 @@ pub fn lower_class_decl(
                             static_accessor_names.push(prop_name.clone());
                             static_accessor_fn_ids.push(func.id);
                         }
-                        setters.push((prop_name, func));
+                        record_class_accessor(
+                            &mut setters,
+                            &mut setter_statics,
+                            prop_name,
+                            func,
+                            method.is_static,
+                        );
                     }
                 }
             }
@@ -1584,6 +1462,10 @@ pub fn lower_class_from_ast(
     let mut static_methods = Vec::new();
     let mut getters = Vec::new();
     let mut setters = Vec::new();
+    // Parallel staticness, so `record_class_accessor` can tell a static
+    // accessor from an instance one with the same name.
+    let mut getter_statics: Vec<bool> = Vec::new();
+    let mut setter_statics: Vec<bool> = Vec::new();
     let mut static_accessor_names: Vec<String> = Vec::new();
     let mut static_accessor_fn_ids: Vec<FuncId> = Vec::new();
     let mut computed_members = Vec::new();
@@ -1670,7 +1552,13 @@ pub fn lower_class_from_ast(
                             static_accessor_names.push(prop_name.clone());
                             static_accessor_fn_ids.push(func.id);
                         }
-                        getters.push((prop_name, func));
+                        record_class_accessor(
+                            &mut getters,
+                            &mut getter_statics,
+                            prop_name,
+                            func,
+                            method.is_static,
+                        );
                     }
                     ast::MethodKind::Setter => {
                         let func = with_static_member_context(ctx, method.is_static, |ctx| {
@@ -1688,7 +1576,13 @@ pub fn lower_class_from_ast(
                             static_accessor_names.push(prop_name.clone());
                             static_accessor_fn_ids.push(func.id);
                         }
-                        setters.push((prop_name, func));
+                        record_class_accessor(
+                            &mut setters,
+                            &mut setter_statics,
+                            prop_name,
+                            func,
+                            method.is_static,
+                        );
                     }
                     ast::MethodKind::Method => {
                         let mut func = with_static_member_context(ctx, method.is_static, |ctx| {
@@ -1702,17 +1596,10 @@ pub fn lower_class_from_ast(
                             let ast::PropName::Computed(computed) = &method.key else {
                                 unreachable!("@@iterator generator key must be computed");
                             };
-                            // #9226 registers the wrapper as a prototype own
-                            // key so `Object.getOwnPropertyNames` /
-                            // `getOwnPropertySymbols` list it. That registration
-                            // does NOT install an instance vtable entry, and the
-                            // wrapper exists precisely to provide one (#5128) —
-                            // dropping it left `const C = class { *[Symbol.iterator]
-                            // () {…} }` throwing `TypeError: value is not
-                            // iterable`. Both registrations are required: the
-                            // vtable entry makes the instance iterable, the
-                            // computed member makes the key enumerable.
-                            methods.push(wrapper.clone());
+                            // The computed-symbol registration installs the
+                            // runtime dispatch alias too. Registering the wrapper
+                            // as a string method also exposed an own "@@iterator"
+                            // property that the source never declared (#9788).
                             computed_members.push(ClassComputedMember {
                                 key_expr: lower_expr(ctx, &computed.expr)?,
                                 function: wrapper,
@@ -1793,7 +1680,13 @@ pub fn lower_class_from_ast(
                             static_accessor_names.push(prop_name.clone());
                             static_accessor_fn_ids.push(func.id);
                         }
-                        getters.push((prop_name, func));
+                        record_class_accessor(
+                            &mut getters,
+                            &mut getter_statics,
+                            prop_name,
+                            func,
+                            method.is_static,
+                        );
                     }
                     ast::MethodKind::Setter => {
                         let prop_name = format!("#{}", method.key.name);
@@ -1802,7 +1695,13 @@ pub fn lower_class_from_ast(
                             static_accessor_names.push(prop_name.clone());
                             static_accessor_fn_ids.push(func.id);
                         }
-                        setters.push((prop_name, func));
+                        record_class_accessor(
+                            &mut setters,
+                            &mut setter_statics,
+                            prop_name,
+                            func,
+                            method.is_static,
+                        );
                     }
                 }
             }

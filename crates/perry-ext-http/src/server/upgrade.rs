@@ -22,18 +22,7 @@
 //!    so user code can interact with it through `ws.on('message',…)`,
 //!    `ws.send(…)`, `ws.close(…)` unchanged.
 //!
-//! The TS-side wrapper for `import { WebSocketServer } from 'ws'`
-//! when constructed with `{ server }` simply registers an
-//! `'upgrade'` listener that re-dispatches to its own `'connection'`
-//! event:
-//!
-//! ```ts
-//! const wss = new WebSocketServer({ server: httpServer });
-//! // wss internally:
-//! //   server.on('upgrade', (req, wsId, head) => {
-//! //     wss.emit('connection', wsId, req);
-//! //   });
-//! ```
+//! Attached WebSocket servers are native observers registered by perry-ext-ws.
 
 use perry_ffi::{alloc_string, get_handle_mut, JsClosure, RawClosureHeader};
 
@@ -121,4 +110,20 @@ pub(crate) fn fire_upgrade_listeners(
 #[allow(clippy::erasing_op)]
 fn _force_link() -> u64 {
     POINTER_TAG | (PTR_MASK & 0)
+}
+
+/// Read owned address metadata without allocating JS objects or introducing a
+/// reverse dependency from ws to HTTP.
+pub(crate) fn attached_address(handle: i64) -> Option<(String, u16)> {
+    perry_ffi::get_handle::<HttpServer>(handle)
+        .and_then(|s| s.listening.then(|| (s.bound_host.clone(), s.bound_port)))
+        .or_else(|| {
+            perry_ffi::get_handle::<crate::server::https_server::HttpsServer>(handle).and_then(
+                |s| {
+                    s.base
+                        .listening
+                        .then(|| (s.base.bound_host.clone(), s.base.bound_port))
+                },
+            )
+        })
 }

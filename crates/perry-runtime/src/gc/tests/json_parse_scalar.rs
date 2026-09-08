@@ -15,7 +15,9 @@ fn json_inline_object_parse_allocates_only_fresh_output_without_suppression() {
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let text = r#"{"a":1,"b":true,"c":"é"}"#.as_bytes();
     let input = crate::js_string_from_bytes(text.as_ptr(), text.len() as u32);
-    unsafe { crate::json::test_json_parse_direct(input); }
+    unsafe {
+        crate::json::test_json_parse_direct(input);
+    }
     let _state = ParseStateGuard::new();
     let before = crate::arena::arena_in_use_bytes();
     let roots = RuntimeHandleScope::active_len_for_tests();
@@ -41,7 +43,8 @@ fn json_inline_object_parse_allocates_only_fresh_output_without_suppression() {
             assert_eq!(crate::object::object_live_slot_count(object), 3);
             let keys = crate::object::object_keys_array(object);
             assert_eq!((*keys).length, 3);
-            let fields = (object as *const u8).add(std::mem::size_of::<crate::ObjectHeader>()) as *const crate::JSValue;
+            let fields = (object as *const u8).add(std::mem::size_of::<crate::ObjectHeader>())
+                as *const crate::JSValue;
             assert_eq!((*fields).as_number(), 1.0);
             assert!((*fields.add(1)).as_bool());
             assert!((*fields.add(2)).is_short_string());
@@ -61,13 +64,19 @@ fn json_inline_object_parse_roots_keys_and_returns_movable_output() {
         let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
         let _state = ParseStateGuard::new();
         let _evacuation = ForcedEvacuationTestGuard::on();
-        let _protection = crate::arena::ProtectionModeGuard::set(crate::arena::FromSpaceProtection::PoisonOnly);
+        let _protection =
+            crate::arena::ProtectionModeGuard::set(crate::arena::FromSpaceProtection::PoisonOnly);
         register_runtime_handle_root_scanner_for_tests();
         gc_register_mutable_root_scanner(json_parse_mutable_root_scanner);
         let scope = RuntimeHandleScope::new();
         let text = br#"{"a":1,"b":true}"#;
-        let input = scope.root_string_ptr(crate::js_string_from_bytes(text.as_ptr(), text.len() as u32));
-        unsafe { crate::json::test_json_parse_direct(input.get_raw_const_ptr()); }
+        let input = scope.root_string_ptr(crate::js_string_from_bytes(
+            text.as_ptr(),
+            text.len() as u32,
+        ));
+        unsafe {
+            crate::json::test_json_parse_direct(input.get_raw_const_ptr());
+        }
         let input_address = input.get_raw_const_ptr::<crate::StringHeader>() as usize;
         GC_SUPPRESSED_TINY_PARSE_COLLECTION_PENDING.with(|c| c.set(true));
         let value = unsafe {
@@ -77,19 +86,30 @@ fn json_inline_object_parse_roots_keys_and_returns_movable_output() {
                 crate::json::js_json_parse(input.get_raw_const_ptr())
             }
         };
-        assert_ne!(input_address, input.get_raw_const_ptr::<crate::StringHeader>() as usize);
+        assert_ne!(
+            input_address,
+            input.get_raw_const_ptr::<crate::StringHeader>() as usize
+        );
         assert!(!GC_SUPPRESSED_TINY_PARSE_COLLECTION_PENDING.with(|c| c.get()));
         let output_address = value.as_pointer::<crate::ObjectHeader>() as usize;
         let output = scope.root_nanbox_u64(value.bits());
         let _ = gc_collect_minor_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Direct));
-        let moved = crate::JSValue::from_bits(output.get_nanbox_f64().to_bits()).as_pointer::<crate::ObjectHeader>();
+        let moved = crate::JSValue::from_bits(output.get_nanbox_f64().to_bits())
+            .as_pointer::<crate::ObjectHeader>();
         assert_ne!(output_address, moved as usize);
         unsafe {
             let keys = crate::object::object_keys_array(moved);
             assert_eq!((*keys).length, 2);
-            assert!(crate::string::js_string_key_matches_bytes(crate::array::js_array_get(keys, 0), b"a"));
-            assert!(crate::string::js_string_key_matches_bytes(crate::array::js_array_get(keys, 1), b"b"));
-            let fields = (moved as *const u8).add(std::mem::size_of::<crate::ObjectHeader>()) as *const crate::JSValue;
+            assert!(crate::string::js_string_key_matches_bytes(
+                crate::array::js_array_get(keys, 0),
+                b"a"
+            ));
+            assert!(crate::string::js_string_key_matches_bytes(
+                crate::array::js_array_get(keys, 1),
+                b"b"
+            ));
+            let fields = (moved as *const u8).add(std::mem::size_of::<crate::ObjectHeader>())
+                as *const crate::JSValue;
             assert_eq!((*fields).as_number(), 1.0);
             assert!((*fields.add(1)).as_bool());
         }
@@ -174,7 +194,10 @@ fn assert_inline_keys_move(fallible: bool, pending: bool) {
     let keys_address = keys as usize;
     let scope = RuntimeHandleScope::new();
     let text = br#"{"a":17,"b":false}"#;
-    let input = scope.root_string_ptr(crate::js_string_from_bytes(text.as_ptr(), text.len() as u32));
+    let input = scope.root_string_ptr(crate::js_string_from_bytes(
+        text.as_ptr(),
+        text.len() as u32,
+    ));
     let before = gc_collection_count();
     if pending {
         GC_SUPPRESSED_TINY_PARSE_COLLECTION_PENDING.with(|c| c.set(true));
@@ -193,7 +216,10 @@ fn assert_inline_keys_move(fallible: bool, pending: bool) {
     assert!(gc_collection_count() > before);
     let object = value.as_pointer::<crate::ObjectHeader>();
     let moved_keys = unsafe { crate::object::object_keys_array(object) };
-    assert_ne!(keys_address, moved_keys as usize, "canonical array must move");
+    assert_ne!(
+        keys_address, moved_keys as usize,
+        "canonical array must move"
+    );
     let output = scope.root_nanbox_u64(value.bits());
     crate::json::test_clear_parse_roots();
     // The result is now the sole managed owner of the canonical keys graph.
@@ -203,9 +229,16 @@ fn assert_inline_keys_move(fallible: bool, pending: bool) {
     unsafe {
         let keys = crate::object::object_keys_array(object);
         assert_eq!((*keys).length, 2);
-        assert!(crate::string::js_string_key_matches_bytes(crate::array::js_array_get(keys, 0), b"a"));
-        assert!(crate::string::js_string_key_matches_bytes(crate::array::js_array_get(keys, 1), b"b"));
-        let fields = (object as *const u8).add(std::mem::size_of::<crate::ObjectHeader>()) as *const crate::JSValue;
+        assert!(crate::string::js_string_key_matches_bytes(
+            crate::array::js_array_get(keys, 0),
+            b"a"
+        ));
+        assert!(crate::string::js_string_key_matches_bytes(
+            crate::array::js_array_get(keys, 1),
+            b"b"
+        ));
+        let fields = (object as *const u8).add(std::mem::size_of::<crate::ObjectHeader>())
+            as *const crate::JSValue;
         assert_eq!((*fields).as_number(), 17.0);
         assert!(!(*fields.add(1)).as_bool());
     }

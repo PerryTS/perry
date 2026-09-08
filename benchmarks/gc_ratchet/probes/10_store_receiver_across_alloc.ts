@@ -33,7 +33,23 @@
 declare function gc(): void;
 
 const SLOTS = 1024;
-const ITERATIONS = 200000;
+
+// Keep margin above the nursery threshold (#9829, #9832, #9833).
+// At 200,000 iterations this probe became inert after allocation optimizations:
+// main @ d36a1af0c runs zero minors, despite still producing correct stdout.
+// Measured with that compiler (three repeats per size):
+//
+//     iterations    minor_cycles
+//        200,000          0
+//        600,000          2
+//      1,200,000          4
+//      2,400,000          9
+//
+// The last size leaves >=2 minors after a further fourfold allocation reduction.
+// Keep minor_cycles >=2 when resizing; the harness's zero-minor rejection is
+// only a last line of defence. Removing the allocating RHS at this size still
+// gives minor_cycles = copied_objects = freed_bytes = 0 (sabotage control).
+const ITERATIONS = 2400000;
 
 // (1) module-level, so the receiver is loaded from a global handle rather than
 // a shadow slot.

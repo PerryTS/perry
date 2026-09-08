@@ -25,6 +25,7 @@ pub(crate) mod lower_patterns;
 pub(crate) mod lower_types;
 pub mod monomorph;
 pub mod native_profile;
+pub mod solid_jsx;
 pub mod stable_hash;
 pub mod type_alias_resolve;
 pub mod types;
@@ -43,8 +44,8 @@ pub use dynamic_import::{
     collect_module_const_locals, detect_top_level_await, dynamic_import_glob_pattern,
     flatten_exports, for_each_dynamic_import, for_each_dynamic_import_mut, for_each_worker_new,
     for_each_worker_new_mut, resolve_import_path, resolve_import_path_with_consts,
-    resolve_import_path_with_consts_and_params, resolve_import_path_with_context, FlatExport,
-    Resolution, DYNAMIC_IMPORT_PATH_CAP,
+    resolve_import_path_with_consts_and_params, resolve_import_path_with_context,
+    resolve_worker_path, FlatExport, Resolution, DYNAMIC_IMPORT_PATH_CAP,
 };
 pub use egress::{audit_module_egress, EgressRefusalReason, EgressViolation};
 pub use enums::fix_imported_enums;
@@ -61,9 +62,9 @@ pub use js_transform::{
 };
 pub use lockdown::{audit_module_lockdown, LockdownViolation};
 pub use lower::{
-    lower_module, lower_module_full, lower_module_with_class_id,
-    lower_module_with_class_id_and_types, lower_module_with_class_id_types_and_seed,
-    lower_module_with_class_id_types_seed_and_entry,
+    lower_module, lower_module_full, lower_module_full_with_platform_globals,
+    lower_module_with_class_id, lower_module_with_class_id_and_types,
+    lower_module_with_class_id_types_and_seed, lower_module_with_class_id_types_seed_and_entry,
 };
 pub use monomorph::monomorphize_module;
 pub use native_profile::exported_native_pod_abi;

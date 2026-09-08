@@ -7,8 +7,13 @@ use super::super::*;
 use super::support::*;
 
 fn take(label: &'static str) {
+    assert!(!super::super::census::test_has_pass1_snapshot());
     super::super::census::census_arm(label);
     gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Manual));
+    assert!(
+        !super::super::census::test_has_pass1_snapshot(),
+        "the untraced snapshot must not outlive the synchronous full cycle"
+    );
 }
 
 fn read_lines(path: &str) -> Vec<serde_json::Value> {
@@ -88,6 +93,9 @@ fn census_reports_a_known_composition_and_sees_deadness() {
         let lines = read_lines(&path_str);
         let _ = std::fs::remove_file(&path);
         assert_eq!(lines.len(), 3, "one census line per armed full collection");
+        for line in &lines {
+            assert_eq!(line["totals"]["reachability_pass"], true, "pass 1 must run");
+        }
         let (b, a, d) = (&lines[0], &lines[1], &lines[2]);
         assert_eq!(b["label"], "baseline");
         assert_eq!(a["label"], "populated");

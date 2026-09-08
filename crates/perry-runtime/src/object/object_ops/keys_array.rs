@@ -348,6 +348,9 @@ pub(crate) unsafe fn own_key_present_via_index(
     if (*obj).class_id == super::super::native_module::NATIVE_MODULE_CLASS_ID {
         return None;
     }
+    if super::super::string_wrapper::has_index_key(obj as usize, key) {
+        return Some(true);
+    }
     let keys = crate::object::object_keys_array(obj);
     match crate::value::addr_class::try_read_gc_header(keys as usize) {
         Some(h) if h.obj_type == crate::gc::GC_TYPE_ARRAY => {}
@@ -396,6 +399,9 @@ pub(crate) unsafe fn own_key_present(
     match crate::value::addr_class::try_read_gc_header(obj as usize) {
         Some(h) if h.obj_type == crate::gc::GC_TYPE_OBJECT => {}
         _ => return false,
+    }
+    if super::super::string_wrapper::has_index_key(obj as usize, key) {
+        return true;
     }
     let keys = crate::object::object_keys_array(obj);
     if keys.is_null() {

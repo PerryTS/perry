@@ -47,6 +47,7 @@ cjs_default_namespace_modules!(
     "path",
     "path.posix",
     "path.win32",
+    "perf_hooks",
     "process",
     "punycode",
     "querystring",

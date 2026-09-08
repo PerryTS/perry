@@ -1,6 +1,6 @@
 use super::*;
 
-thread_local! {
+crate::perry_thread_local! {
     /// Set by test-only helpers that wipe page metadata for isolation
     /// (`old_arena_page_index_clear_for_tests`): real objects become
     /// unclassifiable in that synthetic state, so the differential verifier
@@ -85,7 +85,7 @@ pub(super) fn classifier_verify_enabled() -> bool {
     *CACHED.get_or_init(|| super::env_flag_enabled("PERRY_GC_VERIFY_CLASSIFIER"))
 }
 
-thread_local! {
+crate::perry_thread_local! {
     pub(super) static MARK_SEEDS: std::cell::UnsafeCell<Vec<*mut GcHeader>> =
         const { std::cell::UnsafeCell::new(Vec::new()) };
 }
@@ -922,7 +922,7 @@ pub(super) fn trace_marked_objects(valid_ptrs: &ValidPointerSet) {
 /// old-block neighbors as new block-persist candidates.
 pub(super) const BLOCK_PERSIST_WINDOW: usize = 5;
 
-thread_local! {
+crate::perry_thread_local! {
     /// Objects this thread's block-persistence pass has FORCE-MARKED since
     /// process start — i.e. kept alive for no reason other than sharing a
     /// block with something reachable.

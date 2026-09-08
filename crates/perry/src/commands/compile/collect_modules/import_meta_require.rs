@@ -215,6 +215,7 @@ struct RequireCall {
     start: usize,
     end: usize,
     specifier: Option<String>,
+    direct: bool,
 }
 
 struct CallScan<'a> {
@@ -226,10 +227,11 @@ struct CallScan<'a> {
 
 impl Visit for CallScan<'_> {
     fn visit_call_expr(&mut self, call: &ast::CallExpr) {
+        let direct = matches!(&call.callee, ast::Callee::Expr(callee)
+            if is_import_meta_member(callee, "require"));
         let recognized = match &call.callee {
             ast::Callee::Expr(callee) => {
-                is_import_meta_member(callee, "require")
-                    || identifier_id(callee).is_some_and(|id| self.aliases.contains(&id))
+                direct || identifier_id(callee).is_some_and(|id| self.aliases.contains(&id))
             }
             _ => false,
         };
@@ -241,6 +243,7 @@ impl Visit for CallScan<'_> {
                 start: call.span.lo.0.saturating_sub(1) as usize,
                 end: call.span.hi.0.saturating_sub(1) as usize,
                 specifier,
+                direct,
             });
         }
         call.visit_children_with(self);
@@ -316,6 +319,13 @@ pub(super) fn rewrite_import_meta_require_addons(
     let process_alias = unique_identifier(source, "__perry_import_meta_process", 0);
     for (index, call) in calls.calls.into_iter().enumerate() {
         let Some(specifier) = call.specifier else {
+            // #9742: direct calls can load ordinary JS chunks. Let the HIR
+            // synchronous-require resolver handle their bounded candidate set
+            // and runtime fallback; an unknown path is not proof of an addon.
+            // Aliased addon loading keeps its existing declaration diagnostic.
+            if call.direct {
+                continue;
+            }
             anyhow::bail!(
                 "cannot statically prove the Node-API addon path passed to `import.meta.require` in {}. Declare every project-owned addon with an exact `perry.nativeAddonPaths` entry and call the unmodified binding with a string literal or `new URL(\"./addon.node\", import.meta.url).pathname`.",
                 module_path.display()
@@ -435,6 +445,18 @@ const d = import.meta.require(new URL("./native/addon.node", import.meta.url).pa
         .to_string();
         assert!(error.contains("cannot statically prove"), "{error}");
         assert!(error.contains("perry.nativeAddonPaths"), "{error}");
+    }
+
+    #[test]
+    fn direct_runtime_paths_reach_synchronous_module_dispatch() {
+        let (dir, relative_entry, mut ctx) = fixture();
+        let entry = dir.path().join(relative_entry);
+        let source = "import.meta.require(process.argv[2]); import.meta['require'](choosePath());";
+        assert_eq!(
+            rewrite_import_meta_require_addons(source, &entry, &mut ctx).unwrap(),
+            source
+        );
+        assert!(ctx.native_addons.is_empty());
     }
 
     #[test]

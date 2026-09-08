@@ -1,0 +1,1 @@
+Fix string-wrapper construction scaling with receiver length in non-strict method calls, `Function.prototype.call`/`apply`, and `Object(string)`. Character indices are now virtual properties, preserving UTF-16 indexing, reflection, and readonly descriptors without allocating a property and descriptor for every character (#9810).

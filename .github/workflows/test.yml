@@ -272,6 +272,10 @@ jobs:
           python3 scripts/workspace_architecture.py --self-test
           python3 scripts/workspace_architecture.py --check --print-summary
 
+      - name: Linux incident collector fixtures
+        if: ${{ !cancelled() }}
+        run: python3 scripts/test_capture_linux_incident.py
+
       - name: Public benchmark evidence freshness
         if: ${{ !cancelled() }}
         run: |
@@ -501,6 +505,17 @@ jobs:
         run: |
           python3 scripts/check_llvm_corpus_currency.py --self-test
           python3 scripts/check_llvm_corpus_currency.py
+
+      # #9925. Both native root-dominance corpus generators scraped the
+      # production statepoint pass constant from inprocess.rs, so splitting
+      # that module left the scheduled gate unable to emit either corpus. The
+      # shared reader follows the unique declaration across codegen modules;
+      # keep its parser and the live repository lookup in required lint.
+      - name: Statepoint pass source reader
+        if: ${{ !cancelled() }}
+        run: |
+          python3 scripts/read_statepoint_rewrite_passes.py --self-test
+          python3 scripts/read_statepoint_rewrite_passes.py --check
 
       # #7877, second round. The knob audit above covers env-var names; it says
       # nothing about the paths and numbers the same pages state. Both drifted:
@@ -1589,7 +1604,7 @@ jobs:
           python scripts/check_gc_doc_claims.py
           python scripts/check_thread_locals.py --self-test
           python scripts/check_thread_locals.py
-          python -m unittest discover -s tests -p 'test_gc_ratchet.py' -v
+          python -m unittest discover -s tests -p 'test*gc_ratchet.py' -v
           python benchmarks/gc_ratchet/gc_ratchet.py validate --scope structural
 
       - name: Install Rust toolchain
@@ -3491,15 +3506,9 @@ jobs:
             # Proper fix: hoist well-known-binding lookup out of
             # build_optimized_libs into link.rs so it runs even when
             # auto-optimize is skipped. Tracked separately.
-            # #8475: the three fastify-importing snippets cannot run under the
-            # harness's PERRY_NO_AUTO_OPTIMIZE=1 speed flag — `perry compile`
-            # hard-errors on `import 'fastify'` there, because the prebuilt
-            # stdlib is not built with `external-fastify-pump` and the request
-            # loop would hang. Excluded on the same terms as the HTTP aggregate
-            # above until the harness can run this class in a second,
-            # auto-optimizing pass. COVERAGE GAP, tracked in #8475 — not a
-            # statement that these snippets work.
-            cmd_exclude_gallery: "./scripts/run_doc_tests.sh --verbose --skip-xcompile --filter-exclude ui/gallery.ts --filter-exclude stdlib/http/snippets.ts --filter-exclude getting-started/npm_packages.ts --filter-exclude stdlib/http/fastify_json.ts --filter-exclude stdlib/overview/snippets.ts"
+            # Fastify examples declare `requires: auto-optimize`; the harness
+            # builds their specialized libraries and counts them in this run.
+            cmd_exclude_gallery: "./scripts/run_doc_tests.sh --verbose --skip-xcompile --filter-exclude ui/gallery.ts --filter-exclude stdlib/http/snippets.ts"
             cmd_gallery: "./scripts/run_doc_tests.sh --verbose --skip-xcompile --filter ui/gallery.ts"
             # Repeat `--xcompile-only-target=…` per target rather than a
             # single comma-delimited value because PowerShell splits even
@@ -3542,9 +3551,7 @@ jobs:
             shell: pwsh
             # The well-known HTTP aggregate remains excluded on every host
             # while its no-auto ext-archive routing issue is tracked.
-            # #8475: same fastify / PERRY_NO_AUTO_OPTIMIZE exclusion as the
-            # macOS entry above. COVERAGE GAP, tracked there.
-            cmd_exclude_gallery: "./scripts/run_doc_tests.ps1 --verbose --skip-xcompile --filter-exclude ui/gallery.ts --filter-exclude stdlib/http/snippets.ts --filter-exclude getting-started/npm_packages.ts --filter-exclude stdlib/http/fastify_json.ts --filter-exclude stdlib/overview/snippets.ts"
+            cmd_exclude_gallery: "./scripts/run_doc_tests.ps1 --verbose --skip-xcompile --filter-exclude ui/gallery.ts --filter-exclude stdlib/http/snippets.ts"
             cmd_gallery: "./scripts/run_doc_tests.ps1 --verbose --skip-xcompile --filter ui/gallery.ts"
             cmd_xcompile_blocking: "./scripts/run_doc_tests.ps1 --verbose --xcompile-only --xcompile-only-target=web --xcompile-only-target=wasm"
             cmd_xcompile_advisory: "./scripts/run_doc_tests.ps1 --verbose --xcompile-only"

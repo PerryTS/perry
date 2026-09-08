@@ -673,7 +673,9 @@ jobs:
           export PERRY_RUNTIME_DIR="$PWD/target/perry-dev"
           export PERRY_NO_AUTO_OPTIMIZE=1
           unset PERRY_LLVM_OPT PERRY_LLVM_CLANG
-          export LLVM_SYS_221_PREFIX="$(brew --prefix llvm)"
+          # Keep LLVM_SYS_221_PREFIX from setup-llvm22. The stock-toolchain
+          # assertion removes the external opt/clang overrides; the in-process
+          # backend itself still has to link the LLVM 22 ABI used by llvm-sys.
           export RUSTFLAGS="-C force-frame-pointers=yes -C force-unwind-tables=yes"
           cargo build --profile perry-dev -p perry -p perry-runtime-static \
             -p perry-stdlib-static --features perry-codegen/llvm-inprocess

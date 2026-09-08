@@ -22,6 +22,11 @@ pub(crate) fn test_shape_cache_root(shape_id: u32) -> (usize, usize) {
 
 #[cfg(test)]
 pub(crate) fn test_seed_transition_cache_root(next_keys: usize) {
+    // Slot 0, no key and no length marker: the `len_marker == 0` arm of the
+    // shared predicate with `kid == 0`, which classifies as not-relevant.
+    // Arming through the shared helper is what keeps every writer of this
+    // table on one rule (this seam used to carry a third variant of it).
+    super::arm_transition_cache_young(0, next_keys, 0, 0);
     with_transition_cache(|t| unsafe {
         // GC_STORE_AUDIT(ROOT): test seed mirrors TRANSITION_CACHE_GLOBAL roots scanned by scan_transition_cache_roots_mut.
         let entry = &mut (*t)[0];
@@ -34,6 +39,17 @@ pub(crate) fn test_seed_transition_cache_root(next_keys: usize) {
     });
 }
 
+/// `test_seed_transition_cache_root` under a predecessor ShapeId that resolves,
+/// so `prune_dead_transition_cache_entries` (which retires an entry whose
+/// predecessor has no descriptor) keeps the entry across a collection.
+#[cfg(test)]
+pub(crate) fn test_seed_transition_cache_root_for_shape(prev_shape_id: u32, next_keys: usize) {
+    test_seed_transition_cache_root(next_keys);
+    with_transition_cache(|t| unsafe {
+        (*t)[0].prev_shape_id = prev_shape_id;
+    });
+}
+
 #[cfg(test)]
 pub(crate) fn test_transition_cache_root() -> usize {
     with_transition_cache(|t| unsafe { (*t)[0].next_keys })
@@ -41,6 +57,7 @@ pub(crate) fn test_transition_cache_root() -> usize {
 
 #[cfg(test)]
 pub(crate) fn test_clear_transition_cache_root() {
+    super::TRANSITION_CACHE_YOUNG.with(|log| log.borrow_mut().clear());
     with_transition_cache(|t| unsafe {
         for i in 0..TRANSITION_CACHE_SIZE {
             // GC_STORE_AUDIT(ROOT): test clear writes non-pointer sentinels into scanned TRANSITION_CACHE_GLOBAL roots.

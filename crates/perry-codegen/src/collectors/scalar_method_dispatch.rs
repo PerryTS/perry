@@ -606,9 +606,10 @@ fn note_prototype_effect(
         }
         // Function-classic prototypes are keyed by a synthetic class id derived
         // from the closure value, and `new <func>()` lowers to `NewDynamic`, so
-        // these cannot rewrite a declared class's table. `SetFunctionPrototype`
-        // installs a whole prototype object for such a function — same story.
-        Expr::RegisterFunctionPrototypeMethod { .. } | Expr::SetFunctionPrototype { .. } => {}
+        // these cannot rewrite a declared class's table.
+        Expr::RegisterFunctionPrototypeMethod { .. } => {}
+        // #9365: this node also performs ordinary stores on arbitrary receivers.
+        Expr::SetFunctionPrototype { func, .. } => note_prototype_holder(func, facts),
         // Any expression that so much as NAMES a prototype object: the value
         // can be aliased into a local and written through later.
         Expr::PropertyGet {

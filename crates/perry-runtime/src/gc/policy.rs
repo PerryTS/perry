@@ -5,7 +5,7 @@ pub(super) const GC_FLAG_IN_ALLOC: u8 = 0b01;
 /// Bit 1 of GC_FLAGS — suppression flag (JSON.parse).
 pub(super) const GC_FLAG_SUPPRESSED: u8 = 0b10;
 
-thread_local! {
+crate::perry_thread_local! {
     pub(super) static GC_FLAGS: Cell<u8> = const { Cell::new(0) };
 }
 
@@ -292,7 +292,7 @@ thread_local! {
     static GC_NURSERY_CAP_TEST_SUPPRESSED: Cell<bool> = const { Cell::new(false) };
 }
 
-thread_local! {
+crate::perry_thread_local! {
     /// Lower bound for the next GC trigger. Bumped after each
     /// `gc_collect_inner` based on collection effectiveness (see the
     /// adaptive logic in `gc_check_trigger`).
@@ -367,6 +367,92 @@ pub(super) fn gc_suppressed_parse_is_tiny(parse_growth: usize) -> bool {
     parse_growth <= GC_SUPPRESSED_TINY_PARSE_BYTES
 }
 
+/// #9831: how much the arena must have grown since the last collection ended
+/// before tiny-parse churn may force another one — priced by the part of the
+/// productivity backoff the `ArenaBytes` arm computes and then discards.
+///
+/// `GC_STEP_BYTES` powers on at `GC_THRESHOLD_INITIAL_BYTES`, which equals the
+/// trigger ceiling, and doubles on every collection that frees almost nothing.
+/// The arm's own re-arm (`gc_finish_arena_trigger_collection`) clamps
+/// `new_total + step` at the ceiling, so every doubling past the initial step
+/// is backoff the arm has computed, stored, and cannot express. This rescales
+/// the step so that its power-on value buys exactly the headroom floor, and
+/// each discarded doubling buys the guard one more doubling — up to the same
+/// ceiling, so a run of unproductive collections can never let the guard wait
+/// longer than the arm itself would. A productive collection halves the step
+/// toward its 16 MB floor, which maps below the headroom floor and clamps to
+/// it: a churn loop whose collections pay keeps today's cadence.
+pub(super) fn tiny_parse_pressure_headroom_bytes(step: usize) -> usize {
+    let floor = gc_trigger_headroom_floor_bytes();
+    let ceiling = gc_trigger_absolute_ceiling_bytes();
+    // 64-bit intermediate on purpose: `step` reaches 1 GiB and `floor` 16 MiB,
+    // whose product does not fit a 32-bit `usize` (watchOS/visionOS are ILP32;
+    // see `influx_driven_nursery_cap_bytes` for the same trap).
+    let scaled = (step as u64).saturating_mul(floor as u64) / (GC_THRESHOLD_INITIAL_BYTES as u64);
+    let scaled = scaled.min(usize::MAX as u64) as usize;
+    scaled.max(floor).min(ceiling.max(floor))
+}
+
+/// #9831: whether tiny-parse churn has earned a forced collection.
+///
+/// The guard used to be `in_use >= in_use_trigger` alone — an absolute
+/// threshold on a quantity no collection can lower below the live set. On a
+/// program whose live set sits above it permanently (the compiled claude-code
+/// TUI holds 59–297 MB of arena through one streamed reply) that made every
+/// tiny `JSON.parse` the SSE stream consists of force a collection at the next
+/// safepoint: 51 minors in one 66-delta reply, each freeing a median 131 KB,
+/// while the adaptive step sat at its 1 GiB maximum saying "back off" and
+/// nothing consulted it. The growth clause is what that step is for.
+///
+/// `base` is `arena_in_use_bytes()` as the last collection ended
+/// (`GC_TINY_PARSE_PRESSURE_BASE_BYTES`); `in_use` is the same reading now.
+pub(super) fn tiny_parse_pressure_due_with(
+    in_use: usize,
+    in_use_trigger: usize,
+    base: usize,
+    step: usize,
+) -> bool {
+    in_use >= in_use_trigger
+        && in_use >= base.saturating_add(tiny_parse_pressure_headroom_bytes(step))
+}
+
+/// The live [`tiny_parse_pressure_due_with`]: current base and step.
+pub(super) fn tiny_parse_pressure_due(in_use: usize, in_use_trigger: usize) -> bool {
+    let base = GC_TINY_PARSE_PRESSURE_BASE_BYTES.with(Cell::get);
+    let step = GC_STEP_BYTES.with(Cell::get);
+    tiny_parse_pressure_due_with(in_use, in_use_trigger, base, step)
+}
+
+/// The in-use reading the tiny-parse guard compares against in this collector
+/// mode: the generational collector's guard sits higher than the full
+/// mark-sweep one because a minor is the cheaper collection to force.
+fn tiny_parse_in_use_trigger_for_mode() -> usize {
+    if gen_gc_enabled() {
+        gc_tiny_parse_in_use_trigger_dyn_bytes()
+    } else {
+        gc_tiny_parse_full_gc_in_use_trigger_dyn_bytes()
+    }
+}
+
+/// `PERRY_GC_DIAG=1` witness that the guard is the arm that forced a
+/// collection (CLAUDE.md: a gate must assert its subject was live). One line
+/// per forced collection, tagged with which parse boundary asked for it.
+fn diag_tiny_parse_forced_collection(site: &str, in_use: usize) {
+    if !crate::gc::gc_diag_enabled() {
+        return;
+    }
+    let base = GC_TINY_PARSE_PRESSURE_BASE_BYTES.with(Cell::get);
+    let step = GC_STEP_BYTES.with(Cell::get);
+    eprintln!(
+        "[gc-tiny-parse] forced collection site={} in_use={} base={} headroom={} step={}",
+        site,
+        in_use,
+        base,
+        tiny_parse_pressure_headroom_bytes(step),
+        step
+    );
+}
+
 pub(super) fn gc_bump_arena_trigger_target(
     bytes_now: usize,
     step: usize,
@@ -412,7 +498,7 @@ pub(crate) fn gc_schedule_malloc_sweep_after_json_output() {
     GC_NEXT_MALLOC_TRIGGER.with(|trigger| trigger.set(trigger.get().min(current)));
 }
 
-thread_local! {
+crate::perry_thread_local! {
     /// Per-program adaptive malloc-count step. Mirrors `GC_STEP_BYTES`
     /// behaviour: doubles when mostly-garbage, halves when mostly-live.
     pub(super) static GC_MALLOC_COUNT_STEP: std::cell::Cell<usize> =
@@ -442,7 +528,7 @@ thread_local! {
 ///   the Map/Set side-allocation finalizers) instead of leaking.
 const GC_EXTERNAL_SIDE_ALLOC_STEP: usize = 16 * 1024 * 1024;
 
-thread_local! {
+crate::perry_thread_local! {
     static GC_EXTERNAL_SIDE_ALLOC_PENDING: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static GC_EXTERNAL_SIDE_LIVE_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
@@ -953,7 +1039,7 @@ impl GcTriggerSnapshot {
     }
 }
 
-thread_local! {
+crate::perry_thread_local! {
     pub(super) static GC_DEFERRED_REQUEST: Cell<DeferredGcRequest> =
         const { Cell::new(DeferredGcRequest::None) };
     pub(super) static GC_OLD_RECLAIM_PENDING: Cell<bool> = const { Cell::new(false) };
@@ -991,6 +1077,12 @@ thread_local! {
     /// reading and still escalate. Nursery garbage is not.
     pub(super) static GC_LAST_COLLECTION_POST_IN_USE_BYTES: Cell<usize> =
         const { Cell::new(0) };
+    /// #9831: `arena_in_use_bytes()` as the most recent collection of ANY kind
+    /// ended — the base the tiny-parse pressure guard measures growth from.
+    /// The bump-offset reading rather than the live census above, because the
+    /// guard compares against `arena_in_use_bytes()` at every parse boundary,
+    /// and mixing the two would count every swept hole as growth.
+    pub(super) static GC_TINY_PARSE_PRESSURE_BASE_BYTES: Cell<usize> = const { Cell::new(0) };
     /// Yield-adaptive backoff for major-GC pacing (#7726).
     ///
     /// `arena_growth_full_escalation_due` escalates a minor to a full once the
@@ -1368,12 +1460,12 @@ fn gc_bump_malloc_trigger_inner(collect_now: bool) {
     let is_tiny_parse = gc_bump_malloc_trigger_with_snapshot(current, bytes_now);
     if is_tiny_parse {
         let use_gen_gc = gen_gc_enabled();
-        let in_use_trigger = if use_gen_gc {
-            gc_tiny_parse_in_use_trigger_dyn_bytes()
-        } else {
-            gc_tiny_parse_full_gc_in_use_trigger_dyn_bytes()
-        };
-        if crate::arena::arena_in_use_bytes() < in_use_trigger {
+        // #9831: an absolute in-use guard alone forced a collection after
+        // EVERY tiny parse on a program whose live set never drops below it.
+        // The guard now also requires the arena to have grown past the
+        // productivity-priced headroom since the last collection ended.
+        let in_use = crate::arena::arena_in_use_bytes();
+        if !tiny_parse_pressure_due(in_use, tiny_parse_in_use_trigger_for_mode()) {
             return;
         }
         if use_gen_gc {
@@ -1382,6 +1474,7 @@ fn gc_bump_malloc_trigger_inner(collect_now: bool) {
                 return;
             }
             GC_SUPPRESSED_TINY_PARSE_COLLECTION_PENDING.with(|pending| pending.set(true));
+            diag_tiny_parse_forced_collection("parse_end", in_use);
             GC_NEXT_TRIGGER_BYTES.with(|trigger| {
                 if trigger.get() > bytes_now {
                     trigger.set(bytes_now);
@@ -1419,6 +1512,15 @@ pub fn gc_collect_pending_suppressed_parse() {
         GC_SUPPRESSED_TINY_PARSE_COLLECTION_PENDING.with(|pending| pending.set(true));
         return;
     }
+    // #9831: the request was priced when it was made; a collection of any kind
+    // since then has moved the base, and re-pricing here is what keeps the
+    // boundary collection from stacking a second minor on top of it. A request
+    // nothing has satisfied is still due and still collects.
+    let in_use = crate::arena::arena_in_use_bytes();
+    if !tiny_parse_pressure_due(in_use, tiny_parse_in_use_trigger_for_mode()) {
+        return;
+    }
+    diag_tiny_parse_forced_collection("parse_boundary", in_use);
 
     let total = crate::arena::arena_total_bytes();
     GC_NEXT_TRIGGER_BYTES.with(|trigger| {
@@ -1442,10 +1544,15 @@ pub fn gc_schedule_parse_boundary_collection_if_pressure() {
     if !gen_gc_enabled() {
         return;
     }
-    let in_use = crate::arena::arena_in_use_bytes();
-    if in_use >= gc_tiny_parse_in_use_trigger_dyn_bytes() {
-        GC_SUPPRESSED_TINY_PARSE_COLLECTION_PENDING.with(|pending| pending.set(true));
+    // #9831: priced the same way as the post-parse guard above — see
+    // `tiny_parse_pressure_due_with`.
+    if !tiny_parse_pressure_due(
+        crate::arena::arena_in_use_bytes(),
+        gc_tiny_parse_in_use_trigger_dyn_bytes(),
+    ) {
+        return;
     }
+    GC_SUPPRESSED_TINY_PARSE_COLLECTION_PENDING.with(|pending| pending.set(true));
 }
 
 /// The allocating parser has proved this construction fits the allowance.
@@ -1947,9 +2054,34 @@ pub(super) fn pacing_arena_in_use_bytes() -> usize {
 /// Called once at the end of every cycle, minor and full alike. The copying
 /// fast path publishes directly; non-copying cycles publish from
 /// `GcCycle::publish_reclaim_outcome` after their sweep census.
+///
+/// **Three post-collection quantities, three units — do not conflate them.**
+/// This funnel is the one place a reader can see all three at once, which is
+/// why the list lives here:
+///
+/// | cell | unit | read by |
+/// |---|---|---|
+/// | `GC_LAST_COLLECTION_POST_IN_USE_BYTES` | `pacing_arena_in_use_bytes()` — the LIVE census (`arena_live_allocated_bytes`), test-injectable | `arena_growth_full_escalation_due` |
+/// | `GC_TINY_PARSE_PRESSURE_BASE_BYTES` (#9831) | `arena_in_use_bytes()` — BUMP OFFSETS, the same reading the guard takes at each parse boundary | `tiny_parse_pressure_due_with` |
+/// | `GC_NEXT_TRIGGER_BYTES` (#9840) | `arena_total_bytes()` — COMMITTED bytes, which is what `next_arena_trigger_base()` is compared against | `gc_budgeted_due_trigger`'s `ArenaBytes` arm |
+///
+/// The third is *not* written here, and that is deliberate rather than an
+/// omission: re-arming the arena trigger needs the collection's productivity
+/// score (`outcome.freed_bytes` and `pre_in_use`, which price `GC_STEP_BYTES`)
+/// and the once-consumed `take_promoted_young_capacity_credit()`, neither of
+/// which exists at this point in a cycle — and it must skip fulls, which this
+/// funnel deliberately does not. It is written by
+/// [`gc_rebaseline_arena_trigger_after_collection`], which both nursery-
+/// collection finishers call; #9840 is the change that made that "both"
+/// true, and it is the same symmetry #9831 applied to the cell above.
+/// Mixing the units — re-baselining a committed-bytes trigger from a bump-
+/// offset or live-census base — would arm it below the arena's own total and
+/// make the arm due the instant it re-armed.
 pub(super) fn note_collection_finished_arena_occupancy(full: bool) {
     let bytes = pacing_arena_in_use_bytes();
     GC_LAST_COLLECTION_POST_IN_USE_BYTES.with(|cell| cell.set(bytes));
+    // #9831: the same moment, in the units the tiny-parse guard reads.
+    GC_TINY_PARSE_PRESSURE_BASE_BYTES.with(|cell| cell.set(crate::arena::arena_in_use_bytes()));
     super::arena_right_size::note_collection_finished(bytes, full);
 }
 
@@ -2128,9 +2260,71 @@ fn gc_rebaseline_malloc_trigger_to_survivors(mstep: usize) {
     GC_NEXT_MALLOC_TRIGGER.with(|c| c.set(survivors + mstep));
 }
 
-fn gc_finish_arena_trigger_collection(pre_in_use: usize, outcome: GcCollectOutcome) -> u64 {
+/// Which nursery-collection finisher is re-baselining the whole-arena trigger.
+/// Diagnostic attribution only — the arithmetic is identical for both.
+#[derive(Clone, Copy)]
+enum ArenaRebaselineArm {
+    ArenaBytes,
+    MallocCount,
+}
+
+impl ArenaRebaselineArm {
+    fn label(self) -> &'static str {
+        match self {
+            Self::ArenaBytes => "arena",
+            Self::MallocCount => "malloc",
+        }
+    }
+}
+
+/// Re-baseline `GC_NEXT_TRIGGER_BYTES` (and adapt `GC_STEP_BYTES`) from the
+/// state a nursery collection leaves behind.
+///
+/// Shared by BOTH nursery-collection finishers. `GC_NEXT_TRIGGER_BYTES`'s doc
+/// says it is bumped "after each `gc_collect_inner`", and until #9840 that was
+/// false: only the `ArenaBytes` finisher moved it, so the whole-arena trigger
+/// was measured from the last *arena-kind* collection rather than the last
+/// collection. A `MallocCount` minor is the same nursery collection with the
+/// malloc sweep added — the arena was swept — so it re-baselines the arena
+/// trigger with exactly the arithmetic the arena arm would have used on the
+/// same nursery.
+///
+/// The asymmetry the split kept, in the OTHER direction, is still correct and
+/// still here (see `gc_finish_arena_trigger_collection`): an arena minor that
+/// skipped the malloc sweep must not move the malloc trigger.
+///
+/// **Unit.** The base is `arena_total_bytes()` — COMMITTED bytes, all
+/// generations — because that is the quantity `next_arena_trigger_base()` is
+/// compared against in `gc_budgeted_due_trigger`. It is deliberately neither
+/// of the two post-collection occupancy readings published at
+/// [`note_collection_finished_arena_occupancy`] (a live census, and #9831's
+/// bump-offset guard base); that funnel's doc comment tabulates all three.
+/// Re-baselining this cell from either of those would arm the trigger below
+/// the arena's own total and make the arm due the instant it re-armed.
+///
+/// **What is in scope.** The two *nursery-trigger* finishers, whichever
+/// collection their arm ended up running — an `ArenaBytes` or `MallocCount`
+/// trigger that `arena_growth_full_escalation_due()` escalated to a full still
+/// finishes here, exactly as the arena arm's escalated fulls already did before
+/// #9840. Out of scope is `BudgetedGcRebaseline::OldReclaim` (and the idle
+/// reclaim): those are paced by the old-generation band, and after a full that
+/// released blocks the un-moved trigger sits *further* above the new total,
+/// which is the conservative direction.
+///
+/// Measured on the compiled claude-code TUI before this (`PERRY_GC_DIAG=1`,
+/// per firing, four 3300-character captures on two binaries): the streaming
+/// turn ran a strict 6:1 pattern — six `MallocCount` minors promoting ~3.2 MB
+/// each grew the old generation past the arena trigger *inside the sixth
+/// minor*, and at the very next safepoint the arm fired on a nursery of
+/// **856 bytes** (`promoted_bytes=216 freed_bytes=640`), paying the whole
+/// per-collection fixed cost to free 640 bytes. One in seven of the turn's
+/// collections. See `secret-tests/cc-perf-campaign/DESIGN_arena_contract.md`.
+fn gc_rebaseline_arena_trigger_after_collection(
+    pre_in_use: usize,
+    outcome: &GcCollectOutcome,
+    arm: ArenaRebaselineArm,
+) {
     let sweep_freed_bytes = outcome.freed_bytes;
-    let malloc_swept = outcome.malloc_swept;
     let post_in_use = crate::arena::arena_in_use_bytes();
 
     // Adaptive step:
@@ -2195,8 +2389,13 @@ fn gc_finish_arena_trigger_collection(pre_in_use: usize, outcome: GcCollectOutco
     let freed = std::cmp::max(block_reclaim, sweep_freed_bytes as usize);
     let mut step = GC_STEP_BYTES.with(|c| c.get());
     let old_step = step;
+    // #9840: reported on `[gc-arena-rebaseline]` for BOTH arms, because the
+    // step is now scored by both and #9831's tiny-parse guard prices its
+    // headroom from it — see the note above the `GC_STEP_BYTES` write below.
+    let mut scored_pct_freed = 0usize;
     if pre_in_use > 0 {
         let pct_freed = (freed * 100) / pre_in_use;
+        scored_pct_freed = pct_freed;
         // 2026-05-02: widen the "double" band from `>90% || <10%` to
         // `>=85% || <10%`. ECS perf-comprehensive's two
         // alloc-heavy benches (10k two-comp, 5k × 3 cmds) sweep
@@ -2223,8 +2422,44 @@ fn gc_finish_arena_trigger_collection(pre_in_use: usize, outcome: GcCollectOutco
             step = (step / 2).max(16 * 1024 * 1024);
         }
         // 10-25% freed → keep step unchanged (marginal churn).
+        //
+        // #9840, and the one behavioural coupling this change has beyond the
+        // trigger itself: `GC_STEP_BYTES` had exactly one production writer —
+        // this line, reached only by the `ArenaBytes` finisher — and #9831 made
+        // it an INPUT to the tiny-parse pressure guard
+        // (`tiny_parse_pressure_headroom_bytes`). Scoring a `MallocCount`
+        // minor's productivity here therefore moves that guard's headroom too.
+        // That is the intended reading of both cells and not a side effect:
+        // the step is documented as "collection effectiveness", the guard's
+        // own base cell was made kind-agnostic by #9831 at
+        // `note_collection_finished_arena_occupancy`, and a step scored by
+        // only one of the two nursery arms is the same defect this change
+        // fixes, one cell over. The direction on a given workload is a
+        // question for measurement, not for reasoning. Estimated over the four
+        // 3300-character captures (209 `MallocCount` firings: `freed_bytes`
+        // from each firing's own `[gc-copy-minor]` line over the nearest
+        // `[gc-step]`'s post-collection in-use — an ADJACENT-diagnostic
+        // estimate, because before this change a `MallocCount` minor emitted no
+        // line carrying its own `pre_in_use`, which is exactly why the new one
+        // does):
+        //
+        //     pct_freed  median 4-5 %   <10 %: 194/209   10-24 %: 10/209
+        //                               25-84 %:   5/209   >84 %:  0/209
+        //
+        // 93 % of them land in the "<10 % → double" band and none in ">84 %".
+        // A `MallocCount` minor frees 5-44 MB against an 83-277 MB `pre_in_use`
+        // — most of which is old generation it cannot touch — so on cc this
+        // coupling pushes the step UP and makes #9831's guard MORE conservative,
+        // reinforcing that fix rather than eroding it. `[gc-arena-rebaseline]`
+        // carries `pct=`/`step=` for both arms so the claim is read off a
+        // capture instead of estimated from a neighbour.
         GC_STEP_BYTES.with(|c| c.set(step));
-        if crate::gc::gc_diag_enabled() {
+        // `[gc-step]` stays an ArenaBytes-only line: `scripts/gc_repsel_matrix.sh`
+        // sums every `sweep_freed=` it can grep, so printing it for the malloc
+        // arm too would double-count that arm's reclaim (already reported on its
+        // `[gc-copy-minor]` line) in the ratchet. The malloc arm is attributed
+        // on `[gc-arena-rebaseline]` below instead.
+        if matches!(arm, ArenaRebaselineArm::ArenaBytes) && crate::gc::gc_diag_enabled() {
             eprintln!(
                 "[gc-step] pre_in_use={} post_in_use={} sweep_freed={} block_reclaim={} pct={}% step={}→{}",
                 pre_in_use, post_in_use, sweep_freed_bytes, block_reclaim, pct_freed, old_step, step
@@ -2238,6 +2473,19 @@ fn gc_finish_arena_trigger_collection(pre_in_use: usize, outcome: GcCollectOutco
     // `new_total` so a workload whose post-GC live set already
     // approaches the ceiling doesn't thrash on every fresh
     // allocation.
+    //
+    // #9831: above `ceiling - floor` this arithmetic re-arms at `new_total +
+    // floor` whatever `step` says — the productivity backoff the branch above
+    // just computed is not visible to it. That is deliberate, and measured:
+    // pricing the arm's own headroom by the step bought -10.8 % turn CPU on
+    // the compiled claude-code TUI and cost +22 % settled footprint — a
+    // CPU-for-footprint trade this project does not accept (the issue's own
+    // refuted branch). The step is instead consumed where it was
+    // actually being discarded — the tiny-parse pressure guard
+    // (`tiny_parse_pressure_due_with`), which pulled this trigger down to
+    // "now" after every small `JSON.parse` on a heap above its in-use
+    // threshold and so re-fired this arm 51 times in one reply regardless of
+    // what this function armed.
     let stepped = new_total.saturating_add(step);
     let capped = stepped.min(gc_trigger_absolute_ceiling_bytes());
     let floor = new_total.saturating_add(gc_trigger_headroom_floor_bytes());
@@ -2250,19 +2498,107 @@ fn gc_finish_arena_trigger_collection(pre_in_use: usize, outcome: GcCollectOutco
         std::cmp::max(capped, floor).saturating_add(super::take_promoted_young_capacity_credit());
     GC_NEXT_TRIGGER_BYTES.with(|c| c.set(next_trigger));
     GC_TRIGGER_ARMED.with(|a| a.set(true));
+    if crate::gc::gc_diag_enabled() {
+        // Field names deliberately disjoint from the `[gc-step]` line above and
+        // from the `[gc-copy-minor]` line: `scripts/gc_repsel_matrix.sh` sums
+        // every `sweep_freed=`/`freed_bytes=` it can grep, so a second line
+        // carrying those keys would double-count reclaim in the ratchet.
+        eprintln!(
+            "[gc-arena-rebaseline] arm={} next_trigger={} total={} headroom={} pct={}% step={}→{}",
+            arm.label(),
+            next_trigger,
+            new_total,
+            next_trigger.saturating_sub(new_total),
+            scored_pct_freed,
+            old_step,
+            step
+        );
+    }
+}
+
+fn gc_finish_arena_trigger_collection(pre_in_use: usize, outcome: GcCollectOutcome) -> u64 {
+    gc_rebaseline_arena_trigger_after_collection(
+        pre_in_use,
+        &outcome,
+        ArenaRebaselineArm::ArenaBytes,
+    );
     // Rebaseline the malloc-count trigger only if this collection
     // actually swept malloc objects. Copied-minor arena collections
     // may skip the malloc sweep while count pressure is still below
     // its trigger; moving the trigger in that case would postpone
     // reclamation of already-tracked dead malloc churn.
-    if malloc_swept {
+    if outcome.malloc_swept {
         let mstep = GC_MALLOC_COUNT_STEP.with(|c| c.get());
         gc_rebaseline_malloc_trigger_to_survivors(mstep);
     }
     outcome.emit_after_current()
 }
 
-fn gc_finish_malloc_trigger_collection(pre_count: usize, outcome: GcCollectOutcome) -> u64 {
+/// `PERRY_GC_ARENA_REBASELINE_ALL=0|off|false` restores the pre-#9840
+/// asymmetry: only the `ArenaBytes` finisher moves the whole-arena trigger.
+///
+/// The kill switch, and the positive control — both arms of the measurement
+/// live in ONE binary, so no build difference can be confounded with the
+/// change. Default ON; only the three explicit off-spellings turn it off, so a
+/// typo cannot silently change which behaviour a bisect is measuring
+/// (`env_default_on_from_value`'s contract).
+///
+/// CLAUDE.md's GC knob kill-policy is binding: this knob's OFF state is
+/// asserted, not merely available. `direct_malloc_minor_arena_rebaseline_kill_
+/// switch_restores_the_stale_threshold` in `gc/tests/debt_pacer.rs` runs the
+/// same fixture as the ON-state test through the seam below and asserts the
+/// defect returns — trigger left at the pre-collection value, and a second
+/// minor firing on the nursery the first one emptied. That test is
+/// simultaneously the sabotage proof for the ON-state pair: the OFF state IS
+/// the deletion of the call, kept live by CI instead of performed by hand.
+///
+/// The env read is cached, so a test cannot flip it by poking the process
+/// environment (and must not try — the tests run in one process). The
+/// `#[cfg(test)]` seam is the supported way in, matching
+/// `pacing_arena_in_use_bytes`.
+fn arena_rebaseline_all_enabled() -> bool {
+    #[cfg(test)]
+    if let Some(enabled) = TEST_ARENA_REBASELINE_ALL.with(|cell| cell.get()) {
+        return enabled;
+    }
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| crate::gc::env_default_on_enabled("PERRY_GC_ARENA_REBASELINE_ALL"))
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Test-only override for [`arena_rebaseline_all_enabled`]. Thread-local,
+    /// so concurrently-running tests cannot see each other's value.
+    static TEST_ARENA_REBASELINE_ALL: std::cell::Cell<Option<bool>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Force [`arena_rebaseline_all_enabled`] for the duration of a test, restoring
+/// the previous override on drop. `Drop` rather than a bare setter because the
+/// tests that use it assert a *defect* is present, and a leaked `false` would
+/// silently disarm every later test in the same thread.
+#[cfg(test)]
+pub(super) struct ArenaRebaselineAllTestGuard(Option<bool>);
+
+#[cfg(test)]
+impl ArenaRebaselineAllTestGuard {
+    pub(super) fn force(enabled: bool) -> Self {
+        Self(TEST_ARENA_REBASELINE_ALL.with(|cell| cell.replace(Some(enabled))))
+    }
+}
+
+#[cfg(test)]
+impl Drop for ArenaRebaselineAllTestGuard {
+    fn drop(&mut self) {
+        TEST_ARENA_REBASELINE_ALL.with(|cell| cell.set(self.0));
+    }
+}
+
+fn gc_finish_malloc_trigger_collection(
+    pre_count: usize,
+    pre_in_use: usize,
+    outcome: GcCollectOutcome,
+) -> u64 {
     debug_assert!(
         outcome.malloc_swept,
         "malloc-count trigger must sweep malloc objects"
@@ -2298,6 +2634,15 @@ fn gc_finish_malloc_trigger_collection(pre_count: usize, outcome: GcCollectOutco
     }
     if outcome.malloc_swept {
         GC_NEXT_MALLOC_TRIGGER.with(|c| c.set(survivors + mstep));
+    }
+    // #9840: this collection swept the nursery too, so the whole-arena trigger
+    // is measured from after it — see `gc_rebaseline_arena_trigger_after_collection`.
+    if arena_rebaseline_all_enabled() {
+        gc_rebaseline_arena_trigger_after_collection(
+            pre_in_use,
+            &outcome,
+            ArenaRebaselineArm::MallocCount,
+        );
     }
     outcome.emit_after_current()
 }
@@ -2389,6 +2734,9 @@ pub fn gc_check_trigger() {
     {
         let _reentry = OldReclaimReentryGuard::enter();
         GC_OLD_RECLAIM_PENDING.with(|pending| pending.set(false));
+        super::diag_sites::trigger_decision("alloc_point", "OldReclaim");
+        super::diag_sites::set_full_site("alloc_point_old_reclaim");
+        let probe = super::diag_sites::ChargeProbe::begin();
         let _scan = super::roots::ManualGcScanGuard::force_full_scan(
             super::ConservativeScanSite::OldReclaimAllocPoint,
         );
@@ -2396,6 +2744,7 @@ pub fn gc_check_trigger() {
             GcTriggerKind::OldGenBytes,
         ))
         .emit_after_current();
+        probe.end(0, super::diag_sites::ChargeKind::SyncFull);
         return;
     }
 
@@ -2519,6 +2868,8 @@ pub fn gc_check_trigger() {
             }
             let pre_in_use = crate::arena::arena_in_use_bytes();
             let pre_malloc_count = malloc_object_count();
+            super::diag_sites::trigger_decision("alloc_point_slack", "nursery");
+            let probe = super::diag_sites::ChargeProbe::begin();
             // THE ALLOC POINT IS REGISTER-IMPRECISE, SO THIS MINOR MUST NOT
             // MOVE. Unconditional, and the unconditionality is the fix for
             // #7682.
@@ -2594,12 +2945,13 @@ pub fn gc_check_trigger() {
             // exactly as the budgeted and full-GC paths do on completion.
             match kind {
                 GcTriggerKind::MallocCount => {
-                    gc_finish_malloc_trigger_collection(pre_malloc_count, outcome);
+                    gc_finish_malloc_trigger_collection(pre_malloc_count, pre_in_use, outcome);
                 }
                 _ => {
                     gc_finish_arena_trigger_collection(pre_in_use, outcome);
                 }
             }
+            probe.end(0, super::diag_sites::ChargeKind::DirectMinor);
             return;
         }
     }
@@ -2608,10 +2960,11 @@ pub fn gc_check_trigger() {
         return;
     }
 
-    let _ = gc_mutator_assist_step_work_units_inner_with_progress(
-        gc_mutator_assist_scaled_work_units(),
-        GcProgressKind::MutatorAssist,
-    );
+    let units = gc_mutator_assist_scaled_work_units();
+    let probe = super::diag_sites::ChargeProbe::begin();
+    let _ =
+        gc_mutator_assist_step_work_units_inner_with_progress(units, GcProgressKind::MutatorAssist);
+    probe.end(units, super::diag_sites::ChargeKind::Assist);
 }
 
 /// Debt-proportional assist pacing (#6180 Stage 2, measured 2026-07-10).
@@ -2670,7 +3023,7 @@ pub struct JsGcStepResult {
 #[derive(Clone, Copy)]
 enum BudgetedGcRebaseline {
     ArenaBytes { pre_in_use: usize },
-    MallocCount { pre_count: usize },
+    MallocCount { pre_count: usize, pre_in_use: usize },
     OldReclaim,
 }
 
@@ -2698,7 +3051,7 @@ enum BudgetedGcTrigger {
     MallocCount,
 }
 
-thread_local! {
+crate::perry_thread_local! {
     static GC_BUDGETED_CYCLE: RefCell<Option<BudgetedGcCycle>> = const { RefCell::new(None) };
     static GC_BUDGETED_CYCLE_ACTIVE: Cell<bool> = const { Cell::new(false) };
     static GC_BUDGETED_STEP_ACTIVE: Cell<bool> = const { Cell::new(false) };
@@ -2731,6 +3084,68 @@ pub(super) fn gc_old_reclaim_debt_bytes(old_in_use: usize, baseline: usize) -> u
         baseline.saturating_add(gc_old_reclaim_growth_band_bytes(baseline))
     };
     old_in_use.saturating_sub(trigger) as u64
+}
+
+/// The thread-locals [`gc_budgeted_due_trigger`] reads on its fast path, with
+/// the hot-cache slot each one claimed.
+///
+/// Enumerating them in the module that reads them is what makes the coverage
+/// test able to fail: reverting any declaration below to a raw
+/// `thread_local!` removes `slot_index` and breaks this function's build at
+/// the declaration's own name, rather than leaving a silently slow path — the
+/// failure mode `tls_hot.rs` was written to abolish and that this path
+/// nonetheless kept for three years.
+#[cfg(test)]
+pub(crate) fn trigger_path_hot_slot_indices() -> Vec<(&'static str, u32)> {
+    // Touch each one first: a slot is claimed on first read, not at
+    // declaration, so an unread declaration reports the unassigned sentinel.
+    //
+    // `GC_DEFERRED_REQUEST` is deliberately absent: `defer_gc_request` reads it
+    // only when `GC_ROOT_LOCK_DEPTH` is non-zero, so on the fast path it is
+    // never touched and never claims a slot. Listing it made this function's
+    // own test fail with `index 4294967295` on the first run — which is the
+    // evidence that the test can fail, and the reason the list is "what the
+    // fast path reads" rather than "what the module declares".
+    let _ = gc_budgeted_due_trigger();
+    vec![
+        (
+            "GC_OLD_RECLAIM_PENDING",
+            GC_OLD_RECLAIM_PENDING.slot_index(),
+        ),
+        (
+            "GC_LAST_OLD_RECLAIM_IN_USE_BYTES",
+            GC_LAST_OLD_RECLAIM_IN_USE_BYTES.slot_index(),
+        ),
+        (
+            "GC_NEXT_MALLOC_TRIGGER",
+            GC_NEXT_MALLOC_TRIGGER.slot_index(),
+        ),
+        ("GC_NEXT_TRIGGER_BYTES", GC_NEXT_TRIGGER_BYTES.slot_index()),
+        ("GC_TRIGGER_ARMED", GC_TRIGGER_ARMED.slot_index()),
+        (
+            "GC_EXTERNAL_SIDE_LIVE_BYTES",
+            GC_EXTERNAL_SIDE_LIVE_BYTES.slot_index(),
+        ),
+        (
+            "GC_MAJOR_PACING_RETAINING",
+            GC_MAJOR_PACING_RETAINING.slot_index(),
+        ),
+        ("GC_FLAGS", GC_FLAGS.slot_index()),
+        (
+            "GC_BUDGETED_CYCLE_ACTIVE",
+            GC_BUDGETED_CYCLE_ACTIVE.slot_index(),
+        ),
+        (
+            "GC_BUDGETED_STEP_ACTIVE",
+            GC_BUDGETED_STEP_ACTIVE.slot_index(),
+        ),
+        (
+            "OLD_GEN_IN_USE_BYTES",
+            crate::arena::old_gen_in_use_bytes_slot_index(),
+        ),
+        ("OLD_FREE_BYTES", super::old_free_bytes_slot_index()),
+        ("MALLOC_STATE", super::malloc_state_slot_index()),
+    ]
 }
 
 fn gc_budgeted_due_trigger() -> Option<BudgetedGcTrigger> {
@@ -2850,6 +3265,8 @@ pub(crate) fn gc_safepoint_moving_minor() -> bool {
             }
             let _reentry = OldReclaimReentryGuard::enter();
             GC_OLD_RECLAIM_PENDING.with(|pending| pending.set(false));
+            super::diag_sites::trigger_decision("safepoint", "OldReclaim");
+            super::diag_sites::set_full_site("safepoint_old_reclaim");
             // No `force_full_scan`: roots are precise at this safepoint.
             gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(
                 GcTriggerKind::OldGenBytes,
@@ -2876,11 +3293,18 @@ pub(crate) fn gc_safepoint_moving_minor() -> bool {
     };
     let pre_in_use = crate::arena::arena_in_use_bytes();
     let pre_malloc_count = malloc_object_count();
+    super::diag_sites::trigger_decision(
+        "safepoint",
+        match kind {
+            GcTriggerKind::MallocCount => "MallocCount",
+            _ => "ArenaBytes",
+        },
+    );
     // No `force_full_scan`: roots are precise at this safepoint.
     let outcome = super::gc_collect_minor_with_trigger(GcTriggerSnapshot::capture(kind));
     match kind {
         GcTriggerKind::MallocCount => {
-            gc_finish_malloc_trigger_collection(pre_malloc_count, outcome);
+            gc_finish_malloc_trigger_collection(pre_malloc_count, pre_in_use, outcome);
         }
         _ => {
             gc_finish_arena_trigger_collection(pre_in_use, outcome);
@@ -3314,6 +3738,7 @@ fn gc_start_budgeted_cycle_for_pressure(progress_kind: GcProgressKind) -> Option
         BudgetedGcTrigger::MallocCount => {
             let rebaseline = BudgetedGcRebaseline::MallocCount {
                 pre_count: malloc_object_count(),
+                pre_in_use: crate::arena::arena_in_use_bytes(),
             };
             // Major-GC pacing (malloc-count trigger twin of the ArenaBytes branch).
             if gen_gc_enabled() && !arena_growth_full_escalation_due() {
@@ -3403,12 +3828,16 @@ fn gc_finish_budgeted_cycle(mut cycle: BudgetedGcCycle) -> JsGcStepResult {
         .state
         .take_outcome()
         .expect("completed budgeted GC cycle must produce an outcome");
+    let freed_for_diag = outcome.freed_bytes;
     match cycle.rebaseline {
         BudgetedGcRebaseline::ArenaBytes { pre_in_use } => {
             gc_finish_arena_trigger_collection(pre_in_use, outcome);
         }
-        BudgetedGcRebaseline::MallocCount { pre_count } => {
-            gc_finish_malloc_trigger_collection(pre_count, outcome);
+        BudgetedGcRebaseline::MallocCount {
+            pre_count,
+            pre_in_use,
+        } => {
+            gc_finish_malloc_trigger_collection(pre_count, pre_in_use, outcome);
         }
         BudgetedGcRebaseline::OldReclaim => {
             let freed = outcome.emit_after_current();
@@ -3418,6 +3847,7 @@ fn gc_finish_budgeted_cycle(mut cycle: BudgetedGcCycle) -> JsGcStepResult {
         }
     }
     GC_BUDGETED_CYCLE_ACTIVE.with(|active| active.set(false));
+    super::diag_sites::budgeted_completed(freed_for_diag);
     gc_step_result(
         JS_GC_STEP_STATUS_COMPLETED,
         GcCyclePhase::Complete.ffi_code(),
@@ -3598,8 +4028,14 @@ fn gc_budgeted_step_work_units_inner_with_progress(
             );
             return gc_budgeted_skipped_result();
         }
+        super::diag_sites::trigger_decision("budgeted_start", "due");
         let cycle = gc_start_budgeted_cycle_for_pressure(start_progress_kind)
             .expect("budgeted GC pressure was observed before starting cycle");
+        super::diag_sites::budgeted_started(
+            cycle.trigger_kind,
+            cycle.collection_kind,
+            start_progress_kind,
+        );
         GC_BUDGETED_CYCLE.with(|slot| {
             *slot.borrow_mut() = Some(cycle);
         });
@@ -3625,10 +4061,11 @@ fn gc_budgeted_step_work_units_inner_with_progress(
         // for. `js_gc_step_us` can only consult its clock BETWEEN units, so the
         // only honest statement about pause is a measured maximum.
         let step_started = std::time::Instant::now();
+        let phase_code = cycle.state.phase().ffi_code();
         let step = cycle.state.step(GcWorkBudget::bounded(work_units));
-        super::instruments::note_budgeted_step_duration(
-            step_started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64,
-        );
+        let step_us = step_started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64;
+        super::instruments::note_budgeted_step_duration(step_us);
+        super::diag_sites::budgeted_step_done(phase_code, step_us, work_units);
         super::instruments::note_incremental_step();
         if step.completed {
             super::instruments::note_incremental_completion();

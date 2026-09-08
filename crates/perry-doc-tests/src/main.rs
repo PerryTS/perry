@@ -15,6 +15,8 @@ use serde::Serialize;
 
 mod image_diff;
 mod lint;
+#[cfg(test)]
+mod tests;
 
 #[derive(Parser, Debug)]
 #[command(name = "doc-tests", about = "Perry documentation-example test harness")]
@@ -357,6 +359,7 @@ struct Example {
     platforms: BTreeSet<String>,
     targets: BTreeSet<String>,
     compile_only: bool,
+    requires_auto_optimize: bool,
     widget_bundle_id: Option<String>,
 }
 
@@ -402,6 +405,7 @@ fn discover_examples(root: &Path) -> Result<Vec<Example>> {
             platforms: banner.platforms,
             targets: banner.targets,
             compile_only: banner.compile_only,
+            requires_auto_optimize: banner.requires_auto_optimize,
             widget_bundle_id: banner.widget_bundle_id,
         });
     }
@@ -419,6 +423,7 @@ struct Banner {
     /// single-program timeout. Catches API/TS drift without the
     /// integration-test overhead.
     compile_only: bool,
+    requires_auto_optimize: bool,
     /// Required for any `*-widget` / `wearos-tile` target — passed as
     /// `--app-bundle-id` on the perry compile invocation.
     widget_bundle_id: Option<String>,
@@ -454,6 +459,18 @@ fn read_banner(path: &Path) -> Result<Banner> {
             let v = rest.trim();
             if v.eq_ignore_ascii_case("false") || v == "0" || v.eq_ignore_ascii_case("no") {
                 b.compile_only = true;
+            }
+        } else if let Some(rest) = body.strip_prefix("requires:") {
+            for requirement in rest.split(',').map(str::trim) {
+                match requirement {
+                    "auto-optimize" => b.requires_auto_optimize = true,
+                    _ => {
+                        return Err(anyhow!(
+                            "{}: unknown doc-example requirement `{requirement}`",
+                            path.display()
+                        ))
+                    }
+                }
             }
         } else if let Some(rest) = body.strip_prefix("widget-bundle-id:") {
             let v = rest.trim();
@@ -494,7 +511,7 @@ fn run_one(
     });
 
     if !no_compile {
-        if let Err(e) = compile(perry_bin, &ex.path, &bin_path) {
+        if let Err(e) = compile(perry_bin, ex, &bin_path) {
             return ExampleReport {
                 file: rel.to_string(),
                 kind: ex.kind,
@@ -733,6 +750,7 @@ fn cross_compile_one(
     };
 
     let mut cmd = Command::new(perry_bin);
+    configure_compile_environment(&mut cmd, ex);
     cmd.arg("compile")
         .arg(&ex.path)
         .arg("--target")
@@ -807,13 +825,25 @@ fn cross_compile_one(
     }
 }
 
-fn compile(perry_bin: &Path, src: &Path, out: &Path) -> Result<()> {
-    let out_status = Command::new(perry_bin)
-        .arg(src)
+fn configure_compile_environment(cmd: &mut Command, example: &Example) {
+    // The host wrappers select prebuilt libraries for the ordinary examples.
+    // Fastify requires a specialized stdlib with its request pump, so remove
+    // the override only from this compiler child. Never mutate the harness's
+    // environment: subsequent examples still benefit from the prebuilt libs.
+    if example.requires_auto_optimize {
+        cmd.env_remove("PERRY_NO_AUTO_OPTIMIZE");
+    }
+}
+
+fn compile(perry_bin: &Path, example: &Example, out: &Path) -> Result<()> {
+    let mut cmd = Command::new(perry_bin);
+    configure_compile_environment(&mut cmd, example);
+    let out_status = cmd
+        .arg(&example.path)
         .arg("-o")
         .arg(out)
         .output()
-        .with_context(|| format!("launching perry for {}", src.display()))?;
+        .with_context(|| format!("launching perry for {}", example.path.display()))?;
     if !out_status.status.success() {
         return Err(anyhow!(
             "perry {}: {}",

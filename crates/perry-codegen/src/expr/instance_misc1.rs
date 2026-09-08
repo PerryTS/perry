@@ -1190,6 +1190,41 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // Receiver is a NaN-tagged i64 RegExpHeader pointer; arg is
         // a NaN-tagged string. Both must be unboxed before the call.
         Expr::RegExpTest { regex, string } => {
+            // A literal used directly as this one receiver cannot escape: the
+            // HIR node owns the literal expression and publishes only the
+            // call result.  Construct (or fetch) the site's rooted header
+            // before evaluating the argument, resolving `.test` at the same
+            // pre-argument point as an ordinary call.  This ordering matters
+            // for `/x/.test(patchPrototype())`: it invokes the method value
+            // captured before the patch.
+            if let Expr::RegExp { pattern, flags } = regex.as_ref() {
+                let (receiver, site_key) =
+                    super::logical_collections::lower_regexp_site_test_receiver(
+                        ctx, pattern, flags,
+                    );
+                let method = ctx.block().call(
+                    DOUBLE,
+                    "js_regexp_site_test_get_method",
+                    &[(I64, &site_key), (DOUBLE, &receiver)],
+                );
+                return rooting::with_rooted_group(ctx, 2, |ctx, roots| {
+                    let receiver = roots.adopt_emitted(ctx, rooting::Repr::Boxed, &receiver, true);
+                    let method = roots.adopt_emitted(ctx, rooting::Repr::Boxed, &method, true);
+                    let argument = lower_expr(ctx, string)?;
+                    let receiver = roots.reread_emitted(ctx, receiver);
+                    let method = roots.reread_emitted(ctx, method);
+                    Ok(ctx.block().call(
+                        DOUBLE,
+                        "js_regexp_site_test_dispatch",
+                        &[
+                            (I64, &site_key),
+                            (DOUBLE, &receiver),
+                            (DOUBLE, &method),
+                            (DOUBLE, &argument),
+                        ],
+                    ))
+                });
+            }
             // #7154: the receiver is live across BOTH the string operand's own
             // lowering and the `js_jsvalue_to_string_coerce` below it, and the
             // coerce is unconditional — it allocates, and on an object argument

@@ -64,23 +64,13 @@ pub(crate) fn lower_expr_assignment(
             let result = match &member.prop {
                 ast::MemberProp::Ident(ident) => {
                     let property = ident.sym.to_string();
-                    // Issue #711 part 2: `<expr>.prototype = <value>`
-                    // pattern (Effect's effectable.ts uses this to
-                    // declare prototype-based classes — `function
-                    // Base() {}; Base.prototype = CommitPrototype`).
-                    // Route through the SetFunctionPrototype HIR node
-                    // so codegen calls
-                    // `js_set_function_prototype(func, proto)`, which
-                    // allocates a synthetic class id keyed by the
-                    // function value. The runtime helper is a no-op
-                    // when `object` doesn't evaluate to a function
-                    // (preserves baseline for legitimate
-                    // `someClass.prototype = X` writes on non-function
-                    // values).
+                    // Ordinary property assignment, with function prototype
+                    // metadata synchronized for dynamic class parents (#711).
                     if property == "prototype" {
                         Expr::SetFunctionPrototype {
                             func: object,
                             proto: value,
+                            strict: ctx.current_strict,
                         }
                     } else {
                         Expr::PutValueSet {

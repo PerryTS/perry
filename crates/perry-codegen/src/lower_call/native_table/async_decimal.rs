@@ -89,7 +89,7 @@ pub(super) const ASYNC_DECIMAL_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_async_hooks_create_hook",
         args: &[NA_F64],
-        ret: NR_PTR,
+        ret: NR_FOREIGN_PTR,
     },
     NativeModSig {
         module: "async_hooks",
@@ -125,7 +125,7 @@ pub(super) const ASYNC_DECIMAL_ROWS: &[NativeModSig] = &[
         class_filter: Some("AsyncHook"),
         runtime: "js_async_hook_enable",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_FOREIGN_PTR,
     },
     NativeModSig {
         module: "async_hooks",
@@ -134,7 +134,7 @@ pub(super) const ASYNC_DECIMAL_ROWS: &[NativeModSig] = &[
         class_filter: Some("AsyncHook"),
         runtime: "js_async_hook_disable",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_FOREIGN_PTR,
     },
     NativeModSig {
         module: "async_hooks",
@@ -161,7 +161,7 @@ pub(super) const ASYNC_DECIMAL_ROWS: &[NativeModSig] = &[
         class_filter: Some("AsyncResource"),
         runtime: "js_async_resource_emit_destroy",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_FOREIGN_PTR,
     },
     NativeModSig {
         module: "async_hooks",
@@ -179,7 +179,7 @@ pub(super) const ASYNC_DECIMAL_ROWS: &[NativeModSig] = &[
         class_filter: Some("AsyncResource"),
         runtime: "js_async_resource_bind",
         args: &[NA_F64, NA_F64],
-        ret: NR_PTR,
+        ret: NR_NULLABLE_GCPTR,
     },
     // ========== decimal.js (arbitrary-precision math) ==========
     // `new Decimal(value)` is dispatched by `lower_builtin_new` (calls
@@ -194,7 +194,7 @@ pub(super) const ASYNC_DECIMAL_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_decimal_plus_value",
         args: &[NA_F64],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "decimal.js",
@@ -203,7 +203,7 @@ pub(super) const ASYNC_DECIMAL_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_decimal_minus_value",
         args: &[NA_F64],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "decimal.js",
@@ -212,7 +212,7 @@ pub(super) const ASYNC_DECIMAL_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_decimal_times_value",
         args: &[NA_F64],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "decimal.js",
@@ -221,7 +221,7 @@ pub(super) const ASYNC_DECIMAL_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_decimal_div_value",
         args: &[NA_F64],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "decimal.js",
@@ -230,7 +230,7 @@ pub(super) const ASYNC_DECIMAL_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_decimal_mod_value",
         args: &[NA_F64],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "decimal.js",
@@ -239,7 +239,7 @@ pub(super) const ASYNC_DECIMAL_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_decimal_pow",
         args: &[NA_F64],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "decimal.js",
@@ -248,7 +248,7 @@ pub(super) const ASYNC_DECIMAL_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_decimal_sqrt",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "decimal.js",
@@ -257,7 +257,7 @@ pub(super) const ASYNC_DECIMAL_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_decimal_abs",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "decimal.js",
@@ -266,7 +266,7 @@ pub(super) const ASYNC_DECIMAL_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_decimal_neg",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "decimal.js",
@@ -275,7 +275,7 @@ pub(super) const ASYNC_DECIMAL_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_decimal_round",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "decimal.js",
@@ -284,7 +284,7 @@ pub(super) const ASYNC_DECIMAL_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_decimal_floor",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     NativeModSig {
         module: "decimal.js",
@@ -293,7 +293,7 @@ pub(super) const ASYNC_DECIMAL_ROWS: &[NativeModSig] = &[
         class_filter: None,
         runtime: "js_decimal_ceil",
         args: &[],
-        ret: NR_PTR,
+        ret: NR_HANDLE_ID,
     },
     // Formatting — return strings (NR_STR NaN-boxes the *StringHeader).
     NativeModSig {

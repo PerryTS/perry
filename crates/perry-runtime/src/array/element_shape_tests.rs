@@ -541,6 +541,71 @@ fn a_fail_closed_transfer_leaves_no_record_for_the_next_array_to_inherit() {
     );
 }
 
+#[test]
+fn a_transfer_skips_the_table_only_when_neither_address_advertises_a_proof() {
+    // #9792: `transfer_element_shape` runs for every relocated array, and its
+    // `had_bit` verdict is free — two header words it has already read. When
+    // neither address advertises a proof it takes the side table anyway, for
+    // two removes that can only remove what no reader could reach. The gate
+    // that skips that has exactly ONE safe shape, and this pins both halves.
+    //
+    // Arm 1 — neither bit set: skipping is correct, and the record it leaves
+    // behind stays unreadable and cannot donate its identity.
+    // Arm 2 — the DESTINATION still advertises one: skipping would leave a
+    // live proof describing storage that has just been overwritten, so the
+    // gate must NOT fire on `!had_bit` alone.
+    let _serialized = test_serialize();
+
+    // Arm 1.
+    let src = built_from_pushes(CLASS_A, 2);
+    let dst = built_from_pushes(CLASS_A, 2);
+    let survivor = proof(dst).expect("proven").epoch;
+    unsafe { clear_element_shape(src) };
+    unsafe { test_clear_element_shape_bit_only(dst) };
+    assert!(
+        test_element_shape_record_exists(dst as usize),
+        "the fixture must actually leave a record behind the cleared bit"
+    );
+
+    transfer_element_shape(src as usize, dst as usize);
+
+    assert!(
+        proof(dst).is_none(),
+        "the bit is the sole authority for a read, so a record behind a \
+         cleared bit must not read as a proof"
+    );
+    let reproven = unsafe { ensure_element_shape(dst) }.expect("still homogeneous");
+    assert_ne!(
+        reproven.epoch, survivor,
+        "establishing draws a fresh identity from ELEMENT_SHAPE_PROOF_SEQ, so \
+         a survivor record can never donate its epoch"
+    );
+
+    // Arm 2: source proves nothing, destination still advertises a proof.
+    let src2 = built_from_pushes(CLASS_A, 2);
+    let dst2 = built_from_pushes(CLASS_A, 2);
+    unsafe { clear_element_shape(src2) };
+    assert!(
+        unsafe { test_element_shape_bit_set(dst2) },
+        "the fixture must leave the destination advertising a proof"
+    );
+
+    transfer_element_shape(src2 as usize, dst2 as usize);
+
+    unsafe {
+        assert!(
+            !test_element_shape_bit_set(dst2),
+            "a transfer whose source proved nothing must still fail the \
+             destination closed — gating on `!had_bit` alone would leave a \
+             live proof over storage the move has just replaced"
+        );
+    }
+    assert!(
+        !test_element_shape_record_exists(dst2 as usize),
+        "and it must take the destination's record with it"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Lifecycle hooks — what stops a recycled address inheriting a stale identity
 // ---------------------------------------------------------------------------

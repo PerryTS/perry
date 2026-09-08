@@ -390,6 +390,7 @@ mod cjs_default_dispatch_tests {
         "path.default",
         "path.posix.default",
         "path.win32.default",
+        "perf_hooks.default",
         "process.default",
         "punycode.default",
         "querystring.default",

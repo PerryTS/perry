@@ -29,8 +29,8 @@ use crate::array::ArrayHeader;
 /// `0` for every class id without a reserved raw-field layout. Keep each
 /// entry in lock-step with the family's allocator/dispatcher:
 ///
-///   * array:  `array/iter_object.rs` (fields 0..4: backing, cursor, kind,
-///     snapshot len, epoch)
+///   * array:  `array/iter_object.rs` (fields 0..5: backing, cursor, kind,
+///     `node:sqlite` epoch pointer, epoch value, cached fused result)
 ///   * map/set: `collection_iter_object.rs` (fields 0..5: backing, cursor,
 ///     kind, size-at-last-next, last key, cached fused result)
 ///   * string: `string/iter_object.rs` (fields 0..1)
@@ -39,7 +39,7 @@ use crate::array::ArrayHeader;
 ///   * iterator helpers: `iterator_helpers.rs` (fields 0..3)
 pub(crate) fn reserved_slot_floor_for_class_id(class_id: u32) -> u32 {
     match class_id {
-        crate::array::ARRAY_ITERATOR_CLASS_ID => 5,
+        crate::array::ARRAY_ITERATOR_CLASS_ID => 6,
         crate::collection_iter_object::MAP_ITERATOR_CLASS_ID
         | crate::collection_iter_object::SET_ITERATOR_CLASS_ID => 6,
         crate::string::STRING_ITERATOR_CLASS_ID => 2,
@@ -242,7 +242,7 @@ mod tests {
     fn floors_cover_every_reserved_family_and_nothing_else() {
         assert_eq!(
             reserved_slot_floor_for_class_id(crate::array::ARRAY_ITERATOR_CLASS_ID),
-            5
+            6
         );
         assert_eq!(
             reserved_slot_floor_for_class_id(crate::collection_iter_object::MAP_ITERATOR_CLASS_ID),

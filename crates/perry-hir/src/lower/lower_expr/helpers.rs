@@ -381,6 +381,13 @@ pub(crate) fn native_module_binding_value(ctx: &LoweringContext, name: &str) -> 
         }
     }
     if let Some(method) = method_name {
+        if method == "default" {
+            return Expr::PropertyGet {
+                byte_offset: 0,
+                object: Box::new(Expr::NativeModuleRef(module_name.to_string())),
+                property: method.to_string(),
+            };
+        }
         // #3946: a `node:process` *property* imported by name
         // (`import { pid, arch } from "node:process"`) must read
         // the live process value, not a generic native-module
@@ -391,10 +398,23 @@ pub(crate) fn native_module_binding_value(ctx: &LoweringContext, name: &str) -> 
                 return e;
             }
         }
-        return Expr::PropertyGet {
+        // A named ESM import is a live binding to Node's builtin ESM export
+        // cell, whose value changes only when syncBuiltinESMExports() updates
+        // that cell. Keep this value read distinct from a property read on a
+        // default/namespace import, which must observe CommonJS monkey patches
+        // immediately.
+        return Expr::Call {
+            callee: Box::new(Expr::ExternFuncRef {
+                name: "js_native_module_named_esm_export_value".to_string(),
+                param_types: vec![Type::String, Type::String],
+                return_type: Type::Any,
+            }),
+            args: vec![
+                Expr::String(module_name.to_string()),
+                Expr::String(method.to_string()),
+            ],
+            type_args: vec![],
             byte_offset: 0,
-            object: Box::new(Expr::NativeModuleRef(module_name.to_string())),
-            property: method.to_string(),
         };
     }
     if ctx.lookup_builtin_module_alias(name).is_none()
