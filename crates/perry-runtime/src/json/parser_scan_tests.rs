@@ -225,16 +225,18 @@ fn bounded_root_record_reuses_the_warm_shape_during_one_pass_parse() {
             .map(|key| cached_parse_key_ptr(key.as_bytes()))
             .collect();
         let keys_array = parse_shape_keys_array(&keys);
+        let shape_id = PARSE_SHAPE_CACHE.with(|cache| cache.borrow().last().unwrap().shape_id);
+        assert_ne!(shape_id, 0);
 
         let mut parser = super::DirectParser::new_batched(input);
         assert!(parser.warm_record_shape_pending);
         assert_eq!(parser.hot_shape_len, keys.len());
+        assert_eq!(parser.hot_shape_id, shape_id);
         let value = parser.parse_value();
         assert!(parser.finish());
-        assert_eq!(
-            crate::object::object_keys_array(value.as_pointer::<crate::ObjectHeader>()),
-            keys_array
-        );
+        let object = value.as_pointer::<crate::ObjectHeader>();
+        assert_eq!(crate::object::object_keys_array(object), keys_array);
+        assert_eq!((*object).parent_class_id, shape_id);
 
         PARSE_SHAPE_CACHE.with(|cache| cache.borrow_mut().clear());
         crate::gc::gc_unsuppress();

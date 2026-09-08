@@ -162,10 +162,12 @@ fn assert_inline_keys_move(fallible: bool, pending: bool) {
         (*header).gc_flags |= GC_FLAG_SHAPE_SHARED;
     }
     assert!(crate::arena::pointer_in_nursery(keys as usize));
+    let shape_id = crate::object::shapes::shape_id_for_keys_ensure(keys, 2);
     crate::json::PARSE_SHAPE_CACHE.with(|cache| {
         cache.borrow_mut().push(crate::json::ParseShapeCacheEntry {
             keys: vec![a, b],
             keys_array: keys,
+            shape_id,
         });
     });
     gc_unsuppress();

@@ -272,6 +272,7 @@ pub(crate) struct DirectParser<'a> {
     hot_shape_len: usize,
     hot_shape_keys: [*const StringHeader; 8],
     hot_shape_array: *mut ArrayHeader,
+    hot_shape_id: u32,
     /// The newest small parse shape, copied once at the parse boundary. A
     /// top-level record can consume it while reading keys in order, avoiding
     /// one TLS + RefCell key-cache probe per field. GC is already suppressed
@@ -295,6 +296,7 @@ impl<'a> DirectParser<'a> {
             hot_shape_len: 0,
             hot_shape_keys: [std::ptr::null(); 8],
             hot_shape_array: std::ptr::null_mut(),
+            hot_shape_id: 0,
             warm_record_shape_pending: false,
             saw_wide_object: false,
             batch: None,
@@ -312,6 +314,7 @@ impl<'a> DirectParser<'a> {
                     parser.hot_shape_len = entry.keys.len();
                     parser.hot_shape_keys[..entry.keys.len()].copy_from_slice(&entry.keys);
                     parser.hot_shape_array = entry.keys_array;
+                    parser.hot_shape_id = entry.shape_id;
                     parser.warm_record_shape_pending = true;
                 }
             });
@@ -328,6 +331,7 @@ impl<'a> DirectParser<'a> {
             hot_shape_len: 0,
             hot_shape_keys: [std::ptr::null(); 8],
             hot_shape_array: std::ptr::null_mut(),
+            hot_shape_id: 0,
             warm_record_shape_pending: false,
             saw_wide_object: false,
             batch: None,
@@ -338,7 +342,7 @@ impl<'a> DirectParser<'a> {
     unsafe fn parse_shape_keys_array_hot(
         &mut self,
         keys: &[*const StringHeader],
-    ) -> *mut ArrayHeader {
+    ) -> (*mut ArrayHeader, u32) {
         if keys.len() <= self.hot_shape_keys.len()
             && keys.len() == self.hot_shape_len
             && !self.hot_shape_array.is_null()
@@ -347,16 +351,17 @@ impl<'a> DirectParser<'a> {
                 .zip(keys.iter())
                 .all(|(a, b)| std::ptr::eq(*a, *b))
         {
-            return self.hot_shape_array;
+            return (self.hot_shape_array, self.hot_shape_id);
         }
 
-        let keys_array = parse_shape_keys_array(keys);
+        let (keys_array, shape_id) = parse_shape_keys_array_with_id(keys);
         if keys.len() <= self.hot_shape_keys.len() {
             self.hot_shape_len = keys.len();
             self.hot_shape_keys[..keys.len()].copy_from_slice(keys);
             self.hot_shape_array = keys_array;
+            self.hot_shape_id = shape_id;
         }
-        keys_array
+        (keys_array, shape_id)
     }
 
     #[inline(always)]
@@ -885,6 +890,7 @@ impl<'a> DirectParser<'a> {
                 self.hot_shape_len,
                 self.hot_shape_keys,
                 self.hot_shape_array,
+                self.hot_shape_id,
             ))
         } else {
             None
@@ -897,8 +903,13 @@ impl<'a> DirectParser<'a> {
         if self.peek() == Some(b'}') {
             self.advance();
             let keys: [*const StringHeader; 0] = [];
-            let keys_arr = self.parse_shape_keys_array_hot(&keys);
-            let js_obj = crate::object::object_from_json_fields(&mut self.batch, keys_arr, &[]);
+            let (keys_arr, shape_id) = self.parse_shape_keys_array_hot(&keys);
+            let js_obj = crate::object::object_from_json_fields_preinstalled(
+                &mut self.batch,
+                keys_arr,
+                shape_id,
+                &[],
+            );
             parse_root_restore(saved_roots);
             return JSValue::object_ptr(js_obj as *mut u8);
         }
@@ -981,7 +992,7 @@ impl<'a> DirectParser<'a> {
                 }
             } else {
                 let key_ptr = if warm_shape_matches {
-                    let (expected_len, expected_keys, _) = warm_shape.as_ref().unwrap();
+                    let (expected_len, expected_keys, _, _) = warm_shape.as_ref().unwrap();
                     if warm_shape_slot < *expected_len
                         && json_key_bytes_equal(expected_keys[warm_shape_slot], key_bytes)
                     {
@@ -1025,14 +1036,15 @@ impl<'a> DirectParser<'a> {
             }
         }
         self.expect(b'}');
-        let keys_arr = if let Some((keys, _, _)) = heap_fields.as_ref() {
+        let (keys_arr, shape_id) = if let Some((keys, _, _)) = heap_fields.as_ref() {
             self.parse_shape_keys_array_hot(keys)
         } else if warm_shape_matches
             && warm_shape
                 .as_ref()
-                .is_some_and(|(len, _, _)| *len == inline_len && warm_shape_slot == *len)
+                .is_some_and(|(len, _, _, _)| *len == inline_len && warm_shape_slot == *len)
         {
-            warm_shape.unwrap().2
+            let (_, _, keys_array, shape_id) = warm_shape.unwrap();
+            (keys_array, shape_id)
         } else {
             self.parse_shape_keys_array_hot(&inline_keys[..inline_len])
         };
@@ -1041,7 +1053,12 @@ impl<'a> DirectParser<'a> {
             .map_or(&inline_values[..inline_len], |(_, values, _)| {
                 values.as_slice()
             });
-        let js_obj = crate::object::object_from_json_fields(&mut self.batch, keys_arr, values);
+        let js_obj = crate::object::object_from_json_fields_preinstalled(
+            &mut self.batch,
+            keys_arr,
+            shape_id,
+            values,
+        );
         parse_root_restore(saved_roots);
         JSValue::object_ptr(js_obj as *mut u8)
     }

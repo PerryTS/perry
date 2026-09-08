@@ -103,9 +103,10 @@ pub(crate) unsafe fn object_from_inline_json_fields(
     finish_inline_json_object(raw.cast(), keys, shape_id, fields)
 }
 
-pub(crate) unsafe fn object_from_json_fields(
+pub(crate) unsafe fn object_from_json_fields_preinstalled(
     batch: &mut Option<crate::arena::ConstructionBatch>,
     keys: *mut ArrayHeader,
+    shape_id: u32,
     values: &[JSValue],
 ) -> *mut ObjectHeader {
     let count = values.len();
@@ -115,7 +116,7 @@ pub(crate) unsafe fn object_from_json_fields(
         b.try_alloc(size, crate::gc::GC_TYPE_OBJECT)
     });
     let obj = if raw.is_null() {
-        js_object_alloc_class_inline_keys(0, 0, count as u32, keys)
+        js_object_alloc_class_inline_keys_stamped(0, 0, count as u32, keys, shape_id)
     } else {
         let obj = raw.cast::<ObjectHeader>();
         (*obj).class_id = 0;
@@ -123,8 +124,8 @@ pub(crate) unsafe fn object_from_json_fields(
         // GC_STORE_AUDIT(INIT): fresh record has no metadata edge.
         (*obj).meta = ptr::null_mut();
         // Keep shape publication in the existing mint-and-stamp funnel.
-        let id = shapes::shape_id_for_keys_ensure(keys, count as u32);
-        if !shapes::try_birth_stamp_preinstalled_shape(obj, id, keys, count as u32) {
+        if !shapes::try_birth_stamp_preinstalled_shape(obj, shape_id, keys, count as u32) {
+            let id = shapes::shape_id_for_keys_ensure(keys, count as u32);
             set_object_keys_array_with_live(obj, keys, count as u32);
             shapes::birth_stamp_object_shape(obj, id, count as u32);
         }
