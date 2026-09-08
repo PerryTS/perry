@@ -121,6 +121,7 @@ _CODEGEN_SUITES = [
     "constructor_recursion",
     "destructure_call_location",
     "export_function_alias_identity",
+    "generated_inline_budget",
     "i64_spec_ternary_recursion",
     "ios_platform_api_lowering",
     "large_object_barriers",
