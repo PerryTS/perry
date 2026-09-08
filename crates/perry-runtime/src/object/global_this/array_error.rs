@@ -223,6 +223,7 @@ pub(crate) fn is_native_error_subclass_constructor(name: &str) -> bool {
             | "EvalError"
             | "URIError"
             | "AggregateError"
+            | "SuppressedError"
     )
 }
 
