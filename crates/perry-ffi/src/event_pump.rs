@@ -167,14 +167,23 @@ mod tests {
             return;
         }
 
-        // Exercise the public FFI registration seam and the actual runtime
-        // entry point. Never call drain_quarantined_handles directly here.
-        register_aux_event_pump(lifecycle_probe, lifecycle_idle);
+        // Allocation must install the lifecycle hook even when no extension
+        // event pump has been initialized. Never drain the quarantine directly.
         let prior_tick = crate::register_handle(10_u64);
         assert!(crate::drop_handle(prior_tick));
         let held = crate::register_handle(20_u64);
         assert_ne!(held, prior_tick, "retired ids wait for the next outer tick");
+        unsafe { js_run_stdlib_pump() };
+        let allocation_only = crate::register_handle(15_u64);
+        assert_eq!(
+            allocation_only, prior_tick,
+            "allocation installs the tick hook"
+        );
+        assert!(crate::drop_handle(allocation_only));
 
+        // Now exercise the public extension registration seam and actual
+        // callback dispatch, including re-entry within an outer tick.
+        register_aux_event_pump(lifecycle_probe, lifecycle_idle);
         unsafe { js_run_stdlib_pump() };
         assert_eq!(LIFECYCLE_PHASE.load(Ordering::SeqCst), 2);
         assert_eq!(CALLBACK_HANDLE.load(Ordering::SeqCst), prior_tick);

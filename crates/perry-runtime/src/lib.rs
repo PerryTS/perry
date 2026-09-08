@@ -861,6 +861,54 @@ pub(crate) mod stdlib_pump {
         }
 
         #[test]
+        fn overlapping_outer_guards_share_a_tick_and_restore_one_contribution() {
+            use std::sync::mpsc;
+            use std::time::Duration;
+
+            assert_eq!(pump_depth_savepoint(), 0);
+            assert_eq!(ACTIVE_OUTER_PUMPS.load(Ordering::Acquire), 0);
+            js_register_aux_tick_begin(counting_tick_begin);
+            let ticks_before = TICK_BEGIN_CALLS.load(AtomicOrdering::SeqCst);
+            let (outer, is_outer) = PumpDepthGuard::enter();
+            assert!(is_outer);
+            let (joined_tx, joined_rx) = mpsc::channel();
+            let (release_tx, release_rx) = mpsc::channel();
+            let worker = std::thread::spawn(move || {
+                // Only exercise lifecycle bookkeeping on this thread, not
+                // runtime callbacks or thread-owned GC state.
+                let (guard, is_outer) = PumpDepthGuard::enter();
+                joined_tx.send(is_outer).unwrap();
+                release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+                drop(guard);
+            });
+            assert!(joined_rx.recv_timeout(Duration::from_secs(5)).unwrap());
+            assert_eq!(ACTIVE_OUTER_PUMPS.load(Ordering::Acquire), 2);
+            assert_eq!(
+                TICK_BEGIN_CALLS.load(AtomicOrdering::SeqCst),
+                ticks_before + 1
+            );
+
+            // Eager exception restoration removes this thread's contribution,
+            // but cannot end the other thread's still-active logical tick.
+            pump_depth_restore(0);
+            assert_eq!(ACTIVE_OUTER_PUMPS.load(Ordering::Acquire), 1);
+            drop(outer);
+            assert_eq!(ACTIVE_OUTER_PUMPS.load(Ordering::Acquire), 1);
+            release_tx.send(()).unwrap();
+            worker.join().unwrap();
+            assert_eq!(ACTIVE_OUTER_PUMPS.load(Ordering::Acquire), 0);
+
+            let (next, is_outer) = PumpDepthGuard::enter();
+            assert!(is_outer);
+            assert_eq!(
+                TICK_BEGIN_CALLS.load(AtomicOrdering::SeqCst),
+                ticks_before + 2
+            );
+            drop(next);
+            assert_eq!(ACTIVE_OUTER_PUMPS.load(Ordering::Acquire), 0);
+        }
+
+        #[test]
         fn caught_throw_restores_pump_depth_and_guard_drops_are_idempotent() {
             let base_depth = pump_depth_savepoint();
             let base_try = crate::exception::test_try_depth();
