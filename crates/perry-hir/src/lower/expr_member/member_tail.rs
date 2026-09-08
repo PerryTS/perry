@@ -304,11 +304,12 @@ pub(crate) fn lower_member_tail(
                             .unwrap_or(false);
                     // #4627: `String.fromCharCode` / `fromCodePoint` / `raw` are
                     // reified statics — value reads need the reified String
-                    // receiver for correct `.name`/`.length`. Explicit member
-                    // list (NOT the whole namespace) so only the reified statics
-                    // are rerouted.
-                    let outer_is_reified_string_static_value = !member_is_call_callee
-                        && property == "String"
+                    // receiver for correct `.name`/`.length`. Spread calls also
+                    // reach this path after declining the scalar intrinsics;
+                    // keep their receiver so CallSpread can invoke that same
+                    // variadic function. Non-spread calls are handled earlier.
+                    // Only the explicitly reified statics are rerouted.
+                    let outer_is_reified_string_static_value = property == "String"
                         && outer_static_member
                             .map(|member| {
                                 matches!(member, "fromCharCode" | "fromCodePoint" | "raw")
