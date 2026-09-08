@@ -29,6 +29,57 @@ pub(super) use static_import_bindings::{
     import_is_runtime_erased, pre_register_static_import_bindings,
 };
 
+/// Exporting a local variable depends on the binding, not its initializer.
+/// In particular, specialized HIR such as SetNewFromArray and Binary must
+/// have the same module storage/getters as literals or generic calls (#9778).
+/// Run after lowering the complete module so `export { x }; const x = ...`
+/// and declarations without initializers work too.
+pub(super) fn register_exported_local_variables(module: &mut Module) {
+    fn collect_names<'a>(stmts: &'a [Stmt], names: &mut std::collections::HashSet<&'a str>) {
+        for stmt in stmts {
+            match stmt {
+                Stmt::Let { name, .. } => {
+                    names.insert(name);
+                }
+                // Array-pattern declarations put their bindings inside the
+                // IteratorClose scaffolding; mirror module_globals_emit's
+                // storage walk without descending into closures or loops.
+                Stmt::Try {
+                    body,
+                    catch,
+                    finally,
+                } => {
+                    collect_names(body, names);
+                    if let Some(catch) = catch {
+                        collect_names(&catch.body, names);
+                    }
+                    if let Some(finally) = finally {
+                        collect_names(finally, names);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut locals = std::collections::HashSet::new();
+    collect_names(&module.init, &mut locals);
+    let mut registered: std::collections::HashSet<String> =
+        module.exported_objects.iter().cloned().collect();
+    for export in &module.exports {
+        if let Export::Named { local, exported } = export {
+            if locals.contains(local.as_str()) {
+                // Both names are consumed by existing importer/getter paths;
+                // codegen derives storage ownership from Export::Named.local.
+                for name in [local, exported] {
+                    if registered.insert(name.clone()) {
+                        module.exported_objects.push(name.clone());
+                    }
+                }
+            }
+        }
+    }
+}
+
 pub(crate) fn lower_module_decl(
     ctx: &mut LoweringContext,
     module: &mut Module,
@@ -1552,126 +1603,8 @@ pub(crate) fn lower_module_decl(
                             }
                         }
 
-                        // Check if the variable is a closure or other exportable object
-                        // by looking through init statements. For #460: also catch let
-                        // bindings whose init is a function-reference value
-                        // (`const _await = core.deferredAwait`) — without this branch
-                        // the renamed export `_await as await` produces no backing
-                        // global / getter at all and `_perry_fn_<mod>__await` link-fails.
-                        for stmt in &module.init {
-                            if let Stmt::Let {
-                                name,
-                                init: Some(init_expr),
-                                ..
-                            } = stmt
-                            {
-                                if name == &local {
-                                    let is_exportable = matches!(
-                                        init_expr,
-                                        Expr::Closure { .. }
-                                            | Expr::Object(_)
-                                            | Expr::Array(_)
-                                            | Expr::SetNew
-                                            | Expr::SetNewFromArray(_)
-                                            | Expr::Call { .. }
-                                            | Expr::New { .. }
-                                            | Expr::JsNew { .. }
-                                            | Expr::LocalGet(_)
-                                            | Expr::FuncRef(_)
-                                            | Expr::ExternFuncRef { .. }
-                                            | Expr::PropertyGet { .. }
-                                            // A const aliasing a class STATIC field value
-                                            // (`const stringType = ZodString.create;
-                                            // export { stringType as string }`) lowers its
-                                            // init to `StaticFieldGet`. Like `PropertyGet`
-                                            // above it must flow through `exported_objects`
-                                            // so the importer reads the const's value via the
-                                            // module getter instead of link-failing to a
-                                            // nonexistent `perry_fn_<src>__<name>` symbol
-                                            // (which made the call return `undefined`). zod's
-                                            // `z.string`/`z.number`/… are all this shape.
-                                            | Expr::StaticFieldGet { .. }
-                                            // #421 fix (v0.5.574): primitive literals must
-                                            // also flow through `exported_objects` so the
-                                            // importing module's `imported_vars` set picks
-                                            // them up — without this, `var X = "literal";
-                                            // export { X };` (the shape hono / drizzle /
-                                            // any prebundled JS uses for string / number
-                                            // constants) gets imported as a closure-pointer
-                                            // wrapper instead of the actual value, and
-                                            // `typeof X` returns "function" + `X.toString`
-                                            // prints `[object Object]`.
-                                            | Expr::String(_)
-                                            | Expr::Number(_)
-                                            | Expr::Bool(_)
-                                            | Expr::BigInt(_)
-                                            | Expr::Null
-                                            | Expr::Undefined
-                                            // #7964: renamed RegExp literals are values too.
-                                            // Zod exports `_null as null` and `_undefined as
-                                            // undefined`; omitting these from exported_objects
-                                            // leaves the namespace populator calling getters
-                                            // that the producer never emits.
-                                            | Expr::RegExp { .. }
-                                            // Refs #420 (drizzle): `const entityKind = Symbol.for(...)`
-                                            // followed by `export { entityKind }` must register the
-                                            // local as an exported variable so importing modules
-                                            // pick it up via `imported_vars` (and route through the
-                                            // getter, not as a closure pointer).
-                                            | Expr::SymbolFor(_)
-                                            // Plain `const X = Symbol(); export { X }` — same as
-                                            // SymbolFor above, but for unregistered symbols. Without
-                                            // this the local isn't promoted to a shared module global,
-                                            // so an importer gets a DIFFERENT symbol than the defining
-                                            // module's binding and `imported === X` is false. Hono's
-                                            // RegExpRouter does exactly this with `PATH_ERROR`, so its
-                                            // `e === PATH_ERROR` route-fallback check failed and a bare
-                                            // Symbol escaped `app.fetch`.
-                                            | Expr::SymbolNew(_)
-                                            // Issue #923: `const pool = mysql.createPool(...)`
-                                            // followed by `export { pool }` lowers the init to
-                                            // `Expr::NativeMethodCall` (not `Expr::Call`) because
-                                            // `mysql` is a registered native-module alias and the
-                                            // factory call resolves to the stdlib FFI dispatch.
-                                            // Without this branch, `pool` never lands in
-                                            // `exported_objects`, the producer-side getter
-                                            // `perry_fn_<src>__pool` is never emitted, and the
-                                            // consumer-side `ExternFuncRef { name: "pool" }` falls
-                                            // through to the closure-wrapper path
-                                            // (`__perry_wrap_perry_fn_<src>__pool`) which #836's
-                                            // Sub-bug B emits as a no-op returning undefined. End
-                                            // result: link succeeds but `typeof pool === "function"`
-                                            // and `pool.execute(...)` segfaults. Mirroring the
-                                            // inline-export shape (`export const pool = ...` at
-                                            // line ~5087) makes both export forms equivalent.
-                                            //
-                                            // Covers every stdlib factory pattern: `mysql2/promise`
-                                            // `createPool` / `createConnection`, `net.createConnection`,
-                                            // `http.createServer`, `pg.connect`, `ioredis`
-                                            // constructors, `tls.connect`, and any other
-                                            // factory the codegen already lowers to a
-                                            // `NativeMethodCall` via lookup_native_module.
-                                            | Expr::NativeMethodCall { .. }
-                                    );
-                                    if is_exportable {
-                                        module.exported_objects.push(exported.clone());
-                                        // Ensure the LOCAL name also surfaces as
-                                        // exported — that's what gates the global
-                                        // emission in codegen (`exported_var_names`
-                                        // is built from `exported_objects`).
-                                        // Without the local entry, `_await`'s id
-                                        // is never registered in `module_globals`,
-                                        // so even the local-name getter is missing
-                                        // and call sites that resolve through the
-                                        // local name fall through to undefined.
-                                        if !module.exported_objects.contains(&local) {
-                                            module.exported_objects.push(local.clone());
-                                        }
-                                    }
-                                    break;
-                                }
-                            }
-                        }
+                        // Variable exports are registered after all declarations
+                        // are lowered, independently of their initializer shape.
                     }
                 }
             }
