@@ -7,9 +7,20 @@ FROM ${OLD_GLIBC_IMAGE}
 # The archived slim image has no CA bundle. Debian Release signatures are still
 # checked while bootstrapping ca-certificates; only TLS peer validation is
 # disabled for this first signed archive fetch.
+#
+# BOTH suites need `check-valid-until=no`. Bullseye is EOL, so nobody refreshes
+# its Release files and apt rejects them once Valid-Until passes:
+#
+#   E: Release file for .../bullseye-security/InRelease is expired
+#      (invalid since 14h 44min 50s)
+#
+# The security suite's Release carried `Valid-Until: Mon, 07 Sep 2026 21:13:04
+# UTC` and expired mid-release (run 34197616242, both Linux legs). The packages
+# themselves still serve 200 — only the metadata is stale — so disabling the
+# freshness check is the documented fix, and `main` above has always used it.
 RUN printf '%s\n' \
       'deb [check-valid-until=no] https://archive.debian.org/debian bullseye main' \
-      'deb https://deb.debian.org/debian-security bullseye-security main' \
+      'deb [check-valid-until=no] https://deb.debian.org/debian-security bullseye-security main' \
       > /etc/apt/sources.list \
     && apt-get -o Acquire::https::Verify-Peer=false update \
     && DEBIAN_FRONTEND=noninteractive apt-get \
