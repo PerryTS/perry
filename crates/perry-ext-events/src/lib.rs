@@ -28,7 +28,7 @@ use perry_ffi::{
 };
 use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
-use std::sync::{Mutex, MutexGuard, Once, OnceLock};
+use std::sync::Once;
 
 mod error_monitor;
 use error_monitor::dispatch_error_monitor;
@@ -415,80 +415,22 @@ impl EventEmitterHandle {
     }
 }
 
-type EventEmitterRegistry = Vec<Option<Box<EventEmitterHandle>>>;
+mod registry;
+#[cfg(test)]
+use registry::drop_event_emitter_handle;
+pub use registry::{
+    acquire_event_emitter_registration, drain_quarantined_event_emitter_handles,
+    event_emitter_registration, event_emitter_registry_domain,
+};
+use registry::{
+    get_event_emitter_mut, is_local_event_emitter_handle, lock_event_emitters,
+    register_event_emitter_handle,
+};
 
-static EVENT_EMITTERS: OnceLock<Mutex<EventEmitterRegistry>> = OnceLock::new();
 static EVENTS_RUNTIME_HOOKS_REGISTERED: Once = Once::new();
 
 thread_local! {
     static EVENTS_GC_REGISTERED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-fn event_emitters() -> &'static Mutex<EventEmitterRegistry> {
-    EVENT_EMITTERS.get_or_init(|| Mutex::new(Vec::new()))
-}
-
-fn lock_event_emitters() -> MutexGuard<'static, EventEmitterRegistry> {
-    event_emitters()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
-fn handle_index(handle: Handle) -> Option<usize> {
-    if !(EVENT_EMITTER_HANDLE_ID_START..EVENT_EMITTER_HANDLE_ID_END).contains(&handle) {
-        return None;
-    }
-    Some((handle - EVENT_EMITTER_HANDLE_ID_START) as usize)
-}
-
-fn register_event_emitter_handle(value: EventEmitterHandle) -> Handle {
-    let mut registry = lock_event_emitters();
-    if let Some((idx, slot)) = registry
-        .iter_mut()
-        .enumerate()
-        .find(|(_, slot)| slot.is_none())
-    {
-        *slot = Some(Box::new(value));
-        return EVENT_EMITTER_HANDLE_ID_START + idx as Handle;
-    }
-    let handle = EVENT_EMITTER_HANDLE_ID_START + registry.len() as Handle;
-    if handle >= EVENT_EMITTER_HANDLE_ID_END {
-        panic!("perry-ext-events handle id range exhausted");
-    }
-    registry.push(Some(Box::new(value)));
-    handle
-}
-
-fn event_emitter_ptr(handle: Handle) -> Option<*mut EventEmitterHandle> {
-    let idx = handle_index(handle)?;
-    let mut registry = lock_event_emitters();
-    let slot = registry.get_mut(idx)?.as_mut()?;
-    Some(&mut **slot as *mut EventEmitterHandle)
-}
-
-fn get_event_emitter_mut(handle: Handle) -> Option<&'static mut EventEmitterHandle> {
-    let ptr = event_emitter_ptr(handle)?;
-    Some(unsafe { &mut *ptr })
-}
-
-fn is_local_event_emitter_handle(handle: Handle) -> bool {
-    let Some(idx) = handle_index(handle) else {
-        return false;
-    };
-    let registry = lock_event_emitters();
-    registry.get(idx).is_some_and(|slot| slot.is_some())
-}
-
-#[cfg(test)]
-fn drop_event_emitter_handle(handle: Handle) -> bool {
-    let Some(idx) = handle_index(handle) else {
-        return false;
-    };
-    let mut registry = lock_event_emitters();
-    let Some(slot) = registry.get_mut(idx) else {
-        return false;
-    };
-    slot.take().is_some()
 }
 
 unsafe extern "C" fn event_emitter_handle_probe(handle: i64) -> bool {

@@ -3,14 +3,16 @@
 //! Since we can't pass Rust ownership across FFI, we store objects in a
 //! registry and return integer handles to JavaScript.
 //!
-//! Uses DashMap for lock-free concurrent access, avoiding deadlocks that
-//! would occur with Mutex-based approaches.
+//! Payload-map locks never overlap the native registration-state mutex.
 
 use std::any::Any;
-use std::sync::atomic::{AtomicI64, Ordering};
 
 use dashmap::DashMap;
 use once_cell::sync::Lazy;
+use perry_ffi::{
+    NativeLeaseKind, NativeQuarantine, NativeRegistrationIdentity, NativeRegistrationKind,
+    NativeRegistrationLease, NativeRegistrationRegistry, NativeRegistryDomain,
+};
 
 /// Handle type - an opaque integer identifier for a managed object
 pub type Handle = i64;
@@ -26,34 +28,57 @@ const COMMON_HANDLE_ID_START: Handle = 1;
 const COMMON_HANDLE_ID_END: Handle =
     perry_runtime::value::addr_class::COMMON_HANDLE_BAND_END as Handle;
 
-/// Next handle ID (0 is reserved for invalid/null). The visible low range stops
-/// before Web Fetch's pointer-tagged handle band so generic dispatch cannot
-/// confuse native wrappers with Fetch Request/Headers/Response handles.
-static NEXT_HANDLE: AtomicI64 = AtomicI64::new(COMMON_HANDLE_ID_START);
+static REGISTRATIONS: Lazy<NativeRegistrationRegistry> = Lazy::new(|| {
+    NativeRegistrationRegistry::new(COMMON_HANDLE_ID_START, COMMON_HANDLE_ID_END, 64 * 1024)
+});
 
-fn next_handle_id() -> Handle {
-    let handle = NEXT_HANDLE.fetch_add(1, Ordering::SeqCst);
-    if handle >= COMMON_HANDLE_ID_END {
-        panic!("common native handle id range exhausted before reserved Web handle bands");
-    }
-    handle
+pub fn common_handle_registry_domain() -> NativeRegistryDomain {
+    REGISTRATIONS.domain()
 }
 
-/// Register an object and get a handle to it
+pub fn common_handle_registration(handle: Handle) -> Option<NativeRegistrationIdentity> {
+    REGISTRATIONS.identity(handle)
+}
+
+pub fn acquire_common_handle_registration(
+    identity: NativeRegistrationIdentity,
+    kind: NativeLeaseKind,
+) -> Option<NativeRegistrationLease> {
+    REGISTRATIONS.acquire(identity, kind)
+}
+
+/// Native preparation API. Existing publication paths do not drive this drain.
+pub fn drain_quarantined_common_handles() -> usize {
+    REGISTRATIONS.drain(std::time::Instant::now())
+}
+
 pub fn register_handle<T: 'static + Send + Sync>(value: T) -> Handle {
-    let handle = next_handle_id();
-    HANDLES.insert(handle, Box::new(value));
-    if perry_runtime::hot_diag::receiver_repr_on() {
-        perry_runtime::hot_diag::receiver_repr_note_constructed(
-            perry_runtime::hot_diag::ReceiverReprFamily::Common,
-        );
-    }
-    handle
+    let identity = REGISTRATIONS
+        .begin_registration(NativeRegistrationKind::Payload)
+        .expect("common native handle registration exhausted");
+    publish_payload(value, identity)
 }
 
-/// Register an object with a specific ID
+/// Explicit insertion rejects any slot that has not completed retirement,
+/// quarantine, and lease release. It never replaces an existing payload.
 pub fn register_handle_with_id<T: 'static + Send + Sync>(value: T, handle: Handle) -> Handle {
-    HANDLES.insert(handle, Box::new(value));
+    let identity = REGISTRATIONS
+        .begin_registration_with_id(handle, NativeRegistrationKind::Payload)
+        .expect("common explicit native handle id is unavailable");
+    publish_payload(value, identity)
+}
+
+fn publish_payload<T: 'static + Send + Sync>(
+    value: T,
+    identity: NativeRegistrationIdentity,
+) -> Handle {
+    let handle = identity.numeric_id();
+    let previous = HANDLES.insert(handle, Box::new(value));
+    assert!(
+        previous.is_none(),
+        "pending Common id must have an empty payload slot"
+    );
+    assert!(REGISTRATIONS.publish(identity));
     if perry_runtime::hot_diag::receiver_repr_on() {
         perry_runtime::hot_diag::receiver_repr_note_constructed(
             perry_runtime::hot_diag::ReceiverReprFamily::Common,
@@ -97,15 +122,20 @@ pub fn get_handle_mut<T: 'static + Send + Sync>(handle: Handle) -> Option<&'stat
 
 /// Remove and return a registered object
 pub fn take_handle<T: 'static + Send + Sync>(handle: Handle) -> Option<T> {
-    HANDLES
-        .remove(&handle)
-        .and_then(|(_, boxed)| boxed.downcast::<T>().ok())
-        .map(|b| *b)
+    remove_payload(handle)
+        .and_then(|boxed| boxed.downcast::<T>().ok())
+        .map(|boxed| *boxed)
 }
 
-/// Remove a handle without returning the value (drop it)
 pub fn drop_handle(handle: Handle) -> bool {
-    HANDLES.remove(&handle).is_some()
+    remove_payload(handle).is_some()
+}
+
+fn remove_payload(handle: Handle) -> Option<Box<dyn Any + Send + Sync>> {
+    let identity = REGISTRATIONS.begin_retirement(handle, NativeRegistrationKind::Payload)?;
+    let removed = HANDLES.remove(&handle).map(|(_, boxed)| boxed);
+    assert!(REGISTRATIONS.finish_retirement(identity, NativeQuarantine::NextDrain));
+    removed
 }
 
 /// Check if a handle exists
@@ -174,13 +204,16 @@ where
 
 /// Clone a handle's value if it implements Clone
 pub fn clone_handle<T: 'static + Send + Sync + Clone>(handle: Handle) -> Option<Handle> {
-    HANDLES.get(&handle).and_then(|entry| {
-        entry
-            .value()
-            .downcast_ref::<T>()
-            .map(|value| register_handle(value.clone()))
-    })
+    let cloned = HANDLES
+        .get(&handle)
+        .and_then(|entry| entry.value().downcast_ref::<T>().cloned());
+    cloned.map(register_handle)
 }
+
+// Adapter tests share ordering with the original handle tests. They do not
+// drive the process-global Common drain: other stdlib modules still use bare ids.
+#[cfg(test)]
+static REGISTRATION_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(test)]
 mod tests {
@@ -188,6 +221,9 @@ mod tests {
 
     #[test]
     fn test_register_and_get() {
+        let _serial = REGISTRATION_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
         let value = String::from("test");
         let handle = register_handle(value);
 
@@ -201,6 +237,9 @@ mod tests {
 
     #[test]
     fn test_take_handle() {
+        let _serial = REGISTRATION_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
         let value = 42i32;
         let handle = register_handle(value);
 
@@ -212,3 +251,7 @@ mod tests {
         assert!(retrieved.is_none());
     }
 }
+
+#[cfg(test)]
+#[path = "handle_registration_tests.rs"]
+mod registration_tests;
