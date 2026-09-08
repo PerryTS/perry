@@ -1258,6 +1258,49 @@ mod tests {
     }
 
     #[test]
+    fn cross_module_imported_static_receiver_stays_in_source_module() {
+        // HIR also uses StaticMethodCall for uppercase imported object values.
+        // #9023 deliberately keeps class-bearing calls at their source, where
+        // the receiver import is available; do not require the old localizer
+        // strategy merely because it also avoided the dangling receiver.
+        let mut source = Module::new("/accessor.js");
+        source.imports.push(perry_hir::Import {
+            source: "/state.js".to_string(),
+            specifiers: vec![ImportSpecifier::Named {
+                imported: "Settings".to_string(),
+                local: "Registry".to_string(),
+            }],
+            is_native: false,
+            module_kind: ModuleKind::NativeCompiled,
+            resolved_path: Some("/state.js".to_string()),
+            type_only: false,
+            runtime_erased: false,
+            is_dynamic: false,
+            is_dynamic_target: false,
+            is_deferred_require: false,
+            is_adopted_require: false,
+        });
+        let mut root = function(
+            1,
+            vec![Stmt::Return(Some(Expr::StaticMethodCall {
+                class_name: "Registry".to_string(),
+                method_name: "of".to_string(),
+                args: vec![Expr::Object(Vec::new())],
+            }))],
+        );
+        root.name = "store".to_string();
+        root.is_exported = true;
+        source.functions.push(root);
+        source.exported_functions.push(("store".to_string(), 1));
+        assert!(gather_cross_module_functions(&source).is_empty());
+        assert!(matches!(
+            &source.functions[0].body[0],
+            Stmt::Return(Some(Expr::StaticMethodCall { class_name, .. }))
+                if class_name == "Registry"
+        ));
+    }
+
+    #[test]
     fn cross_module_free_function_cycle_is_rejected() {
         let mut source = Module::new("/src/cycle.ts");
         let call = |id| {

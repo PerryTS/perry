@@ -610,7 +610,11 @@ fn is_async_dispose_symbol_index(index: &Expr) -> bool {
 pub(crate) fn index_object_is_class_or_proto_ref(ctx: &FnCtx<'_>, object: &Expr) -> bool {
     match object {
         Expr::ClassRef(_) => true,
-        Expr::ExternFuncRef { name, .. } => ctx.class_ids.contains_key(name),
+        Expr::ExternFuncRef { name, .. } => {
+            !ctx.imported_vars.contains(name)
+                && !ctx.namespace_imports.contains(name)
+                && ctx.class_ids.contains_key(name)
+        }
         Expr::LocalGet(id) => ctx
             .local_id_to_name
             .get(id)
