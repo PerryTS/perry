@@ -1118,6 +1118,11 @@ fn synthetic_arguments_only_method_uses_shape_guarded_direct_call() {
 
 #[test]
 fn typed_feedback_guards_direct_closure_call_specialization() {
+    // This test asserts the non-recording lane. Join the env-mutating tests'
+    // lock and pin that lane, including when the parent enables profiling.
+    let _lock = env_lock();
+    let _feedback = EnvVarGuard::set("PERRY_TYPED_FEEDBACK", None);
+    let _trace = EnvVarGuard::set("PERRY_TYPED_FEEDBACK_TRACE", None);
     let closure_ty = Type::Function(FunctionType {
         params: vec![("x".to_string(), Type::Number, false)],
         return_type: Box::new(Type::Number),
