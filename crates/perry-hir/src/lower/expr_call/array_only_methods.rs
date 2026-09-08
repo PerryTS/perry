@@ -430,6 +430,15 @@ pub(super) fn try_array_only_methods(
                             return Ok(Err(args));
                         }
                         let ty = ctx.lookup_local_type(&n);
+                        // A structural object is not an Array. The earlier
+                        // local-array pass already declines these receivers;
+                        // do not recapture them here merely because their own
+                        // method has an Array name. In particular,
+                        // `utility.forEach(items, callback)` must not treat
+                        // `items` as Array.prototype.forEach's callback.
+                        if matches!(ty, Some(Type::Object(_))) {
+                            return Ok(Err(args));
+                        }
                         let class_typed = ty
                             .as_ref()
                             .map(|t| {
