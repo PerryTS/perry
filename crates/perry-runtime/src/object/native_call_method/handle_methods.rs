@@ -166,16 +166,16 @@ pub(super) unsafe fn dispatch_handle(
         // objects do not expose Array methods as properties, but this dynamic
         // dispatch path preserves the borrowed Array.prototype.slice behavior.
         if method_name == "slice" {
+            let live_raw = crate::value::js_nanbox_get_pointer(object_handle.get_nanbox_f64());
             if let Some(args_arr) =
-                crate::object::arguments_object_to_array(raw_ptr as *const ObjectHeader)
+                crate::object::arguments_object_to_array(live_raw as *const ObjectHeader)
             {
                 let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
                 let arg_value = |i: usize| -> f64 {
-                    if i < args_len && !args_ptr.is_null() {
-                        *args_ptr.add(i)
-                    } else {
-                        undefined
-                    }
+                    arg_handles
+                        .get(i)
+                        .map(crate::gc::RuntimeHandle::get_nanbox_f64)
+                        .unwrap_or(undefined)
                 };
                 let result =
                     crate::array::js_array_slice_values(args_arr, arg_value(0), arg_value(1));
@@ -337,18 +337,20 @@ pub(super) unsafe fn dispatch_handle(
                     // the fallthrough returned the static `NULL_OBJECT_BYTES`
                     // sentinel and the next chained operation segfaulted.
                     "slice" => {
-                        let arr = raw_ptr as *const crate::array::ArrayHeader;
+                        let live_raw =
+                            crate::value::js_nanbox_get_pointer(object_handle.get_nanbox_f64())
+                                as usize;
+                        let arr = live_raw as *const crate::array::ArrayHeader;
                         let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
                         let arg_value = |i: usize| -> f64 {
-                            if i < args_len && !args_ptr.is_null() {
-                                *args_ptr.add(i)
-                            } else {
-                                undefined
-                            }
+                            arg_handles
+                                .get(i)
+                                .map(crate::gc::RuntimeHandle::get_nanbox_f64)
+                                .unwrap_or(undefined)
                         };
                         let result = if let Some(args_arr) =
                             crate::object::arguments_object_to_array(
-                                raw_ptr as *const crate::object::ObjectHeader,
+                                live_raw as *const crate::object::ObjectHeader,
                             ) {
                             crate::array::js_array_slice_values(
                                 args_arr,
@@ -370,47 +372,33 @@ pub(super) unsafe fn dispatch_handle(
                     // the removed elements. Extra args after deleteCount are
                     // inserted at `start`.
                     "splice" => {
-                        let arr = raw_ptr as *mut crate::array::ArrayHeader;
-                        // ToIntegerOrInfinity with i32 clamping: NaN → 0,
-                        // +Infinity → i32::MAX (clamps to len downstream),
-                        // -Infinity → i32::MIN (relative-from-end → 0). The
-                        // old `is_infinite() → 0` made `splice(Infinity, 3)`
-                        // delete from the front (test262 S15.4.4.12_A2.1_T3).
-                        let arg_i32 = |i: usize| -> i32 {
-                            if i < args_len && !args_ptr.is_null() {
-                                crate::array::js_array_splice_delete_count(*args_ptr.add(i))
-                            } else {
-                                0
-                            }
+                        let arr =
+                            crate::value::js_nanbox_get_pointer(object_handle.get_nanbox_f64())
+                                as *mut crate::array::ArrayHeader;
+                        let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+                        let arg_value = |i: usize| -> f64 {
+                            arg_handles
+                                .get(i)
+                                .map(crate::gc::RuntimeHandle::get_nanbox_f64)
+                                .unwrap_or(undefined)
                         };
-                        let start = if args_len >= 1 { arg_i32(0) } else { 0 };
-                        // Per spec: splice() deletes nothing, while
-                        // splice(start) deletes through the end.
-                        let delete_count = if args_len == 0 {
-                            0
-                        } else if args_len == 1 {
-                            i32::MAX
+                        let start = arg_value(0);
+                        let delete_count = arg_value(1);
+                        let items_count = args_len.saturating_sub(2);
+                        let refreshed = refreshed_args();
+                        let items_ptr = if items_count > 0 {
+                            refreshed.as_ptr().add(2)
                         } else {
-                            arg_i32(1)
-                        };
-                        // Items to insert are args[2..].
-                        let items: Vec<f64> = if args_len > 2 && !args_ptr.is_null() {
-                            std::slice::from_raw_parts(args_ptr.add(2), args_len - 2).to_vec()
-                        } else {
-                            Vec::new()
-                        };
-                        let items_ptr = if items.is_empty() {
                             std::ptr::null()
-                        } else {
-                            items.as_ptr()
                         };
                         let mut out_arr: *mut crate::array::ArrayHeader = std::ptr::null_mut();
-                        let deleted = crate::array::js_array_splice(
+                        let deleted = crate::array::js_array_splice_values(
                             arr,
                             start,
                             delete_count,
+                            args_len.min(2) as u32,
                             items_ptr,
-                            items.len() as u32,
+                            items_count as u32,
                             &mut out_arr,
                         );
                         return Some(f64::from_bits(JSValue::pointer(deleted as *mut u8).bits()));

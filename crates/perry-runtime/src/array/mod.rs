@@ -248,6 +248,7 @@ pub use self::sort::{
 };
 pub use self::splice_slice::{
     js_array_slice, js_array_slice_values, js_array_splice, js_array_splice_delete_count,
+    js_array_splice_values,
 };
 
 pub(crate) use self::alloc::array_length_from_property_value_or_throw;

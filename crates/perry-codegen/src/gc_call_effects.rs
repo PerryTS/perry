@@ -262,7 +262,6 @@ pub(crate) fn classify_direct_callee(name: &str) -> GcCallEffect {
         | "js_array_push_f64"
         | "js_array_push_u31_with_length"
         | "js_array_length"
-        | "js_array_slice_values"
         // Second audit round (2026-08-01): ctor-return semantics check
         // (inspects the returned value, calls nothing), strict-equality
         // indexOf scan (strict equality never runs user code), and the two

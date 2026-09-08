@@ -473,7 +473,7 @@ unsafe fn create_index_data_property(result: f64, index: usize, value: f64) -> b
 /// `Construct`-produced object goes through `OrdinarySet` (honoring an
 /// inherited `length` accessor — a poisoned setter throws and propagates,
 /// a failed write throws in the strict path).
-unsafe fn set_result_length(result: f64, len: usize) {
+pub(super) unsafe fn set_result_length(result: f64, len: usize) {
     if jsv_is_array(result) {
         let arr = crate::value::js_nanbox_get_pointer(result) as *mut ArrayHeader;
         crate::array::js_array_set_length(arr, len as f64);
