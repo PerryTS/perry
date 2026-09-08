@@ -934,6 +934,22 @@ fn args_key(args: &CompileArgs, output_path: &Path, project_root: &Path) -> Stri
     hash_field(&mut hasher, "args-debug", &format!("{args:?}"));
     hash_field(&mut hasher, "input", &absolute_identity(&args.input));
     hash_field(&mut hasher, "output", &absolute_identity(output_path));
+    if let Some(root) = &args.bunfs_root {
+        // Adding/removing/changing loader metadata changes registration code,
+        // even when every JS module and embedded byte is otherwise unchanged.
+        match fs::read(root.join("unbun-manifest.json")) {
+            Ok(bytes) => hash_field(
+                &mut hasher,
+                "bunfs-loader-manifest",
+                &hex::encode(Sha256::digest(bytes)),
+            ),
+            Err(error) => hash_field(
+                &mut hasher,
+                "bunfs-loader-manifest-absent",
+                &format!("{:?}", error.kind()),
+            ),
+        }
+    }
     hash_field(
         &mut hasher,
         "target",

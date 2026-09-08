@@ -42,6 +42,8 @@ struct EmbeddedAsset {
     /// Registry key — the embed-relative path, e.g. `dist/index.html`.
     name: String,
     bytes: &'static [u8],
+    /// Explicit loader metadata, never inferred from the file extension.
+    text_module: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -99,6 +101,32 @@ pub unsafe extern "C" fn js_register_embedded_asset(
     bytes_ptr: *const u8,
     bytes_len: usize,
 ) {
+    register_asset(name_ptr, name_len, bytes_ptr, bytes_len, false);
+}
+
+/// Register a Bun text-loader module as both readable bytes and a require-able
+/// string. Its extension may be `.md`, `.html`, or anything else; the compiler
+/// calls this only when extraction metadata explicitly declares the text loader.
+///
+/// # Safety
+/// Same immortal byte-range contract as [`js_register_embedded_asset`].
+#[no_mangle]
+pub unsafe extern "C" fn js_register_embedded_text_asset(
+    name_ptr: *const u8,
+    name_len: usize,
+    bytes_ptr: *const u8,
+    bytes_len: usize,
+) {
+    register_asset(name_ptr, name_len, bytes_ptr, bytes_len, true);
+}
+
+unsafe fn register_asset(
+    name_ptr: *const u8,
+    name_len: usize,
+    bytes_ptr: *const u8,
+    bytes_len: usize,
+    text_module: bool,
+) {
     if name_ptr.is_null() || (bytes_ptr.is_null() && bytes_len != 0) {
         return;
     }
@@ -112,7 +140,11 @@ pub unsafe extern "C" fn js_register_embedded_asset(
     registry()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .push(EmbeddedAsset { name, bytes });
+        .push(EmbeddedAsset {
+            name,
+            bytes,
+            text_module,
+        });
 }
 
 /// Look up an embedded asset's bytes by virtual path (`$perryfs/...`) or by its
@@ -122,6 +154,16 @@ pub fn lookup(path: &str) -> Option<&'static [u8]> {
     let key = normalize_key(path);
     let reg = registry().lock().unwrap_or_else(|e| e.into_inner());
     reg.iter().find(|a| a.name == key).map(|a| a.bytes)
+}
+
+/// Data modules supported by `require` must opt in via their original loader.
+/// Merely embedding a JS source, native addon or arbitrary file is not enough.
+pub(crate) fn lookup_text_module(path: &str) -> Option<&'static [u8]> {
+    let key = normalize_key(path);
+    let reg = registry().lock().unwrap_or_else(|e| e.into_inner());
+    reg.iter()
+        .find(|a| a.name == key && a.text_module)
+        .map(|a| a.bytes)
 }
 
 /// Metadata for an embedded file or an inferred `$perryfs` directory.
@@ -399,6 +441,8 @@ mod keep_embedded {
 #[used] static K1: extern "C" fn(f64) -> *mut crate::buffer::BufferHeader = js_perry_read_embedded;
     #[cfg(feature = "keepalive-anchors")]
 #[used] static K2: extern "C" fn() -> *mut crate::array::ArrayHeader = js_perry_embedded_files;
+    #[cfg(feature = "keepalive-anchors")]
+#[used] static K3: unsafe extern "C" fn(*const u8, usize, *const u8, usize) = js_register_embedded_text_asset;
 }
 
 #[cfg(test)]
@@ -494,5 +538,21 @@ mod tests {
         assert_eq!(mime_for("font.woff2"), "font/woff2");
         assert_eq!(mime_for("data.bin"), "application/octet-stream");
         assert_eq!(mime_for("noext"), "application/octet-stream");
+    }
+
+    #[test]
+    fn text_modules_require_explicit_registration_and_allow_empty_bytes() {
+        const TEXT: &[u8] = b"/$bunfs/root/embedded-unit-test-text.md";
+        const FILE: &[u8] = b"/$bunfs/root/embedded-unit-test-file.md";
+        unsafe {
+            js_register_embedded_text_asset(TEXT.as_ptr(), TEXT.len(), std::ptr::null(), 0);
+            js_register_embedded_asset(FILE.as_ptr(), FILE.len(), std::ptr::null(), 0);
+        }
+        let text = std::str::from_utf8(TEXT).unwrap();
+        let file = std::str::from_utf8(FILE).unwrap();
+        assert_eq!(lookup(text), Some(&[][..]));
+        assert_eq!(lookup(file), Some(&[][..]));
+        assert_eq!(lookup_text_module(text), Some(&[][..]));
+        assert_eq!(lookup_text_module(file), None);
     }
 }
