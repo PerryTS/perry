@@ -51,6 +51,31 @@ enum Field {
     Array { start: usize, len: usize },
 }
 
+/// Plan a cached record value, reusing the parser's proof for plain heap
+/// strings. `string_from_json_bytes` sets this flag only for tokens without a
+/// backslash; JSON syntax already excludes unescaped quotes, controls and
+/// incomplete UTF-8. Newly constructed or mutated strings keep the ordinary
+/// scalar planner and its full scan. Keeping this specialization in the
+/// record-output module also leaves tiny-object dispatch byte-identical.
+#[inline]
+unsafe fn record_value_piece(bits: u64) -> Option<Piece> {
+    if bits & crate::value::TAG_MASK == STRING_TAG {
+        let header = (bits & POINTER_MASK) as *const StringHeader;
+        if !header.is_null() && (*header).flags & crate::string::STRING_FLAG_JSON_ESCAPE_FREE != 0 {
+            let mut scratch = [0; crate::value::SHORT_STRING_MAX_LEN];
+            let (source, len) =
+                crate::string::str_bytes_from_jsvalue(f64::from_bits(bits), &mut scratch)?;
+            if source.is_null() || len > u32::MAX - 2 {
+                return None;
+            }
+            let units = (*header).utf16_len;
+            units.checked_add(2)?;
+            return Some(Piece::String { bytes: len, units });
+        }
+    }
+    scalar_piece(bits)
+}
+
 /// Decline before entering the planning frame on large/exotic receivers.
 #[inline]
 pub(super) unsafe fn try_object(bits: u64) -> Option<JSValue> {
@@ -198,7 +223,7 @@ unsafe fn emit_cached_record(
     let (mut bytes, mut units) = (1u32 + (*prefix).bytes as u32, 1u32 + (*prefix).units as u32);
     for i in 0..fields {
         let bits = slot(obj.cast(), OBJECT_BYTES, i);
-        let (vb, vu) = if let Some(value) = scalar_piece(bits) {
+        let (vb, vu) = if let Some(value) = record_value_piece(bits) {
             value_plan[i].write(Field::Scalar(value));
             value.lengths()
         } else {
@@ -209,7 +234,7 @@ unsafe fn emit_cached_record(
             value_plan[i].write(Field::Array { start: used, len });
             let (mut ab, mut au) = (2u32, 2u32);
             for j in 0..len {
-                let value = scalar_piece(slot(arr.cast(), ARRAY_BYTES, j))?;
+                let value = record_value_piece(slot(arr.cast(), ARRAY_BYTES, j))?;
                 elements[used + j].write(value);
                 let (eb, eu) = value.lengths();
                 let comma = u32::from(j != 0);
