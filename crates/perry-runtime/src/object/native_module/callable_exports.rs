@@ -47,12 +47,14 @@ pub fn bound_native_callable_export_value(module_name: &str, property_name: &str
     } else {
         export_module_name
     };
-    // Direct named/default `node:module` imports can materialize the callable
-    // without ever constructing a namespace object. Install its registry row
-    // here as well as at codegen import sites so Module's one canonical
-    // closure always receives the prototype/statics attachment.
-    if callable_module_name == "module" {
-        super::super::native_module_registry::js_nm_install_module();
+    // Direct named/default imports can materialize a callable without ever
+    // constructing a namespace object. Install registry rows needed for
+    // constructor decoration here as well as at codegen import sites, before
+    // the canonical closure is minted and cached.
+    match callable_module_name {
+        "module" => super::super::native_module_registry::js_nm_install_module(),
+        "async_hooks" => super::super::native_module_registry::js_nm_install_async_hooks(),
+        _ => {}
     }
     let key = format!("{callable_module_name}\0{property_name}");
     if let Some(bits) = NATIVE_CALLABLE_EXPORTS.with(|c| c.borrow().get(&key).copied()) {
