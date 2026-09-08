@@ -130,6 +130,66 @@ mod tests {
     }
 
     #[test]
+    fn private_domain_reservation_installs_outer_tick_recycling_hook() {
+        const CHILD: &str = "PERRY_TEST_PRIVATE_DOMAIN_TICK_HOOK_CHILD";
+        if std::env::var_os(CHILD).as_deref() != Some(std::ffi::OsStr::new("1")) {
+            // Hook registration is process-wide. Start a child which runs only
+            // this test so an ordinary payload registration cannot conceal a
+            // missing hook on the private-domain entrypoint.
+            let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "event_pump::tests::private_domain_reservation_installs_outer_tick_recycling_hook",
+                ])
+                .env(CHILD, "1")
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .unwrap();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+            let mut timed_out = false;
+            while child.try_wait().unwrap().is_none() {
+                if std::time::Instant::now() >= deadline {
+                    timed_out = true;
+                    let _ = child.kill();
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            let output = child.wait_with_output().unwrap();
+            assert!(
+                !timed_out && output.status.success(),
+                "private-domain lifecycle child timed_out={timed_out}, status={}\n{}\n{}",
+                output.status,
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
+            );
+            return;
+        }
+
+        let domain = crate::NativeRegistryDomain::new().unwrap();
+        let retired = crate::reserve_handle_id_in_domain(domain);
+        assert_ne!(retired, 0);
+        crate::free_handle_id(retired);
+        let held = crate::reserve_handle_id_in_domain(domain);
+        assert_ne!(held, retired, "retired ids wait for the next outer tick");
+
+        // Exercise the real runtime tick. The test must not call the drain
+        // helper directly because the registration edge is the behavior under
+        // test.
+        unsafe { js_run_stdlib_pump() };
+        let reused = crate::reserve_handle_id_in_domain(domain);
+        assert_eq!(
+            reused, retired,
+            "private-domain reservation installs the tick hook"
+        );
+
+        crate::free_handle_id(held);
+        crate::free_handle_id(reused);
+        unsafe { js_run_stdlib_pump() };
+    }
+
+    #[test]
     fn outer_ticks_recycle_handles_before_callbacks_without_http() {
         const CHILD: &str = "PERRY_TEST_OUTER_TICK_LIFECYCLE_CHILD";
         if std::env::var_os(CHILD).as_deref() != Some(std::ffi::OsStr::new("1")) {

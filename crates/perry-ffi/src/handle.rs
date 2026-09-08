@@ -331,7 +331,6 @@ pub fn register_handle<T: 'static + Send + Sync>(value: T) -> Handle {
 /// Reserve from the shared numeric pool without inserting an FFI payload.
 /// Exhaustion preserves the legacy zero sentinel.
 pub fn reserve_handle_id() -> Handle {
-    crate::event_pump::ensure_handle_tick_hook_registered();
     reserve_handle_id_in_domain(handle_registry_domain())
 }
 
@@ -339,6 +338,7 @@ pub fn reserve_handle_id() -> Handle {
 /// The caller publishes no JavaScript value here and must populate its own map
 /// before handing the numeric id to its clients.
 pub fn reserve_handle_id_in_domain(domain: NativeRegistryDomain) -> Handle {
+    crate::event_pump::ensure_handle_tick_hook_registered();
     let Ok(identity) =
         REGISTRATIONS.begin_registration_in_domain(domain, NativeRegistrationKind::Reserved)
     else {

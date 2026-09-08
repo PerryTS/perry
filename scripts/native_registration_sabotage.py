@@ -204,6 +204,7 @@ MUTATIONS = [
     Mutation(
         "ffi_reserved_metadata_omission", "ffi",
         """pub fn reserve_handle_id_in_domain(domain: NativeRegistryDomain) -> Handle {
+    crate::event_pump::ensure_handle_tick_hook_registered();
     let Ok(identity) =
         REGISTRATIONS.begin_registration_in_domain(domain, NativeRegistrationKind::Reserved)
     else {
@@ -213,6 +214,7 @@ MUTATIONS = [
     identity.numeric_id()
 }""",
         """pub fn reserve_handle_id_in_domain(domain: NativeRegistryDomain) -> Handle {
+    crate::event_pump::ensure_handle_tick_hook_registered();
     let _ = domain;
     FFI_HANDLE_ID_END - 1
 }""",
@@ -291,6 +293,12 @@ pub fn handle_registry_domain() -> NativeRegistryDomain {
     static DOMAIN: std::sync::LazyLock<NativeRegistryDomain> =
         std::sync::LazyLock::new(|| NativeRegistryDomain::new().unwrap());
     *DOMAIN
+}
+// The extracted allocation functions now install the runtime tick hook. This
+// native-only fixture has no runtime event pump; its inert seam keeps the
+// source extraction exact while runtime-linked tests own lifecycle behavior.
+mod event_pump {
+    pub(crate) fn ensure_handle_tick_hook_registered() {}
 }
 mod registry;
 mod handle;
