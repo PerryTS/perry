@@ -10,6 +10,7 @@ import argparse
 import json
 import re
 import subprocess
+import time
 
 MARKER = "<!-- gc-ratchet-main-alert -->"
 STATE_RE = re.compile(r"<!-- gc-ratchet-state (.+) -->")
@@ -62,6 +63,24 @@ def regression_rows(log):
             key = fields[0].strip(chr(96)) + "." + fields[1]
             rows[key] = row
     return rows
+
+
+def job_regression_rows(client, path, *, attempts=4, delay_seconds=5):
+    """Wait for GitHub's job-log archive to include the rendered table.
+
+    The reporting job starts as soon as the measurement job completes, while
+    the log service can briefly return a prefix ending at ``gc-ratchet:
+    FAILED``. Treat that marker as proof that a table is still expected. A
+    real setup failure has neither the marker nor a table and returns at once.
+    """
+    log = ""
+    for attempt in range(attempts):
+        log = client.api(path, raw=True)
+        rows = regression_rows(log)
+        if rows or "gc-ratchet: FAILED" not in log or attempt + 1 == attempts:
+            return rows
+        time.sleep(delay_seconds)
+    return {}
 
 
 def successful_runs(client, base, run):
@@ -121,9 +140,9 @@ def report(client, repository, run_id, result):
             if step["conclusion"] == "failure"
         )
         try:
-            rows.update(regression_rows(client.api(
-                f"{base}/actions/jobs/{job['id']}/logs", raw=True,
-            )))
+            rows.update(job_regression_rows(
+                client, f"{base}/actions/jobs/{job['id']}/logs",
+            ))
         except subprocess.CalledProcessError:
             log_errors.append(f"Logs unavailable for {job['name']}; follow the job link.")
 

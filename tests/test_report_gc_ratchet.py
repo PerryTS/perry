@@ -4,7 +4,13 @@ import subprocess
 import unittest
 from pathlib import Path
 
-from scripts.report_gc_ratchet import MARKER, regression_rows, report, state_from
+from scripts.report_gc_ratchet import (
+    MARKER,
+    job_regression_rows,
+    regression_rows,
+    report,
+    state_from,
+)
 
 REPO = "PerryTS/perry"
 TICK = chr(96)
@@ -143,6 +149,15 @@ class IncidentTests(unittest.TestCase):
             "compiler failure",
         ])
         self.assertEqual(regression_rows(log), {"01_probe.copied_bytes": valid})
+
+    def test_failed_marker_retries_until_the_table_is_available(self):
+        client = FakeGitHub()
+        logs = iter(["gc-ratchet: FAILED", "gc-ratchet: FAILED\n" + row("01_probe")])
+        client.api = lambda path, raw=False: next(logs)
+        self.assertEqual(
+            job_regression_rows(client, "job/logs", delay_seconds=0),
+            {"01_probe.copied_bytes": row("01_probe")},
+        )
 
     def test_workflow_keeps_writes_out_of_measurement_job(self):
         path = Path(__file__).resolve().parents[1] / ".github/workflows/gc-ratchet.yml"
