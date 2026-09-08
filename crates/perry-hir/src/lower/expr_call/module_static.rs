@@ -958,16 +958,19 @@ pub(super) fn try_module_static_methods(
             // Check for String.methodName() static calls. #6677: computed form too.
             if obj_ident.sym.as_ref() == "String" {
                 if let Some(method_name) = super::static_call_prop_name(&member.prop) {
+                    // Scalar intrinsics receive flattened AST arguments, not
+                    // expanded values. Let CallSpread preserve every argument
+                    // boundary and invoke the reified variadic String static.
+                    // This also handles mixed spreads and iterable operands.
+                    if has_spread && matches!(method_name, "fromCharCode" | "fromCodePoint" | "raw")
+                    {
+                        return Ok(Err(args));
+                    }
                     match method_name {
                         "fromCharCode" => {
                             if args.is_empty() {
                                 // #2788: String.fromCharCode() -> "".
                                 return Ok(Ok(Expr::String(String::new())));
-                            }
-                            if has_spread && args.len() == 1 {
-                                return Ok(Ok(Expr::StringFromCharCodeSpread(Box::new(
-                                    args.into_iter().next().unwrap(),
-                                ))));
                             }
                             if args.len() == 1 {
                                 return Ok(Ok(Expr::StringFromCharCode(Box::new(
