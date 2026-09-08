@@ -25,35 +25,46 @@ function array_side_mask_covers_a_pointer_stored_at_a_late_index(
 
   const late = { label: operation + "-late" };
   const source: any[] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, late, ,];
-  const sourcePrototype = Object.create(Array.prototype);
-  Object.defineProperty(sourcePrototype, "11", {
+  // Perry's array_iteration_is_exotic predicate observes indexed properties
+  // on the canonical Array prototype. Put the inherited getter there so the
+  // public slice path is forced through its observable-read loop as well as
+  // splice's hole lookup. Restore the prior descriptor in finally.
+  const previousIndex11 = Object.getOwnPropertyDescriptor(Array.prototype, "11");
+  Object.defineProperty(Array.prototype, "11", {
     configurable: true,
     get() {
       throw new Error(operation + "-stop");
     },
   });
-  Object.setPrototypeOf(source, sourcePrototype);
 
   function SpeciesResult(): any[] {
     return destination;
   }
   (source as any).constructor = { [Symbol.species]: SpeciesResult };
 
-  let caught = "none";
   try {
-    if (operation === "slice") {
-      source.slice(0, 12);
-    } else {
-      source.splice(0, 12);
+    let caught = "none";
+    try {
+      if (operation === "slice") {
+        source.slice(0, 12);
+      } else {
+        source.splice(0, 12);
+      }
+    } catch (error) {
+      caught = (error as Error).message;
     }
-  } catch (error) {
-    caught = (error as Error).message;
-  }
 
-  // The throw skips the deferred rebuild. The value itself is observable;
-  // the diagnostic must also find that the collector walk lists its slot.
-  console.log(operation + ":" + caught + ":" + destination[10].label);
-  forceFullGc();
+    // The throw skips the deferred rebuild. Keep destination observably live
+    // across the collection, then verify the value after the diagnostic ran.
+    forceFullGc();
+    console.log(operation + ":" + caught + ":" + destination[10].label);
+  } finally {
+    if (previousIndex11 === undefined) {
+      delete (Array.prototype as any)[11];
+    } else {
+      Object.defineProperty(Array.prototype, "11", previousIndex11);
+    }
+  }
 }
 
 array_side_mask_covers_a_pointer_stored_at_a_late_index("slice");
