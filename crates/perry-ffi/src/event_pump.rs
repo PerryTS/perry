@@ -39,6 +39,7 @@ extern "C" {
     /// one wake — the main-loop tick drains every queue each pass
     /// regardless.
     fn js_notify_main_thread();
+    fn js_register_aux_tick_begin(f: extern "C" fn());
     fn js_register_aux_pump(f: extern "C" fn() -> i32);
     fn js_register_aux_has_active(f: extern "C" fn() -> i32);
 }
@@ -47,9 +48,14 @@ extern "C" {
 /// Registration is idempotent for each function pointer.
 pub fn register_aux_event_pump(pump: extern "C" fn() -> i32, has_active: extern "C" fn() -> i32) {
     unsafe {
+        js_register_aux_tick_begin(drain_handle_quarantine_at_tick_begin);
         js_register_aux_pump(pump);
         js_register_aux_has_active(has_active);
     }
+}
+
+extern "C" fn drain_handle_quarantine_at_tick_begin() {
+    crate::handle::drain_quarantined_handles();
 }
 
 /// Wake the main thread so it picks up a pending event the calling
