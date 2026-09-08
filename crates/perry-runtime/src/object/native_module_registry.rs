@@ -775,4 +775,35 @@ mod tests {
              and no import-emitted js_nm_install_buffer exists on the global-Buffer path"
         );
     }
+
+    /// #9974: stream constructor/custom-promisify decoration is production
+    /// state installed by `js_nm_install_stream`, not a property intrinsic.
+    /// Keep this test independent of the cfg(test) lazy install-all fallback,
+    /// which otherwise makes an unarmed production registry look healthy.
+    #[test]
+    fn stream_installer_arms_attach_registry_without_lazy_fallback() {
+        struct RegistryGuard;
+        impl Drop for RegistryGuard {
+            fn drop(&mut self) {
+                NM_TEST_DISABLE_LAZY_INSTALL.store(false, Ordering::Relaxed);
+                js_nm_install_stream();
+            }
+        }
+
+        let _global = crate::gc::global_side_table_test_lock();
+        NM_TEST_DISABLE_LAZY_INSTALL.store(true, Ordering::Relaxed);
+        let _guard = RegistryGuard;
+        NM_ATTACH_REGISTRY[NmBucket::Stream as usize]
+            .store(std::ptr::null_mut(), Ordering::Relaxed);
+
+        assert!(
+            nm_attach_lookup("stream").is_none(),
+            "disabled lazy lookup must expose an unarmed stream registry"
+        );
+        js_nm_install_stream();
+        assert!(
+            nm_attach_lookup("stream").is_some(),
+            "js_nm_install_stream must arm stream callable decoration"
+        );
+    }
 }
