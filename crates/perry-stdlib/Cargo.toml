@@ -401,7 +401,7 @@ rsa = { version = "0.9", optional = true, default-features = false, features = [
 # #1367 node:crypto X509Certificate — DER/PEM cert parsing. x509-cert 0.3 uses
 # the DER/SPKI 0.8 stack; the direct SPKI 0.7 pin remains for jsonwebtoken.
 x509-cert = { version = "0.3", optional = true, default-features = false, features = ["pem"] }
-spki = { version = "0.7", optional = true, default-features = false, features = ["pem", "alloc"] }
+spki = { version = "0.8", optional = true, default-features = false, features = ["pem", "alloc"] }
 aes = { version = "0.8", optional = true }
 aes_09 = { package = "aes", version = "0.9", optional = true }
 cbc = { version = "0.2", optional = true }
