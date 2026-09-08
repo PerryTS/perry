@@ -884,6 +884,7 @@ pub(crate) mod stdlib_pump {
         /// exited with the pipe still open.
         #[test]
         fn stdin_object_listener_keeps_the_loop_alive_without_stdlib() {
+            let _global = crate::gc::global_side_table_test_lock();
             crate::os::test_set_stdin_data_listener(None);
             assert_eq!(
                 js_stdlib_has_active_handles(),
@@ -916,6 +917,7 @@ pub(crate) mod stdlib_pump {
         /// this slot, not through a timer.
         #[test]
         fn runtime_has_active_slot_gates_the_loop() {
+            let _global = crate::gc::global_side_table_test_lock();
             crate::os::test_set_stdin_data_listener(None);
             register_runtime_has_active(RUNTIME_HAS_ACTIVE_SLOTS - 1, flag_has_active);
             HAS_ACTIVE_FLAG.store(0, AtomicOrdering::SeqCst);
