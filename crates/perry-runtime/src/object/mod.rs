@@ -75,6 +75,8 @@ mod collection_proto_thunks;
 mod data_view_registry;
 mod dataview_proto_thunks;
 mod date_proto_thunks;
+#[cfg(test)]
+mod default_class_field_shape_tests;
 mod delete_rest;
 pub(crate) mod descriptors;
 mod disposable_proto_thunks;
