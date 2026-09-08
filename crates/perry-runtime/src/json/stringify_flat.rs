@@ -241,6 +241,9 @@ pub(super) unsafe fn try_object(bits: u64) -> Option<JSValue> {
         return super::stringify_tojson_probe::to_json_definitely_absent_without_gc(obj.cast())
             .then(|| JSValue::short_string_unchecked(b"{}"));
     }
+    if fields == 1 {
+        return emit_one_field_object(obj);
+    }
     if fields == 2 {
         for i in 0..2 {
             let value_bits = slot(obj.cast(), std::mem::size_of::<crate::ObjectHeader>(), i);
@@ -253,6 +256,50 @@ pub(super) unsafe fn try_object(bits: u64) -> Option<JSValue> {
         }
     }
     emit_object(obj, fields)
+}
+
+/// Exact output for the smallest non-empty object. Keeping this straight-line
+/// avoids constructing and walking the generic four-entry plan for `{a: 1}`
+/// style payloads while retaining the same own-key and prototype checks.
+#[inline]
+unsafe fn emit_one_field_object(obj: *const crate::ObjectHeader) -> Option<JSValue> {
+    let keys = crate::object::object_keys_array(obj);
+    let key_bits = slot(keys.cast(), std::mem::size_of::<crate::ArrayHeader>(), 0);
+    let value_bits = slot(obj.cast(), std::mem::size_of::<crate::ObjectHeader>(), 0);
+    let key = key_piece(key_bits)?;
+    let value = scalar_piece(value_bits)?;
+    let (key_bytes, key_units) = key.lengths();
+    let (value_bytes, value_units) = value.lengths();
+    let bytes = 3u32.checked_add(key_bytes)?.checked_add(value_bytes)?;
+    let units = 3u32.checked_add(key_units)?.checked_add(value_units)?;
+
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let input = scope.root_raw_const_ptr(obj);
+    super::invalidate_object_proto_tojson_state();
+    if !super::stringify_tojson_probe::to_json_definitely_absent_after_own_keys(obj.cast()) {
+        return None;
+    }
+    let (result, output) = string_storage_alloc(bytes);
+    let obj = input.get_raw_const_ptr::<crate::ObjectHeader>();
+    let keys = crate::object::object_keys_array(obj);
+    init_string_header(result, units, bytes, bytes, 0, 0);
+    output.write(b'{');
+    let at = 1 + emit_piece(
+        key,
+        slot(keys.cast(), std::mem::size_of::<crate::ArrayHeader>(), 0),
+        output.add(1),
+    );
+    output.add(at).write(b':');
+    let at = at
+        + 1
+        + emit_piece(
+            value,
+            slot(obj.cast(), std::mem::size_of::<crate::ObjectHeader>(), 0),
+            output.add(at + 1),
+        );
+    output.add(at).write(b'}');
+    debug_assert_eq!(at + 1, bytes as usize);
+    Some(JSValue::string_ptr(result))
 }
 
 /// The direct parser marks strings borrowed from unescaped JSON tokens. That
