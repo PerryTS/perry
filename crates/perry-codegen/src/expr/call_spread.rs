@@ -379,7 +379,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // the non-spread path, so element-call semantics are unchanged.
             if let Expr::IndexGet { object, index } = callee.as_ref() {
                 let object_is_class_ref = matches!(object.as_ref(), Expr::ClassRef(_))
-                    || matches!(object.as_ref(), Expr::ExternFuncRef { name, .. } if ctx.class_ids.contains_key(name));
+                    || matches!(object.as_ref(), Expr::ExternFuncRef { name, .. }
+                        if !ctx.imported_vars.contains(name) && !ctx.namespace_imports.contains(name)
+                            && ctx.class_ids.contains_key(name));
                 if !(crate::type_analysis::is_numeric_expr(ctx, index) && !object_is_class_ref) {
                     let recv_box = lower_expr(ctx, object)?;
                     let key_box = lower_expr(ctx, index)?;

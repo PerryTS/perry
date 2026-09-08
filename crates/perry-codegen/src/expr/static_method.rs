@@ -23,6 +23,50 @@ fn downgrade_unknown_call_args(ctx: &mut FnCtx<'_>, args: &[Expr]) {
     }
 }
 
+fn lower_imported_value_method(
+    ctx: &mut FnCtx<'_>,
+    name: &str,
+    method: &str,
+    args: &[Expr],
+) -> Result<String> {
+    let receiver = Expr::ExternFuncRef {
+        name: name.to_string(),
+        param_types: vec![],
+        return_type: HirType::Any,
+    };
+    let mut operands = vec![&receiver];
+    operands.extend(args.iter());
+    crate::rooting::with_operands_rooted(ctx, &operands, |ctx, values| {
+        let (recv_box, lowered_args) = values.split_first().expect("receiver operand");
+        let (args_ptr, args_len) = if lowered_args.is_empty() {
+            ("null".to_string(), "0".to_string())
+        } else {
+            let buf = ctx.func.alloca_entry_array(DOUBLE, lowered_args.len());
+            let blk = ctx.block();
+            for (i, value) in lowered_args.iter().enumerate() {
+                let slot = blk.gep(DOUBLE, &buf, &[(I64, &i.to_string())]);
+                blk.store(DOUBLE, value, &slot);
+            }
+            (buf, lowered_args.len().to_string())
+        };
+        let method_idx = ctx.strings.intern(method);
+        let entry = ctx.strings.entry(method_idx);
+        let bytes_global = format!("@{}", entry.bytes_global);
+        let name_len = entry.byte_len.to_string();
+        Ok(ctx.block().call(
+            DOUBLE,
+            "js_native_call_method",
+            &[
+                (DOUBLE, recv_box),
+                (PTR, &bytes_global),
+                (I64, &name_len),
+                (PTR, &args_ptr),
+                (I64, &args_len),
+            ],
+        ))
+    })
+}
+
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         Expr::StaticMethodCall {
@@ -31,6 +75,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             args,
         } => {
             downgrade_unknown_call_args(ctx, args);
+            // HIR may classify an uppercase object import as a static call.
+            // Lexical variable imports win over unrelated same-named class
+            // metadata, including when that class has this static method.
+            if ctx.imported_vars.contains(class_name) {
+                return lower_imported_value_method(ctx, class_name, method_name, args);
+            }
             // Built-in static methods that the runtime provides directly.
             if class_name == "AbortSignal" && method_name == "timeout" {
                 let ms = if !args.is_empty() {
@@ -457,47 +507,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             if ctx.import_function_prefixes.contains_key(class_name)
                 || ctx.class_ids.contains_key(class_name)
             {
-                let recv_box = lower_expr(
-                    ctx,
-                    &Expr::ExternFuncRef {
-                        name: class_name.clone(),
-                        param_types: vec![],
-                        return_type: HirType::Any,
-                    },
-                )?;
-                let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
-                for a in args {
-                    lowered_args.push(lower_expr(ctx, a)?);
-                }
-                let (args_ptr, args_len) = if lowered_args.is_empty() {
-                    ("null".to_string(), "0".to_string())
-                } else {
-                    let n = lowered_args.len();
-                    let buf = ctx.func.alloca_entry_array(DOUBLE, n);
-                    {
-                        let blk = ctx.block();
-                        for (i, value) in lowered_args.iter().enumerate() {
-                            let slot = blk.gep(DOUBLE, &buf, &[(I64, &i.to_string())]);
-                            blk.store(DOUBLE, value, &slot);
-                        }
-                    }
-                    (buf, n.to_string())
-                };
-                let method_idx = ctx.strings.intern(method_name);
-                let entry = ctx.strings.entry(method_idx);
-                let bytes_global = format!("@{}", entry.bytes_global);
-                let name_len = entry.byte_len.to_string();
-                return Ok(ctx.block().call(
-                    DOUBLE,
-                    "js_native_call_method",
-                    &[
-                        (DOUBLE, &recv_box),
-                        (PTR, &bytes_global),
-                        (I64, &name_len),
-                        (PTR, &args_ptr),
-                        (I64, &args_len),
-                    ],
-                ));
+                return lower_imported_value_method(ctx, class_name, method_name, args);
             }
             for a in args {
                 let _ = lower_expr(ctx, a)?;
