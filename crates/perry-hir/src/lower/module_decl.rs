@@ -34,12 +34,12 @@ pub(super) use static_import_bindings::{
 /// have the same module storage/getters as literals or generic calls (#9778).
 /// Run after lowering the complete module so `export { x }; const x = ...`
 /// and declarations without initializers work too.
-pub(super) fn register_exported_local_variables(module: &mut Module) {
-    fn collect_names<'a>(stmts: &'a [Stmt], names: &mut std::collections::HashSet<&'a str>) {
+pub(super) fn register_exported_local_variables(ctx: &LoweringContext, module: &mut Module) {
+    fn collect_bindings(stmts: &[Stmt], bindings: &mut std::collections::HashSet<LocalId>) {
         for stmt in stmts {
             match stmt {
-                Stmt::Let { name, .. } => {
-                    names.insert(name);
+                Stmt::Let { id, .. } => {
+                    bindings.insert(*id);
                 }
                 // Array-pattern declarations put their bindings inside the
                 // IteratorClose scaffolding; mirror module_globals_emit's
@@ -49,12 +49,12 @@ pub(super) fn register_exported_local_variables(module: &mut Module) {
                     catch,
                     finally,
                 } => {
-                    collect_names(body, names);
+                    collect_bindings(body, bindings);
                     if let Some(catch) = catch {
-                        collect_names(&catch.body, names);
+                        collect_bindings(&catch.body, bindings);
                     }
                     if let Some(finally) = finally {
-                        collect_names(finally, names);
+                        collect_bindings(finally, bindings);
                     }
                 }
                 _ => {}
@@ -62,12 +62,18 @@ pub(super) fn register_exported_local_variables(module: &mut Module) {
         }
     }
     let mut locals = std::collections::HashSet::new();
-    collect_names(&module.init, &mut locals);
+    collect_bindings(&module.init, &mut locals);
     let mut registered: std::collections::HashSet<String> =
         module.exported_objects.iter().cloned().collect();
     for export in &module.exports {
         if let Export::Named { local, exported } = export {
-            if locals.contains(local.as_str()) {
+            // A user-authored try block may declare the same spelling as an
+            // imported binding or function. Only the binding visible in the
+            // restored module scope can own this export's variable storage.
+            if ctx
+                .lookup_local(local)
+                .is_some_and(|id| locals.contains(&id))
+            {
                 // Both names are consumed by existing importer/getter paths;
                 // codegen derives storage ownership from Export::Named.local.
                 for name in [local, exported] {

@@ -72,3 +72,22 @@ fn imports_functions_and_types_are_not_local_variable_exports() {
     );
     assert!(names.is_empty(), "{names:?}");
 }
+
+#[test]
+fn block_bindings_do_not_reclassify_import_or_function_exports() {
+    for shadow in [
+        "try { const remote = 1; } finally {}",
+        "try {} finally { const remote = 1; }",
+        "try { throw 1; } catch (error) { const remote = 1; }",
+        "try { const [remote] = [1]; } finally {}",
+    ] {
+        for declaration in [
+            "import { remote } from './remote';",
+            "function remote() { return 42; }",
+        ] {
+            let source = format!("{declaration} {shadow} export {{ remote as REMOTE }};");
+            let names = exported_variables(&source);
+            assert!(names.is_empty(), "{source}: {names:?}");
+        }
+    }
+}
