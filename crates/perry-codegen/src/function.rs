@@ -904,6 +904,7 @@ impl LlFunction {
         } else {
             ""
         };
+        let size_attrs = crate::linker::application_size_function_attrs();
         // The native-stack walker recovers frames through the x29 chain, so
         // every generated function must link one; without the attribute,
         // textual-IR input gets no frame-pointer default from the clang
@@ -937,13 +938,14 @@ impl LlFunction {
             None => String::new(),
         };
         format!(
-            "define {}{}{} @{}({}){}{}{}{} {{",
+            "define {}{}{} @{}({}){}{}{}{}{} {{",
             linkage,
             cconv,
             self.return_type,
             self.name,
             param_str,
             attrs,
+            size_attrs,
             frame_pointer,
             gc_strategy,
             personality

@@ -355,7 +355,9 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
                 // than lingering as an untested branch (CLAUDE.md kill
                 // policy) — a corpus still carrying one is stale and must
                 // say so loudly.
-                "alwaysinline" | "inlinehint" | "noinline" => add_enum_attr(ctx, func, a),
+                "alwaysinline" | "inlinehint" | "noinline" | "optsize" | "minsize" => {
+                    add_enum_attr(ctx, func, a)
+                }
                 // String attributes: `"frame-pointer"="non-leaf"`, and the
                 // valueless `"key"` form LLVM also accepts.
                 other if other.starts_with('"') => {

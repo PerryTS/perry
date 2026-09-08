@@ -367,6 +367,29 @@ fn application_opt_flag(explicit: Option<&str>, size_opt: Option<&str>) -> &'sta
     }
 }
 
+fn application_opt_flag_from_env() -> &'static str {
+    application_opt_flag(
+        env::var("PERRY_LL_OPT_LEVEL").ok().as_deref(),
+        env::var("PERRY_LL_SIZE_OPT").ok().as_deref(),
+    )
+}
+
+fn size_function_attrs_for_opt_flag(flag: &str) -> &'static str {
+    match flag {
+        "-Os" => " optsize",
+        "-Oz" => " optsize minsize",
+        _ => "",
+    }
+}
+
+/// LLVM's size-oriented pass pipeline does not add frontend function
+/// attributes. In particular, AArch64 machine outlining consults `minsize`,
+/// so selecting default<Oz> alone still emits speed-oriented machine code.
+/// Share the driver's exact option resolution with both IR renderers.
+pub(crate) fn application_size_function_attrs() -> &'static str {
+    size_function_attrs_for_opt_flag(application_opt_flag_from_env())
+}
+
 fn build_clang_compile_plan(
     clang: PathBuf,
     ll_path: PathBuf,
@@ -388,9 +411,7 @@ fn build_clang_compile_plan(
     // materially shrinks dense generated bundles. `PERRY_LL_SIZE_OPT=0` restores
     // `-O3`; the explicit `PERRY_LL_OPT_LEVEL` override wins over both. There is
     // no implicit module-size-driven policy change.
-    let size_opt = env::var("PERRY_LL_SIZE_OPT").ok();
-    let explicit_opt = env::var("PERRY_LL_OPT_LEVEL").ok();
-    let opt_flag = application_opt_flag(explicit_opt.as_deref(), size_opt.as_deref());
+    let opt_flag = application_opt_flag_from_env();
 
     // Compacting the stack map means going through assembly, because that is
     // where LLVM prints the map's function addresses as symbol *names* — the

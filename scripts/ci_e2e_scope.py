@@ -132,6 +132,7 @@ _CODEGEN_SUITES = [
     "native_proof_buffer_views",
     "padding_single_evaluation",
     "shadow_slot_hygiene",
+    "size_function_attributes",
     "typed_feedback",
     # #7506/#7245: held out until its one failing test was triaged. The
     # composition it guards had drifted from three named callees to three
