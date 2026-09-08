@@ -5,6 +5,8 @@
 //! mutex: Pending and Retiring slots cannot be acquired or reused. No callback,
 //! payload destructor, JavaScript value, or collector slot lives in this module.
 
+#![deny(missing_docs)]
+
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -448,8 +450,10 @@ impl NativeRegistrationRegistry {
         promoted
     }
 
-    #[cfg(test)]
-    pub(crate) fn next_fresh_id_for_tests(&self) -> i64 {
+    /// Read the fresh-id counter for cross-crate adapter fixtures.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn next_fresh_id_for_tests(&self) -> i64 {
         self.lock().next_id
     }
 }

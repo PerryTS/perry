@@ -62,8 +62,7 @@ pub use types::{
     Promise, StringHeader, BIGINT_LIMBS, OBJECT_HEADER_ABI_REVISION, STRING_HEADER_ABI_REVISION,
 };
 
-mod native_registration;
-pub use native_registration::{
+pub use perry_native_registration::{
     NativeLeaseKind, NativeQuarantine, NativeRegistrationError, NativeRegistrationIdentity,
     NativeRegistrationKind, NativeRegistrationLease, NativeRegistrationRegistry,
     NativeRegistryDomain,

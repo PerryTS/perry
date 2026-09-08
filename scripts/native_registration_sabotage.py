@@ -24,8 +24,8 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCES = {
-    "core": ROOT / "crates/perry-ffi/src/native_registration.rs",
-    "core_tests": ROOT / "crates/perry-ffi/src/native_registration/tests.rs",
+    "core": ROOT / "crates/perry-native-registration/src/lib.rs",
+    "core_tests": ROOT / "crates/perry-native-registration/src/tests.rs",
     "events": ROOT / "crates/perry-ext-events/src/registry.rs",
     "ffi": ROOT / "crates/perry-ffi/src/handle.rs",
     "ffi_tests": ROOT / "crates/perry-ffi/src/handle_registration_tests.rs",
@@ -281,6 +281,7 @@ def harness_source() -> str:
         assert match, name
         constants.append(f"const {name}: Handle = {match.group(1)};")
     return """extern crate self as perry_ffi;
+#[path = "native_registration/lib.rs"]
 mod native_registration;
 pub use native_registration::*;
 type Handle = i64;
@@ -372,8 +373,8 @@ mod registration_tests;
 
 def compile_copy(directory: Path, source: dict[str, str], rustc: str, harness: str) -> Path:
     directory.mkdir()
-    (directory / "native_registration.rs").write_text(source["core"])
     (directory / "native_registration").mkdir()
+    (directory / "native_registration/lib.rs").write_text(source["core"])
     (directory / "native_registration/tests.rs").write_text(source["core_tests"])
     (directory / "registry.rs").write_text(source["events"])
     (directory / "handle.rs").write_text(ffi_harness_source(source["ffi"]))

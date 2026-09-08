@@ -1,0 +1,15 @@
+[package]
+name = "perry-native-registration"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Dependency-free native registration identities, leases, and slot transitions shared by Perry adapters."
+
+[lints]
+workspace = true
+
+[features]
+default = []
+# Read-only allocator observation for downstream adapter fixtures.
+test-support = []

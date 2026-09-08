@@ -16,6 +16,8 @@ readme = "README.md"
 workspace = true
 
 [dependencies]
+perry-native-registration.workspace = true
+
 # #1112: `perry-runtime` is restored as an OPTIONAL regular dep (not
 # a dev-dep) so the `runtime-link` feature actually propagates the
 # linkage into downstream test binaries (e.g.
@@ -26,7 +28,7 @@ workspace = true
 # perry-runtime. The optional + path-only workspace dep means
 # `cargo publish` will still error against the missing crates.io
 # entry — see `scripts/publish_perry_ffi.sh` for the maintainer
-# workflow (publish perry-runtime FIRST, then perry-ffi).
+# workflow (publish perry-native-registration and perry-runtime before perry-ffi).
 perry-runtime = { workspace = true, optional = true }
 
 # Handle registry storage (#466 Phase 5 — `lru-cache`/db wrappers).
@@ -34,6 +36,10 @@ perry-runtime = { workspace = true, optional = true }
 # the dep keeps the resulting binaries identical in size.
 dashmap.workspace = true
 once_cell.workspace = true
+
+[dev-dependencies]
+# Keep the existing allocator observations available only in test builds.
+perry-native-registration = { workspace = true, features = ["test-support"] }
 
 [features]
 default = []
