@@ -27,7 +27,7 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Prove and run the typed-result inventory
         run: |
           python3 scripts/native_result_ledger.py --self-test
