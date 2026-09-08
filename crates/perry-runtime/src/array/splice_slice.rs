@@ -101,9 +101,20 @@ pub extern "C" fn js_array_splice(
             (*deleted).length = actual_delete;
             let deleted_elements =
                 (deleted as *mut u8).add(std::mem::size_of::<ArrayHeader>()) as *mut f64;
+            // Hole reads also consult recorded custom prototypes, which are
+            // not covered by array_iteration_is_exotic's canonical-proto flags.
+            let src_exotic = crate::array::array_iteration_is_exotic(arr)
+                || crate::object::prototype_chain::array_static_proto_recorded();
             for i in 0..actual_delete as usize {
-                // GC_STORE_AUDIT(BARRIERED): deleted-array init is followed by layout/barrier rebuild.
-                ptr::write(deleted_elements.add(i), spec_read(i));
+                let value = spec_read(i);
+                if src_exotic {
+                    // Publish before the next getter can collect or throw,
+                    // leaving the species result reachable with a partial copy.
+                    note_array_slot(deleted, i, value.to_bits());
+                } else {
+                    // GC_STORE_AUDIT(BARRIERED): no source callbacks; layout/barrier rebuild follows the copy.
+                    ptr::write(deleted_elements.add(i), value);
+                }
             }
             rebuild_array_layout(deleted);
         } else {
@@ -274,10 +285,16 @@ pub extern "C" fn js_array_slice(
                         f64::from_bits(crate::value::TAG_HOLE)
                     }
                 } else {
-                    // GC_STORE_AUDIT(BARRIERED): slice result init is followed by layout/barrier rebuild.
                     ptr::read(src_elements.add(src_idx))
                 };
-                ptr::write(dst_elements.add(i), v);
+                if src_exotic {
+                    // Publish before the next getter can collect or throw,
+                    // leaving the species result reachable with a partial copy.
+                    note_array_slot(result, i, v.to_bits());
+                } else {
+                    // GC_STORE_AUDIT(BARRIERED): raw source reads cannot call out; rebuild follows the copy.
+                    ptr::write(dst_elements.add(i), v);
+                }
             }
             rebuild_array_layout(result);
         } else {
