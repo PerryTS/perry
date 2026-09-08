@@ -6,7 +6,7 @@
   "description": "Tier-3 fixture for @hono/node-server's compiled-package Node builtin imports.",
   "dependencies": {
     "@hono/node-server": "1.19.17",
-    "hono": "4.13.4"
+    "hono": "4.13.7"
   },
   "perry": {
     "compilePackages": ["@hono/node-server", "hono"],
