@@ -25,8 +25,9 @@ pub struct LlFunction {
     /// string means external (default) linkage.
     pub linkage: String,
     /// When true, emit `alwaysinline` attribute. Forces LLVM to inline this
-    /// function at every call site, exposing integer operations to the
-    /// caller's optimizer context (critical for vectorization of clamp patterns).
+    /// function at every call site, subject to the generated-body size budget,
+    /// exposing integer operations to the caller's optimizer context (critical
+    /// for vectorization of clamp patterns).
     pub force_inline: bool,
     /// Admit this function to the unconditional inliner that runs before
     /// RewriteStatepointsForGC. RS4GC turns calls into statepoints, after
@@ -886,11 +887,19 @@ impl LlFunction {
         };
 
         let rs4gc = crate::codegen::helpers::rs4gc_enabled();
-        let attrs = if self.pre_statepoint_inline || (self.force_inline && !rs4gc) {
+        // The HIR heuristic counts top-level statements, not the operations
+        // inside a minified return/sequence expression. One such "small"
+        // function can lower to megabytes of IR. Unconditional inlining then
+        // duplicates the entire body into its callable wrapper and direct call
+        // sites, overriding even LLVM's -Os/-Oz cost model. Keep genuinely
+        // small helpers eligible; let LLVM decide for larger generated bodies.
+        // The separate pre-statepoint admission already has its own budget.
+        let force_inline = self.force_inline && self.estimated_ir_bytes() <= 8 * 1024;
+        let attrs = if self.pre_statepoint_inline || (force_inline && !rs4gc) {
             " alwaysinline"
         } else if self.no_inline {
             " noinline"
-        } else if self.inline_hint || self.force_inline {
+        } else if self.inline_hint || force_inline {
             " inlinehint"
         } else {
             ""
@@ -1267,6 +1276,31 @@ mod define_header_tests {
                 "an explicitly admitted function needs an unconditional attribute: \
                  {admitted_header}"
             );
+        }
+    }
+
+    #[test]
+    fn force_inline_is_bounded_by_generated_body_not_hir_statement_count() {
+        use crate::codegen::helpers::NativeRootsPin;
+        for native in [false, true] {
+            let _pin = if native {
+                NativeRootsPin::native()
+            } else {
+                NativeRootsPin::shadow()
+            };
+            let mut function = probe();
+            function.force_inline = true;
+            let entry = function.create_block("entry");
+            for index in 0..512 {
+                entry.emit_raw(format!("%large{index} = call double @expensive(double %a)"));
+            }
+            entry.ret(crate::types::DOUBLE, "%a");
+            assert!(function.estimated_ir_bytes() > 8 * 1024);
+            let header = function.define_header(false);
+            assert!(!header.contains("alwaysinline"), "{header}");
+            assert!(!header.contains("inlinehint"), "{header}");
+            function.no_inline = true;
+            assert!(function.define_header(false).contains("noinline"));
         }
     }
 
