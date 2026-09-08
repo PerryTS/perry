@@ -20,7 +20,6 @@ perry-stdlib-core = { package = "perry-stdlib", path = "../../../../../../crates
   "rate-limit",
   "validation",
   "bundled-dotenv",
-  "bundled-slugify",
   "bundled-lru-cache",
   "bundled-exponential-backoff",
   "bundled-decimal",
