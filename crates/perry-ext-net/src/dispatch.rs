@@ -42,6 +42,12 @@ extern "C" {
     );
 }
 
+// Keep this adapter distinct from the legacy exported trampoline in the
+// crate root. LLVM otherwise merges their identical bodies and rewrites this
+// callback's address to `js_net_process_pending`; bundled stdlib can supply that
+// symbol and silently redirect the registered pump to its unrelated queue.
+// The differing noinline attribute prevents that merge (including at -O3).
+#[inline(never)]
 extern "C" fn process_pending_aux() -> i32 {
     // Drain via the DISTINCT `js_ext_net_drain_pending` symbol — NOT the
     // `js_net_process_pending` extern, whose symbol the bundled stdlib net
