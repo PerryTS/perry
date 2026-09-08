@@ -45,6 +45,14 @@ rules:
       # manifests at the next tag). Tracked as follow-up.
       - release-packages.yml
 
+  # 2026-09-08: `workflow_run` is intentional for the scheduled-gate observer:
+  # it needs an issue-write token after a watched workflow completes. The
+  # privileged job checks out `main` explicitly and executes only the trusted
+  # default-branch observer script, never code from the triggering checkout.
+  dangerous-triggers:
+    ignore:
+      - gate-failure-watch.yml
+
   # 2026-08-05: three findings, all audit-confidence Low, all of them the one
   # `LLVM_SYS_221_PREFIX=<prefix>` line that setup-llvm22 exists to write —
   # once per platform arm. This gate went red at #7353, the commit that
