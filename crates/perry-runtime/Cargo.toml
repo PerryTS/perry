@@ -300,6 +300,10 @@ libc.workspace = true
 # the per-PC step cache. Read-only, no_std-capable subset.
 gimli = { version = "0.34", default-features = false, features = ["read"] }
 rand = "0.10"
+# Wide JSON objects hash untrusted property bytes once into their temporary
+# duplicate-key index. aHash keeps that index randomly keyed/DoS-resistant
+# without SipHash's serial per-block rounds on this parse hot path.
+ahash = "0.8.12"
 regex = { workspace = true, optional = true }
 # The parser half of `regex`, used on its own to answer "is this pattern a
 # SyntaxError?" without building the automaton — see `regex/lazy.rs`. Not a

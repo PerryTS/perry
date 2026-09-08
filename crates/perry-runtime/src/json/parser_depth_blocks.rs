@@ -35,9 +35,12 @@ unsafe fn pack(mask: std::arch::aarch64::uint8x16_t) -> u64 {
 }
 
 pub(crate) fn nesting_depth_exceeds(bytes: &[u8], limit: usize) -> bool {
-    if bytes.len() >= 256 && bytes[0] == b'[' && limit > 0 {
+    // No opening-container byte after the root proves depth <= 1 even when
+    // the text contains quotes, escapes or malformed closing delimiters. A
+    // bracket byte inside a string is only a conservative false positive.
+    if bytes.len() >= 256 && matches!(bytes[0], b'[' | b'{') && limit > 0 {
         let body = &bytes[1..];
-        if !body.contains(&b'{') && !body.contains(&b'[') && !body.contains(&b'"') {
+        if !body.contains(&b'{') && !body.contains(&b'[') {
             return false;
         }
     }

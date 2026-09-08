@@ -11,7 +11,7 @@ use std::fmt::Write as FmtWrite;
 
 pub(crate) use super::stringify_scalars::{
     bigint_apply_to_json, serialize_bigint, throw_bigint_serialize, write_escaped_string,
-    write_number,
+    write_heap_string, write_number, write_short_string,
 };
 // The homogeneous-array shape template lives in a sibling (file-size gate);
 // both the object and the array emitter below drive it.
@@ -1093,7 +1093,15 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
         && (*obj).class_id == 0
     {
         if let Some(tmpl_ptr) = shape_template_for(ptr) {
-            if try_emit_shape_element(make_pointer_bits(ptr), &*tmpl_ptr, buf, depth) {
+            let mut data_record_global_proof = false;
+            if try_emit_shape_element(
+                make_pointer_bits(ptr),
+                &*tmpl_ptr,
+                buf,
+                depth,
+                None,
+                &mut data_record_global_proof,
+            ) {
                 if depth > MAX_FAST_DEPTH {
                     STRINGIFY_STACK.with(|s| s.borrow_mut().pop());
                 }
@@ -1558,21 +1566,28 @@ pub(crate) unsafe fn stringify_array_depth(ptr: *const u8, buf: &mut String, dep
     };
 
     if let Some(ref tmpl) = template {
+        let mut data_record_global_proof = false;
         buf.push('[');
         for i in 0..len {
             if i > 0 {
                 buf.push(',');
             }
-            // An element's `toJSON` key is its stringified index (#5909). Set
-            // before the shape emit (which may run the element's own `toJSON`)
-            // and the per-element fallback below.
-            set_to_json_key_index(i as usize);
             // Re-derived per element: the previous element's serialization can
             // have run user code / allocated (and moved this array).
             let elem = elem_at(i as usize);
             let elem_bits = elem.to_bits();
-            if !try_emit_shape_element(elem_bits, tmpl, buf, depth + 1) {
+            if !try_emit_shape_element(
+                elem_bits,
+                tmpl,
+                buf,
+                depth + 1,
+                Some(i as usize),
+                &mut data_record_global_proof,
+            ) {
                 // The element is one container below its enclosing array.
+                // `try_emit_shape_element` can decline before reaching its
+                // callback-capable section, so publish the index for fallback.
+                set_to_json_key_index(i as usize);
                 stringify_value_depth(elem, TYPE_UNKNOWN, buf, depth + 1);
             }
         }

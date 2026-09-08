@@ -28,45 +28,81 @@ impl<'a> ParsedStr<'a> {
     }
 }
 
-/// Content-key wrapper for one parsed object's temporary duplicate index.
+/// Per-object duplicate-key index for wide JSON objects.
 ///
-/// Its pointer is valid and immovable while the index exists: every production
-/// object parse runs under the parse API's GC suppression, and the index drops
-/// before `parse_value` returns. Hashing the managed payload directly avoids a
-/// second owned byte buffer for every field while retaining `HashMap`'s
-/// randomized hasher for untrusted JSON names.
-#[derive(Copy, Clone)]
-struct ParsedObjectKey(*const StringHeader);
+/// Property names are untrusted, so `ahash::RandomState` computes a randomly
+/// keyed, hash-flood-resistant digest over every incoming byte string. The
+/// table stores that result as a `u64`: growth can then rehash the integer in
+/// constant time instead of re-reading every managed string. A matching hash
+/// is never accepted by itself; exact bytes decide identity, and genuine hash
+/// collisions retain their additional indices in `collisions`.
+struct ParsedObjectIndex {
+    hash_state: ahash::RandomState,
+    primary: crate::fast_hash::PtrHashMap<u64, usize>,
+    collisions: Vec<(u64, usize)>,
+}
 
-impl ParsedObjectKey {
-    fn bytes(&self) -> &[u8] {
-        unsafe {
-            std::slice::from_raw_parts(
-                crate::string::string_data(self.0),
-                (*self.0).byte_len as usize,
-            )
+impl ParsedObjectIndex {
+    unsafe fn from_keys(keys: &[*const StringHeader]) -> Self {
+        let mut index = Self {
+            hash_state: ahash::RandomState::new(),
+            primary: crate::fast_hash::PtrHashMap::with_capacity_and_hasher(
+                keys.len(),
+                crate::fast_hash::PtrHasher,
+            ),
+            collisions: Vec::new(),
+        };
+        for (slot, &key) in keys.iter().enumerate() {
+            let bytes = std::slice::from_raw_parts(
+                crate::string::string_data(key),
+                (*key).byte_len as usize,
+            );
+            let hash = index.hash_bytes(bytes);
+            index.insert_hash(hash, slot);
+        }
+        index
+    }
+
+    #[inline]
+    fn hash_bytes(&self, bytes: &[u8]) -> u64 {
+        self.hash_state.hash_one(bytes)
+    }
+
+    #[inline]
+    unsafe fn find_hashed(
+        &self,
+        hash: u64,
+        bytes: &[u8],
+        keys: &[*const StringHeader],
+    ) -> Option<usize> {
+        let first = *self.primary.get(&hash)?;
+        if json_key_bytes_equal(keys[first], bytes) {
+            return Some(first);
+        }
+        self.collisions
+            .iter()
+            .filter(|(candidate_hash, _)| *candidate_hash == hash)
+            .map(|(_, slot)| *slot)
+            .find(|&slot| json_key_bytes_equal(keys[slot], bytes))
+    }
+
+    #[inline]
+    fn insert_hash(&mut self, hash: u64, value_index: usize) {
+        match self.primary.entry(hash) {
+            std::collections::hash_map::Entry::Occupied(_) => {
+                self.collisions.push((hash, value_index));
+            }
+            std::collections::hash_map::Entry::Vacant(slot) => {
+                slot.insert(value_index);
+            }
         }
     }
 }
 
-impl std::borrow::Borrow<[u8]> for ParsedObjectKey {
-    fn borrow(&self) -> &[u8] {
-        self.bytes()
-    }
-}
-
-impl PartialEq for ParsedObjectKey {
-    fn eq(&self, other: &Self) -> bool {
-        self.bytes() == other.bytes()
-    }
-}
-
-impl Eq for ParsedObjectKey {}
-
-impl std::hash::Hash for ParsedObjectKey {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        std::hash::Hash::hash(self.bytes(), state);
-    }
+#[inline]
+unsafe fn json_key_bytes_equal(key: *const StringHeader, bytes: &[u8]) -> bool {
+    (*key).byte_len as usize == bytes.len()
+        && std::slice::from_raw_parts(crate::string::string_data(key), bytes.len()) == bytes
 }
 
 #[inline]
@@ -156,14 +192,13 @@ pub(crate) const MAX_ITERATIVE_NESTING_DEPTH: usize = 500_000;
 /// unbalanced `]` clamps at zero rather than underflowing.
 #[cfg(not(all(target_arch = "aarch64", target_endian = "little")))]
 pub(crate) fn nesting_depth_exceeds(bytes: &[u8], limit: usize) -> bool {
-    // A flat scalar array cannot exceed depth one. Slice byte searches skip
-    // the byte-by-byte state machine for large numeric/boolean/null arrays.
-    // Test for an object first so record arrays reject this hint immediately.
-    // Quotes or another opening container always fall back to the full scan;
-    // this is only a depth proof, never a substitute for syntax validation.
-    if bytes.len() >= 256 && bytes[0] == b'[' && limit > 0 {
+    // If no byte after the root can open a container, the input cannot exceed
+    // depth one. This proof remains valid for quoted, escaped and malformed
+    // text because a false positive opening only sends us to the full scan;
+    // syntax validation remains the parser's job.
+    if bytes.len() >= 256 && matches!(bytes[0], b'[' | b'{') && limit > 0 {
         let body = &bytes[1..];
-        if !body.contains(&b'{') && !body.contains(&b'[') && !body.contains(&b'"') {
+        if !body.contains(&b'{') && !body.contains(&b'[') {
             return false;
         }
     }
@@ -845,7 +880,7 @@ impl<'a> DirectParser<'a> {
         type HeapFields = (
             Vec<*const StringHeader>,
             Vec<JSValue>,
-            Option<std::collections::HashMap<ParsedObjectKey, usize>>,
+            Option<ParsedObjectIndex>,
         );
         let mut heap_fields: Option<HeapFields> = None;
 
@@ -879,16 +914,11 @@ impl<'a> DirectParser<'a> {
                     // a nested wide object must not change key identity while
                     // its enclosing object is still recognizing duplicates.
                     self.saw_wide_object = true;
-                    *indices = Some(
-                        keys.iter()
-                            .copied()
-                            .enumerate()
-                            .map(|(i, key)| (ParsedObjectKey(key), i))
-                            .collect(),
-                    );
+                    *indices = Some(ParsedObjectIndex::from_keys(keys));
                 }
                 if let Some(index) = indices {
-                    if let Some(&existing) = index.get(key_bytes) {
+                    let hash = index.hash_bytes(key_bytes);
+                    if let Some(existing) = index.find_hashed(hash, key_bytes, keys) {
                         values[existing] = value;
                     } else {
                         // The object-local content index already proves this
@@ -896,7 +926,7 @@ impl<'a> DirectParser<'a> {
                         // global interning table only to clear it at return.
                         let key_ptr =
                             crate::string::string_from_json_bytes(&mut self.batch, key_bytes);
-                        index.insert(ParsedObjectKey(key_ptr), keys.len());
+                        index.insert_hash(hash, keys.len());
                         keys.push(key_ptr);
                         values.push(value);
                     }

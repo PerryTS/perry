@@ -20,10 +20,7 @@ pub(super) unsafe fn try_emit(arr: *const crate::ArrayHeader, buf: &mut String) 
         return false;
     }
     let flags = header._reserved;
-    if (*arr).length > (*arr).capacity
-        || flags & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0
-        || crate::array::array_has_named_properties_resolved(arr)
-    {
+    if (*arr).length > (*arr).capacity || flags & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0 {
         return false;
     }
     let data = (arr as *const u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *const f64;
@@ -91,9 +88,7 @@ pub(super) unsafe fn emit_validated(arr: *const crate::ArrayHeader, buf: &mut St
                     let value = JSValue::from_bits(bits);
                     let mut scratch = [0; crate::value::SHORT_STRING_MAX_LEN];
                     let n = value.short_string_to_buf(&mut scratch);
-                    if let Ok(s) = std::str::from_utf8(&scratch[..n]) {
-                        write_escaped_string(buf, s);
-                    } else {
+                    if !write_short_string(buf, &scratch[..n]) {
                         buf.push_str("null");
                     }
                 }

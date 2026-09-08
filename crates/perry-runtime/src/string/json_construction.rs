@@ -22,7 +22,11 @@ pub(crate) unsafe fn string_from_json_bytes(
         zero_alignment_padding_tail(raw, size);
         (raw.cast(), raw.add(std::mem::size_of::<StringHeader>()))
     };
-    init_string_header(header, utf16_len, len, len, 0, 0);
+    // `ParsedStr::Borrowed` reaches this constructor only when the JSON token
+    // contained no backslash. JSON syntax itself excludes unescaped quote and
+    // control bytes, so the decoded payload can be quoted again without an
+    // escape scan.
+    init_string_header(header, utf16_len, len, len, 0, STRING_FLAG_JSON_ESCAPE_FREE);
     std::ptr::copy_nonoverlapping(bytes.as_ptr(), data, bytes.len());
     header
 }

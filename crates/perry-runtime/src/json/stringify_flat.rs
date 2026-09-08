@@ -3,9 +3,43 @@
 //! root. Keys and values are re-read after allocating the final output.
 
 use super::*;
-use crate::string::{init_string_header, string_storage_alloc};
+use crate::string::{
+    init_string_header, json_output_storage_alloc, string_storage_alloc,
+    JSON_MALLOC_OUTPUT_THRESHOLD, STRING_FLAG_JSON_ESCAPE_FREE,
+};
 
 const MAX_FIELDS: usize = 4;
+const JSON_OUTPUT_SWEEP_BUDGET: usize = 32 * 1024 * 1024;
+
+thread_local! {
+    /// Bytes of malloc-backed exact output completed since the last boundary
+    /// sweep. This is scheduling debt only and never owns a managed pointer.
+    static JSON_OUTPUT_BYTES_SINCE_SWEEP: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[inline]
+fn service_json_output_sweep_boundary() {
+    JSON_OUTPUT_BYTES_SINCE_SWEEP.with(|bytes| {
+        if bytes.get() >= JSON_OUTPUT_SWEEP_BUDGET {
+            // The caller has rooted its input and has not allocated output.
+            // A collection here can reclaim prior results without observing a
+            // partially initialized string.
+            crate::gc::gc_check_trigger();
+            bytes.set(0);
+        }
+    });
+}
+
+#[inline]
+fn note_completed_malloc_json_output(bytes: u32) {
+    JSON_OUTPUT_BYTES_SINCE_SWEEP.with(|debt| {
+        let total = debt.get().saturating_add(bytes as usize);
+        debt.set(total);
+        if total >= JSON_OUTPUT_SWEEP_BUDGET {
+            crate::gc::gc_schedule_malloc_sweep_after_json_output();
+        }
+    });
+}
 
 #[derive(Clone, Copy)]
 pub(super) enum Piece {
@@ -207,7 +241,129 @@ pub(super) unsafe fn try_object(bits: u64) -> Option<JSValue> {
         return super::stringify_tojson_probe::to_json_definitely_absent_without_gc(obj.cast())
             .then(|| JSValue::short_string_unchecked(b"{}"));
     }
+    if fields == 2 {
+        for i in 0..2 {
+            let value_bits = slot(obj.cast(), std::mem::size_of::<crate::ObjectHeader>(), i);
+            if let Some(value) = parsed_plain_string_piece(value_bits) {
+                if let Some(result) = emit_two_field_parsed_string_object(obj, i, value) {
+                    return Some(result);
+                }
+                break;
+            }
+        }
+    }
     emit_object(obj, fields)
+}
+
+/// The direct parser marks strings borrowed from unescaped JSON tokens. That
+/// proof is stronger than rescanning the payload here and remains valid until
+/// a string-producing mutation creates a new header without the flag.
+#[inline]
+unsafe fn parsed_plain_string_piece(bits: u64) -> Option<Piece> {
+    if bits & crate::value::TAG_MASK != STRING_TAG {
+        return None;
+    }
+    let mut scratch = [0; crate::value::SHORT_STRING_MAX_LEN];
+    let (_, len) = crate::string::str_bytes_from_jsvalue(f64::from_bits(bits), &mut scratch)?;
+    if len < 64 || len > u32::MAX - 2 {
+        return None;
+    }
+    let header = (bits & POINTER_MASK) as *const StringHeader;
+    if (*header).flags & STRING_FLAG_JSON_ESCAPE_FREE == 0 {
+        return None;
+    }
+    (*header).utf16_len.checked_add(2)?;
+    Some(Piece::String {
+        bytes: len,
+        units: (*header).utf16_len,
+    })
+}
+
+/// Exact output for the common `{ id, text }`-shaped large JSON object. The
+/// caller supplies the one value whose parser provenance avoids a payload
+/// scan; the other scalar and both keys keep their ordinary semantic checks.
+#[inline(never)]
+unsafe fn emit_two_field_parsed_string_object(
+    obj: *const crate::ObjectHeader,
+    proven_index: usize,
+    proven_value: Piece,
+) -> Option<JSValue> {
+    let keys = crate::object::object_keys_array(obj);
+    let empty = Piece::String { bytes: 0, units: 0 };
+    let mut key_plan = [empty; 2];
+    let mut value_plan = [empty; 2];
+    let mut bytes = 2u32;
+    let mut units = 2u32;
+    for i in 0..2 {
+        key_plan[i] = key_piece(slot(
+            keys.cast(),
+            std::mem::size_of::<crate::ArrayHeader>(),
+            i,
+        ))?;
+        value_plan[i] = if i == proven_index {
+            proven_value
+        } else {
+            scalar_piece(slot(
+                obj.cast(),
+                std::mem::size_of::<crate::ObjectHeader>(),
+                i,
+            ))?
+        };
+        let (kb, ku) = key_plan[i].lengths();
+        let (vb, vu) = value_plan[i].lengths();
+        let punctuation = 1 + u32::from(i != 0);
+        bytes = bytes
+            .checked_add(kb)?
+            .checked_add(vb)?
+            .checked_add(punctuation)?;
+        units = units
+            .checked_add(ku)?
+            .checked_add(vu)?
+            .checked_add(punctuation)?;
+    }
+
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let input = scope.root_raw_const_ptr(obj);
+    service_json_output_sweep_boundary();
+    let obj = input.get_raw_const_ptr::<crate::ObjectHeader>();
+    super::invalidate_object_proto_tojson_state();
+    if !super::stringify_tojson_probe::to_json_definitely_absent_after_own_keys(obj.cast()) {
+        return None;
+    }
+
+    let large_output = bytes >= JSON_MALLOC_OUTPUT_THRESHOLD;
+    let construction = large_output.then(crate::gc::GcSuppressScope::new);
+    let (result, output) = json_output_storage_alloc(bytes);
+    let obj = input.get_raw_const_ptr::<crate::ObjectHeader>();
+    let keys = crate::object::object_keys_array(obj);
+    init_string_header(result, units, bytes, bytes, 0, 0);
+    output.write(b'{');
+    let mut at = 1usize;
+    for i in 0..2 {
+        if i != 0 {
+            output.add(at).write(b',');
+            at += 1;
+        }
+        at += emit_piece(
+            key_plan[i],
+            slot(keys.cast(), std::mem::size_of::<crate::ArrayHeader>(), i),
+            output.add(at),
+        );
+        output.add(at).write(b':');
+        at += 1;
+        at += emit_piece(
+            value_plan[i],
+            slot(obj.cast(), std::mem::size_of::<crate::ObjectHeader>(), i),
+            output.add(at),
+        );
+    }
+    output.add(at).write(b'}');
+    debug_assert_eq!(at + 1, bytes as usize);
+    drop(construction);
+    if large_output {
+        note_completed_malloc_json_output(bytes);
+    }
+    Some(JSValue::string_ptr(result))
 }
 
 /// The fused key loop replaces the own-key probe's array validation as well

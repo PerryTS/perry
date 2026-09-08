@@ -1091,10 +1091,13 @@ pub const OBJ_FLAG_NULL_PROTO: u16 = 0x40;
 /// loop guard — direct loads over the admitted prefix are raw numeric f64s —
 /// but their payload layouts and invalidation funnels remain type-specific.
 pub(crate) const OBJ_FLAG_PACKED_NUMERIC_PROOF: u16 = 0x80;
-// Array carries per-index property descriptors (accessors or custom attrs
-// installed via `Object.defineProperty`, or a non-writable `length`). The
-// raw-f64 numeric fast paths must decline and route through the
-// descriptor-aware element get/set. Bit 10 — bits 7/8/9 are taken by
+// Array carries properties outside its ordinary dense-element representation:
+// per-index descriptors (accessors or custom attrs installed via
+// `Object.defineProperty`), a non-writable `length`, or named properties in
+// the array side table. The raw-f64 and callback-free fast paths must decline
+// and route through the property-aware path. This bit is monotone for an
+// allocation, so deleting the last special property may conservatively leave
+// it set. Bit 10 — bits 7/8/9 are taken by
 // `GC_ARRAY_RAW_F64_LAYOUT` (0x80), `OBJ_FLAG_TYPED_ARRAY_PROTO` (0x100),
 // and `GC_ARRAY_ARGUMENTS_OBJECT` (0x200). Only meaningful for
 // `GC_TYPE_ARRAY`.

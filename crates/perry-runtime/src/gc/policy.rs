@@ -401,6 +401,17 @@ pub(super) const GC_MALLOC_COUNT_STEP_INITIAL: usize = 100_000;
 pub(super) const GC_MALLOC_COUNT_STEP_MAX: usize = 2_000_000;
 pub(super) const GC_MALLOC_COUNT_STEP_MIN: usize = 10_000;
 
+/// Arrange for the next ordinary safepoint to sweep malloc-tracked objects.
+///
+/// Large JSON results use malloc-backed string storage so a discarded leaf can
+/// be reclaimed by a generational malloc sweep instead of forcing a full trace
+/// of the unchanged input graph. The caller invokes this only after the result
+/// is completely allocated; no collection runs in the stringify boundary.
+pub(crate) fn gc_schedule_malloc_sweep_after_json_output() {
+    let current = malloc_object_count();
+    GC_NEXT_MALLOC_TRIGGER.with(|trigger| trigger.set(trigger.get().min(current)));
+}
+
 thread_local! {
     /// Per-program adaptive malloc-count step. Mirrors `GC_STEP_BYTES`
     /// behaviour: doubles when mostly-garbage, halves when mostly-live.

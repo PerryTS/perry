@@ -227,6 +227,44 @@ pub(crate) unsafe fn write_escaped_string(buf: &mut String, s: &str) {
     buf_vec.push(b'"');
 }
 
+/// Quote a heap string, using parser provenance to skip a redundant escape
+/// scan for payloads borrowed from an unescaped JSON token.
+#[inline]
+pub(crate) unsafe fn write_heap_string(buf: &mut String, ptr: *const StringHeader) -> bool {
+    let Some(text) = str_from_header(ptr) else {
+        return false;
+    };
+    if (*ptr).flags & crate::string::STRING_FLAG_JSON_ESCAPE_FREE != 0 {
+        buf.reserve(text.len() + 2);
+        buf.push('"');
+        buf.push_str(text);
+        buf.push('"');
+    } else {
+        write_escaped_string(buf, text);
+    }
+    true
+}
+
+/// Quote an inline short-string byte payload. Returns false for malformed
+/// UTF-8, preserving the existing serializer fallback. Plain ASCII is proven
+/// together with escape absence so the common path avoids a second scan.
+#[inline]
+pub(crate) unsafe fn write_short_string(buf: &mut String, bytes: &[u8]) -> bool {
+    if !super::simd::short_string_is_plain_ascii(bytes) {
+        let Ok(text) = std::str::from_utf8(bytes) else {
+            return false;
+        };
+        write_escaped_string(buf, text);
+        return true;
+    }
+    let out = buf.as_mut_vec();
+    out.reserve(bytes.len() + 2);
+    out.push(b'"');
+    out.extend_from_slice(bytes);
+    out.push(b'"');
+    true
+}
+
 #[inline]
 fn append_code_unit_escape(buf: &mut Vec<u8>, unit: u16) {
     const HEX: &[u8; 16] = b"0123456789abcdef";

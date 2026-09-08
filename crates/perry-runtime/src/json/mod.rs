@@ -92,7 +92,7 @@ pub(crate) use simd::find_string_terminator;
 pub(crate) use stringify::{
     arm_to_json_result_guard, check_stringify_nesting_depth, estimate_json_size, is_closure_value,
     is_object_pointer, is_symbol_value, object_get_to_json, stringify_value, write_escaped_string,
-    write_number,
+    write_heap_string, write_number, write_short_string,
 };
 pub(crate) use stringify_api::{redirect_lazy_to_materialized, try_stringify_lazy_array};
 pub(crate) use stringify_buffer::{
@@ -706,6 +706,7 @@ pub(crate) fn test_seed_stringify_shape_cache(keys_arr: *mut crate::ArrayHeader)
             shape_fields: 1,
             primitive_only: true,
             data_record_candidate: false,
+            own_keys_exclude_to_json: true,
         }));
     });
 }

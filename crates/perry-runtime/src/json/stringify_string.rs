@@ -2,7 +2,10 @@
 //! The source is the only root needed across the output allocation. There is
 //! no intermediate JSON buffer and no second UTF-16 length scan.
 
-use crate::string::{init_string_header, string_data, string_storage_alloc, StringHeader};
+use crate::string::{
+    init_string_header, string_data, string_storage_alloc, StringHeader,
+    STRING_FLAG_JSON_ESCAPE_FREE,
+};
 use crate::value::{POINTER_MASK, STRING_TAG, TAG_MASK};
 
 /// Only call when replacer/spacer processing cannot run user code.
@@ -28,12 +31,14 @@ unsafe fn quote_heap_string(source: *const StringHeader) -> Option<*mut StringHe
     let len = (*source).byte_len;
     let output_len = len.checked_add(2)?;
     let output_units = (*source).utf16_len.checked_add(2)?;
-    let bytes = std::slice::from_raw_parts(string_data(source), len as usize);
-    if super::simd::find_string_escape(bytes).is_some() {
-        return super::stringify_escaped_output::quote(source);
-    }
-    if has_incomplete_tail(bytes) {
-        return None;
+    if (*source).flags & STRING_FLAG_JSON_ESCAPE_FREE == 0 {
+        let bytes = std::slice::from_raw_parts(string_data(source), len as usize);
+        if super::simd::find_string_escape(bytes).is_some() {
+            return super::stringify_escaped_output::quote(source);
+        }
+        if has_incomplete_tail(bytes) {
+            return None;
+        }
     }
 
     let scope = crate::gc::RuntimeHandleScope::new();

@@ -41,6 +41,9 @@ pub(crate) struct ShapeTemplate {
     /// Initial fields are primitives plus ordinary arrays. A per-element
     /// validation still proves that array contents cannot invoke callbacks.
     pub(crate) data_record_candidate: bool,
+    /// The shared keys array contains neither `toJSON` nor a native marker
+    /// that can expose a `toJSON` surface. Built once for all matching rows.
+    pub(crate) own_keys_exclude_to_json: bool,
 }
 
 /// Look up (or build & insert) the shape template for an object. Returns
@@ -196,6 +199,7 @@ pub(crate) unsafe fn build_shape_prefix_template(first_elem_bits: u64) -> Option
         (keys_arr as *const u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *const f64;
     let mut prefixes: Vec<String> = Vec::with_capacity(shape_fields as usize);
     let mut key_sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let mut own_keys_exclude_to_json = true;
     for f in 0..shape_fields {
         let key_bits = (*keys_elements.add(f as usize)).to_bits();
         // A tombstoned key slot (#9029, flag-gated deletes): the hole's bits
@@ -208,6 +212,8 @@ pub(crate) unsafe fn build_shape_prefix_template(first_elem_bits: u64) -> Option
         }
         let key_bytes =
             crate::string::js_string_key_bytes(JSValue::from_bits(key_bits), &mut key_sso)?;
+        own_keys_exclude_to_json &=
+            !super::stringify_tojson_probe::key_bytes_may_carry_to_json(key_bytes);
         let key_str = std::str::from_utf8(key_bytes).ok()?;
         let needs_escape = key_str.bytes().any(|b| b == b'"' || b == b'\\' || b < 0x20);
         let mut prefix = String::with_capacity(key_str.len() + 4);
@@ -241,6 +247,7 @@ pub(crate) unsafe fn build_shape_prefix_template(first_elem_bits: u64) -> Option
         shape_fields,
         primitive_only,
         data_record_candidate: super::stringify_data_record::template_candidate(obj, shape_fields),
+        own_keys_exclude_to_json,
     })
 }
 
@@ -311,6 +318,8 @@ pub(crate) unsafe fn try_emit_shape_element(
     template: &ShapeTemplate,
     buf: &mut String,
     depth: u32,
+    array_index_key: Option<usize>,
+    data_record_global_proof: &mut bool,
 ) -> bool {
     let tag = elem_bits & 0xFFFF_0000_0000_0000;
     let elem_ptr = if tag == POINTER_TAG {
@@ -332,14 +341,40 @@ pub(crate) unsafe fn try_emit_shape_element(
         return false;
     }
     let obj = elem_ptr as *const crate::ObjectHeader;
-    if crate::object::object_keys_array(obj) != template.keys_arr.get() {
+    let Some((keys_arr, live_inline_slots)) = crate::object::object_keys_and_live_slots(obj) else {
+        return false;
+    };
+    if keys_arr != template.keys_arr.get() {
         return false;
     }
 
+    if template.data_record_candidate && !*data_record_global_proof {
+        *data_record_global_proof =
+            super::stringify_tojson_probe::data_record_global_to_json_absent_without_gc();
+    }
     if template.data_record_candidate
-        && super::stringify_data_record::try_emit(obj, template, buf, depth)
+        && super::stringify_data_record::try_emit_with_live(
+            obj,
+            template,
+            buf,
+            depth,
+            live_inline_slots,
+            *data_record_global_proof,
+        )
     {
         return true;
+    }
+
+    // Everything below can recurse into a user callback. A callback can
+    // mutate Object.prototype.toJSON, so the next data record must establish
+    // a fresh stringify-wide proof before it emits raw fields.
+    *data_record_global_proof = false;
+
+    // The callback-free record path above proves that neither the element nor
+    // any child can observe a `toJSON` key. Only publish the array index once a
+    // path that may invoke user code remains.
+    if let Some(index) = array_index_key {
+        set_to_json_key_index(index);
     }
 
     // ★ #7268: ROOT THE ELEMENT. The emit loops below call
@@ -443,9 +478,7 @@ pub(crate) unsafe fn try_emit_shape_element(
                 buf.push_str("false");
             } else if vtag == STRING_TAG {
                 let str_ptr = (fb & POINTER_MASK) as *const StringHeader;
-                if let Some(s) = str_from_header(str_ptr) {
-                    write_escaped_string(buf, s);
-                } else {
+                if !write_heap_string(buf, str_ptr) {
                     buf.push_str("null");
                 }
             } else if vtag == crate::value::SHORT_STRING_TAG {
@@ -513,9 +546,7 @@ pub(crate) unsafe fn try_emit_shape_element(
             buf.push_str("false");
         } else if vtag == STRING_TAG {
             let str_ptr = (fb & POINTER_MASK) as *const StringHeader;
-            if let Some(s) = str_from_header(str_ptr) {
-                write_escaped_string(buf, s);
-            } else {
+            if !write_heap_string(buf, str_ptr) {
                 buf.push_str("null");
             }
         } else if vtag == crate::value::SHORT_STRING_TAG {

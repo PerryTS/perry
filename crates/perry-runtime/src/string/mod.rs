@@ -218,6 +218,10 @@ pub(crate) use format::{
 /// Flag: string bytes contain WTF-8 lone-surrogate sequences (U+D800..U+DFFF).
 /// Set by js_string_from_wtf8_bytes. Checked by isWellFormed/toWellFormed.
 pub const STRING_FLAG_HAS_LONE_SURROGATES: u32 = 1;
+/// The payload came from an unescaped JSON token, so quoting it requires no
+/// byte-level escape scan. String-producing mutations do not propagate this
+/// provenance bit unless they independently prove the resulting payload.
+pub(crate) const STRING_FLAG_JSON_ESCAPE_FREE: u32 = 1 << 1;
 
 /// A static empty string that can be used as a safe fallback for null pointers.
 /// Has utf16_len=0, byte_len=0, capacity=0, refcount=0, flags=0 (shared).
@@ -619,6 +623,28 @@ pub(crate) fn string_storage_alloc(capacity: u32) -> (*mut StringHeader, *mut u8
     let ptr = raw as *mut StringHeader;
     let data = unsafe { raw.add(std::mem::size_of::<StringHeader>()) };
     zero_alignment_padding_tail(raw, payload_size);
+    (ptr, data)
+}
+
+/// JSON results at or above this size use individually tracked storage.
+pub(crate) const JSON_MALLOC_OUTPUT_THRESHOLD: u32 = 1024 * 1024;
+
+/// Allocate a large, pointer-free JSON result outside old-generation arenas.
+///
+/// Ordinary large strings are born old because copying them through survivor
+/// space is wasteful. Repeated `JSON.stringify` is different: each result is a
+/// leaf commonly discarded at the next loop edge. Tracking that leaf as an
+/// individual malloc object lets the next minor sweep reclaim it without a
+/// whole-old-heap trace. Smaller results retain the arena fast path.
+#[inline]
+pub(crate) fn json_output_storage_alloc(capacity: u32) -> (*mut StringHeader, *mut u8) {
+    if capacity < JSON_MALLOC_OUTPUT_THRESHOLD {
+        return string_storage_alloc(capacity);
+    }
+    let payload_size = std::mem::size_of::<StringHeader>() + capacity as usize;
+    let raw = crate::gc::gc_malloc(payload_size, crate::gc::GC_TYPE_STRING);
+    let ptr = raw as *mut StringHeader;
+    let data = unsafe { raw.add(std::mem::size_of::<StringHeader>()) };
     (ptr, data)
 }
 

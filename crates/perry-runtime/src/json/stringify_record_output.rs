@@ -71,7 +71,6 @@ unsafe fn dense_array(bits: u64) -> Option<(*const crate::ArrayHeader, usize)> {
     if len > MAX_ELEMENTS
         || len > (*arr).capacity as usize
         || (header.size as usize) < crate::gc::GC_HEADER_SIZE + ARRAY_BYTES + len * 8
-        || crate::array::array_has_named_properties_resolved(arr)
         || crate::object::prototype_chain::object_static_prototype(arr as usize).is_some()
     {
         return None;
@@ -81,33 +80,36 @@ unsafe fn dense_array(bits: u64) -> Option<(*const crate::ArrayHeader, usize)> {
 
 #[inline(never)]
 unsafe fn emit_record(obj: *const crate::ObjectHeader, fields: usize) -> Option<JSValue> {
-    // Every live entry is overwritten before emission. This initialized
-    // placeholder has a smaller active payload than an inline-text piece.
-    let empty = Piece::String { bytes: 0, units: 0 };
-    let mut key_plan = [empty; MAX_FIELDS];
-    let mut value_plan = [Field::Scalar(empty); MAX_FIELDS];
-    let mut elements = [empty; MAX_ELEMENTS];
+    // Only the validated prefixes are read during emission. Avoid clearing
+    // the full fixed-capacity scratch frame for short records; every accessed
+    // slot below is written before the output allocation can occur.
+    let mut key_plan: [std::mem::MaybeUninit<Piece>; MAX_FIELDS] =
+        [const { std::mem::MaybeUninit::uninit() }; MAX_FIELDS];
+    let mut value_plan: [std::mem::MaybeUninit<Field>; MAX_FIELDS] =
+        [const { std::mem::MaybeUninit::uninit() }; MAX_FIELDS];
+    let mut elements: [std::mem::MaybeUninit<Piece>; MAX_ELEMENTS] =
+        [const { std::mem::MaybeUninit::uninit() }; MAX_ELEMENTS];
     let mut used = 0;
     let keys = crate::object::object_keys_array(obj);
     let (mut bytes, mut units) = (2u32, 2u32);
     for i in 0..fields {
         let key = key_piece(slot(keys.cast(), ARRAY_BYTES, i))?;
-        key_plan[i] = key;
+        key_plan[i].write(key);
         let (kb, ku) = key.lengths();
         let bits = slot(obj.cast(), OBJECT_BYTES, i);
         let (vb, vu) = if let Some(value) = scalar_piece(bits) {
-            value_plan[i] = Field::Scalar(value);
+            value_plan[i].write(Field::Scalar(value));
             value.lengths()
         } else {
             let (arr, len) = dense_array(bits)?;
             if used + len > MAX_ELEMENTS {
                 return None;
             }
-            value_plan[i] = Field::Array { start: used, len };
+            value_plan[i].write(Field::Array { start: used, len });
             let (mut ab, mut au) = (2u32, 2u32);
             for j in 0..len {
                 let value = scalar_piece(slot(arr.cast(), ARRAY_BYTES, j))?;
-                elements[used + j] = value;
+                elements[used + j].write(value);
                 let (eb, eu) = value.lengths();
                 let comma = u32::from(j != 0);
                 ab = ab.checked_add(eb)?.checked_add(comma)?;
@@ -146,14 +148,14 @@ unsafe fn emit_record(obj: *const crate::ObjectHeader, fields: usize) -> Option<
             at += 1;
         }
         at += emit_piece(
-            key_plan[i],
+            key_plan[i].assume_init(),
             slot(keys.cast(), ARRAY_BYTES, i),
             output.add(at),
         );
         output.add(at).write(b':');
         at += 1;
         let bits = slot(obj.cast(), OBJECT_BYTES, i);
-        match value_plan[i] {
+        match value_plan[i].assume_init() {
             Field::Scalar(value) => at += emit_piece(value, bits, output.add(at)),
             Field::Array { start, len } => {
                 let arr = (bits & POINTER_MASK) as *const crate::ArrayHeader;
@@ -165,7 +167,7 @@ unsafe fn emit_record(obj: *const crate::ObjectHeader, fields: usize) -> Option<
                         at += 1;
                     }
                     at += emit_piece(
-                        elements[start + j],
+                        elements[start + j].assume_init(),
                         slot(arr.cast(), ARRAY_BYTES, j),
                         output.add(at),
                     );

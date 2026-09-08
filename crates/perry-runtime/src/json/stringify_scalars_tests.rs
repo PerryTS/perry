@@ -1,4 +1,7 @@
-use super::{write_compact_decimal, write_escaped_string, write_number};
+use super::{
+    write_compact_decimal, write_escaped_string, write_heap_string, write_number,
+    write_short_string,
+};
 
 #[test]
 fn compact_decimals_preserve_roundtrips_and_leave_rejections_untouched() {
@@ -38,6 +41,28 @@ fn compact_decimals_preserve_roundtrips_and_leave_rejections_untouched() {
             assert_eq!(output, reference.format_finite(neighbor));
         }
     }
+}
+
+#[test]
+fn parsed_escape_free_heap_strings_skip_only_the_redundant_scan() {
+    let mut batch = None;
+    let parsed = unsafe { crate::string::string_from_json_bytes(&mut batch, b"plain value") };
+    assert_ne!(
+        unsafe { (*parsed).flags } & crate::string::STRING_FLAG_JSON_ESCAPE_FREE,
+        0
+    );
+    let mut output = String::new();
+    assert!(unsafe { write_heap_string(&mut output, parsed) });
+    assert_eq!(output, "\"plain value\"");
+
+    let escaped = crate::string::js_string_from_bytes(b"quote: \"".as_ptr(), 8);
+    assert_eq!(
+        unsafe { (*escaped).flags } & crate::string::STRING_FLAG_JSON_ESCAPE_FREE,
+        0
+    );
+    output.clear();
+    assert!(unsafe { write_heap_string(&mut output, escaped) });
+    assert_eq!(output, "\"quote: \\\"\"");
 }
 
 #[test]
@@ -115,6 +140,11 @@ fn vector_escaping_matches_json_encoder_at_every_boundary() {
                 serde_json::to_string(&text).unwrap(),
                 "prefix={prefix_len} ch={ch:?}"
             );
+            if text.len() <= crate::value::SHORT_STRING_MAX_LEN {
+                let mut short_output = String::new();
+                assert!(unsafe { write_short_string(&mut short_output, text.as_bytes()) });
+                assert_eq!(short_output, output, "short prefix={prefix_len} ch={ch:?}");
+            }
         }
     }
 }

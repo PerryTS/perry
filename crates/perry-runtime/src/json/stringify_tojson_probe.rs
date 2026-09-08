@@ -297,6 +297,24 @@ pub(super) unsafe fn to_json_definitely_absent_without_gc(ptr: *const u8) -> boo
     to_json_definitely_absent(ptr)
 }
 
+/// Establish the stringify-wide part of the plain-data record proof.
+///
+/// A successful data-record emission cannot invoke user code or managed
+/// allocation, so an array walker may reuse this verdict across consecutive
+/// records. It must discard the verdict before entering any fallback path
+/// that can call `toJSON` or a getter. Per-object recorded prototypes remain
+/// checked by the record emitter itself.
+#[inline]
+pub(super) unsafe fn data_record_global_to_json_absent_without_gc() -> bool {
+    if SUPPRESS_NEXT_TO_JSON.with(|c| c.get())
+        || (OBJECT_PROTO_TOJSON_STATE.with(|c| c.get()) == PROTO_TOJSON_DIRTY
+            && CACHED_OBJECT_PROTO_BITS.with(|c| c.get()) == 0)
+    {
+        return false;
+    }
+    !object_proto_may_have_to_json()
+}
+
 // ─── SerializeJSONProperty key (#5909) ───────────────────────────────────────
 // ECMA-262 §25.5.2.2 SerializeJSONProperty step 2.b.i calls `toJSON` with the
 // property key. `TO_JSON_KEY` carries that key from each serialization loop

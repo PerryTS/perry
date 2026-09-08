@@ -431,6 +431,18 @@ fn note_array_named_props_ever() {
     ARRAY_NAMED_PROPS_EVER.store(true, std::sync::atomic::Ordering::Release);
 }
 
+#[inline]
+unsafe fn mark_array_named_properties(arr: *const ArrayHeader) {
+    note_array_named_props_ever();
+    let header = (arr as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+    debug_assert_eq!((*header).obj_type, crate::gc::GC_TYPE_ARRAY);
+    // The existing special-property bit is deliberately conservative and
+    // monotone. Sharing it with named side-table entries gives callback-free
+    // array consumers an address-local absence proof without spending the
+    // final layout bit or probing the TLS map.
+    (*header)._reserved |= crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS;
+}
+
 pub(crate) unsafe fn array_named_property_set(
     arr: *mut ArrayHeader,
     key: *const crate::StringHeader,
@@ -444,7 +456,7 @@ pub(crate) unsafe fn array_named_property_set(
         return;
     };
     let owner = arr as usize;
-    note_array_named_props_ever();
+    mark_array_named_properties(arr);
     ARRAY_NAMED_PROPS.with(|m| {
         let mut map = m.borrow_mut();
         let props = map.entry(owner).or_default();
@@ -478,6 +490,7 @@ pub(crate) unsafe fn array_named_props_install_fresh(
         return;
     }
     let owner = arr as usize;
+    mark_array_named_properties(arr);
     ARRAY_NAMED_PROPS.with(|m| {
         let mut map = m.borrow_mut();
         let props = map.entry(owner).or_default();
@@ -514,11 +527,12 @@ pub(crate) unsafe fn array_named_property_get_by_name(
 }
 
 /// Does this (already resolved) array head carry named properties in the
-/// side table? Answered by the monotone latch first: until some array has
-/// taken a named property, the table has always been empty.
+/// side table? The exact lookup remains necessary to distinguish named
+/// properties from other kinds covered by `OBJ_FLAG_ARRAY_DESCRIPTORS`.
 #[inline]
 pub(crate) unsafe fn array_has_named_properties_resolved(arr: *const ArrayHeader) -> bool {
-    if !ARRAY_NAMED_PROPS_EVER.load(std::sync::atomic::Ordering::Acquire) {
+    let header = (arr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+    if (*header)._reserved & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS == 0 {
         return false;
     }
     ARRAY_NAMED_PROPS.with(|m| {

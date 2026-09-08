@@ -1513,6 +1513,21 @@ pub(crate) unsafe fn object_keys_array(obj: *const ObjectHeader) -> *mut ArrayHe
         .unwrap_or(std::ptr::null_mut())
 }
 
+/// Return the two shape facts needed together by callback-free serializers.
+/// Resolving them as one descriptor avoids a second ShapeId slab probe for the
+/// live inline-slot bound after the ordered-keys identity was already checked.
+#[inline]
+pub(crate) unsafe fn object_keys_and_live_slots(
+    obj: *const ObjectHeader,
+) -> Option<(*mut ArrayHeader, u32)> {
+    shapes::object_shape_descriptor(obj).map(|descriptor| {
+        (
+            descriptor.keys as usize as *mut ArrayHeader,
+            descriptor.live_inline_slot_count,
+        )
+    })
+}
+
 /// #6759 Phase B: per-object metadata record, reached from
 /// [`ObjectHeader::meta`] in two dependent loads (no side-table probe).
 ///

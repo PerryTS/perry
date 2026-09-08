@@ -18,7 +18,18 @@ fn growth_rekeys_named_property_owner() {
         arr = js_array_push_f64(arr, 2.0);
         arr = js_array_push_f64(arr, 3.0);
 
+        let header =
+            (arr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        assert_eq!(
+            (*header)._reserved & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS,
+            0
+        );
         array_named_property_set(arr, key, 42.0);
+        assert_ne!(
+            (*header)._reserved & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS,
+            0
+        );
+        assert!(array_has_named_properties_resolved(arr));
         let old_owner = arr as usize;
         let old_capacity = (*arr).capacity;
         assert_eq!(
@@ -30,6 +41,13 @@ fn growth_rekeys_named_property_owner() {
         arr = js_array_set_f64_extend(arr, old_capacity, 99.0);
 
         assert_ne!(arr as usize, old_owner, "the fixture must grow the array");
+        let header =
+            (arr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        assert_ne!(
+            (*header)._reserved & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS,
+            0
+        );
+        assert!(array_has_named_properties_resolved(arr));
         assert_eq!(
             array_named_property_get_by_name(arr, NAME),
             Some(42.0),

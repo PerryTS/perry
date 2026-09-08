@@ -107,9 +107,23 @@ fn find_word<const CONTROL: bool, const SURROGATE: bool>(bytes: &[u8]) -> Option
 #[inline(always)]
 pub(super) fn short_string_needs_escape(bytes: &[u8]) -> bool {
     if (4..8).contains(&bytes.len()) {
-        find_padded_tail::<true, true>(bytes).is_some()
+        find_padded_tail::<true, true, false>(bytes).is_some()
     } else {
         find_string_escape(bytes).is_some()
+    }
+}
+
+/// True when a short inline payload is valid ASCII and needs no JSON escape.
+/// The common four/five-byte case is classified in one padded word instead of
+/// running UTF-8 validation and the escape predicate as two separate scans.
+#[inline(always)]
+pub(super) fn short_string_is_plain_ascii(bytes: &[u8]) -> bool {
+    if (4..8).contains(&bytes.len()) {
+        find_padded_tail::<true, true, true>(bytes).is_none()
+    } else {
+        bytes
+            .iter()
+            .all(|&b| (0x20..0x80).contains(&b) && b != b'"' && b != b'\\')
     }
 }
 
@@ -118,7 +132,9 @@ pub(super) fn short_string_needs_escape(bytes: &[u8]) -> bool {
 /// subtraction can propagate a mark into later lanes, only after a real hit.
 /// A space cannot match any of these scanner contracts, so padding is inert.
 #[inline(always)]
-fn find_padded_tail<const CONTROL: bool, const SURROGATE: bool>(bytes: &[u8]) -> Option<usize> {
+fn find_padded_tail<const CONTROL: bool, const SURROGATE: bool, const NON_ASCII: bool>(
+    bytes: &[u8],
+) -> Option<usize> {
     debug_assert!((4..8).contains(&bytes.len()));
     const LOW: u64 = 0x0101_0101_0101_0101;
     const HIGH: u64 = 0x8080_8080_8080_8080;
@@ -141,6 +157,9 @@ fn find_padded_tail<const CONTROL: bool, const SURROGATE: bool>(bytes: &[u8]) ->
     }
     if SURROGATE {
         mask |= zero_mask(word ^ 0xEDED_EDED_EDED_EDED);
+    }
+    if NON_ASCII {
+        mask |= word & HIGH;
     }
     (mask != 0).then(|| mask.trailing_zeros() as usize / 8)
 }

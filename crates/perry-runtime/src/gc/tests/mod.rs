@@ -1,7 +1,7 @@
 mod alloc;
 mod arena_right_size;
-mod array_pointer_slot_enumeration;
 mod array_growth_verifier;
+mod array_pointer_slot_enumeration;
 mod barrier;
 mod barrier_arming;
 mod barrier_decoded_parent;
@@ -37,6 +37,7 @@ mod incremental_sweep_reclaim;
 mod inline_generation_gate_contract;
 mod inline_pointer_bearing_contract;
 mod json_parse_scalar;
+mod json_stringify_output;
 mod layout_pointer_free_hazard;
 mod layout_trace;
 mod lazy_intrinsic_towers;

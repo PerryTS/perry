@@ -145,6 +145,32 @@ fn nested_wide_object_does_not_break_outer_duplicate_identity() {
 }
 
 #[test]
+fn wide_object_index_resolves_exact_bytes_inside_a_hash_collision() {
+    unsafe {
+        crate::gc::gc_suppress();
+        let keys: Vec<*const crate::StringHeader> = [b"alpha".as_slice(), b"beta".as_slice()]
+            .into_iter()
+            .map(|bytes| {
+                crate::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32).cast_const()
+            })
+            .collect();
+        let mut index = super::ParsedObjectIndex {
+            hash_state: ahash::RandomState::new(),
+            primary: crate::fast_hash::new_ptr_hash_map(),
+            collisions: Vec::new(),
+        };
+        let forced_hash = 0x51de_c011_1510_0001;
+        index.insert_hash(forced_hash, 0);
+        index.insert_hash(forced_hash, 1);
+        assert_eq!(index.find_hashed(forced_hash, b"alpha", &keys), Some(0));
+        assert_eq!(index.find_hashed(forced_hash, b"beta", &keys), Some(1));
+        assert_eq!(index.find_hashed(forced_hash, b"gamma", &keys), None);
+        assert_eq!(index.find_hashed(forced_hash ^ 1, b"alpha", &keys), None);
+        crate::gc::gc_unsuppress();
+    }
+}
+
+#[test]
 fn parse_shape_cache_bounds_retained_keys_and_keeps_small_shape_hits() {
     use crate::json::{parse_shape_keys_array, PARSE_SHAPE_CACHE, PARSE_SHAPE_CACHE_KEY_BUDGET};
     unsafe {

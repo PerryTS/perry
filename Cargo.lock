@@ -6413,6 +6413,7 @@ dependencies = [
 name = "perry-runtime"
 version = "0.5.1520"
 dependencies = [
+ "ahash 0.8.12",
  "anyhow",
  "base64 0.22.1",
  "cc",

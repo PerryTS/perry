@@ -91,3 +91,21 @@ fn data_records_decline_cold_prototype_lookup_without_allocating() {
         });
     }
 }
+
+#[test]
+fn shared_shape_proof_does_not_skip_an_own_to_json_key() {
+    unsafe {
+        let text = b"{\"toJSON\":1,\"tags\":[1,2]}";
+        let source = js_string_from_bytes(text.as_ptr(), text.len() as u32);
+        let value = crate::json::test_json_parse_direct(source);
+        let obj = value.as_pointer::<crate::ObjectHeader>();
+        let template =
+            super::super::stringify_shape_template::build_shape_prefix_template(value.bits())
+                .unwrap();
+        assert!(template.data_record_candidate);
+        assert!(!template.own_keys_exclude_to_json);
+        let mut output = String::from("unchanged");
+        assert!(!try_emit(obj, &template, &mut output, 0));
+        assert_eq!(output, "unchanged");
+    }
+}

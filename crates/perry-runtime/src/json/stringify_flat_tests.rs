@@ -48,6 +48,72 @@ fn flat_direct_output_preserves_complete_object_and_string_lengths() {
 }
 
 #[test]
+fn two_field_parsed_string_uses_proven_payload_and_exact_output() {
+    unsafe {
+        let text = format!(
+            "{{\"id\":1,\"text\":\"{}\"}}",
+            "abcdefgh".repeat(128 * 1024)
+        );
+        let value = parse(&text);
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let input = scope.root_nanbox_u64(value.bits());
+        let warm = parse("{}");
+        let warm = scope.root_nanbox_u64(warm.bits());
+        assert!(
+            super::super::stringify_tojson_probe::to_json_definitely_absent(
+                (warm.get_nanbox_f64().to_bits() & POINTER_MASK) as *const u8
+            )
+        );
+
+        // Cross the 32 MiB output-debt boundary so one iteration services the
+        // prior malloc leaves before constructing its own complete result.
+        for _ in 0..34 {
+            let obj = crate::JSValue::from_bits(input.get_nanbox_f64().to_bits())
+                .as_pointer::<crate::ObjectHeader>();
+            let bits = slot(obj.cast(), std::mem::size_of::<crate::ObjectHeader>(), 1);
+            let piece = parsed_plain_string_piece(bits).expect("parser provenance");
+            let result = emit_two_field_parsed_string_object(obj, 1, piece).expect("exact output");
+            assert_eq!(output(result), text.as_bytes());
+        }
+    }
+}
+
+#[test]
+fn two_field_provenance_declines_mutated_strings_and_to_json_keys() {
+    unsafe {
+        let warm = parse("{}");
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let warm = scope.root_nanbox_u64(warm.bits());
+        assert!(
+            super::super::stringify_tojson_probe::to_json_definitely_absent(
+                (warm.get_nanbox_f64().to_bits() & POINTER_MASK) as *const u8
+            )
+        );
+
+        let original = format!("{{\"id\":1,\"text\":\"{}\"}}", "abcdefgh".repeat(1024));
+        let value = parse(&original);
+        let obj = value.as_pointer::<crate::ObjectHeader>() as *mut crate::ObjectHeader;
+        let replacement = b"line\n\"quoted\"\\tail";
+        let replacement =
+            crate::js_string_from_bytes(replacement.as_ptr(), replacement.len() as u32);
+        assert_eq!((*replacement).flags & STRING_FLAG_JSON_ESCAPE_FREE, 0);
+        crate::object::js_object_set_field(obj, 1, JSValue::string_ptr(replacement));
+        let result = try_object(value.bits()).expect("ordinary escaped-string fallback");
+        assert_eq!(
+            output(result),
+            br#"{"id":1,"text":"line\n\"quoted\"\\tail"}"#
+        );
+
+        let own_to_json = format!("{{\"toJSON\":\"{}\",\"id\":1}}", "abcdefgh".repeat(1024));
+        let value = parse(&own_to_json);
+        assert!(
+            try_object(value.bits()).is_none(),
+            "an own toJSON key must route through the callback-aware serializer"
+        );
+    }
+}
+
+#[test]
 fn flat_empty_output_declines_cold_lookup_and_stays_allocation_free_when_warm() {
     unsafe {
         let value = parse("{}");

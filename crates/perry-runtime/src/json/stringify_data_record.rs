@@ -39,9 +39,20 @@ unsafe fn array_pointer(bits: u64) -> Option<*const crate::ArrayHeader> {
 }
 
 unsafe fn inline_fields<'a>(obj: *const crate::ObjectHeader, count: u32) -> Option<&'a [u64]> {
+    inline_fields_with_live(obj, count, crate::object::object_live_slot_count(obj))
+}
+
+unsafe fn inline_fields_with_live<'a>(
+    obj: *const crate::ObjectHeader,
+    count: u32,
+    live_inline_slots: u32,
+) -> Option<&'a [u64]> {
     let count = count as usize;
-    let header = crate::value::addr_class::try_read_tracked_gc_header(obj as usize)?;
-    let header = header.as_ref();
+    // Both callers receive `obj` from the shape-template path after it has
+    // validated the tracked object type. Re-reading the global address maps
+    // for every record duplicates that proof in the hottest loop.
+    let header =
+        &*((obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader);
     if count == 0
         || count > MAX_FIELDS
         || header.obj_type != crate::gc::GC_TYPE_OBJECT
@@ -49,7 +60,7 @@ unsafe fn inline_fields<'a>(obj: *const crate::ObjectHeader, count: u32) -> Opti
         || (header.size as usize)
             < crate::gc::GC_HEADER_SIZE + std::mem::size_of::<crate::ObjectHeader>() + count * 8
         || (*obj).class_id != 0
-        || count > crate::object::object_live_slot_count(obj) as usize
+        || count > live_inline_slots as usize
     {
         return None;
     }
@@ -86,16 +97,14 @@ pub(super) unsafe fn template_candidate(obj: *const crate::ObjectHeader, count: 
 /// Reject named properties (including toJSON), descriptors, holes, sparse and
 /// lazy layouts, and any element that could recurse or invoke BigInt.toJSON.
 unsafe fn primitive_array(arr: *const crate::ArrayHeader) -> bool {
-    let Some(header) = crate::value::addr_class::try_read_tracked_gc_header(arr as usize) else {
-        return false;
-    };
-    let header = header.as_ref();
+    // `array_pointer` has already validated this exact tracked header.
+    let header =
+        &*((arr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader);
     if header.obj_type != crate::gc::GC_TYPE_ARRAY
         || (header.size as usize)
             < crate::gc::GC_HEADER_SIZE + std::mem::size_of::<crate::ArrayHeader>()
         || (*arr).length > (*arr).capacity
         || header._reserved & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0
-        || crate::array::array_has_named_properties_resolved(arr)
         || (header.size as usize)
             < crate::gc::GC_HEADER_SIZE
                 + std::mem::size_of::<crate::ArrayHeader>()
@@ -114,48 +123,77 @@ unsafe fn primitive_array(arr: *const crate::ArrayHeader) -> bool {
     elements.iter().all(|&bits| primitive(bits))
 }
 
-pub(super) unsafe fn try_emit(
+#[cfg(test)]
+unsafe fn try_emit(
     obj: *const crate::ObjectHeader,
     template: &ShapeTemplate,
     buf: &mut String,
     depth: u32,
 ) -> bool {
-    if depth as usize >= super::stringify::MAX_STRINGIFY_NESTING_DEPTH
-        || SUPPRESS_NEXT_TO_JSON.with(|c| c.get())
+    try_emit_with_live(
+        obj,
+        template,
+        buf,
+        depth,
+        crate::object::object_live_slot_count(obj),
+        super::stringify_tojson_probe::data_record_global_to_json_absent_without_gc(),
+    )
+}
+
+pub(super) unsafe fn try_emit_with_live(
+    obj: *const crate::ObjectHeader,
+    template: &ShapeTemplate,
+    buf: &mut String,
+    depth: u32,
+    live_inline_slots: u32,
+    global_to_json_absent: bool,
+) -> bool {
+    if depth as usize >= super::stringify::MAX_STRINGIFY_NESTING_DEPTH || !global_to_json_absent {
+        return false;
+    }
+    let Some(fields) = inline_fields_with_live(obj, template.shape_fields, live_inline_slots)
+    else {
+        return false;
+    };
+    if !template.own_keys_exclude_to_json
+        || crate::object::prototype_chain::object_static_prototype(obj as usize).is_some()
     {
         return false;
     }
-    let Some(fields) = inline_fields(obj, template.shape_fields) else {
-        return false;
-    };
-    if !super::stringify_tojson_probe::to_json_definitely_absent_without_gc(obj.cast()) {
-        return false;
-    }
-    let mut values = [0u64; MAX_FIELDS];
-    let mut arrays = [std::ptr::null(); MAX_FIELDS];
+    // Only the `fields.len()` prefix is read below. Keeping each slot wrapped
+    // in `MaybeUninit` avoids clearing both full 32-entry arrays for every
+    // short record while preserving the stable snapshots used during output.
+    let mut values: [std::mem::MaybeUninit<u64>; MAX_FIELDS] =
+        [const { std::mem::MaybeUninit::uninit() }; MAX_FIELDS];
+    let mut arrays: [std::mem::MaybeUninit<*const crate::ArrayHeader>; MAX_FIELDS] =
+        [const { std::mem::MaybeUninit::uninit() }; MAX_FIELDS];
     for (i, &bits) in fields.iter().enumerate() {
         if bits == TAG_UNDEFINED {
             return false;
         }
-        values[i] = bits;
-        if !primitive(bits) {
+        values[i].write(bits);
+        let arr = if !primitive(bits) {
             let Some(arr) = array_pointer(bits) else {
                 return false;
             };
             if !primitive_array(arr) {
                 return false;
             }
-            arrays[i] = arr;
-        }
+            arr
+        } else {
+            std::ptr::null()
+        };
+        arrays[i].write(arr);
     }
     for i in 0..fields.len() {
         buf.push_str(&template.prefixes[i]);
-        if !arrays[i].is_null() {
+        let arr = arrays[i].assume_init();
+        if !arr.is_null() {
             // No callbacks or managed allocation can invalidate validation.
-            super::stringify_primitive_array::emit_validated(arrays[i], buf);
+            super::stringify_primitive_array::emit_validated(arr, buf);
             continue;
         }
-        let bits = values[i];
+        let bits = values[i].assume_init();
         match bits {
             TAG_NULL => buf.push_str("null"),
             TAG_TRUE => buf.push_str("true"),
@@ -163,9 +201,7 @@ pub(super) unsafe fn try_emit(
             _ => match bits & crate::value::TAG_MASK {
                 STRING_TAG => {
                     let ptr = (bits & POINTER_MASK) as *const StringHeader;
-                    if let Some(text) = str_from_header(ptr) {
-                        write_escaped_string(buf, text);
-                    } else {
+                    if !write_heap_string(buf, ptr) {
                         buf.push_str("null");
                     }
                 }

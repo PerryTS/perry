@@ -42,6 +42,27 @@ fn direct_quoted_strings_preserve_bytes_and_utf16_lengths() {
 }
 
 #[test]
+fn parsed_escape_free_string_quotes_directly_at_large_output_size() {
+    unsafe {
+        let payload = "x".repeat(crate::string::JSON_MALLOC_OUTPUT_THRESHOLD as usize);
+        let json = format!("\"{payload}\"");
+        let source = crate::string::js_string_from_bytes(json.as_ptr(), json.len() as u32);
+        let parsed = super::super::test_json_parse_direct(source);
+        let parsed = parsed.as_string_ptr();
+        assert_ne!(
+            (*parsed).flags & crate::string::STRING_FLAG_JSON_ESCAPE_FREE,
+            0
+        );
+
+        let result = try_heap_string(crate::JSValue::string_ptr(parsed.cast_mut()).bits())
+            .expect("parsed plain string fast path");
+        let output = std::slice::from_raw_parts(string_data(result), (*result).byte_len as usize);
+        assert_eq!(output, json.as_bytes());
+        assert_eq!((*result).utf16_len, json.len() as u32);
+    }
+}
+
+#[test]
 fn direct_quoted_strings_accept_escapes_but_decline_surrogates() {
     unsafe {
         for special in [b'"', b'\\', b'\n', 0, 0x1f, 0xed] {
