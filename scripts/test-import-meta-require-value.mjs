@@ -5,8 +5,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { prepareRequireRuntime } from './test-require-runtime.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+prepareRequireRuntime(root);
 const compiler = process.env.PERRY_BIN ?? path.join(root, 'target/perry-dev/perry');
 const work = fs.mkdtempSync(path.join(os.tmpdir(), 'perry-import-meta-require-value-'));
 let passed = false;
@@ -25,7 +27,10 @@ try {
         encoding: 'utf8', timeout: 120_000, maxBuffer: 8 * 1024 * 1024,
       });
       fs.writeFileSync(output + '-compile.log', (compile.stdout ?? '') + (compile.stderr ?? ''));
-      if (compile.status !== 0) throw new Error('Compilation failed: ' + (compile.error ?? compile.status));
+      if (compile.error || compile.status !== 0) {
+        throw new Error('Compilation failed: ' + (compile.error ?? compile.status) + '\n' +
+          (compile.stdout ?? '') + (compile.stderr ?? ''));
+      }
       const run = spawnSync(output, [], { cwd: work, encoding: 'utf8', timeout: 15_000 });
       fs.writeFileSync(output + '-run.log', (run.stdout ?? '') + (run.stderr ?? ''));
       if (run.status !== 0 || !run.stdout?.includes('PASS: first-class import.meta.require')) {
