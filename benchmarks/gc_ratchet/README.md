@@ -666,6 +666,11 @@ old and accepted median plus the causal merged commit(s); the checker treats a
 missing cause, duplicate row, malformed input hash, or receipt/pin disagreement
 as a fatal artifact defect. The receipt is provenance, not an allowance:
 `evaluate` never reads it when deciding whether a future measurement regressed.
+The measurement source is either content hashes of the compiler and both
+runtime archives, or the unique ID and SHA-256 of an immutable GitHub Actions
+artifact plus the SHA-256 of its extracted measurement. The Actions form also
+binds the run's head SHA to the receipt commit. The workflow prints these fields
+after every successful artifact upload, including runs whose comparison fails.
 
 ## Adding a probe
 

@@ -733,6 +733,40 @@ class ArtifactValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(RatchetError, "ISO-8601 UTC timestamp"):
             validate_artifact(tampered)
 
+    def test_selective_refresh_receipt_accepts_immutable_actions_artifact(self):
+        artifact = _artifact_with_synthetic_receipt()
+        receipt = artifact["accepted_deterministic_deltas"]
+        receipt["measurement"].pop("binaries")
+        receipt["measurement"]["github_actions_artifact"] = {
+            "repository": "PerryTS/perry",
+            "run_id": 42,
+            "head_sha": receipt["commit"],
+            "artifact_id": 84,
+            "artifact_name": "gc-ratchet-synthetic",
+            "artifact_sha256": "e" * 64,
+            "measurement_sha256": "f" * 64,
+        }
+        validate_artifact(artifact)
+
+    def test_selective_refresh_receipt_rejects_unbound_actions_artifact(self):
+        artifact = _artifact_with_synthetic_receipt()
+        receipt = artifact["accepted_deterministic_deltas"]
+        receipt["measurement"]["github_actions_artifact"] = {
+            "repository": "PerryTS/perry",
+            "run_id": 42,
+            "head_sha": "f" * 40,
+            "artifact_id": 84,
+            "artifact_name": "gc-ratchet-synthetic",
+            "artifact_sha256": "e" * 64,
+            "measurement_sha256": "f" * 64,
+        }
+        with self.assertRaisesRegex(RatchetError, "exactly one of binaries"):
+            validate_artifact(artifact)
+
+        receipt["measurement"].pop("binaries")
+        with self.assertRaisesRegex(RatchetError, "head_sha does not match receipt commit"):
+            validate_artifact(artifact)
+
     def test_selective_refresh_does_not_allow_a_future_unexplained_delta(self):
         artifact = json.loads(DEFAULT_ARTIFACT.read_text(encoding="utf-8"))
         current = copy.deepcopy(artifact)

@@ -262,6 +262,7 @@ jobs:
             --profile shared_ci
 
       - name: Upload measurement
+        id: measurement_artifact
         if: always() && steps.relevance.outputs.run == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
@@ -270,6 +271,30 @@ jobs:
             .bench-results/gc-ratchet-current.json
             benchmarks/gc_ratchet/baseline/gc-ratchet-v1.json
           retention-days: 90
+
+      # A failed checker is exactly when a selective re-pin may be considered.
+      # Emit the immutable artifact identity and both content hashes so its
+      # receipt can cite the actual CI measurement without rebuilding locally.
+      - name: Print immutable measurement provenance
+        if: >-
+          always() && steps.relevance.outputs.run == 'true' &&
+          steps.measurement_artifact.outcome == 'success'
+        env:
+          ARTIFACT_ID: ${{ steps.measurement_artifact.outputs.artifact-id }}
+          ARTIFACT_NAME: gc-ratchet-${{ github.sha }}
+          ARTIFACT_DIGEST: ${{ steps.measurement_artifact.outputs.artifact-digest }}
+        run: |
+          set -euo pipefail
+          measurement_sha256="$(shasum -a 256 .bench-results/gc-ratchet-current.json | cut -d' ' -f1)"
+          cat <<EOF
+          repository=$GITHUB_REPOSITORY
+          run_id=$GITHUB_RUN_ID
+          head_sha=$GITHUB_SHA
+          artifact_id=$ARTIFACT_ID
+          artifact_name=$ARTIFACT_NAME
+          artifact_sha256=${ARTIFACT_DIGEST#sha256:}
+          measurement_sha256=$measurement_sha256
+          EOF
 
   report-main-result:
     needs: gc-ratchet

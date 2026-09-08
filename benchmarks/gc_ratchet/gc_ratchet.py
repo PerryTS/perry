@@ -1356,14 +1356,20 @@ def _inspect_accepted_deterministic_deltas(
         artifact_defect("accepted_deterministic_deltas.notes is empty")
 
     measurement = receipt.get("measurement")
-    expected_measurement_keys = {"platform", "repeats", "traced_runs", "binaries"}
+    measurement_common_keys = {"platform", "repeats", "traced_runs"}
+    measurement_source_keys = {"binaries", "github_actions_artifact"}
     if not isinstance(measurement, Mapping):
         artifact_defect("accepted_deterministic_deltas.measurement is not an object")
     else:
-        if set(measurement) != expected_measurement_keys:
+        present_sources = set(measurement) & measurement_source_keys
+        if (
+            set(measurement) - measurement_source_keys != measurement_common_keys
+            or len(present_sources) != 1
+        ):
             artifact_defect(
-                "accepted_deterministic_deltas.measurement fields must be exactly: "
-                + ", ".join(sorted(expected_measurement_keys))
+                "accepted_deterministic_deltas.measurement must contain platform, "
+                "repeats, traced_runs, and exactly one of binaries or "
+                "github_actions_artifact"
             )
         if not isinstance(measurement.get("platform"), str) or not measurement.get(
             "platform", ""
@@ -1376,33 +1382,94 @@ def _inspect_accepted_deterministic_deltas(
                     f"accepted_deterministic_deltas.measurement.{field} must be >= {minimum}"
                 )
 
-        binaries = measurement.get("binaries")
-        expected_binaries = {"perry", "libperry_runtime.a", "libperry_stdlib.a"}
-        if not isinstance(binaries, Mapping) or set(binaries) != expected_binaries:
-            artifact_defect(
-                "accepted_deterministic_deltas.measurement.binaries must name perry, "
-                "libperry_runtime.a, and libperry_stdlib.a"
-            )
-        else:
-            for name, binary in binaries.items():
-                if not isinstance(binary, Mapping) or set(binary) != {"size", "sha256"}:
+        if "binaries" in present_sources:
+            binaries = measurement.get("binaries")
+            expected_binaries = {"perry", "libperry_runtime.a", "libperry_stdlib.a"}
+            if not isinstance(binaries, Mapping) or set(binaries) != expected_binaries:
+                artifact_defect(
+                    "accepted_deterministic_deltas.measurement.binaries must name perry, "
+                    "libperry_runtime.a, and libperry_stdlib.a"
+                )
+            else:
+                for name, binary in binaries.items():
+                    if not isinstance(binary, Mapping) or set(binary) != {"size", "sha256"}:
+                        artifact_defect(
+                            "accepted_deterministic_deltas.measurement.binaries."
+                            f"{name} must contain exactly size and sha256"
+                        )
+                        continue
+                    size = binary.get("size")
+                    digest = binary.get("sha256")
+                    if isinstance(size, bool) or not isinstance(size, int) or size <= 0:
+                        artifact_defect(
+                            f"accepted_deterministic_deltas.measurement.binaries.{name}.size "
+                            "must be a positive integer"
+                        )
+                    if (
+                        not isinstance(digest, str)
+                        or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+                    ):
+                        artifact_defect(
+                            f"accepted_deterministic_deltas.measurement.binaries.{name}.sha256 "
+                            "is not a SHA-256 digest"
+                        )
+
+        if "github_actions_artifact" in present_sources:
+            actions = measurement.get("github_actions_artifact")
+            expected_actions_keys = {
+                "repository",
+                "run_id",
+                "head_sha",
+                "artifact_id",
+                "artifact_name",
+                "artifact_sha256",
+                "measurement_sha256",
+            }
+            if not isinstance(actions, Mapping) or set(actions) != expected_actions_keys:
+                artifact_defect(
+                    "accepted_deterministic_deltas.measurement.github_actions_artifact "
+                    "must contain exactly repository, run_id, head_sha, artifact_id, "
+                    "artifact_name, artifact_sha256, and measurement_sha256"
+                )
+            else:
+                repository = actions.get("repository")
+                if (
+                    not isinstance(repository, str)
+                    or re.fullmatch(r"[^/\s]+/[^/\s]+", repository) is None
+                ):
                     artifact_defect(
-                        "accepted_deterministic_deltas.measurement.binaries."
-                        f"{name} must contain exactly size and sha256"
+                        "accepted_deterministic_deltas.measurement."
+                        "github_actions_artifact.repository is not owner/name"
                     )
-                    continue
-                size = binary.get("size")
-                digest = binary.get("sha256")
-                if isinstance(size, bool) or not isinstance(size, int) or size <= 0:
+                for field in ("run_id", "artifact_id"):
+                    value = actions.get(field)
+                    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                        artifact_defect(
+                            "accepted_deterministic_deltas.measurement."
+                            f"github_actions_artifact.{field} must be a positive integer"
+                        )
+                head_sha = actions.get("head_sha")
+                if head_sha != receipt.get("commit"):
                     artifact_defect(
-                        f"accepted_deterministic_deltas.measurement.binaries.{name}.size "
-                        "must be a positive integer"
+                        "accepted_deterministic_deltas.measurement."
+                        "github_actions_artifact.head_sha does not match receipt commit"
                     )
-                if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+                artifact_name = actions.get("artifact_name")
+                if not isinstance(artifact_name, str) or not artifact_name.strip():
                     artifact_defect(
-                        f"accepted_deterministic_deltas.measurement.binaries.{name}.sha256 "
-                        "is not a SHA-256 digest"
+                        "accepted_deterministic_deltas.measurement."
+                        "github_actions_artifact.artifact_name is empty"
                     )
+                for field in ("artifact_sha256", "measurement_sha256"):
+                    digest = actions.get(field)
+                    if (
+                        not isinstance(digest, str)
+                        or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+                    ):
+                        artifact_defect(
+                            "accepted_deterministic_deltas.measurement."
+                            f"github_actions_artifact.{field} is not a SHA-256 digest"
+                        )
 
     causes = receipt.get("causes")
     known_causes: set[str] = set()
