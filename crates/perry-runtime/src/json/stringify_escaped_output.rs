@@ -102,7 +102,9 @@ const EXPANSION: [u8; 256] = {
 };
 
 fn count_expansion(bytes: &[u8]) -> u64 {
-    let mut at = 0;
+    let at = 0;
+    #[cfg(target_arch = "aarch64")]
+    let mut at = at;
     let mut extra = 0u64;
     #[cfg(target_arch = "aarch64")]
     unsafe {
