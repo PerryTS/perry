@@ -32,6 +32,80 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 
+/// Read loader metadata preserved by unbun. Extensions are not authoritative:
+/// Bun can embed `notes.md` using its text loader or its file/Markdown loaders.
+/// Validate before graph compilation, so a malformed sidecar fails promptly.
+pub(super) fn bunfs_text_modules(root: Option<&Path>) -> Result<std::collections::HashSet<String>> {
+    #[derive(serde::Deserialize)]
+    struct Manifest {
+        version: u32,
+        runtime: String,
+        modules: Vec<Entry>,
+    }
+    #[derive(serde::Deserialize)]
+    struct Entry {
+        path: String,
+        extracted_path: String,
+        loader: u8,
+    }
+    let mut text = std::collections::HashSet::new();
+    let Some(root) = root else {
+        return Ok(text);
+    };
+    let manifest_path = root.join("unbun-manifest.json");
+    let bytes = match fs::read(&manifest_path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(text),
+        Err(error) => return Err(anyhow!("cannot read {}: {error}", manifest_path.display())),
+    };
+    let manifest: Manifest = serde_json::from_slice(&bytes)
+        .map_err(|error| anyhow!("invalid {}: {error}", manifest_path.display()))?;
+    if manifest.version != 1 || manifest.runtime != "bun" {
+        return Err(anyhow!(
+            "unsupported unbun manifest version/runtime in {}",
+            manifest_path.display()
+        ));
+    }
+    let root = root.canonicalize()?;
+    let mut seen = std::collections::HashSet::new();
+    for entry in manifest.modules {
+        if !seen.insert(entry.path.clone()) {
+            return Err(anyhow!(
+                "duplicate Bun virtual path in manifest: {}",
+                entry.path
+            ));
+        }
+        if entry.loader != 13 {
+            continue;
+        } // Text-loader discriminant in the version-1 extraction format.
+        let relative = Path::new(&entry.extracted_path);
+        if relative.as_os_str().is_empty()
+            || !relative
+                .components()
+                .all(|c| matches!(c, std::path::Component::Normal(_)))
+        {
+            return Err(anyhow!(
+                "invalid extracted text-module path: {}",
+                entry.extracted_path
+            ));
+        }
+        let mapped = super::resolve::bunfs_mapped_path(&entry.path, &root)
+            .ok_or_else(|| anyhow!("invalid Bun text-module virtual path: {}", entry.path))?;
+        let extracted = root.join(relative).canonicalize()?;
+        if !extracted.starts_with(&root)
+            || !extracted.is_file()
+            || mapped.canonicalize()? != extracted
+        {
+            return Err(anyhow!(
+                "Bun text-module mapping escapes or disagrees with extracted root: {}",
+                entry.path
+            ));
+        }
+        text.insert(entry.path);
+    }
+    Ok(text)
+}
+
 /// Find literal Bun virtual paths in one source module and return every mapped
 /// file that should retain that exact runtime name in the standalone binary.
 /// Missing literals are left to the calling API's normal ENOENT behavior;
@@ -288,6 +362,7 @@ fn relative_name(path: &Path, project_root: &Path) -> Option<String> {
 pub(super) fn generate_embedded_asset_object(
     assets: &[(String, PathBuf)],
     output_dir: &Path,
+    text_modules: &std::collections::HashSet<String>,
 ) -> Result<Option<PathBuf>> {
     if assets.is_empty() {
         return Ok(None);
@@ -323,6 +398,9 @@ pub(super) fn generate_embedded_asset_object(
     c.push_str("// registers them into the runtime registry before `main`.\n");
     c.push_str("#include <stddef.h>\n\n");
     c.push_str("extern void js_register_embedded_asset(const char *name, size_t name_len, const char *bytes, size_t bytes_len);\n\n");
+    if !text_modules.is_empty() {
+        c.push_str("extern void js_register_embedded_text_asset(const char *name, size_t name_len, const char *bytes, size_t bytes_len);\n\n");
+    }
 
     for (idx, (name, path)) in assets.iter().enumerate() {
         // Names are tiny — keep them as ASCII-clean C string literals.
@@ -380,9 +458,14 @@ pub(super) fn generate_embedded_asset_object(
         c.push_str("static void perry_register_embedded_assets(void) {\n");
     }
     for idx in 0..assets.len() {
+        let register = if text_modules.contains(&assets[idx].0) {
+            "js_register_embedded_text_asset"
+        } else {
+            "js_register_embedded_asset"
+        };
         writeln!(
             c,
-            "    js_register_embedded_asset(PERRY_ASSET_NAME_{idx}, PERRY_ASSET_NAME_LEN_{idx}, PERRY_ASSET_DATA_{idx}, (size_t)(PERRY_ASSET_END_{idx} - PERRY_ASSET_DATA_{idx}));"
+            "    {register}(PERRY_ASSET_NAME_{idx}, PERRY_ASSET_NAME_LEN_{idx}, PERRY_ASSET_DATA_{idx}, (size_t)(PERRY_ASSET_END_{idx} - PERRY_ASSET_DATA_{idx}));"
         )
         .ok();
     }
@@ -580,6 +663,36 @@ const escape = "/$bunfs/root/../outside.bin";
         assert!(assets
             .iter()
             .all(|(_, path)| path.starts_with(root.canonicalize().unwrap())));
+    }
+
+    #[test]
+    fn bunfs_text_loader_uses_metadata_not_extension() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("text.md"), "# raw Markdown").unwrap();
+        fs::write(root.path().join("file.md"), "# file asset").unwrap();
+        fs::write(
+            root.path().join("unbun-manifest.json"),
+            r#"{
+            "version":1,"runtime":"bun","modules":[
+                {"path":"/$bunfs/root/text.md","extracted_path":"text.md","loader":13},
+                {"path":"/$bunfs/root/file.md","extracted_path":"file.md","loader":5}
+            ]}"#,
+        )
+        .unwrap();
+        let text = bunfs_text_modules(Some(root.path())).unwrap();
+        assert_eq!(
+            text,
+            std::collections::HashSet::from(["/$bunfs/root/text.md".to_string()])
+        );
+        fs::write(
+            root.path().join("unbun-manifest.json"),
+            r#"{
+            "version":1,"runtime":"bun","modules":[
+                {"path":"/$bunfs/root/text.md","extracted_path":"../outside.md","loader":13}
+            ]}"#,
+        )
+        .unwrap();
+        assert!(bunfs_text_modules(Some(root.path())).is_err());
     }
 
     #[test]

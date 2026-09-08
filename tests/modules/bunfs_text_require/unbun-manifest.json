@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "runtime": "bun",
+  "modules": [
+    {"path": "/$bunfs/root/message.md", "extracted_path": "message.md", "loader": 13},
+    {"path": "/$bunfs/root/empty.txt", "extracted_path": "empty.txt", "loader": 13},
+    {"path": "/$bunfs/root/file-only.md", "extracted_path": "file-only.md", "loader": 5}
+  ]
+}
+

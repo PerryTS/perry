@@ -212,6 +212,24 @@ fn require_base_filename(closure: *const ClosureHeader) -> String {
 }
 
 fn resolve_file(path: &std::path::Path) -> Option<std::path::PathBuf> {
+    if crate::embedded::is_virtual_path(&path.to_string_lossy()) {
+        // Virtual files do not exist on disk. Normalize lexical components
+        // without canonicalize/stat, and never fall through to the host FS.
+        let mut normalized = std::path::PathBuf::new();
+        for component in path.components() {
+            match component {
+                std::path::Component::CurDir => {}
+                std::path::Component::ParentDir => {
+                    normalized.pop();
+                }
+                component => normalized.push(component.as_os_str()),
+            }
+        }
+        let key = normalized.to_string_lossy();
+        return (crate::embedded::is_virtual_path(&key)
+            && crate::embedded::lookup_text_module(&key).is_some())
+        .then_some(normalized);
+    }
     if path.is_file() {
         return Some(std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()));
     }
@@ -283,6 +301,9 @@ fn resolve_request(
     base: &std::path::Path,
     specifier: &str,
 ) -> Result<std::path::PathBuf, ResolveError> {
+    if crate::embedded::is_virtual_path(specifier) {
+        return resolve_file(std::path::Path::new(specifier)).ok_or(ResolveError::NotFound);
+    }
     if specifier.starts_with('/') {
         return resolve_file(std::path::Path::new(specifier)).ok_or(ResolveError::NotFound);
     }
@@ -504,8 +525,9 @@ fn require_path(cache: f64, path: &std::path::Path, parent_filename: &str) -> f6
     let cache_handle = scope.root_nanbox_f64(cache);
     let filename = path.to_string_lossy();
     if let Some((record, exports)) = cached_record(cache_handle.get_nanbox_f64(), &filename) {
+        let exports_handle = scope.root_nanbox_f64(exports);
         link_parent(cache_handle.get_nanbox_f64(), record, parent_filename);
-        return exports;
+        return exports_handle.get_nanbox_f64();
     }
     let mut registered = registered_path_module_value(&filename).unwrap_or_else(|| {
         PENDING_REQUIRE_PARENT.with(|pending| {
@@ -580,6 +602,9 @@ fn require_path(cache: f64, path: &std::path::Path, parent_filename: &str) -> f6
         exports
     } else if !JSValue::from_bits(registered_handle.get_nanbox_f64().to_bits()).is_undefined() {
         registered_handle.get_nanbox_f64()
+    } else if let Some(bytes) = crate::embedded::lookup_text_module(&filename) {
+        let text = js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+        f64::from_bits(JSValue::string_ptr(text).bits())
     } else if path.extension().and_then(|e| e.to_str()) == Some("json") {
         js_require_json_disk(string_value(&filename))
     } else {
