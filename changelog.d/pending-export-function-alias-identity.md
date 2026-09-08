@@ -1,0 +1,3 @@
+Fix raw-name function export aliases that accidentally called a different function when identifiers such as `$n` and `_n` shared a sanitized spelling. Resolve the exported HIR function ID to its canonical emitted symbol, and preserve the target's direct-call and closure-wrapper arity, including renamed exports and functions taking more than five arguments.
+
+Adds an in-process IR regression selected by scoped PR CI, plus a standalone two-module Node/native comparison at LLVM O0, Os, and Oz (`scripts/test-export-dollar-underscore-collision.mjs`). No application source or build artifact is required.

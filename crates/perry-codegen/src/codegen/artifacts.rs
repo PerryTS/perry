@@ -981,7 +981,7 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
     // Format`/`$constructor` family — ~80 symbols on the zod surface), or
     // any other character `sanitize()` rewrites. Fix: for every named
     // export where `sanitize(name) != name`, emit raw-name aliases
-    // forwarding to the sanitized definition.
+    // forwarding to the canonical definition (not a colliding sanitized name).
     //
     // Sub-bug B — missing `__perry_wrap_perry_fn_<src>__<exported>` for
     // `local == exported` non-function exports. Concrete shape:
@@ -1008,6 +1008,12 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
         let mut emitted_aliases: HashSet<String> = HashSet::new();
         let func_by_local_name: HashMap<&str, &perry_hir::Function> =
             hir.functions.iter().map(|f| (f.name.as_str(), f)).collect();
+        let func_by_id: HashMap<_, _> = hir.functions.iter().map(|f| (f.id, f)).collect();
+        let func_by_export_name: HashMap<_, _> = hir
+            .exported_functions
+            .iter()
+            .filter_map(|(name, id)| func_by_id.get(id).map(|f| (name.as_str(), *f)))
+            .collect();
         for export in &hir.exports {
             let perry_hir::Export::Named { local, exported } = export else {
                 continue;
@@ -1017,26 +1023,27 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
             // Sub-bug A: emit raw-name aliases when the exported name
             // sanitizes to a different symbol. Two aliases per mismatch:
             //   * `perry_fn_<src>__<raw_exported>` — value/getter form,
-            //     forwards to the already-emitted sanitized symbol.
+            //     forwards to the exact function body, or a variable getter.
             //   * `__perry_wrap_perry_fn_<src>__<raw_exported>` — closure-
-            //     wrapper form, forwards to the sanitized wrapper if it
+            //     wrapper form, forwards to the matching canonical wrapper if it
             //     exists, otherwise emits a no-op (matches the variable/
             //     class branch in the #837 loop above).
             if sanitized != *exported {
-                let sanitized_target = format!("perry_fn_{}__{}", module_prefix, sanitized);
+                // `$n` and `_n` share sanitize() output but are distinct bodies.
+                // The export's function ID is authoritative, including aliases
+                // whose local name no longer identifies the original function.
+                let function = func_by_export_name
+                    .get(exported.as_str())
+                    .or_else(|| func_by_local_name.get(local.as_str()));
+                let target = function
+                    .and_then(|f| func_names.get(&f.id))
+                    .cloned()
+                    .unwrap_or_else(|| format!("perry_fn_{}__{}", module_prefix, sanitized));
                 let raw_target = format!("perry_fn_{}__{}", module_prefix, exported);
                 if !llmod.has_function(&raw_target) && emitted_aliases.insert(raw_target.clone()) {
-                    // Look up the param count to match the sanitized
-                    // target's arity. Default to 0 — that matches the
-                    // variable-getter shape (zero-arg fetcher) which is
-                    // the common case here. Functions with `$`-prefixed
-                    // names (rare, but possible) need to match arity;
-                    // we look it up from the HIR if the local resolves
-                    // to a known function.
-                    let param_count = func_by_local_name
-                        .get(local.as_str())
-                        .map(|f| f.params.len())
-                        .unwrap_or(0);
+                    // Variable getters take no arguments; function aliases must
+                    // match the exact target's arity, not its sanitized sibling.
+                    let param_count = function.map(|f| f.params.len()).unwrap_or(0);
                     let wrap_params: Vec<(LlvmType, String)> = (0..param_count)
                         .map(|i| (DOUBLE, format!("%a{}", i)))
                         .collect();
@@ -1047,43 +1054,26 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                         (0..param_count).map(|i| format!("%a{}", i)).collect();
                     let call_args: Vec<(LlvmType, &str)> =
                         arg_names.iter().map(|s| (DOUBLE, s.as_str())).collect();
-                    let result = blk.call(DOUBLE, &sanitized_target, &call_args);
+                    let result = blk.call(DOUBLE, &target, &call_args);
                     blk.ret(DOUBLE, &result);
                 }
                 let raw_wrap = format!("__perry_wrap_perry_fn_{}__{}", module_prefix, exported);
-                let sanitized_wrap =
-                    format!("__perry_wrap_perry_fn_{}__{}", module_prefix, sanitized);
+                let target_wrap = format!("__perry_wrap_{}", target);
                 if !llmod.has_function(&raw_wrap) && emitted_aliases.insert(raw_wrap.clone()) {
-                    if llmod.has_function(&sanitized_wrap) {
-                        // Forward to the sanitized wrapper. Both have the
-                        // same closure-call ABI: (i64 this_closure, double
-                        // a0, …, double a4).
-                        let wf = llmod.define_function(
-                            &raw_wrap,
-                            DOUBLE,
-                            vec![
-                                (I64, "%this_closure".to_string()),
-                                (DOUBLE, "%a0".to_string()),
-                                (DOUBLE, "%a1".to_string()),
-                                (DOUBLE, "%a2".to_string()),
-                                (DOUBLE, "%a3".to_string()),
-                                (DOUBLE, "%a4".to_string()),
-                            ],
-                        );
+                    if llmod.has_function(&target_wrap) {
+                        // Match the canonical wrapper's closure-call ABI (up to
+                        // 16 positional arguments), including renamed exports.
+                        let arity = function.map(|f| f.params.len().min(16)).unwrap_or(5);
+                        let mut params = vec![(I64, "%this_closure".to_string())];
+                        params.extend((0..arity).map(|i| (DOUBLE, format!("%a{}", i))));
+                        let wf = llmod.define_function(&raw_wrap, DOUBLE, params.clone());
                         let _ = wf.create_block("entry");
                         let blk = wf.block_mut(0).unwrap();
-                        let result = blk.call(
-                            DOUBLE,
-                            &sanitized_wrap,
-                            &[
-                                (I64, "%this_closure"),
-                                (DOUBLE, "%a0"),
-                                (DOUBLE, "%a1"),
-                                (DOUBLE, "%a2"),
-                                (DOUBLE, "%a3"),
-                                (DOUBLE, "%a4"),
-                            ],
-                        );
+                        let args: Vec<_> = params
+                            .iter()
+                            .map(|(ty, name)| (*ty, name.as_str()))
+                            .collect();
+                        let result = blk.call(DOUBLE, &target_wrap, &args);
                         blk.ret(DOUBLE, &result);
                     } else {
                         // No sanitized wrapper either (variable/class/
