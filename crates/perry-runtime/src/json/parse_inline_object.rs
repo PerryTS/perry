@@ -141,9 +141,10 @@ pub(super) unsafe fn allocate(plan: &Plan) -> Option<JSValue> {
         // This remains a fully-accounted arena birth, while the short no-move
         // scope keeps the keys and shape stable until the final header exists.
         let _no_move = crate::gc::GcSuppressScope::new();
-        let key_ptr = keys.get_raw_mut_ptr::<crate::ArrayHeader>();
-        let id = crate::object::shapes::shape_id_for_keys_ensure(key_ptr, plan.len as u32);
-        crate::object::try_object_from_inline_json_fields(key_ptr, id, &plan.fields[..plan.len])
+        keys.with_mut_ptr(|key_ptr: *mut crate::ArrayHeader| {
+            let id = crate::object::shapes::shape_id_for_keys_ensure(key_ptr, plan.len as u32);
+            crate::object::try_object_from_inline_json_fields(key_ptr, id, &plan.fields[..plan.len])
+        })
     };
     let object = if let Some(object) = object {
         object
@@ -153,9 +154,10 @@ pub(super) unsafe fn allocate(plan: &Plan) -> Option<JSValue> {
         // outside suppression, then re-read every movable fact from its handle.
         crate::gc::gc_check_trigger();
         let _no_move = crate::gc::GcSuppressScope::new();
-        let key_ptr = keys.get_raw_mut_ptr::<crate::ArrayHeader>();
-        let id = crate::object::shapes::shape_id_for_keys_ensure(key_ptr, plan.len as u32);
-        crate::object::object_from_inline_json_fields(key_ptr, id, &plan.fields[..plan.len])
+        keys.with_mut_ptr(|key_ptr: *mut crate::ArrayHeader| {
+            let id = crate::object::shapes::shape_id_for_keys_ensure(key_ptr, plan.len as u32);
+            crate::object::object_from_inline_json_fields(key_ptr, id, &plan.fields[..plan.len])
+        })
     };
     // The key edge lives in the shape descriptor; inline slots contain no
     // managed pointers and retain the newborn's pointer-free layout.

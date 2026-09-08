@@ -74,21 +74,22 @@ fn json_inline_object_parse_roots_keys_and_returns_movable_output() {
             text.as_ptr(),
             text.len() as u32,
         ));
-        unsafe {
-            crate::json::test_json_parse_direct(input.get_raw_const_ptr());
-        }
-        let input_address = input.get_raw_const_ptr::<crate::StringHeader>() as usize;
+        input.with_const_ptr(|input| unsafe {
+            crate::json::test_json_parse_direct(input);
+        });
+        let input_address =
+            input.with_const_ptr(|input: *const crate::StringHeader| input as usize);
         GC_SUPPRESSED_TINY_PARSE_COLLECTION_PENDING.with(|c| c.set(true));
-        let value = unsafe {
+        let value = input.with_const_ptr(|input| unsafe {
             if fallible {
-                crate::json::js_json_parse_result(input.get_raw_const_ptr()).unwrap()
+                crate::json::js_json_parse_result(input).unwrap()
             } else {
-                crate::json::js_json_parse(input.get_raw_const_ptr())
+                crate::json::js_json_parse(input)
             }
-        };
+        });
         assert_ne!(
             input_address,
-            input.get_raw_const_ptr::<crate::StringHeader>() as usize
+            input.with_const_ptr(|input: *const crate::StringHeader| input as usize)
         );
         assert!(!GC_SUPPRESSED_TINY_PARSE_COLLECTION_PENDING.with(|c| c.get()));
         let output_address = value.as_pointer::<crate::ObjectHeader>() as usize;
@@ -206,13 +207,13 @@ fn assert_inline_keys_move(fallible: bool, pending: bool) {
         triggers.make_arena_trigger_due();
         GC_TRIGGER_ARMED.with(|c| c.set(true));
     }
-    let value = unsafe {
+    let value = input.with_const_ptr(|input| unsafe {
         if fallible {
-            crate::json::js_json_parse_result(input.get_raw_const_ptr()).unwrap()
+            crate::json::js_json_parse_result(input).unwrap()
         } else {
-            crate::json::js_json_parse(input.get_raw_const_ptr())
+            crate::json::js_json_parse(input)
         }
-    };
+    });
     assert!(gc_collection_count() > before);
     let object = value.as_pointer::<crate::ObjectHeader>();
     let moved_keys = unsafe { crate::object::object_keys_array(object) };
@@ -259,12 +260,14 @@ fn json_scalar_parse_preserves_blocked_debt_and_services_it_when_safe() {
     ] {
         let input = crate::js_string_from_bytes(text.as_ptr(), text.len() as u32);
         let root = scope.root_string_ptr(input);
-        let parse = || unsafe {
-            if fallible {
-                crate::json::js_json_parse_result(root.get_raw_const_ptr()).unwrap()
-            } else {
-                crate::json::js_json_parse(root.get_raw_const_ptr())
-            }
+        let parse = || {
+            root.with_const_ptr(|input| unsafe {
+                if fallible {
+                    crate::json::js_json_parse_result(input).unwrap()
+                } else {
+                    crate::json::js_json_parse(input)
+                }
+            })
         };
         GC_SUPPRESSED_TINY_PARSE_COLLECTION_PENDING.with(|c| c.set(true));
         let old_flags = GC_FLAGS.with(|c| c.replace(c.get() | GC_FLAG_SUPPRESSED));
@@ -357,17 +360,17 @@ fn assert_empty_parse_moves_input_and_output(fallible: bool) {
         text.as_ptr(),
         text.len() as u32,
     ));
-    let address = input.get_raw_const_ptr::<crate::StringHeader>() as usize;
+    let address = input.with_const_ptr(|input: *const crate::StringHeader| input as usize);
     GC_SUPPRESSED_TINY_PARSE_COLLECTION_PENDING.with(|c| c.set(true));
-    let value = unsafe {
+    let value = input.with_const_ptr(|input| unsafe {
         if fallible {
-            crate::json::js_json_parse_result(input.get_raw_const_ptr()).unwrap()
+            crate::json::js_json_parse_result(input).unwrap()
         } else {
-            crate::json::js_json_parse(input.get_raw_const_ptr())
+            crate::json::js_json_parse(input)
         }
-    };
+    });
     assert_ne!(
-        input.get_raw_const_ptr::<crate::StringHeader>() as usize,
+        input.with_const_ptr(|input: *const crate::StringHeader| input as usize),
         address,
         "input must actually move"
     );
@@ -448,7 +451,7 @@ fn assert_container_input_survives_collection(fallible: bool, array: bool, pendi
         text.as_ptr(),
         text.len() as u32,
     ));
-    let before_address = input.get_raw_const_ptr::<crate::StringHeader>() as usize;
+    let before_address = input.with_const_ptr(|input: *const crate::StringHeader| input as usize);
     let before = gc_collection_count();
     // Model debt left at the preceding parse boundary. The pending hook must
     // lower and arm the threshold itself; the later gc_check_trigger is not
@@ -459,17 +462,17 @@ fn assert_container_input_survives_collection(fallible: bool, array: bool, pendi
         triggers.make_arena_trigger_due();
         GC_TRIGGER_ARMED.with(|c| c.set(true));
     }
-    let value = unsafe {
+    let value = input.with_const_ptr(|input| unsafe {
         if fallible {
-            crate::json::js_json_parse_result(input.get_raw_const_ptr()).unwrap()
+            crate::json::js_json_parse_result(input).unwrap()
         } else {
-            crate::json::js_json_parse(input.get_raw_const_ptr())
+            crate::json::js_json_parse(input)
         }
-    };
+    });
     let output = scope.root_nanbox_u64(value.bits());
     assert!(gc_collection_count() > before, "entry hook must collect");
     assert_ne!(
-        input.get_raw_const_ptr::<crate::StringHeader>() as usize,
+        input.with_const_ptr(|input: *const crate::StringHeader| input as usize),
         before_address,
         "the input must actually move"
     );

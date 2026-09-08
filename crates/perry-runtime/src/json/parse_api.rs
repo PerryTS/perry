@@ -50,7 +50,7 @@ pub unsafe extern "C" fn js_json_parse_or_null(text_ptr: *const StringHeader) ->
 pub(crate) unsafe fn test_json_parse_direct(text_ptr: *const StringHeader) -> JSValue {
     assert!(!text_ptr.is_null());
     let len = (*text_ptr).byte_len as usize;
-    let data_ptr = (text_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+    let data_ptr = crate::string::string_data(text_ptr);
     let bytes = std::slice::from_raw_parts(data_ptr, len);
 
     crate::gc::gc_suppress();
@@ -186,7 +186,7 @@ pub unsafe fn js_json_parse_result(text_ptr: *const StringHeader) -> Result<JSVa
         return Err(syntax_error_value("Unexpected end of JSON input"));
     }
     let len = (*text_ptr).byte_len as usize;
-    let data_ptr = (text_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
+    let data_ptr = crate::string::string_data(text_ptr);
     if len == 0 {
         return Err(syntax_error_value("Unexpected end of JSON input"));
     }

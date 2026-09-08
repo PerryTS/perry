@@ -33,7 +33,7 @@ fn json_construction_during_incremental_marking_preserves_black_births() {
             let _suppressed = crate::gc::GcSuppressScope::new();
             assert!(crate::arena::ConstructionBatch::new().is_none());
         }
-        let value = crate::json::test_json_parse_direct(text.get_raw_mut_ptr());
+        let value = text.with_mut_ptr(|text| crate::json::test_json_parse_direct(text));
         let root = scope.root_nanbox_u64(value.bits());
         assert_ne!(
             (*header_from_user_ptr(value.as_pointer::<u8>())).gc_flags & GC_FLAG_MARKED,

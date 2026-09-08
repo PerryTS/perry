@@ -59,6 +59,7 @@ fn json_piece_copy_neither_reads_nor_writes_past_guard_pages() {
                     let from = source.add(if source_at_end { 2 * page - len } else { page });
                     let to = output.add(if output_at_end { 2 * page - len } else { page });
                     for i in 0..len {
+                        // GC_STORE_AUDIT(POINTER_FREE): JSON byte-buffer payload.
                         from.add(i).write((i * 137 + 11) as u8);
                     }
                     copy_bytes(from, to, len);

@@ -181,8 +181,10 @@ pub(super) unsafe fn emit_piece(piece: Piece, bits: u64, output: *mut u8) -> usi
             let (source, _) =
                 crate::string::str_bytes_from_jsvalue(f64::from_bits(bits), &mut scratch)
                     .expect("prevalidated string slot");
+            // GC_STORE_AUDIT(POINTER_FREE): JSON byte-buffer payload.
             output.write(b'"');
             super::stringify_copy::copy_bytes(source, output.add(1), bytes as usize);
+            // GC_STORE_AUDIT(POINTER_FREE): JSON byte-buffer payload.
             output.add(bytes as usize + 1).write(b'"');
             bytes as usize + 2
         }
@@ -278,26 +280,30 @@ unsafe fn emit_one_field_object(obj: *const crate::ObjectHeader) -> Option<JSVal
         return None;
     }
     let (result, output) = string_storage_alloc(bytes);
-    let obj = input.get_raw_const_ptr::<crate::ObjectHeader>();
-    let keys = crate::object::object_keys_array(obj);
-    init_string_header(result, units, bytes, bytes, 0, 0);
-    output.write(b'{');
-    let at = 1 + emit_piece(
-        key,
-        slot(keys.cast(), std::mem::size_of::<crate::ArrayHeader>(), 0),
-        output.add(1),
-    );
-    output.add(at).write(b':');
-    let at = at
-        + 1
-        + emit_piece(
-            value,
-            slot(obj.cast(), std::mem::size_of::<crate::ObjectHeader>(), 0),
-            output.add(at + 1),
+    input.with_const_ptr(|obj: *const crate::ObjectHeader| {
+        let keys = crate::object::object_keys_array(obj);
+        init_string_header(result, units, bytes, bytes, 0, 0);
+        // GC_STORE_AUDIT(POINTER_FREE): JSON byte-buffer payload.
+        output.write(b'{');
+        let at = 1 + emit_piece(
+            key,
+            slot(keys.cast(), std::mem::size_of::<crate::ArrayHeader>(), 0),
+            output.add(1),
         );
-    output.add(at).write(b'}');
-    debug_assert_eq!(at + 1, bytes as usize);
-    Some(JSValue::string_ptr(result))
+        // GC_STORE_AUDIT(POINTER_FREE): JSON byte-buffer payload.
+        output.add(at).write(b':');
+        let at = at
+            + 1
+            + emit_piece(
+                value,
+                slot(obj.cast(), std::mem::size_of::<crate::ObjectHeader>(), 0),
+                output.add(at + 1),
+            );
+        // GC_STORE_AUDIT(POINTER_FREE): JSON byte-buffer payload.
+        output.add(at).write(b'}');
+        debug_assert_eq!(at + 1, bytes as usize);
+        Some(JSValue::string_ptr(result))
+    })
 }
 
 /// The direct parser marks strings borrowed from unescaped JSON tokens. That
@@ -370,44 +376,51 @@ unsafe fn emit_two_field_parsed_string_object(
     let scope = crate::gc::RuntimeHandleScope::new();
     let input = scope.root_raw_const_ptr(obj);
     service_json_output_sweep_boundary();
-    let obj = input.get_raw_const_ptr::<crate::ObjectHeader>();
-    if !super::stringify_tojson_probe::to_json_definitely_absent_after_own_keys(obj.cast()) {
+    if !input.with_const_ptr(|obj: *const crate::ObjectHeader| {
+        super::stringify_tojson_probe::to_json_definitely_absent_after_own_keys(obj.cast())
+    }) {
         return None;
     }
 
     let large_output = bytes >= JSON_MALLOC_OUTPUT_THRESHOLD;
     let construction = large_output.then(crate::gc::GcSuppressScope::new);
     let (result, output) = json_output_storage_alloc(bytes);
-    let obj = input.get_raw_const_ptr::<crate::ObjectHeader>();
-    let keys = crate::object::object_keys_array(obj);
-    init_string_header(result, units, bytes, bytes, 0, 0);
-    output.write(b'{');
-    let mut at = 1usize;
-    for i in 0..2 {
-        if i != 0 {
-            output.add(at).write(b',');
+    let value = input.with_const_ptr(|obj: *const crate::ObjectHeader| {
+        let keys = crate::object::object_keys_array(obj);
+        init_string_header(result, units, bytes, bytes, 0, 0);
+        // GC_STORE_AUDIT(POINTER_FREE): JSON byte-buffer payload.
+        output.write(b'{');
+        let mut at = 1usize;
+        for i in 0..2 {
+            if i != 0 {
+                // GC_STORE_AUDIT(POINTER_FREE): JSON byte-buffer payload.
+                output.add(at).write(b',');
+                at += 1;
+            }
+            at += emit_piece(
+                key_plan[i],
+                slot(keys.cast(), std::mem::size_of::<crate::ArrayHeader>(), i),
+                output.add(at),
+            );
+            // GC_STORE_AUDIT(POINTER_FREE): JSON byte-buffer payload.
+            output.add(at).write(b':');
             at += 1;
+            at += emit_piece(
+                value_plan[i],
+                slot(obj.cast(), std::mem::size_of::<crate::ObjectHeader>(), i),
+                output.add(at),
+            );
         }
-        at += emit_piece(
-            key_plan[i],
-            slot(keys.cast(), std::mem::size_of::<crate::ArrayHeader>(), i),
-            output.add(at),
-        );
-        output.add(at).write(b':');
-        at += 1;
-        at += emit_piece(
-            value_plan[i],
-            slot(obj.cast(), std::mem::size_of::<crate::ObjectHeader>(), i),
-            output.add(at),
-        );
-    }
-    output.add(at).write(b'}');
-    debug_assert_eq!(at + 1, bytes as usize);
+        // GC_STORE_AUDIT(POINTER_FREE): JSON byte-buffer payload.
+        output.add(at).write(b'}');
+        debug_assert_eq!(at + 1, bytes as usize);
+        Some(JSValue::string_ptr(result))
+    });
     drop(construction);
     if large_output {
         note_completed_malloc_json_output(bytes);
     }
-    Some(JSValue::string_ptr(result))
+    value
 }
 
 /// The fused key loop replaces the own-key probe's array validation as well
@@ -472,32 +485,37 @@ unsafe fn emit_object(obj: *const crate::ObjectHeader, fields: usize) -> Option<
         return None;
     }
     let (result, output) = string_storage_alloc(bytes);
-    let obj = input.get_raw_const_ptr::<crate::ObjectHeader>();
-    let keys = crate::object::object_keys_array(obj);
-    init_string_header(result, units, bytes, bytes, 0, 0);
-    output.write(b'{');
-    let mut at = 1;
-    for i in 0..fields {
-        if i != 0 {
-            output.add(at).write(b',');
+    input.with_const_ptr(|obj: *const crate::ObjectHeader| {
+        let keys = crate::object::object_keys_array(obj);
+        init_string_header(result, units, bytes, bytes, 0, 0);
+        // GC_STORE_AUDIT(POINTER_FREE): JSON byte-buffer payload.
+        output.write(b'{');
+        let mut at = 1;
+        for i in 0..fields {
+            if i != 0 {
+                // GC_STORE_AUDIT(POINTER_FREE): JSON byte-buffer payload.
+                output.add(at).write(b',');
+                at += 1;
+            }
+            at += emit_piece(
+                key_plan[i],
+                slot(keys.cast(), std::mem::size_of::<crate::ArrayHeader>(), i),
+                output.add(at),
+            );
+            // GC_STORE_AUDIT(POINTER_FREE): JSON byte-buffer payload.
+            output.add(at).write(b':');
             at += 1;
+            at += emit_piece(
+                value_plan[i],
+                slot(obj.cast(), std::mem::size_of::<crate::ObjectHeader>(), i),
+                output.add(at),
+            );
         }
-        at += emit_piece(
-            key_plan[i],
-            slot(keys.cast(), std::mem::size_of::<crate::ArrayHeader>(), i),
-            output.add(at),
-        );
-        output.add(at).write(b':');
-        at += 1;
-        at += emit_piece(
-            value_plan[i],
-            slot(obj.cast(), std::mem::size_of::<crate::ObjectHeader>(), i),
-            output.add(at),
-        );
-    }
-    output.add(at).write(b'}');
-    debug_assert_eq!(at + 1, bytes as usize);
-    Some(JSValue::string_ptr(result))
+        // GC_STORE_AUDIT(POINTER_FREE): JSON byte-buffer payload.
+        output.add(at).write(b'}');
+        debug_assert_eq!(at + 1, bytes as usize);
+        Some(JSValue::string_ptr(result))
+    })
 }
 
 #[cfg(test)]

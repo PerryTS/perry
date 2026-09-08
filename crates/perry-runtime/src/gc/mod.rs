@@ -1653,6 +1653,18 @@ pub(crate) unsafe fn mark_shape_shared(user_ptr: *mut u8) {
     (*header).gc_flags |= GC_FLAG_SHAPE_SHARED;
 }
 
+/// Return the header for a user pointer whose GC provenance was already
+/// established by the caller. Keeping the layout cast inside `gc` makes that
+/// proof explicit at hot runtime call sites without repeating address-map
+/// classification during a callback-free operation.
+///
+/// # Safety
+/// `user_ptr` must point at the live payload of a Perry GC allocation.
+#[inline(always)]
+pub(crate) unsafe fn header_from_trusted_user_ptr(user_ptr: *const u8) -> *const GcHeader {
+    layout::header_from_user_ptr(user_ptr)
+}
+
 #[cfg(test)]
 mod tests;
 

@@ -71,26 +71,24 @@ fn assert_initial_prototype_lookup_survives(empty: bool) {
     };
     let input_scope = RuntimeHandleScope::new();
     let input = input_scope.root_raw_mut_ptr(obj);
-    let before_address = input.get_raw_mut_ptr::<crate::ObjectHeader>() as usize;
+    let before_address = input.with_mut_ptr(|input: *mut crate::ObjectHeader| input as usize);
     crate::json::CACHED_OBJECT_PROTO_BITS.with(|c| c.set(0));
     crate::json::OBJECT_PROTO_TOJSON_STATE.with(|c| c.set(0));
     force_next_general_arena_alloc_slow();
     triggers.make_arena_trigger_due();
     let before = gc_collection_count();
-    let output = unsafe {
+    let output = input.with_mut_ptr(|input: *mut crate::ObjectHeader| unsafe {
         crate::json::js_json_stringify_full(
-            f64::from_bits(ptr_bits(
-                input.get_raw_mut_ptr::<crate::ObjectHeader>() as usize
-            )),
+            f64::from_bits(ptr_bits(input as usize)),
             f64::from_bits(crate::value::TAG_UNDEFINED),
             f64::from_bits(crate::value::TAG_UNDEFINED),
         )
-    };
+    });
     let output_scope = RuntimeHandleScope::new();
     let output = output_scope.root_nanbox_u64(output as u64);
     drain_scheduled_minor_gc(before, "initial JSON prototype lookup");
     assert_ne!(
-        input.get_raw_mut_ptr::<crate::ObjectHeader>() as usize,
+        input.with_mut_ptr(|input: *mut crate::ObjectHeader| input as usize),
         before_address,
         "the input must move to exercise the borrowed-pointer hazard"
     );
@@ -190,7 +188,8 @@ fn shape_template_element_survives_the_date_field_allocation() {
     // moved nothing and a green result is meaningless.
     let sentinel_scope = RuntimeHandleScope::new();
     let sentinel = sentinel_scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
-    let sentinel_before = sentinel.get_raw_mut_ptr::<crate::object::ObjectHeader>() as usize;
+    let sentinel_before =
+        sentinel.with_mut_ptr(|sentinel: *mut crate::object::ObjectHeader| sentinel as usize);
 
     // Keep the array reachable across the collection the way generated code
     // would, so the SUBJECT of the test is the template path's own rooting and
@@ -206,10 +205,10 @@ fn shape_template_element_survives_the_date_field_allocation() {
     let out_scope = RuntimeHandleScope::new();
     let out_root = out_scope.root_string_ptr(out);
     drain_scheduled_minor_gc(before, "Date field stringification");
-    let actual = string_contents(out_root.get_raw_const_ptr::<crate::StringHeader>());
+    let actual = out_root.with_const_ptr(string_contents);
 
     assert_ne!(
-        sentinel.get_raw_mut_ptr::<crate::object::ObjectHeader>() as usize,
+        sentinel.with_mut_ptr(|sentinel: *mut crate::object::ObjectHeader| sentinel as usize),
         sentinel_before,
         "the minor did not evacuate — nothing here was exercised"
     );

@@ -20,7 +20,8 @@ pub(crate) unsafe fn string_from_json_bytes(
         string_storage_alloc(len)
     } else {
         zero_alignment_padding_tail(raw, size);
-        (raw.cast(), raw.add(std::mem::size_of::<StringHeader>()))
+        let header = raw.cast::<StringHeader>();
+        (header, string_data(header).cast_mut())
     };
     // `ParsedStr::Borrowed` reaches this constructor only when the JSON token
     // contained no backslash. JSON syntax itself excludes unescaped quote and

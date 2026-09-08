@@ -18,8 +18,7 @@ fn growth_rekeys_named_property_owner() {
         arr = js_array_push_f64(arr, 2.0);
         arr = js_array_push_f64(arr, 3.0);
 
-        let header =
-            (arr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        let header = crate::gc::header_from_trusted_user_ptr(arr.cast());
         assert_eq!(
             (*header)._reserved & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS,
             0
@@ -41,8 +40,7 @@ fn growth_rekeys_named_property_owner() {
         arr = js_array_set_f64_extend(arr, old_capacity, 99.0);
 
         assert_ne!(arr as usize, old_owner, "the fixture must grow the array");
-        let header =
-            (arr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+        let header = crate::gc::header_from_trusted_user_ptr(arr.cast());
         assert_ne!(
             (*header)._reserved & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS,
             0

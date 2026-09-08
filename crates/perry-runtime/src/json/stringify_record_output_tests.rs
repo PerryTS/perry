@@ -89,13 +89,13 @@ fn cached_key_prefixes_follow_shape_changes_and_slot_replacement() {
         let original = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 6));
         for (index, name) in ["a", "b", "c", "d", "e"].iter().enumerate() {
             let key = scope.root_string_ptr(js_string_from_bytes(name.as_ptr(), name.len() as u32));
-            crate::object::js_object_set_field_by_name(
-                original.get_raw_mut_ptr(),
-                key.get_raw_const_ptr(),
-                (index + 1) as f64,
-            );
+            original.with_mut_ptr(|original| {
+                key.with_const_ptr(|key| {
+                    crate::object::js_object_set_field_by_name(original, key, (index + 1) as f64);
+                })
+            });
         }
-        let original_bits = make_pointer_bits(original.get_raw_const_ptr());
+        let original_bits = original.with_const_ptr(|original| make_pointer_bits(original));
         assert_eq!(
             output_bytes(JSValue::from_bits(original_bits)),
             original_text.as_bytes()
@@ -105,16 +105,17 @@ fn cached_key_prefixes_follow_shape_changes_and_slot_replacement() {
             original_text.as_bytes(),
             "the second observation installs the prefix plan"
         );
-        let before = crate::object::shapes::object_shape_stamp(
-            original.get_raw_const_ptr::<crate::ObjectHeader>(),
-        );
+        let before = original.with_const_ptr(|original: *const crate::ObjectHeader| {
+            crate::object::shapes::object_shape_stamp(original)
+        });
         let key = scope.root_string_ptr(js_string_from_bytes(b"later".as_ptr(), 5));
-        crate::object::js_object_set_field_by_name(
-            original.get_raw_mut_ptr(),
-            key.get_raw_const_ptr(),
-            6.0,
-        );
-        let changed = JSValue::from_bits(make_pointer_bits(original.get_raw_const_ptr()));
+        original.with_mut_ptr(|original| {
+            key.with_const_ptr(|key| {
+                crate::object::js_object_set_field_by_name(original, key, 6.0);
+            })
+        });
+        let changed =
+            original.with_const_ptr(|original| JSValue::from_bits(make_pointer_bits(original)));
         assert_ne!(
             crate::object::shapes::object_shape_stamp(changed.as_pointer::<crate::ObjectHeader>()),
             before

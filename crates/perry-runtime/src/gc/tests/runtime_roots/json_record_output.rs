@@ -26,17 +26,23 @@ fn json_nested_records_fallback_runs_getter_once_and_survives_actual_movement() 
         ));
         let descriptor = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
         let get_key = crate::js_string_from_bytes(b"get".as_ptr(), 3);
-        crate::object::js_object_set_field_by_name(
-            descriptor.get_raw_mut_ptr(),
-            get_key,
-            f64::from_bits(ptr_bits(getter.get_raw_mut_ptr::<u8>() as usize)),
-        );
+        descriptor.with_mut_ptr(|descriptor| {
+            getter.with_mut_ptr(|getter: *mut u8| {
+                crate::object::js_object_set_field_by_name(
+                    descriptor,
+                    get_key,
+                    f64::from_bits(ptr_bits(getter as usize)),
+                );
+            })
+        });
         let key = crate::js_string_from_bytes(b"value".as_ptr(), 5);
-        crate::object::js_object_define_property(
-            child.get_nanbox_f64(),
-            f64::from_bits(string_bits(key as usize)),
-            f64::from_bits(ptr_bits(descriptor.get_raw_mut_ptr::<u8>() as usize)),
-        );
+        descriptor.with_mut_ptr(|descriptor: *mut u8| {
+            crate::object::js_object_define_property(
+                child.get_nanbox_f64(),
+                f64::from_bits(string_bits(key as usize)),
+                f64::from_bits(ptr_bits(descriptor as usize)),
+            );
+        });
         GETTER_CALLS.with(|c| c.set(0));
         let before_ptr = array.get_nanbox_u64();
         let before = gc_collection_count();
@@ -92,17 +98,23 @@ fn json_array_getter_runs_once_and_rederives_later_elements_after_movement() {
     ));
     let descriptor = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
     let get_key = crate::js_string_from_bytes(b"get".as_ptr(), 3);
-    crate::object::js_object_set_field_by_name(
-        descriptor.get_raw_mut_ptr(),
-        get_key,
-        f64::from_bits(ptr_bits(getter.get_raw_mut_ptr::<u8>() as usize)),
-    );
+    descriptor.with_mut_ptr(|descriptor| {
+        getter.with_mut_ptr(|getter: *mut u8| {
+            crate::object::js_object_set_field_by_name(
+                descriptor,
+                get_key,
+                f64::from_bits(ptr_bits(getter as usize)),
+            );
+        })
+    });
     let index_key = crate::js_string_from_bytes(b"0".as_ptr(), 1);
-    crate::object::js_object_define_property(
-        array.get_nanbox_f64(),
-        f64::from_bits(string_bits(index_key as usize)),
-        f64::from_bits(ptr_bits(descriptor.get_raw_mut_ptr::<u8>() as usize)),
-    );
+    descriptor.with_mut_ptr(|descriptor: *mut u8| {
+        crate::object::js_object_define_property(
+            array.get_nanbox_f64(),
+            f64::from_bits(string_bits(index_key as usize)),
+            f64::from_bits(ptr_bits(descriptor as usize)),
+        );
+    });
     GETTER_CALLS.with(|c| c.set(0));
     let before_ptr = array.get_nanbox_u64();
     let before = gc_collection_count();
@@ -155,17 +167,23 @@ fn json_grown_array_getter_flags_live_head_and_survives_movement() {
     ));
     let descriptor = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
     let get_key = crate::js_string_from_bytes(b"get".as_ptr(), 3);
-    crate::object::js_object_set_field_by_name(
-        descriptor.get_raw_mut_ptr(),
-        get_key,
-        f64::from_bits(ptr_bits(getter.get_raw_mut_ptr::<u8>() as usize)),
-    );
+    descriptor.with_mut_ptr(|descriptor| {
+        getter.with_mut_ptr(|getter: *mut u8| {
+            crate::object::js_object_set_field_by_name(
+                descriptor,
+                get_key,
+                f64::from_bits(ptr_bits(getter as usize)),
+            );
+        })
+    });
     let index_key = crate::js_string_from_bytes(b"0".as_ptr(), 1);
-    crate::object::js_object_define_property(
-        array.get_nanbox_f64(),
-        f64::from_bits(string_bits(index_key as usize)),
-        f64::from_bits(ptr_bits(descriptor.get_raw_mut_ptr::<u8>() as usize)),
-    );
+    descriptor.with_mut_ptr(|descriptor: *mut u8| {
+        crate::object::js_object_define_property(
+            array.get_nanbox_f64(),
+            f64::from_bits(string_bits(index_key as usize)),
+            f64::from_bits(ptr_bits(descriptor as usize)),
+        );
+    });
     GETTER_CALLS.with(|c| c.set(0));
     let before_ptr = array.get_nanbox_u64();
     let before = gc_collection_count();
@@ -222,13 +240,17 @@ fn json_escaped_heap_string_rederives_source_after_final_allocation() {
     let source = crate::js_string_from_bytes(text.as_ptr(), text.len() as u32);
     let scope = RuntimeHandleScope::new();
     let input = scope.root_string_ptr(source);
-    let before_ptr = input.get_raw_const_ptr::<crate::StringHeader>();
+    let before_ptr = input.with_const_ptr(|input: *const crate::StringHeader| input as usize);
     force_next_general_arena_alloc_slow();
     triggers.make_arena_trigger_due();
     let before = gc_collection_count();
-    let output = unsafe { crate::json::js_json_stringify_string(before_ptr) };
+    let output =
+        input.with_const_ptr(|input| unsafe { crate::json::js_json_stringify_string(input) });
     assert!(gc_collection_count() > before);
-    assert_ne!(input.get_raw_const_ptr::<crate::StringHeader>(), before_ptr);
+    assert_ne!(
+        input.with_const_ptr(|input: *const crate::StringHeader| input as usize),
+        before_ptr
+    );
     assert_eq!(
         unsafe {
             std::slice::from_raw_parts(

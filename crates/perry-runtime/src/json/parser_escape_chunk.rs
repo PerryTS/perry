@@ -25,6 +25,7 @@ impl DirectParser<'_> {
         macro_rules! put {
             ($byte:expr) => {{
                 unsafe {
+                    // GC_STORE_AUDIT(POINTER_FREE): JSON byte-buffer payload.
                     output.add(written).write($byte);
                 }
                 written += 1;

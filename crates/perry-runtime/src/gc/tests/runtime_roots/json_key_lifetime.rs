@@ -161,12 +161,14 @@ fn json_typed_hint_reads_cached_keys_after_the_entry_collection() {
         crate::gc::policy::GC_SUPPRESSED_TINY_PARSE_COLLECTION_PENDING.with(|c| c.set(true));
         let before = gc_collection_count();
         unsafe {
-            let value = crate::json::js_json_parse_typed_array(
-                input.get_raw_const_ptr(),
-                b"moving_property\0".as_ptr(),
-                16,
-                field_count,
-            );
+            let value = input.with_const_ptr(|input| {
+                crate::json::js_json_parse_typed_array(
+                    input,
+                    b"moving_property\0".as_ptr(),
+                    16,
+                    field_count,
+                )
+            });
             assert!(gc_collection_count() > before);
             assert_ne!(
                 key_before,

@@ -38,11 +38,13 @@ fn large_json_output_is_a_complete_malloc_leaf_and_obeys_runtime_roots() {
     let scope = RuntimeHandleScope::new();
     let rooted = scope.root_string_ptr(result);
     gc_collect_minor();
-    let result = rooted.get_raw_const_ptr::<crate::StringHeader>();
-    assert!(malloc_user_ptr_tracked(result.cast_mut().cast()));
-    unsafe {
-        assert_eq!(crate::json::str_from_header(result), Some(text.as_str()));
-    }
+    let result_addr = rooted.with_const_ptr(|result: *const crate::StringHeader| {
+        assert!(malloc_user_ptr_tracked(result.cast_mut().cast()));
+        unsafe {
+            assert_eq!(crate::json::str_from_header(result), Some(text.as_str()));
+        }
+        result as usize
+    });
 
     drop(scope);
     // This test isolates root/lifetime behavior. Automatic scheduling is
@@ -50,7 +52,7 @@ fn large_json_output_is_a_complete_malloc_leaf_and_obeys_runtime_roots() {
     gc_schedule_malloc_sweep_after_json_output();
     gc_collect_minor();
     assert!(
-        !malloc_user_ptr_tracked(result.cast_mut().cast()),
+        !malloc_user_ptr_tracked(result_addr as *mut u8),
         "discarded JSON result must be reclaimed by the next malloc sweep"
     );
 }

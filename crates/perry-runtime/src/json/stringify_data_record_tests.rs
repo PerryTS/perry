@@ -14,17 +14,16 @@ unsafe fn with_record(text: &str, test: impl FnOnce(*const crate::ObjectHeader, 
     // Deliberately warm the potentially allocating first prototype lookup
     // while the input is rooted, before constructing a borrowed template.
     invalidate_object_proto_tojson_state();
-    assert!(
-        super::super::stringify_tojson_probe::to_json_definitely_absent(
-            input.get_raw_const_ptr::<u8>()
+    assert!(input.with_const_ptr(|obj: *const u8| {
+        super::super::stringify_tojson_probe::to_json_definitely_absent(obj)
+    }));
+    input.with_const_ptr(|obj: *const crate::ObjectHeader| {
+        let template = super::super::stringify_shape_template::build_shape_prefix_template(
+            make_pointer_bits(obj.cast()),
         )
-    );
-    let obj = input.get_raw_const_ptr::<crate::ObjectHeader>();
-    let template = super::super::stringify_shape_template::build_shape_prefix_template(
-        make_pointer_bits(obj.cast()),
-    )
-    .unwrap();
-    test(obj, &template);
+        .unwrap();
+        test(obj, &template);
+    });
 }
 
 #[test]

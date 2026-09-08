@@ -94,6 +94,7 @@ impl ConstructionBatch {
         }
         let raw = state.data.add(offset);
         state.offset = offset + total;
+        // GC_STORE_AUDIT(INIT): initialize a fresh GC allocation header.
         raw.cast::<GcHeader>().write(GcHeader {
             obj_type,
             gc_flags: GC_FLAG_ARENA,

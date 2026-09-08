@@ -51,8 +51,7 @@ unsafe fn inline_fields_with_live<'a>(
     // Both callers receive `obj` from the shape-template path after it has
     // validated the tracked object type. Re-reading the global address maps
     // for every record duplicates that proof in the hottest loop.
-    let header =
-        &*((obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader);
+    let header = &*crate::gc::header_from_trusted_user_ptr(obj.cast());
     if count == 0
         || count > MAX_FIELDS
         || header.obj_type != crate::gc::GC_TYPE_OBJECT
@@ -98,8 +97,7 @@ pub(super) unsafe fn template_candidate(obj: *const crate::ObjectHeader, count: 
 /// lazy layouts, and any element that could recurse or invoke BigInt.toJSON.
 unsafe fn primitive_array(arr: *const crate::ArrayHeader) -> bool {
     // `array_pointer` has already validated this exact tracked header.
-    let header =
-        &*((arr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader);
+    let header = &*crate::gc::header_from_trusted_user_ptr(arr.cast());
     if header.obj_type != crate::gc::GC_TYPE_ARRAY
         || (header.size as usize)
             < crate::gc::GC_HEADER_SIZE + std::mem::size_of::<crate::ArrayHeader>()

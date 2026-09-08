@@ -112,7 +112,7 @@ unsafe fn key_may_carry_to_json(stored: JSValue) -> bool {
     if len < b"toJSON".len() {
         return false;
     }
-    let data = (header as *const u8).add(std::mem::size_of::<StringHeader>());
+    let data = crate::string::string_data(header);
     if !matches!(*data, b't' | b'_') {
         return false;
     }

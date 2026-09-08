@@ -35,15 +35,18 @@ impl Plan {
     /// No allocation, callbacks or collection may occur during this write.
     pub(super) unsafe fn write(self, source: *const u8, output: *mut u8) -> usize {
         const HEX: &[u8; 16] = b"0123456789abcdef";
+        // GC_STORE_AUDIT(POINTER_FREE): JSON byte-buffer payload.
         output.write(b'"');
         let mut at = 1usize;
         for i in 0..self.source_bytes as usize {
             let b = source.add(i).read();
             if b >= 0x20 && b != b'"' && b != b'\\' {
+                // GC_STORE_AUDIT(POINTER_FREE): JSON byte-buffer payload.
                 output.add(at).write(b);
                 at += 1;
                 continue;
             }
+            // GC_STORE_AUDIT(POINTER_FREE): JSON byte-buffer payload.
             output.add(at).write(b'\\');
             let short = match b {
                 b'"' | b'\\' => b,
@@ -55,17 +58,24 @@ impl Plan {
                 _ => 0,
             };
             if short != 0 {
+                // GC_STORE_AUDIT(POINTER_FREE): JSON byte-buffer payload.
                 output.add(at + 1).write(short);
                 at += 2;
             } else {
+                // GC_STORE_AUDIT(POINTER_FREE): JSON byte-buffer payload.
                 output.add(at + 1).write(b'u');
+                // GC_STORE_AUDIT(POINTER_FREE): JSON byte-buffer payload.
                 output.add(at + 2).write(b'0');
+                // GC_STORE_AUDIT(POINTER_FREE): JSON byte-buffer payload.
                 output.add(at + 3).write(b'0');
+                // GC_STORE_AUDIT(POINTER_FREE): JSON byte-buffer payload.
                 output.add(at + 4).write(HEX[(b >> 4) as usize]);
+                // GC_STORE_AUDIT(POINTER_FREE): JSON byte-buffer payload.
                 output.add(at + 5).write(HEX[(b & 15) as usize]);
                 at += 6;
             }
         }
+        // GC_STORE_AUDIT(POINTER_FREE): JSON byte-buffer payload.
         output.add(at).write(b'"');
         debug_assert_eq!(at + 1, self.bytes as usize);
         at + 1
@@ -125,9 +135,10 @@ pub(super) unsafe fn quote(source: *const StringHeader) -> Option<*mut StringHea
     let scope = crate::gc::RuntimeHandleScope::new();
     let input = scope.root_string_ptr(source);
     let (result, output) = string_storage_alloc(plan.bytes);
-    let source = input.get_raw_const_ptr::<StringHeader>();
-    init_string_header(result, plan.units, plan.bytes, plan.bytes, 0, 0);
-    plan.write(string_data(source), output);
+    input.with_const_ptr(|source: *const StringHeader| {
+        init_string_header(result, plan.units, plan.bytes, plan.bytes, 0, 0);
+        plan.write(string_data(source), output);
+    });
     Some(result)
 }
 

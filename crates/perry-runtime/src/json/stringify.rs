@@ -278,10 +278,9 @@ pub(crate) unsafe fn object_get_to_json(ptr: *const u8) -> Option<f64> {
 
     let obj_ptr = recv_handle.get_nanbox_f64();
     let obj_ptr = (obj_ptr.to_bits() & POINTER_MASK) as *const crate::ObjectHeader;
-    let method = crate::object::js_object_get_field_by_name(
-        obj_ptr,
-        key_handle.get_raw_const_ptr::<crate::string::StringHeader>(),
-    );
+    let method = key_handle.with_const_ptr(|key: *const crate::string::StringHeader| {
+        crate::object::js_object_get_field_by_name(obj_ptr, key)
+    });
 
     // Only treat it as toJSON if it actually resolved to a callable closure
     // (POINTER_TAG + closure). A plain object with no `toJSON`, or a `toJSON`
@@ -1128,12 +1127,14 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
     // `keys_array` field is rewritten by the collector when it moves).
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj_handle = scope.root_raw_const_ptr(obj);
-    let cur_obj = || obj_handle.get_raw_const_ptr::<crate::ObjectHeader>();
     let key_at = |f: u32| -> f64 {
-        let keys_arr = crate::object::object_keys_array(cur_obj());
-        let keys_elements =
-            (keys_arr as *const u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *const f64;
-        *keys_elements.add(f as usize)
+        obj_handle.with_const_ptr(|obj: *const crate::ObjectHeader| {
+            let keys_arr = crate::object::object_keys_array(obj);
+            let keys_elements = (keys_arr as *const u8)
+                .add(std::mem::size_of::<crate::ArrayHeader>())
+                as *const f64;
+            *keys_elements.add(f as usize)
+        })
     };
     // Closes #307: iterate up to keys_len, not min(num_fields, keys_len).
     // Parser-built objects with ≥9 fields cap field_count at the inline
@@ -1148,14 +1149,15 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
     // for any parsed object with ≥9 fields.
     let alloc_limit = std::cmp::max(num_fields, crate::object::INLINE_SLOT_FLOOR as u32);
     let read_field_bits = |f: u32| -> u64 {
-        let obj = cur_obj();
-        if f < alloc_limit {
-            let fields_ptr =
-                (obj as *const u8).add(std::mem::size_of::<crate::ObjectHeader>()) as *const f64;
-            (*fields_ptr.add(f as usize)).to_bits()
-        } else {
-            crate::object::js_object_get_field(obj, f).bits()
-        }
+        obj_handle.with_const_ptr(|obj: *const crate::ObjectHeader| {
+            if f < alloc_limit {
+                let fields_ptr = (obj as *const u8).add(std::mem::size_of::<crate::ObjectHeader>())
+                    as *const f64;
+                (*fields_ptr.add(f as usize)).to_bits()
+            } else {
+                crate::object::js_object_get_field(obj, f).bits()
+            }
+        })
     };
     let actual_fields = keys_len;
 
@@ -1289,16 +1291,22 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
         // Private elements (`#x`) live in a class instance's keys_array but are
         // not serializable own properties. (`has_prototype_chain` == class_id != 0.)
         if has_prototype_chain
-            && crate::object::instance_private_key_hidden(
-                cur_obj(),
-                JSValue::from_bits(key_at(f).to_bits()),
-            )
+            && obj_handle.with_const_ptr(|obj: *const crate::ObjectHeader| {
+                crate::object::instance_private_key_hidden(
+                    obj,
+                    JSValue::from_bits(key_at(f).to_bits()),
+                )
+            })
         {
             continue;
         }
         // Skip non-enumerable own keys (e.g. `Object.defineProperty(o, k,
         // { enumerable: false })`) before touching the value.
-        if filter_non_enum && json_key_non_enumerable(cur_obj(), key_at(f)) {
+        if filter_non_enum
+            && obj_handle.with_const_ptr(|obj: *const crate::ObjectHeader| {
+                json_key_non_enumerable(obj, key_at(f))
+            })
+        {
             continue;
         }
         let mut field_bits = read_field_bits(f);
@@ -1309,7 +1317,9 @@ pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, de
         // The getter is USER CODE: every pointer below is re-derived from the
         // rooted handle after it returns.
         if filter_non_enum {
-            if let Some(gv) = crate::object::json_object_getter_value(cur_obj(), key_at(f)) {
+            if let Some(gv) = obj_handle.with_const_ptr(|obj: *const crate::ObjectHeader| {
+                crate::object::json_object_getter_value(obj, key_at(f))
+            }) {
                 field_bits = gv.to_bits();
             }
         }
@@ -1522,8 +1532,10 @@ pub(crate) unsafe fn stringify_array_depth(ptr: *const u8, buf: &mut String, dep
     let scope = crate::gc::RuntimeHandleScope::new();
     let arr_handle = scope.root_raw_const_ptr(arr);
     let elem_at = |i: usize| -> f64 {
-        let arr = arr_handle.get_raw_const_ptr::<crate::ArrayHeader>();
-        *((arr as *const u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *const f64).add(i)
+        arr_handle.with_const_ptr(|arr: *const crate::ArrayHeader| {
+            *((arr as *const u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *const f64)
+                .add(i)
+        })
     };
 
     // Homogeneous-shape fast path for arrays of objects sharing one
@@ -1767,7 +1779,7 @@ unsafe fn stringify_exotic_array(
         if i != 0 {
             buf.push(',');
         }
-        let element = crate::array::array_spec_get(input.get_raw_const_ptr(), i);
+        let element = input.with_const_ptr(|arr| crate::array::array_spec_get(arr, i));
         let bits = element.to_bits();
         if bits == TAG_UNDEFINED
             || bits == crate::value::TAG_HOLE

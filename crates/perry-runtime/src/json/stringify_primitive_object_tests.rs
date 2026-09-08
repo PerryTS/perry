@@ -16,30 +16,31 @@ fn primitive_object_leaf_preserves_wide_output_without_managed_scratch() {
         let value = crate::json::test_json_parse_direct(source);
         let scope = crate::gc::RuntimeHandleScope::new();
         let input = scope.root_raw_const_ptr(value.as_pointer::<crate::ObjectHeader>());
-        let obj = input.get_raw_const_ptr::<crate::ObjectHeader>();
-        let keys = crate::object::object_keys_array(obj);
-        assert_eq!((*keys).length, 128);
-        assert!((*keys).length <= crate::object::object_live_slot_count(obj));
-        assert!(fields_are_primitive(obj, (*keys).length));
-        let fields = (obj as *const u8)
-            .add(std::mem::size_of::<crate::ObjectHeader>())
-            .cast::<u64>();
-        assert!((0..128).all(|i| field_is_primitive(*fields.add(i))));
-        let bytes = crate::arena::arena_total_bytes();
-        let roots = crate::gc::RuntimeHandleScope::active_len_for_tests();
-        let mut collections = 0;
-        crate::gc::js_gc_stats(&mut collections, std::ptr::null_mut(), std::ptr::null_mut());
-        let mut output = String::with_capacity(text.len());
-        for _ in 0..1000 {
-            output.clear();
-            emit_validated(obj, keys, None, &mut output);
-            assert_eq!(output, text);
-        }
-        let mut after = 0;
-        crate::gc::js_gc_stats(&mut after, std::ptr::null_mut(), std::ptr::null_mut());
-        assert_eq!(after, collections);
-        assert_eq!(crate::arena::arena_total_bytes(), bytes);
-        assert_eq!(crate::gc::RuntimeHandleScope::active_len_for_tests(), roots);
+        input.with_const_ptr(|obj: *const crate::ObjectHeader| {
+            let keys = crate::object::object_keys_array(obj);
+            assert_eq!((*keys).length, 128);
+            assert!((*keys).length <= crate::object::object_live_slot_count(obj));
+            assert!(fields_are_primitive(obj, (*keys).length));
+            let fields = (obj as *const u8)
+                .add(std::mem::size_of::<crate::ObjectHeader>())
+                .cast::<u64>();
+            assert!((0..128).all(|i| field_is_primitive(*fields.add(i))));
+            let bytes = crate::arena::arena_total_bytes();
+            let roots = crate::gc::RuntimeHandleScope::active_len_for_tests();
+            let mut collections = 0;
+            crate::gc::js_gc_stats(&mut collections, std::ptr::null_mut(), std::ptr::null_mut());
+            let mut output = String::with_capacity(text.len());
+            for _ in 0..1000 {
+                output.clear();
+                emit_validated(obj, keys, None, &mut output);
+                assert_eq!(output, text);
+            }
+            let mut after = 0;
+            crate::gc::js_gc_stats(&mut after, std::ptr::null_mut(), std::ptr::null_mut());
+            assert_eq!(after, collections);
+            assert_eq!(crate::arena::arena_total_bytes(), bytes);
+            assert_eq!(crate::gc::RuntimeHandleScope::active_len_for_tests(), roots);
+        });
     }
 }
 
@@ -51,18 +52,21 @@ fn primitive_object_leaf_uses_existing_key_order_and_omits_undefined() {
         let value = crate::json::test_json_parse_direct(source);
         let scope = crate::gc::RuntimeHandleScope::new();
         let input = scope.root_raw_const_ptr(value.as_pointer::<crate::ObjectHeader>());
-        crate::object::js_object_set_field(
-            input.get_raw_const_ptr::<crate::ObjectHeader>() as *mut crate::ObjectHeader,
-            2,
-            JSValue::from_bits(TAG_UNDEFINED),
-        );
-        let obj = input.get_raw_const_ptr::<crate::ObjectHeader>();
-        let keys = crate::object::object_keys_array(obj);
-        assert!((*keys).length <= crate::object::object_live_slot_count(obj));
-        let order = crate::object::ecma_own_key_order(keys);
-        let mut output = String::new();
-        emit_validated(obj, keys, order.as_deref(), &mut output);
-        assert_eq!(output, "{\"3\":3,\"20\":20,\"a\":\"quote\\\"\"}");
+        input.with_const_ptr(|obj: *const crate::ObjectHeader| {
+            crate::object::js_object_set_field(
+                obj.cast_mut(),
+                2,
+                JSValue::from_bits(TAG_UNDEFINED),
+            );
+        });
+        input.with_const_ptr(|obj: *const crate::ObjectHeader| {
+            let keys = crate::object::object_keys_array(obj);
+            assert!((*keys).length <= crate::object::object_live_slot_count(obj));
+            let order = crate::object::ecma_own_key_order(keys);
+            let mut output = String::new();
+            emit_validated(obj, keys, order.as_deref(), &mut output);
+            assert_eq!(output, "{\"3\":3,\"20\":20,\"a\":\"quote\\\"\"}");
+        });
     }
 }
 

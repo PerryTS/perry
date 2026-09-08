@@ -112,30 +112,38 @@ fn json_lazy_growth_owner_alone_retains_forwarded_array_and_children_across_mino
     let scope = RuntimeHandleScope::new();
     unsafe {
         let owner = scope.root_raw_mut_ptr(owned_small(br#"["heap child survives growth"]"#));
-        let lazy = owner.get_raw_mut_ptr::<crate::json_tape::LazyArrayHeader>();
-        let original = crate::json_tape::force_materialize_lazy(lazy);
-        let mut grown = original;
-        for index in 1..70 {
-            grown = crate::array::js_array_push(grown, crate::JSValue::number(index as f64));
-        }
-        assert_ne!(original, grown);
-        let old_child = crate::array::js_array_get(grown, 0).bits();
-        assert_eq!((*lazy).materialized, original);
+        let (grown, old_child) =
+            owner.with_mut_ptr(|lazy: *mut crate::json_tape::LazyArrayHeader| {
+                let original = crate::json_tape::force_materialize_lazy(lazy);
+                let mut grown = original;
+                for index in 1..70 {
+                    grown =
+                        crate::array::js_array_push(grown, crate::JSValue::number(index as f64));
+                }
+                assert_ne!(original, grown);
+                let old_child = crate::array::js_array_get(grown, 0).bits();
+                assert_eq!((*lazy).materialized, original);
+                (grown, old_child)
+            });
         let before = gc_collection_count();
         let _ = gc_collect_minor_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Direct));
         assert!(gc_collection_count() > before);
-        let lazy = owner.get_raw_mut_ptr::<crate::json_tape::LazyArrayHeader>();
-        let moved = crate::json_tape::force_materialize_lazy(lazy);
-        assert_ne!(moved, grown, "the live array must actually move");
-        let child = crate::json_tape::lazy_get(lazy, 0);
-        assert_ne!(child.bits(), old_child, "the child must actually move");
-        let text = child.as_string_ptr();
-        assert_eq!(
-            std::slice::from_raw_parts(crate::string::string_data(text), (*text).byte_len as usize),
-            b"heap child survives growth"
-        );
-        assert_eq!(crate::array::js_array_length(lazy.cast()), 70);
-        assert_eq!(crate::json_tape::lazy_get(lazy, 69).as_number(), 69.0);
+        owner.with_mut_ptr(|lazy: *mut crate::json_tape::LazyArrayHeader| {
+            let moved = crate::json_tape::force_materialize_lazy(lazy);
+            assert_ne!(moved, grown, "the live array must actually move");
+            let child = crate::json_tape::lazy_get(lazy, 0);
+            assert_ne!(child.bits(), old_child, "the child must actually move");
+            let text = child.as_string_ptr();
+            assert_eq!(
+                std::slice::from_raw_parts(
+                    crate::string::string_data(text),
+                    (*text).byte_len as usize,
+                ),
+                b"heap child survives growth"
+            );
+            assert_eq!(crate::array::js_array_length(lazy.cast()), 70);
+            assert_eq!(crate::json_tape::lazy_get(lazy, 69).as_number(), 69.0);
+        });
     }
 }
 

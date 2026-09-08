@@ -60,6 +60,7 @@ fn digit_and_string_scans_stop_before_guard_page() {
             assert_eq!(find_string_terminator(bytes), None);
             assert!(!short_string_needs_escape(bytes));
             if len != 0 {
+                // GC_STORE_AUDIT(POINTER_FREE): JSON byte-buffer payload.
                 start.add(len - 1).write(b'"');
                 let bytes = std::slice::from_raw_parts(start, len);
                 assert_eq!(count_ascii_digits(bytes), len - 1);

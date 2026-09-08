@@ -70,9 +70,7 @@ fn json_short_arrays_allocate_no_intermediate_array() {
         let roots = parse_root_save_len();
         let before = crate::arena::arena_in_use_bytes();
         let array = unsafe { parse(&source) };
-        let header = unsafe {
-            &*((array as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader)
-        };
+        let header = unsafe { &*crate::gc::header_from_trusted_user_ptr(array.cast()) };
         assert_eq!(
             crate::arena::arena_in_use_bytes() - before,
             header.size as usize

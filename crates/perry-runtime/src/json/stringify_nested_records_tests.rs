@@ -24,6 +24,7 @@ fn json_nested_record_short_copies_respect_guarded_source_and_destination() {
         let source = base.add(page);
         let destination = base.add(page * 4);
         for i in 0..page {
+            // GC_STORE_AUDIT(POINTER_FREE): JSON byte-buffer payload.
             source.add(i).write(b'A' + (i % 23) as u8);
         }
         assert_eq!(libc::mprotect(source.cast(), page, libc::PROT_READ), 0);
@@ -154,7 +155,7 @@ unsafe fn with_array(text: &str, f: impl FnOnce(*const crate::ArrayHeader)) {
     let value = crate::json::test_json_parse_direct(source);
     let scope = crate::gc::RuntimeHandleScope::new();
     let input = scope.root_raw_const_ptr(value.as_pointer::<crate::ArrayHeader>());
-    let first = crate::array::js_array_get(input.get_raw_const_ptr(), 0);
+    let first = input.with_const_ptr(|arr| crate::array::js_array_get(arr, 0));
     let first = scope.root_nanbox_u64(first.bits());
     invalidate_object_proto_tojson_state();
     assert!(
@@ -162,7 +163,7 @@ unsafe fn with_array(text: &str, f: impl FnOnce(*const crate::ArrayHeader)) {
             (first.get_nanbox_u64() & POINTER_MASK) as *const u8
         )
     );
-    f(input.get_raw_const_ptr());
+    input.with_const_ptr(f);
 }
 
 fn collections() -> u64 {

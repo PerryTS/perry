@@ -13,7 +13,7 @@ pub(crate) unsafe fn set_lazy_index(
     let receiver = scope.root_raw_mut_ptr(header);
     let index = scope.root_nanbox_f64(index);
     let value = scope.root_nanbox_f64(value);
-    let array = super::force_materialize_lazy(receiver.get_raw_mut_ptr());
+    let array = receiver.with_mut_ptr(|header| super::force_materialize_lazy(header));
     // The owner roots its materialized array. No allocation lies between this
     // fresh pointer and the ordinary setter, which retains key/strict behavior.
     crate::value::js_dyn_index_set_strict(
@@ -24,8 +24,9 @@ pub(crate) unsafe fn set_lazy_index(
     );
     // Length reads can still arrive through the original lazy value. Reflect
     // indexed extension or a "length" assignment in its inline length slot.
-    let header = receiver.get_raw_mut_ptr::<super::LazyArrayHeader>();
-    resolve_materialized_array(header);
+    receiver.with_mut_ptr(|header: *mut super::LazyArrayHeader| {
+        resolve_materialized_array(header);
+    });
     value.get_nanbox_f64()
 }
 

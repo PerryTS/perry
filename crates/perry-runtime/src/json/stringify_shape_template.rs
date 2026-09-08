@@ -336,7 +336,7 @@ pub(crate) unsafe fn try_emit_shape_element(
     // getter or non-enumerable descriptor. Raw field slots cannot implement
     // either behavior. Decline before output so the generic object traversal
     // performs the required property reads and enumerable filtering.
-    let header = elem_ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+    let header = crate::gc::header_from_trusted_user_ptr(elem_ptr);
     if (*header)._reserved & crate::gc::OBJ_FLAG_HAS_DESCRIPTORS != 0 {
         return false;
     }

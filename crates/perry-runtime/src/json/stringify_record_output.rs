@@ -230,43 +230,48 @@ unsafe fn emit_cached_record(
     }
     let (result, output) = string_storage_alloc(bytes);
     init_string_header(result, units, bytes, bytes, 0, 0);
-    let obj = input.get_raw_const_ptr::<crate::ObjectHeader>();
-    let mut at = 0usize;
-    for i in 0..fields {
-        let start = (*prefix).offsets[i] as usize;
-        let end = (*prefix).offsets[i + 1] as usize;
-        super::stringify_copy::copy_bytes(
-            (*prefix).data.as_ptr().add(start),
-            output.add(at),
-            end - start,
-        );
-        at += end - start;
-        let bits = slot(obj.cast(), OBJECT_BYTES, i);
-        match value_plan[i].assume_init() {
-            Field::Scalar(value) => at += emit_piece(value, bits, output.add(at)),
-            Field::Array { start, len } => {
-                let arr = (bits & POINTER_MASK) as *const crate::ArrayHeader;
-                output.add(at).write(b'[');
-                at += 1;
-                for j in 0..len {
-                    if j != 0 {
-                        output.add(at).write(b',');
-                        at += 1;
+    input.with_const_ptr(|obj: *const crate::ObjectHeader| {
+        let mut at = 0usize;
+        for i in 0..fields {
+            let start = (*prefix).offsets[i] as usize;
+            let end = (*prefix).offsets[i + 1] as usize;
+            super::stringify_copy::copy_bytes(
+                (*prefix).data.as_ptr().add(start),
+                output.add(at),
+                end - start,
+            );
+            at += end - start;
+            let bits = slot(obj.cast(), OBJECT_BYTES, i);
+            match value_plan[i].assume_init() {
+                Field::Scalar(value) => at += emit_piece(value, bits, output.add(at)),
+                Field::Array { start, len } => {
+                    let arr = (bits & POINTER_MASK) as *const crate::ArrayHeader;
+                    // GC_STORE_AUDIT(POINTER_FREE): JSON byte-buffer payload.
+                    output.add(at).write(b'[');
+                    at += 1;
+                    for j in 0..len {
+                        if j != 0 {
+                            // GC_STORE_AUDIT(POINTER_FREE): JSON byte-buffer payload.
+                            output.add(at).write(b',');
+                            at += 1;
+                        }
+                        at += emit_piece(
+                            elements[start + j].assume_init(),
+                            slot(arr.cast(), ARRAY_BYTES, j),
+                            output.add(at),
+                        );
                     }
-                    at += emit_piece(
-                        elements[start + j].assume_init(),
-                        slot(arr.cast(), ARRAY_BYTES, j),
-                        output.add(at),
-                    );
+                    // GC_STORE_AUDIT(POINTER_FREE): JSON byte-buffer payload.
+                    output.add(at).write(b']');
+                    at += 1;
                 }
-                output.add(at).write(b']');
-                at += 1;
             }
         }
-    }
-    output.add(at).write(b'}');
-    debug_assert_eq!(at + 1, bytes as usize);
-    Some(JSValue::string_ptr(result))
+        // GC_STORE_AUDIT(POINTER_FREE): JSON byte-buffer payload.
+        output.add(at).write(b'}');
+        debug_assert_eq!(at + 1, bytes as usize);
+        Some(JSValue::string_ptr(result))
+    })
 }
 
 #[inline(never)]
@@ -331,48 +336,55 @@ unsafe fn emit_record(obj: *const crate::ObjectHeader, fields: usize) -> Option<
     }
     let (result, output) = string_storage_alloc(bytes);
     init_string_header(result, units, bytes, bytes, 0, 0);
-    let obj = input.get_raw_const_ptr::<crate::ObjectHeader>();
-    let keys = crate::object::object_keys_array(obj);
-    output.write(b'{');
-    let mut at = 1usize;
-    for i in 0..fields {
-        if i != 0 {
-            output.add(at).write(b',');
-            at += 1;
-        }
-        at += emit_piece(
-            key_plan[i].assume_init(),
-            slot(keys.cast(), ARRAY_BYTES, i),
-            output.add(at),
-        );
-        output.add(at).write(b':');
-        at += 1;
-        let bits = slot(obj.cast(), OBJECT_BYTES, i);
-        match value_plan[i].assume_init() {
-            Field::Scalar(value) => at += emit_piece(value, bits, output.add(at)),
-            Field::Array { start, len } => {
-                let arr = (bits & POINTER_MASK) as *const crate::ArrayHeader;
-                output.add(at).write(b'[');
-                at += 1;
-                for j in 0..len {
-                    if j != 0 {
-                        output.add(at).write(b',');
-                        at += 1;
-                    }
-                    at += emit_piece(
-                        elements[start + j].assume_init(),
-                        slot(arr.cast(), ARRAY_BYTES, j),
-                        output.add(at),
-                    );
-                }
-                output.add(at).write(b']');
+    input.with_const_ptr(|obj: *const crate::ObjectHeader| {
+        let keys = crate::object::object_keys_array(obj);
+        output.write(b'{');
+        let mut at = 1usize;
+        for i in 0..fields {
+            if i != 0 {
+                // GC_STORE_AUDIT(POINTER_FREE): JSON byte-buffer payload.
+                output.add(at).write(b',');
                 at += 1;
             }
+            at += emit_piece(
+                key_plan[i].assume_init(),
+                slot(keys.cast(), ARRAY_BYTES, i),
+                output.add(at),
+            );
+            // GC_STORE_AUDIT(POINTER_FREE): JSON byte-buffer payload.
+            output.add(at).write(b':');
+            at += 1;
+            let bits = slot(obj.cast(), OBJECT_BYTES, i);
+            match value_plan[i].assume_init() {
+                Field::Scalar(value) => at += emit_piece(value, bits, output.add(at)),
+                Field::Array { start, len } => {
+                    let arr = (bits & POINTER_MASK) as *const crate::ArrayHeader;
+                    // GC_STORE_AUDIT(POINTER_FREE): JSON byte-buffer payload.
+                    output.add(at).write(b'[');
+                    at += 1;
+                    for j in 0..len {
+                        if j != 0 {
+                            // GC_STORE_AUDIT(POINTER_FREE): JSON byte-buffer payload.
+                            output.add(at).write(b',');
+                            at += 1;
+                        }
+                        at += emit_piece(
+                            elements[start + j].assume_init(),
+                            slot(arr.cast(), ARRAY_BYTES, j),
+                            output.add(at),
+                        );
+                    }
+                    // GC_STORE_AUDIT(POINTER_FREE): JSON output payload byte.
+                    output.add(at).write(b']');
+                    at += 1;
+                }
+            }
         }
-    }
-    output.add(at).write(b'}');
-    debug_assert_eq!(at + 1, bytes as usize);
-    Some(JSValue::string_ptr(result))
+        // GC_STORE_AUDIT(POINTER_FREE): JSON output payload byte.
+        output.add(at).write(b'}');
+        debug_assert_eq!(at + 1, bytes as usize);
+        Some(JSValue::string_ptr(result))
+    })
 }
 
 #[cfg(test)]

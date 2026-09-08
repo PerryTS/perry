@@ -236,29 +236,38 @@ unsafe fn copy_short(src: *const u8, dst: *mut u8, len: usize) {
     debug_assert!(len <= 32);
     if len >= 16 {
         dst.cast::<u128>()
+            // GC_STORE_AUDIT(POINTER_FREE): JSON byte-buffer payload.
             .write_unaligned(src.cast::<u128>().read_unaligned());
         dst.add(len - 16)
             .cast::<u128>()
+            // GC_STORE_AUDIT(POINTER_FREE): JSON byte-buffer payload.
             .write_unaligned(src.add(len - 16).cast::<u128>().read_unaligned());
     } else if len >= 8 {
         dst.cast::<u64>()
+            // GC_STORE_AUDIT(POINTER_FREE): JSON byte-buffer payload.
             .write_unaligned(src.cast::<u64>().read_unaligned());
         dst.add(len - 8)
             .cast::<u64>()
+            // GC_STORE_AUDIT(POINTER_FREE): JSON byte-buffer payload.
             .write_unaligned(src.add(len - 8).cast::<u64>().read_unaligned());
     } else if len >= 4 {
         dst.cast::<u32>()
+            // GC_STORE_AUDIT(POINTER_FREE): JSON byte-buffer payload.
             .write_unaligned(src.cast::<u32>().read_unaligned());
         dst.add(len - 4)
             .cast::<u32>()
+            // GC_STORE_AUDIT(POINTER_FREE): JSON byte-buffer payload.
             .write_unaligned(src.add(len - 4).cast::<u32>().read_unaligned());
     } else if len >= 2 {
         dst.cast::<u16>()
+            // GC_STORE_AUDIT(POINTER_FREE): JSON byte-buffer payload.
             .write_unaligned(src.cast::<u16>().read_unaligned());
         dst.add(len - 2)
             .cast::<u16>()
+            // GC_STORE_AUDIT(POINTER_FREE): JSON byte-buffer payload.
             .write_unaligned(src.add(len - 2).cast::<u16>().read_unaligned());
     } else if len == 1 {
+        // GC_STORE_AUDIT(POINTER_FREE): JSON byte-buffer payload.
         dst.write(src.read());
     }
 }
@@ -312,24 +321,31 @@ unsafe fn emit_primitive(bits: u64, buf: &mut String) {
             crate::value::SHORT_STRING_TAG => {
                 let mut scratch = [0; crate::value::SHORT_STRING_MAX_LEN];
                 let len = JSValue::from_bits(bits).short_string_to_buf(&mut scratch);
-                if scratch[..len]
-                    .iter()
-                    .all(|&b| (0x20..=0x7f).contains(&b) && b != b'"' && b != b'\\')
-                {
-                    // The byte check proves both valid ASCII and no escaping.
-                    // Assemble quotes in bounded native storage, then append
-                    // once without a second UTF-8/escape scan.
-                    let mut quoted = [b'"'; crate::value::SHORT_STRING_MAX_LEN + 2];
-                    copy_short(scratch.as_ptr(), quoted.as_mut_ptr().add(1), len);
-                    append_text(buf, std::str::from_utf8_unchecked(&quoted[..len + 2]));
-                } else if let Ok(text) = std::str::from_utf8(&scratch[..len]) {
-                    write_escaped_string(buf, text);
-                } else {
-                    buf.push_str("null");
-                }
+                emit_short_primitive(&scratch[..len], buf);
             }
             _ => emit_number(f64::from_bits(bits), buf),
         },
+    }
+}
+
+#[inline(always)]
+unsafe fn emit_short_primitive(bytes: &[u8], buf: &mut String) {
+    if bytes
+        .iter()
+        .all(|&b| (0x20..=0x7f).contains(&b) && b != b'"' && b != b'\\')
+    {
+        // The byte check proves both valid ASCII and no escaping. Assemble
+        // quotes in bounded native storage, then append without a second scan.
+        let mut quoted = [b'"'; crate::value::SHORT_STRING_MAX_LEN + 2];
+        copy_short(bytes.as_ptr(), quoted.as_mut_ptr().add(1), bytes.len());
+        append_text(
+            buf,
+            std::str::from_utf8_unchecked(&quoted[..bytes.len() + 2]),
+        );
+    } else if let Ok(text) = std::str::from_utf8(bytes) {
+        write_escaped_string(buf, text);
+    } else {
+        buf.push_str("null");
     }
 }
 

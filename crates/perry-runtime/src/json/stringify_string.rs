@@ -15,7 +15,7 @@ pub(super) unsafe fn try_heap_string(bits: u64) -> Option<*mut StringHeader> {
         return None;
     }
     let source = (bits & POINTER_MASK) as *const StringHeader;
-    if (source as usize) < 0x1000 {
+    if !crate::value::addr_class::is_plausible_heap_addr(source as usize) {
         return None;
     }
     // Small inputs already have cheap paths. Keep this scan and the rooted
@@ -46,11 +46,13 @@ unsafe fn quote_heap_string(source: *const StringHeader) -> Option<*mut StringHe
     let (result, output) = string_storage_alloc(output_len);
     // Only scalar lengths survive the allocation. Re-read the source through
     // its handle so a moving collection cannot invalidate the copy address.
-    let source = input.get_raw_const_ptr::<StringHeader>();
-    init_string_header(result, output_units, output_len, output_len, 0, 0);
-    output.write(b'"');
-    std::ptr::copy_nonoverlapping(string_data(source), output.add(1), len as usize);
-    output.add(output_len as usize - 1).write(b'"');
+    input.with_const_ptr(|source: *const StringHeader| {
+        init_string_header(result, output_units, output_len, output_len, 0, 0);
+        output.write(b'"');
+        std::ptr::copy_nonoverlapping(string_data(source), output.add(1), len as usize);
+        // GC_STORE_AUDIT(POINTER_FREE): JSON output payload byte.
+        output.add(output_len as usize - 1).write(b'"');
+    });
     Some(result)
 }
 

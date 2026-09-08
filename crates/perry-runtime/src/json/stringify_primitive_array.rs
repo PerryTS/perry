@@ -50,7 +50,7 @@ pub(super) unsafe fn try_emit(arr: *const crate::ArrayHeader, buf: &mut String) 
 /// and this call. This function only grows the native output buffer.
 #[inline(always)]
 pub(super) unsafe fn emit_validated(arr: *const crate::ArrayHeader, buf: &mut String) {
-    let header = (arr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+    let header = crate::gc::header_from_trusted_user_ptr(arr.cast());
     let flags = (*header)._reserved;
     let data = (arr as *const u8).add(std::mem::size_of::<crate::ArrayHeader>()) as *const f64;
     let elements = std::slice::from_raw_parts(data, (*arr).length as usize);
