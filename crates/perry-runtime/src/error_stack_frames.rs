@@ -356,15 +356,7 @@ pub(crate) fn describe_ip(ip: usize) -> String {
     {
         if let Some(info) = dladdr_info(ip) {
             if info.dli_sname.is_null() {
-                if stack_symbols_enabled() {
-                    if let Some((name, off)) = static_symbol_for_ip(ip, info.dli_fbase as usize) {
-                        return format!("rt:{name}+{off:#x}");
-                    }
-                } else if executable_image_base() == Some(info.dli_fbase as usize) {
-                    if let Some(off) = ip.checked_sub(info.dli_fbase as usize) {
-                        return format!("rt+{off:#x}");
-                    }
-                }
+                return describe_unnamed_native_ip(ip, info.dli_fbase as usize);
             } else {
                 let name = unsafe { std::ffi::CStr::from_ptr(info.dli_sname) }.to_string_lossy();
                 let off = ip.saturating_sub(info.dli_saddr as usize);
@@ -374,6 +366,20 @@ pub(crate) fn describe_ip(ip: usize) -> String {
                 }
                 return format!("{n}+{off:#x}");
             }
+        }
+    }
+    format!("{ip:#x}")
+}
+
+#[cfg(unix)]
+fn describe_unnamed_native_ip(ip: usize, image_base: usize) -> String {
+    if stack_symbols_enabled() {
+        if let Some((name, off)) = static_symbol_for_ip(ip, image_base) {
+            return format!("rt:{name}+{off:#x}");
+        }
+    } else if executable_image_base() == Some(image_base) {
+        if let Some(off) = ip.checked_sub(image_base) {
+            return format!("rt+{off:#x}");
         }
     }
     format!("{ip:#x}")
@@ -967,14 +973,12 @@ mod tests {
         let ip = kept_runtime_symbol_probe as *const () as usize;
         assert_ne!(std::hint::black_box(kept_runtime_symbol_probe(3)), 0);
         let info = dladdr_info(ip).expect("the probe must belong to the main executable image");
-        assert!(
-            info.dli_sname.is_null(),
-            "the probe unexpectedly has a dynamic symbol; this test must exercise the dladdr miss"
-        );
         let image_base = executable_image_base().expect("the executable base must resolve");
         assert_eq!(info.dli_fbase as usize, image_base);
 
-        let description = describe_ip(ip);
+        // Mach-O dladdr can expose local symbols. Supply the missing-name
+        // condition explicitly, retaining the real probe address and image.
+        let description = describe_unnamed_native_ip(ip, image_base);
         assert_eq!(description, format!("rt+{:#x}", ip - image_base));
         assert_eq!(
             STATIC_SYMBOL_SPAWN_ATTEMPTS.load(std::sync::atomic::Ordering::Relaxed),
@@ -983,9 +987,10 @@ mod tests {
         );
     }
 
-    /// A kept local Rust symbol is absent from the dynamic symbol table but is
-    /// present in the executable's static `t` table. This isolated child opts
-    /// into `PERRY_STACK_SYMBOLS`; no in-process test mutates the cached flag.
+    /// A kept local Rust symbol is present in the executable's static `t`
+    /// table. Exercise a missing dynamic name explicitly because Mach-O can
+    /// expose local symbols through dladdr. This isolated child opts into
+    /// `PERRY_STACK_SYMBOLS`; no in-process test mutates the cached flag.
     #[cfg(unix)]
     #[test]
     fn describe_ip_names_a_kept_runtime_symbol_when_nm_is_opted_in() {
@@ -1007,12 +1012,8 @@ mod tests {
         let ip = kept_runtime_symbol_probe as *const () as usize;
         assert_ne!(std::hint::black_box(kept_runtime_symbol_probe(3)), 0);
         let info = dladdr_info(ip).expect("the probe must belong to the main executable image");
-        assert!(
-            info.dli_sname.is_null(),
-            "the probe unexpectedly has a dynamic symbol; this test must exercise the dladdr miss"
-        );
 
-        let description = describe_ip(ip);
+        let description = describe_unnamed_native_ip(ip, info.dli_fbase as usize);
         assert_eq!(
             STATIC_SYMBOL_SPAWN_ATTEMPTS.load(std::sync::atomic::Ordering::Relaxed),
             1,
