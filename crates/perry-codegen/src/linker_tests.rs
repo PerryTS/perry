@@ -241,6 +241,30 @@ fn explicit_application_opt_level_overrides_the_size_default() {
 }
 
 #[test]
+fn size_function_attributes_follow_the_same_policy_as_the_pass_pipeline() {
+    for (explicit, size_opt, expected) in [
+        (None, None, " optsize"),
+        (None, Some("0"), ""),
+        (Some("s"), Some("0"), " optsize"),
+        (Some(" Os "), None, " optsize"),
+        (Some("z"), None, " optsize minsize"),
+        (Some("Oz"), Some("off"), " optsize minsize"),
+        (Some("0"), None, ""),
+        (Some("O1"), None, ""),
+        (Some("2"), None, ""),
+        (Some("O3"), None, ""),
+        (Some("unknown"), None, " optsize"),
+        (Some("unknown"), Some("0"), ""),
+    ] {
+        assert_eq!(
+            size_function_attrs_for_opt_flag(application_opt_flag(explicit, size_opt)),
+            expected,
+            "explicit={explicit:?}, size_opt={size_opt:?}"
+        );
+    }
+}
+
+#[test]
 fn compile_plan_skips_native_tuning_for_explicit_target() {
     let plan = build_clang_compile_plan(
         PathBuf::from("clang"),
