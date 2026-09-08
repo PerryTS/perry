@@ -8,19 +8,33 @@ FROM ${OLD_GLIBC_IMAGE}
 # checked while bootstrapping ca-certificates; only TLS peer validation is
 # disabled for this first signed archive fetch.
 #
-# BOTH suites need `check-valid-until=no`. Bullseye is EOL, so nobody refreshes
-# its Release files and apt rejects them once Valid-Until passes:
+# The `bullseye-security` suite is deliberately NOT listed. Bullseye is EOL and
+# Debian is actively retiring it, which broke this image twice in four days:
 #
-#   E: Release file for .../bullseye-security/InRelease is expired
-#      (invalid since 14h 44min 50s)
+#   run 34197616242 — E: Release file for .../bullseye-security/InRelease is
+#     expired (invalid since 14h 44min 50s). Its Release carried
+#     `Valid-Until: Mon, 07 Sep 2026 21:13:04 UTC`.
+#   run 34272956353 — after adding `check-valid-until=no`, the same suite began
+#     returning 404 for its .debs from some Fastly nodes (IP 151.101.74.132)
+#     while serving 200 from others. A CDN lottery, not a clean removal.
 #
-# The security suite's Release carried `Valid-Until: Mon, 07 Sep 2026 21:13:04
-# UTC` and expired mid-release (run 34197616242, both Linux legs). The packages
-# themselves still serve 200 — only the metadata is stale — so disabling the
-# freshness check is the documented fix, and `main` above has always used it.
+# There is no archive fallback: archive.debian.org carries bullseye,
+# -backports, -proposed-updates and -updates, but NOT debian-security (404).
+#
+# So take everything from the archive instead. Verified against
+# archive.debian.org/debian/dists/bullseye/main/binary-arm64/Packages: every
+# package this image installs is present there — build-essential 12.9,
+# cmake 3.18.4-2+deb11u1, curl 7.74.0-1.3+deb11u13, gnupg 2.2.27-2+deb11u2,
+# libssl-dev 1.1.1w-0+deb11u1, libzstd-dev 1.4.8+dfsg-2.1, perl 5.32.1-4+deb11u3,
+# pkg-config 0.29.2-1, xz-utils 5.2.5-2.1~deb11u1, zlib1g-dev 1.2.11.dfsg-2+deb11u2,
+# ca-certificates 20210119.
+#
+# The trade-off is explicit: these are the archived versions, without later
+# security patches. That is acceptable for a BUILD toolchain image whose only
+# job is to link against glibc 2.31 — it ships no runtime surface itself — and
+# it is the standard configuration for an EOL Debian base.
 RUN printf '%s\n' \
       'deb [check-valid-until=no] https://archive.debian.org/debian bullseye main' \
-      'deb [check-valid-until=no] https://deb.debian.org/debian-security bullseye-security main' \
       > /etc/apt/sources.list \
     && apt-get -o Acquire::https::Verify-Peer=false update \
     && DEBIAN_FRONTEND=noninteractive apt-get \
