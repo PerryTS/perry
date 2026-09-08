@@ -1067,6 +1067,8 @@ pub struct LoweringContext {
     /// strictly narrower than the pre-#8343 behavior, which ignored ALL
     /// local `require` bindings on this path.
     pub(crate) require_local_is_create_require: bool,
+    /// One module-owned loader shared by first-class import.meta.require reads.
+    pub(crate) import_meta_require_local: Option<LocalId>,
     /// Pre-scanned constant environment for `new Function` / `Function(...)`
     /// argument resolution (single-assignment module vars, `toString`-bearing
     /// object literals, counters). Built once per module in
