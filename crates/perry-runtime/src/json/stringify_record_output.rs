@@ -37,7 +37,7 @@ const EMPTY_KEY_PREFIX_PLAN: KeyPrefixPlan = KeyPrefixPlan {
     data: [0; MAX_KEY_PREFIX_BYTES],
 };
 
-thread_local! {
+crate::perry_thread_local! {
     /// Stable shape IDs index copied native bytes only. No managed pointer or
     /// value survives a stringify call, so the collector has no cache edge to
     /// trace or rewrite.

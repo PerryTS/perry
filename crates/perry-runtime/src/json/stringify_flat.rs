@@ -11,7 +11,7 @@ use crate::string::{
 const MAX_FIELDS: usize = 4;
 const JSON_OUTPUT_SWEEP_BUDGET: usize = 32 * 1024 * 1024;
 
-thread_local! {
+crate::perry_thread_local! {
     /// Bytes of malloc-backed exact output completed since the last boundary
     /// sweep. This is scheduling debt only and never owns a managed pointer.
     static JSON_OUTPUT_BYTES_SINCE_SWEEP: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };

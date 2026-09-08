@@ -54,7 +54,7 @@ enum Deferral {
     Spent,
 }
 
-thread_local! {
+crate::perry_thread_local! {
     // Byte counts and scheduling flags only; no managed values.
     static JSON_DEFERRAL: Cell<Deferral> = const { Cell::new(Deferral::Available) };
 }

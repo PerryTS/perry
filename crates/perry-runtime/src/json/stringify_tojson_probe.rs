@@ -24,7 +24,7 @@ struct ObjectProtoToJsonSignature {
     semantic_epoch: u64,
 }
 
-thread_local! {
+crate::perry_thread_local! {
     /// Address-bearing fields are comparison tokens only: they are never
     /// dereferenced from this cache. Moving GC therefore turns a prior entry
     /// into a signature miss without requiring another collector root.
