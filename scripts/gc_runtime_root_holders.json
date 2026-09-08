@@ -469,6 +469,24 @@
       "why": "#9870: `PERRY_SEGVIEW_DIAG` tally for the Intl.Segmenter view mode \u2014 how often the fast path opened, and which check declined it. A plain `AtomicU64` written only through `bump()`'s `fetch_add(1, Relaxed)` and read only by the diagnostic dump: it holds a COUNT, never an address or a NaN-boxed value, so there is no slot for the collector to mark or rewrite."
     },
     {
+      "file": "crates/perry-runtime/src/json/stringify_record_output.rs",
+      "name": "RECEIVER_PROOF_MISSES",
+      "verdict": "test_only",
+      "why": "#[cfg(test)] counter for cached receiver-proof misses; absent from production builds and stores only a tally."
+    },
+    {
+      "file": "crates/perry-runtime/src/json/stringify_record_output.rs",
+      "name": "REPEATED_OUTPUT",
+      "verdict": "not_a_gc_pointer",
+      "why": "Bounded JSON result bytes plus receiver, field, and array-element bit patterns used only as opaque equality tokens. A lookup rereads the live receiver slots and only compares the cached bits; GC movement therefore changes them into cache misses. The cached result itself lives in native TLS."
+    },
+    {
+      "file": "crates/perry-runtime/src/json/stringify_record_output.rs",
+      "name": "REPEATED_OUTPUT_HITS",
+      "verdict": "test_only",
+      "why": "#[cfg(test)] counter for repeated JSON output cache hits; absent from production builds and stores only a tally."
+    },
+    {
       "file": "crates/perry-runtime/src/map.rs",
       "name": "MAP_COMPACTION_LOG",
       "count": 1,

@@ -300,9 +300,15 @@ fn assert_record_children_move(cold: bool, escaped: bool) {
             assert!(crate::json::to_json_definitely_absent(
                 children().0 as *const u8
             ));
-            // Two calls guarantee that the second one publishes the native
-            // key-prefix plan. The triggered allocation below must remain safe
-            // while reusing that plan across an evacuating collection.
+            // Four calls publish the native key-prefix plan and admit the
+            // repeated-output entry. The triggered allocation below must
+            // remain safe when that entry needs no managed input afterward.
+            assert!(
+                crate::json::test_json_stringify_record_output(input.get_nanbox_u64()).is_some()
+            );
+            assert!(
+                crate::json::test_json_stringify_record_output(input.get_nanbox_u64()).is_some()
+            );
             assert!(
                 crate::json::test_json_stringify_record_output(input.get_nanbox_u64()).is_some()
             );

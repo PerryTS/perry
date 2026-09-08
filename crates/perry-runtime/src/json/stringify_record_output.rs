@@ -13,6 +13,8 @@ const MAX_FIELDS: usize = 8;
 const MAX_ELEMENTS: usize = 16;
 const KEY_PREFIX_CACHE_SLOTS: usize = 8;
 const MAX_KEY_PREFIX_BYTES: usize = 256;
+const MAX_REPEATED_OUTPUT_BYTES: usize = 256;
+const SCALAR_FIELD: u8 = u8::MAX;
 const OBJECT_BYTES: usize = std::mem::size_of::<crate::ObjectHeader>();
 const ARRAY_BYTES: usize = std::mem::size_of::<crate::ArrayHeader>();
 
@@ -25,6 +27,7 @@ struct KeyPrefixPlan {
     receiver: usize,
     receiver_epoch: u64,
     fields: u8,
+    memo_cooldown: u8,
     bytes: u16,
     units: u16,
     offsets: [u16; MAX_FIELDS + 1],
@@ -37,11 +40,49 @@ const EMPTY_KEY_PREFIX_PLAN: KeyPrefixPlan = KeyPrefixPlan {
     receiver: 0,
     receiver_epoch: 0,
     fields: 0,
+    memo_cooldown: 0,
     bytes: 0,
     units: 0,
     offsets: [0; MAX_FIELDS + 1],
     data: [0; MAX_KEY_PREFIX_BYTES],
 };
+
+#[derive(Clone, Copy)]
+struct RepeatedOutput {
+    /// Identity token only. Never dereferenced; a moving collection turns a
+    /// pre-allocation token into a miss on the next call.
+    receiver: usize,
+    candidate_receiver: usize,
+    epoch: u64,
+    candidate_signature: u64,
+    candidate_misses: u8,
+    shape: u32,
+    fields: u8,
+    bytes: u16,
+    units: u16,
+    array_lengths: [u8; MAX_FIELDS],
+    field_bits: [u64; MAX_FIELDS],
+    element_bits: [u64; MAX_ELEMENTS],
+    data: [u8; MAX_REPEATED_OUTPUT_BYTES],
+}
+
+const EMPTY_REPEATED_OUTPUT: RepeatedOutput = RepeatedOutput {
+    receiver: 0,
+    candidate_receiver: 0,
+    epoch: 0,
+    candidate_signature: 0,
+    candidate_misses: 0,
+    shape: 0,
+    fields: 0,
+    bytes: 0,
+    units: 0,
+    array_lengths: [SCALAR_FIELD; MAX_FIELDS],
+    field_bits: [0; MAX_FIELDS],
+    element_bits: [0; MAX_ELEMENTS],
+    data: [0; MAX_REPEATED_OUTPUT_BYTES],
+};
+
+const _: () = assert!(std::mem::size_of::<RepeatedOutput>() <= 512);
 
 crate::perry_thread_local! {
     /// Stable shape IDs index copied native bytes only. No managed pointer or
@@ -49,11 +90,17 @@ crate::perry_thread_local! {
     /// trace or rewrite.
     static KEY_PREFIX_CACHE: UnsafeCell<[KeyPrefixPlan; KEY_PREFIX_CACHE_SLOTS]> =
         const { UnsafeCell::new([EMPTY_KEY_PREFIX_PLAN; KEY_PREFIX_CACHE_SLOTS]) };
+
+    /// A bounded native copy of the last small record result and exact value
+    /// tokens. It retains no managed allocation and needs no GC scanning.
+    static REPEATED_OUTPUT: UnsafeCell<RepeatedOutput> =
+        const { UnsafeCell::new(EMPTY_REPEATED_OUTPUT) };
 }
 
 #[cfg(test)]
 crate::perry_thread_local! {
     static RECEIVER_PROOF_MISSES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static REPEATED_OUTPUT_HITS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 #[derive(Clone, Copy)]
@@ -245,8 +292,82 @@ unsafe fn key_prefix_plan(
     })
 }
 
+/// Copy a previously completed small record after proving that every
+/// observable input bit is unchanged. The verification happens before the
+/// output allocation. No managed pointer is needed afterward, so a collection
+/// during allocation may move the input without adding a temporary root.
 #[inline(never)]
-unsafe fn emit_cached_record(
+unsafe fn emit_repeated_output(
+    obj: *const crate::ObjectHeader,
+    fields: usize,
+    prefix: *const KeyPrefixPlan,
+) -> Option<JSValue> {
+    REPEATED_OUTPUT.with(|entry| {
+        let cached = &mut *entry.get();
+        if cached.receiver != obj as usize {
+            return None;
+        }
+        if cached.epoch != crate::object::prop_plan::prop_plan_semantic_epoch()
+            || cached.shape != (*prefix).shape
+            || cached.fields as usize != fields
+            || cached.bytes == 0
+        {
+            cached.receiver = 0;
+            return None;
+        }
+        let mut element = 0usize;
+        for i in 0..fields {
+            let bits = slot(obj.cast(), OBJECT_BYTES, i);
+            if bits != cached.field_bits[i] {
+                cached.receiver = 0;
+                return None;
+            }
+            let len = cached.array_lengths[i];
+            if len == SCALAR_FIELD {
+                continue;
+            }
+            let arr = (bits & POINTER_MASK) as *const crate::ArrayHeader;
+            let header =
+                &*((arr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader);
+            if header.obj_type != crate::gc::GC_TYPE_ARRAY
+                || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+                || header._reserved & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0
+                || (*arr).length != len as u32
+                || (*arr).capacity < len as u32
+                || (header.size as usize)
+                    < crate::gc::GC_HEADER_SIZE + ARRAY_BYTES + len as usize * 8
+                || element + len as usize > MAX_ELEMENTS
+            {
+                cached.receiver = 0;
+                return None;
+            }
+            for j in 0..len as usize {
+                if slot(arr.cast(), ARRAY_BYTES, j) != cached.element_bits[element + j] {
+                    cached.receiver = 0;
+                    return None;
+                }
+            }
+            element += len as usize;
+        }
+
+        #[cfg(test)]
+        REPEATED_OUTPUT_HITS.with(|hits| hits.set(hits.get() + 1));
+        let bytes = cached.bytes as u32;
+        let units = cached.units as u32;
+        let (result, output) = string_storage_alloc(bytes);
+        init_string_header(result, units, bytes, bytes, 0, 0);
+        super::stringify_copy::copy_bytes(cached.data.as_ptr(), output, bytes as usize);
+        Some(JSValue::string_ptr(result))
+    })
+}
+
+#[inline]
+fn repeated_signature_mix(signature: u64, bits: u64) -> u64 {
+    signature.rotate_left(13) ^ bits.wrapping_mul(0x9e37_79b9_7f4a_7c15)
+}
+
+#[inline(never)]
+unsafe fn emit_cached_record_uncached(
     obj: *const crate::ObjectHeader,
     fields: usize,
     prefix: *mut KeyPrefixPlan,
@@ -336,10 +457,170 @@ unsafe fn emit_cached_record(
 }
 
 #[inline(never)]
+unsafe fn emit_cached_record_memo(
+    obj: *const crate::ObjectHeader,
+    fields: usize,
+    prefix: *mut KeyPrefixPlan,
+) -> Option<JSValue> {
+    let mut value_plan: [std::mem::MaybeUninit<Field>; MAX_FIELDS] =
+        [const { std::mem::MaybeUninit::uninit() }; MAX_FIELDS];
+    let mut elements: [std::mem::MaybeUninit<Piece>; MAX_ELEMENTS] =
+        [const { std::mem::MaybeUninit::uninit() }; MAX_ELEMENTS];
+    let mut used = 0;
+    let (mut bytes, mut units) = (1u32 + (*prefix).bytes as u32, 1u32 + (*prefix).units as u32);
+    for i in 0..fields {
+        let bits = slot(obj.cast(), OBJECT_BYTES, i);
+        let (vb, vu) = if let Some(value) = record_value_piece(bits) {
+            value_plan[i].write(Field::Scalar(value));
+            value.lengths()
+        } else {
+            let (arr, len) = dense_array(bits)?;
+            if used + len > MAX_ELEMENTS {
+                return None;
+            }
+            value_plan[i].write(Field::Array { start: used, len });
+            let (mut ab, mut au) = (2u32, 2u32);
+            for j in 0..len {
+                let value = record_value_piece(slot(arr.cast(), ARRAY_BYTES, j))?;
+                elements[used + j].write(value);
+                let (eb, eu) = value.lengths();
+                let comma = u32::from(j != 0);
+                ab = ab.checked_add(eb)?.checked_add(comma)?;
+                au = au.checked_add(eu)?.checked_add(comma)?;
+            }
+            used += len;
+            (ab, au)
+        };
+        bytes = bytes.checked_add(vb)?;
+        units = units.checked_add(vu)?;
+    }
+
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let input = scope.root_raw_const_ptr(obj);
+    if !receiver_to_json_absent(obj, prefix) {
+        return None;
+    }
+    let repeated_candidate = bytes as usize <= MAX_REPEATED_OUTPUT_BYTES;
+    let (result, output) = string_storage_alloc(bytes);
+    init_string_header(result, units, bytes, bytes, 0, 0);
+    input.with_const_ptr(|obj: *const crate::ObjectHeader| {
+        let mut at = 0usize;
+        let mut signature = (*prefix).shape as u64 ^ fields as u64;
+        for i in 0..fields {
+            let start = (*prefix).offsets[i] as usize;
+            let end = (*prefix).offsets[i + 1] as usize;
+            super::stringify_copy::copy_bytes(
+                (*prefix).data.as_ptr().add(start),
+                output.add(at),
+                end - start,
+            );
+            at += end - start;
+            let bits = slot(obj.cast(), OBJECT_BYTES, i);
+            if repeated_candidate {
+                signature = repeated_signature_mix(signature, bits);
+            }
+            match value_plan[i].assume_init() {
+                Field::Scalar(value) => at += emit_piece(value, bits, output.add(at)),
+                Field::Array { start, len } => {
+                    let arr = (bits & POINTER_MASK) as *const crate::ArrayHeader;
+                    if repeated_candidate {
+                        signature = repeated_signature_mix(signature, len as u64);
+                    }
+                    // GC_STORE_AUDIT(POINTER_FREE): JSON byte-buffer payload.
+                    output.add(at).write(b'[');
+                    at += 1;
+                    for j in 0..len {
+                        if j != 0 {
+                            // GC_STORE_AUDIT(POINTER_FREE): JSON byte-buffer payload.
+                            output.add(at).write(b',');
+                            at += 1;
+                        }
+                        let element_bits = slot(arr.cast(), ARRAY_BYTES, j);
+                        if repeated_candidate {
+                            signature = repeated_signature_mix(signature, element_bits);
+                        }
+                        at += emit_piece(
+                            elements[start + j].assume_init(),
+                            element_bits,
+                            output.add(at),
+                        );
+                    }
+                    // GC_STORE_AUDIT(POINTER_FREE): JSON byte-buffer payload.
+                    output.add(at).write(b']');
+                    at += 1;
+                }
+            }
+        }
+        // GC_STORE_AUDIT(POINTER_FREE): JSON byte-buffer payload.
+        output.add(at).write(b'}');
+        debug_assert_eq!(at + 1, bytes as usize);
+        if repeated_candidate {
+            REPEATED_OUTPUT.with(|entry| {
+                let cached = &mut *entry.get();
+                let install = cached.candidate_receiver == obj as usize
+                    && cached.candidate_signature == signature;
+                let mismatch = cached.candidate_receiver != 0 && !install;
+                cached.candidate_receiver = obj as usize;
+                cached.candidate_signature = signature;
+                if !install {
+                    if mismatch {
+                        cached.candidate_misses = cached.candidate_misses.saturating_add(1);
+                        if cached.candidate_misses >= 2 {
+                            cached.candidate_misses = 0;
+                            cached.candidate_receiver = 0;
+                            (*prefix).memo_cooldown = 64;
+                        }
+                    }
+                    return;
+                }
+
+                // Publish the receiver last. Until then an allocation or a
+                // partially copied signature cannot produce a cache hit.
+                cached.receiver = 0;
+                cached.array_lengths.fill(SCALAR_FIELD);
+                for i in 0..fields {
+                    let bits = slot(obj.cast(), OBJECT_BYTES, i);
+                    cached.field_bits[i] = bits;
+                    if let Field::Array { start, len } = value_plan[i].assume_init() {
+                        cached.array_lengths[i] = len as u8;
+                        let arr = (bits & POINTER_MASK) as *const crate::ArrayHeader;
+                        for j in 0..len {
+                            cached.element_bits[start + j] = slot(arr.cast(), ARRAY_BYTES, j);
+                        }
+                    }
+                }
+                super::stringify_copy::copy_bytes(output, cached.data.as_mut_ptr(), bytes as usize);
+                cached.epoch = crate::object::prop_plan::prop_plan_semantic_epoch();
+                cached.shape = (*prefix).shape;
+                cached.fields = fields as u8;
+                cached.bytes = bytes as u16;
+                cached.units = units as u16;
+                cached.candidate_misses = 0;
+                (*prefix).memo_cooldown = 0;
+                cached.receiver = obj as usize;
+            });
+        }
+        Some(JSValue::string_ptr(result))
+    })
+}
+
+#[inline(never)]
 unsafe fn emit_record(obj: *const crate::ObjectHeader, fields: usize) -> Option<JSValue> {
     let keys = crate::object::object_keys_array(obj);
     if let Some(prefix) = key_prefix_plan(obj, keys, fields) {
-        return emit_cached_record(obj, fields, prefix);
+        let repeat_eligible = (*prefix).receiver == obj as usize
+            && (*prefix).receiver_epoch == crate::object::prop_plan::prop_plan_semantic_epoch();
+        if repeat_eligible {
+            if (*prefix).memo_cooldown != 0 {
+                (*prefix).memo_cooldown -= 1;
+                return emit_cached_record_uncached(obj, fields, prefix);
+            }
+            if let Some(result) = emit_repeated_output(obj, fields, prefix) {
+                return Some(result);
+            }
+            return emit_cached_record_memo(obj, fields, prefix);
+        }
+        return emit_cached_record_uncached(obj, fields, prefix);
     }
     // Only the validated prefixes are read during emission. Avoid clearing
     // the full fixed-capacity scratch frame for short records; every accessed
