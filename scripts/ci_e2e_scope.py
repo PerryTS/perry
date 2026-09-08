@@ -127,6 +127,7 @@ _CODEGEN_SUITES = [
     "loop_safepoint_purity",
     "macos_bundle_chdir_gate",
     "manifest_consistency",
+    "namespace_getter_binding_identity",
     "native_proof_buffer_views",
     "shadow_slot_hygiene",
     "typed_feedback",

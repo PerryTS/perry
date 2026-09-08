@@ -1359,7 +1359,11 @@ pub(super) fn emit_module_artifacts(c: ModuleArtifactsCtx<'_>) -> Result<()> {
                 crate::NamespaceEntryKind::ForeignVar {
                     source_prefix,
                     source_local,
-                } => format!("perry_fn_{}__{}", source_prefix, sanitize(source_local)),
+                } => {
+                    // Producers emit raw local-name getter aliases. Sanitizing
+                    // `$item` here would call an unrelated `_item` function.
+                    format!("perry_fn_{}__{}", source_prefix, source_local)
+                }
                 _ => continue,
             };
             if !llmod.has_function(&getter_name) {
