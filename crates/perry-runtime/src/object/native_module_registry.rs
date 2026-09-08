@@ -752,6 +752,7 @@ mod tests {
                 NM_TEST_DISABLE_LAZY_INSTALL.store(false, Ordering::Relaxed);
             }
         }
+        let _global = crate::gc::global_side_table_test_lock();
         NM_TEST_DISABLE_LAZY_INSTALL.store(true, Ordering::Relaxed);
         let _guard = LazyInstallGuard;
 
