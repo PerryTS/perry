@@ -13,5 +13,5 @@ perry-hir.workspace = true
 perry-codegen-js.workspace = true
 perry-dispatch.workspace = true
 anyhow.workspace = true
-wasm-encoder = "0.254"
+wasm-encoder = "0.258"
 base64.workspace = true
