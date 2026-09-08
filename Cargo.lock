@@ -6351,6 +6351,7 @@ version = "0.5.1532"
 dependencies = [
  "dashmap 6.2.1",
  "once_cell",
+ "perry-native-registration",
  "perry-runtime",
 ]
 
@@ -6372,6 +6373,10 @@ dependencies = [
  "swc_ecma_visit",
  "thiserror 1.0.69",
 ]
+
+[[package]]
+name = "perry-native-registration"
+version = "0.5.1521"
 
 [[package]]
 name = "perry-parser"

@@ -10,6 +10,7 @@ members = [
     "crates/perry-dispatch",
     "crates/perry-runtime",
     "crates/perry-ffi",
+    "crates/perry-native-registration",
     "crates/perry-ext-dotenv",
     "crates/perry-ext-nanoid",
     "crates/perry-ext-uuid",
@@ -458,15 +459,10 @@ perry-hir = { path = "crates/perry-hir" }
 perry-transform = { path = "crates/perry-transform" }
 perry-codegen = { path = "crates/perry-codegen" }
 perry-dispatch = { path = "crates/perry-dispatch" }
-# #1112: `perry-ffi` is published to crates.io so npm-packaged native
-# wrappers (per `perry.nativeLibrary` in package.json) can resolve it
-# without a sibling Perry checkout. perry-ffi's only direct reference
-# to perry-runtime is a `#[cfg(test)]` layout-assertion test which
-# moves perry-runtime to a path-only `[dev-dependencies]` entry —
-# `cargo publish -p perry-ffi` therefore strips it from the published
-# Cargo.toml, and external users never need perry-runtime in their
-# Cargo graph (Perry's compiler driver links `libperry_runtime.a`
-# into the final binary directly).
+# #1112: `perry-ffi` is published for external native wrappers. Its optional
+# `runtime-link` edge supplies runtime symbols to in-tree adapter tests.
+# The dependency-free registration core sits below both crates so future
+# runtime wrappers can share identities without depending on perry-ffi.
 # `default-features = false` so dependency EDGES (perry-stdlib, ext crates, the
 # perry binary) don't force perry-runtime's heavy default features (`full`,
 # `regex-engine`, `temporal`, `url-engine`, `string-normalize`, `intl-segmenter`)
@@ -479,6 +475,7 @@ perry-dispatch = { path = "crates/perry-dispatch" }
 # `wasm-host` must stay out of `default`, generalized to all heavy features.
 perry-runtime = { path = "crates/perry-runtime", version = "0.5.1011", default-features = false }
 perry-ffi = { path = "crates/perry-ffi", version = "0.5.1011" }
+perry-native-registration = { path = "crates/perry-native-registration", version = "0.5.1521" }
 perry-ext-dotenv = { path = "crates/perry-ext-dotenv" }
 perry-ext-nanoid = { path = "crates/perry-ext-nanoid" }
 perry-ext-uuid = { path = "crates/perry-ext-uuid" }

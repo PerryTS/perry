@@ -25,7 +25,7 @@
     ]
   },
   "baseline": {
-    "workspace_members": 80,
+    "workspace_members": 81,
     "default_dependency_closure": [
       "perry",
       "perry-api-manifest",
@@ -67,7 +67,7 @@
     ],
     "decision_counts": {
       "externalize": 33,
-      "keep": 42,
+      "keep": 43,
       "merge": 1,
       "remove": 1,
       "review": 3
@@ -344,6 +344,10 @@
     },
     "perry-hir": {
       "category": "compiler-core",
+      "decision": "keep"
+    },
+    "perry-native-registration": {
+      "category": "runtime-core",
       "decision": "keep"
     },
     "perry-parser": {

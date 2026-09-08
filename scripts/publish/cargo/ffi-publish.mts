@@ -3,11 +3,17 @@
  *   into the publish-script tree. Maintainer-only: needs ~/.cargo/credentials.toml
  *   with a crates.io API token (`cargo login` once).
  *
- *   PREREQUISITE: publish perry-runtime first. perry-ffi has an optional dep on
- *   perry-runtime gated by the `runtime-link` feature; cargo publish rejects
- *   perry-ffi until the matching perry-runtime version exists on crates.io.
- *   perry-runtime's own workspace-crate deps need similar handling (out of
- *   scope here — the order is documented, not automated).
+ *   PREREQUISITES: publish perry-native-registration, then perry-runtime,
+ *   before perry-ffi. Cargo requires both the registration core and the
+ *   optional runtime-link dependency to resolve on crates.io.
+ *   Dependency publication is manual; for versions not already published:
+ *     cargo publish --dry-run -p perry-native-registration
+ *     cargo publish -p perry-native-registration
+ *     cargo publish -p perry-runtime
+ *     ./scripts/publish_perry_ffi.sh  (perry-ffi dry run)
+ *     npm run publish:ffi            (perry-ffi publication)
+ *   perry-runtime's own workspace dependencies need prior publication as
+ *   appropriate, outside this entrypoint.
  *
  *   Usage: npm run publish:ffi
  */
@@ -27,10 +33,12 @@ async function main(): Promise<void> {
   }
   logger.log(`Workspace version: ${version}`)
   logger.warn(
-    'Prerequisite: perry-runtime@' + version + ' must already exist on crates.io ' +
-      '(perry-ffi optional-deps gate). Publish it first if it does not.',
+    'Prerequisites: the Cargo.toml versions of perry-native-registration and ' +
+      'perry-runtime must already resolve on crates.io. Publish the registration ' +
+      'core first, then the runtime, before perry-ffi.',
   )
-  // Verify the package builds + would publish cleanly, then publish.
+  // Cargo verifies the package before publishing; the shell entrypoint above
+  // provides the separate perry-ffi dry run after dependency publication.
   // --allow-dirty: this script runs from a clean main right after a release
   // commit, but the worktree may still have generated CHANGELOG/Cargo.lock
   // changes from the auto-optimize pass.

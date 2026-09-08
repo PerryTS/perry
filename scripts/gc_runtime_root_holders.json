@@ -34,12 +34,6 @@
   ],
   "holders": [
     {
-      "file": "crates/perry-ffi/src/handle.rs",
-      "name": "REGISTRATIONS",
-      "verdict": "not_a_gc_pointer",
-      "why": "NativeRegistrationRegistry retains registry-domain ids, registration serials, numeric provider ids, lease counts, slot phases, and Instant deadlines. Its mutex/Arc state and queue keys contain no JavaScript values or wrapper addresses. Payloads remain in HANDLES and retain their existing registered scanners."
-    },
-    {
       "file": "crates/perry-ext-exponential-backoff/src/lib.rs",
       "name": "NEXT_ID",
       "verdict": "not_a_gc_pointer",
