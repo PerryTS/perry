@@ -19,6 +19,22 @@ unsafe fn check(text: &str) {
     assert_eq!((*header).utf16_len as usize, text.encode_utf16().count());
 }
 
+unsafe fn output_bytes(value: JSValue) -> Vec<u8> {
+    let result = try_object(value.bits()).expect("bounded primitive record");
+    let header = result.as_string_ptr();
+    std::slice::from_raw_parts(
+        crate::string::string_data(header),
+        (*header).byte_len as usize,
+    )
+    .to_vec()
+}
+
+unsafe fn clear_key_prefix_cache() {
+    KEY_PREFIX_CACHE.with(|cache| {
+        *cache.get() = [EMPTY_KEY_PREFIX_PLAN; KEY_PREFIX_CACHE_SLOTS];
+    });
+}
+
 #[test]
 fn record_final_output_preserves_scalars_arrays_and_utf16_lengths() {
     unsafe {
@@ -37,6 +53,102 @@ fn record_final_output_preserves_scalars_arrays_and_utf16_lengths() {
             .collect::<Vec<_>>()
             .join(",");
         check(&format!("{{{fields}}}"));
+    }
+}
+
+#[test]
+fn cached_key_prefixes_reuse_only_shape_facts() {
+    unsafe {
+        clear_key_prefix_cache();
+        let first_text = r#"{"id":1,"name":"first","active":true,"score":2,"tags":["a"]}"#;
+        let second_text =
+            r#"{"id":99,"name":"second","active":false,"score":3.5,"tags":["b","c"]}"#;
+        let first = parse(first_text);
+        let first_shape =
+            crate::object::shapes::object_shape_stamp(first.as_pointer::<crate::ObjectHeader>());
+        assert_eq!(output_bytes(first), first_text.as_bytes());
+
+        let second = parse(second_text);
+        assert_eq!(
+            crate::object::shapes::object_shape_stamp(second.as_pointer::<crate::ObjectHeader>()),
+            first_shape,
+            "equal ordered keys must reuse the same immutable shape"
+        );
+        assert_eq!(output_bytes(second), second_text.as_bytes());
+    }
+}
+
+#[test]
+fn cached_key_prefixes_follow_shape_changes_and_slot_replacement() {
+    unsafe {
+        clear_key_prefix_cache();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let original_text = r#"{"a":1,"b":2,"c":3,"d":4,"e":5}"#;
+        // Reserve one extra physical slot so the shape can grow while the
+        // bounded inline-record path remains eligible.
+        let original = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 6));
+        for (index, name) in ["a", "b", "c", "d", "e"].iter().enumerate() {
+            let key = scope.root_string_ptr(js_string_from_bytes(name.as_ptr(), name.len() as u32));
+            crate::object::js_object_set_field_by_name(
+                original.get_raw_mut_ptr(),
+                key.get_raw_const_ptr(),
+                (index + 1) as f64,
+            );
+        }
+        let original_bits = make_pointer_bits(original.get_raw_const_ptr());
+        assert_eq!(
+            output_bytes(JSValue::from_bits(original_bits)),
+            original_text.as_bytes()
+        );
+        assert_eq!(
+            output_bytes(JSValue::from_bits(original_bits)),
+            original_text.as_bytes(),
+            "the second observation installs the prefix plan"
+        );
+        let before = crate::object::shapes::object_shape_stamp(
+            original.get_raw_const_ptr::<crate::ObjectHeader>(),
+        );
+        let key = scope.root_string_ptr(js_string_from_bytes(b"later".as_ptr(), 5));
+        crate::object::js_object_set_field_by_name(
+            original.get_raw_mut_ptr(),
+            key.get_raw_const_ptr(),
+            6.0,
+        );
+        let changed = JSValue::from_bits(make_pointer_bits(original.get_raw_const_ptr()));
+        assert_ne!(
+            crate::object::shapes::object_shape_stamp(changed.as_pointer::<crate::ObjectHeader>()),
+            before
+        );
+        assert_eq!(
+            output_bytes(changed),
+            br#"{"a":1,"b":2,"c":3,"d":4,"e":5,"later":6}"#
+        );
+
+        // More unique five-field shapes than cache slots guarantee a direct-map
+        // collision. Alternating the colliding shapes must rebuild complete
+        // prefixes rather than combining either entry with stale bytes.
+        let mut seen: [Option<(u32, String)>; KEY_PREFIX_CACHE_SLOTS] = Default::default();
+        let mut collision = None;
+        for n in 0..KEY_PREFIX_CACHE_SLOTS + 1 {
+            let text = format!(r#"{{"key_{n}":{n},"b":2,"c":3,"d":4,"e":5}}"#);
+            let value = parse(&text);
+            let shape = crate::object::shapes::object_shape_stamp(
+                value.as_pointer::<crate::ObjectHeader>(),
+            );
+            let cache_slot =
+                (shape.wrapping_mul(0x9e37_79b9) as usize) & (KEY_PREFIX_CACHE_SLOTS - 1);
+            if let Some((other_shape, other_text)) = seen[cache_slot].take() {
+                if other_shape != shape {
+                    collision = Some((other_text, text));
+                    break;
+                }
+            }
+            seen[cache_slot] = Some((shape, text));
+        }
+        let (left, right) = collision.expect("pigeonhole collision");
+        for text in [&left, &left, &right, &right, &left, &left] {
+            assert_eq!(output_bytes(parse(text)), text.as_bytes());
+        }
     }
 }
 
