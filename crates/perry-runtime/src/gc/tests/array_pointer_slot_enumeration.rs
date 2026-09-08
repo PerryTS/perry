@@ -128,11 +128,40 @@ extern "C" fn interrupt_species_copy(_closure: *const crate::closure::ClosureHea
     crate::exception::js_throw(9983.0)
 }
 
+// Even a private array prototype sets these process-wide fast-path latches.
+// As in dyn_eval's ArrayPrototypeLatchGuard, restore both once this fixture's
+// arrays are unreachable, including when an assertion unwinds.
+struct ArrayPrototypeLatchGuard {
+    _guard_tests: std::sync::MutexGuard<'static, ()>,
+    recorded: bool,
+    invalidated: u8,
+}
+
+impl ArrayPrototypeLatchGuard {
+    fn new() -> Self {
+        let _guard_tests = crate::typed_feedback::typed_feedback_test_lock();
+        Self {
+            _guard_tests,
+            recorded: crate::object::prototype_chain::array_static_proto_recorded(),
+            invalidated: crate::array::PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED
+                .load(std::sync::atomic::Ordering::Relaxed),
+        }
+    }
+}
+
+impl Drop for ArrayPrototypeLatchGuard {
+    fn drop(&mut self) {
+        crate::object::prototype_chain::test_swap_array_static_proto_recorded(self.recorded);
+        crate::array::test_swap_array_index_fast_path_invalidated(self.invalidated);
+    }
+}
+
 /// Inspect the exact custom destination after an indexed getter interrupts the
 /// public runtime entry point. No collector invocation or optional diagnostic
 /// wiring is needed: the scanner's enumeration is the assertion.
 fn interrupted_species_copy_describes_late_pointer(splice: bool) {
     let _isolation = copying_nursery_isolation_lock();
+    let _latches = ArrayPrototypeLatchGuard::new();
     let _trigger = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let destination = crate::array::js_array_alloc_with_length(12);
     let old = young_leaf();
