@@ -59,6 +59,7 @@ mod shape_descriptor_authority;
 mod shape_keys_descriptor_edge;
 mod smoke;
 mod step_bounds;
+mod string_char_array_roots;
 pub(super) mod support;
 mod survival_diag;
 mod teardown;

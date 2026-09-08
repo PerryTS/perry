@@ -335,6 +335,10 @@ pub extern "C" fn js_string_char_at(s: *const StringHeader, index: i32) -> *mut 
 /// Returns an ArrayHeader pointer with NaN-boxed STRING_TAG elements.
 #[no_mangle]
 pub extern "C" fn js_string_to_char_array(s: i64) -> i64 {
+    string_to_char_array_with_pre_element_alloc_hook(s, &|| {})
+}
+
+fn string_to_char_array_with_pre_element_alloc_hook(s: i64, hook: &impl Fn()) -> i64 {
     let str_ptr = (s as u64 & crate::value::POINTER_MASK) as *const StringHeader;
     if str_ptr.is_null() || !is_valid_string_ptr(str_ptr) {
         return crate::array::js_array_alloc(0) as i64;
@@ -345,30 +349,46 @@ pub extern "C" fn js_string_to_char_array(s: i64) -> i64 {
     // guaranteed well-formed) reads up to 3 bytes past the exact-sized
     // allocation. `wtf8_step` bounds every continuation read; well-formed input
     // yields byte-identical elements.
-    let bytes =
-        unsafe { slice::from_raw_parts(string_data(str_ptr), (*str_ptr).byte_len as usize) };
+    // Copy the payload out of the moving heap before the first allocation.
+    // `js_string_from_bytes` allocates its result before copying its input, so
+    // merely rooting `str_ptr` would not keep a borrowed `seq.as_ptr()` valid
+    // while that call collects and relocates the source string.
+    let bytes = unsafe {
+        slice::from_raw_parts(string_data(str_ptr), (*str_ptr).byte_len as usize).to_vec()
+    };
     let mut spans: Vec<(usize, usize)> = Vec::new();
     let mut i = 0usize;
     while i < bytes.len() {
-        let (advance, _, _) = crate::string::wtf8_step(bytes, i);
+        let (advance, _, _) = crate::string::wtf8_step(&bytes, i);
         let end = (i + advance).min(bytes.len());
         spans.push((i, end));
         i = end;
     }
-    let arr = crate::array::js_array_alloc_with_length(spans.len() as u32);
-    let elements = unsafe { (arr as *mut u8).add(8) as *mut f64 };
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let arr = scope.root_raw_mut_ptr(crate::array::js_array_alloc_with_length(spans.len() as u32));
     for (i, &(start, end)) in spans.iter().enumerate() {
         let seq = &bytes[start..end];
+        hook();
         let ch_ptr = js_string_from_bytes(seq.as_ptr(), seq.len() as u32);
         let nanboxed =
             f64::from_bits(crate::value::STRING_TAG | (ch_ptr as u64 & crate::value::POINTER_MASK));
         unsafe {
-            // GC_STORE_AUDIT(BARRIERED): char array slot is immediately recorded via note_array_slot.
-            *elements.add(i) = nanboxed;
-            crate::array::note_array_slot(arr, i, nanboxed.to_bits());
+            // The element allocation above may have moved the result. Re-read
+            // its current head, then perform the write and all GC bookkeeping
+            // as one operation.
+            crate::array::note_array_slot(
+                arr.get_raw_mut_ptr::<crate::array::ArrayHeader>(),
+                i,
+                nanboxed.to_bits(),
+            );
         }
     }
-    arr as i64
+    arr.get_raw_mut_ptr::<crate::array::ArrayHeader>() as i64
+}
+
+#[cfg(test)]
+pub(crate) fn test_string_to_char_array_with_pre_element_alloc_hook(s: i64, hook: fn()) -> i64 {
+    string_to_char_array_with_pre_element_alloc_hook(s, &hook)
 }
 
 /// JS `ToUint16` for `String.fromCharCode` (#2788): a non-finite value
