@@ -290,8 +290,7 @@ pub fn bundle_function_name_registry_len() -> Option<usize> {
 /// That entry point is codegen-only by contract, which makes this an exact
 /// provenance filter. The general metadata readers continue to merge this map
 /// with runtime-owned overrides for `fn.name` and reflection.
-pub fn bundle_function_name_registry_entries(
-) -> Option<Vec<(usize, std::sync::Arc<[u8]>)>> {
+pub fn bundle_function_name_registry_entries() -> Option<Vec<(usize, std::sync::Arc<[u8]>)>> {
     Some(
         function_name_registry()
             .lock()
