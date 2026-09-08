@@ -22,7 +22,7 @@ function compile(label, success = true) {
     '-o', output, '--bunfs-root', source, '--platform', 'bun',
     '--cache-dir', path.join(work, 'cache'), '--no-auto-optimize', '--no-color',
     ...(process.env.PERRY_TEST_WASM === '1' ? ['--enable-wasm-runtime'] : [])], {
-    cwd: source, env: { ...process.env, PERRY_WORKSPACE_ROOT: root, PERRY_LL_OPT_LEVEL: 'z' },
+    cwd: source, env: { ...process.env, PERRY_LL_OPT_LEVEL: 'z' },
     encoding: 'utf8', timeout: 120_000, maxBuffer: 8 * 1024 * 1024,
   });
   const log = (result.stdout ?? '') + (result.stderr ?? '');
@@ -59,4 +59,3 @@ try {
   if (passed) fs.rmSync(work, { recursive: true });
   else console.error('Retained regression diagnostics: ' + work);
 }
-
