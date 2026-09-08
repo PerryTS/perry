@@ -36,6 +36,43 @@ unsafe fn clear_key_prefix_cache() {
 }
 
 #[test]
+fn cached_record_reuses_only_the_same_receiver_semantic_proof() {
+    unsafe {
+        clear_key_prefix_cache();
+        RECEIVER_PROOF_MISSES.with(|count| count.set(0));
+        let text = r#"{"id":42,"name":"user_42","email":"user_42@example.com","active":false,"score":63,"tags":["tag_2","tag_0"]}"#;
+        let first = parse(text);
+        let second = parse(text);
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let first = scope.root_nanbox_u64(first.bits());
+        let second = scope.root_nanbox_u64(second.bits());
+        let first_bits = first.get_nanbox_f64().to_bits();
+        assert!(
+            super::super::stringify_tojson_probe::to_json_definitely_absent(
+                (first_bits & POINTER_MASK) as *const u8
+            )
+        );
+        let _no_movement = crate::gc::GcSuppressScope::new();
+        let current =
+            |root: &crate::gc::RuntimeHandle| JSValue::from_bits(root.get_nanbox_f64().to_bits());
+
+        // First sighting records only a cache candidate. The second installs
+        // the shape plan and its receiver proof; the third reuses both.
+        assert_eq!(output_bytes(current(&first)), text.as_bytes());
+        assert_eq!(output_bytes(current(&first)), text.as_bytes());
+        assert_eq!(RECEIVER_PROOF_MISSES.with(std::cell::Cell::get), 1);
+        assert_eq!(output_bytes(current(&first)), text.as_bytes());
+        assert_eq!(RECEIVER_PROOF_MISSES.with(std::cell::Cell::get), 1);
+
+        assert_eq!(output_bytes(current(&second)), text.as_bytes());
+        assert_eq!(RECEIVER_PROOF_MISSES.with(std::cell::Cell::get), 2);
+        crate::object::prop_plan::prop_plan_epoch_bump();
+        assert_eq!(output_bytes(current(&second)), text.as_bytes());
+        assert_eq!(RECEIVER_PROOF_MISSES.with(std::cell::Cell::get), 3);
+    }
+}
+
+#[test]
 fn record_final_output_preserves_scalars_arrays_and_utf16_lengths() {
     unsafe {
         check(

@@ -20,6 +20,10 @@ const ARRAY_BYTES: usize = std::mem::size_of::<crate::ArrayHeader>();
 struct KeyPrefixPlan {
     shape: u32,
     candidate: u32,
+    /// Address token for the last receiver that passed the complete prototype
+    /// proof. Never dereferenced; movement turns it into a cache miss.
+    receiver: usize,
+    receiver_epoch: u64,
     fields: u8,
     bytes: u16,
     units: u16,
@@ -30,6 +34,8 @@ struct KeyPrefixPlan {
 const EMPTY_KEY_PREFIX_PLAN: KeyPrefixPlan = KeyPrefixPlan {
     shape: 0,
     candidate: 0,
+    receiver: 0,
+    receiver_epoch: 0,
     fields: 0,
     bytes: 0,
     units: 0,
@@ -43,6 +49,11 @@ crate::perry_thread_local! {
     /// trace or rewrite.
     static KEY_PREFIX_CACHE: UnsafeCell<[KeyPrefixPlan; KEY_PREFIX_CACHE_SLOTS]> =
         const { UnsafeCell::new([EMPTY_KEY_PREFIX_PLAN; KEY_PREFIX_CACHE_SLOTS]) };
+}
+
+#[cfg(test)]
+crate::perry_thread_local! {
+    static RECEIVER_PROOF_MISSES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 #[derive(Clone, Copy)]
@@ -74,6 +85,30 @@ unsafe fn record_value_piece(bits: u64) -> Option<Piece> {
         }
     }
     scalar_piece(bits)
+}
+
+/// Reuse the complete `toJSON` miss for repeated serialization of the same
+/// receiver. The address is only an identity token: moving GC changes it, and
+/// address reuse cannot revive a verdict after an explicit-prototype or
+/// property-semantic change because both advance the shared semantic epoch.
+/// The shape plan has already proved that no own key can expose `toJSON`.
+#[inline]
+unsafe fn receiver_to_json_absent(
+    obj: *const crate::ObjectHeader,
+    plan: *mut KeyPrefixPlan,
+) -> bool {
+    let epoch = crate::object::prop_plan::prop_plan_semantic_epoch();
+    if (*plan).receiver == obj as usize && (*plan).receiver_epoch == epoch {
+        return true;
+    }
+    #[cfg(test)]
+    RECEIVER_PROOF_MISSES.with(|count| count.set(count.get() + 1));
+    if !super::stringify_tojson_probe::to_json_definitely_absent_after_own_keys(obj.cast()) {
+        return false;
+    }
+    (*plan).receiver = obj as usize;
+    (*plan).receiver_epoch = crate::object::prop_plan::prop_plan_semantic_epoch();
+    true
 }
 
 /// Decline before entering the planning frame on large/exotic receivers.
@@ -143,7 +178,7 @@ unsafe fn key_prefix_plan(
     obj: *const crate::ObjectHeader,
     keys: *const crate::ArrayHeader,
     fields: usize,
-) -> Option<*const KeyPrefixPlan> {
+) -> Option<*mut KeyPrefixPlan> {
     let shape = crate::object::shapes::object_shape_stamp(obj);
     if shape == 0 {
         return None;
@@ -154,7 +189,7 @@ unsafe fn key_prefix_plan(
         let cached = &mut plans[cache_slot];
         if cached.shape == shape {
             if cached.fields as usize == fields {
-                return Some(cached as *const KeyPrefixPlan);
+                return Some(cached as *mut KeyPrefixPlan);
             }
             if cached.fields == 0 {
                 // A zero-field record never reaches this path, so this marks a
@@ -205,7 +240,7 @@ unsafe fn key_prefix_plan(
             return None;
         };
         *cached = plan;
-        Some(cached as *const KeyPrefixPlan)
+        Some(cached as *mut KeyPrefixPlan)
     })
 }
 
@@ -213,7 +248,7 @@ unsafe fn key_prefix_plan(
 unsafe fn emit_cached_record(
     obj: *const crate::ObjectHeader,
     fields: usize,
-    prefix: *const KeyPrefixPlan,
+    prefix: *mut KeyPrefixPlan,
 ) -> Option<JSValue> {
     let mut value_plan: [std::mem::MaybeUninit<Field>; MAX_FIELDS] =
         [const { std::mem::MaybeUninit::uninit() }; MAX_FIELDS];
@@ -250,7 +285,7 @@ unsafe fn emit_cached_record(
 
     let scope = crate::gc::RuntimeHandleScope::new();
     let input = scope.root_raw_const_ptr(obj);
-    if !super::stringify_tojson_probe::to_json_definitely_absent_after_own_keys(obj.cast()) {
+    if !receiver_to_json_absent(obj, prefix) {
         return None;
     }
     let (result, output) = string_storage_alloc(bytes);
