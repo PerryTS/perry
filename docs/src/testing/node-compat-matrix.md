@@ -40,8 +40,13 @@ node scripts/node_compat_matrix.mjs --check         # exit 1 on regressions vs t
 node scripts/node_compat_matrix.mjs --update-baseline   # rewrite the committed baseline
 ```
 
-The harness needs the release binary (`cargo build --release -p perry`). The
-baseline lives at `test-parity/node-compat-matrix.baseline.json`; the CI job
+The harness needs a release compiler and one coherent full set of runtime,
+stdlib, and governed extension archives. The CI workflow builds that set in a
+single Cargo invocation, and each probe compiles with `--no-auto-optimize
+--no-cache`. Auto-optimize behavior is covered by the gap-suite shards; keeping
+it out of this shape sweep prevents the first spelling of a module from paying
+a feature-union rebuild that only the second spelling can reuse. The baseline
+lives at `test-parity/node-compat-matrix.baseline.json`; the CI job
 `.github/workflows/node-compat-matrix.yml` runs `--check` nightly in its own
 job (so the pinned-Node download never slows the main test job).
 
