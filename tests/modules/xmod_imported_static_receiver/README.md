@@ -15,7 +15,7 @@ Run the native regression with a compiler and matching runtime archives:
 
 ```sh
 PERRY_BIN=/absolute/path/to/perry PERRY_RUNTIME_DIR=/absolute/path/to/runtime \
-  node scripts/test-xmod-imported-static-receiver.mjs
+  node scripts/test-imported-value-class-collision.mjs
 ```
 
 The transform unit tests assert that the imported static call remains in its
