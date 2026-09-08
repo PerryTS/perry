@@ -377,16 +377,30 @@ fn unit_promotion_carries_the_convention() {
     lf.create_block("entry").ret(DOUBLE, "0.0");
 
     let f = llmod.function_mut(0).unwrap();
-    assert_eq!(
-        f.define_header(false),
-        "define internal preserve_nonecc double @clone$spec_i32(i32 %arg0) {",
-        "the in-module define carries linkage + convention"
-    );
-    assert_eq!(
-        f.define_header(true),
-        "define preserve_nonecc double @clone$spec_i32(i32 %arg0) {",
-        "force_external drops the linkage keyword and NOTHING else"
-    );
+    fn assert_headers(internal: &str, external: &str) {
+        assert!(
+            internal
+                .starts_with("define internal preserve_nonecc double @clone$spec_i32(i32 %arg0) ")
+                && internal.ends_with(" {"),
+            "the in-module define carries linkage + convention: {internal}"
+        );
+        assert_eq!(
+            external,
+            internal.replacen("define internal ", "define ", 1),
+            "force_external drops the linkage keyword and NOTHING else"
+        );
+    }
+    let internal = f.define_header(false);
+    let external = f.define_header(true);
+    assert_headers(&internal, &external);
+    // Size policy may add attributes, but the relaxed rendering assertion
+    // must still reject a missing convention on either side of the boundary.
+    for (bad_internal, bad_external) in [
+        (internal.replace("preserve_nonecc ", ""), external.clone()),
+        (internal.clone(), external.replace("preserve_nonecc ", "")),
+    ] {
+        assert!(std::panic::catch_unwind(|| assert_headers(&bad_internal, &bad_external)).is_err());
+    }
     assert_eq!(
         crate::module::declare_line_for(f),
         "declare preserve_nonecc double @clone$spec_i32(i32)",

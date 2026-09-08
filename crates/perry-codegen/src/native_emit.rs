@@ -1083,10 +1083,15 @@ mod tests {
         // Control: the same fixture without optnone roots and relocates.
         assert_dynamic_root_survives_rs4gc(&module, "optnone_control");
 
-        let demoted = text_ir.replace(
-            "gc \"statepoint-example\" {",
-            "optnone noinline gc \"statepoint-example\" {",
-        );
+        // LLVM forbids optnone with optsize/minsize. Remove size policy only
+        // from this deliberate negative fixture; keep it on the real control.
+        let demoted = text_ir
+            .replace(" optsize", "")
+            .replace(" minsize", "")
+            .replace(
+                "gc \"statepoint-example\" {",
+                "optnone noinline gc \"statepoint-example\" {",
+            );
         let rewritten =
             crate::inprocess::statepoint_rewritten_ir(&demoted, &target, "optnone_before_rs4gc")
                 .expect("optnone fixture must still run RS4GC");
